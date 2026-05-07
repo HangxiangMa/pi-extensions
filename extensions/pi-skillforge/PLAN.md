@@ -82,14 +82,15 @@ Large historical notes, debugging stories, or one-off failures belong in memory,
 
 ## Pi Package Structure
 
-The repository follows Pi package conventions. Extension entry files live under `extensions/`; reusable implementation modules live under `lib/`.
+The repository is a monorepo of Pi packages under `extensions/`. This package's extension entry file lives under `src/`; reusable implementation modules live under `lib/`.
 
 ```txt
-pi-skillforge/
+extensions/pi-skillforge/
 ├── README.md
 ├── PLAN.md
 ├── package.json
-├── extensions/
+├── tsconfig.json
+├── src/
 │   └── skillforge.ts
 ├── lib/
 │   ├── capture.ts

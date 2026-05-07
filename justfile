@@ -1,27 +1,17 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-package := `node -e 'const p = JSON.parse(require("fs").readFileSync("package.json", "utf8")); process.stdout.write(p.name)'`
-version := `node -e 'const p = JSON.parse(require("fs").readFileSync("package.json", "utf8")); process.stdout.write(p.version)'`
+skillforge := "@narumitw/pi-skillforge"
+retry := "@narumitw/pi-retry"
 
 # Show available commands
 default:
     @just --list
 
-# Show npm account/registry/package visibility information
-doctor:
-    @echo "package: {{package}}"
-    @echo "version: {{version}}"
-    npm whoami
-    npm config get registry
-    npm access get status {{package}} || true
-    npm dist-tag ls {{package}} || true
-    npm view {{package}} version || true
-
-# Run formatter, linter, and typecheck
+# Run formatter, linter, and typechecks for all packages
 check:
     npm run check
 
-# Format files with Biome
+# Format all files with Biome
 format:
     npm run format
 
@@ -33,62 +23,51 @@ hooks:
 pre-commit:
     pre-commit run --all-files
 
-# Preview the package that npm would publish
-pack:
-    npm pack --dry-run
+# Show npm account/registry/package visibility information for one package
+# Usage: just doctor @narumitw/pi-retry
+doctor package="@narumitw/pi-skillforge":
+    @echo "package: {{package}}"
+    npm whoami
+    npm config get registry
+    npm access get status {{package}} || true
+    npm dist-tag ls {{package}} || true
+    npm view {{package}} version || true
 
-# Verify the published npm package metadata
-verify-npm:
-    npm access get status {{package}}
-    npm dist-tag ls {{package}}
-    npm view {{package}} version
+# Preview the skillforge package that npm would publish
+pack-skillforge:
+    npm run pack:skillforge
 
-# Install the published package through pi
-install-npm:
-    pi install npm:{{package}}
+# Preview the retry package that npm would publish
+pack-retry:
+    npm run pack:retry
 
-# Try this working tree as a temporary pi package
-try-local:
-    pi -e .
+# Try skillforge from this working tree as a temporary pi package
+try-skillforge:
+    pi -e ./extensions/pi-skillforge
 
-# Try the published npm package as a temporary pi package
-try-npm:
-    pi -e npm:{{package}}
+# Try retry from this working tree as a temporary pi package
+try-retry:
+    pi -e ./extensions/pi-retry
 
-# Publish the current package.json version to npm
-publish:
-    npm pack --dry-run
-    npm publish --access public
-    @echo
-    @echo "Published {{package}}@{{version}}"
-    @echo "Checking dist-tags, which usually updates before npm view/install metadata..."
-    npm dist-tag ls {{package}}
-    @echo
-    @echo "If npm view or pi install still returns 404, wait a few minutes for npm registry metadata to propagate."
+# Install the published skillforge package through pi
+install-skillforge:
+    pi install npm:{{skillforge}}
 
-# Bump package.json and package-lock.json without creating a git tag
-bump part="patch":
-    npm version {{part}} --no-git-tag-version
+# Install the published retry package through pi
+install-retry:
+    pi install npm:{{retry}}
 
-# Commit the current version bump, tag it, and push main + tag
-# Run this after `just publish` succeeds.
-tag:
-    @version="$(node -e 'const p = JSON.parse(require("fs").readFileSync("package.json", "utf8")); process.stdout.write(p.version)')"; \
-    git add package.json package-lock.json README.md PLAN.md justfile; \
-    git commit -m "chore(release): $${version}"; \
-    git tag "v$${version}"; \
-    git push origin main; \
-    git push origin "v$${version}"
+# Publish skillforge to npm
+publish-skillforge:
+    npm --workspace {{skillforge}} pack --dry-run
+    npm --workspace {{skillforge}} publish --access public
 
-# Full release flow: bump, publish, then commit/tag/push
-release part="patch":
-    npm version {{part}} --no-git-tag-version
-    npm run check
-    npm pack --dry-run
-    npm publish --access public
-    @version="$(node -e 'const p = JSON.parse(require("fs").readFileSync("package.json", "utf8")); process.stdout.write(p.version)')"; \
-    git add package.json package-lock.json README.md PLAN.md justfile; \
-    git commit -m "chore(release): $${version}"; \
-    git tag "v$${version}"; \
-    git push origin main; \
-    git push origin "v$${version}"
+# Publish retry to npm
+publish-retry:
+    npm --workspace {{retry}} pack --dry-run
+    npm --workspace {{retry}} publish --access public
+
+# Bump one workspace package without creating a git tag
+# Usage: just bump @narumitw/pi-retry patch
+bump package part="patch":
+    npm --workspace {{package}} version {{part}} --no-git-tag-version
