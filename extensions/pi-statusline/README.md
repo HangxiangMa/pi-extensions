@@ -32,12 +32,12 @@ The default statusline includes:
 - git branch
 - current project directory
 - active or last tool
-- statuses from other extensions, such as goal mode
 - context usage percentage
 - token totals
 - estimated cost
 - clock
 
+Statuses from other extensions, such as goal mode, appear on their own line below the main statusline.
 The layout adapts to terminal width and truncates safely.
 
 ## Package layout

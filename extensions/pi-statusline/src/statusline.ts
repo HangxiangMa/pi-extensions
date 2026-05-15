@@ -15,7 +15,6 @@ type SegmentName =
 	| "branch"
 	| "cwd"
 	| "tools"
-	| "status"
 	| "context"
 	| "tokens"
 	| "cost"
@@ -68,7 +67,6 @@ const DEFAULT_SEGMENTS: SegmentName[] = [
 	"branch",
 	"cwd",
 	"tools",
-	"status",
 	"context",
 	"tokens",
 	"cost",
@@ -112,7 +110,10 @@ export default function statusline(pi: ExtensionAPI) {
 				},
 				invalidate() {},
 				render(width: number): string[] {
-					return [renderStatusline(width, ctx, footerData, theme, config, runtime)];
+					const lines = [renderStatusline(width, ctx, footerData, theme, config, runtime)];
+					const extensionStatusLine = renderExtensionStatusline(width, footerData, theme);
+					if (extensionStatusLine) lines.push(extensionStatusLine);
+					return lines;
 				},
 			};
 		});
@@ -197,7 +198,7 @@ function renderStatusline(
 	if (width <= 0) return "";
 
 	const segments = config.segments
-		.map((segment, index) => buildSegment(segment, index, ctx, footerData, theme, config, runtime))
+		.map((segment, index) => buildSegment(segment, index, ctx, footerData, config, runtime))
 		.filter(
 			(segment): segment is RenderSegment => segment !== undefined && segment.text.length > 0,
 		);
@@ -227,12 +228,23 @@ function renderStatusline(
 	return truncateToWidth(`${trimmedLeft}${padding}${right}`, width, "");
 }
 
+function renderExtensionStatusline(
+	width: number,
+	footerData: ReadonlyFooterDataProvider,
+	theme: Theme,
+): string | undefined {
+	const status = formatExtensionStatuses(footerData.getExtensionStatuses(), theme);
+	if (!status) return undefined;
+
+	const prefix = theme.fg("dim", "ext ");
+	return truncateToWidth(`${prefix}${status}`, width, "");
+}
+
 function buildSegment(
 	name: SegmentName,
 	index: number,
 	ctx: ExtensionContext,
 	footerData: ReadonlyFooterDataProvider,
-	theme: Theme,
 	config: StatuslineConfig,
 	runtime: RuntimeState,
 ): RenderSegment | undefined {
@@ -251,10 +263,6 @@ function buildSegment(
 			return labeled(name, basename(ctx.cwd) || ctx.cwd, color, config);
 		case "tools":
 			return labeled(name, formatToolActivity(runtime), color, config);
-		case "status": {
-			const status = formatExtensionStatuses(footerData.getExtensionStatuses(), theme);
-			return status ? labeled(name, status, color, config) : undefined;
-		}
 		case "context": {
 			const usage = ctx.getContextUsage();
 			const value =
