@@ -1,0 +1,38 @@
+{
+	"name": "@narumitw/pi-goal",
+	"version": "0.1.3",
+	"description": "Pi extension that keeps working on a /goal until the agent marks it complete.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"goal",
+		"automation"
+	],
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/goal.ts"
+		]
+	},
+	"scripts": {
+		"check": "biome check . && npm run typecheck",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"typebox": "^1.1.37"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.14",
+		"@mariozechner/pi-coding-agent": "0.73.0",
+		"typescript": "6.0.3"
+	}
+}

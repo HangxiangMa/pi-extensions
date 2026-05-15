@@ -1,6 +1,6 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-skillforge := "@narumitw/pi-skillforge"
+goal := "@narumitw/pi-goal"
 retry := "@narumitw/pi-retry"
 
 # Show available commands
@@ -24,8 +24,8 @@ pre-commit:
     pre-commit run --all-files
 
 # Show npm account/registry/package visibility information for one package
-# Usage: just doctor @narumitw/pi-retry
-doctor package="@narumitw/pi-skillforge":
+# Usage: just doctor @narumitw/pi-goal
+doctor package="@narumitw/pi-goal":
     @echo "package: {{package}}"
     npm whoami
     npm config get registry
@@ -33,34 +33,34 @@ doctor package="@narumitw/pi-skillforge":
     npm dist-tag ls {{package}} || true
     npm view {{package}} version || true
 
-# Preview the skillforge package that npm would publish
-pack-skillforge:
-    npm run pack:skillforge
+# Preview the goal package that npm would publish
+pack-goal:
+    npm run pack:goal
 
 # Preview the retry package that npm would publish
 pack-retry:
     npm run pack:retry
 
-# Try skillforge from this working tree as a temporary pi package
-try-skillforge:
-    pi -e ./extensions/pi-skillforge
+# Try goal from this working tree as a temporary pi package
+try-goal:
+    pi -e ./extensions/pi-goal
 
 # Try retry from this working tree as a temporary pi package
 try-retry:
     pi -e ./extensions/pi-retry
 
-# Install the published skillforge package through pi
-install-skillforge:
-    pi install npm:{{skillforge}}
+# Install the published goal package through pi
+install-goal:
+    pi install npm:{{goal}}
 
 # Install the published retry package through pi
 install-retry:
     pi install npm:{{retry}}
 
-# Publish skillforge to npm
-publish-skillforge:
-    npm --workspace {{skillforge}} pack --dry-run
-    npm --workspace {{skillforge}} publish --access public
+# Publish goal to npm
+publish-goal:
+    npm --workspace {{goal}} pack --dry-run
+    npm --workspace {{goal}} publish --access public
 
 # Publish retry to npm
 publish-retry:
@@ -68,6 +68,6 @@ publish-retry:
     npm --workspace {{retry}} publish --access public
 
 # Bump one workspace package without creating a git tag
-# Usage: just bump @narumitw/pi-retry patch
+# Usage: just bump @narumitw/pi-goal patch
 bump package part="patch":
     npm --workspace {{package}} version {{part}} --no-git-tag-version

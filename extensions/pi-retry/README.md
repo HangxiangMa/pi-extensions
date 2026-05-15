@@ -46,9 +46,8 @@ The package exposes its extension through `package.json`:
 }
 ```
 
-This package is separate from `@narumitw/pi-skillforge`, so you can install either package independently:
+Install this package with Pi:
 
 ```bash
-pi install npm:@narumitw/pi-skillforge
 pi install npm:@narumitw/pi-retry
 ```
