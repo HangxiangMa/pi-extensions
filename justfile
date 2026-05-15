@@ -41,9 +41,9 @@ doctor-all:
     just doctor {{retry}}
 
 # Make a scoped npm package public after publish if npm registry returns 404
-# Usage: just npm-public @narumitw/pi-goal
-npm-public package="@narumitw/pi-goal":
-    npm access public {{package}}
+# Usage: just npm-public @narumitw/pi-goal 123456
+npm-public package="@narumitw/pi-goal" otp="":
+    otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; npm access set status=public {{package}} $otp_arg
     npm view {{package}} version
 
 # Preview the chrome-devtools package that npm would publish
@@ -70,9 +70,9 @@ try-goal:
 try-retry:
     pi -e ./extensions/pi-retry
 
-# Install the published chrome-devtools package through pi
+# Install chrome-devtools through pi, falling back to the local workspace if unpublished
 install-chrome-devtools:
-    pi install npm:{{chrome_devtools}}
+    if npm view {{chrome_devtools}} version >/dev/null 2>&1; then pi install npm:{{chrome_devtools}}; else echo "{{chrome_devtools}} is not published; installing local workspace package instead."; pi install ./extensions/pi-chrome-devtools; fi
 
 # Install the published goal package through pi
 install-goal:
