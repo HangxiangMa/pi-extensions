@@ -1,8 +1,8 @@
 # pi-statusline
 
-A public [pi](https://pi.dev) extension package that replaces Pi's footer with a beautiful, information-rich statusline and lets you customize it with `/statusline <prompt>`.
+A public [pi](https://pi.dev) extension package that replaces Pi's footer with a beautiful, information-rich statusline.
 
-Use the slash command for changes, such as `/statusline make it minimal and blue, hide cost`. Normal prompts are not intercepted.
+The extension is display-only: it does not intercept prompts or register customization commands.
 
 ## Install
 
@@ -22,24 +22,6 @@ Try this package locally from the repository root:
 pi -e ./extensions/pi-statusline
 ```
 
-## Slash command examples
-
-Use `/statusline <prompt>`:
-
-```text
-/statusline make it beautiful and compact
-/statusline minimal, blue, and show git branch plus time
-/statusline hide cost and tokens
-/statusline use rainbow colors with context, tools, and cwd
-/statusline monochrome with no separators
-/statusline show current configuration
-/statusline reset to default
-/statusline turn off
-/statusline turn on
-```
-
-Only the `/statusline` command applies changes directly. Other prompts continue to the agent normally.
-
 ## What it shows
 
 The default statusline includes:
@@ -57,10 +39,6 @@ The default statusline includes:
 - clock
 
 The layout adapts to terminal width and truncates safely.
-
-## Agent tool
-
-The package also registers `statusline_customize`, so the agent can apply statusline changes when a statusline request is part of a broader natural-language conversation.
 
 ## Package layout
 
