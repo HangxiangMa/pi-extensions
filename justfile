@@ -1,5 +1,6 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+chrome_devtools := "@narumitw/pi-chrome-devtools"
 goal := "@narumitw/pi-goal"
 retry := "@narumitw/pi-retry"
 
@@ -24,8 +25,8 @@ pre-commit:
     pre-commit run --all-files
 
 # Show npm account/registry/package visibility information for one package
-# Usage: just doctor @narumitw/pi-goal
-doctor package="@narumitw/pi-goal":
+# Usage: just doctor @narumitw/pi-chrome-devtools
+doctor package="@narumitw/pi-chrome-devtools":
     @echo "package: {{package}}"
     npm whoami
     npm config get registry
@@ -35,6 +36,7 @@ doctor package="@narumitw/pi-goal":
 
 # Show npm visibility/version information for all packages
 doctor-all:
+    just doctor {{chrome_devtools}}
     just doctor {{goal}}
     just doctor {{retry}}
 
@@ -44,6 +46,10 @@ npm-public package="@narumitw/pi-goal":
     npm access public {{package}}
     npm view {{package}} version
 
+# Preview the chrome-devtools package that npm would publish
+pack-chrome-devtools:
+    npm run pack:chrome-devtools
+
 # Preview the goal package that npm would publish
 pack-goal:
     npm run pack:goal
@@ -51,6 +57,10 @@ pack-goal:
 # Preview the retry package that npm would publish
 pack-retry:
     npm run pack:retry
+
+# Try chrome-devtools from this working tree as a temporary pi package
+try-chrome-devtools:
+    pi -e ./extensions/pi-chrome-devtools
 
 # Try goal from this working tree as a temporary pi package
 try-goal:
@@ -60,6 +70,10 @@ try-goal:
 try-retry:
     pi -e ./extensions/pi-retry
 
+# Install the published chrome-devtools package through pi
+install-chrome-devtools:
+    pi install npm:{{chrome_devtools}}
+
 # Install the published goal package through pi
 install-goal:
     pi install npm:{{goal}}
@@ -67,6 +81,11 @@ install-goal:
 # Install the published retry package through pi
 install-retry:
     pi install npm:{{retry}}
+
+# Publish chrome-devtools to npm, skipping if the current version already exists
+# Usage with 2FA: just publish-chrome-devtools 123456
+publish-chrome-devtools otp="":
+    version="$(node -p "require('./extensions/pi-chrome-devtools/package.json').version")"; otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; if npm view {{chrome_devtools}}@"$version" version >/dev/null 2>&1; then echo "{{chrome_devtools}}@$version already exists; skipping publish."; else npm --workspace {{chrome_devtools}} pack --dry-run; npm --workspace {{chrome_devtools}} publish --access public $otp_arg; fi
 
 # Publish goal to npm, skipping if the current version already exists
 # Usage with 2FA: just publish-goal 123456
@@ -81,11 +100,13 @@ publish-retry otp="":
 # Publish all extension packages to npm
 # Usage with 2FA: just publish-all 123456
 publish-all otp="":
+    just publish-chrome-devtools {{otp}}
     just publish-goal {{otp}}
     just publish-retry {{otp}}
 
 # Install all published extension packages through pi
 install-all:
+    just install-chrome-devtools
     just install-goal
     just install-retry
 
