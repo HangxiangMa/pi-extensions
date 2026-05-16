@@ -279,12 +279,12 @@ function isWsl() {
 
 function updateStatus(ctx: ExtensionContext) {
 	if (state.disabled) {
-		ctx.ui.setStatus(STATUS_KEY, "caffeinate: disabled");
+		ctx.ui.setStatus(STATUS_KEY, undefined);
 		return;
 	}
 
 	if (state.process) {
-		ctx.ui.setStatus(STATUS_KEY, `caffeinate: on (${state.command?.description ?? "active"})`);
+		ctx.ui.setStatus(STATUS_KEY, "caffeinate: awake");
 		return;
 	}
 
@@ -293,7 +293,7 @@ function updateStatus(ctx: ExtensionContext) {
 		return;
 	}
 
-	ctx.ui.setStatus(STATUS_KEY, "caffeinate: idle");
+	ctx.ui.setStatus(STATUS_KEY, undefined);
 }
 
 function describeState() {

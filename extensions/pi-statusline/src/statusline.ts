@@ -452,7 +452,7 @@ function extensionIcon(key: string): string {
 	if (normalizedKey.includes("python") || normalizedKey.includes("ruff") || normalizedKey.includes("ty"))
 		return "🐍";
 	if (normalizedKey.includes("subagent")) return "🧑‍🤝‍🧑";
-	if (normalizedKey.includes("caffeinate")) return "☕";
+	if (normalizedKey.includes("caffeinate")) return "💊";
 	if (normalizedKey.includes("chrome") || normalizedKey.includes("devtools") || normalizedKey === "cdp")
 		return "🌐";
 	if (normalizedKey.includes("codex")) return "📊";
@@ -464,9 +464,9 @@ function extensionIcon(key: string): string {
 
 function extensionColor(key: string, value: string): ThemeColor {
 	const normalized = `${key} ${value}`.toLowerCase();
-	if (/missing|error|fail|conflict|duplicate/.test(normalized)) return "warning";
+	if (/missing|error|fail|conflict|duplicate|unavailable/.test(normalized)) return "warning";
 	if (normalized.includes("codex")) return "accent";
-	if (/ready|active|running|enabled|ok/.test(normalized)) return "success";
+	if (/ready|active|running|enabled|awake|ok/.test(normalized)) return "success";
 	return "muted";
 }
 

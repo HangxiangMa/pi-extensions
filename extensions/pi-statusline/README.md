@@ -55,6 +55,7 @@ Statuses from other extensions, such as goal mode, appear on their own compact i
 Examples:
 
 - `🎯 active` for goal mode.
+- `💊 awake` while pi-caffeinate is preventing sleep.
 - `🧬 ✓` for Biome LSP readiness.
 - `🐍 ty ✓ ruff ✓` for Python LSP readiness.
 - `🧑‍🤝‍🧑 2 parallel` while subagents are active.

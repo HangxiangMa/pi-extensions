@@ -10,6 +10,7 @@ It is designed for long-running coding, refactoring, debugging, web research, an
 
 - Starts an OS sleep inhibitor when Pi begins processing (`agent_start`).
 - Releases the inhibitor when processing ends (`agent_end`) or the session shuts down.
+- Publishes an `awake` status only while an inhibitor is active.
 - Supports macOS, Windows, WSL, and Linux.
 - Provides `/caffeinate-status` and `/caffeinate-stop` commands.
 - Allows a custom inhibitor command through environment configuration.
