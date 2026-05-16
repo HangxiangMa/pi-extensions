@@ -17,3 +17,5 @@
 
 - Keep entries short and reusable.
 - Keep `just` install recipes resilient by verifying registry visibility and falling back only when it solves the current install path.
+- New extension README files should mirror the existing style: emoji title, npm/Pi/license badges, Features, Install, Usage/What it does, Package layout, Keywords, and License.
+- Earendil Works acquired the Pi tooling from mariozechner; prefer `@earendil-works/*` Pi packages because `@mariozechner/pi-*` packages are deprecated and should not be used for new extension work.

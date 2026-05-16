@@ -83,6 +83,9 @@ pack-caffeinate:
 pack-chrome-devtools:
     just pack chrome-devtools
 
+pack-codex-usage:
+    just pack codex-usage
+
 pack-firecrawl:
     just pack firecrawl
 
@@ -113,6 +116,9 @@ try-caffeinate:
 
 try-chrome-devtools:
     just try chrome-devtools
+
+try-codex-usage:
+    just try codex-usage
 
 try-firecrawl:
     just try firecrawl
@@ -145,6 +151,9 @@ install-caffeinate:
 install-chrome-devtools:
     just install chrome-devtools
 
+install-codex-usage:
+    just install codex-usage
+
 install-firecrawl:
     just install firecrawl
 
@@ -175,6 +184,9 @@ publish-caffeinate:
 
 publish-chrome-devtools:
     just publish chrome-devtools
+
+publish-codex-usage:
+    just publish codex-usage
 
 publish-firecrawl:
     just publish firecrawl

@@ -424,7 +424,9 @@ function formatExtensionStatuses(
 
 function formatExtensionStatus(key: string, value: string, theme: Theme): string {
 	const text = truncateToWidth(simplifyExtensionStatus(key, value), 22, "…");
-	return `${theme.fg(extensionColor(key, value), extensionIcon(key))} ${theme.fg("muted", text)}`;
+	const color = extensionColor(key, value);
+	const textColor = key.toLowerCase().includes("codex") ? color : "muted";
+	return `${theme.fg(color, extensionIcon(key))} ${theme.fg(textColor, text)}`;
 }
 
 function formatSubagentStatus(runtime: RuntimeState, theme: Theme): string[] {
@@ -453,6 +455,7 @@ function extensionIcon(key: string): string {
 	if (normalizedKey.includes("caffeinate")) return "☕";
 	if (normalizedKey.includes("chrome") || normalizedKey.includes("devtools") || normalizedKey === "cdp")
 		return "🌐";
+	if (normalizedKey.includes("codex")) return "📊";
 	if (normalizedKey.includes("firecrawl")) return "🔥";
 	if (normalizedKey.includes("goal")) return "🎯";
 	if (normalizedKey.includes("retry")) return "🔁";
@@ -462,6 +465,7 @@ function extensionIcon(key: string): string {
 function extensionColor(key: string, value: string): ThemeColor {
 	const normalized = `${key} ${value}`.toLowerCase();
 	if (/missing|error|fail|conflict|duplicate/.test(normalized)) return "warning";
+	if (normalized.includes("codex")) return "accent";
 	if (/ready|active|running|enabled|ok/.test(normalized)) return "success";
 	return "muted";
 }
