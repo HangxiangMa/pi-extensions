@@ -54,8 +54,10 @@ doctor-all:
     just doctor {{statusline}}
     just doctor {{subagents}}
 
-# Make a scoped npm package public after publish if npm registry returns 404
-# Usage: just npm-public @narumitw/pi-goal 123456
+# Make an already-published scoped npm package public if npm view returns 404
+# This does not create a package. For a brand-new package, first run:
+#   npm publish --workspace @narumitw/pi-subagents --access public
+# Usage for existing packages: just npm-public @narumitw/pi-goal 123456
 npm-public package="@narumitw/pi-goal" otp="":
     otp_arg=""; if [ -n "{{otp}}" ]; then otp_arg="--otp={{otp}}"; fi; npm access set status=public {{package}} $otp_arg
     npm view {{package}} version
