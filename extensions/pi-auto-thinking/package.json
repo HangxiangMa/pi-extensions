@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-auto-thinking",
-	"version": "0.1.12",
+	"version": "0.1.14",
 	"description": "Pi extension that automatically adjusts thinking level from model capability and task difficulty.",
 	"type": "module",
 	"license": "MIT",
