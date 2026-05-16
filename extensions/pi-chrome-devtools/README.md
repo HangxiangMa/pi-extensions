@@ -1,16 +1,29 @@
-# pi-chrome-devtools
+# 🌐 pi-chrome-devtools — Chrome DevTools Tools for Pi Agents
 
-A public [pi](https://pi.dev) extension package that exposes Chrome DevTools Protocol (CDP) tools to the agent.
+[![npm](https://img.shields.io/npm/v/@narumitw/pi-chrome-devtools)](https://www.npmjs.com/package/@narumitw/pi-chrome-devtools) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-It is inspired by [`chrome-devtools-mcp`](https://github.com/ChromeDevTools/chrome-devtools-mcp), but implemented as native pi tools instead of an MCP server.
+`@narumitw/pi-chrome-devtools` is a native [Pi coding agent](https://pi.dev) extension that exposes Chrome DevTools Protocol (CDP) automation as Pi tools.
 
-## Install
+Use it to let the Pi agent inspect browser tabs, navigate pages, evaluate JavaScript, and capture screenshots while debugging web apps or validating UI behavior.
+
+This package is inspired by [`chrome-devtools-mcp`](https://github.com/ChromeDevTools/chrome-devtools-mcp), but it is implemented as native Pi tools instead of an MCP server.
+
+## ✨ Features
+
+- Lists inspectable Chrome tabs and pages.
+- Selects an active Chrome page for later tool calls.
+- Navigates Chrome to a target URL.
+- Evaluates JavaScript in the selected page.
+- Captures PNG screenshots, including optional full-page screenshots.
+- Uses a local Chrome DevTools Protocol endpoint.
+
+## 📦 Install
 
 ```bash
 pi install npm:@narumitw/pi-chrome-devtools
 ```
 
-Try without installing:
+Try without installing permanently:
 
 ```bash
 pi -e npm:@narumitw/pi-chrome-devtools
@@ -22,7 +35,7 @@ Try this package locally from the repository root:
 pi -e ./extensions/pi-chrome-devtools
 ```
 
-## Start Chrome with CDP enabled
+## 🚀 Start Chrome with CDP enabled
 
 The extension connects to `127.0.0.1:9222` by default.
 
@@ -44,7 +57,7 @@ Override the endpoint if needed:
 PI_CHROME_DEVTOOLS_HOST=127.0.0.1 PI_CHROME_DEVTOOLS_PORT=9223 pi -e ./extensions/pi-chrome-devtools
 ```
 
-## Tools
+## 🛠️ Pi tools
 
 - `chrome_devtools_list_pages` — list inspectable Chrome tabs/pages.
 - `chrome_devtools_select_page` — select the active page for later tool calls.
@@ -52,15 +65,23 @@ PI_CHROME_DEVTOOLS_HOST=127.0.0.1 PI_CHROME_DEVTOOLS_PORT=9223 pi -e ./extension
 - `chrome_devtools_evaluate` — evaluate JavaScript in the selected page.
 - `chrome_devtools_screenshot` — capture a PNG screenshot.
 
-## Command
+## 💬 Command
 
 ```text
 /chrome-devtools
 ```
 
-Shows the configured CDP endpoint and quick start hint.
+Shows the configured CDP endpoint and a quick-start hint.
 
-## Package layout
+## 🧠 Use cases
+
+- Debug front-end applications with an AI coding agent.
+- Verify DOM state after code changes.
+- Capture screenshots for visual inspection.
+- Drive local browser workflows without a separate MCP server.
+- Combine with Pi coding tools for end-to-end web app fixes.
+
+## 🗂️ Package layout
 
 ```txt
 extensions/pi-chrome-devtools/
@@ -72,7 +93,7 @@ extensions/pi-chrome-devtools/
 └── package.json
 ```
 
-The package exposes its extension through `package.json`:
+The package exposes its Pi extension through `package.json`:
 
 ```json
 {
@@ -81,3 +102,11 @@ The package exposes its extension through `package.json`:
   }
 }
 ```
+
+## 🔎 Keywords
+
+Pi extension, Pi coding agent, Chrome DevTools Protocol, CDP, browser automation, web debugging, JavaScript evaluation, screenshot automation, AI coding agent tools.
+
+## 📄 License
+
+MIT. See [`LICENSE`](./LICENSE).

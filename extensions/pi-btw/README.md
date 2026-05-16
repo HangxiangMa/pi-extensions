@@ -1,14 +1,26 @@
-# pi-btw
+# 💬 pi-btw — Side Questions for the Pi Coding Agent
 
-A public [pi](https://pi.dev) extension package that adds `/btw`, a side-question command for asking quick questions without interrupting the main conversation.
+[![npm](https://img.shields.io/npm/v/@narumitw/pi-btw)](https://www.npmjs.com/package/@narumitw/pi-btw) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-## Install
+`@narumitw/pi-btw` is a native [Pi coding agent](https://pi.dev) extension that adds `/btw`, a side-question command for quick clarifications that should not interrupt or pollute the main agent conversation.
+
+Use it when you want to ask a temporary question, inspect context, or get a short explanation while keeping the primary coding task focused.
+
+## ✨ Features
+
+- Adds a `/btw <question>` command to Pi.
+- Answers side questions in a temporary UI.
+- Uses the current session branch as context.
+- Does not append the side question or answer to the main conversation.
+- Works as an independently installable npm Pi extension package.
+
+## 📦 Install
 
 ```bash
 pi install npm:@narumitw/pi-btw
 ```
 
-Try without installing:
+Try without installing permanently:
 
 ```bash
 pi -e npm:@narumitw/pi-btw
@@ -20,15 +32,25 @@ Try this package locally from the repository root:
 pi -e ./extensions/pi-btw
 ```
 
-## Usage
+## 🚀 Usage
 
 ```text
 /btw <your side question>
 ```
 
-The command answers the question in a temporary UI using the current session branch as context, but it does not append the side question or answer to the main conversation.
+Examples:
 
-## Package layout
+```text
+/btw what does this TypeScript error mean?
+/btw summarize the current implementation before we continue
+/btw is this API name idiomatic?
+```
+
+## 🧠 Why use pi-btw?
+
+Normal assistant messages become part of the main Pi conversation and can distract the coding agent from the task. `pi-btw` creates a lightweight side channel for context-aware questions, making it useful for pair programming, debugging, code review, and repository exploration.
+
+## 🗂️ Package layout
 
 ```txt
 extensions/pi-btw/
@@ -40,7 +62,7 @@ extensions/pi-btw/
 └── package.json
 ```
 
-The package exposes its extension through `package.json`:
+The package exposes its Pi extension through `package.json`:
 
 ```json
 {
@@ -49,3 +71,11 @@ The package exposes its extension through `package.json`:
   }
 }
 ```
+
+## 🔎 Keywords
+
+Pi extension, Pi coding agent, AI coding agent, side question command, agent chat workflow, TypeScript Pi package, npm Pi extension.
+
+## 📄 License
+
+MIT. See [`LICENSE`](./LICENSE).
