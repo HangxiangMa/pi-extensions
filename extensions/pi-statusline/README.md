@@ -1,14 +1,27 @@
-# pi-statusline
+# ✨ pi-statusline — Rich Statusline for the Pi Coding Agent
 
-A public [pi](https://pi.dev) extension package that replaces Pi's footer with a beautiful, information-rich statusline.
+[![npm](https://img.shields.io/npm/v/@narumitw/pi-statusline)](https://www.npmjs.com/package/@narumitw/pi-statusline) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-## Install
+`@narumitw/pi-statusline` is a native [Pi coding agent](https://pi.dev) extension that replaces Pi's footer with a beautiful, information-rich terminal statusline.
+
+Use it to monitor model selection, thinking level, git branch, working directory, active tools, context usage, token totals, estimated cost, time, and statuses from other Pi extensions.
+
+## ✨ Features
+
+- Replaces the default Pi footer with a compact rich statusline.
+- Shows model, thinking level, git branch, project directory, active tool, context usage, tokens, cost, and clock.
+- Displays statuses from other extensions, such as goal mode.
+- Uses emoji-labeled segments for readability.
+- Adapts to terminal width and truncates safely.
+- Requires no configuration.
+
+## 📦 Install
 
 ```bash
 pi install npm:@narumitw/pi-statusline
 ```
 
-Try without installing:
+Try without installing permanently:
 
 ```bash
 pi -e npm:@narumitw/pi-statusline
@@ -20,25 +33,32 @@ Try this package locally from the repository root:
 pi -e ./extensions/pi-statusline
 ```
 
-## What it shows
+## 👀 What it shows
 
 The default statusline includes:
 
-- `π` brand marker
-- emoji-labeled current model
-- emoji-labeled thinking level
-- emoji-labeled git branch
-- emoji-labeled current project directory
-- emoji-labeled active or last tool
-- emoji-labeled context usage percentage
-- emoji-labeled token totals
-- emoji-labeled estimated cost
-- emoji-labeled clock
+- `π` brand marker.
+- 🤖 current model.
+- 🧠 thinking level.
+- 🌿 git branch.
+- 📁 current project directory.
+- 🔧 active or last tool.
+- 📊 context usage percentage.
+- 🔢 token totals.
+- 💰 estimated cost.
+- 🕒 clock.
 
 Statuses from other extensions, such as goal mode, appear on their own emoji-labeled line below the main statusline and are separated with ``.
-The layout adapts to terminal width and truncates safely.
 
-## Package layout
+## 🧠 Use cases
+
+- Track agent context usage during long coding sessions.
+- See which model and thinking level are active.
+- Monitor token totals and estimated cost.
+- Keep git branch and project directory visible.
+- Make Pi terminal sessions easier to scan at a glance.
+
+## 🗂️ Package layout
 
 ```txt
 extensions/pi-statusline/
@@ -50,7 +70,7 @@ extensions/pi-statusline/
 └── package.json
 ```
 
-The package exposes its extension through `package.json`:
+The package exposes its Pi extension through `package.json`:
 
 ```json
 {
@@ -59,3 +79,11 @@ The package exposes its extension through `package.json`:
   }
 }
 ```
+
+## 🔎 Keywords
+
+Pi extension, Pi coding agent, statusline, terminal UI, AI coding agent status, token usage, context window, model status, TypeScript Pi package.
+
+## 📄 License
+
+MIT. See [`LICENSE`](./LICENSE).

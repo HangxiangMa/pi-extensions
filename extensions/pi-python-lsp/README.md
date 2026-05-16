@@ -1,16 +1,28 @@
-# pi-python-lsp
+# 🐍 pi-python-lsp — ty and Ruff Language Server Tools for Pi
 
-A public [pi](https://pi.dev) extension package that exposes Python language-server tools from [ty](https://github.com/astral-sh/ty) and [Ruff](https://docs.astral.sh/ruff/).
+[![npm](https://img.shields.io/npm/v/@narumitw/pi-python-lsp)](https://www.npmjs.com/package/@narumitw/pi-python-lsp) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-The extension starts `ty server` or `ruff server` on demand for each tool call, opens the requested Python files over Language Server Protocol (LSP), pulls diagnostics or edits, and then shuts the server down.
+`@narumitw/pi-python-lsp` is a native [Pi coding agent](https://pi.dev) extension that exposes Python language-server tools from [ty](https://github.com/astral-sh/ty) and [Ruff](https://docs.astral.sh/ruff/).
 
-## Install
+Use it to give Pi reliable Python type diagnostics, Ruff lint diagnostics, formatting, import organization, and source fixes through Language Server Protocol (LSP) workflows.
+
+## ✨ Features
+
+- Runs `ty server` on demand for Python type diagnostics.
+- Runs `ruff server` on demand for lint diagnostics.
+- Computes or writes Ruff formatting edits.
+- Computes or writes Ruff source actions such as `source.fixAll.ruff` and `source.organizeImports.ruff`.
+- Supports workspace roots, file limits, and recursive Python file discovery.
+- Starts language servers only for tool calls, then shuts them down.
+- Provides clear setup errors when ty or Ruff is missing.
+
+## 📦 Install
 
 ```bash
 pi install npm:@narumitw/pi-python-lsp
 ```
 
-Try without installing:
+Try without installing permanently:
 
 ```bash
 pi -e npm:@narumitw/pi-python-lsp
@@ -22,7 +34,7 @@ Try this package locally from the repository root:
 pi -e ./extensions/pi-python-lsp
 ```
 
-## Requirements
+## ✅ Requirements
 
 Install `ty` and/or `ruff` somewhere on `PATH`, for example:
 
@@ -43,14 +55,16 @@ Optional timeout overrides:
 PI_TY_LSP_TIMEOUT_MS=30000 PI_RUFF_LSP_TIMEOUT_MS=30000 pi -e ./extensions/pi-python-lsp
 ```
 
-## Tools
+## 🛠️ Pi tools
 
 - `ty_lsp_diagnostics` — start `ty server`, open Python files, and return type diagnostics.
 - `ruff_lsp_diagnostics` — start `ruff server`, open Python files, and return lint diagnostics.
 - `ruff_lsp_format` — compute or write Ruff formatting edits for one Python file.
 - `ruff_lsp_fix` — compute or write Ruff source actions such as `source.fixAll.ruff` or `source.organizeImports.ruff`.
 
-Examples:
+## 🚀 Examples
+
+Check a Python project with ty or Ruff diagnostics:
 
 ```json
 {
@@ -59,12 +73,16 @@ Examples:
 }
 ```
 
+Format a Python file with Ruff:
+
 ```json
 {
   "path": "src/app.py",
   "write": true
 }
 ```
+
+Organize imports with Ruff:
 
 ```json
 {
@@ -76,7 +94,7 @@ Examples:
 
 If `paths` is omitted for diagnostics, the tool recursively discovers Python files under the workspace root, skipping common cache and virtualenv directories.
 
-## Command
+## 💬 Command
 
 ```text
 /python-lsp
@@ -84,7 +102,15 @@ If `paths` is omitted for diagnostics, the tool recursively discovers Python fil
 
 Shows the configured ty and Ruff LSP commands and whether each command is available on `PATH`.
 
-## Package layout
+## 🧠 Use cases
+
+- Let Pi typecheck Python code with ty before completing a task.
+- Ask Pi to run Ruff lint diagnostics while editing.
+- Format Python files through a native Pi tool.
+- Organize imports and apply safe Ruff fixes.
+- Add Python quality gates to AI coding agent workflows.
+
+## 🗂️ Package layout
 
 ```txt
 extensions/pi-python-lsp/
@@ -95,3 +121,11 @@ extensions/pi-python-lsp/
 ├── tsconfig.json
 └── package.json
 ```
+
+## 🔎 Keywords
+
+Pi extension, Pi coding agent, Python LSP, ty, Ruff, Python type checking, Python linting, Python formatter, import organization, Language Server Protocol, AI coding tools.
+
+## 📄 License
+
+MIT. See [`LICENSE`](./LICENSE).
