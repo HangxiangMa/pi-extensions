@@ -453,6 +453,7 @@ function extensionIcon(key: string): string {
 	if (normalizedKey.includes("caffeinate")) return "☕";
 	if (normalizedKey.includes("chrome") || normalizedKey.includes("devtools") || normalizedKey === "cdp")
 		return "🌐";
+	if (normalizedKey.includes("codex")) return "📊";
 	if (normalizedKey.includes("firecrawl")) return "🔥";
 	if (normalizedKey.includes("goal")) return "🎯";
 	if (normalizedKey.includes("retry")) return "🔁";

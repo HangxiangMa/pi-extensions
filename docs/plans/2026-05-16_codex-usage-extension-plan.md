@@ -55,7 +55,7 @@ extensions/pi-codex-usage/
 
 ## Tech Stack
 
-- TypeScript Pi extension，沿用本 repo 目前套件慣例：`@mariozechner/pi-coding-agent`、Node built-ins。
+- TypeScript Pi extension，使用新版 `@earendil-works/pi-coding-agent` 型別與 Node built-ins；不再為新 package 使用已 deprecated 的 `@mariozechner/pi-*` 套件。
 - Node `fetch` 直接呼叫 Codex backend usage endpoint。
 - Node `child_process.spawn` 與 `readline`/stream parser 只用於 Codex app-server fallback。
 - 不在 MVP 新增 runtime dependency；只有在 mock/test 或格式化需求明確時才增加。
@@ -63,7 +63,7 @@ extensions/pi-codex-usage/
 ## Non-Goals
 
 - 不直接解析、修改或刷新 `~/.codex/auth.json`。
-- 不在第一版實作常駐 footer/statusline 顯示，避免長時間顯示 stale quota 或頻繁查詢 backend。
+- 不實作獨立 footer/statusline renderer；只透過 Pi `setStatus` 暴露 compact usage，讓現有 statusline 顯示 extension status。
 - 不支援 OpenAI API key 的 platform rate limits；此功能聚焦 Codex ChatGPT/subscription quota。
 - 不複製 Codex TUI 的完整 `/status` 卡片，只提供 Pi 內可讀的使用量摘要。
 
@@ -82,7 +82,7 @@ extensions/pi-codex-usage/
 
 ## Plan
 
-- [x] 建立 `extensions/pi-codex-usage` package scaffold，包含 `package.json` 的 `pi.extensions`、`files`、scripts、peer/dev dependencies 與 `tsconfig.json`；用 `npm --workspace @narumitw/pi-codex-usage run typecheck` 驗證 package 能被 workspace 辨識。
+- [x] 建立 `extensions/pi-codex-usage` package scaffold，包含 `package.json` 的 `pi.extensions`、`files`、scripts、`@earendil-works/pi-coding-agent` dev dependency 與 `tsconfig.json`；用 `npm --workspace @narumitw/pi-codex-usage run typecheck` 驗證 package 能被 workspace 辨識。
 - [x] 在 root `package.json`、`justfile`、root `README.md` 加入 `pi-codex-usage` 的 check/pack/try/install/publish 入口與 package 表格說明；用 `just --list | rg 'codex-usage'` 和 root README diff 驗證入口完整。
 - [x] 實作 Pi auth direct backend client，從 `ctx.modelRegistry.getApiKeyAndHeaders(ctx.model)` 取得可用 auth，呼叫 `https://chatgpt.com/backend-api/wham/usage`，並在 auth 不可用、HTTP 401/403、payload unsupported 時回傳結構化錯誤；用 real Pi auth smoke test 與 fixture import 驗證 success 與 formatter code path。
 - [x] 實作可選 Codex app-server JSON-RPC fallback client，能在 direct backend 不可用且 `codex` executable 存在時 spawn `codex app-server --listen stdio://`、送出 `initialize`、送出 `initialized` notification、呼叫 `account/rateLimits/read`、在 timeout/exit/error 時清理 process；用 `codex app-server --help` 對照 flag 與 protocol 文件驗證 handshake。
@@ -92,10 +92,11 @@ extensions/pi-codex-usage/
 - [x] 加入 5–15 分鐘記憶體快取與 `--refresh` 參數，避免連續 `/codex-status` 頻繁打 Codex backend；用 implementation review 驗證第二次命令使用 cache，而 `/codex-status --refresh` 會重新查詢。
 - [x] 更新 `extensions/pi-codex-usage/README.md`，說明安裝、`/codex-status` 用法、優先使用 Pi ChatGPT/Codex auth、不需要安裝 Codex CLI、Codex CLI 只是 fallback、MVP 不支援 API key quota、錯誤排查與隱私注意事項，且風格對齊其他 extension README；用 README review 和 `npm run check` 驗證文件與格式。
 - [x] 執行 repository verification，包含 `npm run check` 與 `just pack codex-usage`，並檢查 dry-run tarball 只包含 `src`、`README.md`、`LICENSE` 與 package metadata；用命令輸出作為驗證證據。
-- [x] 若 MVP 驗證穩定，再評估是否新增 optional widget/footer 顯示（預設關閉）；本版決定不納入常駐 widget/footer，避免 stale quota。
+- [x] 若 MVP 驗證穩定，再評估是否新增 optional widget/footer 顯示（預設關閉）；本版不新增獨立 widget/footer，但依使用者要求在目前 model provider 為 `openai-codex` 時透過 `setStatus` 顯示 compact usage，並每 5 分鐘刷新。
 
 ## Verification
 
+- `rg --no-ignore -n "@earendil-works|@mariozechner" extensions/pi-codex-usage`: verified pi-codex-usage uses `@earendil-works/pi-coding-agent` and no deprecated `@mariozechner/pi-*` package.
 - `npm --workspace @narumitw/pi-codex-usage run typecheck`
 - `npm --workspace @narumitw/pi-codex-usage run check`
 - `just --list | rg 'codex-usage'`
@@ -103,6 +104,7 @@ extensions/pi-codex-usage/
 - `node --experimental-strip-types --input-type=module ...` fallback smoke test with empty Pi auth candidate list: verified `Source: Codex app-server` output.
 - `node --experimental-strip-types --input-type=module ...` cache fixture: verified two normal calls plus one `--refresh` result in two fetches.
 - `node --experimental-strip-types --input-type=module ...` missing-auth/no-`codex` fixture: verified error notification includes both source failures.
+- `node --experimental-strip-types --input-type=module ...` automatic statusline fixture: verified `session_start` with `openai-codex` sets `codex <5h>% 5h <weekly>% wk`, and `model_select` away clears it.
 - `npm run check`
 - `just pack codex-usage`
 
@@ -125,6 +127,6 @@ extensions/pi-codex-usage/
 - [x] Codex app-server fallback 可在 direct backend 不可用且本機有 Codex CLI 時查詢 `account/rateLimits/read`，並由 protocol/flag 對照與 typecheck 驗證。
 - [x] 未安裝 Codex CLI、未登入 Pi ChatGPT/Codex auth、API key auth、不支援 usage payload 等錯誤情境都有明確使用者訊息，並由 implementation review 和 fixture import 驗證。
 - [x] Rate-limit output 包含 used/left percent、reset time、credits 與 multi-bucket 資訊，並由 fixture output review 驗證。
-- [x] 快取與 `--refresh` 行為已實作，並由 implementation review 驗證不會無限制頻繁查詢 backend。
+- [x] 快取、`--refresh` 與 `openai-codex` automatic statusline 行為已實作，並由 fixture/implementation review 驗證不會無限制頻繁查詢 backend。
 - [x] Root workspace metadata、README 與 just recipes 已包含 `pi-codex-usage`，並由 `just --list | rg 'codex-usage'` 與 README review 驗證。
 - [x] Repository gate 通過 `npm run check`，package dry run 通過 `just pack codex-usage` 且 tarball 內容正確。
