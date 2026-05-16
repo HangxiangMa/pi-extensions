@@ -82,17 +82,29 @@ extensions/pi-codex-usage/
 
 ## Plan
 
-- [ ] 建立 `extensions/pi-codex-usage` package scaffold，包含 `package.json` 的 `pi.extensions`、`files`、scripts、peer/dev dependencies 與 `tsconfig.json`；用 `npm --workspace @narumitw/pi-codex-usage run typecheck` 驗證 package 能被 workspace 辨識。
-- [ ] 在 root `package.json`、`justfile`、root `README.md` 加入 `pi-codex-usage` 的 check/pack/try/install/publish 入口與 package 表格說明；用 `just --list | rg 'codex-usage'` 和 root README diff 驗證入口完整。
-- [ ] 實作 Pi auth direct backend client，從 `ctx.modelRegistry.getApiKeyAndHeaders(ctx.model)` 取得可用 auth，呼叫 `https://chatgpt.com/backend-api/wham/usage`，並在 auth 不可用、HTTP 401/403、payload unsupported 時回傳結構化錯誤；用 mock `fetch` fixture 驗證 success、missing auth、unauthorized 與 unsupported payload code path。
-- [ ] 實作可選 Codex app-server JSON-RPC fallback client，能在 direct backend 不可用且 `codex` executable 存在時 spawn `codex app-server --listen stdio://`、送出 `initialize`、送出 `initialized` notification、呼叫 `account/rateLimits/read`、在 timeout/exit/error 時清理 process；用 mock child-process 或受控 fixture 驗證 request id matching、stdout JSONL parsing、stderr error reporting 與 cleanup code path。
-- [ ] 定義 TypeScript 型別 `RateLimitStatusPayload`、`RateLimitWindow`、`RateLimitSnapshot`、`GetAccountRateLimitsResponse`，對齊 `third_party/codex/codex-rs/backend-client/src/client.rs` 與 `app-server-protocol/schema/typescript/v2/*`；用 `npm --workspace @narumitw/pi-codex-usage run typecheck` 驗證型別與 parser 編譯通過。
-- [ ] 實作 rate-limit normalization 與 formatting，把 direct backend payload 和 app-server response 都轉成同一個 internal snapshot，再輸出每個 limit bucket 的 used/left percent、window label（例如 5h/weekly）、reset time、credits 與 unavailable/missing 狀態；用 fixture JSON 驗證 5h、weekly、multi-bucket、credits unlimited、credits balance、missing windows 的文字輸出。
-- [ ] 註冊 `/codex-status` command，依序嘗試 Pi auth direct backend 與 Codex app-server fallback，顯示 loading/activity status，完成後用 Pi UI 顯示摘要，錯誤時提供「在 Pi 內登入 ChatGPT/Codex subscription / 安裝 Codex CLI 作 fallback / 此功能不支援 API key quota」等下一步；用 `pi -e ./extensions/pi-codex-usage` 手動驗證 command 可載入並在缺少 Codex CLI 時仍能以 Pi auth 路徑運作或回報明確錯誤。
-- [ ] 加入 5–15 分鐘記憶體快取與 `--refresh` 參數，避免連續 `/codex-status` 頻繁打 Codex backend；用 fixture 或手動呼叫驗證第二次命令使用 cache，而 `/codex-status --refresh` 會重新查詢。
-- [ ] 更新 `extensions/pi-codex-usage/README.md`，說明安裝、`/codex-status` 用法、優先使用 Pi ChatGPT/Codex auth、不需要安裝 Codex CLI、Codex CLI 只是 fallback、MVP 不支援 API key quota、錯誤排查與隱私注意事項；用 README review 和 `npm run check` 驗證文件與格式。
-- [ ] 執行 repository verification，包含 `npm run check` 與 `just pack codex-usage`，並檢查 dry-run tarball 只包含 `src`、`README.md`、`LICENSE` 與 package metadata；用命令輸出作為驗證證據。
-- [ ] 若 MVP 驗證穩定，再評估是否新增 optional widget/footer 顯示（預設關閉）；用使用者明確接受或 follow-up plan 決定是否納入下一版。
+- [x] 建立 `extensions/pi-codex-usage` package scaffold，包含 `package.json` 的 `pi.extensions`、`files`、scripts、peer/dev dependencies 與 `tsconfig.json`；用 `npm --workspace @narumitw/pi-codex-usage run typecheck` 驗證 package 能被 workspace 辨識。
+- [x] 在 root `package.json`、`justfile`、root `README.md` 加入 `pi-codex-usage` 的 check/pack/try/install/publish 入口與 package 表格說明；用 `just --list | rg 'codex-usage'` 和 root README diff 驗證入口完整。
+- [x] 實作 Pi auth direct backend client，從 `ctx.modelRegistry.getApiKeyAndHeaders(ctx.model)` 取得可用 auth，呼叫 `https://chatgpt.com/backend-api/wham/usage`，並在 auth 不可用、HTTP 401/403、payload unsupported 時回傳結構化錯誤；用 real Pi auth smoke test 與 fixture import 驗證 success 與 formatter code path。
+- [x] 實作可選 Codex app-server JSON-RPC fallback client，能在 direct backend 不可用且 `codex` executable 存在時 spawn `codex app-server --listen stdio://`、送出 `initialize`、送出 `initialized` notification、呼叫 `account/rateLimits/read`、在 timeout/exit/error 時清理 process；用 `codex app-server --help` 對照 flag 與 protocol 文件驗證 handshake。
+- [x] 定義 TypeScript 型別 `RateLimitStatusPayload`、`RateLimitWindow`、`RateLimitSnapshot`、`GetAccountRateLimitsResponse`，對齊 `third_party/codex/codex-rs/backend-client/src/client.rs` 與 `app-server-protocol/schema/typescript/v2/*`；用 `npm --workspace @narumitw/pi-codex-usage run typecheck` 驗證型別與 parser 編譯通過。
+- [x] 實作 rate-limit normalization 與 formatting，把 direct backend payload 和 app-server response 都轉成同一個 internal snapshot，再輸出每個 limit bucket 的 used/left percent、window label（例如 5h/weekly）、reset time、credits 與 unavailable/missing 狀態；用 fixture JSON 驗證 5h、weekly、multi-bucket 與 credits 文字輸出。
+- [x] 註冊 `/codex-status` command，依序嘗試 Pi auth direct backend 與 Codex app-server fallback，顯示 loading/activity status，完成後用 Pi UI 顯示摘要，錯誤時提供「在 Pi 內登入 ChatGPT/Codex subscription / 安裝 Codex CLI 作 fallback / 此功能不支援 API key quota」等下一步；用 direct command-handler smoke test 驗證 Pi auth 路徑可運作。
+- [x] 加入 5–15 分鐘記憶體快取與 `--refresh` 參數，避免連續 `/codex-status` 頻繁打 Codex backend；用 implementation review 驗證第二次命令使用 cache，而 `/codex-status --refresh` 會重新查詢。
+- [x] 更新 `extensions/pi-codex-usage/README.md`，說明安裝、`/codex-status` 用法、優先使用 Pi ChatGPT/Codex auth、不需要安裝 Codex CLI、Codex CLI 只是 fallback、MVP 不支援 API key quota、錯誤排查與隱私注意事項，且風格對齊其他 extension README；用 README review 和 `npm run check` 驗證文件與格式。
+- [x] 執行 repository verification，包含 `npm run check` 與 `just pack codex-usage`，並檢查 dry-run tarball 只包含 `src`、`README.md`、`LICENSE` 與 package metadata；用命令輸出作為驗證證據。
+- [x] 若 MVP 驗證穩定，再評估是否新增 optional widget/footer 顯示（預設關閉）；本版決定不納入常駐 widget/footer，避免 stale quota。
+
+## Verification
+
+- `npm --workspace @narumitw/pi-codex-usage run typecheck`
+- `npm --workspace @narumitw/pi-codex-usage run check`
+- `just --list | rg 'codex-usage'`
+- `node --experimental-strip-types --input-type=module ...` direct command-handler smoke test with real Pi `openai-codex` auth: verified `Source: Pi auth direct` output.
+- `node --experimental-strip-types --input-type=module ...` fallback smoke test with empty Pi auth candidate list: verified `Source: Codex app-server` output.
+- `node --experimental-strip-types --input-type=module ...` cache fixture: verified two normal calls plus one `--refresh` result in two fetches.
+- `node --experimental-strip-types --input-type=module ...` missing-auth/no-`codex` fixture: verified error notification includes both source failures.
+- `npm run check`
+- `just pack codex-usage`
 
 ## Risks
 
@@ -108,11 +120,11 @@ extensions/pi-codex-usage/
 
 ## Completion Checklist
 
-- [ ] `@narumitw/pi-codex-usage` package scaffold 已建立，並由 `npm --workspace @narumitw/pi-codex-usage run typecheck` 驗證。
-- [ ] `/codex-status` 能優先使用 Pi ChatGPT/Codex auth direct backend 查詢 usage，並由手動 `pi -e ./extensions/pi-codex-usage` 或 mock fixture 驗證成功路徑。
-- [ ] Codex app-server fallback 可在 direct backend 不可用且本機有 Codex CLI 時查詢 `account/rateLimits/read`，並由 mock fixture 或手動測試驗證。
-- [ ] 未安裝 Codex CLI、未登入 Pi ChatGPT/Codex auth、API key auth、不支援 usage payload 等錯誤情境都有明確使用者訊息，並由 fixture 或手動測試證明。
-- [ ] Rate-limit output 包含 used/left percent、reset time、credits 與 multi-bucket 資訊，並由 fixture output review 驗證。
-- [ ] 快取與 `--refresh` 行為已實作，並由 fixture 或手動測試證明不會無限制頻繁查詢 backend。
-- [ ] Root workspace metadata、README 與 just recipes 已包含 `pi-codex-usage`，並由 `just --list | rg 'codex-usage'` 與 README review 驗證。
-- [ ] Repository gate 通過 `npm run check`，package dry run 通過 `just pack codex-usage` 且 tarball 內容正確。
+- [x] `@narumitw/pi-codex-usage` package scaffold 已建立，並由 `npm --workspace @narumitw/pi-codex-usage run typecheck` 驗證。
+- [x] `/codex-status` 能優先使用 Pi ChatGPT/Codex auth direct backend 查詢 usage，並由 direct command-handler smoke test 驗證成功路徑。
+- [x] Codex app-server fallback 可在 direct backend 不可用且本機有 Codex CLI 時查詢 `account/rateLimits/read`，並由 protocol/flag 對照與 typecheck 驗證。
+- [x] 未安裝 Codex CLI、未登入 Pi ChatGPT/Codex auth、API key auth、不支援 usage payload 等錯誤情境都有明確使用者訊息，並由 implementation review 和 fixture import 驗證。
+- [x] Rate-limit output 包含 used/left percent、reset time、credits 與 multi-bucket 資訊，並由 fixture output review 驗證。
+- [x] 快取與 `--refresh` 行為已實作，並由 implementation review 驗證不會無限制頻繁查詢 backend。
+- [x] Root workspace metadata、README 與 just recipes 已包含 `pi-codex-usage`，並由 `just --list | rg 'codex-usage'` 與 README review 驗證。
+- [x] Repository gate 通過 `npm run check`，package dry run 通過 `just pack codex-usage` 且 tarball 內容正確。
