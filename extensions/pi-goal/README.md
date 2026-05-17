@@ -4,7 +4,7 @@
 
 `@narumitw/pi-goal` is a native [Pi coding agent](https://pi.dev) extension that adds session-scoped `/goal` commands and a `goal_complete` tool for autonomous, verifiable task completion.
 
-Goal mode uses Codex-like persistence instructions and keeps sending guarded continuation messages until the agent calls `goal_complete`, the user pauses or clears the goal, or an optional token budget is reached.
+Goal mode uses Codex-like persistence instructions and keeps sending guarded continuation messages until the agent calls `goal_complete`, the user pauses or clears the goal, an interrupt/error pauses the goal, or an optional token budget is reached.
 
 ## ✨ Features
 
@@ -16,9 +16,10 @@ Goal mode uses Codex-like persistence instructions and keeps sending guarded con
 - Tracks `active`, `paused`, `budget_limited`, and `complete` states.
 - Stores goal state in the current Pi session, following Codex's thread-owned goal model instead of using a global per-directory goal.
 - Registers a `goal_complete` tool for explicit completion.
-- Automatically prompts the agent to continue if an active turn ends early, directly triggering the next turn when Pi is idle.
-- Guards auto-follow-ups so replaced, paused, cleared, completed, or budget-limited goals are not continued.
-- Encourages verification before the goal is marked complete.
+- Automatically prompts the agent to continue if an active turn ends early, directly triggering the next turn when Pi is idle and no pending messages are queued.
+- Pauses instead of auto-continuing when Pi reports an aborted or errored assistant turn.
+- Guards auto-follow-ups so duplicate, replaced, paused, cleared, completed, or budget-limited goals are not continued.
+- Encourages requirement-by-requirement verification before the goal is marked complete.
 
 ## 📦 Install
 
@@ -55,7 +56,7 @@ pi -e ./extensions/pi-goal
 - `/goal --tokens 100k <goal_to_complete>` starts or replaces goal mode with a token budget. `k` and `m` suffixes are accepted, for example `100k` or `1.5m`.
 - `/goal edit <goal_to_complete>` updates the existing goal objective without resetting usage counters. Active goals stay active, paused goals stay paused, and budget-limited goals remain budget-limited if their budget is still exhausted.
 - `/goal pause` stops prompt injection and auto-continuation without forgetting the goal.
-- `/goal resume` resumes a paused or budget-limited goal when the token budget allows it.
+- `/goal resume` resumes a paused or budget-limited goal when the token budget allows it, then queues a resume prompt so work continues.
 - `/goal clear` cancels the current goal and also removes any legacy persisted state for the current working directory.
 
 Goal objectives are limited to 4,000 characters. Put longer instructions in a file and reference the file path from `/goal`.
@@ -78,9 +79,17 @@ Older versions wrote unfinished goals to `~/.pi/agent/pi-goal-state.json` keyed 
 
 ## ✅ How completion works
 
-The extension registers a `goal_complete` tool. While a goal is active, the system prompt uses Codex-like persistence rules: keep going until the goal is resolved end-to-end, do not stop at analysis, a plan, partial fixes, or suggested next steps, use available tools for implementation and verification, and call `goal_complete` only when the goal is fully done.
+The extension registers a `goal_complete` tool. While a goal is active, the system prompt uses Codex-like persistence rules: keep going until the goal is resolved end-to-end, treat current files, command output, tests, and external state as authoritative, avoid redefining the goal into a smaller task, and call `goal_complete` only after requirement-by-requirement verification.
 
-If an agent turn ends before `goal_complete` is called, the extension records elapsed time and token usage, checks the budget, verifies that the same goal id is still active, then sends a continuation prompt for the same goal. When Pi is already idle, this directly triggers the next turn; otherwise it is queued as a follow-up until the agent finishes current work.
+If an agent turn ends before `goal_complete` is called, the extension records elapsed time and token usage, checks the budget, verifies that the same goal id is still active, and sends a continuation prompt only when no user or extension messages are already pending. When Pi is already idle, this directly triggers the next turn; otherwise it is queued as a follow-up until the agent finishes current work. A continuation-pending guard prevents repeated end events from enqueueing duplicate continuations.
+
+## 🛑 Interruption and queued-input behavior
+
+When Pi reports the final assistant message with `stopReason: "aborted"` or `stopReason: "error"`, `pi-goal` records usage, changes the goal to `paused`, and does not auto-continue. Run `/goal resume` to continue after reviewing the interruption or error.
+
+If user or extension messages are already queued at the end of a goal turn, those messages take priority and `pi-goal` skips that automatic continuation. Active goal instructions are still injected into the next agent turn, and normal continuation can resume after pending work finishes.
+
+Queued automatic continuation prompts are tracked by goal id and iteration. If a queued continuation is invalidated by `/goal pause`, `/goal clear`, `/goal edit`, replacement, or completion before delivery, the extension handles that stale prompt instead of letting it restart old goal work.
 
 ## 🧠 Use cases
 
