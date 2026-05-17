@@ -457,7 +457,7 @@ function splitExtensionStatusIcon(value: string): { icon: string; text: string }
 }
 
 function isEmojiOnlyToken(value: string): boolean {
-	return /^[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}0-9#*\u200d\ufe0f\u20e3]+$/u.test(
+	return /^(?=.*(?:\p{Extended_Pictographic}|\p{Regional_Indicator}|[0-9#*]\ufe0f?\u20e3))(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\p{Regional_Indicator}|\u200d|\ufe0f|[0-9#*]\ufe0f?\u20e3)+$/u.test(
 		value,
 	);
 }
