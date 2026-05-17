@@ -450,10 +450,14 @@ function formatDuplicateExtensionStatus(runtime: RuntimeState, theme: Theme): st
 function splitExtensionStatusIcon(value: string): { icon: string; text: string } {
 	const trimmed = value.trim();
 	const [firstToken, ...restTokens] = trimmed.split(/\s+/);
-	if (firstToken && /\p{Extended_Pictographic}/u.test(firstToken)) {
+	if (firstToken && isEmojiOnlyToken(firstToken)) {
 		return { icon: firstToken, text: restTokens.join(" ") };
 	}
 	return { icon: "🔌", text: trimmed };
+}
+
+function isEmojiOnlyToken(value: string): boolean {
+	return /^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\u200d|\ufe0f)+$/u.test(value);
 }
 
 function extensionColor(key: string, value: string): ThemeColor {
