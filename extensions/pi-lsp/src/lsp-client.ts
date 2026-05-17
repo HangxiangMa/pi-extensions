@@ -33,7 +33,7 @@ export class LspClient {
 	}
 
 	async start() {
-		if (!commandExists(this.#command.command)) {
+		if (!commandExists(this.#command.command, this.#cwd)) {
 			throw new Error(
 				`${this.#adapter.label} LSP command not found: ${this.#command.command}. ${this.#adapter.missingCommandHint}`,
 			);
@@ -57,6 +57,7 @@ export class LspClient {
 			this.#stderr += chunk.toString();
 		});
 		child.once("exit", (code, signal) => {
+			if (this.#child === child) this.#child = undefined;
 			const reason = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
 			this.#rejectPending(
 				(id) =>
@@ -125,6 +126,12 @@ export class LspClient {
 	didOpen(uri: string, text: string, languageId: string) {
 		this.notify("textDocument/didOpen", {
 			textDocument: { uri, languageId, version: 1, text },
+		});
+	}
+
+	didClose(uri: string) {
+		this.notify("textDocument/didClose", {
+			textDocument: { uri },
 		});
 	}
 

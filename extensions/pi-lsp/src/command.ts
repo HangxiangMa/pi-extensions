@@ -18,8 +18,10 @@ export function timeoutFromEnv(envVar: string, defaultTimeoutMs: number) {
 	return Number.isFinite(rawValue) && rawValue > 0 ? rawValue : defaultTimeoutMs;
 }
 
-export function commandExists(command: string) {
-	if (command.includes("/") || command.includes("\\")) return isRunnableFile(command);
+export function commandExists(command: string, cwd = process.cwd()) {
+	if (command.includes("/") || command.includes("\\")) {
+		return isRunnableFile(path.isAbsolute(command) ? command : path.resolve(cwd, command));
+	}
 
 	const pathValue = process.env.PATH ?? "";
 	const extensions = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];

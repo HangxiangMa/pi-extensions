@@ -17,7 +17,8 @@
 - [x] Biome defaults to `biome lsp-proxy`, supports `PI_BIOME_LSP_COMMAND`, and uses `PI_BIOME_LSP_TIMEOUT_MS`.
 - [x] ty defaults to `ty server`, supports `PI_TY_LSP_COMMAND`, and uses `PI_TY_LSP_TIMEOUT_MS`.
 - [x] Ruff defaults to `ruff server`, supports `PI_RUFF_LSP_COMMAND`, and uses `PI_RUFF_LSP_TIMEOUT_MS`.
-- [x] Command splitting and `PATH` probing match the old packages.
+- [x] Command splitting preserves the old quoted-command support but intentionally preserves normal backslashes so Windows command paths such as `C:\\Tools\\ruff.exe` remain valid.
+- [x] Command probing validates runnable files, rejects directories/non-executable POSIX files, and resolves relative command paths against the LSP workspace root used as the server `cwd`.
 
 ## File discovery
 
@@ -28,7 +29,7 @@
 
 ## LSP behavior
 
-- [x] Shared runner owns JSON-RPC framing, subprocess lifecycle, initialize/shutdown, file open, diagnostics, formatting, code actions, action resolution, and workspace edit application.
+- [x] Shared runner owns JSON-RPC framing, subprocess lifecycle, initialize/shutdown, file open/close, diagnostics, formatting, code actions, action resolution, and workspace edit application.
 - [x] Biome Adapter keeps dynamic registration capabilities, publish-diagnostics fallback, workspace-folder request handling, tab size 2, and tabs.
 - [x] ty Adapter keeps diagnostic requests without code actions, tab size 4, and spaces.
 - [x] Ruff Adapter keeps diagnostic requests, code actions, tab size 4, and spaces.

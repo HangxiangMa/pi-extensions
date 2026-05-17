@@ -30,10 +30,11 @@ export function collectSupportedFiles(
 ) {
 	const cappedLimit = Math.max(1, Math.floor(limit));
 	const files: string[] = [];
+	const seen = new Set<string>();
 	const inputs = requestedPaths?.length ? requestedPaths : [root];
 
 	for (const input of inputs) {
-		collectPath(adapter, path.resolve(root, input), files, cappedLimit);
+		collectPath(adapter, path.resolve(root, input), files, seen, cappedLimit);
 		if (files.length >= cappedLimit) break;
 	}
 
@@ -44,13 +45,17 @@ function collectPath(
 	adapter: LspServerAdapter,
 	targetPath: string,
 	files: string[],
+	seen: Set<string>,
 	limit: number,
 ) {
 	if (files.length >= limit || !existsSync(targetPath)) return;
 
 	const stats = statSync(targetPath);
 	if (stats.isFile()) {
-		if (adapter.isSupportedFile(targetPath)) files.push(targetPath);
+		if (adapter.isSupportedFile(targetPath) && !seen.has(targetPath)) {
+			seen.add(targetPath);
+			files.push(targetPath);
+		}
 		return;
 	}
 
@@ -61,6 +66,6 @@ function collectPath(
 	for (const entry of entries) {
 		if (files.length >= limit) break;
 		if (entry.isDirectory() && adapter.skipDirectories.has(entry.name)) continue;
-		collectPath(adapter, path.join(targetPath, entry.name), files, limit);
+		collectPath(adapter, path.join(targetPath, entry.name), files, seen, limit);
 	}
 }
