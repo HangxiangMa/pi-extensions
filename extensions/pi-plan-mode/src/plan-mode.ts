@@ -1,18 +1,20 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@mariozechner/pi-coding-agent";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
 const STATUS_KEY = "plan-mode";
 const PLAN_WIDGET_KEY = "plan-mode-plan";
 const PLAN_CONTEXT_MARKER = "[CODEX-LIKE PLAN MODE ACTIVE]";
-const READ_ONLY_TOOLS = ["read", "bash"];
+const SAFE_BUILTIN_PLAN_TOOLS = new Set(["read", "bash", "grep", "find", "ls"]);
+const BLOCKED_BUILTIN_TOOLS = new Set(["edit", "write"]);
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
-const MUTATING_TOOLS = new Set(["edit", "write"]);
 const PROPOSED_PLAN_PATTERN = /<proposed_plan>\s*([\s\S]*?)\s*<\/proposed_plan>/i;
 
 interface PlanModeState {
 	enabled: boolean;
 	latestPlan?: string;
 	awaitingAction: boolean;
+	selectedToolNames?: string[];
+	selectedToolKeys?: string[];
 }
 
 type SessionEntry = {
@@ -95,6 +97,11 @@ export default function planMode(pi: ExtensionAPI) {
 				ctx.ui.notify("Plan mode disabled. Full tool access restored.", "info");
 				return;
 			}
+			if (command === "tools") {
+				if (!state.enabled) enterPlanMode(ctx);
+				await showToolSelector(ctx);
+				return;
+			}
 			if (prompt) {
 				enterPlanModeWithPrompt(prompt, ctx);
 				return;
@@ -111,7 +118,7 @@ export default function planMode(pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		restoreState(ctx);
 		if (pi.getFlag("plan") === true) state.enabled = true;
-		if (state.enabled) activateReadOnlyTools();
+		if (state.enabled) activatePlanModeTools();
 		updateUi(ctx);
 	});
 
@@ -122,13 +129,13 @@ export default function planMode(pi: ExtensionAPI) {
 
 	pi.on("tool_call", async (event) => {
 		if (!state.enabled) return;
-		if (MUTATING_TOOLS.has(event.toolName)) {
+		if (isBlockedBuiltinToolName(event.toolName)) {
 			return {
 				block: true,
-				reason: `Plan mode blocks mutating tool '${event.toolName}'. Use /plan and choose implementation when the plan is ready.`,
+				reason: `Plan mode blocks built-in mutating tool '${event.toolName}'. Use /plan and choose implementation when the plan is ready.`,
 			};
 		}
-		if (event.toolName !== "bash") return;
+		if (event.toolName !== "bash" || !isBuiltinToolName(event.toolName)) return;
 
 		const command = readCommand(event.input);
 		if (!isSafeCommand(command)) {
@@ -148,6 +155,7 @@ export default function planMode(pi: ExtensionAPI) {
 
 	pi.on("before_agent_start", () => {
 		if (!state.enabled) return;
+		applyPlanModeTools();
 		return {
 			message: {
 				customType: "plan-mode-context",
@@ -186,7 +194,7 @@ export default function planMode(pi: ExtensionAPI) {
 	function enterPlanMode(ctx: ExtensionContext) {
 		if (!state.enabled) previousTools = safeGetActiveTools();
 		state = { ...state, enabled: true, awaitingAction: false };
-		activateReadOnlyTools();
+		activatePlanModeTools();
 		persistState();
 		updateUi(ctx);
 	}
@@ -234,8 +242,14 @@ export default function planMode(pi: ExtensionAPI) {
 		}
 
 		const choices = state.latestPlan
-			? ["Show latest proposed plan", "Implement this plan", "Stay in Plan mode", "Exit Plan mode"]
-			: ["Stay in Plan mode", "Exit Plan mode"];
+			? [
+					"Show latest proposed plan",
+					"Implement this plan",
+					"Configure Plan-mode tools",
+					"Stay in Plan mode",
+					"Exit Plan mode",
+				]
+			: ["Configure Plan-mode tools", "Stay in Plan mode", "Exit Plan mode"];
 		const choice = await ctx.ui.select(planStatusText(), choices);
 		if (choice === "Show latest proposed plan") {
 			ctx.ui.notify(state.latestPlan ?? "No proposed plan yet.", "info");
@@ -243,6 +257,10 @@ export default function planMode(pi: ExtensionAPI) {
 		}
 		if (choice === "Implement this plan") {
 			startImplementation(ctx);
+			return;
+		}
+		if (choice === "Configure Plan-mode tools") {
+			await showToolSelector(ctx);
 			return;
 		}
 		if (choice === "Exit Plan mode") {
@@ -257,10 +275,15 @@ export default function planMode(pi: ExtensionAPI) {
 		const choice = await ctx.ui.select("Proposed plan ready. What next?", [
 			"Implement this plan",
 			"Revise plan",
+			"Configure Plan-mode tools",
 			"Stay in Plan mode",
 		]);
 		if (choice === "Implement this plan") {
 			startImplementation(ctx);
+			return;
+		}
+		if (choice === "Configure Plan-mode tools") {
+			await showToolSelector(ctx);
 			return;
 		}
 		if (choice === "Revise plan") {
@@ -269,9 +292,110 @@ export default function planMode(pi: ExtensionAPI) {
 		}
 	}
 
-	function activateReadOnlyTools() {
+	async function showToolSelector(ctx: ExtensionContext) {
+		if (!ctx.hasUI) {
+			ctx.ui.notify(formatToolSummary(), "info");
+			return;
+		}
+
+		while (true) {
+			const tools = selectableTools();
+			const selectedNames = planModeSelectedNames(tools);
+			const choices = tools.map((tool, index) =>
+				formatToolChoice(tool, selectedNames.has(tool.name), index),
+			);
+			const doneChoice = "Done";
+			const choice = await ctx.ui.select(
+				"Plan-mode tools. Non-built-in tools run at user risk.",
+				[...choices, doneChoice],
+			);
+			if (!choice || choice === doneChoice) break;
+
+			const selectedIndex = choices.indexOf(choice);
+			const tool = tools[selectedIndex];
+			if (!tool) continue;
+			if (!canSelectToolInPlanMode(tool)) {
+				ctx.ui.notify(`${tool.name} is blocked in Plan mode.`, "warning");
+				continue;
+			}
+
+			const nextSelectedNames = planModeSelectedNames(tools);
+			if (nextSelectedNames.has(tool.name)) nextSelectedNames.delete(tool.name);
+			else nextSelectedNames.add(tool.name);
+
+			state = {
+				...state,
+				selectedToolNames: filterAvailableSelectedNames(Array.from(nextSelectedNames), tools),
+			};
+			applyPlanModeTools();
+			persistState();
+			updateUi(ctx);
+		}
+
+		applyPlanModeTools();
+		persistState();
+		updateUi(ctx);
+	}
+
+	function activatePlanModeTools() {
 		previousTools ??= safeGetActiveTools();
-		pi.setActiveTools(READ_ONLY_TOOLS);
+		applyPlanModeTools();
+	}
+
+	function applyPlanModeTools() {
+		pi.setActiveTools(planModeToolNames());
+	}
+
+	function planModeToolNames() {
+		const tools = selectableTools();
+		if (tools.length === 0) return ["read", "bash"];
+
+		const selectedNames = planModeSelectedNames(tools);
+		return tools
+			.filter((tool) => selectedNames.has(tool.name) && canSelectToolInPlanMode(tool))
+			.map((tool) => tool.name);
+	}
+
+	function planModeSelectedNames(tools: ToolInfo[]) {
+		const selectedToolNames = state.selectedToolNames ?? migrateSelectedToolKeys(tools);
+		if (selectedToolNames === undefined) return new Set(defaultPlanModeToolNames(tools));
+
+		state = {
+			...state,
+			selectedToolNames: filterAvailableSelectedNames(selectedToolNames, tools),
+			selectedToolKeys: undefined,
+		};
+		return new Set(state.selectedToolNames);
+	}
+
+	function defaultPlanModeToolNames(tools: ToolInfo[]) {
+		return tools
+			.filter((tool) => isBuiltinTool(tool) && SAFE_BUILTIN_PLAN_TOOLS.has(tool.name))
+			.map((tool) => tool.name);
+	}
+
+	function migrateSelectedToolKeys(tools: ToolInfo[]) {
+		if (state.selectedToolKeys === undefined) return undefined;
+		return state.selectedToolKeys
+			.map((key) => toolNameFromLegacyKey(key, tools))
+			.filter((name): name is string => name !== undefined);
+	}
+
+	function filterAvailableSelectedNames(names: string[], tools: ToolInfo[]) {
+		const availableNames = new Set(tools.filter(canSelectToolInPlanMode).map((tool) => tool.name));
+		return unique(names.filter((name) => availableNames.has(name)));
+	}
+
+	function selectableTools() {
+		return safeGetAllTools().sort(compareTools);
+	}
+
+	function safeGetAllTools() {
+		try {
+			return pi.getAllTools();
+		} catch {
+			return [];
+		}
 	}
 
 	function restoreTools() {
@@ -301,6 +425,8 @@ export default function planMode(pi: ExtensionAPI) {
 			enabled: entry.data.enabled ?? false,
 			latestPlan: entry.data.latestPlan,
 			awaitingAction: entry.data.awaitingAction ?? false,
+			selectedToolNames: entry.data.selectedToolNames,
+			selectedToolKeys: entry.data.selectedToolKeys,
 		};
 	}
 
@@ -312,7 +438,11 @@ export default function planMode(pi: ExtensionAPI) {
 				"Use /plan to implement, revise, or exit Plan mode.",
 			]);
 		} else if (state.enabled) {
-			ctx.ui.setWidget(PLAN_WIDGET_KEY, ["Plan mode: read-only", "Produce a <proposed_plan> block."]);
+			ctx.ui.setWidget(PLAN_WIDGET_KEY, [
+				"Plan mode: planning",
+				formatToolSummary(),
+				"Produce a <proposed_plan> block.",
+			]);
 		} else {
 			ctx.ui.setWidget(PLAN_WIDGET_KEY, undefined);
 		}
@@ -331,9 +461,75 @@ export default function planMode(pi: ExtensionAPI) {
 
 	function planStatusText() {
 		if (!state.enabled) return "Plan mode is off.";
-		if (state.latestPlan) return "Plan mode is active and a proposed plan is ready.";
-		return "Plan mode is active. Explore, ask, and produce a <proposed_plan> block.";
+		if (state.latestPlan) return `Plan mode is active and a proposed plan is ready. ${formatToolSummary()}`;
+		return `Plan mode is active. ${formatToolSummary()} Explore, ask, and produce a <proposed_plan> block.`;
 	}
+
+	function formatToolSummary() {
+		const names = planModeToolNames();
+		return `Tools: ${names.length > 0 ? names.join(", ") : "none"}`;
+	}
+
+	function isBlockedBuiltinToolName(toolName: string) {
+		if (!BLOCKED_BUILTIN_TOOLS.has(toolName)) return false;
+		const tool = toolByName(toolName);
+		return tool ? isBuiltinTool(tool) : true;
+	}
+
+	function isBuiltinToolName(toolName: string) {
+		const tool = toolByName(toolName);
+		return tool ? isBuiltinTool(tool) : toolName === "bash";
+	}
+
+	function toolByName(toolName: string) {
+		return safeGetAllTools().find((candidate) => candidate.name === toolName);
+	}
+}
+
+function isBuiltinTool(tool: ToolInfo) {
+	return tool.sourceInfo.source === "builtin";
+}
+
+function canSelectToolInPlanMode(tool: ToolInfo) {
+	if (isBuiltinTool(tool)) return SAFE_BUILTIN_PLAN_TOOLS.has(tool.name);
+	return true;
+}
+
+function toolNameFromLegacyKey(key: string, tools: ToolInfo[]) {
+	const directName = tools.find((tool) => tool.name === key)?.name;
+	if (directName) return directName;
+	const [name] = key.split("\u001f");
+	return tools.find((tool) => tool.name === name) ? name : undefined;
+}
+
+function compareTools(left: ToolInfo, right: ToolInfo) {
+	const leftBuiltin = isBuiltinTool(left);
+	const rightBuiltin = isBuiltinTool(right);
+	if (leftBuiltin !== rightBuiltin) return leftBuiltin ? -1 : 1;
+	return left.name.localeCompare(right.name);
+}
+
+function formatToolChoice(tool: ToolInfo, selected: boolean, index: number) {
+	const marker = selected ? "[x]" : "[ ]";
+	return `${marker} ${index + 1}. ${tool.name} (${toolPolicyLabel(tool)})`;
+}
+
+function toolPolicyLabel(tool: ToolInfo) {
+	if (isBuiltinTool(tool)) {
+		if (!SAFE_BUILTIN_PLAN_TOOLS.has(tool.name)) return "built-in blocked";
+		return tool.name === "bash" ? "built-in limited" : "built-in";
+	}
+	return `user risk: ${toolSourceLabel(tool)}`;
+}
+
+function toolSourceLabel(tool: ToolInfo) {
+	const sourceInfo = tool.sourceInfo;
+	const source = `${sourceInfo.scope}/${sourceInfo.source}`;
+	return sourceInfo.path ? `${source} ${sourceInfo.path}` : source;
+}
+
+function unique(values: string[]) {
+	return Array.from(new Set(values));
 }
 
 function buildPlanModePrompt() {
@@ -346,6 +542,7 @@ Mode rules:
 - Use non-mutating exploration first: read files, search, inspect configuration, run read-only checks, and resolve discoverable facts before asking the user.
 - Ask the user only for preferences or tradeoffs that cannot be discovered from the repository.
 - Do not use update_plan/TODO tooling in Plan Mode; Plan Mode is conversational planning, not execution progress tracking.
+- Plan Mode manages built-in tool safety only. Non-built-in tools are disabled by default and may be enabled by the user at their own risk.
 - Do not perform mutating actions: no edit/write tools, no patching, no formatting that rewrites files, no dependency installation, no commits, no migrations.
 - When the plan is decision-complete, output exactly one proposed plan block using:
 <proposed_plan>
