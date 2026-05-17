@@ -463,13 +463,14 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function isBlockedBuiltinToolName(toolName: string) {
+		if (!BLOCKED_BUILTIN_TOOLS.has(toolName)) return false;
 		const tool = toolByName(toolName);
-		return tool ? isBuiltinTool(tool) && BLOCKED_BUILTIN_TOOLS.has(tool.name) : false;
+		return tool ? isBuiltinTool(tool) : true;
 	}
 
 	function isBuiltinToolName(toolName: string) {
 		const tool = toolByName(toolName);
-		return tool ? isBuiltinTool(tool) : false;
+		return tool ? isBuiltinTool(tool) : toolName === "bash";
 	}
 
 	function toolByName(toolName: string) {
@@ -513,7 +514,7 @@ function formatToolChoice(tool: ToolInfo, selected: boolean, index: number) {
 
 function toolPolicyLabel(tool: ToolInfo) {
 	if (isBuiltinTool(tool)) {
-		if (BLOCKED_BUILTIN_TOOLS.has(tool.name)) return "built-in blocked";
+		if (!SAFE_BUILTIN_PLAN_TOOLS.has(tool.name)) return "built-in blocked";
 		return tool.name === "bash" ? "built-in limited" : "built-in";
 	}
 	return `user risk: ${toolSourceLabel(tool)}`;
