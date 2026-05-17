@@ -423,8 +423,8 @@ function formatExtensionStatuses(
 }
 
 function formatExtensionStatus(key: string, value: string, theme: Theme): string {
-	const status = splitExtensionStatusIcon(simplifyExtensionStatus(key, value));
-	const text = truncateToWidth(status.text, 22, "…");
+	const status = splitExtensionStatusIcon(stripExtensionStatusPrefix(key, value));
+	const text = truncateToWidth(simplifyExtensionStatusText(status.text), 22, "…");
 	const color = extensionColor(key, value);
 	const textColor = color === "warning" ? "warning" : "muted";
 	return `${theme.fg(color, status.icon)} ${theme.fg(textColor, text)}`;
@@ -470,10 +470,13 @@ function extensionColor(key: string, value: string): ThemeColor {
 	return "muted";
 }
 
-function simplifyExtensionStatus(key: string, value: string): string {
+function stripExtensionStatusPrefix(key: string, value: string): string {
+	return value.trim().replace(new RegExp(`^${escapeRegExp(key)}\\s*:\\s*`, "iu"), "");
+}
+
+function simplifyExtensionStatusText(value: string): string {
 	return value
 		.trim()
-		.replace(new RegExp(`^${escapeRegExp(key)}\\s*:\\s*`, "iu"), "")
 		.replace(/\bready\b/giu, "✓")
 		.replace(/\bmissing\b/giu, "✗")
 		.replace(/,\s*/g, " ")
