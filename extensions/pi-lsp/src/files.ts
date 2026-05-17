@@ -5,7 +5,12 @@ import { pathToFileURL } from "node:url";
 import type { LspServerAdapter } from "./types.js";
 
 export function resolveRoot(root?: string) {
-	return path.resolve(root?.trim() || process.cwd());
+	const resolvedRoot = path.resolve(root?.trim() || process.cwd());
+	if (!existsSync(resolvedRoot)) throw new Error(`Workspace root does not exist: ${resolvedRoot}`);
+	if (!statSync(resolvedRoot).isDirectory()) {
+		throw new Error(`Expected workspace root to be a directory: ${resolvedRoot}`);
+	}
+	return resolvedRoot;
 }
 
 export function directoryUri(directory: string) {
@@ -34,7 +39,9 @@ export function collectSupportedFiles(
 	const inputs = requestedPaths?.length ? requestedPaths : [root];
 
 	for (const input of inputs) {
-		collectPath(adapter, path.resolve(root, input), files, seen, cappedLimit);
+		const targetPath = path.resolve(root, input);
+		if (!existsSync(targetPath)) throw new Error(`Requested path does not exist: ${targetPath}`);
+		collectPath(adapter, targetPath, files, seen, cappedLimit);
 		if (files.length >= cappedLimit) break;
 	}
 

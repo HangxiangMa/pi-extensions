@@ -18,12 +18,17 @@ export async function runDiagnostics(
 	statusKey: string,
 ) {
 	const root = resolveRoot(params.root);
+	const command = commandFromEnv(adapter.commandEnvVar, adapter.defaultCommand);
 	const files = collectSupportedFiles(adapter, root, params.paths, params.limit ?? DEFAULT_FILE_LIMIT);
 	if (files.length === 0) {
-		return textResult(adapter.emptyDiagnosticsMessage, { root, files: [] });
+		return textResult(adapter.emptyDiagnosticsMessage, {
+			root,
+			command,
+			files: [],
+			summary: { files: 0, diagnostics: 0 },
+		});
 	}
 
-	const command = commandFromEnv(adapter.commandEnvVar, adapter.defaultCommand);
 	const client = new LspClient(adapter, command, root, timeoutFromEnv(adapter.timeoutEnvVar, DEFAULT_TIMEOUT_MS));
 	const abort = () => client.close();
 	signal?.addEventListener("abort", abort, { once: true });
@@ -44,7 +49,7 @@ export async function runDiagnostics(
 				const diagnostics = await client.diagnostics(uri);
 				entries.push({ path: path.relative(root, file) || file, uri, diagnostics });
 			} finally {
-				client.tryDidClose(uri);
+				client.didClose(uri);
 			}
 		}
 
@@ -90,7 +95,7 @@ export async function runFormat(
 			edits = await client.format(uri);
 			newText = applyTextEdits(text, edits);
 		} finally {
-			client.tryDidClose(uri);
+			client.didClose(uri);
 		}
 		const changed = newText !== text;
 
@@ -147,7 +152,7 @@ export async function runFix(
 			edits = resolvedActions.flatMap((action) => collectWorkspaceEdits(action.edit, uri));
 			newText = applyTextEdits(text, edits);
 		} finally {
-			client.tryDidClose(uri);
+			client.didClose(uri);
 		}
 		const changed = newText !== text;
 

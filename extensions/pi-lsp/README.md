@@ -54,9 +54,15 @@ Avoid installing `@narumitw/pi-lsp` side by side with the older LSP packages unl
 Install the language servers you want to use somewhere on `PATH`:
 
 ```bash
-npm install -D @biomejs/biome
 uv tool install ty
 uv tool install ruff
+```
+
+For Biome, either install it globally/on `PATH`, add your project's `node_modules/.bin` to `PATH`, or point the extension at a project-local command. For example:
+
+```bash
+npm install -D @biomejs/biome
+PI_BIOME_LSP_COMMAND="./node_modules/.bin/biome lsp-proxy" pi -e ./extensions/pi-lsp
 ```
 
 Or provide custom server commands:

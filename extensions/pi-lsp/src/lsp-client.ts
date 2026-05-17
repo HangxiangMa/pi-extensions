@@ -19,6 +19,14 @@ export class LspClient {
 		}
 	>();
 	#publishedDiagnostics = new Map<string, LspDiagnostic[]>();
+	#diagnosticWaiters = new Map<
+		string,
+		Array<{
+			resolve: (diagnostics: LspDiagnostic[]) => void;
+			reject: (reason: unknown) => void;
+			timeout: NodeJS.Timeout;
+		}>
+	>();
 	#stderr = "";
 	#adapter: LspServerAdapter;
 	#command: ServerCommand;
@@ -130,18 +138,11 @@ export class LspClient {
 	}
 
 	didClose(uri: string) {
+		if (!this.#child) return false;
 		this.notify("textDocument/didClose", {
 			textDocument: { uri },
 		});
-	}
-
-	tryDidClose(uri: string) {
-		try {
-			this.didClose(uri);
-			return true;
-		} catch {
-			return false;
-		}
+		return true;
 	}
 
 	async diagnostics(uri: string) {
@@ -155,8 +156,7 @@ export class LspClient {
 			return result?.items ?? [];
 		} catch (error) {
 			if (!this.#adapter.fallbackToPublishDiagnostics || !isUnsupportedMethodError(error)) throw error;
-			await wait(300);
-			return this.#publishedDiagnostics.get(uri) ?? [];
+			return this.#waitForPublishedDiagnostics(uri);
 		}
 	}
 
@@ -217,12 +217,19 @@ export class LspClient {
 		this.#child = undefined;
 	}
 
-	#rejectPending(message: string | ((id: number) => string)) {
+	#rejectPending(message: string | ((id: number | "diagnostics") => string)) {
 		for (const [id, pending] of this.#pending.entries()) {
 			clearTimeout(pending.timeout);
 			pending.reject(new Error(typeof message === "string" ? message : message(id)));
 		}
 		this.#pending.clear();
+		for (const waiters of this.#diagnosticWaiters.values()) {
+			for (const waiter of waiters) {
+				clearTimeout(waiter.timeout);
+				waiter.reject(new Error(typeof message === "string" ? message : message("diagnostics")));
+			}
+		}
+		this.#diagnosticWaiters.clear();
 	}
 
 	#fail(message: string) {
@@ -304,13 +311,41 @@ export class LspClient {
 
 		if (message.method === "textDocument/publishDiagnostics") {
 			const params = message.params as { uri?: string; diagnostics?: LspDiagnostic[] } | undefined;
-			if (params?.uri) this.#publishedDiagnostics.set(params.uri, params.diagnostics ?? []);
+			if (params?.uri) {
+				const diagnostics = params.diagnostics ?? [];
+				this.#publishedDiagnostics.set(params.uri, diagnostics);
+				const waiters = this.#diagnosticWaiters.get(params.uri) ?? [];
+				this.#diagnosticWaiters.delete(params.uri);
+				for (const waiter of waiters) {
+					clearTimeout(waiter.timeout);
+					waiter.resolve(diagnostics);
+				}
+			}
 			return;
 		}
 
 		if (Object.hasOwn(message, "id") && message.method) {
 			this.#respondToServerRequest(message);
 		}
+	}
+
+	#waitForPublishedDiagnostics(uri: string) {
+		const diagnostics = this.#publishedDiagnostics.get(uri);
+		if (diagnostics) return Promise.resolve(diagnostics);
+
+		return new Promise<LspDiagnostic[]>((resolve, reject) => {
+			const waiter = {
+				resolve,
+				reject,
+				timeout: setTimeout(() => {
+					const waiters = this.#diagnosticWaiters.get(uri)?.filter((entry) => entry !== waiter) ?? [];
+					if (waiters.length) this.#diagnosticWaiters.set(uri, waiters);
+					else this.#diagnosticWaiters.delete(uri);
+					resolve(this.#publishedDiagnostics.get(uri) ?? []);
+				}, this.#timeoutMs),
+			};
+			this.#diagnosticWaiters.set(uri, [...(this.#diagnosticWaiters.get(uri) ?? []), waiter]);
+		});
 	}
 
 	#respondToServerRequest(message: JsonRpcMessage) {
