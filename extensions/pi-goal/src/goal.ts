@@ -6,6 +6,7 @@ import { defineTool, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 
 type GoalStatus = "active" | "paused" | "budget_limited" | "complete";
+type AgentStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
 interface ActiveGoal {
 	id: string;
@@ -23,6 +24,18 @@ interface ActiveGoal {
 interface GoalCompleteDetails {
 	goal: string;
 	summary: string;
+}
+
+interface ContinuationPending {
+	goalId: string;
+	iteration: number;
+	prompt: string;
+}
+
+interface AssistantMessageLike {
+	role: "assistant";
+	stopReason?: AgentStopReason;
+	errorMessage?: string;
 }
 
 interface GoalStateEntryData {
@@ -43,12 +56,14 @@ interface StatusContext {
 		setStatus: (key: string, value: string | undefined) => void;
 	};
 	isIdle?: () => boolean;
+	hasPendingMessages?: () => boolean;
 	sessionManager?: unknown;
 }
 
 const STATUS_KEY = "goal";
 const GOAL_STATE_ENTRY_TYPE = "goal-state";
 const MAX_OBJECTIVE_LENGTH = 4_000;
+const MAX_CANCELLED_CONTINUATION_PROMPTS = 20;
 const STATE_FILE = join(
 	process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent"),
 	"pi-goal-state.json",
@@ -57,6 +72,8 @@ const STATE_FILE = join(
 let activeGoal: ActiveGoal | undefined;
 let completionStatusTimer: NodeJS.Timeout | undefined;
 let extensionApi: ExtensionAPI | undefined;
+let continuationPending: ContinuationPending | undefined;
+const cancelledContinuationPrompts = new Set<string>();
 
 const goalCompleteTool = defineTool({
 	name: "goal_complete",
@@ -66,6 +83,7 @@ const goalCompleteTool = defineTool({
 	promptSnippet: "Mark the active /goal as complete after fully finishing and verifying it",
 	promptGuidelines: [
 		"When a /goal is active, keep working until the goal is complete; do not stop with only a plan or partial progress.",
+		"Before calling goal_complete, audit the active goal requirement by requirement against the current files, command output, tests, or external state.",
 		"Call goal_complete only after the requested goal is fully implemented, verified, and no known required work remains.",
 	],
 	parameters: Type.Object({
@@ -118,7 +136,7 @@ export default function goal(pi: ExtensionAPI) {
 					pauseGoal(ctx);
 					return;
 				case "resume":
-					resumeGoal(ctx);
+					resumeGoal(pi, ctx);
 					return;
 				case "clear":
 					clearGoal(ctx);
@@ -134,6 +152,7 @@ export default function goal(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
+		clearContinuationTracking();
 		activeGoal = loadGoalFromSession(ctx);
 		if (activeGoal) updateStatus(ctx, activeGoal);
 		else ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -141,11 +160,18 @@ export default function goal(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (activeGoal) persistGoal(activeGoal);
+		clearContinuationTracking();
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		if (completionStatusTimer) clearTimeout(completionStatusTimer);
 	});
 
+	pi.on("input", (event) => {
+		if (event.source !== "extension") return;
+		if (consumeCancelledContinuationPrompt(event.text)) return { action: "handled" as const };
+	});
+
 	pi.on("before_agent_start", (event) => {
+		markContinuationDelivered(event.prompt);
 		if (!activeGoal || activeGoal.status !== "active") return;
 
 		return {
@@ -153,12 +179,25 @@ export default function goal(pi: ExtensionAPI) {
 		};
 	});
 
-	pi.on("agent_end", (_event, ctx) => {
+	pi.on("agent_end", (event, ctx) => {
 		if (!activeGoal || activeGoal.status !== "active") return;
 
+		if (continuationPending?.goalId === activeGoal.id) {
+			updateGoalUsage(activeGoal, ctx);
+			persistGoal(activeGoal);
+			updateStatus(ctx, activeGoal);
+			return;
+		}
+
 		const goalId = activeGoal.id;
+		const finalAssistant = findFinalAssistantMessage(event.messages);
 		activeGoal = incrementGoal(activeGoal);
 		updateGoalUsage(activeGoal, ctx);
+
+		if (finalAssistant?.stopReason === "aborted" || finalAssistant?.stopReason === "error") {
+			pauseGoalAfterAgentEnd(ctx, activeGoal, finalAssistant);
+			return;
+		}
 
 		if (activeGoal.tokenBudget !== undefined && activeGoal.tokensUsed >= activeGoal.tokenBudget) {
 			activeGoal = transitionGoal(activeGoal, "budget_limited");
@@ -173,6 +212,7 @@ export default function goal(pi: ExtensionAPI) {
 
 		const currentGoal = activeGoal;
 		if (!currentGoal || currentGoal.id !== goalId || currentGoal.status !== "active") return;
+		if (hasPendingMessages(ctx)) return;
 		sendContinuationPrompt(pi, ctx, currentGoal);
 	});
 }
@@ -201,6 +241,7 @@ async function startGoal(
 		}
 	}
 
+	cancelContinuationPending();
 	activeGoal = createGoal(objective, tokenBudget, currentTokenTotal(ctx));
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
@@ -217,13 +258,14 @@ function pauseGoal(ctx: StatusContext) {
 		ctx.ui.notify(`Goal is ${activeGoal.status}; only active goals can be paused.`, "warning");
 		return;
 	}
+	cancelContinuationPending();
 	activeGoal = transitionGoal(activeGoal, "paused");
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
 	ctx.ui.notify(`Goal paused: ${activeGoal.text}`, "info");
 }
 
-function resumeGoal(ctx: StatusContext) {
+function resumeGoal(pi: ExtensionAPI, ctx: StatusContext) {
 	if (!activeGoal) {
 		ctx.ui.notify("No active goal.", "info");
 		return;
@@ -235,12 +277,18 @@ function resumeGoal(ctx: StatusContext) {
 	activeGoal = transitionGoal(activeGoal, "active");
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
+	if (activeGoal.status !== "active") {
+		ctx.ui.notify(`Goal token budget is still reached: ${formatBudget(activeGoal)}`, "warning");
+		return;
+	}
 	ctx.ui.notify(`Goal resumed: ${activeGoal.text}`, "info");
+	sendResumePrompt(pi, ctx, activeGoal);
 }
 
 function clearGoal(ctx: StatusContext) {
 	if (!activeGoal) {
 		ctx.ui.notify("No active goal.", "info");
+		cancelContinuationPending();
 		clearPersistedGoal(ctx.cwd);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		return;
@@ -268,6 +316,7 @@ function editGoal(
 	}
 
 	updateGoalUsage(activeGoal, ctx);
+	cancelContinuationPending();
 	activeGoal = normalizeGoalForBudget({
 		...activeGoal,
 		text: objective,
@@ -330,6 +379,21 @@ function normalizeGoalForBudget(goal: ActiveGoal): ActiveGoal {
 
 function incrementGoal(goal: ActiveGoal): ActiveGoal {
 	return { ...goal, iteration: goal.iteration + 1, updatedAt: Date.now() };
+}
+
+function pauseGoalAfterAgentEnd(
+	ctx: StatusContext,
+	goal: ActiveGoal,
+	assistant: AssistantMessageLike,
+) {
+	cancelContinuationPending();
+	activeGoal = transitionGoal(goal, "paused");
+	persistGoal(activeGoal);
+	updateStatus(ctx, activeGoal);
+
+	const reason = assistant.stopReason === "aborted" ? "interruption" : "agent error";
+	const details = assistant.errorMessage ? ` (${truncateNotification(assistant.errorMessage)})` : "";
+	ctx.ui.notify(`Goal paused after ${reason}${details}. Run /goal resume to continue.`, "warning");
 }
 
 function updateGoalUsage(goal: ActiveGoal, ctx: StatusContext) {
@@ -423,13 +487,30 @@ function sendObjectiveUpdatedPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: 
 	sendPrompt(pi, ctx, buildObjectiveUpdatedPrompt(goal));
 }
 
+function sendResumePrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
+	sendPrompt(pi, ctx, buildResumePrompt(goal));
+}
+
 function sendContinuationPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
-	sendPrompt(pi, ctx, buildContinuePrompt(goal));
+	if (continuationPending?.goalId === goal.id) return false;
+	if (hasPendingMessages(ctx)) return false;
+
+	const prompt = buildContinuePrompt(goal);
+	continuationPending = { goalId: goal.id, iteration: goal.iteration, prompt };
+	const sent = sendPrompt(pi, ctx, prompt);
+	if (!sent && continuationPending?.prompt === prompt) continuationPending = undefined;
+	return sent;
 }
 
 function sendPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string) {
-	if (ctx.isIdle?.()) pi.sendUserMessage(prompt);
-	else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+	try {
+		if (ctx.isIdle?.()) pi.sendUserMessage(prompt);
+		else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+		return true;
+	} catch (error) {
+		ctx.ui.notify(`Goal prompt failed: ${formatError(error)}`, "error");
+		return false;
+	}
 }
 
 function updateStatus(ctx: StatusContext, goal: ActiveGoal) {
@@ -482,25 +563,94 @@ function formatTokenCount(value: number) {
 
 function buildGoalPrompt(goal: ActiveGoal) {
 	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatTokenCount(goal.tokenBudget)}.`;
-	return `Goal mode is active. Complete this goal fully:\n\n${goal.text}${budgetLine}\n\n${goalPersistenceRules("this goal")}`;
+	return `Goal mode is active. Complete this goal fully:\n\n${goalObjectiveBlock(goal)}${budgetLine}\n\n${goalPersistenceRules("this goal")}`;
 }
 
 function buildObjectiveUpdatedPrompt(goal: ActiveGoal) {
 	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
-	return `The active /goal objective was updated. Continue working toward this goal:\n\n${goal.text}${budgetLine}\n\n${goalPersistenceRules("the updated goal")}`;
+	return `The active /goal objective was updated. Continue working toward this goal:\n\n${goalObjectiveBlock(goal)}${budgetLine}\n\n${goalPersistenceRules("the updated goal")}`;
+}
+
+function buildResumePrompt(goal: ActiveGoal) {
+	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
+	return `The user explicitly resumed the paused /goal. Continue working toward this goal:\n\n${goalObjectiveBlock(goal)}${budgetLine}\n\n${goalPersistenceRules("this goal")}`;
 }
 
 function buildGoalSystemPrompt(goal: ActiveGoal) {
 	const budgetLine = goal.tokenBudget === undefined ? "" : `\n- Respect the goal token budget (${formatBudget(goal)} used).`;
-	return `Active /goal: ${goal.text}\n\nGoal-mode rules:\n- Keep going until the active goal is completely resolved end-to-end.\n- Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps.\n- Autonomously perform implementation and verification with the available tools when they are needed to complete the goal.\n- Persevere through recoverable tool failures by trying reasonable alternatives instead of yielding early.\n- If the goal is not complete at the end of a turn, expect an automatic continuation and keep working from where you left off.\n- Only call the goal_complete tool after the goal is fully complete and verified.${budgetLine}`;
+	return `Active /goal:\n${goalObjectiveBlock(goal)}\n\nGoal-mode rules:\n- Keep going until the active goal is completely resolved end-to-end.\n- Treat the current worktree, command output, tests, and external state as authoritative.\n- Do not redefine the goal into a smaller task; audit every requirement before completion.\n- Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps.\n- Autonomously perform implementation and verification with the available tools when they are needed to complete the goal.\n- Persevere through recoverable tool failures by trying reasonable alternatives instead of yielding early.\n- If the goal is not complete at the end of a turn, expect an automatic continuation and keep working from where you left off.\n- Only call the goal_complete tool after the goal is fully complete and verified.${budgetLine}`;
 }
 
 function buildContinuePrompt(goal: ActiveGoal) {
-	return `Continue the active /goal until it is complete:\n\n${goal.text}\n\nThis is automatic continuation #${goal.iteration}. ${goalPersistenceRules("this goal")}`;
+	return `Continue the active /goal until it is complete:\n\n${goalObjectiveBlock(goal)}\n\nThis is automatic continuation #${goal.iteration}. Current files, command output, tests, and external state are authoritative; re-check them as needed. ${goalPersistenceRules("this goal")}`;
+}
+
+function goalObjectiveBlock(goal: ActiveGoal) {
+	return `<goal_objective>\n${escapeXmlText(goal.text)}\n</goal_objective>`;
 }
 
 function goalPersistenceRules(goalLabel: string) {
-	return `Keep going until ${goalLabel} is completely resolved end-to-end. Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps. Autonomously perform implementation and verification with the available tools when they are needed. If a tool call fails, try reasonable alternatives instead of yielding early. Only call the goal_complete tool after ${goalLabel} is fully complete and verified.`;
+	return `Keep going until ${goalLabel} is completely resolved end-to-end. Do not redefine ${goalLabel} into a smaller task. Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps. Autonomously perform implementation and verification with the available tools when they are needed. Treat the current worktree, command output, tests, and external state as authoritative. If a tool call fails, try reasonable alternatives instead of yielding early. Before calling goal_complete, audit ${goalLabel} requirement by requirement against the verified current state. Only call the goal_complete tool after ${goalLabel} is fully complete and verified.`;
+}
+
+function hasPendingMessages(ctx: StatusContext) {
+	return ctx.hasPendingMessages?.() ?? false;
+}
+
+function clearContinuationTracking() {
+	continuationPending = undefined;
+	cancelledContinuationPrompts.clear();
+}
+
+function cancelContinuationPending() {
+	if (continuationPending) rememberCancelledContinuationPrompt(continuationPending.prompt);
+	continuationPending = undefined;
+}
+
+function rememberCancelledContinuationPrompt(prompt: string) {
+	cancelledContinuationPrompts.add(prompt);
+	if (cancelledContinuationPrompts.size <= MAX_CANCELLED_CONTINUATION_PROMPTS) return;
+	const oldest = cancelledContinuationPrompts.values().next().value;
+	if (oldest) cancelledContinuationPrompts.delete(oldest);
+}
+
+function consumeCancelledContinuationPrompt(prompt: string) {
+	return cancelledContinuationPrompts.delete(prompt);
+}
+
+function markContinuationDelivered(prompt: string) {
+	if (continuationPending?.prompt === prompt) continuationPending = undefined;
+}
+
+function findFinalAssistantMessage(messages: unknown[]): AssistantMessageLike | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		if (!message || typeof message !== "object") continue;
+		const candidate = message as Record<string, unknown>;
+		if (candidate.role !== "assistant") continue;
+		return {
+			role: "assistant",
+			stopReason: isAgentStopReason(candidate.stopReason) ? candidate.stopReason : undefined,
+			errorMessage: typeof candidate.errorMessage === "string" ? candidate.errorMessage : undefined,
+		};
+	}
+	return undefined;
+}
+
+function isAgentStopReason(value: unknown): value is AgentStopReason {
+	return ["stop", "length", "toolUse", "error", "aborted"].includes(String(value));
+}
+
+function escapeXmlText(value: string) {
+	return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function formatError(error: unknown) {
+	return truncateNotification(error instanceof Error ? error.message : String(error));
+}
+
+function truncateNotification(value: string) {
+	return value.length > 160 ? `${value.slice(0, 157)}...` : value;
 }
 
 function currentTokenTotal(ctx: StatusContext): number {
@@ -543,6 +693,7 @@ function loadGoalFromSession(ctx: StatusContext): ActiveGoal | undefined {
 }
 
 function clearActiveGoal(ctx: StatusContext) {
+	cancelContinuationPending();
 	activeGoal = undefined;
 	clearPersistedGoal(ctx.cwd);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
