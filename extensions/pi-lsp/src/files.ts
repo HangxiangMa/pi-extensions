@@ -94,7 +94,20 @@ function collectPath(
 
 function resolveWorkspacePath(root: string, inputPath: string, label: string) {
 	const resolvedPath = path.resolve(root, inputPath);
-	if (!isInsidePath(root, resolvedPath)) {
+	const realRoot = realpathSync(root);
+	const isLexicallyInsideRoot = isInsidePath(root, resolvedPath);
+
+	if (existsSync(resolvedPath)) {
+		const realResolvedPath = realpathSync(resolvedPath);
+		if (!isInsidePath(realRoot, realResolvedPath)) {
+			throw new Error(`${label} resolves outside workspace root: ${resolvedPath}`);
+		}
+		return isLexicallyInsideRoot
+			? resolvedPath
+			: path.join(root, path.relative(realRoot, realResolvedPath));
+	}
+
+	if (!isLexicallyInsideRoot && !isInsidePath(realRoot, resolvedPath)) {
 		throw new Error(`${label} escapes workspace root: ${resolvedPath}`);
 	}
 	return resolvedPath;
