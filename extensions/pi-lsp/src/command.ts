@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import type { ServerCommand } from "./types.js";
@@ -19,18 +19,29 @@ export function timeoutFromEnv(envVar: string, defaultTimeoutMs: number) {
 }
 
 export function commandExists(command: string) {
-	if (command.includes("/") || command.includes("\\")) return existsSync(command);
+	if (command.includes("/") || command.includes("\\")) return isRunnableFile(command);
 
 	const pathValue = process.env.PATH ?? "";
 	const extensions = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
 	for (const directory of pathValue.split(process.platform === "win32" ? ";" : ":")) {
 		if (!directory) continue;
 		for (const extension of extensions) {
-			if (existsSync(path.join(directory, `${command}${extension}`))) return true;
+			if (isRunnableFile(path.join(directory, `${command}${extension}`))) return true;
 		}
 	}
 
 	return false;
+}
+
+function isRunnableFile(filePath: string) {
+	if (!existsSync(filePath)) return false;
+	try {
+		if (!statSync(filePath).isFile()) return false;
+		if (process.platform !== "win32") accessSync(filePath, constants.X_OK);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 export function splitCommand(input: string) {

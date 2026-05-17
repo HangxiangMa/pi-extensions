@@ -44,7 +44,15 @@ export class LspClient {
 			stdio: "pipe",
 		});
 		this.#child = child;
-		child.stdout.on("data", (chunk) => this.#onData(chunk));
+		child.stdout.on("data", (chunk) => {
+			try {
+				this.#onData(chunk);
+			} catch (error) {
+				this.#fail(
+					`${this.#adapter.label} LSP server sent invalid JSON-RPC data: ${formatErrorMessage(error)}.${this.#formatStderr()}`,
+				);
+			}
+		});
 		child.stderr.on("data", (chunk) => {
 			this.#stderr += chunk.toString();
 		});
@@ -201,6 +209,12 @@ export class LspClient {
 		this.#pending.clear();
 	}
 
+	#fail(message: string) {
+		this.#rejectPending(message);
+		if (this.#child && !this.#child.killed) this.#child.kill("SIGTERM");
+		this.#child = undefined;
+	}
+
 	private request(method: string, params: unknown) {
 		const id = this.#nextId++;
 
@@ -306,6 +320,10 @@ export class LspClient {
 
 function isUnsupportedMethodError(error: unknown) {
 	return error instanceof Error && /method not found|not supported|unsupported/i.test(error.message);
+}
+
+function formatErrorMessage(error: unknown) {
+	return error instanceof Error ? error.message : String(error);
 }
 
 function wait(ms: number) {

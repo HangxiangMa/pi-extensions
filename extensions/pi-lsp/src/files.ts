@@ -55,7 +55,10 @@ function collectPath(
 	}
 
 	if (!stats.isDirectory()) return;
-	for (const entry of readdirSync(targetPath, { withFileTypes: true })) {
+	const entries = readdirSync(targetPath, { withFileTypes: true }).sort((left, right) =>
+		left.name.localeCompare(right.name),
+	);
+	for (const entry of entries) {
 		if (files.length >= limit) break;
 		if (entry.isDirectory() && adapter.skipDirectories.has(entry.name)) continue;
 		collectPath(adapter, path.join(targetPath, entry.name), files, limit);
