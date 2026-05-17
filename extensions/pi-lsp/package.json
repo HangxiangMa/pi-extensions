@@ -1,0 +1,49 @@
+{
+	"name": "@narumitw/pi-lsp",
+	"version": "0.1.19",
+	"description": "Pi extension that exposes language-server tools for Biome, ty, and Ruff through a shared LSP runner.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"lsp",
+		"biome",
+		"python",
+		"ty",
+		"ruff",
+		"lint",
+		"format"
+	],
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/pi-lsp.ts"
+		]
+	},
+	"scripts": {
+		"check": "biome check . && npm run typecheck",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"typebox": "^1.1.37"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.14",
+		"@mariozechner/pi-coding-agent": "0.73.0",
+		"@types/node": "25.6.0",
+		"typescript": "6.0.3"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/narumiruna/pi-extensions",
+		"directory": "extensions/pi-lsp"
+	}
+}

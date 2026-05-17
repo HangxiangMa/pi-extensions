@@ -92,6 +92,9 @@ pack-firecrawl:
 pack-goal:
     just pack goal
 
+pack-lsp:
+    just pack lsp
+
 pack-plan-mode:
     just pack plan-mode
 
@@ -128,6 +131,9 @@ try-firecrawl:
 
 try-goal:
     just try goal
+
+try-lsp:
+    just try lsp
 
 try-plan-mode:
     just try plan-mode
@@ -166,6 +172,9 @@ install-firecrawl:
 install-goal:
     just install goal
 
+install-lsp:
+    just install lsp
+
 install-plan-mode:
     just install plan-mode
 
@@ -202,6 +211,9 @@ publish-firecrawl:
 
 publish-goal:
     just publish goal
+
+publish-lsp:
+    just publish lsp
 
 publish-plan-mode:
     just publish plan-mode
