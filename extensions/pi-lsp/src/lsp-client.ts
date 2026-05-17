@@ -135,6 +135,15 @@ export class LspClient {
 		});
 	}
 
+	tryDidClose(uri: string) {
+		try {
+			this.didClose(uri);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	async diagnostics(uri: string) {
 		try {
 			const response = await this.request("textDocument/diagnostic", {

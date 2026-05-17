@@ -44,7 +44,7 @@ export async function runDiagnostics(
 				const diagnostics = await client.diagnostics(uri);
 				entries.push({ path: path.relative(root, file) || file, uri, diagnostics });
 			} finally {
-				client.didClose(uri);
+				client.tryDidClose(uri);
 			}
 		}
 
@@ -90,7 +90,7 @@ export async function runFormat(
 			edits = await client.format(uri);
 			newText = applyTextEdits(text, edits);
 		} finally {
-			client.didClose(uri);
+			client.tryDidClose(uri);
 		}
 		const changed = newText !== text;
 
@@ -147,7 +147,7 @@ export async function runFix(
 			edits = resolvedActions.flatMap((action) => collectWorkspaceEdits(action.edit, uri));
 			newText = applyTextEdits(text, edits);
 		} finally {
-			client.didClose(uri);
+			client.tryDidClose(uri);
 		}
 		const changed = newText !== text;
 
