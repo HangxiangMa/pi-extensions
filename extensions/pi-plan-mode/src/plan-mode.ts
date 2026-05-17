@@ -13,6 +13,7 @@ interface PlanModeState {
 	enabled: boolean;
 	latestPlan?: string;
 	awaitingAction: boolean;
+	selectedToolNames?: string[];
 	selectedToolKeys?: string[];
 }
 
@@ -299,9 +300,9 @@ export default function planMode(pi: ExtensionAPI) {
 
 		while (true) {
 			const tools = selectableTools();
-			const selectedKeys = planModeSelectedKeys(tools);
+			const selectedNames = planModeSelectedNames(tools);
 			const choices = tools.map((tool, index) =>
-				formatToolChoice(tool, selectedKeys.has(toolKey(tool)), index),
+				formatToolChoice(tool, selectedNames.has(tool.name), index),
 			);
 			const doneChoice = "Done";
 			const choice = await ctx.ui.select(
@@ -318,14 +319,13 @@ export default function planMode(pi: ExtensionAPI) {
 				continue;
 			}
 
-			const nextSelectedKeys = planModeSelectedKeys(tools);
-			const key = toolKey(tool);
-			if (nextSelectedKeys.has(key)) nextSelectedKeys.delete(key);
-			else nextSelectedKeys.add(key);
+			const nextSelectedNames = planModeSelectedNames(tools);
+			if (nextSelectedNames.has(tool.name)) nextSelectedNames.delete(tool.name);
+			else nextSelectedNames.add(tool.name);
 
 			state = {
 				...state,
-				selectedToolKeys: filterAvailableSelectedKeys(Array.from(nextSelectedKeys), tools),
+				selectedToolNames: filterAvailableSelectedNames(Array.from(nextSelectedNames), tools),
 			};
 			applyPlanModeTools();
 			persistState();
@@ -350,33 +350,40 @@ export default function planMode(pi: ExtensionAPI) {
 		const tools = selectableTools();
 		if (tools.length === 0) return ["read", "bash"];
 
-		const selectedKeys = planModeSelectedKeys(tools);
-		return unique(
-			tools
-				.filter((tool) => selectedKeys.has(toolKey(tool)) && canSelectToolInPlanMode(tool))
-				.map((tool) => tool.name),
-		);
+		const selectedNames = planModeSelectedNames(tools);
+		return tools
+			.filter((tool) => selectedNames.has(tool.name) && canSelectToolInPlanMode(tool))
+			.map((tool) => tool.name);
 	}
 
-	function planModeSelectedKeys(tools: ToolInfo[]) {
-		if (state.selectedToolKeys === undefined) return new Set(defaultPlanModeToolKeys(tools));
+	function planModeSelectedNames(tools: ToolInfo[]) {
+		const selectedToolNames = state.selectedToolNames ?? migrateSelectedToolKeys(tools);
+		if (selectedToolNames === undefined) return new Set(defaultPlanModeToolNames(tools));
 
 		state = {
 			...state,
-			selectedToolKeys: filterAvailableSelectedKeys(state.selectedToolKeys, tools),
+			selectedToolNames: filterAvailableSelectedNames(selectedToolNames, tools),
+			selectedToolKeys: undefined,
 		};
-		return new Set(state.selectedToolKeys);
+		return new Set(state.selectedToolNames);
 	}
 
-	function defaultPlanModeToolKeys(tools: ToolInfo[]) {
+	function defaultPlanModeToolNames(tools: ToolInfo[]) {
 		return tools
 			.filter((tool) => isBuiltinTool(tool) && SAFE_BUILTIN_PLAN_TOOLS.has(tool.name))
-			.map(toolKey);
+			.map((tool) => tool.name);
 	}
 
-	function filterAvailableSelectedKeys(keys: string[], tools: ToolInfo[]) {
-		const availableKeys = new Set(tools.filter(canSelectToolInPlanMode).map(toolKey));
-		return keys.filter((key) => availableKeys.has(key));
+	function migrateSelectedToolKeys(tools: ToolInfo[]) {
+		if (state.selectedToolKeys === undefined) return undefined;
+		return state.selectedToolKeys
+			.map((key) => toolNameFromLegacyKey(key, tools))
+			.filter((name): name is string => name !== undefined);
+	}
+
+	function filterAvailableSelectedNames(names: string[], tools: ToolInfo[]) {
+		const availableNames = new Set(tools.filter(canSelectToolInPlanMode).map((tool) => tool.name));
+		return unique(names.filter((name) => availableNames.has(name)));
 	}
 
 	function selectableTools() {
@@ -418,6 +425,7 @@ export default function planMode(pi: ExtensionAPI) {
 			enabled: entry.data.enabled ?? false,
 			latestPlan: entry.data.latestPlan,
 			awaitingAction: entry.data.awaitingAction ?? false,
+			selectedToolNames: entry.data.selectedToolNames,
 			selectedToolKeys: entry.data.selectedToolKeys,
 		};
 	}
@@ -487,24 +495,18 @@ function canSelectToolInPlanMode(tool: ToolInfo) {
 	return true;
 }
 
-function toolKey(tool: ToolInfo) {
-	if (isBuiltinTool(tool)) return tool.name;
-	const sourceInfo = tool.sourceInfo;
-	return [
-		tool.name,
-		sourceInfo.source,
-		sourceInfo.scope,
-		sourceInfo.origin,
-		sourceInfo.path,
-		sourceInfo.baseDir ?? "",
-	].join("\u001f");
+function toolNameFromLegacyKey(key: string, tools: ToolInfo[]) {
+	const directName = tools.find((tool) => tool.name === key)?.name;
+	if (directName) return directName;
+	const [name] = key.split("\u001f");
+	return tools.find((tool) => tool.name === name) ? name : undefined;
 }
 
 function compareTools(left: ToolInfo, right: ToolInfo) {
 	const leftBuiltin = isBuiltinTool(left);
 	const rightBuiltin = isBuiltinTool(right);
 	if (leftBuiltin !== rightBuiltin) return leftBuiltin ? -1 : 1;
-	return left.name.localeCompare(right.name) || toolKey(left).localeCompare(toolKey(right));
+	return left.name.localeCompare(right.name);
 }
 
 function formatToolChoice(tool: ToolInfo, selected: boolean, index: number) {

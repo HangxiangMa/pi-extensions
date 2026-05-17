@@ -50,6 +50,8 @@ When Plan mode is active, ask the agent to design the change. The agent may insp
 
 By default, Plan mode manages only Pi's built-in tools: `read`, limited `bash`, and available read-only built-ins such as `grep`, `find`, and `ls`. Built-in `edit` and `write` are blocked. Extension and custom tools are disabled by default because Pi tools do not expose standardized mutability metadata; enable them from `/plan tools` only when you accept the risk for that session. For example, you can opt into `firecrawl_scrape`, `firecrawl_search`, or `biome_lsp_diagnostics` if those extensions are loaded and you want to use them during planning.
 
+Pi activates tools by tool name. The `/plan tools` selector stores selections by name and shows each currently effective tool's source from Pi metadata, such as `built-in`, a user extension path, or a project extension path. If an extension overrides a built-in tool with the same name, Pi exposes the effective tool for that name and the selector shows that source.
+
 A complete Plan mode answer should include exactly one block like this:
 
 ```xml
