@@ -192,8 +192,11 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function enterPlanModeWithPrompt(prompt: string, ctx: ExtensionContext) {
+		const wasEnabled = state.enabled;
 		enterPlanMode(ctx);
-		ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
+		if (!wasEnabled) {
+			ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
+		}
 		if (ctx.isIdle()) pi.sendUserMessage(prompt);
 		else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
 	}
