@@ -29,6 +29,7 @@ interface GoalCompleteDetails {
 interface ContinuationPending {
 	goalId: string;
 	iteration: number;
+	marker: string;
 	prompt: string;
 }
 
@@ -64,6 +65,7 @@ const STATUS_KEY = "goal";
 const GOAL_STATE_ENTRY_TYPE = "goal-state";
 const MAX_OBJECTIVE_LENGTH = 4_000;
 const MAX_CANCELLED_CONTINUATION_PROMPTS = 20;
+const CONTINUATION_MARKER_PREFIX = "pi-goal-continuation:";
 const STATE_FILE = join(
 	process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent"),
 	"pi-goal-state.json",
@@ -73,7 +75,7 @@ let activeGoal: ActiveGoal | undefined;
 let completionStatusTimer: NodeJS.Timeout | undefined;
 let extensionApi: ExtensionAPI | undefined;
 let continuationPending: ContinuationPending | undefined;
-const cancelledContinuationPrompts = new Set<string>();
+const cancelledContinuationMarkers = new Set<string>();
 
 const goalCompleteTool = defineTool({
 	name: "goal_complete",
@@ -136,13 +138,13 @@ export default function goal(pi: ExtensionAPI) {
 					pauseGoal(ctx);
 					return;
 				case "resume":
-					resumeGoal(pi, ctx);
+					await resumeGoal(pi, ctx);
 					return;
 				case "clear":
 					clearGoal(ctx);
 					return;
 				case "edit":
-					editGoal(result.objective ?? "", result.tokenBudget, pi, ctx);
+					await editGoal(result.objective ?? "", result.tokenBudget, pi, ctx);
 					return;
 				case "start":
 					await startGoal(result.objective ?? "", result.tokenBudget, pi, ctx);
@@ -179,14 +181,15 @@ export default function goal(pi: ExtensionAPI) {
 		};
 	});
 
-	pi.on("agent_end", (event, ctx) => {
+	pi.on("agent_end", async (event, ctx) => {
 		if (!activeGoal || activeGoal.status !== "active") return;
 
 		if (continuationPending?.goalId === activeGoal.id) {
 			updateGoalUsage(activeGoal, ctx);
 			persistGoal(activeGoal);
 			updateStatus(ctx, activeGoal);
-			return;
+			if (hasPendingMessages(ctx)) return;
+			continuationPending = undefined;
 		}
 
 		const goalId = activeGoal.id;
@@ -213,7 +216,7 @@ export default function goal(pi: ExtensionAPI) {
 		const currentGoal = activeGoal;
 		if (!currentGoal || currentGoal.id !== goalId || currentGoal.status !== "active") return;
 		if (hasPendingMessages(ctx)) return;
-		sendContinuationPrompt(pi, ctx, currentGoal);
+		await sendContinuationPrompt(pi, ctx, currentGoal);
 	});
 }
 
@@ -246,7 +249,7 @@ async function startGoal(
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
 	ctx.ui.notify(existingGoal ? `Goal replaced: ${objective}` : `Goal started: ${objective}`, "info");
-	sendGoalPrompt(pi, ctx, activeGoal);
+	await sendGoalPrompt(pi, ctx, activeGoal);
 }
 
 function pauseGoal(ctx: StatusContext) {
@@ -265,7 +268,7 @@ function pauseGoal(ctx: StatusContext) {
 	ctx.ui.notify(`Goal paused: ${activeGoal.text}`, "info");
 }
 
-function resumeGoal(pi: ExtensionAPI, ctx: StatusContext) {
+async function resumeGoal(pi: ExtensionAPI, ctx: StatusContext) {
 	if (!activeGoal) {
 		ctx.ui.notify("No active goal.", "info");
 		return;
@@ -282,7 +285,7 @@ function resumeGoal(pi: ExtensionAPI, ctx: StatusContext) {
 		return;
 	}
 	ctx.ui.notify(`Goal resumed: ${activeGoal.text}`, "info");
-	sendResumePrompt(pi, ctx, activeGoal);
+	await sendResumePrompt(pi, ctx, activeGoal);
 }
 
 function clearGoal(ctx: StatusContext) {
@@ -299,7 +302,7 @@ function clearGoal(ctx: StatusContext) {
 	ctx.ui.notify(`Goal cleared: ${stoppedGoal}`, "warning");
 }
 
-function editGoal(
+async function editGoal(
 	objective: string,
 	tokenBudget: number | undefined,
 	pi: ExtensionAPI,
@@ -327,7 +330,7 @@ function editGoal(
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
 	ctx.ui.notify(`Goal updated: ${objective}`, "info");
-	if (activeGoal.status === "active") sendObjectiveUpdatedPrompt(pi, ctx, activeGoal);
+	if (activeGoal.status === "active") await sendObjectiveUpdatedPrompt(pi, ctx, activeGoal);
 }
 
 function showGoal(ctx: StatusContext) {
@@ -479,33 +482,36 @@ function validateObjective(objective: string): string | undefined {
 	return undefined;
 }
 
-function sendGoalPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
-	sendPrompt(pi, ctx, buildGoalPrompt(goal));
+async function sendGoalPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
+	return sendPrompt(pi, ctx, buildGoalPrompt(goal));
 }
 
-function sendObjectiveUpdatedPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
-	sendPrompt(pi, ctx, buildObjectiveUpdatedPrompt(goal));
+async function sendObjectiveUpdatedPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
+	return sendPrompt(pi, ctx, buildObjectiveUpdatedPrompt(goal));
 }
 
-function sendResumePrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
-	sendPrompt(pi, ctx, buildResumePrompt(goal));
+async function sendResumePrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
+	return sendPrompt(pi, ctx, buildResumePrompt(goal));
 }
 
-function sendContinuationPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
+async function sendContinuationPrompt(pi: ExtensionAPI, ctx: StatusContext, goal: ActiveGoal) {
 	if (continuationPending?.goalId === goal.id) return false;
 	if (hasPendingMessages(ctx)) return false;
 
-	const prompt = buildContinuePrompt(goal);
-	continuationPending = { goalId: goal.id, iteration: goal.iteration, prompt };
-	const sent = sendPrompt(pi, ctx, prompt);
-	if (!sent && continuationPending?.prompt === prompt) continuationPending = undefined;
+	const marker = continuationMarker(goal);
+	const prompt = buildContinuePrompt(goal, marker);
+	continuationPending = { goalId: goal.id, iteration: goal.iteration, marker, prompt };
+	const sent = await sendPrompt(pi, ctx, prompt);
+	if (!sent && continuationPending?.marker === marker) continuationPending = undefined;
 	return sent;
 }
 
-function sendPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string) {
+async function sendPrompt(pi: ExtensionAPI, ctx: StatusContext, prompt: string) {
 	try {
-		if (ctx.isIdle?.()) pi.sendUserMessage(prompt);
-		else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+		const sent = ctx.isIdle?.()
+			? (pi.sendUserMessage(prompt) as void | Promise<void>)
+			: (pi.sendUserMessage(prompt, { deliverAs: "followUp" }) as void | Promise<void>);
+		await sent;
 		return true;
 	} catch (error) {
 		ctx.ui.notify(`Goal prompt failed: ${formatError(error)}`, "error");
@@ -581,8 +587,8 @@ function buildGoalSystemPrompt(goal: ActiveGoal) {
 	return `Active /goal:\n${goalObjectiveBlock(goal)}\n\nGoal-mode rules:\n- Keep going until the active goal is completely resolved end-to-end.\n- Treat the current worktree, command output, tests, and external state as authoritative.\n- Do not redefine the goal into a smaller task; audit every requirement before completion.\n- Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps.\n- Autonomously perform implementation and verification with the available tools when they are needed to complete the goal.\n- Persevere through recoverable tool failures by trying reasonable alternatives instead of yielding early.\n- If the goal is not complete at the end of a turn, expect an automatic continuation and keep working from where you left off.\n- Only call the goal_complete tool after the goal is fully complete and verified.${budgetLine}`;
 }
 
-function buildContinuePrompt(goal: ActiveGoal) {
-	return `Continue the active /goal until it is complete:\n\n${goalObjectiveBlock(goal)}\n\nThis is automatic continuation #${goal.iteration}. Current files, command output, tests, and external state are authoritative; re-check them as needed. ${goalPersistenceRules("this goal")}`;
+function buildContinuePrompt(goal: ActiveGoal, marker: string) {
+	return `Continue the active /goal until it is complete:\n\n${goalObjectiveBlock(goal)}\n\nThis is automatic continuation #${goal.iteration}. Current files, command output, tests, and external state are authoritative; re-check them as needed. ${goalPersistenceRules("this goal")}\n\n${continuationMarkerComment(marker)}`;
 }
 
 function goalObjectiveBlock(goal: ActiveGoal) {
@@ -599,27 +605,41 @@ function hasPendingMessages(ctx: StatusContext) {
 
 function clearContinuationTracking() {
 	continuationPending = undefined;
-	cancelledContinuationPrompts.clear();
+	cancelledContinuationMarkers.clear();
 }
 
 function cancelContinuationPending() {
-	if (continuationPending) rememberCancelledContinuationPrompt(continuationPending.prompt);
+	if (continuationPending) rememberCancelledContinuationMarker(continuationPending.marker);
 	continuationPending = undefined;
 }
 
-function rememberCancelledContinuationPrompt(prompt: string) {
-	cancelledContinuationPrompts.add(prompt);
-	if (cancelledContinuationPrompts.size <= MAX_CANCELLED_CONTINUATION_PROMPTS) return;
-	const oldest = cancelledContinuationPrompts.values().next().value;
-	if (oldest) cancelledContinuationPrompts.delete(oldest);
+function rememberCancelledContinuationMarker(marker: string) {
+	cancelledContinuationMarkers.add(marker);
+	if (cancelledContinuationMarkers.size <= MAX_CANCELLED_CONTINUATION_PROMPTS) return;
+	const oldest = cancelledContinuationMarkers.values().next().value;
+	if (oldest) cancelledContinuationMarkers.delete(oldest);
 }
 
 function consumeCancelledContinuationPrompt(prompt: string) {
-	return cancelledContinuationPrompts.delete(prompt);
+	const marker = extractContinuationMarker(prompt);
+	return marker ? cancelledContinuationMarkers.delete(marker) : false;
 }
 
 function markContinuationDelivered(prompt: string) {
-	if (continuationPending?.prompt === prompt) continuationPending = undefined;
+	const marker = extractContinuationMarker(prompt);
+	if (marker && continuationPending?.marker === marker) continuationPending = undefined;
+}
+
+function continuationMarker(goal: ActiveGoal) {
+	return `${goal.id}:${goal.iteration}`;
+}
+
+function continuationMarkerComment(marker: string) {
+	return `<!-- ${CONTINUATION_MARKER_PREFIX}${marker} -->`;
+}
+
+function extractContinuationMarker(prompt: string) {
+	return new RegExp(`<!--\\s*${CONTINUATION_MARKER_PREFIX}([^\\s>]+)\\s*-->`).exec(prompt)?.[1];
 }
 
 function findFinalAssistantMessage(messages: unknown[]): AssistantMessageLike | undefined {
