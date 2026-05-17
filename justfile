@@ -66,9 +66,9 @@ publish name:
 publish-all:
     for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; just publish "${dir#pi-}"; done
 
-# Install all extension packages through pi
+# Install all extension packages through pi, excluding pi-lsp because it duplicates old LSP tool names
 install-all:
-    for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; just install "${dir#pi-}"; done
+    for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; name="${dir#pi-}"; if [[ "$name" == "lsp" ]]; then echo "Skipping pi-lsp; install it separately instead of biome-lsp/python-lsp to avoid duplicate LSP tools."; continue; fi; just install "$name"; done
 
 # Preview individual packages that npm would publish
 pack-biome-lsp:
@@ -91,6 +91,9 @@ pack-firecrawl:
 
 pack-goal:
     just pack goal
+
+pack-lsp:
+    just pack lsp
 
 pack-plan-mode:
     just pack plan-mode
@@ -129,6 +132,9 @@ try-firecrawl:
 try-goal:
     just try goal
 
+try-lsp:
+    just try lsp
+
 try-plan-mode:
     just try plan-mode
 
@@ -166,6 +172,9 @@ install-firecrawl:
 install-goal:
     just install goal
 
+install-lsp:
+    just install lsp
+
 install-plan-mode:
     just install plan-mode
 
@@ -202,6 +211,9 @@ publish-firecrawl:
 
 publish-goal:
     just publish goal
+
+publish-lsp:
+    just publish lsp
 
 publish-plan-mode:
     just publish plan-mode
