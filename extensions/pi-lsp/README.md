@@ -38,6 +38,8 @@ Custom config can be supplied in one of these locations:
 2. `<workspace>/.pi/lsp.json`
 3. `~/.pi/agent/lsp.json`
 
+`PI_LSP_CONFIG` only accepts JSON or a JSON file path; JavaScript and TypeScript config files are not evaluated.
+
 `lsp.json` can be a plain object keyed by server name:
 
 ```json
@@ -110,6 +112,15 @@ PI_TY_LSP_COMMAND="uvx ty server" \
 PI_RUFF_LSP_COMMAND="uvx ruff server" \
 pi -e ./extensions/pi-lsp
 ```
+
+## ⚠️ Tool changes
+
+`lsp_format` is no longer provided. pi-lsp now focuses on LSP diagnostics and source code actions:
+
+- `lsp_diagnostics`
+- `lsp_fix`
+
+Use project formatters or shell commands for formatting workflows.
 
 ## 🛠️ Pi tools
 
