@@ -217,8 +217,9 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function exitPlanMode(ctx: ExtensionContext) {
+		const wasEnabled = state.enabled;
 		state = { ...state, enabled: false, latestPlan: undefined, awaitingAction: false };
-		restoreTools();
+		if (wasEnabled) restoreTools();
 		persistState();
 		updateUi(ctx);
 	}
@@ -630,7 +631,7 @@ function latestAssistantText(messages: unknown) {
 }
 
 function messageContainsInactivePlanModeArtifact(message: unknown) {
-	const candidate = message as { customType?: string; content?: unknown };
+	const candidate = unwrapSessionMessage(message);
 	return (
 		candidate.customType === PLAN_CONTEXT_MESSAGE_TYPE ||
 		candidate.customType === PROPOSED_PLAN_MESSAGE_TYPE ||
@@ -639,12 +640,25 @@ function messageContainsInactivePlanModeArtifact(message: unknown) {
 }
 
 function stripProposedPlanBlocksFromMessage<T>(message: T): T {
-	const candidate = message as { role?: string; content?: unknown };
+	const candidate = unwrapSessionMessage(message);
 	if (candidate.role !== "assistant") return message;
 
 	const content = stripProposedPlanBlocksFromContent(candidate.content);
 	if (content === candidate.content) return message;
+
+	if (isSessionMessageEntry(message)) {
+		return { ...message, message: { ...candidate, content } };
+	}
 	return { ...candidate, content } as T;
+}
+
+function unwrapSessionMessage(message: unknown) {
+	const entry = message as { message?: unknown };
+	return (entry.message ?? message) as { role?: string; customType?: string; content?: unknown };
+}
+
+function isSessionMessageEntry<T>(message: T): message is T & { message: SessionMessage } {
+	return typeof message === "object" && message !== null && "message" in message;
 }
 
 function stripProposedPlanBlocksFromContent(content: unknown) {
