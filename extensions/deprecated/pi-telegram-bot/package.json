@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-telegram-bot",
 	"version": "0.1.29",
-	"description": "Pi extension that connects the current Pi session to a Telegram bot without custom tools.",
+	"description": "Deprecated Pi extension that connects the current Pi session to a Telegram bot without custom tools.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -41,6 +41,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "extensions/pi-telegram-bot"
+		"directory": "extensions/deprecated/pi-telegram-bot"
 	}
 }

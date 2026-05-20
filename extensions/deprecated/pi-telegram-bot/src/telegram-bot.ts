@@ -26,6 +26,12 @@ interface TelegramConfig {
 
 type ConfigResult = { ok: true; value: TelegramConfig } | { ok: false; error: string };
 
+type ParsedTelegramCommand =
+	| { kind: "command"; name: string; args: string }
+	| { kind: "other-bot-command" };
+
+type TelegramCommand = Extract<ParsedTelegramCommand, { kind: "command" }>;
+
 type TelegramApiResponse<T> =
 	| { ok: true; result: T }
 	| {
@@ -337,6 +343,11 @@ export default function telegram(pi: ExtensionAPI) {
 	};
 
 	const showTelegramCommandMenu = async (ctx: ExtensionContext) => {
+		if (!ctx.hasUI) {
+			ctx.ui.notify(buildLocalStatus(pi, ctx, getActiveConfig(), poller?.isRunning() ?? false), "info");
+			return;
+		}
+
 		const enabled = poller?.isRunning() ?? false;
 		const toggleLabel = enabled ? "Disable pi-telegram-bot" : "Enable pi-telegram-bot";
 		const choice = await ctx.ui.select("pi-telegram-bot", [toggleLabel, "Show status", "Help"]);
@@ -510,6 +521,7 @@ export default function telegram(pi: ExtensionAPI) {
 		const config = currentConfig;
 		const chatId = normalizeChatId(message.chat.id);
 		const parsedCommand = parseTelegramCommand(text, currentBotUsername);
+		if (parsedCommand?.kind === "other-bot-command") return;
 
 		if (!config.chatId) {
 			await handleSetupTelegramMessage(parsedCommand, message, sendDirectTelegramMessage);
@@ -844,7 +856,7 @@ async function discardPendingUpdates(
 }
 
 async function handleSetupTelegramMessage(
-	command: { name: string; args: string } | undefined,
+	command: TelegramCommand | undefined,
 	message: TelegramMessage,
 	sendDirectTelegramMessage: (
 		chatId: string,
@@ -860,7 +872,7 @@ async function handleSetupTelegramMessage(
 }
 
 async function handleTelegramCommand(
-	command: { name: string; args: string },
+	command: TelegramCommand,
 	message: TelegramMessage,
 	ctx: ExtensionContext,
 	handlers: {
@@ -996,17 +1008,17 @@ function parseTelegramResponse<T>(responseText: string, method: string): Telegra
 function parseTelegramCommand(
 	text: string,
 	botUsername: string | undefined,
-): { name: string; args: string } | undefined {
+): ParsedTelegramCommand | undefined {
 	if (!text.startsWith("/")) return undefined;
 	const [rawCommand, ...rest] = text.slice(1).split(/\s+/);
 	if (!rawCommand) return undefined;
 
 	const [name, targetUsername] = rawCommand.split("@", 2);
 	if (targetUsername && botUsername && targetUsername.toLowerCase() !== botUsername.toLowerCase()) {
-		return undefined;
+		return { kind: "other-bot-command" };
 	}
 
-	return { name: name.toLowerCase(), args: rest.join(" ").trim() };
+	return { kind: "command", name: name.toLowerCase(), args: rest.join(" ").trim() };
 }
 
 function parsePiTelegramArgs(args: string): {

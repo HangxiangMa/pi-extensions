@@ -2,6 +2,8 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-telegram-bot)](https://www.npmjs.com/package/@narumitw/pi-telegram-bot) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
+> Deprecated: this package is kept for reference under `extensions/deprecated/` and is no longer part of the active workspace package set.
+
 `@narumitw/pi-telegram-bot` is a native [Pi coding agent](https://pi.dev) extension that lets a Telegram Bot talk to one currently running Pi session.
 
 Use it to message your active Pi session remotely, ask which session/project/model you are talking to, and request code changes through that session's existing Pi tools.
@@ -33,7 +35,7 @@ pi -e npm:@narumitw/pi-telegram-bot
 Try this package locally from the repository root:
 
 ```bash
-pi -e ./extensions/pi-telegram-bot
+pi -e ./extensions/deprecated/pi-telegram-bot
 ```
 
 ## ⚙️ Configuration
@@ -136,7 +138,7 @@ Telegram messages become normal user messages in the current Pi session. Whether
 ## 🗂️ Package layout
 
 ```txt
-extensions/pi-telegram-bot/
+extensions/deprecated/pi-telegram-bot/
 ├── src/
 │   └── telegram-bot.ts
 ├── README.md
