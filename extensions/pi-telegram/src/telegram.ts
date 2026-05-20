@@ -59,6 +59,10 @@ interface TelegramMessage {
 	text?: string;
 }
 
+interface TelegramSentMessage {
+	message_id: number;
+}
+
 interface TelegramUpdate {
 	update_id: number;
 	message?: TelegramMessage;
@@ -70,6 +74,7 @@ interface RemoteTurn {
 	prompt: string;
 	chatId: string;
 	messageId: number;
+	statusMessageId?: number;
 	state: "queued" | "active";
 	createdAt: number;
 }
@@ -120,8 +125,20 @@ class TelegramClient {
 			disable_web_page_preview?: boolean;
 		},
 		signal?: AbortSignal,
+	): Promise<TelegramSentMessage> {
+		return this.request<TelegramSentMessage>("sendMessage", params, signal);
+	}
+
+	async editMessageText(
+		params: {
+			chat_id: string;
+			message_id: number;
+			text: string;
+			disable_web_page_preview?: boolean;
+		},
+		signal?: AbortSignal,
 	): Promise<unknown> {
-		return this.request("sendMessage", params, signal);
+		return this.request("editMessageText", params, signal);
 	}
 
 	private async request<T>(
@@ -189,11 +206,7 @@ export default function telegram(pi: ExtensionAPI) {
 		if (turn) turn.state = "active";
 	};
 
-	const sendSessionMessage = async (
-		ctx: ExtensionContext,
-		text: string,
-		options: { replyToMessageId?: number; includeHeader?: boolean } = {},
-	) => {
+	const getConfiguredClient = (ctx: ExtensionContext) => {
 		const config = getActiveConfig(ctx);
 		if (!config.ok) throw new Error(config.error);
 
@@ -203,15 +216,56 @@ export default function telegram(pi: ExtensionAPI) {
 			);
 		}
 
-		const client = new TelegramClient(config.value.token);
+		return {
+			chatId: config.value.chatId,
+			client: new TelegramClient(config.value.token),
+		};
+	};
+
+	const sendSessionMessage = async (
+		ctx: ExtensionContext,
+		text: string,
+		options: { replyToMessageId?: number; includeHeader?: boolean } = {},
+	) => {
+		const { chatId, client } = getConfiguredClient(ctx);
 		const body = options.includeHeader === true ? withSessionHeader(pi, ctx, text) : text;
 		const chunks = splitTelegramMessage(body);
+		const sentMessages: TelegramSentMessage[] = [];
 		for (let index = 0; index < chunks.length; index++) {
 			const prefix = index === 0 ? "" : "(continued)\n";
+			sentMessages.push(
+				await client.sendMessage({
+					chat_id: chatId,
+					text: `${prefix}${chunks[index]}`,
+					reply_to_message_id: index === 0 ? options.replyToMessageId : undefined,
+					disable_web_page_preview: true,
+				}),
+			);
+		}
+		return sentMessages;
+	};
+
+	const editSessionMessage = async (
+		ctx: ExtensionContext,
+		messageId: number,
+		text: string,
+		options: { replyToMessageId?: number; includeHeader?: boolean } = {},
+	) => {
+		const { chatId, client } = getConfiguredClient(ctx);
+		const body = options.includeHeader === true ? withSessionHeader(pi, ctx, text) : text;
+		const chunks = splitTelegramMessage(body);
+		const [firstChunk, ...remainingChunks] = chunks;
+		await client.editMessageText({
+			chat_id: chatId,
+			message_id: messageId,
+			text: firstChunk ?? "",
+			disable_web_page_preview: true,
+		});
+		for (const chunk of remainingChunks) {
 			await client.sendMessage({
-				chat_id: config.value.chatId,
-				text: `${prefix}${chunks[index]}`,
-				reply_to_message_id: index === 0 ? options.replyToMessageId : undefined,
+				chat_id: chatId,
+				text: `(continued)\n${chunk}`,
+				reply_to_message_id: options.replyToMessageId,
 				disable_web_page_preview: true,
 			});
 		}
@@ -316,7 +370,7 @@ export default function telegram(pi: ExtensionAPI) {
 		const remoteTurnId = `${Date.now()}-${nextRemoteTurnId++}`;
 		const marker = `pi-telegram:${remoteTurnId}`;
 		const prompt = buildRemotePrompt(marker, message, text);
-		remoteTurns.push({
+		const remoteTurn: RemoteTurn = {
 			id: remoteTurnId,
 			marker,
 			prompt,
@@ -324,20 +378,22 @@ export default function telegram(pi: ExtensionAPI) {
 			messageId: message.message_id,
 			state: "queued",
 			createdAt: Date.now(),
-		});
+		};
+		remoteTurns.push(remoteTurn);
 
 		try {
 			if (ctx.isIdle() && remoteTurns.filter((turn) => turn.state === "queued").length === 1) {
 				pi.sendUserMessage(prompt);
 			} else {
 				pi.sendUserMessage(prompt, { deliverAs: "steer" });
-				await sendSessionMessage(
+				const sentMessages = await sendSessionMessage(
 					ctx,
 					"Agent is busy; your Telegram message will steer the current turn.",
 					{
 						replyToMessageId: message.message_id,
 					},
 				);
+				remoteTurn.statusMessageId = sentMessages[0]?.message_id;
 			}
 		} catch (error) {
 			remoteTurns = remoteTurns.filter((turn) => turn.id !== remoteTurnId);
@@ -433,8 +489,21 @@ export default function telegram(pi: ExtensionAPI) {
 			extractLastAssistantText(event.messages) || "Agent finished without a text response.";
 		for (const turn of turns) {
 			try {
+				if (turn.statusMessageId) {
+					await editSessionMessage(ctx, turn.statusMessageId, finalText, {
+						replyToMessageId: turn.messageId,
+					});
+					continue;
+				}
 				await sendSessionMessage(ctx, finalText, { replyToMessageId: turn.messageId });
 			} catch (error) {
+				if (turn.statusMessageId) {
+					try {
+						await sendSessionMessage(ctx, finalText, { replyToMessageId: turn.messageId });
+					} catch {
+						// Keep the original edit error for the local notification below.
+					}
+				}
 				if (ctx.hasUI)
 					ctx.ui.notify(`Failed to send Telegram reply: ${errorMessage(error)}`, "error");
 			}
@@ -592,7 +661,7 @@ async function handleTelegramCommand(
 			ctx: ExtensionContext,
 			text: string,
 			options?: { replyToMessageId?: number; includeHeader?: boolean },
-		) => Promise<void>;
+		) => Promise<unknown>;
 	},
 ) {
 	const { sendSessionMessage } = handlers;

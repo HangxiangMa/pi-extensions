@@ -80,7 +80,7 @@ First enable polling from Pi with `/telegram` or `/telegram enable`; polling is 
 
 Then send any normal text message to the bot. The extension forwards it to the current Pi session, so the agent can answer or modify code if the current session has the needed tools active.
 
-Messages sent while Pi is already working are queued as steering messages for the current turn, so they can affect the ongoing task before Pi starts another model call.
+Messages sent while Pi is already working are queued as steering messages for the current turn, so they can affect the ongoing task before Pi starts another model call. The temporary busy acknowledgement is edited into the final assistant reply when the turn finishes.
 
 Telegram commands:
 
