@@ -772,8 +772,9 @@ async function pollTelegram(
 			break;
 		} catch (error) {
 			if (isAbortError(error) || signal.aborted || !callbacks.isActive()) return;
-			ctx.ui.setStatus(STATUS_KEY, "📨 error");
-			if (!notifiedError) {
+			const transientNetworkError = isTransientNetworkError(error);
+			ctx.ui.setStatus(STATUS_KEY, transientNetworkError ? "📨 retrying" : "📨 error");
+			if (!transientNetworkError && !notifiedError) {
 				callbacks.onError(error);
 				notifiedError = true;
 			}
@@ -810,8 +811,9 @@ async function pollTelegram(
 			}
 		} catch (error) {
 			if (isAbortError(error) || signal.aborted || !callbacks.isActive()) return;
-			ctx.ui.setStatus(STATUS_KEY, "📨 error");
-			if (!notifiedError) {
+			const transientNetworkError = isTransientNetworkError(error);
+			ctx.ui.setStatus(STATUS_KEY, transientNetworkError ? "📨 retrying" : "📨 error");
+			if (!transientNetworkError && !notifiedError) {
 				callbacks.onError(error);
 				notifiedError = true;
 			}
@@ -1223,8 +1225,20 @@ function isAbortError(error: unknown): boolean {
 	return error instanceof Error && error.name === "AbortError";
 }
 
+function isTransientNetworkError(error: unknown): boolean {
+	return error instanceof TypeError && error.message.toLowerCase().includes("fetch failed");
+}
+
 function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+	if (!(error instanceof Error)) return String(error);
+	const cause = error.cause;
+	if (cause instanceof Error && cause.message && cause.message !== error.message) {
+		return `${error.message}: ${cause.message}`;
+	}
+	if (typeof cause === "string" && cause && cause !== error.message) {
+		return `${error.message}: ${cause}`;
+	}
+	return error.message;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
