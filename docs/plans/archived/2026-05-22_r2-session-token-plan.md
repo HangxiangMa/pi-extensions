@@ -1,10 +1,10 @@
 ## Goal
 
-以程式碼修復 `@narumitw/pi-sync` 在 Cloudflare R2 上因誤送 `X-Amz-Security-Token` 而自動同步失敗的問題，不採用要求使用者 unset/覆蓋環境變數的快速止血方案；成功條件是使用 R2 靜態 access key 時，即使 shell 或 local config 裡存在 session token，pi-sync 也不會把它帶到 R2 request，並能通過既有 repo 檢查。
+Fix `@narumitw/pi-sync` in code so Cloudflare R2 auto sync no longer fails from accidentally sending `X-Amz-Security-Token`. Do not require users to unset or override environment variables as a quick workaround. The success condition is that when R2 static access keys are used, pi-sync will not include a session token in R2 requests even if one exists in the shell or local config, and the repository checks still pass.
 
 ## Context
 
-原本 `extensions/pi-sync/src/sync.ts` 的 `loadPartialConfig()` 會把 session token 套進 R2 request。這對 AWS STS/SSO S3 有用，但 Cloudflare R2 靜態金鑰會拒絕帶有 `x-amz-security-token` 的簽名 request，並回覆：
+Previously, `loadPartialConfig()` in `extensions/pi-sync/src/sync.ts` could apply a session token to R2 requests. This is useful for AWS STS/SSO S3, but Cloudflare R2 static keys reject signed requests that include `x-amz-security-token` and return:
 
 ```text
 InvalidArgument: X-Amz-Security-Token
@@ -12,36 +12,36 @@ InvalidArgument: X-Amz-Security-Token
 
 ## Assumptions
 
-- 這次修復以 R2 靜態 access key 為主，不需要 R2 session token。
-- 仍要保留一般 AWS S3 使用 `AWS_SESSION_TOKEN` 的能力。
+- This fix targets R2 static access keys and does not require R2 session tokens.
+- Regular AWS S3 must still support `AWS_SESSION_TOKEN`.
 
 ## Non-Goals
 
-- 不要求使用者 unset `AWS_SESSION_TOKEN`、修改 shell profile，或用 `PI_SYNC_SESSION_TOKEN=` 覆蓋啟動 Pi。
+- Do not require users to unset `AWS_SESSION_TOKEN`, edit shell profiles, or launch Pi with `PI_SYNC_SESSION_TOKEN=`.
 
 ## Plan
 
-- [x] 修改 `extensions/pi-sync/src/sync.ts` 的 session token 解析邏輯：偵測 endpoint 是否為 Cloudflare R2（hostname 結尾為 `.r2.cloudflarestorage.com`），R2 endpoint 下忽略 `PI_SYNC_SESSION_TOKEN`、`AWS_SESSION_TOKEN`、local config `sessionToken`；已由 `selectSessionToken()` code review 與實機 `/pisync status` 等效 handler 驗證。
-- [x] 將空字串 token 正規化為未設定，避免 `PI_SYNC_SESSION_TOKEN=`、空白字串或 config 裡的 `"sessionToken": ""` 造成顯示或後續邏輯混淆；已由 `normalizeOptionalString()` 實作驗證。
-- [x] 強化 `/pisync doctor` 與 `/pisync config` 的診斷文字：當 R2 endpoint 下有 session token 來源時，顯示該來源會被忽略且不洩漏 token 值；已用實機 config/doctor handler 輸出驗證。
-- [x] 更新 `extensions/pi-sync/README.md` 的 R2 設定說明：標明 R2 靜態金鑰不需要 session token，且 R2 endpoint 會忽略所有 session token 來源；已由 README diff 驗證。
-- [x] 執行格式與型別檢查：已從 repo root 跑 `npm run check` 並成功結束。
-- [x] 做一次 package 內容 dry run：已跑 `npm run pack:sync`，tarball 清單只有 `LICENSE`、`README.md`、`package.json`、`src/sync.ts`。
-- [x] 實機驗證 R2：已用實際 R2 config、保留測試用 `AWS_SESSION_TOKEN`，呼叫 extension `config`、`doctor`、`status` handler；`config` 顯示 `sessionToken: not configured`，`status` 成功讀到 remote pointer，未再收到 `InvalidArgument X-Amz-Security-Token`。
+- [x] Update session-token resolution in `extensions/pi-sync/src/sync.ts`: detect Cloudflare R2 endpoints by hostname ending in `.r2.cloudflarestorage.com`, and ignore `PI_SYNC_SESSION_TOKEN`, `AWS_SESSION_TOKEN`, and local config `sessionToken` for R2 endpoints; verified by reviewing `selectSessionToken()` and by an equivalent live `/pisync status` handler check.
+- [x] Normalize empty token strings as unset so `PI_SYNC_SESSION_TOKEN=`, whitespace-only strings, or `"sessionToken": ""` in config do not confuse display or later logic; verified by the `normalizeOptionalString()` implementation.
+- [x] Strengthen `/pisync doctor` and `/pisync config` diagnostics: when session-token sources exist under an R2 endpoint, show which sources are ignored without leaking token values; verified with live config and doctor handler output.
+- [x] Update `extensions/pi-sync/README.md` R2 configuration docs: document that R2 static keys do not need session tokens and that R2 endpoints ignore all session-token sources; verified by the README diff.
+- [x] Run formatting and type checks from the repository root with `npm run check`; verified by successful command completion.
+- [x] Run a package dry run with `npm run pack:sync`; verified that the tarball contains only `LICENSE`, `README.md`, `package.json`, and `src/sync.ts`.
+- [x] Verify against R2: using the real R2 config and a test `AWS_SESSION_TOKEN`, call the extension `config`, `doctor`, and `status` handlers; `config` showed `sessionToken: not configured`, and `status` successfully read the remote pointer without `InvalidArgument X-Amz-Security-Token`.
 
 ## Risks
 
-- 如果某個非 R2 的 S3-compatible provider 也使用類似 endpoint，但需要 temporary token，偵測規則不能誤判；已限制偵測為 Cloudflare R2 hostname。
-- 如果未來 Cloudflare R2 支援 session token，此版本會對 R2 endpoint 一律忽略 token；屆時可新增明確 opt-in flag。
+- A non-R2 S3-compatible provider might use a similar endpoint and require a temporary token; mitigated by limiting detection to Cloudflare R2 hostnames.
+- If Cloudflare R2 supports session tokens in the future, this version will still ignore tokens for R2 endpoints; an explicit opt-in flag can be added then.
 
 ## Rollback / Recovery
 
-- 若新版行為影響 AWS S3 STS/SSO 使用者，回退 `selectSessionToken()` 的 R2 特例即可恢復舊行為。
+- If the new behavior affects AWS S3 STS/SSO users, revert the R2 special case in `selectSessionToken()` to restore the old behavior.
 
 ## Completion Checklist
 
-- [x] R2 endpoint 搭配 `AWS_SESSION_TOKEN` 或 local config `sessionToken` 不再產生 `x-amz-security-token`，由 `config` 顯示 `sessionToken: not configured` 與實際 R2 `status` 成功驗證。
-- [x] AWS S3 非 R2 endpoint 仍可使用 `AWS_SESSION_TOKEN`，由非 R2 config handler 顯示 `sessionToken: configured` 驗證。
-- [x] 使用者文件清楚說明 R2 不需要 session token，由 `extensions/pi-sync/README.md` diff 驗證。
-- [x] repo 品質門檻通過，由 `npm run check` 成功輸出驗證。
-- [x] pi-sync package dry run 無異常，由 `npm run pack:sync` 成功輸出驗證。
+- [x] R2 endpoints with `AWS_SESSION_TOKEN` or local config `sessionToken` no longer produce `x-amz-security-token`, verified by `config` showing `sessionToken: not configured` and actual R2 `status` succeeding.
+- [x] Non-R2 AWS S3 endpoints can still use `AWS_SESSION_TOKEN`, verified by a non-R2 config handler showing `sessionToken: configured`.
+- [x] User documentation clearly explains that R2 does not need session tokens, verified by the `extensions/pi-sync/README.md` diff.
+- [x] Repository quality gates pass, verified by successful `npm run check` output.
+- [x] The pi-sync package dry run has no anomalies, verified by successful `npm run pack:sync` output.
