@@ -37,6 +37,7 @@ interface SyncConfig {
 	region: string;
 	accessKeyId: string;
 	secretAccessKey: string;
+	sessionToken?: string;
 	profile: string;
 	prefix: string;
 }
@@ -47,6 +48,7 @@ interface PartialConfig {
 	region?: string;
 	accessKeyId?: string;
 	secretAccessKey?: string;
+	sessionToken?: string;
 	profile?: string;
 	prefix?: string;
 	autoSync?: boolean | string;
@@ -236,6 +238,7 @@ async function showConfig(ctx: ExtensionCommandContext) {
 			`region: ${partial.region ?? DEFAULT_REGION}`,
 			`accessKeyId: ${partial.accessKeyId ? redact(partial.accessKeyId) : "missing"}`,
 			`secretAccessKey: ${partial.secretAccessKey ? "configured" : "missing"}`,
+			`sessionToken: ${partial.sessionToken ? "configured" : "not configured"}`,
 			`profile: ${partial.profile ?? DEFAULT_PROFILE}`,
 			`prefix: ${partial.prefix ?? DEFAULT_PREFIX}`,
 			`autoSync: ${isEnabled(partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC, true) ? "enabled" : "disabled"}`,
@@ -555,6 +558,7 @@ async function loadConfig(): Promise<SyncConfig> {
 		region: partial.region ?? DEFAULT_REGION,
 		accessKeyId: accessKeyId!,
 		secretAccessKey: secretAccessKey!,
+		sessionToken: partial.sessionToken,
 		profile: partial.profile ?? DEFAULT_PROFILE,
 		prefix: trimSlashes(partial.prefix ?? DEFAULT_PREFIX),
 	};
@@ -569,6 +573,7 @@ async function loadPartialConfig(): Promise<PartialConfig> {
 		region: process.env.PI_SYNC_REGION ?? process.env.AWS_REGION ?? fileConfig?.region,
 		accessKeyId: process.env.PI_SYNC_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID ?? fileConfig?.accessKeyId,
 		secretAccessKey: process.env.PI_SYNC_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY ?? fileConfig?.secretAccessKey,
+		sessionToken: process.env.PI_SYNC_SESSION_TOKEN ?? process.env.AWS_SESSION_TOKEN ?? fileConfig?.sessionToken,
 		profile: process.env.PI_SYNC_PROFILE ?? fileConfig?.profile,
 		prefix: process.env.PI_SYNC_PREFIX ?? fileConfig?.prefix,
 		autoSync: process.env.PI_SYNC_AUTO_SYNC ?? fileConfig?.autoSync,
@@ -698,10 +703,11 @@ async function applySnapshot(snapshot: Snapshot) {
 	const current = await createSnapshot(snapshot.profile);
 	const plan = preflightSnapshotApply(root, snapshot, current);
 	for (const target of plan.deletes) {
+		await assertNoSymlinkParents(root, target);
 		await fs.rm(target, { force: true, recursive: true });
 	}
 	for (const item of plan.writes) {
-		await fs.mkdir(path.dirname(item.target), { recursive: true });
+		await prepareSnapshotWrite(root, item.target);
 		await fs.writeFile(item.target, item.content);
 	}
 }
@@ -888,6 +894,7 @@ class S3Client {
 			extraHeaders,
 			accessKeyId: this.config.accessKeyId,
 			secretAccessKey: this.config.secretAccessKey,
+			sessionToken: this.config.sessionToken,
 			region: this.config.region,
 		});
 		return fetch(url, { method, headers, body: body ? new Uint8Array(body) : undefined });
@@ -901,6 +908,7 @@ async function signedHeaders(input: {
 	extraHeaders: Record<string, string>;
 	accessKeyId: string;
 	secretAccessKey: string;
+	sessionToken?: string;
 	region: string;
 }) {
 	const now = new Date();
@@ -913,6 +921,7 @@ async function signedHeaders(input: {
 		"x-amz-content-sha256": payloadHash,
 		"x-amz-date": amzDate,
 	};
+	if (input.sessionToken) headers["x-amz-security-token"] = input.sessionToken;
 	const signedHeaderNames = Object.keys(headers).sort();
 	const canonicalHeaders = signedHeaderNames.map((name) => `${name}:${headers[name]?.trim()}\n`).join("");
 	const canonicalRequest = [
@@ -1023,13 +1032,66 @@ async function writeJson(filePath: string, value: unknown) {
 	await fs.writeFile(filePath, `${JSON.stringify(value, null, "\t")}\n`);
 }
 
+async function prepareSnapshotWrite(root: string, target: string) {
+	await ensureSafeDirectory(root, path.dirname(target));
+	try {
+		const stat = await fs.lstat(target);
+		if (stat.isSymbolicLink()) throw new Error(`Refusing to overwrite symlink during snapshot apply: ${target}`);
+		if (stat.isDirectory()) throw new Error(`Refusing to overwrite directory during snapshot apply: ${target}`);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+}
+
+async function ensureSafeDirectory(root: string, directory: string) {
+	assertWithinRoot(root, directory);
+	const rootPath = path.resolve(root);
+	const relative = path.relative(rootPath, path.resolve(directory));
+	let current = rootPath;
+	for (const part of relative.split(path.sep).filter(Boolean)) {
+		current = path.join(current, part);
+		try {
+			const stat = await fs.lstat(current);
+			if (stat.isSymbolicLink()) throw new Error(`Refusing to follow symlink during snapshot apply: ${current}`);
+			if (!stat.isDirectory()) throw new Error(`Snapshot path parent is not a directory: ${current}`);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			await fs.mkdir(current);
+		}
+	}
+}
+
+async function assertNoSymlinkParents(root: string, target: string) {
+	assertWithinRoot(root, target);
+	const rootPath = path.resolve(root);
+	const relative = path.relative(rootPath, path.resolve(target));
+	let current = rootPath;
+	const parts = relative.split(path.sep).filter(Boolean);
+	for (const part of parts.slice(0, -1)) {
+		current = path.join(current, part);
+		try {
+			const stat = await fs.lstat(current);
+			if (stat.isSymbolicLink()) throw new Error(`Refusing to follow symlink during snapshot apply: ${current}`);
+			if (!stat.isDirectory()) throw new Error(`Snapshot path parent is not a directory: ${current}`);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+			throw error;
+		}
+	}
+}
+
 function safeJoin(root: string, relativePath: string) {
 	const target = path.resolve(root, relativePath);
-	const resolvedRoot = path.resolve(root);
-	if (target !== resolvedRoot && !target.startsWith(`${resolvedRoot}${path.sep}`)) {
-		throw new Error(`Unsafe path in snapshot: ${relativePath}`);
-	}
+	assertWithinRoot(root, target, relativePath);
 	return target;
+}
+
+function assertWithinRoot(root: string, target: string, label = target) {
+	const resolvedRoot = path.resolve(root);
+	const resolvedTarget = path.resolve(target);
+	if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`)) {
+		throw new Error(`Unsafe path in snapshot: ${label}`);
+	}
 }
 
 function splitArgs(input: string) {
@@ -1052,7 +1114,7 @@ function usage() {
 	return [
 		"Usage: /pisync <command>",
 		"Commands: init, config, status, diff, doctor, push, pull, sync, history, rollback <snapshot>, unlock --stale",
-		"Config: set PI_SYNC_ENDPOINT, PI_SYNC_BUCKET, PI_SYNC_ACCESS_KEY_ID, PI_SYNC_SECRET_ACCESS_KEY, optional PI_SYNC_REGION/profile/prefix, or edit ~/.pi/agent/pi-sync.local.json.",
+		"Config: set PI_SYNC_ENDPOINT, PI_SYNC_BUCKET, PI_SYNC_ACCESS_KEY_ID, PI_SYNC_SECRET_ACCESS_KEY, optional PI_SYNC_SESSION_TOKEN/region/profile/prefix, or edit ~/.pi/agent/pi-sync.local.json.",
 	].join("\n");
 }
 
