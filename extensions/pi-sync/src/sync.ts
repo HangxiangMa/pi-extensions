@@ -102,6 +102,7 @@ interface CommandOptions {
 	stale: boolean;
 	silent: boolean;
 	reload: boolean;
+	auto: boolean;
 	args: string[];
 }
 
@@ -111,6 +112,7 @@ const AUTO_SYNC_OPTIONS: CommandOptions = {
 	stale: false,
 	silent: true,
 	reload: false,
+	auto: true,
 	args: [],
 };
 
@@ -396,7 +398,11 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 	const remote = await readRemoteSnapshot(client, config);
 	const localChanged = hasLocalChanges(local, state);
 	const remoteChanged = remote ? remote.id !== state.lastAppliedSnapshot : false;
+	const firstSync = !state.lastAppliedSnapshot;
 
+	if (options.auto && firstSync && remote && local.files.length > 0) {
+		throw new Error("Remote settings exist and this machine has local Pi settings. Run /pisync diff, then manually choose /pisync pull or /pisync push.");
+	}
 	if (localChanged && remoteChanged && state.lastAppliedSnapshot) {
 		throw new Error("Both local and remote changed. Run /pisync diff and resolve with push --force or pull --force.");
 	}
@@ -637,13 +643,15 @@ async function uploadSnapshot(
 	const encoded = await encodeSnapshot(snapshot);
 	const pointer = pointerFor(config, snapshot, sha256(encoded));
 	await client.putBuffer(snapshotKey(config, snapshot.id), encoded, "application/gzip");
-	if (!force) {
-		const current = await client.getJson<LatestPointer>(latestKey(config));
-		if (remoteIdentity(current) !== remoteIdentity(latest)) {
-			throw new Error("Remote changed while pushing. Run /pisync pull first, then retry.");
-		}
+	const current = await client.getJson<LatestPointer>(latestKey(config));
+	if (!force && remoteIdentity(current) !== remoteIdentity(latest)) {
+		throw new Error("Remote changed while pushing. Run /pisync pull first, then retry.");
 	}
 	await client.putJson(latestKey(config), pointer);
+	const verified = await client.getJson<LatestPointer>(latestKey(config));
+	if (verified.value?.snapshot !== pointer.snapshot) {
+		throw new Error("Remote latest changed immediately after push. Run /pisync status before continuing.");
+	}
 	return pointer;
 }
 
@@ -670,17 +678,50 @@ async function decodeSnapshot(buffer: Buffer): Promise<Snapshot> {
 async function applySnapshot(snapshot: Snapshot) {
 	const root = agentDir();
 	const current = await createSnapshot(snapshot.profile);
-	const remotePaths = new Set(snapshot.files.map((file) => file.path));
+	const plan = preflightSnapshotApply(root, snapshot, current);
+	for (const item of plan.writes) {
+		await fs.mkdir(path.dirname(item.target), { recursive: true });
+		await fs.writeFile(item.target, item.content);
+	}
+	for (const target of plan.deletes) {
+		await fs.rm(target, { force: true });
+	}
+}
+
+function preflightSnapshotApply(root: string, snapshot: Snapshot, current: Snapshot) {
+	const seenPaths = new Set<string>();
+	const remotePaths = new Set<string>();
+	const writes: Array<{ target: string; content: Buffer }> = [];
+	const deletes: string[] = [];
+
 	for (const file of snapshot.files) {
-		const target = safeJoin(root, file.path);
-		await fs.mkdir(path.dirname(target), { recursive: true });
-		const content = Buffer.from(file.contentBase64, "base64");
-		if (sha256(content) !== file.sha256) throw new Error(`Checksum mismatch in snapshot file: ${file.path}`);
-		await fs.writeFile(target, content);
+		const normalized = toPosix(file.path);
+		if (!normalized || normalized.startsWith("../") || path.posix.isAbsolute(normalized)) {
+			throw new Error(`Unsafe path in snapshot: ${file.path}`);
+		}
+		if (seenPaths.has(normalized)) throw new Error(`Duplicate path in snapshot: ${normalized}`);
+		seenPaths.add(normalized);
+		remotePaths.add(normalized);
+
+		const target = safeJoin(root, normalized);
+		const content = decodeBase64Strict(file.contentBase64, normalized);
+		if (sha256(content) !== file.sha256) throw new Error(`Checksum mismatch in snapshot file: ${normalized}`);
+		writes.push({ target, content });
 	}
+
 	for (const file of current.files) {
-		if (!remotePaths.has(file.path)) await fs.rm(safeJoin(root, file.path), { force: true });
+		const normalized = toPosix(file.path);
+		if (!remotePaths.has(normalized)) deletes.push(safeJoin(root, normalized));
 	}
+
+	return { writes, deletes };
+}
+
+function decodeBase64Strict(value: string, filePath: string) {
+	if (!/^[A-Za-z0-9+/]*={0,2}$/.test(value) || value.length % 4 !== 0) {
+		throw new Error(`Invalid base64 content in snapshot file: ${filePath}`);
+	}
+	return Buffer.from(value, "base64");
 }
 
 async function backupLocal(profile: string) {
@@ -979,6 +1020,7 @@ function parseOptions(args: string[]): CommandOptions {
 		stale: args.includes("--stale"),
 		silent: false,
 		reload: true,
+		auto: false,
 		args: args.filter((arg) => !arg.startsWith("-")),
 	};
 }

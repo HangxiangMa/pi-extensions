@@ -4,7 +4,7 @@
 
 `@narumitw/pi-sync` is a native [Pi coding agent](https://pi.dev) extension that syncs selected Pi configuration through Cloudflare R2 or other S3-compatible object storage.
 
-It syncs automatically by default when Pi starts, then uses immutable snapshot bundles, a `latest.json` pointer, local locking, secret scanning, and pre-apply backups so multiple Pi processes and multiple machines fail safely instead of silently overwriting settings.
+It syncs automatically by default when Pi starts, then uses immutable snapshot bundles, a `latest.json` pointer, local locking, secret scanning, and pre-apply backups. Cross-machine pushes use a best-effort remote re-read guard because R2 rejected conditional `latest.json` writes during testing.
 
 ## ✨ Features
 
@@ -16,7 +16,7 @@ It syncs automatically by default when Pi starts, then uses immutable snapshot b
   - `AGENTS.md`
   - `skills/`, `prompts/`, `themes/`, and `extensions/`
 - Stores each remote version as an immutable gzip-compressed JSON snapshot bundle.
-- Updates remote state through `latest.json`, guarded by S3 conditional writes when possible.
+- Updates remote state through `latest.json` after re-reading remote state to reject already-visible remote changes.
 - Creates local backups before `pull` and `rollback` under `~/.pi/agent/.pisync/backups/`.
 - Runs `/pisync sync` automatically on Pi startup when R2/S3 config is present.
 - Uses a local exclusive lock at `~/.pi/agent/.pisync/lock` for destructive sync operations.
@@ -110,7 +110,8 @@ Useful flags:
 `autoSync` defaults to `true`. When Pi starts, pi-sync runs the same conservative decision logic as `/pisync sync`:
 
 - only local changed or remote is empty → push
-- only remote changed → pull with a backup
+- first sync with both existing local settings and an existing remote snapshot → skip and show a warning so you manually choose `/pisync pull` or `/pisync push`
+- only remote changed after an established sync → pull with a backup
 - both local and remote changed after a previous sync → skip and show a warning
 - no config present → do nothing
 
@@ -144,12 +145,14 @@ pi-sync/
 
 Each snapshot contains the selected file tree and SHA-256 hashes. `latest.json` points to the active snapshot. Rollback applies an older snapshot locally and moves `latest.json` back to that snapshot.
 
+Before updating `latest.json`, pi-sync re-reads the current pointer and rejects the push if it already differs from the version seen at the start of the command. This prevents overwriting changes that are visible before the final write. It is not a true atomic cross-machine compare-and-swap on R2, so two machines that push at the same instant can still race; run `/pisync status` before important manual pushes if you use multiple machines heavily.
+
 ## 🛡️ Safety notes
 
-- pi-sync auto-syncs on startup by default, but skips instead of overwriting when both local and remote changed after a previous sync.
+- pi-sync auto-syncs on startup by default, but skips instead of overwriting when first-run local settings and a remote snapshot both exist, or when both local and remote changed after a previous sync.
 - pi-sync does not sync Pi sessions, OAuth state, npm caches, `.env`, `node_modules`, or `.pisync` state.
 - If another Pi process is already syncing on the same machine, destructive commands stop at the local lock.
-- If another machine updates remote state first, push is rejected unless you explicitly use `--force`.
+- If another machine's update is visible before this machine updates `latest.json`, push is rejected unless you explicitly use `--force`.
 - Pull and rollback create backups before writing local files.
 
 ## 🗂️ Package layout
