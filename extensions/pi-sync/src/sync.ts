@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { gunzip, gzip } from "node:zlib";
 import { promisify } from "node:util";
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+} from "@mariozechner/pi-coding-agent";
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -45,6 +49,7 @@ interface PartialConfig {
 	secretAccessKey?: string;
 	profile?: string;
 	prefix?: string;
+	autoSync?: boolean | string;
 }
 
 interface SnapshotFile {
@@ -95,8 +100,19 @@ interface CommandOptions {
 	yes: boolean;
 	force: boolean;
 	stale: boolean;
+	silent: boolean;
+	reload: boolean;
 	args: string[];
 }
+
+const AUTO_SYNC_OPTIONS: CommandOptions = {
+	yes: true,
+	force: false,
+	stale: false,
+	silent: true,
+	reload: false,
+	args: [],
+};
 
 export default function sync(pi: ExtensionAPI) {
 	pi.registerCommand("pisync", {
@@ -106,8 +122,9 @@ export default function sync(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		await autoSync(ctx);
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
@@ -168,6 +185,20 @@ async function handleCommand(rawArgs: string, ctx: ExtensionCommandContext) {
 	}
 }
 
+async function autoSync(ctx: ExtensionContext) {
+	try {
+		const partial = await loadPartialConfig();
+		if (!isEnabled(partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC, true)) return;
+		await ensureStateDir();
+		await loadConfig();
+		await withLock("auto-sync", () => syncBoth(ctx, AUTO_SYNC_OPTIONS));
+	} catch (error) {
+		if (isMissingConfigError(error)) return;
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+		ctx.ui.notify(`pi-sync auto sync skipped: ${errorMessage(error)}`, "warning");
+	}
+}
+
 async function initConfig(ctx: ExtensionCommandContext) {
 	const configPath = localConfigPath();
 	try {
@@ -186,6 +217,7 @@ async function initConfig(ctx: ExtensionCommandContext) {
 		secretAccessKey: "<secret-access-key>",
 		profile: DEFAULT_PROFILE,
 		prefix: DEFAULT_PREFIX,
+		autoSync: true,
 	};
 	await writeJson(configPath, sample);
 	ctx.ui.notify(`Created ${configPath}. Fill in R2 credentials, then run /pisync doctor.`, "info");
@@ -203,6 +235,7 @@ async function showConfig(ctx: ExtensionCommandContext) {
 			`secretAccessKey: ${partial.secretAccessKey ? "configured" : "missing"}`,
 			`profile: ${partial.profile ?? DEFAULT_PROFILE}`,
 			`prefix: ${partial.prefix ?? DEFAULT_PREFIX}`,
+			`autoSync: ${isEnabled(partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC, true) ? "enabled" : "disabled"}`,
 			`local config: ${localConfigPath()}`,
 		].join("\n"),
 		"info",
@@ -281,7 +314,7 @@ async function doctor(ctx: ExtensionCommandContext) {
 	ctx.ui.notify(messages.join("\n"), level);
 }
 
-async function push(ctx: ExtensionCommandContext, options: CommandOptions) {
+async function push(ctx: ExtensionCommandContext | ExtensionContext, options: CommandOptions) {
 	ctx.ui.setStatus(STATUS_KEY, "sync push");
 	const config = await loadConfig();
 	const client = new S3Client(config);
@@ -313,10 +346,12 @@ async function push(ctx: ExtensionCommandContext, options: CommandOptions) {
 		lastFileHashes: fileHashMap(local),
 	});
 	ctx.ui.setStatus(STATUS_KEY, undefined);
-	ctx.ui.notify(`Pushed ${local.files.length} files as ${pointer.snapshot}.`, "info");
+	if (!options.silent) {
+		ctx.ui.notify(`Pushed ${local.files.length} files as ${pointer.snapshot}.`, "info");
+	}
 }
 
-async function pull(ctx: ExtensionCommandContext, options: CommandOptions) {
+async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: CommandOptions) {
 	ctx.ui.setStatus(STATUS_KEY, "sync pull");
 	const config = await loadConfig();
 	const client = new S3Client(config);
@@ -327,7 +362,7 @@ async function pull(ctx: ExtensionCommandContext, options: CommandOptions) {
 
 	const localChanged = hasLocalChanges(local, state);
 	const remoteChanged = remote.id !== state.lastAppliedSnapshot;
-	if (localChanged && remoteChanged && !options.force) {
+	if (localChanged && remoteChanged && state.lastAppliedSnapshot && !options.force) {
 		throw new Error("Both local and remote changed since last sync. Run /pisync diff, then choose /pisync pull --force or /pisync push --force.");
 	}
 
@@ -347,11 +382,13 @@ async function pull(ctx: ExtensionCommandContext, options: CommandOptions) {
 		lastFileHashes: fileHashMap(remote),
 	});
 	ctx.ui.setStatus(STATUS_KEY, undefined);
-	ctx.ui.notify(`Pulled ${remote.files.length} files from ${remote.id}. Backup: ${backup}`, "info");
-	await maybeReload(ctx);
+	if (!options.silent) {
+		ctx.ui.notify(`Pulled ${remote.files.length} files from ${remote.id}. Backup: ${backup}`, "info");
+	}
+	if (options.reload) await maybeReload(ctx);
 }
 
-async function syncBoth(ctx: ExtensionCommandContext, options: CommandOptions) {
+async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options: CommandOptions) {
 	const config = await loadConfig();
 	const client = new S3Client(config);
 	const state = await readState(config.profile);
@@ -360,7 +397,7 @@ async function syncBoth(ctx: ExtensionCommandContext, options: CommandOptions) {
 	const localChanged = hasLocalChanges(local, state);
 	const remoteChanged = remote ? remote.id !== state.lastAppliedSnapshot : false;
 
-	if (localChanged && remoteChanged) {
+	if (localChanged && remoteChanged && state.lastAppliedSnapshot) {
 		throw new Error("Both local and remote changed. Run /pisync diff and resolve with push --force or pull --force.");
 	}
 	if (remoteChanged) {
@@ -371,7 +408,7 @@ async function syncBoth(ctx: ExtensionCommandContext, options: CommandOptions) {
 		await push(ctx, options);
 		return;
 	}
-	ctx.ui.notify("pi-sync is already up to date.", "info");
+	if (!options.silent) ctx.ui.notify("pi-sync is already up to date.", "info");
 }
 
 async function history(ctx: ExtensionCommandContext) {
@@ -438,7 +475,8 @@ async function unlock(ctx: ExtensionCommandContext, options: CommandOptions) {
 	ctx.ui.notify("Removed stale pi-sync lock.", "info");
 }
 
-async function maybeReload(ctx: ExtensionCommandContext) {
+async function maybeReload(ctx: ExtensionCommandContext | ExtensionContext) {
+	if (!("reload" in ctx)) return;
 	if (ctx.hasUI && (await ctx.ui.confirm("Reload Pi resources now?", "This reloads extensions, skills, prompts, themes, and context files."))) {
 		await ctx.reload();
 	}
@@ -510,6 +548,7 @@ async function loadPartialConfig(): Promise<PartialConfig> {
 		secretAccessKey: process.env.PI_SYNC_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY ?? fileConfig?.secretAccessKey,
 		profile: process.env.PI_SYNC_PROFILE ?? fileConfig?.profile,
 		prefix: process.env.PI_SYNC_PREFIX ?? fileConfig?.prefix,
+		autoSync: process.env.PI_SYNC_AUTO_SYNC ?? fileConfig?.autoSync,
 	};
 }
 
@@ -938,6 +977,8 @@ function parseOptions(args: string[]): CommandOptions {
 		yes: args.includes("--yes") || args.includes("-y"),
 		force: args.includes("--force"),
 		stale: args.includes("--stale"),
+		silent: false,
+		reload: true,
 		args: args.filter((arg) => !arg.startsWith("-")),
 	};
 }
@@ -988,6 +1029,16 @@ function normalizeEtag(value: string | null) {
 
 function redact(value: string) {
 	return value.length <= 8 ? "configured" : `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
+function isEnabled(value: boolean | string | undefined, defaultValue: boolean) {
+	if (value === undefined) return defaultValue;
+	if (typeof value === "boolean") return value;
+	return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
+}
+
+function isMissingConfigError(error: unknown) {
+	return error instanceof Error && error.message.startsWith("Missing pi-sync config:");
 }
 
 function errorMessage(error: unknown) {

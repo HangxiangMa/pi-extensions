@@ -4,7 +4,7 @@
 
 `@narumitw/pi-sync` is a native [Pi coding agent](https://pi.dev) extension that syncs selected Pi configuration through Cloudflare R2 or other S3-compatible object storage.
 
-It uses immutable snapshot bundles, a `latest.json` pointer, local locking, secret scanning, and pre-apply backups so multiple Pi processes and multiple machines fail safely instead of silently overwriting settings.
+It syncs automatically by default when Pi starts, then uses immutable snapshot bundles, a `latest.json` pointer, local locking, secret scanning, and pre-apply backups so multiple Pi processes and multiple machines fail safely instead of silently overwriting settings.
 
 ## ✨ Features
 
@@ -18,6 +18,7 @@ It uses immutable snapshot bundles, a `latest.json` pointer, local locking, secr
 - Stores each remote version as an immutable gzip-compressed JSON snapshot bundle.
 - Updates remote state through `latest.json`, guarded by S3 conditional writes when possible.
 - Creates local backups before `pull` and `rollback` under `~/.pi/agent/.pisync/backups/`.
+- Runs `/pisync sync` automatically on Pi startup when R2/S3 config is present.
 - Uses a local exclusive lock at `~/.pi/agent/.pisync/lock` for destructive sync operations.
 - Refuses to push common secret patterns and denylisted paths such as `.env`, token/secret files, `.pisync`, `.git`, and `node_modules`.
 
@@ -63,7 +64,8 @@ Example:
   "accessKeyId": "<access-key-id>",
   "secretAccessKey": "<secret-access-key>",
   "profile": "default",
-  "prefix": "pi-sync"
+  "prefix": "pi-sync",
+  "autoSync": true
 }
 ```
 
@@ -77,6 +79,7 @@ export PI_SYNC_ACCESS_KEY_ID="..."
 export PI_SYNC_SECRET_ACCESS_KEY="..."
 export PI_SYNC_PROFILE="default"
 export PI_SYNC_PREFIX="pi-sync"
+export PI_SYNC_AUTO_SYNC="true"
 ```
 
 `PI_SYNC_ACCESS_KEY_ID` and `PI_SYNC_SECRET_ACCESS_KEY` are local-only credentials. Do not put them in files that pi-sync syncs.
@@ -102,6 +105,29 @@ Useful flags:
 - `--force`: allow push or pull when both local and remote state changed.
 - `--stale`: remove a stale local lock with `/pisync unlock --stale`.
 
+## 🔄 Automatic sync
+
+`autoSync` defaults to `true`. When Pi starts, pi-sync runs the same conservative decision logic as `/pisync sync`:
+
+- only local changed or remote is empty → push
+- only remote changed → pull with a backup
+- both local and remote changed after a previous sync → skip and show a warning
+- no config present → do nothing
+
+Disable startup sync with either:
+
+```json
+{
+  "autoSync": false
+}
+```
+
+or:
+
+```bash
+export PI_SYNC_AUTO_SYNC=false
+```
+
 ## 🧠 Sync model
 
 Remote layout:
@@ -120,7 +146,7 @@ Each snapshot contains the selected file tree and SHA-256 hashes. `latest.json` 
 
 ## 🛡️ Safety notes
 
-- pi-sync does not auto-apply remote changes on startup.
+- pi-sync auto-syncs on startup by default, but skips instead of overwriting when both local and remote changed after a previous sync.
 - pi-sync does not sync Pi sessions, OAuth state, npm caches, `.env`, `node_modules`, or `.pisync` state.
 - If another Pi process is already syncing on the same machine, destructive commands stop at the local lock.
 - If another machine updates remote state first, push is rejected unless you explicitly use `--force`.
