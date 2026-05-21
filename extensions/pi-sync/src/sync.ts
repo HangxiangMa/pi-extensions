@@ -91,6 +91,7 @@ interface SyncState {
 }
 
 interface LockFile {
+	id: string;
 	pid: number;
 	command: string;
 	startedAt: string;
@@ -490,7 +491,12 @@ async function maybeReload(ctx: ExtensionCommandContext | ExtensionContext) {
 
 async function withLock<T>(command: string, fn: () => Promise<T>): Promise<T> {
 	await ensureStateDir();
-	const lock: LockFile = { pid: process.pid, command, startedAt: new Date().toISOString() };
+	const lock: LockFile = {
+		id: randomUUID(),
+		pid: process.pid,
+		command,
+		startedAt: new Date().toISOString(),
+	};
 	let handle: fs.FileHandle | undefined;
 	try {
 		handle = await fs.open(lockPath(), "wx");
@@ -510,7 +516,7 @@ async function withLock<T>(command: string, fn: () => Promise<T>): Promise<T> {
 	} finally {
 		await handle?.close();
 		const current = await readLock();
-		if (current?.pid === process.pid) await fs.rm(lockPath(), { force: true });
+		if (current?.id === lock.id) await fs.rm(lockPath(), { force: true });
 	}
 }
 
@@ -610,6 +616,7 @@ function isDeniedPath(relativePath: string) {
 		normalized.includes("/.git/") ||
 		normalized.includes("/.pisync/") ||
 		base === ".env" ||
+		base.startsWith(".env.") ||
 		base.endsWith(".env") ||
 		base.includes("secret") ||
 		base.includes("token") ||

@@ -20,7 +20,7 @@ It syncs automatically by default when Pi starts, then uses immutable snapshot b
 - Creates local backups before `pull` and `rollback` under `~/.pi/agent/.pisync/backups/`.
 - Runs `/pisync sync` automatically on Pi startup when R2/S3 config is present.
 - Uses a local exclusive lock at `~/.pi/agent/.pisync/lock` for destructive sync operations.
-- Refuses to push common secret patterns and denylisted paths such as `.env`, token/secret files, `.pisync`, `.git`, and `node_modules`.
+- Refuses to push common secret patterns and denylisted paths such as `.env`, `.env.local`, token/secret files, `.pisync`, `.git`, and `node_modules`.
 
 ## 📦 Install
 
@@ -150,7 +150,7 @@ Before updating `latest.json`, pi-sync re-reads the current pointer and rejects 
 ## 🛡️ Safety notes
 
 - pi-sync auto-syncs on startup by default, but skips instead of overwriting when first-run local settings and a remote snapshot both exist, or when both local and remote changed after a previous sync.
-- pi-sync does not sync Pi sessions, OAuth state, npm caches, `.env`, `node_modules`, or `.pisync` state.
+- pi-sync does not sync Pi sessions, OAuth state, npm caches, `.env`, `.env.local`, `node_modules`, or `.pisync` state.
 - If another Pi process is already syncing on the same machine, destructive commands stop at the local lock.
 - If another machine's update is visible before this machine updates `latest.json`, push is rejected unless you explicitly use `--force`.
 - Pull and rollback create backups before writing local files.
