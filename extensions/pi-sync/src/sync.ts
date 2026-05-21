@@ -702,12 +702,11 @@ async function applySnapshot(snapshot: Snapshot) {
 	const root = agentDir();
 	const current = await createSnapshot(snapshot.profile);
 	const plan = preflightSnapshotApply(root, snapshot, current);
+	await preflightSnapshotMutations(root, plan);
 	for (const target of plan.deletes) {
-		await assertNoSymlinkParents(root, target);
 		await fs.rm(target, { force: true, recursive: true });
 	}
 	for (const item of plan.writes) {
-		await prepareSnapshotWrite(root, item.target);
 		await fs.writeFile(item.target, item.content);
 	}
 }
@@ -1013,7 +1012,8 @@ function isStaleLock(lock: LockFile) {
 	try {
 		process.kill(lock.pid, 0);
 		return false;
-	} catch {
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
 		return Date.now() - Date.parse(lock.startedAt) > LOCK_STALE_MS;
 	}
 }
@@ -1030,6 +1030,18 @@ async function readJsonIfExists<T>(filePath: string): Promise<T | undefined> {
 async function writeJson(filePath: string, value: unknown) {
 	await fs.mkdir(path.dirname(filePath), { recursive: true });
 	await fs.writeFile(filePath, `${JSON.stringify(value, null, "\t")}\n`);
+}
+
+async function preflightSnapshotMutations(
+	root: string,
+	plan: { deletes: string[]; writes: Array<{ target: string; content: Buffer }> },
+) {
+	for (const target of plan.deletes) {
+		await assertNoSymlinkParents(root, target);
+	}
+	for (const item of plan.writes) {
+		await prepareSnapshotWrite(root, item.target);
+	}
 }
 
 async function prepareSnapshotWrite(root: string, target: string) {
