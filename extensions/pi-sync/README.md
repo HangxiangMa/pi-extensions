@@ -19,8 +19,9 @@ It syncs automatically by default when Pi starts, then uses immutable snapshot b
 - Updates remote state through `latest.json` after re-reading remote state to reject already-visible remote changes.
 - Creates local backups before `pull` and `rollback` under `~/.pi/agent/.pisync/backups/`.
 - Runs `/pisync sync` automatically on Pi startup when R2/S3 config is present.
-- Uses a local exclusive lock at `~/.pi/agent/.pisync/lock` for destructive sync operations.
+- Uses a local exclusive lock at `~/.pi/agent/.pisync/lock` for destructive sync operations and only treats locks as stale after checking process liveness.
 - Refuses to push common secret patterns and denylisted paths such as `.env`, `.env.local`, token/secret files, `.pisync`, `.git`, and `node_modules`.
+- Preflights snapshot apply operations before mutating local files, refuses symlink path escapes, and rejects writes over symlinks or directories.
 
 ## 📦 Install
 
@@ -63,6 +64,7 @@ Example:
   "region": "auto",
   "accessKeyId": "<access-key-id>",
   "secretAccessKey": "<secret-access-key>",
+  "sessionToken": "<optional-session-token>",
   "profile": "default",
   "prefix": "pi-sync",
   "autoSync": true
@@ -77,12 +79,13 @@ export PI_SYNC_BUCKET="pi-sync"
 export PI_SYNC_REGION="auto"
 export PI_SYNC_ACCESS_KEY_ID="..."
 export PI_SYNC_SECRET_ACCESS_KEY="..."
+export PI_SYNC_SESSION_TOKEN="..." # optional, for temporary STS/SSO credentials
 export PI_SYNC_PROFILE="default"
 export PI_SYNC_PREFIX="pi-sync"
 export PI_SYNC_AUTO_SYNC="true"
 ```
 
-`PI_SYNC_ACCESS_KEY_ID` and `PI_SYNC_SECRET_ACCESS_KEY` are local-only credentials. Do not put them in files that pi-sync syncs.
+`PI_SYNC_ACCESS_KEY_ID`, `PI_SYNC_SECRET_ACCESS_KEY`, and `PI_SYNC_SESSION_TOKEN` are local-only credentials. Do not put them in files that pi-sync syncs. `PI_SYNC_SESSION_TOKEN` is optional and only needed for temporary credentials such as AWS STS, AWS SSO, or assumed roles. pi-sync also reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`, `R2_ENDPOINT`, and `R2_BUCKET` as compatibility aliases when the matching `PI_SYNC_*` variable is not set.
 
 ## 🚀 Usage
 
@@ -110,7 +113,8 @@ Useful flags:
 `autoSync` defaults to `true`. When Pi starts, pi-sync runs the same conservative decision logic as `/pisync sync`:
 
 - only local changed or remote is empty → push
-- first sync with both existing local settings and an existing remote snapshot → skip and show a warning so you manually choose `/pisync pull` or `/pisync push`
+- first sync with existing local settings and an identical remote snapshot → initialize local sync state without rewriting files
+- first sync with existing local settings and a different remote snapshot → skip and show a warning so you manually choose `/pisync pull` or `/pisync push`
 - only remote changed after an established sync → pull with a backup
 - both local and remote changed after a previous sync → skip and show a warning
 - no config present → do nothing
@@ -151,9 +155,10 @@ Before updating `latest.json`, pi-sync re-reads the current pointer and rejects 
 
 - pi-sync auto-syncs on startup by default, but skips instead of overwriting when first-run local settings and a remote snapshot both exist, or when both local and remote changed after a previous sync.
 - pi-sync does not sync Pi sessions, OAuth state, npm caches, `.env`, `.env.local`, `node_modules`, or `.pisync` state.
-- If another Pi process is already syncing on the same machine, destructive commands stop at the local lock.
+- If another Pi process is already syncing on the same machine, destructive commands stop at the local lock. `/pisync unlock --stale` is intended for locks whose process is gone or invalid.
 - If another machine's update is visible before this machine updates `latest.json`, push is rejected unless you explicitly use `--force`.
-- Pull and rollback create backups before writing local files.
+- Pull and rollback create backups before writing local files, then preflight deletes and writes before mutating the local settings tree.
+- Pull and rollback refuse to follow symlinked parent paths during snapshot apply and refuse to overwrite a symlink or directory with file content.
 
 ## 🗂️ Package layout
 
