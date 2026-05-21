@@ -38,6 +38,7 @@ interface SyncConfig {
 	accessKeyId: string;
 	secretAccessKey: string;
 	sessionToken?: string;
+	ignoredSessionTokenSources?: string[];
 	profile: string;
 	prefix: string;
 }
@@ -49,6 +50,7 @@ interface PartialConfig {
 	accessKeyId?: string;
 	secretAccessKey?: string;
 	sessionToken?: string;
+	ignoredSessionTokenSources?: string[];
 	profile?: string;
 	prefix?: string;
 	autoSync?: boolean | string;
@@ -230,6 +232,7 @@ async function initConfig(ctx: ExtensionCommandContext) {
 
 async function showConfig(ctx: ExtensionCommandContext) {
 	const partial = await loadPartialConfig();
+	const warnings = sessionTokenWarnings(partial);
 	ctx.ui.notify(
 		[
 			"pi-sync config:",
@@ -243,8 +246,9 @@ async function showConfig(ctx: ExtensionCommandContext) {
 			`prefix: ${partial.prefix ?? DEFAULT_PREFIX}`,
 			`autoSync: ${isEnabled(partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC, true) ? "enabled" : "disabled"}`,
 			`local config: ${localConfigPath()}`,
+			...warnings,
 		].join("\n"),
-		"info",
+		warnings.length > 0 ? "warning" : "info",
 	);
 }
 
@@ -300,6 +304,11 @@ async function doctor(ctx: ExtensionCommandContext) {
 	try {
 		const config = await loadConfig();
 		messages.push(`config: ok (${config.bucket}/${profilePrefix(config)})`);
+		const warnings = sessionTokenWarnings(config);
+		if (warnings.length > 0) {
+			level = "warning";
+			messages.push(...warnings);
+		}
 	} catch (error) {
 		level = "warning";
 		messages.push(`config: ${errorMessage(error)}`);
@@ -559,24 +568,28 @@ async function loadConfig(): Promise<SyncConfig> {
 		accessKeyId: accessKeyId!,
 		secretAccessKey: secretAccessKey!,
 		sessionToken: partial.sessionToken,
+		ignoredSessionTokenSources: partial.ignoredSessionTokenSources,
 		profile: partial.profile ?? DEFAULT_PROFILE,
 		prefix: trimSlashes(partial.prefix ?? DEFAULT_PREFIX),
 	};
 }
 
 async function loadPartialConfig(): Promise<PartialConfig> {
-	const fileConfig = await readJsonIfExists<PartialConfig>(localConfigPath());
+	const fileConfig = (await readJsonIfExists<PartialConfig>(localConfigPath())) ?? {};
+	const endpoint = process.env.PI_SYNC_ENDPOINT ?? process.env.R2_ENDPOINT ?? fileConfig.endpoint;
+	const sessionToken = selectSessionToken(endpoint, fileConfig.sessionToken);
 	return {
 		...fileConfig,
-		endpoint: process.env.PI_SYNC_ENDPOINT ?? process.env.R2_ENDPOINT ?? fileConfig?.endpoint,
-		bucket: process.env.PI_SYNC_BUCKET ?? process.env.R2_BUCKET ?? fileConfig?.bucket,
-		region: process.env.PI_SYNC_REGION ?? process.env.AWS_REGION ?? fileConfig?.region,
-		accessKeyId: process.env.PI_SYNC_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID ?? fileConfig?.accessKeyId,
-		secretAccessKey: process.env.PI_SYNC_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY ?? fileConfig?.secretAccessKey,
-		sessionToken: process.env.PI_SYNC_SESSION_TOKEN ?? process.env.AWS_SESSION_TOKEN ?? fileConfig?.sessionToken,
-		profile: process.env.PI_SYNC_PROFILE ?? fileConfig?.profile,
-		prefix: process.env.PI_SYNC_PREFIX ?? fileConfig?.prefix,
-		autoSync: process.env.PI_SYNC_AUTO_SYNC ?? fileConfig?.autoSync,
+		endpoint,
+		bucket: process.env.PI_SYNC_BUCKET ?? process.env.R2_BUCKET ?? fileConfig.bucket,
+		region: process.env.PI_SYNC_REGION ?? process.env.AWS_REGION ?? fileConfig.region,
+		accessKeyId: process.env.PI_SYNC_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID ?? fileConfig.accessKeyId,
+		secretAccessKey: process.env.PI_SYNC_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY ?? fileConfig.secretAccessKey,
+		sessionToken: sessionToken.value,
+		ignoredSessionTokenSources: sessionToken.ignoredSources,
+		profile: process.env.PI_SYNC_PROFILE ?? fileConfig.profile,
+		prefix: process.env.PI_SYNC_PREFIX ?? fileConfig.prefix,
+		autoSync: process.env.PI_SYNC_AUTO_SYNC ?? fileConfig.autoSync,
 	};
 }
 
@@ -1129,7 +1142,7 @@ function usage() {
 	return [
 		"Usage: /pisync <command>",
 		"Commands: init, config, status, diff, doctor, push, pull, sync, history, rollback <snapshot>, unlock --stale",
-		"Config: set PI_SYNC_ENDPOINT, PI_SYNC_BUCKET, PI_SYNC_ACCESS_KEY_ID, PI_SYNC_SECRET_ACCESS_KEY, optional PI_SYNC_SESSION_TOKEN/region/profile/prefix, or edit ~/.pi/agent/pi-sync.local.json.",
+		"Config: set PI_SYNC_ENDPOINT, PI_SYNC_BUCKET, PI_SYNC_ACCESS_KEY_ID, PI_SYNC_SECRET_ACCESS_KEY, optional PI_SYNC_SESSION_TOKEN (ignored for R2)/region/profile/prefix, or edit ~/.pi/agent/pi-sync.local.json.",
 	].join("\n");
 }
 
@@ -1171,6 +1184,51 @@ function normalizeEtag(value: string | null) {
 
 function redact(value: string) {
 	return value.length <= 8 ? "configured" : `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
+function selectSessionToken(endpoint: string | undefined, fileSessionToken: string | undefined) {
+	const piSessionToken = normalizeOptionalString(process.env.PI_SYNC_SESSION_TOKEN);
+	const awsSessionToken = normalizeOptionalString(process.env.AWS_SESSION_TOKEN);
+	const configSessionToken = normalizeOptionalString(fileSessionToken);
+	if (isCloudflareR2Endpoint(endpoint)) {
+		return {
+			value: undefined,
+			ignoredSources: [
+				...(piSessionToken ? ["PI_SYNC_SESSION_TOKEN"] : []),
+				...(awsSessionToken ? ["AWS_SESSION_TOKEN"] : []),
+				...(configSessionToken ? ["local config sessionToken"] : []),
+			],
+		};
+	}
+	if (hasEnv("PI_SYNC_SESSION_TOKEN")) return { value: piSessionToken, ignoredSources: [] };
+	return { value: awsSessionToken ?? configSessionToken, ignoredSources: [] };
+}
+
+function sessionTokenWarnings(config: { endpoint?: string; ignoredSessionTokenSources?: string[] }) {
+	if (!isCloudflareR2Endpoint(config.endpoint)) return [];
+	const sources = config.ignoredSessionTokenSources ?? [];
+	if (sources.length === 0) return [];
+	return [`session token: ${sources.join(", ")} ignored for Cloudflare R2 endpoints because R2 static access keys reject X-Amz-Security-Token.`];
+}
+
+function isCloudflareR2Endpoint(endpoint: string | undefined) {
+	const value = endpoint?.trim();
+	if (!value) return false;
+	try {
+		const hostname = new URL(value).hostname.toLowerCase();
+		return hostname === "r2.cloudflarestorage.com" || hostname.endsWith(".r2.cloudflarestorage.com");
+	} catch {
+		return false;
+	}
+}
+
+function normalizeOptionalString(value: string | undefined) {
+	const normalized = value?.trim();
+	return normalized ? normalized : undefined;
+}
+
+function hasEnv(name: string) {
+	return Object.prototype.hasOwnProperty.call(process.env, name);
 }
 
 function isEnabled(value: boolean | string | undefined, defaultValue: boolean) {
