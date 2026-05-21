@@ -598,12 +598,13 @@ async function uploadSnapshot(
 	const encoded = await encodeSnapshot(snapshot);
 	const pointer = pointerFor(config, snapshot, sha256(encoded));
 	await client.putBuffer(snapshotKey(config, snapshot.id), encoded, "application/gzip");
-	await client.putJson(
-		latestKey(config),
-		pointer,
-		force ? undefined : latest.etag,
-		!force && latest.missing ? "*" : undefined,
-	);
+	if (!force) {
+		const current = await client.getJson<LatestPointer>(latestKey(config));
+		if (remoteIdentity(current) !== remoteIdentity(latest)) {
+			throw new Error("Remote changed while pushing. Run /pisync pull first, then retry.");
+		}
+	}
+	await client.putJson(latestKey(config), pointer);
 	return pointer;
 }
 
@@ -705,6 +706,10 @@ function remoteChangedSinceState(latest: RemoteObject<LatestPointer>, state: Syn
 	return latest.value?.snapshot !== state.lastAppliedSnapshot;
 }
 
+function remoteIdentity(remote: RemoteObject<LatestPointer>) {
+	return remote.missing ? "missing" : (remote.value?.snapshot ?? "unknown");
+}
+
 function sameHashes(left: Record<string, string>, right: Record<string, string>) {
 	const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
 	for (const key of keys) {
@@ -754,21 +759,13 @@ class S3Client {
 		return { value: Buffer.from(await object.arrayBuffer()), etag: normalizeEtag(object.headers.get("etag")), missing: false };
 	}
 
-	async putJson(key: string, value: unknown, ifMatch?: string, ifNoneMatch?: string) {
+	async putJson(key: string, value: unknown) {
 		const body = Buffer.from(JSON.stringify(value, null, "\t"), "utf8");
-		await this.putBuffer(key, body, "application/json", ifMatch, ifNoneMatch);
+		await this.putBuffer(key, body, "application/json");
 	}
 
-	async putBuffer(
-		key: string,
-		body: Buffer,
-		contentType: string,
-		ifMatch?: string,
-		ifNoneMatch?: string,
-	) {
+	async putBuffer(key: string, body: Buffer, contentType: string) {
 		const headers: Record<string, string> = { "content-type": contentType };
-		if (ifMatch) headers["if-match"] = ifMatch;
-		if (ifNoneMatch) headers["if-none-match"] = ifNoneMatch;
 		const response = await this.request("PUT", key, body, headers);
 		if (!response.ok) throw new Error(`S3 PUT failed (${response.status}): ${await response.text()}`);
 	}
