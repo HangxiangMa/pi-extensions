@@ -5,7 +5,6 @@ const STATUS_KEY = "plan-mode";
 const PLAN_WIDGET_KEY = "plan-mode-plan";
 const PLAN_CONTEXT_MESSAGE_TYPE = "plan-mode-context";
 const PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
-const PLAN_IMPLEMENTATION_MESSAGE_TYPE = "plan-mode-implementation";
 const PLAN_CONTEXT_MARKER = "[CODEX-LIKE PLAN MODE ACTIVE]";
 const SAFE_BUILTIN_PLAN_TOOLS = new Set(["read", "bash", "grep", "find", "ls"]);
 const BLOCKED_BUILTIN_TOOLS = new Set(["edit", "write"]);
@@ -214,8 +213,7 @@ export default function planMode(pi: ExtensionAPI) {
 		if (!wasEnabled) {
 			ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
 		}
-		if (ctx.isIdle()) pi.sendUserMessage(prompt);
-		else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+		sendPlanModeUserMessage(prompt, ctx);
 	}
 
 	function exitPlanMode(ctx: ExtensionContext) {
@@ -224,6 +222,11 @@ export default function planMode(pi: ExtensionAPI) {
 		if (wasEnabled) restoreTools();
 		persistState();
 		updateUi(ctx);
+	}
+
+	function sendPlanModeUserMessage(message: string, ctx: ExtensionContext) {
+		if (ctx.isIdle()) pi.sendUserMessage(message);
+		else pi.sendUserMessage(message, { deliverAs: "followUp" });
 	}
 
 	function startImplementation(ctx: ExtensionContext) {
@@ -235,13 +238,9 @@ export default function planMode(pi: ExtensionAPI) {
 			return;
 		}
 
-		pi.sendMessage(
-			{
-				customType: PLAN_IMPLEMENTATION_MESSAGE_TYPE,
-				content: `Plan mode is now disabled. Full tool access is restored. Implement this proposed plan now:\n\n${plan}`,
-				display: true,
-			},
-			{ triggerTurn: true },
+		sendPlanModeUserMessage(
+			`Plan mode is now disabled. Full tool access is restored. Implement this proposed plan now:\n\n${plan}`,
+			ctx,
 		);
 	}
 
@@ -299,7 +298,7 @@ export default function planMode(pi: ExtensionAPI) {
 		}
 		if (choice === "Revise plan") {
 			const refinement = await ctx.ui.editor("Revise the plan", "");
-			if (refinement?.trim()) pi.sendUserMessage(refinement.trim());
+			if (refinement?.trim()) sendPlanModeUserMessage(refinement.trim(), ctx);
 			return;
 		}
 		if (choice === "Exit Plan mode") {
