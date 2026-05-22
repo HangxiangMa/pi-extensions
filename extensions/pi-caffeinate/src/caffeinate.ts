@@ -147,10 +147,13 @@ function stopInhibitor(ctx: ExtensionContext, reason: string, options: { notify?
 	if (!child.killed) {
 		if (state.command?.releaseOnStdinClose && child.stdin && !child.stdin.destroyed) {
 			child.stdin.end();
-			const killTimer = setTimeout(() => {
-				if (!child.killed) child.kill();
-			}, 2000);
-			killTimer.unref();
+			if (child.exitCode === null && child.signalCode === null) {
+				const killTimer = setTimeout(() => {
+					if (child.exitCode === null && child.signalCode === null && !child.killed) child.kill();
+				}, 2000);
+				killTimer.unref();
+				child.once("exit", () => clearTimeout(killTimer));
+			}
 		} else if (process.platform === "win32") {
 			child.kill();
 		} else {
