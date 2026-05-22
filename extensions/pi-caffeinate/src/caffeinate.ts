@@ -11,6 +11,7 @@ interface InhibitorCommand {
 	command: string;
 	args: string[];
 	description: string;
+	releaseOnStdinClose?: boolean;
 }
 
 interface CaffeinateState {
@@ -92,7 +93,7 @@ function startInhibitor(ctx: ExtensionContext) {
 	try {
 		const child = spawn(command.command, command.args, {
 			detached: false,
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: [command.releaseOnStdinClose ? "pipe" : "ignore", "pipe", "pipe"],
 		});
 
 		state.process = child;
@@ -144,12 +145,23 @@ function stopInhibitor(ctx: ExtensionContext, reason: string, options: { notify?
 	child.removeAllListeners("error");
 
 	if (!child.killed) {
-		if (process.platform === "win32") {
+		if (state.command?.releaseOnStdinClose && child.stdin && !child.stdin.destroyed) {
+			child.stdin.end();
+			if (child.exitCode === null && child.signalCode === null) {
+				const killTimer = setTimeout(() => {
+					if (child.exitCode === null && child.signalCode === null && !child.killed) child.kill();
+				}, 2000);
+				killTimer.unref();
+				child.once("exit", () => clearTimeout(killTimer));
+			}
+		} else if (process.platform === "win32") {
 			child.kill();
 		} else {
 			child.kill("SIGTERM");
 		}
 	}
+
+	state.command = undefined;
 
 	if (options.notify !== false) {
 		ctx.ui.notify(`Released pi-caffeinate (${reason}).`, "info");
@@ -164,7 +176,7 @@ function getInhibitorCommand(): InhibitorCommand | undefined {
 	}
 
 	if (process.platform === "darwin") {
-		return { command: "caffeinate", args: ["-dimsu"], description: "caffeinate" };
+		return parentBoundUnixCommand("caffeinate", ["-dimsu"], "caffeinate");
 	}
 
 	if (process.platform === "linux") {
@@ -173,9 +185,9 @@ function getInhibitorCommand(): InhibitorCommand | undefined {
 		}
 
 		if (commandExists("systemd-inhibit")) {
-			return {
-				command: "systemd-inhibit",
-				args: [
+			return parentBoundUnixCommand(
+				"systemd-inhibit",
+				[
 					"--what=idle:sleep",
 					"--who=pi-caffeinate",
 					"--why=Pi agent is running",
@@ -183,12 +195,12 @@ function getInhibitorCommand(): InhibitorCommand | undefined {
 					"sleep",
 					"infinity",
 				],
-				description: "systemd-inhibit",
-			};
+				"systemd-inhibit",
+			);
 		}
 
 		if (commandExists("caffeinate")) {
-			return { command: "caffeinate", args: ["-dimsu"], description: "caffeinate" };
+			return parentBoundUnixCommand("caffeinate", ["-dimsu"], "caffeinate");
 		}
 	}
 
@@ -197,6 +209,29 @@ function getInhibitorCommand(): InhibitorCommand | undefined {
 	}
 
 	return undefined;
+}
+
+function parentBoundUnixCommand(
+	command: string,
+	args: string[],
+	description: string,
+): InhibitorCommand {
+	return {
+		command: "sh",
+		args: [
+			"-c",
+			unixParentBoundScript(),
+			"pi-caffeinate-watch",
+			String(process.pid),
+			command,
+			...args,
+		],
+		description,
+	};
+}
+
+function unixParentBoundScript() {
+	return `parent=$1; shift; "$@" & child=$!; ( while kill -0 "$parent" 2>/dev/null; do sleep 5; done; kill "$child" 2>/dev/null ) & watcher=$!; cleanup() { kill "$watcher" 2>/dev/null; kill "$child" 2>/dev/null; wait "$child" 2>/dev/null; }; trap 'cleanup; exit 0' INT TERM HUP EXIT; wait "$child"; status=$?; kill "$watcher" 2>/dev/null; trap - EXIT; exit "$status"`;
 }
 
 function commandExists(command: string) {
@@ -262,11 +297,12 @@ function windowsPowerInhibitorCommand(command: string): InhibitorCommand {
 		command,
 		args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", windowsInhibitorScript()],
 		description: "PowerShell SetThreadExecutionState",
+		releaseOnStdinClose: true,
 	};
 }
 
 function windowsInhibitorScript() {
-	return `Add-Type -Namespace Native -Name Power -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint esFlags);'; while ($true) { [Native.Power]::SetThreadExecutionState(0x80000000 -bor 0x00000001 -bor 0x00000002) | Out-Null; Start-Sleep -Seconds 30 }`;
+	return `$ErrorActionPreference = 'Stop'; Add-Type -Namespace Native -Name Power -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint esFlags);'; $flags = [uint32]'0x80000003'; $release = [uint32]'0x80000000'; $stdin = [Console]::OpenStandardInput(); $buffer = New-Object byte[] 1; $readTask = $stdin.ReadAsync($buffer, 0, 1); try { while ($true) { [Native.Power]::SetThreadExecutionState($flags) | Out-Null; if ($readTask.Wait(30000)) { break } } } finally { [Native.Power]::SetThreadExecutionState($release) | Out-Null }`;
 }
 
 function isWsl() {
