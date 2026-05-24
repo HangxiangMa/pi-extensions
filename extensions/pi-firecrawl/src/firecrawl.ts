@@ -1,13 +1,76 @@
-import { defineTool, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import {
+	defineTool,
+	type ExtensionAPI,
+	type ExtensionCommandContext,
+} from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 
 const DEFAULT_API_URL = "https://api.firecrawl.dev/v1";
 const STATUS_KEY = "firecrawl";
+const SETTINGS_FILE = join(
+	process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
+	"pi-firecrawl-settings.json",
+);
+const FIRECRAWL_TOOL_NAMES = [
+	"firecrawl_scrape",
+	"firecrawl_crawl",
+	"firecrawl_crawl_status",
+	"firecrawl_map",
+	"firecrawl_search",
+] as const;
+const COMMAND_COMPLETIONS = [
+	{ value: "help", label: "Show command usage" },
+	{ value: "config", label: "Show configuration quick start" },
+	{ value: "quickstart", label: "Show configuration quick start" },
+	{ value: "status", label: "Show tool and settings status" },
+	{ value: "tools", label: "Select Firecrawl tools" },
+	{ value: "toggle", label: "Select Firecrawl tools" },
+	{ value: "enable", label: "Enable all Firecrawl tools" },
+	{ value: "disable", label: "Disable all Firecrawl tools" },
+];
+const MENU_OPTIONS = {
+	config: "Configuration quick start",
+	help: "Command usage guide",
+	status: "Show tool status",
+	tools: "Select Firecrawl tools",
+	enable: "Enable all Firecrawl tools",
+	disable: "Disable all Firecrawl tools",
+} as const;
+const TOOL_SELECTOR_DONE = "Done";
+const TOOL_SELECTOR_ENABLE_ALL = "Enable all Firecrawl tools";
+const TOOL_SELECTOR_DISABLE_ALL = "Disable all Firecrawl tools";
 
 const StringArray = Type.Array(Type.String());
 
+type FirecrawlToolName = (typeof FIRECRAWL_TOOL_NAMES)[number];
+type ToolRuntimeStatus = "enabled" | "disabled" | "partial";
+type CommandAction =
+	| "menu"
+	| "help"
+	| "config"
+	| "quickstart"
+	| "status"
+	| "tools"
+	| "enable"
+	| "disable";
+type CommandContext = ExtensionCommandContext;
+
 interface FirecrawlState {
 	apiUrl: string;
+}
+
+interface FirecrawlSettings {
+	tools: FirecrawlToolName[];
+	updatedAt: number;
+}
+
+interface ToolStatusSummary {
+	runtimeStatus: ToolRuntimeStatus;
+	activeFirecrawlToolCount: number;
+	activeNonFirecrawlToolCount: number;
 }
 
 interface StatusContext {
@@ -19,7 +82,7 @@ const state: FirecrawlState = {
 };
 
 const scrapeTool = defineTool({
-	name: "firecrawl_scrape",
+	name: FIRECRAWL_TOOL_NAMES[0],
 	label: "Firecrawl: Scrape",
 	description: "Scrape a single URL through Firecrawl and return requested formats.",
 	promptSnippet: "Scrape a URL through Firecrawl",
@@ -81,7 +144,7 @@ const scrapeTool = defineTool({
 });
 
 const crawlTool = defineTool({
-	name: "firecrawl_crawl",
+	name: FIRECRAWL_TOOL_NAMES[1],
 	label: "Firecrawl: Crawl",
 	description: "Start a Firecrawl crawl job for a website.",
 	promptSnippet: "Start a Firecrawl site crawl job",
@@ -119,7 +182,7 @@ const crawlTool = defineTool({
 });
 
 const crawlStatusTool = defineTool({
-	name: "firecrawl_crawl_status",
+	name: FIRECRAWL_TOOL_NAMES[2],
 	label: "Firecrawl: Crawl Status",
 	description: "Check a Firecrawl crawl job status and retrieve completed crawl data.",
 	promptSnippet: "Check a Firecrawl crawl job status",
@@ -140,7 +203,7 @@ const crawlStatusTool = defineTool({
 });
 
 const mapTool = defineTool({
-	name: "firecrawl_map",
+	name: FIRECRAWL_TOOL_NAMES[3],
 	label: "Firecrawl: Map",
 	description: "Discover URLs for a site through Firecrawl's map endpoint.",
 	promptSnippet: "Map/discover URLs for a site through Firecrawl",
@@ -167,7 +230,7 @@ const mapTool = defineTool({
 });
 
 const searchTool = defineTool({
-	name: "firecrawl_search",
+	name: FIRECRAWL_TOOL_NAMES[4],
 	label: "Firecrawl: Search",
 	description: "Search the web through Firecrawl and optionally scrape search results.",
 	promptSnippet: "Search the web through Firecrawl",
@@ -198,19 +261,361 @@ export default function firecrawl(pi: ExtensionAPI) {
 	pi.registerTool(searchTool);
 
 	pi.registerCommand("firecrawl", {
-		description: "Show Firecrawl extension configuration status",
-		handler: async (_args, ctx) => {
-			ctx.ui.notify(buildStatusMessage(), hasApiKey() ? "info" : "warning");
+		description: "Open Firecrawl help and tool controls",
+		getArgumentCompletions: (prefix) => commandCompletions(prefix),
+		handler: async (args, ctx) => {
+			await handleFirecrawlCommand(pi, args, ctx);
 		},
 	});
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		const settings = await loadSettings();
+		if (settings.kind === "loaded") {
+			applyFirecrawlTools(pi, settings.settings.tools);
+			return;
+		}
+		if (settings.kind === "invalid") {
+			ctx.ui.notify(`Firecrawl settings ignored: ${settings.reason}`, "warning");
+		}
+		applyFirecrawlTools(pi, allFirecrawlTools());
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
+}
+
+async function handleFirecrawlCommand(pi: ExtensionAPI, args: string, ctx: CommandContext) {
+	const command = parseCommand(args);
+	switch (command) {
+		case "menu":
+			await showMenu(pi, ctx);
+			return;
+		case "help":
+			ctx.ui.notify(buildCommandGuide(), "info");
+			return;
+		case "config":
+		case "quickstart":
+			ctx.ui.notify(buildConfigMessage(), hasApiKey() ? "info" : "warning");
+			return;
+		case "status":
+			ctx.ui.notify(await buildStatusMessage(pi), hasApiKey() ? "info" : "warning");
+			return;
+		case "tools":
+			await showToolSelector(pi, ctx);
+			return;
+		case "enable":
+			await updateFirecrawlTools(pi, ctx, allFirecrawlTools(), "enabled all");
+			return;
+		case "disable":
+			await updateFirecrawlTools(pi, ctx, [], "disabled all");
+			return;
+	}
+
+	ctx.ui.notify(`Unknown /firecrawl command: ${args.trim()}\n\n${buildCommandGuide()}`, "warning");
+}
+
+async function showMenu(pi: ExtensionAPI, ctx: CommandContext) {
+	if (!ctx.hasUI) {
+		ctx.ui.notify(`${buildCommandGuide()}\n\n${await buildStatusMessage(pi)}`, hasApiKey() ? "info" : "warning");
+		return;
+	}
+
+	const choice = await ctx.ui.select("Firecrawl", Object.values(MENU_OPTIONS));
+	switch (choice) {
+		case MENU_OPTIONS.config:
+			ctx.ui.notify(buildConfigMessage(), hasApiKey() ? "info" : "warning");
+			return;
+		case MENU_OPTIONS.help:
+			ctx.ui.notify(buildCommandGuide(), "info");
+			return;
+		case MENU_OPTIONS.status:
+			ctx.ui.notify(await buildStatusMessage(pi), hasApiKey() ? "info" : "warning");
+			return;
+		case MENU_OPTIONS.tools:
+			await showToolSelector(pi, ctx);
+			return;
+		case MENU_OPTIONS.enable:
+			await updateFirecrawlTools(pi, ctx, allFirecrawlTools(), "enabled all");
+			return;
+		case MENU_OPTIONS.disable:
+			await updateFirecrawlTools(pi, ctx, [], "disabled all");
+			return;
+	}
+}
+
+function parseCommand(args: string): CommandAction | "unknown" {
+	const command = args.trim().toLowerCase();
+	if (!command) return "menu";
+	if (command === "help") return "help";
+	if (command === "config") return "config";
+	if (command === "quickstart") return "quickstart";
+	if (command === "status") return "status";
+	if (command === "tools" || command === "select" || command === "toggle") return "tools";
+	if (command === "enable" || command === "on") return "enable";
+	if (command === "disable" || command === "off") return "disable";
+	return "unknown";
+}
+
+function commandCompletions(prefix: string) {
+	const normalized = prefix.trim().toLowerCase();
+	if (normalized.includes(" ")) return null;
+
+	const matches = COMMAND_COMPLETIONS.filter((completion) =>
+		completion.value.startsWith(normalized),
+	);
+	return matches.length > 0 ? matches : null;
+}
+
+async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
+	if (!ctx.hasUI) {
+		ctx.ui.notify(
+			`Firecrawl tool selection needs an interactive UI.\n\n${await buildStatusMessage(pi)}`,
+			hasApiKey() ? "info" : "warning",
+		);
+		return;
+	}
+
+	let selectedTools = new Set<FirecrawlToolName>(getActiveFirecrawlTools(pi));
+	while (true) {
+		const choice = await ctx.ui.select(toolSelectorTitle(selectedTools), [
+			...FIRECRAWL_TOOL_NAMES.map((toolName) => formatToolChoice(toolName, selectedTools)),
+			TOOL_SELECTOR_ENABLE_ALL,
+			TOOL_SELECTOR_DISABLE_ALL,
+			TOOL_SELECTOR_DONE,
+		]);
+
+		if (!choice || choice === TOOL_SELECTOR_DONE) {
+			ctx.ui.notify(await buildStatusMessage(pi), hasApiKey() ? "info" : "warning");
+			return;
+		}
+
+		if (choice === TOOL_SELECTOR_ENABLE_ALL) {
+			selectedTools = new Set(allFirecrawlTools());
+		} else if (choice === TOOL_SELECTOR_DISABLE_ALL) {
+			selectedTools = new Set();
+		} else {
+			const selectedTool = toolNameFromChoice(choice);
+			if (!selectedTool) continue;
+
+			if (selectedTools.has(selectedTool)) selectedTools.delete(selectedTool);
+			else selectedTools.add(selectedTool);
+		}
+
+		await setSelectedFirecrawlTools(pi, ctx, orderedFirecrawlTools(selectedTools));
+	}
+}
+
+async function updateFirecrawlTools(
+	pi: ExtensionAPI,
+	ctx: CommandContext,
+	selectedTools: readonly FirecrawlToolName[],
+	action: string,
+) {
+	await setSelectedFirecrawlTools(pi, ctx, selectedTools);
+	ctx.ui.notify(
+		`Firecrawl tools ${action}.\n\n${await buildStatusMessage(pi)}`,
+		hasApiKey() ? "info" : "warning",
+	);
+}
+
+async function setSelectedFirecrawlTools(
+	pi: ExtensionAPI,
+	ctx: CommandContext,
+	selectedTools: readonly FirecrawlToolName[],
+) {
+	applyFirecrawlTools(pi, selectedTools);
+	await persistSettings(ctx, selectedTools);
+}
+
+function applyFirecrawlTools(pi: ExtensionAPI, selectedTools: readonly FirecrawlToolName[]) {
+	const activeToolNames = pi.getActiveTools();
+	const firecrawlToolNames = new Set<string>(FIRECRAWL_TOOL_NAMES);
+	const activeNonFirecrawlToolNames = activeToolNames.filter(
+		(name) => !firecrawlToolNames.has(name),
+	);
+	pi.setActiveTools(unique([...activeNonFirecrawlToolNames, ...selectedTools]));
+}
+
+function getToolStatusSummary(pi: ExtensionAPI): ToolStatusSummary {
+	const firecrawlToolNames = new Set<string>(FIRECRAWL_TOOL_NAMES);
+	const activeToolNames = new Set(pi.getActiveTools());
+	const activeFirecrawlToolCount = FIRECRAWL_TOOL_NAMES.filter((name) =>
+		activeToolNames.has(name),
+	).length;
+	const activeNonFirecrawlToolCount = Array.from(activeToolNames).filter(
+		(name) => !firecrawlToolNames.has(name),
+	).length;
+	const runtimeStatus =
+		activeFirecrawlToolCount === FIRECRAWL_TOOL_NAMES.length
+			? "enabled"
+			: activeFirecrawlToolCount === 0
+				? "disabled"
+				: "partial";
+
+	return { runtimeStatus, activeFirecrawlToolCount, activeNonFirecrawlToolCount };
+}
+
+async function buildStatusMessage(pi: ExtensionAPI) {
+	const summary = getToolStatusSummary(pi);
+	const persistedSetting = await persistedSettingLabel();
+	return [
+		`Firecrawl tools: ${formatRuntimeStatus(summary)}`,
+		`Persisted selection: ${persistedSetting}`,
+		`Settings file: ${SETTINGS_FILE}`,
+		`Other active tools preserved: ${summary.activeNonFirecrawlToolCount}`,
+		`API key: ${hasApiKey() ? "present" : "missing"} (FIRECRAWL_API_KEY)`,
+		`API URL: ${state.apiUrl}`,
+	].join("\n");
+}
+
+function buildConfigMessage() {
+	return [
+		"Firecrawl configuration:",
+		`API key: ${hasApiKey() ? "present" : "missing"} (FIRECRAWL_API_KEY)`,
+		`API URL: ${state.apiUrl}`,
+		"Override API URL with FIRECRAWL_API_URL or FIRECRAWL_BASE_URL.",
+		"This extension never logs, displays, or stores your Firecrawl API key.",
+	].join("\n");
+}
+
+function buildCommandGuide() {
+	return [
+		"Firecrawl commands:",
+		"/firecrawl — open this menu",
+		"/firecrawl help — show command usage",
+		"/firecrawl config — show API key presence and API URL",
+		"/firecrawl quickstart — alias for /firecrawl config",
+		"/firecrawl status — show tool and settings status",
+		"/firecrawl tools — select individual Firecrawl tools",
+		"/firecrawl toggle — alias for /firecrawl tools",
+		"/firecrawl enable — enable all Firecrawl tools",
+		"/firecrawl disable — disable all Firecrawl tools",
+	].join("\n");
+}
+
+function toolSelectorTitle(selectedTools: ReadonlySet<FirecrawlToolName>) {
+	return `Firecrawl tools (${selectedTools.size}/${FIRECRAWL_TOOL_NAMES.length}). Non-built-in tools run at user risk.`;
+}
+
+function formatToolChoice(
+	toolName: FirecrawlToolName,
+	selectedTools: ReadonlySet<FirecrawlToolName>,
+) {
+	return `${selectedTools.has(toolName) ? "[x]" : "[ ]"} ${toolName}`;
+}
+
+function toolNameFromChoice(choice: string) {
+	return FIRECRAWL_TOOL_NAMES.find((toolName) => choice.endsWith(toolName));
+}
+
+function getActiveFirecrawlTools(pi: ExtensionAPI) {
+	const activeToolNames = new Set(pi.getActiveTools());
+	return FIRECRAWL_TOOL_NAMES.filter((toolName) => activeToolNames.has(toolName));
+}
+
+function allFirecrawlTools() {
+	return [...FIRECRAWL_TOOL_NAMES];
+}
+
+function orderedFirecrawlTools(selectedTools: ReadonlySet<FirecrawlToolName>) {
+	return FIRECRAWL_TOOL_NAMES.filter((toolName) => selectedTools.has(toolName));
+}
+
+function formatRuntimeStatus(summary: ToolStatusSummary) {
+	return `${summary.runtimeStatus} (${summary.activeFirecrawlToolCount}/${FIRECRAWL_TOOL_NAMES.length} active)`;
+}
+
+async function persistedSettingLabel() {
+	const settings = await loadSettings();
+	if (settings.kind === "loaded") return formatPersistedSelection(settings.settings.tools);
+	if (settings.kind === "invalid") return `default all enabled (invalid settings ignored: ${settings.reason})`;
+	return "default all enabled";
+}
+
+function formatPersistedSelection(tools: readonly FirecrawlToolName[]) {
+	if (tools.length === FIRECRAWL_TOOL_NAMES.length) {
+		return `all enabled (${tools.length}/${FIRECRAWL_TOOL_NAMES.length} selected)`;
+	}
+	if (tools.length === 0) return `all disabled (0/${FIRECRAWL_TOOL_NAMES.length} selected)`;
+	return `${tools.length}/${FIRECRAWL_TOOL_NAMES.length} selected: ${tools.join(", ")}`;
+}
+
+async function persistSettings(
+	ctx: CommandContext,
+	selectedTools: readonly FirecrawlToolName[],
+) {
+	try {
+		await saveSettings({ tools: [...selectedTools], updatedAt: Date.now() });
+	} catch (error) {
+		ctx.ui.notify(`Firecrawl settings save failed: ${formatError(error)}`, "warning");
+	}
+}
+
+async function loadSettings(): Promise<
+	| { kind: "missing" }
+	| { kind: "invalid"; reason: string }
+	| { kind: "loaded"; settings: FirecrawlSettings }
+> {
+	let text: string;
+	try {
+		text = await readFile(SETTINGS_FILE, "utf8");
+	} catch (error) {
+		if (isNodeError(error) && error.code === "ENOENT") return { kind: "missing" };
+		return { kind: "invalid", reason: formatError(error) };
+	}
+
+	try {
+		const parsed = JSON.parse(text) as unknown;
+		const settings = normalizeFirecrawlSettings(parsed);
+		if (settings) return { kind: "loaded", settings };
+		return { kind: "invalid", reason: "expected tools to be an array of Firecrawl tool names" };
+	} catch (error) {
+		return { kind: "invalid", reason: formatError(error) };
+	}
+}
+
+function normalizeFirecrawlSettings(value: unknown): FirecrawlSettings | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const settings = value as { tools?: unknown; updatedAt?: unknown };
+	if (typeof settings.updatedAt !== "number") return undefined;
+	if (!Array.isArray(settings.tools)) return undefined;
+	if (!settings.tools.every(isFirecrawlToolName)) return undefined;
+	return { tools: orderedUniqueFirecrawlTools(settings.tools), updatedAt: settings.updatedAt };
+}
+
+function isFirecrawlToolName(value: unknown): value is FirecrawlToolName {
+	return typeof value === "string" && FIRECRAWL_TOOL_NAMES.includes(value as never);
+}
+
+function orderedUniqueFirecrawlTools(tools: readonly FirecrawlToolName[]) {
+	const selectedTools = new Set(tools);
+	return orderedFirecrawlTools(selectedTools);
+}
+
+async function saveSettings(settings: FirecrawlSettings) {
+	await mkdir(dirname(SETTINGS_FILE), { recursive: true });
+	const tempFile = `${SETTINGS_FILE}.${process.pid}.${Date.now()}.tmp`;
+	try {
+		await writeFile(tempFile, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+		await rename(tempFile, SETTINGS_FILE);
+	} catch (error) {
+		await rm(tempFile, { force: true }).catch(() => undefined);
+		throw error;
+	}
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+	return error instanceof Error && "code" in error;
+}
+
+function formatError(error: unknown) {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function unique<T>(values: T[]) {
+	return Array.from(new Set(values));
 }
 
 async function firecrawlRequest(
@@ -290,12 +695,6 @@ async function withStatus<T>(ctx: StatusContext, status: string, callback: () =>
 	} finally {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	}
-}
-
-function buildStatusMessage() {
-	return hasApiKey()
-		? `Firecrawl configured: ${state.apiUrl} (API key present).`
-		: `Firecrawl missing FIRECRAWL_API_KEY. API URL: ${state.apiUrl}.`;
 }
 
 function cleanObject<T>(value: T): T {
