@@ -16,6 +16,7 @@ This package is inspired by [`chrome-devtools-mcp`](https://github.com/ChromeDev
 - Recovers from stale active page selections by falling back to an available page.
 - Evaluates JavaScript in the selected page.
 - Captures PNG screenshots, including optional full-page screenshots.
+- Renders compact tool results that expand/collapse with Pi's default output toggle (`Ctrl+O`).
 - Uses a local Chrome DevTools Protocol endpoint.
 - Retries briefly while Chrome is starting and reports actionable endpoint errors.
 - Shows statusline activity only while Chrome DevTools tools are running.
