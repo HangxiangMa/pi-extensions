@@ -388,88 +388,122 @@ async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
 		persistQueue = persistQueue.then(() => persistSettings(ctx, nextSelectedTools));
 	};
 
-	await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
-		const rows = firecrawlToolSelectorRows();
-		let selectedIndex = 0;
-		const moveSelection = (delta: number) => {
-			selectedIndex = (selectedIndex + delta + rows.length) % rows.length;
-		};
-		const activateSelectedRow = () => {
-			const row = rows[selectedIndex];
-			if (!row) return;
+	const customResult = await ctx.ui.custom<"closed" | undefined>(
+		(tui, theme, keybindings, done) => {
+			const rows = firecrawlToolSelectorRows();
+			let selectedIndex = 0;
+			const moveSelection = (delta: number) => {
+				selectedIndex = (selectedIndex + delta + rows.length) % rows.length;
+			};
+			const activateSelectedRow = () => {
+				const row = rows[selectedIndex];
+				if (!row) return;
 
-			if (row.kind === "tool") {
-				if (selectedTools.has(row.toolName)) selectedTools.delete(row.toolName);
-				else selectedTools.add(row.toolName);
-				commitSelectedTools();
-				return;
-			}
+				if (row.kind === "tool") {
+					if (selectedTools.has(row.toolName)) selectedTools.delete(row.toolName);
+					else selectedTools.add(row.toolName);
+					commitSelectedTools();
+					return;
+				}
 
-			if (row.action === "enableAll") {
-				selectedTools = new Set(allFirecrawlTools());
-				commitSelectedTools();
-				return;
-			}
-			if (row.action === "disableAll") {
-				selectedTools = new Set();
-				commitSelectedTools();
-				return;
-			}
+				if (row.action === "enableAll") {
+					selectedTools = new Set(allFirecrawlTools());
+					commitSelectedTools();
+					return;
+				}
+				if (row.action === "disableAll") {
+					selectedTools = new Set();
+					commitSelectedTools();
+					return;
+				}
 
-			done(undefined);
-		};
+				done("closed");
+			};
 
-		return {
-			invalidate() {},
-			render() {
-				return [
-					theme.fg("accent", theme.bold(toolSelectorTitle(selectedTools))),
-					"",
-					...rows.map((row, index) => {
-						const label = formatToolSelectorRow(row, selectedTools);
-						if (index === selectedIndex) {
-							return `${theme.fg("accent", "›")} ${theme.fg("accent", label)}`;
-						}
-						return `  ${label}`;
-					}),
-					"",
-					theme.fg("dim", "↑↓ navigate • Enter/Space toggle • Esc close"),
-				];
-			},
-			handleInput(data: string) {
-				if (keybindings.matches(data, "tui.select.up")) {
-					moveSelection(-1);
-					tui.requestRender();
-					return;
-				}
-				if (keybindings.matches(data, "tui.select.down")) {
-					moveSelection(1);
-					tui.requestRender();
-					return;
-				}
-				if (keybindings.matches(data, "tui.select.pageUp")) {
-					selectedIndex = 0;
-					tui.requestRender();
-					return;
-				}
-				if (keybindings.matches(data, "tui.select.pageDown")) {
-					selectedIndex = rows.length - 1;
-					tui.requestRender();
-					return;
-				}
-				if (keybindings.matches(data, "tui.select.confirm") || data === " ") {
-					activateSelectedRow();
-					tui.requestRender();
-					return;
-				}
-				if (keybindings.matches(data, "tui.select.cancel")) {
-					done(undefined);
-				}
-			},
-		};
-	});
+			return {
+				invalidate() {},
+				render() {
+					return [
+						theme.fg("accent", theme.bold(toolSelectorTitle(selectedTools))),
+						"",
+						...rows.map((row, index) => {
+							const label = formatToolSelectorRow(row, selectedTools);
+							if (index === selectedIndex) {
+								return `${theme.fg("accent", "›")} ${theme.fg("accent", label)}`;
+							}
+							return `  ${label}`;
+						}),
+						"",
+						theme.fg("dim", "↑↓ navigate • Enter/Space toggle • Esc close"),
+					];
+				},
+				handleInput(data: string) {
+					if (keybindings.matches(data, "tui.select.up")) {
+						moveSelection(-1);
+						tui.requestRender();
+						return;
+					}
+					if (keybindings.matches(data, "tui.select.down")) {
+						moveSelection(1);
+						tui.requestRender();
+						return;
+					}
+					if (keybindings.matches(data, "tui.select.pageUp")) {
+						selectedIndex = 0;
+						tui.requestRender();
+						return;
+					}
+					if (keybindings.matches(data, "tui.select.pageDown")) {
+						selectedIndex = rows.length - 1;
+						tui.requestRender();
+						return;
+					}
+					if (keybindings.matches(data, "tui.select.confirm") || data === " ") {
+						activateSelectedRow();
+						tui.requestRender();
+						return;
+					}
+					if (keybindings.matches(data, "tui.select.cancel")) {
+						done("closed");
+					}
+				},
+			};
+		},
+	);
+
+	if (customResult !== "closed") {
+		await showDialogToolSelector(pi, ctx);
+		return;
+	}
 
 	await persistQueue;
+	ctx.ui.notify(await buildStatusMessage(pi), hasApiKey() ? "info" : "warning");
+}
+
+async function showDialogToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
+	let selectedTools = new Set<FirecrawlToolName>(getActiveFirecrawlTools(pi));
+	while (true) {
+		const rows = firecrawlToolSelectorRows();
+		const choices = rows.map((row) => formatToolSelectorRow(row, selectedTools));
+		const choice = await ctx.ui.select(toolSelectorTitle(selectedTools), choices);
+		if (!choice) break;
+
+		const row = rows[choices.indexOf(choice)];
+		if (!row) continue;
+		if (row.kind === "action" && row.action === "done") break;
+
+		if (row.kind === "tool") {
+			if (selectedTools.has(row.toolName)) selectedTools.delete(row.toolName);
+			else selectedTools.add(row.toolName);
+		} else if (row.action === "enableAll") {
+			selectedTools = new Set(allFirecrawlTools());
+		} else if (row.action === "disableAll") {
+			selectedTools = new Set();
+		}
+
+		await setSelectedFirecrawlTools(pi, ctx, orderedFirecrawlTools(selectedTools));
+	}
+
 	ctx.ui.notify(await buildStatusMessage(pi), hasApiKey() ? "info" : "warning");
 }
 
