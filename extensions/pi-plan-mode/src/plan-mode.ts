@@ -159,8 +159,13 @@ export default function planMode(pi: ExtensionAPI) {
 		};
 	});
 
-	pi.on("before_agent_start", () => {
+	pi.on("before_agent_start", (_event, ctx) => {
 		if (!state.enabled) return;
+		if (state.latestPlan || state.awaitingAction) {
+			state = { ...state, latestPlan: undefined, awaitingAction: false };
+			persistState();
+			updateUi(ctx);
+		}
 		applyPlanModeTools();
 		return {
 			message: {
@@ -186,17 +191,20 @@ export default function planMode(pi: ExtensionAPI) {
 		persistState();
 		updateUi(ctx);
 
-		if (ctx.hasUI) await showPlanReadyMenu(ctx);
-		if (!state.enabled || !state.latestPlan) return;
+		scheduleAfterCurrentAgentRun(async () => {
+			if (!state.enabled || state.latestPlan !== proposedPlan) return;
+			if (ctx.hasUI) await showPlanReadyMenu(ctx);
+			if (!state.enabled || state.latestPlan !== proposedPlan) return;
 
-		pi.sendMessage(
-			{
-				customType: PROPOSED_PLAN_MESSAGE_TYPE,
-				content: `**Proposed Plan**\n\n${proposedPlan}`,
-				display: true,
-			},
-			{ triggerTurn: false },
-		);
+			pi.sendMessage(
+				{
+					customType: PROPOSED_PLAN_MESSAGE_TYPE,
+					content: `**Proposed Plan**\n\n${proposedPlan}`,
+					display: true,
+				},
+				{ triggerTurn: false },
+			);
+		});
 	});
 
 	function enterPlanMode(ctx: ExtensionContext) {
@@ -227,6 +235,15 @@ export default function planMode(pi: ExtensionAPI) {
 	function sendPlanModeUserMessage(message: string, ctx: ExtensionContext) {
 		if (ctx.isIdle()) pi.sendUserMessage(message);
 		else pi.sendUserMessage(message, { deliverAs: "followUp" });
+	}
+
+	function scheduleAfterCurrentAgentRun(task: () => Promise<void> | void) {
+		setTimeout(() => {
+			void Promise.resolve(task()).catch((error: unknown) => {
+				const message = error instanceof Error ? error.message : String(error);
+				console.error(`Plan mode follow-up failed: ${message}`);
+			});
+		}, 0);
 	}
 
 	function startImplementation(ctx: ExtensionContext) {
@@ -283,22 +300,11 @@ export default function planMode(pi: ExtensionAPI) {
 	async function showPlanReadyMenu(ctx: ExtensionContext) {
 		const choice = await ctx.ui.select("Proposed plan ready. What next?", [
 			"Implement this plan",
-			"Revise plan",
-			"Configure Plan-mode tools",
 			"Stay in Plan mode",
 			"Exit Plan mode",
 		]);
 		if (choice === "Implement this plan") {
 			startImplementation(ctx);
-			return;
-		}
-		if (choice === "Configure Plan-mode tools") {
-			await showToolSelector(ctx);
-			return;
-		}
-		if (choice === "Revise plan") {
-			const refinement = await ctx.ui.editor("Revise the plan", "");
-			if (refinement?.trim()) sendPlanModeUserMessage(refinement.trim(), ctx);
 			return;
 		}
 		if (choice === "Exit Plan mode") {

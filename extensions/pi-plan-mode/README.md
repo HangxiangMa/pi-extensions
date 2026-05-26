@@ -14,7 +14,7 @@ Pi core intentionally does not ship a built-in plan mode; this package provides 
 - Disables extension and custom tools by default, with a `/plan tools` selector for explicit user-risk opt-in.
 - Blocks mutating built-in tools and bash commands such as `rm`, `git commit`, dependency installs, redirects, and editor launches.
 - Injects Codex-like Plan mode instructions: explore first, ask only non-discoverable questions, do not mutate files, and finish with `<proposed_plan>`.
-- Detects proposed plan blocks and prompts you to implement, revise, stay in Plan mode, or exit and discard the plan.
+- Detects proposed plan blocks and prompts you to implement, stay in Plan mode, or exit and discard the plan.
 - Shows Plan mode state in Pi's statusline as `📝 plan active` or `📝 plan ready`.
 - Persists Plan mode state in the Pi session so resume restores the mode.
 
@@ -72,12 +72,12 @@ A complete Plan mode answer should include exactly one block like this:
 </proposed_plan>
 ```
 
-After a proposed plan is detected, `/plan` lets you choose whether to implement the plan, revise it, stay in Plan mode, or exit Plan mode. Choosing implementation disables Plan mode, restores full tool access, and immediately starts an implementation turn with the proposed plan. Choosing exit/off disables Plan mode and discards the proposed plan so it is not carried into later non-plan turns.
+After a proposed plan is detected, `/plan` lets you choose whether to implement the plan, stay in Plan mode, or exit Plan mode. Choosing implementation disables Plan mode, restores full tool access, and immediately starts an implementation turn with the proposed plan. Choosing Stay keeps the plan ready while you decide what to do next; to revise the plan, choose Stay and type your revision feedback in the normal prompt. When that next Plan-mode turn starts, the previous plan is no longer treated as the latest implementable plan unless the agent produces an updated `<proposed_plan>`. Choosing exit/off disables Plan mode and discards the proposed plan so it is not carried into later non-plan turns.
 
 While Plan mode is enabled, the extension also publishes a compact status for Pi statuslines. With `@narumitw/pi-statusline`, this appears in the extension status area:
 
 - `📝 plan active`: Plan mode is enabled and still gathering context or drafting a plan.
-- `📝 plan ready`: A `<proposed_plan>` was detected and is waiting for your next `/plan` action.
+- `📝 plan ready`: A `<proposed_plan>` was detected and remains ready until you implement it, continue planning, or exit Plan mode.
 
 You can also exit directly. Direct exit discards the latest proposed plan instead of treating it as an implementation request:
 
