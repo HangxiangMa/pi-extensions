@@ -1411,9 +1411,9 @@ export default function (pi: ExtensionAPI) {
 					const cfg = currentAgents[a.name];
 					const toolSummary = cfg?.tools ? cfg.tools.join(", ") : "defaults";
 					return {
-						val: a.name,
+						value: a.name,
 						label: a.name,
-						desc: `${a.source} · tools: ${toolSummary}`,
+						description: `${a.source} · tools: ${toolSummary}`,
 					};
 				});
 
@@ -1431,11 +1431,11 @@ export default function (pi: ExtensionAPI) {
 					const selectList = new SelectList(agentItems, Math.min(agentItems.length + 2, 15), {
 						selectedPrefix: (t: string) => theme.fg("accent", t),
 						selectedText: (t: string) => theme.fg("accent", t),
-						desc: (t: string) => theme.fg("muted", t),
+						description: (t: string) => theme.fg("muted", t),
 						scrollInfo: (t: string) => theme.fg("dim", t),
 						noMatch: (t: string) => theme.fg("warning", t),
 					});
-					selectList.onSelect = (item) => done(item.val);
+					selectList.onSelect = (item) => done(item.value);
 					selectList.onCancel = () => done(null);
 					container.addChild(selectList);
 					container.addChild(
