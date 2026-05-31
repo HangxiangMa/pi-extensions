@@ -190,18 +190,7 @@ export function discoverAgents(
 	// Lowest priority: built-ins are always available, then user agents, then
 	// trusted project agents if requested. This mirrors the subagent boundary
 	// pattern in ./src: stable built-ins plus overridable local definitions.
-	for (const agent of BUILT_IN_AGENTS) {
-		const override = config?.agents?.[agent.name];
-		if (override) {
-			agentMap.set(agent.name, {
-				...agent,
-				tools: override.tools ?? agent.tools,
-				model: override.model ?? agent.model,
-			});
-		} else {
-			agentMap.set(agent.name, agent);
-		}
-	}
+	for (const agent of BUILT_IN_AGENTS) agentMap.set(agent.name, agent);
 
 	if (scope === "both") {
 		for (const agent of userAgents) agentMap.set(agent.name, agent);
@@ -210,6 +199,19 @@ export function discoverAgents(
 		for (const agent of userAgents) agentMap.set(agent.name, agent);
 	} else {
 		for (const agent of projectAgents) agentMap.set(agent.name, agent);
+	}
+
+	// Apply user-configured overrides (from /subagents:config) on top of
+	// the final resolved agent map, regardless of agent source.
+	for (const [name, override] of Object.entries(config?.agents ?? {})) {
+		const agent = agentMap.get(name);
+		if (agent) {
+			agentMap.set(name, {
+				...agent,
+				tools: override.tools ?? agent.tools,
+				model: override.model ?? agent.model,
+			});
+		}
 	}
 
 	return { agents: Array.from(agentMap.values()), projectAgentsDir };
