@@ -1526,25 +1526,29 @@ export default function (pi: ExtensionAPI) {
 				// Save to global settings
 				const updatedAgents = { ...currentAgents };
 				let deleted = false;
-				if (selectedTools.length === 0) {
-					// Remove agent entry if no tools selected to use defaults
-					delete updatedAgents[agentName];
+
+				const isSameAsDefault =
+					selectedTools.length > 0 &&
+					defaultTools &&
+					defaultTools.length === selectedTools.length &&
+					defaultTools.every((t, i) => t === selectedTools[i]);
+
+				if (selectedTools.length === 0 || isSameAsDefault) {
+					// Tools match defaults — remove only the tools override.
+					// Keep other settings (model, timeoutMs) if present.
+					const existing = updatedAgents[agentName];
+					if (existing) {
+						delete existing.tools;
+						if (existing.model === undefined && existing.timeoutMs === undefined) {
+							delete updatedAgents[agentName];
+						}
+					}
 					deleted = true;
 				} else {
-					const isSameAsDefault =
-						defaultTools &&
-						defaultTools.length === selectedTools.length &&
-						defaultTools.every((t, i) => t === selectedTools[i]);
-					if (isSameAsDefault) {
-						// Tools match defaults — no need to store, remove entry
-						delete updatedAgents[agentName];
-						deleted = true;
-					} else {
-						updatedAgents[agentName] = {
-							...updatedAgents[agentName],
-							tools: selectedTools,
-						};
-					}
+					updatedAgents[agentName] = {
+						...updatedAgents[agentName],
+						tools: selectedTools,
+					};
 				}
 
 				const newSettings: SubagentSettings = {
