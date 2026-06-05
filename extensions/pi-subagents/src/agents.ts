@@ -15,6 +15,7 @@ export interface AgentConfig {
 	description: string;
 	tools?: string[];
 	model?: string;
+	timeoutMs?: number;
 	systemPrompt: string;
 	source: AgentSource;
 	filePath: string;
@@ -174,6 +175,10 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
 	}
 }
 
+function hasOwn(obj: object, key: PropertyKey): boolean {
+	return Object.hasOwn(obj, key);
+}
+
 export function discoverAgents(
 	cwd: string,
 	scope: AgentScope,
@@ -205,13 +210,17 @@ export function discoverAgents(
 	// the final resolved agent map, regardless of agent source.
 	for (const [name, override] of Object.entries(config?.agents ?? {})) {
 		const agent = agentMap.get(name);
-		if (agent) {
-			agentMap.set(name, {
-				...agent,
-				tools: override.tools ?? agent.tools,
-				model: override.model ?? agent.model,
-			});
+		if (!agent) continue;
+
+		const nextAgent: AgentConfig = { ...agent };
+		if (hasOwn(override, "tools")) nextAgent.tools = override.tools;
+		if (hasOwn(override, "model")) {
+			nextAgent.model = override.model === null ? undefined : override.model;
 		}
+		if (hasOwn(override, "timeoutMs")) {
+			nextAgent.timeoutMs = override.timeoutMs === null ? undefined : override.timeoutMs;
+		}
+		agentMap.set(name, nextAgent);
 	}
 
 	return { agents: Array.from(agentMap.values()), projectAgentsDir };
