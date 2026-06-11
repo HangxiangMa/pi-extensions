@@ -1,21 +1,13 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 const WAIT_WHAT_COMMAND = "wait-what";
-const WAIT_WHAT_ALIAS = "ww";
 
 export default function waitWhat(pi: ExtensionAPI) {
-	const handler = async (args: string, ctx: ExtensionCommandContext) => {
-		sendWaitWhatPrompt(pi, ctx, args);
-	};
-
-	pi.registerCommand(WAIT_WHAT_ALIAS, {
-		description: "Pause and ask the agent to explain what it is doing",
-		handler,
-	});
-
 	pi.registerCommand(WAIT_WHAT_COMMAND, {
 		description: "Pause and ask the agent to explain what it is doing",
-		handler,
+		handler: async (args, ctx) => {
+			sendWaitWhatPrompt(pi, ctx, args);
+		},
 	});
 }
 

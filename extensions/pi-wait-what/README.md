@@ -2,13 +2,13 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-wait-what)](https://www.npmjs.com/package/@narumitw/pi-wait-what) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-wait-what` is a native [Pi coding agent](https://pi.dev) extension that adds `/ww` and `/wait-what`, quick commands for pausing the main conversation and asking the agent to explain surprising behavior.
+`@narumitw/pi-wait-what` is a native [Pi coding agent](https://pi.dev) extension that adds `/wait-what`, a quick command for pausing the main conversation and asking the agent to explain surprising behavior.
 
 Use it when the agent starts doing something unexpected, unclear, or more aggressive than you intended and you want it to explain before continuing.
 
 ## ✨ Features
 
-- Adds `/ww` and `/wait-what` commands to Pi.
+- Adds a `/wait-what` command to Pi.
 - Works with or without an extra concern/question.
 - Sends a main-conversation steering message, so the agent remembers the interruption.
 - Asks the agent to avoid tools in the explanation response.
@@ -37,17 +37,15 @@ pi -e ./extensions/pi-wait-what
 ## 🚀 Usage
 
 ```text
-/ww
 /wait-what
-/ww <your concern or question>
 /wait-what <your concern or question>
 ```
 
 Examples:
 
 ```text
-/ww
-/ww why are you editing package-lock?
+/wait-what
+/wait-what why are you editing package-lock?
 /wait-what I thought we agreed not to implement yet
 ```
 
