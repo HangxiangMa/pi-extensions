@@ -188,7 +188,7 @@ function getInhibitorCommand(): InhibitorCommand | undefined {
 			return parentBoundUnixCommand(
 				"systemd-inhibit",
 				[
-					"--what=idle:sleep",
+					"--what=sleep",
 					"--who=pi-caffeinate",
 					"--why=Pi agent is running",
 					"--mode=block",
