@@ -15,7 +15,7 @@ This package is inspired by [`chrome-devtools-mcp`](https://github.com/ChromeDev
 - Navigates Chrome to a target URL, creating an inspectable page when none exists.
 - Recovers from stale active page selections by falling back to an available page.
 - Evaluates JavaScript in the selected page.
-- Captures PNG screenshots, including optional full-page screenshots.
+- Captures PNG screenshots, including optional full-page screenshots, and saves them to disk.
 - Renders compact tool results that expand/collapse with Pi's default output toggle (`Ctrl+O`).
 - Uses a local Chrome DevTools Protocol endpoint.
 - Retries briefly while Chrome is starting and reports actionable endpoint errors.
@@ -70,7 +70,34 @@ PI_CHROME_DEVTOOLS_HOST=127.0.0.1 PI_CHROME_DEVTOOLS_PORT=9223 pi -e ./extension
 - `chrome_devtools_select_page` — select the active page for later tool calls.
 - `chrome_devtools_navigate` — navigate a page to a URL; if no page exists, create one first.
 - `chrome_devtools_evaluate` — evaluate JavaScript in the selected page.
-- `chrome_devtools_screenshot` — capture a PNG screenshot.
+- `chrome_devtools_screenshot` — capture a PNG screenshot and save it as a PNG file.
+
+### Screenshot files
+
+`chrome_devtools_screenshot` always saves the captured PNG to disk. If `savePath` is omitted,
+the extension writes a unique temp file such as:
+
+```text
+/tmp/pi-chrome-devtools-screenshot-<uuid>.png
+```
+
+Pass `savePath` to choose the output path:
+
+```js
+chrome_devtools_screenshot({
+  fullPage: true,
+  savePath: "artifacts/homepage.png",
+});
+```
+
+Relative `savePath` values resolve from Pi's current working directory. A single leading `@`
+is stripped to match Pi file-mention paths. Absolute paths are accepted only when they stay
+inside the current working directory or the OS temp directory. Paths containing `..` segments,
+NUL bytes, symlinked parent directories, directories as targets, final symbolic-link targets, or
+other non-regular file targets are rejected. Existing regular files at the target path are
+replaced. The tool result includes the resolved path, byte count, and an inline image block when
+the active model/provider can consume images. If the model cannot inspect the inline image, ask it
+to read the saved path, for example `read({ path: "artifacts/homepage.png" })`.
 
 ## 💬 Command
 

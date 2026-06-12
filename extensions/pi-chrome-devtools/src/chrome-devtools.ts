@@ -1,12 +1,14 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
 	defineTool,
 	type AgentToolResult,
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 	type ToolRenderResultOptions,
+	withFileMutationQueue,
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -112,6 +114,18 @@ interface CdpResponse<T = unknown> {
 		message: string;
 		data?: unknown;
 	};
+}
+
+interface ResolvedScreenshotPath {
+	path: string;
+	allowedRoots: string[];
+	isDefault: boolean;
+}
+
+interface ScreenshotSaveResult {
+	savedPath: string;
+	bytes: number;
+	isDefaultPath: boolean;
 }
 
 const state: ChromeDevToolsState = {
@@ -234,13 +248,20 @@ const screenshotTool = defineTool({
 		fullPage: Type.Optional(
 			Type.Boolean({ description: "Capture the full document, not just the viewport." }),
 		),
+		savePath: Type.Optional(
+			Type.String({
+				description:
+					"Screenshot is always saved as a PNG file. Optional output path; omitted defaults to a unique temp file. Relative paths resolve from the current working directory. A single leading @ is stripped to match Pi file-mention paths. Existing regular files are replaced.",
+			}),
+		),
 	}),
 	renderCall: renderToolCall("screenshot"),
 	renderResult: renderScreenshotResult,
-	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		return withStatus(ctx, "🌐 screenshot", async () => {
 			const page = await resolvePage(params.pageId);
 			const result = await withCdp(page, async (client) => {
+				throwIfAborted(signal);
 				await client.send("Page.enable");
 
 				if (!params.fullPage) {
@@ -251,6 +272,7 @@ const screenshotTool = defineTool({
 					contentSize: { x: number; y: number; width: number; height: number };
 				}>("Page.getLayoutMetrics");
 
+				throwIfAborted(signal);
 				return client.send<{ data: string }>("Page.captureScreenshot", {
 					captureBeyondViewport: true,
 					format: "png",
@@ -265,12 +287,21 @@ const screenshotTool = defineTool({
 			});
 
 			state.activePageId = page.id;
+			const savedScreenshot = await saveScreenshot(result.data, params.savePath, ctx.cwd, signal);
 			return {
 				content: [
-					{ type: "text", text: `Captured PNG screenshot from ${page.title || page.url}` },
+					{
+						type: "text",
+						text: formatScreenshotText(page, savedScreenshot),
+					},
 					{ type: "image", data: result.data, mimeType: "image/png" },
 				],
-				details: { page: formatPage(page), bytes: Buffer.byteLength(result.data, "base64") },
+				details: {
+					page: formatPage(page),
+					bytes: savedScreenshot.bytes,
+					savedPath: savedScreenshot.savedPath,
+					isDefaultPath: savedScreenshot.isDefaultPath,
+				},
 			};
 		});
 	},
@@ -945,6 +976,233 @@ function textResult(text: string, details: unknown) {
 	};
 }
 
+async function saveScreenshot(
+	base64Png: string,
+	savePath: string | undefined,
+	cwd: string,
+	signal: AbortSignal | undefined,
+): Promise<ScreenshotSaveResult> {
+	const resolvedPath = resolveScreenshotPath(savePath, cwd);
+	const pngBytes = Buffer.from(base64Png, "base64");
+
+	await withFileMutationQueue(resolvedPath.path, async () => {
+		throwIfAborted(signal);
+		await ensureSafeScreenshotParent(resolvedPath);
+		await assertSafeScreenshotTargetPath(resolvedPath);
+		await writeScreenshotFileSafely(resolvedPath, pngBytes, signal);
+	});
+
+	return {
+		savedPath: resolvedPath.path,
+		bytes: pngBytes.byteLength,
+		isDefaultPath: resolvedPath.isDefault,
+	};
+}
+
+function resolveScreenshotPath(savePath: string | undefined, cwd: string): ResolvedScreenshotPath {
+	const cwdRoot = resolve(cwd);
+	const tempRoot = resolve(tmpdir());
+
+	if (savePath === undefined) {
+		return {
+			path: join(tempRoot, `pi-chrome-devtools-screenshot-${randomUUID()}.png`),
+			allowedRoots: [tempRoot],
+			isDefault: true,
+		};
+	}
+
+	const normalizedPath = stripLeadingAtPath(savePath);
+	if (!normalizedPath.trim()) {
+		throw new Error("Screenshot savePath must not be empty.");
+	}
+	if (normalizedPath.includes("\0")) {
+		throw new Error("Screenshot savePath must not contain NUL bytes.");
+	}
+	if (hasParentPathSegment(normalizedPath)) {
+		throw new Error("Screenshot savePath must not contain '..' path segments.");
+	}
+
+	const isAbsolutePath = isAbsolute(normalizedPath);
+	const path = isAbsolutePath ? resolve(normalizedPath) : resolve(cwdRoot, normalizedPath);
+	const allowedRoots = isAbsolutePath ? unique([cwdRoot, tempRoot]) : [cwdRoot];
+	if (!allowedRoots.some((root) => isPathInsideRoot(path, root))) {
+		throw new Error(
+			"Screenshot savePath must be relative to the current working directory, or an absolute path inside the current working directory or OS temp directory.",
+		);
+	}
+
+	return { path, allowedRoots, isDefault: false };
+}
+
+function stripLeadingAtPath(path: string) {
+	return path.startsWith("@") ? path.slice(1) : path;
+}
+
+function hasParentPathSegment(path: string) {
+	return path.split(/[\\/]+/).some((part) => part === "..");
+}
+
+async function ensureSafeScreenshotParent(resolvedPath: ResolvedScreenshotPath) {
+	const parentPath = dirname(resolvedPath.path);
+	const rootPath = selectAllowedRoot(parentPath, resolvedPath.allowedRoots);
+	if (!rootPath) {
+		throw new Error(
+			"Screenshot savePath parent must stay inside the current working directory or OS temp directory.",
+		);
+	}
+
+	const realRootPath = await realpath(rootPath);
+	let currentPath = rootPath;
+	const parentSegments = relative(rootPath, parentPath)
+		.split(/[\\/]+/)
+		.filter((part) => part.length > 0);
+
+	for (const segment of parentSegments) {
+		currentPath = join(currentPath, segment);
+		await ensureSafeDirectorySegment(currentPath, realRootPath);
+	}
+}
+
+function selectAllowedRoot(path: string, roots: readonly string[]) {
+	const matchingRoots = roots.filter((root) => isPathInsideRoot(path, root));
+	matchingRoots.sort(
+		(left, right) =>
+			normalizePathForComparison(resolve(right)).length -
+			normalizePathForComparison(resolve(left)).length,
+	);
+	return matchingRoots[0];
+}
+
+async function ensureSafeDirectorySegment(path: string, realRootPath: string) {
+	const existingDirectory = await lstat(path).catch(async (error: unknown) => {
+		if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+		await mkdir(path).catch((mkdirError: unknown) => {
+			if (!isNodeError(mkdirError) || mkdirError.code !== "EEXIST") throw mkdirError;
+		});
+		return lstat(path);
+	});
+
+	if (existingDirectory.isSymbolicLink()) {
+		throw new Error("Screenshot savePath parent directories must not contain symbolic links.");
+	}
+	if (!existingDirectory.isDirectory()) {
+		throw new Error("Screenshot savePath parent must be a directory.");
+	}
+	await assertPathWithinRealRoot(path, realRootPath);
+}
+
+async function assertSafeScreenshotTargetPath(resolvedPath: ResolvedScreenshotPath) {
+	const existingTarget = await lstat(resolvedPath.path).catch((error: unknown) => {
+		if (isNodeError(error) && error.code === "ENOENT") return undefined;
+		throw error;
+	});
+	if (existingTarget?.isSymbolicLink()) {
+		throw new Error("Screenshot savePath must not point to a symbolic link.");
+	}
+	if (existingTarget?.isDirectory()) {
+		throw new Error("Screenshot savePath must point to a file, not a directory.");
+	}
+	if (existingTarget && !existingTarget.isFile()) {
+		throw new Error("Screenshot savePath may only replace regular files.");
+	}
+
+	const realAllowedRoots = await Promise.all(resolvedPath.allowedRoots.map(realpathOrResolvedPath));
+	const realParent = await realpath(dirname(resolvedPath.path));
+	const realTargetPath = join(realParent, basename(resolvedPath.path));
+	if (!realAllowedRoots.some((root) => isPathInsideRoot(realTargetPath, root))) {
+		throw new Error(
+			"Screenshot savePath resolves outside the current working directory or OS temp directory.",
+		);
+	}
+}
+
+async function assertPathWithinRealRoot(path: string, realRootPath: string) {
+	const realPath = await realpath(path);
+	if (!isPathInsideRoot(realPath, realRootPath)) {
+		throw new Error(
+			"Screenshot savePath parent resolves outside the current working directory or OS temp directory.",
+		);
+	}
+}
+
+async function writeScreenshotFileSafely(
+	resolvedPath: ResolvedScreenshotPath,
+	pngBytes: Buffer,
+	signal: AbortSignal | undefined,
+) {
+	const tempFile = join(
+		dirname(resolvedPath.path),
+		`.${basename(resolvedPath.path)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
+	);
+	try {
+		await writeFile(tempFile, pngBytes, { flag: "wx", signal });
+		throwIfAborted(signal);
+		await replaceScreenshotFile(resolvedPath, tempFile, signal);
+	} catch (error) {
+		await rm(tempFile, { force: true }).catch(() => undefined);
+		throw error;
+	}
+}
+
+async function replaceScreenshotFile(
+	resolvedPath: ResolvedScreenshotPath,
+	tempFile: string,
+	signal: AbortSignal | undefined,
+) {
+	try {
+		await rename(tempFile, resolvedPath.path);
+		return;
+	} catch (error) {
+		if (!shouldRetryRenameAfterRemovingDestination(error)) throw error;
+	}
+
+	// Some Windows filesystems reject renaming over an existing file. Revalidate before
+	// removing the destination so the fallback still refuses directories and symlinks.
+	await assertSafeScreenshotTargetPath(resolvedPath);
+	throwIfAborted(signal);
+	await rm(resolvedPath.path, { force: true });
+	await rename(tempFile, resolvedPath.path);
+}
+
+function shouldRetryRenameAfterRemovingDestination(error: unknown) {
+	return (
+		process.platform === "win32" &&
+		isNodeError(error) &&
+		["EACCES", "EEXIST", "EPERM"].includes(error.code ?? "")
+	);
+}
+
+async function realpathOrResolvedPath(path: string) {
+	return realpath(path).catch(() => resolve(path));
+}
+
+function isPathInsideRoot(path: string, root: string) {
+	const normalizedPath = normalizePathForComparison(resolve(path));
+	const normalizedRoot = normalizePathForComparison(resolve(root));
+	if (normalizedPath === normalizedRoot) return true;
+	const rootWithSeparator = normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`;
+	return normalizedPath.startsWith(rootWithSeparator);
+}
+
+function normalizePathForComparison(path: string) {
+	return process.platform === "win32" ? path.toLowerCase() : path;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined) {
+	if (!signal?.aborted) return;
+	throw signal.reason instanceof Error ? signal.reason : new Error("Screenshot capture cancelled.");
+}
+
+function formatScreenshotText(page: DevToolsPage, screenshot: ScreenshotSaveResult) {
+	const pathLabel = screenshot.isDefaultPath ? "Saved to temp file" : "Saved to";
+	return [
+		`Captured PNG screenshot from ${page.title || page.url || page.id}.`,
+		`${pathLabel}: ${screenshot.savedPath}`,
+		`Bytes: ${screenshot.bytes}`,
+		`Use read({ path: ${JSON.stringify(screenshot.savedPath)} }) to inspect the saved screenshot if inline image content is not available.`,
+	].join("\n");
+}
+
 function renderToolCall(action: string) {
 	return () => new PiTextComponent(`Chrome DevTools: ${action}`);
 }
@@ -963,7 +1221,7 @@ function renderScreenshotResult(
 	options: ToolRenderResultOptions,
 	theme: RenderTheme,
 ): RenderComponent {
-	const output = formatCollapsibleOutput(textContent(result), options);
+	const output = formatCollapsibleOutput(screenshotTextContent(result), options);
 	return new PiTextComponent(output.text, theme, output.color);
 }
 
@@ -971,6 +1229,16 @@ function textContent(result: AgentToolResult<unknown>) {
 	return result.content
 		.flatMap((content) => (content.type === "text" ? [content.text] : []))
 		.join("\n");
+}
+
+function screenshotTextContent(result: AgentToolResult<unknown>) {
+	const text = textContent(result);
+	if (text.trim()) return text;
+
+	const details = result.details as { savedPath?: unknown; bytes?: unknown } | undefined;
+	if (typeof details?.savedPath !== "string") return text;
+	const bytes = typeof details.bytes === "number" ? ` (${details.bytes} bytes)` : "";
+	return `Saved screenshot to ${details.savedPath}${bytes}`;
 }
 
 function formatCollapsibleOutput(
@@ -984,11 +1252,15 @@ function formatCollapsibleOutput(
 }
 
 class PiTextComponent implements RenderComponent {
-	constructor(
-		private text = "",
-		private readonly theme?: RenderTheme,
-		private readonly color?: string,
-	) {}
+	private text: string;
+	private readonly theme?: RenderTheme;
+	private readonly color?: string;
+
+	constructor(text = "", theme?: RenderTheme, color?: string) {
+		this.text = text;
+		this.theme = theme;
+		this.color = color;
+	}
 
 	setText(text: string) {
 		this.text = text;
