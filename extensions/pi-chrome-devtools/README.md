@@ -55,8 +55,9 @@ not terminated by the extension.
 
 When `PI_CHROME_DEVTOOLS_PORT` is not set, auto-launch uses Chrome's dynamic DevTools port mode
 (`--remote-debugging-port=0`) and reads `DevToolsActivePort` from the temp profile. This avoids
-forcing every Pi session onto port `9222`. If you set `PI_CHROME_DEVTOOLS_PORT`, the extension
-uses that explicit port for both attach and auto-launch.
+forcing every Pi session onto port `9222`. If you set `PI_CHROME_DEVTOOLS_PORT` to a valid port
+(`1`-`65535`), the extension uses that explicit port for both attach and auto-launch. Empty or
+invalid port values are ignored and fall back to the default attach-first behavior.
 
 When `PI_CHROME_DEVTOOLS_BROWSER` is set, that executable is the only auto-launch candidate; a
 missing or unusable forced browser reports an error instead of falling back. Without that override,

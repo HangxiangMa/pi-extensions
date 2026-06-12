@@ -170,14 +170,15 @@ interface BrowserCandidate extends BrowserCandidateDefinition {
 }
 
 const configuredHost = process.env.PI_CHROME_DEVTOOLS_HOST ?? DEFAULT_HOST;
-const configuredPort = Number(process.env.PI_CHROME_DEVTOOLS_PORT ?? DEFAULT_PORT);
+const configuredPortOverride = parseConfiguredPort(process.env.PI_CHROME_DEVTOOLS_PORT);
+const configuredPort = configuredPortOverride ?? DEFAULT_PORT;
 
 const state: ChromeDevToolsState = {
 	host: configuredHost,
 	port: configuredPort,
 	configuredPort,
 	hostConfigured: process.env.PI_CHROME_DEVTOOLS_HOST !== undefined,
-	portConfigured: process.env.PI_CHROME_DEVTOOLS_PORT !== undefined,
+	portConfigured: configuredPortOverride !== undefined,
 	autoLaunchEnabled: process.env.PI_CHROME_DEVTOOLS_AUTO_LAUNCH !== "0",
 	browserExecutable: process.env.PI_CHROME_DEVTOOLS_BROWSER,
 	shuttingDown: false,
@@ -838,6 +839,16 @@ function unique<T>(values: T[]) {
 	return Array.from(new Set(values));
 }
 
+function parseConfiguredPort(value: string | undefined) {
+	if (value === undefined) return undefined;
+	const trimmedValue = value.trim();
+	if (!/^\d+$/.test(trimmedValue)) return undefined;
+
+	const port = Number(trimmedValue);
+	if (!Number.isInteger(port) || port < 1 || port > 65_535) return undefined;
+	return port;
+}
+
 async function listPages(options: { waitMs?: number } = {}) {
 	const waitMs = options.waitMs ?? DEFAULT_ENDPOINT_WAIT_MS;
 	await ensureDevToolsEndpoint(waitMs);
@@ -905,11 +916,16 @@ function requirePage(pageId: string, pages: DevToolsPage[]) {
 	);
 }
 
-async function createPage(url: string) {
-	await ensureDevToolsEndpoint();
-	const page = await fetchDevToolsJson<DevToolsPage>(`/json/new?${encodeURIComponent(url)}`, {
-		method: "PUT",
-	});
+async function createPage(url: string, options: { waitMs?: number } = {}) {
+	const waitMs = options.waitMs ?? DEFAULT_ENDPOINT_WAIT_MS;
+	await ensureDevToolsEndpoint(waitMs);
+	const page = await withEndpointRetry(
+		() =>
+			fetchDevToolsJson<DevToolsPage>(`/json/new?${encodeURIComponent(url)}`, {
+				method: "PUT",
+			}),
+		waitMs,
+	);
 	if (page.type !== "page" || !page.webSocketDebuggerUrl) {
 		throw new Error("Chrome DevTools created a target that is not an inspectable page.");
 	}
