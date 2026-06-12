@@ -251,7 +251,7 @@ const screenshotTool = defineTool({
 		savePath: Type.Optional(
 			Type.String({
 				description:
-					"Optional PNG file path to save the screenshot. Defaults to a unique temp file; relative paths resolve from the current working directory. A single leading @ is stripped to match Pi file-mention paths.",
+					"Screenshot is always saved as a PNG file. Optional output path; omitted defaults to a unique temp file. Relative paths resolve from the current working directory. A single leading @ is stripped to match Pi file-mention paths. Existing regular files are replaced.",
 			}),
 		),
 	}),
@@ -989,7 +989,7 @@ async function saveScreenshot(
 		throwIfAborted(signal);
 		await ensureSafeScreenshotParent(resolvedPath);
 		await assertSafeScreenshotTargetPath(resolvedPath);
-		await writeScreenshotAtomically(resolvedPath.path, pngBytes, signal);
+		await writeScreenshotFileSafely(resolvedPath, pngBytes, signal);
 	});
 
 	return {
@@ -1122,23 +1122,51 @@ async function assertPathWithinRealRoot(path: string, realRootPath: string) {
 	}
 }
 
-async function writeScreenshotAtomically(
-	path: string,
+async function writeScreenshotFileSafely(
+	resolvedPath: ResolvedScreenshotPath,
 	pngBytes: Buffer,
 	signal: AbortSignal | undefined,
 ) {
 	const tempFile = join(
-		dirname(path),
-		`.${basename(path)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
+		dirname(resolvedPath.path),
+		`.${basename(resolvedPath.path)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
 	);
 	try {
 		await writeFile(tempFile, pngBytes, { flag: "wx", signal });
 		throwIfAborted(signal);
-		await rename(tempFile, path);
+		await replaceScreenshotFile(resolvedPath, tempFile, signal);
 	} catch (error) {
 		await rm(tempFile, { force: true }).catch(() => undefined);
 		throw error;
 	}
+}
+
+async function replaceScreenshotFile(
+	resolvedPath: ResolvedScreenshotPath,
+	tempFile: string,
+	signal: AbortSignal | undefined,
+) {
+	try {
+		await rename(tempFile, resolvedPath.path);
+		return;
+	} catch (error) {
+		if (!shouldRetryRenameAfterRemovingDestination(error)) throw error;
+	}
+
+	// Some Windows filesystems reject renaming over an existing file. Revalidate before
+	// removing the destination so the fallback still refuses directories and symlinks.
+	await assertSafeScreenshotTargetPath(resolvedPath);
+	throwIfAborted(signal);
+	await rm(resolvedPath.path, { force: true });
+	await rename(tempFile, resolvedPath.path);
+}
+
+function shouldRetryRenameAfterRemovingDestination(error: unknown) {
+	return (
+		process.platform === "win32" &&
+		isNodeError(error) &&
+		["EACCES", "EEXIST", "EPERM"].includes(error.code ?? "")
+	);
 }
 
 async function realpathOrResolvedPath(path: string) {

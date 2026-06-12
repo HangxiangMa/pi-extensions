@@ -93,10 +93,11 @@ chrome_devtools_screenshot({
 Relative `savePath` values resolve from Pi's current working directory. A single leading `@`
 is stripped to match Pi file-mention paths. Absolute paths are accepted only when they stay
 inside the current working directory or the OS temp directory. Paths containing `..` segments,
-NUL bytes, symlinked parent directories, or a final symbolic-link target are rejected. The tool
-result includes the resolved path, byte count, and an inline image block when the active
-model/provider can consume images. If the model cannot inspect the inline image, ask it to read
-the saved path, for example `read({ path: "artifacts/homepage.png" })`.
+NUL bytes, symlinked parent directories, or a final symbolic-link target are rejected. Existing
+regular files at the target path are replaced. The tool result includes the resolved path, byte
+count, and an inline image block when the active model/provider can consume images. If the model
+cannot inspect the inline image, ask it to read the saved path, for example
+`read({ path: "artifacts/homepage.png" })`.
 
 ## 💬 Command
 
