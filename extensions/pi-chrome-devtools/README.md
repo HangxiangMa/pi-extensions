@@ -17,7 +17,11 @@ This package is inspired by [`chrome-devtools-mcp`](https://github.com/ChromeDev
 - Evaluates JavaScript in the selected page.
 - Captures PNG screenshots, including optional full-page screenshots, and saves them to disk.
 - Renders compact tool results that expand/collapse with Pi's default output toggle (`Ctrl+O`).
-- Uses a local Chrome DevTools Protocol endpoint.
+- Reuses an existing Chrome DevTools Protocol endpoint when one is already available.
+- Lazily auto-launches a Chromium-family browser for missing local endpoints, with Chrome,
+  Chromium, Brave, and Edge fallbacks.
+- Uses a dynamic managed DevTools port by default to avoid port conflicts, while preserving
+  explicit endpoint overrides.
 - Retries briefly while Chrome is starting and reports actionable endpoint errors.
 - Shows statusline activity only while Chrome DevTools tools are running.
 - Provides a `/chrome-devtools` menu with quick-start help and tool controls.
@@ -42,9 +46,37 @@ Try this package locally from the repository root:
 pi -e ./extensions/pi-chrome-devtools
 ```
 
-## 🚀 Start Chrome with CDP enabled
+## 🚀 Browser startup
 
-The extension connects to `127.0.0.1:9222` by default.
+The extension first tries the configured endpoint, defaulting to `127.0.0.1:9222`. If that
+local endpoint is unavailable, it lazily launches an extension-owned Chromium-family browser with
+an isolated temp profile and then retries the CDP request. Existing endpoints are reused and are
+not terminated by the extension.
+
+When `PI_CHROME_DEVTOOLS_PORT` is not set, auto-launch uses Chrome's dynamic DevTools port mode
+(`--remote-debugging-port=0`) and reads `DevToolsActivePort` from the temp profile. This avoids
+forcing every Pi session onto port `9222`. If you set `PI_CHROME_DEVTOOLS_PORT` to a valid port
+(`1`-`65535`), the extension uses that explicit port for both attach and auto-launch. Empty or
+invalid port values are ignored and fall back to the default attach-first behavior.
+
+When `PI_CHROME_DEVTOOLS_BROWSER` is set, that executable is the only auto-launch candidate; a
+missing or unusable forced browser reports an error instead of falling back. Without that override,
+browser discovery checks platform-specific Chrome, Chromium, Brave, and Microsoft Edge candidates.
+Disable auto-launch to keep the older manual flow:
+
+```bash
+PI_CHROME_DEVTOOLS_AUTO_LAUNCH=0 pi -e ./extensions/pi-chrome-devtools
+```
+
+Force a browser executable or endpoint if needed:
+
+```bash
+PI_CHROME_DEVTOOLS_BROWSER=/usr/bin/brave-browser pi -e ./extensions/pi-chrome-devtools
+PI_CHROME_DEVTOOLS_HOST=127.0.0.1 PI_CHROME_DEVTOOLS_PORT=9223 pi -e ./extensions/pi-chrome-devtools
+```
+
+Manual launch still works and is required for remote endpoints, opt-out mode, or unsupported WSL
+browser/profile path setups:
 
 ```bash
 google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/pi-chrome-devtools
@@ -58,11 +90,9 @@ On macOS:
   --user-data-dir=/tmp/pi-chrome-devtools
 ```
 
-Override the endpoint if needed:
-
-```bash
-PI_CHROME_DEVTOOLS_HOST=127.0.0.1 PI_CHROME_DEVTOOLS_PORT=9223 pi -e ./extensions/pi-chrome-devtools
-```
+On session shutdown, the extension terminates only browser processes it started itself and
+best-effort removes their temp profiles. It never closes user-started browsers or remote
+endpoints.
 
 ## 🛠️ Pi tools
 
@@ -121,9 +151,10 @@ Direct subcommands are also available:
 ```
 
 - `help` shows command usage.
-- `quickstart` shows the configured CDP endpoint and launch hint.
-- `status` shows runtime tool state, persisted selection, settings file path, and active
-  non-Chrome tool count.
+- `quickstart` shows the configured CDP endpoint, endpoint source, auto-launch mode, browser
+  candidates, last launch attempt, and launch hints.
+- `status` shows runtime tool state, persisted selection, settings file path, endpoint source,
+  launch mode, last launch attempt, and active non-Chrome tool count.
 - `tools` opens a Plan-mode-style selector for choosing individual `chrome_devtools_*` tools.
 - `toggle` is an alias for `tools`.
 - `enable` enables all `chrome_devtools_*` tools for future turns.
