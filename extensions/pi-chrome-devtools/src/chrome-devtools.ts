@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
 	defineTool,
 	type AgentToolResult,
@@ -251,7 +251,7 @@ const screenshotTool = defineTool({
 		savePath: Type.Optional(
 			Type.String({
 				description:
-					"Optional PNG file path to save the screenshot. Defaults to a unique temp file; relative paths resolve from the current working directory.",
+					"Optional PNG file path to save the screenshot. Defaults to a unique temp file; relative paths resolve from the current working directory. A single leading @ is stripped to match Pi file-mention paths.",
 			}),
 		),
 	}),
@@ -987,9 +987,9 @@ async function saveScreenshot(
 
 	await withFileMutationQueue(resolvedPath.path, async () => {
 		throwIfAborted(signal);
-		await mkdir(dirname(resolvedPath.path), { recursive: true });
-		await assertSafeScreenshotWritePath(resolvedPath);
-		await writeFile(resolvedPath.path, pngBytes, { signal });
+		await ensureSafeScreenshotParent(resolvedPath);
+		await assertSafeScreenshotTargetPath(resolvedPath);
+		await writeScreenshotAtomically(resolvedPath.path, pngBytes, signal);
 	});
 
 	return {
@@ -1042,7 +1042,56 @@ function hasParentPathSegment(path: string) {
 	return path.split(/[\\/]+/).some((part) => part === "..");
 }
 
-async function assertSafeScreenshotWritePath(resolvedPath: ResolvedScreenshotPath) {
+async function ensureSafeScreenshotParent(resolvedPath: ResolvedScreenshotPath) {
+	const parentPath = dirname(resolvedPath.path);
+	const rootPath = selectAllowedRoot(parentPath, resolvedPath.allowedRoots);
+	if (!rootPath) {
+		throw new Error(
+			"Screenshot savePath parent must stay inside the current working directory or OS temp directory.",
+		);
+	}
+
+	const realRootPath = await realpath(rootPath);
+	let currentPath = rootPath;
+	const parentSegments = relative(rootPath, parentPath)
+		.split(/[\\/]+/)
+		.filter((part) => part.length > 0);
+
+	for (const segment of parentSegments) {
+		currentPath = join(currentPath, segment);
+		await ensureSafeDirectorySegment(currentPath, realRootPath);
+	}
+}
+
+function selectAllowedRoot(path: string, roots: readonly string[]) {
+	const matchingRoots = roots.filter((root) => isPathInsideRoot(path, root));
+	matchingRoots.sort(
+		(left, right) =>
+			normalizePathForComparison(resolve(right)).length -
+			normalizePathForComparison(resolve(left)).length,
+	);
+	return matchingRoots[0];
+}
+
+async function ensureSafeDirectorySegment(path: string, realRootPath: string) {
+	const existingDirectory = await lstat(path).catch(async (error: unknown) => {
+		if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+		await mkdir(path).catch((mkdirError: unknown) => {
+			if (!isNodeError(mkdirError) || mkdirError.code !== "EEXIST") throw mkdirError;
+		});
+		return lstat(path);
+	});
+
+	if (existingDirectory.isSymbolicLink()) {
+		throw new Error("Screenshot savePath parent directories must not contain symbolic links.");
+	}
+	if (!existingDirectory.isDirectory()) {
+		throw new Error("Screenshot savePath parent must be a directory.");
+	}
+	await assertPathWithinRealRoot(path, realRootPath);
+}
+
+async function assertSafeScreenshotTargetPath(resolvedPath: ResolvedScreenshotPath) {
 	const existingTarget = await lstat(resolvedPath.path).catch((error: unknown) => {
 		if (isNodeError(error) && error.code === "ENOENT") return undefined;
 		throw error;
@@ -1050,16 +1099,45 @@ async function assertSafeScreenshotWritePath(resolvedPath: ResolvedScreenshotPat
 	if (existingTarget?.isSymbolicLink()) {
 		throw new Error("Screenshot savePath must not point to a symbolic link.");
 	}
+	if (existingTarget?.isDirectory()) {
+		throw new Error("Screenshot savePath must point to a file, not a directory.");
+	}
 
-	const [realParent, realAllowedRoots] = await Promise.all([
-		realpath(dirname(resolvedPath.path)),
-		Promise.all(resolvedPath.allowedRoots.map(realpathOrResolvedPath)),
-	]);
+	const realAllowedRoots = await Promise.all(resolvedPath.allowedRoots.map(realpathOrResolvedPath));
+	const realParent = await realpath(dirname(resolvedPath.path));
 	const realTargetPath = join(realParent, basename(resolvedPath.path));
 	if (!realAllowedRoots.some((root) => isPathInsideRoot(realTargetPath, root))) {
 		throw new Error(
 			"Screenshot savePath resolves outside the current working directory or OS temp directory.",
 		);
+	}
+}
+
+async function assertPathWithinRealRoot(path: string, realRootPath: string) {
+	const realPath = await realpath(path);
+	if (!isPathInsideRoot(realPath, realRootPath)) {
+		throw new Error(
+			"Screenshot savePath parent resolves outside the current working directory or OS temp directory.",
+		);
+	}
+}
+
+async function writeScreenshotAtomically(
+	path: string,
+	pngBytes: Buffer,
+	signal: AbortSignal | undefined,
+) {
+	const tempFile = join(
+		dirname(path),
+		`.${basename(path)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
+	);
+	try {
+		await writeFile(tempFile, pngBytes, { flag: "wx", signal });
+		throwIfAborted(signal);
+		await rename(tempFile, path);
+	} catch (error) {
+		await rm(tempFile, { force: true }).catch(() => undefined);
+		throw error;
 	}
 }
 
