@@ -101,7 +101,7 @@ export default function caffeinate(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("caffeinate", {
-		description: "Open pi-caffeinate mode and status controls",
+		description: "Open pi-caffeinate keep-awake controls",
 		getArgumentCompletions: (prefix) => commandCompletions(prefix),
 		handler: async (args, ctx) => {
 			await ensureSettingsLoaded(ctx);
