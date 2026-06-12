@@ -934,14 +934,23 @@ async function createPage(url: string, options: { waitMs?: number } = {}) {
 }
 
 async function ensureDevToolsEndpoint(waitMs = DEFAULT_ENDPOINT_WAIT_MS) {
+	if (canAutoLaunchBrowser()) {
+		try {
+			await withEndpointRetry(() => fetchDevToolsJson<unknown>("/json/version"), waitMs);
+			return;
+		} catch (error) {
+			if (shouldAutoLaunchAfterEndpointError(error)) {
+				await ensureManagedBrowserLaunched(waitMs);
+				return;
+			}
+			if (isRetryableEndpointError(error)) return;
+			throw error;
+		}
+	}
+
 	try {
 		await fetchDevToolsJson<unknown>("/json/version");
-		return;
 	} catch (error) {
-		if (shouldAutoLaunchAfterEndpointError(error)) {
-			await ensureManagedBrowserLaunched(waitMs);
-			return;
-		}
 		if (isRetryableEndpointError(error)) return;
 		throw error;
 	}
