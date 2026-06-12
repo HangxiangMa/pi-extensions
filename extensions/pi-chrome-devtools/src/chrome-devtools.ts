@@ -1168,11 +1168,22 @@ function killManagedBrowserProcess(managedBrowser: ManagedBrowser, signal?: Node
 function waitForManagedBrowserExit(managedBrowser: ManagedBrowser, waitMs: number) {
 	if (managedBrowser.exited) return Promise.resolve();
 	return new Promise<void>((resolve, reject) => {
-		const timeout = setTimeout(() => reject(new Error("Timed out waiting for browser shutdown.")), waitMs);
-		managedBrowser.process.once("exit", () => {
+		const settle = (callback: () => void) => {
 			clearTimeout(timeout);
-			resolve();
-		});
+			managedBrowser.process.off("exit", onExitOrClose);
+			managedBrowser.process.off("close", onExitOrClose);
+			callback();
+		};
+		const onExitOrClose = () => {
+			managedBrowser.exited = true;
+			settle(resolve);
+		};
+		const timeout = setTimeout(
+			() => settle(() => reject(new Error("Timed out waiting for browser shutdown."))),
+			waitMs,
+		);
+		managedBrowser.process.once("exit", onExitOrClose);
+		managedBrowser.process.once("close", onExitOrClose);
 	});
 }
 
