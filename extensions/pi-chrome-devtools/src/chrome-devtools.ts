@@ -1440,15 +1440,15 @@ function windowsBrowserCandidateDefinitions(): BrowserCandidateDefinition[] {
 		join(root, "Microsoft", "Edge", "Application", "msedge.exe"),
 	]);
 	return [
-		{ label: "Google Chrome", executable: "chrome.exe", source: "path" },
-		{ label: "Chromium", executable: "chromium.exe", source: "path" },
-		{ label: "Brave Browser", executable: "brave.exe", source: "path" },
-		{ label: "Microsoft Edge", executable: "msedge.exe", source: "path" },
 		...wellKnownPaths.map((executable) => ({
 			label: browserLabelFromExecutable(executable),
 			executable,
 			source: "wellKnownPath" as const,
 		})),
+		{ label: "Google Chrome", executable: "chrome.exe", source: "path" },
+		{ label: "Chromium", executable: "chromium.exe", source: "path" },
+		{ label: "Brave Browser", executable: "brave.exe", source: "path" },
+		{ label: "Microsoft Edge", executable: "msedge.exe", source: "path" },
 	];
 }
 
