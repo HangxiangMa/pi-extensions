@@ -151,9 +151,10 @@ Direct subcommands are also available:
 ```
 
 - `help` shows command usage.
-- `quickstart` shows the configured CDP endpoint, auto-launch mode, browser candidates, and launch hints.
-- `status` shows runtime tool state, persisted selection, settings file path, and active
-  non-Chrome tool count.
+- `quickstart` shows the configured CDP endpoint, endpoint source, auto-launch mode, browser
+  candidates, last launch attempt, and launch hints.
+- `status` shows runtime tool state, persisted selection, settings file path, endpoint source,
+  launch mode, last launch attempt, and active non-Chrome tool count.
 - `tools` opens a Plan-mode-style selector for choosing individual `chrome_devtools_*` tools.
 - `toggle` is an alias for `tools`.
 - `enable` enables all `chrome_devtools_*` tools for future turns.

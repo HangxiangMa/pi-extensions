@@ -673,16 +673,20 @@ async function buildToolStatusMessage(pi: ExtensionAPI) {
 		`Settings file: ${SETTINGS_FILE}`,
 		`Other active tools preserved: ${summary.activeNonChromeToolCount}`,
 		`Endpoint: ${devToolsEndpoint()}`,
+		`Endpoint source: ${endpointSourceLabel()}`,
 		`Launch mode: ${launchModeLabel()}`,
+		...launchAttemptLines(),
 	].join("\n");
 }
 
 function buildQuickstartMessage() {
 	return [
 		`Chrome DevTools endpoint: ${devToolsEndpoint()}`,
+		`Endpoint source: ${endpointSourceLabel()}`,
 		`Launch mode: ${launchModeLabel()}`,
 		launchHint(),
 		browserCandidateHint(),
+		...launchAttemptLines(),
 		endpointConfigHint(),
 	].join("\n");
 }
@@ -1294,6 +1298,12 @@ function formatHostForUrl(host: string) {
 	return host.includes(":") ? `[${host}]` : host;
 }
 
+function endpointSourceLabel() {
+	const hostSource = state.hostConfigured ? "PI_CHROME_DEVTOOLS_HOST" : "default host";
+	const portSource = state.portConfigured ? "PI_CHROME_DEVTOOLS_PORT" : "default/dynamic port";
+	return `${hostSource}; ${portSource}`;
+}
+
 function launchModeLabel() {
 	if (!isLocalDevToolsHost(state.host)) return "manual remote endpoint";
 	if (!state.autoLaunchEnabled) return "manual; auto-launch disabled";
@@ -1301,6 +1311,24 @@ function launchModeLabel() {
 		return state.portConfigured ? "auto-launched on explicit port" : "auto-launched on dynamic port";
 	}
 	return state.portConfigured ? "attach first; auto-launch explicit port" : "attach first; auto-launch dynamic port";
+}
+
+function launchAttemptLines() {
+	if (!state.lastLaunchAttempt) return [];
+
+	const lines = [`Last launch attempt: ${state.lastLaunchAttempt.mode}`];
+	if (state.lastLaunchAttempt.selectedCandidate) {
+		lines.push(`Launched browser: ${state.lastLaunchAttempt.selectedCandidate}`);
+	} else {
+		lines.push(`Tried browser candidates: ${state.lastLaunchAttempt.candidateLabels.join(", ")}`);
+	}
+	if (state.lastLaunchAttempt.userDataDir) {
+		lines.push(`Managed browser profile: ${state.lastLaunchAttempt.userDataDir}`);
+	}
+	if (state.lastLaunchAttempt.lastError) {
+		lines.push(`Last launch error: ${state.lastLaunchAttempt.lastError}`);
+	}
+	return lines;
 }
 
 function launchHint() {
