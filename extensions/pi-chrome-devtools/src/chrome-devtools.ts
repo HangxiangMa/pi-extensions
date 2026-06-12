@@ -1102,6 +1102,9 @@ async function assertSafeScreenshotTargetPath(resolvedPath: ResolvedScreenshotPa
 	if (existingTarget?.isDirectory()) {
 		throw new Error("Screenshot savePath must point to a file, not a directory.");
 	}
+	if (existingTarget && !existingTarget.isFile()) {
+		throw new Error("Screenshot savePath may only replace regular files.");
+	}
 
 	const realAllowedRoots = await Promise.all(resolvedPath.allowedRoots.map(realpathOrResolvedPath));
 	const realParent = await realpath(dirname(resolvedPath.path));
