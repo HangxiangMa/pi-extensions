@@ -143,6 +143,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 	let statuslineClearTimer: ReturnType<typeof setTimeout> | undefined;
 	let statuslineRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 	let statuslineRequestId = 0;
+	let sessionActive = false;
 
 	const clearStatuslineTimers = () => {
 		if (statuslineClearTimer) clearTimeout(statuslineClearTimer);
@@ -151,25 +152,49 @@ export default function codexUsage(pi: ExtensionAPI) {
 		statuslineRefreshTimer = undefined;
 	};
 
+	const handleStaleContextError = (error: unknown): boolean => {
+		if (!isStaleExtensionContextError(error)) return false;
+		statuslineRequestId += 1;
+		clearStatuslineTimers();
+		return true;
+	};
+
+	const setStatuslineValue = (ctx: ExtensionContext, value: string | undefined): boolean => {
+		try {
+			ctx.ui.setStatus(STATUS_KEY, value);
+			return true;
+		} catch (error) {
+			if (handleStaleContextError(error)) return false;
+			throw error;
+		}
+	};
+
 	const clearUsageStatusline = (ctx: ExtensionContext) => {
 		statuslineRequestId += 1;
 		clearStatuslineTimers();
-		ctx.ui.setStatus(STATUS_KEY, undefined);
+		setStatuslineValue(ctx, undefined);
 	};
 
 	const scheduleTemporaryStatuslineClear = (ctx: ExtensionContext) => {
 		if (statuslineClearTimer) clearTimeout(statuslineClearTimer);
+		const requestId = statuslineRequestId;
 		statuslineClearTimer = setTimeout(() => {
-			ctx.ui.setStatus(STATUS_KEY, undefined);
 			statuslineClearTimer = undefined;
+			if (!sessionActive || requestId !== statuslineRequestId) return;
+			setStatuslineValue(ctx, undefined);
 		}, CACHE_TTL_MS);
 		statuslineClearTimer.unref?.();
 	};
 
-	const scheduleStatuslineRefresh = (ctx: ExtensionContext) => {
+	const scheduleStatuslineRefresh = (ctx: ExtensionContext, model: CodexUsageModel | undefined) => {
 		if (statuslineRefreshTimer) clearTimeout(statuslineRefreshTimer);
+		const requestId = statuslineRequestId;
 		statuslineRefreshTimer = setTimeout(() => {
-			void refreshCurrentCodexUsageStatusline(ctx, true);
+			statuslineRefreshTimer = undefined;
+			if (!sessionActive || requestId !== statuslineRequestId) return;
+			void refreshCurrentCodexUsageStatusline(ctx, true, model).catch((error: unknown) => {
+				if (!handleStaleContextError(error)) throw error;
+			});
 		}, CACHE_TTL_MS);
 		statuslineRefreshTimer.unref?.();
 	};
@@ -181,17 +206,19 @@ export default function codexUsage(pi: ExtensionAPI) {
 	) => {
 		if (statuslineClearTimer) clearTimeout(statuslineClearTimer);
 		statuslineClearTimer = undefined;
-		ctx.ui.setStatus(STATUS_KEY, formatCodexUsageStatusline(report, options.model));
-		if (options.autoRefresh) scheduleStatuslineRefresh(ctx);
+		if (!setStatuslineValue(ctx, formatCodexUsageStatusline(report, options.model))) return;
+		if (options.autoRefresh) scheduleStatuslineRefresh(ctx, options.model);
 		else scheduleTemporaryStatuslineClear(ctx);
 	};
 
 	const refreshCurrentCodexUsageStatusline = async (
 		ctx: ExtensionContext,
 		force: boolean,
-		model = ctx.model,
+		model?: CodexUsageModel,
 	) => {
-		if (!isOpenAICodexModel(model)) {
+		if (!sessionActive) return;
+		const selectedModel = model ?? ctx.model;
+		if (!isOpenAICodexModel(selectedModel)) {
 			clearUsageStatusline(ctx);
 			return;
 		}
@@ -204,22 +231,18 @@ export default function codexUsage(pi: ExtensionAPI) {
 			return;
 		}
 
-		ctx.ui.setStatus(STATUS_KEY, "📊 checking");
+		if (!setStatuslineValue(ctx, "📊 checking")) return;
 		const result = await queryUsage(ctx, { timeoutMs: DEFAULT_TIMEOUT_MS });
-		if (requestId !== statuslineRequestId) return;
-		if (!isOpenAICodexModel(ctx.model)) {
-			clearUsageStatusline(ctx);
-			return;
-		}
+		if (!sessionActive || requestId !== statuslineRequestId) return;
 
 		if (!result.ok) {
-			ctx.ui.setStatus(STATUS_KEY, "📊 usage error");
-			scheduleStatuslineRefresh(ctx);
+			setStatuslineValue(ctx, "📊 usage error");
+			scheduleStatuslineRefresh(ctx, selectedModel);
 			return;
 		}
 
 		cache = { createdAt: Date.now(), report: result.report };
-		setUsageStatusline(ctx, result.report, { autoRefresh: true, model });
+		setUsageStatusline(ctx, result.report, { autoRefresh: true, model: selectedModel });
 	};
 
 	pi.registerCommand(COMMAND_NAME, {
@@ -274,12 +297,13 @@ export default function codexUsage(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		if (isOpenAICodexModel(ctx.model)) void refreshCurrentCodexUsageStatusline(ctx, false);
+		sessionActive = true;
+		if (isOpenAICodexModel(ctx.model)) void refreshCurrentCodexUsageStatusline(ctx, false, ctx.model);
 		else clearUsageStatusline(ctx);
 	});
 
 	pi.on("session_tree", (_event, ctx) => {
-		if (isOpenAICodexModel(ctx.model)) void refreshCurrentCodexUsageStatusline(ctx, false);
+		if (isOpenAICodexModel(ctx.model)) void refreshCurrentCodexUsageStatusline(ctx, false, ctx.model);
 		else clearUsageStatusline(ctx);
 	});
 
@@ -291,7 +315,10 @@ export default function codexUsage(pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => clearUsageStatusline(ctx));
+	pi.on("session_shutdown", (_event, ctx) => {
+		sessionActive = false;
+		clearUsageStatusline(ctx);
+	});
 }
 
 export function parseArgs(
@@ -342,6 +369,13 @@ function isOpenAICodexModel(model: Pick<PiModel, "provider"> | undefined): boole
 	return model?.provider === CODEX_PROVIDER_ID;
 }
 
+export function isStaleExtensionContextError(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		error.message.includes("This extension ctx is stale after session replacement or reload")
+	);
+}
+
 async function queryUsage(
 	ctx: ExtensionContext,
 	options: Pick<QueryUsageOptions, "timeoutMs">,
@@ -352,6 +386,7 @@ async function queryUsage(
 		const report = await queryViaPiAuth(ctx, options.timeoutMs);
 		return { ok: true, report };
 	} catch (cause) {
+		if (isStaleExtensionContextError(cause)) throw cause;
 		errors.push({ source: "pi-auth", message: errorMessage(cause), cause });
 	}
 
@@ -359,6 +394,7 @@ async function queryUsage(
 		const report = await queryViaCodexAppServer(options.timeoutMs);
 		return { ok: true, report };
 	} catch (cause) {
+		if (isStaleExtensionContextError(cause)) throw cause;
 		errors.push({ source: "codex-app-server", message: errorMessage(cause), cause });
 	}
 

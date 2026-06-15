@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createMockPi } from "../../../test/support.js";
+import { createMockContext, createMockPi } from "../../../test/support.js";
 import codexUsage, {
 	type CodexUsageReport,
 	formatCodexUsageReport,
 	formatCodexUsageStatusline,
+	isStaleExtensionContextError,
 	normalizeAppServerResponse,
 	normalizeBackendPayload,
 	parseArgs,
@@ -77,6 +78,62 @@ test("normalizeAppServerResponse merges duplicate snapshots by limit id", () => 
 	assert.equal(report.snapshots.length, 1);
 	assert.equal(report.snapshots[0]?.primary?.usedPercent, 40);
 	assert.equal(report.snapshots[0]?.secondary?.windowMinutes, 10080);
+});
+
+test("scheduled statusline refresh ignores stale extension contexts", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const originalFetch = globalThis.fetch;
+	t.after(() => {
+		globalThis.fetch = originalFetch;
+	});
+	globalThis.fetch = async () =>
+		new Response(
+			JSON.stringify({
+				plan_type: "pro_lite",
+				rate_limit: { primary_window: { used_percent: 25 } },
+			}),
+			{ status: 200 },
+		);
+
+	const mock = createMockPi();
+	codexUsage(mock.pi);
+	const model = { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", provider: "openai-codex" };
+	const { ctx, statuses } = createMockContext({
+		model,
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-token" }),
+			getAvailable: () => [],
+			getAll: () => [],
+		},
+	});
+
+	mock.events.get("session_start")?.[0]?.({}, ctx);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(statuses.get("codex-usage"), "📊 codex 75% 5h");
+
+	const staleError = new Error(
+		"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload().",
+	);
+	Object.defineProperty(ctx, "modelRegistry", {
+		configurable: true,
+		get() {
+			throw staleError;
+		},
+	});
+
+	t.mock.timers.tick(5 * 60 * 1000);
+	await Promise.resolve();
+	await Promise.resolve();
+});
+
+test("isStaleExtensionContextError recognizes Pi stale-context failures", () => {
+	assert.equal(
+		isStaleExtensionContextError(
+			new Error("This extension ctx is stale after session replacement or reload."),
+		),
+		true,
+	);
+	assert.equal(isStaleExtensionContextError(new Error("network failed")), false);
 });
 
 test("formatters render report text and model-specific statusline buckets", () => {
