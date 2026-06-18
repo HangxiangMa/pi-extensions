@@ -191,6 +191,44 @@ test("stale refresh errors do not cancel newer session refresh timers", async (t
 	assert.equal(statuses.get("codex-usage"), "📊 codex 50% 5h");
 });
 
+test("stale command statusline writes are ignored", async (t) => {
+	const originalFetch = globalThis.fetch;
+	t.after(() => {
+		globalThis.fetch = originalFetch;
+	});
+	globalThis.fetch = async () =>
+		new Response(
+			JSON.stringify({
+				plan_type: "pro_lite",
+				rate_limit: { primary_window: { used_percent: 25 } },
+			}),
+			{ status: 200 },
+		);
+
+	const mock = createMockPi();
+	codexUsage(mock.pi);
+	const command = mock.commands.get("codex-status");
+	assert.ok(command);
+	const staleError = new Error("This extension ctx is stale after session replacement or reload.");
+	const model = { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", provider: "openai-codex" };
+	const { ctx } = createMockContext({
+		model,
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-token" }),
+			getAvailable: () => [],
+			getAll: () => [],
+		},
+		ui: {
+			notify: () => undefined,
+			setStatus: () => {
+				throw staleError;
+			},
+		},
+	});
+
+	await command.handler("", ctx);
+});
+
 test("stale command statusline writes do not cancel newer session refresh timers", async (t) => {
 	// Node pairs clearTimeout with mocked setTimeout; clearTimeout is not a valid apis entry.
 	t.mock.timers.enable({ apis: ["setTimeout"] });

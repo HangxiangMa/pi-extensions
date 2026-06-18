@@ -285,7 +285,8 @@ export default function codexUsage(pi: ExtensionAPI) {
 			}
 
 			let keepStatusline = false;
-			if (options.value.statusline) ctx.ui.setStatus(STATUS_KEY, "📊 checking");
+			const statuslineStarted =
+				options.value.statusline && setStatuslineValue(ctx, "📊 checking");
 			try {
 				const result = await queryUsage(ctx, options.value);
 				if (!result.ok) {
@@ -303,7 +304,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 				}
 				showReport(ctx, result.report, false);
 			} finally {
-				if (options.value.statusline && !keepStatusline) ctx.ui.setStatus(STATUS_KEY, undefined);
+				if (statuslineStarted && !keepStatusline) setStatuslineValue(ctx, undefined);
 			}
 		},
 	});
