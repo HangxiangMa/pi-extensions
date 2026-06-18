@@ -24,6 +24,7 @@ import sync, {
 	safeName,
 	scanSnapshot,
 	sessionTokenWarnings,
+	settingsHashMap,
 	splitArgs,
 } from "../src/sync.js";
 
@@ -195,14 +196,29 @@ test("settings-only uploads preserve remote session files", () => {
 		path: "sessions/--project--/session.jsonl",
 		content: Buffer.from("remote"),
 	};
+	const local = snapshot([settings]);
 
-	const merged = mergeRemoteSessionFiles(snapshot([settings]), snapshot([remoteSession]));
+	const merged = mergeRemoteSessionFiles(local, snapshot([remoteSession]));
 
+	assert.notEqual(merged.id, local.id);
 	assert.deepEqual(
 		merged.files.map((file) => file.path),
 		["sessions/--project--/session.jsonl", "settings.json"],
 	);
 	assert.equal(merged.syncSessions, true);
+});
+
+test("settings hash maps ignore session differences for first sync checks", () => {
+	const local = snapshot([
+		{ path: "settings.json", content: Buffer.from("settings") },
+		{ path: "sessions/--project--/local.jsonl", content: Buffer.from("local") },
+	]);
+	const remote = snapshot([
+		{ path: "settings.json", content: Buffer.from("settings") },
+		{ path: "sessions/--project--/remote.jsonl", content: Buffer.from("remote") },
+	]);
+
+	assert.deepEqual(settingsHashMap(local), settingsHashMap(remote));
 });
 
 test("protected session apply plans keep the live session file", () => {
@@ -297,6 +313,7 @@ async function withTempHome<T>(fn: (agentDir: string) => Promise<T>) {
 	} finally {
 		if (previousHome === undefined) delete process.env.HOME;
 		else process.env.HOME = previousHome;
+		rmSync(home, { recursive: true, force: true });
 	}
 }
 

@@ -480,8 +480,12 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 	const firstSync = !state.lastAppliedSnapshot;
 
 	if (firstSync && remote && local.files.length > 0) {
-		if (!sameHashes(fileHashMap(local), fileHashMap(remote))) {
+		if (!sameHashes(settingsHashMap(local), settingsHashMap(remote))) {
 			throw new Error("Remote settings exist and this machine has different local Pi settings. Run /pisync diff, then manually choose /pisync pull or /pisync push.");
+		}
+		if (!sameHashes(fileHashMap(local), fileHashMap(remote))) {
+			await pull(ctx, options);
+			return;
 		}
 		await writeState(config.profile, {
 			version: VERSION,
@@ -545,11 +549,13 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 
 	const backup = await backupLocal(config.profile, config);
 	await applySnapshot(remote, protectedSessionPaths(ctx));
-	const encoded = remote.id === decoded.id ? snapshot.value : await encodeSnapshot(remote);
-	if (remote.id !== decoded.id) {
-		await client.putBuffer(snapshotKey(config, remote.id), encoded, "application/gzip");
+	const latest = await client.getJson<LatestPointer>(latestKey(config));
+	const upload = await snapshotForUpload(client, config, remote, latest);
+	const encoded = upload.id === decoded.id ? snapshot.value : await encodeSnapshot(upload);
+	if (upload.id !== decoded.id) {
+		await client.putBuffer(snapshotKey(config, upload.id), encoded, "application/gzip");
 	}
-	const pointer = pointerFor(config, remote, sha256(encoded));
+	const pointer = pointerFor(config, upload, sha256(encoded));
 	await client.putJson(latestKey(config), pointer);
 	await updateHistory(client, config, pointer);
 	await writeState(config.profile, {
@@ -810,7 +816,7 @@ async function snapshotForUpload(
 	local: Snapshot,
 	latest: RemoteObject<LatestPointer>,
 ) {
-	if (config.syncSessions || latest.missing || !latest.value?.syncSessions) return local;
+	if (config.syncSessions || latest.missing || !latest.value) return local;
 	const remote = await readRemoteSnapshotRaw(client, config);
 	return remote ? mergeRemoteSessionFiles(local, remote) : local;
 }
@@ -820,6 +826,9 @@ export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
 	if (remoteSessions.length === 0) return local;
 	return {
 		...local,
+		id: snapshotId(),
+		createdAt: new Date().toISOString(),
+		machine: os.hostname(),
 		syncSessions: true,
 		files: [...local.files.filter((file) => !isSessionPath(file.path)), ...remoteSessions].sort(
 			(left, right) => left.path.localeCompare(right.path),
@@ -1041,6 +1050,14 @@ function sameHashes(left: Record<string, string>, right: Record<string, string>)
 
 function fileHashMap(snapshot: Snapshot) {
 	return Object.fromEntries(snapshot.files.map((file) => [file.path, file.sha256]));
+}
+
+export function settingsHashMap(snapshot: Snapshot) {
+	return Object.fromEntries(
+		snapshot.files
+			.filter((file) => !isSessionPath(file.path))
+			.map((file) => [file.path, file.sha256]),
+	);
 }
 
 async function readState(profile: string): Promise<SyncState> {
