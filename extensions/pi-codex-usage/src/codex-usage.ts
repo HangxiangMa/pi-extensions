@@ -159,6 +159,10 @@ export default function codexUsage(pi: ExtensionAPI) {
 		return true;
 	};
 
+	const rethrowUnlessStaleContextError = (error: unknown) => {
+		if (!handleStaleContextError(error)) throw error;
+	};
+
 	const setStatuslineValue = (ctx: ExtensionContext, value: string | undefined): boolean => {
 		try {
 			ctx.ui.setStatus(STATUS_KEY, value);
@@ -192,9 +196,9 @@ export default function codexUsage(pi: ExtensionAPI) {
 		statuslineRefreshTimer = setTimeout(() => {
 			statuslineRefreshTimer = undefined;
 			if (!sessionActive || requestId !== statuslineRequestId) return;
-			void refreshCurrentCodexUsageStatusline(ctx, true, model).catch((error: unknown) => {
-				if (!handleStaleContextError(error)) throw error;
-			});
+			void refreshCurrentCodexUsageStatusline(ctx, true, model).catch(
+				rethrowUnlessStaleContextError,
+			);
 		}, CACHE_TTL_MS);
 		statuslineRefreshTimer.unref?.();
 	};
@@ -227,7 +231,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 		statuslineRequestId = requestId;
 		const cached = cache && Date.now() - cache.createdAt < CACHE_TTL_MS ? cache : undefined;
 		if (cached && !force) {
-			setUsageStatusline(ctx, cached.report, { autoRefresh: true, model });
+			setUsageStatusline(ctx, cached.report, { autoRefresh: true, model: selectedModel });
 			return;
 		}
 
@@ -298,18 +302,30 @@ export default function codexUsage(pi: ExtensionAPI) {
 
 	pi.on("session_start", (_event, ctx) => {
 		sessionActive = true;
-		if (isOpenAICodexModel(ctx.model)) void refreshCurrentCodexUsageStatusline(ctx, false, ctx.model);
-		else clearUsageStatusline(ctx);
+		if (isOpenAICodexModel(ctx.model)) {
+			void refreshCurrentCodexUsageStatusline(ctx, false, ctx.model).catch(
+				rethrowUnlessStaleContextError,
+			);
+		} else {
+			clearUsageStatusline(ctx);
+		}
 	});
 
 	pi.on("session_tree", (_event, ctx) => {
-		if (isOpenAICodexModel(ctx.model)) void refreshCurrentCodexUsageStatusline(ctx, false, ctx.model);
-		else clearUsageStatusline(ctx);
+		if (isOpenAICodexModel(ctx.model)) {
+			void refreshCurrentCodexUsageStatusline(ctx, false, ctx.model).catch(
+				rethrowUnlessStaleContextError,
+			);
+		} else {
+			clearUsageStatusline(ctx);
+		}
 	});
 
 	pi.on("model_select", (event, ctx) => {
 		if (isOpenAICodexModel(event.model)) {
-			void refreshCurrentCodexUsageStatusline(ctx, false, event.model);
+			void refreshCurrentCodexUsageStatusline(ctx, false, event.model).catch(
+				rethrowUnlessStaleContextError,
+			);
 		} else {
 			clearUsageStatusline(ctx);
 		}
