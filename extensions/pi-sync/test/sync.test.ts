@@ -13,10 +13,13 @@ import sync, {
 	isCloudflareR2Endpoint,
 	isDeniedPath,
 	isEnabled,
+	isExplicitlyEnabled,
 	loadConfig,
+	mergeRemoteSessionFiles,
 	parseOptions,
 	posixJoin,
 	preflightSnapshotApply,
+	protectSnapshotApplyPlan,
 	safeJoin,
 	safeName,
 	scanSnapshot,
@@ -45,6 +48,15 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 		});
 		await withEnv({ PI_SYNC_SESSIONS: "false" }, async () => {
 			assert.equal((await loadConfig()).syncSessions, false);
+		});
+		await withEnv({ PI_SYNC_SESSIONS: "" }, async () => {
+			assert.equal((await loadConfig()).syncSessions, false);
+		});
+		await withEnv({ PI_SYNC_SESSIONS: "tru" }, async () => {
+			assert.equal((await loadConfig()).syncSessions, false);
+		});
+		await withEnv({ PI_SYNC_SESSIONS: "yes" }, async () => {
+			assert.equal((await loadConfig()).syncSessions, true);
 		});
 
 		rmSync(path.join(agentDir, "pi-sync.local.json"));
@@ -177,6 +189,45 @@ test("snapshot preflight validates checksums, duplicate session paths, and delet
 	);
 });
 
+test("settings-only uploads preserve remote session files", () => {
+	const settings = { path: "settings.json", content: Buffer.from("local") };
+	const remoteSession = {
+		path: "sessions/--project--/session.jsonl",
+		content: Buffer.from("remote"),
+	};
+
+	const merged = mergeRemoteSessionFiles(snapshot([settings]), snapshot([remoteSession]));
+
+	assert.deepEqual(
+		merged.files.map((file) => file.path),
+		["sessions/--project--/session.jsonl", "settings.json"],
+	);
+	assert.equal(merged.syncSessions, true);
+});
+
+test("protected session apply plans keep the live session file", () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-sync-protect-"));
+	const live = path.join(root, "sessions", "--project--", "live.jsonl");
+	const old = path.join(root, "sessions", "--project--", "old.jsonl");
+	const plan = protectSnapshotApplyPlan(
+		root,
+		{
+			writes: [
+				{ target: live, content: Buffer.from("remote") },
+				{ target: path.join(root, "settings.json"), content: Buffer.from("{}") },
+			],
+			deletes: [live, old],
+		},
+		new Set(["sessions/--project--/live.jsonl"]),
+	);
+
+	assert.deepEqual(
+		plan.writes.map((item) => item.target),
+		[path.join(root, "settings.json")],
+	);
+	assert.deepEqual(plan.deletes, [old]);
+});
+
 test("session backups include session jsonl files when enabled", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(path.join(agentDir, "sessions", "--project--"), { recursive: true });
@@ -208,6 +259,9 @@ test("security and configuration helpers detect secrets and R2 session-token war
 	);
 	assert.equal(isEnabled("off", true), false);
 	assert.equal(isEnabled(undefined, true), true);
+	assert.equal(isExplicitlyEnabled("true"), true);
+	assert.equal(isExplicitlyEnabled("tru"), false);
+	assert.equal(isExplicitlyEnabled(""), false);
 });
 
 function snapshot(files: Array<{ path: string; content: Buffer }>) {
