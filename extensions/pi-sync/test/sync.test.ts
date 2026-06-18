@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createMockPi } from "../../../test/support.js";
+import { gunzipSync } from "node:zlib";
+import { createMockContext, createMockPi } from "../../../test/support.js";
 import sync, {
+	backupLocal,
+	collectFiles,
 	encodeKey,
 	isCloudflareR2Endpoint,
 	isDeniedPath,
 	isEnabled,
+	loadConfig,
 	parseOptions,
 	posixJoin,
 	preflightSnapshotApply,
@@ -26,6 +30,49 @@ test("sync registers pisync command and session lifecycle hooks", () => {
 
 	assert.ok(mock.commands.has("pisync"));
 	assert.deepEqual([...mock.events.keys()].sort(), ["session_shutdown", "session_start"]);
+});
+
+test("syncSessions config defaults off and supports file plus env overrides", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			path.join(agentDir, "pi-sync.local.json"),
+			JSON.stringify({ ...requiredConfig(), syncSessions: true }),
+		);
+
+		await withEnv({}, async () => {
+			assert.equal((await loadConfig()).syncSessions, true);
+		});
+		await withEnv({ PI_SYNC_SESSIONS: "false" }, async () => {
+			assert.equal((await loadConfig()).syncSessions, false);
+		});
+
+		rmSync(path.join(agentDir, "pi-sync.local.json"));
+		writeFileSync(path.join(agentDir, "pi-sync.local.json"), JSON.stringify(requiredConfig()));
+		await withEnv({}, async () => {
+			assert.equal((await loadConfig()).syncSessions, false);
+		});
+	});
+});
+
+test("pisync config output reports session sync and privacy warning", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			path.join(agentDir, "pi-sync.local.json"),
+			JSON.stringify({ ...requiredConfig(), syncSessions: true }),
+		);
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext();
+
+		await withEnv({}, async () => {
+			await mock.commands.get("pisync")?.handler("config", ctx);
+		});
+
+		assert.match(notifications[0]?.message ?? "", /syncSessions: enabled/);
+		assert.match(notifications[0]?.message ?? "", /session JSONL can contain/);
+	});
 });
 
 test("argument and option helpers parse quoted command lines", () => {
@@ -57,13 +104,34 @@ test("path and key helpers normalize safe names and reject escapes", () => {
 	assert.equal(safeName("team/prod"), "team_prod");
 });
 
-test("snapshot preflight validates checksums, duplicate paths, and deletes stale files", () => {
+test("snapshot collection includes session jsonl files only when enabled", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-sync-collect-"));
+	mkdirSync(path.join(root, "skills"), { recursive: true });
+	mkdirSync(path.join(root, "sessions", "--project--"), { recursive: true });
+	mkdirSync(path.join(root, "sessions", "token-project"), { recursive: true });
+	writeFileSync(path.join(root, "settings.json"), "{}\n");
+	writeFileSync(path.join(root, "skills", "demo.md"), "demo\n");
+	writeFileSync(path.join(root, "sessions", "--project--", "session.jsonl"), "{}\n");
+	writeFileSync(path.join(root, "sessions", "--project--", "notes.txt"), "skip\n");
+	writeFileSync(path.join(root, "sessions", "token-project", "session.jsonl"), "skip\n");
+
+	assert.deepEqual(
+		(await collectFiles(root)).map((file) => file.path),
+		["settings.json", "skills/demo.md"],
+	);
+	assert.deepEqual(
+		(await collectFiles(root, { syncSessions: true })).map((file) => file.path),
+		["sessions/--project--/session.jsonl", "settings.json", "skills/demo.md"],
+	);
+});
+
+test("snapshot preflight validates checksums, duplicate session paths, and deletes stale files", () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-sync-apply-"));
 	const content = Buffer.from("hello");
 	const remote = snapshot([{ path: "settings.json", content }]);
 	const current = snapshot([
 		{ path: "settings.json", content },
-		{ path: "skills/old.md", content: Buffer.from("old") },
+		{ path: "sessions/--project--/old.jsonl", content: Buffer.from("old") },
 	]);
 
 	const plan = preflightSnapshotApply(root, remote, current);
@@ -71,20 +139,59 @@ test("snapshot preflight validates checksums, duplicate paths, and deletes stale
 		plan.writes.map((item) => item.target),
 		[path.join(root, "settings.json")],
 	);
-	assert.deepEqual(plan.deletes, [path.join(root, "skills", "old.md")]);
+	assert.deepEqual(plan.deletes, [path.join(root, "sessions", "--project--", "old.jsonl")]);
 	assert.throws(
 		() => preflightSnapshotApply(root, snapshot([{ path: "../bad", content }]), current),
 		/Unsafe path/,
+	);
+	const sessionSnapshot = snapshot([{ path: "sessions/--project--/session.jsonl", content }]);
+	assert.throws(
+		() =>
+			preflightSnapshotApply(
+				root,
+				{ ...sessionSnapshot, files: [sessionSnapshot.files[0], sessionSnapshot.files[0]] },
+				current,
+			),
+		/Duplicate path/,
 	);
 	assert.throws(
 		() =>
 			preflightSnapshotApply(
 				root,
-				{ ...remote, files: [remote.files[0], remote.files[0]] },
+				{
+					...sessionSnapshot,
+					files: [{ ...sessionSnapshot.files[0], sha256: "bad" }],
+				},
 				current,
 			),
-		/Duplicate path/,
+		/Checksum mismatch/,
 	);
+	assert.throws(
+		() =>
+			preflightSnapshotApply(
+				root,
+				snapshot([{ path: "sessions/--project--/notes.txt", content }]),
+				current,
+			),
+		/Unsafe session path/,
+	);
+});
+
+test("session backups include session jsonl files when enabled", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(path.join(agentDir, "sessions", "--project--"), { recursive: true });
+		writeFileSync(path.join(agentDir, "settings.json"), "{}\n");
+		writeFileSync(path.join(agentDir, "sessions", "--project--", "session.jsonl"), "{}\n");
+
+		const backupPath = await backupLocal("default", { syncSessions: true });
+		const backup = JSON.parse(gunzipSync(readFileSync(backupPath)).toString("utf8"));
+
+		assert.ok(
+			backup.files.some(
+				(file: { path: string }) => file.path === "sessions/--project--/session.jsonl",
+			),
+		);
+	});
 });
 
 test("security and configuration helpers detect secrets and R2 session-token warnings", () => {
@@ -116,4 +223,58 @@ function snapshot(files: Array<{ path: string; content: Buffer }>) {
 			sha256: createHash("sha256").update(file.content).digest("hex"),
 		})),
 	};
+}
+
+function requiredConfig() {
+	return {
+		endpoint: "https://example.r2.cloudflarestorage.com",
+		bucket: "pi-sync-test",
+		accessKeyId: "access-key",
+		secretAccessKey: "secret-key",
+	};
+}
+
+async function withTempHome<T>(fn: (agentDir: string) => Promise<T>) {
+	const previousHome = process.env.HOME;
+	const home = mkdtempSync(path.join(os.tmpdir(), "pi-sync-home-"));
+	process.env.HOME = home;
+	try {
+		return await fn(path.join(home, ".pi", "agent"));
+	} finally {
+		if (previousHome === undefined) delete process.env.HOME;
+		else process.env.HOME = previousHome;
+	}
+}
+
+async function withEnv<T>(env: Record<string, string>, fn: () => Promise<T>) {
+	const keys = [
+		"PI_SYNC_ENDPOINT",
+		"PI_SYNC_BUCKET",
+		"PI_SYNC_ACCESS_KEY_ID",
+		"PI_SYNC_SECRET_ACCESS_KEY",
+		"PI_SYNC_SESSIONS",
+		"PI_SYNC_SESSION_TOKEN",
+		"PI_SYNC_REGION",
+		"PI_SYNC_PROFILE",
+		"PI_SYNC_PREFIX",
+		"PI_SYNC_AUTO_SYNC",
+		"R2_ENDPOINT",
+		"R2_BUCKET",
+		"AWS_ACCESS_KEY_ID",
+		"AWS_SECRET_ACCESS_KEY",
+		"AWS_SESSION_TOKEN",
+		"AWS_REGION",
+	];
+	const previous = new Map(keys.map((key) => [key, process.env[key]]));
+	for (const key of keys) delete process.env[key];
+	Object.assign(process.env, env);
+	try {
+		return await fn();
+	} finally {
+		for (const key of keys) {
+			const value = previous.get(key);
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	}
 }
