@@ -15,7 +15,7 @@ It syncs automatically by default when Pi starts, then uses immutable snapshot b
   - `models.json`
   - `AGENTS.md`
   - `skills/`, `prompts/`, `themes/`, and `extensions/`
-  - optionally `sessions/**/*.jsonl` when `syncSessions` is enabled
+  - optionally denylist-filtered `sessions/**/*.jsonl` when `syncSessions` is enabled
 - Stores each remote version as an immutable gzip-compressed JSON snapshot bundle.
 - Updates remote state through `latest.json` after re-reading remote state to reject already-visible remote changes.
 - Creates local backups before `pull` and `rollback` under `~/.pi/agent/.pisync/backups/`.
@@ -95,7 +95,7 @@ pi-sync also reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TO
 
 ### Session syncing
 
-`syncSessions` defaults to `false`. Set it to `true`, or set `PI_SYNC_SESSIONS=true`, to include `~/.pi/agent/sessions/**/*.jsonl` in snapshots. Empty or misspelled `PI_SYNC_SESSIONS` values stay disabled. Only JSONL session files are included; other session-directory files are ignored.
+`syncSessions` defaults to `false`. Set it to `true`, or set `PI_SYNC_SESSIONS=true`, to include `~/.pi/agent/sessions/**/*.jsonl` in snapshots. Empty or misspelled `PI_SYNC_SESSIONS` values stay disabled. Only JSONL session files are included; other session-directory files and denylisted paths such as `.env*`, `.pisync`, `node_modules`, and names containing `token` or `secret` are ignored.
 
 Session sync is snapshot-based, not live collaboration. If the same session changes on two machines, `/pisync sync` uses the same conflict rules as settings sync and skips when both local and remote changed. Run `/pisync diff`, then choose `/pisync pull --force` or `/pisync push --force` if needed.
 
@@ -170,7 +170,7 @@ Before updating `latest.json`, pi-sync re-reads the current pointer and rejects 
 ## 🛡️ Safety notes
 
 - pi-sync auto-syncs on startup by default, but skips instead of overwriting when first-run local settings and a remote snapshot both exist, or when both local and remote changed after a previous sync.
-- pi-sync does not sync Pi sessions unless `syncSessions`/`PI_SYNC_SESSIONS` is enabled. It never syncs OAuth state, npm caches, `.env`, `.env.local`, `node_modules`, or `.pisync` state.
+- With `syncSessions`/`PI_SYNC_SESSIONS` disabled, pi-sync does not collect or apply local Pi sessions, though settings-only pushes may preserve session files already present in remote snapshots. It never syncs OAuth state, npm caches, `.env`, `.env.local`, `node_modules`, or `.pisync` state.
 - If another Pi process is already syncing on the same machine, destructive commands stop at the local lock. `/pisync unlock --stale` is intended for locks whose process is gone or invalid.
 - If another machine's update is visible before this machine updates `latest.json`, push is rejected unless you explicitly use `--force`.
 - Pull and rollback create backups before writing local files, then preflight deletes and writes before mutating the local settings tree.
