@@ -7,6 +7,7 @@ import test from "node:test";
 import { gunzipSync } from "node:zlib";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import sync, {
+	appliedFileHashMap,
 	backupLocal,
 	canPullRemoteSessionsOnFirstSync,
 	collectFiles,
@@ -281,6 +282,25 @@ test("protected session apply plans keep the live session file", () => {
 		[path.join(root, "settings.json")],
 	);
 	assert.deepEqual(plan.deletes, [old]);
+
+	const current = snapshot([
+		{ path: "sessions/--project--/live.jsonl", content: Buffer.from("local") },
+		{ path: "sessions/--project--/old.jsonl", content: Buffer.from("old") },
+	]);
+	const remote = snapshot([
+		{ path: "settings.json", content: Buffer.from("{}") },
+		{ path: "sessions/--project--/live.jsonl", content: Buffer.from("remote") },
+	]);
+	const hashes = appliedFileHashMap(remote, current, new Set(["sessions/--project--/live.jsonl"]));
+
+	assert.equal(
+		hashes["sessions/--project--/live.jsonl"],
+		current.files.find((file) => file.path === "sessions/--project--/live.jsonl")?.sha256,
+	);
+	assert.equal(
+		hashes["settings.json"],
+		remote.files.find((file) => file.path === "settings.json")?.sha256,
+	);
 });
 
 test("session backups include session jsonl files when enabled", async () => {

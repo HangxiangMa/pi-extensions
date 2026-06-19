@@ -465,13 +465,13 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 	}
 
 	const backup = await backupLocal(config.profile, config);
-	await applySnapshot(remote, protectedSessionPaths(ctx));
+	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx));
 	await writeState(config.profile, {
 		version: VERSION,
 		profile: config.profile,
 		lastAppliedSnapshot: remote.id,
 		lastRemoteEtag: undefined,
-		lastFileHashes: fileHashMap(remote),
+		lastFileHashes,
 		syncSessions: config.syncSessions,
 	});
 	ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -563,7 +563,7 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 	}
 
 	const backup = await backupLocal(config.profile, config);
-	await applySnapshot(remote, protectedSessionPaths(ctx));
+	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx));
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
 	const upload = await snapshotForUpload(client, config, remote, latest);
 	const encoded = upload.id === decoded.id ? snapshot.value : await encodeSnapshot(upload);
@@ -578,7 +578,7 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 		profile: config.profile,
 		lastAppliedSnapshot: pointer.snapshot,
 		lastRemoteEtag: undefined,
-		lastFileHashes: fileHashMap(remote),
+		lastFileHashes,
 		syncSessions: config.syncSessions,
 	});
 	ctx.ui.notify(`Rolled back to ${target}; latest: ${pointer.snapshot}. Backup: ${backup}`, "info");
@@ -926,6 +926,7 @@ async function applySnapshot(snapshot: Snapshot, protectedRelativePaths = new Se
 	for (const item of plan.writes) {
 		await fs.writeFile(item.target, item.content);
 	}
+	return appliedFileHashMap(snapshot, current, protectedRelativePaths);
 }
 
 export function preflightSnapshotApply(
@@ -982,6 +983,25 @@ export function protectSnapshotApplyPlan(
 		writes: plan.writes.filter((item) => !protectedTargets.has(item.target)),
 		deletes: plan.deletes.filter((target) => !protectedTargets.has(target)),
 	};
+}
+
+export function appliedFileHashMap(
+	snapshot: Snapshot,
+	current: Snapshot,
+	protectedRelativePaths: Set<string>,
+) {
+	const hashes = fileHashMap(snapshot);
+	if (protectedRelativePaths.size === 0) return hashes;
+	const currentHashes = fileHashMap(current);
+	for (const relativePath of protectedRelativePaths) {
+		const normalized = toPosix(relativePath);
+		if (currentHashes[normalized]) {
+			hashes[normalized] = currentHashes[normalized];
+		} else {
+			delete hashes[normalized];
+		}
+	}
+	return hashes;
 }
 
 function decodeBase64Strict(value: string, filePath: string) {
