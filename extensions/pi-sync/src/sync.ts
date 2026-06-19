@@ -473,7 +473,8 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 	}
 
 	const backup = await backupLocal(config.profile, snapshotOptionsForContext(ctx, config));
-	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), sessionDirFromContext(ctx));
+	const applySessionDir = await sessionDirForApply(ctx, remote);
+	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), applySessionDir);
 	await writeState(config.profile, {
 		version: VERSION,
 		profile: config.profile,
@@ -485,6 +486,11 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 	if (!options.silent) {
 		ctx.ui.notify(`Pulled ${remote.files.length} files from ${remote.id}. Backup: ${backup}`, "info");
+	} else if (options.auto && config.syncSessions && snapshotIncludesSessions(remote)) {
+		ctx.ui.notify(
+			"Pulled Pi sessions after startup selected the current session. Restart Pi or resume a pulled session to use newly synced conversations.",
+			"warning",
+		);
 	}
 	if (options.reload) await maybeReload(ctx);
 }
@@ -579,7 +585,8 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 	}
 
 	const backup = await backupLocal(config.profile, snapshotOptionsForContext(ctx, config));
-	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), sessionDirFromContext(ctx));
+	const applySessionDir = await sessionDirForApply(ctx, remote);
+	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), applySessionDir);
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
 	const upload = await snapshotForUpload(client, config, remote, latest);
 	const encoded = upload.id === decoded.id ? snapshot.value : await encodeSnapshot(upload);
@@ -629,13 +636,20 @@ function snapshotOptionsForContext(
 	ctx: ExtensionCommandContext | ExtensionContext,
 	config: SyncConfig,
 ): SnapshotOptions {
-	return { ...config, sessionDir: sessionDirFromContext(ctx) };
+	return { syncSessions: config.syncSessions, sessionDir: sessionDirFromContext(ctx) };
 }
 
 function sessionDirFromContext(ctx: ExtensionCommandContext | ExtensionContext) {
-	const getSessionDir = ctx.sessionManager.getSessionDir;
+	const manager = ctx.sessionManager as typeof ctx.sessionManager & {
+		usesDefaultSessionDir?: () => boolean;
+	};
+	const usesDefaultSessionDir = manager.usesDefaultSessionDir;
+	if (typeof usesDefaultSessionDir === "function" && usesDefaultSessionDir.call(manager)) {
+		return undefined;
+	}
+	const getSessionDir = manager.getSessionDir;
 	return typeof getSessionDir === "function"
-		? (getSessionDir.call(ctx.sessionManager) as string | undefined)
+		? (getSessionDir.call(manager) as string | undefined)
 		: undefined;
 }
 
@@ -730,11 +744,35 @@ async function loadPartialConfig(): Promise<PartialConfig> {
 }
 
 async function configuredSessionDir() {
-	if (process.env.PI_CODING_AGENT_SESSION_DIR) {
-		return expandHome(process.env.PI_CODING_AGENT_SESSION_DIR);
-	}
+	const envSessionDir = normalizeOptionalString(process.env.PI_CODING_AGENT_SESSION_DIR);
+	if (envSessionDir) return expandHome(envSessionDir);
 	const settings = await readJsonIfExists<{ sessionDir?: string }>(path.join(agentDir(), "settings.json"));
 	return settings?.sessionDir ? expandHome(settings.sessionDir) : undefined;
+}
+
+async function sessionDirForApply(ctx: ExtensionCommandContext | ExtensionContext, snapshot: Snapshot) {
+	const contextSessionDir = sessionDirFromContext(ctx);
+	const envSessionDir = normalizeOptionalString(process.env.PI_CODING_AGENT_SESSION_DIR);
+	if (envSessionDir) return contextSessionDir ?? expandHome(envSessionDir);
+
+	const localSessionDir = await configuredSessionDir();
+	if (contextSessionDir && path.resolve(contextSessionDir) !== path.resolve(localSessionDir ?? "")) {
+		return contextSessionDir;
+	}
+	return sessionDirFromSnapshot(snapshot) ?? contextSessionDir;
+}
+
+function sessionDirFromSnapshot(snapshot: Snapshot) {
+	const settingsFile = snapshot.files.find((file) => file.path === "settings.json");
+	if (!settingsFile) return undefined;
+	try {
+		const settings = JSON.parse(
+			decodeBase64Strict(settingsFile.contentBase64, settingsFile.path).toString("utf8"),
+		) as { sessionDir?: string };
+		return settings.sessionDir ? expandHome(settings.sessionDir) : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 async function createSnapshot(profile: string, options: SnapshotOptions = {}): Promise<Snapshot> {
@@ -838,10 +876,7 @@ function isSessionFilePath(relativePath: string) {
 }
 
 function sessionStorageRoot(root: string, configuredSessionDir?: string) {
-	const defaultRoot = path.resolve(root, "sessions");
-	if (!configuredSessionDir) return defaultRoot;
-	const resolved = path.resolve(expandHome(configuredSessionDir));
-	return isPathInside(defaultRoot, resolved) ? defaultRoot : resolved;
+	return configuredSessionDir ? path.resolve(expandHome(configuredSessionDir)) : path.resolve(root, "sessions");
 }
 
 function sessionSnapshotPathFromAbsolute(sessionFile: string, configuredSessionDir?: string) {
@@ -1014,7 +1049,7 @@ async function applySnapshot(
 		protectedRelativePaths,
 		sessionDir,
 	);
-	await preflightSnapshotMutations(root, plan);
+	await preflightSnapshotMutations(root, plan, sessionDir);
 	for (const target of plan.deletes) {
 		await fs.rm(target, { force: true, recursive: true });
 	}
@@ -1065,8 +1100,8 @@ export function preflightSnapshotApply(
 		if (!remotePaths.has(normalized)) {
 			deletePaths.add(snapshotTarget(root, normalized, options.sessionDir));
 		}
-		for (const remotePath of remotePaths) {
-			if (normalized.startsWith(`${remotePath}/`)) {
+		for (const remotePath of parentPaths(normalized)) {
+			if (remotePaths.has(remotePath)) {
 				deletePaths.add(snapshotTarget(root, remotePath, options.sessionDir));
 			}
 		}
@@ -1421,7 +1456,8 @@ function pointerFor(config: SyncConfig, snapshot: Snapshot, checksum: string): L
 }
 
 function agentDir() {
-	return process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
+	const configured = normalizeOptionalString(process.env.PI_CODING_AGENT_DIR);
+	return configured ? expandHome(configured) : path.join(os.homedir(), ".pi", "agent");
 }
 
 function expandHome(value: string) {
@@ -1482,14 +1518,21 @@ async function writeJson(filePath: string, value: unknown) {
 async function preflightSnapshotMutations(
 	root: string,
 	plan: { deletes: string[]; writes: Array<{ target: string; content: Buffer }> },
+	sessionDir?: string,
 ) {
 	const deletePaths = new Set(plan.deletes);
 	for (const target of plan.deletes) {
-		await assertNoSymlinkParents(root, target);
+		await assertNoSymlinkParents(rootForTarget(root, target, sessionDir), target);
 	}
 	for (const item of plan.writes) {
-		await prepareSnapshotWrite(root, item.target, deletePaths);
+		await prepareSnapshotWrite(rootForTarget(root, item.target, sessionDir), item.target, deletePaths);
 	}
+}
+
+function rootForTarget(root: string, target: string, sessionDir?: string) {
+	const sessionRoot = sessionDir ? sessionStorageRoot(root, sessionDir) : undefined;
+	if (sessionRoot && isPathInside(sessionRoot, target)) return sessionRoot;
+	return root;
 }
 
 async function prepareSnapshotWrite(root: string, target: string, deletePaths: Set<string>) {
@@ -1594,6 +1637,16 @@ export function encodeKey(key: string) {
 
 export function posixJoin(...parts: string[]) {
 	return parts.map((part) => trimSlashes(part)).filter(Boolean).join("/");
+}
+
+function parentPaths(relativePath: string) {
+	const results: string[] = [];
+	let index = relativePath.lastIndexOf("/");
+	while (index > 0) {
+		results.push(relativePath.slice(0, index));
+		index = relativePath.lastIndexOf("/", index - 1);
+	}
+	return results;
 }
 
 function toPosix(value: string) {

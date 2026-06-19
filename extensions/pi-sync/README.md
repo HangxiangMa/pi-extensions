@@ -101,7 +101,7 @@ pi-sync also reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TO
 
 Session sync is snapshot-based, not live collaboration. If the same session changes on two machines, `/pisync sync` uses the same conflict rules as settings sync and skips when both local and remote changed. Run `/pisync diff`, then choose `/pisync pull --force` or `/pisync push --force` if needed.
 
-When both `autoSync` and `syncSessions` are enabled, pi-sync syncs on startup and attempts a quiet session push on shutdown when local files changed. If the remote changed first, the shutdown push is skipped with a warning instead of overwriting it.
+When both `autoSync` and `syncSessions` are enabled, pi-sync syncs on startup and attempts a quiet session push on shutdown when local files changed. Startup session pulls happen after Pi has already selected the current session, so restart Pi or resume a pulled session to use newly synced conversations. If the remote changed first, the shutdown push is skipped with a warning instead of overwriting it.
 
 Session files can contain prompts, model output, tool results, file paths, images, and secrets. Use trusted R2/S3 storage, keep credentials local, and recover local files from `${PI_CODING_AGENT_DIR:-~/.pi/agent}/.pisync/backups/` if a pull or rollback overwrites something unexpectedly.
 

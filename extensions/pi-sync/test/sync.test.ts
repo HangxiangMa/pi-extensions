@@ -75,6 +75,16 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 			assert.equal((await loadConfig()).profile, "custom");
 		});
 
+		const tildeAgentDir = path.join(path.dirname(agentDir), "agent-tilde");
+		mkdirSync(tildeAgentDir, { recursive: true });
+		writeFileSync(
+			path.join(tildeAgentDir, "pi-sync.local.json"),
+			JSON.stringify({ ...requiredConfig(), profile: "tilde" }),
+		);
+		await withEnv({ PI_CODING_AGENT_DIR: "~/.pi/agent-tilde" }, async () => {
+			assert.equal((await loadConfig()).profile, "tilde");
+		});
+
 		rmSync(path.join(agentDir, "pi-sync.local.json"));
 		writeFileSync(path.join(agentDir, "pi-sync.local.json"), JSON.stringify(requiredConfig()));
 		await withEnv({}, async () => {
@@ -158,6 +168,15 @@ test("snapshot collection includes session jsonl files only when enabled", async
 			(file) => file.path,
 		),
 		["sessions/custom.jsonl", "settings.json", "skills/demo.md"],
+	);
+	const nestedSessionDir = path.join(root, "sessions", "work");
+	mkdirSync(nestedSessionDir, { recursive: true });
+	writeFileSync(path.join(nestedSessionDir, "nested.jsonl"), "{}\n");
+	assert.deepEqual(
+		(await collectFiles(root, { syncSessions: true, sessionDir: nestedSessionDir })).map(
+			(file) => file.path,
+		),
+		["sessions/nested.jsonl", "settings.json", "skills/demo.md"],
 	);
 });
 
