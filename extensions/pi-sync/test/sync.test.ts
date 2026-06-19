@@ -172,6 +172,15 @@ test("snapshot preflight validates checksums, duplicate session paths, and delet
 		() => preflightSnapshotApply(root, snapshot([{ path: "../bad", content }]), current),
 		/Unsafe path/,
 	);
+	assert.throws(
+		() =>
+			preflightSnapshotApply(
+				root,
+				snapshot([{ path: "sessions/../settings.json", content }]),
+				current,
+			),
+		/Unsafe path/,
+	);
 	const sessionSnapshot = snapshot([{ path: "sessions/--project--/session.jsonl", content }]);
 	assert.throws(
 		() =>

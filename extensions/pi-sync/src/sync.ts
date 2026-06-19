@@ -419,7 +419,7 @@ async function push(
 	if (
 		!options.yes &&
 		!(await ctx.ui.confirm(
-			"Push pi settings?",
+			snapshotIncludesSessions(upload) ? "Push pi settings and sessions?" : "Push pi settings?",
 			formatPushSummary(upload, latest, preservedRemoteSessionCount),
 		))
 	) {
@@ -459,7 +459,13 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 		throw new Error("Both local and remote changed since last sync. Run /pisync diff, then choose /pisync pull --force or /pisync push --force.");
 	}
 
-	if (!options.yes && !(await ctx.ui.confirm("Pull pi settings?", formatDiff(local, remote)))) {
+	if (
+		!options.yes &&
+		!(await ctx.ui.confirm(
+			snapshotIncludesSessions(remote) ? "Pull pi settings and sessions?" : "Pull pi settings?",
+			formatDiff(local, remote),
+		))
+	) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		ctx.ui.notify("Pull cancelled.", "info");
 		return;
@@ -558,7 +564,15 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 	const decoded = await decodeSnapshot(snapshot.value);
 	const remote = config.syncSessions ? decoded : snapshotWithoutSessions(decoded);
 
-	if (!options.yes && !(await ctx.ui.confirm("Rollback pi settings?", formatSnapshotOnlyDiff("Rollback would apply", remote)))) {
+	if (
+		!options.yes &&
+		!(await ctx.ui.confirm(
+			snapshotIncludesSessions(remote)
+				? "Rollback pi settings and sessions?"
+				: "Rollback pi settings?",
+			formatSnapshotOnlyDiff("Rollback would apply", remote),
+		))
+	) {
 		ctx.ui.notify("Rollback cancelled.", "info");
 		return;
 	}
@@ -946,7 +960,12 @@ export function preflightSnapshotApply(
 
 	for (const file of snapshot.files) {
 		const normalized = toPosix(file.path);
-		if (!normalized || normalized.startsWith("../") || path.posix.isAbsolute(normalized)) {
+		if (
+			!normalized ||
+			normalized.startsWith("../") ||
+			path.posix.isAbsolute(normalized) ||
+			path.posix.normalize(normalized) !== normalized
+		) {
 			throw new Error(`Unsafe path in snapshot: ${file.path}`);
 		}
 		if (isSessionPath(normalized) && !isSessionFilePath(normalized)) {
