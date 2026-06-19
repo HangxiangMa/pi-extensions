@@ -154,7 +154,8 @@ export default function sync(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (event, ctx) => {
-		if (event.reason !== "reload") await autoPushSessions(ctx);
+		const reason = typeof event === "object" && event ? (event as { reason?: string }).reason : undefined;
+		if (reason !== "reload") await autoPushSessions(ctx);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 }
