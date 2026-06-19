@@ -25,6 +25,7 @@ import sync, {
 	safeName,
 	scanSnapshot,
 	sessionTokenWarnings,
+	settingsHashesMatchState,
 	settingsHashMap,
 	snapshotWithoutSessions,
 	splitArgs,
@@ -221,6 +222,14 @@ test("settings hash maps ignore session differences for first sync checks", () =
 	]);
 
 	assert.deepEqual(settingsHashMap(local), settingsHashMap(remote));
+	assert.equal(
+		settingsHashesMatchState(remote, {
+			version: 1,
+			profile: "default",
+			lastFileHashes: Object.fromEntries(local.files.map((file) => [file.path, file.sha256])),
+		}),
+		true,
+	);
 });
 
 test("first sync only auto-pulls remote sessions when local sessions are not at risk", () => {

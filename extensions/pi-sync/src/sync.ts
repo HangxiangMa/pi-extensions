@@ -400,17 +400,28 @@ async function push(
 	const local = input?.local ?? (await createSnapshot(config.profile, config));
 
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
+	const remoteForUpload = await readRemoteSnapshotForSettingsOnlyUpload(client, config, latest, state);
 	if (remoteChangedSinceState(latest, state, config) && !options.force) {
-		throw new Error("Remote changed since last sync. Run /pisync pull first or /pisync push --force.");
+		if (!remoteForUpload || !settingsHashesMatchState(remoteForUpload, state)) {
+			throw new Error("Remote changed since last sync. Run /pisync pull first or /pisync push --force.");
+		}
 	}
 
-	const upload = await snapshotForUpload(client, config, local, latest);
-	const secrets = scanSnapshot(upload);
+	const upload = await snapshotForUpload(client, config, local, latest, remoteForUpload);
+	const scanTarget = config.syncSessions ? upload : local;
+	const secrets = scanSnapshot(scanTarget);
 	if (secrets.length > 0) {
 		throw new Error(`Refusing to push possible secrets:\n${secrets.map((s) => `- ${s}`).join("\n")}`);
 	}
 
-	if (!options.yes && !(await ctx.ui.confirm("Push pi settings?", formatPushSummary(upload, latest)))) {
+	const preservedRemoteSessionCount = Math.max(0, countSessionFiles(upload) - countSessionFiles(local));
+	if (
+		!options.yes &&
+		!(await ctx.ui.confirm(
+			"Push pi settings?",
+			formatPushSummary(upload, latest, preservedRemoteSessionCount),
+		))
+	) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		ctx.ui.notify("Push cancelled.", "info");
 		return;
@@ -814,15 +825,27 @@ export function scanSnapshot(snapshot: Snapshot) {
 	return findings;
 }
 
+async function readRemoteSnapshotForSettingsOnlyUpload(
+	client: S3Client,
+	config: SyncConfig,
+	latest: RemoteObject<LatestPointer>,
+	state: SyncState,
+) {
+	if (config.syncSessions || latest.missing || !latest.value) return undefined;
+	if (!latest.value.syncSessions && latest.value.snapshot === state.lastAppliedSnapshot) return undefined;
+	return readRemoteSnapshotRaw(client, config);
+}
+
 async function snapshotForUpload(
 	client: S3Client,
 	config: SyncConfig,
 	local: Snapshot,
 	latest: RemoteObject<LatestPointer>,
+	remote?: Snapshot,
 ) {
 	if (config.syncSessions || latest.missing || !latest.value) return local;
-	const remote = await readRemoteSnapshotRaw(client, config);
-	return remote ? mergeRemoteSessionFiles(local, remote) : local;
+	const snapshot = remote ?? (await readRemoteSnapshotRaw(client, config));
+	return snapshot ? mergeRemoteSessionFiles(local, snapshot) : local;
 }
 
 export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
@@ -1013,11 +1036,17 @@ function formatSnapshotOnlyDiff(title: string, snapshot: Snapshot) {
 	return [`${title}: ${snapshot.id}`, ...snapshot.files.map((file) => `+ ${file.path}`)].join("\n");
 }
 
-function formatPushSummary(local: Snapshot, latest: RemoteObject<LatestPointer>) {
+function formatPushSummary(
+	local: Snapshot,
+	latest: RemoteObject<LatestPointer>,
+	preservedRemoteSessionCount = 0,
+) {
 	return [
 		`Upload ${local.files.length} files from ${agentDir()}.`,
 		latest.value ? `Remote latest: ${latest.value.snapshot}` : "Remote latest: empty",
-		"Possible secrets were scanned before this prompt.",
+		preservedRemoteSessionCount > 0
+			? `Possible secrets in local files were scanned before this prompt; ${preservedRemoteSessionCount} preserved remote session file(s) were not rescanned.`
+			: "Possible secrets were scanned before this prompt.",
 	].join("\n");
 }
 
@@ -1056,6 +1085,10 @@ function fileHashMap(snapshot: Snapshot) {
 	return Object.fromEntries(snapshot.files.map((file) => [file.path, file.sha256]));
 }
 
+function countSessionFiles(snapshot: Snapshot) {
+	return snapshot.files.filter((file) => isSessionPath(file.path)).length;
+}
+
 export function settingsHashMap(snapshot: Snapshot) {
 	return Object.fromEntries(
 		snapshot.files
@@ -1068,6 +1101,16 @@ export function sessionHashMap(snapshot: Snapshot) {
 	return Object.fromEntries(
 		snapshot.files.filter((file) => isSessionPath(file.path)).map((file) => [file.path, file.sha256]),
 	);
+}
+
+export function settingsHashMapFromState(state: SyncState) {
+	return Object.fromEntries(
+		Object.entries(state.lastFileHashes).filter(([filePath]) => !isSessionPath(filePath)),
+	);
+}
+
+export function settingsHashesMatchState(remote: Snapshot, state: SyncState) {
+	return sameHashes(settingsHashMap(remote), settingsHashMapFromState(state));
 }
 
 export function canPullRemoteSessionsOnFirstSync(local: Snapshot, remote: Snapshot) {
