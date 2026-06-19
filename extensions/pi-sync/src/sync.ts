@@ -843,7 +843,7 @@ async function snapshotForUpload(
 	latest: RemoteObject<LatestPointer>,
 	remote?: Snapshot,
 ) {
-	if (config.syncSessions || latest.missing || !latest.value || latest.value.syncSessions !== true) {
+	if (config.syncSessions || latest.missing || !latest.value || latest.value.syncSessions === false) {
 		return local;
 	}
 	const snapshot = remote ?? (await readRemoteSnapshotRaw(client, config));
@@ -854,7 +854,7 @@ export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
 	const remoteSessions = remote.files.filter(
 		(file) => isSessionFilePath(file.path) && !isDeniedPath(file.path),
 	);
-	if (remoteSessions.length === 0) return local;
+	if (remoteSessions.length === 0 && !snapshotIncludesSessions(remote)) return local;
 	return {
 		...local,
 		id: snapshotId(),
@@ -1318,7 +1318,7 @@ function pointerFor(config: SyncConfig, snapshot: Snapshot, checksum: string): L
 }
 
 function agentDir() {
-	return path.join(os.homedir(), ".pi", "agent");
+	return process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
 }
 
 function stateDir() {

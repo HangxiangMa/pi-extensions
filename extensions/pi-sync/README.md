@@ -56,6 +56,8 @@ Then edit:
 ~/.pi/agent/pi-sync.local.json
 ```
 
+If `PI_CODING_AGENT_DIR` is set, pi-sync uses that directory instead of `~/.pi/agent` for config, state, backups, and synced files.
+
 Example:
 
 ```json

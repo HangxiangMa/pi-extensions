@@ -65,6 +65,16 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 			assert.equal((await loadConfig()).syncSessions, true);
 		});
 
+		const customAgentDir = path.join(agentDir, "custom-agent");
+		mkdirSync(customAgentDir, { recursive: true });
+		writeFileSync(
+			path.join(customAgentDir, "pi-sync.local.json"),
+			JSON.stringify({ ...requiredConfig(), profile: "custom" }),
+		);
+		await withEnv({ PI_CODING_AGENT_DIR: customAgentDir }, async () => {
+			assert.equal((await loadConfig()).profile, "custom");
+		});
+
 		rmSync(path.join(agentDir, "pi-sync.local.json"));
 		writeFileSync(path.join(agentDir, "pi-sync.local.json"), JSON.stringify(requiredConfig()));
 		await withEnv({}, async () => {
@@ -222,6 +232,14 @@ test("settings-only uploads preserve remote session files", () => {
 		["sessions/--project--/session.jsonl", "settings.json"],
 	);
 	assert.equal(merged.syncSessions, true);
+
+	const emptySessionSet = mergeRemoteSessionFiles(local, { ...snapshot([]), syncSessions: true });
+	assert.notEqual(emptySessionSet.id, local.id);
+	assert.deepEqual(
+		emptySessionSet.files.map((file) => file.path),
+		["settings.json"],
+	);
+	assert.equal(emptySessionSet.syncSessions, true);
 });
 
 test("settings hash maps ignore session differences for first sync checks", () => {
@@ -416,6 +434,7 @@ async function withEnv<T>(env: Record<string, string>, fn: () => Promise<T>) {
 		"PI_SYNC_PROFILE",
 		"PI_SYNC_PREFIX",
 		"PI_SYNC_AUTO_SYNC",
+		"PI_CODING_AGENT_DIR",
 		"R2_ENDPOINT",
 		"R2_BUCKET",
 		"AWS_ACCESS_KEY_ID",
