@@ -116,6 +116,7 @@ interface CommandOptions {
 
 interface SnapshotOptions {
 	syncSessions?: boolean;
+	sessionDir?: string;
 }
 
 interface PushInput {
@@ -237,7 +238,7 @@ async function autoPushSessions(ctx: ExtensionContext) {
 		if (!config.syncSessions) return;
 		await withLock("auto-session-push", async () => {
 			const state = await readState(config.profile);
-			const local = await createSnapshot(config.profile, config);
+			const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
 			if (!hasLocalChanges(local, state)) return;
 			await push(ctx, AUTO_SYNC_OPTIONS, { config, state, local });
 		});
@@ -301,7 +302,7 @@ async function status(ctx: ExtensionCommandContext) {
 	ctx.ui.setStatus(STATUS_KEY, "🔄 checking");
 	const config = await loadConfig();
 	const client = new S3Client(config);
-	const local = await createSnapshot(config.profile, config);
+	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
 	const state = await readState(config.profile);
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
 	const localChanged = hasLocalChanges(local, state);
@@ -332,7 +333,7 @@ async function diff(ctx: ExtensionCommandContext) {
 	ctx.ui.setStatus(STATUS_KEY, "🔄 diff");
 	const config = await loadConfig();
 	const client = new S3Client(config);
-	const local = await createSnapshot(config.profile, config);
+	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
 	const remote = await readRemoteSnapshot(client, config);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 
@@ -361,7 +362,7 @@ async function doctor(ctx: ExtensionCommandContext) {
 	try {
 		const config = await loadConfig();
 		profile = config.profile;
-		snapshotOptions = config;
+		snapshotOptions = snapshotOptionsForContext(ctx, config);
 		messages.push(`config: ok (${config.bucket}/${profilePrefix(config)})`);
 		messages.push(`sessions: ${config.syncSessions ? "included" : "excluded"}`);
 		const warnings = [...sessionTokenWarnings(config), ...syncSessionsWarnings(config)];
@@ -398,7 +399,7 @@ async function push(
 	const config = input?.config ?? (await loadConfig());
 	const client = input?.client ?? new S3Client(config);
 	const state = input?.state ?? (await readState(config.profile));
-	const local = input?.local ?? (await createSnapshot(config.profile, config));
+	const local = input?.local ?? (await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config)));
 
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
 	const remoteForUpload = await readRemoteSnapshotForSettingsOnlyUpload(client, config, latest, state);
@@ -449,7 +450,7 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 	const config = await loadConfig();
 	const client = new S3Client(config);
 	const state = await readState(config.profile);
-	const local = await createSnapshot(config.profile, config);
+	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
 	const remote = await readRemoteSnapshot(client, config);
 	if (!remote) throw new Error("Remote is empty. Run /pisync push from a configured machine first.");
 
@@ -471,8 +472,8 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 		return;
 	}
 
-	const backup = await backupLocal(config.profile, config);
-	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx));
+	const backup = await backupLocal(config.profile, snapshotOptionsForContext(ctx, config));
+	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), sessionDirFromContext(ctx));
 	await writeState(config.profile, {
 		version: VERSION,
 		profile: config.profile,
@@ -492,7 +493,7 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 	const config = await loadConfig();
 	const client = new S3Client(config);
 	const state = await readState(config.profile);
-	const local = await createSnapshot(config.profile, config);
+	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
 	const remote = await readRemoteSnapshot(client, config);
 	const localChanged = hasLocalChanges(local, state);
 	const remoteChanged = remote ? hasRemoteChanges(remote, state, config) : false;
@@ -577,8 +578,8 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 		return;
 	}
 
-	const backup = await backupLocal(config.profile, config);
-	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx));
+	const backup = await backupLocal(config.profile, snapshotOptionsForContext(ctx, config));
+	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), sessionDirFromContext(ctx));
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
 	const upload = await snapshotForUpload(client, config, remote, latest);
 	const encoded = upload.id === decoded.id ? snapshot.value : await encodeSnapshot(upload);
@@ -618,10 +619,24 @@ function protectedSessionPaths(ctx: ExtensionCommandContext | ExtensionContext) 
 	const getSessionFile = ctx.sessionManager.getSessionFile;
 	if (typeof getSessionFile !== "function") return new Set<string>();
 	const sessionFile = getSessionFile.call(ctx.sessionManager) as string | undefined;
-	if (!sessionFile) return new Set<string>();
-	const relativePath = toPosix(path.relative(agentDir(), sessionFile));
-	if (!isSessionFilePath(relativePath) || relativePath.startsWith("../")) return new Set<string>();
-	return new Set([relativePath]);
+	const snapshotPath = sessionFile
+		? sessionSnapshotPathFromAbsolute(sessionFile, sessionDirFromContext(ctx))
+		: undefined;
+	return snapshotPath ? new Set([snapshotPath]) : new Set<string>();
+}
+
+function snapshotOptionsForContext(
+	ctx: ExtensionCommandContext | ExtensionContext,
+	config: SyncConfig,
+): SnapshotOptions {
+	return { ...config, sessionDir: sessionDirFromContext(ctx) };
+}
+
+function sessionDirFromContext(ctx: ExtensionCommandContext | ExtensionContext) {
+	const getSessionDir = ctx.sessionManager.getSessionDir;
+	return typeof getSessionDir === "function"
+		? (getSessionDir.call(ctx.sessionManager) as string | undefined)
+		: undefined;
 }
 
 async function maybeReload(ctx: ExtensionCommandContext | ExtensionContext) {
@@ -714,9 +729,20 @@ async function loadPartialConfig(): Promise<PartialConfig> {
 	};
 }
 
+async function configuredSessionDir() {
+	if (process.env.PI_CODING_AGENT_SESSION_DIR) {
+		return expandHome(process.env.PI_CODING_AGENT_SESSION_DIR);
+	}
+	const settings = await readJsonIfExists<{ sessionDir?: string }>(path.join(agentDir(), "settings.json"));
+	return settings?.sessionDir ? expandHome(settings.sessionDir) : undefined;
+}
+
 async function createSnapshot(profile: string, options: SnapshotOptions = {}): Promise<Snapshot> {
 	const syncSessions = Boolean(options.syncSessions);
-	const files = await collectFiles(agentDir(), { syncSessions });
+	const files = await collectFiles(agentDir(), {
+		syncSessions,
+		sessionDir: options.sessionDir ?? (await configuredSessionDir()),
+	});
 	return {
 		version: VERSION,
 		id: snapshotId(),
@@ -738,8 +764,16 @@ export async function collectFiles(
 			await addFile(results, root, entry.name);
 		} else if (entry.isDirectory() && TOP_LEVEL_DIRS.has(entry.name)) {
 			await collectDirectory(results, root, entry.name);
-		} else if (entry.isDirectory() && entry.name === "sessions" && options.syncSessions) {
-			await collectDirectory(results, root, entry.name, { sessionsOnly: true });
+		}
+	}
+	if (options.syncSessions) {
+		try {
+			await collectDirectory(results, sessionStorageRoot(root, options.sessionDir), "", {
+				sessionsOnly: true,
+				virtualPrefix: "sessions",
+			});
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
 	}
 	return results.sort((left, right) => left.path.localeCompare(right.path));
@@ -749,25 +783,33 @@ async function collectDirectory(
 	results: SnapshotFile[],
 	root: string,
 	relativeDirectory: string,
-	options: { sessionsOnly?: boolean } = {},
+	options: { sessionsOnly?: boolean; virtualPrefix?: string } = {},
 ) {
 	const absoluteDirectory = path.join(root, relativeDirectory);
 	for (const entry of await fs.readdir(absoluteDirectory, { withFileTypes: true })) {
-		const relativePath = posixJoin(relativeDirectory, entry.name);
-		if (isDeniedPath(relativePath)) continue;
+		const relativePath = relativeDirectory ? posixJoin(relativeDirectory, entry.name) : entry.name;
+		const snapshotPath = options.virtualPrefix
+			? posixJoin(options.virtualPrefix, relativePath)
+			: relativePath;
+		if (isDeniedPath(snapshotPath)) continue;
 		if (entry.isDirectory()) {
 			await collectDirectory(results, root, relativePath, options);
-		} else if (entry.isFile() && (!options.sessionsOnly || isSessionFilePath(relativePath))) {
-			await addFile(results, root, relativePath);
+		} else if (entry.isFile() && (!options.sessionsOnly || isSessionFilePath(snapshotPath))) {
+			await addFile(results, root, relativePath, snapshotPath);
 		}
 	}
 }
 
-async function addFile(results: SnapshotFile[], root: string, relativePath: string) {
-	if (isDeniedPath(relativePath)) return;
+async function addFile(
+	results: SnapshotFile[],
+	root: string,
+	relativePath: string,
+	snapshotPath = relativePath,
+) {
+	if (isDeniedPath(snapshotPath)) return;
 	const absolutePath = safeJoin(root, relativePath);
 	const content = await fs.readFile(absolutePath);
-	results.push({ path: relativePath, contentBase64: content.toString("base64"), sha256: sha256(content) });
+	results.push({ path: snapshotPath, contentBase64: content.toString("base64"), sha256: sha256(content) });
 }
 
 export function isDeniedPath(relativePath: string) {
@@ -793,6 +835,34 @@ function isSessionPath(relativePath: string) {
 function isSessionFilePath(relativePath: string) {
 	const normalized = toPosix(relativePath);
 	return isSessionPath(normalized) && normalized.endsWith(".jsonl");
+}
+
+function sessionStorageRoot(root: string, configuredSessionDir?: string) {
+	const defaultRoot = path.resolve(root, "sessions");
+	if (!configuredSessionDir) return defaultRoot;
+	const resolved = path.resolve(expandHome(configuredSessionDir));
+	return isPathInside(defaultRoot, resolved) ? defaultRoot : resolved;
+}
+
+function sessionSnapshotPathFromAbsolute(sessionFile: string, configuredSessionDir?: string) {
+	const relativePath = toPosix(path.relative(sessionStorageRoot(agentDir(), configuredSessionDir), sessionFile));
+	if (!relativePath || relativePath.startsWith("../") || path.posix.isAbsolute(relativePath)) {
+		return undefined;
+	}
+	const snapshotPath = posixJoin("sessions", relativePath);
+	return isSessionFilePath(snapshotPath) ? snapshotPath : undefined;
+}
+
+function snapshotTarget(root: string, relativePath: string, configuredSessionDir?: string) {
+	if (isSessionPath(relativePath)) {
+		return safeJoin(sessionStorageRoot(root, configuredSessionDir), relativePath.slice("sessions/".length));
+	}
+	return safeJoin(root, relativePath);
+}
+
+function isPathInside(parent: string, child: string) {
+	const relativePath = path.relative(parent, child);
+	return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }
 
 function snapshotIncludesSessions(snapshot: Snapshot) {
@@ -928,15 +998,21 @@ async function decodeSnapshot(buffer: Buffer): Promise<Snapshot> {
 	return parsed;
 }
 
-async function applySnapshot(snapshot: Snapshot, protectedRelativePaths = new Set<string>()) {
+async function applySnapshot(
+	snapshot: Snapshot,
+	protectedRelativePaths = new Set<string>(),
+	sessionDir?: string,
+) {
 	const root = agentDir();
 	const current = await createSnapshot(snapshot.profile, {
 		syncSessions: snapshotIncludesSessions(snapshot),
+		sessionDir,
 	});
 	const plan = protectSnapshotApplyPlan(
 		root,
-		preflightSnapshotApply(root, snapshot, current),
+		preflightSnapshotApply(root, snapshot, current, { sessionDir }),
 		protectedRelativePaths,
+		sessionDir,
 	);
 	await preflightSnapshotMutations(root, plan);
 	for (const target of plan.deletes) {
@@ -952,6 +1028,7 @@ export function preflightSnapshotApply(
 	root: string,
 	snapshot: Snapshot,
 	current: Snapshot,
+	options: { sessionDir?: string } = {},
 ): SnapshotApplyPlan {
 	const seenPaths = new Set<string>();
 	const remotePaths = new Set<string>();
@@ -976,7 +1053,7 @@ export function preflightSnapshotApply(
 		seenPaths.add(normalized);
 		remotePaths.add(normalized);
 
-		const target = safeJoin(root, normalized);
+		const target = snapshotTarget(root, normalized, options.sessionDir);
 		const content = decodeBase64Strict(file.contentBase64, normalized);
 		if (sha256(content) !== file.sha256) throw new Error(`Checksum mismatch in snapshot file: ${normalized}`);
 		writes.push({ target, content });
@@ -985,9 +1062,13 @@ export function preflightSnapshotApply(
 	const deletePaths = new Set<string>();
 	for (const file of current.files) {
 		const normalized = toPosix(file.path);
-		if (!remotePaths.has(normalized)) deletePaths.add(safeJoin(root, normalized));
+		if (!remotePaths.has(normalized)) {
+			deletePaths.add(snapshotTarget(root, normalized, options.sessionDir));
+		}
 		for (const remotePath of remotePaths) {
-			if (normalized.startsWith(`${remotePath}/`)) deletePaths.add(safeJoin(root, remotePath));
+			if (normalized.startsWith(`${remotePath}/`)) {
+				deletePaths.add(snapshotTarget(root, remotePath, options.sessionDir));
+			}
 		}
 	}
 	deletes.push(...deletePaths);
@@ -999,10 +1080,11 @@ export function protectSnapshotApplyPlan(
 	root: string,
 	plan: SnapshotApplyPlan,
 	protectedRelativePaths: Set<string>,
+	sessionDir?: string,
 ): SnapshotApplyPlan {
 	if (protectedRelativePaths.size === 0) return plan;
 	const protectedTargets = new Set(
-		[...protectedRelativePaths].map((relativePath) => safeJoin(root, relativePath)),
+		[...protectedRelativePaths].map((relativePath) => snapshotTarget(root, relativePath, sessionDir)),
 	);
 	return {
 		writes: plan.writes.filter((item) => !protectedTargets.has(item.target)),
@@ -1340,6 +1422,12 @@ function pointerFor(config: SyncConfig, snapshot: Snapshot, checksum: string): L
 
 function agentDir() {
 	return process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
+}
+
+function expandHome(value: string) {
+	return value === "~" || value.startsWith("~/")
+		? path.join(os.homedir(), value.slice(2))
+		: value;
 }
 
 function stateDir() {

@@ -142,6 +142,8 @@ test("snapshot collection includes session jsonl files only when enabled", async
 	writeFileSync(path.join(root, "sessions", "--project--", "session.jsonl"), "{}\n");
 	writeFileSync(path.join(root, "sessions", "--project--", "notes.txt"), "skip\n");
 	writeFileSync(path.join(root, "sessions", "token-project", "session.jsonl"), "skip\n");
+	const customSessionDir = mkdtempSync(path.join(os.tmpdir(), "pi-sync-sessions-"));
+	writeFileSync(path.join(customSessionDir, "custom.jsonl"), "{}\n");
 
 	assert.deepEqual(
 		(await collectFiles(root)).map((file) => file.path),
@@ -150,6 +152,12 @@ test("snapshot collection includes session jsonl files only when enabled", async
 	assert.deepEqual(
 		(await collectFiles(root, { syncSessions: true })).map((file) => file.path),
 		["sessions/--project--/session.jsonl", "settings.json", "skills/demo.md"],
+	);
+	assert.deepEqual(
+		(await collectFiles(root, { syncSessions: true, sessionDir: customSessionDir })).map(
+			(file) => file.path,
+		),
+		["sessions/custom.jsonl", "settings.json", "skills/demo.md"],
 	);
 });
 
@@ -186,6 +194,13 @@ test("snapshot preflight validates checksums, duplicate session paths, and delet
 		/Unsafe path/,
 	);
 	const sessionSnapshot = snapshot([{ path: "sessions/--project--/session.jsonl", content }]);
+	const customSessionDir = mkdtempSync(path.join(os.tmpdir(), "pi-sync-session-apply-"));
+	assert.deepEqual(
+		preflightSnapshotApply(root, sessionSnapshot, snapshot([]), {
+			sessionDir: customSessionDir,
+		}).writes.map((item) => item.target),
+		[path.join(customSessionDir, "--project--", "session.jsonl")],
+	);
 	assert.throws(
 		() =>
 			preflightSnapshotApply(
@@ -425,10 +440,12 @@ function requiredConfig() {
 async function withTempHome<T>(fn: (agentDir: string) => Promise<T>) {
 	const previousHome = process.env.HOME;
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const previousSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
 	const home = mkdtempSync(path.join(os.tmpdir(), "pi-sync-home-"));
 	const agentDir = path.join(home, ".pi", "agent");
 	process.env.HOME = home;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
+	delete process.env.PI_CODING_AGENT_SESSION_DIR;
 	try {
 		return await fn(agentDir);
 	} finally {
@@ -436,6 +453,8 @@ async function withTempHome<T>(fn: (agentDir: string) => Promise<T>) {
 		else process.env.HOME = previousHome;
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		if (previousSessionDir === undefined) delete process.env.PI_CODING_AGENT_SESSION_DIR;
+		else process.env.PI_CODING_AGENT_SESSION_DIR = previousSessionDir;
 		rmSync(home, { recursive: true, force: true });
 	}
 }
@@ -453,6 +472,7 @@ async function withEnv<T>(env: Record<string, string>, fn: () => Promise<T>) {
 		"PI_SYNC_PREFIX",
 		"PI_SYNC_AUTO_SYNC",
 		"PI_CODING_AGENT_DIR",
+		"PI_CODING_AGENT_SESSION_DIR",
 		"R2_ENDPOINT",
 		"R2_BUCKET",
 		"AWS_ACCESS_KEY_ID",
