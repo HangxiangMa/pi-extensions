@@ -144,7 +144,7 @@ Without `@narumitw/pi-statusline`, keep using `PI_CAFFEINATE_ICON` during the co
 
 AI coding agents often run tool-heavy tasks that take several minutes. `pi-caffeinate` keeps your machine awake during active Pi work, helping browser automation, local builds, test runs, code generation, and long prompts finish reliably.
 
-The default display-awake mode prioritizes uninterrupted long-running Pi work across platforms, including Linux desktops that require idle inhibition to prevent automatic suspend. Use sleep-only mode when you prefer normal screen power saving and your system does not need idle inhibition to keep Pi running.
+The default display-awake mode prioritizes uninterrupted long-running Pi work across platforms, including Linux desktops that require idle inhibition to prevent automatic suspend. Use `/caffeinate sleep` (shown as `system-awake` in status output) when you prefer normal screen power saving and your system does not need idle inhibition to keep Pi running.
 
 ## 🗂️ Package layout
 

@@ -319,7 +319,7 @@ function startInhibitor(ctx: ExtensionContext) {
 			updateStatus(ctx);
 		});
 
-		ctx.ui.notify(`Keeping computer awake with ${command.description}.`, "info");
+		ctx.ui.notify(`Keeping computer awake (${statusModeLabel()}).`, "info");
 		updateStatus(ctx);
 	} catch (error) {
 		state.process = undefined;
@@ -580,11 +580,11 @@ function statusLevel() {
 
 function statusModeLabel() {
 	if (state.command?.custom) return "custom";
-	return state.mode === "sleep" ? "sleep" : "display";
+	return formatMode(state.mode);
 }
 
 export function formatMode(mode: CaffeinateMode) {
-	return mode === "sleep" ? "sleep-only" : "display-awake";
+	return mode === "sleep" ? "system-awake" : "display-awake";
 }
 
 async function ensureSettingsLoaded(ctx: ExtensionContext) {
@@ -696,7 +696,7 @@ function warnDeprecatedIcon(ctx: ExtensionContext) {
 	if (state.iconWarningShown || !process.env.PI_CAFFEINATE_ICON?.trim()) return;
 	state.iconWarningShown = true;
 	ctx.ui.notify(
-		'PI_CAFFEINATE_ICON is deprecated and still works for now. If you use @narumitw/pi-statusline, move this icon to pi-statusline-settings.json: { "extensionStatusIcons": { "caffeinate": "..." } }.',
+		"PI_CAFFEINATE_ICON is deprecated but still works for now. If you use @narumitw/pi-statusline, move it to pi-statusline-settings.json (extensionStatusIcons.caffeinate).",
 		"warning",
 	);
 }
