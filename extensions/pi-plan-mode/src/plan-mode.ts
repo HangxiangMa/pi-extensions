@@ -644,8 +644,8 @@ export default function planMode(pi: ExtensionAPI) {
 
 	function formatStatus() {
 		if (!state.enabled) return undefined;
-		if (state.awaitingAction || state.latestPlan) return "📝 plan ready";
-		return "📝 plan active";
+		if (state.awaitingAction || state.latestPlan) return "plan ready";
+		return "plan active";
 	}
 
 	function clearUi(ctx: ExtensionContext) {

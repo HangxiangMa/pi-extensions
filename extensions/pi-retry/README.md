@@ -14,8 +14,8 @@ Use it to make Pi sessions more resilient when an upstream AI provider returns a
 - Lets Pi's built-in retry path continue the turn.
 - Watches provider requests and assistant stream events for stalls.
 - Aborts and rewrites watchdog-triggered aborts as retryable provider errors.
-- Shows `📥 receiving` in the statusline while provider/stream events are arriving.
-- Shows `🔁 retrying` when a matching error or stall triggers retry.
+- Shows `receiving` in the statusline while provider/stream events are arriving.
+- Shows `retrying` when a matching error or stall triggers retry; `@narumitw/pi-statusline` adds the default `🔁` icon unless configured otherwise.
 - Supports `--retry-stall-timeout-ms <ms>` and `PI_RETRY_STALL_TIMEOUT_MS=<ms>`.
 - Works as a small, focused npm Pi extension package.
 
@@ -41,7 +41,7 @@ pi -e ./extensions/pi-retry
 
 When an assistant message ends with `stopReason: "error"` and the error message matches `Unknown error (no error details in response)`, the extension appends Pi's retryable-provider-error hint so Pi's built-in retry path can continue the turn.
 
-After Pi sends a provider request, the extension also starts a stall watchdog. Provider responses and assistant stream events briefly refresh a `📥 receiving` statusline item, so you can tell that data is still arriving while Pi shows its normal working indicator. If no provider response or assistant stream event is observed for 90s, it briefly shows `🔁 retrying`, calls `ctx.abort()`, and rewrites the resulting assistant abort/error as a retryable provider error.
+After Pi sends a provider request, the extension also starts a stall watchdog. Provider responses and assistant stream events briefly refresh a `receiving` statusline item, so you can tell that data is still arriving while Pi shows its normal working indicator. If no provider response or assistant stream event is observed for 90s, it briefly shows `retrying`, calls `ctx.abort()`, and rewrites the resulting assistant abort/error as a retryable provider error.
 
 Configure the watchdog with:
 

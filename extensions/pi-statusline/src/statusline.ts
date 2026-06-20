@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -40,7 +41,25 @@ interface TokenTotals {
 }
 
 const STATUSLINE_KEY = "statusline";
+const SETTINGS_FILE = "pi-statusline-settings.json";
 const DEFAULT_PRESET: StatuslinePresetName = "tokyo-night";
+
+const DEFAULT_EXTENSION_STATUS_ICONS: Record<string, string> = {
+	"chrome-devtools": "🌐",
+	"codex-usage": "📊",
+	caffeinate: "💊",
+	firecrawl: "🔥",
+	goal: "🎯",
+	lsp: "🧰",
+	"plan-mode": "📝",
+	pisync: "🔄",
+	subagents: "🧑‍🤝‍🧑",
+	"unknown-error-retry": "🔁",
+};
+
+interface StatuslineSettings {
+	extensionStatusIcons: Record<string, string>;
+}
 
 const DEFAULT_SEGMENTS: SegmentName[] = [
 	"brand",
@@ -173,6 +192,28 @@ function createDefaultConfig(): StatuslineConfig {
 		separator: "dot",
 		showLabels: false,
 		segments: [...DEFAULT_SEGMENTS],
+		extensionStatusIcons: readStatuslineSettings().extensionStatusIcons,
+	};
+}
+
+export function readStatuslineSettings(settingsPath = join(getAgentDir(), SETTINGS_FILE)): StatuslineSettings {
+	try {
+		return normalizeStatuslineSettings(JSON.parse(readFileSync(settingsPath, "utf8")));
+	} catch {
+		return { extensionStatusIcons: {} };
+	}
+}
+
+export function normalizeStatuslineSettings(value: unknown): StatuslineSettings {
+	if (!value || typeof value !== "object") return { extensionStatusIcons: {} };
+	const icons = (value as { extensionStatusIcons?: unknown }).extensionStatusIcons;
+	if (!icons || typeof icons !== "object" || Array.isArray(icons)) {
+		return { extensionStatusIcons: {} };
+	}
+	return {
+		extensionStatusIcons: Object.fromEntries(
+			Object.entries(icons).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+		),
 	};
 }
 
@@ -351,18 +392,34 @@ function formatExtensionStatuses(
 		...formatDuplicateExtensionStatus(runtime, theme),
 		...[...statuses.entries()]
 			.filter(([key, value]) => key !== STATUSLINE_KEY && value.trim().length > 0)
-			.map(([key, value]) => formatExtensionStatus(key, value, theme)),
+			.map(([key, value]) => formatExtensionStatus(key, value, theme, config)),
 	].slice(0, 5);
 
 	return visibleStatuses.join(separator);
 }
 
-function formatExtensionStatus(key: string, value: string, theme: Theme): string {
+export function formatExtensionStatus(
+	key: string,
+	value: string,
+	theme: Theme,
+	config: Pick<StatuslineConfig, "extensionStatusIcons">,
+): string {
 	const status = splitExtensionStatusIcon(stripExtensionStatusPrefix(key, value));
 	const text = truncateToWidth(simplifyExtensionStatusText(status.text), 22, "…");
 	const color = extensionColor(key, value);
 	const textColor = color === "warning" ? "warning" : "muted";
-	return `${theme.fg(color, status.icon)} ${theme.fg(textColor, text)}`;
+	const icon = extensionStatusIcon(key, status.icon, config.extensionStatusIcons);
+	const renderedText = theme.fg(textColor, text);
+	return icon ? `${theme.fg(color, icon)} ${renderedText}` : renderedText;
+}
+
+function extensionStatusIcon(
+	key: string,
+	leadingIcon: string | undefined,
+	configuredIcons: Record<string, string>,
+) {
+	if (Object.hasOwn(configuredIcons, key)) return configuredIcons[key];
+	return leadingIcon ?? DEFAULT_EXTENSION_STATUS_ICONS[key] ?? "🔌";
 }
 
 function formatDuplicateExtensionStatus(runtime: RuntimeState, theme: Theme): string[] {
@@ -373,13 +430,13 @@ function formatDuplicateExtensionStatus(runtime: RuntimeState, theme: Theme): st
 	return [`${theme.fg("warning", "⚠️")} ${theme.fg("warning", `dup ${names}${suffix}`)}`];
 }
 
-export function splitExtensionStatusIcon(value: string): { icon: string; text: string } {
+export function splitExtensionStatusIcon(value: string): { icon?: string; text: string } {
 	const trimmed = value.trim();
 	const [firstToken, ...restTokens] = trimmed.split(/\s+/);
 	if (firstToken && isEmojiOnlyToken(firstToken)) {
 		return { icon: firstToken, text: restTokens.join(" ") };
 	}
-	return { icon: "🔌", text: trimmed };
+	return { text: trimmed };
 }
 
 function isEmojiOnlyToken(value: string): boolean {

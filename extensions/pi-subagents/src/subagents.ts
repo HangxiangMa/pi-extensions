@@ -99,19 +99,19 @@ function publishSubagentStatus(ctx: StatusContext) {
 }
 
 function singleStatus(agent: string): string {
-	return `🧑‍🤝‍🧑 ${agent}`;
+	return `${agent}`;
 }
 
 function chainStatus(step: number, total: number, agent?: string): string {
-	return `🧑‍🤝‍🧑 chain ${step}/${total}${agent ? ` ${agent}` : ""}`;
+	return `chain ${step}/${total}${agent ? ` ${agent}` : ""}`;
 }
 
 function parallelStatus(done: number, total: number, running: number): string {
-	return `🧑‍🤝‍🧑 parallel ${done}/${total} done${running > 0 ? ` ${running} running` : ""}`;
+	return `parallel ${done}/${total} done${running > 0 ? ` ${running} running` : ""}`;
 }
 
 function fanInStatus(agent: string): string {
-	return `🧑‍🤝‍🧑 fan-in ${agent}`;
+	return `fan-in ${agent}`;
 }
 
 export function formatTokens(count: number): string {

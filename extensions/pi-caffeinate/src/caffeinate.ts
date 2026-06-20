@@ -61,6 +61,7 @@ interface CaffeinateState {
 	mode: CaffeinateMode;
 	settingsLoaded: boolean;
 	settingsError?: string;
+	iconWarningShown: boolean;
 }
 
 interface CaffeinateSettings {
@@ -74,10 +75,13 @@ const state: CaffeinateState = {
 	disabled: isDisabled(),
 	mode: DEFAULT_MODE,
 	settingsLoaded: false,
+	iconWarningShown: false,
 };
 
 export default function caffeinate(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
+		state.iconWarningShown = false;
+		warnDeprecatedIcon(ctx);
 		await loadSettingsIntoState(ctx);
 		updateStatus(ctx);
 	});
@@ -527,12 +531,12 @@ function updateStatus(ctx: ExtensionContext) {
 	}
 
 	if (state.process) {
-		ctx.ui.setStatus(STATUS_KEY, `${getIcon()} ${statusModeLabel()}`);
+		ctx.ui.setStatus(STATUS_KEY, withDeprecatedIcon(statusModeLabel()));
 		return;
 	}
 
 	if (!state.available) {
-		ctx.ui.setStatus(STATUS_KEY, `${getIcon()} unavailable`);
+		ctx.ui.setStatus(STATUS_KEY, withDeprecatedIcon("unavailable"));
 		return;
 	}
 
@@ -683,6 +687,16 @@ function hasCustomCommand() {
 	return Boolean(process.env.PI_CAFFEINATE_COMMAND?.trim());
 }
 
-function getIcon() {
-	return process.env.PI_CAFFEINATE_ICON?.trim() ?? "💊";
+function withDeprecatedIcon(text: string) {
+	const icon = process.env.PI_CAFFEINATE_ICON?.trim();
+	return icon ? `${icon} ${text}` : text;
+}
+
+function warnDeprecatedIcon(ctx: ExtensionContext) {
+	if (state.iconWarningShown || !process.env.PI_CAFFEINATE_ICON?.trim()) return;
+	state.iconWarningShown = true;
+	ctx.ui.notify(
+		'PI_CAFFEINATE_ICON is deprecated and still works for now. If you use @narumitw/pi-statusline, move this icon to pi-statusline-settings.json: { "extensionStatusIcons": { "caffeinate": "..." } }.',
+		"warning",
+	);
 }

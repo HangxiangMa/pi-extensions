@@ -16,7 +16,7 @@ Pi core intentionally does not ship a built-in plan mode; this package provides 
 - Injects Codex-like Plan mode instructions: explore first, ask decision questions for high-impact ambiguity, do not mutate files, and finish with `<proposed_plan>` only when decision-complete.
 - Adds a required `plan_mode_question` tool so the agent can ask structured Plan-mode questions before finalizing a plan.
 - Detects proposed plan blocks and prompts you to implement, stay in Plan mode, or exit and discard the plan.
-- Shows Plan mode state in Pi's statusline as `📝 plan active` or `📝 plan ready`.
+- Shows Plan mode state in Pi's statusline as `plan active` or `plan ready`; `@narumitw/pi-statusline` adds the default `📝` icon unless configured otherwise.
 - Persists Plan mode state in the Pi session so resume restores the mode.
 
 ## 📦 Install
@@ -79,8 +79,8 @@ After a proposed plan is detected, `/plan` lets you choose whether to implement 
 
 While Plan mode is enabled, the extension also publishes a compact status for Pi statuslines. With `@narumitw/pi-statusline`, this appears in the extension status area:
 
-- `📝 plan active`: Plan mode is enabled and still gathering context or drafting a plan.
-- `📝 plan ready`: A `<proposed_plan>` was detected and remains ready until you implement it, continue planning, or exit Plan mode.
+- `plan active`: Plan mode is enabled and still gathering context or drafting a plan.
+- `plan ready`: A `<proposed_plan>` was detected and remains ready until you implement it, continue planning, or exit Plan mode.
 
 You can also exit directly. Direct exit discards the latest proposed plan instead of treating it as an implementation request:
 

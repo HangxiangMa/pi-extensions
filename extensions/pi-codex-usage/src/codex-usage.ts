@@ -242,12 +242,12 @@ export default function codexUsage(pi: ExtensionAPI) {
 			return;
 		}
 
-		if (!setStatuslineValue(ctx, "📊 checking")) return;
+		if (!setStatuslineValue(ctx, "checking")) return;
 		const result = await queryUsage(ctx, { timeoutMs: DEFAULT_TIMEOUT_MS });
 		if (!sessionActive || requestId !== statuslineRequestId) return;
 
 		if (!result.ok) {
-			if (setStatuslineValue(ctx, "📊 usage error")) {
+			if (setStatuslineValue(ctx, "usage error")) {
 				scheduleStatuslineRefresh(ctx, selectedModel);
 			}
 			return;
@@ -287,7 +287,7 @@ export default function codexUsage(pi: ExtensionAPI) {
 
 				let keepStatusline = false;
 				const statuslineStarted =
-					options.value.statusline && setStatuslineValue(ctx, "📊 checking");
+					options.value.statusline && setStatuslineValue(ctx, "checking");
 				try {
 					const result = await queryUsage(ctx, options.value);
 					if (!result.ok) {
@@ -891,9 +891,9 @@ export function formatCodexUsageStatusline(
 	model?: CodexUsageModel,
 ): string {
 	const snapshot = selectSnapshotForModel(report, model);
-	if (!snapshot) return "📊 usage unavailable";
+	if (!snapshot) return "usage unavailable";
 
-	const parts = [`📊 ${formatStatuslinePrefix(snapshot)}`];
+	const parts = [formatStatuslinePrefix(snapshot)];
 	if (snapshot.primary) parts.push(`${formatRemainingPercent(snapshot.primary)} 5h`);
 	if (snapshot.secondary) parts.push(`${formatRemainingPercent(snapshot.secondary)} wk`);
 	if (parts.length === 1 && snapshot.credits) parts.push(formatCredits(snapshot.credits));

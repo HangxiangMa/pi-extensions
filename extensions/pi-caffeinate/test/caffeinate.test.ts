@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createMockPi } from "../../../test/support.js";
+import { createMockContext, createMockPi } from "../../../test/support.js";
 import caffeinate, {
 	commandCompletions,
 	formatMode,
@@ -51,6 +51,26 @@ test("normalizeCaffeinateSettings accepts only known modes", () => {
 	assert.deepEqual(normalizeCaffeinateSettings({ mode: "sleep" }), { mode: "sleep", updatedAt: 0 });
 	assert.equal(normalizeCaffeinateSettings({ mode: "display", updatedAt: "now" }), undefined);
 	assert.equal(normalizeCaffeinateSettings({ mode: "screen" }), undefined);
+});
+
+test("session start warns for deprecated PI_CAFFEINATE_ICON", async (t) => {
+	const original = process.env.PI_CAFFEINATE_ICON;
+	t.after(() => {
+		if (original === undefined) delete process.env.PI_CAFFEINATE_ICON;
+		else process.env.PI_CAFFEINATE_ICON = original;
+	});
+	process.env.PI_CAFFEINATE_ICON = "☕";
+
+	const mock = createMockPi();
+	caffeinate(mock.pi);
+	const { ctx, notifications } = createMockContext();
+	const handler = mock.events.get("session_start")?.[0];
+
+	await handler?.({}, ctx);
+
+	assert.equal(notifications.length, 1);
+	assert.match(notifications[0]?.message ?? "", /PI_CAFFEINATE_ICON is deprecated/);
+	assert.match(notifications[0]?.message ?? "", /If you use @narumitw\/pi-statusline/);
 });
 
 test("windowsInhibitorScript uses unsigned flags and releases on exit", () => {

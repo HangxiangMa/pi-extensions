@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { createMockPi } from "../../../test/support.js";
 import statusline, {
 	contextColor,
 	extensionColor,
 	formatCount,
+	formatExtensionStatus,
 	formatToolActivity,
 	npmPackageName,
+	readStatuslineSettings,
 	shortenModel,
 	simplifyExtensionStatusText,
 	splitExtensionStatusIcon,
@@ -58,11 +63,43 @@ test("extension status helpers strip prefixes, icons, and simplify text", () => 
 		icon: "🔥",
 		text: "running crawl",
 	});
-	assert.deepEqual(splitExtensionStatusIcon("plain status"), { icon: "🔌", text: "plain status" });
+	assert.deepEqual(splitExtensionStatusIcon("plain status"), { text: "plain status" });
 	assert.equal(stripExtensionStatusPrefix("firecrawl", "firecrawl: ready"), "ready");
 	assert.equal(simplifyExtensionStatusText("ready, missing (details)"), "✓ ✗");
 	assert.equal(extensionColor("codex", "checking"), "accent");
 	assert.equal(extensionColor("lsp", "command missing"), "warning");
+});
+
+test("statusline settings load extension icon overrides", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-test-"));
+	const settingsPath = join(root, "pi-statusline-settings.json");
+
+	assert.deepEqual(readStatuslineSettings(settingsPath), { extensionStatusIcons: {} });
+
+	writeFileSync(
+		settingsPath,
+		JSON.stringify({ extensionStatusIcons: { goal: "", caffeinate: "☕", bad: 1 } }),
+	);
+	assert.deepEqual(readStatuslineSettings(settingsPath), {
+		extensionStatusIcons: { goal: "", caffeinate: "☕" },
+	});
+
+	writeFileSync(settingsPath, "not json");
+	assert.deepEqual(readStatuslineSettings(settingsPath), { extensionStatusIcons: {} });
+});
+
+test("extension status icons use config, leading emoji, defaults, and fallback", () => {
+	const theme = { fg: (_color: string, text: string) => text } as never;
+	const config = (extensionStatusIcons: Record<string, string>) => ({ extensionStatusIcons });
+
+	assert.equal(formatExtensionStatus("goal", "active", theme, config({})), "🎯 active");
+	assert.equal(
+		formatExtensionStatus("caffeinate", "☕ display", theme, config({ caffeinate: "🍵" })),
+		"🍵 display",
+	);
+	assert.equal(formatExtensionStatus("caffeinate", "☕ display", theme, config({})), "☕ display");
+	assert.equal(formatExtensionStatus("goal", "active", theme, config({ goal: "" })), "active");
+	assert.equal(formatExtensionStatus("unknown", "running", theme, config({})), "🔌 running");
 });
 
 test("statusline compact formatting helpers", () => {

@@ -16,7 +16,7 @@ It is designed for long-running coding, refactoring, debugging, web research, an
 - Provides a single `/caffeinate` command with menu-based controls and direct subcommands.
 - Persists the selected keep-awake mode in a small JSON settings file.
 - Allows a custom inhibitor command through environment configuration.
-- Allows a custom status icon through environment configuration.
+- Emits plain status text; `@narumitw/pi-statusline` can add or suppress the status icon from JSON config.
 - Fails safely when no supported inhibitor is available.
 
 ## 📦 Install
@@ -128,11 +128,17 @@ PI_CAFFEINATE_COMMAND='systemd-inhibit --what=idle:sleep --why="pi running" --mo
 
 The custom command is parsed with shell-like quoting and is run directly without a shell. `PI_CAFFEINATE_COMMAND` takes precedence over the saved mode; `/caffeinate status` reports when a custom command is active.
 
-Customise the status bar icon (default: `💊`):
+Deprecated: `PI_CAFFEINATE_ICON` still works for now. If you use `@narumitw/pi-statusline`, move the icon to `${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-statusline-settings.json`:
 
-```bash
-PI_CAFFEINATE_ICON='☕️' pi
+```json
+{
+  "extensionStatusIcons": {
+    "caffeinate": "☕️"
+  }
+}
 ```
+
+Without `@narumitw/pi-statusline`, keep using `PI_CAFFEINATE_ICON` during the compatibility window. In `pi-statusline-settings.json`, use an empty string to show the caffeinate status without an icon.
 
 ## 🧠 Why use pi-caffeinate?
 

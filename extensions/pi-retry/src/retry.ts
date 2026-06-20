@@ -73,11 +73,11 @@ export default function retry(pi: ExtensionAPI) {
 	};
 
 	const showRetryStatus = (ctx: StatusContext) => {
-		setTransientStatus(ctx, "retry", "🔁 retrying", STATUS_VISIBLE_MS);
+		setTransientStatus(ctx, "retry", "retrying", STATUS_VISIBLE_MS);
 	};
 
 	const showIncomingStatus = (ctx: StatusContext) => {
-		setTransientStatus(ctx, "incoming", "📥 receiving", INCOMING_STATUS_VISIBLE_MS);
+		setTransientStatus(ctx, "incoming", "receiving", INCOMING_STATUS_VISIBLE_MS);
 	};
 
 	const clearIncomingStatus = (ctx: StatusContext) => {

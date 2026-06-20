@@ -110,7 +110,7 @@ test("scheduled statusline refresh ignores stale extension contexts", async (t) 
 
 	mock.events.get("session_start")?.[0]?.({}, ctx);
 	await new Promise<void>((resolve) => setImmediate(resolve));
-	assert.equal(statuses.get("codex-usage"), "📊 codex 75% 5h");
+	assert.equal(statuses.get("codex-usage"), "codex 75% 5h");
 
 	let staleModelRegistryReads = 0;
 	const staleError = new Error(
@@ -180,7 +180,7 @@ test("stale refresh errors do not cancel newer session refresh timers", async (t
 	mock.events.get("session_start")?.[0]?.({}, oldCtx);
 	mock.events.get("session_start")?.[0]?.({}, newCtx);
 	await new Promise<void>((resolve) => setImmediate(resolve));
-	assert.equal(statuses.get("codex-usage"), "📊 codex 75% 5h");
+	assert.equal(statuses.get("codex-usage"), "codex 75% 5h");
 
 	rejectOldAuth(staleError);
 	await Promise.resolve();
@@ -188,7 +188,7 @@ test("stale refresh errors do not cancel newer session refresh timers", async (t
 
 	t.mock.timers.tick(5 * 60 * 1000);
 	await new Promise<void>((resolve) => setImmediate(resolve));
-	assert.equal(statuses.get("codex-usage"), "📊 codex 50% 5h");
+	assert.equal(statuses.get("codex-usage"), "codex 50% 5h");
 });
 
 test("stale command statusline writes are ignored", async (t) => {
@@ -286,7 +286,7 @@ test("stale command statusline writes do not cancel newer session refresh timers
 
 	mock.events.get("session_start")?.[0]?.({}, newCtx);
 	await new Promise<void>((resolve) => setImmediate(resolve));
-	assert.equal(statuses.get("codex-usage"), "📊 codex 75% 5h");
+	assert.equal(statuses.get("codex-usage"), "codex 75% 5h");
 
 	const staleError = new Error(
 		"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload().",
@@ -304,7 +304,7 @@ test("stale command statusline writes do not cancel newer session refresh timers
 	await command.handler("", staleCtx);
 	t.mock.timers.tick(5 * 60 * 1000);
 	await new Promise<void>((resolve) => setImmediate(resolve));
-	assert.equal(statuses.get("codex-usage"), "📊 codex 50% 5h");
+	assert.equal(statuses.get("codex-usage"), "codex 50% 5h");
 });
 
 test("isStaleExtensionContextError recognizes Pi stale-context failures", () => {
@@ -334,7 +334,7 @@ test("formatters render report text and model-specific statusline buckets", () =
 			name: "GPT-5.3 Codex Spark",
 			provider: "openai-codex",
 		}),
-		"📊 codex spark 90% 5h",
+		"codex spark 90% 5h",
 	);
-	assert.equal(formatCodexUsageStatusline(report), "📊 codex 40% 5h 20% wk");
+	assert.equal(formatCodexUsageStatusline(report), "codex 40% 5h 20% wk");
 });
