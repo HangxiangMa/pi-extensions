@@ -67,9 +67,9 @@ test("formatStatus reports active, paused, budget-limited, and empty states", ()
 	} as const;
 
 	assert.equal(formatStatus(undefined), undefined);
-	assert.equal(formatStatus(activeGoal), "🎯 active 500/2k");
-	assert.equal(formatStatus({ ...activeGoal, status: "paused" }), "🎯 paused");
-	assert.equal(formatStatus({ ...activeGoal, status: "budget_limited" }), "🎯 budget 500/2k");
+	assert.equal(formatStatus(activeGoal), "active 500/2k");
+	assert.equal(formatStatus({ ...activeGoal, status: "paused" }), "paused");
+	assert.equal(formatStatus({ ...activeGoal, status: "budget_limited" }), "budget 500/2k");
 });
 
 test("buildGoalSystemPrompt escapes objective XML and includes budget rules", () => {

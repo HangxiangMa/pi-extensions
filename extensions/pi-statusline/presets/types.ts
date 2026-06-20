@@ -26,6 +26,7 @@ export interface StatuslineConfig {
 	separator: SeparatorName;
 	showLabels: boolean;
 	segments: SegmentName[];
+	extensionStatusIcons: Record<string, string>;
 }
 
 export interface RenderSegment {

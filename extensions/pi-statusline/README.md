@@ -11,7 +11,7 @@ Use it to monitor model selection, thinking level, git branch, working directory
 - Replaces the default Pi footer with a compact preset-based statusline.
 - Shows model, thinking level, git branch, project directory, active tool, context usage, tokens, cost, and clock.
 - Displays compact statuses published through Pi's generic extension status API.
-- Preserves extension-provided status icons when the status text starts with one.
+- Owns extension status icons through optional JSON config, including per-extension icon suppression with `""`.
 - Warns when the same extension package is installed from multiple sources.
 - Uses emoji-labeled segments for readability in both classic and Tokyo Night presets.
 - Adapts to terminal width and truncates safely.
@@ -49,7 +49,31 @@ Supported presets:
 - `tokyo-night` — the default, inspired by the [Starship Tokyo Night preset](https://starship.rs/presets/tokyo-night), using `░▒▓` / `` powerline blocks and the Tokyo Night color ramp.
 - `classic` — a compact Pi-themed statusline with left-aligned `•` separators.
 
-Unset or invalid values fall back to `tokyo-night`. Both presets keep the same emoji-labeled information and preserve extension-provided status icons.
+Unset or invalid values fall back to `tokyo-night`. Both presets keep the same emoji-labeled information.
+
+## ⚙️ Extension status icons
+
+Extension statuses use built-in icons by status key. Override or suppress them in `${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-statusline-settings.json`:
+
+```json
+{
+  "extensionStatusIcons": {
+    "caffeinate": "☕",
+    "goal": "🎯",
+    "pisync": "☁️",
+    "unknown-error-retry": "",
+    "plan-mode": "📝",
+    "subagents": "🤖"
+  }
+}
+```
+
+- Missing key: use the built-in icon, or `🔌` for an unknown status key.
+- String value: use that string as the icon.
+- Empty string: show the status text without an icon.
+- `PI_STATUSLINE_PRESET` remains the only preset setting; this JSON file only controls extension status icons.
+
+During the `PI_CAFFEINATE_ICON` deprecation window, a leading emoji from `pi-caffeinate` is still used when JSON does not configure `caffeinate`. JSON wins when both are set.
 
 ## 👀 What it shows
 
@@ -68,14 +92,14 @@ The default `tokyo-night` statusline uses a Starship-inspired `░▒▓` / `
 
 Statuses from other extensions appear on their own compact line below the main statusline and use each preset's separator.
 
-`pi-statusline` is extension-agnostic: it consumes Pi's generic extension status API and does not import or depend on status-producing extensions. If an extension wants a custom icon, it should include that icon at the start of its status text, for example `ctx.ui.setStatus("goal", "🎯 active")`. Statuses without a leading icon use the generic `🔌` icon.
+`pi-statusline` is extension-agnostic: it consumes Pi's generic extension status API and does not import or depend on status-producing extensions.
 
 Examples:
 
-- `🔌 active` for a plain status such as `goal: active`.
-- `🎯 active` when the producing extension sets `🎯 active`.
-- `🐍 ty ✓ ruff ✓` when the producing extension sets a Python status with a leading icon.
-- `🧪 running` when any extension publishes an activity status with its own icon.
+- `🎯 active` for `goal: active` using the built-in `goal` icon.
+- `☕ display` when JSON config sets `"caffeinate": "☕"`.
+- `receiving` when JSON config sets `"unknown-error-retry": ""`.
+- `🔌 running` for an unknown extension status key with no configured icon.
 - `⚠️ dup biome-lsp` when local and npm installs register the same extension.
 
 ## 🧠 Use cases

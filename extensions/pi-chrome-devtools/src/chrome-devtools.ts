@@ -193,7 +193,7 @@ const listPagesTool = defineTool({
 	renderCall: renderToolCall("list pages"),
 	renderResult: renderTextResult,
 	async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-		return withStatus(ctx, "🌐 list pages", async () => {
+		return withStatus(ctx, "list pages", async () => {
 			const pages = await listPages();
 			return textResult(JSON.stringify(pages.map(formatPage), null, 2), { pages });
 		});
@@ -211,7 +211,7 @@ const selectPageTool = defineTool({
 	renderCall: renderToolCall("select page"),
 	renderResult: renderTextResult,
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-		return withStatus(ctx, "🌐 select page", async () => {
+		return withStatus(ctx, "select page", async () => {
 			const page = await getPage(params.pageId);
 			state.activePageId = page.id;
 			return textResult(`Selected page ${page.id}: ${page.title}\n${page.url}`, {
@@ -236,7 +236,7 @@ const navigateTool = defineTool({
 	renderCall: renderToolCall("navigate"),
 	renderResult: renderTextResult,
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-		return withStatus(ctx, "🌐 navigate", async () => {
+		return withStatus(ctx, "navigate", async () => {
 			const { created, page } = await resolvePageForNavigation(params.pageId);
 			const result = await withCdp(page, async (client) => {
 				await client.send("Page.enable");
@@ -271,7 +271,7 @@ const evaluateTool = defineTool({
 	renderCall: renderToolCall("evaluate"),
 	renderResult: renderTextResult,
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-		return withStatus(ctx, "🌐 evaluate", async () => {
+		return withStatus(ctx, "evaluate", async () => {
 			const page = await resolvePage(params.pageId);
 			const result = await withCdp(page, (client) =>
 				client.send("Runtime.evaluate", {
@@ -309,7 +309,7 @@ const screenshotTool = defineTool({
 	renderCall: renderToolCall("screenshot"),
 	renderResult: renderScreenshotResult,
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-		return withStatus(ctx, "🌐 screenshot", async () => {
+		return withStatus(ctx, "screenshot", async () => {
 			const page = await resolvePage(params.pageId);
 			const result = await withCdp(page, async (client) => {
 				throwIfAborted(signal);

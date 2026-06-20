@@ -299,7 +299,7 @@ async function showConfig(ctx: ExtensionCommandContext) {
 }
 
 async function status(ctx: ExtensionCommandContext) {
-	ctx.ui.setStatus(STATUS_KEY, "🔄 checking");
+	ctx.ui.setStatus(STATUS_KEY, "checking");
 	const config = await loadConfig();
 	const client = new S3Client(config);
 	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
@@ -330,7 +330,7 @@ async function status(ctx: ExtensionCommandContext) {
 }
 
 async function diff(ctx: ExtensionCommandContext) {
-	ctx.ui.setStatus(STATUS_KEY, "🔄 diff");
+	ctx.ui.setStatus(STATUS_KEY, "diff");
 	const config = await loadConfig();
 	const client = new S3Client(config);
 	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
@@ -395,7 +395,7 @@ async function push(
 	options: CommandOptions,
 	input?: PushInput,
 ) {
-	ctx.ui.setStatus(STATUS_KEY, "🔄 pushing");
+	ctx.ui.setStatus(STATUS_KEY, "pushing");
 	const config = input?.config ?? (await loadConfig());
 	const client = input?.client ?? new S3Client(config);
 	const state = input?.state ?? (await readState(config.profile));
@@ -446,7 +446,7 @@ async function push(
 }
 
 async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: CommandOptions) {
-	ctx.ui.setStatus(STATUS_KEY, "🔄 pulling");
+	ctx.ui.setStatus(STATUS_KEY, "pulling");
 	const config = await loadConfig();
 	const client = new S3Client(config);
 	const state = await readState(config.profile);

@@ -69,13 +69,13 @@ Older versions wrote unfinished goals to `~/.pi/agent/pi-goal-state.json` keyed 
 
 ## 📊 Statusline states
 
-`pi-goal` writes compact status strings for statusline extensions:
+`pi-goal` writes compact plain status strings for statusline extensions. `@narumitw/pi-statusline` adds the default `🎯` icon unless configured otherwise:
 
-- `🎯 active 3m` — an active goal without a token budget.
-- `🎯 active 18k/100k` — an active goal with token usage and budget.
-- `🎯 paused` — auto-continuation is paused.
-- `🎯 budget 100k/100k` — the token budget was reached; auto-continuation stops.
-- `🎯 complete` — shown briefly after `goal_complete` succeeds.
+- `active 3m` — an active goal without a token budget.
+- `active 18k/100k` — an active goal with token usage and budget.
+- `paused` — auto-continuation is paused.
+- `budget 100k/100k` — the token budget was reached; auto-continuation stops.
+- `complete` — shown briefly after `goal_complete` succeeds.
 
 ## ✅ How completion works
 

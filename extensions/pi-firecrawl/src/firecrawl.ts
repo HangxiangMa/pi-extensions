@@ -140,7 +140,7 @@ const scrapeTool = defineTool({
 		location: Type.Optional(Type.Any({ description: "Firecrawl location options." })),
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-		return withStatus(ctx, "🔥 scrape", async () => {
+		return withStatus(ctx, "scrape", async () => {
 			const payload = await firecrawlRequest("POST", "/scrape", cleanObject(params), signal);
 			return jsonResult(payload);
 		});
@@ -178,7 +178,7 @@ const crawlTool = defineTool({
 		webhook: Type.Optional(Type.Any({ description: "Firecrawl webhook configuration." })),
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-		return withStatus(ctx, "🔥 crawl", async () => {
+		return withStatus(ctx, "crawl", async () => {
 			const payload = await firecrawlRequest("POST", "/crawl", cleanObject(params), signal);
 			return jsonResult(payload);
 		});
@@ -194,7 +194,7 @@ const crawlStatusTool = defineTool({
 		id: Type.String({ description: "Crawl job id returned by firecrawl_crawl." }),
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-		return withStatus(ctx, "🔥 crawl status", async () => {
+		return withStatus(ctx, "crawl status", async () => {
 			const payload = await firecrawlRequest(
 				"GET",
 				`/crawl/${encodeURIComponent(params.id)}`,
@@ -226,7 +226,7 @@ const mapTool = defineTool({
 		limit: Type.Optional(Type.Number({ description: "Maximum number of URLs to return." })),
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-		return withStatus(ctx, "🔥 map", async () => {
+		return withStatus(ctx, "map", async () => {
 			const payload = await firecrawlRequest("POST", "/map", cleanObject(params), signal);
 			return jsonResult(payload);
 		});
@@ -250,7 +250,7 @@ const searchTool = defineTool({
 		),
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-		return withStatus(ctx, "🔥 search", async () => {
+		return withStatus(ctx, "search", async () => {
 			const payload = await firecrawlRequest("POST", "/search", cleanObject(params), signal);
 			return jsonResult(payload);
 		});
