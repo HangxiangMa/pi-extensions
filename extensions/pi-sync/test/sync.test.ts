@@ -227,6 +227,14 @@ test("snapshot preflight validates checksums, duplicate session paths, and delet
 		/Unsafe path/,
 	);
 	assert.throws(
+		() => preflightSnapshotApply(root, snapshot([{ path: ".", content }]), current),
+		/Unsafe path/,
+	);
+	assert.throws(
+		() => preflightSnapshotApply(root, snapshot([{ path: "..", content }]), current),
+		/Unsafe path/,
+	);
+	assert.throws(
 		() =>
 			preflightSnapshotApply(
 				root,

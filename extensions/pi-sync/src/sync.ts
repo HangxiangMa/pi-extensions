@@ -1249,6 +1249,8 @@ export function appliedFileHashMap(
 function isSafeSnapshotPath(normalized: string) {
 	return (
 		Boolean(normalized) &&
+		normalized !== "." &&
+		normalized !== ".." &&
 		!normalized.startsWith("../") &&
 		!path.posix.isAbsolute(normalized) &&
 		path.posix.normalize(normalized) === normalized &&
