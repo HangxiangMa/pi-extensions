@@ -12,12 +12,14 @@ import sync, {
 	canPullRemoteSessionsOnFirstSync,
 	collectFiles,
 	encodeKey,
+	filterSnapshotForConfigPolicy,
 	hasRemoteChanges,
 	isCloudflareR2Endpoint,
 	isDeniedPath,
 	isEnabled,
 	isExplicitlyEnabled,
 	loadConfig,
+	mergeRemotePreservedFiles,
 	mergeRemoteSessionFiles,
 	parseOptions,
 	posixJoin,
@@ -271,6 +273,46 @@ test("snapshot preflight validates checksums, duplicate session paths, and delet
 				current,
 			),
 		/Unsafe session path/,
+	);
+});
+
+test("unconfigured extra top-level files are filtered locally and preserved on upload", () => {
+	const settings = { path: "settings.json", content: Buffer.from("settings") };
+	const custom = { path: "LOCAL.md", content: Buffer.from("custom") };
+	const configured = { path: "CONFIGURED.md", content: Buffer.from("configured") };
+	const session = { path: "sessions/--project--/session.jsonl", content: Buffer.from("session") };
+	const remote = { ...snapshot([custom, configured, session, settings]), syncSessions: true };
+	const config = {
+		...requiredConfig(),
+		region: "auto",
+		profile: "default",
+		prefix: "pi-sync",
+		syncSessions: false,
+		extraFiles: ["CONFIGURED.md"],
+	};
+
+	assert.deepEqual(
+		filterSnapshotForConfigPolicy(remote, config)
+			.files.map((file) => file.path)
+			.sort(),
+		["CONFIGURED.md", "settings.json"],
+	);
+	assert.deepEqual(
+		filterSnapshotForConfigPolicy(remote, { ...config, syncSessions: true })
+			.files.map((file) => file.path)
+			.sort(),
+		["CONFIGURED.md", "sessions/--project--/session.jsonl", "settings.json"],
+	);
+	assert.deepEqual(
+		mergeRemotePreservedFiles(snapshot([settings]), remote, config).files.map((file) => file.path),
+		["LOCAL.md", "sessions/--project--/session.jsonl", "settings.json"],
+	);
+	assert.deepEqual(
+		mergeRemotePreservedFiles(snapshot([settings]), remote, {
+			...config,
+			extraFiles: ["CONFIGURED.md", "LOCAL.md"],
+		}).files.map((file) => file.path),
+		["sessions/--project--/session.jsonl", "settings.json"],
 	);
 });
 

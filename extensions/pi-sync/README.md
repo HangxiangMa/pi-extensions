@@ -91,7 +91,7 @@ export PI_SYNC_AUTO_SYNC="true"
 export PI_SYNC_SESSIONS="false" # opt in with true to sync Pi conversation JSONL files
 ```
 
-Set `extraFiles` to additional top-level file names to include beyond the default allowlist.
+Set `extraFiles` to additional top-level file names to include beyond the default allowlist. Machines without a matching `extraFiles` entry preserve those remote files but do not apply or delete them locally.
 
 `PI_SYNC_ACCESS_KEY_ID`, `PI_SYNC_SECRET_ACCESS_KEY`, and `PI_SYNC_SESSION_TOKEN` are local-only credentials. Do not put them in files that pi-sync syncs. `PI_SYNC_SESSION_TOKEN` is optional and only needed for temporary credentials such as AWS STS, AWS SSO, assumed roles, or S3-compatible providers that issue short-lived credentials.
 

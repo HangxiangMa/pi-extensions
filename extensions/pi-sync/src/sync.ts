@@ -415,7 +415,10 @@ async function push(
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
 	const remoteForUpload = await readRemoteSnapshotForSettingsOnlyUpload(client, config, latest, state);
 	if (remoteChangedSinceState(latest, state, config) && !options.force) {
-		if (!remoteForUpload || !settingsHashesMatchState(remoteForUpload, state)) {
+		const remoteForConflict = remoteForUpload
+			? filterSnapshotForConfigPolicy(remoteForUpload, config)
+			: undefined;
+		if (!remoteForConflict || !settingsHashesMatchState(remoteForConflict, state)) {
 			throw new Error("Remote changed since last sync. Run /pisync pull first or /pisync push --force.");
 		}
 	}
@@ -427,12 +430,12 @@ async function push(
 		throw new Error(`Refusing to push possible secrets:\n${secrets.map((s) => `- ${s}`).join("\n")}`);
 	}
 
-	const preservedRemoteSessionCount = Math.max(0, countSessionFiles(upload) - countSessionFiles(local));
+	const preservedRemoteFileCount = countPreservedRemoteFiles(local, upload);
 	if (
 		!options.yes &&
 		!(await ctx.ui.confirm(
 			snapshotIncludesSessions(upload) ? "Push pi settings and sessions?" : "Push pi settings?",
-			formatPushSummary(upload, latest, preservedRemoteSessionCount),
+			formatPushSummary(upload, latest, preservedRemoteFileCount),
 		))
 	) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -583,7 +586,10 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 	const snapshot = await client.getBuffer(snapshotKey(config, target));
 	if (!snapshot.value) throw new Error(`Snapshot not found: ${target}`);
 	const decoded = await decodeSnapshot(snapshot.value);
-	const remote = config.syncSessions ? decoded : snapshotWithoutSessions(decoded);
+	const remote = filterSnapshotForConfigPolicy(
+		config.syncSessions ? decoded : snapshotWithoutSessions(decoded),
+		config,
+	);
 
 	if (
 		!options.yes &&
@@ -930,16 +936,27 @@ function snapshotIncludesSessions(snapshot: Snapshot) {
 	return snapshot.syncSessions === true || snapshot.files.some((file) => isSessionPath(file.path));
 }
 
-function filterSnapshotForSessionPolicy(
-	snapshot: Snapshot | undefined,
-	syncSessions: boolean,
-): Snapshot | undefined {
-	if (!snapshot || syncSessions) return snapshot;
+export function filterSnapshotForConfigPolicy(
+	snapshot: Snapshot,
+	config: Pick<SyncConfig, "syncSessions" | "extraFiles">,
+) {
+	const extraFiles = new Set(normalizeExtraFiles(config.extraFiles));
 	return {
 		...snapshot,
-		syncSessions: false,
-		files: snapshot.files.filter((file) => !isSessionPath(file.path)),
+		syncSessions: config.syncSessions ? snapshot.syncSessions : false,
+		files: snapshot.files.filter((file) => isConfiguredSnapshotPath(file.path, config, extraFiles)),
 	};
+}
+
+function isConfiguredSnapshotPath(
+	relativePath: string,
+	config: Pick<SyncConfig, "syncSessions">,
+	extraFiles: Set<string>,
+) {
+	const normalized = toPosix(relativePath);
+	if (isSessionPath(normalized)) return config.syncSessions;
+	if (!normalized.includes("/")) return TOP_LEVEL_FILES.has(normalized) || extraFiles.has(normalized);
+	return TOP_LEVEL_DIRS.has(normalized.slice(0, normalized.indexOf("/")));
 }
 
 export function snapshotWithoutSessions(snapshot: Snapshot) {
@@ -977,8 +994,9 @@ async function readRemoteSnapshotForSettingsOnlyUpload(
 	latest: RemoteObject<LatestPointer>,
 	state: SyncState,
 ) {
-	if (config.syncSessions || latest.missing || !latest.value) return undefined;
-	if (!latest.value.syncSessions && latest.value.snapshot === state.lastAppliedSnapshot) return undefined;
+	if (latest.missing || !latest.value || latest.value.snapshot === state.lastAppliedSnapshot) {
+		return undefined;
+	}
 	return readRemoteSnapshotRaw(client, config);
 }
 
@@ -989,11 +1007,39 @@ async function snapshotForUpload(
 	latest: RemoteObject<LatestPointer>,
 	remote?: Snapshot,
 ) {
-	if (config.syncSessions || latest.missing || !latest.value || latest.value.syncSessions === false) {
-		return local;
-	}
+	if (latest.missing || !latest.value) return local;
 	const snapshot = remote ?? (await readRemoteSnapshotRaw(client, config));
-	return snapshot ? mergeRemoteSessionFiles(local, snapshot) : local;
+	return snapshot ? mergeRemotePreservedFiles(local, snapshot, config) : local;
+}
+
+export function mergeRemotePreservedFiles(
+	local: Snapshot,
+	remote: Snapshot,
+	config: Pick<SyncConfig, "syncSessions" | "extraFiles">,
+) {
+	const withSessions = config.syncSessions ? local : mergeRemoteSessionFiles(local, remote);
+	const paths = new Set(withSessions.files.map((file) => file.path));
+	const extraFiles = new Set(normalizeExtraFiles(config.extraFiles));
+	const remoteExtras = remote.files.filter((file) => {
+		const normalized = toPosix(file.path);
+		return (
+			!paths.has(normalized) &&
+			isSafeSnapshotPath(normalized) &&
+			!normalized.includes("/") &&
+			!TOP_LEVEL_FILES.has(normalized) &&
+			!extraFiles.has(normalized)
+		);
+	});
+	if (remoteExtras.length === 0) return withSessions;
+	return {
+		...withSessions,
+		id: snapshotId(),
+		createdAt: new Date().toISOString(),
+		machine: os.hostname(),
+		files: [...withSessions.files, ...remoteExtras].sort((left, right) =>
+			left.path.localeCompare(right.path),
+		),
+	};
 }
 
 export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
@@ -1036,7 +1082,8 @@ async function uploadSnapshot(
 }
 
 async function readRemoteSnapshot(client: S3Client, config: SyncConfig) {
-	return filterSnapshotForSessionPolicy(await readRemoteSnapshotRaw(client, config), config.syncSessions);
+	const snapshot = await readRemoteSnapshotRaw(client, config);
+	return snapshot ? filterSnapshotForConfigPolicy(snapshot, config) : undefined;
 }
 
 async function readRemoteSnapshotRaw(client: S3Client, config: SyncConfig) {
@@ -1100,13 +1147,7 @@ export function preflightSnapshotApply(
 
 	for (const file of snapshot.files) {
 		const normalized = toPosix(file.path);
-		if (
-			!normalized ||
-			normalized.startsWith("../") ||
-			path.posix.isAbsolute(normalized) ||
-			path.posix.normalize(normalized) !== normalized ||
-			isDeniedPath(normalized)
-		) {
+		if (!isSafeSnapshotPath(normalized)) {
 			throw new Error(`Unsafe path in snapshot: ${file.path}`);
 		}
 		if (isSessionPath(normalized) && !isSessionFilePath(normalized)) {
@@ -1174,6 +1215,16 @@ export function appliedFileHashMap(
 	return hashes;
 }
 
+function isSafeSnapshotPath(normalized: string) {
+	return (
+		Boolean(normalized) &&
+		!normalized.startsWith("../") &&
+		!path.posix.isAbsolute(normalized) &&
+		path.posix.normalize(normalized) === normalized &&
+		!isDeniedPath(normalized)
+	);
+}
+
 function decodeBase64Strict(value: string, filePath: string) {
 	if (!/^[A-Za-z0-9+/]*={0,2}$/.test(value) || value.length % 4 !== 0) {
 		throw new Error(`Invalid base64 content in snapshot file: ${filePath}`);
@@ -1229,13 +1280,13 @@ function formatSnapshotOnlyDiff(title: string, snapshot: Snapshot) {
 function formatPushSummary(
 	local: Snapshot,
 	latest: RemoteObject<LatestPointer>,
-	preservedRemoteSessionCount = 0,
+	preservedRemoteFileCount = 0,
 ) {
 	return [
 		`Upload ${local.files.length} files from ${agentDir()}.`,
 		latest.value ? `Remote latest: ${latest.value.snapshot}` : "Remote latest: empty",
-		preservedRemoteSessionCount > 0
-			? `Possible secrets in local files were scanned before this prompt; ${preservedRemoteSessionCount} preserved remote session file(s) were not rescanned.`
+		preservedRemoteFileCount > 0
+			? `Possible secrets in local files were scanned before this prompt; ${preservedRemoteFileCount} preserved remote file(s) were not rescanned.`
 			: "Possible secrets were scanned before this prompt.",
 	].join("\n");
 }
@@ -1277,8 +1328,9 @@ function fileHashMap(snapshot: Snapshot) {
 	return Object.fromEntries(snapshot.files.map((file) => [file.path, file.sha256]));
 }
 
-function countSessionFiles(snapshot: Snapshot) {
-	return snapshot.files.filter((file) => isSessionPath(file.path)).length;
+function countPreservedRemoteFiles(local: Snapshot, upload: Snapshot) {
+	const localPaths = new Set(local.files.map((file) => file.path));
+	return upload.files.filter((file) => !localPaths.has(file.path)).length;
 }
 
 export function settingsHashMap(snapshot: Snapshot) {
