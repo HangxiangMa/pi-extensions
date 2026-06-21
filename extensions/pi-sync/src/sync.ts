@@ -964,7 +964,10 @@ export function filterSnapshotForConfigPolicy(
 	const filtered = {
 		...snapshot,
 		syncSessions: config.syncSessions ? snapshot.syncSessions : false,
-		files: snapshot.files.filter((file) => isConfiguredSnapshotPath(file.path, config, extraFiles)),
+		files: snapshot.files.filter((file) => {
+			const normalized = toPosix(file.path);
+			return isSafeSnapshotPath(normalized) && isConfiguredSnapshotPath(normalized, config, extraFiles);
+		}),
 	};
 	if (!options.regenerateId || snapshotHashesMatch(snapshot, filtered)) return filtered;
 	return {
@@ -1074,9 +1077,10 @@ export function mergeRemotePreservedFiles(
 }
 
 export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
-	const remoteSessions = remote.files.filter(
-		(file) => isSessionFilePath(file.path) && !isDeniedPath(file.path),
-	);
+	const remoteSessions = remote.files.filter((file) => {
+		const normalized = toPosix(file.path);
+		return isSessionFilePath(normalized) && isSafeSnapshotPath(normalized);
+	});
 	if (remoteSessions.length === 0 && !snapshotIncludesSessions(remote)) return local;
 	return {
 		...local,
@@ -1873,6 +1877,7 @@ function normalizeExtraFiles(value: unknown) {
 				item !== "" &&
 				!item.includes("/") &&
 				!item.includes("\\") &&
+				!isDeniedPath(item) &&
 				!TOP_LEVEL_DIRS.has(lower) &&
 				lower !== "sessions"
 			);
