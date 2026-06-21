@@ -3,6 +3,7 @@ import test from "node:test";
 import { createMockPi } from "../../../test/support.js";
 import goal, {
 	buildGoalSystemPrompt,
+	completeGoalArguments,
 	findFinalAssistantMessage,
 	formatDuration,
 	formatStatus,
@@ -17,6 +18,7 @@ test("goal registers command, completion tool, and lifecycle hooks", () => {
 	goal(mock.pi);
 
 	assert.ok(mock.commands.has("goal"));
+	assert.equal(typeof mock.commands.get("goal")?.getArgumentCompletions, "function");
 	assert.equal(mock.tools[0]?.name, "goal_complete");
 	assert.deepEqual([...mock.events.keys()].sort(), [
 		"agent_end",
@@ -25,6 +27,35 @@ test("goal registers command, completion tool, and lifecycle hooks", () => {
 		"session_shutdown",
 		"session_start",
 	]);
+});
+
+test("completeGoalArguments suggests /goal subcommands and token options", () => {
+	assert.deepEqual(
+		completeGoalArguments("")?.map((item) => item.label),
+		["pause", "resume", "clear", "edit", "status", "--tokens"],
+	);
+	assert.deepEqual(
+		completeGoalArguments("pa")?.map((item) => item.value),
+		["pause"],
+	);
+	assert.deepEqual(
+		completeGoalArguments("pause")?.map((item) => item.value),
+		["pause"],
+	);
+	assert.deepEqual(
+		completeGoalArguments("--t")?.map((item) => item.value),
+		["--tokens "],
+	);
+	assert.deepEqual(
+		completeGoalArguments("edit ")?.map((item) => item.value),
+		["edit --tokens "],
+	);
+	assert.deepEqual(
+		completeGoalArguments("edit --t")?.map((item) => item.value),
+		["edit --tokens "],
+	);
+	assert.equal(completeGoalArguments("ship objective"), null);
+	assert.equal(completeGoalArguments("edit objective"), null);
 });
 
 test("parseCommand parses budgets, quoted objectives, and management commands", () => {
