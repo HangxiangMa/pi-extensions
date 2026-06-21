@@ -49,6 +49,12 @@ interface CommandResult {
 	tokenBudget?: number;
 }
 
+interface GoalArgumentCompletion {
+	value: string;
+	label: string;
+	description?: string;
+}
+
 interface StatusContext {
 	cwd: string;
 	ui: {
@@ -66,6 +72,19 @@ const GOAL_STATE_ENTRY_TYPE = "goal-state";
 const MAX_OBJECTIVE_LENGTH = 4_000;
 const MAX_CANCELLED_CONTINUATION_PROMPTS = 20;
 const CONTINUATION_MARKER_PREFIX = "pi-goal-continuation:";
+const GOAL_ARGUMENT_COMPLETIONS: readonly GoalArgumentCompletion[] = [
+	{ value: "pause", label: "pause", description: "Pause the active goal" },
+	{ value: "resume", label: "resume", description: "Resume a paused or budget-limited goal" },
+	{ value: "clear", label: "clear", description: "Clear the current goal" },
+	{ value: "edit", label: "edit", description: "Edit the current goal objective" },
+	{ value: "status", label: "status", description: "Show the current goal" },
+	{ value: "--tokens ", label: "--tokens", description: "Set a token budget before the goal" },
+];
+const EDIT_TOKEN_COMPLETION: GoalArgumentCompletion = {
+	value: "edit --tokens ",
+	label: "--tokens",
+	description: "Set a token budget before the updated goal",
+};
 const STATE_FILE = join(
 	process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent"),
 	"pi-goal-state.json",
@@ -123,6 +142,7 @@ export default function goal(pi: ExtensionAPI) {
 
 	pi.registerCommand("goal", {
 		description: "Run a goal to completion: /goal [--tokens 100k] <goal_to_complete>",
+		getArgumentCompletions: completeGoalArguments,
 		handler: async (args, ctx) => {
 			const result = parseCommand(args);
 			if (typeof result === "string") {
@@ -404,6 +424,25 @@ function updateGoalUsage(goal: ActiveGoal, ctx: StatusContext) {
 	goal.tokensUsed = Math.max(0, currentTokenTotal(ctx) - goal.baselineTokens);
 	goal.timeUsedSeconds = Math.max(0, Math.floor((Date.now() - goal.startedAt) / 1000));
 	goal.updatedAt = Date.now();
+}
+
+export function completeGoalArguments(argumentPrefix: string): GoalArgumentCompletion[] | null {
+	const prefix = argumentPrefix.trimStart();
+	if (prefix === "") return [...GOAL_ARGUMENT_COMPLETIONS];
+
+	const editOptionPrefix = /^edit\s+(\S*)$/.exec(prefix)?.[1];
+	if (editOptionPrefix !== undefined) {
+		return editOptionPrefix === "" || "--tokens".startsWith(editOptionPrefix)
+			? [EDIT_TOKEN_COMPLETION]
+			: null;
+	}
+
+	if (/\s/.test(prefix)) return null;
+
+	const matches = GOAL_ARGUMENT_COMPLETIONS.filter(
+		(item) => item.value.startsWith(prefix) || item.label.startsWith(prefix),
+	);
+	return matches.length > 0 ? [...matches] : null;
 }
 
 export function parseCommand(args: string): CommandResult | string {
