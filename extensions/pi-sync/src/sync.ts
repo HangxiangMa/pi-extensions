@@ -434,7 +434,7 @@ async function push(
 	const upload = await snapshotForUpload(client, config, local, latest, remoteForUpload, {
 		preserveRemote: !options.force,
 	});
-	const secrets = scanSnapshot(upload);
+	const secrets = scanSnapshot(local);
 	if (secrets.length > 0) {
 		throw new Error(`Refusing to push possible secrets:\n${secrets.map((s) => `- ${s}`).join("\n")}`);
 	}
@@ -1429,7 +1429,7 @@ function formatPushSummary(
 		`Upload ${local.files.length} files from ${agentDir()}.`,
 		latest.value ? `Remote latest: ${latest.value.snapshot}` : "Remote latest: empty",
 		preservedRemoteFileCount > 0
-			? `Possible secrets in all uploaded files were scanned before this prompt, including ${preservedRemoteFileCount} preserved remote file(s).`
+			? `Possible secrets in locally managed files were scanned before this prompt; ${preservedRemoteFileCount} preserved remote file(s) were not rescanned.`
 			: "Possible secrets were scanned before this prompt.",
 	].join("\n");
 }
