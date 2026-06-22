@@ -211,6 +211,12 @@ test("snapshot collection includes session jsonl files only when enabled", async
 		(await collectFiles(root)).map((file) => file.path),
 		["APPEND_SYSTEM.md", "settings.json", "skills/demo.md"],
 	);
+	const caseRoot = mkdtempSync(path.join(os.tmpdir(), "pi-sync-collect-case-"));
+	writeFileSync(path.join(caseRoot, "append_system.md"), "append\n");
+	assert.deepEqual(
+		(await collectFiles(caseRoot)).map((file) => file.path),
+		["APPEND_SYSTEM.md"],
+	);
 	assert.deepEqual(
 		(await collectFiles(root, { extraFiles: ["LOCAL.md"] })).map((file) => file.path),
 		["APPEND_SYSTEM.md", "LOCAL.md", "settings.json", "skills/demo.md"],
@@ -366,6 +372,13 @@ test("unconfigured extra top-level files are filtered locally and preserved on u
 		"CONFIGURED.md",
 		"settings.json",
 	]);
+	assert.deepEqual(
+		filterSnapshotForConfigPolicy(
+			snapshot([{ path: "append_system.md", content: Buffer.from("append") }]),
+			config,
+		).files.map((file) => file.path),
+		["APPEND_SYSTEM.md"],
+	);
 	assert.notEqual(
 		filterSnapshotForConfigPolicy(remote, config, { regenerateId: true }).id,
 		remote.id,

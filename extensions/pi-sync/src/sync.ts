@@ -29,7 +29,8 @@ const TOP_LEVEL_FILES = new Set([
 	"APPEND_SYSTEM.md",
 ]);
 const TOP_LEVEL_DIRS = new Set(["skills", "prompts", "themes", "extensions"]);
-const TOP_LEVEL_FILE_NAMES = new Set([...TOP_LEVEL_FILES].map((name) => name.toLowerCase()));
+const TOP_LEVEL_FILE_PATHS = new Map([...TOP_LEVEL_FILES].map((name) => [name.toLowerCase(), name]));
+const TOP_LEVEL_FILE_NAMES = new Set(TOP_LEVEL_FILE_PATHS.keys());
 const RESERVED_TOP_LEVEL_NAMES = new Set([...TOP_LEVEL_DIRS, "sessions"]);
 const SECRET_PATTERNS = [
 	/AWS_SECRET_ACCESS_KEY\s*[=:]\s*['\"]?[A-Za-z0-9/+]{35,}/i,
@@ -416,7 +417,9 @@ async function push(
 	const local = input?.local ?? (await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config)));
 
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
-	const remoteForUpload = await readRemoteSnapshotForUpload(client, config, latest, state);
+	const remoteForUpload = options.force
+		? undefined
+		: await readRemoteSnapshotForUpload(client, config, latest, state);
 	if (remoteChangedSinceState(latest, state, config) && !options.force) {
 		const remoteForConflict = remoteForUpload
 			? filterSnapshotForConfigPolicy(remoteForUpload, config)
@@ -428,8 +431,10 @@ async function push(
 		}
 	}
 
-	const upload = await snapshotForUpload(client, config, local, latest, remoteForUpload);
-	const secrets = scanSnapshot(local);
+	const upload = await snapshotForUpload(client, config, local, latest, remoteForUpload, {
+		preserveRemote: !options.force,
+	});
+	const secrets = scanSnapshot(upload);
 	if (secrets.length > 0) {
 		throw new Error(`Refusing to push possible secrets:\n${secrets.map((s) => `- ${s}`).join("\n")}`);
 	}
@@ -528,7 +533,7 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 	const remoteChanged = remote ? hasRemoteChanges(remote, state, config) : false;
 	const firstSync = !state.lastAppliedSnapshot;
 
-	if (firstSync && remote && local.files.length > 0) {
+	if (firstSync && remote && remote.files.length > 0 && local.files.length > 0) {
 		if (!canPullRemoteSettingsOnFirstSync(local, remote)) {
 			throw new Error("Remote settings exist and this machine has different local Pi settings. Run /pisync diff, then manually choose /pisync pull or /pisync push.");
 		}
@@ -643,7 +648,9 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 		extraFiles: config.extraFiles,
 	});
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
-	const upload = await snapshotForUpload(client, config, remote, latest);
+	const upload = await snapshotForUpload(client, config, remote, latest, undefined, {
+		ignoreUnreadableRemote: true,
+	});
 	const encoded = upload.id === decoded.id ? snapshot.value : await encodeSnapshot(upload);
 	if (upload.id !== decoded.id) {
 		await client.putBuffer(snapshotKey(config, upload.id), encoded, "application/gzip");
@@ -862,14 +869,16 @@ export async function collectFiles(
 	const results: SnapshotFile[] = [];
 	const entries = await fs.readdir(root, { withFileTypes: true });
 	for (const entry of entries) {
-		if (entry.isFile() && TOP_LEVEL_FILES.has(entry.name)) {
-			await addFile(results, root, entry.name);
-		} else if (entry.isDirectory() && TOP_LEVEL_DIRS.has(entry.name)) {
+		if (entry.isDirectory() && TOP_LEVEL_DIRS.has(entry.name)) {
 			await collectDirectory(results, root, entry.name);
 		}
 	}
+	for (const fileName of TOP_LEVEL_FILES) {
+		const entry = selectTopLevelFileEntry(entries, fileName);
+		if (entry) await addFile(results, root, entry.name, fileName);
+	}
 	for (const extraFileName of normalizeExtraFiles(options.extraFiles)) {
-		const entry = selectExtraFileEntry(entries, extraFileName);
+		const entry = selectTopLevelFileEntry(entries, extraFileName);
 		if (entry) await addFile(results, root, entry.name, extraFileName);
 	}
 	if (options.syncSessions) {
@@ -1002,7 +1011,10 @@ function isConfiguredSnapshotPath(
 ) {
 	const normalized = toPosix(relativePath);
 	if (isSessionPath(normalized)) return config.syncSessions;
-	if (!normalized.includes("/")) return TOP_LEVEL_FILES.has(normalized) || extraFiles.has(normalized.toLowerCase());
+	if (!normalized.includes("/")) {
+		const lower = normalized.toLowerCase();
+		return TOP_LEVEL_FILE_NAMES.has(lower) || extraFiles.has(lower);
+	}
 	return TOP_LEVEL_DIRS.has(normalized.slice(0, normalized.indexOf("/")));
 }
 
@@ -1022,19 +1034,19 @@ function canonicalizeSnapshotFilesForConfig(
 		if (!isSafeSnapshotPath(file.path) || !isConfiguredSnapshotPath(normalized, config, extraFiles)) {
 			continue;
 		}
-		const extraPath = configuredExtraPath(normalized, extraFilePaths);
-		if (!extraPath) {
+		const topLevelPath = canonicalTopLevelFilePath(normalized, extraFilePaths);
+		if (!topLevelPath) {
 			configuredFiles.push(normalized === file.path ? file : { ...file, path: normalized });
 			continue;
 		}
 		const candidate = {
-			exact: normalized === extraPath,
-			file: { ...file, path: extraPath },
+			exact: normalized === topLevelPath,
+			file: { ...file, path: topLevelPath },
 			originalPath: normalized,
 		};
-		const current = extraCandidates.get(extraPath.toLowerCase());
+		const current = extraCandidates.get(topLevelPath.toLowerCase());
 		if (!current || isPreferredExtraCandidate(candidate, current)) {
-			extraCandidates.set(extraPath.toLowerCase(), candidate);
+			extraCandidates.set(topLevelPath.toLowerCase(), candidate);
 		}
 	}
 	return [
@@ -1043,14 +1055,15 @@ function canonicalizeSnapshotFilesForConfig(
 	].sort((left, right) => left.path.localeCompare(right.path));
 }
 
-function configuredExtraPath(relativePath: string, extraFilePaths: Map<string, string>) {
+function canonicalTopLevelFilePath(relativePath: string, extraFilePaths: Map<string, string>) {
 	const normalized = toPosix(relativePath);
-	if (normalized.includes("/") || TOP_LEVEL_FILES.has(normalized)) return undefined;
-	return extraFilePaths.get(normalized.toLowerCase());
+	if (normalized.includes("/")) return undefined;
+	const lower = normalized.toLowerCase();
+	return TOP_LEVEL_FILE_PATHS.get(lower) ?? extraFilePaths.get(lower);
 }
 
 function canonicalSnapshotPathForConfig(relativePath: string, extraFilePaths: Map<string, string>) {
-	return configuredExtraPath(relativePath, extraFilePaths) ?? toPosix(relativePath);
+	return canonicalTopLevelFilePath(relativePath, extraFilePaths) ?? toPosix(relativePath);
 }
 
 function isPreferredExtraCandidate(
@@ -1112,9 +1125,18 @@ async function snapshotForUpload(
 	local: Snapshot,
 	latest: RemoteObject<LatestPointer>,
 	remote?: Snapshot,
+	options: { preserveRemote?: boolean; ignoreUnreadableRemote?: boolean } = {},
 ) {
-	if (latest.missing || !latest.value) return local;
-	const snapshot = remote ?? (await readRemoteSnapshotRaw(client, config));
+	if (options.preserveRemote === false || latest.missing || !latest.value) return local;
+	let snapshot = remote;
+	if (!snapshot) {
+		try {
+			snapshot = await readRemoteSnapshotRaw(client, config);
+		} catch (error) {
+			if (options.ignoreUnreadableRemote) return local;
+			throw error;
+		}
+	}
 	return snapshot ? mergeRemotePreservedFiles(local, snapshot, config) : local;
 }
 
@@ -1407,7 +1429,7 @@ function formatPushSummary(
 		`Upload ${local.files.length} files from ${agentDir()}.`,
 		latest.value ? `Remote latest: ${latest.value.snapshot}` : "Remote latest: empty",
 		preservedRemoteFileCount > 0
-			? `Possible secrets in local files were scanned before this prompt; ${preservedRemoteFileCount} preserved remote file(s) were not rescanned.`
+			? `Possible secrets in all uploaded files were scanned before this prompt, including ${preservedRemoteFileCount} preserved remote file(s).`
 			: "Possible secrets were scanned before this prompt.",
 	].join("\n");
 }
@@ -1989,7 +2011,7 @@ function extraFilePathsByLower(value: unknown) {
 	return new Map(normalizeExtraFiles(value).map((fileName) => [fileName.toLowerCase(), fileName]));
 }
 
-function selectExtraFileEntry(entries: Dirent[], fileName: string) {
+function selectTopLevelFileEntry(entries: Dirent[], fileName: string) {
 	const exact = entries.find((entry) => entry.isFile() && entry.name === fileName);
 	if (exact) return exact;
 	const lower = fileName.toLowerCase();
