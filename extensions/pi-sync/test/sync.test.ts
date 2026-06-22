@@ -13,6 +13,7 @@ import sync, {
 	canPullRemoteSessionsOnFirstSync,
 	canPullRemoteSettingsOnFirstSync,
 	collectFiles,
+	completeSyncArguments,
 	encodeKey,
 	filterSnapshotForConfigPolicy,
 	hasRemoteChanges,
@@ -42,7 +43,59 @@ test("sync registers pisync command and session lifecycle hooks", () => {
 	sync(mock.pi);
 
 	assert.ok(mock.commands.has("pisync"));
+	assert.equal(typeof mock.commands.get("pisync")?.getArgumentCompletions, "function");
 	assert.deepEqual([...mock.events.keys()].sort(), ["session_shutdown", "session_start"]);
+});
+
+test("completeSyncArguments suggests commands and useful flags", () => {
+	assert.deepEqual(
+		completeSyncArguments("")?.map((item) => item.label),
+		[
+			"help",
+			"init",
+			"config",
+			"status",
+			"diff",
+			"doctor",
+			"push",
+			"pull",
+			"sync",
+			"history",
+			"rollback",
+			"unlock",
+		],
+	);
+	assert.deepEqual(
+		completeSyncArguments("pu")?.map((item) => item.value),
+		["push", "pull"],
+	);
+	assert.deepEqual(
+		completeSyncArguments("push ")?.map((item) => item.value),
+		["push --yes", "push -y", "push --force"],
+	);
+	assert.deepEqual(
+		completeSyncArguments("pull --f")?.map((item) => item.value),
+		["pull --force"],
+	);
+	assert.deepEqual(
+		completeSyncArguments("sync -")?.map((item) => item.value),
+		["sync --yes", "sync -y", "sync --force"],
+	);
+	assert.deepEqual(
+		completeSyncArguments("push --yes --f")?.map((item) => item.value),
+		["push --yes --force"],
+	);
+	assert.deepEqual(
+		completeSyncArguments("rollback 2026-06-22 --y")?.map((item) => item.value),
+		["rollback 2026-06-22 --yes"],
+	);
+	assert.deepEqual(
+		completeSyncArguments("unlock --s")?.map((item) => item.value),
+		["unlock --stale"],
+	);
+	assert.equal(completeSyncArguments("status "), null);
+	assert.equal(completeSyncArguments("push snapshot"), null);
+	assert.equal(completeSyncArguments("wat"), null);
 });
 
 test("syncSessions config defaults off and supports file plus env overrides", async () => {
