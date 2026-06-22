@@ -29,6 +29,8 @@ const TOP_LEVEL_FILES = new Set([
 	"APPEND_SYSTEM.md",
 ]);
 const TOP_LEVEL_DIRS = new Set(["skills", "prompts", "themes", "extensions"]);
+const TOP_LEVEL_FILE_NAMES = new Set([...TOP_LEVEL_FILES].map((name) => name.toLowerCase()));
+const RESERVED_TOP_LEVEL_NAMES = new Set([...TOP_LEVEL_DIRS, "sessions"]);
 const SECRET_PATTERNS = [
 	/AWS_SECRET_ACCESS_KEY\s*[=:]\s*['\"]?[A-Za-z0-9/+]{35,}/i,
 	/(ANTHROPIC|OPENAI|GEMINI|GOOGLE|FIRECRAWL|GITHUB|CLOUDFLARE|R2|S3)_[A-Z0-9_]*(KEY|TOKEN|SECRET)\s*[=:]\s*['\"]?[^\s'\"]{12,}/i,
@@ -427,13 +429,12 @@ async function push(
 	}
 
 	const upload = await snapshotForUpload(client, config, local, latest, remoteForUpload);
-	const scanTarget = config.syncSessions ? upload : local;
-	const secrets = scanSnapshot(scanTarget);
+	const secrets = scanSnapshot(local);
 	if (secrets.length > 0) {
 		throw new Error(`Refusing to push possible secrets:\n${secrets.map((s) => `- ${s}`).join("\n")}`);
 	}
 
-	const preservedRemoteFileCount = config.syncSessions ? 0 : countPreservedRemoteFiles(local, upload);
+	const preservedRemoteFileCount = countPreservedRemoteFiles(local, upload);
 	if (
 		!options.yes &&
 		!(await ctx.ui.confirm(
@@ -1069,11 +1070,13 @@ export function mergeRemotePreservedFiles(
 	const extraFiles = new Set(normalizeExtraFiles(config.extraFiles));
 	const remoteExtras = remote.files.filter((file) => {
 		const normalized = toPosix(file.path);
+		const lower = normalized.toLowerCase();
 		return (
 			!paths.has(normalized) &&
 			isSafeSnapshotPath(file.path) &&
 			!normalized.includes("/") &&
-			!TOP_LEVEL_FILES.has(normalized) &&
+			!TOP_LEVEL_FILE_NAMES.has(lower) &&
+			!RESERVED_TOP_LEVEL_NAMES.has(lower) &&
 			!extraFiles.has(normalized)
 		);
 	});
@@ -1893,10 +1896,9 @@ function normalizeExtraFiles(value: unknown) {
 				item !== "" &&
 				!item.includes("/") &&
 				!item.includes("\\") &&
-				!TOP_LEVEL_FILES.has(item) &&
+				!TOP_LEVEL_FILE_NAMES.has(lower) &&
 				!isDeniedPath(item) &&
-				!TOP_LEVEL_DIRS.has(lower) &&
-				lower !== "sessions"
+				!RESERVED_TOP_LEVEL_NAMES.has(lower)
 			);
 		});
 	return [...new Set(files)];

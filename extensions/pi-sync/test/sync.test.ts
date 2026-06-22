@@ -87,7 +87,9 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 					"skills",
 					"SESSIONS",
 					"settings.json",
+					"Settings.json",
 					"AGENTS.md",
+					"append_system.md",
 					".env",
 					"pi-sync.local.json",
 					"secret.txt",
@@ -313,8 +315,18 @@ test("unconfigured extra top-level files are filtered locally and preserved on u
 	const configured = { path: "CONFIGURED.md", content: Buffer.from("configured") };
 	const session = { path: "sessions/--project--/session.jsonl", content: Buffer.from("session") };
 	const unsafeSession = { path: "sessions/../evil.jsonl", content: Buffer.from("evil") };
+	const reservedExtra = { path: "skills", content: Buffer.from("reserved") };
+	const builtInCaseExtra = { path: "Settings.json", content: Buffer.from("duplicate") };
 	const remote = {
-		...snapshot([custom, configured, session, unsafeSession, settings]),
+		...snapshot([
+			custom,
+			configured,
+			session,
+			unsafeSession,
+			reservedExtra,
+			builtInCaseExtra,
+			settings,
+		]),
 		syncSessions: true,
 	};
 	const config = {
