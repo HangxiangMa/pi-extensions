@@ -92,6 +92,8 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 					"Settings.json",
 					"AGENTS.md",
 					"append_system.md",
+					".",
+					"..",
 					".env",
 					"pi-sync.local.json",
 					"secret.txt",
@@ -189,6 +191,7 @@ test("snapshot collection includes session jsonl files only when enabled", async
 	mkdirSync(path.join(root, "sessions", "token-project"), { recursive: true });
 	writeFileSync(path.join(root, "APPEND_SYSTEM.md"), "append\n");
 	writeFileSync(path.join(root, "LOCAL.md"), "local\n");
+	writeFileSync(path.join(root, "local-case.md"), "local case\n");
 	writeFileSync(path.join(root, "settings.json"), "{}\n");
 	writeFileSync(path.join(root, "skills", "demo.md"), "demo\n");
 	if (path.sep === "/") writeFileSync(path.join(root, "skills", "foo\\bar.md"), "skip\n");
@@ -205,6 +208,10 @@ test("snapshot collection includes session jsonl files only when enabled", async
 	assert.deepEqual(
 		(await collectFiles(root, { extraFiles: ["LOCAL.md"] })).map((file) => file.path),
 		["APPEND_SYSTEM.md", "LOCAL.md", "settings.json", "skills/demo.md"],
+	);
+	assert.deepEqual(
+		(await collectFiles(root, { extraFiles: ["LOCAL-CASE.md"] })).map((file) => file.path),
+		["APPEND_SYSTEM.md", "LOCAL-CASE.md", "settings.json", "skills/demo.md"],
 	);
 	assert.deepEqual(
 		(await collectFiles(root, { syncSessions: true })).map((file) => file.path),
@@ -366,6 +373,14 @@ test("unconfigured extra top-level files are filtered locally and preserved on u
 			extraFiles: ["CONFIGURED.md", "LOCAL.md"],
 		}).files.map((file) => file.path),
 		["sessions/--project--/session.jsonl", "settings.json"],
+	);
+	assert.deepEqual(
+		mergeRemotePreservedFiles(
+			snapshot([settings, { path: "local.md", content: Buffer.from("local") }]),
+			remote,
+			config,
+		).files.map((file) => file.path),
+		["local.md", "sessions/--project--/session.jsonl", "settings.json"],
 	);
 	assert.equal(
 		hasRemoteChanges(

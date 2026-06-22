@@ -416,7 +416,7 @@ async function push(
 	const local = input?.local ?? (await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config)));
 
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
-	const remoteForUpload = await readRemoteSnapshotForSettingsOnlyUpload(client, config, latest, state);
+	const remoteForUpload = await readRemoteSnapshotForUpload(client, config, latest, state);
 	if (remoteChangedSinceState(latest, state, config) && !options.force) {
 		const remoteForConflict = remoteForUpload
 			? filterSnapshotForConfigPolicy(remoteForUpload, config)
@@ -860,11 +860,13 @@ export async function collectFiles(
 	options: SnapshotOptions = {},
 ): Promise<SnapshotFile[]> {
 	const results: SnapshotFile[] = [];
-	const extraFiles = new Set(normalizeExtraFiles(options.extraFiles));
+	const extraFiles = extraFileNamesByLower(options.extraFiles);
 	for (const entry of await fs.readdir(root, { withFileTypes: true })) {
-		const isTopLevelFile = TOP_LEVEL_FILES.has(entry.name) || extraFiles.has(entry.name);
-		if (entry.isFile() && isTopLevelFile) {
+		const extraFileName = extraFiles.get(entry.name.toLowerCase());
+		if (entry.isFile() && TOP_LEVEL_FILES.has(entry.name)) {
 			await addFile(results, root, entry.name);
+		} else if (entry.isFile() && extraFileName) {
+			await addFile(results, root, entry.name, extraFileName);
 		} else if (entry.isDirectory() && TOP_LEVEL_DIRS.has(entry.name)) {
 			await collectDirectory(results, root, entry.name);
 		}
@@ -1032,7 +1034,7 @@ export function scanSnapshot(snapshot: Snapshot) {
 	return findings;
 }
 
-async function readRemoteSnapshotForSettingsOnlyUpload(
+async function readRemoteSnapshotForUpload(
 	client: S3Client,
 	config: SyncConfig,
 	latest: RemoteObject<LatestPointer>,
@@ -1067,18 +1069,26 @@ export function mergeRemotePreservedFiles(
 ) {
 	const withSessions = config.syncSessions ? local : mergeRemoteSessionFiles(local, remote);
 	const paths = new Set(withSessions.files.map((file) => file.path));
-	const extraFiles = new Set(normalizeExtraFiles(config.extraFiles));
+	const pathNames = new Set(withSessions.files.map((file) => file.path.toLowerCase()));
+	const extraFileNames = new Set(normalizeExtraFiles(config.extraFiles).map((file) => file.toLowerCase()));
+	const seenRemoteExtraNames = new Set<string>();
 	const remoteExtras = remote.files.filter((file) => {
 		const normalized = toPosix(file.path);
 		const lower = normalized.toLowerCase();
-		return (
-			!paths.has(normalized) &&
-			isSafeSnapshotPath(file.path) &&
-			!normalized.includes("/") &&
-			!TOP_LEVEL_FILE_NAMES.has(lower) &&
-			!RESERVED_TOP_LEVEL_NAMES.has(lower) &&
-			!extraFiles.has(normalized)
-		);
+		if (
+			paths.has(normalized) ||
+			pathNames.has(lower) ||
+			!isSafeSnapshotPath(file.path) ||
+			normalized.includes("/") ||
+			TOP_LEVEL_FILE_NAMES.has(lower) ||
+			RESERVED_TOP_LEVEL_NAMES.has(lower) ||
+			extraFileNames.has(lower) ||
+			seenRemoteExtraNames.has(lower)
+		) {
+			return false;
+		}
+		seenRemoteExtraNames.add(lower);
+		return true;
 	});
 	if (remoteExtras.length === 0) return withSessions;
 	return {
@@ -1902,6 +1912,8 @@ function normalizeExtraFiles(value: unknown) {
 			const lower = item.toLowerCase();
 			if (
 				item === "" ||
+				item === "." ||
+				item === ".." ||
 				item.includes("/") ||
 				item.includes("\\") ||
 				TOP_LEVEL_FILE_NAMES.has(lower) ||
@@ -1914,6 +1926,10 @@ function normalizeExtraFiles(value: unknown) {
 			seen.add(lower);
 			return true;
 		});
+}
+
+function extraFileNamesByLower(value: unknown) {
+	return new Map(normalizeExtraFiles(value).map((fileName) => [fileName.toLowerCase(), fileName]));
 }
 
 function hasEnv(name: string) {
