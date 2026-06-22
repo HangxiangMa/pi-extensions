@@ -7,6 +7,7 @@ import test from "node:test";
 import { gunzipSync } from "node:zlib";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import sync, {
+	addTopLevelCaseVariantDeletes,
 	appliedFileHashMap,
 	backupLocal,
 	canPullRemoteSessionsOnFirstSync,
@@ -344,6 +345,18 @@ test("snapshot preflight validates checksums, duplicate session paths, and delet
 			),
 		/Unsafe session path/,
 	);
+});
+
+test("snapshot apply deletes stale top-level case variants", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-sync-apply-case-"));
+	writeFileSync(path.join(root, "append_system.md"), "old\n");
+	const remote = snapshot([{ path: "APPEND_SYSTEM.md", content: Buffer.from("new\n") }]);
+	const current = snapshot([{ path: "APPEND_SYSTEM.md", content: Buffer.from("old\n") }]);
+	const plan = preflightSnapshotApply(root, remote, current);
+	assert.deepEqual(plan.deletes, []);
+
+	const withCaseDeletes = await addTopLevelCaseVariantDeletes(root, plan, remote);
+	assert.deepEqual(withCaseDeletes.deletes, [path.join(root, "append_system.md")]);
 });
 
 test("unconfigured extra top-level files are filtered locally and preserved on upload", () => {

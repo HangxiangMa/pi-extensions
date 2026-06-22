@@ -1257,11 +1257,15 @@ async function applySnapshot(
 		sessionDir,
 		extraFiles: options.extraFiles,
 	});
-	const plan = protectSnapshotApplyPlan(
+	const plan = await addTopLevelCaseVariantDeletes(
 		root,
-		preflightSnapshotApply(root, snapshot, current, { sessionDir }),
-		protectedRelativePaths,
-		sessionDir,
+		protectSnapshotApplyPlan(
+			root,
+			preflightSnapshotApply(root, snapshot, current, { sessionDir }),
+			protectedRelativePaths,
+			sessionDir,
+		),
+		snapshot,
 	);
 	await preflightSnapshotMutations(root, plan, sessionDir);
 	for (const target of plan.deletes) {
@@ -1333,6 +1337,38 @@ export function protectSnapshotApplyPlan(
 		writes: plan.writes.filter((item) => !protectedTargets.has(item.target)),
 		deletes: plan.deletes.filter((target) => !protectedTargets.has(target)),
 	};
+}
+
+export async function addTopLevelCaseVariantDeletes(
+	root: string,
+	plan: SnapshotApplyPlan,
+	snapshot: Pick<Snapshot, "files">,
+): Promise<SnapshotApplyPlan> {
+	const topLevelPaths = new Map<string, string>();
+	for (const file of snapshot.files) {
+		const normalized = toPosix(file.path);
+		if (!normalized.includes("/") && isSafeSnapshotPath(file.path)) {
+			topLevelPaths.set(normalized.toLowerCase(), normalized);
+		}
+	}
+	if (topLevelPaths.size === 0) return plan;
+
+	let entries: Dirent[];
+	try {
+		entries = await fs.readdir(root, { withFileTypes: true });
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return plan;
+		throw error;
+	}
+
+	const deletes = new Set(plan.deletes);
+	for (const entry of entries) {
+		const canonicalPath = topLevelPaths.get(entry.name.toLowerCase());
+		if (canonicalPath && entry.name !== canonicalPath) {
+			deletes.add(safeJoin(root, entry.name));
+		}
+	}
+	return { ...plan, deletes: [...deletes] };
 }
 
 export function appliedFileHashMap(
