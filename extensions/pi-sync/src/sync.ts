@@ -979,7 +979,7 @@ export function filterSnapshotForConfigPolicy(
 		syncSessions: config.syncSessions ? snapshot.syncSessions : false,
 		files: snapshot.files.filter((file) => {
 			const normalized = toPosix(file.path);
-			return isSafeSnapshotPath(normalized) && isConfiguredSnapshotPath(normalized, config, extraFiles);
+			return isSafeSnapshotPath(file.path) && isConfiguredSnapshotPath(normalized, config, extraFiles);
 		}),
 	};
 	if (!options.regenerateId || snapshotsMatch(snapshot, filtered)) return filtered;
@@ -1071,7 +1071,7 @@ export function mergeRemotePreservedFiles(
 		const normalized = toPosix(file.path);
 		return (
 			!paths.has(normalized) &&
-			isSafeSnapshotPath(normalized) &&
+			isSafeSnapshotPath(file.path) &&
 			!normalized.includes("/") &&
 			!TOP_LEVEL_FILES.has(normalized) &&
 			!extraFiles.has(normalized)
@@ -1092,7 +1092,7 @@ export function mergeRemotePreservedFiles(
 export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
 	const remoteSessions = remote.files.filter((file) => {
 		const normalized = toPosix(file.path);
-		return isSessionFilePath(normalized) && isSafeSnapshotPath(normalized);
+		return isSessionFilePath(normalized) && isSafeSnapshotPath(file.path);
 	});
 	if (remoteSessions.length === 0 && !snapshotIncludesSessions(remote)) return local;
 	return {
@@ -1195,7 +1195,7 @@ export function preflightSnapshotApply(
 
 	for (const file of snapshot.files) {
 		const normalized = toPosix(file.path);
-		if (!isSafeSnapshotPath(normalized)) {
+		if (!isSafeSnapshotPath(file.path)) {
 			throw new Error(`Unsafe path in snapshot: ${file.path}`);
 		}
 		if (isSessionPath(normalized) && !isSessionFilePath(normalized)) {
@@ -1263,13 +1263,14 @@ export function appliedFileHashMap(
 	return hashes;
 }
 
-function isSafeSnapshotPath(normalized: string) {
+function isSafeSnapshotPath(relativePath: string) {
+	if (relativePath.includes("\\")) return false;
+	const normalized = toPosix(relativePath);
 	return (
 		Boolean(normalized) &&
 		normalized !== "." &&
 		normalized !== ".." &&
 		!normalized.startsWith("../") &&
-		!normalized.includes("\\") &&
 		!path.posix.isAbsolute(normalized) &&
 		path.posix.normalize(normalized) === normalized &&
 		!isDeniedPath(normalized)
