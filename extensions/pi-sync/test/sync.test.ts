@@ -1,23 +1,27 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { gunzipSync } from "node:zlib";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import sync, {
+	addTopLevelCaseVariantDeletes,
 	appliedFileHashMap,
 	backupLocal,
 	canPullRemoteSessionsOnFirstSync,
+	canPullRemoteSettingsOnFirstSync,
 	collectFiles,
 	encodeKey,
+	filterSnapshotForConfigPolicy,
 	hasRemoteChanges,
 	isCloudflareR2Endpoint,
 	isDeniedPath,
 	isEnabled,
 	isExplicitlyEnabled,
 	loadConfig,
+	mergeRemotePreservedFiles,
 	mergeRemoteSessionFiles,
 	parseOptions,
 	posixJoin,
@@ -63,6 +67,48 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 		});
 		await withEnv({ PI_SYNC_SESSIONS: "yes" }, async () => {
 			assert.equal((await loadConfig()).syncSessions, true);
+		});
+
+		rmSync(path.join(agentDir, "pi-sync.local.json"));
+		writeFileSync(
+			path.join(agentDir, "pi-sync.local.json"),
+			JSON.stringify({ ...requiredConfig(), extraFiles: "APPEND_SYSTEM.md" }),
+		);
+		await withEnv({}, async () => {
+			assert.deepEqual((await loadConfig()).extraFiles, []);
+		});
+		writeFileSync(
+			path.join(agentDir, "pi-sync.local.json"),
+			JSON.stringify({
+				...requiredConfig(),
+				extraFiles: [
+					"LOCAL.md",
+					"LOCAL.md",
+					"local.md",
+					"skills/demo.md",
+					"nested\\x",
+					"skills",
+					"SESSIONS",
+					"settings.json",
+					"Settings.json",
+					"AGENTS.md",
+					"append_system.md",
+					".",
+					"..",
+					".git",
+					"node_modules",
+					".pisync",
+					".env",
+					"pi-sync.local.json",
+					"secret.txt",
+					"token.json",
+					1,
+					"",
+				],
+			}),
+		);
+		await withEnv({}, async () => {
+			assert.deepEqual((await loadConfig()).extraFiles, ["LOCAL.md"]);
 		});
 
 		const customAgentDir = path.join(agentDir, "custom-agent");
@@ -136,6 +182,9 @@ test("path and key helpers normalize safe names and reject escapes", () => {
 	assert.equal(safeJoin(root, "skills/demo.md"), path.join(root, "skills", "demo.md"));
 	assert.throws(() => safeJoin(root, "../escape"), /Unsafe path/);
 	assert.equal(isDeniedPath("skills/.env.local"), true);
+	assert.equal(isDeniedPath(".git"), true);
+	assert.equal(isDeniedPath("node_modules"), true);
+	assert.equal(isDeniedPath(".pisync"), true);
 	assert.equal(isDeniedPath("skills/demo.md"), false);
 	assert.equal(encodeKey("a b/c+d"), "a%20b/c%2Bd");
 	assert.equal(posixJoin("/prefix/", "profile", "/latest.json"), "prefix/profile/latest.json");
@@ -147,8 +196,12 @@ test("snapshot collection includes session jsonl files only when enabled", async
 	mkdirSync(path.join(root, "skills"), { recursive: true });
 	mkdirSync(path.join(root, "sessions", "--project--"), { recursive: true });
 	mkdirSync(path.join(root, "sessions", "token-project"), { recursive: true });
+	writeFileSync(path.join(root, "APPEND_SYSTEM.md"), "append\n");
+	writeFileSync(path.join(root, "LOCAL.md"), "local\n");
+	writeFileSync(path.join(root, "local-case.md"), "local case\n");
 	writeFileSync(path.join(root, "settings.json"), "{}\n");
 	writeFileSync(path.join(root, "skills", "demo.md"), "demo\n");
+	if (path.sep === "/") writeFileSync(path.join(root, "skills", "foo\\bar.md"), "skip\n");
 	writeFileSync(path.join(root, "sessions", "--project--", "session.jsonl"), "{}\n");
 	writeFileSync(path.join(root, "sessions", "--project--", "notes.txt"), "skip\n");
 	writeFileSync(path.join(root, "sessions", "token-project", "session.jsonl"), "skip\n");
@@ -157,17 +210,46 @@ test("snapshot collection includes session jsonl files only when enabled", async
 
 	assert.deepEqual(
 		(await collectFiles(root)).map((file) => file.path),
-		["settings.json", "skills/demo.md"],
+		["APPEND_SYSTEM.md", "settings.json", "skills/demo.md"],
+	);
+	const caseRoot = mkdtempSync(path.join(os.tmpdir(), "pi-sync-collect-case-"));
+	writeFileSync(path.join(caseRoot, "append_system.md"), "append\n");
+	assert.deepEqual(
+		(await collectFiles(caseRoot)).map((file) => file.path),
+		["APPEND_SYSTEM.md"],
 	);
 	assert.deepEqual(
+		(await collectFiles(root, { extraFiles: ["LOCAL.md"] })).map((file) => file.path),
+		["APPEND_SYSTEM.md", "LOCAL.md", "settings.json", "skills/demo.md"],
+	);
+	assert.deepEqual(
+		(await collectFiles(root, { extraFiles: ["LOCAL-CASE.md"] })).map((file) => file.path),
+		["APPEND_SYSTEM.md", "LOCAL-CASE.md", "settings.json", "skills/demo.md"],
+	);
+	writeFileSync(path.join(root, "LOCAL-CASE.md"), "local exact case\n");
+	if (readdirSync(root).includes("LOCAL-CASE.md")) {
+		const exactCaseFiles = await collectFiles(root, { extraFiles: ["LOCAL-CASE.md"] });
+		assert.deepEqual(
+			exactCaseFiles.map((file) => file.path),
+			["APPEND_SYSTEM.md", "LOCAL-CASE.md", "settings.json", "skills/demo.md"],
+		);
+		assert.equal(
+			Buffer.from(
+				exactCaseFiles.find((file) => file.path === "LOCAL-CASE.md")?.contentBase64 ?? "",
+				"base64",
+			).toString("utf8"),
+			"local exact case\n",
+		);
+	}
+	assert.deepEqual(
 		(await collectFiles(root, { syncSessions: true })).map((file) => file.path),
-		["sessions/--project--/session.jsonl", "settings.json", "skills/demo.md"],
+		["APPEND_SYSTEM.md", "sessions/--project--/session.jsonl", "settings.json", "skills/demo.md"],
 	);
 	assert.deepEqual(
 		(await collectFiles(root, { syncSessions: true, sessionDir: customSessionDir })).map(
 			(file) => file.path,
 		),
-		["sessions/custom.jsonl", "settings.json", "skills/demo.md"],
+		["APPEND_SYSTEM.md", "sessions/custom.jsonl", "settings.json", "skills/demo.md"],
 	);
 	const nestedSessionDir = path.join(root, "sessions", "work");
 	mkdirSync(nestedSessionDir, { recursive: true });
@@ -176,7 +258,7 @@ test("snapshot collection includes session jsonl files only when enabled", async
 		(await collectFiles(root, { syncSessions: true, sessionDir: nestedSessionDir })).map(
 			(file) => file.path,
 		),
-		["sessions/nested.jsonl", "settings.json", "skills/demo.md"],
+		["APPEND_SYSTEM.md", "sessions/nested.jsonl", "settings.json", "skills/demo.md"],
 	);
 });
 
@@ -197,6 +279,19 @@ test("snapshot preflight validates checksums, duplicate session paths, and delet
 	assert.deepEqual(plan.deletes, [path.join(root, "sessions", "--project--", "old.jsonl")]);
 	assert.throws(
 		() => preflightSnapshotApply(root, snapshot([{ path: "../bad", content }]), current),
+		/Unsafe path/,
+	);
+	assert.throws(
+		() => preflightSnapshotApply(root, snapshot([{ path: ".", content }]), current),
+		/Unsafe path/,
+	);
+	assert.throws(
+		() => preflightSnapshotApply(root, snapshot([{ path: "..", content }]), current),
+		/Unsafe path/,
+	);
+	assert.throws(
+		() =>
+			preflightSnapshotApply(root, snapshot([{ path: "sessions\\bad.jsonl", content }]), current),
 		/Unsafe path/,
 	);
 	assert.throws(
@@ -249,6 +344,146 @@ test("snapshot preflight validates checksums, duplicate session paths, and delet
 				current,
 			),
 		/Unsafe session path/,
+	);
+});
+
+test("snapshot apply deletes stale top-level case variants", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-sync-apply-case-"));
+	writeFileSync(path.join(root, "append_system.md"), "old\n");
+	const remote = snapshot([{ path: "APPEND_SYSTEM.md", content: Buffer.from("new\n") }]);
+	const current = snapshot([{ path: "APPEND_SYSTEM.md", content: Buffer.from("old\n") }]);
+	const plan = preflightSnapshotApply(root, remote, current);
+	assert.deepEqual(plan.deletes, []);
+
+	const withCaseDeletes = await addTopLevelCaseVariantDeletes(root, plan, remote);
+	assert.deepEqual(withCaseDeletes.deletes, [path.join(root, "append_system.md")]);
+
+	const directoryRoot = mkdtempSync(path.join(os.tmpdir(), "pi-sync-apply-case-dir-"));
+	mkdirSync(path.join(directoryRoot, "append_system.md"));
+	const directoryPlan = preflightSnapshotApply(directoryRoot, remote, current);
+	const withoutDirectoryDelete = await addTopLevelCaseVariantDeletes(
+		directoryRoot,
+		directoryPlan,
+		remote,
+	);
+	assert.deepEqual(withoutDirectoryDelete.deletes, []);
+});
+
+test("unconfigured extra top-level files are filtered locally and preserved on upload", () => {
+	const settings = { path: "settings.json", content: Buffer.from("settings") };
+	const custom = { path: "LOCAL.md", content: Buffer.from("custom") };
+	const configured = { path: "CONFIGURED.md", content: Buffer.from("configured") };
+	const session = { path: "sessions/--project--/session.jsonl", content: Buffer.from("session") };
+	const unsafeSession = { path: "sessions/../evil.jsonl", content: Buffer.from("evil") };
+	const reservedExtra = { path: "skills", content: Buffer.from("reserved") };
+	const builtInCaseExtra = { path: "Settings.json", content: Buffer.from("duplicate") };
+	const remote = {
+		...snapshot([
+			custom,
+			configured,
+			session,
+			unsafeSession,
+			reservedExtra,
+			builtInCaseExtra,
+			settings,
+		]),
+		syncSessions: true,
+	};
+	const config = {
+		...requiredConfig(),
+		region: "auto",
+		profile: "default",
+		prefix: "pi-sync",
+		syncSessions: false,
+		extraFiles: ["CONFIGURED.md"],
+	};
+
+	const filtered = filterSnapshotForConfigPolicy(remote, config);
+	assert.deepEqual(filtered.files.map((file) => file.path).sort(), [
+		"CONFIGURED.md",
+		"settings.json",
+	]);
+	assert.deepEqual(
+		filterSnapshotForConfigPolicy(
+			snapshot([{ path: "append_system.md", content: Buffer.from("append") }]),
+			config,
+		).files.map((file) => file.path),
+		["APPEND_SYSTEM.md"],
+	);
+	assert.notEqual(
+		filterSnapshotForConfigPolicy(remote, config, { regenerateId: true }).id,
+		remote.id,
+	);
+	assert.deepEqual(
+		filterSnapshotForConfigPolicy(remote, { ...config, syncSessions: true })
+			.files.map((file) => file.path)
+			.sort(),
+		["CONFIGURED.md", "sessions/--project--/session.jsonl", "settings.json"],
+	);
+	const lowerCaseRemoteExtra = filterSnapshotForConfigPolicy(
+		snapshot([{ path: "local.md", content: Buffer.from("local") }]),
+		{
+			...config,
+			extraFiles: ["LOCAL.md"],
+		},
+	);
+	assert.deepEqual(
+		lowerCaseRemoteExtra.files.map((file) => file.path),
+		["LOCAL.md"],
+	);
+	assert.equal(
+		hasRemoteChanges(
+			lowerCaseRemoteExtra,
+			{
+				version: 1,
+				profile: "default",
+				lastAppliedSnapshot: lowerCaseRemoteExtra.id,
+				lastFileHashes: Object.fromEntries(
+					snapshot([{ path: "local.md", content: Buffer.from("local") }]).files.map((file) => [
+						file.path,
+						file.sha256,
+					]),
+				),
+				extraFiles: ["LOCAL.md"],
+			},
+			{ ...config, extraFiles: ["LOCAL.md"] },
+		),
+		false,
+	);
+	assert.deepEqual(
+		mergeRemotePreservedFiles(snapshot([settings]), remote, config).files.map((file) => file.path),
+		["LOCAL.md", "sessions/--project--/session.jsonl", "settings.json"],
+	);
+	assert.deepEqual(
+		mergeRemotePreservedFiles(snapshot([settings]), remote, {
+			...config,
+			extraFiles: ["CONFIGURED.md", "LOCAL.md"],
+		}).files.map((file) => file.path),
+		["sessions/--project--/session.jsonl", "settings.json"],
+	);
+	assert.deepEqual(
+		mergeRemotePreservedFiles(
+			snapshot([settings, { path: "local.md", content: Buffer.from("local") }]),
+			remote,
+			config,
+		).files.map((file) => file.path),
+		["local.md", "sessions/--project--/session.jsonl", "settings.json"],
+	);
+	assert.equal(
+		hasRemoteChanges(
+			filtered,
+			{
+				version: 1,
+				profile: "default",
+				lastAppliedSnapshot: remote.id,
+				lastFileHashes: Object.fromEntries(
+					snapshot([settings]).files.map((file) => [file.path, file.sha256]),
+				),
+				extraFiles: [],
+			},
+			config,
+		),
+		true,
 	);
 });
 
@@ -316,6 +551,7 @@ test("settings hash maps ignore session differences for first sync checks", () =
 
 	assert.equal(settingsHashesMatchState(remote, state), true);
 	assert.equal(hasRemoteChanges(remote, state, config), false);
+	assert.equal(hasRemoteChanges(remote, state, { ...config, syncSessions: true }), true);
 	assert.equal(
 		hasRemoteChanges(
 			snapshot([{ path: "settings.json", content: Buffer.from("changed") }]),
@@ -326,13 +562,28 @@ test("settings hash maps ignore session differences for first sync checks", () =
 	);
 });
 
-test("first sync only auto-pulls remote sessions when local sessions are not at risk", () => {
+test("first sync only auto-pulls remote files when local files are not at risk", () => {
+	const settings = { path: "settings.json", content: Buffer.from("settings") };
+	const appendSystem = { path: "APPEND_SYSTEM.md", content: Buffer.from("append") };
+	const changedSettings = { path: "settings.json", content: Buffer.from("changed") };
 	const remoteOnly = snapshot([
 		{ path: "sessions/--project--/remote.jsonl", content: Buffer.from("r") },
 	]);
 	const shared = { path: "sessions/--project--/shared.jsonl", content: Buffer.from("same") };
 	const changed = { path: "sessions/--project--/shared.jsonl", content: Buffer.from("changed") };
 
+	assert.equal(
+		canPullRemoteSettingsOnFirstSync(snapshot([settings]), snapshot([settings, appendSystem])),
+		true,
+	);
+	assert.equal(
+		canPullRemoteSettingsOnFirstSync(snapshot([settings]), snapshot([changedSettings])),
+		false,
+	);
+	assert.equal(
+		canPullRemoteSettingsOnFirstSync(snapshot([appendSystem]), snapshot([settings])),
+		false,
+	);
 	assert.equal(canPullRemoteSessionsOnFirstSync(snapshot([]), remoteOnly), true);
 	assert.equal(canPullRemoteSessionsOnFirstSync(snapshot([shared]), snapshot([shared])), true);
 	assert.equal(canPullRemoteSessionsOnFirstSync(snapshot([shared]), remoteOnly), false);
@@ -394,6 +645,34 @@ test("protected session apply plans keep the live session file", () => {
 		hashes["settings.json"],
 		remote.files.find((file) => file.path === "settings.json")?.sha256,
 	);
+	const config = {
+		...requiredConfig(),
+		region: "auto",
+		profile: "default",
+		prefix: "pi-sync",
+		syncSessions: true,
+	};
+	const protectedState = {
+		version: 1,
+		profile: "default",
+		lastAppliedSnapshot: remote.id,
+		lastFileHashes: hashes,
+		syncSessions: true,
+		extraFiles: [],
+	};
+	assert.equal(hasRemoteChanges(remote, protectedState, config), false);
+
+	const advancedRemote = { ...remote, id: "advanced" };
+	assert.equal(hasRemoteChanges(advancedRemote, protectedState, config), true);
+	assert.equal(
+		hasRemoteChanges(
+			advancedRemote,
+			protectedState,
+			config,
+			new Set(["sessions/--project--/live.jsonl"]),
+		),
+		false,
+	);
 });
 
 test("session backups include session jsonl files when enabled", async () => {
@@ -453,6 +732,7 @@ function requiredConfig() {
 		bucket: "pi-sync-test",
 		accessKeyId: "access-key",
 		secretAccessKey: "secret-key",
+		extraFiles: [],
 	};
 }
 
