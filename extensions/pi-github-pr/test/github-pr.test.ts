@@ -163,6 +163,20 @@ test("runGhPrView calls gh pr view for the current branch and reports actionable
 		),
 		/No GitHub pull request found/,
 	);
+	await assert.rejects(
+		runGhPrView(
+			{
+				exec: async () => ({
+					stdout: "",
+					stderr: "HTTP 404: Not Found",
+					code: 1,
+					killed: false,
+				}),
+			},
+			"/repo",
+		),
+		/gh pr view failed/,
+	);
 });
 
 test("lifecycle refresh sets and clears only statusline output", async () => {
@@ -209,11 +223,18 @@ test("ambient failures stay non-intrusive", async () => {
 		code: 1,
 		killed: false,
 	}));
+	const notFound = await lifecycleStatusFor(async () => ({
+		stdout: "",
+		stderr: "HTTP 404: Not Found",
+		code: 1,
+		killed: false,
+	}));
 
 	assert.equal(missingGh.statuses.get("github-pr"), "PR gh missing");
 	assert.equal(unauthenticated.statuses.get("github-pr"), "PR gh auth");
 	assert.equal(noPr.statuses.get("github-pr"), undefined);
-	for (const context of [missingGh, unauthenticated, noPr]) {
+	assert.equal(notFound.statuses.get("github-pr"), undefined);
+	for (const context of [missingGh, unauthenticated, noPr, notFound]) {
 		assert.equal(context.widgets.size, 0);
 		assert.equal(context.notifications.length, 0);
 	}

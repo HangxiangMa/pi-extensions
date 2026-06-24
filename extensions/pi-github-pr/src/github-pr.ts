@@ -261,7 +261,7 @@ function renderAmbientFailure(ctx: ExtensionContext, error: unknown) {
 	const message = formatError(error);
 	const lower = message.toLowerCase();
 
-	if (/not available|not found|enoent|spawn gh/.test(lower)) {
+	if (isGhExecutableMissingMessage(lower)) {
 		ctx.ui.setStatus(STATUS_KEY, "PR gh missing");
 		return;
 	}
@@ -276,7 +276,7 @@ function renderAmbientFailure(ctx: ExtensionContext, error: unknown) {
 function formatGhFailure(result: ExecResult): string {
 	const output = (result.stderr || result.stdout).trim();
 	const lower = output.toLowerCase();
-	if (/not found|enoent|spawn gh/.test(lower)) {
+	if (isGhExecutableMissingMessage(lower)) {
 		return "GitHub CLI not found. Install gh and run: gh auth login.";
 	}
 	if (/not logged in|authentication|auth login|gh auth/.test(lower)) {
@@ -286,6 +286,17 @@ function formatGhFailure(result: ExecResult): string {
 		return `No GitHub pull request found. ${output}`;
 	}
 	return `gh pr view failed (${result.code}): ${output || "no output"}`;
+}
+
+function isGhExecutableMissingMessage(lowerMessage: string): boolean {
+	return (
+		/\bgithub cli (?:not available|not found)\b/.test(lowerMessage) ||
+		/\bspawn gh\b/.test(lowerMessage) ||
+		/\b(?:gh|gh\.exe)\b.*\benoent\b|\benoent\b.*\b(?:gh|gh\.exe)\b/.test(lowerMessage) ||
+		/\b(?:gh|gh\.exe): (?:command )?not found\b/.test(lowerMessage) ||
+		/\bcommand not found: (?:gh|gh\.exe)\b/.test(lowerMessage) ||
+		/\b(?:gh|gh\.exe): no such file or directory\b/.test(lowerMessage)
+	);
 }
 
 function formatError(error: unknown): string {
