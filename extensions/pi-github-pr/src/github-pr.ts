@@ -39,12 +39,25 @@ const GH_TIMEOUT_MS = 10_000;
 const GH_PR_FIELDS = [
 	"number",
 	"isDraft",
+	"url",
 	"reviewDecision",
 	"latestReviews",
-	"reviews",
-	"comments",
 	"statusCheckRollup",
 ];
+const GH_PR_COUNT_QUERY = `
+	query PullRequestCounts($owner: String!, $name: String!, $number: Int!) {
+		repository(owner: $owner, name: $name) {
+			pullRequest(number: $number) {
+				comments {
+					totalCount
+				}
+				reviews {
+					totalCount
+				}
+			}
+		}
+	}
+`;
 
 export default function githubPr(pi: ExtensionAPI) {
 	const refreshStatus = async (ctx: ExtensionContext, signal?: AbortSignal) => {
@@ -75,33 +88,26 @@ export async function runGhPrView(
 	signal?: AbortSignal,
 ): Promise<PullRequestStatus> {
 	const args = ["pr", "view", "--json", GH_PR_FIELDS.join(",")];
-	let result: ExecResult;
-
-	try {
-		result = await pi.exec("gh", args, { cwd, signal, timeout: GH_TIMEOUT_MS });
-	} catch (error) {
-		const message = formatError(error);
-		if (isGhExecutableMissingMessage(message.toLowerCase())) {
-			throw new Error(`GitHub CLI not found. Install gh and run: gh auth login. ${message}`);
-		}
-		throw new Error(`gh pr view could not start: ${message}`);
-	}
-
+	const result = await execGh(pi, args, cwd, signal, "gh pr view");
 	if (result.killed) throw new Error("gh pr view timed out or was cancelled.");
-	if (result.code !== 0) throw new Error(formatGhFailure(result));
+	if (result.code !== 0) throw new Error(formatGhFailure("gh pr view", result));
 
+	let pr: JsonRecord;
 	try {
-		return normalizeGhPrView(JSON.parse(result.stdout));
+		pr = objectRecord(JSON.parse(result.stdout));
 	} catch (error) {
 		throw new Error(`Failed to parse gh pr view output: ${formatError(error)}`);
 	}
+
+	const counts = await runGhPrCountQuery(pi, cwd, pr, signal);
+	return normalizeGhPrView({ ...pr, ...counts });
 }
 
 export function normalizeGhPrView(value: unknown): PullRequestStatus {
 	const pr = objectRecord(value);
 	const reviews = arrayValue(pr.reviews);
 	const latestReviews = arrayValue(pr.latestReviews);
-	const comments = summarizeComments(pr.comments, reviews.length);
+	const comments = summarizeComments(pr.comments, countValue(pr.reviews));
 
 	return {
 		number: requiredNumber(pr.number, "number"),
@@ -280,7 +286,69 @@ function renderAmbientFailure(ctx: ExtensionContext, error: unknown) {
 	clearStatus(ctx);
 }
 
-function formatGhFailure(result: ExecResult): string {
+async function runGhPrCountQuery(
+	pi: Pick<ExtensionAPI, "exec">,
+	cwd: string,
+	pr: JsonRecord,
+	signal?: AbortSignal,
+): Promise<Pick<JsonRecord, "comments" | "reviews">> {
+	const { owner, name, number } = parsePrCoordinates(pr);
+	const result = await execGh(
+		pi,
+		[
+			"api",
+			"graphql",
+			"-f",
+			`query=${GH_PR_COUNT_QUERY}`,
+			"-F",
+			`owner=${owner}`,
+			"-F",
+			`name=${name}`,
+			"-F",
+			`number=${number}`,
+		],
+		cwd,
+		signal,
+		"gh api graphql",
+	);
+
+	if (result.killed) throw new Error("gh api graphql timed out or was cancelled.");
+	if (result.code !== 0) throw new Error(formatGhFailure("gh api graphql", result));
+
+	try {
+		const payload = objectRecord(JSON.parse(result.stdout));
+		const data = objectRecord(payload.data);
+		const repository = objectRecord(data.repository);
+		const pullRequest = objectRecord(repository.pullRequest);
+		return { comments: pullRequest.comments, reviews: pullRequest.reviews };
+	} catch (error) {
+		throw new Error(`Failed to parse gh api graphql output: ${formatError(error)}`);
+	}
+}
+
+async function execGh(
+	pi: Pick<ExtensionAPI, "exec">,
+	args: string[],
+	cwd: string,
+	signal: AbortSignal | undefined,
+	command: string,
+): Promise<ExecResult> {
+	try {
+		return await pi.exec(
+			"gh",
+			args,
+			{ cwd, signal, timeout: GH_TIMEOUT_MS },
+		);
+	} catch (error) {
+		const message = formatError(error);
+		if (isGhExecutableMissingMessage(message.toLowerCase())) {
+			throw new Error(`GitHub CLI not found. Install gh and run: gh auth login. ${message}`);
+		}
+		throw new Error(`${command} could not start: ${message}`);
+	}
+}
+
+function formatGhFailure(command: string, result: ExecResult): string {
 	const output = (result.stderr || result.stdout).trim();
 	const lower = output.toLowerCase();
 	if (isGhExecutableMissingMessage(lower)) {
@@ -292,7 +360,7 @@ function formatGhFailure(result: ExecResult): string {
 	if (/no pull requests|could not resolve|not a github repository/.test(lower)) {
 		return `No GitHub pull request found. ${output}`;
 	}
-	return `gh pr view failed (${result.code}): ${output || "no output"}`;
+	return `${command} failed (${result.code}): ${output || "no output"}`;
 }
 
 function isGhExecutableMissingMessage(lowerMessage: string): boolean {
@@ -307,6 +375,24 @@ function isGhExecutableMissingMessage(lowerMessage: string): boolean {
 
 function formatError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function parsePrCoordinates(pr: JsonRecord): { owner: string; name: string; number: number } {
+	const number = requiredNumber(pr.number, "number");
+	const url = optionalString(pr.url);
+	if (!url) throw new Error("Missing PR url");
+
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch (error) {
+		throw new Error(`Invalid PR url: ${formatError(error)}`);
+	}
+
+	const match = /^\/([^/]+)\/([^/]+)\/pull\/\d+\/?$/.exec(parsed.pathname);
+	if (!match) throw new Error(`Unsupported PR url: ${url}`);
+
+	return { owner: match[1], name: match[2], number };
 }
 
 function arrayValue(value: unknown): unknown[] {

@@ -15,9 +15,21 @@ const okResult = (stdout: unknown): ExecResult => ({
 	killed: false,
 });
 
+const sampleCounts = {
+	data: {
+		repository: {
+			pullRequest: {
+				comments: { totalCount: 2 },
+				reviews: { totalCount: 3 },
+			},
+		},
+	},
+};
+
 const samplePr = {
 	number: 123,
 	isDraft: false,
+	url: "https://github.com/narumiruna/pi-extensions/pull/123",
 	reviewDecision: "APPROVED",
 	latestReviews: [
 		{ state: "APPROVED", author: { login: "alice" } },
@@ -93,29 +105,49 @@ test("normalizeGhPrView summarizes pending, changes-requested, draft, and commen
 	assert.equal(formatCompactStatus(commented), "PR #123: checks passing, commented, 3 comments");
 });
 
+test("normalizeGhPrView accepts count-only review and comment payloads", () => {
+	const status = normalizeGhPrView({
+		...samplePr,
+		reviews: { totalCount: 3 },
+		comments: { totalCount: 2 },
+	});
+
+	assert.deepEqual(status.comments, { issue: 2, reviews: 3, total: 5 });
+});
+
 test("runGhPrView calls gh pr view for the current branch and reports actionable failures", async () => {
 	const calls: ExecCall[] = [];
 	const pi = {
 		exec: async (command, args, options) => {
 			calls.push({ command, args, options });
-			return okResult(samplePr);
+			return okResult(args[0] === "pr" ? samplePr : sampleCounts);
 		},
 	} satisfies { exec: ExecFunction };
 
 	const status = await runGhPrView(pi, "/repo");
 
 	assert.equal(status.number, 123);
-	assert.deepEqual(calls, [
-		{
-			command: "gh",
-			args: [
-				"pr",
-				"view",
-				"--json",
-				"number,isDraft,reviewDecision,latestReviews,reviews,comments,statusCheckRollup",
-			],
-			options: { cwd: "/repo", signal: undefined, timeout: 10_000 },
-		},
+	assert.equal(calls.length, 2);
+	assert.deepEqual(calls[0], {
+		command: "gh",
+		args: [
+			"pr",
+			"view",
+			"--json",
+			"number,isDraft,url,reviewDecision,latestReviews,statusCheckRollup",
+		],
+		options: { cwd: "/repo", signal: undefined, timeout: 10_000 },
+	});
+	assert.deepEqual(calls[1]?.options, { cwd: "/repo", signal: undefined, timeout: 10_000 });
+	assert.deepEqual(calls[1]?.args.slice(0, 4), ["api", "graphql", "-f", calls[1]?.args[3]]);
+	assert.match(calls[1]?.args[3] ?? "", /^query=\s*query PullRequestCounts/);
+	assert.deepEqual(calls[1]?.args.slice(4), [
+		"-F",
+		"owner=narumiruna",
+		"-F",
+		"name=pi-extensions",
+		"-F",
+		"number=123",
 	]);
 
 	await assert.rejects(
@@ -206,7 +238,9 @@ test("runGhPrView calls gh pr view for the current branch and reports actionable
 
 test("lifecycle refresh sets and clears only statusline output", async () => {
 	const mock = createMockPi();
-	const calls = installExec(mock, async () => okResult(samplePr));
+	const calls = installExec(mock, async (_command, args) =>
+		okResult(args[0] === "pr" ? samplePr : sampleCounts),
+	);
 	githubPr(mock.pi);
 	const context = createMockContext({ cwd: "/repo" });
 
@@ -226,7 +260,7 @@ test("lifecycle refresh sets and clears only statusline output", async () => {
 	assert.equal(context.notifications.length, 0);
 
 	await agentEnd({}, context.ctx);
-	assert.equal(calls.length, 2);
+	assert.equal(calls.length, 4);
 	assert.equal(
 		context.statuses.get("github-pr"),
 		"PR #123: checks failing (1), approved, 5 comments",
