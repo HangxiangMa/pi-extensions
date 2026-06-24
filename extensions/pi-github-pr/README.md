@@ -4,6 +4,8 @@
 
 `@narumitw/pi-github-pr` is a passive [Pi coding agent](https://pi.dev) extension that shows the current branch GitHub pull request status in Pi's statusline.
 
+It only reads PR metadata for the current branch. It counts comments and reviews, but does not fetch or display comment bodies, review text, or review-thread content.
+
 It is intentionally ambient: no slash command, no custom tool, no widget, and no comment injection.
 
 ## ✨ Features
@@ -11,6 +13,7 @@ It is intentionally ambient: no slash command, no custom tool, no widget, and no
 - Automatically shows compact PR status in Pi's statusline.
 - Refreshes the current branch PR after agent turns.
 - Shows PR number, CI state, review state, and comment/review count.
+- Does not read or expose PR discussion text; use `gh pr view --comments` or GitHub directly when you need the conversation.
 - Uses GitHub CLI auth and repository resolution; the extension stores no GitHub token.
 - No slash commands, LLM tools, widgets, polling loop, webhook server, or runtime service.
 
@@ -67,6 +70,7 @@ The extension runs passively:
 - Requires `gh`; there is no direct GitHub API or `GITHUB_TOKEN` fallback.
 - Only the current branch PR is shown; there is no command or tool for arbitrary PR lookup.
 - Comment count uses `gh pr view` comments and reviews, not precise unresolved review-thread counts.
+- It does not read PR comment bodies, review bodies, inline diff comments, or unresolved review-thread text.
 - No continuous polling; refresh happens on session start and after agent turns.
 
 ## 📁 Package layout
