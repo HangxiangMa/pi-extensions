@@ -298,7 +298,6 @@ function formatGhFailure(result: ExecResult): string {
 function isGhExecutableMissingMessage(lowerMessage: string): boolean {
 	return (
 		/\bgithub cli (?:not available|not found)\b/.test(lowerMessage) ||
-		/\bspawn gh\b/.test(lowerMessage) ||
 		/\b(?:gh|gh\.exe)\b.*\benoent\b|\benoent\b.*\b(?:gh|gh\.exe)\b/.test(lowerMessage) ||
 		/\b(?:gh|gh\.exe): (?:command )?not found\b/.test(lowerMessage) ||
 		/\bcommand not found: (?:gh|gh\.exe)\b/.test(lowerMessage) ||

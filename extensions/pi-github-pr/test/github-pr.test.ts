@@ -143,6 +143,17 @@ test("runGhPrView calls gh pr view for the current branch and reports actionable
 	await assert.rejects(
 		runGhPrView(
 			{
+				exec: async () => {
+					throw new Error("spawn gh EACCES");
+				},
+			},
+			"/repo",
+		),
+		/gh pr view could not start: spawn gh EACCES/,
+	);
+	await assert.rejects(
+		runGhPrView(
+			{
 				exec: async () => ({ stdout: "", stderr: "not logged in", code: 1, killed: false }),
 			},
 			"/repo",
@@ -240,6 +251,9 @@ test("ambient failures stay non-intrusive", async () => {
 	const execFailure = await lifecycleStatusFor(async () => {
 		throw new Error("operation aborted");
 	});
+	const spawnPermissionFailure = await lifecycleStatusFor(async () => {
+		throw new Error("spawn gh EACCES");
+	});
 	const noPr = await lifecycleStatusFor(async () => ({
 		stdout: "",
 		stderr: "no pull requests found",
@@ -256,9 +270,17 @@ test("ambient failures stay non-intrusive", async () => {
 	assert.equal(missingGh.statuses.get("github-pr"), "PR gh missing");
 	assert.equal(unauthenticated.statuses.get("github-pr"), "PR gh auth");
 	assert.equal(execFailure.statuses.get("github-pr"), undefined);
+	assert.equal(spawnPermissionFailure.statuses.get("github-pr"), undefined);
 	assert.equal(noPr.statuses.get("github-pr"), undefined);
 	assert.equal(notFound.statuses.get("github-pr"), undefined);
-	for (const context of [missingGh, unauthenticated, execFailure, noPr, notFound]) {
+	for (const context of [
+		missingGh,
+		unauthenticated,
+		execFailure,
+		spawnPermissionFailure,
+		noPr,
+		notFound,
+	]) {
 		assert.equal(context.widgets.size, 0);
 		assert.equal(context.notifications.length, 0);
 	}
