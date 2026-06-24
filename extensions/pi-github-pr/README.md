@@ -12,7 +12,7 @@ It is intentionally ambient: no slash command, no custom tool, no widget, and no
 
 - Automatically shows compact PR status in Pi's statusline.
 - Refreshes the current branch PR after agent turns.
-- Shows PR number, CI state, review state, and comment/review count.
+- Shows PR number, GitHub checks state, review state, and comment/review count.
 - Does not read or expose PR discussion text; use `gh pr view --comments` or GitHub directly when you need the conversation.
 - Uses GitHub CLI auth and repository resolution; the extension stores no GitHub token.
 - No slash commands, LLM tools, widgets, polling loop, webhook server, or runtime service.
@@ -20,14 +20,15 @@ It is intentionally ambient: no slash command, no custom tool, no widget, and no
 Example statusline text:
 
 ```text
-PR #123 CI ok approved C7
-PR #123 CI failed 2 changes requested C3
-PR #123 CI pending 5 commented C12
-PR #123 CI none draft C0
+PR #123: checks passing, approved, 7 comments
+PR #123: checks failing (2), changes requested, 3 comments
+PR #123: checks pending (5), commented, 12 comments
+PR #123: no checks, draft, no comments
 ```
 
-The trailing `C#` is the combined comments + reviews count. When rendered by `pi-statusline`,
-the `github-pr` icon comes from pi-statusline icon settings.
+The check wording follows GitHub's Checks terminology. The trailing comment count is the
+combined comments + reviews count. When rendered by `pi-statusline`, the `github-pr` icon comes
+from pi-statusline icon settings.
 
 ## 📦 Install
 

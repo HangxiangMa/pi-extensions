@@ -98,7 +98,7 @@ Statuses from other extensions appear on their own compact line below the main s
 Examples:
 
 - `🎯 active` for `goal: active` using the built-in `goal` icon.
-- `🔎 PR #123 CI ok` for `github-pr: PR #123 CI ok` using the built-in `github-pr` icon.
+- `🔎 PR #123 checks passing` for `github-pr: PR #123 checks passing` using the built-in `github-pr` icon.
 - `☕ display` when JSON config sets `"caffeinate": "☕"`.
 - `receiving` when JSON config sets `"unknown-error-retry": ""`.
 - `🔌 running` for an unknown extension status key with no configured icon.

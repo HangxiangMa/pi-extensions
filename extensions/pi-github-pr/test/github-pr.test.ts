@@ -49,13 +49,13 @@ test("github-pr registers only passive lifecycle events", () => {
 	]);
 });
 
-test("normalizeGhPrView summarizes approved reviews, failed CI, and comments", () => {
+test("normalizeGhPrView summarizes approved reviews, failing checks, and comments", () => {
 	const status = normalizeGhPrView(samplePr);
 
 	assert.deepEqual(status.checks, { passed: 1, failed: 1, pending: 1, total: 3 });
 	assert.deepEqual(status.comments, { issue: 2, reviews: 3, total: 5 });
 	assert.deepEqual(status.review.approvedBy, ["alice"]);
-	assert.equal(formatCompactStatus(status), "PR #123 CI failed 1 approved C5");
+	assert.equal(formatCompactStatus(status), "PR #123: checks failing (1), approved, 5 comments");
 });
 
 test("normalizeGhPrView summarizes pending, changes-requested, draft, and commented reviews", () => {
@@ -84,10 +84,13 @@ test("normalizeGhPrView summarizes pending, changes-requested, draft, and commen
 	});
 
 	assert.deepEqual(changesRequested.comments, { issue: 0, reviews: 3, total: 3 });
-	assert.equal(formatCompactStatus(changesRequested), "PR #123 CI pending 1 changes requested C3");
+	assert.equal(
+		formatCompactStatus(changesRequested),
+		"PR #123: checks pending (1), changes requested, 3 comments",
+	);
 	assert.deepEqual(draft.comments, { issue: 0, reviews: 0, total: 0 });
-	assert.equal(formatCompactStatus(draft), "PR #123 CI none draft C0");
-	assert.equal(formatCompactStatus(commented), "PR #123 CI ok commented C3");
+	assert.equal(formatCompactStatus(draft), "PR #123: no checks, draft, no comments");
+	assert.equal(formatCompactStatus(commented), "PR #123: checks passing, commented, 3 comments");
 });
 
 test("runGhPrView calls gh pr view for the current branch and reports actionable failures", async () => {
@@ -124,7 +127,18 @@ test("runGhPrView calls gh pr view for the current branch and reports actionable
 			},
 			"/repo",
 		),
-		/GitHub CLI not available/,
+		/GitHub CLI not found/,
+	);
+	await assert.rejects(
+		runGhPrView(
+			{
+				exec: async () => {
+					throw new Error("operation aborted");
+				},
+			},
+			"/repo",
+		),
+		/gh pr view could not start: operation aborted/,
 	);
 	await assert.rejects(
 		runGhPrView(
@@ -193,13 +207,19 @@ test("lifecycle refresh sets and clears only statusline output", async () => {
 	assert.ok(sessionShutdown);
 
 	await sessionStart({}, context.ctx);
-	assert.equal(context.statuses.get("github-pr"), "PR #123 CI failed 1 approved C5");
+	assert.equal(
+		context.statuses.get("github-pr"),
+		"PR #123: checks failing (1), approved, 5 comments",
+	);
 	assert.equal(context.widgets.size, 0);
 	assert.equal(context.notifications.length, 0);
 
 	await agentEnd({}, context.ctx);
 	assert.equal(calls.length, 2);
-	assert.equal(context.statuses.get("github-pr"), "PR #123 CI failed 1 approved C5");
+	assert.equal(
+		context.statuses.get("github-pr"),
+		"PR #123: checks failing (1), approved, 5 comments",
+	);
 
 	await sessionShutdown({}, context.ctx);
 	assert.equal(context.statuses.get("github-pr"), undefined);
@@ -217,6 +237,9 @@ test("ambient failures stay non-intrusive", async () => {
 		code: 1,
 		killed: false,
 	}));
+	const execFailure = await lifecycleStatusFor(async () => {
+		throw new Error("operation aborted");
+	});
 	const noPr = await lifecycleStatusFor(async () => ({
 		stdout: "",
 		stderr: "no pull requests found",
@@ -232,9 +255,10 @@ test("ambient failures stay non-intrusive", async () => {
 
 	assert.equal(missingGh.statuses.get("github-pr"), "PR gh missing");
 	assert.equal(unauthenticated.statuses.get("github-pr"), "PR gh auth");
+	assert.equal(execFailure.statuses.get("github-pr"), undefined);
 	assert.equal(noPr.statuses.get("github-pr"), undefined);
 	assert.equal(notFound.statuses.get("github-pr"), undefined);
-	for (const context of [missingGh, unauthenticated, noPr, notFound]) {
+	for (const context of [missingGh, unauthenticated, execFailure, noPr, notFound]) {
 		assert.equal(context.widgets.size, 0);
 		assert.equal(context.notifications.length, 0);
 	}

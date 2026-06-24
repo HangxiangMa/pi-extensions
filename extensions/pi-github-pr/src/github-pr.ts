@@ -80,9 +80,11 @@ export async function runGhPrView(
 	try {
 		result = await pi.exec("gh", args, { cwd, signal, timeout: GH_TIMEOUT_MS });
 	} catch (error) {
-		throw new Error(
-			`GitHub CLI not available. Install gh and run: gh auth login. ${formatError(error)}`,
-		);
+		const message = formatError(error);
+		if (isGhExecutableMissingMessage(message.toLowerCase())) {
+			throw new Error(`GitHub CLI not found. Install gh and run: gh auth login. ${message}`);
+		}
+		throw new Error(`gh pr view could not start: ${message}`);
 	}
 
 	if (result.killed) throw new Error("gh pr view timed out or was cancelled.");
@@ -213,25 +215,30 @@ function checkOverall(checks: CheckSummary): CheckState {
 }
 
 export function formatCompactStatus(status: PullRequestStatus): string {
-	return [
-		`PR #${status.number}`,
+	return `PR #${status.number}: ${[
 		formatCheckCompact(status.checks),
 		formatReviewCompact(status),
-		`C${status.comments.total}`,
-	].join(" ");
+		formatCommentCompact(status.comments),
+	].join(", ")}`;
 }
 
 function formatCheckCompact(checks: CheckSummary): string {
 	switch (checkOverall(checks)) {
 		case "pass":
-			return "CI ok";
+			return "checks passing";
 		case "fail":
-			return `CI failed ${checks.failed}`;
+			return `checks failing (${checks.failed})`;
 		case "pending":
-			return `CI pending ${checks.pending}`;
+			return `checks pending (${checks.pending})`;
 		case "none":
-			return "CI none";
+			return "no checks";
 	}
+}
+
+function formatCommentCompact(comments: CommentSummary): string {
+	const count = comments.total;
+	if (count === 0) return "no comments";
+	return `${count} ${count === 1 ? "comment" : "comments"}`;
 }
 
 function formatReviewCompact(status: PullRequestStatus): string {
