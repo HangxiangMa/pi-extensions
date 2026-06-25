@@ -28,6 +28,7 @@ export interface CommentSummary {
 
 export interface PullRequestStatus {
 	number: number;
+	url: string;
 	isDraft: boolean;
 	review: ReviewSummary;
 	checks: CheckSummary;
@@ -111,6 +112,7 @@ export function normalizeGhPrView(value: unknown): PullRequestStatus {
 
 	return {
 		number: requiredNumber(pr.number, "number"),
+		url: optionalString(pr.url) ?? "",
 		isDraft: pr.isDraft === true,
 		review: summarizeReviews(pr.reviewDecision, latestReviews.length > 0 ? latestReviews : reviews),
 		checks: summarizeChecks(pr.statusCheckRollup),
@@ -263,7 +265,18 @@ function formatReviewCompact(status: PullRequestStatus): string {
 }
 
 function renderStatus(ctx: ExtensionContext, status: PullRequestStatus) {
-	ctx.ui.setStatus(STATUS_KEY, formatCompactStatus(status));
+	ctx.ui.setStatus(STATUS_KEY, formatLinkedStatus(status));
+}
+
+export function formatLinkedStatus(status: PullRequestStatus): string {
+	const text = formatCompactStatus(status);
+	if (!status.url) return text;
+	const label = `#${status.number}`;
+	return text.replace(label, osc8Link(status.url, label));
+}
+
+function osc8Link(url: string, text: string): string {
+	return `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`;
 }
 
 function clearStatus(ctx: ExtensionContext) {
