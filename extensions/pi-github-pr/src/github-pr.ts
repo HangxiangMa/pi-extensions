@@ -319,12 +319,14 @@ async function runGhPrCountQuery(
 	pr: JsonRecord,
 	signal?: AbortSignal,
 ): Promise<Pick<JsonRecord, "comments" | "reviews">> {
-	const { owner, name, number } = parsePrCoordinates(pr);
+	const { host, owner, name, number } = parsePrCoordinates(pr);
 	const result = await execGh(
 		pi,
 		[
 			"api",
 			"graphql",
+			"--hostname",
+			host,
 			"-f",
 			`query=${GH_PR_COUNT_QUERY}`,
 			"-F",
@@ -404,7 +406,9 @@ function formatError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-function parsePrCoordinates(pr: JsonRecord): { owner: string; name: string; number: number } {
+function parsePrCoordinates(
+	pr: JsonRecord,
+): { host: string; owner: string; name: string; number: number } {
 	const number = requiredNumber(pr.number, "number");
 	const url = optionalString(pr.url);
 	if (!url) throw new Error("Missing PR url");
@@ -419,7 +423,7 @@ function parsePrCoordinates(pr: JsonRecord): { owner: string; name: string; numb
 	const match = /^\/([^/]+)\/([^/]+)\/pull\/\d+\/?$/.exec(parsed.pathname);
 	if (!match) throw new Error(`Unsupported PR url: ${url}`);
 
-	return { owner: match[1], name: match[2], number };
+	return { host: parsed.host, owner: match[1], name: match[2], number };
 }
 
 function arrayValue(value: unknown): unknown[] {
