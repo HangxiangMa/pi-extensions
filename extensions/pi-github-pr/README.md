@@ -56,10 +56,10 @@ Install and authenticate GitHub CLI yourself:
 brew install gh
 gh auth login
 # For GitHub Enterprise Server (include the port if your URL uses one):
-gh auth login --hostname github.example.com
+gh auth login --hostname github.example.com:8443
 ```
 
-The extension shells out to `gh`; GitHub Enterprise hosts and credential storage are delegated to `gh`. It uses the PR URL host for follow-up API calls, so no manual `GH_HOST` is required.
+The extension shells out to `gh`; GitHub Enterprise hosts and credential storage are delegated to `gh`. It uses the PR URL host (including any port) for follow-up API calls, so no manual `GH_HOST` is required.
 
 ## 💬 Behavior
 
