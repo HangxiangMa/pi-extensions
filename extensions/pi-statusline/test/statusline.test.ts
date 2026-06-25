@@ -12,6 +12,7 @@ import statusline, {
 	formatExtensionStatus,
 	formatToolActivity,
 	npmPackageName,
+	prLinkFromStatuses,
 	readStatuslineSettings,
 	shortenModel,
 	simplifyExtensionStatusText,
@@ -70,6 +71,16 @@ test("extension status helpers strip prefixes, icons, and simplify text", () => 
 	assert.equal(simplifyExtensionStatusText("ready, missing (details)"), "✓ ✗");
 	assert.equal(extensionColor("codex", "checking"), "accent");
 	assert.equal(extensionColor("lsp", "command missing"), "warning");
+});
+
+test("prLinkFromStatuses keeps the linked PR token and drops the tail and non-PR states", () => {
+	const link = "\x1b]8;;https://github.com/o/r/pull/123\x07#123\x1b]8;;\x07";
+	assert.equal(
+		prLinkFromStatuses(new Map([["github-pr", `PR ${link}: checks failing (1), approved`]])),
+		link,
+	);
+	assert.equal(prLinkFromStatuses(new Map([["github-pr", "PR gh missing"]])), undefined);
+	assert.equal(prLinkFromStatuses(new Map()), undefined);
 });
 
 test("statusline settings load extension icon overrides", () => {

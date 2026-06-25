@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import githubPr, { formatCompactStatus, normalizeGhPrView, runGhPrView } from "../src/github-pr.js";
+import githubPr, {
+	formatCompactStatus,
+	formatLinkedStatus,
+	normalizeGhPrView,
+	runGhPrView,
+} from "../src/github-pr.js";
 
 type ExecOptions = { cwd?: string; signal?: AbortSignal; timeout?: number };
 type ExecCall = { command: string; args: string[]; options?: ExecOptions };
@@ -68,6 +73,17 @@ test("normalizeGhPrView summarizes approved reviews, failing checks, and comment
 	assert.deepEqual(status.comments, { issue: 2, reviews: 3, total: 5 });
 	assert.deepEqual(status.review.approvedBy, ["alice"]);
 	assert.equal(formatCompactStatus(status), "PR #123: checks failing (1), approved, 5 comments");
+	assert.equal(
+		formatLinkedStatus(status),
+		`PR \x1b]8;;${samplePr.url}\x07#123\x1b]8;;\x07: checks failing (1), approved, 5 comments`,
+	);
+});
+
+test("formatLinkedStatus falls back to plain text when the PR url is missing", () => {
+	const status = normalizeGhPrView({ ...samplePr, url: undefined });
+
+	assert.equal(status.url, "");
+	assert.equal(formatLinkedStatus(status), formatCompactStatus(status));
 });
 
 test("normalizeGhPrView summarizes pending, changes-requested, draft, and commented reviews", () => {
@@ -254,7 +270,7 @@ test("lifecycle refresh sets and clears only statusline output", async () => {
 	await sessionStart({}, context.ctx);
 	assert.equal(
 		context.statuses.get("github-pr"),
-		"PR #123: checks failing (1), approved, 5 comments",
+		`PR \x1b]8;;${samplePr.url}\x07#123\x1b]8;;\x07: checks failing (1), approved, 5 comments`,
 	);
 	assert.equal(context.widgets.size, 0);
 	assert.equal(context.notifications.length, 0);
@@ -263,7 +279,7 @@ test("lifecycle refresh sets and clears only statusline output", async () => {
 	assert.equal(calls.length, 4);
 	assert.equal(
 		context.statuses.get("github-pr"),
-		"PR #123: checks failing (1), approved, 5 comments",
+		`PR \x1b]8;;${samplePr.url}\x07#123\x1b]8;;\x07: checks failing (1), approved, 5 comments`,
 	);
 
 	await sessionShutdown({}, context.ctx);

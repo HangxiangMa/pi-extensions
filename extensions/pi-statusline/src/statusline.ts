@@ -41,6 +41,7 @@ interface TokenTotals {
 }
 
 const STATUSLINE_KEY = "statusline";
+const GITHUB_PR_KEY = "github-pr";
 const SETTINGS_FILE = "pi-statusline-settings.json";
 const DEFAULT_PRESET: StatuslinePresetName = "tokyo-night";
 
@@ -276,8 +277,11 @@ function buildSegment(
 				thinkingColor(runtime.thinkingLevel),
 				"header",
 			);
-		case "branch":
-			return segment(name, `🌿 ${footerData.getGitBranch() ?? "no-git"}`, color, "git");
+		case "branch": {
+			const branch = footerData.getGitBranch();
+			const pr = branch ? prLinkFromStatuses(footerData.getExtensionStatuses()) : undefined;
+			return segment(name, pr ? `🌿 ${branch} (${pr})` : `🌿 ${branch ?? "no-git"}`, color, "git");
+		}
 		case "cwd":
 			return segment(name, `📁 ${basename(ctx.cwd) || ctx.cwd}`, color, "directory");
 		case "tools":
@@ -373,6 +377,19 @@ export function formatToolActivity(runtime: RuntimeState): string {
 	return "💤 idle";
 }
 
+export function prLinkFromStatuses(statuses: ReadonlyMap<string, string>): string | undefined {
+	const value = statuses.get(GITHUB_PR_KEY);
+	if (!value) return undefined;
+	// Extract the OSC 8 hyperlink span (the clickable "#123"); skip non-PR states
+	// like "PR gh missing" that carry no link. github-pr emits exactly one link, so the
+	// first OSC 8 span is the PR number.
+	const open = value.indexOf("\x1b]8;;");
+	if (open === -1) return undefined;
+	const closeMarker = "\x1b]8;;\x07";
+	const close = value.indexOf(closeMarker, open + 1);
+	return close === -1 ? undefined : value.slice(open, close + closeMarker.length);
+}
+
 function formatExtensionStatuses(
 	statuses: ReadonlyMap<string, string>,
 	theme: Theme,
@@ -383,7 +400,11 @@ function formatExtensionStatuses(
 	const visibleStatuses = [
 		...formatDuplicateExtensionStatus(runtime, theme),
 		...[...statuses.entries()]
-			.filter(([key, value]) => key !== STATUSLINE_KEY && value.trim().length > 0)
+			// github-pr is rendered inline in the branch segment, so skip it here to avoid duplication.
+			.filter(
+				([key, value]) =>
+					key !== STATUSLINE_KEY && key !== GITHUB_PR_KEY && value.trim().length > 0,
+			)
 			.map(([key, value]) => formatExtensionStatus(key, value, theme, config)),
 	].slice(0, 5);
 
