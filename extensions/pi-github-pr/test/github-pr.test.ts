@@ -259,14 +259,14 @@ test("runGhPrView calls gh pr view for the current branch and reports actionable
 	);
 });
 
-test("runGhPrView sends gh api graphql to the enterprise PR hostname", async () => {
+test("runGhPrView sends gh api graphql to the enterprise PR host", async () => {
 	const calls: ExecCall[] = [];
 	const pi = {
 		exec: async (command, args, options) => {
 			calls.push({ command, args, options });
 			return okResult(
 				args[0] === "pr"
-					? { ...samplePr, url: "https://github.example.com/org/repo/pull/123" }
+					? { ...samplePr, url: "https://github.example.com:8443/org/repo/pull/123" }
 					: sampleCounts,
 			);
 		},
@@ -278,7 +278,7 @@ test("runGhPrView sends gh api graphql to the enterprise PR hostname", async () 
 		"api",
 		"graphql",
 		"--hostname",
-		"github.example.com",
+		"github.example.com:8443",
 	]);
 	assert.deepEqual(calls[1]?.args.slice(6), [
 		"-F",

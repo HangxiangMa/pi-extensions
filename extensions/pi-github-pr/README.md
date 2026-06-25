@@ -55,7 +55,7 @@ Install and authenticate GitHub CLI yourself:
 ```bash
 brew install gh
 gh auth login
-# For GitHub Enterprise Server:
+# For GitHub Enterprise Server (include the port if your URL uses one):
 gh auth login --hostname github.example.com
 ```
 

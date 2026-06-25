@@ -411,7 +411,7 @@ function parsePrCoordinates(
 	const match = /^\/([^/]+)\/([^/]+)\/pull\/\d+\/?$/.exec(parsed.pathname);
 	if (!match) throw new Error(`Unsupported PR url: ${url}`);
 
-	return { hostname: parsed.hostname, owner: match[1], name: match[2], number };
+	return { hostname: parsed.host, owner: match[1], name: match[2], number };
 }
 
 function arrayValue(value: unknown): unknown[] {
