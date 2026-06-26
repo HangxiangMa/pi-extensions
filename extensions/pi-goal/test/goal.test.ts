@@ -203,7 +203,7 @@ test("goal_complete rejects contradictory summaries and accepts verified complet
 	mock.events.get("session_shutdown")?.[0]?.({}, ctx);
 });
 
-test("pause and clear abort the current turn and persist stopped goal state", async () => {
+test("pause aborts the current turn, blocks stale tools, and persists paused state", async () => {
 	let pauseAborts = 0;
 	const paused = await startGoalForTest({ abort: () => pauseAborts++ });
 	await paused.mock.events.get("agent_end")?.[0]?.(
@@ -225,14 +225,59 @@ test("pause and clear abort the current turn and persist stopped goal state", as
 		),
 		{ action: "handled" },
 	);
+	assert.deepEqual(
+		paused.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "bash", toolCallId: "t1", input: {} },
+			paused.ctx,
+		),
+		{
+			block: true,
+			reason: "Blocked stale /goal tool call after the goal was paused or interrupted.",
+		},
+	);
+});
 
+test("clear removes goal state without aborting or blocking stale tools", async () => {
 	let clearAborts = 0;
 	const cleared = await startGoalForTest({ abort: () => clearAborts++ });
+	await cleared.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop" }] },
+		cleared.ctx,
+	);
+	const staleContinuation = cleared.mock.sentUserMessages.at(-1)?.text ?? "";
+	assert.match(staleContinuation, /pi-goal-continuation/);
+
 	await cleared.mock.commands.get("goal")?.handler("clear", cleared.ctx);
 
-	assert.equal(clearAborts, 1);
+	assert.equal(clearAborts, 0);
 	assert.equal(lastGoalStatus(cleared.mock), null);
 	assert.equal(cleared.statuses.get("goal"), undefined);
+	assert.deepEqual(
+		cleared.mock.events.get("input")?.[0]?.(
+			{ source: "extension", text: staleContinuation },
+			cleared.ctx,
+		),
+		{ action: "handled" },
+	);
+	assert.equal(
+		cleared.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "edit", toolCallId: "t-clear", input: {} },
+			cleared.ctx,
+		),
+		undefined,
+	);
+
+	const tool = cleared.mock.tools[0] as GoalTool;
+	const staleCompletion = await tool.execute(
+		"call-after-clear",
+		{ summary: "Implemented and verified." },
+		new AbortController().signal,
+		() => undefined,
+		cleared.ctx,
+	);
+
+	assert.equal(staleCompletion.terminate, undefined);
+	assert.match(staleCompletion.content?.[0]?.text ?? "", /no active goal/i);
 });
 
 test("agent_end keeps retryable interruptions active but pauses non-retryable errors", async () => {
@@ -288,19 +333,19 @@ test("agent_end keeps retryable interruptions active but pauses non-retryable er
 		),
 		{
 			block: true,
-			reason: "Blocked stale /goal tool call after the goal was paused or cleared.",
+			reason: "Blocked stale /goal tool call after the goal was paused or interrupted.",
 		},
 	);
 });
 
-test("stale goal tool calls are blocked until a fresh non-goal prompt arrives", async () => {
+test("stale goal tool calls are blocked after pause until a fresh non-goal prompt arrives", async () => {
 	const paused = await startGoalForTest();
 	await paused.mock.commands.get("goal")?.handler("pause", paused.ctx);
 
 	const pauseToolCall = paused.mock.events.get("tool_call")?.[0];
 	assert.deepEqual(pauseToolCall?.({ toolName: "bash", toolCallId: "t1", input: {} }, paused.ctx), {
 		block: true,
-		reason: "Blocked stale /goal tool call after the goal was paused or cleared.",
+		reason: "Blocked stale /goal tool call after the goal was paused or interrupted.",
 	});
 
 	paused.mock.events.get("input")?.[0]?.(
@@ -309,7 +354,7 @@ test("stale goal tool calls are blocked until a fresh non-goal prompt arrives", 
 	);
 	assert.deepEqual(pauseToolCall?.({ toolName: "bash", toolCallId: "t2", input: {} }, paused.ctx), {
 		block: true,
-		reason: "Blocked stale /goal tool call after the goal was paused or cleared.",
+		reason: "Blocked stale /goal tool call after the goal was paused or interrupted.",
 	});
 
 	paused.mock.events.get("input")?.[0]?.(
@@ -319,19 +364,6 @@ test("stale goal tool calls are blocked until a fresh non-goal prompt arrives", 
 	assert.equal(
 		pauseToolCall?.({ toolName: "bash", toolCallId: "t3", input: {} }, paused.ctx),
 		undefined,
-	);
-
-	const cleared = await startGoalForTest();
-	await cleared.mock.commands.get("goal")?.handler("clear", cleared.ctx);
-	assert.deepEqual(
-		cleared.mock.events.get("tool_call")?.[0]?.(
-			{ toolName: "edit", toolCallId: "t3", input: {} },
-			cleared.ctx,
-		),
-		{
-			block: true,
-			reason: "Blocked stale /goal tool call after the goal was paused or cleared.",
-		},
 	);
 });
 

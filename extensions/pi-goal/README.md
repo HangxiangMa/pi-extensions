@@ -17,9 +17,10 @@ Goal mode uses Codex-like persistence instructions and keeps sending guarded con
 - Stores goal state in the current Pi session, following Codex's thread-owned goal model instead of using a global per-directory goal.
 - Registers a `goal_complete` tool for explicit completion, and rejects plainly contradictory completion summaries such as “not complete” or “tests still fail”.
 - Automatically prompts the agent to continue if an active turn ends early, directly triggering the next turn when Pi is idle and no pending messages are queued.
-- Pauses and aborts queued goal work when the user pauses/clears a goal or Pi reports a non-retryable aborted/errored assistant turn.
+- Pauses and aborts queued goal work when the user pauses a goal or Pi reports a non-retryable aborted/errored assistant turn.
 - Keeps retryable provider interruptions active without enqueueing duplicate goal continuations while Pi retries.
-- Guards auto-follow-ups and stale tool calls so duplicate, replaced, paused, cleared, completed, or budget-limited goals are not continued.
+- Guards auto-follow-ups so duplicate, replaced, paused, cleared, completed, or budget-limited goals are not continued.
+- Blocks stale tool calls after pause/interruption.
 - Encourages requirement-by-requirement verification before the goal is marked complete.
 
 ## 📦 Install
@@ -56,9 +57,9 @@ pi -e ./extensions/pi-goal
 - `/goal <goal_to_complete>` starts goal mode. If another unfinished goal exists, Pi asks for confirmation before replacing it with a new active goal and resetting its usage counters.
 - `/goal --tokens 100k <goal_to_complete>` starts or replaces goal mode with a token budget. `k` and `m` suffixes are accepted, for example `100k` or `1.5m`.
 - `/goal edit <goal_to_complete>` updates the existing goal objective without resetting usage counters. Active goals stay active, paused goals stay paused, and budget-limited goals remain budget-limited if their budget is still exhausted.
-- `/goal pause` stops prompt injection and auto-continuation without forgetting the goal.
+- `/goal pause` stops prompt injection and auto-continuation, aborts the current turn, and keeps the goal for later resume.
 - `/goal resume` resumes a paused or budget-limited goal when the token budget allows it, then queues a resume prompt so work continues.
-- `/goal clear` cancels the current goal and also removes any legacy persisted state for the current working directory.
+- `/goal clear` clears the current goal state, status, pending continuation, and legacy persisted state for the current working directory without aborting any in-flight agent turn.
 
 Goal objectives are limited to 4,000 characters. Put longer instructions in a file and reference the file path from `/goal`.
 
@@ -84,7 +85,7 @@ While a goal is active, `pi-goal` injects persistence rules and exposes `goal_co
 
 ## 🛑 Interruption and queued-input behavior
 
-On user pause/clear, abort, or non-retryable error, `pi-goal` pauses or clears the goal, aborts stale work, and blocks cancelled-goal tool calls until the next user prompt (non-extension input). Retryable provider interruptions stay active while Pi retries; no extra continuation is queued.
+On user pause, abort, or non-retryable error, `pi-goal` pauses the goal, aborts stale work, and blocks stale tool calls until the next user prompt (non-extension input). On `/goal clear`, it only clears goal state and pending continuation markers; it does not abort the current turn. Retryable provider interruptions stay active while Pi retries; no extra continuation is queued.
 
 ## 🧠 Use cases
 

@@ -247,7 +247,7 @@ export default function goal(pi: ExtensionAPI) {
 		if (!staleGoalToolCallsBlocked) return;
 		return {
 			block: true,
-			reason: "Blocked stale /goal tool call after the goal was paused or cleared.",
+			reason: "Blocked stale /goal tool call after the goal was paused or interrupted.",
 		};
 	});
 
@@ -387,8 +387,6 @@ function clearGoal(ctx: StatusContext) {
 	}
 
 	const stoppedGoal = activeGoal.text;
-	blockStaleGoalToolCalls();
-	abortCurrentTurn(ctx);
 	clearActiveGoal(ctx);
 	ctx.ui.notify(`Goal cleared: ${stoppedGoal}`, "warning");
 }
