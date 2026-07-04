@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -106,7 +107,7 @@ interface FetchSignal {
 	isTimeout(): boolean;
 }
 
-let rawResponsePathPromise: Promise<string> | undefined;
+let rawResponseDirectoryPromise: Promise<string> | undefined;
 
 const googleSearchTool = defineTool({
 	name: "google_search",
@@ -592,7 +593,8 @@ function assertSafeApiUrl(apiUrl: string) {
 		throw new Error(`Google GenAI apiUrl must be a valid HTTPS URL: ${apiUrl}`);
 	}
 	const localHttp =
-		parsed.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+		parsed.protocol === "http:" &&
+		["localhost", "127.0.0.1", "::1", "[::1]"].includes(parsed.hostname);
 	if (parsed.protocol !== "https:" && !localHttp) {
 		throw new Error(
 			`Google GenAI apiUrl must use https:// to protect the API key (http://localhost is allowed for local proxies): ${apiUrl}`,
@@ -876,23 +878,24 @@ function formatSource(source: GoogleGenaiSource) {
 }
 
 async function writeRawResponse(raw: unknown) {
-	const path = await rawResponsePath();
+	const directory = await rawResponseDirectory();
+	const path = join(directory, `interaction-${Date.now()}-${randomUUID()}.json`);
 	await writeFile(path, `${JSON.stringify(raw, null, "\t")}\n`, { mode: 0o600 });
 	await chmod(path, 0o600);
 	return path;
 }
 
-function rawResponsePath() {
-	rawResponsePathPromise ??= mkdtemp(join(tmpdir(), "pi-google-genai-"))
+function rawResponseDirectory() {
+	rawResponseDirectoryPromise ??= mkdtemp(join(tmpdir(), "pi-google-genai-"))
 		.then(async (directory) => {
 			await chmod(directory, 0o700);
-			return join(directory, "interaction.json");
+			return directory;
 		})
 		.catch((error) => {
-			rawResponsePathPromise = undefined;
+			rawResponseDirectoryPromise = undefined;
 			throw error;
 		});
-	return rawResponsePathPromise;
+	return rawResponseDirectoryPromise;
 }
 
 function asArray(value: unknown): unknown[] {

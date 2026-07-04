@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
@@ -192,6 +192,22 @@ test("tools reject insecure apiUrl before sending the API key", async () => {
 	});
 });
 
+test("tools allow local http apiUrl for proxies", async () => {
+	await withTempAgentDir(async () => {
+		await writeConfig({ apiUrl: "http://[::1]:1234/interactions" });
+		const mock = createMockPi();
+		googleGenai(mock.pi);
+		const { ctx } = createMockContext({
+			modelRegistry: { getApiKeyForProvider: async () => "test-key" },
+		});
+		const fetchCalls: Array<{ url: string; init: RequestInit & { body?: string } }> = [];
+		await withMockFetch(fetchCalls, async () => {
+			await executeTool(mock.tools[0], "call-local", { query: "ok" }, ctx);
+			assert.equal(fetchCalls[0].url, "http://[::1]:1234/interactions");
+		});
+	});
+});
+
 test("tool requests report HTTP errors and time out", async () => {
 	await withTempAgentDir(async () => {
 		await writeConfig({ timeoutMs: 1 });
@@ -312,9 +328,12 @@ test("formatToolResult limits sources, truncates content, and writes raw respons
 		assert.ok(result.details.fullResponsePath);
 		assert.equal((await stat(result.details.fullResponsePath)).mode & 0o777, 0o600);
 		assert.match(await readFile(result.details.fullResponsePath, "utf8"), /output_text/);
+		const second = await formatToolResult(raw, "gemini-test");
+		assert.ok(second.details.fullResponsePath);
+		assert.notEqual(second.details.fullResponsePath, result.details.fullResponsePath);
 		assert.equal(
-			(await formatToolResult(raw, "gemini-test")).details.fullResponsePath,
-			result.details.fullResponsePath,
+			dirname(second.details.fullResponsePath),
+			dirname(result.details.fullResponsePath),
 		);
 	});
 });
