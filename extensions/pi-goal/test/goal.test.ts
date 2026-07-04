@@ -408,6 +408,32 @@ test("agent_end keeps retryable interruptions active but pauses non-retryable er
 	);
 });
 
+test("agent_end keeps Codex retry-hinted errors active without stale tool blocking", async () => {
+	let aborts = 0;
+	const retryable = await startGoalForTest({ abort: () => aborts++ });
+	const errorMessage =
+		"Codex error: An error occurred while processing your request. You can retry your request.\n\n[codex-generic-retry] provider returned error; treating Codex retryable backend failure as retryable.";
+
+	assert.equal(
+		isRetryableGoalInterruption({ role: "assistant", stopReason: "error", errorMessage }),
+		true,
+	);
+	await retryable.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "error", errorMessage }] },
+		retryable.ctx,
+	);
+
+	assert.equal(aborts, 0);
+	assert.equal(lastGoalStatus(retryable.mock), "active");
+	assert.equal(
+		retryable.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "bash", toolCallId: "codex-retry-tool", input: {} },
+			retryable.ctx,
+		),
+		undefined,
+	);
+});
+
 test("overflow compaction retry keeps the goal active and does not block retry tools", async () => {
 	let aborts = 0;
 	const overflow = await startGoalForTest({ abort: () => aborts++ });
