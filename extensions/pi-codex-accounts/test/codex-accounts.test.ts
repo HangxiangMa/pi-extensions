@@ -13,6 +13,7 @@ import codexAccounts, {
 	CODEX_PROVIDER_ID,
 	CodexAccountStore,
 	completeStoredAccountArguments,
+	DEFAULT_CODEX_MODEL_ID,
 	DEFAULT_PI_LOGIN_LABEL,
 	ensureActiveCodexAuth,
 	FAIL_CLOSED_API_KEY,
@@ -47,6 +48,7 @@ test("codex-accounts registers commands and lifecycle hooks", () => {
 test("parseAccountName accepts small account labels and rejects unsafe names", () => {
 	assert.equal(parseAccountName("  work-1_2.foo  ").ok, true);
 	assert.equal(parseAccountName("two words").ok, false);
+	assert.equal(parseAccountName("").ok, false);
 	assert.equal(parseAccountName("../secret").ok, false);
 	assert.equal(parseAccountName("a".repeat(65)).ok, false);
 });
@@ -201,6 +203,121 @@ test("codex-login stores credentials, activates the account, and does not change
 	assert.deepEqual(runtimeCalls, [`set:${CODEX_PROVIDER_ID}:access-work`]);
 	assert.equal(mock.setModels.length, 0);
 	assert.match(notifications.at(-1)?.message ?? "", /Logged in Codex account "work"/);
+});
+
+test("codex-login selects the default Codex model only from unknown/unknown", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	const mock = createMockPi();
+	codexAccounts(mock.pi, {
+		store,
+		oauthProvider: {
+			async login() {
+				return validCred("work");
+			},
+			async refreshToken() {
+				throw new Error("unexpected refresh");
+			},
+			getApiKey: (credential) => credential.access,
+		},
+	});
+	const command = mock.commands.get("codex-login");
+	assert.ok(command);
+	const codexModel = { provider: CODEX_PROVIDER_ID, id: DEFAULT_CODEX_MODEL_ID };
+	const findCalls: string[] = [];
+	const { ctx } = createMockContext({
+		hasUI: true,
+		model: { provider: "unknown", id: "unknown", api: "unknown" },
+		modelRegistry: {
+			find: (provider: string, id: string) => {
+				findCalls.push(`${provider}/${id}`);
+				return codexModel;
+			},
+			authStorage: {
+				setRuntimeApiKey: () => undefined,
+				removeRuntimeApiKey: () => undefined,
+			},
+		},
+	});
+
+	await command.handler("work", ctx);
+
+	assert.deepEqual(findCalls, [`${CODEX_PROVIDER_ID}/${DEFAULT_CODEX_MODEL_ID}`]);
+	assert.deepEqual(mock.setModels, [codexModel]);
+});
+
+test("codex-login warns when the default Codex model is unavailable", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	const mock = createMockPi();
+	codexAccounts(mock.pi, {
+		store,
+		oauthProvider: {
+			async login() {
+				return validCred("work");
+			},
+			async refreshToken() {
+				throw new Error("unexpected refresh");
+			},
+			getApiKey: (credential) => credential.access,
+		},
+	});
+	const command = mock.commands.get("codex-login");
+	assert.ok(command);
+	const { ctx, notifications } = createMockContext({
+		hasUI: true,
+		model: { provider: "unknown", id: "unknown", api: "unknown" },
+		modelRegistry: {
+			find: () => undefined,
+			authStorage: {
+				setRuntimeApiKey: () => undefined,
+				removeRuntimeApiKey: () => undefined,
+			},
+		},
+	});
+
+	await command.handler("work", ctx);
+
+	assert.equal(mock.setModels.length, 0);
+	assert.ok(notifications.some((item) => item.message.includes("was not found")));
+});
+
+test("codex-login warns when selecting the default Codex model fails", async () => {
+	const store = new CodexAccountStore(new InMemoryAuthStorageBackend());
+	const mock = createMockPi();
+	mock.rawPi.setModel = async (model: unknown) => {
+		mock.setModels.push(model);
+		return false;
+	};
+	codexAccounts(mock.pi, {
+		store,
+		oauthProvider: {
+			async login() {
+				return validCred("work");
+			},
+			async refreshToken() {
+				throw new Error("unexpected refresh");
+			},
+			getApiKey: (credential) => credential.access,
+		},
+	});
+	const command = mock.commands.get("codex-login");
+	assert.ok(command);
+	const codexModel = { provider: CODEX_PROVIDER_ID, id: DEFAULT_CODEX_MODEL_ID };
+	const { ctx, notifications } = createMockContext({
+		hasUI: true,
+		model: { provider: "unknown", id: "unknown", api: "unknown" },
+		modelRegistry: {
+			find: () => codexModel,
+			authStorage: {
+				setRuntimeApiKey: () => undefined,
+				removeRuntimeApiKey: () => undefined,
+			},
+		},
+	});
+
+	await command.handler("work", ctx);
+
+	assert.deepEqual(mock.setModels, [codexModel]);
+	assert.ok(notifications.some((item) => item.message.includes("selecting gpt-5.5 failed")));
 });
 
 test("codex-account can switch accounts or return to default Pi login", async () => {
