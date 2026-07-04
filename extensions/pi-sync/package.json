@@ -29,8 +29,8 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.5.1",
-		"@earendil-works/pi-coding-agent": "0.79.8",
+		"@biomejs/biome": "2.5.2",
+		"@earendil-works/pi-coding-agent": "0.80.3",
 		"typescript": "6.0.3"
 	},
 	"repository": {
