@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -539,7 +539,7 @@ function authSource(config: GoogleGenaiConfig, ctx: ExtensionCommandContext) {
 	if (status.configured || status.source) {
 		return status.label ? `Pi auth/google (${status.label})` : "Pi auth/google";
 	}
-	return Promise.resolve("missing");
+	return "missing";
 }
 
 async function saveToolSelection(tools: GoogleGenaiToolName[]) {
@@ -627,8 +627,16 @@ async function readJsonIfExists(path: string, warnings: string[]) {
 async function writeGoogleGenaiConfig(config: GoogleGenaiConfig) {
 	const path = googleGenaiConfigPath();
 	await mkdir(dirname(path), { recursive: true });
-	await writeFile(path, `${JSON.stringify(cleanObject(config), null, "\t")}\n`, { mode: 0o600 });
-	await chmod(path, 0o600);
+	const tempFile = `${path}.${process.pid}.${Date.now()}.tmp`;
+	try {
+		await writeFile(tempFile, `${JSON.stringify(cleanObject(config), null, "\t")}\n`, { mode: 0o600 });
+		await chmod(tempFile, 0o600);
+		await rename(tempFile, path);
+		await chmod(path, 0o600);
+	} catch (error) {
+		await rm(tempFile, { force: true }).catch(() => undefined);
+		throw error;
+	}
 }
 
 async function ensureConfigPermissions(path: string, warnings: string[]) {
