@@ -4,7 +4,7 @@
 
 `@narumitw/pi-google-genai` exposes Google GenAI Interactions grounding tools to Pi.
 
-## Features
+## ✨ Features
 
 - `google_search` for Google Search grounding.
 - `google_maps` for Google Maps/place grounding.
@@ -13,7 +13,7 @@
 - Lets `/google-genai tools` persist which of the three tools are active.
 - Truncates large outputs and writes the full raw interaction response to a private temp file only when truncation happens.
 
-## Install
+## 📦 Install
 
 ```bash
 pi install npm:@narumitw/pi-google-genai
@@ -25,7 +25,7 @@ Try from this repository:
 pi -e ./extensions/pi-google-genai
 ```
 
-## Configuration
+## ⚙️ Configuration
 
 Config lives at:
 
@@ -47,7 +47,7 @@ Example:
 
 The file is written as `0600`.
 
-### Auth precedence
+### 🔐 Auth precedence
 
 1. Literal `apiKey` in `google-genai.json`.
 2. Pi Google auth via `/login google`, `auth.json`, runtime key, or `GEMINI_API_KEY`.
@@ -55,7 +55,7 @@ The file is written as `0600`.
 
 `apiKey` in this config is literal only. `$GEMINI_API_KEY`, `${GEMINI_API_KEY}`, and `!command` are not resolved here. Use Pi `/login google` or `GEMINI_API_KEY` for that behavior.
 
-## Command
+## 💬 Command
 
 ```text
 /google-genai init
@@ -73,9 +73,9 @@ The file is written as `0600`.
 - `enable`: enable all three tools.
 - `disable`: disable all three tools. The slash command remains available so you can re-enable them.
 
-## Tools
+## 🛠️ Tools
 
-### `google_search`
+### 🔎 `google_search`
 
 Search Google through Gemini grounding.
 
@@ -84,7 +84,7 @@ Parameters:
 - `query`: search question.
 - `searchTypes?`: optional array of `web_search` and/or `image_search`. Omit it for Google's default web search.
 
-### `google_maps`
+### 🗺️ `google_maps`
 
 Ask Google Maps-grounded questions.
 
@@ -93,7 +93,7 @@ Parameters:
 - `query`: maps/place question.
 - `latitude?` and `longitude?`: optional pair for location-sensitive questions. If one is set, both are required. Latitude must be `-90..90`; longitude must be `-180..180`.
 
-### `google_url_context`
+### 🔗 `google_url_context`
 
 Ask Gemini to use specific URLs as context.
 
@@ -104,7 +104,7 @@ Parameters:
 
 Use Firecrawl instead when you need raw HTML/markdown extraction, crawling, or URL discovery.
 
-## Manual live smoke test
+## 🧪 Manual live smoke test
 
 Automated tests mock Google. Before publishing, you can manually try:
 
@@ -121,11 +121,11 @@ Use google_maps to find Italian restaurants near latitude 34.050481 longitude -1
 Use google_url_context to summarize https://ai.google.dev/gemini-api/docs/interactions.
 ```
 
-## Why no `@google/genai` dependency yet?
+## 🪶 Why no `@google/genai` dependency yet?
 
 The first version only needs one POST to the Interactions API, so native `fetch` is enough. Add `@google/genai` later when the extension needs SDK-heavy features such as file upload, live sessions, Vertex/Enterprise auth, batch/video operations, or file-search store management.
 
-## Package layout
+## 📁 Package layout
 
 ```txt
 extensions/pi-google-genai/
@@ -137,10 +137,10 @@ extensions/pi-google-genai/
 └── package.json
 ```
 
-## Keywords
+## 🏷️ Keywords
 
 `pi-package`, `pi-extension`, `google`, `gemini`, `genai`, `search`, `maps`
 
-## License
+## 📄 License
 
 MIT. See [`LICENSE`](./LICENSE).
