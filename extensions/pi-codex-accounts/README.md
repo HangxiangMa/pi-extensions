@@ -14,7 +14,7 @@ It keeps using Pi's built-in `openai-codex` provider. It does **not** add provid
 - Adds `(default pi login)` in the selector to clear the active self-managed account and return to Pi's normal `openai-codex` auth.
 - Stores credentials in `~/.pi/agent/codex-accounts.json` with private file permissions.
 - Sets only the runtime API key for Pi's native `openai-codex` provider.
-- Leaves your selected `/model` unchanged, matching Pi's built-in `/login` behavior.
+- Leaves your selected `/model` unchanged, matching Pi's built-in `/login` behavior, except it may select `openai-codex/gpt-5.5` when the current model is `unknown/unknown`.
 - Shows `codex:<name>` in the statusline only while the current model provider is `openai-codex`.
 - Fails closed if an active self-managed account cannot refresh, so Pi does not silently fall back to a different Codex account.
 

@@ -223,7 +223,7 @@ export default function codexAccounts(
 
 export function parseAccountName(input: string): { ok: true; name: string } | { ok: false; error: string } {
 	const name = input.trim();
-	if (!name) return { ok: false, error: "Usage: /codex-login <account-name>" };
+	if (!name) return { ok: false, error: "Account name is required." };
 	if (!ACCOUNT_NAME_RE.test(name)) {
 		return {
 			ok: false,
