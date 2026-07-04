@@ -7,6 +7,7 @@ import {
 	defineTool,
 	formatSize,
 	truncateHead,
+	truncateLine,
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 	type ExtensionContext,
@@ -260,8 +261,8 @@ export function normalizeGoogleGenaiSettings(value: unknown): GoogleGenaiConfig 
 export async function loadGoogleGenaiConfig(): Promise<LoadedGoogleGenaiConfig> {
 	const path = googleGenaiConfigPath();
 	const warnings: string[] = [];
+	await ensureConfigPermissions(path, warnings);
 	const raw = await readJsonIfExists(path, warnings);
-	if (raw !== undefined) await ensureConfigPermissions(path, warnings);
 	const normalized = normalizeConfigWithWarnings(raw);
 	return { config: normalized.config, path, warnings: [...warnings, ...normalized.warnings] };
 }
@@ -356,22 +357,26 @@ export async function formatToolResult(raw: unknown, model: string) {
 		truncated: truncation.truncated,
 	};
 
-	let content = truncation.content;
-	if (truncation.truncated) {
-		if (sources.length > 0 && !content.includes("\nSources:")) {
-			content += `\n\n${formatSourcesSection(sources)}`;
-		}
-		const fullResponsePath = await writeRawResponse(raw);
-		details.fullResponsePath = fullResponsePath;
-		details.truncation = {
-			truncatedBy: truncation.truncatedBy,
-			totalLines: truncation.totalLines,
-			totalBytes: truncation.totalBytes,
-			outputLines: truncation.outputLines,
-			outputBytes: truncation.outputBytes,
-		};
-		content += `\n\n[Output truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines (${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}). Full response saved to: ${fullResponsePath}]`;
+	if (!truncation.truncated) {
+		return { content: [{ type: "text" as const, text: truncation.content }], details };
 	}
+
+	const fullResponsePath = await writeRawResponse(raw);
+	details.fullResponsePath = fullResponsePath;
+	details.truncation = {
+		truncatedBy: truncation.truncatedBy,
+		totalLines: truncation.totalLines,
+		totalBytes: truncation.totalBytes,
+		outputLines: truncation.outputLines,
+		outputBytes: truncation.outputBytes,
+	};
+	const footer = `[Output truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines (${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}). Full response saved to: ${fullResponsePath}]`;
+	const suffix = joinBlocks([sources.length > 0 ? formatSourcesSection(sources) : "", footer]);
+	const truncatedOutput = truncateHead(outputText, {
+		maxLines: Math.max(0, DEFAULT_MAX_LINES - countLines(suffix) - 1),
+		maxBytes: Math.max(0, DEFAULT_MAX_BYTES - Buffer.byteLength(suffix, "utf8") - 2),
+	});
+	const content = joinBlocks([truncatedOutput.content, suffix]);
 
 	return { content: [{ type: "text" as const, text: content }], details };
 }
@@ -644,6 +649,7 @@ async function ensureConfigPermissions(path: string, warnings: string[]) {
 		const current = await stat(path);
 		if ((current.mode & 0o777) !== 0o600) await chmod(path, 0o600);
 	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
 		warnings.push(`Failed to enforce 0600 permissions for ${path}: ${error instanceof Error ? error.message : String(error)}`);
 	}
 }
@@ -805,16 +811,28 @@ function extractToolSteps(raw: unknown) {
 }
 
 function formatContent(outputText: string, sources: GoogleGenaiSource[]) {
-	if (sources.length === 0) return outputText;
-	return [outputText, "", formatSourcesSection(sources)].join("\n");
+	return joinBlocks([outputText, sources.length > 0 ? formatSourcesSection(sources) : ""]);
 }
 
 function formatSourcesSection(sources: GoogleGenaiSource[]) {
 	const visibleSources = sources.slice(0, SOURCE_LIMIT);
 	return [
 		"Sources:",
-		...visibleSources.map((source, index) => `${index + 1}. ${formatSource(source)}`),
+		...visibleSources.map((source, index) =>
+			truncateLine(`${index + 1}. ${formatSource(source)}`).text,
+		),
 	].join("\n");
+}
+
+function joinBlocks(blocks: string[]) {
+	return blocks.filter(Boolean).join("\n\n");
+}
+
+function countLines(content: string) {
+	if (!content) return 0;
+	const lines = content.split("\n");
+	if (content.endsWith("\n")) lines.pop();
+	return lines.length;
 }
 
 function formatSource(source: GoogleGenaiSource) {

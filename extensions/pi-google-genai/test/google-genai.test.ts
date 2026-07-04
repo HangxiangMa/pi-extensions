@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import googleGenai, {
 	buildStatusMessage,
@@ -76,6 +77,20 @@ test("config loading defaults, normalizes tools, and rejects interpolation", asy
 			() => resolveGoogleGenaiAuth(loaded.config, authContext()),
 			/Interpolation/,
 		);
+	});
+});
+
+test("config loading repairs permissions even when JSON is invalid", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const path = join(agentDir, "google-genai.json");
+		await mkdir(agentDir, { recursive: true });
+		await writeFile(path, '{"apiKey":"secret"', { mode: 0o644 });
+		await chmod(path, 0o644);
+
+		const loaded = await loadGoogleGenaiConfig();
+
+		assert.match(loaded.warnings.join("\n"), /Failed to read/);
+		assert.equal((await stat(path)).mode & 0o777, 0o600);
 	});
 });
 
@@ -258,6 +273,8 @@ test("formatToolResult limits sources, truncates content, and writes raw respons
 		const result = await formatToolResult(raw, "gemini-test");
 		const text = result.content[0].text;
 		assert.match(text, /Output truncated/);
+		assert.ok(countLines(text) <= DEFAULT_MAX_LINES);
+		assert.ok(Buffer.byteLength(text, "utf8") <= DEFAULT_MAX_BYTES);
 		assert.equal((text.match(/^\d+\./gm) ?? []).length, 10);
 		assert.equal(result.details.sources.length, 12);
 		assert.equal("rawInteraction" in result.details, false);
@@ -374,6 +391,13 @@ async function withTempAgentDir(fn: (agentDir: string) => Promise<void>) {
 		else process.env.PI_CODING_AGENT_DIR = previous;
 		await rm(agentDir, { recursive: true, force: true });
 	}
+}
+
+function countLines(content: string) {
+	if (!content) return 0;
+	const lines = content.split("\n");
+	if (content.endsWith("\n")) lines.pop();
+	return lines.length;
 }
 
 async function writeConfig(value: unknown) {
