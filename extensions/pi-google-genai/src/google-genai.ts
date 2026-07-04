@@ -38,7 +38,7 @@ const COMMAND_COMPLETIONS = [
 ];
 
 const SearchTypesParameter = Type.Optional(
-	Type.Array(Type.String({ description: "Search type: web_search or image_search." }), {
+	Type.Array(Type.Union([Type.Literal("web_search"), Type.Literal("image_search")]), {
 		description: "Optional Google Search grounding types. Defaults to Google's web search.",
 	}),
 );
@@ -104,6 +104,8 @@ interface FetchSignal {
 	cleanup(): void;
 	isTimeout(): boolean;
 }
+
+let rawResponsePathPromise: Promise<string> | undefined;
 
 const googleSearchTool = defineTool({
 	name: "google_search",
@@ -868,11 +870,18 @@ function formatSource(source: GoogleGenaiSource) {
 }
 
 async function writeRawResponse(raw: unknown) {
-	const directory = await mkdtemp(join(tmpdir(), "pi-google-genai-"));
-	const path = join(directory, "interaction.json");
+	const path = await rawResponsePath();
 	await writeFile(path, `${JSON.stringify(raw, null, "\t")}\n`, { mode: 0o600 });
 	await chmod(path, 0o600);
 	return path;
+}
+
+function rawResponsePath() {
+	rawResponsePathPromise ??= mkdtemp(join(tmpdir(), "pi-google-genai-")).then(async (directory) => {
+		await chmod(directory, 0o700);
+		return join(directory, "interaction.json");
+	});
+	return rawResponsePathPromise;
 }
 
 function asArray(value: unknown): unknown[] {

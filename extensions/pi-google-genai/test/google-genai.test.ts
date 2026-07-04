@@ -31,6 +31,8 @@ test("google-genai registers three tools, command, and session hooks", () => {
 		["google_search", "google_maps", "google_url_context"],
 	);
 	assert.ok(mock.commands.has("google-genai"));
+	assert.match(JSON.stringify(mock.tools[0].parameters), /"const":"web_search"/);
+	assert.match(JSON.stringify(mock.tools[0].parameters), /"const":"image_search"/);
 	assert.deepEqual([...mock.events.keys()].sort(), ["session_shutdown", "session_start"]);
 });
 
@@ -307,6 +309,10 @@ test("formatToolResult limits sources, truncates content, and writes raw respons
 		assert.ok(result.details.fullResponsePath);
 		assert.equal((await stat(result.details.fullResponsePath)).mode & 0o777, 0o600);
 		assert.match(await readFile(result.details.fullResponsePath, "utf8"), /output_text/);
+		assert.equal(
+			(await formatToolResult(raw, "gemini-test")).details.fullResponsePath,
+			result.details.fullResponsePath,
+		);
 	});
 });
 
