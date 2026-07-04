@@ -877,10 +877,15 @@ async function writeRawResponse(raw: unknown) {
 }
 
 function rawResponsePath() {
-	rawResponsePathPromise ??= mkdtemp(join(tmpdir(), "pi-google-genai-")).then(async (directory) => {
-		await chmod(directory, 0o700);
-		return join(directory, "interaction.json");
-	});
+	rawResponsePathPromise ??= mkdtemp(join(tmpdir(), "pi-google-genai-"))
+		.then(async (directory) => {
+			await chmod(directory, 0o700);
+			return join(directory, "interaction.json");
+		})
+		.catch((error) => {
+			rawResponsePathPromise = undefined;
+			throw error;
+		});
 	return rawResponsePathPromise;
 }
 

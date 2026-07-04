@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -439,7 +439,7 @@ async function executeTool(
 
 async function withTempAgentDir(fn: (agentDir: string) => Promise<void>) {
 	const previous = process.env.PI_CODING_AGENT_DIR;
-	const agentDir = join(tmpdir(), `pi-google-genai-test-${Date.now()}-${Math.random()}`);
+	const agentDir = await mkdtemp(join(tmpdir(), "pi-google-genai-test-"));
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	try {
 		await fn(agentDir);
