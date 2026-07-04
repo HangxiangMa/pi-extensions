@@ -75,3 +75,31 @@ test("message_end appends pi retry hint for Codex websocket connection limits on
 		undefined,
 	);
 });
+
+test("message_end appends pi retry hint for Codex generic retryable errors once", () => {
+	const mock = createMockPi();
+	retry(mock.pi);
+	const handler = mock.events.get("message_end")?.[0];
+	assert.ok(handler);
+
+	const result = handler(
+		{
+			message: {
+				role: "assistant",
+				stopReason: "error",
+				errorMessage:
+					"Codex error: An error occurred while processing your request. You can retry your request, or contact support if the issue persists.",
+			},
+		},
+		createMockContext({ hasUI: false }).ctx,
+	);
+	assert.ok(result && typeof result === "object" && "message" in result);
+	const retryResult = result as { message: { errorMessage: string } };
+
+	assert.match(retryResult.message.errorMessage, /\[codex-generic-retry\] provider returned error/);
+	assert.equal(retryResult.message.errorMessage.match(/provider returned error/g)?.length, 1);
+	assert.equal(
+		handler({ message: retryResult.message }, createMockContext({ hasUI: false }).ctx),
+		undefined,
+	);
+});

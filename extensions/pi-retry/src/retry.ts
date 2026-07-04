@@ -3,9 +3,13 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 const UNKNOWN_NO_DETAILS_RE = /Unknown error \(no error details in response\)/i;
 const CODEX_WEBSOCKET_CONNECTION_LIMIT_RE =
 	/websocket[_\s-]*connection[_\s-]*limit[_\s-]*reached|create a new websocket connection to continue/i;
+const CODEX_GENERIC_PROCESSING_ERROR_RE =
+	/Codex error:[\s\S]*An error occurred while processing your request/i;
+const CODEX_GENERIC_RETRY_PROMPT_RE = /You can retry your request/i;
 const RETRYABLE_HINT = "provider returned error";
 const UNKNOWN_ERROR_TAG = "[unknown-error-retry]";
 const CODEX_WEBSOCKET_CONNECTION_LIMIT_TAG = "[codex-websocket-limit-retry]";
+const CODEX_GENERIC_RETRY_TAG = "[codex-generic-retry]";
 const STALL_WATCHDOG_TAG = "[stall-watchdog-retry]";
 const STATUS_KEY = "unknown-error-retry";
 const STATUS_VISIBLE_MS = 8_000;
@@ -208,7 +212,15 @@ export default function retry(pi: ExtensionAPI) {
 						notification:
 							"Matched Codex websocket connection limit; letting pi auto-retry with a fresh websocket.",
 					}
-				: undefined;
+				: CODEX_GENERIC_PROCESSING_ERROR_RE.test(message.errorMessage) &&
+						CODEX_GENERIC_RETRY_PROMPT_RE.test(message.errorMessage)
+					? {
+							tag: CODEX_GENERIC_RETRY_TAG,
+							label: "Codex retryable backend failure",
+							notification:
+								"Matched Codex generic retryable backend failure; letting pi auto-retry this turn.",
+						}
+					: undefined;
 		if (!matchedError) return;
 
 		// Avoid appending the hint repeatedly if a resumed/replayed message already has it.
