@@ -33,6 +33,7 @@ test("google-genai registers three tools, command, and session hooks", () => {
 	assert.ok(mock.commands.has("google-genai"));
 	assert.match(JSON.stringify(mock.tools[0].parameters), /"const":"web_search"/);
 	assert.match(JSON.stringify(mock.tools[0].parameters), /"const":"image_search"/);
+	assert.match(JSON.stringify(mock.tools[2].parameters), /"minItems":1/);
 	assert.deepEqual([...mock.events.keys()].sort(), ["session_shutdown", "session_start"]);
 });
 
@@ -168,6 +169,29 @@ test("tools send expected interaction requests and format sources", async () => 
 			assert.match(result.content[0].text, /Sources:/);
 			assert.equal(result.details.sources[0].url, "https://example.test/euro");
 		});
+	});
+});
+
+test("tools surface successful non-JSON responses instead of dropping the body", async () => {
+	await withTempAgentDir(async () => {
+		const mock = createMockPi();
+		googleGenai(mock.pi);
+		const { ctx } = createMockContext({
+			modelRegistry: { getApiKeyForProvider: async () => "test-key" },
+		});
+		const previous = globalThis.fetch;
+		globalThis.fetch = (async () =>
+			new Response("plain text response", {
+				status: 200,
+				headers: { "content-type": "text/plain" },
+			})) as typeof fetch;
+		try {
+			const result = await executeTool(mock.tools[0], "call-text", { query: "text" }, ctx);
+			assert.equal(result.content[0].text, "plain text response");
+			assert.equal(result.details.outputText, "plain text response");
+		} finally {
+			globalThis.fetch = previous;
+		}
 	});
 });
 

@@ -179,6 +179,7 @@ const googleUrlContextTool = defineTool({
 		prompt: Type.String({ description: "Question or instruction for the provided URLs." }),
 		urls: Type.Array(Type.String({ description: "HTTP or HTTPS URL to fetch as context." }), {
 			description: "One or more http:// or https:// URLs.",
+			minItems: 1,
 		}),
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -742,7 +743,7 @@ function parseJsonResponse(text: string) {
 	try {
 		return JSON.parse(text);
 	} catch {
-		return { text };
+		return { message: text, output_text: text };
 	}
 }
 
