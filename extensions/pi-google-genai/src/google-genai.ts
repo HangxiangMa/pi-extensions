@@ -17,7 +17,8 @@ import { Type } from "typebox";
 
 export const DEFAULT_MODEL = "gemini-3.5-flash";
 export const DEFAULT_API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
-export const DEFAULT_TIMEOUT_MS = 30_000;
+export const DEFAULT_TIMEOUT_MS = 60_000;
+export const MAX_TIMEOUT_MS = 2_147_483_647;
 export const GOOGLE_GENAI_TOOL_NAMES = [
 	"google_search",
 	"google_maps",
@@ -44,9 +45,10 @@ const SearchTypesParameter = Type.Optional(
 	}),
 );
 const TimeoutMsParameter = Type.Optional(
-	Type.Number({
-		description: `Per-call timeout in milliseconds. Overrides google-genai.json timeoutMs and the ${DEFAULT_TIMEOUT_MS}ms default.`,
+	Type.Integer({
+		description: `Per-call timeout in milliseconds. Overrides google-genai.json timeoutMs and the ${DEFAULT_TIMEOUT_MS}ms default. Must be an integer from 1 to ${MAX_TIMEOUT_MS}.`,
 		minimum: 1,
+		maximum: MAX_TIMEOUT_MS,
 	}),
 );
 
@@ -335,8 +337,8 @@ export function validateSearchTypes(searchTypes: unknown): SearchType[] | undefi
 
 export function validateTimeoutMs(timeoutMs: unknown): number | undefined {
 	if (timeoutMs === undefined) return undefined;
-	if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-		throw new Error("timeoutMs must be a positive number of milliseconds.");
+	if (!isValidTimeoutMs(timeoutMs)) {
+		throw new Error(`timeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS} milliseconds.`);
 	}
 	return timeoutMs;
 }
@@ -687,9 +689,15 @@ function normalizeApiUrl(value: unknown) {
 
 function normalizeConfigTimeout(value: unknown, warnings: string[]) {
 	if (value === undefined) return undefined;
-	if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
-	warnings.push("google-genai.json timeoutMs must be a positive number of milliseconds; ignoring value.");
+	if (isValidTimeoutMs(value)) return value;
+	warnings.push(
+		`google-genai.json timeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS} milliseconds; ignoring value.`,
+	);
 	return undefined;
+}
+
+function isValidTimeoutMs(value: unknown): value is number {
+	return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_TIMEOUT_MS;
 }
 
 async function readJsonIfExists(path: string, warnings: string[]) {

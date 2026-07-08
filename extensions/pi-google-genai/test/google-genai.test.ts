@@ -15,11 +15,13 @@ import googleGenai, {
 	GOOGLE_GENAI_TOOL_NAMES,
 	googleGenaiConfigPath,
 	loadGoogleGenaiConfig,
+	MAX_TIMEOUT_MS,
 	normalizeGoogleGenaiSettings,
 	parseCommand,
 	resolveGoogleGenaiAuth,
 	validateMapsLocation,
 	validateSearchTypes,
+	validateTimeoutMs,
 	validateUrls,
 } from "../src/google-genai.js";
 
@@ -35,6 +37,8 @@ test("google-genai registers three tools, command, and session hooks", () => {
 	assert.match(JSON.stringify(mock.tools[0].parameters), /"const":"web_search"/);
 	assert.match(JSON.stringify(mock.tools[0].parameters), /"const":"image_search"/);
 	assert.match(JSON.stringify(mock.tools[0].parameters), /timeoutMs/);
+	assert.match(JSON.stringify(mock.tools[0].parameters), /"type":"integer"/);
+	assert.match(JSON.stringify(mock.tools[0].parameters), new RegExp(`"maximum":${MAX_TIMEOUT_MS}`));
 	assert.match(JSON.stringify(mock.tools[0].promptGuidelines), /split|narrow/i);
 	assert.match(JSON.stringify(mock.tools[2].parameters), /"minItems":1/);
 	assert.deepEqual([...mock.events.keys()].sort(), ["session_shutdown", "session_start"]);
@@ -103,7 +107,12 @@ test("config loading validates google-genai.json timeoutMs", async () => {
 		loaded = await loadGoogleGenaiConfig();
 		assert.equal(loaded.config.timeoutMs, DEFAULT_TIMEOUT_MS);
 		assert.match(loaded.warnings.join("\n"), /google-genai\.json timeoutMs/);
-		assert.match(loaded.warnings.join("\n"), /positive number of milliseconds/);
+		assert.match(loaded.warnings.join("\n"), /integer from 1/);
+
+		await writeConfig({ timeoutMs: MAX_TIMEOUT_MS + 1 });
+		loaded = await loadGoogleGenaiConfig();
+		assert.equal(loaded.config.timeoutMs, DEFAULT_TIMEOUT_MS);
+		assert.match(loaded.warnings.join("\n"), new RegExp(String(MAX_TIMEOUT_MS)));
 	});
 });
 
@@ -139,13 +148,18 @@ test("auth uses config apiKey before Pi google auth", async () => {
 	);
 });
 
-test("validators enforce search types, map coordinate pairs, and URL schemes", () => {
+test("validators enforce search types, timeout bounds, map coordinate pairs, and URL schemes", () => {
 	assert.deepEqual(validateSearchTypes(undefined), undefined);
 	assert.deepEqual(validateSearchTypes(["web_search", "image_search"]), [
 		"web_search",
 		"image_search",
 	]);
 	assert.throws(() => validateSearchTypes(["enterprise_web_search"]), /searchTypes/);
+	assert.equal(validateTimeoutMs(undefined), undefined);
+	assert.equal(validateTimeoutMs(MAX_TIMEOUT_MS), MAX_TIMEOUT_MS);
+	assert.throws(() => validateTimeoutMs(0), /integer from 1/);
+	assert.throws(() => validateTimeoutMs(1.5), /integer from 1/);
+	assert.throws(() => validateTimeoutMs(MAX_TIMEOUT_MS + 1), /integer from 1/);
 	assert.deepEqual(validateMapsLocation({}), {});
 	assert.deepEqual(validateMapsLocation({ latitude: 34.05, longitude: -118.24 }), {
 		latitude: 34.05,
@@ -335,7 +349,7 @@ test("tool requests report HTTP errors and time out", async () => {
 			await assert.rejects(
 				() =>
 					executeTool(mock.tools[0], "call-invalid-timeout", { query: "slow", timeoutMs: 0 }, ctx),
-				/timeoutMs must be a positive number of milliseconds/,
+				/integer from 1/,
 			);
 
 			let mapsTimeout: unknown;

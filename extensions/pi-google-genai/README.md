@@ -40,7 +40,7 @@ Example:
   "apiKey": "YOUR_GOOGLE_API_KEY",
   "model": "gemini-3.5-flash",
   "apiUrl": "https://generativelanguage.googleapis.com/v1beta/interactions",
-  "timeoutMs": 30000,
+  "timeoutMs": 60000,
   "tools": ["google_search", "google_maps", "google_url_context"]
 }
 ```
@@ -48,7 +48,7 @@ Example:
 The file is written as `0600`.
 
 Timeout precedence is: per-call `timeoutMs` parameter, `google-genai.json` `timeoutMs`, then
-the 30000ms default.
+the 60000ms default. Timeout values must be integer milliseconds from 1 to 2147483647.
 
 ### 🔐 Auth precedence
 
