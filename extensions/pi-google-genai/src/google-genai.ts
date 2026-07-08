@@ -18,7 +18,6 @@ import { Type } from "typebox";
 export const DEFAULT_MODEL = "gemini-3.5-flash";
 export const DEFAULT_API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
 export const DEFAULT_TIMEOUT_MS = 30_000;
-export const GOOGLE_GENAI_TIMEOUT_ENV = "PI_GOOGLE_GENAI_TIMEOUT_MS";
 export const GOOGLE_GENAI_TOOL_NAMES = [
 	"google_search",
 	"google_maps",
@@ -46,7 +45,7 @@ const SearchTypesParameter = Type.Optional(
 );
 const TimeoutMsParameter = Type.Optional(
 	Type.Number({
-		description: `Per-call timeout in milliseconds. Overrides ${GOOGLE_GENAI_TIMEOUT_ENV}, google-genai.json timeoutMs, and the ${DEFAULT_TIMEOUT_MS}ms default.`,
+		description: `Per-call timeout in milliseconds. Overrides google-genai.json timeoutMs and the ${DEFAULT_TIMEOUT_MS}ms default.`,
 		minimum: 1,
 	}),
 );
@@ -643,11 +642,10 @@ function normalizeConfigWithWarnings(value: unknown): { config: GoogleGenaiConfi
 	const warnings: string[] = [];
 	const tools = normalizeTools(raw.tools, warnings);
 	const fileTimeoutMs = normalizeConfigTimeout(raw.timeoutMs, warnings);
-	const envTimeoutMs = normalizeEnvTimeout(warnings);
 	const config: GoogleGenaiConfig = {
 		model: normalizeString(raw.model) ?? DEFAULT_MODEL,
 		apiUrl: normalizeApiUrl(raw.apiUrl) ?? DEFAULT_API_URL,
-		timeoutMs: envTimeoutMs ?? fileTimeoutMs ?? DEFAULT_TIMEOUT_MS,
+		timeoutMs: fileTimeoutMs ?? DEFAULT_TIMEOUT_MS,
 		tools,
 	};
 	const apiKey = normalizeString(raw.apiKey);
@@ -689,28 +687,9 @@ function normalizeApiUrl(value: unknown) {
 
 function normalizeConfigTimeout(value: unknown, warnings: string[]) {
 	if (value === undefined) return undefined;
-	const timeoutMs = parsePositiveTimeoutMs(value);
-	if (timeoutMs !== undefined) return timeoutMs;
+	if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
 	warnings.push("google-genai.json timeoutMs must be a positive number of milliseconds; ignoring value.");
 	return undefined;
-}
-
-function normalizeEnvTimeout(warnings: string[]) {
-	const value = process.env[GOOGLE_GENAI_TIMEOUT_ENV];
-	if (value === undefined || value.trim() === "") return undefined;
-	const timeoutMs = parsePositiveTimeoutMs(value);
-	if (timeoutMs !== undefined) return timeoutMs;
-	warnings.push(`${GOOGLE_GENAI_TIMEOUT_ENV} must be a positive number of milliseconds; ignoring value.`);
-	return undefined;
-}
-
-function parsePositiveTimeoutMs(value: unknown) {
-	if (typeof value === "number") {
-		return Number.isFinite(value) && value > 0 ? value : undefined;
-	}
-	if (typeof value !== "string") return undefined;
-	const parsed = Number(value.trim());
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 async function readJsonIfExists(path: string, warnings: string[]) {
@@ -776,7 +755,7 @@ function formatTimeoutError(timeoutMs: number, timeoutAdvice?: string) {
 		`Google GenAI request timed out after ${timeoutMs}ms.`,
 		"This is a timeout, not a no-results response.",
 		timeoutAdvice ?? "Try narrowing the query or splitting broad comparison/review queries.",
-		`To allow longer calls, set ${GOOGLE_GENAI_TIMEOUT_ENV}, google-genai.json timeoutMs, or the per-call timeoutMs parameter.`,
+		"To allow longer calls, set google-genai.json timeoutMs or the per-call timeoutMs parameter.",
 	].join(" ");
 }
 

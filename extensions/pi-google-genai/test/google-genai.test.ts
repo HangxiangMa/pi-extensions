@@ -12,7 +12,6 @@ import googleGenai, {
 	DEFAULT_MODEL,
 	DEFAULT_TIMEOUT_MS,
 	formatToolResult,
-	GOOGLE_GENAI_TIMEOUT_ENV,
 	GOOGLE_GENAI_TOOL_NAMES,
 	googleGenaiConfigPath,
 	loadGoogleGenaiConfig,
@@ -93,19 +92,17 @@ test("config loading defaults, normalizes tools, and rejects interpolation", asy
 	});
 });
 
-test("config loading supports PI_GOOGLE_GENAI_TIMEOUT_MS override", async () => {
+test("config loading validates google-genai.json timeoutMs", async () => {
 	await withTempAgentDir(async () => {
-		await writeConfig({ timeoutMs: 12_000 });
-
-		process.env[GOOGLE_GENAI_TIMEOUT_ENV] = "45000";
+		await writeConfig({ timeoutMs: 45_000 });
 		let loaded = await loadGoogleGenaiConfig();
 		assert.equal(loaded.config.timeoutMs, 45_000);
 		assert.deepEqual(loaded.warnings, []);
 
-		process.env[GOOGLE_GENAI_TIMEOUT_ENV] = "not-a-number";
+		await writeConfig({ timeoutMs: "not-a-number" });
 		loaded = await loadGoogleGenaiConfig();
-		assert.equal(loaded.config.timeoutMs, 12_000);
-		assert.match(loaded.warnings.join("\n"), /PI_GOOGLE_GENAI_TIMEOUT_MS/);
+		assert.equal(loaded.config.timeoutMs, DEFAULT_TIMEOUT_MS);
+		assert.match(loaded.warnings.join("\n"), /google-genai\.json timeoutMs/);
 		assert.match(loaded.warnings.join("\n"), /positive number of milliseconds/);
 	});
 });
@@ -289,7 +286,7 @@ test("tools allow local http apiUrl for proxies", async () => {
 
 test("tool requests report HTTP errors and time out", async () => {
 	await withTempAgentDir(async () => {
-		await writeConfig({ timeoutMs: 50_000 });
+		await writeConfig({ timeoutMs: 1 });
 		const mock = createMockPi();
 		googleGenai(mock.pi);
 		const { ctx } = createMockContext({
@@ -315,7 +312,6 @@ test("tool requests report HTTP errors and time out", async () => {
 				throw new Error("unreachable");
 			}) as typeof fetch;
 
-			process.env[GOOGLE_GENAI_TIMEOUT_ENV] = "1";
 			await assert.rejects(
 				() => executeTool(mock.tools[0], "call-timeout", { query: "slow" }, ctx),
 				(error) => {
@@ -324,13 +320,13 @@ test("tool requests report HTTP errors and time out", async () => {
 					assert.match(error.message, /timeout, not a no-results response/i);
 					assert.match(error.message, /narrow/i);
 					assert.match(error.message, /split/i);
-					assert.match(error.message, /PI_GOOGLE_GENAI_TIMEOUT_MS/);
+					assert.match(error.message, /google-genai\.json timeoutMs/);
 					assert.doesNotMatch(error.message, /not found|no results found/i);
 					return true;
 				},
 			);
 
-			delete process.env[GOOGLE_GENAI_TIMEOUT_ENV];
+			await writeConfig({ timeoutMs: 50_000 });
 			await assert.rejects(
 				() =>
 					executeTool(mock.tools[0], "call-per-call-timeout", { query: "slow", timeoutMs: 1 }, ctx),
@@ -582,16 +578,14 @@ test("session_start restores persisted tool selection and ignores unknown names"
 	});
 });
 
-test("normalize settings defaults missing tools to all enabled and allows empty selection", async () => {
-	await withGoogleGenaiTimeoutEnv(undefined, async () => {
-		assert.deepEqual(normalizeGoogleGenaiSettings({}), {
-			model: DEFAULT_MODEL,
-			apiUrl: DEFAULT_API_URL,
-			timeoutMs: DEFAULT_TIMEOUT_MS,
-			tools: [...GOOGLE_GENAI_TOOL_NAMES],
-		});
-		assert.deepEqual(normalizeGoogleGenaiSettings({ tools: [] }).tools, []);
+test("normalize settings defaults missing tools to all enabled and allows empty selection", () => {
+	assert.deepEqual(normalizeGoogleGenaiSettings({}), {
+		model: DEFAULT_MODEL,
+		apiUrl: DEFAULT_API_URL,
+		timeoutMs: DEFAULT_TIMEOUT_MS,
+		tools: [...GOOGLE_GENAI_TOOL_NAMES],
 	});
+	assert.deepEqual(normalizeGoogleGenaiSettings({ tools: [] }).tools, []);
 });
 
 interface TestToolDetails extends Record<string, unknown> {
@@ -618,30 +612,14 @@ async function executeTool(
 
 async function withTempAgentDir(fn: (agentDir: string) => Promise<void>) {
 	const previous = process.env.PI_CODING_AGENT_DIR;
-	const previousTimeout = process.env[GOOGLE_GENAI_TIMEOUT_ENV];
 	const agentDir = await mkdtemp(join(tmpdir(), "pi-google-genai-test-"));
 	process.env.PI_CODING_AGENT_DIR = agentDir;
-	delete process.env[GOOGLE_GENAI_TIMEOUT_ENV];
 	try {
 		await fn(agentDir);
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;
-		if (previousTimeout === undefined) delete process.env[GOOGLE_GENAI_TIMEOUT_ENV];
-		else process.env[GOOGLE_GENAI_TIMEOUT_ENV] = previousTimeout;
 		await rm(agentDir, { recursive: true, force: true });
-	}
-}
-
-async function withGoogleGenaiTimeoutEnv(value: string | undefined, fn: () => Promise<void>) {
-	const previous = process.env[GOOGLE_GENAI_TIMEOUT_ENV];
-	if (value === undefined) delete process.env[GOOGLE_GENAI_TIMEOUT_ENV];
-	else process.env[GOOGLE_GENAI_TIMEOUT_ENV] = value;
-	try {
-		await fn();
-	} finally {
-		if (previous === undefined) delete process.env[GOOGLE_GENAI_TIMEOUT_ENV];
-		else process.env[GOOGLE_GENAI_TIMEOUT_ENV] = previous;
 	}
 }
 

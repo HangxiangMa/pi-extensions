@@ -47,14 +47,8 @@ Example:
 
 The file is written as `0600`.
 
-Timeout precedence is: per-call `timeoutMs` parameter, `PI_GOOGLE_GENAI_TIMEOUT_MS`,
-`google-genai.json` `timeoutMs`, then the 30000ms default.
-
-Example environment override:
-
-```bash
-PI_GOOGLE_GENAI_TIMEOUT_MS=60000 pi -e ./extensions/pi-google-genai
-```
+Timeout precedence is: per-call `timeoutMs` parameter, `google-genai.json` `timeoutMs`, then
+the 30000ms default.
 
 ### 🔐 Auth precedence
 
@@ -98,9 +92,8 @@ Parameters:
 
 Very broad market-research, comparison, review, or search-result synthesis queries can time out. A
 timeout error means the request exceeded the configured duration; it is not a “no results found”
-response. Prefer several narrow searches over one big query, or raise
-`PI_GOOGLE_GENAI_TIMEOUT_MS`, config `timeoutMs`, or per-call `timeoutMs` when a broader call is
-genuinely needed.
+response. Prefer several narrow searches over one big query, or raise config `timeoutMs` or
+per-call `timeoutMs` when a broader call is genuinely needed.
 
 Instead of:
 
