@@ -30,6 +30,7 @@
 - Symptom: pi-goal compaction/retry hooks can mis-handle continuation state if a fresh continuation reuses a cancelled marker. Cause: markers based only on goal id and iteration collide after compaction cancellation. Fix: include a unique nonce in continuation markers.
 - Symptom: Pi compaction event docs may mention `reason`/`willRetry` while project target typings lack them. Cause: local/global `@earendil-works/pi-coding-agent` version skew. Fix: run `npm install`, verify target version, and treat compaction event fields as optional.
 - `fs.watch` on a single file can miss branch HEAD writes on some platforms; watch the parent directory and filter the `HEAD` filename instead.
+- Symptom: Pi 0.79 CI rejects `ProviderHeaders` imports from `@earendil-works/pi-ai`. Cause: that root type export is newer than the supported compatibility floor. Fix: use the compatible local `Record<string, string>` auth-header shape when an extension must typecheck across the 0.79/0.80 matrix.
 
 ## TASTE
 
