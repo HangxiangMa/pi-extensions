@@ -26,7 +26,7 @@ Goal mode uses Codex-like persistence instructions and sends guarded continuatio
 - Guards auto-follow-ups so duplicate, replaced, stopped, cleared, completed, or budget-limited goals are not continued.
 - Rotates the completion guard id when a goal is resumed or edited so delayed old turns cannot complete the newer goal instance.
 - Blocks stale tool calls after in-flight work pauses, blocks, or reaches a usage limit, until fresh non-goal user work, successful reactivation/replacement, or clear.
-- Encourages requirement-by-requirement verification before the goal is marked complete.
+- Applies one evidence-based completion audit across kickoff, resume, edit, system, continuation, and budget-wrap-up prompts.
 
 ## 📦 Install
 
@@ -98,7 +98,11 @@ Elapsed time is accumulated only while status is `active`. Pause, blocked, usage
 
 ## ✅ How completion works
 
-While a goal is active, `pi-goal` injects persistence rules, a `<goal_id>` stale-turn guard, and exposes `goal_complete`. To finish, the agent must call `goal_complete` with the exact current `goal_id` and a `summary` of completion evidence. Missing or stale `goal_id` values are rejected before summary validation. Paused, blocked, and usage-limited goals cannot be completed until resumed; a budget-limited goal permits completion only during its bounded in-flight wrap-up. Empty or plainly contradictory summaries are also rejected; the summary is completion evidence, not the stale-turn safety token.
+While a goal is active, `pi-goal` injects persistence rules, a `<goal_id>` stale-turn guard, and exposes `goal_complete`. Kickoff, resume, edited-objective, system, and automatic-continuation prompts all identify the escaped objective as user-provided task data, preserve its full scope across turns, and require the agent to derive concrete requirements from the objective and referenced artifacts. They treat the current worktree, command output, tests, runtime behavior, PR state, rendered artifacts, and external state as authoritative; previous conversation and plans are context rather than proof.
+
+Before completion, the shared audit tells the agent to treat completion as unproven, inspect requirement-by-requirement evidence for every named artifact, command, test, gate, invariant, and deliverable, and match each check's scope to the requirement it supports. Weak, indirect, missing, or merely consistent evidence means work must continue. This prompt wording is a behavioral guardrail, not proof by itself: `pi-goal` can enforce the current goal id and reject empty or plainly contradictory summaries, but it cannot independently prove that external work is complete.
+
+To finish, the agent must call `goal_complete` with the exact current `goal_id` and a `summary` of completion evidence. Missing or stale `goal_id` values are rejected before summary validation. Paused, blocked, and usage-limited goals cannot be completed until resumed; a budget-limited goal permits completion only during its bounded in-flight wrap-up. The summary is completion evidence, not the stale-turn safety token.
 
 If a turn ends before completion, `pi-goal` records usage and creates one continuation intent. It dispatches that continuation only from Pi's `agent_settled` lifecycle after retries, automatic compaction, steering, and follow-up work have drained, `ctx.isIdle()` is true, and no messages are pending. Repeated settled events cannot dispatch the same intent twice.
 
@@ -106,7 +110,7 @@ Manual compaction does not emit `agent_settled`, so its completion hook uses the
 
 ## 🚧 Blocked goals
 
-`goal_blocked` is intentionally narrower than completion or ordinary clarification. The model must provide the exact current `goal_id`, a specific reason describing the user or external action required (up to 1,000 characters), concrete evidence from the failed resolution attempts (up to 4,000 characters), and `repeated_turns` showing the same blocker recurred for at least three consecutive goal turns. A resumed goal starts a fresh blocker audit. Empty or oversized reasons/evidence, stale ids, non-whole turn counts, stopped goals, and fewer than three turns are rejected. Accepted blocker reports set `blocked`, stop automatic continuation, and terminate the tool batch when Pi can do so safely.
+`goal_blocked` is intentionally narrower than completion or ordinary clarification. Every goal-mode prompt repeats the blocked audit: the model must provide the exact current `goal_id`, a specific reason describing the user or external action required (up to 1,000 characters), concrete evidence from the failed resolution attempts (up to 4,000 characters), and `repeated_turns` showing the same blocker recurred for at least three consecutive goal turns. A resumed goal starts a fresh blocker audit. Empty or oversized reasons/evidence, stale ids, non-whole turn counts, stopped goals, and fewer than three turns are rejected. Accepted blocker reports set `blocked`, stop automatic continuation, and terminate the tool batch when Pi can do so safely.
 
 Do not use `goal_blocked` merely because work is difficult, incomplete, uncertain, awaiting normal clarification, or affected by a recoverable tool/provider failure. The user can resolve the external condition and run `/goal resume` to rotate the goal id and continue.
 
