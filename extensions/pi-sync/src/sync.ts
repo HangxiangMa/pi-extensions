@@ -1,15 +1,77 @@
-import { createHash, createHmac, randomUUID } from "node:crypto";
-import { constants as fsConstants, type Dirent } from "node:fs";
+import { createHash } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { gunzip, gzip } from "node:zlib";
 import { promisify } from "node:util";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { completeSyncArguments, parseOptions, splitArgs, usage } from "./command.js";
+import {
+	agentDir,
+	ensureStateDir,
+	extraFilePathsByLower,
+	isMissingConfigError,
+	isStaleLock,
+	loadPartialConfig,
+	localConfigPath,
+	lockPath,
+	normalizeExtraFiles,
+	readLock,
+	stateDir,
+	writeJson,
+	configuredSessionDir,
+	isCloudflareR2Endpoint,
+	isEnabled,
+	isExplicitlyEnabled,
+	loadConfig,
+	readState,
+	sessionDirForApply,
+	sessionTokenWarnings,
+	syncSessionsWarnings,
+	withLock,
+	writeState,
+} from "./config.js";
+import { encodeKey, posixJoin, safeJoin, safeName, toPosix } from "./paths.js";
+import {
+	historyKey,
+	latestKey,
+	pointerFor,
+	profilePrefix,
+	S3Client,
+	snapshotKey,
+} from "./s3-client.js";
+import {
+	addTopLevelCaseVariantDeletes,
+	appliedFileHashMap,
+	applySnapshot,
+	preflightSnapshotApply,
+	protectSnapshotApplyPlan,
+} from "./snapshot-apply.js";
+import {
+	collectFiles,
+	createSnapshot,
+	canonicalSnapshotPathForConfig,
+	filterSnapshotForConfigPolicy,
+	isConfiguredSnapshotPath,
+	isDeniedPath,
+	isSessionPath,
+	sessionSnapshotPathFromAbsolute,
+	mergeRemotePreservedFiles,
+	mergeRemoteSessionFiles,
+	scanSnapshot,
+	snapshotIncludesSessions,
+	snapshotWithoutSessions,
+} from "./snapshot.js";
 import type {
-	ExtensionAPI,
-	ExtensionCommandContext,
-	ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+	CommandOptions,
+	LatestPointer,
+	RemoteObject,
+	Snapshot,
+	SnapshotOptions,
+	SyncConfig,
+	SyncState,
+} from "./types.js";
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -21,133 +83,11 @@ const DEFAULT_PREFIX = "pi-sync";
 const DEFAULT_REGION = "auto";
 const LOCK_STALE_MS = 30 * 60 * 1000;
 
-const TOP_LEVEL_FILES = new Set([
-	"settings.json",
-	"keybindings.json",
-	"models.json",
-	"AGENTS.md",
-	"APPEND_SYSTEM.md",
-]);
-const TOP_LEVEL_DIRS = new Set(["skills", "prompts", "themes", "extensions"]);
-const TOP_LEVEL_FILE_PATHS = new Map([...TOP_LEVEL_FILES].map((name) => [name.toLowerCase(), name]));
-const TOP_LEVEL_FILE_NAMES = new Set(TOP_LEVEL_FILE_PATHS.keys());
-const RESERVED_TOP_LEVEL_NAMES = new Set([...TOP_LEVEL_DIRS, "sessions"]);
-const SECRET_PATTERNS = [
-	/AWS_SECRET_ACCESS_KEY\s*[=:]\s*['\"]?[A-Za-z0-9/+]{35,}/i,
-	/(ANTHROPIC|OPENAI|GEMINI|GOOGLE|FIRECRAWL|GITHUB|CLOUDFLARE|R2|S3)_[A-Z0-9_]*(KEY|TOKEN|SECRET)\s*[=:]\s*['\"]?[^\s'\"]{12,}/i,
-	/sk-ant-[A-Za-z0-9_-]{20,}/,
-	/sk-[A-Za-z0-9]{20,}/,
-	/gh[pousr]_[A-Za-z0-9_]{20,}/,
-];
-
-interface SyncConfig {
-	endpoint: string;
-	bucket: string;
-	region: string;
-	accessKeyId: string;
-	secretAccessKey: string;
-	sessionToken?: string;
-	profile: string;
-	prefix: string;
-	syncSessions: boolean;
-	extraFiles: string[];
-}
-
-interface PartialConfig {
-	endpoint?: string;
-	bucket?: string;
-	region?: string;
-	accessKeyId?: string;
-	secretAccessKey?: string;
-	sessionToken?: string;
-	profile?: string;
-	prefix?: string;
-	autoSync?: boolean | string;
-	syncSessions?: boolean | string;
-	extraFiles?: unknown;
-}
-
-interface SnapshotFile {
-	path: string;
-	contentBase64: string;
-	sha256: string;
-}
-
-interface Snapshot {
-	version: number;
-	id: string;
-	createdAt: string;
-	machine: string;
-	profile: string;
-	syncSessions?: boolean;
-	files: SnapshotFile[];
-}
-
-interface LatestPointer {
-	version: number;
-	profile: string;
-	snapshot: string;
-	sha256: string;
-	createdAt: string;
-	machine: string;
-	syncSessions?: boolean;
-}
-
-interface RemoteObject<T> {
-	value?: T;
-	etag?: string;
-	missing: boolean;
-}
-
-interface SyncState {
-	version: number;
-	profile: string;
-	lastAppliedSnapshot?: string;
-	lastRemoteEtag?: string;
-	lastFileHashes: Record<string, string>;
-	syncSessions?: boolean;
-	extraFiles?: string[];
-}
-
-interface LockFile {
-	id: string;
-	pid: number;
-	command: string;
-	startedAt: string;
-}
-
-interface CommandOptions {
-	yes: boolean;
-	force: boolean;
-	stale: boolean;
-	silent: boolean;
-	reload: boolean;
-	auto: boolean;
-	args: string[];
-}
-
-interface CommandArgumentCompletion {
-	value: string;
-	label: string;
-	description?: string;
-}
-
-interface SnapshotOptions {
-	syncSessions?: boolean;
-	sessionDir?: string;
-	extraFiles?: string[];
-}
-
 interface PushInput {
 	config: SyncConfig;
 	state: SyncState;
 	local: Snapshot;
 	client?: S3Client;
-}
-
-interface SnapshotApplyPlan {
-	writes: Array<{ target: string; content: Buffer }>;
-	deletes: string[];
 }
 
 const AUTO_SYNC_OPTIONS: CommandOptions = {
@@ -159,41 +99,6 @@ const AUTO_SYNC_OPTIONS: CommandOptions = {
 	auto: true,
 	args: [],
 };
-const YES_FLAG_COMPLETIONS: readonly CommandArgumentCompletion[] = [
-	{ value: "--yes", label: "--yes", description: "Skip confirmation prompts" },
-	{ value: "-y", label: "-y", description: "Skip confirmation prompts" },
-];
-const SYNC_COMMAND_COMPLETIONS: readonly CommandArgumentCompletion[] = [
-	{ value: "help", label: "help", description: "Show command usage" },
-	{ value: "init", label: "init", description: "Create local config template" },
-	{ value: "config", label: "config", description: "Show resolved configuration" },
-	{ value: "status", label: "status", description: "Show sync status" },
-	{ value: "diff", label: "diff", description: "Show local/remote diff" },
-	{ value: "doctor", label: "doctor", description: "Check config, secrets, and lock state" },
-	{ value: "push", label: "push", description: "Upload local settings" },
-	{ value: "pull", label: "pull", description: "Apply remote settings" },
-	{ value: "sync", label: "sync", description: "Push or pull as needed" },
-	{ value: "history", label: "history", description: "Show recent remote snapshots" },
-	{ value: "rollback", label: "rollback", description: "Apply a previous snapshot" },
-	{ value: "unlock", label: "unlock", description: "Remove a stale local lock" },
-];
-const SYNC_FLAG_COMPLETIONS: Record<string, readonly CommandArgumentCompletion[]> = {
-	push: [
-		...YES_FLAG_COMPLETIONS,
-		{ value: "--force", label: "--force", description: "Overwrite visible remote changes" },
-	],
-	pull: [
-		...YES_FLAG_COMPLETIONS,
-		{ value: "--force", label: "--force", description: "Overwrite local changes" },
-	],
-	sync: [
-		...YES_FLAG_COMPLETIONS,
-		{ value: "--force", label: "--force", description: "Resolve conflicts by forcing action" },
-	],
-	rollback: YES_FLAG_COMPLETIONS,
-	unlock: [{ value: "--stale", label: "--stale", description: "Remove only a stale lock" }],
-};
-
 export default function sync(pi: ExtensionAPI) {
 	pi.registerCommand("pisync", {
 		description: "Sync Pi settings through Cloudflare R2 or S3-compatible storage",
@@ -770,382 +675,6 @@ async function maybeReload(ctx: ExtensionCommandContext | ExtensionContext) {
 	}
 }
 
-async function withLock<T>(command: string, fn: () => Promise<T>): Promise<T> {
-	await ensureStateDir();
-	const lock: LockFile = {
-		id: randomUUID(),
-		pid: process.pid,
-		command,
-		startedAt: new Date().toISOString(),
-	};
-	let handle: fs.FileHandle | undefined;
-	try {
-		handle = await fs.open(lockPath(), "wx");
-		await handle.writeFile(JSON.stringify(lock, null, "\t"));
-		await handle.close();
-		handle = undefined;
-		return await fn();
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-			const current = await readLock();
-			if (current && isStaleLock(current)) {
-				throw new Error(`pi-sync lock is stale (pid ${current.pid}). Run /pisync unlock --stale, then retry.`);
-			}
-			throw new Error(`pi-sync is already running${current ? ` (${current.command}, pid ${current.pid}, started ${current.startedAt})` : ""}.`);
-		}
-		throw error;
-	} finally {
-		await handle?.close();
-		const current = await readLock();
-		if (current?.id === lock.id) await fs.rm(lockPath(), { force: true });
-	}
-}
-
-async function loadConfigInternal(): Promise<SyncConfig> {
-	const partial = await loadPartialConfig();
-	const endpoint = partial.endpoint;
-	const bucket = partial.bucket;
-	const accessKeyId = partial.accessKeyId;
-	const secretAccessKey = partial.secretAccessKey;
-	const missing = [
-		["endpoint", endpoint],
-		["bucket", bucket],
-		["accessKeyId", accessKeyId],
-		["secretAccessKey", secretAccessKey],
-	]
-		.filter(([, value]) => !value)
-		.map(([name]) => name);
-	if (missing.length > 0) {
-		throw new Error(`Missing pi-sync config: ${missing.join(", ")}. Run /pisync init or set PI_SYNC_* environment variables.`);
-	}
-
-	return {
-		endpoint: endpoint!,
-		bucket: bucket!,
-		region: partial.region ?? DEFAULT_REGION,
-		accessKeyId: accessKeyId!,
-		secretAccessKey: secretAccessKey!,
-		sessionToken: partial.sessionToken,
-		profile: partial.profile ?? DEFAULT_PROFILE,
-		prefix: trimSlashes(partial.prefix ?? DEFAULT_PREFIX),
-		syncSessions: isExplicitlyEnabled(partial.syncSessions),
-		extraFiles: normalizeExtraFiles(partial.extraFiles),
-	};
-}
-
-export async function loadConfig(): Promise<SyncConfig> {
-	return loadConfigInternal();
-}
-
-async function loadPartialConfig(): Promise<PartialConfig> {
-	const fileConfig = (await readJsonIfExists<PartialConfig>(localConfigPath())) ?? {};
-	return {
-		...fileConfig,
-		endpoint: process.env.PI_SYNC_ENDPOINT ?? process.env.R2_ENDPOINT ?? fileConfig.endpoint,
-		bucket: process.env.PI_SYNC_BUCKET ?? process.env.R2_BUCKET ?? fileConfig.bucket,
-		region: process.env.PI_SYNC_REGION ?? process.env.AWS_REGION ?? fileConfig.region,
-		accessKeyId: process.env.PI_SYNC_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID ?? fileConfig.accessKeyId,
-		secretAccessKey: process.env.PI_SYNC_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY ?? fileConfig.secretAccessKey,
-		sessionToken: selectSessionToken(fileConfig.sessionToken),
-		profile: process.env.PI_SYNC_PROFILE ?? fileConfig.profile,
-		prefix: process.env.PI_SYNC_PREFIX ?? fileConfig.prefix,
-		autoSync: process.env.PI_SYNC_AUTO_SYNC ?? fileConfig.autoSync,
-		syncSessions: process.env.PI_SYNC_SESSIONS ?? fileConfig.syncSessions,
-		extraFiles: fileConfig.extraFiles,
-	};
-}
-
-async function configuredSessionDir() {
-	const envSessionDir = normalizeOptionalString(process.env.PI_CODING_AGENT_SESSION_DIR);
-	if (envSessionDir) return expandHome(envSessionDir);
-	const settings = await readJsonIfExists<{ sessionDir?: string }>(path.join(agentDir(), "settings.json"));
-	return settings?.sessionDir ? expandHome(settings.sessionDir) : undefined;
-}
-
-async function sessionDirForApply(ctx: ExtensionCommandContext | ExtensionContext, snapshot: Snapshot) {
-	const contextSessionDir = sessionDirFromContext(ctx);
-	const envSessionDir = normalizeOptionalString(process.env.PI_CODING_AGENT_SESSION_DIR);
-	if (envSessionDir) return contextSessionDir ?? expandHome(envSessionDir);
-
-	const localSessionDir = await configuredSessionDir();
-	if (contextSessionDir && path.resolve(contextSessionDir) !== path.resolve(localSessionDir ?? "")) {
-		return contextSessionDir;
-	}
-	return sessionDirFromSnapshot(snapshot) ?? contextSessionDir;
-}
-
-function sessionDirFromSnapshot(snapshot: Snapshot) {
-	const settingsFile = snapshot.files.find((file) => file.path === "settings.json");
-	if (!settingsFile) return undefined;
-	try {
-		const settings = JSON.parse(
-			decodeBase64Strict(settingsFile.contentBase64, settingsFile.path).toString("utf8"),
-		) as { sessionDir?: string };
-		return settings.sessionDir ? expandHome(settings.sessionDir) : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-async function createSnapshot(profile: string, options: SnapshotOptions = {}): Promise<Snapshot> {
-	const syncSessions = Boolean(options.syncSessions);
-	const files = await collectFiles(agentDir(), {
-		syncSessions,
-		sessionDir: options.sessionDir ?? (await configuredSessionDir()),
-		extraFiles: options.extraFiles,
-	});
-	return {
-		version: VERSION,
-		id: snapshotId(),
-		createdAt: new Date().toISOString(),
-		machine: os.hostname(),
-		profile,
-		syncSessions,
-		files,
-	};
-}
-
-export async function collectFiles(
-	root: string,
-	options: SnapshotOptions = {},
-): Promise<SnapshotFile[]> {
-	const results: SnapshotFile[] = [];
-	const entries = await fs.readdir(root, { withFileTypes: true });
-	for (const entry of entries) {
-		if (entry.isDirectory() && TOP_LEVEL_DIRS.has(entry.name)) {
-			await collectDirectory(results, root, entry.name);
-		}
-	}
-	for (const fileName of TOP_LEVEL_FILES) {
-		const entry = selectTopLevelFileEntry(entries, fileName);
-		if (entry) await addFile(results, root, entry.name, fileName);
-	}
-	for (const extraFileName of normalizeExtraFiles(options.extraFiles)) {
-		const entry = selectTopLevelFileEntry(entries, extraFileName);
-		if (entry) await addFile(results, root, entry.name, extraFileName);
-	}
-	if (options.syncSessions) {
-		try {
-			await collectDirectory(results, sessionStorageRoot(root, options.sessionDir), "", {
-				sessionsOnly: true,
-				virtualPrefix: "sessions",
-			});
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-		}
-	}
-	return results.sort((left, right) => left.path.localeCompare(right.path));
-}
-
-async function collectDirectory(
-	results: SnapshotFile[],
-	root: string,
-	relativeDirectory: string,
-	options: { sessionsOnly?: boolean; virtualPrefix?: string } = {},
-) {
-	const absoluteDirectory = path.join(root, relativeDirectory);
-	for (const entry of await fs.readdir(absoluteDirectory, { withFileTypes: true })) {
-		const relativePath = relativeDirectory ? posixJoin(relativeDirectory, entry.name) : entry.name;
-		const snapshotPath = options.virtualPrefix
-			? posixJoin(options.virtualPrefix, relativePath)
-			: relativePath;
-		if (isDeniedPath(snapshotPath)) continue;
-		if (entry.isDirectory()) {
-			await collectDirectory(results, root, relativePath, options);
-		} else if (entry.isFile() && (!options.sessionsOnly || isSessionFilePath(snapshotPath))) {
-			await addFile(results, root, relativePath, snapshotPath);
-		}
-	}
-}
-
-async function addFile(
-	results: SnapshotFile[],
-	root: string,
-	relativePath: string,
-	snapshotPath = relativePath,
-) {
-	if (!isSafeSnapshotPath(snapshotPath)) return;
-	const absolutePath = safeJoin(root, relativePath);
-	const content = await fs.readFile(absolutePath);
-	results.push({ path: snapshotPath, contentBase64: content.toString("base64"), sha256: sha256(content) });
-}
-
-export function isDeniedPath(relativePath: string) {
-	const normalized = toPosix(relativePath);
-	const lower = normalized.toLowerCase();
-	const segments = lower.split("/");
-	const base = path.posix.basename(lower);
-	return (
-		segments.includes("node_modules") ||
-		segments.includes(".git") ||
-		segments.includes(".pisync") ||
-		base === ".env" ||
-		base.startsWith(".env.") ||
-		base.endsWith(".env") ||
-		base.includes("secret") ||
-		base.includes("token") ||
-		base === "pi-sync.local.json"
-	);
-}
-
-function isSessionPath(relativePath: string) {
-	return toPosix(relativePath).startsWith("sessions/");
-}
-
-function isSessionFilePath(relativePath: string) {
-	const normalized = toPosix(relativePath);
-	return isSessionPath(normalized) && normalized.endsWith(".jsonl");
-}
-
-function sessionStorageRoot(root: string, configuredSessionDir?: string) {
-	return configuredSessionDir ? path.resolve(expandHome(configuredSessionDir)) : path.resolve(root, "sessions");
-}
-
-function sessionSnapshotPathFromAbsolute(sessionFile: string, configuredSessionDir?: string) {
-	const relativePath = toPosix(path.relative(sessionStorageRoot(agentDir(), configuredSessionDir), sessionFile));
-	if (!relativePath || relativePath.startsWith("../") || path.posix.isAbsolute(relativePath)) {
-		return undefined;
-	}
-	const snapshotPath = posixJoin("sessions", relativePath);
-	return isSessionFilePath(snapshotPath) ? snapshotPath : undefined;
-}
-
-function snapshotTarget(root: string, relativePath: string, configuredSessionDir?: string) {
-	if (isSessionPath(relativePath)) {
-		return safeJoin(sessionStorageRoot(root, configuredSessionDir), relativePath.slice("sessions/".length));
-	}
-	return safeJoin(root, relativePath);
-}
-
-function isPathInside(parent: string, child: string) {
-	const relativePath = path.relative(parent, child);
-	return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
-}
-
-function snapshotIncludesSessions(snapshot: Snapshot) {
-	return snapshot.syncSessions === true || snapshot.files.some((file) => isSessionPath(file.path));
-}
-
-export function filterSnapshotForConfigPolicy(
-	snapshot: Snapshot,
-	config: Pick<SyncConfig, "syncSessions" | "extraFiles">,
-	options: { regenerateId?: boolean } = {},
-) {
-	const extraFilePaths = extraFilePathsByLower(config.extraFiles);
-	const extraFiles = new Set(extraFilePaths.keys());
-	const filtered = {
-		...snapshot,
-		syncSessions: config.syncSessions ? snapshot.syncSessions : false,
-		files: canonicalizeSnapshotFilesForConfig(snapshot.files, config, extraFiles, extraFilePaths),
-	};
-	if (!options.regenerateId || snapshotsMatch(snapshot, filtered)) return filtered;
-	return {
-		...filtered,
-		id: snapshotId(),
-		createdAt: new Date().toISOString(),
-		machine: os.hostname(),
-	};
-}
-
-function isConfiguredSnapshotPath(
-	relativePath: string,
-	config: Pick<SyncConfig, "syncSessions">,
-	extraFiles: Set<string>,
-) {
-	const normalized = toPosix(relativePath);
-	if (isSessionPath(normalized)) return config.syncSessions;
-	if (!normalized.includes("/")) {
-		const lower = normalized.toLowerCase();
-		return TOP_LEVEL_FILE_NAMES.has(lower) || extraFiles.has(lower);
-	}
-	return TOP_LEVEL_DIRS.has(normalized.slice(0, normalized.indexOf("/")));
-}
-
-function canonicalizeSnapshotFilesForConfig(
-	files: SnapshotFile[],
-	config: Pick<SyncConfig, "syncSessions">,
-	extraFiles: Set<string>,
-	extraFilePaths: Map<string, string>,
-) {
-	const configuredFiles: SnapshotFile[] = [];
-	const extraCandidates = new Map<
-		string,
-		{ exact: boolean; file: SnapshotFile; originalPath: string }
-	>();
-	for (const file of files) {
-		const normalized = toPosix(file.path);
-		if (!isSafeSnapshotPath(file.path) || !isConfiguredSnapshotPath(normalized, config, extraFiles)) {
-			continue;
-		}
-		const topLevelPath = canonicalTopLevelFilePath(normalized, extraFilePaths);
-		if (!topLevelPath) {
-			configuredFiles.push(normalized === file.path ? file : { ...file, path: normalized });
-			continue;
-		}
-		const candidate = {
-			exact: normalized === topLevelPath,
-			file: { ...file, path: topLevelPath },
-			originalPath: normalized,
-		};
-		const current = extraCandidates.get(topLevelPath.toLowerCase());
-		if (!current || isPreferredExtraCandidate(candidate, current)) {
-			extraCandidates.set(topLevelPath.toLowerCase(), candidate);
-		}
-	}
-	return [
-		...configuredFiles,
-		...[...extraCandidates.values()].map((candidate) => candidate.file),
-	].sort((left, right) => left.path.localeCompare(right.path));
-}
-
-function canonicalTopLevelFilePath(relativePath: string, extraFilePaths: Map<string, string>) {
-	const normalized = toPosix(relativePath);
-	if (normalized.includes("/")) return undefined;
-	const lower = normalized.toLowerCase();
-	return TOP_LEVEL_FILE_PATHS.get(lower) ?? extraFilePaths.get(lower);
-}
-
-function canonicalSnapshotPathForConfig(relativePath: string, extraFilePaths: Map<string, string>) {
-	return canonicalTopLevelFilePath(relativePath, extraFilePaths) ?? toPosix(relativePath);
-}
-
-function isPreferredExtraCandidate(
-	left: { exact: boolean; originalPath: string },
-	right: { exact: boolean; originalPath: string },
-) {
-	if (left.exact !== right.exact) return left.exact;
-	return left.originalPath.localeCompare(right.originalPath) < 0;
-}
-
-export function snapshotWithoutSessions(snapshot: Snapshot) {
-	const files = snapshot.files.filter((file) => !isSessionPath(file.path));
-	if (files.length === snapshot.files.length && snapshot.syncSessions !== true) return snapshot;
-	return {
-		...snapshot,
-		id: snapshotId(),
-		createdAt: new Date().toISOString(),
-		machine: os.hostname(),
-		syncSessions: false,
-		files,
-	};
-}
-
-export function scanSnapshot(snapshot: Snapshot) {
-	const findings: string[] = [];
-	for (const file of snapshot.files) {
-		const content = Buffer.from(file.contentBase64, "base64");
-		if (content.includes(0)) continue;
-		const text = content.toString("utf8");
-		for (const pattern of SECRET_PATTERNS) {
-			if (pattern.test(text)) {
-				findings.push(file.path);
-				break;
-			}
-		}
-	}
-	return findings;
-}
-
 async function readRemoteSnapshotForUpload(
 	client: S3Client,
 	config: SyncConfig,
@@ -1181,64 +710,6 @@ async function snapshotForUpload(
 		}
 	}
 	return snapshot ? mergeRemotePreservedFiles(local, snapshot, config) : local;
-}
-
-export function mergeRemotePreservedFiles(
-	local: Snapshot,
-	remote: Snapshot,
-	config: Pick<SyncConfig, "syncSessions" | "extraFiles">,
-) {
-	const withSessions = config.syncSessions ? local : mergeRemoteSessionFiles(local, remote);
-	const paths = new Set(withSessions.files.map((file) => file.path));
-	const pathNames = new Set(withSessions.files.map((file) => file.path.toLowerCase()));
-	const extraFileNames = new Set(normalizeExtraFiles(config.extraFiles).map((file) => file.toLowerCase()));
-	const seenRemoteExtraNames = new Set<string>();
-	const remoteExtras = remote.files.filter((file) => {
-		const normalized = toPosix(file.path);
-		const lower = normalized.toLowerCase();
-		if (
-			paths.has(normalized) ||
-			pathNames.has(lower) ||
-			!isSafeSnapshotPath(file.path) ||
-			normalized.includes("/") ||
-			TOP_LEVEL_FILE_NAMES.has(lower) ||
-			RESERVED_TOP_LEVEL_NAMES.has(lower) ||
-			extraFileNames.has(lower) ||
-			seenRemoteExtraNames.has(lower)
-		) {
-			return false;
-		}
-		seenRemoteExtraNames.add(lower);
-		return true;
-	});
-	if (remoteExtras.length === 0) return withSessions;
-	return {
-		...withSessions,
-		id: snapshotId(),
-		createdAt: new Date().toISOString(),
-		machine: os.hostname(),
-		files: [...withSessions.files, ...remoteExtras].sort((left, right) =>
-			left.path.localeCompare(right.path),
-		),
-	};
-}
-
-export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
-	const remoteSessions = remote.files.filter((file) => {
-		const normalized = toPosix(file.path);
-		return isSessionFilePath(normalized) && isSafeSnapshotPath(file.path);
-	});
-	if (remoteSessions.length === 0 && !snapshotIncludesSessions(remote)) return local;
-	return {
-		...local,
-		id: snapshotId(),
-		createdAt: new Date().toISOString(),
-		machine: os.hostname(),
-		syncSessions: true,
-		files: [...local.files.filter((file) => !isSessionPath(file.path)), ...remoteSessions].sort(
-			(left, right) => left.path.localeCompare(right.path),
-		),
-	};
 }
 
 async function uploadSnapshot(
@@ -1286,172 +757,6 @@ async function decodeSnapshot(buffer: Buffer): Promise<Snapshot> {
 	const parsed = JSON.parse(decoded.toString("utf8")) as Snapshot;
 	if (parsed.version !== VERSION || !Array.isArray(parsed.files)) throw new Error("Unsupported snapshot format.");
 	return parsed;
-}
-
-async function applySnapshot(
-	snapshot: Snapshot,
-	protectedRelativePaths = new Set<string>(),
-	options: Pick<SnapshotOptions, "sessionDir" | "extraFiles"> = {},
-) {
-	const root = agentDir();
-	const { sessionDir } = options;
-	const current = await createSnapshot(snapshot.profile, {
-		syncSessions: snapshotIncludesSessions(snapshot),
-		sessionDir,
-		extraFiles: options.extraFiles,
-	});
-	const plan = await addTopLevelCaseVariantDeletes(
-		root,
-		protectSnapshotApplyPlan(
-			root,
-			preflightSnapshotApply(root, snapshot, current, { sessionDir }),
-			protectedRelativePaths,
-			sessionDir,
-		),
-		snapshot,
-	);
-	await preflightSnapshotMutations(root, plan, sessionDir);
-	for (const target of plan.deletes) {
-		await fs.rm(target, { force: true, recursive: true });
-	}
-	for (const item of plan.writes) {
-		await fs.writeFile(item.target, item.content);
-	}
-	return appliedFileHashMap(snapshot, current, protectedRelativePaths);
-}
-
-export function preflightSnapshotApply(
-	root: string,
-	snapshot: Snapshot,
-	current: Snapshot,
-	options: { sessionDir?: string } = {},
-): SnapshotApplyPlan {
-	const seenPaths = new Set<string>();
-	const remotePaths = new Set<string>();
-	const writes: Array<{ target: string; content: Buffer }> = [];
-	const deletes: string[] = [];
-
-	for (const file of snapshot.files) {
-		const normalized = toPosix(file.path);
-		if (!isSafeSnapshotPath(file.path)) {
-			throw new Error(`Unsafe path in snapshot: ${file.path}`);
-		}
-		if (isSessionPath(normalized) && !isSessionFilePath(normalized)) {
-			throw new Error(`Unsafe session path in snapshot: ${file.path}`);
-		}
-		if (seenPaths.has(normalized)) throw new Error(`Duplicate path in snapshot: ${normalized}`);
-		seenPaths.add(normalized);
-		remotePaths.add(normalized);
-
-		const target = snapshotTarget(root, normalized, options.sessionDir);
-		const content = decodeBase64Strict(file.contentBase64, normalized);
-		if (sha256(content) !== file.sha256) throw new Error(`Checksum mismatch in snapshot file: ${normalized}`);
-		writes.push({ target, content });
-	}
-
-	const deletePaths = new Set<string>();
-	for (const file of current.files) {
-		const normalized = toPosix(file.path);
-		if (!remotePaths.has(normalized)) {
-			deletePaths.add(snapshotTarget(root, normalized, options.sessionDir));
-		}
-		for (const remotePath of parentPaths(normalized)) {
-			if (remotePaths.has(remotePath)) {
-				deletePaths.add(snapshotTarget(root, remotePath, options.sessionDir));
-			}
-		}
-	}
-	deletes.push(...deletePaths);
-
-	return { writes, deletes };
-}
-
-export function protectSnapshotApplyPlan(
-	root: string,
-	plan: SnapshotApplyPlan,
-	protectedRelativePaths: Set<string>,
-	sessionDir?: string,
-): SnapshotApplyPlan {
-	if (protectedRelativePaths.size === 0) return plan;
-	const protectedTargets = new Set(
-		[...protectedRelativePaths].map((relativePath) => snapshotTarget(root, relativePath, sessionDir)),
-	);
-	return {
-		writes: plan.writes.filter((item) => !protectedTargets.has(item.target)),
-		deletes: plan.deletes.filter((target) => !protectedTargets.has(target)),
-	};
-}
-
-export async function addTopLevelCaseVariantDeletes(
-	root: string,
-	plan: SnapshotApplyPlan,
-	snapshot: Pick<Snapshot, "files">,
-): Promise<SnapshotApplyPlan> {
-	const topLevelPaths = new Map<string, string>();
-	for (const file of snapshot.files) {
-		const normalized = toPosix(file.path);
-		if (!normalized.includes("/") && isSafeSnapshotPath(file.path)) {
-			topLevelPaths.set(normalized.toLowerCase(), normalized);
-		}
-	}
-	if (topLevelPaths.size === 0) return plan;
-
-	let entries: Dirent[];
-	try {
-		entries = await fs.readdir(root, { withFileTypes: true });
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return plan;
-		throw error;
-	}
-
-	const deletes = new Set(plan.deletes);
-	for (const entry of entries) {
-		const canonicalPath = topLevelPaths.get(entry.name.toLowerCase());
-		if (canonicalPath && entry.name !== canonicalPath && (entry.isFile() || entry.isSymbolicLink())) {
-			deletes.add(safeJoin(root, entry.name));
-		}
-	}
-	return { ...plan, deletes: [...deletes] };
-}
-
-export function appliedFileHashMap(
-	snapshot: Snapshot,
-	current: Snapshot,
-	protectedRelativePaths: Set<string>,
-) {
-	const hashes = fileHashMap(snapshot);
-	if (protectedRelativePaths.size === 0) return hashes;
-	const currentHashes = fileHashMap(current);
-	for (const relativePath of protectedRelativePaths) {
-		const normalized = toPosix(relativePath);
-		if (currentHashes[normalized]) {
-			hashes[normalized] = currentHashes[normalized];
-		} else {
-			delete hashes[normalized];
-		}
-	}
-	return hashes;
-}
-
-function isSafeSnapshotPath(relativePath: string) {
-	if (relativePath.includes("\\")) return false;
-	const normalized = toPosix(relativePath);
-	return (
-		Boolean(normalized) &&
-		normalized !== "." &&
-		normalized !== ".." &&
-		!normalized.startsWith("../") &&
-		!path.posix.isAbsolute(normalized) &&
-		path.posix.normalize(normalized) === normalized &&
-		!isDeniedPath(normalized)
-	);
-}
-
-function decodeBase64Strict(value: string, filePath: string) {
-	if (!/^[A-Za-z0-9+/]*={0,2}$/.test(value) || value.length % 4 !== 0) {
-		throw new Error(`Invalid base64 content in snapshot file: ${filePath}`);
-	}
-	return Buffer.from(value, "base64");
 }
 
 export async function backupLocal(profile: string, options: SnapshotOptions = {}) {
@@ -1652,533 +957,37 @@ export function canPullRemoteSessionsOnFirstSync(local: Snapshot, remote: Snapsh
 	return Object.entries(localSessions).every(([filePath, hash]) => remoteSessions[filePath] === hash);
 }
 
-async function readState(profile: string): Promise<SyncState> {
-	return (
-		(await readJsonIfExists<SyncState>(statePath(profile))) ?? {
-			version: VERSION,
-			profile,
-			lastFileHashes: {},
-		}
-	);
-}
-
-async function writeState(profile: string, state: SyncState) {
-	await writeJson(statePath(profile), state);
-}
-
-class S3Client {
-	private config: SyncConfig;
-	private endpoint: URL;
-	private omitSessionTokenAfterRejection = false;
-
-	constructor(config: SyncConfig) {
-		this.config = config;
-		this.endpoint = new URL(config.endpoint);
-	}
-
-	async getJson<T>(key: string): Promise<RemoteObject<T>> {
-		const object = await this.request("GET", key);
-		if (object.status === 404) return { missing: true };
-		if (!object.ok) throw new Error(`S3 GET failed (${object.status}): ${await object.text()}`);
-		return { value: (await object.json()) as T, etag: normalizeEtag(object.headers.get("etag")), missing: false };
-	}
-
-	async getBuffer(key: string): Promise<RemoteObject<Buffer>> {
-		const object = await this.request("GET", key);
-		if (object.status === 404) return { missing: true };
-		if (!object.ok) throw new Error(`S3 GET failed (${object.status}): ${await object.text()}`);
-		return { value: Buffer.from(await object.arrayBuffer()), etag: normalizeEtag(object.headers.get("etag")), missing: false };
-	}
-
-	async putJson(key: string, value: unknown) {
-		const body = Buffer.from(JSON.stringify(value, null, "\t"), "utf8");
-		await this.putBuffer(key, body, "application/json");
-	}
-
-	async putBuffer(key: string, body: Buffer, contentType: string) {
-		const headers: Record<string, string> = { "content-type": contentType };
-		const response = await this.request("PUT", key, body, headers);
-		if (!response.ok) throw new Error(`S3 PUT failed (${response.status}): ${await response.text()}`);
-	}
-
-	private async request(
-		method: "GET" | "PUT",
-		key: string,
-		body?: Buffer,
-		extraHeaders: Record<string, string> = {},
-	) {
-		const url = new URL(this.endpoint.toString());
-		url.pathname = posixJoin(url.pathname, this.config.bucket, encodeKey(key));
-		const send = async (sessionToken: string | undefined) => {
-			const headers = await signedHeaders({
-				method,
-				url,
-				body,
-				extraHeaders,
-				accessKeyId: this.config.accessKeyId,
-				secretAccessKey: this.config.secretAccessKey,
-				sessionToken,
-				region: this.config.region,
-			});
-			return fetch(url, { method, headers, body: body ? new Uint8Array(body) : undefined });
-		};
-		const sessionToken = this.omitSessionTokenAfterRejection ? undefined : this.config.sessionToken;
-		const response = await send(sessionToken);
-		if (!(await this.shouldRetryWithoutSessionToken(response, sessionToken))) return response;
-
-		const retry = await send(undefined);
-		if (retry.ok || retry.status === 404) this.omitSessionTokenAfterRejection = true;
-		return retry;
-	}
-
-	private async shouldRetryWithoutSessionToken(response: Response, sessionToken: string | undefined) {
-		if (
-			!sessionToken ||
-			!isCloudflareR2Endpoint(this.config.endpoint) ||
-			response.ok ||
-			response.status !== 400
-		) {
-			return false;
-		}
-		return isSecurityTokenInvalidArgument(await response.clone().text());
-	}
-}
-
-async function signedHeaders(input: {
-	method: string;
-	url: URL;
-	body?: Buffer;
-	extraHeaders: Record<string, string>;
-	accessKeyId: string;
-	secretAccessKey: string;
-	sessionToken?: string;
-	region: string;
-}) {
-	const now = new Date();
-	const amzDate = iso8601Basic(now);
-	const dateStamp = amzDate.slice(0, 8);
-	const payloadHash = sha256(input.body ?? Buffer.alloc(0));
-	const headers: Record<string, string> = {
-		...lowercaseKeys(input.extraHeaders),
-		host: input.url.host,
-		"x-amz-content-sha256": payloadHash,
-		"x-amz-date": amzDate,
-	};
-	if (input.sessionToken) headers["x-amz-security-token"] = input.sessionToken;
-	const signedHeaderNames = Object.keys(headers).sort();
-	const canonicalHeaders = signedHeaderNames.map((name) => `${name}:${headers[name]?.trim()}\n`).join("");
-	const canonicalRequest = [
-		input.method,
-		input.url.pathname,
-		input.url.searchParams.toString(),
-		canonicalHeaders,
-		signedHeaderNames.join(";"),
-		payloadHash,
-	].join("\n");
-	const scope = `${dateStamp}/${input.region}/s3/aws4_request`;
-	const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, sha256(Buffer.from(canonicalRequest))].join("\n");
-	const signingKey = hmac(
-		hmac(hmac(hmac(Buffer.from(`AWS4${input.secretAccessKey}`), dateStamp), input.region), "s3"),
-		"aws4_request",
-	);
-	const signature = createHmac("sha256", signingKey).update(stringToSign).digest("hex");
-	return {
-		...headers,
-		authorization: `AWS4-HMAC-SHA256 Credential=${input.accessKeyId}/${scope}, SignedHeaders=${signedHeaderNames.join(";")}, Signature=${signature}`,
-	};
-}
-
-function hmac(key: Buffer, value: string) {
-	return createHmac("sha256", key).update(value).digest();
-}
-
 function sha256(value: Buffer) {
 	return createHash("sha256").update(value).digest("hex");
-}
-
-function latestKey(config: SyncConfig) {
-	return posixJoin(profilePrefix(config), "latest.json");
-}
-
-function historyKey(config: SyncConfig) {
-	return posixJoin(profilePrefix(config), "history.json");
-}
-
-function snapshotKey(config: SyncConfig, id: string) {
-	return posixJoin(profilePrefix(config), "snapshots", `${id}.json.gz`);
-}
-
-function profilePrefix(config: SyncConfig) {
-	return posixJoin(config.prefix, "profiles", config.profile);
-}
-
-function pointerFor(config: SyncConfig, snapshot: Snapshot, checksum: string): LatestPointer {
-	return {
-		version: VERSION,
-		profile: config.profile,
-		snapshot: snapshot.id,
-		sha256: checksum,
-		createdAt: snapshot.createdAt,
-		machine: snapshot.machine,
-		syncSessions: snapshotIncludesSessions(snapshot),
-	};
-}
-
-function agentDir() {
-	const configured = normalizeOptionalString(process.env.PI_CODING_AGENT_DIR);
-	return configured ? expandHome(configured) : path.join(os.homedir(), ".pi", "agent");
-}
-
-function expandHome(value: string) {
-	return value === "~" || value.startsWith("~/")
-		? path.join(os.homedir(), value.slice(2))
-		: value;
-}
-
-function stateDir() {
-	return path.join(agentDir(), ".pisync");
-}
-
-function localConfigPath() {
-	return path.join(agentDir(), "pi-sync.local.json");
-}
-
-function statePath(profile: string) {
-	return path.join(stateDir(), `${safeName(profile)}.state.json`);
-}
-
-function lockPath() {
-	return path.join(stateDir(), "lock");
-}
-
-async function ensureStateDir() {
-	await fs.mkdir(stateDir(), { recursive: true });
-}
-
-async function readLock() {
-	return readJsonIfExists<LockFile>(lockPath());
-}
-
-function isStaleLock(lock: LockFile) {
-	if (!Number.isInteger(lock.pid) || lock.pid <= 0) return true;
-	try {
-		process.kill(lock.pid, 0);
-		return false;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
-		return Date.now() - Date.parse(lock.startedAt) > LOCK_STALE_MS;
-	}
-}
-
-async function readJsonIfExists<T>(filePath: string): Promise<T | undefined> {
-	try {
-		return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-		throw error;
-	}
-}
-
-async function writeJson(filePath: string, value: unknown) {
-	await fs.mkdir(path.dirname(filePath), { recursive: true });
-	await fs.writeFile(filePath, `${JSON.stringify(value, null, "\t")}\n`);
-}
-
-async function preflightSnapshotMutations(
-	root: string,
-	plan: { deletes: string[]; writes: Array<{ target: string; content: Buffer }> },
-	sessionDir?: string,
-) {
-	const deletePaths = new Set(plan.deletes);
-	for (const target of plan.deletes) {
-		await assertNoSymlinkParents(rootForTarget(root, target, sessionDir), target);
-	}
-	for (const item of plan.writes) {
-		await prepareSnapshotWrite(rootForTarget(root, item.target, sessionDir), item.target, deletePaths);
-	}
-}
-
-function rootForTarget(root: string, target: string, sessionDir?: string) {
-	const sessionRoot = sessionDir ? sessionStorageRoot(root, sessionDir) : undefined;
-	if (sessionRoot && isPathInside(sessionRoot, target)) return sessionRoot;
-	return root;
-}
-
-async function prepareSnapshotWrite(root: string, target: string, deletePaths: Set<string>) {
-	await ensureSafeDirectory(root, path.dirname(target));
-	try {
-		const stat = await fs.lstat(target);
-		if (stat.isSymbolicLink()) throw new Error(`Refusing to overwrite symlink during snapshot apply: ${target}`);
-		if (stat.isDirectory() && !deletePaths.has(target)) {
-			throw new Error(`Refusing to overwrite directory during snapshot apply: ${target}`);
-		}
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-	}
-}
-
-async function ensureSafeDirectory(root: string, directory: string) {
-	assertWithinRoot(root, directory);
-	const rootPath = path.resolve(root);
-	const relative = path.relative(rootPath, path.resolve(directory));
-	let current = rootPath;
-	for (const part of relative.split(path.sep).filter(Boolean)) {
-		current = path.join(current, part);
-		try {
-			const stat = await fs.lstat(current);
-			if (stat.isSymbolicLink()) throw new Error(`Refusing to follow symlink during snapshot apply: ${current}`);
-			if (!stat.isDirectory()) throw new Error(`Snapshot path parent is not a directory: ${current}`);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-			await fs.mkdir(current);
-		}
-	}
-}
-
-async function assertNoSymlinkParents(root: string, target: string) {
-	assertWithinRoot(root, target);
-	const rootPath = path.resolve(root);
-	const relative = path.relative(rootPath, path.resolve(target));
-	let current = rootPath;
-	const parts = relative.split(path.sep).filter(Boolean);
-	for (const part of parts.slice(0, -1)) {
-		current = path.join(current, part);
-		try {
-			const stat = await fs.lstat(current);
-			if (stat.isSymbolicLink()) throw new Error(`Refusing to follow symlink during snapshot apply: ${current}`);
-			if (!stat.isDirectory()) throw new Error(`Snapshot path parent is not a directory: ${current}`);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-			throw error;
-		}
-	}
-}
-
-export function safeJoin(root: string, relativePath: string) {
-	const target = path.resolve(root, relativePath);
-	assertWithinRoot(root, target, relativePath);
-	return target;
-}
-
-function assertWithinRoot(root: string, target: string, label = target) {
-	const resolvedRoot = path.resolve(root);
-	const resolvedTarget = path.resolve(target);
-	if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`)) {
-		throw new Error(`Unsafe path in snapshot: ${label}`);
-	}
-}
-
-export function splitArgs(input: string) {
-	return input.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((arg) => arg.replace(/^['"]|['"]$/g, "")) ?? [];
-}
-
-export function parseOptions(args: string[]): CommandOptions {
-	return {
-		yes: args.includes("--yes") || args.includes("-y"),
-		force: args.includes("--force"),
-		stale: args.includes("--stale"),
-		silent: false,
-		reload: true,
-		auto: false,
-		args: args.filter((arg) => !arg.startsWith("-")),
-	};
-}
-
-export function completeSyncArguments(argumentPrefix: string): CommandArgumentCompletion[] | null {
-	const prefix = argumentPrefix.trimStart();
-	if (prefix === "") return [...SYNC_COMMAND_COMPLETIONS];
-
-	const trailingSpace = /\s$/.test(prefix);
-	const tokens = splitArgs(prefix);
-	if (tokens.length === 0) return [...SYNC_COMMAND_COMPLETIONS];
-
-	const [command] = tokens;
-	if (tokens.length === 1 && !trailingSpace) {
-		const matches = SYNC_COMMAND_COMPLETIONS.filter((item) => item.value.startsWith(command));
-		return matches.length > 0 ? [...matches] : null;
-	}
-
-	const flagCompletions = SYNC_FLAG_COMPLETIONS[command];
-	if (!flagCompletions) return null;
-
-	const args = tokens.slice(1);
-	const completedArgs = trailingSpace ? args : args.slice(0, -1);
-	const completedValues = completedArgs.filter((arg) => !arg.startsWith("-"));
-	if (command === "rollback" ? completedValues.length > 1 : completedValues.length > 0) {
-		return null;
-	}
-
-	const current = trailingSpace ? "" : (args.at(-1) ?? "");
-	if (current && !current.startsWith("-")) return null;
-
-	const currentRaw = trailingSpace ? "" : (prefix.match(/\S+$/)?.[0] ?? "");
-	const completionPrefix = trailingSpace
-		? prefix
-		: prefix.slice(0, prefix.length - currentRaw.length);
-	const matches = flagCompletions.filter((item) => item.value.startsWith(current));
-	return matches.length > 0
-		? matches.map((item) => ({ ...item, value: `${completionPrefix}${item.value}` }))
-		: null;
-}
-
-function usage() {
-	return [
-		"Usage: /pisync <command>",
-		"Commands: init, config, status, diff, doctor, push, pull, sync, history, rollback <snapshot>, unlock --stale",
-		"Config: set PI_SYNC_ENDPOINT, PI_SYNC_BUCKET, PI_SYNC_ACCESS_KEY_ID, PI_SYNC_SECRET_ACCESS_KEY, optional PI_SYNC_SESSION_TOKEN, PI_SYNC_SESSIONS/syncSessions, region/profile/prefix, or edit ~/.pi/agent/pi-sync.local.json (or $PI_CODING_AGENT_DIR/pi-sync.local.json when PI_CODING_AGENT_DIR is set).",
-	].join("\n");
-}
-
-function snapshotId() {
-	return `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
-}
-
-function iso8601Basic(date: Date) {
-	return date.toISOString().replace(/[:-]|\.\d{3}/g, "");
-}
-
-export function encodeKey(key: string) {
-	return key.split("/").map(encodeURIComponent).join("/");
-}
-
-export function posixJoin(...parts: string[]) {
-	return parts.map((part) => trimSlashes(part)).filter(Boolean).join("/");
-}
-
-function parentPaths(relativePath: string) {
-	const results: string[] = [];
-	let index = relativePath.lastIndexOf("/");
-	while (index > 0) {
-		results.push(relativePath.slice(0, index));
-		index = relativePath.lastIndexOf("/", index - 1);
-	}
-	return results;
-}
-
-function toPosix(value: string) {
-	return value.split(path.sep).join("/");
-}
-
-function trimSlashes(value: string) {
-	return value.replace(/^\/+|\/+$/g, "");
-}
-
-export function safeName(value: string) {
-	return value.replace(/[^A-Za-z0-9._-]/g, "_");
-}
-
-function lowercaseKeys(value: Record<string, string>) {
-	return Object.fromEntries(Object.entries(value).map(([key, item]) => [key.toLowerCase(), item]));
-}
-
-function normalizeEtag(value: string | null) {
-	return value ?? undefined;
 }
 
 function redact(value: string) {
 	return value.length <= 8 ? "configured" : `${value.slice(0, 4)}…${value.slice(-4)}`;
 }
 
-function selectSessionToken(fileSessionToken: string | undefined) {
-	if (hasEnv("PI_SYNC_SESSION_TOKEN")) return normalizeOptionalString(process.env.PI_SYNC_SESSION_TOKEN);
-	return normalizeOptionalString(process.env.AWS_SESSION_TOKEN) ?? normalizeOptionalString(fileSessionToken);
-}
-
-export function sessionTokenWarnings(config: { endpoint?: string; sessionToken?: string }) {
-	if (!isCloudflareR2Endpoint(config.endpoint) || !config.sessionToken) return [];
-	return [
-		"session token: configured for Cloudflare R2; if R2 rejects X-Amz-Security-Token, pi-sync retries once without it. R2 static access keys usually do not need a session token.",
-	];
-}
-
-function syncSessionsWarnings(config: { syncSessions?: boolean }) {
-	if (!config.syncSessions) return [];
-	return [
-		"sessions: enabled; Pi session JSONL can contain prompts, tool output, file paths, images, and secrets. Sync sessions only to storage you trust.",
-	];
-}
-
-function isSecurityTokenInvalidArgument(text: string) {
-	return (
-		text.includes("<Code>InvalidArgument</Code>") &&
-		text.includes("<Message>X-Amz-Security-Token</Message>")
-	);
-}
-
-export function isCloudflareR2Endpoint(endpoint: string | undefined) {
-	const value = endpoint?.trim();
-	if (!value) return false;
-	try {
-		const hostname = new URL(value).hostname.toLowerCase();
-		return hostname === "r2.cloudflarestorage.com" || hostname.endsWith(".r2.cloudflarestorage.com");
-	} catch {
-		return false;
-	}
-}
-
-function normalizeOptionalString(value: string | undefined) {
-	const normalized = value?.trim();
-	return normalized ? normalized : undefined;
-}
-
-function normalizeExtraFiles(value: unknown) {
-	if (!Array.isArray(value)) return [];
-	const seen = new Set<string>();
-	return value
-		.filter((item): item is string => typeof item === "string")
-		.map((item) => item.trim())
-		.filter((item) => {
-			const lower = item.toLowerCase();
-			if (
-				item === "" ||
-				item === "." ||
-				item === ".." ||
-				item.includes("/") ||
-				item.includes("\\") ||
-				TOP_LEVEL_FILE_NAMES.has(lower) ||
-				isDeniedPath(item) ||
-				RESERVED_TOP_LEVEL_NAMES.has(lower) ||
-				seen.has(lower)
-			) {
-				return false;
-			}
-			seen.add(lower);
-			return true;
-		});
-}
-
-function extraFilePathsByLower(value: unknown) {
-	return new Map(normalizeExtraFiles(value).map((fileName) => [fileName.toLowerCase(), fileName]));
-}
-
-function selectTopLevelFileEntry(entries: Dirent[], fileName: string) {
-	const exact = entries.find((entry) => entry.isFile() && entry.name === fileName);
-	if (exact) return exact;
-	const lower = fileName.toLowerCase();
-	return entries
-		.filter((entry) => entry.isFile() && entry.name.toLowerCase() === lower)
-		.sort((left, right) => left.name.localeCompare(right.name))[0];
-}
-
-function hasEnv(name: string) {
-	return Object.prototype.hasOwnProperty.call(process.env, name);
-}
-
-export function isEnabled(value: boolean | string | undefined, defaultValue: boolean) {
-	if (value === undefined) return defaultValue;
-	if (typeof value === "boolean") return value;
-	return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
-}
-
-export function isExplicitlyEnabled(value: boolean | string | undefined) {
-	if (typeof value === "boolean") return value;
-	return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
-}
-
-function isMissingConfigError(error: unknown) {
-	return error instanceof Error && error.message.startsWith("Missing pi-sync config:");
-}
-
 function errorMessage(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
 }
+
+export { completeSyncArguments, parseOptions, splitArgs } from "./command.js";
+export { isCloudflareR2Endpoint, isEnabled, isExplicitlyEnabled, loadConfig, sessionTokenWarnings } from "./config.js";
+export { encodeKey, posixJoin, safeJoin, safeName } from "./paths.js";
+export {
+	addTopLevelCaseVariantDeletes,
+	appliedFileHashMap,
+	preflightSnapshotApply,
+	protectSnapshotApplyPlan,
+} from "./snapshot-apply.js";
+export {
+	collectFiles,
+	canonicalSnapshotPathForConfig,
+	filterSnapshotForConfigPolicy,
+	isConfiguredSnapshotPath,
+	isDeniedPath,
+	isSessionPath,
+	sessionSnapshotPathFromAbsolute,
+	mergeRemotePreservedFiles,
+	mergeRemoteSessionFiles,
+	scanSnapshot,
+	snapshotWithoutSessions,
+} from "./snapshot.js";
