@@ -206,19 +206,27 @@ const goalCompleteTool = defineTool({
 			};
 		}
 
+		const completingDuringBudgetWrapUp =
+			completedGoal.status === "budget_limited" &&
+			budgetWrapUp?.goalId === completedGoal.id &&
+			budgetWrapUp.delivered;
 		const staleGoalRejection = goalIdRejectionReason(completedGoal, requestedGoalId);
 		if (staleGoalRejection) {
 			const rejection = `Goal completion rejected: ${staleGoalRejection}.`;
 			ctx.ui.notify(rejection, "warning");
+			if (completingDuringBudgetWrapUp) {
+				updateGoalUsage(completedGoal, ctx);
+				persistGoal(completedGoal);
+				updateStatus(ctx, completedGoal);
+				clearBudgetWrapUp();
+			}
 
 			return {
 				content: [{ type: "text", text: rejection }],
 				details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
+				terminate: completingDuringBudgetWrapUp || undefined,
 			};
 		}
-
-		const completingDuringBudgetWrapUp =
-			completedGoal.status === "budget_limited" && budgetWrapUp?.goalId === completedGoal.id;
 		if (completedGoal.status !== "active" && !completingDuringBudgetWrapUp) {
 			const rejection = `Goal completion rejected: goal is ${completedGoal.status}, not active.`;
 			ctx.ui.notify(rejection, "warning");
@@ -240,6 +248,7 @@ const goalCompleteTool = defineTool({
 			updateStatus(ctx, completedGoal);
 			const rejection = `Goal completion rejected: ${rejectionReason}.`;
 			ctx.ui.notify(rejection, "warning");
+			if (completingDuringBudgetWrapUp) clearBudgetWrapUp();
 
 			return {
 				content: [
@@ -249,6 +258,7 @@ const goalCompleteTool = defineTool({
 					},
 				],
 				details: { goal, goal_id: requestedGoalId, summary } satisfies GoalCompleteDetails,
+				terminate: completingDuringBudgetWrapUp || undefined,
 			};
 		}
 
@@ -470,6 +480,7 @@ export default function goal(pi: ExtensionAPI) {
 			if (consumeCancelledContinuationPrompt(event.text)) return { action: "handled" as const };
 			return;
 		}
+		if (/^\/goal(?:\s|$)/u.test(event.text.trimStart())) return;
 		clearGoalRecovery();
 		clearBudgetWrapUp();
 		clearStaleGoalToolCallBlock();
@@ -480,12 +491,15 @@ export default function goal(pi: ExtensionAPI) {
 		if (messages.length !== event.messages.length) return { messages };
 	});
 
-	pi.on("tool_call", (event) => {
+	pi.on("tool_call", (event, ctx) => {
 		if (
 			activeGoal?.status === "budget_limited" &&
 			budgetWrapUp?.goalId === activeGoal.id &&
 			event.toolName !== "goal_complete"
 		) {
+			// A blocked tool result would normally trigger another model call. Abort the
+			// wrap-up instead so a tool-seeking model cannot create an unbounded loop.
+			abortCurrentTurn(ctx);
 			return {
 				block: true,
 				reason: "Goal token budget is exhausted; only goal_complete is allowed during wrap-up.",
@@ -624,8 +638,30 @@ async function startGoal(
 	activeGoal = createGoal(objective, tokenBudget, currentTokenTotal(ctx));
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
+	const startedGoal = activeGoal;
+	const sent = await sendGoalPrompt(pi, ctx, startedGoal);
+	if (!sent) {
+		if (activeGoal?.id === startedGoal.id) {
+			if (existingGoal) {
+				updateGoalUsage(existingGoal, ctx);
+				if (existingGoal.status === "active") {
+					abortCurrentTurn(ctx);
+					activeGoal = transitionGoal(existingGoal, "paused");
+					blockStaleGoalToolCalls();
+				} else {
+					activeGoal = existingGoal;
+					if (blocksStaleGoalToolCalls(activeGoal.status)) blockStaleGoalToolCalls();
+					else clearStaleGoalToolCallBlock();
+				}
+				persistGoal(activeGoal);
+				updateStatus(ctx, activeGoal);
+			} else {
+				clearActiveGoal(ctx);
+			}
+		}
+		return;
+	}
 	ctx.ui.notify(existingGoal ? `Goal replaced: ${objective}` : `Goal started: ${objective}`, "info");
-	await sendGoalPrompt(pi, ctx, activeGoal);
 }
 
 function pauseGoal(ctx: StatusContext) {
@@ -731,6 +767,7 @@ async function editGoal(
 	}
 
 	updateGoalUsage(activeGoal, ctx);
+	const previousGoal = { ...activeGoal };
 	cancelContinuationWork();
 	clearGoalRecovery();
 	clearBudgetWrapUp();
@@ -745,11 +782,32 @@ async function editGoal(
 	);
 	persistGoal(activeGoal);
 	updateStatus(ctx, activeGoal);
-	ctx.ui.notify(`Goal updated: ${objective}`, "info");
 	if (activeGoal.status === "active") {
 		clearStaleGoalToolCallBlock();
-		await sendObjectiveUpdatedPrompt(pi, ctx, activeGoal);
+		const editedGoal = activeGoal;
+		const sent = await sendObjectiveUpdatedPrompt(pi, ctx, editedGoal);
+		if (!sent) {
+			if (activeGoal?.id === editedGoal.id) {
+				if (previousStatus === "active") {
+					abortCurrentTurn(ctx);
+					activeGoal = transitionGoal(previousGoal, "paused");
+					blockStaleGoalToolCalls();
+				} else {
+					activeGoal = previousGoal;
+					if (blocksStaleGoalToolCalls(activeGoal.status)) blockStaleGoalToolCalls();
+					else clearStaleGoalToolCallBlock();
+				}
+				persistGoal(activeGoal);
+				updateStatus(ctx, activeGoal);
+			}
+			return;
+		}
+	} else if (blocksStaleGoalToolCalls(activeGoal.status)) {
+		blockStaleGoalToolCalls();
+	} else {
+		clearStaleGoalToolCallBlock();
 	}
+	ctx.ui.notify(`Goal updated: ${objective}`, "info");
 }
 
 function showGoal(ctx: StatusContext) {
@@ -944,7 +1002,8 @@ export function parseTokenBudget(value: string): number | undefined {
 	const amount = Number(match[1]);
 	if (!Number.isFinite(amount) || amount <= 0) return undefined;
 	const multiplier = match[2]?.toLowerCase() === "m" ? 1_000_000 : match[2]?.toLowerCase() === "k" ? 1_000 : 1;
-	return Math.floor(amount * multiplier);
+	const tokens = Math.floor(amount * multiplier);
+	return normalizeTokenBudget(tokens);
 }
 
 export function validateObjective(objective: string): string | undefined {
@@ -1428,8 +1487,18 @@ interface AssistantUsageEntryLike {
 	message?: { role?: unknown; usage?: unknown };
 }
 
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
 function nonNegativeFiniteNumber(value: unknown) {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+	return isNonNegativeFiniteNumber(value) ? value : 0;
+}
+
+function normalizeTokenBudget(value: unknown) {
+	return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+		? value
+		: undefined;
 }
 
 export function assistantUsageTokens(value: unknown) {
@@ -1503,9 +1572,10 @@ function normalizeLoadedGoal(goal: ActiveGoal): ActiveGoal {
 	const now = Date.now();
 	return {
 		...goal,
-		startedAt: nonNegativeFiniteNumber(goal.startedAt) || now,
-		updatedAt: nonNegativeFiniteNumber(goal.updatedAt) || now,
+		startedAt: isNonNegativeFiniteNumber(goal.startedAt) ? goal.startedAt : now,
+		updatedAt: isNonNegativeFiniteNumber(goal.updatedAt) ? goal.updatedAt : now,
 		iteration: Math.max(0, Math.floor(nonNegativeFiniteNumber(goal.iteration))),
+		tokenBudget: normalizeTokenBudget(goal.tokenBudget),
 		tokensUsed: nonNegativeFiniteNumber(goal.tokensUsed),
 		timeUsedSeconds: nonNegativeFiniteNumber(goal.timeUsedSeconds),
 		baselineTokens: nonNegativeFiniteNumber(goal.baselineTokens),

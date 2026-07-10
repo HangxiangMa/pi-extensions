@@ -264,6 +264,24 @@ test("session reload immediately limits an active goal whose persisted usage is 
 	assert.equal(restored.mock.sentMessages.length, 0);
 });
 
+test("session reload drops malformed persisted budgets instead of limiting the goal", () => {
+	const restored = restoreStoredGoalForTest({
+		id: "restored-malformed-budget",
+		text: "restore malformed budget",
+		status: "active",
+		startedAt: 0,
+		updatedAt: 2,
+		iteration: 3,
+		tokenBudget: -1,
+		tokensUsed: 5,
+		timeUsedSeconds: 4,
+		baselineTokens: 0,
+	});
+	assert.equal(lastGoalStatus(restored.mock), "active");
+	assert.equal(requireLastGoal(restored.mock).tokenBudget, undefined);
+	assert.equal(requireLastGoal(restored.mock).startedAt, 0);
+});
+
 test("legacy active-time state migrates without counting offline or reload time", async (t) => {
 	let now = 100_000;
 	t.mock.method(Date, "now", () => now);
@@ -291,6 +309,9 @@ test("parseTokenBudget and format helpers use compact units", () => {
 	assert.equal(parseTokenBudget("250"), 250);
 	assert.equal(parseTokenBudget("2.5k"), 2500);
 	assert.equal(parseTokenBudget("0"), undefined);
+	assert.equal(parseTokenBudget("0.1"), undefined);
+	assert.equal(parseTokenBudget("9007199254740992"), undefined);
+	assert.equal(parseTokenBudget(String(Number.MAX_SAFE_INTEGER)), Number.MAX_SAFE_INTEGER);
 	assert.equal(formatTokenCount(1500), "1.5k");
 	assert.equal(formatTokenCount(2_000_000), "2m");
 	assert.equal(formatDuration(59), "59s");
@@ -803,6 +824,86 @@ test("failed resume delivery restores the stopped state and original goal_id", a
 	);
 });
 
+test("failed start delivery clears a new goal and restores a replaced stopped goal", async () => {
+	const freshMock = createMockPi();
+	goal(freshMock.pi);
+	const freshContext = createMockContext();
+	freshMock.events.get("session_start")?.[0]?.({}, freshContext.ctx);
+	freshMock.rawPi.sendUserMessage = () => {
+		throw new Error("start delivery failed");
+	};
+	await freshMock.commands.get("goal")?.handler("new objective", freshContext.ctx);
+	assert.equal(lastGoalStatus(freshMock), null);
+	assert.equal(freshContext.statuses.get("goal"), undefined);
+	assert.match(freshContext.notifications.at(-1)?.message ?? "", /start delivery failed/i);
+
+	let activeReplacementAborts = 0;
+	const activeReplacementBranch: Array<Record<string, unknown>> = [];
+	const activeReplacement = await startGoalForTest({
+		abort: () => activeReplacementAborts++,
+		sessionManager: {
+			getBranch: () => activeReplacementBranch,
+			getEntries: () => activeReplacementBranch,
+		},
+	});
+	const activeOriginal = requireLastGoal(activeReplacement.mock);
+	activeReplacementBranch.push(assistantUsageEntry({ totalTokens: 5 }));
+	activeReplacement.mock.rawPi.sendUserMessage = () => {
+		throw new Error("active replacement delivery failed");
+	};
+	await activeReplacement.mock.commands
+		.get("goal")
+		?.handler("active replacement objective", activeReplacement.ctx);
+	const restoredActive = requireLastGoal(activeReplacement.mock);
+	assert.equal(restoredActive.id, activeOriginal.id);
+	assert.equal(restoredActive.text, activeOriginal.text);
+	assert.equal(restoredActive.status, "paused");
+	assert.equal(restoredActive.tokensUsed, 5);
+	assert.equal(activeReplacementAborts, 1);
+
+	const replacement = await startGoalForTest();
+	await replacement.mock.commands.get("goal")?.handler("pause", replacement.ctx);
+	const original = requireLastGoal(replacement.mock);
+	replacement.mock.rawPi.sendUserMessage = () => {
+		throw new Error("replacement delivery failed");
+	};
+	await replacement.mock.commands.get("goal")?.handler("replacement objective", replacement.ctx);
+	const restored = requireLastGoal(replacement.mock);
+	assert.equal(restored.id, original.id);
+	assert.equal(restored.text, original.text);
+	assert.equal(restored.status, "paused");
+	assert.deepEqual(
+		replacement.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "bash", toolCallId: "stale-after-replacement-failure", input: {} },
+			replacement.ctx,
+		),
+		{ block: true, reason: STALE_GOAL_TOOL_REASON },
+	);
+});
+
+test("failed active edit delivery restores and pauses the prior goal", async () => {
+	let aborts = 0;
+	const edited = await startGoalForTest({ abort: () => aborts++ });
+	const original = requireLastGoal(edited.mock);
+	edited.mock.rawPi.sendUserMessage = () => {
+		throw new Error("active edit delivery failed");
+	};
+
+	await edited.mock.commands.get("goal")?.handler("edit changed objective", edited.ctx);
+	const restored = requireLastGoal(edited.mock);
+	assert.equal(restored.id, original.id);
+	assert.equal(restored.text, original.text);
+	assert.equal(restored.status, "paused");
+	assert.equal(aborts, 1);
+	assert.deepEqual(
+		edited.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "bash", toolCallId: "stale-after-edit-failure", input: {} },
+			edited.ctx,
+		),
+		{ block: true, reason: STALE_GOAL_TOOL_REASON },
+	);
+});
+
 test("editing paused, blocked, or usage-limited goals preserves their stopped state", async () => {
 	for (const status of ["paused", "blocked", "usage_limited"] as const) {
 		const restored = restoreGoalForTest(status);
@@ -816,6 +917,13 @@ test("editing paused, blocked, or usage-limited goals preserves their stopped st
 		assert.equal(edited.tokenBudget, 20);
 		assert.notEqual(edited.id, oldId);
 		assert.equal(restored.mock.sentUserMessages.length, 0);
+		assert.deepEqual(
+			restored.mock.events.get("tool_call")?.[0]?.(
+				{ toolName: "bash", toolCallId: `stale-after-edit-${status}`, input: {} },
+				restored.ctx,
+			),
+			{ block: true, reason: STALE_GOAL_TOOL_REASON },
+		);
 	}
 });
 
@@ -1085,8 +1193,12 @@ test("state changes between agent_end and agent_settled cancel stale continuatio
 
 test("tool_execution_end enforces budget once and injects one bounded wrap-up", async () => {
 	const branch: Array<Record<string, unknown>> = [];
+	let aborts = 0;
 	const budgeted = await startGoalForTest(
-		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
+		{
+			abort: () => aborts++,
+			sessionManager: { getBranch: () => branch, getEntries: () => branch },
+		},
 		"--tokens 10 finish",
 	);
 	const goalId = requireLastGoal(budgeted.mock).id;
@@ -1129,6 +1241,7 @@ test("tool_execution_end enforces budget once and injects one bounded wrap-up", 
 			reason: "Goal token budget is exhausted; only goal_complete is allowed during wrap-up.",
 		},
 	);
+	assert.equal(aborts, 1);
 	assert.equal(
 		budgeted.mock.events.get("tool_call")?.[0]?.(
 			{ toolName: "goal_complete", toolCallId: "complete-after-budget", input: {} },
@@ -1146,6 +1259,75 @@ test("tool_execution_end enforces budget once and injects one bounded wrap-up", 
 	);
 	assert.equal(completion.terminate, true);
 	assert.equal(lastGoalStatus(budgeted.mock), null);
+});
+
+test("rejected completion closes a budget wrap-up without another model call", async () => {
+	const branch: Array<Record<string, unknown>> = [];
+	const budgeted = await startGoalForTest(
+		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
+		"--tokens 10 finish",
+	);
+	const goalId = requireLastGoal(budgeted.mock).id;
+	branch.push(assistantUsageEntry({ totalTokens: 12 }));
+	await budgeted.mock.events.get("tool_execution_end")?.[0]?.(
+		{ toolCallId: "tool-1", toolName: "bash", result: {}, isError: false },
+		budgeted.ctx,
+	);
+
+	const rejected = await requireGoalTool(budgeted.mock, "goal_complete").execute(
+		"rejected-budget-completion",
+		{ goal_id: goalId, summary: "Tests are still failing." },
+		new AbortController().signal,
+		() => undefined,
+		budgeted.ctx,
+	);
+	assert.equal(rejected.terminate, true);
+	assert.equal(lastGoalStatus(budgeted.mock), "budget_limited");
+
+	const retry = await requireGoalTool(budgeted.mock, "goal_complete").execute(
+		"retry-budget-completion",
+		{ goal_id: goalId, summary: "Everything is now complete." },
+		new AbortController().signal,
+		() => undefined,
+		budgeted.ctx,
+	);
+	assert.equal(retry.terminate, undefined);
+	assert.match(retry.content?.[0]?.text ?? "", /budget_limited, not active/i);
+});
+
+test("stale completion also closes a budget wrap-up after recording final usage", async () => {
+	const branch: Array<Record<string, unknown>> = [];
+	const budgeted = await startGoalForTest(
+		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
+		"--tokens 10 finish",
+	);
+	const goalId = requireLastGoal(budgeted.mock).id;
+	branch.push(assistantUsageEntry({ totalTokens: 12 }));
+	await budgeted.mock.events.get("tool_execution_end")?.[0]?.(
+		{ toolCallId: "tool-1", toolName: "bash", result: {}, isError: false },
+		budgeted.ctx,
+	);
+	branch.push(assistantUsageEntry({ totalTokens: 3 }));
+
+	const rejected = await requireGoalTool(budgeted.mock, "goal_complete").execute(
+		"stale-budget-completion",
+		{ goal_id: "stale-goal-id", summary: "Everything is complete." },
+		new AbortController().signal,
+		() => undefined,
+		budgeted.ctx,
+	);
+	assert.equal(rejected.terminate, true);
+	assert.match(rejected.content?.[0]?.text ?? "", /goal_id does not match/i);
+	assert.equal(requireLastGoal(budgeted.mock).tokensUsed, 15);
+
+	const retry = await requireGoalTool(budgeted.mock, "goal_complete").execute(
+		"retry-after-stale-budget-completion",
+		{ goal_id: goalId, summary: "Everything is complete." },
+		new AbortController().signal,
+		() => undefined,
+		budgeted.ctx,
+	);
+	assert.match(retry.content?.[0]?.text ?? "", /budget_limited, not active/i);
 });
 
 test("failed budget wrap-up delivery retries once without duplicate accepted messages", async () => {
@@ -1286,6 +1468,33 @@ test("budget edits require an actual increase before reactivating and rotate sta
 	assert.notEqual(increased.id, unchanged.id);
 	assert.equal(budgeted.mock.sentUserMessages.length, 2);
 	assertPromptHasGoalId(budgeted.mock.sentUserMessages.at(-1)?.text ?? "", increased.id);
+});
+
+test("failed budget-increase edit delivery restores the limited goal and stale id", async () => {
+	const branch: Array<Record<string, unknown>> = [];
+	const budgeted = await startGoalForTest(
+		{ sessionManager: { getBranch: () => branch, getEntries: () => branch } },
+		"--tokens 10 original objective",
+	);
+	branch.push(assistantUsageEntry({ totalTokens: 10 }));
+	await budgeted.mock.events.get("agent_end")?.[0]?.(
+		{ messages: [{ role: "assistant", stopReason: "stop" }] },
+		budgeted.ctx,
+	);
+	const limited = requireLastGoal(budgeted.mock);
+	budgeted.mock.rawPi.sendUserMessage = () => {
+		throw new Error("edit delivery failed");
+	};
+
+	await budgeted.mock.commands
+		.get("goal")
+		?.handler("edit --tokens 20 changed objective", budgeted.ctx);
+	const restored = requireLastGoal(budgeted.mock);
+	assert.equal(restored.id, limited.id);
+	assert.equal(restored.text, limited.text);
+	assert.equal(restored.tokenBudget, limited.tokenBudget);
+	assert.equal(restored.status, "budget_limited");
+	assert.match(budgeted.notifications.at(-1)?.message ?? "", /edit delivery failed/i);
 });
 
 test("budget exhaustion between agent_end and agent_settled cancels continuation intent", async () => {
@@ -1704,11 +1913,20 @@ test("stale goal tool calls are blocked after pause until a fresh non-goal promp
 	});
 
 	paused.mock.events.get("input")?.[0]?.(
+		{ source: "interactive", text: "/goal edit revised paused objective" },
+		paused.ctx,
+	);
+	assert.deepEqual(pauseToolCall?.({ toolName: "bash", toolCallId: "t3", input: {} }, paused.ctx), {
+		block: true,
+		reason: STALE_GOAL_TOOL_REASON,
+	});
+
+	paused.mock.events.get("input")?.[0]?.(
 		{ source: "interactive", text: "what happened?" },
 		paused.ctx,
 	);
 	assert.equal(
-		pauseToolCall?.({ toolName: "bash", toolCallId: "t3", input: {} }, paused.ctx),
+		pauseToolCall?.({ toolName: "bash", toolCallId: "t4", input: {} }, paused.ctx),
 		undefined,
 	);
 });

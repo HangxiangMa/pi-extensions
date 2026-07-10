@@ -276,6 +276,29 @@ async function budgetBoundaryScenario() {
 	}
 }
 
+async function budgetViolationScenario() {
+	const harness = await createHarness([
+		fauxAssistantMessage(fauxToolCall("budget_probe", {})),
+		fauxAssistantMessage(fauxToolCall("budget_probe", {})),
+		(_context, options) => {
+			assert.equal(options?.signal?.aborted, true);
+			return fauxAssistantMessage("This aborted response must not start more work.");
+		},
+	]);
+	try {
+		await harness.session.prompt("/goal --tokens 1 reject wrap-up tools at runtime");
+		await harness.session.agent.waitForIdle();
+		assert.equal(harness.faux.state.callCount, 3);
+		assert.equal(
+			harness.lifecycleEvents.filter((event) => event === "budget_probe_execute").length,
+			1,
+		);
+		assert.equal(persistedGoalStatus(harness.session), "budget_limited");
+	} finally {
+		await harness.cleanup();
+	}
+}
+
 async function budgetAgentEndFallbackScenario() {
 	const harness = await createHarness([fauxAssistantMessage("No-tool budget response.")]);
 	try {
@@ -353,8 +376,9 @@ await normalContinuationScenario();
 await queuedInputScenario();
 await pauseScenario();
 await budgetBoundaryScenario();
+await budgetViolationScenario();
 await budgetAgentEndFallbackScenario();
 await manualCompactionScenario();
 console.log(
-	"pi-goal runtime smoke: normal, queued input, pause, budget boundaries, and manual compaction passed",
+	"pi-goal runtime smoke: normal, queued input, pause, bounded budget behavior, and manual compaction passed",
 );

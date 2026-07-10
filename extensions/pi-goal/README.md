@@ -25,7 +25,7 @@ Goal mode uses Codex-like persistence instructions and sends guarded continuatio
 - Preserves active goals across manual, threshold, and overflow compaction.
 - Guards auto-follow-ups so duplicate, replaced, stopped, cleared, completed, or budget-limited goals are not continued.
 - Rotates the completion guard id when a goal is resumed or edited so delayed old turns cannot complete the newer goal instance.
-- Blocks stale tool calls after in-flight work pauses, blocks, or reaches a usage limit, until fresh user input, resume, or clear.
+- Blocks stale tool calls after in-flight work pauses, blocks, or reaches a usage limit, until fresh non-goal user work, successful reactivation/replacement, or clear.
 - Encourages requirement-by-requirement verification before the goal is marked complete.
 
 ## 📦 Install
@@ -61,9 +61,9 @@ pi -e ./extensions/pi-goal
 ```
 
 - `/goal` shows the current goal, status, iteration count, active elapsed time, token usage, and available `/goal` subcommands.
-- `/goal <goal_to_complete>` starts goal mode. If another unfinished goal exists, Pi asks for confirmation before replacing it with a new active goal and resetting its usage counters.
+- `/goal <goal_to_complete>` starts goal mode. If another unfinished goal exists, Pi asks for confirmation before replacing it with a new active goal and resetting its usage counters. Failed kickoff delivery clears a new goal or restores the prior goal; a previously active goal is restored as paused.
 - `/goal --tokens 100k <goal_to_complete>` starts or replaces goal mode with a token budget. `k` and `m` suffixes are accepted, for example `100k` or `1.5m`.
-- `/goal edit <goal_to_complete>` updates the existing goal objective without resetting usage counters. Active goals stay active; paused, blocked, and usage-limited goals stay stopped. A budget-limited goal reactivates only when `edit --tokens` raises its budget above current usage.
+- `/goal edit <goal_to_complete>` updates the existing goal objective without resetting usage counters. Active goals stay active; paused, blocked, and usage-limited goals stay stopped. A budget-limited goal reactivates only when `edit --tokens` raises its budget above current usage. Failed prompt delivery restores a budget-limited goal or restores and pauses a previously active goal.
 - `/goal pause` stops prompt injection and auto-continuation, aborts the current turn, and keeps the goal for later resume. Only active goals can be paused.
 - `/goal resume` resumes a paused, blocked, usage-limited, or budget-limited goal when its token budget allows it, rotates the stale-turn guard id, and queues a resume prompt so work continues. If prompt delivery fails, the original stopped state and guard id are restored.
 - `/goal clear` clears the current goal state, status, pending continuation, and legacy persisted state for the current working directory without aborting any in-flight agent turn.
@@ -92,7 +92,7 @@ Older versions wrote unfinished goals to `~/.pi/agent/pi-goal-state.json` keyed 
 
 For each persisted assistant message, `pi-goal` uses finite, non-negative `usage.totalTokens` when available. For compatibility with older or partial records, it otherwise sums finite, non-negative `input + output + cacheRead + cacheWrite`. It does not add `reasoning` because reasoning is already part of output, or `cacheWrite1h` because that is a subset of cache writes. Goal usage is the current branch's cumulative assistant total minus the baseline captured when the goal started, clamped at zero after branch rewinds.
 
-Provider usage becomes authoritative only when an assistant message finishes, so a budget can overshoot by one model call. When completed tool activity first exposes exhaustion, the goal transitions once to `budget_limited`, cancels continuation, and queues one bounded custom wrap-up instruction before the next model call. The instruction permits only a concise progress/results/blockers summary; substantive tools are blocked. `goal_complete` remains available in that wrap-up only when existing evidence already proves every requirement—budget exhaustion itself never means completion. If exhaustion is first visible at `agent_end` and no turn remains, the extension stops without creating another model turn.
+Provider usage becomes authoritative only when an assistant message finishes, so a budget can overshoot by one model call. When completed tool activity first exposes exhaustion, the goal transitions once to `budget_limited`, cancels continuation, and queues one bounded custom wrap-up instruction before the next model call. The instruction permits only a concise progress/results/blockers summary; a substantive tool attempt is blocked and aborts the remaining wrap-up. A rejected `goal_complete` also terminates the wrap-up, while accepted completion still requires existing evidence that proves every requirement—budget exhaustion itself never means completion. If exhaustion is first visible at `agent_end` and no turn remains, the extension stops without creating another model turn.
 
 Elapsed time is accumulated only while status is `active`. Pause, blocked, usage-limited, budget-limited, shutdown, and offline periods do not increase it. Legacy session entries are migrated by preserving their accumulated seconds and starting a fresh active clock when loaded.
 
@@ -112,7 +112,7 @@ Do not use `goal_blocked` merely because work is difficult, incomplete, uncertai
 
 ## 🛑 Interruption and queued-input behavior
 
-A user pause or aborted turn produces `paused`; a terminal provider/account quota error produces `usage_limited`; another non-retryable agent error produces `blocked`. Each stopped transition cancels pending continuation intent or delivery, aborts stale work when applicable, and blocks stale tool calls until the next user prompt (non-extension input), `/goal resume`, or `/goal clear`. On `/goal clear`, the extension clears goal state, continuation markers, and any stale tool-call block without aborting an unrelated in-flight turn. Retryable provider interruptions and overflow compaction retries stay `active` while Pi retries; no extra continuation is queued. User and extension work that starts before settlement supersedes the older continuation intent, and pending messages always take priority.
+A user pause or aborted turn produces `paused`; a terminal provider/account quota error produces `usage_limited`; another non-retryable agent error produces `blocked`. Each stopped transition cancels pending continuation intent or delivery, aborts stale work when applicable, and blocks stale tool calls until the next non-goal user prompt, successful reactivation/replacement, or `/goal clear`. On `/goal clear`, the extension clears goal state, continuation markers, and any stale tool-call block without aborting an unrelated in-flight turn. Retryable provider interruptions and overflow compaction retries stay `active` while Pi retries; no extra continuation is queued. User and extension work that starts before settlement supersedes the older continuation intent, and pending messages always take priority.
 
 ## 🧠 Use cases
 
