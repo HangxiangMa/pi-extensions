@@ -1,10 +1,20 @@
-import { type ChildProcess, spawn } from "node:child_process";
-import { constants, existsSync } from "node:fs";
-import { access, link, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import pathModule from "node:path";
+import type { ChildProcess } from "node:child_process";
 import process from "node:process";
+import { startInhibitorProcess, stopInhibitorProcess } from "./inhibitor-process.js";
+import {
+	formatMode,
+	getInhibitorCommand,
+	type InhibitorCommand,
+	splitCommand,
+	windowsInhibitorScript,
+} from "./inhibitors.js";
+import {
+	type CaffeinateMode,
+	loadSettings,
+	normalizeCaffeinateSettings,
+	saveSettings,
+	settingsFilePath,
+} from "./settings.js";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -14,8 +24,6 @@ import type {
 const STATUS_KEY = "caffeinate";
 const DISABLED_VALUES = new Set(["1", "true", "yes", "on"]);
 const DEFAULT_MODE = "display" satisfies CaffeinateMode;
-const NEW_SETTINGS_FILE = "pi-caffeinate.json";
-const LEGACY_SETTINGS_FILE = "pi-caffeinate-settings.json";
 const COMMAND_COMPLETIONS = [
 	{ value: "display", label: "display", description: "Keep system and display awake" },
 	{ value: "sleep", label: "sleep", description: "Keep system awake; allow display sleep" },
@@ -36,17 +44,8 @@ const MODE_OPTIONS = {
 	sleep: "Keep system awake; allow display sleep",
 } as const;
 
-type CaffeinateMode = "sleep" | "display";
 type CommandAction = "menu" | "help" | "status" | "mode" | "sleep" | "display" | "stop";
 type CommandContext = ExtensionCommandContext;
-
-interface InhibitorCommand {
-	command: string;
-	args: string[];
-	description: string;
-	releaseOnStdinClose?: boolean;
-	custom?: boolean;
-}
 
 interface CaffeinateState {
 	process?: ChildProcess;
@@ -61,11 +60,6 @@ interface CaffeinateState {
 	settingsError?: string;
 	settingsNotice?: string;
 	iconWarningShown: boolean;
-}
-
-interface CaffeinateSettings {
-	mode: CaffeinateMode;
-	updatedAt: number;
 }
 
 const state: CaffeinateState = {
@@ -268,12 +262,7 @@ function buildCommandGuide() {
 }
 
 function startInhibitor(ctx: ExtensionContext) {
-	if (state.disabled) {
-		updateStatus(ctx);
-		return;
-	}
-
-	if (state.process) {
+	if (state.disabled || state.process) {
 		updateStatus(ctx);
 		return;
 	}
@@ -288,37 +277,32 @@ function startInhibitor(ctx: ExtensionContext) {
 	}
 
 	try {
-		const child = spawn(command.command, command.args, {
-			detached: false,
-			stdio: [command.releaseOnStdinClose ? "pipe" : "ignore", "pipe", "pipe"],
-		});
-
+		const child = startInhibitorProcess(
+			command,
+			(error) => {
+				if (state.process === child) {
+					state.process = undefined;
+					state.startedAt = undefined;
+				}
+				state.available = false;
+				state.lastError = `${command.description} failed: ${error.message}`;
+				ctx.ui.notify(state.lastError, "warning");
+				updateStatus(ctx);
+			},
+			(exit) => {
+				if (state.process !== child) return;
+				state.process = undefined;
+				state.startedAt = undefined;
+				state.lastError = `${command.description} exited unexpectedly (${exit}).`;
+				ctx.ui.notify(state.lastError, "warning");
+				updateStatus(ctx);
+			},
+		);
 		state.process = child;
 		state.startedAt = Date.now();
 		state.command = command;
 		state.available = true;
 		state.lastError = undefined;
-
-		child.once("error", (error) => {
-			if (state.process === child) {
-				state.process = undefined;
-				state.startedAt = undefined;
-			}
-			state.available = false;
-			state.lastError = `${command.description} failed: ${error.message}`;
-			ctx.ui.notify(state.lastError, "warning");
-			updateStatus(ctx);
-		});
-
-		child.once("exit", (code, signal) => {
-			if (state.process !== child) return;
-			state.process = undefined;
-			state.startedAt = undefined;
-			state.lastError = `${command.description} exited unexpectedly (${formatExit(code, signal)}).`;
-			ctx.ui.notify(state.lastError, "warning");
-			updateStatus(ctx);
-		});
-
 		ctx.ui.notify(`Keeping computer awake (${statusModeLabel()}).`, "info");
 		updateStatus(ctx);
 	} catch (error) {
@@ -334,194 +318,11 @@ function startInhibitor(ctx: ExtensionContext) {
 function stopInhibitor(ctx: ExtensionContext, reason: string, options: { notify?: boolean } = {}) {
 	const child = state.process;
 	if (!child) return;
-
 	state.process = undefined;
 	state.startedAt = undefined;
-
-	child.removeAllListeners("exit");
-	child.removeAllListeners("error");
-
-	if (!child.killed) {
-		if (state.command?.releaseOnStdinClose && child.stdin && !child.stdin.destroyed) {
-			child.stdin.end();
-			if (child.exitCode === null && child.signalCode === null) {
-				const killTimer = setTimeout(() => {
-					if (child.exitCode === null && child.signalCode === null && !child.killed) child.kill();
-				}, 2000);
-				killTimer.unref();
-				child.once("exit", () => clearTimeout(killTimer));
-			}
-		} else if (process.platform === "win32") {
-			child.kill();
-		} else {
-			child.kill("SIGTERM");
-		}
-	}
-
+	stopInhibitorProcess(child, state.command);
 	state.command = undefined;
-
-	if (options.notify !== false) {
-		ctx.ui.notify(`Released pi-caffeinate (${reason}).`, "info");
-	}
-}
-
-function getInhibitorCommand(mode: CaffeinateMode): InhibitorCommand | undefined {
-	const customCommand = process.env.PI_CAFFEINATE_COMMAND?.trim();
-	if (customCommand) {
-		const [command, ...args] = splitCommand(customCommand);
-		if (command) return { command, args, description: `custom command (${command})`, custom: true };
-	}
-
-	if (process.platform === "darwin") {
-		return parentBoundUnixCommand("caffeinate", macCaffeinateArgs(mode), caffeinateDescription(mode));
-	}
-
-	if (process.platform === "linux") {
-		if (isWsl() && commandExists("powershell.exe")) {
-			return windowsPowerInhibitorCommand("powershell.exe", mode);
-		}
-
-		if (commandExists("systemd-inhibit")) {
-			const what = mode === "sleep" ? "sleep" : "idle:sleep";
-			return parentBoundUnixCommand(
-				"systemd-inhibit",
-				[
-					`--what=${what}`,
-					"--who=pi-caffeinate",
-					"--why=Pi agent is running",
-					"--mode=block",
-					"sleep",
-					"infinity",
-				],
-				`systemd-inhibit (${formatMode(mode)})`,
-			);
-		}
-
-		if (commandExists("caffeinate")) {
-			return parentBoundUnixCommand(
-				"caffeinate",
-				macCaffeinateArgs(mode),
-				caffeinateDescription(mode),
-			);
-		}
-	}
-
-	if (process.platform === "win32") {
-		return windowsPowerInhibitorCommand("powershell.exe", mode);
-	}
-
-	return undefined;
-}
-
-function macCaffeinateArgs(mode: CaffeinateMode) {
-	return mode === "sleep" ? ["-ims"] : ["-dimsu"];
-}
-
-function caffeinateDescription(mode: CaffeinateMode) {
-	return `caffeinate (${formatMode(mode)})`;
-}
-
-function parentBoundUnixCommand(
-	command: string,
-	args: string[],
-	description: string,
-): InhibitorCommand {
-	return {
-		command: "sh",
-		args: [
-			"-c",
-			unixParentBoundScript(),
-			"pi-caffeinate-watch",
-			String(process.pid),
-			command,
-			...args,
-		],
-		description,
-	};
-}
-
-function unixParentBoundScript() {
-	return `parent=$1; shift; "$@" & child=$!; ( while kill -0 "$parent" 2>/dev/null; do sleep 5; done; kill "$child" 2>/dev/null ) & watcher=$!; cleanup() { kill "$watcher" 2>/dev/null; kill "$child" 2>/dev/null; wait "$child" 2>/dev/null; }; trap 'cleanup; exit 0' INT TERM HUP EXIT; wait "$child"; status=$?; kill "$watcher" 2>/dev/null; trap - EXIT; exit "$status"`;
-}
-
-function commandExists(command: string) {
-	const path = process.env.PATH ?? "";
-	const extensions = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
-
-	for (const directory of path.split(process.platform === "win32" ? ";" : ":")) {
-		if (!directory) continue;
-		for (const extension of extensions) {
-			const candidate = pathModule.join(directory, `${command}${extension}`);
-			if (existsSync(candidate)) return true;
-		}
-	}
-
-	return false;
-}
-
-export function splitCommand(input: string) {
-	const parts: string[] = [];
-	let current = "";
-	let quote: '"' | "'" | undefined;
-	let escaping = false;
-
-	for (const char of input) {
-		if (escaping) {
-			current += char;
-			escaping = false;
-			continue;
-		}
-
-		if (char === "\\") {
-			escaping = true;
-			continue;
-		}
-
-		if ((char === '"' || char === "'") && !quote) {
-			quote = char;
-			continue;
-		}
-
-		if (char === quote) {
-			quote = undefined;
-			continue;
-		}
-
-		if (/\s/.test(char) && !quote) {
-			if (current) {
-				parts.push(current);
-				current = "";
-			}
-			continue;
-		}
-
-		current += char;
-	}
-
-	if (current) parts.push(current);
-	return parts;
-}
-
-function windowsPowerInhibitorCommand(command: string, mode: CaffeinateMode): InhibitorCommand {
-	return {
-		command,
-		args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", windowsInhibitorScript(mode)],
-		description: `PowerShell SetThreadExecutionState (${formatMode(mode)})`,
-		releaseOnStdinClose: true,
-	};
-}
-
-export function windowsInhibitorScript(mode: CaffeinateMode) {
-	const flags = mode === "sleep" ? "0x80000001" : "0x80000003";
-	return `$ErrorActionPreference = 'Stop'; Add-Type -Namespace Native -Name Power -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint esFlags);'; $flags = [uint32]'${flags}'; $release = [uint32]'0x80000000'; $stdin = [Console]::OpenStandardInput(); $buffer = New-Object byte[] 1; $readTask = $stdin.ReadAsync($buffer, 0, 1); try { while ($true) { [Native.Power]::SetThreadExecutionState($flags) | Out-Null; if ($readTask.Wait(30000)) { break } } } finally { [Native.Power]::SetThreadExecutionState($release) | Out-Null }`;
-}
-
-function isWsl() {
-	try {
-		return existsSync("/proc/sys/fs/binfmt_misc/WSLInterop");
-	} catch {
-		return false;
-	}
+	if (options.notify !== false) ctx.ui.notify(`Released pi-caffeinate (${reason}).`, "info");
 }
 
 function updateStatus(ctx: ExtensionContext) {
@@ -584,10 +385,6 @@ function statusModeLabel() {
 	return formatMode(state.mode);
 }
 
-export function formatMode(mode: CaffeinateMode) {
-	return mode === "sleep" ? "system-awake" : "display-awake";
-}
-
 async function ensureSettingsLoaded(ctx: ExtensionContext) {
 	if (state.disabled || state.settingsLoaded) return;
 	await loadSettingsIntoState(ctx);
@@ -623,156 +420,8 @@ async function loadSettingsIntoState(ctx: ExtensionContext) {
 	}
 }
 
-type SettingsLoadResult =
-	| { kind: "missing"; notice?: string }
-	| { kind: "invalid"; reason: string; notice?: string }
-	| { kind: "loaded"; settings: CaffeinateSettings; notice?: string };
-
-type SettingsMigrationResult = {
-	kind: "migrated" | "failed";
-	notice: string;
-};
-
-async function loadSettings(): Promise<SettingsLoadResult> {
-	const newPath = settingsFilePath();
-	const newSettings = await readSettingsFile(newPath);
-	if (newSettings.kind !== "missing") {
-		return withLegacyIgnoredNotice(newSettings);
-	}
-
-	const legacyPath = legacySettingsFilePath();
-	const legacySettings = await readSettingsFile(legacyPath);
-	const concurrentlyCreatedSettings = await readSettingsFile(newPath);
-	if (concurrentlyCreatedSettings.kind !== "missing") {
-		return withLegacyIgnoredNotice(concurrentlyCreatedSettings);
-	}
-	if (legacySettings.kind === "missing") return { kind: "missing" };
-	if (legacySettings.kind === "invalid") return legacySettings;
-
-	const migration = await migrateLegacySettings(legacyPath);
-	if (migration.kind === "failed") {
-		const settingsCreatedDuringMigration = await readSettingsFile(newPath);
-		if (settingsCreatedDuringMigration.kind !== "missing") {
-			return withLegacyIgnoredNotice(settingsCreatedDuringMigration);
-		}
-	}
-
-	return { ...legacySettings, notice: migration.notice };
-}
-
-async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
-	let text: string;
-	try {
-		text = await readFile(filePath, "utf8");
-	} catch (error) {
-		if (isNodeError(error) && error.code === "ENOENT") return { kind: "missing" };
-		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
-	}
-
-	try {
-		const parsed = JSON.parse(text) as unknown;
-		const settings = normalizeCaffeinateSettings(parsed);
-		if (settings) return { kind: "loaded", settings };
-		return {
-			kind: "invalid",
-			reason: `${filePath}: expected { "mode": "sleep" | "display" }`,
-		};
-	} catch (error) {
-		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
-	}
-}
-
-async function withLegacyIgnoredNotice(settings: SettingsLoadResult): Promise<SettingsLoadResult> {
-	if (!(await fileExists(legacySettingsFilePath()))) return settings;
-	return {
-		...settings,
-		notice: `pi-caffeinate legacy settings ignored: ${legacySettingsFilePath()} exists, but ${settingsFilePath()} takes precedence. Delete ${LEGACY_SETTINGS_FILE} after confirming your settings.`,
-	};
-}
-
-async function migrateLegacySettings(legacyPath: string): Promise<SettingsMigrationResult> {
-	const newPath = settingsFilePath();
-	try {
-		await link(legacyPath, newPath);
-	} catch (error) {
-		return {
-			kind: "failed",
-			notice: `pi-caffeinate legacy settings migration failed: could not migrate ${legacyPath} to ${newPath}: ${formatError(error)}. The legacy file was used for this session; future saves will write ${NEW_SETTINGS_FILE}.`,
-		};
-	}
-
-	try {
-		await rm(legacyPath, { force: true });
-	} catch (error) {
-		return {
-			kind: "migrated",
-			notice: `pi-caffeinate settings migrated from ${legacyPath} to ${newPath}, but the legacy file could not be removed: ${formatError(error)}. Delete ${LEGACY_SETTINGS_FILE} after confirming your settings.`,
-		};
-	}
-
-	return {
-		kind: "migrated",
-		notice: `pi-caffeinate settings migrated from ${legacyPath} to ${newPath}. ${LEGACY_SETTINGS_FILE} is deprecated and will be removed in a future major release.`,
-	};
-}
-
-async function fileExists(filePath: string) {
-	try {
-		await access(filePath, constants.F_OK);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-export function normalizeCaffeinateSettings(value: unknown): CaffeinateSettings | undefined {
-	if (!value || typeof value !== "object") return undefined;
-	const settings = value as { mode?: unknown; updatedAt?: unknown };
-	if (!isCaffeinateMode(settings.mode)) return undefined;
-	if (settings.updatedAt !== undefined && typeof settings.updatedAt !== "number") return undefined;
-	return { mode: settings.mode, updatedAt: settings.updatedAt ?? 0 };
-}
-
-function isCaffeinateMode(value: unknown): value is CaffeinateMode {
-	return value === "sleep" || value === "display";
-}
-
-async function saveSettings(settings: CaffeinateSettings) {
-	const filePath = settingsFilePath();
-	await mkdir(dirname(filePath), { recursive: true });
-	const tempFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-	try {
-		await writeFile(tempFile, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
-		await rename(tempFile, filePath);
-	} catch (error) {
-		await rm(tempFile, { force: true }).catch(() => undefined);
-		throw error;
-	}
-}
-
-function settingsFilePath() {
-	return join(agentDir(), NEW_SETTINGS_FILE);
-}
-
-function legacySettingsFilePath() {
-	return join(agentDir(), LEGACY_SETTINGS_FILE);
-}
-
-function agentDir() {
-	return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
-}
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-	return error instanceof Error && "code" in error;
-}
-
 function formatError(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
-}
-
-function formatExit(code: number | null, signal: NodeJS.Signals | null) {
-	if (signal) return `signal ${signal}`;
-	return `code ${code ?? "unknown"}`;
 }
 
 function isDisabled() {
@@ -797,3 +446,6 @@ function warnDeprecatedIcon(ctx: ExtensionContext) {
 		"warning",
 	);
 }
+
+export { formatMode, splitCommand, windowsInhibitorScript } from "./inhibitors.js";
+export { normalizeCaffeinateSettings } from "./settings.js";
