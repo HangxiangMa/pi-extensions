@@ -95,4 +95,3 @@ export function usage() {
 		"Config: set PI_SYNC_ENDPOINT, PI_SYNC_BUCKET, PI_SYNC_ACCESS_KEY_ID, PI_SYNC_SECRET_ACCESS_KEY, optional PI_SYNC_SESSION_TOKEN, PI_SYNC_SESSIONS/syncSessions, region/profile/prefix, or edit ~/.pi/agent/pi-sync.local.json (or $PI_CODING_AGENT_DIR/pi-sync.local.json when PI_CODING_AGENT_DIR is set).",
 	].join("\n");
 }
-

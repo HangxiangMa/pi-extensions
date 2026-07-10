@@ -205,4 +205,3 @@ async function withStatus<T>(ctx: ExtensionContext, status: string, fn: () => Pr
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	}
 }
-

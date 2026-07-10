@@ -244,4 +244,3 @@ function isObject(value: unknown): value is Record<string, unknown> {
 function stringValue(value: unknown) {
 	return typeof value === "string" && value ? value : undefined;
 }
-

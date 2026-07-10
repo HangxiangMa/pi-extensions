@@ -261,4 +261,3 @@ async function assertNoSymlinkParents(root: string, target: string) {
 		}
 	}
 }
-

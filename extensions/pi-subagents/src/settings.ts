@@ -118,4 +118,3 @@ export function hasAnyAgentOverride(config: SubagentAgentConfig): boolean {
 		hasOwn(config, "timeoutMs")
 	);
 }
-

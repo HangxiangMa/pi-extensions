@@ -298,4 +298,3 @@ function sourceIdentity(source: string, baseDirectory: string): string {
 function resolveSourcePath(source: string, baseDirectory: string): string {
 	return isAbsolute(source) ? source : resolve(baseDirectory, source);
 }
-

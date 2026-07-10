@@ -250,4 +250,3 @@ export function formatScreenshotText(page: DevToolsPage, screenshot: ScreenshotS
 		`Use read({ path: ${JSON.stringify(screenshot.savedPath)} }) to inspect the saved screenshot if inline image content is not available.`,
 	].join("\n");
 }
-

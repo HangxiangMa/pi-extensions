@@ -184,4 +184,3 @@ export const searchTool = defineTool({
 		});
 	},
 });
-

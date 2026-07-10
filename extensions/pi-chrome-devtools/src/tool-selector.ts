@@ -338,4 +338,3 @@ async function persistSettings(
 		ctx.ui.notify(`Chrome DevTools settings save failed: ${formatError(error)}`, "warning");
 	}
 }
-

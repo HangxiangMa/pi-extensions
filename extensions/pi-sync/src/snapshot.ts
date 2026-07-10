@@ -402,4 +402,3 @@ export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
 		),
 	};
 }
-

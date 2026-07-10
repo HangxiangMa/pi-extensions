@@ -208,4 +208,3 @@ function asNumber(value: unknown): number | undefined {
 function asBoolean(value: unknown): boolean | undefined {
 	return typeof value === "boolean" ? value : undefined;
 }
-

@@ -109,4 +109,3 @@ export async function withStatus<T>(ctx: StatusContext, status: string, callback
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	}
 }
-

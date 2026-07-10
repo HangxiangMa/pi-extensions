@@ -106,4 +106,3 @@ function errorMessage(payload: unknown) {
 	}
 	return typeof payload === "string" ? payload : JSON.stringify(payload);
 }
-
