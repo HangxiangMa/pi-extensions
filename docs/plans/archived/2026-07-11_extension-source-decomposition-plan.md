@@ -38,7 +38,7 @@ Four smaller files also have clear responsibility boundaries: `pi-google-genai`,
 
 ## Plan
 
-- [ ] Record a clean behavioral baseline and export/package inventory for all ten packages; run `npm run check`, the `just pack` recipe for each package, and save the pre-refactor source line/function inventory in the first PR description so later diffs can be compared against known-good evidence.
+- [x] Record a clean behavioral baseline and export/package inventory for all ten packages; run `npm run check`, the `just pack` recipe for each package, and save the pre-refactor source line/function inventory in the first PR description so later diffs can be compared against known-good evidence.
 
 - [x] Decompose `extensions/pi-sync/src/sync.ts`: move configuration/state/lock I/O to `config.ts`, snapshot collection/filtering/merge/hash logic to `snapshot.ts`, mutation preflight and path-safe application to `snapshot-apply.ts`, SigV4/S3 transport to `s3-client.ts`, and argument helpers to `command.ts`, leaving command/lifecycle orchestration in `sync.ts`; add or preserve focused tests for snapshot policy, symlink/path safety, merge behavior, signing transport boundaries, and parsing, then verify with `npm test`, `npm run typecheck`, and `just pack sync`.
 
@@ -66,7 +66,7 @@ Four smaller files also have clear responsibility boundaries: `pi-google-genai`,
 
 - [x] Run final repository and packaging verification: `npm run check`, `npm run --workspace @narumitw/pi-goal test:runtime`, all ten `just pack <name>` dry runs, and `git diff --check`; inspect each tarball listing to confirm the unchanged entrypoint and every imported package-local module are included.
 
-- [ ] Submit one coordinated PR containing focused per-extension commits; require the repository CI matrix to pass, and include module-boundary rationale, tests run, package dry-run evidence, and confirmation of no intended user-visible behavior change in the PR description.
+- [x] Submit one coordinated PR containing focused per-extension commits; require the repository CI matrix to pass, and include module-boundary rationale, tests run, package dry-run evidence, and confirmation of no intended user-visible behavior change in the PR description.
 
 ## Risks
 
@@ -89,5 +89,5 @@ Each extension split is an independent behavior-preserving commit. Revert only t
 - [x] Repository formatting, typechecks, boundary checks, and tests pass, verified by `npm run check`.
 - [x] Real-session goal behavior passes after extraction, verified by `npm run --workspace @narumitw/pi-goal test:runtime`.
 - [x] All ten npm package previews contain their unchanged entrypoint and required internal modules, verified by `just pack sync`, `just pack chrome-devtools`, `just pack subagents`, `just pack goal`, `just pack codex-usage`, `just pack plan-mode`, `just pack google-genai`, `just pack firecrawl`, `just pack statusline`, and `just pack caffeinate`.
-- [ ] The coordinated decomposition PR contains focused per-extension commits, recorded verification evidence, and passing compatibility CI.
-- [ ] The completed plan is archived at `docs/plans/archived/2026-07-11_extension-source-decomposition-plan.md` only after every item above is evidenced.
+- [x] The coordinated decomposition PR contains focused per-extension commits, recorded verification evidence, and passing compatibility CI.
+- [x] The completed plan is archived at `docs/plans/archived/2026-07-11_extension-source-decomposition-plan.md` only after every item above is evidenced.
