@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -142,6 +142,43 @@ test("firecrawl migrates a legacy-only settings file and warns", async () => {
 		assert.match(notifications[0]?.message ?? "", /migrated/i);
 		assert.match(notifications[0]?.message ?? "", /pi-firecrawl-settings\.json/);
 		assert.match(notifications[0]?.message ?? "", /pi-firecrawl\.json/);
+	});
+});
+
+test("firecrawl falls back to valid legacy settings when migration fails", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, LEGACY_SETTINGS_FILE, [SCRAPE_TOOL]);
+		symlinkSync("missing-firecrawl-settings-target", path.join(agentDir, NEW_SETTINGS_FILE));
+		const firecrawlModule = await importFreshFirecrawl();
+		const mock = createMockPi({ activeTools: ["other_tool", MAP_TOOL] });
+		const { ctx, notifications } = createMockContext();
+
+		firecrawlModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", SCRAPE_TOOL]);
+		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), true);
+		assert.match(notifications[0]?.message ?? "", /migration failed/i);
+		assert.match(notifications[0]?.message ?? "", /legacy file was used for this session/i);
+	});
+});
+
+test("firecrawl prefers new settings created while legacy settings are loading", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, LEGACY_SETTINGS_FILE, [SCRAPE_TOOL]);
+		const firecrawlModule = await importFreshFirecrawl();
+		const mock = createMockPi({ activeTools: ["other_tool", MAP_TOOL] });
+		const { ctx, notifications } = createMockContext();
+
+		firecrawlModule.default(mock.pi);
+		const sessionStart = mock.events.get("session_start")?.[0]?.({}, ctx);
+		writeSettings(agentDir, NEW_SETTINGS_FILE, [SEARCH_TOOL]);
+		await sessionStart;
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", SEARCH_TOOL]);
+		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, [SEARCH_TOOL]);
+		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), true);
+		assert.match(notifications[0]?.message ?? "", /legacy settings ignored/i);
 	});
 });
 

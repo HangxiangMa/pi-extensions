@@ -671,21 +671,36 @@ type SettingsLoadResult =
 	| { kind: "invalid"; reason: string; notice?: string }
 	| { kind: "loaded"; settings: FirecrawlSettings; notice?: string };
 
+type SettingsMigrationResult = {
+	kind: "migrated" | "failed";
+	notice: string;
+};
+
 async function loadSettings(): Promise<SettingsLoadResult> {
-	const newSettings = await readSettingsFile(settingsFilePath());
+	const newPath = settingsFilePath();
+	const newSettings = await readSettingsFile(newPath);
 	if (newSettings.kind !== "missing") {
 		return withLegacyIgnoredNotice(newSettings);
 	}
 
 	const legacyPath = legacySettingsFilePath();
 	const legacySettings = await readSettingsFile(legacyPath);
+	const concurrentlyCreatedSettings = await readSettingsFile(newPath);
+	if (concurrentlyCreatedSettings.kind !== "missing") {
+		return withLegacyIgnoredNotice(concurrentlyCreatedSettings);
+	}
 	if (legacySettings.kind === "missing") return { kind: "missing" };
 	if (legacySettings.kind === "invalid") return legacySettings;
 
-	return {
-		...legacySettings,
-		notice: await migrateLegacySettings(legacyPath, legacySettings.settings),
-	};
+	const migration = await migrateLegacySettings(legacyPath, legacySettings.settings);
+	if (migration.kind === "failed") {
+		const settingsCreatedDuringMigration = await readSettingsFile(newPath);
+		if (settingsCreatedDuringMigration.kind !== "missing") {
+			return withLegacyIgnoredNotice(settingsCreatedDuringMigration);
+		}
+	}
+
+	return { ...legacySettings, notice: migration.notice };
 }
 
 async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
@@ -718,7 +733,10 @@ async function withLegacyIgnoredNotice(settings: SettingsLoadResult): Promise<Se
 	};
 }
 
-async function migrateLegacySettings(legacyPath: string, settings: FirecrawlSettings) {
+async function migrateLegacySettings(
+	legacyPath: string,
+	settings: FirecrawlSettings,
+): Promise<SettingsMigrationResult> {
 	const newPath = settingsFilePath();
 	try {
 		await mkdir(dirname(newPath), { recursive: true });
@@ -727,16 +745,25 @@ async function migrateLegacySettings(legacyPath: string, settings: FirecrawlSett
 			flag: "wx",
 		});
 	} catch (error) {
-		return `Firecrawl legacy settings migration failed: could not migrate ${legacyPath} to ${newPath}: ${formatError(error)}. The legacy file was used for this session; future saves will write ${NEW_SETTINGS_FILE}.`;
+		return {
+			kind: "failed",
+			notice: `Firecrawl legacy settings migration failed: could not migrate ${legacyPath} to ${newPath}: ${formatError(error)}. The legacy file was used for this session; future saves will write ${NEW_SETTINGS_FILE}.`,
+		};
 	}
 
 	try {
 		await rm(legacyPath, { force: true });
 	} catch (error) {
-		return `Firecrawl settings migrated from ${legacyPath} to ${newPath}, but the legacy file could not be removed: ${formatError(error)}. Delete ${LEGACY_SETTINGS_FILE} after confirming your settings.`;
+		return {
+			kind: "migrated",
+			notice: `Firecrawl settings migrated from ${legacyPath} to ${newPath}, but the legacy file could not be removed: ${formatError(error)}. Delete ${LEGACY_SETTINGS_FILE} after confirming your settings.`,
+		};
 	}
 
-	return `Firecrawl settings migrated from ${legacyPath} to ${newPath}. ${LEGACY_SETTINGS_FILE} is deprecated and will be removed in a future major release.`;
+	return {
+		kind: "migrated",
+		notice: `Firecrawl settings migrated from ${legacyPath} to ${newPath}. ${LEGACY_SETTINGS_FILE} is deprecated and will be removed in a future major release.`,
+	};
 }
 
 async function fileExists(filePath: string) {
