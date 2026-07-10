@@ -10,23 +10,55 @@ import goal, {
 	formatTokenCount,
 	isContradictoryCompletionSummary,
 	isRetryableGoalInterruption,
+	isUsageLimitedGoalInterruption,
 	parseCommand,
 	parseTokenBudget,
 	validateObjective,
 } from "../src/goal.js";
 
-test("goal registers command, completion tool, and lifecycle hooks", () => {
+const STALE_GOAL_TOOL_REASON =
+	"Blocked stale /goal tool call after the goal stopped or was interrupted.";
+
+test("goal registers command, status tools, and lifecycle hooks", () => {
 	const mock = createMockPi();
 	goal(mock.pi);
 
 	assert.ok(mock.commands.has("goal"));
 	assert.equal(typeof mock.commands.get("goal")?.getArgumentCompletions, "function");
-	assert.equal(mock.tools[0]?.name, "goal_complete");
-	const toolParameters = mock.tools[0]?.parameters as
-		| { required?: string[]; properties?: Record<string, unknown> }
+	assert.deepEqual(
+		mock.tools.map((tool) => tool.name),
+		["goal_complete", "goal_blocked"],
+	);
+	const completionParameters = mock.tools.find((tool) => tool.name === "goal_complete")
+		?.parameters as { required?: string[]; properties?: Record<string, unknown> } | undefined;
+	assert.deepEqual(completionParameters?.required, ["goal_id", "summary"]);
+	assert.ok(completionParameters?.properties?.goal_id);
+	const blockerDefinition = mock.tools.find((tool) => tool.name === "goal_blocked");
+	const blockedParameters = blockerDefinition?.parameters as
+		| {
+				required?: string[];
+				properties?: Record<string, { minimum?: number; minLength?: number; maxLength?: number }>;
+		  }
 		| undefined;
-	assert.deepEqual(toolParameters?.required, ["goal_id", "summary"]);
-	assert.ok(toolParameters?.properties?.goal_id);
+	assert.deepEqual(blockedParameters?.required, [
+		"goal_id",
+		"reason",
+		"evidence",
+		"repeated_turns",
+	]);
+	assert.equal(blockedParameters?.properties?.reason?.minLength, 1);
+	assert.equal(blockedParameters?.properties?.reason?.maxLength, 1_000);
+	assert.equal(blockedParameters?.properties?.evidence?.minLength, 1);
+	assert.equal(blockedParameters?.properties?.evidence?.maxLength, 4_000);
+	assert.equal(blockedParameters?.properties?.repeated_turns?.minimum, 3);
+	assert.match(
+		String(blockerDefinition?.description),
+		/same blocker.*three consecutive goal turns/i,
+	);
+	assert.match(
+		String((blockerDefinition?.promptGuidelines as string[] | undefined)?.join(" ")),
+		/fresh three-turn blocker audit/i,
+	);
 	assert.deepEqual([...mock.events.keys()].sort(), [
 		"agent_end",
 		"agent_settled",
@@ -49,7 +81,7 @@ test("completeGoalArguments suggests /goal subcommands and token options", () =>
 		completeGoalArguments("")?.map((item) => item.description),
 		[
 			"Pause the active goal",
-			"Resume a paused or budget-limited goal",
+			"Resume a stopped or budget-limited goal",
 			"Clear the current goal",
 			"Edit the current goal objective",
 			"Show the current goal",
@@ -105,7 +137,7 @@ test("parseTokenBudget and format helpers use compact units", () => {
 	assert.equal(formatDuration(3660), "1h1m");
 });
 
-test("formatStatus reports active, paused, budget-limited, and empty states", () => {
+test("formatStatus reports active, stopped, budget-limited, complete, and empty states", () => {
 	const activeGoal = {
 		id: "g1",
 		text: "finish",
@@ -122,7 +154,10 @@ test("formatStatus reports active, paused, budget-limited, and empty states", ()
 	assert.equal(formatStatus(undefined), undefined);
 	assert.equal(formatStatus(activeGoal), "active 500/2k");
 	assert.equal(formatStatus({ ...activeGoal, status: "paused" }), "paused");
+	assert.equal(formatStatus({ ...activeGoal, status: "blocked" }), "blocked");
+	assert.equal(formatStatus({ ...activeGoal, status: "usage_limited" }), "usage");
 	assert.equal(formatStatus({ ...activeGoal, status: "budget_limited" }), "budget 500/2k");
+	assert.equal(formatStatus({ ...activeGoal, status: "complete" }), "complete");
 });
 
 test("buildGoalSystemPrompt escapes objective XML and includes goal_id guard rules", () => {
@@ -178,7 +213,7 @@ test("goal prompts include the active goal_id guard", async () => {
 
 test("goal_complete requires current goal_id before validating summary", async () => {
 	const { mock, ctx } = await startGoalForTest();
-	const tool = mock.tools[0] as GoalTool;
+	const tool = requireGoalTool(mock, "goal_complete");
 	const currentGoal = requireLastGoal(mock);
 
 	try {
@@ -229,7 +264,7 @@ test("goal_complete rejects contradictory summaries and accepts verified complet
 	);
 
 	const { mock, ctx } = await startGoalForTest();
-	const tool = mock.tools[0] as GoalTool;
+	const tool = requireGoalTool(mock, "goal_complete");
 	const goalId = requireLastGoal(mock).id;
 
 	const rejected = await tool.execute(
@@ -283,7 +318,7 @@ test("goal_complete rejects contradictory summaries and accepts verified complet
 
 test("goal_complete rejects stale goal_id after replacement, pause/resume, and clear", async () => {
 	const replaced = await startGoalForTest();
-	const replacementTool = replaced.mock.tools[0] as GoalTool;
+	const replacementTool = requireGoalTool(replaced.mock, "goal_complete");
 	const originalGoal = requireLastGoal(replaced.mock);
 
 	await replaced.mock.commands.get("goal")?.handler("ship replacement objective", replaced.ctx);
@@ -308,7 +343,7 @@ test("goal_complete rejects stale goal_id after replacement, pause/resume, and c
 	assert.equal(lastGoalStatus(replaced.mock), "active");
 
 	const resumed = await startGoalForTest();
-	const resumeTool = resumed.mock.tools[0] as GoalTool;
+	const resumeTool = requireGoalTool(resumed.mock, "goal_complete");
 	const beforePauseGoal = requireLastGoal(resumed.mock);
 	await resumed.mock.commands.get("goal")?.handler("pause", resumed.ctx);
 
@@ -328,10 +363,7 @@ test("goal_complete rejects stale goal_id after replacement, pause/resume, and c
 			{ toolName: "bash", toolCallId: "t-after-stale-complete", input: {} },
 			resumed.ctx,
 		),
-		{
-			block: true,
-			reason: "Blocked stale /goal tool call after the goal was paused or interrupted.",
-		},
+		{ block: true, reason: STALE_GOAL_TOOL_REASON },
 	);
 
 	await resumed.mock.commands.get("goal")?.handler("resume", resumed.ctx);
@@ -356,7 +388,7 @@ test("goal_complete rejects stale goal_id after replacement, pause/resume, and c
 	assert.equal(lastGoalStatus(resumed.mock), "active");
 
 	const cleared = await startGoalForTest();
-	const clearTool = cleared.mock.tools[0] as GoalTool;
+	const clearTool = requireGoalTool(cleared.mock, "goal_complete");
 	const beforeClearGoal = requireLastGoal(cleared.mock);
 	await cleared.mock.commands.get("goal")?.handler("clear", cleared.ctx);
 
@@ -371,6 +403,269 @@ test("goal_complete rejects stale goal_id after replacement, pause/resume, and c
 	assert.equal(staleAfterClear.terminate, undefined);
 	assert.match(staleAfterClear.content?.[0]?.text ?? "", /no active goal/i);
 	assert.equal(lastGoalStatus(cleared.mock), null);
+});
+
+test("goal_blocked rejects calls without an active goal", async () => {
+	const mock = createMockPi();
+	goal(mock.pi);
+	const context = createMockContext();
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	const blockerTool = requireGoalTool(mock, "goal_blocked");
+
+	const result = await blockerTool.execute(
+		"block-without-goal",
+		{
+			goal_id: "missing",
+			reason: "Need access",
+			evidence: "Three attempts failed",
+			repeated_turns: 3,
+		},
+		new AbortController().signal,
+		() => undefined,
+		context.ctx,
+	);
+
+	assert.match(result.content?.[0]?.text ?? "", /no active goal/i);
+	assert.equal(result.terminate, undefined);
+	assert.equal(lastGoalStatus(mock), null);
+});
+
+test("goal_blocked requires a current active goal and strict blocker evidence", async () => {
+	const blocked = await startGoalForTest();
+	const blockerTool = requireGoalTool(blocked.mock, "goal_blocked");
+	const completionTool = requireGoalTool(blocked.mock, "goal_complete");
+	const currentGoal = requireLastGoal(blocked.mock);
+
+	const stale = await blockerTool.execute(
+		"block-stale",
+		{ goal_id: "stale", reason: "", evidence: "", repeated_turns: 0 },
+		new AbortController().signal,
+		() => undefined,
+		blocked.ctx,
+	);
+	assert.match(stale.content?.[0]?.text ?? "", /goal_id/i);
+	assert.equal(lastGoalStatus(blocked.mock), "active");
+
+	for (const [params, rejection] of [
+		[
+			{
+				goal_id: currentGoal.id,
+				reason: "Need access",
+				evidence: "Tried available paths",
+				repeated_turns: 2,
+			},
+			/at least 3/i,
+		],
+		[
+			{ goal_id: currentGoal.id, reason: "Need access", evidence: "   ", repeated_turns: 3 },
+			/evidence is empty/i,
+		],
+		[
+			{
+				goal_id: currentGoal.id,
+				reason: "   ",
+				evidence: "Three attempts failed",
+				repeated_turns: 3,
+			},
+			/reason is empty/i,
+		],
+		[
+			{
+				goal_id: currentGoal.id,
+				reason: "r".repeat(1_001),
+				evidence: "Three attempts failed",
+				repeated_turns: 3,
+			},
+			/reason is too long/i,
+		],
+		[
+			{
+				goal_id: currentGoal.id,
+				reason: "Need access",
+				evidence: "e".repeat(4_001),
+				repeated_turns: 3,
+			},
+			/evidence is too long/i,
+		],
+		[
+			{
+				goal_id: currentGoal.id,
+				reason: "Need access",
+				evidence: "Three attempts failed",
+				repeated_turns: 3.5,
+			},
+			/whole number/i,
+		],
+	] as const) {
+		const result = await blockerTool.execute(
+			"block-rejected",
+			params,
+			new AbortController().signal,
+			() => undefined,
+			blocked.ctx,
+		);
+		assert.match(result.content?.[0]?.text ?? "", rejection);
+		assert.equal(result.terminate, undefined);
+		assert.equal(lastGoalStatus(blocked.mock), "active");
+	}
+
+	const accepted = await blockerTool.execute(
+		"block-accepted",
+		{
+			goal_id: currentGoal.id,
+			reason: "Repository access requires the user",
+			evidence: "Three separate attempts confirmed that no available credential can read it.",
+			repeated_turns: 3,
+		},
+		new AbortController().signal,
+		() => undefined,
+		blocked.ctx,
+	);
+
+	assert.equal(accepted.terminate, true);
+	assert.match(accepted.content?.[0]?.text ?? "", /goal blocked/i);
+	assert.equal(lastGoalStatus(blocked.mock), "blocked");
+	assert.equal(blocked.statuses.get("goal"), "blocked");
+	assert.match(blocked.notifications.at(-1)?.message ?? "", /goal blocked/i);
+	assert.deepEqual(
+		blocked.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "bash", toolCallId: "stale-after-block", input: {} },
+			blocked.ctx,
+		),
+		{ block: true, reason: STALE_GOAL_TOOL_REASON },
+	);
+
+	const completion = await completionTool.execute(
+		"complete-blocked",
+		{ goal_id: currentGoal.id, summary: "Implemented and verified." },
+		new AbortController().signal,
+		() => undefined,
+		blocked.ctx,
+	);
+	assert.match(completion.content?.[0]?.text ?? "", /blocked, not active/i);
+	assert.equal(completion.terminate, undefined);
+	assert.equal(lastGoalStatus(blocked.mock), "blocked");
+
+	const alreadyStopped = await blockerTool.execute(
+		"block-stopped",
+		{
+			goal_id: currentGoal.id,
+			reason: "Still blocked",
+			evidence: "The external state is unchanged.",
+			repeated_turns: 4,
+		},
+		new AbortController().signal,
+		() => undefined,
+		blocked.ctx,
+	);
+	assert.match(alreadyStopped.content?.[0]?.text ?? "", /blocked, not active/i);
+	assert.equal(alreadyStopped.terminate, undefined);
+});
+
+test("session persistence restores stopped states with resumable command hints", async () => {
+	for (const [status, statusline] of [
+		["paused", "paused"],
+		["blocked", "blocked"],
+		["usage_limited", "usage"],
+		["budget_limited", "budget 5/10"],
+	] as const) {
+		const restored = restoreGoalForTest(status);
+		assert.equal(restored.statuses.get("goal"), statusline);
+
+		await restored.mock.commands.get("goal")?.handler("", restored.ctx);
+		assert.match(restored.notifications.at(-1)?.message ?? "", new RegExp(`Status: ${status}`));
+		assert.match(restored.notifications.at(-1)?.message ?? "", /\/goal resume/);
+	}
+});
+
+test("resume safely reactivates every resumable stopped status and rotates goal_id", async () => {
+	for (const status of ["paused", "blocked", "usage_limited", "budget_limited"] as const) {
+		const restored = restoreGoalForTest(status);
+		const beforeResume = restored.sessionGoal;
+
+		await restored.mock.commands.get("goal")?.handler("resume", restored.ctx);
+
+		const resumed = requireLastGoal(restored.mock);
+		assert.equal(resumed.status, "active", `${status} should resume`);
+		assert.notEqual(resumed.id, beforeResume.id);
+		assert.equal(restored.statuses.get("goal"), "active 5/10");
+		assert.equal(restored.mock.sentUserMessages.length, 1);
+		assert.match(restored.mock.sentUserMessages[0]?.text ?? "", /explicitly resumed/i);
+		assert.equal(
+			restored.mock.events.get("tool_call")?.[0]?.(
+				{ toolName: "bash", toolCallId: `tool-after-${status}`, input: {} },
+				restored.ctx,
+			),
+			undefined,
+		);
+	}
+});
+
+test("resume rejects active goals and exhausted budgets without rotating goal_id", async () => {
+	const active = await startGoalForTest();
+	const activeGoal = requireLastGoal(active.mock);
+	const activeMessageCount = active.mock.sentUserMessages.length;
+	await active.mock.commands.get("goal")?.handler("resume", active.ctx);
+	assert.match(active.notifications.at(-1)?.message ?? "", /only paused, blocked/i);
+	assert.equal(requireLastGoal(active.mock).id, activeGoal.id);
+	assert.equal(active.mock.sentUserMessages.length, activeMessageCount);
+
+	for (const status of ["paused", "blocked", "usage_limited", "budget_limited"] as const) {
+		const exhausted = restoreGoalForTest(status, { tokensUsed: 10 });
+		await exhausted.mock.commands.get("goal")?.handler("resume", exhausted.ctx);
+		assert.match(exhausted.notifications.at(-1)?.message ?? "", /still reached/i);
+		exhausted.mock.events.get("session_shutdown")?.[0]?.({}, exhausted.ctx);
+		assert.equal(lastGoalStatus(exhausted.mock), status);
+		assert.equal(requireLastGoal(exhausted.mock).id, exhausted.sessionGoal.id);
+		assert.equal(exhausted.mock.sentUserMessages.length, 0);
+	}
+});
+
+test("failed resume delivery restores the stopped state and original goal_id", async () => {
+	const restored = restoreGoalForTest("blocked");
+	restored.mock.rawPi.sendUserMessage = () => {
+		throw new Error("runtime became busy");
+	};
+
+	await restored.mock.commands.get("goal")?.handler("resume", restored.ctx);
+
+	assert.equal(lastGoalStatus(restored.mock), "blocked");
+	assert.equal(requireLastGoal(restored.mock).id, restored.sessionGoal.id);
+	assert.equal(restored.statuses.get("goal"), "blocked");
+	assert.equal(restored.mock.sentUserMessages.length, 0);
+	assert.match(restored.notifications.at(-1)?.message ?? "", /runtime became busy/i);
+	assert.deepEqual(
+		restored.mock.events.get("tool_call")?.[0]?.(
+			{ toolName: "bash", toolCallId: "stale-after-failed-resume", input: {} },
+			restored.ctx,
+		),
+		{ block: true, reason: STALE_GOAL_TOOL_REASON },
+	);
+});
+
+test("editing paused, blocked, or usage-limited goals preserves their stopped state", async () => {
+	for (const status of ["paused", "blocked", "usage_limited"] as const) {
+		const restored = restoreGoalForTest(status);
+		const oldId = restored.sessionGoal.id;
+		await restored.mock.commands.get("goal")?.handler("edit revised objective", restored.ctx);
+
+		const edited = requireLastGoal(restored.mock);
+		assert.equal(edited.status, status);
+		assert.notEqual(edited.id, oldId);
+		assert.equal(restored.mock.sentUserMessages.length, 0);
+	}
+});
+
+test("pause remains active-only for new stopped statuses", async () => {
+	for (const status of ["blocked", "usage_limited", "budget_limited"] as const) {
+		const restored = restoreGoalForTest(status);
+		await restored.mock.commands.get("goal")?.handler("pause", restored.ctx);
+		assert.match(restored.notifications.at(-1)?.message ?? "", /only active goals can be paused/i);
+		assert.equal(
+			restored.statuses.get("goal"),
+			status === "usage_limited" ? "usage" : status === "budget_limited" ? "budget 5/10" : status,
+		);
+	}
 });
 
 test("agent_settled dispatches one idle continuation after agent_end records intent", async () => {
@@ -509,10 +804,7 @@ test("pause aborts the current turn, blocks stale tools, and persists paused sta
 			{ toolName: "bash", toolCallId: "t1", input: {} },
 			paused.ctx,
 		),
-		{
-			block: true,
-			reason: "Blocked stale /goal tool call after the goal was paused or interrupted.",
-		},
+		{ block: true, reason: STALE_GOAL_TOOL_REASON },
 	);
 });
 
@@ -548,7 +840,7 @@ test("clear removes goal state without aborting or blocking stale tools", async 
 		undefined,
 	);
 
-	const tool = cleared.mock.tools[0] as GoalTool;
+	const tool = requireGoalTool(cleared.mock, "goal_complete");
 	const staleCompletion = await tool.execute(
 		"call-after-clear",
 		{ goal_id: beforeClearGoal.id, summary: "Implemented and verified." },
@@ -578,10 +870,7 @@ test("clear releases stale tool-call block from a paused goal", async () => {
 			{ toolName: "bash", toolCallId: "t-paused", input: {} },
 			paused.ctx,
 		),
-		{
-			block: true,
-			reason: "Blocked stale /goal tool call after the goal was paused or interrupted.",
-		},
+		{ block: true, reason: STALE_GOAL_TOOL_REASON },
 	);
 
 	await paused.mock.commands.get("goal")?.handler("clear", paused.ctx);
@@ -612,7 +901,7 @@ test("state changes between agent_end and agent_settled cancel stale continuatio
 		} else if (action === "replace") {
 			await changed.mock.commands.get("goal")?.handler("replacement objective", changed.ctx);
 		} else {
-			await (changed.mock.tools[0] as GoalTool).execute(
+			await requireGoalTool(changed.mock, "goal_complete").execute(
 				"complete-before-settled",
 				{ goal_id: originalGoal.id, summary: "Implemented and verified." },
 				new AbortController().signal,
@@ -659,7 +948,120 @@ test("budget exhaustion between agent_end and agent_settled cancels continuation
 	assert.equal(budgeted.mock.sentUserMessages.length, 1);
 });
 
-test("agent_end keeps retryable interruptions active but pauses non-retryable errors", async () => {
+test("usage-limit classification recognizes quota failures without swallowing unrelated errors", () => {
+	for (const errorMessage of [
+		"You have hit your ChatGPT usage limit.",
+		"GoUsageLimitError",
+		"Monthly usage limit reached; enable available balance",
+		"Provider account is out of budget",
+		"Your organization quota has been exceeded",
+		"RESOURCE_EXHAUSTED: quota exhausted",
+		"insufficient_quota",
+		"Billing hard limit reached",
+		"Please check your plan and billing details",
+		"Your credit balance is too low to access the API",
+		"Payment Required: insufficient credits",
+	]) {
+		assert.equal(
+			isUsageLimitedGoalInterruption({ role: "assistant", stopReason: "error", errorMessage }),
+			true,
+			errorMessage,
+		);
+	}
+	for (const errorMessage of [
+		"WebSocket closed 1000",
+		"rate_limit_exceeded",
+		"HTTP 429 Too Many Requests",
+		"Unauthorized: invalid API key",
+		"multi-auth rotation failed: 2 credentials tried",
+	]) {
+		assert.equal(
+			isUsageLimitedGoalInterruption({ role: "assistant", stopReason: "error", errorMessage }),
+			false,
+			errorMessage,
+		);
+	}
+	assert.equal(
+		isUsageLimitedGoalInterruption({
+			role: "assistant",
+			stopReason: "aborted",
+			errorMessage: "usage limit",
+		}),
+		false,
+	);
+	for (const errorMessage of [
+		"rate_limit_exceeded",
+		"HTTP 429 Too Many Requests",
+		"Internal server error 503",
+	]) {
+		assert.equal(
+			isRetryableGoalInterruption({ role: "assistant", stopReason: "error", errorMessage }),
+			true,
+			errorMessage,
+		);
+	}
+});
+
+test("agent_end maps abort, quota failure, and terminal error to distinct stopped states", async () => {
+	for (const [assistant, status, notification] of [
+		[{ role: "assistant", stopReason: "aborted" }, "paused", /paused after interruption/i],
+		[
+			{
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: "You have hit your ChatGPT usage limit.",
+			},
+			"usage_limited",
+			/usage limit/i,
+		],
+		[
+			{
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: "Permission denied by remote service",
+			},
+			"blocked",
+			/blocked after agent error/i,
+		],
+	] as const) {
+		let aborts = 0;
+		const stopped = await startGoalForTest({ abort: () => aborts++ });
+		await stopped.mock.events.get("agent_end")?.[0]?.({ messages: [assistant] }, stopped.ctx);
+
+		assert.equal(lastGoalStatus(stopped.mock), status);
+		assert.equal(aborts, 1);
+		assert.match(stopped.notifications.at(-1)?.message ?? "", notification);
+		await stopped.mock.events.get("agent_settled")?.[0]?.({}, stopped.ctx);
+		assert.equal(stopped.mock.sentUserMessages.length, 1);
+		const staleToolCall = stopped.mock.events.get("tool_call")?.[0];
+		assert.deepEqual(
+			staleToolCall?.({ toolName: "bash", toolCallId: `stale-${status}`, input: {} }, stopped.ctx),
+			{ block: true, reason: STALE_GOAL_TOOL_REASON },
+		);
+		stopped.mock.events.get("input")?.[0]?.(
+			{ source: "extension", text: "unrelated extension work" },
+			stopped.ctx,
+		);
+		assert.deepEqual(
+			staleToolCall?.(
+				{ toolName: "bash", toolCallId: `still-stale-${status}`, input: {} },
+				stopped.ctx,
+			),
+			{ block: true, reason: STALE_GOAL_TOOL_REASON },
+		);
+		await stopped.mock.commands.get("goal")?.handler("resume", stopped.ctx);
+		assert.equal(lastGoalStatus(stopped.mock), "active");
+		assert.equal(
+			staleToolCall?.(
+				{ toolName: "bash", toolCallId: `resumed-${status}`, input: {} },
+				stopped.ctx,
+			),
+			undefined,
+		);
+	}
+});
+
+test("agent_end keeps retryable interruptions active but stops on non-retryable errors", async () => {
 	assert.equal(
 		isRetryableGoalInterruption({
 			role: "assistant",
@@ -737,7 +1139,7 @@ test("agent_end keeps retryable interruptions active but pauses non-retryable er
 	);
 
 	assert.equal(aborts, 1);
-	assert.equal(lastGoalStatus(nonRetryable.mock), "paused");
+	assert.equal(lastGoalStatus(nonRetryable.mock), "usage_limited");
 	await nonRetryable.mock.events.get("agent_settled")?.[0]?.({}, nonRetryable.ctx);
 	assert.equal(nonRetryable.mock.sentUserMessages.length, 1);
 	assert.deepEqual(
@@ -745,10 +1147,7 @@ test("agent_end keeps retryable interruptions active but pauses non-retryable er
 			{ toolName: "bash", toolCallId: "t1", input: {} },
 			nonRetryable.ctx,
 		),
-		{
-			block: true,
-			reason: "Blocked stale /goal tool call after the goal was paused or interrupted.",
-		},
+		{ block: true, reason: STALE_GOAL_TOOL_REASON },
 	);
 });
 
@@ -896,7 +1295,7 @@ test("stale goal tool calls are blocked after pause until a fresh non-goal promp
 	const pauseToolCall = paused.mock.events.get("tool_call")?.[0];
 	assert.deepEqual(pauseToolCall?.({ toolName: "bash", toolCallId: "t1", input: {} }, paused.ctx), {
 		block: true,
-		reason: "Blocked stale /goal tool call after the goal was paused or interrupted.",
+		reason: STALE_GOAL_TOOL_REASON,
 	});
 
 	paused.mock.events.get("input")?.[0]?.(
@@ -905,7 +1304,7 @@ test("stale goal tool calls are blocked after pause until a fresh non-goal promp
 	);
 	assert.deepEqual(pauseToolCall?.({ toolName: "bash", toolCallId: "t2", input: {} }, paused.ctx), {
 		block: true,
-		reason: "Blocked stale /goal tool call after the goal was paused or interrupted.",
+		reason: STALE_GOAL_TOOL_REASON,
 	});
 
 	paused.mock.events.get("input")?.[0]?.(
@@ -978,6 +1377,44 @@ function assertPromptHasGoalId(prompt: string, goalId: string) {
 
 function escapeRegExp(value: string) {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function requireGoalTool(mock: ReturnType<typeof createMockPi>, name: string) {
+	const tool = mock.tools.find((tool) => tool.name === name);
+	assert.ok(tool, `expected ${name} to be registered`);
+	return tool as unknown as GoalTool;
+}
+
+function restoreGoalForTest(
+	status: "paused" | "blocked" | "usage_limited" | "budget_limited",
+	overrides: { tokenBudget?: number; tokensUsed?: number } = {},
+) {
+	const sessionGoal = {
+		id: `restored-${status}`,
+		text: `restore ${status}`,
+		status,
+		startedAt: 1,
+		updatedAt: 2,
+		iteration: 3,
+		tokenBudget: overrides.tokenBudget ?? 10,
+		tokensUsed: overrides.tokensUsed ?? 5,
+		timeUsedSeconds: 4,
+		baselineTokens: 0,
+	};
+	const branch = [
+		{
+			type: "custom",
+			customType: "goal-state",
+			data: { goal: sessionGoal },
+		},
+	];
+	const mock = createMockPi();
+	goal(mock.pi);
+	const context = createMockContext({
+		sessionManager: { getBranch: () => branch, getEntries: () => branch },
+	});
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	return { mock, ...context, sessionGoal };
 }
 
 async function startGoalForTest(overrides: Record<string, unknown> = {}, command = "finish") {
