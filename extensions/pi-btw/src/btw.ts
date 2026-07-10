@@ -5,8 +5,6 @@ import type {
 	AssistantMessage,
 	Context,
 	Model,
-	ProviderEnv,
-	ProviderHeaders,
 	SimpleStreamOptions,
 	UserMessage,
 } from "@earendil-works/pi-ai";
@@ -97,8 +95,8 @@ interface LoadBtwThinkingLevelOptions {
 
 interface SideQuestionAuth {
 	apiKey: string;
-	headers?: ProviderHeaders;
-	env?: ProviderEnv;
+	headers?: Record<string, string>;
+	env?: Record<string, string>;
 }
 
 interface CompleteSideQuestionOptions {
