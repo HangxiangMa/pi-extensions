@@ -1,14 +1,42 @@
-import type { UserMessage } from "@earendil-works/pi-ai";
+import type {
+	Api,
+	AssistantMessage,
+	Context,
+	Model,
+	ProviderStreamOptions,
+	UserMessage,
+} from "@earendil-works/pi-ai";
 // Support both old (@earendil-works/pi-ai/compat) and new (@earendil-works/pi-ai)
 // pi-ai layouts. compat subpath was removed in later versions.
-let complete: (model: any, context: any, options?: any) => Promise<any>;
-try {
-	const mod = await import("@earendil-works/pi-ai/compat");
-	complete = mod.complete;
-} catch {
-	const mod = await import("@earendil-works/pi-ai");
-	complete = mod.complete;
+type CompleteFunction = <TApi extends Api>(
+	model: Model<TApi>,
+	context: Context,
+	options?: ProviderStreamOptions,
+) => Promise<AssistantMessage>;
+
+function hasComplete(value: unknown): value is { complete: CompleteFunction } {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		typeof Reflect.get(value, "complete") === "function"
+	);
 }
+
+async function loadComplete(): Promise<CompleteFunction> {
+	let importError: unknown;
+	for (const moduleId of ["@earendil-works/pi-ai/compat", "@earendil-works/pi-ai"]) {
+		try {
+			const module: unknown = await import(moduleId);
+			if (hasComplete(module)) return module.complete;
+		} catch (error: unknown) {
+			importError = error;
+		}
+	}
+
+	throw importError ?? new Error("@earendil-works/pi-ai does not export complete");
+}
+
+const complete = await loadComplete();
 import {
 	BorderedLoader,
 	DynamicBorder,
