@@ -193,6 +193,9 @@ Enable the lifecycle tools in `~/.pi/agent/pi-subagents-config.json`, then reloa
     "enabled": true,
     "maxAgents": 16,
     "maxActiveTurns": 4,
+    "maxDepth": 3,
+    "maxChildrenPerAgent": 8,
+    "maxMailboxMessages": 100,
     "idleTtlMs": 3600000,
     "retentionDays": 30,
     "maxStoredAgents": 50
@@ -206,20 +209,29 @@ Enabling the feature registers:
 | --- | --- |
 | `subagent_spawn` | Start a logical agent and return an opaque `agentId`. |
 | `subagent_send` | Send follow-up work to a reusable agent. |
+| `subagent_message` | Queue a bounded mailbox message without starting a turn. |
+| `subagent_messages` | Read and optionally acknowledge unread mailbox messages. |
 | `subagent_wait` | Wait for completion without terminating the agent on wait timeout. |
 | `subagent_list` | List retained agents and lifecycle states. |
 | `subagent_interrupt` | Abort the current turn while retaining its identity and history. |
 | `subagent_close` | Abort if necessary, close the agent, and remove it from retained persistence. |
 
-Use `/subagents:agents list` to inspect agents and `/subagents:agents clear` to close and delete all retained agents for the session. Active turns are FIFO-limited by `maxActiveTurns`; excess retained work remains in `starting` state until a slot is available. `maxAgents` separately bounds running, queued, and idle records.
+Use `/subagents:agents list` to inspect the indented agent tree, lifecycle state, unread count, and available actions. Use `/subagents:agents clear` to close and delete all retained agents for the session. Active turns are FIFO-limited by `maxActiveTurns`; excess retained work remains in `starting` state until a slot is available. `maxAgents` separately bounds running, queued, and idle records. `parentId` creates a bounded child relationship; subtree interrupt and close operate child-first.
 
 `subagent_spawn.context` accepts:
 
 - `"none"` (default) — no parent conversation.
 - `"all"` — bounded user/assistant text from the active branch.
+- `"summary"` — a bounded earlier-context checkpoint plus recent messages verbatim.
 - A positive number — the most recent N user turns and related assistant text.
 
-Reasoning, tool results, custom transport messages, and non-text parts are excluded. Text inside `<private>...</private>` and lines containing `[subagent-private]` are omitted before context or history is persisted.
+Use `contextEntryIds` to select exact session entries. Stable source IDs are retained so repeated follow-ups do not need to duplicate parent context.
+
+Reasoning, tool results, custom transport messages, and non-text parts are excluded. Text inside `<private>...</private>` and lines containing `[subagent-private]` are omitted before context, mailbox content, or history is persisted.
+
+Stateful execution now uses a transport boundary. `SubprocessTransport` is the supported fallback and preserves current behavior; a native child-session transport remains unavailable until Pi exposes supported child-session APIs. No private Pi imports are used.
+
+Write-capable agents share the workspace by default. Concurrent write-capable starts in the same cwd are rejected unless `allowConcurrentWrites` is explicitly set. Set `workspaceMode: "worktree"` to opt into a disposable detached Git worktree; this requires a clean repository and the worktree is removed on close or session shutdown. Isolated worktree agents are intentionally not restored after shutdown.
 
 ## 📜 Compatibility and failure contract
 

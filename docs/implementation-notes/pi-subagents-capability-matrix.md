@@ -11,6 +11,10 @@ Date: 2026-07-11
 | Cwd validation and spawn-error normalization | Implemented | `runner.ts::runSingleAgent` |
 | Recursion guard | Implemented | `PI_SUBAGENT_DEPTH` / `PI_SUBAGENT_MAX_DEPTH` in `execution.ts` and `runner.ts` |
 | Addressable logical agents | Implemented, opt-in | `registry.ts`, `stateful.ts` |
+| Transport abstraction and fallback | Implemented | `transport.ts`, `subprocess-transport.ts`; native transport remains API-blocked |
+| Hierarchical ownership and subtree lifecycle | Implemented | parent/root/depth/children metadata and child-first interrupt/close in `registry.ts` |
+| Bounded asynchronous mailbox | Implemented | message/read/ack tools, deduplication, completion delivery, and persistence tests |
+| Shared-write guard and disposable worktrees | Implemented, opt-in | `stateful.ts`, `workspace.ts`; clean-repository and cleanup tests |
 | Follow-up, wait, list, interrupt, close | Implemented, opt-in | six lifecycle tools in `stateful.ts`; registry lifecycle tests |
 | Separate active and retained capacity | Implemented | FIFO queue and limits in `registry.ts`; capacity/fairness test |
 | Interactive inspection | Implemented | `/subagents:agents list|clear` |
