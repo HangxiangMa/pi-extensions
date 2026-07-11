@@ -16,7 +16,7 @@ The existing `subagent` schema remains the compatibility path. Setting `stateful
 
 ## Automated evidence
 
-- `npm run check`: passed; includes Biome, package-boundary checks, all workspace typechecks, and 287 tests.
+- `npm run check`: passed; includes Biome, package-boundary checks, all workspace typechecks, and 290 tests.
 - `just pack-subagents`: passed; dry-run tarball contained README, license, package metadata, and all 19 source modules, including `src/in-process-transport.ts` and the declared `src/subagents.ts` entrypoint.
 - Process fixtures verified SIGTERM-resistant forced kill in about 54 ms with a 30 ms test grace period.
 - Registry fixtures verified FIFO active-turn capacity, retained-agent capacity, wait timeout, interrupt/reuse, close, idle expiry, inert restoration, corruption quarantine, redaction, and deletion.
@@ -41,6 +41,7 @@ Executed from the repository root with the local package:
 - Hard timeout (`timeoutMs: 1`): local Pi run returned `TIMEOUT_OK` after observing the timeout result.
 - Default subprocess stateful spawn plus overlapping main-agent read returned `SUBPROCESS_STATEFUL_OK` from a temporary agent directory.
 - In-process spawn, overlapping main work, wait, follow-up, second wait, and close returned `IN_PROCESS_STATEFUL_OK`; temporary config/auth copies were removed by a shell trap.
+- Detached in-process spawn without wait/list/polling overlapped README inspection and workspace typecheck, consumed the automatic non-triggering completion, and returned `DETACHED_NOTIFICATION_OK`.
 - Abort cleanup is covered by pre-aborted and mid-stream child integration tests that preserve partial output, plus registry and process-group termination fixtures; interactive Esc itself was not automated because it requires terminal input.
 
 ## Bounded acceptance thresholds

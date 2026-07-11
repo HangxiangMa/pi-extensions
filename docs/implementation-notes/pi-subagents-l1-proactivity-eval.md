@@ -11,8 +11,9 @@ The policy remains static tool prompt metadata and documentation, not autonomous
 
 - `subagent` says not to delegate critical-path work needed for the main agent's next action.
 - A single blocking call is reserved for context/output isolation or independent review that is worth waiting for.
-- `subagent_spawn` is reserved for a concrete sidecar task that overlaps meaningful non-overlapping main-agent work.
-- Spawn guidance explicitly forbids immediately calling `subagent_wait` unless useful local work is exhausted and progress is genuinely blocked.
+- `subagent_spawn` is reserved for a concrete detached sidecar task that overlaps meaningful non-overlapping main-agent work.
+- One bounded completion message is delivered automatically per settled turn without waking an idle root turn.
+- Spawn guidance explicitly forbids polling or immediately calling `subagent_wait` unless useful local work is exhausted and progress is genuinely blocked.
 - Parallel fan-out remains limited to independent branches; write-heavy shared-file work is serialized.
 - Project agents still require explicit scope selection and project trust.
 
@@ -40,4 +41,4 @@ Summary: 9 PASS, 0 FAIL.
 
 ## Runtime boundary
 
-The extension cannot force the model to remain productive after a spawn without adding an autonomous scheduler. Default-on detached lifecycle tools plus explicit prompt rules provide the bounded behavior: spawning does not block, completion remains queryable, and immediate waiting is discouraged. Autonomous continuation remains rejected without explicit opt-in, budgets, stop conditions, and visible controls.
+The extension cannot force the model to remain productive after a spawn without adding an autonomous scheduler. Default-on detached lifecycle tools plus explicit prompt rules provide the bounded behavior: spawning does not block, completion is delivered automatically with `triggerTurn: false`, and polling/immediate waiting is discouraged. Autonomous continuation remains rejected without explicit opt-in, budgets, stop conditions, and visible controls.

@@ -10,7 +10,7 @@ Use it to split independent research, planning, implementation, and review work 
 
 - Registers a `subagent` tool for single-agent, parallel, fan-in, and chained delegation.
 - Keeps batch workers isolated in `pi --mode json -p --no-session` subprocesses.
-- Registers background stateful lifecycle tools by default; they can be disabled in settings.
+- Registers detached stateful lifecycle tools by default; spawn returns immediately and completion is delivered asynchronously without starting a new root turn.
 - Supports an opt-in public-SDK `in-process` stateful transport with one reusable child `AgentSession` per `agentId`.
 - Supports built-in `scout`, `planner`, `reviewer`, and `worker` agents.
 - Loads custom user agents from `~/.pi/agent/agents/*.md`.
@@ -46,7 +46,7 @@ pi -e ./extensions/pi-subagents
 `pi-subagents` registers a primary batch tool plus the stateful lifecycle tools documented below:
 
 - `subagent` — delegate blocking single, parallel, fan-in, or chained batch work.
-- `subagent_spawn` and related lifecycle tools — start reusable background work and return immediately.
+- `subagent_spawn` and related lifecycle tools — start reusable detached work, return immediately, and receive bounded completion messages automatically.
 
 Execution modes:
 
@@ -73,8 +73,9 @@ Count-selection guidance:
 - A single `subagent` call is blocking. Use one only when context isolation, high-volume output
   isolation, or independent review is worth waiting for; otherwise the main agent should do the work.
 - Never delegate a critical-path task whose answer is required for the main agent's next action merely
-  to wait for it. Use background `subagent_spawn` only for sidecar work, continue meaningful
-  non-overlapping local work immediately, and call `subagent_wait` only when genuinely blocked.
+  to wait for it. Use detached `subagent_spawn` only for sidecar work, continue meaningful
+  non-overlapping local work immediately, and consume its automatic completion message when it
+  arrives. Call `subagent_wait` only when genuinely blocked.
 - Prefer **2–4 parallel read-only subagents** when a broad task naturally splits into independent
   branches that can each return a concise summary.
 - Exceed 4 tasks only when the branches are clearly distinct and worth the extra cost, while staying
@@ -189,7 +190,7 @@ Run a chain where each step receives the previous output:
 
 ## 🔁 Stateful agents
 
-Stateful lifecycle tools are available by default. `subagent_spawn` returns immediately with an opaque `agentId`; the main agent should continue identified non-overlapping work before waiting.
+Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects one bounded `pi-subagent-completion` message per settled turn. The message uses `deliverAs: "steer"` with `triggerTurn: false`, so an active root turn can consume it naturally while an idle root does not wake up autonomously. The main agent should continue identified non-overlapping work instead of polling or waiting immediately.
 
 The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history. Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
 
@@ -216,11 +217,11 @@ Set `"enabled": false` to remove all stateful lifecycle tools. Otherwise, the ex
 
 | Tool | Purpose |
 | --- | --- |
-| `subagent_spawn` | Start a logical agent and return an opaque `agentId`. |
+| `subagent_spawn` | Start detached work, return an opaque `agentId` immediately, and deliver completion asynchronously. |
 | `subagent_send` | Send follow-up work to a reusable agent; shared-workspace write conflicts are guarded unless explicitly overridden. |
 | `subagent_message` | Queue a bounded mailbox message without starting a turn; sender IDs must be `root` or an agent in the same tree. |
 | `subagent_messages` | Read and optionally acknowledge unread mailbox messages. |
-| `subagent_wait` | Wait for completion without terminating the agent on wait timeout. |
+| `subagent_wait` | Explicitly wait only when blocked; timeout does not terminate the agent. Detached completion does not require polling. |
 | `subagent_list` | List retained agents and lifecycle states. |
 | `subagent_interrupt` | Abort the current turn while retaining its identity and history. |
 | `subagent_close` | Abort if necessary, close the agent, and remove it from retained persistence. |

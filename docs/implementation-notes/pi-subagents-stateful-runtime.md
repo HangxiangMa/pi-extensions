@@ -12,6 +12,8 @@ Keep the existing logical stateful registry and support two transports:
 
 Stateful lifecycle tools are registered by default and can be removed with `stateful.enabled: false`. The default transport remains subprocess for compatibility and rollback safety.
 
+Detached completion follows Codex's completion-watcher pattern: spawn returns after scheduling, a background lifecycle observer publishes final status/output to the parent session, and the notification does not trigger a turn by itself. Pi implements this with `AgentRegistry.onTurnComplete` plus `pi.sendMessage(..., { deliverAs: "steer", triggerTurn: false })`.
+
 ## In-process ownership
 
 The extension constructs children only with public SDK APIs: `createAgentSession()`, `SessionManager.inMemory()`, `DefaultResourceLoader`, `SettingsManager`, `ModelRegistry`, and documented `AgentSession` methods.
@@ -41,8 +43,9 @@ restored persisted state -> idle -> explicit follow-up -> starting
 
 - `starting` means queued for an active-turn slot.
 - `running` owns one `AbortController` and one transport turn.
-- `subagent_spawn` returns immediately; prompt guidance requires useful non-overlapping main-agent work before waiting.
-- `subagent_wait` times out only the caller's wait.
+- `subagent_spawn` returns immediately; prompt guidance requires useful non-overlapping main-agent work instead of polling or waiting.
+- Every settled turn emits one bounded `pi-subagent-completion` custom message through `deliverAs: "steer"` and `triggerTurn: false`. Active root turns can consume it; idle roots are not awakened autonomously.
+- `subagent_wait` is an explicit blocking fallback and times out only the caller's wait.
 - `subagent_interrupt` aborts a queued/running turn but preserves identity and settled history.
 - `subagent_close` aborts current work, releases transport ownership exactly once, and excludes the record from persistence.
 - Session shutdown aborts active work, drains queued work, persists non-closed records as inert `idle`, and shuts down every owned child session.
@@ -53,7 +56,7 @@ Subprocess cleanup retains process-group SIGTERM/SIGKILL escalation. In-process 
 
 ## Public surface
 
-Separate lifecycle tools preserve the existing batch `subagent` schema and give each operation a precise contract. `subagent` remains the blocking API for single, parallel, chain, and fan-in work. `subagent_spawn` is the background sidecar API and must not be used to delegate one immediate critical-path blocker while the main agent idles.
+Separate lifecycle tools preserve the existing batch `subagent` schema and give each operation a precise contract. `subagent` remains the blocking API for single, parallel, chain, and fan-in work. `subagent_spawn` is the detached sidecar API: scheduling and execution continue independently, settled turns notify the root session without triggering a new turn, and explicit wait remains optional. It must not be used to delegate one immediate critical-path blocker while the main agent idles.
 
 ## Context and policy boundary
 

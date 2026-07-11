@@ -397,7 +397,7 @@ test("child resource loader excludes extensions while retaining the agent prompt
 	assert.equal(loader.getAgentsFiles().agentsFiles.at(-1)?.content, "Trusted child context.");
 });
 
-test("registered in-process lifecycle reuses one SDK child through follow-up, interrupt, reuse, and close", async () => {
+test("registered detached spawn returns while running and publishes each in-process completion", async () => {
 	const originalDir = process.env.PI_CODING_AGENT_DIR;
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-sdk-tools-"));
 	process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -432,12 +432,16 @@ test("registered in-process lifecycle reuses one SDK child through follow-up, in
 				undefined,
 				context.ctx,
 			) as Promise<{
-				details: { agent: { id: string } };
+				details: { agent: { id: string; state: string } };
 			}>;
 		};
+		child.waitForNextAbort();
 		const spawned = await execute("subagent_spawn", { agent: "scout", task: "first" });
 		const agentId = spawned.details.agent.id;
-		await execute("subagent_wait", { agentId, timeoutMs: 100 });
+		assert.match(spawned.details.agent.state, /starting|running/);
+		assert.deepEqual(child.prompts, ["first"]);
+		assert.equal(mock.sentMessages.length, 0);
+		await execute("subagent_interrupt", { agentId });
 		await execute("subagent_send", { agentId, task: "second" });
 		await execute("subagent_wait", { agentId, timeoutMs: 100 });
 		child.waitForNextAbort();
@@ -451,6 +455,19 @@ test("registered in-process lifecycle reuses one SDK child through follow-up, in
 		assert.equal(created[0].parentRuntime.model, selectedModel);
 		assert.equal(created[0].parentRuntime.thinkingLevel, "high");
 		assert.equal(child.disposals, 1);
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(mock.sentMessages.length, 4);
+		const firstCompletion = mock.sentMessages[0] as {
+			message: { customType: string; content: string; details: { agentId: string; state: string } };
+			options: { deliverAs: string; triggerTurn: boolean };
+		};
+		assert.equal(firstCompletion.message.customType, "pi-subagent-completion");
+		assert.equal(firstCompletion.message.details.agentId, agentId);
+		assert.equal(firstCompletion.message.details.state, "interrupted");
+		assert.match(firstCompletion.message.content, /Message Type: SUBAGENT_COMPLETION/);
+		assert.match(firstCompletion.message.content, /Payload:\ndone:first/);
+		assert.deepEqual(firstCompletion.options, { deliverAs: "steer", triggerTurn: false });
+		assert.equal(mock.sentUserMessages.length, 0);
 		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
 	} finally {
 		if (originalDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
