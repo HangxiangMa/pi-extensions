@@ -47,7 +47,8 @@ test("subagents registers self-directed fan-out guidance and configuration comma
 	assert.match(guidanceText, /no subagent/i);
 	assert.match(guidanceText, /blocking subagent/i);
 	assert.match(guidanceText, /critical-path/i);
-	assert.match(guidanceText, /subagent_spawn.*background/i);
+	assert.match(guidanceText, /subagent_spawn.*detached/i);
+	assert.match(guidanceText, /completion is delivered automatically/i);
 	assert.match(guidanceText, /meaningful non-overlapping work/i);
 	assert.match(guidanceText, /2-4 parallel read-only subagents/i);
 	assert.match(guidanceText, /hard max 8/i);

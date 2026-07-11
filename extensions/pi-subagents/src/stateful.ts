@@ -8,7 +8,11 @@ import { buildContextSnapshot, type ContextMode, redactPrivateText } from "./con
 import { assertSubagentDepthAllowed } from "./execution.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
 import { AgentPersistence } from "./persistence.js";
-import { AgentRegistry, type ManagedAgent } from "./registry.js";
+import {
+	AgentRegistry,
+	type AgentTurnCompletion,
+	type ManagedAgent,
+} from "./registry.js";
 import { readSubagentSettings } from "./settings.js";
 import { SubprocessTransport } from "./subprocess-transport.js";
 import {
@@ -39,6 +43,7 @@ export function registerStatefulSubagents(
 	let registry: AgentRegistry | undefined;
 	let persistence: AgentPersistence | undefined;
 	let sweepTimer: NodeJS.Timeout | undefined;
+	let completionNotificationsEnabled = false;
 	const workspaceManager = new WorkspaceManager();
 	const isolatedAgents = new Map<string, string>();
 	const seenMessageIds = new Set<string>();
@@ -50,6 +55,7 @@ export function registerStatefulSubagents(
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
+		completionNotificationsEnabled = true;
 		parentRuntime.model = ctx.model;
 		parentRuntime.thinkingLevel = normalizeRuntimeThinkingLevel(pi.getThinkingLevel());
 		const owner = ctx.sessionManager.getSessionId?.() ?? ctx.sessionManager.getSessionFile?.() ?? `ephemeral:${ctx.cwd}`;
@@ -87,6 +93,9 @@ export function registerStatefulSubagents(
 					}
 				}
 			},
+			onTurnComplete: (completion) => {
+				if (completionNotificationsEnabled) sendDetachedCompletion(pi, completion);
+			},
 		});
 		const restored = persistence
 			.load()
@@ -119,6 +128,7 @@ export function registerStatefulSubagents(
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		completionNotificationsEnabled = false;
 		if (sweepTimer) clearInterval(sweepTimer);
 		sweepTimer = undefined;
 		for (const agentId of isolatedAgents.keys()) {
@@ -147,11 +157,12 @@ export function registerStatefulSubagents(
 	pi.registerTool({
 		name: "subagent_spawn",
 		label: "Spawn Subagent",
-		description: "Start an addressable background subagent and return immediately with an agentId.",
-		promptSnippet: "Start a reusable background subagent and receive an agentId for lifecycle operations",
+		description: "Start an addressable background subagent, return immediately with an agentId, and receive its completion asynchronously.",
+		promptSnippet: "Start a reusable detached subagent; completion is delivered asynchronously",
 		promptGuidelines: [
 			"Use subagent_spawn only for a concrete sidecar task that can run while the main agent immediately performs meaningful non-overlapping work.",
 			"Do not use subagent_spawn for critical-path work whose result is required for the main agent's next action; do that work locally instead.",
+			"A completion message is delivered automatically without triggering a new turn; consume it when it arrives instead of polling.",
 			"After subagent_spawn, do not call subagent_wait immediately unless all useful local work is exhausted and progress is genuinely blocked on that result.",
 		],
 		parameters: Type.Object({
@@ -583,6 +594,37 @@ function summarizeAgent(agent: ManagedAgent) {
 		error: agent.error ? truncateUtf8(agent.error, MAX_TOOL_MESSAGE_BYTES).text : undefined,
 		policy: agent.policy,
 	};
+}
+
+function sendDetachedCompletion(
+	pi: ExtensionAPI,
+	completion: AgentTurnCompletion,
+): void {
+	const payload = redactPrivateText(completion.output || completion.error || "(no output)");
+	const content = truncateUtf8(
+		[
+			"Message Type: SUBAGENT_COMPLETION",
+			`Agent ID: ${completion.agent.id}`,
+			`Agent: ${completion.agent.agent}`,
+			`State: ${completion.agent.state}`,
+			"Payload:",
+			payload,
+		].join("\n"),
+		MAX_TOOL_MESSAGE_BYTES,
+	).text;
+	pi.sendMessage(
+		{
+			customType: "pi-subagent-completion",
+			content,
+			display: true,
+			details: {
+				agentId: completion.agent.id,
+				agent: completion.agent.agent,
+				state: completion.agent.state,
+			},
+		},
+		{ deliverAs: "steer", triggerTurn: false },
+	);
 }
 
 async function cleanupClosedWorkspaces(

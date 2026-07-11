@@ -66,6 +66,13 @@ export interface TurnOutcome {
 	policy?: ManagedAgent["policy"];
 }
 
+export interface AgentTurnCompletion {
+	agent: ManagedAgent;
+	task: string;
+	output: string;
+	error?: string;
+}
+
 export interface AgentRegistryOptions {
 	maxAgents?: number;
 	maxActiveTurns?: number;
@@ -79,6 +86,7 @@ export interface AgentRegistryOptions {
 	idleTtlMs?: number;
 	now?: () => number;
 	onChange?: (agents: ManagedAgent[]) => void | Promise<void>;
+	onTurnComplete?: (completion: AgentTurnCompletion) => void | Promise<void>;
 }
 
 function positiveInteger(value: number, label: string): number {
@@ -349,8 +357,15 @@ export class AgentRegistry {
 				agent.currentTask = undefined;
 				agent.currentMailboxMessageIds = undefined;
 				agent.updatedAt = this.now();
+				const completion: AgentTurnCompletion = {
+					agent: this.copy(agent),
+					task: entry.task,
+					output: "",
+					error: "Interrupted before execution",
+				};
 				entry.resolve(agent);
 				this.running.delete(id);
+				await this.notifyTurnComplete(completion);
 				await this.changed();
 				return this.copy(agent);
 			}
@@ -512,6 +527,8 @@ export class AgentRegistry {
 		const startedAt = this.now();
 		const completionKey = `completion:${agent.id}:${randomUUID()}`;
 		let completionContent = "";
+		let completionOutput = "";
+		let completionError: string | undefined;
 		void this.transport.runTurn(this.copy(agent), task, controller.signal)
 			.then(async (outcome) => {
 				const output = truncateUtf8(outcome.output, this.maxTurnOutputBytes).text;
@@ -530,6 +547,8 @@ export class AgentRegistry {
 				agent.state = outcome.aborted ? "interrupted" : outcome.exitCode === 0 ? "completed" : "failed";
 				agent.error = error;
 				agent.policy = outcome.policy;
+				completionOutput = output;
+				completionError = error;
 				completionContent = output || error || `${agent.id} ${agent.state}`;
 				return agent;
 			})
@@ -547,10 +566,17 @@ export class AgentRegistry {
 					exitCode: controller.signal.aborted ? 130 : 1,
 				});
 				agent.history = agent.history.slice(-this.maxHistoryTurns);
+				completionError = agent.error;
 				completionContent = agent.error;
 				return agent;
 			})
 			.finally(async () => {
+				const turnCompletion: AgentTurnCompletion = {
+					agent: this.copy(agent),
+					task,
+					output: completionOutput,
+					error: completionError,
+				};
 				if (agent.parentId) {
 					const parent = this.agents.get(agent.parentId);
 					if (parent && parent.state !== "closed") {
@@ -564,6 +590,7 @@ export class AgentRegistry {
 				this.running.delete(agent.id);
 				resolveQueued(agent);
 				this.pumpQueue();
+				await this.notifyTurnComplete(turnCompletion);
 				await this.changed();
 			});
 	}
@@ -667,6 +694,14 @@ export class AgentRegistry {
 			.filter((agent) => agent.state === "closed")
 			.sort((left, right) => right.updatedAt - left.updatedAt);
 		for (const agent of closed.slice(this.maxAgents)) this.agents.delete(agent.id);
+	}
+
+	private async notifyTurnComplete(completion: AgentTurnCompletion): Promise<void> {
+		try {
+			await this.options.onTurnComplete?.(completion);
+		} catch {
+			// Completion notifications are best-effort and must not destabilize agent lifecycle.
+		}
 	}
 
 	private async changed(): Promise<void> {

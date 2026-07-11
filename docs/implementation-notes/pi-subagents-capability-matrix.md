@@ -10,7 +10,7 @@ Date: 2026-07-11
 | Abort with partial structured result | Implemented | `runner.ts::runSingleAgent`; abort no longer throws after process settlement |
 | Cwd validation and spawn-error normalization | Implemented | `runner.ts::runSingleAgent` |
 | Recursion guard | Implemented | `PI_SUBAGENT_DEPTH` / `PI_SUBAGENT_MAX_DEPTH` in `execution.ts` and `runner.ts` |
-| Addressable logical agents | Implemented, default-on | `registry.ts`, `stateful.ts`; disable with `stateful.enabled: false` |
+| Detached addressable agents | Implemented, default-on | `subagent_spawn` returns immediately; every settled turn sends one bounded non-triggering completion message; disable with `stateful.enabled: false` |
 | Transport abstraction and fallback | Implemented | `transport.ts`, default `subprocess-transport.ts`, opt-in public-SDK `in-process-transport.ts` |
 | Hierarchical ownership and subtree lifecycle | Implemented | parent/root/depth/children metadata and child-first interrupt/close in `registry.ts` |
 | Bounded asynchronous mailbox | Implemented | message/read/ack tools, deduplication, completion delivery, and persistence tests |
