@@ -97,7 +97,12 @@ test("isSafeCommand permits read-only command lists and rejects shell mutation",
 		"sort input -o output",
 		"tree -o output",
 		"find . -fprint output",
-		"git diff --output=patch",
+		"fd pattern --exec touch file",
+		"fd pattern -x rm {}",
+		"rg pattern --pre 'touch file'",
+		"bat file --pager 'sh -c touch file'",
+		"git diff --ext-diff",
+		"git log --output=log.txt",
 		"git remote update",
 		"awk 'BEGIN { system(\"touch file\") }'",
 		"rg x || (echo bad > file)",
@@ -117,20 +122,35 @@ test("tool policy classifies built-ins and extension tools consistently", () => 
 	assert.equal(classifyPlanModeTool(extensionTool("custom") as PlanTool), "user-opt-in");
 });
 
-test("active Plan mode blocks update_plan at the tool hook", async () => {
-	const mock = createMockPi({ activeTools: ["read", "bash", "update_plan"] });
+test("active Plan mode blocks update_plan and blocked built-ins at the tool hook", async () => {
+	const mock = createMockPi({
+		activeTools: ["read", "bash", "update_plan", "danger"],
+		allTools: [
+			builtinTool("read"),
+			builtinTool("bash"),
+			builtinTool("danger"),
+			extensionTool("edit"),
+		],
+	});
 	planMode(mock.pi);
 	const context = createMockContext();
 	await mock.commands.get("plan")?.handler("", context.ctx);
 	const hook = mock.events.get("tool_call")?.[0];
 	const blocked = await hook?.({ toolName: "update_plan", input: {} }, context.ctx);
+	const blockedBuiltin = await hook?.({ toolName: "danger", input: {} }, context.ctx);
 	const allowed = await hook?.({ toolName: "read", input: {} }, context.ctx);
+	const optedInExtension = await hook?.({ toolName: "edit", input: {} }, context.ctx);
 	assert.deepEqual(blocked, {
 		block: true,
 		reason:
 			"Plan mode blocks update_plan because it tracks execution progress rather than conversational planning.",
 	});
+	assert.deepEqual(blockedBuiltin, {
+		block: true,
+		reason: "Plan mode blocks built-in tool 'danger' because its policy class is blocked.",
+	});
 	assert.equal(allowed, undefined);
+	assert.equal(optedInExtension, undefined);
 });
 
 test("plan_mode_question reports non-interactive cancellation", async () => {
@@ -275,6 +295,16 @@ test("Plan thinking level restores only while the extension owns the applied val
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		await rm(directory, { recursive: true, force: true });
 	}
+});
+
+test("Plan mode restores an intentionally empty active-tool set", async () => {
+	const mock = createMockPi({ activeTools: [], allTools: [] });
+	planMode(mock.pi);
+	const context = createMockContext();
+	await mock.commands.get("plan")?.handler("", context.ctx);
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "plan_mode_question"]);
+	await mock.commands.get("plan")?.handler("exit", context.ctx);
+	assert.deepEqual(mock.rawPi.getActiveTools(), []);
 });
 
 test("Plan lifecycle enters with a prompt and hands a valid plan to implementation", async () => {

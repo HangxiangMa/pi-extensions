@@ -200,10 +200,17 @@ export default function planMode(pi: ExtensionAPI) {
 					"Plan mode blocks update_plan because it tracks execution progress rather than conversational planning.",
 			};
 		}
-		if (isBlockedBuiltinToolName(event.toolName)) {
+		const calledTool = toolByName(event.toolName);
+		if (calledTool && classifyPlanModeTool(calledTool) === "blocked") {
 			return {
 				block: true,
-				reason: `Plan mode blocks built-in mutating tool '${event.toolName}'. Use /plan and choose implementation when the plan is ready.`,
+				reason: `Plan mode blocks built-in tool '${event.toolName}' because its policy class is blocked.`,
+			};
+		}
+		if (!calledTool && BLOCKED_BUILTIN_TOOLS.has(event.toolName)) {
+			return {
+				block: true,
+				reason: `Plan mode blocks built-in tool '${event.toolName}' because its metadata is unavailable.`,
 			};
 		}
 		if (event.toolName !== "bash" || !isBuiltinToolName(event.toolName)) return;
@@ -535,7 +542,7 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function restoreTools() {
-		const restoredTools = previousTools && previousTools.length > 0 ? previousTools : DEFAULT_TOOLS;
+		const restoredTools = previousTools ?? DEFAULT_TOOLS;
 		pi.setActiveTools(withoutPlanModeQuestionTool(restoredTools));
 		previousTools = undefined;
 	}
@@ -638,12 +645,6 @@ export default function planMode(pi: ExtensionAPI) {
 	function formatToolSummary() {
 		const names = planModeToolNames();
 		return `Tools: ${names.length > 0 ? names.join(", ") : "none"}`;
-	}
-
-	function isBlockedBuiltinToolName(toolName: string) {
-		if (!BLOCKED_BUILTIN_TOOLS.has(toolName)) return false;
-		const tool = toolByName(toolName);
-		return tool ? isBuiltinTool(tool) : true;
 	}
 
 	function isBuiltinToolName(toolName: string) {

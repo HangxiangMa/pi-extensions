@@ -211,6 +211,28 @@ function hasSafeArguments(command: string, args: string[]) {
 	) {
 		return false;
 	}
+	if (
+		command === "fd" &&
+		args.some((argument) =>
+			["-x", "-X", "--exec", "--exec-batch"].some(
+				(flag) => argument === flag || argument.startsWith(`${flag}=`),
+			),
+		)
+	) {
+		return false;
+	}
+	if (
+		command === "rg" &&
+		args.some((argument) => argument === "--pre" || argument.startsWith("--pre="))
+	) {
+		return false;
+	}
+	if (
+		command === "bat" &&
+		args.some((argument) => argument === "--pager" || argument.startsWith("--pager="))
+	) {
+		return false;
+	}
 	return true;
 }
 
@@ -238,7 +260,16 @@ function isSafeStructuredCommand(command: string, args: string[]) {
 			)
 		)
 			return false;
-		if (args.some((argument) => argument === "--output" || argument.startsWith("--output="))) return false;
+		if (
+			args.some(
+				(argument) =>
+					argument === "--output" ||
+					argument.startsWith("--output=") ||
+					argument === "--ext-diff" ||
+					argument === "--textconv",
+			)
+		)
+			return false;
 		return true;
 	}
 	if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
