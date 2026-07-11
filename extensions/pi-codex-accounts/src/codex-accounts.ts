@@ -7,7 +7,6 @@ import {
 	type ExtensionCommandContext,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { closeOpenAICodexWebSocketSessions } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import {
 	openaiCodexOAuthProvider,
 	type OAuthCredentials,
@@ -74,7 +73,7 @@ export type CommandArgumentCompletion = {
 export type CodexAccountsDependencies = {
 	store?: CodexAccountStore;
 	oauthProvider?: CodexOAuthProvider;
-	closeWebSocketSessions?: (sessionId?: string) => void;
+	closeWebSocketSessions?: (sessionId?: string) => unknown;
 };
 
 export class CodexAccountStore {
@@ -131,8 +130,9 @@ export default function codexAccounts(
 ) {
 	const store = dependencies.store ?? new CodexAccountStore();
 	const oauthProvider = dependencies.oauthProvider ?? openaiCodexOAuthProvider;
-	const closeWebSocketSessions =
-		dependencies.closeWebSocketSessions ?? closeOpenAICodexWebSocketSessions;
+	// Pi's extension loader only exposes pi-ai's root, compat, and OAuth entry points.
+	// Keep cleanup injectable until the WebSocket API is available through a loader-safe export.
+	const closeWebSocketSessions = dependencies.closeWebSocketSessions ?? (() => undefined);
 	let appliedAuthIdentity: string | undefined;
 	let authIdentityInitialized = false;
 
@@ -140,7 +140,7 @@ export default function codexAccounts(
 		const result = await ensureActiveCodexAuth(ctx, store, { oauthProvider });
 		const authIdentity = await getActiveAuthIdentity(store, result);
 		if (!authIdentityInitialized || appliedAuthIdentity !== authIdentity) {
-			closeWebSocketSessions(ctx.sessionManager.getSessionId());
+			await closeWebSocketSessions(ctx.sessionManager.getSessionId());
 			authIdentityInitialized = true;
 			appliedAuthIdentity = authIdentity;
 		}
