@@ -21,7 +21,7 @@ import { readSubagentSettings, resolveSubagentThinkingLevel } from "./settings.j
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
-const DEFAULT_TIMEOUT_MS = parsePositiveInteger(process.env.PI_SUBAGENT_TIMEOUT_MS) ?? 10 * 60 * 1000;
+export const FALLBACK_TIMEOUT_MS = 10 * 60 * 1000;
 const STATUS_KEY = "subagents";
 const activeStatuses = new Map<string, string>();
 
@@ -29,6 +29,18 @@ export function parsePositiveInteger(value: string | undefined): number | undefi
 	if (!value) return undefined;
 	const parsed = Number.parseInt(value, 10);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+export function resolveDefaultSubagentTimeoutMs(): number {
+	return parsePositiveInteger(process.env.PI_SUBAGENT_TIMEOUT_MS) ?? FALLBACK_TIMEOUT_MS;
+}
+
+export function assertSubagentDepthAllowed(): void {
+	const depth = Number.parseInt(process.env.PI_SUBAGENT_DEPTH ?? "0", 10) || 0;
+	const maxDepth = parsePositiveInteger(process.env.PI_SUBAGENT_MAX_DEPTH) ?? 1;
+	if (depth >= maxDepth) {
+		throw new Error(`Subagent recursion depth limit reached (${maxDepth})`);
+	}
 }
 
 interface StatusContext {
@@ -91,11 +103,7 @@ export async function executeSubagent(
 	onUpdate: AgentToolUpdateCallback<SubagentDetails> | undefined,
 	ctx: ExtensionContext,
 ): Promise<AgentToolResult<SubagentDetails> & { isError?: boolean }> {
-			const depth = Number.parseInt(process.env.PI_SUBAGENT_DEPTH ?? "0", 10) || 0;
-			const maxDepth = parsePositiveInteger(process.env.PI_SUBAGENT_MAX_DEPTH) ?? 1;
-			if (depth >= maxDepth) {
-				throw new Error(`Subagent recursion depth limit reached (${maxDepth})`);
-			}
+			assertSubagentDepthAllowed();
 			const agentScope: AgentScope = params.agentScope ?? "user";
 			const config = readSubagentSettings();
 			const discovery = discoverAgents(ctx.cwd, agentScope, config);
@@ -105,7 +113,7 @@ export async function executeSubagent(
 				localTimeoutMs ??
 				params.timeoutMs ??
 				agents.find((agent) => agent.name === agentName)?.timeoutMs ??
-				DEFAULT_TIMEOUT_MS;
+				resolveDefaultSubagentTimeoutMs();
 			const resolveThinkingLevel = (agentName: string, localThinkingLevel?: SubagentThinkingLevel) =>
 				resolveSubagentThinkingLevel(agents, agentName, params.thinkingLevel, localThinkingLevel);
 

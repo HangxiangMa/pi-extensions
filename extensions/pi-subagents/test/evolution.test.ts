@@ -17,7 +17,11 @@ import {
 	terminateProcess,
 } from "../src/runner.js";
 import { normalizeSubagentSettings } from "../src/settings.js";
-import { registerStatefulSubagents } from "../src/stateful.js";
+import {
+	buildStatefulTurnPrompt,
+	registerStatefulSubagents,
+	resolveStatefulTurnTimeout,
+} from "../src/stateful.js";
 
 function record(overrides: Partial<ManagedAgent> = {}): ManagedAgent {
 	return {
@@ -113,6 +117,36 @@ test("context snapshots keep only user/assistant text, recent turns, and redact 
 	assert.match(snapshot.text, /new/);
 	assert.equal(snapshot.turns, 1);
 	assert.equal(redactPrivateText("a<private>secret</private>b"), "a[private content omitted]b");
+});
+
+test("stateful follow-up prompts redact retained history and honor global timeout", () => {
+	const originalTimeout = process.env.PI_SUBAGENT_TIMEOUT_MS;
+	process.env.PI_SUBAGENT_TIMEOUT_MS = "4321";
+	try {
+		const prompt = buildStatefulTurnPrompt(
+			record({
+				context: "parent <private>ctx-secret</private>",
+				history: [
+					{
+						task: "task <private>task-secret</private>",
+						output: "[subagent-private] hidden-line\nvisible output",
+						startedAt: 1,
+						completedAt: 2,
+						exitCode: 0,
+					},
+				],
+			}),
+			"next task",
+		);
+		assert.match(prompt.text, /Current task:\nnext task/);
+		assert.match(prompt.text, /visible output/);
+		assert.doesNotMatch(prompt.text, /ctx-secret|task-secret|hidden-line/);
+		assert.equal(resolveStatefulTurnTimeout(undefined), 4321);
+		assert.equal(resolveStatefulTurnTimeout({ timeoutMs: 99 }), 99);
+	} finally {
+		if (originalTimeout === undefined) delete process.env.PI_SUBAGENT_TIMEOUT_MS;
+		else process.env.PI_SUBAGENT_TIMEOUT_MS = originalTimeout;
+	}
 });
 
 test("mapWithConcurrencyLimit preserves input order and enforces its active limit", async () => {
@@ -318,6 +352,41 @@ test("stateful tools are opt-in and expose the complete lifecycle surface", asyn
 		const spawnTool = mock.tools.find((tool) => tool.name === "subagent_spawn") as {
 			execute: (...args: unknown[]) => Promise<unknown>;
 		};
+		const originalDepth = process.env.PI_SUBAGENT_DEPTH;
+		process.env.PI_SUBAGENT_DEPTH = "1";
+		try {
+			await assert.rejects(
+				() =>
+					spawnTool.execute(
+						"id",
+						{ agent: "scout", task: "nested" },
+						undefined,
+						undefined,
+						context.ctx,
+					),
+				/recursion depth limit/,
+			);
+		} finally {
+			if (originalDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
+			else process.env.PI_SUBAGENT_DEPTH = originalDepth;
+		}
+		await assert.rejects(
+			() =>
+				spawnTool.execute(
+					"id",
+					{
+						agent: "project",
+						task: "task",
+						cwd: project,
+						agentScope: "project",
+						confirmProjectAgents: false,
+					},
+					undefined,
+					undefined,
+					createMockContext({ isProjectTrusted: () => true }).ctx,
+				),
+			/overridden cwd/,
+		);
 		await assert.rejects(
 			() =>
 				spawnTool.execute(

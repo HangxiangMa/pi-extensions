@@ -133,7 +133,6 @@ export class AgentRegistry {
 		let timer: NodeJS.Timeout | undefined;
 		const timeout = new Promise<"timeout">((resolve) => {
 			timer = setTimeout(() => resolve("timeout"), Math.max(1, timeoutMs));
-			timer.unref();
 		});
 		const result = await Promise.race([running, timeout]);
 		if (timer) clearTimeout(timer);

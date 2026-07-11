@@ -1,8 +1,10 @@
+import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { discoverAgents, type AgentScope } from "./agents.js";
-import { buildContextSnapshot, type ContextMode } from "./context.js";
+import { discoverAgents, type AgentConfig, type AgentScope } from "./agents.js";
+import { buildContextSnapshot, type ContextMode, redactPrivateText } from "./context.js";
+import { assertSubagentDepthAllowed, resolveDefaultSubagentTimeoutMs } from "./execution.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
 import { AgentPersistence } from "./persistence.js";
 import { AgentRegistry, type ManagedAgent } from "./registry.js";
@@ -74,13 +76,15 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 		}),
 		async execute(_id, params, _signal, _update, ctx) {
 			const scope = (params.agentScope ?? "user") as AgentScope;
-			await confirmProjectAgent(params.agent, scope, params.confirmProjectAgents ?? true, ctx);
+			assertSubagentDepthAllowed();
+			const cwd = params.cwd ?? ctx.cwd;
+			await confirmProjectAgent(params.agent, scope, params.confirmProjectAgents ?? true, ctx, cwd);
 			const mode = normalizeContextMode(params.context);
 			const snapshot = buildContextSnapshot(ctx.sessionManager.getBranch(), mode, DEFAULT_MAX_CONTEXT_BYTES);
 			const agent = await requireRegistry().spawn({
 				agent: params.agent,
 				task: params.task,
-				cwd: params.cwd ?? ctx.cwd,
+				cwd,
 				agentScope: scope,
 				context: snapshot.text || undefined,
 				contextTruncated: snapshot.truncated,
@@ -190,17 +194,7 @@ function createTurnRunner(ctx: ExtensionContext) {
 		const settings = readSubagentSettings();
 		const discovery = discoverAgents(record.cwd, record.agentScope ?? "user", settings);
 		const agent = discovery.agents.find((candidate) => candidate.name === record.agent);
-		const previous = record.history
-			.map((turn) => `Task: ${turn.task}\nOutput: ${turn.output}`)
-			.join("\n\n");
-		const context = [
-			`Current task:\n${task}`,
-			previous ? `Prior subagent turns:\n${previous}` : "",
-			record.context ? `Parent context:\n${record.context}` : "",
-		]
-			.filter(Boolean)
-			.join("\n\n---\n\n");
-		const boundedTask = truncateUtf8(context, DEFAULT_MAX_CONTEXT_BYTES);
+		const boundedTask = buildStatefulTurnPrompt(record, task);
 		const makeDetails = (results: SubagentDetails["results"]): SubagentDetails => ({
 			mode: "single",
 			agentScope: record.agentScope ?? "user",
@@ -216,7 +210,7 @@ function createTurnRunner(ctx: ExtensionContext) {
 			undefined,
 			signal,
 			resolveSubagentThinkingLevel(discovery.agents, record.agent),
-			agent?.timeoutMs ?? 10 * 60 * 1000,
+			resolveStatefulTurnTimeout(agent),
 			undefined,
 			makeDetails,
 		);
@@ -231,16 +225,46 @@ function createTurnRunner(ctx: ExtensionContext) {
 	};
 }
 
+export function buildStatefulTurnPrompt(
+	record: Pick<ManagedAgent, "context" | "history">,
+	task: string,
+	maxBytes = DEFAULT_MAX_CONTEXT_BYTES,
+): { text: string; truncated: boolean } {
+	const previous = record.history
+		.map((turn) => {
+			const redactedTask = redactPrivateText(turn.task);
+			const redactedOutput = redactPrivateText(turn.output);
+			return `Task: ${redactedTask}\nOutput: ${redactedOutput}`;
+		})
+		.join("\n\n");
+	const context = [
+		`Current task:\n${task}`,
+		previous ? `Prior subagent turns:\n${previous}` : "",
+		record.context ? `Parent context:\n${redactPrivateText(record.context)}` : "",
+	]
+		.filter(Boolean)
+		.join("\n\n---\n\n");
+	return truncateUtf8(context, maxBytes);
+}
+
+export function resolveStatefulTurnTimeout(agent: Pick<AgentConfig, "timeoutMs"> | undefined): number {
+	return agent?.timeoutMs ?? resolveDefaultSubagentTimeoutMs();
+}
+
 async function confirmProjectAgent(
 	name: string,
 	scope: AgentScope,
 	confirm: boolean,
 	ctx: ExtensionContext,
+	cwd: string,
 ): Promise<void> {
 	if (scope !== "project" && scope !== "both") return;
-	const discovery = discoverAgents(ctx.cwd, scope, readSubagentSettings());
+	const discovery = discoverAgents(cwd, scope, readSubagentSettings());
 	const agent = discovery.agents.find((candidate) => candidate.name === name);
 	if (agent?.source !== "project") return;
+	if (!isSameCwd(cwd, ctx.cwd)) {
+		throw new Error("Project-local subagent definitions cannot run with an overridden cwd");
+	}
 	if (!ctx.isProjectTrusted()) {
 		throw new Error("Project-local subagent definitions require a trusted project");
 	}
@@ -248,6 +272,10 @@ async function confirmProjectAgent(
 		const approved = await ctx.ui.confirm("Run project-local agent?", `Agent: ${name}\nSource: ${agent.filePath}`);
 		if (!approved) throw new Error("Project-local subagent was not approved");
 	}
+}
+
+function isSameCwd(left: string, right: string): boolean {
+	return path.resolve(left) === path.resolve(right);
 }
 
 function normalizeContextMode(value: "none" | "all" | number | undefined): ContextMode {
