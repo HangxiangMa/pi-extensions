@@ -80,6 +80,7 @@ export const BTW_THINKING_LEVELS = [
 export type BtwThinkingLevel = (typeof BTW_THINKING_LEVELS)[number];
 
 export interface BtwSettings {
+	model?: string;
 	thinkingLevel?: BtwThinkingLevel;
 }
 
@@ -94,9 +95,29 @@ interface LoadBtwThinkingLevelOptions {
 }
 
 interface SideQuestionAuth {
-	apiKey: string;
+	apiKey?: string;
 	headers?: Record<string, string>;
 	env?: Record<string, string>;
+}
+
+interface BtwModelRegistry {
+	find(provider: string, modelId: string): Model<Api> | undefined;
+	getApiKeyAndHeaders(model: Model<Api>): Promise<
+		| { ok: true; apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> }
+		| { ok: false; error: string }
+	>;
+}
+
+interface ResolveBtwModelOptions {
+	settings: BtwSettings;
+	currentModel: Model<Api> | undefined;
+	modelRegistry: BtwModelRegistry;
+	warn?: (message: string) => void;
+}
+
+interface ResolvedBtwModel {
+	model: Model<Api>;
+	auth: SideQuestionAuth;
 }
 
 interface CompleteSideQuestionOptions {
@@ -111,10 +132,83 @@ interface CompleteSideQuestionOptions {
 
 export function normalizeBtwSettings(value: unknown): BtwSettings | undefined {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-	if (!Object.hasOwn(value, "thinkingLevel")) return {};
 
-	const thinkingLevel = Reflect.get(value, "thinkingLevel");
-	return isBtwThinkingLevel(thinkingLevel) ? { thinkingLevel } : undefined;
+	const settings: BtwSettings = {};
+	if (Object.hasOwn(value, "model")) {
+		const model = Reflect.get(value, "model");
+		if (typeof model !== "string" || !parseBtwModelReference(model)) return undefined;
+		settings.model = model;
+	}
+	if (Object.hasOwn(value, "thinkingLevel")) {
+		const thinkingLevel = Reflect.get(value, "thinkingLevel");
+		if (!isBtwThinkingLevel(thinkingLevel)) return undefined;
+		settings.thinkingLevel = thinkingLevel;
+	}
+	return settings;
+}
+
+export function parseBtwModelReference(
+	reference: string,
+): { provider: string; modelId: string } | undefined {
+	if (/\s/.test(reference)) return undefined;
+	const separator = reference.indexOf("/");
+	if (separator <= 0 || separator === reference.length - 1) return undefined;
+	return { provider: reference.slice(0, separator), modelId: reference.slice(separator + 1) };
+}
+
+export async function resolveBtwModel({
+	settings,
+	currentModel,
+	modelRegistry,
+	warn,
+}: ResolveBtwModelOptions): Promise<ResolvedBtwModel | undefined> {
+	if (settings.model) {
+		const fallback = currentModel
+			? `${currentModel.provider}/${currentModel.id}`
+			: "the current model";
+		const reference = parseBtwModelReference(settings.model)!;
+		const configuredModel = modelRegistry.find(reference.provider, reference.modelId);
+		if (!configuredModel) {
+			warn?.(`pi-btw model ${settings.model} was not found; falling back to ${fallback}.`);
+		} else {
+			const sameAsCurrent =
+				configuredModel === currentModel ||
+				(configuredModel.provider === currentModel?.provider && configuredModel.id === currentModel.id);
+			const fallbackAction = sameAsCurrent
+				? "no distinct current model is available"
+				: `falling back to ${fallback}`;
+			try {
+				const auth = await modelRegistry.getApiKeyAndHeaders(configuredModel);
+				if (auth.ok && hasRequestAuth(auth)) return { model: configuredModel, auth };
+				const reason = auth.ok ? "has no request credentials" : auth.error;
+				warn?.(
+					`pi-btw model ${settings.model} is unavailable (${reason}); ${fallbackAction}.`,
+				);
+			} catch (error: unknown) {
+				warn?.(
+					`pi-btw model ${settings.model} credentials failed (${formatError(error)}); ${fallbackAction}.`,
+				);
+			}
+			if (sameAsCurrent) return undefined;
+		}
+	}
+
+	if (!currentModel) return undefined;
+	try {
+		const auth = await modelRegistry.getApiKeyAndHeaders(currentModel);
+		if (auth.ok && hasRequestAuth(auth)) return { model: currentModel, auth };
+	} catch {
+		// The caller reports the final lack of an available model.
+	}
+	return undefined;
+}
+
+function hasRequestAuth(auth: SideQuestionAuth): boolean {
+	return Boolean(
+		auth.apiKey ||
+			(auth.headers && Object.keys(auth.headers).length > 0) ||
+			(auth.env && Object.keys(auth.env).length > 0),
+	);
 }
 
 export async function readBtwSettings(
@@ -148,7 +242,7 @@ export async function loadBtwThinkingLevel(
 	}
 
 	options.warn?.(
-		`pi-btw settings ignored: ${settings.reason}; expected { "thinkingLevel"?: "${BTW_THINKING_LEVELS.join('" | "')}" }. Using current Pi thinking level.`,
+		`pi-btw settings ignored: ${settings.reason}; expected optional model "provider/model-id" and thinkingLevel "${BTW_THINKING_LEVELS.join('" | "')}". Using current Pi thinking level.`,
 	);
 	return currentThinkingLevel;
 }
@@ -233,15 +327,26 @@ export default function btw(pi: ExtensionAPI) {
 				return;
 			}
 
-			if (!ctx.model) {
-				ctx.ui.notify("No model selected", "error");
+			const settingsResult = await readBtwSettings();
+			let settings: BtwSettings = {};
+			if (settingsResult.kind === "loaded") {
+				settings = settingsResult.settings;
+			} else if (settingsResult.kind === "invalid") {
+				ctx.ui.notify(`pi-btw settings ignored: ${settingsResult.reason}`, "warning");
+			}
+
+			const resolution = await resolveBtwModelWithLoader(settings, ctx);
+			if (resolution.kind === "cancelled") {
+				ctx.ui.notify("Cancelled", "info");
+				return;
+			}
+			if (resolution.kind === "unavailable") {
+				ctx.ui.notify("No available model for /btw", "error");
 				return;
 			}
 
-			const thinkingLevel = await loadBtwThinkingLevel(pi.getThinkingLevel(), {
-				warn: (message) => ctx.ui.notify(message, "warning"),
-			});
-			const answer = await askSideQuestion(question, thinkingLevel, ctx);
+			const thinkingLevel = settings.thinkingLevel ?? pi.getThinkingLevel();
+			const answer = await askSideQuestion(question, resolution.selected, thinkingLevel, ctx);
 			if (answer === undefined) {
 				ctx.ui.notify("Cancelled", "info");
 				return;
@@ -252,28 +357,61 @@ export default function btw(pi: ExtensionAPI) {
 	});
 }
 
+type ModelResolutionOutcome =
+	| { kind: "cancelled" }
+	| { kind: "unavailable" }
+	| { kind: "selected"; selected: ResolvedBtwModel };
+
+async function resolveBtwModelWithLoader(
+	settings: BtwSettings,
+	ctx: ExtensionCommandContext,
+): Promise<ModelResolutionOutcome> {
+	return ctx.ui.custom<ModelResolutionOutcome>((tui, theme, _keybindings, done) => {
+		const loader = new BorderedLoader(tui, theme, "Resolving /btw model credentials...");
+		let cancelled = false;
+		loader.onAbort = () => {
+			cancelled = true;
+			done({ kind: "cancelled" });
+		};
+
+		resolveBtwModel({
+			settings,
+			currentModel: ctx.model,
+			modelRegistry: ctx.modelRegistry,
+			warn: (message) => {
+				if (!cancelled) ctx.ui.notify(message, "warning");
+			},
+		}).then((selected) => {
+			if (cancelled) return;
+			done(selected ? { kind: "selected", selected } : { kind: "unavailable" });
+		});
+
+		return loader;
+	});
+}
+
 async function askSideQuestion(
 	question: string,
+	selected: ResolvedBtwModel,
 	thinkingLevel: BtwThinkingLevel,
 	ctx: ExtensionCommandContext,
 ): Promise<string | undefined> {
 	return ctx.ui.custom<string | undefined>((tui, theme, _keybindings, done) => {
-		const loader = new BorderedLoader(tui, theme, `Answering /btw with ${ctx.model!.id}...`);
+		const loader = new BorderedLoader(
+			tui,
+			theme,
+			`Answering /btw with ${selected.model.provider}/${selected.model.id}...`,
+		);
 		loader.onAbort = () => done(undefined);
 
 		const ask = async () => {
-			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model!);
-			if (!auth.ok || !auth.apiKey) {
-				throw new Error(auth.ok ? `No API key for ${ctx.model!.provider}` : auth.error);
-			}
-
 			const conversationContext = buildConversationContext(ctx.sessionManager.getBranch());
 			const response = await completeSideQuestion({
-				model: ctx.model!,
+				model: selected.model,
 				question,
 				conversationContext,
 				thinkingLevel,
-				auth: { apiKey: auth.apiKey, headers: auth.headers, env: auth.env },
+				auth: selected.auth,
 				signal: loader.signal,
 			});
 
