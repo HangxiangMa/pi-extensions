@@ -4,8 +4,8 @@ Date: 2026-07-11
 
 ## Automated evidence
 
-- `npm run check`: passed with Biome, extension boundaries, all workspace typechecks, and 263 tests.
-- `just pack-subagents`: passed; dry-run package contains 20 expected files, including transport and workspace modules.
+- `npm run check`: passed with Biome, extension boundaries, all workspace typechecks, and 264 tests.
+- `just pack-subagents`: passed; dry-run package contains 21 expected files, including transport and workspace modules.
 - Transport contract behavior is exercised through fake transport lifecycle tests and the subprocess-backed local Pi smoke test.
 - Hierarchy tests cover root/child/grandchild metadata, depth rejection, child ordering, cyclic restore rejection, subtree close, and inert migration.
 - Mailbox tests cover bounded retention, message IDs, deduplication keys, unread/ack state, follow-up consumption, and exactly-once child completion delivery.
