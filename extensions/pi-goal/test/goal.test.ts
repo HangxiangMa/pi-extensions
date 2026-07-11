@@ -81,6 +81,141 @@ test("goal registers command, status tools, and lifecycle hooks", () => {
 	]);
 });
 
+test("child session initialization does not erase or reroute the parent goal", async () => {
+	const rootBranch: Array<Record<string, unknown>> = [];
+	const root = createMockPi();
+	goal(root.pi);
+	const rootContext = createMockContext({
+		sessionManager: { getBranch: () => rootBranch, getEntries: () => rootBranch },
+	});
+	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
+	await root.commands.get("goal")?.handler("parent objective", rootContext.ctx);
+
+	const rootGoal = requireLastGoal(root);
+	rootBranch.push({
+		type: "custom",
+		customType: "goal-state",
+		data: { goal: rootGoal },
+	});
+	const rootCompletion = requireGoalTool(root, "goal_complete");
+
+	const child = createMockPi();
+	goal(child.pi);
+	const childContext = createMockContext({
+		sessionManager: { getBranch: () => [], getEntries: () => [] },
+	});
+	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
+
+	const result = await rootCompletion.execute(
+		"root-completion",
+		{ goal_id: rootGoal.id, summary: "Verified parent completion." },
+		new AbortController().signal,
+		() => undefined,
+		rootContext.ctx,
+	);
+
+	assert.equal(result.content?.[0]?.text, "Goal complete: Verified parent completion.");
+	assert.equal(result.terminate, true);
+	assert.equal(result.details?.goal, rootGoal.text);
+	assert.deepEqual(root.entries.filter((entry) => entry.customType === "goal-state").at(-1)?.data, {
+		goal: null,
+	});
+	assert.equal(child.entries.filter((entry) => entry.customType === "goal-state").length, 0);
+});
+
+test("independent goal instances keep completion local", async () => {
+	const root = createMockPi();
+	goal(root.pi);
+	const rootContext = createMockContext();
+	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
+	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
+
+	const child = createMockPi();
+	goal(child.pi);
+	const childContext = createMockContext();
+	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
+	await child.commands.get("goal")?.handler("child objective", childContext.ctx);
+
+	const rootGoal = requireLastGoal(root);
+	const childGoal = requireLastGoal(child);
+	assert.notEqual(rootGoal.id, childGoal.id);
+
+	const result = await requireGoalTool(root, "goal_complete").execute(
+		"root-completion",
+		{ goal_id: rootGoal.id, summary: "Root work verified." },
+		new AbortController().signal,
+		() => undefined,
+		rootContext.ctx,
+	);
+
+	assert.equal(result.terminate, true);
+	assert.equal(lastGoalStatus(root), null);
+	assert.equal(lastGoalStatus(child), "active");
+	assert.equal(requireLastGoal(child).id, childGoal.id);
+	root.events.get("session_shutdown")?.[0]?.({}, rootContext.ctx);
+	child.events.get("session_shutdown")?.[0]?.({}, childContext.ctx);
+});
+
+test("tool lifecycle persistence stays on the owning goal instance", async () => {
+	const rootBranch: Array<Record<string, unknown>> = [assistantUsageEntry({ totalTokens: 1 })];
+	const root = createMockPi();
+	goal(root.pi);
+	const rootContext = createMockContext({
+		sessionManager: { getBranch: () => rootBranch, getEntries: () => rootBranch },
+	});
+	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
+	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
+
+	const childBranch: Array<Record<string, unknown>> = [assistantUsageEntry({ totalTokens: 2 })];
+	const child = createMockPi();
+	goal(child.pi);
+	const childContext = createMockContext({
+		sessionManager: { getBranch: () => childBranch, getEntries: () => childBranch },
+	});
+	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
+	await child.commands.get("goal")?.handler("child objective", childContext.ctx);
+
+	const rootEntriesBefore = root.entries.length;
+	const childEntriesBefore = child.entries.length;
+	root.events.get("tool_execution_end")?.[0]?.({}, rootContext.ctx);
+	assert.equal(root.entries.length, rootEntriesBefore + 1);
+	assert.equal(child.entries.length, childEntriesBefore);
+
+	child.events.get("tool_execution_end")?.[0]?.({}, childContext.ctx);
+	assert.equal(root.entries.length, rootEntriesBefore + 1);
+	assert.equal(child.entries.length, childEntriesBefore + 1);
+	root.events.get("session_shutdown")?.[0]?.({}, rootContext.ctx);
+	child.events.get("session_shutdown")?.[0]?.({}, childContext.ctx);
+});
+
+test("child shutdown does not clear the parent goal", async () => {
+	const root = createMockPi();
+	goal(root.pi);
+	const rootContext = createMockContext();
+	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
+	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
+	const rootGoal = requireLastGoal(root);
+
+	const child = createMockPi();
+	goal(child.pi);
+	const childContext = createMockContext();
+	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
+	child.events.get("session_shutdown")?.[0]?.({}, childContext.ctx);
+
+	const result = await requireGoalTool(root, "goal_complete").execute(
+		"root-completion-after-child-shutdown",
+		{ goal_id: rootGoal.id, summary: "Root work verified after child shutdown." },
+		new AbortController().signal,
+		() => undefined,
+		rootContext.ctx,
+	);
+
+	assert.equal(result.terminate, true);
+	assert.equal(lastGoalStatus(root), null);
+	assert.equal(child.entries.length, 0);
+	root.events.get("session_shutdown")?.[0]?.({}, rootContext.ctx);
+});
+
 test("completeGoalArguments suggests /goal subcommands and token options", () => {
 	assert.deepEqual(
 		completeGoalArguments("")?.map((item) => item.label),
@@ -2040,6 +2175,7 @@ test("findFinalAssistantMessage returns the last assistant with a known stop rea
 type GoalTool = {
 	execute: (...args: unknown[]) => Promise<{
 		content?: Array<{ type: string; text: string }>;
+		details?: { goal?: string };
 		terminate?: boolean;
 	}>;
 };
