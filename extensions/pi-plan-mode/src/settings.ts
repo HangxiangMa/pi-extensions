@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-export const PLAN_MODE_SETTINGS_FILE = "pi-plan-mode.json";
+export const PLAN_MODE_SETTINGS_FILE = "plan-mode.json";
 export const PLAN_MODE_THINKING_LEVELS = [
 	"inherit",
 	"off",

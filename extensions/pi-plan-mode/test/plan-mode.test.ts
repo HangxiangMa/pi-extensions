@@ -196,7 +196,7 @@ test("Plan-mode settings validate inherit and fixed thinking levels", async () =
 
 	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-test-"));
 	try {
-		const path = join(directory, "pi-plan-mode.json");
+		const path = join(directory, "plan-mode.json");
 		await writeFile(path, '{"thinkingLevel":"high"}');
 		assert.deepEqual(await readPlanModeSettings(path), {
 			kind: "loaded",
@@ -243,7 +243,7 @@ test("Plan thinking level restores only while the extension owns the applied val
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
 	try {
-		await writeFile(join(directory, "pi-plan-mode.json"), '{"thinkingLevel":"medium"}');
+		await writeFile(join(directory, "plan-mode.json"), '{"thinkingLevel":"medium"}');
 		const mock = createMockPi({ activeTools: ["read", "bash"], thinkingLevel: "low" });
 		planMode(mock.pi);
 		const context = createMockContext();

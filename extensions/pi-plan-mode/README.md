@@ -94,7 +94,7 @@ You can also exit directly. Direct exit discards the latest proposed plan instea
 
 ## ⚙️ Thinking level
 
-Plan mode inherits Pi's current thinking level by default. To request a fixed level only while Plan mode is active, create `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`):
+Plan mode inherits Pi's current thinking level by default. To request a fixed level only while Plan mode is active, create `$PI_CODING_AGENT_DIR/plan-mode.json` (normally `~/.pi/agent/plan-mode.json`):
 
 ```json
 {
