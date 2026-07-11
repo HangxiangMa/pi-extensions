@@ -149,7 +149,7 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 			if (params.workspaceMode === "worktree" && resolvedAgent?.source === "project") {
 				throw new Error("Project-local subagent definitions cannot run in a detached worktree");
 			}
-			const mode = normalizeContextMode(params.context);
+			const mode = resolveSpawnContextMode(params.context, params.contextEntryIds);
 			const snapshot = buildContextSnapshot(
 				ctx.sessionManager.getBranch(),
 				mode,
@@ -198,6 +198,9 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 		parameters: Type.Object({
 			agentId: Type.String(),
 			task: Type.String({ minLength: 1, maxLength: DEFAULT_MAX_CONTEXT_BYTES }),
+			allowConcurrentWrites: Type.Optional(
+				Type.Boolean({ description: "Override the shared-workspace write conflict guard." }),
+			),
 		}),
 		async execute(_id, params, _signal, _update, ctx) {
 			const existing = requireRegistry().get(params.agentId);
@@ -208,6 +211,12 @@ export function registerStatefulSubagents(pi: ExtensionAPI): void {
 				false,
 				ctx,
 				existing.cwd,
+			);
+			assertFollowUpWriteAllowed(
+				requireRegistry(),
+				existing,
+				params.allowConcurrentWrites ?? false,
+				isolatedAgents.has(existing.id),
 			);
 			const agent = await requireRegistry().followUp(params.agentId, params.task);
 			return result(agent, `Started follow-up for ${agent.id}.`);
@@ -425,6 +434,21 @@ export function assertNoSharedWriteConflict(
 	}
 }
 
+export function assertFollowUpWriteAllowed(
+	registry: AgentRegistry,
+	agent: ManagedAgent,
+	allowConcurrentWrites: boolean,
+	isolatedWorkspace: boolean,
+): void {
+	if (allowConcurrentWrites || isolatedWorkspace) return;
+	assertNoSharedWriteConflict(
+		registry,
+		agent.agent,
+		agent.cwd,
+		agent.agentScope ?? "user",
+	);
+}
+
 export function isWriteCapable(tools: string[] | undefined): boolean {
 	if (!tools) return true;
 	return tools.some((tool) => ["bash", "write", "edit"].includes(tool));
@@ -463,6 +487,14 @@ function normalizeContextMode(
 	if (value === undefined) return "none";
 	if (value === "none" || value === "all" || value === "summary") return value;
 	return Math.max(1, Math.floor(value));
+}
+
+export function resolveSpawnContextMode(
+	value: "none" | "all" | "summary" | number | undefined,
+	contextEntryIds: readonly string[] | undefined,
+): ContextMode {
+	if (value === undefined && contextEntryIds !== undefined) return "all";
+	return normalizeContextMode(value);
 }
 
 function formatLine(agent: ManagedAgent): string {

@@ -209,7 +209,7 @@ Enabling the feature registers:
 | Tool | Purpose |
 | --- | --- |
 | `subagent_spawn` | Start a logical agent and return an opaque `agentId`. |
-| `subagent_send` | Send follow-up work to a reusable agent. |
+| `subagent_send` | Send follow-up work to a reusable agent; shared-workspace write conflicts are guarded unless explicitly overridden. |
 | `subagent_message` | Queue a bounded mailbox message without starting a turn; sender IDs must be `root` or an agent in the same tree. |
 | `subagent_messages` | Read and optionally acknowledge unread mailbox messages. |
 | `subagent_wait` | Wait for completion without terminating the agent on wait timeout. |
@@ -226,7 +226,7 @@ Use `/subagents:agents list` to inspect the indented agent tree, lifecycle state
 - `"summary"` — a bounded earlier-context checkpoint plus recent messages verbatim.
 - A positive number — the most recent N user turns and related assistant text.
 
-Use `contextEntryIds` to select exact session entries. Stable source IDs are retained so repeated follow-ups do not need to duplicate parent context.
+Use `contextEntryIds` to select exact session entries. Supplying IDs without `context` implies `context: "all"`; an explicit `context: "none"` still disables parent context. Stable source IDs are retained so repeated follow-ups do not need to duplicate parent context.
 
 Reasoning, tool results, custom transport messages, and non-text parts are excluded. Text inside `<private>...</private>` and lines containing `[subagent-private]` are omitted before context, mailbox content, or history is persisted.
 

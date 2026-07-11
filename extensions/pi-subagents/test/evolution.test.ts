@@ -26,9 +26,11 @@ import {
 } from "../src/runner.js";
 import { normalizeSubagentSettings } from "../src/settings.js";
 import {
+	assertFollowUpWriteAllowed,
 	buildStatefulTurnPrompt,
 	isWriteCapable,
 	registerStatefulSubagents,
+	resolveSpawnContextMode,
 	resolveStatefulTurnTimeout,
 } from "../src/stateful.js";
 import { WorkspaceManager } from "../src/workspace.js";
@@ -565,10 +567,35 @@ test("AgentRegistry eviction preserves active ancestry and removes expired trees
 	assert.equal(await registry.sweepExpired(), 0);
 	assert.ok(registry.get(root.id));
 	await registry.interrupt(child.id);
+	assert.equal(registry.get(root.id)?.updatedAt, now);
 	now += 101;
 	assert.equal(await registry.sweepExpired(), 2);
 	assert.equal(registry.get(root.id), undefined);
 	assert.equal(registry.get(child.id), undefined);
+});
+
+test("AgentRegistry expiry prunes stale child links from retained parents", async () => {
+	let now = 1_000;
+	const registry = new AgentRegistry(async () => ({ output: "done", exitCode: 0 }), {
+		idleTtlMs: 100,
+		now: () => now,
+	});
+	const root = await registry.spawn({ agent: "scout", task: "root", cwd: process.cwd() });
+	await registry.wait(root.id, 100);
+	const child = await registry.spawn({
+		agent: "scout",
+		task: "child",
+		cwd: process.cwd(),
+		parentId: root.id,
+	});
+	await registry.wait(child.id, 100);
+	now += 50;
+	await registry.sendMessage(root.id, "refresh parent");
+	now += 51;
+	assert.equal(await registry.sweepExpired(), 1);
+	assert.equal(registry.get(child.id), undefined);
+	assert.deepEqual(registry.get(root.id)?.children, []);
+	assert.equal((await registry.close(root.id)).state, "closed");
 });
 
 test("AgentRegistry bounds retained closed records", async () => {
@@ -755,11 +782,34 @@ test("WorkspaceManager creates and cleans owned disposable worktrees", async () 
 	await assert.rejects(() => manager.create("dirty", repo), /clean Git repository/);
 });
 
-test("shared-workspace write classification is conservative", () => {
+test("shared-workspace write classification and follow-up guards are conservative", async () => {
 	assert.equal(isWriteCapable(undefined), true);
 	assert.equal(isWriteCapable(["read", "grep"]), false);
 	assert.equal(isWriteCapable(["read", "bash"]), true);
 	assert.equal(isWriteCapable(["edit"]), true);
+	const registry = new AgentRegistry(async (_agent, _task, signal) => {
+		await new Promise<void>((resolve) =>
+			signal.addEventListener("abort", () => resolve(), { once: true }),
+		);
+		return { output: "interrupted", exitCode: 130, aborted: true };
+	});
+	const active = await registry.spawn({ agent: "worker", task: "active", cwd: process.cwd() });
+	const followUp = record({ agent: "worker", cwd: process.cwd(), state: "completed" });
+	assert.throws(
+		() => assertFollowUpWriteAllowed(registry, followUp, false, false),
+		/already active in shared workspace/,
+	);
+	assert.doesNotThrow(() => assertFollowUpWriteAllowed(registry, followUp, true, false));
+	assert.doesNotThrow(() => assertFollowUpWriteAllowed(registry, followUp, false, true));
+	await registry.interrupt(active.id);
+});
+
+test("selected context entries imply all mode only when context mode is omitted", () => {
+	assert.equal(resolveSpawnContextMode(undefined, ["entry"]), "all");
+	assert.equal(resolveSpawnContextMode(undefined, []), "all");
+	assert.equal(resolveSpawnContextMode(undefined, undefined), "none");
+	assert.equal(resolveSpawnContextMode("none", ["entry"]), "none");
+	assert.equal(resolveSpawnContextMode(3, ["entry"]), 3);
 });
 
 test("stateful tools are opt-in and expose the complete lifecycle surface", async () => {
