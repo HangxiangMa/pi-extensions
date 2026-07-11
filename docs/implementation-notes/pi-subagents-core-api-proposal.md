@@ -48,4 +48,4 @@ interface ExtensionCommandContext {
 
 ## Migration path
 
-`pi-subagents` should retain its batch API and place child execution behind a transport interface. When the proposed API exists, the current logical registry can replace its fresh-process runner with a `ChildSessionHandle` adapter while preserving opaque IDs and lifecycle tools. Existing persisted logical histories remain readable and can be imported as context for the first native child turn.
+`pi-subagents` retains its batch API and now places child execution behind `SubagentTransport` in `extensions/pi-subagents/src/transport.ts`. When the proposed API exists, a `ChildSessionHandle` adapter can replace `SubprocessTransport` while preserving opaque IDs, hierarchy, mailboxes, and lifecycle tools. The shared transport contract suite must pass before native transport is enabled. Existing persisted logical histories remain readable and can be imported as context for the first native child turn. No private Pi imports or runtime-object casts are permitted.

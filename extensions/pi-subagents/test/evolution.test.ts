@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { buildContextSnapshot, redactPrivateText } from "../src/context.js";
-import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "../src/limits.js";
+import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8, truncateUtf8Tail } from "../src/limits.js";
 import { AgentPersistence } from "../src/persistence.js";
 import { JsonLineDecoder } from "../src/protocol.js";
 import { AgentRegistry, type ManagedAgent } from "../src/registry.js";
@@ -18,20 +26,28 @@ import {
 } from "../src/runner.js";
 import { normalizeSubagentSettings } from "../src/settings.js";
 import {
+	assertFollowUpWriteAllowed,
 	buildStatefulTurnPrompt,
+	isWriteCapable,
 	registerStatefulSubagents,
+	resolveSpawnContextMode,
 	resolveStatefulTurnTimeout,
 } from "../src/stateful.js";
+import { WorkspaceManager } from "../src/workspace.js";
 
 function record(overrides: Partial<ManagedAgent> = {}): ManagedAgent {
 	return {
 		id: "sa_test",
 		agent: "scout",
+		rootId: "sa_test",
+		depth: 0,
+		children: [],
 		state: "completed",
 		createdAt: 1,
 		updatedAt: Date.now(),
 		cwd: process.cwd(),
 		history: [],
+		mailbox: [],
 		...overrides,
 	};
 }
@@ -54,6 +70,19 @@ test("JsonLineDecoder handles fragmented, malformed, trailing, and oversized lin
 	assert.deepEqual(values, [{ ok: 1 }, { tail: 2 }]);
 	assert.deepEqual(malformed, ["not-json"]);
 	assert.equal(oversized.length, 1);
+
+	const unicodeValues: unknown[] = [];
+	const unicodeDecoder = new JsonLineDecoder({ onValue: (value) => unicodeValues.push(value) });
+	const unicodeLine = Buffer.from('{"text":"界"}\n');
+	const characterStart = unicodeLine.indexOf(Buffer.from("界"));
+	unicodeDecoder.push(unicodeLine.subarray(0, characterStart + 1));
+	unicodeDecoder.push(unicodeLine.subarray(characterStart + 1));
+	unicodeDecoder.finish();
+	assert.deepEqual(unicodeValues, [{ text: "界" }]);
+	assert.throws(
+		() => new JsonLineDecoder({ maxLineBytes: Number.NaN, onValue: () => undefined }),
+		/positive safe integer/,
+	);
 });
 
 test("UTF-8 and fan-in truncation are bounded and marked", () => {
@@ -61,6 +90,16 @@ test("UTF-8 and fan-in truncation are bounded and marked", () => {
 	assert.ok(Buffer.byteLength(bounded.text) <= 80);
 	assert.equal(bounded.truncated, true);
 	assert.doesNotMatch(bounded.text, /�/);
+	const tail = truncateUtf8Tail(`old-${"界".repeat(100)}-new`, 80);
+	assert.ok(Buffer.byteLength(tail.text) <= 80);
+	assert.doesNotMatch(tail.text, /�/);
+	assert.match(tail.text, /-new$/);
+	assert.deepEqual(truncateUtf8("value", Number.NaN), {
+		text: "",
+		truncated: true,
+		originalBytes: 5,
+	});
+	assert.equal(truncateUtf8("value", Number.POSITIVE_INFINITY).text, "value");
 	const fanIn = buildFanInContext([
 		{
 			...record(),
@@ -117,6 +156,52 @@ test("context snapshots keep only user/assistant text, recent turns, and redact 
 	assert.match(snapshot.text, /new/);
 	assert.equal(snapshot.turns, 1);
 	assert.equal(redactPrivateText("a<private>secret</private>b"), "a[private content omitted]b");
+	assert.equal(
+		redactPrivateText("a<private>outer<private>inner</private>tail</private>b"),
+		"a[private content omitted]b",
+	);
+	assert.equal(redactPrivateText("a<private>unterminated"), "a[private content omitted]");
+
+	const selected = buildContextSnapshot(
+		[
+			{ id: "one", type: "message", message: { role: "user", content: "omit" } },
+			{ id: "two", type: "message", message: { role: "user", content: "keep" } },
+		],
+		"summary",
+		1_000,
+		["two"],
+	);
+	assert.equal(selected.text, "## user\nkeep");
+	assert.deepEqual(selected.sourceIds, ["two"]);
+
+	const deduplicated = buildContextSnapshot(
+		[
+			{ id: "same", type: "message", message: { role: "user", content: "first" } },
+			{ id: "same", type: "message", message: { role: "user", content: "duplicate" } },
+		],
+		"all",
+	);
+	assert.equal(deduplicated.text, "## user\nfirst");
+	assert.deepEqual(deduplicated.sourceIds, ["same"]);
+
+	const summarized = buildContextSnapshot(
+		[
+			...Array.from({ length: 5 }, (_, index) => ({
+				id: `old-${index}`,
+				type: "message",
+				message: { role: index % 2 ? "assistant" : "user", content: "old".repeat(50) },
+			})),
+			{
+				id: "latest",
+				type: "message",
+				message: { role: "assistant", content: `${"new".repeat(50)}LATEST_END` },
+			},
+		],
+		"summary",
+		100,
+	);
+	assert.ok(Buffer.byteLength(summarized.text) <= 100);
+	assert.match(summarized.text, /LATEST_END$/);
 });
 
 test("stateful follow-up prompts redact retained history and honor global timeout", () => {
@@ -126,6 +211,25 @@ test("stateful follow-up prompts redact retained history and honor global timeou
 		const prompt = buildStatefulTurnPrompt(
 			record({
 				context: "parent <private>ctx-secret</private>",
+				currentMailboxMessageIds: ["new-message"],
+				mailbox: [
+					{
+						id: "old-message",
+						senderId: "root",
+						recipientId: "sa_test",
+						content: "old mailbox content",
+						createdAt: 1,
+						readAt: 2,
+					},
+					{
+						id: "new-message",
+						senderId: "root",
+						recipientId: "sa_test",
+						content: "new <private>mail-secret</private> content",
+						createdAt: 3,
+						readAt: 4,
+					},
+				],
 				history: [
 					{
 						task: "task <private>task-secret</private>",
@@ -136,11 +240,15 @@ test("stateful follow-up prompts redact retained history and honor global timeou
 					},
 				],
 			}),
-			"next task",
+			"next <private>current-secret</private> task",
 		);
-		assert.match(prompt.text, /Current task:\nnext task/);
+		assert.match(prompt.text, /Current task:\nnext \[private content omitted\] task/);
+		assert.match(prompt.text, /new \[private content omitted\] content/);
 		assert.match(prompt.text, /visible output/);
-		assert.doesNotMatch(prompt.text, /ctx-secret|task-secret|hidden-line/);
+		assert.doesNotMatch(
+			prompt.text,
+			/ctx-secret|task-secret|current-secret|mail-secret|hidden-line|old mailbox/,
+		);
 		assert.equal(resolveStatefulTurnTimeout(undefined), 4321);
 		assert.equal(resolveStatefulTurnTimeout({ timeoutMs: 99 }), 99);
 	} finally {
@@ -177,6 +285,47 @@ test("mapWithConcurrencyLimit preserves input order and enforces its active limi
 	);
 	assert.equal(started, 0);
 	assert.deepEqual(skipped, [-1, -2]);
+});
+
+test("AgentRegistry rejects invalid capacity and wait bounds", async () => {
+	assert.throws(
+		() => new AgentRegistry(async () => ({ output: "", exitCode: 0 }), { maxActiveTurns: 0 }),
+		/positive safe integer/,
+	);
+	assert.throws(
+		() => new AgentRegistry(async () => ({ output: "", exitCode: 0 }), { maxDepth: -1 }),
+		/non-negative safe integer/,
+	);
+	const registry = new AgentRegistry(async () => ({ output: "", exitCode: 0 }));
+	const agent = await registry.spawn({ agent: "scout", task: "done", cwd: process.cwd() });
+	await assert.rejects(() => registry.wait(agent.id, Number.NaN), /positive finite/);
+	await registry.wait(agent.id, 100);
+	await registry.close(agent.id);
+	await assert.rejects(
+		() => registry.spawn({ agent: "scout", task: "child", cwd: process.cwd(), parentId: agent.id }),
+		/Cannot spawn under closed agent/,
+	);
+	await assert.rejects(
+		() => registry.spawn({ agent: "scout", task: "  ", cwd: process.cwd() }),
+		/tasks cannot be empty/,
+	);
+
+	let observedTask = "";
+	const boundedRegistry = new AgentRegistry(
+		async (_agent, task) => {
+			observedTask = task;
+			return { output: "y".repeat(200), exitCode: 0 };
+		},
+		{ maxTaskBytes: 64, maxTurnOutputBytes: 64 },
+	);
+	const boundedAgent = await boundedRegistry.spawn({
+		agent: "scout",
+		task: "x".repeat(200),
+		cwd: process.cwd(),
+	});
+	const boundedResult = await boundedRegistry.wait(boundedAgent.id, 100);
+	assert.ok(Buffer.byteLength(observedTask) <= 64);
+	assert.ok(Buffer.byteLength(boundedResult.agent.history[0].output) <= 64);
 });
 
 test("AgentRegistry supports follow-up, wait timeout, interrupt/reuse, limits, and close", async () => {
@@ -220,6 +369,159 @@ test("AgentRegistry supports follow-up, wait timeout, interrupt/reuse, limits, a
 	await assert.rejects(() => registry.close(first.id), /already closed/);
 });
 
+test("AgentRegistry runs lifecycle operations through a transport contract", async () => {
+	const calls: string[] = [];
+	const registry = new AgentRegistry({
+		kind: "fake",
+		async runTurn(_agent, task, signal) {
+			calls.push(`run:${task}`);
+			if (task === "slow") {
+				await new Promise<void>((resolve) =>
+					signal.addEventListener("abort", () => resolve(), { once: true }),
+				);
+			}
+			return { output: task, exitCode: signal.aborted ? 130 : 0, aborted: signal.aborted };
+		},
+		async shutdown() {
+			calls.push("shutdown");
+		},
+	});
+	const agent = await registry.spawn({ agent: "scout", task: "slow", cwd: process.cwd() });
+	await registry.interrupt(agent.id);
+	await registry.followUp(agent.id, "next");
+	await registry.wait(agent.id, 100);
+	await registry.shutdown();
+	assert.deepEqual(calls, ["run:slow", "run:next", "shutdown"]);
+});
+
+test("AgentRegistry delivers unread mailbox messages to only the next follow-up turn", async () => {
+	const delivered: string[][] = [];
+	const registry = new AgentRegistry(async (agent) => {
+		delivered.push(agent.currentMailboxMessageIds ?? []);
+		return { output: "done", exitCode: 0 };
+	});
+	const agent = await registry.spawn({ agent: "scout", task: "initial", cwd: process.cwd() });
+	await registry.wait(agent.id, 100);
+	const message = await registry.sendMessage(agent.id, "once");
+	await registry.followUp(agent.id, "first follow-up");
+	await registry.wait(agent.id, 100);
+	await registry.followUp(agent.id, "second follow-up");
+	await registry.wait(agent.id, 100);
+	assert.deepEqual(delivered, [[], [message.id], []]);
+});
+
+test("AgentRegistry preserves hierarchy and delivers bounded deduplicated mailbox messages", async () => {
+	const registry = new AgentRegistry(
+		async (_agent, task) => ({ output: `done:${task}`, exitCode: 0 }),
+		{
+			maxDepth: 2,
+			maxChildrenPerAgent: 2,
+			maxMailboxMessages: 2,
+		},
+	);
+	const root = await registry.spawn({ agent: "scout", task: "root", cwd: process.cwd() });
+	await registry.wait(root.id, 100);
+	const child = await registry.spawn({
+		agent: "scout",
+		task: "child",
+		cwd: process.cwd(),
+		parentId: root.id,
+	});
+	await registry.wait(child.id, 100);
+	const grandchild = await registry.spawn({
+		agent: "scout",
+		task: "grandchild",
+		cwd: process.cwd(),
+		parentId: child.id,
+	});
+	await registry.wait(grandchild.id, 100);
+	await assert.rejects(
+		() =>
+			registry.spawn({
+				agent: "scout",
+				task: "too deep",
+				cwd: process.cwd(),
+				parentId: grandchild.id,
+			}),
+		/depth limit/,
+	);
+	assert.equal(registry.get(child.id)?.rootId, root.id);
+	assert.equal(registry.get(grandchild.id)?.depth, 2);
+	assert.deepEqual(registry.get(root.id)?.children, [child.id]);
+
+	const first = await registry.sendMessage(child.id, "hello", root.id, "same");
+	const duplicate = await registry.sendMessage(child.id, "hello", root.id, "same");
+	assert.equal(duplicate.id, first.id);
+	await registry.sendMessage(child.id, "second", root.id);
+	await registry.sendMessage(child.id, "third", root.id);
+	const unread = await registry.readMessages(child.id, false);
+	assert.deepEqual(
+		unread.map((message) => message.content),
+		["second", "third"],
+	);
+	assert.equal((await registry.readMessages(child.id, true)).length, 2);
+	assert.equal((await registry.readMessages(child.id, false)).length, 0);
+
+	const rootMessages = await registry.readMessages(root.id, false);
+	assert.ok(
+		rootMessages.some(
+			(message) => message.senderId === child.id && /done:child/.test(message.content),
+		),
+	);
+	const closed = await registry.closeTree(root.id);
+	assert.deepEqual(
+		closed.map((agent) => agent.id),
+		[grandchild.id, child.id, root.id],
+	);
+	await assert.rejects(() => registry.sendMessage(child.id, "late"), /Cannot message closed/);
+});
+
+test("AgentRegistry bounds mailbox input and reports rejected child turns to their parent", async () => {
+	const registry = new AgentRegistry(
+		async (_agent, task) => {
+			if (task === "reject") throw new Error("transport rejected");
+			return { output: task, exitCode: 0 };
+		},
+		{ maxMailboxMessageBytes: 64 },
+	);
+	const root = await registry.spawn({ agent: "scout", task: "root", cwd: process.cwd() });
+	await registry.wait(root.id, 100);
+	const child = await registry.spawn({
+		agent: "scout",
+		task: "reject",
+		cwd: process.cwd(),
+		parentId: root.id,
+	});
+	assert.equal((await registry.wait(child.id, 100)).agent.state, "failed");
+	const completion = await registry.readMessages(root.id, false);
+	assert.equal(completion.length, 1);
+	assert.match(completion[0].content, /transport rejected/);
+	assert.equal(registry.get(child.id)?.history.at(-1)?.exitCode, 1);
+
+	await assert.rejects(() => registry.sendMessage(child.id, "  "), /cannot be empty/);
+	await assert.rejects(
+		() => registry.sendMessage(child.id, "message", "missing"),
+		/Unknown subagent/,
+	);
+	const other = await registry.spawn({ agent: "scout", task: "other", cwd: process.cwd() });
+	await registry.wait(other.id, 100);
+	await assert.rejects(
+		() => registry.sendMessage(child.id, "message", other.id),
+		/cannot cross agent trees/,
+	);
+	const bounded = await registry.sendMessage(child.id, "x".repeat(200));
+	assert.ok(Buffer.byteLength(bounded.content, "utf8") <= 64);
+	assert.match(bounded.content, /truncated/);
+	await registry.sendMessage(child.id, "second");
+	await registry.sendMessage(child.id, "third");
+	assert.equal((await registry.readMessages(child.id, true, 2)).length, 2);
+	assert.equal((await registry.readMessages(child.id, false)).length, 1);
+	await assert.rejects(
+		() => registry.sendMessage(child.id, "message", "root", "k".repeat(257)),
+		/cannot exceed 256/,
+	);
+});
+
 test("AgentRegistry shutdown aborts active work and drains queued work without starting it", async () => {
 	const started: string[] = [];
 	const registry = new AgentRegistry(
@@ -240,17 +542,76 @@ test("AgentRegistry shutdown aborts active work and drains queued work without s
 	assert.equal(registry.get(queued.id)?.state, "idle");
 });
 
-test("AgentRegistry evicts expired idle agents without touching active work", async () => {
+test("AgentRegistry eviction preserves active ancestry and removes expired trees leaf-first", async () => {
+	let now = 1_000;
+	const registry = new AgentRegistry(
+		async (_agent, task, signal) => {
+			if (task === "slow") {
+				await new Promise<void>((resolve) =>
+					signal.addEventListener("abort", () => resolve(), { once: true }),
+				);
+			}
+			return { output: "done", exitCode: signal.aborted ? 130 : 0, aborted: signal.aborted };
+		},
+		{ idleTtlMs: 100, now: () => now },
+	);
+	const root = await registry.spawn({ agent: "scout", task: "done", cwd: process.cwd() });
+	await registry.wait(root.id, 100);
+	const child = await registry.spawn({
+		agent: "scout",
+		task: "slow",
+		cwd: process.cwd(),
+		parentId: root.id,
+	});
+	now += 101;
+	assert.equal(await registry.sweepExpired(), 0);
+	assert.ok(registry.get(root.id));
+	await registry.interrupt(child.id);
+	assert.equal(registry.get(root.id)?.updatedAt, now);
+	now += 101;
+	assert.equal(await registry.sweepExpired(), 2);
+	assert.equal(registry.get(root.id), undefined);
+	assert.equal(registry.get(child.id), undefined);
+});
+
+test("AgentRegistry expiry prunes stale child links from retained parents", async () => {
 	let now = 1_000;
 	const registry = new AgentRegistry(async () => ({ output: "done", exitCode: 0 }), {
 		idleTtlMs: 100,
 		now: () => now,
 	});
-	const agent = await registry.spawn({ agent: "scout", task: "done", cwd: process.cwd() });
-	await registry.wait(agent.id, 100);
-	now += 101;
+	const root = await registry.spawn({ agent: "scout", task: "root", cwd: process.cwd() });
+	await registry.wait(root.id, 100);
+	const child = await registry.spawn({
+		agent: "scout",
+		task: "child",
+		cwd: process.cwd(),
+		parentId: root.id,
+	});
+	await registry.wait(child.id, 100);
+	now += 50;
+	await registry.sendMessage(root.id, "refresh parent");
+	now += 51;
 	assert.equal(await registry.sweepExpired(), 1);
-	assert.equal(registry.get(agent.id), undefined);
+	assert.equal(registry.get(child.id), undefined);
+	assert.deepEqual(registry.get(root.id)?.children, []);
+	assert.equal((await registry.close(root.id)).state, "closed");
+});
+
+test("AgentRegistry bounds retained closed records", async () => {
+	const registry = new AgentRegistry(async () => ({ output: "done", exitCode: 0 }), {
+		maxAgents: 2,
+	});
+	for (let index = 0; index < 4; index++) {
+		const agent = await registry.spawn({
+			agent: "scout",
+			task: String(index),
+			cwd: process.cwd(),
+		});
+		await registry.wait(agent.id, 100);
+		await registry.close(agent.id);
+	}
+	assert.equal(registry.list(true).length, 2);
 });
 
 test("AgentRegistry keeps lifecycle usable when persistence callbacks fail", async () => {
@@ -263,12 +624,22 @@ test("AgentRegistry keeps lifecycle usable when persistence callbacks fail", asy
 	assert.equal((await registry.wait(agent.id, 100)).agent.state, "completed");
 });
 
-test("AgentRegistry restores persisted running agents as inert idle agents", () => {
+test("AgentRegistry restores valid records inertly and rejects cyclic hierarchy", () => {
 	const registry = new AgentRegistry(async () => ({ output: "", exitCode: 0 }));
-	registry.restore([record({ state: "running", currentTask: "must not resume" })]);
+	registry.restore([
+		record({ state: "running", currentTask: "must not resume" }),
+		record({ id: "child", rootId: "wrong", parentId: "sa_test", depth: 99 }),
+		record({ id: "cycle-a", rootId: "cycle-a", parentId: "cycle-b", depth: 1 }),
+		record({ id: "cycle-b", rootId: "cycle-a", parentId: "cycle-a", depth: 2 }),
+	]);
 	const restored = registry.get("sa_test");
 	assert.equal(restored?.state, "idle");
 	assert.equal(restored?.currentTask, undefined);
+	assert.deepEqual(restored?.children, ["child"]);
+	assert.equal(registry.get("child")?.rootId, "sa_test");
+	assert.equal(registry.get("child")?.depth, 1);
+	assert.equal(registry.get("cycle-a"), undefined);
+	assert.equal(registry.get("cycle-b"), undefined);
 });
 
 test("AgentPersistence atomically saves, restores, redacts, deletes, and quarantines bad state", async () => {
@@ -277,6 +648,15 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	await persistence.save([
 		record({
 			context: "<private>secret</private>",
+			mailbox: [
+				{
+					id: "msg",
+					senderId: "root",
+					recipientId: "sa_test",
+					content: "<private>mail-secret</private>visible",
+					createdAt: 1,
+				},
+			],
 			history: [
 				{
 					task: "task",
@@ -290,14 +670,79 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	]);
 	const raw = readFileSync(persistence.filePath, "utf8");
 	assert.doesNotMatch(raw, /secret|hidden/);
-	assert.equal(persistence.load()[0]?.state, "idle");
+	assert.match(raw, /visible/);
+	const restoredState = persistence.load()[0];
+	assert.equal(restoredState?.state, "idle");
+	assert.equal(restoredState?.mailbox[0]?.content, "[private content omitted]visible");
 	const competing = new AgentPersistence("session", { stateDir: dir, maxStoredAgents: 2 });
 	await Promise.all([
 		persistence.save([record({ id: "one" })]),
 		competing.save([record({ id: "two" })]),
 	]);
 	assert.ok(["one", "two"].includes(persistence.load()[0]?.id ?? ""));
+	const hierarchyPersistence = new AgentPersistence("hierarchy", {
+		stateDir: dir,
+		maxStoredAgents: 2,
+	});
+	const persistenceNow = Date.now();
+	await hierarchyPersistence.save([
+		record({ id: "root", rootId: "root", updatedAt: persistenceNow }),
+		record({
+			id: "child",
+			rootId: "root",
+			parentId: "root",
+			depth: 1,
+			updatedAt: persistenceNow + 2,
+		}),
+		record({ id: "other", rootId: "other", updatedAt: persistenceNow + 1 }),
+	]);
+	assert.deepEqual(
+		hierarchyPersistence.load().map((agent) => agent.id),
+		["root", "child"],
+	);
+	assert.throws(
+		() => new AgentPersistence("invalid", { stateDir: dir, maxStoredAgents: 0 }),
+		/positive safe integer/,
+	);
 	await persistence.delete();
+	assert.deepEqual(persistence.load(), []);
+	writeFileSync(
+		persistence.filePath,
+		JSON.stringify({
+			version: 1,
+			updatedAt: Date.now(),
+			agents: [
+				{
+					id: "legacy",
+					agent: "scout",
+					state: "completed",
+					createdAt: Date.now(),
+					updatedAt: Date.now(),
+					cwd: process.cwd(),
+					history: [],
+				},
+			],
+		}),
+	);
+	assert.equal(persistence.load()[0]?.rootId, "legacy");
+	writeFileSync(
+		persistence.filePath,
+		JSON.stringify({
+			version: 2,
+			updatedAt: Date.now(),
+			agents: [
+				{
+					id: "malformed",
+					agent: "scout",
+					state: "idle",
+					createdAt: Date.now(),
+					updatedAt: Date.now(),
+					cwd: process.cwd(),
+					history: [{}],
+				},
+			],
+		}),
+	);
 	assert.deepEqual(persistence.load(), []);
 	writeFileSync(persistence.filePath, JSON.stringify({ version: 999, agents: [] }));
 	assert.deepEqual(persistence.load(), []);
@@ -308,6 +753,63 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 			name.startsWith(`${path.basename(persistence.filePath)}.invalid-`),
 		),
 	);
+});
+
+test("WorkspaceManager creates and cleans owned disposable worktrees", async () => {
+	const repo = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-workspace-repo-"));
+	execFileSync("git", ["init", "-q", repo]);
+	execFileSync("git", ["-C", repo, "config", "user.email", "test@example.com"]);
+	execFileSync("git", ["-C", repo, "config", "user.name", "Test"]);
+	writeFileSync(path.join(repo, "tracked.txt"), "base\n");
+	mkdirSync(path.join(repo, "nested"));
+	writeFileSync(path.join(repo, "nested", "inner.txt"), "inner\n");
+	execFileSync("git", ["-C", repo, "add", "tracked.txt", "nested/inner.txt"]);
+	execFileSync("git", ["-C", repo, "commit", "-qm", "init"]);
+	const manager = new WorkspaceManager();
+	const workspace = await manager.create("owner", path.join(repo, "nested"));
+	assert.equal(readFileSync(path.join(workspace.path, "inner.txt"), "utf8"), "inner\n");
+	assert.equal(readFileSync(path.join(workspace.rootPath, "tracked.txt"), "utf8"), "base\n");
+	await assert.rejects(() => manager.create("owner", repo), /owner already exists/);
+	rmSync(`${workspace.rootPath}.owner`);
+	await assert.rejects(() => manager.cleanup("owner"), /Refusing to clean unowned/);
+	writeFileSync(`${workspace.rootPath}.owner`, "owner", { mode: 0o600 });
+	await manager.cleanup("owner");
+	assert.equal(existsSync(workspace.rootPath), false);
+	const second = await manager.create("second", repo);
+	await manager.cleanupAll();
+	assert.equal(existsSync(second.path), false);
+	writeFileSync(path.join(repo, "dirty.txt"), "dirty");
+	await assert.rejects(() => manager.create("dirty", repo), /clean Git repository/);
+});
+
+test("shared-workspace write classification and follow-up guards are conservative", async () => {
+	assert.equal(isWriteCapable(undefined), true);
+	assert.equal(isWriteCapable(["read", "grep"]), false);
+	assert.equal(isWriteCapable(["read", "bash"]), true);
+	assert.equal(isWriteCapable(["edit"]), true);
+	const registry = new AgentRegistry(async (_agent, _task, signal) => {
+		await new Promise<void>((resolve) =>
+			signal.addEventListener("abort", () => resolve(), { once: true }),
+		);
+		return { output: "interrupted", exitCode: 130, aborted: true };
+	});
+	const active = await registry.spawn({ agent: "worker", task: "active", cwd: process.cwd() });
+	const followUp = record({ agent: "worker", cwd: process.cwd(), state: "completed" });
+	assert.throws(
+		() => assertFollowUpWriteAllowed(registry, followUp, false, false),
+		/already active in shared workspace/,
+	);
+	assert.doesNotThrow(() => assertFollowUpWriteAllowed(registry, followUp, true, false));
+	assert.doesNotThrow(() => assertFollowUpWriteAllowed(registry, followUp, false, true));
+	await registry.interrupt(active.id);
+});
+
+test("selected context entries imply all mode only when context mode is omitted", () => {
+	assert.equal(resolveSpawnContextMode(undefined, ["entry"]), "all");
+	assert.equal(resolveSpawnContextMode(undefined, []), "all");
+	assert.equal(resolveSpawnContextMode(undefined, undefined), "none");
+	assert.equal(resolveSpawnContextMode("none", ["entry"]), "none");
+	assert.equal(resolveSpawnContextMode(3, ["entry"]), 3);
 });
 
 test("stateful tools are opt-in and expose the complete lifecycle surface", async () => {
@@ -326,6 +828,8 @@ test("stateful tools are opt-in and expose the complete lifecycle surface", asyn
 			[
 				"subagent_spawn",
 				"subagent_send",
+				"subagent_message",
+				"subagent_messages",
 				"subagent_wait",
 				"subagent_list",
 				"subagent_interrupt",
@@ -412,12 +916,33 @@ test("stateful tools are opt-in and expose the complete lifecycle surface", asyn
 
 test("stateful settings validate bounded runtime options without breaking agent overrides", () => {
 	assert.deepEqual(
-		normalizeSubagentSettings({ stateful: { enabled: true, maxAgents: 8 }, agents: {} }),
+		normalizeSubagentSettings({
+			stateful: {
+				enabled: true,
+				maxAgents: 8,
+				maxDepth: 2,
+				maxChildrenPerAgent: 3,
+				maxMailboxMessages: 10,
+				maxMailboxMessageBytes: 4096,
+			},
+			agents: {},
+		}),
 		{
-			stateful: { enabled: true, maxAgents: 8 },
+			stateful: {
+				enabled: true,
+				maxAgents: 8,
+				maxDepth: 2,
+				maxChildrenPerAgent: 3,
+				maxMailboxMessages: 10,
+				maxMailboxMessageBytes: 4096,
+			},
 		},
 	);
 	assert.equal(normalizeSubagentSettings({ stateful: { maxAgents: 0 } }), undefined);
+	assert.equal(normalizeSubagentSettings({ stateful: { maxAgents: 1.5 } }), undefined);
+	assert.deepEqual(normalizeSubagentSettings({ stateful: { maxDepth: 0 } }), {
+		stateful: { maxDepth: 0 },
+	});
 });
 
 test("runSingleAgent normalizes invalid cwd without spawning or throwing", async () => {

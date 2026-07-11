@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_OUTPUT_BYTES, truncateUtf8 } from "./limits.js";
+import {
+	type AgentTurnRunner,
+	normalizeTransport,
+	type SubagentTransport,
+} from "./transport.js";
 
 export type AgentLifecycleState =
 	| "starting"
@@ -18,9 +24,23 @@ export interface AgentTurn {
 	truncated?: boolean;
 }
 
+export interface AgentMailboxMessage {
+	id: string;
+	senderId: string;
+	recipientId: string;
+	content: string;
+	createdAt: number;
+	readAt?: number;
+	deduplicationKey?: string;
+}
+
 export interface ManagedAgent {
 	id: string;
 	agent: string;
+	parentId?: string;
+	rootId: string;
+	depth: number;
+	children: string[];
 	state: AgentLifecycleState;
 	createdAt: number;
 	updatedAt: number;
@@ -30,8 +50,11 @@ export interface ManagedAgent {
 	history: AgentTurn[];
 	error?: string;
 	context?: string;
+	contextSourceIds?: string[];
 	contextTruncated?: boolean;
 	policy?: { inherited: string[]; overridden: string[]; unsupported: string[] };
+	mailbox: AgentMailboxMessage[];
+	currentMailboxMessageIds?: string[];
 }
 
 export interface TurnOutcome {
@@ -43,15 +66,33 @@ export interface TurnOutcome {
 	policy?: ManagedAgent["policy"];
 }
 
-export type AgentTurnRunner = (agent: ManagedAgent, task: string, signal: AbortSignal) => Promise<TurnOutcome>;
-
 export interface AgentRegistryOptions {
 	maxAgents?: number;
 	maxActiveTurns?: number;
 	maxHistoryTurns?: number;
+	maxDepth?: number;
+	maxChildrenPerAgent?: number;
+	maxMailboxMessages?: number;
+	maxMailboxMessageBytes?: number;
+	maxTaskBytes?: number;
+	maxTurnOutputBytes?: number;
 	idleTtlMs?: number;
 	now?: () => number;
 	onChange?: (agents: ManagedAgent[]) => void | Promise<void>;
+}
+
+function positiveInteger(value: number, label: string): number {
+	if (!Number.isSafeInteger(value) || value < 1) {
+		throw new Error(`${label} must be a positive safe integer`);
+	}
+	return value;
+}
+
+function nonNegativeInteger(value: number, label: string): number {
+	if (!Number.isSafeInteger(value) || value < 0) {
+		throw new Error(`${label} must be a non-negative safe integer`);
+	}
+	return value;
 }
 
 export class AgentRegistry {
@@ -62,26 +103,90 @@ export class AgentRegistry {
 	private readonly maxAgents: number;
 	private readonly maxActiveTurns: number;
 	private readonly maxHistoryTurns: number;
+	private readonly maxDepth: number;
+	private readonly maxChildrenPerAgent: number;
+	private readonly maxMailboxMessages: number;
+	private readonly maxMailboxMessageBytes: number;
+	private readonly maxTaskBytes: number;
+	private readonly maxTurnOutputBytes: number;
 	private readonly idleTtlMs: number;
+	private readonly transport: SubagentTransport;
 	private readonly now: () => number;
 
-	constructor(private readonly runner: AgentTurnRunner, private readonly options: AgentRegistryOptions = {}) {
-		this.maxAgents = options.maxAgents ?? 16;
-		this.maxActiveTurns = options.maxActiveTurns ?? 4;
-		this.maxHistoryTurns = options.maxHistoryTurns ?? 20;
-		this.idleTtlMs = options.idleTtlMs ?? 60 * 60 * 1000;
+	constructor(transport: SubagentTransport | AgentTurnRunner, private readonly options: AgentRegistryOptions = {}) {
+		this.transport = normalizeTransport(transport);
+		this.maxAgents = positiveInteger(options.maxAgents ?? 16, "maxAgents");
+		this.maxActiveTurns = positiveInteger(options.maxActiveTurns ?? 4, "maxActiveTurns");
+		this.maxHistoryTurns = positiveInteger(options.maxHistoryTurns ?? 20, "maxHistoryTurns");
+		this.maxDepth = nonNegativeInteger(options.maxDepth ?? 3, "maxDepth");
+		this.maxChildrenPerAgent = positiveInteger(
+			options.maxChildrenPerAgent ?? 8,
+			"maxChildrenPerAgent",
+		);
+		this.maxMailboxMessages = positiveInteger(
+			options.maxMailboxMessages ?? 100,
+			"maxMailboxMessages",
+		);
+		this.maxMailboxMessageBytes = positiveInteger(
+			options.maxMailboxMessageBytes ?? 16 * 1024,
+			"maxMailboxMessageBytes",
+		);
+		this.maxTaskBytes = positiveInteger(
+			options.maxTaskBytes ?? DEFAULT_MAX_CONTEXT_BYTES,
+			"maxTaskBytes",
+		);
+		this.maxTurnOutputBytes = positiveInteger(
+			options.maxTurnOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
+			"maxTurnOutputBytes",
+		);
+		this.idleTtlMs = positiveInteger(options.idleTtlMs ?? 60 * 60 * 1000, "idleTtlMs");
 		this.now = options.now ?? Date.now;
 	}
 
 	restore(records: readonly ManagedAgent[]): void {
-		for (const record of records.slice(-this.maxAgents)) {
-			if (!record.id || record.state === "closed") continue;
+		const candidates = new Map(
+			records
+				.slice(-this.maxAgents)
+				.filter((record) => record.id && record.state !== "closed")
+				.map((record) => [record.id, record]),
+		);
+		for (const record of candidates.values()) {
+			if (record.parentId && !candidates.has(record.parentId)) continue;
+			if (record.parentId === record.id) continue;
+			const seen = new Set([record.id]);
+			let parentId = record.parentId;
+			let rootId = record.id;
+			let cyclic = false;
+			while (parentId) {
+				if (seen.has(parentId)) {
+					cyclic = true;
+					break;
+				}
+				seen.add(parentId);
+				rootId = parentId;
+				parentId = candidates.get(parentId)?.parentId;
+			}
+			const depth = seen.size - 1;
+			if (cyclic || depth > this.maxDepth) continue;
 			this.agents.set(record.id, {
 				...record,
 				state: "idle",
+				rootId,
+				depth,
 				currentTask: undefined,
-				history: record.history.slice(-this.maxHistoryTurns),
+				currentMailboxMessageIds: undefined,
+				children: [],
+				contextSourceIds: [...(record.contextSourceIds ?? [])],
+				mailbox: (record.mailbox ?? [])
+					.slice(-this.maxMailboxMessages)
+					.map((message) => ({ ...message, recipientId: record.id })),
+				history: record.history.slice(-this.maxHistoryTurns).map((turn) => ({ ...turn })),
 			});
+		}
+		for (const agent of this.agents.values()) {
+			if (!agent.parentId) continue;
+			const parent = this.agents.get(agent.parentId);
+			if (parent && !parent.children.includes(agent.id)) parent.children.push(agent.id);
 		}
 	}
 
@@ -90,43 +195,116 @@ export class AgentRegistry {
 		task: string;
 		cwd: string;
 		agentScope?: "user" | "project" | "both";
+		parentId?: string;
 		context?: string;
+		contextSourceIds?: string[];
 		contextTruncated?: boolean;
 	}): Promise<ManagedAgent> {
+		if (!input.task.trim()) throw new Error("Subagent tasks cannot be empty");
+		const task = truncateUtf8(input.task, this.maxTaskBytes).text;
 		this.evictExpired();
 		if (this.retainedCount() >= this.maxAgents) {
 			throw new Error(`Subagent capacity reached (${this.maxAgents})`);
 		}
+		const parent = input.parentId ? this.require(input.parentId) : undefined;
+		if (parent?.state === "closed") throw new Error(`Cannot spawn under closed agent ${parent.id}`);
+		if (parent && parent.children.length >= this.maxChildrenPerAgent) {
+			throw new Error(`Agent ${parent.id} child capacity reached (${this.maxChildrenPerAgent})`);
+		}
+		const depth = parent ? parent.depth + 1 : 0;
+		if (depth > this.maxDepth) throw new Error(`Subagent depth limit reached (${this.maxDepth})`);
 		const now = this.now();
+		const id = `sa_${randomUUID()}`;
 		const record: ManagedAgent = {
-			id: `sa_${randomUUID()}`,
+			id,
 			agent: input.agent,
+			parentId: parent?.id,
+			rootId: parent?.rootId ?? id,
+			depth,
+			children: [],
 			state: "starting",
 			createdAt: now,
 			updatedAt: now,
 			cwd: input.cwd,
 			agentScope: input.agentScope,
-			currentTask: input.task,
+			currentTask: task,
 			history: [],
+			mailbox: [],
 			context: input.context,
+			contextSourceIds: input.contextSourceIds,
 			contextTruncated: input.contextTruncated,
 		};
 		this.agents.set(record.id, record);
+		if (parent) {
+			parent.children.push(record.id);
+			parent.updatedAt = now;
+		}
 		await this.changed();
-		this.startTurn(record, input.task);
+		this.startTurn(record, task);
 		return this.copy(record);
 	}
 
 	async followUp(id: string, task: string): Promise<ManagedAgent> {
+		if (!task.trim()) throw new Error("Subagent tasks cannot be empty");
+		const boundedTask = truncateUtf8(task, this.maxTaskBytes).text;
 		const agent = this.require(id);
 		if (!["idle", "completed", "interrupted", "failed"].includes(agent.state)) {
 			throw new Error(`Agent ${id} cannot accept follow-up while ${agent.state}`);
 		}
-		this.startTurn(agent, task);
+		const unread = agent.mailbox.filter((message) => !message.readAt);
+		const readAt = this.now();
+		for (const message of unread) message.readAt = readAt;
+		agent.currentMailboxMessageIds = unread.map((message) => message.id);
+		this.startTurn(agent, boundedTask);
 		return this.copy(agent);
 	}
 
+	async sendMessage(
+		recipientId: string,
+		content: string,
+		senderId = "root",
+		deduplicationKey?: string,
+	): Promise<AgentMailboxMessage> {
+		if (!content.trim()) throw new Error("Subagent mailbox messages cannot be empty");
+		if (deduplicationKey && deduplicationKey.length > 256) {
+			throw new Error("Subagent mailbox deduplication keys cannot exceed 256 characters");
+		}
+		const recipient = this.require(recipientId);
+		if (recipient.state === "closed") throw new Error(`Cannot message closed agent ${recipient.id}`);
+		if (senderId !== "root") {
+			const sender = this.require(senderId);
+			if (sender.state === "closed") throw new Error(`Closed agent ${sender.id} cannot send messages`);
+			if (sender.rootId !== recipient.rootId) {
+				throw new Error("Subagent mailbox messages cannot cross agent trees");
+			}
+		}
+		const message = this.enqueueMessage(recipient, content, senderId, deduplicationKey);
+		await this.changed();
+		return { ...message };
+	}
+
+	async readMessages(
+		id: string,
+		acknowledge = true,
+		limit = this.maxMailboxMessages,
+	): Promise<AgentMailboxMessage[]> {
+		if (!Number.isSafeInteger(limit) || limit < 1) {
+			throw new Error("Subagent mailbox read limit must be a positive safe integer");
+		}
+		const agent = this.require(id);
+		const unread = agent.mailbox.filter((message) => !message.readAt).slice(0, limit);
+		if (acknowledge && unread.length > 0) {
+			const readAt = this.now();
+			for (const message of unread) message.readAt = readAt;
+			await this.changed();
+		}
+		return unread.map((message) => ({ ...message }));
+	}
+
 	async wait(id: string, timeoutMs = 30_000): Promise<{ timedOut: boolean; agent: ManagedAgent }> {
+		if (!Number.isFinite(timeoutMs) || timeoutMs < 1) {
+			throw new Error("Subagent wait timeout must be a positive finite number");
+		}
 		const agent = this.require(id);
 		const running = this.running.get(id);
 		if (!running) return { timedOut: false, agent: this.copy(agent) };
@@ -141,6 +319,17 @@ export class AgentRegistry {
 			: { timedOut: false, agent: this.copy(result) };
 	}
 
+	async interruptTree(id: string): Promise<ManagedAgent[]> {
+		const results: ManagedAgent[] = [];
+		for (const target of this.descendants(id).reverse()) {
+			const agent = this.require(target);
+			if (agent.state === "running" || agent.state === "starting") {
+				results.push(await this.interrupt(target));
+			}
+		}
+		return results;
+	}
+
 	async interrupt(id: string): Promise<ManagedAgent> {
 		const agent = this.require(id);
 		if (agent.state !== "running" && agent.state !== "starting") throw new Error(`Agent ${id} is not running`);
@@ -150,8 +339,10 @@ export class AgentRegistry {
 				const [entry] = this.queue.splice(index, 1);
 				agent.state = "interrupted";
 				agent.currentTask = undefined;
+				agent.currentMailboxMessageIds = undefined;
 				agent.updatedAt = this.now();
 				entry.resolve(agent);
+				this.running.delete(id);
 				await this.changed();
 				return this.copy(agent);
 			}
@@ -161,9 +352,21 @@ export class AgentRegistry {
 		return this.copy(this.require(id));
 	}
 
+	async closeTree(id: string): Promise<ManagedAgent[]> {
+		const results: ManagedAgent[] = [];
+		for (const target of this.descendants(id).reverse()) {
+			const agent = this.require(target);
+			if (agent.state !== "closed") results.push(await this.close(target));
+		}
+		return results;
+	}
+
 	async close(id: string): Promise<ManagedAgent> {
 		const agent = this.require(id);
 		if (agent.state === "closed") throw new Error(`Agent ${id} is already closed`);
+		if (agent.children.some((childId) => this.agents.get(childId)?.state !== "closed")) {
+			throw new Error(`Agent ${id} has active descendants; close the subtree instead`);
+		}
 		if (agent.state === "starting") {
 			const index = this.queue.findIndex((entry) => entry.agent.id === id);
 			if (index >= 0) {
@@ -176,20 +379,29 @@ export class AgentRegistry {
 		await this.running.get(id)?.catch(() => undefined);
 		agent.state = "closed";
 		agent.updatedAt = this.now();
+		if (agent.parentId) {
+			const parent = this.agents.get(agent.parentId);
+			if (parent) parent.children = parent.children.filter((childId) => childId !== id);
+		}
 		agent.currentTask = undefined;
+		agent.currentMailboxMessageIds = undefined;
+		this.pruneClosedAgents();
 		await this.changed();
 		return this.copy(agent);
 	}
 
 	async closeAll(): Promise<void> {
-		const ids = [...this.agents.values()].filter((agent) => agent.state !== "closed").map((agent) => agent.id);
-		await Promise.all(ids.map((id) => this.close(id).catch(() => undefined)));
+		const roots = [...this.agents.values()]
+			.filter((agent) => agent.state !== "closed" && !agent.parentId)
+			.map((agent) => agent.id);
+		for (const id of roots) await this.closeTree(id);
 	}
 
 	async shutdown(): Promise<void> {
 		for (const entry of this.queue.splice(0)) {
 			entry.agent.state = "idle";
 			entry.agent.currentTask = undefined;
+			entry.agent.currentMailboxMessageIds = undefined;
 			entry.resolve(entry.agent);
 			this.running.delete(entry.agent.id);
 		}
@@ -199,13 +411,16 @@ export class AgentRegistry {
 			if (agent.state !== "closed") {
 				agent.state = "idle";
 				agent.currentTask = undefined;
+				agent.currentMailboxMessageIds = undefined;
 			}
 		}
+		await this.transport.shutdown?.();
 		await this.changed();
 	}
 
-	list(includeClosed = false): ManagedAgent[] {
+	list(includeClosed = false, rootId?: string): ManagedAgent[] {
 		return [...this.agents.values()]
+			.filter((agent) => !rootId || agent.rootId === rootId)
 			.filter((agent) => includeClosed || agent.state !== "closed")
 			.sort((a, b) => a.createdAt - b.createdAt)
 			.map((agent) => this.copy(agent));
@@ -250,11 +465,17 @@ export class AgentRegistry {
 		agent.state = "running";
 		agent.updatedAt = this.now();
 		const startedAt = this.now();
-		void this.runner(this.copy(agent), task, controller.signal)
+		const completionKey = `completion:${agent.id}:${randomUUID()}`;
+		let completionContent = "";
+		void this.transport.runTurn(this.copy(agent), task, controller.signal)
 			.then(async (outcome) => {
+				const output = truncateUtf8(outcome.output, this.maxTurnOutputBytes).text;
+				const error = outcome.error
+					? truncateUtf8(outcome.error, this.maxTurnOutputBytes).text
+					: undefined;
 				agent.history.push({
 					task,
-					output: outcome.output,
+					output,
 					startedAt,
 					completedAt: this.now(),
 					exitCode: outcome.exitCode,
@@ -262,17 +483,37 @@ export class AgentRegistry {
 				});
 				agent.history = agent.history.slice(-this.maxHistoryTurns);
 				agent.state = outcome.aborted ? "interrupted" : outcome.exitCode === 0 ? "completed" : "failed";
-				agent.error = outcome.error;
+				agent.error = error;
 				agent.policy = outcome.policy;
+				completionContent = output || error || `${agent.id} ${agent.state}`;
 				return agent;
 			})
 			.catch((error) => {
 				agent.state = controller.signal.aborted ? "interrupted" : "failed";
-				agent.error = error instanceof Error ? error.message : String(error);
+				agent.error = truncateUtf8(
+					error instanceof Error ? error.message : String(error),
+					this.maxTurnOutputBytes,
+				).text;
+				agent.history.push({
+					task,
+					output: "",
+					startedAt,
+					completedAt: this.now(),
+					exitCode: controller.signal.aborted ? 130 : 1,
+				});
+				agent.history = agent.history.slice(-this.maxHistoryTurns);
+				completionContent = agent.error;
 				return agent;
 			})
 			.finally(async () => {
+				if (agent.parentId) {
+					const parent = this.agents.get(agent.parentId);
+					if (parent && parent.state !== "closed") {
+						this.enqueueMessage(parent, completionContent, agent.id, completionKey);
+					}
+				}
 				agent.currentTask = undefined;
+				agent.currentMailboxMessageIds = undefined;
 				agent.updatedAt = this.now();
 				this.controllers.delete(agent.id);
 				this.running.delete(agent.id);
@@ -280,6 +521,48 @@ export class AgentRegistry {
 				this.pumpQueue();
 				await this.changed();
 			});
+	}
+
+	private enqueueMessage(
+		recipient: ManagedAgent,
+		content: string,
+		senderId: string,
+		deduplicationKey?: string,
+	): AgentMailboxMessage {
+		if (deduplicationKey) {
+			const existing = recipient.mailbox.find(
+				(message) =>
+					message.deduplicationKey === deduplicationKey && message.senderId === senderId,
+			);
+			if (existing) return existing;
+		}
+		const bounded = truncateUtf8(content, this.maxMailboxMessageBytes);
+		const message: AgentMailboxMessage = {
+			id: `msg_${randomUUID()}`,
+			senderId,
+			recipientId: recipient.id,
+			content: bounded.text,
+			createdAt: this.now(),
+			deduplicationKey,
+		};
+		recipient.mailbox.push(message);
+		recipient.mailbox = recipient.mailbox.slice(-this.maxMailboxMessages);
+		recipient.updatedAt = this.now();
+		return message;
+	}
+
+	private descendants(id: string): string[] {
+		const root = this.require(id);
+		const result: string[] = [];
+		const visit = (agent: ManagedAgent) => {
+			result.push(agent.id);
+			for (const childId of agent.children) {
+				const child = this.agents.get(childId);
+				if (child) visit(child);
+			}
+		};
+		visit(root);
+		return result;
 	}
 
 	private require(id: string): ManagedAgent {
@@ -294,14 +577,35 @@ export class AgentRegistry {
 
 	private evictExpired(): number {
 		const cutoff = this.now() - this.idleTtlMs;
-		let removed = 0;
-		for (const [id, agent] of this.agents) {
-			if (!["running", "starting"].includes(agent.state) && agent.updatedAt < cutoff) {
-				this.agents.delete(id);
-				removed++;
+		const protectedIds = new Set<string>();
+		for (const agent of this.agents.values()) {
+			if (agent.state !== "running" && agent.state !== "starting") continue;
+			let current: ManagedAgent | undefined = agent;
+			while (current) {
+				protectedIds.add(current.id);
+				current = current.parentId ? this.agents.get(current.parentId) : undefined;
 			}
 		}
+		let removed = 0;
+		const candidates = [...this.agents.values()].sort((left, right) => right.depth - left.depth);
+		for (const agent of candidates) {
+			if (protectedIds.has(agent.id) || agent.updatedAt >= cutoff) continue;
+			if (agent.children.some((childId) => this.agents.get(childId)?.state !== "closed")) continue;
+			this.agents.delete(agent.id);
+			if (agent.parentId) {
+				const parent = this.agents.get(agent.parentId);
+				if (parent) parent.children = parent.children.filter((childId) => childId !== agent.id);
+			}
+			removed++;
+		}
 		return removed;
+	}
+
+	private pruneClosedAgents(): void {
+		const closed = [...this.agents.values()]
+			.filter((agent) => agent.state === "closed")
+			.sort((left, right) => right.updatedAt - left.updatedAt);
+		for (const agent of closed.slice(this.maxAgents)) this.agents.delete(agent.id);
 	}
 
 	private async changed(): Promise<void> {
@@ -315,7 +619,13 @@ export class AgentRegistry {
 	private copy(agent: ManagedAgent): ManagedAgent {
 		return {
 			...agent,
+			children: [...agent.children],
+			contextSourceIds: [...(agent.contextSourceIds ?? [])],
+			currentMailboxMessageIds: agent.currentMailboxMessageIds
+				? [...agent.currentMailboxMessageIds]
+				: undefined,
 			history: agent.history.map((turn) => ({ ...turn })),
+			mailbox: agent.mailbox.map((message) => ({ ...message })),
 			policy: agent.policy
 				? {
 						inherited: [...agent.policy.inherited],
