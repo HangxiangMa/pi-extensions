@@ -1,4 +1,5 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	discoverAgents,
 	type AgentConfig,
@@ -14,6 +15,7 @@ import {
 	type SingleResult,
 	type SubagentDetails,
 } from "./runner.js";
+import type { SubagentParams } from "./params.js";
 import { readSubagentSettings, resolveSubagentThinkingLevel } from "./settings.js";
 
 const MAX_PARALLEL_TASKS = 8;
@@ -83,10 +85,10 @@ function fanInStatus(agent: string): string {
 
 export async function executeSubagent(
 	toolCallId: string,
-	params: any,
+	params: SubagentParams,
 	signal: AbortSignal | undefined,
-	onUpdate: any,
-	ctx: any,
+	onUpdate: AgentToolUpdateCallback<SubagentDetails> | undefined,
+	ctx: ExtensionContext,
 ): Promise<AgentToolResult<SubagentDetails> & { isError?: boolean }> {
 			const agentScope: AgentScope = params.agentScope ?? "user";
 			const config = readSubagentSettings();
@@ -272,7 +274,7 @@ export async function executeSubagent(
 						}
 					};
 
-					const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t: any, index) => {
+					const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
 						const result = await runSingleAgent(
 							ctx.cwd,
 							agents,

@@ -1,8 +1,15 @@
 import * as os from "node:os";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
-import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import {
+	getMarkdownTheme,
+	type Theme,
+	type ThemeColor,
+	type ToolRenderResultOptions,
+} from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { AgentScope, SubagentThinkingLevel } from "./agents.js";
+import type { SubagentParams } from "./params.js";
 import {
 	getResultFinalOutput,
 	type SingleResult,
@@ -49,7 +56,7 @@ export function formatUsageStats(
 function formatToolCall(
 	toolName: string,
 	args: Record<string, unknown>,
-	themeFg: (color: any, text: string) => string,
+	themeFg: (color: ThemeColor, text: string) => string,
 ): string {
 	const shortenPath = (p: string) => {
 		const home = os.homedir();
@@ -114,7 +121,9 @@ function formatToolCall(
 	}
 }
 
-type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, any> };
+type DisplayItem =
+	| { type: "text"; text: string }
+	| { type: "toolCall"; name: string; args: Record<string, unknown> };
 
 function getDisplayItems(messages: Message[]): DisplayItem[] {
 	const items: DisplayItem[] = [];
@@ -129,7 +138,7 @@ function getDisplayItems(messages: Message[]): DisplayItem[] {
 	return items;
 }
 
-export function renderSubagentCall(args: any, theme: any) {
+export function renderSubagentCall(args: SubagentParams, theme: Theme) {
 			const scope: AgentScope = args.agentScope ?? "user";
 			if (args.chain && args.chain.length > 0) {
 				let text =
@@ -181,7 +190,11 @@ export function renderSubagentCall(args: any, theme: any) {
 			return new Text(text, 0, 0);
 }
 
-export function renderSubagentResult(result: any, { expanded }: { expanded: boolean }, theme: any) {
+export function renderSubagentResult(
+	result: AgentToolResult<SubagentDetails>,
+	{ expanded }: ToolRenderResultOptions,
+	theme: Theme,
+) {
 			const details = result.details as SubagentDetails | undefined;
 			if (!details || details.results.length === 0) {
 				const text = result.content[0];
