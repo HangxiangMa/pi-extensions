@@ -4,11 +4,19 @@ import type {
 	ToolInfo,
 } from "@earendil-works/pi-coding-agent";
 import {
+	PLAN_MODE_COMPLETE_PARAMS,
+	PLAN_MODE_COMPLETE_TOOL_NAME,
+	normalizePlanModeCompletion,
+	planModeCompleted,
+} from "./completion-tool.js";
+import {
 	extractProposedPlan,
+	isEmptyAssistantMessage,
 	latestAssistantText,
 	parseProposedPlan,
 	messageContainsInactivePlanModeArtifact,
 	messageContainsLegacyPlanModeContextArtifact,
+	stripPlanModeCompletionCallsFromMessage,
 	stripProposedPlanBlocksFromMessage,
 } from "./message-transform.js";
 import { buildPlanModePrompt } from "./prompt.js";
@@ -30,11 +38,14 @@ import {
 } from "./tool-policy.js";
 import {
 	configuredThinkingLevel,
-	PLAN_MODE_THINKING_LEVELS,
 	readPlanModeSettings,
-	type PlanModeFixedThinkingLevel,
 	type PlanModeSettings,
 } from "./settings.js";
+import {
+	restorePlanModeState,
+	type PlanCompletionSource,
+	type PlanModeState,
+} from "./state.js";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
 const STATUS_KEY = "plan-mode";
@@ -50,28 +61,11 @@ interface CommandArgumentCompletion {
 	description?: string;
 }
 
-interface PlanModeState {
-	enabled: boolean;
-	latestPlan?: string;
-	awaitingAction: boolean;
-	selectedToolNames?: string[];
-	selectedToolKeys?: string[];
-	previousThinkingLevel?: PlanModeFixedThinkingLevel;
-	appliedThinkingLevel?: PlanModeFixedThinkingLevel;
-	manualThinkingLevel?: PlanModeFixedThinkingLevel;
+interface ReadyPresentationIntent {
+	nonce: number;
+	plan: string;
+	source: PlanCompletionSource;
 }
-
-type SessionEntry = {
-	type?: string;
-	customType?: string;
-	data?: Partial<PlanModeState>;
-	message?: SessionMessage;
-};
-
-type SessionMessage = {
-	role?: string;
-	content?: unknown;
-};
 
 type TextBlock = {
 	type?: string;
@@ -79,6 +73,9 @@ type TextBlock = {
 };
 
 const PLAN_COMMAND_COMPLETIONS: readonly CommandArgumentCompletion[] = [
+	{ value: "show", label: "show", description: "Show the completed plan" },
+	{ value: "finalize", label: "finalize", description: "Request a completed plan" },
+	{ value: "implement", label: "implement", description: "Implement the completed plan" },
 	{ value: "exit", label: "exit", description: "Leave Plan mode" },
 	{ value: "off", label: "off", description: "Leave Plan mode" },
 	{ value: "tools", label: "tools", description: "Select tools allowed in Plan mode" },
@@ -88,6 +85,8 @@ export default function planMode(pi: ExtensionAPI) {
 	let state: PlanModeState = { enabled: false, awaitingAction: false };
 	let settings: PlanModeSettings = { thinkingLevel: "inherit" };
 	let previousTools: string[] | undefined;
+	let readyPresentationIntent: ReadyPresentationIntent | undefined;
+	let nextReadyPresentationNonce = 0;
 
 	pi.registerFlag("plan", {
 		description: "Start in Codex-like Plan mode",
@@ -140,12 +139,50 @@ export default function planMode(pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerTool({
+		name: PLAN_MODE_COMPLETE_TOOL_NAME,
+		label: "Complete plan",
+		description:
+			"Submit the complete decision-ready implementation plan for user review. Only available while Plan mode is active, and must be the final standalone action.",
+		promptSnippet: "Submit the final Plan-mode implementation plan",
+		promptGuidelines: [
+			"Call plan_mode_complete alone as the final action only after the implementation plan is decision-complete.",
+		],
+		parameters: PLAN_MODE_COMPLETE_PARAMS,
+		async execute(_toolCallId, params: unknown, _signal, _onUpdate, ctx) {
+			if (!state.enabled) {
+				throw new Error("plan_mode_complete is only available while Plan mode is active");
+			}
+			const parsed = normalizePlanModeCompletion(params);
+			if (!parsed.ok) throw new Error(parsed.error);
+
+			acceptCompletedPlan(parsed.plan, PLAN_MODE_COMPLETE_TOOL_NAME, ctx);
+			return planModeCompleted(parsed.plan);
+		},
+	});
+
 	pi.registerCommand("plan", {
 		description: "Enter or manage Codex-like Plan mode",
 		getArgumentCompletions: completePlanArguments,
 		handler: async (args, ctx) => {
 			const prompt = args.trim();
 			const command = prompt.toLowerCase();
+			if (command === "show") {
+				showStoredPlan(ctx);
+				return;
+			}
+			if (command === "finalize") {
+				requestFinalPlan(ctx);
+				return;
+			}
+			if (command === "implement") {
+				if (!state.enabled || !state.latestPlan?.trim()) {
+					ctx.ui.notify("No completed plan is available to implement.", "warning");
+					return;
+				}
+				startImplementation(ctx);
+				return;
+			}
 			if (command === "exit" || command === "off") {
 				exitPlanMode(ctx);
 				ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
@@ -170,6 +207,7 @@ export default function planMode(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		readyPresentationIntent = undefined;
 		settings = { thinkingLevel: "inherit" };
 		const loadedSettings = await readPlanModeSettings();
 		if (loadedSettings.kind === "loaded") settings = loadedSettings.settings;
@@ -199,6 +237,7 @@ export default function planMode(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
+		readyPresentationIntent = undefined;
 		captureManualThinkingLevel();
 		persistState();
 		if (state.enabled) {
@@ -249,14 +288,22 @@ export default function planMode(pi: ExtensionAPI) {
 		return {
 			messages: messagesWithoutLegacyPlanContext
 				.filter((message: unknown) => !messageContainsInactivePlanModeArtifact(message))
-				.map(stripProposedPlanBlocksFromMessage),
+				.map(stripProposedPlanBlocksFromMessage)
+				.map(stripPlanModeCompletionCallsFromMessage)
+				.filter((message: unknown) => !isEmptyAssistantMessage(message)),
 		};
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {
 		if (!state.enabled) return;
 		if (state.latestPlan || state.awaitingAction) {
-			state = { ...state, latestPlan: undefined, awaitingAction: false };
+			readyPresentationIntent = undefined;
+			state = {
+				...state,
+				latestPlan: undefined,
+				latestPlanSource: undefined,
+				awaitingAction: false,
+			};
 			persistState();
 			updateUi(ctx);
 		}
@@ -279,30 +326,36 @@ export default function planMode(pi: ExtensionAPI) {
 			updateUi(ctx);
 			return;
 		}
-		const proposedPlan = parsedPlan.plan;
+		acceptCompletedPlan(parsedPlan.plan, "legacy_proposed_plan", ctx);
+	});
 
-		state = { ...state, latestPlan: proposedPlan, awaitingAction: true };
-		persistState();
-		updateUi(ctx);
+	pi.on("agent_settled", async (_event, ctx) => {
+		const intent = readyPresentationIntent;
+		if (!intent || !readyPresentationIsCurrent(intent)) return;
+		if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
 
-		scheduleAfterCurrentAgentRun(async () => {
-			if (!state.enabled || state.latestPlan !== proposedPlan) return;
-			if (ctx.hasUI) await showPlanReadyMenu(ctx);
-			if (!state.enabled || state.latestPlan !== proposedPlan) return;
-
-			pi.sendMessage(
-				{
-					customType: PROPOSED_PLAN_MESSAGE_TYPE,
-					content: `**Proposed Plan**\n\n${proposedPlan}`,
-					display: true,
-				},
-				{ triggerTurn: false },
-			);
-		});
+		readyPresentationIntent = undefined;
+		try {
+			if (intent.source === "legacy_proposed_plan") {
+				pi.sendMessage(
+					{
+						customType: PROPOSED_PLAN_MESSAGE_TYPE,
+						content: `**Proposed Plan**\n\n${intent.plan}`,
+						display: true,
+					},
+					{ triggerTurn: false },
+				);
+			}
+			if (ctx.hasUI && completedPlanIsCurrent(intent)) {
+				await showPlanReadyMenu(ctx);
+			}
+		} catch (error: unknown) {
+			if (!isStaleExtensionContextError(error)) throw error;
+		}
 	});
 
 	function enterPlanMode(ctx: ExtensionContext) {
-		if (!state.enabled) previousTools = withoutPlanModeQuestionTool(safeGetActiveTools());
+		if (!state.enabled) previousTools = withoutRequiredPlanModeTools(safeGetActiveTools());
 		state = { ...state, enabled: true, awaitingAction: false };
 		activatePlanModeTools();
 		applyPlanThinkingLevel();
@@ -321,10 +374,12 @@ export default function planMode(pi: ExtensionAPI) {
 
 	function exitPlanMode(ctx: ExtensionContext) {
 		const wasEnabled = state.enabled;
+		readyPresentationIntent = undefined;
 		state = {
 			...state,
 			enabled: false,
 			latestPlan: undefined,
+			latestPlanSource: undefined,
 			awaitingAction: false,
 			manualThinkingLevel: undefined,
 		};
@@ -349,17 +404,82 @@ export default function planMode(pi: ExtensionAPI) {
 		}
 	}
 
-	function scheduleAfterCurrentAgentRun(task: () => Promise<void> | void) {
-		setTimeout(() => {
-			void Promise.resolve(task()).catch((error: unknown) => {
-				const message = error instanceof Error ? error.message : String(error);
-				console.error(`Plan mode follow-up failed: ${message}`);
-			});
-		}, 0);
+	function acceptCompletedPlan(
+		plan: string,
+		source: PlanCompletionSource,
+		ctx: ExtensionContext,
+	) {
+		if (
+			state.enabled &&
+			state.awaitingAction &&
+			state.latestPlan === plan &&
+			state.latestPlanSource === source
+		) {
+			return;
+		}
+		state = {
+			...state,
+			latestPlan: plan,
+			latestPlanSource: source,
+			awaitingAction: true,
+		};
+		readyPresentationIntent = {
+			nonce: ++nextReadyPresentationNonce,
+			plan,
+			source,
+		};
+		persistState();
+		updateUi(ctx);
+	}
+
+	function completedPlanIsCurrent(intent: ReadyPresentationIntent) {
+		return (
+			state.enabled &&
+			state.awaitingAction &&
+			state.latestPlan === intent.plan &&
+			state.latestPlanSource === intent.source
+		);
+	}
+
+	function readyPresentationIsCurrent(intent: ReadyPresentationIntent) {
+		return completedPlanIsCurrent(intent) && readyPresentationIntent?.nonce === intent.nonce;
+	}
+
+	function showStoredPlan(ctx: ExtensionContext) {
+		const plan = state.latestPlan?.trim();
+		if (!state.enabled || !plan) {
+			ctx.ui.notify("No completed plan is available. Use /plan finalize when planning is complete.", "info");
+			return;
+		}
+		try {
+			pi.sendMessage(
+				{
+					customType: PROPOSED_PLAN_MESSAGE_TYPE,
+					content: `**Proposed Plan**\n\n${plan}`,
+					display: true,
+				},
+				{ triggerTurn: false },
+			);
+		} catch (error: unknown) {
+			const detail = error instanceof Error ? error.message : String(error);
+			ctx.ui.notify(`Unable to show completed plan: ${detail}`, "error");
+		}
+	}
+
+	function requestFinalPlan(ctx: ExtensionContext) {
+		if (!state.enabled) {
+			ctx.ui.notify("Plan mode is not active. Use /plan first.", "warning");
+			return;
+		}
+		sendPlanModeUserMessage(
+			"Finalize the current implementation plan now. If any material decision remains, use plan_mode_question instead. Otherwise call plan_mode_complete alone as your final action with the complete decision-ready plan.",
+			ctx,
+		);
 	}
 
 	function startImplementation(ctx: ExtensionContext) {
 		const plan = state.latestPlan?.trim();
+		const source = state.latestPlanSource;
 		exitPlanMode(ctx);
 
 		if (!plan) {
@@ -373,7 +493,7 @@ export default function planMode(pi: ExtensionAPI) {
 		);
 		if (!sent) {
 			enterPlanMode(ctx);
-			state = { ...state, latestPlan: plan, awaitingAction: true };
+			state = { ...state, latestPlan: plan, latestPlanSource: source, awaitingAction: true };
 			persistState();
 			updateUi(ctx);
 		}
@@ -393,10 +513,19 @@ export default function planMode(pi: ExtensionAPI) {
 					"Stay in Plan mode",
 					"Exit Plan mode",
 				]
-			: ["Configure Plan-mode tools", "Stay in Plan mode", "Exit Plan mode"];
+			: [
+					"Request final plan",
+					"Configure Plan-mode tools",
+					"Stay in Plan mode",
+					"Exit Plan mode",
+				];
 		const choice = await ctx.ui.select(planStatusText(), choices);
 		if (choice === "Show latest proposed plan") {
-			ctx.ui.notify(state.latestPlan ?? "No proposed plan yet.", "info");
+			showStoredPlan(ctx);
+			return;
+		}
+		if (choice === "Request final plan") {
+			requestFinalPlan(ctx);
 			return;
 		}
 		if (choice === "Implement this plan") {
@@ -497,7 +626,7 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function activatePlanModeTools() {
-		previousTools ??= withoutPlanModeQuestionTool(safeGetActiveTools());
+		previousTools ??= withoutRequiredPlanModeTools(safeGetActiveTools());
 		applyPlanModeTools();
 	}
 
@@ -507,7 +636,9 @@ export default function planMode(pi: ExtensionAPI) {
 
 	function planModeToolNames() {
 		const tools = selectableTools();
-		if (tools.length === 0) return ["read", "bash", PLAN_MODE_QUESTION_TOOL_NAME];
+		if (tools.length === 0) {
+			return ["read", "bash", PLAN_MODE_QUESTION_TOOL_NAME, PLAN_MODE_COMPLETE_TOOL_NAME];
+		}
 
 		const selectedNames = planModeSelectedNames(tools);
 		return withRequiredPlanModeTools(
@@ -549,7 +680,10 @@ export default function planMode(pi: ExtensionAPI) {
 
 	function selectableTools() {
 		return safeGetAllTools()
-			.filter((tool) => tool.name !== PLAN_MODE_QUESTION_TOOL_NAME)
+			.filter(
+				(tool) =>
+					tool.name !== PLAN_MODE_QUESTION_TOOL_NAME && tool.name !== PLAN_MODE_COMPLETE_TOOL_NAME,
+			)
 			.sort(compareTools);
 	}
 
@@ -567,7 +701,7 @@ export default function planMode(pi: ExtensionAPI) {
 
 	function restoreTools() {
 		const restoredTools = previousTools ?? DEFAULT_TOOLS;
-		pi.setActiveTools(withoutPlanModeQuestionTool(restoredTools));
+		pi.setActiveTools(withoutRequiredPlanModeTools(restoredTools));
 		previousTools = undefined;
 	}
 
@@ -620,7 +754,7 @@ export default function planMode(pi: ExtensionAPI) {
 
 	function deactivatePlanModeQuestionTool() {
 		const activeTools = safeGetActiveTools();
-		const filteredTools = withoutPlanModeQuestionTool(activeTools);
+		const filteredTools = withoutRequiredPlanModeTools(activeTools);
 		if (filteredTools.length !== activeTools.length) {
 			pi.setActiveTools(filteredTools);
 		}
@@ -639,30 +773,7 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function restoreState(ctx: ExtensionContext) {
-		state = { enabled: false, awaitingAction: false };
-		const entries = ctx.sessionManager.getEntries() as SessionEntry[];
-		const entry = entries
-			.filter((candidate) => candidate.type === "custom" && candidate.customType === STATE_ENTRY_TYPE)
-			.pop();
-		if (!isRecord(entry?.data)) return;
-		const enabled = entry.data.enabled === true;
-		state = {
-			enabled,
-			latestPlan:
-				enabled && typeof entry.data.latestPlan === "string" ? entry.data.latestPlan : undefined,
-			awaitingAction: enabled && entry.data.awaitingAction === true,
-			selectedToolNames: stringArray(entry.data.selectedToolNames),
-			selectedToolKeys: stringArray(entry.data.selectedToolKeys),
-			previousThinkingLevel: enabled
-				? fixedThinkingLevel(entry.data.previousThinkingLevel)
-				: undefined,
-			appliedThinkingLevel: enabled
-				? fixedThinkingLevel(entry.data.appliedThinkingLevel)
-				: undefined,
-			manualThinkingLevel: enabled
-				? fixedThinkingLevel(entry.data.manualThinkingLevel)
-				: undefined,
-		};
+		state = restorePlanModeState(ctx.sessionManager.getBranch(), STATE_ENTRY_TYPE);
 	}
 
 	function updateUi(ctx: ExtensionContext) {
@@ -676,7 +787,7 @@ export default function planMode(pi: ExtensionAPI) {
 			ctx.ui.setWidget(PLAN_WIDGET_KEY, [
 				"Plan mode: planning",
 				formatToolSummary(),
-				"Produce a <proposed_plan> block.",
+				"Finish with plan_mode_complete when decision-ready.",
 			]);
 		} else {
 			ctx.ui.setWidget(PLAN_WIDGET_KEY, undefined);
@@ -697,7 +808,7 @@ export default function planMode(pi: ExtensionAPI) {
 	function planStatusText() {
 		if (!state.enabled) return "Plan mode is off.";
 		if (state.latestPlan) return `Plan mode is active and a proposed plan is ready. ${formatToolSummary()}`;
-		return `Plan mode is active. ${formatToolSummary()} Explore, ask, and produce a <proposed_plan> block.`;
+		return `Plan mode is active. ${formatToolSummary()} Explore, ask, and finish with plan_mode_complete when decision-ready.`;
 	}
 
 	function formatToolSummary() {
@@ -761,30 +872,31 @@ function unique(values: string[]) {
 	return Array.from(new Set(values));
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function stringArray(value: unknown) {
-	return Array.isArray(value) && value.every((item): item is string => typeof item === "string")
-		? unique(value)
-		: undefined;
-}
-
-function fixedThinkingLevel(value: unknown): PlanModeFixedThinkingLevel | undefined {
-	return typeof value === "string" &&
-		value !== "inherit" &&
-		PLAN_MODE_THINKING_LEVELS.includes(value as (typeof PLAN_MODE_THINKING_LEVELS)[number])
-		? (value as PlanModeFixedThinkingLevel)
-		: undefined;
+function isStaleExtensionContextError(error: unknown) {
+	return (
+		error instanceof Error &&
+		(error.message.includes("This extension ctx is stale after session replacement or reload") ||
+			error.message.includes("Extension context is no longer active"))
+	);
 }
 
 export function withRequiredPlanModeTools(toolNames: string[]) {
-	return unique([...withoutPlanModeQuestionTool(toolNames), PLAN_MODE_QUESTION_TOOL_NAME]);
+	return unique([
+		...withoutRequiredPlanModeTools(toolNames),
+		PLAN_MODE_QUESTION_TOOL_NAME,
+		PLAN_MODE_COMPLETE_TOOL_NAME,
+	]);
 }
 
 export function withoutPlanModeQuestionTool(toolNames: string[]) {
 	return toolNames.filter((toolName) => toolName !== PLAN_MODE_QUESTION_TOOL_NAME);
+}
+
+function withoutRequiredPlanModeTools(toolNames: string[]) {
+	return toolNames.filter(
+		(toolName) =>
+			toolName !== PLAN_MODE_QUESTION_TOOL_NAME && toolName !== PLAN_MODE_COMPLETE_TOOL_NAME,
+	);
 }
 
 function invalidPlanMessage(kind: "empty" | "multiple" | "malformed" | "unclosed") {

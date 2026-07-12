@@ -1,3 +1,5 @@
+import { PLAN_MODE_COMPLETE_TOOL_NAME } from "./completion-tool.js";
+
 const PLAN_CONTEXT_MESSAGE_TYPE = "plan-mode-context";
 const PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
 const PROPOSED_PLAN_PATTERN = /^<proposed_plan>[\t ]*\r?\n([\s\S]*?)\r?\n<\/proposed_plan>[\t ]*$/gm;
@@ -56,14 +58,47 @@ export function messageContainsLegacyPlanModeContextArtifact(message: unknown) {
 }
 
 export function messageContainsInactivePlanModeArtifact(message: unknown) {
-	return unwrapSessionMessage(message).customType === PROPOSED_PLAN_MESSAGE_TYPE;
+	const candidate = unwrapSessionMessage(message);
+	return (
+		candidate.customType === PROPOSED_PLAN_MESSAGE_TYPE ||
+		(candidate.role === "toolResult" && candidate.toolName === PLAN_MODE_COMPLETE_TOOL_NAME)
+	);
 }
 
 export function stripProposedPlanBlocksFromMessage<T>(message: T): T {
+	return replaceAssistantContent(message, stripProposedPlanBlocksFromContent);
+}
+
+export function stripPlanModeCompletionCallsFromMessage<T>(message: T): T {
+	return replaceAssistantContent(message, (content) => {
+		if (!Array.isArray(content)) return content;
+		const nextContent = content.filter((block) => {
+			const candidate = block as { type?: string; name?: string };
+			return !(
+				candidate.type === "toolCall" && candidate.name === PLAN_MODE_COMPLETE_TOOL_NAME
+			);
+		});
+		return nextContent.length === content.length ? content : nextContent;
+	});
+}
+
+export function isEmptyAssistantMessage(message: unknown) {
+	const candidate = unwrapSessionMessage(message);
+	return (
+		candidate.role === "assistant" &&
+		Array.isArray(candidate.content) &&
+		candidate.content.length === 0
+	);
+}
+
+function replaceAssistantContent<T>(
+	message: T,
+	transform: (content: unknown) => unknown,
+): T {
 	const candidate = unwrapSessionMessage(message);
 	if (candidate.role !== "assistant") return message;
 
-	const content = stripProposedPlanBlocksFromContent(candidate.content);
+	const content = transform(candidate.content);
 	if (content === candidate.content) return message;
 
 	if (isSessionMessageEntry(message)) {
@@ -74,7 +109,12 @@ export function stripProposedPlanBlocksFromMessage<T>(message: T): T {
 
 function unwrapSessionMessage(message: unknown) {
 	const entry = message as { message?: unknown };
-	return (entry.message ?? message) as { role?: string; customType?: string; content?: unknown };
+	return (entry.message ?? message) as {
+		role?: string;
+		customType?: string;
+		toolName?: string;
+		content?: unknown;
+	};
 }
 
 function isSessionMessageEntry<T>(message: T): message is T & { message: SessionMessage } {
