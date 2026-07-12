@@ -66,10 +66,39 @@ export function messageContainsInactivePlanModeArtifact(message: unknown) {
 }
 
 export function stripProposedPlanBlocksFromMessage<T>(message: T): T {
+	return replaceAssistantContent(message, stripProposedPlanBlocksFromContent);
+}
+
+export function stripPlanModeCompletionCallsFromMessage<T>(message: T): T {
+	return replaceAssistantContent(message, (content) => {
+		if (!Array.isArray(content)) return content;
+		const nextContent = content.filter((block) => {
+			const candidate = block as { type?: string; name?: string };
+			return !(
+				candidate.type === "toolCall" && candidate.name === PLAN_MODE_COMPLETE_TOOL_NAME
+			);
+		});
+		return nextContent.length === content.length ? content : nextContent;
+	});
+}
+
+export function isEmptyAssistantMessage(message: unknown) {
+	const candidate = unwrapSessionMessage(message);
+	return (
+		candidate.role === "assistant" &&
+		Array.isArray(candidate.content) &&
+		candidate.content.length === 0
+	);
+}
+
+function replaceAssistantContent<T>(
+	message: T,
+	transform: (content: unknown) => unknown,
+): T {
 	const candidate = unwrapSessionMessage(message);
 	if (candidate.role !== "assistant") return message;
 
-	const content = stripProposedPlanBlocksFromContent(candidate.content);
+	const content = transform(candidate.content);
 	if (content === candidate.content) return message;
 
 	if (isSessionMessageEntry(message)) {

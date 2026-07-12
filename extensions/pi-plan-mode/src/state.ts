@@ -1,5 +1,6 @@
 import {
 	PLAN_MODE_COMPLETE_TOOL_NAME,
+	normalizePlanModeCompletion,
 	planFromCompletionDetails,
 } from "./completion-tool.js";
 import {
@@ -48,20 +49,25 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
 	if (!isRecord(entry?.data)) return { enabled: false, awaitingAction: false };
 
 	const enabled = entry.data.enabled === true;
-	const persistedPlan =
-		enabled && typeof entry.data.latestPlan === "string" ? entry.data.latestPlan : undefined;
+	const persistedSource = enabled
+		? planCompletionSource(entry.data.latestPlanSource)
+		: undefined;
+	const persistedPlan = enabled
+		? normalizePersistedPlan(entry.data.latestPlan, persistedSource)
+		: undefined;
 	const recoveredPlan =
 		enabled && !persistedPlan
 			? latestCompletionPlan(branch.slice(stateEntryIndex + 1))
 			: undefined;
+	const latestPlan = persistedPlan ?? recoveredPlan;
 	return {
 		enabled,
-		latestPlan: persistedPlan ?? recoveredPlan,
+		latestPlan,
 		latestPlanSource: enabled
-			? planCompletionSource(entry.data.latestPlanSource) ??
+			? (persistedPlan ? persistedSource : undefined) ??
 				(recoveredPlan ? PLAN_MODE_COMPLETE_TOOL_NAME : undefined)
 			: undefined,
-		awaitingAction: enabled && (entry.data.awaitingAction === true || recoveredPlan !== undefined),
+		awaitingAction: enabled && latestPlan !== undefined,
 		selectedToolNames: stringArray(entry.data.selectedToolNames),
 		selectedToolKeys: stringArray(entry.data.selectedToolKeys),
 		previousThinkingLevel: enabled
@@ -74,6 +80,15 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
 			? fixedThinkingLevel(entry.data.manualThinkingLevel)
 			: undefined,
 	};
+}
+
+function normalizePersistedPlan(value: unknown, source: PlanCompletionSource | undefined) {
+	if (typeof value !== "string") return undefined;
+	if (source === PLAN_MODE_COMPLETE_TOOL_NAME) {
+		const normalized = normalizePlanModeCompletion({ plan: value });
+		return normalized.ok ? normalized.plan : undefined;
+	}
+	return value.trim() || undefined;
 }
 
 function latestCompletionPlan(entries: SessionEntry[]) {

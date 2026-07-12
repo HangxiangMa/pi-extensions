@@ -11,10 +11,12 @@ import {
 } from "./completion-tool.js";
 import {
 	extractProposedPlan,
+	isEmptyAssistantMessage,
 	latestAssistantText,
 	parseProposedPlan,
 	messageContainsInactivePlanModeArtifact,
 	messageContainsLegacyPlanModeContextArtifact,
+	stripPlanModeCompletionCallsFromMessage,
 	stripProposedPlanBlocksFromMessage,
 } from "./message-transform.js";
 import { buildPlanModePrompt } from "./prompt.js";
@@ -286,7 +288,9 @@ export default function planMode(pi: ExtensionAPI) {
 		return {
 			messages: messagesWithoutLegacyPlanContext
 				.filter((message: unknown) => !messageContainsInactivePlanModeArtifact(message))
-				.map(stripProposedPlanBlocksFromMessage),
+				.map(stripProposedPlanBlocksFromMessage)
+				.map(stripPlanModeCompletionCallsFromMessage)
+				.filter((message: unknown) => !isEmptyAssistantMessage(message)),
 		};
 	});
 

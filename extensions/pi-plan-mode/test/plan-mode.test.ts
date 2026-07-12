@@ -415,6 +415,57 @@ test("session restore uses only the active branch state", async () => {
 	);
 });
 
+test("session restore fails closed for malformed persisted completed plans", async () => {
+	for (const data of [
+		{
+			enabled: true,
+			awaitingAction: true,
+			latestPlan: "  \n",
+			latestPlanSource: "plan_mode_complete",
+		},
+		{
+			enabled: true,
+			awaitingAction: true,
+			latestPlan: "x".repeat(50_001),
+			latestPlanSource: "plan_mode_complete",
+		},
+	]) {
+		const mock = createMockPi({ activeTools: ["read"] });
+		planMode(mock.pi);
+		const context = createMockContext({
+			sessionManager: {
+				getEntries: () => [],
+				getBranch: () => [{ type: "custom", customType: "plan-mode-state", data }],
+			},
+		});
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		assert.equal(context.statuses.get("plan-mode"), "plan active");
+		await mock.commands.get("plan")?.handler("implement", context.ctx);
+		assert.equal(mock.sentUserMessages.length, 0);
+	}
+
+	const legacy = createMockPi({ activeTools: ["read"] });
+	planMode(legacy.pi);
+	const legacyContext = createMockContext({
+		sessionManager: {
+			getEntries: () => [],
+			getBranch: () => [
+				{
+					type: "custom",
+					customType: "plan-mode-state",
+					data: {
+						enabled: true,
+						awaitingAction: true,
+						latestPlan: "# Legacy state",
+					},
+				},
+			],
+		},
+	});
+	await legacy.events.get("session_start")?.[0]?.({}, legacyContext.ctx);
+	assert.equal(legacyContext.statuses.get("plan-mode"), "plan ready");
+});
+
 test("session restore recovers only valid completion details after the latest state", async () => {
 	const completion = {
 		type: "message",
@@ -1058,30 +1109,56 @@ test("inactive context discards completed-plan tool results", async () => {
 	const context = createMockContext();
 	const contextHook = mock.events.get("context")?.[0];
 	assert.ok(contextHook);
+	const assistantWithCalls = {
+		role: "assistant",
+		content: [
+			{ type: "text", text: "keep explanation" },
+			{ type: "toolCall", id: "plan-call", name: "plan_mode_complete", arguments: {} },
+			{ type: "toolCall", id: "read-call", name: "read", arguments: {} },
+		],
+	};
+	const assistantWithOnlyCompletion = {
+		role: "assistant",
+		content: [
+			{ type: "toolCall", id: "only-plan-call", name: "plan_mode_complete", arguments: {} },
+		],
+	};
 	const completionResult = {
 		role: "toolResult",
+		toolCallId: "plan-call",
 		toolName: "plan_mode_complete",
 		content: [{ type: "text", text: "**Proposed Plan**\n\n# Discarded" }],
 		details: { version: 1, source: "plan_mode_complete", plan: "# Discarded" },
 	};
 	const unrelatedResult = {
 		role: "toolResult",
+		toolCallId: "read-call",
 		toolName: "read",
 		content: [{ type: "text", text: "keep me" }],
 	};
+	const allMessages = [
+		assistantWithCalls,
+		assistantWithOnlyCompletion,
+		completionResult,
+		unrelatedResult,
+	];
 
-	const inactive = (await contextHook(
-		{ messages: [completionResult, unrelatedResult] },
-		context.ctx,
-	)) as { messages: unknown[] };
-	assert.deepEqual(inactive.messages, [unrelatedResult]);
+	const inactive = (await contextHook({ messages: allMessages }, context.ctx)) as {
+		messages: unknown[];
+	};
+	assert.deepEqual(inactive.messages, [
+		{
+			...assistantWithCalls,
+			content: [assistantWithCalls.content[0], assistantWithCalls.content[2]],
+		},
+		unrelatedResult,
+	]);
 
 	await mock.commands.get("plan")?.handler("", context.ctx);
-	const active = (await contextHook(
-		{ messages: [completionResult, unrelatedResult] },
-		context.ctx,
-	)) as { messages: unknown[] };
-	assert.deepEqual(active.messages, [completionResult, unrelatedResult]);
+	const active = (await contextHook({ messages: allMessages }, context.ctx)) as {
+		messages: unknown[];
+	};
+	assert.deepEqual(active.messages, allMessages);
 });
 
 test("Plan prompt requires the standalone completion contract", () => {
