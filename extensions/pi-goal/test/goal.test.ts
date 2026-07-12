@@ -320,7 +320,7 @@ test("goal_blocked ownership stays on the root instance after child start", asyn
 	child.events.get("session_shutdown")?.[0]?.({}, childContext.ctx);
 });
 
-test("continuation and budget messages stay on the owning runtime API", async () => {
+test("pending continuation and budget state survive later child startup", async () => {
 	const rootBranch: Array<Record<string, unknown>> = [assistantUsageEntry({ totalTokens: 0 })];
 	const root = createMockPi();
 	goal(root.pi);
@@ -331,42 +331,177 @@ test("continuation and budget messages stay on the owning runtime API", async ()
 	await root.commands.get("goal")?.handler("--tokens 1 root objective", rootContext.ctx);
 	const rootGoal = requireLastGoal(root);
 	const rootUserMessagesBefore = root.sentUserMessages.length;
-	const rootCustomMessagesBefore = root.sentMessages.length;
 
-	const child = createMockPi();
-	goal(child.pi);
-	const childContext = createMockContext();
-	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
-	const childUserMessagesBefore = child.sentUserMessages.length;
-	const childCustomMessagesBefore = child.sentMessages.length;
-
-	// Parent agent_end after an incomplete stop must enqueue and later dispatch continuation
-	// against the parent API only, even after a sibling factory started.
+	// Record the parent continuation before the child starts. Child session_start must not
+	// clear an already-pending continuation or reroute its eventual delivery.
 	await root.events.get("agent_end")?.[0]?.(
 		{ messages: [{ role: "assistant", stopReason: "stop" }] },
 		rootContext.ctx,
 	);
+	const child = createMockPi();
+	goal(child.pi);
+	const childContext = createMockContext();
+	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
 	root.events.get("agent_settled")?.[0]?.({}, rootContext.ctx);
-	assert.ok(root.sentUserMessages.length > rootUserMessagesBefore);
-	assert.match(
-		root.sentUserMessages.at(-1)?.text ?? "",
-		new RegExp(`<!-- pi-goal-continuation:${rootGoal.id}:`),
-	);
-	assert.equal(child.sentUserMessages.length, childUserMessagesBefore);
+	assert.equal(root.sentUserMessages.length, rootUserMessagesBefore + 1);
+	const staleContinuation = root.sentUserMessages.at(-1)?.text ?? "";
+	assert.match(staleContinuation, new RegExp(`<!-- pi-goal-continuation:${rootGoal.id}:`));
+	assert.equal(child.sentUserMessages.length, 0);
 
-	// Parent tool activity that crosses the token budget must wrap up through the parent API.
+	// Establish the parent budget wrap-up before another child starts. Its context marker
+	// must remain authorized by the parent runtime after that later child session_start.
 	rootBranch.push(assistantUsageEntry({ totalTokens: 5 }));
 	root.events.get("tool_execution_end")?.[0]?.({}, rootContext.ctx);
 	assert.equal(lastGoalStatus(root), "budget_limited");
-	assert.ok(root.sentMessages.length > rootCustomMessagesBefore);
 	const wrapUp = root.sentMessages.at(-1)?.message as {
 		customType?: string;
 		details?: { goalId?: string };
 	};
 	assert.equal(wrapUp?.customType, "goal-budget-wrap-up");
 	assert.equal(wrapUp?.details?.goalId, rootGoal.id);
-	assert.equal(child.sentMessages.length, childCustomMessagesBefore);
+
+	const laterChild = createMockPi();
+	goal(laterChild.pi);
+	const laterChildContext = createMockContext();
+	laterChild.events.get("session_start")?.[0]?.({}, laterChildContext.ctx);
+	const contextMessages = [
+		{ role: "custom", customType: wrapUp.customType, details: wrapUp.details },
+		{ role: "user", content: "continue" },
+	];
+	assert.equal(
+		root.events.get("context")?.[0]?.({ messages: contextMessages }, rootContext.ctx),
+		undefined,
+	);
+	assert.equal(child.sentMessages.length, 0);
+	assert.equal(laterChild.sentMessages.length, 0);
 	assert.equal(lastGoalStatus(child), null);
+	assert.equal(lastGoalStatus(laterChild), null);
+	assert.deepEqual(
+		root.events.get("input")?.[0]?.(
+			{ source: "extension", text: staleContinuation },
+			rootContext.ctx,
+		),
+		{ action: "handled" },
+	);
+	assert.equal(
+		laterChild.events.get("input")?.[0]?.(
+			{ source: "extension", text: staleContinuation },
+			laterChildContext.ctx,
+		),
+		undefined,
+	);
+
+	root.events.get("session_shutdown")?.[0]?.({}, rootContext.ctx);
+	child.events.get("session_shutdown")?.[0]?.({}, childContext.ctx);
+	laterChild.events.get("session_shutdown")?.[0]?.({}, laterChildContext.ctx);
+});
+
+test("stale tool guard survives later child startup", async () => {
+	const root = createMockPi();
+	goal(root.pi);
+	const rootContext = createMockContext();
+	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
+	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
+	await root.commands.get("goal")?.handler("pause", rootContext.ctx);
+
+	const child = createMockPi();
+	goal(child.pi);
+	const childContext = createMockContext();
+	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
+	const rootToolCall = root.events.get("tool_call")?.[0];
+	assert.deepEqual(
+		rootToolCall?.({ toolName: "bash", toolCallId: "root-stale", input: {} }, rootContext.ctx),
+		{ block: true, reason: STALE_GOAL_TOOL_REASON },
+	);
+	assert.equal(
+		child.events.get("tool_call")?.[0]?.(
+			{ toolName: "bash", toolCallId: "child-fresh", input: {} },
+			childContext.ctx,
+		),
+		undefined,
+	);
+
+	child.events.get("session_shutdown")?.[0]?.({}, childContext.ctx);
+	assert.deepEqual(
+		rootToolCall?.(
+			{ toolName: "bash", toolCallId: "root-stale-after-shutdown", input: {} },
+			rootContext.ctx,
+		),
+		{ block: true, reason: STALE_GOAL_TOOL_REASON },
+	);
+	assert.equal(lastGoalStatus(root), "paused");
+	assert.equal(lastGoalStatus(child), null);
+	root.events.get("session_shutdown")?.[0]?.({}, rootContext.ctx);
+});
+
+test("pending compaction recovery survives later child startup", async () => {
+	const root = createMockPi();
+	goal(root.pi);
+	const rootContext = createMockContext();
+	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
+	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
+	const rootGoal = requireLastGoal(root);
+	const rootUserMessagesBefore = root.sentUserMessages.length;
+
+	await root.events.get("agent_end")?.[0]?.(
+		{
+			messages: [
+				{
+					role: "assistant",
+					stopReason: "error",
+					errorMessage: "prompt is too long: 213462 tokens > 200000 maximum",
+				},
+			],
+		},
+		rootContext.ctx,
+	);
+
+	const child = createMockPi();
+	goal(child.pi);
+	const childContext = createMockContext();
+	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
+	const retryPrompt = root.events.get("before_agent_start")?.[0]?.(
+		{ prompt: "retry", systemPrompt: "base" },
+		rootContext.ctx,
+	) as { systemPrompt?: string } | undefined;
+	assert.match(retryPrompt?.systemPrompt ?? "", new RegExp(rootGoal.id));
+
+	root.events.get("session_before_compact")?.[0]?.({}, rootContext.ctx);
+	await root.events.get("session_compact")?.[0]?.({}, rootContext.ctx);
+	await root.events.get("agent_settled")?.[0]?.({}, rootContext.ctx);
+	assert.equal(root.sentUserMessages.length, rootUserMessagesBefore);
+	assert.equal(child.sentUserMessages.length, 0);
+	assert.equal(lastGoalStatus(root), "active");
+	assert.equal(lastGoalStatus(child), null);
+
+	root.events.get("session_shutdown")?.[0]?.({}, rootContext.ctx);
+	child.events.get("session_shutdown")?.[0]?.({}, childContext.ctx);
+});
+
+test("completion status timer survives later child startup", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const root = createMockPi();
+	goal(root.pi);
+	const rootContext = createMockContext();
+	root.events.get("session_start")?.[0]?.({}, rootContext.ctx);
+	await root.commands.get("goal")?.handler("root objective", rootContext.ctx);
+	const rootGoal = requireLastGoal(root);
+	await requireGoalTool(root, "goal_complete").execute(
+		"root-completion",
+		{ goal_id: rootGoal.id, summary: "Root work verified." },
+		new AbortController().signal,
+		() => undefined,
+		rootContext.ctx,
+	);
+	assert.equal(rootContext.statuses.get("goal"), "complete");
+
+	const child = createMockPi();
+	goal(child.pi);
+	const childContext = createMockContext();
+	child.events.get("session_start")?.[0]?.({}, childContext.ctx);
+	t.mock.timers.tick(8_000);
+	assert.equal(rootContext.statuses.get("goal"), undefined);
+	assert.equal(childContext.statuses.get("goal"), undefined);
 
 	root.events.get("session_shutdown")?.[0]?.({}, rootContext.ctx);
 	child.events.get("session_shutdown")?.[0]?.({}, childContext.ctx);
