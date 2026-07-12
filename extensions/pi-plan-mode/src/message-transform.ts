@@ -1,3 +1,5 @@
+import { PLAN_MODE_COMPLETE_TOOL_NAME } from "./completion-tool.js";
+
 const PLAN_CONTEXT_MESSAGE_TYPE = "plan-mode-context";
 const PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
 const PROPOSED_PLAN_PATTERN = /^<proposed_plan>[\t ]*\r?\n([\s\S]*?)\r?\n<\/proposed_plan>[\t ]*$/gm;
@@ -56,7 +58,11 @@ export function messageContainsLegacyPlanModeContextArtifact(message: unknown) {
 }
 
 export function messageContainsInactivePlanModeArtifact(message: unknown) {
-	return unwrapSessionMessage(message).customType === PROPOSED_PLAN_MESSAGE_TYPE;
+	const candidate = unwrapSessionMessage(message);
+	return (
+		candidate.customType === PROPOSED_PLAN_MESSAGE_TYPE ||
+		(candidate.role === "toolResult" && candidate.toolName === PLAN_MODE_COMPLETE_TOOL_NAME)
+	);
 }
 
 export function stripProposedPlanBlocksFromMessage<T>(message: T): T {
@@ -74,7 +80,12 @@ export function stripProposedPlanBlocksFromMessage<T>(message: T): T {
 
 function unwrapSessionMessage(message: unknown) {
 	const entry = message as { message?: unknown };
-	return (entry.message ?? message) as { role?: string; customType?: string; content?: unknown };
+	return (entry.message ?? message) as {
+		role?: string;
+		customType?: string;
+		toolName?: string;
+		content?: unknown;
+	};
 }
 
 function isSessionMessageEntry<T>(message: T): message is T & { message: SessionMessage } {

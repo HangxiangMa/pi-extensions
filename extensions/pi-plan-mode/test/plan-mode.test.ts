@@ -1052,12 +1052,45 @@ test("active Plan UI advertises the completion tool rather than legacy XML", asy
 	assert.doesNotMatch(context.notifications.at(-1)?.message ?? "", /proposed_plan/);
 });
 
+test("inactive context discards completed-plan tool results", async () => {
+	const mock = createMockPi({ activeTools: ["read"] });
+	planMode(mock.pi);
+	const context = createMockContext();
+	const contextHook = mock.events.get("context")?.[0];
+	assert.ok(contextHook);
+	const completionResult = {
+		role: "toolResult",
+		toolName: "plan_mode_complete",
+		content: [{ type: "text", text: "**Proposed Plan**\n\n# Discarded" }],
+		details: { version: 1, source: "plan_mode_complete", plan: "# Discarded" },
+	};
+	const unrelatedResult = {
+		role: "toolResult",
+		toolName: "read",
+		content: [{ type: "text", text: "keep me" }],
+	};
+
+	const inactive = (await contextHook(
+		{ messages: [completionResult, unrelatedResult] },
+		context.ctx,
+	)) as { messages: unknown[] };
+	assert.deepEqual(inactive.messages, [unrelatedResult]);
+
+	await mock.commands.get("plan")?.handler("", context.ctx);
+	const active = (await contextHook(
+		{ messages: [completionResult, unrelatedResult] },
+		context.ctx,
+	)) as { messages: unknown[] };
+	assert.deepEqual(active.messages, [completionResult, unrelatedResult]);
+});
+
 test("Plan prompt requires the standalone completion contract", () => {
 	const prompt = buildPlanModePrompt();
 	assert.match(prompt, /recommended option.*assumption/i);
 	assert.match(prompt, /plan_mode_complete/i);
 	assert.match(prompt, /alone as (?:your )?(?:final|last) action/i);
 	assert.match(prompt, /end.*plan_mode_question.*plan_mode_complete/is);
+	assert.match(prompt, /clarification.*plan_mode_complete.*unchanged/is);
 	assert.match(prompt, /behavior-level/i);
 	assert.doesNotMatch(prompt, /<proposed_plan>/i);
 });
