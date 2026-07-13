@@ -6,13 +6,14 @@
 
 ## ✨ Features
 
-- Creates a Langfuse trace for each Pi agent run.
+- Creates a native Langfuse `agent` observation for each Pi agent run.
 - Records LLM input, output, provider, model, stop reason, token usage, and reported cost.
 - Records tool inputs, outputs, duration, and failures as child spans.
 - Groups traces with Pi's session id.
 - Records provider HTTP status codes when Pi exposes them.
 - Reads Langfuse credentials and options only from a private `pi-langfuse.json` file.
-- Flushes completed traces after each agent run and during session shutdown.
+- Batches routine exports without delaying normal Pi agent completion.
+- Keeps its OpenTelemetry provider isolated so it coexists with other tracing extensions.
 - Redacts Langfuse public and secret keys from exported trace data.
 - Supports metadata-only tracing when content capture is disabled.
 
@@ -49,25 +50,27 @@ Create `~/.pi/agent/pi-langfuse.json`:
 
 `environment` and `release` are optional Langfuse trace attributes. Set `captureContent` to `false` to trace timing, model, usage, cost, and status metadata without sending prompts, responses, or tool content.
 
-The extension automatically restricts an existing config file to mode `0600`. You can also set it explicitly:
+The extension automatically restricts an existing config file to mode `0600` and refuses to load credentials if that protection cannot be enforced. You can also set it explicitly:
 
 ```bash
 chmod 600 ~/.pi/agent/pi-langfuse.json
 ```
 
-Restart Pi after changing credentials, endpoint, environment, or release. The OpenTelemetry SDK is initialized once per Pi process so `/reload` and session replacement do not register duplicate global tracer providers.
+Restart Pi after changing credentials, endpoint, environment, or release. The isolated OpenTelemetry tracer provider is initialized once per Pi process and selected only for Langfuse; it does not replace Pi's process-global provider or send Langfuse observations to another extension's exporter.
 
 ## 🔭 What is traced
 
-Each `pi.agent` trace contains:
+Each `pi.agent` native `agent` observation contains:
 
-- a `pi.llm` generation for every provider request;
-- a `pi.tool.<tool-name>` child span for every tool execution;
+- a `pi.llm` native `generation` for every provider request;
+- a `pi.tool.<tool-name>` native `tool` observation for every tool execution;
 - the Pi session id, working directory, mode, provider, and model;
 - generation token usage and total cost when the provider reports them;
 - error levels and status messages for failed provider responses, model calls, and tools.
 
-Images are represented without their base64 payload. Long strings, deeply nested values, and oversized arrays are bounded before export. Langfuse credentials are masked again in the span processor before network export.
+Images are represented without their base64 payload. Every captured input or output has one cumulative 64 KiB serialized UTF-8 budget, bounded object/array traversal, and deterministic truncation markers. Langfuse credentials are masked again in the span processor before network export.
+
+Completed observations are exported in batches while Pi remains live. Normal `agent_end` handling never waits for Langfuse network I/O. Use `/langfuse flush` when you need to wait for completed exports; quit shutdown also drains the provider.
 
 Automatic retries or continuations that begin without a new user prompt are recorded as a new trace labeled `[automatic continuation]`, so provider activity is not lost on Pi versions without a final `agent_settled` extension event.
 
@@ -76,10 +79,14 @@ Automatic retries or continuations that begin without a new user prompt are reco
 ```text
 /langfuse status
 /langfuse flush
+/langfuse help
+/langfuse config
 ```
 
 - `status` reports whether tracing is enabled, the endpoint, configuration source, and content-capture mode. It never displays credentials.
-- `flush` immediately exports all completed spans.
+- `flush` waits for all completed observations to export.
+- `help` displays command guidance.
+- `config` displays the config path and a credential-free JSON template. It never opens an interactive prompt or echoes configured keys.
 
 ## 🔐 Privacy
 

@@ -10,7 +10,20 @@ interface ExtensionDependencies {
 const COMMAND_COMPLETIONS = [
 	{ value: "status", label: "status", description: "Show Langfuse tracing status" },
 	{ value: "flush", label: "flush", description: "Export all completed traces now" },
+	{ value: "help", label: "help", description: "Show Langfuse command help" },
+	{ value: "config", label: "config", description: "Show the config path and JSON template" },
 ];
+
+const CONFIG_TEMPLATE = JSON.stringify(
+	{
+		publicKey: "pk-lf-...",
+		secretKey: "sk-lf-...",
+		baseUrl: "https://cloud.langfuse.com",
+		captureContent: true,
+	},
+	null,
+	2,
+);
 
 export function createLangfuseExtension(
 	dependencies: Partial<ExtensionDependencies> = {},
@@ -64,11 +77,34 @@ export function createLangfuseExtension(
 						ctx.ui.notify("Langfuse tracing is not enabled.", "warning");
 						return;
 					}
-					await recorder.flush();
-					ctx.ui.notify("Langfuse traces flushed.", "info");
+					try {
+						await recorder.flush();
+						ctx.ui.notify("Langfuse traces flushed.", "info");
+					} catch (error) {
+						ctx.ui.notify(`Langfuse flush failed: ${formatError(error)}`, "error");
+					}
 					return;
 				}
-				ctx.ui.notify("Usage: /langfuse [status|flush]", "warning");
+				if (action === "config") {
+					ctx.ui.notify(
+						`Langfuse configuration: ${configPath ?? "~/.pi/agent/pi-langfuse.json"}\n${CONFIG_TEMPLATE}`,
+						"info",
+					);
+					return;
+				}
+				if (action === "help") {
+					ctx.ui.notify(
+						[
+							"Usage: /langfuse [status|flush|help|config]",
+							"status: show tracing state without credentials",
+							"flush: wait for completed traces to export",
+							"config: show the config path and credential-free JSON template",
+						].join("\n"),
+						"info",
+					);
+					return;
+				}
+				ctx.ui.notify("Usage: /langfuse [status|flush|help|config]", "warning");
 			},
 		});
 
@@ -120,7 +156,10 @@ export function createLangfuseExtension(
 					model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
 				});
 			}
-			recorder.beginGeneration({ messages: event.messages });
+			recorder.beginGeneration({
+				messages: event.messages,
+				systemPrompt: ctx.getSystemPrompt(),
+			});
 		});
 
 		pi.on("after_provider_response", (event) => {
@@ -143,21 +182,23 @@ export function createLangfuseExtension(
 			});
 		});
 
-		pi.on("agent_end", async () => {
-			if (!recorder) return;
-			recorder.settle();
-			await recorder.flush();
+		pi.on("agent_end", () => {
+			recorder?.settle();
 		});
 
-		pi.on("session_shutdown", async (event) => {
+		pi.on("session_shutdown", async (event, ctx) => {
 			const activeRecorder = recorder;
 			recorder = undefined;
 			activeConfig = undefined;
 			if (!activeRecorder) return;
-			if (event.reason === "quit") await activeRecorder.shutdown();
-			else {
-				activeRecorder.settle();
-				await activeRecorder.flush();
+			try {
+				if (event.reason === "quit") await activeRecorder.shutdown();
+				else {
+					activeRecorder.settle();
+					await activeRecorder.flush();
+				}
+			} catch (error) {
+				ctx.ui.notify(`Langfuse shutdown export failed: ${formatError(error)}`, "error");
 			}
 		});
 	};

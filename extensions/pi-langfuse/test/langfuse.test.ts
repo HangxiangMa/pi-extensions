@@ -1,15 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { trace } from "@opentelemetry/api";
+import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import { loadLangfuseConfig } from "../src/config.js";
+import { loadLangfuseConfig, normalizeLangfuseConfig } from "../src/config.js";
 import { createLangfuseExtension } from "../src/langfuse.js";
-import { maskSecrets } from "../src/runtime.js";
+import { createProductionBackend, maskSecrets } from "../src/runtime.js";
 import {
+	MAX_CAPTURE_BYTES,
 	type Observation,
 	type ObservationAttributes,
+	sanitizeTraceValue,
 	type TraceBackend,
 	TraceRecorder,
 } from "../src/tracing.js";
@@ -22,7 +27,7 @@ class FakeObservation implements Observation {
 	constructor(
 		readonly name: string,
 		readonly attributes: ObservationAttributes,
-		readonly type: "span" | "generation",
+		readonly type: "agent" | "generation" | "tool",
 		readonly parent?: Observation,
 	) {}
 
@@ -50,7 +55,7 @@ class FakeBackend implements TraceBackend {
 	start(
 		name: string,
 		attributes: ObservationAttributes,
-		options: { asType: "span" | "generation"; parent?: Observation },
+		options: { asType: "agent" | "generation" | "tool"; parent?: Observation },
 	) {
 		const observation = new FakeObservation(name, attributes, options.asType, options.parent);
 		this.observations.push(observation);
@@ -96,7 +101,7 @@ test("loadLangfuseConfig reads pi-langfuse.json and enforces private permissions
 			captureContent: false,
 		},
 		path,
-		warnings: [],
+		warnings: [`Restricted ${path} permissions to 0600.`],
 	});
 	assert.equal((await stat(path)).mode & 0o777, 0o600);
 });
@@ -160,7 +165,7 @@ test("TraceRecorder builds one agent trace with child generations and tool spans
 	assert.equal(backend.observations.length, 3);
 	const [root, generation, tool] = backend.observations;
 	assert.equal(root?.name, "pi.agent");
-	assert.equal(root?.type, "span");
+	assert.equal(root?.type, "agent");
 	assert.deepEqual(root?.traceUpdates[0], {
 		name: "pi.agent",
 		sessionId: "session-1",
@@ -184,18 +189,44 @@ test("TraceRecorder builds one agent trace with child generations and tool spans
 		systemPrompt: "You are Pi",
 	});
 	assert.deepEqual(generation?.updates.at(-1)?.usageDetails, {
-		cacheReadTokens: 2,
-		cacheWriteTokens: 1,
-		completionTokens: 5,
-		promptTokens: 10,
-		totalTokens: 18,
+		cache_creation_input_tokens: 1,
+		cache_read_input_tokens: 2,
+		input: 10,
+		output: 5,
+		total: 18,
 	});
 	assert.equal(generation?.ended, true);
 	assert.equal(tool?.name, "pi.tool.read");
+	assert.equal(tool?.type, "tool");
 	assert.equal(tool?.parent, root);
 	assert.equal(tool?.ended, true);
 	assert.equal(root?.ended, true);
 	assert.equal(backend.flushes, 1);
+});
+
+test("TraceRecorder replaces all captured values when content capture is disabled", () => {
+	const backend = new FakeBackend();
+	const recorder = new TraceRecorder(backend, {
+		sessionId: "session-1",
+		cwd: "/workspace",
+		mode: "tui",
+		captureContent: false,
+	});
+	recorder.beginAgent({ prompt: "private prompt", systemPrompt: "private system" });
+	recorder.beginGeneration({ messages: ["private history"] });
+	recorder.finishAssistant({ role: "assistant", content: "private response" });
+	recorder.beginTool("call", "read", { path: "private path" });
+	recorder.finishTool("call", { content: "private content", details: "private details" });
+	recorder.settle();
+
+	for (const observation of backend.observations) {
+		assert.equal(observation.attributes.input, "[content capture disabled]");
+		for (const update of observation.updates) {
+			if (update.output !== undefined) {
+				assert.equal(update.output, "[content capture disabled]");
+			}
+		}
+	}
 });
 
 test("TraceRecorder closes interrupted observations and redacts image payloads", () => {
@@ -281,7 +312,7 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 	});
 	await mock.events.get("session_start")?.[0]?.({}, ctx);
 	await mock.events.get("before_agent_start")?.[0]?.(
-		{ prompt: "Hello", images: [], systemPrompt: "system" },
+		{ prompt: "Hello", images: [], systemPrompt: "system before modifiers" },
 		ctx,
 	);
 	await mock.events.get("context")?.[0]?.({ messages: [{ role: "user", content: "Hello" }] }, ctx);
@@ -305,7 +336,12 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 		backend.observations.every((observation) => observation.ended),
 		true,
 	);
-	assert.equal(backend.flushes, 1);
+	assert.equal(backend.flushes, 0);
+	assert.equal(
+		(backend.observations[1]?.attributes.input as Record<string, unknown> | undefined)
+			?.systemPrompt,
+		"system",
+	);
 
 	await mock.events.get("context")?.[0]?.({ messages: [{ role: "user", content: "retry" }] }, ctx);
 	await mock.events.get("message_end")?.[0]?.(
@@ -331,5 +367,283 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 		backend.observations.slice(2).every((observation) => observation.ended),
 		true,
 	);
-	assert.equal(backend.flushes, 2);
+	assert.equal(backend.flushes, 0);
+});
+
+function serializedBytes(value: unknown): number {
+	return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+test("sanitizeTraceValue globally bounds adversarial values in UTF-8 bytes", () => {
+	const shared = { text: "repeated" };
+	const circular: Record<string, unknown> = { label: "cycle" };
+	circular.self = circular;
+	const value = {
+		manyKeys: Object.fromEntries(
+			Array.from({ length: 1_000 }, (_, index) => [`key-${index}`, "🪢".repeat(100)]),
+		),
+		nested: Array.from({ length: 300 }, () => ["界".repeat(1_000)]),
+		sharedA: shared,
+		sharedB: shared,
+		circular,
+	};
+
+	const sanitized = sanitizeTraceValue(value);
+	assert.ok(serializedBytes(sanitized) <= MAX_CAPTURE_BYTES);
+	assert.match(JSON.stringify(sanitized), /truncated|omitted|circular/i);
+	assert.deepEqual(sanitizeTraceValue({ first: shared, second: shared }), {
+		first: { text: "repeated" },
+		second: { text: "repeated" },
+	});
+	assert.match(JSON.stringify(sanitizeTraceValue(circular)), /circular/i);
+});
+
+test("TraceRecorder bounds oversized tool details as one captured output", () => {
+	const backend = new FakeBackend();
+	const recorder = new TraceRecorder(backend, {
+		sessionId: "session",
+		cwd: "/workspace",
+		mode: "tui",
+		captureContent: true,
+	});
+	recorder.beginAgent({ prompt: "test" });
+	recorder.beginTool("call", "read", {
+		paths: Array.from({ length: 500 }, () => "界".repeat(500)),
+	});
+	recorder.finishTool("call", {
+		content: "🪢".repeat(100_000),
+		details: Object.fromEntries(
+			Array.from({ length: 500 }, (_, index) => [`detail-${index}`, "value".repeat(500)]),
+		),
+	});
+
+	const tool = backend.observations[1];
+	assert.ok(serializedBytes(tool?.attributes.input) <= MAX_CAPTURE_BYTES);
+	assert.ok(serializedBytes(tool?.updates.at(-1)?.output) <= MAX_CAPTURE_BYTES);
+});
+
+test("configuration covers malformed JSON, normalization, and captureContent false", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-langfuse-invalid-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const path = join(dir, "pi-langfuse.json");
+	await writeFile(path, "{broken", { mode: 0o600 });
+	const malformed = await loadLangfuseConfig(path);
+	assert.equal(malformed.ok, false);
+	if (!malformed.ok) assert.match(malformed.reason, /failed to read/i);
+
+	assert.deepEqual(
+		normalizeLangfuseConfig({ publicKey: " pk ", secretKey: " sk ", baseUrl: "https://x.test///" }),
+		{
+			ok: true,
+			config: {
+				publicKey: "pk",
+				secretKey: "sk",
+				baseUrl: "https://x.test",
+				captureContent: true,
+			},
+		},
+	);
+	assert.equal(
+		normalizeLangfuseConfig({ publicKey: "pk", secretKey: "sk", baseUrl: "ftp://x" }).ok,
+		false,
+	);
+	assert.equal(
+		normalizeLangfuseConfig({ publicKey: "pk", secretKey: "sk", captureContent: false }).ok,
+		true,
+	);
+
+	await writeFile(path, JSON.stringify({ publicKey: "pk", secretKey: "sk" }), { mode: 0o600 });
+	await chmod(path, 0o644);
+	const repaired = await loadLangfuseConfig(path);
+	assert.deepEqual(repaired.warnings, [`Restricted ${path} permissions to 0600.`]);
+});
+
+test("commands expose status, flush, help, and credential-free config guidance", async () => {
+	const backend = new FakeBackend();
+	let releaseFlush: (() => void) | undefined;
+	backend.forceFlush = () =>
+		new Promise<void>((resolve) => {
+			releaseFlush = resolve;
+		});
+	const mock = createMockPi();
+	createLangfuseExtension({
+		loadConfig: async () => ({
+			ok: true,
+			config: {
+				publicKey: "pk-private-value",
+				secretKey: "sk-private-value",
+				baseUrl: "https://example.test",
+				captureContent: true,
+			},
+			path: "/private/pi-langfuse.json",
+			warnings: [],
+		}),
+		createBackend: async () => backend,
+	})(mock.pi);
+	const { ctx, notifications } = createMockContext({ hasUI: false });
+	await mock.events.get("session_start")?.[0]?.({}, ctx);
+	const command = mock.commands.get("langfuse");
+	const completions = command?.getArgumentCompletions?.("") as Array<{ value: string }>;
+	assert.deepEqual(
+		completions.map(({ value }) => value),
+		["status", "flush", "help", "config"],
+	);
+	await command?.handler("status", ctx);
+	await command?.handler("help", ctx);
+	await command?.handler("config", ctx);
+	const flush = command?.handler("flush", ctx) as Promise<void>;
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(
+		notifications.some(({ message }) => /flushed/.test(message)),
+		false,
+	);
+	releaseFlush?.();
+	await flush;
+
+	const output = notifications.map(({ message }) => message).join("\n");
+	assert.match(output, /\/private\/pi-langfuse\.json/);
+	assert.match(output, /"publicKey": "pk-lf-\.\.\."/);
+	assert.doesNotMatch(output, /private-value/);
+});
+
+test("agent_end never waits for or starts a routine flush", async () => {
+	const backend = new FakeBackend();
+	backend.forceFlush = () => new Promise<void>(() => undefined);
+	const mock = createMockPi();
+	createLangfuseExtension({
+		loadConfig: async () => ({
+			ok: true,
+			config: {
+				publicKey: "pk",
+				secretKey: "sk",
+				baseUrl: "https://example.test",
+				captureContent: true,
+			},
+			path: "/config.json",
+			warnings: [],
+		}),
+		createBackend: async () => backend,
+	})(mock.pi);
+	const { ctx } = createMockContext();
+	await mock.events.get("session_start")?.[0]?.({}, ctx);
+	await mock.events.get("before_agent_start")?.[0]?.(
+		{ prompt: "hello", images: [], systemPrompt: "system" },
+		ctx,
+	);
+	await Promise.race([
+		mock.events.get("agent_end")?.[0]?.({}, ctx),
+		new Promise((_, reject) => setTimeout(() => reject(new Error("agent_end blocked")), 50)),
+	]);
+	assert.equal(backend.flushes, 0);
+});
+
+test("session shutdown is idempotent and reports initialization failures", async () => {
+	const backend = new FakeBackend();
+	const mock = createMockPi();
+	createLangfuseExtension({
+		loadConfig: async () => ({
+			ok: true,
+			config: {
+				publicKey: "pk",
+				secretKey: "sk",
+				baseUrl: "https://example.test",
+				captureContent: false,
+			},
+			path: "/config.json",
+			warnings: [],
+		}),
+		createBackend: async () => backend,
+	})(mock.pi);
+	const { ctx } = createMockContext();
+	await mock.events.get("session_start")?.[0]?.({}, ctx);
+	await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, ctx);
+	await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, ctx);
+	assert.equal(backend.shutdowns, 1);
+
+	const failedMock = createMockPi();
+	createLangfuseExtension({
+		loadConfig: async () => ({
+			ok: true,
+			config: {
+				publicKey: "pk",
+				secretKey: "sk",
+				baseUrl: "https://example.test",
+				captureContent: true,
+			},
+			path: "/config.json",
+			warnings: [],
+		}),
+		createBackend: async () => {
+			throw new Error("backend unavailable");
+		},
+	})(failedMock.pi);
+	const failed = createMockContext();
+	await failedMock.events.get("session_start")?.[0]?.({}, failed.ctx);
+	assert.match(failed.notifications.at(-1)?.message ?? "", /backend unavailable/);
+});
+
+test("isolated runtime preserves the global provider and exports native observation hierarchy", async () => {
+	const existingGlobalProvider = new NodeTracerProvider();
+	assert.equal(trace.setGlobalTracerProvider(existingGlobalProvider), true);
+	const globalProvider = trace.getTracerProvider();
+	const exporter = new InMemorySpanExporter();
+	const processor = new SimpleSpanProcessor(exporter);
+	let providers = 0;
+	const config = {
+		publicKey: "pk-runtime-test",
+		secretKey: "sk-runtime-test",
+		baseUrl: "https://example.test",
+		captureContent: true,
+	};
+	await assert.rejects(
+		createProductionBackend(config, {
+			createProcessor: () => new SimpleSpanProcessor(new InMemorySpanExporter()),
+			createProvider: () => {
+				throw new Error("provider initialization failed");
+			},
+		}),
+		/provider initialization failed/,
+	);
+	const backend = await createProductionBackend(config, {
+		createProcessor: () => processor,
+		createProvider: (spanProcessor) => {
+			providers += 1;
+			return new NodeTracerProvider({ spanProcessors: [spanProcessor] });
+		},
+	});
+	assert.equal(await createProductionBackend(config), backend);
+	assert.equal(providers, 1);
+	await assert.rejects(
+		createProductionBackend({ ...config, release: "changed" }),
+		/configuration changed/i,
+	);
+	assert.equal(trace.getTracerProvider(), globalProvider);
+
+	const recorder = new TraceRecorder(backend, {
+		sessionId: "runtime-session",
+		cwd: "/workspace",
+		mode: "tui",
+		captureContent: true,
+	});
+	recorder.beginAgent({ prompt: "hello" });
+	recorder.beginGeneration({ messages: [] });
+	recorder.finishAssistant({ role: "assistant", content: "world" });
+	recorder.beginTool("call", "read", { path: "file" });
+	recorder.finishTool("call", { content: "content" });
+	recorder.settle();
+	await recorder.flush();
+
+	const spans = exporter.getFinishedSpans();
+	assert.deepEqual(spans.map((span) => span.attributes["langfuse.observation.type"]).sort(), [
+		"agent",
+		"generation",
+		"tool",
+	]);
+	const root = spans.find((span) => span.name === "pi.agent");
+	for (const child of spans.filter((span) => span.name !== "pi.agent")) {
+		assert.equal(child.parentSpanContext?.spanId, root?.spanContext().spanId);
+	}
+	await backend.shutdown();
+	await backend.shutdown();
+	await existingGlobalProvider.shutdown();
 });

@@ -1,7 +1,9 @@
+export const MAX_CAPTURE_BYTES = 64 * 1024;
 const MAX_STRING_LENGTH = 50_000;
-const MAX_ARRAY_LENGTH = 200;
+const MAX_COLLECTION_LENGTH = 200;
 const MAX_DEPTH = 12;
 const CONTENT_DISABLED = "[content capture disabled]";
+const TRUNCATED = "[truncated: content budget exceeded]";
 
 export interface ObservationAttributes {
 	input?: unknown;
@@ -27,7 +29,7 @@ export interface TraceBackend {
 	start(
 		name: string,
 		attributes: ObservationAttributes,
-		options: { asType: "span" | "generation"; parent?: Observation },
+		options: { asType: "agent" | "generation" | "tool"; parent?: Observation },
 	): Observation;
 	forceFlush(): Promise<void>;
 	shutdown(): Promise<void>;
@@ -54,6 +56,7 @@ interface BeginAgentInput {
 
 interface BeginGenerationInput {
 	messages: unknown;
+	systemPrompt?: unknown;
 }
 
 interface AssistantMessage {
@@ -112,7 +115,7 @@ export class TraceRecorder {
 			"pi.session.id": this.context.sessionId,
 		};
 
-		this.root = this.backend.start("pi.agent", { input: traceInput, metadata }, { asType: "span" });
+		this.root = this.backend.start("pi.agent", { input: traceInput, metadata }, { asType: "agent" });
 		this.root.updateTrace?.({
 			name: "pi.agent",
 			sessionId: this.context.sessionId,
@@ -130,7 +133,11 @@ export class TraceRecorder {
 			{
 				input: this.capture({
 					messages: input.messages,
-					...(this.systemPrompt !== undefined ? { systemPrompt: this.systemPrompt } : {}),
+					...(input.systemPrompt !== undefined
+						? { systemPrompt: input.systemPrompt }
+						: this.systemPrompt !== undefined
+							? { systemPrompt: this.systemPrompt }
+							: {}),
 				}),
 			},
 			{ asType: "generation", parent: this.root },
@@ -153,11 +160,11 @@ export class TraceRecorder {
 		if (!this.generation) return;
 
 		const usageDetails = numericRecord({
-			promptTokens: message.usage?.input,
-			completionTokens: message.usage?.output,
-			cacheReadTokens: message.usage?.cacheRead,
-			cacheWriteTokens: message.usage?.cacheWrite,
-			totalTokens: message.usage?.totalTokens,
+			input: message.usage?.input,
+			output: message.usage?.output,
+			cache_read_input_tokens: message.usage?.cacheRead,
+			cache_creation_input_tokens: message.usage?.cacheWrite,
+			total: message.usage?.totalTokens,
 		});
 		const totalCost = message.usage?.cost?.total;
 		const failed = message.stopReason === "error" || Boolean(message.errorMessage);
@@ -196,7 +203,7 @@ export class TraceRecorder {
 					input: this.capture(args),
 					metadata: { "pi.tool.call_id": toolCallId, "pi.tool.name": toolName },
 				},
-				{ asType: "span", parent: this.root },
+				{ asType: "tool", parent: this.root },
 			),
 		);
 	}
@@ -266,49 +273,111 @@ export class TraceRecorder {
 }
 
 export function sanitizeTraceValue(value: unknown): unknown {
-	return sanitize(value, new WeakSet<object>(), 0);
+	const budget = { remaining: MAX_CAPTURE_BYTES };
+	const sanitized = sanitize(value, new WeakSet<object>(), 0, budget);
+	return serializedBytes(sanitized) <= MAX_CAPTURE_BYTES ? sanitized : TRUNCATED;
 }
 
-function sanitize(value: unknown, seen: WeakSet<object>, depth: number): unknown {
-	if (value === null || typeof value === "number" || typeof value === "boolean") return value;
-	if (typeof value === "string") {
-		return value.length <= MAX_STRING_LENGTH
-			? value
-			: `${value.slice(0, MAX_STRING_LENGTH)}… [truncated ${value.length - MAX_STRING_LENGTH} chars]`;
+function sanitize(
+	value: unknown,
+	active: WeakSet<object>,
+	depth: number,
+	budget: { remaining: number },
+): unknown {
+	if (budget.remaining <= byteLength(TRUNCATED)) return TRUNCATED;
+	if (value === null || typeof value === "number" || typeof value === "boolean") {
+		return consume(value, budget);
 	}
-	if (typeof value === "bigint") return value.toString();
+	if (typeof value === "string") {
+		const bounded = truncateString(value, Math.min(MAX_STRING_LENGTH, budget.remaining));
+		return consume(bounded, budget);
+	}
+	if (typeof value === "bigint") return consume(value.toString(), budget);
 	if (typeof value === "undefined" || typeof value === "function" || typeof value === "symbol") {
 		return undefined;
 	}
-	if (value instanceof Date) return value.toISOString();
-	if (value instanceof Error) return { name: value.name, message: value.message };
-	if (depth >= MAX_DEPTH) return "[maximum depth reached]";
-	if (seen.has(value)) return "[circular]";
-	seen.add(value);
-
-	if (Array.isArray(value)) {
-		const items = value.slice(0, MAX_ARRAY_LENGTH).map((item) => sanitize(item, seen, depth + 1));
-		if (value.length > MAX_ARRAY_LENGTH) {
-			items.push(`[${value.length - MAX_ARRAY_LENGTH} items omitted]`);
-		}
-		return items;
+	if (value instanceof Date) return consume(value.toISOString(), budget);
+	if (value instanceof Error) {
+		return sanitize({ name: value.name, message: value.message }, active, depth, budget);
 	}
+	if (depth >= MAX_DEPTH) return consume("[maximum depth reached]", budget);
+	if (active.has(value)) return consume("[circular]", budget);
+	active.add(value);
 
-	const record = value as Record<string, unknown>;
-	const isImage = record.type === "image";
-	const entries = Object.entries(record).map(([key, item]) => {
-		if (isImage && key === "data") return [key, "[base64 omitted]"];
-		if (
-			key === "source" &&
-			item &&
-			typeof item === "object" &&
-			(item as Record<string, unknown>).type === "base64"
-		) {
-			return [key, { ...(item as Record<string, unknown>), data: "[base64 omitted]" }];
+	let result: unknown;
+	if (Array.isArray(value)) {
+		const items: unknown[] = [];
+		for (const item of value.slice(0, MAX_COLLECTION_LENGTH)) {
+			if (budget.remaining <= byteLength(TRUNCATED)) break;
+			items.push(sanitize(item, active, depth + 1, budget));
 		}
-		return [key, sanitize(item, seen, depth + 1)];
-	});
-	return Object.fromEntries(entries);
+		if (items.length < value.length) items.push(`[${value.length - items.length} items omitted]`);
+		result = items;
+	} else {
+		const record = value as Record<string, unknown>;
+		const entries = Object.entries(record);
+		const output: Record<string, unknown> = {};
+		const isImage = record.type === "image";
+		let processed = 0;
+		for (const [key, item] of entries.slice(0, MAX_COLLECTION_LENGTH)) {
+			if (budget.remaining <= byteLength(TRUNCATED)) break;
+			budget.remaining -= byteLength(key) + 4;
+			if (isImage && key === "data") output[key] = consume("[base64 omitted]", budget);
+			else if (
+				key === "source" &&
+				item &&
+				typeof item === "object" &&
+				(item as Record<string, unknown>).type === "base64"
+			) {
+				output[key] = sanitize(
+					{ ...(item as Record<string, unknown>), data: "[base64 omitted]" },
+					active,
+					depth + 1,
+					budget,
+				);
+			} else output[key] = sanitize(item, active, depth + 1, budget);
+			processed += 1;
+		}
+		if (processed < entries.length) {
+			output["$truncated"] = `${entries.length - processed} object entries omitted`;
+		}
+		result = output;
+	}
+	active.delete(value);
+	return result;
+}
+
+function consume<T>(value: T, budget: { remaining: number }): T | string {
+	const size = serializedBytes(value);
+	if (size > budget.remaining) {
+		budget.remaining -= byteLength(TRUNCATED);
+		return TRUNCATED;
+	}
+	budget.remaining -= size;
+	return value;
+}
+
+function truncateString(value: string, maxBytes: number): string {
+	if (byteLength(value) <= maxBytes) return value;
+	const suffix = "… [truncated]";
+	const target = Math.max(0, maxBytes - byteLength(suffix) - 2);
+	let bytes = 0;
+	let output = "";
+	for (const character of value) {
+		const size = byteLength(character);
+		if (bytes + size > target) break;
+		output += character;
+		bytes += size;
+	}
+	return `${output}${suffix}`;
+}
+
+function serializedBytes(value: unknown): number {
+	return byteLength(JSON.stringify(value) ?? "null");
+}
+
+function byteLength(value: string): number {
+	return Buffer.byteLength(value, "utf8");
 }
 
 function numericRecord(values: Record<string, number | undefined>): Record<string, number> {

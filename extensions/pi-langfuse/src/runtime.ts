@@ -4,9 +4,11 @@ import {
 	type LangfuseObservation,
 	type LangfuseObservationAttributes,
 	type LangfuseTraceAttributes,
+	setLangfuseTracerProvider,
 	startObservation,
 } from "@langfuse/tracing";
-import { NodeSDK } from "@opentelemetry/sdk-node";
+import type { SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import type { LangfuseConfig } from "./config.js";
 import type { Observation, ObservationAttributes, TraceBackend } from "./tracing.js";
 
@@ -21,6 +23,12 @@ interface SharedRuntime {
 type GlobalWithRuntime = typeof globalThis & {
 	[RUNTIME_KEY]?: Promise<SharedRuntime>;
 };
+
+export interface RuntimeFactories {
+	createProcessor(config: LangfuseConfig): SpanProcessor;
+	createProvider(processor: SpanProcessor): NodeTracerProvider;
+	selectProvider(provider: NodeTracerProvider): void;
+}
 
 class ProductionObservation implements Observation {
 	constructor(readonly native: LangfuseObservation) {}
@@ -43,33 +51,22 @@ class ProductionObservation implements Observation {
 
 class ProductionTraceBackend implements TraceBackend {
 	constructor(
-		private readonly sdk: NodeSDK,
-		private readonly processor: LangfuseSpanProcessor,
+		private readonly provider: NodeTracerProvider,
+		private readonly processor: SpanProcessor,
 	) {}
 
 	start(
 		name: string,
 		attributes: ObservationAttributes,
-		options: { asType: "span" | "generation"; parent?: Observation },
+		options: { asType: "agent" | "generation" | "tool"; parent?: Observation },
 	): Observation {
 		const parent = options.parent;
 		if (parent instanceof ProductionObservation) {
-			const child =
-				options.asType === "generation"
-					? parent.native.startObservation(name, attributes as LangfuseObservationAttributes, {
-							asType: "generation",
-						})
-					: parent.native.startObservation(name, attributes as LangfuseObservationAttributes);
-			return new ProductionObservation(child);
+			return new ProductionObservation(
+				startChild(parent.native, name, attributes, options.asType),
+			);
 		}
-
-		const root =
-			options.asType === "generation"
-				? startObservation(name, attributes as LangfuseObservationAttributes, {
-						asType: "generation",
-					})
-				: startObservation(name, attributes as LangfuseObservationAttributes);
-		return new ProductionObservation(root);
+		return new ProductionObservation(startRoot(name, attributes, options.asType));
 	}
 
 	async forceFlush(): Promise<void> {
@@ -77,11 +74,14 @@ class ProductionTraceBackend implements TraceBackend {
 	}
 
 	async shutdown(): Promise<void> {
-		await this.sdk.shutdown();
+		await this.provider.shutdown();
 	}
 }
 
-export async function createProductionBackend(config: LangfuseConfig): Promise<TraceBackend> {
+export async function createProductionBackend(
+	config: LangfuseConfig,
+	factoryOverrides: Partial<RuntimeFactories> = {},
+): Promise<TraceBackend> {
 	const globalRuntime = globalThis as GlobalWithRuntime;
 	const fingerprint = configFingerprint(config);
 	const existing = globalRuntime[RUNTIME_KEY];
@@ -96,7 +96,8 @@ export async function createProductionBackend(config: LangfuseConfig): Promise<T
 		return runtime.backend;
 	}
 
-	const initializing = initializeRuntime(config, fingerprint);
+	const factories = { ...defaultFactories, ...factoryOverrides };
+	const initializing = initializeRuntime(config, fingerprint, factories);
 	globalRuntime[RUNTIME_KEY] = initializing;
 	try {
 		return (await initializing).backend;
@@ -109,24 +110,18 @@ export async function createProductionBackend(config: LangfuseConfig): Promise<T
 async function initializeRuntime(
 	config: LangfuseConfig,
 	fingerprint: string,
+	factories: RuntimeFactories,
 ): Promise<SharedRuntime> {
-	const secrets = [config.secretKey, config.publicKey];
-	const processor = new LangfuseSpanProcessor({
-		publicKey: config.publicKey,
-		secretKey: config.secretKey,
-		baseUrl: config.baseUrl,
-		environment: config.environment ?? "",
-		release: config.release ?? "",
-		flushAt: 512,
-		flushInterval: 5,
-		timeout: 5,
-		mask: ({ data }) => maskSecrets(data, secrets),
-		shouldExportSpan: ({ otelSpan }) =>
-			typeof otelSpan.attributes["langfuse.observation.type"] === "string",
-	});
-	const sdk = new NodeSDK({ spanProcessors: [processor] });
-	await sdk.start();
-	const backend = new ProductionTraceBackend(sdk, processor);
+	const processor = factories.createProcessor(config);
+	let provider: NodeTracerProvider | undefined;
+	try {
+		provider = factories.createProvider(processor);
+		factories.selectProvider(provider);
+	} catch (error) {
+		await (provider?.shutdown() ?? processor.shutdown()).catch(() => undefined);
+		throw error;
+	}
+	const backend = new ProductionTraceBackend(provider, processor);
 	const runtime: SharedRuntime = { fingerprint, backend, shutdown: false };
 	const originalShutdown = backend.shutdown.bind(backend);
 	backend.shutdown = async () => {
@@ -135,6 +130,64 @@ async function initializeRuntime(
 		await originalShutdown();
 	};
 	return runtime;
+}
+
+const defaultFactories: RuntimeFactories = {
+	createProcessor: (config) => {
+		const secrets = [config.secretKey, config.publicKey];
+		return new LangfuseSpanProcessor({
+			publicKey: config.publicKey,
+			secretKey: config.secretKey,
+			baseUrl: config.baseUrl,
+			environment: config.environment ?? "",
+			release: config.release ?? "",
+			flushAt: 512,
+			flushInterval: 5,
+			timeout: 5,
+			mask: ({ data }) => maskSecrets(data, secrets),
+			shouldExportSpan: ({ otelSpan }) =>
+				typeof otelSpan.attributes["langfuse.observation.type"] === "string",
+		});
+	},
+	createProvider: (processor) => new NodeTracerProvider({ spanProcessors: [processor] }),
+	selectProvider: setLangfuseTracerProvider,
+};
+
+function startRoot(
+	name: string,
+	attributes: ObservationAttributes,
+	type: "agent" | "generation" | "tool",
+): LangfuseObservation {
+	if (type === "agent") {
+		return startObservation(name, attributes as LangfuseObservationAttributes, { asType: "agent" });
+	}
+	if (type === "generation") {
+		return startObservation(name, attributes as LangfuseObservationAttributes, {
+			asType: "generation",
+		});
+	}
+	return startObservation(name, attributes as LangfuseObservationAttributes, { asType: "tool" });
+}
+
+function startChild(
+	parent: LangfuseObservation,
+	name: string,
+	attributes: ObservationAttributes,
+	type: "agent" | "generation" | "tool",
+): LangfuseObservation {
+	if (type === "agent") {
+		return parent.startObservation(name, attributes as LangfuseObservationAttributes, {
+			asType: "agent",
+		});
+	}
+	if (type === "generation") {
+		return parent.startObservation(name, attributes as LangfuseObservationAttributes, {
+			asType: "generation",
+		});
+	}
+	return parent.startObservation(name, attributes as LangfuseObservationAttributes, {
+		asType: "tool",
+	});
 }
 
 function configFingerprint(config: LangfuseConfig): string {

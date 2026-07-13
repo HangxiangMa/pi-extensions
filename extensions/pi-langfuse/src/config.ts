@@ -26,7 +26,15 @@ export async function loadLangfuseConfig(
 	path = langfuseConfigPath(),
 ): Promise<LangfuseConfigResult> {
 	const warnings: string[] = [];
-	await ensurePrivatePermissions(path, warnings);
+	const permissionFailure = await ensurePrivatePermissions(path, warnings);
+	if (permissionFailure) {
+		return {
+			ok: false,
+			path,
+			warnings,
+			reason: `Refusing to load credentials: ${permissionFailure}`,
+		};
+	}
 
 	let parsed: unknown;
 	try {
@@ -112,14 +120,23 @@ export function normalizeLangfuseConfig(
 	};
 }
 
-async function ensurePrivatePermissions(path: string, warnings: string[]): Promise<void> {
+async function ensurePrivatePermissions(
+	path: string,
+	warnings: string[],
+): Promise<string | undefined> {
 	try {
 		const file = await stat(path);
-		if ((file.mode & 0o777) !== 0o600) await chmod(path, 0o600);
+		if ((file.mode & 0o777) !== 0o600) {
+			await chmod(path, 0o600);
+			warnings.push(`Restricted ${path} permissions to 0600.`);
+		}
 	} catch (error) {
-		if (isNodeError(error) && error.code === "ENOENT") return;
-		warnings.push(`Failed to enforce 0600 permissions for ${path}: ${formatError(error)}`);
+		if (isNodeError(error) && error.code === "ENOENT") return undefined;
+		const failure = `Failed to enforce 0600 permissions for ${path}: ${formatError(error)}`;
+		warnings.push(failure);
+		return failure;
 	}
+	return undefined;
 }
 
 function normalizeBaseUrl(value: string): string | undefined {
