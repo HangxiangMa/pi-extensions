@@ -167,7 +167,7 @@ test("TraceRecorder builds one agent trace with child generations and tool spans
 	assert.equal(root?.name, "pi.agent");
 	assert.equal(root?.type, "agent");
 	assert.deepEqual(root?.traceUpdates[0], {
-		name: "pi.agent",
+		name: "pi.trace",
 		sessionId: "session-1",
 		input: { prompt: "Fix the test" },
 		metadata: root?.attributes.metadata,

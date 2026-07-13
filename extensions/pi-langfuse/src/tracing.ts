@@ -119,7 +119,7 @@ export class TraceRecorder {
 
 		this.root = this.backend.start("pi.agent", { input: traceInput, metadata }, { asType: "agent" });
 		this.root.updateTrace?.({
-			name: "pi.agent",
+			name: "pi.trace",
 			sessionId: this.context.sessionId,
 			input: traceInput,
 			metadata,

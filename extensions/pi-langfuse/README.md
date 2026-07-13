@@ -6,7 +6,7 @@
 
 ## ✨ Features
 
-- Creates a native Langfuse `agent` observation for each Pi agent run.
+- Names each Langfuse trace `pi.trace` and creates a native `pi.agent` observation for the Pi agent run.
 - Adds a `pi.turn` span for every Pi turn, with generations and tools nested beneath it.
 - Records finalized assistant outputs without retaining intermediate provider request payloads.
 - Records provider, model, stop reason, token usage, and known non-zero reported cost.
@@ -70,7 +70,7 @@ Restart Pi after changing credentials, endpoint, environment, or release. The is
 
 ## 🔭 What is traced
 
-Each `pi.agent` native `agent` observation contains:
+Each `pi.trace` contains one `pi.agent` native `agent` observation, which contains:
 
 - a `pi.turn` native `span` for every Pi turn, including its index, stop reason, tool-result count, duration, and failure status;
 - a `pi.llm` native `generation` under the active turn for every provider request;
