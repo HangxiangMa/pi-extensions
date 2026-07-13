@@ -714,6 +714,30 @@ test("sanitizeTraceValue stops enumerating object properties at the collection c
 	}
 });
 
+test("sanitizeTraceValue bounds inherited enumerable property scans", () => {
+	const prototype = Object.fromEntries(
+		Array.from({ length: 1_000 }, (_, index) => [`inherited-${index}`, `value-${index}`]),
+	);
+	const value = Object.create(prototype) as Record<string, unknown>;
+	const originalHasOwn = Object.hasOwn;
+	let propertyChecks = 0;
+	Object.hasOwn = ((target: object, key: PropertyKey) => {
+		if (target === value) {
+			propertyChecks += 1;
+			assert.ok(propertyChecks <= 200, "sanitizer scanned beyond inherited property limits");
+		}
+		return originalHasOwn(target, key);
+	}) as typeof Object.hasOwn;
+
+	try {
+		assert.deepEqual(sanitizeTraceValue(value), {
+			$truncated: "additional object entries omitted",
+		});
+	} finally {
+		Object.hasOwn = originalHasOwn;
+	}
+});
+
 test("sanitizeTraceValue omits object keys larger than the remaining budget", () => {
 	const oversizedKey = "k".repeat(MAX_CAPTURE_BYTES * 4);
 	const sanitized = sanitizeTraceValue({ [oversizedKey]: "secret" });

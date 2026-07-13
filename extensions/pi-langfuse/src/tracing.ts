@@ -390,15 +390,16 @@ function sanitize(
 		const output: Record<string, unknown> = {};
 		const objectType = readProperty(record, "type").value;
 		const redactData = objectType === "image" || objectType === "base64";
+		let visited = 0;
 		let processed = 0;
 		let omitted = false;
 		try {
 			for (const key in record) {
-				if (!Object.hasOwn(record, key)) continue;
-				if (processed >= MAX_COLLECTION_LENGTH || budget.remaining <= byteLength(TRUNCATED)) {
+				if (visited >= MAX_COLLECTION_LENGTH || budget.remaining <= byteLength(TRUNCATED)) {
 					omitted = true;
 					break;
 				}
+				visited += 1;
 				const keyBudget = Math.min(MAX_STRING_LENGTH, Math.max(0, budget.remaining - 4));
 				if (key.length > keyBudget) {
 					omitted = true;
@@ -410,6 +411,7 @@ function sanitize(
 					break;
 				}
 				budget.remaining -= keyBytes + 4;
+				if (!Object.hasOwn(record, key)) continue;
 				const property = readProperty(record, key);
 				if (redactData && key === "data") {
 					output[key] = consume("[base64 omitted]", budget);
