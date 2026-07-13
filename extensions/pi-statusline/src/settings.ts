@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, linkSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import process from "node:process";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -59,8 +59,9 @@ export function readStatuslineSettings(settingsPath?: string): StatuslineSetting
 		pendingSettingsNotice = `${LEGACY_SETTINGS_FILE} is invalid and was ignored.`;
 		return legacy.settings;
 	}
+	let installedIdentity: FileIdentity;
 	try {
-		installFileExclusively(canonicalPath, legacy.contents ?? "");
+		installedIdentity = installFileExclusively(canonicalPath, legacy.contents ?? "");
 	} catch (error) {
 		if (existsSync(canonicalPath)) {
 			const canonical = readSettingsFileResult(canonicalPath);
@@ -74,7 +75,13 @@ export function readStatuslineSettings(settingsPath?: string): StatuslineSetting
 		return legacy.settings;
 	}
 	if (!fileContentsEqual(legacyPath, legacy.contents ?? "")) {
-		pendingSettingsNotice = `Statusline settings migrated to ${SETTINGS_FILE}, but ${LEGACY_SETTINGS_FILE} changed during migration and was retained.`;
+		pendingSettingsNotice = removeFileIfIdentityMatches(
+			canonicalPath,
+			installedIdentity,
+			legacy.contents ?? "",
+		)
+			? `${LEGACY_SETTINGS_FILE} changed during migration; the stale ${SETTINGS_FILE} snapshot was removed.`
+			: `${LEGACY_SETTINGS_FILE} changed during migration, but ${SETTINGS_FILE} was replaced concurrently and takes precedence on the next load.`;
 		return legacy.settings;
 	}
 	try {
@@ -86,17 +93,37 @@ export function readStatuslineSettings(settingsPath?: string): StatuslineSetting
 	return legacy.settings;
 }
 
-function installFileExclusively(filePath: string, contents: string) {
+type FileIdentity = { dev: number; ino: number };
+
+function installFileExclusively(filePath: string, contents: string): FileIdentity {
 	const tempFile = join(dirname(filePath), `.${SETTINGS_FILE}.${randomUUID()}.tmp`);
 	try {
 		writeFileSync(tempFile, contents, { encoding: "utf8", flag: "wx" });
+		const identity = lstatSync(tempFile);
 		linkSync(tempFile, filePath);
+		return { dev: identity.dev, ino: identity.ino };
 	} finally {
 		try {
 			rmSync(tempFile, { force: true });
 		} catch {
 			// Preserve the migration result if best-effort temp cleanup fails.
 		}
+	}
+}
+
+function removeFileIfIdentityMatches(
+	filePath: string,
+	expected: FileIdentity,
+	expectedContents: string,
+) {
+	try {
+		const current = lstatSync(filePath);
+		if (current.dev !== expected.dev || current.ino !== expected.ino) return false;
+		if (readFileSync(filePath, "utf8") !== expectedContents) return false;
+		rmSync(filePath);
+		return true;
+	} catch {
+		return false;
 	}
 }
 

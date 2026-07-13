@@ -134,7 +134,7 @@ function loadConfiguredConfig(cwd: string): LspConfig | undefined {
 		return legacy;
 	}
 	if (!fileContentsEqual(legacyUserConfig, legacyContents)) {
-		if (removeFileIfIdentityMatches(userConfig, installedIdentity)) {
+		if (removeFileIfIdentityMatches(userConfig, installedIdentity, legacyContents)) {
 			pendingConfigNotice =
 				"lsp.json changed during migration; the stale pi-lsp.json snapshot was removed and the legacy file was used for this session.";
 		} else {
@@ -171,10 +171,15 @@ function installFileExclusively(filePath: string, contents: string, mode: number
 	}
 }
 
-function removeFileIfIdentityMatches(filePath: string, expected: FileIdentity) {
+function removeFileIfIdentityMatches(
+	filePath: string,
+	expected: FileIdentity,
+	expectedContents: string,
+) {
 	try {
 		const current = lstatSync(filePath);
 		if (current.dev !== expected.dev || current.ino !== expected.ino) return false;
+		if (readFileSync(filePath, "utf8") !== expectedContents) return false;
 		rmSync(filePath);
 		return true;
 	} catch {

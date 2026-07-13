@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { access, link, readFile, rm, writeFile } from "node:fs/promises";
+import { access, link, lstat, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -57,8 +57,12 @@ export async function readPlanModeSettings(
 	const raced = await readSettingsFile(canonicalPath);
 	if (raced.kind !== "missing") return raced;
 	if (legacy.kind !== "loaded") return legacy;
+	let installedIdentity: FileIdentity;
 	try {
-		await installFileExclusively(canonicalPath, legacySnapshot.contents ?? "");
+		installedIdentity = await installFileExclusively(
+			canonicalPath,
+			legacySnapshot.contents ?? "",
+		);
 	} catch (error) {
 		const created = await readSettingsFile(canonicalPath);
 		if (created.kind !== "missing") {
@@ -73,9 +77,16 @@ export async function readPlanModeSettings(
 		};
 	}
 	if (!(await fileContentsEqual(legacyPath, legacySnapshot.contents ?? ""))) {
+		const removed = await removeFileIfIdentityMatches(
+			canonicalPath,
+			installedIdentity,
+			legacySnapshot.contents ?? "",
+		);
 		return {
 			...legacy,
-			notice: `Plan-mode settings migrated to ${PLAN_MODE_SETTINGS_FILE}, but ${LEGACY_PLAN_MODE_SETTINGS_FILE} changed during migration and was retained.`,
+			notice: removed
+				? `${LEGACY_PLAN_MODE_SETTINGS_FILE} changed during migration; the stale ${PLAN_MODE_SETTINGS_FILE} snapshot was removed.`
+				: `${LEGACY_PLAN_MODE_SETTINGS_FILE} changed during migration, but ${PLAN_MODE_SETTINGS_FILE} was replaced concurrently and takes precedence on the next load.`,
 		};
 	}
 	try {
@@ -92,13 +103,33 @@ export async function readPlanModeSettings(
 	}
 }
 
-async function installFileExclusively(filePath: string, contents: string) {
+type FileIdentity = { dev: number; ino: number };
+
+async function installFileExclusively(filePath: string, contents: string): Promise<FileIdentity> {
 	const tempFile = join(dirname(filePath), `.${PLAN_MODE_SETTINGS_FILE}.${randomUUID()}.tmp`);
 	try {
 		await writeFile(tempFile, contents, { encoding: "utf8", flag: "wx" });
+		const identity = await lstat(tempFile);
 		await link(tempFile, filePath);
+		return { dev: identity.dev, ino: identity.ino };
 	} finally {
 		await rm(tempFile, { force: true }).catch(() => undefined);
+	}
+}
+
+async function removeFileIfIdentityMatches(
+	filePath: string,
+	expected: FileIdentity,
+	expectedContents: string,
+) {
+	try {
+		const current = await lstat(filePath);
+		if (current.dev !== expected.dev || current.ino !== expected.ino) return false;
+		if ((await readFile(filePath, "utf8")) !== expectedContents) return false;
+		await rm(filePath);
+		return true;
+	} catch {
+		return false;
 	}
 }
 

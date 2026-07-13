@@ -5,6 +5,7 @@ import {
 	linkSync,
 	lstatSync,
 	openSync,
+	readFileSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -400,18 +401,27 @@ function defaultAccountsPath(): string {
 	if (!pathEntryExists(legacyPath)) return canonicalPath;
 
 	try {
-		return new FileAuthStorageBackend(legacyPath).withLock((current) => {
-			const contents = current ?? "{}";
+		return new FileAuthStorageBackend(legacyPath).withLock(() => {
+			const contents = readFileSync(legacyPath, "utf8");
 			const permissionError = enforcePrivateFilePermissions(legacyPath);
 			if (permissionError) throw new Error(permissionError);
+			let installedIdentity: FileIdentity;
 			try {
-				installPrivateFileExclusively(canonicalPath, contents);
+				installedIdentity = installPrivateFileExclusively(canonicalPath, contents);
 			} catch (error) {
 				if (pathEntryExists(canonicalPath)) {
 					pendingAccountsMigrationNotice = `${LEGACY_CODEX_ACCOUNTS_FILE} ignored because ${CODEX_ACCOUNTS_FILE} was created concurrently.`;
 					return { result: canonicalPath };
 				}
 				throw error;
+			}
+			if (!fileContentsEqual(legacyPath, contents)) {
+				if (removeFileIfIdentityMatches(canonicalPath, installedIdentity, contents)) {
+					pendingAccountsMigrationNotice = `${LEGACY_CODEX_ACCOUNTS_FILE} changed during migration; the stale ${CODEX_ACCOUNTS_FILE} snapshot was removed and the legacy file will be used for this session.`;
+					return { result: legacyPath };
+				}
+				pendingAccountsMigrationNotice = `${LEGACY_CODEX_ACCOUNTS_FILE} changed during migration, but ${CODEX_ACCOUNTS_FILE} was replaced concurrently and takes precedence.`;
+				return { result: canonicalPath };
 			}
 			try {
 				rmSync(legacyPath);
@@ -443,18 +453,46 @@ function enforcePrivateFilePermissions(filePath: string): string | undefined {
 	}
 }
 
-function installPrivateFileExclusively(filePath: string, contents: string): void {
+type FileIdentity = { dev: number; ino: number };
+
+function installPrivateFileExclusively(filePath: string, contents: string): FileIdentity {
 	const tempFile = join(dirname(filePath), `.${CODEX_ACCOUNTS_FILE}.${randomUUID()}.tmp`);
 	try {
 		writeFileSync(tempFile, contents, { encoding: "utf8", flag: "wx", mode: 0o600 });
 		chmodSync(tempFile, 0o600);
+		const identity = lstatSync(tempFile);
 		linkSync(tempFile, filePath);
+		return { dev: identity.dev, ino: identity.ino };
 	} finally {
 		try {
 			rmSync(tempFile, { force: true });
 		} catch {
 			// Preserve the migration result if best-effort temp cleanup fails.
 		}
+	}
+}
+
+function removeFileIfIdentityMatches(
+	filePath: string,
+	expected: FileIdentity,
+	expectedContents: string,
+) {
+	try {
+		const current = lstatSync(filePath);
+		if (current.dev !== expected.dev || current.ino !== expected.ino) return false;
+		if (readFileSync(filePath, "utf8") !== expectedContents) return false;
+		rmSync(filePath);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function fileContentsEqual(filePath: string, expected: string) {
+	try {
+		return readFileSync(filePath, "utf8") === expected;
+	} catch {
+		return false;
 	}
 }
 

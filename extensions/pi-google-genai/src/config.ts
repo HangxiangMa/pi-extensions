@@ -205,7 +205,9 @@ async function prepareGoogleGenaiConfigPath(canonicalPath: string, warnings: str
 		);
 		await chmod(canonicalPath, 0o600);
 		if (!(await jsonFileEquals(legacyPath, legacy))) {
-			if (await removeFileIfIdentityMatches(canonicalPath, installedIdentity)) {
+			if (
+				await removeFileIfIdentityMatches(canonicalPath, installedIdentity, installedContents)
+			) {
 				warnings.push(
 					`${LEGACY_CONFIG_FILE_NAME} changed during migration; the stale ${CONFIG_FILE_NAME} snapshot was removed and the legacy file was used for this session.`,
 				);
@@ -269,10 +271,15 @@ async function installPrivateConfigExclusively(
 	}
 }
 
-async function removeFileIfIdentityMatches(filePath: string, expected: FileIdentity) {
+async function removeFileIfIdentityMatches(
+	filePath: string,
+	expected: FileIdentity,
+	expectedContents: string,
+) {
 	try {
 		const current = await lstat(filePath);
 		if (current.dev !== expected.dev || current.ino !== expected.ino) return false;
+		if ((await readFile(filePath, "utf8")) !== expectedContents) return false;
 		await rm(filePath);
 		return true;
 	} catch {
