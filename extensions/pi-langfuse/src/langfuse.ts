@@ -193,7 +193,7 @@ export function createLangfuseExtension(
 			recorder.beginTurn(event.turnIndex);
 		});
 
-		pi.on("before_provider_request", (event, ctx) => {
+		pi.on("before_provider_request", (_event, ctx) => {
 			if (!recorder) return;
 			if (!recorder.hasActiveTrace()) {
 				recorder.beginAgent({
@@ -201,7 +201,7 @@ export function createLangfuseExtension(
 					model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
 				});
 			}
-			recorder.beginGeneration({ payload: event.payload });
+			recorder.beginGeneration();
 		});
 
 		pi.on("after_provider_response", (event) => {

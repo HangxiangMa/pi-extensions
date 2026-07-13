@@ -8,7 +8,7 @@
 
 - Creates a native Langfuse `agent` observation for each Pi agent run.
 - Adds a `pi.turn` span for every Pi turn, with generations and tools nested beneath it.
-- Records serialized provider payloads after context filtering and finalized assistant outputs.
+- Records finalized assistant outputs without retaining intermediate provider request payloads.
 - Records provider, model, stop reason, token usage, and known non-zero reported cost.
 - Records normalized tool inputs, finalized outputs, duration, and failures as child spans.
 - Groups traces with Pi's session id.
@@ -77,9 +77,10 @@ Each `pi.agent` native `agent` observation contains:
 - a `pi.tool.<tool-name>` native `tool` observation under the active turn for every tool execution;
 - the Pi session id, working directory, mode, provider, and model;
 - generation token usage and positive total cost when Pi reports a known price;
+- the concrete response model when Pi reports one, with a differing requested alias retained in metadata;
 - error levels and status messages for failed provider responses, model calls, and tools.
 
-Generation input uses Pi's serialized provider payload after context filters, and assistant output is reconciled after message transformers. Tool input is captured after argument preparation and `tool_call` mutations, while tool output is captured after `tool_result` transformers.
+Pi does not expose a post-transform provider payload event, so generation request bodies are intentionally omitted rather than risking capture of a payload that a later extension rewrites or redacts. The agent observation still records the user prompt, and assistant output is reconciled after message transformers. Tool input is captured after argument preparation and `tool_call` mutations, while tool output is captured after `tool_result` transformers.
 
 Images are represented without their base64 payload, including provider data URLs. Every captured input or output has one cumulative 64 KiB serialized UTF-8 budget, bounded object/array traversal, and deterministic truncation markers. Langfuse credentials are masked again in the span processor before network export.
 
@@ -105,7 +106,7 @@ Automatic retries or continuations that begin without a new user prompt are reco
 
 ## 🔐 Privacy
 
-With content capture enabled, traces can contain user prompts, system prompts, conversation context, model responses, tool arguments, and tool results. These may include source code, file contents, shell output, or other sensitive project data. Review your Langfuse retention and access controls before enabling this extension.
+With content capture enabled, traces can contain user prompts, model responses, tool arguments, and tool results. These may include source code, file contents, shell output, or other sensitive project data. Review your Langfuse retention and access controls before enabling this extension.
 
 The built-in mask specifically protects Langfuse credentials; it is not a general secret scanner. Set `"captureContent": false` in `pi-langfuse.json` when content must remain local.
 

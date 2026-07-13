@@ -55,15 +55,12 @@ interface BeginAgentInput {
 	model?: ModelDescriptor;
 }
 
-interface BeginGenerationInput {
-	payload: unknown;
-}
-
 interface AssistantMessage {
 	role: string;
 	content?: unknown;
 	provider?: string;
 	model?: string;
+	responseModel?: string;
 	usage?: {
 		input?: number;
 		output?: number;
@@ -175,12 +172,12 @@ export class TraceRecorder {
 		this.turnIndex = undefined;
 	}
 
-	beginGeneration(input: BeginGenerationInput): void {
+	beginGeneration(): void {
 		if (!this.root) return;
 		this.closeGeneration("Interrupted by the next provider request.");
 		this.generation = this.backend.start(
 			"pi.llm",
-			{ input: this.capture(input.payload) },
+			{},
 			{ asType: "generation", parent: this.turn ?? this.root },
 		);
 	}
@@ -209,15 +206,19 @@ export class TraceRecorder {
 		});
 		const totalCost = message.usage?.cost?.total;
 		const failed = message.stopReason === "error" || Boolean(message.errorMessage);
+		const responseModel = message.responseModel ?? message.model;
 		this.generation.update({
 			output: this.lastOutput,
-			...(message.model ? { model: message.model } : {}),
+			...(responseModel ? { model: responseModel } : {}),
 			...(Object.keys(usageDetails).length > 0 ? { usageDetails } : {}),
 			...(typeof totalCost === "number" && Number.isFinite(totalCost) && totalCost > 0
 				? { costDetails: { total: totalCost } }
 				: {}),
 			metadata: {
 				...(message.provider ? { "pi.provider": message.provider } : {}),
+				...(message.responseModel && message.model && message.responseModel !== message.model
+					? { "pi.requested_model": message.model }
+					: {}),
 				...(message.stopReason ? { "pi.stop_reason": message.stopReason } : {}),
 			},
 			...(failed

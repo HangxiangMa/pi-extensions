@@ -138,12 +138,7 @@ test("TraceRecorder builds one agent trace with child generations and tool spans
 		prompt: "Fix the test",
 		model: { provider: "anthropic", id: "claude" },
 	});
-	recorder.beginGeneration({
-		payload: {
-			messages: [{ role: "user", content: "Fix the test" }],
-			systemPrompt: "You are Pi",
-		},
-	});
+	recorder.beginGeneration();
 	recorder.finishAssistant({
 		role: "assistant",
 		provider: "anthropic",
@@ -189,10 +184,7 @@ test("TraceRecorder builds one agent trace with child generations and tool spans
 	assert.equal(generation?.name, "pi.llm");
 	assert.equal(generation?.type, "generation");
 	assert.equal(generation?.parent, root);
-	assert.deepEqual(generation?.attributes.input, {
-		messages: [{ role: "user", content: "Fix the test" }],
-		systemPrompt: "You are Pi",
-	});
+	assert.equal(generation?.attributes.input, undefined);
 	assert.deepEqual(generation?.updates.at(-1)?.usageDetails, {
 		cache_creation_input_tokens: 1,
 		cache_read_input_tokens: 2,
@@ -219,13 +211,13 @@ test("TraceRecorder only exports known non-zero costs with the Langfuse total bu
 	});
 
 	recorder.beginAgent({ prompt: "test" });
-	recorder.beginGeneration({ payload: { model: "unpriced" } });
+	recorder.beginGeneration();
 	recorder.finishAssistant({
 		role: "assistant",
 		content: "unpriced",
 		usage: { cost: { total: 0 } },
 	});
-	recorder.beginGeneration({ payload: { model: "priced" } });
+	recorder.beginGeneration();
 	recorder.finishAssistant({
 		role: "assistant",
 		content: "priced",
@@ -234,6 +226,33 @@ test("TraceRecorder only exports known non-zero costs with the Langfuse total bu
 
 	assert.equal(backend.observations[1]?.updates.at(-1)?.costDetails, undefined);
 	assert.deepEqual(backend.observations[2]?.updates.at(-1)?.costDetails, { total: 0.01 });
+});
+
+test("TraceRecorder prefers the concrete response model and retains the requested alias", () => {
+	const backend = new FakeBackend();
+	const recorder = new TraceRecorder(backend, {
+		sessionId: "session-1",
+		cwd: "/workspace",
+		mode: "tui",
+		captureContent: true,
+	});
+	recorder.beginAgent({ prompt: "test" });
+	recorder.beginGeneration();
+	recorder.finishAssistant({
+		role: "assistant",
+		content: "done",
+		provider: "openai",
+		model: "requested-alias",
+		responseModel: "concrete-model",
+		stopReason: "stop",
+	});
+
+	assert.equal(backend.observations[1]?.updates.at(-1)?.model, "concrete-model");
+	assert.deepEqual(backend.observations[1]?.updates.at(-1)?.metadata, {
+		"pi.provider": "openai",
+		"pi.requested_model": "requested-alias",
+		"pi.stop_reason": "stop",
+	});
 });
 
 test("TraceRecorder replaces all captured values when content capture is disabled", () => {
@@ -245,14 +264,15 @@ test("TraceRecorder replaces all captured values when content capture is disable
 		captureContent: false,
 	});
 	recorder.beginAgent({ prompt: "private prompt" });
-	recorder.beginGeneration({ payload: { messages: ["private history"] } });
+	recorder.beginGeneration();
 	recorder.finishAssistant({ role: "assistant", content: "private response" });
 	recorder.beginTool("call", "read", { path: "private path" });
 	recorder.finishTool("call", { content: "private content", details: "private details" });
 	recorder.settle();
 
 	for (const observation of backend.observations) {
-		assert.equal(observation.attributes.input, "[content capture disabled]");
+		if (observation.name === "pi.llm") assert.equal(observation.attributes.input, undefined);
+		else assert.equal(observation.attributes.input, "[content capture disabled]");
 		for (const update of observation.updates) {
 			if (update.output !== undefined) {
 				assert.equal(update.output, "[content capture disabled]");
@@ -275,8 +295,8 @@ test("TraceRecorder closes interrupted observations and redacts image payloads",
 		images: [{ type: "image", mimeType: "image/png", data: "base64-secret" }],
 		model: { provider: "openai", id: "gpt" },
 	});
-	recorder.beginGeneration({ payload: { messages: [] } });
-	recorder.beginGeneration({ payload: { messages: [] } });
+	recorder.beginGeneration();
+	recorder.beginGeneration();
 	recorder.beginTool("call-1", "bash", { command: "exit 1" });
 	recorder.finishTool("call-1", { content: "failed", isError: true });
 	recorder.settle();
@@ -389,7 +409,7 @@ test("pi-langfuse registers lifecycle hooks and exports completed traces", async
 		"pi.turn.stop_reason": "stop",
 		"pi.turn.tool_result_count": 0,
 	});
-	assert.deepEqual(generation?.attributes.input, finalPayload);
+	assert.equal(generation?.attributes.input, undefined);
 	assert.deepEqual(generation?.updates.at(-1)?.output, [
 		{ type: "text", text: "Hi after message transforms" },
 	]);
@@ -885,7 +905,7 @@ test("isolated runtime preserves the global provider and exports native observat
 	});
 	recorder.beginAgent({ prompt: "hello" });
 	recorder.beginTurn(0);
-	recorder.beginGeneration({ payload: { messages: [] } });
+	recorder.beginGeneration();
 	recorder.finishAssistant({ role: "assistant", content: "world", stopReason: "toolUse" });
 	recorder.beginTool("call", "read", { path: "file" });
 	recorder.finishTool("call", { content: "content" });
