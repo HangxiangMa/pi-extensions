@@ -103,6 +103,23 @@ test("normalizeBackendPayload accepts a reset-credit-only usage response", () =>
 	assert.match(formatCodexUsageReport(report), /Usage limit resets:\s+2 available/);
 });
 
+test("normalizeBackendPayload skips malformed optional additional rate limits", () => {
+	const report = normalizeBackendPayload(
+		{
+			plan_type: "plus",
+			rate_limit: { primary_window: { used_percent: 25 } },
+			rate_limit_reset_credits: { available_count: 1 },
+			additional_rate_limits: [null, { metered_feature: "broken", rate_limit: "not-an-object" }],
+		},
+		1750,
+		"pi-auth",
+	);
+
+	assert.equal(report.snapshots.length, 1);
+	assert.equal(report.snapshots[0]?.limitId, "codex");
+	assert.deepEqual(report.resetCredits, { availableCount: 1 });
+});
+
 test("normalizeAppServerResponse merges duplicate snapshots by limit id", () => {
 	const report = normalizeAppServerResponse(
 		{
@@ -146,6 +163,91 @@ test("normalizeAppServerResponse merges duplicate snapshots by limit id", () => 
 			},
 		],
 	});
+});
+
+test("normalizeAppServerResponse skips malformed optional buckets", () => {
+	const malformedEntry = normalizeAppServerResponse(
+		{
+			rateLimits: { limitId: "codex", primary: { usedPercent: 40 } },
+			rateLimitsByLimitId: {
+				broken: "not-an-object",
+			},
+			rateLimitResetCredits: { availableCount: 1 },
+		},
+		2250,
+	);
+	const arrayInsteadOfMap = normalizeAppServerResponse(
+		{
+			rateLimits: { limitId: "codex", primary: { usedPercent: 40 } },
+			rateLimitsByLimitId: [{ primary: { usedPercent: 10 } }],
+		},
+		2300,
+	);
+
+	assert.equal(malformedEntry.snapshots.length, 1);
+	assert.equal(malformedEntry.snapshots[0]?.limitId, "codex");
+	assert.deepEqual(malformedEntry.resetCredits, { availableCount: 1 });
+	assert.equal(arrayInsteadOfMap.snapshots.length, 1);
+});
+
+test("normalizeAppServerResponse distinguishes empty from malformed reset-credit details", () => {
+	const empty = normalizeAppServerResponse(
+		{
+			rateLimits: { limitId: "codex", primary: { usedPercent: 40 } },
+			rateLimitResetCredits: { availableCount: 0, credits: [] },
+		},
+		2500,
+	);
+	const malformed = normalizeAppServerResponse(
+		{
+			rateLimits: { limitId: "codex", primary: { usedPercent: 40 } },
+			rateLimitResetCredits: { availableCount: 2, credits: [null, { id: "" }] },
+		},
+		2750,
+	);
+	const capped = normalizeAppServerResponse(
+		{
+			rateLimits: { limitId: "codex", primary: { usedPercent: 40 } },
+			rateLimitResetCredits: {
+				availableCount: 1,
+				credits: [{ id: "reset-1" }, { id: "reset-2" }],
+			},
+		},
+		3000,
+	);
+
+	assert.deepEqual(empty.resetCredits, { availableCount: 0, credits: [] });
+	assert.deepEqual(malformed.resetCredits, { availableCount: 2 });
+	assert.deepEqual(capped.resetCredits, {
+		availableCount: 1,
+		credits: [{ id: "reset-1" }],
+	});
+});
+
+test("normalizers keep required primary snapshots strict", () => {
+	assert.throws(
+		() =>
+			normalizeBackendPayload(
+				{
+					rate_limit: "not-an-object",
+					rate_limit_reset_credits: { available_count: 1 },
+				},
+				3250,
+				"pi-auth",
+			),
+		/rate limit was not an object/,
+	);
+	assert.throws(
+		() =>
+			normalizeAppServerResponse(
+				{
+					rateLimits: "not-an-object",
+					rateLimitResetCredits: { availableCount: 1 },
+				},
+				3500,
+			),
+		/app-server rate-limit snapshot was not an object/,
+	);
 });
 
 test("scheduled statusline refresh ignores stale extension contexts", async (t) => {
