@@ -1,8 +1,10 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { access, link, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-export const PLAN_MODE_SETTINGS_FILE = "plan-mode.json";
+export const PLAN_MODE_SETTINGS_FILE = "pi-plan-mode.json";
+const LEGACY_PLAN_MODE_SETTINGS_FILE = "plan-mode.json";
 export const PLAN_MODE_THINKING_LEVELS = [
 	"inherit",
 	"off",
@@ -20,9 +22,9 @@ export interface PlanModeSettings {
 	thinkingLevel: PlanModeThinkingLevel;
 }
 export type PlanModeSettingsLoadResult =
-	| { kind: "missing" }
-	| { kind: "invalid"; reason: string }
-	| { kind: "loaded"; settings: PlanModeSettings };
+	| { kind: "missing"; notice?: string }
+	| { kind: "invalid"; reason: string; notice?: string }
+	| { kind: "loaded"; settings: PlanModeSettings; notice?: string };
 
 export function normalizePlanModeSettings(value: unknown): PlanModeSettings | undefined {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -35,8 +37,60 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
 }
 
 export async function readPlanModeSettings(
-	settingsPath = join(getAgentDir(), PLAN_MODE_SETTINGS_FILE),
+	settingsPath?: string,
 ): Promise<PlanModeSettingsLoadResult> {
+	if (settingsPath) return readSettingsFile(settingsPath);
+	const canonicalPath = join(getAgentDir(), PLAN_MODE_SETTINGS_FILE);
+	const canonical = await readSettingsFile(canonicalPath);
+	const legacyPath = join(getAgentDir(), LEGACY_PLAN_MODE_SETTINGS_FILE);
+	if (canonical.kind !== "missing") {
+		return (await exists(legacyPath))
+			? {
+					...canonical,
+					notice: `${LEGACY_PLAN_MODE_SETTINGS_FILE} ignored because ${PLAN_MODE_SETTINGS_FILE} takes precedence.`,
+				}
+			: canonical;
+	}
+
+	const legacy = await readSettingsFile(legacyPath);
+	const raced = await readSettingsFile(canonicalPath);
+	if (raced.kind !== "missing") return raced;
+	if (legacy.kind !== "loaded") return legacy;
+	try {
+		await installFileExclusively(canonicalPath, `${JSON.stringify(legacy.settings, null, "\t")}\n`);
+	} catch (error) {
+		const created = await readSettingsFile(canonicalPath);
+		if (created.kind !== "missing") return created;
+		return {
+			...legacy,
+			notice: `Plan-mode settings migration failed: ${formatError(error)}. The legacy file was used for this session.`,
+		};
+	}
+	try {
+		await rm(legacyPath);
+		return {
+			...legacy,
+			notice: `Plan-mode settings migrated from ${LEGACY_PLAN_MODE_SETTINGS_FILE} to ${PLAN_MODE_SETTINGS_FILE}.`,
+		};
+	} catch (error) {
+		return {
+			...legacy,
+			notice: `Plan-mode settings migrated to ${PLAN_MODE_SETTINGS_FILE}, but ${LEGACY_PLAN_MODE_SETTINGS_FILE} could not be removed: ${formatError(error)}.`,
+		};
+	}
+}
+
+async function installFileExclusively(filePath: string, contents: string) {
+	const tempFile = join(dirname(filePath), `.${PLAN_MODE_SETTINGS_FILE}.${randomUUID()}.tmp`);
+	try {
+		await writeFile(tempFile, contents, { encoding: "utf8", flag: "wx" });
+		await link(tempFile, filePath);
+	} finally {
+		await rm(tempFile, { force: true }).catch(() => undefined);
+	}
+}
+
+async function readSettingsFile(settingsPath: string): Promise<PlanModeSettingsLoadResult> {
 	let contents: string;
 	try {
 		contents = await readFile(settingsPath, "utf8");
@@ -58,6 +112,15 @@ export function configuredThinkingLevel(
 	settings: PlanModeSettings,
 ): PlanModeFixedThinkingLevel | undefined {
 	return settings.thinkingLevel === "inherit" ? undefined : settings.thinkingLevel;
+}
+
+async function exists(path: string) {
+	try {
+		await access(path);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

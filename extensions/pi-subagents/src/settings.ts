@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -118,9 +119,69 @@ export function normalizeSubagentSettings(value: unknown): SubagentSettings | un
 	return settings;
 }
 
+const SETTINGS_FILE = "pi-subagents.json";
+const LEGACY_SETTINGS_FILE = "pi-subagents-config.json";
+let pendingSettingsNotice: string | undefined;
+
 export function readSubagentSettings(): SubagentSettings | undefined {
-	const configPath = path.join(getAgentDir(), "pi-subagents-config.json");
-	if (!fs.existsSync(configPath)) return undefined;
+	const canonicalPath = path.join(getAgentDir(), SETTINGS_FILE);
+	const legacyPath = path.join(getAgentDir(), LEGACY_SETTINGS_FILE);
+	if (fs.existsSync(canonicalPath)) {
+		const canonical = readSettingsFile(canonicalPath);
+		const notices: string[] = [];
+		if (!canonical) notices.push(`${SETTINGS_FILE} is invalid and was ignored.`);
+		if (fs.existsSync(legacyPath)) {
+			notices.push(`${LEGACY_SETTINGS_FILE} ignored because ${SETTINGS_FILE} takes precedence.`);
+		}
+		if (notices.length > 0) pendingSettingsNotice = notices.join("\n");
+		return canonical;
+	}
+	if (!fs.existsSync(legacyPath)) return undefined;
+	const legacy = readSettingsFile(legacyPath);
+	if (!legacy) {
+		pendingSettingsNotice = `${LEGACY_SETTINGS_FILE} is invalid and was ignored.`;
+		return undefined;
+	}
+	try {
+		installFileExclusively(canonicalPath, `${JSON.stringify(legacy, null, "\t")}\n`);
+	} catch (error) {
+		if (fs.existsSync(canonicalPath)) return readSettingsFile(canonicalPath);
+		pendingSettingsNotice = `Subagent settings migration failed: ${formatError(error)}. The legacy file was used for this session.`;
+		return legacy;
+	}
+	try {
+		fs.rmSync(legacyPath);
+		pendingSettingsNotice = `Subagent settings migrated from ${LEGACY_SETTINGS_FILE} to ${SETTINGS_FILE}.`;
+	} catch (error) {
+		pendingSettingsNotice = `Subagent settings migrated to ${SETTINGS_FILE}, but ${LEGACY_SETTINGS_FILE} could not be removed: ${formatError(error)}.`;
+	}
+	return legacy;
+}
+
+function installFileExclusively(filePath: string, contents: string) {
+	const tempFile = path.join(path.dirname(filePath), `.${SETTINGS_FILE}.${randomUUID()}.tmp`);
+	try {
+		fs.writeFileSync(tempFile, contents, { encoding: "utf8", flag: "wx" });
+		fs.linkSync(tempFile, filePath);
+	} finally {
+		fs.rmSync(tempFile, { force: true });
+	}
+}
+
+export function consumeSubagentSettingsNotice() {
+	const notice = pendingSettingsNotice;
+	pendingSettingsNotice = undefined;
+	return notice;
+}
+
+export function saveSubagentConfig(settings: SubagentSettings): void {
+	const agentDir = getAgentDir();
+	fs.mkdirSync(agentDir, { recursive: true });
+	const configPath = path.join(agentDir, SETTINGS_FILE);
+	fs.writeFileSync(configPath, `${JSON.stringify(settings, null, "\t")}\n`, "utf-8");
+}
+
+function readSettingsFile(configPath: string): SubagentSettings | undefined {
 	try {
 		return normalizeSubagentSettings(JSON.parse(fs.readFileSync(configPath, "utf-8")));
 	} catch {
@@ -128,12 +189,8 @@ export function readSubagentSettings(): SubagentSettings | undefined {
 	}
 }
 
-export function saveSubagentConfig(settings: SubagentSettings): void {
-	const agentDir = getAgentDir();
-	fs.mkdirSync(agentDir, { recursive: true });
-
-	const configPath = path.join(agentDir, "pi-subagents-config.json");
-	fs.writeFileSync(configPath, `${JSON.stringify(settings, null, "\t")}\n`, "utf-8");
+function formatError(error: unknown) {
+	return error instanceof Error ? error.message : String(error);
 }
 
 export function uniqueToolNames(tools: string[]): string[] {
@@ -153,7 +210,11 @@ export function resolveSubagentThinkingLevel(
 	topLevelThinkingLevel?: SubagentThinkingLevel,
 	localThinkingLevel?: SubagentThinkingLevel,
 ): SubagentThinkingLevel | undefined {
-	return localThinkingLevel ?? topLevelThinkingLevel ?? agents.find((agent) => agent.name === agentName)?.thinkingLevel;
+	return (
+		localThinkingLevel ??
+		topLevelThinkingLevel ??
+		agents.find((agent) => agent.name === agentName)?.thinkingLevel
+	);
 }
 
 export function hasAnyAgentOverride(config: SubagentAgentConfig): boolean {

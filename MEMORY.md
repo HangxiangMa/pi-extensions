@@ -19,7 +19,7 @@
 - `pi-codex-usage` statusline must select a rate-limit bucket by current model id/name; `gpt-5.3-codex-spark` can use its own returned bucket instead of primary `codex`.
 - Keep package metadata and CI/bump/publish workflows pinned to npm 11.16.0; npm 12.0 resolves shrinkwrapped overrides differently, prunes alternate-Pi installs, and cannot resolve its published provenance `sigstore`. Regenerate the lockfile when intentionally changing npm major versions.
 - New filesystem-writing Pi tools need a pre-review edge-case pass: workspace containment, absolute/`..` paths, symlink loops/escapes, duplicate paths, cancellation, process errors, protocol errors, and edit ordering.
-- New extension package source may match the root `.gitignore` `src/` rule; stage intended `extensions/<pkg>/src/*.ts` with `git add -f`.
+- New extension package source may match the root `.gitignore` `src/` rule; stage intended `extensions/<pkg>/src/*.ts` with `git add -f`. Biome also honors that ignore, so format/check changed source explicitly with `--vcs-use-ignore-file=false`.
 - Symptom: `npm test --workspace @narumitw/<extension>` fails with “Missing script: test”. Cause: extension packages do not define workspace test scripts; root `npm test` compiles and runs all extension tests. Fix: run `npm test` from the repository root.
 - When PR comments expose one class of bug, stop patching comment-by-comment and do a holistic pass over adjacent Modules before pushing again.
 - Symptom: PR status shows no issue comments but inline review comments exist. Cause: `gh pr view --json comments,reviews` omits pull review comment bodies. Fix: use `gh api repos/OWNER/REPO/pulls/NUMBER/comments` plus issue comments/reviews when actual PR review comments are needed.
