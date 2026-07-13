@@ -40,6 +40,7 @@ export function createDefaultConfig(): StatuslineConfig {
 
 export function readStatuslineSettings(settingsPath?: string): StatuslineSettings {
 	if (settingsPath) return readSettingsFile(settingsPath);
+	pendingSettingsNotice = undefined;
 	const canonicalPath = join(getAgentDir(), SETTINGS_FILE);
 	const legacyPath = join(getAgentDir(), LEGACY_SETTINGS_FILE);
 	if (existsSync(canonicalPath)) {
@@ -59,10 +60,21 @@ export function readStatuslineSettings(settingsPath?: string): StatuslineSetting
 		return legacy.settings;
 	}
 	try {
-		installFileExclusively(canonicalPath, `${JSON.stringify(legacy.settings, null, "\t")}\n`);
+		installFileExclusively(canonicalPath, legacy.contents ?? "");
 	} catch (error) {
-		if (existsSync(canonicalPath)) return readSettingsFile(canonicalPath);
+		if (existsSync(canonicalPath)) {
+			const canonical = readSettingsFileResult(canonicalPath);
+			pendingSettingsNotice = [
+				...(!canonical.valid ? [`${SETTINGS_FILE} is invalid and was ignored.`] : []),
+				`${LEGACY_SETTINGS_FILE} ignored because ${SETTINGS_FILE} was created concurrently.`,
+			].join("\n");
+			return canonical.settings;
+		}
 		pendingSettingsNotice = `Statusline settings migration failed: ${formatError(error)}. The legacy file was used for this session.`;
+		return legacy.settings;
+	}
+	if (!fileContentsEqual(legacyPath, legacy.contents ?? "")) {
+		pendingSettingsNotice = `Statusline settings migrated to ${SETTINGS_FILE}, but ${LEGACY_SETTINGS_FILE} changed during migration and was retained.`;
 		return legacy.settings;
 	}
 	try {
@@ -80,7 +92,19 @@ function installFileExclusively(filePath: string, contents: string) {
 		writeFileSync(tempFile, contents, { encoding: "utf8", flag: "wx" });
 		linkSync(tempFile, filePath);
 	} finally {
-		rmSync(tempFile, { force: true });
+		try {
+			rmSync(tempFile, { force: true });
+		} catch {
+			// Preserve the migration result if best-effort temp cleanup fails.
+		}
+	}
+}
+
+function fileContentsEqual(path: string, expected: string) {
+	try {
+		return readFileSync(path, "utf8") === expected;
+	} catch {
+		return false;
 	}
 }
 
@@ -97,13 +121,16 @@ function readSettingsFile(settingsPath: string): StatuslineSettings {
 function readSettingsFileResult(settingsPath: string): {
 	settings: StatuslineSettings;
 	valid: boolean;
+	contents?: string;
 } {
+	let contents: string;
 	try {
-		const parsed = JSON.parse(readFileSync(settingsPath, "utf8")) as unknown;
+		contents = readFileSync(settingsPath, "utf8");
+		const parsed = JSON.parse(contents) as unknown;
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-			return { settings: { extensionStatusIcons: {} }, valid: false };
+			return { settings: { extensionStatusIcons: {} }, valid: false, contents };
 		}
-		return { settings: normalizeStatuslineSettings(parsed), valid: true };
+		return { settings: normalizeStatuslineSettings(parsed), valid: true, contents };
 	} catch {
 		return { settings: { extensionStatusIcons: {} }, valid: false };
 	}

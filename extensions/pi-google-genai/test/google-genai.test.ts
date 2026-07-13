@@ -137,6 +137,12 @@ test("config loading migrates to the canonical package filename with private per
 		assert.equal(invalidLegacy.configLoaded, false);
 		await assert.rejects(stat(canonicalPath));
 
+		await writeFile(legacyPath, "null", { mode: 0o600 });
+		const wrongShapeLegacy = await loadGoogleGenaiConfig();
+		assert.match(wrongShapeLegacy.warnings.join("\n"), /google-genai\.json must/);
+		assert.doesNotMatch(wrongShapeLegacy.warnings.join("\n"), /pi-google-genai\.json must/);
+		await assert.rejects(stat(canonicalPath));
+
 		await writeFile(legacyPath, JSON.stringify({ apiKey: "fallback-key", model: "fallback" }), {
 			mode: 0o600,
 		});

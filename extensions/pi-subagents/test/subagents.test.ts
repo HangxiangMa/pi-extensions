@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -14,6 +15,7 @@ import path from "node:path";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { discoverAgents, formatAgentList } from "../src/agents.js";
+import { consumeSubagentSettingsNotice } from "../src/settings.js";
 import subagents, {
 	buildPiArgs,
 	formatTokens,
@@ -224,12 +226,17 @@ test("subagent settings migrate and save to the canonical package filename", () 
 	try {
 		const legacyPath = path.join(directory, "pi-subagents-config.json");
 		const canonicalPath = path.join(directory, "pi-subagents.json");
-		writeFileSync(legacyPath, JSON.stringify({ agents: { scout: { tools: ["read"] } } }));
-		assert.deepEqual(readSubagentSettings(), { agents: { scout: { tools: ["read"] } } });
-		assert.equal(existsSync(canonicalPath), true);
-		assert.equal(existsSync(legacyPath), false);
+		writeFileSync(
+			legacyPath,
+			JSON.stringify({ agents: { scout: { tools: ["read"] } }, futureOption: true }),
+		);
 		const migrationMock = createMockPi();
 		subagents(migrationMock.pi);
+		assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), {
+			agents: { scout: { tools: ["read"] } },
+			futureOption: true,
+		});
+		assert.equal(existsSync(legacyPath), false);
 		const migrationContext = createMockContext();
 		migrationMock.events.get("session_start")?.[0]?.({}, migrationContext.ctx);
 		assert.match(migrationContext.notifications[0]?.message ?? "", /migrated/i);
@@ -242,7 +249,10 @@ test("subagent settings migrate and save to the canonical package filename", () 
 		writeFileSync(canonicalPath, "invalid");
 		assert.equal(readSubagentSettings(), undefined);
 		assert.equal(readFileSync(legacyPath, "utf8").includes("bash"), true);
-
+		unlinkSync(legacyPath);
+		writeFileSync(canonicalPath, JSON.stringify({ agents: { scout: { tools: ["read"] } } }));
+		assert.deepEqual(readSubagentSettings(), { agents: { scout: { tools: ["read"] } } });
+		assert.equal(consumeSubagentSettingsNotice(), undefined);
 		unlinkSync(canonicalPath);
 		writeFileSync(legacyPath, "invalid");
 		assert.equal(readSubagentSettings(), undefined);
@@ -252,9 +262,10 @@ test("subagent settings migrate and save to the canonical package filename", () 
 		symlinkSync("missing-target", canonicalPath);
 		assert.deepEqual(readSubagentSettings(), { agents: { scout: { tools: ["read"] } } });
 		assert.equal(existsSync(legacyPath), true);
-		unlinkSync(canonicalPath);
 
 		saveSubagentConfig({ stateful: { enabled: false } });
+		assert.equal(lstatSync(canonicalPath).isSymbolicLink(), false);
+		assert.equal(existsSync(path.join(directory, "missing-target")), false);
 		assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), {
 			stateful: { enabled: false },
 		});

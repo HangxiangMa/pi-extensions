@@ -79,6 +79,7 @@ export function loadConfig(cwd = process.cwd()): LspConfig {
 let pendingConfigNotice: string | undefined;
 
 function loadConfiguredConfig(cwd: string): LspConfig | undefined {
+	pendingConfigNotice = undefined;
 	const rawConfig = process.env.PI_LSP_CONFIG?.trim();
 	if (rawConfig) return parseConfigSource(rawConfig, cwd, "PI_LSP_CONFIG");
 
@@ -111,8 +112,16 @@ function loadConfiguredConfig(cwd: string): LspConfig | undefined {
 	try {
 		installFileExclusively(userConfig, legacyContents);
 	} catch (error) {
-		if (existsSync(userConfig)) return parseConfigFile(userConfig);
+		if (existsSync(userConfig)) {
+			pendingConfigNotice = "lsp.json ignored because pi-lsp.json was created concurrently.";
+			return parseConfigFile(userConfig);
+		}
 		pendingConfigNotice = `LSP config migration failed: ${formatError(error)}. The legacy file was used for this session.`;
+		return legacy;
+	}
+	if (!fileContentsEqual(legacyUserConfig, legacyContents)) {
+		pendingConfigNotice =
+			"LSP config migrated to pi-lsp.json, but lsp.json changed during migration and was retained.";
 		return legacy;
 	}
 	try {
@@ -130,7 +139,19 @@ function installFileExclusively(filePath: string, contents: string) {
 		writeFileSync(tempFile, contents, { encoding: "utf8", flag: "wx" });
 		linkSync(tempFile, filePath);
 	} finally {
-		rmSync(tempFile, { force: true });
+		try {
+			rmSync(tempFile, { force: true });
+		} catch {
+			// Preserve the migration result if best-effort temp cleanup fails.
+		}
+	}
+}
+
+function fileContentsEqual(filePath: string, expected: string) {
+	try {
+		return readFileSync(filePath, "utf8") === expected;
+	} catch {
+		return false;
 	}
 }
 

@@ -14,6 +14,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { consumeStatuslineSettingsNotice } from "../src/settings.js";
 import type { ExtensionStatusIconAliasMap } from "../src/statusline.js";
 import statusline, {
 	buildExtensionStatusIconAliases,
@@ -435,10 +436,14 @@ test("statusline settings migrate to the canonical package filename", async () =
 	try {
 		const legacyPath = join(root, "pi-statusline-settings.json");
 		const canonicalPath = join(root, "pi-statusline.json");
-		writeFileSync(legacyPath, JSON.stringify({ extensionStatusIcons: { goal: "🎯" } }));
+		writeFileSync(
+			legacyPath,
+			JSON.stringify({ extensionStatusIcons: { goal: "🎯" }, futureOption: true }),
+		);
 		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: { goal: "🎯" } });
 		assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), {
 			extensionStatusIcons: { goal: "🎯" },
+			futureOption: true,
 		});
 		assert.equal(existsSync(legacyPath), false);
 
@@ -450,7 +455,10 @@ test("statusline settings migrate to the canonical package filename", async () =
 		writeFileSync(canonicalPath, "invalid");
 		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: {} });
 		assert.equal(readFileSync(legacyPath, "utf8").includes("old"), true);
-
+		unlinkSync(legacyPath);
+		writeFileSync(canonicalPath, JSON.stringify({ extensionStatusIcons: { goal: "fixed" } }));
+		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: { goal: "fixed" } });
+		assert.equal(consumeStatuslineSettingsNotice(), undefined);
 		unlinkSync(canonicalPath);
 		writeFileSync(legacyPath, "invalid");
 		assert.deepEqual(readStatuslineSettings(), { extensionStatusIcons: {} });

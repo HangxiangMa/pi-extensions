@@ -11,7 +11,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export const DEFAULT_MODEL = "gemini-3.5-flash";
@@ -56,7 +56,7 @@ export async function loadGoogleGenaiConfig(): Promise<LoadedGoogleGenaiConfig> 
 	const raw = await readJsonIfExists(readPath, warnings);
 	const configLoaded = isObject(raw);
 	if (raw !== undefined && !configLoaded) {
-		warnings.push(`${CONFIG_FILE_NAME} must contain a JSON object; ignoring config.`);
+		warnings.push(`${basename(readPath)} must contain a JSON object; ignoring config.`);
 	}
 	const normalized = normalizeConfigWithWarnings(configLoaded ? raw : undefined);
 	return {
@@ -193,14 +193,17 @@ async function prepareGoogleGenaiConfigPath(canonicalPath: string, warnings: str
 	const legacy = await readJsonIfExists(legacyPath, legacyWarnings);
 	if (!isObject(legacy)) {
 		warnings.push(...legacyWarnings);
-		if (legacy !== undefined) {
-			warnings.push(`${LEGACY_CONFIG_FILE_NAME} must contain a JSON object; ignoring config.`);
-		}
 		return legacyPath;
 	}
 	try {
 		await installPrivateConfigExclusively(canonicalPath, `${JSON.stringify(legacy, null, "\t")}\n`);
 		await chmod(canonicalPath, 0o600);
+		if (!(await jsonFileEquals(legacyPath, legacy))) {
+			warnings.push(
+				`Google GenAI config migrated to ${CONFIG_FILE_NAME}, but ${LEGACY_CONFIG_FILE_NAME} changed during migration and was retained.`,
+			);
+			return canonicalPath;
+		}
 		try {
 			await rm(legacyPath);
 			warnings.push(
@@ -223,6 +226,16 @@ async function prepareGoogleGenaiConfigPath(canonicalPath: string, warnings: str
 			`Google GenAI config migration failed: ${formatError(error)}. The legacy file was used for this session.`,
 		);
 		return legacyPath;
+	}
+}
+
+async function jsonFileEquals(filePath: string, expected: object) {
+	try {
+		return (
+			JSON.stringify(JSON.parse(await readFile(filePath, "utf8"))) === JSON.stringify(expected)
+		);
+	} catch {
+		return false;
 	}
 }
 

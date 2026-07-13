@@ -261,12 +261,16 @@ test("Plan-mode settings migrate to the canonical package filename", async () =>
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
 	try {
-		await writeFile(join(directory, "plan-mode.json"), '{"thinkingLevel":"high"}');
+		await writeFile(
+			join(directory, "plan-mode.json"),
+			'{"thinkingLevel":"high","futureOption":true}',
+		);
 		const loaded = await readPlanModeSettings();
 		assert.equal(loaded.kind, "loaded");
 		assert.match(loaded.notice ?? "", /migrated/i);
 		assert.deepEqual(JSON.parse(await readFile(join(directory, "pi-plan-mode.json"), "utf8")), {
 			thinkingLevel: "high",
+			futureOption: true,
 		});
 		await assert.rejects(access(join(directory, "plan-mode.json")));
 

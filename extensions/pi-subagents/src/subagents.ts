@@ -69,8 +69,11 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		readSubagentSettings();
-		const notice = consumeSubagentSettingsNotice();
+		let notice = consumeSubagentSettingsNotice();
+		if (!notice) {
+			readSubagentSettings();
+			notice = consumeSubagentSettingsNotice();
+		}
 		if (notice) ctx.ui.notify(notice, "warning");
 	});
 

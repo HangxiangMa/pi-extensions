@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createMockPi } from "../../../test/support.js";
-import { loadConfig } from "../src/adapters.js";
+import { consumeLspConfigNotice, loadConfig } from "../src/adapters.js";
 import { commandExists, commandFromEnv, splitCommand } from "../src/command.js";
 import { collectSupportedFiles, directoryUri, resolveSupportedFile } from "../src/files.js";
 import lsp from "../src/pi-lsp.js";
@@ -101,7 +101,12 @@ test("LSP config uses canonical paths while preserving project legacy files", ()
 		symlinkSync("missing-target", path.join(agentDir, "pi-lsp.json"));
 		assert.equal(loadConfig(project).servers[0]?.name, "fallback");
 		assert.equal(existsSync(userLegacy), true);
+
+		process.env.PI_LSP_CONFIG = JSON.stringify(config("explicit"));
+		assert.equal(loadConfig(project).servers[0]?.name, "explicit");
+		assert.equal(consumeLspConfigNotice(), undefined);
 	} finally {
+		delete process.env.PI_LSP_CONFIG;
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		rmSync(root, { recursive: true, force: true });

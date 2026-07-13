@@ -124,6 +124,7 @@ const LEGACY_SETTINGS_FILE = "pi-subagents-config.json";
 let pendingSettingsNotice: string | undefined;
 
 export function readSubagentSettings(): SubagentSettings | undefined {
+	pendingSettingsNotice = undefined;
 	const canonicalPath = path.join(getAgentDir(), SETTINGS_FILE);
 	const legacyPath = path.join(getAgentDir(), LEGACY_SETTINGS_FILE);
 	if (fs.existsSync(canonicalPath)) {
@@ -137,16 +138,28 @@ export function readSubagentSettings(): SubagentSettings | undefined {
 		return canonical;
 	}
 	if (!fs.existsSync(legacyPath)) return undefined;
-	const legacy = readSettingsFile(legacyPath);
+	const legacySnapshot = readSettingsSnapshot(legacyPath);
+	const legacy = legacySnapshot.settings;
 	if (!legacy) {
 		pendingSettingsNotice = `${LEGACY_SETTINGS_FILE} is invalid and was ignored.`;
 		return undefined;
 	}
 	try {
-		installFileExclusively(canonicalPath, `${JSON.stringify(legacy, null, "\t")}\n`);
+		installFileExclusively(canonicalPath, legacySnapshot.contents ?? "");
 	} catch (error) {
-		if (fs.existsSync(canonicalPath)) return readSettingsFile(canonicalPath);
+		if (fs.existsSync(canonicalPath)) {
+			const canonical = readSettingsFile(canonicalPath);
+			pendingSettingsNotice = [
+				...(!canonical ? [`${SETTINGS_FILE} is invalid and was ignored.`] : []),
+				`${LEGACY_SETTINGS_FILE} ignored because ${SETTINGS_FILE} was created concurrently.`,
+			].join("\n");
+			return canonical;
+		}
 		pendingSettingsNotice = `Subagent settings migration failed: ${formatError(error)}. The legacy file was used for this session.`;
+		return legacy;
+	}
+	if (!fileContentsEqual(legacyPath, legacySnapshot.contents ?? "")) {
+		pendingSettingsNotice = `Subagent settings migrated to ${SETTINGS_FILE}, but ${LEGACY_SETTINGS_FILE} changed during migration and was retained.`;
 		return legacy;
 	}
 	try {
@@ -164,7 +177,19 @@ function installFileExclusively(filePath: string, contents: string) {
 		fs.writeFileSync(tempFile, contents, { encoding: "utf8", flag: "wx" });
 		fs.linkSync(tempFile, filePath);
 	} finally {
-		fs.rmSync(tempFile, { force: true });
+		try {
+			fs.rmSync(tempFile, { force: true });
+		} catch {
+			// Preserve the migration result if best-effort temp cleanup fails.
+		}
+	}
+}
+
+function fileContentsEqual(filePath: string, expected: string) {
+	try {
+		return fs.readFileSync(filePath, "utf8") === expected;
+	} catch {
+		return false;
 	}
 }
 
@@ -178,14 +203,35 @@ export function saveSubagentConfig(settings: SubagentSettings): void {
 	const agentDir = getAgentDir();
 	fs.mkdirSync(agentDir, { recursive: true });
 	const configPath = path.join(agentDir, SETTINGS_FILE);
-	fs.writeFileSync(configPath, `${JSON.stringify(settings, null, "\t")}\n`, "utf-8");
+	const tempFile = path.join(agentDir, `.${SETTINGS_FILE}.${randomUUID()}.tmp`);
+	try {
+		fs.writeFileSync(tempFile, `${JSON.stringify(settings, null, "\t")}\n`, {
+			encoding: "utf8",
+			flag: "wx",
+		});
+		fs.renameSync(tempFile, configPath);
+	} finally {
+		try {
+			fs.rmSync(tempFile, { force: true });
+		} catch {
+			// Preserve the save result if best-effort temp cleanup fails.
+		}
+	}
 }
 
 function readSettingsFile(configPath: string): SubagentSettings | undefined {
+	return readSettingsSnapshot(configPath).settings;
+}
+
+function readSettingsSnapshot(configPath: string): {
+	settings?: SubagentSettings;
+	contents?: string;
+} {
 	try {
-		return normalizeSubagentSettings(JSON.parse(fs.readFileSync(configPath, "utf-8")));
+		const contents = fs.readFileSync(configPath, "utf8");
+		return { settings: normalizeSubagentSettings(JSON.parse(contents)), contents };
 	} catch {
-		return undefined;
+		return {};
 	}
 }
 
