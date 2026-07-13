@@ -1,9 +1,10 @@
-import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 const CONFIG_FILE_NAME = "pi-langfuse.json";
-const DEFAULT_BASE_URL = "https://cloud.langfuse.com";
+export const DEFAULT_BASE_URL = "https://us.cloud.langfuse.com";
 
 export interface LangfuseConfig {
 	publicKey: string;
@@ -18,49 +19,31 @@ export type LangfuseConfigResult =
 	| { ok: true; config: LangfuseConfig; path: string; warnings: string[] }
 	| { ok: false; path: string; warnings: string[]; reason: string };
 
-export type LangfuseConfigInitResult =
-	| { ok: true; path: string }
-	| { ok: false; path: string; reason: string; exists: boolean };
-
 export function langfuseConfigPath(): string {
 	return join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), CONFIG_FILE_NAME);
 }
 
-export async function initializeLangfuseConfig(
+export async function writeLangfuseConfig(
+	config: LangfuseConfig,
 	path = langfuseConfigPath(),
-): Promise<LangfuseConfigInitResult> {
-	try {
-		await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-	} catch (error) {
-		return initFailure(path, error);
-	}
+): Promise<LangfuseConfig> {
+	const normalized = normalizeLangfuseConfig(config);
+	if (!normalized.ok) throw new Error(normalized.reason);
 
+	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+	const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
 	try {
-		await writeFile(
-			path,
-			`${JSON.stringify(
-				{
-					publicKey: "",
-					secretKey: "",
-					baseUrl: DEFAULT_BASE_URL,
-					captureContent: true,
-				},
-				null,
-				2,
-			)}\n`,
-			{ encoding: "utf8", flag: "wx", mode: 0o600 },
-		);
-		return { ok: true, path };
+		await writeFile(tempPath, `${JSON.stringify(normalized.config, null, 2)}\n`, {
+			encoding: "utf8",
+			mode: 0o600,
+		});
+		await chmod(tempPath, 0o600);
+		await rename(tempPath, path);
+		await chmod(path, 0o600);
+		return normalized.config;
 	} catch (error) {
-		if (isNodeError(error) && error.code === "EEXIST") {
-			return {
-				ok: false,
-				path,
-				exists: true,
-				reason: `Configuration file already exists: ${path}`,
-			};
-		}
-		return initFailure(path, error);
+		await rm(tempPath, { force: true }).catch(() => undefined);
+		throw error;
 	}
 }
 
@@ -208,18 +191,6 @@ function normalizeString(value: unknown): string | undefined {
 
 function isInterpolation(value: string): boolean {
 	return value.startsWith("$") || value.startsWith("!");
-}
-
-function initFailure(
-	path: string,
-	error: unknown,
-): Extract<LangfuseConfigInitResult, { ok: false }> {
-	return {
-		ok: false,
-		path,
-		exists: false,
-		reason: `Failed to create ${path}: ${formatError(error)}`,
-	};
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

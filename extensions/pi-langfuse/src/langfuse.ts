@@ -1,16 +1,20 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+} from "@earendil-works/pi-coding-agent";
 import {
+	DEFAULT_BASE_URL,
 	type LangfuseConfig,
-	type LangfuseConfigInitResult,
 	type LangfuseConfigResult,
-	initializeLangfuseConfig,
 	loadLangfuseConfig,
+	normalizeLangfuseConfig,
+	writeLangfuseConfig,
 } from "./config.js";
 import { type TraceBackend, TraceRecorder } from "./tracing.js";
 
 interface ExtensionDependencies {
-	loadConfig(): Promise<LangfuseConfigResult>;
-	initializeConfig(path?: string): Promise<LangfuseConfigInitResult>;
+	loadConfig(path?: string): Promise<LangfuseConfigResult>;
+	writeConfig(config: LangfuseConfig, path?: string): Promise<LangfuseConfig>;
 	createBackend(config: LangfuseConfig): Promise<TraceBackend>;
 }
 
@@ -19,14 +23,14 @@ const COMMAND_COMPLETIONS = [
 	{ value: "flush", label: "flush", description: "Export all completed traces now" },
 	{ value: "help", label: "help", description: "Show Langfuse command help" },
 	{ value: "config", label: "config", description: "Show the config path and JSON template" },
-	{ value: "init", label: "init", description: "Create a starter config without overwriting" },
+	{ value: "init", label: "init", description: "Interactively create or update config" },
 ];
 
 const CONFIG_TEMPLATE = JSON.stringify(
 	{
 		publicKey: "pk-lf-...",
 		secretKey: "sk-lf-...",
-		baseUrl: "https://cloud.langfuse.com",
+		baseUrl: DEFAULT_BASE_URL,
 		captureContent: true,
 	},
 	null,
@@ -37,7 +41,7 @@ export function createLangfuseExtension(
 	dependencies: Partial<ExtensionDependencies> = {},
 ): (pi: ExtensionAPI) => void {
 	const loadConfig = dependencies.loadConfig ?? loadLangfuseConfig;
-	const initializeConfig = dependencies.initializeConfig ?? initializeLangfuseConfig;
+	const writeConfig = dependencies.writeConfig ?? writeLangfuseConfig;
 	const createBackend =
 		dependencies.createBackend ??
 		(async (config) => {
@@ -102,17 +106,24 @@ export function createLangfuseExtension(
 					return;
 				}
 				if (action === "init") {
-					const result = await initializeConfig(configPath);
-					configPath = result.path;
-					if (result.ok) {
-						initializationError =
-							"Langfuse tracing is disabled until the new config has credentials and Pi is restarted.";
+					if (!ctx.hasUI) {
 						ctx.ui.notify(
-							`Created Langfuse config at ${result.path}. Fill in publicKey and secretKey, then restart Pi.`,
-							"info",
+							"/langfuse init requires interactive UI. Edit pi-langfuse.json manually.",
+							"warning",
 						);
-					} else {
-						ctx.ui.notify(result.reason, result.exists ? "warning" : "error");
+						return;
+					}
+					const loaded = await loadConfig(configPath);
+					configPath = loaded.path;
+					const next = await promptForConfig(ctx, loaded.ok ? loaded.config : undefined);
+					if (!next) return;
+					try {
+						await writeConfig(next, loaded.path);
+						initializationError =
+							"Langfuse config was saved. Restart Pi to apply the new configuration.";
+						ctx.ui.notify(`Saved Langfuse config to ${loaded.path}. Restart Pi to apply it.`, "info");
+					} catch (error) {
+						ctx.ui.notify(`Failed to save Langfuse config: ${formatError(error)}`, "error");
 					}
 					return;
 				}
@@ -123,7 +134,7 @@ export function createLangfuseExtension(
 							"status: show tracing state without credentials",
 							"flush: wait for completed traces to export",
 							"config: show the config path and credential-free JSON template",
-							"init: create a private starter config without overwriting an existing file",
+							"init: interactively create or update the private config",
 						].join("\n"),
 						"info",
 					);
@@ -232,6 +243,40 @@ export function createLangfuseExtension(
 			}
 		});
 	};
+}
+
+async function promptForConfig(
+	ctx: ExtensionCommandContext,
+	current: LangfuseConfig | undefined,
+): Promise<LangfuseConfig | undefined> {
+	const publicKey = await ctx.ui.input("Langfuse public key (leave blank to keep existing):");
+	if (publicKey === undefined) {
+		ctx.ui.notify("Cancelled", "info");
+		return undefined;
+	}
+	const secretKey = await ctx.ui.input("Langfuse secret key (leave blank to keep existing):");
+	if (secretKey === undefined) {
+		ctx.ui.notify("Cancelled", "info");
+		return undefined;
+	}
+	const baseUrl = await ctx.ui.input("Langfuse base URL:", current?.baseUrl ?? DEFAULT_BASE_URL);
+	if (baseUrl === undefined) {
+		ctx.ui.notify("Cancelled", "info");
+		return undefined;
+	}
+
+	const normalized = normalizeLangfuseConfig({
+		...current,
+		publicKey: publicKey.trim() || current?.publicKey || "",
+		secretKey: secretKey.trim() || current?.secretKey || "",
+		baseUrl: baseUrl.trim() || current?.baseUrl || DEFAULT_BASE_URL,
+		captureContent: current?.captureContent ?? true,
+	});
+	if (!normalized.ok) {
+		ctx.ui.notify(`Invalid Langfuse config: ${normalized.reason}`, "error");
+		return undefined;
+	}
+	return normalized.config;
 }
 
 function formatConfigError(result: Extract<LangfuseConfigResult, { ok: false }>): string {

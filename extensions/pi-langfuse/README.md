@@ -34,13 +34,13 @@ The Langfuse v4 SDK requires Node.js 20 or newer.
 
 ## ⚙️ Configuration
 
-Create a private starter file from Pi:
+Create or update the private config interactively from Pi:
 
 ```text
 /langfuse init
 ```
 
-The command creates `~/.pi/agent/pi-langfuse.json` with mode `0600`, empty key fields, and safe defaults. It never overwrites an existing file. Fill in the generated `publicKey` and `secretKey`, then restart Pi.
+The command prompts for the public key, secret key, and base URL. Leave either key blank to preserve its existing value when updating a valid config. The file is saved atomically with mode `0600`; restart Pi after saving. In print or JSON mode, edit the file manually because interactive input is unavailable.
 
 You can also create the file manually:
 
@@ -48,14 +48,14 @@ You can also create the file manually:
 {
   "publicKey": "pk-lf-...",
   "secretKey": "sk-lf-...",
-  "baseUrl": "https://cloud.langfuse.com",
+  "baseUrl": "https://us.cloud.langfuse.com",
   "environment": "development",
   "release": "local",
   "captureContent": true
 }
 ```
 
-`publicKey` and `secretKey` are required literal strings. Environment-variable and command interpolation are intentionally unsupported. `baseUrl` defaults to `https://cloud.langfuse.com`; regional and self-hosted HTTP or HTTPS endpoints are supported. Prefer HTTPS because HTTP sends Langfuse credentials and trace content without transport encryption.
+`publicKey` and `secretKey` are required literal strings. Environment-variable and command interpolation are intentionally unsupported. `baseUrl` defaults to `https://us.cloud.langfuse.com`; regional and self-hosted HTTP or HTTPS endpoints are supported. Prefer HTTPS because HTTP sends Langfuse credentials and trace content without transport encryption.
 
 `environment` and `release` are optional Langfuse trace attributes. Set `captureContent` to `false` to trace timing, model, usage, cost, and status metadata without sending prompts, responses, or tool content.
 
@@ -99,7 +99,7 @@ Automatic retries or continuations that begin without a new user prompt are reco
 - `flush` waits for all completed observations to export.
 - `help` displays command guidance.
 - `config` displays the config path and a credential-free JSON template. It never opens an interactive prompt or echoes configured keys.
-- `init` creates a private starter config with empty credential fields and never overwrites an existing file.
+- `init` interactively creates or updates the private config without displaying existing credentials. Blank keys preserve valid existing values.
 
 ## 🔐 Privacy
 

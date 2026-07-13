@@ -601,9 +601,17 @@ test("configuration covers malformed JSON, normalization, and captureContent fal
 		normalizeLangfuseConfig({ publicKey: "pk", secretKey: "sk", baseUrl: "ftp://x" }).ok,
 		false,
 	);
-	assert.equal(
-		normalizeLangfuseConfig({ publicKey: "pk", secretKey: "sk", captureContent: false }).ok,
-		true,
+	assert.deepEqual(
+		normalizeLangfuseConfig({ publicKey: "pk", secretKey: "sk", captureContent: false }),
+		{
+			ok: true,
+			config: {
+				publicKey: "pk",
+				secretKey: "sk",
+				baseUrl: "https://us.cloud.langfuse.com",
+				captureContent: false,
+			},
+		},
 	);
 
 	await writeFile(path, JSON.stringify({ publicKey: "pk", secretKey: "sk" }), { mode: 0o600 });
@@ -660,40 +668,67 @@ test("commands expose status, flush, help, and credential-free config guidance",
 	assert.doesNotMatch(output, /private-value/);
 });
 
-test("/langfuse init creates a private starter config without overwriting", async (t) => {
+test("/langfuse init interactively creates and updates a private config", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-langfuse-init-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
 	const path = join(dir, "nested", "pi-langfuse.json");
 	const mock = createMockPi();
 	createLangfuseExtension({
+		loadConfig: (requestedPath = path) => loadLangfuseConfig(requestedPath),
+		createBackend: async () => new FakeBackend(),
+	})(mock.pi);
+	const session = createMockContext({ hasUI: false });
+	await mock.events.get("session_start")?.[0]?.({}, session.ctx);
+	const command = mock.commands.get("langfuse");
+	const notifications: Array<{ message: string; level?: string }> = [];
+	const answers = ["pk-new", "sk-new", ""];
+	const ctx = {
+		hasUI: true,
+		ui: {
+			input: async () => answers.shift(),
+			notify(message: string, level?: string) {
+				notifications.push({ message, level });
+			},
+		},
+	};
+
+	await command?.handler("init", ctx);
+
+	assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+		publicKey: "pk-new",
+		secretKey: "sk-new",
+		baseUrl: "https://us.cloud.langfuse.com",
+		captureContent: true,
+	});
+	assert.equal((await stat(path)).mode & 0o777, 0o600);
+	assert.match(notifications.at(-1)?.message ?? "", /saved.*restart pi/i);
+	assert.equal(notifications.at(-1)?.level, "info");
+
+	answers.push("", "", "https://self-hosted.example/");
+	await command?.handler("init", ctx);
+	assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+		publicKey: "pk-new",
+		secretKey: "sk-new",
+		baseUrl: "https://self-hosted.example",
+		captureContent: true,
+	});
+});
+
+test("/langfuse init requires interactive UI", async () => {
+	const mock = createMockPi();
+	createLangfuseExtension({
 		loadConfig: async () => ({
 			ok: false,
-			path,
+			path: "/config/pi-langfuse.json",
 			warnings: [],
-			reason: `Configuration file not found: ${path}`,
+			reason: "missing",
 		}),
 		createBackend: async () => new FakeBackend(),
 	})(mock.pi);
 	const { ctx, notifications } = createMockContext({ hasUI: false });
 	await mock.events.get("session_start")?.[0]?.({}, ctx);
-	const command = mock.commands.get("langfuse");
-
-	await command?.handler("init", ctx);
-
-	assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
-		publicKey: "",
-		secretKey: "",
-		baseUrl: "https://cloud.langfuse.com",
-		captureContent: true,
-	});
-	assert.equal((await stat(path)).mode & 0o777, 0o600);
-	assert.match(notifications.at(-1)?.message ?? "", /created.*restart pi/i);
-	assert.equal(notifications.at(-1)?.level, "info");
-
-	await writeFile(path, '{"keep":true}\n', { mode: 0o600 });
-	await command?.handler("init", ctx);
-	assert.equal(await readFile(path, "utf8"), '{"keep":true}\n');
-	assert.match(notifications.at(-1)?.message ?? "", /already exists/i);
+	await mock.commands.get("langfuse")?.handler("init", ctx);
+	assert.match(notifications.at(-1)?.message ?? "", /requires interactive ui/i);
 	assert.equal(notifications.at(-1)?.level, "warning");
 });
 
