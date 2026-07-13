@@ -9,7 +9,8 @@ Use it when you want a quick Codex-style usage summary without leaving Pi or req
 ## ✨ Features
 
 - Adds a `/codex-status` command to Pi.
-- Shows Codex plan, 5-hour and weekly usage windows, reset times, credits, and earned usage-limit resets.
+- Shows Codex usage windows, reset times, credits, and earned usage-limit resets.
+- Labels each window from its reported duration (for example, 5-hour or weekly).
 - Displays additional usage buckets when the Codex backend returns them.
 - Reads the authoritative available reset count from the current Codex usage contract.
 - Automatically shows a compact statusline item while the current Pi model uses `openai-codex`.
@@ -73,7 +74,7 @@ codex 59% 5h 61% wk
 codex spark 100% 5h 100% wk
 ```
 
-`@narumitw/pi-statusline` adds the default `📊` icon unless configured otherwise. The statusline value uses the cached usage snapshot and refreshes every five minutes while the current model remains `openai-codex`.
+`@narumitw/pi-statusline` adds the default `📊` icon unless configured otherwise. The statusline value uses the cached usage snapshot and refreshes every five minutes while the current model remains `openai-codex`. Window labels come from the duration reported by Codex, with 5-hour/weekly fallbacks for older responses that omit it.
 When the selected model has its own returned usage bucket, such as `gpt-5.3-codex-spark`, the statusline switches to that bucket instead of the default `codex` bucket.
 Switching away from an OpenAI Codex model clears the item.
 

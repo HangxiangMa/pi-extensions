@@ -31,8 +31,8 @@ export function formatCodexUsageReport(report: CodexUsageReport, _cacheAgeMs?: n
 		if (!isPrimaryCodexSnapshot(snapshot)) {
 			lines.push(`  ${label} limit:`);
 		}
-		if (snapshot.primary) lines.push(formatWindowLine("5h limit:", snapshot.primary));
-		if (snapshot.secondary) lines.push(formatWindowLine("Weekly limit:", snapshot.secondary));
+		if (snapshot.primary) lines.push(formatWindowLine(snapshot.primary, "5h"));
+		if (snapshot.secondary) lines.push(formatWindowLine(snapshot.secondary, "weekly"));
 		if (!snapshot.primary && !snapshot.secondary) {
 			lines.push("  Limits unavailable for this account");
 		}
@@ -56,8 +56,16 @@ export function formatCodexUsageStatusline(
 	if (!snapshot) return "usage unavailable";
 
 	const parts = [formatStatuslinePrefix(snapshot)];
-	if (snapshot.primary) parts.push(`${formatRemainingPercent(snapshot.primary)} 5h`);
-	if (snapshot.secondary) parts.push(`${formatRemainingPercent(snapshot.secondary)} wk`);
+	if (snapshot.primary) {
+		parts.push(
+			`${formatRemainingPercent(snapshot.primary)} ${formatWindowLabel(snapshot.primary, "5h", true)}`,
+		);
+	}
+	if (snapshot.secondary) {
+		parts.push(
+			`${formatRemainingPercent(snapshot.secondary)} ${formatWindowLabel(snapshot.secondary, "weekly", true)}`,
+		);
+	}
 	if (parts.length === 1 && snapshot.credits) parts.push(formatCredits(snapshot.credits));
 	return parts.join(" ");
 }
@@ -178,8 +186,32 @@ function isPrimaryCodexSnapshot(snapshot: NormalizedRateLimitSnapshot): boolean 
 	);
 }
 
-function formatWindowLine(label: string, window: NormalizedRateLimitWindow): string {
+function formatWindowLine(
+	window: NormalizedRateLimitWindow,
+	fallback: "5h" | "weekly",
+): string {
+	const label = `${formatWindowLabel(window, fallback, false)} limit:`;
 	return `  ${label.padEnd(LIMIT_VALUE_COLUMN)}${formatWindow(window)}`;
+}
+
+function formatWindowLabel(
+	window: NormalizedRateLimitWindow,
+	fallback: "5h" | "weekly",
+	compact: boolean,
+): string {
+	const minutes = window.windowMinutes;
+	if (!minutes || !Number.isFinite(minutes) || minutes <= 0) {
+		return compact && fallback === "weekly" ? "wk" : capitalize(fallback);
+	}
+	if (minutes === 10_080) return compact ? "wk" : "Weekly";
+	if (minutes % 10_080 === 0) return `${minutes / 10_080}w`;
+	if (minutes % 1_440 === 0) return `${minutes / 1_440}d`;
+	if (minutes % 60 === 0) return `${minutes / 60}h`;
+	return `${minutes}m`;
+}
+
+function capitalize(value: string): string {
+	return `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}`;
 }
 
 function formatWindow(window: NormalizedRateLimitWindow): string {

@@ -487,6 +487,23 @@ test("isStaleExtensionContextError recognizes Pi stale-context failures", () => 
 	assert.equal(isStaleExtensionContextError(new Error("network failed")), false);
 });
 
+test("formatters label a primary weekly window from its reported duration", () => {
+	const report: CodexUsageReport = {
+		source: "pi-auth",
+		capturedAt: 0,
+		snapshots: [
+			{
+				limitId: "codex",
+				primary: { usedPercent: 16, windowMinutes: 10_080 },
+			},
+		],
+	};
+
+	assert.match(formatCodexUsageReport(report), /Weekly limit:/);
+	assert.doesNotMatch(formatCodexUsageReport(report), /5h limit:/);
+	assert.equal(formatCodexUsageStatusline(report), "codex 84% wk");
+});
+
 test("formatters render report text and model-specific statusline buckets", () => {
 	const report: CodexUsageReport = {
 		source: "pi-auth",
