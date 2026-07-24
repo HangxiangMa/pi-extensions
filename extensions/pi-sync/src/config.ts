@@ -1,8 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	type ExtensionCommandContext,
+	type ExtensionContext,
+	getAgentDir,
+} from "@earendil-works/pi-coding-agent";
 import { safeName } from "./paths.js";
 import { DEFAULT_SYNC_FILES, normalizeExtraFiles, normalizeSyncFiles } from "./sync-policy.js";
 import type { PartialConfig, Snapshot, SyncConfig, SyncState } from "./types.js";
@@ -13,6 +17,19 @@ const VERSION = 1;
 const DEFAULT_PROFILE = "default";
 const DEFAULT_PREFIX = "pi-sync";
 const DEFAULT_REGION = "auto";
+
+export const DEPRECATED_PI_SYNC_ENV_NAMES = [
+	"PI_SYNC_ENDPOINT",
+	"PI_SYNC_BUCKET",
+	"PI_SYNC_REGION",
+	"PI_SYNC_ACCESS_KEY_ID",
+	"PI_SYNC_SECRET_ACCESS_KEY",
+	"PI_SYNC_SESSION_TOKEN",
+	"PI_SYNC_PROFILE",
+	"PI_SYNC_PREFIX",
+	"PI_SYNC_AUTO_SYNC",
+	"PI_SYNC_SESSIONS",
+] as const;
 
 function trimSlashes(value: string) {
 	return value.replace(/^\/+|\/+$/g, "");
@@ -39,12 +56,12 @@ function sessionDirFromContext(ctx: ExtensionCommandContext | ExtensionContext) 
 		: undefined;
 }
 
-export async function loadConfigInternal(): Promise<SyncConfig> {
-	const partial = await loadPartialConfig();
-	const endpoint = partial.endpoint;
-	const bucket = partial.bucket;
-	const accessKeyId = partial.accessKeyId;
-	const secretAccessKey = partial.secretAccessKey;
+export async function loadConfigInternal(targetName?: string): Promise<SyncConfig> {
+	const partial = await loadPartialConfig(targetName);
+	const endpoint = normalizeConfiguredString(partial.endpoint);
+	const bucket = normalizeConfiguredString(partial.bucket);
+	const accessKeyId = normalizeConfiguredString(partial.accessKeyId);
+	const secretAccessKey = normalizeConfiguredString(partial.secretAccessKey);
 	const missing = [
 		["endpoint", endpoint],
 		["bucket", bucket],
@@ -55,7 +72,7 @@ export async function loadConfigInternal(): Promise<SyncConfig> {
 		.map(([name]) => name);
 	if (missing.length > 0) {
 		throw new Error(
-			`Missing pi-sync config: ${missing.join(", ")}. Run /sync init or set PI_SYNC_* environment variables.`,
+			`Missing pi-sync config: ${missing.join(", ")}. Use /sync setup or edit ${localConfigPath()}.`,
 		);
 	}
 	if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) {
@@ -65,26 +82,61 @@ export async function loadConfigInternal(): Promise<SyncConfig> {
 	return {
 		endpoint,
 		bucket,
-		region: partial.region ?? DEFAULT_REGION,
+		region: normalizeOptionalString(partial.region) ?? DEFAULT_REGION,
 		accessKeyId,
 		secretAccessKey,
-		sessionToken: partial.sessionToken,
-		profile: partial.profile ?? DEFAULT_PROFILE,
-		prefix: trimSlashes(partial.prefix ?? DEFAULT_PREFIX),
+		sessionToken: normalizeOptionalString(partial.sessionToken),
+		profile: normalizeOptionalString(partial.profile) ?? DEFAULT_PROFILE,
+		prefix: trimSlashes(normalizeOptionalString(partial.prefix) ?? DEFAULT_PREFIX),
+		target: partial.target ?? DEFAULT_PROFILE,
+		storageProfile: partial.storageProfile ?? DEFAULT_PROFILE,
+		storageKind: partial.storageKind,
+		autoSync: isEnabled(partial.autoSync, true),
+		settingsVersion: partial.settingsVersion ?? 1,
 		syncFiles: normalizeSyncFiles(partial.syncFiles),
 		syncSessions: isExplicitlyEnabled(partial.syncSessions),
 		extraFiles: normalizeExtraFiles(partial.extraFiles),
 	};
 }
 
-export async function loadConfig(): Promise<SyncConfig> {
-	return loadConfigInternal();
+export async function loadConfig(targetName?: string): Promise<SyncConfig> {
+	return loadConfigInternal(targetName);
 }
 
-export async function loadPartialConfig(): Promise<PartialConfig> {
-	const fileConfig = ((await readLocalConfigObject()) ?? {}) as PartialConfig;
+export async function configuredTargetNames() {
+	const settings = await readLocalConfigObject();
+	if (!settings) return [];
+	if (!isV2SettingsObject(settings)) return [DEFAULT_PROFILE];
+	return Object.keys(requireNamedObjectMap(settings.targets, "targets")).sort((left, right) =>
+		left.localeCompare(right),
+	);
+}
+
+export async function loadPartialConfig(targetName?: string): Promise<PartialConfig> {
+	const fileConfig = (await readLocalConfigObject()) ?? {};
+	return isV2SettingsObject(fileConfig)
+		? resolveV2PartialConfig(fileConfig, targetName)
+		: resolveLegacyPartialConfig(fileConfig as PartialConfig);
+}
+
+export function deprecatedPiSyncEnvironmentNames() {
+	return DEPRECATED_PI_SYNC_ENV_NAMES.filter((name) => hasEnv(name));
+}
+
+export function deprecatedPiSyncEnvironmentWarnings() {
+	const names = deprecatedPiSyncEnvironmentNames();
+	if (names.length === 0) return [];
+	return [
+		`deprecated environment: ${names.join(", ")} still override pi-sync settings but will be removed in a future major version. Move them to ${localConfigPath()}; values are not shown.`,
+	];
+}
+
+function resolveLegacyPartialConfig(fileConfig: PartialConfig): PartialConfig {
 	return {
 		...fileConfig,
+		target: DEFAULT_PROFILE,
+		storageProfile: DEFAULT_PROFILE,
+		settingsVersion: 1,
 		endpoint: process.env.PI_SYNC_ENDPOINT ?? process.env.R2_ENDPOINT ?? fileConfig.endpoint,
 		bucket: process.env.PI_SYNC_BUCKET ?? process.env.R2_BUCKET ?? fileConfig.bucket,
 		region: process.env.PI_SYNC_REGION ?? process.env.AWS_REGION ?? fileConfig.region,
@@ -98,10 +150,146 @@ export async function loadPartialConfig(): Promise<PartialConfig> {
 		profile: process.env.PI_SYNC_PROFILE ?? fileConfig.profile,
 		prefix: process.env.PI_SYNC_PREFIX ?? fileConfig.prefix,
 		autoSync: process.env.PI_SYNC_AUTO_SYNC ?? fileConfig.autoSync,
-		syncFiles: fileConfig.syncFiles,
 		syncSessions: process.env.PI_SYNC_SESSIONS ?? fileConfig.syncSessions,
-		extraFiles: fileConfig.extraFiles,
 	};
+}
+
+function resolveV2PartialConfig(
+	settings: Record<string, unknown>,
+	targetName?: string,
+): PartialConfig {
+	const targets = requireNamedObjectMap(settings.targets, "targets");
+	const profiles = requireNamedObjectMap(settings.profiles, "profiles");
+	validateUniqueRemoteTargets(targets);
+	const selectedTarget =
+		targetName ?? normalizeOptionalString(asOptionalString(settings.activeTarget));
+	if (!selectedTarget) throw new Error("Invalid pi-sync settings: activeTarget is required.");
+	validateConfigName(selectedTarget, "target");
+	const target = ownObject(targets, selectedTarget);
+	if (!target)
+		throw new Error(`Invalid pi-sync settings: target "${selectedTarget}" was not found.`);
+	const storageProfile = normalizeOptionalString(asOptionalString(target.profile));
+	if (!storageProfile) {
+		throw new Error(`Invalid pi-sync settings: target "${selectedTarget}" is missing profile.`);
+	}
+	validateConfigName(storageProfile, "storage profile");
+	const profile = ownObject(profiles, storageProfile);
+	if (!profile) {
+		throw new Error(
+			`Invalid pi-sync settings: target "${selectedTarget}" references missing profile "${storageProfile}".`,
+		);
+	}
+	const kind = asOptionalString(profile.kind);
+	if (kind !== undefined && kind !== "r2" && kind !== "s3-compatible") {
+		throw new Error(
+			`Invalid pi-sync settings: profile "${storageProfile}" has unsupported kind "${kind}".`,
+		);
+	}
+	return {
+		target: selectedTarget,
+		storageProfile,
+		storageKind: kind,
+		settingsVersion: 2,
+		endpoint:
+			process.env.PI_SYNC_ENDPOINT ?? process.env.R2_ENDPOINT ?? asOptionalString(profile.endpoint),
+		bucket: process.env.PI_SYNC_BUCKET ?? process.env.R2_BUCKET ?? asOptionalString(target.bucket),
+		region:
+			process.env.PI_SYNC_REGION ?? process.env.AWS_REGION ?? asOptionalString(profile.region),
+		accessKeyId:
+			process.env.PI_SYNC_ACCESS_KEY_ID ??
+			process.env.AWS_ACCESS_KEY_ID ??
+			asOptionalString(profile.accessKeyId),
+		secretAccessKey:
+			process.env.PI_SYNC_SECRET_ACCESS_KEY ??
+			process.env.AWS_SECRET_ACCESS_KEY ??
+			asOptionalString(profile.secretAccessKey),
+		sessionToken: selectSessionToken(asOptionalString(profile.sessionToken)),
+		profile: process.env.PI_SYNC_PROFILE ?? asOptionalString(target.namespace) ?? selectedTarget,
+		prefix: process.env.PI_SYNC_PREFIX ?? asOptionalString(target.prefix),
+		autoSync: process.env.PI_SYNC_AUTO_SYNC ?? asOptionalBoolean(target.autoSync),
+		syncFiles: target.syncFiles,
+		syncSessions: process.env.PI_SYNC_SESSIONS ?? asOptionalBoolean(target.syncSessions),
+		extraFiles: target.extraFiles,
+	};
+}
+
+function isV2SettingsObject(value: Record<string, unknown>) {
+	const hasV2Fields =
+		Object.hasOwn(value, "profiles") ||
+		Object.hasOwn(value, "targets") ||
+		Object.hasOwn(value, "activeTarget");
+	if (!hasV2Fields) return false;
+	if (value.version !== 2) {
+		throw new Error("Invalid pi-sync settings: version must be 2 for profiles and targets.");
+	}
+	return true;
+}
+
+function validateUniqueRemoteTargets(targets: Record<string, unknown>) {
+	const identities = new Map<string, string>();
+	for (const name of Object.keys(targets)) {
+		const target = ownObject(targets, name);
+		if (!target || typeof target.profile !== "string" || typeof target.bucket !== "string")
+			continue;
+		const identity = JSON.stringify([
+			target.profile,
+			target.bucket,
+			target.prefix ?? DEFAULT_PREFIX,
+			target.namespace ?? name,
+		]);
+		const existing = identities.get(identity);
+		if (existing) {
+			throw new Error(
+				`Invalid pi-sync settings: targets "${existing}" and "${name}" use the same remote destination.`,
+			);
+		}
+		identities.set(identity, name);
+	}
+}
+
+function requireNamedObjectMap(value: unknown, field: string): Record<string, unknown> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new Error(`Invalid pi-sync settings: ${field} must be an object.`);
+	}
+	for (const name of Object.keys(value)) validateConfigName(name, field.slice(0, -1));
+	return value as Record<string, unknown>;
+}
+
+function ownObject(
+	value: Record<string, unknown>,
+	key: string,
+): Record<string, unknown> | undefined {
+	if (!Object.hasOwn(value, key)) return undefined;
+	const item = value[key];
+	return item && typeof item === "object" && !Array.isArray(item)
+		? (item as Record<string, unknown>)
+		: undefined;
+}
+
+function validateConfigName(value: string, field: string) {
+	if (
+		!value.trim() ||
+		value.length > 100 ||
+		value === "__proto__" ||
+		value === "prototype" ||
+		value === "constructor" ||
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: Config identifiers cannot render terminal controls.
+		/[\u0000-\u001f\u007f-\u009f]/u.test(value)
+	) {
+		throw new Error(`Invalid pi-sync settings: invalid ${field} name.`);
+	}
+}
+
+function asOptionalString(value: unknown) {
+	if (value === undefined) return undefined;
+	if (typeof value !== "string") throw new Error("Invalid pi-sync settings: expected a string.");
+	return value;
+}
+
+function asOptionalBoolean(value: unknown) {
+	if (value === undefined) return undefined;
+	if (typeof value !== "boolean") throw new Error("Invalid pi-sync settings: expected a boolean.");
+	return value;
 }
 
 export async function configuredSessionDir() {
@@ -158,9 +346,30 @@ export async function writeState(profile: string, state: SyncState) {
 	await writeJson(statePath(profile), state);
 }
 
+export async function readStateForConfig(config: SyncConfig): Promise<SyncState> {
+	if (config.settingsVersion !== 2) return readState(config.profile);
+	return (
+		(await readJsonIfExists<SyncState>(statePathForConfig(config))) ?? {
+			version: VERSION,
+			profile: config.profile,
+			lastFileHashes: {},
+		}
+	);
+}
+
+export async function writeStateForConfig(config: SyncConfig, state: SyncState) {
+	await writeJson(statePathForConfig(config), state);
+}
+
+export function statePathForConfig(config: SyncConfig) {
+	if (config.settingsVersion !== 2) return statePath(config.profile);
+	const target = config.target ?? DEFAULT_PROFILE;
+	const hash = createHash("sha256").update(target).digest("hex").slice(0, 10);
+	return path.join(stateDir(), "targets", `${safeName(target)}-${hash}.state.json`);
+}
+
 export function agentDir() {
-	const configured = normalizeOptionalString(process.env.PI_CODING_AGENT_DIR);
-	return configured ? expandHome(configured) : path.join(os.homedir(), ".pi", "agent");
+	return getAgentDir();
 }
 
 function expandHome(value: string) {
@@ -177,17 +386,29 @@ export function localConfigPath() {
 
 export function localConfigTemplate(): Record<string, unknown> {
 	return {
-		endpoint: "https://<account-id>.r2.cloudflarestorage.com",
-		bucket: "pi-sync",
-		region: DEFAULT_REGION,
-		accessKeyId: "<access-key-id>",
-		secretAccessKey: "<secret-access-key>",
-		profile: DEFAULT_PROFILE,
-		prefix: DEFAULT_PREFIX,
-		autoSync: true,
-		syncFiles: [...DEFAULT_SYNC_FILES],
-		syncSessions: false,
-		extraFiles: [],
+		version: 2,
+		activeTarget: DEFAULT_PROFILE,
+		profiles: {
+			[DEFAULT_PROFILE]: {
+				kind: "r2",
+				endpoint: "https://<account-id>.r2.cloudflarestorage.com",
+				region: DEFAULT_REGION,
+				accessKeyId: "<access-key-id>",
+				secretAccessKey: "<secret-access-key>",
+			},
+		},
+		targets: {
+			[DEFAULT_PROFILE]: {
+				profile: DEFAULT_PROFILE,
+				bucket: "pi-sync",
+				namespace: DEFAULT_PROFILE,
+				prefix: DEFAULT_PREFIX,
+				autoSync: true,
+				syncFiles: [...DEFAULT_SYNC_FILES],
+				syncSessions: false,
+				extraFiles: [],
+			},
+		},
 	};
 }
 
@@ -209,7 +430,20 @@ export async function readLocalConfigObject(): Promise<Record<string, unknown> |
 	return parsed as Record<string, unknown>;
 }
 
-export async function updateLocalConfig(
+let configUpdateQueue: Promise<void> = Promise.resolve();
+
+export function updateLocalConfig(
+	update: (current: Record<string, unknown>) => Record<string, unknown>,
+) {
+	const operation = configUpdateQueue.then(() => performLocalConfigUpdate(update));
+	configUpdateQueue = operation.then(
+		() => undefined,
+		() => undefined,
+	);
+	return operation;
+}
+
+async function performLocalConfigUpdate(
 	update: (current: Record<string, unknown>) => Record<string, unknown>,
 ) {
 	const current = (await readLocalConfigObject()) ?? localConfigTemplate();
@@ -315,6 +549,13 @@ export function isCloudflareR2Endpoint(endpoint: string | undefined) {
 function normalizeOptionalString(value: string | undefined) {
 	const normalized = value?.trim();
 	return normalized ? normalized : undefined;
+}
+
+function normalizeConfiguredString(value: string | undefined) {
+	const normalized = normalizeOptionalString(value);
+	return normalized && !/^<[^>]+>$/u.test(normalized) && !normalized.includes("<account-id>")
+		? normalized
+		: undefined;
 }
 
 function hasEnv(name: string) {

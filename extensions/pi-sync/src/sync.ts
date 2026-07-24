@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -9,9 +8,17 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { completeSyncArguments, parseOptions, resolveSyncCommand, usage } from "./command.js";
 import {
-	agentDir,
+	completeSyncArguments,
+	parseOptions,
+	resolveSyncCommand,
+	setSyncTargetCompletions,
+	usage,
+	validateCommandOptions,
+} from "./command.js";
+import {
+	configuredTargetNames,
+	deprecatedPiSyncEnvironmentWarnings,
 	ensureStateDir,
 	isEnabled,
 	isExplicitlyEnabled,
@@ -22,16 +29,17 @@ import {
 	localConfigTemplate,
 	normalizeExtraFiles,
 	normalizeSyncFiles,
-	readState,
+	readStateForConfig,
 	sessionDirForApply,
 	sessionTokenWarnings,
 	stateDir,
 	syncSessionsWarnings,
 	writeLocalConfigObject,
-	writeState,
+	writeStateForConfig,
 } from "./config.js";
 import { showFileSelection } from "./file-selection.js";
 import { inspectLock, isLockGuardHeld, isStaleLock, unlock, withLock } from "./lock.js";
+import { showSetupWizard, showSyncManager, useSyncTarget } from "./manager-ui.js";
 import {
 	historyKey,
 	latestKey,
@@ -50,6 +58,21 @@ import {
 	snapshotWithoutSessions,
 } from "./snapshot.js";
 import { applySnapshot } from "./snapshot-apply.js";
+import { recoverPendingSnapshotTransactions } from "./snapshot-transaction.js";
+import {
+	countPreservedRemoteFiles,
+	errorMessage,
+	formatDestination,
+	formatDiff,
+	formatPullSummary,
+	formatPushSummary,
+	formatRollbackSummary,
+	formatSnapshotOnlyDiff,
+	redact,
+	remoteIdentity,
+	safeTerminalText,
+	sha256,
+} from "./sync-format.js";
 import {
 	canPullRemoteSessionsOnFirstSync,
 	canPullRemoteSettingsOnFirstSync,
@@ -109,6 +132,19 @@ export default function sync(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		try {
+			await recoverPendingSnapshotTransactions();
+		} catch (error) {
+			ctx.ui.notify(`pi-sync recovery required: ${errorMessage(error)}`, "error");
+			return;
+		}
+		try {
+			setSyncTargetCompletions(await configuredTargetNames());
+		} catch {
+			setSyncTargetCompletions([]);
+		}
+		const warnings = deprecatedPiSyncEnvironmentWarnings();
+		if (warnings.length > 0) ctx.ui.notify(warnings.join("\n"), "warning");
 		await autoSync(ctx);
 	});
 
@@ -121,34 +157,59 @@ export default function sync(pi: ExtensionAPI) {
 }
 
 async function handleCommand(rawArgs: string, ctx: ExtensionCommandContext) {
+	if (!rawArgs.trim()) {
+		try {
+			await showSyncManager(ctx, (route, signal, onCommit) =>
+				executeCommand(route, ctx, signal, onCommit),
+			);
+		} catch (error) {
+			ctx.ui.setStatus(STATUS_KEY, undefined);
+			ctx.ui.notify(errorMessage(error), "error");
+		}
+		return;
+	}
+	await executeCommand(rawArgs, ctx);
+}
+
+async function executeCommand(
+	rawArgs: string,
+	ctx: ExtensionCommandContext,
+	signal?: AbortSignal,
+	onCommit?: () => void,
+) {
 	try {
 		const command = await resolveSyncCommand(rawArgs, ctx);
 		if (!command) return;
 		const { subcommand, rest } = command;
 		const options = parseOptions(rest);
-		await ensureStateDir();
+		if (signal) options.signal = signal;
+		if (onCommit) options.onCommit = onCommit;
+		validateCommandOptions(subcommand, options);
 
 		switch (subcommand) {
 			case "help":
 				ctx.ui.notify(usage(), "info");
 				return;
+			case "use":
+				await useSyncTarget(ctx, options.args[0] ?? "");
+				return;
 			case "init":
 				await initConfig(ctx);
 				return;
 			case "config":
-				await showConfig(ctx);
+				await showConfig(ctx, options);
 				return;
 			case "files":
-				await showFileSelection(ctx);
+				await showFileSelection(ctx, options.target);
 				return;
 			case "status":
-				await status(ctx);
+				await status(ctx, options);
 				return;
 			case "diff":
-				await diff(ctx);
+				await diff(ctx, options);
 				return;
 			case "doctor":
-				await doctor(ctx);
+				await doctor(ctx, options);
 				return;
 			case "push":
 				await withLock("push", () => push(ctx, options));
@@ -160,7 +221,7 @@ async function handleCommand(rawArgs: string, ctx: ExtensionCommandContext) {
 				await withLock("sync", () => syncBoth(ctx, options));
 				return;
 			case "history":
-				await history(ctx);
+				await history(ctx, options);
 				return;
 			case "rollback":
 				await withLock("rollback", () => rollback(ctx, options));
@@ -173,6 +234,7 @@ async function handleCommand(rawArgs: string, ctx: ExtensionCommandContext) {
 		}
 	} catch (error) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		if (signal?.aborted && error instanceof Error && error.name === "AbortError") return;
 		ctx.ui.notify(errorMessage(error), "error");
 	}
 }
@@ -200,7 +262,7 @@ async function autoPushSessions(ctx: ExtensionContext) {
 		const config = await loadConfig();
 		if (!config.syncSessions) return;
 		await withLock("auto-session-push", async () => {
-			const state = await readState(config.profile);
+			const state = await readStateForConfig(config);
 			const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
 			if (!hasLocalChanges(local, state, config)) return;
 			await push(ctx, AUTO_SYNC_OPTIONS, { config, state, local });
@@ -219,20 +281,30 @@ async function initConfig(ctx: ExtensionCommandContext) {
 		ctx.ui.notify(`Config already exists: ${configPath}`, "info");
 		return;
 	} catch {
-		// Create below.
+		// Create or guide setup below.
 	}
 
+	if (ctx.mode === "tui") {
+		await showSetupWizard(ctx);
+		return;
+	}
 	await writeLocalConfigObject(localConfigTemplate());
 	ctx.ui.notify(`Created ${configPath}. Fill in R2 credentials, then run /sync doctor.`, "info");
 }
 
-async function showConfig(ctx: ExtensionCommandContext) {
-	const partial = await loadPartialConfig();
+async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions) {
+	const partial = await loadPartialConfig(options.target);
 	const syncSessions = isExplicitlyEnabled(partial.syncSessions);
-	const warnings = [...sessionTokenWarnings(partial), ...syncSessionsWarnings({ syncSessions })];
+	const warnings = [
+		...deprecatedPiSyncEnvironmentWarnings(),
+		...sessionTokenWarnings(partial),
+		...syncSessionsWarnings({ syncSessions }),
+	];
 	ctx.ui.notify(
 		[
 			"pi-sync config:",
+			`target: ${partial.target ?? "default"}`,
+			`storage profile: ${partial.storageProfile ?? "default"}`,
 			`endpoint: ${partial.endpoint ?? "missing"}`,
 			`bucket: ${partial.bucket ?? "missing"}`,
 			`region: ${partial.region ?? DEFAULT_REGION}`,
@@ -252,12 +324,12 @@ async function showConfig(ctx: ExtensionCommandContext) {
 	);
 }
 
-async function status(ctx: ExtensionCommandContext) {
-	ctx.ui.setStatus(STATUS_KEY, "checking");
-	const config = await loadConfig();
-	const client = new S3Client(config);
+async function status(ctx: ExtensionCommandContext, options: CommandOptions) {
+	const config = await loadConfig(options.target);
+	ctx.ui.setStatus(STATUS_KEY, `checking ${config.target ?? "default"}`);
+	const client = new S3Client(config, options.signal);
 	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
-	const state = await readState(config.profile);
+	const state = await readStateForConfig(config);
 	const latest = await client.getJson<LatestPointer>(latestKey(config));
 	const localChanged = hasLocalChanges(local, state, config);
 
@@ -267,11 +339,14 @@ async function status(ctx: ExtensionCommandContext) {
 		remoteText = `remote: ${latest.value.snapshot} from ${latest.value.machine} at ${latest.value.createdAt}`;
 	}
 
-	const warnings = syncSessionsWarnings(config);
+	const warnings = [...deprecatedPiSyncEnvironmentWarnings(), ...syncSessionsWarnings(config)];
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 	ctx.ui.notify(
 		[
-			`profile: ${config.profile}`,
+			`target: ${config.target ?? "default"}`,
+			`storage profile: ${config.storageProfile ?? "default"}`,
+			`destination: ${formatDestination(config)}`,
+			`remote namespace: ${config.profile}`,
 			`sync files: ${normalizeSyncFiles(config.syncFiles).join(", ") || "none"}`,
 			`extra files: ${config.extraFiles.join(", ") || "none"}`,
 			`sessions: ${config.syncSessions ? "included" : "excluded"}`,
@@ -285,16 +360,19 @@ async function status(ctx: ExtensionCommandContext) {
 	);
 }
 
-async function diff(ctx: ExtensionCommandContext) {
-	ctx.ui.setStatus(STATUS_KEY, "diff");
-	const config = await loadConfig();
-	const client = new S3Client(config);
+async function diff(ctx: ExtensionCommandContext, options: CommandOptions) {
+	const config = await loadConfig(options.target);
+	ctx.ui.setStatus(STATUS_KEY, `checking ${config.target ?? "default"}`);
+	const client = new S3Client(config, options.signal);
 	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
 	const remote = await readRemoteSnapshot(client, config);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 
-	const warnings = syncSessionsWarnings(config);
+	const warnings = [...deprecatedPiSyncEnvironmentWarnings(), ...syncSessionsWarnings(config)];
 	const header = [
+		`target: ${config.target ?? "default"}`,
+		`storage profile: ${config.storageProfile ?? "default"}`,
+		`destination: ${formatDestination(config)}`,
 		`sync files: ${normalizeSyncFiles(config.syncFiles).join(", ") || "none"}`,
 		`extra files: ${config.extraFiles.join(", ") || "none"}`,
 		`sessions: ${config.syncSessions ? "included" : "excluded"}`,
@@ -312,21 +390,27 @@ async function diff(ctx: ExtensionCommandContext) {
 	ctx.ui.notify(`${header}\n\n${formatDiff(local, remote)}`, level);
 }
 
-async function doctor(ctx: ExtensionCommandContext) {
+async function doctor(ctx: ExtensionCommandContext, options: CommandOptions) {
 	const messages: string[] = [];
 	let level: "info" | "warning" = "info";
 	let snapshotOptions: SnapshotOptions = {};
 	let profile = DEFAULT_PROFILE;
 
 	try {
-		const config = await loadConfig();
+		const config = await loadConfig(options.target);
 		profile = config.profile;
 		snapshotOptions = snapshotOptionsForContext(ctx, config);
-		messages.push(`config: ok (${config.bucket}/${profilePrefix(config)})`);
+		messages.push(
+			`config: ok (target ${config.target ?? "default"}; ${config.bucket}/${profilePrefix(config)})`,
+		);
 		messages.push(`sync files: ${normalizeSyncFiles(config.syncFiles).join(", ") || "none"}`);
 		messages.push(`extra files: ${config.extraFiles.join(", ") || "none"}`);
 		messages.push(`sessions: ${config.syncSessions ? "included" : "excluded"}`);
-		const warnings = [...sessionTokenWarnings(config), ...syncSessionsWarnings(config)];
+		const warnings = [
+			...deprecatedPiSyncEnvironmentWarnings(),
+			...sessionTokenWarnings(config),
+			...syncSessionsWarnings(config),
+		];
 		if (warnings.length > 0) {
 			level = "warning";
 			messages.push(...warnings);
@@ -373,10 +457,10 @@ async function push(
 	options: CommandOptions,
 	input?: PushInput,
 ) {
-	ctx.ui.setStatus(STATUS_KEY, "pushing");
-	const config = input?.config ?? (await loadConfig());
-	const client = input?.client ?? new S3Client(config);
-	const state = input?.state ?? (await readState(config.profile));
+	const config = input?.config ?? (await loadConfig(options.target));
+	ctx.ui.setStatus(STATUS_KEY, `pushing ${config.target ?? "default"}`);
+	const client = input?.client ?? new S3Client(config, options.signal);
+	const state = input?.state ?? (await readStateForConfig(config));
 	const local =
 		input?.local ?? (await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config)));
 
@@ -406,7 +490,7 @@ async function push(
 		!options.yes &&
 		!(await ctx.ui.confirm(
 			snapshotIncludesSessions(upload) ? "Push pi settings and sessions?" : "Push pi settings?",
-			formatPushSummary(upload, latest, preservedRemoteFileCount),
+			formatPushSummary(config, upload, latest, preservedRemoteFileCount, remoteForUpload),
 		))
 	) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -414,9 +498,11 @@ async function push(
 		return;
 	}
 
-	const pointer = await uploadSnapshot(client, config, upload, latest, options.force);
-	await updateHistory(client, config, pointer);
-	await writeState(config.profile, {
+	options.onCommit?.();
+	const publicationClient = options.onCommit ? new S3Client(config) : client;
+	const pointer = await uploadSnapshot(publicationClient, config, upload, latest, options.force);
+	const historyWarning = await updateHistorySafely(publicationClient, config, pointer);
+	await writeStateForConfig(config, {
 		version: VERSION,
 		profile: config.profile,
 		lastAppliedSnapshot: pointer.snapshot,
@@ -428,15 +514,23 @@ async function push(
 	});
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 	if (!options.silent) {
-		ctx.ui.notify(`Pushed ${upload.files.length} files as ${pointer.snapshot}.`, "info");
+		ctx.ui.notify(
+			[
+				`Pushed ${upload.files.length} files from target “${config.target ?? "default"}” as ${pointer.snapshot}.`,
+				historyWarning,
+			]
+				.filter(Boolean)
+				.join("\n"),
+			historyWarning ? "warning" : "info",
+		);
 	}
 }
 
 async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: CommandOptions) {
-	ctx.ui.setStatus(STATUS_KEY, "pulling");
-	const config = await loadConfig();
-	const client = new S3Client(config);
-	const state = await readState(config.profile);
+	const config = await loadConfig(options.target);
+	ctx.ui.setStatus(STATUS_KEY, `pulling ${config.target ?? "default"}`);
+	const client = new S3Client(config, options.signal);
+	const state = await readStateForConfig(config);
 	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
 	const remote = await readRemoteSnapshot(client, config);
 	if (!remote) throw new Error("Remote is empty. Run /sync push from a configured machine first.");
@@ -453,7 +547,7 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 		!options.yes &&
 		!(await ctx.ui.confirm(
 			snapshotIncludesSessions(remote) ? "Pull pi settings and sessions?" : "Pull pi settings?",
-			formatDiff(local, remote),
+			formatPullSummary(config, local, remote, protectedSessionPaths(ctx).size),
 		))
 	) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -461,6 +555,7 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 		return;
 	}
 
+	options.onCommit?.();
 	const backup = await backupLocal(config.profile, snapshotOptionsForContext(ctx, config));
 	const applySessionDir = await sessionDirForApply(ctx, remote);
 	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), {
@@ -468,7 +563,7 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 		sessionDir: applySessionDir,
 		extraFiles: config.extraFiles,
 	});
-	await writeState(config.profile, {
+	await writeStateForConfig(config, {
 		version: VERSION,
 		profile: config.profile,
 		lastAppliedSnapshot: remote.id,
@@ -494,10 +589,23 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 }
 
 async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options: CommandOptions) {
-	const config = await loadConfig();
-	const client = new S3Client(config);
-	const state = await readState(config.profile);
+	const config = await loadConfig(options.target);
+	const client = new S3Client(config, options.signal);
+	const state = await readStateForConfig(config);
 	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
+	if (
+		normalizeSyncFiles(config.syncFiles).length === 0 &&
+		config.extraFiles.length === 0 &&
+		!config.syncSessions
+	) {
+		if (!options.silent) {
+			ctx.ui.notify(
+				`Target “${config.target ?? "default"}” manages no files. Choose synced content in /sync Settings before syncing.`,
+				"warning",
+			);
+		}
+		return;
+	}
 	const remote = await readRemoteSnapshot(client, config);
 	const localChanged = hasLocalChanges(local, state, config);
 	const remoteChanged = remote
@@ -520,7 +628,7 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 			await pull(ctx, options);
 			return;
 		}
-		await writeState(config.profile, {
+		await writeStateForConfig(config, {
 			version: VERSION,
 			profile: config.profile,
 			lastAppliedSnapshot: remote.id,
@@ -535,7 +643,7 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 		return;
 	}
 	if (localChanged && remoteChanged && remote && snapshotsMatch(local, remote)) {
-		await writeState(config.profile, {
+		await writeStateForConfig(config, {
 			version: VERSION,
 			profile: config.profile,
 			lastAppliedSnapshot: remote.id,
@@ -562,7 +670,7 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 		return;
 	}
 	if (shouldRefreshSyncedState(remote, state, config)) {
-		await writeState(config.profile, {
+		await writeStateForConfig(config, {
 			version: VERSION,
 			profile: config.profile,
 			lastAppliedSnapshot: remote.id,
@@ -576,20 +684,36 @@ async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options
 	if (!options.silent) ctx.ui.notify("pi-sync is already up to date.", "info");
 }
 
-async function history(ctx: ExtensionCommandContext) {
-	const config = await loadConfig();
-	const client = new S3Client(config);
+async function history(ctx: ExtensionCommandContext, options: CommandOptions) {
+	const config = await loadConfig(options.target);
+	const client = new S3Client(config, options.signal);
 	const remote = await client.getJson<{ snapshots?: LatestPointer[] }>(historyKey(config));
 	if (remote.missing || !remote.value?.snapshots?.length) {
 		ctx.ui.notify("No remote pi-sync history found.", "info");
 		return;
 	}
 
+	const snapshots = remote.value.snapshots.slice(-20).reverse();
+	const currentSnapshot = snapshots[0]?.snapshot;
+	if (ctx.mode === "tui") {
+		const labels = snapshots.map(
+			(item, index) =>
+				`${index + 1}. ${item.createdAt} · ${safeTerminalText(item.machine)} · ${item.snapshot}${item.snapshot === currentSnapshot ? " (current)" : ""}${item.syncSessions ? " · sessions" : ""}`,
+		);
+		const selected = await ctx.ui.select(
+			`History for target “${safeTerminalText(config.target ?? "default")}”\n\nChoose a snapshot to preview rollback.`,
+			[...labels, "Back"],
+		);
+		if (!selected || selected === "Back") return;
+		const index = labels.indexOf(selected);
+		const snapshot = snapshots[index];
+		if (!snapshot) return;
+		await rollback(ctx, { ...options, args: [snapshot.snapshot], yes: false });
+		return;
+	}
 	ctx.ui.notify(
-		remote.value.snapshots
-			.slice(-20)
-			.reverse()
-			.map((item) => `${item.snapshot} ${item.createdAt} ${item.machine}`)
+		snapshots
+			.map((item) => `${item.snapshot} ${item.createdAt} ${safeTerminalText(item.machine)}`)
 			.join("\n"),
 		"info",
 	);
@@ -599,8 +723,8 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 	const target = options.args[0];
 	if (!target) throw new Error("Usage: /sync rollback <snapshot-id> [--yes]");
 
-	const config = await loadConfig();
-	const client = new S3Client(config);
+	const config = await loadConfig(options.target);
+	const client = new S3Client(config, options.signal);
 	const snapshot = await client.getBuffer(snapshotKey(config, target));
 	if (!snapshot.value) throw new Error(`Snapshot not found: ${target}`);
 	const decoded = await decodeSnapshot(snapshot.value);
@@ -609,6 +733,7 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 		config,
 		{ regenerateId: true },
 	);
+	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
 
 	if (
 		!options.yes &&
@@ -616,13 +741,14 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 			snapshotIncludesSessions(remote)
 				? "Rollback pi settings and sessions?"
 				: "Rollback pi settings?",
-			formatSnapshotOnlyDiff("Rollback would apply", remote),
+			formatRollbackSummary(config, local, remote, target, protectedSessionPaths(ctx).size),
 		))
 	) {
 		ctx.ui.notify("Rollback cancelled.", "info");
 		return;
 	}
 
+	options.onCommit?.();
 	const backup = await backupLocal(config.profile, snapshotOptionsForContext(ctx, config));
 	const applySessionDir = await sessionDirForApply(ctx, remote);
 	const lastFileHashes = await applySnapshot(remote, protectedSessionPaths(ctx), {
@@ -630,18 +756,19 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 		sessionDir: applySessionDir,
 		extraFiles: config.extraFiles,
 	});
-	const latest = await client.getJson<LatestPointer>(latestKey(config));
-	const upload = await snapshotForUpload(client, config, remote, latest, undefined, {
+	const publicationClient = options.onCommit ? new S3Client(config) : client;
+	const latest = await publicationClient.getJson<LatestPointer>(latestKey(config));
+	const upload = await snapshotForUpload(publicationClient, config, remote, latest, undefined, {
 		ignoreUnreadableRemote: true,
 	});
 	const encoded = upload.id === decoded.id ? snapshot.value : await encodeSnapshot(upload);
 	if (upload.id !== decoded.id) {
-		await client.putBuffer(snapshotKey(config, upload.id), encoded, "application/gzip");
+		await publicationClient.putBuffer(snapshotKey(config, upload.id), encoded, "application/gzip");
 	}
 	const pointer = pointerFor(config, upload, sha256(encoded));
-	await client.putJson(latestKey(config), pointer);
-	await updateHistory(client, config, pointer);
-	await writeState(config.profile, {
+	await publicationClient.putJson(latestKey(config), pointer);
+	const historyWarning = await updateHistorySafely(publicationClient, config, pointer);
+	await writeStateForConfig(config, {
 		version: VERSION,
 		profile: config.profile,
 		lastAppliedSnapshot: pointer.snapshot,
@@ -651,7 +778,15 @@ async function rollback(ctx: ExtensionCommandContext, options: CommandOptions) {
 		syncSessions: config.syncSessions,
 		extraFiles: config.extraFiles,
 	});
-	ctx.ui.notify(`Rolled back to ${target}; latest: ${pointer.snapshot}. Backup: ${backup}`, "info");
+	ctx.ui.notify(
+		[
+			`Rolled back target “${config.target ?? "default"}” to ${target}; latest: ${pointer.snapshot}. Backup: ${backup}`,
+			historyWarning,
+		]
+			.filter(Boolean)
+			.join("\n"),
+		historyWarning ? "warning" : "info",
+	);
 	await maybeReload(ctx);
 }
 
@@ -802,6 +937,15 @@ export async function backupLocal(profile: string, options: SnapshotOptions = {}
 	return backupPath;
 }
 
+async function updateHistorySafely(client: S3Client, config: SyncConfig, pointer: LatestPointer) {
+	try {
+		await updateHistory(client, config, pointer);
+		return undefined;
+	} catch (error) {
+		return `Remote snapshot is active, but history could not be updated: ${errorMessage(error)}. Run /sync doctor before relying on history.`;
+	}
+}
+
 async function updateHistory(client: S3Client, config: SyncConfig, pointer: LatestPointer) {
 	const object = await client.getJson<{ version: number; snapshots: LatestPointer[] }>(
 		historyKey(config),
@@ -812,71 +956,6 @@ async function updateHistory(client: S3Client, config: SyncConfig, pointer: Late
 		pointer,
 	].slice(-100);
 	await client.putJson(historyKey(config), { version: VERSION, snapshots: next });
-}
-
-function formatDiff(local: Snapshot, remote: Snapshot) {
-	const localMap = fileHashMap(local);
-	const remoteMap = fileHashMap(remote);
-	const allPaths = [...new Set([...Object.keys(localMap), ...Object.keys(remoteMap)])].sort();
-	const lines = [
-		`local: ${local.files.length} files`,
-		`remote: ${remote.id} (${remote.files.length} files)`,
-		"",
-	];
-	let changed = 0;
-	for (const filePath of allPaths) {
-		if (!localMap[filePath]) {
-			lines.push(`+ ${filePath}`);
-			changed += 1;
-		} else if (!remoteMap[filePath]) {
-			lines.push(`- ${filePath}`);
-			changed += 1;
-		} else if (localMap[filePath] !== remoteMap[filePath]) {
-			lines.push(`~ ${filePath}`);
-			changed += 1;
-		}
-	}
-	if (changed === 0) lines.push("No file differences.");
-	return lines.join("\n");
-}
-
-function formatSnapshotOnlyDiff(title: string, snapshot: Snapshot) {
-	return [`${title}: ${snapshot.id}`, ...snapshot.files.map((file) => `+ ${file.path}`)].join("\n");
-}
-
-function formatPushSummary(
-	local: Snapshot,
-	latest: RemoteObject<LatestPointer>,
-	preservedRemoteFileCount = 0,
-) {
-	return [
-		`Upload ${local.files.length} files from ${agentDir()}.`,
-		latest.value ? `Remote latest: ${latest.value.snapshot}` : "Remote latest: empty",
-		preservedRemoteFileCount > 0
-			? `Possible secrets in locally managed files were scanned before this prompt; ${preservedRemoteFileCount} preserved remote file(s) were not rescanned.`
-			: "Possible secrets were scanned before this prompt.",
-	].join("\n");
-}
-
-function remoteIdentity(remote: RemoteObject<LatestPointer>) {
-	return remote.missing ? "missing" : (remote.value?.snapshot ?? "unknown");
-}
-
-function countPreservedRemoteFiles(local: Snapshot, upload: Snapshot) {
-	const localPaths = new Set(local.files.map((file) => file.path));
-	return upload.files.filter((file) => !localPaths.has(file.path)).length;
-}
-
-function sha256(value: Buffer) {
-	return createHash("sha256").update(value).digest("hex");
-}
-
-function redact(value: string) {
-	return value.length <= 8 ? "configured" : `${value.slice(0, 4)}…${value.slice(-4)}`;
-}
-
-function errorMessage(error: unknown) {
-	return error instanceof Error ? error.message : String(error);
 }
 
 export { completeSyncArguments, parseOptions, splitArgs } from "./command.js";

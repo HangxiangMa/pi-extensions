@@ -2,26 +2,26 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-sync)](https://www.npmjs.com/package/@narumitw/pi-sync) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-sync` is a native [Pi coding agent](https://pi.dev) extension that syncs selected Pi configuration through Cloudflare R2 or other S3-compatible object storage.
+`@narumitw/pi-sync` syncs selected Pi configuration through Cloudflare R2 or other S3-compatible object storage. Named sync targets such as `home` and `work` can reuse storage profiles such as `r2` and `s3`.
 
-It syncs automatically by default when Pi starts, then uses immutable snapshot bundles, a `latest.json` pointer, local locking, secret scanning, and pre-apply backups. Conversation/session syncing is opt-in because session JSONL can contain prompts, tool output, paths, screenshots, and secrets. Cross-machine pushes use a best-effort remote re-read guard because R2 rejected conditional `latest.json` writes during testing.
+The extension uses immutable snapshot bundles, a `latest.json` publication pointer, local locking, secret scanning, pre-apply backups, and recoverable local apply transactions. Conversation/session syncing remains opt-in because session JSONL can contain prompts, tool output, paths, screenshots, and secrets.
 
 ## ✨ Features
 
-- Opens every pi-sync action from the bare `/sync` menu and keeps direct `help`, `init`, `config`, `files`, `status`, `diff`, `doctor`, `push`, `pull`, `sync`, `history`, `rollback`, and `unlock` subcommands for automation and advanced flags.
-- Uses `/sync files` to choose which top-level Pi files and recursive directory groups are managed by this machine.
-- Syncs selected, allowlisted Pi configuration from `~/.pi/agent`:
+- Opens a goal-oriented `/sync` manager showing the current target, storage, auto-sync, session scope, and relevant next actions.
+- Supports multiple named **sync targets** and reusable R2/S3 **storage profiles**.
+- Switches targets without syncing or modifying files; only the current target runs automatic startup/shutdown sync.
+- Previews concrete local or remote file changes before push, pull, force resolution, or rollback.
+- Uses transactional synced-content drafts with explicit Save, Discard, and Continue editing choices.
+- Keeps direct `help`, `use`, `init`, `config`, `files`, `status`, `diff`, `doctor`, `push`, `pull`, `sync`, `history`, `rollback`, and `unlock` routes for compatibility and automation.
+- Syncs allowlisted Pi configuration from the Pi agent directory:
   - `settings.json`, `keybindings.json`, `models.json`, `AGENTS.md`, and `APPEND_SYSTEM.md`
   - recursive `skills/`, `prompts/`, `themes/`, and `extensions/` groups
   - safe top-level files selected through `extraFiles`
-  - optionally denylist-filtered `sessions/**/*.jsonl` when `syncSessions` is enabled
-- Stores each remote version as an immutable gzip-compressed JSON snapshot bundle.
-- Updates remote state through `latest.json` after re-reading remote state to reject already-visible remote changes.
-- Creates local backups before `pull` and `rollback` under `~/.pi/agent/.pisync/backups/`.
-- Runs `/sync sync` automatically on Pi startup when R2/S3 config is present.
-- Uses a local exclusive lock at `~/.pi/agent/.pisync/lock` for destructive sync operations and only treats locks as stale after checking process liveness.
-- Refuses to push common secret patterns and denylisted paths such as `.env`, `.env.local`, token/secret files, `.pisync`, `.git`, and `node_modules`.
-- Preflights snapshot apply operations before mutating local files, refuses symlink path escapes, and rejects writes over symlinks or directories.
+  - optionally denylist-filtered `sessions/**/*.jsonl`
+- Preserves files outside the addressed target's selection locally and in remote uploads.
+- Creates backups before pull/rollback and journals multi-file applies so failures roll back; interrupted transactions recover before the next sync.
+- Refuses common secret patterns, unsafe paths, symlink escapes, live-lock removal, and unreviewed conflict overwrites.
 
 ## 📦 Install
 
@@ -35,212 +35,282 @@ Try without installing permanently:
 pi -e npm:@narumitw/pi-sync
 ```
 
-Try this package locally from the repository root:
+Try this package from a local checkout:
 
 ```bash
 pi -e ./extensions/pi-sync
 ```
 
-## ⚙️ Configuration
+## 🚀 Quick start
 
-Run:
-
-```text
-/sync init
-```
-
-Then edit:
-
-```text
-~/.pi/agent/pi-sync.local.json
-```
-
-If `PI_CODING_AGENT_DIR` is set, pi-sync uses that directory instead of `~/.pi/agent` for config, state, backups, and synced files.
-
-Example:
-
-```json
-{
-  "endpoint": "https://<account-id>.r2.cloudflarestorage.com",
-  "bucket": "pi-sync",
-  "region": "auto",
-  "accessKeyId": "<access-key-id>",
-  "secretAccessKey": "<secret-access-key>",
-  "profile": "default",
-  "prefix": "pi-sync",
-  "autoSync": true,
-  "syncFiles": [
-    "settings.json",
-    "keybindings.json",
-    "models.json",
-    "AGENTS.md",
-    "APPEND_SYSTEM.md",
-    "skills",
-    "prompts",
-    "themes",
-    "extensions"
-  ],
-  "syncSessions": false,
-  "extraFiles": []
-}
-```
-
-Environment variables override the local config file:
-
-```bash
-export PI_SYNC_ENDPOINT="https://<account-id>.r2.cloudflarestorage.com"
-export PI_SYNC_BUCKET="pi-sync"
-export PI_SYNC_REGION="auto"
-export PI_SYNC_ACCESS_KEY_ID="..."
-export PI_SYNC_SECRET_ACCESS_KEY="..."
-export PI_SYNC_SESSION_TOKEN="..." # optional, for temporary credentials that require a session token
-export PI_SYNC_PROFILE="default"
-export PI_SYNC_PREFIX="pi-sync"
-export PI_SYNC_AUTO_SYNC="true"
-export PI_SYNC_SESSIONS="false" # opt in with true to sync Pi conversation JSONL files
-```
-
-Run `/sync files` in TUI mode to edit `syncFiles`, `syncSessions`, and `extraFiles` with a searchable selector. Enter or Space toggles an item and Escape closes the screen. Each successful change is saved immediately to `pi-sync.local.json`, preserving unknown fields through an atomic replacement with `0600` permissions on POSIX. No network sync starts until the next manual `push`, `pull`, or `sync`, or the existing automatic sync lifecycle.
-
-`syncFiles` accepts the built-in names shown above and has no environment-variable override. Directory names select the complete recursive group. Omitting `syncFiles` preserves the legacy default of selecting every built-in item; an empty array is valid and means this machine manages none of them. Unknown values make configuration validation fail instead of silently narrowing the selection.
-
-The selector always shows built-in items, even when they are absent locally, so another machine can provide them on pull. It also shows safe top-level regular files found locally and configured `extraFiles` that may only exist remotely. It excludes directories, symlinks, reserved names, and denylisted names. You can still edit `extraFiles` manually to select additional safe top-level file names.
-
-An unselected item is unmanaged by this machine: pi-sync does not collect, compare, pull, overwrite, or delete its local content, and pushes preserve its existing remote snapshot content for other machines. This applies to built-ins, directory groups, sessions, and extra files. Selecting nothing therefore does not delete unmanaged local or remote files.
-
-`PI_SYNC_ACCESS_KEY_ID`, `PI_SYNC_SECRET_ACCESS_KEY`, and `PI_SYNC_SESSION_TOKEN` are local-only credentials. Do not put them in files that pi-sync syncs. `PI_SYNC_SESSION_TOKEN` is optional and only needed for temporary credentials such as AWS STS, AWS SSO, assumed roles, or S3-compatible providers that issue short-lived credentials.
-
-Cloudflare R2 static access keys do not use a session token and usually reject requests signed with `X-Amz-Security-Token`. R2 temporary credentials that require a token are still supported. For R2 endpoints (`*.r2.cloudflarestorage.com`), pi-sync first sends the configured session token; if R2 rejects it with `InvalidArgument: X-Amz-Security-Token`, pi-sync retries that request once without the token and omits the token for the rest of the same command after a successful retry.
-
-pi-sync also reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`, `R2_ENDPOINT`, and `R2_BUCKET` as compatibility aliases when the matching `PI_SYNC_*` variable is not set.
-
-### Session syncing
-
-`syncSessions` defaults to `false`. Set it to `true`, or set `PI_SYNC_SESSIONS=true`, to include Pi's configured session JSONL files in snapshots. pi-sync uses `PI_CODING_AGENT_SESSION_DIR`, Pi's `sessionDir` setting, or the default `${PI_CODING_AGENT_DIR:-~/.pi/agent}/sessions/**/*.jsonl` storage. Empty or misspelled `PI_SYNC_SESSIONS` values stay disabled. Only JSONL session files are included; other session-directory files and denylisted paths such as `.env*`, `.pisync`, `node_modules`, and names containing `token` or `secret` are ignored.
-
-Session sync is snapshot-based, not live collaboration. If the same session changes on two machines, `/sync sync` uses the same conflict rules as settings sync and skips when both local and remote changed. Run `/sync diff`, then choose `/sync pull --force` or `/sync push --force` if needed.
-
-When both `autoSync` and `syncSessions` are enabled, pi-sync syncs on startup and attempts a quiet session push on shutdown when local files changed. Startup session pulls happen after Pi has already selected the current session, so restart Pi or resume a pulled session to use newly synced conversations. If the remote changed first, the shutdown push is skipped with a warning instead of overwriting it.
-
-Session files can contain prompts, model output, tool results, file paths, images, and secrets. Use trusted R2/S3 storage, keep credentials local, and recover local files from `${PI_CODING_AGENT_DIR:-~/.pi/agent}/.pisync/backups/` if a pull or rollback overwrites something unexpectedly.
-
-## 🚀 Usage
-
-Run `/sync` without arguments to open the interactive menu containing every pi-sync action. The **files — Choose synced files** action opens the persistent selector. Choosing rollback asks for the snapshot id before showing the existing confirmation. Cancelling either action leaves unmodified state unchanged; file-selection changes that were already saved are not rolled back when the screen closes.
+Run the manager:
 
 ```text
 /sync
 ```
 
-The same actions remain available as direct routes for automation, non-interactive use, and advanced flags:
+When pi-sync is not configured, choose **Set up sync**. The TUI guides you through:
+
+1. Cloudflare R2 or another S3-compatible service
+2. a target name such as `home`
+3. a reusable storage-profile name such as `r2`
+4. endpoint, bucket, prefix, and remote namespace
+5. environment credentials or a private settings-file template
+6. a synced-content preset
+7. an exact setup preview and **Save setup** confirmation
+
+Pi's extension input API does not provide masked secret entry, so pi-sync never asks for a secret in an unmasked dialog. Use existing environment credentials or add credentials manually to the private settings file. Secret values are never shown in menus, status, warnings, or errors.
+
+A configured manager shows:
 
 ```text
-/sync help
-/sync init
-/sync config
-/sync files
-/sync status
-/sync diff
-/sync doctor
-/sync push
-/sync pull
-/sync sync
-/sync history
-/sync rollback <snapshot-id>
-/sync unlock --stale
+Current target: home
+Storage: Cloudflare R2 · personal-pi
+Auto-sync: On · Sessions: Off
+Last known sync: Remote not checked
 ```
 
-Bare `/sync` reports command usage when an interactive UI is unavailable; use a direct route for the desired operation. Outside TUI mode, `/sync files` does not open a custom component and instead reports the effective selection, config path, and manual editing fields. When `PI_SYNC_SESSIONS` is set, the sessions row is read-only and identifies the environment override.
+Its primary actions are:
 
-Useful flags:
+- **Sync now** — conservatively decide whether to push, pull, or do nothing
+- **Switch target** — preview and change the current target without syncing
+- **Status & changes** — perform a cancellable read-only remote check
+- **Settings** — control automatic sync and synced content for the current target
+- **Manage targets & storage** — add, edit, or remove local target/profile definitions
+- **History & recovery** — browse snapshots, preview rollback, diagnose setup, or recover a stale lock
+- **Help**
 
-- `--yes` / `-y`: skip confirmation prompts.
-- `--force`: allow push or pull when both local and remote state changed.
-- `--stale`: remove a stale local lock with `/sync unlock --stale`.
+Escape exits the main menu. Secondary menus provide Back; dirty synced-content drafts provide Save, Discard, and Continue editing. Cancellation before publication has no side effects.
 
-## 🔄 Automatic sync
+## ⚙️ Settings
 
-`autoSync` defaults to `true`. When Pi starts, pi-sync runs the same conservative decision logic as `/sync sync`:
+The private user settings file is:
 
-- only local changed or remote is empty → push
-- first sync with existing local settings and an identical remote snapshot → initialize local sync state without rewriting files
-- first sync with existing local settings and a different remote snapshot → skip and show a warning so you manually choose `/sync pull` or `/sync push`
-- only remote changed after an established sync → pull with a backup
-- both local and remote changed after a previous sync → skip and show a warning
-- no config present → do nothing
+```text
+${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-sync.local.json
+```
 
-Disable startup sync with either:
+A version 2 example:
 
 ```json
 {
-  "autoSync": false
+  "version": 2,
+  "activeTarget": "home",
+  "profiles": {
+    "r2": {
+      "kind": "r2",
+      "endpoint": "https://<account-id>.r2.cloudflarestorage.com",
+      "region": "auto",
+      "accessKeyId": "<access-key-id>",
+      "secretAccessKey": "<secret-access-key>"
+    },
+    "s3": {
+      "kind": "s3-compatible",
+      "endpoint": "https://s3.example.com",
+      "region": "ap-northeast-1",
+      "accessKeyId": "<access-key-id>",
+      "secretAccessKey": "<secret-access-key>"
+    }
+  },
+  "targets": {
+    "home": {
+      "profile": "r2",
+      "bucket": "personal-pi",
+      "prefix": "pi-sync",
+      "namespace": "home",
+      "autoSync": true,
+      "syncFiles": ["settings.json", "skills", "prompts", "themes"],
+      "syncSessions": false,
+      "extraFiles": []
+    },
+    "work": {
+      "profile": "s3",
+      "bucket": "company-pi",
+      "prefix": "developers/narumi",
+      "namespace": "work",
+      "autoSync": true,
+      "syncFiles": ["AGENTS.md", "prompts"],
+      "syncSessions": false,
+      "extraFiles": []
+    }
+  }
 }
 ```
 
-or:
+### Terminology
 
-```bash
-export PI_SYNC_AUTO_SYNC=false
+- A **storage profile** owns connection/authentication fields: `kind`, `endpoint`, `region`, `accessKeyId`, `secretAccessKey`, and optional `sessionToken`.
+- A **sync target** references a storage profile and owns `bucket`, `prefix`, `namespace`, `autoSync`, and its synced-content policy.
+- `activeTarget` is used by bare commands and automatic sync.
+- `namespace` is the old flat `profile` concept. The remote layout and snapshot wire field remain named `profiles`/`profile` for compatibility.
+
+Two targets may intentionally overlap local files, but only one is automatic. pi-sync rejects duplicate target remote identities to prevent independent local states from controlling the same remote pointer. Removing a target/profile removes local configuration only; it never deletes buckets or snapshots. A referenced profile cannot be removed, and users must switch away before removing one of several current targets.
+
+### Synced content
+
+The **Settings → Choose synced content** screen edits a draft. Enter or Space toggles, typing searches, and Escape opens the Save/Discard/Continue decision. A single Save atomically updates the target while preserving unknown fields and POSIX `0600` permissions. Saving settings never starts network sync.
+
+Omitting `syncFiles` preserves the legacy default of every built-in item. An empty array is valid and means the target manages nothing; **Sync now** reports that state instead of publishing an empty sync. Unknown built-in names fail validation.
+
+Unselected items are unmanaged: pi-sync does not compare, pull, overwrite, or delete their local content, and pushes preserve their existing remote content.
+
+### Environment precedence and deprecation
+
+The existing `PI_SYNC_*` family still works in this release with its existing highest precedence, but it is deprecated and will be removed in a future major version. pi-sync shows variable names—not values—and migration guidance when any are active.
+
+Move these fields into a storage profile:
+
+- `PI_SYNC_ENDPOINT`
+- `PI_SYNC_REGION`
+- `PI_SYNC_ACCESS_KEY_ID`
+- `PI_SYNC_SECRET_ACCESS_KEY`
+- `PI_SYNC_SESSION_TOKEN`
+
+Move these fields into a sync target:
+
+- `PI_SYNC_BUCKET`
+- `PI_SYNC_PROFILE` → `namespace`
+- `PI_SYNC_PREFIX`
+- `PI_SYNC_AUTO_SYNC`
+- `PI_SYNC_SESSIONS`
+
+`PI_SYNC_PROFILE` continues to mean only the remote namespace during the deprecation period; it never selects a storage profile or current target.
+
+Standard compatibility aliases remain below `PI_SYNC_*` precedence:
+
+- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`
+- `R2_ENDPOINT`, `R2_BUCKET`
+
+Environment-overridden fields are read-only in interactive settings. Cloudflare R2 static keys commonly reject `X-Amz-Security-Token`; pi-sync retains its one-time retry without the configured token for that R2 response.
+
+### Legacy flat settings
+
+Existing flat `pi-sync.local.json` files continue to work unchanged as a synthetic `default` target/profile. The old flat `profile` remains the remote namespace.
+
+Adding a second target offers an explicit migration preview. On confirmation pi-sync:
+
+1. takes an exact private backup of the original JSON bytes;
+2. preserves unknown top-level fields;
+3. maps existing connection and policy fields without changing the remote destination;
+4. adopts the existing local sync state for the migrated target;
+5. publishes the version 2 file atomically.
+
+Malformed, invalid, symlinked, or concurrently changed settings are never overwritten automatically. Version 2 settings require the multi-target pi-sync release or newer. For a manual downgrade, restore the exact `.legacy-<timestamp>.bak` flat-config backup; no remote migration or rollback is needed.
+
+## 💬 Commands
+
+The menu is the preferred interactive workflow. Existing deterministic routes remain available:
+
+```text
+/sync help
+/sync use <target>
+/sync init
+/sync config [--target <name>]
+/sync files [--target <name>]
+/sync status [--target <name>]
+/sync diff [--target <name>]
+/sync doctor [--target <name>]
+/sync push [--target <name>]
+/sync pull [--target <name>]
+/sync sync [--target <name>]
+/sync history [--target <name>]
+/sync rollback <snapshot-id> [--target <name>]
+/sync unlock --stale
 ```
 
-## 🧠 Sync model
+Flags:
 
-Remote layout:
+- `--target <name>` addresses a target without switching it.
+- `--yes` / `-y` skips an explicit direct command's confirmation.
+- `--force` resolves a reviewed conflict for push/pull/sync.
+- `--stale` requests guarded stale-lock recovery.
 
-```txt
-pi-sync/
+Unknown flags, unexpected values, and missing target/snapshot values are rejected. Argument completion includes configured target names after session start.
+
+TUI mode provides the full manager and custom settings components. RPC uses Pi's dialog/notification protocol and does not call TUI-only components. Print/JSON modes cannot display extension UI; use explicit direct routes for compatible automation and do not expect notification-only status output.
+
+## 🔄 Sync and recovery model
+
+For the current target, startup auto-sync uses conservative decisions:
+
+- local changed or remote empty → preview/confirm manually, or push in the existing quiet automatic path
+- identical first sync → initialize local state
+- safe remote-only change → pull with backup
+- first-sync mismatch or both changed → stop and require review
+- no selected content → report/skip
+
+Switching targets changes only `activeTarget`; it never starts sync. The next startup uses the new target's `autoSync`, or the user can choose **Sync now** immediately.
+
+Remote layout remains compatible:
+
+```text
+<prefix>/
 └── profiles/
-    └── default/
+    └── <namespace>/
         ├── latest.json
         ├── history.json
         └── snapshots/
-            └── 2026-05-21T12-00-00-000Z-abcd1234.json.gz
+            └── <snapshot-id>.json.gz
 ```
 
-Each snapshot contains the selected file tree and SHA-256 hashes. `latest.json` points to the active snapshot. Rollback applies an older snapshot locally and moves `latest.json` back to that snapshot.
+Snapshot upload is staging; `latest.json` is the active publication boundary. A failed history update after publication is reported as “snapshot active, history needs repair” instead of falsely claiming no remote change.
 
-Before updating `latest.json`, pi-sync re-reads the current pointer and rejects the push if it already differs from the version seen at the start of the command. This prevents overwriting changes that are visible before the final write. It is not a true atomic cross-machine compare-and-swap on R2, so two machines that push at the same instant can still race; run `/sync status` before important manual pushes if you use multiple machines heavily.
+Before pull/rollback, pi-sync writes a backup under `.pisync/backups/`. It then preflights all paths, stages a private transaction journal, applies changes, and restores every affected path if a later mutation fails. An interrupted journal is recovered before the next session/snapshot apply. Filesystem-wide replacement cannot be one OS primitive, so the guarantee is a complete previous or complete new accepted state after rollback/recovery—not an unrecoverable partial accepted state.
+
+R2/S3 does not provide the true cross-machine compare-and-swap used here. pi-sync re-reads `latest.json` immediately before publication and verifies afterward, but simultaneous writers can still race. Review status before important forced updates.
+
+## 🔒 Session syncing
+
+`syncSessions` defaults to `false`. Enabling it includes configured Pi session JSONL files and makes the privacy warning visible in settings, status, previews, and confirmations.
+
+Only JSONL session files are included. Denylisted names and paths such as `.env*`, `.pisync`, `node_modules`, `token`, and `secret` are ignored. The currently open session file is protected during pull; restart Pi or resume a pulled session to use newly synced conversations.
+
+Sessions can contain prompts, model output, tool results, file paths, images, and secrets. Use only storage you trust.
 
 ## 🛡️ Safety notes
 
-- pi-sync auto-syncs on startup by default, but skips instead of overwriting when first-run local settings and a remote snapshot both exist, or when both local and remote changed after a previous sync.
-- Unselected built-in files, directory groups, sessions, and extra files are unmanaged locally and preserved remotely; selecting nothing does not delete them.
-- With `syncSessions`/`PI_SYNC_SESSIONS` disabled, pi-sync does not collect or apply local Pi sessions, though settings-only pushes may preserve session files already present in remote snapshots. It never syncs OAuth state, npm caches, `.env`, `.env.local`, `node_modules`, or `.pisync` state.
-- If another Pi process is already syncing on the same machine, destructive commands stop at the local lock. `/sync unlock --stale` is intended for locks whose process is gone or invalid.
-- If another machine's update is visible before this machine updates `latest.json`, push is rejected unless you explicitly use `--force`.
-- Pull and rollback create backups before writing local files, then preflight deletes and writes before mutating the local settings tree.
-- Pull and rollback refuse to follow symlinked parent paths during snapshot apply and refuse to overwrite a symlink or directory with file content.
+- Credentials stay local and are never included in snapshots.
+- Push refuses common secret patterns in locally managed files.
+- Pull/rollback reject unsafe paths, duplicate paths, checksum mismatches, symlink parents, and file/directory replacement hazards before mutation.
+- Unmanaged local/remote files remain preserved.
+- A live local lock disables destructive work. Stale/unreadable lock recovery retains process-liveness and guard checks.
+- Force operations remain explicit direct/conflict-recovery actions and retain exact confirmations.
+- Terminal-bound config, remote metadata, machine names, paths, and errors are control-character sanitized.
+
+## ♿ Conditional terminal accessibility smoke
+
+Pi exposes terminal components rather than a semantic/ARIA tree, so automated tests verify textual state, keyboard paths, control-character escaping, and 32/60/100-column fitting rather than claiming semantic announcements. When validating a release in a supported environment:
+
+1. open `/sync` using only the keyboard and verify arrows, Enter, Space, search typing, paging where available, Back, and Escape;
+2. enter a Unicode target/profile name with an IME and confirm focus returns to Pi after closing;
+3. check the main, warning, preview, saved, cancelled, and invalid states with the terminal screen reader in use;
+4. repeat under a light and dark Pi theme and at 32, 60, and 100 columns.
+
+Critical meaning is always present in text such as `(current)`, `Warning`, `Invalid`, `Saved`, `Cancelled`, or `Applied`; color is supplementary.
 
 ## 🗂️ Package layout
 
-```txt
+```text
 extensions/pi-sync/
 ├── src/
-│   ├── index.ts       # Pi package entrypoint
-│   ├── sync.ts        # Extension registration and command orchestration
-│   ├── file-selection.ts # Persistent SettingsList selector
-│   ├── sync-policy.ts # Shared built-in catalog and path policy
-│   └── *.ts           # Package-local config, snapshot, path, and S3 modules
+│   ├── index.ts                 # Thin Pi entrypoint
+│   ├── sync.ts                  # Command and lifecycle orchestration
+│   ├── manager-ui.ts            # Goal-oriented menus and setup/management flows
+│   ├── file-selection.ts        # Transactional synced-content editor
+│   ├── settings-management.ts   # Profiles, targets, migration, and atomic saves
+│   ├── snapshot-transaction.ts  # Local apply journal, rollback, and recovery
+│   └── *.ts                     # Config, policy, snapshot, S3, lock, and format modules
+├── test/
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json
 └── package.json
 ```
 
-`index.ts` is the Pi entrypoint and forwards to `sync.ts`; the other source modules are internal. The package exposes its Pi extension through `package.json`:
-
-```json
-{
-  "pi": {
-    "extensions": ["./src/index.ts"]
-  }
-}
-```
-
 ## 🔎 Keywords
 
-Pi extension, Pi coding agent, settings sync, Cloudflare R2, S3-compatible storage, snapshot sync, dotfiles sync.
+Pi extension, Pi coding agent, settings sync, Cloudflare R2, S3-compatible storage, multi-profile sync, sync targets, snapshot sync, dotfiles sync.
 
 ## 📄 License
 
-MIT. See [`LICENSE`](./LICENSE).
+MIT

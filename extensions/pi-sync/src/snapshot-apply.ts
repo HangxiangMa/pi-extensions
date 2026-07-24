@@ -19,6 +19,10 @@ import {
 	snapshotIncludesSessions,
 	snapshotTarget,
 } from "./snapshot.js";
+import {
+	applySnapshotTransaction,
+	recoverPendingSnapshotTransactions,
+} from "./snapshot-transaction.js";
 import type { Snapshot, SnapshotApplyPlan, SnapshotOptions } from "./types.js";
 
 function sha256(value: Buffer) {
@@ -36,6 +40,7 @@ export async function applySnapshot(
 ) {
 	const root = agentDir();
 	const { sessionDir } = options;
+	await recoverPendingSnapshotTransactions();
 	const current = await createSnapshot(snapshot.profile, {
 		syncFiles: options.syncFiles,
 		syncSessions: snapshotIncludesSessions(snapshot),
@@ -53,12 +58,7 @@ export async function applySnapshot(
 		snapshot,
 	);
 	await preflightSnapshotMutations(root, plan, sessionDir);
-	for (const target of plan.deletes) {
-		await fs.rm(target, { force: true, recursive: true });
-	}
-	for (const item of plan.writes) {
-		await fs.writeFile(item.target, item.content);
-	}
+	await applySnapshotTransaction(plan, { sessionDir });
 	return appliedFileHashMap(snapshot, current, protectedRelativePaths);
 }
 
