@@ -23,6 +23,7 @@
 - pi-lsp catalog entries must target actual standalone launchers, handle platform wrappers, and include initialization needed by a stateless client; do not infer server readiness from a toolchain executable or route ambiguous/partially supported dialects.
 - On Windows, extensionless LSP commands can resolve to `.cmd`/`.bat` PATH shims; resolve with the adapter's effective `PATH` and child cwd before wrapping batch launchers through `%ComSpec%`.
 - pi-lsp defaults must use dialect-specific language IDs, nest workspace settings under the server-requested section, and avoid save-only settings unless diagnostics emit `didSave`.
+- Keep pi-lsp Docker profiles synchronized with production initialization as well as diagnostics policy; compare their commands against Linux launchers rather than host-evaluated platform wrappers.
 - pi-statusline owns footer rendering and its `/statusline` settings command; keep it out of prompt interception.
 - Symptom: an idle optional statusline segment leaves a blank multiline row. Cause: filtering the segment while preserving both adjacent `line_break` entries. Fix: group configured rows first, drop only dynamically empty rows, then flatten while preserving explicitly empty rows.
 - In Pi extensions, do not call action methods such as `getThinkingLevel()` during the factory load; defer them to `session_start` or later handlers.

@@ -53,13 +53,14 @@ test("lsp registers diagnostics/fix tools, command, and status hooks", () => {
 	assert.deepEqual([...mock.events.keys()].sort(), ["session_shutdown", "session_start"]);
 });
 
-test("Docker diagnostics matrix covers every built-in server and command", () => {
+test("Docker diagnostics matrix covers every built-in server and production setting", () => {
 	const matrixPath = path.join(process.cwd(), "extensions/pi-lsp/test/docker/matrix.json");
 	const matrix = JSON.parse(readFileSync(matrixPath, "utf8")) as {
 		profiles: Array<{
 			name: string;
 			command: string[];
 			extensions: string[];
+			initialization?: Record<string, unknown>;
 			policy: {
 				diagnosticsSettleMs?: number;
 				pushDiagnosticsGraceMs?: number;
@@ -74,8 +75,10 @@ test("Docker diagnostics matrix covers every built-in server and command", () =>
 	for (const config of DEFAULT_SERVER_CONFIGS) {
 		const profile = matrix.profiles.find(({ name }) => name === config.name);
 		assert.ok(profile, `missing Docker profile for ${config.name}`);
-		assert.deepEqual(profile.command, config.command);
+		const linuxCommand = config.name === "elixir-ls" ? ["language_server.sh"] : config.command;
+		assert.deepEqual(profile.command, linuxCommand);
 		assert.deepEqual(profile.extensions, config.extensions);
+		assert.deepEqual(profile.initialization, config.initialization);
 		assert.deepEqual(profile.policy, {
 			...(config.diagnosticsSettleMs ? { diagnosticsSettleMs: config.diagnosticsSettleMs } : {}),
 			...(config.pushDiagnosticsGraceMs

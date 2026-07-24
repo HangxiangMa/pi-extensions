@@ -551,6 +551,9 @@
 			"command": ["terraform-ls", "serve"],
 			"versionCommand": ["terraform-ls", "version"],
 			"extensions": [".tf", ".tfvars"],
+			"initialization": {
+				"experimentalFeatures": { "prefillRequiredFields": true }
+			},
 			"policy": { "pushDiagnosticsGraceMs": 2000 },
 			"cases": {
 				"error": {
