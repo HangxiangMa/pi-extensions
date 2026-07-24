@@ -182,7 +182,8 @@ export async function removeSyncTarget(name: string) {
 		return {
 			...settings,
 			targets: nextTargets,
-			activeTarget: Object.keys(nextTargets)[0],
+			activeTarget:
+				settings.activeTarget === name ? Object.keys(nextTargets)[0] : settings.activeTarget,
 		};
 	});
 }
@@ -246,9 +247,15 @@ async function adoptLegacyState(
 	const targets = requireObject(next.targets, "targets");
 	const target = requireObject(targets[targetName], "target");
 	const profile = typeof target.namespace === "string" ? target.namespace : targetName;
+	const storageProfileName = typeof target.profile === "string" ? target.profile : "default";
+	const profiles = requireObject(next.profiles, "profiles");
+	const storageProfile = requireObject(profiles[storageProfileName], "storage profile");
 	const destination = statePathForConfig({
 		settingsVersion: 2,
 		target: targetName,
+		endpoint: typeof storageProfile.endpoint === "string" ? storageProfile.endpoint : "",
+		bucket: typeof target.bucket === "string" ? target.bucket : "",
+		prefix: typeof target.prefix === "string" ? target.prefix : "pi-sync",
 		profile,
 	} as SyncConfig);
 	await fs.mkdir(path.dirname(destination), { recursive: true });

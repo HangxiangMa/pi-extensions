@@ -382,8 +382,24 @@ export async function writeStateForConfig(config: SyncConfig, state: SyncState) 
 export function statePathForConfig(config: SyncConfig) {
 	if (config.settingsVersion !== 2) return statePath(config.profile);
 	const target = config.target ?? DEFAULT_PROFILE;
-	const hash = createHash("sha256").update(target).digest("hex").slice(0, 10);
+	const identity = JSON.stringify([
+		target,
+		normalizeEndpointIdentity(config.endpoint),
+		normalizeRemoteKeySegment(config.bucket),
+		normalizeRemoteKeySegment(config.prefix),
+		normalizeRemoteKeySegment(config.profile),
+	]);
+	const hash = createHash("sha256").update(identity).digest("hex").slice(0, 10);
 	return path.join(stateDir(), "targets", `${safeName(target)}-${hash}.state.json`);
+}
+
+function normalizeEndpointIdentity(endpoint: string) {
+	const normalized = endpoint.trim();
+	try {
+		return new URL(normalized).toString();
+	} catch {
+		return normalized;
+	}
 }
 
 export function agentDir() {

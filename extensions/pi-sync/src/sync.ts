@@ -133,7 +133,7 @@ export default function sync(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		try {
-			await recoverPendingSnapshotTransactions();
+			await withLock("recovery", recoverPendingSnapshotTransactions);
 		} catch (error) {
 			ctx.ui.notify(`pi-sync recovery required: ${errorMessage(error)}`, "error");
 			return;
