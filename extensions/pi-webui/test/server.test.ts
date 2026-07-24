@@ -102,12 +102,14 @@ test("assets and APIs require auth and carry restrictive headers", async () => {
 		assert.equal(page.headers.get("referrer-policy"), "no-referrer");
 		assert.match(page.headers.get("content-security-policy") ?? "", /default-src 'self'/);
 		assert.equal(page.headers.get("access-control-allow-origin"), null);
-		assert.match(await page.text(), /id="composer"/);
-		for (const module of ["app.js", "state.js", "markdown.js", "transcript.js", "image-drag.js"]) {
-			const asset = await api(server, `/${module}`, { cookie });
-			assert.equal(asset.status, 200, module);
-			assert.match(asset.headers.get("content-type") ?? "", /javascript/, module);
-		}
+		assert.match(await page.text(), /id="root"/);
+		const script = await api(server, "/app.js", { cookie });
+		assert.equal(script.status, 200);
+		assert.match(script.headers.get("content-type") ?? "", /javascript/);
+		const stylesheet = await api(server, "/app.css", { cookie });
+		assert.equal(stylesheet.status, 200);
+		assert.match(stylesheet.headers.get("content-type") ?? "", /css/);
+		assert.notEqual((await api(server, "/state.js", { cookie })).status, 200);
 		const state = await (await api(server, "/api/state", { cookie })).json();
 		assert.equal(state.session.projectName, "demo");
 	} finally {

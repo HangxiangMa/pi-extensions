@@ -1,0 +1,7 @@
+{
+	"root": false,
+	"extends": ["../../biome.json"],
+	"files": {
+		"includes": ["!src/web/app.js", "!src/web/app.css"]
+	}
+}

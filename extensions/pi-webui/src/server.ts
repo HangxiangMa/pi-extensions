@@ -231,17 +231,12 @@ export class WebUIServer {
 				await this.asset(response, "index.html", "text/html; charset=utf-8");
 				return;
 			}
-			if (
-				request.method === "GET" &&
-				["/app.js", "/state.js", "/markdown.js", "/transcript.js", "/image-drag.js"].includes(
-					url.pathname,
-				)
-			) {
-				await this.asset(response, url.pathname.slice(1), "text/javascript; charset=utf-8");
+			if (request.method === "GET" && url.pathname === "/app.js") {
+				await this.asset(response, "app.js", "text/javascript; charset=utf-8");
 				return;
 			}
-			if (request.method === "GET" && url.pathname === "/styles.css") {
-				await this.asset(response, "styles.css", "text/css; charset=utf-8");
+			if (request.method === "GET" && url.pathname === "/app.css") {
+				await this.asset(response, "app.css", "text/css; charset=utf-8");
 				return;
 			}
 			if (request.method === "GET" && url.pathname === "/api/state") {
