@@ -75,12 +75,6 @@ export function isSafeLink(url) {
 	}
 }
 
-export function renderMarkdown(input, documentRef = document) {
-	const fragment = documentRef.createDocumentFragment();
-	for (const block of parseMarkdown(input)) fragment.append(renderBlock(block, documentRef));
-	return fragment;
-}
-
 function startsBlock(line) {
 	return (
 		/^\s*```/.test(line) ||
@@ -132,67 +126,4 @@ function pushText(nodes, text) {
 	const previous = nodes.at(-1);
 	if (previous?.type === "text") previous.text += text;
 	else nodes.push({ type: "text", text });
-}
-
-function renderBlock(block, documentRef) {
-	if (block.type === "heading") {
-		const heading = documentRef.createElement(`h${Math.min(6, block.level + 2)}`);
-		heading.className = "markdown-heading";
-		appendInline(heading, block.children, documentRef);
-		return heading;
-	}
-	if (block.type === "list") {
-		const list = documentRef.createElement(block.ordered ? "ol" : "ul");
-		list.className = "markdown-list";
-		for (const children of block.items) {
-			const item = documentRef.createElement("li");
-			appendInline(item, children, documentRef);
-			list.append(item);
-		}
-		return list;
-	}
-	if (block.type === "blockquote") {
-		const quote = documentRef.createElement("blockquote");
-		for (const child of block.children) quote.append(renderBlock(child, documentRef));
-		return quote;
-	}
-	if (block.type === "codeBlock") {
-		const pre = documentRef.createElement("pre");
-		pre.className = "markdown-code";
-		const code = documentRef.createElement("code");
-		if (block.language) code.dataset.language = block.language;
-		code.append(documentRef.createTextNode(block.text));
-		pre.append(code);
-		return pre;
-	}
-	const paragraph = documentRef.createElement("p");
-	paragraph.className = "message-text";
-	appendInline(paragraph, block.children, documentRef);
-	return paragraph;
-}
-
-function appendInline(parent, nodes, documentRef) {
-	for (const node of nodes) {
-		if (node.type === "text") {
-			parent.append(documentRef.createTextNode(node.text));
-			continue;
-		}
-		const element = documentRef.createElement(
-			node.type === "code"
-				? "code"
-				: node.type === "strong"
-					? "strong"
-					: node.type === "emphasis"
-						? "em"
-						: "a",
-		);
-		if (node.type === "link") {
-			element.href = node.href;
-			element.target = "_blank";
-			element.rel = "noopener noreferrer";
-		}
-		if (node.type === "code") element.append(documentRef.createTextNode(node.text));
-		else appendInline(element, node.children, documentRef);
-		parent.append(element);
-	}
 }

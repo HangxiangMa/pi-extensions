@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-webui)](https://www.npmjs.com/package/@narumitw/pi-webui) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-webui` adds a private, lightweight browser companion to the current terminal-owned [Pi Coding Agent](https://pi.dev) session. It displays Pi's semantic conversation and tool activity as they happen and can send text or sanitized images back into that same session.
+`@narumitw/pi-webui` adds a private, focused browser companion to the current terminal-owned [Pi Coding Agent](https://pi.dev) session. It displays Pi's semantic conversation and tool activity as they happen and can send text or sanitized images back into that same session.
 
 This package is intentionally different from the broader, separately maintained `@narumitw/pi-web` application. WebUI has one current-session chat page and no session manager, shell, file browser, git UI, control room, or task board.
 
@@ -16,7 +16,7 @@ This package is intentionally different from the broader, separately maintained 
 - Accepts pasted, dropped, or selected PNG, JPEG, WebP, GIF, BMP, TIFF, HEIC/HEIF, and AVIF images, strips metadata server-side, applies Pi-compatible size limits, and provides ordered thumbnails plus an enlarged preview.
 - Reconnects from an ordered event cursor and replaces state from an authoritative snapshot after a gap.
 - Keeps a failed browser draft and prevents rapid duplicate submission with request IDs.
-- Uses no frontend framework, build step, browser storage, remote service, or automatically launched browser.
+- Uses React with Radix Primitives, Themes, Colors, and Icons for accessible controls, disclosures, overlays, adaptive color, and consistent iconography. Published browser assets are bundled locally; runtime use needs no CDN, remote service, browser storage, or automatically launched browser.
 
 ## 📦 Install
 
@@ -168,7 +168,10 @@ src/server.ts        authenticated loopback HTTP/SSE server and raw attachment p
 src/image-limits.ts  shared configurable defaults, ceilings, and provider constraints
 src/images.ts        bounded provider-ready image processing
 src/pi-settings.ts   effective Pi image settings reader
-src/web/             framework-free browser page
+src/web/ui/          React source using Radix UI and the browser protocol client
+src/web/app.js        generated, bundled browser application
+src/web/app.css       generated Radix Themes, Colors, and local presentation styles
+src/web/index.html    minimal authenticated browser shell
 ```
 
 ## 🧪 Development
@@ -176,13 +179,14 @@ src/web/             framework-free browser page
 From the repository root:
 
 ```bash
+npm --workspace @narumitw/pi-webui run build:web
 npm --workspace @narumitw/pi-webui run check
 npm test
 just try webui
 just pack webui
 ```
 
-The package preview must contain its manifest, license, README, TypeScript source, and static web assets, but no tests, fixtures, cache, or `node_modules`.
+Edit browser code under `src/web/ui/`, then run `build:web`; `check:web` (included in the package typecheck) rejects stale generated assets. The package preview must contain its manifest, license, README, TypeScript and browser source, and bundled static assets, but no tests, fixtures, cache, build scripts, or `node_modules`.
 
 ## 🔎 Keywords
 
