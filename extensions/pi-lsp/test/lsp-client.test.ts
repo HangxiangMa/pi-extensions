@@ -101,6 +101,52 @@ test("empty pull diagnostics fall back after the configured grace period", async
 	}
 });
 
+test("push-only diagnostics may treat no publication as clean after a configured grace", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-push-silent-"));
+	const file = path.join(root, "main.go");
+	writeFileSync(file, "package main\n");
+	const adapter = fixtureAdapter("push-silent", 30, undefined, 100);
+	const client = new LspClient(adapter, adapter.defaultCommand, root, 1_000);
+	const startedAt = Date.now();
+
+	try {
+		await client.start();
+		await client.initialize(root);
+		const uri = pathToFileURL(file).href;
+		client.didOpen(uri, "package main\n", "go");
+		assert.deepEqual(await client.diagnostics(uri), []);
+		assert.ok(Date.now() - startedAt < 500, "silent push server should not wait for timeout");
+		client.didClose(uri);
+	} finally {
+		await client.shutdown();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("push-only diagnostics preserve a publication within the configured grace", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-push-silent-late-"));
+	const file = path.join(root, "main.go");
+	writeFileSync(file, "package main\n");
+	const adapter = fixtureAdapter("push-silent-then-diagnostic", 30, undefined, 100);
+	const client = new LspClient(adapter, adapter.defaultCommand, root, 1_000);
+
+	try {
+		await client.start();
+		await client.initialize(root);
+		const uri = pathToFileURL(file).href;
+		client.didOpen(uri, "package main\n", "go");
+		const diagnostics = await client.diagnostics(uri);
+		assert.deepEqual(
+			diagnostics.map(({ message }) => message),
+			["late push-only diagnostic"],
+		);
+		client.didClose(uri);
+	} finally {
+		await client.shutdown();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("push diagnostics settle on the latest publication", async () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-push-sequence-"));
 	const file = path.join(root, "main.go");
@@ -182,6 +228,7 @@ function fixtureAdapter(
 	scenario: string,
 	diagnosticsSettleMs: number,
 	expectedFiles?: number,
+	pushDiagnosticsGraceMs?: number,
 ): LspServerAdapter {
 	return {
 		name: `fixture-${scenario}`,
@@ -195,6 +242,7 @@ function fixtureAdapter(
 		extensions: [".go"],
 		skipDirectories: new Set(),
 		diagnosticsSettleMs,
+		pushDiagnosticsGraceMs,
 		pullDiagnosticsGraceMs:
 			scenario === "pull-empty-then-push" ||
 			scenario === "pull-empty-after-push" ||

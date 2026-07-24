@@ -148,6 +148,8 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 		name: "lua-language-server",
 		command: ["lua-language-server"],
 		extensions: [".lua"],
+		// LuaLS does not publish an empty diagnostic set for a clean document.
+		pushDiagnosticsGraceMs: 3_000,
 	},
 	{
 		name: "intelephense",
@@ -167,6 +169,8 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 		command: ["dart", "language-server"],
 		extensions: [".dart"],
 		skipDirectories: [".dart_tool", "build"],
+		// The analysis server can remain silent when a document is clean.
+		pushDiagnosticsGraceMs: 2_000,
 	},
 	{
 		name: "ocaml-lsp",
@@ -184,6 +188,7 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 		command: ["terraform-ls", "serve"],
 		extensions: [".tf", ".tfvars"],
 		skipDirectories: [".terraform"],
+		pushDiagnosticsGraceMs: 2_000,
 		initialization: {
 			experimentalFeatures: { prefillRequiredFields: true },
 		},
@@ -198,6 +203,7 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 		command: ["gleam", "lsp"],
 		extensions: [".gleam"],
 		skipDirectories: ["build"],
+		pushDiagnosticsGraceMs: 2_000,
 	},
 	{
 		name: "clojure-lsp",
@@ -214,12 +220,14 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 		name: "tinymist",
 		command: ["tinymist"],
 		extensions: [".typ", ".typc"],
+		pushDiagnosticsGraceMs: 2_000,
 	},
 	{
 		name: "haskell-language-server",
 		command: ["haskell-language-server-wrapper", "--lsp"],
 		extensions: [".hs", ".lhs"],
 		skipDirectories: [".stack-work", "dist-newstyle"],
+		pushDiagnosticsGraceMs: 3_000,
 	},
 ];
 
@@ -425,6 +433,7 @@ function normalizeServer(name: string, value: unknown, label: string): InternalL
 		initialization: optionalRecordField(value, "initialization", label),
 		skipDirectories: optionalDirectoryNamesField(value, "skipDirectories", label),
 		diagnosticsSettleMs: optionalPositiveNumberField(value, "diagnosticsSettleMs", label),
+		pushDiagnosticsGraceMs: optionalPositiveNumberField(value, "pushDiagnosticsGraceMs", label),
 		pullDiagnosticsGraceMs: optionalPositiveNumberField(value, "pullDiagnosticsGraceMs", label),
 	};
 }
@@ -452,6 +461,7 @@ function configToAdapter(config: InternalLspServer): LspServerAdapter {
 		initialization: config.initialization,
 		skipDirectories: new Set([...COMMON_SKIP_DIRECTORIES, ...(config.skipDirectories ?? [])]),
 		diagnosticsSettleMs: config.diagnosticsSettleMs,
+		pushDiagnosticsGraceMs: config.pushDiagnosticsGraceMs,
 		pullDiagnosticsGraceMs: config.pullDiagnosticsGraceMs,
 		isSupportedFile: (filePath) => extensionSet.has(path.extname(filePath)),
 		languageIdFor: (filePath) => languageIdFor(config, filePath),

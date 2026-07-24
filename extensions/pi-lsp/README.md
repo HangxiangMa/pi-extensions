@@ -158,6 +158,7 @@ Each server entry supports:
 - `initialization`: LSP initialization options and workspace configuration values.
 - `skipDirectories`: additional directory names to exclude from recursive discovery. Explicitly requested paths remain available.
 - `diagnosticsSettleMs`: positive number of milliseconds without another push-diagnostics publication before using the latest result. Defaults to `800`; the built-in intelephense route uses `4000`. The global timeout remains the upper bound.
+- `pushDiagnosticsGraceMs`: positive number of milliseconds to wait for the first publication from a push-only server. It is unset by default, so a silent push-only server waits for the global timeout. The built-in Lua and Haskell routes use `3000`; Dart, Terraform, Gleam, and Tinymist use `2000`. This lets clean files finish after bounded silence without returning before a late error publication.
 - `pullDiagnosticsGraceMs`: positive number of milliseconds to wait for a newer push publication after a server returns an empty pull-diagnostics result. It is unset by default; the built-in rust-analyzer route uses `5000` because initial workspace analysis can finish after an early empty pull response.
 
 Global options:

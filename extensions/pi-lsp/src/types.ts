@@ -69,6 +69,8 @@ export interface ConfiguredLspServer {
 	skipDirectories?: string[];
 	// Quiet period in ms after the latest push-diagnostics publication.
 	diagnosticsSettleMs?: number;
+	// Maximum wait for a push-only server that publishes nothing for a clean document.
+	pushDiagnosticsGraceMs?: number;
 	// Maximum wait for a newer push publication after an empty pull result.
 	pullDiagnosticsGraceMs?: number;
 }
@@ -94,6 +96,7 @@ export interface LspServerAdapter {
 	initialization?: Record<string, unknown>;
 	skipDirectories: Set<string>;
 	diagnosticsSettleMs?: number;
+	pushDiagnosticsGraceMs?: number;
 	pullDiagnosticsGraceMs?: number;
 	isSupportedFile: (filePath: string) => boolean;
 	languageIdFor: (filePath: string) => string;

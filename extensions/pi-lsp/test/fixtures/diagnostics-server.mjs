@@ -58,8 +58,12 @@ function handle(message) {
 	if (message.method === "textDocument/didOpen") {
 		const uri = message.params.textDocument.uri;
 		openedUris.push(uri);
-		publish(uri, []);
-		if (scenario === "push-sequence") {
+		if (scenario !== "push-silent" && scenario !== "push-silent-then-diagnostic") {
+			publish(uri, []);
+		}
+		if (scenario === "push-silent-then-diagnostic") {
+			setTimeout(() => publish(uri, [diagnostic("late push-only diagnostic")]), 40);
+		} else if (scenario === "push-sequence") {
 			setTimeout(() => publish(uri, [diagnostic("first")]), 20);
 			setTimeout(() => publish(uri, [diagnostic("first"), diagnostic("second", 1)]), 40);
 		} else if (scenario === "pull-empty-then-push") {

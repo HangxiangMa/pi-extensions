@@ -4,6 +4,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	rmSync,
 	statSync,
 	symlinkSync,
@@ -14,7 +15,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createMockPi } from "../../../test/support.js";
-import { consumeLspConfigNotice, loadConfig, loadRuntime } from "../src/adapters.js";
+import {
+	consumeLspConfigNotice,
+	DEFAULT_SERVER_CONFIGS,
+	loadConfig,
+	loadRuntime,
+} from "../src/adapters.js";
 import {
 	commandExists,
 	commandFromEnv,
@@ -45,6 +51,44 @@ test("lsp registers diagnostics/fix tools, command, and status hooks", () => {
 	);
 	assert.ok(mock.commands.has("lsp"));
 	assert.deepEqual([...mock.events.keys()].sort(), ["session_shutdown", "session_start"]);
+});
+
+test("Docker diagnostics matrix covers every built-in server and production setting", () => {
+	const matrixPath = path.join(process.cwd(), "extensions/pi-lsp/test/docker/matrix.json");
+	const matrix = JSON.parse(readFileSync(matrixPath, "utf8")) as {
+		profiles: Array<{
+			name: string;
+			command: string[];
+			extensions: string[];
+			initialization?: Record<string, unknown>;
+			policy: {
+				diagnosticsSettleMs?: number;
+				pushDiagnosticsGraceMs?: number;
+				pullDiagnosticsGraceMs?: number;
+			};
+		}>;
+	};
+	assert.deepEqual(
+		matrix.profiles.map(({ name }) => name).sort(),
+		DEFAULT_SERVER_CONFIGS.map(({ name }) => name).sort(),
+	);
+	for (const config of DEFAULT_SERVER_CONFIGS) {
+		const profile = matrix.profiles.find(({ name }) => name === config.name);
+		assert.ok(profile, `missing Docker profile for ${config.name}`);
+		const linuxCommand = config.name === "elixir-ls" ? ["language_server.sh"] : config.command;
+		assert.deepEqual(profile.command, linuxCommand);
+		assert.deepEqual(profile.extensions, config.extensions);
+		assert.deepEqual(profile.initialization, config.initialization);
+		assert.deepEqual(profile.policy, {
+			...(config.diagnosticsSettleMs ? { diagnosticsSettleMs: config.diagnosticsSettleMs } : {}),
+			...(config.pushDiagnosticsGraceMs
+				? { pushDiagnosticsGraceMs: config.pushDiagnosticsGraceMs }
+				: {}),
+			...(config.pullDiagnosticsGraceMs
+				? { pullDiagnosticsGraceMs: config.pullDiagnosticsGraceMs }
+				: {}),
+		});
+	}
 });
 
 test("default catalog routes common languages and skips generated trees", () => {
@@ -99,6 +143,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 			skipDirectories?: string[];
 			initialization?: Record<string, unknown>;
 			diagnosticsSettleMs?: number;
+			pushDiagnosticsGraceMs?: number;
 			pullDiagnosticsGraceMs?: number;
 		}> = [
 			{
@@ -186,6 +231,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 				extensions: [".lua"],
 				sample: "init.lua",
 				languageId: "lua",
+				pushDiagnosticsGraceMs: 3_000,
 			},
 			{
 				name: "intelephense",
@@ -210,6 +256,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 				sample: "lib/main.dart",
 				languageId: "dart",
 				skipDirectories: [".dart_tool", "build"],
+				pushDiagnosticsGraceMs: 2_000,
 			},
 			{
 				name: "ocaml-lsp",
@@ -236,6 +283,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 				initialization: {
 					experimentalFeatures: { prefillRequiredFields: true },
 				},
+				pushDiagnosticsGraceMs: 2_000,
 			},
 			{
 				name: "texlab",
@@ -251,6 +299,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 				sample: "src/app.gleam",
 				languageId: "gleam",
 				skipDirectories: ["build"],
+				pushDiagnosticsGraceMs: 2_000,
 			},
 			{
 				name: "clojure-lsp",
@@ -273,6 +322,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 				extensions: [".typ", ".typc"],
 				sample: "main.typc",
 				languageId: "typst-code",
+				pushDiagnosticsGraceMs: 2_000,
 			},
 			{
 				name: "haskell-language-server",
@@ -281,6 +331,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 				sample: "src/Main.lhs",
 				languageId: "lhaskell",
 				skipDirectories: [".stack-work", "dist-newstyle"],
+				pushDiagnosticsGraceMs: 3_000,
 			},
 		];
 		assert.equal(
@@ -300,6 +351,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 			assert.equal(adapter.languageIdFor(expected.sample), expected.languageId);
 			assert.deepEqual(adapter.initialization, expected.initialization);
 			assert.equal(adapter.diagnosticsSettleMs, expected.diagnosticsSettleMs);
+			assert.equal(adapter.pushDiagnosticsGraceMs, expected.pushDiagnosticsGraceMs);
 			assert.equal(adapter.pullDiagnosticsGraceMs, expected.pullDiagnosticsGraceMs);
 			for (const directory of expected.skipDirectories ?? []) {
 				assert.equal(
@@ -456,6 +508,7 @@ test("LSP config applies safe server-specific skip directories", () => {
 					extensions: [".foo"],
 					skipDirectories: ["generated"],
 					diagnosticsSettleMs: 250,
+					pushDiagnosticsGraceMs: 375,
 					pullDiagnosticsGraceMs: 500,
 				},
 			},
@@ -464,6 +517,7 @@ test("LSP config applies safe server-specific skip directories", () => {
 		assert.ok(adapter);
 		assert.equal(adapter.isDefault, false);
 		assert.equal(adapter.diagnosticsSettleMs, 250);
+		assert.equal(adapter.pushDiagnosticsGraceMs, 375);
 		assert.equal(adapter.pullDiagnosticsGraceMs, 500);
 		assert.deepEqual(collectSupportedFiles(adapter, project, undefined, 50), [
 			path.join(project, "src", "main.foo"),
