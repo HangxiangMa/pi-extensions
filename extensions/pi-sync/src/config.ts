@@ -233,9 +233,9 @@ function validateUniqueRemoteTargets(targets: Record<string, unknown>) {
 			continue;
 		const identity = JSON.stringify([
 			target.profile,
-			target.bucket,
-			target.prefix ?? DEFAULT_PREFIX,
-			target.namespace ?? name,
+			process.env.PI_SYNC_BUCKET ?? process.env.R2_BUCKET ?? target.bucket,
+			process.env.PI_SYNC_PREFIX ?? target.prefix ?? DEFAULT_PREFIX,
+			process.env.PI_SYNC_PROFILE ?? target.namespace ?? name,
 		]);
 		const existing = identities.get(identity);
 		if (existing) {

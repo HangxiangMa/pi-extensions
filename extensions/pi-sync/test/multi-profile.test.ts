@@ -363,7 +363,7 @@ test("cancelling a target switch leaves settings byte-for-byte unchanged", async
 	});
 });
 
-test("first-time setup saves one previewed v2 target without rendering credentials", async () => {
+test("first-time R2 setup recommends home/r2/pi-sync defaults without raw path questions", async () => {
 	await withTempSettings(async () => {
 		process.env.AWS_ACCESS_KEY_ID = "setup-access-secret";
 		process.env.AWS_SECRET_ACCESS_KEY = "setup-secret-value";
@@ -372,21 +372,18 @@ test("first-time setup saves one previewed v2 target without rendering credentia
 		const selections = [
 			"Set up sync",
 			"Cloudflare R2",
+			"Personal / Home",
+			"Use suggested location (recommended)",
 			"Use environment credentials",
 			"Recommended Pi settings",
 			"Enable automatic sync",
 			"Keep sessions off (recommended)",
 			"Save setup",
+			undefined,
 		];
-		const inputs = [
-			"home",
-			"r2",
-			"https://account.r2.cloudflarestorage.com",
-			"personal-pi",
-			"pi-sync",
-			"home",
-		];
+		const inputs = ["https://account.r2.cloudflarestorage.com"];
 		const rendered: string[] = [];
+		const inputTitles: string[] = [];
 		const { ctx, notifications } = createMockContext({
 			hasUI: true,
 			mode: "tui",
@@ -395,7 +392,7 @@ test("first-time setup saves one previewed v2 target without rendering credentia
 				return selections.shift();
 			},
 			input: async (title: string) => {
-				rendered.push(title);
+				inputTitles.push(title);
 				return inputs.shift();
 			},
 		});
@@ -403,18 +400,111 @@ test("first-time setup saves one previewed v2 target without rendering credentia
 		await mock.commands.get("sync")?.handler("", ctx);
 
 		const saved = await readLocalConfigObject();
+		const profile = (saved?.profiles as Record<string, Record<string, unknown>> | undefined)?.r2;
+		const target = (saved?.targets as Record<string, Record<string, unknown>> | undefined)?.home;
 		assert.equal(saved?.version, 2);
 		assert.equal(saved?.activeTarget, "home");
-		assert.equal(
-			(saved?.profiles as Record<string, Record<string, unknown>> | undefined)?.r2?.kind,
-			"r2",
-		);
-		assert.equal(
-			(saved?.targets as Record<string, Record<string, unknown>> | undefined)?.home?.bucket,
-			"personal-pi",
-		);
+		assert.equal(profile?.kind, "r2");
+		assert.equal(target?.profile, "r2");
+		assert.equal(target?.bucket, "pi-sync");
+		assert.equal(target?.prefix, "pi-sync");
+		assert.equal(target?.namespace, "home");
+		assert.deepEqual(inputTitles, ["Cloudflare R2 endpoint"]);
+		assert.match(rendered.join("\n"), /Bucket must already exist/);
+		assert.match(rendered.join("\n"), /pi-sync\/profiles\/home/);
 		assert.match(notifications.at(-1)?.message ?? "", /Target “home” is ready/);
 		assert.doesNotMatch(rendered.join("\n"), /setup-access-secret|setup-secret-value/);
+	});
+});
+
+test("first-time S3 setup asks only for the existing bucket and derives work defaults", async () => {
+	await withTempSettings(async () => {
+		const mock = createMockPi();
+		sync(mock.pi);
+		const selections = [
+			"Set up sync",
+			"Other S3-compatible storage",
+			"Work",
+			"Use existing bucket with suggested path (recommended)",
+			"Create private settings template",
+			"Minimal settings",
+			"Keep automatic sync off",
+			"Keep sessions off (recommended)",
+			"Save setup",
+			undefined,
+		];
+		const inputs = ["https://s3.example.com", "ap-northeast-1", "company-pi"];
+		const inputTitles: string[] = [];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async () => selections.shift(),
+			input: async (title: string) => {
+				inputTitles.push(title);
+				return inputs.shift();
+			},
+		});
+
+		await mock.commands.get("sync")?.handler("", ctx);
+
+		const saved = await readLocalConfigObject();
+		const profile = (saved?.profiles as Record<string, Record<string, unknown>> | undefined)?.s3;
+		const target = (saved?.targets as Record<string, Record<string, unknown>> | undefined)?.work;
+		assert.equal(saved?.activeTarget, "work");
+		assert.equal(profile?.kind, "s3-compatible");
+		assert.equal(target?.bucket, "company-pi");
+		assert.equal(target?.prefix, "pi-sync");
+		assert.equal(target?.namespace, "work");
+		assert.deepEqual(inputTitles, ["S3-compatible endpoint", "Storage region", "Existing bucket"]);
+	});
+});
+
+test("first-time setup keeps advanced profile and remote-location customization", async () => {
+	await withTempSettings(async () => {
+		const mock = createMockPi();
+		sync(mock.pi);
+		const selections = [
+			"Set up sync",
+			"Cloudflare R2",
+			"Custom",
+			"Customize remote location",
+			"Create private settings template",
+			"Minimal settings",
+			"Keep automatic sync off",
+			"Keep sessions off (recommended)",
+			"Save setup",
+			undefined,
+		];
+		const inputs = [
+			"lab",
+			"https://account.r2.cloudflarestorage.com",
+			"archive",
+			"custom-bucket",
+			"custom-prefix",
+			"custom-space",
+		];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async () => selections.shift(),
+			input: async () => inputs.shift(),
+		});
+
+		await mock.commands.get("sync")?.handler("", ctx);
+
+		const saved = await readLocalConfigObject();
+		const target = (saved?.targets as Record<string, Record<string, unknown>> | undefined)?.lab;
+		assert.equal(saved?.activeTarget, "lab");
+		assert.ok(
+			Object.hasOwn(
+				(saved?.profiles as Record<string, Record<string, unknown>> | undefined) ?? {},
+				"archive",
+			),
+		);
+		assert.equal(target?.profile, "archive");
+		assert.equal(target?.bucket, "custom-bucket");
+		assert.equal(target?.prefix, "custom-prefix");
+		assert.equal(target?.namespace, "custom-space");
 	});
 });
 
@@ -436,7 +526,7 @@ test("cancelling first-time setup creates no settings or state", async () => {
 	});
 });
 
-test("manage flow adds a previewed target without switching or syncing", async () => {
+test("manage flow recommends the current profile bucket and derives a separate namespace", async () => {
 	await withTempSettings(async () => {
 		writeSettings(v2Settings());
 		const mock = createMockPi();
@@ -445,26 +535,33 @@ test("manage flow adds a previewed target without switching or syncing", async (
 			"Manage targets & storage",
 			"Add sync target",
 			"r2",
+			"Same bucket as “home” (recommended)",
 			"Recommended Pi settings",
 			"Add target",
 			undefined,
 		];
-		const inputs = ["work", "company-pi", "pi-sync", "work"];
+		const inputs = ["work"];
+		const rendered: string[] = [];
 		const { ctx, notifications } = createMockContext({
 			hasUI: true,
 			mode: "tui",
-			select: async () => selections.shift(),
+			select: async (title: string) => {
+				rendered.push(title);
+				return selections.shift();
+			},
 			input: async () => inputs.shift(),
 		});
 
 		await mock.commands.get("sync")?.handler("", ctx);
 
 		const saved = await readLocalConfigObject();
+		const work = (saved?.targets as Record<string, Record<string, unknown>> | undefined)?.work;
 		assert.equal(saved?.activeTarget, "home");
-		assert.equal(
-			(saved?.targets as Record<string, Record<string, unknown>> | undefined)?.work?.bucket,
-			"company-pi",
-		);
+		assert.equal(work?.profile, "r2");
+		assert.equal(work?.bucket, "personal-pi");
+		assert.equal(work?.prefix, "pi-sync");
+		assert.equal(work?.namespace, "work");
+		assert.match(rendered.join("\n"), /personal-pi.*pi-sync\/profiles\/work/s);
 		assert.match(notifications.at(-1)?.message ?? "", /Added sync target “work”/);
 	});
 });
@@ -643,6 +740,17 @@ test("duplicate target remote identities fail validation", async () => {
 		const settings = v2Settings();
 		settings.targets.work = { ...settings.targets.home };
 		writeSettings(settings);
+		await assert.rejects(loadConfig(), /targets "home" and "work" use the same remote destination/);
+	});
+});
+
+test("deprecated namespace overrides cannot collapse distinct targets onto one destination", async () => {
+	await withTempSettings(async () => {
+		const settings = v2Settings();
+		settings.targets.work = { ...settings.targets.home, namespace: "work" };
+		writeSettings(settings);
+		process.env.PI_SYNC_PROFILE = "forced-namespace";
+
 		await assert.rejects(loadConfig(), /targets "home" and "work" use the same remote destination/);
 	});
 });

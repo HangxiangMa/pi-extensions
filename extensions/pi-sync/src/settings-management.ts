@@ -274,9 +274,9 @@ function assertUniqueRemoteIdentity(
 function remoteIdentity(target: SyncTargetSettings | Record<string, unknown>) {
 	return JSON.stringify([
 		target.profile,
-		target.bucket,
-		target.prefix ?? "pi-sync",
-		"namespace" in target ? target.namespace : undefined,
+		process.env.PI_SYNC_BUCKET ?? process.env.R2_BUCKET ?? target.bucket,
+		process.env.PI_SYNC_PREFIX ?? target.prefix ?? "pi-sync",
+		process.env.PI_SYNC_PROFILE ?? ("namespace" in target ? target.namespace : undefined),
 	]);
 }
 

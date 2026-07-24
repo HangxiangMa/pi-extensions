@@ -237,14 +237,8 @@ export async function showSetupWizard(ctx: ExtensionCommandContext) {
 		"Cancel",
 	]);
 	if (!preset || preset === "Cancel") return false;
-	const targetName = await requiredInput(ctx, "Name this sync target", "default");
+	const targetName = await chooseInitialTargetName(ctx);
 	if (!targetName) return false;
-	const profileName = await requiredInput(
-		ctx,
-		"Name this reusable storage profile",
-		preset === "Cloudflare R2" ? "r2" : "s3",
-	);
-	if (!profileName) return false;
 	const endpoint = await requiredInput(
 		ctx,
 		preset === "Cloudflare R2" ? "Cloudflare R2 endpoint" : "S3-compatible endpoint",
@@ -259,12 +253,9 @@ export async function showSetupWizard(ctx: ExtensionCommandContext) {
 		if (!selectedRegion) return false;
 		region = selectedRegion;
 	}
-	const bucket = await requiredInput(ctx, "Bucket", "pi-sync");
-	if (!bucket) return false;
-	const prefix = await requiredInput(ctx, "Remote prefix", "pi-sync");
-	if (!prefix) return false;
-	const namespace = await requiredInput(ctx, "Remote namespace", targetName);
-	if (!namespace) return false;
+	const location = await chooseInitialRemoteLocation(ctx, preset, targetName);
+	if (!location) return false;
+	const { profileName, bucket, prefix, namespace } = location;
 	const credentialChoice = await ctx.ui.select(
 		"Credentials\n\nSecret values are never shown in pi-sync screens.",
 		["Use environment credentials", "Create private settings template", "Cancel"],
@@ -318,7 +309,8 @@ export async function showSetupWizard(ctx: ExtensionCommandContext) {
 			`Storage profile: ${safeTerminalText(profileName)} (${preset})`,
 			`Endpoint: ${safeTerminalText(endpoint)}`,
 			`Bucket: ${safeTerminalText(bucket)}`,
-			`Remote: ${safeTerminalText(prefix)}/${safeTerminalText(namespace)}`,
+			`Remote path: ${formatRemotePath(prefix, namespace)}`,
+			"Bucket must already exist. pi-sync will not create it.",
 			`Synced content: ${syncFiles.length} built-in groups · Sessions: ${syncSessions ? "On — privacy warning acknowledged" : "Off"}`,
 			`Auto-sync: ${autoSync ? "On" : "Off"}`,
 			`Credentials: ${safeTerminalText(credentialSummary)}`,
@@ -532,12 +524,9 @@ async function showAddTarget(ctx: ExtensionCommandContext) {
 		"Cancel",
 	]);
 	if (!profile || profile === "Cancel") return;
-	const bucket = await requiredInput(ctx, "Bucket", "pi-sync");
-	if (!bucket) return;
-	const prefix = await requiredInput(ctx, "Remote prefix", "pi-sync");
-	if (!prefix) return;
-	const namespace = await requiredInput(ctx, "Remote namespace", name);
-	if (!namespace) return;
+	const location = await chooseAdditionalRemoteLocation(ctx, raw, profile, name);
+	if (!location) return;
+	const { bucket, prefix, namespace } = location;
 	const preset = await ctx.ui.select("Choose synced content", [
 		"Recommended Pi settings",
 		"Minimal settings",
@@ -547,7 +536,8 @@ async function showAddTarget(ctx: ExtensionCommandContext) {
 	const syncFiles =
 		preset === "Minimal settings" ? ["settings.json", "AGENTS.md"] : [...DEFAULT_SYNC_FILES];
 	const overlapsExistingTarget = Object.values(ownRecord(raw.targets) ?? {}).some((value) => {
-		const existing = value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+		const existing =
+			value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 		const selected = normalizeSyncFiles(existing?.syncFiles as string[] | undefined);
 		return selected.some((item) => syncFiles.includes(item));
 	});
@@ -557,10 +547,14 @@ async function showAddTarget(ctx: ExtensionCommandContext) {
 			"",
 			`Target: ${safeTerminalText(name)}`,
 			`Storage profile: ${safeTerminalText(profile)}`,
-			`Destination: ${safeTerminalText(bucket)}/${safeTerminalText(prefix)}/${safeTerminalText(namespace)}`,
+			`Bucket: ${safeTerminalText(bucket)}`,
+			`Remote path: ${formatRemotePath(prefix, namespace)}`,
+			"Bucket must already exist. pi-sync will not create it.",
 			`Synced content: ${syncFiles.length} built-in groups · Sessions: Off`,
 			...(overlapsExistingTarget
-				? ["Warning: this target shares local content with another target; only the current target auto-syncs."]
+				? [
+						"Warning: this target shares local content with another target; only the current target auto-syncs.",
+					]
 				: []),
 			"Switching to this target later will not sync automatically.",
 		].join("\n"),
@@ -743,6 +737,172 @@ async function showRecoveryMenu(ctx: ExtensionCommandContext, runRoute: RunRoute
 	else await runRoute("unlock");
 }
 
+interface ChosenRemoteLocation {
+	profileName: string;
+	bucket: string;
+	prefix: string;
+	namespace: string;
+}
+
+async function chooseInitialTargetName(ctx: ExtensionCommandContext) {
+	const purpose = await ctx.ui.select("What will this target be used for?", [
+		"Personal / Home",
+		"Work",
+		"Custom",
+		"Cancel",
+	]);
+	if (!purpose || purpose === "Cancel") return undefined;
+	if (purpose === "Personal / Home") return "home";
+	if (purpose === "Work") return "work";
+	return requiredInput(ctx, "Name this sync target", "default");
+}
+
+async function chooseInitialRemoteLocation(
+	ctx: ExtensionCommandContext,
+	preset: string,
+	targetName: string,
+): Promise<ChosenRemoteLocation | undefined> {
+	const profileName = preset === "Cloudflare R2" ? "r2" : "s3";
+	const suggested = {
+		profileName,
+		bucket: "pi-sync",
+		prefix: "pi-sync",
+		namespace: targetName,
+	};
+	if (preset === "Cloudflare R2") {
+		const choice = await ctx.ui.select(
+			[
+				"Choose remote location",
+				"",
+				`Suggested storage profile: ${profileName}`,
+				`Suggested bucket: ${suggested.bucket}`,
+				`Remote path: ${formatRemotePath(suggested.prefix, suggested.namespace)}`,
+				"Bucket must already exist. pi-sync will not create it.",
+			].join("\n"),
+			["Use suggested location (recommended)", "Customize remote location", "Cancel"],
+		);
+		if (!choice || choice === "Cancel") return undefined;
+		if (choice === "Use suggested location (recommended)") return suggested;
+		return chooseCustomRemoteLocation(ctx, targetName, profileName, true);
+	}
+
+	const choice = await ctx.ui.select(
+		[
+			"Choose remote location",
+			"",
+			`Suggested storage profile: ${profileName}`,
+			`Suggested path: ${formatRemotePath("pi-sync", targetName)}`,
+			"S3 bucket names may need to be globally unique and the bucket must already exist.",
+		].join("\n"),
+		[
+			"Use existing bucket with suggested path (recommended)",
+			"Customize remote location",
+			"Cancel",
+		],
+	);
+	if (!choice || choice === "Cancel") return undefined;
+	if (choice === "Customize remote location") {
+		return chooseCustomRemoteLocation(ctx, targetName, profileName, true);
+	}
+	const bucket = await requiredExistingBucket(ctx, "pi-sync-your-name");
+	return bucket ? { ...suggested, bucket } : undefined;
+}
+
+async function chooseAdditionalRemoteLocation(
+	ctx: ExtensionCommandContext,
+	settings: Record<string, unknown>,
+	profileName: string,
+	targetName: string,
+): Promise<Omit<ChosenRemoteLocation, "profileName"> | undefined> {
+	const targets = ownRecord(settings.targets) ?? {};
+	const activeTarget =
+		typeof settings.activeTarget === "string" ? settings.activeTarget : undefined;
+	const candidates = Object.entries(targets)
+		.map(([name, value]) => ({ name, target: ownRecord(value) }))
+		.filter(
+			(item): item is { name: string; target: Record<string, unknown> } =>
+				item.target?.profile === profileName && typeof item.target.bucket === "string",
+		);
+	const source =
+		candidates.find((item) => item.name === activeTarget) ??
+		candidates.sort((left, right) => left.name.localeCompare(right.name))[0];
+	if (source) {
+		const sourcePrefix =
+			typeof source.target.prefix === "string" ? source.target.prefix : "pi-sync";
+		const sameBucketLabel = `Same bucket as “${safeTerminalText(source.name)}” (recommended)`;
+		const choice = await ctx.ui.select(
+			[
+				`Remote location for “${safeTerminalText(targetName)}”`,
+				"",
+				`Recommended bucket: ${safeTerminalText(String(source.target.bucket))}`,
+				`Remote path: ${formatRemotePath(sourcePrefix, targetName)}`,
+				"The namespace and local sync state remain separate.",
+			].join("\n"),
+			[sameBucketLabel, "Use a different bucket", "Customize remote location", "Cancel"],
+		);
+		if (!choice || choice === "Cancel") return undefined;
+		if (choice === sameBucketLabel) {
+			return {
+				bucket: String(source.target.bucket),
+				prefix: sourcePrefix,
+				namespace: targetName,
+			};
+		}
+		if (choice === "Use a different bucket") {
+			const bucket = await requiredExistingBucket(ctx, "pi-sync");
+			return bucket ? { bucket, prefix: "pi-sync", namespace: targetName } : undefined;
+		}
+		const custom = await chooseCustomRemoteLocation(ctx, targetName, profileName, false);
+		return custom
+			? { bucket: custom.bucket, prefix: custom.prefix, namespace: custom.namespace }
+			: undefined;
+	}
+
+	const profileSettings = ownRecord(ownRecord(settings.profiles)?.[profileName]);
+	const isR2 =
+		profileSettings?.kind === "r2" ||
+		isCloudflareR2Endpoint(String(profileSettings?.endpoint ?? ""));
+	const suggestedLabel = isR2
+		? "Use suggested location (recommended)"
+		: "Use existing bucket with suggested path (recommended)";
+	const choice = await ctx.ui.select(
+		`Remote location for “${safeTerminalText(targetName)}”\n\nSuggested path: ${formatRemotePath("pi-sync", targetName)}`,
+		[suggestedLabel, "Customize remote location", "Cancel"],
+	);
+	if (!choice || choice === "Cancel") return undefined;
+	if (choice === "Customize remote location") {
+		const custom = await chooseCustomRemoteLocation(ctx, targetName, profileName, false);
+		return custom
+			? { bucket: custom.bucket, prefix: custom.prefix, namespace: custom.namespace }
+			: undefined;
+	}
+	if (isR2) return { bucket: "pi-sync", prefix: "pi-sync", namespace: targetName };
+	const bucket = await requiredExistingBucket(ctx, "pi-sync-your-name");
+	return bucket ? { bucket, prefix: "pi-sync", namespace: targetName } : undefined;
+}
+
+async function chooseCustomRemoteLocation(
+	ctx: ExtensionCommandContext,
+	targetName: string,
+	initialProfileName: string,
+	customizeProfileName: boolean,
+): Promise<ChosenRemoteLocation | undefined> {
+	const profileName = customizeProfileName
+		? await requiredInput(ctx, "Storage profile name", initialProfileName)
+		: initialProfileName;
+	if (!profileName) return undefined;
+	const bucket = await requiredExistingBucket(ctx, "pi-sync");
+	if (!bucket) return undefined;
+	const prefix = await requiredInput(ctx, "Remote prefix", "pi-sync");
+	if (!prefix) return undefined;
+	const namespace = await requiredInput(ctx, "Remote namespace", targetName);
+	return namespace ? { profileName, bucket, prefix, namespace } : undefined;
+}
+
+function formatRemotePath(prefix: string, namespace: string) {
+	return safeTerminalText(`${prefix}/profiles/${namespace}/`);
+}
+
 async function updateCurrentTarget(
 	update: (target: Record<string, unknown>) => Record<string, unknown>,
 ) {
@@ -755,6 +915,17 @@ async function updateCurrentTarget(
 		if (!target) throw new Error(`Current target “${active}” is invalid.`);
 		return { ...current, targets: { ...targets, [active]: update(target) } };
 	});
+}
+
+async function requiredExistingBucket(ctx: ExtensionCommandContext, example: string) {
+	const value = await ctx.ui.input("Existing bucket", `Example: ${example}`);
+	if (value === undefined) return undefined;
+	const normalized = value.trim();
+	if (!normalized) {
+		ctx.ui.notify("Enter the name of an existing R2/S3 bucket, or cancel setup.", "warning");
+		return undefined;
+	}
+	return normalized;
 }
 
 async function requiredInput(ctx: ExtensionCommandContext, title: string, placeholder: string) {

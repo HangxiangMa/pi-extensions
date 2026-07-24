@@ -52,12 +52,25 @@ Run the manager:
 When pi-sync is not configured, choose **Set up sync**. The TUI guides you through:
 
 1. Cloudflare R2 or another S3-compatible service
-2. a target name such as `home`
-3. a reusable storage-profile name such as `r2`
-4. endpoint, bucket, prefix, and remote namespace
+2. `Personal / Home`, `Work`, or a custom target purpose
+3. an endpoint and, for S3, the existing bucket name
+4. a recommended remote location or advanced customization
 5. environment credentials or a private settings-file template
 6. a synced-content preset
 7. an exact setup preview and **Save setup** confirmation
+
+For a first Cloudflare R2 target, the recommended location requires no raw path questions:
+
+```json
+{
+  "profile": "r2",
+  "bucket": "pi-sync",
+  "prefix": "pi-sync",
+  "namespace": "home"
+}
+```
+
+The R2 bucket must already exist; pi-sync never creates buckets. Generic S3 setup asks for one existing, potentially globally unique bucket and derives storage profile `s3`, prefix `pi-sync`, and namespace `home` or `work`. **Customize remote location** retains direct control over profile name, bucket, prefix, and namespace.
 
 Pi's extension input API does not provide masked secret entry, so pi-sync never asks for a secret in an unmasked dialog. Use existing environment credentials or add credentials manually to the private settings file. Secret values are never shown in menus, status, warnings, or errors.
 
@@ -144,7 +157,9 @@ A version 2 example:
 - `activeTarget` is used by bare commands and automatic sync.
 - `namespace` is the old flat `profile` concept. The remote layout and snapshot wire field remain named `profiles`/`profile` for compatibility.
 
-Two targets may intentionally overlap local files, but only one is automatic. pi-sync rejects duplicate target remote identities to prevent independent local states from controlling the same remote pointer. Removing a target/profile removes local configuration only; it never deletes buckets or snapshots. A referenced profile cannot be removed, and users must switch away before removing one of several current targets.
+When adding another target with the same storage profile, pi-sync recommends reusing the current target's bucket and prefix while deriving a separate namespace from the new target name. For example, `home` and `work` may both use profile `r2`, bucket `pi-sync`, and prefix `pi-sync`, producing `pi-sync/profiles/home/` and `pi-sync/profiles/work/`.
+
+Two targets may intentionally overlap local files, but only one is automatic. pi-sync rejects duplicate effective target remote identities—including deprecated bucket/prefix/namespace environment overrides—to prevent independent local states from controlling the same remote pointer. Removing a target/profile removes local configuration only; it never deletes buckets or snapshots. A referenced profile cannot be removed, and users must switch away before removing one of several current targets.
 
 ### Synced content
 
