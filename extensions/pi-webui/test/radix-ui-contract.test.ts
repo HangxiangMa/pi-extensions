@@ -46,6 +46,19 @@ test("Radix primitives own overlays and disclosures without unsafe HTML", () => 
 	assert.match(appSource, /parseMarkdown/);
 });
 
+test("alert dialogs expose accessible titles and descriptions", () => {
+	assert.equal(overlaysSource.match(/<AlertDialog\.Title asChild>/g)?.length, 2);
+	assert.equal(overlaysSource.match(/<AlertDialog\.Description asChild>/g)?.length, 2);
+});
+
+test("composer height keeps the jump-to-latest action clear of dynamic content", () => {
+	assert.match(appSource, /new ResizeObserver\(updateComposerHeight\)/);
+	assert.match(appSource, /--composer-height/);
+	assert.match(appSource, /observer\.observe\(composer\)/);
+	assert.match(appSource, /observer\.disconnect\(\)/);
+	assert.match(stylesSource, /bottom:\s*calc\(var\(--composer-height/);
+});
+
 test("custom states use Radix color scales and preserve adaptive accessibility", () => {
 	assert.match(appSource, /@radix-ui\/colors\/(?:jade|green)\.css/);
 	assert.match(appSource, /@radix-ui\/colors\/(?:jade|green)-dark\.css/);

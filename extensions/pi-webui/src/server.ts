@@ -23,6 +23,7 @@ const REQUEST_ID = /^[A-Za-z0-9_-]{1,120}$/;
 const MAX_REQUESTS = 128;
 const DEFAULT_MAX_DRAFT_TEXT_BYTES = 1024 * 1024;
 const SSE_FLUSH_TIMEOUT_MS = 250;
+const CSP_NONCE_PLACEHOLDER = "__PI_CSP_NONCE__";
 
 export interface WebSendRequest {
 	requestId: string;
@@ -80,6 +81,7 @@ export class WebUIServer {
 	readonly origin: string;
 	private bootstrapToken?: string;
 	private readonly sessionSecret = token();
+	private readonly cspNonce = token();
 	private readonly cookieName = `pi_webui_${randomBytes(8).toString("hex")}`;
 	private readonly sockets = new Set<Socket>();
 	private readonly sseClients = new Set<SseClient>();
@@ -740,7 +742,11 @@ export class WebUIServer {
 	}
 
 	private async asset(response: ServerResponse, name: string, contentType: string): Promise<void> {
-		const content = await readAsset(name);
+		const asset = await readAsset(name);
+		const content =
+			name === "index.html"
+				? Buffer.from(asset.toString("utf8").replaceAll(CSP_NONCE_PLACEHOLDER, this.cspNonce))
+				: asset;
 		response.writeHead(200, { "Content-Type": contentType, "Content-Length": content.byteLength });
 		response.end(content);
 	}
@@ -749,7 +755,7 @@ export class WebUIServer {
 		response.setHeader("Cache-Control", "no-store");
 		response.setHeader(
 			"Content-Security-Policy",
-			"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+			`default-src 'self'; script-src 'self'; style-src 'self' 'nonce-${this.cspNonce}'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
 		);
 		response.setHeader("Referrer-Policy", "no-referrer");
 		response.setHeader("X-Content-Type-Options", "nosniff");

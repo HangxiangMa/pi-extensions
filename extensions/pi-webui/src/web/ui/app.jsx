@@ -591,10 +591,25 @@ function BlockingState({ model }) {
 function Composer({ dragActive, onClear, onPreview, view, ...dropProps }) {
 	const inputRef = useRef();
 	const fileRef = useRef();
+	const composerRef = useRef();
 	const model = view.model;
 	const locked = composerLocked(view);
 	const admissionLocked = locked || model.readingImages > 0;
 	useEffect(() => resizeInput(inputRef.current));
+	useEffect(() => {
+		const composer = composerRef.current;
+		if (!composer) return;
+		const root = document.documentElement;
+		const updateComposerHeight = () =>
+			root.style.setProperty("--composer-height", `${composer.offsetHeight}px`);
+		updateComposerHeight();
+		const observer = new ResizeObserver(updateComposerHeight);
+		observer.observe(composer);
+		return () => {
+			observer.disconnect();
+			root.style.removeProperty("--composer-height");
+		};
+	}, []);
 	return (
 		<Card asChild className={`composer ${dragActive ? "drag-active" : ""}`} id="composer" size="2">
 			<form
@@ -602,6 +617,7 @@ function Composer({ dragActive, onClear, onPreview, view, ...dropProps }) {
 					event.preventDefault();
 					void webClient.send(false);
 				}}
+				ref={composerRef}
 				{...dropProps}
 			>
 				<Flex direction="column" gap="3">

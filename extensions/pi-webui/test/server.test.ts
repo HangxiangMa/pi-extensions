@@ -100,9 +100,15 @@ test("assets and APIs require auth and carry restrictive headers", async () => {
 		assert.equal(page.headers.get("cache-control"), "no-store");
 		assert.equal(page.headers.get("x-content-type-options"), "nosniff");
 		assert.equal(page.headers.get("referrer-policy"), "no-referrer");
-		assert.match(page.headers.get("content-security-policy") ?? "", /default-src 'self'/);
+		const contentSecurityPolicy = page.headers.get("content-security-policy") ?? "";
+		assert.match(contentSecurityPolicy, /default-src 'self'/);
 		assert.equal(page.headers.get("access-control-allow-origin"), null);
-		assert.match(await page.text(), /id="root"/);
+		const pageSource = await page.text();
+		assert.match(pageSource, /id="root"/);
+		const nonce = /<meta name="csp-nonce" content="([A-Za-z0-9_-]+)" \/>/.exec(pageSource)?.[1];
+		assert.ok(nonce);
+		assert.match(contentSecurityPolicy, new RegExp(`style-src 'self' 'nonce-${nonce}'`));
+		assert.doesNotMatch(pageSource, /__PI_CSP_NONCE__/);
 		const script = await api(server, "/app.js", { cookie });
 		assert.equal(script.status, 200);
 		assert.match(script.headers.get("content-type") ?? "", /javascript/);

@@ -8,12 +8,16 @@ export function ClearAttachmentsDialog({ count, onOpenChange, open }) {
 		<AlertDialog.Root onOpenChange={onOpenChange} open={open}>
 			<AlertDialog.Overlay className="dialog-overlay" />
 			<AlertDialog.Content className="dialog-content">
-				<Heading as="h2" size="4">
-					Clear attachments?
-				</Heading>
-				<Text as="p" color="gray" size="2">
-					Remove all {count} unsent image attachments? Message text will be kept.
-				</Text>
+				<AlertDialog.Title asChild>
+					<Heading as="h2" size="4">
+						Clear attachments?
+					</Heading>
+				</AlertDialog.Title>
+				<AlertDialog.Description asChild>
+					<Text as="p" color="gray" size="2">
+						Remove all {count} unsent image attachments? Message text will be kept.
+					</Text>
+				</AlertDialog.Description>
 				<Flex gap="3" justify="end">
 					<AlertDialog.Cancel asChild>
 						<Button color="gray" variant="soft">
@@ -36,12 +40,16 @@ export function ForgetImageDialog({ id, onOpenChange }) {
 		<AlertDialog.Root onOpenChange={onOpenChange} open={Boolean(id)}>
 			<AlertDialog.Overlay className="dialog-overlay" />
 			<AlertDialog.Content className="dialog-content">
-				<Heading as="h2" size="4">
-					Forget retained image?
-				</Heading>
-				<Text as="p" color="gray" size="2">
-					This removes the session-only copy. It does not retract provider content.
-				</Text>
+				<AlertDialog.Title asChild>
+					<Heading as="h2" size="4">
+						Forget retained image?
+					</Heading>
+				</AlertDialog.Title>
+				<AlertDialog.Description asChild>
+					<Text as="p" color="gray" size="2">
+						This removes the session-only copy. It does not retract provider content.
+					</Text>
+				</AlertDialog.Description>
 				<Flex gap="3" justify="end">
 					<AlertDialog.Cancel asChild>
 						<Button color="gray" variant="soft">
