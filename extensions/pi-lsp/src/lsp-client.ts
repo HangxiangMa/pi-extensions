@@ -172,7 +172,16 @@ export class LspClient {
 	async diagnostics(uri: string) {
 		// Only pull if the server advertised it; otherwise use push diagnostics.
 		if (!this.#serverCapabilities.diagnosticProvider) {
-			return this.#waitForPublishedDiagnostics(uri);
+			return this.#waitForPublishedDiagnostics(
+				uri,
+				this.#adapter.pushDiagnosticsGraceMs
+					? {
+							afterVersion: 0,
+							diagnostics: [],
+							waitMs: this.#adapter.pushDiagnosticsGraceMs,
+						}
+					: undefined,
+			);
 		}
 		const published = this.#publishedDiagnostics.get(uri);
 		// Ignore a provisional empty publish, but preserve diagnostics that arrived before the pull.
