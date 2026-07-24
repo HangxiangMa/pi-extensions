@@ -12,7 +12,12 @@ export interface WorkspaceExecResult {
 export type WorkspaceExec = (
 	command: string,
 	args: string[],
-	options: { cwd: string; timeout: number; maxOutputBytes: number },
+	options: {
+		cwd: string;
+		timeout: number;
+		maxOutputBytes: number;
+		environment: Readonly<Record<string, string | undefined>>;
+	},
 ) => Promise<WorkspaceExecResult>;
 
 export interface WorkspaceEntry {

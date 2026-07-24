@@ -57,6 +57,10 @@ async function readCargo(context: CollectorContext): Promise<PackageVersion | un
 		if (direct) return { version: direct, source: "Cargo.toml" };
 		const inherited = isRecord(packageTable?.version) && packageTable.version.workspace === true;
 		if (!inherited) return undefined;
+		const localWorkspaceVersion = workspacePackageVersion(document);
+		if (localWorkspaceVersion) {
+			return { version: localWorkspaceVersion, source: "Cargo.toml workspace" };
+		}
 		for (const parent of parentDirectories(context.input.cwd, 8)) {
 			const parentSource = await context.fs.readFile(
 				join(parent, "Cargo.toml"),
@@ -64,15 +68,19 @@ async function readCargo(context: CollectorContext): Promise<PackageVersion | un
 			);
 			if (!parentSource) continue;
 			const parentDocument = parse(parentSource);
-			const workspace = isRecord(parentDocument.workspace) ? parentDocument.workspace : undefined;
-			const workspacePackage = isRecord(workspace?.package) ? workspace.package : undefined;
-			const version = safeVersion(workspacePackage?.version);
+			const version = workspacePackageVersion(parentDocument);
 			if (version) return { version, source: "Cargo.toml workspace" };
 		}
 		return undefined;
 	} catch {
 		return undefined;
 	}
+}
+
+function workspacePackageVersion(document: Record<string, unknown>): string | undefined {
+	const workspace = isRecord(document.workspace) ? document.workspace : undefined;
+	const workspacePackage = isRecord(workspace?.package) ? workspace.package : undefined;
+	return safeVersion(workspacePackage?.version);
 }
 
 async function readPyproject(context: CollectorContext): Promise<PackageVersion | undefined> {

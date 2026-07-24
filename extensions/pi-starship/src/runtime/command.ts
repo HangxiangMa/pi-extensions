@@ -9,6 +9,7 @@ export const execWorkspaceCommand: WorkspaceExec = async (command, args, options
 		try {
 			child = spawn(command, args, {
 				cwd: options.cwd,
+				env: explicitEnvironment(options.environment),
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
 				windowsHide: true,
@@ -64,3 +65,21 @@ export const execWorkspaceCommand: WorkspaceExec = async (command, args, options
 		child.once("close", (code) => finish(code ?? 1));
 		const timeoutTimer = setTimeout(terminate, options.timeout);
 	});
+
+function explicitEnvironment(
+	source: Readonly<Record<string, string | undefined>>,
+): NodeJS.ProcessEnv {
+	const result: NodeJS.ProcessEnv = Object.create(null);
+	for (const [name, value] of Object.entries(source)) {
+		if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name) || value === undefined || value.includes("\0")) {
+			continue;
+		}
+		Object.defineProperty(result, name, {
+			value,
+			writable: true,
+			enumerable: true,
+			configurable: true,
+		});
+	}
+	return result;
+}

@@ -28,11 +28,36 @@ test("workspace commands stream output and terminate at the byte limit", async (
 			"-e",
 			"process.stdout.write(Buffer.alloc(2 * 1024 * 1024, 120)); setInterval(() => {}, 10_000);",
 		],
-		{ cwd: process.cwd(), timeout: 2_000, maxOutputBytes: 1_024 },
+		{ cwd: process.cwd(), timeout: 2_000, maxOutputBytes: 1_024, environment: {} },
 	);
 	assert.equal(result.killed, true);
 	assert.ok(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr) <= 1_024);
 	assert.ok(Date.now() - started < 1_500);
+});
+
+test("workspace commands receive only the explicit allowlisted environment", async () => {
+	const secretName = `PI_STARSHIP_SENTINEL_${process.pid}`;
+	process.env[secretName] = "secret";
+	try {
+		const result = await execWorkspaceCommand(
+			process.execPath,
+			[
+				"-e",
+				`process.stdout.write((process.env.ALLOWED ?? "") + "|" + (process.env[${JSON.stringify(secretName)}] ?? ""));`,
+			],
+			{
+				cwd: process.cwd(),
+				timeout: 2_000,
+				maxOutputBytes: 1_024,
+				environment: { ALLOWED: "visible", OMITTED: undefined },
+			},
+		);
+		assert.equal(result.killed, false);
+		assert.equal(result.code, 0);
+		assert.equal(result.stdout, "visible|");
+	} finally {
+		delete process.env[secretName];
+	}
 });
 
 test("package metadata is bounded, deterministic, and opt-in", async () => {
@@ -71,11 +96,30 @@ test("package metadata is bounded, deterministic, and opt-in", async () => {
 test("package parser supports Cargo inheritance and Python metadata without ancestor recursion", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-starship-package-formats-"));
 	try {
+		writeFileSync(
+			join(root, "Cargo.toml"),
+			'[package]\nversion.workspace = true\n[workspace.package]\nversion = "1.8.0"\n',
+		);
+		let snapshot = await collectWorkspaceSnapshot({
+			cwd: root,
+			config: config("$package"),
+			environment: {},
+			homeDir: root,
+			platform: "linux",
+			hostname: "host",
+			username: "user",
+			exec: noExec,
+		});
+		assert.deepEqual(snapshot.modules.package, {
+			source: "Cargo.toml workspace",
+			version: "v1.8.0",
+		});
+
 		const child = join(root, "member");
 		mkdirSync(child);
 		writeFileSync(join(root, "Cargo.toml"), '[workspace.package]\nversion = "2.4.0"\n');
 		writeFileSync(join(child, "Cargo.toml"), "[package]\nversion.workspace = true\n");
-		let snapshot = await collectWorkspaceSnapshot({
+		snapshot = await collectWorkspaceSnapshot({
 			cwd: child,
 			config: config("$package", { package: { version_format: "release-$raw" } }),
 			environment: {},
@@ -181,6 +225,33 @@ test("language commands are required by active variables and parsed strictly", a
 		assert.equal(parseRuntimeVersion("nodejs", "banner\nv1.0.0"), undefined);
 		assert.equal(parseRuntimeVersion("python", "Python 3.13.1\r\n"), "v3.13.1");
 		assert.equal(parseRuntimeVersion("golang", "go version go1.24.0 linux/amd64\n"), "v1.24.0");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("Rust numver runs the version probe without requiring version", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-rust-numver-"));
+	try {
+		writeFileSync(join(root, "Cargo.toml"), '[package]\nname = "demo"\n');
+		const calls: string[] = [];
+		const compiler = join(root, "toolchain", "rustc");
+		const snapshot = await collectWorkspaceSnapshot({
+			cwd: root,
+			config: config("$rust", { rust: { format: "$numver" } }),
+			environment: { RUSTC: compiler },
+			homeDir: root,
+			platform: "linux",
+			hostname: "host",
+			username: "user",
+			fileExists: async (path) => path === compiler,
+			exec: async (command, args) => {
+				calls.push(`${command} ${args.join(" ")}`);
+				return { stdout: "rustc 1.88.0 (abc 2025-06-23)", stderr: "", code: 0, killed: false };
+			},
+		});
+		assert.deepEqual(calls, [`${compiler} --version`]);
+		assert.deepEqual(snapshot.modules.rust, { numver: "1.88.0" });
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

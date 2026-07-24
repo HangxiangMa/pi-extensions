@@ -68,14 +68,18 @@ export async function collectLanguages(context: CollectorContext): Promise<Mutab
 			const engine = await readNodeEngine(context);
 			if (engine) values.engines_version = engine;
 		}
-		if (context.needs(name, "version")) {
+		const needsVersion = context.needs(name, "version");
+		const needsNumver = name === "rust" && context.needs(name, "numver");
+		if (needsVersion || needsNumver) {
 			const command = await versionCommand(context, name);
 			if (command) {
 				const output = await runBounded(context, command[0], command[1]);
 				const version = output ? parseRuntimeVersion(name, output) : undefined;
 				if (version) {
-					values.version = formatVersion(version, optionString(context, name, "version_format"));
-					if (name === "rust") values.numver = version.replace(/^v/u, "");
+					if (needsVersion) {
+						values.version = formatVersion(version, optionString(context, name, "version_format"));
+					}
+					if (needsNumver) values.numver = version.replace(/^v/u, "");
 				}
 			}
 		}
