@@ -1,3 +1,33 @@
+export type StorageProfileKind = "r2" | "s3-compatible";
+
+export interface StorageProfileSettings {
+	kind?: StorageProfileKind;
+	endpoint?: string;
+	region?: string;
+	accessKeyId?: string;
+	secretAccessKey?: string;
+	sessionToken?: string;
+}
+
+export interface SyncTargetSettings {
+	profile?: string;
+	bucket?: string;
+	prefix?: string;
+	namespace?: string;
+	autoSync?: boolean;
+	syncFiles?: unknown;
+	syncSessions?: boolean;
+	extraFiles?: unknown;
+}
+
+export interface PiSyncSettingsV2 {
+	version: 2;
+	activeTarget?: string;
+	profiles?: Record<string, StorageProfileSettings>;
+	targets?: Record<string, SyncTargetSettings>;
+	[key: string]: unknown;
+}
+
 export interface SyncConfig {
 	endpoint: string;
 	bucket: string;
@@ -5,14 +35,24 @@ export interface SyncConfig {
 	accessKeyId: string;
 	secretAccessKey: string;
 	sessionToken?: string;
+	/** Remote namespace retained as `profile` for snapshot/wire compatibility. */
 	profile: string;
 	prefix: string;
+	target?: string;
+	storageProfile?: string;
+	storageKind?: StorageProfileKind;
+	autoSync?: boolean;
+	settingsVersion?: 1 | 2;
 	syncFiles?: string[];
 	syncSessions: boolean;
 	extraFiles: string[];
 }
 
 export interface PartialConfig {
+	target?: string;
+	storageProfile?: string;
+	storageKind?: StorageProfileKind;
+	settingsVersion?: 1 | 2;
 	endpoint?: string;
 	bucket?: string;
 	region?: string;
@@ -84,6 +124,9 @@ export interface CommandOptions {
 	silent: boolean;
 	reload: boolean;
 	auto: boolean;
+	target?: string;
+	signal?: AbortSignal;
+	onCommit?: () => void;
 	args: string[];
 }
 

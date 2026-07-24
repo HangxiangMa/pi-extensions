@@ -10,7 +10,10 @@ function iso8601Basic(date: Date) {
 }
 
 function snapshotIncludesSessions(snapshot: Snapshot) {
-	return snapshot.syncSessions === true || snapshot.files.some((file) => file.path.startsWith("sessions/"));
+	return (
+		snapshot.syncSessions === true ||
+		snapshot.files.some((file) => file.path.startsWith("sessions/"))
+	);
 }
 
 function isCloudflareR2Endpoint(endpoint: string | undefined) {
@@ -18,7 +21,9 @@ function isCloudflareR2Endpoint(endpoint: string | undefined) {
 	if (!value) return false;
 	try {
 		const hostname = new URL(value).hostname.toLowerCase();
-		return hostname === "r2.cloudflarestorage.com" || hostname.endsWith(".r2.cloudflarestorage.com");
+		return (
+			hostname === "r2.cloudflarestorage.com" || hostname.endsWith(".r2.cloudflarestorage.com")
+		);
 	} catch {
 		return false;
 	}
@@ -27,11 +32,13 @@ function isCloudflareR2Endpoint(endpoint: string | undefined) {
 export class S3Client {
 	private config: SyncConfig;
 	private endpoint: URL;
+	private signal?: AbortSignal;
 	private omitSessionTokenAfterRejection = false;
 
-	constructor(config: SyncConfig) {
+	constructor(config: SyncConfig, signal?: AbortSignal) {
 		this.config = config;
 		this.endpoint = new URL(config.endpoint);
+		this.signal = signal;
 	}
 
 	async getJson<T>(key: string): Promise<RemoteObject<T>> {
@@ -48,11 +55,15 @@ export class S3Client {
 			// Retry so the transient blip is absorbed instead of surfacing as a
 			// "pi-sync auto sync skipped" warning on every session start.
 			if (body.length > 0) {
-				return { value: JSON.parse(body) as T, etag: normalizeEtag(object.headers.get("etag")), missing: false };
+				return {
+					value: JSON.parse(body) as T,
+					etag: normalizeEtag(object.headers.get("etag")),
+					missing: false,
+				};
 			}
 			lastError = new Error(`S3 GET returned an empty body for ${key}`);
 			if (attempt < maxAttempts) {
-				await sleep(250 * attempt);
+				await sleep(250 * attempt, undefined, { signal: this.signal });
 			}
 		}
 		throw lastError;
@@ -78,7 +89,7 @@ export class S3Client {
 			}
 			lastError = new Error(`S3 GET returned an empty body for ${key}`);
 			if (attempt < maxAttempts) {
-				await sleep(250 * attempt);
+				await sleep(250 * attempt, undefined, { signal: this.signal });
 			}
 		}
 		throw lastError;
@@ -92,7 +103,8 @@ export class S3Client {
 	async putBuffer(key: string, body: Buffer, contentType: string) {
 		const headers: Record<string, string> = { "content-type": contentType };
 		const response = await this.request("PUT", key, body, headers);
-		if (!response.ok) throw new Error(`S3 PUT failed (${response.status}): ${await response.text()}`);
+		if (!response.ok)
+			throw new Error(`S3 PUT failed (${response.status}): ${await response.text()}`);
 	}
 
 	private async request(
@@ -114,7 +126,12 @@ export class S3Client {
 				sessionToken,
 				region: this.config.region,
 			});
-			return fetch(url, { method, headers, body: body ? new Uint8Array(body) : undefined });
+			return fetch(url, {
+				method,
+				headers,
+				body: body ? new Uint8Array(body) : undefined,
+				signal: this.signal,
+			});
 		};
 		const sessionToken = this.omitSessionTokenAfterRejection ? undefined : this.config.sessionToken;
 		const response = await send(sessionToken);
@@ -125,7 +142,10 @@ export class S3Client {
 		return retry;
 	}
 
-	private async shouldRetryWithoutSessionToken(response: Response, sessionToken: string | undefined) {
+	private async shouldRetryWithoutSessionToken(
+		response: Response,
+		sessionToken: string | undefined,
+	) {
 		if (
 			!sessionToken ||
 			!isCloudflareR2Endpoint(this.config.endpoint) ||
@@ -160,7 +180,9 @@ async function signedHeaders(input: {
 	};
 	if (input.sessionToken) headers["x-amz-security-token"] = input.sessionToken;
 	const signedHeaderNames = Object.keys(headers).sort();
-	const canonicalHeaders = signedHeaderNames.map((name) => `${name}:${headers[name]?.trim()}\n`).join("");
+	const canonicalHeaders = signedHeaderNames
+		.map((name) => `${name}:${headers[name]?.trim()}\n`)
+		.join("");
 	const canonicalRequest = [
 		input.method,
 		input.url.pathname,
@@ -170,7 +192,12 @@ async function signedHeaders(input: {
 		payloadHash,
 	].join("\n");
 	const scope = `${dateStamp}/${input.region}/s3/aws4_request`;
-	const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, sha256(Buffer.from(canonicalRequest))].join("\n");
+	const stringToSign = [
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		sha256(Buffer.from(canonicalRequest)),
+	].join("\n");
 	const signingKey = hmac(
 		hmac(hmac(hmac(Buffer.from(`AWS4${input.secretAccessKey}`), dateStamp), input.region), "s3"),
 		"aws4_request",
@@ -206,7 +233,11 @@ export function profilePrefix(config: SyncConfig) {
 	return posixJoin(config.prefix, "profiles", config.profile);
 }
 
-export function pointerFor(config: SyncConfig, snapshot: Snapshot, checksum: string): LatestPointer {
+export function pointerFor(
+	config: SyncConfig,
+	snapshot: Snapshot,
+	checksum: string,
+): LatestPointer {
 	return {
 		version: VERSION,
 		profile: config.profile,
@@ -227,5 +258,8 @@ function normalizeEtag(value: string | null) {
 }
 
 function isSecurityTokenInvalidArgument(text: string) {
-	return text.includes("<Code>InvalidArgument</Code>") && text.includes("<Message>X-Amz-Security-Token</Message>");
+	return (
+		text.includes("<Code>InvalidArgument</Code>") &&
+		text.includes("<Message>X-Amz-Security-Token</Message>")
+	);
 }
