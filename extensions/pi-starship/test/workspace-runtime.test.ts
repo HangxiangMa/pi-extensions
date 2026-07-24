@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { normalizeConfig } from "../src/config.js";
+import { execWorkspaceCommand } from "../src/runtime/command.js";
 import { AsyncRefreshController } from "../src/runtime/refresh-controller.js";
 import {
 	collectWorkspaceSnapshot,
@@ -18,6 +19,21 @@ function config(format: string, document: Record<string, unknown> = {}) {
 const noExec: WorkspaceExec = async () => {
 	throw new Error("unexpected command");
 };
+
+test("workspace commands stream output and terminate at the byte limit", async () => {
+	const started = Date.now();
+	const result = await execWorkspaceCommand(
+		process.execPath,
+		[
+			"-e",
+			"process.stdout.write(Buffer.alloc(2 * 1024 * 1024, 120)); setInterval(() => {}, 10_000);",
+		],
+		{ cwd: process.cwd(), timeout: 2_000, maxOutputBytes: 1_024 },
+	);
+	assert.equal(result.killed, true);
+	assert.ok(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr) <= 1_024);
+	assert.ok(Date.now() - started < 1_500);
+});
 
 test("package metadata is bounded, deterministic, and opt-in", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-starship-package-"));
@@ -316,7 +332,7 @@ test("all language collectors use bounded exact commands and degrade independent
 			hostname: "host",
 			username: "user",
 			exec: async (command, args, options) => {
-				calls.push(`${command} ${args.join(" ")} ${options.timeout}`);
+				calls.push(`${command} ${args.join(" ")} ${options.timeout}/${options.maxOutputBytes}`);
 				if (command === "python")
 					return { stdout: outputs.python ?? "", stderr: "", code: 0, killed: false };
 				if (command === "go")
@@ -327,10 +343,10 @@ test("all language collectors use bounded exact commands and degrade independent
 			},
 		});
 		assert.deepEqual(calls, [
-			"python --version 2000",
-			"go version 2000",
-			"bun --version 2000",
-			"deno -V 2000",
+			"python --version 2000/65536",
+			"go version 2000/65536",
+			"bun --version 2000/65536",
+			"deno -V 2000/65536",
 		]);
 		assert.equal(snapshot.modules.python?.version, "v3.12.2");
 		assert.equal(snapshot.modules.rust?.version, undefined);
@@ -468,6 +484,30 @@ test("kubeconfig and Terraform readers remain local, bounded, and command-lazy",
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("Terraform applies version_format to Terraform and OpenTofu versions", async () => {
+	const calls: string[] = [];
+	const snapshot = await collectWorkspaceSnapshot({
+		cwd: "/workspace",
+		config: config("$terraform", {
+			terraform: { format: "$version", version_format: "release-$raw" },
+		}),
+		environment: {},
+		homeDir: "/home/user",
+		platform: "linux",
+		hostname: "host",
+		username: "user",
+		fileSystem: {
+			readDirectory: async () => [{ name: "main.tf", isFile: true, isDirectory: false }],
+		},
+		exec: async (command, args) => {
+			calls.push(`${command} ${args.join(" ")}`);
+			return { stdout: "Terraform v1.12.2\n", stderr: "", code: 0, killed: false };
+		},
+	});
+	assert.deepEqual(calls, ["terraform version"]);
+	assert.equal(snapshot.modules.terraform?.version, "release-1.12.2");
 });
 
 test("Azure and OpenStack readers select metadata while discarding adjacent secrets", async () => {

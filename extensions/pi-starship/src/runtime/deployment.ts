@@ -3,12 +3,14 @@ import { parse as parseYaml } from "yaml";
 import {
 	directMatch,
 	exactAlias,
+	formatVersion,
 	isRecord,
 	joinHome,
 	MAX_METADATA_FILE_BYTES,
 	optionBoolean,
 	optionMap,
 	optionNumber,
+	optionString,
 	optionStrings,
 	runBounded,
 	safeMetadata,
@@ -159,7 +161,10 @@ async function collectTerraform(
 			const output = await runBounded(context, command, ["version"]);
 			const parsed = output ? parseTerraformVersion(output, command) : undefined;
 			if (parsed) {
-				values.version = parsed;
+				values.version = formatVersion(
+					parsed,
+					optionString(context, "terraform", "version_format"),
+				);
 				break;
 			}
 		}

@@ -160,6 +160,7 @@ export async function runBounded(
 		const result = await context.input.exec(command, args, {
 			cwd: context.input.cwd,
 			timeout: COMMAND_TIMEOUT_MS,
+			maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
 		});
 		if (result.code !== 0 || result.killed) return undefined;
 		const selectedOutput = result.stdout || result.stderr;

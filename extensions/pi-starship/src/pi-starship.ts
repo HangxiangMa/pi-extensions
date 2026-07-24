@@ -24,6 +24,7 @@ import {
 	type StarshipRuntimeSnapshot,
 	type WorkspaceSnapshot,
 } from "./modules/index.js";
+import { execWorkspaceCommand } from "./runtime/command.js";
 import { AsyncRefreshController } from "./runtime/refresh-controller.js";
 import {
 	collectWorkspaceSnapshot,
@@ -123,7 +124,7 @@ export default function piStarship(pi: ExtensionAPI) {
 		if (!loaded || !isActiveTarget(target)) return;
 		gitController.request({ cwd: target.cwd, config: loaded.config });
 		workspaceController.request(
-			workspaceInput(pi, target.cwd, loaded.config, reason, runtime.workspace),
+			workspaceInput(target.cwd, loaded.config, reason, runtime.workspace),
 		);
 	};
 	const scheduleRefresh = (ctx: ExtensionContext) => {
@@ -301,7 +302,6 @@ export default function piStarship(pi: ExtensionAPI) {
 }
 
 function workspaceInput(
-	pi: ExtensionAPI,
 	cwd: string,
 	config: StarshipConfig,
 	reason: WorkspaceRefreshInput["reason"],
@@ -315,7 +315,7 @@ function workspaceInput(
 		platform: process.platform,
 		hostname: hostname(),
 		username: safeUsername(),
-		exec: (command, args, options) => pi.exec(command, args, options),
+		exec: execWorkspaceCommand,
 		reason,
 		previous,
 	};
