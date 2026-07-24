@@ -133,7 +133,7 @@ export function deprecatedPiSyncEnvironmentWarnings() {
 	];
 }
 
-function resolveLegacyPartialConfig(fileConfig: PartialConfig): PartialConfig {
+export function resolveLegacyPartialConfig(fileConfig: PartialConfig): PartialConfig {
 	return {
 		...fileConfig,
 		target: DEFAULT_PROFILE,
@@ -156,7 +156,7 @@ function resolveLegacyPartialConfig(fileConfig: PartialConfig): PartialConfig {
 	};
 }
 
-function resolveV2PartialConfig(
+export function resolveV2PartialConfig(
 	settings: Record<string, unknown>,
 	targetName?: string,
 ): PartialConfig {
@@ -366,8 +366,11 @@ export async function writeState(profile: string, state: SyncState) {
 
 export async function readStateForConfig(config: SyncConfig): Promise<SyncState> {
 	if (config.settingsVersion !== 2) return readState(config.profile);
+	const destination = statePathForConfig(config);
+	const state = await readJsonIfExists<SyncState>(destination);
+	if (state) return state;
 	return (
-		(await readJsonIfExists<SyncState>(statePathForConfig(config))) ?? {
+		(await migrateLegacyV2State(config, destination)) ?? {
 			version: VERSION,
 			profile: config.profile,
 			lastFileHashes: {},
@@ -382,8 +385,76 @@ export async function writeStateForConfig(config: SyncConfig, state: SyncState) 
 export function statePathForConfig(config: SyncConfig) {
 	if (config.settingsVersion !== 2) return statePath(config.profile);
 	const target = config.target ?? DEFAULT_PROFILE;
-	const hash = createHash("sha256").update(target).digest("hex").slice(0, 10);
+	const identity = JSON.stringify([
+		target,
+		normalizeEndpointIdentity(config.endpoint),
+		normalizeRemoteKeySegment(config.bucket),
+		normalizeRemoteKeySegment(config.prefix),
+		normalizeRemoteKeySegment(config.profile),
+	]);
+	const hash = createHash("sha256").update(identity).digest("hex").slice(0, 10);
 	return path.join(stateDir(), "targets", `${safeName(target)}-${hash}.state.json`);
+}
+
+export function statePathForPartialConfig(partial: PartialConfig) {
+	const profile = normalizeOptionalString(partial.profile) ?? DEFAULT_PROFILE;
+	if (partial.settingsVersion !== 2) return statePath(profile);
+	return statePathForConfig({
+		settingsVersion: 2,
+		target: partial.target ?? DEFAULT_PROFILE,
+		endpoint: normalizeConfiguredString(partial.endpoint) ?? "",
+		bucket: normalizeConfiguredString(partial.bucket) ?? "",
+		prefix: trimSlashes(normalizeOptionalString(partial.prefix) ?? DEFAULT_PREFIX),
+		profile,
+	} as SyncConfig);
+}
+
+async function migrateLegacyV2State(config: SyncConfig, destination: string) {
+	const target = config.target ?? DEFAULT_PROFILE;
+	const legacyHash = createHash("sha256").update(target).digest("hex").slice(0, 10);
+	const legacyPath = path.join(
+		stateDir(),
+		"targets",
+		`${safeName(target)}-${legacyHash}.state.json`,
+	);
+	const claimPath = `${legacyPath}.migrating-to-${path.basename(destination)}`;
+	if (!(await pathExists(claimPath))) {
+		try {
+			await fs.rename(legacyPath, claimPath);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
+	if (!(await pathExists(claimPath))) return readJsonIfExists<SyncState>(destination);
+
+	await fs.mkdir(path.dirname(destination), { recursive: true });
+	try {
+		await fs.link(claimPath, destination);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+	}
+	const migrated = await readJsonIfExists<SyncState>(destination);
+	if (migrated) await fs.rm(claimPath, { force: true });
+	return migrated;
+}
+
+async function pathExists(filePath: string) {
+	try {
+		await fs.lstat(filePath);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
+	}
+}
+
+function normalizeEndpointIdentity(endpoint: string) {
+	const normalized = endpoint.trim();
+	try {
+		return new URL(normalized).toString();
+	} catch {
+		return normalized;
+	}
 }
 
 export function agentDir() {
