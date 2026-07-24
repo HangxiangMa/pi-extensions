@@ -734,7 +734,7 @@ async function showRecoveryMenu(ctx: ExtensionCommandContext, runRoute: RunRoute
 	if (!selected || selected === BACK) return;
 	if (selected === "Browse history") await runRoute("history");
 	else if (selected === "Check setup") await runRoute("doctor");
-	else await runRoute("unlock");
+	else await runRoute("unlock --stale");
 }
 
 interface ChosenRemoteLocation {

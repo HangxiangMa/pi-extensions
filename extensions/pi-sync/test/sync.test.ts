@@ -263,10 +263,11 @@ test("sync files keeps environment-overridden sessions read-only", async () => {
 			const { ctx } = createMockContext({
 				hasUI: true,
 				mode: "tui",
+				select: async () => "Save changes",
 				custom: async (factory: unknown) => {
 					const selector = createCustomSelectorHarness(factory);
-					for (const character of "sessions") selector.handleInput(character);
 					sessionRender = selector.render().join("\n");
+					for (const character of "settings.json") selector.handleInput(character);
 					selector.handleInput("\r");
 					selector.handleInput("\u001b");
 					return selector.result;
@@ -274,8 +275,13 @@ test("sync files keeps environment-overridden sessions read-only", async () => {
 			});
 
 			await mock.commands.get("sync")?.handler("files", ctx);
+			const saved = await readLocalConfigObject();
 			assert.match(sessionRender, /included \(environment, deprecated\)/);
-			assert.equal((await readLocalConfigObject())?.syncSessions, false);
+			assert.deepEqual(
+				saved?.syncFiles,
+				DEFAULT_SYNC_FILES.filter((item) => item !== "settings.json"),
+			);
+			assert.equal(saved?.syncSessions, false);
 		});
 	});
 });

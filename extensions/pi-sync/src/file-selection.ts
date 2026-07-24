@@ -75,7 +75,7 @@ export async function showFileSelection(ctx: ExtensionCommandContext, targetName
 			return;
 		}
 		try {
-			await persistSelectionDraft(draft, targetName);
+			await persistSelectionDraft(draft, targetName, sessionEnvironmentOverride);
 			ctx.ui.notify(
 				`Saved synced content for target “${safeTerminalText(partial.target ?? "default")}”. It applies to the next manual or automatic sync.`,
 				"info",
@@ -185,11 +185,15 @@ function updateDraft(draft: SelectionDraft, id: string, included: boolean) {
 	throw new Error(`Unknown file selection: ${id}`);
 }
 
-async function persistSelectionDraft(draft: SelectionDraft, targetName?: string) {
+async function persistSelectionDraft(
+	draft: SelectionDraft,
+	targetName: string | undefined,
+	sessionEnvironmentOverride: boolean,
+) {
 	await updateLocalConfig((current) => {
 		const selection = {
 			syncFiles: DEFAULT_SYNC_FILES.filter((candidate) => draft.builtIns.has(candidate)),
-			syncSessions: draft.sessions,
+			...(!sessionEnvironmentOverride ? { syncSessions: draft.sessions } : {}),
 			extraFiles: [...draft.extras],
 		};
 		if (current.version !== 2) return { ...current, ...selection };

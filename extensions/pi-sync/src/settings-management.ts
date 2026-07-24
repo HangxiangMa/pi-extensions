@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+	effectiveTargetRemoteIdentity,
 	localConfigPath,
 	readLocalConfigObject,
 	stateDir,
@@ -263,21 +264,15 @@ function assertUniqueRemoteIdentity(
 	name: string,
 	target: SyncTargetSettings,
 ) {
-	const identity = remoteIdentity(target);
+	const identity = effectiveTargetRemoteIdentity(target as Record<string, unknown>, name);
 	for (const [otherName, value] of Object.entries(targets)) {
-		if (otherName !== name && remoteIdentity(requireObject(value, "target")) === identity) {
+		if (
+			otherName !== name &&
+			effectiveTargetRemoteIdentity(requireObject(value, "target"), otherName) === identity
+		) {
 			throw new Error(`Target “${name}” duplicates the remote destination of “${otherName}”.`);
 		}
 	}
-}
-
-function remoteIdentity(target: SyncTargetSettings | Record<string, unknown>) {
-	return JSON.stringify([
-		target.profile,
-		process.env.PI_SYNC_BUCKET ?? process.env.R2_BUCKET ?? target.bucket,
-		process.env.PI_SYNC_PREFIX ?? target.prefix ?? "pi-sync",
-		process.env.PI_SYNC_PROFILE ?? ("namespace" in target ? target.namespace : undefined),
-	]);
 }
 
 function compactObject(value: Record<string, unknown>) {

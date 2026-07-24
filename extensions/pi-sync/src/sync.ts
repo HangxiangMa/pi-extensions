@@ -708,7 +708,9 @@ async function history(ctx: ExtensionCommandContext, options: CommandOptions) {
 		const index = labels.indexOf(selected);
 		const snapshot = snapshots[index];
 		if (!snapshot) return;
-		await rollback(ctx, { ...options, args: [snapshot.snapshot], yes: false });
+		await withLock("rollback", () =>
+			rollback(ctx, { ...options, args: [snapshot.snapshot], yes: false }),
+		);
 		return;
 	}
 	ctx.ui.notify(

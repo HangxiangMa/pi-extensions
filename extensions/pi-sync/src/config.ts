@@ -106,7 +106,7 @@ export async function loadConfig(targetName?: string): Promise<SyncConfig> {
 export async function configuredTargetNames() {
 	const settings = await readLocalConfigObject();
 	if (!settings) return [];
-	if (!isV2SettingsObject(settings)) return [DEFAULT_PROFILE];
+	if (!isV2SettingsObject(settings)) return [];
 	return Object.keys(requireNamedObjectMap(settings.targets, "targets")).sort((left, right) =>
 		left.localeCompare(right),
 	);
@@ -114,9 +114,11 @@ export async function configuredTargetNames() {
 
 export async function loadPartialConfig(targetName?: string): Promise<PartialConfig> {
 	const fileConfig = (await readLocalConfigObject()) ?? {};
-	return isV2SettingsObject(fileConfig)
-		? resolveV2PartialConfig(fileConfig, targetName)
-		: resolveLegacyPartialConfig(fileConfig as PartialConfig);
+	if (isV2SettingsObject(fileConfig)) return resolveV2PartialConfig(fileConfig, targetName);
+	if (targetName !== undefined) {
+		throw new Error("--target requires version 2 pi-sync settings with named targets.");
+	}
+	return resolveLegacyPartialConfig(fileConfig as PartialConfig);
 }
 
 export function deprecatedPiSyncEnvironmentNames() {
@@ -231,12 +233,7 @@ function validateUniqueRemoteTargets(targets: Record<string, unknown>) {
 		const target = ownObject(targets, name);
 		if (!target || typeof target.profile !== "string" || typeof target.bucket !== "string")
 			continue;
-		const identity = JSON.stringify([
-			target.profile,
-			process.env.PI_SYNC_BUCKET ?? process.env.R2_BUCKET ?? target.bucket,
-			process.env.PI_SYNC_PREFIX ?? target.prefix ?? DEFAULT_PREFIX,
-			process.env.PI_SYNC_PROFILE ?? target.namespace ?? name,
-		]);
+		const identity = effectiveTargetRemoteIdentity(target, name);
 		const existing = identities.get(identity);
 		if (existing) {
 			throw new Error(
@@ -245,6 +242,27 @@ function validateUniqueRemoteTargets(targets: Record<string, unknown>) {
 		}
 		identities.set(identity, name);
 	}
+}
+
+export function effectiveTargetRemoteIdentity(target: Record<string, unknown>, name: string) {
+	const profile = typeof target.profile === "string" ? target.profile.trim() : "";
+	const bucket = normalizeRemoteKeySegment(
+		process.env.PI_SYNC_BUCKET ??
+			process.env.R2_BUCKET ??
+			(typeof target.bucket === "string" ? target.bucket : ""),
+	);
+	const prefix = normalizeRemoteKeySegment(
+		process.env.PI_SYNC_PREFIX ??
+			(typeof target.prefix === "string" ? target.prefix : DEFAULT_PREFIX),
+	);
+	const namespace = normalizeRemoteKeySegment(
+		process.env.PI_SYNC_PROFILE ?? (typeof target.namespace === "string" ? target.namespace : name),
+	);
+	return JSON.stringify([profile, bucket, prefix, namespace]);
+}
+
+function normalizeRemoteKeySegment(value: string) {
+	return trimSlashes(value.trim());
 }
 
 function requireNamedObjectMap(value: unknown, field: string): Record<string, unknown> {
