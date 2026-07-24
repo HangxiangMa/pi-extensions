@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { agentDir, stateDir } from "./config.js";
+import { withLock } from "./lock.js";
 import { assertWithinRoot, isPathInside } from "./paths.js";
 import { sessionStorageRoot } from "./snapshot.js";
 import type { SnapshotApplyPlan } from "./types.js";
@@ -49,15 +50,14 @@ export async function applySnapshotTransaction(
 	}
 }
 
+export async function recoverSnapshotTransactionsOnStartup() {
+	if (!(await pendingTransactionEntries()).some((entry) => entry.isDirectory())) return;
+	await withLock("recovery", recoverPendingSnapshotTransactions, { reclaimStale: true });
+}
+
 export async function recoverPendingSnapshotTransactions() {
 	const directory = transactionRoot();
-	let entries: import("node:fs").Dirent[];
-	try {
-		entries = await fs.readdir(directory, { withFileTypes: true });
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-		throw error;
-	}
+	const entries = await pendingTransactionEntries();
 	for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
 		if (!entry.isDirectory()) continue;
 		const transactionDirectory = path.join(directory, entry.name);
@@ -75,6 +75,15 @@ export async function recoverPendingSnapshotTransactions() {
 			});
 		}
 		await restoreTransaction(transactionDirectory, journal);
+	}
+}
+
+async function pendingTransactionEntries() {
+	try {
+		return await fs.readdir(transactionRoot(), { withFileTypes: true });
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+		throw error;
 	}
 }
 

@@ -59,7 +59,11 @@ export type LockInspection =
 	| { status: "unreadable" }
 	| { status: "valid"; lock: LockFile };
 
-export async function withLock<T>(command: string, fn: () => Promise<T>): Promise<T> {
+export async function withLock<T>(
+	command: string,
+	fn: () => Promise<T>,
+	options: { reclaimStale?: boolean } = {},
+): Promise<T> {
 	await ensureStateDir();
 	const lock: LockFile = {
 		id: randomUUID(),
@@ -79,11 +83,24 @@ export async function withLock<T>(command: string, fn: () => Promise<T>): Promis
 			throw await describeHeldLock();
 		}
 
-		const inspection = await inspectLock();
+		let inspection = await inspectLock();
 		if (inspection.status === "valid" && isStaleLock(inspection.lock)) {
-			throw new Error(
-				`pi-sync lock is stale (pid ${inspection.lock.pid}). Run /sync unlock --stale, then retry.`,
-			);
+			if (!options.reclaimStale) {
+				throw new Error(
+					`pi-sync lock is stale (pid ${inspection.lock.pid}). Run /sync unlock --stale, then retry.`,
+				);
+			}
+			guard.throwIfCompromised();
+			const rechecked = await inspectLock();
+			if (
+				rechecked.status !== "valid" ||
+				rechecked.lock.id !== inspection.lock.id ||
+				!isStaleLock(rechecked.lock)
+			) {
+				throw new Error("pi-sync lock changed while preparing transaction recovery; retry.");
+			}
+			await fs.rm(lockPath(), { force: true });
+			inspection = { status: "missing" };
 		}
 		if (inspection.status === "valid") {
 			throw new Error(

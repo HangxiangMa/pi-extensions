@@ -58,7 +58,7 @@ import {
 	snapshotWithoutSessions,
 } from "./snapshot.js";
 import { applySnapshot } from "./snapshot-apply.js";
-import { recoverPendingSnapshotTransactions } from "./snapshot-transaction.js";
+import { recoverSnapshotTransactionsOnStartup } from "./snapshot-transaction.js";
 import {
 	countPreservedRemoteFiles,
 	errorMessage,
@@ -133,7 +133,7 @@ export default function sync(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		try {
-			await withLock("recovery", recoverPendingSnapshotTransactions);
+			await recoverSnapshotTransactionsOnStartup();
 		} catch (error) {
 			ctx.ui.notify(`pi-sync recovery required: ${errorMessage(error)}`, "error");
 			return;

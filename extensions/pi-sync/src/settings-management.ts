@@ -5,13 +5,14 @@ import {
 	effectiveTargetRemoteIdentity,
 	localConfigPath,
 	readLocalConfigObject,
+	resolveLegacyPartialConfig,
+	resolveV2PartialConfig,
 	stateDir,
-	statePathForConfig,
+	statePathForPartialConfig,
 	writeLocalConfigObject,
 } from "./config.js";
 import { withLock } from "./lock.js";
-import { safeName } from "./paths.js";
-import type { StorageProfileSettings, SyncConfig, SyncTargetSettings } from "./types.js";
+import type { PartialConfig, StorageProfileSettings, SyncTargetSettings } from "./types.js";
 
 const LEGACY_FIELDS = new Set([
 	"endpoint",
@@ -235,8 +236,8 @@ async function adoptLegacyState(
 	next: Record<string, unknown>,
 	targetName: string,
 ) {
-	const legacyProfile = typeof legacy.profile === "string" ? legacy.profile : "default";
-	const source = path.join(stateDir(), `${safeName(legacyProfile)}.state.json`);
+	const legacyConfig = resolveLegacyPartialConfig(legacy as PartialConfig);
+	const source = statePathForPartialConfig(legacyConfig);
 	let bytes: Buffer;
 	try {
 		bytes = await fs.readFile(source);
@@ -244,20 +245,7 @@ async function adoptLegacyState(
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
 		throw error;
 	}
-	const targets = requireObject(next.targets, "targets");
-	const target = requireObject(targets[targetName], "target");
-	const profile = typeof target.namespace === "string" ? target.namespace : targetName;
-	const storageProfileName = typeof target.profile === "string" ? target.profile : "default";
-	const profiles = requireObject(next.profiles, "profiles");
-	const storageProfile = requireObject(profiles[storageProfileName], "storage profile");
-	const destination = statePathForConfig({
-		settingsVersion: 2,
-		target: targetName,
-		endpoint: typeof storageProfile.endpoint === "string" ? storageProfile.endpoint : "",
-		bucket: typeof target.bucket === "string" ? target.bucket : "",
-		prefix: typeof target.prefix === "string" ? target.prefix : "pi-sync",
-		profile,
-	} as SyncConfig);
+	const destination = statePathForPartialConfig(resolveV2PartialConfig(next, targetName));
 	await fs.mkdir(path.dirname(destination), { recursive: true });
 	try {
 		await fs.writeFile(destination, bytes, { flag: "wx", mode: 0o600 });
