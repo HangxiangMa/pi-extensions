@@ -57,6 +57,7 @@ export interface CompletedGoalRun {
 
 export interface StatusContext {
 	cwd: string;
+	mode?: "tui" | "rpc" | "json" | "print";
 	ui: {
 		confirm: (title: string, message: string) => Promise<boolean>;
 		notify: (message: string, level?: "info" | "warning" | "error") => void;
@@ -146,6 +147,8 @@ const CONTRADICTORY_COMPLETION_PATTERNS = [
 ] as const;
 // One instance belongs to one extension factory. It owns all mutable session state
 // and the cross-cutting invariants used by command and lifecycle orchestration.
+// Keep this state machine cohesive despite its size: prompt ownership, continuation,
+// budget, safety, and tool-policy transitions share ordering-sensitive invariants.
 export class GoalRuntime {
 	settings: GoalSettings = DEFAULT_GOAL_SETTINGS;
 	activeGoal?: ActiveGoal;

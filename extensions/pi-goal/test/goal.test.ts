@@ -135,6 +135,53 @@ test("goal registers command, status tools, and lifecycle hooks", () => {
 	]);
 });
 
+test("bare goal is menu-first only in TUI while status and non-TUI stay deterministic", async () => {
+	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
+	registerGoal(mock.pi);
+	const selections: Array<{ title: string; actions: string[] }> = [];
+	const tui = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		select: async (title: string, actions: string[]) => {
+			selections.push({ title, actions });
+			return undefined;
+		},
+	});
+	mock.events.get("session_start")?.[0]?.({}, tui.ctx);
+
+	await mock.commands.get("goal")?.handler("", tui.ctx);
+	assert.equal(selections.length, 1);
+	assert.match(selections[0]?.title ?? "", /Goal · No goal/i);
+	assert.ok(selections[0]?.actions.includes("Start a goal…"));
+	assert.equal(tui.notifications.length, 0);
+
+	await mock.commands.get("goal")?.handler("status", tui.ctx);
+	assert.equal(selections.length, 1);
+	assert.match(tui.notifications.at(-1)?.message ?? "", /No goal is currently set/i);
+
+	let printSelections = 0;
+	const print = createMockContext({
+		mode: "print",
+		hasUI: false,
+		select: async () => {
+			printSelections++;
+			return undefined;
+		},
+	});
+	await assert.rejects(
+		mock.commands.get("goal")?.handler("", print.ctx) as Promise<unknown>,
+		/No goal is currently set/i,
+	);
+	assert.equal(printSelections, 0);
+	assert.equal(print.notifications.length, 0);
+
+	const json = createMockContext({ mode: "json", hasUI: false });
+	await assert.rejects(
+		mock.commands.get("goal")?.handler("status", json.ctx) as Promise<unknown>,
+		/No goal is currently set/i,
+	);
+});
+
 test("session start creates complete default settings when the file is missing", () => {
 	const settingsPath = join(GOAL_SETTINGS_DIRECTORY, "session-created.json");
 	const mock = createMockPi({

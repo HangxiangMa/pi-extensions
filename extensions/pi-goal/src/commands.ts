@@ -516,8 +516,9 @@ export class GoalCommandController {
 
 	showGoal(ctx: StatusContext) {
 		if (!this.runtime.activeGoal) {
-			ctx.ui.notify("Usage: /goal <objective>\nNo goal is currently set.", "info");
+			const message = "Usage: /goal <objective>\nNo goal is currently set.";
 			ctx.ui.setStatus(STATUS_KEY, undefined);
+			this.reportGoalStatus(ctx, message);
 			return;
 		}
 		if (!this.runtime.queueFrozen) {
@@ -525,15 +526,20 @@ export class GoalCommandController {
 			this.runtime.persistGoal(this.runtime.activeGoal);
 			this.runtime.updateStatus(ctx, this.runtime.activeGoal);
 		}
-		ctx.ui.notify(
+		this.reportGoalStatus(
+			ctx,
 			goalSummary(
 				this.runtime.activeGoal,
 				this.runtime.queuedGoals,
 				this.runtime.settings.experimental.goals,
 				this.runtime.queueFrozen,
 			),
-			"info",
 		);
+	}
+
+	private reportGoalStatus(ctx: StatusContext, message: string) {
+		if (ctx.mode === "print" || ctx.mode === "json") throw new Error(message);
+		ctx.ui.notify(message, "info");
 	}
 
 	private async activatePrioritizedGoal(

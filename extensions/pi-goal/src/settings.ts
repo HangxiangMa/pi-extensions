@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -41,6 +41,13 @@ interface GoalSettingsInitializationFileSystem {
 	mkdirSync: typeof mkdirSync;
 	writeFileSync: typeof writeFileSync;
 	linkSync: typeof linkSync;
+	rmSync: typeof rmSync;
+}
+
+interface GoalSettingsSaveFileSystem {
+	mkdirSync: typeof mkdirSync;
+	writeFileSync: typeof writeFileSync;
+	renameSync: typeof renameSync;
 	rmSync: typeof rmSync;
 }
 
@@ -154,6 +161,62 @@ export function loadOrCreateGoalSettings(
 	}
 }
 
+export function saveGoalSettings(
+	settings: GoalSettings,
+	settingsPath = join(getAgentDir(), GOAL_SETTINGS_FILE),
+	overrides: Partial<GoalSettingsSaveFileSystem> = {},
+) {
+	const normalized = normalizeGoalSettings(settings);
+	if (!normalized) throw new Error("Refusing to save invalid pi-goal settings.");
+
+	let raw: Record<string, unknown> = {};
+	try {
+		const contents = readFileSync(settingsPath, "utf8");
+		const parsed = JSON.parse(contents) as unknown;
+		if (!normalizeGoalSettings(parsed)) {
+			throw new Error(`${settingsPath}: invalid settings shape`);
+		}
+		raw = ownRecord(parsed) ?? {};
+	} catch (error) {
+		if (!isNodeError(error) || error.code !== "ENOENT") {
+			throw new Error(`Cannot save invalid settings file: ${formatError(error)}`);
+		}
+	}
+
+	const experimental = ownRecord(raw.experimental) ?? {};
+	const continuationLimits = ownRecord(raw.continuationLimits) ?? {};
+	const document = `${JSON.stringify(
+		{
+			...raw,
+			toolVisibility: normalized.toolVisibility,
+			experimental: { ...experimental, goals: normalized.experimental.goals },
+			continuationLimits: {
+				...continuationLimits,
+				automaticTurns: normalized.continuationLimits.automaticTurns,
+				noProgressTurns: normalized.continuationLimits.noProgressTurns,
+			},
+		},
+		null,
+		2,
+	)}\n`;
+	const fs = { mkdirSync, writeFileSync, renameSync, rmSync, ...overrides };
+	const temporaryPath = join(
+		dirname(settingsPath),
+		`.${basename(settingsPath)}.${randomUUID()}.tmp`,
+	);
+	try {
+		fs.mkdirSync(dirname(settingsPath), { recursive: true });
+		fs.writeFileSync(temporaryPath, document, { encoding: "utf8", flag: "wx" });
+		fs.renameSync(temporaryPath, settingsPath);
+	} finally {
+		try {
+			fs.rmSync(temporaryPath, { force: true });
+		} catch {
+			// Best-effort cleanup must not replace the save result.
+		}
+	}
+}
+
 export function readGoalSettings(
 	settingsPath = join(getAgentDir(), GOAL_SETTINGS_FILE),
 ): GoalSettingsLoadResult {
@@ -173,6 +236,12 @@ export function readGoalSettings(
 	} catch (error: unknown) {
 		return { kind: "invalid", reason: `${settingsPath}: ${formatError(error)}` };
 	}
+}
+
+function ownRecord(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

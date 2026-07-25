@@ -9,8 +9,8 @@ Goal mode uses Codex-like persistence instructions and sends guarded continuatio
 ## ✨ Features
 
 - Adds `/goal <goal_to_complete>` to start goal mode, with confirmation before replacing an existing goal.
-- Bare `/goal` shows the current goal summary.
-- Keeps advanced goal management inside `/goal` subcommands: `pause`, `resume`, `clear`, and `edit`.
+- Bare `/goal` opens a current-state manager in the TUI, with guided start, pause, resume, edit, queue, settings, status, help, and destructive-action confirmation; non-TUI modes retain deterministic status output.
+- Keeps direct goal management available through `/goal` subcommands: `status`, `pause`, `resume`, `clear`, and `edit`.
 - Exposes only one top-level command: `/goal`, including when ordered goals are enabled.
 - Optionally adds ordered-goal operations through `/goal add`, `prioritize`, `drop-last`, and `skip`, while accepting `push`, `unshift`, `pop`, and `shift` as hidden compatibility aliases.
 - Bounds automatic work by default to 25 normal model responses, including responses inside automatic tool loops and Pi-owned retry/compaction recovery; set `continuationLimits.automaticTurns` explicitly to `null` only when unbounded automatic work is intended.
@@ -70,7 +70,7 @@ with the complete current defaults:
 }
 ```
 
-Edit this generated file only when overriding the defaults.
+Use `/goal` → **Settings…** in the TUI to edit these values interactively, or edit the generated file directly. Interactive changes are serialized, written atomically, preserve unknown fields, and apply to the current runtime. Escape closes the settings screen without reverting changes that were already saved.
 
 `toolVisibility` accepts:
 
@@ -84,9 +84,7 @@ Edit this generated file only when overriding the defaults.
 - `automaticTurns` is a positive safe integer and defaults to `25`. It counts every completed normal `turn_end` owned by automatically started Goal work, including model responses inside tool loops and matching Pi-owned retries. The user-triggered kickoff, resume, edit, and ordinary user runs are not charged. At the limit, the goal becomes `paused` with cause `continuation_limit`, pending continuation/recovery is cancelled, and the current operation is aborted. Pi may invoke a provider adapter once more with an already-aborted signal to produce its synthetic terminal event; that event is not counted and cannot resume Goal work. Set this field to `null` to remove the authoritative hard bound.
 - `noProgressTurns` is a positive safe integer and defaults to `3`. At the end of an automatic run, pi-goal compares visible assistant text after Unicode normalization, lowercasing, control-character removal, and whitespace collapse. Thinking and tool blocks are excluded; empty and punctuation-only output are equivalent. Consecutive empty or identical tool-free outputs increment the repeat count. Different non-empty output starts a new run at one, and any attempted tool call resets it. Set this field to `null` to disable only this heuristic.
 
-Settings are reread at Pi startup, session replacement, and `/reload`; the file is not watched live.
-A missing file is created during any of those session starts, while an existing file is read without
-being rewritten. Initialization publishes the generated file atomically and never overwrites a file
+Settings are reread at Pi startup, session replacement, and `/reload`; direct external file edits are not watched live, while changes made through the Goal menu apply immediately. A missing file is created during any of those session starts, while an existing file is read without being rewritten. Initialization publishes the generated file atomically and never overwrites a file
 created concurrently by another process.
 
 Omitted fields use the defaults above. Invalid or malformed existing settings are never overwritten;
@@ -102,6 +100,7 @@ Tool visibility is a baseline, not ownership of Pi's global active-tool list. Pl
 
 ```text
 /goal
+/goal status
 /goal implement snake game
 /goal --tokens 100k fix the failing test and verify it
 /goal edit ship the smaller fix first
@@ -116,7 +115,9 @@ Tool visibility is a baseline, not ownership of Pi's global active-tool list. Pl
 /goal skip
 ```
 
-- `/goal` shows the current goal, status, lifetime iteration count, automatic model-response count, active elapsed time, token usage, any safety-pause reason, and available `/goal` subcommands.
+- In the TUI, `/goal` opens a state-aware manager. Its first action follows the current state: start when empty, pause when active, resume when stopped, or increase the budget when exhausted. Status, Settings, Help, queue management, Clear, and Close remain shallow, labeled routes. Arrow keys navigate, Enter selects, and Escape cancels or closes without changing state.
+- In print, JSON, and RPC modes, bare `/goal` reports the current summary without opening a terminal UI. `/goal status` provides the same deterministic summary in every mode.
+- Menu-driven Replace, Clear, Prioritize, Skip, and Drop last actions preview the exact affected goals and require confirmation. Existing direct routes remain immediate for compatibility and automation.
 - `/goal <goal_to_complete>` starts goal mode. If another unfinished goal exists, Pi asks for confirmation before replacing it with a new active goal and resetting its usage counters. Failed kickoff delivery clears a new goal or restores the prior goal; a previously active goal is restored as paused.
 - `/goal --tokens 100k <goal_to_complete>` starts or replaces goal mode with a token budget. `k` and `m` suffixes are accepted, for example `100k` or `1.5m`.
 - `/goal edit <goal_to_complete>` updates the existing goal objective without resetting usage counters. A successful active edit rotates the stale-turn guard and starts a fresh safety epoch. Paused, blocked, and usage-limited goals stay stopped and retain their safety state until resume. A budget-limited goal reactivates only when `edit --tokens` raises its budget above current usage. Failed prompt delivery restores the exact previous safety counters/cause; it restores a budget-limited goal or restores and pauses a previously active goal.
