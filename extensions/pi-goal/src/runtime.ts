@@ -1079,13 +1079,15 @@ export function goalSummary(
 		);
 	}
 	if (experimentalGoals || queuedGoals.length > 0 || queueFrozen || pendingAction) {
-		const goals = [goal, ...queuedGoals].map(
-			(queuedGoal, index) => `${index + 1}. [${queuedGoal.status}] ${queuedGoal.text}`,
+		const orderedGoals = [
+			`[${goal.status}] ${goal.text}`,
+			...(pendingAction?.kind === "prioritize" ? [`[pending] ${pendingAction.objective}`] : []),
+			...queuedGoals.map((queuedGoal) => `[${queuedGoal.status}] ${queuedGoal.text}`),
+		];
+		summary.push(
+			`Goals (${orderedGoals.length}):`,
+			...orderedGoals.map((queuedGoal, index) => `${index + 1}. ${queuedGoal}`),
 		);
-		if (pendingAction?.kind === "prioritize") {
-			goals.push(`${goals.length + 1}. [pending] ${pendingAction.objective}`);
-		}
-		summary.push(`Goals (${goals.length}):`, ...goals);
 	}
 	if (pendingAction?.kind === "advance") {
 		summary.push(

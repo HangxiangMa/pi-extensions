@@ -41,7 +41,7 @@ export async function showGoalSettings(
 		if (!result) return;
 		if (result.kind === "queue") {
 			const next = await nextQueueSettings(runtime, ctx, result.enabled);
-			if (!next) continue;
+			if (!next) return;
 			const wasFrozen = runtime.queueFrozen;
 			try {
 				applyGoalSettings(runtime, next, ctx, {
@@ -61,7 +61,7 @@ export async function showGoalSettings(
 			} catch (error) {
 				ctx.ui.notify(`pi-goal settings save failed: ${formatError(error)}`, "error");
 			}
-			continue;
+			return;
 		}
 
 		const previous = runtime.settings.continuationLimits[result.field];

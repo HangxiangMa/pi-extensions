@@ -511,8 +511,8 @@ test("full goal status includes a pending priority objective", () => {
 	const summary = context.notifications.at(-1)?.message ?? "";
 	assert.match(summary, /Goals \(3\):/);
 	assert.match(summary, /1\. \[active\] current objective/);
-	assert.match(summary, /2\. \[queued\] queued objective/);
-	assert.match(summary, /3\. \[pending\] urgent objective/);
+	assert.match(summary, /2\. \[pending\] urgent objective/);
+	assert.match(summary, /3\. \[queued\] queued objective/);
 });
 
 test("queue confirmations open only after the custom settings screen closes", async () => {
@@ -597,6 +597,7 @@ test("settings screen resumes retained work after enabling the queue", async () 
 	assert.equal(state.queueFrozen, false);
 	assert.equal(state.settings.experimental.goals, true);
 	assert.equal(unfrozen, 1);
+	assert.equal(screens, 1);
 });
 
 test("settings screen fits narrow, normal, and wide terminal widths", async () => {
