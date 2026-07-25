@@ -1,11 +1,35 @@
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-case-conflict
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-yaml
+      - id: detect-private-key
+      - id: trailing-whitespace
+        exclude: |
+          (?x)^(
+            extensions/pi-image-drop/src/web/app\.js|
+            extensions/pi-image-drop/src/web/state\.js|
+            extensions/pi-image-drop/src/web/styles\.css|
+            extensions/pi-webui/src/web/app\.css|
+            extensions/pi-webui/src/web/app\.js|
+            extensions/pi-webui/src/web/image-drag\.js|
+            extensions/pi-webui/src/web/markdown\.js|
+            extensions/pi-webui/src/web/state\.js|
+            extensions/pi-webui/src/web/transcript\.js
+          )$
   - repo: local
     hooks:
       - id: biome-check
-        name: biome check
-        entry: npx biome check --write --no-errors-on-unmatched
+        name: npm biome check
+        entry: npm run biome:check
         language: system
-        types_or: [javascript, jsx, ts, tsx, json]
+        pass_filenames: false
       - id: typecheck
         name: npm typecheck
         entry: npm run typecheck
