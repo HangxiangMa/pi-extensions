@@ -63,9 +63,9 @@ pack name: (_validate-extension-name name)
 try name: (_validate-extension-name name)
     name={{quote(name)}}; pi -e "./extensions/pi-$name"
 
-# Start a fresh Pi session with every local extension loaded
+# Start a fresh Pi session with every local extension package loaded
 try-all:
-    args=(); for dir in ./extensions/pi-*; do args+=(-e "$dir"); done; pi -ne "${args[@]}"
+    args=(); for package_json in ./extensions/pi-*/package.json; do args+=(-e "$(dirname "$package_json")"); done; pi -ne "${args[@]}"
 
 # Install a package through pi, falling back to the local workspace if unpublished
 # Usage: just install subagents
