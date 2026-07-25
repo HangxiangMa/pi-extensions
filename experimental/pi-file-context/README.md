@@ -77,10 +77,10 @@ RPC receives an observable warning. JSON and print modes do not enter custom UI.
 
 ```text
 src/index.ts                 Thin Pi entrypoint
-src/file-quote.ts            Lifecycle, filesystem boundaries, quote injection
-src/file-quote-explorer.ts   File list and line-range TUI
+src/file-context.ts            Lifecycle, filesystem boundaries, quote injection
+src/file-context-explorer.ts   File list and line-range TUI
 
-test/file-quote.test.ts      Filesystem, prompt, lifecycle, and TUI tests
+test/file-context.test.ts      Filesystem, prompt, lifecycle, and TUI tests
 ```
 
 ## 🔎 Keywords

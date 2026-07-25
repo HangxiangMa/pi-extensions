@@ -14,8 +14,8 @@ import fileQuoteExtension, {
 	formatPromptWithQuote,
 	formatPromptWithQuotes,
 	loadProjectTextFile,
-} from "../src/file-quote.js";
-import { FileQuoteExplorer } from "../src/file-quote-explorer.js";
+} from "../src/file-context.js";
+import { FileQuoteExplorer } from "../src/file-context-explorer.js";
 
 async function withTempProject(run: (root: string) => Promise<void>): Promise<void> {
 	const root = await mkdtemp(join(tmpdir(), "pi-file-context-test-"));

@@ -14,7 +14,7 @@ import {
 	type FileQuote,
 	filterProjectFiles,
 	type LoadedProjectTextFile,
-} from "./file-quote.js";
+} from "./file-context.js";
 
 const RESERVED_APP_ROWS = 3;
 const EXPLORER_CHROME_ROWS = 4;

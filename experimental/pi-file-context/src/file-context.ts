@@ -7,7 +7,7 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
-import { FileQuoteExplorer, type FileQuoteExplorerResult } from "./file-quote-explorer.js";
+import { FileQuoteExplorer, type FileQuoteExplorerResult } from "./file-context-explorer.js";
 
 const WIDGET_KEY = "file-quote";
 const DEFAULT_MAX_FILES = 5_000;
