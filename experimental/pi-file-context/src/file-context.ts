@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
@@ -62,6 +63,7 @@ interface DiscoveryOptions {
 
 interface LoadOptions {
 	maxBytes?: number;
+	beforeOpen?: () => Promise<void>;
 }
 
 export async function discoverProjectFiles(
@@ -78,11 +80,11 @@ export async function discoverProjectFiles(
 		);
 		for (const entry of entries) {
 			if (files.length >= maxFiles) return;
-			if (entry.isSymbolicLink()) continue;
+			if (IGNORED_DIRECTORIES.has(entry.name) || entry.isSymbolicLink()) continue;
 			const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
 			const absolutePath = resolve(directory, entry.name);
 			if (entry.isDirectory()) {
-				if (!IGNORED_DIRECTORIES.has(entry.name)) await walk(absolutePath, relativePath);
+				await walk(absolutePath, relativePath);
 			} else if (entry.isFile()) {
 				files.push(relativePath);
 			}
@@ -121,8 +123,23 @@ export async function loadProjectTextFile(
 
 	const maxBytes = Math.max(1, options.maxBytes ?? DEFAULT_MAX_BYTES);
 	if (info.size > maxBytes) throw new Error(`${projectPath} exceeds ${maxBytes} bytes`);
-	const file = await open(canonicalFile, "r");
+	await options.beforeOpen?.();
+	let file: Awaited<ReturnType<typeof open>>;
 	try {
+		file = await open(
+			canonicalFile,
+			constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+		);
+	} catch (error: unknown) {
+		throw new Error(`Cannot safely open ${projectPath}: ${formatError(error)}`);
+	}
+	try {
+		const openedInfo = await file.stat();
+		if (!openedInfo.isFile()) throw new Error(`${projectPath} is not a regular file`);
+		if (openedInfo.dev !== info.dev || openedInfo.ino !== info.ino) {
+			throw new Error(`${projectPath} changed while it was being opened safely`);
+		}
+		if (openedInfo.size > maxBytes) throw new Error(`${projectPath} exceeds ${maxBytes} bytes`);
 		const buffer = Buffer.alloc(maxBytes + 1);
 		let offset = 0;
 		while (offset < buffer.length) {
@@ -135,7 +152,7 @@ export async function loadProjectTextFile(
 		if (contents.includes(0)) throw new Error(`${projectPath} appears to be binary`);
 		return {
 			path: projectPath.replaceAll("\\", "/"),
-			lines: contents.toString("utf8").replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n"),
+			lines: normalizeTextLines(contents.toString("utf8")),
 		};
 	} finally {
 		await file.close();
@@ -215,6 +232,10 @@ export function formatPromptWithQuote(prompt: string, quote: FileQuote): string 
 
 export function formatPromptWithQuotes(prompt: string, quotes: readonly FileQuote[]): string {
 	if (quotes.length === 0) return prompt;
+	return `${formatQuoteContext(quotes)}\n\n${prompt}`;
+}
+
+export function formatQuoteContext(quotes: readonly FileQuote[]): string {
 	const blocks = quotes.map((quote) => {
 		const path = escapeXml(quote.path);
 		const text = escapeXml(quote.text);
@@ -229,7 +250,7 @@ export function formatPromptWithQuotes(prompt: string, quotes: readonly FileQuot
 		quotes.length === 1
 			? "The user intentionally selected the file excerpt above."
 			: "The user intentionally selected the file excerpts above.";
-	return `${blocks.join("\n\n")}\n\n${description}\n\n${prompt}`;
+	return `${blocks.join("\n\n")}\n\n${description}`;
 }
 
 export class FileQuoteTriggerEditor extends CustomEditor {
@@ -266,6 +287,8 @@ export class FileQuoteTriggerEditor extends CustomEditor {
 export default function fileQuoteExtension(pi: ExtensionAPI): void {
 	let pendingQuotes: FileQuote[] = [];
 	let installedEditorFactory: unknown;
+	let activeSessionManager: unknown;
+	let sessionGeneration = 0;
 
 	const clearPending = (ctx: ExtensionContext) => {
 		pendingQuotes = [];
@@ -294,11 +317,16 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 		}
 	};
 
+	const isCurrentSession = (owner: unknown, generation: number) =>
+		owner === activeSessionManager && generation === sessionGeneration;
+
 	const openExplorer = async (ctx: ExtensionContext): Promise<void> => {
 		if (ctx.mode !== "tui") {
 			rejectCommand(ctx, "File Context requires Pi's interactive TUI.");
 			return;
 		}
+		const owner = ctx.sessionManager;
+		const generation = sessionGeneration;
 		try {
 			const [files, gitContext] = await Promise.all([
 				discoverProjectFiles(ctx.cwd),
@@ -320,9 +348,13 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 						done,
 					}),
 			);
+			if (!isCurrentSession(owner, generation)) return;
 			if (result?.kind === "quote") appendPending(result.quote, ctx);
-			else if (result?.kind === "reference") ctx.ui.pasteToEditor(`@${result.path}`);
+			else if (result?.kind === "reference") {
+				ctx.ui.pasteToEditor(formatFileReference(result.path));
+			}
 		} catch (error: unknown) {
+			if (!isCurrentSession(owner, generation)) return;
 			try {
 				ctx.ui.notify(`File Context failed: ${formatError(error)}`, "error");
 			} catch {
@@ -343,6 +375,8 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
+		activeSessionManager = ctx.sessionManager;
+		sessionGeneration += 1;
 		clearPending(ctx);
 		if (ctx.mode !== "tui") return;
 		ctx.ui.notify(
@@ -363,21 +397,21 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 		ctx.ui.setEditorComponent(factory);
 	});
 
-	pi.on("input", (event, ctx) => {
-		if (
-			pendingQuotes.length === 0 ||
-			event.source !== "interactive" ||
-			!event.text.trim() ||
-			event.text.trimStart().startsWith("/")
-		) {
-			return { action: "continue" };
-		}
+	pi.on("before_agent_start", (_event, ctx) => {
+		if (ctx.sessionManager !== activeSessionManager || pendingQuotes.length === 0) return;
 		const quotes = pendingQuotes;
 		clearPending(ctx);
-		return { action: "transform", text: formatPromptWithQuotes(event.text, quotes) };
+		return {
+			message: {
+				customType: "file-context-quotes",
+				content: formatQuoteContext(quotes),
+				display: false,
+			},
+		};
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
+		if (ctx.sessionManager !== activeSessionManager) return;
 		clearPending(ctx);
 		if (installedEditorFactory && ctx.mode === "tui") {
 			if (ctx.ui.getEditorComponent() === installedEditorFactory)
@@ -385,6 +419,18 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 			installedEditorFactory = undefined;
 		}
 	});
+}
+
+function normalizeTextLines(contents: string): string[] {
+	if (contents === "") return [];
+	const lines = contents.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
+	if (lines.at(-1) === "") lines.pop();
+	return lines;
+}
+
+function formatFileReference(path: string): string {
+	const escaped = path.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+	return /\s|["\\]/.test(path) ? `@"${escaped}" ` : `@${path} `;
 }
 
 function compareStrings(left: string, right: string): number {

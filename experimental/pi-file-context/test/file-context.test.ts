@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -33,6 +33,7 @@ test("discovers bounded project text candidates without traversing ignored direc
 		await writeFile(join(root, "README.md"), "read me");
 		await writeFile(join(root, "src", "main.ts"), "export {};\n");
 		await writeFile(join(root, "node_modules", "hidden", "index.js"), "hidden");
+		await writeFile(join(root, ".git"), "gitdir: /private/metadata\n");
 		await symlink(join(root, "src"), join(root, "linked-src"), "dir");
 
 		assert.deepEqual(await discoverProjectFiles(root), ["README.md", "src/main.ts"]);
@@ -45,10 +46,15 @@ test("loads only bounded regular text files inside the project", async () => {
 		await writeFile(join(root, "safe.ts"), "one\ntwo\nthree\n");
 		await writeFile(join(root, "binary.bin"), Buffer.from([0, 1, 2]));
 		await writeFile(join(root, "large.txt"), "x".repeat(32));
+		await writeFile(join(root, "empty.txt"), "");
 
 		assert.deepEqual(await loadProjectTextFile(root, "safe.ts"), {
 			path: "safe.ts",
-			lines: ["one", "two", "three", ""],
+			lines: ["one", "two", "three"],
+		});
+		assert.deepEqual(await loadProjectTextFile(root, "empty.txt"), {
+			path: "empty.txt",
+			lines: [],
 		});
 		await assert.rejects(loadProjectTextFile(root, "../outside.txt"), /outside the project/);
 		await assert.rejects(loadProjectTextFile(root, "binary.bin"), /binary/);
@@ -56,6 +62,27 @@ test("loads only bounded regular text files inside the project", async () => {
 			loadProjectTextFile(root, "large.txt", { maxBytes: 16 }),
 			/exceeds 16 bytes/,
 		);
+	});
+});
+
+test("rejects a validated file replaced by a symlink before descriptor open", async () => {
+	await withTempProject(async (root) => {
+		const outside = await mkdtemp(join(tmpdir(), "pi-file-context-outside-test-"));
+		try {
+			await writeFile(join(root, "safe.ts"), "inside\n");
+			await writeFile(join(outside, "secret.ts"), "outside secret\n");
+			await assert.rejects(
+				loadProjectTextFile(root, "safe.ts", {
+					beforeOpen: async () => {
+						await rename(join(root, "safe.ts"), join(root, "original.ts"));
+						await symlink(join(outside, "secret.ts"), join(root, "safe.ts"));
+					},
+				}),
+				/safely|changed|symbolic link/i,
+			);
+		} finally {
+			await rm(outside, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -153,6 +180,46 @@ test("explorer previews a file, selects a range, and keeps rendered rows width-s
 	});
 	cancelledExplorer.handleInput("\u001b");
 	assert.equal(result, undefined);
+});
+
+test("explorer escapes errors and keeps narrow empty states width-safe", async () => {
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+	};
+	const keybindings = {
+		matches(data: string, key: string) {
+			return data === "enter" && key === "tui.select.confirm";
+		},
+	};
+	const noMatch = new FileQuoteExplorer({
+		tui: tui as never,
+		theme: theme as never,
+		keybindings: keybindings as never,
+		files: ["safe.ts"],
+		loadFile: async () => ({ path: "", lines: [] }),
+		done() {},
+	});
+	noMatch.handleInput("z");
+	assert.ok(noMatch.render(4).every((line) => visibleWidth(line) <= 4));
+
+	const errorExplorer = new FileQuoteExplorer({
+		tui: tui as never,
+		theme: theme as never,
+		keybindings: keybindings as never,
+		files: ["unsafe\u001b[31m.bin"],
+		loadFile: async () => {
+			throw new Error("Cannot open unsafe\u001b[31m.bin");
+		},
+		done() {},
+	});
+	errorExplorer.handleInput("enter");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	const errorRows = errorExplorer.render(80);
+	assert.ok(errorRows.every((line) => !line.includes("\u001b[31m")));
+	assert.ok(errorRows.some((line) => line.includes("\\x1b")));
 });
 
 test("explorer shows Git status and provenance and selects changed hunks", async () => {
@@ -254,7 +321,10 @@ test("explorer discloses current-line blame and bounded file history", async () 
 		} as never,
 		keybindings: {
 			matches(data: string, key: string) {
-				return data === "enter" && key === "tui.select.confirm";
+				return (
+					(data === "enter" && key === "tui.select.confirm") ||
+					(data === "down" && key === "tui.select.down")
+				);
 			},
 		} as never,
 		files: ["src/history.ts"],
@@ -285,7 +355,7 @@ test("explorer discloses current-line blame and bounded file history", async () 
 					{
 						commit: "fedcba0987654321fedcba0987654321fedcba09",
 						author: "Bob",
-						authorTime: 1_700_000_100,
+						authorTime: Number.MAX_VALUE,
 						summary: "Update history file",
 					},
 				];
@@ -303,16 +373,110 @@ test("explorer discloses current-line blame and bounded file history", async () 
 	assert.ok(
 		renders[0].some((line) => line.includes("Alice") && line.includes("Explain this line")),
 	);
+	explorer.handleInput("down");
+	assert.ok(explorer.render(100).every((line) => !line.includes("Alice")));
 	explorer.handleInput("h");
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	renders.push(explorer.render(100));
 	assert.ok(renders[1].every((line) => visibleWidth(line) <= 100));
 	assert.ok(renders[1].some((line) => line.includes("File history")));
+	assert.ok(renders[1].some((line) => line.includes("unknown-date")));
 	assert.ok(
 		renders[1].some((line) => line.includes("Bob") && line.includes("Update history file")),
 	);
 	explorer.handleInput("\u001b");
 	assert.ok(explorer.render(100).some((line) => line.includes("src/history.ts")));
+});
+
+test("explorer cancellation releases detail loading and empty history stays width-safe", async () => {
+	let resolveHistory: ((value: []) => void) | undefined;
+	const historyPromise = new Promise<[]>((resolve) => {
+		resolveHistory = resolve;
+	});
+	let loadCalls = 0;
+	const explorer = new FileQuoteExplorer({
+		tui: { terminal: { rows: 10 }, requestRender() {} } as never,
+		theme: {
+			fg: (_color: string, text: string) => text,
+			bg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		} as never,
+		keybindings: {
+			matches(data: string, key: string) {
+				return data === "enter" && key === "tui.select.confirm";
+			},
+		} as never,
+		files: ["src/cancel.ts"],
+		loadFile: async () => {
+			loadCalls += 1;
+			return { path: "src/cancel.ts", lines: ["one"] };
+		},
+		gitContext: {
+			project: {
+				repositoryRoot: "/repo",
+				projectPrefix: "",
+				branch: "main",
+				head: "a".repeat(40),
+				dirty: false,
+			},
+			statuses: new Map(),
+			async getFileContext() {
+				return { status: undefined, blob: undefined, hunks: [] };
+			},
+			async getHistory() {
+				return historyPromise;
+			},
+		} as never,
+		done() {},
+	});
+
+	explorer.handleInput("enter");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	explorer.handleInput("h");
+	explorer.handleInput("\u001b");
+	explorer.handleInput("enter");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(loadCalls, 2);
+	resolveHistory?.([]);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+
+	const emptyHistory = new FileQuoteExplorer({
+		tui: { terminal: { rows: 10 }, requestRender() {} } as never,
+		theme: {
+			fg: (_color: string, text: string) => text,
+			bg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		} as never,
+		keybindings: {
+			matches(data: string, key: string) {
+				return data === "enter" && key === "tui.select.confirm";
+			},
+		} as never,
+		files: ["new.ts"],
+		loadFile: async () => ({ path: "new.ts", lines: ["new"] }),
+		gitContext: {
+			project: {
+				repositoryRoot: "/repo",
+				projectPrefix: "",
+				branch: "main",
+				head: "a".repeat(40),
+				dirty: true,
+			},
+			statuses: new Map(),
+			async getFileContext() {
+				return { status: undefined, blob: undefined, hunks: [] };
+			},
+			async getHistory() {
+				return [];
+			},
+		} as never,
+		done() {},
+	});
+	emptyHistory.handleInput("enter");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	emptyHistory.handleInput("h");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.ok(emptyHistory.render(4).every((line) => visibleWidth(line) <= 4));
 });
 
 test("explorer loads validated revisions and attaches explicit Git diff context", async () => {
@@ -582,23 +746,103 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 		"• test/example.test.ts · lines 2-3 · ~8 tokens",
 	]);
 
-	const input = mock.events.get("input")?.[0];
-	const transformed = await input?.(
-		{ text: "Explain this", images: [], source: "interactive" },
+	assert.equal(mock.events.get("input"), undefined);
+	assert.notEqual(widgets.get("file-quote"), undefined);
+	const beforeStart = mock.events.get("before_agent_start")?.[0];
+	const injection = await beforeStart?.(
+		{ prompt: "/skill:explain Explain this", images: [], systemPrompt: "base" },
 		context.ctx,
 	);
-	assert.deepEqual(transformed, {
-		action: "transform",
-		text: '<user_file_quote path="src/example.ts" lines="1-1">\nconst example = true;\n</user_file_quote>\n\n<user_file_quote path="test/example.test.ts" lines="2-3">\nexpect(example)\n  .toBe(true);\n</user_file_quote>\n\nThe user intentionally selected the file excerpts above.\n\nExplain this',
+	assert.deepEqual(injection, {
+		message: {
+			customType: "file-context-quotes",
+			content:
+				'<user_file_quote path="src/example.ts" lines="1-1">\nconst example = true;\n</user_file_quote>\n\n<user_file_quote path="test/example.test.ts" lines="2-3">\nexpect(example)\n  .toBe(true);\n</user_file_quote>\n\nThe user intentionally selected the file excerpts above.',
+			display: false,
+		},
 	});
 	assert.equal(widgets.get("file-quote"), undefined);
-	assert.deepEqual(
-		await input?.({ text: "Again", images: [], source: "interactive" }, context.ctx),
-		{ action: "continue" },
+	assert.equal(
+		await beforeStart?.({ prompt: "Again", systemPrompt: "base" }, context.ctx),
+		undefined,
 	);
 	await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
 	assert.equal(currentEditorFactory, undefined);
 	assert.equal(widgets.get("file-quote"), undefined);
+});
+
+test("quotes whole-file references and rejects picker results from replaced sessions", async () => {
+	const referenceMock = createMockPi();
+	fileQuoteExtension(referenceMock.pi);
+	const pasted: string[] = [];
+	const referenceContext = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		cwd: process.cwd(),
+		ui: {
+			theme: { fg: (_color: string, text: string) => text },
+			notify() {},
+			setWidget() {},
+			setEditorComponent() {},
+			getEditorComponent() {
+				return undefined;
+			},
+			async custom() {
+				return { kind: "reference", path: 'docs/my "note".md' };
+			},
+			pasteToEditor(value: string) {
+				pasted.push(value);
+			},
+		},
+	});
+	await referenceMock.events.get("session_start")?.[0]?.({}, referenceContext.ctx);
+	await referenceMock.commands.get("file-quote")?.handler("", referenceContext.ctx);
+	assert.deepEqual(pasted, ['@"docs/my \\"note\\".md" ']);
+
+	const staleMock = createMockPi();
+	fileQuoteExtension(staleMock.pi);
+	let resolvePicker: ((value: unknown) => void) | undefined;
+	const picker = new Promise((resolve) => {
+		resolvePicker = resolve;
+	});
+	const oldManager = { getSessionId: () => "old" };
+	const newManager = { getSessionId: () => "new" };
+	const makeContext = (sessionManager: object, custom: () => Promise<unknown>) =>
+		createMockContext({
+			mode: "tui",
+			hasUI: true,
+			cwd: process.cwd(),
+			sessionManager,
+			ui: {
+				theme: { fg: (_color: string, text: string) => text },
+				notify() {},
+				setWidget() {},
+				setEditorComponent() {},
+				getEditorComponent() {
+					return undefined;
+				},
+				custom,
+				pasteToEditor() {},
+			},
+		});
+	const oldContext = makeContext(oldManager, async () => picker);
+	const newContext = makeContext(newManager, async () => undefined);
+	await staleMock.events.get("session_start")?.[0]?.({}, oldContext.ctx);
+	const command = staleMock.commands.get("file-quote")?.handler("", oldContext.ctx);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	await staleMock.events.get("session_start")?.[0]?.({}, newContext.ctx);
+	resolvePicker?.({
+		kind: "quote",
+		quote: { path: "old.ts", startLine: 1, endLine: 1, text: "old" },
+	});
+	await command;
+	assert.equal(
+		await staleMock.events.get("before_agent_start")?.[0]?.(
+			{ prompt: "new", systemPrompt: "base" },
+			newContext.ctx,
+		),
+		undefined,
+	);
 });
 
 test("rejects the fallback command observably outside TUI mode", async () => {

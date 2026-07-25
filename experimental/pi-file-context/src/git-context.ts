@@ -55,6 +55,7 @@ export interface GitHistoryEntry {
 	author: string;
 	authorTime: number;
 	summary: string;
+	path: string;
 }
 
 export interface GitRevisionFile {
@@ -119,7 +120,9 @@ export class GitContext {
 			[
 				"log",
 				`--max-count=${MAX_HISTORY_ENTRIES}`,
-				"--format=%H%x1f%an%x1f%at%x1f%s%x00",
+				"--format=%x1e%H%x1f%an%x1f%at%x1f%s",
+				"--name-only",
+				"-z",
 				"--follow",
 				"--",
 				projectPath,
@@ -129,7 +132,11 @@ export class GitContext {
 		return result.ok ? parseHistory(result.stdout) : [];
 	}
 
-	async loadRevision(projectPath: string, revision: string): Promise<GitRevisionFile> {
+	async loadRevision(
+		projectPath: string,
+		revision: string,
+		historicalPath?: string,
+	): Promise<GitRevisionFile> {
 		this.assertProjectPath(projectPath);
 		const normalizedRevision = revision.trim();
 		if (!normalizedRevision || /[\0\r\n]/.test(normalizedRevision)) {
@@ -143,7 +150,9 @@ export class GitContext {
 			throw new Error(`Unknown Git revision: ${normalizedRevision}`);
 		}
 		const commit = resolved.stdout.trim().toLowerCase();
-		const repositoryPath = this.repositoryPath(projectPath);
+		const repositoryPath = historicalPath
+			? this.assertRepositoryPath(historicalPath)
+			: this.repositoryPath(projectPath);
 		const [contentsResult, blobResult] = await Promise.all([
 			this.run(["show", `${commit}:${repositoryPath}`], true),
 			this.run(["rev-parse", "--verify", `${commit}:${repositoryPath}`], true),
@@ -158,7 +167,7 @@ export class GitContext {
 			throw new Error(`${projectPath} appears to be binary at ${normalizedRevision}`);
 		}
 		return {
-			path: projectPath,
+			path: historicalPath ?? projectPath,
 			lines: normalizeLines(contentsResult.stdout),
 			revision: normalizedRevision,
 			commit,
@@ -172,6 +181,19 @@ export class GitContext {
 
 	private repositoryPath(projectPath: string): string {
 		return `${this.project.projectPrefix}${projectPath}`.replaceAll("\\", "/");
+	}
+
+	private assertRepositoryPath(repositoryPath: string): string {
+		const normalized = repositoryPath.replaceAll("\\", "/");
+		if (!normalized || isAbsolute(normalized) || normalized.includes("\0")) {
+			throw new Error("Invalid historical Git path");
+		}
+		const candidate = resolve(this.project.repositoryRoot, normalized);
+		const result = relative(this.project.repositoryRoot, candidate);
+		if (result === ".." || result.startsWith(`..${sep}`)) {
+			throw new Error("Historical Git path is outside the repository");
+		}
+		return normalized;
 	}
 
 	private assertProjectPath(projectPath: string): void {
@@ -205,7 +227,7 @@ export async function createGitContext(root: string): Promise<GitContext | undef
 				"--porcelain=v1",
 				"-z",
 				"--untracked-files=all",
-				"--ignored=matching",
+				"--ignored=traditional",
 				"--",
 				".",
 			],
@@ -337,7 +359,7 @@ function parseUnifiedDiff(output: string): GitDiffHunk[] {
 		if (line.startsWith("+") && !line.startsWith("+++")) {
 			current.changedLines.push(newLine);
 			newLine += 1;
-		} else if (!line.startsWith("-")) {
+		} else if (!line.startsWith("-") && !line.startsWith("\\")) {
 			newLine += 1;
 		}
 	}
@@ -365,15 +387,17 @@ function parseBlame(output: string): GitBlameInfo | undefined {
 
 function parseHistory(output: string): GitHistoryEntry[] {
 	return output
-		.split("\0")
+		.split("\x1e")
 		.filter(Boolean)
 		.flatMap((record) => {
-			const [commit, author, authorTime, ...summaryParts] = record
+			const [metadata = "", ...pathRecords] = record.split("\0");
+			const [commit, author, authorTime, ...summaryParts] = metadata
 				.replace(/^\n+/, "")
 				.split("\x1f");
+			const path = pathRecords.map((value) => value.replace(/^\n+/, "")).find(Boolean);
 			const time = Number(authorTime);
-			return commit && author && Number.isFinite(time)
-				? [{ commit, author, authorTime: time, summary: summaryParts.join("\x1f") }]
+			return commit && author && path && Number.isFinite(time)
+				? [{ commit, author, authorTime: time, summary: summaryParts.join("\x1f"), path }]
 				: [];
 		});
 }
@@ -391,5 +415,8 @@ function stripLineEnding(value: string): string {
 }
 
 function normalizeLines(contents: string): string[] {
-	return contents.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
+	if (contents === "") return [];
+	const lines = contents.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
+	if (lines.at(-1) === "") lines.pop();
+	return lines;
 }

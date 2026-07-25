@@ -105,7 +105,7 @@ test("resolves commit and branch revisions before loading bounded file content",
 		assert.equal(revision.revision, "main");
 		assert.match(revision.commit, /^[0-9a-f]{40}$/);
 		assert.match(revision.blob ?? "", /^[0-9a-f]{40}$/);
-		assert.deepEqual(revision.lines, ["one", "two", "three", ""]);
+		assert.deepEqual(revision.lines, ["one", "two", "three"]);
 		await assert.rejects(context.loadRevision("tracked.ts", "--help"), /Unknown Git revision/);
 		await assert.rejects(context.loadRevision("tracked.ts", "missing"), /Unknown Git revision/);
 	});
@@ -125,7 +125,56 @@ test("keeps status, diff, and revision paths relative to a nested project root",
 		assert.deepEqual([...context.statuses.keys()], ["nested.ts"]);
 		assert.equal(context.statuses.get("nested.ts")?.label, "modified (unstaged)");
 		assert.deepEqual((await context.getFileContext("nested.ts")).hunks[0]?.changedLines, [1]);
-		assert.deepEqual((await context.loadRevision("nested.ts", "HEAD")).lines, ["before", ""]);
+		assert.deepEqual((await context.loadRevision("nested.ts", "HEAD")).lines, ["before"]);
+	});
+});
+
+test("does not advance hunk lines for Git no-newline metadata", async () => {
+	await withGitProject(async (root) => {
+		await writeFile(join(root, "single.txt"), "old");
+		await git(root, "add", "single.txt");
+		await git(root, "commit", "-m", "add single line");
+		await writeFile(join(root, "single.txt"), "new\n");
+		const context = await createGitContext(root);
+		assert.ok(context);
+		const hunk = (await context.getFileContext("single.txt")).hunks[0];
+		assert.ok(hunk?.lines.includes("\\ No newline at end of file"));
+		assert.deepEqual(hunk?.changedLines, [1]);
+	});
+});
+
+test("reports children of ignored directories with per-file status", async () => {
+	await withGitProject(async (root) => {
+		await writeFile(join(root, ".gitignore"), "generated/\n");
+		await git(root, "add", ".gitignore");
+		await git(root, "commit", "-m", "ignore generated directory");
+		await mkdir(join(root, "generated"));
+		await writeFile(join(root, "generated", "a.ts"), "generated\n");
+		const context = await createGitContext(root);
+		assert.ok(context);
+		assert.equal(context.statuses.get("generated/a.ts")?.label, "ignored");
+	});
+});
+
+test("retains followed historical paths when a file was renamed", async () => {
+	await withGitProject(async (root) => {
+		await writeFile(join(root, "old-name.ts"), "before rename\n");
+		await git(root, "add", "old-name.ts");
+		await git(root, "commit", "-m", "add old path");
+		await git(root, "mv", "old-name.ts", "new-name.ts");
+		await git(root, "commit", "-m", "rename path");
+		const context = await createGitContext(root);
+		assert.ok(context);
+		const history = await context.getHistory("new-name.ts");
+		const oldEntry = history.find((entry) => entry.summary === "add old path");
+		assert.equal(oldEntry?.path, "old-name.ts");
+		const revision = await context.loadRevision(
+			"new-name.ts",
+			oldEntry?.commit ?? "",
+			oldEntry?.path,
+		);
+		assert.equal(revision.path, "old-name.ts");
+		assert.deepEqual(revision.lines, ["before rename"]);
 	});
 });
 

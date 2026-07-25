@@ -145,12 +145,18 @@ export class FileQuoteExplorer implements Component, Focusable {
 				"",
 			);
 		});
-		if (fileLines.length === 0)
-			fileLines.push(this.options.theme.fg("muted", "  No matching files"));
+		if (fileLines.length === 0) {
+			fileLines.push(
+				truncateToWidth(this.options.theme.fg("muted", "  No matching files"), width, ""),
+			);
+		}
 		const state = this.loading
 			? this.options.theme.fg("warning", "Loading…")
 			: this.error
-				? this.options.theme.fg("error", truncateToWidth(this.error, width))
+				? this.options.theme.fg(
+						"error",
+						truncateToWidth(escapeTerminalControls(this.error), width, ""),
+					)
 				: this.options.theme.fg(
 						"muted",
 						`${this.filteredFiles.length} files · ↑↓ navigate · Enter preview · Tab reference · Esc cancel`,
@@ -198,6 +204,9 @@ export class FileQuoteExplorer implements Component, Focusable {
 					: line;
 			return truncateToWidth(styled, width, "");
 		});
+		if (previewLines.length === 0) {
+			previewLines.push(truncateToWidth(this.options.theme.fg("muted", "  Empty file"), width, ""));
+		}
 		const selecting =
 			this.previewAnchor === undefined
 				? "cursor line"
@@ -205,7 +214,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 		const selectedText = loadedFile.lines.slice(range.start, range.end + 1).join("\n");
 		const estimatedTokens = Math.max(1, Math.ceil(Buffer.byteLength(selectedText, "utf8") / 4));
 		const footer = this.error
-			? this.options.theme.fg("error", this.error)
+			? this.options.theme.fg("error", escapeTerminalControls(this.error))
 			: `~${estimatedTokens} tokens · Enter attach ${selecting} · Space anchor · ↑↓ extend · [] hunks · b blame · h history · r revision · d diff · Esc files`;
 		const project = this.options.gitContext?.project;
 		const gitLabel = this.loadedRevision
@@ -248,7 +257,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 		const inputWidth = Math.max(1, width - visibleWidth(label));
 		const input = `${label}${this.revisionInput.render(inputWidth)[0] ?? ""}`;
 		const state = this.error
-			? this.options.theme.fg("error", this.error)
+			? this.options.theme.fg("error", escapeTerminalControls(this.error))
 			: this.loading
 				? this.options.theme.fg("warning", "Loading revision…")
 				: this.options.theme.fg("muted", "Enter open commit/branch/tag · Esc preview");
@@ -290,7 +299,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 		const text = hunk?.lines.join("\n") ?? "";
 		const tokens = Math.max(1, Math.ceil(Buffer.byteLength(text, "utf8") / 4));
 		const footer = this.error
-			? this.options.theme.fg("error", this.error)
+			? this.options.theme.fg("error", escapeTerminalControls(this.error))
 			: `~${tokens} tokens · Enter attach diff · Hunk ${hunk ? this.diffHunkIndex + 1 : 0}/${this.loadedGit?.hunks.length ?? 0} · rows ${hunkLines.length === 0 ? 0 : this.diffScrollOffset + 1}-${Math.min(hunkLines.length, this.diffScrollOffset + contentHeight)}/${hunkLines.length} · ↑↓ scroll · [] navigate · Esc preview`;
 		return fitRows(
 			[
@@ -314,7 +323,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 		const entries = this.history.slice(start, start + listHeight).map((entry, visibleIndex) => {
 			const index = start + visibleIndex;
 			const prefix = index === this.historyIndex ? "> " : "  ";
-			const date = new Date(entry.authorTime * 1_000).toISOString().slice(0, 10);
+			const date = formatHistoryDate(entry.authorTime);
 			const line = `${prefix}${entry.commit.slice(0, 12)} · ${date} · ${escapeTerminalControls(entry.author)} · ${escapeTerminalControls(entry.summary)}`;
 			return truncateToWidth(
 				index === this.historyIndex
@@ -324,8 +333,12 @@ export class FileQuoteExplorer implements Component, Focusable {
 				"",
 			);
 		});
-		if (entries.length === 0) entries.push(this.options.theme.fg("muted", "  No file history"));
-		const footer = this.error ?? "↑↓ navigate · Enter open revision · Esc preview";
+		if (entries.length === 0) {
+			entries.push(truncateToWidth(this.options.theme.fg("muted", "  No file history"), width, ""));
+		}
+		const footer = this.error
+			? escapeTerminalControls(this.error)
+			: "↑↓ navigate · Enter open revision · Esc preview";
 		return fitRows(
 			[
 				truncateToWidth(title, width, ""),
@@ -391,7 +404,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 		if (!loadedFile) return;
 		const lines = loadedFile.lines;
 		if (matchesKey(data, Key.escape)) {
-			this.detailRequest += 1;
+			this.cancelDetailRequest();
 			this.mode = "files";
 			this.loadedFile = undefined;
 			this.loadedGit = undefined;
@@ -436,19 +449,19 @@ export class FileQuoteExplorer implements Component, Focusable {
 			return;
 		}
 		if (this.options.keybindings.matches(data, "tui.select.up")) {
-			this.previewCursor = Math.max(0, this.previewCursor - 1);
+			this.movePreviewCursor(Math.max(0, this.previewCursor - 1));
 			return;
 		}
 		if (this.options.keybindings.matches(data, "tui.select.down")) {
-			this.previewCursor = Math.min(lines.length - 1, this.previewCursor + 1);
+			this.movePreviewCursor(Math.min(Math.max(0, lines.length - 1), this.previewCursor + 1));
 			return;
 		}
 		if (this.options.keybindings.matches(data, "tui.select.pageUp")) {
-			this.previewCursor = Math.max(0, this.previewCursor - 10);
+			this.movePreviewCursor(Math.max(0, this.previewCursor - 10));
 			return;
 		}
 		if (this.options.keybindings.matches(data, "tui.select.pageDown")) {
-			this.previewCursor = Math.min(lines.length - 1, this.previewCursor + 10);
+			this.movePreviewCursor(Math.min(Math.max(0, lines.length - 1), this.previewCursor + 10));
 			return;
 		}
 		if (data === "]" || data === "[") {
@@ -488,7 +501,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 
 	private handleHistoryInput(data: string): void {
 		if (matchesKey(data, Key.escape)) {
-			this.detailRequest += 1;
+			this.cancelDetailRequest();
 			this.mode = "preview";
 			this.error = undefined;
 			return;
@@ -502,14 +515,14 @@ export class FileQuoteExplorer implements Component, Focusable {
 			return;
 		}
 		if (this.options.keybindings.matches(data, "tui.select.confirm")) {
-			const revision = this.history[this.historyIndex]?.commit;
-			if (revision) void this.loadRevision(revision);
+			const entry = this.history[this.historyIndex];
+			if (entry) void this.loadRevision(entry.commit, entry.path);
 		}
 	}
 
 	private handleRevisionInput(data: string): void {
 		if (matchesKey(data, Key.escape)) {
-			this.detailRequest += 1;
+			this.cancelDetailRequest();
 			this.mode = "preview";
 			this.revisionInput.focused = false;
 			this.error = undefined;
@@ -592,19 +605,18 @@ export class FileQuoteExplorer implements Component, Focusable {
 		}
 	}
 
-	private async loadRevision(revision: string): Promise<void> {
+	private async loadRevision(revision: string, historicalPath?: string): Promise<void> {
 		const path = this.loadedFile?.path;
 		const gitContext = this.options.gitContext;
 		if (!path || !gitContext) {
 			this.error = "Git revision browsing is unavailable";
 			return;
 		}
-		const request = ++this.detailRequest;
-		this.loading = true;
+		const request = this.beginDetailRequest();
 		this.error = undefined;
 		this.options.tui.requestRender();
 		try {
-			const loadedRevision = await gitContext.loadRevision(path, revision);
+			const loadedRevision = await gitContext.loadRevision(path, revision, historicalPath);
 			if (this.finished || request !== this.detailRequest) return;
 			this.loadedRevision = loadedRevision;
 			this.loadedFile = { path: loadedRevision.path, lines: loadedRevision.lines };
@@ -629,17 +641,20 @@ export class FileQuoteExplorer implements Component, Focusable {
 			this.error = "Git blame is unavailable";
 			return;
 		}
-		const request = ++this.detailRequest;
-		this.loading = true;
+		const request = this.beginDetailRequest();
+		const requestedLine = this.previewCursor + 1;
 		this.error = undefined;
 		this.options.tui.requestRender();
 		try {
-			const blame = await gitContext.getBlame(
-				path,
-				this.previewCursor + 1,
-				this.loadedRevision?.commit,
-			);
-			if (this.finished || request !== this.detailRequest || this.mode !== "preview") return;
+			const blame = await gitContext.getBlame(path, requestedLine, this.loadedRevision?.commit);
+			if (
+				this.finished ||
+				request !== this.detailRequest ||
+				this.mode !== "preview" ||
+				requestedLine !== this.previewCursor + 1
+			) {
+				return;
+			}
 			this.blame = blame;
 			if (!blame) this.error = "No blame information for this line";
 		} catch (error: unknown) {
@@ -657,8 +672,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 			this.error = "Git history is unavailable";
 			return;
 		}
-		const request = ++this.detailRequest;
-		this.loading = true;
+		const request = this.beginDetailRequest();
 		this.error = undefined;
 		this.options.tui.requestRender();
 		try {
@@ -724,8 +738,26 @@ export class FileQuoteExplorer implements Component, Focusable {
 		const start = Math.max(0, Math.min(...selectedLines) - 1);
 		const end = Math.max(start, Math.min(lineCount - 1, Math.max(...selectedLines) - 1));
 		this.previewAnchor = start;
-		this.previewCursor = end;
+		this.movePreviewCursor(end);
 		this.error = undefined;
+	}
+
+	private beginDetailRequest(): number {
+		const request = ++this.detailRequest;
+		this.loading = true;
+		return request;
+	}
+
+	private cancelDetailRequest(): void {
+		this.detailRequest += 1;
+		this.loading = false;
+	}
+
+	private movePreviewCursor(next: number): void {
+		if (next === this.previewCursor) return;
+		this.cancelDetailRequest();
+		this.previewCursor = next;
+		this.blame = undefined;
 	}
 
 	private finish(result: FileQuoteExplorerResult | undefined): void {
@@ -775,6 +807,11 @@ function escapeTerminalControls(text: string): string {
 			return character;
 		})
 		.join("");
+}
+
+function formatHistoryDate(authorTime: number): string {
+	const date = new Date(authorTime * 1_000);
+	return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : "unknown-date";
 }
 
 function formatError(error: unknown): string {
