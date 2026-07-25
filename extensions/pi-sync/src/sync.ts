@@ -1,4 +1,3 @@
-import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -17,7 +16,9 @@ import {
 	validateCommandOptions,
 } from "./command.js";
 import {
+	activeLocalConfigPath,
 	configuredTargetNames,
+	consumeLocalConfigMigrationNotice,
 	deprecatedPiSyncEnvironmentWarnings,
 	ensureStateDir,
 	isEnabled,
@@ -29,6 +30,7 @@ import {
 	localConfigTemplate,
 	normalizeExtraFiles,
 	normalizeSyncFiles,
+	readLocalConfigObject,
 	readStateForConfig,
 	sessionDirForApply,
 	sessionTokenWarnings,
@@ -142,6 +144,8 @@ export default function sync(pi: ExtensionAPI) {
 		} catch {
 			setSyncTargetCompletions([]);
 		}
+		const migrationNotice = consumeLocalConfigMigrationNotice();
+		if (migrationNotice) ctx.ui.notify(migrationNotice, "warning");
 		const warnings = deprecatedPiSyncEnvironmentWarnings();
 		if (warnings.length > 0) ctx.ui.notify(warnings.join("\n"), "warning");
 		await autoSync(ctx);
@@ -279,12 +283,9 @@ async function autoPushSessions(ctx: ExtensionContext) {
 
 async function initConfig(ctx: ExtensionCommandContext) {
 	const configPath = localConfigPath();
-	try {
-		await fs.access(configPath, fsConstants.F_OK);
-		ctx.ui.notify(`Config already exists: ${configPath}`, "info");
+	if (await readLocalConfigObject()) {
+		ctx.ui.notify(`Config already exists: ${await activeLocalConfigPath()}`, "info");
 		return;
-	} catch {
-		// Create or guide setup below.
 	}
 
 	if (ctx.mode === "tui") {

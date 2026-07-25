@@ -14,7 +14,12 @@ export function isDeniedPath(relativePath: string) {
 		base.endsWith(".env") ||
 		base.includes("secret") ||
 		base.includes("token") ||
-		base === "pi-sync.local.json"
+		base === "pi-sync.json" ||
+		base.startsWith("pi-sync.json.") ||
+		base.startsWith(".pi-sync.json.") ||
+		base === "pi-sync.local.json" ||
+		base.startsWith("pi-sync.local.json.") ||
+		base.startsWith(".pi-sync.local.json.")
 	);
 }
 

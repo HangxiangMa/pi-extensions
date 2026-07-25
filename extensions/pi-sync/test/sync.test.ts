@@ -301,10 +301,7 @@ test("sync files has a protocol-safe non-TUI summary", async () => {
 
 		await mock.commands.get("sync")?.handler("files", ctx);
 		assert.equal(customCalls, 0);
-		assert.match(
-			notifications.at(-1)?.message ?? "",
-			/selected files.*syncFiles.*pi-sync\.local\.json/is,
-		);
+		assert.match(notifications.at(-1)?.message ?? "", /selected files.*syncFiles.*pi-sync\.json/is);
 	});
 });
 
@@ -496,11 +493,11 @@ test("syncFiles keeps the legacy allowlist by default and validates explicit sel
 
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
-		writeFileSync(path.join(agentDir, "pi-sync.local.json"), JSON.stringify(requiredConfig()));
+		writeFileSync(path.join(agentDir, "pi-sync.json"), JSON.stringify(requiredConfig()));
 		assert.deepEqual((await loadConfig()).syncFiles, [...DEFAULT_SYNC_FILES]);
 
 		writeFileSync(
-			path.join(agentDir, "pi-sync.local.json"),
+			path.join(agentDir, "pi-sync.json"),
 			JSON.stringify({ ...requiredConfig(), syncFiles: [] }),
 		);
 		assert.deepEqual((await loadConfig()).syncFiles, []);
@@ -636,7 +633,7 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(
-			path.join(agentDir, "pi-sync.local.json"),
+			path.join(agentDir, "pi-sync.json"),
 			JSON.stringify({ ...requiredConfig(), syncSessions: true }),
 		);
 
@@ -656,16 +653,16 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 			assert.equal((await loadConfig()).syncSessions, true);
 		});
 
-		rmSync(path.join(agentDir, "pi-sync.local.json"));
+		rmSync(path.join(agentDir, "pi-sync.json"));
 		writeFileSync(
-			path.join(agentDir, "pi-sync.local.json"),
+			path.join(agentDir, "pi-sync.json"),
 			JSON.stringify({ ...requiredConfig(), extraFiles: "APPEND_SYSTEM.md" }),
 		);
 		await withEnv({}, async () => {
 			assert.deepEqual((await loadConfig()).extraFiles, []);
 		});
 		writeFileSync(
-			path.join(agentDir, "pi-sync.local.json"),
+			path.join(agentDir, "pi-sync.json"),
 			JSON.stringify({
 				...requiredConfig(),
 				extraFiles: [
@@ -686,7 +683,7 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 					"node_modules",
 					".pisync",
 					".env",
-					"pi-sync.local.json",
+					"pi-sync.json",
 					"secret.txt",
 					"token.json",
 					1,
@@ -701,7 +698,7 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 		const customAgentDir = path.join(agentDir, "custom-agent");
 		mkdirSync(customAgentDir, { recursive: true });
 		writeFileSync(
-			path.join(customAgentDir, "pi-sync.local.json"),
+			path.join(customAgentDir, "pi-sync.json"),
 			JSON.stringify({ ...requiredConfig(), profile: "custom" }),
 		);
 		await withEnv({ PI_CODING_AGENT_DIR: customAgentDir }, async () => {
@@ -711,15 +708,15 @@ test("syncSessions config defaults off and supports file plus env overrides", as
 		const tildeAgentDir = path.join(path.dirname(agentDir), "agent-tilde");
 		mkdirSync(tildeAgentDir, { recursive: true });
 		writeFileSync(
-			path.join(tildeAgentDir, "pi-sync.local.json"),
+			path.join(tildeAgentDir, "pi-sync.json"),
 			JSON.stringify({ ...requiredConfig(), profile: "tilde" }),
 		);
 		await withEnv({ PI_CODING_AGENT_DIR: "~/.pi/agent-tilde" }, async () => {
 			assert.equal((await loadConfig()).profile, "tilde");
 		});
 
-		rmSync(path.join(agentDir, "pi-sync.local.json"));
-		writeFileSync(path.join(agentDir, "pi-sync.local.json"), JSON.stringify(requiredConfig()));
+		rmSync(path.join(agentDir, "pi-sync.json"));
+		writeFileSync(path.join(agentDir, "pi-sync.json"), JSON.stringify(requiredConfig()));
 		await withEnv({}, async () => {
 			assert.equal((await loadConfig()).syncSessions, false);
 		});
@@ -730,7 +727,7 @@ test("sync config output reports session sync and privacy warning", async () => 
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(
-			path.join(agentDir, "pi-sync.local.json"),
+			path.join(agentDir, "pi-sync.json"),
 			JSON.stringify({ ...requiredConfig(), syncSessions: true }),
 		);
 		const mock = createMockPi();

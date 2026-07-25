@@ -106,6 +106,8 @@
 - Symptom: latest-Pi CI reports committed WebUI assets as stale without source changes. Cause: its lockfile-free install can update semver-ranged browser bundle dependencies. Fix: pin bundle inputs that must reproduce committed assets, or regenerate those assets deliberately.
 - Runtime-auth generation guards prevent stale credential mutation but not stale outer status or connection-invalidation publication; overlapping provider syncs also need latest-task ownership at the lifecycle boundary.
 - Credential-file path and permission checks must run on every locked read, not only startup migration; reject symlinks and repair `0600` through the opened descriptor.
+- Credential filename migrations cannot safely delete a legacy path while uncoordinated older writers may still replace it; install the canonical file exclusively, retain a private legacy recovery copy, and deny canonical, legacy, temporary, and recovery names from sync/export paths.
+- Pi-sync v2 settings may legitimately have no targets or active target after removing the last target. Filename migration can keep the legacy path active when exclusive canonical installation is unavailable, so resolve the effective path and cross-process lock any cleanup that temporarily vacates the canonical path.
 
 ## TASTE
 
