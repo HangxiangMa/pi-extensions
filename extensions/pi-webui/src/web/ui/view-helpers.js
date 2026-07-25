@@ -1,10 +1,14 @@
 export function withStableKeys(values) {
-	const occurrences = new Map();
-	return values.map((value) => {
-		const signature = JSON.stringify(value);
-		const occurrence = occurrences.get(signature) ?? 0;
-		occurrences.set(signature, occurrence + 1);
-		return { key: `${signature}:${occurrence}`, value };
+	return values.map((value, index) => {
+		const type =
+			value && typeof value === "object" && typeof value.type === "string" ? value.type : "item";
+		const id =
+			value &&
+			typeof value === "object" &&
+			(typeof value.id === "string" || typeof value.id === "number")
+				? value.id
+				: undefined;
+		return { key: id === undefined ? `${type}:index:${index}` : `${type}:id:${id}`, value };
 	});
 }
 

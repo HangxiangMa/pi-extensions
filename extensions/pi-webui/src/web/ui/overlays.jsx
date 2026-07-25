@@ -103,24 +103,26 @@ export function ImagePreviewDialog({ image, onOpenChange, revision }) {
 
 export function PageFooter() {
 	return (
-		<Container asChild size="3" px={{ initial: "3", sm: "5" }}>
-			<footer className="page-footer">
-				<Separator size="4" />
-				<Collapsible.Root>
-					<Collapsible.Trigger asChild>
-						<Button color="gray" variant="ghost">
-							<EyeOpenIcon /> Privacy and limitations{" "}
-							<ChevronDownIcon className="disclosure-icon" />
-						</Button>
-					</Collapsible.Trigger>
-					<Collapsible.Content>
-						<Text as="p" className="page-footer-copy" color="gray" size="2">
-							This loopback page reflects semantic Pi messages, not terminal pixels. Data stays in
-							this live Pi process and browser tab. Thinking is collapsed by default.
-						</Text>
-					</Collapsible.Content>
-				</Collapsible.Root>
-			</footer>
-		</Container>
+		<footer className="page-footer">
+			<Container size="3" px={{ initial: "3", sm: "5" }}>
+				<div className="page-footer-content">
+					<Separator size="4" />
+					<Collapsible.Root>
+						<Collapsible.Trigger asChild>
+							<Button color="gray" variant="ghost">
+								<EyeOpenIcon /> Privacy and limitations{" "}
+								<ChevronDownIcon className="disclosure-icon" />
+							</Button>
+						</Collapsible.Trigger>
+						<Collapsible.Content>
+							<Text as="p" className="page-footer-copy" color="gray" size="2">
+								This loopback page reflects semantic Pi messages, not terminal pixels. Data stays in
+								this live Pi process and browser tab. Thinking is collapsed by default.
+							</Text>
+						</Collapsible.Content>
+					</Collapsible.Root>
+				</div>
+			</Container>
+		</footer>
 	);
 }

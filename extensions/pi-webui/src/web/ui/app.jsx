@@ -261,47 +261,49 @@ function App() {
 
 function SessionHeader({ model }) {
 	return (
-		<Container asChild size="3" px={{ initial: "3", sm: "5" }}>
-			<header className="session-header">
-				<Box className="session-identity">
-					<Text as="p" className="eyebrow" color="jade" size="1" weight="bold">
-						Pi WebUI
-					</Text>
-					<Heading as="h1" id="project-name" size="6">
-						{model.session?.projectName ?? "Connecting…"}
-					</Heading>
-					<Text as="p" color="gray" id="session-name" size="2">
-						{model.session?.name ?? "Current session"}
-					</Text>
-				</Box>
-				<Flex align="center" className="session-controls" gap="2">
-					<Badge color={connectionColor(model)} id="connection-status" role="status" size="2">
-						{model.activity === "running" && !model.stale && !model.closed ? (
-							<Spinner size="1" />
-						) : (
-							<CheckCircledIcon />
-						)}
-						{connectionLabel(model)}
-					</Badge>
-					<Popover.Root>
-						<Popover.Trigger asChild>
-							<Button color="gray" highContrast variant="ghost">
-								<InfoCircledIcon /> Session details <ChevronDownIcon />
-							</Button>
-						</Popover.Trigger>
-						<Popover.Content align="end" className="session-popover" sideOffset={6}>
-							<Text as="div" color="gray" size="1" weight="bold">
-								Working directory
-							</Text>
-							<Code id="cwd" size="1" variant="ghost">
-								{model.session?.cwd ?? "—"}
-							</Code>
-							<Popover.Arrow className="popover-arrow" />
-						</Popover.Content>
-					</Popover.Root>
+		<header className="session-header">
+			<Container size="3" px={{ initial: "3", sm: "5" }}>
+				<Flex className="session-header-content">
+					<Box className="session-identity">
+						<Text as="p" className="eyebrow" color="jade" size="1" weight="bold">
+							Pi WebUI
+						</Text>
+						<Heading as="h1" id="project-name" size="6">
+							{model.session?.projectName ?? "Connecting…"}
+						</Heading>
+						<Text as="p" color="gray" id="session-name" size="2">
+							{model.session?.name ?? "Current session"}
+						</Text>
+					</Box>
+					<Flex align="center" className="session-controls" gap="2">
+						<Badge color={connectionColor(model)} id="connection-status" role="status" size="2">
+							{model.activity === "running" && !model.stale && !model.closed ? (
+								<Spinner size="1" />
+							) : (
+								<CheckCircledIcon />
+							)}
+							{connectionLabel(model)}
+						</Badge>
+						<Popover.Root>
+							<Popover.Trigger asChild>
+								<Button color="gray" highContrast variant="ghost">
+									<InfoCircledIcon /> Session details <ChevronDownIcon />
+								</Button>
+							</Popover.Trigger>
+							<Popover.Content align="end" className="session-popover" sideOffset={6}>
+								<Text as="div" color="gray" size="1" weight="bold">
+									Working directory
+								</Text>
+								<Code id="cwd" size="1" variant="ghost">
+									{model.session?.cwd ?? "—"}
+								</Code>
+								<Popover.Arrow className="popover-arrow" />
+							</Popover.Content>
+						</Popover.Root>
+					</Flex>
 				</Flex>
-			</header>
-		</Container>
+			</Container>
+		</header>
 	);
 }
 

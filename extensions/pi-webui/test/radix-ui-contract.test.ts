@@ -51,6 +51,26 @@ test("alert dialogs expose accessible titles and descriptions", () => {
 	assert.equal(overlaysSource.match(/<AlertDialog\.Description asChild>/g)?.length, 2);
 });
 
+test("session header keeps its identity and controls in the flex layout", () => {
+	assert.doesNotMatch(appSource, /<Container asChild[^>]*>\s*<header className="session-header">/);
+	assert.match(
+		appSource,
+		/<header className="session-header">[\s\S]*<Container[^>]*>[\s\S]*className="session-header-content"/,
+	);
+});
+
+test("page footer keeps direct-child layout inside the Container wrapper", () => {
+	assert.doesNotMatch(
+		overlaysSource,
+		/<Container asChild[^>]*>\s*<footer className="page-footer">/,
+	);
+	assert.match(
+		overlaysSource,
+		/<footer className="page-footer">[\s\S]*<Container[^>]*>[\s\S]*className="page-footer-content"/,
+	);
+	assert.match(stylesSource, /\.page-footer-content > \.rt-Separator/);
+});
+
 test("composer height keeps the jump-to-latest action clear of dynamic content", () => {
 	assert.match(appSource, /new ResizeObserver\(updateComposerHeight\)/);
 	assert.match(appSource, /--composer-height/);
