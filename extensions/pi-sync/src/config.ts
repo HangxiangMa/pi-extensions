@@ -15,6 +15,7 @@ import {
 	quarantineAndRemoveConfigIfMatches,
 	readMigratingLocalConfigDocument,
 	replaceLocalConfigDocument,
+	withLocalConfigFileLock,
 } from "./config-file.js";
 import { safeName } from "./paths.js";
 import { DEFAULT_SYNC_FILES, normalizeExtraFiles, normalizeSyncFiles } from "./sync-policy.js";
@@ -647,7 +648,11 @@ async function performLocalConfigUpdate(
 	return next;
 }
 
-export async function writeLocalConfigObject(value: Record<string, unknown>) {
+export function writeLocalConfigObject(value: Record<string, unknown>) {
+	return withLocalConfigFileLock(() => writeLocalConfigObjectUnlocked(value));
+}
+
+async function writeLocalConfigObjectUnlocked(value: Record<string, unknown>) {
 	const configPath = localConfigPath();
 	await fs.mkdir(path.dirname(configPath), { recursive: true });
 	try {

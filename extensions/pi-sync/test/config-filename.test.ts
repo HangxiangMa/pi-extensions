@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import {
 	consumeLocalConfigMigrationNotice,
@@ -25,6 +26,7 @@ import {
 } from "../src/config.js";
 import {
 	withConfigFileLinkForTest,
+	withConfigQuarantinedHookForTest,
 	withConfigReplacementInstalledHookForTest,
 } from "../src/config-file.js";
 import { isDeniedPath } from "../src/paths.js";
@@ -386,6 +388,43 @@ test("migration cleanup preserves a config path replaced after validation", asyn
 			),
 			false,
 		);
+		assert.deepEqual(readFileSync(configPath), replacement);
+	});
+});
+
+test("migration cleanup keeps concurrent readers from installing legacy settings", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const configPath = localConfigPath();
+		const legacyPath = legacyLocalConfigPath();
+		const replacementPath = path.join(agentDir, "replacement.json");
+		const original = Buffer.from(JSON.stringify({ original: true }));
+		const replacement = Buffer.from(JSON.stringify({ replacement: true }));
+		writeFileSync(configPath, original);
+		const originalStat = statSync(configPath);
+		writeFileSync(legacyPath, JSON.stringify(requiredConfig()));
+		writeFileSync(replacementPath, replacement);
+		renameSync(replacementPath, configPath);
+
+		let concurrentRead: Promise<Record<string, unknown> | undefined> | undefined;
+		await withConfigQuarantinedHookForTest(
+			async () => {
+				concurrentRead = readLocalConfigObject();
+				await delay(25);
+			},
+			async () => {
+				assert.equal(
+					await quarantineAndRemoveConfigIfMatches(
+						configPath,
+						{ dev: originalStat.dev, ino: originalStat.ino },
+						original,
+					),
+					false,
+				);
+			},
+		);
+
+		assert.deepEqual(await concurrentRead, { replacement: true });
 		assert.deepEqual(readFileSync(configPath), replacement);
 	});
 });

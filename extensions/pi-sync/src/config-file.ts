@@ -1,17 +1,45 @@
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import {
+	constants as fsConstants,
+	mkdir,
+	mkdirSync,
+	realpath,
+	realpathSync,
+	rmdir,
+	rmdirSync,
+	stat,
+	statSync,
+	utimes,
+	utimesSync,
+} from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import lockfile from "proper-lockfile";
 
 const CONFIG_FILE_NAME = "pi-sync.json";
 const LEGACY_CONFIG_FILE_NAME = "pi-sync.local.json";
 const configMigrationNotices = new Map<string, string>();
 const legacyPresenceNoticed = new Set<string>();
+const CONFIG_LOCK_STALE_MS = 30_000;
+const CONFIG_LOCK_UPDATE_MS = 10_000;
+const LOCKFILE_FS_ADAPTER = {
+	mkdir,
+	mkdirSync,
+	realpath,
+	realpathSync,
+	rmdir,
+	rmdirSync,
+	stat,
+	statSync,
+	utimes,
+	utimesSync,
+};
 
 type LinkFile = (source: string, destination: string) => Promise<void>;
 let linkConfigFile: LinkFile = (source, destination) => fs.link(source, destination);
 let afterReplacementInstalledHook: () => Promise<void> = async () => undefined;
+let afterConfigQuarantinedHook: () => Promise<void> = async () => undefined;
 
 export type FileIdentity = { dev: number; ino: number };
 
@@ -41,6 +69,19 @@ export async function withConfigReplacementInstalledHookForTest<T>(
 	}
 }
 
+export async function withConfigQuarantinedHookForTest<T>(
+	hook: () => Promise<void>,
+	run: () => Promise<T>,
+): Promise<T> {
+	const previous = afterConfigQuarantinedHook;
+	afterConfigQuarantinedHook = hook;
+	try {
+		return await run();
+	} finally {
+		afterConfigQuarantinedHook = previous;
+	}
+}
+
 type ConfigSnapshot = {
 	bytes: Buffer;
 	identity: FileIdentity;
@@ -58,10 +99,12 @@ export function legacyLocalConfigPath() {
 }
 
 export async function activeLocalConfigPath() {
-	const canonicalPath = localConfigPath();
-	if (await pathExists(canonicalPath)) return canonicalPath;
-	const legacyPath = legacyLocalConfigPath();
-	return (await pathExists(legacyPath)) ? legacyPath : canonicalPath;
+	return withLocalConfigFileLock(async () => {
+		const canonicalPath = localConfigPath();
+		if (await pathExists(canonicalPath)) return canonicalPath;
+		const legacyPath = legacyLocalConfigPath();
+		return (await pathExists(legacyPath)) ? legacyPath : canonicalPath;
+	});
 }
 
 export function consumeLocalConfigMigrationNotice() {
@@ -74,12 +117,21 @@ export function consumeLocalConfigMigrationNotice() {
 export async function readMigratingLocalConfigDocument(
 	validateForMigration: (settings: Record<string, unknown>) => void,
 ): Promise<LocalConfigDocument | undefined> {
-	const configPath = await prepareLocalConfigPath(validateForMigration);
-	const snapshot = await readConfigSnapshotIfExists(configPath);
-	return snapshot ? { path: configPath, ...snapshot } : undefined;
+	return withLocalConfigFileLock(async () => {
+		const configPath = await prepareLocalConfigPath(validateForMigration);
+		const snapshot = await readConfigSnapshotIfExists(configPath);
+		return snapshot ? { path: configPath, ...snapshot } : undefined;
+	});
 }
 
-export async function replaceLocalConfigDocument(
+export function replaceLocalConfigDocument(
+	document: LocalConfigDocument,
+	value: Record<string, unknown>,
+) {
+	return withLocalConfigFileLock(() => replaceLocalConfigDocumentUnlocked(document, value));
+}
+
+async function replaceLocalConfigDocumentUnlocked(
 	document: LocalConfigDocument,
 	value: Record<string, unknown>,
 ) {
@@ -97,7 +149,7 @@ export async function replaceLocalConfigDocument(
 			throw error;
 		}
 		if (!(await configDocumentStillMatches(document))) {
-			await quarantineAndRemoveConfigIfMatches(canonicalPath, installed, nextBytes);
+			await quarantineAndRemoveConfigIfMatchesUnlocked(canonicalPath, installed, nextBytes);
 			throw settingsChangedError();
 		}
 		return;
@@ -116,7 +168,7 @@ export async function replaceLocalConfigDocument(
 	}
 	await afterReplacementInstalledHook();
 	if (!(await fileIdentityAndContentsMatch(quarantinePath, document.identity, document.bytes))) {
-		await quarantineAndRemoveConfigIfMatches(canonicalPath, installed, nextBytes);
+		await quarantineAndRemoveConfigIfMatchesUnlocked(canonicalPath, installed, nextBytes);
 		await restoreQuarantinedConfig(canonicalPath, quarantinePath);
 		throw settingsChangedError();
 	}
@@ -166,7 +218,7 @@ async function prepareLocalConfigPath(
 	}
 
 	if (!(await configSnapshotStillMatches(legacyPath, legacy))) {
-		const removed = await quarantineAndRemoveConfigIfMatches(
+		const removed = await quarantineAndRemoveConfigIfMatchesUnlocked(
 			canonicalPath,
 			installedIdentity,
 			legacy.bytes,
@@ -291,7 +343,7 @@ async function installPrivateConfigExclusively(
 			if (process.platform !== "win32") await fs.chmod(filePath, 0o600);
 			await syncParentDirectory(filePath).catch(() => undefined);
 		} catch (error) {
-			await quarantineAndRemoveConfigIfMatches(
+			await quarantineAndRemoveConfigIfMatchesUnlocked(
 				filePath,
 				{ dev: installed.dev, ino: installed.ino },
 				bytes,
@@ -345,7 +397,17 @@ async function configSnapshotStillMatches(filePath: string, snapshot: ConfigSnap
 	return fileIdentityAndContentsMatch(filePath, snapshot.identity, snapshot.bytes);
 }
 
-export async function quarantineAndRemoveConfigIfMatches(
+export function quarantineAndRemoveConfigIfMatches(
+	filePath: string,
+	identity: FileIdentity,
+	expectedBytes: Buffer,
+) {
+	return withLocalConfigFileLock(() =>
+		quarantineAndRemoveConfigIfMatchesUnlocked(filePath, identity, expectedBytes),
+	);
+}
+
+async function quarantineAndRemoveConfigIfMatchesUnlocked(
 	filePath: string,
 	identity: FileIdentity,
 	expectedBytes: Buffer,
@@ -359,6 +421,7 @@ export async function quarantineAndRemoveConfigIfMatches(
 	} catch {
 		return false;
 	}
+	await afterConfigQuarantinedHook();
 	try {
 		await syncParentDirectory(filePath);
 	} catch {
@@ -429,6 +492,30 @@ async function restoreQuarantinedConfig(filePath: string, quarantinePath: string
 		await syncParentDirectory(filePath);
 	} catch {
 		// Preserve the quarantine rather than risk deleting settings that changed concurrently.
+	}
+}
+
+export async function withLocalConfigFileLock<T>(run: () => Promise<T>): Promise<T> {
+	const configPath = localConfigPath();
+	await fs.mkdir(path.dirname(configPath), { recursive: true });
+	let compromisedError: Error | undefined;
+	const release = await lockfile.lock(configPath, {
+		fs: LOCKFILE_FS_ADAPTER,
+		lockfilePath: `${configPath}.mutation-lock`,
+		realpath: false,
+		stale: CONFIG_LOCK_STALE_MS,
+		update: CONFIG_LOCK_UPDATE_MS,
+		retries: { retries: 100, factor: 1.2, minTimeout: 10, maxTimeout: 100 },
+		onCompromised: (error) => {
+			compromisedError = error;
+		},
+	});
+	try {
+		const result = await run();
+		if (compromisedError) throw compromisedError;
+		return result;
+	} finally {
+		await release();
 	}
 }
 
