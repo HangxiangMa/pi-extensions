@@ -119,7 +119,7 @@ export class BtwTranscriptPager implements Component {
 		}
 		if (this.canPromote && matchesKey(data, Key.ctrl("r"))) {
 			this.finished = true;
-			this.onAction({ kind: "promote", questionDraft: this.editor.getText() });
+			this.onAction({ kind: "promote", questionDraft: this.editor.getExpandedText() });
 			return;
 		}
 		if (matchesKey(data, Key.pageUp)) {
@@ -153,11 +153,20 @@ export class BtwTranscriptPager implements Component {
 		const fullBase = this.canPromote
 			? "btw • Enter send • Ctrl+R bring to main • Ctrl+C exit"
 			: "btw • Enter send • Ctrl+C exit";
-		const compactBase = "btw • Enter • Ctrl+C";
-		let hints = visibleWidth(fullBase) <= width ? fullBase : compactBase;
+		const fallbackBase = "btw • Enter • Ctrl+C";
+		const compactBase = this.canPromote ? "btw • Enter • Ctrl+R • Ctrl+C" : fallbackBase;
+		let hints =
+			visibleWidth(fullBase) <= width
+				? fullBase
+				: visibleWidth(compactBase) <= width
+					? compactBase
+					: fallbackBase;
 		if (scrollable) {
 			const history = ` • ${this.scrollOffset > 0 ? "↑ older" : "↓ newer"} • PgUp/PgDn history`;
 			const compactHistory = " • PgUp/PgDn";
+			const compactScrollable = this.canPromote
+				? "Enter • Ctrl+R • Ctrl+C • PgUp/PgDn"
+				: `${fallbackBase}${compactHistory}`;
 			if (visibleWidth(`${hints}${history}`) <= width) {
 				hints += history;
 			} else if (visibleWidth(`${compactBase}${history}`) <= width) {
@@ -166,6 +175,8 @@ export class BtwTranscriptPager implements Component {
 				hints += compactHistory;
 			} else if (visibleWidth(`${compactBase}${compactHistory}`) <= width) {
 				hints = `${compactBase}${compactHistory}`;
+			} else if (visibleWidth(compactScrollable) <= width) {
+				hints = compactScrollable;
 			}
 		}
 		return truncateToWidth(this.theme.fg("muted", hints), width);

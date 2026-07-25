@@ -17,6 +17,7 @@ import {
 	buildQuickHandoffSegments,
 	formatBtwHandoff,
 	segmentsFromLineRange,
+	segmentsFromTextRange,
 } from "../src/handoff.js";
 import {
 	buildSideThreadMessages,
@@ -623,12 +624,58 @@ test("transcript offers opt-in promotion only after a successful answer", () => 
 		(action) => actions.push(action),
 	);
 	assert.match(answered.render(80).join("\n"), /Ctrl\+R bring to main/);
+	assert.match(answered.render(40).join("\n"), /Ctrl\+R/);
+	assert.match(answered.render(29).join("\n"), /Ctrl\+R/);
 	answered.handleInput("\u0012");
 
 	assert.deepEqual(actions, [{ kind: "promote", questionDraft: "" }]);
 });
 
-test("text range selector anchors with Space, extends, confirms, and stays width-safe", () => {
+test("promotion preserves expanded large-paste content in the composer draft", () => {
+	initTheme("dark");
+	const actions: unknown[] = [];
+	const tui = { terminal: { rows: 24 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const pager = new BtwTranscriptPager(
+		tui as never,
+		theme as never,
+		[{ question: "Q1", answer: "A1", kind: "answered", response: response("A1") }],
+		(action) => actions.push(action),
+	);
+	const pasted = "large paste ".repeat(100);
+	pager.handleInput(`\u001b[200~${pasted}\u001b[201~`);
+	pager.handleInput("\u0012");
+
+	assert.deepEqual(actions, [{ kind: "promote", questionDraft: pasted }]);
+});
+
+test("character ranges preserve exact text and role boundaries in either direction", () => {
+	const lines = buildBtwSelectionLines([
+		{ question: "abc", answer: "de\nfgh", kind: "answered", response: response("de\nfgh") },
+	]);
+	const expected = [
+		{ role: "user" as const, text: "bc" },
+		{ role: "assistant" as const, text: "de" },
+	];
+
+	assert.deepEqual(
+		segmentsFromTextRange(lines, { line: 0, column: 1 }, { line: 1, column: 2 }),
+		expected,
+	);
+	assert.deepEqual(
+		segmentsFromTextRange(lines, { line: 1, column: 2 }, { line: 0, column: 1 }),
+		expected,
+	);
+});
+
+test("text range selector moves like an editor and extends character selection with Shift+Arrows", () => {
 	const actions: unknown[] = [];
 	const tui = { terminal: { rows: 10 }, requestRender() {} };
 	const theme = {
@@ -646,38 +693,61 @@ test("text range selector anchors with Space, extends, confirms, and stays width
 		tui as never,
 		theme as never,
 		keybindings({
+			"tui.select.up": "k",
 			"tui.select.down": "j",
 			"tui.select.confirm": "y",
 		}) as never,
-		[
-			{
-				question: "question one\nquestion two",
-				answer: "answer one\nanswer two",
-				kind: "answered",
-				response: response("answer one\nanswer two"),
-			},
-		],
+		[{ question: "abc", answer: "de", kind: "answered", response: response("de") }],
 		(action) => actions.push(action),
 	);
 
 	selector.handleInput("j");
-	selector.handleInput(" ");
-	selector.handleInput("j");
-	selector.handleInput("j");
+	selector.handleInput("k");
+	selector.handleInput("\u001b[C");
+	selector.handleInput("\u001b[1;2C");
+	selector.handleInput("\u001b[1;2C");
+	selector.handleInput("\u001b[1;2B");
 	const narrow = selector.render(24);
 	assert.ok(narrow.every((line) => visibleWidth(line) <= 24));
-	assert.match(selector.render(80).join("\n"), /Space anchor.*navigate\/extend.*confirm.*back/);
+	assert.match(selector.render(80).join("\n"), /Shift\+Arrows select.*Arrows move.*confirm.*back/);
 	selector.handleInput("y");
 
 	assert.deepEqual(actions, [
 		{
 			kind: "confirm",
 			segments: [
-				{ role: "user", text: "question two" },
-				{ role: "assistant", text: "answer one\nanswer two" },
+				{ role: "user", text: "bc" },
+				{ role: "assistant", text: "de" },
 			],
 		},
 	]);
+});
+
+test("text range selector keeps a horizontally moved character cursor visible", () => {
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const selector = new BtwTextRangeSelector(
+		tui as never,
+		theme as never,
+		keybindings() as never,
+		[{ question: "0123456789ABCDEFGHIJ", answer: "A", kind: "answered", response: response("A") }],
+		() => undefined,
+	);
+	for (let index = 0; index < 18; index += 1) selector.handleInput("\u001b[C");
+	const rendered = selector.render(24);
+
+	assert.ok(rendered.every((line) => visibleWidth(line) <= 24));
+	assert.match(rendered.join("\n"), /….*│I/);
 });
 
 test("text range selector distinguishes back from closing the side thread", () => {
@@ -894,7 +964,9 @@ test("scrollable transcript reveals history controls only when they are useful",
 
 	const rendered = composer.render(80).join("\n");
 	assert.match(rendered, /↑ older.*PgUp\/PgDn history/);
-	assert.match(composer.render(40).join("\n"), /PgUp\/PgDn/);
+	const compact = composer.render(40).join("\n");
+	assert.match(compact, /Ctrl\+R/);
+	assert.match(compact, /PgUp\/PgDn/);
 });
 
 test("transcript honors an explicit top start on its first render", () => {

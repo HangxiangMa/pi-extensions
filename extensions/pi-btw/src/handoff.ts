@@ -1,5 +1,12 @@
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import { type Component, Key, matchesKey, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	Key,
+	matchesKey,
+	type TUI,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { SideThreadTurn } from "./side-thread.js";
 
 const RESERVED_APP_ROWS = 3;
@@ -13,6 +20,11 @@ export interface BtwHandoffSegment {
 export interface BtwSelectionLine {
 	role: BtwHandoffSegment["role"];
 	text: string;
+}
+
+export interface BtwTextPosition {
+	line: number;
+	column: number;
 }
 
 export type BtwQuickHandoffScope =
@@ -77,6 +89,34 @@ export function segmentsFromLineRange(
 		} else {
 			segments.push({ role: line.role, text: line.text });
 		}
+	}
+	return segments;
+}
+
+export function segmentsFromTextRange(
+	lines: readonly BtwSelectionLine[],
+	anchor: BtwTextPosition,
+	cursor: BtwTextPosition,
+): BtwHandoffSegment[] {
+	if (lines.length === 0) return [];
+	const first = clampTextPosition(lines, anchor);
+	const second = clampTextPosition(lines, cursor);
+	const [start, end] = compareTextPositions(first, second) <= 0 ? [first, second] : [second, first];
+	if (compareTextPositions(start, end) === 0) return [];
+
+	const segments: BtwHandoffSegment[] = [];
+	for (let lineIndex = start.line; lineIndex <= end.line; lineIndex += 1) {
+		const line = lines[lineIndex];
+		if (!line) continue;
+		const characters = [...line.text];
+		const from = lineIndex === start.line ? start.column : 0;
+		const to = lineIndex === end.line ? end.column : characters.length;
+		const text = characters.slice(from, to).join("");
+		const crossesSameRoleLine = lineIndex < end.line && lines[lineIndex + 1]?.role === line.role;
+		if (!text && !crossesSameRoleLine) continue;
+		const previous = segments.at(-1);
+		if (previous?.role === line.role) previous.text += `\n${text}`;
+		else segments.push({ role: line.role, text });
 	}
 	return segments;
 }
@@ -199,9 +239,12 @@ export class BtwMenuSelector implements Component {
 
 export class BtwTextRangeSelector implements Component {
 	private readonly lines: BtwSelectionLine[];
-	private cursor = 0;
-	private anchor: number | undefined;
+	private cursor: BtwTextPosition = { line: 0, column: 0 };
+	private anchor: BtwTextPosition | undefined;
+	private preferredColumn = 0;
 	private scrollOffset = 0;
+	private horizontalOffset = 0;
+	private warning: string | undefined;
 	private finished = false;
 
 	constructor(
@@ -219,24 +262,26 @@ export class BtwTextRangeSelector implements Component {
 		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS);
 		const viewportHeight = Math.max(0, availableRows - SELECTOR_CHROME_ROWS);
 		this.keepCursorVisible(viewportHeight);
+		const textWidth = Math.max(1, safeWidth - visibleWidth("> Assistant │ "));
+		this.keepCursorHorizontallyVisible(Math.max(1, textWidth - 2));
 		const range = this.getSelectionRange();
 		const visible = this.lines.slice(this.scrollOffset, this.scrollOffset + viewportHeight);
 		const rows = visible.map((line, visibleIndex) => {
-			const index = this.scrollOffset + visibleIndex;
-			const cursor = index === this.cursor ? ">" : " ";
+			const lineIndex = this.scrollOffset + visibleIndex;
 			const role = line.role === "user" ? "User" : "Assistant";
-			const raw = `${cursor} ${role.padEnd(9)} │ ${escapeTerminalControls(line.text)}`;
-			const styled =
-				index >= range.start && index <= range.end
-					? this.theme.bg("selectedBg", this.theme.fg("text", raw))
-					: index === this.cursor
-						? this.theme.fg("accent", raw)
-						: raw;
-			return truncateToWidth(styled, safeWidth, "");
+			const prefix = `${lineIndex === this.cursor.line ? ">" : " "} ${role.padEnd(9)} │ `;
+			const text = this.renderTextLine(line, lineIndex, range);
+			return truncateToWidth(
+				lineIndex === this.cursor.line ? this.theme.fg("accent", prefix) + text : prefix + text,
+				safeWidth,
+				"",
+			);
 		});
-		const selected = segmentsFromLineRange(this.lines, this.anchor ?? this.cursor, this.cursor);
+		const selected = this.getSelectedSegments();
 		const bytes = Buffer.byteLength(selected.map((segment) => segment.text).join("\n"), "utf8");
-		const footer = `~${Math.max(1, Math.ceil(bytes / 4))} tokens • Space anchor • navigate/extend • confirm • back • Ctrl+C close`;
+		const footer = this.warning
+			? `${this.warning} • Shift+Arrows select • back • Ctrl+C close`
+			: `~${Math.ceil(bytes / 4)} tokens • Shift+Arrows select • Arrows move • confirm • back • Ctrl+C close`;
 		return fitRows(
 			[
 				truncateToWidth(
@@ -245,7 +290,7 @@ export class BtwTextRangeSelector implements Component {
 					"",
 				),
 				...rows,
-				truncateToWidth(this.theme.fg("muted", footer), safeWidth, ""),
+				truncateToWidth(this.theme.fg(this.warning ? "warning" : "muted", footer), safeWidth, ""),
 			],
 			availableRows,
 		);
@@ -261,51 +306,167 @@ export class BtwTextRangeSelector implements Component {
 			this.finish({ kind: "back" });
 			return;
 		}
-		if (data === " ") {
-			this.anchor = this.anchor === undefined ? this.cursor : undefined;
-			this.tui.requestRender();
+		if (matchesKey(data, Key.shift("left"))) {
+			this.moveHorizontal(-1, true);
+			return;
+		}
+		if (matchesKey(data, Key.shift("right"))) {
+			this.moveHorizontal(1, true);
+			return;
+		}
+		if (matchesKey(data, Key.shift("up"))) {
+			this.moveVertical(-1, true);
+			return;
+		}
+		if (matchesKey(data, Key.shift("down"))) {
+			this.moveVertical(1, true);
+			return;
+		}
+		if (matchesKey(data, Key.left)) {
+			this.moveHorizontal(-1, false);
+			return;
+		}
+		if (matchesKey(data, Key.right)) {
+			this.moveHorizontal(1, false);
 			return;
 		}
 		if (this.keybindings.matches(data, "tui.select.up")) {
-			this.cursor = Math.max(0, this.cursor - 1);
-			this.tui.requestRender();
+			this.moveVertical(-1, false);
 			return;
 		}
 		if (this.keybindings.matches(data, "tui.select.down")) {
-			this.cursor = Math.min(Math.max(0, this.lines.length - 1), this.cursor + 1);
-			this.tui.requestRender();
+			this.moveVertical(1, false);
 			return;
 		}
 		if (this.keybindings.matches(data, "tui.select.pageUp")) {
-			this.cursor = Math.max(0, this.cursor - 10);
-			this.tui.requestRender();
+			this.moveVertical(-10, false);
 			return;
 		}
 		if (this.keybindings.matches(data, "tui.select.pageDown")) {
-			this.cursor = Math.min(Math.max(0, this.lines.length - 1), this.cursor + 10);
-			this.tui.requestRender();
+			this.moveVertical(10, false);
 			return;
 		}
 		if (this.keybindings.matches(data, "tui.select.confirm") && this.lines.length > 0) {
-			this.finish({
-				kind: "confirm",
-				segments: segmentsFromLineRange(this.lines, this.anchor ?? this.cursor, this.cursor),
-			});
+			const segments = this.getSelectedSegments();
+			if (segments.length === 0) {
+				this.warning = "Select text first";
+				this.tui.requestRender();
+				return;
+			}
+			this.finish({ kind: "confirm", segments });
 		}
 	}
 
 	invalidate(): void {}
 
-	private getSelectionRange(): { start: number; end: number } {
-		const anchor = this.anchor ?? this.cursor;
-		return { start: Math.min(anchor, this.cursor), end: Math.max(anchor, this.cursor) };
+	private renderTextLine(
+		line: BtwSelectionLine,
+		lineIndex: number,
+		range: { start: BtwTextPosition; end: BtwTextPosition } | undefined,
+	): string {
+		const characters = [...line.text];
+		let rendered = this.horizontalOffset > 0 ? this.theme.fg("muted", "…") : "";
+		let buffer = "";
+		let bufferSelected = false;
+		const flush = () => {
+			if (!buffer) return;
+			rendered += bufferSelected
+				? this.theme.bg("selectedBg", this.theme.fg("text", buffer))
+				: buffer;
+			buffer = "";
+		};
+		for (let column = this.horizontalOffset; column <= characters.length; column += 1) {
+			if (lineIndex === this.cursor.line && column === this.cursor.column) {
+				flush();
+				rendered += this.theme.fg("accent", "│");
+			}
+			const character = characters[column];
+			if (character === undefined) continue;
+			const selected = range ? positionFallsInside(lineIndex, column, range) : false;
+			if (buffer && selected !== bufferSelected) flush();
+			bufferSelected = selected;
+			buffer += escapeTerminalControls(character);
+		}
+		flush();
+		return rendered;
+	}
+
+	private getSelectionRange(): { start: BtwTextPosition; end: BtwTextPosition } | undefined {
+		if (!this.anchor || compareTextPositions(this.anchor, this.cursor) === 0) return undefined;
+		return compareTextPositions(this.anchor, this.cursor) < 0
+			? { start: this.anchor, end: this.cursor }
+			: { start: this.cursor, end: this.anchor };
+	}
+
+	private getSelectedSegments(): BtwHandoffSegment[] {
+		return this.anchor ? segmentsFromTextRange(this.lines, this.anchor, this.cursor) : [];
+	}
+
+	private moveHorizontal(delta: -1 | 1, extend: boolean): void {
+		if (this.lines.length === 0) return;
+		if (!extend && this.anchor) {
+			const range = this.getSelectionRange();
+			if (range) this.cursor = delta < 0 ? range.start : range.end;
+			this.anchor = undefined;
+			this.preferredColumn = this.cursor.column;
+			this.afterMove();
+			return;
+		}
+		this.beginOrClearSelection(extend);
+		const line = this.lines[this.cursor.line];
+		const length = line ? [...line.text].length : 0;
+		if (delta < 0) {
+			if (this.cursor.column > 0) this.cursor = { ...this.cursor, column: this.cursor.column - 1 };
+			else if (this.cursor.line > 0) {
+				const previousLine = this.lines[this.cursor.line - 1];
+				this.cursor = {
+					line: this.cursor.line - 1,
+					column: previousLine ? [...previousLine.text].length : 0,
+				};
+			}
+		} else if (this.cursor.column < length) {
+			this.cursor = { ...this.cursor, column: this.cursor.column + 1 };
+		} else if (this.cursor.line < this.lines.length - 1) {
+			this.cursor = { line: this.cursor.line + 1, column: 0 };
+		}
+		this.preferredColumn = this.cursor.column;
+		this.afterMove();
+	}
+
+	private moveVertical(delta: number, extend: boolean): void {
+		if (this.lines.length === 0) return;
+		this.beginOrClearSelection(extend);
+		const line = Math.max(0, Math.min(this.lines.length - 1, this.cursor.line + delta));
+		const target = this.lines[line];
+		this.cursor = {
+			line,
+			column: Math.min(this.preferredColumn, target ? [...target.text].length : 0),
+		};
+		this.afterMove();
+	}
+
+	private beginOrClearSelection(extend: boolean): void {
+		if (extend && !this.anchor) this.anchor = { ...this.cursor };
+		if (!extend) this.anchor = undefined;
+	}
+
+	private afterMove(): void {
+		this.warning = undefined;
+		this.tui.requestRender();
 	}
 
 	private keepCursorVisible(height: number): void {
 		if (height <= 0) return;
-		if (this.cursor < this.scrollOffset) this.scrollOffset = this.cursor;
-		if (this.cursor >= this.scrollOffset + height) {
-			this.scrollOffset = this.cursor - height + 1;
+		if (this.cursor.line < this.scrollOffset) this.scrollOffset = this.cursor.line;
+		if (this.cursor.line >= this.scrollOffset + height) {
+			this.scrollOffset = this.cursor.line - height + 1;
+		}
+	}
+
+	private keepCursorHorizontallyVisible(width: number): void {
+		if (this.cursor.column < this.horizontalOffset) this.horizontalOffset = this.cursor.column;
+		if (this.cursor.column >= this.horizontalOffset + width) {
+			this.horizontalOffset = this.cursor.column - width + 1;
 		}
 	}
 
@@ -314,6 +475,31 @@ export class BtwTextRangeSelector implements Component {
 		this.finished = true;
 		this.onAction(action);
 	}
+}
+
+function clampTextPosition(
+	lines: readonly BtwSelectionLine[],
+	position: BtwTextPosition,
+): BtwTextPosition {
+	const line = Math.max(0, Math.min(lines.length - 1, position.line));
+	const text = lines[line]?.text ?? "";
+	return { line, column: Math.max(0, Math.min([...text].length, position.column)) };
+}
+
+function compareTextPositions(first: BtwTextPosition, second: BtwTextPosition): number {
+	return first.line === second.line ? first.column - second.column : first.line - second.line;
+}
+
+function positionFallsInside(
+	line: number,
+	column: number,
+	range: { start: BtwTextPosition; end: BtwTextPosition },
+): boolean {
+	const position = { line, column };
+	return (
+		compareTextPositions(position, range.start) >= 0 &&
+		compareTextPositions(position, range.end) < 0
+	);
 }
 
 function fitRows(rows: string[], availableRows: number): string[] {
