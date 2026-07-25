@@ -8,7 +8,7 @@ import {
 	DEFAULT_MAX_OUTPUT_BYTES,
 	DEFAULT_MAX_STDERR_BYTES,
 } from "../src/limits.js";
-import { renderSubagentResult } from "../src/render.js";
+import { renderSubagentCall, renderSubagentResult } from "../src/render.js";
 import {
 	buildFanInContext,
 	formatResultFailure,
@@ -17,6 +17,34 @@ import {
 	type SubagentDetails,
 	terminateProcess,
 } from "../src/runner.js";
+
+test("renderSubagentCall handles partial streaming arguments", () => {
+	const identityTheme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+	};
+	const render = (args: unknown) =>
+		renderSubagentCall(args as never, identityTheme as never)
+			.render(120)
+			.join("\n");
+
+	assert.match(
+		render({ tasks: [{ agent: "proof-auditor" }] }),
+		/parallel \(1 tasks\).*proof-auditor \.\.\./s,
+	);
+	assert.match(
+		render({ chain: [{ agent: "calculation-checker" }] }),
+		/chain \(1 steps\).*calculation-checker \.\.\./s,
+	);
+	assert.match(
+		render({
+			tasks: [{ agent: "proof-auditor", task: "Review the proof" }],
+			aggregator: { agent: "reviewer" },
+		}),
+		/fan-in → reviewer \.\.\./,
+	);
+	assert.match(render({ tasks: [{ task: "Review the proof" }] }), /\.\.\. Review the proof/);
+});
 
 test("runSingleAgent normalizes invalid cwd without spawning or throwing", async () => {
 	const result = await runSingleAgent(
