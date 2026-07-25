@@ -100,8 +100,14 @@ Escape exits the main menu. Secondary menus provide Back; dirty synced-content d
 The private user settings file is:
 
 ```text
-${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-sync.local.json
+${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-sync.json
 ```
+
+On first read, an existing `pi-sync.local.json` is migrated byte-for-byte to `pi-sync.json`
+with private POSIX `0600` permissions. The private legacy file is retained as a recovery copy and may
+be deleted after verifying the new file. If both files exist, `pi-sync.json` takes precedence and the
+legacy file remains untouched. Malformed, invalid, symlinked, changed, or otherwise unsafe legacy
+files are never overwritten automatically.
 
 A version 2 example:
 
@@ -208,7 +214,7 @@ Environment-overridden fields are read-only in interactive settings. Cloudflare 
 
 ### Legacy flat settings
 
-Existing flat `pi-sync.local.json` files continue to work unchanged as a synthetic `default` target/profile. The old flat `profile` remains the remote namespace.
+Existing flat settings continue to work unchanged as a synthetic `default` target/profile, including settings migrated from the legacy `pi-sync.local.json` filename. The old flat `profile` remains the remote namespace.
 
 Adding a second target offers an explicit migration preview. On confirmation pi-sync:
 
@@ -292,7 +298,7 @@ Sessions can contain prompts, model output, tool results, file paths, images, an
 
 ## 🛡️ Safety notes
 
-- Credentials stay local and are never included in snapshots.
+- Credentials stay local; `pi-sync.json` and the legacy `pi-sync.local.json` are always excluded from snapshots.
 - Push refuses common secret patterns in locally managed files.
 - Pull/rollback reject unsafe paths, duplicate paths, checksum mismatches, symlink parents, and file/directory replacement hazards before mutation.
 - Unmanaged local/remote files remain preserved.
@@ -320,6 +326,7 @@ extensions/pi-sync/
 │   ├── sync.ts                  # Command and lifecycle orchestration
 │   ├── manager-ui.ts            # Goal-oriented menus and setup/management flows
 │   ├── file-selection.ts        # Transactional synced-content editor
+│   ├── config-file.ts           # Private settings I/O and legacy filename migration
 │   ├── settings-management.ts   # Profiles, targets, migration, and atomic saves
 │   ├── settings-ui.ts           # SettingsList interaction and serialized saves
 │   ├── target-switch.ts         # Post-switch prompt, policy, and target handoff

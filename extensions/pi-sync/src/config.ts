@@ -7,6 +7,13 @@ import {
 	type ExtensionContext,
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
+import {
+	consumeLocalConfigMigrationNotice,
+	legacyLocalConfigPath,
+	localConfigPath,
+	quarantineAndRemoveConfigIfMatches,
+	readMigratingLocalConfig,
+} from "./config-file.js";
 import { safeName } from "./paths.js";
 import { DEFAULT_SYNC_FILES, normalizeExtraFiles, normalizeSyncFiles } from "./sync-policy.js";
 import type {
@@ -24,6 +31,13 @@ const DEFAULT_PROFILE = "default";
 const DEFAULT_PREFIX = "pi-sync";
 const DEFAULT_REGION = "auto";
 export const DEFAULT_TARGET_SWITCH_ACTION: TargetSwitchAction = "ask";
+
+export {
+	consumeLocalConfigMigrationNotice,
+	legacyLocalConfigPath,
+	localConfigPath,
+	quarantineAndRemoveConfigIfMatches,
+};
 
 export const DEPRECATED_PI_SYNC_ENV_NAMES = [
 	"PI_SYNC_ENDPOINT",
@@ -491,10 +505,6 @@ export function stateDir() {
 	return path.join(agentDir(), ".pisync");
 }
 
-export function localConfigPath() {
-	return path.join(agentDir(), "pi-sync.local.json");
-}
-
 export function localConfigTemplate(): Record<string, unknown> {
 	return {
 		version: 2,
@@ -525,21 +535,80 @@ export function localConfigTemplate(): Record<string, unknown> {
 }
 
 export async function readLocalConfigObject(): Promise<Record<string, unknown> | undefined> {
-	const configPath = localConfigPath();
-	try {
-		const stat = await fs.lstat(configPath);
-		if (stat.isSymbolicLink())
-			throw new Error(`Refusing to read symlinked pi-sync config: ${configPath}`);
-		if (!stat.isFile()) throw new Error(`pi-sync config is not a regular file: ${configPath}`);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-		throw error;
+	return readMigratingLocalConfig(validateConfigDocumentForMigration);
+}
+
+function validateConfigDocumentForMigration(settings: Record<string, unknown>) {
+	if (!isV2SettingsObject(settings)) {
+		for (const field of [
+			"endpoint",
+			"bucket",
+			"region",
+			"accessKeyId",
+			"secretAccessKey",
+			"sessionToken",
+			"profile",
+			"prefix",
+		] as const) {
+			asOptionalString(settings[field]);
+		}
+		for (const field of ["autoSync", "syncSessions"] as const) {
+			const value = settings[field];
+			if (value !== undefined && typeof value !== "boolean" && typeof value !== "string") {
+				throw new Error(`Invalid pi-sync settings: ${field} must be a boolean or string.`);
+			}
+		}
+		normalizeSyncFiles(settings.syncFiles);
+		normalizeExtraFiles(settings.extraFiles);
+		return;
 	}
-	const parsed = JSON.parse(await fs.readFile(configPath, "utf8")) as unknown;
-	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-		throw new Error(`pi-sync config must contain a JSON object: ${configPath}`);
+
+	normalizeTargetSwitchAction(settings.targetSwitchAction);
+	const profiles = requireNamedObjectMap(settings.profiles, "profiles");
+	const targets = requireNamedObjectMap(settings.targets, "targets");
+	validateUniqueRemoteTargets(targets);
+	for (const [name, value] of Object.entries(profiles)) {
+		const profile = ownObject(profiles, name);
+		if (!profile || value !== profile) {
+			throw new Error(`Invalid pi-sync settings: storage profile "${name}" must be an object.`);
+		}
+		const kind = asOptionalString(profile.kind);
+		if (kind !== undefined && kind !== "r2" && kind !== "s3-compatible") {
+			throw new Error(
+				`Invalid pi-sync settings: profile "${name}" has unsupported kind "${kind}".`,
+			);
+		}
+		for (const field of [
+			"endpoint",
+			"region",
+			"accessKeyId",
+			"secretAccessKey",
+			"sessionToken",
+		] as const) {
+			asOptionalString(profile[field]);
+		}
 	}
-	return parsed as Record<string, unknown>;
+	for (const [name, value] of Object.entries(targets)) {
+		const target = ownObject(targets, name);
+		if (!target || value !== target) {
+			throw new Error(`Invalid pi-sync settings: target "${name}" must be an object.`);
+		}
+		const profileName = normalizeOptionalString(asOptionalString(target.profile));
+		if (!profileName || !Object.hasOwn(profiles, profileName)) {
+			throw new Error(`Invalid pi-sync settings: target "${name}" references a missing profile.`);
+		}
+		for (const field of ["bucket", "prefix", "namespace"] as const) {
+			asOptionalString(target[field]);
+		}
+		asOptionalBoolean(target.autoSync);
+		asOptionalBoolean(target.syncSessions);
+		normalizeSyncFiles(target.syncFiles);
+		normalizeExtraFiles(target.extraFiles);
+	}
+	const activeTarget = normalizeOptionalString(asOptionalString(settings.activeTarget));
+	if (!activeTarget || !Object.hasOwn(targets, activeTarget)) {
+		throw new Error("Invalid pi-sync settings: activeTarget must reference an existing target.");
+	}
 }
 
 let configUpdateQueue: Promise<void> = Promise.resolve();
