@@ -20,7 +20,10 @@ interface GoalSettingsApplyOptions {
 }
 
 type LimitField = "automaticTurns" | "noProgressTurns";
-type SettingsScreenResult = { kind: "limit"; field: LimitField } | undefined;
+type SettingsScreenResult =
+	| { kind: "limit"; field: LimitField }
+	| { kind: "queue"; enabled: boolean }
+	| undefined;
 
 export async function showGoalSettings(
 	runtime: GoalRuntime,
@@ -36,6 +39,31 @@ export async function showGoalSettings(
 	while (true) {
 		const result = await showSettingsScreen(runtime, ctx, settingsPath, options);
 		if (!result) return;
+		if (result.kind === "queue") {
+			const next = await nextQueueSettings(runtime, ctx, result.enabled);
+			if (!next) return;
+			const wasFrozen = runtime.queueFrozen;
+			try {
+				applyGoalSettings(runtime, next, ctx, {
+					save: (settings) => (options.save ?? saveGoalSettings)(settings, settingsPath),
+				});
+				if (wasFrozen && !runtime.queueFrozen) {
+					try {
+						await options.onQueueUnfrozen?.(ctx);
+					} catch (error) {
+						ctx.ui.notify(
+							`Goal queue enabled, but automatic resume failed: ${formatError(error)}. Reopen /goal to retry.`,
+							"warning",
+						);
+					}
+				}
+				ctx.ui.notify(`Ordered goal queue: ${result.enabled ? "Experimental" : "Off"}.`, "info");
+			} catch (error) {
+				ctx.ui.notify(`pi-goal settings save failed: ${formatError(error)}`, "error");
+			}
+			return;
+		}
+
 		const previous = runtime.settings.continuationLimits[result.field];
 		const raw = await ctx.ui.input(
 			result.field === "automaticTurns" ? "Automatic response limit" : "No-progress run limit",
@@ -190,39 +218,23 @@ async function showSettingsScreen(
 					closeAfterSaves({ kind: "limit", field: id });
 					return;
 				}
-				if (id !== "toolVisibility" && id !== "experimentalGoals") return;
+				if (id === "experimentalGoals") {
+					closeAfterSaves({ kind: "queue", enabled: newValue === "Experimental" });
+					return;
+				}
+				if (id !== "toolVisibility") return;
 				latestRequested.set(id, newValue);
 				const operation = saveQueue.then(async () => {
-					const previousValue =
-						id === "toolVisibility"
-							? visibilityLabel(runtime.settings.toolVisibility)
-							: runtime.settings.experimental.goals
-								? "Experimental"
-								: "Off";
+					const previousValue = visibilityLabel(runtime.settings.toolVisibility);
 					try {
-						const next = await nextToggleSettings(runtime, ctx, id, newValue);
-						if (!next) {
-							if (latestRequested.get(id) === newValue) {
-								settingsList.updateValue(id, previousValue);
-							}
-							tui.requestRender();
-							return;
-						}
-						const wasFrozen = runtime.queueFrozen;
+						const next = {
+							...structuredClone(runtime.settings),
+							toolVisibility: newValue === "Always" ? "always" : "after-first-goal",
+						} satisfies GoalSettings;
 						applyGoalSettings(runtime, next, ctx, {
 							save: (value) => (options.save ?? saveGoalSettings)(value, settingsPath),
 						});
-						if (wasFrozen && !runtime.queueFrozen) {
-							try {
-								await options.onQueueUnfrozen?.(ctx);
-							} catch (error) {
-								ctx.ui.notify(
-									`Goal queue enabled, but automatic resume failed: ${formatError(error)}. Reopen /goal to retry.`,
-									"warning",
-								);
-							}
-						}
-						ctx.ui.notify(`${settingLabel(id)}: ${newValue}.`, "info");
+						ctx.ui.notify(`Goal tools: ${newValue}.`, "info");
 					} catch (error) {
 						if (latestRequested.get(id) === newValue) {
 							settingsList.updateValue(id, previousValue);
@@ -252,19 +264,12 @@ async function showSettingsScreen(
 	});
 }
 
-async function nextToggleSettings(
+async function nextQueueSettings(
 	runtime: GoalRuntime,
 	ctx: ExtensionCommandContext,
-	id: "toolVisibility" | "experimentalGoals",
-	newValue: string,
+	enabled: boolean,
 ) {
-	if (id === "toolVisibility") {
-		return {
-			...structuredClone(runtime.settings),
-			toolVisibility: newValue === "Always" ? "always" : "after-first-goal",
-		} satisfies GoalSettings;
-	}
-	const enabled = newValue === "Experimental";
+	if (runtime.settings.experimental.goals === enabled) return undefined;
 	if (enabled && !runtime.settings.experimental.goals) {
 		const confirmed = await ctx.ui.confirm(
 			"Enable experimental goal queue?",
@@ -277,7 +282,7 @@ async function nextToggleSettings(
 		(runtime.queuedGoals.length > 0 || runtime.pendingQueueAction !== undefined) &&
 		!(await ctx.ui.confirm(
 			"Freeze ordered goal queue?",
-			`Disabling the experiment preserves ${runtime.queuedGoals.length + 1} goal(s) but freezes automatic work until the setting is re-enabled. No goal data will be deleted.`,
+			`Disabling the experiment preserves ${retainedGoalCount(runtime)} goal(s) but freezes automatic work until the setting is re-enabled. No goal data will be deleted.`,
 		))
 	) {
 		return undefined;
@@ -402,8 +407,12 @@ function visibilityLabel(value: GoalSettings["toolVisibility"]) {
 	return value === "always" ? "Always" : "After first goal";
 }
 
-function settingLabel(id: "toolVisibility" | "experimentalGoals") {
-	return id === "toolVisibility" ? "Goal tools" : "Ordered goal queue";
+function retainedGoalCount(runtime: GoalRuntime) {
+	return (
+		(runtime.activeGoal ? 1 : 0) +
+		runtime.queuedGoals.length +
+		(runtime.pendingQueueAction?.kind === "prioritize" ? 1 : 0)
+	);
 }
 
 function safeTerminalText(value: string) {
