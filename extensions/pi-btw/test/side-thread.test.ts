@@ -709,7 +709,7 @@ test("text range selector moves like an editor and extends character selection w
 	selector.handleInput("\u001b[1;2B");
 	const narrow = selector.render(24);
 	assert.ok(narrow.every((line) => visibleWidth(line) <= 24));
-	assert.match(selector.render(80).join("\n"), /Shift\+Arrows select.*Arrows move.*confirm.*back/);
+	assert.match(selector.render(120).join("\n"), /Shift\+Arrows select.*Arrows move.*confirm.*back/);
 	selector.handleInput("y");
 
 	assert.deepEqual(actions, [
@@ -721,6 +721,85 @@ test("text range selector moves like an editor and extends character selection w
 			],
 		},
 	]);
+});
+
+test("text range selector uses Space to select and extend whole raw lines", () => {
+	const actions: unknown[] = [];
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bg(_color: string, text: string) {
+			return `[${text}]`;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const selector = new BtwTextRangeSelector(
+		tui as never,
+		theme as never,
+		keybindings({ "tui.select.down": "j", "tui.select.confirm": "y" }) as never,
+		[
+			{
+				question: "one\ntwo",
+				answer: "three",
+				kind: "answered",
+				response: response("three"),
+			},
+		],
+		(action) => actions.push(action),
+	);
+
+	selector.handleInput(" ");
+	selector.handleInput("j");
+	selector.handleInput("j");
+	assert.match(selector.render(80).join("\n"), /Space clear.*extend lines/);
+	selector.handleInput("y");
+
+	assert.deepEqual(actions, [
+		{
+			kind: "confirm",
+			segments: [
+				{ role: "user", text: "one\ntwo" },
+				{ role: "assistant", text: "three" },
+			],
+		},
+	]);
+});
+
+test("Shift+Arrow switches a Space line selection to character selection", () => {
+	const actions: unknown[] = [];
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const selector = new BtwTextRangeSelector(
+		tui as never,
+		theme as never,
+		keybindings({ "tui.select.confirm": "y" }) as never,
+		[{ question: "one", answer: "three", kind: "answered", response: response("three") }],
+		(action) => actions.push(action),
+	);
+
+	selector.handleInput(" ");
+	selector.handleInput(" ");
+	selector.handleInput("y");
+	assert.deepEqual(actions, []);
+	selector.handleInput(" ");
+	selector.handleInput("\u001b[1;2C");
+	selector.handleInput("y");
+
+	assert.deepEqual(actions, [{ kind: "confirm", segments: [{ role: "user", text: "o" }] }]);
 });
 
 test("text range selector keeps a horizontally moved character cursor visible", () => {

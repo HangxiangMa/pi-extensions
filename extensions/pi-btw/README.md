@@ -67,11 +67,14 @@ invocation. While a response is running, the transcript stays visible above a co
 
 After at least one successful answer, press `Ctrl+R` to bring selected context back to the main
 thread. Choose the latest question and answer, everything from a chosen question onward, an
-exact text range, or the entire side thread. Text-range selection behaves like a text editor:
+exact text range, or the entire side thread. The text-range selector supports both fast line
+selection and editor-style character selection. Press `Space` to select the current raw source
+line, then use `Up`/`Down` to extend by whole lines; press `Space` again to clear it. Alternatively,
 use the arrow keys to move the cursor and `Shift`+arrow keys to extend a character-level
-selection. Pi's configured keys still control vertical navigation, confirmation, and going back
-(`Up`/`Down`, `Enter`, and `Escape` by default). `Ctrl+C` closes the side thread without a
-handoff. Selection follows raw source text rather than terminal-wrapped visual rows.
+selection. Starting a Shift selection replaces any active line selection. Pi's configured keys
+still control vertical navigation, confirmation, and going back (`Up`/`Down`, `Enter`, and
+`Escape` by default). `Ctrl+C` closes the side thread without a handoff. Selection follows raw
+source text rather than terminal-wrapped visual rows.
 
 A handoff closes the side thread and loads a deterministic, editable context block into Pi's
 main editor. It never sends the draft automatically. If another extension populated the main

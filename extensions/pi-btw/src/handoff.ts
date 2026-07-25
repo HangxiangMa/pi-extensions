@@ -241,6 +241,7 @@ export class BtwTextRangeSelector implements Component {
 	private readonly lines: BtwSelectionLine[];
 	private cursor: BtwTextPosition = { line: 0, column: 0 };
 	private anchor: BtwTextPosition | undefined;
+	private lineAnchor: number | undefined;
 	private preferredColumn = 0;
 	private scrollOffset = 0;
 	private horizontalOffset = 0;
@@ -265,12 +266,18 @@ export class BtwTextRangeSelector implements Component {
 		const textWidth = Math.max(1, safeWidth - visibleWidth("> Assistant │ "));
 		this.keepCursorHorizontallyVisible(Math.max(1, textWidth - 2));
 		const range = this.getSelectionRange();
+		const lineRange = this.getLineSelectionRange();
 		const visible = this.lines.slice(this.scrollOffset, this.scrollOffset + viewportHeight);
 		const rows = visible.map((line, visibleIndex) => {
 			const lineIndex = this.scrollOffset + visibleIndex;
 			const role = line.role === "user" ? "User" : "Assistant";
 			const prefix = `${lineIndex === this.cursor.line ? ">" : " "} ${role.padEnd(9)} │ `;
-			const text = this.renderTextLine(line, lineIndex, range);
+			const text = this.renderTextLine(
+				line,
+				lineIndex,
+				range,
+				lineRange ? lineIndex >= lineRange.start && lineIndex <= lineRange.end : false,
+			);
 			return truncateToWidth(
 				lineIndex === this.cursor.line ? this.theme.fg("accent", prefix) + text : prefix + text,
 				safeWidth,
@@ -280,8 +287,10 @@ export class BtwTextRangeSelector implements Component {
 		const selected = this.getSelectedSegments();
 		const bytes = Buffer.byteLength(selected.map((segment) => segment.text).join("\n"), "utf8");
 		const footer = this.warning
-			? `${this.warning} • Shift+Arrows select • back • Ctrl+C close`
-			: `~${Math.ceil(bytes / 4)} tokens • Shift+Arrows select • Arrows move • confirm • back • Ctrl+C close`;
+			? `${this.warning} • Space lines • Shift+Arrows text • back • Ctrl+C close`
+			: this.lineAnchor !== undefined
+				? `~${Math.ceil(bytes / 4)} tokens • Space clear • ↑↓ extend lines • Shift+Arrows text • confirm • back • Ctrl+C close`
+				: `~${Math.ceil(bytes / 4)} tokens • Shift+Arrows select text • Arrows move • Space lines • confirm • back • Ctrl+C close`;
 		return fitRows(
 			[
 				truncateToWidth(
@@ -304,6 +313,12 @@ export class BtwTextRangeSelector implements Component {
 		}
 		if (this.keybindings.matches(data, "tui.select.cancel")) {
 			this.finish({ kind: "back" });
+			return;
+		}
+		if (matchesKey(data, Key.space)) {
+			this.anchor = undefined;
+			this.lineAnchor = this.lineAnchor === undefined ? this.cursor.line : undefined;
+			this.afterMove();
 			return;
 		}
 		if (matchesKey(data, Key.shift("left"))) {
@@ -363,6 +378,7 @@ export class BtwTextRangeSelector implements Component {
 		line: BtwSelectionLine,
 		lineIndex: number,
 		range: { start: BtwTextPosition; end: BtwTextPosition } | undefined,
+		lineSelected: boolean,
 	): string {
 		const characters = [...line.text];
 		let rendered = this.horizontalOffset > 0 ? this.theme.fg("muted", "…") : "";
@@ -382,7 +398,8 @@ export class BtwTextRangeSelector implements Component {
 			}
 			const character = characters[column];
 			if (character === undefined) continue;
-			const selected = range ? positionFallsInside(lineIndex, column, range) : false;
+			const selected =
+				lineSelected || (range ? positionFallsInside(lineIndex, column, range) : false);
 			if (buffer && selected !== bufferSelected) flush();
 			bufferSelected = selected;
 			buffer += escapeTerminalControls(character);
@@ -398,12 +415,25 @@ export class BtwTextRangeSelector implements Component {
 			: { start: this.cursor, end: this.anchor };
 	}
 
+	private getLineSelectionRange(): { start: number; end: number } | undefined {
+		return this.lineAnchor === undefined
+			? undefined
+			: {
+					start: Math.min(this.lineAnchor, this.cursor.line),
+					end: Math.max(this.lineAnchor, this.cursor.line),
+				};
+	}
+
 	private getSelectedSegments(): BtwHandoffSegment[] {
+		if (this.lineAnchor !== undefined) {
+			return segmentsFromLineRange(this.lines, this.lineAnchor, this.cursor.line);
+		}
 		return this.anchor ? segmentsFromTextRange(this.lines, this.anchor, this.cursor) : [];
 	}
 
 	private moveHorizontal(delta: -1 | 1, extend: boolean): void {
 		if (this.lines.length === 0) return;
+		if (!extend) this.lineAnchor = undefined;
 		if (!extend && this.anchor) {
 			const range = this.getSelectionRange();
 			if (range) this.cursor = delta < 0 ? range.start : range.end;
@@ -435,7 +465,7 @@ export class BtwTextRangeSelector implements Component {
 
 	private moveVertical(delta: number, extend: boolean): void {
 		if (this.lines.length === 0) return;
-		this.beginOrClearSelection(extend);
+		if (extend || this.lineAnchor === undefined) this.beginOrClearSelection(extend);
 		const line = Math.max(0, Math.min(this.lines.length - 1, this.cursor.line + delta));
 		const target = this.lines[line];
 		this.cursor = {
@@ -446,6 +476,7 @@ export class BtwTextRangeSelector implements Component {
 	}
 
 	private beginOrClearSelection(extend: boolean): void {
+		if (extend) this.lineAnchor = undefined;
 		if (extend && !this.anchor) this.anchor = { ...this.cursor };
 		if (!extend) this.anchor = undefined;
 	}
