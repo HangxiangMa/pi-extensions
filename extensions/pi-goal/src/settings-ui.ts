@@ -77,9 +77,10 @@ export function applyGoalSettings(
 		options.save?.(next);
 		fileSaved = options.save !== undefined;
 		applyQueueSetting(runtime, ctx);
-		const pausedByLimit =
-			runtime.enforceAutomaticTurnLimit(ctx, false) || runtime.enforceNoProgressLimit(ctx);
-		if (pausedByLimit) abortCurrentTurn(ctx);
+		const activeGoalId = runtime.activeGoal?.id;
+		const abortOwnedRun = activeGoalId !== undefined && runtime.agentRunGoalId === activeGoalId;
+		const pausedByAutomaticLimit = runtime.enforceAutomaticTurnLimit(ctx, abortOwnedRun);
+		if (!pausedByAutomaticLimit) runtime.enforceNoProgressLimit(ctx, abortOwnedRun);
 	} catch (error) {
 		const rollbackErrors: unknown[] = [];
 		try {
@@ -176,6 +177,7 @@ async function showSettingsScreen(
 			Math.min(items.length + 2, 15),
 			getSettingsListTheme(),
 			(id, newValue) => {
+				if (closing) return;
 				if ((id === "automaticTurns" || id === "noProgressTurns") && newValue === "Edit…") {
 					closeAfterSaves({ kind: "limit", field: id });
 					return;
@@ -234,6 +236,7 @@ async function showSettingsScreen(
 			render: (width: number) => container.render(width),
 			invalidate: () => container.invalidate(),
 			handleInput(data: string) {
+				if (closing) return;
 				settingsList.handleInput?.(data);
 				tui.requestRender();
 			},
@@ -296,6 +299,9 @@ function applyToolVisibility(
 		runtime.goalToolsUnlocked = true;
 		runtime.goalToolsHiddenByPolicy.clear();
 		return;
+	}
+	if (ctx.isIdle() !== true) {
+		throw new Error("Wait for Pi to become idle before hiding Goal tools.");
 	}
 	runtime.goalToolsUnlocked = false;
 	runtime.hideGoalToolsIfLocked();

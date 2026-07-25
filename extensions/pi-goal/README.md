@@ -70,7 +70,7 @@ with the complete current defaults:
 }
 ```
 
-Use `/goal` → **Settings…** in the TUI to edit these values interactively, or edit the generated file directly. Interactive changes are serialized, written atomically, preserve unknown fields, and apply to the current runtime. Revealing lazy Goal tools is rejected while Pi is busy so the active tool schema cannot change mid-run; retry after Pi settles. Escape closes the settings screen without reverting changes that were already saved.
+Use `/goal` → **Settings…** in the TUI to edit these values interactively, or edit the generated file directly. Interactive changes are serialized, written atomically, preserve unknown fields, and apply to the current runtime. Tool-visibility changes that would alter the active tool schema are rejected while Pi is busy; retry after Pi settles. Escape closes the settings screen without reverting changes that were already saved.
 
 `toolVisibility` accepts:
 

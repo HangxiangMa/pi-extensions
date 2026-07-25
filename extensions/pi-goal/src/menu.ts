@@ -118,6 +118,7 @@ export async function showGoalManager(
 	while (true) {
 		refreshGoalMenuState(runtime, ctx);
 		const state = buildGoalMenuState(runtime);
+		const displayedGoal = runtime.activeGoal;
 		const selected = await ctx.ui.select(state.title, state.actions);
 		if (!selected || selected === GOAL_MENU_ACTIONS.close) return;
 		switch (selected) {
@@ -128,15 +129,19 @@ export async function showGoalManager(
 				await startFromMenu(commands, ctx, true);
 				return;
 			case GOAL_MENU_ACTIONS.pause:
+				if (!displayedGoal || !requireCurrentMenuGoal(runtime, displayedGoal, ctx)) continue;
 				commands.pauseGoal(ctx);
 				return;
 			case GOAL_MENU_ACTIONS.resume:
+				if (!displayedGoal || !requireCurrentMenuGoal(runtime, displayedGoal, ctx)) continue;
 				await commands.resumeGoal(ctx);
 				return;
 			case GOAL_MENU_ACTIONS.increaseBudget:
+				if (!displayedGoal || !requireCurrentMenuGoal(runtime, displayedGoal, ctx)) continue;
 				await increaseBudget(runtime, commands, ctx);
 				return;
 			case GOAL_MENU_ACTIONS.edit:
+				if (!displayedGoal || !requireCurrentMenuGoal(runtime, displayedGoal, ctx)) continue;
 				await editFromMenu(runtime, commands, ctx);
 				return;
 			case GOAL_MENU_ACTIONS.replace:

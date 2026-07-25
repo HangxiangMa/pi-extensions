@@ -481,13 +481,13 @@ export class GoalRuntime {
 		return this.pauseGoalForSafety(ctx, "continuation_limit", abortTurn);
 	}
 
-	enforceNoProgressLimit(ctx: StatusContext) {
+	enforceNoProgressLimit(ctx: StatusContext, abortTurn = false) {
 		const goal = this.activeGoal;
 		const limit = this.settings.continuationLimits.noProgressTurns;
 		if (goal?.status !== "active" || limit === null || goal.toolFreeRepeatCount < limit) {
 			return false;
 		}
-		return this.pauseGoalForSafety(ctx, "no_progress", false);
+		return this.pauseGoalForSafety(ctx, "no_progress", abortTurn);
 	}
 
 	pauseGoalForSafety(ctx: StatusContext, cause: SafetyPauseCause, abortTurn: boolean) {

@@ -208,6 +208,32 @@ test("revealing lazy Goal tools rejects a busy unrelated run", () => {
 	assert.deepEqual(state.visibility, before);
 });
 
+test("hiding always-visible Goal tools rejects a busy unrelated run", () => {
+	const mock = createMockPi({ activeTools: ["read", "goal_complete", "goal_blocked"] });
+	const state = new GoalRuntime(mock.pi);
+	state.settings = structuredClone(DEFAULT_GOAL_SETTINGS);
+	const before = state.snapshotGoalToolVisibility();
+	const next = {
+		...structuredClone(state.settings),
+		toolVisibility: "after-first-goal" as const,
+	};
+	let saves = 0;
+	const context = createMockContext({ mode: "tui", hasUI: true, isIdle: () => false });
+
+	assert.throws(
+		() =>
+			applyGoalSettings(state, next, context.ctx, {
+				save() {
+					saves++;
+				},
+			}),
+		/wait for Pi to become idle/i,
+	);
+	assert.equal(saves, 0);
+	assert.equal(state.settings.toolVisibility, "always");
+	assert.deepEqual(state.snapshotGoalToolVisibility(), before);
+});
+
 test("lowering the no-progress limit pauses and aborts in-flight Goal work", () => {
 	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
 	const state = new GoalRuntime(mock.pi);
@@ -217,6 +243,7 @@ test("lowering the no-progress limit pauses and aborts in-flight Goal work", () 
 	};
 	state.activeGoal = createGoal("current objective", undefined, 0);
 	state.activeGoal.toolFreeRepeatCount = 3;
+	state.beginAgentRun(state.activeGoal.id, "automatic");
 	let aborts = 0;
 	const context = createMockContext({
 		mode: "tui",
@@ -231,6 +258,35 @@ test("lowering the no-progress limit pauses and aborts in-flight Goal work", () 
 	applyGoalSettings(state, next, context.ctx, { save() {} });
 
 	assert.equal(aborts, 1);
+	assert.equal(state.activeGoal?.status, "paused");
+	assert.equal(state.activeGoal?.safetyPauseCause, "no_progress");
+});
+
+test("lowering a reached limit preserves an unrelated in-flight run", () => {
+	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
+	const state = new GoalRuntime(mock.pi);
+	state.settings = {
+		...structuredClone(DEFAULT_GOAL_SETTINGS),
+		continuationLimits: { automaticTurns: 25, noProgressTurns: 5 },
+	};
+	state.activeGoal = createGoal("current objective", undefined, 0);
+	state.activeGoal.toolFreeRepeatCount = 3;
+	state.beginAgentRun(null, undefined);
+	let aborts = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		abort: () => aborts++,
+	});
+	const next = {
+		...structuredClone(state.settings),
+		continuationLimits: { automaticTurns: 25, noProgressTurns: 3 },
+	};
+
+	applyGoalSettings(state, next, context.ctx, { save() {} });
+
+	assert.equal(aborts, 0);
+	assert.equal(state.agentRunGoalId, null);
 	assert.equal(state.activeGoal?.status, "paused");
 	assert.equal(state.activeGoal?.safetyPauseCause, "no_progress");
 });
@@ -371,6 +427,7 @@ test("settings screen saves changes in place and Escape waits for the save queue
 			initialRender = selector.render().join("\n");
 			selector.handleInput("\r");
 			selector.handleInput("\u001b");
+			selector.handleInput("\r");
 			await new Promise((resolve) => setImmediate(resolve));
 			return selector.result;
 		},

@@ -330,6 +330,43 @@ test("queue confirmations do not mutate a changed active head or queue selection
 	}
 });
 
+test("main-menu pause and resume do not mutate a replacement goal", async () => {
+	for (const scenario of [
+		{ action: GOAL_MENU_ACTIONS.pause, status: "active" as const, method: "pauseGoal" },
+		{ action: GOAL_MENU_ACTIONS.resume, status: "paused" as const, method: "resumeGoal" },
+	]) {
+		const displayed = transitionGoal(
+			createGoal("displayed objective", undefined, 0),
+			scenario.status,
+		);
+		const state = runtime(displayed);
+		const tracked = commands();
+		const selections = [scenario.action, GOAL_MENU_ACTIONS.close];
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			select: async () => {
+				const selected = selections.shift();
+				if (selected === scenario.action) {
+					state.activeGoal = transitionGoal(
+						createGoal("replacement objective", undefined, 0),
+						scenario.status,
+					);
+				}
+				return selected;
+			},
+		});
+
+		await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+
+		assert.equal(
+			tracked.calls.some((call) => call.name === scenario.method),
+			false,
+		);
+		assert.match(context.notifications.at(-1)?.message ?? "", /active goal changed.*reopen/i);
+	}
+});
+
 test("edit dialogs do not mutate a replacement active goal", async () => {
 	const original = createGoal("old objective", undefined, 0);
 	const replacement = createGoal("replacement objective", undefined, 0);
