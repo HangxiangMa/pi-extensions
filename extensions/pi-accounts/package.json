@@ -41,7 +41,7 @@
 	"devDependencies": {
 		"@biomejs/biome": "2.5.3",
 		"@earendil-works/pi-ai": "0.80.10",
-		"@earendil-works/pi-coding-agent": "0.80.10",
+		"@earendil-works/pi-coding-agent": "0.82.0",
 		"@types/proper-lockfile": "^4.1.4",
 		"typescript": "7.0.2"
 	},
