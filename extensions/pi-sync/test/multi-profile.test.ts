@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	symlinkSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -342,9 +352,9 @@ test("switch target asks to pull by default and declining leaves local files unc
 		]);
 		assert.match(calls[2]?.title ?? "", /From: home/);
 		assert.match(calls[2]?.title ?? "", /To: work/);
-		assert.match(calls[2]?.title ?? "", /ask whether to pull/i);
-		assert.match(pullPrompt, /Pull target “work” now\?/);
-		assert.match(pullPrompt, /selected local files/i);
+		assert.match(calls[2]?.title ?? "", /ask whether to review a pull/i);
+		assert.match(pullPrompt, /Review a pull for target “work” now\?/);
+		assert.match(pullPrompt, /exact local writes and deletions/i);
 		assert.equal((await readLocalConfigObject())?.activeTarget, "work");
 		assert.match(notifications.at(-1)?.message ?? "", /Switched to “work”.*not pulled/i);
 	});
@@ -356,6 +366,7 @@ test("accepting the default post-switch prompt starts a pull", async () => {
 		settings.targets.work = { ...settings.targets.home, namespace: "work" };
 		writeSettings(settings);
 		let pullCalls = 0;
+		let pulledTarget: unknown;
 		let promptTitle = "";
 		const { ctx } = createMockContext({
 			hasUI: true,
@@ -366,17 +377,37 @@ test("accepting the default post-switch prompt starts a pull", async () => {
 			},
 		});
 
-		const result = await useSyncTarget(ctx, "work", async () => {
+		const result = await useSyncTarget(ctx, "work", async (...args: unknown[]) => {
 			pullCalls += 1;
+			pulledTarget = args[0];
 		});
 
-		assert.match(promptTitle, /Pull target “work” now\?/);
+		assert.match(promptTitle, /Review a pull for target “work” now\?/);
 		assert.equal(pullCalls, 1);
+		assert.equal(pulledTarget, "work");
 		assert.equal(result.pullAttempted, true);
 	});
 });
 
-test("always-pull target switching skips confirmation and applies remote settings", async () => {
+test("selecting the current target is idempotent even when post-switch pulls are enabled", async () => {
+	await withTempSettings(async () => {
+		const settings = v2Settings();
+		settings.targetSwitchAction = "pull";
+		writeSettings(settings);
+		let pullCalls = 0;
+		const { ctx, notifications } = createMockContext({ hasUI: true, mode: "tui" });
+
+		const result = await useSyncTarget(ctx, "home", async () => {
+			pullCalls += 1;
+		});
+
+		assert.equal(pullCalls, 0);
+		assert.equal(result.pullAttempted, false);
+		assert.match(notifications.at(-1)?.message ?? "", /already current/i);
+	});
+});
+
+test("pull-after-switch starts a reviewed pull and applies remote settings", async () => {
 	await withTempSettings(async (agentDir) => {
 		const settings = v2Settings();
 		settings.targetSwitchAction = "pull";
@@ -405,16 +436,16 @@ test("always-pull target switching skips confirmation and applies remote setting
 			throw new Error(`Unexpected request: ${url.pathname}`);
 		}) as typeof globalThis.fetch;
 		try {
-			const confirmationTitles: string[] = [];
+			const confirmations: Array<{ title: string; message: string }> = [];
 			let reloads = 0;
 			const mock = createMockPi();
 			sync(mock.pi);
 			const { ctx, notifications } = createMockContext({
 				hasUI: true,
 				mode: "tui",
-				confirm: async (title: string) => {
-					confirmationTitles.push(title);
-					return title === "Reload Pi resources now?";
+				confirm: async (title: string, message: string) => {
+					confirmations.push({ title, message });
+					return true;
 				},
 				reload: async () => {
 					reloads += 1;
@@ -423,7 +454,11 @@ test("always-pull target switching skips confirmation and applies remote setting
 
 			await mock.commands.get("sync")?.handler("use work", ctx);
 
-			assert.deepEqual(confirmationTitles, ["Reload Pi resources now?"]);
+			assert.deepEqual(
+				confirmations.map(({ title }) => title),
+				["Pull pi settings?", "Reload Pi resources now?"],
+			);
+			assert.match(confirmations[0]?.message ?? "", /Update locally: settings\.json/);
 			assert.equal((await readLocalConfigObject())?.activeTarget, "work");
 			assert.equal(readFileSync(path.join(agentDir, "settings.json"), "utf8"), '{"remote":true}\n');
 			assert.equal(reloads, 1);
@@ -432,6 +467,63 @@ test("always-pull target switching skips confirmation and applies remote setting
 			globalThis.fetch = originalFetch;
 		}
 	});
+});
+
+test("post-switch pulls stay pinned to the selected target across concurrent active-target changes", async () => {
+	for (const route of ["direct", "manager"] as const) {
+		await withTempSettings(async () => {
+			const settings = v2Settings();
+			settings.targetSwitchAction = "pull";
+			settings.targets.work = { ...settings.targets.home, namespace: "work" };
+			writeSettings(settings);
+			const requestedPaths: string[] = [];
+			const originalFetch = globalThis.fetch;
+			globalThis.fetch = (async (input) => {
+				requestedPaths.push(new URL(String(input)).pathname);
+				return new Response(null, { status: 404 });
+			}) as typeof globalThis.fetch;
+			try {
+				const selections = ["Switch target", "work", "Switch to work"];
+				const mock = createMockPi();
+				sync(mock.pi);
+				const { ctx } = createMockContext({
+					hasUI: true,
+					mode: "rpc",
+					select: async () => selections.shift(),
+				});
+				const mutableContext = ctx as unknown as {
+					ui: { notify: (message: string, level?: string) => void };
+				};
+				const originalNotify = mutableContext.ui.notify.bind(mutableContext.ui);
+				mutableContext.ui.notify = (message, level) => {
+					originalNotify(message, level);
+					if (/Switched to “work”.*Checking remote files/u.test(message)) {
+						writeSettings({ ...settings, activeTarget: "home" });
+					}
+				};
+
+				await mock.commands.get("sync")?.handler(route === "direct" ? "use work" : "", ctx);
+
+				assert.equal((await readLocalConfigObject())?.activeTarget, "home", route);
+				assert.equal(
+					requestedPaths.some((requestedPath) =>
+						requestedPath.endsWith("/profiles/work/latest.json"),
+					),
+					true,
+					route,
+				);
+				assert.equal(
+					requestedPaths.some((requestedPath) =>
+						requestedPath.endsWith("/profiles/home/latest.json"),
+					),
+					false,
+					route,
+				);
+			} finally {
+				globalThis.fetch = originalFetch;
+			}
+		});
+	}
 });
 
 test("always-pull keeps the switched target and reports a pull failure", async () => {
@@ -450,7 +542,7 @@ test("always-pull keeps the switched target and reports a pull failure", async (
 			await mock.commands.get("sync")?.handler("use work", ctx);
 
 			assert.equal((await readLocalConfigObject())?.activeTarget, "work");
-			assert.match(notifications[0]?.message ?? "", /Switched to “work”.*Pulling/);
+			assert.match(notifications[0]?.message ?? "", /Switched to “work”.*Checking remote files/);
 			assert.match(notifications.at(-1)?.message ?? "", /Remote is empty/);
 		} finally {
 			globalThis.fetch = originalFetch;
@@ -541,25 +633,121 @@ test("switch-only target setting retains the previous no-pull behavior", async (
 	});
 });
 
-test("settings menu persists the target-switch action and preserves unknown fields", async () => {
+test("settings menu uses SettingsList and persists target-switch choices in place", async () => {
 	await withTempSettings(async () => {
 		const settings = v2Settings();
 		settings.future = { retained: true };
 		writeSettings(settings);
-		const selections = ["Settings", "After switching target", "Always pull", undefined];
+		const selections = ["Settings", undefined];
+		let initialRender = "";
 		const mock = createMockPi();
 		sync(mock.pi);
 		const { ctx } = createMockContext({
 			hasUI: true,
 			mode: "tui",
 			select: async () => selections.shift(),
+			custom: async (factory: unknown) => {
+				const selector = createCustomSelectorHarness(factory, 80);
+				initialRender = selector.render().join("\n");
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\r");
+				await new Promise((resolve) => setImmediate(resolve));
+				selector.handleInput("\u001b");
+				await new Promise((resolve) => setImmediate(resolve));
+				return selector.result;
+			},
+		});
+
+		await mock.commands.get("sync")?.handler("", ctx);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		assert.match(initialRender, /Pi Sync Settings/);
+		assert.match(initialRender, /Automatic sync/);
+		assert.match(initialRender, /After target switch/);
+		const saved = await readLocalConfigObject();
+		assert.equal(saved?.targetSwitchAction, "pull");
+		assert.deepEqual(saved?.future, { retained: true });
+	});
+});
+
+test("settings list restores the displayed value when an atomic save is rejected", {
+	skip: process.platform === "win32",
+}, async () => {
+	await withTempSettings(async () => {
+		const settings = v2Settings();
+		writeSettings(settings);
+		const configPath = localConfigPath();
+		const backupPath = `${configPath}.backup`;
+		const selections = ["Settings", undefined];
+		let afterFailure = "";
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async () => selections.shift(),
+			custom: async (factory: unknown) => {
+				const selector = createCustomSelectorHarness(factory, 80);
+				selector.handleInput("\u001b[B");
+				renameSync(configPath, backupPath);
+				symlinkSync(backupPath, configPath);
+				try {
+					selector.handleInput("\r");
+					await new Promise((resolve) => setTimeout(resolve, 20));
+					afterFailure = selector.render().join("\n");
+				} finally {
+					unlinkSync(configPath);
+					renameSync(backupPath, configPath);
+				}
+				selector.handleInput("\u001b");
+				await new Promise((resolve) => setImmediate(resolve));
+				return selector.result;
+			},
 		});
 
 		await mock.commands.get("sync")?.handler("", ctx);
 
-		const saved = await readLocalConfigObject();
-		assert.equal(saved?.targetSwitchAction, "pull");
-		assert.deepEqual(saved?.future, { retained: true });
+		assert.match(afterFailure, /After target switch/);
+		assert.match(afterFailure, /Ask before pull/);
+		assert.doesNotMatch(afterFailure, /Start pull/);
+		assert.match(notifications.at(-1)?.message ?? "", /settings save failed/i);
+		assert.equal((await readLocalConfigObject())?.targetSwitchAction, undefined);
+	});
+});
+
+test("legacy settings screen omits the unavailable target-switch setting", async () => {
+	await withTempSettings(async () => {
+		writeSettings({
+			endpoint: "https://account.r2.cloudflarestorage.com",
+			bucket: "personal-pi",
+			region: "auto",
+			accessKeyId: "r2-access",
+			secretAccessKey: "r2-secret",
+			profile: "home",
+			autoSync: true,
+			syncFiles: ["settings.json"],
+			extraFiles: [],
+		});
+		const selections = ["Settings", undefined];
+		let rendered = "";
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async () => selections.shift(),
+			custom: async (factory: unknown) => {
+				const selector = createCustomSelectorHarness(factory, 80);
+				rendered = selector.render().join("\n");
+				selector.handleInput("\u001b");
+				return selector.result;
+			},
+		});
+
+		await mock.commands.get("sync")?.handler("", ctx);
+
+		assert.match(rendered, /Automatic sync/);
+		assert.doesNotMatch(rendered, /After target switch/);
 	});
 });
 

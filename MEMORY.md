@@ -69,6 +69,7 @@
 - Symptom: PR status shows no issue comments but inline review comments exist. Cause: `gh pr view --json comments,reviews` omits pull review comment bodies. Fix: use `gh api repos/OWNER/REPO/pulls/NUMBER/comments` plus issue comments/reviews when actual PR review comments are needed.
 - Symptom: Chrome DevTools `/json/new` may reject unsafe `GET`. Cause: modern Chrome expects `PUT` for target creation. Fix: use `PUT /json/new?${encodeURIComponent(url)}`.
 - For pi-sync on Cloudflare R2, keep session-token support for temporary credentials but retry once without the token when R2 static keys reject `X-Amz-Security-Token`.
+- Pi-sync post-switch pulls cross a concurrency boundary after changing `activeTarget`; skip already-current targets, carry the selected target explicitly through locking, and retain the exact pull summary before apply.
 - Symptom: Pi extension async/timer/command continuations can crash after reload or session replacement. Cause: captured `ExtensionContext` becomes stale. Fix: pass plain data into delayed callbacks, catch stale-context errors, and scope cleanup to the failing ctx/request.
 - Pi extension `message_end` handlers run before AgentSession persists the assistant message; use `tool_execution_end` when a tool-using turn needs the just-finished assistant usage from the session branch, with `agent_end` as the no-tool fallback.
 - Treat session text rendered in custom TUI components as untrusted terminal input: escape C0/C1 controls before `wrapTextWithAnsi`, while retaining the raw value only for non-rendered payloads.

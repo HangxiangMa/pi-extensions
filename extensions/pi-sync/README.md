@@ -10,7 +10,7 @@ The extension uses immutable snapshot bundles, a `latest.json` publication point
 
 - Opens a goal-oriented `/sync` manager showing the current target, storage, auto-sync, session scope, and relevant next actions.
 - Supports multiple named **sync targets** and reusable R2/S3 **storage profiles**.
-- Asks to pull after switching targets by default, with settings for always pulling or switching only.
+- Asks to review a pull after switching targets by default, with settings to start that review automatically or switch only.
 - Previews concrete local or remote file changes before push, pull, force resolution, or rollback.
 - Uses transactional synced-content drafts with explicit Save, Discard, and Continue editing choices.
 - Keeps direct `help`, `use`, `init`, `config`, `files`, `status`, `diff`, `doctor`, `push`, `pull`, `sync`, `history`, `rollback`, and `unlock` routes for compatibility and automation.
@@ -165,9 +165,9 @@ Two targets may intentionally overlap local files, but only one is automatic. pi
 
 ### Target switching
 
-The default `targetSwitchAction: "ask"` changes `activeTarget` atomically, then asks whether to pull that target in TUI mode. Choosing not to pull leaves local files unchanged. In print, JSON, or RPC mode, `ask` switches without pulling and directs interactive users to `/sync pull` where notifications are available.
+The default `targetSwitchAction: "ask"` changes `activeTarget` atomically, then asks in TUI mode whether to review a pull for that target. Choosing not to review leaves local files unchanged. Accepting starts the normal pull flow, which fetches the remote snapshot and shows the exact writes and deletions before apply. In print, JSON, or RPC mode, `ask` switches without pulling and directs interactive users to `/sync pull` where notifications are available.
 
-Set `targetSwitchAction` to `"pull"` to begin a confirmed target switch's pull immediately without a second pull confirmation. Conflict detection remains enabled, a local backup is still created before apply, and pi-sync never adds `--force`; Pi may separately ask whether to reload changed resources after a successful pull. Set it to `"switch-only"` to retain the previous no-pull behavior. If a pull fails, the new target remains active and the error can be resolved before retrying `/sync pull`.
+Set `targetSwitchAction` to `"pull"` to start that reviewed pull automatically after a confirmed target switch. The exact pull summary and apply confirmation remain enabled, conflict detection still stops unsafe merges, a local backup is created before apply, and pi-sync never adds `--force`; Pi may separately ask whether to reload changed resources after a successful pull. Set it to `"switch-only"` to retain the previous no-pull behavior. Selecting an already-current target is a no-op. If a pull fails, the new target remains active and the error can be resolved before retrying `/sync pull`.
 
 ### Synced content
 
@@ -262,7 +262,7 @@ For the current target, startup auto-sync uses conservative decisions:
 - first-sync mismatch or both changed → stop and require review
 - no selected content → report/skip
 
-Switching targets first changes `activeTarget`, then follows `targetSwitchAction`: ask in TUI by default, pull immediately when configured, or stop after switching. Pulls retain normal locking, backup, and conflict safeguards. The next startup uses the new target's `autoSync` regardless of the switch action.
+Switching targets first changes `activeTarget`, then follows `targetSwitchAction`: ask before reviewing a pull in TUI by default, start a reviewed pull automatically when configured, or stop after switching. Pulls remain pinned to the selected target and retain exact summaries, locking, backups, and conflict safeguards. The next startup uses the new target's `autoSync` regardless of the switch action.
 
 Remote layout remains compatible:
 
@@ -321,7 +321,8 @@ extensions/pi-sync/
 │   ├── manager-ui.ts            # Goal-oriented menus and setup/management flows
 │   ├── file-selection.ts        # Transactional synced-content editor
 │   ├── settings-management.ts   # Profiles, targets, migration, and atomic saves
-│   ├── target-switch.ts         # Post-switch prompt, policy, and settings UI
+│   ├── settings-ui.ts           # SettingsList interaction and serialized saves
+│   ├── target-switch.ts         # Post-switch prompt, policy, and target handoff
 │   ├── snapshot-transaction.ts  # Local apply journal, rollback, and recovery
 │   └── *.ts                     # Config, policy, snapshot, S3, lock, and format modules
 ├── test/

@@ -158,8 +158,8 @@ export default function sync(pi: ExtensionAPI) {
 async function handleCommand(rawArgs: string, ctx: ExtensionCommandContext) {
 	if (!rawArgs.trim()) {
 		try {
-			await showSyncManager(ctx, (route, signal, onCommit) =>
-				executeCommand(route, ctx, signal, onCommit),
+			await showSyncManager(ctx, (route, signal, onCommit, target) =>
+				executeCommand(route, ctx, signal, onCommit, target),
 			);
 		} catch (error) {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -175,12 +175,14 @@ async function executeCommand(
 	ctx: ExtensionCommandContext,
 	signal?: AbortSignal,
 	onCommit?: () => void,
+	target?: string,
 ) {
 	try {
 		const command = await resolveSyncCommand(rawArgs, ctx);
 		if (!command) return;
 		const { subcommand, rest } = command;
 		const options = parseOptions(rest);
+		if (target !== undefined) options.target = target;
 		if (signal) options.signal = signal;
 		if (onCommit) options.onCommit = onCommit;
 		validateCommandOptions(subcommand, options);
@@ -190,8 +192,8 @@ async function executeCommand(
 				ctx.ui.notify(usage(), "info");
 				return;
 			case "use":
-				await useSyncTarget(ctx, options.args[0] ?? "", () =>
-					withLock("pull", () => pull(ctx, { ...options, yes: true })),
+				await useSyncTarget(ctx, options.args[0] ?? "", (selectedTarget) =>
+					withLock("pull", () => pull(ctx, { ...options, target: selectedTarget })),
 				);
 				return;
 			case "init":

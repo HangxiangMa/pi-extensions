@@ -4,15 +4,12 @@ import {
 	configuredTargetNames,
 	deprecatedPiSyncEnvironmentWarnings,
 	isCloudflareR2Endpoint,
-	isEnabled,
 	loadConfig,
 	loadPartialConfig,
 	loadTargetSwitchAction,
 	localConfigPath,
-	normalizeExtraFiles,
 	normalizeSyncFiles,
 	readLocalConfigObject,
-	updateLocalConfig,
 } from "./config.js";
 import { inspectLock, isStaleLock } from "./lock.js";
 import {
@@ -25,12 +22,9 @@ import {
 	updateStorageProfile,
 	updateSyncTarget,
 } from "./settings-management.js";
+import { showSyncSettings } from "./settings-ui.js";
 import { DEFAULT_SYNC_FILES } from "./sync-policy.js";
-import {
-	showTargetSwitchActionSetting,
-	targetSwitchActionLabel,
-	useSyncTarget,
-} from "./target-switch.js";
+import { useSyncTarget } from "./target-switch.js";
 import type { SyncConfig } from "./types.js";
 
 export const MAIN_MENU_ACTIONS = [
@@ -46,7 +40,12 @@ export const MAIN_MENU_ACTIONS = [
 const BACK = "Back";
 
 type MainMenuAction = (typeof MAIN_MENU_ACTIONS)[number];
-type RunRoute = (route: string, signal?: AbortSignal, onCommit?: () => void) => Promise<void>;
+type RunRoute = (
+	route: string,
+	signal?: AbortSignal,
+	onCommit?: () => void,
+	target?: string,
+) => Promise<void>;
 
 export async function showSyncManager(
 	ctx: ExtensionCommandContext,
@@ -74,7 +73,7 @@ export async function showSyncManager(
 				await runCancellableOperation(ctx, "Checking current target…", "diff", runRoute);
 				break;
 			case "Settings":
-				await showSettingsMenu(ctx, runRoute);
+				await showSyncSettings(ctx, runRoute);
 				break;
 			case "Manage targets & storage":
 				await showManageMenu(ctx, runRoute);
@@ -100,9 +99,10 @@ async function runCancellableOperation(
 	runRoute: RunRoute,
 	commitAware = false,
 	cancelledMessage = "Check cancelled; no settings or files were changed.",
+	target?: string,
 ) {
 	if (ctx.mode !== "tui") {
-		await runRoute(route);
+		await runRoute(route, undefined, undefined, target);
 		return;
 	}
 	let commitStarted = false;
@@ -126,6 +126,7 @@ async function runCancellableOperation(
 				route,
 				loader.signal,
 				commitAware ? () => (commitStarted = true) : undefined,
+				target,
 			)
 				.then(() => {
 					if (!closed) done({});
@@ -408,9 +409,9 @@ async function showTargetSwitcher(ctx: ExtensionCommandContext, runRoute: RunRou
 	const targetSwitchAction = await loadTargetSwitchAction();
 	const switchEffect =
 		targetSwitchAction === "ask"
-			? "After switching, pi-sync will ask whether to pull the target."
+			? "After switching, pi-sync will ask whether to review a pull for the target."
 			: targetSwitchAction === "pull"
-				? "After switching, pi-sync will immediately pull the target without a pull confirmation."
+				? "After switching, pi-sync will check the target and show exact changes before applying them."
 				: "After switching, pi-sync will not pull or modify synced files.";
 	const choice = await ctx.ui.select(
 		[
@@ -427,66 +428,18 @@ async function showTargetSwitcher(ctx: ExtensionCommandContext, runRoute: RunRou
 		[`Switch to ${safeTerminalText(name)}`, "Cancel"],
 	);
 	if (choice !== `Switch to ${safeTerminalText(name)}`) return false;
-	const result = await useSyncTarget(ctx, name, () =>
+	const result = await useSyncTarget(ctx, name, (selectedTarget) =>
 		runCancellableOperation(
 			ctx,
 			`Pulling target “${safeTerminalText(name)}”…`,
-			"pull --yes",
+			"pull",
 			runRoute,
 			true,
 			"Pull cancelled; the target was switched, but synced files were not changed.",
+			selectedTarget,
 		),
 	);
 	return result.pullAttempted ? "pull-attempted" : "switched";
-}
-
-async function showSettingsMenu(ctx: ExtensionCommandContext, runRoute: RunRoute) {
-	const partial = await loadPartialConfig();
-	const targetSwitchAction = await loadTargetSwitchAction();
-	const automaticSyncOverridden = Object.hasOwn(process.env, "PI_SYNC_AUTO_SYNC");
-	const selected = await ctx.ui.select(
-		[
-			`Settings for target “${safeTerminalText(partial.target ?? "default")}”`,
-			`Storage: ${storageDescription(partial.storageKind, partial.endpoint, partial.bucket)}`,
-			"Automatic sync changes save immediately; synced-content changes use a reviewed draft.",
-			"",
-			`Auto-sync: ${isEnabled(partial.autoSync, true) ? "On" : "Off"}`,
-			`After target switch: ${targetSwitchActionLabel(targetSwitchAction)}`,
-			`Synced content: ${normalizeSyncFiles(partial.syncFiles).length} built-ins · ${normalizeExtraFiles(partial.extraFiles).length} extra`,
-		].join("\n"),
-		[
-			"Choose synced content",
-			"After switching target",
-			automaticSyncOverridden
-				? "Automatic sync (environment override, deprecated)"
-				: "Toggle automatic sync",
-			BACK,
-		],
-	);
-	if (!selected || selected === BACK) return;
-	if (selected === "Choose synced content") {
-		await runRoute("files");
-		return;
-	}
-	if (selected === "After switching target") {
-		await showTargetSwitchActionSetting(ctx, targetSwitchAction);
-		return;
-	}
-	if (automaticSyncOverridden) {
-		ctx.ui.notify(
-			"Automatic sync is read-only because deprecated PI_SYNC_AUTO_SYNC currently overrides this target. Move it into target settings before the future major removal.",
-			"warning",
-		);
-		return;
-	}
-	await updateCurrentTarget((target) => ({
-		...target,
-		autoSync: !isEnabled(partial.autoSync, true),
-	}));
-	ctx.ui.notify(
-		`Automatic sync ${isEnabled(partial.autoSync, true) ? "disabled" : "enabled"} for “${safeTerminalText(partial.target ?? "default")}”.`,
-		"info",
-	);
 }
 
 async function showManageMenu(ctx: ExtensionCommandContext, _runRoute: RunRoute) {
@@ -919,20 +872,6 @@ async function chooseCustomRemoteLocation(
 
 function formatRemotePath(prefix: string, namespace: string) {
 	return safeTerminalText(`${prefix}/profiles/${namespace}/`);
-}
-
-async function updateCurrentTarget(
-	update: (target: Record<string, unknown>) => Record<string, unknown>,
-) {
-	await updateLocalConfig((current) => {
-		if (current.version !== 2) return update(current);
-		const targets = ownRecord(current.targets);
-		const active = typeof current.activeTarget === "string" ? current.activeTarget : undefined;
-		if (!targets || !active) throw new Error("Current target is not configured.");
-		const target = ownRecord(targets[active]);
-		if (!target) throw new Error(`Current target “${active}” is invalid.`);
-		return { ...current, targets: { ...targets, [active]: update(target) } };
-	});
 }
 
 async function requiredExistingBucket(ctx: ExtensionCommandContext, example: string) {
