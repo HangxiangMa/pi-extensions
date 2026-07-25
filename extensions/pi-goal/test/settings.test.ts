@@ -10,6 +10,7 @@ import {
 	loadOrCreateGoalSettings,
 	normalizeGoalSettings,
 	readGoalSettings,
+	saveGoalSettings,
 } from "../src/settings.js";
 
 test("normalizeGoalSettings applies defaults and accepts bounded continuation limits", () => {
@@ -167,6 +168,60 @@ test("loadOrCreateGoalSettings adopts a concurrent winner without overwriting it
 		},
 	});
 	assert.equal(readFileSync(settingsPath, "utf8"), winnerDocument);
+	assert.deepEqual(readdirSync(directory), ["pi-goal.json"]);
+});
+
+test("saveGoalSettings atomically preserves unknown top-level and nested fields", async (t) => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-goal-settings-save-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const settingsPath = join(directory, "pi-goal.json");
+	writeFileSync(
+		settingsPath,
+		JSON.stringify({
+			future: { enabled: true },
+			toolVisibility: "after-first-goal",
+			experimental: { goals: false, futureQueue: "keep" },
+			continuationLimits: { automaticTurns: 25, noProgressTurns: 3, futureLimit: 9 },
+		}),
+	);
+
+	saveGoalSettings(
+		{
+			toolVisibility: "always",
+			experimental: { goals: true },
+			continuationLimits: { automaticTurns: 40, noProgressTurns: null },
+		},
+		settingsPath,
+	);
+
+	assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
+		future: { enabled: true },
+		toolVisibility: "always",
+		experimental: { goals: true, futureQueue: "keep" },
+		continuationLimits: { automaticTurns: 40, noProgressTurns: null, futureLimit: 9 },
+	});
+	assert.deepEqual(readdirSync(directory), ["pi-goal.json"]);
+});
+
+test("saveGoalSettings refuses malformed files and cleans a failed atomic write", async (t) => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-goal-settings-save-failure-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const settingsPath = join(directory, "pi-goal.json");
+	writeFileSync(settingsPath, "{invalid");
+	assert.throws(() => saveGoalSettings(DEFAULT_GOAL_SETTINGS, settingsPath), /invalid settings/i);
+	assert.equal(readFileSync(settingsPath, "utf8"), "{invalid");
+
+	writeFileSync(settingsPath, DEFAULT_GOAL_SETTINGS_DOCUMENT);
+	assert.throws(
+		() =>
+			saveGoalSettings(DEFAULT_GOAL_SETTINGS, settingsPath, {
+				renameSync() {
+					throw new Error("rename failed");
+				},
+			}),
+		/rename failed/,
+	);
+	assert.equal(readFileSync(settingsPath, "utf8"), DEFAULT_GOAL_SETTINGS_DOCUMENT);
 	assert.deepEqual(readdirSync(directory), ["pi-goal.json"]);
 });
 

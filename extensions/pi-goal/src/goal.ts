@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { currentTokenTotal } from "./accounting.js";
 import { completeGoalArguments, parseCommand } from "./command.js";
 import { GoalCommandController } from "./commands.js";
+import { showGoalManager } from "./menu.js";
 import { type ActiveGoal, loadGoalStateFromSession } from "./persistence.js";
 import { buildGoalPrompt, buildGoalSystemPrompt } from "./prompts.js";
 import { activateQueuedGoal } from "./queue.js";
@@ -31,10 +32,11 @@ import {
 } from "./runtime.js";
 import { hasAssistantToolCall } from "./safety.js";
 import { DEFAULT_GOAL_SETTINGS, loadOrCreateGoalSettings } from "./settings.js";
+import { showGoalSettings } from "./settings-ui.js";
 
-// goal.ts is the Pi-facing composition root: it keeps tool contracts and event
-// ordering together. Per-session mechanisms live in runtime.ts, while user command
-// transitions live in commands.ts. Each factory constructs isolated instances.
+// goal.ts remains the Pi-facing composition root despite its size because tool contracts and
+// lifecycle-event registration share order-sensitive wiring. Per-session mechanisms live in
+// runtime.ts, while user-command transitions live in commands.ts; each factory stays isolated.
 
 interface GoalCompleteDetails {
 	goal: string;
@@ -409,6 +411,17 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 				ctx.ui.notify(result, "warning");
 				return;
 			}
+			if (result.kind === "show" && args.trim() === "") {
+				await showGoalManager(runtime, commands, ctx, (menuCtx) =>
+					showGoalSettings(runtime, menuCtx, {
+						settingsPath: options.settingsPath,
+						onQueueUnfrozen: async (settingsCtx) => {
+							await commands.resumeQueueAfterUnfreeze(settingsCtx);
+						},
+					}),
+				);
+				return;
+			}
 			if (runtime.queueFrozen) {
 				if (result.kind === "show") commands.showGoal(ctx);
 				else if (result.kind === "clear") commands.clearGoal(ctx);
@@ -470,6 +483,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		runtime.queuedGoals = [];
 		runtime.pendingQueueAction = undefined;
 		runtime.queueFrozen = false;
+		runtime.queueFreezeAwaitingSettle = false;
 		runtime.clearTerminalDetails();
 		rpc.bindSession(ctx);
 		const previousToolVisibility = runtime.settings.toolVisibility;
@@ -600,6 +614,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		runtime.queuedGoals = [];
 		runtime.pendingQueueAction = undefined;
 		runtime.queueFrozen = false;
+		runtime.queueFreezeAwaitingSettle = false;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		clearCompletionStatusTimer();
 		runtime.clearTerminalDetails();
@@ -1027,6 +1042,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	pi.on("agent_settled", async (_event, ctx) => {
 		if (runtime.queueFrozen) {
 			runtime.clearSettledSafetyTracking();
+			runtime.queueFreezeAwaitingSettle = false;
+			if (runtime.settings.experimental.goals) {
+				await commands.resumeQueueAfterUnfreeze(ctx);
+			}
 			return;
 		}
 		runtime.finalizeSettledRecovery(ctx);
