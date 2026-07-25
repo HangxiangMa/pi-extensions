@@ -20,7 +20,7 @@ Add bounded, read-only Git provenance and navigation to `pi-file-context`: file 
 - [x] Added focused revision/diff tests; the explorer test first failed on absent revision state, then passed with validated commit/branch resolution, bounded historical file loading, explicit diff view/hunk attachment, token estimates, and provenance that distinguishes revision/worktree/diff sources.
 - [x] Updated the package README with Git controls, optional provenance semantics, privacy/output bounds, deterministic token estimates, non-repository fallback, limitations, and the new Git module; focused legacy workflow tests remain green.
 - [x] Ran focused tests and the full repository gate (1,402 passing tests), inspected the seven-file package dry run, and loaded the extension through isolated Pi.
-- [ ] Commit the bounded Git integration, update PR #405, then archive this completed plan.
+- [x] Committed the bounded Git integration as `ace061a`, pushed it, and updated PR #405 with capability, safety, and verification details.
 
 ## Completion Checklist
 
