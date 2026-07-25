@@ -11,11 +11,11 @@ It is intentionally ambient: no slash command, no custom tool, no widget, and no
 ## ✨ Features
 
 - Automatically shows compact PR status in Pi's statusline.
-- Refreshes the current branch PR after agent turns.
+- Refreshes the current branch PR every minute and after agent turns.
 - Shows PR number, GitHub checks state, review state, and comment/review count.
 - Does not read or expose PR discussion text; use `gh pr view --comments` or GitHub directly when you need the conversation.
 - Uses GitHub CLI auth and repository resolution; the extension stores no GitHub token.
-- No slash commands, LLM tools, widgets, polling loop, webhook server, or runtime service.
+- No slash commands, LLM tools, widgets, webhook server, or separate runtime service.
 
 Example statusline text:
 
@@ -67,7 +67,8 @@ The extension runs passively:
 
 - On session start, it checks the current branch PR and sets a compact statusline entry.
 - On Git branch change, it clears the old PR immediately and refreshes the new current branch.
-- After each agent turn, it refreshes that same current branch PR status.
+- While the session remains open, it refreshes that same current branch PR every 60 seconds and after each agent turn.
+- On branch change, session replacement, or session shutdown, it cancels the previous refresh timer and any in-flight periodic request.
 - On session shutdown, it clears the statusline entry.
 - If the directory has no GitHub PR, the statusline entry stays empty.
 - If `gh` is missing or unauthenticated, the statusline shows a short hint such as `PR gh missing` or `PR gh auth`.
@@ -78,7 +79,7 @@ The extension runs passively:
 - Only the current branch PR is shown; there is no command or tool for arbitrary PR lookup.
 - Comment count uses `gh pr view` comments and reviews, not precise unresolved review-thread counts.
 - It does not read PR comment bodies, review bodies, inline diff comments, or unresolved review-thread text.
-- No continuous polling; refresh happens on session start, branch change, and after agent turns.
+- While a session is open, refresh runs every 60 seconds in addition to session start, branch changes, and agent turns; each refresh invokes `gh pr view` and one GraphQL count query.
 
 ## 📁 Package layout
 

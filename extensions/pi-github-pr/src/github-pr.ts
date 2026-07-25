@@ -45,6 +45,7 @@ const STATUS_KEY = "github-pr";
 const GH_TIMEOUT_MS = 10_000;
 const GIT_TIMEOUT_MS = 5_000;
 const BRANCH_REFRESH_DEBOUNCE_MS = 100;
+const PR_REFRESH_INTERVAL_MS = 60_000;
 const TERMINAL_PR_LIFETIME_MS = 24 * 60 * 60 * 1000;
 const GH_PR_FIELDS = [
 	"number",
@@ -72,38 +73,73 @@ const GH_PR_COUNT_QUERY = `
 	}
 `;
 
-export default function githubPr(pi: ExtensionAPI) {
-	const branchWatch: BranchWatchState = { generation: 0, session: 0 };
+interface GithubPrOptions {
+	refreshIntervalMs?: number;
+}
+
+export default function githubPr(pi: ExtensionAPI, options: GithubPrOptions = {}) {
+	const refreshIntervalMs = options.refreshIntervalMs ?? PR_REFRESH_INTERVAL_MS;
+	if (!Number.isFinite(refreshIntervalMs) || refreshIntervalMs <= 0) {
+		throw new RangeError("refreshIntervalMs must be a positive finite number");
+	}
+	const branchWatch: BranchWatchState = { generation: 0, request: 0, session: 0 };
 	const refreshStatus = async (
 		ctx: ExtensionContext,
 		signal?: AbortSignal,
 		generation = branchWatch.generation,
 	) => {
+		branchWatch.request += 1;
+		const request = branchWatch.request;
 		try {
 			const status = await runGhPrView(pi, ctx.cwd, signal);
-			if (generation === branchWatch.generation) renderStatus(ctx, status, branchWatch, generation);
+			if (generation === branchWatch.generation && request === branchWatch.request) {
+				renderStatus(ctx, status, branchWatch, generation);
+			}
 		} catch (error) {
-			if (generation === branchWatch.generation) {
+			if (generation === branchWatch.generation && request === branchWatch.request) {
 				clearExpiryTimer(branchWatch);
 				renderAmbientFailure(ctx, error);
 			}
 		}
+		return request;
 	};
-	const scheduleBranchRefresh = (ctx: ExtensionContext) => {
+	const schedulePeriodicRefresh = (ctx: ExtensionContext, session: number) => {
+		cancelPeriodicRefresh(branchWatch);
+		branchWatch.refreshTimer = setTimeout(async () => {
+			branchWatch.refreshTimer = undefined;
+			if (session !== branchWatch.session) return;
+			const controller = new AbortController();
+			branchWatch.refreshController = controller;
+			const request = await refreshStatus(ctx, controller.signal);
+			if (branchWatch.refreshController === controller) {
+				branchWatch.refreshController = undefined;
+			}
+			if (session === branchWatch.session && request === branchWatch.request) {
+				schedulePeriodicRefresh(ctx, session);
+			}
+		}, refreshIntervalMs);
+		branchWatch.refreshTimer.unref?.();
+	};
+	const scheduleBranchRefresh = (ctx: ExtensionContext, session: number) => {
 		branchWatch.generation += 1;
 		const generation = branchWatch.generation;
+		cancelPeriodicRefresh(branchWatch);
 		clearExpiryTimer(branchWatch);
 		clearStatus(ctx);
 		if (branchWatch.timer) clearTimeout(branchWatch.timer);
-		branchWatch.timer = setTimeout(() => {
+		branchWatch.timer = setTimeout(async () => {
 			branchWatch.timer = undefined;
 			if (generation !== branchWatch.generation) return;
-			void refreshStatus(ctx, ctx.signal, generation);
+			const request = await refreshStatus(ctx, ctx.signal, generation);
+			if (session === branchWatch.session && request === branchWatch.request) {
+				schedulePeriodicRefresh(ctx, session);
+			}
 		}, BRANCH_REFRESH_DEBOUNCE_MS);
 	};
 	const closeBranchWatcher = () => {
 		if (branchWatch.timer) clearTimeout(branchWatch.timer);
 		branchWatch.timer = undefined;
+		cancelPeriodicRefresh(branchWatch);
 		clearExpiryTimer(branchWatch);
 		branchWatch.watcher?.close();
 		branchWatch.watcher = undefined;
@@ -112,24 +148,36 @@ export default function githubPr(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		branchWatch.generation += 1;
 		branchWatch.session += 1;
+		branchWatch.sessionManager = ctx.sessionManager;
 		const session = branchWatch.session;
 		closeBranchWatcher();
 		const watcher = await createBranchWatcher(pi, ctx.cwd, ctx.signal, () => {
-			if (session === branchWatch.session) scheduleBranchRefresh(ctx);
+			if (session === branchWatch.session) scheduleBranchRefresh(ctx, session);
 		});
 		if (session !== branchWatch.session) {
 			watcher?.close();
 			return;
 		}
 		branchWatch.watcher = watcher;
-		await refreshStatus(ctx, ctx.signal);
+		const request = await refreshStatus(ctx, ctx.signal);
+		if (session === branchWatch.session && request === branchWatch.request) {
+			schedulePeriodicRefresh(ctx, session);
+		}
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
-		await refreshStatus(ctx, ctx.signal);
+		if (ctx.sessionManager !== branchWatch.sessionManager) return;
+		const session = branchWatch.session;
+		cancelPeriodicRefresh(branchWatch);
+		const request = await refreshStatus(ctx, ctx.signal);
+		if (session === branchWatch.session && request === branchWatch.request) {
+			schedulePeriodicRefresh(ctx, session);
+		}
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
+		if (ctx.sessionManager !== branchWatch.sessionManager) return;
+		branchWatch.sessionManager = undefined;
 		branchWatch.generation += 1;
 		branchWatch.session += 1;
 		closeBranchWatcher();
@@ -139,9 +187,13 @@ export default function githubPr(pi: ExtensionAPI) {
 
 interface BranchWatchState {
 	generation: number;
+	request: number;
 	session: number;
+	sessionManager?: ExtensionContext["sessionManager"];
 	watcher?: FSWatcher;
 	timer?: ReturnType<typeof setTimeout>;
+	refreshTimer?: ReturnType<typeof setTimeout>;
+	refreshController?: AbortController;
 	expiryTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -399,6 +451,13 @@ function pullRequestExpiresAt(status: PullRequestStatus): number | undefined {
 	if (!timestamp) return undefined;
 	const terminalAt = Date.parse(timestamp);
 	return Number.isFinite(terminalAt) ? terminalAt + TERMINAL_PR_LIFETIME_MS : undefined;
+}
+
+function cancelPeriodicRefresh(branchWatch: BranchWatchState) {
+	if (branchWatch.refreshTimer) clearTimeout(branchWatch.refreshTimer);
+	branchWatch.refreshTimer = undefined;
+	branchWatch.refreshController?.abort();
+	branchWatch.refreshController = undefined;
 }
 
 function clearExpiryTimer(branchWatch: BranchWatchState) {
