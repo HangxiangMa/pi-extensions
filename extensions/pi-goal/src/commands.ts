@@ -585,6 +585,7 @@ export class GoalCommandController {
 				this.runtime.queuedGoals,
 				this.runtime.settings.experimental.goals,
 				this.runtime.queueFrozen,
+				this.runtime.pendingQueueAction,
 			),
 		);
 	}

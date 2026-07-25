@@ -496,22 +496,91 @@ test("lowered limit confirmation cannot apply to a replacement goal", async () =
 	assert.match(context.notifications.at(-1)?.message ?? "", /goal changed/i);
 });
 
+test("full goal status includes a pending priority objective", () => {
+	const state = runtime();
+	state.settings.experimental.goals = true;
+	state.activeGoal = createGoal("current objective", undefined, 0);
+	const queued = createGoal("queued objective", undefined, 0);
+	queued.status = "queued";
+	state.queuedGoals = [queued];
+	state.pendingQueueAction = { kind: "prioritize", objective: "urgent objective" };
+	const context = createMockContext({ mode: "tui", hasUI: true });
+
+	new GoalCommandController(state).showGoal(context.ctx);
+
+	const summary = context.notifications.at(-1)?.message ?? "";
+	assert.match(summary, /Goals \(3\):/);
+	assert.match(summary, /1\. \[active\] current objective/);
+	assert.match(summary, /2\. \[queued\] queued objective/);
+	assert.match(summary, /3\. \[pending\] urgent objective/);
+});
+
+test("queue confirmations open only after the custom settings screen closes", async () => {
+	for (const scenario of ["enable", "disable"] as const) {
+		const state = runtime();
+		if (scenario === "disable") {
+			state.settings.experimental.goals = true;
+			state.activeGoal = createGoal("current objective", undefined, 0);
+			state.queuedGoals = [createGoal("queued objective", undefined, 0)];
+			state.pendingQueueAction = { kind: "prioritize", objective: "urgent objective" };
+		}
+		let customActive = false;
+		let confirmedWhileCustom = false;
+		let confirmationMessage = "";
+		let screens = 0;
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			confirm: async (_title: string, message: string) => {
+				confirmedWhileCustom ||= customActive;
+				confirmationMessage = message;
+				return false;
+			},
+			custom: async (factory: unknown) => {
+				customActive = true;
+				const selector = createCustomSelectorHarness(factory, 80);
+				if (screens++ === 0) {
+					selector.handleInput("\u001b[B");
+					selector.handleInput("\r");
+				} else {
+					selector.handleInput("\u001b");
+				}
+				await new Promise((resolve) => setImmediate(resolve));
+				customActive = false;
+				return selector.result;
+			},
+		});
+
+		await showGoalSettings(state, context.ctx, {
+			settingsPath: "/tmp/pi-goal.json",
+			save() {},
+		});
+
+		assert.equal(confirmedWhileCustom, false, scenario);
+		assert.equal(state.settings.experimental.goals, scenario === "disable");
+		if (scenario === "disable") assert.match(confirmationMessage, /preserves 3 goal\(s\)/i);
+	}
+});
+
 test("settings screen resumes retained work after enabling the queue", async () => {
 	const state = runtime();
 	state.activeGoal = createGoal("current objective", undefined, 0);
 	state.queuedGoals = [createGoal("queued objective", undefined, 0)];
 	state.queueFrozen = true;
 	let unfrozen = 0;
+	let screens = 0;
 	const context = createMockContext({
 		mode: "tui",
 		hasUI: true,
 		confirm: async () => true,
 		custom: async (factory: unknown) => {
 			const selector = createCustomSelectorHarness(factory, 80);
-			selector.handleInput("\u001b[B");
-			selector.handleInput("\r");
-			await new Promise((resolve) => setImmediate(resolve));
-			selector.handleInput("\u001b");
+			if (screens++ === 0) {
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\r");
+			} else {
+				selector.handleInput("\u001b");
+			}
 			await new Promise((resolve) => setImmediate(resolve));
 			return selector.result;
 		},

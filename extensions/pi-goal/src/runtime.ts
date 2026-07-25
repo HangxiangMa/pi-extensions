@@ -1063,6 +1063,7 @@ export function goalSummary(
 	queuedGoals: readonly ActiveGoal[] = [],
 	experimentalGoals = false,
 	queueFrozen = false,
+	pendingAction?: PendingQueueAction,
 ) {
 	const summary = [
 		`Goal: ${goal.text}`,
@@ -1077,12 +1078,18 @@ export function goalSummary(
 			`Safety pause: ${goal.safetyPauseCause === "continuation_limit" ? "automatic response limit" : "no progress"}`,
 		);
 	}
-	if (experimentalGoals || queuedGoals.length > 0 || queueFrozen) {
+	if (experimentalGoals || queuedGoals.length > 0 || queueFrozen || pendingAction) {
+		const goals = [goal, ...queuedGoals].map(
+			(queuedGoal, index) => `${index + 1}. [${queuedGoal.status}] ${queuedGoal.text}`,
+		);
+		if (pendingAction?.kind === "prioritize") {
+			goals.push(`${goals.length + 1}. [pending] ${pendingAction.objective}`);
+		}
+		summary.push(`Goals (${goals.length}):`, ...goals);
+	}
+	if (pendingAction?.kind === "advance") {
 		summary.push(
-			`Goals (${queuedGoals.length + 1}):`,
-			...[goal, ...queuedGoals].map(
-				(queuedGoal, index) => `${index + 1}. [${queuedGoal.status}] ${queuedGoal.text}`,
-			),
+			`Pending queue action: ${pendingAction.reason === "complete" ? "complete" : "skip"} current goal when Pi settles.`,
 		);
 	}
 	if (queueFrozen) {
