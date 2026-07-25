@@ -506,6 +506,43 @@ test("periodically refreshes PR state while the session remains open", async () 
 	assert.equal(prViews, viewsAtShutdown);
 });
 
+test("a replaced session's late lifecycle events cannot disrupt its replacement", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const mock = createMockPi();
+	const prCwds: string[] = [];
+	installExec(mock, async (command, args, options) => {
+		if (command === "git") return textResult("", 128, "not a git repository");
+		if (args[0] === "pr") prCwds.push(options?.cwd ?? "");
+		return okResult(args[0] === "pr" ? samplePr : sampleCounts);
+	});
+	githubPr(mock.pi, { refreshIntervalMs: 100 });
+	const oldContext = createMockContext({ cwd: "/repo-a" });
+	const currentContext = createMockContext({ cwd: "/repo-b" });
+	const sessionStart = mock.events.get("session_start")?.[0];
+	const agentEnd = mock.events.get("agent_end")?.[0];
+	const sessionShutdown = mock.events.get("session_shutdown")?.[0];
+	assert.ok(sessionStart);
+	assert.ok(agentEnd);
+	assert.ok(sessionShutdown);
+
+	try {
+		await sessionStart({}, oldContext.ctx);
+		await sessionStart({}, currentContext.ctx);
+		assert.deepEqual(prCwds, ["/repo-a", "/repo-b"]);
+
+		await sessionShutdown({}, oldContext.ctx);
+		await agentEnd({}, oldContext.ctx);
+		assert.deepEqual(prCwds, ["/repo-a", "/repo-b"]);
+
+		t.mock.timers.tick(100);
+		await Promise.resolve();
+		await Promise.resolve();
+		assert.deepEqual(prCwds, ["/repo-a", "/repo-b", "/repo-b"]);
+	} finally {
+		await sessionShutdown({}, currentContext.ctx);
+	}
+});
+
 test("an older periodic refresh cannot overwrite a newer agent-end refresh", async () => {
 	const mock = createMockPi();
 	const periodicPrView = deferred<ExecResult>();

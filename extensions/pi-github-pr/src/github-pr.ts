@@ -148,6 +148,7 @@ export default function githubPr(pi: ExtensionAPI, options: GithubPrOptions = {}
 	pi.on("session_start", async (_event, ctx) => {
 		branchWatch.generation += 1;
 		branchWatch.session += 1;
+		branchWatch.sessionManager = ctx.sessionManager;
 		const session = branchWatch.session;
 		closeBranchWatcher();
 		const watcher = await createBranchWatcher(pi, ctx.cwd, ctx.signal, () => {
@@ -165,6 +166,7 @@ export default function githubPr(pi: ExtensionAPI, options: GithubPrOptions = {}
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
+		if (ctx.sessionManager !== branchWatch.sessionManager) return;
 		const session = branchWatch.session;
 		cancelPeriodicRefresh(branchWatch);
 		const request = await refreshStatus(ctx, ctx.signal);
@@ -174,6 +176,7 @@ export default function githubPr(pi: ExtensionAPI, options: GithubPrOptions = {}
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
+		if (ctx.sessionManager !== branchWatch.sessionManager) return;
 		branchWatch.generation += 1;
 		branchWatch.session += 1;
 		closeBranchWatcher();
@@ -185,6 +188,7 @@ interface BranchWatchState {
 	generation: number;
 	request: number;
 	session: number;
+	sessionManager?: ExtensionContext["sessionManager"];
 	watcher?: FSWatcher;
 	timer?: ReturnType<typeof setTimeout>;
 	refreshTimer?: ReturnType<typeof setTimeout>;
