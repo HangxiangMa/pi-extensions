@@ -25,11 +25,15 @@ const OSC133_MARKERS = ["\u001b]133;A\u0007", "\u001b]133;B\u0007", "\u001b]133;
 // Pi renders a spacer above the custom component and a two-line built-in footer below it.
 const RESERVED_APP_LINES = 3;
 
-export type TranscriptPagerAction = { kind: "submit"; question: string } | { kind: "close" };
+export type TranscriptPagerAction =
+	| { kind: "submit"; question: string }
+	| { kind: "promote"; questionDraft: string }
+	| { kind: "close" };
 
 export class BtwTranscriptPager implements Component {
 	private readonly transcriptComponents: Component[];
 	private readonly editor: Editor;
+	private readonly canPromote: boolean;
 	private scrollOffset = 0;
 	private lastContentLineCount = 0;
 	private lastViewportHeight = 1;
@@ -43,9 +47,10 @@ export class BtwTranscriptPager implements Component {
 		private readonly theme: Theme,
 		turns: readonly SideThreadTurn[],
 		private readonly onAction: (action: TranscriptPagerAction) => void,
-		options: { startAtBottom?: boolean } = {},
+		options: { startAtBottom?: boolean; initialQuestion?: string } = {},
 	) {
 		this.transcriptComponents = buildTranscriptComponents(turns, this.theme);
+		this.canPromote = turns.some((turn) => turn.kind === "answered");
 		this.followBottom = options.startAtBottom ?? false;
 		const editorTheme: EditorTheme = {
 			borderColor: (text) => this.theme.fg("accent", text),
@@ -58,6 +63,7 @@ export class BtwTranscriptPager implements Component {
 			},
 		};
 		this.editor = new Editor(this.tui, editorTheme);
+		if (options.initialQuestion) this.editor.setText(options.initialQuestion);
 		this.editor.onChange = () => {
 			this.warning = undefined;
 		};
@@ -111,6 +117,11 @@ export class BtwTranscriptPager implements Component {
 			this.onAction({ kind: "close" });
 			return;
 		}
+		if (this.canPromote && matchesKey(data, Key.ctrl("r"))) {
+			this.finished = true;
+			this.onAction({ kind: "promote", questionDraft: this.editor.getText() });
+			return;
+		}
 		if (matchesKey(data, Key.pageUp)) {
 			const previousOffset = this.scrollOffset;
 			this.scrollBy(-this.lastViewportHeight);
@@ -139,7 +150,9 @@ export class BtwTranscriptPager implements Component {
 			return truncateToWidth(this.theme.fg("warning", warning), width);
 		}
 		const scrollable = this.getMaxScrollOffset() > 0;
-		const fullBase = "btw • Enter send • Ctrl+C exit";
+		const fullBase = this.canPromote
+			? "btw • Enter send • Ctrl+R bring to main • Ctrl+C exit"
+			: "btw • Enter send • Ctrl+C exit";
 		const compactBase = "btw • Enter • Ctrl+C";
 		let hints = visibleWidth(fullBase) <= width ? fullBase : compactBase;
 		if (scrollable) {
@@ -147,6 +160,8 @@ export class BtwTranscriptPager implements Component {
 			const compactHistory = " • PgUp/PgDn";
 			if (visibleWidth(`${hints}${history}`) <= width) {
 				hints += history;
+			} else if (visibleWidth(`${compactBase}${history}`) <= width) {
+				hints = `${compactBase}${history}`;
 			} else if (visibleWidth(`${hints}${compactHistory}`) <= width) {
 				hints += compactHistory;
 			} else if (visibleWidth(`${compactBase}${compactHistory}`) <= width) {

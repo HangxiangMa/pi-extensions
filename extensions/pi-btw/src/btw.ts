@@ -8,6 +8,12 @@ import {
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import {
+	BtwTextRangeSelector,
+	buildQuickHandoffSegments,
+	formatBtwHandoff,
+	getAnsweredTurns,
+} from "./handoff.js";
+import {
 	BTW_THINKING_LEVELS,
 	type BtwThinkingLevel,
 	completeSideThreadTurn,
@@ -222,12 +228,13 @@ export default function btw(pi: ExtensionAPI) {
 				return;
 			}
 
-			await runBtwThread({
+			const result = await runBtwThread({
 				initialQuestion: question || undefined,
 				selected: resolution.selected,
 				thinkingLevel: settings.thinkingLevel ?? pi.getThinkingLevel(),
 				ctx,
 			});
+			if (result.kind === "handoff") await loadHandoffIntoMainEditor(result.draft, ctx);
 		},
 	});
 }
@@ -285,7 +292,12 @@ async function resolveBtwModelWithLoader(
 interface RunBtwThreadDependencies {
 	ask?: typeof askThreadQuestion;
 	interact?: typeof showThreadComposer;
+	chooseHandoff?: typeof chooseBtwHandoff;
 }
+
+export type BtwThreadResult = { kind: "closed" } | { kind: "handoff"; draft: string };
+
+type BtwHandoffChoice = BtwThreadResult | { kind: "back" };
 
 interface RunBtwThreadOptions {
 	initialQuestion?: string;
@@ -301,23 +313,34 @@ export async function runBtwThread({
 	thinkingLevel,
 	ctx,
 	dependencies = {},
-}: RunBtwThreadOptions): Promise<void> {
+}: RunBtwThreadOptions): Promise<BtwThreadResult> {
 	const ask = dependencies.ask ?? askThreadQuestion;
 	const interact = dependencies.interact ?? showThreadComposer;
+	const chooseHandoff = dependencies.chooseHandoff ?? chooseBtwHandoff;
 	const thread = createSideThread(buildConversationContext(ctx.sessionManager.getBranch()));
 	let pendingQuestion = initialQuestion;
+	let composerDraft: string | undefined;
 
 	while (true) {
 		if (!pendingQuestion) {
-			const action = await interact(thread, thread.turns.length > 0, ctx);
-			if (action.kind === "close") return;
+			const action = await interact(thread, thread.turns.length > 0, ctx, composerDraft);
+			if (action.kind === "close") return { kind: "closed" };
+			if (action.kind === "promote") {
+				const choice = await chooseHandoff(thread, ctx);
+				if (choice.kind === "back") {
+					composerDraft = action.questionDraft;
+					continue;
+				}
+				return choice;
+			}
+			composerDraft = undefined;
 			pendingQuestion = action.question;
 		}
 
 		const result = await ask(thread, pendingQuestion, selected, thinkingLevel, ctx);
 		if (result.kind === "aborted") {
 			ctx.ui.notify("Cancelled", "info");
-			return;
+			return { kind: "closed" };
 		}
 		if (result.kind === "error") {
 			thread.turns.push({
@@ -329,6 +352,88 @@ export async function runBtwThread({
 
 		pendingQuestion = undefined;
 	}
+}
+
+export async function chooseBtwHandoff(
+	thread: SideThread,
+	ctx: ExtensionCommandContext,
+): Promise<BtwHandoffChoice> {
+	const answered = getAnsweredTurns(thread.turns);
+	if (answered.length === 0) return { kind: "back" };
+
+	while (true) {
+		const scope = await ctx.ui.select("Bring what back to the main thread?", [
+			"Latest question and answer",
+			"From a question onward…",
+			"Select a text range…",
+			"Entire side thread",
+			"Cancel",
+		]);
+		if (!scope || scope === "Cancel") return { kind: "back" };
+		if (scope === "Latest question and answer") {
+			return {
+				kind: "handoff",
+				draft: formatBtwHandoff(buildQuickHandoffSegments(thread.turns, { kind: "latest" })),
+			};
+		}
+		if (scope === "Entire side thread") {
+			return {
+				kind: "handoff",
+				draft: formatBtwHandoff(buildQuickHandoffSegments(thread.turns, { kind: "entire" })),
+			};
+		}
+		if (scope === "From a question onward…") {
+			const questions = answered.map(
+				(turn, index) => `${index + 1}. ${truncatePreview(sanitizeSingleLine(turn.question))}`,
+			);
+			const selectedQuestion = await ctx.ui.select("Start from which question?", questions);
+			if (!selectedQuestion) continue;
+			const answeredTurnIndex = questions.indexOf(selectedQuestion);
+			if (answeredTurnIndex < 0) continue;
+			return {
+				kind: "handoff",
+				draft: formatBtwHandoff(
+					buildQuickHandoffSegments(thread.turns, { kind: "from", answeredTurnIndex }),
+				),
+			};
+		}
+
+		const selectedRange = await ctx.ui.custom<BtwHandoffChoice>(
+			(tui, theme, _keybindings, done) =>
+				new BtwTextRangeSelector(tui, theme, thread.turns, (action) => {
+					if (action.kind === "back") done({ kind: "back" });
+					else if (action.kind === "close") done({ kind: "closed" });
+					else done({ kind: "handoff", draft: formatBtwHandoff(action.segments) });
+				}),
+		);
+		if (selectedRange.kind === "back") continue;
+		return selectedRange;
+	}
+}
+
+async function loadHandoffIntoMainEditor(
+	draft: string,
+	ctx: ExtensionCommandContext,
+): Promise<void> {
+	const existing = ctx.ui.getEditorText();
+	if (!existing.trim()) {
+		ctx.ui.setEditorText(draft);
+		ctx.ui.notify("Context loaded into the main editor. Review and submit when ready.", "info");
+		return;
+	}
+	const action = await ctx.ui.select("The main editor already contains text", [
+		"Append context",
+		"Replace editor text",
+		"Cancel",
+	]);
+	if (action === "Append context") ctx.ui.setEditorText(`${existing}\n\n${draft}`);
+	else if (action === "Replace editor text") ctx.ui.setEditorText(draft);
+	else return;
+	ctx.ui.notify("Context loaded into the main editor. Review and submit when ready.", "info");
+}
+
+function truncatePreview(text: string): string {
+	return text.length <= 72 ? text : `${text.slice(0, 69)}…`;
 }
 
 async function askThreadQuestion(
@@ -368,10 +473,14 @@ async function showThreadComposer(
 	thread: SideThread,
 	startAtBottom: boolean,
 	ctx: ExtensionCommandContext,
+	initialQuestion?: string,
 ): Promise<TranscriptPagerAction> {
 	return ctx.ui.custom<TranscriptPagerAction>(
 		(tui, theme, _keybindings, done) =>
-			new BtwTranscriptPager(tui, theme, thread.turns, done, { startAtBottom }),
+			new BtwTranscriptPager(tui, theme, thread.turns, done, {
+				startAtBottom,
+				initialQuestion,
+			}),
 	);
 }
 

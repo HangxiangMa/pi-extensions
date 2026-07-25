@@ -9,7 +9,14 @@ import type {
 } from "@earendil-works/pi-ai";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
-import { type ResolvedBtwModel, runBtwThread } from "../src/btw.js";
+import { chooseBtwHandoff, type ResolvedBtwModel, runBtwThread } from "../src/btw.js";
+import {
+	BtwTextRangeSelector,
+	buildBtwSelectionLines,
+	buildQuickHandoffSegments,
+	formatBtwHandoff,
+	segmentsFromLineRange,
+} from "../src/handoff.js";
 import {
 	buildSideThreadMessages,
 	completeSideThreadTurn,
@@ -159,6 +166,109 @@ test("buildSideThreadMessages keeps failed display turns out of provider context
 	assert.doesNotMatch(JSON.stringify(messages), /failed|boom/);
 });
 
+test("handoff scopes exclude failed turns and preserve ordered question and answer roles", () => {
+	const turns = [
+		{ question: "Q1", answer: "A1", kind: "answered" as const, response: response("A1") },
+		{ question: "failed", answer: "boom", kind: "error" as const },
+		{ question: "Q2", answer: "A2", kind: "answered" as const, response: response("A2") },
+	];
+
+	assert.deepEqual(buildQuickHandoffSegments(turns, { kind: "latest" }), [
+		{ role: "user", text: "Q2" },
+		{ role: "assistant", text: "A2" },
+	]);
+	assert.deepEqual(buildQuickHandoffSegments(turns, { kind: "from", answeredTurnIndex: 1 }), [
+		{ role: "user", text: "Q2" },
+		{ role: "assistant", text: "A2" },
+	]);
+	assert.deepEqual(buildQuickHandoffSegments(turns, { kind: "entire" }), [
+		{ role: "user", text: "Q1" },
+		{ role: "assistant", text: "A1" },
+		{ role: "user", text: "Q2" },
+		{ role: "assistant", text: "A2" },
+	]);
+});
+
+test("custom handoff line ranges retain raw text and role boundaries in either direction", () => {
+	const turns = [
+		{
+			question: "first question\nsecond question",
+			answer: "first answer\n\nlast answer",
+			kind: "answered" as const,
+			response: response("first answer\n\nlast answer"),
+		},
+	];
+	const lines = buildBtwSelectionLines(turns);
+
+	assert.deepEqual(segmentsFromLineRange(lines, 4, 1), [
+		{ role: "user", text: "second question" },
+		{ role: "assistant", text: "first answer\n\nlast answer" },
+	]);
+	assert.equal(
+		formatBtwHandoff(segmentsFromLineRange(lines, 4, 1)),
+		[
+			"The following context was promoted from a /btw side discussion.",
+			"Treat it as discussion context, not as work already completed.",
+			"",
+			"<btw_context>",
+			"User:",
+			"second question",
+			"",
+			"Assistant:",
+			"first answer",
+			"",
+			"last answer",
+			"</btw_context>",
+		].join("\n"),
+	);
+});
+
+test("handoff drafts escape terminal controls before entering the main editor", () => {
+	const draft = formatBtwHandoff([
+		{ role: "assistant", text: "safe\u001b]52;c;ZXZpbA==\u0007\ttext" },
+	]);
+
+	assert.equal(draft.includes("\u001b"), false);
+	assert.equal(draft.includes("\u0007"), false);
+	assert.match(draft, /safe\\x1b]52;c;ZXZpbA==\\x07 {4}text/);
+});
+
+test("handoff scope menu offers the approved choices and selects a question-to-end suffix", async () => {
+	const thread = createSideThread("context");
+	for (const [question, answer] of [
+		["Q1", "A1"],
+		["Q2", "A2"],
+	] as const) {
+		thread.turns.push({ kind: "answered", question, answer, response: response(answer) });
+	}
+	const prompts: Array<{ title: string; options: string[] }> = [];
+	const selections = ["From a question onward…", "2. Q2"];
+	const ctx = {
+		ui: {
+			select: async (title: string, options: string[]) => {
+				prompts.push({ title, options });
+				return selections.shift();
+			},
+		},
+	} as never;
+
+	const result = await chooseBtwHandoff(thread, ctx);
+
+	assert.deepEqual(prompts[0], {
+		title: "Bring what back to the main thread?",
+		options: [
+			"Latest question and answer",
+			"From a question onward…",
+			"Select a text range…",
+			"Entire side thread",
+			"Cancel",
+		],
+	});
+	assert.equal(result.kind, "handoff");
+	assert.doesNotMatch(result.kind === "handoff" ? result.draft : "", /Q1|A1/);
+	assert.match(result.kind === "handoff" ? result.draft : "", /Q2[\s\S]*A2/);
+});
+
 test("side-thread command loop opens the composer before the first question", async () => {
 	const ctx = {
 		ui: { notify() {} },
@@ -172,7 +282,7 @@ test("side-thread command loop opens the composer before the first question", as
 	const questions: string[] = [];
 	const interactions = [{ kind: "submit" as const, question: "Q1" }, { kind: "close" as const }];
 
-	await runBtwThread({
+	const result = await runBtwThread({
 		selected,
 		thinkingLevel: "off",
 		ctx,
@@ -192,6 +302,7 @@ test("side-thread command loop opens the composer before the first question", as
 
 	assert.deepEqual(transcriptSizes, [0, 1]);
 	assert.deepEqual(questions, ["Q1"]);
+	assert.deepEqual(result, { kind: "closed" });
 });
 
 test("side-thread command loop immediately accepts another question after each answer", async () => {
@@ -274,6 +385,74 @@ test("cancelling an in-progress side answer exits without reopening the composer
 	assert.deepEqual(notifications, [{ message: "Cancelled", level: "info" }]);
 });
 
+test("cancelled handoff selection restores the unsubmitted side-question draft", async () => {
+	const ctx = {
+		ui: { notify() {} },
+		sessionManager: { getBranch: () => [] },
+	} as never;
+	const drafts: Array<string | undefined> = [];
+	let interactions = 0;
+	const result = await runBtwThread({
+		initialQuestion: "Q1",
+		selected: {
+			model: { provider: "test", id: "side" } as Model<Api>,
+			auth: { apiKey: "key" },
+		},
+		thinkingLevel: "off",
+		ctx,
+		dependencies: {
+			ask: async (thread) => {
+				const assistant = response("A1");
+				thread.turns.push({ kind: "answered", question: "Q1", answer: "A1", response: assistant });
+				return { kind: "answered", response: assistant, answer: "A1" };
+			},
+			interact: async (_thread, _atBottom, _ctx, draft) => {
+				drafts.push(draft);
+				interactions += 1;
+				return interactions === 1
+					? { kind: "promote", questionDraft: "unfinished question" }
+					: { kind: "close" };
+			},
+			chooseHandoff: async () => ({ kind: "back" }),
+		},
+	});
+
+	assert.deepEqual(drafts, [undefined, "unfinished question"]);
+	assert.deepEqual(result, { kind: "closed" });
+});
+
+test("side-thread command loop returns an explicit handoff without mutating the main session", async () => {
+	const branch = [{ type: "message", message: { role: "user", content: "main" } }];
+	const ctx = {
+		ui: { notify() {} },
+		sessionManager: { getBranch: () => branch },
+	} as never;
+	const assistant = response("A1");
+	const result = await runBtwThread({
+		initialQuestion: "Q1",
+		selected: {
+			model: { provider: "test", id: "side" } as Model<Api>,
+			auth: { apiKey: "key" },
+		},
+		thinkingLevel: "off",
+		ctx,
+		dependencies: {
+			ask: async (thread) => {
+				thread.turns.push({ kind: "answered", question: "Q1", answer: "A1", response: assistant });
+				return { kind: "answered", response: assistant, answer: "A1" };
+			},
+			interact: async () => ({ kind: "promote", questionDraft: "" }),
+			chooseHandoff: async () => ({
+				kind: "handoff",
+				draft: "selected draft",
+			}),
+		},
+	});
+
+	assert.deepEqual(result, { kind: "handoff", draft: "selected draft" });
+	assert.equal(branch.length, 1);
+});
+
 test("empty transcript composer accepts the first side-thread question", () => {
 	const actions: unknown[] = [];
 	const tui = { terminal: { rows: 24 }, requestRender() {} };
@@ -300,6 +479,140 @@ test("empty transcript composer accepts the first side-thread question", () => {
 	composer.handleInput("\r");
 
 	assert.deepEqual(actions, [{ kind: "submit", question: "first question" }]);
+});
+
+test("transcript offers opt-in promotion only after a successful answer", () => {
+	initTheme("dark");
+	const actions: unknown[] = [];
+	const tui = { terminal: { rows: 24 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const empty = new BtwTranscriptPager(tui as never, theme as never, [], (action) =>
+		actions.push(action),
+	);
+	empty.handleInput("\u0012");
+	assert.doesNotMatch(empty.render(80).join("\n"), /bring to main/i);
+
+	const answered = new BtwTranscriptPager(
+		tui as never,
+		theme as never,
+		[{ question: "Q1", answer: "A1", kind: "answered", response: response("A1") }],
+		(action) => actions.push(action),
+	);
+	assert.match(answered.render(80).join("\n"), /Ctrl\+R bring to main/);
+	answered.handleInput("\u0012");
+
+	assert.deepEqual(actions, [{ kind: "promote", questionDraft: "" }]);
+});
+
+test("text range selector anchors with Space, extends, confirms, and stays width-safe", () => {
+	const actions: unknown[] = [];
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bg(_color: string, text: string) {
+			return `[${text}]`;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const selector = new BtwTextRangeSelector(
+		tui as never,
+		theme as never,
+		[
+			{
+				question: "question one\nquestion two",
+				answer: "answer one\nanswer two",
+				kind: "answered",
+				response: response("answer one\nanswer two"),
+			},
+		],
+		(action) => actions.push(action),
+	);
+
+	selector.handleInput("\u001b[B");
+	selector.handleInput(" ");
+	selector.handleInput("\u001b[B");
+	selector.handleInput("\u001b[B");
+	const narrow = selector.render(24);
+	assert.ok(narrow.every((line) => visibleWidth(line) <= 24));
+	assert.match(selector.render(80).join("\n"), /Space anchor.*Enter confirm/);
+	selector.handleInput("\r");
+
+	assert.deepEqual(actions, [
+		{
+			kind: "confirm",
+			segments: [
+				{ role: "user", text: "question two" },
+				{ role: "assistant", text: "answer one\nanswer two" },
+			],
+		},
+	]);
+});
+
+test("text range selector distinguishes back from closing the side thread", () => {
+	const actions: unknown[] = [];
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const turns = [
+		{ question: "Q", answer: "A", kind: "answered" as const, response: response("A") },
+	];
+	new BtwTextRangeSelector(tui as never, theme as never, turns, (action) =>
+		actions.push(action),
+	).handleInput("\u001b");
+	new BtwTextRangeSelector(tui as never, theme as never, turns, (action) =>
+		actions.push(action),
+	).handleInput("\u0003");
+
+	assert.deepEqual(actions, [{ kind: "back" }, { kind: "close" }]);
+});
+
+test("text range selector scrolls raw lines and escapes controls in its display", () => {
+	const tui = { terminal: { rows: 8 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const answer = Array.from({ length: 20 }, (_, index) =>
+		index === 19 ? "latest\u001b[2J" : `line ${index + 1}`,
+	).join("\n");
+	const selector = new BtwTextRangeSelector(
+		tui as never,
+		theme as never,
+		[{ question: "Q", answer, kind: "answered", response: response(answer) }],
+		() => undefined,
+	);
+	for (let index = 0; index < 20; index += 1) selector.handleInput("\u001b[B");
+	const rendered = selector.render(60).join("\n");
+
+	assert.match(rendered, /latest\\x1b\[2J/);
+	assert.equal(rendered.includes("\u001b[2J"), false);
 });
 
 test("side-thread header and footer remain visible when the editor grows", () => {
