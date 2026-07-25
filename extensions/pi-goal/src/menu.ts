@@ -2,7 +2,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { formatDuration } from "./accounting.js";
 import { parseTokenBudget } from "./command.js";
 import type { GoalCommandController } from "./commands.js";
-import type { ActiveGoal } from "./persistence.js";
+import type { ActiveGoal, PendingQueueAction } from "./persistence.js";
 import type { GoalRuntime } from "./runtime.js";
 
 export const GOAL_MENU_ACTIONS = {
@@ -32,7 +32,7 @@ const QUEUE_ACTIONS = {
 interface GoalMenuRuntimeView {
 	activeGoal?: ActiveGoal;
 	queuedGoals: ActiveGoal[];
-	pendingQueueAction?: unknown;
+	pendingQueueAction?: PendingQueueAction;
 	queueFrozen: boolean;
 	settings: GoalRuntime["settings"];
 	recordGoalUsage?: GoalRuntime["recordGoalUsage"];
@@ -95,7 +95,9 @@ export function buildGoalMenuState(runtime: GoalMenuRuntimeView): GoalMenuState 
 		actions.push(GOAL_MENU_ACTIONS.edit, GOAL_MENU_ACTIONS.replace);
 	}
 	if (goal) actions.push(GOAL_MENU_ACTIONS.status);
-	if (runtime.settings.experimental.goals || queueCount > 0) actions.push(GOAL_MENU_ACTIONS.queue);
+	if (goal && (runtime.settings.experimental.goals || queueCount > 0)) {
+		actions.push(GOAL_MENU_ACTIONS.queue);
+	}
 	actions.push(GOAL_MENU_ACTIONS.settings, GOAL_MENU_ACTIONS.help);
 	if (goal) actions.push(GOAL_MENU_ACTIONS.clear);
 	actions.push(GOAL_MENU_ACTIONS.close);
@@ -143,7 +145,7 @@ export async function showGoalManager(
 				commands.showGoal(ctx);
 				return;
 			case GOAL_MENU_ACTIONS.queue:
-				await showQueueMenu(runtime, commands, ctx);
+				if ((await showQueueMenu(runtime, commands, ctx)) === "back") continue;
 				return;
 			case GOAL_MENU_ACTIONS.settings:
 				await showSettings(ctx);
@@ -265,7 +267,7 @@ async function showQueueMenu(
 		`Goal queue · ${runtime.queuedGoals.length + 1} total\nCurrent: ${safeGoalMenuText(goal.text)}`,
 		actions,
 	);
-	if (!selected || selected === QUEUE_ACTIONS.back) return;
+	if (!selected || selected === QUEUE_ACTIONS.back) return "back" as const;
 	if (selected === QUEUE_ACTIONS.add) {
 		const objective = (await ctx.ui.editor("Add goal to queue", ""))?.trim();
 		if (objective) await commands.addGoal(objective, undefined, ctx);
@@ -304,11 +306,19 @@ async function confirmClear(runtime: GoalMenuRuntimeView, ctx: ExtensionCommandC
 	const goals = [runtime.activeGoal, ...runtime.queuedGoals].filter(
 		(goal): goal is ActiveGoal => goal !== undefined,
 	);
-	if (goals.length === 0) return false;
+	const pendingPriority =
+		runtime.pendingQueueAction?.kind === "prioritize"
+			? runtime.pendingQueueAction.objective
+			: undefined;
+	const summaries = [
+		...goals.map((goal) => safeGoalMenuText(goal.text, 4_000)),
+		...(pendingPriority ? [`Pending priority: ${safeGoalMenuText(pendingPriority, 4_000)}`] : []),
+	];
+	if (summaries.length === 0) return false;
 	return ctx.ui.confirm(
-		goals.length > 1 ? "Clear goal queue?" : "Clear goal?",
-		`Remove ${goals.length === 1 ? "this goal" : `all ${goals.length} goals`}:\n\n${goals
-			.map((goal, index) => `${index + 1}. ${safeGoalMenuText(goal.text, 4_000)}`)
+		summaries.length > 1 ? "Clear goal queue?" : "Clear goal?",
+		`Remove ${summaries.length === 1 ? "this goal" : `all ${summaries.length} goals`}:\n\n${summaries
+			.map((summary, index) => `${index + 1}. ${summary}`)
 			.join("\n")}\n\nThis cannot be undone.`,
 	);
 }
@@ -321,13 +331,7 @@ function displayStatus(status?: ActiveGoal["status"]) {
 }
 
 function formatTokenCount(tokens: number) {
-	if (tokens >= 1_000_000) return `${trimNumber(tokens / 1_000_000)}m`;
-	if (tokens >= 1_000) return `${trimNumber(tokens / 1_000)}k`;
 	return String(tokens);
-}
-
-function trimNumber(value: number) {
-	return value.toFixed(value >= 10 ? 0 : 1).replace(/\.0$/u, "");
 }
 
 function isTerminalControl(character: string) {

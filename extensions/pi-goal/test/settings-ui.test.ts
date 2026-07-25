@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
+import {
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+} from "../../../test/support.js";
+import { GoalCommandController } from "../src/commands.js";
+import { createGoal, GoalRuntime } from "../src/runtime.js";
 import { DEFAULT_GOAL_SETTINGS, type GoalSettings } from "../src/settings.js";
 import {
 	applyGoalSettings,
@@ -14,37 +20,17 @@ import {
 initTheme("dark", false);
 
 function runtime() {
-	const visibility = {
-		activeTools: ["read"],
-		goalToolsUnlocked: false,
-		goalToolsHiddenByPolicy: ["goal_complete", "goal_blocked"],
+	const mock = createMockPi({ activeTools: ["read"] });
+	const state = new GoalRuntime(mock.pi) as GoalRuntime & {
+		readonly visibility: ReturnType<GoalRuntime["snapshotGoalToolVisibility"]>;
 	};
-	return {
-		settings: structuredClone(DEFAULT_GOAL_SETTINGS),
-		activeGoal: undefined,
-		queuedGoals: [],
-		pendingQueueAction: undefined,
-		queueFrozen: false,
-		snapshotGoalToolVisibility: () => structuredClone(visibility),
-		restoreGoalToolVisibility: (snapshot: typeof visibility) => Object.assign(visibility, snapshot),
-		restoreGoalToolsHiddenByPolicy() {
-			visibility.activeTools.push(...visibility.goalToolsHiddenByPolicy);
-			visibility.goalToolsHiddenByPolicy = [];
-		},
-		hideGoalToolsIfLocked() {},
-		cancelContinuationWork() {},
-		persistGoal() {},
-		updateStatus() {},
-		enforceAutomaticTurnLimit() {
-			return false;
-		},
-		enforceNoProgressLimit() {
-			return false;
-		},
-		get visibility() {
-			return visibility;
-		},
-	};
+	state.settings = structuredClone(DEFAULT_GOAL_SETTINGS);
+	state.goalToolsHiddenByPolicy.add("goal_complete");
+	state.goalToolsHiddenByPolicy.add("goal_blocked");
+	Object.defineProperty(state, "visibility", {
+		get: () => state.snapshotGoalToolVisibility(),
+	});
+	return state;
 }
 
 test("goal setting limit parsing preserves arbitrary positive integers and unlimited", () => {
@@ -64,7 +50,7 @@ test("applyGoalSettings saves before committing runtime settings and enforces lo
 	let enforced = 0;
 	state.enforceAutomaticTurnLimit = () => {
 		enforced++;
-		return true;
+		return false;
 	};
 	const next: GoalSettings = {
 		...structuredClone(DEFAULT_GOAL_SETTINGS),
@@ -105,6 +91,107 @@ test("applyGoalSettings restores effective tool policy when persistence fails", 
 	assert.deepEqual(state.visibility, before);
 });
 
+test("applyGoalSettings rolls back file and effective state after runtime application fails", () => {
+	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
+	const state = new GoalRuntime(mock.pi);
+	state.settings = {
+		...structuredClone(DEFAULT_GOAL_SETTINGS),
+		experimental: { goals: true },
+	};
+	state.activeGoal = createGoal("current objective", undefined, 0);
+	state.queuedGoals = [createGoal("queued objective", undefined, 0)];
+	const previous = structuredClone(state.settings);
+	const next = { ...structuredClone(previous), experimental: { goals: false } };
+	const saved: GoalSettings[] = [];
+	let persistCalls = 0;
+	state.persistGoal = () => {
+		persistCalls++;
+		if (persistCalls === 1) throw new Error("stale context");
+	};
+	const context = createMockContext({ mode: "tui", hasUI: true });
+
+	assert.throws(
+		() =>
+			applyGoalSettings(state, next, context.ctx, {
+				save(settings) {
+					saved.push(structuredClone(settings));
+				},
+			}),
+		/stale context/,
+	);
+	assert.deepEqual(saved, [next, previous]);
+	assert.deepEqual(state.settings, previous);
+	assert.equal(state.queueFrozen, false);
+	assert.equal(state.activeGoal?.status, "active");
+});
+
+test("disabling a retained queue pauses and aborts in-flight Goal work", () => {
+	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
+	const state = new GoalRuntime(mock.pi);
+	state.settings = {
+		...structuredClone(DEFAULT_GOAL_SETTINGS),
+		experimental: { goals: true },
+	};
+	state.activeGoal = createGoal("current objective", undefined, 0);
+	state.queuedGoals = [createGoal("queued objective", undefined, 0)];
+	state.requestContinuation(state.activeGoal);
+	let aborts = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		abort: () => aborts++,
+	});
+	const next = { ...structuredClone(state.settings), experimental: { goals: false } };
+
+	applyGoalSettings(state, next, context.ctx, { save() {} });
+
+	assert.equal(aborts, 1);
+	assert.equal(state.queueFrozen, true);
+	assert.equal(state.activeGoal?.status, "active");
+	assert.equal(state.continuationIntent, undefined);
+	assert.equal(state.staleGoalToolCallsBlocked, true);
+});
+
+test("unfreezing an active retained queue dispatches Goal work immediately", async () => {
+	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
+	const state = new GoalRuntime(mock.pi);
+	state.settings = {
+		...structuredClone(DEFAULT_GOAL_SETTINGS),
+		experimental: { goals: true },
+	};
+	state.activeGoal = createGoal("current objective", undefined, 0);
+	state.queuedGoals = [createGoal("queued objective", undefined, 0)];
+	state.queueFrozen = false;
+	const controller = new GoalCommandController(state);
+	const context = createMockContext({ mode: "tui", hasUI: true, isIdle: () => true });
+
+	const dispatched = await controller.resumeQueueAfterUnfreeze(context.ctx);
+
+	assert.equal(dispatched, true);
+	assert.equal(mock.sentUserMessages.length, 1);
+	assert.match(mock.sentUserMessages[0]?.text ?? "", /Continue the active \/goal/i);
+});
+
+test("unfreezing a pending priority dispatches it at the idle boundary", async () => {
+	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
+	const state = new GoalRuntime(mock.pi);
+	state.settings = {
+		...structuredClone(DEFAULT_GOAL_SETTINGS),
+		experimental: { goals: true },
+	};
+	state.activeGoal = createGoal("current objective", undefined, 0);
+	state.pendingQueueAction = { kind: "prioritize", objective: "urgent objective" };
+	const controller = new GoalCommandController(state);
+	const context = createMockContext({ mode: "tui", hasUI: true, isIdle: () => true });
+
+	const dispatched = await controller.resumeQueueAfterUnfreeze(context.ctx);
+
+	assert.equal(dispatched, true);
+	assert.equal(state.pendingQueueAction, undefined);
+	assert.equal(state.activeGoal?.text, "urgent objective");
+	assert.equal(mock.sentUserMessages.length, 1);
+});
+
 test("settings screen saves changes in place and Escape waits for the save queue", async () => {
 	const state = runtime();
 	const saved: GoalSettings[] = [];
@@ -135,6 +222,40 @@ test("settings screen saves changes in place and Escape waits for the save queue
 	assert.equal(saved.length, 1);
 	assert.equal(saved[0]?.toolVisibility, "after-first-goal");
 	assert.equal(state.settings.toolVisibility, "after-first-goal");
+});
+
+test("settings screen resumes retained work after enabling the queue", async () => {
+	const state = runtime();
+	state.activeGoal = createGoal("current objective", undefined, 0);
+	state.queuedGoals = [createGoal("queued objective", undefined, 0)];
+	state.queueFrozen = true;
+	let unfrozen = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		confirm: async () => true,
+		custom: async (factory: unknown) => {
+			const selector = createCustomSelectorHarness(factory, 80);
+			selector.handleInput("\u001b[B");
+			selector.handleInput("\r");
+			await new Promise((resolve) => setImmediate(resolve));
+			selector.handleInput("\u001b");
+			await new Promise((resolve) => setImmediate(resolve));
+			return selector.result;
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save() {},
+		onQueueUnfrozen: async () => {
+			unfrozen++;
+		},
+	});
+
+	assert.equal(state.queueFrozen, false);
+	assert.equal(state.settings.experimental.goals, true);
+	assert.equal(unfrozen, 1);
 });
 
 test("settings screen fits narrow, normal, and wide terminal widths", async () => {

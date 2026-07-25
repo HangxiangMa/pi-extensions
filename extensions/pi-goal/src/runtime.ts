@@ -123,6 +123,21 @@ interface GoalTerminalDetails {
 	reason?: string;
 }
 
+export interface GoalSettingsRuntimeSnapshot {
+	settings: GoalSettings;
+	activeGoal?: ActiveGoal;
+	queueFrozen: boolean;
+	continuationIntent?: ContinuationTicket;
+	continuationDelivery?: ContinuationTicket;
+	goalRecovery?: GoalRecovery;
+	budgetWrapUp?: BudgetWrapUp;
+	guardAbortGoalId?: string;
+	staleGoalToolCallsBlocked: boolean;
+	cancelledContinuationMarkers: string[];
+	terminalDetails?: GoalTerminalDetails;
+	toolVisibility: GoalToolVisibilitySnapshot;
+}
+
 interface PendingGoalPrompt {
 	goalId: string;
 	resetSafetyEpoch: boolean;
@@ -832,6 +847,48 @@ export class GoalRuntime {
 			goalToolsUnlocked: this.goalToolsUnlocked,
 			goalToolsHiddenByPolicy: [...this.goalToolsHiddenByPolicy],
 		};
+	}
+
+	snapshotSettingsApplicationState(): GoalSettingsRuntimeSnapshot {
+		return {
+			settings: structuredClone(this.settings),
+			activeGoal: this.activeGoal ? structuredClone(this.activeGoal) : undefined,
+			queueFrozen: this.queueFrozen,
+			continuationIntent: this.continuationIntent
+				? structuredClone(this.continuationIntent)
+				: undefined,
+			continuationDelivery: this.continuationDelivery
+				? structuredClone(this.continuationDelivery)
+				: undefined,
+			goalRecovery: this.goalRecovery ? structuredClone(this.goalRecovery) : undefined,
+			budgetWrapUp: this.budgetWrapUp ? structuredClone(this.budgetWrapUp) : undefined,
+			guardAbortGoalId: this.guardAbortGoalId,
+			staleGoalToolCallsBlocked: this.staleGoalToolCallsBlocked,
+			cancelledContinuationMarkers: [...this.cancelledContinuationMarkers],
+			terminalDetails: this.terminalDetails ? structuredClone(this.terminalDetails) : undefined,
+			toolVisibility: this.snapshotGoalToolVisibility(),
+		};
+	}
+
+	restoreSettingsApplicationState(snapshot: GoalSettingsRuntimeSnapshot) {
+		this.settings = structuredClone(snapshot.settings);
+		this.activeGoal = snapshot.activeGoal ? structuredClone(snapshot.activeGoal) : undefined;
+		this.queueFrozen = snapshot.queueFrozen;
+		this.continuationIntent = snapshot.continuationIntent
+			? structuredClone(snapshot.continuationIntent)
+			: undefined;
+		this.continuationDelivery = snapshot.continuationDelivery
+			? structuredClone(snapshot.continuationDelivery)
+			: undefined;
+		this.goalRecovery = snapshot.goalRecovery ? structuredClone(snapshot.goalRecovery) : undefined;
+		this.budgetWrapUp = snapshot.budgetWrapUp ? structuredClone(snapshot.budgetWrapUp) : undefined;
+		this.guardAbortGoalId = snapshot.guardAbortGoalId;
+		this.staleGoalToolCallsBlocked = snapshot.staleGoalToolCallsBlocked;
+		this.cancelledContinuationMarkers = new Set(snapshot.cancelledContinuationMarkers);
+		this.terminalDetails = snapshot.terminalDetails
+			? structuredClone(snapshot.terminalDetails)
+			: undefined;
+		this.restoreGoalToolVisibility(snapshot.toolVisibility);
 	}
 
 	restoreGoalToolVisibility(snapshot: GoalToolVisibilitySnapshot) {

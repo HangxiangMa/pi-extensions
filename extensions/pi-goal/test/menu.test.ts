@@ -7,7 +7,7 @@ import {
 	safeGoalMenuText,
 	showGoalManager,
 } from "../src/menu.js";
-import type { ActiveGoal } from "../src/persistence.js";
+import type { ActiveGoal, PendingQueueAction } from "../src/persistence.js";
 import { createGoal, transitionGoal } from "../src/runtime.js";
 import { DEFAULT_GOAL_SETTINGS } from "../src/settings.js";
 
@@ -15,7 +15,7 @@ function runtime(goal?: ActiveGoal) {
 	return {
 		activeGoal: goal,
 		queuedGoals: [] as ActiveGoal[],
-		pendingQueueAction: undefined,
+		pendingQueueAction: undefined as PendingQueueAction | undefined,
 		queueFrozen: false,
 		settings: structuredClone(DEFAULT_GOAL_SETTINGS),
 	};
@@ -45,10 +45,13 @@ function commands() {
 }
 
 test("buildGoalMenuState prioritizes actions for empty, active, stopped, budget, and frozen states", () => {
-	assert.deepEqual(buildGoalMenuState(runtime()).actions.slice(0, 2), [
+	const empty = runtime();
+	empty.settings.experimental.goals = true;
+	assert.deepEqual(buildGoalMenuState(empty).actions.slice(0, 2), [
 		GOAL_MENU_ACTIONS.start,
 		GOAL_MENU_ACTIONS.startBudget,
 	]);
+	assert.equal(buildGoalMenuState(empty).actions.includes(GOAL_MENU_ACTIONS.queue), false);
 
 	const active = createGoal("ship the release", 100, 0);
 	active.tokensUsed = 20;
@@ -117,6 +120,71 @@ test("menu cancellation has no side effects and clear requires an exact preview"
 	});
 
 	await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+	assert.equal(tracked.calls.length, 0);
+});
+
+test("clear preview includes a pending priority objective", async () => {
+	const state = runtime(createGoal("current objective", undefined, 0));
+	state.queuedGoals.push(createGoal("queued objective", undefined, 0));
+	state.pendingQueueAction = { kind: "prioritize", objective: "pending urgent objective" };
+	const tracked = commands();
+	const selections = [GOAL_MENU_ACTIONS.clear, undefined];
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		select: async () => selections.shift(),
+		confirm: async (title: string, message: string) => {
+			assert.equal(title, "Clear goal queue?");
+			assert.match(message, /all 3 goals/i);
+			assert.match(message, /current objective/);
+			assert.match(message, /queued objective/);
+			assert.match(message, /pending urgent objective/);
+			return false;
+		},
+	});
+
+	await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+	assert.equal(tracked.calls.length, 0);
+});
+
+test("menu preserves exact token values in status and budget input", async () => {
+	const goal = transitionGoal(createGoal("precise budget", 10_500, 0), "budget_limited");
+	goal.tokensUsed = 10_499;
+	const state = runtime(goal);
+	assert.match(buildGoalMenuState(state).title, /10499\/10500/);
+	let placeholder = "";
+	const tracked = commands();
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		select: async () => GOAL_MENU_ACTIONS.increaseBudget,
+		input: async (_title: string, value: string) => {
+			placeholder = value;
+			return undefined;
+		},
+	});
+	await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+	assert.equal(placeholder, "10500");
+	assert.equal(tracked.calls.length, 0);
+});
+
+test("Queue Back returns to the refreshed main menu", async () => {
+	const state = runtime(createGoal("current objective", undefined, 0));
+	state.settings.experimental.goals = true;
+	const tracked = commands();
+	const selections = [GOAL_MENU_ACTIONS.queue, "Back", GOAL_MENU_ACTIONS.close];
+	let selectionCount = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		select: async () => {
+			selectionCount++;
+			return selections.shift();
+		},
+	});
+
+	await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+	assert.equal(selectionCount, 3);
 	assert.equal(tracked.calls.length, 0);
 });
 

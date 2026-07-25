@@ -5,13 +5,13 @@ import {
 	getSettingsListTheme,
 } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
-import type { GoalRuntime } from "./runtime.js";
-import { STATUS_KEY } from "./runtime.js";
+import { abortCurrentTurn, type GoalRuntime, STATUS_KEY } from "./runtime.js";
 import { GOAL_SETTINGS_FILE, type GoalSettings, saveGoalSettings } from "./settings.js";
 
 interface GoalSettingsUiOptions {
 	settingsPath?: string;
 	save?: (settings: GoalSettings, settingsPath: string) => void;
+	onQueueUnfrozen?: (ctx: ExtensionCommandContext) => Promise<void>;
 }
 
 interface GoalSettingsApplyOptions {
@@ -33,7 +33,7 @@ export async function showGoalSettings(
 	}
 
 	while (true) {
-		const result = await showSettingsScreen(runtime, ctx, settingsPath, options.save);
+		const result = await showSettingsScreen(runtime, ctx, settingsPath, options);
 		if (!result) return;
 		const previous = runtime.settings.continuationLimits[result.field];
 		const raw = await ctx.ui.input(
@@ -68,23 +68,44 @@ export function applyGoalSettings(
 	ctx: ExtensionCommandContext,
 	options: GoalSettingsApplyOptions = {},
 ) {
-	const previous = runtime.settings;
-	const visibility = runtime.snapshotGoalToolVisibility();
-	const previousQueueFrozen = runtime.queueFrozen;
+	const snapshot = runtime.snapshotSettingsApplicationState();
+	let fileSaved = false;
 	try {
 		runtime.settings = structuredClone(next);
-		applyToolVisibility(runtime, previous, next);
+		applyToolVisibility(runtime, snapshot.settings, next);
 		options.save?.(next);
+		fileSaved = options.save !== undefined;
+		applyQueueSetting(runtime, ctx);
+		const pausedByLimit =
+			runtime.enforceAutomaticTurnLimit(ctx, false) || runtime.enforceNoProgressLimit(ctx);
+		if (pausedByLimit) abortCurrentTurn(ctx);
 	} catch (error) {
-		runtime.settings = previous;
-		runtime.queueFrozen = previousQueueFrozen;
-		runtime.restoreGoalToolVisibility(visibility);
+		const rollbackErrors: unknown[] = [];
+		try {
+			runtime.restoreSettingsApplicationState(snapshot);
+		} catch (rollbackError) {
+			rollbackErrors.push(rollbackError);
+		}
+		if (fileSaved) {
+			try {
+				options.save?.(snapshot.settings);
+			} catch (rollbackError) {
+				rollbackErrors.push(rollbackError);
+			}
+			try {
+				restorePersistedRuntime(runtime, ctx);
+			} catch (rollbackError) {
+				rollbackErrors.push(rollbackError);
+			}
+		}
+		if (rollbackErrors.length > 0) {
+			throw new AggregateError(
+				[error, ...rollbackErrors],
+				`pi-goal settings application failed and rollback was incomplete: ${formatError(error)}`,
+			);
+		}
 		throw error;
 	}
-
-	applyQueueSetting(runtime, ctx);
-	runtime.enforceAutomaticTurnLimit(ctx, true);
-	runtime.enforceNoProgressLimit(ctx);
 }
 
 export function parseGoalLimit(value: string): number | null | undefined {
@@ -103,7 +124,7 @@ async function showSettingsScreen(
 	runtime: GoalRuntime,
 	ctx: ExtensionCommandContext,
 	settingsPath: string,
-	save: GoalSettingsUiOptions["save"],
+	options: GoalSettingsUiOptions,
 ): Promise<SettingsScreenResult> {
 	let saveQueue = Promise.resolve();
 	const latestRequested = new Map<string, string>();
@@ -176,9 +197,20 @@ async function showSettingsScreen(
 							tui.requestRender();
 							return;
 						}
+						const wasFrozen = runtime.queueFrozen;
 						applyGoalSettings(runtime, next, ctx, {
-							save: (value) => (save ?? saveGoalSettings)(value, settingsPath),
+							save: (value) => (options.save ?? saveGoalSettings)(value, settingsPath),
 						});
+						if (wasFrozen && !runtime.queueFrozen) {
+							try {
+								await options.onQueueUnfrozen?.(ctx);
+							} catch (error) {
+								ctx.ui.notify(
+									`Goal queue enabled, but automatic resume failed: ${formatError(error)}. Reopen /goal to retry.`,
+									"warning",
+								);
+							}
+						}
 						ctx.ui.notify(`${settingLabel(id)}: ${newValue}.`, "info");
 					} catch (error) {
 						if (latestRequested.get(id) === newValue) {
@@ -264,12 +296,34 @@ function applyQueueSetting(runtime: GoalRuntime, ctx: ExtensionCommandContext) {
 	const hasQueueState = runtime.queuedGoals.length > 0 || runtime.pendingQueueAction !== undefined;
 	const shouldFreeze = !runtime.settings.experimental.goals && hasQueueState;
 	if (runtime.queueFrozen === shouldFreeze) return;
+	const activeGoal = runtime.activeGoal?.status === "active" ? runtime.activeGoal : undefined;
+	if (shouldFreeze && activeGoal) runtime.recordGoalUsage(activeGoal, ctx);
 	runtime.queueFrozen = shouldFreeze;
-	if (shouldFreeze) runtime.cancelContinuationWork();
 	if (runtime.activeGoal) runtime.persistGoal(runtime.activeGoal);
 	if (shouldFreeze) ctx.ui.setStatus(STATUS_KEY, "queue off");
 	else if (runtime.activeGoal) runtime.updateStatus(ctx, runtime.activeGoal);
 	else ctx.ui.setStatus(STATUS_KEY, undefined);
+	if (!shouldFreeze) return;
+
+	runtime.cancelContinuationWork();
+	runtime.clearGoalRecovery();
+	runtime.clearBudgetWrapUp();
+	if (activeGoal) {
+		runtime.blockStaleGoalToolCalls();
+		runtime.guardAbortGoalId = activeGoal.id;
+		runtime.clearAgentRun();
+		abortCurrentTurn(ctx);
+	}
+}
+
+function restorePersistedRuntime(runtime: GoalRuntime, ctx: ExtensionCommandContext) {
+	if (runtime.activeGoal) {
+		runtime.persistGoal(runtime.activeGoal);
+		if (runtime.queueFrozen) ctx.ui.setStatus(STATUS_KEY, "queue off");
+		else runtime.updateStatus(ctx, runtime.activeGoal);
+		return;
+	}
+	ctx.ui.setStatus(STATUS_KEY, undefined);
 }
 
 async function confirmLowerActiveLimit(

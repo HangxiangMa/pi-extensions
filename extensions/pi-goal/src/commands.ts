@@ -214,6 +214,18 @@ export class GoalCommandController {
 		}
 	}
 
+	async resumeQueueAfterUnfreeze(ctx: StatusContext) {
+		this.runtime.clearStaleGoalToolCallBlock();
+		this.runtime.guardAbortGoalId = undefined;
+		if (this.runtime.pendingQueueAction) {
+			return this.dispatchPendingQueueActionIfSettled(ctx);
+		}
+		const goal = this.runtime.activeGoal;
+		if (goal?.status !== "active") return false;
+		this.runtime.requestContinuation(goal);
+		return this.runtime.dispatchContinuationIfSettled(ctx);
+	}
+
 	async dispatchPendingQueueActionIfSettled(ctx: StatusContext) {
 		const pending = this.runtime.pendingQueueAction;
 		if (!pending || this.runtime.queueFrozen) return false;
