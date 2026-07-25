@@ -155,6 +155,264 @@ test("explorer previews a file, selects a range, and keeps rendered rows width-s
 	assert.equal(result, undefined);
 });
 
+test("explorer shows Git status and provenance and selects changed hunks", async () => {
+	let result: unknown;
+	const status = {
+		code: " M",
+		label: "modified (unstaged)",
+		staged: false,
+		unstaged: true,
+		untracked: false,
+		conflicted: false,
+	};
+	const explorer = new FileQuoteExplorer({
+		tui: { terminal: { rows: 14 }, requestRender() {} } as never,
+		theme: {
+			fg: (_color: string, text: string) => text,
+			bg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		} as never,
+		keybindings: {
+			matches(data: string, key: string) {
+				return data === "enter" && key === "tui.select.confirm";
+			},
+		} as never,
+		files: ["src/changed.ts"],
+		loadFile: async () => ({
+			path: "src/changed.ts",
+			lines: ["one", "changed", "three"],
+		}),
+		gitContext: {
+			project: {
+				repositoryRoot: "/repo",
+				projectPrefix: "",
+				branch: "main",
+				head: "abcdef1234567890abcdef1234567890abcdef12",
+				dirty: true,
+			},
+			statuses: new Map([["src/changed.ts", status]]),
+			async getFileContext() {
+				return {
+					status,
+					blob: "1234567890abcdef1234567890abcdef12345678",
+					hunks: [
+						{
+							header: "@@ -2 +2 @@",
+							oldStart: 2,
+							oldCount: 1,
+							newStart: 2,
+							newCount: 1,
+							lines: ["@@ -2 +2 @@", "-two", "+changed"],
+							changedLines: [2],
+						},
+					],
+				};
+			},
+		} as never,
+		done: (value) => {
+			result = value;
+		},
+	});
+
+	assert.ok(explorer.render(80).some((line) => line.includes(" M") && line.includes("changed.ts")));
+	explorer.handleInput("enter");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	const preview = explorer.render(100);
+	assert.ok(preview.some((line) => line.includes("main@abcdef123456") && line.includes("dirty")));
+	assert.ok(preview.some((line) => line.includes("modified (unstaged)")));
+	explorer.handleInput("]");
+	assert.ok(explorer.render(100).some((line) => line.includes("~2 tokens")));
+	explorer.handleInput("enter");
+	assert.deepEqual(result, {
+		kind: "quote",
+		quote: {
+			path: "src/changed.ts",
+			startLine: 2,
+			endLine: 2,
+			text: "changed",
+			git: {
+				head: "abcdef1234567890abcdef1234567890abcdef12",
+				branch: "main",
+				status: "modified (unstaged)",
+				blob: "1234567890abcdef1234567890abcdef12345678",
+				contentSha256: "d67e2e944994496c8d8ec76eed0cf9f09679448d584b532bebf941852a37f5ed",
+				source: "worktree",
+				base: "HEAD",
+			},
+		},
+	});
+});
+
+test("explorer discloses current-line blame and bounded file history", async () => {
+	const renders: string[][] = [];
+	const explorer = new FileQuoteExplorer({
+		tui: { terminal: { rows: 12 }, requestRender() {} } as never,
+		theme: {
+			fg: (_color: string, text: string) => text,
+			bg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		} as never,
+		keybindings: {
+			matches(data: string, key: string) {
+				return data === "enter" && key === "tui.select.confirm";
+			},
+		} as never,
+		files: ["src/history.ts"],
+		loadFile: async () => ({ path: "src/history.ts", lines: ["one", "two"] }),
+		gitContext: {
+			project: {
+				repositoryRoot: "/repo",
+				projectPrefix: "",
+				branch: "main",
+				head: "abcdef1234567890abcdef1234567890abcdef12",
+				dirty: false,
+			},
+			statuses: new Map(),
+			async getFileContext() {
+				return { status: undefined, blob: undefined, hunks: [] };
+			},
+			async getBlame() {
+				return {
+					commit: "1234567890abcdef1234567890abcdef12345678",
+					author: "Alice",
+					authorTime: 1_700_000_000,
+					summary: "Explain this line",
+					committed: true,
+				};
+			},
+			async getHistory() {
+				return [
+					{
+						commit: "fedcba0987654321fedcba0987654321fedcba09",
+						author: "Bob",
+						authorTime: 1_700_000_100,
+						summary: "Update history file",
+					},
+				];
+			},
+		} as never,
+		done() {},
+	});
+
+	explorer.handleInput("enter");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	explorer.handleInput("b");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	renders.push(explorer.render(100));
+	assert.ok(renders[0].every((line) => visibleWidth(line) <= 100));
+	assert.ok(
+		renders[0].some((line) => line.includes("Alice") && line.includes("Explain this line")),
+	);
+	explorer.handleInput("h");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	renders.push(explorer.render(100));
+	assert.ok(renders[1].every((line) => visibleWidth(line) <= 100));
+	assert.ok(renders[1].some((line) => line.includes("File history")));
+	assert.ok(
+		renders[1].some((line) => line.includes("Bob") && line.includes("Update history file")),
+	);
+	explorer.handleInput("\u001b");
+	assert.ok(explorer.render(100).some((line) => line.includes("src/history.ts")));
+});
+
+test("explorer loads validated revisions and attaches explicit Git diff context", async () => {
+	const project = {
+		repositoryRoot: "/repo",
+		projectPrefix: "",
+		branch: "main",
+		head: "abcdef1234567890abcdef1234567890abcdef12",
+		dirty: true,
+	};
+	const hunk = {
+		header: "@@ -2 +2 @@",
+		oldStart: 2,
+		oldCount: 1,
+		newStart: 2,
+		newCount: 1,
+		lines: ["@@ -2 +2 @@", "-two", "+changed"],
+		changedLines: [2],
+	};
+	const results: unknown[] = [];
+	const makeExplorer = () =>
+		new FileQuoteExplorer({
+			tui: { terminal: { rows: 14 }, requestRender() {} } as never,
+			theme: {
+				fg: (_color: string, text: string) => text,
+				bg: (_color: string, text: string) => text,
+				bold: (text: string) => text,
+			} as never,
+			keybindings: {
+				matches(data: string, key: string) {
+					return data === "enter" && key === "tui.select.confirm";
+				},
+			} as never,
+			files: ["src/revision.ts"],
+			loadFile: async () => ({ path: "src/revision.ts", lines: ["one", "changed"] }),
+			gitContext: {
+				project,
+				statuses: new Map(),
+				async getFileContext() {
+					return { status: undefined, blob: undefined, hunks: [hunk] };
+				},
+				async loadRevision(_path: string, revision: string) {
+					assert.equal(revision, "HEAD~1");
+					return {
+						path: "src/revision.ts",
+						lines: ["old one", "old two"],
+						revision,
+						commit: "1111111111111111111111111111111111111111",
+						blob: "2222222222222222222222222222222222222222",
+					};
+				},
+			} as never,
+			done: (value) => results.push(value),
+		});
+
+	const revisionExplorer = makeExplorer();
+	revisionExplorer.handleInput("enter");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	revisionExplorer.handleInput("r");
+	revisionExplorer.handleInput("HEAD~1");
+	revisionExplorer.handleInput("enter");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	const revisionRows = revisionExplorer.render(100);
+	assert.ok(revisionRows.every((line) => visibleWidth(line) <= 100));
+	assert.ok(revisionRows.some((line) => line.includes("HEAD~1@111111111111")));
+	assert.ok(revisionRows.some((line) => line.includes("old one")));
+	revisionExplorer.handleInput("enter");
+	assert.equal(
+		(results[0] as { quote: { git?: { source: string; revision: string } } }).quote.git?.source,
+		"revision",
+	);
+	assert.equal(
+		(results[0] as { quote: { git?: { revision: string } } }).quote.git?.revision,
+		"HEAD~1",
+	);
+
+	const diffExplorer = makeExplorer();
+	diffExplorer.handleInput("enter");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	diffExplorer.handleInput("d");
+	const diffRows = diffExplorer.render(100);
+	assert.ok(diffRows.every((line) => visibleWidth(line) <= 100));
+	assert.ok(diffRows.some((line) => line.includes("Git diff")));
+	assert.ok(diffRows.some((line) => line.includes("+changed")));
+	diffExplorer.handleInput("enter");
+	const diffResult = results[1] as {
+		quote: {
+			startLine: number;
+			endLine: number;
+			text: string;
+			git?: { source: string; base: string };
+		};
+	};
+	assert.equal(diffResult.quote.startLine, 2);
+	assert.equal(diffResult.quote.endLine, 2);
+	assert.equal(diffResult.quote.text, "@@ -2 +2 @@\n-two\n+changed");
+	assert.equal(diffResult.quote.git?.source, "git_diff");
+	assert.equal(diffResult.quote.git?.base, "HEAD");
+});
+
 test("custom editor opens the explorer on a boundary @ without changing the draft", async () => {
 	let opened = 0;
 	const editor = new FileQuoteTriggerEditor(
@@ -207,6 +465,32 @@ test("captures an exact normalized line snapshot and formats one focused prompt"
 	assert.equal(
 		formatPromptWithQuote("Why this order?", quote),
 		'<user_file_quote path="src/runtime.ts" lines="2-4">\none\ntwo\nthree\n</user_file_quote>\n\nThe user intentionally selected the file excerpt above.\n\nWhy this order?',
+	);
+});
+
+test("adds deterministic optional Git provenance without changing legacy quote syntax", () => {
+	const quote = createFileQuote("src/runtime.ts", ["selected"], 0, 0, {
+		head: "a".repeat(40),
+		branch: "feature/context",
+		status: "modified (unstaged)",
+		revision: "HEAD",
+		blob: "b".repeat(40),
+		source: "worktree",
+		base: "HEAD",
+	});
+	assert.deepEqual(quote.git, {
+		head: "a".repeat(40),
+		branch: "feature/context",
+		status: "modified (unstaged)",
+		revision: "HEAD",
+		blob: "b".repeat(40),
+		contentSha256: "d7cbbb688b2e506c022e95cef8c4f629a29b9b36a6e50324e70dff466dbb95af",
+		source: "worktree",
+		base: "HEAD",
+	});
+	assert.equal(
+		formatPromptWithQuote("Explain", quote),
+		`<user_file_quote path="src/runtime.ts" lines="1-1" git_head="${"a".repeat(40)}" git_branch="feature/context" git_status="modified (unstaged)" git_revision="HEAD" git_blob="${"b".repeat(40)}" content_sha256="d7cbbb688b2e506c022e95cef8c4f629a29b9b36a6e50324e70dff466dbb95af" source="worktree" git_base="HEAD">\nselected\n</user_file_quote>\n\nThe user intentionally selected the file excerpt above.\n\nExplain`,
 	);
 });
 
@@ -293,9 +577,9 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 	await mock.commands.get("file-quote")?.handler("", context.ctx);
 	assert.equal(typeof customFactory, "function");
 	assert.deepEqual(widgets.get("file-quote"), [
-		"Quotes (2):",
-		"• src/example.ts · lines 1-1",
-		"• test/example.test.ts · lines 2-3",
+		"Quotes (2) · ~13 tokens:",
+		"• src/example.ts · lines 1-1 · ~6 tokens",
+		"• test/example.test.ts · lines 2-3 · ~8 tokens",
 	]);
 
 	const input = mock.events.get("input")?.[0];

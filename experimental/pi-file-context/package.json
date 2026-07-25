@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-file-context",
 	"version": "0.1.0",
-	"description": "Experimental Pi extension for browsing files and attaching selected line ranges as context.",
+	"description": "Experimental Pi extension for attaching file ranges and Git provenance as context.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -10,6 +10,7 @@
 		"pi-extension",
 		"pi",
 		"file-explorer",
+		"git",
 		"context",
 		"quote"
 	],

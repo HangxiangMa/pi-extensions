@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
@@ -8,6 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { FileQuoteExplorer, type FileQuoteExplorerResult } from "./file-context-explorer.js";
+import { createGitContext } from "./git-context.js";
 
 const WIDGET_KEY = "file-quote";
 const DEFAULT_MAX_FILES = 5_000;
@@ -28,11 +30,25 @@ const IGNORED_DIRECTORIES = new Set([
 	"target",
 ]);
 
+export interface FileQuoteGitProvenance {
+	head: string;
+	branch?: string;
+	status?: string;
+	revision?: string;
+	blob?: string;
+	contentSha256: string;
+	source?: "worktree" | "revision" | "git_diff";
+	base?: string;
+}
+
+export type FileQuoteGitProvenanceInput = Omit<FileQuoteGitProvenance, "contentSha256">;
+
 export interface FileQuote {
 	path: string;
 	startLine: number;
 	endLine: number;
 	text: string;
+	git?: FileQuoteGitProvenance;
 }
 
 export interface LoadedProjectTextFile {
@@ -58,7 +74,7 @@ export async function discoverProjectFiles(
 	async function walk(directory: string, prefix: string): Promise<void> {
 		if (files.length >= maxFiles) return;
 		const entries = (await readdir(directory, { withFileTypes: true })).sort((left, right) =>
-			left.name.localeCompare(right.name),
+			compareStrings(left.name, right.name),
 		);
 		for (const entry of entries) {
 			if (files.length >= maxFiles) return;
@@ -74,7 +90,7 @@ export async function discoverProjectFiles(
 	}
 
 	await walk(await realpath(root), "");
-	return files.sort((left, right) => left.localeCompare(right));
+	return files.sort(compareStrings);
 }
 
 export function filterProjectFiles(files: readonly string[], query: string): string[] {
@@ -131,22 +147,51 @@ export function createFileQuote(
 	lines: readonly string[],
 	anchorIndex: number,
 	cursorIndex: number,
+	git?: FileQuoteGitProvenanceInput,
 ): FileQuote {
 	if (lines.length === 0) throw new Error("Cannot quote an empty file");
 	const startIndex = Math.max(0, Math.min(anchorIndex, cursorIndex, lines.length - 1));
 	const endIndex = Math.max(0, Math.min(Math.max(anchorIndex, cursorIndex), lines.length - 1));
-	if (endIndex - startIndex + 1 > MAX_QUOTE_LINES) {
+	const text = lines.slice(startIndex, endIndex + 1).join("\n");
+	return createFileQuoteSnapshot(path, startIndex + 1, endIndex + 1, text, git);
+}
+
+export function createFileQuoteSnapshot(
+	path: string,
+	startLine: number,
+	endLine: number,
+	text: string,
+	git?: FileQuoteGitProvenanceInput,
+): FileQuote {
+	if (!Number.isSafeInteger(startLine) || !Number.isSafeInteger(endLine) || startLine < 1) {
+		throw new Error("Quote lines must be positive integers");
+	}
+	if (endLine < startLine) throw new Error("Quote end line precedes its start line");
+	if (text.split("\n").length > MAX_QUOTE_LINES) {
 		throw new Error(`Quote exceeds ${MAX_QUOTE_LINES} lines`);
 	}
-	const text = lines.slice(startIndex, endIndex + 1).join("\n");
 	if (Buffer.byteLength(text, "utf8") > MAX_QUOTE_BYTES) {
 		throw new Error(`Quote exceeds ${MAX_QUOTE_BYTES} bytes`);
 	}
 	return {
 		path,
-		startLine: startIndex + 1,
-		endLine: endIndex + 1,
+		startLine,
+		endLine,
 		text,
+		...(git
+			? {
+					git: {
+						head: git.head,
+						...(git.branch !== undefined ? { branch: git.branch } : {}),
+						...(git.status !== undefined ? { status: git.status } : {}),
+						...(git.revision !== undefined ? { revision: git.revision } : {}),
+						...(git.blob !== undefined ? { blob: git.blob } : {}),
+						contentSha256: createHash("sha256").update(text, "utf8").digest("hex"),
+						...(git.source !== undefined ? { source: git.source } : {}),
+						...(git.base !== undefined ? { base: git.base } : {}),
+					},
+				}
+			: {}),
 	};
 }
 
@@ -173,7 +218,12 @@ export function formatPromptWithQuotes(prompt: string, quotes: readonly FileQuot
 	const blocks = quotes.map((quote) => {
 		const path = escapeXml(quote.path);
 		const text = escapeXml(quote.text);
-		return `<user_file_quote path="${path}" lines="${quote.startLine}-${quote.endLine}">\n${text}\n</user_file_quote>`;
+		const attributes = [
+			`path="${path}"`,
+			`lines="${quote.startLine}-${quote.endLine}"`,
+			...formatGitAttributes(quote.git),
+		].join(" ");
+		return `<user_file_quote ${attributes}>\n${text}\n</user_file_quote>`;
 	});
 	const description =
 		quotes.length === 1
@@ -225,12 +275,19 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 	const appendPending = (quote: FileQuote, ctx: ExtensionContext) => {
 		pendingQuotes = appendPendingQuote(pendingQuotes, quote);
 		if (ctx.hasUI) {
+			const totalBytes = pendingQuotes.reduce(
+				(total, item) => total + Buffer.byteLength(item.text, "utf8"),
+				0,
+			);
 			ctx.ui.setWidget(WIDGET_KEY, [
-				ctx.ui.theme.fg("accent", `Quotes (${pendingQuotes.length}):`),
+				ctx.ui.theme.fg(
+					"accent",
+					`Quotes (${pendingQuotes.length}) · ~${estimateTokens(totalBytes)} tokens:`,
+				),
 				...pendingQuotes.map((item) =>
 					ctx.ui.theme.fg(
 						"muted",
-						`• ${escapeTerminalControls(item.path)} · lines ${item.startLine}-${item.endLine}`,
+						`• ${escapeTerminalControls(item.path)} · lines ${item.startLine}-${item.endLine} · ~${estimateTokens(Buffer.byteLength(item.text, "utf8"))} tokens`,
 					),
 				),
 			]);
@@ -243,7 +300,10 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 			return;
 		}
 		try {
-			const files = await discoverProjectFiles(ctx.cwd);
+			const [files, gitContext] = await Promise.all([
+				discoverProjectFiles(ctx.cwd),
+				createGitContext(ctx.cwd),
+			]);
 			if (files.length === 0) {
 				ctx.ui.notify("File Context found no project files.", "warning");
 				return;
@@ -256,6 +316,7 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 						keybindings,
 						files,
 						loadFile: (path) => loadProjectTextFile(ctx.cwd, path),
+						gitContext,
 						done,
 					}),
 			);
@@ -326,6 +387,14 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 	});
 }
 
+function compareStrings(left: string, right: string): number {
+	return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function estimateTokens(bytes: number): number {
+	return Math.max(1, Math.ceil(bytes / 4));
+}
+
 function isOrderedSubsequence(value: string, query: string): boolean {
 	let queryIndex = 0;
 	for (const character of value) {
@@ -340,6 +409,20 @@ function isInside(root: string, candidate: string): boolean {
 	return (
 		result === "" || (!result.startsWith(`..${sep}`) && result !== ".." && !isAbsolute(result))
 	);
+}
+
+function formatGitAttributes(git: FileQuoteGitProvenance | undefined): string[] {
+	if (!git) return [];
+	return [
+		["git_head", git.head],
+		["git_branch", git.branch],
+		["git_status", git.status],
+		["git_revision", git.revision],
+		["git_blob", git.blob],
+		["content_sha256", git.contentSha256],
+		["source", git.source],
+		["git_base", git.base],
+	].flatMap(([name, value]) => (value ? [`${name}="${escapeXml(value)}"`] : []));
 }
 
 function escapeXml(value: string): string {
