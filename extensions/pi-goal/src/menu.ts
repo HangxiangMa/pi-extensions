@@ -285,9 +285,14 @@ async function showQueueMenu(
 	}
 	if (selected === QUEUE_ACTIONS.skip) {
 		const next = runtime.queuedGoals[0];
+		const nextEffect = !next
+			? "No goal remains"
+			: next.status === "queued"
+				? `Start next goal:\n${safeGoalMenuText(next.text, 4_000)}`
+				: `Next goal remains ${displayStatus(next.status).toLowerCase()}:\n${safeGoalMenuText(next.text, 4_000)}`;
 		const confirmed = await ctx.ui.confirm(
 			"Skip current goal?",
-			`Remove current goal:\n${safeGoalMenuText(goal.text, 4_000)}\n\nStart next goal:\n${safeGoalMenuText(next?.text ?? "No goal remains", 4_000)}`,
+			`Remove current goal:\n${safeGoalMenuText(goal.text, 4_000)}\n\n${nextEffect}`,
 		);
 		if (confirmed) await commands.skipGoal(ctx);
 		return;

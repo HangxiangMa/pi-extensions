@@ -228,6 +228,27 @@ test("queue menu previews prioritize, skip, and drop-last before delegation", as
 	}
 });
 
+test("Skip preview reflects a stopped next goal without promising activation", async () => {
+	const state = runtime(createGoal("current objective", undefined, 0));
+	state.settings.experimental.goals = true;
+	state.queuedGoals.push(transitionGoal(createGoal("blocked objective", undefined, 0), "blocked"));
+	const tracked = commands();
+	const selections = [GOAL_MENU_ACTIONS.queue, "Skip current goal…"];
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		select: async () => selections.shift(),
+		confirm: async (_title: string, message: string) => {
+			assert.match(message, /Next goal remains blocked/i);
+			assert.doesNotMatch(message, /Start next goal/i);
+			return false;
+		},
+	});
+
+	await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+	assert.equal(tracked.calls.length, 0);
+});
+
 test("menu start and edit delegate raw objective data only after explicit input", async () => {
 	const empty = runtime();
 	const started = commands();

@@ -152,6 +152,33 @@ test("disabling a retained queue pauses and aborts in-flight Goal work", () => {
 	assert.equal(state.staleGoalToolCallsBlocked, true);
 });
 
+test("lowering the no-progress limit pauses and aborts in-flight Goal work", () => {
+	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
+	const state = new GoalRuntime(mock.pi);
+	state.settings = {
+		...structuredClone(DEFAULT_GOAL_SETTINGS),
+		continuationLimits: { automaticTurns: 25, noProgressTurns: 5 },
+	};
+	state.activeGoal = createGoal("current objective", undefined, 0);
+	state.activeGoal.toolFreeRepeatCount = 3;
+	let aborts = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		abort: () => aborts++,
+	});
+	const next = {
+		...structuredClone(state.settings),
+		continuationLimits: { automaticTurns: 25, noProgressTurns: 3 },
+	};
+
+	applyGoalSettings(state, next, context.ctx, { save() {} });
+
+	assert.equal(aborts, 1);
+	assert.equal(state.activeGoal?.status, "paused");
+	assert.equal(state.activeGoal?.safetyPauseCause, "no_progress");
+});
+
 test("unfreezing an active retained queue dispatches Goal work immediately", async () => {
 	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
 	const state = new GoalRuntime(mock.pi);
