@@ -36,7 +36,7 @@
 		"@radix-ui/themes": "^3.3.0",
 		"bmp-js": "^0.1.0",
 		"heic-decode": "^2.1.0",
-		"radix-ui": "1.6.6",
+		"radix-ui": "1.6.7",
 		"react": "^19.2.8",
 		"react-dom": "^19.2.8",
 		"sharp": "^0.35.3"
@@ -48,10 +48,10 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.5",
-		"@earendil-works/pi-ai": "0.80.10",
-		"@earendil-works/pi-coding-agent": "0.82.0",
-		"@earendil-works/pi-tui": "0.80.10",
-		"esbuild": "^0.25.12",
+		"@earendil-works/pi-ai": "0.82.1",
+		"@earendil-works/pi-coding-agent": "0.82.1",
+		"@earendil-works/pi-tui": "0.82.1",
+		"esbuild": "^0.28.1",
 		"typescript": "7.0.2"
 	},
 	"repository": {

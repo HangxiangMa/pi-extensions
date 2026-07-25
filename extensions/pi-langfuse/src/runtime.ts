@@ -3,7 +3,7 @@ import { LangfuseSpanProcessor } from "@langfuse/otel";
 import {
 	type LangfuseObservation,
 	type LangfuseObservationAttributes,
-	type LangfuseTraceAttributes,
+	LangfuseOtelSpanAttributes,
 	setLangfuseTracerProvider,
 	startObservation,
 } from "@langfuse/tracing";
@@ -44,7 +44,28 @@ class ProductionObservation implements Observation {
 	}
 
 	updateTrace(attributes: ObservationAttributes): Observation {
-		this.native.updateTrace(attributes as LangfuseTraceAttributes);
+		const { input, output, metadata, name, sessionId, tags, version } = attributes;
+		if (input !== undefined || output !== undefined) {
+			this.native.setTraceIO({ input, output });
+		}
+		if (name !== undefined) {
+			this.native.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_NAME, name);
+		}
+		if (sessionId !== undefined) {
+			this.native.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_SESSION_ID, sessionId);
+		}
+		if (tags !== undefined) {
+			this.native.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_TAGS, tags);
+		}
+		if (version !== undefined) {
+			this.native.otelSpan.setAttribute(LangfuseOtelSpanAttributes.VERSION, version);
+		}
+		for (const [key, value] of Object.entries(metadata ?? {})) {
+			this.native.otelSpan.setAttribute(
+				`${LangfuseOtelSpanAttributes.TRACE_METADATA}.${key}`,
+				String(value),
+			);
+		}
 		return this;
 	}
 
