@@ -1,4 +1,4 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, Key, matchesKey, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import type { SideThreadTurn } from "./side-thread.js";
 
@@ -19,6 +19,11 @@ export type BtwQuickHandoffScope =
 	| { kind: "latest" }
 	| { kind: "from"; answeredTurnIndex: number }
 	| { kind: "entire" };
+
+export type BtwMenuSelectorAction =
+	| { kind: "select"; value: string }
+	| { kind: "back" }
+	| { kind: "close" };
 
 export type BtwTextRangeSelectorAction =
 	| { kind: "confirm"; segments: BtwHandoffSegment[] }
@@ -93,6 +98,105 @@ export function formatBtwHandoff(segments: readonly BtwHandoffSegment[]): string
 	].join("\n");
 }
 
+export class BtwMenuSelector implements Component {
+	private cursor = 0;
+	private scrollOffset = 0;
+	private finished = false;
+
+	constructor(
+		private readonly tui: TUI,
+		private readonly theme: Theme,
+		private readonly keybindings: KeybindingsManager,
+		private readonly title: string,
+		private readonly options: readonly string[],
+		private readonly onAction: (action: BtwMenuSelectorAction) => void,
+	) {}
+
+	render(width: number): string[] {
+		const safeWidth = Math.max(1, width);
+		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS);
+		const viewportHeight = Math.max(0, availableRows - SELECTOR_CHROME_ROWS);
+		this.keepCursorVisible(viewportHeight);
+		const rows = this.options
+			.slice(this.scrollOffset, this.scrollOffset + viewportHeight)
+			.map((option, visibleIndex) => {
+				const index = this.scrollOffset + visibleIndex;
+				const raw = `${index === this.cursor ? ">" : " "} ${escapeTerminalControls(option)}`;
+				const styled =
+					index === this.cursor ? this.theme.bg("selectedBg", this.theme.fg("text", raw)) : raw;
+				return truncateToWidth(styled, safeWidth, "");
+			});
+		return fitRows(
+			[
+				truncateToWidth(
+					this.theme.fg("accent", this.theme.bold(escapeTerminalControls(this.title))),
+					safeWidth,
+					"",
+				),
+				...rows,
+				truncateToWidth(
+					this.theme.fg("muted", "Navigate • confirm • back • Ctrl+C close"),
+					safeWidth,
+					"",
+				),
+			],
+			availableRows,
+		);
+	}
+
+	handleInput(data: string): void {
+		if (this.finished) return;
+		if (matchesKey(data, Key.ctrl("c"))) {
+			this.finish({ kind: "close" });
+			return;
+		}
+		if (this.keybindings.matches(data, "tui.select.cancel")) {
+			this.finish({ kind: "back" });
+			return;
+		}
+		if (this.keybindings.matches(data, "tui.select.up")) {
+			this.cursor = Math.max(0, this.cursor - 1);
+			this.tui.requestRender();
+			return;
+		}
+		if (this.keybindings.matches(data, "tui.select.down")) {
+			this.cursor = Math.min(Math.max(0, this.options.length - 1), this.cursor + 1);
+			this.tui.requestRender();
+			return;
+		}
+		if (this.keybindings.matches(data, "tui.select.pageUp")) {
+			this.cursor = Math.max(0, this.cursor - 10);
+			this.tui.requestRender();
+			return;
+		}
+		if (this.keybindings.matches(data, "tui.select.pageDown")) {
+			this.cursor = Math.min(Math.max(0, this.options.length - 1), this.cursor + 10);
+			this.tui.requestRender();
+			return;
+		}
+		if (this.keybindings.matches(data, "tui.select.confirm")) {
+			const value = this.options[this.cursor];
+			if (value !== undefined) this.finish({ kind: "select", value });
+		}
+	}
+
+	invalidate(): void {}
+
+	private keepCursorVisible(height: number): void {
+		if (height <= 0) return;
+		if (this.cursor < this.scrollOffset) this.scrollOffset = this.cursor;
+		if (this.cursor >= this.scrollOffset + height) {
+			this.scrollOffset = this.cursor - height + 1;
+		}
+	}
+
+	private finish(action: BtwMenuSelectorAction): void {
+		if (this.finished) return;
+		this.finished = true;
+		this.onAction(action);
+	}
+}
+
 export class BtwTextRangeSelector implements Component {
 	private readonly lines: BtwSelectionLine[];
 	private cursor = 0;
@@ -103,6 +207,7 @@ export class BtwTextRangeSelector implements Component {
 	constructor(
 		private readonly tui: TUI,
 		private readonly theme: Theme,
+		private readonly keybindings: KeybindingsManager,
 		turns: readonly SideThreadTurn[],
 		private readonly onAction: (action: BtwTextRangeSelectorAction) => void,
 	) {
@@ -131,7 +236,7 @@ export class BtwTextRangeSelector implements Component {
 		});
 		const selected = segmentsFromLineRange(this.lines, this.anchor ?? this.cursor, this.cursor);
 		const bytes = Buffer.byteLength(selected.map((segment) => segment.text).join("\n"), "utf8");
-		const footer = `~${Math.max(1, Math.ceil(bytes / 4))} tokens • Space anchor • ↑↓ extend • Enter confirm • Esc back`;
+		const footer = `~${Math.max(1, Math.ceil(bytes / 4))} tokens • Space anchor • navigate/extend • confirm • back • Ctrl+C close`;
 		return fitRows(
 			[
 				truncateToWidth(
@@ -152,7 +257,7 @@ export class BtwTextRangeSelector implements Component {
 			this.finish({ kind: "close" });
 			return;
 		}
-		if (matchesKey(data, Key.escape)) {
+		if (this.keybindings.matches(data, "tui.select.cancel")) {
 			this.finish({ kind: "back" });
 			return;
 		}
@@ -161,27 +266,27 @@ export class BtwTextRangeSelector implements Component {
 			this.tui.requestRender();
 			return;
 		}
-		if (matchesKey(data, Key.up)) {
+		if (this.keybindings.matches(data, "tui.select.up")) {
 			this.cursor = Math.max(0, this.cursor - 1);
 			this.tui.requestRender();
 			return;
 		}
-		if (matchesKey(data, Key.down)) {
+		if (this.keybindings.matches(data, "tui.select.down")) {
 			this.cursor = Math.min(Math.max(0, this.lines.length - 1), this.cursor + 1);
 			this.tui.requestRender();
 			return;
 		}
-		if (matchesKey(data, Key.pageUp)) {
+		if (this.keybindings.matches(data, "tui.select.pageUp")) {
 			this.cursor = Math.max(0, this.cursor - 10);
 			this.tui.requestRender();
 			return;
 		}
-		if (matchesKey(data, Key.pageDown)) {
+		if (this.keybindings.matches(data, "tui.select.pageDown")) {
 			this.cursor = Math.min(Math.max(0, this.lines.length - 1), this.cursor + 10);
 			this.tui.requestRender();
 			return;
 		}
-		if (matchesKey(data, Key.enter) && this.lines.length > 0) {
+		if (this.keybindings.matches(data, "tui.select.confirm") && this.lines.length > 0) {
 			this.finish({
 				kind: "confirm",
 				segments: segmentsFromLineRange(this.lines, this.anchor ?? this.cursor, this.cursor),
@@ -228,7 +333,8 @@ function escapeHandoffText(text: string): string {
 			}
 			return character;
 		})
-		.join("");
+		.join("")
+		.replaceAll("</btw_context>", "&lt;/btw_context&gt;");
 }
 
 function escapeTerminalControls(text: string): string {

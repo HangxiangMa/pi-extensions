@@ -8,6 +8,8 @@ import {
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import {
+	BtwMenuSelector,
+	type BtwMenuSelectorAction,
 	BtwTextRangeSelector,
 	buildQuickHandoffSegments,
 	formatBtwHandoff,
@@ -228,13 +230,12 @@ export default function btw(pi: ExtensionAPI) {
 				return;
 			}
 
-			const result = await runBtwThread({
+			await runBtwThread({
 				initialQuestion: question || undefined,
 				selected: resolution.selected,
 				thinkingLevel: settings.thinkingLevel ?? pi.getThinkingLevel(),
 				ctx,
 			});
-			if (result.kind === "handoff") await loadHandoffIntoMainEditor(result.draft, ctx);
 		},
 	});
 }
@@ -293,11 +294,14 @@ interface RunBtwThreadDependencies {
 	ask?: typeof askThreadQuestion;
 	interact?: typeof showThreadComposer;
 	chooseHandoff?: typeof chooseBtwHandoff;
+	deliverHandoff?: typeof loadHandoffIntoMainEditor;
 }
 
-export type BtwThreadResult = { kind: "closed" } | { kind: "handoff"; draft: string };
+export type BtwThreadResult = { kind: "closed" };
 
-type BtwHandoffChoice = BtwThreadResult | { kind: "back" };
+type BtwHandoffChoice = BtwThreadResult | { kind: "handoff"; draft: string } | { kind: "back" };
+
+type BtwHandoffDelivery = "loaded" | "back" | "closed";
 
 interface RunBtwThreadOptions {
 	initialQuestion?: string;
@@ -317,6 +321,7 @@ export async function runBtwThread({
 	const ask = dependencies.ask ?? askThreadQuestion;
 	const interact = dependencies.interact ?? showThreadComposer;
 	const chooseHandoff = dependencies.chooseHandoff ?? chooseBtwHandoff;
+	const deliverHandoff = dependencies.deliverHandoff ?? loadHandoffIntoMainEditor;
 	const thread = createSideThread(buildConversationContext(ctx.sessionManager.getBranch()));
 	let pendingQuestion = initialQuestion;
 	let composerDraft: string | undefined;
@@ -327,11 +332,15 @@ export async function runBtwThread({
 			if (action.kind === "close") return { kind: "closed" };
 			if (action.kind === "promote") {
 				const choice = await chooseHandoff(thread, ctx);
+				if (choice.kind === "closed") return choice;
 				if (choice.kind === "back") {
 					composerDraft = action.questionDraft;
 					continue;
 				}
-				return choice;
+				const delivery = await deliverHandoff(choice.draft, ctx);
+				if (delivery === "loaded" || delivery === "closed") return { kind: "closed" };
+				composerDraft = action.questionDraft;
+				continue;
 			}
 			composerDraft = undefined;
 			pendingQuestion = action.question;
@@ -354,22 +363,30 @@ export async function runBtwThread({
 	}
 }
 
+interface ChooseBtwHandoffDependencies {
+	showMenu?: typeof showBtwMenu;
+}
+
 export async function chooseBtwHandoff(
 	thread: SideThread,
 	ctx: ExtensionCommandContext,
+	dependencies: ChooseBtwHandoffDependencies = {},
 ): Promise<BtwHandoffChoice> {
 	const answered = getAnsweredTurns(thread.turns);
 	if (answered.length === 0) return { kind: "back" };
+	const showMenu = dependencies.showMenu ?? showBtwMenu;
 
 	while (true) {
-		const scope = await ctx.ui.select("Bring what back to the main thread?", [
+		const scopeResult = await showMenu(ctx, "Bring what back to the main thread?", [
 			"Latest question and answer",
 			"From a question onward…",
 			"Select a text range…",
 			"Entire side thread",
 			"Cancel",
 		]);
-		if (!scope || scope === "Cancel") return { kind: "back" };
+		if (scopeResult.kind === "close") return { kind: "closed" };
+		if (scopeResult.kind === "back" || scopeResult.value === "Cancel") return { kind: "back" };
+		const scope = scopeResult.value;
 		if (scope === "Latest question and answer") {
 			return {
 				kind: "handoff",
@@ -386,9 +403,10 @@ export async function chooseBtwHandoff(
 			const questions = answered.map(
 				(turn, index) => `${index + 1}. ${truncatePreview(sanitizeSingleLine(turn.question))}`,
 			);
-			const selectedQuestion = await ctx.ui.select("Start from which question?", questions);
-			if (!selectedQuestion) continue;
-			const answeredTurnIndex = questions.indexOf(selectedQuestion);
+			const questionResult = await showMenu(ctx, "Start from which question?", questions);
+			if (questionResult.kind === "close") return { kind: "closed" };
+			if (questionResult.kind === "back") continue;
+			const answeredTurnIndex = questions.indexOf(questionResult.value);
 			if (answeredTurnIndex < 0) continue;
 			return {
 				kind: "handoff",
@@ -399,8 +417,8 @@ export async function chooseBtwHandoff(
 		}
 
 		const selectedRange = await ctx.ui.custom<BtwHandoffChoice>(
-			(tui, theme, _keybindings, done) =>
-				new BtwTextRangeSelector(tui, theme, thread.turns, (action) => {
+			(tui, theme, keybindings, done) =>
+				new BtwTextRangeSelector(tui, theme, keybindings, thread.turns, (action) => {
 					if (action.kind === "back") done({ kind: "back" });
 					else if (action.kind === "close") done({ kind: "closed" });
 					else done({ kind: "handoff", draft: formatBtwHandoff(action.segments) });
@@ -411,25 +429,39 @@ export async function chooseBtwHandoff(
 	}
 }
 
+async function showBtwMenu(
+	ctx: ExtensionCommandContext,
+	title: string,
+	options: readonly string[],
+): Promise<BtwMenuSelectorAction> {
+	return ctx.ui.custom<BtwMenuSelectorAction>(
+		(tui, theme, keybindings, done) =>
+			new BtwMenuSelector(tui, theme, keybindings, title, options, done),
+	);
+}
+
 async function loadHandoffIntoMainEditor(
 	draft: string,
 	ctx: ExtensionCommandContext,
-): Promise<void> {
+): Promise<BtwHandoffDelivery> {
 	const existing = ctx.ui.getEditorText();
 	if (!existing.trim()) {
 		ctx.ui.setEditorText(draft);
 		ctx.ui.notify("Context loaded into the main editor. Review and submit when ready.", "info");
-		return;
+		return "loaded";
 	}
-	const action = await ctx.ui.select("The main editor already contains text", [
+	const action = await showBtwMenu(ctx, "The main editor already contains text", [
 		"Append context",
 		"Replace editor text",
 		"Cancel",
 	]);
-	if (action === "Append context") ctx.ui.setEditorText(`${existing}\n\n${draft}`);
-	else if (action === "Replace editor text") ctx.ui.setEditorText(draft);
-	else return;
+	if (action.kind === "close") return "closed";
+	if (action.kind === "back" || action.value === "Cancel") return "back";
+	if (action.value === "Append context") ctx.ui.setEditorText(`${existing}\n\n${draft}`);
+	else if (action.value === "Replace editor text") ctx.ui.setEditorText(draft);
+	else return "back";
 	ctx.ui.notify("Context loaded into the main editor. Review and submit when ready.", "info");
+	return "loaded";
 }
 
 function truncatePreview(text: string): string {

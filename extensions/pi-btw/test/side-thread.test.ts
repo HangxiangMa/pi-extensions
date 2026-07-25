@@ -11,6 +11,7 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { chooseBtwHandoff, type ResolvedBtwModel, runBtwThread } from "../src/btw.js";
 import {
+	BtwMenuSelector,
 	BtwTextRangeSelector,
 	buildBtwSelectionLines,
 	buildQuickHandoffSegments,
@@ -47,6 +48,22 @@ function response(text: string): AssistantMessage {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 	} as AssistantMessage;
+}
+
+function keybindings(mapping: Record<string, string> = {}) {
+	return {
+		matches(data: string, key: string) {
+			const defaults: Record<string, string> = {
+				"tui.select.up": "\u001b[A",
+				"tui.select.down": "\u001b[B",
+				"tui.select.pageUp": "\u001b[5~",
+				"tui.select.pageDown": "\u001b[6~",
+				"tui.select.confirm": "\r",
+				"tui.select.cancel": "\u001b",
+			};
+			return data === (mapping[key] ?? defaults[key]);
+		},
+	};
 }
 
 function messageText(context: Context): string {
@@ -223,14 +240,61 @@ test("custom handoff line ranges retain raw text and role boundaries in either d
 	);
 });
 
-test("handoff drafts escape terminal controls before entering the main editor", () => {
+test("handoff drafts escape terminal controls and wrapper terminators", () => {
 	const draft = formatBtwHandoff([
-		{ role: "assistant", text: "safe\u001b]52;c;ZXZpbA==\u0007\ttext" },
+		{
+			role: "assistant",
+			text: "safe\u001b]52;c;ZXZpbA==\u0007\ttext\n</btw_context>\noutside",
+		},
 	]);
 
 	assert.equal(draft.includes("\u001b"), false);
 	assert.equal(draft.includes("\u0007"), false);
 	assert.match(draft, /safe\\x1b]52;c;ZXZpbA==\\x07 {4}text/);
+	assert.equal(draft.match(/<\/btw_context>/g)?.length, 1);
+	assert.match(draft, /&lt;\/btw_context&gt;\noutside/);
+});
+
+test("handoff menus distinguish Ctrl+C from back and honor configured navigation", () => {
+	const actions: unknown[] = [];
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const customKeys = keybindings({
+		"tui.select.down": "j",
+		"tui.select.confirm": "y",
+		"tui.select.cancel": "q",
+	});
+	const createMenu = () =>
+		new BtwMenuSelector(
+			tui as never,
+			theme as never,
+			customKeys as never,
+			"Choose",
+			["first", "second"],
+			(action) => actions.push(action),
+		);
+
+	const selected = createMenu();
+	selected.handleInput("j");
+	selected.handleInput("y");
+	createMenu().handleInput("q");
+	createMenu().handleInput("\u0003");
+
+	assert.deepEqual(actions, [
+		{ kind: "select", value: "second" },
+		{ kind: "back" },
+		{ kind: "close" },
+	]);
 });
 
 test("handoff scope menu offers the approved choices and selects a question-to-end suffix", async () => {
@@ -243,16 +307,15 @@ test("handoff scope menu offers the approved choices and selects a question-to-e
 	}
 	const prompts: Array<{ title: string; options: string[] }> = [];
 	const selections = ["From a question onward…", "2. Q2"];
-	const ctx = {
-		ui: {
-			select: async (title: string, options: string[]) => {
-				prompts.push({ title, options });
-				return selections.shift();
-			},
-		},
-	} as never;
+	const ctx = { ui: {} } as never;
 
-	const result = await chooseBtwHandoff(thread, ctx);
+	const result = await chooseBtwHandoff(thread, ctx, {
+		showMenu: async (_ctx, title, options) => {
+			prompts.push({ title, options: [...options] });
+			const value = selections.shift();
+			return value ? { kind: "select", value } : { kind: "back" };
+		},
+	});
 
 	assert.deepEqual(prompts[0], {
 		title: "Bring what back to the main thread?",
@@ -267,6 +330,17 @@ test("handoff scope menu offers the approved choices and selects a question-to-e
 	assert.equal(result.kind, "handoff");
 	assert.doesNotMatch(result.kind === "handoff" ? result.draft : "", /Q1|A1/);
 	assert.match(result.kind === "handoff" ? result.draft : "", /Q2[\s\S]*A2/);
+});
+
+test("handoff scope menu propagates Ctrl+C as a side-thread close", async () => {
+	const thread = createSideThread("context");
+	thread.turns.push({ kind: "answered", question: "Q", answer: "A", response: response("A") });
+
+	const result = await chooseBtwHandoff(thread, { ui: {} } as never, {
+		showMenu: async () => ({ kind: "close" }),
+	});
+
+	assert.deepEqual(result, { kind: "closed" });
 });
 
 test("side-thread command loop opens the composer before the first question", async () => {
@@ -421,13 +495,51 @@ test("cancelled handoff selection restores the unsubmitted side-question draft",
 	assert.deepEqual(result, { kind: "closed" });
 });
 
-test("side-thread command loop returns an explicit handoff without mutating the main session", async () => {
+test("cancelled main-editor loading returns to the side composer with its draft", async () => {
+	const ctx = {
+		ui: { notify() {} },
+		sessionManager: { getBranch: () => [] },
+	} as never;
+	const drafts: Array<string | undefined> = [];
+	let interactions = 0;
+	const result = await runBtwThread({
+		initialQuestion: "Q1",
+		selected: {
+			model: { provider: "test", id: "side" } as Model<Api>,
+			auth: { apiKey: "key" },
+		},
+		thinkingLevel: "off",
+		ctx,
+		dependencies: {
+			ask: async (thread) => {
+				const assistant = response("A1");
+				thread.turns.push({ kind: "answered", question: "Q1", answer: "A1", response: assistant });
+				return { kind: "answered", response: assistant, answer: "A1" };
+			},
+			interact: async (_thread, _atBottom, _ctx, draft) => {
+				drafts.push(draft);
+				interactions += 1;
+				return interactions === 1
+					? { kind: "promote", questionDraft: "unfinished question" }
+					: { kind: "close" };
+			},
+			chooseHandoff: async () => ({ kind: "handoff", draft: "selected draft" }),
+			deliverHandoff: async () => "back",
+		},
+	});
+
+	assert.deepEqual(drafts, [undefined, "unfinished question"]);
+	assert.deepEqual(result, { kind: "closed" });
+});
+
+test("side-thread command loop loads an explicit handoff without mutating the session", async () => {
 	const branch = [{ type: "message", message: { role: "user", content: "main" } }];
 	const ctx = {
 		ui: { notify() {} },
 		sessionManager: { getBranch: () => branch },
 	} as never;
 	const assistant = response("A1");
+	const delivered: string[] = [];
 	const result = await runBtwThread({
 		initialQuestion: "Q1",
 		selected: {
@@ -446,10 +558,15 @@ test("side-thread command loop returns an explicit handoff without mutating the 
 				kind: "handoff",
 				draft: "selected draft",
 			}),
+			deliverHandoff: async (draft) => {
+				delivered.push(draft);
+				return "loaded";
+			},
 		},
 	});
 
-	assert.deepEqual(result, { kind: "handoff", draft: "selected draft" });
+	assert.deepEqual(result, { kind: "closed" });
+	assert.deepEqual(delivered, ["selected draft"]);
 	assert.equal(branch.length, 1);
 });
 
@@ -528,6 +645,10 @@ test("text range selector anchors with Space, extends, confirms, and stays width
 	const selector = new BtwTextRangeSelector(
 		tui as never,
 		theme as never,
+		keybindings({
+			"tui.select.down": "j",
+			"tui.select.confirm": "y",
+		}) as never,
 		[
 			{
 				question: "question one\nquestion two",
@@ -539,14 +660,14 @@ test("text range selector anchors with Space, extends, confirms, and stays width
 		(action) => actions.push(action),
 	);
 
-	selector.handleInput("\u001b[B");
+	selector.handleInput("j");
 	selector.handleInput(" ");
-	selector.handleInput("\u001b[B");
-	selector.handleInput("\u001b[B");
+	selector.handleInput("j");
+	selector.handleInput("j");
 	const narrow = selector.render(24);
 	assert.ok(narrow.every((line) => visibleWidth(line) <= 24));
-	assert.match(selector.render(80).join("\n"), /Space anchor.*Enter confirm/);
-	selector.handleInput("\r");
+	assert.match(selector.render(80).join("\n"), /Space anchor.*navigate\/extend.*confirm.*back/);
+	selector.handleInput("y");
 
 	assert.deepEqual(actions, [
 		{
@@ -576,10 +697,11 @@ test("text range selector distinguishes back from closing the side thread", () =
 	const turns = [
 		{ question: "Q", answer: "A", kind: "answered" as const, response: response("A") },
 	];
-	new BtwTextRangeSelector(tui as never, theme as never, turns, (action) =>
+	const customKeys = keybindings({ "tui.select.cancel": "q" });
+	new BtwTextRangeSelector(tui as never, theme as never, customKeys as never, turns, (action) =>
 		actions.push(action),
-	).handleInput("\u001b");
-	new BtwTextRangeSelector(tui as never, theme as never, turns, (action) =>
+	).handleInput("q");
+	new BtwTextRangeSelector(tui as never, theme as never, customKeys as never, turns, (action) =>
 		actions.push(action),
 	).handleInput("\u0003");
 
@@ -605,6 +727,7 @@ test("text range selector scrolls raw lines and escapes controls in its display"
 	const selector = new BtwTextRangeSelector(
 		tui as never,
 		theme as never,
+		keybindings() as never,
 		[{ question: "Q", answer, kind: "answered", response: response(answer) }],
 		() => undefined,
 	);
