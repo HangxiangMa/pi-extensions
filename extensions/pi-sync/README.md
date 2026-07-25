@@ -79,21 +79,27 @@ A configured manager shows:
 ```text
 Current target: home
 Storage: Cloudflare R2 · personal-pi
-Auto-sync: On · Sessions: Off
-Last known sync: Remote not checked
+Synced content: 9 built-in groups · 0 extra files · Sessions: Off
+Auto-sync: On
+Last applied snapshot: snapshot-id (or Never synced)
+Remote changes: Not checked
 ```
 
 Its primary actions are:
 
-- **Sync now** — conservatively decide whether to push, pull, or do nothing
+- **Sync now (recommended)** — conservatively decide whether to push, pull, or do nothing
+- **Pull from remote** — check the remote snapshot, preview exact local writes/deletes, then confirm
+- **Push to remote** — scan and preview exact remote publication changes, then confirm
 - **Switch target** — preview the target change, then follow the configured pull behavior
 - **Status & changes** — perform a cancellable read-only remote check
 - **Settings** — control post-switch pulling, automatic sync, and synced content
-- **Manage targets & storage** — add, edit, or remove local target/profile definitions
-- **History & recovery** — browse snapshots, preview rollback, diagnose setup, or recover a stale lock
-- **Help**
+- **More…** — open one shallow level containing target/storage management, history/recovery, Help, and Back
 
-Escape exits the main menu. Secondary menus provide Back; dirty synced-content drafts provide Save, Discard, and Continue editing. Cancellation before publication has no side effects.
+The menu does not query remote storage merely to open. It shows the last locally applied snapshot and marks remote changes as unchecked until an operation runs. When no synced content is selected, transfer actions are hidden and Settings becomes the first action. During an active or recoverable lock, mutation actions remain unavailable.
+
+Push and pull keep their existing concrete previews and confirmation prompts. Pull creates a local backup before applying; push scans locally managed content for likely secrets before publication. Escape cancels a pre-commit check without changing local or remote files. Once publication or apply begins, cancellation is disabled. Conflicts never force automatically; inspect **Status & changes** and use an explicit direct route only after reviewing the conflict.
+
+Escape exits the main menu. **More…** and secondary menus provide Back; dirty synced-content drafts provide Save, Discard, and Continue editing. Cancellation before publication has no side effects.
 
 ## ⚙️ Settings
 

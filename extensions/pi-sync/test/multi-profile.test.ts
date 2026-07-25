@@ -31,6 +31,7 @@ import {
 	stateDir,
 	writeStateForConfig,
 } from "../src/config.js";
+import { showSyncManager } from "../src/manager-ui.js";
 import { migrateLegacySettings } from "../src/settings-management.js";
 import { recoverPendingSnapshotTransactions } from "../src/snapshot-transaction.js";
 import sync, { parseOptions } from "../src/sync.js";
@@ -160,9 +161,16 @@ test("deprecated PI_SYNC variables retain precedence and warnings never reveal v
 	});
 });
 
-test("bare sync menu shows the current target and goal-oriented actions", async () => {
+test("bare sync menu shows current state and goal-oriented actions", async () => {
 	await withTempSettings(async () => {
 		writeSettings(v2Settings());
+		const config = await loadConfig();
+		await writeStateForConfig(config, {
+			version: 1,
+			profile: config.profile,
+			lastAppliedSnapshot: "snapshot-home-123",
+			lastFileHashes: {},
+		});
 		const mock = createMockPi();
 		sync(mock.pi);
 		const calls: Array<{ title: string; options: string[] }> = [];
@@ -179,16 +187,100 @@ test("bare sync menu shows the current target and goal-oriented actions", async 
 
 		assert.match(calls[0]?.title ?? "", /Current target: home/);
 		assert.match(calls[0]?.title ?? "", /Cloudflare R2.*personal-pi/);
-		assert.match(calls[0]?.title ?? "", /Auto-sync: On.*Sessions: Off/);
+		assert.match(calls[0]?.title ?? "", /Synced content: 1 built-in group.*Sessions: Off/);
+		assert.match(calls[0]?.title ?? "", /Auto-sync: On/);
+		assert.match(calls[0]?.title ?? "", /Last applied snapshot: snapshot-home-123/);
+		assert.match(calls[0]?.title ?? "", /Remote changes: Not checked/);
 		assert.deepEqual(calls[0]?.options, [
-			"Sync now",
+			"Sync now (recommended)",
+			"Pull from remote",
+			"Push to remote",
 			"Switch target",
 			"Status & changes",
 			"Settings",
+			"More…",
+		]);
+	});
+});
+
+test("main menu exposes shallow secondary navigation with Back", async () => {
+	await withTempSettings(async () => {
+		writeSettings(v2Settings());
+		const mock = createMockPi();
+		sync(mock.pi);
+		const choices = ["More…", "Back", undefined];
+		const calls: Array<{ title: string; options: string[] }> = [];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async (title: string, options: string[]) => {
+				calls.push({ title, options });
+				return choices.shift();
+			},
+		});
+
+		await mock.commands.get("sync")?.handler("", ctx);
+
+		assert.match(calls[1]?.title ?? "", /More options/);
+		assert.deepEqual(calls[1]?.options, [
 			"Manage targets & storage",
 			"History & recovery",
 			"Help",
+			"Back",
 		]);
+		assert.match(calls[2]?.title ?? "", /Current target: home/);
+	});
+});
+
+test("main menu dispatches explicit pull and push routes", async () => {
+	await withTempSettings(async () => {
+		writeSettings(v2Settings());
+		const choices = ["Pull from remote", "Push to remote", undefined];
+		const routes: string[] = [];
+		const titles: string[] = [];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "rpc",
+			select: async (title: string) => {
+				titles.push(title);
+				return choices.shift();
+			},
+		});
+
+		await showSyncManager(ctx, async (route) => {
+			routes.push(route);
+			const config = await loadConfig();
+			await writeStateForConfig(config, {
+				version: 1,
+				profile: config.profile,
+				lastAppliedSnapshot: `after-${route}`,
+				lastFileHashes: {},
+			});
+			return undefined;
+		});
+
+		assert.deepEqual(routes, ["pull", "push"]);
+		assert.match(titles[1] ?? "", /Last applied snapshot: after-pull/);
+		assert.match(titles[2] ?? "", /Last applied snapshot: after-push/);
+	});
+});
+
+test("main menu exits the stale continuation after an applied pull", async () => {
+	await withTempSettings(async () => {
+		writeSettings(v2Settings());
+		let selectCalls = 0;
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "rpc",
+			select: async () => {
+				selectCalls += 1;
+				return "Pull from remote";
+			},
+		});
+
+		await showSyncManager(ctx, async () => "applied");
+
+		assert.equal(selectCalls, 1);
 	});
 });
 
@@ -246,8 +338,225 @@ test("bare sync disables mutations and exposes recovery while a live lock is hel
 		await mock.commands.get("sync")?.handler("", ctx);
 
 		assert.match(title, /Operation in progress: pull/);
-		assert.doesNotMatch(options.join("\n"), /Sync now|Settings|Switch target/);
+		assert.doesNotMatch(options.join("\n"), /Sync now|Pull|Push|Settings|Switch target/);
 		assert.deepEqual(options, ["Status & changes", "History & recovery", "Help"]);
+	});
+});
+
+test("menu hides transfer actions when no synced content is selected", async () => {
+	await withTempSettings(async () => {
+		const settings = v2Settings();
+		settings.targets.home.syncFiles = [];
+		settings.targets.home.extraFiles = [];
+		settings.targets.home.syncSessions = false;
+		writeSettings(settings);
+		const mock = createMockPi();
+		sync(mock.pi);
+		let title = "";
+		let options: string[] = [];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			select: async (nextTitle: string, nextOptions: string[]) => {
+				title = nextTitle;
+				options = nextOptions;
+				return undefined;
+			},
+		});
+
+		await mock.commands.get("sync")?.handler("", ctx);
+
+		assert.match(title, /No synced content is selected/);
+		assert.deepEqual(options, ["Settings", "Switch target", "Status & changes", "More…"]);
+	});
+});
+
+test("menu pull and push checks cancel before commit with distinct feedback", async () => {
+	for (const scenario of [
+		{
+			label: "Pull from remote",
+			route: "pull",
+			loading: /Checking remote changes/,
+			cancelled: /Pull check cancelled; no local files were changed/,
+		},
+		{
+			label: "Push to remote",
+			route: "push",
+			loading: /Preparing push preview/,
+			cancelled: /Push preparation cancelled; no remote files were changed/,
+		},
+	] as const) {
+		await withTempSettings(async () => {
+			writeSettings(v2Settings());
+			const choices = [scenario.label, undefined];
+			let requestedRoute = "";
+			let signalAborted = false;
+			let commitStarted = false;
+			let loadingLines: string[] = [];
+			const { ctx, notifications } = createMockContext({
+				hasUI: true,
+				mode: "tui",
+				select: async () => choices.shift(),
+				custom: async (factory: unknown) => {
+					const loader = createCustomSelectorHarness(factory, 32);
+					loadingLines = loader.render();
+					loader.handleInput("\u001b");
+					loader.dispose();
+					return loader.result;
+				},
+			});
+
+			await showSyncManager(ctx, (route, signal, onCommit) => {
+				requestedRoute = route;
+				return new Promise<undefined>((resolve, reject) => {
+					const commitTimer = setTimeout(() => {
+						onCommit?.();
+						commitStarted = true;
+						resolve(undefined);
+					}, 100);
+					const cancel = () => {
+						clearTimeout(commitTimer);
+						signalAborted = true;
+						reject(new DOMException("Aborted", "AbortError"));
+					};
+					if (signal?.aborted) cancel();
+					else signal?.addEventListener("abort", cancel, { once: true });
+				});
+			});
+
+			assert.equal(requestedRoute, scenario.route);
+			assert.ok(loadingLines.every((line) => visibleWidth(line) <= 32));
+			assert.match(loadingLines.join("\n"), scenario.loading);
+			assert.equal(signalAborted, true);
+			assert.equal(commitStarted, false);
+			assert.match(notifications.at(-1)?.message ?? "", scenario.cancelled);
+		});
+	}
+});
+
+test("menu push and pull preview concrete effects and cancellation is read-only", async () => {
+	await withTempSettings(async (agentDir) => {
+		writeSettings(v2Settings());
+		mkdirSync(agentDir, { recursive: true });
+		const settingsPath = path.join(agentDir, "settings.json");
+		writeFileSync(settingsPath, '{"local":true}\n');
+		const originalFetch = globalThis.fetch;
+		let putCalls = 0;
+		globalThis.fetch = (async (_input, init) => {
+			if (init?.method === "PUT") putCalls += 1;
+			return new Response(null, { status: 404 });
+		}) as typeof globalThis.fetch;
+		try {
+			const choices = ["Push to remote", undefined];
+			let confirmTitle = "";
+			let confirmMessage = "";
+			const mock = createMockPi();
+			sync(mock.pi);
+			const { ctx, notifications } = createMockContext({
+				hasUI: true,
+				mode: "rpc",
+				select: async () => choices.shift(),
+				confirm: async (title: string, message: string) => {
+					confirmTitle = title;
+					confirmMessage = message;
+					return false;
+				},
+			});
+
+			await mock.commands.get("sync")?.handler("", ctx);
+
+			assert.match(confirmTitle, /Push pi settings/);
+			assert.match(confirmMessage, /Add remotely: settings\.json/);
+			assert.equal(putCalls, 0);
+			assert.equal(readFileSync(settingsPath, "utf8"), '{"local":true}\n');
+			assert.match(notifications.at(-1)?.message ?? "", /Push cancelled/);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	await withTempSettings(async (agentDir) => {
+		writeSettings(v2Settings());
+		mkdirSync(agentDir, { recursive: true });
+		const settingsPath = path.join(agentDir, "settings.json");
+		writeFileSync(settingsPath, '{"local":true}\n');
+		const remoteSnapshot = snapshotPayload("remote-snapshot", '{"remote":true}\n');
+		const encoded = gzipSync(Buffer.from(JSON.stringify(remoteSnapshot)));
+		const pointer = {
+			version: 1,
+			profile: "home",
+			snapshot: remoteSnapshot.id,
+			sha256: createHash("sha256").update(encoded).digest("hex"),
+			createdAt: remoteSnapshot.createdAt,
+			machine: remoteSnapshot.machine,
+		};
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (input) => {
+			const url = new URL(String(input));
+			if (url.pathname.endsWith("/latest.json")) return Response.json(pointer);
+			if (url.pathname.endsWith(`/snapshots/${remoteSnapshot.id}.json.gz`)) {
+				return new Response(new Uint8Array(encoded));
+			}
+			throw new Error(`Unexpected request: ${url.pathname}`);
+		}) as typeof globalThis.fetch;
+		try {
+			const choices = ["Pull from remote", undefined];
+			let confirmTitle = "";
+			let confirmMessage = "";
+			const mock = createMockPi();
+			sync(mock.pi);
+			const { ctx, notifications } = createMockContext({
+				hasUI: true,
+				mode: "rpc",
+				select: async () => choices.shift(),
+				confirm: async (title: string, message: string) => {
+					confirmTitle = title;
+					confirmMessage = message;
+					return false;
+				},
+			});
+
+			await mock.commands.get("sync")?.handler("", ctx);
+
+			assert.match(confirmTitle, /Pull pi settings/);
+			assert.match(confirmMessage, /Update locally: settings\.json/);
+			assert.match(confirmMessage, /local backup is created/);
+			assert.equal(readFileSync(settingsPath, "utf8"), '{"local":true}\n');
+			assert.equal(existsSync(path.join(stateDir(), "backups")), false);
+			assert.match(notifications.at(-1)?.message ?? "", /Pull cancelled/);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+});
+
+test("menu pull failure preserves local files and suggests the next action", async () => {
+	await withTempSettings(async (agentDir) => {
+		writeSettings(v2Settings());
+		mkdirSync(agentDir, { recursive: true });
+		const settingsPath = path.join(agentDir, "settings.json");
+		writeFileSync(settingsPath, '{"local":true}\n');
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () => new Response(null, { status: 404 })) as typeof globalThis.fetch;
+		try {
+			const choices = ["Pull from remote", undefined];
+			const mock = createMockPi();
+			sync(mock.pi);
+			const { ctx, notifications } = createMockContext({
+				hasUI: true,
+				mode: "rpc",
+				select: async () => choices.shift(),
+			});
+
+			await mock.commands.get("sync")?.handler("", ctx);
+
+			assert.equal(readFileSync(settingsPath, "utf8"), '{"local":true}\n');
+			assert.match(
+				notifications.map(({ message }) => message).join("\n"),
+				/Remote is empty.*\/sync push/s,
+			);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
 	});
 });
 
@@ -283,7 +592,7 @@ test("Sync now read-only check aborts from Escape before any publication", async
 			const { ctx, notifications } = createMockContext({
 				hasUI: true,
 				mode: "tui",
-				select: async () => (selectCount++ === 0 ? "Sync now" : undefined),
+				select: async () => (selectCount++ === 0 ? "Sync now (recommended)" : undefined),
 				custom: async (factory: unknown) => {
 					const loader = createCustomSelectorHarness(factory, 60);
 					loader.handleInput("\u001b");
@@ -1026,6 +1335,7 @@ test("manage flow recommends the current profile bucket and derives a separate n
 		const mock = createMockPi();
 		sync(mock.pi);
 		const selections = [
+			"More…",
 			"Manage targets & storage",
 			"Add sync target",
 			"r2",
