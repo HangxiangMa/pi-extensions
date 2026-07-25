@@ -24,6 +24,7 @@ import {
 import { migrateLegacySettings } from "../src/settings-management.js";
 import { recoverPendingSnapshotTransactions } from "../src/snapshot-transaction.js";
 import sync, { parseOptions } from "../src/sync.js";
+import { useSyncTarget } from "../src/target-switch.js";
 
 initTheme("dark", false);
 
@@ -293,7 +294,7 @@ test("Sync now read-only check aborts from Escape before any publication", async
 	});
 });
 
-test("switch target previews and atomically changes only the active target", async () => {
+test("switch target asks to pull by default and declining leaves local files unchanged", async () => {
 	await withTempSettings(async () => {
 		const settings = v2Settings();
 		settings.profiles.s3 = {
@@ -317,12 +318,17 @@ test("switch target previews and atomically changes only the active target", asy
 		sync(mock.pi);
 		const selections = ["Switch target", "work", "Switch to work", undefined];
 		const calls: Array<{ title: string; options: string[] }> = [];
+		let pullPrompt = "";
 		const { ctx, notifications } = createMockContext({
 			hasUI: true,
 			mode: "tui",
 			select: async (title: string, options: string[]) => {
 				calls.push({ title, options });
 				return selections.shift();
+			},
+			confirm: async (title: string, message: string) => {
+				pullPrompt = `${title}\n${message}`;
+				return false;
 			},
 		});
 
@@ -336,9 +342,224 @@ test("switch target previews and atomically changes only the active target", asy
 		]);
 		assert.match(calls[2]?.title ?? "", /From: home/);
 		assert.match(calls[2]?.title ?? "", /To: work/);
-		assert.match(calls[2]?.title ?? "", /does not sync or modify files/i);
+		assert.match(calls[2]?.title ?? "", /ask whether to pull/i);
+		assert.match(pullPrompt, /Pull target “work” now\?/);
+		assert.match(pullPrompt, /selected local files/i);
 		assert.equal((await readLocalConfigObject())?.activeTarget, "work");
-		assert.match(notifications.at(-1)?.message ?? "", /Switched to “work”/);
+		assert.match(notifications.at(-1)?.message ?? "", /Switched to “work”.*not pulled/i);
+	});
+});
+
+test("accepting the default post-switch prompt starts a pull", async () => {
+	await withTempSettings(async () => {
+		const settings = v2Settings();
+		settings.targets.work = { ...settings.targets.home, namespace: "work" };
+		writeSettings(settings);
+		let pullCalls = 0;
+		let promptTitle = "";
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			confirm: async (title: string) => {
+				promptTitle = title;
+				return true;
+			},
+		});
+
+		const result = await useSyncTarget(ctx, "work", async () => {
+			pullCalls += 1;
+		});
+
+		assert.match(promptTitle, /Pull target “work” now\?/);
+		assert.equal(pullCalls, 1);
+		assert.equal(result.pullAttempted, true);
+	});
+});
+
+test("always-pull target switching skips confirmation and applies remote settings", async () => {
+	await withTempSettings(async (agentDir) => {
+		const settings = v2Settings();
+		settings.targetSwitchAction = "pull";
+		settings.targets.work = { ...settings.targets.home, namespace: "work" };
+		writeSettings(settings);
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(path.join(agentDir, "settings.json"), '{"local":true}\n');
+		const remoteSnapshot = snapshotPayload("work-snapshot", '{"remote":true}\n');
+		remoteSnapshot.profile = "work";
+		const encoded = gzipSync(Buffer.from(JSON.stringify(remoteSnapshot)));
+		const pointer = {
+			version: 1,
+			profile: "work",
+			snapshot: remoteSnapshot.id,
+			sha256: createHash("sha256").update(encoded).digest("hex"),
+			createdAt: remoteSnapshot.createdAt,
+			machine: remoteSnapshot.machine,
+		};
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (input) => {
+			const url = new URL(String(input));
+			if (url.pathname.endsWith("/profiles/work/latest.json")) return Response.json(pointer);
+			if (url.pathname.endsWith(`/profiles/work/snapshots/${remoteSnapshot.id}.json.gz`)) {
+				return new Response(new Uint8Array(encoded));
+			}
+			throw new Error(`Unexpected request: ${url.pathname}`);
+		}) as typeof globalThis.fetch;
+		try {
+			const confirmationTitles: string[] = [];
+			let reloads = 0;
+			const mock = createMockPi();
+			sync(mock.pi);
+			const { ctx, notifications } = createMockContext({
+				hasUI: true,
+				mode: "tui",
+				confirm: async (title: string) => {
+					confirmationTitles.push(title);
+					return title === "Reload Pi resources now?";
+				},
+				reload: async () => {
+					reloads += 1;
+				},
+			});
+
+			await mock.commands.get("sync")?.handler("use work", ctx);
+
+			assert.deepEqual(confirmationTitles, ["Reload Pi resources now?"]);
+			assert.equal((await readLocalConfigObject())?.activeTarget, "work");
+			assert.equal(readFileSync(path.join(agentDir, "settings.json"), "utf8"), '{"remote":true}\n');
+			assert.equal(reloads, 1);
+			assert.match(notifications.map((item) => item.message).join("\n"), /Pulled 1 files/);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+});
+
+test("always-pull keeps the switched target and reports a pull failure", async () => {
+	await withTempSettings(async () => {
+		const settings = v2Settings();
+		settings.targetSwitchAction = "pull";
+		settings.targets.work = { ...settings.targets.home, namespace: "work" };
+		writeSettings(settings);
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () => new Response(null, { status: 404 })) as typeof globalThis.fetch;
+		try {
+			const mock = createMockPi();
+			sync(mock.pi);
+			const { ctx, notifications } = createMockContext();
+
+			await mock.commands.get("sync")?.handler("use work", ctx);
+
+			assert.equal((await readLocalConfigObject())?.activeTarget, "work");
+			assert.match(notifications[0]?.message ?? "", /Switched to “work”.*Pulling/);
+			assert.match(notifications.at(-1)?.message ?? "", /Remote is empty/);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+});
+
+test("cancelling an automatic post-switch pull reports that the target remains switched", async () => {
+	await withTempSettings(async () => {
+		const settings = v2Settings();
+		settings.targetSwitchAction = "pull";
+		settings.targets.work = { ...settings.targets.home, namespace: "work" };
+		writeSettings(settings);
+		const originalFetch = globalThis.fetch;
+		let aborted = false;
+		globalThis.fetch = ((_input, init) =>
+			new Promise<Response>((_resolve, reject) => {
+				if (init?.signal?.aborted) {
+					aborted = true;
+					reject(new DOMException("Aborted", "AbortError"));
+					return;
+				}
+				init?.signal?.addEventListener(
+					"abort",
+					() => {
+						aborted = true;
+						reject(new DOMException("Aborted", "AbortError"));
+					},
+					{ once: true },
+				);
+			})) as typeof globalThis.fetch;
+		try {
+			const selections = ["Switch target", "work", "Switch to work"];
+			const mock = createMockPi();
+			sync(mock.pi);
+			const { ctx, notifications } = createMockContext({
+				hasUI: true,
+				mode: "tui",
+				select: async () => selections.shift(),
+				custom: async (factory: unknown) => {
+					const loader = createCustomSelectorHarness(factory, 60);
+					loader.handleInput("\u001b");
+					loader.dispose();
+					return loader.result;
+				},
+			});
+
+			await mock.commands.get("sync")?.handler("", ctx);
+
+			assert.equal(aborted, true);
+			assert.equal((await readLocalConfigObject())?.activeTarget, "work");
+			assert.match(
+				notifications.at(-1)?.message ?? "",
+				/Pull cancelled; the target was switched, but synced files were not changed/,
+			);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+});
+
+test("switch-only target setting retains the previous no-pull behavior", async () => {
+	await withTempSettings(async () => {
+		const settings = v2Settings();
+		settings.targetSwitchAction = "switch-only";
+		settings.targets.work = { ...settings.targets.home, namespace: "work" };
+		settings.future = { retained: true };
+		writeSettings(settings);
+		const mock = createMockPi();
+		sync(mock.pi);
+		let confirmations = 0;
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			confirm: async () => {
+				confirmations += 1;
+				return true;
+			},
+		});
+
+		await mock.commands.get("sync")?.handler("use work", ctx);
+
+		const saved = await readLocalConfigObject();
+		assert.equal(confirmations, 0);
+		assert.equal(saved?.activeTarget, "work");
+		assert.deepEqual(saved?.future, { retained: true });
+		assert.match(notifications.at(-1)?.message ?? "", /No files were pulled/);
+	});
+});
+
+test("settings menu persists the target-switch action and preserves unknown fields", async () => {
+	await withTempSettings(async () => {
+		const settings = v2Settings();
+		settings.future = { retained: true };
+		writeSettings(settings);
+		const selections = ["Settings", "After switching target", "Always pull", undefined];
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async () => selections.shift(),
+		});
+
+		await mock.commands.get("sync")?.handler("", ctx);
+
+		const saved = await readLocalConfigObject();
+		assert.equal(saved?.targetSwitchAction, "pull");
+		assert.deepEqual(saved?.future, { retained: true });
 	});
 });
 
@@ -728,10 +949,20 @@ test("direct use switches targets and target options parse exactly", async () =>
 		await mock.commands.get("sync")?.handler("use work", ctx);
 
 		assert.equal((await readLocalConfigObject())?.activeTarget, "work");
-		assert.match(notifications.at(-1)?.message ?? "", /Switched to “work”/);
+		assert.match(notifications.at(-1)?.message ?? "", /confirmation requires TUI mode/);
 		assert.equal(parseOptions(["--target", "home"]).target, "home");
 		assert.throws(() => parseOptions(["--target"]), /requires a target name/);
 		assert.throws(() => parseOptions(["--unknown"]), /Unknown sync option/);
+	});
+});
+
+test("invalid target-switch actions fail settings validation", async () => {
+	await withTempSettings(async () => {
+		writeSettings({ ...v2Settings(), targetSwitchAction: "sometimes" });
+		await assert.rejects(
+			loadConfig(),
+			/targetSwitchAction must be "ask", "pull", or "switch-only"/,
+		);
 	});
 });
 
@@ -927,8 +1158,10 @@ function snapshotPayload(id: string, settings: string) {
 function v2Settings(): {
 	version: 2;
 	activeTarget: string;
+	targetSwitchAction?: "ask" | "pull" | "switch-only";
 	profiles: Record<string, Record<string, unknown>>;
 	targets: Record<string, Record<string, unknown>>;
+	future?: Record<string, unknown>;
 } {
 	return {
 		version: 2,

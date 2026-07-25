@@ -7,6 +7,7 @@ import {
 	isEnabled,
 	loadConfig,
 	loadPartialConfig,
+	loadTargetSwitchAction,
 	localConfigPath,
 	normalizeExtraFiles,
 	normalizeSyncFiles,
@@ -25,6 +26,11 @@ import {
 	updateSyncTarget,
 } from "./settings-management.js";
 import { DEFAULT_SYNC_FILES } from "./sync-policy.js";
+import {
+	showTargetSwitchActionSetting,
+	targetSwitchActionLabel,
+	useSyncTarget,
+} from "./target-switch.js";
 import type { SyncConfig } from "./types.js";
 
 export const MAIN_MENU_ACTIONS = [
@@ -58,9 +64,12 @@ export async function showSyncManager(
 			case "Sync now":
 				await runCancellableOperation(ctx, "Checking current target…", "sync", runRoute, true);
 				break;
-			case "Switch target":
-				if (await showTargetSwitcher(ctx)) continue;
+			case "Switch target": {
+				const result = await showTargetSwitcher(ctx, runRoute);
+				if (result === "pull-attempted") return;
+				if (result === "switched") continue;
 				break;
+			}
 			case "Status & changes":
 				await runCancellableOperation(ctx, "Checking current target…", "diff", runRoute);
 				break;
@@ -90,6 +99,7 @@ async function runCancellableOperation(
 	route: string,
 	runRoute: RunRoute,
 	commitAware = false,
+	cancelledMessage = "Check cancelled; no settings or files were changed.",
 ) {
 	if (ctx.mode !== "tui") {
 		await runRoute(route);
@@ -128,7 +138,7 @@ async function runCancellableOperation(
 	);
 	if (result?.cancelled) {
 		await operation;
-		ctx.ui.notify("Check cancelled; no settings or files were changed.", "info");
+		ctx.ui.notify(cancelledMessage, "info");
 		return;
 	}
 	if (result?.error) throw result.error;
@@ -346,7 +356,7 @@ export async function showSetupWizard(ctx: ExtensionCommandContext) {
 	return true;
 }
 
-async function showTargetSwitcher(ctx: ExtensionCommandContext) {
+async function showTargetSwitcher(ctx: ExtensionCommandContext, runRoute: RunRoute) {
 	const raw = await readLocalConfigObject();
 	if (raw?.version !== 2) {
 		ctx.ui.notify("Add a second sync target before switching targets.", "info");
@@ -395,6 +405,13 @@ async function showTargetSwitcher(ctx: ExtensionCommandContext) {
 		);
 		return false;
 	}
+	const targetSwitchAction = await loadTargetSwitchAction();
+	const switchEffect =
+		targetSwitchAction === "ask"
+			? "After switching, pi-sync will ask whether to pull the target."
+			: targetSwitchAction === "pull"
+				? "After switching, pi-sync will immediately pull the target without a pull confirmation."
+				: "After switching, pi-sync will not pull or modify synced files.";
 	const choice = await ctx.ui.select(
 		[
 			"Switch target",
@@ -405,32 +422,27 @@ async function showTargetSwitcher(ctx: ExtensionCommandContext) {
 			`Synced content: ${normalizeSyncFiles(config.syncFiles).length} built-in groups · ${config.extraFiles.length} extra files`,
 			`Auto-sync: ${config.autoSync ? "On" : "Off"} · Sessions: ${config.syncSessions ? "On" : "Off"}`,
 			"",
-			"Switching does not sync or modify files now.",
+			switchEffect,
 		].join("\n"),
 		[`Switch to ${safeTerminalText(name)}`, "Cancel"],
 	);
 	if (choice !== `Switch to ${safeTerminalText(name)}`) return false;
-	await useSyncTarget(ctx, name);
-	return true;
-}
-
-export async function useSyncTarget(ctx: ExtensionCommandContext, name: string) {
-	const normalized = name.trim();
-	if (!normalized) throw new Error("Usage: /sync use <target>");
-	await loadConfig(normalized);
-	await updateLocalConfig((current) => {
-		if (current.version !== 2) throw new Error("Target switching requires version 2 settings.");
-		return { ...current, activeTarget: normalized };
-	});
-	await refreshTargetCompletions();
-	ctx.ui.notify(
-		`Switched to “${safeTerminalText(normalized)}”. No files were synced; use Sync now when ready.`,
-		"info",
+	const result = await useSyncTarget(ctx, name, () =>
+		runCancellableOperation(
+			ctx,
+			`Pulling target “${safeTerminalText(name)}”…`,
+			"pull --yes",
+			runRoute,
+			true,
+			"Pull cancelled; the target was switched, but synced files were not changed.",
+		),
 	);
+	return result.pullAttempted ? "pull-attempted" : "switched";
 }
 
 async function showSettingsMenu(ctx: ExtensionCommandContext, runRoute: RunRoute) {
 	const partial = await loadPartialConfig();
+	const targetSwitchAction = await loadTargetSwitchAction();
 	const automaticSyncOverridden = Object.hasOwn(process.env, "PI_SYNC_AUTO_SYNC");
 	const selected = await ctx.ui.select(
 		[
@@ -439,10 +451,12 @@ async function showSettingsMenu(ctx: ExtensionCommandContext, runRoute: RunRoute
 			"Automatic sync changes save immediately; synced-content changes use a reviewed draft.",
 			"",
 			`Auto-sync: ${isEnabled(partial.autoSync, true) ? "On" : "Off"}`,
+			`After target switch: ${targetSwitchActionLabel(targetSwitchAction)}`,
 			`Synced content: ${normalizeSyncFiles(partial.syncFiles).length} built-ins · ${normalizeExtraFiles(partial.extraFiles).length} extra`,
 		].join("\n"),
 		[
 			"Choose synced content",
+			"After switching target",
 			automaticSyncOverridden
 				? "Automatic sync (environment override, deprecated)"
 				: "Toggle automatic sync",
@@ -452,6 +466,10 @@ async function showSettingsMenu(ctx: ExtensionCommandContext, runRoute: RunRoute
 	if (!selected || selected === BACK) return;
 	if (selected === "Choose synced content") {
 		await runRoute("files");
+		return;
+	}
+	if (selected === "After switching target") {
+		await showTargetSwitchActionSetting(ctx, targetSwitchAction);
 		return;
 	}
 	if (automaticSyncOverridden) {

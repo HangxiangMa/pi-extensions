@@ -39,7 +39,7 @@ import {
 } from "./config.js";
 import { showFileSelection } from "./file-selection.js";
 import { inspectLock, isLockGuardHeld, isStaleLock, unlock, withLock } from "./lock.js";
-import { showSetupWizard, showSyncManager, useSyncTarget } from "./manager-ui.js";
+import { showSetupWizard, showSyncManager } from "./manager-ui.js";
 import {
 	historyKey,
 	latestKey,
@@ -86,6 +86,7 @@ import {
 	snapshotsMatch,
 	syncPolicyChanged,
 } from "./sync-state.js";
+import { useSyncTarget } from "./target-switch.js";
 import type {
 	CommandOptions,
 	LatestPointer,
@@ -96,9 +97,7 @@ import type {
 	SyncState,
 } from "./types.js";
 
-const gzipAsync = promisify(gzip);
-const gunzipAsync = promisify(gunzip);
-
+const [gzipAsync, gunzipAsync] = [promisify(gzip), promisify(gunzip)];
 const STATUS_KEY = "sync";
 const VERSION = 1;
 const DEFAULT_PROFILE = "default";
@@ -191,7 +190,9 @@ async function executeCommand(
 				ctx.ui.notify(usage(), "info");
 				return;
 			case "use":
-				await useSyncTarget(ctx, options.args[0] ?? "");
+				await useSyncTarget(ctx, options.args[0] ?? "", () =>
+					withLock("pull", () => pull(ctx, { ...options, yes: true })),
+				);
 				return;
 			case "init":
 				await initConfig(ctx);
