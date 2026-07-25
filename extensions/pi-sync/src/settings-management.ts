@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+	DEFAULT_TARGET_SWITCH_ACTION,
 	effectiveTargetRemoteIdentity,
 	localConfigPath,
 	readLocalConfigObject,
@@ -112,6 +113,7 @@ export async function saveNewV2Settings(input: {
 	const settings = {
 		version: 2,
 		activeTarget: input.targetName,
+		targetSwitchAction: DEFAULT_TARGET_SWITCH_ACTION,
 		profiles: { [input.storageProfileName]: { ...input.profile } },
 		targets: {
 			[input.targetName]: { ...input.target, profile: input.storageProfileName },

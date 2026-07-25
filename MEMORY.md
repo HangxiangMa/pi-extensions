@@ -69,6 +69,7 @@
 - Symptom: PR status shows no issue comments but inline review comments exist. Cause: `gh pr view --json comments,reviews` omits pull review comment bodies. Fix: use `gh api repos/OWNER/REPO/pulls/NUMBER/comments` plus issue comments/reviews when actual PR review comments are needed.
 - Symptom: Chrome DevTools `/json/new` may reject unsafe `GET`. Cause: modern Chrome expects `PUT` for target creation. Fix: use `PUT /json/new?${encodeURIComponent(url)}`.
 - For pi-sync on Cloudflare R2, keep session-token support for temporary credentials but retry once without the token when R2 static keys reject `X-Amz-Security-Token`.
+- Pi-sync post-switch pulls cross a concurrency boundary after changing `activeTarget`; skip already-current targets, carry the selected target explicitly through locking, and retain the exact pull summary before apply.
 - Symptom: Pi extension async/timer/command continuations can crash after reload or session replacement. Cause: captured `ExtensionContext` becomes stale. Fix: pass plain data into delayed callbacks, catch stale-context errors, and scope cleanup to the failing ctx/request.
 - Pi extension `message_end` handlers run before AgentSession persists the assistant message; use `tool_execution_end` when a tool-using turn needs the just-finished assistant usage from the session branch, with `agent_end` as the no-tool fallback.
 - Treat session text rendered in custom TUI components as untrusted terminal input: escape C0/C1 controls before `wrapTextWithAnsi`, while retaining the raw value only for non-rendered payloads.
@@ -101,6 +102,7 @@
 - Treat parsed credential maps as own-property dictionaries: names such as `__proto__` and `constructor` must not mutate or resolve through `Object.prototype`.
 - Active-account API-key conversion failures must fail closed, and user-facing errors must redact the exact current access and refresh secrets rather than relying only on token-shape regexes.
 - Symptom: a compiled pi-webui server smoke serves stale browser assets from another checkout. Cause: when cache-local `src/web` is absent, asset loading falls back through `process.cwd()`. Fix: launch the smoke with cwd set to the target worktree.
+- Symptom: latest-Pi CI reports committed WebUI assets as stale without source changes. Cause: its lockfile-free install can update semver-ranged browser bundle dependencies. Fix: pin bundle inputs that must reproduce committed assets, or regenerate those assets deliberately.
 - Runtime-auth generation guards prevent stale credential mutation but not stale outer status or connection-invalidation publication; overlapping provider syncs also need latest-task ownership at the lifecycle boundary.
 - Credential-file path and permission checks must run on every locked read, not only startup migration; reject symlinks and repair `0600` through the opened descriptor.
 

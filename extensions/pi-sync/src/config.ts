@@ -9,7 +9,13 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { safeName } from "./paths.js";
 import { DEFAULT_SYNC_FILES, normalizeExtraFiles, normalizeSyncFiles } from "./sync-policy.js";
-import type { PartialConfig, Snapshot, SyncConfig, SyncState } from "./types.js";
+import type {
+	PartialConfig,
+	Snapshot,
+	SyncConfig,
+	SyncState,
+	TargetSwitchAction,
+} from "./types.js";
 
 export { extraFilePathsByLower, normalizeExtraFiles, normalizeSyncFiles } from "./sync-policy.js";
 
@@ -17,6 +23,7 @@ const VERSION = 1;
 const DEFAULT_PROFILE = "default";
 const DEFAULT_PREFIX = "pi-sync";
 const DEFAULT_REGION = "auto";
+export const DEFAULT_TARGET_SWITCH_ACTION: TargetSwitchAction = "ask";
 
 export const DEPRECATED_PI_SYNC_ENV_NAMES = [
 	"PI_SYNC_ENDPOINT",
@@ -121,6 +128,20 @@ export async function loadPartialConfig(targetName?: string): Promise<PartialCon
 	return resolveLegacyPartialConfig(fileConfig as PartialConfig);
 }
 
+export async function loadTargetSwitchAction(): Promise<TargetSwitchAction> {
+	const settings = await readLocalConfigObject();
+	if (!settings || !isV2SettingsObject(settings)) return DEFAULT_TARGET_SWITCH_ACTION;
+	return normalizeTargetSwitchAction(settings.targetSwitchAction);
+}
+
+export function normalizeTargetSwitchAction(value: unknown): TargetSwitchAction {
+	if (value === undefined) return DEFAULT_TARGET_SWITCH_ACTION;
+	if (value === "ask" || value === "pull" || value === "switch-only") return value;
+	throw new Error(
+		'Invalid pi-sync settings: targetSwitchAction must be "ask", "pull", or "switch-only".',
+	);
+}
+
 export function deprecatedPiSyncEnvironmentNames() {
 	return DEPRECATED_PI_SYNC_ENV_NAMES.filter((name) => hasEnv(name));
 }
@@ -160,6 +181,7 @@ export function resolveV2PartialConfig(
 	settings: Record<string, unknown>,
 	targetName?: string,
 ): PartialConfig {
+	normalizeTargetSwitchAction(settings.targetSwitchAction);
 	const targets = requireNamedObjectMap(settings.targets, "targets");
 	const profiles = requireNamedObjectMap(settings.profiles, "profiles");
 	validateUniqueRemoteTargets(targets);
@@ -477,6 +499,7 @@ export function localConfigTemplate(): Record<string, unknown> {
 	return {
 		version: 2,
 		activeTarget: DEFAULT_PROFILE,
+		targetSwitchAction: DEFAULT_TARGET_SWITCH_ACTION,
 		profiles: {
 			[DEFAULT_PROFILE]: {
 				kind: "r2",

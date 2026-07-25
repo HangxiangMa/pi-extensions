@@ -1,4 +1,5 @@
 export type StorageProfileKind = "r2" | "s3-compatible";
+export type TargetSwitchAction = "ask" | "pull" | "switch-only";
 
 export interface StorageProfileSettings {
 	kind?: StorageProfileKind;
@@ -23,6 +24,7 @@ export interface SyncTargetSettings {
 export interface PiSyncSettingsV2 {
 	version: 2;
 	activeTarget?: string;
+	targetSwitchAction?: TargetSwitchAction;
 	profiles?: Record<string, StorageProfileSettings>;
 	targets?: Record<string, SyncTargetSettings>;
 	[key: string]: unknown;

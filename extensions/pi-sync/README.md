@@ -10,7 +10,7 @@ The extension uses immutable snapshot bundles, a `latest.json` publication point
 
 - Opens a goal-oriented `/sync` manager showing the current target, storage, auto-sync, session scope, and relevant next actions.
 - Supports multiple named **sync targets** and reusable R2/S3 **storage profiles**.
-- Switches targets without syncing or modifying files; only the current target runs automatic startup/shutdown sync.
+- Asks to review a pull after switching targets by default, with settings to start that review automatically or switch only.
 - Previews concrete local or remote file changes before push, pull, force resolution, or rollback.
 - Uses transactional synced-content drafts with explicit Save, Discard, and Continue editing choices.
 - Keeps direct `help`, `use`, `init`, `config`, `files`, `status`, `diff`, `doctor`, `push`, `pull`, `sync`, `history`, `rollback`, and `unlock` routes for compatibility and automation.
@@ -86,9 +86,9 @@ Last known sync: Remote not checked
 Its primary actions are:
 
 - **Sync now** — conservatively decide whether to push, pull, or do nothing
-- **Switch target** — preview and change the current target without syncing
+- **Switch target** — preview the target change, then follow the configured pull behavior
 - **Status & changes** — perform a cancellable read-only remote check
-- **Settings** — control automatic sync and synced content for the current target
+- **Settings** — control post-switch pulling, automatic sync, and synced content
 - **Manage targets & storage** — add, edit, or remove local target/profile definitions
 - **History & recovery** — browse snapshots, preview rollback, diagnose setup, or recover a stale lock
 - **Help**
@@ -109,6 +109,7 @@ A version 2 example:
 {
   "version": 2,
   "activeTarget": "home",
+  "targetSwitchAction": "ask",
   "profiles": {
     "r2": {
       "kind": "r2",
@@ -155,11 +156,18 @@ A version 2 example:
 - A **storage profile** owns connection/authentication fields: `kind`, `endpoint`, `region`, `accessKeyId`, `secretAccessKey`, and optional `sessionToken`.
 - A **sync target** references a storage profile and owns `bucket`, `prefix`, `namespace`, `autoSync`, and its synced-content policy.
 - `activeTarget` is used by bare commands and automatic sync.
+- `targetSwitchAction` controls what happens after a target switch: `ask` (default), `pull`, or `switch-only`.
 - `namespace` is the old flat `profile` concept. The remote layout and snapshot wire field remain named `profiles`/`profile` for compatibility.
 
 When adding another target with the same storage profile, pi-sync recommends reusing the current target's bucket and prefix while deriving a separate namespace from the new target name. For example, `home` and `work` may both use profile `r2`, bucket `pi-sync`, and prefix `pi-sync`, producing `pi-sync/profiles/home/` and `pi-sync/profiles/work/`.
 
 Two targets may intentionally overlap local files, but only one is automatic. pi-sync rejects duplicate effective target remote identities—including deprecated bucket/prefix/namespace environment overrides—to prevent independent local states from controlling the same remote pointer. Removing a target/profile removes local configuration only; it never deletes buckets or snapshots. A referenced profile cannot be removed, and users must switch away before removing one of several current targets.
+
+### Target switching
+
+The default `targetSwitchAction: "ask"` changes `activeTarget` atomically, then asks in TUI mode whether to review a pull for that target. Choosing not to review leaves local files unchanged. Accepting starts the normal pull flow, which fetches the remote snapshot and shows the exact writes and deletions before apply. In print, JSON, or RPC mode, `ask` switches without pulling and directs interactive users to `/sync pull` where notifications are available.
+
+Set `targetSwitchAction` to `"pull"` to start that reviewed pull automatically after a confirmed target switch. The exact pull summary and apply confirmation remain enabled, conflict detection still stops unsafe merges, a local backup is created before apply, and pi-sync never adds `--force`; Pi may separately ask whether to reload changed resources after a successful pull. Set it to `"switch-only"` to retain the previous no-pull behavior. Selecting an already-current target is a no-op. If a pull fails, the new target remains active and the error can be resolved before retrying `/sync pull`.
 
 ### Synced content
 
@@ -254,7 +262,7 @@ For the current target, startup auto-sync uses conservative decisions:
 - first-sync mismatch or both changed → stop and require review
 - no selected content → report/skip
 
-Switching targets changes only `activeTarget`; it never starts sync. The next startup uses the new target's `autoSync`, or the user can choose **Sync now** immediately.
+Switching targets first changes `activeTarget`, then follows `targetSwitchAction`: ask before reviewing a pull in TUI by default, start a reviewed pull automatically when configured, or stop after switching. Pulls remain pinned to the selected target and retain exact summaries, locking, backups, and conflict safeguards. The next startup uses the new target's `autoSync` regardless of the switch action.
 
 Remote layout remains compatible:
 
@@ -313,6 +321,8 @@ extensions/pi-sync/
 │   ├── manager-ui.ts            # Goal-oriented menus and setup/management flows
 │   ├── file-selection.ts        # Transactional synced-content editor
 │   ├── settings-management.ts   # Profiles, targets, migration, and atomic saves
+│   ├── settings-ui.ts           # SettingsList interaction and serialized saves
+│   ├── target-switch.ts         # Post-switch prompt, policy, and target handoff
 │   ├── snapshot-transaction.ts  # Local apply journal, rollback, and recovery
 │   └── *.ts                     # Config, policy, snapshot, S3, lock, and format modules
 ├── test/

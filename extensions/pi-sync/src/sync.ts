@@ -39,7 +39,7 @@ import {
 } from "./config.js";
 import { showFileSelection } from "./file-selection.js";
 import { inspectLock, isLockGuardHeld, isStaleLock, unlock, withLock } from "./lock.js";
-import { showSetupWizard, showSyncManager, useSyncTarget } from "./manager-ui.js";
+import { showSetupWizard, showSyncManager } from "./manager-ui.js";
 import {
 	historyKey,
 	latestKey,
@@ -86,6 +86,7 @@ import {
 	snapshotsMatch,
 	syncPolicyChanged,
 } from "./sync-state.js";
+import { useSyncTarget } from "./target-switch.js";
 import type {
 	CommandOptions,
 	LatestPointer,
@@ -96,9 +97,7 @@ import type {
 	SyncState,
 } from "./types.js";
 
-const gzipAsync = promisify(gzip);
-const gunzipAsync = promisify(gunzip);
-
+const [gzipAsync, gunzipAsync] = [promisify(gzip), promisify(gunzip)];
 const STATUS_KEY = "sync";
 const VERSION = 1;
 const DEFAULT_PROFILE = "default";
@@ -159,8 +158,8 @@ export default function sync(pi: ExtensionAPI) {
 async function handleCommand(rawArgs: string, ctx: ExtensionCommandContext) {
 	if (!rawArgs.trim()) {
 		try {
-			await showSyncManager(ctx, (route, signal, onCommit) =>
-				executeCommand(route, ctx, signal, onCommit),
+			await showSyncManager(ctx, (route, signal, onCommit, target) =>
+				executeCommand(route, ctx, signal, onCommit, target),
 			);
 		} catch (error) {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -176,12 +175,14 @@ async function executeCommand(
 	ctx: ExtensionCommandContext,
 	signal?: AbortSignal,
 	onCommit?: () => void,
+	target?: string,
 ) {
 	try {
 		const command = await resolveSyncCommand(rawArgs, ctx);
 		if (!command) return;
 		const { subcommand, rest } = command;
 		const options = parseOptions(rest);
+		if (target !== undefined) options.target = target;
 		if (signal) options.signal = signal;
 		if (onCommit) options.onCommit = onCommit;
 		validateCommandOptions(subcommand, options);
@@ -191,7 +192,9 @@ async function executeCommand(
 				ctx.ui.notify(usage(), "info");
 				return;
 			case "use":
-				await useSyncTarget(ctx, options.args[0] ?? "");
+				await useSyncTarget(ctx, options.args[0] ?? "", (selectedTarget) =>
+					withLock("pull", () => pull(ctx, { ...options, target: selectedTarget })),
+				);
 				return;
 			case "init":
 				await initConfig(ctx);
