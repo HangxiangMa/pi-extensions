@@ -567,7 +567,9 @@ function escapeHandoffText(text: string): string {
 			return character;
 		})
 		.join("")
-		.replaceAll("</btw_context>", "&lt;/btw_context&gt;");
+		.replace(/<\/btw_context[ \t\r\n]*>/g, (terminator) =>
+			terminator.replace("<", "&lt;").replace(">", "&gt;"),
+		);
 }
 
 function escapeTerminalControls(text: string): string {
