@@ -14,7 +14,7 @@ format:
 
 # Update, install, rebuild, and verify dependencies across all npm workspaces
 update:
-    npx npm-check-updates --workspaces -u
+    npx npm-check-updates --workspaces --root -u
     npm install
     # Rebuild generated web assets only in workspaces that provide build:web
     npm --workspaces --if-present run build:web
