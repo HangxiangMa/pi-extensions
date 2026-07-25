@@ -1,39 +1,6 @@
 import assert from "node:assert/strict";
-import path from "node:path";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
-
-type StateHelpers = {
-	summarizeBatch(batch: unknown): {
-		label: string;
-		ready: number;
-		uploading: number;
-		error: number;
-	};
-	summarizeHistory(history: unknown): {
-		label: string;
-		usage: string;
-		total: number;
-		bytes: number;
-		maxImages: number;
-		maxBytes: number;
-	};
-	draftGuidance(batch: unknown): string;
-	draftPresentation(batch: unknown): { status: string; guidance: string };
-	visibleItemNotes(notes: unknown): string[];
-	moveItem(ids: string[], id: string, direction: number): string[];
-	moveItemBefore(ids: string[], id: string, target: string): string[];
-	canMutate(batch: { phase: string }): boolean;
-	preferNewestState<T extends { batch: { revision: number } }>(current: T | undefined, next: T): T;
-	attemptMutation<T>(
-		operation: () => Promise<T>,
-	): Promise<{ ok: true; value: T } | { ok: false; error: unknown }>;
-	formatBytes(value: number): string;
-};
-
-const helpers = (await import(
-	pathToFileURL(path.join(process.cwd(), "extensions/pi-image-drop/src/web/state.js")).href
-)) as StateHelpers;
+import * as helpers from "../src/web/ui/state.js";
 
 test("web state helpers summarize every visible batch state without color-only meaning", () => {
 	assert.equal(

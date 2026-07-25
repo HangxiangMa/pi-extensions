@@ -56,6 +56,36 @@ function commitHistory(batch: BatchStore, id: string, marker = id): string {
 	return historyId;
 }
 
+async function readStreamUntil(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+	marker: string,
+): Promise<string> {
+	let text = "";
+	while (!text.includes(marker)) {
+		const chunk = await readWithTimeout(reader);
+		if (chunk.done) break;
+		text += Buffer.from(chunk.value).toString();
+		if (Buffer.byteLength(text) > 64 * 1024) throw new Error(`SSE marker not found: ${marker}`);
+	}
+	return text;
+}
+
+async function readWithTimeout(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			reader.read(),
+			new Promise<never>((_resolve, reject) => {
+				timeout = setTimeout(() => reject(new Error("Timed out waiting for SSE data")), 2_000);
+			}),
+		]);
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
 async function authenticate(server: ImageDropServer) {
 	const link = server.issueLink();
 	const response = await fetch(link, { redirect: "manual" });
@@ -118,45 +148,34 @@ test("bootstrap tokens rotate, replay fails, and clean pages require the session
 		const cookie = response.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
 		const page = await api(server, "/", { cookie });
 		assert.equal(page.status, 200);
-		assert.match(page.headers.get("content-security-policy") ?? "", /default-src 'self'/);
+		const contentSecurityPolicy = page.headers.get("content-security-policy") ?? "";
+		assert.match(contentSecurityPolicy, /default-src 'self'/);
 		assert.equal(page.headers.get("cache-control"), "no-store");
 		assert.equal(page.headers.get("x-content-type-options"), "nosniff");
 		assert.equal(page.headers.get("access-control-allow-origin"), null);
 
 		const html = await page.text();
+		const nonce = /<meta name="csp-nonce" content="([A-Za-z0-9_-]+)" \/>/.exec(html)?.[1];
+		assert.ok(nonce);
+		assert.match(contentSecurityPolicy, new RegExp(`style-src 'self' 'nonce-${nonce}'`));
+		assert.doesNotMatch(html, /__PI_CSP_NONCE__/);
 		const app = await (await api(server, "/app.js", { cookie })).text();
+		const stateHelpers = await (await api(server, "/state.js", { cookie })).text();
 		const styles = await (await api(server, "/styles.css", { cookie })).text();
-		assert.match(html, /<summary>Session details<\/summary>/);
-		assert.match(html, /<h2 id="batch-title">Ready for next message<\/h2>/);
-		assert.match(html, /id="next-step"[^>]*role="status"/);
-		assert.match(html, /id="clear-all"[^>]*hidden/);
-		assert.match(html, /<section class="history" aria-labelledby="history-title">/);
-		assert.match(html, /<h2 id="history-title">Previously sent<\/h2>/);
-		assert.match(html, /id="history-retention"/);
-		assert.match(html, /id="history-grid"/);
-		assert.match(html, /id="clear-history"[^>]*hidden/);
-		assert.match(html, /<dialog id="clear-history-dialog"/);
-		assert.match(html, /<dialog id="image-preview-dialog"/);
-		assert.doesNotMatch(html, /id="image-preview-close"/);
-		assert.match(html, /<button id="image-preview-dismiss"[^>]*aria-label="Close enlarged image"/);
-		assert.match(app, /summarizeHistory/);
+		assert.match(html, /id="root"/);
+		assert.match(html, /href="\/styles\.css"/);
+		assert.match(html, /src="\/app\.js"/);
+		assert.doesNotMatch(html, /<(?:button|dialog|details|summary)\b/);
+		assert.match(app, /Ready for next message/);
+		assert.match(app, /Previously sent/);
 		assert.match(app, /\/api\/history\//);
-		assert.match(app, /previewDismiss\.addEventListener\("click", closePreview\)/);
-		assert.match(app, /event\.target === ui\.previewDialog\) closePreview\(\)/);
-		assert.match(app, /showModal\(\)/);
 		assert.match(app, /Enlarge preview of/);
-		assert.match(app, /draftPresentation/);
-		assert.match(
-			app,
-			/button\("Delete", "Delete", !mutable, \(\) => remove\(item\.id\), "danger-secondary"\)/,
-		);
+		assert.match(app, /Clear sent image history\?/);
+		assert.match(stateHelpers, /summarizeHistory/);
+		assert.match(stateHelpers, /draftPresentation/);
 		assert.match(styles, /\.history/);
-		assert.match(styles, /\.image-preview-dialog/);
-		assert.match(styles, /\.image-preview-dismiss\s*{[^}]*width: 100%[^}]*height: 100%/s);
-		assert.match(
-			styles,
-			/\.image-preview-dismiss img\s*{[^}]*width: 100%[^}]*height: 100%[^}]*cursor: zoom-out/s,
-		);
+		assert.match(styles, /\.preview-content/);
+		assert.match(styles, /\.image-preview-dismiss/);
 	} finally {
 		await server.close();
 	}
@@ -751,15 +770,10 @@ test("SSE reports state and invalidates the previous editing lease", async () =>
 		assert.match(events.headers.get("content-type") ?? "", /text\/event-stream/);
 		const reader = events.body?.getReader();
 		assert.ok(reader);
-		const first = await reader.read();
-		assert.match(Buffer.from(first.value ?? []).toString(), /event: state/);
+		const initial = await readStreamUntil(reader, "event: state");
+		assert.match(initial, /event: state/);
 		await lease(server, cookie, "new-client");
-		let tail = "";
-		while (!tail.includes("event: stale")) {
-			const next = await reader.read();
-			if (next.done) break;
-			tail += Buffer.from(next.value).toString();
-		}
+		const tail = await readStreamUntil(reader, "event: stale");
 		assert.match(tail, /event: stale/);
 	} finally {
 		controller.abort();

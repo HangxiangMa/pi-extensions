@@ -4,7 +4,7 @@
 
 `@narumitw/pi-image-drop` adds one `/image-drop` command to the latest [Pi Coding Agent](https://pi.dev). It serves a private loopback page where you can paste, drop, choose, preview, reorder, retry, and remove local images. The ordered batch is attached to your next non-empty interactive Pi message.
 
-The page never contains a prompt or Attach button: Pi remains the only place where messages are written and sent.
+The page never contains a prompt or Attach button: Pi remains the only place where messages are written and sent. Its React and TypeScript frontend uses Radix Themes, Primitives, Colors, and Icons, and ships as local bundled assets with no CDN or runtime build step.
 
 ## ✨ Features
 
@@ -14,6 +14,7 @@ The page never contains a prompt or Attach button: Pi remains the only place whe
 - Supports PNG, JPEG, WebP, GIF, BMP, TIFF, HEIC/HEIF, and AVIF input.
 - Applies orientation, strips private metadata, and enforces Pi-compatible image limits.
 - Keeps bounded sent-image history for explicit re-attachment during the live session.
+- Uses Radix UI for an adaptive light/dark design system, accessible dialogs and disclosures, semantic colors, and consistent action icons.
 - Reports batch state above Pi's editor and can start automatically with each session.
 
 ## 📦 Install
@@ -147,7 +148,11 @@ src/images.ts           bounded image processing
 src/server.ts           authenticated loopback HTTP/SSE server
 src/settings.ts         extension settings
 src/pi-settings.ts      effective Pi image settings adapter
-src/web/                framework-free browser page
+src/web/ui/             authored React and TypeScript browser source
+src/web/app.js           generated bundled React application
+src/web/state.js         generated compatibility helper module
+src/web/styles.css       generated Radix Themes, Colors, and local styles
+src/web/index.html       minimal authenticated React shell
 ```
 
 ## 🧪 Development
@@ -155,13 +160,14 @@ src/web/                framework-free browser page
 From the repository root:
 
 ```bash
+npm --workspace @narumitw/pi-image-drop run build:web
 npm --workspace @narumitw/pi-image-drop run check
 npm test
 just try image-drop
 just pack image-drop
 ```
 
-The dry-run package must contain the manifest, license, README, TypeScript sources, and static web assets, but no tests, fixtures, image bytes, or `node_modules`.
+Edit browser code under `src/web/ui/`, then run `build:web`. The package typecheck runs `check:web`, which rebuilds in a temporary directory and rejects stale generated assets. The dry-run package must contain the manifest, license, README, TypeScript/TSX sources, and bundled static web assets, but no tests, fixtures, image bytes, build scripts, or `node_modules`.
 
 ## 🚀 Publishing
 
