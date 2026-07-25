@@ -1,16 +1,11 @@
 import {
-	PLAN_MODE_COMPLETE_TOOL_NAME,
 	normalizePlanModeCompletion,
+	PLAN_MODE_COMPLETE_TOOL_NAME,
 	planFromCompletionDetails,
 } from "./completion-tool.js";
-import {
-	PLAN_MODE_THINKING_LEVELS,
-	type PlanModeFixedThinkingLevel,
-} from "./settings.js";
+import { PLAN_MODE_THINKING_LEVELS, type PlanModeFixedThinkingLevel } from "./settings.js";
 
-export type PlanCompletionSource =
-	| typeof PLAN_MODE_COMPLETE_TOOL_NAME
-	| "legacy_proposed_plan";
+export type PlanCompletionSource = typeof PLAN_MODE_COMPLETE_TOOL_NAME | "legacy_proposed_plan";
 
 export interface PlanModeState {
 	enabled: boolean;
@@ -49,23 +44,19 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
 	if (!isRecord(entry?.data)) return { enabled: false, awaitingAction: false };
 
 	const enabled = entry.data.enabled === true;
-	const persistedSource = enabled
-		? planCompletionSource(entry.data.latestPlanSource)
-		: undefined;
+	const persistedSource = enabled ? planCompletionSource(entry.data.latestPlanSource) : undefined;
 	const persistedPlan = enabled
 		? normalizePersistedPlan(entry.data.latestPlan, persistedSource)
 		: undefined;
 	const recoveredPlan =
-		enabled && !persistedPlan
-			? latestCompletionPlan(branch.slice(stateEntryIndex + 1))
-			: undefined;
+		enabled && !persistedPlan ? latestCompletionPlan(branch.slice(stateEntryIndex + 1)) : undefined;
 	const latestPlan = persistedPlan ?? recoveredPlan;
 	return {
 		enabled,
 		latestPlan,
 		latestPlanSource: enabled
-			? (persistedPlan ? persistedSource : undefined) ??
-				(recoveredPlan ? PLAN_MODE_COMPLETE_TOOL_NAME : undefined)
+			? ((persistedPlan ? persistedSource : undefined) ??
+				(recoveredPlan ? PLAN_MODE_COMPLETE_TOOL_NAME : undefined))
 			: undefined,
 		awaitingAction: enabled && latestPlan !== undefined,
 		selectedToolNames: stringArray(entry.data.selectedToolNames),
@@ -73,12 +64,8 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
 		previousThinkingLevel: enabled
 			? fixedThinkingLevel(entry.data.previousThinkingLevel)
 			: undefined,
-		appliedThinkingLevel: enabled
-			? fixedThinkingLevel(entry.data.appliedThinkingLevel)
-			: undefined,
-		manualThinkingLevel: enabled
-			? fixedThinkingLevel(entry.data.manualThinkingLevel)
-			: undefined,
+		appliedThinkingLevel: enabled ? fixedThinkingLevel(entry.data.appliedThinkingLevel) : undefined,
+		manualThinkingLevel: enabled ? fixedThinkingLevel(entry.data.manualThinkingLevel) : undefined,
 	};
 }
 

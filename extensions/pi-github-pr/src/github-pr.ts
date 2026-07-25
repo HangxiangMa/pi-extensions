@@ -1,4 +1,4 @@
-import { watch, type FSWatcher } from "node:fs";
+import { type FSWatcher, watch } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import type { ExecResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -180,14 +180,7 @@ export async function runGhPrView(
 	signal?: AbortSignal,
 ): Promise<PullRequestStatus> {
 	const invocation = ghPrViewInvocation();
-	const result = await execGh(
-		pi,
-		invocation.command,
-		invocation.args,
-		cwd,
-		signal,
-		"gh pr view",
-	);
+	const result = await execGh(pi, invocation.command, invocation.args, cwd, signal, "gh pr view");
 	if (result.killed) throw new Error("gh pr view timed out or was cancelled.");
 	if (result.code !== 0) throw new Error(formatGhFailure("gh pr view", result));
 
@@ -421,7 +414,12 @@ export function formatLinkedStatus(status: PullRequestStatus): string {
 }
 
 function stripTerminalControlChars(value: string): string {
-	return value.replace(/[\x00-\x1f\x7f]/g, "");
+	let sanitized = "";
+	for (const character of value) {
+		const codePoint = character.codePointAt(0);
+		if (codePoint !== undefined && codePoint > 0x1f && codePoint !== 0x7f) sanitized += character;
+	}
+	return sanitized;
 }
 
 function osc8Link(url: string, text: string): string {
@@ -557,9 +555,7 @@ function isGhExecutableMissingMessage(lowerMessage: string): boolean {
 		/\b(?:gh|gh\.exe)\b.*\benoent\b|\benoent\b.*\b(?:gh|gh\.exe)\b/.test(lowerMessage) ||
 		/\b(?:gh|gh\.exe): (?:command )?not found\b/.test(lowerMessage) ||
 		/\bcommand not found: (?:gh|gh\.exe)\b/.test(lowerMessage) ||
-		/\benv:\s+['"‘’]?(?:gh|gh\.exe)['"‘’]?: no such file or directory\b/.test(
-			lowerMessage,
-		) ||
+		/\benv:\s+['"‘’]?(?:gh|gh\.exe)['"‘’]?: no such file or directory\b/.test(lowerMessage) ||
 		/['"‘’]?(?:gh|gh\.exe)['"‘’]? is not recognized as an internal or external command\b/.test(
 			lowerMessage,
 		) ||
@@ -571,9 +567,12 @@ function formatError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-function parsePrCoordinates(
-	pr: JsonRecord,
-): { host: string; owner: string; name: string; number: number } {
+function parsePrCoordinates(pr: JsonRecord): {
+	host: string;
+	owner: string;
+	name: string;
+	number: number;
+} {
 	const number = requiredNumber(pr.number, "number");
 	const url = optionalString(pr.url);
 	if (!url) throw new Error("Missing PR url");

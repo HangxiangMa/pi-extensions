@@ -18,7 +18,11 @@ export function getInhibitorCommand(mode: CaffeinateMode): InhibitorCommand | un
 		if (command) return { command, args, description: `custom command (${command})`, custom: true };
 	}
 	if (process.platform === "darwin") {
-		return parentBoundUnixCommand("caffeinate", macCaffeinateArgs(mode), caffeinateDescription(mode));
+		return parentBoundUnixCommand(
+			"caffeinate",
+			macCaffeinateArgs(mode),
+			caffeinateDescription(mode),
+		);
 	}
 	if (process.platform === "linux") {
 		if (isWsl() && commandExists("powershell.exe")) {
@@ -40,7 +44,11 @@ export function getInhibitorCommand(mode: CaffeinateMode): InhibitorCommand | un
 			);
 		}
 		if (commandExists("caffeinate")) {
-			return parentBoundUnixCommand("caffeinate", macCaffeinateArgs(mode), caffeinateDescription(mode));
+			return parentBoundUnixCommand(
+				"caffeinate",
+				macCaffeinateArgs(mode),
+				caffeinateDescription(mode),
+			);
 		}
 	}
 	if (process.platform === "win32") return windowsPowerInhibitorCommand("powershell.exe", mode);
@@ -55,10 +63,21 @@ function caffeinateDescription(mode: CaffeinateMode) {
 	return `caffeinate (${formatMode(mode)})`;
 }
 
-function parentBoundUnixCommand(command: string, args: string[], description: string): InhibitorCommand {
+function parentBoundUnixCommand(
+	command: string,
+	args: string[],
+	description: string,
+): InhibitorCommand {
 	return {
 		command: "sh",
-		args: ["-c", unixParentBoundScript(), "pi-caffeinate-watch", String(process.pid), command, ...args],
+		args: [
+			"-c",
+			unixParentBoundScript(),
+			"pi-caffeinate-watch",
+			String(process.pid),
+			command,
+			...args,
+		],
 		description,
 	};
 }

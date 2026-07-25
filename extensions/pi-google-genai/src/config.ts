@@ -3,8 +3,8 @@ import {
 	access,
 	chmod,
 	link,
-	mkdir,
 	lstat,
+	mkdir,
 	readFile,
 	rename,
 	rm,
@@ -205,9 +205,7 @@ async function prepareGoogleGenaiConfigPath(canonicalPath: string, warnings: str
 		);
 		await chmod(canonicalPath, 0o600);
 		if (!(await jsonFileEquals(legacyPath, legacy))) {
-			if (
-				await removeFileIfIdentityMatches(canonicalPath, installedIdentity, installedContents)
-			) {
+			if (await removeFileIfIdentityMatches(canonicalPath, installedIdentity, installedContents)) {
 				warnings.push(
 					`${LEGACY_CONFIG_FILE_NAME} changed during migration; the stale ${CONFIG_FILE_NAME} snapshot was removed and the legacy file was used for this session.`,
 				);

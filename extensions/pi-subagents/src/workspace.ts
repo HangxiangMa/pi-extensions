@@ -27,10 +27,10 @@ export class WorkspaceManager {
 		if (relativeCwd.startsWith("..") || path.isAbsolute(relativeCwd)) {
 			throw new Error("Subagent cwd is outside the Git repository");
 		}
-		const status = (
-			await execFileAsync("git", ["-C", repositoryRoot, "status", "--porcelain"])
-		).stdout;
-		if (status.trim()) throw new Error("Isolated subagent workspace requires a clean Git repository");
+		const status = (await execFileAsync("git", ["-C", repositoryRoot, "status", "--porcelain"]))
+			.stdout;
+		if (status.trim())
+			throw new Error("Isolated subagent workspace requires a clean Git repository");
 		const rootPath = await fs.promises.mkdtemp(path.join(os.tmpdir(), WORKTREE_PREFIX));
 		let registered = false;
 		try {
@@ -86,8 +86,9 @@ export class WorkspaceManager {
 			workspace.rootPath,
 		]).catch(async () => {
 			await fs.promises.rm(workspace.rootPath, { recursive: true, force: true });
-			await execFileAsync("git", ["-C", workspace.repositoryRoot, "worktree", "prune"])
-				.catch(() => undefined);
+			await execFileAsync("git", ["-C", workspace.repositoryRoot, "worktree", "prune"]).catch(
+				() => undefined,
+			);
 		});
 		await fs.promises.rm(`${workspace.rootPath}.owner`, { force: true });
 	}

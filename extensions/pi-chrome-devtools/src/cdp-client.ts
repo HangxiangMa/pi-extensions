@@ -1,6 +1,6 @@
 import {
-	ensureDevToolsEndpoint,
 	devToolsEndpoint,
+	ensureDevToolsEndpoint,
 	fetchDevToolsJson,
 	formatPageListItem,
 	launchHint,
@@ -9,8 +9,8 @@ import {
 import {
 	DEFAULT_ENDPOINT_WAIT_MS,
 	DEFAULT_TIMEOUT_MS,
-	state,
 	type DevToolsPage,
+	state,
 } from "./runtime.js";
 
 interface CdpResponse<T = unknown> {

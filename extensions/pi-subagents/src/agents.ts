@@ -6,15 +6,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
-export const THINKING_LEVELS = [
-	"off",
-	"minimal",
-	"low",
-	"medium",
-	"high",
-	"xhigh",
-	"max",
-] as const;
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export type SubagentThinkingLevel = (typeof THINKING_LEVELS)[number];
 
@@ -72,7 +64,8 @@ export interface SubagentSettings {
 const BUILT_IN_AGENTS: AgentConfig[] = [
 	{
 		name: "scout",
-		description: "Read-only codebase reconnaissance; returns concise findings with paths and evidence.",
+		description:
+			"Read-only codebase reconnaissance; returns concise findings with paths and evidence.",
 		tools: ["read", "grep", "find", "ls", "bash"],
 		source: "built-in",
 		filePath: "built-in:scout",
@@ -185,7 +178,9 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			description: frontmatter.description,
 			tools: tools && tools.length > 0 ? tools : undefined,
 			model: frontmatter.model,
-			thinkingLevel: isThinkingLevel(frontmatter.thinkingLevel) ? frontmatter.thinkingLevel : undefined,
+			thinkingLevel: isThinkingLevel(frontmatter.thinkingLevel)
+				? frontmatter.thinkingLevel
+				: undefined,
 			systemPrompt: body,
 			source,
 			filePath,
@@ -228,7 +223,8 @@ export function discoverAgents(
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
 	const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
-	const projectAgents = scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project");
+	const projectAgents =
+		scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project");
 
 	const agentMap = new Map<string, AgentConfig>();
 
@@ -258,7 +254,8 @@ export function discoverAgents(
 			nextAgent.model = override.model === null ? undefined : override.model;
 		}
 		if (hasOwn(override, "thinkingLevel")) {
-			nextAgent.thinkingLevel = override.thinkingLevel === null ? undefined : override.thinkingLevel;
+			nextAgent.thinkingLevel =
+				override.thinkingLevel === null ? undefined : override.thinkingLevel;
 		}
 		if (hasOwn(override, "timeoutMs")) {
 			nextAgent.timeoutMs = override.timeoutMs === null ? undefined : override.timeoutMs;
@@ -269,7 +266,10 @@ export function discoverAgents(
 	return { agents: Array.from(agentMap.values()), projectAgentsDir };
 }
 
-export function formatAgentList(agents: AgentConfig[], maxItems: number): { text: string; remaining: number } {
+export function formatAgentList(
+	agents: AgentConfig[],
+	maxItems: number,
+): { text: string; remaining: number } {
 	if (agents.length === 0) return { text: "none", remaining: 0 };
 	const listed = agents.slice(0, maxItems);
 	const remaining = agents.length - listed.length;

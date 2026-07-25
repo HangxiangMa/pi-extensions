@@ -243,8 +243,7 @@ export class TraceRecorder {
 	}
 
 	beginAgent(input: BeginAgentInput): void {
-		if (this.root)
-			this.closeActiveTrace("Interrupted by a new Pi run.", undefined, "interrupted");
+		if (this.root) this.closeActiveTrace("Interrupted by a new Pi run.", undefined, "interrupted");
 
 		this.lastOutput = undefined;
 		this.lastAssistant = undefined;

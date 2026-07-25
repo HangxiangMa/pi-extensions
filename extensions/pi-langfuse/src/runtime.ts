@@ -67,9 +67,7 @@ class ProductionTraceBackend implements TraceBackend {
 	): Observation {
 		const parent = options.parent;
 		if (parent instanceof ProductionObservation) {
-			return new ProductionObservation(
-				startChild(parent.native, name, attributes, options.asType),
-			);
+			return new ProductionObservation(startChild(parent.native, name, attributes, options.asType));
 		}
 		return new ProductionObservation(startRoot(name, attributes, options.asType));
 	}
@@ -236,10 +234,7 @@ function maskSecretValue(
 			return data.map((item) => maskSecretValue(item, secrets, active));
 		}
 		return Object.fromEntries(
-			Object.entries(data).map(([key, value]) => [
-				key,
-				maskSecretValue(value, secrets, active),
-			]),
+			Object.entries(data).map(([key, value]) => [key, maskSecretValue(value, secrets, active)]),
 		);
 	} finally {
 		active.delete(data);

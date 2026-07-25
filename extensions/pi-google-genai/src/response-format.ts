@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -42,7 +42,10 @@ export async function formatToolResult(raw: unknown, model: string) {
 	const sources = extractSources(raw);
 	const toolSteps = extractToolSteps(raw);
 	const text = formatContent(outputText, sources);
-	const truncation = truncateHead(text, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
+	const truncation = truncateHead(text, {
+		maxLines: DEFAULT_MAX_LINES,
+		maxBytes: DEFAULT_MAX_BYTES,
+	});
 	const details: GoogleGenaiDetails = {
 		model,
 		outputText,
@@ -102,7 +105,8 @@ function extractSources(raw: unknown): GoogleGenaiSource[] {
 		if (step.type === "model_output") {
 			for (const block of asArray(step.content)) {
 				if (!isObject(block)) continue;
-				for (const annotation of asArray(block.annotations)) addAnnotationSource(sources, annotation);
+				for (const annotation of asArray(block.annotations))
+					addAnnotationSource(sources, annotation);
 			}
 		} else if (step.type === "google_maps_result") {
 			for (const result of asArray(step.result)) {
@@ -158,7 +162,14 @@ function addAnnotationSource(sources: GoogleGenaiSource[], annotation: unknown) 
 function addSource(sources: GoogleGenaiSource[], source: GoogleGenaiSource) {
 	if (!source.url && !source.name && !source.title) return;
 	const key = `${source.type}\0${source.url ?? ""}\0${source.name ?? ""}\0${source.title ?? ""}`;
-	if (sources.some((existing) => `${existing.type}\0${existing.url ?? ""}\0${existing.name ?? ""}\0${existing.title ?? ""}` === key)) return;
+	if (
+		sources.some(
+			(existing) =>
+				`${existing.type}\0${existing.url ?? ""}\0${existing.name ?? ""}\0${existing.title ?? ""}` ===
+				key,
+		)
+	)
+		return;
 	sources.push(source);
 }
 
@@ -177,8 +188,8 @@ function formatSourcesSection(sources: GoogleGenaiSource[]) {
 	const visibleSources = sources.slice(0, SOURCE_LIMIT);
 	return [
 		"Sources:",
-		...visibleSources.map((source, index) =>
-			truncateLine(`${index + 1}. ${formatSource(source)}`).text,
+		...visibleSources.map(
+			(source, index) => truncateLine(`${index + 1}. ${formatSource(source)}`).text,
 		),
 	].join("\n");
 }

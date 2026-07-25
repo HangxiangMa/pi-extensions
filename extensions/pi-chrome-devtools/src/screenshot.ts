@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { link, lstat, mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
@@ -47,7 +47,10 @@ export async function saveScreenshot(
 	};
 }
 
-export function resolveScreenshotPath(savePath: string | undefined, cwd: string): ResolvedScreenshotPath {
+export function resolveScreenshotPath(
+	savePath: string | undefined,
+	cwd: string,
+): ResolvedScreenshotPath {
 	const cwdRoot = resolve(cwd);
 	const tempRoot = resolve(tmpdir());
 
@@ -228,7 +231,9 @@ export function isPathInsideRoot(path: string, root: string) {
 	const normalizedPath = normalizePathForComparison(resolve(path));
 	const normalizedRoot = normalizePathForComparison(resolve(root));
 	if (normalizedPath === normalizedRoot) return true;
-	const rootWithSeparator = normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`;
+	const rootWithSeparator = normalizedRoot.endsWith(sep)
+		? normalizedRoot
+		: `${normalizedRoot}${sep}`;
 	return normalizedPath.startsWith(rootWithSeparator);
 }
 

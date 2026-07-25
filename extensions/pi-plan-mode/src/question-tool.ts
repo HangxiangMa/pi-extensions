@@ -23,7 +23,11 @@ type PlanModeQuestionAnswer = {
 	optionIndex?: number;
 };
 
-type PlanModeQuestionReason = "cancelled" | "ui_unavailable" | "plan_mode_inactive" | "invalid_input";
+type PlanModeQuestionReason =
+	| "cancelled"
+	| "ui_unavailable"
+	| "plan_mode_inactive"
+	| "invalid_input";
 
 type PlanModeQuestionDetails = {
 	cancelled: boolean;
@@ -47,8 +51,14 @@ export const PLAN_MODE_QUESTION_PARAMS = {
 				additionalProperties: false,
 				required: ["id", "header", "question", "options"],
 				properties: {
-					id: { type: "string", description: "Stable identifier for mapping answers (snake_case)." },
-					header: { type: "string", description: "Short header label shown in the UI (12 or fewer chars)." },
+					id: {
+						type: "string",
+						description: "Stable identifier for mapping answers (snake_case).",
+					},
+					header: {
+						type: "string",
+						description: "Short header label shown in the UI (12 or fewer chars).",
+					},
 					question: { type: "string", description: "Single-sentence prompt shown to the user." },
 					options: {
 						type: "array",
@@ -79,7 +89,9 @@ type NormalizePlanModeQuestionParamsResult =
 	| { ok: true; questions: PlanModeQuestion[] }
 	| { ok: false; error: string };
 
-export function normalizePlanModeQuestionParams(input: unknown): NormalizePlanModeQuestionParamsResult {
+export function normalizePlanModeQuestionParams(
+	input: unknown,
+): NormalizePlanModeQuestionParamsResult {
 	if (!isRecord(input) || !Array.isArray(input.questions)) {
 		return { ok: false, error: "questions must be an array" };
 	}
@@ -96,7 +108,10 @@ export function normalizePlanModeQuestionParams(input: unknown): NormalizePlanMo
 		const header = stringField(rawQuestion.header);
 		const question = stringField(rawQuestion.question);
 		if (!id || !header || !question) {
-			return { ok: false, error: `question ${questionIndex + 1} requires non-empty id, header, and question` };
+			return {
+				ok: false,
+				error: `question ${questionIndex + 1} requires non-empty id, header, and question`,
+			};
 		}
 		if (!Array.isArray(rawQuestion.options)) {
 			return { ok: false, error: `question ${questionIndex + 1} options must be an array` };
@@ -114,7 +129,10 @@ export function normalizePlanModeQuestionParams(input: unknown): NormalizePlanMo
 			}
 			const label = stringField(rawOption.label);
 			if (!label) {
-				return { ok: false, error: `question ${questionIndex + 1} option ${optionIndex + 1} requires a label` };
+				return {
+					ok: false,
+					error: `question ${questionIndex + 1} option ${optionIndex + 1} requires a label`,
+				};
 			}
 			const description = stringField(rawOption.description);
 			if (!description) {
@@ -138,7 +156,10 @@ export async function askPlanModeQuestions(
 	for (const question of questions) {
 		const choices = question.options.map(formatPlanModeQuestionChoice);
 		const otherChoice = `${question.options.length + 1}. Other (free-form)`;
-		const choice = await ctx.ui.select(`${question.header}: ${question.question}`, [...choices, otherChoice]);
+		const choice = await ctx.ui.select(`${question.header}: ${question.question}`, [
+			...choices,
+			otherChoice,
+		]);
 		if (!choice) return undefined;
 		if (choice === otherChoice) {
 			const customAnswer = (await ctx.ui.editor(question.question, ""))?.trim();
@@ -171,9 +192,14 @@ function formatPlanModeQuestionChoice(option: PlanModeQuestionOption, index: num
 	return `${index + 1}. ${option.label}${option.description ? ` — ${option.description}` : ""}`;
 }
 
-export function planModeQuestionAnswered(questions: PlanModeQuestion[], answers: PlanModeQuestionAnswer[]) {
+export function planModeQuestionAnswered(
+	questions: PlanModeQuestion[],
+	answers: PlanModeQuestionAnswer[],
+) {
 	return {
-		content: [{ type: "text" as const, text: formatPlanModeQuestionPayload({ cancelled: false, answers }) }],
+		content: [
+			{ type: "text" as const, text: formatPlanModeQuestionPayload({ cancelled: false, answers }) },
+		],
 		details: { cancelled: false, questions, answers } satisfies PlanModeQuestionDetails,
 	};
 }
@@ -184,7 +210,12 @@ export function planModeQuestionCancelled(
 	message: string,
 ) {
 	return {
-		content: [{ type: "text" as const, text: formatPlanModeQuestionPayload({ cancelled: true, reason, message }) }],
+		content: [
+			{
+				type: "text" as const,
+				text: formatPlanModeQuestionPayload({ cancelled: true, reason, message }),
+			},
+		],
 		details: { cancelled: true, reason, questions } satisfies PlanModeQuestionDetails,
 	};
 }

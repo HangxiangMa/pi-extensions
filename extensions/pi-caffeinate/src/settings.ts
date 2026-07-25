@@ -116,7 +116,11 @@ export function normalizeCaffeinateSettings(value: unknown): CaffeinateSettings 
 	if (!isCaffeinateMode(settings.mode)) return undefined;
 	if (settings.quiet !== undefined && typeof settings.quiet !== "boolean") return undefined;
 	if (settings.updatedAt !== undefined && typeof settings.updatedAt !== "number") return undefined;
-	return { mode: settings.mode, quiet: settings.quiet ?? false, updatedAt: settings.updatedAt ?? 0 };
+	return {
+		mode: settings.mode,
+		quiet: settings.quiet ?? false,
+		updatedAt: settings.updatedAt ?? 0,
+	};
 }
 
 function isCaffeinateMode(value: unknown): value is CaffeinateMode {

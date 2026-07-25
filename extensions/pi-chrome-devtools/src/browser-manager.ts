@@ -1,21 +1,20 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, delimiter, isAbsolute, join, resolve } from "node:path";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
 import {
 	BROWSER_SHUTDOWN_WAIT_MS,
-	DEFAULT_ENDPOINT_RETRY_MS,
-	DEFAULT_ENDPOINT_WAIT_MS,
-	DEFAULT_HOST,
-	DEFAULT_HTTP_TIMEOUT_MS,
-	DEVTOOLS_ACTIVE_PORT_FILE,
-	MANAGED_BROWSER_PROFILE_PREFIX,
-	state,
 	type BrowserCandidate,
 	type BrowserCandidateDefinition,
+	DEFAULT_ENDPOINT_RETRY_MS,
+	DEFAULT_ENDPOINT_WAIT_MS,
+	DEFAULT_HTTP_TIMEOUT_MS,
+	DEVTOOLS_ACTIVE_PORT_FILE,
 	type DevToolsPage,
+	MANAGED_BROWSER_PROFILE_PREFIX,
 	type ManagedBrowser,
+	state,
 } from "./runtime.js";
 
 function formatError(error: unknown) {
@@ -128,7 +127,12 @@ async function launchBrowserCandidate(candidate: BrowserCandidate, waitMs: numbe
 		];
 		throwIfBrowserLaunchCancelled();
 		const child = spawn(candidate.resolvedExecutable, args, { shell: false, stdio: "ignore" });
-		const launchedBrowser: ManagedBrowser = { process: child, userDataDir, exited: false, ready: false };
+		const launchedBrowser: ManagedBrowser = {
+			process: child,
+			userDataDir,
+			exited: false,
+			ready: false,
+		};
 		managedBrowser = launchedBrowser;
 		state.managedBrowser = launchedBrowser;
 
@@ -259,7 +263,8 @@ export async function shutdownManagedBrowser(
 		});
 	}
 	await rm(managedBrowser.userDataDir, { recursive: true, force: true }).catch(() => undefined);
-	if (!state.portConfigured && managedBrowser.port === state.port) state.port = state.configuredPort;
+	if (!state.portConfigured && managedBrowser.port === state.port)
+		state.port = state.configuredPort;
 }
 
 function killManagedBrowserProcess(managedBrowser: ManagedBrowser, signal?: NodeJS.Signals) {
@@ -400,9 +405,13 @@ export function launchModeLabel() {
 	if (!isLocalDevToolsHost(state.host)) return "manual remote endpoint";
 	if (!state.autoLaunchEnabled) return "manual; auto-launch disabled";
 	if (state.managedBrowser && !state.managedBrowser.exited) {
-		return state.portConfigured ? "auto-launched on explicit port" : "auto-launched on dynamic port";
+		return state.portConfigured
+			? "auto-launched on explicit port"
+			: "auto-launched on dynamic port";
 	}
-	return state.portConfigured ? "attach first; auto-launch explicit port" : "attach first; auto-launch dynamic port";
+	return state.portConfigured
+		? "attach first; auto-launch explicit port"
+		: "attach first; auto-launch dynamic port";
 }
 
 export function launchAttemptLines() {
@@ -435,7 +444,9 @@ export function launchHint() {
 }
 
 export function browserCandidateHint() {
-	return `Browser candidates: ${browserCandidateDefinitions().map((candidate) => candidate.label).join(", ")}`;
+	return `Browser candidates: ${browserCandidateDefinitions()
+		.map((candidate) => candidate.label)
+		.join(", ")}`;
 }
 
 export function chromeLaunchCommand() {
@@ -475,7 +486,9 @@ function browserCandidateDefinitions(): BrowserCandidateDefinition[] {
 
 function explicitBrowserCandidateDefinition(): BrowserCandidateDefinition[] {
 	if (!state.browserExecutable) return [];
-	return [{ label: "PI_CHROME_DEVTOOLS_BROWSER", executable: state.browserExecutable, source: "env" }];
+	return [
+		{ label: "PI_CHROME_DEVTOOLS_BROWSER", executable: state.browserExecutable, source: "env" },
+	];
 }
 
 function platformBrowserCandidateDefinitions(): BrowserCandidateDefinition[] {
