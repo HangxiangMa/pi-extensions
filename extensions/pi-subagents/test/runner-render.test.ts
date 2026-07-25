@@ -36,14 +36,33 @@ test("renderSubagentCall handles partial streaming arguments", () => {
 		render({ chain: [{ agent: "calculation-checker" }] }),
 		/chain \(1 steps\).*calculation-checker \.\.\./s,
 	);
-	assert.match(
+	assert.doesNotMatch(
 		render({
 			tasks: [{ agent: "proof-auditor", task: "Review the proof" }],
 			aggregator: { agent: "reviewer" },
 		}),
-		/fan-in → reviewer \.\.\./,
+		/fan-in/,
 	);
 	assert.match(render({ tasks: [{ task: "Review the proof" }] }), /\.\.\. Review the proof/);
+});
+
+test("renderSubagentCall omits an empty optional aggregator", () => {
+	const identityTheme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+	};
+	const rendered = renderSubagentCall(
+		{
+			tasks: [{ agent: "scout", task: "Inspect the implementation" }],
+			aggregator: { agent: "  ", task: "\t" },
+		},
+		identityTheme as never,
+	)
+		.render(120)
+		.join("\n");
+
+	assert.match(rendered, /parallel \(1 tasks\)/);
+	assert.doesNotMatch(rendered, /fan-in/);
 });
 
 test("runSingleAgent normalizes invalid cwd without spawning or throwing", async () => {

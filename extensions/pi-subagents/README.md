@@ -178,6 +178,10 @@ Run multiple agents in parallel with a shared thinking level and one per-task ov
 }
 ```
 
+Omit `aggregator` entirely when parallel worker outputs should return directly. Do not send `null`,
+empty strings, or an empty object for an unused optional field; for compatibility, an aggregator with
+an empty or whitespace-only `agent` or `task` is treated as absent.
+
 Run parallel workers, then aggregate their results:
 
 ```json
@@ -338,6 +342,9 @@ Existing `subagent` requests remain unchanged:
 | Chain | Input order. | Stops at the first failed step; completed steps remain in details. |
 | Parallel | Input order, with at most four active children. | Collects all task results; partial worker failure is reported in summaries but does not discard successful results. |
 | Parallel + aggregator | Source input order, then aggregator. | The aggregator runs with both successful outputs and failure descriptions; aggregator failure marks the tool result as an error. |
+
+An aggregator whose `agent` or `task` is empty or whitespace-only is treated as absent, so successful
+parallel outputs remain available instead of being replaced by a malformed fan-in failure.
 
 Timeout precedence remains: task/step/aggregator → call → agent setting → `PI_SUBAGENT_TIMEOUT_MS` → 600000 ms. Blocking thinking precedence remains: task/step/aggregator → call → agent setting → child default. Stateful spawn thinking precedence is: `subagent_spawn.thinkingLevel` → agent setting → transport fallback. Project-agent resolution and confirmation behavior is unchanged.
 

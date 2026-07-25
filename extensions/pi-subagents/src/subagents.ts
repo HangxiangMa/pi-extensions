@@ -41,6 +41,7 @@ export default function (pi: ExtensionAPI) {
 			"Use the blocking subagent tool only when delegated outputs are required before the main agent's next action and waiting is intentional; the main agent cannot process queued steering until the call returns.",
 			"Use a blocking subagent single, parallel, chain, or fan-in call only when synchronous context or output isolation is worth making the main agent unavailable while it runs.",
 			"If a blocking parallel subagent call is genuinely required, keep tasks independent, stay within the hard max 8, and avoid write-heavy implementation touching the same files or shared state.",
+			"For parallel subagent calls, omit the aggregator key entirely unless a fan-in step is required; do not send null, empty strings, or an empty object for unused optional fields.",
 			'Do not use subagent with project-local agents unless the user explicitly wants project agents or sets agentScope to "project" or "both"; keep confirmation enabled for untrusted repositories.',
 			"When using subagent, write self-contained tasks with file paths, context, expected output, and whether the subagent may edit files.",
 		],

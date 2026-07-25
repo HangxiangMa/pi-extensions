@@ -22,6 +22,7 @@ import {
 	type SubagentSettingsRuntime,
 	ToolToggleList,
 } from "../src/config-ui.js";
+import { hasUsableAggregator } from "../src/params.js";
 import type { ManagedAgent } from "../src/registry.js";
 import { consumeSubagentSettingsNotice } from "../src/settings.js";
 import subagents, {
@@ -87,6 +88,8 @@ test("subagents registers consistent blocking guidance and configuration command
 	assert.doesNotMatch(guidanceText, /subagent_spawn/i);
 	assert.doesNotMatch(guidanceText, /use subagent parallel mode with 2-4/i);
 	assert.match(guidanceText, /hard max 8/i);
+	assert.match(guidanceText, /omit the aggregator key entirely/i);
+	assert.match(guidanceText, /null, empty strings, or an empty object/i);
 
 	const parameters = tool?.parameters as SchemaObject | undefined;
 	const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -108,6 +111,8 @@ test("subagents registers consistent blocking guidance and configuration command
 		parameters?.properties?.aggregator?.properties?.thinkingLevel?.enum,
 		thinkingLevels,
 	);
+	assert.match(parameters?.properties?.aggregator?.description ?? "", /omit this key entirely/i);
+	assert.match(parameters?.properties?.aggregator?.description ?? "", /treated as absent/i);
 	assert.ok(mock.commands.has("subagents"));
 	assert.ok(mock.commands.has("subagents:config"));
 	assert.deepEqual(mock.commands.get("subagents")?.getArgumentCompletions?.("s"), [
@@ -846,6 +851,57 @@ test("buildPiArgs passes thinking only when requested", () => {
 		"--no-tools",
 		"Task: no tools",
 	]);
+});
+
+test("aggregator usability requires non-whitespace agent and task values", () => {
+	assert.equal(hasUsableAggregator(undefined), false);
+	assert.equal(hasUsableAggregator({ agent: "", task: "Synthesize" }), false);
+	assert.equal(hasUsableAggregator({ agent: "reviewer", task: " \t" }), false);
+	assert.equal(hasUsableAggregator({ agent: "reviewer", task: "Synthesize" }), true);
+});
+
+test("parallel execution ignores an empty optional aggregator and preserves worker outputs", async () => {
+	const mock = createMockPi();
+	subagents(mock.pi);
+	const tool = mock.tools[0] as SubagentTool;
+	const { ctx } = createMockContext();
+	const signal = new AbortController().signal;
+	const dir = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-empty-aggregator-"));
+	const fakePi = path.join(dir, "fake-pi.mjs");
+	writeFileSync(
+		fakePi,
+		[
+			"const task=process.argv.at(-1) ?? '';",
+			"const output=task.includes('PROOF')?'PROOF_OK':'CALC_OK';",
+			"const message={role:'assistant',content:[{type:'text',text:output}],stopReason:'stop',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	const originalScript = process.argv[1];
+	process.argv[1] = fakePi;
+	try {
+		const result = await tool.execute(
+			"empty-aggregator",
+			{
+				tasks: [
+					{ agent: "scout", task: "PROOF" },
+					{ agent: "scout", task: "CALC" },
+				],
+				aggregator: { agent: " ", task: "\t", thinkingLevel: "off", timeoutMs: 1 },
+			},
+			signal,
+			() => undefined,
+			ctx,
+		);
+		assert.equal(result.isError, undefined);
+		assert.equal(result.details?.aggregator, undefined);
+		assert.match(result.content?.[0]?.text ?? "", /Parallel: 2\/2 succeeded/);
+		assert.match(result.content?.[0]?.text ?? "", /PROOF_OK/);
+		assert.match(result.content?.[0]?.text ?? "", /CALC_OK/);
+	} finally {
+		process.argv[1] = originalScript;
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("subagent execute resolves thinking level in single, chain, parallel, and aggregator modes", async () => {

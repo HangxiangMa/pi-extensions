@@ -9,7 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { AgentScope, SubagentThinkingLevel } from "./agents.js";
-import type { SubagentParams } from "./params.js";
+import { hasUsableAggregator, type SubagentParams } from "./params.js";
 import {
 	getResultFinalOutput,
 	isResultError,
@@ -215,8 +215,8 @@ export function renderSubagentCall(args: SubagentParams, theme: Theme) {
 		}
 		if (args.tasks.length > 3)
 			text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
-		if (args.aggregator) {
-			const aggregator = args.aggregator as { agent?: unknown; task?: unknown };
+		if (hasUsableAggregator(args.aggregator)) {
+			const aggregator = args.aggregator;
 			text += `\n  ${theme.fg("muted", "fan-in → ")}${theme.fg("accent", previewAgent(aggregator.agent))}${theme.fg(
 				"dim",
 				` ${previewTask(aggregator.task)}`,
