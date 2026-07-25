@@ -12,6 +12,10 @@ check:
 format:
     npm run format
 
+# Update dependency ranges across all npm workspaces
+update:
+    npx npm-check-updates --workspaces -u
+
 # Install pre-commit hooks
 hooks:
     pre-commit install
