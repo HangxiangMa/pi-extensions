@@ -127,6 +127,7 @@ export interface GoalSettingsRuntimeSnapshot {
 	settings: GoalSettings;
 	activeGoal?: ActiveGoal;
 	queueFrozen: boolean;
+	queueFreezeAwaitingSettle: boolean;
 	continuationIntent?: ContinuationTicket;
 	continuationDelivery?: ContinuationTicket;
 	goalRecovery?: GoalRecovery;
@@ -172,6 +173,7 @@ export class GoalRuntime {
 	queuedGoals: ActiveGoal[] = [];
 	pendingQueueAction?: PendingQueueAction;
 	queueFrozen = false;
+	queueFreezeAwaitingSettle = false;
 	completionStatusTimer?: NodeJS.Timeout;
 	continuationIntent?: ContinuationTicket;
 	continuationDelivery?: ContinuationTicket;
@@ -752,6 +754,7 @@ export class GoalRuntime {
 		this.queuedGoals = [];
 		this.pendingQueueAction = undefined;
 		this.queueFrozen = false;
+		this.queueFreezeAwaitingSettle = false;
 		this.clearPersistedGoal(ctx.cwd, clearedGoal, reason);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		// Do not clear goalToolsUnlocked: after first activation, keep tools visible
@@ -854,6 +857,7 @@ export class GoalRuntime {
 			settings: structuredClone(this.settings),
 			activeGoal: this.activeGoal ? structuredClone(this.activeGoal) : undefined,
 			queueFrozen: this.queueFrozen,
+			queueFreezeAwaitingSettle: this.queueFreezeAwaitingSettle,
 			continuationIntent: this.continuationIntent
 				? structuredClone(this.continuationIntent)
 				: undefined,
@@ -874,6 +878,7 @@ export class GoalRuntime {
 		this.settings = structuredClone(snapshot.settings);
 		this.activeGoal = snapshot.activeGoal ? structuredClone(snapshot.activeGoal) : undefined;
 		this.queueFrozen = snapshot.queueFrozen;
+		this.queueFreezeAwaitingSettle = snapshot.queueFreezeAwaitingSettle;
 		this.continuationIntent = snapshot.continuationIntent
 			? structuredClone(snapshot.continuationIntent)
 			: undefined;

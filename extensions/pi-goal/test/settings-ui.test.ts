@@ -179,6 +179,65 @@ test("lowering the no-progress limit pauses and aborts in-flight Goal work", () 
 	assert.equal(state.activeGoal?.safetyPauseCause, "no_progress");
 });
 
+test("replacement confirmation sanitizes terminal controls without changing goal data", async () => {
+	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
+	const state = new GoalRuntime(mock.pi);
+	state.activeGoal = createGoal("current\u001b]8;;bad\u0007 objective", undefined, 0);
+	let preview = "";
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		confirm: async (_title: string, message: string) => {
+			preview = message;
+			return false;
+		},
+	});
+	const controller = new GoalCommandController(state);
+
+	await controller.startGoal("new\u009b31m objective", undefined, context.ctx);
+
+	for (const control of ["\u0007", "\u001b", "\u009b"]) {
+		assert.equal(preview.includes(control), false);
+	}
+	assert.match(preview, /Current goal: current ]8;;bad objective/);
+	assert.match(preview, /New goal: new 31m objective/);
+	assert.equal(state.activeGoal?.text, "current\u001b]8;;bad\u0007 objective");
+});
+
+test("unfreezing waits for an aborted frozen run to settle before dispatching", async () => {
+	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
+	const state = new GoalRuntime(mock.pi);
+	state.settings = {
+		...structuredClone(DEFAULT_GOAL_SETTINGS),
+		experimental: { goals: false },
+	};
+	state.activeGoal = createGoal("current objective", undefined, 0);
+	state.queuedGoals = [createGoal("queued objective", undefined, 0)];
+	state.beginAgentRun(state.activeGoal.id, "manual");
+	state.queueFrozen = true;
+	state.guardAbortGoalId = state.activeGoal.id;
+	state.queueFreezeAwaitingSettle = true;
+	const context = createMockContext({ mode: "tui", hasUI: true, isIdle: () => true });
+	const enabled = { ...structuredClone(state.settings), experimental: { goals: true } };
+	const controller = new GoalCommandController(state);
+
+	applyGoalSettings(state, enabled, context.ctx, { save() {} });
+	const dispatchedEarly = await controller.resumeQueueAfterUnfreeze(context.ctx);
+
+	assert.equal(dispatchedEarly, false);
+	assert.equal(state.queueFrozen, true);
+	assert.equal(state.guardAbortGoalId, state.activeGoal.id);
+	assert.equal(mock.sentUserMessages.length, 0);
+
+	state.clearSettledSafetyTracking();
+	state.queueFreezeAwaitingSettle = false;
+	const dispatchedAfterSettle = await controller.resumeQueueAfterUnfreeze(context.ctx);
+
+	assert.equal(dispatchedAfterSettle, true);
+	assert.equal(state.queueFrozen, false);
+	assert.equal(mock.sentUserMessages.length, 1);
+});
+
 test("unfreezing an active retained queue dispatches Goal work immediately", async () => {
 	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
 	const state = new GoalRuntime(mock.pi);

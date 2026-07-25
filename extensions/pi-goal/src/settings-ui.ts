@@ -295,6 +295,9 @@ function applyToolVisibility(runtime: GoalRuntime, previous: GoalSettings, next:
 function applyQueueSetting(runtime: GoalRuntime, ctx: ExtensionCommandContext) {
 	const hasQueueState = runtime.queuedGoals.length > 0 || runtime.pendingQueueAction !== undefined;
 	const shouldFreeze = !runtime.settings.experimental.goals && hasQueueState;
+	// Keep the freeze guard until the aborted Goal-owned run reaches agent_settled.
+	// Releasing it earlier lets the old agent_end pause newly resumed work.
+	if (runtime.queueFrozen && !shouldFreeze && runtime.queueFreezeAwaitingSettle) return;
 	if (runtime.queueFrozen === shouldFreeze) return;
 	const activeGoal = runtime.activeGoal?.status === "active" ? runtime.activeGoal : undefined;
 	if (shouldFreeze && activeGoal) runtime.recordGoalUsage(activeGoal, ctx);
@@ -311,6 +314,7 @@ function applyQueueSetting(runtime: GoalRuntime, ctx: ExtensionCommandContext) {
 	if (activeGoal) {
 		runtime.blockStaleGoalToolCalls();
 		runtime.guardAbortGoalId = activeGoal.id;
+		runtime.queueFreezeAwaitingSettle = runtime.agentRunGoalId !== undefined;
 		runtime.clearAgentRun();
 		abortCurrentTurn(ctx);
 	}

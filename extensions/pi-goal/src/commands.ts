@@ -1,5 +1,6 @@
 import { currentTokenTotal } from "./accounting.js";
 import { validateObjective } from "./command.js";
+import { safeGoalMenuText } from "./menu.js";
 import type { ActiveGoal } from "./persistence.js";
 import { buildGoalPrompt, buildObjectiveUpdatedPrompt, buildResumePrompt } from "./prompts.js";
 import {
@@ -56,7 +57,7 @@ export class GoalCommandController {
 		if (existingGoal) {
 			const shouldReplace = await ctx.ui.confirm(
 				"Replace goal?",
-				`Current goal: ${existingGoal.text}\n\nNew goal: ${objective}`,
+				`Current goal: ${safeGoalMenuText(existingGoal.text, 4_000)}\n\nNew goal: ${safeGoalMenuText(objective, 4_000)}`,
 			);
 			if (!shouldReplace) {
 				ctx.ui.notify(`Goal kept: ${existingGoal.text}`, "info");
@@ -215,8 +216,17 @@ export class GoalCommandController {
 	}
 
 	async resumeQueueAfterUnfreeze(ctx: StatusContext) {
-		this.runtime.clearStaleGoalToolCallBlock();
+		if (this.runtime.queueFreezeAwaitingSettle) return false;
+		this.runtime.queueFrozen = false;
+		this.runtime.queueFreezeAwaitingSettle = false;
 		this.runtime.guardAbortGoalId = undefined;
+		this.runtime.clearStaleGoalToolCallBlock();
+		if (this.runtime.activeGoal) {
+			this.runtime.persistGoal(this.runtime.activeGoal);
+			this.runtime.updateStatus(ctx, this.runtime.activeGoal);
+		} else {
+			ctx.ui.setStatus(STATUS_KEY, undefined);
+		}
 		if (this.runtime.pendingQueueAction) {
 			return this.dispatchPendingQueueActionIfSettled(ctx);
 		}

@@ -202,14 +202,13 @@ async function editFromMenu(
 	if (!goal) return;
 	const objective = (await ctx.ui.editor("Edit goal objective", goal.text))?.trim();
 	if (!objective || objective === goal.text) return;
-	if (
-		goal.status === "active" &&
-		!(await ctx.ui.confirm(
+	if (!requireCurrentMenuGoal(runtime, goal, ctx)) return;
+	if (goal.status === "active") {
+		const confirmed = await ctx.ui.confirm(
 			"Apply goal edit?",
 			`Current goal:\n${safeGoalMenuText(goal.text, 4_000)}\n\nUpdated goal:\n${safeGoalMenuText(objective, 4_000)}\n\nApplying this edit starts a new guarded goal instance.`,
-		))
-	) {
-		return;
+		);
+		if (!confirmed || !requireCurrentMenuGoal(runtime, goal, ctx)) return;
 	}
 	await commands.editGoal(objective, undefined, ctx);
 }
@@ -222,7 +221,7 @@ async function increaseBudget(
 	const goal = runtime.activeGoal;
 	if (!goal) return;
 	const budget = await askTokenBudget(ctx, goal.tokenBudget);
-	if (budget === undefined) return;
+	if (budget === undefined || !requireCurrentMenuGoal(runtime, goal, ctx)) return;
 	if (budget <= goal.tokensUsed) {
 		ctx.ui.notify(
 			`Token budget must be greater than current usage (${formatTokenCount(goal.tokensUsed)}).`,
@@ -230,14 +229,11 @@ async function increaseBudget(
 		);
 		return;
 	}
-	if (
-		!(await ctx.ui.confirm(
-			"Increase goal budget?",
-			`Goal: ${safeGoalMenuText(goal.text, 4_000)}\n\nBudget: ${formatTokenCount(goal.tokenBudget ?? 0)} → ${formatTokenCount(budget)}\nCurrent usage: ${formatTokenCount(goal.tokensUsed)}\n\nThe goal will resume immediately.`,
-		))
-	) {
-		return;
-	}
+	const confirmed = await ctx.ui.confirm(
+		"Increase goal budget?",
+		`Goal: ${safeGoalMenuText(goal.text, 4_000)}\n\nBudget: ${formatTokenCount(goal.tokenBudget ?? 0)} → ${formatTokenCount(budget)}\nCurrent usage: ${formatTokenCount(goal.tokensUsed)}\n\nThe goal will resume immediately.`,
+	);
+	if (!confirmed || !requireCurrentMenuGoal(runtime, goal, ctx)) return;
 	await commands.editGoal(goal.text, budget, ctx);
 }
 
@@ -326,6 +322,19 @@ async function confirmClear(runtime: GoalMenuRuntimeView, ctx: ExtensionCommandC
 			.map((summary, index) => `${index + 1}. ${summary}`)
 			.join("\n")}\n\nThis cannot be undone.`,
 	);
+}
+
+function requireCurrentMenuGoal(
+	runtime: GoalMenuRuntimeView,
+	expected: ActiveGoal,
+	ctx: ExtensionCommandContext,
+) {
+	if (runtime.activeGoal?.id === expected.id) return true;
+	ctx.ui.notify(
+		"The active goal changed while the dialog was open. Reopen /goal and try again.",
+		"warning",
+	);
+	return false;
 }
 
 function displayStatus(status?: ActiveGoal["status"]) {

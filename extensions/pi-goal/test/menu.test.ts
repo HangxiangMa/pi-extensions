@@ -249,6 +249,51 @@ test("Skip preview reflects a stopped next goal without promising activation", a
 	assert.equal(tracked.calls.length, 0);
 });
 
+test("edit dialogs do not mutate a replacement active goal", async () => {
+	const original = createGoal("old objective", undefined, 0);
+	const replacement = createGoal("replacement objective", undefined, 0);
+	const state = runtime(original);
+	const tracked = commands();
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		select: async () => GOAL_MENU_ACTIONS.edit,
+		editor: async () => {
+			state.activeGoal = replacement;
+			return "edited old objective";
+		},
+		confirm: async () => true,
+	});
+
+	await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+
+	assert.equal(tracked.calls.length, 0);
+	assert.match(context.notifications.at(-1)?.message ?? "", /goal changed.*reopen/i);
+});
+
+test("budget dialogs do not mutate a replacement active goal", async () => {
+	const original = transitionGoal(createGoal("old objective", 100, 0), "budget_limited");
+	original.tokensUsed = 100;
+	const replacement = createGoal("replacement objective", undefined, 0);
+	const state = runtime(original);
+	const tracked = commands();
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		select: async () => GOAL_MENU_ACTIONS.increaseBudget,
+		input: async () => {
+			state.activeGoal = replacement;
+			return "200";
+		},
+		confirm: async () => true,
+	});
+
+	await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+
+	assert.equal(tracked.calls.length, 0);
+	assert.match(context.notifications.at(-1)?.message ?? "", /goal changed.*reopen/i);
+});
+
 test("menu start and edit delegate raw objective data only after explicit input", async () => {
 	const empty = runtime();
 	const started = commands();

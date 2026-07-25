@@ -483,6 +483,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		runtime.queuedGoals = [];
 		runtime.pendingQueueAction = undefined;
 		runtime.queueFrozen = false;
+		runtime.queueFreezeAwaitingSettle = false;
 		runtime.clearTerminalDetails();
 		rpc.bindSession(ctx);
 		const previousToolVisibility = runtime.settings.toolVisibility;
@@ -613,6 +614,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		runtime.queuedGoals = [];
 		runtime.pendingQueueAction = undefined;
 		runtime.queueFrozen = false;
+		runtime.queueFreezeAwaitingSettle = false;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		clearCompletionStatusTimer();
 		runtime.clearTerminalDetails();
@@ -1040,6 +1042,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 	pi.on("agent_settled", async (_event, ctx) => {
 		if (runtime.queueFrozen) {
 			runtime.clearSettledSafetyTracking();
+			runtime.queueFreezeAwaitingSettle = false;
+			if (runtime.settings.experimental.goals) {
+				await commands.resumeQueueAfterUnfreeze(ctx);
+			}
 			return;
 		}
 		runtime.finalizeSettledRecovery(ctx);
