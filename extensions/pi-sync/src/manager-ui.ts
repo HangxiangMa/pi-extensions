@@ -1,6 +1,7 @@
 import { BorderedLoader, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { setSyncTargetCompletions } from "./command.js";
 import {
+	activeLocalConfigPath,
 	configuredTargetNames,
 	deprecatedPiSyncEnvironmentWarnings,
 	isCloudflareR2Endpoint,
@@ -158,7 +159,7 @@ async function describeManagerState(): Promise<{ title: string; actions: string[
 				"",
 				"Settings file needs repair. Automatic sync and settings writes are paused.",
 				`Error: ${safeTerminalText(errorMessage(error))}`,
-				`File: ${safeTerminalText(localConfigPath())}`,
+				`File: ${safeTerminalText(await activeLocalConfigPath())}`,
 				"",
 				"Repair the JSON file, then reopen /sync.",
 			].join("\n"),
@@ -229,7 +230,7 @@ async function describeManagerState(): Promise<{ title: string; actions: string[
 				"Settings need attention. Automatic sync is paused.",
 				`Current target: ${safeTerminalText(typeof raw.activeTarget === "string" ? raw.activeTarget : "default")}`,
 				`Error: ${safeTerminalText(errorMessage(error))}`,
-				`File: ${safeTerminalText(localConfigPath())}`,
+				`File: ${safeTerminalText(await activeLocalConfigPath())}`,
 				"",
 				"What do you want to do?",
 			].join("\n"),

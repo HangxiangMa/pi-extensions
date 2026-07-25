@@ -5,7 +5,9 @@ import {
 	DEFAULT_TARGET_SWITCH_ACTION,
 	effectiveTargetRemoteIdentity,
 	localConfigPath,
+	readLocalConfigDocument,
 	readLocalConfigObject,
+	replaceLocalConfigDocument,
 	resolveLegacyPartialConfig,
 	resolveV2PartialConfig,
 	stateDir,
@@ -14,6 +16,21 @@ import {
 } from "./config.js";
 import { withLock } from "./lock.js";
 import type { PartialConfig, StorageProfileSettings, SyncTargetSettings } from "./types.js";
+
+let afterLegacySettingsReadHook: () => Promise<void> = async () => undefined;
+
+export async function withLegacySettingsReadHookForTest<T>(
+	hook: () => Promise<void>,
+	run: () => Promise<T>,
+) {
+	const previous = afterLegacySettingsReadHook;
+	afterLegacySettingsReadHook = hook;
+	try {
+		return await run();
+	} finally {
+		afterLegacySettingsReadHook = previous;
+	}
+}
 
 const LEGACY_FIELDS = new Set([
 	"endpoint",
@@ -42,21 +59,17 @@ export async function migrateLegacySettings(
 	validateName(targetName, "target");
 	validateName(storageProfileName, "storage profile");
 	return withLock("settings-migration", async () => {
-		const configPath = localConfigPath();
-		const originalBytes = await fs.readFile(configPath);
-		const current = await readLocalConfigObject();
-		if (!current) throw new Error("No legacy pi-sync settings are available to migrate.");
+		const document = await readLocalConfigDocument();
+		if (!document) throw new Error("No legacy pi-sync settings are available to migrate.");
+		const { bytes: originalBytes, parsed: current } = document;
 		if (current.version === 2) {
 			throw new Error("pi-sync settings already use profiles and targets.");
 		}
+		await afterLegacySettingsReadHook();
 		const next = legacySettingsAsV2(current, targetName, storageProfileName);
 		const backupPath = await writeMigrationBackup(originalBytes);
 		await adoptLegacyState(current, next, targetName);
-		const latestBytes = await fs.readFile(configPath);
-		if (!latestBytes.equals(originalBytes)) {
-			throw new Error("pi-sync settings changed during migration; no settings were replaced.");
-		}
-		await writeLocalConfigObject(next);
+		await replaceLocalConfigDocument(document, next);
 		return { settings: next, backupPath };
 	});
 }

@@ -298,7 +298,7 @@ Sessions can contain prompts, model output, tool results, file paths, images, an
 
 ## 🛡️ Safety notes
 
-- Credentials stay local; `pi-sync.json` and the legacy `pi-sync.local.json` are always excluded from snapshots.
+- Credentials stay local; canonical, legacy, temporary, and migration-recovery settings files are always excluded from snapshots.
 - Push refuses common secret patterns in locally managed files.
 - Pull/rollback reject unsafe paths, duplicate paths, checksum mismatches, symlink parents, and file/directory replacement hazards before mutation.
 - Unmanaged local/remote files remain preserved.

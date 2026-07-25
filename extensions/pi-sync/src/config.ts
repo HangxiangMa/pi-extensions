@@ -8,11 +8,13 @@ import {
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import {
+	activeLocalConfigPath,
 	consumeLocalConfigMigrationNotice,
 	legacyLocalConfigPath,
 	localConfigPath,
 	quarantineAndRemoveConfigIfMatches,
-	readMigratingLocalConfig,
+	readMigratingLocalConfigDocument,
+	replaceLocalConfigDocument,
 } from "./config-file.js";
 import { safeName } from "./paths.js";
 import { DEFAULT_SYNC_FILES, normalizeExtraFiles, normalizeSyncFiles } from "./sync-policy.js";
@@ -33,10 +35,12 @@ const DEFAULT_REGION = "auto";
 export const DEFAULT_TARGET_SWITCH_ACTION: TargetSwitchAction = "ask";
 
 export {
+	activeLocalConfigPath,
 	consumeLocalConfigMigrationNotice,
 	legacyLocalConfigPath,
 	localConfigPath,
 	quarantineAndRemoveConfigIfMatches,
+	replaceLocalConfigDocument,
 };
 
 export const DEPRECATED_PI_SYNC_ENV_NAMES = [
@@ -534,8 +538,12 @@ export function localConfigTemplate(): Record<string, unknown> {
 	};
 }
 
+export async function readLocalConfigDocument() {
+	return readMigratingLocalConfigDocument(validateConfigDocumentForMigration);
+}
+
 export async function readLocalConfigObject(): Promise<Record<string, unknown> | undefined> {
-	return readMigratingLocalConfig(validateConfigDocumentForMigration);
+	return (await readLocalConfigDocument())?.parsed;
 }
 
 function validateConfigDocumentForMigration(settings: Record<string, unknown>) {
@@ -606,6 +614,12 @@ function validateConfigDocumentForMigration(settings: Record<string, unknown>) {
 		normalizeExtraFiles(target.extraFiles);
 	}
 	const activeTarget = normalizeOptionalString(asOptionalString(settings.activeTarget));
+	if (Object.keys(targets).length === 0) {
+		if (activeTarget) {
+			throw new Error("Invalid pi-sync settings: targetless settings cannot have activeTarget.");
+		}
+		return;
+	}
 	if (!activeTarget || !Object.hasOwn(targets, activeTarget)) {
 		throw new Error("Invalid pi-sync settings: activeTarget must reference an existing target.");
 	}

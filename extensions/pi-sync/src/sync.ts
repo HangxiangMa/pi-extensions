@@ -16,6 +16,7 @@ import {
 	validateCommandOptions,
 } from "./command.js";
 import {
+	activeLocalConfigPath,
 	configuredTargetNames,
 	consumeLocalConfigMigrationNotice,
 	deprecatedPiSyncEnvironmentWarnings,
@@ -23,7 +24,6 @@ import {
 	isEnabled,
 	isExplicitlyEnabled,
 	isMissingConfigError,
-	legacyLocalConfigPath,
 	loadConfig,
 	loadPartialConfig,
 	localConfigPath,
@@ -284,13 +284,7 @@ async function autoPushSessions(ctx: ExtensionContext) {
 async function initConfig(ctx: ExtensionCommandContext) {
 	const configPath = localConfigPath();
 	if (await readLocalConfigObject()) {
-		let existingPath = configPath;
-		try {
-			await fs.access(configPath);
-		} catch {
-			existingPath = legacyLocalConfigPath();
-		}
-		ctx.ui.notify(`Config already exists: ${existingPath}`, "info");
+		ctx.ui.notify(`Config already exists: ${await activeLocalConfigPath()}`, "info");
 		return;
 	}
 
