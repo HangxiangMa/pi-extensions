@@ -12,9 +12,13 @@ check:
 format:
     npm run format
 
-# Update dependency ranges across all npm workspaces
+# Update, install, rebuild, and verify dependencies across all npm workspaces
 update:
     npx npm-check-updates --workspaces -u
+    npm install
+    # Rebuild generated web assets only in workspaces that provide build:web
+    npm --workspaces --if-present run build:web
+    npm run check
 
 # Install pre-commit hooks
 hooks:
