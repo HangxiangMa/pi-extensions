@@ -1,9 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-	DEFAULT_MAX_CONTEXT_BYTES,
-	truncateUtf8,
-	truncateUtf8Tail,
-} from "./limits.js";
+import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8, truncateUtf8Tail } from "./limits.js";
 
 export type ContextMode = "none" | "all" | "summary" | number;
 
@@ -107,19 +103,20 @@ export function buildContextSnapshot(
 	const raw =
 		mode === "summary" && selected.length > 4
 			? [
-					`## Earlier context checkpoint\n${truncateUtf8(
-						selected
-							.slice(0, -4)
-							.map((message) => `${message.role}: ${message.text}`)
-							.join("\n"),
-						Math.floor(maxBytes / 3),
-					).text}`,
-					...selected
-						.slice(-4)
-						.map((message) => `## ${message.role}\n${message.text}`),
+					`## Earlier context checkpoint\n${
+						truncateUtf8(
+							selected
+								.slice(0, -4)
+								.map((message) => `${message.role}: ${message.text}`)
+								.join("\n"),
+							Math.floor(maxBytes / 3),
+						).text
+					}`,
+					...selected.slice(-4).map((message) => `## ${message.role}\n${message.text}`),
 				].join("\n\n")
 			: selected.map((message) => `## ${message.role}\n${message.text}`).join("\n\n");
-	const bounded = mode === "summary" ? truncateUtf8Tail(raw, maxBytes) : truncateUtf8(raw, maxBytes);
+	const bounded =
+		mode === "summary" ? truncateUtf8Tail(raw, maxBytes) : truncateUtf8(raw, maxBytes);
 	return {
 		text: bounded.text,
 		turns: selected.filter((message) => message.role === "user").length,

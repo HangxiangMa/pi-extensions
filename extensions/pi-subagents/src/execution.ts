@@ -105,375 +105,398 @@ export async function executeSubagent(
 	onUpdate: AgentToolUpdateCallback<SubagentDetails> | undefined,
 	ctx: ExtensionContext,
 ): Promise<AgentToolResult<SubagentDetails> & { isError?: boolean }> {
-			assertSubagentDepthAllowed();
-			const agentScope: AgentScope = params.agentScope ?? "user";
-			const aggregator = hasUsableAggregator(params.aggregator) ? params.aggregator : undefined;
-			const config = readSubagentSettings();
-			const discovery = discoverAgents(ctx.cwd, agentScope, config);
-			const agents = discovery.agents;
-			const confirmProjectAgents = params.confirmProjectAgents ?? true;
-			const resolveTimeoutMs = (agentName: string, localTimeoutMs?: number) =>
-				localTimeoutMs ??
-				params.timeoutMs ??
-				agents.find((agent) => agent.name === agentName)?.timeoutMs ??
-				resolveDefaultSubagentTimeoutMs();
-			const resolveThinkingLevel = (agentName: string, localThinkingLevel?: SubagentThinkingLevel) =>
-				resolveSubagentThinkingLevel(agents, agentName, params.thinkingLevel, localThinkingLevel);
+	assertSubagentDepthAllowed();
+	const agentScope: AgentScope = params.agentScope ?? "user";
+	const aggregator = hasUsableAggregator(params.aggregator) ? params.aggregator : undefined;
+	const config = readSubagentSettings();
+	const discovery = discoverAgents(ctx.cwd, agentScope, config);
+	const agents = discovery.agents;
+	const confirmProjectAgents = params.confirmProjectAgents ?? true;
+	const resolveTimeoutMs = (agentName: string, localTimeoutMs?: number) =>
+		localTimeoutMs ??
+		params.timeoutMs ??
+		agents.find((agent) => agent.name === agentName)?.timeoutMs ??
+		resolveDefaultSubagentTimeoutMs();
+	const resolveThinkingLevel = (agentName: string, localThinkingLevel?: SubagentThinkingLevel) =>
+		resolveSubagentThinkingLevel(agents, agentName, params.thinkingLevel, localThinkingLevel);
 
-			const hasChain = (params.chain?.length ?? 0) > 0;
-			const hasTasks = (params.tasks?.length ?? 0) > 0;
-			const hasSingle = Boolean(params.agent && params.task);
-			const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
+	const hasChain = (params.chain?.length ?? 0) > 0;
+	const hasTasks = (params.tasks?.length ?? 0) > 0;
+	const hasSingle = Boolean(params.agent && params.task);
+	const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
 
-			const makeDetails =
-				(mode: "single" | "parallel" | "chain") =>
-				(results: SingleResult[], aggregator?: SingleResult): SubagentDetails => ({
-					mode,
-					agentScope,
-					projectAgentsDir: discovery.projectAgentsDir,
-					results,
-					aggregator,
-				});
+	const makeDetails =
+		(mode: "single" | "parallel" | "chain") =>
+		(results: SingleResult[], aggregator?: SingleResult): SubagentDetails => ({
+			mode,
+			agentScope,
+			projectAgentsDir: discovery.projectAgentsDir,
+			results,
+			aggregator,
+		});
 
-			if (modeCount !== 1 || (aggregator && !hasTasks)) {
-				const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
-				const reason =
-					modeCount !== 1
-						? "Provide exactly one mode."
-						: "Aggregator is only valid with parallel tasks.";
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Invalid parameters. ${reason}\nAvailable agents: ${available}`,
-						},
-					],
-					details: makeDetails("single")([]),
+	if (modeCount !== 1 || (aggregator && !hasTasks)) {
+		const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
+		const reason =
+			modeCount !== 1
+				? "Provide exactly one mode."
+				: "Aggregator is only valid with parallel tasks.";
+		return {
+			content: [
+				{
+					type: "text",
+					text: `Invalid parameters. ${reason}\nAvailable agents: ${available}`,
+				},
+			],
+			details: makeDetails("single")([]),
+		};
+	}
+
+	if (agentScope === "project" || agentScope === "both") {
+		const requestedAgentNames = new Set<string>();
+		if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
+		if (params.tasks) for (const t of params.tasks) requestedAgentNames.add(t.agent);
+		if (aggregator) requestedAgentNames.add(aggregator.agent);
+		if (params.agent) requestedAgentNames.add(params.agent);
+
+		const projectAgentsRequested = Array.from(requestedAgentNames)
+			.map((name) => agents.find((a) => a.name === name))
+			.filter((a): a is AgentConfig => a?.source === "project");
+
+		if (projectAgentsRequested.length > 0) {
+			if (!ctx.isProjectTrusted()) {
+				throw new Error("Project-local subagent definitions require a trusted project");
+			}
+			if (confirmProjectAgents && ctx.hasUI) {
+				const names = projectAgentsRequested.map((a) => a.name).join(", ");
+				const dir = discovery.projectAgentsDir ?? "(unknown)";
+				const ok = await ctx.ui.confirm(
+					"Run project-local agents?",
+					`Agents: ${names}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
+				);
+				if (!ok) {
+					return {
+						content: [{ type: "text", text: "Canceled: project-local agents not approved." }],
+						details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single")([]),
+					};
+				}
+			}
+		}
+	}
+
+	if (params.chain && params.chain.length > 0) {
+		const results: SingleResult[] = [];
+		let previousOutput = "";
+		const status = startSubagentStatus(ctx, toolCallId, chainStatus(0, params.chain.length));
+
+		try {
+			for (let i = 0; i < params.chain.length; i++) {
+				const step = params.chain[i];
+				status.update(chainStatus(i + 1, params.chain.length, step.agent));
+				const taskWithContext = truncateUtf8(
+					step.task.replace(/\{previous\}/g, previousOutput),
+					DEFAULT_MAX_CONTEXT_BYTES,
+				).text;
+
+				// Create update callback that includes all previous results
+				const chainUpdate: OnUpdateCallback | undefined = onUpdate
+					? (partial) => {
+							// Combine completed results with current streaming result
+							const currentResult = partial.details?.results[0];
+							if (currentResult) {
+								const allResults = [...results, currentResult];
+								onUpdate({
+									content: partial.content,
+									details: makeDetails("chain")(allResults),
+								});
+							}
+						}
+					: undefined;
+
+				const result = await runSingleAgent(
+					ctx.cwd,
+					agents,
+					step.agent,
+					taskWithContext,
+					step.cwd,
+					i + 1,
+					signal,
+					resolveThinkingLevel(step.agent, step.thinkingLevel),
+					resolveTimeoutMs(step.agent, step.timeoutMs),
+					chainUpdate,
+					makeDetails("chain"),
+				);
+				results.push(result);
+
+				const isError = isResultError(result);
+				if (isError) {
+					const errorMsg = formatResultFailure(result);
+					return {
+						content: [
+							{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}` },
+						],
+						details: { ...makeDetails("chain")(results), isError: true },
+						isError: true,
+					};
+				}
+				previousOutput = getResultFinalOutput(result);
+			}
+			return {
+				content: [
+					{
+						type: "text",
+						text: getResultFinalOutput(results[results.length - 1]) || "(no output)",
+					},
+				],
+				details: makeDetails("chain")(results),
+			};
+		} finally {
+			status.clear();
+		}
+	}
+
+	if (params.tasks && params.tasks.length > 0) {
+		if (params.tasks.length > MAX_PARALLEL_TASKS)
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Too many parallel tasks (${params.tasks.length}). Max is ${MAX_PARALLEL_TASKS}.`,
+					},
+				],
+				details: makeDetails("parallel")([]),
+			};
+
+		const status = startSubagentStatus(
+			ctx,
+			toolCallId,
+			parallelStatus(0, params.tasks.length, params.tasks.length),
+		);
+
+		try {
+			// Track all results for streaming updates
+			const allResults: SingleResult[] = new Array(params.tasks.length);
+
+			// Initialize placeholder results
+			for (let i = 0; i < params.tasks.length; i++) {
+				allResults[i] = {
+					agent: params.tasks[i].agent,
+					agentSource: "unknown",
+					task: params.tasks[i].task,
+					exitCode: -1, // -1 = still running
+					messages: [],
+					stderr: "",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						cost: 0,
+						contextTokens: 0,
+						turns: 0,
+					},
+					thinkingLevel: resolveThinkingLevel(params.tasks[i].agent, params.tasks[i].thinkingLevel),
+					finalOutput: "",
 				};
 			}
 
-			if (agentScope === "project" || agentScope === "both") {
-				const requestedAgentNames = new Set<string>();
-				if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
-				if (params.tasks) for (const t of params.tasks) requestedAgentNames.add(t.agent);
-				if (aggregator) requestedAgentNames.add(aggregator.agent);
-				if (params.agent) requestedAgentNames.add(params.agent);
+			let doneCount = 0;
+			let runningCount = params.tasks.length;
 
-				const projectAgentsRequested = Array.from(requestedAgentNames)
-					.map((name) => agents.find((a) => a.name === name))
-					.filter((a): a is AgentConfig => a?.source === "project");
-
-				if (projectAgentsRequested.length > 0) {
-					if (!ctx.isProjectTrusted()) {
-						throw new Error("Project-local subagent definitions require a trusted project");
-					}
-					if (confirmProjectAgents && ctx.hasUI) {
-						const names = projectAgentsRequested.map((a) => a.name).join(", ");
-						const dir = discovery.projectAgentsDir ?? "(unknown)";
-						const ok = await ctx.ui.confirm(
-							"Run project-local agents?",
-							`Agents: ${names}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
-						);
-						if (!ok) {
-							return {
-								content: [{ type: "text", text: "Canceled: project-local agents not approved." }],
-								details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single")([]),
-							};
-						}
-					}
-				}
-			}
-
-			if (params.chain && params.chain.length > 0) {
-				const results: SingleResult[] = [];
-				let previousOutput = "";
-				const status = startSubagentStatus(ctx, toolCallId, chainStatus(0, params.chain.length));
-
-				try {
-					for (let i = 0; i < params.chain.length; i++) {
-						const step = params.chain[i];
-						status.update(chainStatus(i + 1, params.chain.length, step.agent));
-						const taskWithContext = truncateUtf8(
-							step.task.replace(/\{previous\}/g, previousOutput),
-							DEFAULT_MAX_CONTEXT_BYTES,
-						).text;
-
-						// Create update callback that includes all previous results
-						const chainUpdate: OnUpdateCallback | undefined = onUpdate
-							? (partial) => {
-									// Combine completed results with current streaming result
-									const currentResult = partial.details?.results[0];
-									if (currentResult) {
-										const allResults = [...results, currentResult];
-										onUpdate({
-											content: partial.content,
-											details: makeDetails("chain")(allResults),
-										});
-									}
+			const emitParallelUpdate = () => {
+				status.update(parallelStatus(doneCount, allResults.length, runningCount));
+				if (onUpdate) {
+					const pendingAggregator: SingleResult | undefined =
+						aggregator && !signal?.aborted && doneCount === allResults.length
+							? {
+									agent: aggregator.agent,
+									agentSource:
+										agents.find((agent) => agent.name === aggregator.agent)?.source ?? "unknown",
+									task: aggregator.task,
+									exitCode: -1,
+									messages: [],
+									stderr: "",
+									usage: {
+										input: 0,
+										output: 0,
+										cacheRead: 0,
+										cacheWrite: 0,
+										cost: 0,
+										contextTokens: 0,
+										turns: 0,
+									},
+									thinkingLevel: resolveThinkingLevel(aggregator.agent, aggregator.thinkingLevel),
+									timeoutMs: resolveTimeoutMs(aggregator.agent, aggregator.timeoutMs),
+									finalOutput: "",
 								}
 							: undefined;
-
-						const result = await runSingleAgent(
-							ctx.cwd,
-							agents,
-							step.agent,
-							taskWithContext,
-							step.cwd,
-							i + 1,
-							signal,
-							resolveThinkingLevel(step.agent, step.thinkingLevel),
-							resolveTimeoutMs(step.agent, step.timeoutMs),
-							chainUpdate,
-							makeDetails("chain"),
-						);
-						results.push(result);
-
-						const isError = isResultError(result);
-						if (isError) {
-							const errorMsg = formatResultFailure(result);
-							return {
-								content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}` }],
-								details: { ...makeDetails("chain")(results), isError: true },
-								isError: true,
-							};
-						}
-						previousOutput = getResultFinalOutput(result);
-					}
-					return {
-						content: [{ type: "text", text: getResultFinalOutput(results[results.length - 1]) || "(no output)" }],
-						details: makeDetails("chain")(results),
-					};
-				} finally {
-					status.clear();
-				}
-			}
-
-			if (params.tasks && params.tasks.length > 0) {
-				if (params.tasks.length > MAX_PARALLEL_TASKS)
-					return {
+					onUpdate({
 						content: [
 							{
 								type: "text",
-								text: `Too many parallel tasks (${params.tasks.length}). Max is ${MAX_PARALLEL_TASKS}.`,
+								text: `Parallel: ${doneCount}/${allResults.length} done, ${runningCount} running...`,
 							},
 						],
-						details: makeDetails("parallel")([]),
-					};
-
-				const status = startSubagentStatus(ctx, toolCallId, parallelStatus(0, params.tasks.length, params.tasks.length));
-
-				try {
-					// Track all results for streaming updates
-					const allResults: SingleResult[] = new Array(params.tasks.length);
-
-					// Initialize placeholder results
-					for (let i = 0; i < params.tasks.length; i++) {
-						allResults[i] = {
-							agent: params.tasks[i].agent,
-							agentSource: "unknown",
-							task: params.tasks[i].task,
-							exitCode: -1, // -1 = still running
-							messages: [],
-							stderr: "",
-							usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-							thinkingLevel: resolveThinkingLevel(params.tasks[i].agent, params.tasks[i].thinkingLevel),
-							finalOutput: "",
-						};
-					}
-
-					let doneCount = 0;
-					let runningCount = params.tasks.length;
-
-					const emitParallelUpdate = () => {
-						status.update(parallelStatus(doneCount, allResults.length, runningCount));
-						if (onUpdate) {
-							const pendingAggregator: SingleResult | undefined =
-								aggregator && !signal?.aborted && doneCount === allResults.length
-									? {
-											agent: aggregator.agent,
-											agentSource:
-												agents.find((agent) => agent.name === aggregator.agent)?.source ?? "unknown",
-											task: aggregator.task,
-											exitCode: -1,
-											messages: [],
-											stderr: "",
-											usage: {
-												input: 0,
-												output: 0,
-												cacheRead: 0,
-												cacheWrite: 0,
-												cost: 0,
-												contextTokens: 0,
-												turns: 0,
-											},
-											thinkingLevel: resolveThinkingLevel(
-												aggregator.agent,
-												aggregator.thinkingLevel,
-											),
-											timeoutMs: resolveTimeoutMs(aggregator.agent, aggregator.timeoutMs),
-											finalOutput: "",
-										}
-									: undefined;
-							onUpdate({
-								content: [
-									{
-										type: "text",
-										text: `Parallel: ${doneCount}/${allResults.length} done, ${runningCount} running...`,
-									},
-								],
-								details: makeDetails("parallel")([...allResults], pendingAggregator),
-							});
-						}
-					};
-
-					const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
-						const result = await runSingleAgent(
-							ctx.cwd,
-							agents,
-							t.agent,
-							t.task,
-							t.cwd,
-							undefined,
-							signal,
-							resolveThinkingLevel(t.agent, t.thinkingLevel),
-							resolveTimeoutMs(t.agent, t.timeoutMs),
-							// Per-task update callback
-							(partial) => {
-								if (partial.details?.results[0]) {
-									allResults[index] = { ...partial.details.results[0], exitCode: -1 };
-									emitParallelUpdate();
-								}
-							},
-							makeDetails("parallel"),
-						);
-						allResults[index] = result;
-						doneCount += 1;
-						runningCount -= 1;
-						emitParallelUpdate();
-						return result;
-					}, signal, (task, index) => {
-						const skipped: SingleResult = {
-							...allResults[index],
-							task: task.task,
-							exitCode: 130,
-							stopReason: "aborted",
-							aborted: true,
-							errorMessage: "Subagent was not started because the parent call was aborted",
-						};
-						allResults[index] = skipped;
-						doneCount += 1;
-						runningCount -= 1;
-						emitParallelUpdate();
-						return skipped;
+						details: makeDetails("parallel")([...allResults], pendingAggregator),
 					});
-
-					let aggregatorResult: SingleResult | undefined;
-					if (aggregator && !signal?.aborted) {
-						status.update(fanInStatus(aggregator.agent));
-						const fanInContext = buildFanInContext(results);
-						const aggregatorTask = truncateUtf8(
-							aggregator.task.includes("{previous}")
-								? aggregator.task.replace(/\{previous\}/g, fanInContext)
-								: `${aggregator.task}\n\nParallel task outputs:\n\n${fanInContext}`,
-							DEFAULT_MAX_CONTEXT_BYTES,
-						).text;
-						aggregatorResult = await runSingleAgent(
-							ctx.cwd,
-							agents,
-							aggregator.agent,
-							aggregatorTask,
-							aggregator.cwd,
-							undefined,
-							signal,
-							resolveThinkingLevel(aggregator.agent, aggregator.thinkingLevel),
-							resolveTimeoutMs(aggregator.agent, aggregator.timeoutMs),
-							(partial) => {
-								status.update(fanInStatus(aggregator.agent));
-								if (onUpdate && partial.details?.results[0]) {
-									onUpdate({
-										content: partial.content,
-										details: makeDetails("parallel")(results, partial.details.results[0]),
-									});
-								}
-							},
-							makeDetails("parallel"),
-						);
-					}
-
-					const successCount = results.filter((result) => !isResultError(result)).length;
-					const summaries = results.map((result) => {
-						const failed = isResultError(result);
-						const output = getResultFinalOutput(result);
-						const error = result.errorMessage || result.stderr.trim();
-						const summaryText = failed ? formatResultFailure(result) : output || error;
-						const preview = truncateUtf8(summaryText, 160).text;
-						return `[${result.agent}] ${failed ? "failed" : "completed"}: ${preview || "(no output)"}`;
-					});
-					const aggregatorFailed = aggregatorResult ? isResultError(aggregatorResult) : false;
-					const aggregatorOutput = aggregatorResult ? getResultFinalOutput(aggregatorResult) : "";
-					const aggregatorError = aggregatorResult?.errorMessage || aggregatorResult?.stderr.trim() || "";
-					return {
-						content: [
-							{
-								type: "text",
-								text: aggregatorResult
-									? aggregatorFailed
-										? formatResultFailure(aggregatorResult)
-										: aggregatorOutput ||
-											aggregatorError ||
-											`(aggregator ${aggregatorResult.agent} produced no output)`
-									: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
-							},
-						],
-						details: {
-							...makeDetails("parallel")(results, aggregatorResult),
-							isError: aggregatorFailed,
-						},
-						isError: aggregatorResult ? aggregatorFailed : undefined,
-					};
-				} finally {
-					status.clear();
 				}
-			}
+			};
 
-			if (params.agent && params.task) {
-				const status = startSubagentStatus(ctx, toolCallId, singleStatus(params.agent));
-
-				try {
+			const results = await mapWithConcurrencyLimit(
+				params.tasks,
+				MAX_CONCURRENCY,
+				async (t, index) => {
 					const result = await runSingleAgent(
 						ctx.cwd,
 						agents,
-						params.agent,
-						params.task,
-						params.cwd,
+						t.agent,
+						t.task,
+						t.cwd,
 						undefined,
 						signal,
-						resolveThinkingLevel(params.agent, params.thinkingLevel),
-						resolveTimeoutMs(params.agent, params.timeoutMs),
-						onUpdate,
-						makeDetails("single"),
+						resolveThinkingLevel(t.agent, t.thinkingLevel),
+						resolveTimeoutMs(t.agent, t.timeoutMs),
+						// Per-task update callback
+						(partial) => {
+							if (partial.details?.results[0]) {
+								allResults[index] = { ...partial.details.results[0], exitCode: -1 };
+								emitParallelUpdate();
+							}
+						},
+						makeDetails("parallel"),
 					);
-					const isError = isResultError(result);
-					if (isError) {
-						const errorMsg = formatResultFailure(result);
-						return {
-							content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
-							details: { ...makeDetails("single")([result]), isError: true },
-							isError: true,
-						};
-					}
-					return {
-						content: [{ type: "text", text: getResultFinalOutput(result) || "(no output)" }],
-						details: makeDetails("single")([result]),
+					allResults[index] = result;
+					doneCount += 1;
+					runningCount -= 1;
+					emitParallelUpdate();
+					return result;
+				},
+				signal,
+				(task, index) => {
+					const skipped: SingleResult = {
+						...allResults[index],
+						task: task.task,
+						exitCode: 130,
+						stopReason: "aborted",
+						aborted: true,
+						errorMessage: "Subagent was not started because the parent call was aborted",
 					};
-				} finally {
-					status.clear();
-				}
+					allResults[index] = skipped;
+					doneCount += 1;
+					runningCount -= 1;
+					emitParallelUpdate();
+					return skipped;
+				},
+			);
+
+			let aggregatorResult: SingleResult | undefined;
+			if (aggregator && !signal?.aborted) {
+				status.update(fanInStatus(aggregator.agent));
+				const fanInContext = buildFanInContext(results);
+				const aggregatorTask = truncateUtf8(
+					aggregator.task.includes("{previous}")
+						? aggregator.task.replace(/\{previous\}/g, fanInContext)
+						: `${aggregator.task}\n\nParallel task outputs:\n\n${fanInContext}`,
+					DEFAULT_MAX_CONTEXT_BYTES,
+				).text;
+				aggregatorResult = await runSingleAgent(
+					ctx.cwd,
+					agents,
+					aggregator.agent,
+					aggregatorTask,
+					aggregator.cwd,
+					undefined,
+					signal,
+					resolveThinkingLevel(aggregator.agent, aggregator.thinkingLevel),
+					resolveTimeoutMs(aggregator.agent, aggregator.timeoutMs),
+					(partial) => {
+						status.update(fanInStatus(aggregator.agent));
+						if (onUpdate && partial.details?.results[0]) {
+							onUpdate({
+								content: partial.content,
+								details: makeDetails("parallel")(results, partial.details.results[0]),
+							});
+						}
+					},
+					makeDetails("parallel"),
+				);
 			}
 
-			const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
+			const successCount = results.filter((result) => !isResultError(result)).length;
+			const summaries = results.map((result) => {
+				const failed = isResultError(result);
+				const output = getResultFinalOutput(result);
+				const error = result.errorMessage || result.stderr.trim();
+				const summaryText = failed ? formatResultFailure(result) : output || error;
+				const preview = truncateUtf8(summaryText, 160).text;
+				return `[${result.agent}] ${failed ? "failed" : "completed"}: ${preview || "(no output)"}`;
+			});
+			const aggregatorFailed = aggregatorResult ? isResultError(aggregatorResult) : false;
+			const aggregatorOutput = aggregatorResult ? getResultFinalOutput(aggregatorResult) : "";
+			const aggregatorError =
+				aggregatorResult?.errorMessage || aggregatorResult?.stderr.trim() || "";
 			return {
-				content: [{ type: "text", text: `Invalid parameters. Available agents: ${available}` }],
-				details: makeDetails("single")([]),
+				content: [
+					{
+						type: "text",
+						text: aggregatorResult
+							? aggregatorFailed
+								? formatResultFailure(aggregatorResult)
+								: aggregatorOutput ||
+									aggregatorError ||
+									`(aggregator ${aggregatorResult.agent} produced no output)`
+							: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
+					},
+				],
+				details: {
+					...makeDetails("parallel")(results, aggregatorResult),
+					isError: aggregatorFailed,
+				},
+				isError: aggregatorResult ? aggregatorFailed : undefined,
 			};
+		} finally {
+			status.clear();
+		}
+	}
+
+	if (params.agent && params.task) {
+		const status = startSubagentStatus(ctx, toolCallId, singleStatus(params.agent));
+
+		try {
+			const result = await runSingleAgent(
+				ctx.cwd,
+				agents,
+				params.agent,
+				params.task,
+				params.cwd,
+				undefined,
+				signal,
+				resolveThinkingLevel(params.agent, params.thinkingLevel),
+				resolveTimeoutMs(params.agent, params.timeoutMs),
+				onUpdate,
+				makeDetails("single"),
+			);
+			const isError = isResultError(result);
+			if (isError) {
+				const errorMsg = formatResultFailure(result);
+				return {
+					content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
+					details: { ...makeDetails("single")([result]), isError: true },
+					isError: true,
+				};
+			}
+			return {
+				content: [{ type: "text", text: getResultFinalOutput(result) || "(no output)" }],
+				details: makeDetails("single")([result]),
+			};
+		} finally {
+			status.clear();
+		}
+	}
+
+	const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
+	return {
+		content: [{ type: "text", text: `Invalid parameters. Available agents: ${available}` }],
+		details: makeDetails("single")([]),
+	};
 }

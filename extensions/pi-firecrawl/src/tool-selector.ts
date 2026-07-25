@@ -1,6 +1,11 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { configuredApiUrl, hasApiKey } from "./client.js";
-import { loadSettings, saveSettings, settingsFilePath, type SettingsLoadResult } from "./settings.js";
+import {
+	loadSettings,
+	type SettingsLoadResult,
+	saveSettings,
+	settingsFilePath,
+} from "./settings.js";
 import { FIRECRAWL_TOOL_NAMES, type FirecrawlToolName } from "./tools.js";
 
 type CommandContext = ExtensionCommandContext;
@@ -318,10 +323,7 @@ function formatError(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
 }
 
-async function persistSettings(
-	ctx: CommandContext,
-	selectedTools: readonly FirecrawlToolName[],
-) {
+async function persistSettings(ctx: CommandContext, selectedTools: readonly FirecrawlToolName[]) {
 	try {
 		await saveSettings({ tools: [...selectedTools], updatedAt: Date.now() });
 	} catch (error) {

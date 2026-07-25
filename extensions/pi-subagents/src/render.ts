@@ -440,8 +440,7 @@ export function renderSubagentResult(
 			const collapsed = getCollapsedDisplayItems(r);
 			const finalOutput = getResultFinalOutput(r).trim();
 			text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
-			if (rFailed && r.errorMessage)
-				text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
+			if (rFailed && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
 			if (collapsed.items.length > 0)
 				text += `\n${renderDisplayItems(collapsed.items, 5, collapsed.total)}`;
 			else if (currentIsRunning && r === currentResult)
@@ -605,8 +604,7 @@ export function renderSubagentResult(
 			const collapsed = getCollapsedDisplayItems(r);
 			const finalOutput = getResultFinalOutput(r).trim();
 			text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
-			if (rFailed && r.errorMessage)
-				text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
+			if (rFailed && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
 			if (collapsed.items.length > 0)
 				text += `\n${renderDisplayItems(collapsed.items, 5, collapsed.total)}`;
 			else if (rRunning) text += `\n${theme.fg("muted", "(running...)")}`;

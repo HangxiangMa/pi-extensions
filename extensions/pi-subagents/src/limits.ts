@@ -31,7 +31,10 @@ export function truncateUtf8(text: string, maxBytes: number): BoundedText {
 			originalBytes,
 		};
 	}
-	const prefix = Buffer.from(text, "utf8").subarray(0, limit - marker.length).toString("utf8").replace(/�+$/g, "");
+	const prefix = Buffer.from(text, "utf8")
+		.subarray(0, limit - marker.length)
+		.toString("utf8")
+		.replace(/�+$/g, "");
 	return { text: `${prefix}${TRUNCATION_MARKER}`, truncated: true, originalBytes };
 }
 
@@ -45,7 +48,10 @@ export function truncateUtf8Tail(text: string, maxBytes: number): BoundedText {
 	const marker = Buffer.from(TAIL_TRUNCATION_MARKER, "utf8");
 	if (marker.length >= limit) {
 		return {
-			text: bytes.subarray(originalBytes - limit).toString("utf8").replace(/^�+/g, ""),
+			text: bytes
+				.subarray(originalBytes - limit)
+				.toString("utf8")
+				.replace(/^�+/g, ""),
 			truncated: true,
 			originalBytes,
 		};

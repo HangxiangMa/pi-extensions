@@ -1,9 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-	assertSafeApiUrl,
-	loadGoogleGenaiConfig,
-	resolveGoogleGenaiAuth,
-} from "./config.js";
+import { assertSafeApiUrl, loadGoogleGenaiConfig, resolveGoogleGenaiAuth } from "./config.js";
 import { formatToolResult } from "./response-format.js";
 
 interface InteractionRequest {
@@ -18,7 +14,12 @@ interface FetchSignal {
 }
 
 export async function callInteraction(
-	request: { input: string; tool: Record<string, unknown>; timeoutMs?: number; timeoutAdvice?: string },
+	request: {
+		input: string;
+		tool: Record<string, unknown>;
+		timeoutMs?: number;
+		timeoutAdvice?: string;
+	},
 	ctx: ExtensionContext,
 	signal: AbortSignal | undefined,
 ) {

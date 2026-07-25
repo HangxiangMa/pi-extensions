@@ -2,25 +2,17 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { hasApiKey } from "./client.js";
 import { loadSettings } from "./settings.js";
 import {
+	allFirecrawlTools,
+	applyFirecrawlTools,
 	buildCommandGuide,
 	buildConfigMessage,
 	buildStatusMessage,
 	clearSettingsNotice,
-	applyFirecrawlTools,
 	recordSettingsNotice,
-	setSelectedFirecrawlTools,
 	showToolSelector,
 	updateFirecrawlTools,
-	allFirecrawlTools,
 } from "./tool-selector.js";
-import {
-	crawlStatusTool,
-	crawlTool,
-	FIRECRAWL_TOOL_NAMES,
-	mapTool,
-	scrapeTool,
-	searchTool,
-} from "./tools.js";
+import { crawlStatusTool, crawlTool, mapTool, scrapeTool, searchTool } from "./tools.js";
 
 const STATUS_KEY = "firecrawl";
 const COMMAND_COMPLETIONS = [
@@ -118,7 +110,10 @@ async function handleFirecrawlCommand(pi: ExtensionAPI, args: string, ctx: Comma
 
 async function showMenu(pi: ExtensionAPI, ctx: CommandContext) {
 	if (!ctx.hasUI) {
-		ctx.ui.notify(`${buildCommandGuide()}\n\n${await buildStatusMessage(pi)}`, hasApiKey() ? "info" : "warning");
+		ctx.ui.notify(
+			`${buildCommandGuide()}\n\n${await buildStatusMessage(pi)}`,
+			hasApiKey() ? "info" : "warning",
+		);
 		return;
 	}
 
@@ -168,6 +163,12 @@ export function commandCompletions(prefix: string) {
 	return matches.length > 0 ? matches : null;
 }
 
-export { cleanObject, formatPayload, jsonResult, normalizeApiUrl, parseResponseBody } from "./client.js";
+export {
+	cleanObject,
+	formatPayload,
+	jsonResult,
+	normalizeApiUrl,
+	parseResponseBody,
+} from "./client.js";
 export { installSettingsFileExclusively, normalizeFirecrawlSettings } from "./settings.js";
 export { formatPersistedSelection, orderedFirecrawlTools } from "./tool-selector.js";

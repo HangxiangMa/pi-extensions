@@ -141,7 +141,9 @@ const biomeFormatTool = defineTool({
 	parameters: Type.Object({
 		path: Type.String({ description: "File to format." }),
 		root: Type.Optional(
-			Type.String({ description: "Workspace root for the Biome language server. Defaults to cwd." }),
+			Type.String({
+				description: "Workspace root for the Biome language server. Defaults to cwd.",
+			}),
 		),
 		write: Type.Optional(
 			Type.Boolean({ description: "Write formatted text back to the file. Defaults to false." }),
@@ -191,7 +193,9 @@ const biomeFixTool = defineTool({
 	parameters: Type.Object({
 		path: Type.String({ description: "File to fix." }),
 		root: Type.Optional(
-			Type.String({ description: "Workspace root for the Biome language server. Defaults to cwd." }),
+			Type.String({
+				description: "Workspace root for the Biome language server. Defaults to cwd.",
+			}),
 		),
 		kind: Type.Optional(
 			Type.String({
@@ -347,7 +351,8 @@ function resolveBiomeFile(root: string, filePath: string) {
 	const resolvedPath = path.resolve(root, filePath);
 	if (!existsSync(resolvedPath)) throw new Error(`File does not exist: ${resolvedPath}`);
 	if (!statSync(resolvedPath).isFile()) throw new Error(`Expected a file: ${resolvedPath}`);
-	if (!isBiomeFile(resolvedPath)) throw new Error(`Expected a Biome-supported file: ${resolvedPath}`);
+	if (!isBiomeFile(resolvedPath))
+		throw new Error(`Expected a Biome-supported file: ${resolvedPath}`);
 	return resolvedPath;
 }
 
@@ -653,7 +658,7 @@ class LspClient {
 					didChangeConfiguration: { dynamicRegistration: true },
 					workspaceEdit: { documentChanges: true },
 					workspaceFolders: true,
-				}, 
+				},
 			},
 		});
 		this.notify("initialized", {});
@@ -845,7 +850,9 @@ class LspClient {
 }
 
 function isUnsupportedMethodError(error: unknown) {
-	return error instanceof Error && /method not found|not supported|unsupported/i.test(error.message);
+	return (
+		error instanceof Error && /method not found|not supported|unsupported/i.test(error.message)
+	);
 }
 
 function wait(ms: number) {

@@ -47,7 +47,10 @@ export function encodeKey(key: string) {
 }
 
 export function posixJoin(...parts: string[]) {
-	return parts.map((part) => trimSlashes(part)).filter(Boolean).join("/");
+	return parts
+		.map((part) => trimSlashes(part))
+		.filter(Boolean)
+		.join("/");
 }
 
 export function parentPaths(relativePath: string) {

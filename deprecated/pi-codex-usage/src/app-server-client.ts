@@ -179,16 +179,6 @@ class CodexAppServerClient {
 	}
 }
 
-function parseJsonObject(text: string, description: string): Record<string, unknown> {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(text) as unknown;
-	} catch (error) {
-		throw new Error(`${description} was not valid JSON: ${errorMessage(error)}`);
-	}
-	return assertObject(parsed, description);
-}
-
 function assertObject(value: unknown, description: string): Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		throw new Error(`${description} was not an object.`);
@@ -209,8 +199,4 @@ function redactErrorBody(body: string): string {
 function truncateEnd(value: string, maxChars: number): string {
 	if (value.length <= maxChars) return value;
 	return `${value.slice(0, maxChars - 1)}…`;
-}
-
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }

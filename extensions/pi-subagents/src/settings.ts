@@ -261,8 +261,7 @@ export function inspectCompletionDeliverySettings(): CompletionDeliverySettingsS
 		const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
 		const settings = normalizeSubagentSettings(raw);
 		if (!settings) throw new Error(`${SETTINGS_FILE} is not a valid settings object`);
-		const explicit =
-			isPlainObject(raw.stateful) && hasOwn(raw.stateful, "completionDelivery");
+		const explicit = isPlainObject(raw.stateful) && hasOwn(raw.stateful, "completionDelivery");
 		return {
 			path: configPath,
 			value: settings.stateful?.completionDelivery ?? DEFAULT_COMPLETION_DELIVERY,

@@ -1,14 +1,13 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { shutdownManagedBrowser } from "./browser-manager.js";
-import { loadSettings } from "./settings.js";
 import { state } from "./runtime.js";
+import { loadSettings } from "./settings.js";
 import {
 	allChromeDevtoolsTools,
 	applyChromeDevtoolsTools,
 	buildCommandGuide,
 	buildQuickstartMessage,
 	buildToolStatusMessage,
-	setSelectedChromeDevtoolsTools,
 	showToolSelector,
 	updateChromeDevtoolsTools,
 } from "./tool-selector.js";
@@ -104,16 +103,22 @@ async function handleChromeDevtoolsCommand(pi: ExtensionAPI, args: string, ctx: 
 			return;
 	}
 
-	ctx.ui.notify(`Unknown /chrome-devtools command: ${args.trim()}
+	ctx.ui.notify(
+		`Unknown /chrome-devtools command: ${args.trim()}
 
-${buildCommandGuide()}`, "warning");
+${buildCommandGuide()}`,
+		"warning",
+	);
 }
 
 async function showMenu(pi: ExtensionAPI, ctx: CommandContext) {
 	if (!ctx.hasUI) {
-		ctx.ui.notify(`${buildCommandGuide()}
+		ctx.ui.notify(
+			`${buildCommandGuide()}
 
-${await buildToolStatusMessage(pi)}`, "info");
+${await buildToolStatusMessage(pi)}`,
+			"info",
+		);
 		return;
 	}
 

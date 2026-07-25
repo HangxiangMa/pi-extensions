@@ -1,25 +1,13 @@
 import type { ChildProcess } from "node:child_process";
 import process from "node:process";
-import { startInhibitorProcess, stopInhibitorProcess } from "./inhibitor-process.js";
-import {
-	formatMode,
-	getInhibitorCommand,
-	type InhibitorCommand,
-	splitCommand,
-	windowsInhibitorScript,
-} from "./inhibitors.js";
-import {
-	type CaffeinateMode,
-	loadSettings,
-	normalizeCaffeinateSettings,
-	saveSettings,
-	settingsFilePath,
-} from "./settings.js";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { startInhibitorProcess, stopInhibitorProcess } from "./inhibitor-process.js";
+import { formatMode, getInhibitorCommand, type InhibitorCommand } from "./inhibitors.js";
+import { type CaffeinateMode, loadSettings, saveSettings, settingsFilePath } from "./settings.js";
 
 const STATUS_KEY = "caffeinate";
 const DISABLED_VALUES = new Set(["1", "true", "yes", "on"]);
@@ -110,7 +98,6 @@ export default function caffeinate(pi: ExtensionAPI) {
 			await handleCaffeinateCommand(args, ctx);
 		},
 	});
-
 }
 
 async function handleCaffeinateCommand(args: string, ctx: CommandContext) {
@@ -380,7 +367,9 @@ function describeState() {
 		return lines.join("\n");
 	}
 
-	lines.unshift("pi-caffeinate is idle and will keep the computer awake during the next agent run.");
+	lines.unshift(
+		"pi-caffeinate is idle and will keep the computer awake during the next agent run.",
+	);
 	return lines.join("\n");
 }
 

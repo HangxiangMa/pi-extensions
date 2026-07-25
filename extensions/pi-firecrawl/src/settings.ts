@@ -97,10 +97,7 @@ async function migrateLegacySettings(
 ): Promise<SettingsMigrationResult> {
 	const newPath = settingsFilePath();
 	try {
-		await installSettingsFileExclusively(
-			newPath,
-			`${JSON.stringify(settings, null, 2)}\n`,
-		);
+		await installSettingsFileExclusively(newPath, `${JSON.stringify(settings, null, 2)}\n`);
 	} catch (error) {
 		return {
 			kind: "failed",
@@ -181,8 +178,4 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 
 function formatError(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
-}
-
-function unique<T>(values: T[]) {
-	return Array.from(new Set(values));
 }

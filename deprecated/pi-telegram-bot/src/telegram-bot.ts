@@ -344,7 +344,10 @@ export default function telegram(pi: ExtensionAPI) {
 
 	const showTelegramCommandMenu = async (ctx: ExtensionContext) => {
 		if (!ctx.hasUI) {
-			ctx.ui.notify(buildLocalStatus(pi, ctx, getActiveConfig(), poller?.isRunning() ?? false), "info");
+			ctx.ui.notify(
+				buildLocalStatus(pi, ctx, getActiveConfig(), poller?.isRunning() ?? false),
+				"info",
+			);
 			return;
 		}
 

@@ -3,10 +3,7 @@ import { constants } from "node:fs";
 import { access, link, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import {
-	CHROME_DEVTOOLS_TOOL_NAMES,
-	type ChromeDevToolsToolName,
-} from "./tool-names.js";
+import { CHROME_DEVTOOLS_TOOL_NAMES, type ChromeDevToolsToolName } from "./tool-names.js";
 
 const NEW_SETTINGS_FILE_NAME = "pi-chrome-devtools.json";
 const LEGACY_SETTINGS_FILE_NAME = "pi-chrome-devtools-settings.json";
@@ -99,10 +96,7 @@ async function migrateLegacySettings(
 ): Promise<SettingsMigrationResult> {
 	const newPath = settingsFilePath();
 	try {
-		await installSettingsFileExclusively(
-			newPath,
-			`${JSON.stringify(settings, null, 2)}\n`,
-		);
+		await installSettingsFileExclusively(newPath, `${JSON.stringify(settings, null, 2)}\n`);
 	} catch (error) {
 		return {
 			kind: "failed",
@@ -134,7 +128,9 @@ async function fileExists(filePath: string) {
 	}
 }
 
-export function normalizeChromeDevtoolsSettings(value: unknown): ChromeDevToolsSettings | undefined {
+export function normalizeChromeDevtoolsSettings(
+	value: unknown,
+): ChromeDevToolsSettings | undefined {
 	if (!value || typeof value !== "object") return undefined;
 	const settings = value as { tools?: unknown; updatedAt?: unknown };
 	if (typeof settings.updatedAt !== "number") return undefined;
@@ -189,8 +185,4 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 
 function formatError(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
-}
-
-function unique<T>(values: T[]) {
-	return Array.from(new Set(values));
 }

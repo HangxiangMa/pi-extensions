@@ -72,7 +72,14 @@ type RuntimeState = {
 const STATUS_KEY = "auto-thinking";
 const COMMAND_NAME = "auto-thinking";
 const CONFIG_FILE_NAME = "pi-auto-thinking.json";
-const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const satisfies readonly ThinkingLevel[];
+const LEVELS = [
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+] as const satisfies readonly ThinkingLevel[];
 const MAX_RESPECT_MANUAL_TURNS = 20;
 
 const DEFAULT_CONFIG: Config = {
@@ -263,7 +270,8 @@ export default function autoThinking(pi: ExtensionAPI) {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			return;
 		}
-		if (runtime.lastDecision) ctx.ui.setStatus(STATUS_KEY, formatLastDecision(runtime.lastDecision));
+		if (runtime.lastDecision)
+			ctx.ui.setStatus(STATUS_KEY, formatLastDecision(runtime.lastDecision));
 	});
 
 	pi.registerCommand(COMMAND_NAME, {
@@ -276,7 +284,8 @@ export default function autoThinking(pi: ExtensionAPI) {
 
 function loadConfig(): LoadedConfig {
 	const configPath = getConfigPath();
-	if (!existsSync(configPath)) return { config: { ...DEFAULT_CONFIG }, path: configPath, warnings: [] };
+	if (!existsSync(configPath))
+		return { config: { ...DEFAULT_CONFIG }, path: configPath, warnings: [] };
 
 	try {
 		const raw = readFileSync(configPath, "utf8");
@@ -289,9 +298,7 @@ function loadConfig(): LoadedConfig {
 		return {
 			config: { ...DEFAULT_CONFIG },
 			path: configPath,
-			warnings: [
-				`Failed to load ${CONFIG_FILE_NAME}; using defaults. ${message}`,
-			],
+			warnings: [`Failed to load ${CONFIG_FILE_NAME}; using defaults. ${message}`],
 		};
 	}
 }
@@ -364,7 +371,12 @@ function readModelOverrides(value: unknown, warnings: string[]): Record<string, 
 	return overrides;
 }
 
-function readBoolean(value: unknown, fallback: boolean, field: string, warnings: string[]): boolean {
+function readBoolean(
+	value: unknown,
+	fallback: boolean,
+	field: string,
+	warnings: string[],
+): boolean {
 	if (value === undefined) return fallback;
 	if (typeof value === "boolean") return value;
 	warnings.push(`${field} must be a boolean; using ${fallback}.`);
@@ -505,7 +517,11 @@ function isModelLevelSupported(model: Model, level: ThinkingLevel): boolean {
 	return model.thinkingLevelMap?.[level] !== null;
 }
 
-function clampLevel(level: ThinkingLevel, minLevel: ThinkingLevel, maxLevel: ThinkingLevel): ThinkingLevel {
+function clampLevel(
+	level: ThinkingLevel,
+	minLevel: ThinkingLevel,
+	maxLevel: ThinkingLevel,
+): ThinkingLevel {
 	const low = Math.min(levelIndex(minLevel), levelIndex(maxLevel));
 	const high = Math.max(levelIndex(minLevel), levelIndex(maxLevel));
 	return LEVELS[Math.min(Math.max(levelIndex(level), low), high)];
@@ -600,7 +616,10 @@ function handleCommand(args: string, runtime: RuntimeState, ctx: ExtensionComman
 			ctx.ui.notify(formatHelp(), "info");
 			return;
 		default:
-			ctx.ui.notify(`Unknown /${COMMAND_NAME} command: ${args.trim()}\n\n${formatHelp()}`, "warning");
+			ctx.ui.notify(
+				`Unknown /${COMMAND_NAME} command: ${args.trim()}\n\n${formatHelp()}`,
+				"warning",
+			);
 	}
 }
 

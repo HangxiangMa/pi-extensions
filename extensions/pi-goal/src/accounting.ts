@@ -72,9 +72,7 @@ export function nonNegativeFiniteNumber(value: unknown) {
 }
 
 export function normalizeTokenBudget(value: unknown) {
-	return typeof value === "number" && Number.isSafeInteger(value) && value > 0
-		? value
-		: undefined;
+	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 export function assistantUsageTokens(value: unknown) {

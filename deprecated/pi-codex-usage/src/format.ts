@@ -186,10 +186,7 @@ function isPrimaryCodexSnapshot(snapshot: NormalizedRateLimitSnapshot): boolean 
 	);
 }
 
-function formatWindowLine(
-	window: NormalizedRateLimitWindow,
-	fallback: "5h" | "weekly",
-): string {
+function formatWindowLine(window: NormalizedRateLimitWindow, fallback: "5h" | "weekly"): string {
 	const label = `${formatWindowLabel(window, fallback, false)} limit:`;
 	return `  ${label.padEnd(LIMIT_VALUE_COLUMN)}${formatWindow(window)}`;
 }

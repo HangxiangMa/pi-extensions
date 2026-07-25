@@ -1,7 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
 	browserCandidateHint,
-	chromeLaunchCommand,
 	devToolsEndpoint,
 	endpointConfigHint,
 	endpointSourceLabel,
@@ -9,12 +8,9 @@ import {
 	launchHint,
 	launchModeLabel,
 } from "./browser-manager.js";
-import { loadSettings, saveSettings, settingsFilePath } from "./settings.js";
 import { state } from "./runtime.js";
-import {
-	CHROME_DEVTOOLS_TOOL_NAMES,
-	type ChromeDevToolsToolName,
-} from "./tool-names.js";
+import { loadSettings, saveSettings, settingsFilePath } from "./settings.js";
+import { CHROME_DEVTOOLS_TOOL_NAMES, type ChromeDevToolsToolName } from "./tool-names.js";
 
 type CommandContext = ExtensionCommandContext;
 const TOOL_SELECTOR_DONE = "Done";
@@ -187,9 +183,12 @@ export async function updateChromeDevtoolsTools(
 	action: string,
 ) {
 	await setSelectedChromeDevtoolsTools(pi, ctx, selectedTools);
-	ctx.ui.notify(`Chrome DevTools tools ${action}.
+	ctx.ui.notify(
+		`Chrome DevTools tools ${action}.
 
-${await buildToolStatusMessage(pi)}`, "info");
+${await buildToolStatusMessage(pi)}`,
+		"info",
+	);
 }
 
 export async function setSelectedChromeDevtoolsTools(

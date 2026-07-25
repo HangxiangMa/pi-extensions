@@ -22,9 +22,7 @@ export const PLAN_MODE_COMPLETE_PARAMS = {
 	},
 } as const;
 
-type NormalizePlanModeCompletionResult =
-	| { ok: true; plan: string }
-	| { ok: false; error: string };
+type NormalizePlanModeCompletionResult = { ok: true; plan: string } | { ok: false; error: string };
 
 export function normalizePlanModeCompletion(input: unknown): NormalizePlanModeCompletionResult {
 	if (!isRecord(input) || typeof input.plan !== "string") {

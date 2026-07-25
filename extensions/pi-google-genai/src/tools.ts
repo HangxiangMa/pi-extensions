@@ -2,15 +2,11 @@ import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	defineTool,
-	formatSize,
 	type ExtensionContext,
+	formatSize,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import {
-	cleanObject,
-	DEFAULT_TIMEOUT_MS,
-	MAX_TIMEOUT_MS,
-} from "./config.js";
+import { cleanObject, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS } from "./config.js";
 import { callInteraction } from "./interaction-client.js";
 
 const STATUS_KEY = "google-genai";
@@ -43,7 +39,9 @@ export function validateSearchTypes(searchTypes: unknown): SearchType[] | undefi
 }
 
 function isValidTimeoutMs(value: unknown): value is number {
-	return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_TIMEOUT_MS;
+	return (
+		typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_TIMEOUT_MS
+	);
 }
 
 export function validateTimeoutMs(timeoutMs: unknown): number | undefined {

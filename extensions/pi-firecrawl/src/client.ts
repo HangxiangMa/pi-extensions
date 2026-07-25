@@ -32,7 +32,9 @@ export async function firecrawlRequest(
 	const responseText = await response.text();
 	const payload = parseResponseBody(responseText);
 	if (!response.ok) {
-		throw new Error(`Firecrawl ${method} ${path} failed (${response.status}): ${formatPayload(payload)}`);
+		throw new Error(
+			`Firecrawl ${method} ${path} failed (${response.status}): ${formatPayload(payload)}`,
+		);
 	}
 	return payload;
 }

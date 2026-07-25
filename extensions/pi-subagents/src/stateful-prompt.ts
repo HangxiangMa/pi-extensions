@@ -1,14 +1,11 @@
 import type { AgentConfig } from "./agents.js";
+import { redactPrivateText } from "./context.js";
 import { resolveDefaultSubagentTimeoutMs } from "./execution.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
-import { redactPrivateText } from "./context.js";
 import type { ManagedAgent } from "./registry.js";
 
 export function buildStatefulTurnPrompt(
-	record: Pick<
-		ManagedAgent,
-		"context" | "history" | "mailbox" | "currentMailboxMessageIds"
-	>,
+	record: Pick<ManagedAgent, "context" | "history" | "mailbox" | "currentMailboxMessageIds">,
 	task: string,
 	maxBytes = DEFAULT_MAX_CONTEXT_BYTES,
 ): { text: string; truncated: boolean } {

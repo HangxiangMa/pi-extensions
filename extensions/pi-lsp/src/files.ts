@@ -19,7 +19,8 @@ export function directoryUri(directory: string) {
 
 export function resolveSupportedFile(adapter: LspServerAdapter, root: string, filePath: string) {
 	const resolvedPath = resolveWorkspacePath(root, filePath, "File path");
-	if (!existsSync(resolvedPath)) throw new Error(`${adapter.name} file does not exist: ${resolvedPath}`);
+	if (!existsSync(resolvedPath))
+		throw new Error(`${adapter.name} file does not exist: ${resolvedPath}`);
 	if (!isInsidePath(realpathSync(root), realpathSync(resolvedPath))) {
 		throw new Error(`File resolves outside workspace root: ${resolvedPath}`);
 	}
@@ -87,8 +88,17 @@ function collectPath(
 	);
 	for (const entry of entries) {
 		if (files.length >= limit) break;
-		if ((entry.isDirectory() || entry.isSymbolicLink()) && adapter.skipDirectories.has(entry.name)) continue;
-		collectPath(adapter, path.join(targetPath, entry.name), files, seen, visitedDirectories, realRoot, limit);
+		if ((entry.isDirectory() || entry.isSymbolicLink()) && adapter.skipDirectories.has(entry.name))
+			continue;
+		collectPath(
+			adapter,
+			path.join(targetPath, entry.name),
+			files,
+			seen,
+			visitedDirectories,
+			realRoot,
+			limit,
+		);
 	}
 }
 

@@ -50,10 +50,7 @@ export async function queryUsage(
 	return { ok: false, errors };
 }
 
-async function queryViaPiAuth(
-	ctx: ExtensionContext,
-	timeoutMs: number,
-): Promise<CodexUsageReport> {
+async function queryViaPiAuth(ctx: ExtensionContext, timeoutMs: number): Promise<CodexUsageReport> {
 	const auth = await resolvePiCodexAuth(ctx);
 	if (!auth) {
 		throw new Error(
