@@ -440,7 +440,7 @@ async function showBtwMenu(
 	);
 }
 
-async function loadHandoffIntoMainEditor(
+export async function loadHandoffIntoMainEditor(
 	draft: string,
 	ctx: ExtensionCommandContext,
 ): Promise<BtwHandoffDelivery> {
@@ -457,8 +457,9 @@ async function loadHandoffIntoMainEditor(
 	]);
 	if (action.kind === "close") return "closed";
 	if (action.kind === "back" || action.value === "Cancel") return "back";
-	if (action.value === "Append context") ctx.ui.setEditorText(`${existing}\n\n${draft}`);
-	else if (action.value === "Replace editor text") ctx.ui.setEditorText(draft);
+	if (action.value === "Append context") {
+		ctx.ui.setEditorText(`${ctx.ui.getEditorText()}\n\n${draft}`);
+	} else if (action.value === "Replace editor text") ctx.ui.setEditorText(draft);
 	else return "back";
 	ctx.ui.notify("Context loaded into the main editor. Review and submit when ready.", "info");
 	return "loaded";

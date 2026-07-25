@@ -112,11 +112,17 @@ export function segmentsFromTextRange(
 		const from = lineIndex === start.line ? start.column : 0;
 		const to = lineIndex === end.line ? end.column : characters.length;
 		const text = characters.slice(from, to).join("");
+		if (text) {
+			const previous = segments.at(-1);
+			if (previous?.role === line.role) previous.text += text;
+			else segments.push({ role: line.role, text });
+		}
 		const crossesSameRoleLine = lineIndex < end.line && lines[lineIndex + 1]?.role === line.role;
-		if (!text && !crossesSameRoleLine) continue;
-		const previous = segments.at(-1);
-		if (previous?.role === line.role) previous.text += `\n${text}`;
-		else segments.push({ role: line.role, text });
+		if (crossesSameRoleLine) {
+			const current = segments.at(-1);
+			if (current?.role === line.role) current.text += "\n";
+			else segments.push({ role: line.role, text: "\n" });
+		}
 	}
 	return segments;
 }
@@ -264,7 +270,7 @@ export class BtwTextRangeSelector implements Component {
 		const viewportHeight = Math.max(0, availableRows - SELECTOR_CHROME_ROWS);
 		this.keepCursorVisible(viewportHeight);
 		const textWidth = Math.max(1, safeWidth - visibleWidth("> Assistant │ "));
-		this.keepCursorHorizontallyVisible(Math.max(1, textWidth - 2));
+		this.keepCursorHorizontallyVisible(textWidth);
 		const range = this.getSelectionRange();
 		const lineRange = this.getLineSelectionRange();
 		const visible = this.lines.slice(this.scrollOffset, this.scrollOffset + viewportHeight);
@@ -495,10 +501,20 @@ export class BtwTextRangeSelector implements Component {
 	}
 
 	private keepCursorHorizontallyVisible(width: number): void {
-		if (this.cursor.column < this.horizontalOffset) this.horizontalOffset = this.cursor.column;
-		if (this.cursor.column >= this.horizontalOffset + width) {
-			this.horizontalOffset = this.cursor.column - width + 1;
+		const characters = [...(this.lines[this.cursor.line]?.text ?? "")];
+		const displayWidths = characters.map((character) =>
+			visibleWidth(escapeTerminalControls(character)),
+		);
+		const currentWidth = displayWidths[this.cursor.column] ?? 0;
+		let usedWidth = 1 + Math.min(currentWidth, Math.max(0, width - 1));
+		let offset = this.cursor.column;
+		for (let index = this.cursor.column - 1; index >= 0; index -= 1) {
+			const nextWidth = usedWidth + (displayWidths[index] ?? 0) + (index > 0 ? 1 : 0);
+			if (nextWidth > width) break;
+			usedWidth += displayWidths[index] ?? 0;
+			offset = index;
 		}
+		this.horizontalOffset = offset;
 	}
 
 	private finish(action: BtwTextRangeSelectorAction): void {

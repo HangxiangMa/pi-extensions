@@ -9,7 +9,12 @@ import type {
 } from "@earendil-works/pi-ai";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
-import { chooseBtwHandoff, type ResolvedBtwModel, runBtwThread } from "../src/btw.js";
+import {
+	chooseBtwHandoff,
+	loadHandoffIntoMainEditor,
+	type ResolvedBtwModel,
+	runBtwThread,
+} from "../src/btw.js";
 import {
 	BtwMenuSelector,
 	BtwTextRangeSelector,
@@ -571,6 +576,28 @@ test("side-thread command loop loads an explicit handoff without mutating the se
 	assert.equal(branch.length, 1);
 });
 
+test("appending a handoff re-reads editor text after the conflict menu closes", async () => {
+	let editor = "original editor";
+	const ctx = {
+		ui: {
+			getEditorText: () => editor,
+			custom: async () => {
+				editor = "newer editor";
+				return { kind: "select", value: "Append context" };
+			},
+			setEditorText: (text: string) => {
+				editor = text;
+			},
+			notify() {},
+		},
+	} as never;
+
+	const result = await loadHandoffIntoMainEditor("handoff", ctx);
+
+	assert.equal(result, "loaded");
+	assert.equal(editor, "newer editor\n\nhandoff");
+});
+
 test("empty transcript composer accepts the first side-thread question", () => {
 	const actions: unknown[] = [];
 	const tui = { terminal: { rows: 24 }, requestRender() {} };
@@ -654,6 +681,19 @@ test("promotion preserves expanded large-paste content in the composer draft", (
 	pager.handleInput("\u0012");
 
 	assert.deepEqual(actions, [{ kind: "promote", questionDraft: pasted }]);
+});
+
+test("character ranges preserve a selected newline at the next line start", () => {
+	const lines = buildBtwSelectionLines([
+		{ question: "foo\nbar", answer: "A", kind: "answered", response: response("A") },
+	]);
+
+	assert.deepEqual(segmentsFromTextRange(lines, { line: 0, column: 0 }, { line: 1, column: 0 }), [
+		{ role: "user", text: "foo\n" },
+	]);
+	assert.deepEqual(segmentsFromTextRange(lines, { line: 0, column: 3 }, { line: 1, column: 0 }), [
+		{ role: "user", text: "\n" },
+	]);
 });
 
 test("character ranges preserve exact text and role boundaries in either direction", () => {
@@ -827,6 +867,33 @@ test("text range selector keeps a horizontally moved character cursor visible", 
 
 	assert.ok(rendered.every((line) => visibleWidth(line) <= 24));
 	assert.match(rendered.join("\n"), /….*│I/);
+});
+
+test("text range selector measures terminal cells to keep a CJK cursor visible", () => {
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const selector = new BtwTextRangeSelector(
+		tui as never,
+		theme as never,
+		keybindings() as never,
+		[{ question: "界".repeat(12), answer: "A", kind: "answered", response: response("A") }],
+		() => undefined,
+	);
+	for (let index = 0; index < 10; index += 1) selector.handleInput("\u001b[C");
+	const rendered = selector.render(24);
+
+	assert.ok(rendered.every((line) => visibleWidth(line) <= 24));
+	assert.match(rendered[1] ?? "", /│/);
 });
 
 test("text range selector distinguishes back from closing the side thread", () => {
