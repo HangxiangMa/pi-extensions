@@ -47,7 +47,15 @@ export async function showGoalSettings(
 			ctx.ui.notify("Enter a positive whole number or Unlimited.", "warning");
 			continue;
 		}
-		if (!(await confirmLowerActiveLimit(runtime, ctx, result.field, limit))) continue;
+		const confirmation = await confirmLowerActiveLimit(runtime, ctx, result.field, limit);
+		if (!confirmation.apply) continue;
+		if (confirmation.goalId !== undefined && runtime.activeGoal?.id !== confirmation.goalId) {
+			ctx.ui.notify(
+				"The active goal changed while confirming the limit. No settings were changed.",
+				"warning",
+			);
+			continue;
+		}
 		const next = withLimit(runtime.settings, result.field, limit);
 		try {
 			applyGoalSettings(runtime, next, ctx, {
@@ -360,13 +368,16 @@ async function confirmLowerActiveLimit(
 	limit: number | null,
 ) {
 	const goal = runtime.activeGoal;
-	if (goal?.status !== "active" || limit === null) return true;
+	if (goal?.status !== "active" || limit === null) return { apply: true };
 	const used = field === "automaticTurns" ? goal.automaticModelTurns : goal.toolFreeRepeatCount;
-	if (used < limit) return true;
-	return ctx.ui.confirm(
-		"Apply reached safety limit?",
-		`The active goal has already used ${used}. Setting this limit to ${limit} will pause it immediately without deleting progress.`,
-	);
+	if (used < limit) return { apply: true };
+	return {
+		apply: await ctx.ui.confirm(
+			"Apply reached safety limit?",
+			`The active goal has already used ${used}. Setting this limit to ${limit} will pause it immediately without deleting progress.`,
+		),
+		goalId: goal.id,
+	};
 }
 
 function withLimit(settings: GoalSettings, field: LimitField, value: number | null): GoalSettings {

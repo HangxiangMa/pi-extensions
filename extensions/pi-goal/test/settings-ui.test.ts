@@ -448,6 +448,54 @@ test("settings screen saves changes in place and Escape waits for the save queue
 	assert.equal(state.settings.toolVisibility, "after-first-goal");
 });
 
+test("lowered limit confirmation cannot apply to a replacement goal", async () => {
+	const state = runtime();
+	const original = createGoal("original objective", undefined, 0);
+	original.automaticModelTurns = 5;
+	state.activeGoal = original;
+	const replacement = createGoal("replacement objective", undefined, 0);
+	replacement.automaticModelTurns = 5;
+	const saved: GoalSettings[] = [];
+	let screens = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		input: async () => "3",
+		confirm: async () => {
+			state.activeGoal = replacement;
+			return true;
+		},
+		custom: async (factory: unknown) => {
+			const selector = createCustomSelectorHarness(factory, 80);
+			if (screens++ === 0) {
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\r");
+			} else {
+				selector.handleInput("\u001b");
+			}
+			await new Promise((resolve) => setImmediate(resolve));
+			return selector.result;
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save(settings) {
+			saved.push(structuredClone(settings));
+		},
+	});
+
+	assert.equal(saved.length, 0);
+	assert.equal(
+		state.settings.continuationLimits.automaticTurns,
+		DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns,
+	);
+	assert.equal(state.activeGoal?.id, replacement.id);
+	assert.equal(state.activeGoal?.status, "active");
+	assert.match(context.notifications.at(-1)?.message ?? "", /goal changed/i);
+});
+
 test("settings screen resumes retained work after enabling the queue", async () => {
 	const state = runtime();
 	state.activeGoal = createGoal("current objective", undefined, 0);
