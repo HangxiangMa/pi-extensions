@@ -11,7 +11,7 @@ Resolve every inline review comment on PR #405 with focused regression coverage,
 - [x] Added explorer regressions and fixed terminal-safe width-bounded errors/placeholders, invalid history dates, cursor-owned blame, and detail-request cancellation/loading ownership.
 - [x] Added real-repository regressions and fixed no-newline hunk accounting, followed historical rename paths, and per-file ignored-directory status.
 - [x] Ran focused tests and `npm run check` (1,409 passing), inspected the seven-file package dry run, loaded isolated Pi, and fixed the adjacent empty-file cursor state found during the bounded sibling scan.
-- [ ] Commit and push the bounded fixes to `feat/pi-file-context`, reply to every review comment with evidence, and resolve every PR #405 review thread.
+- [x] Committed fixes as `736c67a`, pushed `feat/pi-file-context`, posted evidence replies to all 16 inline comments, and resolved all 16 PR #405 review threads.
 
 ## Completion Checklist
 
@@ -20,4 +20,4 @@ Resolve every inline review comment on PR #405 with focused regression coverage,
 - [x] File reads remain inside the project under path replacement races and normalize true file lines.
 - [x] Every rendered state is terminal-safe and width-safe; async cancellation cannot strand loading or stale blame.
 - [x] Git hunk, ignored status, and rename-history behavior match real repositories.
-- [ ] Current branch is clean, pushed, fully verified, and has no unresolved review threads.
+- [x] Current branch is clean, pushed, fully verified, and has no unresolved review threads.
