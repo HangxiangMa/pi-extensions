@@ -18,6 +18,7 @@ import { errorMessage, safeTerminalText } from "./sync-format.js";
 import {
 	saveTargetSwitchAction,
 	TARGET_SWITCH_ACTION_OPTIONS,
+	type TargetPullOutcome,
 	targetSwitchActionFromLabel,
 	targetSwitchActionLabel,
 } from "./target-switch.js";
@@ -27,7 +28,7 @@ export type SyncSettingsRoute = (
 	signal?: AbortSignal,
 	onCommit?: () => void,
 	target?: string,
-) => Promise<void>;
+) => Promise<TargetPullOutcome | undefined>;
 
 export async function showSyncSettings(ctx: ExtensionCommandContext, runRoute: SyncSettingsRoute) {
 	if (ctx.mode !== "tui") {
@@ -152,7 +153,6 @@ async function showSettingsList(
 				saveQueue = operation.catch(() => undefined);
 			},
 			() => closeAfterSaves(undefined),
-			{ enableSearch: true },
 		);
 		container.addChild(settingsList);
 		return {

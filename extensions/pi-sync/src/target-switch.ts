@@ -36,14 +36,18 @@ export async function saveTargetSwitchAction(action: TargetSwitchAction) {
 	});
 }
 
+export type TargetPullOutcome = "applied" | "cancelled";
+
+export class TargetPullRequiresUiError extends Error {}
+
 export interface TargetSwitchResult {
-	pullAttempted: boolean;
+	pullApplied: boolean;
 }
 
 export async function useSyncTarget(
 	ctx: ExtensionCommandContext,
 	name: string,
-	pullCurrentTarget?: (target: string) => Promise<void>,
+	pullCurrentTarget?: (target: string) => Promise<TargetPullOutcome | undefined>,
 ): Promise<TargetSwitchResult> {
 	const normalized = name.trim();
 	if (!normalized) throw new Error("Usage: /sync use <target>");
@@ -51,9 +55,14 @@ export async function useSyncTarget(
 	const before = await readLocalConfigObject();
 	if (before?.version === 2 && before.activeTarget === normalized) {
 		ctx.ui.notify(`Target “${safeTerminalText(normalized)}” is already current.`, "info");
-		return { pullAttempted: false };
+		return { pullApplied: false };
 	}
 	const action = await loadTargetSwitchAction();
+	if (action === "pull" && !ctx.hasUI) {
+		throw new TargetPullRequiresUiError(
+			`Automatic target pulls require interactive confirmation; target “${safeTerminalText(normalized)}” was not switched. Use TUI or RPC mode.`,
+		);
+	}
 	let switched = false;
 	await updateLocalConfig((current) => {
 		if (current.version !== 2) throw new Error("Target switching requires version 2 settings.");
@@ -63,13 +72,13 @@ export async function useSyncTarget(
 	});
 	if (!switched) {
 		ctx.ui.notify(`Target “${safeTerminalText(normalized)}” is already current.`, "info");
-		return { pullAttempted: false };
+		return { pullApplied: false };
 	}
 	setSyncTargetCompletions(await configuredTargetNames());
 
 	if (action === "switch-only") {
 		ctx.ui.notify(`Switched to “${safeTerminalText(normalized)}”. No files were pulled.`, "info");
-		return { pullAttempted: false };
+		return { pullApplied: false };
 	}
 	if (action === "ask") {
 		if (ctx.mode !== "tui") {
@@ -77,7 +86,7 @@ export async function useSyncTarget(
 				`Switched to “${safeTerminalText(normalized)}”. No files were pulled because confirmation requires TUI mode; run /sync pull to apply the target.`,
 				"info",
 			);
-			return { pullAttempted: false };
+			return { pullApplied: false };
 		}
 		const confirmed = await ctx.ui.confirm(
 			`Review a pull for target “${safeTerminalText(normalized)}” now?`,
@@ -88,7 +97,7 @@ export async function useSyncTarget(
 				`Switched to “${safeTerminalText(normalized)}”; files were not pulled.`,
 				"info",
 			);
-			return { pullAttempted: false };
+			return { pullApplied: false };
 		}
 	}
 
@@ -99,6 +108,12 @@ export async function useSyncTarget(
 	if (!pullCurrentTarget) {
 		throw new Error(`Switched to “${safeTerminalText(normalized)}”, but pull is unavailable.`);
 	}
-	await pullCurrentTarget(normalized);
-	return { pullAttempted: true };
+	const pullOutcome = await pullCurrentTarget(normalized);
+	if (pullOutcome === "cancelled") {
+		ctx.ui.notify(
+			`Pull cancelled; target “${safeTerminalText(normalized)}” remains active and synced files were not changed.`,
+			"info",
+		);
+	}
+	return { pullApplied: pullOutcome === "applied" };
 }

@@ -145,7 +145,6 @@ async function showDraftEditor(
 			getSettingsListTheme(),
 			(id, newValue) => updateDraft(draft, id, newValue === INCLUDED),
 			() => done(undefined),
-			{ enableSearch: true },
 		);
 		container.addChild(settingsList);
 		container.addChild(hint);

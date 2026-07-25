@@ -86,7 +86,7 @@ import {
 	snapshotsMatch,
 	syncPolicyChanged,
 } from "./sync-state.js";
-import { useSyncTarget } from "./target-switch.js";
+import { TargetPullRequiresUiError, useSyncTarget } from "./target-switch.js";
 import type {
 	CommandOptions,
 	LatestPointer,
@@ -218,8 +218,7 @@ async function executeCommand(
 				await withLock("push", () => push(ctx, options));
 				return;
 			case "pull":
-				await withLock("pull", () => pull(ctx, options));
-				return;
+				return await withLock("pull", () => pull(ctx, options));
 			case "sync":
 				await withLock("sync", () => syncBoth(ctx, options));
 				return;
@@ -238,6 +237,7 @@ async function executeCommand(
 	} catch (error) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		if (signal?.aborted && error instanceof Error && error.name === "AbortError") return;
+		if (error instanceof TargetPullRequiresUiError) throw error;
 		ctx.ui.notify(errorMessage(error), "error");
 	}
 }
@@ -555,7 +555,7 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 	) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		ctx.ui.notify("Pull cancelled.", "info");
-		return;
+		return "cancelled" as const;
 	}
 
 	options.onCommit?.();
@@ -589,6 +589,7 @@ async function pull(ctx: ExtensionCommandContext | ExtensionContext, options: Co
 		);
 	}
 	if (options.reload) await maybeReload(ctx);
+	return "applied" as const;
 }
 
 async function syncBoth(ctx: ExtensionCommandContext | ExtensionContext, options: CommandOptions) {
