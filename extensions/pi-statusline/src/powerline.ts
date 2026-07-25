@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { ansiStyle } from "./ansi.js";
 import { resolvePreset } from "./presets/index.js";
 import type { BlockColors, PowerlinePreset } from "./presets/types.js";
@@ -79,7 +79,8 @@ function fitPowerlineSegments(
 		}
 		fitted.splice(removalIndex, 1);
 	}
-	return truncateToWidth(joinPowerlineSegments(fitted, config), width, "");
+	const rendered = joinPowerlineSegments(fitted, config);
+	return visibleWidth(rendered) <= width ? rendered : "";
 }
 
 export function powerlineExtensionSeparator(

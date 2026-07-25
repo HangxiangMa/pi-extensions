@@ -197,14 +197,14 @@ test("responsive fitting preserves explicit row boundaries and fits every render
 	assert.ok(lines.every((line) => visibleWidth(line) <= 15));
 });
 
-test("responsive fitting truncates one oversized segment and preserves empty explicit rows", () => {
+test("responsive fitting removes one oversized segment and preserves empty explicit rows", () => {
 	const config = createDefaultConfig();
 	const oversized = renderPowerlineStatusline(
 		8,
 		[segment("model", "A VERY LONG MODEL", "header")],
 		config,
 	);
-	assert.ok(visibleWidth(oversized) <= 8);
+	assert.equal(oversized, "");
 
 	const multiline = renderPowerlineStatusline(
 		20,
