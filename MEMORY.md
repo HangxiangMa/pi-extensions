@@ -46,6 +46,8 @@
 - Symptom: Plan mode can skip limited-shell validation for an effective `bash` override. Cause: built-in-compatible overrides retain the canonical name but replace built-in source metadata. Fix: enforce the shell policy by the canonical `bash` name, regardless of provenance.
 - Read-looking Git commands can invoke configured helpers implicitly: content-producing `diff`/`log`/`show`/`blame`, queried `remote show`, and abbreviated `cat-file`/`grep` flags need explicit helper-disabling guards or command-specific prefix rejection.
 - GitHub CLI read commands can invoke configured pagers from `GH_PAGER`, `PAGER`, or gh config; plan-mode allowlists should require non-paged output such as `--json <fields>` instead of accepting plain text views.
+- Git porcelain v1 status paths stay repository-root-relative even when Git runs from a nested project directory; strip `git rev-parse --show-prefix` before joining status with project-relative discovery paths.
+- `git log --follow` must retain each entry's historical pathname; loading a pre-rename commit with the current path falsely reports that the file is absent.
 - Root tests create temporary Git commits and inherit global signing settings; if 1Password signing is unavailable, run verification with command-scoped `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false` instead of changing user config.
 - Root Biome honors `.gitignore`; never add a blanket `src/` rule because it hides extension source from repository checks. Exclude only exact generated bundles and verify them with reproducible build checks.
 - `git worktree list --porcelain` can omit stale administrative entries that `git worktree prune` will still delete. Inspect `$GIT_COMMON_DIR/worktrees/*` directly; hard-stop staged indexes, missing branch refs, and unreachable current detached HEADs, but name reflog/pseudoref/`FETCH_HEAD`-only historical OIDs in an exact risk-bound confirmation so ordinary rebase/reset history does not make cleanup impossible.
@@ -66,6 +68,7 @@
 - If a goal-owned send becomes stale during async input preflight, consume it in the `input` hook; aborting from `before_agent_start` can be too late because the new agent run has not started yet.
 - Symptom: claiming a streaming extension follow-up in `input` charges prior in-flight output, while deferring only to `before_agent_start` can strand it. Cause: Pi emits `input` when queueing, but same-run queued messages do not emit `before_agent_start`, and steers run before follow-ups. Fix: retain owned markers through input; track bounded prompt fingerprints for both delivery modes; and only let the matching follow-up reclassify ownership, reset user safety, and release stale tools at its actual start.
 - Custom `pi.sendMessage` traffic bypasses `input`, and custom queues are absent from `ctx.hasPendingMessages()`. When cleanup ownership is ambiguous, let a current custom `message_start` claim unrelated work; otherwise abort at context transformation before the provider adapter receives the signal.
+- Pi input transforms chain before downstream handlers can return `handled`; context that must survive downstream rejection should be retained and injected from the accepted `before_agent_start` boundary instead of mutating the draft in `input`.
 - Symptom: completed pi-goal state can retain `activeStartedAt` after wrapping usage accounting. Cause: a wrapper defaulted clock continuation to `true` instead of preserving `goal.status === "active"`. Fix: preserve status-dependent defaults when centralizing `updateGoalUsage`.
 - Symptom: PR status shows no issue comments but inline review comments exist. Cause: `gh pr view --json comments,reviews` omits pull review comment bodies. Fix: use `gh api repos/OWNER/REPO/pulls/NUMBER/comments` plus issue comments/reviews when actual PR review comments are needed.
 - Symptom: Chrome DevTools `/json/new` may reject unsafe `GET`. Cause: modern Chrome expects `PUT` for target creation. Fix: use `PUT /json/new?${encodeURIComponent(url)}`.
@@ -117,6 +120,7 @@
 
 ### General
 
+- Prefer direct, user-owned context selection; avoid dedicated shortcuts or manual copy steps for routine quoting workflows.
 - Prefer reading GitHub issue and pull request links with `gh --json` first; use web tools only when `gh` cannot access the needed content.
 - Live provider smokes are acceptable when relevant, but stop after one clear external or entitlement failure; use deterministic tests instead of repeatedly retrying unless the user explicitly asks.
 - Keep a predecessor extension active while its successor soaks; move it to `deprecated/` only after an explicit follow-up decision.

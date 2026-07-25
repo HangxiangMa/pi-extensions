@@ -40,7 +40,7 @@ doctor package="@narumitw/pi-chrome-devtools":
 
 # Show npm visibility/version information for all extension packages
 doctor-all:
-    for package_json in extensions/*/package.json; do package="$(node -p "require('./$package_json').name")"; just doctor "$package"; done
+    shopt -s nullglob; for package_json in extensions/*/package.json experimental/*/package.json; do package="$(node -p "require('./$package_json').name")"; just doctor "$package"; done
 
 # Make an already-published scoped npm package public if npm view returns 404
 # This does not create a package. For a brand-new package, first run:
@@ -56,26 +56,26 @@ _validate-extension-name name:
 # Preview the package that npm would publish
 # Usage: just pack subagents
 pack name: (_validate-extension-name name)
-    name={{quote(name)}}; package="$(node -p "require('./extensions/pi-' + process.argv[1] + '/package.json').name" "$name")"; npm --workspace "$package" pack --dry-run
+    name={{quote(name)}}; package_json="./extensions/pi-$name/package.json"; if [[ ! -f "$package_json" ]]; then package_json="./experimental/pi-$name/package.json"; fi; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; npm --workspace "$package" pack --dry-run
 
 # Try a package from this working tree as a temporary pi package
 # Usage: just try subagents
 try name: (_validate-extension-name name)
-    name={{quote(name)}}; pi -e "./extensions/pi-$name"
+    name={{quote(name)}}; extension_dir="./extensions/pi-$name"; if [[ ! -d "$extension_dir" ]]; then extension_dir="./experimental/pi-$name"; fi; [[ -d "$extension_dir" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; pi -e "$extension_dir"
 
 # Start a fresh Pi session with every local extension package loaded
 try-all:
-    args=(); for package_json in ./extensions/pi-*/package.json; do args+=(-e "$(dirname "$package_json")"); done; pi -ne "${args[@]}"
+    shopt -s nullglob; args=(); for package_json in ./extensions/pi-*/package.json ./experimental/pi-*/package.json; do args+=(-e "$(dirname "$package_json")"); done; pi -ne "${args[@]}"
 
 # Install a package through pi, falling back to the local workspace if unpublished
 # Usage: just install subagents
 install name: (_validate-extension-name name)
-    name={{quote(name)}}; package="$(node -p "require('./extensions/pi-' + process.argv[1] + '/package.json').name" "$name")"; if npm view "$package" version >/dev/null 2>&1; then pi install "npm:$package"; else echo "$package is not published; installing local workspace package instead."; pi install "./extensions/pi-$name"; fi
+    name={{quote(name)}}; extension_dir="./extensions/pi-$name"; if [[ ! -d "$extension_dir" ]]; then extension_dir="./experimental/pi-$name"; fi; package_json="$extension_dir/package.json"; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; if npm view "$package" version >/dev/null 2>&1; then pi install "npm:$package"; else echo "$package is not published; installing local workspace package instead."; pi install "$extension_dir"; fi
 
 # Manually publish one production or experimental package, skipping an existing version
 # Usage: just publish subagents
 publish name: (_validate-extension-name name)
-    name={{quote(name)}}; package_json="./extensions/pi-$name/package.json"; if [[ ! -f "$package_json" ]]; then package_json="./extensions/experimental/pi-$name/package.json"; fi; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; if [[ "$package_json" == ./extensions/experimental/* ]]; then echo "WARNING: manually publishing experimental Pi extension pi-$name; automated workflows exclude it." >&2; fi; package="$(node -p "require(process.argv[1]).name" "$package_json")"; version="$(node -p "require(process.argv[1]).version" "$package_json")"; if npm view "$package@$version" version >/dev/null 2>&1; then echo "$package@$version already exists; skipping publish."; else npm --workspace "$package" pack --dry-run; npm --workspace "$package" publish --access public; fi
+    name={{quote(name)}}; package_json="./extensions/pi-$name/package.json"; if [[ ! -f "$package_json" ]]; then package_json="./experimental/pi-$name/package.json"; fi; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; if [[ "$package_json" == ./experimental/* ]]; then echo "WARNING: manually publishing experimental Pi extension pi-$name; automated workflows exclude it." >&2; fi; package="$(node -p "require(process.argv[1]).name" "$package_json")"; version="$(node -p "require(process.argv[1]).version" "$package_json")"; if npm view "$package@$version" version >/dev/null 2>&1; then echo "$package@$version already exists; skipping publish."; else npm --workspace "$package" pack --dry-run; npm --workspace "$package" publish --access public; fi
 
 # Publish all production extension packages to npm; experimental packages are excluded
 publish-all:
