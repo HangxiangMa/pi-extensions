@@ -248,10 +248,7 @@ export class ImageDropRuntime {
 		if (generation !== this.generation) return false;
 		if (batch.publicState().phase !== "ready") {
 			this.restoreEditor(ctx, text);
-			ctx.ui.notify(
-				"Images could not be updated for the current auto-resize setting.",
-				"warning",
-			);
+			ctx.ui.notify("Images could not be updated for the current auto-resize setting.", "warning");
 			this.updateWidget(ctx);
 			return false;
 		}

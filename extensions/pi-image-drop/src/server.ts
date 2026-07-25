@@ -11,6 +11,7 @@ import type { ImageDropSettings } from "./settings.js";
 
 const JSON_LIMIT = 64 * 1024;
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,80}$/;
+const CSP_NONCE_PLACEHOLDER = "__PI_CSP_NONCE__";
 
 export interface ImageDropServerOptions {
 	batch: BatchStore;
@@ -47,6 +48,7 @@ export class ImageDropServer {
 	readonly origin: string;
 	private bootstrapToken?: string;
 	private readonly sessionSecret = token();
+	private readonly cspNonce = token();
 	private readonly cookieName = `pi_image_drop_${randomBytes(8).toString("hex")}`;
 	private readonly abortController = new AbortController();
 	private readonly sockets = new Set<Socket>();
@@ -463,7 +465,11 @@ export class ImageDropServer {
 	}
 
 	private async asset(response: ServerResponse, name: string, contentType: string): Promise<void> {
-		const data = await readAsset(name);
+		const asset = await readAsset(name);
+		const data =
+			name === "index.html"
+				? Buffer.from(asset.toString("utf8").replaceAll(CSP_NONCE_PLACEHOLDER, this.cspNonce))
+				: asset;
 		response.setHeader("Content-Type", contentType);
 		response.setHeader("Content-Length", data.byteLength);
 		response.writeHead(200).end(data);
@@ -473,7 +479,7 @@ export class ImageDropServer {
 		response.setHeader("Cache-Control", "no-store");
 		response.setHeader(
 			"Content-Security-Policy",
-			"default-src 'self'; img-src 'self' blob:; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+			`default-src 'self'; img-src 'self' blob:; script-src 'self'; style-src 'self' 'nonce-${this.cspNonce}'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
 		);
 		response.setHeader("Referrer-Policy", "no-referrer");
 		response.setHeader("X-Content-Type-Options", "nosniff");

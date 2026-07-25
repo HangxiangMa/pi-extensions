@@ -56,6 +56,7 @@
 - Bounded request-dedup caches must evict only settled records; evicting an in-flight promise lets a repeated request id start the mutation twice.
 - New framework-free browser modules must be added to the authenticated server asset allowlist as well as the package; cover each runtime module with an HTTP asset test and pack dry run.
 - Radix Themes `Button`/`IconButton` elements inside the WebUI composer form default to submit semantics unless given `type="button"`; set it explicitly on preview, retry, removal, and other non-send actions.
+- Radix modal primitives can inject `react-remove-scroll` styles; loopback frontends with restrictive CSP must provide a per-page style nonce through `__webpack_nonce__` rather than allowing unsafe inline styles.
 - Lease snapshots and non-replayed lease events must carry and compare a monotonic generation; an older HTTP snapshot must never clear stale state established by a newer SSE event.
 - Pi's extension `sendUserMessage()` is fire-and-forget, so browser APIs must explicitly preflight idle model/auth state before acknowledging; final message projection must run in a later task because subsequent `message_end` handlers can replace the message in place.
 - Pi `tool_execution_end` omits args, so replacement-style tool projections must carry forward sanitized args from start/update; async shutdown must generation-check after slow cleanup before clearing replacement-session state.

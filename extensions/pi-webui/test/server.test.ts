@@ -1035,10 +1035,10 @@ test("empty SSE streams flush immediately and remain available for later events"
 		assert.equal(response.status, 200);
 		const reader = response.body?.getReader();
 		assert.ok(reader);
-		const connected = new TextDecoder().decode((await reader.read()).value);
+		const connected = await readStreamUntil(reader, ": connected");
 		assert.match(connected, /: connected/);
 		conversation.setActivity("running");
-		const update = new TextDecoder().decode((await reader.read()).value);
+		const update = await readStreamUntil(reader, '"type":"activity"');
 		assert.match(update, /"type":"activity"/);
 		controller.abort();
 		await reader.cancel().catch(() => undefined);
@@ -1048,7 +1048,7 @@ test("empty SSE streams flush immediately and remain available for later events"
 });
 
 test("new SSE streams receive the current lease before relying on broadcasts", async () => {
-	const { conversation, server } = await harness();
+	const { server } = await harness();
 	try {
 		const cookie = await authenticate(server);
 		await takeLease(server, cookie, "first");
@@ -1060,11 +1060,7 @@ test("new SSE streams receive the current lease before relying on broadcasts", a
 		});
 		const reader = response.body?.getReader();
 		assert.ok(reader);
-		let text = new TextDecoder().decode((await reader.read()).value);
-		if (!text.includes("event: lease")) {
-			conversation.setActivity("running");
-			text += new TextDecoder().decode((await reader.read()).value);
-		}
+		const text = await readStreamUntil(reader, "event: lease");
 		assert.match(text, /event: lease/);
 		assert.match(text, /"activeClientId":"second"/);
 		assert.match(text, /"generation":2/);
@@ -1088,8 +1084,7 @@ test("SSE replays retained events and sends a snapshot after a sequence gap", as
 		assert.equal(response.status, 200);
 		const reader = response.body?.getReader();
 		assert.ok(reader);
-		const chunk = await reader.read();
-		const text = new TextDecoder().decode(chunk.value);
+		const text = await readStreamUntil(reader, '"type":"message"');
 		assert.match(text, /"type":"message"/);
 		controller.abort();
 		await reader.cancel().catch(() => undefined);
@@ -1119,8 +1114,7 @@ test("SSE sequence gaps receive an authoritative snapshot", async () => {
 		});
 		const reader = response.body?.getReader();
 		assert.ok(reader);
-		const chunk = await reader.read();
-		const text = new TextDecoder().decode(chunk.value);
+		const text = await readStreamUntil(reader, "event: snapshot");
 		assert.match(text, /event: snapshot/);
 		assert.match(text, /"sequence":2/);
 		controller.abort();
@@ -1163,6 +1157,38 @@ test("close ends connections and is idempotent", async () => {
 	await server.close();
 	await assert.rejects(() => fetch(`${server.origin}/api/state`));
 });
+
+async function readStreamUntil(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+	marker: string,
+): Promise<string> {
+	let text = "";
+	while (!text.includes(marker)) {
+		const chunk = await readWithTimeout(reader);
+		if (chunk.done) break;
+		text += new TextDecoder().decode(chunk.value);
+		if (new TextEncoder().encode(text).byteLength > 64 * 1024) {
+			throw new Error(`SSE marker not found: ${marker}`);
+		}
+	}
+	return text;
+}
+
+async function readWithTimeout(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			reader.read(),
+			new Promise<never>((_resolve, reject) => {
+				timeout = setTimeout(() => reject(new Error("Timed out waiting for SSE data")), 2_000);
+			}),
+		]);
+	} finally {
+		clearTimeout(timeout);
+	}
+}
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
