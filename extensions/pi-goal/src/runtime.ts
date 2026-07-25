@@ -57,6 +57,7 @@ export interface CompletedGoalRun {
 
 export interface StatusContext {
 	cwd: string;
+	mode?: "tui" | "rpc" | "json" | "print";
 	ui: {
 		confirm: (title: string, message: string) => Promise<boolean>;
 		notify: (message: string, level?: "info" | "warning" | "error") => void;
@@ -122,6 +123,22 @@ interface GoalTerminalDetails {
 	reason?: string;
 }
 
+export interface GoalSettingsRuntimeSnapshot {
+	settings: GoalSettings;
+	activeGoal?: ActiveGoal;
+	queueFrozen: boolean;
+	queueFreezeAwaitingSettle: boolean;
+	continuationIntent?: ContinuationTicket;
+	continuationDelivery?: ContinuationTicket;
+	goalRecovery?: GoalRecovery;
+	budgetWrapUp?: BudgetWrapUp;
+	guardAbortGoalId?: string;
+	staleGoalToolCallsBlocked: boolean;
+	cancelledContinuationMarkers: string[];
+	terminalDetails?: GoalTerminalDetails;
+	toolVisibility: GoalToolVisibilitySnapshot;
+}
+
 interface PendingGoalPrompt {
 	goalId: string;
 	resetSafetyEpoch: boolean;
@@ -146,6 +163,8 @@ const CONTRADICTORY_COMPLETION_PATTERNS = [
 ] as const;
 // One instance belongs to one extension factory. It owns all mutable session state
 // and the cross-cutting invariants used by command and lifecycle orchestration.
+// Keep this state machine cohesive despite its size: prompt ownership, continuation,
+// budget, safety, and tool-policy transitions share ordering-sensitive invariants.
 export class GoalRuntime {
 	settings: GoalSettings = DEFAULT_GOAL_SETTINGS;
 	activeGoal?: ActiveGoal;
@@ -154,6 +173,7 @@ export class GoalRuntime {
 	queuedGoals: ActiveGoal[] = [];
 	pendingQueueAction?: PendingQueueAction;
 	queueFrozen = false;
+	queueFreezeAwaitingSettle = false;
 	completionStatusTimer?: NodeJS.Timeout;
 	continuationIntent?: ContinuationTicket;
 	continuationDelivery?: ContinuationTicket;
@@ -461,13 +481,13 @@ export class GoalRuntime {
 		return this.pauseGoalForSafety(ctx, "continuation_limit", abortTurn);
 	}
 
-	enforceNoProgressLimit(ctx: StatusContext) {
+	enforceNoProgressLimit(ctx: StatusContext, abortTurn = false) {
 		const goal = this.activeGoal;
 		const limit = this.settings.continuationLimits.noProgressTurns;
 		if (goal?.status !== "active" || limit === null || goal.toolFreeRepeatCount < limit) {
 			return false;
 		}
-		return this.pauseGoalForSafety(ctx, "no_progress", false);
+		return this.pauseGoalForSafety(ctx, "no_progress", abortTurn);
 	}
 
 	pauseGoalForSafety(ctx: StatusContext, cause: SafetyPauseCause, abortTurn: boolean) {
@@ -734,6 +754,7 @@ export class GoalRuntime {
 		this.queuedGoals = [];
 		this.pendingQueueAction = undefined;
 		this.queueFrozen = false;
+		this.queueFreezeAwaitingSettle = false;
 		this.clearPersistedGoal(ctx.cwd, clearedGoal, reason);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		// Do not clear goalToolsUnlocked: after first activation, keep tools visible
@@ -829,6 +850,50 @@ export class GoalRuntime {
 			goalToolsUnlocked: this.goalToolsUnlocked,
 			goalToolsHiddenByPolicy: [...this.goalToolsHiddenByPolicy],
 		};
+	}
+
+	snapshotSettingsApplicationState(): GoalSettingsRuntimeSnapshot {
+		return {
+			settings: structuredClone(this.settings),
+			activeGoal: this.activeGoal ? structuredClone(this.activeGoal) : undefined,
+			queueFrozen: this.queueFrozen,
+			queueFreezeAwaitingSettle: this.queueFreezeAwaitingSettle,
+			continuationIntent: this.continuationIntent
+				? structuredClone(this.continuationIntent)
+				: undefined,
+			continuationDelivery: this.continuationDelivery
+				? structuredClone(this.continuationDelivery)
+				: undefined,
+			goalRecovery: this.goalRecovery ? structuredClone(this.goalRecovery) : undefined,
+			budgetWrapUp: this.budgetWrapUp ? structuredClone(this.budgetWrapUp) : undefined,
+			guardAbortGoalId: this.guardAbortGoalId,
+			staleGoalToolCallsBlocked: this.staleGoalToolCallsBlocked,
+			cancelledContinuationMarkers: [...this.cancelledContinuationMarkers],
+			terminalDetails: this.terminalDetails ? structuredClone(this.terminalDetails) : undefined,
+			toolVisibility: this.snapshotGoalToolVisibility(),
+		};
+	}
+
+	restoreSettingsApplicationState(snapshot: GoalSettingsRuntimeSnapshot) {
+		this.settings = structuredClone(snapshot.settings);
+		this.activeGoal = snapshot.activeGoal ? structuredClone(snapshot.activeGoal) : undefined;
+		this.queueFrozen = snapshot.queueFrozen;
+		this.queueFreezeAwaitingSettle = snapshot.queueFreezeAwaitingSettle;
+		this.continuationIntent = snapshot.continuationIntent
+			? structuredClone(snapshot.continuationIntent)
+			: undefined;
+		this.continuationDelivery = snapshot.continuationDelivery
+			? structuredClone(snapshot.continuationDelivery)
+			: undefined;
+		this.goalRecovery = snapshot.goalRecovery ? structuredClone(snapshot.goalRecovery) : undefined;
+		this.budgetWrapUp = snapshot.budgetWrapUp ? structuredClone(snapshot.budgetWrapUp) : undefined;
+		this.guardAbortGoalId = snapshot.guardAbortGoalId;
+		this.staleGoalToolCallsBlocked = snapshot.staleGoalToolCallsBlocked;
+		this.cancelledContinuationMarkers = new Set(snapshot.cancelledContinuationMarkers);
+		this.terminalDetails = snapshot.terminalDetails
+			? structuredClone(snapshot.terminalDetails)
+			: undefined;
+		this.restoreGoalToolVisibility(snapshot.toolVisibility);
 	}
 
 	restoreGoalToolVisibility(snapshot: GoalToolVisibilitySnapshot) {

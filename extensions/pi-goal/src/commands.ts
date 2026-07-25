@@ -1,5 +1,6 @@
-import { currentTokenTotal } from "./accounting.js";
+import { checkpointGoalActiveTime, currentTokenTotal } from "./accounting.js";
 import { validateObjective } from "./command.js";
+import { safeGoalMenuText } from "./menu.js";
 import type { ActiveGoal } from "./persistence.js";
 import { buildGoalPrompt, buildObjectiveUpdatedPrompt, buildResumePrompt } from "./prompts.js";
 import {
@@ -7,6 +8,7 @@ import {
 	appendGoal,
 	createQueuedGoal,
 	dropLastGoal as dropLastQueuedGoal,
+	goalQueueIdentity,
 	prioritizeGoal as prioritizeQueuedGoal,
 	skipGoal as skipQueuedGoal,
 } from "./queue.js";
@@ -53,13 +55,34 @@ export class GoalCommandController {
 		const existingGoal =
 			this.runtime.activeGoal?.status !== "complete" ? this.runtime.activeGoal : undefined;
 		const existingQueuedGoals = [...this.runtime.queuedGoals];
+		const existingQueueIdentity = goalQueueIdentity(
+			this.runtime.activeGoal,
+			this.runtime.queuedGoals,
+			this.runtime.pendingQueueAction,
+		);
 		if (existingGoal) {
+			const queuedRemovalPreview =
+				existingQueuedGoals.length > 0
+					? `\n\nQueued goals also removed:\n${existingQueuedGoals
+							.map((goal, index) => `${index + 1}. ${safeGoalMenuText(goal.text, 4_000)}`)
+							.join("\n")}`
+					: "";
 			const shouldReplace = await ctx.ui.confirm(
 				"Replace goal?",
-				`Current goal: ${existingGoal.text}\n\nNew goal: ${objective}`,
+				`Current goal: ${safeGoalMenuText(existingGoal.text, 4_000)}${queuedRemovalPreview}\n\nNew goal: ${safeGoalMenuText(objective, 4_000)}`,
 			);
 			if (!shouldReplace) {
 				ctx.ui.notify(`Goal kept: ${existingGoal.text}`, "info");
+				return;
+			}
+			if (
+				goalQueueIdentity(
+					this.runtime.activeGoal,
+					this.runtime.queuedGoals,
+					this.runtime.pendingQueueAction,
+				) !== existingQueueIdentity
+			) {
+				ctx.ui.notify("The goal queue changed while confirmation was open. Try again.", "warning");
 				return;
 			}
 		}
@@ -212,6 +235,35 @@ export class GoalCommandController {
 		if (ctx.isIdle?.() === true && !hasPendingMessages(ctx)) {
 			await this.dispatchPendingQueueActionIfSettled(ctx);
 		}
+	}
+
+	async resumeQueueAfterUnfreeze(ctx: StatusContext) {
+		if (this.runtime.queueFreezeAwaitingSettle) return false;
+		this.runtime.queueFrozen = false;
+		this.runtime.queueFreezeAwaitingSettle = false;
+		this.runtime.guardAbortGoalId = undefined;
+		this.runtime.clearStaleGoalToolCallBlock();
+		if (this.runtime.activeGoal) {
+			if (
+				this.runtime.activeGoal.status === "active" &&
+				this.runtime.activeGoal.activeStartedAt === undefined
+			) {
+				const now = Date.now();
+				checkpointGoalActiveTime(this.runtime.activeGoal, now, true);
+				this.runtime.activeGoal.updatedAt = now;
+			}
+			this.runtime.persistGoal(this.runtime.activeGoal);
+			this.runtime.updateStatus(ctx, this.runtime.activeGoal);
+		} else {
+			ctx.ui.setStatus(STATUS_KEY, undefined);
+		}
+		if (this.runtime.pendingQueueAction) {
+			return this.dispatchPendingQueueActionIfSettled(ctx);
+		}
+		const goal = this.runtime.activeGoal;
+		if (goal?.status !== "active") return false;
+		this.runtime.requestContinuation(goal);
+		return this.runtime.dispatchContinuationIfSettled(ctx);
 	}
 
 	async dispatchPendingQueueActionIfSettled(ctx: StatusContext) {
@@ -516,8 +568,9 @@ export class GoalCommandController {
 
 	showGoal(ctx: StatusContext) {
 		if (!this.runtime.activeGoal) {
-			ctx.ui.notify("Usage: /goal <objective>\nNo goal is currently set.", "info");
+			const message = "Usage: /goal <objective>\nNo goal is currently set.";
 			ctx.ui.setStatus(STATUS_KEY, undefined);
+			this.reportGoalStatus(ctx, message);
 			return;
 		}
 		if (!this.runtime.queueFrozen) {
@@ -525,15 +578,24 @@ export class GoalCommandController {
 			this.runtime.persistGoal(this.runtime.activeGoal);
 			this.runtime.updateStatus(ctx, this.runtime.activeGoal);
 		}
-		ctx.ui.notify(
+		this.reportGoalStatus(
+			ctx,
 			goalSummary(
 				this.runtime.activeGoal,
 				this.runtime.queuedGoals,
 				this.runtime.settings.experimental.goals,
 				this.runtime.queueFrozen,
 			),
-			"info",
 		);
+	}
+
+	private reportGoalStatus(ctx: StatusContext, message: string) {
+		if (ctx.mode === "print" || ctx.mode === "json") {
+			throw new Error(
+				`/goal status is unavailable in ${ctx.mode} mode because Pi does not expose an extension-command output channel. Use TUI or RPC mode.`,
+			);
+		}
+		ctx.ui.notify(message, "info");
 	}
 
 	private async activatePrioritizedGoal(
