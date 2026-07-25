@@ -380,12 +380,13 @@ test("accepting the default post-switch prompt starts a pull", async () => {
 		const result = await useSyncTarget(ctx, "work", async (...args: unknown[]) => {
 			pullCalls += 1;
 			pulledTarget = args[0];
+			return "applied";
 		});
 
 		assert.match(promptTitle, /Review a pull for target “work” now\?/);
 		assert.equal(pullCalls, 1);
 		assert.equal(pulledTarget, "work");
-		assert.equal(result.pullAttempted, true);
+		assert.equal(result.pullApplied, true);
 	});
 });
 
@@ -402,9 +403,40 @@ test("selecting the current target is idempotent even when post-switch pulls are
 		});
 
 		assert.equal(pullCalls, 0);
-		assert.equal(result.pullAttempted, false);
+		assert.equal(result.pullApplied, false);
 		assert.match(notifications.at(-1)?.message ?? "", /already current/i);
 	});
+});
+
+test("automatic post-switch pulls reject no-UI modes before changing the active target", async () => {
+	for (const mode of ["print", "json"] as const) {
+		await withTempSettings(async () => {
+			const settings = v2Settings();
+			settings.targetSwitchAction = "pull";
+			settings.targets.work = { ...settings.targets.home, namespace: "work" };
+			writeSettings(settings);
+			const mock = createMockPi();
+			sync(mock.pi);
+			const { ctx } = createMockContext({ hasUI: false, mode });
+			const originalFetch = globalThis.fetch;
+			let fetchCalls = 0;
+			globalThis.fetch = (async () => {
+				fetchCalls += 1;
+				throw new Error("Pull should not start without observable UI.");
+			}) as typeof globalThis.fetch;
+			try {
+				await assert.rejects(
+					async () => await mock.commands.get("sync")?.handler("use work", ctx),
+					/automatic target pulls require interactive confirmation/i,
+				);
+			} finally {
+				globalThis.fetch = originalFetch;
+			}
+
+			assert.equal(fetchCalls, 0, mode);
+			assert.equal((await readLocalConfigObject())?.activeTarget, "home", mode);
+		});
+	}
 });
 
 test("pull-after-switch starts a reviewed pull and applies remote settings", async () => {
@@ -463,6 +495,58 @@ test("pull-after-switch starts a reviewed pull and applies remote settings", asy
 			assert.equal(readFileSync(path.join(agentDir, "settings.json"), "utf8"), '{"remote":true}\n');
 			assert.equal(reloads, 1);
 			assert.match(notifications.map((item) => item.message).join("\n"), /Pulled 1 files/);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+});
+
+test("declining a post-switch pull review reports that the selected target remains active", async () => {
+	await withTempSettings(async (agentDir) => {
+		const settings = v2Settings();
+		settings.targetSwitchAction = "pull";
+		settings.targets.work = { ...settings.targets.home, namespace: "work" };
+		writeSettings(settings);
+		mkdirSync(agentDir, { recursive: true });
+		const settingsPath = path.join(agentDir, "settings.json");
+		writeFileSync(settingsPath, '{"local":true}\n');
+		const remoteSnapshot = snapshotPayload("work-snapshot", '{"remote":true}\n');
+		remoteSnapshot.profile = "work";
+		const encoded = gzipSync(Buffer.from(JSON.stringify(remoteSnapshot)));
+		const pointer = {
+			version: 1,
+			profile: "work",
+			snapshot: remoteSnapshot.id,
+			sha256: createHash("sha256").update(encoded).digest("hex"),
+			createdAt: remoteSnapshot.createdAt,
+			machine: remoteSnapshot.machine,
+		};
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (input) => {
+			const url = new URL(String(input));
+			if (url.pathname.endsWith("/profiles/work/latest.json")) return Response.json(pointer);
+			if (url.pathname.endsWith(`/profiles/work/snapshots/${remoteSnapshot.id}.json.gz`)) {
+				return new Response(new Uint8Array(encoded));
+			}
+			throw new Error(`Unexpected request: ${url.pathname}`);
+		}) as typeof globalThis.fetch;
+		try {
+			const mock = createMockPi();
+			sync(mock.pi);
+			const { ctx, notifications } = createMockContext({
+				hasUI: true,
+				mode: "tui",
+				confirm: async () => false,
+			});
+
+			await mock.commands.get("sync")?.handler("use work", ctx);
+
+			assert.equal((await readLocalConfigObject())?.activeTarget, "work");
+			assert.equal(readFileSync(settingsPath, "utf8"), '{"local":true}\n');
+			assert.match(
+				notifications.at(-1)?.message ?? "",
+				/Pull cancelled; target “work” remains active and synced files were not changed/,
+			);
 		} finally {
 			globalThis.fetch = originalFetch;
 		}
@@ -537,7 +621,7 @@ test("always-pull keeps the switched target and reports a pull failure", async (
 		try {
 			const mock = createMockPi();
 			sync(mock.pi);
-			const { ctx, notifications } = createMockContext();
+			const { ctx, notifications } = createMockContext({ hasUI: true, mode: "tui" });
 
 			await mock.commands.get("sync")?.handler("use work", ctx);
 
@@ -596,7 +680,7 @@ test("cancelling an automatic post-switch pull reports that the target remains s
 			assert.equal((await readLocalConfigObject())?.activeTarget, "work");
 			assert.match(
 				notifications.at(-1)?.message ?? "",
-				/Pull cancelled; the target was switched, but synced files were not changed/,
+				/Pull cancelled; target “work” remains active and synced files were not changed/,
 			);
 		} finally {
 			globalThis.fetch = originalFetch;
@@ -664,6 +748,7 @@ test("settings menu uses SettingsList and persists target-switch choices in plac
 		assert.match(initialRender, /Pi Sync Settings/);
 		assert.match(initialRender, /Automatic sync/);
 		assert.match(initialRender, /After target switch/);
+		assert.doesNotMatch(initialRender, /Type to search/);
 		const saved = await readLocalConfigObject();
 		assert.equal(saved?.targetSwitchAction, "pull");
 		assert.deepEqual(saved?.future, { retained: true });
@@ -1005,6 +1090,7 @@ test("synced-content UI fits narrow and wide terminal widths with textual state"
 			assert.ok(lines.length > 0);
 			assert.ok(lines.every((line) => visibleWidth(line) <= width));
 			assert.match(lines.join("\n"), /included|excluded/);
+			assert.doesNotMatch(lines.join("\n"), /Type to search/);
 		}
 	});
 });

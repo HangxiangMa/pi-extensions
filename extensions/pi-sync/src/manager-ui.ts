@@ -24,7 +24,7 @@ import {
 } from "./settings-management.js";
 import { showSyncSettings } from "./settings-ui.js";
 import { DEFAULT_SYNC_FILES } from "./sync-policy.js";
-import { useSyncTarget } from "./target-switch.js";
+import { type TargetPullOutcome, useSyncTarget } from "./target-switch.js";
 import type { SyncConfig } from "./types.js";
 
 export const MAIN_MENU_ACTIONS = [
@@ -45,7 +45,7 @@ type RunRoute = (
 	signal?: AbortSignal,
 	onCommit?: () => void,
 	target?: string,
-) => Promise<void>;
+) => Promise<TargetPullOutcome | undefined>;
 
 export async function showSyncManager(
 	ctx: ExtensionCommandContext,
@@ -98,15 +98,15 @@ async function runCancellableOperation(
 	route: string,
 	runRoute: RunRoute,
 	commitAware = false,
-	cancelledMessage = "Check cancelled; no settings or files were changed.",
+	cancelledMessage: string | null = "Check cancelled; no settings or files were changed.",
 	target?: string,
 ) {
 	if (ctx.mode !== "tui") {
-		await runRoute(route, undefined, undefined, target);
-		return;
+		return await runRoute(route, undefined, undefined, target);
 	}
 	let commitStarted = false;
 	let operation: Promise<void> | undefined;
+	let routeResult: TargetPullOutcome | undefined;
 	const result = await ctx.ui.custom<{ cancelled?: boolean; error?: unknown }>(
 		(tui, theme, _kb, done) => {
 			const loader = new BorderedLoader(tui, theme, message, { cancellable: true });
@@ -128,7 +128,8 @@ async function runCancellableOperation(
 				commitAware ? () => (commitStarted = true) : undefined,
 				target,
 			)
-				.then(() => {
+				.then((result) => {
+					routeResult = result;
 					if (!closed) done({});
 				})
 				.catch((error) => {
@@ -139,10 +140,11 @@ async function runCancellableOperation(
 	);
 	if (result?.cancelled) {
 		await operation;
-		ctx.ui.notify(cancelledMessage, "info");
-		return;
+		if (cancelledMessage) ctx.ui.notify(cancelledMessage, "info");
+		return "cancelled";
 	}
 	if (result?.error) throw result.error;
+	return routeResult;
 }
 
 async function describeManagerState(): Promise<{ title: string; actions: string[] }> {
@@ -435,11 +437,11 @@ async function showTargetSwitcher(ctx: ExtensionCommandContext, runRoute: RunRou
 			"pull",
 			runRoute,
 			true,
-			"Pull cancelled; the target was switched, but synced files were not changed.",
+			null,
 			selectedTarget,
 		),
 	);
-	return result.pullAttempted ? "pull-attempted" : "switched";
+	return result.pullApplied ? "pull-attempted" : "switched";
 }
 
 async function showManageMenu(ctx: ExtensionCommandContext, _runRoute: RunRoute) {
