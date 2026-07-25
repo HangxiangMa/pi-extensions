@@ -1,13 +1,13 @@
 import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-	discoverAgents,
 	type AgentConfig,
 	type AgentScope,
+	discoverAgents,
 	type SubagentThinkingLevel,
 } from "./agents.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
-import type { SubagentParams } from "./params.js";
+import { hasUsableAggregator, type SubagentParams } from "./params.js";
 import {
 	buildFanInContext,
 	formatResultFailure,
@@ -107,6 +107,7 @@ export async function executeSubagent(
 ): Promise<AgentToolResult<SubagentDetails> & { isError?: boolean }> {
 			assertSubagentDepthAllowed();
 			const agentScope: AgentScope = params.agentScope ?? "user";
+			const aggregator = hasUsableAggregator(params.aggregator) ? params.aggregator : undefined;
 			const config = readSubagentSettings();
 			const discovery = discoverAgents(ctx.cwd, agentScope, config);
 			const agents = discovery.agents;
@@ -134,7 +135,7 @@ export async function executeSubagent(
 					aggregator,
 				});
 
-			if (modeCount !== 1 || (params.aggregator && !hasTasks)) {
+			if (modeCount !== 1 || (aggregator && !hasTasks)) {
 				const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
 				const reason =
 					modeCount !== 1
@@ -155,7 +156,7 @@ export async function executeSubagent(
 				const requestedAgentNames = new Set<string>();
 				if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
 				if (params.tasks) for (const t of params.tasks) requestedAgentNames.add(t.agent);
-				if (params.aggregator) requestedAgentNames.add(params.aggregator.agent);
+				if (aggregator) requestedAgentNames.add(aggregator.agent);
 				if (params.agent) requestedAgentNames.add(params.agent);
 
 				const projectAgentsRequested = Array.from(requestedAgentNames)
@@ -286,7 +287,6 @@ export async function executeSubagent(
 					const emitParallelUpdate = () => {
 						status.update(parallelStatus(doneCount, allResults.length, runningCount));
 						if (onUpdate) {
-							const aggregator = params.aggregator;
 							const pendingAggregator: SingleResult | undefined =
 								aggregator && !signal?.aborted && doneCount === allResults.length
 									? {
@@ -368,8 +368,7 @@ export async function executeSubagent(
 					});
 
 					let aggregatorResult: SingleResult | undefined;
-					if (params.aggregator && !signal?.aborted) {
-						const aggregator = params.aggregator;
+					if (aggregator && !signal?.aborted) {
 						status.update(fanInStatus(aggregator.agent));
 						const fanInContext = buildFanInContext(results);
 						const aggregatorTask = truncateUtf8(

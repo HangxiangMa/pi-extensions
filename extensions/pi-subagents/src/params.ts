@@ -29,13 +29,19 @@ const ChainItem = Type.Object({
 	thinkingLevel: Type.Optional(ThinkingLevelSchema),
 });
 
-const AggregatorItem = Type.Object({
-	agent: Type.String({ description: "Name of the fan-in agent to invoke after parallel tasks complete" }),
-	task: Type.String({ description: "Fan-in task. Use {previous} to include all parallel outputs." }),
-	cwd: Type.Optional(Type.String({ description: "Working directory for the aggregator process" })),
-	timeoutMs: Type.Optional(TimeoutMs),
-	thinkingLevel: Type.Optional(ThinkingLevelSchema),
-});
+const AggregatorItem = Type.Object(
+	{
+		agent: Type.String({ description: "Name of the fan-in agent to invoke after parallel tasks complete" }),
+		task: Type.String({ description: "Fan-in task. Use {previous} to include all parallel outputs." }),
+		cwd: Type.Optional(Type.String({ description: "Working directory for the aggregator process" })),
+		timeoutMs: Type.Optional(TimeoutMs),
+		thinkingLevel: Type.Optional(ThinkingLevelSchema),
+	},
+	{
+		description:
+			"Optional fan-in step for parallel mode. Omit this key entirely when no aggregation is needed; empty or whitespace-only agent/task values are treated as absent.",
+	},
+);
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 	description:
@@ -59,3 +65,16 @@ export const SubagentParams = Type.Object({
 });
 
 export type SubagentParams = Static<typeof SubagentParams>;
+
+export function hasUsableAggregator(
+	aggregator: unknown,
+): aggregator is { agent: string; task: string } {
+	if (!aggregator || typeof aggregator !== "object") return false;
+	const candidate = aggregator as { agent?: unknown; task?: unknown };
+	return (
+		typeof candidate.agent === "string" &&
+		candidate.agent.trim().length > 0 &&
+		typeof candidate.task === "string" &&
+		candidate.task.trim().length > 0
+	);
+}
