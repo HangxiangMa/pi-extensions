@@ -543,6 +543,35 @@ test("a replaced session's late lifecycle events cannot disrupt its replacement"
 	}
 });
 
+test("agent-end after session shutdown cannot restart polling", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const mock = createMockPi();
+	let prViews = 0;
+	installExec(mock, async (command, args) => {
+		if (command === "git") return textResult("", 128, "not a git repository");
+		if (args[0] === "pr") prViews += 1;
+		return okResult(args[0] === "pr" ? samplePr : sampleCounts);
+	});
+	githubPr(mock.pi, { refreshIntervalMs: 100 });
+	const context = createMockContext({ cwd: "/repo" });
+	const sessionStart = mock.events.get("session_start")?.[0];
+	const agentEnd = mock.events.get("agent_end")?.[0];
+	const sessionShutdown = mock.events.get("session_shutdown")?.[0];
+	assert.ok(sessionStart);
+	assert.ok(agentEnd);
+	assert.ok(sessionShutdown);
+
+	await sessionStart({}, context.ctx);
+	await sessionShutdown({}, context.ctx);
+	await agentEnd({}, context.ctx);
+	t.mock.timers.tick(100);
+	await Promise.resolve();
+	await Promise.resolve();
+
+	assert.equal(prViews, 1);
+	assert.equal(context.statuses.get("github-pr"), undefined);
+});
+
 test("an older periodic refresh cannot overwrite a newer agent-end refresh", async () => {
 	const mock = createMockPi();
 	const periodicPrView = deferred<ExecResult>();

@@ -177,6 +177,7 @@ export default function githubPr(pi: ExtensionAPI, options: GithubPrOptions = {}
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (ctx.sessionManager !== branchWatch.sessionManager) return;
+		branchWatch.sessionManager = undefined;
 		branchWatch.generation += 1;
 		branchWatch.session += 1;
 		closeBranchWatcher();
