@@ -11,6 +11,7 @@ import {
 	localConfigPath,
 	normalizeSyncFiles,
 	readLocalConfigObject,
+	readStateForConfig,
 } from "./config.js";
 import { inspectLock, isStaleLock } from "./lock.js";
 import {
@@ -29,18 +30,25 @@ import { type TargetPullOutcome, useSyncTarget } from "./target-switch.js";
 import type { SyncConfig } from "./types.js";
 
 export const MAIN_MENU_ACTIONS = [
-	"Sync now",
+	"Sync now (recommended)",
+	"Pull from remote",
+	"Push to remote",
 	"Switch target",
 	"Status & changes",
 	"Settings",
+	"More…",
+] as const;
+
+const MORE_MENU_ACTIONS = [
 	"Manage targets & storage",
 	"History & recovery",
 	"Help",
+	"Back",
 ] as const;
-
 const BACK = "Back";
 
 type MainMenuAction = (typeof MAIN_MENU_ACTIONS)[number];
+type ContextualMenuAction = "Manage targets & storage" | "History & recovery" | "Help";
 type RunRoute = (
 	route: string,
 	signal?: AbortSignal,
@@ -60,9 +68,33 @@ export async function showSyncManager(
 		const state = await describeManagerState();
 		const selected = await ctx.ui.select(state.title, state.actions);
 		if (!selected) return;
-		switch (selected as MainMenuAction | "Set up sync" | "Use existing settings") {
-			case "Sync now":
+		switch (
+			selected as MainMenuAction | ContextualMenuAction | "Set up sync" | "Use existing settings"
+		) {
+			case "Sync now (recommended)":
 				await runCancellableOperation(ctx, "Checking current target…", "sync", runRoute, true);
+				break;
+			case "Pull from remote": {
+				const result = await runCancellableOperation(
+					ctx,
+					"Checking remote changes…",
+					"pull",
+					runRoute,
+					true,
+					"Pull check cancelled; no local files were changed.",
+				);
+				if (result === "applied") return;
+				break;
+			}
+			case "Push to remote":
+				await runCancellableOperation(
+					ctx,
+					"Preparing push preview…",
+					"push",
+					runRoute,
+					true,
+					"Push preparation cancelled; no remote files were changed.",
+				);
 				break;
 			case "Switch target": {
 				const result = await showTargetSwitcher(ctx, runRoute);
@@ -76,20 +108,34 @@ export async function showSyncManager(
 			case "Settings":
 				await showSyncSettings(ctx, runRoute);
 				break;
+			case "More…":
+				if ((await showMoreMenu(ctx, runRoute)) === "exit") return;
+				break;
 			case "Manage targets & storage":
 				await showManageMenu(ctx, runRoute);
 				break;
 			case "History & recovery":
 				await showRecoveryMenu(ctx, runRoute);
 				break;
+			case "Help":
+				await runRoute("help");
+				return;
 			case "Set up sync":
 			case "Use existing settings":
 				await runRoute("init");
 				continue;
-			case "Help":
-				await runRoute("help");
-				return;
 		}
+	}
+}
+
+async function showMoreMenu(ctx: ExtensionCommandContext, runRoute: RunRoute) {
+	const selected = await ctx.ui.select("More options", [...MORE_MENU_ACTIONS]);
+	if (!selected || selected === BACK) return;
+	if (selected === "Manage targets & storage") await showManageMenu(ctx, runRoute);
+	else if (selected === "History & recovery") await showRecoveryMenu(ctx, runRoute);
+	else {
+		await runRoute("help");
+		return "exit" as const;
 	}
 }
 
@@ -195,15 +241,34 @@ async function describeManagerState(): Promise<{ title: string; actions: string[
 		const liveLock = lock.status === "valid" && !isStaleLock(lock.lock);
 		const recoverableLock =
 			lock.status === "unreadable" || (lock.status === "valid" && isStaleLock(lock.lock));
+		const builtInCount = normalizeSyncFiles(config.syncFiles).length;
+		const extraFileCount = config.extraFiles.length;
+		const noSyncedContent = builtInCount === 0 && extraFileCount === 0 && !config.syncSessions;
+		const stateReadDisabled = liveLock || recoverableLock;
+		const syncState = stateReadDisabled
+			? undefined
+			: await readStateForConfig(config).catch(() => undefined);
+		const lastAppliedSnapshot = stateReadDisabled
+			? "Unavailable while operations are locked"
+			: syncState?.lastAppliedSnapshot
+				? safeTerminalText(syncState.lastAppliedSnapshot)
+				: syncState
+					? "Never synced"
+					: "Unavailable";
 		return {
 			title: [
 				"Pi Sync",
 				"",
 				`Current target: ${safeTerminalText(target)}`,
 				`Storage: ${storage}`,
-				`Auto-sync: ${config.autoSync ? "On" : "Off"} · Sessions: ${config.syncSessions ? "On" : "Off"}`,
-				"Last known sync: Remote not checked",
+				`Synced content: ${builtInCount} built-in group${builtInCount === 1 ? "" : "s"} · ${extraFileCount} extra file${extraFileCount === 1 ? "" : "s"} · Sessions: ${config.syncSessions ? "On" : "Off"}`,
+				`Auto-sync: ${config.autoSync ? "On" : "Off"}`,
+				`Last applied snapshot: ${lastAppliedSnapshot}`,
+				"Remote changes: Not checked",
 				...warnings.map((warning) => `Warning: ${safeTerminalText(warning)}`),
+				...(noSyncedContent
+					? ["", "No synced content is selected. Choose synced content in Settings before syncing."]
+					: []),
 				...(liveLock
 					? [
 							"",
@@ -219,7 +284,9 @@ async function describeManagerState(): Promise<{ title: string; actions: string[
 			actions:
 				liveLock || recoverableLock
 					? ["Status & changes", "History & recovery", "Help"]
-					: [...MAIN_MENU_ACTIONS],
+					: noSyncedContent
+						? ["Settings", "Switch target", "Status & changes", "More…"]
+						: [...MAIN_MENU_ACTIONS],
 		};
 	} catch (error) {
 		const targets = ownRecord(raw.targets);
