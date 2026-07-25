@@ -2,8 +2,8 @@
 
 Status: **design decision recorded; no new Pi-native module is approved for implementation**.
 
-Reference runtime: the repository-installed `@earendil-works/pi-coding-agent` typings and the
-extension lifecycle documentation reviewed on 2026-07-24. Starship behavior references are pinned to
+Reference runtime: `@earendil-works/pi-coding-agent` 0.80.10 installed typings and the extension
+lifecycle documentation reviewed on 2026-07-24. Starship behavior references are pinned to
 `9f4d07ed45804e280d6884bb8ced7ea3d3033093`.
 
 ## Decision
