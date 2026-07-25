@@ -123,6 +123,29 @@ test("menu cancellation has no side effects and clear requires an exact preview"
 	assert.equal(tracked.calls.length, 0);
 });
 
+test("clear confirmation does not erase a queue that changed while open", async () => {
+	const state = runtime(createGoal("previewed objective", undefined, 0));
+	const tracked = commands();
+	const selections = [GOAL_MENU_ACTIONS.clear, undefined];
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		select: async () => selections.shift(),
+		confirm: async () => {
+			state.activeGoal = createGoal("replacement objective", undefined, 0);
+			return true;
+		},
+	});
+
+	await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+
+	assert.equal(
+		tracked.calls.some((call) => call.name === "clearGoal"),
+		false,
+	);
+	assert.match(context.notifications.at(-1)?.message ?? "", /goal queue changed.*reopen/i);
+});
+
 test("clear preview includes a pending priority objective", async () => {
 	const state = runtime(createGoal("current objective", undefined, 0));
 	state.queuedGoals.push(createGoal("queued objective", undefined, 0));
@@ -247,6 +270,64 @@ test("Skip preview reflects a stopped next goal without promising activation", a
 
 	await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
 	assert.equal(tracked.calls.length, 0);
+});
+
+test("queue confirmations do not mutate a changed active head or queue selection", async () => {
+	for (const scenario of [
+		{
+			action: "Prioritize goal…",
+			expectedMethod: "prioritizeGoal",
+			editor: "urgent objective",
+			mutate(state: ReturnType<typeof runtime>) {
+				state.activeGoal = createGoal("replacement head", undefined, 0);
+			},
+		},
+		{
+			action: "Skip current goal…",
+			expectedMethod: "skipGoal",
+			mutate(state: ReturnType<typeof runtime>) {
+				state.activeGoal = createGoal("replacement head", undefined, 0);
+			},
+		},
+		{
+			action: "Skip current goal…",
+			expectedMethod: "skipGoal",
+			mutate(state: ReturnType<typeof runtime>) {
+				state.queuedGoals = [createGoal("replacement successor", undefined, 0)];
+			},
+		},
+		{
+			action: "Drop last goal…",
+			expectedMethod: "dropLastGoal",
+			mutate(state: ReturnType<typeof runtime>) {
+				state.queuedGoals = [createGoal("replacement tail", undefined, 0)];
+			},
+		},
+	] as const) {
+		const state = runtime(createGoal("current objective", undefined, 0));
+		state.settings.experimental.goals = true;
+		state.queuedGoals = [createGoal("queued objective", undefined, 0)];
+		const tracked = commands();
+		const selections = [GOAL_MENU_ACTIONS.queue, scenario.action];
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			select: async () => selections.shift(),
+			editor: async () => ("editor" in scenario ? scenario.editor : undefined),
+			confirm: async () => {
+				scenario.mutate(state);
+				return true;
+			},
+		});
+
+		await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+
+		assert.equal(
+			tracked.calls.some((call) => call.name === scenario.expectedMethod),
+			false,
+		);
+		assert.match(context.notifications.at(-1)?.message ?? "", /goal queue changed.*reopen/i);
+	}
 });
 
 test("edit dialogs do not mutate a replacement active goal", async () => {

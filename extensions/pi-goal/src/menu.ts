@@ -3,6 +3,7 @@ import { formatDuration } from "./accounting.js";
 import { parseTokenBudget } from "./command.js";
 import type { GoalCommandController } from "./commands.js";
 import type { ActiveGoal, PendingQueueAction } from "./persistence.js";
+import { goalQueueIdentity } from "./queue.js";
 import type { GoalRuntime } from "./runtime.js";
 
 export const GOAL_MENU_ACTIONS = {
@@ -153,10 +154,26 @@ export async function showGoalManager(
 			case GOAL_MENU_ACTIONS.help:
 				ctx.ui.notify(goalHelp(), "info");
 				return;
-			case GOAL_MENU_ACTIONS.clear:
-				if (await confirmClear(runtime, ctx)) commands.clearGoal(ctx);
-				else continue;
+			case GOAL_MENU_ACTIONS.clear: {
+				const previewedQueue = goalQueueIdentity(
+					runtime.activeGoal,
+					runtime.queuedGoals,
+					runtime.pendingQueueAction,
+				);
+				if (!(await confirmClear(runtime, ctx))) continue;
+				if (
+					goalQueueIdentity(runtime.activeGoal, runtime.queuedGoals, runtime.pendingQueueAction) !==
+					previewedQueue
+				) {
+					ctx.ui.notify(
+						"The goal queue changed while the dialog was open. Reopen /goal and try again.",
+						"warning",
+					);
+					continue;
+				}
+				commands.clearGoal(ctx);
 				return;
+			}
 		}
 	}
 }
@@ -271,12 +288,14 @@ async function showQueueMenu(
 	}
 	if (selected === QUEUE_ACTIONS.prioritize) {
 		const objective = (await ctx.ui.editor("Prioritize goal", ""))?.trim();
-		if (!objective) return;
+		if (!objective || !requireCurrentQueueHead(runtime, goal, ctx)) return;
 		const confirmed = await ctx.ui.confirm(
 			"Prioritize goal?",
 			`New priority goal:\n${safeGoalMenuText(objective, 4_000)}\n\nCurrent goal moved to the queue:\n${safeGoalMenuText(goal.text, 4_000)}`,
 		);
-		if (confirmed) await commands.prioritizeGoal(objective, undefined, ctx);
+		if (confirmed && requireCurrentQueueHead(runtime, goal, ctx)) {
+			await commands.prioritizeGoal(objective, undefined, ctx);
+		}
 		return;
 	}
 	if (selected === QUEUE_ACTIONS.skip) {
@@ -290,7 +309,9 @@ async function showQueueMenu(
 			"Skip current goal?",
 			`Remove current goal:\n${safeGoalMenuText(goal.text, 4_000)}\n\n${nextEffect}`,
 		);
-		if (confirmed) await commands.skipGoal(ctx);
+		if (confirmed && requireCurrentQueueSelection(runtime, goal, next, "first", ctx)) {
+			await commands.skipGoal(ctx);
+		}
 		return;
 	}
 	if (selected === QUEUE_ACTIONS.dropLast) {
@@ -299,7 +320,9 @@ async function showQueueMenu(
 			"Drop last goal?",
 			`Remove from queue:\n${safeGoalMenuText(last.text, 4_000)}`,
 		);
-		if (confirmed) commands.dropLastGoal(ctx);
+		if (confirmed && requireCurrentQueueSelection(runtime, goal, last, "last", ctx)) {
+			commands.dropLastGoal(ctx);
+		}
 	}
 }
 
@@ -322,6 +345,43 @@ async function confirmClear(runtime: GoalMenuRuntimeView, ctx: ExtensionCommandC
 			.map((summary, index) => `${index + 1}. ${summary}`)
 			.join("\n")}\n\nThis cannot be undone.`,
 	);
+}
+
+function requireCurrentQueueHead(
+	runtime: GoalMenuRuntimeView,
+	expectedGoal: ActiveGoal,
+	ctx: ExtensionCommandContext,
+) {
+	if (runtime.activeGoal?.id === expectedGoal.id) return true;
+	ctx.ui.notify(
+		"The goal queue changed while the dialog was open. Reopen /goal and try again.",
+		"warning",
+	);
+	return false;
+}
+
+function requireCurrentQueueSelection(
+	runtime: GoalMenuRuntimeView,
+	expectedGoal: ActiveGoal,
+	expectedQueuedGoal: ActiveGoal | undefined,
+	position: "first" | "last",
+	ctx: ExtensionCommandContext,
+) {
+	const currentQueuedGoal =
+		position === "first"
+			? runtime.queuedGoals[0]
+			: (runtime.queuedGoals.at(-1) ?? runtime.activeGoal);
+	if (
+		runtime.activeGoal?.id === expectedGoal.id &&
+		currentQueuedGoal?.id === expectedQueuedGoal?.id
+	) {
+		return true;
+	}
+	ctx.ui.notify(
+		"The goal queue changed while the dialog was open. Reopen /goal and try again.",
+		"warning",
+	);
+	return false;
 }
 
 function requireCurrentMenuGoal(

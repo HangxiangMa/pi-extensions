@@ -1,4 +1,4 @@
-import { currentTokenTotal } from "./accounting.js";
+import { checkpointGoalActiveTime, currentTokenTotal } from "./accounting.js";
 import { validateObjective } from "./command.js";
 import { safeGoalMenuText } from "./menu.js";
 import type { ActiveGoal } from "./persistence.js";
@@ -8,6 +8,7 @@ import {
 	appendGoal,
 	createQueuedGoal,
 	dropLastGoal as dropLastQueuedGoal,
+	goalQueueIdentity,
 	prioritizeGoal as prioritizeQueuedGoal,
 	skipGoal as skipQueuedGoal,
 } from "./queue.js";
@@ -54,13 +55,34 @@ export class GoalCommandController {
 		const existingGoal =
 			this.runtime.activeGoal?.status !== "complete" ? this.runtime.activeGoal : undefined;
 		const existingQueuedGoals = [...this.runtime.queuedGoals];
+		const existingQueueIdentity = goalQueueIdentity(
+			this.runtime.activeGoal,
+			this.runtime.queuedGoals,
+			this.runtime.pendingQueueAction,
+		);
 		if (existingGoal) {
+			const queuedRemovalPreview =
+				existingQueuedGoals.length > 0
+					? `\n\nQueued goals also removed:\n${existingQueuedGoals
+							.map((goal, index) => `${index + 1}. ${safeGoalMenuText(goal.text, 4_000)}`)
+							.join("\n")}`
+					: "";
 			const shouldReplace = await ctx.ui.confirm(
 				"Replace goal?",
-				`Current goal: ${safeGoalMenuText(existingGoal.text, 4_000)}\n\nNew goal: ${safeGoalMenuText(objective, 4_000)}`,
+				`Current goal: ${safeGoalMenuText(existingGoal.text, 4_000)}${queuedRemovalPreview}\n\nNew goal: ${safeGoalMenuText(objective, 4_000)}`,
 			);
 			if (!shouldReplace) {
 				ctx.ui.notify(`Goal kept: ${existingGoal.text}`, "info");
+				return;
+			}
+			if (
+				goalQueueIdentity(
+					this.runtime.activeGoal,
+					this.runtime.queuedGoals,
+					this.runtime.pendingQueueAction,
+				) !== existingQueueIdentity
+			) {
+				ctx.ui.notify("The goal queue changed while confirmation was open. Try again.", "warning");
 				return;
 			}
 		}
@@ -222,6 +244,14 @@ export class GoalCommandController {
 		this.runtime.guardAbortGoalId = undefined;
 		this.runtime.clearStaleGoalToolCallBlock();
 		if (this.runtime.activeGoal) {
+			if (
+				this.runtime.activeGoal.status === "active" &&
+				this.runtime.activeGoal.activeStartedAt === undefined
+			) {
+				const now = Date.now();
+				checkpointGoalActiveTime(this.runtime.activeGoal, now, true);
+				this.runtime.activeGoal.updatedAt = now;
+			}
 			this.runtime.persistGoal(this.runtime.activeGoal);
 			this.runtime.updateStatus(ctx, this.runtime.activeGoal);
 		} else {
@@ -560,7 +590,11 @@ export class GoalCommandController {
 	}
 
 	private reportGoalStatus(ctx: StatusContext, message: string) {
-		if (ctx.mode === "print" || ctx.mode === "json") throw new Error(message);
+		if (ctx.mode === "print" || ctx.mode === "json") {
+			throw new Error(
+				`/goal status is unavailable in ${ctx.mode} mode because Pi does not expose an extension-command output channel. Use TUI or RPC mode.`,
+			);
+		}
 		ctx.ui.notify(message, "info");
 	}
 

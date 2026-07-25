@@ -135,6 +135,7 @@ test("disabling a retained queue pauses and aborts in-flight Goal work", () => {
 	state.activeGoal = createGoal("current objective", undefined, 0);
 	state.queuedGoals = [createGoal("queued objective", undefined, 0)];
 	state.requestContinuation(state.activeGoal);
+	state.beginAgentRun(state.activeGoal.id, "automatic");
 	let aborts = 0;
 	const context = createMockContext({
 		mode: "tui",
@@ -148,8 +149,63 @@ test("disabling a retained queue pauses and aborts in-flight Goal work", () => {
 	assert.equal(aborts, 1);
 	assert.equal(state.queueFrozen, true);
 	assert.equal(state.activeGoal?.status, "active");
+	assert.equal(state.activeGoal?.activeStartedAt, undefined);
 	assert.equal(state.continuationIntent, undefined);
 	assert.equal(state.staleGoalToolCallsBlocked, true);
+});
+
+test("freezing a queue preserves an unrelated in-flight run", () => {
+	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
+	const state = new GoalRuntime(mock.pi);
+	state.settings = {
+		...structuredClone(DEFAULT_GOAL_SETTINGS),
+		experimental: { goals: true },
+	};
+	state.activeGoal = createGoal("current objective", undefined, 0);
+	state.queuedGoals = [createGoal("queued objective", undefined, 0)];
+	state.beginAgentRun(null, undefined);
+	let aborts = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		abort: () => aborts++,
+	});
+	const next = { ...structuredClone(state.settings), experimental: { goals: false } };
+
+	applyGoalSettings(state, next, context.ctx, { save() {} });
+
+	assert.equal(aborts, 0);
+	assert.equal(state.queueFrozen, true);
+	assert.equal(state.agentRunGoalId, null);
+	assert.equal(state.activeGoal?.activeStartedAt, undefined);
+	assert.equal(state.guardAbortGoalId, undefined);
+	assert.equal(state.queueFreezeAwaitingSettle, false);
+	assert.equal(state.staleGoalToolCallsBlocked, false);
+});
+
+test("revealing lazy Goal tools rejects a busy unrelated run", () => {
+	const state = runtime();
+	state.settings = {
+		...structuredClone(DEFAULT_GOAL_SETTINGS),
+		toolVisibility: "after-first-goal",
+	};
+	const before = structuredClone(state.visibility);
+	const next = { ...structuredClone(state.settings), toolVisibility: "always" as const };
+	let saves = 0;
+	const context = createMockContext({ mode: "tui", hasUI: true, isIdle: () => false });
+
+	assert.throws(
+		() =>
+			applyGoalSettings(state, next, context.ctx, {
+				save() {
+					saves++;
+				},
+			}),
+		/wait for Pi to become idle/i,
+	);
+	assert.equal(saves, 0);
+	assert.equal(state.settings.toolVisibility, "after-first-goal");
+	assert.deepEqual(state.visibility, before);
 });
 
 test("lowering the no-progress limit pauses and aborts in-flight Goal work", () => {
@@ -179,10 +235,33 @@ test("lowering the no-progress limit pauses and aborts in-flight Goal work", () 
 	assert.equal(state.activeGoal?.safetyPauseCause, "no_progress");
 });
 
+test("replacement confirmation does not replace a goal that changed while open", async () => {
+	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
+	const state = new GoalRuntime(mock.pi);
+	state.activeGoal = createGoal("previewed objective", undefined, 0);
+	const replacement = createGoal("replacement objective", undefined, 0);
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		confirm: async () => {
+			state.activeGoal = replacement;
+			return true;
+		},
+	});
+	const controller = new GoalCommandController(state);
+
+	await controller.startGoal("new objective", undefined, context.ctx);
+
+	assert.equal(state.activeGoal?.id, replacement.id);
+	assert.equal(mock.sentUserMessages.length, 0);
+	assert.match(context.notifications.at(-1)?.message ?? "", /goal queue changed.*try again/i);
+});
+
 test("replacement confirmation sanitizes terminal controls without changing goal data", async () => {
 	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
 	const state = new GoalRuntime(mock.pi);
 	state.activeGoal = createGoal("current\u001b]8;;bad\u0007 objective", undefined, 0);
+	state.queuedGoals = [createGoal("queued\u001b objective", undefined, 0)];
 	let preview = "";
 	const context = createMockContext({
 		mode: "tui",
@@ -200,6 +279,7 @@ test("replacement confirmation sanitizes terminal controls without changing goal
 		assert.equal(preview.includes(control), false);
 	}
 	assert.match(preview, /Current goal: current ]8;;bad objective/);
+	assert.match(preview, /Queued goals also removed:\n1\. queued objective/);
 	assert.match(preview, /New goal: new 31m objective/);
 	assert.equal(state.activeGoal?.text, "current\u001b]8;;bad\u0007 objective");
 });
@@ -235,6 +315,7 @@ test("unfreezing waits for an aborted frozen run to settle before dispatching", 
 
 	assert.equal(dispatchedAfterSettle, true);
 	assert.equal(state.queueFrozen, false);
+	assert.equal(typeof state.activeGoal?.activeStartedAt, "number");
 	assert.equal(mock.sentUserMessages.length, 1);
 });
 

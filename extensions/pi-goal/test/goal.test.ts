@@ -135,7 +135,7 @@ test("goal registers command, status tools, and lifecycle hooks", () => {
 	]);
 });
 
-test("bare goal is menu-first only in TUI while status and non-TUI stay deterministic", async () => {
+test("bare goal is menu-first in TUI, observable in RPC, and rejects headless modes", async () => {
 	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
 	registerGoal(mock.pi);
 	const selections: Array<{ title: string; actions: string[] }> = [];
@@ -159,6 +159,10 @@ test("bare goal is menu-first only in TUI while status and non-TUI stay determin
 	assert.equal(selections.length, 1);
 	assert.match(tui.notifications.at(-1)?.message ?? "", /No goal is currently set/i);
 
+	const rpc = createMockContext({ mode: "rpc", hasUI: true });
+	await mock.commands.get("goal")?.handler("status", rpc.ctx);
+	assert.match(rpc.notifications.at(-1)?.message ?? "", /No goal is currently set/i);
+
 	let printSelections = 0;
 	const print = createMockContext({
 		mode: "print",
@@ -170,7 +174,7 @@ test("bare goal is menu-first only in TUI while status and non-TUI stay determin
 	});
 	await assert.rejects(
 		mock.commands.get("goal")?.handler("", print.ctx) as Promise<unknown>,
-		/No goal is currently set/i,
+		/\/goal status is unavailable in print mode/i,
 	);
 	assert.equal(printSelections, 0);
 	assert.equal(print.notifications.length, 0);
@@ -178,7 +182,7 @@ test("bare goal is menu-first only in TUI while status and non-TUI stay determin
 	const json = createMockContext({ mode: "json", hasUI: false });
 	await assert.rejects(
 		mock.commands.get("goal")?.handler("status", json.ctx) as Promise<unknown>,
-		/No goal is currently set/i,
+		/\/goal status is unavailable in json mode/i,
 	);
 });
 

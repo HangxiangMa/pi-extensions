@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { checkpointGoalActiveTime } from "./accounting.js";
-import type { ActiveGoal } from "./persistence.js";
+import type { ActiveGoal, PendingQueueAction } from "./persistence.js";
 import { resetGoalSafetyEpoch } from "./safety.js";
 
 export interface GoalQueueResult {
@@ -10,6 +10,30 @@ export interface GoalQueueResult {
 
 export interface DropLastGoalResult extends GoalQueueResult {
 	removed: ActiveGoal | undefined;
+}
+
+export function goalQueueIdentity(
+	goal: ActiveGoal | undefined,
+	queue: readonly ActiveGoal[],
+	pendingAction: PendingQueueAction | undefined,
+) {
+	const pendingIdentity =
+		pendingAction?.kind === "prioritize"
+			? [
+					pendingAction.kind,
+					pendingAction.objective,
+					pendingAction.tokenBudget,
+					pendingAction.displacedUsageFinalized,
+				]
+			: pendingAction
+				? [
+						pendingAction.kind,
+						pendingAction.goalId,
+						pendingAction.reason,
+						pendingAction.completedText,
+					]
+				: undefined;
+	return JSON.stringify([goal?.id, queue.map((queuedGoal) => queuedGoal.id), pendingIdentity]);
 }
 
 export function createQueuedGoal(

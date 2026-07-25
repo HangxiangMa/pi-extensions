@@ -5,6 +5,7 @@ import {
 	getSettingsListTheme,
 } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
+import { checkpointGoalActiveTime } from "./accounting.js";
 import { abortCurrentTurn, type GoalRuntime, STATUS_KEY } from "./runtime.js";
 import { GOAL_SETTINGS_FILE, type GoalSettings, saveGoalSettings } from "./settings.js";
 
@@ -72,7 +73,7 @@ export function applyGoalSettings(
 	let fileSaved = false;
 	try {
 		runtime.settings = structuredClone(next);
-		applyToolVisibility(runtime, snapshot.settings, next);
+		applyToolVisibility(runtime, snapshot.settings, next, ctx);
 		options.save?.(next);
 		fileSaved = options.save !== undefined;
 		applyQueueSetting(runtime, ctx);
@@ -276,9 +277,17 @@ async function nextToggleSettings(
 	} satisfies GoalSettings;
 }
 
-function applyToolVisibility(runtime: GoalRuntime, previous: GoalSettings, next: GoalSettings) {
+function applyToolVisibility(
+	runtime: GoalRuntime,
+	previous: GoalSettings,
+	next: GoalSettings,
+	ctx: ExtensionCommandContext,
+) {
 	if (previous.toolVisibility === next.toolVisibility) return;
 	if (next.toolVisibility === "always") {
+		if (runtime.goalToolsHiddenByPolicy.size > 0 && ctx.isIdle() !== true) {
+			throw new Error("Wait for Pi to become idle before revealing Goal tools.");
+		}
 		runtime.restoreGoalToolsHiddenByPolicy();
 		runtime.goalToolsUnlocked = true;
 		return;
@@ -300,7 +309,15 @@ function applyQueueSetting(runtime: GoalRuntime, ctx: ExtensionCommandContext) {
 	if (runtime.queueFrozen && !shouldFreeze && runtime.queueFreezeAwaitingSettle) return;
 	if (runtime.queueFrozen === shouldFreeze) return;
 	const activeGoal = runtime.activeGoal?.status === "active" ? runtime.activeGoal : undefined;
-	if (shouldFreeze && activeGoal) runtime.recordGoalUsage(activeGoal, ctx);
+	const goalOwnedRun = activeGoal && runtime.agentRunGoalId === activeGoal.id;
+	if (shouldFreeze && activeGoal) {
+		if (goalOwnedRun) runtime.recordGoalUsage(activeGoal, ctx, false);
+		else {
+			const now = Date.now();
+			checkpointGoalActiveTime(activeGoal, now, false);
+			activeGoal.updatedAt = now;
+		}
+	}
 	runtime.queueFrozen = shouldFreeze;
 	if (runtime.activeGoal) runtime.persistGoal(runtime.activeGoal);
 	if (shouldFreeze) ctx.ui.setStatus(STATUS_KEY, "queue off");
@@ -311,10 +328,10 @@ function applyQueueSetting(runtime: GoalRuntime, ctx: ExtensionCommandContext) {
 	runtime.cancelContinuationWork();
 	runtime.clearGoalRecovery();
 	runtime.clearBudgetWrapUp();
-	if (activeGoal) {
+	if (goalOwnedRun) {
 		runtime.blockStaleGoalToolCalls();
 		runtime.guardAbortGoalId = activeGoal.id;
-		runtime.queueFreezeAwaitingSettle = runtime.agentRunGoalId !== undefined;
+		runtime.queueFreezeAwaitingSettle = true;
 		runtime.clearAgentRun();
 		abortCurrentTurn(ctx);
 	}
