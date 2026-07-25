@@ -602,15 +602,17 @@ test("an older refresh cannot postpone a newer refresh timer", async (t) => {
 	}
 });
 
-test("an in-flight periodic refresh cannot restore status after shutdown", async () => {
+test("session shutdown aborts an in-flight periodic refresh", async () => {
 	const mock = createMockPi();
 	const periodicPrView = deferred<ExecResult>();
 	let prViews = 0;
-	installExec(mock, async (command, args) => {
+	let periodicSignal: AbortSignal | undefined;
+	installExec(mock, async (command, args, options) => {
 		if (command === "git") return textResult("", 128, "not a git repository");
 		if (args[0] === "pr") {
 			prViews += 1;
 			if (prViews === 1) return okResult(samplePr);
+			periodicSignal = options?.signal;
 			return periodicPrView.promise;
 		}
 		return okResult(sampleCounts);
@@ -622,21 +624,72 @@ test("an in-flight periodic refresh cannot restore status after shutdown", async
 	assert.ok(sessionStart);
 	assert.ok(sessionShutdown);
 
-	await sessionStart({}, context.ctx);
-	await waitFor(() => prViews === 2, "periodic refresh starts");
-	await sessionShutdown({}, context.ctx);
-	assert.equal(context.statuses.get("github-pr"), undefined);
+	try {
+		await sessionStart({}, context.ctx);
+		await waitFor(() => prViews === 2, "periodic refresh starts");
+		assert.ok(periodicSignal, "periodic refresh receives a session-owned abort signal");
+		assert.equal(periodicSignal.aborted, false);
 
-	periodicPrView.resolve(
-		okResult({
-			...samplePr,
-			reviewDecision: "CHANGES_REQUESTED",
-			latestReviews: [{ state: "CHANGES_REQUESTED", author: { login: "carol" } }],
-		}),
-	);
-	await wait(25);
-	assert.equal(context.statuses.get("github-pr"), undefined);
-	assert.equal(prViews, 2);
+		await sessionShutdown({}, context.ctx);
+		assert.equal(periodicSignal.aborted, true);
+		assert.equal(context.statuses.get("github-pr"), undefined);
+
+		periodicPrView.resolve(
+			okResult({
+				...samplePr,
+				reviewDecision: "CHANGES_REQUESTED",
+				latestReviews: [{ state: "CHANGES_REQUESTED", author: { login: "carol" } }],
+			}),
+		);
+		await wait(25);
+		assert.equal(context.statuses.get("github-pr"), undefined);
+		assert.equal(prViews, 2);
+	} finally {
+		periodicPrView.resolve(okResult(samplePr));
+		await sessionShutdown({}, context.ctx);
+	}
+});
+
+test("branch changes abort an in-flight periodic refresh", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-github-pr-test-"));
+	const gitDir = join(root, ".git");
+	const headPath = join(gitDir, "HEAD");
+	mkdirSync(gitDir);
+	writeFileSync(headPath, "ref: refs/heads/feature\n");
+
+	const periodicPrView = deferred<ExecResult>();
+	let prViews = 0;
+	let periodicSignal: AbortSignal | undefined;
+	const mock = createMockPi();
+	installExec(mock, async (command, args, options) => {
+		if (command === "git") return textResult(".git/HEAD\n");
+		if (args[0] === "pr") {
+			prViews += 1;
+			if (prViews === 1) return okResult(samplePr);
+			periodicSignal = options?.signal;
+			return periodicPrView.promise;
+		}
+		return okResult(sampleCounts);
+	});
+	githubPr(mock.pi, { refreshIntervalMs: 20 });
+	const context = createMockContext({ cwd: root });
+	const sessionStart = mock.events.get("session_start")?.[0];
+	const sessionShutdown = mock.events.get("session_shutdown")?.[0];
+	assert.ok(sessionStart);
+	assert.ok(sessionShutdown);
+
+	try {
+		await sessionStart({}, context.ctx);
+		await waitFor(() => prViews === 2, "periodic refresh starts");
+		assert.ok(periodicSignal, "periodic refresh receives a session-owned abort signal");
+		assert.equal(periodicSignal.aborted, false);
+
+		writeFileSync(headPath, "ref: refs/heads/main\n");
+		await waitFor(() => periodicSignal?.aborted === true, "branch change aborts periodic refresh");
+	} finally {
+		periodicPrView.resolve(okResult(samplePr));
+		await sessionShutdown({}, context.ctx);
+	}
 });
 
 test("recent terminal pull request status clears when its 24-hour lifetime expires", async () => {
