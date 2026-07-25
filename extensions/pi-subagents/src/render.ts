@@ -19,6 +19,15 @@ import {
 
 const COLLAPSED_ITEM_COUNT = 10;
 
+function previewTask(task: unknown, maxLength = 40): string {
+	if (typeof task !== "string" || task.length === 0) return "...";
+	return task.length > maxLength ? `${task.slice(0, maxLength)}...` : task;
+}
+
+function previewAgent(agent: unknown): string {
+	return typeof agent === "string" && agent.length > 0 ? agent : "...";
+}
+
 export function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
@@ -180,16 +189,16 @@ export function renderSubagentCall(args: SubagentParams, theme: Theme) {
 			theme.fg("accent", `chain (${args.chain.length} steps)`) +
 			theme.fg("muted", ` [${scope}]`);
 		for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
-			const step = args.chain[i];
+			const step = args.chain[i] as { agent?: unknown; task?: unknown } | undefined;
 			// Clean up {previous} placeholder for display
-			const cleanTask = step.task.replace(/\{previous\}/g, "").trim();
-			const preview = cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask;
+			const cleanTask =
+				typeof step?.task === "string" ? step.task.replace(/\{previous\}/g, "").trim() : undefined;
 			text +=
 				"\n  " +
 				theme.fg("muted", `${i + 1}.`) +
 				" " +
-				theme.fg("accent", step.agent) +
-				theme.fg("dim", ` ${preview}`);
+				theme.fg("accent", previewAgent(step?.agent)) +
+				theme.fg("dim", ` ${previewTask(cleanTask)}`);
 		}
 		if (args.chain.length > 3)
 			text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
@@ -200,30 +209,23 @@ export function renderSubagentCall(args: SubagentParams, theme: Theme) {
 			theme.fg("toolTitle", theme.bold("subagent ")) +
 			theme.fg("accent", `parallel (${args.tasks.length} tasks)`) +
 			theme.fg("muted", ` [${scope}]`);
-		for (const t of args.tasks.slice(0, 3)) {
-			const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
-			text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview}`)}`;
+		for (const task of args.tasks.slice(0, 3)) {
+			const item = task as { agent?: unknown; task?: unknown } | undefined;
+			text += `\n  ${theme.fg("accent", previewAgent(item?.agent))}${theme.fg("dim", ` ${previewTask(item?.task)}`)}`;
 		}
 		if (args.tasks.length > 3)
 			text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
 		if (args.aggregator) {
-			const preview =
-				args.aggregator.task.length > 40
-					? `${args.aggregator.task.slice(0, 40)}...`
-					: args.aggregator.task;
-			text += `\n  ${theme.fg("muted", "fan-in → ")}${theme.fg("accent", args.aggregator.agent)}${theme.fg(
+			const aggregator = args.aggregator as { agent?: unknown; task?: unknown };
+			text += `\n  ${theme.fg("muted", "fan-in → ")}${theme.fg("accent", previewAgent(aggregator.agent))}${theme.fg(
 				"dim",
-				` ${preview}`,
+				` ${previewTask(aggregator.task)}`,
 			)}`;
 		}
 		return new Text(text, 0, 0);
 	}
-	const agentName = args.agent || "...";
-	const preview = args.task
-		? args.task.length > 60
-			? `${args.task.slice(0, 60)}...`
-			: args.task
-		: "...";
+	const agentName = previewAgent(args.agent);
+	const preview = previewTask(args.task, 60);
 	let text =
 		theme.fg("toolTitle", theme.bold("subagent ")) +
 		theme.fg("accent", agentName) +
