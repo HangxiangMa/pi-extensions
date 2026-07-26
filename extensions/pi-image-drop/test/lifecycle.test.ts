@@ -62,7 +62,7 @@ function createHarness(
 		inputDialog?: () => Promise<InputDialogResult>;
 		onStatus?: (lines: readonly string[]) => void;
 		onLimits?: (state: ImageDropLimitsMenuState) => void;
-		onSave?: (settings: ImageDropSettings) => Promise<void>;
+		onSave?: (settings: Partial<ImageDropSettings>) => Promise<void>;
 		readPiSettings?: (
 			cwd?: string,
 			projectTrusted?: boolean,
@@ -139,7 +139,7 @@ function createHarness(
 				const value = await options.input?.();
 				return value === undefined ? { kind: "cancelled" } : { kind: "submitted", value };
 			}),
-		saveSettings: options.onSave ?? (async () => undefined),
+		updateSettings: options.onSave ?? (async () => undefined),
 		settingsFilePath: () => "/agent/pi-image-drop.json",
 	});
 	runtime.register();
@@ -475,7 +475,7 @@ test("a failed Status refresh preserves and labels the previous valid policy", a
 });
 
 test("Settings preview and save future limits without changing current-session limits", async () => {
-	let saved: ImageDropSettings | undefined;
+	let saved: Partial<ImageDropSettings> | undefined;
 	const menuStates: ImageDropLimitsMenuState[] = [];
 	const harness = createHarness({
 		menuActions: ["settings", "close"],
@@ -490,7 +490,7 @@ test("Settings preview and save future limits without changing current-session l
 	});
 	await emit(harness.mock, "session_start", {}, harness.context.ctx);
 	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
-	assert.equal(saved?.maxImages, 12);
+	assert.deepEqual(saved, { maxImages: 12 });
 	assert.deepEqual(menuStates[0]?.values.maxImages, { current: "8", defaultValue: "8" });
 	assert.deepEqual(menuStates[1]?.values.maxImages, {
 		pending: "12",
@@ -499,6 +499,20 @@ test("Settings preview and save future limits without changing current-session l
 	});
 	assert.equal(harness.runtime.getBatchForTesting()?.publicHistoryState().maxImages, 128);
 	assert.match(harness.context.notifications.at(-1)?.message ?? "", /future Pi sessions/i);
+});
+
+test("automatic-start updates patch only the toggled setting", async () => {
+	let saved: Partial<ImageDropSettings> | undefined;
+	const harness = createHarness({
+		menuActions: ["settings", "close"],
+		settingsActions: ["toggle-start", "back"],
+		onSave: async (patch) => {
+			saved = patch;
+		},
+	});
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
+	assert.deepEqual(saved, { startOnSessionStart: true });
 });
 
 test("cancelled and failed settings changes preserve the previous valid state", async () => {

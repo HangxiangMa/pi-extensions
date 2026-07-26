@@ -18,6 +18,7 @@ import {
 	loadSettings,
 	normalizeSettings,
 	saveSettings,
+	updateSettings,
 } from "../src/settings.js";
 
 test("settings normalize partial values, preserve compatibility fields, and reject unsafe values", () => {
@@ -127,6 +128,23 @@ test("settings saves are atomic and preserve unknown fields", async () => {
 			(await readdir(directory)).filter((name) => name !== "pi-image-drop.json"),
 			[],
 		);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("settings patches preserve recognized fields changed after an earlier read", async () => {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-image-drop-settings-patch-"));
+	const settingsPath = path.join(directory, "pi-image-drop.json");
+	try {
+		await writeFile(settingsPath, '{"startOnSessionStart":false,"maxImages":8}\n');
+		const earlier = await loadSettings(settingsPath);
+		assert.equal(earlier.settings.maxImages, 8);
+		await writeFile(settingsPath, '{"startOnSessionStart":false,"maxImages":12}\n');
+		await updateSettings({ startOnSessionStart: true }, settingsPath);
+		const saved = JSON.parse(await readFile(settingsPath, "utf8"));
+		assert.equal(saved.startOnSessionStart, true);
+		assert.equal(saved.maxImages, 12);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}

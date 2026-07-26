@@ -33,8 +33,8 @@ import {
 	HARD_LIMITS,
 	type ImageDropSettings,
 	loadSettings,
-	saveSettings,
 	settingsFilePath,
+	updateSettings,
 } from "./settings.js";
 
 const WIDGET_KEY = "image-drop";
@@ -82,7 +82,7 @@ export interface RuntimeDependencies {
 	): ReturnType<typeof showImageDropLimitsMenu>;
 	showConfirm(ctx: ExtensionContext, title: string, message: string): Promise<ConfirmDialogResult>;
 	showInput(ctx: ExtensionContext, title: string, initialValue: string): Promise<InputDialogResult>;
-	saveSettings: typeof saveSettings;
+	updateSettings: typeof updateSettings;
 	settingsFilePath: typeof settingsFilePath;
 }
 
@@ -99,7 +99,7 @@ const DEFAULT_DEPENDENCIES: RuntimeDependencies = {
 	showLimitsMenu: showImageDropLimitsMenu,
 	showConfirm: showImageDropConfirmDialog,
 	showInput: showImageDropInputDialog,
-	saveSettings,
+	updateSettings,
 	settingsFilePath,
 };
 
@@ -483,7 +483,7 @@ export class ImageDropRuntime {
 					if (!this.isCurrentMenu(generation)) return false;
 					const next = { ...settings, startOnSessionStart: enabled };
 					try {
-						await this.dependencies.saveSettings(next);
+						await this.dependencies.updateSettings({ startOnSessionStart: enabled });
 						if (!this.isCurrentMenu(generation)) return false;
 						settings = next;
 						ctx.ui.notify(
@@ -540,7 +540,7 @@ export class ImageDropRuntime {
 				if (!this.isCurrentMenu(generation) || confirmation === "close") return "close";
 				if (confirmation !== "confirmed") continue;
 				try {
-					await this.dependencies.saveSettings(draft);
+					await this.dependencies.updateSettings(limitSettingsPatch(original, draft));
 					if (!this.isCurrentMenu(generation)) return "close";
 					ctx.ui.notify("Resource limits saved for future Pi sessions.", "info");
 					return "back";
@@ -804,6 +804,17 @@ function limitChanges(original: ImageDropSettings, draft: ImageDropSettings): st
 		(key) =>
 			`${limitLabel(key)}: ${formatLimit(key, original[key])} → ${formatLimit(key, draft[key])}`,
 	);
+}
+
+function limitSettingsPatch(
+	original: ImageDropSettings,
+	draft: ImageDropSettings,
+): Partial<Record<LimitKey, number>> {
+	const patch: Partial<Record<LimitKey, number>> = {};
+	for (const key of LIMIT_KEYS) {
+		if (original[key] !== draft[key]) patch[key] = draft[key];
+	}
+	return patch;
 }
 
 function limitPrompt(key: LimitKey): string {

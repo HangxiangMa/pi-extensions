@@ -48,6 +48,7 @@ const LIMIT_KEYS = new Set<keyof ImageDropLimits>([
 	"maxRetainedImages",
 	"maxRetainedBytes",
 ]);
+const SETTING_KEYS = new Set<keyof ImageDropSettings>([...LIMIT_KEYS, "startOnSessionStart"]);
 const saveQueues = new Map<string, Promise<void>>();
 
 export type SettingsLoadResult =
@@ -122,17 +123,29 @@ export interface SettingsSaveOperations {
 	rename?: typeof rename;
 }
 
-export async function saveSettings(
+export function saveSettings(
 	settings: ImageDropSettings,
 	path = settingsFilePath(),
 	operations: SettingsSaveOperations = {},
 ): Promise<void> {
-	if (!normalizeSettings(settings))
-		throw new Error("Refusing to save invalid Image Drop settings.");
+	if (!normalizeSettings(settings)) {
+		return Promise.reject(new Error("Refusing to save invalid Image Drop settings."));
+	}
+	return updateSettings(settings, path, operations);
+}
+
+export async function updateSettings(
+	patch: Partial<ImageDropSettings>,
+	path = settingsFilePath(),
+	operations: SettingsSaveOperations = {},
+): Promise<void> {
+	if (Object.keys(patch).some((key) => !SETTING_KEYS.has(key as keyof ImageDropSettings))) {
+		throw new Error("Refusing to save unknown Image Drop settings.");
+	}
 	const previous = saveQueues.get(path) ?? Promise.resolve();
 	const next = previous
 		.catch(() => undefined)
-		.then(() => saveSettingsAtomic(settings, path, operations));
+		.then(() => saveSettingsAtomic(patch, path, operations));
 	saveQueues.set(path, next);
 	try {
 		await next;
@@ -220,24 +233,30 @@ async function readSettingsDocument(path: string, signal?: AbortSignal): Promise
 }
 
 async function saveSettingsAtomic(
-	settings: ImageDropSettings,
+	patch: Partial<ImageDropSettings>,
 	path: string,
 	operations: SettingsSaveOperations,
 ): Promise<void> {
 	let document: Record<string, unknown> = {};
+	let current = { ...DEFAULT_SETTINGS };
 	try {
 		const parsed = JSON.parse(await readSettingsDocument(path)) as unknown;
-		if (!isRecord(parsed) || !normalizeSettings(parsed)) {
+		const normalized = normalizeSettings(parsed);
+		if (!isRecord(parsed) || !normalized) {
 			throw new Error("existing settings are malformed or invalid");
 		}
 		document = parsed;
+		current = normalized;
 	} catch (error) {
 		if (!(isNodeError(error) && error.code === "ENOENT")) throw error;
+	}
+	if (!normalizeSettings({ ...current, ...patch })) {
+		throw new Error("Refusing to save invalid Image Drop settings.");
 	}
 	await mkdir(dirname(path), { recursive: true });
 	const temporaryPath = join(dirname(path), `.${SETTINGS_FILE}.${process.pid}.${randomUUID()}.tmp`);
 	try {
-		const contents = `${JSON.stringify({ ...document, ...settings }, null, "\t")}\n`;
+		const contents = `${JSON.stringify({ ...document, ...patch }, null, "\t")}\n`;
 		if (Buffer.byteLength(contents, "utf8") > MAX_SETTINGS_BYTES) {
 			throw new Error(`settings document exceeds ${MAX_SETTINGS_BYTES} bytes`);
 		}
