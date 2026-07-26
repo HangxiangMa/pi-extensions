@@ -2,15 +2,40 @@ import { basename } from "node:path";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type {
 	ExtensionAPI,
+	ExtensionCommandContext,
 	ExtensionContext,
 	InputEvent,
 	InputEventResult,
 } from "@earendil-works/pi-coding-agent";
 import { BatchError, BatchStore, digestImages, type ProcessedImage } from "./batch.js";
 import { ImageProcessor } from "./images.js";
+import {
+	type ConfirmDialogResult,
+	type ImageDropLimitsMenuState,
+	type ImageDropSettingsMenuOptions,
+	type InputDialogResult,
+	type LimitSettingAction,
+	type MainMenuAction,
+	type MenuLoadResult,
+	runImageDropMenuLoad,
+	showImageDropConfirmDialog,
+	showImageDropHelp,
+	showImageDropInputDialog,
+	showImageDropLimitsMenu,
+	showImageDropMainMenu,
+	showImageDropSettingsMenu,
+	showImageDropStatus,
+} from "./menu.js";
 import { readEffectivePiImageSettings } from "./pi-settings.js";
 import { ImageDropServer, type ImageDropServerOptions } from "./server.js";
-import { type ImageDropSettings, loadSettings } from "./settings.js";
+import {
+	DEFAULT_SETTINGS,
+	HARD_LIMITS,
+	type ImageDropSettings,
+	loadSettings,
+	settingsFilePath,
+	updateSettings,
+} from "./settings.js";
 
 const WIDGET_KEY = "image-drop";
 
@@ -19,7 +44,9 @@ type LatestExtensionAPI = ExtensionAPI & {
 	on(event: "agent_settled", handler: LatestEventHandler): void;
 };
 
-type ServerControl = Pick<ImageDropServer, "issueLink" | "broadcastState" | "close">;
+type ServerControl = Pick<ImageDropServer, "issueLink" | "broadcastState" | "close"> & {
+	hasUnusedLink?: () => boolean;
+};
 type ProcessorControl = Pick<ImageProcessor, "process">;
 
 export interface RuntimeDependencies {
@@ -27,6 +54,36 @@ export interface RuntimeDependencies {
 	readPiSettings: typeof readEffectivePiImageSettings;
 	startServer(options: ImageDropServerOptions): Promise<ServerControl>;
 	createProcessor(): ProcessorControl;
+	showMainMenu(
+		ctx: ExtensionCommandContext,
+		state: {
+			batch: ReturnType<BatchStore["publicState"]>;
+			history: ReturnType<BatchStore["publicHistoryState"]>;
+			serverRunning: boolean;
+		},
+	): Promise<MainMenuAction>;
+	showStatus(
+		ctx: ExtensionCommandContext,
+		lines: readonly string[],
+	): ReturnType<typeof showImageDropStatus>;
+	loadStatus<T>(
+		ctx: ExtensionCommandContext,
+		label: string,
+		task: (signal: AbortSignal) => Promise<T>,
+	): Promise<MenuLoadResult<T>>;
+	showHelp(ctx: ExtensionCommandContext): ReturnType<typeof showImageDropHelp>;
+	showSettingsMenu(
+		ctx: ExtensionCommandContext,
+		options: ImageDropSettingsMenuOptions,
+	): ReturnType<typeof showImageDropSettingsMenu>;
+	showLimitsMenu(
+		ctx: ExtensionCommandContext,
+		state: ImageDropLimitsMenuState,
+	): ReturnType<typeof showImageDropLimitsMenu>;
+	showConfirm(ctx: ExtensionContext, title: string, message: string): Promise<ConfirmDialogResult>;
+	showInput(ctx: ExtensionContext, title: string, initialValue: string): Promise<InputDialogResult>;
+	updateSettings: typeof updateSettings;
+	settingsFilePath: typeof settingsFilePath;
 }
 
 const DEFAULT_DEPENDENCIES: RuntimeDependencies = {
@@ -34,6 +91,16 @@ const DEFAULT_DEPENDENCIES: RuntimeDependencies = {
 	readPiSettings: readEffectivePiImageSettings,
 	startServer: (options) => ImageDropServer.start(options),
 	createProcessor: () => new ImageProcessor(2),
+	showMainMenu: showImageDropMainMenu,
+	showStatus: showImageDropStatus,
+	loadStatus: runImageDropMenuLoad,
+	showHelp: showImageDropHelp,
+	showSettingsMenu: showImageDropSettingsMenu,
+	showLimitsMenu: showImageDropLimitsMenu,
+	showConfirm: showImageDropConfirmDialog,
+	showInput: showImageDropInputDialog,
+	updateSettings,
+	settingsFilePath,
 };
 
 export class ImageDropRuntime {
@@ -58,15 +125,29 @@ export class ImageDropRuntime {
 
 	register(): void {
 		this.pi.registerCommand("image-drop", {
-			description: "Show a local browser link for staging images",
-			handler: async (_args, ctx) => {
+			description: "Open the Image Drop menu",
+			handler: async (args, ctx) => {
+				if (args.trim()) {
+					const message = "Usage: /image-drop";
+					if (ctx.hasUI) {
+						ctx.ui.notify(message, "warning");
+						return;
+					}
+					throw new Error(message);
+				}
+				if (ctx.mode !== "tui") {
+					const message = "The Image Drop menu is available in TUI mode only.";
+					if (ctx.hasUI) {
+						ctx.ui.notify(message, "warning");
+						return;
+					}
+					throw new Error(message);
+				}
+				const generation = this.generation;
 				this.context = ctx;
 				await this.recoverOrphanedReservation(ctx);
-				try {
-					await this.presentLink(ctx);
-				} catch (error) {
-					ctx.ui.notify(`Image Drop could not start: ${formatError(error)}`, "error");
-				}
+				if (!this.isCurrentMenu(generation)) return;
+				await this.showMenu(ctx, generation);
 			},
 		});
 
@@ -89,12 +170,18 @@ export class ImageDropRuntime {
 		await this.releaseServer();
 		previousBatch?.close();
 		if (generation !== this.generation) return;
-		const result = await this.dependencies.loadSettings();
+		this.sessionAbort = new AbortController();
+		let result: Awaited<ReturnType<typeof loadSettings>>;
+		try {
+			result = await this.dependencies.loadSettings(undefined, this.sessionAbort.signal);
+		} catch (error) {
+			if (generation !== this.generation || this.sessionAbort.signal.aborted) return;
+			throw error;
+		}
 		if (generation !== this.generation) return;
 		this.settings = result.settings;
 		this.batch = new BatchStore(result.settings);
 		this.processor = this.dependencies.createProcessor();
-		this.sessionAbort = new AbortController();
 		this.context = ctx;
 		this.closed = false;
 		this.lastPiSettingsWarning = "";
@@ -256,8 +343,269 @@ export class ImageDropRuntime {
 		return true;
 	}
 
-	private async presentLink(ctx: ExtensionContext): Promise<void> {
+	private isCurrentMenu(generation: number): boolean {
+		return generation === this.generation && !this.closed;
+	}
+
+	private async showMenu(ctx: ExtensionCommandContext, generation: number): Promise<void> {
+		for (;;) {
+			const batch = this.batch;
+			if (!batch || !this.isCurrentMenu(generation)) return;
+			const action = await this.dependencies.showMainMenu(ctx, {
+				batch: batch.publicState(),
+				history: batch.publicHistoryState(),
+				serverRunning: Boolean(this.server),
+			});
+			if (!this.isCurrentMenu(generation)) return;
+			if (action === "close") return;
+			if (action === "open") {
+				try {
+					const opened = await this.presentLink(ctx, true);
+					if (!this.isCurrentMenu(generation)) return;
+					if (opened !== "cancelled") return;
+				} catch (error) {
+					if (!this.isCurrentMenu(generation)) return;
+					ctx.ui.notify(`Image Drop could not start: ${formatError(error)}`, "error");
+				}
+				continue;
+			}
+			if (action === "status") {
+				const outcome = await this.showStatusFlow(ctx, generation);
+				if (!this.isCurrentMenu(generation) || outcome === "close") return;
+				continue;
+			}
+			if (action === "settings") {
+				const outcome = await this.showSettingsFlow(ctx, generation);
+				if (!this.isCurrentMenu(generation) || outcome === "close") return;
+				continue;
+			}
+			const outcome = await this.dependencies.showHelp(ctx);
+			if (!this.isCurrentMenu(generation) || outcome === "close") return;
+		}
+	}
+
+	private async showStatusFlow(
+		ctx: ExtensionCommandContext,
+		generation: number,
+	): Promise<"back" | "close"> {
+		let previousPiSettings: Awaited<ReturnType<typeof readEffectivePiImageSettings>> | undefined;
+		for (;;) {
+			const batch = this.batch;
+			if (!batch || !this.isCurrentMenu(generation)) return "close";
+			const sessionSignal = this.sessionAbort.signal;
+			const loaded = await this.dependencies.loadStatus(
+				ctx,
+				"Refreshing Image Drop status…",
+				(signal) =>
+					this.dependencies.readPiSettings(
+						ctx.cwd,
+						ctx.isProjectTrusted(),
+						AbortSignal.any([signal, sessionSignal]),
+					),
+			);
+			if (!this.isCurrentMenu(generation) || loaded.kind === "closed") return "close";
+			if (loaded.kind === "cancelled") return "back";
+			let settingsError = "";
+			if (loaded.kind === "completed") previousPiSettings = loaded.value;
+			else settingsError = `Pi image settings refresh failed — ${formatError(loaded.error)}`;
+			const piSettings = previousPiSettings;
+			const state = batch.publicState();
+			const retained = batch.retainedCapacityUsage();
+			const lines = [
+				`Service: ${this.server ? "Running" : "Not started"}`,
+				this.batchStatusLine(state),
+				`Retained capacity: ${retained.images}/${retained.maxImages} images · ${formatBytes(retained.bytes)}/${formatBytes(retained.maxBytes)} (draft + sent history)`,
+				`Current model: ${supportsImages(ctx) ? "Supports images" : "Text only — sending disabled"}`,
+				...(piSettings
+					? [
+							`Pi image sending: ${piSettings.blockImages ? "Disabled in /settings" : "Enabled"}`,
+							`Auto-resize: ${piSettings.autoResize ? "On" : "Off"}`,
+							...piSettings.warnings.map((warning) => `Warning: ${warning}`),
+							...(settingsError
+								? [`Warning: ${settingsError}; showing the previous valid state.`]
+								: []),
+						]
+					: [settingsError]),
+			];
+			const action = await this.dependencies.showStatus(ctx, lines);
+			if (!this.isCurrentMenu(generation)) return "close";
+			if (action === "close" || action === "back") return action;
+			if (action === "refresh") continue;
+			try {
+				const opened = await this.presentLink(ctx, true);
+				if (!this.isCurrentMenu(generation) || opened !== "cancelled") return "close";
+			} catch (error) {
+				if (!this.isCurrentMenu(generation)) return "close";
+				ctx.ui.notify(`Image Drop could not start: ${formatError(error)}`, "error");
+			}
+		}
+	}
+
+	private async showSettingsFlow(
+		ctx: ExtensionCommandContext,
+		generation: number,
+	): Promise<"back" | "close"> {
+		for (;;) {
+			const sessionSignal = this.sessionAbort.signal;
+			const loaded = await this.dependencies.loadStatus(
+				ctx,
+				"Loading Image Drop settings…",
+				(signal) =>
+					this.dependencies.loadSettings(undefined, AbortSignal.any([signal, sessionSignal])),
+			);
+			if (!this.isCurrentMenu(generation) || loaded.kind === "closed") return "close";
+			if (loaded.kind === "cancelled") return "back";
+			if (loaded.kind === "error") {
+				ctx.ui.notify(
+					`Image Drop settings could not be loaded: ${formatError(loaded.error)}`,
+					"error",
+				);
+				return "back";
+			}
+			const result = loaded.value;
+			const invalid = result.kind === "invalid";
+			const path = this.dependencies.settingsFilePath();
+			let settings = { ...result.settings };
+			const lines = invalid
+				? [
+						"Settings file: Invalid — editing is disabled",
+						"Fix the file and reopen Settings.",
+						path,
+						result.warning,
+					]
+				: [`Settings file: ${result.kind === "missing" ? "Defaults (not created)" : path}`];
+			const action = await this.dependencies.showSettingsMenu(ctx, {
+				lines,
+				editable: !invalid,
+				startOnSessionStart: settings.startOnSessionStart,
+				limitsValue: usesSafeLimits(settings) ? "Recommended" : "Custom",
+				onStartChange: async (enabled) => {
+					if (!this.isCurrentMenu(generation)) return false;
+					const next = { ...settings, startOnSessionStart: enabled };
+					try {
+						await this.dependencies.updateSettings({ startOnSessionStart: enabled });
+						if (!this.isCurrentMenu(generation)) return false;
+						settings = next;
+						ctx.ui.notify(
+							`Saved. Automatic start is ${enabled ? "on" : "off"} for future Pi sessions.`,
+							"info",
+						);
+						return true;
+					} catch (error) {
+						if (!this.isCurrentMenu(generation)) return false;
+						ctx.ui.notify(
+							`Image Drop settings were not saved; the previous settings remain active: ${formatError(error)}`,
+							"error",
+						);
+						return false;
+					}
+				},
+			});
+			if (!this.isCurrentMenu(generation)) return "close";
+			if (action === "close" || action === "back") return action;
+			const outcome = await this.showLimitsFlow(ctx, settings, generation);
+			if (!this.isCurrentMenu(generation) || outcome === "close") return "close";
+		}
+	}
+
+	private async showLimitsFlow(
+		ctx: ExtensionCommandContext,
+		original: ImageDropSettings,
+		generation: number,
+	): Promise<"back" | "close"> {
+		let draft = { ...original };
+		for (;;) {
+			const action = await this.dependencies.showLimitsMenu(ctx, limitMenuState(draft, original));
+			if (!this.isCurrentMenu(generation)) return "close";
+			if (action === "close" || action === "back") return action;
+			if (action === "defaults") {
+				draft = {
+					...draft,
+					...DEFAULT_SETTINGS,
+					startOnSessionStart: original.startOnSessionStart,
+				};
+				continue;
+			}
+			if (action === "save") {
+				const changes = limitChanges(original, draft);
+				if (changes.length === 0) {
+					ctx.ui.notify("No resource-limit changes to save.", "info");
+					continue;
+				}
+				const confirmation = await this.dependencies.showConfirm(
+					ctx,
+					"Save resource limits for future sessions?",
+					`${changes.join("\n")}\n\nThese limits apply when the next Pi session starts. Higher limits may increase memory use or provider failures.`,
+				);
+				if (!this.isCurrentMenu(generation) || confirmation === "close") return "close";
+				if (confirmation !== "confirmed") continue;
+				try {
+					await this.dependencies.updateSettings(limitSettingsPatch(original, draft));
+					if (!this.isCurrentMenu(generation)) return "close";
+					ctx.ui.notify("Resource limits saved for future Pi sessions.", "info");
+					return "back";
+				} catch (error) {
+					if (!this.isCurrentMenu(generation)) return "close";
+					ctx.ui.notify(
+						`Resource limits were not saved; the previous settings remain active: ${formatError(error)}`,
+						"error",
+					);
+					continue;
+				}
+			}
+			const input = await this.dependencies.showInput(
+				ctx,
+				limitPrompt(action),
+				limitInputValue(action, draft),
+			);
+			if (!this.isCurrentMenu(generation) || input.kind === "closed") return "close";
+			if (input.kind === "cancelled") continue;
+			const parsed = parseLimitInput(action, input.value);
+			if (parsed === undefined || parsed > HARD_LIMITS[action]) {
+				ctx.ui.notify(`Enter ${limitRange(action)}.`, "warning");
+				continue;
+			}
+			const next = { ...draft, [action]: parsed };
+			if (next.maxImageBytes > next.maxBatchBytes) {
+				ctx.ui.notify("Size per image cannot exceed the combined draft size.", "warning");
+				continue;
+			}
+			draft = next;
+		}
+	}
+
+	private batchStatusLine(state: ReturnType<BatchStore["publicState"]>): string {
+		const ready = state.items.filter((item) => item.status === "ready").length;
+		const processing = state.items.filter(
+			(item) => item.status === "uploading" || item.status === "processing",
+		).length;
+		const errors = state.items.filter((item) => item.status === "error").length;
+		if (state.phase === "empty") return "Draft: No images staged";
+		if (state.phase === "reserved") return `Draft: ${state.items.length} images queued with Pi`;
+		return `Draft: ${ready}/${state.items.length} ready · ${processing} processing · ${errors} need attention · ${formatBytes(state.totalSourceBytes)}`;
+	}
+
+	private async presentLink(
+		ctx: ExtensionContext,
+		confirmRotation = false,
+	): Promise<"opened" | "cancelled" | "closed"> {
+		const generation = this.generation;
 		const server = await this.ensureServer(ctx);
+		if (generation !== this.generation || this.closed) {
+			throw new Error("the Pi session changed while opening Image Drop");
+		}
+		if (confirmRotation && server.hasUnusedLink?.()) {
+			const confirmation = await this.dependencies.showConfirm(
+				ctx,
+				"Create a new staging link?",
+				"The previous unused Image Drop link will stop working.",
+			);
+			if (generation !== this.generation || this.closed) {
+				throw new Error("the Pi session changed while opening Image Drop");
+			}
+			if (confirmation === "close") return "closed";
+			if (confirmation !== "confirmed") return "cancelled";
+		}
 		const link = server.issueLink();
 		if (this.batch?.publicState().phase === "empty") {
 			ctx.ui.setWidget(WIDGET_KEY, [`🖼️ Image Drop: ${link}`]);
@@ -265,6 +613,7 @@ export class ImageDropRuntime {
 			this.updateWidget(ctx);
 		}
 		ctx.ui.notify(`Image Drop: ${link}`, "info");
+		return "opened";
 	}
 
 	private async ensureServer(ctx: ExtensionContext): Promise<ServerControl> {
@@ -401,6 +750,130 @@ export class ImageDropRuntime {
 			? "Resolve or delete failed images before sending."
 			: "Wait for every image to finish uploading before sending.";
 	}
+}
+
+const MIB = 1024 * 1024;
+const LIMIT_KEYS = [
+	"maxImages",
+	"maxImageBytes",
+	"maxBatchBytes",
+	"maxImagePixels",
+	"maxRetainedImages",
+	"maxRetainedBytes",
+] as const;
+type LimitKey = (typeof LIMIT_KEYS)[number];
+
+function usesSafeLimits(settings: ImageDropSettings): boolean {
+	return LIMIT_KEYS.every((key) => settings[key] === DEFAULT_SETTINGS[key]);
+}
+
+function limitMenuState(
+	draft: ImageDropSettings,
+	original: ImageDropSettings,
+): ImageDropLimitsMenuState {
+	const value = (key: LimitSettingAction) => ({
+		current: formatLimitValue(key, original[key]),
+		defaultValue: formatLimitValue(key, DEFAULT_SETTINGS[key]),
+		...(draft[key] === original[key] ? {} : { pending: formatLimitValue(key, draft[key]) }),
+	});
+	return {
+		unsavedChanges: limitChanges(original, draft).length,
+		values: {
+			maxImages: value("maxImages"),
+			maxImageBytes: value("maxImageBytes"),
+			maxBatchBytes: value("maxBatchBytes"),
+			maxImagePixels: value("maxImagePixels"),
+			maxRetainedImages: value("maxRetainedImages"),
+			maxRetainedBytes: value("maxRetainedBytes"),
+		},
+	};
+}
+
+function formatLimitValue(key: LimitSettingAction, value: number): string {
+	if (key === "maxImageBytes" || key === "maxBatchBytes" || key === "maxRetainedBytes") {
+		return formatBytes(value);
+	}
+	if (key === "maxImagePixels" && value % 1_000_000 === 0) {
+		return `${value / 1_000_000} MP`;
+	}
+	return formatCount(value);
+}
+
+function limitChanges(original: ImageDropSettings, draft: ImageDropSettings): string[] {
+	return LIMIT_KEYS.filter((key) => original[key] !== draft[key]).map(
+		(key) =>
+			`${limitLabel(key)}: ${formatLimit(key, original[key])} → ${formatLimit(key, draft[key])}`,
+	);
+}
+
+function limitSettingsPatch(
+	original: ImageDropSettings,
+	draft: ImageDropSettings,
+): Partial<Record<LimitKey, number>> {
+	const patch: Partial<Record<LimitKey, number>> = {};
+	for (const key of LIMIT_KEYS) {
+		if (original[key] !== draft[key]) patch[key] = draft[key];
+	}
+	return patch;
+}
+
+function limitPrompt(key: LimitKey): string {
+	const unit = byteLimit(key) ? "MiB" : key === "maxImagePixels" ? "megapixels" : "images";
+	return `${limitLabel(key)} (${unit})`;
+}
+
+function limitInputValue(key: LimitKey, settings: ImageDropSettings): string {
+	const value = settings[key];
+	if (byteLimit(key)) return String(value / MIB);
+	if (key === "maxImagePixels") return String(value / 1_000_000);
+	return String(value);
+}
+
+function parseLimitInput(key: LimitKey, input: string): number | undefined {
+	const value = Number(input.trim());
+	if (!Number.isFinite(value) || value <= 0) return undefined;
+	const scaled = byteLimit(key)
+		? value * MIB
+		: key === "maxImagePixels"
+			? value * 1_000_000
+			: value;
+	return Number.isSafeInteger(scaled) ? scaled : undefined;
+}
+
+function limitRange(key: LimitKey): string {
+	return `a positive value no greater than ${formatLimit(key, HARD_LIMITS[key])}`;
+}
+
+function limitLabel(key: LimitKey): string {
+	return {
+		maxImages: "Images for next message",
+		maxImageBytes: "Per-image upload size",
+		maxBatchBytes: "Total upload size",
+		maxImagePixels: "Maximum image resolution",
+		maxRetainedImages: "Sent history count",
+		maxRetainedBytes: "Sent history memory",
+	}[key];
+}
+
+function formatLimit(key: LimitKey, value: number): string {
+	if (byteLimit(key)) return formatBytes(value);
+	return key === "maxImagePixels" ? formatCount(value) : String(value);
+}
+
+function byteLimit(key: LimitKey): boolean {
+	return key === "maxImageBytes" || key === "maxBatchBytes" || key === "maxRetainedBytes";
+}
+
+function formatBytes(value: number): string {
+	if (value < 1024) return `${value} B`;
+	if (value < MIB) return `${Math.round(value / 1024)} KiB`;
+	return `${Number((value / MIB).toFixed(1))} MiB`;
+}
+
+function formatCount(value: number): string {
+	return value >= 1_000_000
+		? `${Number((value / 1_000_000).toFixed(1))} megapixels`
+		: String(value);
 }
 
 function supportsImages(ctx: ExtensionContext): boolean {

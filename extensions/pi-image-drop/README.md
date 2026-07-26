@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-image-drop)](https://www.npmjs.com/package/@narumitw/pi-image-drop) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-image-drop` adds one `/image-drop` command to the latest [Pi Coding Agent](https://pi.dev). It serves a private loopback page where you can paste, drop, choose, preview, reorder, retry, and remove local images. The ordered batch is attached to your next non-empty interactive Pi message.
+`@narumitw/pi-image-drop` adds one menu-first `/image-drop` command to the latest [Pi Coding Agent](https://pi.dev). Its **Open staging page** action serves a private loopback page where you can paste, drop, choose, preview, reorder, retry, and remove local images. The ordered batch is attached to your next non-empty interactive Pi message.
 
 The page never contains a prompt or Attach button: Pi remains the only place where messages are written and sent. Its React and TypeScript frontend uses Radix Themes, Primitives, Colors, and Icons, and ships as local bundled assets with no CDN or runtime build step.
 
@@ -15,6 +15,7 @@ The page never contains a prompt or Attach button: Pi remains the only place whe
 - Applies orientation, strips private metadata, and enforces Pi-compatible image limits.
 - Keeps bounded sent-image history for explicit re-attachment during the live session.
 - Uses Radix UI for an adaptive light/dark design system, accessible dialogs and disclosures, semantic colors, and consistent action icons.
+- Opens a side-effect-free TUI menu with current draft state, Status, Settings, and Help.
 - Reports batch state above Pi's editor and can start automatically with each session.
 
 ## 📦 Install
@@ -35,8 +36,8 @@ This package targets the latest Pi release and uses its `agent_settled` lifecycl
 
 ## 🚀 Workflow
 
-1. Run `/image-drop` in an interactive Pi session. You can instead set `startOnSessionStart: true` to start the service with every Pi session.
-2. Pi prints and displays a clickable one-time `http://127.0.0.1:<port>/...` link. The extension does **not** open a browser, including when session startup is enabled.
+1. Run `/image-drop` in an interactive Pi session. The command opens a menu without starting the browser service or changing a link.
+2. Choose **Open staging page**. Pi prints and displays a clickable one-time `http://127.0.0.1:<port>/...` link. The extension does **not** open a browser, including when session startup is enabled.
 3. Open the link. Paste images anywhere, drop files, or select **Choose images**.
 4. Review previews and processing details. Drag to reorder, use the keyboard-accessible arrow buttons, retry failures, delete individual items, or use confirmed **Clear all**.
 5. Write and submit a non-empty message in Pi. The ready images are appended after any attachments already on that message, in browser order.
@@ -44,7 +45,19 @@ This package targets the latest Pi release and uses its `agent_settled` lifecycl
 
 The `🖼️` widget above Pi's editor reports ready, uploading, error, and queued counts. Uploading or failed items block the whole batch and preserve the Pi editor text. Image-only messages are not supported.
 
-By default, the loopback service starts lazily when you run `/image-drop`. With `startOnSessionStart: true`, it starts after each Pi session initializes and displays the link in Pi automatically. Each later `/image-drop` invocation reuses the service and rotates the unused one-time link. A browser refresh keeps the current in-memory batch and sent-image history. Opening the authenticated page in another tab gives the new tab the editing lease and makes the old tab stale. Reloading, replacing, forking, or shutting down the Pi session releases both the draft and all retained history.
+By default, the loopback service starts lazily only when you choose **Open staging page**. With `startOnSessionStart: true`, it starts after each Pi session initializes and displays the link in Pi automatically. A later Open action reuses the service. If the previous one-time link is still unused, Image Drop previews that it will be invalidated and asks before creating another; cancellation leaves the existing link unchanged. A browser refresh keeps the current in-memory batch and sent-image history. Opening the authenticated page in another tab gives the new tab the editing lease and makes the old tab stale. Reloading, replacing, forking, or shutting down the Pi session releases both the draft and all retained history.
+
+## 💬 Command menu
+
+Run `/image-drop` without arguments in TUI mode. The menu shows the current draft and service state, then offers:
+
+- **Open staging page** — start or reuse the private browser service and create a one-time link.
+- **Status** — inspect draft readiness, sent-history usage, model image support, Pi image policy, and auto-resize behavior.
+- **Settings** — configure automatic startup or review advanced resource limits.
+- **Help** — review the send workflow, privacy lifecycle, and remote forwarding guidance.
+- **Close** — return to Pi without side effects.
+
+Use the configured navigation and confirmation keys. Escape returns from a subview or closes the main menu; Ctrl+C closes from any menu level. `/image-drop` accepts no arguments. The interactive menu is unavailable in RPC, JSON, and print modes and rejects those invocations before starting the service; manual settings remain available through the JSON file below.
 
 ## 🖼️ Supported images
 
@@ -65,7 +78,7 @@ The processor applies orientation and removes EXIF (including GPS), XMP, IPTC, c
 
 ## ⚙️ Configuration
 
-Image Drop has one optional **global-only** JSON file:
+Image Drop has one optional **global-only** JSON file. In TUI mode, choose **Settings** from `/image-drop` for guided editing, or edit the same file manually:
 
 ```text
 ${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-image-drop.json
@@ -98,9 +111,11 @@ Example:
 | `maxRetainedImages` | 128 | 256 |
 | `maxRetainedBytes` | 512 MiB | 1 GiB |
 
+Settings saved from the menu are written atomically, preserve unknown fields, and apply to future Pi sessions; the current draft and history are never rebuilt or discarded to apply new limits. Automatic-start changes save immediately, and leaving Settings waits for an in-progress save. Resource-limit changes remain a preview until **Review changes before saving** is confirmed; cancelling a field, preview, or unsaved limits menu writes no resource-limit change. If saving fails, the previous file and effective session settings remain active and the menu reports how to retry.
+
 `maxRetainedImages` and `maxRetainedBytes` govern how much sent history can coexist with the current draft, using combined image-count and resident-byte accounting. When either limit is reached, Image Drop removes the oldest sent-history entries first until the new draft fits. It never automatically removes the active or queued draft and does not reject a new image merely because retained history is full; the draft remains independently bounded by the batch limits above.
 
-Limit values are positive integer counts/bytes/pixels, and `startOnSessionStart` must be a boolean. `maxImageBytes` cannot exceed `maxBatchBytes`. Unknown fields, malformed JSON, invalid values, symlinks, or values above a hard ceiling cause the **whole file** to be ignored with one warning and safe defaults to be used. Limit values above a safe default but within a hard ceiling produce a memory/provider-limit warning.
+Limit values are positive integer counts/bytes/pixels, and `startOnSessionStart` must be a boolean. `maxImageBytes` cannot exceed `maxBatchBytes`. Unknown fields are ignored by this version and preserved by menu saves for forward compatibility. Malformed JSON, invalid recognized values, symlinks, files larger than 64 KiB, or values above a hard ceiling cause the **whole file** to be ignored with one warning and safe defaults to be used; the menu will not overwrite an invalid file. Limit values above a safe default but within a hard ceiling produce a memory/provider-limit warning.
 
 At upload and submission time, the extension also re-reads Pi's documented global and trusted-project `images.autoResize` and `images.blockImages` settings. `blockImages: true` or a text-only current model blocks processing/submission without discarding the draft.
 
@@ -130,7 +145,7 @@ Then open the unchanged `http://127.0.0.1:45678/...` link locally. Image Drop do
 
 ## 🚧 Limitations
 
-- Only `/image-drop` is registered; there is no `/image-drop clear` command.
+- Only the argument-free `/image-drop` menu is registered; there is no `/image-drop open` or `/image-drop clear` textual route.
 - A non-empty interactive Pi message is required. RPC, extension-generated, slash-command, and image-only inputs do not consume the batch.
 - All items must be ready. One uploading or failed item blocks submission until it is retried or deleted.
 - Provider aggregate request limits vary. Raising the defaults to the hard ceilings does not guarantee that a provider accepts the final multi-image request.
@@ -142,7 +157,8 @@ Then open the unchanged `http://127.0.0.1:45678/...` link locally. Image Drop do
 ```text
 src/index.ts            Pi package entrypoint
 src/image-drop.ts       extension registration and command orchestration
-src/runtime.ts          Pi lifecycle and message orchestration
+src/runtime.ts          Pi lifecycle, command menu, and message orchestration
+src/menu.ts             responsive TUI menus, status, help, and settings views
 src/batch.ts            in-memory draft and sent-history state machine
 src/images.ts           bounded image processing
 src/server.ts           authenticated loopback HTTP/SSE server

@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { digestImages, type ProcessedImage } from "../src/batch.js";
+import type {
+	ConfirmDialogResult,
+	ImageDropLimitsMenuState,
+	InputDialogResult,
+} from "../src/menu.js";
 import { ImageDropRuntime } from "../src/runtime.js";
 import type { ImageDropServerOptions } from "../src/server.js";
 import { DEFAULT_SETTINGS, type ImageDropSettings } from "../src/settings.js";
@@ -26,7 +31,47 @@ function createHarness(
 		idle?: () => boolean;
 		pending?: () => boolean;
 		settings?: Partial<ImageDropSettings>;
+		loadSettings?: (
+			path?: string,
+			signal?: AbortSignal,
+		) => Promise<
+			| { kind: "missing"; settings: ImageDropSettings }
+			| { kind: "loaded"; settings: ImageDropSettings; warning?: string }
+			| { kind: "invalid"; settings: ImageDropSettings; warning: string }
+		>;
 		startError?: Error;
+		menuActions?: Array<"open" | "status" | "settings" | "help" | "close">;
+		showMainMenu?: () => Promise<"open" | "status" | "settings" | "help" | "close">;
+		statusActions?: Array<"open" | "refresh" | "back" | "close">;
+		settingsActions?: Array<"toggle-start" | "limits" | "back" | "close">;
+		limitActions?: Array<
+			| "maxImages"
+			| "maxImageBytes"
+			| "maxBatchBytes"
+			| "maxImagePixels"
+			| "maxRetainedImages"
+			| "maxRetainedBytes"
+			| "save"
+			| "defaults"
+			| "back"
+			| "close"
+		>;
+		confirm?: () => Promise<boolean>;
+		input?: () => Promise<string | undefined>;
+		confirmDialog?: () => Promise<ConfirmDialogResult>;
+		inputDialog?: () => Promise<InputDialogResult>;
+		onStatus?: (lines: readonly string[]) => void;
+		onLimits?: (state: ImageDropLimitsMenuState) => void;
+		onSave?: (settings: Partial<ImageDropSettings>) => Promise<void>;
+		readPiSettings?: (
+			cwd?: string,
+			projectTrusted?: boolean,
+			signal?: AbortSignal,
+		) => Promise<{
+			autoResize: boolean;
+			blockImages: boolean;
+			warnings: string[];
+		}>;
 	} = {},
 ) {
 	const mock = createMockPi();
@@ -34,29 +79,76 @@ function createHarness(
 	let serverStarts = 0;
 	let serverCloses = 0;
 	let links = 0;
+	let unusedLink = false;
 	const server = {
-		issueLink: () => `http://127.0.0.1:1234/bootstrap?token=${++links}`,
+		hasUnusedLink: () => unusedLink,
+		issueLink: () => {
+			unusedLink = true;
+			return `http://127.0.0.1:1234/bootstrap?token=${++links}`;
+		},
 		broadcastState() {},
 		async close() {
 			serverCloses += 1;
 		},
 	};
 	const runtime = new ImageDropRuntime(mock.pi, {
-		loadSettings: async () => ({
-			kind: "missing",
-			settings: { ...DEFAULT_SETTINGS, ...options.settings },
-		}),
-		readPiSettings: async () => ({ autoResize: true, blockImages: false, warnings: [] }),
+		loadSettings:
+			options.loadSettings ??
+			(async () => ({
+				kind: "missing",
+				settings: { ...DEFAULT_SETTINGS, ...options.settings },
+			})),
+		readPiSettings:
+			options.readPiSettings ??
+			(async () => ({ autoResize: true, blockImages: false, warnings: [] })),
 		startServer: async (received) => {
 			serverStarts += 1;
 			serverOptions = received;
 			if (options.startError) throw options.startError;
 			return server;
 		},
+		showMainMenu: options.showMainMenu ?? (async () => options.menuActions?.shift() ?? "close"),
+		showStatus: async (_ctx, lines) => {
+			options.onStatus?.(lines);
+			return options.statusActions?.shift() ?? "back";
+		},
+		loadStatus: async (_ctx, _label, task) => {
+			try {
+				return { kind: "completed", value: await task(new AbortController().signal) };
+			} catch (error) {
+				return { kind: "error", error };
+			}
+		},
+		showHelp: async () => "back",
+		showSettingsMenu: async (_ctx, menuOptions) => {
+			const action = options.settingsActions?.shift() ?? "back";
+			if (action !== "toggle-start") return action;
+			await menuOptions.onStartChange(!menuOptions.startOnSessionStart);
+			return "back";
+		},
+		showLimitsMenu: async (_ctx, state) => {
+			options.onLimits?.(state);
+			return options.limitActions?.shift() ?? "back";
+		},
+		showConfirm:
+			options.confirmDialog ??
+			(async () => (((await options.confirm?.()) ?? true) ? "confirmed" : "cancelled")),
+		showInput:
+			options.inputDialog ??
+			(async () => {
+				const value = await options.input?.();
+				return value === undefined ? { kind: "cancelled" } : { kind: "submitted", value };
+			}),
+		updateSettings: options.onSave ?? (async () => undefined),
+		settingsFilePath: () => "/agent/pi-image-drop.json",
 	});
 	runtime.register();
 	const context = createMockContext({
 		cwd: "/workspace/image-drop",
+		mode: "tui",
+		hasUI: true,
+		confirm: options.confirm,
+		input: options.input,
 		model: { id: "vision", provider: "test", input: ["text", "image"] },
 		isIdle: options.idle ?? (() => true),
 		hasPendingMessages: options.pending ?? (() => false),
@@ -184,18 +276,20 @@ test("agent_settled restores a queued reservation that never became a user messa
 	assert.match(context.notifications.at(-1)?.message ?? "", /restored/i);
 });
 
-test("/image-drop lazily starts one server, rotates links, and shutdown releases it", async () => {
-	const harness = createHarness();
+test("/image-drop is a side-effect-free menu until Open is selected", async () => {
+	const cancelled = createHarness({ menuActions: ["close"] });
+	await emit(cancelled.mock, "session_start", {}, cancelled.context.ctx);
+	await cancelled.mock.commands.get("image-drop")?.handler("", cancelled.context.ctx);
+	assert.equal(cancelled.serverStarts, 0);
+	assert.equal(cancelled.context.notifications.length, 0);
+	assert.equal(cancelled.context.widgets.get("image-drop"), undefined);
+
+	const harness = createHarness({ menuActions: ["open"] });
 	await emit(harness.mock, "session_start", {}, harness.context.ctx);
-	assert.equal(harness.serverStarts, 0);
-	await Promise.all([
-		harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx),
-		harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx),
-	]);
+	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
 	assert.equal(harness.serverStarts, 1);
 	assert.equal(harness.serverOptions?.projectName, "image-drop");
 	assert.match(harness.context.notifications[0]?.message ?? "", /token=1/);
-	assert.match(harness.context.notifications[1]?.message ?? "", /token=2/);
 	assert.match(String(harness.context.widgets.get("image-drop")), /127\.0\.0\.1/);
 	harness.runtime.addReadyImageForTesting("one", "one.png", Buffer.from("source"), PROCESSED);
 	const closingBatch = harness.runtime.getBatchForTesting();
@@ -209,8 +303,293 @@ test("/image-drop lazily starts one server, rotates links, and shutdown releases
 	assert.equal(harness.context.widgets.get("image-drop"), undefined);
 });
 
+test("an unused staging link is previewed before rotation and cancellation preserves it", async () => {
+	const harness = createHarness({
+		menuActions: ["open", "open", "close"],
+		confirm: async () => false,
+	});
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
+	assert.match(harness.context.notifications.at(-1)?.message ?? "", /token=1/);
+	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
+	assert.equal(harness.serverStarts, 1);
+	assert.equal(harness.context.notifications.length, 1);
+	assert.match(String(harness.context.widgets.get("image-drop")), /token=1/);
+});
+
+test("unsupported modes and arguments reject observably before starting the service", async () => {
+	const harness = createHarness({ menuActions: ["open"] });
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	const command = harness.mock.commands.get("image-drop");
+	assert.ok(command);
+	const rpcContext = createMockContext({ mode: "rpc", hasUI: true });
+	await command.handler("", rpcContext.ctx);
+	await command.handler("open", harness.context.ctx);
+	for (const mode of ["print", "json"] as const) {
+		const noUiContext = createMockContext({ mode, hasUI: false });
+		await assert.rejects(async () => {
+			await command.handler("", noUiContext.ctx);
+		}, /TUI mode only/i);
+		await assert.rejects(async () => {
+			await command.handler("open", noUiContext.ctx);
+		}, /Usage: \/image-drop/);
+	}
+	assert.equal(harness.serverStarts, 0);
+	assert.match(rpcContext.notifications.at(-1)?.message ?? "", /TUI mode only/i);
+	assert.match(harness.context.notifications.at(-1)?.message ?? "", /Usage: \/image-drop/);
+});
+
+test("session replacement stops stale main-menu and Status continuations", async () => {
+	let resolveMain!: (action: "open") => void;
+	let markMainShown!: () => void;
+	const mainShown = new Promise<void>((resolve) => {
+		markMainShown = resolve;
+	});
+	const staleMain = createHarness({
+		showMainMenu: () =>
+			new Promise((resolve) => {
+				resolveMain = resolve;
+				markMainShown();
+			}),
+	});
+	await emit(staleMain.mock, "session_start", {}, staleMain.context.ctx);
+	const oldMain = staleMain.mock.commands.get("image-drop")?.handler("", staleMain.context.ctx);
+	await mainShown;
+	const replacement = createMockContext({
+		cwd: "/workspace/replacement",
+		mode: "tui",
+		hasUI: true,
+	});
+	await emit(staleMain.mock, "session_start", {}, replacement.ctx);
+	resolveMain("open");
+	await oldMain;
+	assert.equal(staleMain.serverStarts, 0);
+	assert.equal(staleMain.context.notifications.length, 0);
+
+	let staleStatusSignal: AbortSignal | undefined;
+	let markSettingsRead!: () => void;
+	const settingsRead = new Promise<void>((resolve) => {
+		markSettingsRead = resolve;
+	});
+	let statusViews = 0;
+	const staleStatus = createHarness({
+		menuActions: ["status"],
+		readPiSettings: (_cwd, _trusted, signal) =>
+			new Promise((_resolve, reject) => {
+				staleStatusSignal = signal;
+				markSettingsRead();
+				signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+			}),
+		onStatus: () => {
+			statusViews += 1;
+		},
+	});
+	await emit(staleStatus.mock, "session_start", {}, staleStatus.context.ctx);
+	const oldStatus = staleStatus.mock.commands
+		.get("image-drop")
+		?.handler("", staleStatus.context.ctx);
+	await settingsRead;
+	await emit(staleStatus.mock, "session_start", {}, replacement.ctx);
+	assert.equal(staleStatusSignal?.aborted, true);
+	await oldStatus;
+	assert.equal(statusViews, 0);
+	assert.equal(staleStatus.serverStarts, 0);
+});
+
+test("session replacement aborts an in-flight Settings reload", async () => {
+	let reads = 0;
+	let settingsSignal: AbortSignal | undefined;
+	let markSettingsRead!: () => void;
+	const settingsRead = new Promise<void>((resolve) => {
+		markSettingsRead = resolve;
+	});
+	const harness = createHarness({
+		menuActions: ["settings"],
+		loadSettings: async (_path, signal) => {
+			reads += 1;
+			if (reads !== 2) return { kind: "missing", settings: { ...DEFAULT_SETTINGS } };
+			settingsSignal = signal;
+			markSettingsRead();
+			return new Promise((_resolve, reject) => {
+				signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+			});
+		},
+	});
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	const command = harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
+	await settingsRead;
+	const replacement = createMockContext({ mode: "tui", hasUI: true });
+	await emit(harness.mock, "session_start", {}, replacement.ctx);
+	assert.equal(settingsSignal?.aborted, true);
+	await command;
+});
+
+test("Status exposes readiness, model, history, and Pi policy without starting the service", async () => {
+	let statusLines: readonly string[] = [];
+	let statusSignal: AbortSignal | undefined;
+	const harness = createHarness({
+		menuActions: ["status", "close"],
+		statusActions: ["back"],
+		onStatus: (lines) => {
+			statusLines = lines;
+		},
+		readPiSettings: async (_cwd, _trusted, signal) => {
+			statusSignal = signal;
+			return { autoResize: true, blockImages: false, warnings: [] };
+		},
+	});
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	harness.runtime.addReadyImageForTesting("sent", "sent.png", Buffer.from("source"), PROCESSED);
+	const batch = harness.runtime.getBatchForTesting();
+	const sent = batch?.reserveMessage("sent");
+	assert.ok(sent);
+	batch?.commitReservation(sent.digest);
+	harness.runtime.addReadyImageForTesting("draft", "draft.png", Buffer.from("source"), PROCESSED);
+	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
+	assert.equal(harness.serverStarts, 0);
+	assert.ok(statusSignal instanceof AbortSignal);
+	assert.match(statusLines.join("\n"), /1\/1 ready/);
+	assert.match(statusLines.join("\n"), /Supports images/);
+	assert.match(statusLines.join("\n"), /Pi image sending: Enabled/);
+	assert.match(statusLines.join("\n"), /Retained capacity: 2\/128 images.*draft \+ sent history/);
+});
+
+test("a failed Status refresh preserves and labels the previous valid policy", async () => {
+	let reads = 0;
+	const snapshots: string[] = [];
+	const harness = createHarness({
+		menuActions: ["status", "close"],
+		statusActions: ["refresh", "back"],
+		readPiSettings: async () => {
+			reads += 1;
+			if (reads > 1) throw new Error("settings unavailable");
+			return { autoResize: false, blockImages: false, warnings: [] };
+		},
+		onStatus: (lines) => snapshots.push(lines.join("\n")),
+	});
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
+	assert.equal(snapshots.length, 2);
+	assert.match(snapshots[1] ?? "", /Auto-resize: Off/);
+	assert.match(snapshots[1] ?? "", /showing the previous valid state/);
+});
+
+test("Settings preview and save future limits without changing current-session limits", async () => {
+	let saved: Partial<ImageDropSettings> | undefined;
+	const menuStates: ImageDropLimitsMenuState[] = [];
+	const harness = createHarness({
+		menuActions: ["settings", "close"],
+		settingsActions: ["limits", "back"],
+		limitActions: ["maxImages", "save"],
+		input: async () => "12",
+		confirm: async () => true,
+		onSave: async (settings) => {
+			saved = settings;
+		},
+		onLimits: (state) => menuStates.push(state),
+	});
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
+	assert.deepEqual(saved, { maxImages: 12 });
+	assert.deepEqual(menuStates[0]?.values.maxImages, { current: "8", defaultValue: "8" });
+	assert.deepEqual(menuStates[1]?.values.maxImages, {
+		pending: "12",
+		current: "8",
+		defaultValue: "8",
+	});
+	assert.equal(harness.runtime.getBatchForTesting()?.publicHistoryState().maxImages, 128);
+	assert.match(harness.context.notifications.at(-1)?.message ?? "", /future Pi sessions/i);
+});
+
+test("automatic-start updates patch only the toggled setting", async () => {
+	let saved: Partial<ImageDropSettings> | undefined;
+	const harness = createHarness({
+		menuActions: ["settings", "close"],
+		settingsActions: ["toggle-start", "back"],
+		onSave: async (patch) => {
+			saved = patch;
+		},
+	});
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
+	assert.deepEqual(saved, { startOnSessionStart: true });
+});
+
+test("cancelled and failed settings changes preserve the previous valid state", async () => {
+	let saves = 0;
+	const cancelled = createHarness({
+		menuActions: ["settings", "close"],
+		settingsActions: ["limits", "back"],
+		limitActions: ["maxImages", "save", "back"],
+		input: async () => "12",
+		confirm: async () => false,
+		onSave: async () => {
+			saves += 1;
+		},
+	});
+	await emit(cancelled.mock, "session_start", {}, cancelled.context.ctx);
+	await cancelled.mock.commands.get("image-drop")?.handler("", cancelled.context.ctx);
+	assert.equal(saves, 0);
+
+	const failed = createHarness({
+		menuActions: ["settings", "close"],
+		settingsActions: ["toggle-start", "back"],
+		onSave: async () => {
+			throw new Error("disk full");
+		},
+	});
+	await emit(failed.mock, "session_start", {}, failed.context.ctx);
+	await failed.mock.commands.get("image-drop")?.handler("", failed.context.ctx);
+	assert.equal(failed.runtime.getBatchForTesting()?.publicHistoryState().maxImages, 128);
+	assert.match(
+		failed.context.notifications.at(-1)?.message ?? "",
+		/previous settings remain active.*disk full/i,
+	);
+});
+
+test("Ctrl+C closes Image Drop from limit dialogs and link rotation", async () => {
+	const confirmClose = createHarness({
+		menuActions: ["settings", "open"],
+		settingsActions: ["limits"],
+		limitActions: ["maxImages", "save"],
+		input: async () => "12",
+		confirmDialog: async () => "close",
+	});
+	await emit(confirmClose.mock, "session_start", {}, confirmClose.context.ctx);
+	await confirmClose.mock.commands.get("image-drop")?.handler("", confirmClose.context.ctx);
+	assert.equal(confirmClose.serverStarts, 0);
+
+	const inputClose = createHarness({
+		menuActions: ["settings", "open"],
+		settingsActions: ["limits"],
+		limitActions: ["maxImages"],
+		inputDialog: async () => ({ kind: "closed" }),
+	});
+	await emit(inputClose.mock, "session_start", {}, inputClose.context.ctx);
+	await inputClose.mock.commands.get("image-drop")?.handler("", inputClose.context.ctx);
+	assert.equal(inputClose.serverStarts, 0);
+
+	const actions: Array<"open" | "close"> = ["open", "open", "close"];
+	let menuViews = 0;
+	const linkClose = createHarness({
+		showMainMenu: async () => {
+			menuViews += 1;
+			return actions.shift() ?? "close";
+		},
+		confirmDialog: async () => "close",
+	});
+	await emit(linkClose.mock, "session_start", {}, linkClose.context.ctx);
+	await linkClose.mock.commands.get("image-drop")?.handler("", linkClose.context.ctx);
+	await linkClose.mock.commands.get("image-drop")?.handler("", linkClose.context.ctx);
+	assert.equal(menuViews, 2);
+	assert.equal(linkClose.context.notifications.length, 1);
+});
+
 test("startOnSessionStart starts once, presents a link, and reuses the server", async () => {
-	const harness = createHarness({ settings: { startOnSessionStart: true } });
+	const harness = createHarness({
+		settings: { startOnSessionStart: true },
+		menuActions: ["open"],
+	});
 	await emit(harness.mock, "session_start", {}, harness.context.ctx);
 	assert.equal(harness.serverStarts, 1);
 	assert.match(harness.context.notifications[0]?.message ?? "", /token=1/);
@@ -264,9 +643,11 @@ test("browser processing re-reads Pi settings and guards model and blockImages",
 				close: async () => {},
 			};
 		},
+		showMainMenu: async () => "open",
 	});
 	runtime.register();
 	const context = createMockContext({
+		mode: "tui",
 		model: { id: "vision", provider: "test", input: ["text", "image"] },
 	});
 	await emit(mock, "session_start", {}, context.ctx);
@@ -506,7 +887,7 @@ test("empty image-only interactive input does not consume the browser batch", as
 });
 
 test("session replacement closes the old server and clears every staged and retained byte", async () => {
-	const harness = createHarness();
+	const harness = createHarness({ menuActions: ["open"] });
 	await emit(harness.mock, "session_start", {}, harness.context.ctx);
 	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
 	harness.runtime.addReadyImageForTesting("one", "one.png", Buffer.from("source"), PROCESSED);
@@ -595,9 +976,10 @@ test("a stale session start cannot close the newer batch after slow server shutd
 				});
 			},
 		}),
+		showMainMenu: async () => "open",
 	});
 	runtime.register();
-	const initialContext = createMockContext({ cwd: "/workspace/initial" });
+	const initialContext = createMockContext({ cwd: "/workspace/initial", mode: "tui" });
 	const staleContext = createMockContext({ cwd: "/workspace/stale" });
 	const currentContext = createMockContext({ cwd: "/workspace/current" });
 	await runtime.start(initialContext.ctx);
@@ -634,9 +1016,10 @@ test("a stale shutdown cannot clear a newer batch after slow server shutdown", a
 				});
 			},
 		}),
+		showMainMenu: async () => "open",
 	});
 	runtime.register();
-	const oldContext = createMockContext({ cwd: "/workspace/old" });
+	const oldContext = createMockContext({ cwd: "/workspace/old", mode: "tui" });
 	const currentContext = createMockContext({ cwd: "/workspace/current" });
 	await runtime.start(oldContext.ctx);
 	await mock.commands.get("image-drop")?.handler("", oldContext.ctx);
