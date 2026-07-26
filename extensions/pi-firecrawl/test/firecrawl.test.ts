@@ -5,16 +5,20 @@ import {
 	readdirSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import os from "node:os";
-import path from "node:path";
+import path, { dirname } from "node:path";
 import test from "node:test";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
 import firecrawl, {
 	cleanObject,
+	cleanupResponseArtifacts,
 	commandCompletions,
+	firecrawlRequest,
 	formatPayload,
 	formatPersistedSelection,
 	installSettingsFileExclusively,
@@ -80,15 +84,21 @@ test("firecrawl settings normalize ordered unique valid tool names", () => {
 	]);
 });
 
-test("firecrawl helpers trim URLs, parse payloads, and remove undefined fields", () => {
+test("firecrawl helpers trim URLs, parse payloads, and remove undefined fields", async () => {
 	assert.equal(normalizeApiUrl(" https://example.test/v1/// "), "https://example.test/v1");
 	assert.equal(normalizeApiUrl(undefined), "https://api.firecrawl.dev/v1");
 	assert.deepEqual(parseResponseBody('{"ok":true}'), { ok: true });
 	assert.equal(parseResponseBody("not json"), "not json");
 	assert.equal(formatPayload({ ok: true }), '{"ok":true}');
-	assert.deepEqual(jsonResult({ ok: true }), {
+	assert.deepEqual(await jsonResult({ ok: true }, {}), {
 		content: [{ type: "text", text: '{\n  "ok": true\n}' }],
-		details: { ok: true },
+		details: {
+			truncated: false,
+			totalLines: 3,
+			totalBytes: 16,
+			outputLines: 3,
+			outputBytes: 16,
+		},
 	});
 	assert.deepEqual(
 		cleanObject({
@@ -99,6 +109,227 @@ test("firecrawl helpers trim URLs, parse payloads, and remove undefined fields",
 		}),
 		{ keep: false, nested: { value: null }, list: [undefined, 1] },
 	);
+});
+
+test("jsonResult bounds byte-heavy UTF-8 output and saves the exact full response privately", async () => {
+	const artifactOwner = {};
+	const payload = { markdown: "界".repeat(DEFAULT_MAX_BYTES) };
+	const serialized = JSON.stringify(payload, null, 2);
+	const result = await jsonResult(payload, artifactOwner);
+	const text = result.content[0].text;
+
+	assert.ok(Buffer.byteLength(text, "utf8") <= DEFAULT_MAX_BYTES);
+	assert.ok(text.split("\n").length <= DEFAULT_MAX_LINES);
+	assert.match(text, /Output truncated/);
+	assert.equal(result.details.truncated, true);
+	assert.ok(result.details.fullResponsePath);
+	assert.equal(readFileSync(result.details.fullResponsePath, "utf8"), serialized);
+	assert.equal(statSync(dirname(result.details.fullResponsePath)).mode & 0o777, 0o700);
+	assert.equal(statSync(result.details.fullResponsePath).mode & 0o777, 0o600);
+	assert.equal("markdown" in result.details, false);
+
+	await cleanupResponseArtifacts(artifactOwner);
+});
+
+test("jsonResult bounds line-heavy output including its truncation footer", async () => {
+	const artifactOwner = {};
+	const payload = Array.from({ length: DEFAULT_MAX_LINES + 100 }, (_, index) => ({ index }));
+	const result = await jsonResult(payload, artifactOwner);
+	const text = result.content[0].text;
+
+	assert.ok(Buffer.byteLength(text, "utf8") <= DEFAULT_MAX_BYTES);
+	assert.ok(text.split("\n").length <= DEFAULT_MAX_LINES);
+	assert.match(text, /showing \d+ of \d+ lines/);
+	assert.equal(result.details.truncated, true);
+
+	await cleanupResponseArtifacts(artifactOwner);
+});
+
+test("jsonResult fits its final footer when a multiline response crosses size units", async () => {
+	const artifactOwner = {};
+	const payload = {
+		lines: Array.from({ length: 15_000 }, () => "x".repeat(80)),
+	};
+	const result = await jsonResult(payload, artifactOwner);
+	const text = result.content[0].text;
+
+	assert.ok(result.details.totalBytes > 1024 * 1024);
+	assert.ok(Buffer.byteLength(text, "utf8") <= DEFAULT_MAX_BYTES);
+	assert.ok(text.split("\n").length <= DEFAULT_MAX_LINES);
+	assert.match(text, /Output truncated/);
+
+	await cleanupResponseArtifacts(artifactOwner);
+});
+
+test("jsonResult gives concurrent truncated responses unique artifact paths", async () => {
+	const artifactOwner = {};
+	const payload = { value: "x".repeat(DEFAULT_MAX_BYTES + 1) };
+	const [first, second] = await Promise.all([
+		jsonResult(payload, artifactOwner),
+		jsonResult(payload, artifactOwner),
+	]);
+
+	assert.ok(first.details.fullResponsePath);
+	assert.ok(second.details.fullResponsePath);
+	assert.notEqual(first.details.fullResponsePath, second.details.fullResponsePath);
+
+	await cleanupResponseArtifacts(artifactOwner);
+});
+
+test("response artifact cleanup is isolated by session owner", async () => {
+	const firstOwner = {};
+	const secondOwner = {};
+	const payload = { value: "x".repeat(DEFAULT_MAX_BYTES + 1) };
+	const [first, second] = await Promise.all([
+		jsonResult(payload, firstOwner),
+		jsonResult(payload, secondOwner),
+	]);
+	assert.ok(first.details.fullResponsePath);
+	assert.ok(second.details.fullResponsePath);
+
+	await cleanupResponseArtifacts(firstOwner);
+
+	assert.equal(existsSync(first.details.fullResponsePath), false);
+	assert.equal(existsSync(second.details.fullResponsePath), true);
+	await cleanupResponseArtifacts(secondOwner);
+});
+
+test("cleanup waits for an in-flight artifact write owned by that session", async () => {
+	const artifactOwner = {};
+	const pending = jsonResult({ value: "x".repeat(DEFAULT_MAX_BYTES + 1) }, artifactOwner);
+
+	await cleanupResponseArtifacts(artifactOwner);
+	const result = await pending;
+
+	assert.ok(result.details.fullResponsePath);
+	assert.equal(existsSync(result.details.fullResponsePath), false);
+});
+
+test("all five Firecrawl tools bound oversized successful responses", async () => {
+	const originalFetch = globalThis.fetch;
+	const previousApiKey = process.env.FIRECRAWL_API_KEY;
+	const paths: string[] = [];
+	let artifactOwner: object | undefined;
+	globalThis.fetch = async (input) => {
+		paths.push(new URL(String(input)).pathname);
+		return new Response(JSON.stringify({ data: "x".repeat(DEFAULT_MAX_BYTES * 2) }));
+	};
+	process.env.FIRECRAWL_API_KEY = "test-key";
+	try {
+		const mock = createMockPi();
+		firecrawl(mock.pi);
+		const sessionManager = { getSessionId: () => "tool-test-session" };
+		const { ctx } = createMockContext({ sessionManager });
+		artifactOwner = sessionManager;
+		const inputs = [
+			{ url: "https://example.test" },
+			{ url: "https://example.test" },
+			{ id: "crawl-id" },
+			{ url: "https://example.test" },
+			{ query: "example" },
+		];
+		for (const [index, tool] of mock.tools.entries()) {
+			const execute = tool.execute as (
+				id: string,
+				params: unknown,
+				signal: AbortSignal | undefined,
+				onUpdate: undefined,
+				context: typeof ctx,
+			) => Promise<{ content: Array<{ type: string; text?: string }> }>;
+			const result = await execute(`call-${index}`, inputs[index], undefined, undefined, ctx);
+			const text = result.content.find((item) => item.type === "text")?.text ?? "";
+			assert.ok(Buffer.byteLength(text, "utf8") <= DEFAULT_MAX_BYTES);
+			assert.ok(text.split("\n").length <= DEFAULT_MAX_LINES);
+			assert.match(text, /Output truncated/);
+		}
+		assert.deepEqual(paths, [
+			"/v1/scrape",
+			"/v1/crawl",
+			"/v1/crawl/crawl-id",
+			"/v1/map",
+			"/v1/search",
+		]);
+	} finally {
+		globalThis.fetch = originalFetch;
+		if (previousApiKey === undefined) delete process.env.FIRECRAWL_API_KEY;
+		else process.env.FIRECRAWL_API_KEY = previousApiKey;
+		if (artifactOwner) await cleanupResponseArtifacts(artifactOwner);
+	}
+});
+
+test("firecrawl bounds oversized non-2xx responses and saves their exact raw body", async () => {
+	const originalFetch = globalThis.fetch;
+	const responseText = `{\n  "error": "${"x".repeat(DEFAULT_MAX_BYTES * 2)}",\n  "duplicate": 1,\n  "duplicate": 2\n}`;
+	globalThis.fetch = async () => new Response(responseText, { status: 500 });
+	const previousApiKey = process.env.FIRECRAWL_API_KEY;
+	const artifactOwner = {};
+	process.env.FIRECRAWL_API_KEY = "test-key";
+	try {
+		const hugePath = `/${"a".repeat(DEFAULT_MAX_BYTES * 2)}`;
+		await assert.rejects(
+			firecrawlRequest("GET", hugePath, undefined, undefined, artifactOwner),
+			(error: Error) => {
+				assert.ok(Buffer.byteLength(error.message, "utf8") <= DEFAULT_MAX_BYTES);
+				assert.match(error.message, /Output truncated/);
+				const artifactPath = error.message.match(/Full response saved to: (.+)\]$/)?.[1];
+				assert.ok(artifactPath);
+				assert.equal(readFileSync(artifactPath, "utf8"), responseText);
+				return true;
+			},
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
+		if (previousApiKey === undefined) delete process.env.FIRECRAWL_API_KEY;
+		else process.env.FIRECRAWL_API_KEY = previousApiKey;
+		await cleanupResponseArtifacts(artifactOwner);
+	}
+});
+
+test("session shutdown rejects an error artifact write that starts after cleanup", async () => {
+	const originalFetch = globalThis.fetch;
+	const previousApiKey = process.env.FIRECRAWL_API_KEY;
+	let resolveResponse: (response: Response) => void = () => undefined;
+	const pendingResponse = new Promise<Response>((resolve) => {
+		resolveResponse = resolve;
+	});
+	globalThis.fetch = async () => pendingResponse;
+	process.env.FIRECRAWL_API_KEY = "test-key";
+	const artifactOwner = {};
+	const prior = await jsonResult({ value: "x".repeat(DEFAULT_MAX_BYTES + 1) }, artifactOwner);
+	assert.ok(prior.details.fullResponsePath);
+	const priorDirectory = dirname(prior.details.fullResponsePath);
+	const pendingRequest = firecrawlRequest(
+		"GET",
+		"/late-error",
+		undefined,
+		undefined,
+		artifactOwner,
+	);
+	try {
+		await cleanupResponseArtifacts(artifactOwner);
+		resolveResponse(new Response("x".repeat(DEFAULT_MAX_BYTES * 2), { status: 500 }));
+
+		await assert.rejects(pendingRequest, /after session shutdown/);
+		assert.equal(existsSync(priorDirectory), false);
+	} finally {
+		globalThis.fetch = originalFetch;
+		if (previousApiKey === undefined) delete process.env.FIRECRAWL_API_KEY;
+		else process.env.FIRECRAWL_API_KEY = previousApiKey;
+	}
+});
+
+test("session shutdown removes only that session's Firecrawl response artifacts", async () => {
+	const mock = createMockPi();
+	firecrawl(mock.pi);
+	const sessionManager = { getSessionId: () => "shutdown-test-session" };
+	const { ctx } = createMockContext({ sessionManager });
+	const result = await jsonResult({ value: "x".repeat(DEFAULT_MAX_BYTES + 1) }, sessionManager);
+	assert.ok(result.details.fullResponsePath);
+	const directory = dirname(result.details.fullResponsePath);
+
+	await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+
+	assert.equal(existsSync(directory), false);
 });
 
 test("formatPersistedSelection summarizes all, none, and partial selections", () => {

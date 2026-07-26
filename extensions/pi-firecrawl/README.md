@@ -18,6 +18,7 @@ Use it to give your AI coding agent reliable web research capabilities for docum
 - Provides a `/firecrawl` menu with configuration help and tool controls.
 - Provides a Plan-mode-style selector for choosing individual Firecrawl tools.
 - Persists the selected Firecrawl tools across Pi restarts.
+- Bounds tool output to Pi's 50 KB or 2,000-line limit while preserving oversized responses in private temporary files.
 - Never logs, displays, or stores your Firecrawl API key.
 
 ## 📦 Install
@@ -63,6 +64,13 @@ export FIRECRAWL_API_URL=https://api.firecrawl.dev/v1
 - `firecrawl_search` — search the web through Firecrawl and optionally scrape result pages.
 
 All tools fail with a clear configuration error when `FIRECRAWL_API_KEY` is missing.
+
+Tool output is limited to 50 KB or 2,000 lines, whichever is reached first. When a response is
+truncated, the result reports the original and displayed sizes and the path to a complete temporary
+JSON file. These files use private permissions, remain available for the current session, and are
+removed during session shutdown or reload. Tool-result metadata contains only size and artifact
+information rather than a duplicate of the raw Firecrawl response. Oversized Firecrawl error bodies
+are bounded in the same way.
 
 ## 💬 Command
 
