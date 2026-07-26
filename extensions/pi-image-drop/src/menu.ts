@@ -12,17 +12,25 @@ import type { PublicBatchState, PublicHistoryState } from "./batch.js";
 export type MainMenuAction = "open" | "status" | "settings" | "help" | "close";
 export type StatusAction = "open" | "refresh" | "back" | "close";
 export type SettingsAction = "toggle-start" | "limits" | "back" | "close";
-export type LimitsAction =
+export type LimitSettingAction =
 	| "maxImages"
 	| "maxImageBytes"
 	| "maxBatchBytes"
 	| "maxImagePixels"
 	| "maxRetainedImages"
-	| "maxRetainedBytes"
-	| "save"
-	| "defaults"
-	| "back"
-	| "close";
+	| "maxRetainedBytes";
+export type LimitsAction = LimitSettingAction | "save" | "defaults" | "back" | "close";
+
+export interface LimitMenuValue {
+	current: string;
+	defaultValue: string;
+	pending?: string;
+}
+
+export interface ImageDropLimitsMenuState {
+	unsavedChanges: number;
+	values: Record<LimitSettingAction, LimitMenuValue>;
+}
 
 export type MenuLoadResult<T> =
 	| { kind: "completed"; value: T }
@@ -38,13 +46,29 @@ export interface ImageDropMenuState {
 const MAIN_ACTIONS: readonly SelectItem[] = [
 	{
 		value: "open",
-		label: "Open staging page",
-		description: "Paste, review, and order images in your browser",
+		label: "Add images in browser",
+		description: "Stage and arrange images for your next Pi message",
 	},
-	{ value: "status", label: "Status", description: "Check readiness and image sending" },
-	{ value: "settings", label: "Settings", description: "Auto-start and resource limits" },
-	{ value: "help", label: "Help", description: "Workflow, privacy, and remote access" },
-	{ value: "close", label: "Close" },
+	{
+		value: "status",
+		label: "Check image status",
+		description: "See what is ready and whether Pi can send images",
+	},
+	{
+		value: "settings",
+		label: "Change Image Drop settings",
+		description: "Choose automatic startup and image limits",
+	},
+	{
+		value: "help",
+		label: "How Image Drop works",
+		description: "Learn how images are attached, stored, and forwarded",
+	},
+	{
+		value: "close",
+		label: "Close menu",
+		description: "Return to Pi without changing anything",
+	},
 ];
 
 export function runImageDropMenuLoad<T>(
@@ -142,51 +166,35 @@ export function showImageDropSettingsMenu(
 
 export function showImageDropLimitsMenu(
 	ctx: ExtensionCommandContext,
-	lines: readonly string[],
+	state: ImageDropLimitsMenuState,
 ): Promise<LimitsAction> {
+	const item = (value: LimitSettingAction, label: string): SelectItem => ({
+		value,
+		label,
+		description: limitValueText(state.values[value]),
+	});
 	return showActionScreen(ctx, {
-		title: "Resource limits",
-		lines,
+		title: "Image limits",
+		lines: [
+			"Choose a limit to change. Saved changes apply when your next Pi session starts.",
+			state.unsavedChanges > 0 ? `${state.unsavedChanges} unsaved change(s)` : "No unsaved changes",
+		],
 		items: [
-			{
-				value: "maxImages",
-				label: "Images for next message",
-				description: "Maximum number staged for one Pi message",
-			},
-			{
-				value: "maxImageBytes",
-				label: "Per-image upload size",
-				description: "Maximum source size accepted for each image",
-			},
-			{
-				value: "maxBatchBytes",
-				label: "Total upload size",
-				description: "Maximum combined source size for one Pi message",
-			},
-			{
-				value: "maxImagePixels",
-				label: "Maximum image resolution",
-				description: "Reject images above this decoded resolution",
-			},
-			{
-				value: "maxRetainedImages",
-				label: "Sent history count",
-				description: "Maximum sent images kept for Add again",
-			},
-			{
-				value: "maxRetainedBytes",
-				label: "Sent history memory",
-				description: "Memory shared by the current draft and sent history",
-			},
+			item("maxImages", "Images per message"),
+			item("maxImageBytes", "Max file size per image"),
+			item("maxBatchBytes", "Max total size per message"),
+			item("maxImagePixels", "Max image resolution"),
+			item("maxRetainedImages", "Reusable sent images"),
+			item("maxRetainedBytes", "Staged + sent image memory"),
 			{
 				value: "save",
-				label: "Review and save changes",
-				description: "Preview every change before saving for future sessions",
+				label: "Review changes before saving",
+				description: "Nothing is saved until you confirm",
 			},
 			{
 				value: "defaults",
-				label: "Reset to safe defaults",
-				description: "Stage recommended values; review before saving",
+				label: "Restore recommended defaults",
+				description: "Only stages the defaults; review and save to apply",
 			},
 			{ value: "back", label: "Back to Settings" },
 			{ value: "close", label: "Close Image Drop" },
@@ -194,6 +202,12 @@ export function showImageDropLimitsMenu(
 		cancel: "back",
 		hint: "↑↓ navigate • enter select • esc back • Ctrl+C close",
 	});
+}
+
+function limitValueText(value: LimitMenuValue): string {
+	return value.pending === undefined
+		? `Current: ${value.current} · Default: ${value.defaultValue}`
+		: `Pending: ${value.pending} · Current: ${value.current} · Default: ${value.defaultValue}`;
 }
 
 interface ActionScreenOptions<T extends string> {

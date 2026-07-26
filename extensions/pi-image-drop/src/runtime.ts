@@ -10,6 +10,8 @@ import type {
 import { BatchError, BatchStore, digestImages, type ProcessedImage } from "./batch.js";
 import { ImageProcessor } from "./images.js";
 import {
+	type ImageDropLimitsMenuState,
+	type LimitSettingAction,
 	type MainMenuAction,
 	type MenuLoadResult,
 	runImageDropMenuLoad,
@@ -71,7 +73,7 @@ export interface RuntimeDependencies {
 	): ReturnType<typeof showImageDropSettingsMenu>;
 	showLimitsMenu(
 		ctx: ExtensionCommandContext,
-		lines: readonly string[],
+		state: ImageDropLimitsMenuState,
 	): ReturnType<typeof showImageDropLimitsMenu>;
 	saveSettings: typeof saveSettings;
 	settingsFilePath: typeof settingsFilePath;
@@ -441,7 +443,7 @@ export class ImageDropRuntime {
 	): Promise<"back" | "close"> {
 		let draft = { ...original };
 		for (;;) {
-			const action = await this.dependencies.showLimitsMenu(ctx, limitLines(draft, original));
+			const action = await this.dependencies.showLimitsMenu(ctx, limitMenuState(draft, original));
 			if (action === "close" || action === "back") return action;
 			if (action === "defaults") {
 				draft = {
@@ -674,17 +676,36 @@ function usesSafeLimits(settings: ImageDropSettings): boolean {
 	return LIMIT_KEYS.every((key) => settings[key] === DEFAULT_SETTINGS[key]);
 }
 
-function limitLines(settings: ImageDropSettings, original: ImageDropSettings): string[] {
-	return [
-		`Images for next message: ${settings.maxImages}`,
-		`Per-image upload size: ${formatBytes(settings.maxImageBytes)}`,
-		`Total upload size: ${formatBytes(settings.maxBatchBytes)}`,
-		`Maximum image resolution: ${formatCount(settings.maxImagePixels)}`,
-		`Sent history: ${settings.maxRetainedImages} images · ${formatBytes(settings.maxRetainedBytes)}`,
-		limitChanges(original, settings).length > 0
-			? `${limitChanges(original, settings).length} unsaved change(s)`
-			: "No unsaved changes",
-	];
+function limitMenuState(
+	draft: ImageDropSettings,
+	original: ImageDropSettings,
+): ImageDropLimitsMenuState {
+	const value = (key: LimitSettingAction) => ({
+		current: formatLimitValue(key, original[key]),
+		defaultValue: formatLimitValue(key, DEFAULT_SETTINGS[key]),
+		...(draft[key] === original[key] ? {} : { pending: formatLimitValue(key, draft[key]) }),
+	});
+	return {
+		unsavedChanges: limitChanges(original, draft).length,
+		values: {
+			maxImages: value("maxImages"),
+			maxImageBytes: value("maxImageBytes"),
+			maxBatchBytes: value("maxBatchBytes"),
+			maxImagePixels: value("maxImagePixels"),
+			maxRetainedImages: value("maxRetainedImages"),
+			maxRetainedBytes: value("maxRetainedBytes"),
+		},
+	};
+}
+
+function formatLimitValue(key: LimitSettingAction, value: number): string {
+	if (key === "maxImageBytes" || key === "maxBatchBytes" || key === "maxRetainedBytes") {
+		return formatBytes(value);
+	}
+	if (key === "maxImagePixels" && value % 1_000_000 === 0) {
+		return `${value / 1_000_000} MP`;
+	}
+	return formatCount(value);
 }
 
 function limitChanges(original: ImageDropSettings, draft: ImageDropSettings): string[] {

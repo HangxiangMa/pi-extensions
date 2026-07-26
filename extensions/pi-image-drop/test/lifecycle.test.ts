@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { digestImages, type ProcessedImage } from "../src/batch.js";
+import type { ImageDropLimitsMenuState } from "../src/menu.js";
 import { ImageDropRuntime } from "../src/runtime.js";
 import type { ImageDropServerOptions } from "../src/server.js";
 import { DEFAULT_SETTINGS, type ImageDropSettings } from "../src/settings.js";
@@ -45,6 +46,7 @@ function createHarness(
 		confirm?: () => Promise<boolean>;
 		input?: () => Promise<string | undefined>;
 		onStatus?: (lines: readonly string[]) => void;
+		onLimits?: (state: ImageDropLimitsMenuState) => void;
 		onSave?: (settings: ImageDropSettings) => Promise<void>;
 		readPiSettings?: () => Promise<{
 			autoResize: boolean;
@@ -98,7 +100,10 @@ function createHarness(
 		},
 		showHelp: async () => "back",
 		showSettingsMenu: async () => options.settingsActions?.shift() ?? "back",
-		showLimitsMenu: async () => options.limitActions?.shift() ?? "back",
+		showLimitsMenu: async (_ctx, state) => {
+			options.onLimits?.(state);
+			return options.limitActions?.shift() ?? "back";
+		},
 		saveSettings: options.onSave ?? (async () => undefined),
 		settingsFilePath: () => "/agent/pi-image-drop.json",
 	});
@@ -329,6 +334,7 @@ test("a failed Status refresh preserves and labels the previous valid policy", a
 
 test("Settings preview and save future limits without changing current-session limits", async () => {
 	let saved: ImageDropSettings | undefined;
+	const menuStates: ImageDropLimitsMenuState[] = [];
 	const harness = createHarness({
 		menuActions: ["settings", "close"],
 		settingsActions: ["limits", "back"],
@@ -338,10 +344,17 @@ test("Settings preview and save future limits without changing current-session l
 		onSave: async (settings) => {
 			saved = settings;
 		},
+		onLimits: (state) => menuStates.push(state),
 	});
 	await emit(harness.mock, "session_start", {}, harness.context.ctx);
 	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
 	assert.equal(saved?.maxImages, 12);
+	assert.deepEqual(menuStates[0]?.values.maxImages, { current: "8", defaultValue: "8" });
+	assert.deepEqual(menuStates[1]?.values.maxImages, {
+		pending: "12",
+		current: "8",
+		defaultValue: "8",
+	});
 	assert.equal(harness.runtime.getBatchForTesting()?.publicHistoryState().maxImages, 128);
 	assert.match(harness.context.notifications.at(-1)?.message ?? "", /future Pi sessions/i);
 });

@@ -37,7 +37,7 @@ test("main menu renders current state without opening and stays within narrow wi
 		assert.equal(await showImageDropMainMenu(context.ctx, EMPTY_STATE), "close");
 		const rendered = lines.join(" ");
 		assert.match(rendered, /No images staged/);
-		assert.match(rendered, /Open staging/);
+		assert.match(rendered, /Add images/);
 		assert.ok(
 			lines.every((line) => visibleWidth(line) <= width),
 			`${width}: ${lines.join("\n")}`,
@@ -78,20 +78,38 @@ test("resource-limit actions explain their concrete effect and save behavior", a
 			return harness.result;
 		},
 	});
-	assert.equal(await showImageDropLimitsMenu(context.ctx, ["No unsaved changes"]), "back");
+	assert.equal(
+		await showImageDropLimitsMenu(context.ctx, {
+			unsavedChanges: 1,
+			values: {
+				maxImages: { pending: "12", current: "8", defaultValue: "8" },
+				maxImageBytes: { current: "10 MiB", defaultValue: "10 MiB" },
+				maxBatchBytes: { current: "40 MiB", defaultValue: "40 MiB" },
+				maxImagePixels: { current: "50 MP", defaultValue: "50 MP" },
+				maxRetainedImages: { current: "128", defaultValue: "128" },
+				maxRetainedBytes: { current: "512 MiB", defaultValue: "512 MiB" },
+			},
+		}),
+		"back",
+	);
 	const rendered = lines.join(" ");
 	for (const text of [
-		"Images for next message",
-		"Maximum number staged for one Pi message",
-		"Maximum source size accepted for each image",
-		"Maximum combined source size for one Pi message",
-		"Reject images above this decoded resolution",
-		"sent images kept for Add again",
-		"Memory shared by the current draft and sent history",
-		"Preview every change before saving for future sessions",
-		"Stage recommended values; review before saving",
+		"Images per message",
+		"Pending: 12 · Current: 8 · Default: 8",
+		"Max file size per image",
+		"Current: 10 MiB · Default: 10 MiB",
+		"Max total size per message",
+		"Current: 40 MiB · Default: 40 MiB",
+		"Max image resolution",
+		"Current: 50 MP · Default: 50 MP",
+		"Reusable sent images",
+		"Current: 128 · Default: 128",
+		"Staged + sent image memory",
+		"Current: 512 MiB · Default: 512 MiB",
+		"Nothing is saved until you confirm",
+		"Only stages the defaults; review and save to apply",
 	]) {
-		assert.match(rendered, new RegExp(text));
+		assert.ok(rendered.includes(text), text);
 	}
 });
 
