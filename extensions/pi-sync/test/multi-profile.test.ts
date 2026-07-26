@@ -560,30 +560,15 @@ test("menu pull failure preserves local files and suggests the next action", asy
 	});
 });
 
-test("Sync now read-only check aborts from Escape before any publication", async () => {
+test("Sync now read-only check stops before transport when Escape wins command resolution", async () => {
 	await withTempSettings(async () => {
 		writeSettings(v2Settings());
 		const before = readFileSync(localConfigPath(), "utf8");
 		const originalFetch = globalThis.fetch;
-		let putCalls = 0;
-		let aborted = false;
-		globalThis.fetch = ((_input, init) => {
-			if (init?.method === "PUT") putCalls += 1;
-			return new Promise<Response>((_resolve, reject) => {
-				if (init?.signal?.aborted) {
-					aborted = true;
-					reject(new DOMException("Aborted", "AbortError"));
-					return;
-				}
-				init?.signal?.addEventListener(
-					"abort",
-					() => {
-						aborted = true;
-						reject(new DOMException("Aborted", "AbortError"));
-					},
-					{ once: true },
-				);
-			});
+		let requests = 0;
+		globalThis.fetch = (async () => {
+			requests += 1;
+			throw new Error("Transport must not start after cancellation");
 		}) as typeof globalThis.fetch;
 		try {
 			const mock = createMockPi();
@@ -603,8 +588,7 @@ test("Sync now read-only check aborts from Escape before any publication", async
 
 			await mock.commands.get("sync")?.handler("", ctx);
 
-			assert.equal(aborted, true);
-			assert.equal(putCalls, 0);
+			assert.equal(requests, 0);
 			assert.equal(readFileSync(localConfigPath(), "utf8"), before);
 			assert.match(notifications.map((item) => item.message).join("\n"), /cancelled/);
 		} finally {
@@ -950,23 +934,11 @@ test("cancelling an automatic post-switch pull reports that the target remains s
 		settings.targets.work = { ...settings.targets.home, namespace: "work" };
 		writeSettings(settings);
 		const originalFetch = globalThis.fetch;
-		let aborted = false;
-		globalThis.fetch = ((_input, init) =>
-			new Promise<Response>((_resolve, reject) => {
-				if (init?.signal?.aborted) {
-					aborted = true;
-					reject(new DOMException("Aborted", "AbortError"));
-					return;
-				}
-				init?.signal?.addEventListener(
-					"abort",
-					() => {
-						aborted = true;
-						reject(new DOMException("Aborted", "AbortError"));
-					},
-					{ once: true },
-				);
-			})) as typeof globalThis.fetch;
+		let requests = 0;
+		globalThis.fetch = (async () => {
+			requests += 1;
+			throw new Error("Transport must not start after cancellation");
+		}) as typeof globalThis.fetch;
 		try {
 			const selections = ["Switch target", "work", "Switch to work"];
 			const mock = createMockPi();
@@ -985,7 +957,7 @@ test("cancelling an automatic post-switch pull reports that the target remains s
 
 			await mock.commands.get("sync")?.handler("", ctx);
 
-			assert.equal(aborted, true);
+			assert.equal(requests, 0);
 			assert.equal((await readLocalConfigObject())?.activeTarget, "work");
 			assert.match(
 				notifications.at(-1)?.message ?? "",

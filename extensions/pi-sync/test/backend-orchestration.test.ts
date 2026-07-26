@@ -3,12 +3,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { createMockContext } from "../../../test/support.js";
-import { localConfigPath, readState } from "../src/config.js";
+import { loadConfig, localConfigPath, readState, statePathForConfig } from "../src/config.js";
 import { expectedRemoteHead } from "../src/sync-backend.js";
 import {
 	diff,
 	doctor,
 	history,
+	PublicationStatePersistenceError,
 	pull,
 	push,
 	RollbackPublicationError,
@@ -16,7 +17,7 @@ import {
 	status,
 	syncBoth,
 } from "../src/sync-operations.js";
-import type { CommandOptions, Snapshot } from "../src/types.js";
+import type { CommandOptions, Snapshot, SyncConfig } from "../src/types.js";
 import { requiredConfig, snapshot, withTempHome } from "./helpers.js";
 import { MemorySyncBackend } from "./memory-sync-backend.js";
 
@@ -69,6 +70,49 @@ test("fake backend exercises push, pull, history, rollback, and revision state",
 		);
 		assert.equal(readFileSync(path.join(agentDir, "settings.json"), "utf8"), '{"local":true}\n');
 		assert.equal((await readState("default")).lastRemoteRevision, restoredHead.revision);
+	});
+});
+
+test("history rollback aborts if the selected backend destination changes", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(path.join(agentDir, "settings.json"), '{"current":true}\n');
+		const initialSettings = {
+			...requiredConfig(),
+			bucket: "first-bucket",
+			syncFiles: ["settings.json"],
+		};
+		writeFileSync(localConfigPath(), JSON.stringify(initialSettings));
+		const first = new MemorySyncBackend("memory:first", "memory · first");
+		const second = new MemorySyncBackend("memory:second", "memory · second");
+		const historical = {
+			...snapshot([{ path: "settings.json", content: Buffer.from('{"historical":true}\n') }]),
+			id: "historical",
+		};
+		await first.publishSnapshot(historical, { kind: "missing" });
+		const current = {
+			...snapshot([{ path: "settings.json", content: Buffer.from('{"current":true}\n') }]),
+			id: "current",
+		};
+		await first.publishSnapshot(current, expectedRemoteHead(await first.readHead()));
+		const factory = (config: SyncConfig) =>
+			config.backend.destination.bucket === "first-bucket" ? first : second;
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async (_title: string, options: string[]) => {
+				writeFileSync(
+					localConfigPath(),
+					JSON.stringify({ ...initialSettings, bucket: "second-bucket" }),
+				);
+				return options[0];
+			},
+		});
+
+		await assert.rejects(history(ctx, commandOptions(), factory), /destination changed/i);
+		assert.equal(readFileSync(path.join(agentDir, "settings.json"), "utf8"), '{"current":true}\n');
+		assert.equal((await first.readHead())?.snapshotId, current.id);
+		assert.equal(await second.readHead(), undefined);
 	});
 });
 
@@ -150,6 +194,30 @@ test("rollback rejects a remote head change that lands during confirmation", asy
 	});
 });
 
+test("push reports a typed partial outcome when remote commits but local state cannot persist", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(path.join(agentDir, "settings.json"), '{"local":true}\n');
+		writeFileSync(
+			localConfigPath(),
+			JSON.stringify({ ...requiredConfig(), syncFiles: ["settings.json"] }),
+		);
+		const config = await loadConfig();
+		const backend = new StateBreakingBackend(statePathForConfig(config));
+		const { ctx } = createMockContext({ hasUI: true });
+
+		await assert.rejects(
+			push(ctx, commandOptions(), undefined, () => backend),
+			(error: unknown) => {
+				assert.ok(error instanceof PublicationStatePersistenceError);
+				assert.match(error.message, /remote publication.*active.*state could not be saved/i);
+				return true;
+			},
+		);
+		assert.ok(await backend.readHead());
+	});
+});
+
 test("fake backend exercises status, diff, sync, and backend diagnostics", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
@@ -211,6 +279,22 @@ test("forced fake-backend push re-reads the head and preserves newly observed un
 		]);
 	});
 });
+
+class StateBreakingBackend extends MemorySyncBackend {
+	constructor(private readonly statePath: string) {
+		super();
+	}
+
+	override async publishSnapshot(
+		snapshotValue: Snapshot,
+		expected: Parameters<MemorySyncBackend["publishSnapshot"]>[1],
+		options?: Parameters<MemorySyncBackend["publishSnapshot"]>[2],
+	) {
+		const result = await super.publishSnapshot(snapshotValue, expected, options);
+		mkdirSync(this.statePath, { recursive: true });
+		return result;
+	}
+}
 
 class ConflictingRollbackBackend extends MemorySyncBackend {
 	failRollbackPublication = false;

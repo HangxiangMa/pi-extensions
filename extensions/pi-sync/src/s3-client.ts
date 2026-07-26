@@ -6,6 +6,7 @@ import type { RemoteObject, ResolvedS3Backend } from "./types.js";
 const MAX_JSON_RESPONSE_BYTES = 1024 * 1024;
 const MAX_SNAPSHOT_RESPONSE_BYTES = 256 * 1024 * 1024;
 const MAX_ERROR_RESPONSE_BYTES = 64 * 1024;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 function iso8601Basic(date: Date) {
 	return date.toISOString().replace(/[:-]|\.\d{3}/g, "");
@@ -35,12 +36,18 @@ export class S3Client {
 	private config: ResolvedS3Backend;
 	private endpoint: URL;
 	private signal?: AbortSignal;
+	private requestTimeoutMs: number;
 	private omitSessionTokenAfterRejection = false;
 
-	constructor(config: ResolvedS3Backend, signal?: AbortSignal) {
+	constructor(
+		config: ResolvedS3Backend,
+		signal?: AbortSignal,
+		requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+	) {
 		this.config = config;
 		this.endpoint = new URL(config.profile.endpoint);
 		this.signal = signal;
+		this.requestTimeoutMs = requestTimeoutMs;
 	}
 
 	async getJson<T>(key: string): Promise<RemoteObject<T>> {
@@ -136,6 +143,7 @@ export class S3Client {
 		const url = new URL(this.endpoint.toString());
 		url.pathname = posixJoin(url.pathname, this.config.destination.bucket, encodeKey(key));
 		const send = async (sessionToken: string | undefined) => {
+			const transportSignal = this.transportSignal();
 			const headers = await signedHeaders({
 				method,
 				url,
@@ -151,10 +159,13 @@ export class S3Client {
 					method,
 					headers,
 					body: body ? new Uint8Array(body) : undefined,
-					signal: this.signal,
+					signal: transportSignal,
 				});
 			} catch (error) {
 				if (error instanceof Error && error.name === "AbortError") throw error;
+				if (error instanceof Error && error.name === "TimeoutError") {
+					throw new Error("S3 request timed out.", { cause: error });
+				}
 				throw new Error(`S3 request failed: ${this.redact(errorMessage(error))}`, { cause: error });
 			}
 		};
@@ -167,6 +178,11 @@ export class S3Client {
 		const retry = await send(undefined);
 		if (retry.ok || retry.status === 404) this.omitSessionTokenAfterRejection = true;
 		return retry;
+	}
+
+	private transportSignal() {
+		const timeout = AbortSignal.timeout(this.requestTimeoutMs);
+		return this.signal ? AbortSignal.any([this.signal, timeout]) : timeout;
 	}
 
 	private async shouldRetryWithoutSessionToken(

@@ -209,7 +209,7 @@ export function resolveV2PartialConfig(
 	normalizeTargetSwitchAction(settings.targetSwitchAction);
 	const targets = requireNamedObjectMap(settings.targets, "targets");
 	const profiles = requireNamedObjectMap(settings.profiles, "profiles");
-	validateUniqueRemoteTargets(targets, profiles);
+	validateUniqueRemoteTargets(targets);
 	const selectedTarget =
 		targetName ?? normalizeOptionalString(asOptionalString(settings.activeTarget));
 	if (!selectedTarget) throw new Error("Invalid pi-sync settings: activeTarget is required.");
@@ -274,16 +274,13 @@ function isV2SettingsObject(value: Record<string, unknown>) {
 	return true;
 }
 
-export function validateUniqueRemoteTargets(
-	targets: Record<string, unknown>,
-	profiles: Record<string, unknown>,
-) {
+export function validateUniqueRemoteTargets(targets: Record<string, unknown>) {
 	const identities = new Map<string, string>();
 	for (const name of Object.keys(targets)) {
 		const target = ownObject(targets, name);
 		if (!target || typeof target.profile !== "string" || typeof target.bucket !== "string")
 			continue;
-		const identity = effectiveTargetRemoteIdentity(target, name, profiles);
+		const identity = effectiveTargetRemoteIdentity(target, name);
 		const existing = identities.get(identity);
 		if (existing) {
 			throw new Error(
@@ -294,18 +291,8 @@ export function validateUniqueRemoteTargets(
 	}
 }
 
-export function effectiveTargetRemoteIdentity(
-	target: Record<string, unknown>,
-	name: string,
-	profiles: Record<string, unknown>,
-) {
+export function effectiveTargetRemoteIdentity(target: Record<string, unknown>, name: string) {
 	const profileName = typeof target.profile === "string" ? target.profile.trim() : "";
-	const profile = ownObject(profiles, profileName);
-	const endpoint = normalizeEndpointIdentity(
-		process.env.PI_SYNC_ENDPOINT ??
-			process.env.R2_ENDPOINT ??
-			(typeof profile?.endpoint === "string" ? profile.endpoint : ""),
-	);
 	const bucket = normalizeRemoteKeySegment(
 		process.env.PI_SYNC_BUCKET ??
 			process.env.R2_BUCKET ??
@@ -318,7 +305,7 @@ export function effectiveTargetRemoteIdentity(
 	const namespace = normalizeRemoteKeySegment(
 		process.env.PI_SYNC_PROFILE ?? (typeof target.namespace === "string" ? target.namespace : name),
 	);
-	return JSON.stringify(["s3", endpoint, bucket, prefix, namespace]);
+	return JSON.stringify([profileName, bucket, prefix, namespace]);
 }
 
 function normalizeRemoteKeySegment(value: string) {
@@ -602,7 +589,7 @@ function validateConfigDocumentForMigration(settings: Record<string, unknown>) {
 	normalizeTargetSwitchAction(settings.targetSwitchAction);
 	const profiles = requireNamedObjectMap(settings.profiles, "profiles");
 	const targets = requireNamedObjectMap(settings.targets, "targets");
-	validateUniqueRemoteTargets(targets, profiles);
+	validateUniqueRemoteTargets(targets);
 	for (const [name, value] of Object.entries(profiles)) {
 		const profile = ownObject(profiles, name);
 		if (!profile || value !== profile) {

@@ -12,14 +12,19 @@ import {
 import type { Snapshot } from "../src/types.js";
 
 export class MemorySyncBackend implements SyncBackend {
-	readonly identity = "memory:test";
-	readonly destination = "memory · test";
+	readonly identity: string;
+	readonly destination: string;
 	readonly capability = "atomic-conditional" as const;
 	private snapshots = new Map<string, Snapshot>();
 	private head: RemoteHead | undefined;
 	private history: RemoteHistoryEntry[] = [];
 	private revision = 0;
 	failNextPublicationAfterCommit = false;
+
+	constructor(identity = "memory:test", destination = "memory · test") {
+		this.identity = identity;
+		this.destination = destination;
+	}
 
 	sameRevision(left: string, right: string) {
 		return left === right;
@@ -60,7 +65,13 @@ export class MemorySyncBackend implements SyncBackend {
 		};
 		this.history = [
 			...this.history.filter((entry) => entry.snapshotRef !== snapshot.id),
-			{ ...this.head },
+			{
+				snapshotRef: this.head.snapshotRef,
+				snapshotId: this.head.snapshotId,
+				createdAt: this.head.createdAt,
+				machine: this.head.machine,
+				syncSessions: this.head.syncSessions,
+			},
 		].slice(-100);
 		if (this.failNextPublicationAfterCommit) {
 			this.failNextPublicationAfterCommit = false;

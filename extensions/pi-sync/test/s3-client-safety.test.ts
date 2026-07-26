@@ -32,6 +32,48 @@ test("S3 errors redact configured credentials and bound response text", async ()
 	);
 });
 
+test("S3 requests enforce a hard transport deadline", async () => {
+	await withFetch(
+		async (_input, init) => hangingResponse(init?.signal),
+		async () => {
+			await assert.rejects(
+				new S3Client(s3Config(), undefined, 5).getJson("latest.json"),
+				/timed out/i,
+			);
+			await assert.rejects(
+				new S3Client(s3Config(), undefined, 5).putBuffer(
+					"snapshots/new.json.gz",
+					Buffer.from("snapshot"),
+					"application/gzip",
+				),
+				/timed out/i,
+			);
+		},
+	);
+});
+
+test("R2 retries a rejected session token once without the token", async () => {
+	const seenTokens: Array<string | null> = [];
+	await withFetch(
+		async (_input, init) => {
+			const token = new Headers(init?.headers).get("x-amz-security-token");
+			seenTokens.push(token);
+			if (token) {
+				return new Response(
+					"<Error><Code>InvalidArgument</Code><Message>X-Amz-Security-Token</Message></Error>",
+					{ status: 400 },
+				);
+			}
+			return Response.json({ snapshot: "ok" });
+		},
+		async () => {
+			const result = await new S3Client(s3Config()).getJson<{ snapshot: string }>("latest.json");
+			assert.equal(result.value?.snapshot, "ok");
+			assert.deepEqual(seenTokens, ["session-token", null]);
+		},
+	);
+});
+
 test("S3 operations forward an already-aborted signal to transport", async () => {
 	let calls = 0;
 	const controller = new AbortController();
@@ -66,6 +108,20 @@ function s3Config() {
 		},
 		destination: { bucket: flat.bucket, prefix: "pi-sync", namespace: "default" },
 	};
+}
+
+function hangingResponse(signal?: AbortSignal | null) {
+	return new Promise<Response>((_resolve, reject) => {
+		const keepAlive = setInterval(() => undefined, 1_000);
+		signal?.addEventListener(
+			"abort",
+			() => {
+				clearInterval(keepAlive);
+				reject(signal.reason);
+			},
+			{ once: true },
+		);
+	});
 }
 
 async function withFetch<T>(fetch: typeof globalThis.fetch, fn: () => Promise<T>) {

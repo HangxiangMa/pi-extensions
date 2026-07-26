@@ -47,7 +47,7 @@ test("flat and version 2 settings normalize to the S3 backend factory", async ()
 	});
 });
 
-test("profile aliases resolving to one backend destination are rejected", async () => {
+test("distinct profile aliases resolving to one backend destination remain valid", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		const profile = {
@@ -69,7 +69,11 @@ test("profile aliases resolving to one backend destination are rejected", async 
 			}),
 		);
 
-		await assert.rejects(loadConfig(), /use the same remote destination/);
+		const home = await loadConfig("home");
+		const work = await loadConfig("work");
+		assert.equal(home.storageProfile, "first");
+		assert.equal(work.storageProfile, "alias");
+		assert.equal(createSyncBackend(home).identity, createSyncBackend(work).identity);
 	});
 });
 

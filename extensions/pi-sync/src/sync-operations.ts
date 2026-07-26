@@ -61,6 +61,21 @@ const VERSION = 1;
 const DEFAULT_PROFILE = "default";
 const POST_LOCAL_COMMIT_TIMEOUT_MS = 30_000;
 
+export class PublicationStatePersistenceError extends Error {
+	readonly head: RemoteHead;
+	readonly backupPath?: string;
+
+	constructor(head: RemoteHead, cause: unknown, backupPath?: string) {
+		super(
+			`Remote publication ${head.snapshotId} is active, but local sync state could not be saved${backupPath ? `; local backup: ${backupPath}` : ""}: ${errorMessage(cause)}`,
+			{ cause },
+		);
+		this.name = "PublicationStatePersistenceError";
+		this.head = head;
+		this.backupPath = backupPath;
+	}
+}
+
 export class RollbackPublicationError extends Error {
 	readonly backupPath: string;
 
@@ -91,10 +106,13 @@ export async function status(
 	factory: SyncBackendFactory = createSyncBackend,
 ) {
 	const config = await loadConfig(options.target);
+	throwIfAborted(options.signal);
 	ctx.ui.setStatus(STATUS_KEY, `checking ${config.target ?? "default"}`);
 	const backend = backendFor(config, factory);
 	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
+	throwIfAborted(options.signal);
 	const state = await readStateForConfig(config);
+	throwIfAborted(options.signal);
 	const head = await backend.readHead(options.signal);
 	throwIfAborted(options.signal);
 	const localChanged = hasLocalChanges(local, state, config);
@@ -133,9 +151,11 @@ export async function diff(
 	factory: SyncBackendFactory = createSyncBackend,
 ) {
 	const config = await loadConfig(options.target);
+	throwIfAborted(options.signal);
 	ctx.ui.setStatus(STATUS_KEY, `checking ${config.target ?? "default"}`);
 	const backend = backendFor(config, factory);
 	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
+	throwIfAborted(options.signal);
 	const { snapshot: remote } = await readRemoteSnapshot(backend, config, options.signal);
 	throwIfAborted(options.signal);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -174,6 +194,7 @@ export async function doctor(
 
 	try {
 		const config = await loadConfig(options.target);
+		throwIfAborted(options.signal);
 		const backend = backendFor(config, factory);
 		profile = config.profile;
 		snapshotOptions = snapshotOptionsForContext(ctx, config);
@@ -196,6 +217,7 @@ export async function doctor(
 			messages.push(...warnings);
 		}
 	} catch (error) {
+		throwIfAborted(options.signal);
 		level = "warning";
 		messages.push(`config: ${errorMessage(error)}`);
 	}
@@ -242,11 +264,14 @@ export async function push(
 	factory: SyncBackendFactory = createSyncBackend,
 ) {
 	const config = input?.config ?? (await loadConfig(options.target));
+	throwIfAborted(options.signal);
 	ctx.ui.setStatus(STATUS_KEY, `pushing ${config.target ?? "default"}`);
 	const backend = input?.backend ?? backendFor(config, factory);
 	const state = input?.state ?? (await readStateForConfig(config));
+	throwIfAborted(options.signal);
 	const local =
 		input?.local ?? (await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config)));
+	throwIfAborted(options.signal);
 
 	let head = await backend.readHead(options.signal);
 	let remoteForUpload = await readRemoteSnapshotForUpload(
@@ -328,16 +353,20 @@ export async function push(
 		signal: options.signal,
 		onCommit: options.onCommit,
 	});
-	await writeStateForConfig(config, {
-		version: VERSION,
-		profile: config.profile,
-		lastAppliedSnapshot: result.head.snapshotId,
-		lastRemoteRevision: result.head.revision,
-		lastFileHashes: fileHashMap(local),
-		syncFiles: config.syncFiles,
-		syncSessions: config.syncSessions,
-		extraFiles: config.extraFiles,
-	});
+	try {
+		await writeStateForConfig(config, {
+			version: VERSION,
+			profile: config.profile,
+			lastAppliedSnapshot: result.head.snapshotId,
+			lastRemoteRevision: result.head.revision,
+			lastFileHashes: fileHashMap(local),
+			syncFiles: config.syncFiles,
+			syncSessions: config.syncSessions,
+			extraFiles: config.extraFiles,
+		});
+	} catch (error) {
+		throw new PublicationStatePersistenceError(result.head, error);
+	}
 	if (options.signal?.aborted) return;
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 	if (!options.silent) {
@@ -359,10 +388,13 @@ export async function pull(
 	factory: SyncBackendFactory = createSyncBackend,
 ) {
 	const config = await loadConfig(options.target);
+	throwIfAborted(options.signal);
 	ctx.ui.setStatus(STATUS_KEY, `pulling ${config.target ?? "default"}`);
 	const backend = backendFor(config, factory);
 	const state = await readStateForConfig(config);
+	throwIfAborted(options.signal);
 	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
+	throwIfAborted(options.signal);
 	const { head, snapshot: remote } = await readRemoteSnapshot(backend, config, options.signal);
 	throwIfAborted(options.signal);
 	if (!remote) throw new Error("Remote is empty. Run /sync push from a configured machine first.");
@@ -440,9 +472,12 @@ export async function syncBoth(
 	factory: SyncBackendFactory = createSyncBackend,
 ) {
 	const config = await loadConfig(options.target);
+	throwIfAborted(options.signal);
 	const backend = backendFor(config, factory);
 	const state = await readStateForConfig(config);
+	throwIfAborted(options.signal);
 	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
+	throwIfAborted(options.signal);
 	if (
 		normalizeSyncFiles(config.syncFiles).length === 0 &&
 		config.extraFiles.length === 0 &&
@@ -545,6 +580,7 @@ export async function history(
 	factory: SyncBackendFactory = createSyncBackend,
 ) {
 	const config = await loadConfig(options.target);
+	throwIfAborted(options.signal);
 	const backend = backendFor(config, factory);
 	const snapshots = (await backend.listHistory(options.signal)).slice(-20).reverse();
 	throwIfAborted(options.signal);
@@ -569,7 +605,10 @@ export async function history(
 		const snapshot = snapshots[index];
 		if (!snapshot) return;
 		await withLock("rollback", () =>
-			rollback(ctx, { ...options, args: [snapshot.snapshotRef], yes: false }, factory, backend),
+			rollback(ctx, { ...options, args: [snapshot.snapshotRef], yes: false }, factory, {
+				backendIdentity: backend.identity,
+				target: config.target,
+			}),
 		);
 		return;
 	}
@@ -585,13 +624,23 @@ export async function rollback(
 	ctx: ExtensionCommandContext,
 	options: CommandOptions,
 	factory: SyncBackendFactory = createSyncBackend,
-	existingBackend?: SyncBackend,
+	expectedSelection?: { backendIdentity: string; target?: string },
 ) {
 	const target = options.args[0];
 	if (!target) throw new Error("Usage: /sync rollback <snapshot-id> [--yes]");
 
 	const config = await loadConfig(options.target);
-	const backend = existingBackend ?? backendFor(config, factory);
+	throwIfAborted(options.signal);
+	const backend = backendFor(config, factory);
+	if (
+		expectedSelection &&
+		(backend.identity !== expectedSelection.backendIdentity ||
+			config.target !== expectedSelection.target)
+	) {
+		throw new Error(
+			"Sync target or destination changed while history was open; reopen history and retry.",
+		);
+	}
 	const decoded = await backend.readSnapshot(target, options.signal);
 	const selected = filterSnapshotForConfigPolicy(
 		config.syncSessions ? decoded : snapshotWithoutSessions(decoded),
@@ -654,16 +703,20 @@ export async function rollback(
 	} catch (error) {
 		throw new RollbackPublicationError(backup, error);
 	}
-	await writeStateForConfig(config, {
-		version: VERSION,
-		profile: config.profile,
-		lastAppliedSnapshot: result.head.snapshotId,
-		lastRemoteRevision: result.head.revision,
-		lastFileHashes,
-		syncFiles: config.syncFiles,
-		syncSessions: config.syncSessions,
-		extraFiles: config.extraFiles,
-	});
+	try {
+		await writeStateForConfig(config, {
+			version: VERSION,
+			profile: config.profile,
+			lastAppliedSnapshot: result.head.snapshotId,
+			lastRemoteRevision: result.head.revision,
+			lastFileHashes,
+			syncFiles: config.syncFiles,
+			syncSessions: config.syncSessions,
+			extraFiles: config.extraFiles,
+		});
+	} catch (error) {
+		throw new PublicationStatePersistenceError(result.head, error, backup);
+	}
 	if (options.signal?.aborted) return;
 	ctx.ui.notify(
 		[

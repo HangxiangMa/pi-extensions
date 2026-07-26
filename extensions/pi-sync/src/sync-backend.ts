@@ -16,7 +16,13 @@ export interface RemoteHead {
 	syncSessions: boolean;
 }
 
-export type RemoteHistoryEntry = RemoteHead;
+export interface RemoteHistoryEntry {
+	snapshotRef: string;
+	snapshotId: string;
+	createdAt: string;
+	machine: string;
+	syncSessions: boolean;
+}
 
 export type ExpectedRemoteHead = { kind: "missing" } | { kind: "revision"; revision: string };
 

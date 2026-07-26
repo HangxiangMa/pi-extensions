@@ -49,30 +49,26 @@ export class S3SyncBackend implements SyncBackend {
 			"Remote latest pointer is malformed.",
 			this.config.destination.namespace,
 		);
-		this.checksums.set(pointer.snapshot, pointer.sha256);
+		this.registerChecksum(pointer.snapshot, pointer.sha256);
 		return remoteHead(pointer, this.identity, object.etag);
 	}
 
 	async readSnapshot(reference: string, signal?: AbortSignal): Promise<Snapshot> {
 		const expectedChecksum =
 			this.checksums.get(reference) ?? (await this.resolveChecksum(reference, signal));
-		if (!expectedChecksum) {
-			throw new Error(
-				`Snapshot ${reference} is not present in the active head or retained history; integrity cannot be verified.`,
-			);
-		}
 		const object = await new S3Client(this.config, signal).getBuffer(
 			snapshotKey(this.config, reference),
 		);
 		throwIfAborted(signal);
 		if (!object.value) throw new Error(`Snapshot not found: ${reference}`);
-		if (sha256(object.value) !== expectedChecksum) {
+		if (expectedChecksum && sha256(object.value) !== expectedChecksum) {
 			throw new Error("Remote snapshot checksum mismatch.");
 		}
 		const snapshot = await decodeSnapshot(object.value, { signal });
 		if (snapshot.id !== reference || snapshot.profile !== this.config.destination.namespace) {
 			throw new Error("Remote snapshot identity mismatch.");
 		}
+		validateSnapshotBundle(snapshot);
 		return snapshot;
 	}
 
@@ -103,17 +99,16 @@ export class S3SyncBackend implements SyncBackend {
 		}
 		const currentObject = await cancellableClient.getJson<LatestPointer>(latestKey(this.config));
 		throwIfAborted(options.signal);
-		const current = currentObject.missing
-			? undefined
-			: remoteHead(
-					requirePointer(
-						currentObject.value,
-						"Remote latest pointer is malformed.",
-						this.config.destination.namespace,
-					),
-					this.identity,
-					currentObject.etag,
-				);
+		let current: RemoteHead | undefined;
+		if (!currentObject.missing) {
+			const currentPointer = requirePointer(
+				currentObject.value,
+				"Remote latest pointer is malformed.",
+				this.config.destination.namespace,
+			);
+			this.registerChecksum(currentPointer.snapshot, currentPointer.sha256);
+			current = remoteHead(currentPointer, this.identity, currentObject.etag);
+		}
 		if (!matchesExpected(current, expected)) {
 			throw new SyncBackendConflictError(
 				"Remote changed while pushing. Run /sync pull first, then retry.",
@@ -167,7 +162,7 @@ export class S3SyncBackend implements SyncBackend {
 				},
 			);
 		}
-		this.checksums.set(verifiedPointer.snapshot, verifiedPointer.sha256);
+		this.registerChecksum(verifiedPointer.snapshot, verifiedPointer.sha256);
 		const head = remoteHead(verifiedPointer, this.identity, verifiedObject.etag);
 		const warning = await this.updateHistorySafely(commitClient, pointer);
 		return { head, warnings: warning ? [warning] : [] };
@@ -187,8 +182,8 @@ export class S3SyncBackend implements SyncBackend {
 				throw new Error("Remote history conflicts with an already observed snapshot checksum.");
 			}
 		}
-		for (const pointer of pointers) this.checksums.set(pointer.snapshot, pointer.sha256);
-		return pointers.map((pointer) => remoteHead(pointer, this.identity));
+		for (const pointer of pointers) this.registerChecksum(pointer.snapshot, pointer.sha256);
+		return pointers.map(remoteHistoryEntry);
 	}
 
 	async diagnose(signal?: AbortSignal): Promise<BackendDiagnostic[]> {
@@ -213,6 +208,14 @@ export class S3SyncBackend implements SyncBackend {
 		if (headChecksum) return headChecksum;
 		await this.listHistory(signal);
 		return this.checksums.get(reference);
+	}
+
+	private registerChecksum(reference: string, checksum: string) {
+		const known = this.checksums.get(reference);
+		if (known && known !== checksum) {
+			throw new Error("Remote snapshot reference was rebound to a different checksum.");
+		}
+		this.checksums.set(reference, checksum);
 	}
 
 	private async updateHistorySafely(client: S3Client, pointer: LatestPointer) {
@@ -310,6 +313,16 @@ function trimSlashes(value: string) {
 	return value.replace(/^\/+|\/+$/g, "");
 }
 
+function remoteHistoryEntry(pointer: LatestPointer): RemoteHistoryEntry {
+	return {
+		snapshotRef: pointer.snapshot,
+		snapshotId: pointer.snapshot,
+		createdAt: pointer.createdAt,
+		machine: pointer.machine,
+		syncSessions: pointer.syncSessions === true,
+	};
+}
+
 function remoteHead(pointer: LatestPointer, identity: string, etag?: string): RemoteHead {
 	return {
 		snapshotRef: pointer.snapshot,
@@ -398,6 +411,27 @@ function assertSnapshotIdentity(snapshot: Snapshot, expectedProfile: string) {
 		!Array.isArray(snapshot.files)
 	) {
 		throw new Error("Invalid snapshot identity for S3 publication.");
+	}
+}
+
+function validateSnapshotBundle(snapshot: Snapshot) {
+	const paths = new Set<string>();
+	for (const file of snapshot.files) {
+		if (
+			!file ||
+			typeof file.path !== "string" ||
+			typeof file.contentBase64 !== "string" ||
+			typeof file.sha256 !== "string" ||
+			!/^[0-9a-f]{64}$/.test(file.sha256) ||
+			paths.has(file.path)
+		) {
+			throw new Error("Remote snapshot bundle is malformed.");
+		}
+		const content = Buffer.from(file.contentBase64, "base64");
+		if (content.toString("base64") !== file.contentBase64 || sha256(content) !== file.sha256) {
+			throw new Error("Remote snapshot file checksum mismatch.");
+		}
+		paths.add(file.path);
 	}
 }
 

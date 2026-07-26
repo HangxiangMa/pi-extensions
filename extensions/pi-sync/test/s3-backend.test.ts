@@ -73,7 +73,7 @@ test("S3 backend reads an opaque revision and validates immutable snapshot check
 		await assert.rejects(freshBackend.readSnapshot(remote.id), /checksum mismatch/i);
 		await assert.rejects(
 			createSyncBackend(s3Config()).readSnapshot("untracked"),
-			/integrity cannot be verified/i,
+			/snapshot not found/i,
 		);
 		const historical = { ...remote, id: "historical" };
 		harness.addHistorical(historical);
@@ -117,6 +117,49 @@ test("S3 rejects control-bearing or oversized remote display metadata", async ()
 	});
 	await harness.run(async () => {
 		await assert.rejects(createSyncBackend(s3Config()).readHead(), /malformed/i);
+	});
+});
+
+test("S3 retained snapshots remain recoverable after history gaps and eviction", async () => {
+	const remote = snapshot([{ path: "settings.json", content: Buffer.from("remote") }]);
+	const upload = { ...remote, id: "upload" };
+	const harness = new S3Harness(remote);
+	harness.failHistory = true;
+	await harness.run(async () => {
+		const writer = createSyncBackend(s3Config());
+		const observed = await writer.readHead();
+		await writer.publishSnapshot(upload, expectedRemoteHead(observed));
+		harness.failHistory = false;
+		harness.replaceHead({ ...remote, id: "advanced" });
+		assert.deepEqual(await createSyncBackend(s3Config()).readSnapshot(upload.id), upload);
+		harness.addHistorical(upload);
+		harness.clearHistory();
+		assert.deepEqual(await createSyncBackend(s3Config()).readSnapshot(upload.id), upload);
+	});
+});
+
+test("S3 checksum registration rejects immutable-reference rebinding in either read order", async () => {
+	const remote = snapshot([{ path: "settings.json", content: Buffer.from("remote") }]);
+	const changed = {
+		...remote,
+		files: snapshot([{ path: "settings.json", content: Buffer.from("changed") }]).files,
+	};
+
+	const historyFirst = new S3Harness(remote);
+	historyFirst.addHistorical(remote);
+	await historyFirst.run(async () => {
+		const backend = createSyncBackend(s3Config());
+		await backend.listHistory();
+		historyFirst.replaceHead(changed);
+		await assert.rejects(backend.readHead(), /rebound/i);
+	});
+
+	const headFirst = new S3Harness(remote);
+	await headFirst.run(async () => {
+		const backend = createSyncBackend(s3Config());
+		await backend.readHead();
+		headFirst.addHistorical(changed);
+		await assert.rejects(backend.listHistory(), /conflicts|rebound/i);
 	});
 });
 
@@ -292,6 +335,10 @@ class S3Harness {
 		this.historyPointers.push(pointer(value, encoded));
 	}
 
+	clearHistory() {
+		this.historyPointers = [];
+	}
+
 	addMalformedHistoryEntry() {
 		this.historyPointers.push({ ...this.pointer, snapshot: "../foreign" });
 	}
@@ -335,15 +382,7 @@ class S3Harness {
 		if (url.pathname.endsWith("/latest.json")) {
 			if (method === "PUT") {
 				this.latestPuts += 1;
-				if (this.hangLatest) {
-					return new Promise<Response>((_resolve, reject) => {
-						init?.signal?.addEventListener(
-							"abort",
-							() => reject(new DOMException("Timed out", "TimeoutError")),
-							{ once: true },
-						);
-					});
-				}
+				if (this.hangLatest) return hangingResponse(init?.signal);
 				if (this.failLatest) return new Response("latest failed", { status: 503 });
 				this.pointer = parseJsonBody(init?.body) as unknown as LatestPointer;
 				this.etagRevision += 1;
@@ -394,6 +433,20 @@ class S3Harness {
 		}
 		throw new Error(`Unexpected request: ${method} ${url.pathname}`);
 	};
+}
+
+function hangingResponse(signal?: AbortSignal | null) {
+	return new Promise<Response>((_resolve, reject) => {
+		const keepAlive = setInterval(() => undefined, 1_000);
+		signal?.addEventListener(
+			"abort",
+			() => {
+				clearInterval(keepAlive);
+				reject(signal.reason);
+			},
+			{ once: true },
+		);
+	});
 }
 
 function encode(value: Snapshot) {

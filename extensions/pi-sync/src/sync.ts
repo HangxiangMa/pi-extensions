@@ -154,7 +154,7 @@ async function executeCommand(
 ) {
 	try {
 		const command = await resolveSyncCommand(rawArgs, ctx);
-		if (!command) return;
+		if (signal?.aborted || !command) return;
 		const { subcommand, rest } = command;
 		const options = parseOptions(rest);
 		if (target !== undefined) options.target = target;
@@ -220,10 +220,16 @@ async function executeCommand(
 async function autoSync(ctx: ExtensionContext, signal: AbortSignal) {
 	try {
 		const partial = await loadPartialConfig();
+		throwIfAborted(signal);
 		if (!isEnabled(partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC, true)) return;
 		await ensureStateDir();
+		throwIfAborted(signal);
 		await loadConfig();
-		await withLock("auto-sync", () => syncBoth(ctx, { ...AUTO_SYNC_OPTIONS, signal }));
+		throwIfAborted(signal);
+		await withLock("auto-sync", () => {
+			throwIfAborted(signal);
+			return syncBoth(ctx, { ...AUTO_SYNC_OPTIONS, signal });
+		});
 	} catch (error) {
 		if (signal.aborted || isMissingConfigError(error)) return;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -234,14 +240,20 @@ async function autoSync(ctx: ExtensionContext, signal: AbortSignal) {
 async function autoPushSessions(ctx: ExtensionContext, signal: AbortSignal) {
 	try {
 		const partial = await loadPartialConfig();
+		throwIfAborted(signal);
 		if (!isEnabled(partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC, true)) return;
 		if (!isExplicitlyEnabled(partial.syncSessions)) return;
 		await ensureStateDir();
+		throwIfAborted(signal);
 		const config = await loadConfig();
+		throwIfAborted(signal);
 		if (!config.syncSessions) return;
 		await withLock("auto-session-push", async () => {
+			throwIfAborted(signal);
 			const state = await readStateForConfig(config);
+			throwIfAborted(signal);
 			const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
+			throwIfAborted(signal);
 			if (!hasLocalChanges(local, state, config)) return;
 			await push(ctx, { ...AUTO_SYNC_OPTIONS, signal }, { config, state, local });
 		});
@@ -297,6 +309,13 @@ async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions)
 		].join("\n"),
 		warnings.length > 0 ? "warning" : "info",
 	);
+}
+
+function throwIfAborted(signal: AbortSignal) {
+	if (!signal.aborted) return;
+	throw signal.reason instanceof Error
+		? signal.reason
+		: new DOMException("The operation was aborted", "AbortError");
 }
 
 function combineSignals(primary: AbortSignal, secondary?: AbortSignal) {

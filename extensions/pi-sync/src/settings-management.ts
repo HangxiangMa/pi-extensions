@@ -155,7 +155,7 @@ export async function updateStorageProfile(
 		const profiles = requireObject(settings.profiles, "profiles");
 		const profile = requireObject(profiles[name], "storage profile");
 		const nextProfiles = { ...profiles, [name]: update(profile) };
-		validateUniqueRemoteTargets(requireObject(settings.targets, "targets"), nextProfiles);
+		validateUniqueRemoteTargets(requireObject(settings.targets, "targets"));
 		return { ...settings, profiles: nextProfiles };
 	});
 }
@@ -169,7 +169,7 @@ export async function addSyncTarget(name: string, target: S3SyncTargetSettings) 
 		if (!target.profile || !Object.hasOwn(profiles, target.profile)) {
 			throw new Error(`Storage profile not found: ${target.profile ?? "missing"}`);
 		}
-		assertUniqueRemoteIdentity(targets, profiles, name, target);
+		assertUniqueRemoteIdentity(targets, name, target);
 		return { ...settings, targets: { ...targets, [name]: { ...target } } };
 	});
 }
@@ -181,10 +181,9 @@ export async function updateSyncTarget(
 	validateName(name, "target");
 	await updateV2Settings((settings) => {
 		const targets = requireObject(settings.targets, "targets");
-		const profiles = requireObject(settings.profiles, "profiles");
 		const target = requireObject(targets[name], "target");
 		const nextTarget = update(target);
-		assertUniqueRemoteIdentity(targets, profiles, name, nextTarget);
+		assertUniqueRemoteIdentity(targets, name, nextTarget);
 		return { ...settings, targets: { ...targets, [name]: nextTarget } };
 	});
 }
@@ -275,16 +274,14 @@ async function adoptLegacyState(
 
 function assertUniqueRemoteIdentity(
 	targets: Record<string, unknown>,
-	profiles: Record<string, unknown>,
 	name: string,
 	target: S3SyncTargetSettings,
 ) {
-	const identity = effectiveTargetRemoteIdentity(target as Record<string, unknown>, name, profiles);
+	const identity = effectiveTargetRemoteIdentity(target as Record<string, unknown>, name);
 	for (const [otherName, value] of Object.entries(targets)) {
 		if (
 			otherName !== name &&
-			effectiveTargetRemoteIdentity(requireObject(value, "target"), otherName, profiles) ===
-				identity
+			effectiveTargetRemoteIdentity(requireObject(value, "target"), otherName) === identity
 		) {
 			throw new Error(`Target “${name}” duplicates the remote destination of “${otherName}”.`);
 		}
