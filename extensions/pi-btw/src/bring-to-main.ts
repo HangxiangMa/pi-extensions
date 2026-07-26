@@ -10,12 +10,17 @@ import {
 import type { SideThreadTurn } from "./side-thread.js";
 
 const RESERVED_APP_ROWS = 3;
-const SELECTOR_CHROME_ROWS = 2;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export interface BtwBringToMainSegment {
 	role: "user" | "assistant";
 	text: string;
+}
+
+export interface BtwBringToMainSummary {
+	lines: number;
+	messages: number;
+	tokens: number;
 }
 
 export interface BtwSelectionLine {
@@ -26,6 +31,15 @@ export interface BtwSelectionLine {
 export interface BtwTextPosition {
 	line: number;
 	column: number;
+}
+
+export interface BtwTextRangeSelectorState {
+	cursor: BtwTextPosition;
+	anchor?: BtwTextPosition;
+	lineAnchor?: number;
+	preferredColumn: number;
+	scrollOffset: number;
+	horizontalOffset: number;
 }
 
 export type BtwQuickBringToMainScope =
@@ -128,6 +142,22 @@ export function segmentsFromTextRange(
 	return segments;
 }
 
+export function estimateBringToMainTokens(segments: readonly BtwBringToMainSegment[]): number {
+	return Math.ceil(
+		Buffer.byteLength(segments.map((segment) => segment.text).join("\n"), "utf8") / 4,
+	);
+}
+
+export function summarizeBringToMain(
+	segments: readonly BtwBringToMainSegment[],
+): BtwBringToMainSummary {
+	return {
+		lines: segments.reduce((count, segment) => count + segment.text.split("\n").length, 0),
+		messages: segments.length,
+		tokens: estimateBringToMainTokens(segments),
+	};
+}
+
 export function formatBtwBringToMain(segments: readonly BtwBringToMainSegment[]): string {
 	const body = segments
 		.map(
@@ -145,8 +175,11 @@ export function formatBtwBringToMain(segments: readonly BtwBringToMainSegment[])
 	].join("\n");
 }
 
-export class BtwMenuSelector implements Component {
-	private cursor = 0;
+export type BtwBringToMainPreviewAction = { kind: "bring" } | { kind: "back" } | { kind: "close" };
+
+export class BtwBringToMainPreview implements Component {
+	private readonly lines: string[];
+	private displayLines: string[];
 	private scrollOffset = 0;
 	private finished = false;
 
@@ -154,38 +187,37 @@ export class BtwMenuSelector implements Component {
 		private readonly tui: TUI,
 		private readonly theme: Theme,
 		private readonly keybindings: KeybindingsManager,
-		private readonly title: string,
-		private readonly options: readonly string[],
-		private readonly onAction: (action: BtwMenuSelectorAction) => void,
-	) {}
+		draft: string,
+		private readonly summary: BtwBringToMainSummary,
+		private readonly onAction: (action: BtwBringToMainPreviewAction) => void,
+	) {
+		this.lines = draft.split("\n").map(escapeTerminalControls);
+		this.displayLines = this.lines;
+	}
 
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
+		this.displayLines = this.lines.flatMap((line) => wrapPreviewLine(line, safeWidth));
 		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS);
-		const viewportHeight = Math.max(0, availableRows - SELECTOR_CHROME_ROWS);
-		this.keepCursorVisible(viewportHeight);
-		const rows = this.options
-			.slice(this.scrollOffset, this.scrollOffset + viewportHeight)
-			.map((option, visibleIndex) => {
-				const index = this.scrollOffset + visibleIndex;
-				const raw = `${index === this.cursor ? ">" : " "} ${escapeTerminalControls(option)}`;
-				const styled =
-					index === this.cursor ? this.theme.bg("selectedBg", this.theme.fg("text", raw)) : raw;
-				return truncateToWidth(styled, safeWidth, "");
-			});
+		const showFooter = availableRows >= 3;
+		const viewportHeight = Math.max(1, availableRows - 1 - (showFooter ? 1 : 0));
+		this.clampScroll(viewportHeight);
+		const count = this.summary.messages === 1 ? "1 message" : `${this.summary.messages} messages`;
+		const lineCount = this.summary.lines === 1 ? "1 line" : `${this.summary.lines} lines`;
+		const firstVisible = Math.min(this.displayLines.length, this.scrollOffset + 1);
+		const lastVisible = Math.min(this.displayLines.length, this.scrollOffset + viewportHeight);
+		const scrollable = this.displayLines.length > viewportHeight;
+		const position = `${firstVisible}–${lastVisible}/${this.displayLines.length}`;
+		const header = `Preview${scrollable ? ` ${position}` : ""} · ${count} · ${lineCount} · ~${this.summary.tokens} tokens`;
+		const actions = `${confirmKeyLabel(this.keybindings)} bring • ${keybindingLabel(this.keybindings, "tui.select.cancel", ["ctrl+c"])} back • Ctrl+C close`;
+		const scroll = `${position} • ${keybindingLabel(this.keybindings, "tui.select.pageUp")}/${keybindingLabel(this.keybindings, "tui.select.pageDown")} scroll`;
+		const detailedFooter = scrollable ? `${scroll} • ${actions}` : actions;
+		const footer = visibleWidth(detailedFooter) <= safeWidth ? detailedFooter : actions;
 		return fitRows(
 			[
-				truncateToWidth(
-					this.theme.fg("accent", this.theme.bold(escapeTerminalControls(this.title))),
-					safeWidth,
-					"",
-				),
-				...rows,
-				truncateToWidth(
-					this.theme.fg("muted", "Navigate • confirm • back • Ctrl+C close"),
-					safeWidth,
-					"",
-				),
+				truncateToWidth(this.theme.fg("accent", this.theme.bold(header)), safeWidth, ""),
+				...this.displayLines.slice(this.scrollOffset, this.scrollOffset + viewportHeight),
+				...(showFooter ? [truncateToWidth(this.theme.fg("muted", footer), safeWidth, "")] : []),
 			],
 			availableRows,
 		);
@@ -199,6 +231,113 @@ export class BtwMenuSelector implements Component {
 		}
 		if (this.keybindings.matches(data, "tui.select.cancel")) {
 			this.finish({ kind: "back" });
+			return;
+		}
+		if (matchesConfirm(data, this.keybindings)) {
+			this.finish({ kind: "bring" });
+			return;
+		}
+		if (this.keybindings.matches(data, "tui.select.pageUp")) {
+			this.scrollOffset -= Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS - 2);
+			this.clampScroll(Math.max(0, this.tui.terminal.rows - RESERVED_APP_ROWS - 2));
+			this.tui.requestRender();
+			return;
+		}
+		if (this.keybindings.matches(data, "tui.select.pageDown")) {
+			this.scrollOffset += Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS - 2);
+			this.clampScroll(Math.max(0, this.tui.terminal.rows - RESERVED_APP_ROWS - 2));
+			this.tui.requestRender();
+		}
+	}
+
+	invalidate(): void {}
+
+	private clampScroll(viewportHeight: number): void {
+		this.scrollOffset = Math.max(
+			0,
+			Math.min(this.scrollOffset, Math.max(0, this.displayLines.length - viewportHeight)),
+		);
+	}
+
+	private finish(action: BtwBringToMainPreviewAction): void {
+		if (this.finished) return;
+		this.finished = true;
+		this.onAction(action);
+	}
+}
+
+export class BtwMenuSelector implements Component {
+	private cursor = 0;
+	private scrollOffset = 0;
+	private finished = false;
+
+	constructor(
+		private readonly tui: TUI,
+		private readonly theme: Theme,
+		private readonly keybindings: KeybindingsManager,
+		private readonly title: string,
+		private readonly options: readonly string[],
+		private readonly onAction: (action: BtwMenuSelectorAction) => void,
+		initialValue?: string,
+	) {
+		const initialIndex = initialValue === undefined ? -1 : options.indexOf(initialValue);
+		if (initialIndex >= 0) this.cursor = initialIndex;
+	}
+
+	render(width: number): string[] {
+		const safeWidth = Math.max(1, width);
+		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS);
+		const showFooter = availableRows >= 3;
+		const viewportHeight = Math.max(1, availableRows - 1 - (showFooter ? 1 : 0));
+		this.keepCursorVisible(viewportHeight);
+		const rows = this.options
+			.slice(this.scrollOffset, this.scrollOffset + viewportHeight)
+			.map((option, visibleIndex) => {
+				const index = this.scrollOffset + visibleIndex;
+				const raw = `${index === this.cursor ? ">" : " "} ${escapeTerminalControls(option)}`;
+				const toned = option.startsWith("⚠") ? this.theme.fg("warning", raw) : raw;
+				const styled =
+					index === this.cursor ? this.theme.bg("selectedBg", this.theme.fg("text", toned)) : toned;
+				return truncateToWidth(styled, safeWidth, "");
+			});
+		return fitRows(
+			[
+				truncateToWidth(
+					this.theme.fg("accent", this.theme.bold(escapeTerminalControls(this.title))),
+					safeWidth,
+					"",
+				),
+				...rows,
+				...(showFooter
+					? [
+							truncateToWidth(
+								this.theme.fg(
+									"muted",
+									`${confirmKeyLabel(this.keybindings)} confirm • ${keybindingLabel(this.keybindings, "tui.select.cancel", ["ctrl+c"])} back • Ctrl+C close`,
+								),
+								safeWidth,
+								"",
+							),
+						]
+					: []),
+			],
+			availableRows,
+		);
+	}
+
+	handleInput(data: string): void {
+		if (this.finished) return;
+		if (matchesKey(data, Key.ctrl("c"))) {
+			this.finish({ kind: "close" });
+			return;
+		}
+		if (this.keybindings.matches(data, "tui.select.cancel")) {
+			this.finish({ kind: "back" });
+			return;
+		}
+		if (matchesConfirm(data, this.keybindings)) {
+			const value = this.options[this.cursor];
+			if (value !== undefined) this.finish({ kind: "select", value });
 			return;
 		}
 		if (this.keybindings.matches(data, "tui.select.up")) {
@@ -220,10 +359,6 @@ export class BtwMenuSelector implements Component {
 			this.cursor = Math.min(Math.max(0, this.options.length - 1), this.cursor + 10);
 			this.tui.requestRender();
 			return;
-		}
-		if (this.keybindings.matches(data, "tui.select.confirm")) {
-			const value = this.options[this.cursor];
-			if (value !== undefined) this.finish({ kind: "select", value });
 		}
 	}
 
@@ -261,16 +396,46 @@ export class BtwTextRangeSelector implements Component {
 		private readonly keybindings: KeybindingsManager,
 		turns: readonly SideThreadTurn[],
 		private readonly onAction: (action: BtwTextRangeSelectorAction) => void,
+		initialState?: BtwTextRangeSelectorState,
 	) {
 		this.lines = buildBtwSelectionLines(turns);
+		if (initialState) {
+			this.cursor = clampTextPosition(this.lines, initialState.cursor);
+			this.anchor = initialState.anchor
+				? clampTextPosition(this.lines, initialState.anchor)
+				: undefined;
+			this.lineAnchor =
+				initialState.lineAnchor === undefined
+					? undefined
+					: Math.max(0, Math.min(this.lines.length - 1, initialState.lineAnchor));
+			this.preferredColumn = Math.max(0, initialState.preferredColumn);
+			this.scrollOffset = Math.max(0, initialState.scrollOffset);
+			this.horizontalOffset = Math.max(0, initialState.horizontalOffset);
+		}
+	}
+
+	getState(): BtwTextRangeSelectorState {
+		return {
+			cursor: { ...this.cursor },
+			anchor: this.anchor ? { ...this.anchor } : undefined,
+			lineAnchor: this.lineAnchor,
+			preferredColumn: this.preferredColumn,
+			scrollOffset: this.scrollOffset,
+			horizontalOffset: this.horizontalOffset,
+		};
 	}
 
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
 		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS);
-		const viewportHeight = Math.max(0, availableRows - SELECTOR_CHROME_ROWS);
+		const showStatus = availableRows >= 4;
+		const showFooter = availableRows >= 3;
+		const viewportHeight = Math.max(
+			1,
+			availableRows - 1 - (showStatus ? 1 : 0) - (showFooter ? 1 : 0),
+		);
 		this.keepCursorVisible(viewportHeight);
-		const textWidth = Math.max(1, safeWidth - visibleWidth("> Assistant │ "));
+		const textWidth = Math.max(1, safeWidth - visibleWidth("●> Assistant │ "));
 		this.keepCursorHorizontallyVisible(textWidth);
 		const range = this.getSelectionRange();
 		const lineRange = this.getLineSelectionRange();
@@ -278,13 +443,11 @@ export class BtwTextRangeSelector implements Component {
 		const rows = visible.map((line, visibleIndex) => {
 			const lineIndex = this.scrollOffset + visibleIndex;
 			const role = line.role === "user" ? "User" : "Assistant";
-			const prefix = `${lineIndex === this.cursor.line ? ">" : " "} ${role.padEnd(9)} │ `;
-			const text = this.renderTextLine(
-				line,
-				lineIndex,
-				range,
-				lineRange ? lineIndex >= lineRange.start && lineIndex <= lineRange.end : false,
-			);
+			const lineSelected = lineRange
+				? lineIndex >= lineRange.start && lineIndex <= lineRange.end
+				: false;
+			const prefix = `${lineSelected ? "●" : " "}${lineIndex === this.cursor.line ? ">" : " "} ${role.padEnd(9)} │ `;
+			const text = this.renderTextLine(line, lineIndex, range, lineSelected);
 			return truncateToWidth(
 				lineIndex === this.cursor.line ? this.theme.fg("accent", prefix) + text : prefix + text,
 				safeWidth,
@@ -292,21 +455,40 @@ export class BtwTextRangeSelector implements Component {
 			);
 		});
 		const selected = this.getSelectedSegments();
-		const bytes = Buffer.byteLength(selected.map((segment) => segment.text).join("\n"), "utf8");
-		const footer = this.warning
-			? `${this.warning} • Space lines • Shift+Arrows text • back • Ctrl+C close`
+		const summary = summarizeBringToMain(selected);
+		const status =
+			selected.length === 0
+				? "Selected: none"
+				: `Selected: ${summary.lines} ${summary.lines === 1 ? "line" : "lines"} · ${summary.messages} ${summary.messages === 1 ? "message" : "messages"} · ~${summary.tokens} ${summary.tokens === 1 ? "token" : "tokens"}`;
+		const confirm = confirmKeyLabel(this.keybindings);
+		const back = keybindingLabel(this.keybindings, "tui.select.cancel", ["ctrl+c"]);
+		const vertical = `${keybindingLabel(this.keybindings, "tui.select.up")}/${keybindingLabel(this.keybindings, "tui.select.down")}`;
+		const confirmUsesSpace = this.keybindings.matches(" ", "tui.select.confirm");
+		const detailedFooter = this.warning
+			? `${this.warning} • ${confirmUsesSpace ? "Shift+Arrows select" : "Space lines • Shift+Arrows text"} • ${back} back • Ctrl+C close`
 			: this.lineAnchor !== undefined
-				? `~${Math.ceil(bytes / 4)} tokens • Space clear • ↑↓ extend lines • Shift+Arrows text • confirm • back • Ctrl+C close`
-				: `~${Math.ceil(bytes / 4)} tokens • Shift+Arrows select text • Arrows move • Space lines • confirm • back • Ctrl+C close`;
+				? `${confirmUsesSpace ? `${vertical} extend lines` : `Space clear • ${vertical} extend lines`} • Shift+Arrows text • ${confirm} bring • ${back} back • Ctrl+C close`
+				: `Shift+Arrows select • Arrows move${confirmUsesSpace ? "" : " • Space lines"} • ${confirm} bring • ${back} back • Ctrl+C close`;
+		const criticalFooter = `${confirm} bring • ${back} back • Ctrl+C close`;
+		const footer = visibleWidth(detailedFooter) <= safeWidth ? detailedFooter : criticalFooter;
 		return fitRows(
 			[
 				truncateToWidth(
-					this.theme.fg("accent", this.theme.bold("Select text to bring back")),
+					this.theme.fg("accent", this.theme.bold("Select text to bring to main")),
 					safeWidth,
 					"",
 				),
+				...(showStatus ? [truncateToWidth(this.theme.fg("muted", status), safeWidth, "")] : []),
 				...rows,
-				truncateToWidth(this.theme.fg(this.warning ? "warning" : "muted", footer), safeWidth, ""),
+				...(showFooter
+					? [
+							truncateToWidth(
+								this.theme.fg(this.warning ? "warning" : "muted", footer),
+								safeWidth,
+								"",
+							),
+						]
+					: []),
 			],
 			availableRows,
 		);
@@ -320,6 +502,18 @@ export class BtwTextRangeSelector implements Component {
 		}
 		if (this.keybindings.matches(data, "tui.select.cancel")) {
 			this.finish({ kind: "back" });
+			return;
+		}
+		if (matchesConfirm(data, this.keybindings)) {
+			if (this.lines.length > 0) {
+				const segments = this.getSelectedSegments();
+				if (segments.length === 0) {
+					this.warning = "Select text first";
+					this.tui.requestRender();
+				} else {
+					this.finish({ kind: "confirm", segments });
+				}
+			}
 			return;
 		}
 		if (matchesKey(data, Key.space)) {
@@ -368,15 +562,6 @@ export class BtwTextRangeSelector implements Component {
 			this.moveVertical(10, false);
 			return;
 		}
-		if (this.keybindings.matches(data, "tui.select.confirm") && this.lines.length > 0) {
-			const segments = this.getSelectedSegments();
-			if (segments.length === 0) {
-				this.warning = "Select text first";
-				this.tui.requestRender();
-				return;
-			}
-			this.finish({ kind: "confirm", segments });
-		}
 	}
 
 	invalidate(): void {}
@@ -399,9 +584,17 @@ export class BtwTextRangeSelector implements Component {
 			buffer = "";
 		};
 		for (let column = this.horizontalOffset; column <= characters.length; column += 1) {
+			if (range && lineIndex === range.start.line && column === range.start.column) {
+				flush();
+				rendered += this.theme.fg("accent", "[");
+			}
 			if (lineIndex === this.cursor.line && column === this.cursor.column) {
 				flush();
 				rendered += this.theme.fg("accent", "│");
+			}
+			if (range && lineIndex === range.end.line && column === range.end.column) {
+				flush();
+				rendered += this.theme.fg("accent", "]");
 			}
 			const character = characters[column];
 			if (character === undefined) continue;
@@ -537,8 +730,91 @@ function clampTextPosition(
 	};
 }
 
+function confirmKeyLabel(keybindings: KeybindingsManager): string {
+	return keybindingLabel(keybindings, "tui.select.confirm", ["ctrl+c"], "enter");
+}
+
+function matchesConfirm(data: string, keybindings: KeybindingsManager): boolean {
+	if (matchesKey(data, Key.ctrl("c"))) return false;
+	const hasUsableBinding = keybindings
+		.getKeys("tui.select.confirm")
+		.map(String)
+		.some((key) => key.toLowerCase() !== "ctrl+c");
+	return (
+		keybindings.matches(data, "tui.select.confirm") ||
+		(!hasUsableBinding && matchesKey(data, Key.enter))
+	);
+}
+
+function keybindingLabel(
+	keybindings: KeybindingsManager,
+	keybinding:
+		| "tui.select.confirm"
+		| "tui.select.cancel"
+		| "tui.select.up"
+		| "tui.select.down"
+		| "tui.select.pageUp"
+		| "tui.select.pageDown",
+	excluded: readonly string[] = [],
+	fallback?: string,
+): string {
+	const key = keybindings
+		.getKeys(keybinding)
+		.map(String)
+		.find((candidate) => !excluded.includes(candidate.toLowerCase()));
+	return formatKeyLabel(key ?? fallback ?? keybinding);
+}
+
+function formatKeyLabel(key: string): string {
+	return key
+		.split("+")
+		.map((part) => {
+			const lower = part.toLowerCase();
+			if (lower === "ctrl") return "Ctrl";
+			if (lower === "alt") return "Alt";
+			if (lower === "shift") return "Shift";
+			if (lower === "escape" || lower === "esc") return "Esc";
+			if (lower === "enter" || lower === "return") return "Enter";
+			if (lower === "pageup") return "PgUp";
+			if (lower === "pagedown") return "PgDn";
+			return part.length === 1
+				? part.toUpperCase()
+				: `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`;
+		})
+		.join("+");
+}
+
 function splitGraphemes(text: string): string[] {
 	return [...GRAPHEME_SEGMENTER.segment(text)].map(({ segment }) => segment);
+}
+
+function wrapPreviewLine(text: string, width: number): string[] {
+	if (!text) return [""];
+	const rows: string[] = [];
+	let row = "";
+	let rowWidth = 0;
+	const append = (value: string, valueWidth: number) => {
+		if (row && rowWidth + valueWidth > width) {
+			rows.push(row);
+			row = "";
+			rowWidth = 0;
+		}
+		row += value;
+		rowWidth += valueWidth;
+	};
+	for (const character of splitGraphemes(text)) {
+		const characterWidth = visibleWidth(character);
+		if (characterWidth <= width) {
+			append(character, characterWidth);
+			continue;
+		}
+		const codePoints = [...character]
+			.map((value) => `\\u{${value.codePointAt(0)?.toString(16) ?? "0"}}`)
+			.join("");
+		for (const value of codePoints) append(value, 1);
+	}
+	rows.push(row);
+	return rows;
 }
 
 function compareTextPositions(first: BtwTextPosition, second: BtwTextPosition): number {
