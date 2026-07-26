@@ -91,24 +91,30 @@ export class NotebookPreviewPanel implements Component {
 		lines.push(`${border("├")}${border("─".repeat(inner))}${border("┤")}`);
 
 		if (!this.state.path) {
-			lines.push(pad(" No notebook selected."), pad(dim(" /jupyter-preview <file.ipynb>")));
-		} else if (this.state.lastError) {
+			lines.push(pad(" No notebook selected."), pad(dim(" Run /jupyter to choose one.")));
+		} else if (this.state.lastError && !this.state.model) {
 			lines.push(
 				...wrapBoxLines(error(sanitizeTerminalText(this.state.lastError)), inner).map(pad),
 			);
 		} else if (!this.state.model) lines.push(pad(dim(" Loading…")));
 		else {
+			if (this.state.lastError) {
+				lines.push(
+					...wrapBoxLines(
+						error(
+							` Refresh failed; showing last valid version: ${sanitizeTerminalText(this.state.lastError)}`,
+						),
+						inner,
+					).map(pad),
+					pad(),
+				);
+			}
 			const body = renderNotebookBody(this.state, inner, this.theme);
 			lines.push(...body.slice(this.state.scroll).map(pad));
 		}
 
 		lines.push(`${border("├")}${border("─".repeat(inner))}${border("┤")}`);
-		const footer = this.state.resizing
-			? " Drag to resize width"
-			: this.state.focused
-				? " ↑↓ PgUp/PgDn or j/k/u/d scroll • Esc/F8 return"
-				: " Drag left border resize • Ctrl+Alt+j/k scroll • Shift+F8 focus";
-		lines.push(pad(dim(footer)), border(`╰${"─".repeat(inner)}╯`));
+		lines.push(pad(dim(previewFooter(this.state, inner))), border(`╰${"─".repeat(inner)}╯`));
 		return lines;
 	}
 
@@ -155,6 +161,18 @@ export function installMouseResize(
 		removeListener();
 		terminal.write("\x1b[?1006l\x1b[?1002l\x1b[?1000l");
 	};
+}
+
+export function previewFooter(state: PreviewState, width: number): string {
+	if (state.resizing) return " Drag to resize width";
+	if (state.focused) {
+		return width >= 58
+			? " ↑↓ PgUp/PgDn or j/k/u/d scroll • Esc/F8 return"
+			: " ↑↓ scroll • Esc/F8 return";
+	}
+	return width >= 58
+		? " Drag left border resize • Ctrl+Alt+j/k scroll • Shift+F8 focus"
+		: " Shift+F8 focus • F8 close";
 }
 
 export function parseSgrMouseEvent(data: string): MouseEvent | undefined {
