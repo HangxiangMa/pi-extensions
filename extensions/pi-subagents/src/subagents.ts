@@ -26,7 +26,14 @@ export default function (pi: ExtensionAPI) {
 	if (settings?.blocking?.enabled !== false) registerBlockingSubagent(pi);
 
 	pi.on("session_start", (_event, ctx) => {
-		const notice = consumeSubagentSettingsNotice();
+		// Preserve a one-shot migration notice from extension load while refreshing
+		// validation against settings that may have changed before this session.
+		const loadNotice = consumeSubagentSettingsNotice();
+		readSubagentSettings();
+		const refreshedNotice = consumeSubagentSettingsNotice();
+		const notice = [
+			...new Set([loadNotice, refreshedNotice].filter((value) => value !== undefined)),
+		].join("\n");
 		if (notice) ctx.ui.notify(notice, "warning");
 	});
 

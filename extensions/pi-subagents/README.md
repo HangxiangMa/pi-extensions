@@ -51,7 +51,7 @@ pi -e ./extensions/pi-subagents
 | **Async only** | `subagent_spawn`, `subagent_send`, `subagent_manage`, and `subagent_mailbox`; blocking `subagent` is omitted |
 | **Blocking only** | Blocking `subagent` only; equivalent to the existing `stateful.enabled: false` behavior |
 
-The preview is read-only until confirmation. Escape or **Cancel** leaves settings unchanged. Tool removal requires an extension reload because Pi does not expose extension tool unregistration. To avoid aborting work or removing isolated worktrees during `session_shutdown`, workflow changes are blocked while detached agents are retained; finish or clear them through **Current agents** first. Pi owns reload-error reporting and does not return a success result to extensions, so the save notification also tells users to run `/reload` if the tool surface does not refresh.
+The preview compares the selection with the tools registered in the current session, even when a manual settings edit is pending, and remains read-only until confirmation. Escape or **Cancel** leaves settings unchanged. Tool removal requires an extension reload because Pi does not expose extension tool unregistration. To avoid aborting work or removing isolated worktrees during `session_shutdown`, workflow changes are blocked while detached agents are retained; finish or clear them through **Current agents** first. Pi owns reload-error reporting and does not return a success result to extensions, so the save notification also tells users to run `/reload` if the tool surface does not refresh.
 
 The available tools are:
 
@@ -62,7 +62,7 @@ Choose the API by lifecycle:
 
 | Need | Use |
 | --- | --- |
-| A delegated result is required before the root's next action under default next-turn delivery | One blocking `subagent` call (`tasks` for synchronous parallel work) |
+| A delegated result is required before the root's next action under default next-turn delivery | Use one blocking `subagent` call when registered. In **Async only**, complete the critical-path work directly or switch workflows before delegating it |
 | Broad research/review the current response does not depend on | Prefer one `subagent_spawn` covering related branches, when lifecycle tools are enabled |
 | Final-answer-dependent broad work with `completionDelivery: "auto-resume"` | Prefer one `subagent_spawn`; completion requests a synthesis turn |
 | Reusable history, follow-ups, or mailboxes | `subagent_spawn` and lifecycle tools, when enabled |
@@ -96,8 +96,10 @@ Count-selection guidance:
 - `subagent` is deliberately blocking: while it runs, the main agent cannot answer queued steering.
   Use it when delegated outputs are required before the next root action and waiting is intentional.
 - With default `completionDelivery: "next-turn"`, prefer **one detached `subagent_spawn`** for broad
-  research or review only when the current response does not depend on its result. Keep
-  final-answer-dependent delegated work on the blocking path because an idle root is not awakened.
+  research or review only when the current response does not depend on its result. When blocking
+  `subagent` is registered, use it for required delegated output because an idle root is not awakened.
+  In **Async only**, complete required work directly, opt into `auto-resume` when a later synthesis
+  turn is appropriate, or switch delegation workflows.
 - With `completionDelivery: "auto-resume"`, prefer one detached `subagent_spawn` for broad related
   research or review even when the final answer depends on it; completion requests a later synthesis
   turn. Do not choose blocking parallel fan-out merely to keep delegation in one turn.
@@ -225,7 +227,7 @@ Run a chain where each step receives the previous output:
 
 Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects a bounded `pi-subagent-completion` custom message. Completions that settle in the same dispatch window are batched, and the broker allows at most one in-flight root wake until that parent turn starts.
 
-Detached work follows a non-polling policy. With default `next-turn` delivery, prefer one bounded `subagent_spawn` for related asynchronous research or review only when the current response does not depend on its result; if it does, use blocking `subagent`. With opt-in `auto-resume`, detached broad work may be final-answer-dependent because completion requests a synthesis turn after the root settles. In either mode, do useful non-overlapping main-agent work immediately, do not poll `subagent_manage` with `action: "list"` or `subagent_mailbox` with `action: "read"`, and do not duplicate delegated work. Add another detached agent only for truly independent work with safe workspace concurrency. Detached lifecycle work intentionally has no `subagent_wait` tool.
+Detached work follows a non-polling policy. With default `next-turn` delivery, prefer one bounded `subagent_spawn` for related asynchronous research or review only when the current response does not depend on its result. If it does, use blocking `subagent` when registered; in **Async only**, complete required work directly, opt into `auto-resume` when a later synthesis turn is appropriate, or switch workflows. With opt-in `auto-resume`, detached broad work may be final-answer-dependent because completion requests a synthesis turn after the root settles. In either mode, do useful non-overlapping main-agent work immediately, do not poll `subagent_manage` with `action: "list"` or `subagent_mailbox` with `action: "read"`, and do not duplicate delegated work. Add another detached agent only for truly independent work with safe workspace concurrency. Detached lifecycle work intentionally has no `subagent_wait` tool.
 
 A detached agent additionally needs a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation. Simple work that the main agent can perform directly should not be delegated.
 

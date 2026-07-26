@@ -441,6 +441,7 @@ async function showDelegationWorkflow(
 		);
 		return false;
 	}
+	const activeWorkflow = currentWorkflow(runtime, runtime.getRuntimeStatus());
 	const choices: SelectItem[] = [
 		{
 			value: "all",
@@ -464,7 +465,19 @@ async function showDelegationWorkflow(
 			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
 			container.addChild(new Text(theme.fg("accent", theme.bold("Change Delegation")), 1, 0));
 			container.addChild(
-				new Text(theme.fg("muted", `Current: ${workflowLabel(snapshot.value)}`), 1, 0),
+				new Text(
+					theme.fg(
+						"muted",
+						[
+							`Current: ${workflowLabel(activeWorkflow)}`,
+							...(snapshot.value !== activeWorkflow
+								? [`Configured after reload: ${workflowLabel(snapshot.value)}`]
+								: []),
+						].join("\n"),
+					),
+					1,
+					0,
+				),
 			);
 			container.addChild(new Spacer(1));
 			const selectList = new SelectList(choices, Math.min(choices.length + 2, 10), {
@@ -496,21 +509,29 @@ async function showDelegationWorkflow(
 		},
 	);
 	if (!selected) return false;
-	if (selected === snapshot.value) {
+	if (selected === activeWorkflow && selected === snapshot.value) {
 		ctx.ui.notify(`Delegation already uses ${workflowLabel(selected)}.`, "info");
 		return false;
 	}
-	if (blockReloadWithRetainedAgents(ctx, runtime)) return false;
+	const requiresReload = selected !== activeWorkflow;
+	if (requiresReload && blockReloadWithRetainedAgents(ctx, runtime)) return false;
 
-	const confirmed = await showWorkflowPreview(ctx, snapshot.value, selected);
+	const confirmed = await showWorkflowPreview(ctx, activeWorkflow, selected, requiresReload);
 	if (!confirmed) return false;
-	if (blockReloadWithRetainedAgents(ctx, runtime)) return false;
+	if (requiresReload && blockReloadWithRetainedAgents(ctx, runtime)) return false;
 	try {
 		updateDelegationWorkflowSetting(selected as Exclude<DelegationWorkflow, "disabled">);
 	} catch (error) {
 		ctx.ui.notify(
 			`Delegation settings were not saved: ${formatError(error)}. The current workflow is unchanged.`,
 			"error",
+		);
+		return false;
+	}
+	if (!requiresReload) {
+		ctx.ui.notify(
+			`Saved ${workflowLabel(selected)}. The current tool surface already matches.`,
+			"info",
 		);
 		return false;
 	}
@@ -539,8 +560,14 @@ async function showWorkflowPreview(
 	ctx: ExtensionCommandContext,
 	current: DelegationWorkflow,
 	next: DelegationWorkflow,
+	requiresReload: boolean,
 ): Promise<boolean> {
-	const effects = workflowEffects(current, next)
+	const workflowChanges = workflowEffects(current, next);
+	const effects = (
+		workflowChanges.length > 0
+			? workflowChanges
+			: ["Keep the current registered tools and cancel the pending workflow change"]
+	)
 		.map((effect) => `- ${effect}`)
 		.join("\n");
 	return ctx.ui.custom<boolean>((tui, theme, _keybindings, done) => {
@@ -551,7 +578,7 @@ async function showWorkflowPreview(
 			new Text(
 				theme.fg(
 					"muted",
-					`Current: ${workflowLabel(current)}\nNew: ${workflowLabel(next)}\n\nEffect:\n${effects}\n- Reload the extension to apply this tool surface`,
+					`Current: ${workflowLabel(current)}\nNew: ${workflowLabel(next)}\n\nEffect:\n${effects}\n- ${requiresReload ? "Reload the extension to apply this tool surface" : "No reload is needed because the active tools already match"}`,
 				),
 				1,
 				0,
@@ -559,7 +586,13 @@ async function showWorkflowPreview(
 		);
 		container.addChild(new Spacer(1));
 		const actions: SelectItem[] = [
-			{ value: "save", label: "Save and reload", description: "Persist and apply this workflow" },
+			{
+				value: "save",
+				label: requiresReload ? "Save and reload" : "Save",
+				description: requiresReload
+					? "Persist and apply this workflow"
+					: "Persist the workflow that is already active",
+			},
 			{ value: "cancel", label: "Cancel", description: "Leave settings and tools unchanged" },
 		];
 		const selectList = new SelectList(actions, 4, {

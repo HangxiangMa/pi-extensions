@@ -355,7 +355,7 @@ test("delegation workflow preview applies async-only on confirmation and cancell
 	}
 });
 
-test("configured workflow differences remain visible and manager layouts stay bounded", async () => {
+test("configured workflow differences reload from the active tool surface", async () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-workflow-partial-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
@@ -367,19 +367,53 @@ test("configured workflow differences remain visible and manager layouts stay bo
 		const command = reloadMock.commands.get("subagents");
 		assert.ok(command);
 		updateDelegationWorkflowSetting("async-only");
-		let lines: string[] = [];
+		let reloads = 0;
+		let call = 0;
+		const renders: string[][] = [];
 		const context = createMockContext({
 			mode: "tui",
 			hasUI: true,
+			reload: async () => {
+				reloads++;
+			},
 			custom: async (factory: unknown) => {
-				const driven = driveCustomSelector(factory, ["\u001b"], 40);
-				lines = driven.renders.flat();
+				if (call >= 3) throw new Error("workflow should reload after the third screen");
+				const driven = driveCustomSelector(factory, ["\r"], 40);
+				renders[call++] = driven.renders.flat();
 				return driven.result;
 			},
 		});
 		await command.handler("", context.ctx);
-		assert.match(lines.join("\n"), /Configured after reload: Async only/);
-		assert.ok(lines.every((line) => visibleWidth(line) <= 40));
+		assert.equal(call, 3);
+		assert.equal(reloads, 1);
+		assert.match(renders[0]?.join("\n") ?? "", /Configured after reload: Async only/);
+		assert.match(renders[1]?.join("\n") ?? "", /Current: All delegation methods/);
+		assert.match(renders[2]?.join("\n") ?? "", /Current: All delegation methods/);
+		assert.match(renders[2]?.join("\n") ?? "", /Remove blocking `subagent`/);
+		assert.ok(renders.flat().every((line) => visibleWidth(line) <= 40));
+
+		reloads = 0;
+		call = 0;
+		const revertContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			reload: async () => {
+				reloads++;
+			},
+			custom: async (factory: unknown) => {
+				const inputs = call === 1 ? ["\u001b[A", "\r"] : call === 3 ? ["\u001b"] : ["\r"];
+				call++;
+				return driveCustomSelector(factory, inputs, 60).result;
+			},
+		});
+		await command.handler("", revertContext.ctx);
+		assert.equal(call, 4);
+		assert.equal(reloads, 0);
+		assert.equal(inspectDelegationWorkflowSettings().value, "all");
+		assert.match(
+			revertContext.notifications.at(-1)?.message ?? "",
+			/current tool surface already matches/i,
+		);
 
 		for (const width of [40, 60, 100]) {
 			const widthMock = createMockPi();
@@ -398,7 +432,7 @@ test("configured workflow differences remain visible and manager layouts stay bo
 			});
 			await widthCommand.handler("", widthContext.ctx);
 			assert.ok(lines.every((line) => visibleWidth(line) <= width));
-			assert.match(lines.join("\n"), /Delegation: Async only/);
+			assert.match(lines.join("\n"), /Delegation: All delegation methods/);
 		}
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -955,6 +989,28 @@ test("subagent settings normalize known override fields only", () => {
 	assert.equal(normalizeSubagentSettings({ blocking: { enabled: "no" } }), undefined);
 	assert.equal(normalizeSubagentSettings({ blocking: false }), undefined);
 	assert.equal(normalizeSubagentSettings({ agents: [] }), undefined);
+});
+
+test("session start re-reads settings before reporting warnings", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-session-settings-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(settingsPath, "{}\n");
+		const mock = createMockPi();
+		subagents(mock.pi);
+		writeFileSync(settingsPath, "{ malformed");
+		const context = createMockContext();
+		for (const handler of mock.events.get("session_start") ?? []) {
+			await handler({}, context.ctx);
+		}
+		assert.match(context.notifications[0]?.message ?? "", /pi-subagents\.json is invalid/i);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
 });
 
 test("subagent settings migrate and save to the canonical package filename", () => {
