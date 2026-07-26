@@ -398,7 +398,7 @@ export function showImageDropLimitsMenu(
 			item("maxImageBytes", "Max file size per image"),
 			item("maxBatchBytes", "Max total size per message"),
 			item("maxImagePixels", "Max image resolution"),
-			item("maxRetainedImages", "Reusable sent images"),
+			item("maxRetainedImages", "Staged + sent image count"),
 			item("maxRetainedBytes", "Staged + sent image memory"),
 			{
 				value: "save",

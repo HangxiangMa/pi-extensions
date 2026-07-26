@@ -105,7 +105,7 @@ test("resource-limit actions explain their concrete effect and save behavior", a
 		"Current: 40 MiB · Default: 40 MiB",
 		"Max image resolution",
 		"Current: 50 MP · Default: 50 MP",
-		"Reusable sent images",
+		"Staged + sent image count",
 		"Current: 128 · Default: 128",
 		"Staged + sent image memory",
 		"Current: 512 MiB · Default: 512 MiB",

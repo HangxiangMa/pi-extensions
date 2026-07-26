@@ -850,8 +850,8 @@ function limitLabel(key: LimitKey): string {
 		maxImageBytes: "Per-image upload size",
 		maxBatchBytes: "Total upload size",
 		maxImagePixels: "Maximum image resolution",
-		maxRetainedImages: "Sent history count",
-		maxRetainedBytes: "Sent history memory",
+		maxRetainedImages: "Staged + sent image count",
+		maxRetainedBytes: "Staged + sent image memory",
 	}[key];
 }
 
