@@ -45,7 +45,7 @@ The first iteration will not add settings or another public tool. The full artif
 - [x] Update `extensions/pi-firecrawl/src/tools.ts` and `extensions/pi-firecrawl/src/client.ts` so all successful tool responses and oversized non-2xx bodies use the bounded formatter, cancellation behavior remains unchanged, and error messages remain concise and actionable. Evidence: one execution test invokes all five tools, and the oversized error test covers a huge endpoint prefix plus exact raw-body preservation.
 - [x] Register best-effort artifact cleanup from `extensions/pi-firecrawl/src/firecrawl.ts` on `session_shutdown`, without disturbing the existing status/settings cleanup. Evidence: tests cover owner isolation, registered-write draining, late-write rejection, and session-owned removal.
 - [x] Update tool descriptions and `extensions/pi-firecrawl/README.md` to state the 50 KB / 2,000-line limits, truncation notice, temporary full-response path, cleanup lifetime, and compact session metadata. Evidence: descriptions and README now document the tested behavior.
-- [ ] Run `npm run check`, then run `just pack-firecrawl` and inspect that only intended source/docs/package files are included. Evidence so far: Biome, boundaries, all-workspace typechecks, 26 focused tests, and the pack dry run pass; local `npm run check` reaches 1,509/1,510 tests but is blocked by the unchanged `pi-github-pr` branch-watcher timing test, pending PR CI on the target platform.
+- [x] Run `npm run check`, then run `just pack-firecrawl` and inspect that only intended source/docs/package files are included. Evidence: PR #427 CI passed the full repository check; local Biome, boundaries, all-workspace typechecks, 26 focused tests, and the pack dry run also passed. The local macOS run's sole unchanged `pi-github-pr` watcher-test failure did not reproduce in target-platform CI.
 - [x] Run one local Pi smoke against `https://www.bbc.com/news/live/c3r2nz9ed3lt` and one deterministic oversized mocked response. Evidence: BBC returned 32,256 bytes / 62 lines without truncation; the deterministic 100,016-byte response returned a bounded 217-byte / 3-line notice with a readable complete artifact that cleanup removed.
 
 ## Completion Checklist
@@ -56,4 +56,4 @@ The first iteration will not add settings or another public tool. The full artif
 - [x] Full-response artifacts are exact, private, collision-safe, and cleaned up on session shutdown.
 - [x] Tool-result `details` no longer duplicates the raw Firecrawl payload.
 - [x] Non-truncated visible output remains compatible with the current pretty-printed JSON.
-- [ ] Focused tests, full repository checks, package dry run, and runtime smoke all pass; PR CI is pending to resolve the unrelated local `pi-github-pr` watcher-test failure.
+- [x] Focused tests, full repository checks, package dry run, and runtime smoke all pass; PR #427 CI supplied the passing target-platform full repository gate.
