@@ -27,6 +27,10 @@
 		"format": "biome check --write .",
 		"typecheck": "tsc --noEmit"
 	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
+	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.5",
 		"@earendil-works/pi-coding-agent": "0.82.1",
