@@ -1431,6 +1431,9 @@ test("TUI history selects a snapshot, previews concrete rollback, and cancellati
 			if (url.pathname.endsWith("/history.json")) {
 				return Response.json({ version: 1, snapshots: [pointer] });
 			}
+			if (url.pathname.endsWith("/latest.json")) {
+				return Response.json(pointer, { headers: { etag: '"current"' } });
+			}
 			if (url.pathname.endsWith(`/snapshots/${remoteSnapshot.id}.json.gz`)) {
 				return new Response(new Uint8Array(encoded));
 			}

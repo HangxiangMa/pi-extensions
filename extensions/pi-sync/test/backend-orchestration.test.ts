@@ -111,6 +111,45 @@ test("rollback reports a typed local/remote partial failure with its backup", as
 	});
 });
 
+test("rollback rejects a remote head change that lands during confirmation", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(path.join(agentDir, "settings.json"), '{"current":true}\n');
+		writeFileSync(
+			localConfigPath(),
+			JSON.stringify({ ...requiredConfig(), syncFiles: ["settings.json"] }),
+		);
+		const backend = new MemorySyncBackend();
+		const historical = {
+			...snapshot([{ path: "settings.json", content: Buffer.from('{"historical":true}\n') }]),
+			id: "historical",
+		};
+		await backend.publishSnapshot(historical, { kind: "missing" });
+		const current = {
+			...snapshot([{ path: "settings.json", content: Buffer.from('{"current":true}\n') }]),
+			id: "current",
+		};
+		await backend.publishSnapshot(current, expectedRemoteHead(await backend.readHead()));
+		const concurrent = {
+			...snapshot([{ path: "settings.json", content: Buffer.from('{"concurrent":true}\n') }]),
+			id: "concurrent",
+		};
+		const { ctx } = createMockContext({
+			hasUI: true,
+			confirm: async () => {
+				await backend.publishSnapshot(concurrent, expectedRemoteHead(await backend.readHead()));
+				return true;
+			},
+		});
+
+		await assert.rejects(
+			rollback(ctx, { ...commandOptions(), args: [historical.id], yes: false }, () => backend),
+			RollbackPublicationError,
+		);
+		assert.equal((await backend.readHead())?.snapshotId, concurrent.id);
+	});
+});
+
 test("fake backend exercises status, diff, sync, and backend diagnostics", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });

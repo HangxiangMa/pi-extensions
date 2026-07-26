@@ -294,7 +294,7 @@ test("history selection acquires the rollback lock before reading or applying a 
 						version: 1,
 						profile: "home",
 						snapshot: "snapshot-1",
-						sha256: "checksum",
+						sha256: "0".repeat(64),
 						createdAt: "2026-07-24T00:00:00.000Z",
 						machine: "remote",
 					},

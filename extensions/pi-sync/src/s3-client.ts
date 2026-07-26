@@ -24,6 +24,13 @@ function isCloudflareR2Endpoint(endpoint: string | undefined) {
 	}
 }
 
+export class S3ObjectAlreadyExistsError extends Error {
+	constructor(readonly key: string) {
+		super(`S3 object already exists: ${key}`);
+		this.name = "S3ObjectAlreadyExistsError";
+	}
+}
+
 export class S3Client {
 	private config: ResolvedS3Backend;
 	private endpoint: URL;
@@ -103,9 +110,18 @@ export class S3Client {
 		await this.putBuffer(key, body, "application/json");
 	}
 
-	async putBuffer(key: string, body: Buffer, contentType: string) {
+	async putBuffer(
+		key: string,
+		body: Buffer,
+		contentType: string,
+		options: { ifAbsent?: boolean } = {},
+	) {
 		const headers: Record<string, string> = { "content-type": contentType };
+		if (options.ifAbsent) headers["if-none-match"] = "*";
 		const response = await this.request("PUT", key, body, headers);
+		if (options.ifAbsent && response.status === 412) {
+			throw new S3ObjectAlreadyExistsError(key);
+		}
 		if (!response.ok) {
 			throw new Error(`S3 PUT failed (${response.status}): ${await this.readErrorText(response)}`);
 		}

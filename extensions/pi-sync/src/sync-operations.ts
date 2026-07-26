@@ -599,6 +599,7 @@ export async function rollback(
 	);
 	const remote = regenerateSnapshotIdentity(selected);
 	const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
+	const expectedHead = await backend.readHead(options.signal);
 	throwIfAborted(options.signal);
 
 	if (
@@ -638,17 +639,16 @@ export async function rollback(
 	let result: PublishSnapshotResult;
 	try {
 		const completionSignal = AbortSignal.timeout(POST_LOCAL_COMMIT_TIMEOUT_MS);
-		const head = await backend.readHead(completionSignal);
 		const upload = await snapshotForUpload(
 			backend,
 			config,
 			remote,
-			head,
+			expectedHead,
 			undefined,
 			completionSignal,
 			{ ignoreUnreadableRemote: true },
 		);
-		result = await backend.publishSnapshot(upload, expectedRemoteHead(head), {
+		result = await backend.publishSnapshot(upload, expectedRemoteHead(expectedHead), {
 			signal: completionSignal,
 		});
 	} catch (error) {

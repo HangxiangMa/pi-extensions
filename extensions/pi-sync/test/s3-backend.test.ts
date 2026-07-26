@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { gzipSync } from "node:zlib";
 import { createSyncBackend } from "../src/backend-factory.js";
-import { S3SyncBackend } from "../src/s3-backend.js";
+import { S3SyncBackend, snapshotKey } from "../src/s3-backend.js";
 import {
 	expectedRemoteHead,
 	SyncBackendConflictError,
@@ -63,10 +63,9 @@ test("S3 backend reads an opaque revision and validates immutable snapshot check
 		assert.equal(head?.snapshotRef, remote.id);
 		assert.equal(head?.snapshotId, remote.id);
 		assert.match(head?.revision ?? "", /^s3:/);
-		const workConfig = s3Config();
-		workConfig.profile = "work";
-		workConfig.backend.destination.namespace = "work";
-		const otherIdentityHead = await createSyncBackend(workConfig).readHead();
+		const otherConfig = s3Config();
+		otherConfig.backend.profile.endpoint = "https://other.example.com";
+		const otherIdentityHead = await createSyncBackend(otherConfig).readHead();
 		assert.notEqual(head?.revision, otherIdentityHead?.revision);
 		assert.deepEqual(await backend.readSnapshot(remote.id), remote);
 		harness.corruptSnapshot(remote.id);
@@ -82,6 +81,76 @@ test("S3 backend reads an opaque revision and validates immutable snapshot check
 		const historyBackend = createSyncBackend(s3Config());
 		await historyBackend.listHistory();
 		await assert.rejects(historyBackend.readSnapshot(historical.id), /checksum mismatch/i);
+	});
+});
+
+test("S3 rejects unsafe snapshot references and mismatched immutable bundle identities", async () => {
+	const config = s3Config();
+	assert.throws(() => snapshotKey(config.backend, "../foreign"), /snapshot reference/i);
+	const unsafeDestination = s3Config();
+	unsafeDestination.backend.destination.prefix = "../foreign";
+	assert.throws(() => createSyncBackend(unsafeDestination), /destination/i);
+
+	const remote = snapshot([{ path: "settings.json", content: Buffer.from("remote") }]);
+	const harness = new S3Harness(remote);
+	harness.replaceSnapshotPayload(remote.id, { ...remote, id: "different-id" });
+	await harness.run(async () => {
+		const backend = createSyncBackend(config);
+		const head = await backend.readHead();
+		await assert.rejects(backend.readSnapshot(head?.snapshotRef ?? ""), /identity mismatch/i);
+		await assert.rejects(
+			backend.publishSnapshot(
+				{ ...remote, id: "candidate", profile: "other" },
+				expectedRemoteHead(head),
+			),
+			/snapshot identity/i,
+		);
+	});
+});
+
+test("S3 rejects control-bearing or oversized remote display metadata", async () => {
+	const remote = snapshot([{ path: "settings.json", content: Buffer.from("remote") }]);
+	const harness = new S3Harness(remote);
+	harness.replacePointerMetadata({
+		machine: `host\u001b]8;;https://evil.example\u0007`,
+		createdAt: "x".repeat(65),
+	});
+	await harness.run(async () => {
+		await assert.rejects(createSyncBackend(s3Config()).readHead(), /malformed/i);
+	});
+});
+
+test("S3 malformed history cannot partially prime snapshot integrity state", async () => {
+	const remote = snapshot([{ path: "settings.json", content: Buffer.from("remote") }]);
+	const historical = { ...remote, id: "historical" };
+	const harness = new S3Harness(remote);
+	harness.addHistorical(historical);
+	harness.addMalformedHistoryEntry();
+	await harness.run(async () => {
+		const backend = createSyncBackend(s3Config());
+		await assert.rejects(backend.listHistory(), /history entry/i);
+		await assert.rejects(backend.readSnapshot(historical.id), /history entry/i);
+	});
+});
+
+test("S3 publication never overwrites an existing immutable snapshot id", async () => {
+	const remote = snapshot([{ path: "settings.json", content: Buffer.from("remote") }]);
+	const harness = new S3Harness(remote);
+	await harness.run(async () => {
+		const backend = createSyncBackend(s3Config());
+		const observed = await backend.readHead();
+		await assert.rejects(
+			backend.publishSnapshot(
+				{
+					...remote,
+					files: snapshot([{ path: "settings.json", content: Buffer.from("different") }]).files,
+				},
+				expectedRemoteHead(observed),
+			),
+			SyncBackendConflictError,
+		);
+		const idempotent = await backend.publishSnapshot(remote, expectedRemoteHead(observed));
+		assert.equal(idempotent.head.snapshotId, remote.id);
 	});
 });
 
@@ -223,8 +292,25 @@ class S3Harness {
 		this.historyPointers.push(pointer(value, encoded));
 	}
 
+	addMalformedHistoryEntry() {
+		this.historyPointers.push({ ...this.pointer, snapshot: "../foreign" });
+	}
+
 	corruptSnapshot(reference: string) {
 		this.snapshots.set(reference, Buffer.from("corrupt"));
+	}
+
+	replaceSnapshotPayload(reference: string, value: Snapshot) {
+		const encoded = encode(value);
+		this.snapshots.set(reference, encoded);
+		this.pointer = {
+			...this.pointer,
+			sha256: createHash("sha256").update(encoded).digest("hex"),
+		};
+	}
+
+	replacePointerMetadata(value: Partial<LatestPointer>) {
+		this.pointer = { ...this.pointer, ...value };
 	}
 
 	replaceHead(value: Snapshot) {
@@ -282,6 +368,10 @@ class S3Harness {
 			);
 			if (method === "PUT") {
 				this.snapshotPuts += 1;
+				const headers = new Headers(init?.headers);
+				if (headers.get("if-none-match") === "*" && this.snapshots.has(reference)) {
+					return new Response("already exists", { status: 412 });
+				}
 				this.snapshots.set(reference, Buffer.from(init?.body as Uint8Array));
 				return new Response(null, { status: 200 });
 			}
