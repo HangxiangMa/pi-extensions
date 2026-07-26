@@ -112,6 +112,9 @@ pack-goal:
 pack-image-drop:
     just pack image-drop
 
+pack-jupyter:
+    just pack jupyter
+
 pack-langfuse:
     just pack langfuse
 
@@ -172,6 +175,9 @@ try-goal:
 
 try-image-drop:
     just try image-drop
+
+try-jupyter:
+    just try jupyter
 
 try-langfuse:
     just try langfuse
@@ -234,6 +240,9 @@ install-goal:
 install-image-drop:
     just install image-drop
 
+install-jupyter:
+    just install jupyter
+
 install-langfuse:
     just install langfuse
 
@@ -291,6 +300,9 @@ publish-goal:
 
 publish-image-drop:
     just publish image-drop
+
+publish-jupyter:
+    just publish jupyter
 
 publish-langfuse:
     just publish langfuse
