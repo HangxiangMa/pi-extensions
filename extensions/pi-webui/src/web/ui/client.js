@@ -27,6 +27,7 @@ import {
 	allowTranscriptAutoScroll,
 	createRenderBatcher,
 	shouldBatchConversationEvent,
+	shouldScrollForConversationEvent,
 	withPublishedConversation,
 } from "./view-helpers.js";
 
@@ -69,11 +70,7 @@ const scheduleConversationRender = createRenderBatcher(
 		publishConversation();
 		emit({
 			...extra,
-			scrollToLatest: allowTranscriptAutoScroll(
-				extra.scrollToLatest,
-				model.following,
-				!model.closed,
-			),
+			scrollToLatest: allowTranscriptAutoScroll(model.following, !model.closed),
 		});
 	},
 );
@@ -241,7 +238,12 @@ function connectEvents() {
 			scheduleConversationRender.cancel();
 			publishConversation();
 		}
-		emit();
+		emit({
+			scrollToLatest: shouldScrollForConversationEvent(
+				conversationEvent.type,
+				model.following && !model.closed,
+			),
+		});
 	});
 	events.addEventListener("snapshot", (event) => {
 		const snapshot = JSON.parse(event.data);

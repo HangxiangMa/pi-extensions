@@ -13,8 +13,9 @@ const helpers = (await import(
 	): ((extra?: { transcriptAnnouncement?: string; scrollToLatest?: boolean }) => void) & {
 		cancel(): void;
 	};
-	allowTranscriptAutoScroll(requested: boolean, following: boolean, active?: boolean): boolean;
+	allowTranscriptAutoScroll(following: boolean, active?: boolean): boolean;
 	shouldBatchConversationEvent(type: string): boolean;
+	shouldScrollForConversationEvent(type: string, following: boolean): boolean;
 	withPublishedConversation<T extends { messages: unknown[]; tools: unknown[] }>(
 		model: T,
 		messages: unknown[],
@@ -92,11 +93,17 @@ test("immediate composer renders retain the published transcript", () => {
 	);
 });
 
-test("a delayed transcript render cannot override a user who stopped following", () => {
-	assert.equal(helpers.allowTranscriptAutoScroll(true, true), true);
+test("delayed transcript renders use the current follow state", () => {
+	assert.equal(helpers.allowTranscriptAutoScroll(true), true);
+	assert.equal(helpers.allowTranscriptAutoScroll(false), false);
 	assert.equal(helpers.allowTranscriptAutoScroll(true, false), false);
-	assert.equal(helpers.allowTranscriptAutoScroll(false, true), false);
-	assert.equal(helpers.allowTranscriptAutoScroll(true, true, false), false);
+});
+
+test("authoritative conversation snapshots preserve follow scrolling", () => {
+	assert.equal(helpers.shouldScrollForConversationEvent("snapshot", true), true);
+	assert.equal(helpers.shouldScrollForConversationEvent("snapshot", false), false);
+	assert.equal(helpers.shouldScrollForConversationEvent("activity", true), false);
+	assert.equal(helpers.shouldScrollForConversationEvent("session-ended", true), false);
 });
 
 test("transcript keys survive streaming content updates", () => {
