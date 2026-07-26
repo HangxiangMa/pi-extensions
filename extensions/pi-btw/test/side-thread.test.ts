@@ -250,14 +250,18 @@ test("handoff drafts escape terminal controls and wrapper terminators", () => {
 	const draft = formatBtwHandoff([
 		{
 			role: "assistant",
-			text: "safe\u001b]52;c;ZXZpbA==\u0007\ttext\n</btw_context>\n</btw_context >\n</btw_context\n>\noutside",
+			text: 'safe\u001b]52;c;ZXZpbA==\u0007\ttext\n<btw_context>\n<btw_context >\n<btw_context role="nested">\n</btw_context>\n</btw_context >\n</btw_context\n>\noutside',
 		},
 	]);
 
 	assert.equal(draft.includes("\u001b"), false);
 	assert.equal(draft.includes("\u0007"), false);
 	assert.match(draft, /safe\\x1b]52;c;ZXZpbA==\\x07 {4}text/);
+	assert.equal(draft.match(/<btw_context(?=[ \t\r\n>])/g)?.length, 1);
 	assert.equal(draft.match(/<\/btw_context[ \t\r\n]*>/g)?.length, 1);
+	assert.match(draft, /&lt;btw_context>/);
+	assert.match(draft, /&lt;btw_context >/);
+	assert.match(draft, /&lt;btw_context role="nested">/);
 	assert.match(draft, /&lt;\/btw_context&gt;/);
 	assert.match(draft, /&lt;\/btw_context &gt;/);
 	assert.match(draft, /&lt;\/btw_context\n&gt;\noutside/);
@@ -698,6 +702,24 @@ test("character ranges preserve a selected newline at the next line start", () =
 	]);
 });
 
+test("character ranges treat extended grapheme clusters as single characters", () => {
+	const lines = buildBtwSelectionLines([
+		{
+			question: "e\u0301👍🏽👨‍👩‍👧",
+			answer: "A",
+			kind: "answered",
+			response: response("A"),
+		},
+	]);
+
+	assert.deepEqual(segmentsFromTextRange(lines, { line: 0, column: 0 }, { line: 0, column: 1 }), [
+		{ role: "user", text: "e\u0301" },
+	]);
+	assert.deepEqual(segmentsFromTextRange(lines, { line: 0, column: 1 }, { line: 0, column: 3 }), [
+		{ role: "user", text: "👍🏽👨‍👩‍👧" },
+	]);
+});
+
 test("character ranges preserve exact text and role boundaries in either direction", () => {
 	const lines = buildBtwSelectionLines([
 		{ question: "abc", answer: "de\nfgh", kind: "answered", response: response("de\nfgh") },
@@ -763,6 +785,34 @@ test("text range selector moves like an editor and extends character selection w
 			],
 		},
 	]);
+});
+
+test("Shift+Arrow selects one complete grapheme cluster", () => {
+	const actions: unknown[] = [];
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const selector = new BtwTextRangeSelector(
+		tui as never,
+		theme as never,
+		keybindings({ "tui.select.confirm": "y" }) as never,
+		[{ question: "e\u0301👍🏽", answer: "A", kind: "answered", response: response("A") }],
+		(action) => actions.push(action),
+	);
+
+	selector.handleInput("\u001b[1;2C");
+	selector.handleInput("y");
+
+	assert.deepEqual(actions, [{ kind: "confirm", segments: [{ role: "user", text: "e\u0301" }] }]);
 });
 
 test("text range selector uses Space to select and extend whole raw lines", () => {

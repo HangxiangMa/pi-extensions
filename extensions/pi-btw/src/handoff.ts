@@ -11,6 +11,7 @@ import type { SideThreadTurn } from "./side-thread.js";
 
 const RESERVED_APP_ROWS = 3;
 const SELECTOR_CHROME_ROWS = 2;
+const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export interface BtwHandoffSegment {
 	role: "user" | "assistant";
@@ -108,7 +109,7 @@ export function segmentsFromTextRange(
 	for (let lineIndex = start.line; lineIndex <= end.line; lineIndex += 1) {
 		const line = lines[lineIndex];
 		if (!line) continue;
-		const characters = [...line.text];
+		const characters = splitGraphemes(line.text);
 		const from = lineIndex === start.line ? start.column : 0;
 		const to = lineIndex === end.line ? end.column : characters.length;
 		const text = characters.slice(from, to).join("");
@@ -386,7 +387,7 @@ export class BtwTextRangeSelector implements Component {
 		range: { start: BtwTextPosition; end: BtwTextPosition } | undefined,
 		lineSelected: boolean,
 	): string {
-		const characters = [...line.text];
+		const characters = splitGraphemes(line.text);
 		let rendered = this.horizontalOffset > 0 ? this.theme.fg("muted", "…") : "";
 		let buffer = "";
 		let bufferSelected = false;
@@ -450,14 +451,14 @@ export class BtwTextRangeSelector implements Component {
 		}
 		this.beginOrClearSelection(extend);
 		const line = this.lines[this.cursor.line];
-		const length = line ? [...line.text].length : 0;
+		const length = line ? splitGraphemes(line.text).length : 0;
 		if (delta < 0) {
 			if (this.cursor.column > 0) this.cursor = { ...this.cursor, column: this.cursor.column - 1 };
 			else if (this.cursor.line > 0) {
 				const previousLine = this.lines[this.cursor.line - 1];
 				this.cursor = {
 					line: this.cursor.line - 1,
-					column: previousLine ? [...previousLine.text].length : 0,
+					column: previousLine ? splitGraphemes(previousLine.text).length : 0,
 				};
 			}
 		} else if (this.cursor.column < length) {
@@ -476,7 +477,7 @@ export class BtwTextRangeSelector implements Component {
 		const target = this.lines[line];
 		this.cursor = {
 			line,
-			column: Math.min(this.preferredColumn, target ? [...target.text].length : 0),
+			column: Math.min(this.preferredColumn, target ? splitGraphemes(target.text).length : 0),
 		};
 		this.afterMove();
 	}
@@ -501,7 +502,7 @@ export class BtwTextRangeSelector implements Component {
 	}
 
 	private keepCursorHorizontallyVisible(width: number): void {
-		const characters = [...(this.lines[this.cursor.line]?.text ?? "")];
+		const characters = splitGraphemes(this.lines[this.cursor.line]?.text ?? "");
 		const displayWidths = characters.map((character) =>
 			visibleWidth(escapeTerminalControls(character)),
 		);
@@ -530,7 +531,14 @@ function clampTextPosition(
 ): BtwTextPosition {
 	const line = Math.max(0, Math.min(lines.length - 1, position.line));
 	const text = lines[line]?.text ?? "";
-	return { line, column: Math.max(0, Math.min([...text].length, position.column)) };
+	return {
+		line,
+		column: Math.max(0, Math.min(splitGraphemes(text).length, position.column)),
+	};
+}
+
+function splitGraphemes(text: string): string[] {
+	return [...GRAPHEME_SEGMENTER.segment(text)].map(({ segment }) => segment);
 }
 
 function compareTextPositions(first: BtwTextPosition, second: BtwTextPosition): number {
@@ -567,6 +575,7 @@ function escapeHandoffText(text: string): string {
 			return character;
 		})
 		.join("")
+		.replace(/<btw_context(?=[ \t\r\n>])/g, "&lt;btw_context")
 		.replace(/<\/btw_context[ \t\r\n]*>/g, (terminator) =>
 			terminator.replace("<", "&lt;").replace(">", "&gt;"),
 		);
