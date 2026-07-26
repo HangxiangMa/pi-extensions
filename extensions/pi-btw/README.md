@@ -65,22 +65,31 @@ invocation. While a response is running, the transcript stays visible above a co
 `Answering…` status. The footer shows `PgUp`/`PgDn` only when history can scroll; press
 `Ctrl+C` to cancel an in-progress answer or leave the side thread.
 
-After at least one successful answer, press `Ctrl+R` to bring selected context back to the main
-thread. Choose the latest question and answer, everything from a chosen question onward, an
-exact text range, or the entire side thread. The text-range selector supports both fast line
-selection and editor-style character selection. Press `Space` to select the current raw source
-line, then use `Up`/`Down` to extend by whole lines; press `Space` again to clear it. Alternatively,
-use the arrow keys to move the cursor and `Shift`+arrow keys to extend a character-level
-selection. Starting a Shift selection replaces any active line selection. Pi's configured keys
-still control vertical navigation, confirmation, and going back (`Up`/`Down`, `Enter`, and
-`Escape` by default). `Ctrl+C` closes the side thread without bringing anything to main. Selection follows raw
-source text rather than terminal-wrapped visual rows.
+After at least one successful answer, press `Ctrl+R` to bring selected context to the main
+editor. The scope menu shows the size of the latest question and answer and the entire side
+thread before you choose. Bring the latest question and answer, everything from a chosen
+question onward, an exact text range, or the entire side thread. Question-suffix, exact-range,
+and entire-thread choices preview the exact editable context block before the side thread closes;
+`Escape` returns and `Ctrl+C` closes without bringing anything to main.
 
-Bringing context to main closes the side thread and loads a deterministic, editable context block into Pi's
-main editor. It never sends the draft automatically. If another extension populated the main
-editor while `/btw` was open, pi-btw asks whether to append, replace, or cancel. Without an
-explicit bring-to-main action, closing `/btw`, reloading Pi, or switching sessions still discards the side
-thread without adding it to the main conversation.
+The text-range selector supports both fast line selection and editor-style character selection.
+It reports whether anything is selected plus the selected line, message, and approximate token
+counts. Press `Space` to select the current raw source line, then use `Up`/`Down` to extend by
+whole lines; press `Space` again to clear it. Alternatively, use the arrow keys to move the cursor
+and `Shift`+arrow keys to extend a character-level selection. Starting a Shift selection replaces
+any active line selection. Selected lines include a visible `●` marker in addition to highlighting.
+Pi's configured keys control vertical navigation, bringing, and going back (`Up`/`Down`, `Enter`,
+and `Escape` by default), and the selector displays the active keys. Selection follows raw source
+text rather than terminal-wrapped visual rows.
+
+Bringing context to main closes the side thread and loads a deterministic, editable context block
+into Pi's main editor. It never sends the draft automatically. If the main editor already has a
+draft, append is the recommended default. Replace is labeled as destructive and requires a second
+confirmation; Cancel returns to the side thread without changing either draft. Concurrent editor
+updates made while these menus are open are preserved. A success message reports whether context
+was loaded, appended, or replaced and its approximate size. Without an explicit bring-to-main
+action, closing `/btw`, reloading Pi, or switching sessions still discards the side thread without
+adding it to the main conversation.
 
 ## ⚙️ Model and thinking level
 

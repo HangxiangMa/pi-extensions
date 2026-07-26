@@ -10,6 +10,7 @@ import type {
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import {
+	BtwBringToMainPreview,
 	BtwMenuSelector,
 	BtwTextRangeSelector,
 	buildBtwSelectionLines,
@@ -57,17 +58,28 @@ function response(text: string): AssistantMessage {
 }
 
 function keybindings(mapping: Record<string, string> = {}) {
+	const defaults: Record<string, string> = {
+		"tui.select.up": "\u001b[A",
+		"tui.select.down": "\u001b[B",
+		"tui.select.pageUp": "\u001b[5~",
+		"tui.select.pageDown": "\u001b[6~",
+		"tui.select.confirm": "\r",
+		"tui.select.cancel": "\u001b",
+	};
+	const labels: Record<string, string> = {
+		"tui.select.up": "up",
+		"tui.select.down": "down",
+		"tui.select.pageUp": "pageUp",
+		"tui.select.pageDown": "pageDown",
+		"tui.select.confirm": "enter",
+		"tui.select.cancel": "escape",
+	};
 	return {
 		matches(data: string, key: string) {
-			const defaults: Record<string, string> = {
-				"tui.select.up": "\u001b[A",
-				"tui.select.down": "\u001b[B",
-				"tui.select.pageUp": "\u001b[5~",
-				"tui.select.pageDown": "\u001b[6~",
-				"tui.select.confirm": "\r",
-				"tui.select.cancel": "\u001b",
-			};
 			return data === (mapping[key] ?? defaults[key]);
+		},
+		getKeys(key: string) {
+			return [mapping[key] ?? labels[key]];
 		},
 	};
 }
@@ -297,6 +309,7 @@ test("bring-to-main menus distinguish Ctrl+C from back and honor configured navi
 		);
 
 	const selected = createMenu();
+	assert.match(selected.render(80).join("\n"), /Y confirm.*Q back.*Ctrl\+C close/);
 	selected.handleInput("j");
 	selected.handleInput("y");
 	createMenu().handleInput("q");
@@ -318,7 +331,7 @@ test("bring-to-main scope menu offers the approved choices and selects a questio
 		thread.turns.push({ kind: "answered", question, answer, response: response(answer) });
 	}
 	const prompts: Array<{ title: string; options: string[] }> = [];
-	const selections = ["From a question onward…", "2. Q2"];
+	const selections = ["From a question onward…  Choose a starting question", "2. Q2"];
 	const ctx = { ui: {} } as never;
 
 	const result = await chooseBringToMain(thread, ctx, {
@@ -327,21 +340,117 @@ test("bring-to-main scope menu offers the approved choices and selects a questio
 			const value = selections.shift();
 			return value ? { kind: "select", value } : { kind: "back" };
 		},
+		showPreview: async () => ({ kind: "bring" }),
 	});
 
 	assert.deepEqual(prompts[0], {
 		title: "Bring what back to the main thread?",
 		options: [
-			"Latest question and answer",
-			"From a question onward…",
-			"Select a text range…",
-			"Entire side thread",
-			"Cancel",
+			"Latest question and answer  1 Q&A · ~2 tokens",
+			"From a question onward…  Choose a starting question",
+			"Select exact text…  Lines or characters",
+			"Entire side thread  2 Q&A · ~3 tokens",
+			"Cancel  Return to the side thread",
 		],
 	});
 	assert.equal(result.kind, "bringToMain");
 	assert.doesNotMatch(result.kind === "bringToMain" ? result.draft : "", /Q1|A1/);
 	assert.match(result.kind === "bringToMain" ? result.draft : "", /Q2[\s\S]*A2/);
+});
+
+test("large bring-to-main scopes preview the exact draft and support Back", async () => {
+	const thread = createSideThread("context");
+	for (const [question, answer] of [
+		["Q1", "A1"],
+		["Q2", "A2"],
+	] as const) {
+		thread.turns.push({ kind: "answered", question, answer, response: response(answer) });
+	}
+	let scopeMenuCount = 0;
+	let previewDraft = "";
+	const result = await chooseBringToMain(thread, { ui: {} } as never, {
+		showMenu: async (_ctx, title, options) => {
+			if (title !== "Bring what back to the main thread?") return { kind: "back" };
+			scopeMenuCount += 1;
+			const prefix = scopeMenuCount === 1 ? "Entire side thread" : "Latest question and answer";
+			const value = options.find((option) => option.startsWith(prefix));
+			return value ? { kind: "select", value } : { kind: "back" };
+		},
+		showPreview: async (_ctx, draft, summary) => {
+			previewDraft = draft;
+			assert.deepEqual(summary, { lines: 4, messages: 4, tokens: 3 });
+			return { kind: "back" };
+		},
+	});
+
+	assert.match(previewDraft, /Q1[\s\S]*A1[\s\S]*Q2[\s\S]*A2/);
+	assert.equal(scopeMenuCount, 2);
+	assert.equal(result.kind, "bringToMain");
+	assert.doesNotMatch(result.kind === "bringToMain" ? result.draft : "", /Q1|A1/);
+});
+
+test("custom text ranges pass their exact formatted draft through preview", async () => {
+	const thread = createSideThread("context");
+	thread.turns.push({ kind: "answered", question: "Q", answer: "A", response: response("A") });
+	const exactDraft = formatBtwBringToMain([{ role: "assistant", text: "exact excerpt" }]);
+	let previewDraft = "";
+	const ctx = {
+		ui: {
+			custom: async () => ({
+				kind: "bringToMain",
+				draft: exactDraft,
+				summary: { lines: 1, messages: 1, tokens: 4 },
+			}),
+		},
+	} as never;
+
+	const result = await chooseBringToMain(thread, ctx, {
+		showMenu: async (_ctx, _title, options) => {
+			const value = options.find((option) => option.startsWith("Select exact text"));
+			return value ? { kind: "select", value } : { kind: "back" };
+		},
+		showPreview: async (_ctx, draft) => {
+			previewDraft = draft;
+			return { kind: "bring" };
+		},
+	});
+
+	assert.equal(previewDraft, exactDraft);
+	assert.deepEqual(result, {
+		kind: "bringToMain",
+		draft: exactDraft,
+		summary: { lines: 1, messages: 1, tokens: 4 },
+	});
+});
+
+test("bring-to-main preview renders exact content and configured Bring and Back keys", () => {
+	const actions: unknown[] = [];
+	const tui = { terminal: { rows: 9 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const preview = new BtwBringToMainPreview(
+		tui as never,
+		theme as never,
+		keybindings({ "tui.select.confirm": "y", "tui.select.cancel": "q" }) as never,
+		"line one\nline two",
+		{ lines: 2, messages: 1, tokens: 4 },
+		(action) => actions.push(action),
+	);
+
+	assert.ok(preview.render(40).every((line) => visibleWidth(line) <= 40));
+	const rendered = preview.render(80).join("\n");
+	assert.match(rendered, /Preview · 1 message · 2 lines · ~4 tokens/);
+	assert.match(rendered, /line one[\s\S]*line two/);
+	assert.match(rendered, /Y bring.*Q back.*Ctrl\+C close/);
+	preview.handleInput("q");
+
+	assert.deepEqual(actions, [{ kind: "back" }]);
 });
 
 test("bring-to-main scope menu propagates Ctrl+C as a side-thread close", async () => {
@@ -535,7 +644,11 @@ test("cancelled main-editor loading returns to the side composer with its draft"
 					? { kind: "bringToMain", questionDraft: "unfinished question" }
 					: { kind: "close" };
 			},
-			chooseBringToMain: async () => ({ kind: "bringToMain", draft: "selected draft" }),
+			chooseBringToMain: async () => ({
+				kind: "bringToMain",
+				draft: "selected draft",
+				summary: { lines: 1, messages: 1, tokens: 4 },
+			}),
 			deliverBringToMain: async () => "back",
 		},
 	});
@@ -551,7 +664,7 @@ test("side-thread command loop loads an explicit bring-to-main draft without mut
 		sessionManager: { getBranch: () => branch },
 	} as never;
 	const assistant = response("A1");
-	const delivered: string[] = [];
+	const delivered: Array<{ draft: string; summary: unknown }> = [];
 	const result = await runBtwThread({
 		initialQuestion: "Q1",
 		selected: {
@@ -569,31 +682,97 @@ test("side-thread command loop loads an explicit bring-to-main draft without mut
 			chooseBringToMain: async () => ({
 				kind: "bringToMain",
 				draft: "selected draft",
+				summary: { lines: 1, messages: 1, tokens: 4 },
 			}),
-			deliverBringToMain: async (draft) => {
-				delivered.push(draft);
+			deliverBringToMain: async (draft, _ctx, summary) => {
+				delivered.push({ draft, summary });
 				return "loaded";
 			},
 		},
 	});
 
 	assert.deepEqual(result, { kind: "closed" });
-	assert.deepEqual(delivered, ["selected draft"]);
+	assert.deepEqual(delivered, [
+		{
+			draft: "selected draft",
+			summary: { lines: 1, messages: 1, tokens: 4 },
+		},
+	]);
 	assert.equal(branch.length, 1);
 });
 
-test("appending a bring-to-main draft preserves editor updates made while the conflict menu is open", async () => {
+test("appending a bring-to-main draft is recommended and reports the concrete outcome", async () => {
 	let editor = "original editor";
 	let usedOverlay = false;
+	let menuOptions: string[] = [];
+	const notifications: string[] = [];
 	const ctx = {
 		ui: {
 			getEditorText: () => editor,
-			custom: async (_factory: unknown, options?: { overlay?: boolean }) => {
+			custom: async (
+				factory: (
+					_tui: unknown,
+					_theme: unknown,
+					_keys: unknown,
+					_done: (value: unknown) => void,
+				) => unknown,
+				options?: { overlay?: boolean },
+			) => {
 				const entryText = editor;
 				editor = "newer editor";
 				usedOverlay = options?.overlay === true;
 				if (!usedOverlay) editor = entryText;
-				return { kind: "select", value: "Append context" };
+				const component = factory({}, {}, keybindings(), () => undefined) as {
+					options?: readonly string[];
+				};
+				menuOptions = [...(component.options ?? [])];
+				return { kind: "select", value: "Append after current draft  Recommended" };
+			},
+			setEditorText: (text: string) => {
+				editor = text;
+			},
+			notify(message: string) {
+				notifications.push(message);
+			},
+		},
+	} as never;
+
+	const result = await loadBringToMainDraft("brought context", ctx, {
+		lines: 1,
+		messages: 1,
+		tokens: 4,
+	});
+
+	assert.equal(result, "loaded");
+	assert.equal(usedOverlay, true);
+	assert.deepEqual(menuOptions, [
+		"Append after current draft  Recommended",
+		"⚠ Replace current draft  Discards current editor text",
+		"Cancel  Return to the side thread",
+	]);
+	assert.equal(editor, "newer editor\n\nbrought context");
+	assert.deepEqual(notifications, [
+		"Appended 1 message (~4 tokens) to the existing main-editor draft. Review and submit when ready.",
+	]);
+});
+
+test("replace requires destructive confirmation with Back selected first", async () => {
+	let editor = "original editor";
+	const menus: string[][] = [];
+	const choices = [
+		"⚠ Replace current draft  Discards current editor text",
+		"Back  Keep current editor text",
+		"Cancel  Return to the side thread",
+	];
+	const ctx = {
+		ui: {
+			getEditorText: () => editor,
+			custom: async (factory: (...args: unknown[]) => unknown) => {
+				const component = factory({}, {}, keybindings(), () => undefined) as {
+					options?: readonly string[];
+				};
+				menus.push([...(component.options ?? [])]);
+				return { kind: "select", value: choices.shift() };
 			},
 			setEditorText: (text: string) => {
 				editor = text;
@@ -602,11 +781,79 @@ test("appending a bring-to-main draft preserves editor updates made while the co
 		},
 	} as never;
 
-	const result = await loadBringToMainDraft("brought context", ctx);
+	const result = await loadBringToMainDraft("brought context", ctx, {
+		lines: 1,
+		messages: 1,
+		tokens: 4,
+	});
+
+	assert.equal(result, "back");
+	assert.deepEqual(menus[1], [
+		"Back  Keep current editor text",
+		"⚠ Replace current draft  Cannot be undone",
+	]);
+	assert.equal(editor, "original editor");
+});
+
+test("confirmed replace reports the discarded-draft outcome", async () => {
+	let editor = "original editor";
+	const notifications: string[] = [];
+	const choices = [
+		"⚠ Replace current draft  Discards current editor text",
+		"⚠ Replace current draft  Cannot be undone",
+	];
+	const ctx = {
+		ui: {
+			getEditorText: () => editor,
+			custom: async () => ({ kind: "select", value: choices.shift() }),
+			setEditorText: (text: string) => {
+				editor = text;
+			},
+			notify(message: string) {
+				notifications.push(message);
+			},
+		},
+	} as never;
+
+	const result = await loadBringToMainDraft("brought context", ctx, {
+		lines: 1,
+		messages: 2,
+		tokens: 4,
+	});
 
 	assert.equal(result, "loaded");
-	assert.equal(usedOverlay, true);
-	assert.equal(editor, "newer editor\n\nbrought context");
+	assert.equal(editor, "brought context");
+	assert.deepEqual(notifications, [
+		"Replaced the main-editor draft with 2 messages (~4 tokens). Review and submit when ready.",
+	]);
+});
+
+test("empty main editor receives an editable draft with a concrete success message", async () => {
+	let editor = "";
+	const notifications: string[] = [];
+	const ctx = {
+		ui: {
+			getEditorText: () => editor,
+			setEditorText: (text: string) => {
+				editor = text;
+			},
+			notify(message: string) {
+				notifications.push(message);
+			},
+		},
+	} as never;
+
+	const result = await loadBringToMainDraft("brought context", ctx, {
+		lines: 1,
+		messages: 1,
+		tokens: 1,
+	});
+
+	assert.equal(result, "loaded");
+	assert.equal(editor, "brought context");
+	assert.deepEqual(notifications, [
+		"Brought 1 message (~1 token) to the main editor. Review and submit when ready.",
+	]);
 });
 
 test("cancelling bring-to-main loading preserves editor updates made while the menu is open", async () => {
@@ -618,7 +865,7 @@ test("cancelling bring-to-main loading preserves editor updates made while the m
 				const entryText = editor;
 				editor = "newer editor";
 				if (!options?.overlay) editor = entryText;
-				return { kind: "select", value: "Cancel" };
+				return { kind: "select", value: "Cancel  Return to the side thread" };
 			},
 			setEditorText: (text: string) => {
 				editor = text;
@@ -627,7 +874,11 @@ test("cancelling bring-to-main loading preserves editor updates made while the m
 		},
 	} as never;
 
-	const result = await loadBringToMainDraft("brought context", ctx);
+	const result = await loadBringToMainDraft("brought context", ctx, {
+		lines: 1,
+		messages: 1,
+		tokens: 4,
+	});
 
 	assert.equal(result, "back");
 	assert.equal(editor, "newer editor");
@@ -768,6 +1019,45 @@ test("character ranges preserve exact text and role boundaries in either directi
 	);
 });
 
+test("text range selector exposes selection status, non-color markers, and configured actions", () => {
+	const actions: unknown[] = [];
+	const tui = { terminal: { rows: 10 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const selector = new BtwTextRangeSelector(
+		tui as never,
+		theme as never,
+		keybindings({
+			"tui.select.up": "k",
+			"tui.select.down": "j",
+			"tui.select.confirm": "y",
+			"tui.select.cancel": "q",
+		}) as never,
+		[{ question: "abc", answer: "de", kind: "answered", response: response("de") }],
+		(action) => actions.push(action),
+	);
+
+	const empty = selector.render(100).join("\n");
+	assert.match(empty, /Select text to bring to main/);
+	assert.match(empty, /Selected: none/);
+	assert.match(empty, /Y bring.*Q back.*Ctrl\+C close/);
+	assert.match(selector.render(40).join("\n"), /Y bring.*Q back.*Ctrl\+C close/);
+	selector.handleInput(" ");
+	const selected = selector.render(100).join("\n");
+	assert.match(selected, /Selected: 1 line · 1 message · ~1 token/);
+	assert.match(selected, /●> User/);
+	assert.match(selected, /K\/J extend lines/);
+});
+
 test("text range selector moves like an editor and extends character selection with Shift+Arrows", () => {
 	const actions: unknown[] = [];
 	const tui = { terminal: { rows: 10 }, requestRender() {} };
@@ -802,7 +1092,7 @@ test("text range selector moves like an editor and extends character selection w
 	selector.handleInput("\u001b[1;2B");
 	const narrow = selector.render(24);
 	assert.ok(narrow.every((line) => visibleWidth(line) <= 24));
-	assert.match(selector.render(120).join("\n"), /Shift\+Arrows select.*Arrows move.*confirm.*back/);
+	assert.match(selector.render(120).join("\n"), /Shift\+Arrows select.*Arrows move.*Y bring.*back/);
 	selector.handleInput("y");
 
 	assert.deepEqual(actions, [
@@ -876,7 +1166,7 @@ test("text range selector uses Space to select and extend whole raw lines", () =
 	selector.handleInput(" ");
 	selector.handleInput("j");
 	selector.handleInput("j");
-	assert.match(selector.render(80).join("\n"), /Space clear.*extend lines/);
+	assert.match(selector.render(120).join("\n"), /Space clear.*extend lines/);
 	selector.handleInput("y");
 
 	assert.deepEqual(actions, [
@@ -974,7 +1264,7 @@ test("text range selector measures terminal cells to keep a CJK cursor visible",
 	const rendered = selector.render(24);
 
 	assert.ok(rendered.every((line) => visibleWidth(line) <= 24));
-	assert.match(rendered[1] ?? "", /│/);
+	assert.match(rendered.find((line) => line.includes("User")) ?? "", /│/);
 });
 
 test("text range selector distinguishes back from closing the side thread", () => {

@@ -10,12 +10,19 @@ import {
 import type { SideThreadTurn } from "./side-thread.js";
 
 const RESERVED_APP_ROWS = 3;
-const SELECTOR_CHROME_ROWS = 2;
+const SELECTOR_CHROME_ROWS = 3;
+const PREVIEW_CHROME_ROWS = 2;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export interface BtwBringToMainSegment {
 	role: "user" | "assistant";
 	text: string;
+}
+
+export interface BtwBringToMainSummary {
+	lines: number;
+	messages: number;
+	tokens: number;
 }
 
 export interface BtwSelectionLine {
@@ -128,6 +135,22 @@ export function segmentsFromTextRange(
 	return segments;
 }
 
+export function estimateBringToMainTokens(segments: readonly BtwBringToMainSegment[]): number {
+	return Math.ceil(
+		Buffer.byteLength(segments.map((segment) => segment.text).join("\n"), "utf8") / 4,
+	);
+}
+
+export function summarizeBringToMain(
+	segments: readonly BtwBringToMainSegment[],
+): BtwBringToMainSummary {
+	return {
+		lines: segments.reduce((count, segment) => count + segment.text.split("\n").length, 0),
+		messages: segments.length,
+		tokens: estimateBringToMainTokens(segments),
+	};
+}
+
 export function formatBtwBringToMain(segments: readonly BtwBringToMainSegment[]): string {
 	const body = segments
 		.map(
@@ -143,6 +166,87 @@ export function formatBtwBringToMain(segments: readonly BtwBringToMainSegment[])
 		body,
 		"</btw_context>",
 	].join("\n");
+}
+
+export type BtwBringToMainPreviewAction = { kind: "bring" } | { kind: "back" } | { kind: "close" };
+
+export class BtwBringToMainPreview implements Component {
+	private readonly lines: string[];
+	private scrollOffset = 0;
+	private finished = false;
+
+	constructor(
+		private readonly tui: TUI,
+		private readonly theme: Theme,
+		private readonly keybindings: KeybindingsManager,
+		draft: string,
+		private readonly summary: BtwBringToMainSummary,
+		private readonly onAction: (action: BtwBringToMainPreviewAction) => void,
+	) {
+		this.lines = draft.split("\n").map(escapeTerminalControls);
+	}
+
+	render(width: number): string[] {
+		const safeWidth = Math.max(1, width);
+		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS);
+		const viewportHeight = Math.max(0, availableRows - PREVIEW_CHROME_ROWS);
+		this.clampScroll(viewportHeight);
+		const count = this.summary.messages === 1 ? "1 message" : `${this.summary.messages} messages`;
+		const header = `Preview · ${count} · ${this.summary.lines} lines · ~${this.summary.tokens} tokens`;
+		const footer = `${keybindingLabel(this.keybindings, "tui.select.confirm")} bring • ${keybindingLabel(this.keybindings, "tui.select.cancel", ["ctrl+c"])} back • Ctrl+C close`;
+		return fitRows(
+			[
+				truncateToWidth(this.theme.fg("accent", this.theme.bold(header)), safeWidth, ""),
+				...this.lines
+					.slice(this.scrollOffset, this.scrollOffset + viewportHeight)
+					.map((line) => truncateToWidth(line, safeWidth, "")),
+				truncateToWidth(this.theme.fg("muted", footer), safeWidth, ""),
+			],
+			availableRows,
+		);
+	}
+
+	handleInput(data: string): void {
+		if (this.finished) return;
+		if (matchesKey(data, Key.ctrl("c"))) {
+			this.finish({ kind: "close" });
+			return;
+		}
+		if (this.keybindings.matches(data, "tui.select.cancel")) {
+			this.finish({ kind: "back" });
+			return;
+		}
+		if (this.keybindings.matches(data, "tui.select.confirm")) {
+			this.finish({ kind: "bring" });
+			return;
+		}
+		if (this.keybindings.matches(data, "tui.select.pageUp")) {
+			this.scrollOffset -= Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS - 2);
+			this.clampScroll(Math.max(0, this.tui.terminal.rows - RESERVED_APP_ROWS - 2));
+			this.tui.requestRender();
+			return;
+		}
+		if (this.keybindings.matches(data, "tui.select.pageDown")) {
+			this.scrollOffset += Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS - 2);
+			this.clampScroll(Math.max(0, this.tui.terminal.rows - RESERVED_APP_ROWS - 2));
+			this.tui.requestRender();
+		}
+	}
+
+	invalidate(): void {}
+
+	private clampScroll(viewportHeight: number): void {
+		this.scrollOffset = Math.max(
+			0,
+			Math.min(this.scrollOffset, Math.max(0, this.lines.length - viewportHeight)),
+		);
+	}
+
+	private finish(action: BtwBringToMainPreviewAction): void {
+		if (this.finished) return;
+		this.finished = true;
+		this.onAction(action);
+	}
 }
 
 export class BtwMenuSelector implements Component {
@@ -169,8 +273,9 @@ export class BtwMenuSelector implements Component {
 			.map((option, visibleIndex) => {
 				const index = this.scrollOffset + visibleIndex;
 				const raw = `${index === this.cursor ? ">" : " "} ${escapeTerminalControls(option)}`;
+				const toned = option.startsWith("⚠") ? this.theme.fg("warning", raw) : raw;
 				const styled =
-					index === this.cursor ? this.theme.bg("selectedBg", this.theme.fg("text", raw)) : raw;
+					index === this.cursor ? this.theme.bg("selectedBg", this.theme.fg("text", toned)) : toned;
 				return truncateToWidth(styled, safeWidth, "");
 			});
 		return fitRows(
@@ -182,7 +287,10 @@ export class BtwMenuSelector implements Component {
 				),
 				...rows,
 				truncateToWidth(
-					this.theme.fg("muted", "Navigate • confirm • back • Ctrl+C close"),
+					this.theme.fg(
+						"muted",
+						`${keybindingLabel(this.keybindings, "tui.select.confirm")} confirm • ${keybindingLabel(this.keybindings, "tui.select.cancel", ["ctrl+c"])} back • Ctrl+C close`,
+					),
 					safeWidth,
 					"",
 				),
@@ -270,7 +378,7 @@ export class BtwTextRangeSelector implements Component {
 		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS);
 		const viewportHeight = Math.max(0, availableRows - SELECTOR_CHROME_ROWS);
 		this.keepCursorVisible(viewportHeight);
-		const textWidth = Math.max(1, safeWidth - visibleWidth("> Assistant │ "));
+		const textWidth = Math.max(1, safeWidth - visibleWidth("●> Assistant │ "));
 		this.keepCursorHorizontallyVisible(textWidth);
 		const range = this.getSelectionRange();
 		const lineRange = this.getLineSelectionRange();
@@ -278,13 +386,11 @@ export class BtwTextRangeSelector implements Component {
 		const rows = visible.map((line, visibleIndex) => {
 			const lineIndex = this.scrollOffset + visibleIndex;
 			const role = line.role === "user" ? "User" : "Assistant";
-			const prefix = `${lineIndex === this.cursor.line ? ">" : " "} ${role.padEnd(9)} │ `;
-			const text = this.renderTextLine(
-				line,
-				lineIndex,
-				range,
-				lineRange ? lineIndex >= lineRange.start && lineIndex <= lineRange.end : false,
-			);
+			const lineSelected = lineRange
+				? lineIndex >= lineRange.start && lineIndex <= lineRange.end
+				: false;
+			const prefix = `${lineSelected ? "●" : " "}${lineIndex === this.cursor.line ? ">" : " "} ${role.padEnd(9)} │ `;
+			const text = this.renderTextLine(line, lineIndex, range, lineSelected);
 			return truncateToWidth(
 				lineIndex === this.cursor.line ? this.theme.fg("accent", prefix) + text : prefix + text,
 				safeWidth,
@@ -292,19 +398,29 @@ export class BtwTextRangeSelector implements Component {
 			);
 		});
 		const selected = this.getSelectedSegments();
-		const bytes = Buffer.byteLength(selected.map((segment) => segment.text).join("\n"), "utf8");
-		const footer = this.warning
-			? `${this.warning} • Space lines • Shift+Arrows text • back • Ctrl+C close`
+		const summary = summarizeBringToMain(selected);
+		const status =
+			selected.length === 0
+				? "Selected: none"
+				: `Selected: ${summary.lines} ${summary.lines === 1 ? "line" : "lines"} · ${summary.messages} ${summary.messages === 1 ? "message" : "messages"} · ~${summary.tokens} ${summary.tokens === 1 ? "token" : "tokens"}`;
+		const confirm = keybindingLabel(this.keybindings, "tui.select.confirm");
+		const back = keybindingLabel(this.keybindings, "tui.select.cancel", ["ctrl+c"]);
+		const vertical = `${keybindingLabel(this.keybindings, "tui.select.up")}/${keybindingLabel(this.keybindings, "tui.select.down")}`;
+		const detailedFooter = this.warning
+			? `${this.warning} • Space lines • Shift+Arrows text • ${back} back • Ctrl+C close`
 			: this.lineAnchor !== undefined
-				? `~${Math.ceil(bytes / 4)} tokens • Space clear • ↑↓ extend lines • Shift+Arrows text • confirm • back • Ctrl+C close`
-				: `~${Math.ceil(bytes / 4)} tokens • Shift+Arrows select text • Arrows move • Space lines • confirm • back • Ctrl+C close`;
+				? `Space clear • ${vertical} extend lines • Shift+Arrows text • ${confirm} bring • ${back} back • Ctrl+C close`
+				: `Shift+Arrows select • Arrows move • Space lines • ${confirm} bring • ${back} back • Ctrl+C close`;
+		const criticalFooter = `${confirm} bring • ${back} back • Ctrl+C close`;
+		const footer = visibleWidth(detailedFooter) <= safeWidth ? detailedFooter : criticalFooter;
 		return fitRows(
 			[
 				truncateToWidth(
-					this.theme.fg("accent", this.theme.bold("Select text to bring back")),
+					this.theme.fg("accent", this.theme.bold("Select text to bring to main")),
 					safeWidth,
 					"",
 				),
+				truncateToWidth(this.theme.fg("muted", status), safeWidth, ""),
 				...rows,
 				truncateToWidth(this.theme.fg(this.warning ? "warning" : "muted", footer), safeWidth, ""),
 			],
@@ -399,9 +515,17 @@ export class BtwTextRangeSelector implements Component {
 			buffer = "";
 		};
 		for (let column = this.horizontalOffset; column <= characters.length; column += 1) {
+			if (range && lineIndex === range.start.line && column === range.start.column) {
+				flush();
+				rendered += this.theme.fg("accent", "[");
+			}
 			if (lineIndex === this.cursor.line && column === this.cursor.column) {
 				flush();
 				rendered += this.theme.fg("accent", "│");
+			}
+			if (range && lineIndex === range.end.line && column === range.end.column) {
+				flush();
+				rendered += this.theme.fg("accent", "]");
 			}
 			const character = characters[column];
 			if (character === undefined) continue;
@@ -535,6 +659,37 @@ function clampTextPosition(
 		line,
 		column: Math.max(0, Math.min(splitGraphemes(text).length, position.column)),
 	};
+}
+
+function keybindingLabel(
+	keybindings: KeybindingsManager,
+	keybinding: "tui.select.confirm" | "tui.select.cancel" | "tui.select.up" | "tui.select.down",
+	excluded: readonly string[] = [],
+): string {
+	const key = keybindings
+		.getKeys(keybinding)
+		.map(String)
+		.find((candidate) => !excluded.includes(candidate.toLowerCase()));
+	return formatKeyLabel(key ?? keybinding);
+}
+
+function formatKeyLabel(key: string): string {
+	return key
+		.split("+")
+		.map((part) => {
+			const lower = part.toLowerCase();
+			if (lower === "ctrl") return "Ctrl";
+			if (lower === "alt") return "Alt";
+			if (lower === "shift") return "Shift";
+			if (lower === "escape" || lower === "esc") return "Esc";
+			if (lower === "enter" || lower === "return") return "Enter";
+			if (lower === "pageup") return "PgUp";
+			if (lower === "pagedown") return "PgDn";
+			return part.length === 1
+				? part.toUpperCase()
+				: `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`;
+		})
+		.join("+");
 }
 
 function splitGraphemes(text: string): string[] {

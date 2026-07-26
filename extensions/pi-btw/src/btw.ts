@@ -8,12 +8,18 @@ import {
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import {
+	BtwBringToMainPreview,
+	type BtwBringToMainPreviewAction,
+	type BtwBringToMainSegment,
+	type BtwBringToMainSummary,
 	BtwMenuSelector,
 	type BtwMenuSelectorAction,
 	BtwTextRangeSelector,
 	buildQuickBringToMainSegments,
+	estimateBringToMainTokens,
 	formatBtwBringToMain,
 	getAnsweredTurns,
+	summarizeBringToMain,
 } from "./bring-to-main.js";
 import {
 	BTW_THINKING_LEVELS,
@@ -301,7 +307,7 @@ export type BtwThreadResult = { kind: "closed" };
 
 type BtwBringToMainChoice =
 	| BtwThreadResult
-	| { kind: "bringToMain"; draft: string }
+	| { kind: "bringToMain"; draft: string; summary: BtwBringToMainSummary }
 	| { kind: "back" };
 
 type BtwBringToMainDelivery = "loaded" | "back" | "closed";
@@ -340,7 +346,7 @@ export async function runBtwThread({
 					composerDraft = action.questionDraft;
 					continue;
 				}
-				const delivery = await deliverBringToMainDraft(choice.draft, ctx);
+				const delivery = await deliverBringToMainDraft(choice.draft, ctx, choice.summary);
 				if (delivery === "loaded" || delivery === "closed") return { kind: "closed" };
 				composerDraft = action.questionDraft;
 				continue;
@@ -368,6 +374,7 @@ export async function runBtwThread({
 
 interface ChooseBringToMainDependencies {
 	showMenu?: typeof showBtwMenu;
+	showPreview?: typeof showBringToMainPreview;
 }
 
 export async function chooseBringToMain(
@@ -378,62 +385,90 @@ export async function chooseBringToMain(
 	const answered = getAnsweredTurns(thread.turns);
 	if (answered.length === 0) return { kind: "back" };
 	const showMenu = dependencies.showMenu ?? showBtwMenu;
+	const showPreview = dependencies.showPreview ?? showBringToMainPreview;
+	const makeChoice = (segments: readonly BtwBringToMainSegment[]) => ({
+		kind: "bringToMain" as const,
+		draft: formatBtwBringToMain(segments),
+		summary: summarizeBringToMain(segments),
+	});
+
+	const latestSegments = buildQuickBringToMainSegments(thread.turns, { kind: "latest" });
+	const entireSegments = buildQuickBringToMainSegments(thread.turns, { kind: "entire" });
+	const latestOption = `Latest question and answer  1 Q&A · ~${estimateBringToMainTokens(latestSegments)} tokens`;
+	const fromOption = "From a question onward…  Choose a starting question";
+	const exactOption = "Select exact text…  Lines or characters";
+	const entireOption = `Entire side thread  ${answered.length} Q&A · ~${estimateBringToMainTokens(entireSegments)} tokens`;
+	const cancelOption = "Cancel  Return to the side thread";
 
 	while (true) {
-		const scopeResult = await showMenu(ctx, "Bring what back to the main thread?", [
-			"Latest question and answer",
-			"From a question onward…",
-			"Select a text range…",
-			"Entire side thread",
-			"Cancel",
-		]);
+		const scopeResult = await showMenu(
+			ctx,
+			"Bring what back to the main thread?",
+			[latestOption, fromOption, exactOption, entireOption, cancelOption],
+			{ overlay: true },
+		);
 		if (scopeResult.kind === "close") return { kind: "closed" };
-		if (scopeResult.kind === "back" || scopeResult.value === "Cancel") return { kind: "back" };
+		if (scopeResult.kind === "back" || scopeResult.value === cancelOption) return { kind: "back" };
 		const scope = scopeResult.value;
-		if (scope === "Latest question and answer") {
-			return {
-				kind: "bringToMain",
-				draft: formatBtwBringToMain(
-					buildQuickBringToMainSegments(thread.turns, { kind: "latest" }),
-				),
-			};
+		if (scope === latestOption) return makeChoice(latestSegments);
+		if (scope === entireOption) {
+			const choice = makeChoice(entireSegments);
+			const preview = await showPreview(ctx, choice.draft, choice.summary);
+			if (preview.kind === "close") return { kind: "closed" };
+			if (preview.kind === "back") continue;
+			return choice;
 		}
-		if (scope === "Entire side thread") {
-			return {
-				kind: "bringToMain",
-				draft: formatBtwBringToMain(
-					buildQuickBringToMainSegments(thread.turns, { kind: "entire" }),
-				),
-			};
-		}
-		if (scope === "From a question onward…") {
+		if (scope === fromOption) {
 			const questions = answered.map(
 				(turn, index) => `${index + 1}. ${truncatePreview(sanitizeSingleLine(turn.question))}`,
 			);
-			const questionResult = await showMenu(ctx, "Start from which question?", questions);
+			const questionResult = await showMenu(ctx, "Start from which question?", questions, {
+				overlay: true,
+			});
 			if (questionResult.kind === "close") return { kind: "closed" };
 			if (questionResult.kind === "back") continue;
 			const answeredTurnIndex = questions.indexOf(questionResult.value);
 			if (answeredTurnIndex < 0) continue;
-			return {
-				kind: "bringToMain",
-				draft: formatBtwBringToMain(
-					buildQuickBringToMainSegments(thread.turns, { kind: "from", answeredTurnIndex }),
-				),
-			};
+			const choice = makeChoice(
+				buildQuickBringToMainSegments(thread.turns, { kind: "from", answeredTurnIndex }),
+			);
+			const preview = await showPreview(ctx, choice.draft, choice.summary);
+			if (preview.kind === "close") return { kind: "closed" };
+			if (preview.kind === "back") continue;
+			return choice;
 		}
 
-		const selectedRange = await ctx.ui.custom<BtwBringToMainChoice>(
-			(tui, theme, keybindings, done) =>
-				new BtwTextRangeSelector(tui, theme, keybindings, thread.turns, (action) => {
-					if (action.kind === "back") done({ kind: "back" });
-					else if (action.kind === "close") done({ kind: "closed" });
-					else done({ kind: "bringToMain", draft: formatBtwBringToMain(action.segments) });
-				}),
-		);
-		if (selectedRange.kind === "back") continue;
-		return selectedRange;
+		if (scope !== exactOption) continue;
+		while (true) {
+			const selectedRange = await ctx.ui.custom<BtwBringToMainChoice>(
+				(tui, theme, keybindings, done) =>
+					new BtwTextRangeSelector(tui, theme, keybindings, thread.turns, (action) => {
+						if (action.kind === "back") done({ kind: "back" });
+						else if (action.kind === "close") done({ kind: "closed" });
+						else done(makeChoice(action.segments));
+					}),
+				{ overlay: true },
+			);
+			if (selectedRange.kind === "closed") return selectedRange;
+			if (selectedRange.kind === "back") break;
+			const preview = await showPreview(ctx, selectedRange.draft, selectedRange.summary);
+			if (preview.kind === "close") return { kind: "closed" };
+			if (preview.kind === "back") continue;
+			return selectedRange;
+		}
 	}
+}
+
+async function showBringToMainPreview(
+	ctx: ExtensionCommandContext,
+	draft: string,
+	summary: BtwBringToMainSummary,
+): Promise<BtwBringToMainPreviewAction> {
+	return ctx.ui.custom<BtwBringToMainPreviewAction>(
+		(tui, theme, keybindings, done) =>
+			new BtwBringToMainPreview(tui, theme, keybindings, draft, summary, done),
+		{ overlay: true },
+	);
 }
 
 async function showBtwMenu(
@@ -452,27 +487,60 @@ async function showBtwMenu(
 export async function loadBringToMainDraft(
 	draft: string,
 	ctx: ExtensionCommandContext,
+	summary: BtwBringToMainSummary,
 ): Promise<BtwBringToMainDelivery> {
+	const describeContent = () =>
+		`${summary.messages} ${summary.messages === 1 ? "message" : "messages"} (~${summary.tokens} ${summary.tokens === 1 ? "token" : "tokens"})`;
 	const existing = ctx.ui.getEditorText();
 	if (!existing.trim()) {
 		ctx.ui.setEditorText(draft);
-		ctx.ui.notify("Context loaded into the main editor. Review and submit when ready.", "info");
+		ctx.ui.notify(
+			`Brought ${describeContent()} to the main editor. Review and submit when ready.`,
+			"info",
+		);
 		return "loaded";
 	}
-	const action = await showBtwMenu(
-		ctx,
-		"The main editor already contains text",
-		["Append context", "Replace editor text", "Cancel"],
-		{ overlay: true },
-	);
-	if (action.kind === "close") return "closed";
-	if (action.kind === "back" || action.value === "Cancel") return "back";
-	if (action.value === "Append context") {
-		ctx.ui.setEditorText(`${ctx.ui.getEditorText()}\n\n${draft}`);
-	} else if (action.value === "Replace editor text") ctx.ui.setEditorText(draft);
-	else return "back";
-	ctx.ui.notify("Context loaded into the main editor. Review and submit when ready.", "info");
-	return "loaded";
+
+	const appendOption = "Append after current draft  Recommended";
+	const replaceOption = "⚠ Replace current draft  Discards current editor text";
+	const cancelOption = "Cancel  Return to the side thread";
+	while (true) {
+		const action = await showBtwMenu(
+			ctx,
+			"The main editor already has a draft",
+			[appendOption, replaceOption, cancelOption],
+			{ overlay: true },
+		);
+		if (action.kind === "close") return "closed";
+		if (action.kind === "back" || action.value === cancelOption) return "back";
+		if (action.value === appendOption) {
+			ctx.ui.setEditorText(`${ctx.ui.getEditorText()}\n\n${draft}`);
+			ctx.ui.notify(
+				`Appended ${describeContent()} to the existing main-editor draft. Review and submit when ready.`,
+				"info",
+			);
+			return "loaded";
+		}
+		if (action.value !== replaceOption) continue;
+
+		const current = ctx.ui.getEditorText();
+		const characters = [...current].length;
+		const confirmed = await showBtwMenu(
+			ctx,
+			`Replace the current ${characters}-character editor draft?`,
+			["Back  Keep current editor text", "⚠ Replace current draft  Cannot be undone"],
+			{ overlay: true },
+		);
+		if (confirmed.kind === "close") return "closed";
+		if (confirmed.kind === "back" || confirmed.value === "Back  Keep current editor text") continue;
+		if (confirmed.value !== "⚠ Replace current draft  Cannot be undone") continue;
+		ctx.ui.setEditorText(draft);
+		ctx.ui.notify(
+			`Replaced the main-editor draft with ${describeContent()}. Review and submit when ready.`,
+			"info",
+		);
+		return "loaded";
+	}
 }
 
 function truncatePreview(text: string): string {
