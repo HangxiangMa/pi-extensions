@@ -9,13 +9,26 @@ const helpers = (await import(
 	withStableKeys<T>(values: T[]): Array<{ key: string; value: T }>;
 	createRenderBatcher(
 		schedule: (callback: () => void) => void,
-		render: (extra: { transcriptAnnouncement?: string; scrollToLatest?: boolean }) => void,
-	): ((extra?: { transcriptAnnouncement?: string; scrollToLatest?: boolean }) => void) & {
+		render: (extra: {
+			transcriptAnnouncement?: string;
+			scrollToLatest?: boolean;
+			transcriptUpdateKeys?: string[];
+		}) => void,
+	): ((extra?: {
+		transcriptAnnouncement?: string;
+		scrollToLatest?: boolean;
+		transcriptUpdateKeys?: string[];
+	}) => void) & {
 		cancel(): void;
 	};
 	allowTranscriptAutoScroll(following: boolean, active?: boolean): boolean;
 	shouldBatchConversationEvent(type: string): boolean;
 	shouldScrollForConversationEvent(type: string, following: boolean): boolean;
+	hasConversationReferenceChange(
+		previousMessages: unknown[],
+		previousTools: unknown[],
+		current: { messages: unknown[]; tools: unknown[] },
+	): boolean;
 	withPublishedConversation<T extends { messages: unknown[]; tools: unknown[] }>(
 		model: T,
 		messages: unknown[],
@@ -25,20 +38,34 @@ const helpers = (await import(
 
 test("conversation renders batch bursts while preserving important view signals", () => {
 	const scheduled: Array<() => void> = [];
-	const renders: Array<{ transcriptAnnouncement?: string; scrollToLatest?: boolean }> = [];
+	const renders: Array<{
+		transcriptAnnouncement?: string;
+		scrollToLatest?: boolean;
+		transcriptUpdateKeys?: string[];
+	}> = [];
 	const batch = helpers.createRenderBatcher(
 		(callback) => scheduled.push(callback),
 		(extra) => renders.push(extra),
 	);
 
-	batch({ scrollToLatest: true });
-	batch({ transcriptAnnouncement: "Tool completed." });
+	batch({ scrollToLatest: true, transcriptUpdateKeys: ["message:one"] });
+	batch({ transcriptAnnouncement: "Tool completed.", transcriptUpdateKeys: ["tool:call"] });
+	batch({
+		transcriptAnnouncement: "New completed message from Pi.",
+		transcriptUpdateKeys: ["message:one"],
+	});
 	batch({ transcriptAnnouncement: "" });
 
 	assert.equal(scheduled.length, 1);
 	assert.deepEqual(renders, []);
 	scheduled[0]?.();
-	assert.deepEqual(renders, [{ transcriptAnnouncement: "Tool completed.", scrollToLatest: true }]);
+	assert.deepEqual(renders, [
+		{
+			transcriptAnnouncement: "Tool completed. New completed message from Pi.",
+			scrollToLatest: true,
+			transcriptUpdateKeys: ["message:one", "tool:call"],
+		},
+	]);
 
 	batch();
 	assert.equal(scheduled.length, 2);
@@ -97,6 +124,20 @@ test("delayed transcript renders use the current follow state", () => {
 	assert.equal(helpers.allowTranscriptAutoScroll(true), true);
 	assert.equal(helpers.allowTranscriptAutoScroll(false), false);
 	assert.equal(helpers.allowTranscriptAutoScroll(true, false), false);
+});
+
+test("conversation reference changes detect replacement snapshots", () => {
+	const messages = [{ id: "message" }];
+	const tools = [{ id: "tool" }];
+	assert.equal(helpers.hasConversationReferenceChange(messages, tools, { messages, tools }), false);
+	assert.equal(
+		helpers.hasConversationReferenceChange(messages, tools, { messages: [...messages], tools }),
+		true,
+	);
+	assert.equal(
+		helpers.hasConversationReferenceChange(messages, tools, { messages, tools: [...tools] }),
+		true,
+	);
 });
 
 test("authoritative conversation snapshots preserve follow scrolling", () => {

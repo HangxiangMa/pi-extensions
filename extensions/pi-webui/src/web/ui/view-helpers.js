@@ -6,6 +6,10 @@ export function shouldScrollForConversationEvent(type, following) {
 	return type === "snapshot" && following;
 }
 
+export function hasConversationReferenceChange(previousMessages, previousTools, current) {
+	return current.messages !== previousMessages || current.tools !== previousTools;
+}
+
 export function withPublishedConversation(model, messages, tools) {
 	if (model.messages === messages && model.tools === tools) return model;
 	return { ...model, messages, tools };
@@ -20,11 +24,18 @@ export function createRenderBatcher(schedule, render) {
 	let scheduled = false;
 	let pending = {};
 	const batch = (extra = {}) => {
+		const transcriptAnnouncement = [pending.transcriptAnnouncement, extra.transcriptAnnouncement]
+			.filter(Boolean)
+			.join(" ");
+		const transcriptUpdateKeys = [
+			...new Set([...(pending.transcriptUpdateKeys ?? []), ...(extra.transcriptUpdateKeys ?? [])]),
+		];
 		pending = {
 			...pending,
 			...extra,
-			transcriptAnnouncement: extra.transcriptAnnouncement || pending.transcriptAnnouncement || "",
+			transcriptAnnouncement,
 			scrollToLatest: Boolean(pending.scrollToLatest || extra.scrollToLatest),
+			...(transcriptUpdateKeys.length > 0 ? { transcriptUpdateKeys } : {}),
 		};
 		if (scheduled) return;
 		scheduled = true;

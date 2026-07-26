@@ -26,6 +26,7 @@ import {
 import {
 	allowTranscriptAutoScroll,
 	createRenderBatcher,
+	hasConversationReferenceChange,
 	shouldBatchConversationEvent,
 	shouldScrollForConversationEvent,
 	withPublishedConversation,
@@ -67,6 +68,9 @@ const scheduleConversationRender = createRenderBatcher(
 		setTimeout(() => requestAnimationFrame(callback), 50);
 	},
 	(extra) => {
+		for (const key of extra.transcriptUpdateKeys ?? []) {
+			model = noteUnseenUpdate(model, key);
+		}
 		publishConversation();
 		emit({
 			...extra,
@@ -221,21 +225,28 @@ function connectEvents() {
 	});
 	events.addEventListener("conversation", (event) => {
 		const conversationEvent = JSON.parse(event.data);
+		const previousMessages = model.messages;
+		const previousTools = model.tools;
 		model = applyConversationEvent(model, conversationEvent);
 		if (model.needsSnapshot) {
 			void refreshSnapshot(conversationEvent.sequence).catch(connectionFailure);
 			return;
 		}
 		if (shouldBatchConversationEvent(conversationEvent.type)) {
-			model = noteUnseenUpdate(model, conversationUpdateKey(conversationEvent));
 			scheduleConversationRender({
 				transcriptAnnouncement: conversationAnnouncement(conversationEvent),
-				scrollToLatest: model.following,
+				transcriptUpdateKeys: [conversationUpdateKey(conversationEvent)],
 			});
 			return;
 		}
 		if (conversationEvent.type === "snapshot" || conversationEvent.type === "session-ended") {
 			scheduleConversationRender.cancel();
+			if (
+				conversationEvent.type === "snapshot" &&
+				hasConversationReferenceChange(previousMessages, previousTools, model)
+			) {
+				model = noteUnseenUpdate(model, conversationUpdateKey(conversationEvent));
+			}
 			publishConversation();
 		}
 		emit({
