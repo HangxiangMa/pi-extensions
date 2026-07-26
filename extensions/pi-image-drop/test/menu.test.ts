@@ -142,6 +142,38 @@ test("status loading distinguishes Escape back from Ctrl+C close", async () => {
 	assert.equal((await loadWith("\u0003")).kind, "closed");
 });
 
+test("Ctrl+C aborts loader work before closing its UI", async () => {
+	let uiClosed = false;
+	let abortedBeforeClose = false;
+	const context = createMockContext({
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			if (typeof factory !== "function") throw new Error("Expected a custom component factory");
+			let result: unknown;
+			const component = factory(
+				{ requestRender() {} },
+				{ fg: (_color: string, text: string) => text },
+				{},
+				(value: unknown) => {
+					uiClosed = true;
+					result = value;
+				},
+			) as { handleInput(data: string): void; dispose(): void };
+			component.handleInput("\u0003");
+			component.dispose();
+			return result;
+		},
+	});
+	const result = await runImageDropMenuLoad(context.ctx, "Loading…", async (signal) => {
+		signal.addEventListener("abort", () => {
+			abortedBeforeClose = !uiClosed;
+		});
+		return new Promise<never>(() => undefined);
+	});
+	assert.equal(result.kind, "closed");
+	assert.equal(abortedBeforeClose, true);
+});
+
 test("disposing a menu loader aborts its owned task", async () => {
 	let signal: AbortSignal | undefined;
 	const context = createMockContext({

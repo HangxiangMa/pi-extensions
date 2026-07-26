@@ -110,6 +110,7 @@ export function runImageDropMenuLoad<T>(
 			invalidate: () => loader.invalidate(),
 			handleInput(data: string) {
 				if (matchesKey(data, Key.ctrl("c"))) {
+					taskAbort.abort();
 					finish({ kind: "closed" });
 					loader.handleInput(data);
 					return;
