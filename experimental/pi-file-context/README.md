@@ -22,13 +22,23 @@ Browse project files inside Pi, preview text, select a line range, and attach th
 
 ## 📦 Install
 
-The package is currently a local-only experiment. From this repository checkout:
+Install persistently from npm:
+
+```bash
+pi install npm:@narumitw/pi-file-context
+```
+
+Try from npm without installing permanently:
+
+```bash
+pi -e npm:@narumitw/pi-file-context
+```
+
+Try the local working tree from this repository checkout:
 
 ```bash
 pi -e ./experimental/pi-file-context
 ```
-
-For persistent local use, add its absolute directory to the `extensions` array in `~/.pi/agent/settings.json`.
 
 ## 🚀 Quick start
 
