@@ -1,3 +1,4 @@
+import { constants } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Image, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
@@ -29,15 +30,17 @@ export type NotebookRenderState = Partial<LoadedNotebook> & {
 	model?: Notebook;
 };
 
-export async function loadNotebook(path: string): Promise<LoadedNotebook> {
-	const file = await open(path, "r");
+export async function loadNotebook(path: string, signal?: AbortSignal): Promise<LoadedNotebook> {
+	signal?.throwIfAborted();
+	const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
 	try {
+		signal?.throwIfAborted();
 		const info = await file.stat();
 		if (!info.isFile()) throw new Error("notebook path is not a regular file");
 		if (info.size > MAX_NOTEBOOK_BYTES) {
 			throw new Error(`notebook exceeds the ${MAX_NOTEBOOK_BYTES / 1024 / 1024} MB preview limit`);
 		}
-		const model = JSON.parse(await readBoundedUtf8(file)) as Notebook;
+		const model = JSON.parse(await readBoundedUtf8(file, signal)) as Notebook;
 		validateNotebook(model);
 		return { model, lastMtime: info.mtime, lastLoadedAt: new Date() };
 	} finally {
@@ -45,10 +48,11 @@ export async function loadNotebook(path: string): Promise<LoadedNotebook> {
 	}
 }
 
-async function readBoundedUtf8(file: FileHandle): Promise<string> {
+async function readBoundedUtf8(file: FileHandle, signal?: AbortSignal): Promise<string> {
 	const chunks: Buffer[] = [];
 	let total = 0;
 	while (total <= MAX_NOTEBOOK_BYTES) {
+		signal?.throwIfAborted();
 		const buffer = Buffer.alloc(Math.min(64 * 1024, MAX_NOTEBOOK_BYTES + 1 - total));
 		const { bytesRead } = await file.read(buffer, 0, buffer.length, null);
 		if (bytesRead === 0) break;

@@ -1,9 +1,21 @@
 import { watch } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import {
+	BorderedLoader,
+	type ExtensionAPI,
+	type ExtensionCommandContext,
+	type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, OverlayOptions } from "@earendil-works/pi-tui";
-import { loadNotebook, sanitizeTerminalText } from "./notebook.js";
+import { type JupyterScrollDirection, registerJupyterCommand } from "./jupyter-command.js";
+import {
+	createJupyterHelpComponent,
+	createJupyterMenuComponent,
+	createNotebookPickerComponent,
+	type JupyterMenuAction,
+} from "./jupyter-menu.js";
+import { type LoadedNotebook, loadNotebook, sanitizeTerminalText } from "./notebook.js";
 import {
 	applyLoadedNotebook,
 	DEFAULT_PANEL_WIDTH_PERCENT,
@@ -27,16 +39,18 @@ type WatchNotebook = (
 
 export type JupyterPreviewDependencies = {
 	watchNotebook: WatchNotebook;
+	loadNotebook(path: string, signal?: AbortSignal): Promise<LoadedNotebook>;
 };
 
 const DEFAULT_DEPENDENCIES: JupyterPreviewDependencies = {
 	watchNotebook: (directory, listener) => watch(directory, { persistent: false }, listener),
+	loadNotebook,
 };
 
 export function createJupyterPreview(
-	dependencies: JupyterPreviewDependencies,
+	dependencies: Partial<JupyterPreviewDependencies>,
 ): (pi: ExtensionAPI) => void {
-	return (pi) => registerJupyterPreview(pi, dependencies);
+	return (pi) => registerJupyterPreview(pi, { ...DEFAULT_DEPENDENCIES, ...dependencies });
 }
 
 export default function jupyterPreview(pi: ExtensionAPI): void {
@@ -54,9 +68,13 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 	let closeOverlay: (() => void) | undefined;
 	let requestRender: (() => void) | undefined;
 	let removeMouseResize: (() => void) | undefined;
+	let overlayTask: Promise<void> | undefined;
 	let currentWatcher: NotebookWatcher | undefined;
 	let cancelWatchDebounce: (() => void) | undefined;
 	let watchGeneration = 0;
+	let selectionGeneration = 0;
+	let refreshGeneration = 0;
+	let pendingSelectionPath: string | undefined;
 
 	function stopWatcher(): void {
 		watchGeneration += 1;
@@ -66,62 +84,118 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 		currentWatcher = undefined;
 	}
 
-	async function reloadSelectedNotebook(): Promise<void> {
-		if (!state.path) return;
+	async function reloadSelectedNotebook(ctx?: ExtensionContext): Promise<boolean> {
+		const path = state.path;
+		if (!path) return false;
+		const generation = ++refreshGeneration;
 		try {
-			applyLoadedNotebook(state, await loadNotebook(state.path));
+			const loaded = await dependencies.loadNotebook(path);
+			if (generation !== refreshGeneration || state.path !== path) return false;
+			applyLoadedNotebook(state, loaded);
+			updateStatus(ctx);
+			return true;
 		} catch (cause) {
-			state.model = undefined;
-			state.lastLoadedAt = new Date();
-			state.lastError = cause instanceof Error ? cause.message : String(cause);
+			if (generation !== refreshGeneration || state.path !== path) return false;
+			state.lastError = errorMessage(cause);
+			updateStatus(ctx);
+			return false;
 		}
 	}
 
-	function startWatcher(path: string): void {
-		stopWatcher();
-		const generation = watchGeneration;
+	function startWatcher(path: string, ctx: ExtensionContext): boolean {
+		const generation = watchGeneration + 1;
 		const targetName = basename(path);
 		const debounced = debounce(() => {
 			if (generation !== watchGeneration || state.path !== path) return;
-			void reloadSelectedNotebook().finally(() => requestRender?.());
+			void reloadSelectedNotebook(ctx).finally(() => requestRender?.());
 		}, 150);
-		cancelWatchDebounce = debounced.cancel;
+		let watcher: NotebookWatcher;
 		try {
-			currentWatcher = dependencies.watchNotebook(dirname(path), (_event, changedName) => {
+			watcher = dependencies.watchNotebook(dirname(path), (_event, changedName) => {
 				if (changedName === null || changedName.toString() === targetName) debounced.run();
 			});
-		} catch {
-			currentWatcher = undefined;
+		} catch (cause) {
+			debounced.cancel();
+			ctx.ui.notify(
+				`Could not watch ${sanitizeTerminalText(path)}: ${errorMessage(cause)}. The previous preview was preserved.`,
+				"error",
+			);
+			return false;
 		}
+		stopWatcher();
+		currentWatcher = watcher;
+		cancelWatchDebounce = debounced.cancel;
+		return true;
 	}
 
-	async function setNotebookPath(rawPath: string, ctx: ExtensionContext): Promise<void> {
+	async function setNotebookPath(
+		rawPath: string,
+		ctx: ExtensionContext,
+		signal?: AbortSignal,
+	): Promise<boolean> {
 		const path = resolveNotebookPath(rawPath, ctx.cwd);
-		if (!path.endsWith(NOTEBOOK_EXTENSION)) throw new Error("Notebook path must end in .ipynb.");
-		state.cwd = ctx.cwd;
-		state.path = path;
-		state.scroll = 0;
-		await reloadSelectedNotebook();
-		startWatcher(path);
+		if (!path.endsWith(NOTEBOOK_EXTENSION)) {
+			ctx.ui.notify("Notebook path must end in .ipynb.", "error");
+			return false;
+		}
+		const generation = ++selectionGeneration;
+		refreshGeneration += 1;
+		pendingSelectionPath = path;
+		updateStatus(ctx);
+		try {
+			const loaded = await dependencies.loadNotebook(path, signal);
+			signal?.throwIfAborted();
+			if (generation !== selectionGeneration) return false;
+			refreshGeneration += 1;
+			if (!startWatcher(path, ctx)) {
+				pendingSelectionPath = undefined;
+				updateStatus(ctx);
+				return false;
+			}
+			state.cwd = ctx.cwd;
+			state.path = path;
+			state.scroll = 0;
+			applyLoadedNotebook(state, loaded);
+			pendingSelectionPath = undefined;
+			updateStatus(ctx);
+			return true;
+		} catch (cause) {
+			if (generation !== selectionGeneration) return false;
+			pendingSelectionPath = undefined;
+			updateStatus(ctx);
+			if (signal?.aborted) return false;
+			ctx.ui.notify(
+				`Could not open ${sanitizeTerminalText(path)}: ${errorMessage(cause)}. The previous preview was preserved.`,
+				"error",
+			);
+			return false;
+		}
 	}
 
 	async function showPanel(ctx: ExtensionContext, rawPath?: string): Promise<void> {
 		requireTui(ctx);
-		if (rawPath?.trim()) await setNotebookPath(rawPath, ctx);
-		else if (!state.path) {
+		if (rawPath?.trim()) {
+			if (!(await setNotebookPath(rawPath, ctx))) return;
+		} else if (!state.path) {
 			const discovered = await findFirstNotebook(ctx.cwd);
 			if (!discovered) {
-				ctx.ui.notify("No .ipynb file found. Use /jupyter-preview <path>.", "warning");
+				ctx.ui.notify("No top-level .ipynb file found. Run /jupyter to enter a path.", "warning");
 				return;
 			}
-			await setNotebookPath(discovered, ctx);
+			if (!(await setNotebookPath(discovered, ctx))) return;
 		} else {
 			state.cwd = ctx.cwd;
-			await reloadSelectedNotebook();
+			const loaded = await reloadSelectedNotebook(ctx);
+			if (!loaded && !state.model) return;
+			startWatcher(state.path, ctx);
 		}
 
+		openPanel(ctx);
+	}
+
+	function openPanel(ctx: ExtensionContext): void {
 		state.visible = true;
-		ctx.ui.setStatus(STATUS_KEY, "previewing notebook");
+		updateStatus(ctx);
 		if (overlayHandle) {
 			overlayHandle.setHidden(false);
 			requestRender?.();
@@ -137,7 +211,7 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 			nonCapturing: true,
 			visible: (termWidth) => termWidth >= 90,
 		};
-		void ctx.ui
+		const task = ctx.ui
 			.custom<void>(
 				(tui, theme, _keybindings, done) => {
 					const panel = new NotebookPreviewPanel(tui, theme, state, () => {
@@ -174,6 +248,12 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 				}
 			})
 			.finally(() => {
+				if (overlayTask !== task) return;
+				overlayTask = undefined;
+				selectionGeneration += 1;
+				refreshGeneration += 1;
+				pendingSelectionPath = undefined;
+				stopWatcher();
 				removeMouseResize?.();
 				removeMouseResize = undefined;
 				overlayHandle = undefined;
@@ -188,20 +268,27 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 					// A replacement session can invalidate the context before overlay disposal settles.
 				}
 			});
+		overlayTask = task;
+		void task;
 	}
 
-	function hidePanel(ctx?: ExtensionContext): void {
+	async function hidePanel(ctx?: ExtensionContext): Promise<void> {
+		selectionGeneration += 1;
+		refreshGeneration += 1;
+		pendingSelectionPath = undefined;
+		stopWatcher();
 		state.visible = false;
 		state.focused = false;
 		state.resizing = false;
 		if (ctx?.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
 		closeOverlay?.();
+		await overlayTask;
 	}
 
 	function focusPanel(ctx: ExtensionContext): void {
 		requireTui(ctx);
 		if (!overlayHandle) {
-			ctx.ui.notify("Jupyter preview is not open. Use /jupyter-preview <path>.", "warning");
+			ctx.ui.notify("Jupyter preview is not open. Run /jupyter to open it.", "warning");
 			return;
 		}
 		state.focused = true;
@@ -216,34 +303,165 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 	function scrollPreview(delta: number | "top", ctx: ExtensionContext): void {
 		requireTui(ctx);
 		if (!state.visible || !overlayHandle) {
-			ctx.ui.notify("Jupyter preview is not open. Use /jupyter-preview <path>.", "warning");
+			ctx.ui.notify("Jupyter preview is not open. Run /jupyter to open it.", "warning");
 			return;
 		}
 		state.scroll = delta === "top" ? 0 : Math.max(0, state.scroll + delta);
 		requestRender?.();
 	}
 
-	registerCommands(pi, {
-		showPanel,
-		hidePanel,
-		focusPanel,
-		scrollPreview,
-		reload: async (ctx) => {
+	function updateStatus(ctx?: ExtensionContext, loadingPath = pendingSelectionPath): void {
+		if (!ctx?.hasUI) return;
+		if (loadingPath) {
+			ctx.ui.setStatus(
+				STATUS_KEY,
+				`loading notebook: ${sanitizeTerminalText(basename(loadingPath))}`,
+			);
+			return;
+		}
+		if (!state.visible || !state.path) {
+			ctx.ui.setStatus(STATUS_KEY, undefined);
+			return;
+		}
+		const stale = state.lastError ? " (stale)" : "";
+		ctx.ui.setStatus(STATUS_KEY, `notebook: ${sanitizeTerminalText(basename(state.path))}${stale}`);
+	}
+
+	async function loadFromMenu(ctx: ExtensionCommandContext, path: string): Promise<boolean> {
+		return ctx.ui.custom<boolean>((tui, theme, _keybindings, done) => {
+			const loader = new BorderedLoader(
+				tui,
+				theme,
+				`Loading ${sanitizeTerminalText(basename(resolveNotebookPath(path, ctx.cwd)))}…`,
+				{ cancellable: true },
+			);
+			let settled = false;
+			const finish = (result: boolean) => {
+				if (settled) return;
+				settled = true;
+				done(result);
+			};
+			loader.onAbort = () => finish(false);
+			void setNotebookPath(path, ctx, loader.signal).then(finish);
+			return loader;
+		});
+	}
+
+	async function showJupyterMenu(ctx: ExtensionCommandContext): Promise<void> {
+		requireTui(ctx);
+		let selectedAction: JupyterMenuAction | undefined;
+		while (true) {
+			const action = await ctx.ui.custom<JupyterMenuAction | undefined>(
+				(tui, theme, keybindings, done) =>
+					createJupyterMenuComponent(
+						{
+							...state,
+							cellCount: state.model?.cells?.length,
+						},
+						tui.terminal.columns,
+						tui,
+						theme,
+						keybindings,
+						done,
+						selectedAction,
+					),
+			);
+			if (!action) return;
+			selectedAction = action;
+			switch (action) {
+				case "open":
+					if (state.path && (await loadFromMenu(ctx, state.path))) openPanel(ctx);
+					return;
+				case "choose": {
+					const selection = await chooseNotebook(ctx);
+					if (selection === "back") continue;
+					return;
+				}
+				case "focus":
+					focusPanel(ctx);
+					return;
+				case "refresh":
+					await reloadSelectedNotebook(ctx);
+					requestRender?.();
+					return;
+				case "close":
+					await hidePanel(ctx);
+					ctx.ui.notify("Jupyter preview closed.", "info");
+					return;
+				case "help": {
+					const result = await ctx.ui.custom<"back" | "close">((tui, theme, keybindings, done) =>
+						createJupyterHelpComponent(tui, theme, keybindings, done),
+					);
+					if (result === "close") return;
+					continue;
+				}
+			}
+		}
+	}
+
+	async function chooseNotebook(ctx: ExtensionCommandContext): Promise<"back" | "closed"> {
+		const paths = await findNotebooks(ctx.cwd);
+		const result = await ctx.ui.custom<
+			| { action: "select"; path: string }
+			| { action: "enter-path" }
+			| { action: "back" }
+			| { action: "close" }
+		>((tui, theme, keybindings, done) =>
+			createNotebookPickerComponent(paths, state.path, tui, theme, keybindings, done),
+		);
+		if (result.action === "back") return "back";
+		if (result.action === "close") return "closed";
+		let selectedPath = result.action === "select" ? result.path : undefined;
+		if (!selectedPath) {
+			const entered = await ctx.ui.input("Notebook path", "path/to/notebook.ipynb");
+			if (!entered?.trim()) return "back";
+			selectedPath = entered.trim();
+			const resolved = resolveNotebookPath(selectedPath, ctx.cwd);
+			const local = relative(ctx.cwd, resolved);
+			if (local === ".." || local.startsWith(`..${sep}`) || isAbsolute(local)) {
+				const confirmed = await ctx.ui.confirm(
+					"Open notebook outside workspace?",
+					sanitizeTerminalText(resolved),
+				);
+				if (!confirmed) return "back";
+			}
+		}
+		if (await loadFromMenu(ctx, selectedPath)) openPanel(ctx);
+		return "closed";
+	}
+
+	registerJupyterCommand(pi, {
+		showMenu: showJupyterMenu,
+		open: showPanel,
+		toggle: async (ctx, path) => {
+			requireTui(ctx);
+			if (state.visible && overlayHandle && !path?.trim()) await hidePanel(ctx);
+			else await showPanel(ctx, path);
+		},
+		focus: focusPanel,
+		refresh: async (ctx) => {
 			requireTui(ctx);
 			if (!state.path) {
-				ctx.ui.notify("No notebook selected. Use /jupyter-preview <path>.", "warning");
+				ctx.ui.notify("No notebook selected. Run /jupyter to choose one.", "warning");
 				return;
 			}
-			await reloadSelectedNotebook();
+			await reloadSelectedNotebook(ctx);
 			requestRender?.();
 		},
-		isVisible: () => state.visible && overlayHandle !== undefined,
+		close: async (ctx) => {
+			requireTui(ctx);
+			await hidePanel(ctx);
+		},
+		scroll: (direction, lines, ctx) => {
+			const delta = scrollDelta(direction, lines);
+			scrollPreview(delta, ctx);
+		},
 	});
 
 	pi.registerShortcut("f8", {
 		description: "Toggle Jupyter notebook preview",
 		handler: async (ctx) => {
-			if (state.visible && overlayHandle) hidePanel(ctx);
+			if (state.visible && overlayHandle) await hidePanel(ctx);
 			else await showPanel(ctx);
 		},
 	});
@@ -266,16 +484,8 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 	pi.on("session_start", async (_event, ctx) => {
 		if (ctx.hasUI) ctx.ui.notify(EXPERIMENTAL_WARNING, "warning");
 	});
-	pi.on("tool_call", async (event, ctx) => {
-		if (ctx.mode !== "tui") return;
-		const candidate = extractNotebookPath(event.input);
-		if (!candidate) return;
-		state.cwd = ctx.cwd;
-		state.path = resolveNotebookPath(candidate, ctx.cwd);
-		startWatcher(state.path);
-	});
 	pi.on("tool_result", async (event, ctx) => {
-		if (ctx.mode !== "tui") return;
+		if (ctx.mode !== "tui" || event.isError) return;
 		const candidate = extractNotebookPath(event.input);
 		if (!candidate) return;
 		if (state.visible) {
@@ -284,87 +494,24 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 		} else await showPanel(ctx, candidate);
 	});
 	pi.on("session_shutdown", async (_event, ctx) => {
-		stopWatcher();
-		hidePanel(ctx);
+		await hidePanel(ctx);
 		if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 }
 
-type CommandActions = {
-	showPanel(ctx: ExtensionContext, path?: string): Promise<void>;
-	hidePanel(ctx: ExtensionContext): void;
-	focusPanel(ctx: ExtensionContext): void;
-	scrollPreview(delta: number | "top", ctx: ExtensionContext): void;
-	reload(ctx: ExtensionContext): Promise<void>;
-	isVisible(): boolean;
-};
-
-function registerCommands(pi: ExtensionAPI, actions: CommandActions): void {
-	pi.registerCommand("jupyter-preview", {
-		description: "Open or refresh a right-side .ipynb preview. Usage: /jupyter-preview [path]",
-		handler: async (args, ctx) => actions.showPanel(ctx, args),
-	});
-	pi.registerCommand("jupyter-preview-close", {
-		description: "Close the right-side Jupyter notebook preview",
-		handler: async (args, ctx) => {
-			assertNoArguments("/jupyter-preview-close", args);
-			requireTui(ctx);
-			actions.hidePanel(ctx);
-		},
-	});
-	pi.registerCommand("jupyter-preview-toggle", {
-		description:
-			"Toggle the right-side Jupyter notebook preview. Usage: /jupyter-preview-toggle [path]",
-		handler: async (args, ctx) => {
-			requireTui(ctx);
-			if (actions.isVisible() && !args.trim()) actions.hidePanel(ctx);
-			else await actions.showPanel(ctx, args);
-		},
-	});
-	pi.registerCommand("jupyter-preview-focus", {
-		description: "Focus the notebook preview for keyboard scrolling",
-		handler: async (args, ctx) => {
-			assertNoArguments("/jupyter-preview-focus", args);
-			actions.focusPanel(ctx);
-		},
-	});
-	pi.registerCommand("jupyter-preview-refresh", {
-		description: "Reload the current notebook preview from disk",
-		handler: async (args, ctx) => {
-			assertNoArguments("/jupyter-preview-refresh", args);
-			await actions.reload(ctx);
-		},
-	});
-	for (const [name, direction, fallback] of [
-		["jupyter-preview-up", -1, 3],
-		["jupyter-preview-down", 1, 3],
-	] as const) {
-		pi.registerCommand(name, {
-			description: `Scroll the notebook preview ${direction < 0 ? "up" : "down"}. Usage: /${name} [lines]`,
-			handler: async (args, ctx) => {
-				actions.scrollPreview(direction * parsePositiveLineCount(args, fallback), ctx);
-			},
-		});
+function scrollDelta(direction: JupyterScrollDirection, lines?: number): number | "top" {
+	switch (direction) {
+		case "up":
+			return -(lines ?? 3);
+		case "down":
+			return lines ?? 3;
+		case "page-up":
+			return -12;
+		case "page-down":
+			return 12;
+		case "top":
+			return "top";
 	}
-	for (const [name, delta] of [
-		["jupyter-preview-page-up", -12],
-		["jupyter-preview-page-down", 12],
-	] as const) {
-		pi.registerCommand(name, {
-			description: `Scroll the notebook preview one page ${delta < 0 ? "up" : "down"}`,
-			handler: async (args, ctx) => {
-				assertNoArguments(`/${name}`, args);
-				actions.scrollPreview(delta, ctx);
-			},
-		});
-	}
-	pi.registerCommand("jupyter-preview-top", {
-		description: "Scroll the notebook preview to the top",
-		handler: async (args, ctx) => {
-			assertNoArguments("/jupyter-preview-top", args);
-			actions.scrollPreview("top", ctx);
-		},
-	});
 }
 
 export function parsePositiveLineCount(args: string, fallback: number): number {
@@ -374,10 +521,6 @@ export function parsePositiveLineCount(args: string, fallback: number): number {
 	const parsed = Number(value);
 	if (!Number.isSafeInteger(parsed)) throw new Error("Scroll amount must be one positive integer.");
 	return parsed;
-}
-
-function assertNoArguments(command: string, args: string): void {
-	if (args.trim()) throw new Error(`${command} does not accept arguments.`);
 }
 
 function requireTui(ctx: ExtensionContext): void {
@@ -399,16 +542,23 @@ export function extractNotebookPath(input: unknown): string | undefined {
 }
 
 async function findFirstNotebook(cwd: string): Promise<string | undefined> {
+	return (await findNotebooks(cwd))[0];
+}
+
+async function findNotebooks(cwd: string): Promise<string[]> {
 	try {
 		const entries = await readdir(cwd, { withFileTypes: true });
-		const name = entries
+		return entries
 			.filter((entry) => entry.isFile() && entry.name.endsWith(NOTEBOOK_EXTENSION))
-			.map((entry) => entry.name)
-			.sort()[0];
-		return name ? resolve(cwd, name) : undefined;
+			.map((entry) => resolve(cwd, entry.name))
+			.sort();
 	} catch {
-		return undefined;
+		return [];
 	}
+}
+
+function errorMessage(cause: unknown): string {
+	return sanitizeTerminalText(cause instanceof Error ? cause.message : String(cause));
 }
 
 function debounce(callback: () => void, milliseconds: number): { run(): void; cancel(): void } {
