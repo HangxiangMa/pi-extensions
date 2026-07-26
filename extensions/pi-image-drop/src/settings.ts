@@ -1,5 +1,6 @@
-import { lstat, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const SETTINGS_FILE = "pi-image-drop.json";
@@ -45,7 +46,7 @@ const LIMIT_KEYS = new Set<keyof ImageDropLimits>([
 	"maxRetainedImages",
 	"maxRetainedBytes",
 ]);
-const SETTING_KEYS = new Set<keyof ImageDropSettings>([...LIMIT_KEYS, "startOnSessionStart"]);
+const saveQueues = new Map<string, Promise<void>>();
 
 export type SettingsLoadResult =
 	| { kind: "missing"; settings: ImageDropSettings }
@@ -53,9 +54,7 @@ export type SettingsLoadResult =
 	| { kind: "invalid"; settings: ImageDropSettings; warning: string };
 
 export function normalizeSettings(value: unknown): ImageDropSettings | undefined {
-	if (!isRecord(value) || Object.keys(value).some((key) => !SETTING_KEYS.has(key as never))) {
-		return undefined;
-	}
+	if (!isRecord(value)) return undefined;
 	const settings: ImageDropSettings = { ...DEFAULT_SETTINGS };
 	for (const key of LIMIT_KEYS) {
 		if (!Object.hasOwn(value, key)) continue;
@@ -78,9 +77,11 @@ export function normalizeSettings(value: unknown): ImageDropSettings | undefined
 	return settings;
 }
 
-export async function loadSettings(
-	path = join(getAgentDir(), SETTINGS_FILE),
-): Promise<SettingsLoadResult> {
+export function settingsFilePath(): string {
+	return join(getAgentDir(), SETTINGS_FILE);
+}
+
+export async function loadSettings(path = settingsFilePath()): Promise<SettingsLoadResult> {
 	let text: string;
 	try {
 		const stats = await lstat(path);
@@ -108,6 +109,63 @@ export async function loadSettings(
 		};
 	} catch (error) {
 		return invalid(path, formatError(error));
+	}
+}
+
+export interface SettingsSaveOperations {
+	writeFile?: typeof writeFile;
+	rename?: typeof rename;
+}
+
+export async function saveSettings(
+	settings: ImageDropSettings,
+	path = settingsFilePath(),
+	operations: SettingsSaveOperations = {},
+): Promise<void> {
+	if (!normalizeSettings(settings))
+		throw new Error("Refusing to save invalid Image Drop settings.");
+	const previous = saveQueues.get(path) ?? Promise.resolve();
+	const next = previous
+		.catch(() => undefined)
+		.then(() => saveSettingsAtomic(settings, path, operations));
+	saveQueues.set(path, next);
+	try {
+		await next;
+	} finally {
+		if (saveQueues.get(path) === next) saveQueues.delete(path);
+	}
+}
+
+async function saveSettingsAtomic(
+	settings: ImageDropSettings,
+	path: string,
+	operations: SettingsSaveOperations,
+): Promise<void> {
+	let document: Record<string, unknown> = {};
+	try {
+		const stats = await lstat(path);
+		if (stats.isSymbolicLink()) throw new Error("symbolic links are not accepted");
+		if (!stats.isFile()) throw new Error("settings path is not a regular file");
+		const parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
+		if (!isRecord(parsed) || !normalizeSettings(parsed)) {
+			throw new Error("existing settings are malformed or invalid");
+		}
+		document = parsed;
+	} catch (error) {
+		if (!(isNodeError(error) && error.code === "ENOENT")) throw error;
+	}
+	await mkdir(dirname(path), { recursive: true });
+	const temporaryPath = join(dirname(path), `.${SETTINGS_FILE}.${process.pid}.${randomUUID()}.tmp`);
+	try {
+		const contents = `${JSON.stringify({ ...document, ...settings }, null, "\t")}\n`;
+		await (operations.writeFile ?? writeFile)(temporaryPath, contents, {
+			encoding: "utf8",
+			flag: "wx",
+			mode: 0o600,
+		});
+		await (operations.rename ?? rename)(temporaryPath, path);
+	} finally {
+		await rm(temporaryPath, { force: true }).catch(() => undefined);
 	}
 }
 

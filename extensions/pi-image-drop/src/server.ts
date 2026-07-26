@@ -96,6 +96,10 @@ export class ImageDropServer {
 		return instance;
 	}
 
+	hasUnusedLink(): boolean {
+		return !this.closed && Boolean(this.bootstrapToken);
+	}
+
 	issueLink(): string {
 		if (this.closed) throw new Error("Image Drop server is closed");
 		this.bootstrapToken = token();

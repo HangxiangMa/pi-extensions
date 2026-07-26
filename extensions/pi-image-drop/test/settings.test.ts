@@ -1,11 +1,26 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdtemp,
+	readdir,
+	readFile,
+	rename,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { DEFAULT_SETTINGS, HARD_LIMITS, loadSettings, normalizeSettings } from "../src/settings.js";
+import {
+	DEFAULT_SETTINGS,
+	HARD_LIMITS,
+	loadSettings,
+	normalizeSettings,
+	saveSettings,
+} from "../src/settings.js";
 
-test("settings normalize partial values and reject unknown, inconsistent, and unsafe values", () => {
+test("settings normalize partial values, preserve compatibility fields, and reject unsafe values", () => {
 	assert.equal(DEFAULT_SETTINGS.startOnSessionStart, false);
 	assert.equal(DEFAULT_SETTINGS.maxRetainedImages, 128);
 	assert.equal(DEFAULT_SETTINGS.maxRetainedBytes, 512 * 1024 * 1024);
@@ -18,7 +33,7 @@ test("settings normalize partial values and reject unknown, inconsistent, and un
 	});
 	assert.deepEqual(normalizeSettings({ startOnSessionStart: false }), DEFAULT_SETTINGS);
 	assert.equal(normalizeSettings({ startOnSessionStart: "yes" }), undefined);
-	assert.equal(normalizeSettings({ unknown: 1 }), undefined);
+	assert.deepEqual(normalizeSettings({ unknown: 1 }), DEFAULT_SETTINGS);
 	assert.equal(normalizeSettings({ maxImages: 0 }), undefined);
 	assert.equal(normalizeSettings({ maxImages: HARD_LIMITS.maxImages + 1 }), undefined);
 	assert.equal(normalizeSettings({ maxImageBytes: DEFAULT_SETTINGS.maxBatchBytes + 1 }), undefined);
@@ -69,6 +84,81 @@ test("settings loading distinguishes missing, valid, warned, and invalid files",
 		assert.equal(invalid.kind, "invalid");
 		assert.deepEqual(invalid.settings, DEFAULT_SETTINGS);
 		assert.match("warning" in invalid ? invalid.warning : "", /using safe defaults/i);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("settings saves are atomic and preserve unknown fields", async () => {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-image-drop-settings-save-"));
+	const settingsPath = path.join(directory, "pi-image-drop.json");
+	try {
+		await writeFile(settingsPath, '{"future":{"enabled":true},"maxImages":4}\n');
+		await saveSettings(
+			{ ...DEFAULT_SETTINGS, maxImages: 6, startOnSessionStart: true },
+			settingsPath,
+		);
+		const saved = JSON.parse(await readFile(settingsPath, "utf8"));
+		assert.deepEqual(saved.future, { enabled: true });
+		assert.equal(saved.maxImages, 6);
+		assert.equal(saved.startOnSessionStart, true);
+		assert.deepEqual(
+			(await readdir(directory)).filter((name) => name !== "pi-image-drop.json"),
+			[],
+		);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("concurrent settings saves publish in user action order", async () => {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-image-drop-settings-order-"));
+	const settingsPath = path.join(directory, "pi-image-drop.json");
+	let releaseFirst!: () => void;
+	let firstStarted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		firstStarted = resolve;
+	});
+	const release = new Promise<void>((resolve) => {
+		releaseFirst = resolve;
+	});
+	try {
+		await writeFile(settingsPath, '{"maxImages":3,"future":"kept"}\n');
+		const first = saveSettings({ ...DEFAULT_SETTINGS, maxImages: 4 }, settingsPath, {
+			rename: async (source, destination) => {
+				firstStarted();
+				await release;
+				await rename(source, destination);
+			},
+		});
+		await started;
+		const second = saveSettings({ ...DEFAULT_SETTINGS, maxImages: 6 }, settingsPath);
+		releaseFirst();
+		await Promise.all([first, second]);
+		const saved = JSON.parse(await readFile(settingsPath, "utf8"));
+		assert.equal(saved.maxImages, 6);
+		assert.equal(saved.future, "kept");
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("failed atomic publication preserves the previous settings and cleans temporary files", async () => {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-image-drop-settings-fail-"));
+	const settingsPath = path.join(directory, "pi-image-drop.json");
+	const original = '{"maxImages":4,"future":"kept"}\n';
+	try {
+		await writeFile(settingsPath, original);
+		await assert.rejects(
+			saveSettings({ ...DEFAULT_SETTINGS, maxImages: 6 }, settingsPath, {
+				rename: async () => {
+					throw new Error("publish failed");
+				},
+			}),
+			/publish failed/,
+		);
+		assert.equal(await readFile(settingsPath, "utf8"), original);
+		assert.deepEqual(await readdir(directory), ["pi-image-drop.json"]);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
