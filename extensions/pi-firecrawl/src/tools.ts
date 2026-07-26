@@ -1,4 +1,9 @@
-import { defineTool } from "@earendil-works/pi-coding-agent";
+import {
+	DEFAULT_MAX_BYTES,
+	DEFAULT_MAX_LINES,
+	defineTool,
+	formatSize,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { cleanObject, firecrawlRequest, jsonResult, withStatus } from "./client.js";
 
@@ -12,11 +17,12 @@ export const FIRECRAWL_TOOL_NAMES = [
 export type FirecrawlToolName = (typeof FIRECRAWL_TOOL_NAMES)[number];
 
 const StringArray = Type.Array(Type.String());
+const OUTPUT_LIMIT_DESCRIPTION = `Output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}; complete truncated responses are saved temporarily and their path is returned.`;
 
 export const scrapeTool = defineTool({
 	name: FIRECRAWL_TOOL_NAMES[0],
 	label: "Firecrawl: Scrape",
-	description: "Scrape a single URL through Firecrawl and return requested formats.",
+	description: `Scrape a single URL through Firecrawl and return requested formats. ${OUTPUT_LIMIT_DESCRIPTION}`,
 	promptSnippet: "Scrape a URL through Firecrawl",
 	promptGuidelines: [
 		"Use firecrawl_scrape when you need clean markdown, HTML, links, screenshots, or structured extraction for one URL.",
@@ -69,8 +75,14 @@ export const scrapeTool = defineTool({
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		return withStatus(ctx, "scrape", async () => {
-			const payload = await firecrawlRequest("POST", "/scrape", cleanObject(params), signal);
-			return jsonResult(payload);
+			const payload = await firecrawlRequest(
+				"POST",
+				"/scrape",
+				cleanObject(params),
+				signal,
+				ctx.sessionManager,
+			);
+			return await jsonResult(payload, ctx.sessionManager);
 		});
 	},
 });
@@ -78,7 +90,7 @@ export const scrapeTool = defineTool({
 export const crawlTool = defineTool({
 	name: FIRECRAWL_TOOL_NAMES[1],
 	label: "Firecrawl: Crawl",
-	description: "Start a Firecrawl crawl job for a website.",
+	description: `Start a Firecrawl crawl job for a website. ${OUTPUT_LIMIT_DESCRIPTION}`,
 	promptSnippet: "Start a Firecrawl site crawl job",
 	parameters: Type.Object({
 		url: Type.String({ description: "Starting URL for the crawl." }),
@@ -107,8 +119,14 @@ export const crawlTool = defineTool({
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		return withStatus(ctx, "crawl", async () => {
-			const payload = await firecrawlRequest("POST", "/crawl", cleanObject(params), signal);
-			return jsonResult(payload);
+			const payload = await firecrawlRequest(
+				"POST",
+				"/crawl",
+				cleanObject(params),
+				signal,
+				ctx.sessionManager,
+			);
+			return await jsonResult(payload, ctx.sessionManager);
 		});
 	},
 });
@@ -116,7 +134,7 @@ export const crawlTool = defineTool({
 export const crawlStatusTool = defineTool({
 	name: FIRECRAWL_TOOL_NAMES[2],
 	label: "Firecrawl: Crawl Status",
-	description: "Check a Firecrawl crawl job status and retrieve completed crawl data.",
+	description: `Check a Firecrawl crawl job status and retrieve completed crawl data. ${OUTPUT_LIMIT_DESCRIPTION}`,
 	promptSnippet: "Check a Firecrawl crawl job status",
 	parameters: Type.Object({
 		id: Type.String({ description: "Crawl job id returned by firecrawl_crawl." }),
@@ -128,8 +146,9 @@ export const crawlStatusTool = defineTool({
 				`/crawl/${encodeURIComponent(params.id)}`,
 				undefined,
 				signal,
+				ctx.sessionManager,
 			);
-			return jsonResult(payload);
+			return await jsonResult(payload, ctx.sessionManager);
 		});
 	},
 });
@@ -137,7 +156,7 @@ export const crawlStatusTool = defineTool({
 export const mapTool = defineTool({
 	name: FIRECRAWL_TOOL_NAMES[3],
 	label: "Firecrawl: Map",
-	description: "Discover URLs for a site through Firecrawl's map endpoint.",
+	description: `Discover URLs for a site through Firecrawl's map endpoint. ${OUTPUT_LIMIT_DESCRIPTION}`,
 	promptSnippet: "Map/discover URLs for a site through Firecrawl",
 	parameters: Type.Object({
 		url: Type.String({ description: "Website URL to map." }),
@@ -155,8 +174,14 @@ export const mapTool = defineTool({
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		return withStatus(ctx, "map", async () => {
-			const payload = await firecrawlRequest("POST", "/map", cleanObject(params), signal);
-			return jsonResult(payload);
+			const payload = await firecrawlRequest(
+				"POST",
+				"/map",
+				cleanObject(params),
+				signal,
+				ctx.sessionManager,
+			);
+			return await jsonResult(payload, ctx.sessionManager);
 		});
 	},
 });
@@ -164,7 +189,7 @@ export const mapTool = defineTool({
 export const searchTool = defineTool({
 	name: FIRECRAWL_TOOL_NAMES[4],
 	label: "Firecrawl: Search",
-	description: "Search the web through Firecrawl and optionally scrape search results.",
+	description: `Search the web through Firecrawl and optionally scrape search results. ${OUTPUT_LIMIT_DESCRIPTION}`,
 	promptSnippet: "Search the web through Firecrawl",
 	parameters: Type.Object({
 		query: Type.String({ description: "Search query." }),
@@ -179,8 +204,14 @@ export const searchTool = defineTool({
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		return withStatus(ctx, "search", async () => {
-			const payload = await firecrawlRequest("POST", "/search", cleanObject(params), signal);
-			return jsonResult(payload);
+			const payload = await firecrawlRequest(
+				"POST",
+				"/search",
+				cleanObject(params),
+				signal,
+				ctx.sessionManager,
+			);
+			return await jsonResult(payload, ctx.sessionManager);
 		});
 	},
 });

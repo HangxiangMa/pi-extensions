@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { boundResponseText, formatJsonResult } from "./response-format.js";
 
 const DEFAULT_API_URL = "https://api.firecrawl.dev/v1";
 const STATUS_KEY = "firecrawl";
@@ -17,7 +18,8 @@ export async function firecrawlRequest(
 	method: "GET" | "POST",
 	path: string,
 	body: unknown,
-	signal?: AbortSignal,
+	signal: AbortSignal | undefined,
+	artifactOwner: object,
 ) {
 	const apiKey = getApiKey();
 	const response = await fetch(`${apiUrl}${path}`, {
@@ -32,9 +34,12 @@ export async function firecrawlRequest(
 	const responseText = await response.text();
 	const payload = parseResponseBody(responseText);
 	if (!response.ok) {
-		throw new Error(
-			`Firecrawl ${method} ${path} failed (${response.status}): ${formatPayload(payload)}`,
-		);
+		const prefix = `Firecrawl ${method} ${path} failed (${response.status}): `;
+		const bounded = await boundResponseText(`${prefix}${formatPayload(payload)}`, artifactOwner, {
+			artifactText: responseText,
+			artifactExtension: "txt",
+		});
+		throw new Error(bounded.text);
 	}
 	return payload;
 }
@@ -67,14 +72,11 @@ export function parseResponseBody(responseText: string) {
 }
 
 export function formatPayload(payload: unknown) {
-	return typeof payload === "string" ? payload : JSON.stringify(payload);
+	return typeof payload === "string" ? payload : (JSON.stringify(payload) ?? String(payload));
 }
 
-export function jsonResult(payload: unknown) {
-	return {
-		content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
-		details: payload,
-	};
+export function jsonResult(payload: unknown, artifactOwner: object) {
+	return formatJsonResult(payload, artifactOwner);
 }
 
 export async function withStatus<T>(

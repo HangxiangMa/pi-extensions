@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { hasApiKey } from "./client.js";
+import { cleanupResponseArtifacts, openResponseArtifacts } from "./response-format.js";
 import { loadSettings } from "./settings.js";
 import {
 	allFirecrawlTools,
@@ -59,6 +60,7 @@ export default function firecrawl(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		openResponseArtifacts(ctx.sessionManager);
 		clearSettingsNotice();
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		const settings = await loadSettings();
@@ -73,8 +75,9 @@ export default function firecrawl(pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => {
+	pi.on("session_shutdown", async (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		await cleanupResponseArtifacts(ctx.sessionManager);
 	});
 }
 
@@ -165,10 +168,12 @@ export function commandCompletions(prefix: string) {
 
 export {
 	cleanObject,
+	firecrawlRequest,
 	formatPayload,
 	jsonResult,
 	normalizeApiUrl,
 	parseResponseBody,
 } from "./client.js";
+export { cleanupResponseArtifacts } from "./response-format.js";
 export { installSettingsFileExclusively, normalizeFirecrawlSettings } from "./settings.js";
 export { formatPersistedSelection, orderedFirecrawlTools } from "./tool-selector.js";
