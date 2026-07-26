@@ -8,6 +8,7 @@ import {
 	menuSummary,
 	runImageDropMenuLoad,
 	safeMenuText,
+	showImageDropLimitsMenu,
 	showImageDropMainMenu,
 	showImageDropStatus,
 } from "../src/menu.js";
@@ -64,6 +65,34 @@ test("menu summaries expose partial and queued state without relying on color", 
 		/queued/,
 	);
 	assert.equal(safeMenuText("unsafe\u001b]8;;bad\u0007 value"), "unsafe ]8;;bad value");
+});
+
+test("resource-limit actions explain their concrete effect and save behavior", async () => {
+	let lines: string[] = [];
+	const context = createMockContext({
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 100);
+			lines = harness.render();
+			harness.handleInput("tui.select.cancel");
+			return harness.result;
+		},
+	});
+	assert.equal(await showImageDropLimitsMenu(context.ctx, ["No unsaved changes"]), "back");
+	const rendered = lines.join(" ");
+	for (const text of [
+		"Images for next message",
+		"Maximum number staged for one Pi message",
+		"Maximum source size accepted for each image",
+		"Maximum combined source size for one Pi message",
+		"Reject images above this decoded resolution",
+		"sent images kept for Add again",
+		"Memory shared by the current draft and sent history",
+		"Preview every change before saving for future sessions",
+		"Stage recommended values; review before saving",
+	]) {
+		assert.match(rendered, new RegExp(text));
+	}
 });
 
 test("status loading is visible and cancellable", async () => {

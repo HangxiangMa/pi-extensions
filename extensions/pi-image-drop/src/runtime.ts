@@ -676,11 +676,11 @@ function usesSafeLimits(settings: ImageDropSettings): boolean {
 
 function limitLines(settings: ImageDropSettings, original: ImageDropSettings): string[] {
 	return [
-		`Images per draft: ${settings.maxImages}`,
-		`Size per image: ${formatBytes(settings.maxImageBytes)}`,
-		`Combined draft size: ${formatBytes(settings.maxBatchBytes)}`,
-		`Decoded pixels: ${formatCount(settings.maxImagePixels)}`,
-		`Retained history: ${settings.maxRetainedImages} images · ${formatBytes(settings.maxRetainedBytes)}`,
+		`Images for next message: ${settings.maxImages}`,
+		`Per-image upload size: ${formatBytes(settings.maxImageBytes)}`,
+		`Total upload size: ${formatBytes(settings.maxBatchBytes)}`,
+		`Maximum image resolution: ${formatCount(settings.maxImagePixels)}`,
+		`Sent history: ${settings.maxRetainedImages} images · ${formatBytes(settings.maxRetainedBytes)}`,
 		limitChanges(original, settings).length > 0
 			? `${limitChanges(original, settings).length} unsaved change(s)`
 			: "No unsaved changes",
@@ -723,12 +723,12 @@ function limitRange(key: LimitKey): string {
 
 function limitLabel(key: LimitKey): string {
 	return {
-		maxImages: "Images per draft",
-		maxImageBytes: "Size per image",
-		maxBatchBytes: "Combined draft size",
-		maxImagePixels: "Decoded pixels",
-		maxRetainedImages: "Retained history images",
-		maxRetainedBytes: "Retained history size",
+		maxImages: "Images for next message",
+		maxImageBytes: "Per-image upload size",
+		maxBatchBytes: "Total upload size",
+		maxImagePixels: "Maximum image resolution",
+		maxRetainedImages: "Sent history count",
+		maxRetainedBytes: "Sent history memory",
 	}[key];
 }
 
