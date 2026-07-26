@@ -12,6 +12,7 @@ import {
 	type CompletionDelivery,
 	discoverAgents,
 	isThinkingLevel,
+	type SubagentRuntimeSettings,
 	THINKING_LEVELS,
 } from "./agents.js";
 import { buildContextSnapshot, type ContextMode, redactPrivateText } from "./context.js";
@@ -52,11 +53,18 @@ const MAX_COMPLETION_ERROR_BYTES = 512;
 const MAX_COMPLETIONS_PER_MESSAGE = 16;
 const COMPLETION_BATCH_DELAY_MS = 10;
 
-function createSpawnPromptGuidelines(completionDelivery: CompletionDelivery): string[] {
+function createSpawnPromptGuidelines(
+	completionDelivery: CompletionDelivery,
+	blockingEnabled = true,
+): string[] {
 	const deliveryGuidance =
 		completionDelivery === "auto-resume"
-			? "With subagent_spawn completion delivery set to auto-resume, prefer one subagent_spawn for broad asynchronous research or review that covers related branches even when the final answer depends on its result; do not choose blocking parallel fan-out merely to keep delegation in the same turn."
-			: "With subagent_spawn completion delivery set to next-turn (the default), prefer one subagent_spawn for broad asynchronous research or review only when the current response does not depend on its result; use the blocking subagent when the final answer depends on the detached result.";
+			? blockingEnabled
+				? "With subagent_spawn completion delivery set to auto-resume, prefer one subagent_spawn for broad asynchronous research or review that covers related branches even when the final answer depends on its result; do not choose blocking parallel fan-out merely to keep delegation in the same turn."
+				: "With subagent_spawn completion delivery set to auto-resume, prefer one subagent_spawn for broad asynchronous research or review that covers related branches even when the final answer depends on its result."
+			: blockingEnabled
+				? "With subagent_spawn completion delivery set to next-turn (the default), prefer one subagent_spawn for broad asynchronous research or review only when the current response does not depend on its result; use the blocking subagent when the final answer depends on the detached result."
+				: "With subagent_spawn completion delivery set to next-turn (the default), use subagent_spawn only when the current response does not depend on its result; complete final-answer-dependent work directly because an idle root is not awakened.";
 	const noLocalWorkGuidance =
 		completionDelivery === "auto-resume"
 			? "After subagent_spawn returns, do useful non-overlapping local work immediately. If none remains, briefly tell the user what subagent_spawn launched and end the response; auto-resume will request a synthesis turn after completion."
@@ -66,8 +74,12 @@ function createSpawnPromptGuidelines(completionDelivery: CompletionDelivery): st
 		"Set subagent_spawn thinkingLevel to the lowest sufficient thinking level for the delegated task: use off or minimal for extraction, formatting, or mechanical work; low for straightforward bounded work; medium for ordinary multi-step research or implementation; high for complex debugging, design, review, or cross-file analysis; xhigh for highly ambiguous, cross-system, or high-risk analysis; and max only for the hardest tasks when quality clearly outweighs latency and cost. Omit subagent_spawn thinkingLevel only to preserve the agent or child default.",
 		deliveryGuidance,
 		"Use a single subagent_spawn only for a concrete bounded subtask that can run independently and has an isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation.",
-		"Use the blocking subagent instead of subagent_spawn when synchronous output is required before the main agent can continue and waiting is intentional; queued steering cannot be processed until that blocking call returns.",
-		"When subagent_spawn fits the completion-delivery policy, do not choose a blocking parallel subagent merely to keep delegation in the same turn.",
+		...(blockingEnabled
+			? [
+					"Use the blocking subagent instead of subagent_spawn when synchronous output is required before the main agent can continue and waiting is intentional; queued steering cannot be processed until that blocking call returns.",
+					"When subagent_spawn fits the completion-delivery policy, do not choose a blocking parallel subagent merely to keep delegation in the same turn.",
+				]
+			: []),
 		"Add another subagent_spawn only for truly independent work with safe workspace concurrency.",
 		noLocalWorkGuidance,
 		'Consume and synthesize available subagent_spawn completion messages; use subagent_manage with action "interrupt" or "close" for agents that are no longer needed.',
@@ -76,8 +88,10 @@ function createSpawnPromptGuidelines(completionDelivery: CompletionDelivery): st
 }
 
 export interface StatefulSubagentDependencies {
+	blockingEnabled?: boolean;
 	createInProcessSession?: ChildSessionFactory;
 	workspaceManager?: WorkspaceManager;
+	settings?: SubagentRuntimeSettings;
 }
 
 export interface StatefulSubagentRuntimeStatus {
@@ -106,7 +120,10 @@ export function registerStatefulSubagents(
 	pi: ExtensionAPI,
 	dependencies: StatefulSubagentDependencies = {},
 ): StatefulSubagentController {
-	const settings = readSubagentSettings()?.stateful ?? {};
+	const settings = Object.hasOwn(dependencies, "settings")
+		? (dependencies.settings ?? {})
+		: (readSubagentSettings()?.stateful ?? {});
+	const blockingEnabled = dependencies.blockingEnabled !== false;
 	const enabled = settings.enabled !== false;
 	const transportKind = resolveStatefulTransportKind(settings.transport);
 	let completionDelivery = resolveCompletionDelivery(settings.completionDelivery);
@@ -304,7 +321,7 @@ export function registerStatefulSubagents(
 		description:
 			"Start an addressable background subagent with an optional thinking level chosen for the task difficulty, return immediately with an agentId, and receive its completion asynchronously.",
 		promptSnippet: "Start a reusable detached subagent; completion is delivered asynchronously",
-		promptGuidelines: createSpawnPromptGuidelines(completionDelivery),
+		promptGuidelines: createSpawnPromptGuidelines(completionDelivery, blockingEnabled),
 		parameters: Type.Object({
 			agent: Type.String({ minLength: 1 }),
 			task: Type.String({ minLength: 1, maxLength: DEFAULT_MAX_CONTEXT_BYTES }),
@@ -382,7 +399,7 @@ export function registerStatefulSubagents(
 		},
 	});
 	refreshSpawnToolRegistration = () => {
-		spawnTool.promptGuidelines = createSpawnPromptGuidelines(completionDelivery);
+		spawnTool.promptGuidelines = createSpawnPromptGuidelines(completionDelivery, blockingEnabled);
 		pi.registerTool(spawnTool);
 	};
 	refreshSpawnToolRegistration();

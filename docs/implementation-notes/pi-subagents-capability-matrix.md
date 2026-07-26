@@ -1,7 +1,7 @@
 # pi-subagents capability matrix
 
 Date: 2026-07-11
-Updated: 2026-07-23
+Updated: 2026-07-26
 
 | Capability | Status | Evidence |
 | --- | --- | --- |
@@ -16,10 +16,10 @@ Updated: 2026-07-23
 | Hierarchical ownership and subtree lifecycle | Implemented | parent/root/depth/children metadata and child-first interrupt/close in `registry.ts` |
 | Bounded asynchronous mailbox | Implemented | `subagent_mailbox` send/read actions, acknowledgement, deduplication, completion delivery, and persistence tests |
 | Shared-write guard and disposable worktrees | Implemented, opt-in | `stateful.ts`, `workspace.ts`; clean-repository and cleanup tests |
-| Fixed five-tool delegation surface | Implemented, default-on | blocking `subagent` plus four non-waiting stateful tools; `stateful-tool-params.ts`, orchestration/in-process contract tests |
+| Configurable delegation workflow | Implemented, all methods by default | `blocking.enabled: false` selects async-only; existing `stateful.enabled: false` remains blocking-only; exact registration, settings-preservation, preview/reload, and compatibility tests in `test/subagents.test.ts` |
 | Follow-up, mailbox, list, interrupt, close | Implemented, default-on | `subagent_send`, `subagent_manage`, and `subagent_mailbox` action dispatch in `stateful.ts`; registry and completion-delivery tests |
 | Separate active and retained capacity | Implemented | FIFO queue and limits in `registry.ts`; capacity/fairness test |
-| Interactive settings and inspection | Implemented | Bare `/subagents` is the current-session-first manager; `settings|status|help` remain direct routes, with compatibility `/subagents:config` and `/subagents:agents list|clear` |
+| Interactive settings and inspection | Implemented | Bare `/subagents` leads with delegation workflow, completion behavior, and current agents; consequential workflow changes preview tool effects before atomic save/reload, while advanced and compatibility routes preserve expert access |
 | Native transcript switching | Core-blocked | Extension APIs expose custom entries/UI but no supported child transcript/session switch handle |
 | Parent context selection | Implemented | `context.ts`: none/all/summary/recent N/entry IDs, text-only sanitation and byte bound |
 | Approval/sandbox/header inheritance | Unsupported guarantee | `SingleResult.policy`; only environment and explicit CLI overrides are reported |

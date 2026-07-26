@@ -41,6 +41,10 @@ export type SubagentTransportKind = "subprocess" | "in-process";
 
 export type CompletionDelivery = "next-turn" | "auto-resume";
 
+export interface SubagentBlockingSettings {
+	enabled?: boolean;
+}
+
 export interface SubagentRuntimeSettings {
 	enabled?: boolean;
 	transport?: SubagentTransportKind;
@@ -58,6 +62,7 @@ export interface SubagentRuntimeSettings {
 
 export interface SubagentSettings {
 	agents?: Record<string, SubagentAgentConfig>;
+	blocking?: SubagentBlockingSettings;
 	stateful?: SubagentRuntimeSettings;
 }
 
