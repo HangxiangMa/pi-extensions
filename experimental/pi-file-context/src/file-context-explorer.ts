@@ -13,9 +13,9 @@ import {
 	createFileQuote,
 	createFileQuoteSnapshot,
 	type FileQuote,
-	filterProjectFiles,
 	type LoadedProjectTextFile,
 } from "./file-context.js";
+import { ProjectFileSearch } from "./file-search.js";
 import type {
 	GitBlameInfo,
 	GitContext,
@@ -47,7 +47,7 @@ interface FileQuoteExplorerOptions {
 export class FileQuoteExplorer implements Component, Focusable {
 	private readonly search = new Input();
 	private readonly revisionInput = new Input();
-	private readonly files: readonly string[];
+	private readonly fileSearch: ProjectFileSearch;
 	private filteredFiles: string[];
 	private selectedFileIndex = 0;
 	private fileScrollOffset = 0;
@@ -71,7 +71,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 	private isFocused = false;
 
 	constructor(private readonly options: FileQuoteExplorerOptions) {
-		this.files = options.files;
+		this.fileSearch = new ProjectFileSearch(options.files);
 		this.filteredFiles = [...options.files];
 	}
 
@@ -392,7 +392,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 		this.search.handleInput(data);
 		const query = this.search.getValue();
 		if (query !== previousQuery) {
-			this.filteredFiles = filterProjectFiles(this.files, query);
+			this.filteredFiles = this.fileSearch.search(query);
 			this.selectedFileIndex = 0;
 			this.fileScrollOffset = 0;
 			this.error = undefined;

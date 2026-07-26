@@ -13,7 +13,7 @@ Browse project files inside Pi, preview text, select a line range, and attach th
 
 - Opens the file explorer when `@` is typed at a word boundary in Pi's normal editor.
 - Provides `/file-context` as a discoverable fallback when another extension owns the editor.
-- Fuzzy-filters project files, preserves normal whole-file `@path` references, and previews bounded text files with line numbers.
+- Fuzzy-searches project files with typo tolerance and relevance ranking, preserves normal whole-file `@path` references, and previews bounded text files with line numbers.
 - Shows textual staged, unstaged, untracked, ignored, and conflict status plus branch, HEAD, and dirty state when Git is available.
 - Selects a contiguous line range or changed hunk without using the system clipboard and shows a deterministic token estimate before attachment.
 - Discloses current-line blame and bounded file history, opens a validated commit/branch/tag version, and attaches explicit Git diff hunks.
@@ -43,7 +43,7 @@ pi -e ./experimental/pi-file-context
 ## 🚀 Quick start
 
 1. Type `@` at the start of a word in Pi's editor. If another custom editor is active, run `/file-context` instead.
-2. Type to filter files and use `Up`/`Down` to navigate. Press `Tab` to insert a normal whole-file `@path` reference, or `Enter` to preview a file for quoting.
+2. Type to fuzzy-search files in relevance order and use `Up`/`Down` to navigate. Press `Tab` to insert a normal whole-file `@path` reference, or `Enter` to preview a file for quoting.
 3. In the preview, move to the first line and press `Space` to anchor the selection.
 4. Extend the range with `Up`/`Down`, then press `Enter` to attach it. Without an anchor, `Enter` attaches the cursor line.
 5. In a Git worktree, use `[`/`]` to select changed hunks, `b` for current-line blame, `h` for file history, `r` to open a commit/branch/tag, or `d` to inspect and attach explicit diff context.
