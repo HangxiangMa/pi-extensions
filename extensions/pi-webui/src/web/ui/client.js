@@ -68,10 +68,7 @@ const scheduleConversationRender = createRenderBatcher(
 		setTimeout(() => requestAnimationFrame(callback), 50);
 	},
 	(extra) => {
-		for (const key of extra.transcriptUpdateKeys ?? []) {
-			model = noteUnseenUpdate(model, key);
-		}
-		publishConversation();
+		publishConversation(extra);
 		emit({
 			...extra,
 			scrollToLatest: allowTranscriptAutoScroll(model.following, !model.closed),
@@ -97,9 +94,18 @@ function emit(extra) {
 	for (const listener of listeners) listener();
 }
 
-function publishConversation() {
+function publishConversation(extra = {}) {
+	for (const key of extra.transcriptUpdateKeys ?? []) {
+		model = noteUnseenUpdate(model, key);
+	}
 	publishedMessages = model.messages;
 	publishedTools = model.tools;
+}
+
+function drainConversationRender() {
+	const pending = scheduleConversationRender.drain();
+	publishConversation(pending);
+	return pending;
 }
 
 export const webClient = {
@@ -179,6 +185,7 @@ async function refreshSnapshot(requiredSequence = 0) {
 	if (!snapshotRefresh) {
 		snapshotRefresh = (async () => {
 			do {
+				let pendingConversation = {};
 				const response = await fetch("/api/state", { cache: "no-store" });
 				if (!response.ok) throw new Error(await responseError(response));
 				const snapshot = await response.json();
@@ -189,10 +196,9 @@ async function refreshSnapshot(requiredSequence = 0) {
 					model = applyLease(model, snapshot.lease, clientId);
 				}
 				if (replacesConversation) {
-					scheduleConversationRender.cancel();
-					publishConversation();
+					pendingConversation = drainConversationRender();
 				}
-				emit({ scrollToLatest: model.following });
+				emit({ ...pendingConversation, scrollToLatest: model.following });
 			} while (model.sequence < snapshotTarget);
 		})().finally(() => {
 			snapshotRefresh = undefined;
@@ -239,8 +245,9 @@ function connectEvents() {
 			});
 			return;
 		}
+		let pendingConversation = {};
 		if (conversationEvent.type === "snapshot" || conversationEvent.type === "session-ended") {
-			scheduleConversationRender.cancel();
+			pendingConversation = drainConversationRender();
 			if (
 				conversationEvent.type === "snapshot" &&
 				hasConversationReferenceChange(previousMessages, previousTools, model)
@@ -250,6 +257,7 @@ function connectEvents() {
 			publishConversation();
 		}
 		emit({
+			...pendingConversation,
 			scrollToLatest: shouldScrollForConversationEvent(
 				conversationEvent.type,
 				model.following && !model.closed,
@@ -261,11 +269,8 @@ function connectEvents() {
 		const replacesConversation =
 			Number.isSafeInteger(snapshot?.sequence) && snapshot.sequence >= model.sequence;
 		model = applySnapshot(model, snapshot);
-		if (replacesConversation) {
-			scheduleConversationRender.cancel();
-			publishConversation();
-		}
-		emit({ scrollToLatest: model.following });
+		const pendingConversation = replacesConversation ? drainConversationRender() : {};
+		emit({ ...pendingConversation, scrollToLatest: model.following });
 	});
 	events.addEventListener("lease", (event) => {
 		model = applyLease(model, JSON.parse(event.data), clientId);
@@ -290,17 +295,20 @@ function connectEvents() {
 	events.addEventListener("session-ended", () => {
 		model = { ...model, closed: true, activity: "ended", connected: false };
 		events?.close();
-		scheduleConversationRender.cancel();
-		publishConversation();
-		emit({ transcriptAnnouncement: "Pi session ended." });
+		const pendingConversation = drainConversationRender();
+		emit({
+			...pendingConversation,
+			transcriptAnnouncement: [pendingConversation.transcriptAnnouncement, "Pi session ended."]
+				.filter(Boolean)
+				.join(" "),
+		});
 	});
 	events.addEventListener("error", () => {
 		events?.close();
 		if (model.closed) return;
 		model = { ...model, connected: false };
-		scheduleConversationRender.cancel();
-		publishConversation();
-		emit();
+		const pendingConversation = drainConversationRender();
+		emit(pendingConversation);
 		scheduleReconnect();
 	});
 }
@@ -322,9 +330,8 @@ function scheduleReconnect() {
 
 function connectionFailure(error) {
 	model = { ...model, connected: false, error: errorMessage(error) };
-	scheduleConversationRender.cancel();
-	publishConversation();
-	emit();
+	const pendingConversation = drainConversationRender();
+	emit(pendingConversation);
 	scheduleReconnect();
 }
 

@@ -48,10 +48,15 @@ export function createRenderBatcher(schedule, render) {
 			render(next);
 		});
 	};
-	batch.cancel = () => {
+	batch.drain = () => {
 		generation += 1;
 		scheduled = false;
+		const next = pending;
 		pending = {};
+		return next;
+	};
+	batch.cancel = () => {
+		batch.drain();
 	};
 	return batch;
 }

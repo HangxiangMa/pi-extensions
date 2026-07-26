@@ -20,6 +20,11 @@ const helpers = (await import(
 		transcriptUpdateKeys?: string[];
 	}) => void) & {
 		cancel(): void;
+		drain(): {
+			transcriptAnnouncement?: string;
+			scrollToLatest?: boolean;
+			transcriptUpdateKeys?: string[];
+		};
 	};
 	allowTranscriptAutoScroll(following: boolean, active?: boolean): boolean;
 	shouldBatchConversationEvent(type: string): boolean;
@@ -69,6 +74,24 @@ test("conversation renders batch bursts while preserving important view signals"
 
 	batch();
 	assert.equal(scheduled.length, 2);
+});
+
+test("drained conversation renders transfer signals without a stale scheduled render", () => {
+	const scheduled: Array<() => void> = [];
+	const renders: Array<{ transcriptAnnouncement?: string }> = [];
+	const batch = helpers.createRenderBatcher(
+		(callback) => scheduled.push(callback),
+		(extra) => renders.push(extra),
+	);
+
+	batch({ transcriptAnnouncement: "Tool failed.", transcriptUpdateKeys: ["tool:call"] });
+	assert.deepEqual(batch.drain(), {
+		transcriptAnnouncement: "Tool failed.",
+		transcriptUpdateKeys: ["tool:call"],
+		scrollToLatest: false,
+	});
+	scheduled[0]?.();
+	assert.deepEqual(renders, []);
 });
 
 test("cancelled conversation renders cannot publish stale signals", () => {
