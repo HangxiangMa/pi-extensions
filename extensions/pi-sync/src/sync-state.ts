@@ -5,28 +5,35 @@ import {
 	isConfiguredSnapshotPath,
 	isSessionPath,
 } from "./snapshot.js";
+import type { RemoteHead } from "./sync-backend.js";
 import { extraFilePathsByLower, normalizeExtraFiles, normalizeSyncFiles } from "./sync-policy.js";
-import type { LatestPointer, RemoteObject, Snapshot, SyncConfig, SyncState } from "./types.js";
+import type { Snapshot, SyncConfig, SyncState } from "./types.js";
 
-export function hasLocalChanges(local: Snapshot, state: SyncState, config: SyncConfig) {
+type SyncPolicyConfig = Pick<SyncConfig, "syncFiles" | "syncSessions" | "extraFiles">;
+
+export function hasLocalChanges(local: Snapshot, state: SyncState, config: SyncPolicyConfig) {
 	return !sameHashes(fileHashMap(local), stateHashMapForConfig(state, config));
 }
 
 export function remoteChangedSinceState(
-	latest: RemoteObject<LatestPointer>,
+	head: RemoteHead | undefined,
 	state: SyncState,
-	config: SyncConfig,
+	config: SyncPolicyConfig,
+	sameRevision: (left: string, right: string) => boolean,
 ) {
-	if (latest.missing) return Boolean(state.lastAppliedSnapshot);
-	if (latest.value?.snapshot !== state.lastAppliedSnapshot) return true;
+	if (!head) return Boolean(state.lastAppliedSnapshot);
+	if (head.snapshotId !== state.lastAppliedSnapshot) return true;
+	if (state.lastRemoteRevision && !sameRevision(head.revision, state.lastRemoteRevision)) {
+		return true;
+	}
 	if (syncFilesChanged(state, config) || extraFilesChanged(state, config)) return true;
-	return config.syncSessions && state.syncSessions !== true && latest.value?.syncSessions === true;
+	return config.syncSessions && state.syncSessions !== true && head.syncSessions;
 }
 
 export function hasRemoteChanges(
 	remote: Snapshot,
 	state: SyncState,
-	config: SyncConfig,
+	config: SyncPolicyConfig,
 	ignoredPaths = new Set<string>(),
 ) {
 	if (remote.id === state.lastAppliedSnapshot && !syncPolicyChanged(state, config)) return false;
@@ -101,10 +108,18 @@ export function syncPolicyChanged(
 
 export function shouldRefreshSyncedState(
 	remote: Snapshot,
+	head: RemoteHead | undefined,
 	state: SyncState,
 	config: Pick<SyncConfig, "syncFiles" | "syncSessions" | "extraFiles">,
+	sameRevision: (left: string, right: string) => boolean,
 ) {
-	return remote.id !== state.lastAppliedSnapshot || syncPolicyChanged(state, config);
+	return (
+		remote.id !== state.lastAppliedSnapshot ||
+		Boolean(
+			head && (!state.lastRemoteRevision || !sameRevision(head.revision, state.lastRemoteRevision)),
+		) ||
+		syncPolicyChanged(state, config)
+	);
 }
 
 function syncFilesChanged(state: SyncState, config: Pick<SyncConfig, "syncFiles">) {

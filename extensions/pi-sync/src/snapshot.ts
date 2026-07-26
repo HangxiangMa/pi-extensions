@@ -78,6 +78,15 @@ function snapshotId() {
 	return `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
 }
 
+export function regenerateSnapshotIdentity(snapshot: Snapshot): Snapshot {
+	return {
+		...snapshot,
+		id: snapshotId(),
+		createdAt: new Date().toISOString(),
+		machine: os.hostname(),
+	};
+}
+
 export async function createSnapshot(
 	profile: string,
 	options: SnapshotOptions = {},

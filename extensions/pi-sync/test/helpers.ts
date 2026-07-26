@@ -27,6 +27,7 @@ export function snapshot(files: Array<{ path: string; content: Buffer }>) {
 
 export function requiredConfig() {
 	return {
+		backend: "s3" as const,
 		endpoint: "https://example.r2.cloudflarestorage.com",
 		bucket: "pi-sync-test",
 		accessKeyId: "access-key",

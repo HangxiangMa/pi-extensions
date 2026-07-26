@@ -4,7 +4,7 @@
 
 `@narumitw/pi-sync` syncs selected Pi configuration through Cloudflare R2 or other S3-compatible object storage. Named sync targets such as `home` and `work` can reuse storage profiles such as `r2` and `s3`.
 
-The extension uses immutable snapshot bundles, a `latest.json` publication pointer, local locking, secret scanning, pre-apply backups, and recoverable local apply transactions. Conversation/session syncing remains opt-in because session JSONL can contain prompts, tool output, paths, screenshots, and secrets.
+The extension uses immutable snapshot bundles, a `latest.json` publication pointer, local locking, secret scanning, pre-apply backups, and recoverable local apply transactions. Remote persistence is isolated behind a backend-neutral contract; normalized runtime config pairs a discriminated backend profile with its matching destination before factory selection, while the persisted settings shape remains compatible. S3/R2 remains the only production backend in this release. Conversation/session syncing remains opt-in because session JSONL can contain prompts, tool output, paths, screenshots, and secrets.
 
 ## ✨ Features
 
@@ -288,11 +288,11 @@ Remote layout remains compatible:
             └── <snapshot-id>.json.gz
 ```
 
-Snapshot upload is staging; `latest.json` is the active publication boundary. A failed history update after publication is reported as “snapshot active, history needs repair” instead of falsely claiming no remote change.
+Snapshot upload is staging; `latest.json` is the active publication boundary. pi-sync records the backend's opaque remote revision separately from the applied snapshot identity, while continuing to read legacy state that has no revision or contains the old `lastRemoteEtag` field. Rollback verifies the selected snapshot against the active head or retained history, mints a new snapshot identity, and publishes a new history entry instead of rewriting the old one. If remote rollback publication fails after local apply, the error identifies that partial outcome and its local backup. A failed history update after publication is reported as “snapshot active, history needs repair” instead of falsely claiming no remote change. A transport failure at the active-head boundary is reported as an unknown publication outcome and directs the user to check status rather than claiming that nothing changed.
 
 Before pull/rollback, pi-sync writes a backup under `.pisync/backups/`. It then preflights all paths, stages a private transaction journal, applies changes, and restores every affected path if a later mutation fails. An interrupted journal is recovered before the next session/snapshot apply. Filesystem-wide replacement cannot be one OS primitive, so the guarantee is a complete previous or complete new accepted state after rollback/recovery—not an unrecoverable partial accepted state.
 
-R2/S3 does not provide the true cross-machine compare-and-swap used here. pi-sync re-reads `latest.json` immediately before publication and verifies afterward, but simultaneous writers can still race. Review status before important forced updates.
+R2/S3 is explicitly reported as `read-check-write-verify`, not atomic compare-and-swap. pi-sync re-reads `latest.json` immediately before publication and verifies afterward, but simultaneous writers can still race. `--force` accepts a reviewed content conflict, re-reads the head, and never disables the backend revision check; it is not an unconditional overwrite. Review status before important forced updates.
 
 ## 🔒 Session syncing
 
@@ -306,7 +306,7 @@ Sessions can contain prompts, model output, tool results, file paths, images, an
 
 - Credentials stay local; canonical, legacy, temporary, and migration-recovery settings files are always excluded from snapshots.
 - Push refuses common secret patterns in locally managed files.
-- Pull/rollback reject unsafe paths, duplicate paths, checksum mismatches, symlink parents, and file/directory replacement hazards before mutation.
+- Pull/rollback reject unsafe paths, duplicate paths, checksum mismatches, symlink parents, and file/directory replacement hazards before mutation. Remote JSON responses are limited to 1 MiB, error bodies to 64 KiB, compressed snapshot downloads to 256 MiB, and decompressed snapshot bundles to 512 MiB.
 - Unmanaged local/remote files remain preserved.
 - A live local lock disables destructive work. Stale/unreadable lock recovery retains process-liveness and guard checks.
 - Force operations remain explicit direct/conflict-recovery actions and retain exact confirmations.
@@ -329,7 +329,13 @@ Critical meaning is always present in text such as `(current)`, `Warning`, `Inva
 extensions/pi-sync/
 ├── src/
 │   ├── index.ts                 # Thin Pi entrypoint
-│   ├── sync.ts                  # Command and lifecycle orchestration
+│   ├── sync.ts                  # Command registration and session lifecycle
+│   ├── sync-operations.ts       # Backend-neutral sync orchestration
+│   ├── sync-backend.ts          # Backend contract, revisions, capabilities, and errors
+│   ├── backend-factory.ts       # Backend selection from normalized settings
+│   ├── s3-backend.ts            # S3/R2 persistence, publication, history, and diagnostics
+│   ├── s3-client.ts             # Bounded, signed S3 transport
+│   ├── snapshot-codec.ts        # Shared immutable snapshot bundle codec
 │   ├── manager-ui.ts            # Goal-oriented menus and setup/management flows
 │   ├── file-selection.ts        # Transactional synced-content editor
 │   ├── config-file.ts           # Private settings I/O and legacy filename migration

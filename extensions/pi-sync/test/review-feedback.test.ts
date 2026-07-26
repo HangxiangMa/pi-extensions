@@ -203,9 +203,12 @@ test("legacy migration adopts state under effective environment overrides", asyn
 				await migrateLegacySettings("home", "r2");
 				const migrated = await loadConfig();
 
-				assert.equal(migrated.endpoint, "https://override.r2.cloudflarestorage.com");
-				assert.equal(migrated.bucket, "override-bucket");
-				assert.equal(migrated.prefix, "override-prefix");
+				assert.equal(
+					migrated.backend.profile.endpoint,
+					"https://override.r2.cloudflarestorage.com",
+				);
+				assert.equal(migrated.backend.destination.bucket, "override-bucket");
+				assert.equal(migrated.backend.destination.prefix, "override-prefix");
 				assert.equal(migrated.profile, "override-space");
 				assert.equal((await readStateForConfig(migrated)).lastAppliedSnapshot, "legacy-snapshot");
 			}),
@@ -291,7 +294,7 @@ test("history selection acquires the rollback lock before reading or applying a 
 						version: 1,
 						profile: "home",
 						snapshot: "snapshot-1",
-						sha256: "checksum",
+						sha256: "0".repeat(64),
 						createdAt: "2026-07-24T00:00:00.000Z",
 						machine: "remote",
 					},

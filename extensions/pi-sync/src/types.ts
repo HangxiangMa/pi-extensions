@@ -1,8 +1,7 @@
 export type StorageProfileKind = "r2" | "s3-compatible";
 export type TargetSwitchAction = "ask" | "pull" | "switch-only";
 
-export interface StorageProfileSettings {
-	kind?: StorageProfileKind;
+export interface S3StorageProfileFields {
 	endpoint?: string;
 	region?: string;
 	accessKeyId?: string;
@@ -10,45 +9,69 @@ export interface StorageProfileSettings {
 	sessionToken?: string;
 }
 
-export interface SyncTargetSettings {
+export type S3StorageProfileSettings = S3StorageProfileFields &
+	({ kind?: undefined } | { kind: "r2" } | { kind: "s3-compatible" });
+
+export interface CommonSyncTargetSettings {
 	profile?: string;
-	bucket?: string;
-	prefix?: string;
-	namespace?: string;
 	autoSync?: boolean;
 	syncFiles?: unknown;
 	syncSessions?: boolean;
 	extraFiles?: unknown;
 }
 
+export interface S3SyncTargetSettings extends CommonSyncTargetSettings {
+	bucket?: string;
+	prefix?: string;
+	namespace?: string;
+}
+
 export interface PiSyncSettingsV2 {
 	version: 2;
 	activeTarget?: string;
 	targetSwitchAction?: TargetSwitchAction;
-	profiles?: Record<string, StorageProfileSettings>;
-	targets?: Record<string, SyncTargetSettings>;
+	profiles?: Record<string, S3StorageProfileSettings>;
+	targets?: Record<string, S3SyncTargetSettings>;
 	[key: string]: unknown;
 }
 
-export interface SyncConfig {
+export interface ResolvedS3StorageProfile {
+	kind: StorageProfileKind;
 	endpoint: string;
-	bucket: string;
 	region: string;
 	accessKeyId: string;
 	secretAccessKey: string;
 	sessionToken?: string;
+}
+
+export interface ResolvedS3Destination {
+	bucket: string;
+	prefix: string;
+	namespace: string;
+}
+
+export interface ResolvedS3Backend {
+	type: "s3";
+	profile: ResolvedS3StorageProfile;
+	destination: ResolvedS3Destination;
+}
+
+export interface CommonSyncConfig {
 	/** Remote namespace retained as `profile` for snapshot/wire compatibility. */
 	profile: string;
-	prefix: string;
 	target?: string;
 	storageProfile?: string;
-	storageKind?: StorageProfileKind;
 	autoSync?: boolean;
 	settingsVersion?: 1 | 2;
 	syncFiles?: string[];
 	syncSessions: boolean;
 	extraFiles: string[];
 }
+
+/** Discriminated union extended by each production backend. */
+export type SyncConfig = CommonSyncConfig & {
+	backend: ResolvedS3Backend;
+};
 
 export interface PartialConfig {
 	target?: string;
@@ -105,6 +128,8 @@ export interface SyncState {
 	version: number;
 	profile: string;
 	lastAppliedSnapshot?: string;
+	lastRemoteRevision?: string;
+	/** Legacy state field accepted for compatibility but never reinterpreted. */
 	lastRemoteEtag?: string;
 	lastFileHashes: Record<string, string>;
 	syncFiles?: string[];

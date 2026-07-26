@@ -26,8 +26,31 @@ test("history failure reports the newly published snapshot as active and repaira
 	});
 });
 
+test("active-head write failure reports an unknown publication outcome", async () => {
+	await withPublicationHarness({ failLatest: true }, async ({ counts, notifications }) => {
+		assert.equal(counts.snapshotPuts, 1);
+		assert.equal(counts.latestPuts, 1);
+		assert.equal(counts.historyPuts, 0);
+		assert.match(notifications(), /publication outcome is unknown/i);
+	});
+});
+
+test("post-publication verification reports an observed competing head", async () => {
+	await withPublicationHarness({ replaceAfterLatest: true }, async ({ counts, notifications }) => {
+		assert.equal(counts.snapshotPuts, 1);
+		assert.equal(counts.latestPuts, 1);
+		assert.equal(counts.historyPuts, 0);
+		assert.match(notifications(), /changed immediately after push/i);
+	});
+});
+
 async function withPublicationHarness(
-	failures: { failSnapshot?: boolean; failHistory?: boolean },
+	failures: {
+		failSnapshot?: boolean;
+		failHistory?: boolean;
+		failLatest?: boolean;
+		replaceAfterLatest?: boolean;
+	},
 	assertions: (state: {
 		counts: { snapshotPuts: number; latestPuts: number; historyPuts: number };
 		notifications: () => string;
@@ -52,6 +75,7 @@ async function withPublicationHarness(
 			createdAt: remote.createdAt,
 			machine: remote.machine,
 		};
+		let replaceOnNextLatestRead = false;
 		const counts = { snapshotPuts: 0, latestPuts: 0, historyPuts: 0 };
 		const originalFetch = globalThis.fetch;
 		globalThis.fetch = (async (input, init) => {
@@ -60,8 +84,19 @@ async function withPublicationHarness(
 			if (url.pathname.endsWith("/latest.json")) {
 				if (method === "PUT") {
 					counts.latestPuts += 1;
+					if (failures.failLatest) return new Response("latest failed", { status: 503 });
 					activePointer = parseRequestJson(init?.body);
+					replaceOnNextLatestRead = failures.replaceAfterLatest === true;
 					return new Response(null, { status: 200 });
+				}
+				if (replaceOnNextLatestRead) {
+					replaceOnNextLatestRead = false;
+					return Response.json(
+						{ ...activePointer, snapshot: "concurrent-writer" },
+						{
+							headers: { etag: '"concurrent"' },
+						},
+					);
 				}
 				return Response.json(activePointer, { headers: { etag: '"latest"' } });
 			}
