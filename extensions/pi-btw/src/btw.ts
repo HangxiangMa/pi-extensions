@@ -433,10 +433,12 @@ async function showBtwMenu(
 	ctx: ExtensionCommandContext,
 	title: string,
 	options: readonly string[],
+	customOptions?: { overlay?: boolean },
 ): Promise<BtwMenuSelectorAction> {
 	return ctx.ui.custom<BtwMenuSelectorAction>(
 		(tui, theme, keybindings, done) =>
 			new BtwMenuSelector(tui, theme, keybindings, title, options, done),
+		customOptions,
 	);
 }
 
@@ -450,11 +452,12 @@ export async function loadHandoffIntoMainEditor(
 		ctx.ui.notify("Context loaded into the main editor. Review and submit when ready.", "info");
 		return "loaded";
 	}
-	const action = await showBtwMenu(ctx, "The main editor already contains text", [
-		"Append context",
-		"Replace editor text",
-		"Cancel",
-	]);
+	const action = await showBtwMenu(
+		ctx,
+		"The main editor already contains text",
+		["Append context", "Replace editor text", "Cancel"],
+		{ overlay: true },
+	);
 	if (action.kind === "close") return "closed";
 	if (action.kind === "back" || action.value === "Cancel") return "back";
 	if (action.value === "Append context") {

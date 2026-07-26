@@ -582,13 +582,17 @@ test("side-thread command loop loads an explicit handoff without mutating the se
 	assert.equal(branch.length, 1);
 });
 
-test("appending a handoff re-reads editor text after the conflict menu closes", async () => {
+test("appending a handoff preserves editor updates made while the conflict menu is open", async () => {
 	let editor = "original editor";
+	let usedOverlay = false;
 	const ctx = {
 		ui: {
 			getEditorText: () => editor,
-			custom: async () => {
+			custom: async (_factory: unknown, options?: { overlay?: boolean }) => {
+				const entryText = editor;
 				editor = "newer editor";
+				usedOverlay = options?.overlay === true;
+				if (!usedOverlay) editor = entryText;
 				return { kind: "select", value: "Append context" };
 			},
 			setEditorText: (text: string) => {
@@ -601,7 +605,32 @@ test("appending a handoff re-reads editor text after the conflict menu closes", 
 	const result = await loadHandoffIntoMainEditor("handoff", ctx);
 
 	assert.equal(result, "loaded");
+	assert.equal(usedOverlay, true);
 	assert.equal(editor, "newer editor\n\nhandoff");
+});
+
+test("cancelling handoff loading preserves editor updates made while the menu is open", async () => {
+	let editor = "original editor";
+	const ctx = {
+		ui: {
+			getEditorText: () => editor,
+			custom: async (_factory: unknown, options?: { overlay?: boolean }) => {
+				const entryText = editor;
+				editor = "newer editor";
+				if (!options?.overlay) editor = entryText;
+				return { kind: "select", value: "Cancel" };
+			},
+			setEditorText: (text: string) => {
+				editor = text;
+			},
+			notify() {},
+		},
+	} as never;
+
+	const result = await loadHandoffIntoMainEditor("handoff", ctx);
+
+	assert.equal(result, "back");
+	assert.equal(editor, "newer editor");
 });
 
 test("empty transcript composer accepts the first side-thread question", () => {
