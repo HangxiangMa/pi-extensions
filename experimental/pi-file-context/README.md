@@ -5,14 +5,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > [!WARNING]
-> This extension is experimental. Its interaction model and package API may change, and it is excluded from automated repository publishing.
+> This extension is experimental. Its interaction model and package API may change between releases.
 
 Browse project files inside Pi, preview text, select a line range, and attach the exact snapshot to the next prompt.
 
 ## ✨ Features
 
 - Opens the file explorer when `@` is typed at a word boundary in Pi's normal editor.
-- Provides `/file-quote` as a discoverable fallback when another extension owns the editor.
+- Provides `/file-context` as a discoverable fallback when another extension owns the editor.
 - Fuzzy-filters project files, preserves normal whole-file `@path` references, and previews bounded text files with line numbers.
 - Shows textual staged, unstaged, untracked, ignored, and conflict status plus branch, HEAD, and dirty state when Git is available.
 - Selects a contiguous line range or changed hunk without using the system clipboard and shows a deterministic token estimate before attachment.
@@ -32,7 +32,7 @@ For persistent local use, add its absolute directory to the `extensions` array i
 
 ## 🚀 Quick start
 
-1. Type `@` at the start of a word in Pi's editor. If another custom editor is active, run `/file-quote` instead.
+1. Type `@` at the start of a word in Pi's editor. If another custom editor is active, run `/file-context` instead.
 2. Type to filter files and use `Up`/`Down` to navigate. Press `Tab` to insert a normal whole-file `@path` reference, or `Enter` to preview a file for quoting.
 3. In the preview, move to the first line and press `Space` to anchor the selection.
 4. Extend the range with `Up`/`Down`, then press `Enter` to attach it. Without an anchor, `Enter` attaches the cursor line.
@@ -58,9 +58,10 @@ Token counts are deterministic byte-based estimates (`ceil(UTF-8 bytes / 4)`), n
 
 | Command | Mode | Description |
 | --- | --- | --- |
-| `/file-quote` | TUI only | Open the file explorer. Arguments are rejected. |
+| `/file-context` | TUI only | Open the file explorer. Arguments are rejected. |
+| `/file-quote` | TUI only | Compatibility alias for `/file-context`. |
 
-RPC receives an observable warning. JSON and print modes do not enter custom UI.
+`/file-context` is the canonical command. Existing `/file-quote` usage remains supported as a compatibility alias. RPC receives an observable warning. JSON and print modes do not enter custom UI.
 
 ## 🔒 Security and limits
 
@@ -80,7 +81,7 @@ RPC receives an observable warning. JSON and print modes do not enter custom UI.
 - Keyboard line selection only; mouse drag selection is not implemented.
 - Up to eight pending quotes; there is not yet an interactive remove/reorder action.
 - Pending quotes do not survive `/reload`, session replacement, or shutdown.
-- The `@` trigger is not installed when another extension already owns the custom editor; `/file-quote` remains available.
+- The `@` trigger is not installed when another extension already owns the custom editor; `/file-context` remains available.
 - File discovery uses a small built-in ignore list rather than `.gitignore` semantics.
 - Git integration degrades to the original filesystem-only workflow outside a repository or when Git metadata cannot be read.
 - File history is limited to the 20 most recent commits. Untracked files have status and provenance but no HEAD diff hunk until Git tracks them.

@@ -678,7 +678,11 @@ test("accumulates ordered pending quotes within aggregate limits", () => {
 test("registers a TUI fallback command and injects all pending quotes only once", async () => {
 	const mock = createMockPi();
 	fileQuoteExtension(mock.pi);
-	assert.ok(mock.commands.has("file-quote"));
+	assert.ok(mock.commands.has("file-context"));
+	assert.equal(
+		mock.commands.get("file-quote")?.handler,
+		mock.commands.get("file-context")?.handler,
+	);
 
 	let customFactory: unknown;
 	const widgets = new Map<string, unknown>();
@@ -737,17 +741,17 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 
 	await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 	assert.equal(editorFactories.length, 1);
-	await mock.commands.get("file-quote")?.handler("", context.ctx);
-	await mock.commands.get("file-quote")?.handler("", context.ctx);
+	await mock.commands.get("file-context")?.handler("", context.ctx);
+	await mock.commands.get("file-context")?.handler("", context.ctx);
 	assert.equal(typeof customFactory, "function");
-	assert.deepEqual(widgets.get("file-quote"), [
+	assert.deepEqual(widgets.get("file-context"), [
 		"Quotes (2) · ~13 tokens:",
 		"• src/example.ts · lines 1-1 · ~6 tokens",
 		"• test/example.test.ts · lines 2-3 · ~8 tokens",
 	]);
 
 	assert.equal(mock.events.get("input"), undefined);
-	assert.notEqual(widgets.get("file-quote"), undefined);
+	assert.notEqual(widgets.get("file-context"), undefined);
 	const beforeStart = mock.events.get("before_agent_start")?.[0];
 	const injection = await beforeStart?.(
 		{ prompt: "/skill:explain Explain this", images: [], systemPrompt: "base" },
@@ -761,14 +765,14 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 			display: false,
 		},
 	});
-	assert.equal(widgets.get("file-quote"), undefined);
+	assert.equal(widgets.get("file-context"), undefined);
 	assert.equal(
 		await beforeStart?.({ prompt: "Again", systemPrompt: "base" }, context.ctx),
 		undefined,
 	);
 	await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
 	assert.equal(currentEditorFactory, undefined);
-	assert.equal(widgets.get("file-quote"), undefined);
+	assert.equal(widgets.get("file-context"), undefined);
 });
 
 test("quotes whole-file references and rejects picker results from replaced sessions", async () => {
@@ -796,7 +800,7 @@ test("quotes whole-file references and rejects picker results from replaced sess
 		},
 	});
 	await referenceMock.events.get("session_start")?.[0]?.({}, referenceContext.ctx);
-	await referenceMock.commands.get("file-quote")?.handler("", referenceContext.ctx);
+	await referenceMock.commands.get("file-context")?.handler("", referenceContext.ctx);
 	assert.deepEqual(pasted, ['@"docs/my \\"note\\".md" ']);
 
 	const staleMock = createMockPi();
@@ -828,7 +832,7 @@ test("quotes whole-file references and rejects picker results from replaced sess
 	const oldContext = makeContext(oldManager, async () => picker);
 	const newContext = makeContext(newManager, async () => undefined);
 	await staleMock.events.get("session_start")?.[0]?.({}, oldContext.ctx);
-	const command = staleMock.commands.get("file-quote")?.handler("", oldContext.ctx);
+	const command = staleMock.commands.get("file-context")?.handler("", oldContext.ctx);
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	await staleMock.events.get("session_start")?.[0]?.({}, newContext.ctx);
 	resolvePicker?.({
@@ -849,15 +853,15 @@ test("rejects the fallback command observably outside TUI mode", async () => {
 	const mock = createMockPi();
 	fileQuoteExtension(mock.pi);
 	const rpc = createMockContext({ mode: "rpc", hasUI: true });
-	await mock.commands.get("file-quote")?.handler("", rpc.ctx);
+	await mock.commands.get("file-context")?.handler("", rpc.ctx);
 	assert.match(rpc.notifications[0]?.message ?? "", /interactive TUI/);
 	assert.equal(rpc.notifications[0]?.level, "warning");
 
 	const print = createMockContext({ mode: "print", hasUI: false });
 	await assert.rejects(async () => {
-		await mock.commands.get("file-quote")?.handler("", print.ctx);
+		await mock.commands.get("file-context")?.handler("", print.ctx);
 	}, /interactive TUI/);
 	await assert.rejects(async () => {
-		await mock.commands.get("file-quote")?.handler("unexpected", print.ctx);
+		await mock.commands.get("file-context")?.handler("unexpected", print.ctx);
 	}, /Usage/);
 });
