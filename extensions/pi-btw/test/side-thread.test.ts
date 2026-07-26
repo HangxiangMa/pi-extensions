@@ -408,6 +408,42 @@ test("bring-to-main scope menu offers the approved choices and selects a questio
 	assert.match(result.kind === "bringToMain" ? result.draft : "", /Q2[\s\S]*A2/);
 });
 
+test("question-suffix preview returns to the previously selected question", async () => {
+	const thread = createSideThread("context");
+	for (const [question, answer] of [
+		["Q1", "A1"],
+		["Q2", "A2"],
+	] as const) {
+		thread.turns.push({ kind: "answered", question, answer, response: response(answer) });
+	}
+	let scopeMenus = 0;
+	let questionMenus = 0;
+	const initialQuestions: Array<string | undefined> = [];
+	let previews = 0;
+
+	const result = await chooseBringToMain(thread, { ui: {} } as never, {
+		showMenu: async (_ctx, title, options, initialValue) => {
+			if (title === "Bring what back to the main thread?") {
+				scopeMenus += 1;
+				const value = options.find((option) => option.startsWith("From a question"));
+				return value ? { kind: "select", value } : { kind: "back" };
+			}
+			questionMenus += 1;
+			initialQuestions.push(initialValue);
+			return { kind: "select", value: options[1] ?? "" };
+		},
+		showPreview: async () => {
+			previews += 1;
+			return previews === 1 ? { kind: "back" } : { kind: "bring" };
+		},
+	});
+
+	assert.equal(scopeMenus, 1);
+	assert.equal(questionMenus, 2);
+	assert.deepEqual(initialQuestions, [undefined, "2. Q2"]);
+	assert.match(result.kind === "bringToMain" ? result.draft : "", /Q2[\s\S]*A2/);
+});
+
 test("large bring-to-main scopes preview the exact draft and support Back", async () => {
 	const thread = createSideThread("context");
 	for (const [question, answer] of [
@@ -418,10 +454,12 @@ test("large bring-to-main scopes preview the exact draft and support Back", asyn
 	}
 	let scopeMenuCount = 0;
 	let previewDraft = "";
+	const initialScopes: Array<string | undefined> = [];
 	const result = await chooseBringToMain(thread, { ui: {} } as never, {
-		showMenu: async (_ctx, title, options) => {
+		showMenu: async (_ctx, title, options, initialValue) => {
 			if (title !== "Bring what back to the main thread?") return { kind: "back" };
 			scopeMenuCount += 1;
+			initialScopes.push(initialValue);
 			const prefix = scopeMenuCount === 1 ? "Entire side thread" : "Latest question and answer";
 			const value = options.find((option) => option.startsWith(prefix));
 			return value ? { kind: "select", value } : { kind: "back" };
@@ -435,6 +473,7 @@ test("large bring-to-main scopes preview the exact draft and support Back", asyn
 
 	assert.match(previewDraft, /Q1[\s\S]*A1[\s\S]*Q2[\s\S]*A2/);
 	assert.equal(scopeMenuCount, 2);
+	assert.match(initialScopes[1] ?? "", /^Entire side thread/);
 	assert.equal(result.kind, "bringToMain");
 	assert.doesNotMatch(result.kind === "bringToMain" ? result.draft : "", /Q1|A1/);
 });
@@ -579,7 +618,7 @@ test("bring-to-main preview renders exact content and configured Bring and Back 
 });
 
 test("bring-to-main preview wraps long lines without hiding content", () => {
-	const content = "abcdefghijklmnopqrstuvwxyz0123456789";
+	const content = "abc     defghijklmnopqrstuvwxyz0123456789";
 	const preview = new BtwBringToMainPreview(
 		{ terminal: { rows: 12 }, requestRender() {} } as never,
 		{
@@ -594,6 +633,35 @@ test("bring-to-main preview wraps long lines without hiding content", () => {
 
 	const contentRows = preview.render(12).slice(1, -1);
 	assert.equal(contentRows.join("").replaceAll("\u001b[0m", ""), content);
+
+	const narrow = new BtwBringToMainPreview(
+		{ terminal: { rows: 12 }, requestRender() {} } as never,
+		{
+			fg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		} as never,
+		keybindings() as never,
+		"界",
+		{ lines: 1, messages: 1, tokens: 1 },
+		() => undefined,
+	).render(1);
+	assert.ok(narrow.every((line) => visibleWidth(line) <= 1));
+});
+
+test("bring-to-main preview exposes scrolling when content exceeds its viewport", () => {
+	const preview = new BtwBringToMainPreview(
+		{ terminal: { rows: 9 }, requestRender() {} } as never,
+		{
+			fg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		} as never,
+		keybindings() as never,
+		Array.from({ length: 10 }, (_, index) => `line ${index + 1}`).join("\n"),
+		{ lines: 10, messages: 1, tokens: 15 },
+		() => undefined,
+	);
+
+	assert.match(preview.render(100).join("\n"), /1–4\/10.*PgUp\/PgDn scroll/);
 });
 
 test("bring-to-main scope menu propagates Ctrl+C as a side-thread close", async () => {
@@ -1273,6 +1341,34 @@ test("text range selector exposes selection status, non-color markers, and confi
 	assert.match(selected, /Selected: 1 line · 1 message · ~1 token/);
 	assert.match(selected, /●> User/);
 	assert.match(selected, /K\/J extend lines/);
+});
+
+test("configured confirm bindings take precedence over selector shortcuts", () => {
+	const actions: unknown[] = [];
+	const selector = new BtwTextRangeSelector(
+		{ terminal: { rows: 10 }, requestRender() {} } as never,
+		{
+			fg: (_color: string, text: string) => text,
+			bg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		} as never,
+		{
+			matches: (data: string, key: string) =>
+				key === "tui.select.confirm" ? data === " " : keybindings().matches(data, key),
+			getKeys: (key: string) =>
+				key === "tui.select.confirm" ? ["space"] : keybindings().getKeys(key),
+		} as never,
+		[{ question: "abc", answer: "de", kind: "answered", response: response("de") }],
+		(action) => actions.push(action),
+	);
+
+	selector.handleInput("\u001b[1;2C");
+	const rendered = selector.render(100).join("\n");
+	assert.match(rendered, /Space bring/);
+	assert.doesNotMatch(rendered, /Space (?:lines|clear)/);
+	selector.handleInput(" ");
+
+	assert.deepEqual(actions, [{ kind: "confirm", segments: [{ role: "user", text: "a" }] }]);
 });
 
 test("text range selector moves like an editor and extends character selection with Shift+Arrows", () => {

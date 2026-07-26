@@ -430,18 +430,19 @@ export async function chooseBringToMain(
 	const exactOption = "Select exact text…  Lines or characters";
 	const entireOption = `Entire side thread  ${answered.length} Q&A · ~${estimateBringToMainTokens(entireSegments)} tokens`;
 	const cancelOption = "Cancel  Return to the side thread";
+	let selectedScope: string | undefined;
 
 	while (true) {
-		const scopeResult = await showMenu(ctx, "Bring what back to the main thread?", [
-			latestOption,
-			fromOption,
-			exactOption,
-			entireOption,
-			cancelOption,
-		]);
+		const scopeResult = await showMenu(
+			ctx,
+			"Bring what back to the main thread?",
+			[latestOption, fromOption, exactOption, entireOption, cancelOption],
+			selectedScope,
+		);
 		if (scopeResult.kind === "close") return { kind: "closed" };
 		if (scopeResult.kind === "back" || scopeResult.value === cancelOption) return { kind: "back" };
 		const scope = scopeResult.value;
+		selectedScope = scope;
 		if (scope === latestOption) return makeChoice(latestSegments);
 		if (scope === entireOption) {
 			const choice = makeChoice(entireSegments);
@@ -454,18 +455,28 @@ export async function chooseBringToMain(
 			const questions = answered.map(
 				(turn, index) => `${index + 1}. ${truncatePreview(sanitizeSingleLine(turn.question))}`,
 			);
-			const questionResult = await showMenu(ctx, "Start from which question?", questions);
-			if (questionResult.kind === "close") return { kind: "closed" };
-			if (questionResult.kind === "back") continue;
-			const answeredTurnIndex = questions.indexOf(questionResult.value);
-			if (answeredTurnIndex < 0) continue;
-			const choice = makeChoice(
-				buildQuickBringToMainSegments(thread.turns, { kind: "from", answeredTurnIndex }),
-			);
-			const preview = await showPreview(ctx, choice.draft, choice.summary);
-			if (preview.kind === "close") return { kind: "closed" };
-			if (preview.kind === "back") continue;
-			return choice;
+			let selectedQuestion: string | undefined;
+			while (true) {
+				const questionResult = await showMenu(
+					ctx,
+					"Start from which question?",
+					questions,
+					selectedQuestion,
+				);
+				if (questionResult.kind === "close") return { kind: "closed" };
+				if (questionResult.kind === "back") break;
+				const answeredTurnIndex = questions.indexOf(questionResult.value);
+				if (answeredTurnIndex < 0) continue;
+				selectedQuestion = questionResult.value;
+				const choice = makeChoice(
+					buildQuickBringToMainSegments(thread.turns, { kind: "from", answeredTurnIndex }),
+				);
+				const preview = await showPreview(ctx, choice.draft, choice.summary);
+				if (preview.kind === "close") return { kind: "closed" };
+				if (preview.kind === "back") continue;
+				return choice;
+			}
+			continue;
 		}
 
 		if (scope !== exactOption) continue;
@@ -523,11 +534,12 @@ async function showBtwMenu(
 	ctx: ExtensionCommandContext,
 	title: string,
 	options: readonly string[],
+	initialValue?: string,
 ): Promise<BtwMenuSelectorAction> {
 	return showBtwCustomPreservingEditor<BtwMenuSelectorAction>(
 		ctx,
 		(tui, theme, keybindings, done) =>
-			new BtwMenuSelector(tui, theme, keybindings, title, options, done),
+			new BtwMenuSelector(tui, theme, keybindings, title, options, done, initialValue),
 	);
 }
 
