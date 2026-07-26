@@ -190,8 +190,6 @@ export class LspClient {
 			: (published?.version ?? 0);
 		const response = await this.request("textDocument/diagnostic", {
 			textDocument: { uri },
-			identifier: null,
-			previousResultId: null,
 		});
 		const result = response.result as { items?: LspDiagnostic[] } | undefined;
 		const diagnostics = result?.items ?? [];
