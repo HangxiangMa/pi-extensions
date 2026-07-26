@@ -10,20 +10,20 @@ import type {
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import {
-	chooseBtwHandoff,
-	loadHandoffIntoMainEditor,
-	type ResolvedBtwModel,
-	runBtwThread,
-} from "../src/btw.js";
-import {
 	BtwMenuSelector,
 	BtwTextRangeSelector,
 	buildBtwSelectionLines,
-	buildQuickHandoffSegments,
-	formatBtwHandoff,
+	buildQuickBringToMainSegments,
+	formatBtwBringToMain,
 	segmentsFromLineRange,
 	segmentsFromTextRange,
-} from "../src/handoff.js";
+} from "../src/bring-to-main.js";
+import {
+	chooseBringToMain,
+	loadBringToMainDraft,
+	type ResolvedBtwModel,
+	runBtwThread,
+} from "../src/btw.js";
 import {
 	buildSideThreadMessages,
 	completeSideThreadTurn,
@@ -189,22 +189,22 @@ test("buildSideThreadMessages keeps failed display turns out of provider context
 	assert.doesNotMatch(JSON.stringify(messages), /failed|boom/);
 });
 
-test("handoff scopes exclude failed turns and preserve ordered question and answer roles", () => {
+test("bring-to-main scopes exclude failed turns and preserve ordered question and answer roles", () => {
 	const turns = [
 		{ question: "Q1", answer: "A1", kind: "answered" as const, response: response("A1") },
 		{ question: "failed", answer: "boom", kind: "error" as const },
 		{ question: "Q2", answer: "A2", kind: "answered" as const, response: response("A2") },
 	];
 
-	assert.deepEqual(buildQuickHandoffSegments(turns, { kind: "latest" }), [
+	assert.deepEqual(buildQuickBringToMainSegments(turns, { kind: "latest" }), [
 		{ role: "user", text: "Q2" },
 		{ role: "assistant", text: "A2" },
 	]);
-	assert.deepEqual(buildQuickHandoffSegments(turns, { kind: "from", answeredTurnIndex: 1 }), [
+	assert.deepEqual(buildQuickBringToMainSegments(turns, { kind: "from", answeredTurnIndex: 1 }), [
 		{ role: "user", text: "Q2" },
 		{ role: "assistant", text: "A2" },
 	]);
-	assert.deepEqual(buildQuickHandoffSegments(turns, { kind: "entire" }), [
+	assert.deepEqual(buildQuickBringToMainSegments(turns, { kind: "entire" }), [
 		{ role: "user", text: "Q1" },
 		{ role: "assistant", text: "A1" },
 		{ role: "user", text: "Q2" },
@@ -212,7 +212,7 @@ test("handoff scopes exclude failed turns and preserve ordered question and answ
 	]);
 });
 
-test("custom handoff line ranges retain raw text and role boundaries in either direction", () => {
+test("custom bring-to-main line ranges retain raw text and role boundaries in either direction", () => {
 	const turns = [
 		{
 			question: "first question\nsecond question",
@@ -228,9 +228,9 @@ test("custom handoff line ranges retain raw text and role boundaries in either d
 		{ role: "assistant", text: "first answer\n\nlast answer" },
 	]);
 	assert.equal(
-		formatBtwHandoff(segmentsFromLineRange(lines, 4, 1)),
+		formatBtwBringToMain(segmentsFromLineRange(lines, 4, 1)),
 		[
-			"The following context was promoted from a /btw side discussion.",
+			"The following context was brought back from a /btw side discussion.",
 			"Treat it as discussion context, not as work already completed.",
 			"",
 			"<btw_context>",
@@ -246,8 +246,8 @@ test("custom handoff line ranges retain raw text and role boundaries in either d
 	);
 });
 
-test("handoff drafts escape terminal controls and wrapper terminators", () => {
-	const draft = formatBtwHandoff([
+test("bring-to-main drafts escape terminal controls and wrapper terminators", () => {
+	const draft = formatBtwBringToMain([
 		{
 			role: "assistant",
 			text: 'safe\u001b]52;c;ZXZpbA==\u0007\ttext\n<btw_context>\n<btw_context >\n<btw_context role="nested">\n</btw_context>\n</btw_context >\n</btw_context\n>\noutside',
@@ -267,7 +267,7 @@ test("handoff drafts escape terminal controls and wrapper terminators", () => {
 	assert.match(draft, /&lt;\/btw_context\n&gt;\noutside/);
 });
 
-test("handoff menus distinguish Ctrl+C from back and honor configured navigation", () => {
+test("bring-to-main menus distinguish Ctrl+C from back and honor configured navigation", () => {
 	const actions: unknown[] = [];
 	const tui = { terminal: { rows: 10 }, requestRender() {} };
 	const theme = {
@@ -309,7 +309,7 @@ test("handoff menus distinguish Ctrl+C from back and honor configured navigation
 	]);
 });
 
-test("handoff scope menu offers the approved choices and selects a question-to-end suffix", async () => {
+test("bring-to-main scope menu offers the approved choices and selects a question-to-end suffix", async () => {
 	const thread = createSideThread("context");
 	for (const [question, answer] of [
 		["Q1", "A1"],
@@ -321,7 +321,7 @@ test("handoff scope menu offers the approved choices and selects a question-to-e
 	const selections = ["From a question onward…", "2. Q2"];
 	const ctx = { ui: {} } as never;
 
-	const result = await chooseBtwHandoff(thread, ctx, {
+	const result = await chooseBringToMain(thread, ctx, {
 		showMenu: async (_ctx, title, options) => {
 			prompts.push({ title, options: [...options] });
 			const value = selections.shift();
@@ -339,16 +339,16 @@ test("handoff scope menu offers the approved choices and selects a question-to-e
 			"Cancel",
 		],
 	});
-	assert.equal(result.kind, "handoff");
-	assert.doesNotMatch(result.kind === "handoff" ? result.draft : "", /Q1|A1/);
-	assert.match(result.kind === "handoff" ? result.draft : "", /Q2[\s\S]*A2/);
+	assert.equal(result.kind, "bringToMain");
+	assert.doesNotMatch(result.kind === "bringToMain" ? result.draft : "", /Q1|A1/);
+	assert.match(result.kind === "bringToMain" ? result.draft : "", /Q2[\s\S]*A2/);
 });
 
-test("handoff scope menu propagates Ctrl+C as a side-thread close", async () => {
+test("bring-to-main scope menu propagates Ctrl+C as a side-thread close", async () => {
 	const thread = createSideThread("context");
 	thread.turns.push({ kind: "answered", question: "Q", answer: "A", response: response("A") });
 
-	const result = await chooseBtwHandoff(thread, { ui: {} } as never, {
+	const result = await chooseBringToMain(thread, { ui: {} } as never, {
 		showMenu: async () => ({ kind: "close" }),
 	});
 
@@ -471,7 +471,7 @@ test("cancelling an in-progress side answer exits without reopening the composer
 	assert.deepEqual(notifications, [{ message: "Cancelled", level: "info" }]);
 });
 
-test("cancelled handoff selection restores the unsubmitted side-question draft", async () => {
+test("cancelled bring-to-main selection restores the unsubmitted side-question draft", async () => {
 	const ctx = {
 		ui: { notify() {} },
 		sessionManager: { getBranch: () => [] },
@@ -496,10 +496,10 @@ test("cancelled handoff selection restores the unsubmitted side-question draft",
 				drafts.push(draft);
 				interactions += 1;
 				return interactions === 1
-					? { kind: "promote", questionDraft: "unfinished question" }
+					? { kind: "bringToMain", questionDraft: "unfinished question" }
 					: { kind: "close" };
 			},
-			chooseHandoff: async () => ({ kind: "back" }),
+			chooseBringToMain: async () => ({ kind: "back" }),
 		},
 	});
 
@@ -532,11 +532,11 @@ test("cancelled main-editor loading returns to the side composer with its draft"
 				drafts.push(draft);
 				interactions += 1;
 				return interactions === 1
-					? { kind: "promote", questionDraft: "unfinished question" }
+					? { kind: "bringToMain", questionDraft: "unfinished question" }
 					: { kind: "close" };
 			},
-			chooseHandoff: async () => ({ kind: "handoff", draft: "selected draft" }),
-			deliverHandoff: async () => "back",
+			chooseBringToMain: async () => ({ kind: "bringToMain", draft: "selected draft" }),
+			deliverBringToMain: async () => "back",
 		},
 	});
 
@@ -544,7 +544,7 @@ test("cancelled main-editor loading returns to the side composer with its draft"
 	assert.deepEqual(result, { kind: "closed" });
 });
 
-test("side-thread command loop loads an explicit handoff without mutating the session", async () => {
+test("side-thread command loop loads an explicit bring-to-main draft without mutating the session", async () => {
 	const branch = [{ type: "message", message: { role: "user", content: "main" } }];
 	const ctx = {
 		ui: { notify() {} },
@@ -565,12 +565,12 @@ test("side-thread command loop loads an explicit handoff without mutating the se
 				thread.turns.push({ kind: "answered", question: "Q1", answer: "A1", response: assistant });
 				return { kind: "answered", response: assistant, answer: "A1" };
 			},
-			interact: async () => ({ kind: "promote", questionDraft: "" }),
-			chooseHandoff: async () => ({
-				kind: "handoff",
+			interact: async () => ({ kind: "bringToMain", questionDraft: "" }),
+			chooseBringToMain: async () => ({
+				kind: "bringToMain",
 				draft: "selected draft",
 			}),
-			deliverHandoff: async (draft) => {
+			deliverBringToMain: async (draft) => {
 				delivered.push(draft);
 				return "loaded";
 			},
@@ -582,7 +582,7 @@ test("side-thread command loop loads an explicit handoff without mutating the se
 	assert.equal(branch.length, 1);
 });
 
-test("appending a handoff preserves editor updates made while the conflict menu is open", async () => {
+test("appending a bring-to-main draft preserves editor updates made while the conflict menu is open", async () => {
 	let editor = "original editor";
 	let usedOverlay = false;
 	const ctx = {
@@ -602,14 +602,14 @@ test("appending a handoff preserves editor updates made while the conflict menu 
 		},
 	} as never;
 
-	const result = await loadHandoffIntoMainEditor("handoff", ctx);
+	const result = await loadBringToMainDraft("brought context", ctx);
 
 	assert.equal(result, "loaded");
 	assert.equal(usedOverlay, true);
-	assert.equal(editor, "newer editor\n\nhandoff");
+	assert.equal(editor, "newer editor\n\nbrought context");
 });
 
-test("cancelling handoff loading preserves editor updates made while the menu is open", async () => {
+test("cancelling bring-to-main loading preserves editor updates made while the menu is open", async () => {
 	let editor = "original editor";
 	const ctx = {
 		ui: {
@@ -627,7 +627,7 @@ test("cancelling handoff loading preserves editor updates made while the menu is
 		},
 	} as never;
 
-	const result = await loadHandoffIntoMainEditor("handoff", ctx);
+	const result = await loadBringToMainDraft("brought context", ctx);
 
 	assert.equal(result, "back");
 	assert.equal(editor, "newer editor");
@@ -661,7 +661,7 @@ test("empty transcript composer accepts the first side-thread question", () => {
 	assert.deepEqual(actions, [{ kind: "submit", question: "first question" }]);
 });
 
-test("transcript offers opt-in promotion only after a successful answer", () => {
+test("transcript offers opt-in bring-to-main action only after a successful answer", () => {
 	initTheme("dark");
 	const actions: unknown[] = [];
 	const tui = { terminal: { rows: 24 }, requestRender() {} };
@@ -690,10 +690,10 @@ test("transcript offers opt-in promotion only after a successful answer", () => 
 	assert.match(answered.render(29).join("\n"), /Ctrl\+R/);
 	answered.handleInput("\u0012");
 
-	assert.deepEqual(actions, [{ kind: "promote", questionDraft: "" }]);
+	assert.deepEqual(actions, [{ kind: "bringToMain", questionDraft: "" }]);
 });
 
-test("promotion preserves expanded large-paste content in the composer draft", () => {
+test("bring-to-main preserves expanded large-paste content in the composer draft", () => {
 	initTheme("dark");
 	const actions: unknown[] = [];
 	const tui = { terminal: { rows: 24 }, requestRender() {} };
@@ -715,7 +715,7 @@ test("promotion preserves expanded large-paste content in the composer draft", (
 	pager.handleInput(`\u001b[200~${pasted}\u001b[201~`);
 	pager.handleInput("\u0012");
 
-	assert.deepEqual(actions, [{ kind: "promote", questionDraft: pasted }]);
+	assert.deepEqual(actions, [{ kind: "bringToMain", questionDraft: pasted }]);
 });
 
 test("character ranges preserve a selected newline at the next line start", () => {

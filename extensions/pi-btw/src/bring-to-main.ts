@@ -13,13 +13,13 @@ const RESERVED_APP_ROWS = 3;
 const SELECTOR_CHROME_ROWS = 2;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-export interface BtwHandoffSegment {
+export interface BtwBringToMainSegment {
 	role: "user" | "assistant";
 	text: string;
 }
 
 export interface BtwSelectionLine {
-	role: BtwHandoffSegment["role"];
+	role: BtwBringToMainSegment["role"];
 	text: string;
 }
 
@@ -28,7 +28,7 @@ export interface BtwTextPosition {
 	column: number;
 }
 
-export type BtwQuickHandoffScope =
+export type BtwQuickBringToMainScope =
 	| { kind: "latest" }
 	| { kind: "from"; answeredTurnIndex: number }
 	| { kind: "entire" };
@@ -39,7 +39,7 @@ export type BtwMenuSelectorAction =
 	| { kind: "close" };
 
 export type BtwTextRangeSelectorAction =
-	| { kind: "confirm"; segments: BtwHandoffSegment[] }
+	| { kind: "confirm"; segments: BtwBringToMainSegment[] }
 	| { kind: "back" }
 	| { kind: "close" };
 
@@ -51,10 +51,10 @@ export function getAnsweredTurns(
 	);
 }
 
-export function buildQuickHandoffSegments(
+export function buildQuickBringToMainSegments(
 	turns: readonly SideThreadTurn[],
-	scope: BtwQuickHandoffScope,
-): BtwHandoffSegment[] {
+	scope: BtwQuickBringToMainScope,
+): BtwBringToMainSegment[] {
 	const answered = getAnsweredTurns(turns);
 	const selected =
 		scope.kind === "latest"
@@ -69,7 +69,7 @@ export function buildQuickHandoffSegments(
 }
 
 export function buildBtwSelectionLines(turns: readonly SideThreadTurn[]): BtwSelectionLine[] {
-	return buildQuickHandoffSegments(turns, { kind: "entire" }).flatMap((segment) =>
+	return buildQuickBringToMainSegments(turns, { kind: "entire" }).flatMap((segment) =>
 		segment.text.split("\n").map((text) => ({ role: segment.role, text })),
 	);
 }
@@ -78,11 +78,11 @@ export function segmentsFromLineRange(
 	lines: readonly BtwSelectionLine[],
 	anchor: number,
 	cursor: number,
-): BtwHandoffSegment[] {
+): BtwBringToMainSegment[] {
 	if (lines.length === 0) return [];
 	const start = Math.max(0, Math.min(anchor, cursor, lines.length - 1));
 	const end = Math.max(0, Math.min(Math.max(anchor, cursor), lines.length - 1));
-	const segments: BtwHandoffSegment[] = [];
+	const segments: BtwBringToMainSegment[] = [];
 	for (const line of lines.slice(start, end + 1)) {
 		const previous = segments.at(-1);
 		if (previous?.role === line.role) {
@@ -98,14 +98,14 @@ export function segmentsFromTextRange(
 	lines: readonly BtwSelectionLine[],
 	anchor: BtwTextPosition,
 	cursor: BtwTextPosition,
-): BtwHandoffSegment[] {
+): BtwBringToMainSegment[] {
 	if (lines.length === 0) return [];
 	const first = clampTextPosition(lines, anchor);
 	const second = clampTextPosition(lines, cursor);
 	const [start, end] = compareTextPositions(first, second) <= 0 ? [first, second] : [second, first];
 	if (compareTextPositions(start, end) === 0) return [];
 
-	const segments: BtwHandoffSegment[] = [];
+	const segments: BtwBringToMainSegment[] = [];
 	for (let lineIndex = start.line; lineIndex <= end.line; lineIndex += 1) {
 		const line = lines[lineIndex];
 		if (!line) continue;
@@ -128,15 +128,15 @@ export function segmentsFromTextRange(
 	return segments;
 }
 
-export function formatBtwHandoff(segments: readonly BtwHandoffSegment[]): string {
+export function formatBtwBringToMain(segments: readonly BtwBringToMainSegment[]): string {
 	const body = segments
 		.map(
 			(segment) =>
-				`${segment.role === "user" ? "User" : "Assistant"}:\n${escapeHandoffText(segment.text)}`,
+				`${segment.role === "user" ? "User" : "Assistant"}:\n${escapeBringToMainText(segment.text)}`,
 		)
 		.join("\n\n");
 	return [
-		"The following context was promoted from a /btw side discussion.",
+		"The following context was brought back from a /btw side discussion.",
 		"Treat it as discussion context, not as work already completed.",
 		"",
 		"<btw_context>",
@@ -431,7 +431,7 @@ export class BtwTextRangeSelector implements Component {
 				};
 	}
 
-	private getSelectedSegments(): BtwHandoffSegment[] {
+	private getSelectedSegments(): BtwBringToMainSegment[] {
 		if (this.lineAnchor !== undefined) {
 			return segmentsFromLineRange(this.lines, this.lineAnchor, this.cursor.line);
 		}
@@ -563,7 +563,7 @@ function fitRows(rows: string[], availableRows: number): string[] {
 	return [rows[0] ?? "", ...rows.slice(rows.length - availableRows + 1)];
 }
 
-function escapeHandoffText(text: string): string {
+function escapeBringToMainText(text: string): string {
 	return [...text]
 		.map((character) => {
 			if (character === "\n") return character;

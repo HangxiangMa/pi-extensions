@@ -11,7 +11,7 @@ Use it when you want to ask a temporary question, inspect context, or get a shor
 - Adds a `/btw` side-thread command to Pi, with an optional initial question.
 - Answers side questions in a temporary, scrollable UI.
 - Supports follow-up questions in the same ephemeral side thread.
-- Optionally promotes the latest answer, a question-to-end suffix, an exact line range, or the entire side thread into the main editor.
+- Optionally brings the latest answer, a question-to-end suffix, an exact line range, or the entire side thread into the main editor.
 - Uses the current session branch as context.
 - Uses Pi's current model or an independent model selected in `pi-btw.json`.
 - Inherits Pi's current thinking level or uses a fixed level from `pi-btw.json`.
@@ -73,13 +73,13 @@ line, then use `Up`/`Down` to extend by whole lines; press `Space` again to clea
 use the arrow keys to move the cursor and `Shift`+arrow keys to extend a character-level
 selection. Starting a Shift selection replaces any active line selection. Pi's configured keys
 still control vertical navigation, confirmation, and going back (`Up`/`Down`, `Enter`, and
-`Escape` by default). `Ctrl+C` closes the side thread without a handoff. Selection follows raw
+`Escape` by default). `Ctrl+C` closes the side thread without bringing anything to main. Selection follows raw
 source text rather than terminal-wrapped visual rows.
 
-A handoff closes the side thread and loads a deterministic, editable context block into Pi's
+Bringing context to main closes the side thread and loads a deterministic, editable context block into Pi's
 main editor. It never sends the draft automatically. If another extension populated the main
 editor while `/btw` was open, pi-btw asks whether to append, replace, or cancel. Without an
-explicit handoff, closing `/btw`, reloading Pi, or switching sessions still discards the side
+explicit bring-to-main action, closing `/btw`, reloading Pi, or switching sessions still discards the side
 thread without adding it to the main conversation.
 
 ## ⚙️ Model and thinking level
@@ -131,7 +131,7 @@ extensions/pi-btw/
 ├── src/
 │   ├── index.ts
 │   ├── btw.ts
-│   ├── handoff.ts
+│   ├── bring-to-main.ts
 │   ├── side-thread.ts
 │   └── transcript-pager.ts
 ├── README.md

@@ -27,13 +27,13 @@ const RESERVED_APP_LINES = 3;
 
 export type TranscriptPagerAction =
 	| { kind: "submit"; question: string }
-	| { kind: "promote"; questionDraft: string }
+	| { kind: "bringToMain"; questionDraft: string }
 	| { kind: "close" };
 
 export class BtwTranscriptPager implements Component {
 	private readonly transcriptComponents: Component[];
 	private readonly editor: Editor;
-	private readonly canPromote: boolean;
+	private readonly canBringToMain: boolean;
 	private scrollOffset = 0;
 	private lastContentLineCount = 0;
 	private lastViewportHeight = 1;
@@ -50,7 +50,7 @@ export class BtwTranscriptPager implements Component {
 		options: { startAtBottom?: boolean; initialQuestion?: string } = {},
 	) {
 		this.transcriptComponents = buildTranscriptComponents(turns, this.theme);
-		this.canPromote = turns.some((turn) => turn.kind === "answered");
+		this.canBringToMain = turns.some((turn) => turn.kind === "answered");
 		this.followBottom = options.startAtBottom ?? false;
 		const editorTheme: EditorTheme = {
 			borderColor: (text) => this.theme.fg("accent", text),
@@ -117,9 +117,9 @@ export class BtwTranscriptPager implements Component {
 			this.onAction({ kind: "close" });
 			return;
 		}
-		if (this.canPromote && matchesKey(data, Key.ctrl("r"))) {
+		if (this.canBringToMain && matchesKey(data, Key.ctrl("r"))) {
 			this.finished = true;
-			this.onAction({ kind: "promote", questionDraft: this.editor.getExpandedText() });
+			this.onAction({ kind: "bringToMain", questionDraft: this.editor.getExpandedText() });
 			return;
 		}
 		if (matchesKey(data, Key.pageUp)) {
@@ -150,11 +150,11 @@ export class BtwTranscriptPager implements Component {
 			return truncateToWidth(this.theme.fg("warning", warning), width);
 		}
 		const scrollable = this.getMaxScrollOffset() > 0;
-		const fullBase = this.canPromote
+		const fullBase = this.canBringToMain
 			? "btw • Enter send • Ctrl+R bring to main • Ctrl+C exit"
 			: "btw • Enter send • Ctrl+C exit";
 		const fallbackBase = "btw • Enter • Ctrl+C";
-		const compactBase = this.canPromote ? "btw • Enter • Ctrl+R • Ctrl+C" : fallbackBase;
+		const compactBase = this.canBringToMain ? "btw • Enter • Ctrl+R • Ctrl+C" : fallbackBase;
 		let hints =
 			visibleWidth(fullBase) <= width
 				? fullBase
@@ -164,7 +164,7 @@ export class BtwTranscriptPager implements Component {
 		if (scrollable) {
 			const history = ` • ${this.scrollOffset > 0 ? "↑ older" : "↓ newer"} • PgUp/PgDn history`;
 			const compactHistory = " • PgUp/PgDn";
-			const compactScrollable = this.canPromote
+			const compactScrollable = this.canBringToMain
 				? "Enter • Ctrl+R • Ctrl+C • PgUp/PgDn"
 				: `${fallbackBase}${compactHistory}`;
 			if (visibleWidth(`${hints}${history}`) <= width) {

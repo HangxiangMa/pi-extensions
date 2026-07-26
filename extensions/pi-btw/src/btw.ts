@@ -11,10 +11,10 @@ import {
 	BtwMenuSelector,
 	type BtwMenuSelectorAction,
 	BtwTextRangeSelector,
-	buildQuickHandoffSegments,
-	formatBtwHandoff,
+	buildQuickBringToMainSegments,
+	formatBtwBringToMain,
 	getAnsweredTurns,
-} from "./handoff.js";
+} from "./bring-to-main.js";
 import {
 	BTW_THINKING_LEVELS,
 	type BtwThinkingLevel,
@@ -293,15 +293,18 @@ async function resolveBtwModelWithLoader(
 interface RunBtwThreadDependencies {
 	ask?: typeof askThreadQuestion;
 	interact?: typeof showThreadComposer;
-	chooseHandoff?: typeof chooseBtwHandoff;
-	deliverHandoff?: typeof loadHandoffIntoMainEditor;
+	chooseBringToMain?: typeof chooseBringToMain;
+	deliverBringToMain?: typeof loadBringToMainDraft;
 }
 
 export type BtwThreadResult = { kind: "closed" };
 
-type BtwHandoffChoice = BtwThreadResult | { kind: "handoff"; draft: string } | { kind: "back" };
+type BtwBringToMainChoice =
+	| BtwThreadResult
+	| { kind: "bringToMain"; draft: string }
+	| { kind: "back" };
 
-type BtwHandoffDelivery = "loaded" | "back" | "closed";
+type BtwBringToMainDelivery = "loaded" | "back" | "closed";
 
 interface RunBtwThreadOptions {
 	initialQuestion?: string;
@@ -320,8 +323,8 @@ export async function runBtwThread({
 }: RunBtwThreadOptions): Promise<BtwThreadResult> {
 	const ask = dependencies.ask ?? askThreadQuestion;
 	const interact = dependencies.interact ?? showThreadComposer;
-	const chooseHandoff = dependencies.chooseHandoff ?? chooseBtwHandoff;
-	const deliverHandoff = dependencies.deliverHandoff ?? loadHandoffIntoMainEditor;
+	const chooseBringToMainAction = dependencies.chooseBringToMain ?? chooseBringToMain;
+	const deliverBringToMainDraft = dependencies.deliverBringToMain ?? loadBringToMainDraft;
 	const thread = createSideThread(buildConversationContext(ctx.sessionManager.getBranch()));
 	let pendingQuestion = initialQuestion;
 	let composerDraft: string | undefined;
@@ -330,14 +333,14 @@ export async function runBtwThread({
 		if (!pendingQuestion) {
 			const action = await interact(thread, thread.turns.length > 0, ctx, composerDraft);
 			if (action.kind === "close") return { kind: "closed" };
-			if (action.kind === "promote") {
-				const choice = await chooseHandoff(thread, ctx);
+			if (action.kind === "bringToMain") {
+				const choice = await chooseBringToMainAction(thread, ctx);
 				if (choice.kind === "closed") return choice;
 				if (choice.kind === "back") {
 					composerDraft = action.questionDraft;
 					continue;
 				}
-				const delivery = await deliverHandoff(choice.draft, ctx);
+				const delivery = await deliverBringToMainDraft(choice.draft, ctx);
 				if (delivery === "loaded" || delivery === "closed") return { kind: "closed" };
 				composerDraft = action.questionDraft;
 				continue;
@@ -363,15 +366,15 @@ export async function runBtwThread({
 	}
 }
 
-interface ChooseBtwHandoffDependencies {
+interface ChooseBringToMainDependencies {
 	showMenu?: typeof showBtwMenu;
 }
 
-export async function chooseBtwHandoff(
+export async function chooseBringToMain(
 	thread: SideThread,
 	ctx: ExtensionCommandContext,
-	dependencies: ChooseBtwHandoffDependencies = {},
-): Promise<BtwHandoffChoice> {
+	dependencies: ChooseBringToMainDependencies = {},
+): Promise<BtwBringToMainChoice> {
 	const answered = getAnsweredTurns(thread.turns);
 	if (answered.length === 0) return { kind: "back" };
 	const showMenu = dependencies.showMenu ?? showBtwMenu;
@@ -389,14 +392,18 @@ export async function chooseBtwHandoff(
 		const scope = scopeResult.value;
 		if (scope === "Latest question and answer") {
 			return {
-				kind: "handoff",
-				draft: formatBtwHandoff(buildQuickHandoffSegments(thread.turns, { kind: "latest" })),
+				kind: "bringToMain",
+				draft: formatBtwBringToMain(
+					buildQuickBringToMainSegments(thread.turns, { kind: "latest" }),
+				),
 			};
 		}
 		if (scope === "Entire side thread") {
 			return {
-				kind: "handoff",
-				draft: formatBtwHandoff(buildQuickHandoffSegments(thread.turns, { kind: "entire" })),
+				kind: "bringToMain",
+				draft: formatBtwBringToMain(
+					buildQuickBringToMainSegments(thread.turns, { kind: "entire" }),
+				),
 			};
 		}
 		if (scope === "From a question onward…") {
@@ -409,19 +416,19 @@ export async function chooseBtwHandoff(
 			const answeredTurnIndex = questions.indexOf(questionResult.value);
 			if (answeredTurnIndex < 0) continue;
 			return {
-				kind: "handoff",
-				draft: formatBtwHandoff(
-					buildQuickHandoffSegments(thread.turns, { kind: "from", answeredTurnIndex }),
+				kind: "bringToMain",
+				draft: formatBtwBringToMain(
+					buildQuickBringToMainSegments(thread.turns, { kind: "from", answeredTurnIndex }),
 				),
 			};
 		}
 
-		const selectedRange = await ctx.ui.custom<BtwHandoffChoice>(
+		const selectedRange = await ctx.ui.custom<BtwBringToMainChoice>(
 			(tui, theme, keybindings, done) =>
 				new BtwTextRangeSelector(tui, theme, keybindings, thread.turns, (action) => {
 					if (action.kind === "back") done({ kind: "back" });
 					else if (action.kind === "close") done({ kind: "closed" });
-					else done({ kind: "handoff", draft: formatBtwHandoff(action.segments) });
+					else done({ kind: "bringToMain", draft: formatBtwBringToMain(action.segments) });
 				}),
 		);
 		if (selectedRange.kind === "back") continue;
@@ -442,10 +449,10 @@ async function showBtwMenu(
 	);
 }
 
-export async function loadHandoffIntoMainEditor(
+export async function loadBringToMainDraft(
 	draft: string,
 	ctx: ExtensionCommandContext,
-): Promise<BtwHandoffDelivery> {
+): Promise<BtwBringToMainDelivery> {
 	const existing = ctx.ui.getEditorText();
 	if (!existing.trim()) {
 		ctx.ui.setEditorText(draft);
