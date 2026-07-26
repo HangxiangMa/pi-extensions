@@ -89,6 +89,27 @@ test("settings loading distinguishes missing, valid, warned, and invalid files",
 	}
 });
 
+test("settings loads are bounded and cancellable", async () => {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-image-drop-settings-bounds-"));
+	const settingsPath = path.join(directory, "pi-image-drop.json");
+	try {
+		await writeFile(settingsPath, JSON.stringify({ padding: "x".repeat(64 * 1024) }));
+		const oversized = await loadSettings(settingsPath);
+		assert.equal(oversized.kind, "invalid");
+		assert.match("warning" in oversized ? oversized.warning : "", /exceeds 65536 bytes/i);
+
+		await writeFile(settingsPath, "{}\n");
+		const controller = new AbortController();
+		controller.abort();
+		await assert.rejects(
+			loadSettings(settingsPath, controller.signal),
+			(error: unknown) => error instanceof Error && error.name === "AbortError",
+		);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("settings saves are atomic and preserve unknown fields", async () => {
 	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-image-drop-settings-save-"));
 	const settingsPath = path.join(directory, "pi-image-drop.json");
@@ -176,6 +197,46 @@ test("settings loads wait for an earlier queued save", async () => {
 		const loaded = await loading;
 		assert.equal(loaded.settings.startOnSessionStart, true);
 	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("settings load cancellation does not wait for a pending write", async () => {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-image-drop-settings-read-abort-"));
+	const settingsPath = path.join(directory, "pi-image-drop.json");
+	let releaseSave!: () => void;
+	let markSaveStarted!: () => void;
+	const saveStarted = new Promise<void>((resolve) => {
+		markSaveStarted = resolve;
+	});
+	const release = new Promise<void>((resolve) => {
+		releaseSave = resolve;
+	});
+	try {
+		await writeFile(settingsPath, "{}\n");
+		const saving = saveSettings({ ...DEFAULT_SETTINGS, maxImages: 4 }, settingsPath, {
+			rename: async (source, destination) => {
+				markSaveStarted();
+				await release;
+				await rename(source, destination);
+			},
+		});
+		await saveStarted;
+		const controller = new AbortController();
+		const loading = loadSettings(settingsPath, controller.signal);
+		controller.abort();
+		const outcome = await Promise.race([
+			loading.then(
+				() => "loaded",
+				(error: unknown) => (error instanceof Error ? error.name : String(error)),
+			),
+			new Promise<string>((resolve) => setTimeout(() => resolve("timeout"), 25)),
+		]);
+		assert.equal(outcome, "AbortError");
+		releaseSave();
+		await saving;
+	} finally {
+		releaseSave?.();
 		await rm(directory, { recursive: true, force: true });
 	}
 });

@@ -10,13 +10,17 @@ import type {
 import { BatchError, BatchStore, digestImages, type ProcessedImage } from "./batch.js";
 import { ImageProcessor } from "./images.js";
 import {
+	type ConfirmDialogResult,
 	type ImageDropLimitsMenuState,
 	type ImageDropSettingsMenuOptions,
+	type InputDialogResult,
 	type LimitSettingAction,
 	type MainMenuAction,
 	type MenuLoadResult,
 	runImageDropMenuLoad,
+	showImageDropConfirmDialog,
 	showImageDropHelp,
+	showImageDropInputDialog,
 	showImageDropLimitsMenu,
 	showImageDropMainMenu,
 	showImageDropSettingsMenu,
@@ -76,6 +80,8 @@ export interface RuntimeDependencies {
 		ctx: ExtensionCommandContext,
 		state: ImageDropLimitsMenuState,
 	): ReturnType<typeof showImageDropLimitsMenu>;
+	showConfirm(ctx: ExtensionContext, title: string, message: string): Promise<ConfirmDialogResult>;
+	showInput(ctx: ExtensionContext, title: string, initialValue: string): Promise<InputDialogResult>;
 	saveSettings: typeof saveSettings;
 	settingsFilePath: typeof settingsFilePath;
 }
@@ -91,6 +97,8 @@ const DEFAULT_DEPENDENCIES: RuntimeDependencies = {
 	showHelp: showImageDropHelp,
 	showSettingsMenu: showImageDropSettingsMenu,
 	showLimitsMenu: showImageDropLimitsMenu,
+	showConfirm: showImageDropConfirmDialog,
+	showInput: showImageDropInputDialog,
 	saveSettings,
 	settingsFilePath,
 };
@@ -162,12 +170,18 @@ export class ImageDropRuntime {
 		await this.releaseServer();
 		previousBatch?.close();
 		if (generation !== this.generation) return;
-		const result = await this.dependencies.loadSettings();
+		this.sessionAbort = new AbortController();
+		let result: Awaited<ReturnType<typeof loadSettings>>;
+		try {
+			result = await this.dependencies.loadSettings(undefined, this.sessionAbort.signal);
+		} catch (error) {
+			if (generation !== this.generation || this.sessionAbort.signal.aborted) return;
+			throw error;
+		}
 		if (generation !== this.generation) return;
 		this.settings = result.settings;
 		this.batch = new BatchStore(result.settings);
 		this.processor = this.dependencies.createProcessor();
-		this.sessionAbort = new AbortController();
 		this.context = ctx;
 		this.closed = false;
 		this.lastPiSettingsWarning = "";
@@ -348,7 +362,7 @@ export class ImageDropRuntime {
 				try {
 					const opened = await this.presentLink(ctx, true);
 					if (!this.isCurrentMenu(generation)) return;
-					if (opened) return;
+					if (opened !== "cancelled") return;
 				} catch (error) {
 					if (!this.isCurrentMenu(generation)) return;
 					ctx.ui.notify(`Image Drop could not start: ${formatError(error)}`, "error");
@@ -378,10 +392,16 @@ export class ImageDropRuntime {
 		for (;;) {
 			const batch = this.batch;
 			if (!batch || !this.isCurrentMenu(generation)) return "close";
+			const sessionSignal = this.sessionAbort.signal;
 			const loaded = await this.dependencies.loadStatus(
 				ctx,
 				"Refreshing Image Drop status…",
-				(signal) => this.dependencies.readPiSettings(ctx.cwd, ctx.isProjectTrusted(), signal),
+				(signal) =>
+					this.dependencies.readPiSettings(
+						ctx.cwd,
+						ctx.isProjectTrusted(),
+						AbortSignal.any([signal, sessionSignal]),
+					),
 			);
 			if (!this.isCurrentMenu(generation) || loaded.kind === "closed") return "close";
 			if (loaded.kind === "cancelled") return "back";
@@ -413,7 +433,7 @@ export class ImageDropRuntime {
 			if (action === "refresh") continue;
 			try {
 				const opened = await this.presentLink(ctx, true);
-				if (!this.isCurrentMenu(generation) || opened) return "close";
+				if (!this.isCurrentMenu(generation) || opened !== "cancelled") return "close";
 			} catch (error) {
 				if (!this.isCurrentMenu(generation)) return "close";
 				ctx.ui.notify(`Image Drop could not start: ${formatError(error)}`, "error");
@@ -426,8 +446,23 @@ export class ImageDropRuntime {
 		generation: number,
 	): Promise<"back" | "close"> {
 		for (;;) {
-			const result = await this.dependencies.loadSettings();
-			if (!this.isCurrentMenu(generation)) return "close";
+			const sessionSignal = this.sessionAbort.signal;
+			const loaded = await this.dependencies.loadStatus(
+				ctx,
+				"Loading Image Drop settings…",
+				(signal) =>
+					this.dependencies.loadSettings(undefined, AbortSignal.any([signal, sessionSignal])),
+			);
+			if (!this.isCurrentMenu(generation) || loaded.kind === "closed") return "close";
+			if (loaded.kind === "cancelled") return "back";
+			if (loaded.kind === "error") {
+				ctx.ui.notify(
+					`Image Drop settings could not be loaded: ${formatError(loaded.error)}`,
+					"error",
+				);
+				return "back";
+			}
+			const result = loaded.value;
 			const invalid = result.kind === "invalid";
 			const path = this.dependencies.settingsFilePath();
 			let settings = { ...result.settings };
@@ -497,12 +532,13 @@ export class ImageDropRuntime {
 					ctx.ui.notify("No resource-limit changes to save.", "info");
 					continue;
 				}
-				const confirmed = await ctx.ui.confirm(
+				const confirmation = await this.dependencies.showConfirm(
+					ctx,
 					"Save resource limits for future sessions?",
 					`${changes.join("\n")}\n\nThese limits apply when the next Pi session starts. Higher limits may increase memory use or provider failures.`,
 				);
-				if (!this.isCurrentMenu(generation)) return "close";
-				if (!confirmed) continue;
+				if (!this.isCurrentMenu(generation) || confirmation === "close") return "close";
+				if (confirmation !== "confirmed") continue;
 				try {
 					await this.dependencies.saveSettings(draft);
 					if (!this.isCurrentMenu(generation)) return "close";
@@ -517,10 +553,14 @@ export class ImageDropRuntime {
 					continue;
 				}
 			}
-			const input = await ctx.ui.input(limitPrompt(action), limitInputValue(action, draft));
-			if (!this.isCurrentMenu(generation)) return "close";
-			if (input === undefined) continue;
-			const parsed = parseLimitInput(action, input);
+			const input = await this.dependencies.showInput(
+				ctx,
+				limitPrompt(action),
+				limitInputValue(action, draft),
+			);
+			if (!this.isCurrentMenu(generation) || input.kind === "closed") return "close";
+			if (input.kind === "cancelled") continue;
+			const parsed = parseLimitInput(action, input.value);
 			if (parsed === undefined || parsed > HARD_LIMITS[action]) {
 				ctx.ui.notify(`Enter ${limitRange(action)}.`, "warning");
 				continue;
@@ -545,21 +585,26 @@ export class ImageDropRuntime {
 		return `Draft: ${ready}/${state.items.length} ready · ${processing} processing · ${errors} need attention · ${formatBytes(state.totalSourceBytes)}`;
 	}
 
-	private async presentLink(ctx: ExtensionContext, confirmRotation = false): Promise<boolean> {
+	private async presentLink(
+		ctx: ExtensionContext,
+		confirmRotation = false,
+	): Promise<"opened" | "cancelled" | "closed"> {
 		const generation = this.generation;
 		const server = await this.ensureServer(ctx);
 		if (generation !== this.generation || this.closed) {
 			throw new Error("the Pi session changed while opening Image Drop");
 		}
 		if (confirmRotation && server.hasUnusedLink?.()) {
-			const confirmed = await ctx.ui.confirm(
+			const confirmation = await this.dependencies.showConfirm(
+				ctx,
 				"Create a new staging link?",
 				"The previous unused Image Drop link will stop working.",
 			);
 			if (generation !== this.generation || this.closed) {
 				throw new Error("the Pi session changed while opening Image Drop");
 			}
-			if (!confirmed) return false;
+			if (confirmation === "close") return "closed";
+			if (confirmation !== "confirmed") return "cancelled";
 		}
 		const link = server.issueLink();
 		if (this.batch?.publicState().phase === "empty") {
@@ -568,7 +613,7 @@ export class ImageDropRuntime {
 			this.updateWidget(ctx);
 		}
 		ctx.ui.notify(`Image Drop: ${link}`, "info");
-		return true;
+		return "opened";
 	}
 
 	private async ensureServer(ctx: ExtensionContext): Promise<ServerControl> {

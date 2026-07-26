@@ -5,6 +5,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const SETTINGS_FILE = "pi-image-drop.json";
 const MIB = 1024 * 1024;
+const MAX_SETTINGS_BYTES = 64 * 1024;
 
 export interface ImageDropLimits {
 	maxImages: number;
@@ -81,15 +82,26 @@ export function settingsFilePath(): string {
 	return join(getAgentDir(), SETTINGS_FILE);
 }
 
-export async function loadSettings(path = settingsFilePath()): Promise<SettingsLoadResult> {
-	await (saveQueues.get(path) ?? Promise.resolve()).catch(() => undefined);
+export async function loadSettings(
+	path = settingsFilePath(),
+	signal?: AbortSignal,
+): Promise<SettingsLoadResult> {
+	await waitForPendingSave(path, signal);
+	if (signal?.aborted) throw signal.reason;
 	let text: string;
 	try {
-		const stats = await lstat(path);
+		const stats = await abortable(lstat(path), signal);
 		if (stats.isSymbolicLink()) return invalid(path, "symbolic links are not accepted");
 		if (!stats.isFile()) return invalid(path, "settings path is not a regular file");
-		text = await readFile(path, "utf8");
+		if (stats.size > MAX_SETTINGS_BYTES) {
+			return invalid(path, `settings file exceeds ${MAX_SETTINGS_BYTES} bytes`);
+		}
+		text = await readFile(path, { encoding: "utf8", signal });
+		if (Buffer.byteLength(text, "utf8") > MAX_SETTINGS_BYTES) {
+			return invalid(path, `settings file exceeds ${MAX_SETTINGS_BYTES} bytes`);
+		}
 	} catch (error) {
+		if (signal?.aborted) throw error;
 		if (isNodeError(error) && error.code === "ENOENT") {
 			return { kind: "missing", settings: { ...DEFAULT_SETTINGS } };
 		}
@@ -137,6 +149,30 @@ export async function saveSettings(
 	}
 }
 
+function abortable<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+	if (!signal) return operation;
+	if (signal.aborted) return Promise.reject(signal.reason);
+	return new Promise((resolve, reject) => {
+		const onAbort = () => reject(signal.reason);
+		signal.addEventListener("abort", onAbort, { once: true });
+		void operation.then(
+			(value) => {
+				signal.removeEventListener("abort", onAbort);
+				resolve(value);
+			},
+			(error: unknown) => {
+				signal.removeEventListener("abort", onAbort);
+				reject(error);
+			},
+		);
+	});
+}
+
+function waitForPendingSave(path: string, signal?: AbortSignal): Promise<void> {
+	const pending = (saveQueues.get(path) ?? Promise.resolve()).catch(() => undefined);
+	return abortable(pending, signal);
+}
+
 async function saveSettingsAtomic(
 	settings: ImageDropSettings,
 	path: string,
@@ -147,7 +183,14 @@ async function saveSettingsAtomic(
 		const stats = await lstat(path);
 		if (stats.isSymbolicLink()) throw new Error("symbolic links are not accepted");
 		if (!stats.isFile()) throw new Error("settings path is not a regular file");
-		const parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
+		if (stats.size > MAX_SETTINGS_BYTES) {
+			throw new Error(`settings file exceeds ${MAX_SETTINGS_BYTES} bytes`);
+		}
+		const existing = await readFile(path, "utf8");
+		if (Buffer.byteLength(existing, "utf8") > MAX_SETTINGS_BYTES) {
+			throw new Error(`settings file exceeds ${MAX_SETTINGS_BYTES} bytes`);
+		}
+		const parsed = JSON.parse(existing) as unknown;
 		if (!isRecord(parsed) || !normalizeSettings(parsed)) {
 			throw new Error("existing settings are malformed or invalid");
 		}
@@ -159,6 +202,9 @@ async function saveSettingsAtomic(
 	const temporaryPath = join(dirname(path), `.${SETTINGS_FILE}.${process.pid}.${randomUUID()}.tmp`);
 	try {
 		const contents = `${JSON.stringify({ ...document, ...settings }, null, "\t")}\n`;
+		if (Buffer.byteLength(contents, "utf8") > MAX_SETTINGS_BYTES) {
+			throw new Error(`settings document exceeds ${MAX_SETTINGS_BYTES} bytes`);
+		}
 		await (operations.writeFile ?? writeFile)(temporaryPath, contents, {
 			encoding: "utf8",
 			flag: "wx",

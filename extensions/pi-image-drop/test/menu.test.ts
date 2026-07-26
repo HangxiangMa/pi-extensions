@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
 import {
 	type ImageDropMenuState,
 	menuSummary,
 	runImageDropMenuLoad,
 	safeMenuText,
+	showImageDropConfirmDialog,
+	showImageDropInputDialog,
 	showImageDropLimitsMenu,
 	showImageDropMainMenu,
 	showImageDropSettingsMenu,
@@ -138,6 +140,71 @@ test("status loading distinguishes Escape back from Ctrl+C close", async () => {
 	}
 	assert.equal((await loadWith("\u001b")).kind, "cancelled");
 	assert.equal((await loadWith("\u0003")).kind, "closed");
+});
+
+test("disposing a menu loader aborts its owned task", async () => {
+	let signal: AbortSignal | undefined;
+	const context = createMockContext({
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 80);
+			harness.dispose();
+			return { kind: "closed" };
+		},
+	});
+	await runImageDropMenuLoad(context.ctx, "Loading…", async (received) => {
+		signal = received;
+		return new Promise<never>(() => undefined);
+	});
+	assert.equal(signal?.aborted, true);
+});
+
+test("nested dialogs distinguish cancellation from closing Image Drop", async () => {
+	async function customResult<T>(
+		input: string,
+		show: (ctx: ReturnType<typeof createMockContext>["ctx"]) => Promise<T>,
+	) {
+		const context = createMockContext({
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 80);
+				harness.handleInput(input);
+				return harness.result;
+			},
+		});
+		return show(context.ctx);
+	}
+	assert.equal(
+		await customResult("\u0003", (ctx) => showImageDropConfirmDialog(ctx, "Save?", "Review")),
+		"close",
+	);
+	assert.equal(
+		await customResult("\u001b", (ctx) => showImageDropConfirmDialog(ctx, "Save?", "Review")),
+		"cancelled",
+	);
+	assert.deepEqual(await customResult("\r", (ctx) => showImageDropInputDialog(ctx, "Limit", "4")), {
+		kind: "submitted",
+		value: "4",
+	});
+	assert.deepEqual(
+		await customResult("\u0003", (ctx) => showImageDropInputDialog(ctx, "Limit", "4")),
+		{ kind: "closed" },
+	);
+
+	let focusedRender = "";
+	const focused = createMockContext({
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 20);
+			harness.setFocused(true);
+			focusedRender = harness.render().join("\n");
+			harness.handleInput("\u0003");
+			return harness.result;
+		},
+	});
+	await showImageDropInputDialog(focused.ctx, "Limit", "4");
+	assert.equal(focusedRender.includes(CURSOR_MARKER), true);
+	for (const line of focusedRender.split("\n")) assert.ok(visibleWidth(line) <= 20);
 });
 
 test("action hints reflect callback-provided keybindings", async () => {

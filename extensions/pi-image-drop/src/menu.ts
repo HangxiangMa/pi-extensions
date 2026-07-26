@@ -1,10 +1,13 @@
 import {
 	BorderedLoader,
 	type ExtensionCommandContext,
+	type ExtensionContext,
 	getSettingsListTheme,
 } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
+	type Focusable,
+	Input,
 	Key,
 	matchesKey,
 	type SelectItem,
@@ -87,14 +90,18 @@ export function runImageDropMenuLoad<T>(
 ): Promise<MenuLoadResult<T>> {
 	return ctx.ui.custom<MenuLoadResult<T>>((tui, theme, _keybindings, done) => {
 		const loader = new BorderedLoader(tui, theme, label);
+		const taskAbort = new AbortController();
 		let settled = false;
 		const finish = (result: MenuLoadResult<T>) => {
 			if (settled) return;
 			settled = true;
 			done(result);
 		};
-		loader.onAbort = () => finish({ kind: "cancelled" });
-		void task(loader.signal).then(
+		loader.onAbort = () => {
+			taskAbort.abort();
+			finish({ kind: "cancelled" });
+		};
+		void task(taskAbort.signal).then(
 			(value) => finish({ kind: "completed", value }),
 			(error: unknown) => finish({ kind: "error", error }),
 		);
@@ -109,7 +116,10 @@ export function runImageDropMenuLoad<T>(
 				}
 				loader.handleInput(data);
 			},
-			dispose: () => loader.dispose(),
+			dispose() {
+				taskAbort.abort();
+				loader.dispose();
+			},
 		};
 	});
 }
@@ -142,6 +152,95 @@ export function showImageDropStatus(
 		],
 		cancel: "back",
 		hint: "back",
+	});
+}
+
+export type ConfirmDialogResult = "confirmed" | "cancelled" | "close";
+export type InputDialogResult =
+	| { kind: "submitted"; value: string }
+	| { kind: "cancelled" }
+	| { kind: "closed" };
+
+export function showImageDropConfirmDialog(
+	ctx: ExtensionContext,
+	title: string,
+	message: string,
+): Promise<ConfirmDialogResult> {
+	return showActionScreen(ctx, {
+		title,
+		lines: message.split(/\r?\n/),
+		items: [
+			{ value: "confirmed", label: "Confirm" },
+			{ value: "cancelled", label: "Cancel" },
+		],
+		cancel: "cancelled",
+		hint: "back",
+	});
+}
+
+export function showImageDropInputDialog(
+	ctx: ExtensionContext,
+	title: string,
+	initialValue: string,
+): Promise<InputDialogResult> {
+	return ctx.ui.custom<InputDialogResult>((tui, theme, keybindings, done) => {
+		const input = new Input();
+		input.setValue(initialValue);
+		input.onSubmit = (value) => done({ kind: "submitted", value });
+		input.onEscape = () => done({ kind: "cancelled" });
+		const heading = new Text("", 0, 0);
+		const hint = new Text("", 0, 0);
+		const applyTheme = () => {
+			heading.setText(theme.fg("accent", theme.bold(safeMenuText(title))));
+			const confirm = bindingText(keybindings, "tui.select.confirm");
+			const cancel = bindingText(keybindings, "tui.select.cancel", "ctrl+c");
+			hint.setText(
+				theme.fg(
+					"dim",
+					[
+						...(confirm ? [`${confirm} save`] : []),
+						...(cancel ? [`${cancel} back`] : []),
+						"ctrl+c close",
+					].join(" • "),
+				),
+			);
+		};
+		applyTheme();
+		const component: Focusable & {
+			render(width: number): string[];
+			invalidate(): void;
+			handleInput(data: string): void;
+		} = {
+			get focused() {
+				return input.focused;
+			},
+			set focused(value: boolean) {
+				input.focused = value;
+			},
+			render(width: number) {
+				const safeWidth = Math.max(1, width);
+				return [
+					...heading.render(safeWidth),
+					...input.render(safeWidth),
+					...hint.render(safeWidth),
+				].map((line) => truncateToWidth(line, safeWidth));
+			},
+			invalidate() {
+				applyTheme();
+				heading.invalidate();
+				input.invalidate();
+				hint.invalidate();
+			},
+			handleInput(data: string) {
+				if (matchesKey(data, Key.ctrl("c"))) done({ kind: "closed" });
+				else if (keybindings.matches(data, "tui.select.cancel")) done({ kind: "cancelled" });
+				else if (keybindings.matches(data, "tui.select.confirm")) {
+					done({ kind: "submitted", value: input.getValue() });
+				} else input.handleInput(data);
+				tui.requestRender();
+			},
+		};
+		return component;
 	});
 }
 
@@ -372,7 +471,7 @@ interface ActionScreenOptions<T extends string> {
 }
 
 async function showActionScreen<T extends string>(
-	ctx: ExtensionCommandContext,
+	ctx: ExtensionContext,
 	options: ActionScreenOptions<T>,
 ): Promise<T> {
 	return ctx.ui.custom<T>((tui, theme, keybindings, done) => {
@@ -389,7 +488,10 @@ async function showActionScreen<T extends string>(
 			render(width: number): string[] {
 				const safeWidth = Math.max(1, width);
 				return [
-					...wrapTextWithAnsi(theme.fg("accent", theme.bold(options.title)), safeWidth),
+					...wrapTextWithAnsi(
+						theme.fg("accent", theme.bold(safeMenuText(options.title))),
+						safeWidth,
+					),
 					...options.lines.flatMap((line) =>
 						wrapTextWithAnsi(theme.fg("muted", safeMenuText(line)), safeWidth),
 					),

@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { digestImages, type ProcessedImage } from "../src/batch.js";
-import type { ImageDropLimitsMenuState } from "../src/menu.js";
+import type {
+	ConfirmDialogResult,
+	ImageDropLimitsMenuState,
+	InputDialogResult,
+} from "../src/menu.js";
 import { ImageDropRuntime } from "../src/runtime.js";
 import type { ImageDropServerOptions } from "../src/server.js";
 import { DEFAULT_SETTINGS, type ImageDropSettings } from "../src/settings.js";
@@ -27,6 +31,14 @@ function createHarness(
 		idle?: () => boolean;
 		pending?: () => boolean;
 		settings?: Partial<ImageDropSettings>;
+		loadSettings?: (
+			path?: string,
+			signal?: AbortSignal,
+		) => Promise<
+			| { kind: "missing"; settings: ImageDropSettings }
+			| { kind: "loaded"; settings: ImageDropSettings; warning?: string }
+			| { kind: "invalid"; settings: ImageDropSettings; warning: string }
+		>;
 		startError?: Error;
 		menuActions?: Array<"open" | "status" | "settings" | "help" | "close">;
 		showMainMenu?: () => Promise<"open" | "status" | "settings" | "help" | "close">;
@@ -46,6 +58,8 @@ function createHarness(
 		>;
 		confirm?: () => Promise<boolean>;
 		input?: () => Promise<string | undefined>;
+		confirmDialog?: () => Promise<ConfirmDialogResult>;
+		inputDialog?: () => Promise<InputDialogResult>;
 		onStatus?: (lines: readonly string[]) => void;
 		onLimits?: (state: ImageDropLimitsMenuState) => void;
 		onSave?: (settings: ImageDropSettings) => Promise<void>;
@@ -78,10 +92,12 @@ function createHarness(
 		},
 	};
 	const runtime = new ImageDropRuntime(mock.pi, {
-		loadSettings: async () => ({
-			kind: "missing",
-			settings: { ...DEFAULT_SETTINGS, ...options.settings },
-		}),
+		loadSettings:
+			options.loadSettings ??
+			(async () => ({
+				kind: "missing",
+				settings: { ...DEFAULT_SETTINGS, ...options.settings },
+			})),
 		readPiSettings:
 			options.readPiSettings ??
 			(async () => ({ autoResize: true, blockImages: false, warnings: [] })),
@@ -114,6 +130,15 @@ function createHarness(
 			options.onLimits?.(state);
 			return options.limitActions?.shift() ?? "back";
 		},
+		showConfirm:
+			options.confirmDialog ??
+			(async () => (((await options.confirm?.()) ?? true) ? "confirmed" : "cancelled")),
+		showInput:
+			options.inputDialog ??
+			(async () => {
+				const value = await options.input?.();
+				return value === undefined ? { kind: "cancelled" } : { kind: "submitted", value };
+			}),
 		saveSettings: options.onSave ?? (async () => undefined),
 		settingsFilePath: () => "/agent/pi-image-drop.json",
 	});
@@ -341,11 +366,7 @@ test("session replacement stops stale main-menu and Status continuations", async
 	assert.equal(staleMain.serverStarts, 0);
 	assert.equal(staleMain.context.notifications.length, 0);
 
-	let resolveSettings!: (value: {
-		autoResize: boolean;
-		blockImages: boolean;
-		warnings: string[];
-	}) => void;
+	let staleStatusSignal: AbortSignal | undefined;
 	let markSettingsRead!: () => void;
 	const settingsRead = new Promise<void>((resolve) => {
 		markSettingsRead = resolve;
@@ -353,10 +374,11 @@ test("session replacement stops stale main-menu and Status continuations", async
 	let statusViews = 0;
 	const staleStatus = createHarness({
 		menuActions: ["status"],
-		readPiSettings: () =>
-			new Promise((resolve) => {
-				resolveSettings = resolve;
+		readPiSettings: (_cwd, _trusted, signal) =>
+			new Promise((_resolve, reject) => {
+				staleStatusSignal = signal;
 				markSettingsRead();
+				signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
 			}),
 		onStatus: () => {
 			statusViews += 1;
@@ -368,10 +390,38 @@ test("session replacement stops stale main-menu and Status continuations", async
 		?.handler("", staleStatus.context.ctx);
 	await settingsRead;
 	await emit(staleStatus.mock, "session_start", {}, replacement.ctx);
-	resolveSettings({ autoResize: true, blockImages: false, warnings: [] });
+	assert.equal(staleStatusSignal?.aborted, true);
 	await oldStatus;
 	assert.equal(statusViews, 0);
 	assert.equal(staleStatus.serverStarts, 0);
+});
+
+test("session replacement aborts an in-flight Settings reload", async () => {
+	let reads = 0;
+	let settingsSignal: AbortSignal | undefined;
+	let markSettingsRead!: () => void;
+	const settingsRead = new Promise<void>((resolve) => {
+		markSettingsRead = resolve;
+	});
+	const harness = createHarness({
+		menuActions: ["settings"],
+		loadSettings: async (_path, signal) => {
+			reads += 1;
+			if (reads !== 2) return { kind: "missing", settings: { ...DEFAULT_SETTINGS } };
+			settingsSignal = signal;
+			markSettingsRead();
+			return new Promise((_resolve, reject) => {
+				signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+			});
+		},
+	});
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	const command = harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
+	await settingsRead;
+	const replacement = createMockContext({ mode: "tui", hasUI: true });
+	await emit(harness.mock, "session_start", {}, replacement.ctx);
+	assert.equal(settingsSignal?.aborted, true);
+	await command;
 });
 
 test("Status exposes readiness, model, history, and Pi policy without starting the service", async () => {
@@ -481,6 +531,44 @@ test("cancelled and failed settings changes preserve the previous valid state", 
 		failed.context.notifications.at(-1)?.message ?? "",
 		/previous settings remain active.*disk full/i,
 	);
+});
+
+test("Ctrl+C closes Image Drop from limit dialogs and link rotation", async () => {
+	const confirmClose = createHarness({
+		menuActions: ["settings", "open"],
+		settingsActions: ["limits"],
+		limitActions: ["maxImages", "save"],
+		input: async () => "12",
+		confirmDialog: async () => "close",
+	});
+	await emit(confirmClose.mock, "session_start", {}, confirmClose.context.ctx);
+	await confirmClose.mock.commands.get("image-drop")?.handler("", confirmClose.context.ctx);
+	assert.equal(confirmClose.serverStarts, 0);
+
+	const inputClose = createHarness({
+		menuActions: ["settings", "open"],
+		settingsActions: ["limits"],
+		limitActions: ["maxImages"],
+		inputDialog: async () => ({ kind: "closed" }),
+	});
+	await emit(inputClose.mock, "session_start", {}, inputClose.context.ctx);
+	await inputClose.mock.commands.get("image-drop")?.handler("", inputClose.context.ctx);
+	assert.equal(inputClose.serverStarts, 0);
+
+	const actions: Array<"open" | "close"> = ["open", "open", "close"];
+	let menuViews = 0;
+	const linkClose = createHarness({
+		showMainMenu: async () => {
+			menuViews += 1;
+			return actions.shift() ?? "close";
+		},
+		confirmDialog: async () => "close",
+	});
+	await emit(linkClose.mock, "session_start", {}, linkClose.context.ctx);
+	await linkClose.mock.commands.get("image-drop")?.handler("", linkClose.context.ctx);
+	await linkClose.mock.commands.get("image-drop")?.handler("", linkClose.context.ctx);
+	assert.equal(menuViews, 2);
+	assert.equal(linkClose.context.notifications.length, 1);
 });
 
 test("startOnSessionStart starts once, presents a link, and reuses the server", async () => {
