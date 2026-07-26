@@ -203,12 +203,13 @@ export class BtwBringToMainPreview implements Component {
 		const viewportHeight = Math.max(1, availableRows - 1 - (showFooter ? 1 : 0));
 		this.clampScroll(viewportHeight);
 		const count = this.summary.messages === 1 ? "1 message" : `${this.summary.messages} messages`;
+		const lineCount = this.summary.lines === 1 ? "1 line" : `${this.summary.lines} lines`;
 		const firstVisible = Math.min(this.displayLines.length, this.scrollOffset + 1);
 		const lastVisible = Math.min(this.displayLines.length, this.scrollOffset + viewportHeight);
 		const scrollable = this.displayLines.length > viewportHeight;
 		const position = `${firstVisible}–${lastVisible}/${this.displayLines.length}`;
-		const header = `Preview${scrollable ? ` ${position}` : ""} · ${count} · ${this.summary.lines} lines · ~${this.summary.tokens} tokens`;
-		const actions = `${keybindingLabel(this.keybindings, "tui.select.confirm")} bring • ${keybindingLabel(this.keybindings, "tui.select.cancel", ["ctrl+c"])} back • Ctrl+C close`;
+		const header = `Preview${scrollable ? ` ${position}` : ""} · ${count} · ${lineCount} · ~${this.summary.tokens} tokens`;
+		const actions = `${confirmKeyLabel(this.keybindings)} bring • ${keybindingLabel(this.keybindings, "tui.select.cancel", ["ctrl+c"])} back • Ctrl+C close`;
 		const scroll = `${position} • ${keybindingLabel(this.keybindings, "tui.select.pageUp")}/${keybindingLabel(this.keybindings, "tui.select.pageDown")} scroll`;
 		const detailedFooter = scrollable ? `${scroll} • ${actions}` : actions;
 		const footer = visibleWidth(detailedFooter) <= safeWidth ? detailedFooter : actions;
@@ -232,7 +233,7 @@ export class BtwBringToMainPreview implements Component {
 			this.finish({ kind: "back" });
 			return;
 		}
-		if (this.keybindings.matches(data, "tui.select.confirm")) {
+		if (matchesConfirm(data, this.keybindings)) {
 			this.finish({ kind: "bring" });
 			return;
 		}
@@ -312,7 +313,7 @@ export class BtwMenuSelector implements Component {
 							truncateToWidth(
 								this.theme.fg(
 									"muted",
-									`${keybindingLabel(this.keybindings, "tui.select.confirm")} confirm • ${keybindingLabel(this.keybindings, "tui.select.cancel", ["ctrl+c"])} back • Ctrl+C close`,
+									`${confirmKeyLabel(this.keybindings)} confirm • ${keybindingLabel(this.keybindings, "tui.select.cancel", ["ctrl+c"])} back • Ctrl+C close`,
 								),
 								safeWidth,
 								"",
@@ -334,7 +335,7 @@ export class BtwMenuSelector implements Component {
 			this.finish({ kind: "back" });
 			return;
 		}
-		if (this.keybindings.matches(data, "tui.select.confirm")) {
+		if (matchesConfirm(data, this.keybindings)) {
 			const value = this.options[this.cursor];
 			if (value !== undefined) this.finish({ kind: "select", value });
 			return;
@@ -459,7 +460,7 @@ export class BtwTextRangeSelector implements Component {
 			selected.length === 0
 				? "Selected: none"
 				: `Selected: ${summary.lines} ${summary.lines === 1 ? "line" : "lines"} · ${summary.messages} ${summary.messages === 1 ? "message" : "messages"} · ~${summary.tokens} ${summary.tokens === 1 ? "token" : "tokens"}`;
-		const confirm = keybindingLabel(this.keybindings, "tui.select.confirm");
+		const confirm = confirmKeyLabel(this.keybindings);
 		const back = keybindingLabel(this.keybindings, "tui.select.cancel", ["ctrl+c"]);
 		const vertical = `${keybindingLabel(this.keybindings, "tui.select.up")}/${keybindingLabel(this.keybindings, "tui.select.down")}`;
 		const confirmUsesSpace = this.keybindings.matches(" ", "tui.select.confirm");
@@ -503,7 +504,7 @@ export class BtwTextRangeSelector implements Component {
 			this.finish({ kind: "back" });
 			return;
 		}
-		if (this.keybindings.matches(data, "tui.select.confirm")) {
+		if (matchesConfirm(data, this.keybindings)) {
 			if (this.lines.length > 0) {
 				const segments = this.getSelectedSegments();
 				if (segments.length === 0) {
@@ -729,6 +730,22 @@ function clampTextPosition(
 	};
 }
 
+function confirmKeyLabel(keybindings: KeybindingsManager): string {
+	return keybindingLabel(keybindings, "tui.select.confirm", ["ctrl+c"], "enter");
+}
+
+function matchesConfirm(data: string, keybindings: KeybindingsManager): boolean {
+	if (matchesKey(data, Key.ctrl("c"))) return false;
+	const hasUsableBinding = keybindings
+		.getKeys("tui.select.confirm")
+		.map(String)
+		.some((key) => key.toLowerCase() !== "ctrl+c");
+	return (
+		keybindings.matches(data, "tui.select.confirm") ||
+		(!hasUsableBinding && matchesKey(data, Key.enter))
+	);
+}
+
 function keybindingLabel(
 	keybindings: KeybindingsManager,
 	keybinding:
@@ -739,12 +756,13 @@ function keybindingLabel(
 		| "tui.select.pageUp"
 		| "tui.select.pageDown",
 	excluded: readonly string[] = [],
+	fallback?: string,
 ): string {
 	const key = keybindings
 		.getKeys(keybinding)
 		.map(String)
 		.find((candidate) => !excluded.includes(candidate.toLowerCase()));
-	return formatKeyLabel(key ?? keybinding);
+	return formatKeyLabel(key ?? fallback ?? keybinding);
 }
 
 function formatKeyLabel(key: string): string {

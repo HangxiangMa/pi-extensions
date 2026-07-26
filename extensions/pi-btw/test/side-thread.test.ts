@@ -617,6 +617,32 @@ test("bring-to-main preview renders exact content and configured Bring and Back 
 	assert.deepEqual(actions, [{ kind: "back" }]);
 });
 
+test("bring-to-main preview never advertises Ctrl+C as its confirm action", () => {
+	const actions: unknown[] = [];
+	const defaults = keybindings();
+	const preview = new BtwBringToMainPreview(
+		{ terminal: { rows: 9 }, requestRender() {} } as never,
+		{
+			fg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		} as never,
+		{
+			matches: (data: string, key: string) =>
+				key === "tui.select.confirm" ? data === "\u0003" : defaults.matches(data, key),
+			getKeys: (key: string) => (key === "tui.select.confirm" ? ["ctrl+c"] : defaults.getKeys(key)),
+		} as never,
+		"preview",
+		{ lines: 1, messages: 1, tokens: 2 },
+		(action) => actions.push(action),
+	);
+
+	const rendered = preview.render(80).join("\n");
+	assert.match(rendered, /Enter bring/);
+	assert.doesNotMatch(rendered, /Ctrl\+C bring/);
+	preview.handleInput("\r");
+	assert.deepEqual(actions, [{ kind: "bring" }]);
+});
+
 test("bring-to-main preview wraps long lines without hiding content", () => {
 	const content = "abc     defghijklmnopqrstuvwxyz0123456789";
 	const preview = new BtwBringToMainPreview(
