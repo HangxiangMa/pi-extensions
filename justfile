@@ -75,11 +75,11 @@ install name: (_validate-extension-name name)
 # Manually publish one production or experimental package, skipping an existing version
 # Usage: just publish subagents
 publish name: (_validate-extension-name name)
-    name={{quote(name)}}; package_json="./extensions/pi-$name/package.json"; if [[ ! -f "$package_json" ]]; then package_json="./experimental/pi-$name/package.json"; fi; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; if [[ "$package_json" == ./experimental/* ]]; then echo "WARNING: manually publishing experimental Pi extension pi-$name; automated workflows exclude it." >&2; fi; package="$(node -p "require(process.argv[1]).name" "$package_json")"; version="$(node -p "require(process.argv[1]).version" "$package_json")"; if npm view "$package@$version" version >/dev/null 2>&1; then echo "$package@$version already exists; skipping publish."; else npm --workspace "$package" pack --dry-run; npm --workspace "$package" publish --access public; fi
+    name={{quote(name)}}; package_json="./extensions/pi-$name/package.json"; if [[ ! -f "$package_json" ]]; then package_json="./experimental/pi-$name/package.json"; fi; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; if [[ "$package_json" == ./experimental/* ]]; then echo "WARNING: publishing experimental Pi extension pi-$name." >&2; fi; package="$(node -p "require(process.argv[1]).name" "$package_json")"; version="$(node -p "require(process.argv[1]).version" "$package_json")"; if npm view "$package@$version" version >/dev/null 2>&1; then echo "$package@$version already exists; skipping publish."; else npm --workspace "$package" pack --dry-run; npm --workspace "$package" publish --access public; fi
 
-# Publish all production extension packages to npm; experimental packages are excluded
+# Publish all production and experimental extension packages to npm
 publish-all:
-    for package_json in extensions/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; just publish "${dir#pi-}"; done
+    for package_json in extensions/*/package.json experimental/*/package.json; do dir="$(basename "$(dirname "$package_json")")"; just publish "${dir#pi-}"; done
 
 # Preview individual packages that npm would publish
 pack-btw:

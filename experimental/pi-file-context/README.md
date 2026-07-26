@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > [!WARNING]
-> This extension is experimental. Its interaction model and package API may change, and it is excluded from automated repository publishing.
+> This extension is experimental. Its interaction model and package API may change between releases.
 
 Browse project files inside Pi, preview text, select a line range, and attach the exact snapshot to the next prompt.
 
