@@ -60,6 +60,7 @@ function createHarness(
 		input?: () => Promise<string | undefined>;
 		confirmDialog?: () => Promise<ConfirmDialogResult>;
 		inputDialog?: () => Promise<InputDialogResult>;
+		onConfirm?: (title: string, message: string) => void;
 		onStatus?: (lines: readonly string[]) => void;
 		onLimits?: (state: ImageDropLimitsMenuState) => void;
 		onSave?: (settings: Partial<ImageDropSettings>) => Promise<void>;
@@ -130,9 +131,11 @@ function createHarness(
 			options.onLimits?.(state);
 			return options.limitActions?.shift() ?? "back";
 		},
-		showConfirm:
-			options.confirmDialog ??
-			(async () => (((await options.confirm?.()) ?? true) ? "confirmed" : "cancelled")),
+		showConfirm: async (_ctx, title, message) => {
+			options.onConfirm?.(title, message);
+			if (options.confirmDialog) return options.confirmDialog();
+			return ((await options.confirm?.()) ?? true) ? "confirmed" : "cancelled";
+		},
 		showInput:
 			options.inputDialog ??
 			(async () => {
@@ -476,28 +479,36 @@ test("a failed Status refresh preserves and labels the previous valid policy", a
 
 test("Settings preview and save future limits without changing current-session limits", async () => {
 	let saved: Partial<ImageDropSettings> | undefined;
+	let confirmation = "";
 	const menuStates: ImageDropLimitsMenuState[] = [];
 	const harness = createHarness({
 		menuActions: ["settings", "close"],
 		settingsActions: ["limits", "back"],
-		limitActions: ["maxImages", "save"],
-		input: async () => "12",
+		limitActions: ["maxRetainedImages", "save"],
+		input: async () => "120",
 		confirm: async () => true,
 		onSave: async (settings) => {
 			saved = settings;
+		},
+		onConfirm: (_title, message) => {
+			confirmation = message;
 		},
 		onLimits: (state) => menuStates.push(state),
 	});
 	await emit(harness.mock, "session_start", {}, harness.context.ctx);
 	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
-	assert.deepEqual(saved, { maxImages: 12 });
-	assert.deepEqual(menuStates[0]?.values.maxImages, { current: "8", defaultValue: "8" });
-	assert.deepEqual(menuStates[1]?.values.maxImages, {
-		pending: "12",
-		current: "8",
-		defaultValue: "8",
+	assert.deepEqual(saved, { maxRetainedImages: 120 });
+	assert.deepEqual(menuStates[0]?.values.maxRetainedImages, {
+		current: "128",
+		defaultValue: "128",
+	});
+	assert.deepEqual(menuStates[1]?.values.maxRetainedImages, {
+		pending: "120",
+		current: "128",
+		defaultValue: "128",
 	});
 	assert.equal(harness.runtime.getBatchForTesting()?.publicHistoryState().maxImages, 128);
+	assert.match(confirmation, /Staged \+ sent image count/);
 	assert.match(harness.context.notifications.at(-1)?.message ?? "", /future Pi sessions/i);
 });
 
