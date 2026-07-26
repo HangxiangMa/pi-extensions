@@ -10,12 +10,12 @@ import fileQuoteExtension, {
 	createFileQuote,
 	discoverProjectFiles,
 	FileQuoteTriggerEditor,
-	filterProjectFiles,
 	formatPromptWithQuote,
 	formatPromptWithQuotes,
 	loadProjectTextFile,
 } from "../src/file-context.js";
 import { FileQuoteExplorer } from "../src/file-context-explorer.js";
+import { ProjectFileSearch } from "../src/file-search.js";
 
 async function withTempProject(run: (root: string) => Promise<void>): Promise<void> {
 	const root = await mkdtemp(join(tmpdir(), "pi-file-context-test-"));
@@ -86,10 +86,23 @@ test("rejects a validated file replaced by a symlink before descriptor open", as
 	});
 });
 
-test("filters files by ordered fuzzy characters", () => {
-	const files = ["src/runtime.ts", "src/settings.ts", "test/runtime.test.ts"];
-	assert.deepEqual(filterProjectFiles(files, "settings"), ["src/settings.ts"]);
-	assert.deepEqual(filterProjectFiles(files, "rtt"), files);
+test("ranks fuzzy file matches and tolerates typos", () => {
+	const files = [
+		"file-context.ts-notes/README.md",
+		"src/file-context.ts",
+		"src/settings.ts",
+		"docs/guide.md",
+	];
+
+	const search = new ProjectFileSearch(files);
+	assert.deepEqual(search.search("  FILE-context.ts  "), [
+		"src/file-context.ts",
+		"file-context.ts-notes/README.md",
+	]);
+	assert.deepEqual(search.search("src/settings"), ["src/settings.ts"]);
+	assert.deepEqual(search.search("setxings"), ["src/settings.ts"]);
+	assert.deepEqual(search.search("zzzzzz"), []);
+	assert.deepEqual(search.search("  "), files);
 });
 
 test("explorer previews a file, selects a range, and keeps rendered rows width-safe", async () => {

@@ -95,12 +95,6 @@ export async function discoverProjectFiles(
 	return files.sort(compareStrings);
 }
 
-export function filterProjectFiles(files: readonly string[], query: string): string[] {
-	const needle = query.trim().toLocaleLowerCase();
-	if (!needle) return [...files];
-	return files.filter((file) => isOrderedSubsequence(file.toLocaleLowerCase(), needle));
-}
-
 export async function loadProjectTextFile(
 	root: string,
 	projectPath: string,
@@ -444,15 +438,6 @@ function compareStrings(left: string, right: string): number {
 
 function estimateTokens(bytes: number): number {
 	return Math.max(1, Math.ceil(bytes / 4));
-}
-
-function isOrderedSubsequence(value: string, query: string): boolean {
-	let queryIndex = 0;
-	for (const character of value) {
-		if (character === query[queryIndex]) queryIndex += 1;
-		if (queryIndex === query.length) return true;
-	}
-	return false;
 }
 
 function isInside(root: string, candidate: string): boolean {
