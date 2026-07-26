@@ -447,6 +447,21 @@ test("security and configuration helpers detect secrets and R2 session-token war
 	assert.equal(isExplicitlyEnabled(""), false);
 });
 
+function s3ClientConfig() {
+	const flat = requiredConfig();
+	return {
+		type: "s3" as const,
+		profile: {
+			kind: "r2" as const,
+			endpoint: flat.endpoint,
+			region: "auto",
+			accessKeyId: flat.accessKeyId,
+			secretAccessKey: flat.secretAccessKey,
+		},
+		destination: { bucket: flat.bucket, prefix: "pi-sync", namespace: "default" },
+	};
+}
+
 test("getJson retries on empty R2 response body and eventually succeeds", async () => {
 	const originalFetch = globalThis.fetch;
 	const responses = [
@@ -464,13 +479,7 @@ test("getJson retries on empty R2 response body and eventually succeeds", async 
 		return response;
 	}) as typeof globalThis.fetch;
 	try {
-		const client = new S3Client({
-			...requiredConfig(),
-			region: "auto",
-			profile: "default",
-			prefix: "pi-sync",
-			syncSessions: false,
-		});
+		const client = new S3Client(s3ClientConfig());
 		const result = await client.getJson<{ snapshot: string; sha256: string }>("latest.json");
 		assert.equal(result.missing, false);
 		assert.equal(result.value?.snapshot, "snap-1");
@@ -489,13 +498,7 @@ test("getJson throws after retrying a persistently empty R2 response body", asyn
 		return new Response("", { status: 200, headers: { etag: "w/empty" } });
 	}) as typeof globalThis.fetch;
 	try {
-		const client = new S3Client({
-			...requiredConfig(),
-			region: "auto",
-			profile: "default",
-			prefix: "pi-sync",
-			syncSessions: false,
-		});
+		const client = new S3Client(s3ClientConfig());
 		await assert.rejects(client.getJson("latest.json"), /empty body/);
 		assert.equal(calls, 3);
 	} finally {
@@ -511,13 +514,7 @@ test("getJson does not retry a non-empty malformed response body", async () => {
 		return new Response("{", { status: 200, headers: { etag: "w/malformed" } });
 	}) as typeof globalThis.fetch;
 	try {
-		const client = new S3Client({
-			...requiredConfig(),
-			region: "auto",
-			profile: "default",
-			prefix: "pi-sync",
-			syncSessions: false,
-		});
+		const client = new S3Client(s3ClientConfig());
 		await assert.rejects(client.getJson("latest.json"), SyntaxError);
 		assert.equal(calls, 1);
 	} finally {
@@ -540,13 +537,7 @@ test("getBuffer retries on empty R2 response body and eventually succeeds", asyn
 		return response;
 	}) as typeof globalThis.fetch;
 	try {
-		const client = new S3Client({
-			...requiredConfig(),
-			region: "auto",
-			profile: "default",
-			prefix: "pi-sync",
-			syncSessions: false,
-		});
+		const client = new S3Client(s3ClientConfig());
 		const result = await client.getBuffer("snapshots/snap-1.json.gz");
 		assert.equal(result.missing, false);
 		assert.deepEqual(result.value, payload);
@@ -565,13 +556,7 @@ test("getBuffer throws after retrying a persistently empty R2 response body", as
 		return new Response("", { status: 200, headers: { etag: "w/empty" } });
 	}) as typeof globalThis.fetch;
 	try {
-		const client = new S3Client({
-			...requiredConfig(),
-			region: "auto",
-			profile: "default",
-			prefix: "pi-sync",
-			syncSessions: false,
-		});
+		const client = new S3Client(s3ClientConfig());
 		await assert.rejects(client.getBuffer("snapshots/snap-1.json.gz"), /empty body/);
 		assert.equal(calls, 3);
 	} finally {

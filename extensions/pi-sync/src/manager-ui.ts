@@ -235,7 +235,11 @@ async function describeManagerState(): Promise<{ title: string; actions: string[
 	try {
 		const config = await loadConfig();
 		const target = config.target ?? "default";
-		const storage = storageDescription(config.storageKind, config.endpoint, config.bucket);
+		const storage = storageDescription(
+			config.backend.profile.kind,
+			config.backend.profile.endpoint,
+			config.backend.destination.bucket,
+		);
 		const warnings = deprecatedPiSyncEnvironmentWarnings();
 		const lock = await inspectLock();
 		const liveLock = lock.status === "valid" && !isStaleLock(lock.lock);
@@ -489,7 +493,11 @@ async function showTargetSwitcher(ctx: ExtensionCommandContext, runRoute: RunRou
 			"",
 			`From: ${safeTerminalText(active ?? "none")}`,
 			`To: ${safeTerminalText(name)}`,
-			`Storage: ${storageDescription(config.storageKind, config.endpoint, config.bucket)}`,
+			`Storage: ${storageDescription(
+				config.backend.profile.kind,
+				config.backend.profile.endpoint,
+				config.backend.destination.bucket,
+			)}`,
 			`Synced content: ${normalizeSyncFiles(config.syncFiles).length} built-in groups · ${config.extraFiles.length} extra files`,
 			`Auto-sync: ${config.autoSync ? "On" : "Off"} · Sessions: ${config.syncSessions ? "On" : "Off"}`,
 			"",

@@ -203,9 +203,12 @@ test("legacy migration adopts state under effective environment overrides", asyn
 				await migrateLegacySettings("home", "r2");
 				const migrated = await loadConfig();
 
-				assert.equal(migrated.endpoint, "https://override.r2.cloudflarestorage.com");
-				assert.equal(migrated.bucket, "override-bucket");
-				assert.equal(migrated.prefix, "override-prefix");
+				assert.equal(
+					migrated.backend.profile.endpoint,
+					"https://override.r2.cloudflarestorage.com",
+				);
+				assert.equal(migrated.backend.destination.bucket, "override-bucket");
+				assert.equal(migrated.backend.destination.prefix, "override-prefix");
 				assert.equal(migrated.profile, "override-space");
 				assert.equal((await readStateForConfig(migrated)).lastAppliedSnapshot, "legacy-snapshot");
 			}),

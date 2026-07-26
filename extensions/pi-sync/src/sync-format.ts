@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import { agentDir } from "./config.js";
+import type { RemoteHead } from "./sync-backend.js";
 import { fileHashMap } from "./sync-state.js";
-import type { LatestPointer, RemoteObject, Snapshot, SyncConfig } from "./types.js";
+import type { Snapshot, SyncConfig } from "./types.js";
 
 export function formatDiff(local: Snapshot, remote: Snapshot) {
 	const localMap = fileHashMap(local);
@@ -37,18 +37,19 @@ export function formatSnapshotOnlyDiff(title: string, snapshot: Snapshot) {
 
 export function formatPushSummary(
 	config: SyncConfig,
+	destination: string,
 	upload: Snapshot,
-	latest: RemoteObject<LatestPointer>,
+	head: RemoteHead | undefined,
 	preservedRemoteFileCount = 0,
 	remote?: Snapshot,
 ) {
 	return [
 		`Target: ${safeTerminalText(config.target ?? "default")}`,
-		`Destination: ${formatDestination(config)}`,
+		`Destination: ${safeTerminalText(destination)}`,
 		`Upload ${upload.files.length} files from ${safeTerminalText(agentDir())}.`,
 		`Sessions: ${upload.syncSessions ? "included — may contain private conversations" : "not included"}`,
-		latest.value ? `Remote latest: ${latest.value.snapshot}` : "Remote latest: empty",
-		"Publication effect: latest.json will point to the new immutable snapshot.",
+		head ? `Remote latest: ${head.snapshotId}` : "Remote latest: empty",
+		"Publication effect: the backend's active head will reference the new immutable snapshot.",
 		formatPublicationPreview(remote, upload),
 		preservedRemoteFileCount > 0
 			? `Possible secrets in locally managed files were scanned before this prompt; ${preservedRemoteFileCount} preserved remote file(s) were not rescanned.`
@@ -66,13 +67,14 @@ export function formatApplyPreview(local: Snapshot, remote: Snapshot) {
 
 export function formatPullSummary(
 	config: SyncConfig,
+	destination: string,
 	local: Snapshot,
 	remote: Snapshot,
 	protectedSessionCount: number,
 ) {
 	return [
 		`Target: ${safeTerminalText(config.target ?? "default")}`,
-		`Destination: ${formatDestination(config)}`,
+		`Destination: ${safeTerminalText(destination)}`,
 		`Snapshot: ${safeTerminalText(remote.id)}`,
 		`Sessions: ${remote.syncSessions ? "included — may contain private conversations" : "not included"}`,
 		`Protected live sessions: ${protectedSessionCount || "none"}`,
@@ -83,6 +85,7 @@ export function formatPullSummary(
 
 export function formatRollbackSummary(
 	config: SyncConfig,
+	destination: string,
 	local: Snapshot,
 	remote: Snapshot,
 	requestedSnapshot: string,
@@ -90,12 +93,12 @@ export function formatRollbackSummary(
 ) {
 	return [
 		`Target: ${safeTerminalText(config.target ?? "default")}`,
-		`Destination: ${formatDestination(config)}`,
+		`Destination: ${safeTerminalText(destination)}`,
 		`Snapshot: ${safeTerminalText(requestedSnapshot)}`,
 		`Sessions: ${remote.syncSessions ? "included — may contain private conversations" : "not included"}`,
 		`Protected live sessions: ${protectedSessionCount || "none"}`,
 		formatApplyPreview(local, remote),
-		"A local backup is created before applying; the remote latest pointer will change.",
+		"A local backup is created before applying; the backend's active head will change.",
 	].join("\n");
 }
 
@@ -131,16 +134,6 @@ function formatDirectionalChanges(
 	return lines.join("\n");
 }
 
-export function formatDestination(config: SyncConfig) {
-	let host = config.endpoint;
-	try {
-		host = new URL(config.endpoint).hostname;
-	} catch {
-		// Preserve a sanitized invalid endpoint for actionable repair output.
-	}
-	return safeTerminalText(`${host} · ${config.bucket}/${config.prefix}/profiles/${config.profile}`);
-}
-
 export function countPreservedRemoteFiles(local: Snapshot, upload: Snapshot) {
 	const localPaths = new Set(local.files.map((file) => file.path));
 	return upload.files.filter((file) => !localPaths.has(file.path)).length;
@@ -153,14 +146,6 @@ export function safeTerminalText(value: string) {
 
 export function redact(value: string) {
 	return value.length <= 8 ? "configured" : `${value.slice(0, 4)}…${value.slice(-4)}`;
-}
-
-export function remoteIdentity(remote: RemoteObject<LatestPointer>) {
-	return remote.missing ? "missing" : (remote.value?.snapshot ?? "unknown");
-}
-
-export function sha256(value: Buffer) {
-	return createHash("sha256").update(value).digest("hex");
 }
 
 export function errorMessage(error: unknown) {

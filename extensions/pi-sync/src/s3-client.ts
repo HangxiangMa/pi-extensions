@@ -1,19 +1,14 @@
 import { createHash, createHmac } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { encodeKey, posixJoin } from "./paths.js";
-import type { LatestPointer, RemoteObject, Snapshot, SyncConfig } from "./types.js";
+import type { RemoteObject, ResolvedS3Backend } from "./types.js";
 
-const VERSION = 1;
+const MAX_JSON_RESPONSE_BYTES = 1024 * 1024;
+const MAX_SNAPSHOT_RESPONSE_BYTES = 256 * 1024 * 1024;
+const MAX_ERROR_RESPONSE_BYTES = 64 * 1024;
 
 function iso8601Basic(date: Date) {
 	return date.toISOString().replace(/[:-]|\.\d{3}/g, "");
-}
-
-function snapshotIncludesSessions(snapshot: Snapshot) {
-	return (
-		snapshot.syncSessions === true ||
-		snapshot.files.some((file) => file.path.startsWith("sessions/"))
-	);
 }
 
 function isCloudflareR2Endpoint(endpoint: string | undefined) {
@@ -30,14 +25,14 @@ function isCloudflareR2Endpoint(endpoint: string | undefined) {
 }
 
 export class S3Client {
-	private config: SyncConfig;
+	private config: ResolvedS3Backend;
 	private endpoint: URL;
 	private signal?: AbortSignal;
 	private omitSessionTokenAfterRejection = false;
 
-	constructor(config: SyncConfig, signal?: AbortSignal) {
+	constructor(config: ResolvedS3Backend, signal?: AbortSignal) {
 		this.config = config;
-		this.endpoint = new URL(config.endpoint);
+		this.endpoint = new URL(config.profile.endpoint);
 		this.signal = signal;
 	}
 
@@ -47,8 +42,10 @@ export class S3Client {
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			const object = await this.request("GET", key);
 			if (object.status === 404) return { missing: true };
-			if (!object.ok) throw new Error(`S3 GET failed (${object.status}): ${await object.text()}`);
-			const body = await object.text();
+			if (!object.ok) {
+				throw new Error(`S3 GET failed (${object.status}): ${await this.readErrorText(object)}`);
+			}
+			const body = await readBoundedText(object, MAX_JSON_RESPONSE_BYTES, "S3 JSON response");
 			// R2 can intermittently return an empty 200 body (read-after-write
 			// inconsistency on a long-lived keep-alive connection), which makes
 			// response.json() throw "JSON Parse error: Unexpected EOF" under Bun.
@@ -75,8 +72,14 @@ export class S3Client {
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			const object = await this.request("GET", key);
 			if (object.status === 404) return { missing: true };
-			if (!object.ok) throw new Error(`S3 GET failed (${object.status}): ${await object.text()}`);
-			const buffer = Buffer.from(await object.arrayBuffer());
+			if (!object.ok) {
+				throw new Error(`S3 GET failed (${object.status}): ${await this.readErrorText(object)}`);
+			}
+			const buffer = await readBoundedBuffer(
+				object,
+				MAX_SNAPSHOT_RESPONSE_BYTES,
+				"S3 snapshot response",
+			);
 			// R2 can intermittently return an empty 200 body on a long-lived
 			// keep-alive connection (same root cause as the getJson retry
 			// above). getBuffer is only used for snapshot .json.gz payloads,
@@ -103,8 +106,9 @@ export class S3Client {
 	async putBuffer(key: string, body: Buffer, contentType: string) {
 		const headers: Record<string, string> = { "content-type": contentType };
 		const response = await this.request("PUT", key, body, headers);
-		if (!response.ok)
-			throw new Error(`S3 PUT failed (${response.status}): ${await response.text()}`);
+		if (!response.ok) {
+			throw new Error(`S3 PUT failed (${response.status}): ${await this.readErrorText(response)}`);
+		}
 	}
 
 	private async request(
@@ -114,26 +118,33 @@ export class S3Client {
 		extraHeaders: Record<string, string> = {},
 	) {
 		const url = new URL(this.endpoint.toString());
-		url.pathname = posixJoin(url.pathname, this.config.bucket, encodeKey(key));
+		url.pathname = posixJoin(url.pathname, this.config.destination.bucket, encodeKey(key));
 		const send = async (sessionToken: string | undefined) => {
 			const headers = await signedHeaders({
 				method,
 				url,
 				body,
 				extraHeaders,
-				accessKeyId: this.config.accessKeyId,
-				secretAccessKey: this.config.secretAccessKey,
+				accessKeyId: this.config.profile.accessKeyId,
+				secretAccessKey: this.config.profile.secretAccessKey,
 				sessionToken,
-				region: this.config.region,
+				region: this.config.profile.region,
 			});
-			return fetch(url, {
-				method,
-				headers,
-				body: body ? new Uint8Array(body) : undefined,
-				signal: this.signal,
-			});
+			try {
+				return await fetch(url, {
+					method,
+					headers,
+					body: body ? new Uint8Array(body) : undefined,
+					signal: this.signal,
+				});
+			} catch (error) {
+				if (error instanceof Error && error.name === "AbortError") throw error;
+				throw new Error(`S3 request failed: ${this.redact(errorMessage(error))}`, { cause: error });
+			}
 		};
-		const sessionToken = this.omitSessionTokenAfterRejection ? undefined : this.config.sessionToken;
+		const sessionToken = this.omitSessionTokenAfterRejection
+			? undefined
+			: this.config.profile.sessionToken;
 		const response = await send(sessionToken);
 		if (!(await this.shouldRetryWithoutSessionToken(response, sessionToken))) return response;
 
@@ -148,14 +159,86 @@ export class S3Client {
 	) {
 		if (
 			!sessionToken ||
-			!isCloudflareR2Endpoint(this.config.endpoint) ||
+			!isCloudflareR2Endpoint(this.config.profile.endpoint) ||
 			response.ok ||
 			response.status !== 400
 		) {
 			return false;
 		}
-		return isSecurityTokenInvalidArgument(await response.clone().text());
+		return isSecurityTokenInvalidArgument(
+			await readBoundedText(response.clone(), MAX_ERROR_RESPONSE_BYTES, "S3 error response"),
+		);
 	}
+
+	private async readErrorText(response: Response) {
+		try {
+			return this.redact(
+				await readBoundedText(response, MAX_ERROR_RESPONSE_BYTES, "S3 error response"),
+			);
+		} catch (error) {
+			return this.redact(errorMessage(error));
+		}
+	}
+
+	private redact(value: string) {
+		let redacted = value;
+		let endpointUsername: string | undefined;
+		let endpointPassword: string | undefined;
+		let endpointQueryValues: string[] = [];
+		try {
+			const endpoint = new URL(this.config.profile.endpoint);
+			endpointUsername = endpoint.username;
+			endpointPassword = endpoint.password;
+			endpointQueryValues = [...endpoint.searchParams.values()];
+		} catch {
+			// The constructor already validates normal runtime endpoints.
+		}
+		for (const secret of [
+			this.config.profile.accessKeyId,
+			this.config.profile.secretAccessKey,
+			this.config.profile.sessionToken,
+			endpointUsername,
+			endpointPassword,
+			...endpointQueryValues,
+		]) {
+			if (secret) redacted = redacted.replaceAll(secret, "[REDACTED]");
+		}
+		return redacted;
+	}
+}
+
+async function readBoundedText(response: Response, limit: number, label: string) {
+	return (await readBoundedBuffer(response, limit, label)).toString("utf8");
+}
+
+async function readBoundedBuffer(response: Response, limit: number, label: string) {
+	const contentLength = Number(response.headers.get("content-length"));
+	if (Number.isFinite(contentLength) && contentLength > limit) {
+		throw new Error(`${label} exceeds the ${limit}-byte limit.`);
+	}
+	if (!response.body) return Buffer.alloc(0);
+	const reader = response.body.getReader();
+	const chunks: Buffer[] = [];
+	let total = 0;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			total += value.byteLength;
+			if (total > limit) {
+				await reader.cancel().catch(() => undefined);
+				throw new Error(`${label} exceeds the ${limit}-byte limit.`);
+			}
+			chunks.push(Buffer.from(value));
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	return Buffer.concat(chunks, total);
+}
+
+function errorMessage(error: unknown) {
+	return error instanceof Error ? error.message : String(error);
 }
 
 async function signedHeaders(input: {
@@ -215,38 +298,6 @@ function hmac(key: Buffer, value: string) {
 
 function sha256(value: Buffer) {
 	return createHash("sha256").update(value).digest("hex");
-}
-
-export function latestKey(config: SyncConfig) {
-	return posixJoin(profilePrefix(config), "latest.json");
-}
-
-export function historyKey(config: SyncConfig) {
-	return posixJoin(profilePrefix(config), "history.json");
-}
-
-export function snapshotKey(config: SyncConfig, id: string) {
-	return posixJoin(profilePrefix(config), "snapshots", `${id}.json.gz`);
-}
-
-export function profilePrefix(config: SyncConfig) {
-	return posixJoin(config.prefix, "profiles", config.profile);
-}
-
-export function pointerFor(
-	config: SyncConfig,
-	snapshot: Snapshot,
-	checksum: string,
-): LatestPointer {
-	return {
-		version: VERSION,
-		profile: config.profile,
-		snapshot: snapshot.id,
-		sha256: checksum,
-		createdAt: snapshot.createdAt,
-		machine: snapshot.machine,
-		syncSessions: snapshotIncludesSessions(snapshot),
-	};
 }
 
 function lowercaseKeys(value: Record<string, string>) {

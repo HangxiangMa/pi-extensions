@@ -109,7 +109,7 @@ test("v2 settings resolve reusable storage profiles and named targets", async ()
 		assert.equal(home.target, "home");
 		assert.equal(home.storageProfile, "r2");
 		assert.equal(home.profile, "home-space");
-		assert.equal(home.bucket, "personal-pi");
+		assert.equal(home.backend.destination.bucket, "personal-pi");
 		assert.equal(home.autoSync, true);
 		assert.deepEqual(home.syncFiles, ["settings.json", "skills"]);
 
@@ -117,7 +117,7 @@ test("v2 settings resolve reusable storage profiles and named targets", async ()
 		assert.equal(work.target, "work");
 		assert.equal(work.storageProfile, "s3");
 		assert.equal(work.profile, "work-space");
-		assert.equal(work.bucket, "company-pi");
+		assert.equal(work.backend.destination.bucket, "company-pi");
 		assert.equal(work.autoSync, false);
 		assert.equal(work.syncSessions, true);
 		assert.deepEqual(work.extraFiles, ["LOCAL.md"]);
@@ -135,12 +135,12 @@ test("standard AWS and R2 aliases still override the selected profile and target
 		process.env.R2_BUCKET = "override-bucket";
 
 		const config = await loadConfig();
-		assert.equal(config.endpoint, "https://override.r2.cloudflarestorage.com");
-		assert.equal(config.bucket, "override-bucket");
-		assert.equal(config.region, "us-west-2");
-		assert.equal(config.accessKeyId, "aws-access");
-		assert.equal(config.secretAccessKey, "aws-secret");
-		assert.equal(config.sessionToken, "aws-session");
+		assert.equal(config.backend.profile.endpoint, "https://override.r2.cloudflarestorage.com");
+		assert.equal(config.backend.destination.bucket, "override-bucket");
+		assert.equal(config.backend.profile.region, "us-west-2");
+		assert.equal(config.backend.profile.accessKeyId, "aws-access");
+		assert.equal(config.backend.profile.secretAccessKey, "aws-secret");
+		assert.equal(config.backend.profile.sessionToken, "aws-session");
 	});
 });
 
@@ -151,7 +151,7 @@ test("deprecated PI_SYNC variables retain precedence and warnings never reveal v
 		process.env.PI_SYNC_PROFILE = "deprecated-namespace-value";
 
 		const config = await loadConfig();
-		assert.equal(config.bucket, "deprecated-bucket-value");
+		assert.equal(config.backend.destination.bucket, "deprecated-bucket-value");
 		assert.equal(config.profile, "deprecated-namespace-value");
 		const warning = deprecatedPiSyncEnvironmentWarnings().join("\n");
 		assert.match(warning, /PI_SYNC_BUCKET/);

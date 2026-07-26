@@ -105,18 +105,24 @@ export async function loadConfigInternal(targetName?: string): Promise<SyncConfi
 		throw new Error("Missing pi-sync config after validation.");
 	}
 
+	const namespace = normalizeOptionalString(partial.profile) ?? DEFAULT_PROFILE;
+	const prefix = trimSlashes(normalizeOptionalString(partial.prefix) ?? DEFAULT_PREFIX);
 	return {
-		endpoint,
-		bucket,
-		region: normalizeOptionalString(partial.region) ?? DEFAULT_REGION,
-		accessKeyId,
-		secretAccessKey,
-		sessionToken: normalizeOptionalString(partial.sessionToken),
-		profile: normalizeOptionalString(partial.profile) ?? DEFAULT_PROFILE,
-		prefix: trimSlashes(normalizeOptionalString(partial.prefix) ?? DEFAULT_PREFIX),
+		backend: {
+			type: "s3",
+			profile: {
+				kind: partial.storageKind ?? (isCloudflareR2Endpoint(endpoint) ? "r2" : "s3-compatible"),
+				endpoint,
+				region: normalizeOptionalString(partial.region) ?? DEFAULT_REGION,
+				accessKeyId,
+				secretAccessKey,
+				sessionToken: normalizeOptionalString(partial.sessionToken),
+			},
+			destination: { bucket, prefix, namespace },
+		},
+		profile: namespace,
 		target: partial.target ?? DEFAULT_PROFILE,
 		storageProfile: partial.storageProfile ?? DEFAULT_PROFILE,
-		storageKind: partial.storageKind,
 		autoSync: isEnabled(partial.autoSync, true),
 		settingsVersion: partial.settingsVersion ?? 1,
 		syncFiles: normalizeSyncFiles(partial.syncFiles),
@@ -203,7 +209,7 @@ export function resolveV2PartialConfig(
 	normalizeTargetSwitchAction(settings.targetSwitchAction);
 	const targets = requireNamedObjectMap(settings.targets, "targets");
 	const profiles = requireNamedObjectMap(settings.profiles, "profiles");
-	validateUniqueRemoteTargets(targets);
+	validateUniqueRemoteTargets(targets, profiles);
 	const selectedTarget =
 		targetName ?? normalizeOptionalString(asOptionalString(settings.activeTarget));
 	if (!selectedTarget) throw new Error("Invalid pi-sync settings: activeTarget is required.");
@@ -268,13 +274,16 @@ function isV2SettingsObject(value: Record<string, unknown>) {
 	return true;
 }
 
-function validateUniqueRemoteTargets(targets: Record<string, unknown>) {
+export function validateUniqueRemoteTargets(
+	targets: Record<string, unknown>,
+	profiles: Record<string, unknown>,
+) {
 	const identities = new Map<string, string>();
 	for (const name of Object.keys(targets)) {
 		const target = ownObject(targets, name);
 		if (!target || typeof target.profile !== "string" || typeof target.bucket !== "string")
 			continue;
-		const identity = effectiveTargetRemoteIdentity(target, name);
+		const identity = effectiveTargetRemoteIdentity(target, name, profiles);
 		const existing = identities.get(identity);
 		if (existing) {
 			throw new Error(
@@ -285,8 +294,18 @@ function validateUniqueRemoteTargets(targets: Record<string, unknown>) {
 	}
 }
 
-export function effectiveTargetRemoteIdentity(target: Record<string, unknown>, name: string) {
-	const profile = typeof target.profile === "string" ? target.profile.trim() : "";
+export function effectiveTargetRemoteIdentity(
+	target: Record<string, unknown>,
+	name: string,
+	profiles: Record<string, unknown>,
+) {
+	const profileName = typeof target.profile === "string" ? target.profile.trim() : "";
+	const profile = ownObject(profiles, profileName);
+	const endpoint = normalizeEndpointIdentity(
+		process.env.PI_SYNC_ENDPOINT ??
+			process.env.R2_ENDPOINT ??
+			(typeof profile?.endpoint === "string" ? profile.endpoint : ""),
+	);
 	const bucket = normalizeRemoteKeySegment(
 		process.env.PI_SYNC_BUCKET ??
 			process.env.R2_BUCKET ??
@@ -299,7 +318,7 @@ export function effectiveTargetRemoteIdentity(target: Record<string, unknown>, n
 	const namespace = normalizeRemoteKeySegment(
 		process.env.PI_SYNC_PROFILE ?? (typeof target.namespace === "string" ? target.namespace : name),
 	);
-	return JSON.stringify([profile, bucket, prefix, namespace]);
+	return JSON.stringify(["s3", endpoint, bucket, prefix, namespace]);
 }
 
 function normalizeRemoteKeySegment(value: string) {
@@ -428,9 +447,9 @@ export function statePathForConfig(config: SyncConfig) {
 	const target = config.target ?? DEFAULT_PROFILE;
 	const identity = JSON.stringify([
 		target,
-		normalizeEndpointIdentity(config.endpoint),
-		normalizeRemoteKeySegment(config.bucket),
-		normalizeRemoteKeySegment(config.prefix),
+		normalizeEndpointIdentity(config.backend.profile.endpoint),
+		normalizeRemoteKeySegment(config.backend.destination.bucket),
+		normalizeRemoteKeySegment(config.backend.destination.prefix),
 		normalizeRemoteKeySegment(config.profile),
 	]);
 	const hash = createHash("sha256").update(identity).digest("hex").slice(0, 10);
@@ -443,10 +462,18 @@ export function statePathForPartialConfig(partial: PartialConfig) {
 	return statePathForConfig({
 		settingsVersion: 2,
 		target: partial.target ?? DEFAULT_PROFILE,
-		endpoint: normalizeConfiguredString(partial.endpoint) ?? "",
-		bucket: normalizeConfiguredString(partial.bucket) ?? "",
-		prefix: trimSlashes(normalizeOptionalString(partial.prefix) ?? DEFAULT_PREFIX),
 		profile,
+		backend: {
+			type: "s3",
+			profile: {
+				endpoint: normalizeConfiguredString(partial.endpoint) ?? "",
+			},
+			destination: {
+				bucket: normalizeConfiguredString(partial.bucket) ?? "",
+				prefix: trimSlashes(normalizeOptionalString(partial.prefix) ?? DEFAULT_PREFIX),
+				namespace: profile,
+			},
+		},
 	} as SyncConfig);
 }
 
@@ -575,7 +602,7 @@ function validateConfigDocumentForMigration(settings: Record<string, unknown>) {
 	normalizeTargetSwitchAction(settings.targetSwitchAction);
 	const profiles = requireNamedObjectMap(settings.profiles, "profiles");
 	const targets = requireNamedObjectMap(settings.targets, "targets");
-	validateUniqueRemoteTargets(targets);
+	validateUniqueRemoteTargets(targets, profiles);
 	for (const [name, value] of Object.entries(profiles)) {
 		const profile = ownObject(profiles, name);
 		if (!profile || value !== profile) {
