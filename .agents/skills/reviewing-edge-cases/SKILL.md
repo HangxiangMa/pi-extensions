@@ -11,8 +11,8 @@ Simulate a skeptical reviewer after the primary behavior works. Find plausible f
 
 Infer authority from the request:
 
-- For an audit, review, or diagnosis request, inspect and report only.
-- For a preflight, hardening, fix, or implementation request, add focused failing tests first when practical, make the smallest justified fixes, and verify them.
+- For an audit, review, diagnosis, or preflight request, inspect and report only.
+- For a hardening, fix, implementation, or other explicit editing request, add focused failing tests first when practical, make the smallest justified fixes, and verify them.
 - Do not post comments, resolve threads, commit, push, or otherwise write externally unless explicitly requested.
 
 Read the diff, affected implementation, existing tests, contracts, and repository instructions before judging behavior. For non-trivial work, check repository memory or equivalent project notes when instructed.
