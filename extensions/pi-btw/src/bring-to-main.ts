@@ -6,6 +6,7 @@ import {
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
+	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { SideThreadTurn } from "./side-thread.js";
 
@@ -31,6 +32,15 @@ export interface BtwSelectionLine {
 export interface BtwTextPosition {
 	line: number;
 	column: number;
+}
+
+export interface BtwTextRangeSelectorState {
+	cursor: BtwTextPosition;
+	anchor?: BtwTextPosition;
+	lineAnchor?: number;
+	preferredColumn: number;
+	scrollOffset: number;
+	horizontalOffset: number;
 }
 
 export type BtwQuickBringToMainScope =
@@ -170,6 +180,7 @@ export type BtwBringToMainPreviewAction = { kind: "bring" } | { kind: "back" } |
 
 export class BtwBringToMainPreview implements Component {
 	private readonly lines: string[];
+	private displayLines: string[];
 	private scrollOffset = 0;
 	private finished = false;
 
@@ -182,10 +193,15 @@ export class BtwBringToMainPreview implements Component {
 		private readonly onAction: (action: BtwBringToMainPreviewAction) => void,
 	) {
 		this.lines = draft.split("\n").map(escapeTerminalControls);
+		this.displayLines = this.lines;
 	}
 
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
+		this.displayLines = this.lines.flatMap((line) => {
+			const wrapped = wrapTextWithAnsi(line, safeWidth);
+			return wrapped.length > 0 ? wrapped : [""];
+		});
 		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS);
 		const showFooter = availableRows >= 3;
 		const viewportHeight = Math.max(1, availableRows - 1 - (showFooter ? 1 : 0));
@@ -196,9 +212,7 @@ export class BtwBringToMainPreview implements Component {
 		return fitRows(
 			[
 				truncateToWidth(this.theme.fg("accent", this.theme.bold(header)), safeWidth, ""),
-				...this.lines
-					.slice(this.scrollOffset, this.scrollOffset + viewportHeight)
-					.map((line) => truncateToWidth(line, safeWidth, "")),
+				...this.displayLines.slice(this.scrollOffset, this.scrollOffset + viewportHeight),
 				...(showFooter ? [truncateToWidth(this.theme.fg("muted", footer), safeWidth, "")] : []),
 			],
 			availableRows,
@@ -237,7 +251,7 @@ export class BtwBringToMainPreview implements Component {
 	private clampScroll(viewportHeight: number): void {
 		this.scrollOffset = Math.max(
 			0,
-			Math.min(this.scrollOffset, Math.max(0, this.lines.length - viewportHeight)),
+			Math.min(this.scrollOffset, Math.max(0, this.displayLines.length - viewportHeight)),
 		);
 	}
 
@@ -373,8 +387,33 @@ export class BtwTextRangeSelector implements Component {
 		private readonly keybindings: KeybindingsManager,
 		turns: readonly SideThreadTurn[],
 		private readonly onAction: (action: BtwTextRangeSelectorAction) => void,
+		initialState?: BtwTextRangeSelectorState,
 	) {
 		this.lines = buildBtwSelectionLines(turns);
+		if (initialState) {
+			this.cursor = clampTextPosition(this.lines, initialState.cursor);
+			this.anchor = initialState.anchor
+				? clampTextPosition(this.lines, initialState.anchor)
+				: undefined;
+			this.lineAnchor =
+				initialState.lineAnchor === undefined
+					? undefined
+					: Math.max(0, Math.min(this.lines.length - 1, initialState.lineAnchor));
+			this.preferredColumn = Math.max(0, initialState.preferredColumn);
+			this.scrollOffset = Math.max(0, initialState.scrollOffset);
+			this.horizontalOffset = Math.max(0, initialState.horizontalOffset);
+		}
+	}
+
+	getState(): BtwTextRangeSelectorState {
+		return {
+			cursor: { ...this.cursor },
+			anchor: this.anchor ? { ...this.anchor } : undefined,
+			lineAnchor: this.lineAnchor,
+			preferredColumn: this.preferredColumn,
+			scrollOffset: this.scrollOffset,
+			horizontalOffset: this.horizontalOffset,
+		};
 	}
 
 	render(width: number): string[] {

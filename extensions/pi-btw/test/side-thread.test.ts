@@ -483,6 +483,71 @@ test("custom text ranges pass their exact formatted draft through preview", asyn
 	});
 });
 
+test("exact text selection survives returning from preview", async () => {
+	const thread = createSideThread("context");
+	thread.turns.push({
+		kind: "answered",
+		question: "abcd",
+		answer: "answer",
+		response: response("answer"),
+	});
+	let editor = "main draft";
+	let selectorCount = 0;
+	const ctx = {
+		ui: {
+			getEditorText: () => editor,
+			setEditorText: (text: string) => {
+				editor = text;
+			},
+			custom: async (
+				factory: (...args: never[]) => {
+					handleInput(data: string): void;
+					render(width: number): string[];
+				},
+			) => {
+				let result: unknown;
+				const component = factory(
+					{ terminal: { rows: 10 }, requestRender() {} } as never,
+					{
+						fg: (_color: string, text: string) => text,
+						bg: (_color: string, text: string) => text,
+						bold: (text: string) => text,
+					} as never,
+					keybindings() as never,
+					((value: unknown) => {
+						result = value;
+					}) as never,
+				);
+				selectorCount += 1;
+				if (selectorCount === 1) {
+					component.handleInput("\u001b[1;2C");
+					component.handleInput("\u001b[1;2C");
+				} else {
+					assert.match(component.render(80).join("\n"), /Selected: 1 line · 1 message/);
+				}
+				component.handleInput("\r");
+				return result;
+			},
+		},
+	} as never;
+	let previewCount = 0;
+
+	const result = await chooseBringToMain(thread, ctx, {
+		showMenu: async (_ctx, _title, options) => {
+			const value = options.find((option) => option.startsWith("Select exact text"));
+			return value ? { kind: "select", value } : { kind: "back" };
+		},
+		showPreview: async () => {
+			previewCount += 1;
+			return previewCount === 1 ? { kind: "back" } : { kind: "bring" };
+		},
+	});
+
+	assert.equal(selectorCount, 2);
+	assert.equal(result.kind, "bringToMain");
+	assert.match(result.kind === "bringToMain" ? result.draft : "", /User:\nab/);
+});
+
 test("bring-to-main preview renders exact content and configured Bring and Back keys", () => {
 	const actions: unknown[] = [];
 	const tui = { terminal: { rows: 9 }, requestRender() {} };
@@ -511,6 +576,24 @@ test("bring-to-main preview renders exact content and configured Bring and Back 
 	preview.handleInput("q");
 
 	assert.deepEqual(actions, [{ kind: "back" }]);
+});
+
+test("bring-to-main preview wraps long lines without hiding content", () => {
+	const content = "abcdefghijklmnopqrstuvwxyz0123456789";
+	const preview = new BtwBringToMainPreview(
+		{ terminal: { rows: 12 }, requestRender() {} } as never,
+		{
+			fg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		} as never,
+		keybindings() as never,
+		content,
+		{ lines: 1, messages: 1, tokens: 9 },
+		() => undefined,
+	);
+
+	const contentRows = preview.render(12).slice(1, -1);
+	assert.equal(contentRows.join("").replaceAll("\u001b[0m", ""), content);
 });
 
 test("bring-to-main scope menu propagates Ctrl+C as a side-thread close", async () => {
@@ -888,6 +971,62 @@ test("confirmed replace reports the discarded-draft outcome", async () => {
 	assert.deepEqual(notifications, [
 		"Replaced the main-editor draft with 2 messages (~4 tokens). Review and submit when ready.",
 	]);
+});
+
+test("replace re-prompts instead of discarding an editor update made during confirmation", async () => {
+	let editor = "original editor";
+	const targets = [
+		"⚠ Replace current draft  Discards current editor text",
+		"⚠ Replace current draft  Cannot be undone",
+		"Cancel  Return to the side thread",
+	];
+	let menuCount = 0;
+	const ctx = {
+		ui: {
+			getEditorText: () => editor,
+			setEditorText: (text: string) => {
+				editor = text;
+			},
+			custom: async (
+				factory: (...args: never[]) => {
+					handleInput(data: string): void;
+					options?: readonly string[];
+				},
+			) => {
+				const entryText = editor;
+				let result: unknown;
+				const component = factory(
+					{ requestRender() {} } as never,
+					{} as never,
+					keybindings() as never,
+					((value: unknown) => {
+						result = value;
+					}) as never,
+				);
+				const target = targets[menuCount];
+				assert.ok(target);
+				const index = component.options?.indexOf(target) ?? -1;
+				assert.ok(index >= 0);
+				if (menuCount === 1) editor = "concurrent editor update";
+				for (let step = 0; step < index; step += 1) component.handleInput("\u001b[B");
+				component.handleInput("\r");
+				editor = entryText;
+				menuCount += 1;
+				return result;
+			},
+			notify() {},
+		},
+	} as never;
+
+	const result = await loadBringToMainDraft("brought context", ctx, {
+		lines: 1,
+		messages: 1,
+		tokens: 4,
+	});
+
+	assert.equal(result, "back");
+	assert.equal(menuCount, 3);
+	assert.equal(editor, "concurrent editor update");
 });
 
 test("empty main editor receives an editable draft with a concrete success message", async () => {

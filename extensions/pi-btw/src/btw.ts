@@ -18,6 +18,7 @@ import {
 	BtwMenuSelector,
 	type BtwMenuSelectorAction,
 	BtwTextRangeSelector,
+	type BtwTextRangeSelectorState,
 	buildQuickBringToMainSegments,
 	estimateBringToMainTokens,
 	formatBtwBringToMain,
@@ -310,7 +311,12 @@ export type BtwThreadResult = { kind: "closed" };
 
 type BtwBringToMainChoice =
 	| BtwThreadResult
-	| { kind: "bringToMain"; draft: string; summary: BtwBringToMainSummary }
+	| {
+			kind: "bringToMain";
+			draft: string;
+			summary: BtwBringToMainSummary;
+			selectionState?: BtwTextRangeSelectorState;
+	  }
 	| { kind: "back" };
 
 type BtwBringToMainDelivery = "loaded" | "back" | "closed";
@@ -463,22 +469,40 @@ export async function chooseBringToMain(
 		}
 
 		if (scope !== exactOption) continue;
+		let selectionState: BtwTextRangeSelectorState | undefined;
 		while (true) {
 			const selectedRange = await showBtwCustomPreservingEditor<BtwBringToMainChoice>(
 				ctx,
-				(tui, theme, keybindings, done) =>
-					new BtwTextRangeSelector(tui, theme, keybindings, thread.turns, (action) => {
-						if (action.kind === "back") done({ kind: "back" });
-						else if (action.kind === "close") done({ kind: "closed" });
-						else done(makeChoice(action.segments));
-					}),
+				(tui, theme, keybindings, done) => {
+					let selector: BtwTextRangeSelector;
+					selector = new BtwTextRangeSelector(
+						tui,
+						theme,
+						keybindings,
+						thread.turns,
+						(action) => {
+							if (action.kind === "back") done({ kind: "back" });
+							else if (action.kind === "close") done({ kind: "closed" });
+							else done({ ...makeChoice(action.segments), selectionState: selector.getState() });
+						},
+						selectionState,
+					);
+					return selector;
+				},
 			);
 			if (selectedRange.kind === "closed") return selectedRange;
 			if (selectedRange.kind === "back") break;
 			const preview = await showPreview(ctx, selectedRange.draft, selectedRange.summary);
 			if (preview.kind === "close") return { kind: "closed" };
-			if (preview.kind === "back") continue;
-			return selectedRange;
+			if (preview.kind === "back") {
+				selectionState = selectedRange.selectionState;
+				continue;
+			}
+			return {
+				kind: "bringToMain",
+				draft: selectedRange.draft,
+				summary: selectedRange.summary,
+			};
 		}
 	}
 }
@@ -555,6 +579,13 @@ export async function loadBringToMainDraft(
 		if (confirmed.kind === "close") return "closed";
 		if (confirmed.kind === "back" || confirmed.value === "Back  Keep current editor text") continue;
 		if (confirmed.value !== "⚠ Replace current draft  Cannot be undone") continue;
+		if (ctx.ui.getEditorText() !== current) {
+			ctx.ui.notify(
+				"The main editor changed during confirmation. Review the updated draft and choose again.",
+				"warning",
+			);
+			continue;
+		}
 		ctx.ui.setEditorText(draft);
 		ctx.ui.notify(
 			`Replaced the main-editor draft with ${describeContent()}. Review and submit when ready.`,
