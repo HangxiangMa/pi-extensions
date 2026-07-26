@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-webui",
 	"version": "0.32.0",
-	"description": "Local Radix UI web companion for the current Pi terminal session.",
+	"description": "Experimental Radix UI web companion for the current Pi terminal session.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -57,6 +57,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "extensions/pi-webui"
+		"directory": "experimental/pi-webui"
 	}
 }

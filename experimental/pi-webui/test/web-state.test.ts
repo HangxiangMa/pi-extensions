@@ -4,7 +4,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 
 const state = (await import(
-	pathToFileURL(path.join(process.cwd(), "extensions/pi-webui/src/web/state.js")).href
+	pathToFileURL(path.join(process.cwd(), "experimental/pi-webui/src/web/state.js")).href
 )) as {
 	initialState(): WebState;
 	applySnapshot(current: WebState, snapshot: Snapshot): WebState;

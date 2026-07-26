@@ -4,7 +4,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 
 const transcript = (await import(
-	pathToFileURL(path.join(process.cwd(), "extensions/pi-webui/src/web/transcript.js")).href
+	pathToFileURL(path.join(process.cwd(), "experimental/pi-webui/src/web/transcript.js")).href
 )) as {
 	toolPhaseLabel(tool?: { phase?: string; isError?: boolean }): string;
 	toolCommandPreview(tool?: { args?: unknown }): string;

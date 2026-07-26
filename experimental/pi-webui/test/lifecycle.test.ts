@@ -219,6 +219,12 @@ function harness(overrides: Partial<RuntimeDependencies> = {}) {
 	};
 }
 
+test("session start warns that pi-webui is experimental", async () => {
+	const h = harness();
+	await h.emit("session_start");
+	assert.match(h.notifications.join("\n"), /pi-webui is experimental/i);
+});
+
 test("/webui lazily starts one server, rotates links, and projects the existing branch", async () => {
 	const h = harness();
 	await h.emit("session_start");

@@ -800,7 +800,7 @@ async function readAsset(name: string): Promise<Buffer> {
 		return await readFile(runtimePath);
 	} catch (error) {
 		if (!isNodeError(error) || error.code !== "ENOENT") throw error;
-		return readFile(join(process.cwd(), "extensions", "pi-webui", "src", "web", name));
+		return readFile(join(process.cwd(), "experimental", "pi-webui", "src", "web", name));
 	}
 }
 

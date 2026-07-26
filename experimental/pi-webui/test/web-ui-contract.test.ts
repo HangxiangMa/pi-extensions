@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
-const root = path.join(process.cwd(), "extensions/pi-webui/src/web");
+const root = path.join(process.cwd(), "experimental/pi-webui/src/web");
 const [html, app, overlays, client, styles, markdown, imageDrag] = await Promise.all([
 	readFile(path.join(root, "index.html"), "utf8"),
 	readFile(path.join(root, "ui/app.jsx"), "utf8"),

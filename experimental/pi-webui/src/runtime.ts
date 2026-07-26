@@ -46,6 +46,8 @@ import {
 
 const WIDGET_KEY = "webui";
 const ACTIVITY_STATUS_KEY = "webui:activity";
+const EXPERIMENTAL_WARNING =
+	"pi-webui is experimental; its browser workflow and package API may change.";
 const INPUT_HEADER = /^<pi-webui-input nonce="([0-9a-f-]+)">\n/;
 const INPUT_FOOTER = "\n</pi-webui-input>";
 const COMMAND_USAGE = "Usage: /webui [open|settings|status|help|init]";
@@ -284,6 +286,7 @@ export class WebUIRuntime {
 		ctx.ui.setWidget(WIDGET_KEY, undefined);
 		this.activityId += 1;
 		ctx.ui.setStatus(ACTIVITY_STATUS_KEY, undefined);
+		if (ctx.hasUI) ctx.ui.notify(EXPERIMENTAL_WARNING, "warning");
 		if (settingsResult.warning) ctx.ui.notify(settingsResult.warning, "warning");
 		if (!this.settings.startOnSessionStart) return;
 		try {

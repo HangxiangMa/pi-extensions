@@ -163,8 +163,14 @@ test("a menu selection cannot dispatch into a replacement session", async () => 
 	await opening;
 
 	assert.equal(starts, 0);
-	assert.equal(original.notifications.length, 0);
-	assert.equal(replacement.notifications.length, 0);
+	assert.deepEqual(
+		original.notifications.map((notification) => notification.message),
+		["pi-webui is experimental; its browser workflow and package API may change."],
+	);
+	assert.deepEqual(
+		replacement.notifications.map((notification) => notification.message),
+		["pi-webui is experimental; its browser workflow and package API may change."],
+	);
 });
 
 test("menu waits for settings persistence before rebuilding current state", async () => {
