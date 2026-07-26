@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hardening Code Paths"
+  short_description: "Confirm and fix plausible code-path failure modes."
+  default_prompt: "Use $hardening-code-paths to trace this code path, confirm plausible failures, fix the shared cause, and verify bounded sibling cases."

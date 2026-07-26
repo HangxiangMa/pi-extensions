@@ -4,7 +4,7 @@ Use this as a prompt library, not a requirement to test every item. Select domai
 
 ## Inputs and representation
 
-- Empty, singleton, maximum-size, malformed, duplicate, and partially valid input
+- Empty, singleton, maximum-size, malformed, duplicate, unsorted, missing, null, undefined, NaN, wrong-type, and partially valid input
 - Leading/trailing whitespace, blank lines, mixed newline forms, and embedded NUL/control bytes
 - Equivalent delimiter forms, nesting, escaping, quoting, casing, and normalization
 - UTF-8 byte limits versus code units, code points, grapheme clusters, and display cells
@@ -16,6 +16,7 @@ Use this as a prompt library, not a requirement to test every item. Select domai
 - Start/end boundaries, reversed endpoints, zero-length ranges, and one-past-the-end positions
 - Cross-line or cross-record selections, especially an endpoint at the next item's start
 - Inclusive versus half-open semantics and separators that belong between items
+- Overflow, underflow, divide-by-zero, precision loss, and invalid numeric conversions
 - Empty collections, duplicate identities, unstable ordering, and mutation during iteration
 - Clamping after the underlying collection shrinks or changes
 
@@ -32,19 +33,29 @@ Use this as a prompt library, not a requirement to test every item. Select domai
 
 - Cancellation before start, while waiting, after side effects, and during cleanup
 - State captured before `await` and changed before continuation resumes
-- Concurrent updates, lost writes, duplicate callbacks, retries, and out-of-order completion
+- Concurrent updates, lost writes, duplicate callbacks, retries, reconnects, disconnects, and out-of-order completion
 - Session, component, request, or generation replacement while work is in flight
 - Teardown after partial initialization and cleanup when one disposer fails
-- Timeouts where descendants or inherited streams outlive a leader
+- Timeouts where descendants, file handles, sockets, locks, transactions, subscriptions, or inherited streams outlive their owner
+- Memory or retained-state growth across retries, replacements, and long-lived sessions
 
-## Files, processes, and network
+## Files, processes, network, and trust boundaries
 
+- HTTP, WebSocket, CLI, file, environment, database, and external-API inputs validated at the boundary
+- Authentication, authorization, tenant ownership, unsafe deserialization, and sensitive logging
 - Absolute paths, `..`, symlink escapes/swaps, broken links, and containment after realpath
 - File identity changes between validation and use; bounded reads and partial writes
 - Argument boundaries, shell expansion, environment/config helpers, and terminal injection
 - Partial protocol messages, malformed success responses, truncation, and retry classification
 - Idempotency when a response is lost; only settled work may be evicted from deduplication state
 - Secret redaction in errors, logs, diagnostics, and persisted state
+
+## Time, consistency, and compatibility
+
+- Time zones, DST transitions, clock skew, expiry boundaries, and wall-clock versus monotonic time
+- Ordering assumptions, eventual consistency, stale reads, and partial failure across stores or services
+- Response-shape and schema evolution, backward compatibility, and mixed-version readers or writers
+- Packaging, runtime, platform, architecture, and configuration mismatches
 
 ## Framing and trust boundaries
 

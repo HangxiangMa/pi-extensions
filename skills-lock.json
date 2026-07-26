@@ -1,0 +1,53 @@
+{
+	"version": 1,
+	"skills": {
+		"applying-tdd": {
+			"source": "narumiruna/skills",
+			"sourceType": "github",
+			"skillPath": "skills/workflow-repository/applying-tdd/SKILL.md",
+			"computedHash": "bfb1256046d8e002e83f3a1acd9c00af15fe098f649d391374cc6852ffc243ec"
+		},
+		"designing-user-experiences": {
+			"source": "narumiruna/skills",
+			"sourceType": "github",
+			"skillPath": "skills/ui-ux-design/designing-user-experiences/SKILL.md",
+			"computedHash": "b434e67f86e03e4dd084ab968b959102e189d6376160c4e44a0dec218f39d993"
+		},
+		"explaining-step-by-step": {
+			"source": "narumiruna/skills",
+			"sourceType": "github",
+			"skillPath": "skills/learning-explanation/explaining-step-by-step/SKILL.md",
+			"computedHash": "1aa9df9a404a0cac46e97c19258f8493564384e2c3afe9a978bf2d58c70d591c"
+		},
+		"hardening-code-paths": {
+			"source": "narumiruna/skills",
+			"sourceType": "github",
+			"skillPath": "skills/workflow-repository/hardening-code-paths/SKILL.md",
+			"computedHash": "3d8d1e4fcdbc9c56befd98cf986f075700b0fbd79e14a9c83cf8385617743a72"
+		},
+		"reviewing-code": {
+			"source": "narumiruna/skills",
+			"sourceType": "github",
+			"skillPath": "skills/workflow-repository/reviewing-code/SKILL.md",
+			"computedHash": "2920e6e8f54958f40afcfb0d8781e37aeb4eb1cf11b7c5b44166a4693ff13a43"
+		},
+		"running-panel-review-loops": {
+			"source": "narumiruna/skills",
+			"sourceType": "github",
+			"skillPath": "skills/workflow-repository/running-panel-review-loops/SKILL.md",
+			"computedHash": "cb1bf52f5489331da557920eff87016f7b4c7f57ce05041b183aab8fbc926606"
+		},
+		"writing-git-commits": {
+			"source": "narumiruna/skills",
+			"sourceType": "github",
+			"skillPath": "skills/workflow-repository/writing-git-commits/SKILL.md",
+			"computedHash": "dedf046b1a6fae4069e6a3965b32b1879f78af1a475896e2ff4f155fe376f8c6"
+		},
+		"writing-plans": {
+			"source": "narumiruna/skills",
+			"sourceType": "github",
+			"skillPath": "skills/writing-research/writing-plans/SKILL.md",
+			"computedHash": "e31d2ff275c0bf89978fae40f88ef73e02a2eef5ad7cc6b5453440c3bd0e5b64"
+		}
+	}
+}
