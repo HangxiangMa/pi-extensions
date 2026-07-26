@@ -19,6 +19,15 @@ import {
 	processStagedImage,
 	validateStagedBrowserImages,
 } from "./images.js";
+import {
+	createWebUIDetailComponent,
+	createWebUIMenuComponent,
+	safeTerminalText,
+	type WebUIMenuAction,
+	type WebUIMenuState,
+	webUIMenuItems,
+	webUIMenuTitle,
+} from "./menu.js";
 import { type EffectivePiImageSettings, readEffectivePiImageSettings } from "./pi-settings.js";
 import {
 	type WebSendRequest,
@@ -36,10 +45,12 @@ import {
 } from "./settings.js";
 
 const WIDGET_KEY = "webui";
+const ACTIVITY_STATUS_KEY = "webui:activity";
 const INPUT_HEADER = /^<pi-webui-input nonce="([0-9a-f-]+)">\n/;
 const INPUT_FOOTER = "\n</pi-webui-input>";
-const COMMAND_USAGE = "Usage: /webui [settings|status|help|init]";
+const COMMAND_USAGE = "Usage: /webui [open|settings|status|help|init]";
 const COMMAND_COMPLETIONS = [
+	{ value: "open", label: "open", description: "Open WebUI and display a fresh link" },
 	{ value: "settings", label: "settings", description: "Open WebUI settings" },
 	{ value: "status", label: "status", description: "Show effective WebUI settings and state" },
 	{ value: "help", label: "help", description: "Show WebUI command help" },
@@ -111,6 +122,7 @@ export class WebUIRuntime {
 	private settingsPath = "pi-webui.json";
 	private settingsSource: SettingsLoadResult["source"] = "defaults";
 	private settingsSaveQueue: Promise<void> = Promise.resolve();
+	private activityId = 0;
 
 	constructor(
 		private readonly pi: ExtensionAPI,
@@ -121,7 +133,7 @@ export class WebUIRuntime {
 
 	register(): void {
 		this.pi.registerCommand("webui", {
-			description: "Open or configure the local web companion for this Pi session",
+			description: "Manage the local web companion for this Pi session",
 			getArgumentCompletions: (prefix) => {
 				const normalized = prefix.trimStart().toLowerCase();
 				if (/\s/.test(normalized)) return null;
@@ -133,7 +145,11 @@ export class WebUIRuntime {
 				const action = args.trim().toLowerCase();
 				try {
 					if (!action) {
-						await this.presentLink(ctx);
+						await this.showMenu(ctx);
+						return;
+					}
+					if (action === "open") {
+						await this.openWebUI(ctx);
 						return;
 					}
 					if (action === "settings") {
@@ -154,10 +170,12 @@ export class WebUIRuntime {
 					}
 					if (ctx.hasUI) ctx.ui.notify(COMMAND_USAGE, "warning");
 				} catch (error) {
-					if (!action) {
-						ctx.ui.notify(`Pi WebUI could not start: ${formatError(error)}`, "error");
-					} else if (ctx.hasUI) {
-						ctx.ui.notify(`Pi WebUI command failed: ${formatError(error)}`, "error");
+					if (ctx.hasUI) {
+						const message = `Pi WebUI command failed: ${formatError(error)}`;
+						ctx.ui.notify(
+							action === "open" || !action ? `${message}. Retry with /webui open.` : message,
+							"error",
+						);
 					}
 				}
 			},
@@ -243,6 +261,8 @@ export class WebUIRuntime {
 		previousConversation?.close();
 		await this.releaseServer();
 		if (generation !== this.generation) return;
+		await this.settingsSaveQueue;
+		if (generation !== this.generation) return;
 		const settingsResult = await this.dependencies.loadSettings();
 		if (generation !== this.generation) return;
 		this.applySettingsResult(settingsResult);
@@ -262,6 +282,8 @@ export class WebUIRuntime {
 		this.closed = false;
 		this.lastSettingsWarning = "";
 		ctx.ui.setWidget(WIDGET_KEY, undefined);
+		this.activityId += 1;
+		ctx.ui.setStatus(ACTIVITY_STATUS_KEY, undefined);
 		if (settingsResult.warning) ctx.ui.notify(settingsResult.warning, "warning");
 		if (!this.settings.startOnSessionStart) return;
 		try {
@@ -285,6 +307,8 @@ export class WebUIRuntime {
 		this.context = undefined;
 		this.conversation = undefined;
 		ctx.ui.setWidget(WIDGET_KEY, undefined);
+		this.activityId += 1;
+		ctx.ui.setStatus(ACTIVITY_STATUS_KEY, undefined);
 	}
 
 	private captureContext(ctx: ExtensionContext): void {
@@ -363,7 +387,105 @@ export class WebUIRuntime {
 		ctx.ui.notify(`Pi WebUI: ${link}`, "info");
 	}
 
+	private async openWebUI(ctx: ExtensionCommandContext): Promise<void> {
+		if (ctx.mode === "print" || ctx.mode === "json") return;
+		const activityId = ++this.activityId;
+		ctx.ui.setStatus(
+			ACTIVITY_STATUS_KEY,
+			this.server ? "Creating fresh WebUI link…" : "Starting WebUI…",
+		);
+		try {
+			await this.presentLink(ctx);
+		} finally {
+			if (activityId === this.activityId) {
+				ctx.ui.setStatus(ACTIVITY_STATUS_KEY, undefined);
+			}
+		}
+	}
+
+	private menuState(): WebUIMenuState {
+		return {
+			serverRunning: this.server !== undefined,
+			startupAutomatic: this.settings.startOnSessionStart,
+			settingsSource:
+				this.settingsDocument === undefined
+					? "Defaults (invalid file ignored)"
+					: this.settingsSource === "settings file"
+						? "Settings file"
+						: "Defaults",
+			settingsPath: this.settingsPath,
+			settingsInvalid: this.settingsDocument === undefined,
+		};
+	}
+
+	private async showMenu(ctx: ExtensionCommandContext): Promise<void> {
+		if (!ctx.hasUI) return;
+		const generation = this.generation;
+		let selectedAction: WebUIMenuAction | undefined;
+		while (generation === this.generation) {
+			const state = this.menuState();
+			let action: WebUIMenuAction | undefined;
+			if (ctx.mode === "tui") {
+				action = await ctx.ui.custom<WebUIMenuAction | undefined>(
+					(tui, theme, _keybindings, done) =>
+						createWebUIMenuComponent(state, tui, theme, done, selectedAction),
+				);
+			} else {
+				const items = webUIMenuItems(state);
+				const options = items.map((item) => `${item.label} — ${item.description ?? ""}`);
+				const selected = await ctx.ui.select(webUIMenuTitle(state), options);
+				const selectedIndex = selected === undefined ? -1 : options.indexOf(selected);
+				action = items[selectedIndex]?.value;
+			}
+			if (generation !== this.generation || !action) return;
+			selectedAction = action;
+			if (action === "open") {
+				await this.openWebUI(ctx);
+				return;
+			}
+			if (action === "settings") {
+				await this.showSettings(ctx);
+				if (generation !== this.generation) return;
+				continue;
+			}
+			if (action === "repair") {
+				await this.showDetail(ctx, "Repair WebUI settings", this.repairLines());
+				if (generation !== this.generation) return;
+				continue;
+			}
+			if (action === "status") {
+				await this.showDetail(ctx, "Pi WebUI status", this.statusLines());
+				if (generation !== this.generation) return;
+				continue;
+			}
+			await this.showDetail(ctx, "Pi WebUI help", this.helpLines());
+			if (generation !== this.generation) return;
+		}
+	}
+
+	private async showDetail(
+		ctx: ExtensionCommandContext,
+		title: string,
+		lines: readonly string[],
+	): Promise<void> {
+		if (ctx.mode === "tui") {
+			await ctx.ui.custom<void>((tui, theme, keybindings, done) =>
+				createWebUIDetailComponent(title, lines, tui, theme, keybindings, done),
+			);
+			return;
+		}
+		await ctx.ui.select([title, "", ...lines].join("\n"), ["Back"]);
+	}
+
 	private async showSettings(ctx: ExtensionCommandContext): Promise<void> {
+		if (this.settingsDocument === undefined) {
+			if (ctx.mode === "tui") {
+				await this.showDetail(ctx, "Repair WebUI settings", this.repairLines());
+			} else if (ctx.hasUI) {
+				ctx.ui.notify(this.repairLines().join("\n"), "warning");
+			}
+			return;
+		}
 		if (ctx.mode !== "tui") {
 			if (ctx.hasUI) {
 				ctx.ui.notify(`Edit WebUI settings manually: ${this.settingsPath}`, "info");
@@ -371,26 +493,35 @@ export class WebUIRuntime {
 			return;
 		}
 
+		const settingsGeneration = this.generation;
 		const items: SettingItem[] = [
 			{
 				id: "startOnSessionStart",
-				label: "Start on session start",
-				description: "Start WebUI and display a link for each newly initialized Pi session",
-				currentValue: String(this.settings.startOnSessionStart),
-				values: ["true", "false"],
+				label: "Start WebUI automatically",
+				description: "Choose whether future Pi session initializations display a WebUI link",
+				currentValue: this.settings.startOnSessionStart ? "Every session" : "Manual",
+				values: ["Manual", "Every session"],
 			},
 		];
 
 		await ctx.ui.custom((tui, theme, _keybindings, done) => {
 			const container = new Container();
-			container.addChild(new Text(theme.fg("accent", theme.bold("Pi WebUI Settings")), 1, 1));
+			const title = new Text(theme.fg("accent", theme.bold("Pi WebUI Settings")), 1, 1);
+			container.addChild(title);
+			container.addChild(
+				new Text(
+					`Changes save immediately. Startup changes apply on the next session initialization or reload.\nAdvanced settings: ${safeTerminalText(this.settingsPath)}`,
+					1,
+					0,
+				),
+			);
 			const list = new SettingsList(
 				items,
 				Math.min(items.length + 2, 15),
 				getSettingsListTheme(),
 				(id, value) => {
 					if (id !== "startOnSessionStart") return;
-					const requested = value === "true";
+					const requested = value === "Every session";
 					const operation = this.settingsSaveQueue.then(async () => {
 						const previous = this.settings.startOnSessionStart;
 						try {
@@ -407,60 +538,77 @@ export class WebUIRuntime {
 							this.settingsDocument = document;
 							this.settingsSource = "settings file";
 						} catch (error) {
-							list.updateValue(id, String(previous));
-							ctx.ui.notify(`WebUI settings save failed: ${formatError(error)}`, "error");
-							tui.requestRender();
+							if (settingsGeneration === this.generation) {
+								list.updateValue(id, previous ? "Every session" : "Manual");
+								ctx.ui.notify(`WebUI settings save failed: ${formatError(error)}`, "error");
+								tui.requestRender();
+							}
 						}
 					});
 					this.settingsSaveQueue = operation.catch(() => undefined);
 				},
 				() => done(undefined),
-				{ enableSearch: true },
+				{ enableSearch: false },
 			);
 			container.addChild(list);
 			return {
 				render: (width: number) => container.render(width),
-				invalidate: () => container.invalidate(),
+				invalidate: () => {
+					title.setText(theme.fg("accent", theme.bold("Pi WebUI Settings")));
+					container.invalidate();
+				},
 				handleInput(data: string) {
 					list.handleInput?.(data);
 					tui.requestRender();
 				},
 			};
 		});
+		await this.settingsSaveQueue;
+	}
+
+	private statusLines(): string[] {
+		const source =
+			this.settingsDocument === undefined ? "Defaults (invalid file ignored)" : this.settingsSource;
+		return [
+			`Server: ${this.server ? "Running" : "Stopped"}`,
+			`Startup: ${this.settings.startOnSessionStart ? "Every session" : "Manual"} (${source})`,
+			`Image limits (${source}): ${this.effectiveImageLimits.maxImages} images, ${formatMib(this.effectiveImageLimits.maxImageBytes)}/image, ${formatMib(this.effectiveImageLimits.maxBatchBytes)}/batch, ${this.effectiveImageLimits.maxImagePixels.toLocaleString("en-US")} pixels/image`,
+			`Settings: ${safeTerminalText(this.settingsPath)}`,
+		];
 	}
 
 	private showStatus(ctx: ExtensionCommandContext): void {
 		if (!ctx.hasUI) return;
-		const source =
-			this.settingsDocument === undefined ? "defaults (invalid file ignored)" : this.settingsSource;
-		ctx.ui.notify(
-			[
-				"Pi WebUI status",
-				`startOnSessionStart: ${this.settings.startOnSessionStart} (${source})`,
-				`Image limits (${source}): ${this.effectiveImageLimits.maxImages} images, ${formatMib(this.effectiveImageLimits.maxImageBytes)}/image, ${formatMib(this.effectiveImageLimits.maxBatchBytes)}/batch, ${this.effectiveImageLimits.maxImagePixels.toLocaleString("en-US")} pixels/image`,
-				`Settings: ${this.settingsPath}`,
-				`Server: ${this.server ? "running" : "stopped"}`,
-			].join("\n"),
-			"info",
-		);
+		ctx.ui.notify(["Pi WebUI status", ...this.statusLines()].join("\n"), "info");
+	}
+
+	private helpLines(): string[] {
+		return [
+			COMMAND_USAGE,
+			"/webui: open the current-state menu",
+			"open: start or reuse the current session server and display a fresh one-time link",
+			"settings: edit WebUI settings in TUI mode",
+			"status: show effective settings, source, path, and current server state",
+			"init: create the defaults file without overwriting existing content",
+			'Accepted JSON starts with { "startOnSessionStart": false } and may include advanced maxImages, maxImageBytes, maxBatchBytes, and maxImagePixels fields.',
+			`Settings path: ${safeTerminalText(this.settingsPath)}`,
+			"Image byte/pixel limits stay in Advanced JSON; Pi provider-ready dimension/Base64 limits are fixed.",
+			"Settings changes save immediately; startup changes apply on the next session initialization or reload.",
+		];
+	}
+
+	private repairLines(): string[] {
+		return [
+			"The settings file is invalid and was preserved without changes.",
+			"Safe defaults remain active; settings writes are paused.",
+			`File: ${safeTerminalText(this.settingsPath)}`,
+			"Repair the JSON file, then run /reload before editing settings again.",
+		];
 	}
 
 	private showHelp(ctx: ExtensionCommandContext): void {
 		if (!ctx.hasUI) return;
-		ctx.ui.notify(
-			[
-				COMMAND_USAGE,
-				"/webui: start or reuse the current session server and display a fresh one-time link",
-				"settings: edit WebUI settings in TUI mode",
-				"status: show effective settings, source, path, and current server state",
-				"init: create the defaults file without overwriting existing content",
-				'Accepted JSON starts with { "startOnSessionStart": false } and may include advanced maxImages, maxImageBytes, maxBatchBytes, and maxImagePixels fields.',
-				`Settings path: ${this.settingsPath}`,
-				"Image byte/pixel limits stay in Advanced JSON; Pi provider-ready dimension/Base64 limits are fixed.",
-				"Changes apply on the next session initialization or reload.",
-			].join("\n"),
-			"info",
-		);
+		ctx.ui.notify(this.helpLines().join("\n"), "info");
 	}
 
 	private async initializeSettings(ctx: ExtensionCommandContext): Promise<void> {

@@ -99,6 +99,8 @@ function harness(overrides: Partial<RuntimeDependencies> = {}) {
 	};
 	const ctx = {
 		cwd: "/workspace/demo",
+		hasUI: true,
+		mode: "rpc",
 		get model() {
 			return model;
 		},
@@ -122,6 +124,10 @@ function harness(overrides: Partial<RuntimeDependencies> = {}) {
 			notify(message: string) {
 				notifications.push(message);
 			},
+			async select(_title: string, options: string[]) {
+				return options[0];
+			},
+			setStatus() {},
 			setWidget(key: string, value: unknown) {
 				if (value === undefined) widgets.delete(key);
 				else widgets.set(key, value);
@@ -834,7 +840,7 @@ test("replacement and shutdown close stale servers and invalidate send callbacks
 	const gate = deferred<ReturnType<typeof harness>["server"]>();
 	const h = harness({ startServer: async () => gate.promise });
 	await h.emit("session_start");
-	const opening = h.commands.get("webui")?.handler("", h.ctx as never);
+	const opening = h.commands.get("webui")?.handler("open", h.ctx as never);
 	const replacing = h.emit("session_start", { reason: "reload" });
 	gate.resolve(h.server);
 	await Promise.all([opening, replacing]);
