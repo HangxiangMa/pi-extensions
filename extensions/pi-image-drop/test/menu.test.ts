@@ -161,14 +161,16 @@ test("disposing a menu loader aborts its owned task", async () => {
 
 test("nested dialogs distinguish cancellation from closing Image Drop", async () => {
 	async function customResult<T>(
-		input: string,
+		inputs: string | readonly string[],
 		show: (ctx: ReturnType<typeof createMockContext>["ctx"]) => Promise<T>,
 	) {
 		const context = createMockContext({
 			mode: "tui",
 			custom: async (factory: unknown) => {
 				const harness = createCustomSelectorHarness(factory, 80);
-				harness.handleInput(input);
+				for (const input of typeof inputs === "string" ? [inputs] : inputs) {
+					harness.handleInput(input);
+				}
 				return harness.result;
 			},
 		});
@@ -182,10 +184,12 @@ test("nested dialogs distinguish cancellation from closing Image Drop", async ()
 		await customResult("\u001b", (ctx) => showImageDropConfirmDialog(ctx, "Save?", "Review")),
 		"cancelled",
 	);
-	assert.deepEqual(await customResult("\r", (ctx) => showImageDropInputDialog(ctx, "Limit", "4")), {
-		kind: "submitted",
-		value: "4",
-	});
+	assert.deepEqual(
+		await customResult(["1", "2", "tui.input.submit"], (ctx) =>
+			showImageDropInputDialog(ctx, "Limit", "4"),
+		),
+		{ kind: "submitted", value: "12" },
+	);
 	assert.deepEqual(
 		await customResult("\u0003", (ctx) => showImageDropInputDialog(ctx, "Limit", "4")),
 		{ kind: "closed" },
@@ -265,6 +269,39 @@ test("SettingsList sanitizes diagnostics, updates in place, and rolls back a fai
 	assert.deepEqual(attempts, [true]);
 	assert.match(afterToggle, /Start with each Pi session/);
 	assert.match(afterToggle, /Off/);
+});
+
+test("Settings enqueues rapid changes before an earlier save settles", async () => {
+	const requested: boolean[] = [];
+	let releaseFirst!: () => void;
+	const first = new Promise<void>((resolve) => {
+		releaseFirst = resolve;
+	});
+	const context = createMockContext({
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 80);
+			harness.handleInput("\r");
+			harness.handleInput("\r");
+			assert.deepEqual(requested, [true, false]);
+			releaseFirst();
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			harness.handleInput("\u001b");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			return harness.result;
+		},
+	});
+	await showImageDropSettingsMenu(context.ctx, {
+		lines: [],
+		editable: true,
+		startOnSessionStart: false,
+		limitsValue: "Recommended",
+		onStartChange: async (enabled) => {
+			requested.push(enabled);
+			if (enabled) await first;
+			return true;
+		},
+	});
 });
 
 test("Settings waits for pending saves before Back or Close", async () => {

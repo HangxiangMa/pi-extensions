@@ -185,14 +185,13 @@ export function showImageDropInputDialog(
 ): Promise<InputDialogResult> {
 	return ctx.ui.custom<InputDialogResult>((tui, theme, keybindings, done) => {
 		const input = new Input();
-		input.setValue(initialValue);
-		input.onSubmit = (value) => done({ kind: "submitted", value });
-		input.onEscape = () => done({ kind: "cancelled" });
 		const heading = new Text("", 0, 0);
+		const current = new Text("", 0, 0);
 		const hint = new Text("", 0, 0);
 		const applyTheme = () => {
 			heading.setText(theme.fg("accent", theme.bold(safeMenuText(title))));
-			const confirm = bindingText(keybindings, "tui.select.confirm");
+			current.setText(theme.fg("muted", `Current: ${safeMenuText(initialValue)}`));
+			const confirm = bindingText(keybindings, "tui.input.submit");
 			const cancel = bindingText(keybindings, "tui.select.cancel", "ctrl+c");
 			hint.setText(
 				theme.fg(
@@ -221,6 +220,7 @@ export function showImageDropInputDialog(
 				const safeWidth = Math.max(1, width);
 				return [
 					...heading.render(safeWidth),
+					...current.render(safeWidth),
 					...input.render(safeWidth),
 					...hint.render(safeWidth),
 				].map((line) => truncateToWidth(line, safeWidth));
@@ -228,13 +228,14 @@ export function showImageDropInputDialog(
 			invalidate() {
 				applyTheme();
 				heading.invalidate();
+				current.invalidate();
 				input.invalidate();
 				hint.invalidate();
 			},
 			handleInput(data: string) {
 				if (matchesKey(data, Key.ctrl("c"))) done({ kind: "closed" });
 				else if (keybindings.matches(data, "tui.select.cancel")) done({ kind: "cancelled" });
-				else if (keybindings.matches(data, "tui.select.confirm")) {
+				else if (keybindings.matches(data, "tui.input.submit")) {
 					done({ kind: "submitted", value: input.getValue() });
 				} else input.handleInput(data);
 				tui.requestRender();
@@ -321,8 +322,9 @@ export function showImageDropSettingsMenu(
 			(id, value) => {
 				if (id !== "automatic-start" || exitRequested) return;
 				displayedStart = value;
+				const saveAttempt = options.onStartChange(value === "On").catch(() => false);
 				saveQueue = saveQueue.then(async () => {
-					const saved = await options.onStartChange(value === "On");
+					const saved = await saveAttempt;
 					if (closed) return;
 					if (saved) persistedStart = value;
 					else if (displayedStart === value) {
@@ -424,7 +426,12 @@ function limitValueText(value: LimitMenuValue): string {
 
 interface MenuKeybindings {
 	getKeys(
-		binding: "tui.select.up" | "tui.select.down" | "tui.select.confirm" | "tui.select.cancel",
+		binding:
+			| "tui.select.up"
+			| "tui.select.down"
+			| "tui.select.confirm"
+			| "tui.select.cancel"
+			| "tui.input.submit",
 	): readonly string[];
 }
 

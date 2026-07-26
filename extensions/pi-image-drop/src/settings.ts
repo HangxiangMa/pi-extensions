@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -90,16 +91,7 @@ export async function loadSettings(
 	if (signal?.aborted) throw signal.reason;
 	let text: string;
 	try {
-		const stats = await abortable(lstat(path), signal);
-		if (stats.isSymbolicLink()) return invalid(path, "symbolic links are not accepted");
-		if (!stats.isFile()) return invalid(path, "settings path is not a regular file");
-		if (stats.size > MAX_SETTINGS_BYTES) {
-			return invalid(path, `settings file exceeds ${MAX_SETTINGS_BYTES} bytes`);
-		}
-		text = await readFile(path, { encoding: "utf8", signal });
-		if (Buffer.byteLength(text, "utf8") > MAX_SETTINGS_BYTES) {
-			return invalid(path, `settings file exceeds ${MAX_SETTINGS_BYTES} bytes`);
-		}
+		text = await readSettingsDocument(path, signal);
 	} catch (error) {
 		if (signal?.aborted) throw error;
 		if (isNodeError(error) && error.code === "ENOENT") {
@@ -173,6 +165,60 @@ function waitForPendingSave(path: string, signal?: AbortSignal): Promise<void> {
 	return abortable(pending, signal);
 }
 
+async function openSettingsDescriptor(
+	path: string,
+	signal?: AbortSignal,
+): Promise<Awaited<ReturnType<typeof open>>> {
+	const flags = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0);
+	const opening = open(path, flags);
+	try {
+		return await abortable(opening, signal);
+	} catch (error) {
+		if (signal?.aborted) {
+			void opening.then((handle) => handle.close()).catch(() => undefined);
+		}
+		throw error;
+	}
+}
+
+async function readSettingsDocument(path: string, signal?: AbortSignal): Promise<string> {
+	const handle = await openSettingsDescriptor(path, signal);
+	try {
+		const [descriptorStats, pathStats] = await Promise.all([
+			abortable(handle.stat(), signal),
+			abortable(lstat(path), signal),
+		]);
+		if (pathStats.isSymbolicLink()) throw new Error("symbolic links are not accepted");
+		if (!descriptorStats.isFile() || !pathStats.isFile()) {
+			throw new Error("settings path is not a regular file");
+		}
+		if (descriptorStats.dev !== pathStats.dev || descriptorStats.ino !== pathStats.ino) {
+			throw new Error("settings path changed while it was being opened");
+		}
+		if (descriptorStats.size > MAX_SETTINGS_BYTES) {
+			throw new Error(`settings file exceeds ${MAX_SETTINGS_BYTES} bytes`);
+		}
+		const buffer = Buffer.alloc(MAX_SETTINGS_BYTES + 1);
+		let offset = 0;
+		while (offset < buffer.byteLength) {
+			const { bytesRead } = await abortable(
+				handle.read(buffer, offset, buffer.byteLength - offset, offset),
+				signal,
+			);
+			if (bytesRead === 0) break;
+			offset += bytesRead;
+		}
+		if (offset > MAX_SETTINGS_BYTES) {
+			throw new Error(`settings file exceeds ${MAX_SETTINGS_BYTES} bytes`);
+		}
+		return buffer.subarray(0, offset).toString("utf8");
+	} finally {
+		const closing = handle.close();
+		if (signal?.aborted) void closing.catch(() => undefined);
+		else await closing;
+	}
+}
+
 async function saveSettingsAtomic(
 	settings: ImageDropSettings,
 	path: string,
@@ -180,17 +226,7 @@ async function saveSettingsAtomic(
 ): Promise<void> {
 	let document: Record<string, unknown> = {};
 	try {
-		const stats = await lstat(path);
-		if (stats.isSymbolicLink()) throw new Error("symbolic links are not accepted");
-		if (!stats.isFile()) throw new Error("settings path is not a regular file");
-		if (stats.size > MAX_SETTINGS_BYTES) {
-			throw new Error(`settings file exceeds ${MAX_SETTINGS_BYTES} bytes`);
-		}
-		const existing = await readFile(path, "utf8");
-		if (Buffer.byteLength(existing, "utf8") > MAX_SETTINGS_BYTES) {
-			throw new Error(`settings file exceeds ${MAX_SETTINGS_BYTES} bytes`);
-		}
-		const parsed = JSON.parse(existing) as unknown;
+		const parsed = JSON.parse(await readSettingsDocument(path)) as unknown;
 		if (!isRecord(parsed) || !normalizeSettings(parsed)) {
 			throw new Error("existing settings are malformed or invalid");
 		}
