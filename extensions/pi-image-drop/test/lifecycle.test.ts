@@ -389,14 +389,19 @@ test("Status exposes readiness, model, history, and Pi policy without starting t
 		},
 	});
 	await emit(harness.mock, "session_start", {}, harness.context.ctx);
-	harness.runtime.addReadyImageForTesting("one", "one.png", Buffer.from("source"), PROCESSED);
+	harness.runtime.addReadyImageForTesting("sent", "sent.png", Buffer.from("source"), PROCESSED);
+	const batch = harness.runtime.getBatchForTesting();
+	const sent = batch?.reserveMessage("sent");
+	assert.ok(sent);
+	batch?.commitReservation(sent.digest);
+	harness.runtime.addReadyImageForTesting("draft", "draft.png", Buffer.from("source"), PROCESSED);
 	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
 	assert.equal(harness.serverStarts, 0);
 	assert.ok(statusSignal instanceof AbortSignal);
 	assert.match(statusLines.join("\n"), /1\/1 ready/);
 	assert.match(statusLines.join("\n"), /Supports images/);
 	assert.match(statusLines.join("\n"), /Pi image sending: Enabled/);
-	assert.match(statusLines.join("\n"), /Sent history/);
+	assert.match(statusLines.join("\n"), /Retained capacity: 2\/128 images.*draft \+ sent history/);
 });
 
 test("a failed Status refresh preserves and labels the previous valid policy", async () => {

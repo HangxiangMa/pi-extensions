@@ -171,6 +171,15 @@ export class BatchStore {
 		};
 	}
 
+	retainedCapacityUsage(): { images: number; bytes: number; maxImages: number; maxBytes: number } {
+		return {
+			images: this.history.length + this.items.length,
+			bytes: this.historyBytes() + this.draftResidentBytes(),
+			maxImages: this.settings.maxRetainedImages,
+			maxBytes: this.settings.maxRetainedBytes,
+		};
+	}
+
 	reserveItems(inputs: readonly ItemReservation[], expectedRevision = this.revision): number {
 		this.assertMutable(expectedRevision);
 		if (inputs.length === 0) throw new BatchError("No images supplied", "invalid");

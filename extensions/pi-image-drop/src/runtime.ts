@@ -390,11 +390,11 @@ export class ImageDropRuntime {
 			else settingsError = `Pi image settings refresh failed — ${formatError(loaded.error)}`;
 			const piSettings = previousPiSettings;
 			const state = batch.publicState();
-			const history = batch.publicHistoryState();
+			const retained = batch.retainedCapacityUsage();
 			const lines = [
 				`Service: ${this.server ? "Running" : "Not started"}`,
 				this.batchStatusLine(state),
-				`Sent history: ${history.items.length}/${history.maxImages} images · ${formatBytes(history.totalBytes)}/${formatBytes(history.maxBytes)}`,
+				`Retained capacity: ${retained.images}/${retained.maxImages} images · ${formatBytes(retained.bytes)}/${formatBytes(retained.maxBytes)} (draft + sent history)`,
 				`Current model: ${supportsImages(ctx) ? "Supports images" : "Text only — sending disabled"}`,
 				...(piSettings
 					? [

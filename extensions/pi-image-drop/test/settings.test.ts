@@ -143,6 +143,43 @@ test("concurrent settings saves publish in user action order", async () => {
 	}
 });
 
+test("settings loads wait for an earlier queued save", async () => {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-image-drop-settings-read-order-"));
+	const settingsPath = path.join(directory, "pi-image-drop.json");
+	let releaseSave!: () => void;
+	let markSaveStarted!: () => void;
+	const saveStarted = new Promise<void>((resolve) => {
+		markSaveStarted = resolve;
+	});
+	const release = new Promise<void>((resolve) => {
+		releaseSave = resolve;
+	});
+	try {
+		await writeFile(settingsPath, '{"startOnSessionStart":false}\n');
+		const saving = saveSettings({ ...DEFAULT_SETTINGS, startOnSessionStart: true }, settingsPath, {
+			rename: async (source, destination) => {
+				markSaveStarted();
+				await release;
+				await rename(source, destination);
+			},
+		});
+		await saveStarted;
+		let loadSettled = false;
+		const loading = loadSettings(settingsPath).then((result) => {
+			loadSettled = true;
+			return result;
+		});
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(loadSettled, false);
+		releaseSave();
+		await saving;
+		const loaded = await loading;
+		assert.equal(loaded.settings.startOnSessionStart, true);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("failed atomic publication preserves the previous settings and cleans temporary files", async () => {
 	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-image-drop-settings-fail-"));
 	const settingsPath = path.join(directory, "pi-image-drop.json");

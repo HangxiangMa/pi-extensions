@@ -82,6 +82,7 @@ export function settingsFilePath(): string {
 }
 
 export async function loadSettings(path = settingsFilePath()): Promise<SettingsLoadResult> {
+	await (saveQueues.get(path) ?? Promise.resolve()).catch(() => undefined);
 	let text: string;
 	try {
 		const stats = await lstat(path);

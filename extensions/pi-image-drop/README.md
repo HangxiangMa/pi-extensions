@@ -111,7 +111,7 @@ Example:
 | `maxRetainedImages` | 128 | 256 |
 | `maxRetainedBytes` | 512 MiB | 1 GiB |
 
-Settings saved from the menu are written atomically, preserve unknown fields, and apply to future Pi sessions; the current draft and history are never rebuilt or discarded to apply new limits. Resource-limit changes remain a preview until **Review and save** is confirmed. Cancelling a field, preview, or menu writes nothing. If saving fails, the previous file and effective session settings remain active and the menu reports how to retry.
+Settings saved from the menu are written atomically, preserve unknown fields, and apply to future Pi sessions; the current draft and history are never rebuilt or discarded to apply new limits. Automatic-start changes save immediately, and leaving Settings waits for an in-progress save. Resource-limit changes remain a preview until **Review changes before saving** is confirmed; cancelling a field, preview, or unsaved limits menu writes no resource-limit change. If saving fails, the previous file and effective session settings remain active and the menu reports how to retry.
 
 `maxRetainedImages` and `maxRetainedBytes` govern how much sent history can coexist with the current draft, using combined image-count and resident-byte accounting. When either limit is reached, Image Drop removes the oldest sent-history entries first until the new draft fits. It never automatically removes the active or queued draft and does not reject a new image merely because retained history is full; the draft remains independently bounded by the batch limits above.
 
