@@ -19,7 +19,7 @@ Updated: 2026-07-26
 | Configurable delegation workflow | Implemented, all methods by default | `blocking.enabled: false` selects async-only; existing `stateful.enabled: false` remains blocking-only; exact registration, settings-preservation, preview/reload, and compatibility tests in `test/subagents.test.ts` |
 | Follow-up, mailbox, list, interrupt, close | Implemented, default-on | `subagent_send`, `subagent_manage`, and `subagent_mailbox` action dispatch in `stateful.ts`; registry and completion-delivery tests |
 | Separate active and retained capacity | Implemented | FIFO queue and limits in `registry.ts`; capacity/fairness test |
-| Interactive settings and inspection | Implemented | Bare `/subagents` leads with delegation workflow, completion behavior, and current agents; consequential workflow changes preview tool effects before atomic save/reload, while advanced and compatibility routes preserve expert access |
+| Interactive settings and inspection | Implemented | Bare `/subagents` leads with delegation workflow, completion behavior, and current agents; consequential workflow changes preview tool effects before atomic save/reload, while shallow advanced settings preserve expert access through the single `/subagents` command |
 | Native transcript switching | Core-blocked | Extension APIs expose custom entries/UI but no supported child transcript/session switch handle |
 | Parent context selection | Implemented | `context.ts`: none/all/summary/recent N/entry IDs, text-only sanitation and byte bound |
 | Approval/sandbox/header inheritance | Unsupported guarantee | `SingleResult.policy`; only environment and explicit CLI overrides are reported |

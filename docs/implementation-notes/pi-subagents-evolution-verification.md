@@ -12,7 +12,7 @@ The implementation is organized as independently reversible modules:
 2. Stateful lifecycle: `registry.ts` and default-on registrations in `stateful.ts`.
 3. Context and policy reporting: `context.ts` and `SingleResult.policy`.
 4. Persistence/recovery: `persistence.ts`.
-5. Inspection/core boundary: `/subagents:agents`, capability matrix, and core API proposal.
+5. Inspection/core boundary: `/subagents` → **Current agents**, capability matrix, and core API proposal.
 
 The existing `subagent` schema remains the compatibility path. Setting `stateful.enabled: false` removes all lifecycle tools without affecting batch calls; `stateful.transport` defaults to `subprocess` and provides the runtime rollback path. Persisted state is separate, versioned, and transport-neutral; older package versions ignore it.
 
@@ -62,4 +62,4 @@ Executed from the repository root with the local package:
 
 ## Migration and downgrade
 
-No existing settings or request fields are renamed. `stateful` remains an optional settings object; omission enables lifecycle tools with the subprocess transport, while `enabled: false` removes them. Unknown future state versions are quarantined instead of interpreted. Downgrade leaves the separate state directory untouched and harmless; users can clear it before downgrade with `/subagents:agents clear` when running the new version or remove `~/.pi/agent/pi-subagents-state/` manually after Pi exits.
+No existing settings or request fields are renamed. `stateful` remains an optional settings object; omission enables lifecycle tools with the subprocess transport, while `enabled: false` removes them. Unknown future state versions are quarantined instead of interpreted. Downgrade leaves the separate state directory untouched and harmless; users can clear **Current agents** from `/subagents` before downgrade when running the new version or remove `~/.pi/agent/pi-subagents-state/` manually after Pi exits.

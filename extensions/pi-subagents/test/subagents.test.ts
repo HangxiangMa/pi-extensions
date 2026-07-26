@@ -72,7 +72,7 @@ type SubagentTool = {
 	}>;
 };
 
-test("subagents registers consistent blocking guidance and configuration command", () => {
+test("subagents registers consistent blocking guidance and one management command", () => {
 	const mock = createMockPi();
 	subagents(mock.pi);
 
@@ -124,8 +124,10 @@ test("subagents registers consistent blocking guidance and configuration command
 	);
 	assert.match(parameters?.properties?.aggregator?.description ?? "", /omit this key entirely/i);
 	assert.match(parameters?.properties?.aggregator?.description ?? "", /treated as absent/i);
-	assert.ok(mock.commands.has("subagents"));
-	assert.ok(mock.commands.has("subagents:config"));
+	assert.deepEqual(
+		[...mock.commands.keys()].filter((name) => name.startsWith("subagents")),
+		["subagents"],
+	);
 	assert.deepEqual(mock.commands.get("subagents")?.getArgumentCompletions?.("s"), [
 		{ value: "settings", label: "settings", description: "Configure completion behavior" },
 		{ value: "status", label: "status", description: "Show effective subagent settings" },
@@ -256,7 +258,8 @@ test("bare subagents opens a current-session manager and keeps direct routes pre
 		assert.match(managerContext.notifications.at(-1)?.message ?? "", /Current session/);
 		assert.match(managerContext.notifications.at(-1)?.message ?? "", /User settings/);
 		await command.handler("help", managerContext.ctx);
-		assert.match(managerContext.notifications.at(-1)?.message ?? "", /compatibility route/);
+		assert.match(managerContext.notifications.at(-1)?.message ?? "", /configure agent tools/);
+		assert.doesNotMatch(managerContext.notifications.at(-1)?.message ?? "", /subagents:/);
 		await command.handler("unknown", managerContext.ctx);
 		assert.match(
 			managerContext.notifications.at(-1)?.message ?? "",
@@ -266,18 +269,6 @@ test("bare subagents opens a current-session manager and keeps direct routes pre
 		assert.match(
 			managerContext.notifications.at(-1)?.message ?? "",
 			/Unknown \/subagents subcommand: settings extra/,
-		);
-		const agentsCommand = mock.commands.get("subagents:agents");
-		assert.ok(agentsCommand);
-		await agentsCommand.handler("list", managerContext.ctx);
-		assert.match(
-			managerContext.notifications.at(-1)?.message ?? "",
-			/No current-session subagents/,
-		);
-		await agentsCommand.handler("unknown", managerContext.ctx);
-		assert.match(
-			managerContext.notifications.at(-1)?.message ?? "",
-			/Unknown \/subagents:agents subcommand: unknown/,
 		);
 		for (const handler of mock.events.get("session_shutdown") ?? []) {
 			await handler({}, managerContext.ctx);
@@ -674,7 +665,8 @@ test("disabled stateful settings do not advertise unavailable lifecycle tools", 
 		await command.handler("", context.ctx);
 		assert.match(renders.flat().join("\n"), /Delegation: Blocking only/);
 		await command.handler("help", context.ctx);
-		assert.match(context.notifications.at(-1)?.message ?? "", /unavailable.*disabled/);
+		assert.match(context.notifications.at(-1)?.message ?? "", /configure agent tools/);
+		assert.doesNotMatch(context.notifications.at(-1)?.message ?? "", /subagents:/);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -752,8 +744,6 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 		});
 		await command.handler("settings", nonTui.ctx);
 		assert.match(nonTui.notifications[0]?.message ?? "", /Edit settings manually/);
-		await mock.commands.get("subagents:config")?.handler("", nonTui.ctx);
-		assert.match(nonTui.notifications.at(-1)?.message ?? "", /requires TUI mode/);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

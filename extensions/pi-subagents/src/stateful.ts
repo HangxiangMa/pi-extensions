@@ -548,39 +548,6 @@ export function registerStatefulSubagents(
 		},
 	});
 
-	pi.registerCommand("subagents:agents", {
-		description: "Inspect or clear current-session subagents",
-		getArgumentCompletions(prefix: string) {
-			return ["list", "clear"]
-				.filter((value) => value.startsWith(prefix))
-				.map((value) => ({ value, label: value }));
-		},
-		async handler(args, ctx) {
-			const subcommand = args.trim().toLowerCase() || "list";
-			if (subcommand === "clear") {
-				const count = await controller.clearAgents();
-				ctx.ui.notify(
-					count > 0
-						? `Cleared ${count} current-session subagent${count === 1 ? "" : "s"}.`
-						: statefulEmptyMessage(controller.getRuntimeStatus()),
-					"info",
-				);
-				return;
-			}
-			if (subcommand !== "list") {
-				ctx.ui.notify(`Unknown /subagents:agents subcommand: ${subcommand}`, "warning");
-				return;
-			}
-			const agents = controller.listAgents(true);
-			ctx.ui.notify(
-				agents.length
-					? agents.map(formatLine).join("\n")
-					: statefulEmptyMessage(controller.getRuntimeStatus()),
-				"info",
-			);
-		},
-	});
-
 	return controller;
 }
 
@@ -667,12 +634,6 @@ export function resolveSpawnContextMode(
 ): ContextMode {
 	if (value === undefined && contextEntryIds !== undefined) return "all";
 	return normalizeContextMode(value);
-}
-
-function statefulEmptyMessage(status: StatefulSubagentRuntimeStatus): string {
-	if (!status.enabled) return "Stateful subagents are disabled in user settings.";
-	if (!status.initialized) return "Stateful subagents are not initialized for this session.";
-	return "No current-session subagents.";
 }
 
 export function formatStatefulAgentLine(agent: ManagedAgent): string {

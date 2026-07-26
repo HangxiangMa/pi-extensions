@@ -240,7 +240,7 @@ The default `subprocess` transport preserves compatibility: each turn starts a f
 
 Run `/subagents` in TUI mode to open the primary manager. It leads with the current delegation workflow, human-readable async completion behavior, and active/retained counts. **Change delegation**, **Current agents**, and **Completion behavior** cover the common workflows; agent permissions, transport/runtime details, source, and settings path remain under **Advanced settings**. Escape returns from a nested screen to a newly refreshed manager and then closes it.
 
-The direct routes remain predictable: `/subagents settings` changes user completion delivery and applies it immediately, including refreshing the model-facing spawn guidance; `/subagents status` reports current-session runtime values separately from the configured value, source, and path; `/subagents help` summarizes commands and compatibility routes. In RPC mode, bare `/subagents` emits the same bounded status through Pi's notification protocol instead of opening a custom TUI. JSON and print modes do not emit ad hoc command output. Manual edits use `~/.pi/agent/pi-subagents.json` and take effect after reloading Pi:
+The direct routes remain predictable: `/subagents settings` changes user completion delivery and applies it immediately, including refreshing the model-facing spawn guidance; `/subagents status` reports current-session runtime values separately from the configured value, source, and path; `/subagents help` summarizes the single-command interface. In RPC mode, bare `/subagents` emits the same bounded status through Pi's notification protocol instead of opening a custom TUI. JSON and print modes do not emit ad hoc command output. Manual edits use `~/.pi/agent/pi-subagents.json` and take effect after reloading Pi:
 
 ```json
 {
@@ -291,7 +291,7 @@ The action schemas are flat for provider compatibility and reject parameters tha
 }
 ```
 
-Use the **Current agents** action in `/subagents` to inspect the indented agent tree, lifecycle state, unread count, and available actions, or to confirm clearing retained agents. `/subagents:agents list|clear` remains the compatibility command for the same current-session operations. Active turns are FIFO-limited by `maxActiveTurns`; excess retained work remains in `starting` state until a slot is available. `maxAgents` separately bounds running, queued, and idle records. `parentId` creates a bounded child relationship; subtree interrupt and close operate child-first.
+Use the **Current agents** action in `/subagents` to inspect the indented agent tree, lifecycle state, unread count, and available actions, or to confirm clearing retained agents. Active turns are FIFO-limited by `maxActiveTurns`; excess retained work remains in `starting` state until a slot is available. `maxAgents` separately bounds running, queued, and idle records. `parentId` creates a bounded child relationship; subtree interrupt and close operate child-first.
 
 ### Migrating from the seven-tool lifecycle surface
 
@@ -380,7 +380,7 @@ Built-in agents inherit the active/default Pi model instead of forcing a provide
 
 ## ⚙️ Configure agent tools
 
-Open `/subagents` and choose **Agent tool settings** in an interactive Pi session to edit the tools each subagent may use. `/subagents:config` remains a documented compatibility route to the same screen. These are user settings stored in `~/.pi/agent/pi-subagents.json` and affect future sessions.
+Open `/subagents`, choose **Advanced settings**, then **Agent tool settings** in an interactive Pi session to edit the tools each subagent may use. These are user settings stored in `~/.pi/agent/pi-subagents.json` and affect future sessions.
 
 Compatibility: a valid legacy `pi-subagents-config.json` is migrated automatically to `pi-subagents.json`. If both files exist, the new filename takes precedence.
 
@@ -505,7 +505,7 @@ The runner explicitly reports policy continuity in result details:
 
 Treat project-local agent prompts like executable project configuration: only enable them in trusted repositories. Stateful project agents require Pi's project trust; interactive use also keeps confirmation enabled by default.
 
-Stateful records are stored as versioned mode-0600 JSON under `~/.pi/agent/pi-subagents-state/` (or the configured Pi agent directory). Records contain sanitized logical history, never process IDs or credentials. Corrupt or unsupported state is quarantined, restored agents are always inert `idle` records, and no prior side effect is automatically resumed. Retention and count limits are configurable. Downgrading is safe: older extension versions ignore this separate state directory; use `/subagents:agents clear` before downgrade if the histories should be removed.
+Stateful records are stored as versioned mode-0600 JSON under `~/.pi/agent/pi-subagents-state/` (or the configured Pi agent directory). Records contain sanitized logical history, never process IDs or credentials. Corrupt or unsupported state is quarantined, restored agents are always inert `idle` records, and no prior side effect is automatically resumed. Retention and count limits are configurable. Downgrading is safe: older extension versions ignore this separate state directory; clear **Current agents** from `/subagents` before downgrade if the histories should be removed.
 
 ## 🗂️ Package layout
 

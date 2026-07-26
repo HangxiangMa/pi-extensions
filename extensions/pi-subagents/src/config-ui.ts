@@ -106,17 +106,11 @@ export class ToolToggleList {
 
 export function registerSubagentConfigCommand(pi: ExtensionAPI, runtime: SubagentSettingsRuntime) {
 	registerSubagentPrimaryCommand(pi, runtime);
-	pi.registerCommand("subagents:config", {
-		description: "Configure user tool settings for each subagent",
-		handler: async (_args, ctx) => {
-			await showSubagentToolSettings(pi, ctx);
-		},
-	});
 }
 
 async function showSubagentToolSettings(pi: ExtensionAPI, ctx: ExtensionCommandContext) {
 	if (ctx.mode !== "tui") {
-		if (ctx.hasUI) ctx.ui.notify("/subagents:config requires TUI mode", "info");
+		if (ctx.hasUI) ctx.ui.notify("Agent tool settings require TUI mode", "info");
 		return;
 	}
 
@@ -322,7 +316,7 @@ function registerSubagentPrimaryCommand(pi: ExtensionAPI, runtime: SubagentSetti
 					showSubagentStatus(ctx, runtime);
 					return;
 				case "help":
-					showSubagentHelp(ctx, runtime);
+					showSubagentHelp(ctx);
 					return;
 				default:
 					if (ctx.mode === "tui" || ctx.hasUI) {
@@ -359,7 +353,7 @@ async function showSubagentManager(
 				await showAdvancedSettings(pi, ctx, runtime);
 				break;
 			case "help":
-				showSubagentHelp(ctx, runtime);
+				showSubagentHelp(ctx);
 				break;
 		}
 	}
@@ -806,20 +800,15 @@ function showSubagentStatus(ctx: ExtensionCommandContext, runtime: SubagentSetti
 	);
 }
 
-function showSubagentHelp(ctx: ExtensionCommandContext, runtime: SubagentSettingsRuntime) {
+function showSubagentHelp(ctx: ExtensionCommandContext) {
 	if (ctx.mode !== "tui" && !ctx.hasUI) return;
 	const snapshot = inspectCompletionDeliverySettings();
-	const runtimeStatus = runtime.getRuntimeStatus();
 	ctx.ui.notify(
 		[
-			"/subagents — choose delegation workflow and manage current agents",
+			"/subagents — choose delegation workflow, manage current agents, and configure agent tools",
 			"/subagents settings — configure async completion behavior",
 			"/subagents status — show current-session and user-setting values",
 			"/subagents help — show this help",
-			"/subagents:config — compatibility route for per-agent user tool settings",
-			runtimeStatus.enabled
-				? "/subagents:agents list|clear — compatibility route for current-session agents"
-				: "/subagents:agents — unavailable while stateful lifecycle tools are disabled",
 			`User settings: ${safeTerminalText(snapshot.path)}`,
 		].join("\n"),
 		"info",
