@@ -6,7 +6,10 @@ import {
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 	getAgentDir,
+	type KeybindingsManager,
+	type Theme,
 } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import {
 	BtwBringToMainPreview,
 	type BtwBringToMainPreviewAction,
@@ -372,6 +375,28 @@ export async function runBtwThread({
 	}
 }
 
+type BtwCustomFactory<T> = (
+	tui: TUI,
+	theme: Theme,
+	keybindings: KeybindingsManager,
+	done: (result: T) => void,
+) => Component;
+
+async function showBtwCustomPreservingEditor<T>(
+	ctx: ExtensionCommandContext,
+	factory: BtwCustomFactory<T>,
+): Promise<T> {
+	let liveEditorText = ctx.ui.getEditorText();
+	const result = await ctx.ui.custom<T>((tui, theme, keybindings, done) =>
+		factory(tui, theme, keybindings, (value) => {
+			liveEditorText = ctx.ui.getEditorText();
+			done(value);
+		}),
+	);
+	if (ctx.ui.getEditorText() !== liveEditorText) ctx.ui.setEditorText(liveEditorText);
+	return result;
+}
+
 interface ChooseBringToMainDependencies {
 	showMenu?: typeof showBtwMenu;
 	showPreview?: typeof showBringToMainPreview;
@@ -401,12 +426,13 @@ export async function chooseBringToMain(
 	const cancelOption = "Cancel  Return to the side thread";
 
 	while (true) {
-		const scopeResult = await showMenu(
-			ctx,
-			"Bring what back to the main thread?",
-			[latestOption, fromOption, exactOption, entireOption, cancelOption],
-			{ overlay: true },
-		);
+		const scopeResult = await showMenu(ctx, "Bring what back to the main thread?", [
+			latestOption,
+			fromOption,
+			exactOption,
+			entireOption,
+			cancelOption,
+		]);
 		if (scopeResult.kind === "close") return { kind: "closed" };
 		if (scopeResult.kind === "back" || scopeResult.value === cancelOption) return { kind: "back" };
 		const scope = scopeResult.value;
@@ -422,9 +448,7 @@ export async function chooseBringToMain(
 			const questions = answered.map(
 				(turn, index) => `${index + 1}. ${truncatePreview(sanitizeSingleLine(turn.question))}`,
 			);
-			const questionResult = await showMenu(ctx, "Start from which question?", questions, {
-				overlay: true,
-			});
+			const questionResult = await showMenu(ctx, "Start from which question?", questions);
 			if (questionResult.kind === "close") return { kind: "closed" };
 			if (questionResult.kind === "back") continue;
 			const answeredTurnIndex = questions.indexOf(questionResult.value);
@@ -440,14 +464,14 @@ export async function chooseBringToMain(
 
 		if (scope !== exactOption) continue;
 		while (true) {
-			const selectedRange = await ctx.ui.custom<BtwBringToMainChoice>(
+			const selectedRange = await showBtwCustomPreservingEditor<BtwBringToMainChoice>(
+				ctx,
 				(tui, theme, keybindings, done) =>
 					new BtwTextRangeSelector(tui, theme, keybindings, thread.turns, (action) => {
 						if (action.kind === "back") done({ kind: "back" });
 						else if (action.kind === "close") done({ kind: "closed" });
 						else done(makeChoice(action.segments));
 					}),
-				{ overlay: true },
 			);
 			if (selectedRange.kind === "closed") return selectedRange;
 			if (selectedRange.kind === "back") break;
@@ -464,10 +488,10 @@ async function showBringToMainPreview(
 	draft: string,
 	summary: BtwBringToMainSummary,
 ): Promise<BtwBringToMainPreviewAction> {
-	return ctx.ui.custom<BtwBringToMainPreviewAction>(
+	return showBtwCustomPreservingEditor<BtwBringToMainPreviewAction>(
+		ctx,
 		(tui, theme, keybindings, done) =>
 			new BtwBringToMainPreview(tui, theme, keybindings, draft, summary, done),
-		{ overlay: true },
 	);
 }
 
@@ -475,12 +499,11 @@ async function showBtwMenu(
 	ctx: ExtensionCommandContext,
 	title: string,
 	options: readonly string[],
-	customOptions?: { overlay?: boolean },
 ): Promise<BtwMenuSelectorAction> {
-	return ctx.ui.custom<BtwMenuSelectorAction>(
+	return showBtwCustomPreservingEditor<BtwMenuSelectorAction>(
+		ctx,
 		(tui, theme, keybindings, done) =>
 			new BtwMenuSelector(tui, theme, keybindings, title, options, done),
-		customOptions,
 	);
 }
 
@@ -505,12 +528,11 @@ export async function loadBringToMainDraft(
 	const replaceOption = "⚠ Replace current draft  Discards current editor text";
 	const cancelOption = "Cancel  Return to the side thread";
 	while (true) {
-		const action = await showBtwMenu(
-			ctx,
-			"The main editor already has a draft",
-			[appendOption, replaceOption, cancelOption],
-			{ overlay: true },
-		);
+		const action = await showBtwMenu(ctx, "The main editor already has a draft", [
+			appendOption,
+			replaceOption,
+			cancelOption,
+		]);
 		if (action.kind === "close") return "closed";
 		if (action.kind === "back" || action.value === cancelOption) return "back";
 		if (action.value === appendOption) {
@@ -529,7 +551,6 @@ export async function loadBringToMainDraft(
 			ctx,
 			`Replace the current ${characters}-character editor draft?`,
 			["Back  Keep current editor text", "⚠ Replace current draft  Cannot be undone"],
-			{ overlay: true },
 		);
 		if (confirmed.kind === "close") return "closed";
 		if (confirmed.kind === "back" || confirmed.value === "Back  Keep current editor text") continue;

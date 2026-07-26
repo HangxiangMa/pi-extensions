@@ -381,14 +381,12 @@ test("bring-to-main scope menu offers the approved choices and selects a questio
 		thread.turns.push({ kind: "answered", question, answer, response: response(answer) });
 	}
 	const prompts: Array<{ title: string; options: string[] }> = [];
-	const overlays: boolean[] = [];
 	const selections = ["From a question onward…  Choose a starting question", "2. Q2"];
 	const ctx = { ui: {} } as never;
 
 	const result = await chooseBringToMain(thread, ctx, {
-		showMenu: async (_ctx, title, options, customOptions) => {
+		showMenu: async (_ctx, title, options) => {
 			prompts.push({ title, options: [...options] });
-			overlays.push(customOptions?.overlay === true);
 			const value = selections.shift();
 			return value ? { kind: "select", value } : { kind: "back" };
 		},
@@ -405,7 +403,6 @@ test("bring-to-main scope menu offers the approved choices and selects a questio
 			"Cancel  Return to the side thread",
 		],
 	});
-	assert.deepEqual(overlays, [true, true]);
 	assert.equal(result.kind, "bringToMain");
 	assert.doesNotMatch(result.kind === "bringToMain" ? result.draft : "", /Q1|A1/);
 	assert.match(result.kind === "bringToMain" ? result.draft : "", /Q2[\s\S]*A2/);
@@ -447,11 +444,16 @@ test("custom text ranges pass their exact formatted draft through preview", asyn
 	thread.turns.push({ kind: "answered", question: "Q", answer: "A", response: response("A") });
 	const exactDraft = formatBtwBringToMain([{ role: "assistant", text: "exact excerpt" }]);
 	let previewDraft = "";
-	let selectorOverlay = false;
+	let selectorCustomOptions: unknown;
+	let editor = "main draft";
 	const ctx = {
 		ui: {
-			custom: async (_factory: unknown, options?: { overlay?: boolean }) => {
-				selectorOverlay = options?.overlay === true;
+			getEditorText: () => editor,
+			setEditorText: (text: string) => {
+				editor = text;
+			},
+			custom: async (_factory: unknown, customOptions?: unknown) => {
+				selectorCustomOptions = customOptions;
 				return {
 					kind: "bringToMain",
 					draft: exactDraft,
@@ -472,7 +474,7 @@ test("custom text ranges pass their exact formatted draft through preview", asyn
 		},
 	});
 
-	assert.equal(selectorOverlay, true);
+	assert.equal(selectorCustomOptions, undefined);
 	assert.equal(previewDraft, exactDraft);
 	assert.deepEqual(result, {
 		kind: "bringToMain",
@@ -761,7 +763,7 @@ test("side-thread command loop loads an explicit bring-to-main draft without mut
 
 test("appending a bring-to-main draft is recommended and reports the concrete outcome", async () => {
 	let editor = "original editor";
-	let usedOverlay = false;
+	let customOptions: unknown;
 	let menuOptions: string[] = [];
 	const notifications: string[] = [];
 	const ctx = {
@@ -774,17 +776,19 @@ test("appending a bring-to-main draft is recommended and reports the concrete ou
 					_keys: unknown,
 					_done: (value: unknown) => void,
 				) => unknown,
-				options?: { overlay?: boolean },
+				options?: unknown,
 			) => {
 				const entryText = editor;
-				editor = "newer editor";
-				usedOverlay = options?.overlay === true;
-				if (!usedOverlay) editor = entryText;
-				const component = factory({}, {}, keybindings(), () => undefined) as {
-					options?: readonly string[];
-				};
+				let result: unknown;
+				customOptions = options;
+				const component = factory({}, {}, keybindings(), (value) => {
+					result = value;
+				}) as { handleInput(data: string): void; options?: readonly string[] };
 				menuOptions = [...(component.options ?? [])];
-				return { kind: "select", value: "Append after current draft  Recommended" };
+				editor = "newer editor";
+				component.handleInput("\r");
+				editor = entryText;
+				return result;
 			},
 			setEditorText: (text: string) => {
 				editor = text;
@@ -802,7 +806,7 @@ test("appending a bring-to-main draft is recommended and reports the concrete ou
 	});
 
 	assert.equal(result, "loaded");
-	assert.equal(usedOverlay, true);
+	assert.equal(customOptions, undefined);
 	assert.deepEqual(menuOptions, [
 		"Append after current draft  Recommended",
 		"⚠ Replace current draft  Discards current editor text",
@@ -919,11 +923,27 @@ test("cancelling bring-to-main loading preserves editor updates made while the m
 	const ctx = {
 		ui: {
 			getEditorText: () => editor,
-			custom: async (_factory: unknown, options?: { overlay?: boolean }) => {
+			custom: async (
+				factory: (
+					_tui: unknown,
+					_theme: unknown,
+					_keys: unknown,
+					_done: (value: unknown) => void,
+				) => unknown,
+				options?: unknown,
+			) => {
+				assert.equal(options, undefined);
 				const entryText = editor;
+				let result: unknown;
+				const component = factory({ requestRender() {} }, {}, keybindings(), (value) => {
+					result = value;
+				}) as { handleInput(data: string): void };
 				editor = "newer editor";
-				if (!options?.overlay) editor = entryText;
-				return { kind: "select", value: "Cancel  Return to the side thread" };
+				component.handleInput("\u001b[B");
+				component.handleInput("\u001b[B");
+				component.handleInput("\r");
+				editor = entryText;
+				return result;
 			},
 			setEditorText: (text: string) => {
 				editor = text;
