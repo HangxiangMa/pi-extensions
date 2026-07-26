@@ -606,10 +606,6 @@ export default function usageExtension(pi: ExtensionAPI) {
 		description: "Show usage for the current runtime account",
 		handler: commandHandler,
 	});
-	pi.registerCommand("codex-status", {
-		description: "Open /usage (temporary compatibility alias)",
-		handler: commandHandler,
-	});
 
 	pi.on("session_start", (_event, ctx) => {
 		sessionActive = true;

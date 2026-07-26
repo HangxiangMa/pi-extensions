@@ -56,14 +56,13 @@ function usageFetch(input: string | URL | Request): Promise<Response> {
 	);
 }
 
-test("pi-usage registers one primary command, compatibility alias, and lifecycle hooks", () => {
+test("pi-usage registers only its primary command and lifecycle hooks", () => {
 	const mock = createMockPi();
 	usageExtension(mock.pi);
 
 	assert.ok(mock.commands.has("usage"));
-	assert.ok(mock.commands.has("codex-status"));
+	assert.equal(mock.commands.has("codex-status"), false);
 	assert.equal(mock.commands.get("usage")?.getArgumentCompletions, undefined);
-	assert.equal(mock.commands.get("codex-status")?.getArgumentCompletions, undefined);
 	assert.deepEqual([...mock.events.keys()].sort(), [
 		"model_select",
 		"session_shutdown",
