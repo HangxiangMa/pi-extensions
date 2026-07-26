@@ -1,7 +1,12 @@
+export function allowTranscriptAutoScroll(requested, following, active = true) {
+	return Boolean(requested && following && active);
+}
+
 export function createRenderBatcher(schedule, render) {
+	let generation = 0;
 	let scheduled = false;
 	let pending = {};
-	return (extra = {}) => {
+	const batch = (extra = {}) => {
 		pending = {
 			...pending,
 			...extra,
@@ -10,13 +15,21 @@ export function createRenderBatcher(schedule, render) {
 		};
 		if (scheduled) return;
 		scheduled = true;
+		const scheduledGeneration = generation;
 		schedule(() => {
+			if (scheduledGeneration !== generation) return;
 			scheduled = false;
 			const next = pending;
 			pending = {};
 			render(next);
 		});
 	};
+	batch.cancel = () => {
+		generation += 1;
+		scheduled = false;
+		pending = {};
+	};
+	return batch;
 }
 
 export function withStableKeys(values) {

@@ -10,7 +10,10 @@ const helpers = (await import(
 	createRenderBatcher(
 		schedule: (callback: () => void) => void,
 		render: (extra: { transcriptAnnouncement?: string; scrollToLatest?: boolean }) => void,
-	): (extra?: { transcriptAnnouncement?: string; scrollToLatest?: boolean }) => void;
+	): ((extra?: { transcriptAnnouncement?: string; scrollToLatest?: boolean }) => void) & {
+		cancel(): void;
+	};
+	allowTranscriptAutoScroll(requested: boolean, following: boolean, active?: boolean): boolean;
 };
 
 test("conversation renders batch bursts while preserving important view signals", () => {
@@ -32,6 +35,33 @@ test("conversation renders batch bursts while preserving important view signals"
 
 	batch();
 	assert.equal(scheduled.length, 2);
+});
+
+test("cancelled conversation renders cannot publish stale signals", () => {
+	const scheduled: Array<() => void> = [];
+	const renders: Array<{ transcriptAnnouncement?: string }> = [];
+	const batch = helpers.createRenderBatcher(
+		(callback) => scheduled.push(callback),
+		(extra) => renders.push(extra),
+	);
+
+	batch({ transcriptAnnouncement: "Tool completed." });
+	batch.cancel();
+	scheduled[0]?.();
+	assert.deepEqual(renders, []);
+
+	batch({ transcriptAnnouncement: "New completed message from Pi." });
+	scheduled[1]?.();
+	assert.deepEqual(renders, [
+		{ transcriptAnnouncement: "New completed message from Pi.", scrollToLatest: false },
+	]);
+});
+
+test("a delayed transcript render cannot override a user who stopped following", () => {
+	assert.equal(helpers.allowTranscriptAutoScroll(true, true), true);
+	assert.equal(helpers.allowTranscriptAutoScroll(true, false), false);
+	assert.equal(helpers.allowTranscriptAutoScroll(false, true), false);
+	assert.equal(helpers.allowTranscriptAutoScroll(true, true, false), false);
 });
 
 test("transcript keys survive streaming content updates", () => {

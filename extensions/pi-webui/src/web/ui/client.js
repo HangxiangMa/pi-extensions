@@ -23,7 +23,7 @@ import {
 	prepareSend,
 	setNearBottom,
 } from "../state.js";
-import { createRenderBatcher } from "./view-helpers.js";
+import { allowTranscriptAutoScroll, createRenderBatcher } from "./view-helpers.js";
 
 const SUPPORTED_IMAGE_TYPES = new Set([
 	"image/png",
@@ -58,7 +58,15 @@ const scheduleConversationRender = createRenderBatcher(
 		// Streaming can produce many events per frame. Cap transcript work so input remains responsive.
 		setTimeout(() => requestAnimationFrame(callback), 50);
 	},
-	(extra) => emit(extra),
+	(extra) =>
+		emit({
+			...extra,
+			scrollToLatest: allowTranscriptAutoScroll(
+				extra.scrollToLatest,
+				model.following,
+				!model.closed,
+			),
+		}),
 );
 
 function createView(extra = {}) {
@@ -159,10 +167,13 @@ async function refreshSnapshot(requiredSequence = 0) {
 				const response = await fetch("/api/state", { cache: "no-store" });
 				if (!response.ok) throw new Error(await responseError(response));
 				const snapshot = await response.json();
+				const replacesConversation =
+					Number.isSafeInteger(snapshot?.sequence) && snapshot.sequence >= model.sequence;
 				model = applySnapshot(model, snapshot);
 				if (typeof snapshot.lease?.activeClientId === "string") {
 					model = applyLease(model, snapshot.lease, clientId);
 				}
+				if (replacesConversation) scheduleConversationRender.cancel();
 				emit({ scrollToLatest: model.following });
 			} while (model.sequence < snapshotTarget);
 		})().finally(() => {
@@ -208,7 +219,11 @@ function connectEvents() {
 		});
 	});
 	events.addEventListener("snapshot", (event) => {
-		model = applySnapshot(model, JSON.parse(event.data));
+		const snapshot = JSON.parse(event.data);
+		const replacesConversation =
+			Number.isSafeInteger(snapshot?.sequence) && snapshot.sequence >= model.sequence;
+		model = applySnapshot(model, snapshot);
+		if (replacesConversation) scheduleConversationRender.cancel();
 		emit({ scrollToLatest: model.following });
 	});
 	events.addEventListener("lease", (event) => {
@@ -234,12 +249,14 @@ function connectEvents() {
 	events.addEventListener("session-ended", () => {
 		model = { ...model, closed: true, activity: "ended", connected: false };
 		events?.close();
+		scheduleConversationRender.cancel();
 		emit({ transcriptAnnouncement: "Pi session ended." });
 	});
 	events.addEventListener("error", () => {
 		events?.close();
 		if (model.closed) return;
 		model = { ...model, connected: false };
+		scheduleConversationRender.cancel();
 		emit();
 		scheduleReconnect();
 	});
@@ -262,6 +279,7 @@ function scheduleReconnect() {
 
 function connectionFailure(error) {
 	model = { ...model, connected: false, error: errorMessage(error) };
+	scheduleConversationRender.cancel();
 	emit();
 	scheduleReconnect();
 }
