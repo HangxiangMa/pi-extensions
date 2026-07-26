@@ -14,6 +14,12 @@ const helpers = (await import(
 		cancel(): void;
 	};
 	allowTranscriptAutoScroll(requested: boolean, following: boolean, active?: boolean): boolean;
+	shouldBatchConversationEvent(type: string): boolean;
+	withPublishedConversation<T extends { messages: unknown[]; tools: unknown[] }>(
+		model: T,
+		messages: unknown[],
+		tools: unknown[],
+	): T;
 };
 
 test("conversation renders batch bursts while preserving important view signals", () => {
@@ -55,6 +61,35 @@ test("cancelled conversation renders cannot publish stale signals", () => {
 	assert.deepEqual(renders, [
 		{ transcriptAnnouncement: "New completed message from Pi.", scrollToLatest: false },
 	]);
+});
+
+test("only transcript-heavy conversation events are batched", () => {
+	assert.equal(helpers.shouldBatchConversationEvent("message"), true);
+	assert.equal(helpers.shouldBatchConversationEvent("tool"), true);
+	assert.equal(helpers.shouldBatchConversationEvent("activity"), false);
+	assert.equal(helpers.shouldBatchConversationEvent("session-ended"), false);
+	assert.equal(helpers.shouldBatchConversationEvent("snapshot"), false);
+});
+
+test("immediate composer renders retain the published transcript", () => {
+	const publishedMessages = [{ id: "assistant", content: "published" }];
+	const publishedTools = [{ id: "tool", phase: "start" }];
+	const pending = {
+		text: "new input",
+		activity: "idle",
+		messages: [{ id: "assistant", content: "pending stream" }],
+		tools: [{ id: "tool", phase: "update" }],
+	};
+
+	const rendered = helpers.withPublishedConversation(pending, publishedMessages, publishedTools);
+	assert.equal(rendered.text, "new input");
+	assert.equal(rendered.activity, "idle");
+	assert.equal(rendered.messages, publishedMessages);
+	assert.equal(rendered.tools, publishedTools);
+	assert.equal(
+		helpers.withPublishedConversation(pending, pending.messages, pending.tools),
+		pending,
+	);
 });
 
 test("a delayed transcript render cannot override a user who stopped following", () => {

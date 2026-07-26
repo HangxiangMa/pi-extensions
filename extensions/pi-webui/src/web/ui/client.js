@@ -23,7 +23,12 @@ import {
 	prepareSend,
 	setNearBottom,
 } from "../state.js";
-import { allowTranscriptAutoScroll, createRenderBatcher } from "./view-helpers.js";
+import {
+	allowTranscriptAutoScroll,
+	createRenderBatcher,
+	shouldBatchConversationEvent,
+	withPublishedConversation,
+} from "./view-helpers.js";
 
 const SUPPORTED_IMAGE_TYPES = new Set([
 	"image/png",
@@ -43,6 +48,8 @@ const listeners = new Set();
 const retryFiles = new Map();
 const uploadProgress = new Map();
 let model = initialState();
+let publishedMessages = model.messages;
+let publishedTools = model.tools;
 let events;
 let reconnectTimer;
 let reconnectDelay = 500;
@@ -58,7 +65,8 @@ const scheduleConversationRender = createRenderBatcher(
 		// Streaming can produce many events per frame. Cap transcript work so input remains responsive.
 		setTimeout(() => requestAnimationFrame(callback), 50);
 	},
-	(extra) =>
+	(extra) => {
+		publishConversation();
 		emit({
 			...extra,
 			scrollToLatest: allowTranscriptAutoScroll(
@@ -66,12 +74,13 @@ const scheduleConversationRender = createRenderBatcher(
 				model.following,
 				!model.closed,
 			),
-		}),
+		});
+	},
 );
 
 function createView(extra = {}) {
 	return {
-		model,
+		model: withPublishedConversation(model, publishedMessages, publishedTools),
 		mutatingAttachments,
 		uploadProgress: new Map(uploadProgress),
 		retryableIds: new Set(retryFiles.keys()),
@@ -85,6 +94,11 @@ function createView(extra = {}) {
 function emit(extra) {
 	view = createView(extra);
 	for (const listener of listeners) listener();
+}
+
+function publishConversation() {
+	publishedMessages = model.messages;
+	publishedTools = model.tools;
 }
 
 export const webClient = {
@@ -173,7 +187,10 @@ async function refreshSnapshot(requiredSequence = 0) {
 				if (typeof snapshot.lease?.activeClientId === "string") {
 					model = applyLease(model, snapshot.lease, clientId);
 				}
-				if (replacesConversation) scheduleConversationRender.cancel();
+				if (replacesConversation) {
+					scheduleConversationRender.cancel();
+					publishConversation();
+				}
 				emit({ scrollToLatest: model.following });
 			} while (model.sequence < snapshotTarget);
 		})().finally(() => {
@@ -212,18 +229,29 @@ function connectEvents() {
 			void refreshSnapshot(conversationEvent.sequence).catch(connectionFailure);
 			return;
 		}
-		model = noteUnseenUpdate(model, conversationUpdateKey(conversationEvent));
-		scheduleConversationRender({
-			transcriptAnnouncement: conversationAnnouncement(conversationEvent),
-			scrollToLatest: model.following,
-		});
+		if (shouldBatchConversationEvent(conversationEvent.type)) {
+			model = noteUnseenUpdate(model, conversationUpdateKey(conversationEvent));
+			scheduleConversationRender({
+				transcriptAnnouncement: conversationAnnouncement(conversationEvent),
+				scrollToLatest: model.following,
+			});
+			return;
+		}
+		if (conversationEvent.type === "snapshot" || conversationEvent.type === "session-ended") {
+			scheduleConversationRender.cancel();
+			publishConversation();
+		}
+		emit();
 	});
 	events.addEventListener("snapshot", (event) => {
 		const snapshot = JSON.parse(event.data);
 		const replacesConversation =
 			Number.isSafeInteger(snapshot?.sequence) && snapshot.sequence >= model.sequence;
 		model = applySnapshot(model, snapshot);
-		if (replacesConversation) scheduleConversationRender.cancel();
+		if (replacesConversation) {
+			scheduleConversationRender.cancel();
+			publishConversation();
+		}
 		emit({ scrollToLatest: model.following });
 	});
 	events.addEventListener("lease", (event) => {
@@ -250,6 +278,7 @@ function connectEvents() {
 		model = { ...model, closed: true, activity: "ended", connected: false };
 		events?.close();
 		scheduleConversationRender.cancel();
+		publishConversation();
 		emit({ transcriptAnnouncement: "Pi session ended." });
 	});
 	events.addEventListener("error", () => {
@@ -257,6 +286,7 @@ function connectEvents() {
 		if (model.closed) return;
 		model = { ...model, connected: false };
 		scheduleConversationRender.cancel();
+		publishConversation();
 		emit();
 		scheduleReconnect();
 	});
@@ -280,6 +310,7 @@ function scheduleReconnect() {
 function connectionFailure(error) {
 	model = { ...model, connected: false, error: errorMessage(error) };
 	scheduleConversationRender.cancel();
+	publishConversation();
 	emit();
 	scheduleReconnect();
 }

@@ -1,3 +1,12 @@
+export function shouldBatchConversationEvent(type) {
+	return type === "message" || type === "tool";
+}
+
+export function withPublishedConversation(model, messages, tools) {
+	if (model.messages === messages && model.tools === tools) return model;
+	return { ...model, messages, tools };
+}
+
 export function allowTranscriptAutoScroll(requested, following, active = true) {
 	return Boolean(requested && following && active);
 }
