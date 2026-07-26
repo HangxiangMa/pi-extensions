@@ -72,7 +72,9 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 	let currentWatcher: NotebookWatcher | undefined;
 	let cancelWatchDebounce: (() => void) | undefined;
 	let watchGeneration = 0;
-	let loadGeneration = 0;
+	let selectionGeneration = 0;
+	let refreshGeneration = 0;
+	let pendingSelectionPath: string | undefined;
 
 	function stopWatcher(): void {
 		watchGeneration += 1;
@@ -85,16 +87,15 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 	async function reloadSelectedNotebook(ctx?: ExtensionContext): Promise<boolean> {
 		const path = state.path;
 		if (!path) return false;
-		const generation = ++loadGeneration;
+		const generation = ++refreshGeneration;
 		try {
 			const loaded = await dependencies.loadNotebook(path);
-			if (generation !== loadGeneration || state.path !== path) return false;
+			if (generation !== refreshGeneration || state.path !== path) return false;
 			applyLoadedNotebook(state, loaded);
-			state.scroll = 0;
 			updateStatus(ctx);
 			return true;
 		} catch (cause) {
-			if (generation !== loadGeneration || state.path !== path) return false;
+			if (generation !== refreshGeneration || state.path !== path) return false;
 			state.lastError = errorMessage(cause);
 			updateStatus(ctx);
 			return false;
@@ -137,13 +138,17 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 			ctx.ui.notify("Notebook path must end in .ipynb.", "error");
 			return false;
 		}
-		const generation = ++loadGeneration;
-		updateStatus(ctx, path);
+		const generation = ++selectionGeneration;
+		refreshGeneration += 1;
+		pendingSelectionPath = path;
+		updateStatus(ctx);
 		try {
 			const loaded = await dependencies.loadNotebook(path, signal);
 			signal?.throwIfAborted();
-			if (generation !== loadGeneration) return false;
+			if (generation !== selectionGeneration) return false;
+			refreshGeneration += 1;
 			if (!startWatcher(path, ctx)) {
+				pendingSelectionPath = undefined;
 				updateStatus(ctx);
 				return false;
 			}
@@ -151,10 +156,12 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 			state.path = path;
 			state.scroll = 0;
 			applyLoadedNotebook(state, loaded);
+			pendingSelectionPath = undefined;
 			updateStatus(ctx);
 			return true;
 		} catch (cause) {
-			if (generation !== loadGeneration) return false;
+			if (generation !== selectionGeneration) return false;
+			pendingSelectionPath = undefined;
 			updateStatus(ctx);
 			if (signal?.aborted) return false;
 			ctx.ui.notify(
@@ -243,7 +250,9 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 			.finally(() => {
 				if (overlayTask !== task) return;
 				overlayTask = undefined;
-				loadGeneration += 1;
+				selectionGeneration += 1;
+				refreshGeneration += 1;
+				pendingSelectionPath = undefined;
 				stopWatcher();
 				removeMouseResize?.();
 				removeMouseResize = undefined;
@@ -264,7 +273,9 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 	}
 
 	async function hidePanel(ctx?: ExtensionContext): Promise<void> {
-		loadGeneration += 1;
+		selectionGeneration += 1;
+		refreshGeneration += 1;
+		pendingSelectionPath = undefined;
 		stopWatcher();
 		state.visible = false;
 		state.focused = false;
@@ -299,7 +310,7 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 		requestRender?.();
 	}
 
-	function updateStatus(ctx?: ExtensionContext, loadingPath?: string): void {
+	function updateStatus(ctx?: ExtensionContext, loadingPath = pendingSelectionPath): void {
 		if (!ctx?.hasUI) return;
 		if (loadingPath) {
 			ctx.ui.setStatus(

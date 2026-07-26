@@ -110,6 +110,8 @@ export class NotebookPreviewPanel implements Component {
 				);
 			}
 			const body = renderNotebookBody(this.state, inner, this.theme);
+			const maximumScroll = Math.max(0, body.length - 3);
+			this.state.scroll = Math.min(this.state.scroll, maximumScroll);
 			lines.push(...body.slice(this.state.scroll).map(pad));
 		}
 

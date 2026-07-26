@@ -30,12 +30,14 @@ function createTransitionHarness(
 	const mock = createMockPi();
 	Object.assign(mock.rawPi, { registerShortcut() {} });
 	const watchedDirectories: string[] = [];
+	const watcherListeners: Array<(event: string, filename: string | Buffer | null) => void> = [];
 	let watcherCloses = 0;
 	let component: { render(width: number): string[] } | undefined;
 	const extension = createJupyterPreview({
 		loadNotebook: load,
-		watchNotebook(directory) {
+		watchNotebook(directory, listener) {
 			watchedDirectories.push(directory);
+			watcherListeners.push(listener);
 			return { close: () => watcherCloses++ };
 		},
 	});
@@ -71,6 +73,9 @@ function createTransitionHarness(
 		mock,
 		context,
 		watchedDirectories,
+		fireWatch(index: number, filename: string) {
+			watcherListeners[index]?.("change", filename);
+		},
 		get watcherCloses() {
 			return watcherCloses;
 		},
@@ -282,6 +287,36 @@ test("a slower notebook load cannot overwrite a newer selection", async () => {
 	}
 });
 
+test("a watcher refresh cannot cancel an explicit notebook switch", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "pi-jupyter-switch-vs-refresh-"));
+	try {
+		let resolveSwitch: ((value: LoadedNotebook) => void) | undefined;
+		const switchLoad = new Promise<LoadedNotebook>((resolve) => {
+			resolveSwitch = resolve;
+		});
+		let currentLoads = 0;
+		const harness = createTransitionHarness(async (path) => {
+			if (path.endsWith("next.ipynb")) return switchLoad;
+			currentLoads++;
+			return loaded(3);
+		}, cwd);
+		await invokeJupyter(harness, "open current.ipynb");
+		const switching = invokeJupyter(harness, "open next.ipynb");
+		await Promise.resolve();
+		harness.fireWatch(0, "current.ipynb");
+		await new Promise((resolve) => setTimeout(resolve, 180));
+		assert.equal(currentLoads, 2);
+		resolveSwitch?.(loaded(2));
+		await switching;
+
+		assert.match(harness.render(), /next\.ipynb/);
+		assert.match(harness.render(), /2 cells/);
+		assert.equal(harness.watchedDirectories.length, 2);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 test("cancelling the menu loader leaves notebook state and watchers unchanged", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-jupyter-load-cancel-"));
 	try {
@@ -368,7 +403,21 @@ test("closing and immediately reopening waits for old overlay cleanup before rep
 	}
 });
 
-test("refreshing shorter content resets an out-of-range scroll position", async () => {
+test("refreshing equally long content preserves a valid scroll position", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "pi-jupyter-scroll-preserve-"));
+	try {
+		const harness = createTransitionHarness(async () => loaded(20), cwd);
+		await invokeJupyter(harness, "open demo.ipynb");
+		await invokeJupyter(harness, "scroll down 5");
+		await invokeJupyter(harness, "refresh");
+		assert.doesNotMatch(harness.render(), / 1\. markdown/);
+		assert.match(harness.render(), / 2\. markdown/);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("refreshing shorter content clamps an out-of-range scroll position", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-jupyter-scroll-clamp-"));
 	try {
 		let cells = 20;

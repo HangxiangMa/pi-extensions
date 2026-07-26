@@ -1,3 +1,4 @@
+import { constants } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Image, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
@@ -31,7 +32,7 @@ export type NotebookRenderState = Partial<LoadedNotebook> & {
 
 export async function loadNotebook(path: string, signal?: AbortSignal): Promise<LoadedNotebook> {
 	signal?.throwIfAborted();
-	const file = await open(path, "r");
+	const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
 	try {
 		signal?.throwIfAborted();
 		const info = await file.stat();
