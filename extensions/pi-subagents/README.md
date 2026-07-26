@@ -51,7 +51,7 @@ pi -e ./extensions/pi-subagents
 | **Async only** | `subagent_spawn`, `subagent_send`, `subagent_manage`, and `subagent_mailbox`; blocking `subagent` is omitted |
 | **Blocking only** | Blocking `subagent` only; equivalent to the existing `stateful.enabled: false` behavior |
 
-The preview is read-only until confirmation. Escape or **Cancel** leaves settings unchanged. Tool removal requires an extension reload because Pi does not expose extension tool unregistration; if automatic reload fails after the atomic save succeeds, run `/reload` to apply the configured workflow.
+The preview is read-only until confirmation. Escape or **Cancel** leaves settings unchanged. Tool removal requires an extension reload because Pi does not expose extension tool unregistration. To avoid aborting work or removing isolated worktrees during `session_shutdown`, workflow changes are blocked while detached agents are retained; finish or clear them through **Current agents** first. Pi owns reload-error reporting and does not return a success result to extensions, so the save notification also tells users to run `/reload` if the tool surface does not refresh.
 
 The available tools are:
 

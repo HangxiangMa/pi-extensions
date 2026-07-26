@@ -45,6 +45,15 @@ import subagents, {
 
 initTheme("dark", false);
 
+const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+const testAgentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-test-agent-"));
+process.env.PI_CODING_AGENT_DIR = testAgentDir;
+process.once("exit", () => {
+	if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+	rmSync(testAgentDir, { recursive: true, force: true });
+});
+
 type SchemaObject = {
 	properties?: Record<string, SchemaObject>;
 	items?: SchemaObject;
@@ -310,6 +319,7 @@ test("delegation workflow preview applies async-only on confirmation and cancell
 		await command.handler("", applyContext.ctx);
 		assert.equal(applyCall, 3);
 		assert.equal(reloads, 1);
+		assert.match(applyContext.notifications.at(-1)?.message ?? "", /run \/reload/i);
 		assert.match(applyRenders[0]?.join("\n") ?? "", /Delegation: All delegation methods/);
 		assert.match(applyRenders[1]?.join("\n") ?? "", /Async only/);
 		assert.match(applyRenders[2]?.join("\n") ?? "", /Current: All delegation methods/);
@@ -354,8 +364,8 @@ test("delegation workflow preview applies async-only on confirmation and cancell
 	}
 });
 
-test("delegation workflow failures remain recoverable and manager layouts stay bounded", async () => {
-	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-workflow-failures-"));
+test("configured workflow differences remain visible and manager layouts stay bounded", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-workflow-partial-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
 	try {
@@ -365,29 +375,20 @@ test("delegation workflow failures remain recoverable and manager layouts stay b
 		subagents(reloadMock.pi);
 		const command = reloadMock.commands.get("subagents");
 		assert.ok(command);
-		let call = 0;
-		const renders: string[][] = [];
+		updateDelegationWorkflowSetting("async-only");
+		let lines: string[] = [];
 		const context = createMockContext({
 			mode: "tui",
 			hasUI: true,
-			reload: async () => {
-				throw new Error("reload unavailable");
-			},
 			custom: async (factory: unknown) => {
-				const inputs =
-					call === 0 ? ["\r"] : call === 1 ? ["\u001b[B", "\r"] : call === 2 ? ["\r"] : ["\u001b"];
-				const width = call === 3 ? 40 : 100;
-				const driven = driveCustomSelector(factory, inputs, width);
-				renders[call++] = driven.renders.flat();
+				const driven = driveCustomSelector(factory, ["\u001b"], 40);
+				lines = driven.renders.flat();
 				return driven.result;
 			},
 		});
 		await command.handler("", context.ctx);
-		assert.equal(call, 4);
-		assert.match(context.notifications.at(-1)?.message ?? "", /saved.*reload failed.*\/reload/i);
-		assert.equal(inspectDelegationWorkflowSettings().value, "async-only");
-		assert.match(renders[3]?.join("\n") ?? "", /Configured after reload: Async only/);
-		assert.ok(renders[3]?.every((line) => visibleWidth(line) <= 40));
+		assert.match(lines.join("\n"), /Configured after reload: Async only/);
+		assert.ok(lines.every((line) => visibleWidth(line) <= 40));
 
 		for (const width of [40, 60, 100]) {
 			const widthMock = createMockPi();
@@ -408,6 +409,61 @@ test("delegation workflow failures remain recoverable and manager layouts stay b
 			assert.ok(lines.every((line) => visibleWidth(line) <= width));
 			assert.match(lines.join("\n"), /Delegation: Async only/);
 		}
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("delegation workflow blocks reload while detached agents are retained", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-workflow-retained-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(settingsPath, "{}\n");
+		const mock = createMockPi();
+		let reloads = 0;
+		const runtime: SubagentSettingsRuntime = {
+			getBlockingEnabled: () => true,
+			getCompletionDelivery: () => "next-turn",
+			setCompletionDelivery: () => undefined,
+			getRuntimeStatus: () => ({
+				enabled: true,
+				initialized: true,
+				transport: "subprocess",
+				completionDelivery: "next-turn",
+				activeAgents: 1,
+				retainedAgents: 2,
+			}),
+			listAgents: () => [],
+			clearAgents: async () => 0,
+		};
+		registerSubagentConfigCommand(mock.pi, runtime);
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		let call = 0;
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			reload: async () => {
+				reloads++;
+			},
+			custom: async (factory: unknown) => {
+				const inputs = call === 0 ? ["\r"] : call === 1 ? ["\u001b[B", "\r"] : ["\u001b"];
+				call++;
+				return driveCustomSelector(factory, inputs, 60).result;
+			},
+		});
+		await command.handler("", context.ctx);
+		assert.equal(call, 3);
+		assert.equal(reloads, 0);
+		assert.equal(readFileSync(settingsPath, "utf8"), "{}\n");
+		assert.match(
+			context.notifications.at(-1)?.message ?? "",
+			/2 detached subagents.*retained.*1 active.*Current agents/i,
+		);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

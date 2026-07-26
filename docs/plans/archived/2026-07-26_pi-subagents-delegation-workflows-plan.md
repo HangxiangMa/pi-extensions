@@ -37,7 +37,8 @@ Let users choose an async-only delegation workflow that omits the blocking `suba
 ## Risks
 
 - Reload runs the remainder of the command in a stale extension frame; the handler must `await ctx.reload(); return` and perform no later runtime access.
-- A settings write can succeed before reload fails. The UI must distinguish saved configuration from active runtime and provide an actionable reload instruction rather than falsely claiming the registered surface changed.
+- Pi owns reload-error reporting and does not expose a success result to extensions. The UI must provide `/reload` fallback guidance before reload rather than depending on promise rejection or falsely claiming the registered surface changed.
+- Reload emits `session_shutdown`, which can abort retained work and remove isolated worktrees; workflow changes must be blocked until no detached agents are retained.
 - Deriving presets from two booleans can mishandle explicit `false`; tests must cover all four combinations and absent defaults.
 - Narrow terminals and long settings paths can hide consequential state; custom views must hard-bound every line and retain mode/effect text.
 - Reorganizing menu order can break selector-driving tests and muscle memory; direct routes and labels remain available, while focused tests assert the revised order and Escape/back behavior.
@@ -46,7 +47,7 @@ Let users choose an async-only delegation workflow that omits the blocking `suba
 
 - Removing `blocking.enabled` restores the historical default because absence means blocking enabled; no stored-data migration is required.
 - Existing releases ignore the unknown `blocking` object and continue registering blocking mode, so downgrade is safe.
-- If reload fails after a successful save, the current runtime remains usable until the user runs `/reload`; `/subagents status` reports configured workflow separately from current registered tools.
+- If the tool surface does not refresh after a successful save, the current runtime remains usable and the pre-reload notification directs the user to run `/reload`; `/subagents status` reports configured workflow separately from current registered tools.
 - If the redesign regresses, the old menu can be restored without reverting the settings schema or tool registration guard.
 
 ## Plan
@@ -54,11 +55,11 @@ Let users choose an async-only delegation workflow that omits the blocking `suba
 - [x] Add failing settings and registration tests in `extensions/pi-subagents/test/subagents.test.ts` for absent/default, all, async-only, blocking-only, disabled, malformed, and unknown-field cases; the first focused run failed in exactly two cases because `blocking.enabled` was not normalized and async-only still registered blocking `subagent`.
 - [x] Extend `extensions/pi-subagents/src/agents.ts` and `extensions/pi-subagents/src/settings.ts` with `blocking.enabled`, workflow derivation/inspection, and an atomic workflow updater that preserves unknown fields; focused tests pass for normalization, default/user source detection, malformed-file rejection, unknown-field preservation, and all workflow combinations.
 - [x] Extract conditional blocking-tool registration in `extensions/pi-subagents/src/subagents.ts`, keep error propagation scoped to registered blocking mode, and retain commands when one or both execution surfaces are disabled; exact registered names pass for all, async-only, blocking-only, and disabled workflows, and async-only prompt guidance does not name the unavailable blocking tool.
-- [x] Add TUI contract tests for the goal-oriented manager, workflow preset selection, concrete current-to-new preview, confirmation, cancellation, save failure, reload invocation/failure, disabled/configured-versus-current state, Escape/back navigation, and bounded 40/60/100-column rendering; the initial workflow test failed against the old manager before implementation.
-- [x] Refactor `extensions/pi-subagents/src/config-ui.ts` so the manager prioritizes Change delegation, Current agents, Completion behavior, Advanced settings, and Help; human-readable labels, shallow advanced disclosure, explicit preview/save/cancel semantics, terminal successful reload, and actionable save/reload failures are covered by TUI tests while direct and compatibility routes still pass.
-- [x] Update status/help and non-TUI presentation to distinguish current registered tools from configured workflow, preserve RPC notifications and JSON/print silence, and explain `/reload` recovery after a saved-but-not-applied reload failure; focused manager, route, partial-state, and non-TUI tests pass.
+- [x] Add TUI contract tests for the goal-oriented manager, workflow preset selection, concrete current-to-new preview, confirmation, cancellation, save failure, reload invocation/fallback guidance, retained-agent blocking, disabled/configured-versus-current state, Escape/back navigation, and bounded 40/60/100-column rendering; the initial workflow test failed against the old manager before implementation.
+- [x] Refactor `extensions/pi-subagents/src/config-ui.ts` so the manager prioritizes Change delegation, Current agents, Completion behavior, Advanced settings, and Help; human-readable labels, shallow advanced disclosure, explicit preview/save/cancel semantics, a retained-agent reload gate, terminal reload handling, and actionable save/fallback guidance are covered by TUI tests while direct and compatibility routes still pass.
+- [x] Update status/help and non-TUI presentation to distinguish current registered tools from configured workflow, preserve RPC notifications and JSON/print silence, and explain `/reload` fallback when the saved tool surface does not refresh; focused manager, route, partial-state, and non-TUI tests pass.
 - [x] Update `extensions/pi-subagents/README.md`, `docs/implementation-notes/pi-subagents-capability-matrix.md`, and `docs/implementation-notes/pi-subagents-stateful-runtime.md` with workflow presets, async-only JSON, preview/reload semantics, compatibility, disabled behavior, and advanced-setting paths; targeted searches found no stale always-registered/fixed-five-tool claims.
-- [x] Format only intended files, then run `git diff --check`, focused compiled tests, `npm run typecheck --workspace @narumitw/pi-subagents`, `npm run check`, and `just pack-subagents`; all 1,497 repository tests pass, Biome/boundaries/typechecks pass, and the dry-run tarball contains the expected 24 files.
+- [x] Format only intended files, then run `git diff --check`, focused compiled tests, `npm run typecheck --workspace @narumitw/pi-subagents`, `npm run check`, and `just pack-subagents`; all 1,498 repository tests pass, Biome/boundaries/typechecks pass, and the dry-run tarball contains the expected 24 files.
 
 ## Completion Checklist
 

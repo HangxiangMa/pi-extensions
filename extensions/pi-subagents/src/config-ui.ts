@@ -347,7 +347,7 @@ async function showSubagentManager(
 		if (!action) return;
 		switch (action) {
 			case "workflow":
-				if (await showDelegationWorkflow(ctx)) return;
+				if (await showDelegationWorkflow(ctx, runtime)) return;
 				break;
 			case "agents":
 				await showCurrentSessionAgents(ctx, runtime);
@@ -426,7 +426,10 @@ async function selectManagerAction(
 	});
 }
 
-async function showDelegationWorkflow(ctx: ExtensionCommandContext): Promise<boolean> {
+async function showDelegationWorkflow(
+	ctx: ExtensionCommandContext,
+	runtime: SubagentSettingsRuntime,
+): Promise<boolean> {
 	const snapshot = inspectDelegationWorkflowSettings();
 	if (ctx.mode !== "tui") {
 		if (ctx.hasUI) {
@@ -503,9 +506,11 @@ async function showDelegationWorkflow(ctx: ExtensionCommandContext): Promise<boo
 		ctx.ui.notify(`Delegation already uses ${workflowLabel(selected)}.`, "info");
 		return false;
 	}
+	if (blockReloadWithRetainedAgents(ctx, runtime)) return false;
 
 	const confirmed = await showWorkflowPreview(ctx, snapshot.value, selected);
 	if (!confirmed) return false;
+	if (blockReloadWithRetainedAgents(ctx, runtime)) return false;
 	try {
 		updateDelegationWorkflowSetting(selected as Exclude<DelegationWorkflow, "disabled">);
 	} catch (error) {
@@ -515,17 +520,25 @@ async function showDelegationWorkflow(ctx: ExtensionCommandContext): Promise<boo
 		);
 		return false;
 	}
-	ctx.ui.notify(`Saved ${workflowLabel(selected)}. Reloading subagent tools…`, "info");
-	try {
-		await ctx.reload();
-		return true;
-	} catch (error) {
-		ctx.ui.notify(
-			`Settings were saved, but reload failed: ${formatError(error)}. Run /reload to apply ${workflowLabel(selected)}.`,
-			"error",
-		);
-		return false;
-	}
+	ctx.ui.notify(
+		`Saved ${workflowLabel(selected)}. Reloading subagent tools… If the tool surface does not refresh, run /reload.`,
+		"info",
+	);
+	await ctx.reload();
+	return true;
+}
+
+function blockReloadWithRetainedAgents(
+	ctx: ExtensionCommandContext,
+	runtime: SubagentSettingsRuntime,
+): boolean {
+	const status = runtime.getRuntimeStatus();
+	if (status.retainedAgents === 0) return false;
+	ctx.ui.notify(
+		`Cannot reload while ${status.retainedAgents} detached subagent${status.retainedAgents === 1 ? " is" : "s are"} retained (${status.activeAgents} active). Open Current agents and clear them after their work is safe to discard, then change delegation.`,
+		"warning",
+	);
+	return true;
 }
 
 async function showWorkflowPreview(
