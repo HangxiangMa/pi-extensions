@@ -55,6 +55,42 @@ function createRuntime(
 	return { mock, runtime };
 }
 
+test("bare webui opens a cancellable TUI menu while open preserves the direct link flow", async () => {
+	let starts = 0;
+	let links = 0;
+	const { mock, runtime } = createRuntime({
+		startServer: async () => {
+			starts += 1;
+			return {
+				issueLink: () => `http://127.0.0.1:1234/bootstrap?token=${++links}`,
+				close: async () => undefined,
+			};
+		},
+	});
+	const tui = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			const selector = createCustomSelectorHarness(factory);
+			assert.match(selector.render().join("\n"), /server: stopped/i);
+			selector.handleInput("\u001b");
+			return selector.result;
+		},
+	});
+	await runtime.start(tui.ctx);
+	const command = mock.commands.get("webui");
+	assert.ok(command);
+
+	await command.handler("", tui.ctx);
+	assert.equal(starts, 0);
+	assert.equal(links, 0);
+
+	await command.handler("open", tui.ctx);
+	assert.equal(starts, 1);
+	assert.equal(links, 1);
+	assert.match(tui.notifications.at(-1)?.message ?? "", /token=1/);
+});
+
 test("webui command completes and routes settings, status, help, and invalid arguments", async () => {
 	const { mock, runtime } = createRuntime();
 	const context = createMockContext({ hasUI: true, mode: "rpc" });
@@ -65,14 +101,14 @@ test("webui command completes and routes settings, status, help, and invalid arg
 	assert.ok(completions);
 	assert.deepEqual(
 		completions.map((item) => item.value),
-		["settings", "status", "help", "init"],
+		["open", "settings", "status", "help", "init"],
 	);
 
 	await command.handler("settings", context.ctx);
 	assert.match(context.notifications.at(-1)?.message ?? "", /manual.*pi-webui\.json/i);
 	await command.handler("status", context.ctx);
 	const status = context.notifications.at(-1)?.message ?? "";
-	assert.match(status, /startOnSessionStart: false.*defaults/is);
+	assert.match(status, /Startup: Manual.*defaults/is);
 	assert.match(
 		status,
 		/Image limits \(defaults\): 8 images, 10 MiB\/image, 40 MiB\/batch, 50,000,000 pixels\/image/,
@@ -81,7 +117,7 @@ test("webui command completes and routes settings, status, help, and invalid arg
 	assert.doesNotMatch(status, /token=/i);
 	await command.handler("help", context.ctx);
 	const help = context.notifications.at(-1)?.message ?? "";
-	assert.match(help, /\/webui \[settings\|status\|help\|init\]/i);
+	assert.match(help, /\/webui \[open\|settings\|status\|help\|init\]/i);
 	assert.match(help, /"startOnSessionStart": false/);
 	assert.match(help, /maxImages.*maxImageBytes.*maxBatchBytes.*maxImagePixels/i);
 	assert.match(help, /provider-ready dimension\/Base64 limits are fixed/i);
@@ -89,11 +125,181 @@ test("webui command completes and routes settings, status, help, and invalid arg
 	await command.handler("unknown", context.ctx);
 	assert.match(context.notifications.at(-1)?.message ?? "", /usage:/i);
 
-	await command.handler("", context.ctx);
+	await command.handler("open", context.ctx);
 	await command.handler("status", context.ctx);
 	const runningStatus = context.notifications.at(-1)?.message ?? "";
 	assert.match(runningStatus, /server: running/i);
 	assert.doesNotMatch(runningStatus, /token=/i);
+});
+
+test("menu secondary screens return with stable selection and no server side effects", async () => {
+	let starts = 0;
+	let customCalls = 0;
+	const { mock, runtime } = createRuntime({
+		startServer: async () => {
+			starts += 1;
+			return {
+				issueLink: () => "http://127.0.0.1:1234/bootstrap?token=unused",
+				close: async () => undefined,
+			};
+		},
+	});
+	const context = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			customCalls += 1;
+			const selector = createCustomSelectorHarness(factory);
+			if (customCalls === 1) {
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\r");
+			} else if (customCalls === 2) {
+				assert.match(selector.render().join("\n"), /Image limits/);
+				selector.handleInput("tui.select.cancel");
+			} else {
+				assert.match(selector.render().join("\n"), /Effect: Review effective startup/);
+				selector.handleInput("\u001b");
+			}
+			return selector.result;
+		},
+	});
+	await runtime.start(context.ctx);
+	await mock.commands.get("webui")?.handler("", context.ctx);
+	assert.equal(customCalls, 3);
+	assert.equal(starts, 0);
+});
+
+test("bare webui is side-effect free without UI and RPC cancellation stays observable", async () => {
+	let starts = 0;
+	const { mock, runtime } = createRuntime({
+		startServer: async () => {
+			starts += 1;
+			return {
+				issueLink: () => "http://127.0.0.1:1234/bootstrap?token=unused",
+				close: async () => undefined,
+			};
+		},
+	});
+	for (const mode of ["print", "json"] as const) {
+		const context = createMockContext({ hasUI: false, mode });
+		await runtime.start(context.ctx);
+		await mock.commands.get("webui")?.handler("", context.ctx);
+		await mock.commands.get("webui")?.handler("open", context.ctx);
+	}
+	const rpc = createMockContext({
+		hasUI: true,
+		mode: "rpc",
+		select: async () => undefined,
+	});
+	await runtime.start(rpc.ctx);
+	await mock.commands.get("webui")?.handler("", rpc.ctx);
+	assert.equal(starts, 0);
+});
+
+test("invalid settings expose read-only repair guidance instead of a failing toggle", async () => {
+	let saves = 0;
+	let customCalls = 0;
+	const { mock, runtime } = createRuntime(
+		{
+			saveSettings: async () => {
+				saves += 1;
+				return {};
+			},
+		},
+		{
+			kind: "invalid",
+			path: "/agent/broken-pi-webui.json",
+			settings: { ...DEFAULT_SETTINGS },
+			source: "defaults",
+			warning: "invalid settings preserved",
+		},
+	);
+	const context = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			customCalls += 1;
+			const selector = createCustomSelectorHarness(factory);
+			if (customCalls === 1) {
+				assert.match(selector.render().join("\n"), /Repair settings file/);
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\r");
+			} else if (customCalls === 2) {
+				assert.match(selector.render().join("\n"), /preserved without changes/);
+				selector.handleInput("tui.select.cancel");
+			} else {
+				selector.handleInput("\u001b");
+			}
+			return selector.result;
+		},
+	});
+	await runtime.start(context.ctx);
+	await mock.commands.get("webui")?.handler("", context.ctx);
+	assert.equal(customCalls, 3);
+	assert.equal(saves, 0);
+});
+
+test("open exposes distinct applying state before publishing success", async () => {
+	const starting = deferred<{
+		issueLink(): string;
+		close(): Promise<void>;
+	}>();
+	const { mock, runtime } = createRuntime({ startServer: async () => starting.promise });
+	const context = createMockContext({ hasUI: true, mode: "rpc" });
+	await runtime.start(context.ctx);
+	const opening = mock.commands.get("webui")?.handler("open", context.ctx);
+	assert.equal(context.statuses.get("webui:activity"), "Starting WebUI…");
+	starting.resolve({
+		issueLink: () => "http://127.0.0.1:1234/bootstrap?token=ready",
+		close: async () => undefined,
+	});
+	await opening;
+	assert.equal(context.statuses.get("webui:activity"), undefined);
+	assert.match(context.notifications.at(-1)?.message ?? "", /token=ready/);
+
+	const refreshing = mock.commands.get("webui")?.handler("open", context.ctx);
+	assert.equal(context.statuses.get("webui:activity"), "Creating fresh WebUI link…");
+	await refreshing;
+	assert.equal(context.statuses.get("webui:activity"), undefined);
+});
+
+test("open failures preserve valid server state and clear actionable activity feedback", async () => {
+	let issues = 0;
+	const { mock, runtime } = createRuntime({
+		startServer: async () => ({
+			issueLink: () => {
+				issues += 1;
+				if (issues === 2) throw new Error("token source unavailable");
+				return "http://127.0.0.1:1234/bootstrap?token=first";
+			},
+			close: async () => undefined,
+		}),
+	});
+	const context = createMockContext({ hasUI: true, mode: "rpc" });
+	await runtime.start(context.ctx);
+	const command = mock.commands.get("webui");
+	await command?.handler("open", context.ctx);
+	await command?.handler("open", context.ctx);
+	assert.match(
+		context.notifications.at(-1)?.message ?? "",
+		/token source unavailable.*Retry with \/webui open/i,
+	);
+	assert.equal(context.statuses.get("webui:activity"), undefined);
+	await command?.handler("status", context.ctx);
+	assert.match(context.notifications.at(-1)?.message ?? "", /Server: Running/);
+
+	const failed = createRuntime({
+		startServer: async () => {
+			throw new Error("listener unavailable");
+		},
+	});
+	const failedContext = createMockContext({ hasUI: true, mode: "rpc" });
+	await failed.runtime.start(failedContext.ctx);
+	await failed.mock.commands.get("webui")?.handler("open", failedContext.ctx);
+	assert.equal(failedContext.statuses.get("webui:activity"), undefined);
+	await failed.mock.commands.get("webui")?.handler("status", failedContext.ctx);
+	assert.match(failedContext.notifications.at(-1)?.message ?? "", /Server: Stopped/);
 });
 
 test("settings never opens custom TUI in RPC, JSON, or print modes", async () => {
@@ -188,10 +394,7 @@ test("settings changes save in action order and update effective status", async 
 		context.notifications.map((item) => item.message).join("\n"),
 	);
 	await mock.commands.get("webui")?.handler("status", context.ctx);
-	assert.match(
-		context.notifications.at(-1)?.message ?? "",
-		/startOnSessionStart: false.*settings file/is,
-	);
+	assert.match(context.notifications.at(-1)?.message ?? "", /Startup: Manual.*settings file/is);
 });
 
 test("failed settings save rolls back the displayed and effective value", async () => {
@@ -207,7 +410,7 @@ test("failed settings save rolls back the displayed and effective value", async 
 			const selector = createCustomSelectorHarness(factory);
 			selector.handleInput("\r");
 			await waitFor(() => context.notifications.some((item) => /disk full/i.test(item.message)));
-			assert.ok(selector.render().some((line) => /false/.test(line)));
+			assert.ok(selector.render().some((line) => /Manual/.test(line)));
 			selector.handleInput("\u001b");
 			return selector.result;
 		},
@@ -215,8 +418,5 @@ test("failed settings save rolls back the displayed and effective value", async 
 	await runtime.start(context.ctx);
 	await mock.commands.get("webui")?.handler("settings", context.ctx);
 	await mock.commands.get("webui")?.handler("status", context.ctx);
-	assert.match(
-		context.notifications.at(-1)?.message ?? "",
-		/startOnSessionStart: false.*defaults/is,
-	);
+	assert.match(context.notifications.at(-1)?.message ?? "", /Startup: Manual.*defaults/is);
 });

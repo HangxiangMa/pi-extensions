@@ -36,11 +36,12 @@ The package targets the latest Pi release.
 
 ## 🚀 Usage
 
-1. Start Pi in a terminal and run `/webui`.
-2. Open the one-time `http://127.0.0.1:<port>/bootstrap?...` link shown by Pi. The extension does not open a browser itself.
-3. Continue typing in either the terminal or browser. Accepted messages from both surfaces appear in the browser transcript.
-4. While Pi is idle, **Send** starts a turn immediately. While Pi is working, **Queue next** queues a follow-up. Use **Steer** only when the new instruction should reach Pi after the current tool batch.
-5. Refreshing or opening the link in another tab takes the editing lease. Older tabs remain readable and clearly become read-only.
+1. Start Pi in a terminal and run `/webui` to open the current-state menu.
+2. Select **Open WebUI**. If the server is already running, select **Get a fresh link** instead; this invalidates any earlier unused bootstrap link.
+3. Open the one-time `http://127.0.0.1:<port>/bootstrap?...` link shown by Pi. The extension does not open a browser itself. Use `/webui open` when you intentionally want to skip the menu.
+4. Continue typing in either the terminal or browser. Accepted messages from both surfaces appear in the browser transcript.
+5. While Pi is idle, **Send** starts a turn immediately. While Pi is working, **Queue next** queues a follow-up. Use **Steer** only when the new instruction should reach Pi after the current tool batch.
+6. Refreshing or opening the link in another tab takes the editing lease. Older tabs remain readable and clearly become read-only.
 
 If another installed extension also registers `/webui`, Pi assigns numeric command suffixes according to extension load order. Check Pi's command provenance and invoke the WebUI entry.
 
@@ -48,13 +49,16 @@ If another installed extension also registers `/webui`, Pi assigns numeric comma
 
 | Command | Behavior |
 | --- | --- |
-| `/webui` | Start or reuse the current session server and display a fresh one-time link. |
+| `/webui` | Open the current-state menu in TUI or an interactive RPC client. Opening or cancelling the menu has no side effects. |
+| `/webui open` | Start or reuse the current session server and display a fresh one-time link without opening the menu. Unsupported print/JSON modes remain side-effect free because they cannot expose the link. |
 | `/webui settings` | Open the interactive settings screen in TUI mode. Other modes report the manual settings path when notifications are available. |
 | `/webui status` | Show the effective startup preference and source, settings path, and whether the current session server is running. It never issues a bootstrap link. |
 | `/webui help` | Show command and manual-settings help. |
 | `/webui init` | Create the defaults file without overwriting existing content, then open settings in TUI mode. |
 
-Argument completion is available for all subcommands. Bare `/webui` remains the direct browser-link action.
+Argument completion is available for all subcommands. Bare `/webui` is menu-first; scripts and users migrating from the earlier direct behavior should use `/webui open`.
+
+The menu keeps the consequential current state beside each decision: whether the session server is running, whether startup is **Manual** or **Every session**, and whether values come from defaults or the settings file. **Open WebUI** previews that it starts a private session server. **Get a fresh link** previews that it keeps the server but invalidates any earlier unused bootstrap link. Escape closes the main menu without starting a server, issuing a link, or saving settings. Settings, Status & diagnostics, and Help are one level deep and return to the menu.
 
 ## ⚙️ Settings
 
@@ -90,7 +94,9 @@ The normal default path is `~/.pi/agent/pi-webui.json`. Pi installations that us
 | `maxBatchBytes` | `41943040` (40 MiB) | Combined source/processed draft bytes; hard ceiling 209715200 (200 MiB). |
 | `maxImagePixels` | `50000000` | Decoded pixels per image; hard ceiling 100000000. Animated-image frame area participates in this limit. |
 
-A missing file uses defaults. The file must contain a top-level JSON object; recognized booleans and positive integer limits must have the documented types and remain within their hard ceilings. Malformed JSON or an invalid recognized value causes the file to be ignored with a warning and leaves it untouched. Unknown fields are accepted and preserved by the settings screen for forward compatibility. The settings screen exposes only the frequent startup toggle; there is not yet user-testing evidence that `maxImages` is adjusted often enough to justify another routine row. Retention and image-limit fields remain in Advanced JSON at the reported path.
+A missing file uses defaults. The file must contain a top-level JSON object; recognized booleans and positive integer limits must have the documented types and remain within their hard ceilings. Malformed JSON or an invalid recognized value causes the file to be ignored with a warning and leaves it untouched. Unknown fields are accepted and preserved by the settings screen for forward compatibility. The settings screen exposes only **Start WebUI automatically**, with the user-facing values **Manual** and **Every session**. Changes save immediately; Escape closes or returns and does not roll back changes that already succeeded. The startup behavior applies on the next session initialization or `/reload` and does not start or stop the current server. There is not yet user-testing evidence that `maxImages` is adjusted often enough to justify another routine row. Retention and image-limit fields remain in Advanced JSON at the reported path.
+
+If the settings file is malformed or contains an invalid recognized value, the menu presents a read-only **Repair settings file** flow. Safe defaults remain active, the original bytes stay untouched, and settings writes remain paused until the file is repaired and Pi is reloaded.
 
 ### Advanced image limits
 
@@ -98,7 +104,7 @@ Omitting all four image-limit fields exactly reproduces the original 8 image / 1
 
 Settings are reloaded on every `session_start`. Changes made in `/webui settings` are saved atomically and update the in-memory preference immediately, but they intentionally do not start or stop the server in the current session; they take effect at the next session initialization or `/reload`. `/webui init` creates formatted defaults once and refuses to overwrite valid or invalid existing content.
 
-In print, JSON, and RPC modes, `/webui settings` does not open custom TUI or write protocol-breaking output. Use `/webui status`, `/webui help`, or edit the reported path manually.
+In RPC mode, `/webui` uses the client's observable selection dialogs without opening custom TUI. In print and JSON modes, bare `/webui` and `/webui open` remain side-effect free because those modes cannot safely expose an interactive menu or bootstrap link. `/webui settings` does not open custom TUI or write protocol-breaking output outside TUI mode. Use an interactive TUI/RPC client for the menu and link, or use `/webui status`, `/webui help`, and the reported path where notifications are available.
 
 ## 🔄 What synchronization means
 
@@ -143,7 +149,9 @@ A loopback page is local to the operating-system network namespace. WebUI does n
 
 ## ♿ Accessibility and browsers
 
-The page uses semantic headings, native disclosure/dialog controls, concise status/alert live regions, accessible labels, visible keyboard focus, at least 44 px controls, keyboard image preview/removal/reordering, `Ctrl/Command+Enter` submission, reduced-motion handling, dark mode, and responsive reflow. It targets current stable desktop Chrome, Edge, Firefox, and Safari.
+The terminal menu uses Pi's configured selection keybindings, textual state that does not depend on color, stable focus when returning from a secondary screen, and responsive wrapping without hiding consequential previews. Pi's terminal accessibility remains subject to terminal and screen-reader capabilities.
+
+The browser page uses semantic headings, native disclosure/dialog controls, concise status/alert live regions, accessible labels, visible keyboard focus, at least 44 px controls, keyboard image preview/removal/reordering, `Ctrl/Command+Enter` submission, reduced-motion handling, dark mode, and responsive reflow. It targets current stable desktop Chrome, Edge, Firefox, and Safari.
 
 ## 🚧 Limitations
 
@@ -158,7 +166,8 @@ The page uses semantic headings, native disclosure/dialog controls, concise stat
 ```text
 src/index.ts         Pi package entrypoint
 src/webui.ts         extension registration and command orchestration
-src/runtime.ts       Pi lifecycle, commands, event projection, and browser message routing
+src/runtime.ts       Pi lifecycle, commands, menu orchestration, event projection, and browser routing
+src/menu.ts          responsive current-state menu and read-only detail presentation
 src/settings.ts      global WebUI settings validation and atomic persistence
 src/conversation.ts  bounded transcript snapshot and ordered event replay
 src/drafts.ts        authoritative in-memory text and attachment-reference revisions
