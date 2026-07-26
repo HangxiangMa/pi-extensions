@@ -29,6 +29,7 @@ function createHarness(
 		settings?: Partial<ImageDropSettings>;
 		startError?: Error;
 		menuActions?: Array<"open" | "status" | "settings" | "help" | "close">;
+		showMainMenu?: () => Promise<"open" | "status" | "settings" | "help" | "close">;
 		statusActions?: Array<"open" | "refresh" | "back" | "close">;
 		settingsActions?: Array<"toggle-start" | "limits" | "back" | "close">;
 		limitActions?: Array<
@@ -86,7 +87,7 @@ function createHarness(
 			if (options.startError) throw options.startError;
 			return server;
 		},
-		showMainMenu: async () => options.menuActions?.shift() ?? "close",
+		showMainMenu: options.showMainMenu ?? (async () => options.menuActions?.shift() ?? "close"),
 		showStatus: async (_ctx, lines) => {
 			options.onStatus?.(lines);
 			return options.statusActions?.shift() ?? "back";
@@ -99,7 +100,12 @@ function createHarness(
 			}
 		},
 		showHelp: async () => "back",
-		showSettingsMenu: async () => options.settingsActions?.shift() ?? "back",
+		showSettingsMenu: async (_ctx, menuOptions) => {
+			const action = options.settingsActions?.shift() ?? "back";
+			if (action !== "toggle-start") return action;
+			await menuOptions.onStartChange(!menuOptions.startOnSessionStart);
+			return "back";
+		},
 		showLimitsMenu: async (_ctx, state) => {
 			options.onLimits?.(state);
 			return options.limitActions?.shift() ?? "back";
@@ -282,15 +288,86 @@ test("an unused staging link is previewed before rotation and cancellation prese
 	assert.match(String(harness.context.widgets.get("image-drop")), /token=1/);
 });
 
-test("unsupported modes and arguments reject before starting the service", async () => {
+test("unsupported modes and arguments reject observably before starting the service", async () => {
 	const harness = createHarness({ menuActions: ["open"] });
 	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	const command = harness.mock.commands.get("image-drop");
+	assert.ok(command);
 	const rpcContext = createMockContext({ mode: "rpc", hasUI: true });
-	await harness.mock.commands.get("image-drop")?.handler("", rpcContext.ctx);
-	await harness.mock.commands.get("image-drop")?.handler("open", harness.context.ctx);
+	await command.handler("", rpcContext.ctx);
+	await command.handler("open", harness.context.ctx);
+	for (const mode of ["print", "json"] as const) {
+		const noUiContext = createMockContext({ mode, hasUI: false });
+		await assert.rejects(async () => {
+			await command.handler("", noUiContext.ctx);
+		}, /TUI mode only/i);
+		await assert.rejects(async () => {
+			await command.handler("open", noUiContext.ctx);
+		}, /Usage: \/image-drop/);
+	}
 	assert.equal(harness.serverStarts, 0);
 	assert.match(rpcContext.notifications.at(-1)?.message ?? "", /TUI mode only/i);
 	assert.match(harness.context.notifications.at(-1)?.message ?? "", /Usage: \/image-drop/);
+});
+
+test("session replacement stops stale main-menu and Status continuations", async () => {
+	let resolveMain!: (action: "open") => void;
+	let markMainShown!: () => void;
+	const mainShown = new Promise<void>((resolve) => {
+		markMainShown = resolve;
+	});
+	const staleMain = createHarness({
+		showMainMenu: () =>
+			new Promise((resolve) => {
+				resolveMain = resolve;
+				markMainShown();
+			}),
+	});
+	await emit(staleMain.mock, "session_start", {}, staleMain.context.ctx);
+	const oldMain = staleMain.mock.commands.get("image-drop")?.handler("", staleMain.context.ctx);
+	await mainShown;
+	const replacement = createMockContext({
+		cwd: "/workspace/replacement",
+		mode: "tui",
+		hasUI: true,
+	});
+	await emit(staleMain.mock, "session_start", {}, replacement.ctx);
+	resolveMain("open");
+	await oldMain;
+	assert.equal(staleMain.serverStarts, 0);
+	assert.equal(staleMain.context.notifications.length, 0);
+
+	let resolveSettings!: (value: {
+		autoResize: boolean;
+		blockImages: boolean;
+		warnings: string[];
+	}) => void;
+	let markSettingsRead!: () => void;
+	const settingsRead = new Promise<void>((resolve) => {
+		markSettingsRead = resolve;
+	});
+	let statusViews = 0;
+	const staleStatus = createHarness({
+		menuActions: ["status"],
+		readPiSettings: () =>
+			new Promise((resolve) => {
+				resolveSettings = resolve;
+				markSettingsRead();
+			}),
+		onStatus: () => {
+			statusViews += 1;
+		},
+	});
+	await emit(staleStatus.mock, "session_start", {}, staleStatus.context.ctx);
+	const oldStatus = staleStatus.mock.commands
+		.get("image-drop")
+		?.handler("", staleStatus.context.ctx);
+	await settingsRead;
+	await emit(staleStatus.mock, "session_start", {}, replacement.ctx);
+	resolveSettings({ autoResize: true, blockImages: false, warnings: [] });
+	await oldStatus;
+	assert.equal(statusViews, 0);
+	assert.equal(staleStatus.serverStarts, 0);
 });
 
 test("Status exposes readiness, model, history, and Pi policy without starting the service", async () => {

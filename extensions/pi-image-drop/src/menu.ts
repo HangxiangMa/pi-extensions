@@ -1,9 +1,17 @@
-import { BorderedLoader, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
+	BorderedLoader,
+	type ExtensionCommandContext,
+	getSettingsListTheme,
+} from "@earendil-works/pi-coding-agent";
+import {
+	Container,
 	Key,
 	matchesKey,
 	type SelectItem,
 	SelectList,
+	type SettingItem,
+	SettingsList,
+	Text,
 	truncateToWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
@@ -11,7 +19,7 @@ import type { PublicBatchState, PublicHistoryState } from "./batch.js";
 
 export type MainMenuAction = "open" | "status" | "settings" | "help" | "close";
 export type StatusAction = "open" | "refresh" | "back" | "close";
-export type SettingsAction = "toggle-start" | "limits" | "back" | "close";
+export type SettingsAction = "limits" | "back" | "close";
 export type LimitSettingAction =
 	| "maxImages"
 	| "maxImageBytes"
@@ -35,6 +43,7 @@ export interface ImageDropLimitsMenuState {
 export type MenuLoadResult<T> =
 	| { kind: "completed"; value: T }
 	| { kind: "cancelled" }
+	| { kind: "closed" }
 	| { kind: "error"; error: unknown };
 
 export interface ImageDropMenuState {
@@ -89,7 +98,19 @@ export function runImageDropMenuLoad<T>(
 			(value) => finish({ kind: "completed", value }),
 			(error: unknown) => finish({ kind: "error", error }),
 		);
-		return loader;
+		return {
+			render: (width: number) => loader.render(width),
+			invalidate: () => loader.invalidate(),
+			handleInput(data: string) {
+				if (matchesKey(data, Key.ctrl("c"))) {
+					finish({ kind: "closed" });
+					loader.handleInput(data);
+					return;
+				}
+				loader.handleInput(data);
+			},
+			dispose: () => loader.dispose(),
+		};
 	});
 }
 
@@ -102,7 +123,7 @@ export function showImageDropMainMenu(
 		lines: [menuSummary(state), `Service: ${state.serverRunning ? "Running" : "Not started"}`],
 		items: MAIN_ACTIONS,
 		cancel: "close",
-		hint: "↑↓ navigate • enter select • esc close",
+		hint: "close",
 	});
 }
 
@@ -120,7 +141,7 @@ export function showImageDropStatus(
 			{ value: "close", label: "Close" },
 		],
 		cancel: "back",
-		hint: "↑↓ navigate • enter select • esc back • Ctrl+C close",
+		hint: "back",
 	});
 }
 
@@ -140,27 +161,97 @@ export function showImageDropHelp(ctx: ExtensionCommandContext): Promise<"back" 
 			{ value: "close", label: "Close" },
 		],
 		cancel: "back",
-		hint: "↑↓ navigate • enter select • esc back • Ctrl+C close",
+		hint: "back",
 	});
+}
+
+export interface ImageDropSettingsMenuOptions {
+	lines: readonly string[];
+	editable: boolean;
+	startOnSessionStart: boolean;
+	limitsValue: "Recommended" | "Custom";
+	onStartChange(enabled: boolean): Promise<boolean>;
 }
 
 export function showImageDropSettingsMenu(
 	ctx: ExtensionCommandContext,
-	options: { lines: readonly string[]; editable: boolean },
+	options: ImageDropSettingsMenuOptions,
 ): Promise<SettingsAction> {
-	const items: SelectItem[] = options.editable
-		? [
-				{ value: "toggle-start", label: "Toggle automatic start" },
-				{ value: "limits", label: "Resource limits…", description: "Advanced" },
-			]
-		: [];
-	items.push({ value: "back", label: "Back" }, { value: "close", label: "Close" });
-	return showActionScreen(ctx, {
-		title: "Image Drop Settings",
-		lines: options.lines,
-		items,
-		cancel: "back",
-		hint: "↑↓ navigate • enter select • esc back • Ctrl+C close",
+	return ctx.ui.custom<SettingsAction>((tui, theme, _keybindings, done) => {
+		let closed = false;
+		let persistedStart = options.startOnSessionStart ? "On" : "Off";
+		let displayedStart = persistedStart;
+		let saveQueue = Promise.resolve();
+		const items: SettingItem[] = options.editable
+			? [
+					{
+						id: "automatic-start",
+						label: "Start with each Pi session",
+						description: "Default: Off · Starts Image Drop and shows a staging link",
+						currentValue: persistedStart,
+						values: ["Off", "On"],
+					},
+					{
+						id: "limits",
+						label: "Image limits",
+						description: "Open current, default, and pending image limits",
+						currentValue: options.limitsValue,
+						submenu: () => {
+							void saveQueue.then(() => {
+								if (!closed) done("limits");
+							});
+							return new Text("Opening image limits…", 1, 0);
+						},
+					},
+				]
+			: [];
+		const list = new SettingsList(
+			items,
+			Math.min(items.length + 2, 10),
+			getSettingsListTheme(),
+			(id, value) => {
+				if (id !== "automatic-start") return;
+				displayedStart = value;
+				saveQueue = saveQueue.then(async () => {
+					const saved = await options.onStartChange(value === "On");
+					if (closed) return;
+					if (saved) persistedStart = value;
+					else if (displayedStart === value) {
+						displayedStart = persistedStart;
+						list.updateValue(id, persistedStart);
+					}
+					tui.requestRender();
+				});
+			},
+			() => done("back"),
+		);
+		const header = new Container();
+		header.addChild(new Text(theme.fg("accent", theme.bold("Image Drop Settings")), 0, 0));
+		for (const line of options.lines) header.addChild(new Text(theme.fg("muted", line), 0, 0));
+		return {
+			render(width: number): string[] {
+				const safeWidth = Math.max(1, width);
+				return [...header.render(safeWidth), "", ...list.render(safeWidth)].map((line) =>
+					truncateToWidth(line, safeWidth),
+				);
+			},
+			invalidate() {
+				header.invalidate();
+				list.invalidate();
+			},
+			handleInput(data: string) {
+				if (matchesKey(data, Key.ctrl("c"))) {
+					closed = true;
+					done("close");
+					return;
+				}
+				list.handleInput(data);
+				tui.requestRender();
+			},
+			dispose() {
+				closed = true;
+			},
+		};
 	});
 }
 
@@ -200,7 +291,7 @@ export function showImageDropLimitsMenu(
 			{ value: "close", label: "Close Image Drop" },
 		],
 		cancel: "back",
-		hint: "↑↓ navigate • enter select • esc back • Ctrl+C close",
+		hint: "back",
 	});
 }
 
@@ -210,12 +301,52 @@ function limitValueText(value: LimitMenuValue): string {
 		: `Pending: ${value.pending} · Current: ${value.current} · Default: ${value.defaultValue}`;
 }
 
+interface MenuKeybindings {
+	getKeys(
+		binding: "tui.select.up" | "tui.select.down" | "tui.select.confirm" | "tui.select.cancel",
+	): readonly string[];
+}
+
+function actionHint(keybindings: MenuKeybindings, destination: "back" | "close"): string {
+	const up = bindingText(keybindings, "tui.select.up");
+	const down = bindingText(keybindings, "tui.select.down");
+	const confirm = bindingText(keybindings, "tui.select.confirm");
+	const cancel = bindingText(
+		keybindings,
+		"tui.select.cancel",
+		destination === "back" ? "ctrl+c" : undefined,
+	);
+	return [
+		...(up || down ? [`${[up, down].filter(Boolean).join("/")} navigate`] : []),
+		...(confirm ? [`${confirm} select`] : []),
+		...(cancel ? [`${cancel} ${destination}`] : []),
+		...(destination === "back" ? ["ctrl+c close"] : []),
+	].join(" • ");
+}
+
+function bindingText(
+	keybindings: MenuKeybindings,
+	binding: Parameters<MenuKeybindings["getKeys"]>[0],
+	excluded?: string,
+): string {
+	return keybindings
+		.getKeys(binding)
+		.filter((key) => key !== excluded)
+		.map((key) => {
+			if (key === "up") return "↑";
+			if (key === "down") return "↓";
+			if (key === "escape") return "esc";
+			return key;
+		})
+		.join("/");
+}
+
 interface ActionScreenOptions<T extends string> {
 	title: string;
 	lines: readonly string[];
 	items: readonly SelectItem[];
 	cancel: T;
-	hint: string;
+	hint: "back" | "close";
 }
 
 async function showActionScreen<T extends string>(
@@ -242,7 +373,7 @@ async function showActionScreen<T extends string>(
 					),
 					"",
 					...list.render(safeWidth),
-					...wrapTextWithAnsi(theme.fg("dim", options.hint), safeWidth),
+					...wrapTextWithAnsi(theme.fg("dim", actionHint(keybindings, options.hint)), safeWidth),
 				].map((line) => truncateToWidth(line, safeWidth));
 			},
 			invalidate() {

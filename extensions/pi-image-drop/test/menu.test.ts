@@ -10,6 +10,7 @@ import {
 	safeMenuText,
 	showImageDropLimitsMenu,
 	showImageDropMainMenu,
+	showImageDropSettingsMenu,
 	showImageDropStatus,
 } from "../src/menu.js";
 
@@ -113,26 +114,85 @@ test("resource-limit actions explain their concrete effect and save behavior", a
 	}
 });
 
-test("status loading is visible and cancellable", async () => {
+test("status loading distinguishes Escape back from Ctrl+C close", async () => {
+	async function loadWith(input: string) {
+		let lines: string[] = [];
+		const context = createMockContext({
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 40);
+				lines = harness.render();
+				harness.handleInput(input);
+				const result = harness.result;
+				harness.dispose();
+				return result;
+			},
+		});
+		const result = await runImageDropMenuLoad(
+			context.ctx,
+			"Refreshing Image Drop status…",
+			async () => new Promise<never>(() => undefined),
+		);
+		assert.match(lines.join(" "), /Refreshing Image Drop status/);
+		return result;
+	}
+	assert.equal((await loadWith("\u001b")).kind, "cancelled");
+	assert.equal((await loadWith("\u0003")).kind, "closed");
+});
+
+test("action hints reflect callback-provided keybindings", async () => {
 	let lines: string[] = [];
 	const context = createMockContext({
 		mode: "tui",
 		custom: async (factory: unknown) => {
-			const harness = createCustomSelectorHarness(factory, 40);
+			const keybindings = {
+				matches: (data: string, key: string) => data === "q" && key === "tui.select.cancel",
+				getKeys: (key: string): readonly string[] => {
+					if (key === "tui.select.up") return ["k"];
+					if (key === "tui.select.down") return ["j"];
+					if (key === "tui.select.confirm") return ["l"];
+					if (key === "tui.select.cancel") return ["q", "ctrl+c"];
+					return [];
+				},
+			};
+			const harness = createCustomSelectorHarness(factory, 80, keybindings);
 			lines = harness.render();
-			harness.handleInput("\u001b");
-			const result = harness.result;
-			harness.dispose();
-			return result;
+			harness.handleInput("q");
+			return harness.result;
 		},
 	});
-	const result = await runImageDropMenuLoad(
-		context.ctx,
-		"Refreshing Image Drop status…",
-		async () => new Promise<never>(() => undefined),
-	);
-	assert.equal(result.kind, "cancelled");
-	assert.match(lines.join(" "), /Refreshing Image Drop status/);
+	assert.equal(await showImageDropStatus(context.ctx, ["Ready"]), "back");
+	assert.match(lines.join(" "), /k\/j navigate • l select • q back • ctrl\+c close/);
+});
+
+test("SettingsList updates in place and rolls back a failed save", async () => {
+	const attempts: boolean[] = [];
+	let afterToggle = "";
+	const context = createMockContext({
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 80);
+			harness.handleInput("\r");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			afterToggle = harness.render().join(" ");
+			harness.handleInput("\u001b");
+			return harness.result;
+		},
+	});
+	const result = await showImageDropSettingsMenu(context.ctx, {
+		lines: ["Settings file: defaults"],
+		editable: true,
+		startOnSessionStart: false,
+		limitsValue: "Recommended",
+		onStartChange: async (enabled) => {
+			attempts.push(enabled);
+			return false;
+		},
+	});
+	assert.equal(result, "back");
+	assert.deepEqual(attempts, [true]);
+	assert.match(afterToggle, /Start with each Pi session/);
+	assert.match(afterToggle, /Off/);
 });
 
 test("subviews distinguish Escape back from Ctrl+C close", async () => {
