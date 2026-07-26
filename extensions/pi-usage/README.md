@@ -16,7 +16,6 @@
 - Keeps the compact statusline scoped to the current provider and runtime account.
 - Isolates its five-minute in-memory cache by provider and a process-salted credential fingerprint.
 - Resolves credentials through Pi and never reads Pi, account-extension, Codex CLI, or provider auth files.
-- Retains `/codex-status` as a temporary argument-free compatibility alias.
 
 ## 📦 Install
 
@@ -56,8 +55,6 @@ Close
 ```
 
 There are intentionally no `/usage --refresh`, `/usage <provider>`, or `/usage --all` argument paths. Cross-provider traffic requires an explicit interactive choice.
-
-`/codex-status` opens the same menu during the migration period. Its former flags are not supported by `pi-usage`.
 
 ## 📋 Provider semantics
 
@@ -102,12 +99,11 @@ pi remove npm:@narumitw/pi-codex-usage
 pi install npm:@narumitw/pi-usage
 ```
 
-Do not load both packages together: both register `/codex-status`, so Pi must suffix duplicate commands and the two packages can publish overlapping usage status.
+Remove the deprecated package rather than loading both usage extensions together.
 
 Behavior changes:
 
-- Use `/usage` as the primary entry point.
-- `/codex-status` is an argument-free compatibility alias.
+- Use `/usage` as the only entry point; `/codex-status` is no longer registered.
 - Refresh and cross-provider operations are menu actions rather than flags.
 - Codex CLI fallback is removed to preserve active-runtime-account correctness.
 - The status key changes from `codex-usage` to `usage`.
