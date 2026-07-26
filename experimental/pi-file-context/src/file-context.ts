@@ -368,10 +368,6 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 		description: "Browse project files and attach a selected line range",
 		handler: handleFileContextCommand,
 	});
-	pi.registerCommand("file-quote", {
-		description: "Compatibility alias for /file-context",
-		handler: handleFileContextCommand,
-	});
 
 	pi.on("session_start", (_event, ctx) => {
 		activeSessionManager = ctx.sessionManager;

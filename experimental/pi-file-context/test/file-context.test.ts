@@ -692,10 +692,7 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 	const mock = createMockPi();
 	fileQuoteExtension(mock.pi);
 	assert.ok(mock.commands.has("file-context"));
-	assert.equal(
-		mock.commands.get("file-quote")?.handler,
-		mock.commands.get("file-context")?.handler,
-	);
+	assert.equal(mock.commands.has("file-quote"), false);
 
 	let customFactory: unknown;
 	const widgets = new Map<string, unknown>();

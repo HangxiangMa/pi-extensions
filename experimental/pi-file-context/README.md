@@ -69,9 +69,8 @@ Token counts are deterministic byte-based estimates (`ceil(UTF-8 bytes / 4)`), n
 | Command | Mode | Description |
 | --- | --- | --- |
 | `/file-context` | TUI only | Open the file explorer. Arguments are rejected. |
-| `/file-quote` | TUI only | Compatibility alias for `/file-context`. |
 
-`/file-context` is the canonical command. Existing `/file-quote` usage remains supported as a compatibility alias. RPC receives an observable warning. JSON and print modes do not enter custom UI.
+RPC receives an observable warning. JSON and print modes do not enter custom UI.
 
 ## 🔒 Security and limits
 
