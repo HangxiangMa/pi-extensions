@@ -23,6 +23,14 @@ import {
 	prepareSend,
 	setNearBottom,
 } from "../state.js";
+import {
+	allowTranscriptAutoScroll,
+	createRenderBatcher,
+	hasConversationReferenceChange,
+	shouldBatchConversationEvent,
+	shouldScrollForConversationEvent,
+	withPublishedConversation,
+} from "./view-helpers.js";
 
 const SUPPORTED_IMAGE_TYPES = new Set([
 	"image/png",
@@ -42,6 +50,8 @@ const listeners = new Set();
 const retryFiles = new Map();
 const uploadProgress = new Map();
 let model = initialState();
+let publishedMessages = model.messages;
+let publishedTools = model.tools;
 let events;
 let reconnectTimer;
 let reconnectDelay = 500;
@@ -52,10 +62,23 @@ let draftSaveQueue = Promise.resolve();
 let mutatingAttachments = false;
 let started = false;
 let view = createView();
+const scheduleConversationRender = createRenderBatcher(
+	(callback) => {
+		// Streaming can produce many events per frame. Cap transcript work so input remains responsive.
+		setTimeout(() => requestAnimationFrame(callback), 50);
+	},
+	(extra) => {
+		publishConversation(extra);
+		emit({
+			...extra,
+			scrollToLatest: allowTranscriptAutoScroll(model.following, !model.closed),
+		});
+	},
+);
 
 function createView(extra = {}) {
 	return {
-		model,
+		model: withPublishedConversation(model, publishedMessages, publishedTools),
 		mutatingAttachments,
 		uploadProgress: new Map(uploadProgress),
 		retryableIds: new Set(retryFiles.keys()),
@@ -69,6 +92,20 @@ function createView(extra = {}) {
 function emit(extra) {
 	view = createView(extra);
 	for (const listener of listeners) listener();
+}
+
+function publishConversation(extra = {}) {
+	for (const key of extra.transcriptUpdateKeys ?? []) {
+		model = noteUnseenUpdate(model, key);
+	}
+	publishedMessages = model.messages;
+	publishedTools = model.tools;
+}
+
+function drainConversationRender() {
+	const pending = scheduleConversationRender.drain();
+	publishConversation(pending);
+	return pending;
 }
 
 export const webClient = {
@@ -148,14 +185,20 @@ async function refreshSnapshot(requiredSequence = 0) {
 	if (!snapshotRefresh) {
 		snapshotRefresh = (async () => {
 			do {
+				let pendingConversation = {};
 				const response = await fetch("/api/state", { cache: "no-store" });
 				if (!response.ok) throw new Error(await responseError(response));
 				const snapshot = await response.json();
+				const replacesConversation =
+					Number.isSafeInteger(snapshot?.sequence) && snapshot.sequence >= model.sequence;
 				model = applySnapshot(model, snapshot);
 				if (typeof snapshot.lease?.activeClientId === "string") {
 					model = applyLease(model, snapshot.lease, clientId);
 				}
-				emit({ scrollToLatest: model.following });
+				if (replacesConversation) {
+					pendingConversation = drainConversationRender();
+				}
+				emit({ ...pendingConversation, scrollToLatest: model.following });
 			} while (model.sequence < snapshotTarget);
 		})().finally(() => {
 			snapshotRefresh = undefined;
@@ -188,20 +231,46 @@ function connectEvents() {
 	});
 	events.addEventListener("conversation", (event) => {
 		const conversationEvent = JSON.parse(event.data);
+		const previousMessages = model.messages;
+		const previousTools = model.tools;
 		model = applyConversationEvent(model, conversationEvent);
 		if (model.needsSnapshot) {
 			void refreshSnapshot(conversationEvent.sequence).catch(connectionFailure);
 			return;
 		}
-		model = noteUnseenUpdate(model, conversationUpdateKey(conversationEvent));
+		if (shouldBatchConversationEvent(conversationEvent.type)) {
+			scheduleConversationRender({
+				transcriptAnnouncement: conversationAnnouncement(conversationEvent),
+				transcriptUpdateKeys: [conversationUpdateKey(conversationEvent)],
+			});
+			return;
+		}
+		let pendingConversation = {};
+		if (conversationEvent.type === "snapshot" || conversationEvent.type === "session-ended") {
+			pendingConversation = drainConversationRender();
+			if (
+				conversationEvent.type === "snapshot" &&
+				hasConversationReferenceChange(previousMessages, previousTools, model)
+			) {
+				model = noteUnseenUpdate(model, conversationUpdateKey(conversationEvent));
+			}
+			publishConversation();
+		}
 		emit({
-			transcriptAnnouncement: conversationAnnouncement(conversationEvent),
-			scrollToLatest: model.following,
+			...pendingConversation,
+			scrollToLatest: shouldScrollForConversationEvent(
+				conversationEvent.type,
+				model.following && !model.closed,
+			),
 		});
 	});
 	events.addEventListener("snapshot", (event) => {
-		model = applySnapshot(model, JSON.parse(event.data));
-		emit({ scrollToLatest: model.following });
+		const snapshot = JSON.parse(event.data);
+		const replacesConversation =
+			Number.isSafeInteger(snapshot?.sequence) && snapshot.sequence >= model.sequence;
+		model = applySnapshot(model, snapshot);
+		const pendingConversation = replacesConversation ? drainConversationRender() : {};
+		emit({ ...pendingConversation, scrollToLatest: model.following });
 	});
 	events.addEventListener("lease", (event) => {
 		model = applyLease(model, JSON.parse(event.data), clientId);
@@ -226,13 +295,20 @@ function connectEvents() {
 	events.addEventListener("session-ended", () => {
 		model = { ...model, closed: true, activity: "ended", connected: false };
 		events?.close();
-		emit({ transcriptAnnouncement: "Pi session ended." });
+		const pendingConversation = drainConversationRender();
+		emit({
+			...pendingConversation,
+			transcriptAnnouncement: [pendingConversation.transcriptAnnouncement, "Pi session ended."]
+				.filter(Boolean)
+				.join(" "),
+		});
 	});
 	events.addEventListener("error", () => {
 		events?.close();
 		if (model.closed) return;
 		model = { ...model, connected: false };
-		emit();
+		const pendingConversation = drainConversationRender();
+		emit(pendingConversation);
 		scheduleReconnect();
 	});
 }
@@ -254,7 +330,8 @@ function scheduleReconnect() {
 
 function connectionFailure(error) {
 	model = { ...model, connected: false, error: errorMessage(error) };
-	emit();
+	const pendingConversation = drainConversationRender();
+	emit(pendingConversation);
 	scheduleReconnect();
 }
 
