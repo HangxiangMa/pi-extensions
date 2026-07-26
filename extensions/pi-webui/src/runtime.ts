@@ -261,6 +261,8 @@ export class WebUIRuntime {
 		previousConversation?.close();
 		await this.releaseServer();
 		if (generation !== this.generation) return;
+		await this.settingsSaveQueue;
+		if (generation !== this.generation) return;
 		const settingsResult = await this.dependencies.loadSettings();
 		if (generation !== this.generation) return;
 		this.applySettingsResult(settingsResult);
@@ -418,8 +420,9 @@ export class WebUIRuntime {
 
 	private async showMenu(ctx: ExtensionCommandContext): Promise<void> {
 		if (!ctx.hasUI) return;
+		const generation = this.generation;
 		let selectedAction: WebUIMenuAction | undefined;
-		while (true) {
+		while (generation === this.generation) {
 			const state = this.menuState();
 			let action: WebUIMenuAction | undefined;
 			if (ctx.mode === "tui") {
@@ -434,7 +437,7 @@ export class WebUIRuntime {
 				const selectedIndex = selected === undefined ? -1 : options.indexOf(selected);
 				action = items[selectedIndex]?.value;
 			}
-			if (!action) return;
+			if (generation !== this.generation || !action) return;
 			selectedAction = action;
 			if (action === "open") {
 				await this.openWebUI(ctx);
@@ -442,17 +445,21 @@ export class WebUIRuntime {
 			}
 			if (action === "settings") {
 				await this.showSettings(ctx);
+				if (generation !== this.generation) return;
 				continue;
 			}
 			if (action === "repair") {
 				await this.showDetail(ctx, "Repair WebUI settings", this.repairLines());
+				if (generation !== this.generation) return;
 				continue;
 			}
 			if (action === "status") {
 				await this.showDetail(ctx, "Pi WebUI status", this.statusLines());
+				if (generation !== this.generation) return;
 				continue;
 			}
 			await this.showDetail(ctx, "Pi WebUI help", this.helpLines());
+			if (generation !== this.generation) return;
 		}
 	}
 
@@ -486,6 +493,7 @@ export class WebUIRuntime {
 			return;
 		}
 
+		const settingsGeneration = this.generation;
 		const items: SettingItem[] = [
 			{
 				id: "startOnSessionStart",
@@ -530,9 +538,11 @@ export class WebUIRuntime {
 							this.settingsDocument = document;
 							this.settingsSource = "settings file";
 						} catch (error) {
-							list.updateValue(id, previous ? "Every session" : "Manual");
-							ctx.ui.notify(`WebUI settings save failed: ${formatError(error)}`, "error");
-							tui.requestRender();
+							if (settingsGeneration === this.generation) {
+								list.updateValue(id, previous ? "Every session" : "Manual");
+								ctx.ui.notify(`WebUI settings save failed: ${formatError(error)}`, "error");
+								tui.requestRender();
+							}
 						}
 					});
 					this.settingsSaveQueue = operation.catch(() => undefined);
@@ -553,6 +563,7 @@ export class WebUIRuntime {
 				},
 			};
 		});
+		await this.settingsSaveQueue;
 	}
 
 	private statusLines(): string[] {

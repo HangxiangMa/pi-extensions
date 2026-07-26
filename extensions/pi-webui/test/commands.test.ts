@@ -132,6 +132,80 @@ test("webui command completes and routes settings, status, help, and invalid arg
 	assert.doesNotMatch(runningStatus, /token=/i);
 });
 
+test("a menu selection cannot dispatch into a replacement session", async () => {
+	const selection = deferred<string | undefined>();
+	let options: string[] = [];
+	let starts = 0;
+	const { mock, runtime } = createRuntime({
+		startServer: async () => {
+			starts += 1;
+			return {
+				issueLink: () => "http://127.0.0.1:1234/bootstrap?token=stale",
+				close: async () => undefined,
+			};
+		},
+	});
+	const original = createMockContext({
+		hasUI: true,
+		mode: "rpc",
+		select: async (_title: string, items: string[]) => {
+			options = items;
+			return selection.promise;
+		},
+	});
+	await runtime.start(original.ctx);
+	const opening = mock.commands.get("webui")?.handler("", original.ctx);
+	await waitFor(() => options.length > 0);
+
+	const replacement = createMockContext({ hasUI: true, mode: "rpc" });
+	await runtime.start(replacement.ctx);
+	selection.resolve(options[0]);
+	await opening;
+
+	assert.equal(starts, 0);
+	assert.equal(original.notifications.length, 0);
+	assert.equal(replacement.notifications.length, 0);
+});
+
+test("menu waits for settings persistence before rebuilding current state", async () => {
+	const saved = deferred<void>();
+	let customCalls = 0;
+	let saveStarted = false;
+	const { mock, runtime } = createRuntime({
+		saveSettings: async (settings, document) => {
+			saveStarted = true;
+			await saved.promise;
+			return { ...document, ...settings };
+		},
+	});
+	const context = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			customCalls += 1;
+			const selector = createCustomSelectorHarness(factory);
+			if (customCalls === 1) {
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\r");
+			} else if (customCalls === 2) {
+				selector.handleInput("\r");
+				selector.handleInput("\u001b");
+			} else {
+				assert.match(selector.render().join("\n"), /Startup: Every session/);
+				selector.handleInput("\u001b");
+			}
+			return selector.result;
+		},
+	});
+	await runtime.start(context.ctx);
+	const showing = mock.commands.get("webui")?.handler("", context.ctx);
+	await waitFor(() => saveStarted);
+	assert.equal(customCalls, 2);
+	saved.resolve(undefined);
+	await showing;
+	assert.equal(customCalls, 3);
+});
+
 test("menu secondary screens return with stable selection and no server side effects", async () => {
 	let starts = 0;
 	let customCalls = 0;
