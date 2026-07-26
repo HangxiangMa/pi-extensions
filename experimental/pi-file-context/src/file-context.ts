@@ -12,7 +12,7 @@ import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { FileQuoteExplorer, type FileQuoteExplorerResult } from "./file-context-explorer.js";
 import { createGitContext } from "./git-context.js";
 
-const WIDGET_KEY = "file-quote";
+const WIDGET_KEY = "file-context";
 const DEFAULT_MAX_FILES = 5_000;
 const DEFAULT_MAX_BYTES = 1_000_000;
 const MAX_QUOTE_BYTES = 50_000;
@@ -363,15 +363,20 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 		}
 	};
 
-	pi.registerCommand("file-quote", {
+	const handleFileContextCommand = async (args: string, ctx: ExtensionContext) => {
+		if (args.trim()) {
+			rejectCommand(ctx, "Usage: /file-context");
+			return;
+		}
+		await openExplorer(ctx);
+	};
+	pi.registerCommand("file-context", {
 		description: "Browse project files and attach a selected line range",
-		handler: async (args, ctx) => {
-			if (args.trim()) {
-				rejectCommand(ctx, "Usage: /file-quote");
-				return;
-			}
-			await openExplorer(ctx);
-		},
+		handler: handleFileContextCommand,
+	});
+	pi.registerCommand("file-quote", {
+		description: "Compatibility alias for /file-context",
+		handler: handleFileContextCommand,
 	});
 
 	pi.on("session_start", (_event, ctx) => {
@@ -386,7 +391,7 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 		const previous = ctx.ui.getEditorComponent();
 		if (previous) {
 			ctx.ui.notify(
-				"File Context left the existing custom editor unchanged; use /file-quote.",
+				"File Context left the existing custom editor unchanged; use /file-context.",
 				"warning",
 			);
 			return;
