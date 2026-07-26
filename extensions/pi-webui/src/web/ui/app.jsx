@@ -35,7 +35,16 @@ import {
 	Theme,
 } from "@radix-ui/themes";
 import { Collapsible, Popover, Tooltip } from "radix-ui";
-import { StrictMode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+	memo,
+	StrictMode,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 import { createRoot } from "react-dom/client";
 import { dropAfterTarget, imagesStackVertically } from "../image-drag.js";
 import { parseMarkdown } from "../markdown.js";
@@ -156,10 +165,10 @@ function App() {
 		if (!open) requestAnimationFrame(() => clearReturnFocus.current?.focus());
 	}
 
-	function openForgetDialog(id, trigger) {
+	const openForgetDialog = useCallback((id, trigger) => {
 		forgetReturnFocus.current = trigger;
 		setForgetId(id);
-	}
+	}, []);
 
 	function closeForgetDialog() {
 		setForgetId("");
@@ -355,7 +364,7 @@ function Conversation({ model, onForget, view }) {
 	);
 }
 
-function Message({ message, onForget, retained, tools }) {
+const Message = memo(function Message({ message, onForget, retained, tools }) {
 	const role = knownRole(message.role);
 	const body = (
 		<Box className="message-body">
@@ -401,6 +410,23 @@ function Message({ message, onForget, retained, tools }) {
 			</li>
 		</Box>
 	);
+}, messagePropsEqual);
+
+function messagePropsEqual(previous, next) {
+	if (
+		previous.message !== next.message ||
+		previous.onForget !== next.onForget ||
+		previous.retained !== next.retained
+	) {
+		return false;
+	}
+	if (previous.tools === next.tools) return true;
+	for (const block of previous.message.content ?? []) {
+		if (block.type === "toolCall" && previous.tools.get(block.id) !== next.tools.get(block.id)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 function MessageBlock({ block, onForget, retained, tool }) {
@@ -426,7 +452,7 @@ function MessageBlock({ block, onForget, retained, tool }) {
 	return null;
 }
 
-function Markdown({ text }) {
+const Markdown = memo(function Markdown({ text }) {
 	return (
 		<Box className="message-markdown">
 			{withStableKeys(parseMarkdown(text)).map(({ key, value: block }) => (
@@ -434,7 +460,7 @@ function Markdown({ text }) {
 			))}
 		</Box>
 	);
-}
+});
 
 function MarkdownBlock({ block }) {
 	if (block.type === "heading") {

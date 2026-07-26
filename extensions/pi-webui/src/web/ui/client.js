@@ -23,6 +23,7 @@ import {
 	prepareSend,
 	setNearBottom,
 } from "../state.js";
+import { createRenderBatcher } from "./view-helpers.js";
 
 const SUPPORTED_IMAGE_TYPES = new Set([
 	"image/png",
@@ -52,6 +53,13 @@ let draftSaveQueue = Promise.resolve();
 let mutatingAttachments = false;
 let started = false;
 let view = createView();
+const scheduleConversationRender = createRenderBatcher(
+	(callback) => {
+		// Streaming can produce many events per frame. Cap transcript work so input remains responsive.
+		setTimeout(() => requestAnimationFrame(callback), 50);
+	},
+	(extra) => emit(extra),
+);
 
 function createView(extra = {}) {
 	return {
@@ -194,7 +202,7 @@ function connectEvents() {
 			return;
 		}
 		model = noteUnseenUpdate(model, conversationUpdateKey(conversationEvent));
-		emit({
+		scheduleConversationRender({
 			transcriptAnnouncement: conversationAnnouncement(conversationEvent),
 			scrollToLatest: model.following,
 		});

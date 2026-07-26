@@ -1,3 +1,24 @@
+export function createRenderBatcher(schedule, render) {
+	let scheduled = false;
+	let pending = {};
+	return (extra = {}) => {
+		pending = {
+			...pending,
+			...extra,
+			transcriptAnnouncement: extra.transcriptAnnouncement || pending.transcriptAnnouncement || "",
+			scrollToLatest: Boolean(pending.scrollToLatest || extra.scrollToLatest),
+		};
+		if (scheduled) return;
+		scheduled = true;
+		schedule(() => {
+			scheduled = false;
+			const next = pending;
+			pending = {};
+			render(next);
+		});
+	};
+}
+
 export function withStableKeys(values) {
 	return values.map((value, index) => {
 		const type =
