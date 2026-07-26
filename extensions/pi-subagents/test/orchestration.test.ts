@@ -151,7 +151,7 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			),
 			false,
 		);
-		assert.ok(mock.commands.has("subagents:agents"));
+		assert.equal(mock.commands.has("subagents:agents"), false);
 		const context = createMockContext();
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		assert.deepEqual(controller.getRuntimeStatus(), {

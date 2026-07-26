@@ -16,23 +16,27 @@ import {
 import { type CompletionDelivery, discoverAgents } from "./agents.js";
 import type { ManagedAgent } from "./registry.js";
 import {
+	type DelegationWorkflow,
 	hasOwn,
 	inspectCompletionDeliverySettings,
+	inspectDelegationWorkflowSettings,
 	readSubagentSettings,
 	sameToolSet,
 	uniqueToolNames,
 	updateAgentToolsSetting,
 	updateCompletionDeliverySetting,
+	updateDelegationWorkflowSetting,
 } from "./settings.js";
 import { formatStatefulAgentLine, type StatefulSubagentRuntimeStatus } from "./stateful.js";
 
 const SUBCOMMANDS: AutocompleteItem[] = [
-	{ value: "settings", label: "settings", description: "Configure completion delivery" },
+	{ value: "settings", label: "settings", description: "Configure completion behavior" },
 	{ value: "status", label: "status", description: "Show effective subagent settings" },
 	{ value: "help", label: "help", description: "Show subagent settings help" },
 ];
 
 export interface SubagentSettingsRuntime {
+	getBlockingEnabled(): boolean;
 	getCompletionDelivery(): CompletionDelivery;
 	setCompletionDelivery(value: CompletionDelivery): void;
 	getRuntimeStatus(): StatefulSubagentRuntimeStatus;
@@ -102,17 +106,11 @@ export class ToolToggleList {
 
 export function registerSubagentConfigCommand(pi: ExtensionAPI, runtime: SubagentSettingsRuntime) {
 	registerSubagentPrimaryCommand(pi, runtime);
-	pi.registerCommand("subagents:config", {
-		description: "Configure user tool settings for each subagent",
-		handler: async (_args, ctx) => {
-			await showSubagentToolSettings(pi, ctx);
-		},
-	});
 }
 
 async function showSubagentToolSettings(pi: ExtensionAPI, ctx: ExtensionCommandContext) {
 	if (ctx.mode !== "tui") {
-		if (ctx.hasUI) ctx.ui.notify("/subagents:config requires TUI mode", "info");
+		if (ctx.hasUI) ctx.ui.notify("Agent tool settings require TUI mode", "info");
 		return;
 	}
 
@@ -292,7 +290,8 @@ async function showSubagentToolSettings(pi: ExtensionAPI, ctx: ExtensionCommandC
 	}
 }
 
-type ManagerAction = "settings" | "agent-tools" | "agents" | "status" | "help";
+type ManagerAction = "workflow" | "agents" | "completion" | "advanced" | "help";
+type AdvancedAction = "agent-tools" | "status" | "back";
 type AgentManagerAction = "back" | "clear";
 
 function registerSubagentPrimaryCommand(pi: ExtensionAPI, runtime: SubagentSettingsRuntime) {
@@ -317,7 +316,7 @@ function registerSubagentPrimaryCommand(pi: ExtensionAPI, runtime: SubagentSetti
 					showSubagentStatus(ctx, runtime);
 					return;
 				case "help":
-					showSubagentHelp(ctx, runtime);
+					showSubagentHelp(ctx);
 					return;
 				default:
 					if (ctx.mode === "tui" || ctx.hasUI) {
@@ -341,20 +340,20 @@ async function showSubagentManager(
 		const action = await selectManagerAction(ctx, runtime);
 		if (!action) return;
 		switch (action) {
-			case "settings":
-				await showSubagentSettings(ctx, runtime);
-				break;
-			case "agent-tools":
-				await showSubagentToolSettings(pi, ctx);
+			case "workflow":
+				if (await showDelegationWorkflow(ctx, runtime)) return;
 				break;
 			case "agents":
 				await showCurrentSessionAgents(ctx, runtime);
 				break;
-			case "status":
-				showSubagentStatus(ctx, runtime);
+			case "completion":
+				await showSubagentSettings(ctx, runtime);
+				break;
+			case "advanced":
+				await showAdvancedSettings(pi, ctx, runtime);
 				break;
 			case "help":
-				showSubagentHelp(ctx, runtime);
+				showSubagentHelp(ctx);
 				break;
 		}
 	}
@@ -365,24 +364,28 @@ async function selectManagerAction(
 	runtime: SubagentSettingsRuntime,
 ): Promise<ManagerAction | null> {
 	const status = runtime.getRuntimeStatus();
-	const settings = inspectCompletionDeliverySettings();
+	const workflow = inspectDelegationWorkflowSettings();
 	const items: SelectItem[] = [
 		{
-			value: "settings",
-			label: "Completion settings",
-			description: "Change user completion delivery for this and future sessions",
-		},
-		{
-			value: "agent-tools",
-			label: "Agent tool settings",
-			description: "Configure persistent per-agent tool allow-lists",
+			value: "workflow",
+			label: "Change delegation",
+			description: "Choose all methods, async only, or blocking only",
 		},
 		{
 			value: "agents",
-			label: "Current-session agents",
+			label: "Current agents",
 			description: `${status.activeAgents} active · ${status.retainedAgents} retained`,
 		},
-		{ value: "status", label: "Status", description: "Show effective runtime and settings state" },
+		{
+			value: "completion",
+			label: "Completion behavior",
+			description: "Choose whether async completion waits or resumes automatically",
+		},
+		{
+			value: "advanced",
+			label: "Advanced settings",
+			description: "Agent permissions, runtime details, and settings path",
+		},
 		{ value: "help", label: "Help", description: "Show commands and manual configuration" },
 	];
 	return ctx.ui.custom<ManagerAction | null>((tui, theme, _keybindings, done) => {
@@ -390,7 +393,9 @@ async function selectManagerAction(
 		container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
 		container.addChild(new Text(theme.fg("accent", theme.bold("Subagents")), 1, 0));
 		container.addChild(new Spacer(1));
-		container.addChild(new Text(theme.fg("muted", formatManagerSummary(status, settings)), 1, 0));
+		container.addChild(
+			new Text(theme.fg("muted", formatManagerSummary(runtime, status, workflow)), 1, 0),
+		);
 		container.addChild(new Spacer(1));
 		const selectList = new SelectList(items, Math.min(items.length + 2, 15), {
 			selectedPrefix: (text: string) => theme.fg("accent", text),
@@ -413,6 +418,257 @@ async function selectManagerAction(
 			},
 		};
 	});
+}
+
+async function showDelegationWorkflow(
+	ctx: ExtensionCommandContext,
+	runtime: SubagentSettingsRuntime,
+): Promise<boolean> {
+	const snapshot = inspectDelegationWorkflowSettings();
+	if (ctx.mode !== "tui") {
+		if (ctx.hasUI) {
+			ctx.ui.notify(
+				`Edit delegation settings manually: ${safeTerminalText(snapshot.path)}`,
+				"info",
+			);
+		}
+		return false;
+	}
+	if (snapshot.error) {
+		ctx.ui.notify(
+			`Delegation settings cannot be edited: ${safeTerminalText(snapshot.error)}. Repair ${safeTerminalText(snapshot.path)} and retry.`,
+			"error",
+		);
+		return false;
+	}
+	const activeWorkflow = currentWorkflow(runtime, runtime.getRuntimeStatus());
+	const choices: SelectItem[] = [
+		{
+			value: "all",
+			label: "All delegation methods",
+			description: "Allow blocking batches and reusable async agents",
+		},
+		{
+			value: "async-only",
+			label: "Async only",
+			description: "Keep the root responsive; remove blocking subagent",
+		},
+		{
+			value: "blocking-only",
+			label: "Blocking only",
+			description: "Keep blocking batches; remove reusable async agents",
+		},
+	];
+	const selected = await ctx.ui.custom<DelegationWorkflow | null>(
+		(tui, theme, _keybindings, done) => {
+			const container = new Container();
+			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+			container.addChild(new Text(theme.fg("accent", theme.bold("Change Delegation")), 1, 0));
+			container.addChild(
+				new Text(
+					theme.fg(
+						"muted",
+						[
+							`Current: ${workflowLabel(activeWorkflow)}`,
+							...(snapshot.value !== activeWorkflow
+								? [`Configured after reload: ${workflowLabel(snapshot.value)}`]
+								: []),
+						].join("\n"),
+					),
+					1,
+					0,
+				),
+			);
+			container.addChild(new Spacer(1));
+			const selectList = new SelectList(choices, Math.min(choices.length + 2, 10), {
+				selectedPrefix: (text: string) => theme.fg("accent", text),
+				selectedText: (text: string) => theme.fg("accent", text),
+				description: (text: string) => theme.fg("muted", text),
+				scrollInfo: (text: string) => theme.fg("dim", text),
+				noMatch: (text: string) => theme.fg("warning", text),
+			});
+			selectList.setSelectedIndex(
+				Math.max(
+					0,
+					choices.findIndex((item) => item.value === snapshot.value),
+				),
+			);
+			selectList.onSelect = (item) => done(item.value as DelegationWorkflow);
+			selectList.onCancel = () => done(null);
+			container.addChild(selectList);
+			container.addChild(new Text(theme.fg("dim", "↑↓ navigate · enter preview · esc back"), 1, 0));
+			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+			return {
+				render: (width: number) => container.render(width),
+				invalidate: () => container.invalidate(),
+				handleInput(data: string) {
+					selectList.handleInput(data);
+					tui.requestRender();
+				},
+			};
+		},
+	);
+	if (!selected) return false;
+	if (selected === activeWorkflow && selected === snapshot.value) {
+		ctx.ui.notify(`Delegation already uses ${workflowLabel(selected)}.`, "info");
+		return false;
+	}
+	const requiresReload = selected !== activeWorkflow;
+	if (requiresReload && blockReloadWithRetainedAgents(ctx, runtime)) return false;
+
+	const confirmed = await showWorkflowPreview(ctx, activeWorkflow, selected, requiresReload);
+	if (!confirmed) return false;
+	if (requiresReload && blockReloadWithRetainedAgents(ctx, runtime)) return false;
+	try {
+		updateDelegationWorkflowSetting(selected as Exclude<DelegationWorkflow, "disabled">);
+	} catch (error) {
+		ctx.ui.notify(
+			`Delegation settings were not saved: ${formatError(error)}. The current workflow is unchanged.`,
+			"error",
+		);
+		return false;
+	}
+	if (!requiresReload) {
+		ctx.ui.notify(
+			`Saved ${workflowLabel(selected)}. The current tool surface already matches.`,
+			"info",
+		);
+		return false;
+	}
+	ctx.ui.notify(
+		`Saved ${workflowLabel(selected)}. Reloading subagent tools… If the tool surface does not refresh, run /reload.`,
+		"info",
+	);
+	await ctx.reload();
+	return true;
+}
+
+function blockReloadWithRetainedAgents(
+	ctx: ExtensionCommandContext,
+	runtime: SubagentSettingsRuntime,
+): boolean {
+	const status = runtime.getRuntimeStatus();
+	if (status.retainedAgents === 0) return false;
+	ctx.ui.notify(
+		`Cannot reload while ${status.retainedAgents} detached subagent${status.retainedAgents === 1 ? " is" : "s are"} retained (${status.activeAgents} active). Open Current agents and clear them after their work is safe to discard, then change delegation.`,
+		"warning",
+	);
+	return true;
+}
+
+async function showWorkflowPreview(
+	ctx: ExtensionCommandContext,
+	current: DelegationWorkflow,
+	next: DelegationWorkflow,
+	requiresReload: boolean,
+): Promise<boolean> {
+	const workflowChanges = workflowEffects(current, next);
+	const effects = (
+		workflowChanges.length > 0
+			? workflowChanges
+			: ["Keep the current registered tools and cancel the pending workflow change"]
+	)
+		.map((effect) => `- ${effect}`)
+		.join("\n");
+	return ctx.ui.custom<boolean>((tui, theme, _keybindings, done) => {
+		const container = new Container();
+		container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+		container.addChild(new Text(theme.fg("accent", theme.bold("Review Delegation Change")), 1, 0));
+		container.addChild(
+			new Text(
+				theme.fg(
+					"muted",
+					`Current: ${workflowLabel(current)}\nNew: ${workflowLabel(next)}\n\nEffect:\n${effects}\n- ${requiresReload ? "Reload the extension to apply this tool surface" : "No reload is needed because the active tools already match"}`,
+				),
+				1,
+				0,
+			),
+		);
+		container.addChild(new Spacer(1));
+		const actions: SelectItem[] = [
+			{
+				value: "save",
+				label: requiresReload ? "Save and reload" : "Save",
+				description: requiresReload
+					? "Persist and apply this workflow"
+					: "Persist the workflow that is already active",
+			},
+			{ value: "cancel", label: "Cancel", description: "Leave settings and tools unchanged" },
+		];
+		const selectList = new SelectList(actions, 4, {
+			selectedPrefix: (text: string) => theme.fg("accent", text),
+			selectedText: (text: string) => theme.fg("accent", text),
+			description: (text: string) => theme.fg("muted", text),
+			scrollInfo: (text: string) => theme.fg("dim", text),
+			noMatch: (text: string) => theme.fg("warning", text),
+		});
+		selectList.onSelect = (item) => done(item.value === "save");
+		selectList.onCancel = () => done(false);
+		container.addChild(selectList);
+		container.addChild(new Text(theme.fg("dim", "↑↓ navigate · enter choose · esc cancel"), 1, 0));
+		container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+		return {
+			render: (width: number) => container.render(width),
+			invalidate: () => container.invalidate(),
+			handleInput(data: string) {
+				selectList.handleInput(data);
+				tui.requestRender();
+			},
+		};
+	});
+}
+
+async function showAdvancedSettings(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	runtime: SubagentSettingsRuntime,
+) {
+	while (true) {
+		const action = await ctx.ui.custom<AdvancedAction | null>((tui, theme, _keybindings, done) => {
+			const container = new Container();
+			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+			container.addChild(
+				new Text(theme.fg("accent", theme.bold("Advanced Subagent Settings")), 1, 0),
+			);
+			container.addChild(new Spacer(1));
+			const items: SelectItem[] = [
+				{
+					value: "agent-tools",
+					label: "Agent tool permissions",
+					description: "Customize persistent per-agent tool allow-lists",
+				},
+				{
+					value: "status",
+					label: "Runtime details",
+					description: "Show transport, configured source, and settings path",
+				},
+				{ value: "back", label: "Back", description: "Return to the Subagents manager" },
+			];
+			const selectList = new SelectList(items, 5, {
+				selectedPrefix: (text: string) => theme.fg("accent", text),
+				selectedText: (text: string) => theme.fg("accent", text),
+				description: (text: string) => theme.fg("muted", text),
+				scrollInfo: (text: string) => theme.fg("dim", text),
+				noMatch: (text: string) => theme.fg("warning", text),
+			});
+			selectList.onSelect = (item) => done(item.value as AdvancedAction);
+			selectList.onCancel = () => done(null);
+			container.addChild(selectList);
+			container.addChild(new Text(theme.fg("dim", "↑↓ navigate · enter select · esc back"), 1, 0));
+			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+			return {
+				render: (width: number) => container.render(width),
+				invalidate: () => container.invalidate(),
+				handleInput(data: string) {
+					selectList.handleInput(data);
+					tui.requestRender();
+				},
+			};
+		});
+		if (!action || action === "back") return;
+		if (action === "agent-tools") await showSubagentToolSettings(pi, ctx);
+		else showSubagentStatus(ctx, runtime);
+	}
 }
 
 async function showCurrentSessionAgents(
@@ -516,11 +772,11 @@ async function showSubagentSettings(
 		const items: SettingItem[] = [
 			{
 				id: "completionDelivery",
-				label: "Completion delivery",
+				label: "When async work finishes",
 				description:
-					"User setting applied now and to future sessions. next-turn queues completion; auto-resume requests synthesis after settlement.",
-				currentValue,
-				values: ["next-turn", "auto-resume"],
+					"Wait for your next turn, or request one synthesis turn after the root settles.",
+				currentValue: completionLabel(currentValue),
+				values: ["Wait until my next turn", "Resume automatically when finished"],
 			},
 		];
 		const container = new Container();
@@ -541,17 +797,15 @@ async function showSubagentSettings(
 			(id, newValue) => {
 				if (id !== "completionDelivery") return;
 				const previous = currentValue;
-				const next = newValue as CompletionDelivery;
+				const next: CompletionDelivery =
+					newValue === "Resume automatically when finished" ? "auto-resume" : "next-turn";
 				try {
 					updateCompletionDeliverySetting(next);
 					runtime.setCompletionDelivery(next);
 					currentValue = next;
-					ctx.ui.notify(
-						`User completion delivery set to ${next} for this and future sessions.`,
-						"info",
-					);
+					ctx.ui.notify(`Saved and applied: ${completionLabel(next)}.`, "info");
 				} catch (error) {
-					settingsList.updateValue(id, previous);
+					settingsList.updateValue(id, completionLabel(previous));
 					ctx.ui.notify(`Subagent settings were not saved: ${formatError(error)}`, "error");
 				}
 				tui.requestRender();
@@ -574,25 +828,20 @@ function showSubagentStatus(ctx: ExtensionCommandContext, runtime: SubagentSetti
 	if (ctx.mode !== "tui" && !ctx.hasUI) return;
 	const snapshot = inspectCompletionDeliverySettings();
 	ctx.ui.notify(
-		formatStatus(runtime.getRuntimeStatus(), snapshot),
+		formatStatus(runtime.getRuntimeStatus(), snapshot, runtime),
 		snapshot.error ? "warning" : "info",
 	);
 }
 
-function showSubagentHelp(ctx: ExtensionCommandContext, runtime: SubagentSettingsRuntime) {
+function showSubagentHelp(ctx: ExtensionCommandContext) {
 	if (ctx.mode !== "tui" && !ctx.hasUI) return;
 	const snapshot = inspectCompletionDeliverySettings();
-	const runtimeStatus = runtime.getRuntimeStatus();
 	ctx.ui.notify(
 		[
-			"/subagents — open the current-session manager",
-			"/subagents settings — configure user completion delivery",
+			"/subagents — choose delegation workflow, manage current agents, and configure agent tools",
+			"/subagents settings — configure async completion behavior",
 			"/subagents status — show current-session and user-setting values",
 			"/subagents help — show this help",
-			"/subagents:config — compatibility route for per-agent user tool settings",
-			runtimeStatus.enabled
-				? "/subagents:agents list|clear — compatibility route for current-session agents"
-				: "/subagents:agents — unavailable while stateful lifecycle tools are disabled",
 			`User settings: ${safeTerminalText(snapshot.path)}`,
 		].join("\n"),
 		"info",
@@ -600,41 +849,48 @@ function showSubagentHelp(ctx: ExtensionCommandContext, runtime: SubagentSetting
 }
 
 function formatManagerSummary(
+	runtime: SubagentSettingsRuntime,
 	status: StatefulSubagentRuntimeStatus,
-	settings: ReturnType<typeof inspectCompletionDeliverySettings>,
+	configured: ReturnType<typeof inspectDelegationWorkflowSettings>,
 ): string {
+	const current = currentWorkflow(runtime, status);
 	return [
-		"Current session",
-		`Lifecycle: ${status.enabled ? "enabled" : "disabled"}${status.initialized ? " · initialized" : " · not initialized"}`,
-		`Transport: ${status.transport}`,
-		`Completion delivery: ${status.completionDelivery}`,
+		`Delegation: ${workflowLabel(current)}`,
+		`Completion: ${completionLabel(status.completionDelivery)}`,
 		`Agents: ${status.activeAgents} active · ${status.retainedAgents} retained`,
-		"",
-		"User settings",
-		`Completion source: ${settings.source}`,
-		`Path: ${safeTerminalText(settings.path)}`,
-		...(settings.error ? [`Warning: ${safeTerminalText(settings.error)}`] : []),
+		...(configured.value !== current
+			? [`Configured after reload: ${workflowLabel(configured.value)}`]
+			: []),
+		...(configured.error ? ["Settings need repair; open Advanced settings for details."] : []),
 	].join("\n");
 }
 
 function formatStatus(
 	status: StatefulSubagentRuntimeStatus,
 	snapshot: ReturnType<typeof inspectCompletionDeliverySettings>,
+	runtime?: SubagentSettingsRuntime,
 ): string {
+	const configuredWorkflow = inspectDelegationWorkflowSettings();
+	const current = runtime ? currentWorkflow(runtime, status) : configuredWorkflow.value;
 	return [
 		"Current session",
-		`  Lifecycle: ${status.enabled ? "enabled" : "disabled"}`,
-		`  Runtime: ${status.initialized ? "initialized" : "not initialized"}`,
+		`  Delegation: ${workflowLabel(current)}`,
+		`  Async runtime: ${status.initialized ? "initialized" : status.enabled ? "not initialized" : "disabled"}`,
 		`  Transport: ${status.transport}`,
-		`  Completion delivery: ${status.completionDelivery}`,
+		`  Completion: ${completionLabel(status.completionDelivery)}`,
 		`  Agents: ${status.activeAgents} active, ${status.retainedAgents} retained`,
 		"User settings",
+		`  Delegation source: ${configuredWorkflow.source}`,
+		`  Configured delegation: ${workflowLabel(configuredWorkflow.value)}`,
 		`  Completion source: ${snapshot.source}`,
+		`  Configured completion: ${completionLabel(snapshot.value)}`,
 		`  Path: ${safeTerminalText(snapshot.path)}`,
-		`  Configured completion delivery: ${snapshot.value}`,
-		snapshot.error ? `  Warning: ${safeTerminalText(snapshot.error)}` : "  Warning: none",
-		"User settings persist for future sessions; /subagents settings also applies changes now.",
-		"Manual file changes require /reload.",
+		configuredWorkflow.error || snapshot.error
+			? `  Warning: ${safeTerminalText(configuredWorkflow.error ?? snapshot.error ?? "invalid settings")}`
+			: "  Warning: none",
+		configuredWorkflow.value !== current
+			? "Configured delegation differs from this session. Run /reload to apply it."
+			: "Manual file changes require /reload.",
 	].join("\n");
 }
 
@@ -642,6 +898,52 @@ function formatEmptyRuntime(status: StatefulSubagentRuntimeStatus): string {
 	if (!status.enabled) return "Stateful subagents are disabled in user settings.";
 	if (!status.initialized) return "Stateful subagents are not initialized for this session.";
 	return "No current-session subagents.";
+}
+
+function currentWorkflow(
+	runtime: SubagentSettingsRuntime,
+	status: StatefulSubagentRuntimeStatus,
+): DelegationWorkflow {
+	const blocking = runtime.getBlockingEnabled();
+	if (blocking && status.enabled) return "all";
+	if (status.enabled) return "async-only";
+	if (blocking) return "blocking-only";
+	return "disabled";
+}
+
+function workflowLabel(value: DelegationWorkflow): string {
+	switch (value) {
+		case "all":
+			return "All delegation methods";
+		case "async-only":
+			return "Async only";
+		case "blocking-only":
+			return "Blocking only";
+		case "disabled":
+			return "Delegation disabled";
+	}
+}
+
+function completionLabel(value: CompletionDelivery): string {
+	return value === "auto-resume" ? "Resume automatically when finished" : "Wait until my next turn";
+}
+
+function workflowEffects(current: DelegationWorkflow, next: DelegationWorkflow): string[] {
+	const blockingEnabled = (value: DelegationWorkflow) =>
+		value === "all" || value === "blocking-only";
+	const asyncEnabled = (value: DelegationWorkflow) => value === "all" || value === "async-only";
+	const effects: string[] = [];
+	if (blockingEnabled(current) !== blockingEnabled(next)) {
+		effects.push(blockingEnabled(next) ? "Add blocking `subagent`" : "Remove blocking `subagent`");
+	}
+	if (asyncEnabled(current) !== asyncEnabled(next)) {
+		effects.push(
+			asyncEnabled(next)
+				? "Add reusable async lifecycle tools"
+				: "Remove reusable async lifecycle tools",
+		);
+	}
+	return effects;
 }
 
 function safeTerminalText(value: string): string {

@@ -22,6 +22,33 @@ import { consumeSubagentSettingsNotice, readSubagentSettings } from "./settings.
 import { registerStatefulSubagents } from "./stateful.js";
 
 export default function (pi: ExtensionAPI) {
+	const settings = readSubagentSettings();
+	if (settings?.blocking?.enabled !== false) registerBlockingSubagent(pi);
+
+	pi.on("session_start", (_event, ctx) => {
+		// Preserve a one-shot migration notice from extension load while refreshing
+		// validation against settings that may have changed before this session.
+		const loadNotice = consumeSubagentSettingsNotice();
+		readSubagentSettings();
+		const refreshedNotice = consumeSubagentSettingsNotice();
+		const notice = [
+			...new Set([loadNotice, refreshedNotice].filter((value) => value !== undefined)),
+		].join("\n");
+		if (notice) ctx.ui.notify(notice, "warning");
+	});
+
+	const blockingEnabled = settings?.blocking?.enabled !== false;
+	const statefulRuntime = registerStatefulSubagents(pi, {
+		blockingEnabled,
+		settings: settings?.stateful,
+	});
+	registerSubagentConfigCommand(pi, {
+		...statefulRuntime,
+		getBlockingEnabled: () => blockingEnabled,
+	});
+}
+
+function registerBlockingSubagent(pi: ExtensionAPI) {
 	pi.registerTool<typeof SubagentParams, SubagentDetails>({
 		name: "subagent",
 		label: "Blocking Subagent",
@@ -65,24 +92,14 @@ export default function (pi: ExtensionAPI) {
 		if ((event.details as (SubagentDetails & { isError?: boolean }) | undefined)?.isError)
 			return { isError: true };
 	});
-
-	pi.on("session_start", (_event, ctx) => {
-		let notice = consumeSubagentSettingsNotice();
-		if (!notice) {
-			readSubagentSettings();
-			notice = consumeSubagentSettingsNotice();
-		}
-		if (notice) ctx.ui.notify(notice, "warning");
-	});
-
-	const statefulRuntime = registerStatefulSubagents(pi);
-	registerSubagentConfigCommand(pi, statefulRuntime);
 }
+
 export { parsePositiveInteger } from "./execution.js";
 export { formatTokens, formatUsageStats } from "./render.js";
 export { buildPiArgs } from "./runner.js";
 export {
 	inspectCompletionDeliverySettings,
+	inspectDelegationWorkflowSettings,
 	normalizeAgentSettings,
 	normalizeSubagentSettings,
 	readSubagentSettings,
@@ -93,4 +110,5 @@ export {
 	uniqueToolNames,
 	updateAgentToolsSetting,
 	updateCompletionDeliverySetting,
+	updateDelegationWorkflowSetting,
 } from "./settings.js";

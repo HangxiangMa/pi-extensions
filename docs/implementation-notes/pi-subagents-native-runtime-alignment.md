@@ -11,7 +11,7 @@ Updated: 2026-07-23
 - Subtree interrupt and close use child-first order. Restore rejects orphaned/cyclic hierarchy and always returns valid records as inert.
 - Context supports none, all, recent N, summary checkpoint plus recent messages, and selected session entry IDs with stable source IDs.
 - Shared-workspace write-capable concurrency is blocked by default. Opt-in disposable detached worktrees require a clean repository and are removed on close or shutdown.
-- `/subagents:agents` renders hierarchy indentation, unread counts, state, elapsed time, and available actions.
+- `/subagents` → **Current agents** renders hierarchy indentation, unread counts, state, elapsed time, and available actions.
 
 ## Public SDK boundary
 

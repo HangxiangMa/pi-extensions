@@ -41,6 +41,10 @@ export type SubagentTransportKind = "subprocess" | "in-process";
 
 export type CompletionDelivery = "next-turn" | "auto-resume";
 
+export interface SubagentBlockingSettings {
+	enabled?: boolean;
+}
+
 export interface SubagentRuntimeSettings {
 	enabled?: boolean;
 	transport?: SubagentTransportKind;
@@ -58,6 +62,7 @@ export interface SubagentRuntimeSettings {
 
 export interface SubagentSettings {
 	agents?: Record<string, SubagentAgentConfig>;
+	blocking?: SubagentBlockingSettings;
 	stateful?: SubagentRuntimeSettings;
 }
 
@@ -242,7 +247,7 @@ export function discoverAgents(
 		for (const agent of projectAgents) agentMap.set(agent.name, agent);
 	}
 
-	// Apply user-configured overrides (from /subagents:config) on top of
+	// Apply user-configured overrides (from /subagents → Agent tool settings) on top of
 	// the final resolved agent map, regardless of agent source.
 	for (const [name, override] of Object.entries(config?.agents ?? {})) {
 		const agent = agentMap.get(name);

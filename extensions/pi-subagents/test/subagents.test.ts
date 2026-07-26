@@ -30,6 +30,7 @@ import subagents, {
 	formatTokens,
 	formatUsageStats,
 	inspectCompletionDeliverySettings,
+	inspectDelegationWorkflowSettings,
 	normalizeSubagentSettings,
 	parsePositiveInteger,
 	readSubagentSettings,
@@ -39,9 +40,19 @@ import subagents, {
 	uniqueToolNames,
 	updateAgentToolsSetting,
 	updateCompletionDeliverySetting,
+	updateDelegationWorkflowSetting,
 } from "../src/subagents.js";
 
 initTheme("dark", false);
+
+const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+const testAgentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-test-agent-"));
+process.env.PI_CODING_AGENT_DIR = testAgentDir;
+process.once("exit", () => {
+	if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+	rmSync(testAgentDir, { recursive: true, force: true });
+});
 
 type SchemaObject = {
 	properties?: Record<string, SchemaObject>;
@@ -61,7 +72,7 @@ type SubagentTool = {
 	}>;
 };
 
-test("subagents registers consistent blocking guidance and configuration command", () => {
+test("subagents registers consistent blocking guidance and one management command", () => {
 	const mock = createMockPi();
 	subagents(mock.pi);
 
@@ -113,10 +124,12 @@ test("subagents registers consistent blocking guidance and configuration command
 	);
 	assert.match(parameters?.properties?.aggregator?.description ?? "", /omit this key entirely/i);
 	assert.match(parameters?.properties?.aggregator?.description ?? "", /treated as absent/i);
-	assert.ok(mock.commands.has("subagents"));
-	assert.ok(mock.commands.has("subagents:config"));
+	assert.deepEqual(
+		[...mock.commands.keys()].filter((name) => name.startsWith("subagents")),
+		["subagents"],
+	);
 	assert.deepEqual(mock.commands.get("subagents")?.getArgumentCompletions?.("s"), [
-		{ value: "settings", label: "settings", description: "Configure completion delivery" },
+		{ value: "settings", label: "settings", description: "Configure completion behavior" },
 		{ value: "status", label: "status", description: "Show effective subagent settings" },
 	]);
 	const toolResultHandler = mock.events.get("tool_result")?.[0];
@@ -157,16 +170,13 @@ test("bare subagents opens a current-session manager and keeps direct routes pre
 		assert.ok(managerRenders.flat().every((line) => visibleWidth(line) <= 52));
 		const managerText = managerRenders.flat().join("\n");
 		assert.match(managerText, /Subagents/);
-		assert.match(managerText, /Current session/);
-		assert.match(managerText, /Lifecycle: enabled/);
-		assert.match(managerText, /Transport: subprocess/);
-		assert.match(managerText, /Completion delivery: next-turn/);
+		assert.match(managerText, /Delegation: All delegation methods/);
+		assert.match(managerText, /Completion: Wait until my next turn/);
 		assert.match(managerText, /Agents: 0 active.*0 retained/);
-		assert.match(managerText, /User settings/);
-		assert.match(managerText.replace(/\s+/gu, ""), /pi-subagents\.json/);
-		assert.match(managerText, /Completion settings/);
-		assert.match(managerText, /Agent tool settings/);
-		assert.match(managerText, /Current-session agents/);
+		assert.match(managerText, /Change delegation/);
+		assert.match(managerText, /Current agents/);
+		assert.match(managerText, /Completion behavior/);
+		assert.match(managerText, /Advanced settings/);
 		assert.equal(managerContext.notifications.length, 0);
 
 		let nestedCall = 0;
@@ -175,7 +185,7 @@ test("bare subagents opens a current-session manager and keeps direct routes pre
 			mode: "tui",
 			hasUI: true,
 			custom: async (factory: unknown) => {
-				const inputs = nestedCall === 0 ? ["\r"] : ["\u001b"];
+				const inputs = nestedCall === 0 ? ["\u001b[B", "\u001b[B", "\r"] : ["\u001b"];
 				const driven = driveCustomSelector(factory, inputs, 60);
 				nestedRenders[nestedCall++] = driven.renders.flat();
 				return driven.result;
@@ -183,9 +193,9 @@ test("bare subagents opens a current-session manager and keeps direct routes pre
 		});
 		await command.handler("", nestedContext.ctx);
 		assert.equal(nestedCall, 3, "settings closes back to a fresh manager before final Escape");
-		assert.match(nestedRenders[0]?.join("\n") ?? "", /Current session/);
+		assert.match(nestedRenders[0]?.join("\n") ?? "", /Delegation:/);
 		assert.match(nestedRenders[1]?.join("\n") ?? "", /Subagent User Settings/);
-		assert.match(nestedRenders[2]?.join("\n") ?? "", /Current session/);
+		assert.match(nestedRenders[2]?.join("\n") ?? "", /Delegation:/);
 
 		let agentRouteCall = 0;
 		const agentRouteRenders: string[][] = [];
@@ -193,7 +203,7 @@ test("bare subagents opens a current-session manager and keeps direct routes pre
 			mode: "tui",
 			hasUI: true,
 			custom: async (factory: unknown) => {
-				const inputs = agentRouteCall === 0 ? ["\u001b[B", "\u001b[B", "\r"] : ["\u001b"];
+				const inputs = agentRouteCall === 0 ? ["\u001b[B", "\r"] : ["\u001b"];
 				const driven = driveCustomSelector(factory, inputs, 60);
 				agentRouteRenders[agentRouteCall++] = driven.renders.flat();
 				return driven.result;
@@ -248,7 +258,8 @@ test("bare subagents opens a current-session manager and keeps direct routes pre
 		assert.match(managerContext.notifications.at(-1)?.message ?? "", /Current session/);
 		assert.match(managerContext.notifications.at(-1)?.message ?? "", /User settings/);
 		await command.handler("help", managerContext.ctx);
-		assert.match(managerContext.notifications.at(-1)?.message ?? "", /compatibility route/);
+		assert.match(managerContext.notifications.at(-1)?.message ?? "", /configure agent tools/);
+		assert.doesNotMatch(managerContext.notifications.at(-1)?.message ?? "", /subagents:/);
 		await command.handler("unknown", managerContext.ctx);
 		assert.match(
 			managerContext.notifications.at(-1)?.message ?? "",
@@ -259,21 +270,267 @@ test("bare subagents opens a current-session manager and keeps direct routes pre
 			managerContext.notifications.at(-1)?.message ?? "",
 			/Unknown \/subagents subcommand: settings extra/,
 		);
-		const agentsCommand = mock.commands.get("subagents:agents");
-		assert.ok(agentsCommand);
-		await agentsCommand.handler("list", managerContext.ctx);
-		assert.match(
-			managerContext.notifications.at(-1)?.message ?? "",
-			/No current-session subagents/,
-		);
-		await agentsCommand.handler("unknown", managerContext.ctx);
-		assert.match(
-			managerContext.notifications.at(-1)?.message ?? "",
-			/Unknown \/subagents:agents subcommand: unknown/,
-		);
 		for (const handler of mock.events.get("session_shutdown") ?? []) {
 			await handler({}, managerContext.ctx);
 		}
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("delegation workflow preview applies async-only on confirmation and cancellation is read-only", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-workflow-ui-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(settingsPath, JSON.stringify({ future: true }));
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		let applyCall = 0;
+		let reloads = 0;
+		const applyRenders: string[][] = [];
+		const applyContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			reload: async () => {
+				reloads++;
+			},
+			custom: async (factory: unknown) => {
+				const inputs = applyCall === 0 ? ["\r"] : applyCall === 1 ? ["\u001b[B", "\r"] : ["\r"];
+				const driven = driveCustomSelector(factory, inputs, 60);
+				applyRenders[applyCall++] = driven.renders.flat();
+				return driven.result;
+			},
+		});
+		await command.handler("", applyContext.ctx);
+		assert.equal(applyCall, 3);
+		assert.equal(reloads, 1);
+		assert.match(applyContext.notifications.at(-1)?.message ?? "", /run \/reload/i);
+		assert.match(applyRenders[0]?.join("\n") ?? "", /Delegation: All delegation methods/);
+		assert.match(applyRenders[1]?.join("\n") ?? "", /Async only/);
+		assert.match(applyRenders[2]?.join("\n") ?? "", /Current: All delegation methods/);
+		assert.match(applyRenders[2]?.join("\n") ?? "", /New: Async only/);
+		assert.match(applyRenders[2]?.join("\n") ?? "", /Remove blocking `subagent`/);
+		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
+			future: true,
+			blocking: { enabled: false },
+			stateful: { enabled: true },
+		});
+
+		writeFileSync(settingsPath, JSON.stringify({ future: "unchanged" }));
+		const beforeCancel = readFileSync(settingsPath, "utf8");
+		const cancelMock = createMockPi();
+		subagents(cancelMock.pi);
+		const cancelCommand = cancelMock.commands.get("subagents");
+		assert.ok(cancelCommand);
+		let cancelCall = 0;
+		const cancelContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const inputs =
+					cancelCall === 0
+						? ["\r"]
+						: cancelCall === 1
+							? ["\u001b[B", "\r"]
+							: cancelCall === 2
+								? ["\u001b"]
+								: ["\u001b"];
+				cancelCall++;
+				return driveCustomSelector(factory, inputs, 40).result;
+			},
+		});
+		await cancelCommand.handler("", cancelContext.ctx);
+		assert.equal(cancelCall, 4);
+		assert.equal(readFileSync(settingsPath, "utf8"), beforeCancel);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("configured workflow differences reload from the active tool surface", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-workflow-partial-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(settingsPath, "{}\n");
+		const reloadMock = createMockPi();
+		subagents(reloadMock.pi);
+		const command = reloadMock.commands.get("subagents");
+		assert.ok(command);
+		updateDelegationWorkflowSetting("async-only");
+		let reloads = 0;
+		let call = 0;
+		const renders: string[][] = [];
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			reload: async () => {
+				reloads++;
+			},
+			custom: async (factory: unknown) => {
+				if (call >= 3) throw new Error("workflow should reload after the third screen");
+				const driven = driveCustomSelector(factory, ["\r"], 40);
+				renders[call++] = driven.renders.flat();
+				return driven.result;
+			},
+		});
+		await command.handler("", context.ctx);
+		assert.equal(call, 3);
+		assert.equal(reloads, 1);
+		assert.match(renders[0]?.join("\n") ?? "", /Configured after reload: Async only/);
+		assert.match(renders[1]?.join("\n") ?? "", /Current: All delegation methods/);
+		assert.match(renders[2]?.join("\n") ?? "", /Current: All delegation methods/);
+		assert.match(renders[2]?.join("\n") ?? "", /Remove blocking `subagent`/);
+		assert.ok(renders.flat().every((line) => visibleWidth(line) <= 40));
+
+		reloads = 0;
+		call = 0;
+		const revertContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			reload: async () => {
+				reloads++;
+			},
+			custom: async (factory: unknown) => {
+				const inputs = call === 1 ? ["\u001b[A", "\r"] : call === 3 ? ["\u001b"] : ["\r"];
+				call++;
+				return driveCustomSelector(factory, inputs, 60).result;
+			},
+		});
+		await command.handler("", revertContext.ctx);
+		assert.equal(call, 4);
+		assert.equal(reloads, 0);
+		assert.equal(inspectDelegationWorkflowSettings().value, "all");
+		assert.match(
+			revertContext.notifications.at(-1)?.message ?? "",
+			/current tool surface already matches/i,
+		);
+
+		for (const width of [40, 60, 100]) {
+			const widthMock = createMockPi();
+			subagents(widthMock.pi);
+			const widthCommand = widthMock.commands.get("subagents");
+			assert.ok(widthCommand);
+			let lines: string[] = [];
+			const widthContext = createMockContext({
+				mode: "tui",
+				hasUI: true,
+				custom: async (factory: unknown) => {
+					const driven = driveCustomSelector(factory, ["\u001b"], width);
+					lines = driven.renders.flat();
+					return driven.result;
+				},
+			});
+			await widthCommand.handler("", widthContext.ctx);
+			assert.ok(lines.every((line) => visibleWidth(line) <= width));
+			assert.match(lines.join("\n"), /Delegation: All delegation methods/);
+		}
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("delegation workflow blocks reload while detached agents are retained", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-workflow-retained-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(settingsPath, "{}\n");
+		const mock = createMockPi();
+		let reloads = 0;
+		const runtime: SubagentSettingsRuntime = {
+			getBlockingEnabled: () => true,
+			getCompletionDelivery: () => "next-turn",
+			setCompletionDelivery: () => undefined,
+			getRuntimeStatus: () => ({
+				enabled: true,
+				initialized: true,
+				transport: "subprocess",
+				completionDelivery: "next-turn",
+				activeAgents: 1,
+				retainedAgents: 2,
+			}),
+			listAgents: () => [],
+			clearAgents: async () => 0,
+		};
+		registerSubagentConfigCommand(mock.pi, runtime);
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		let call = 0;
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			reload: async () => {
+				reloads++;
+			},
+			custom: async (factory: unknown) => {
+				const inputs = call === 0 ? ["\r"] : call === 1 ? ["\u001b[B", "\r"] : ["\u001b"];
+				call++;
+				return driveCustomSelector(factory, inputs, 60).result;
+			},
+		});
+		await command.handler("", context.ctx);
+		assert.equal(call, 3);
+		assert.equal(reloads, 0);
+		assert.equal(readFileSync(settingsPath, "utf8"), "{}\n");
+		assert.match(
+			context.notifications.at(-1)?.message ?? "",
+			/2 detached subagents.*retained.*1 active.*Current agents/i,
+		);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("delegation workflow save failure does not reload or claim application", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-workflow-save-failure-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(settingsPath, "{}\n");
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		let call = 0;
+		let reloads = 0;
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			reload: async () => {
+				reloads++;
+			},
+			custom: async (factory: unknown) => {
+				const inputs =
+					call === 0 ? ["\r"] : call === 1 ? ["\u001b[B", "\r"] : call === 2 ? ["\r"] : ["\u001b"];
+				if (call === 2) {
+					rmSync(settingsPath);
+					mkdirSync(settingsPath);
+				}
+				call++;
+				return driveCustomSelector(factory, inputs, 60).result;
+			},
+		});
+		await command.handler("", context.ctx);
+		assert.equal(call, 4);
+		assert.equal(reloads, 0);
+		assert.match(context.notifications.at(-1)?.message ?? "", /not saved.*unchanged/i);
+		assert.equal(lstatSync(settingsPath).isDirectory(), true);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -302,6 +559,7 @@ test("current-session manager excludes already closed agent records", async () =
 		};
 		const includeClosedArguments: boolean[] = [];
 		const runtime: SubagentSettingsRuntime = {
+			getBlockingEnabled: () => true,
 			getCompletionDelivery: () => "next-turn",
 			setCompletionDelivery: () => undefined,
 			getRuntimeStatus: () => ({
@@ -327,8 +585,7 @@ test("current-session manager excludes already closed agent records", async () =
 			mode: "tui",
 			hasUI: true,
 			custom: async (factory: unknown) => {
-				const inputs =
-					call === 0 ? ["\u001b[B", "\u001b[B", "\r"] : call === 1 ? ["\r"] : ["\u001b"];
+				const inputs = call === 0 ? ["\u001b[B", "\r"] : call === 1 ? ["\r"] : ["\u001b"];
 				const driven = driveCustomSelector(factory, inputs, 60);
 				renders[call++] = driven.renders.flat();
 				return driven.result;
@@ -339,6 +596,65 @@ test("current-session manager excludes already closed agent records", async () =
 		assert.deepEqual(includeClosedArguments, [false]);
 		assert.match(renders[1]?.join("\n") ?? "", /No current-session subagents/);
 		assert.doesNotMatch(renders[1]?.join("\n") ?? "", /sa_closed/);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("delegation workflow settings control the registered tool surface", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-workflows-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		const cases = [
+			{
+				name: "all delegation methods",
+				settings: {},
+				tools: [
+					"subagent",
+					"subagent_spawn",
+					"subagent_send",
+					"subagent_manage",
+					"subagent_mailbox",
+				],
+			},
+			{
+				name: "async only",
+				settings: { blocking: { enabled: false }, stateful: { enabled: true } },
+				tools: ["subagent_spawn", "subagent_send", "subagent_manage", "subagent_mailbox"],
+			},
+			{
+				name: "blocking only",
+				settings: { blocking: { enabled: true }, stateful: { enabled: false } },
+				tools: ["subagent"],
+			},
+			{
+				name: "disabled",
+				settings: { blocking: { enabled: false }, stateful: { enabled: false } },
+				tools: [],
+			},
+		] as const;
+		for (const scenario of cases) {
+			writeFileSync(settingsPath, JSON.stringify(scenario.settings));
+			const mock = createMockPi();
+			subagents(mock.pi);
+			assert.deepEqual(
+				mock.tools.map((tool) => tool.name),
+				scenario.tools,
+				scenario.name,
+			);
+			assert.ok(mock.commands.has("subagents"), `${scenario.name} keeps recovery commands`);
+			if (scenario.name === "async only") {
+				const spawnGuidance = mock.tools.find(
+					(tool) => tool.name === "subagent_spawn",
+				)?.promptGuidelines;
+				assert.ok(Array.isArray(spawnGuidance));
+				assert.doesNotMatch(spawnGuidance.join("\n"), /blocking subagent/i);
+			}
+		}
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -381,9 +697,10 @@ test("disabled stateful settings do not advertise unavailable lifecycle tools", 
 			},
 		});
 		await command.handler("", context.ctx);
-		assert.match(renders.flat().join("\n"), /Lifecycle: disabled/);
+		assert.match(renders.flat().join("\n"), /Delegation: Blocking only/);
 		await command.handler("help", context.ctx);
-		assert.match(context.notifications.at(-1)?.message ?? "", /unavailable.*disabled/);
+		assert.match(context.notifications.at(-1)?.message ?? "", /configure agent tools/);
+		assert.doesNotMatch(context.notifications.at(-1)?.message ?? "", /subagents:/);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -446,7 +763,10 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 			agents: { scout: { tools: ["read"] } },
 		});
 		await command.handler("status", context.ctx);
-		assert.match(context.notifications.at(-1)?.message ?? "", /Completion delivery: auto-resume/);
+		assert.match(
+			context.notifications.at(-1)?.message ?? "",
+			/Completion: Resume automatically when finished/,
+		);
 		assert.match(context.notifications.at(-1)?.message ?? "", /User settings/);
 
 		const nonTui = createMockContext({
@@ -458,8 +778,6 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 		});
 		await command.handler("settings", nonTui.ctx);
 		assert.match(nonTui.notifications[0]?.message ?? "", /Edit settings manually/);
-		await mock.commands.get("subagents:config")?.handler("", nonTui.ctx);
-		assert.match(nonTui.notifications.at(-1)?.message ?? "", /requires TUI mode/);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -492,9 +810,12 @@ test("subagent settings UI rolls back after an atomic save failure", async () =>
 		});
 		await command.handler("settings", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /were not saved/i);
-		assert.ok(renders[0]?.some((line) => line.includes("next-turn")));
+		assert.ok(renders[0]?.some((line) => line.includes("Wait until my next turn")));
 		await command.handler("status", context.ctx);
-		assert.match(context.notifications.at(-1)?.message ?? "", /Completion delivery: next-turn/);
+		assert.match(
+			context.notifications.at(-1)?.message ?? "",
+			/Completion: Wait until my next turn/,
+		);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -647,6 +968,8 @@ test("formatAgentList returns concise text and remaining count", () => {
 test("subagent settings normalize known override fields only", () => {
 	assert.deepEqual(
 		normalizeSubagentSettings({
+			blocking: { enabled: false },
+			stateful: { enabled: true },
 			agents: {
 				scout: { tools: ["read"], model: null, timeoutMs: 1, thinkingLevel: "medium" },
 				clearThinking: { thinkingLevel: null },
@@ -659,9 +982,35 @@ test("subagent settings normalize known override fields only", () => {
 				scout: { tools: ["read"], model: null, timeoutMs: 1, thinkingLevel: "medium" },
 				clearThinking: { thinkingLevel: null },
 			},
+			blocking: { enabled: false },
+			stateful: { enabled: true },
 		},
 	);
+	assert.equal(normalizeSubagentSettings({ blocking: { enabled: "no" } }), undefined);
+	assert.equal(normalizeSubagentSettings({ blocking: false }), undefined);
 	assert.equal(normalizeSubagentSettings({ agents: [] }), undefined);
+});
+
+test("session start re-reads settings before reporting warnings", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-session-settings-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(settingsPath, "{}\n");
+		const mock = createMockPi();
+		subagents(mock.pi);
+		writeFileSync(settingsPath, "{ malformed");
+		const context = createMockContext();
+		for (const handler of mock.events.get("session_start") ?? []) {
+			await handler({}, context.ctx);
+		}
+		assert.match(context.notifications[0]?.message ?? "", /pi-subagents\.json is invalid/i);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
 });
 
 test("subagent settings migrate and save to the canonical package filename", () => {
@@ -719,6 +1068,53 @@ test("subagent settings migrate and save to the canonical package filename", () 
 		const ignoredContext = createMockContext();
 		ignoredMock.events.get("session_start")?.[0]?.({}, ignoredContext.ctx);
 		assert.match(ignoredContext.notifications[0]?.message ?? "", /ignored/i);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("delegation workflow inspection and updates preserve unknown settings", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-workflow-settings-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		assert.deepEqual(inspectDelegationWorkflowSettings(), {
+			path: path.join(directory, "pi-subagents.json"),
+			value: "all",
+			source: "default",
+		});
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({
+				future: true,
+				blocking: { futureBlocking: 1 },
+				stateful: { futureStateful: 2 },
+			}),
+		);
+		updateDelegationWorkflowSetting("async-only");
+		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
+			future: true,
+			blocking: { futureBlocking: 1, enabled: false },
+			stateful: { futureStateful: 2, enabled: true },
+		});
+		assert.deepEqual(inspectDelegationWorkflowSettings(), {
+			path: settingsPath,
+			value: "async-only",
+			source: "user settings",
+		});
+		updateDelegationWorkflowSetting("blocking-only");
+		assert.equal(inspectDelegationWorkflowSettings().value, "blocking-only");
+		updateDelegationWorkflowSetting("all");
+		assert.equal(inspectDelegationWorkflowSettings().value, "all");
+		writeFileSync(settingsPath, "invalid");
+		const malformed = inspectDelegationWorkflowSettings();
+		assert.equal(malformed.value, "all");
+		assert.match(malformed.error ?? "", /Unexpected token|JSON/i);
+		assert.throws(() => updateDelegationWorkflowSetting("async-only"), /Cannot update malformed/);
+		assert.equal(readFileSync(settingsPath, "utf8"), "invalid");
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

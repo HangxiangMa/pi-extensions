@@ -80,6 +80,15 @@ export function normalizeSubagentSettings(value: unknown): SubagentSettings | un
 		}
 		if (Object.keys(agents).length > 0) settings.agents = agents;
 	}
+	if (hasOwn(value, "blocking")) {
+		if (!isPlainObject(value.blocking)) return undefined;
+		const blocking: NonNullable<SubagentSettings["blocking"]> = {};
+		if (hasOwn(value.blocking, "enabled")) {
+			if (typeof value.blocking.enabled !== "boolean") return undefined;
+			blocking.enabled = value.blocking.enabled;
+		}
+		settings.blocking = blocking;
+	}
 	if (hasOwn(value, "stateful")) {
 		if (!isPlainObject(value.stateful)) return undefined;
 		const runtime: NonNullable<SubagentSettings["stateful"]> = {};
@@ -241,6 +250,15 @@ export function saveSubagentConfig(settings: SubagentSettings): void {
 	writeSettingsObject(settings);
 }
 
+export type DelegationWorkflow = "all" | "async-only" | "blocking-only" | "disabled";
+
+export interface DelegationWorkflowSettingsSnapshot {
+	path: string;
+	value: DelegationWorkflow;
+	source: "default" | "user settings";
+	error?: string;
+}
+
 export interface CompletionDeliverySettingsSnapshot {
 	path: string;
 	value: CompletionDelivery;
@@ -250,6 +268,46 @@ export interface CompletionDeliverySettingsSnapshot {
 
 export function subagentSettingsFilePath(): string {
 	return path.join(getAgentDir(), SETTINGS_FILE);
+}
+
+export function resolveDelegationWorkflow(
+	blockingEnabled: boolean,
+	statefulEnabled: boolean,
+): DelegationWorkflow {
+	if (blockingEnabled && statefulEnabled) return "all";
+	if (statefulEnabled) return "async-only";
+	if (blockingEnabled) return "blocking-only";
+	return "disabled";
+}
+
+export function inspectDelegationWorkflowSettings(): DelegationWorkflowSettingsSnapshot {
+	const configPath = subagentSettingsFilePath();
+	if (!fs.existsSync(configPath)) {
+		return { path: configPath, value: "all", source: "default" };
+	}
+	try {
+		const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
+		const settings = normalizeSubagentSettings(raw);
+		if (!settings) throw new Error(`${SETTINGS_FILE} is not a valid settings object`);
+		const explicit =
+			(isPlainObject(raw.blocking) && hasOwn(raw.blocking, "enabled")) ||
+			(isPlainObject(raw.stateful) && hasOwn(raw.stateful, "enabled"));
+		return {
+			path: configPath,
+			value: resolveDelegationWorkflow(
+				settings.blocking?.enabled !== false,
+				settings.stateful?.enabled !== false,
+			),
+			source: explicit ? "user settings" : "default",
+		};
+	} catch (error) {
+		return {
+			path: configPath,
+			value: "all",
+			source: "default",
+			error: formatError(error),
+		};
+	}
 }
 
 export function inspectCompletionDeliverySettings(): CompletionDeliverySettingsSnapshot {
@@ -275,6 +333,31 @@ export function inspectCompletionDeliverySettings(): CompletionDeliverySettingsS
 			error: formatError(error),
 		};
 	}
+}
+
+export function updateDelegationWorkflowSetting(
+	value: Exclude<DelegationWorkflow, "disabled">,
+): void {
+	const raw = readSettingsObjectForUpdate();
+	const blocking = raw.blocking;
+	if (blocking !== undefined && !isPlainObject(blocking)) {
+		throw new Error(`Cannot update invalid ${SETTINGS_FILE} blocking settings`);
+	}
+	const stateful = raw.stateful;
+	if (stateful !== undefined && !isPlainObject(stateful)) {
+		throw new Error(`Cannot update invalid ${SETTINGS_FILE} stateful settings`);
+	}
+	writeSettingsObject({
+		...raw,
+		blocking: {
+			...(blocking ?? {}),
+			enabled: value !== "async-only",
+		},
+		stateful: {
+			...(stateful ?? {}),
+			enabled: value !== "blocking-only",
+		},
+	});
 }
 
 export function updateCompletionDeliverySetting(value: CompletionDelivery): void {

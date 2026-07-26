@@ -2,13 +2,13 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-subagents)](https://www.npmjs.com/package/@narumitw/pi-subagents) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-subagents` is a native [Pi coding agent](https://pi.dev) extension for delegating work to specialized agents. The blocking batch `subagent` tool keeps isolated Pi subprocesses, while four detached tools run reusable agents either as subprocess-backed logical sessions or as public-SDK in-process child sessions. Together they form a fixed five-tool surface.
+`@narumitw/pi-subagents` is a native [Pi coding agent](https://pi.dev) extension for delegating work to specialized agents. By default, the blocking batch `subagent` tool uses isolated Pi subprocesses while four detached tools run reusable agents either as subprocess-backed logical sessions or as public-SDK in-process child sessions. Users can keep all five tools, choose async-only delegation, or retain only blocking batches.
 
 Use it to split independent research, planning, implementation, and review work across focused workers. Under the default next-turn delivery policy, background delegation is for work the current response does not depend on. Opt-in auto-resume also supports final-answer-dependent background work by requesting a synthesis turn after completion.
 
 ## ✨ Features
 
-- Registers a `subagent` tool for single-agent, parallel, fan-in, and chained delegation.
+- Offers all delegation methods by default, with goal-oriented presets for async-only or blocking-only workflows.
 - Keeps batch workers isolated in `pi --mode json -p --no-session` subprocesses.
 - Registers detached stateful lifecycle tools by default; completion can stay queued for the next turn or opt into an idle root synthesis turn.
 - Supports an opt-in public-SDK `in-process` stateful transport with one reusable child `AgentSession` per `agentId`.
@@ -43,7 +43,17 @@ pi -e ./extensions/pi-subagents
 
 ## 🛠️ Pi tool
 
-`pi-subagents` always registers the primary batch tool and registers the stateful lifecycle tools unless `stateful.enabled` is `false`:
+`pi-subagents` registers all five tools by default. Run `/subagents`, choose **Change delegation**, review the concrete tool changes, then select **Save and reload** to apply one of these workflows:
+
+| Workflow | Registered tools |
+| --- | --- |
+| **All delegation methods** (default) | Blocking `subagent` plus all four detached lifecycle tools |
+| **Async only** | `subagent_spawn`, `subagent_send`, `subagent_manage`, and `subagent_mailbox`; blocking `subagent` is omitted |
+| **Blocking only** | Blocking `subagent` only; equivalent to the existing `stateful.enabled: false` behavior |
+
+The preview compares the selection with the tools registered in the current session, even when a manual settings edit is pending, and remains read-only until confirmation. Escape or **Cancel** leaves settings unchanged. Tool removal requires an extension reload because Pi does not expose extension tool unregistration. To avoid aborting work or removing isolated worktrees during `session_shutdown`, workflow changes are blocked while detached agents are retained; finish or clear them through **Current agents** first. Pi owns reload-error reporting and does not return a success result to extensions, so the save notification also tells users to run `/reload` if the tool surface does not refresh.
+
+The available tools are:
 
 - `subagent` — delegate blocking single, parallel, fan-in, or chained batch work. The main agent cannot process queued steering until the call returns.
 - `subagent_spawn` and related lifecycle tools — when enabled, start reusable detached work, return immediately, and receive bounded completion messages automatically.
@@ -52,7 +62,7 @@ Choose the API by lifecycle:
 
 | Need | Use |
 | --- | --- |
-| A delegated result is required before the root's next action under default next-turn delivery | One blocking `subagent` call (`tasks` for synchronous parallel work) |
+| A delegated result is required before the root's next action under default next-turn delivery | Use one blocking `subagent` call when registered. In **Async only**, complete the critical-path work directly or switch workflows before delegating it |
 | Broad research/review the current response does not depend on | Prefer one `subagent_spawn` covering related branches, when lifecycle tools are enabled |
 | Final-answer-dependent broad work with `completionDelivery: "auto-resume"` | Prefer one `subagent_spawn`; completion requests a synthesis turn |
 | Reusable history, follow-ups, or mailboxes | `subagent_spawn` and lifecycle tools, when enabled |
@@ -75,7 +85,7 @@ For `subagent_spawn`, the root agent selects the lowest thinking level sufficien
 
 ## 🧭 Proactive use
 
-The always-available `subagent` tool advertises only blocking guidance. When stateful lifecycle tools
+When registered, the blocking `subagent` tool advertises only blocking guidance. When stateful lifecycle tools
 are registered, `subagent_spawn` adds detached guidance for the active completion-delivery policy.
 Changing the policy through `/subagents settings` refreshes that guidance immediately.
 
@@ -86,8 +96,10 @@ Count-selection guidance:
 - `subagent` is deliberately blocking: while it runs, the main agent cannot answer queued steering.
   Use it when delegated outputs are required before the next root action and waiting is intentional.
 - With default `completionDelivery: "next-turn"`, prefer **one detached `subagent_spawn`** for broad
-  research or review only when the current response does not depend on its result. Keep
-  final-answer-dependent delegated work on the blocking path because an idle root is not awakened.
+  research or review only when the current response does not depend on its result. When blocking
+  `subagent` is registered, use it for required delegated output because an idle root is not awakened.
+  In **Async only**, complete required work directly, opt into `auto-resume` when a later synthesis
+  turn is appropriate, or switch delegation workflows.
 - With `completionDelivery: "auto-resume"`, prefer one detached `subagent_spawn` for broad related
   research or review even when the final answer depends on it; completion requests a later synthesis
   turn. Do not choose blocking parallel fan-out merely to keep delegation in one turn.
@@ -215,7 +227,7 @@ Run a chain where each step receives the previous output:
 
 Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects a bounded `pi-subagent-completion` custom message. Completions that settle in the same dispatch window are batched, and the broker allows at most one in-flight root wake until that parent turn starts.
 
-Detached work follows a non-polling policy. With default `next-turn` delivery, prefer one bounded `subagent_spawn` for related asynchronous research or review only when the current response does not depend on its result; if it does, use blocking `subagent`. With opt-in `auto-resume`, detached broad work may be final-answer-dependent because completion requests a synthesis turn after the root settles. In either mode, do useful non-overlapping main-agent work immediately, do not poll `subagent_manage` with `action: "list"` or `subagent_mailbox` with `action: "read"`, and do not duplicate delegated work. Add another detached agent only for truly independent work with safe workspace concurrency. Detached lifecycle work intentionally has no `subagent_wait` tool.
+Detached work follows a non-polling policy. With default `next-turn` delivery, prefer one bounded `subagent_spawn` for related asynchronous research or review only when the current response does not depend on its result. If it does, use blocking `subagent` when registered; in **Async only**, complete required work directly, opt into `auto-resume` when a later synthesis turn is appropriate, or switch workflows. With opt-in `auto-resume`, detached broad work may be final-answer-dependent because completion requests a synthesis turn after the root settles. In either mode, do useful non-overlapping main-agent work immediately, do not poll `subagent_manage` with `action: "list"` or `subagent_mailbox` with `action: "read"`, and do not duplicate delegated work. Add another detached agent only for truly independent work with safe workspace concurrency. Detached lifecycle work intentionally has no `subagent_wait` tool.
 
 A detached agent additionally needs a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation. Simple work that the main agent can perform directly should not be delegated.
 
@@ -228,13 +240,17 @@ Auto-resume is best-effort because Pi's custom-message API is fire-and-forget. S
 
 The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history. Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
 
-Run `/subagents` in TUI mode to open the primary manager. It separates current-session lifecycle state, transport, completion delivery, and active/retained counts from user settings that persist across sessions. Its actions open completion settings, per-agent tool settings, current-session agent inspection/clear, status, and help. Escape returns from a nested screen to a newly refreshed manager and then closes it.
+Run `/subagents` in TUI mode to open the primary manager. It leads with the current delegation workflow, human-readable async completion behavior, and active/retained counts. **Change delegation**, **Current agents**, and **Completion behavior** cover the common workflows; agent permissions, transport/runtime details, source, and settings path remain under **Advanced settings**. Escape returns from a nested screen to a newly refreshed manager and then closes it.
 
-The direct routes remain predictable: `/subagents settings` changes user completion delivery and applies it immediately, including refreshing the model-facing spawn guidance; `/subagents status` reports current-session runtime values separately from the configured value, source, and path; `/subagents help` summarizes commands and compatibility routes. In RPC mode, bare `/subagents` emits the same bounded status through Pi's notification protocol instead of opening a custom TUI. JSON and print modes do not emit ad hoc command output. Manual edits use `~/.pi/agent/pi-subagents.json` and take effect after reloading Pi:
+The direct routes remain predictable: `/subagents settings` changes user completion delivery and applies it immediately, including refreshing the model-facing spawn guidance; `/subagents status` reports current-session runtime values separately from the configured value, source, and path; `/subagents help` summarizes the single-command interface. In RPC mode, bare `/subagents` emits the same bounded status through Pi's notification protocol instead of opening a custom TUI. JSON and print modes do not emit ad hoc command output. Manual edits use `~/.pi/agent/pi-subagents.json` and take effect after reloading Pi:
 
 ```json
 {
+  "blocking": {
+    "enabled": false
+  },
   "stateful": {
+    "enabled": true,
     "transport": "in-process",
     "completionDelivery": "auto-resume",
     "maxAgents": 16,
@@ -250,7 +266,7 @@ The direct routes remain predictable: `/subagents settings` changes user complet
 }
 ```
 
-The settings UI patches the raw JSON atomically and preserves unknown fields; it refuses to overwrite malformed or invalid settings. Set `"enabled": false` to remove all four stateful tools. Otherwise, the extension keeps the following tool membership fixed across spawn, completion, interrupt, close, and mailbox transitions. This avoids lifecycle-driven tool-schema churn and preserves a stable provider prompt prefix for KV caching.
+The settings UI patches the raw JSON atomically and preserves unknown fields; it refuses to overwrite malformed or invalid settings. `blocking.enabled` defaults to `true`; set it to `false` for async-only delegation. `stateful.enabled` also defaults to `true`; its existing `false` value remains the blocking-only workflow. When stateful tools are enabled, their membership stays fixed across spawn, completion, interrupt, close, and mailbox transitions. This avoids lifecycle-driven tool-schema churn and preserves a stable provider prompt prefix for KV caching.
 
 | Tool | Purpose |
 | --- | --- |
@@ -277,7 +293,7 @@ The action schemas are flat for provider compatibility and reject parameters tha
 }
 ```
 
-Use the **Current-session agents** action in `/subagents` to inspect the indented agent tree, lifecycle state, unread count, and available actions, or to confirm clearing retained agents. `/subagents:agents list|clear` remains the compatibility command for the same current-session operations. Active turns are FIFO-limited by `maxActiveTurns`; excess retained work remains in `starting` state until a slot is available. `maxAgents` separately bounds running, queued, and idle records. `parentId` creates a bounded child relationship; subtree interrupt and close operate child-first.
+Use the **Current agents** action in `/subagents` to inspect the indented agent tree, lifecycle state, unread count, and available actions, or to confirm clearing retained agents. Active turns are FIFO-limited by `maxActiveTurns`; excess retained work remains in `starting` state until a slot is available. `maxAgents` separately bounds running, queued, and idle records. `parentId` creates a bounded child relationship; subtree interrupt and close operate child-first.
 
 ### Migrating from the seven-tool lifecycle surface
 
@@ -366,7 +382,7 @@ Built-in agents inherit the active/default Pi model instead of forcing a provide
 
 ## ⚙️ Configure agent tools
 
-Open `/subagents` and choose **Agent tool settings** in an interactive Pi session to edit the tools each subagent may use. `/subagents:config` remains a documented compatibility route to the same screen. These are user settings stored in `~/.pi/agent/pi-subagents.json` and affect future sessions.
+Open `/subagents`, choose **Advanced settings**, then **Agent tool settings** in an interactive Pi session to edit the tools each subagent may use. These are user settings stored in `~/.pi/agent/pi-subagents.json` and affect future sessions.
 
 Compatibility: a valid legacy `pi-subagents-config.json` is migrated automatically to `pi-subagents.json`. If both files exist, the new filename takes precedence.
 
@@ -491,7 +507,7 @@ The runner explicitly reports policy continuity in result details:
 
 Treat project-local agent prompts like executable project configuration: only enable them in trusted repositories. Stateful project agents require Pi's project trust; interactive use also keeps confirmation enabled by default.
 
-Stateful records are stored as versioned mode-0600 JSON under `~/.pi/agent/pi-subagents-state/` (or the configured Pi agent directory). Records contain sanitized logical history, never process IDs or credentials. Corrupt or unsupported state is quarantined, restored agents are always inert `idle` records, and no prior side effect is automatically resumed. Retention and count limits are configurable. Downgrading is safe: older extension versions ignore this separate state directory; use `/subagents:agents clear` before downgrade if the histories should be removed.
+Stateful records are stored as versioned mode-0600 JSON under `~/.pi/agent/pi-subagents-state/` (or the configured Pi agent directory). Records contain sanitized logical history, never process IDs or credentials. Corrupt or unsupported state is quarantined, restored agents are always inert `idle` records, and no prior side effect is automatically resumed. Retention and count limits are configurable. Downgrading is safe: older extension versions ignore this separate state directory; clear **Current agents** from `/subagents` before downgrade if the histories should be removed.
 
 ## 🗂️ Package layout
 
@@ -509,7 +525,7 @@ extensions/pi-subagents/
 └── package.json
 ```
 
-`index.ts` is the Pi entrypoint and forwards to `subagents.ts`; the other source modules are internal. The package exposes its Pi extension through `package.json`:
+`index.ts` is the Pi entrypoint and forwards to `subagents.ts`; the other source modules are internal. Workflow settings remain backward compatible: older files without `blocking.enabled` keep the five-tool default, existing `stateful.enabled: false` files remain blocking-only, and older package releases ignore the new `blocking` object. The package exposes its Pi extension through `package.json`:
 
 ```json
 {
