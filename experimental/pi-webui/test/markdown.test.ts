@@ -4,7 +4,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 
 const markdown = (await import(
-	pathToFileURL(path.join(process.cwd(), "extensions/pi-webui/src/web/markdown.js")).href
+	pathToFileURL(path.join(process.cwd(), "experimental/pi-webui/src/web/markdown.js")).href
 )) as {
 	parseMarkdown(input: string): Array<Record<string, unknown>>;
 	isSafeLink(url: string): boolean;

@@ -4,7 +4,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 
 const helpers = (await import(
-	`${pathToFileURL(path.join(process.cwd(), "extensions/pi-webui/src/web/ui/view-helpers.js")).href}?t=${Date.now()}`
+	`${pathToFileURL(path.join(process.cwd(), "experimental/pi-webui/src/web/ui/view-helpers.js")).href}?t=${Date.now()}`
 )) as {
 	withStableKeys<T>(values: T[]): Array<{ key: string; value: T }>;
 	createRenderBatcher(

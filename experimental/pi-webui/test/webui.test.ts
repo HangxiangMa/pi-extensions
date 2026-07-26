@@ -6,7 +6,7 @@ import webUI from "../src/webui.js";
 
 test("package Biome scripts explicitly include ignored production source", async () => {
 	const packageJson = JSON.parse(
-		await readFile(resolve("extensions/pi-webui/package.json"), "utf8"),
+		await readFile(resolve("experimental/pi-webui/package.json"), "utf8"),
 	) as { scripts?: Record<string, string> };
 	for (const name of ["check", "format"]) {
 		const script = packageJson.scripts?.[name] ?? "";

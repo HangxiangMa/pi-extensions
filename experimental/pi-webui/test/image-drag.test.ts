@@ -4,7 +4,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 
 const drag = (await import(
-	`${pathToFileURL(path.join(process.cwd(), "extensions/pi-webui/src/web/image-drag.js")).href}?t=${Date.now()}`
+	`${pathToFileURL(path.join(process.cwd(), "experimental/pi-webui/src/web/image-drag.js")).href}?t=${Date.now()}`
 )) as {
 	dropAfterTarget(
 		event: { clientX: number; clientY: number },

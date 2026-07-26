@@ -11,7 +11,7 @@ import {
 	processBrowserImages,
 } from "../src/images.js";
 
-const FIXTURE_DIR = path.join(process.cwd(), "extensions/pi-webui/test/fixtures");
+const FIXTURE_DIR = path.join(process.cwd(), "experimental/pi-webui/test/fixtures");
 
 async function png(width = 2, height = 2, withMetadata = false): Promise<Buffer> {
 	let image = sharp({

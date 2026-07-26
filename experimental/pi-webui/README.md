@@ -2,6 +2,9 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-webui)](https://www.npmjs.com/package/@narumitw/pi-webui) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
+> [!WARNING]
+> This extension is experimental. Its browser workflow and package API may change between releases.
+
 `@narumitw/pi-webui` adds a private, focused browser companion to the current terminal-owned [Pi Coding Agent](https://pi.dev) session. It displays Pi's semantic conversation and tool activity as they happen and can send text or sanitized images back into that same session.
 
 This package is intentionally different from the broader, separately maintained `@narumitw/pi-web` application. WebUI has one current-session chat page and no session manager, shell, file browser, git UI, control room, or task board.
@@ -27,7 +30,7 @@ pi install npm:@narumitw/pi-webui
 Try the working tree without installing:
 
 ```bash
-pi -e ./extensions/pi-webui
+pi -e ./experimental/pi-webui
 # or
 just try webui
 ```
