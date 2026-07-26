@@ -8,6 +8,14 @@ import {
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import {
+	BtwMenuSelector,
+	type BtwMenuSelectorAction,
+	BtwTextRangeSelector,
+	buildQuickBringToMainSegments,
+	formatBtwBringToMain,
+	getAnsweredTurns,
+} from "./bring-to-main.js";
+import {
 	BTW_THINKING_LEVELS,
 	type BtwThinkingLevel,
 	completeSideThreadTurn,
@@ -285,7 +293,18 @@ async function resolveBtwModelWithLoader(
 interface RunBtwThreadDependencies {
 	ask?: typeof askThreadQuestion;
 	interact?: typeof showThreadComposer;
+	chooseBringToMain?: typeof chooseBringToMain;
+	deliverBringToMain?: typeof loadBringToMainDraft;
 }
+
+export type BtwThreadResult = { kind: "closed" };
+
+type BtwBringToMainChoice =
+	| BtwThreadResult
+	| { kind: "bringToMain"; draft: string }
+	| { kind: "back" };
+
+type BtwBringToMainDelivery = "loaded" | "back" | "closed";
 
 interface RunBtwThreadOptions {
 	initialQuestion?: string;
@@ -301,23 +320,39 @@ export async function runBtwThread({
 	thinkingLevel,
 	ctx,
 	dependencies = {},
-}: RunBtwThreadOptions): Promise<void> {
+}: RunBtwThreadOptions): Promise<BtwThreadResult> {
 	const ask = dependencies.ask ?? askThreadQuestion;
 	const interact = dependencies.interact ?? showThreadComposer;
+	const chooseBringToMainAction = dependencies.chooseBringToMain ?? chooseBringToMain;
+	const deliverBringToMainDraft = dependencies.deliverBringToMain ?? loadBringToMainDraft;
 	const thread = createSideThread(buildConversationContext(ctx.sessionManager.getBranch()));
 	let pendingQuestion = initialQuestion;
+	let composerDraft: string | undefined;
 
 	while (true) {
 		if (!pendingQuestion) {
-			const action = await interact(thread, thread.turns.length > 0, ctx);
-			if (action.kind === "close") return;
+			const action = await interact(thread, thread.turns.length > 0, ctx, composerDraft);
+			if (action.kind === "close") return { kind: "closed" };
+			if (action.kind === "bringToMain") {
+				const choice = await chooseBringToMainAction(thread, ctx);
+				if (choice.kind === "closed") return choice;
+				if (choice.kind === "back") {
+					composerDraft = action.questionDraft;
+					continue;
+				}
+				const delivery = await deliverBringToMainDraft(choice.draft, ctx);
+				if (delivery === "loaded" || delivery === "closed") return { kind: "closed" };
+				composerDraft = action.questionDraft;
+				continue;
+			}
+			composerDraft = undefined;
 			pendingQuestion = action.question;
 		}
 
 		const result = await ask(thread, pendingQuestion, selected, thinkingLevel, ctx);
 		if (result.kind === "aborted") {
 			ctx.ui.notify("Cancelled", "info");
-			return;
+			return { kind: "closed" };
 		}
 		if (result.kind === "error") {
 			thread.turns.push({
@@ -329,6 +364,119 @@ export async function runBtwThread({
 
 		pendingQuestion = undefined;
 	}
+}
+
+interface ChooseBringToMainDependencies {
+	showMenu?: typeof showBtwMenu;
+}
+
+export async function chooseBringToMain(
+	thread: SideThread,
+	ctx: ExtensionCommandContext,
+	dependencies: ChooseBringToMainDependencies = {},
+): Promise<BtwBringToMainChoice> {
+	const answered = getAnsweredTurns(thread.turns);
+	if (answered.length === 0) return { kind: "back" };
+	const showMenu = dependencies.showMenu ?? showBtwMenu;
+
+	while (true) {
+		const scopeResult = await showMenu(ctx, "Bring what back to the main thread?", [
+			"Latest question and answer",
+			"From a question onward…",
+			"Select a text range…",
+			"Entire side thread",
+			"Cancel",
+		]);
+		if (scopeResult.kind === "close") return { kind: "closed" };
+		if (scopeResult.kind === "back" || scopeResult.value === "Cancel") return { kind: "back" };
+		const scope = scopeResult.value;
+		if (scope === "Latest question and answer") {
+			return {
+				kind: "bringToMain",
+				draft: formatBtwBringToMain(
+					buildQuickBringToMainSegments(thread.turns, { kind: "latest" }),
+				),
+			};
+		}
+		if (scope === "Entire side thread") {
+			return {
+				kind: "bringToMain",
+				draft: formatBtwBringToMain(
+					buildQuickBringToMainSegments(thread.turns, { kind: "entire" }),
+				),
+			};
+		}
+		if (scope === "From a question onward…") {
+			const questions = answered.map(
+				(turn, index) => `${index + 1}. ${truncatePreview(sanitizeSingleLine(turn.question))}`,
+			);
+			const questionResult = await showMenu(ctx, "Start from which question?", questions);
+			if (questionResult.kind === "close") return { kind: "closed" };
+			if (questionResult.kind === "back") continue;
+			const answeredTurnIndex = questions.indexOf(questionResult.value);
+			if (answeredTurnIndex < 0) continue;
+			return {
+				kind: "bringToMain",
+				draft: formatBtwBringToMain(
+					buildQuickBringToMainSegments(thread.turns, { kind: "from", answeredTurnIndex }),
+				),
+			};
+		}
+
+		const selectedRange = await ctx.ui.custom<BtwBringToMainChoice>(
+			(tui, theme, keybindings, done) =>
+				new BtwTextRangeSelector(tui, theme, keybindings, thread.turns, (action) => {
+					if (action.kind === "back") done({ kind: "back" });
+					else if (action.kind === "close") done({ kind: "closed" });
+					else done({ kind: "bringToMain", draft: formatBtwBringToMain(action.segments) });
+				}),
+		);
+		if (selectedRange.kind === "back") continue;
+		return selectedRange;
+	}
+}
+
+async function showBtwMenu(
+	ctx: ExtensionCommandContext,
+	title: string,
+	options: readonly string[],
+	customOptions?: { overlay?: boolean },
+): Promise<BtwMenuSelectorAction> {
+	return ctx.ui.custom<BtwMenuSelectorAction>(
+		(tui, theme, keybindings, done) =>
+			new BtwMenuSelector(tui, theme, keybindings, title, options, done),
+		customOptions,
+	);
+}
+
+export async function loadBringToMainDraft(
+	draft: string,
+	ctx: ExtensionCommandContext,
+): Promise<BtwBringToMainDelivery> {
+	const existing = ctx.ui.getEditorText();
+	if (!existing.trim()) {
+		ctx.ui.setEditorText(draft);
+		ctx.ui.notify("Context loaded into the main editor. Review and submit when ready.", "info");
+		return "loaded";
+	}
+	const action = await showBtwMenu(
+		ctx,
+		"The main editor already contains text",
+		["Append context", "Replace editor text", "Cancel"],
+		{ overlay: true },
+	);
+	if (action.kind === "close") return "closed";
+	if (action.kind === "back" || action.value === "Cancel") return "back";
+	if (action.value === "Append context") {
+		ctx.ui.setEditorText(`${ctx.ui.getEditorText()}\n\n${draft}`);
+	} else if (action.value === "Replace editor text") ctx.ui.setEditorText(draft);
+	else return "back";
+	ctx.ui.notify("Context loaded into the main editor. Review and submit when ready.", "info");
+	return "loaded";
+}
+
+function truncatePreview(text: string): string {
+	return text.length <= 72 ? text : `${text.slice(0, 69)}…`;
 }
 
 async function askThreadQuestion(
@@ -368,10 +516,14 @@ async function showThreadComposer(
 	thread: SideThread,
 	startAtBottom: boolean,
 	ctx: ExtensionCommandContext,
+	initialQuestion?: string,
 ): Promise<TranscriptPagerAction> {
 	return ctx.ui.custom<TranscriptPagerAction>(
 		(tui, theme, _keybindings, done) =>
-			new BtwTranscriptPager(tui, theme, thread.turns, done, { startAtBottom }),
+			new BtwTranscriptPager(tui, theme, thread.turns, done, {
+				startAtBottom,
+				initialQuestion,
+			}),
 	);
 }
 

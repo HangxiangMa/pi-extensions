@@ -11,6 +11,7 @@ Use it when you want to ask a temporary question, inspect context, or get a shor
 - Adds a `/btw` side-thread command to Pi, with an optional initial question.
 - Answers side questions in a temporary, scrollable UI.
 - Supports follow-up questions in the same ephemeral side thread.
+- Optionally brings the latest answer, a question-to-end suffix, an exact line range, or the entire side thread into the main editor.
 - Uses the current session branch as context.
 - Uses Pi's current model or an independent model selected in `pi-btw.json`.
 - Inherits Pi's current thinking level or uses a fixed level from `pi-btw.json`.
@@ -62,9 +63,24 @@ required.
 Previous side questions and answers remain available to the model and visible for that
 invocation. While a response is running, the transcript stays visible above a compact
 `Answering…` status. The footer shows `PgUp`/`PgDn` only when history can scroll; press
-`Ctrl+C` to cancel an in-progress answer or leave the side thread. Closing it, reloading Pi,
-or switching sessions discards it without adding any of its questions or answers to the main
-conversation.
+`Ctrl+C` to cancel an in-progress answer or leave the side thread.
+
+After at least one successful answer, press `Ctrl+R` to bring selected context back to the main
+thread. Choose the latest question and answer, everything from a chosen question onward, an
+exact text range, or the entire side thread. The text-range selector supports both fast line
+selection and editor-style character selection. Press `Space` to select the current raw source
+line, then use `Up`/`Down` to extend by whole lines; press `Space` again to clear it. Alternatively,
+use the arrow keys to move the cursor and `Shift`+arrow keys to extend a character-level
+selection. Starting a Shift selection replaces any active line selection. Pi's configured keys
+still control vertical navigation, confirmation, and going back (`Up`/`Down`, `Enter`, and
+`Escape` by default). `Ctrl+C` closes the side thread without bringing anything to main. Selection follows raw
+source text rather than terminal-wrapped visual rows.
+
+Bringing context to main closes the side thread and loads a deterministic, editable context block into Pi's
+main editor. It never sends the draft automatically. If another extension populated the main
+editor while `/btw` was open, pi-btw asks whether to append, replace, or cancel. Without an
+explicit bring-to-main action, closing `/btw`, reloading Pi, or switching sessions still discards the side
+thread without adding it to the main conversation.
 
 ## ⚙️ Model and thinking level
 
@@ -114,7 +130,10 @@ Normal assistant messages become part of the main Pi conversation and can distra
 extensions/pi-btw/
 ├── src/
 │   ├── index.ts
-│   └── btw.ts
+│   ├── btw.ts
+│   ├── bring-to-main.ts
+│   ├── side-thread.ts
+│   └── transcript-pager.ts
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json
