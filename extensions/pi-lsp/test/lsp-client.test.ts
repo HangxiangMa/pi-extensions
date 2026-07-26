@@ -10,6 +10,30 @@ import type { LspServerAdapter } from "../src/types.js";
 
 const fixture = path.resolve("extensions/pi-lsp/test/fixtures/diagnostics-server.mjs");
 
+test("pull diagnostics omit optional params when no values are available", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-pull-strict-optional-params-"));
+	const file = path.join(root, "main.go");
+	writeFileSync(file, "package main\n");
+	const adapter = fixtureAdapter("pull-strict-optional-params", 30);
+	const client = new LspClient(adapter, adapter.defaultCommand, root, 1_000);
+
+	try {
+		await client.start();
+		await client.initialize(root);
+		const uri = pathToFileURL(file).href;
+		client.didOpen(uri, "package main\n", "go");
+		const diagnostics = await client.diagnostics(uri);
+		assert.deepEqual(
+			diagnostics.map(({ message }) => message),
+			["strict pull diagnostic"],
+		);
+		client.didClose(uri);
+	} finally {
+		await client.shutdown();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("advertised pull diagnostic errors propagate", async () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-pull-error-"));
 	const file = path.join(root, "main.go");

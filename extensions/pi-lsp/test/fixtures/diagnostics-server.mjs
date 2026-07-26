@@ -36,6 +36,7 @@ function handle(message) {
 			result: {
 				capabilities:
 					scenario === "pull-error" ||
+					scenario === "pull-strict-optional-params" ||
 					scenario === "pull-empty-then-push" ||
 					scenario === "pull-empty-after-push" ||
 					scenario === "pull-empty-only"
@@ -81,6 +82,25 @@ function handle(message) {
 	}
 
 	if (message.method === "textDocument/diagnostic") {
+		if (scenario === "pull-strict-optional-params") {
+			const hasUnsupportedOptionalParam =
+				Object.hasOwn(message.params, "identifier") ||
+				Object.hasOwn(message.params, "previousResultId");
+			send(
+				hasUnsupportedOptionalParam
+					? {
+							jsonrpc: "2.0",
+							id: message.id,
+							error: { code: -32602, message: "optional diagnostic params must be omitted" },
+						}
+					: {
+							jsonrpc: "2.0",
+							id: message.id,
+							result: { kind: "full", items: [diagnostic("strict pull diagnostic")] },
+						},
+			);
+			return;
+		}
 		send(
 			scenario === "pull-empty-then-push" ||
 				scenario === "pull-empty-after-push" ||
