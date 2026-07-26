@@ -50,6 +50,17 @@ test("Pi image settings default safely and report malformed values", async () =>
 	});
 });
 
+test("Pi image settings reads honor cancellation", async () => {
+	await withDirectories(async ({ cwd }) => {
+		const controller = new AbortController();
+		controller.abort();
+		await assert.rejects(
+			readEffectivePiImageSettings(cwd, true, controller.signal),
+			(error: unknown) => error instanceof Error && error.name === "AbortError",
+		);
+	});
+});
+
 test("Pi image settings are re-read after a mid-session change", async () => {
 	await withDirectories(async ({ agentDir, cwd }) => {
 		const settingsPath = path.join(agentDir, "settings.json");

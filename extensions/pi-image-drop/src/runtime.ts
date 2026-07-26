@@ -378,8 +378,10 @@ export class ImageDropRuntime {
 		for (;;) {
 			const batch = this.batch;
 			if (!batch || !this.isCurrentMenu(generation)) return "close";
-			const loaded = await this.dependencies.loadStatus(ctx, "Refreshing Image Drop status…", () =>
-				this.dependencies.readPiSettings(ctx.cwd, ctx.isProjectTrusted()),
+			const loaded = await this.dependencies.loadStatus(
+				ctx,
+				"Refreshing Image Drop status…",
+				(signal) => this.dependencies.readPiSettings(ctx.cwd, ctx.isProjectTrusted(), signal),
 			);
 			if (!this.isCurrentMenu(generation) || loaded.kind === "closed") return "close";
 			if (loaded.kind === "cancelled") return "back";

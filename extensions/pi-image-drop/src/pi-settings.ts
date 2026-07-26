@@ -16,11 +16,12 @@ interface ImageSettingsPatch {
 export async function readEffectivePiImageSettings(
 	cwd: string,
 	projectTrusted: boolean,
+	signal?: AbortSignal,
 ): Promise<EffectivePiImageSettings> {
 	const warnings: string[] = [];
-	const global = await readPatch(join(getAgentDir(), "settings.json"), warnings);
+	const global = await readPatch(join(getAgentDir(), "settings.json"), warnings, signal);
 	const project = projectTrusted
-		? await readPatch(join(cwd, CONFIG_DIR_NAME, "settings.json"), warnings)
+		? await readPatch(join(cwd, CONFIG_DIR_NAME, "settings.json"), warnings, signal)
 		: undefined;
 	return {
 		autoResize: project?.autoResize ?? global?.autoResize ?? true,
@@ -32,11 +33,13 @@ export async function readEffectivePiImageSettings(
 async function readPatch(
 	path: string,
 	warnings: string[],
+	signal?: AbortSignal,
 ): Promise<ImageSettingsPatch | undefined> {
 	let text: string;
 	try {
-		text = await readFile(path, "utf8");
+		text = await readFile(path, { encoding: "utf8", signal });
 	} catch (error) {
+		if (signal?.aborted) throw error;
 		if (isNodeError(error) && error.code === "ENOENT") return undefined;
 		warnings.push(`Could not read Pi image settings from ${path}: ${formatError(error)}`);
 		return undefined;

@@ -165,22 +165,25 @@ test("action hints reflect callback-provided keybindings", async () => {
 	assert.match(lines.join(" "), /k\/j navigate • l select • q back • ctrl\+c close/);
 });
 
-test("SettingsList updates in place and rolls back a failed save", async () => {
+test("SettingsList sanitizes diagnostics, updates in place, and rolls back a failed save", async () => {
 	const attempts: boolean[] = [];
+	let initial = "";
 	let afterToggle = "";
 	const context = createMockContext({
 		mode: "tui",
 		custom: async (factory: unknown) => {
 			const harness = createCustomSelectorHarness(factory, 80);
+			initial = harness.render().join(" ");
 			harness.handleInput("\r");
 			await new Promise<void>((resolve) => setImmediate(resolve));
 			afterToggle = harness.render().join(" ");
 			harness.handleInput("\u001b");
+			await new Promise<void>((resolve) => setImmediate(resolve));
 			return harness.result;
 		},
 	});
 	const result = await showImageDropSettingsMenu(context.ctx, {
-		lines: ["Settings file: defaults"],
+		lines: ["Settings file: unsafe\u001b]8;;bad\u0007 value"],
 		editable: true,
 		startOnSessionStart: false,
 		limitsValue: "Recommended",
@@ -190,9 +193,82 @@ test("SettingsList updates in place and rolls back a failed save", async () => {
 		},
 	});
 	assert.equal(result, "back");
+	assert.equal(initial.includes("\u001b]8"), false);
+	assert.match(initial, /unsafe ]8;;bad value/);
 	assert.deepEqual(attempts, [true]);
 	assert.match(afterToggle, /Start with each Pi session/);
 	assert.match(afterToggle, /Off/);
+});
+
+test("Settings waits for pending saves before Back or Close", async () => {
+	async function exitWith(input: string, expected: "back" | "close") {
+		let releaseSave!: (saved: boolean) => void;
+		let markSaveStarted!: () => void;
+		const saveStarted = new Promise<void>((resolve) => {
+			markSaveStarted = resolve;
+		});
+		const save = new Promise<boolean>((resolve) => {
+			releaseSave = resolve;
+		});
+		let exitedBeforeSave = false;
+		const context = createMockContext({
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 80);
+				harness.handleInput("\r");
+				await saveStarted;
+				harness.handleInput(input);
+				exitedBeforeSave = harness.result !== undefined;
+				releaseSave(true);
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				return harness.result;
+			},
+		});
+		const result = await showImageDropSettingsMenu(context.ctx, {
+			lines: [],
+			editable: true,
+			startOnSessionStart: false,
+			limitsValue: "Recommended",
+			onStartChange: async () => {
+				markSaveStarted();
+				return save;
+			},
+		});
+		assert.equal(exitedBeforeSave, false);
+		assert.equal(result, expected);
+	}
+	await exitWith("\u001b", "back");
+	await exitWith("\u0003", "close");
+});
+
+test("Settings reapplies theme colors when invalidated", async () => {
+	let before = "";
+	let after = "";
+	const context = createMockContext({
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 80);
+			before = harness.render().join("\n");
+			initTheme("light", false);
+			try {
+				harness.invalidate();
+				after = harness.render().join("\n");
+			} finally {
+				initTheme("dark", false);
+			}
+			harness.handleInput("\u001b");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			return harness.result;
+		},
+	});
+	await showImageDropSettingsMenu(context.ctx, {
+		lines: ["Settings file: defaults"],
+		editable: true,
+		startOnSessionStart: false,
+		limitsValue: "Recommended",
+		onStartChange: async () => true,
+	});
+	assert.notEqual(after, before);
 });
 
 test("subviews distinguish Escape back from Ctrl+C close", async () => {

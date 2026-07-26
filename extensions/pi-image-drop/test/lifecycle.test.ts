@@ -49,7 +49,11 @@ function createHarness(
 		onStatus?: (lines: readonly string[]) => void;
 		onLimits?: (state: ImageDropLimitsMenuState) => void;
 		onSave?: (settings: ImageDropSettings) => Promise<void>;
-		readPiSettings?: () => Promise<{
+		readPiSettings?: (
+			cwd?: string,
+			projectTrusted?: boolean,
+			signal?: AbortSignal,
+		) => Promise<{
 			autoResize: boolean;
 			blockImages: boolean;
 			warnings: string[];
@@ -372,17 +376,23 @@ test("session replacement stops stale main-menu and Status continuations", async
 
 test("Status exposes readiness, model, history, and Pi policy without starting the service", async () => {
 	let statusLines: readonly string[] = [];
+	let statusSignal: AbortSignal | undefined;
 	const harness = createHarness({
 		menuActions: ["status", "close"],
 		statusActions: ["back"],
 		onStatus: (lines) => {
 			statusLines = lines;
 		},
+		readPiSettings: async (_cwd, _trusted, signal) => {
+			statusSignal = signal;
+			return { autoResize: true, blockImages: false, warnings: [] };
+		},
 	});
 	await emit(harness.mock, "session_start", {}, harness.context.ctx);
 	harness.runtime.addReadyImageForTesting("one", "one.png", Buffer.from("source"), PROCESSED);
 	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
 	assert.equal(harness.serverStarts, 0);
+	assert.ok(statusSignal instanceof AbortSignal);
 	assert.match(statusLines.join("\n"), /1\/1 ready/);
 	assert.match(statusLines.join("\n"), /Supports images/);
 	assert.match(statusLines.join("\n"), /Pi image sending: Enabled/);

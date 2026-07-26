@@ -179,9 +179,20 @@ export function showImageDropSettingsMenu(
 ): Promise<SettingsAction> {
 	return ctx.ui.custom<SettingsAction>((tui, theme, _keybindings, done) => {
 		let closed = false;
+		let exitRequested = false;
 		let persistedStart = options.startOnSessionStart ? "On" : "Off";
 		let displayedStart = persistedStart;
 		let saveQueue = Promise.resolve();
+		const finishWhenSaved = (action: SettingsAction) => {
+			if (exitRequested) return;
+			exitRequested = true;
+			const finish = () => {
+				if (closed) return;
+				closed = true;
+				done(action);
+			};
+			void saveQueue.then(finish, finish);
+		};
 		const items: SettingItem[] = options.editable
 			? [
 					{
@@ -197,20 +208,19 @@ export function showImageDropSettingsMenu(
 						description: "Open current, default, and pending image limits",
 						currentValue: options.limitsValue,
 						submenu: () => {
-							void saveQueue.then(() => {
-								if (!closed) done("limits");
-							});
-							return new Text("Opening image limits…", 1, 0);
+							finishWhenSaved("limits");
+							return new Text("Waiting for settings to save…", 1, 0);
 						},
 					},
 				]
 			: [];
+		const settingsTheme = getSettingsListTheme();
 		const list = new SettingsList(
 			items,
 			Math.min(items.length + 2, 10),
-			getSettingsListTheme(),
+			settingsTheme,
 			(id, value) => {
-				if (id !== "automatic-start") return;
+				if (id !== "automatic-start" || exitRequested) return;
 				displayedStart = value;
 				saveQueue = saveQueue.then(async () => {
 					const saved = await options.onStartChange(value === "On");
@@ -223,11 +233,21 @@ export function showImageDropSettingsMenu(
 					tui.requestRender();
 				});
 			},
-			() => done("back"),
+			() => finishWhenSaved("back"),
 		);
 		const header = new Container();
-		header.addChild(new Text(theme.fg("accent", theme.bold("Image Drop Settings")), 0, 0));
-		for (const line of options.lines) header.addChild(new Text(theme.fg("muted", line), 0, 0));
+		const title = new Text("", 0, 0);
+		const diagnostics = options.lines.map(() => new Text("", 0, 0));
+		header.addChild(title);
+		for (const diagnostic of diagnostics) header.addChild(diagnostic);
+		const applyTheme = () => {
+			title.setText(theme.fg("accent", theme.bold("Image Drop Settings")));
+			for (const [index, line] of options.lines.entries()) {
+				diagnostics[index]?.setText(theme.fg("muted", safeMenuText(line)));
+			}
+			Object.assign(settingsTheme, getSettingsListTheme());
+		};
+		applyTheme();
 		return {
 			render(width: number): string[] {
 				const safeWidth = Math.max(1, width);
@@ -236,13 +256,14 @@ export function showImageDropSettingsMenu(
 				);
 			},
 			invalidate() {
+				applyTheme();
 				header.invalidate();
 				list.invalidate();
 			},
 			handleInput(data: string) {
+				if (exitRequested) return;
 				if (matchesKey(data, Key.ctrl("c"))) {
-					closed = true;
-					done("close");
+					finishWhenSaved("close");
 					return;
 				}
 				list.handleInput(data);
@@ -250,6 +271,7 @@ export function showImageDropSettingsMenu(
 			},
 			dispose() {
 				closed = true;
+				exitRequested = true;
 			},
 		};
 	});
