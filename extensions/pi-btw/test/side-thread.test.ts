@@ -322,6 +322,56 @@ test("bring-to-main menus distinguish Ctrl+C from back and honor configured navi
 	]);
 });
 
+test("bring-to-main selectors keep one content row visible in five-row terminals", () => {
+	const tui = { terminal: { rows: 5 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const keys = keybindings();
+	const menu = new BtwMenuSelector(
+		tui as never,
+		theme as never,
+		keys as never,
+		"Choose",
+		["first", "second"],
+		() => undefined,
+	);
+	const preview = new BtwBringToMainPreview(
+		tui as never,
+		theme as never,
+		keys as never,
+		"preview content",
+		{ lines: 1, messages: 1, tokens: 4 },
+		() => undefined,
+	);
+	const selector = new BtwTextRangeSelector(
+		tui as never,
+		theme as never,
+		keys as never,
+		[
+			{
+				question: "selectable content",
+				answer: "answer",
+				kind: "answered",
+				response: response("answer"),
+			},
+		],
+		() => undefined,
+	);
+
+	assert.match(menu.render(80).join("\n"), /first/);
+	assert.match(preview.render(80).join("\n"), /preview content/);
+	assert.match(selector.render(80).join("\n"), /selectable content/);
+});
+
 test("bring-to-main scope menu offers the approved choices and selects a question-to-end suffix", async () => {
 	const thread = createSideThread("context");
 	for (const [question, answer] of [
@@ -331,12 +381,14 @@ test("bring-to-main scope menu offers the approved choices and selects a questio
 		thread.turns.push({ kind: "answered", question, answer, response: response(answer) });
 	}
 	const prompts: Array<{ title: string; options: string[] }> = [];
+	const overlays: boolean[] = [];
 	const selections = ["From a question onward…  Choose a starting question", "2. Q2"];
 	const ctx = { ui: {} } as never;
 
 	const result = await chooseBringToMain(thread, ctx, {
-		showMenu: async (_ctx, title, options) => {
+		showMenu: async (_ctx, title, options, customOptions) => {
 			prompts.push({ title, options: [...options] });
+			overlays.push(customOptions?.overlay === true);
 			const value = selections.shift();
 			return value ? { kind: "select", value } : { kind: "back" };
 		},
@@ -353,6 +405,7 @@ test("bring-to-main scope menu offers the approved choices and selects a questio
 			"Cancel  Return to the side thread",
 		],
 	});
+	assert.deepEqual(overlays, [true, true]);
 	assert.equal(result.kind, "bringToMain");
 	assert.doesNotMatch(result.kind === "bringToMain" ? result.draft : "", /Q1|A1/);
 	assert.match(result.kind === "bringToMain" ? result.draft : "", /Q2[\s\S]*A2/);
@@ -394,13 +447,17 @@ test("custom text ranges pass their exact formatted draft through preview", asyn
 	thread.turns.push({ kind: "answered", question: "Q", answer: "A", response: response("A") });
 	const exactDraft = formatBtwBringToMain([{ role: "assistant", text: "exact excerpt" }]);
 	let previewDraft = "";
+	let selectorOverlay = false;
 	const ctx = {
 		ui: {
-			custom: async () => ({
-				kind: "bringToMain",
-				draft: exactDraft,
-				summary: { lines: 1, messages: 1, tokens: 4 },
-			}),
+			custom: async (_factory: unknown, options?: { overlay?: boolean }) => {
+				selectorOverlay = options?.overlay === true;
+				return {
+					kind: "bringToMain",
+					draft: exactDraft,
+					summary: { lines: 1, messages: 1, tokens: 4 },
+				};
+			},
 		},
 	} as never;
 
@@ -415,6 +472,7 @@ test("custom text ranges pass their exact formatted draft through preview", asyn
 		},
 	});
 
+	assert.equal(selectorOverlay, true);
 	assert.equal(previewDraft, exactDraft);
 	assert.deepEqual(result, {
 		kind: "bringToMain",

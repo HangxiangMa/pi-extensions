@@ -10,8 +10,6 @@ import {
 import type { SideThreadTurn } from "./side-thread.js";
 
 const RESERVED_APP_ROWS = 3;
-const SELECTOR_CHROME_ROWS = 3;
-const PREVIEW_CHROME_ROWS = 2;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export interface BtwBringToMainSegment {
@@ -189,7 +187,8 @@ export class BtwBringToMainPreview implements Component {
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
 		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS);
-		const viewportHeight = Math.max(0, availableRows - PREVIEW_CHROME_ROWS);
+		const showFooter = availableRows >= 3;
+		const viewportHeight = Math.max(1, availableRows - 1 - (showFooter ? 1 : 0));
 		this.clampScroll(viewportHeight);
 		const count = this.summary.messages === 1 ? "1 message" : `${this.summary.messages} messages`;
 		const header = `Preview · ${count} · ${this.summary.lines} lines · ~${this.summary.tokens} tokens`;
@@ -200,7 +199,7 @@ export class BtwBringToMainPreview implements Component {
 				...this.lines
 					.slice(this.scrollOffset, this.scrollOffset + viewportHeight)
 					.map((line) => truncateToWidth(line, safeWidth, "")),
-				truncateToWidth(this.theme.fg("muted", footer), safeWidth, ""),
+				...(showFooter ? [truncateToWidth(this.theme.fg("muted", footer), safeWidth, "")] : []),
 			],
 			availableRows,
 		);
@@ -266,7 +265,8 @@ export class BtwMenuSelector implements Component {
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
 		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS);
-		const viewportHeight = Math.max(0, availableRows - SELECTOR_CHROME_ROWS);
+		const showFooter = availableRows >= 3;
+		const viewportHeight = Math.max(1, availableRows - 1 - (showFooter ? 1 : 0));
 		this.keepCursorVisible(viewportHeight);
 		const rows = this.options
 			.slice(this.scrollOffset, this.scrollOffset + viewportHeight)
@@ -286,14 +286,18 @@ export class BtwMenuSelector implements Component {
 					"",
 				),
 				...rows,
-				truncateToWidth(
-					this.theme.fg(
-						"muted",
-						`${keybindingLabel(this.keybindings, "tui.select.confirm")} confirm • ${keybindingLabel(this.keybindings, "tui.select.cancel", ["ctrl+c"])} back • Ctrl+C close`,
-					),
-					safeWidth,
-					"",
-				),
+				...(showFooter
+					? [
+							truncateToWidth(
+								this.theme.fg(
+									"muted",
+									`${keybindingLabel(this.keybindings, "tui.select.confirm")} confirm • ${keybindingLabel(this.keybindings, "tui.select.cancel", ["ctrl+c"])} back • Ctrl+C close`,
+								),
+								safeWidth,
+								"",
+							),
+						]
+					: []),
 			],
 			availableRows,
 		);
@@ -376,7 +380,12 @@ export class BtwTextRangeSelector implements Component {
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
 		const availableRows = Math.max(1, this.tui.terminal.rows - RESERVED_APP_ROWS);
-		const viewportHeight = Math.max(0, availableRows - SELECTOR_CHROME_ROWS);
+		const showStatus = availableRows >= 4;
+		const showFooter = availableRows >= 3;
+		const viewportHeight = Math.max(
+			1,
+			availableRows - 1 - (showStatus ? 1 : 0) - (showFooter ? 1 : 0),
+		);
 		this.keepCursorVisible(viewportHeight);
 		const textWidth = Math.max(1, safeWidth - visibleWidth("●> Assistant │ "));
 		this.keepCursorHorizontallyVisible(textWidth);
@@ -420,9 +429,17 @@ export class BtwTextRangeSelector implements Component {
 					safeWidth,
 					"",
 				),
-				truncateToWidth(this.theme.fg("muted", status), safeWidth, ""),
+				...(showStatus ? [truncateToWidth(this.theme.fg("muted", status), safeWidth, "")] : []),
 				...rows,
-				truncateToWidth(this.theme.fg(this.warning ? "warning" : "muted", footer), safeWidth, ""),
+				...(showFooter
+					? [
+							truncateToWidth(
+								this.theme.fg(this.warning ? "warning" : "muted", footer),
+								safeWidth,
+								"",
+							),
+						]
+					: []),
 			],
 			availableRows,
 		);
