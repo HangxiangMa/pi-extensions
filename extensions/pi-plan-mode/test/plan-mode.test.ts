@@ -3,7 +3,9 @@ import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { planModeCompleted } from "../src/completion-tool.js";
 import planMode, {
 	buildPlanModePrompt,
 	completePlanArguments,
@@ -27,6 +29,36 @@ test("plan-mode registers flag, question tool, command, and safety hooks", () =>
 	assert.equal(typeof mock.commands.get("plan")?.getArgumentCompletions, "function");
 	assert.ok(mock.events.has("tool_call"));
 	assert.ok(mock.events.has("before_agent_start"));
+});
+
+test("plan_mode_complete result renders the plan as Markdown", () => {
+	initTheme("dark");
+	const mock = createMockPi({ activeTools: ["read", "bash"] });
+	planMode(mock.pi);
+	const tool = mock.tools.find((candidate) => candidate.name === "plan_mode_complete");
+	assert.equal(typeof tool?.renderResult, "function");
+
+	const renderResult = tool?.renderResult as (
+		result: unknown,
+		options: unknown,
+	) => { render(width: number): string[] };
+	const ansiPattern = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+	const renderMarkdown = (result: unknown) =>
+		renderResult(result, { expanded: false, isPartial: false })
+			.render(80)
+			.map((line) => line.replace(ansiPattern, ""))
+			.join("\n");
+
+	const result = planModeCompleted("# Title\n\n- item\n\n```ts\nconst x = 1;\n```");
+	const rendered = renderMarkdown(result);
+	assert.match(rendered, /Proposed Plan/);
+	assert.match(rendered, /const x = 1;/);
+	assert.doesNotMatch(rendered, /\*\*Proposed Plan\*\*/);
+	assert.doesNotMatch(rendered, /# Title/);
+
+	const fallback = renderMarkdown({ content: [], details: result.details });
+	assert.match(fallback, /Proposed Plan/);
+	assert.match(fallback, /const x = 1;/);
 });
 
 test("completePlanArguments suggests management tokens only", () => {

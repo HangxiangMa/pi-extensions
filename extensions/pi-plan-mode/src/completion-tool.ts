@@ -1,3 +1,6 @@
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { Markdown } from "@earendil-works/pi-tui";
+
 export const PLAN_MODE_COMPLETE_TOOL_NAME = "plan_mode_complete";
 export const PLAN_MODE_COMPLETE_VERSION = 1;
 export const PLAN_MODE_MAX_CHARS = 50_000;
@@ -61,6 +64,26 @@ export function planModeCompleted(plan: string) {
 		} satisfies PlanModeCompletionDetails,
 		terminate: true,
 	};
+}
+
+type PlanModeCompletionRenderResult = {
+	content: Array<{ type: string; text?: string }>;
+	details?: unknown;
+};
+
+export function planModeCompletionMarkdown(result: PlanModeCompletionRenderResult) {
+	const content = result.content
+		.filter((block) => block.type === "text" && typeof block.text === "string")
+		.map((block) => block.text)
+		.join("\n")
+		.trim();
+	if (content) return content;
+	const plan = planFromCompletionDetails(result.details);
+	return plan ? `**Proposed Plan**\n\n${plan}` : "";
+}
+
+export function renderPlanModeCompletion(result: PlanModeCompletionRenderResult) {
+	return new Markdown(planModeCompletionMarkdown(result), 0, 0, getMarkdownTheme());
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -4,6 +4,7 @@ import {
 	PLAN_MODE_COMPLETE_PARAMS,
 	PLAN_MODE_COMPLETE_TOOL_NAME,
 	planModeCompleted,
+	renderPlanModeCompletion,
 } from "./completion-tool.js";
 import {
 	isEmptyAssistantMessage,
@@ -157,6 +158,7 @@ export default function planMode(pi: ExtensionAPI) {
 			"Call plan_mode_complete alone as the final action only after the implementation plan is decision-complete.",
 		],
 		parameters: PLAN_MODE_COMPLETE_PARAMS,
+		renderResult: renderPlanModeCompletion,
 		async execute(_toolCallId, params: unknown, _signal, _onUpdate, ctx) {
 			if (!state.enabled) {
 				throw new Error("plan_mode_complete is only available while Plan mode is active");
