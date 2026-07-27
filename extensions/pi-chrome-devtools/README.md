@@ -171,9 +171,10 @@ When the file is missing or invalid, the extension preserves Pi's current active
 instead of enabling tools by itself. A valid saved selection is restored on Pi startup and
 `/reload`.
 
-Compatibility: older versions used `pi-chrome-devtools-settings.json`. During the migration
-window, a legacy-only file is automatically migrated to `pi-chrome-devtools.json` with a warning.
-If both files exist, `pi-chrome-devtools.json` wins and the legacy file is ignored. The legacy
+Compatibility: older versions used `pi-chrome-devtools-settings.json`. A legacy-only file remains
+readable with a warning and is never modified automatically; rename it to
+`pi-chrome-devtools.json`. The first subsequent settings save writes the canonical file. If both
+files exist, `pi-chrome-devtools.json` wins and the legacy file is ignored. The legacy
 filename is deprecated and will be removed in a future major release.
 
 ## 🧠 Use cases

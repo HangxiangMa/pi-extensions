@@ -1,13 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-	existsSync,
-	linkSync,
-	mkdirSync,
-	readFileSync,
-	renameSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parse, type TomlTable } from "smol-toml";
 import {
@@ -192,48 +184,6 @@ export function loadStarshipConfig(settingsPath: string): LoadedStarshipConfig {
 		settingsPath,
 		rawDocument,
 	};
-}
-
-interface InitialFileSystem {
-	mkdirSync: typeof mkdirSync;
-	writeFileSync: typeof writeFileSync;
-	linkSync: typeof linkSync;
-	rmSync: typeof rmSync;
-}
-
-export function loadOrCreateStarshipConfig(
-	settingsPath: string,
-	overrides: Partial<InitialFileSystem> = {},
-): LoadedStarshipConfig {
-	const loaded = loadStarshipConfig(settingsPath);
-	if (loaded.source === "user" || loaded.diagnostics.length > 0) return loaded;
-
-	const fs = { mkdirSync, writeFileSync, linkSync, rmSync, ...overrides };
-	const tempPath = join(dirname(settingsPath), `.${CONFIG_FILE_NAME}.${randomUUID()}.tmp`);
-	try {
-		fs.mkdirSync(dirname(settingsPath), { recursive: true });
-		fs.writeFileSync(tempPath, BUILT_IN_EXAMPLE, { encoding: "utf8", flag: "wx" });
-		try {
-			fs.linkSync(tempPath, settingsPath);
-		} catch (error) {
-			if (isAlreadyExistsError(error)) return loadStarshipConfig(settingsPath);
-			throw error;
-		}
-		return loadStarshipConfig(settingsPath);
-	} catch (error) {
-		return {
-			...loaded,
-			diagnostics: [
-				diagnostic("warning", "", `Unable to create default settings: ${formatError(error)}`),
-			],
-		};
-	} finally {
-		try {
-			fs.rmSync(tempPath, { force: true });
-		} catch {
-			// Best-effort cleanup must not replace the initialization result.
-		}
-	}
 }
 
 export function normalizeConfig(value: unknown): {
@@ -646,10 +596,6 @@ function diagnostic(
 	message: string,
 ): ConfigDiagnostic {
 	return { severity, path, message };
-}
-
-function isAlreadyExistsError(error: unknown): boolean {
-	return error instanceof Error && "code" in error && error.code === "EEXIST";
 }
 
 function formatError(error: unknown): string {

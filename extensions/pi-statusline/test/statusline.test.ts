@@ -567,7 +567,7 @@ test("statusline settings load extension icon overrides", () => {
 	assert.equal(typeof readStatuslineSettings(settingsPath).palette, "object");
 });
 
-test("statusline settings migrate to the canonical package filename", async () => {
+test("statusline settings read legacy files and prefer the canonical package filename", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-migration-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = root;
@@ -579,11 +579,12 @@ test("statusline settings migrate to the canonical package filename", async () =
 			JSON.stringify({ extensionStatusIcons: { goal: "🎯" }, futureOption: true }),
 		);
 		assert.equal(readStatuslineSettings().extensionStatusIcons.goal, "🎯");
-		assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), {
+		assert.equal(existsSync(canonicalPath), false);
+		assert.deepEqual(JSON.parse(readFileSync(legacyPath, "utf8")), {
 			extensionStatusIcons: { goal: "🎯" },
 			futureOption: true,
 		});
-		assert.equal(existsSync(legacyPath), false);
+		assert.match(consumeStatuslineSettingsNotice() ?? "", /using legacy/i);
 
 		writeFileSync(legacyPath, JSON.stringify({ extensionStatusIcons: { goal: "old" } }));
 		writeFileSync(canonicalPath, JSON.stringify({ extensionStatusIcons: { goal: "new" } }));

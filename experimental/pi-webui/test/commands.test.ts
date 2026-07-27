@@ -437,6 +437,35 @@ test("init creates defaults without TUI in non-TUI modes and opens settings in T
 	assert.match(tui.notifications[0]?.message ?? "", /already exists/i);
 });
 
+test("session replacement drops a delayed init continuation", async () => {
+	const initializing = deferred<"created" | "exists">();
+	let loads = 0;
+	const { mock, runtime } = createRuntime({
+		initializeSettings: () => initializing.promise,
+		loadSettings: async () => {
+			loads += 1;
+			return {
+				kind: "missing",
+				path: "/agent/pi-webui.json",
+				settings: { ...DEFAULT_SETTINGS },
+				source: "defaults",
+				document: {},
+			};
+		},
+	});
+	const first = createMockContext({ hasUI: true, mode: "rpc" });
+	await runtime.start(first.ctx);
+	const notificationsBeforeInit = first.notifications.length;
+	const pending = mock.commands.get("webui")?.handler("init", first.ctx);
+	const replacement = createMockContext({ hasUI: true, mode: "rpc" });
+	await runtime.start(replacement.ctx);
+	initializing.resolve("created");
+	await pending;
+
+	assert.equal(first.notifications.length, notificationsBeforeInit);
+	assert.equal(loads, 2);
+});
+
 test("settings changes save in action order and update effective status", async () => {
 	const first = deferred<void>();
 	const requested: boolean[] = [];

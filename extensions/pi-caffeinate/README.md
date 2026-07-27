@@ -121,9 +121,10 @@ running Pi session before using mode commands.
 Missing, invalid, or deleted settings default back to `display` mode with quiet mode disabled on
 every supported OS.
 
-Compatibility: older versions used `pi-caffeinate-settings.json`. During the migration window, a
-legacy-only file is automatically migrated to `pi-caffeinate.json` with a warning. If both files
-exist, `pi-caffeinate.json` wins and the legacy file is ignored. The legacy filename is deprecated
+Compatibility: older versions used `pi-caffeinate-settings.json`. A legacy-only file remains
+readable with a warning and is never modified automatically; rename it to `pi-caffeinate.json`.
+The first subsequent settings save writes the canonical file. If both files exist,
+`pi-caffeinate.json` wins and the legacy file is ignored. The legacy filename is deprecated
 and will be removed in a future major release.
 
 ### Environment variables

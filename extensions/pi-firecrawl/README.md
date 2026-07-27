@@ -116,9 +116,10 @@ instead of enabling tools by itself. A valid saved selection is restored on Pi s
 `/reload`. The settings file stores only tool names and a timestamp; it never stores
 `FIRECRAWL_API_KEY`, request headers, or other secrets.
 
-Compatibility: older versions used `pi-firecrawl-settings.json`. During the migration window,
-a legacy-only file is automatically migrated to `pi-firecrawl.json` with a warning. If both
-files exist, `pi-firecrawl.json` wins and the legacy file is ignored. The legacy filename is
+Compatibility: older versions used `pi-firecrawl-settings.json`. A legacy-only file remains
+readable with a warning and is never modified automatically; rename it to `pi-firecrawl.json`.
+The first subsequent settings save writes the canonical file. If both files exist,
+`pi-firecrawl.json` wins and the legacy file is ignored. The legacy filename is
 deprecated and will be removed in a future major release.
 
 ## 🚀 Examples

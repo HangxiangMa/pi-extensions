@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 const CONFIG_FILE_NAME = "pi-langfuse.json";
 export const DEFAULT_BASE_URL = "https://us.cloud.langfuse.com";
@@ -20,7 +20,7 @@ export type LangfuseConfigResult =
 	| { ok: false; path: string; warnings: string[]; reason: string };
 
 export function langfuseConfigPath(): string {
-	return join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), CONFIG_FILE_NAME);
+	return join(getAgentDir(), CONFIG_FILE_NAME);
 }
 
 export async function writeLangfuseConfig(

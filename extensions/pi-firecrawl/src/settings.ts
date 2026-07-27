@@ -1,8 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, link, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { FIRECRAWL_TOOL_NAMES, type FirecrawlToolName } from "./tools.js";
 
 const NEW_SETTINGS_FILE = "pi-firecrawl.json";
@@ -17,11 +16,6 @@ export type SettingsLoadResult =
 	| { kind: "missing"; notice?: string }
 	| { kind: "invalid"; reason: string; notice?: string }
 	| { kind: "loaded"; settings: FirecrawlSettings; notice?: string };
-
-type SettingsMigrationResult = {
-	kind: "migrated" | "failed";
-	notice: string;
-};
 
 export async function loadSettings(): Promise<SettingsLoadResult> {
 	const newPath = settingsFilePath();
@@ -39,15 +33,10 @@ export async function loadSettings(): Promise<SettingsLoadResult> {
 	if (legacySettings.kind === "missing") return { kind: "missing" };
 	if (legacySettings.kind === "invalid") return legacySettings;
 
-	const migration = await migrateLegacySettings(legacyPath, legacySettings.settings);
-	if (migration.kind === "failed") {
-		const settingsCreatedDuringMigration = await readSettingsFile(newPath);
-		if (settingsCreatedDuringMigration.kind !== "missing") {
-			return withLegacyIgnoredNotice(settingsCreatedDuringMigration);
-		}
-	}
-
-	return { ...legacySettings, notice: migration.notice };
+	return {
+		...legacySettings,
+		notice: `Using legacy ${LEGACY_SETTINGS_FILE}; rename it to ${NEW_SETTINGS_FILE}. Future saves write ${NEW_SETTINGS_FILE} without modifying the legacy file.`,
+	};
 }
 
 async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
@@ -77,46 +66,6 @@ async function withLegacyIgnoredNotice(settings: SettingsLoadResult): Promise<Se
 	return {
 		...settings,
 		notice: `Firecrawl legacy settings ignored: ${legacySettingsFilePath()} exists, but ${settingsFilePath()} takes precedence. Delete ${LEGACY_SETTINGS_FILE} after confirming your settings.`,
-	};
-}
-
-export async function installSettingsFileExclusively(filePath: string, contents: string) {
-	await mkdir(dirname(filePath), { recursive: true });
-	const tempFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-	try {
-		await writeFile(tempFile, contents, { encoding: "utf8", flag: "wx" });
-		await link(tempFile, filePath);
-	} finally {
-		await rm(tempFile, { force: true }).catch(() => undefined);
-	}
-}
-
-async function migrateLegacySettings(
-	legacyPath: string,
-	settings: FirecrawlSettings,
-): Promise<SettingsMigrationResult> {
-	const newPath = settingsFilePath();
-	try {
-		await installSettingsFileExclusively(newPath, `${JSON.stringify(settings, null, 2)}\n`);
-	} catch (error) {
-		return {
-			kind: "failed",
-			notice: `Firecrawl legacy settings migration failed: could not migrate ${legacyPath} to ${newPath}: ${formatError(error)}. The legacy file was used for this session; future saves will write ${NEW_SETTINGS_FILE}.`,
-		};
-	}
-
-	try {
-		await rm(legacyPath, { force: true });
-	} catch (error) {
-		return {
-			kind: "migrated",
-			notice: `Firecrawl settings migrated from ${legacyPath} to ${newPath}, but the legacy file could not be removed: ${formatError(error)}. Delete ${LEGACY_SETTINGS_FILE} after confirming your settings.`,
-		};
-	}
-
-	return {
-		kind: "migrated",
-		notice: `Firecrawl settings migrated from ${legacyPath} to ${newPath}. ${LEGACY_SETTINGS_FILE} is deprecated and will be removed in a future major release.`,
 	};
 }
 
@@ -169,7 +118,7 @@ function legacySettingsFilePath() {
 }
 
 function agentDir() {
-	return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+	return getAgentDir();
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

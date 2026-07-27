@@ -87,7 +87,7 @@ Custom config is resolved in this order:
 
 `PI_LSP_CONFIG` only accepts JSON or a JSON file path; JavaScript and TypeScript config files are not evaluated. An untrusted project's canonical and legacy files are ignored. A `root` passed to an LSP tool selects files and the server working directory; it does not grant that directory authority to provide project settings. Project settings always come from the trusted Pi session workspace.
 
-Compatibility: a user-scoped legacy `lsp.json` is migrated automatically. A trusted project-scoped legacy `.pi/lsp.json` remains readable with a warning but is not renamed automatically, so the extension never modifies a repository working tree. New paths take precedence when both names exist.
+Compatibility: user-scoped `lsp.json` and trusted project-scoped `.pi/lsp.json` remain readable with a warning and are never modified automatically; rename them to their canonical `pi-lsp.json` names. New paths take precedence when both names exist.
 
 Providing custom config replaces the default server map. The following `pi-lsp.json` example intentionally keeps five selected servers:
 

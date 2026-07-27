@@ -1,13 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-	linkSync,
-	lstatSync,
-	mkdirSync,
-	readFileSync,
-	renameSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { INFORMATION_PROFILES } from "./information-profiles.js";
@@ -110,13 +102,6 @@ export interface LoadedStatuslineSettings {
 	settingsPath: string;
 	rawDocument?: string;
 	diagnostics: StatuslineConfigDiagnostic[];
-}
-
-interface InitialFileSystem {
-	mkdirSync: typeof mkdirSync;
-	writeFileSync: typeof writeFileSync;
-	linkSync: typeof linkSync;
-	rmSync: typeof rmSync;
 }
 
 interface AtomicFileSystem {
@@ -324,10 +309,7 @@ export function loadStatuslineSettings(settingsPath: string): LoadedStatuslineSe
 	};
 }
 
-export function loadOrCreateStatuslineSettings(
-	agentDir = getAgentDir(),
-	overrides: Partial<InitialFileSystem> = {},
-): LoadedStatuslineSettings {
+export function loadStatuslineSettingsForAgent(agentDir = getAgentDir()): LoadedStatuslineSettings {
 	pendingSettingsNotice = undefined;
 	const canonicalPath = settingsFilePath(agentDir);
 	const legacyPath = join(agentDir, LEGACY_SETTINGS_FILE_NAME);
@@ -338,39 +320,11 @@ export function loadOrCreateStatuslineSettings(
 		return loadStatuslineSettings(canonicalPath);
 	}
 	if (pathExists(legacyPath)) return migrateLegacySettings(canonicalPath, legacyPath);
-	return createInitialSettings(canonicalPath, overrides);
-}
-
-function createInitialSettings(
-	canonicalPath: string,
-	overrides: Partial<InitialFileSystem>,
-): LoadedStatuslineSettings {
-	const fs = { mkdirSync, writeFileSync, linkSync, rmSync, ...overrides };
-	const temporaryPath = temporarySettingsPath(canonicalPath);
-	try {
-		fs.mkdirSync(dirname(canonicalPath), { recursive: true });
-		fs.writeFileSync(temporaryPath, DEFAULT_STATUSLINE_DOCUMENT, {
-			encoding: "utf8",
-			flag: "wx",
-		});
-		try {
-			fs.linkSync(temporaryPath, canonicalPath);
-		} catch (error) {
-			if (isAlreadyExistsError(error)) return loadStatuslineSettings(canonicalPath);
-			throw error;
-		}
-		return loadStatuslineSettings(canonicalPath);
-	} catch (error) {
-		return builtInSettings(canonicalPath, [
-			diagnostic("warning", "io", "", `Unable to create default settings: ${formatError(error)}`),
-		]);
-	} finally {
-		removeTemporaryFile(fs.rmSync, temporaryPath);
-	}
+	return builtInSettings(canonicalPath);
 }
 
 function migrateLegacySettings(
-	canonicalPath: string,
+	_canonicalPath: string,
 	legacyPath: string,
 ): LoadedStatuslineSettings {
 	const legacy = loadStatuslineSettings(legacyPath);
@@ -382,30 +336,8 @@ function migrateLegacySettings(
 		pendingSettingsNotice = `${LEGACY_SETTINGS_FILE_NAME} is invalid and was ignored.`;
 		return legacy;
 	}
-	let identity: FileIdentity;
-	try {
-		identity = installFileExclusively(canonicalPath, legacy.rawDocument);
-	} catch (error) {
-		if (pathExists(canonicalPath)) {
-			pendingSettingsNotice = `${LEGACY_SETTINGS_FILE_NAME} ignored because ${SETTINGS_FILE_NAME} was created concurrently.`;
-			return loadStatuslineSettings(canonicalPath);
-		}
-		pendingSettingsNotice = `Statusline settings migration failed: ${formatError(error)}. The legacy file was used for this session.`;
-		return legacy;
-	}
-	if (!fileContentsEqual(legacyPath, legacy.rawDocument)) {
-		pendingSettingsNotice = removeFileIfIdentityMatches(canonicalPath, identity, legacy.rawDocument)
-			? `${LEGACY_SETTINGS_FILE_NAME} changed during migration; the stale ${SETTINGS_FILE_NAME} snapshot was removed.`
-			: `${LEGACY_SETTINGS_FILE_NAME} changed during migration, but ${SETTINGS_FILE_NAME} was replaced concurrently and takes precedence on the next load.`;
-		return legacy;
-	}
-	try {
-		rmSync(legacyPath);
-		pendingSettingsNotice = `Statusline settings migrated from ${LEGACY_SETTINGS_FILE_NAME} to ${SETTINGS_FILE_NAME}.`;
-	} catch (error) {
-		pendingSettingsNotice = `Statusline settings migrated to ${SETTINGS_FILE_NAME}, but ${LEGACY_SETTINGS_FILE_NAME} could not be removed: ${formatError(error)}.`;
-	}
-	return loadStatuslineSettings(canonicalPath);
+	pendingSettingsNotice = `Using legacy ${LEGACY_SETTINGS_FILE_NAME}; rename it to ${SETTINGS_FILE_NAME}. Future saves write ${SETTINGS_FILE_NAME} without modifying the legacy file.`;
+	return legacy;
 }
 
 export function saveStatuslineSettingsDocument(
@@ -452,7 +384,7 @@ export function consumeStatuslineSettingsNotice(): string | undefined {
 export function readStatuslineSettings(settingsPath?: string): StatuslineConfig {
 	return settingsPath
 		? loadStatuslineSettings(settingsPath).config
-		: loadOrCreateStatuslineSettings().config;
+		: loadStatuslineSettingsForAgent().config;
 }
 
 export function normalizeStatuslineSettings(value: unknown): StatuslineConfig {
@@ -628,45 +560,6 @@ function removeTemporaryFile(remove: typeof rmSync, temporaryPath: string) {
 	}
 }
 
-type FileIdentity = { dev: number; ino: number };
-
-function installFileExclusively(filePath: string, contents: string): FileIdentity {
-	mkdirSync(dirname(filePath), { recursive: true });
-	const temporaryPath = temporarySettingsPath(filePath);
-	try {
-		writeFileSync(temporaryPath, contents, { encoding: "utf8", flag: "wx" });
-		const identity = lstatSync(temporaryPath);
-		linkSync(temporaryPath, filePath);
-		return { dev: identity.dev, ino: identity.ino };
-	} finally {
-		removeTemporaryFile(rmSync, temporaryPath);
-	}
-}
-
-function removeFileIfIdentityMatches(
-	filePath: string,
-	expected: FileIdentity,
-	expectedContents: string,
-): boolean {
-	try {
-		const current = lstatSync(filePath);
-		if (current.dev !== expected.dev || current.ino !== expected.ino) return false;
-		if (readFileSync(filePath, "utf8") !== expectedContents) return false;
-		rmSync(filePath);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-function fileContentsEqual(path: string, expected: string): boolean {
-	try {
-		return readFileSync(path, "utf8") === expected;
-	} catch {
-		return false;
-	}
-}
-
 function pathExists(path: string): boolean {
 	try {
 		lstatSync(path);
@@ -674,10 +567,6 @@ function pathExists(path: string): boolean {
 	} catch {
 		return false;
 	}
-}
-
-function isAlreadyExistsError(error: unknown): boolean {
-	return error instanceof Error && "code" in error && error.code === "EEXIST";
 }
 
 function formatError(error: unknown): string {

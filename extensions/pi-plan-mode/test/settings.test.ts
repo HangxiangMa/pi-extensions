@@ -125,7 +125,7 @@ test("Plan-mode settings validate safe subcommands strictly", async () => {
 	}
 });
 
-test("Plan-mode settings migrate to the canonical package filename", async () => {
+test("Plan-mode settings read legacy files without modifying them", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-migration-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
@@ -136,13 +136,13 @@ test("Plan-mode settings migrate to the canonical package filename", async () =>
 		);
 		const loaded = await readPlanModeSettings();
 		assert.equal(loaded.kind, "loaded");
-		assert.match(loaded.notice ?? "", /migrated/i);
-		assert.deepEqual(JSON.parse(await readFile(join(directory, "pi-plan-mode.json"), "utf8")), {
+		assert.match(loaded.notice ?? "", /using legacy/i);
+		assert.deepEqual(JSON.parse(await readFile(join(directory, "plan-mode.json"), "utf8")), {
 			thinkingLevel: "high",
 			safeSubcommands: { gh: ["pr view"] },
 			futureOption: true,
 		});
-		await assert.rejects(access(join(directory, "plan-mode.json")));
+		await assert.rejects(access(join(directory, "pi-plan-mode.json")));
 
 		await writeFile(join(directory, "plan-mode.json"), '{"thinkingLevel":"low"}');
 		await writeFile(join(directory, "pi-plan-mode.json"), '{"thinkingLevel":"medium"}');
@@ -171,7 +171,7 @@ test("Plan-mode settings migrate to the canonical package filename", async () =>
 		assert.deepEqual(fallback.kind === "loaded" ? fallback.settings : undefined, {
 			thinkingLevel: "high",
 		});
-		assert.match(fallback.notice ?? "", /migration failed/i);
+		assert.match(fallback.notice ?? "", /using legacy/i);
 		assert.equal(
 			await readFile(join(directory, "plan-mode.json"), "utf8"),
 			'{"thinkingLevel":"high"}',

@@ -1013,7 +1013,7 @@ test("session start re-reads settings before reporting warnings", async () => {
 	}
 });
 
-test("subagent settings migrate and save to the canonical package filename", () => {
+test("subagent settings read legacy files and save to the canonical package filename", () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-migration-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
@@ -1026,14 +1026,14 @@ test("subagent settings migrate and save to the canonical package filename", () 
 		);
 		const migrationMock = createMockPi();
 		subagents(migrationMock.pi);
-		assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), {
+		assert.equal(existsSync(canonicalPath), false);
+		assert.deepEqual(JSON.parse(readFileSync(legacyPath, "utf8")), {
 			agents: { scout: { tools: ["read"] } },
 			futureOption: true,
 		});
-		assert.equal(existsSync(legacyPath), false);
 		const migrationContext = createMockContext();
 		migrationMock.events.get("session_start")?.[0]?.({}, migrationContext.ctx);
-		assert.match(migrationContext.notifications[0]?.message ?? "", /migrated/i);
+		assert.match(migrationContext.notifications[0]?.message ?? "", /using legacy/i);
 
 		writeFileSync(legacyPath, JSON.stringify({ agents: { scout: { tools: ["bash"] } } }));
 		writeFileSync(canonicalPath, JSON.stringify({ agents: { scout: { tools: ["read"] } } }));

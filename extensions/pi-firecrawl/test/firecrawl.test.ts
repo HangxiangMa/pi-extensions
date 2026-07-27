@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import {
 	existsSync,
 	mkdtempSync,
-	readdirSync,
 	readFileSync,
 	rmSync,
 	statSync,
@@ -21,7 +20,6 @@ import firecrawl, {
 	firecrawlRequest,
 	formatPayload,
 	formatPersistedSelection,
-	installSettingsFileExclusively,
 	jsonResult,
 	normalizeApiUrl,
 	normalizeFirecrawlSettings,
@@ -337,21 +335,6 @@ test("formatPersistedSelection summarizes all, none, and partial selections", ()
 	assert.equal(formatPersistedSelection(["firecrawl_scrape"]), "1/5 selected: firecrawl_scrape");
 });
 
-test("firecrawl installs migrated settings exclusively without leaving temp files", async () => {
-	await withTempAgentDir(async (agentDir) => {
-		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
-		await installSettingsFileExclusively(settingsPath, "first\n");
-
-		await assert.rejects(
-			installSettingsFileExclusively(settingsPath, "replacement\n"),
-			(error: NodeJS.ErrnoException) => error.code === "EEXIST",
-		);
-
-		assert.equal(readFileSync(settingsPath, "utf8"), "first\n");
-		assert.deepEqual(readdirSync(agentDir), [NEW_SETTINGS_FILE]);
-	});
-});
-
 test("firecrawl preserves active tools when settings are missing", async () => {
 	await withTempAgentDir(async () => {
 		const firecrawlModule = await importFreshFirecrawl();
@@ -381,7 +364,7 @@ test("firecrawl loads the new settings file without a migration warning", async 
 	});
 });
 
-test("firecrawl migrates a legacy-only settings file and warns", async () => {
+test("firecrawl reads legacy-only settings without modifying either path", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		writeSettings(agentDir, LEGACY_SETTINGS_FILE, [SCRAPE_TOOL]);
 		const firecrawlModule = await importFreshFirecrawl();
@@ -392,19 +375,14 @@ test("firecrawl migrates a legacy-only settings file and warns", async () => {
 		await mock.events.get("session_start")?.[0]?.({}, ctx);
 
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", SCRAPE_TOOL]);
-		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, [SCRAPE_TOOL]);
-		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), false);
-		assert.match(notifications[0]?.message ?? "", /migrated/i);
-		assert.match(notifications[0]?.message ?? "", /pi-firecrawl-settings\.json/);
-		assert.match(notifications[0]?.message ?? "", /pi-firecrawl\.json/);
-
-		await mock.commands.get("firecrawl")?.handler("disable", ctx);
-		await mock.commands.get("firecrawl")?.handler("status", ctx);
-		assert.match(notifications.at(-1)?.message ?? "", /migrated/i);
+		assert.equal(existsSync(path.join(agentDir, NEW_SETTINGS_FILE)), false);
+		assert.deepEqual(readSettings(agentDir, LEGACY_SETTINGS_FILE).tools, [SCRAPE_TOOL]);
+		assert.match(notifications[0]?.message ?? "", /using legacy/i);
+		assert.match(notifications[0]?.message ?? "", /rename.*pi-firecrawl\.json/i);
 	});
 });
 
-test("firecrawl falls back to valid legacy settings when migration fails", async () => {
+test("firecrawl reads valid legacy settings beside a missing canonical symlink target", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		writeSettings(agentDir, LEGACY_SETTINGS_FILE, [SCRAPE_TOOL]);
 		symlinkSync("missing-firecrawl-settings-target", path.join(agentDir, NEW_SETTINGS_FILE));
@@ -417,8 +395,8 @@ test("firecrawl falls back to valid legacy settings when migration fails", async
 
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", SCRAPE_TOOL]);
 		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), true);
-		assert.match(notifications[0]?.message ?? "", /migration failed/i);
-		assert.match(notifications[0]?.message ?? "", /legacy file was used for this session/i);
+		assert.match(notifications[0]?.message ?? "", /using legacy/i);
+		assert.match(notifications[0]?.message ?? "", /without modifying the legacy file/i);
 	});
 });
 

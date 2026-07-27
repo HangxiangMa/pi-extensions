@@ -79,6 +79,8 @@ export type StorageLockResult<T> = {
 };
 
 export interface AccountStorageBackend {
+	read<T>(reader: (current: string | undefined) => T): T;
+	readAsync<T>(reader: (current: string | undefined) => Promise<T>): Promise<T>;
 	withLock<T>(mutator: (current: string | undefined) => StorageLockResult<T>): T;
 	withLockAsync<T>(
 		mutator: (current: string | undefined) => Promise<StorageLockResult<T>>,
@@ -91,12 +93,33 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
 		private readonly options: { syncLockTimeoutMs?: number } = {},
 	) {}
 
-	withLock<T>(mutator: (current: string | undefined) => StorageLockResult<T>): T {
-		this.ensureFileExists();
+	read<T>(reader: (current: string | undefined) => T): T {
+		if (!pathEntryExists(this.filePath)) return reader(undefined);
 		let release: (() => void) | undefined;
 		try {
 			release = this.acquireLockSyncWithRetry();
-			const { result, next } = mutator(readPrivateRegularFile(this.filePath));
+			return reader(readPrivateRegularFileIfExists(this.filePath));
+		} finally {
+			release?.();
+		}
+	}
+
+	async readAsync<T>(reader: (current: string | undefined) => Promise<T>): Promise<T> {
+		if (!pathEntryExists(this.filePath)) return reader(undefined);
+		const release = await this.acquireLockAsync();
+		try {
+			return await reader(readPrivateRegularFileIfExists(this.filePath));
+		} finally {
+			await release().catch(() => undefined);
+		}
+	}
+
+	withLock<T>(mutator: (current: string | undefined) => StorageLockResult<T>): T {
+		this.ensureParentDirectory();
+		let release: (() => void) | undefined;
+		try {
+			release = this.acquireLockSyncWithRetry();
+			const { result, next } = mutator(readPrivateRegularFileIfExists(this.filePath));
 			if (next !== undefined) this.writePrivate(next);
 			return result;
 		} finally {
@@ -107,7 +130,7 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
 	async withLockAsync<T>(
 		mutator: (current: string | undefined) => Promise<StorageLockResult<T>>,
 	): Promise<T> {
-		this.ensureFileExists();
+		this.ensureParentDirectory();
 		let release: (() => Promise<void>) | undefined;
 		let compromisedError: Error | undefined;
 		const throwIfCompromised = () => {
@@ -115,23 +138,11 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
 		};
 
 		try {
-			release = await lockfile.lock(this.filePath, {
-				fs: LOCKFILE_FS_ADAPTER,
-				realpath: false,
-				retries: {
-					retries: 10,
-					factor: 2,
-					minTimeout: 100,
-					maxTimeout: 10_000,
-					randomize: true,
-				},
-				stale: 30_000,
-				onCompromised: (error) => {
-					compromisedError = error;
-				},
+			release = await this.acquireLockAsync((error) => {
+				compromisedError = error;
 			});
 			throwIfCompromised();
-			const { result, next } = await mutator(readPrivateRegularFile(this.filePath));
+			const { result, next } = await mutator(readPrivateRegularFileIfExists(this.filePath));
 			throwIfCompromised();
 			if (next !== undefined) this.writePrivate(next);
 			throwIfCompromised();
@@ -147,19 +158,27 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
 		}
 	}
 
-	private ensureFileExists(): void {
+	private ensureParentDirectory(): void {
 		const parent = dirname(this.filePath);
 		mkdirSync(parent, { recursive: true, mode: 0o700 });
 		chmodSync(parent, 0o700);
-		let descriptor: number | undefined;
-		try {
-			descriptor = openSync(this.filePath, "wx", 0o600);
-			writeFileSync(descriptor, "", PRIVATE_FILE_WRITE_OPTIONS);
-		} catch (error) {
-			if (!isNodeError(error) || error.code !== "EEXIST") throw error;
-		} finally {
-			if (descriptor !== undefined) closeSync(descriptor);
-		}
+	}
+
+	private acquireLockAsync(onCompromised?: (error: Error) => void) {
+		return lockfile.lock(this.filePath, {
+			fs: LOCKFILE_FS_ADAPTER,
+			lockfilePath: `${this.filePath}.mutation-lock`,
+			realpath: false,
+			retries: {
+				retries: 10,
+				factor: 2,
+				minTimeout: 100,
+				maxTimeout: 10_000,
+				randomize: true,
+			},
+			stale: 30_000,
+			...(onCompromised ? { onCompromised } : {}),
+		});
 	}
 
 	private acquireLockSyncWithRetry(): () => void {
@@ -169,6 +188,7 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
 			try {
 				return lockfile.lockSync(this.filePath, {
 					fs: LOCKFILE_FS_ADAPTER,
+					lockfilePath: `${this.filePath}.mutation-lock`,
 					realpath: false,
 				});
 			} catch (error) {
@@ -196,6 +216,20 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
 	}
 }
 
+function readPrivateRegularFileIfExists(filePath: string): string | undefined {
+	return pathEntryExists(filePath) ? readPrivateRegularFile(filePath) : undefined;
+}
+
+function pathEntryExists(filePath: string): boolean {
+	try {
+		lstatSync(filePath);
+		return true;
+	} catch (error) {
+		if (isNodeError(error) && error.code === "ENOENT") return false;
+		throw error;
+	}
+}
+
 function readPrivateRegularFile(filePath: string): string {
 	const info = lstatSync(filePath);
 	if (!info.isFile() || info.isSymbolicLink()) {
@@ -216,6 +250,14 @@ function readPrivateRegularFile(filePath: string): string {
 
 export class InMemoryAccountStorageBackend implements AccountStorageBackend {
 	private value: string | undefined;
+
+	read<T>(reader: (current: string | undefined) => T): T {
+		return reader(this.value);
+	}
+
+	readAsync<T>(reader: (current: string | undefined) => Promise<T>): Promise<T> {
+		return reader(this.value);
+	}
 
 	withLock<T>(mutator: (current: string | undefined) => StorageLockResult<T>): T {
 		const { result, next } = mutator(this.value);

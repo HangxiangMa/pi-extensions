@@ -155,7 +155,7 @@ test("session reload applies quiet mode and clears an active status", async () =
 	});
 });
 
-test("caffeinate migrates legacy-only settings and warns", async () => {
+test("caffeinate reads legacy-only settings without modifying either path", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		writeSettings(agentDir, LEGACY_SETTINGS_FILE, "sleep");
 		const caffeinateModule = await importFreshCaffeinate();
@@ -165,24 +165,22 @@ test("caffeinate migrates legacy-only settings and warns", async () => {
 		caffeinateModule.default(mock.pi);
 		await mock.events.get("session_start")?.[0]?.({}, ctx);
 
-		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE), {
+		assert.equal(existsSync(path.join(agentDir, NEW_SETTINGS_FILE)), false);
+		assert.deepEqual(readSettings(agentDir, LEGACY_SETTINGS_FILE), {
 			mode: "sleep",
 			updatedAt: 1,
 		});
-		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), false);
-		assert.match(notifications[0]?.message ?? "", /migrated/i);
-		assert.match(notifications[0]?.message ?? "", /pi-caffeinate-settings\.json/);
-		assert.match(notifications[0]?.message ?? "", /pi-caffeinate\.json/);
+		assert.match(notifications[0]?.message ?? "", /using legacy/i);
+		assert.match(notifications[0]?.message ?? "", /rename.*pi-caffeinate\.json/i);
 
 		await mock.commands.get("caffeinate")?.handler("status", ctx);
 		const statusMessage = notifications.at(-1)?.message ?? "";
 		assert.match(statusMessage, /Mode: system-awake/);
-		assert.match(statusMessage, /Settings: .*pi-caffeinate\.json/);
-		assert.match(statusMessage, /Settings note: .*migrated/i);
+		assert.match(statusMessage, /Settings note: .*using legacy/i);
 	});
 });
 
-test("caffeinate falls back to valid legacy settings when migration fails", async () => {
+test("caffeinate reads valid legacy settings beside a missing canonical symlink target", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		writeSettings(agentDir, LEGACY_SETTINGS_FILE, "sleep");
 		symlinkSync("missing-caffeinate-settings-target", path.join(agentDir, NEW_SETTINGS_FILE));
@@ -194,8 +192,8 @@ test("caffeinate falls back to valid legacy settings when migration fails", asyn
 		await mock.events.get("session_start")?.[0]?.({}, ctx);
 
 		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), true);
-		assert.match(notifications[0]?.message ?? "", /migration failed/i);
-		assert.match(notifications[0]?.message ?? "", /legacy file was used for this session/i);
+		assert.match(notifications[0]?.message ?? "", /using legacy/i);
+		assert.match(notifications[0]?.message ?? "", /without modifying the legacy file/i);
 		await mock.commands.get("caffeinate")?.handler("status", ctx);
 		assert.match(notifications.at(-1)?.message ?? "", /Mode: system-awake/);
 	});

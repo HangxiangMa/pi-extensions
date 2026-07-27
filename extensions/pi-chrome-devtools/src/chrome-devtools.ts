@@ -179,5 +179,5 @@ export {
 	resolveScreenshotPath,
 	selectAllowedRoot,
 } from "./screenshot.js";
-export { installSettingsFileExclusively, normalizeChromeDevtoolsSettings } from "./settings.js";
+export { normalizeChromeDevtoolsSettings } from "./settings.js";
 export { orderedChromeDevtoolsTools } from "./tool-selector.js";

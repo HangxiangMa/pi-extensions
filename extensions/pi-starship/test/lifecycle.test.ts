@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -49,18 +49,19 @@ test("pi-starship registers lifecycle handlers without reading actions at factor
 	assert.ok(mock.events.has("tool_execution_start"));
 });
 
-test("session start creates the default settings file when it is missing", async () => {
+test("session start uses built-in settings without materializing a missing file", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-starship-lifecycle-"));
+	const agentDir = join(root, "agent");
 	const previous = process.env.PI_CODING_AGENT_DIR;
-	process.env.PI_CODING_AGENT_DIR = root;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
 	try {
 		const mock = createMockPi();
 		piStarship(mock.pi);
 		const context = createMockContext({ mode: "print" });
 		await emit(mock.events, "session_start", {}, context.ctx);
-		const settings = readFileSync(join(root, "pi-starship.toml"), "utf8");
-		assert.match(settings, /^format = """/mu);
-		assert.match(settings, /\$brand\\\n\$provider\\\n/u);
+		await emit(mock.events, "session_start", {}, context.ctx);
+		assert.equal(existsSync(agentDir), false);
+		assert.deepEqual(context.notifications, []);
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;

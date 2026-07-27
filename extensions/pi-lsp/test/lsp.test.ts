@@ -451,9 +451,9 @@ test("LSP config uses canonical paths while preserving project legacy files", ()
 		writeFileSync(userLegacy, JSON.stringify(config("user")));
 		chmodSync(userLegacy, 0o600);
 		assert.equal(loadTrustedConfig().servers[0]?.name, "user");
-		assert.equal(existsSync(path.join(agentDir, "pi-lsp.json")), true);
-		assert.equal(statSync(path.join(agentDir, "pi-lsp.json")).mode & 0o777, 0o600);
-		assert.equal(existsSync(userLegacy), false);
+		assert.equal(existsSync(path.join(agentDir, "pi-lsp.json")), false);
+		assert.equal(statSync(userLegacy).mode & 0o777, 0o600);
+		assert.match(consumeLspConfigNotice() ?? "", /using legacy lsp\.json/i);
 
 		const projectLegacy = path.join(project, ".pi", "lsp.json");
 		writeFileSync(projectLegacy, JSON.stringify(config("legacy-project")));
@@ -472,7 +472,6 @@ test("LSP config uses canonical paths while preserving project legacy files", ()
 		unlinkSync(projectLegacy);
 
 		writeFileSync(userLegacy, JSON.stringify(config("fallback")));
-		unlinkSync(path.join(agentDir, "pi-lsp.json"));
 		symlinkSync("missing-target", path.join(agentDir, "pi-lsp.json"));
 		assert.equal(loadTrustedConfig().servers[0]?.name, "fallback");
 		assert.equal(existsSync(userLegacy), true);

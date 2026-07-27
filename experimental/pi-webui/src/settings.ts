@@ -1,14 +1,8 @@
-import {
-	link as linkFile,
-	lstat,
-	mkdir,
-	readFile,
-	rename,
-	unlink,
-	writeFile,
-} from "node:fs/promises";
+import * as nodeFs from "node:fs";
+import { lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import lockfile from "proper-lockfile";
 import {
 	DEFAULT_IMAGE_LIMITS,
 	IMAGE_HARD_LIMITS,
@@ -52,14 +46,25 @@ export interface SettingsLoadResult {
 export interface SettingsFileOperations {
 	write(path: string, data: string): Promise<void>;
 	rename(source: string, destination: string): Promise<void>;
-	link(source: string, destination: string): Promise<void>;
 }
 
 const DEFAULT_FILE_OPERATIONS: SettingsFileOperations = {
 	write: (path, data) =>
 		writeFile(path, data, { encoding: "utf8", flag: "wx", mode: 0o600 }).then(() => undefined),
 	rename,
-	link: linkFile,
+};
+
+const LOCKFILE_FS_ADAPTER = {
+	mkdir: nodeFs.mkdir,
+	mkdirSync: nodeFs.mkdirSync,
+	realpath: nodeFs.realpath,
+	realpathSync: nodeFs.realpathSync,
+	rmdir: nodeFs.rmdir,
+	rmdirSync: nodeFs.rmdirSync,
+	stat: nodeFs.stat,
+	statSync: nodeFs.statSync,
+	utimes: nodeFs.utimes,
+	utimesSync: nodeFs.utimesSync,
 };
 
 export function settingsFilePath(): string {
@@ -216,21 +221,29 @@ export async function initializeSettings(
 
 	const directory = dirname(path);
 	await mkdir(directory, { recursive: true });
+	const release = await lockfile.lock(path, {
+		fs: LOCKFILE_FS_ADAPTER,
+		lockfilePath: `${path}.init-lock`,
+		realpath: false,
+		retries: { retries: 20, factor: 1.2, minTimeout: 5, maxTimeout: 50 },
+	});
 	const temporaryPath = temporaryFilePath(path);
 	try {
+		try {
+			await lstat(path);
+			return "exists";
+		} catch (error) {
+			if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+		}
 		await (operations.write ?? DEFAULT_FILE_OPERATIONS.write)(
 			temporaryPath,
 			`${JSON.stringify(DEFAULT_SETTINGS, null, 2)}\n`,
 		);
-		try {
-			await (operations.link ?? DEFAULT_FILE_OPERATIONS.link)(temporaryPath, path);
-		} catch (error) {
-			if (isNodeError(error) && error.code === "EEXIST") return "exists";
-			throw error;
-		}
+		await (operations.rename ?? DEFAULT_FILE_OPERATIONS.rename)(temporaryPath, path);
 		return "created";
 	} finally {
 		await unlink(temporaryPath).catch(() => undefined);
+		await release();
 	}
 }
 

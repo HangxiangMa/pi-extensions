@@ -1,14 +1,4 @@
-import { randomUUID } from "node:crypto";
-import {
-	chmodSync,
-	existsSync,
-	linkSync,
-	lstatSync,
-	readFileSync,
-	rmSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -284,83 +274,10 @@ function loadConfiguredConfig(cwd: string, projectTrusted: boolean): LspConfig |
 	}
 	if (!existsSync(legacyUserConfig)) return undefined;
 
-	const legacyContents = readFileSync(legacyUserConfig, "utf8");
-	const legacy = normalizeConfig(JSON.parse(legacyContents), legacyUserConfig);
-	let installedIdentity: FileIdentity;
-	try {
-		installedIdentity = installFileExclusively(
-			userConfig,
-			legacyContents,
-			statSync(legacyUserConfig).mode & 0o777,
-		);
-	} catch (error) {
-		if (existsSync(userConfig)) {
-			pendingConfigNotice = "lsp.json ignored because pi-lsp.json was created concurrently.";
-			return parseConfigFile(userConfig);
-		}
-		pendingConfigNotice = `LSP config migration failed: ${formatError(error)}. The legacy file was used for this session.`;
-		return legacy;
-	}
-	if (!fileContentsEqual(legacyUserConfig, legacyContents)) {
-		if (removeFileIfIdentityMatches(userConfig, installedIdentity, legacyContents)) {
-			pendingConfigNotice =
-				"lsp.json changed during migration; the stale pi-lsp.json snapshot was removed and the legacy file was used for this session.";
-		} else {
-			pendingConfigNotice =
-				"lsp.json changed during migration, but pi-lsp.json was replaced concurrently and takes precedence on the next load.";
-		}
-		return legacy;
-	}
-	try {
-		rmSync(legacyUserConfig);
-		pendingConfigNotice = "LSP config migrated from lsp.json to pi-lsp.json.";
-	} catch (error) {
-		pendingConfigNotice = `LSP config migrated to pi-lsp.json, but lsp.json could not be removed: ${formatError(error)}.`;
-	}
+	const legacy = parseConfigFile(legacyUserConfig);
+	pendingConfigNotice =
+		"Using legacy lsp.json; rename it to pi-lsp.json. Future settings use pi-lsp.json without modifying the legacy file.";
 	return legacy;
-}
-
-type FileIdentity = { dev: number; ino: number };
-
-function installFileExclusively(filePath: string, contents: string, mode: number): FileIdentity {
-	const tempFile = path.join(path.dirname(filePath), `.pi-lsp.json.${randomUUID()}.tmp`);
-	try {
-		writeFileSync(tempFile, contents, { encoding: "utf8", flag: "wx", mode });
-		chmodSync(tempFile, mode);
-		const identity = lstatSync(tempFile);
-		linkSync(tempFile, filePath);
-		return { dev: identity.dev, ino: identity.ino };
-	} finally {
-		try {
-			rmSync(tempFile, { force: true });
-		} catch {
-			// Preserve the migration result if best-effort temp cleanup fails.
-		}
-	}
-}
-
-function removeFileIfIdentityMatches(
-	filePath: string,
-	expected: FileIdentity,
-	expectedContents: string,
-) {
-	try {
-		const current = lstatSync(filePath);
-		if (current.dev !== expected.dev || current.ino !== expected.ino) return false;
-		if (readFileSync(filePath, "utf8") !== expectedContents) return false;
-		rmSync(filePath);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-function fileContentsEqual(filePath: string, expected: string) {
-	try {
-		return readFileSync(filePath, "utf8") === expected;
-	} catch {
-		return false;
-	}
 }
 
 export function consumeLspConfigNotice() {

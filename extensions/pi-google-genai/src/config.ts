@@ -1,19 +1,6 @@
-import { randomUUID } from "node:crypto";
-import {
-	access,
-	chmod,
-	link,
-	lstat,
-	mkdir,
-	readFile,
-	rename,
-	rm,
-	stat,
-	writeFile,
-} from "node:fs/promises";
-import { homedir } from "node:os";
+import { access, chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const DEFAULT_MODEL = "gemini-3.5-flash";
 export const DEFAULT_API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
@@ -42,7 +29,7 @@ export interface LoadedGoogleGenaiConfig {
 }
 
 export function googleGenaiConfigPath() {
-	return join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), CONFIG_FILE_NAME);
+	return join(getAgentDir(), CONFIG_FILE_NAME);
 }
 
 export function normalizeGoogleGenaiSettings(value: unknown): GoogleGenaiConfig {
@@ -191,98 +178,10 @@ async function prepareGoogleGenaiConfigPath(canonicalPath: string, warnings: str
 	if (!(await exists(legacyPath))) return canonicalPath;
 
 	await ensureConfigPermissions(legacyPath, warnings);
-	const legacyWarnings: string[] = [];
-	const legacy = await readJsonIfExists(legacyPath, legacyWarnings);
-	if (!isObject(legacy)) {
-		warnings.push(...legacyWarnings);
-		return legacyPath;
-	}
-	try {
-		const installedContents = `${JSON.stringify(legacy, null, "\t")}\n`;
-		const installedIdentity = await installPrivateConfigExclusively(
-			canonicalPath,
-			installedContents,
-		);
-		await chmod(canonicalPath, 0o600);
-		if (!(await jsonFileEquals(legacyPath, legacy))) {
-			if (await removeFileIfIdentityMatches(canonicalPath, installedIdentity, installedContents)) {
-				warnings.push(
-					`${LEGACY_CONFIG_FILE_NAME} changed during migration; the stale ${CONFIG_FILE_NAME} snapshot was removed and the legacy file was used for this session.`,
-				);
-				return legacyPath;
-			}
-			warnings.push(
-				`${LEGACY_CONFIG_FILE_NAME} changed during migration, but ${CONFIG_FILE_NAME} was replaced concurrently and takes precedence.`,
-			);
-			return canonicalPath;
-		}
-		try {
-			await rm(legacyPath);
-			warnings.push(
-				`Google GenAI config migrated from ${LEGACY_CONFIG_FILE_NAME} to ${CONFIG_FILE_NAME}.`,
-			);
-		} catch (error) {
-			warnings.push(
-				`Google GenAI config migrated to ${CONFIG_FILE_NAME}, but ${LEGACY_CONFIG_FILE_NAME} could not be removed: ${formatError(error)}.`,
-			);
-		}
-		return canonicalPath;
-	} catch (error) {
-		if (await exists(canonicalPath)) {
-			warnings.push(
-				`${LEGACY_CONFIG_FILE_NAME} ignored because ${CONFIG_FILE_NAME} was created concurrently.`,
-			);
-			return canonicalPath;
-		}
-		warnings.push(
-			`Google GenAI config migration failed: ${formatError(error)}. The legacy file was used for this session.`,
-		);
-		return legacyPath;
-	}
-}
-
-async function jsonFileEquals(filePath: string, expected: object) {
-	try {
-		return (
-			JSON.stringify(JSON.parse(await readFile(filePath, "utf8"))) === JSON.stringify(expected)
-		);
-	} catch {
-		return false;
-	}
-}
-
-type FileIdentity = Pick<Awaited<ReturnType<typeof lstat>>, "dev" | "ino">;
-
-async function installPrivateConfigExclusively(
-	filePath: string,
-	contents: string,
-): Promise<FileIdentity> {
-	const tempFile = join(dirname(filePath), `.${CONFIG_FILE_NAME}.${randomUUID()}.tmp`);
-	try {
-		await writeFile(tempFile, contents, { encoding: "utf8", flag: "wx", mode: 0o600 });
-		await chmod(tempFile, 0o600);
-		const identity = await lstat(tempFile);
-		await link(tempFile, filePath);
-		return { dev: identity.dev, ino: identity.ino };
-	} finally {
-		await rm(tempFile, { force: true }).catch(() => undefined);
-	}
-}
-
-async function removeFileIfIdentityMatches(
-	filePath: string,
-	expected: FileIdentity,
-	expectedContents: string,
-) {
-	try {
-		const current = await lstat(filePath);
-		if (current.dev !== expected.dev || current.ino !== expected.ino) return false;
-		if ((await readFile(filePath, "utf8")) !== expectedContents) return false;
-		await rm(filePath);
-		return true;
-	} catch {
-		return false;
-	}
+	warnings.push(
+		`Using legacy ${LEGACY_CONFIG_FILE_NAME}; rename it to ${CONFIG_FILE_NAME}. Future saves write ${CONFIG_FILE_NAME} without modifying the legacy file.`,
+	);
+	return legacyPath;
 }
 
 async function exists(path: string) {

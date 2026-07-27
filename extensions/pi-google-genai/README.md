@@ -53,7 +53,7 @@ Example:
 
 The file is written as `0600`.
 
-Compatibility: a valid legacy `google-genai.json` is migrated automatically to `pi-google-genai.json` while preserving private permissions. If both files exist, the new filename takes precedence.
+Compatibility: a valid legacy `google-genai.json` remains readable with a warning and private permissions and is never modified automatically; rename it to `pi-google-genai.json`. The first subsequent save writes the canonical file. If both files exist, the new filename takes precedence.
 
 Timeout precedence is: per-call `timeoutMs` parameter, `pi-google-genai.json` `timeoutMs`, then
 the 60000ms default. Timeout values must be integer milliseconds from 1 to 2147483647.

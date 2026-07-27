@@ -615,7 +615,9 @@ export class WebUIRuntime {
 	}
 
 	private async initializeSettings(ctx: ExtensionCommandContext): Promise<void> {
+		const generation = this.generation;
 		const result = await this.dependencies.initializeSettings(this.settingsPath);
+		if (generation !== this.generation || this.closed) return;
 		if (ctx.hasUI) {
 			ctx.ui.notify(
 				result === "created"
@@ -625,6 +627,7 @@ export class WebUIRuntime {
 			);
 		}
 		const loaded = await this.dependencies.loadSettings(this.settingsPath);
+		if (generation !== this.generation || this.closed) return;
 		this.applySettingsResult(loaded);
 		if (loaded.warning && ctx.hasUI) ctx.ui.notify(loaded.warning, "warning");
 		if (ctx.mode === "tui") await this.showSettings(ctx);

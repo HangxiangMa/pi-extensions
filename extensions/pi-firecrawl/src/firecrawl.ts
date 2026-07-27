@@ -175,5 +175,5 @@ export {
 	parseResponseBody,
 } from "./client.js";
 export { cleanupResponseArtifacts } from "./response-format.js";
-export { installSettingsFileExclusively, normalizeFirecrawlSettings } from "./settings.js";
+export { normalizeFirecrawlSettings } from "./settings.js";
 export { formatPersistedSelection, orderedFirecrawlTools } from "./tool-selector.js";

@@ -11,10 +11,18 @@ import {
 	writeLocalConfigObject,
 } from "../src/config.js";
 import {
-	withConfigFileLinkForTest,
+	withConfigFilePublicationForTest,
 	withConfigReplacementInstalledHookForTest,
 } from "../src/config-file.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
+
+test("missing pi-sync settings load without materializing the agent directory", async () => {
+	await withTempHome(async (agentDir) => {
+		assert.equal(existsSync(agentDir), false);
+		assert.equal(await readLocalConfigObject(), undefined);
+		assert.equal(existsSync(agentDir), false);
+	});
+});
 
 test("pi-sync uses the canonical private settings filename", async () => {
 	await withTempHome(async (agentDir) => {
@@ -95,7 +103,7 @@ test("failed atomic publication restores the exact previous private document", a
 		const before = Buffer.from(`${JSON.stringify(v3S3Settings())}\n`);
 		writeFileSync(localConfigPath(), before, { mode: 0o600 });
 		await assert.rejects(
-			withConfigFileLinkForTest(
+			withConfigFilePublicationForTest(
 				async () => {
 					const error = new Error("injected publication failure") as NodeJS.ErrnoException;
 					error.code = "EACCES";

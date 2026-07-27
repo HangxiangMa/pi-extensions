@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import { DEFAULT_STATUSLINE_DOCUMENT } from "../src/settings.js";
 import statusline from "../src/statusline.js";
 
 async function emit(
@@ -37,19 +36,20 @@ function createFooter(factory: FooterFactory) {
 	);
 }
 
-test("session start creates the editable default statusline settings", async () => {
+test("session start uses defaults without materializing missing statusline settings", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-lifecycle-"));
+	const agentDir = join(root, "agent");
 	const previous = process.env.PI_CODING_AGENT_DIR;
-	process.env.PI_CODING_AGENT_DIR = root;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
 	try {
 		const mock = createMockPi();
 		statusline(mock.pi);
 		const context = createMockContext({ mode: "print" });
 		await emit(mock.events, "session_start", {}, context.ctx);
-		const path = join(root, "pi-statusline.json");
-		assert.equal(existsSync(path), true);
-		assert.equal(readFileSync(path, "utf8"), DEFAULT_STATUSLINE_DOCUMENT);
+		await emit(mock.events, "session_start", {}, context.ctx);
+		assert.equal(existsSync(agentDir), false);
 		assert.equal(context.footer, undefined);
+		assert.deepEqual(context.notifications, []);
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;

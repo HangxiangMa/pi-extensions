@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { chmod, lstat, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -115,6 +116,21 @@ test("storage rejects malformed credentials and non-JSON-safe metadata", async (
 		}),
 		/not JSON-safe/,
 	);
+});
+
+test("missing account storage reads as empty without materializing its directory", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-accounts-store-missing-"));
+	const agentDir = join(root, "agent");
+	const file = join(agentDir, ACCOUNTS_FILE);
+	try {
+		const store = new AccountStore(new FileAccountStorageBackend(file));
+		const loaded = await store.readAsync();
+		assert.equal(loaded.version, 1);
+		assert.deepEqual(Object.keys(loaded.providers), []);
+		assert.equal(existsSync(agentDir), false);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });
 
 test("file storage creates private files and serializes concurrent updates", async () => {

@@ -120,6 +120,8 @@ The canonical file is:
 When `PI_CODING_AGENT_DIR` is set, the file is stored at
 `$PI_CODING_AGENT_DIR/pi-accounts.json` instead. Its versioned structure keeps account maps and
 active names under separate provider IDs. Credential values are private and must not be committed.
+When neither canonical nor legacy storage exists, reads use an empty in-memory store without creating
+an agent directory or file; the first account mutation creates the private canonical file.
 
 On first load, if `pi-accounts.json` does not exist and released `pi-codex-accounts.json` does, the extension:
 

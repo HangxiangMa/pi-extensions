@@ -111,7 +111,7 @@ test("config loading defaults, normalizes tools, and rejects interpolation", asy
 	});
 });
 
-test("config loading migrates to the canonical package filename with private permissions", async () => {
+test("config loading reads legacy settings without mutation and keeps private permissions", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		const legacyPath = join(agentDir, "google-genai.json");
 		const canonicalPath = join(agentDir, "pi-google-genai.json");
@@ -119,11 +119,11 @@ test("config loading migrates to the canonical package filename with private per
 		await writeFile(legacyPath, JSON.stringify({ apiKey: "test-key", model: "legacy" }), {
 			mode: 0o600,
 		});
-		const migrated = await loadGoogleGenaiConfig();
-		assert.equal(migrated.config.model, "legacy");
-		assert.match(migrated.warnings.join("\n"), /migrated/i);
-		assert.equal((await stat(canonicalPath)).mode & 0o777, 0o600);
-		await assert.rejects(stat(legacyPath));
+		const legacy = await loadGoogleGenaiConfig();
+		assert.equal(legacy.config.model, "legacy");
+		assert.match(legacy.warnings.join("\n"), /using legacy/i);
+		await assert.rejects(stat(canonicalPath));
+		assert.equal((await stat(legacyPath)).mode & 0o777, 0o600);
 
 		await writeFile(legacyPath, JSON.stringify({ model: "old" }), { mode: 0o644 });
 		await chmod(legacyPath, 0o644);
@@ -156,7 +156,7 @@ test("config loading migrates to the canonical package filename with private per
 		await symlink("missing-target", canonicalPath);
 		const fallback = await loadGoogleGenaiConfig();
 		assert.equal(fallback.config.model, "fallback");
-		assert.match(fallback.warnings.join("\n"), /migration failed/i);
+		assert.match(fallback.warnings.join("\n"), /using legacy/i);
 		assert.equal((await stat(legacyPath)).mode & 0o777, 0o600);
 	});
 });

@@ -191,6 +191,28 @@ test("init creates formatted defaults once and never overwrites existing content
 	}
 });
 
+test("concurrent init calls publish one complete default document", async () => {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-webui-settings-"));
+	const settingsPath = path.join(directory, "pi-webui.json");
+	try {
+		assert.deepEqual(
+			(
+				await Promise.all([initializeSettings(settingsPath), initializeSettings(settingsPath)])
+			).sort(),
+			["created", "exists"],
+		);
+		assert.equal(
+			await readFile(settingsPath, "utf8"),
+			`${JSON.stringify(DEFAULT_SETTINGS, null, 2)}\n`,
+		);
+		assert.deepEqual(await import("node:fs/promises").then(({ readdir }) => readdir(directory)), [
+			"pi-webui.json",
+		]);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("failed init publish leaves no canonical or temporary file", async () => {
 	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-webui-settings-"));
 	const settingsPath = path.join(directory, "pi-webui.json");
@@ -198,8 +220,8 @@ test("failed init publish leaves no canonical or temporary file", async () => {
 		await assert.rejects(
 			() =>
 				initializeSettings(settingsPath, {
-					link: async () => {
-						throw new Error("publish failed");
+					rename: async () => {
+						throw Object.assign(new Error("publish failed"), { code: "EACCES" });
 					},
 				}),
 			/publish failed/,

@@ -6,7 +6,7 @@ import test from "node:test";
 import {
 	DEFAULT_STATUSLINE_CONFIG,
 	DEFAULT_STATUSLINE_DOCUMENT,
-	loadOrCreateStatuslineSettings,
+	loadStatuslineSettingsForAgent,
 	normalizeStatuslineConfig,
 	saveStatuslineSettingsDocument,
 	settingsFilePath,
@@ -317,14 +317,14 @@ test("all named palettes, separators, empty segments, and environment independen
 	}
 });
 
-test("missing settings are atomically initialized with the editable default document", () => {
+test("missing settings use defaults without materializing a document", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-settings-"));
 	try {
-		const loaded = loadOrCreateStatuslineSettings(root);
+		const loaded = loadStatuslineSettingsForAgent(root);
 		const path = settingsFilePath(root);
-		assert.equal(loaded.source, "user");
-		assert.equal(loaded.rawDocument, DEFAULT_STATUSLINE_DOCUMENT);
-		assert.equal(readFileSync(path, "utf8"), DEFAULT_STATUSLINE_DOCUMENT);
+		assert.equal(loaded.source, "built-in");
+		assert.equal(loaded.rawDocument, undefined);
+		assert.equal(existsSync(path), false);
 		assert.deepEqual(loaded.config, DEFAULT_STATUSLINE_CONFIG);
 		assert.deepEqual(loaded.diagnostics, []);
 	} finally {
@@ -337,7 +337,7 @@ test("malformed existing settings are never overwritten", () => {
 	const path = settingsFilePath(root);
 	try {
 		writeFileSync(path, "{broken\n");
-		const loaded = loadOrCreateStatuslineSettings(root);
+		const loaded = loadStatuslineSettingsForAgent(root);
 		assert.equal(loaded.source, "built-in");
 		assert.equal(readFileSync(path, "utf8"), "{broken\n");
 		assert.match(loaded.diagnostics[0]?.message ?? "", /parse JSON/i);
@@ -353,33 +353,13 @@ test("invalid legacy settings are not migrated to the canonical path", () => {
 	const raw = `${JSON.stringify({ palette: "invalid", future: true })}\n`;
 	try {
 		writeFileSync(legacyPath, raw);
-		const loaded = loadOrCreateStatuslineSettings(root);
+		const loaded = loadStatuslineSettingsForAgent(root);
 		assert.equal(
 			loaded.diagnostics.some((item) => item.path === "palette"),
 			true,
 		);
 		assert.equal(readFileSync(legacyPath, "utf8"), raw);
 		assert.equal(existsSync(canonicalPath), false);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("a concurrent default creator wins without being overwritten", () => {
-	const root = mkdtempSync(join(tmpdir(), "pi-statusline-settings-"));
-	const path = settingsFilePath(root);
-	try {
-		const winner = `${JSON.stringify({ segments: ["model"] }, null, "\t")}\n`;
-		const loaded = loadOrCreateStatuslineSettings(root, {
-			linkSync(_temporaryPath, canonicalPath) {
-				writeFileSync(canonicalPath, winner, { flag: "wx" });
-				throw Object.assign(new Error("already exists"), { code: "EEXIST" });
-			},
-		});
-		assert.equal(loaded.source, "user");
-		assert.deepEqual(loaded.config.segments, ["model"]);
-		assert.equal(readFileSync(path, "utf8"), winner);
-		assert.deepEqual(readdirSync(root), ["pi-statusline.json"]);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

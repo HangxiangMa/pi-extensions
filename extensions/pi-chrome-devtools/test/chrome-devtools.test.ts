@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,7 +8,6 @@ import chromeDevtools, {
 	commandCompletions,
 	formatHostForUrl,
 	hasParentPathSegment,
-	installSettingsFileExclusively,
 	isLocalDevToolsHost,
 	isPathInsideRoot,
 	normalizeChromeDevtoolsSettings,
@@ -70,21 +69,6 @@ test("chrome-devtools settings normalize ordered unique tool names", () => {
 	assert.deepEqual(orderedChromeDevtoolsTools(new Set([EVALUATE_TOOL])), [EVALUATE_TOOL]);
 });
 
-test("chrome-devtools installs migrated settings exclusively without leaving temp files", async () => {
-	await withTempAgentDir(async (agentDir) => {
-		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
-		await installSettingsFileExclusively(settingsPath, "first\n");
-
-		await assert.rejects(
-			installSettingsFileExclusively(settingsPath, "replacement\n"),
-			(error: NodeJS.ErrnoException) => error.code === "EEXIST",
-		);
-
-		assert.equal(readFileSync(settingsPath, "utf8"), "first\n");
-		assert.deepEqual(readdirSync(agentDir), [NEW_SETTINGS_FILE]);
-	});
-});
-
 test("chrome-devtools preserves active tools when settings are missing", async () => {
 	await withTempAgentDir(async () => {
 		const chromeDevtoolsModule = await importFreshChromeDevtools();
@@ -114,7 +98,7 @@ test("chrome-devtools loads the new settings file without a migration warning", 
 	});
 });
 
-test("chrome-devtools migrates a legacy-only settings file and warns", async () => {
+test("chrome-devtools reads legacy-only settings without modifying either path", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		writeSettings(agentDir, LEGACY_SETTINGS_FILE, [LIST_PAGES_TOOL]);
 		const chromeDevtoolsModule = await importFreshChromeDevtools();
@@ -125,15 +109,10 @@ test("chrome-devtools migrates a legacy-only settings file and warns", async () 
 		await mock.events.get("session_start")?.[0]?.({}, ctx);
 
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LIST_PAGES_TOOL]);
-		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, [LIST_PAGES_TOOL]);
-		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), false);
-		assert.match(notifications[0]?.message ?? "", /migrated/i);
-		assert.match(notifications[0]?.message ?? "", /pi-chrome-devtools-settings\.json/);
-		assert.match(notifications[0]?.message ?? "", /pi-chrome-devtools\.json/);
-
-		await mock.commands.get("chrome-devtools")?.handler("disable", ctx);
-		await mock.commands.get("chrome-devtools")?.handler("status", ctx);
-		assert.match(notifications.at(-1)?.message ?? "", /migrated/i);
+		assert.equal(existsSync(path.join(agentDir, NEW_SETTINGS_FILE)), false);
+		assert.deepEqual(readSettings(agentDir, LEGACY_SETTINGS_FILE).tools, [LIST_PAGES_TOOL]);
+		assert.match(notifications[0]?.message ?? "", /using legacy/i);
+		assert.match(notifications[0]?.message ?? "", /rename.*pi-chrome-devtools\.json/i);
 	});
 });
 

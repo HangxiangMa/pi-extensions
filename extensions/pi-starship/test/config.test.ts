@@ -8,7 +8,6 @@ import {
 	BUILT_IN_CONFIG,
 	BUILT_IN_EXAMPLE,
 	CONFIG_FILE_NAME,
-	loadOrCreateStarshipConfig,
 	loadStarshipConfig,
 	MODULE_NAMES,
 	settingsFilePath,
@@ -24,6 +23,7 @@ test("config path uses the agent directory and missing settings use built-in def
 		assert.equal(loaded.source, "built-in");
 		assert.equal(loaded.config.format, BUILT_IN_CONFIG.format);
 		assert.deepEqual(loaded.diagnostics, []);
+		assert.equal(existsSync(path), false);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -134,54 +134,6 @@ test("catalog-owned module options normalize values and diagnose invalid input",
 		invalid.diagnostics.map((item) => `${item.path}: ${item.message}`).join("\n"),
 		/package\.version_format.*string|package\.future|nodejs\.detect_files/iu,
 	);
-});
-
-test("missing settings are atomically initialized from the readable built-in example", () => {
-	const root = mkdtempSync(join(tmpdir(), "pi-starship-config-"));
-	const path = join(root, CONFIG_FILE_NAME);
-	try {
-		const loaded = loadOrCreateStarshipConfig(path);
-		assert.equal(loaded.source, "user");
-		assert.equal(loaded.rawDocument, BUILT_IN_EXAMPLE);
-		assert.equal(readFileSync(path, "utf8"), BUILT_IN_EXAMPLE);
-		assert.deepEqual(loaded.diagnostics, []);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("default initialization never overwrites an existing malformed document", () => {
-	const root = mkdtempSync(join(tmpdir(), "pi-starship-config-"));
-	const path = join(root, CONFIG_FILE_NAME);
-	try {
-		const malformed = "format = [\n";
-		writeFileSync(path, malformed);
-		const loaded = loadOrCreateStarshipConfig(path);
-		assert.equal(loaded.source, "built-in");
-		assert.equal(loaded.rawDocument, malformed);
-		assert.equal(readFileSync(path, "utf8"), malformed);
-		assert.match(loaded.diagnostics[0]?.message ?? "", /parse TOML/i);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("default initialization failures keep built-in settings and report the error", () => {
-	const root = mkdtempSync(join(tmpdir(), "pi-starship-config-"));
-	const path = join(root, CONFIG_FILE_NAME);
-	try {
-		const loaded = loadOrCreateStarshipConfig(path, {
-			linkSync() {
-				throw new Error("publish failed");
-			},
-		});
-		assert.equal(loaded.source, "built-in");
-		assert.equal(existsSync(path), false);
-		assert.match(loaded.diagnostics[0]?.message ?? "", /create.*publish failed/i);
-		assert.deepEqual(readdirSync(root), []);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
 });
 
 test("valid TOML loads root, palette, module, and extension status settings", () => {

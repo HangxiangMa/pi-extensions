@@ -17,7 +17,7 @@ import {
 	readLocalConfigObject,
 	updateLocalConfig,
 } from "../src/config.js";
-import { withConfigFileLinkForTest, withLocalConfigFileLock } from "../src/config-file.js";
+import { withConfigFilePublicationForTest, withLocalConfigFileLock } from "../src/config-file.js";
 import {
 	addStorageConnection,
 	addSyncSetup,
@@ -582,7 +582,7 @@ test("settings UI restores its displayed value when a private atomic save is rej
 				return harness.result;
 			},
 		});
-		await withConfigFileLinkForTest(
+		await withConfigFilePublicationForTest(
 			async () => {
 				const error = new Error("injected settings failure") as NodeJS.ErrnoException;
 				error.code = "EACCES";
