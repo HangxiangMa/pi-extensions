@@ -63,7 +63,7 @@ Before merge, reverting the follow-up commit restores the gzip implementation wi
 - [x] Update shared contract and route coverage in `extensions/pi-sync/test/git-backend-contract.test.ts` and `extensions/pi-sync/test/git-routes.test.ts` only where the storage representation changes; verify push, pull, sync, status, diff, history, rollback, doctor, automatic sync, fresh-cache recovery, concurrent writers, and post-push reconciliation continue to operate through the backend-neutral interface.
 - [x] Audit the final diff against `docs/extension-conventions.md` and `docs/extension-settings.md`, specifically asynchronous cancellation/disposal/shutdown, temporary-file cleanup, post-`await` state revalidation, secret-safe output, unknown-field preservation, state identity compatibility, and unchanged S3/R2/WebDAV behavior; audit found no accepted deviations: the new temporary resource is request-scoped and unconditionally removed, each post-I/O continuation either passes/rechecks cancellation or performs cleanup, no settings/state/S3/WebDAV code changed, and all output remains metadata-only and redacted.
 - [x] Run `npm run check`, `just pack-sync`, `npm audit --omit=dev`, an isolated offline Pi RPC extension-load smoke, and a real local-bare-repository Git smoke; `npm run check` passed all 1,681 tests plus Biome/boundaries/typechecks, the pack contained 42 expected files, production audit reported zero vulnerabilities, RPC returned successful `get_state`, and the real local-bare backend/route smoke passed.
-- [ ] Archive this completed plan under `docs/plans/archived/`, commit the revision on `feat/pi-sync-git-backend`, push it to PR #434, update the PR description to describe Git-native blobs rather than gzip, and verify GitHub CI passes before requesting merge.
+- [x] Archive this completed plan under `docs/plans/archived/`, commit the revision on `feat/pi-sync-git-backend`, push it to PR #434, update the PR description to describe Git-native blobs rather than gzip, and verify GitHub CI passes before requesting merge; implementation commit `6b87d5b` and GitHub Actions run `30257024926` passed, and the PR body now documents native blobs and the 1,681-test/42-file evidence.
 
 ## Completion Checklist
 
@@ -73,4 +73,4 @@ Before merge, reverting the follow-up commit restores the gzip implementation wi
 - [x] No single payload above the documented GitHub-compatible limit can reach commit construction.
 - [x] S3/R2/WebDAV snapshot bytes, settings/state identities, routes, and tests remain compatible.
 - [x] Exact leases, cancellation boundaries, process cleanup, redaction, history, rollback, and outcome reconciliation remain verified.
-- [ ] PR #434 documentation, commit history, package dry run, local checks, and GitHub CI all describe and validate the revised representation.
+- [x] PR #434 documentation, commit history, package dry run, local checks, and GitHub CI all describe and validate the revised representation.
