@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
+import { chooseS3Credentials } from "../src/s3-credentials-ui.js";
 import { promptSecret } from "../src/secret-input.js";
 
 test("masked secret input never renders plaintext and submits pasted text", async () => {
@@ -24,6 +25,18 @@ test("masked secret input never renders plaintext and submits pasted text", asyn
 	});
 
 	assert.equal(await promptSecret(ctx, "WebDAV password"), secret);
+});
+
+test("stored S3 credentials reject a blank access key ID", async () => {
+	const { ctx, notifications } = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		select: async () => "Store credentials privately",
+		input: async () => "",
+	});
+
+	assert.equal(await chooseS3Credentials(ctx), undefined);
+	assert.match(notifications.at(-1)?.message ?? "", /Access key ID is required/i);
 });
 
 test("masked secret input cancellation returns without a secret", async () => {

@@ -35,6 +35,9 @@ export async function repairableWebDavDestinationName(signal?: AbortSignal) {
 			profile?.kind === "webdav" &&
 			(Object.hasOwn(target, "bucket") ||
 				Object.hasOwn(target, "prefix") ||
+				["endpoint", "region", "accessKeyId", "secretAccessKey", "sessionToken"].some((field) =>
+					Object.hasOwn(profile, field),
+				) ||
 				typeof profile.password !== "string" ||
 				profile.password.length === 0)
 		);

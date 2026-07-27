@@ -1,5 +1,4 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { requiredInput } from "./manager-helpers.js";
 import { promptSecret } from "./secret-input.js";
 
 export interface ChosenS3Credentials {
@@ -76,7 +75,7 @@ export async function chooseS3Credentials(
 			ready: false,
 		};
 	}
-	const accessKeyId = await requiredInput(ctx, "Access key ID", "access-key-id");
+	const accessKeyId = await requiredCredentialInput(ctx, "Access key ID", "access-key-id");
 	if (!accessKeyId) return undefined;
 	const secretAccessKey = await promptSecret(ctx, "Secret access key");
 	if (secretAccessKey === undefined) return undefined;
@@ -85,4 +84,19 @@ export async function chooseS3Credentials(
 		summary: "Stored privately (values hidden)",
 		ready: true,
 	};
+}
+
+async function requiredCredentialInput(
+	ctx: ExtensionCommandContext,
+	title: string,
+	placeholder: string,
+) {
+	const value = await ctx.ui.input(title, placeholder);
+	if (value === undefined) return undefined;
+	const normalized = value.trim();
+	if (!normalized) {
+		ctx.ui.notify(`${title} is required.`, "warning");
+		return undefined;
+	}
+	return normalized.includes("<") || normalized.includes(">") ? undefined : normalized;
 }

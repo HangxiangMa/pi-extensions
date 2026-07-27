@@ -533,6 +533,7 @@ export function statePathForConfig(config: AnySyncConfig) {
 			: JSON.stringify([
 					target,
 					normalizeEndpointIdentity(config.backend.profile.url),
+					config.backend.profile.username,
 					normalizeRemoteKeySegment(config.backend.destination.path),
 					normalizeRemoteKeySegment(config.profile),
 				]);
@@ -550,7 +551,10 @@ export function statePathForPartialConfig(partial: PartialConfig) {
 			profile,
 			backend: {
 				type: "webdav",
-				profile: { url: normalizeConfiguredString(partial.url) ?? "" },
+				profile: {
+					url: normalizeConfiguredString(partial.url) ?? "",
+					username: normalizeConfiguredString(partial.username) ?? "",
+				},
 				destination: {
 					path: normalizeWebDavPath(partial.path),
 					namespace: profile,

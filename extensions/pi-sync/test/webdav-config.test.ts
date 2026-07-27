@@ -50,6 +50,23 @@ test("version 2 resolves a WebDAV profile and destination without environment ov
 	});
 });
 
+test("WebDAV state identity changes with the authenticated username", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(localConfigPath(), JSON.stringify(settings));
+		const first = await loadConfig();
+		if (first.backend.type !== "webdav") return;
+		const second = {
+			...first,
+			backend: {
+				...first.backend,
+				profile: { ...first.backend.profile, username: "other-user" },
+			},
+		};
+		assert.notEqual(statePathForConfig(first), statePathForConfig(second));
+	});
+});
+
 test("WebDAV settings reject aliased profiles that resolve to one remote destination", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });

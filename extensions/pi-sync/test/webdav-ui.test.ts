@@ -9,6 +9,7 @@ import {
 import { loadConfig, localConfigPath, readLocalConfigObject } from "../src/config.js";
 import sync from "../src/sync.js";
 import {
+	repairableWebDavDestinationName,
 	showAddWebDavStorageProfile,
 	showAddWebDavTarget,
 	showEditWebDavStorageProfile,
@@ -241,6 +242,32 @@ test("Add destination can create a WebDAV connection without leaving the manager
 		assert.equal(requireRecord(saved?.targets).work.profile, "dav");
 		assert.equal(requireRecord(saved?.targets).work.path, "pi-sync");
 		assert.doesNotMatch(rendered.join("\n"), /app-password/);
+	});
+});
+
+test("WebDAV repair detection includes incompatible profile-only fields", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			localConfigPath(),
+			JSON.stringify({
+				version: 2,
+				activeTarget: "webdav",
+				profiles: {
+					webdav: {
+						kind: "webdav",
+						url: "https://cloud.example.com/dav",
+						username: "user",
+						password: "secret",
+						accessKeyId: "incompatible",
+					},
+				},
+				targets: {
+					webdav: { profile: "webdav", path: "pi-sync", namespace: "webdav" },
+				},
+			}),
+		);
+		assert.equal(await repairableWebDavDestinationName(), "webdav");
 	});
 });
 
