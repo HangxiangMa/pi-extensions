@@ -137,9 +137,9 @@ export async function status(
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 	ctx.ui.notify(
 		[
-			`target: ${config.target ?? "default"}`,
-			`storage profile: ${config.storageProfile ?? "default"}`,
-			`destination: ${safeTerminalText(backend.destination)}`,
+			`sync setup: ${config.target ?? "default"}`,
+			`storage connection: ${config.storageProfile ?? "default"}`,
+			`storage location: ${safeTerminalText(backend.destination)}`,
 			`publication safety: ${publicationCapabilityDescription(backend.capability)}`,
 			`remote namespace: ${config.profile}`,
 			`sync files: ${normalizeSyncFiles(config.syncFiles).join(", ") || "none"}`,
@@ -175,9 +175,9 @@ export async function diff(
 		...syncSessionsWarnings(config),
 	];
 	const header = [
-		`target: ${config.target ?? "default"}`,
-		`storage profile: ${config.storageProfile ?? "default"}`,
-		`destination: ${safeTerminalText(backend.destination)}`,
+		`sync setup: ${config.target ?? "default"}`,
+		`storage connection: ${config.storageProfile ?? "default"}`,
+		`storage location: ${safeTerminalText(backend.destination)}`,
 		`sync files: ${normalizeSyncFiles(config.syncFiles).join(", ") || "none"}`,
 		`extra files: ${config.extraFiles.join(", ") || "none"}`,
 		`sessions: ${config.syncSessions ? "included" : "excluded"}`,
@@ -214,13 +214,13 @@ export async function doctor(
 		profile = config.profile;
 		snapshotOptions = snapshotOptionsForContext(ctx, config);
 		messages.push(
-			`config: ok (target ${config.target ?? "default"})`,
+			`config: ok (sync setup ${config.target ?? "default"})`,
 			`sync files: ${normalizeSyncFiles(config.syncFiles).join(", ") || "none"}`,
 			`extra files: ${config.extraFiles.join(", ") || "none"}`,
 			`sessions: ${config.syncSessions ? "included" : "excluded"}`,
 		);
 		backendSummary = [
-			`destination: ${safeTerminalText(backend.destination)}`,
+			`storage location: ${safeTerminalText(backend.destination)}`,
 			`publication safety: ${publicationCapabilityDescription(backend.capability)}`,
 		];
 		const warnings = [
@@ -397,7 +397,7 @@ export async function push(
 	if (!options.silent) {
 		ctx.ui.notify(
 			[
-				`Pushed ${upload.files.length} files from target “${config.target ?? "default"}” as ${result.head.snapshotId}.`,
+				`Pushed ${upload.files.length} files from sync setup “${config.target ?? "default"}” as ${result.head.snapshotId}.`,
 				...result.warnings,
 			]
 				.filter(Boolean)
@@ -510,7 +510,7 @@ export async function syncBoth(
 	) {
 		if (!options.silent) {
 			ctx.ui.notify(
-				`Target “${config.target ?? "default"}” manages no files. Choose synced content in /sync Settings before syncing.`,
+				`Sync setup “${config.target ?? "default"}” includes no files. Choose included content in /sync Settings before syncing.`,
 				"warning",
 			);
 		}
@@ -621,7 +621,7 @@ export async function history(
 				`${index + 1}. ${item.createdAt} · ${safeTerminalText(item.machine)} · ${item.snapshotId}${item.snapshotId === currentSnapshot ? " (current)" : ""}${item.syncSessions ? " · sessions" : ""}`,
 		);
 		const selected = await ctx.ui.select(
-			`History for target “${safeTerminalText(config.target ?? "default")}”\n\nChoose a snapshot to preview rollback.`,
+			`History for sync setup “${safeTerminalText(config.target ?? "default")}”\n\nChoose a snapshot to preview rollback.`,
 			[...labels, "Back"],
 		);
 		if (!selected || selected === "Back") return;
@@ -663,7 +663,7 @@ export async function rollback(
 			config.target !== expectedSelection.target)
 	) {
 		throw new Error(
-			"Sync target or destination changed while history was open; reopen history and retry.",
+			"Sync setup or storage location changed while history was open; reopen history and retry.",
 		);
 	}
 	const decoded = await backend.readSnapshot(target, options.signal);
@@ -745,7 +745,7 @@ export async function rollback(
 	if (options.signal?.aborted) return;
 	ctx.ui.notify(
 		[
-			`Rolled back target “${config.target ?? "default"}” to ${target}; latest: ${result.head.snapshotId}. Backup: ${backup}`,
+			`Rolled back sync setup “${config.target ?? "default"}” to ${target}; latest: ${result.head.snapshotId}. Backup: ${backup}`,
 			...result.warnings,
 		]
 			.filter(Boolean)

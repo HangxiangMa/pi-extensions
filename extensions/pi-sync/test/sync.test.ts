@@ -67,10 +67,10 @@ test("sync command help and errors use the public command name", async () => {
 
 const expectedSyncMenuOptions = [
 	"help — Show command usage",
-	"use — Switch the current sync target",
+	"use — Switch the current sync setup",
 	"init — Create local config template",
 	"config — Show resolved configuration",
-	"files — Choose synced files",
+	"files — Choose included content",
 	"status — Show sync status",
 	"diff — Show local/remote diff",
 	"doctor — Check config, secrets, and lock state",
@@ -301,7 +301,10 @@ test("sync files has a protocol-safe non-TUI summary", async () => {
 
 		await mock.commands.get("sync")?.handler("files", ctx);
 		assert.equal(customCalls, 0);
-		assert.match(notifications.at(-1)?.message ?? "", /selected files.*syncFiles.*pi-sync\.json/is);
+		assert.match(
+			notifications.at(-1)?.message ?? "",
+			/included content.*syncFiles.*pi-sync\.json/is,
+		);
 	});
 });
 
@@ -738,7 +741,7 @@ test("sync config output reports session sync and privacy warning", async () => 
 			await mock.commands.get("sync")?.handler("config", ctx);
 		});
 
-		assert.match(notifications[0]?.message ?? "", /syncSessions: enabled/);
+		assert.match(notifications[0]?.message ?? "", /sessions: included/);
 		assert.match(notifications[0]?.message ?? "", /session JSONL can contain/);
 	});
 });

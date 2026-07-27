@@ -7,10 +7,10 @@ const YES_FLAG_COMPLETIONS: readonly CommandArgumentCompletion[] = [
 ];
 export const SYNC_COMMANDS = [
 	{ name: "help", description: "Show command usage" },
-	{ name: "use", description: "Switch the current sync target", usageSuffix: " <target>" },
+	{ name: "use", description: "Switch the current sync setup", usageSuffix: " <setup>" },
 	{ name: "init", description: "Create local config template" },
 	{ name: "config", description: "Show resolved configuration" },
-	{ name: "files", description: "Choose synced files" },
+	{ name: "files", description: "Choose included content" },
 	{ name: "status", description: "Show sync status" },
 	{ name: "diff", description: "Show local/remote diff" },
 	{ name: "doctor", description: "Check config, secrets, and lock state" },
@@ -35,7 +35,7 @@ export function setSyncTargetCompletions(names: readonly string[]) {
 const TARGET_FLAG_COMPLETION = {
 	value: "--target",
 	label: "--target",
-	description: "Address a target without switching",
+	description: "Address a sync setup without switching",
 } as const;
 const SYNC_FLAG_COMPLETIONS: Record<string, readonly CommandArgumentCompletion[]> = {
 	config: [TARGET_FLAG_COMPLETION],
@@ -83,7 +83,7 @@ export function parseOptions(args: string[]): CommandOptions {
 		else if (arg === "--stale") stale = true;
 		else if (arg === "--target") {
 			const name = args[index + 1];
-			if (!name || name.startsWith("-")) throw new Error("--target requires a target name.");
+			if (!name || name.startsWith("-")) throw new Error("--target requires a sync setup name.");
 			if (target !== undefined) throw new Error("--target may be provided only once.");
 			target = name;
 			index += 1;
@@ -129,7 +129,7 @@ export function validateCommandOptions(command: string, options: CommandOptions)
 	if (options.args.length !== expectedValues) {
 		if (command === "rollback")
 			throw new Error("Usage: /sync rollback <snapshot-id> [--yes] [--target <name>]");
-		if (command === "use") throw new Error("Usage: /sync use <target>");
+		if (command === "use") throw new Error("Usage: /sync use <setup>");
 		throw new Error(`Unexpected argument for /sync ${command}: ${options.args.join(" ")}`);
 	}
 }
@@ -189,7 +189,7 @@ function completeTargetValue(prefix: string, current: string) {
 		? matches.map((name) => ({
 				value: `${completionPrefix}${name}`,
 				label: name,
-				description: "Sync target",
+				description: "Sync setup",
 			}))
 		: null;
 }
@@ -230,6 +230,6 @@ export function usage() {
 	return [
 		"Usage: /sync <command>",
 		`Commands: ${commands}`,
-		"Settings: use /sync init or edit profiles and targets in ~/.pi/agent/pi-sync.json (or $PI_CODING_AGENT_DIR/pi-sync.json). Existing S3-only PI_SYNC_* overrides still work but are deprecated for future major-version removal.",
+		"Settings: use /sync init or edit storage connections (`profiles`) and sync setups (`targets`) in ~/.pi/agent/pi-sync.json (or $PI_CODING_AGENT_DIR/pi-sync.json). Existing S3-only PI_SYNC_* overrides still work but are deprecated for future major-version removal.",
 	].join("\n");
 }

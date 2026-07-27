@@ -39,9 +39,7 @@ test("Git setup stores a backend-specific destination without credentials", asyn
 			input: async () => inputs.shift(),
 			select: async (title: string) => {
 				reviews.push(title);
-				return title === "Automatic sync for this target"
-					? "Keep automatic sync off"
-					: "Save setup";
+				return title === "Automatic sync for this setup" ? "Keep automatic sync off" : "Save setup";
 			},
 		});
 		assert.equal(await showGitSetup(ctx, "home"), true);
@@ -55,7 +53,7 @@ test("Git setup stores a backend-specific destination without credentials", asyn
 			namespace: "home",
 		});
 		assert.equal(config.autoSync, false);
-		assert.match(reviews.join("\n"), /Auto-sync: Off/);
+		assert.match(reviews.join("\n"), /Automatic sync: Off/);
 		assert.doesNotMatch(reviews.join("\n"), /token|password/i);
 		assert.match(reviews.join("\n"), /existing non-interactive Git\/SSH credentials/i);
 	});
@@ -78,7 +76,7 @@ test("Git setup review preserves a credential-free custom SSH port", async () =>
 			input: async () => inputs.shift(),
 			select: async (title: string) => {
 				reviews.push(title);
-				return title === "Automatic sync for this target" ? "Keep automatic sync off" : "Cancel";
+				return title === "Automatic sync for this setup" ? "Keep automatic sync off" : "Cancel";
 			},
 		});
 		assert.equal(await showGitSetup(ctx, "home"), false);
@@ -103,7 +101,7 @@ test("Git settings ignore deprecated S3 automatic-sync environment overrides", a
 				mode: "tui",
 				input: async () => setupInputs.shift(),
 				select: async (title: string) =>
-					title === "Automatic sync for this target" ? "Enable automatic sync" : "Save setup",
+					title === "Automatic sync for this setup" ? "Enable automatic sync" : "Save setup",
 			});
 			assert.equal(await showGitSetup(setup.ctx, "home"), true);
 			let rendered = "";
@@ -190,11 +188,12 @@ test("Git is available through the existing setup manager and config route", asy
 		assert.match(output, /kind: git/i);
 		assert.match(output, /branch: pi-sync\/home/i);
 		assert.doesNotMatch(output, /accessKeyId|secretAccessKey|password:/i);
-		assert.match(rendered.join("\n"), /Consistency: Exact expected-branch lease/);
+		assert.doesNotMatch(rendered.join("\n"), /Consistency:/);
+		assert.match(rendered.join("\n"), /Storage: Git · github · pi-sync\/home/);
 	});
 });
 
-test("Git saved connections and targets add and edit through one destination model", async () => {
+test("Git storage connections and sync setups add and edit through one model", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		const setupInputs = [
@@ -217,12 +216,12 @@ test("Git saved connections and targets add and edit through one destination mod
 			hasUI: true,
 			mode: "tui",
 			input: async () => addProfileInputs.shift(),
-			select: async () => "Add connection",
+			select: async () => "Add storage connection",
 		});
 		assert.equal(await showAddGitStorageProfile(addProfile.ctx), true);
 
 		const addTargetInputs = ["pi-sync/work", "settings", "work"];
-		const targetSelections = ["Minimal settings", "Keep automatic sync off", "Add target"];
+		const targetSelections = ["Minimal settings", "Keep automatic sync off", "Add sync setup"];
 		const addTarget = createMockContext({
 			hasUI: true,
 			mode: "tui",
@@ -244,7 +243,7 @@ test("Git saved connections and targets add and edit through one destination mod
 			hasUI: true,
 			mode: "tui",
 			input: async () => invalidTargetInputs.shift(),
-			select: async () => "Save target",
+			select: async () => "Save sync setup",
 		});
 		assert.equal(
 			await showEditGitTarget(invalidTarget.ctx, {
@@ -266,7 +265,7 @@ test("Git saved connections and targets add and edit through one destination mod
 			hasUI: true,
 			mode: "tui",
 			input: async () => editProfileInputs.shift(),
-			select: async () => "Save profile",
+			select: async () => "Save storage connection",
 		});
 		await showEditGitStorageProfile(editProfile.ctx, "backup", {
 			kind: "git",
@@ -278,7 +277,7 @@ test("Git saved connections and targets add and edit through one destination mod
 			hasUI: true,
 			mode: "tui",
 			input: async () => editTargetInputs.shift(),
-			select: async () => "Save target",
+			select: async () => "Save sync setup",
 		});
 		await showEditGitTarget(editTarget.ctx, {
 			settingsVersion: 2,

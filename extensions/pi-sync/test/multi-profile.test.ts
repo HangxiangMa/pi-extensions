@@ -185,17 +185,14 @@ test("bare sync menu shows current state and goal-oriented actions", async () =>
 
 		await mock.commands.get("sync")?.handler("", ctx);
 
-		assert.match(calls[0]?.title ?? "", /Current target: home/);
-		assert.match(calls[0]?.title ?? "", /Cloudflare R2.*personal-pi/);
-		assert.match(calls[0]?.title ?? "", /Synced content: 1 built-in group.*Sessions: Off/);
-		assert.match(calls[0]?.title ?? "", /Auto-sync: On/);
-		assert.match(calls[0]?.title ?? "", /Last applied snapshot: snapshot-home-123/);
-		assert.match(calls[0]?.title ?? "", /Remote changes: Not checked/);
+		assert.match(calls[0]?.title ?? "", /Current sync setup: home/);
+		assert.match(calls[0]?.title ?? "", /Storage: Cloudflare R2.*r2.*personal-pi/);
+		assert.match(calls[0]?.title ?? "", /Included: 1 built-in group.*Sessions off/);
+		assert.match(calls[0]?.title ?? "", /Automatic sync: On/);
+		assert.match(calls[0]?.title ?? "", /Last applied: snapshot-home-123/);
+		assert.match(calls[0]?.title ?? "", /Remote status: Not checked/);
 		assert.deepEqual(calls[0]?.options, [
 			"Sync now (recommended)",
-			"Pull from remote",
-			"Push to remote",
-			"Switch target",
 			"Status & changes",
 			"Settings",
 			"More…",
@@ -223,19 +220,73 @@ test("main menu exposes shallow secondary navigation with Back", async () => {
 
 		assert.match(calls[1]?.title ?? "", /More options/);
 		assert.deepEqual(calls[1]?.options, [
-			"Manage destinations",
-			"History & recovery",
+			"Pull from remote…",
+			"Push to remote…",
+			"Sync setups…",
+			"Storage connections…",
+			"History & recovery…",
 			"Help",
 			"Back",
 		]);
-		assert.match(calls[2]?.title ?? "", /Current target: home/);
+		assert.match(calls[2]?.title ?? "", /Current sync setup: home/);
 	});
 });
 
-test("main menu dispatches explicit pull and push routes", async () => {
+test("Sync setups expose current state and symmetric detail actions", async () => {
 	await withTempSettings(async () => {
 		writeSettings(v2Settings());
-		const choices = ["Pull from remote", "Push to remote", undefined];
+		const choices = ["More…", "Sync setups…", "home (current)", "Back", "Back", undefined];
+		const calls: Array<{ title: string; options: string[] }> = [];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async (title: string, options: string[]) => {
+				calls.push({ title, options });
+				return choices.shift();
+			},
+		});
+
+		await showSyncManager(ctx, async () => undefined);
+
+		assert.equal(calls[2]?.title, "Sync setups");
+		assert.deepEqual(calls[2]?.options, ["Add sync setup", "home (current)", "Back"]);
+		assert.match(calls[3]?.title ?? "", /Sync setup “home”/);
+		assert.match(calls[3]?.title ?? "", /Status: Current/);
+		assert.match(calls[3]?.title ?? "", /Storage connection: r2/);
+		assert.deepEqual(calls[3]?.options, ["Edit sync setup…", "Remove sync setup…", "Back"]);
+	});
+});
+
+test("Storage connections show type, credential source, dependents, and unavailable removal", async () => {
+	await withTempSettings(async () => {
+		writeSettings(v2Settings());
+		const choices = ["More…", "Storage connections…", "r2", "Back", "Back", undefined];
+		const calls: Array<{ title: string; options: string[] }> = [];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async (title: string, options: string[]) => {
+				calls.push({ title, options });
+				return choices.shift();
+			},
+		});
+
+		await showSyncManager(ctx, async () => undefined);
+
+		assert.equal(calls[2]?.title, "Storage connections");
+		assert.deepEqual(calls[2]?.options, ["Add storage connection", "r2", "Back"]);
+		assert.match(calls[3]?.title ?? "", /Storage connection “r2”/);
+		assert.match(calls[3]?.title ?? "", /Credentials: Settings file/);
+		assert.match(calls[3]?.title ?? "", /Used by: home/);
+		assert.match(calls[3]?.title ?? "", /Remove unavailable/);
+		assert.deepEqual(calls[3]?.options, ["Edit storage connection…", "Back"]);
+	});
+});
+
+test("More dispatches explicit pull and push routes", async () => {
+	await withTempSettings(async () => {
+		writeSettings(v2Settings());
+		const choices = ["More…", "Pull from remote…", "More…", "Push to remote…", undefined];
 		const routes: string[] = [];
 		const titles: string[] = [];
 		const { ctx } = createMockContext({
@@ -260,27 +311,28 @@ test("main menu dispatches explicit pull and push routes", async () => {
 		});
 
 		assert.deepEqual(routes, ["pull", "push"]);
-		assert.match(titles[1] ?? "", /Last applied snapshot: after-pull/);
-		assert.match(titles[2] ?? "", /Last applied snapshot: after-push/);
+		assert.match(titles[2] ?? "", /Last applied: after-pull/);
+		assert.match(titles[4] ?? "", /Last applied: after-push/);
 	});
 });
 
 test("main menu exits the stale continuation after an applied pull", async () => {
 	await withTempSettings(async () => {
 		writeSettings(v2Settings());
+		const choices = ["More…", "Pull from remote…"];
 		let selectCalls = 0;
 		const { ctx } = createMockContext({
 			hasUI: true,
 			mode: "rpc",
 			select: async () => {
 				selectCalls += 1;
-				return "Pull from remote";
+				return choices.shift();
 			},
 		});
 
 		await showSyncManager(ctx, async () => "applied");
 
-		assert.equal(selectCalls, 1);
+		assert.equal(selectCalls, 2);
 	});
 });
 
@@ -338,12 +390,12 @@ test("bare sync disables mutations and exposes recovery while a live lock is hel
 		await mock.commands.get("sync")?.handler("", ctx);
 
 		assert.match(title, /Operation in progress: pull/);
-		assert.doesNotMatch(options.join("\n"), /Sync now|Pull|Push|Settings|Switch target/);
-		assert.deepEqual(options, ["Status & changes", "History & recovery", "Help"]);
+		assert.doesNotMatch(options.join("\n"), /Sync now|Pull|Push|Settings|Switch sync setup/);
+		assert.deepEqual(options, ["Status & changes", "History & recovery…", "Help"]);
 	});
 });
 
-test("menu hides transfer actions when no synced content is selected", async () => {
+test("menu hides transfer actions when no included content is selected", async () => {
 	await withTempSettings(async () => {
 		const settings = v2Settings();
 		settings.targets.home.syncFiles = [];
@@ -365,21 +417,21 @@ test("menu hides transfer actions when no synced content is selected", async () 
 
 		await mock.commands.get("sync")?.handler("", ctx);
 
-		assert.match(title, /No synced content is selected/);
-		assert.deepEqual(options, ["Settings", "Switch target", "Status & changes", "More…"]);
+		assert.match(title, /No included content is selected/);
+		assert.deepEqual(options, ["Settings", "Status & changes", "More…"]);
 	});
 });
 
 test("menu pull and push checks cancel before commit with distinct feedback", async () => {
 	for (const scenario of [
 		{
-			label: "Pull from remote",
+			label: "Pull from remote…",
 			route: "pull",
 			loading: /Checking remote changes/,
 			cancelled: /Pull check cancelled; no local files were changed/,
 		},
 		{
-			label: "Push to remote",
+			label: "Push to remote…",
 			route: "push",
 			loading: /Preparing push preview/,
 			cancelled: /Push preparation cancelled; no remote files were changed/,
@@ -387,7 +439,7 @@ test("menu pull and push checks cancel before commit with distinct feedback", as
 	] as const) {
 		await withTempSettings(async () => {
 			writeSettings(v2Settings());
-			const choices = [scenario.label, undefined];
+			const choices = ["More…", scenario.label, undefined];
 			let requestedRoute = "";
 			let signalAborted = false;
 			let commitStarted = false;
@@ -446,7 +498,7 @@ test("menu push and pull preview concrete effects and cancellation is read-only"
 			return new Response(null, { status: 404 });
 		}) as typeof globalThis.fetch;
 		try {
-			const choices = ["Push to remote", undefined];
+			const choices = ["More…", "Push to remote…", undefined];
 			let confirmTitle = "";
 			let confirmMessage = "";
 			const mock = createMockPi();
@@ -499,7 +551,7 @@ test("menu push and pull preview concrete effects and cancellation is read-only"
 			throw new Error(`Unexpected request: ${url.pathname}`);
 		}) as typeof globalThis.fetch;
 		try {
-			const choices = ["Pull from remote", undefined];
+			const choices = ["More…", "Pull from remote…", undefined];
 			let confirmTitle = "";
 			let confirmMessage = "";
 			const mock = createMockPi();
@@ -538,7 +590,7 @@ test("menu pull failure preserves local files and suggests the next action", asy
 		const originalFetch = globalThis.fetch;
 		globalThis.fetch = (async () => new Response(null, { status: 404 })) as typeof globalThis.fetch;
 		try {
-			const choices = ["Pull from remote", undefined];
+			const choices = ["More…", "Pull from remote…", undefined];
 			const mock = createMockPi();
 			sync(mock.pi);
 			const { ctx, notifications } = createMockContext({
@@ -597,7 +649,7 @@ test("Sync now read-only check stops before transport when Escape wins command r
 	});
 });
 
-test("switch target asks to pull by default and declining leaves local files unchanged", async () => {
+test("switch sync setup asks to pull by default and declining leaves local files unchanged", async () => {
 	await withTempSettings(async () => {
 		const settings = v2Settings();
 		settings.profiles.s3 = {
@@ -619,7 +671,7 @@ test("switch target asks to pull by default and declining leaves local files unc
 		writeSettings(settings);
 		const mock = createMockPi();
 		sync(mock.pi);
-		const selections = ["Switch target", "work", "Switch to work", undefined];
+		const selections = ["Switch sync setup", "work · s3 · company-pi", "Switch to work", undefined];
 		const calls: Array<{ title: string; options: string[] }> = [];
 		let pullPrompt = "";
 		const { ctx, notifications } = createMockContext({
@@ -637,16 +689,16 @@ test("switch target asks to pull by default and declining leaves local files unc
 
 		await mock.commands.get("sync")?.handler("", ctx);
 
-		assert.match(calls[1]?.title ?? "", /Current target: home/);
+		assert.match(calls[1]?.title ?? "", /Current sync setup: home/);
 		assert.deepEqual(calls[1]?.options, [
-			"home (current) · r2 · personal-pi · 1 groups · Sessions: Off",
-			"work · s3 · company-pi · 1 groups · Sessions: Off",
+			"home (current) · r2 · personal-pi",
+			"work · s3 · company-pi",
 			"Back",
 		]);
 		assert.match(calls[2]?.title ?? "", /From: home/);
 		assert.match(calls[2]?.title ?? "", /To: work/);
 		assert.match(calls[2]?.title ?? "", /ask whether to review a pull/i);
-		assert.match(pullPrompt, /Review a pull for target “work” now\?/);
+		assert.match(pullPrompt, /Review a pull for sync setup “work” now\?/);
 		assert.match(pullPrompt, /exact local writes and deletions/i);
 		assert.equal((await readLocalConfigObject())?.activeTarget, "work");
 		assert.match(notifications.at(-1)?.message ?? "", /Switched to “work”.*not pulled/i);
@@ -676,7 +728,7 @@ test("accepting the default post-switch prompt starts a pull", async () => {
 			return "applied";
 		});
 
-		assert.match(promptTitle, /Review a pull for target “work” now\?/);
+		assert.match(promptTitle, /Review a pull for sync setup “work” now\?/);
 		assert.equal(pullCalls, 1);
 		assert.equal(pulledTarget, "work");
 		assert.equal(result.pullApplied, true);
@@ -720,7 +772,7 @@ test("automatic post-switch pulls reject no-UI modes before changing the active 
 			try {
 				await assert.rejects(
 					async () => await mock.commands.get("sync")?.handler("use work", ctx),
-					/automatic target pulls require interactive confirmation/i,
+					/automatic setup pulls require interactive confirmation/i,
 				);
 			} finally {
 				globalThis.fetch = originalFetch;
@@ -838,7 +890,7 @@ test("declining a post-switch pull review reports that the selected target remai
 			assert.equal(readFileSync(settingsPath, "utf8"), '{"local":true}\n');
 			assert.match(
 				notifications.at(-1)?.message ?? "",
-				/Pull cancelled; target “work” remains active and synced files were not changed/,
+				/Pull cancelled; sync setup “work” remains current and synced files were not changed/,
 			);
 		} finally {
 			globalThis.fetch = originalFetch;
@@ -860,7 +912,7 @@ test("post-switch pulls stay pinned to the selected target across concurrent act
 				return new Response(null, { status: 404 });
 			}) as typeof globalThis.fetch;
 			try {
-				const selections = ["Switch target", "work", "Switch to work"];
+				const selections = ["Switch sync setup", "work · r2 · personal-pi", "Switch to work"];
 				const mock = createMockPi();
 				sync(mock.pi);
 				const { ctx } = createMockContext({
@@ -940,7 +992,7 @@ test("cancelling an automatic post-switch pull reports that the target remains s
 			throw new Error("Transport must not start after cancellation");
 		}) as typeof globalThis.fetch;
 		try {
-			const selections = ["Switch target", "work", "Switch to work"];
+			const selections = ["Switch sync setup", "work · r2 · personal-pi", "Switch to work"];
 			const mock = createMockPi();
 			sync(mock.pi);
 			const { ctx, notifications } = createMockContext({
@@ -961,7 +1013,7 @@ test("cancelling an automatic post-switch pull reports that the target remains s
 			assert.equal((await readLocalConfigObject())?.activeTarget, "work");
 			assert.match(
 				notifications.at(-1)?.message ?? "",
-				/Pull cancelled; target “work” remains active and synced files were not changed/,
+				/Pull cancelled; sync setup “work” remains current and synced files were not changed/,
 			);
 		} finally {
 			globalThis.fetch = originalFetch;
@@ -1028,7 +1080,7 @@ test("settings menu uses SettingsList and persists target-switch choices in plac
 
 		assert.match(initialRender, /Pi Sync Settings/);
 		assert.match(initialRender, /Automatic sync/);
-		assert.match(initialRender, /After target switch/);
+		assert.match(initialRender, /After switching setup/);
 		assert.doesNotMatch(initialRender, /Type to search/);
 		const saved = await readLocalConfigObject();
 		assert.equal(saved?.targetSwitchAction, "pull");
@@ -1073,7 +1125,7 @@ test("settings list restores the displayed value when an atomic save is rejected
 
 		await mock.commands.get("sync")?.handler("", ctx);
 
-		assert.match(afterFailure, /After target switch/);
+		assert.match(afterFailure, /After switching setup/);
 		assert.match(afterFailure, /Ask before pull/);
 		assert.doesNotMatch(afterFailure, /Start pull/);
 		assert.match(notifications.at(-1)?.message ?? "", /settings save failed/i);
@@ -1113,11 +1165,11 @@ test("legacy settings screen omits the unavailable target-switch setting", async
 		await mock.commands.get("sync")?.handler("", ctx);
 
 		assert.match(rendered, /Automatic sync/);
-		assert.doesNotMatch(rendered, /After target switch/);
+		assert.doesNotMatch(rendered, /After switching setup/);
 	});
 });
 
-test("cancelling a target switch leaves settings byte-for-byte unchanged", async () => {
+test("cancelling a sync setup switch leaves settings byte-for-byte unchanged", async () => {
 	await withTempSettings(async () => {
 		const settings = v2Settings();
 		settings.targets.work = { ...settings.targets.home, namespace: "work" };
@@ -1125,7 +1177,7 @@ test("cancelling a target switch leaves settings byte-for-byte unchanged", async
 		const before = JSON.stringify(await readLocalConfigObject());
 		const mock = createMockPi();
 		sync(mock.pi);
-		const selections = ["Switch target", "work", "Cancel", undefined];
+		const selections = ["Switch sync setup", "work · r2 · personal-pi", "Cancel", undefined];
 		const { ctx } = createMockContext({
 			hasUI: true,
 			mode: "tui",
@@ -1153,7 +1205,7 @@ test("first-time R2 setup recommends home/r2/pi-sync defaults without raw path q
 			"Recommended Pi settings",
 			"Enable automatic sync",
 			"Keep sessions off (recommended)",
-			"Save setup",
+			"Save sync setup",
 			undefined,
 		];
 		const inputs = ["https://account.r2.cloudflarestorage.com"];
@@ -1187,7 +1239,7 @@ test("first-time R2 setup recommends home/r2/pi-sync defaults without raw path q
 		assert.deepEqual(inputTitles, ["Cloudflare R2 endpoint"]);
 		assert.match(rendered.join("\n"), /Bucket must already exist/);
 		assert.match(rendered.join("\n"), /pi-sync\/profiles\/home/);
-		assert.match(notifications.at(-1)?.message ?? "", /Destination “home” is ready/);
+		assert.match(notifications.at(-1)?.message ?? "", /Sync setup “home” is ready/);
 		assert.doesNotMatch(rendered.join("\n"), /setup-access-secret|setup-secret-value/);
 	});
 });
@@ -1205,7 +1257,7 @@ test("first-time S3 setup asks only for the existing bucket and derives work def
 			"Minimal settings",
 			"Keep automatic sync off",
 			"Keep sessions off (recommended)",
-			"Save setup",
+			"Save sync setup",
 			undefined,
 		];
 		const inputs = ["https://s3.example.com", "ap-northeast-1", "company-pi"];
@@ -1247,7 +1299,7 @@ test("first-time S3 setup can store masked credentials entirely through TUI", as
 			"Minimal settings",
 			"Keep automatic sync off",
 			"Keep sessions off (recommended)",
-			"Save setup",
+			"Save sync setup",
 			undefined,
 		];
 		const inputs = ["https://s3.example.com", "us-east-1", "personal-pi", "access-key-id"];
@@ -1291,7 +1343,7 @@ test("first-time setup keeps advanced profile and remote-location customization"
 			"Minimal settings",
 			"Keep automatic sync off",
 			"Keep sessions off (recommended)",
-			"Save setup",
+			"Save sync setup",
 			undefined,
 		];
 		const inputs = [
@@ -1345,19 +1397,19 @@ test("cancelling first-time setup creates no settings or state", async () => {
 	});
 });
 
-test("manage flow recommends the current profile bucket and derives a separate namespace", async () => {
+test("add sync setup recommends the current connection bucket and derives a separate namespace", async () => {
 	await withTempSettings(async () => {
 		writeSettings(v2Settings());
 		const mock = createMockPi();
 		sync(mock.pi);
 		const selections = [
 			"More…",
-			"Manage destinations",
-			"Add destination",
+			"Sync setups…",
+			"Add sync setup",
 			"r2",
 			"Same bucket as “home” (recommended)",
 			"Recommended Pi settings",
-			"Add target",
+			"Add sync setup",
 			undefined,
 		];
 		const inputs = ["work"];
@@ -1382,11 +1434,11 @@ test("manage flow recommends the current profile bucket and derives a separate n
 		assert.equal(work?.prefix, "pi-sync");
 		assert.equal(work?.namespace, "work");
 		assert.match(rendered.join("\n"), /personal-pi.*pi-sync\/profiles\/work/s);
-		assert.match(notifications.at(-1)?.message ?? "", /Added sync target “work”/);
+		assert.match(notifications.at(-1)?.message ?? "", /Added sync setup “work”/);
 	});
 });
 
-test("synced-content UI fits narrow and wide terminal widths with textual state", async () => {
+test("included-content UI fits narrow and wide terminal widths with textual state", async () => {
 	await withTempSettings(async () => {
 		const settings = v2Settings();
 		settings.activeTarget = "家庭與工作設定";
@@ -1475,7 +1527,7 @@ test("TUI history selects a snapshot, previews concrete rollback, and cancellati
 
 			await mock.commands.get("sync")?.handler("history", ctx);
 
-			assert.match(historyTitle, /History for target “home”/);
+			assert.match(historyTitle, /History for sync setup “home”/);
 			assert.match(confirmMessage, /Snapshot: remote-snapshot/);
 			assert.match(confirmMessage, /Update locally: settings\.json/);
 			assert.equal(putCalls, 0);
@@ -1506,7 +1558,7 @@ test("Sync now reports nothing selected without network or state mutation", asyn
 			await mock.commands.get("sync")?.handler("sync", ctx);
 
 			assert.equal(requests, 0);
-			assert.match(notifications.at(-1)?.message ?? "", /manages no files/);
+			assert.match(notifications.at(-1)?.message ?? "", /includes no files/);
 			assert.equal(existsSync(path.join(stateDir(), "targets")), false);
 		} finally {
 			globalThis.fetch = originalFetch;
@@ -1554,7 +1606,7 @@ test("direct use switches targets and target options parse exactly", async () =>
 		assert.equal((await readLocalConfigObject())?.activeTarget, "work");
 		assert.match(notifications.at(-1)?.message ?? "", /confirmation requires TUI mode/);
 		assert.equal(parseOptions(["--target", "home"]).target, "home");
-		assert.throws(() => parseOptions(["--target"]), /requires a target name/);
+		assert.throws(() => parseOptions(["--target"]), /requires a sync setup name/);
 		assert.throws(() => parseOptions(["--unknown"]), /Unknown sync option/);
 	});
 });

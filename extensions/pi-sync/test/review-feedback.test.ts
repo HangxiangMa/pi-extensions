@@ -64,7 +64,7 @@ test("duplicate destination validation uses normalized S3 key segments", async (
 
 		await assert.rejects(
 			addSyncTarget("work", duplicate),
-			/duplicates the remote destination of “home”/,
+			/duplicates the storage location of “home”/,
 		);
 
 		settings.targets.work = duplicate;
@@ -81,7 +81,7 @@ test("recovery menu passes explicit stale confirmation for unreadable lock metad
 		writeFileSync(lockPath(), "");
 		const mock = createMockPi();
 		sync(mock.pi);
-		const selections = ["History & recovery", "Recover stale operation", undefined];
+		const selections = ["History & recovery…", "Recover stale operation", undefined];
 		const { ctx, notifications } = createMockContext({
 			hasUI: true,
 			mode: "tui",

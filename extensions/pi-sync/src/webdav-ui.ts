@@ -109,24 +109,24 @@ export async function showRepairWebDavDestination(
 	const review = await select(
 		ctx,
 		[
-			"Repair WebDAV destination",
+			"Repair WebDAV storage location",
 			"",
-			`Destination: ${safe(targetName)}`,
-			`Saved connection: ${safe(profileName)}`,
-			`Remote path: ${safe(`${destination.path}/profiles/${destination.namespace}/`)}`,
+			`Sync setup: ${safe(targetName)}`,
+			`Storage connection: ${safe(profileName)}`,
+			`Storage location: ${safe(`${destination.path}/profiles/${destination.namespace}/`)}`,
 			`Password: configured (value hidden)`,
 			...(removedTargetFields.length > 0
-				? [`Remove incompatible destination fields: ${removedTargetFields.join(", ")}`]
+				? [`Remove incompatible storage-location fields: ${removedTargetFields.join(", ")}`]
 				: []),
 			...(removedProfileFields.length > 0
 				? [`Remove incompatible connection fields: ${removedProfileFields.join(", ")}`]
 				: []),
-			"Unknown settings and every other destination remain unchanged.",
+			"Unknown settings and every other sync setup remain unchanged.",
 		].join("\n"),
-		["Repair destination", "Cancel"],
+		["Repair storage location", "Cancel"],
 		signal,
 	);
-	if (review !== "Repair destination") return false;
+	if (review !== "Repair storage location") return false;
 	const nextProfile: Record<string, unknown> = { ...profile, ...connection };
 	for (const field of removedProfileFields) delete nextProfile[field];
 	const nextTarget: Record<string, unknown> = { ...target, ...destination };
@@ -139,7 +139,7 @@ export async function showRepairWebDavDestination(
 	resolveV2PartialConfig(next, targetName);
 	throwIfAborted(signal);
 	await awaitActive(signal, replaceLocalConfigDocument(document, next));
-	ctx.ui.notify(`Repaired WebDAV destination “${safe(targetName)}”.`, "info");
+	ctx.ui.notify(`Repaired WebDAV storage location for sync setup “${safe(targetName)}”.`, "info");
 	return true;
 }
 
@@ -168,7 +168,7 @@ export async function showWebDavSetup(
 	if (!content) return false;
 	const automatic = await select(
 		ctx,
-		"Automatic sync for this target",
+		"Automatic sync for this setup",
 		["Enable automatic sync", "Keep automatic sync off", "Cancel"],
 		signal,
 	);
@@ -181,15 +181,15 @@ export async function showWebDavSetup(
 		[
 			"Review WebDAV setup",
 			"",
-			`Target: ${safe(targetName)}`,
-			`Storage profile: ${profileName} (WebDAV)`,
+			`Sync setup: ${safe(targetName)}`,
+			`Storage connection: ${profileName} (WebDAV)`,
 			`URL: ${displayUrl(connection.url)}`,
-			`Remote path: ${safe(`${destination.path}/profiles/${destination.namespace}/`)}`,
+			`Storage location: ${safe(`${destination.path}/profiles/${destination.namespace}/`)}`,
 			"Username: stored in the private settings file (value hidden)",
 			"Password: configured (value hidden)",
 			`Conditional writes: /sync doctor verifies atomic If-Match and If-None-Match support before publication.`,
-			`Synced content: ${content.length} built-in groups · Sessions: ${sessions ? "On — privacy warning acknowledged" : "Off"}`,
-			`Auto-sync: ${automatic === "Enable automatic sync" ? "On" : "Off"}`,
+			`Included content: ${content.length} built-in groups · Sessions: ${sessions ? "On — privacy warning acknowledged" : "Off"}`,
+			`Automatic sync: ${automatic === "Enable automatic sync" ? "On" : "Off"}`,
 		].join("\n"),
 		["Save setup", "Cancel"],
 		signal,
@@ -213,7 +213,7 @@ export async function showWebDavSetup(
 			},
 		}),
 	);
-	ctx.ui.notify(`Destination “${safe(targetName)}” is ready. Use Sync now when ready.`, "info");
+	ctx.ui.notify(`Sync setup “${safe(targetName)}” is ready. Use Sync now when ready.`, "info");
 	return true;
 }
 
@@ -231,11 +231,11 @@ export async function showAddWebDavTarget(
 	if (!content) return false;
 	const review = await select(
 		ctx,
-		`Review WebDAV target\n\nTarget: ${safe(name)}\nStorage profile: ${safe(profile)}\nRemote path: ${safe(`${destination.path}/profiles/${destination.namespace}/`)}\nSynced content: ${content.length} built-in groups · Sessions: Off\nSwitching later does not sync until its reviewed pull.`,
-		["Add target", "Cancel"],
+		`Review WebDAV sync setup\n\nSync setup: ${safe(name)}\nStorage connection: ${safe(profile)}\nStorage location: ${safe(`${destination.path}/profiles/${destination.namespace}/`)}\nIncluded content: ${content.length} built-in groups · Sessions: Off\nAdding this setup does not sync or modify remote data.`,
+		["Add sync setup", "Cancel"],
 		signal,
 	);
-	if (review !== "Add target") return false;
+	if (review !== "Add sync setup") return false;
 	throwIfAborted(signal);
 	await awaitActive(
 		signal,
@@ -249,7 +249,7 @@ export async function showAddWebDavTarget(
 			extraFiles: [],
 		}),
 	);
-	ctx.ui.notify(`Added sync target “${safe(name)}”.`, "info");
+	ctx.ui.notify(`Added sync setup “${safe(name)}”.`, "info");
 	return true;
 }
 
@@ -277,17 +277,17 @@ export async function showEditWebDavTarget(
 	if (!destination) return false;
 	const review = await select(
 		ctx,
-		`Review target “${safe(partial.target)}”\n\nPath: ${safe(partial.path ?? "pi-sync")} → ${safe(destination.path)}\nNamespace: ${safe(partial.profile ?? partial.target)} → ${safe(destination.namespace)}\nSaving changes future sync destination only; it does not move or delete remote data.`,
-		["Save target", "Cancel"],
+		`Review sync setup “${safe(partial.target)}”\n\nPath: ${safe(partial.path ?? "pi-sync")} → ${safe(destination.path)}\nNamespace: ${safe(partial.profile ?? partial.target)} → ${safe(destination.namespace)}\nSaving changes the future storage location only; it does not move or delete remote data.`,
+		["Save sync setup", "Cancel"],
 		signal,
 	);
-	if (review !== "Save target") return false;
+	if (review !== "Save sync setup") return false;
 	throwIfAborted(signal);
 	await awaitActive(
 		signal,
 		updateSyncTarget(partial.target, (target) => ({ ...target, ...destination })),
 	);
-	ctx.ui.notify(`Saved target “${safe(partial.target)}”.`, "info");
+	ctx.ui.notify(`Saved sync setup “${safe(partial.target)}”.`, "info");
 	return true;
 }
 
@@ -295,7 +295,7 @@ export async function showAddWebDavStorageProfile(
 	ctx: ExtensionCommandContext,
 	signal?: AbortSignal,
 ) {
-	const name = await requiredInput(ctx, "Name the storage profile", "webdav", signal);
+	const name = await requiredInput(ctx, "Name this storage connection", "webdav", signal);
 	if (!name) return false;
 	const url = await requiredInput(
 		ctx,
@@ -312,14 +312,14 @@ export async function showAddWebDavStorageProfile(
 	if (!connection) return false;
 	const review = await select(
 		ctx,
-		`Review saved connection\n\nName: ${safe(name)}\nType: WebDAV\nURL: ${displayUrl(connection.url)}\nUsername: stored privately (value hidden)\nPassword: configured (value hidden)`,
-		["Add profile", "Cancel"],
+		`Review storage connection\n\nName: ${safe(name)}\nType: WebDAV\nURL: ${displayUrl(connection.url)}\nUsername: stored privately (value hidden)\nPassword: configured (value hidden)\nAdding a connection does not contact the server or start syncing.`,
+		["Add storage connection", "Cancel"],
 		signal,
 	);
-	if (review !== "Add profile") return false;
+	if (review !== "Add storage connection") return false;
 	throwIfAborted(signal);
 	await awaitActive(signal, addStorageProfile(name, { kind: "webdav", ...connection }));
-	ctx.ui.notify(`Added storage profile “${safe(name)}”.`, "info");
+	ctx.ui.notify(`Added storage connection “${safe(name)}”.`, "info");
 	return true;
 }
 
@@ -328,6 +328,7 @@ export async function showEditWebDavStorageProfile(
 	name: string,
 	profile: Record<string, unknown>,
 	signal?: AbortSignal,
+	affectedSetups?: string[],
 ) {
 	const url = await requiredInput(
 		ctx,
@@ -365,21 +366,25 @@ export async function showEditWebDavStorageProfile(
 	if (!connection) return false;
 	const review = await select(
 		ctx,
-		`Review connection\n\nSaved connection: ${safe(name)}\nURL: ${displayUrl(connection.url)}\nUsername: stored privately (value hidden)\nPassword: ${replacePassword ? "will be replaced" : "unchanged"} (value hidden)`,
-		["Save profile", "Cancel"],
+		`Review storage connection\n\nStorage connection: ${safe(name)}\nURL: ${displayUrl(String(profile.url ?? "https://invalid.invalid"))} → ${displayUrl(connection.url)}\nUsername: stored privately (value hidden)\nPassword: ${replacePassword ? "will be replaced" : "unchanged"} (value hidden)\nAffected sync setups: ${affectedSetups && affectedSetups.length > 0 ? affectedSetups.map(safe).join(", ") : "None"}\nSaving changes future storage access for every affected setup; it does not move remote data.`,
+		["Save storage connection", "Cancel"],
 		signal,
 	);
-	if (review !== "Save profile") return false;
+	if (review !== "Save storage connection") return false;
 	throwIfAborted(signal);
 	await awaitActive(
 		signal,
-		updateStorageProfile(name, (current) => ({
-			...current,
-			...connection,
-			...(replacePassword ? { password } : {}),
-		})),
+		updateStorageProfile(
+			name,
+			(current) => ({
+				...current,
+				...connection,
+				...(replacePassword ? { password } : {}),
+			}),
+			affectedSetups,
+		),
 	);
-	ctx.ui.notify(`Saved storage profile “${safe(name)}”.`, "info");
+	ctx.ui.notify(`Saved storage connection “${safe(name)}”.`, "info");
 	return true;
 }
 

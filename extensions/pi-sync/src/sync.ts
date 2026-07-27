@@ -298,14 +298,14 @@ async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions)
 	ctx.ui.notify(
 		[
 			"pi-sync config:",
-			`target: ${partial.target ?? "default"}`,
-			`storage profile: ${partial.storageProfile ?? "default"}`,
+			`sync setup: ${partial.target ?? "default"}`,
+			`storage connection: ${partial.storageProfile ?? "default"}`,
 			...storageLines,
-			`autoSync: ${isEnabled(s3 ? (partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC) : partial.autoSync, true) ? "enabled" : "disabled"}`,
-			`syncFiles: ${normalizeSyncFiles(partial.syncFiles).join(", ") || "none"}`,
-			`syncSessions: ${syncSessions ? "enabled" : "disabled"}`,
-			`extraFiles: ${normalizeExtraFiles(partial.extraFiles).join(", ") || "none"}`,
-			`local config: ${localConfigPath()}`,
+			`automatic sync: ${isEnabled(s3 ? (partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC) : partial.autoSync, true) ? "enabled" : "disabled"}`,
+			`included built-ins: ${normalizeSyncFiles(partial.syncFiles).join(", ") || "none"}`,
+			`sessions: ${syncSessions ? "included" : "not included"}`,
+			`extra included files: ${normalizeExtraFiles(partial.extraFiles).join(", ") || "none"}`,
+			`settings file: ${localConfigPath()}`,
 			...warnings,
 		].join("\n"),
 		warnings.length > 0 ? "warning" : "info",
@@ -340,7 +340,7 @@ function configStorageLines(partial: Awaited<ReturnType<typeof loadPartialConfig
 				`accessKeyId: ${partial.accessKeyId ? redact(partial.accessKeyId) : "missing"}`,
 				`secretAccessKey: ${partial.secretAccessKey ? "configured" : "missing"}`,
 				`sessionToken: ${partial.sessionToken ? "configured" : "not configured"}`,
-				`profile: ${partial.profile ?? DEFAULT_PROFILE}`,
+				`namespace: ${partial.profile ?? DEFAULT_PROFILE}`,
 				`prefix: ${partial.prefix ?? DEFAULT_PREFIX}`,
 			];
 	}

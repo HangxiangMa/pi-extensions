@@ -21,7 +21,7 @@ export async function showGitSetup(
 	targetName: string,
 	signal?: AbortSignal,
 ) {
-	const profileName = await requiredInput(ctx, "Name this saved Git connection", "git", signal);
+	const profileName = await requiredInput(ctx, "Name this Git storage connection", "git", signal);
 	if (!profileName) return false;
 	const remoteInput = await requiredInput(
 		ctx,
@@ -33,7 +33,7 @@ export async function showGitSetup(
 	const destination = await promptGitDestination(ctx, targetName, signal);
 	if (!destination) return false;
 	const automatic = await ctx.ui.select(
-		"Automatic sync for this target",
+		"Automatic sync for this setup",
 		["Enable automatic sync", "Keep automatic sync off", "Cancel"],
 		{ signal },
 	);
@@ -49,15 +49,15 @@ export async function showGitSetup(
 	if (!remote) return false;
 	const choice = await ctx.ui.select(
 		[
-			"Review Git setup",
+			"Review Git sync setup",
 			"",
-			`Target: ${safeTerminalText(targetName)}`,
-			`Saved connection: ${safeTerminalText(profileName)} (Git)`,
+			`Sync setup: ${safeTerminalText(targetName)}`,
+			`Storage connection: ${safeTerminalText(profileName)} (Git)`,
 			`Remote: ${safeGitRemote(remote)}`,
 			`Owned branch: ${safeTerminalText(destination.branch)}`,
-			`Remote directory: ${safeTerminalText(`${destination.directory}/profiles/${destination.namespace}/`)}`,
-			`Synced content: ${DEFAULT_SYNC_FILES.length} built-in groups · Sessions: Off`,
-			`Auto-sync: ${automatic === "Enable automatic sync" ? "On" : "Off"}`,
+			`Storage location: ${safeTerminalText(`${destination.directory}/profiles/${destination.namespace}/`)}`,
+			`Included content: ${DEFAULT_SYNC_FILES.length} built-in groups · Sessions: Off`,
+			`Automatic sync: ${automatic === "Enable automatic sync" ? "On" : "Off"}`,
 			"Authentication: existing non-interactive Git/SSH credentials; no credentials are stored by pi-sync.",
 			"The remote repository must already exist. The owned branch may be created on first push.",
 		].join("\n"),
@@ -80,14 +80,14 @@ export async function showGitSetup(
 	});
 	if (signal?.aborted) return true;
 	ctx.ui.notify(
-		`Saved Git destination “${safeTerminalText(targetName)}”. Run /sync doctor.`,
+		`Saved Git sync setup “${safeTerminalText(targetName)}”. Run /sync doctor.`,
 		"info",
 	);
 	return true;
 }
 
 export async function showAddGitStorageProfile(ctx: ExtensionCommandContext, signal?: AbortSignal) {
-	const name = await requiredInput(ctx, "Name this saved Git connection", "git", signal);
+	const name = await requiredInput(ctx, "Name this Git storage connection", "git", signal);
 	if (!name) return false;
 	const remoteInput = await requiredInput(
 		ctx,
@@ -105,15 +105,15 @@ export async function showAddGitStorageProfile(ctx: ExtensionCommandContext, sig
 	}
 	if (!remote) return false;
 	const choice = await ctx.ui.select(
-		`Review saved connection\n\nName: ${safeTerminalText(name)}\nType: Git\nRemote: ${safeGitRemote(remote)}\nCredentials: existing Git/SSH authentication (not stored)`,
-		["Add connection", "Cancel"],
+		`Review storage connection\n\nName: ${safeTerminalText(name)}\nType: Git\nRemote: ${safeGitRemote(remote)}\nCredentials: existing Git/SSH authentication (not stored)\nAdding a connection does not contact the remote or start syncing.`,
+		["Add storage connection", "Cancel"],
 		{ signal },
 	);
 	throwIfAborted(signal);
-	if (choice !== "Add connection") return false;
+	if (choice !== "Add storage connection") return false;
 	await addStorageProfile(name, { kind: "git", remote });
 	if (signal?.aborted) return true;
-	ctx.ui.notify(`Added saved connection “${safeTerminalText(name)}”.`, "info");
+	ctx.ui.notify(`Added storage connection “${safeTerminalText(name)}”.`, "info");
 	return true;
 }
 
@@ -122,6 +122,7 @@ export async function showEditGitStorageProfile(
 	name: string,
 	profile: Record<string, unknown>,
 	signal?: AbortSignal,
+	affectedSetups?: string[],
 ) {
 	const remoteInput = await requiredInput(
 		ctx,
@@ -141,15 +142,19 @@ export async function showEditGitStorageProfile(
 	}
 	if (!remote) return false;
 	const choice = await ctx.ui.select(
-		`Review connection\n\nSaved connection: ${safeTerminalText(name)}\nRemote: ${safeGitRemote(remote)}\nChanging it does not move or delete remote history.`,
-		["Save profile", "Cancel"],
+		`Review storage connection\n\nStorage connection: ${safeTerminalText(name)}\nRemote: ${safeGitRemote(String(profile.remote ?? "missing"))} → ${safeGitRemote(remote)}\nAffected sync setups: ${affectedSetups && affectedSetups.length > 0 ? affectedSetups.map(safeTerminalText).join(", ") : "None"}\nSaving changes future storage access for every affected setup; it does not move or delete remote history.`,
+		["Save storage connection", "Cancel"],
 		{ signal },
 	);
 	throwIfAborted(signal);
-	if (choice !== "Save profile") return false;
-	await updateStorageProfile(name, (current) => ({ ...current, kind: "git", remote }));
+	if (choice !== "Save storage connection") return false;
+	await updateStorageProfile(
+		name,
+		(current) => ({ ...current, kind: "git", remote }),
+		affectedSetups,
+	);
 	if (signal?.aborted) return true;
-	ctx.ui.notify(`Saved connection “${safeTerminalText(name)}”.`, "info");
+	ctx.ui.notify(`Saved storage connection “${safeTerminalText(name)}”.`, "info");
 	return true;
 }
 
@@ -162,7 +167,7 @@ export async function showAddGitTarget(
 	const destination = await promptGitDestination(ctx, name, signal);
 	if (!destination) return false;
 	const preset = await ctx.ui.select(
-		"Choose synced content",
+		"Choose included content",
 		["Recommended Pi settings", "Minimal settings", "Cancel"],
 		{ signal },
 	);
@@ -171,19 +176,19 @@ export async function showAddGitTarget(
 	const syncFiles =
 		preset === "Minimal settings" ? ["settings.json", "AGENTS.md"] : [...DEFAULT_SYNC_FILES];
 	const automatic = await ctx.ui.select(
-		"Automatic sync for this target",
+		"Automatic sync for this setup",
 		["Enable automatic sync", "Keep automatic sync off", "Cancel"],
 		{ signal },
 	);
 	throwIfAborted(signal);
 	if (!automatic || automatic === "Cancel") return false;
 	const choice = await ctx.ui.select(
-		`Review Git target\n\nTarget: ${safeTerminalText(name)}\nSaved connection: ${safeTerminalText(profile)}\nOwned branch: ${safeTerminalText(destination.branch)}\nRemote directory: ${safeTerminalText(`${destination.directory}/profiles/${destination.namespace}/`)}\nSynced content: ${syncFiles.length} built-in groups · Sessions: Off\nAuto-sync: ${automatic === "Enable automatic sync" ? "On" : "Off"}`,
-		["Add target", "Cancel"],
+		`Review Git sync setup\n\nSync setup: ${safeTerminalText(name)}\nStorage connection: ${safeTerminalText(profile)}\nOwned branch: ${safeTerminalText(destination.branch)}\nStorage location: ${safeTerminalText(`${destination.directory}/profiles/${destination.namespace}/`)}\nIncluded content: ${syncFiles.length} built-in groups · Sessions: Off\nAutomatic sync: ${automatic === "Enable automatic sync" ? "On" : "Off"}`,
+		["Add sync setup", "Cancel"],
 		{ signal },
 	);
 	throwIfAborted(signal);
-	if (choice !== "Add target") return false;
+	if (choice !== "Add sync setup") return false;
 	await addSyncTarget(name, {
 		profile,
 		...destination,
@@ -193,7 +198,7 @@ export async function showAddGitTarget(
 		extraFiles: [],
 	});
 	if (signal?.aborted) return true;
-	ctx.ui.notify(`Added sync target “${safeTerminalText(name)}”.`, "info");
+	ctx.ui.notify(`Added sync setup “${safeTerminalText(name)}”.`, "info");
 	return true;
 }
 
@@ -202,7 +207,7 @@ export async function showEditGitTarget(
 	partial: PartialConfig,
 	signal?: AbortSignal,
 ) {
-	if (!partial.target) throw new Error("Git target is not configured.");
+	if (!partial.target) throw new Error("Git sync setup is not configured.");
 	const targetName = partial.target;
 	const destination = await promptGitDestination(ctx, targetName, signal, partial);
 	if (!destination) return false;
@@ -219,15 +224,15 @@ export async function showEditGitTarget(
 		return false;
 	}
 	const choice = await ctx.ui.select(
-		`Review target “${safeTerminalText(targetName)}”\n\nBranch: ${safeTerminalText(partial.branch ?? "pi-sync")} → ${safeTerminalText(destination.branch)}\nDirectory: ${safeTerminalText(partial.directory ?? "pi-sync")} → ${safeTerminalText(destination.directory)}\nNamespace: ${safeTerminalText(partial.profile ?? targetName)} → ${safeTerminalText(destination.namespace)}\nSaving changes future sync destination only; it does not move or delete remote history.`,
-		["Save target", "Cancel"],
+		`Review sync setup “${safeTerminalText(targetName)}”\n\nBranch: ${safeTerminalText(partial.branch ?? "pi-sync")} → ${safeTerminalText(destination.branch)}\nDirectory: ${safeTerminalText(partial.directory ?? "pi-sync")} → ${safeTerminalText(destination.directory)}\nNamespace: ${safeTerminalText(partial.profile ?? targetName)} → ${safeTerminalText(destination.namespace)}\nSaving changes the future storage location only; it does not move or delete remote history.`,
+		["Save sync setup", "Cancel"],
 		{ signal },
 	);
 	throwIfAborted(signal);
-	if (choice !== "Save target") return false;
+	if (choice !== "Save sync setup") return false;
 	await updateSyncTarget(targetName, (target) => ({ ...target, ...destination }));
 	if (signal?.aborted) return true;
-	ctx.ui.notify(`Saved target “${safeTerminalText(targetName)}”.`, "info");
+	ctx.ui.notify(`Saved sync setup “${safeTerminalText(targetName)}”.`, "info");
 	return true;
 }
 
