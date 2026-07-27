@@ -14,6 +14,7 @@ import {
 } from "../src/settings.js";
 
 test("normalizeGoalSettings applies defaults and accepts bounded continuation limits", () => {
+	assert.equal(DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns, null);
 	assert.deepEqual(normalizeGoalSettings({}), DEFAULT_GOAL_SETTINGS);
 	assert.deepEqual(normalizeGoalSettings({ futureOption: true }), DEFAULT_GOAL_SETTINGS);
 	assert.deepEqual(normalizeGoalSettings({ toolVisibility: "always" }), {
@@ -38,7 +39,7 @@ test("normalizeGoalSettings applies defaults and accepts bounded continuation li
 	});
 	assert.deepEqual(normalizeGoalSettings({ continuationLimits: { noProgressTurns: 2 } }), {
 		...DEFAULT_GOAL_SETTINGS,
-		continuationLimits: { automaticTurns: 25, noProgressTurns: 2 },
+		continuationLimits: { automaticTurns: null, noProgressTurns: 2 },
 	});
 	assert.deepEqual(
 		normalizeGoalSettings({
@@ -242,7 +243,7 @@ test("readGoalSettings distinguishes missing, loaded, malformed, and unreadable 
 		settings: {
 			toolVisibility: "after-first-goal",
 			experimental: { goals: true },
-			continuationLimits: { automaticTurns: 25, noProgressTurns: 3 },
+			continuationLimits: { automaticTurns: null, noProgressTurns: 3 },
 		},
 	});
 

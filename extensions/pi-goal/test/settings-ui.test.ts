@@ -33,11 +33,19 @@ function runtime() {
 	return state;
 }
 
-test("goal setting limit parsing preserves arbitrary positive integers and unlimited", () => {
+test("goal setting custom limits accept only safe whole numbers greater than zero", () => {
 	assert.equal(parseGoalLimit("40"), 40);
-	assert.equal(parseGoalLimit("unlimited"), null);
-	assert.equal(parseGoalLimit("off"), null);
-	for (const invalid of ["", "0", "-1", "1.5", "many"]) {
+	assert.equal(parseGoalLimit(" 25 "), 25);
+	for (const invalid of [
+		"",
+		"0",
+		"-1",
+		"1.5",
+		"Unlimited",
+		"off",
+		"many",
+		String(Number.MAX_SAFE_INTEGER + 1),
+	]) {
 		assert.equal(parseGoalLimit(invalid), undefined);
 	}
 	assert.equal(formatGoalLimit(25), "25");
@@ -415,37 +423,339 @@ test("unfreezing a pending priority dispatches it at the idle boundary", async (
 	assert.equal(mock.sentUserMessages.length, 1);
 });
 
-test("settings screen saves changes in place and Escape waits for the save queue", async () => {
+test("settings screen prioritizes safety state and keeps internal controls under Advanced", async () => {
 	const state = runtime();
-	const saved: GoalSettings[] = [];
 	let initialRender = "";
+	let advancedRender = "";
+	let screens = 0;
 	const context = createMockContext({
 		mode: "tui",
 		hasUI: true,
 		custom: async (factory: unknown) => {
-			const selector = createCustomSelectorHarness(factory, 40);
+			if (screens++ > 0) throw new Error("Navigation unexpectedly reopened settings.");
+			const selector = createCustomSelectorHarness(factory, 80);
 			initialRender = selector.render().join("\n");
-			selector.handleInput("\r");
+			selector.handleInput("\u001b[B");
+			selector.handleInput("\u001b[B");
+			advancedRender = selector.handleInput("\r").join("\n");
+			const mainAgain = selector.handleInput("\u001b").join("\n");
+			assert.match(mainAgain, /Automatic work/);
 			selector.handleInput("\u001b");
-			selector.handleInput("\r");
 			await new Promise((resolve) => setImmediate(resolve));
 			return selector.result;
 		},
 	});
 
-	await showGoalSettings(state as never, context.ctx, {
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save() {
+			throw new Error("Navigation must not save.");
+		},
+	});
+
+	assert.match(initialRender, /Pi Goal Settings/);
+	assert.match(initialRender, /Automatic work.*Unlimited/is);
+	assert.match(initialRender, /No-progress guard.*3 runs/is);
+	assert.match(initialRender, /Advanced.*Open/is);
+	assert.match(initialRender, /Esc back to Goal menu/);
+	assert.doesNotMatch(initialRender, /Goal tools/);
+	assert.doesNotMatch(initialRender, /Type to search/);
+	assert.match(advancedRender, /Advanced Goal Settings/);
+	assert.match(advancedRender, /Goal tools/);
+	assert.match(advancedRender, /Ordered goal queue/);
+	assert.match(advancedRender, /Esc back to Goal Settings/);
+});
+
+test("Automatic work offers an explicit Unlimited choice with concrete active-goal state", async () => {
+	const state = runtime();
+	state.settings.continuationLimits.automaticTurns = 25;
+	state.activeGoal = createGoal("current objective", undefined, 0);
+	state.activeGoal.automaticModelTurns = 12;
+	const saved: GoalSettings[] = [];
+	let screens = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		confirm: async () => {
+			throw new Error("Choosing Unlimited must not add a redundant confirmation.");
+		},
+		custom: async (factory: unknown) => {
+			const selector = createCustomSelectorHarness(factory, 80);
+			if (screens++ === 0) {
+				const choices = selector.handleInput("\r").join("\n");
+				assert.match(choices, /Current: Up to 25 responses/i);
+				assert.match(choices, /12 automatic responses used/i);
+				assert.match(choices, /Unlimited \(default\)/i);
+				assert.match(choices, /Set a maximum/i);
+				selector.handleInput("\u001b[A");
+				selector.handleInput("\r");
+			} else {
+				assert.match(selector.render().join("\n"), /Automatic work.*Unlimited/is);
+				selector.handleInput("\u001b");
+			}
+			await new Promise((resolve) => setImmediate(resolve));
+			return selector.result;
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
 		settingsPath: "/tmp/pi-goal.json",
 		save(settings) {
 			saved.push(structuredClone(settings));
 		},
 	});
 
-	assert.match(initialRender, /Pi Goal Settings/);
-	assert.match(initialRender, /Goal tools/);
-	assert.doesNotMatch(initialRender, /Type to search/);
 	assert.equal(saved.length, 1);
-	assert.equal(saved[0]?.toolVisibility, "after-first-goal");
-	assert.equal(state.settings.toolVisibility, "after-first-goal");
+	assert.equal(saved[0]?.continuationLimits.automaticTurns, null);
+	assert.equal(state.settings.continuationLimits.automaticTurns, null);
+	assert.match(context.notifications.at(-1)?.message ?? "", /Automatic work: Unlimited/i);
+});
+
+test("Unlimited preview does not invent active-goal usage when no goal exists", async () => {
+	const state = runtime();
+	state.settings.continuationLimits.automaticTurns = 25;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			const selector = createCustomSelectorHarness(factory, 80);
+			selector.handleInput("\r");
+			const choices = selector.handleInput("\u001b[A").join("\n");
+			assert.match(choices, /Goal work will have no response-count cap/i);
+			assert.doesNotMatch(choices, /Active goal:/i);
+			selector.handleInput("\u001b");
+			selector.handleInput("\u001b");
+			return selector.result;
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save() {
+			throw new Error("Preview cancellation must not save.");
+		},
+	});
+});
+
+test("custom automatic limits reject invalid values in place and save one positive integer", async () => {
+	const state = runtime();
+	const inputs = ["0", "-1", "Unlimited", "off", "1.5", "25"];
+	const inputTitles: string[] = [];
+	const saved: GoalSettings[] = [];
+	let screens = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		input: async (title: string) => {
+			inputTitles.push(title);
+			return inputs.shift();
+		},
+		custom: async (factory: unknown) => {
+			const selector = createCustomSelectorHarness(factory, 80);
+			if (screens++ === 0) {
+				selector.handleInput("\r");
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\r");
+			} else {
+				selector.handleInput("\u001b");
+			}
+			await new Promise((resolve) => setImmediate(resolve));
+			return selector.result;
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save(settings) {
+			saved.push(structuredClone(settings));
+		},
+	});
+
+	assert.equal(inputs.length, 0);
+	assert.ok(inputTitles.every((title) => /> 0|greater than 0/i.test(title)));
+	assert.equal(
+		context.notifications.filter((notice) => /whole number greater than 0/i.test(notice.message))
+			.length,
+		5,
+	);
+	assert.equal(saved.length, 1);
+	assert.equal(saved[0]?.continuationLimits.automaticTurns, 25);
+	assert.equal(state.settings.continuationLimits.automaticTurns, 25);
+});
+
+test("No-progress guard exposes default, custom, and Off as explicit choices", async () => {
+	const state = runtime();
+	const saved: GoalSettings[] = [];
+	let screens = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			const selector = createCustomSelectorHarness(factory, 80);
+			if (screens++ === 0) {
+				selector.handleInput("\u001b[B");
+				const choices = selector.handleInput("\r").join("\n");
+				assert.match(choices, /After 3 repeated runs \(default\)/i);
+				assert.match(choices, /Set threshold/i);
+				assert.match(choices, /Off/i);
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\r");
+			} else {
+				assert.match(selector.render().join("\n"), /No-progress guard.*Off/is);
+				selector.handleInput("\u001b");
+			}
+			await new Promise((resolve) => setImmediate(resolve));
+			return selector.result;
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save(settings) {
+			saved.push(structuredClone(settings));
+		},
+	});
+
+	assert.equal(saved.length, 1);
+	assert.equal(saved[0]?.continuationLimits.noProgressTurns, null);
+	assert.equal(state.settings.continuationLimits.noProgressTurns, null);
+	assert.match(context.notifications.at(-1)?.message ?? "", /No-progress guard: Off/i);
+});
+
+test("cancelling a custom limit input leaves settings untouched", async () => {
+	const state = runtime();
+	let saves = 0;
+	let screens = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		input: async () => undefined,
+		custom: async (factory: unknown) => {
+			const selector = createCustomSelectorHarness(factory, 80);
+			if (screens++ === 0) {
+				selector.handleInput("\r");
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\r");
+			} else {
+				selector.handleInput("\u001b");
+			}
+			await new Promise((resolve) => setImmediate(resolve));
+			return selector.result;
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save() {
+			saves++;
+		},
+	});
+
+	assert.equal(saves, 0);
+	assert.deepEqual(state.settings, DEFAULT_GOAL_SETTINGS);
+});
+
+test("invalid settings render read-only defaults and cannot overwrite the file", async () => {
+	const state = runtime() as GoalRuntime & {
+		settingsLoadIssue?: { kind: "invalid"; reason: string };
+	};
+	state.settingsLoadIssue = { kind: "invalid", reason: "invalid settings shape" };
+	let render = "";
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			const selector = createCustomSelectorHarness(factory, 40);
+			render = selector.render().join("\n");
+			selector.handleInput("\r");
+			selector.handleInput("\u001b");
+			return selector.result;
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save() {
+			throw new Error("Invalid settings must remain untouched.");
+		},
+	});
+
+	assert.match(render, /Read only/i);
+	assert.match(render, /invalid settings file/i);
+	assert.match(render, /using built-in defaults/i);
+	assert.match(render, /fix .*pi-goal\.json.*\/reload/is);
+	assert.match(render, /Automatic work.*Unlimited/is);
+});
+
+test("a create-failed fallback clears after a successful settings save", async () => {
+	const state = runtime() as GoalRuntime & {
+		settingsLoadIssue?: { kind: "create-failed"; reason: string };
+	};
+	state.settingsLoadIssue = { kind: "create-failed", reason: "publish failed" };
+	let screens = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		input: async () => "25",
+		custom: async (factory: unknown) => {
+			const selector = createCustomSelectorHarness(factory, 80);
+			if (screens++ === 0) {
+				assert.match(selector.render().join("\n"), /Built-in defaults.*retry/is);
+				selector.handleInput("\r");
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\r");
+			} else {
+				assert.doesNotMatch(selector.render().join("\n"), /Built-in defaults/i);
+				selector.handleInput("\u001b");
+			}
+			await new Promise((resolve) => setImmediate(resolve));
+			return selector.result;
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save() {},
+	});
+
+	assert.equal(state.settingsLoadIssue, undefined);
+	assert.equal(state.settings.continuationLimits.automaticTurns, 25);
+});
+
+test("a failed safety-setting save keeps the previous state and gives actionable feedback", async () => {
+	const state = runtime();
+	let screens = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		input: async () => "25",
+		custom: async (factory: unknown) => {
+			const selector = createCustomSelectorHarness(factory, 80);
+			if (screens++ === 0) {
+				selector.handleInput("\r");
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\r");
+			} else {
+				assert.match(selector.render().join("\n"), /Automatic work.*Unlimited/is);
+				selector.handleInput("\u001b");
+			}
+			await new Promise((resolve) => setImmediate(resolve));
+			return selector.result;
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save() {
+			throw new Error("disk full");
+		},
+	});
+
+	assert.equal(state.settings.continuationLimits.automaticTurns, null);
+	assert.match(context.notifications.at(-1)?.message ?? "", /previous value remains/i);
+	assert.match(context.notifications.at(-1)?.message ?? "", /\/tmp\/pi-goal\.json/i);
+	assert.match(context.notifications.at(-1)?.message ?? "", /disk full/i);
 });
 
 test("lowered limit confirmation cannot apply to a replacement goal", async () => {
@@ -461,14 +771,17 @@ test("lowered limit confirmation cannot apply to a replacement goal", async () =
 		mode: "tui",
 		hasUI: true,
 		input: async () => "3",
-		confirm: async () => {
+		confirm: async (title: string, message: string) => {
+			assert.equal(title, "Apply limit and pause now?");
+			assert.match(message, /already used 5/i);
+			assert.match(message, /pause it immediately without deleting progress/i);
 			state.activeGoal = replacement;
 			return true;
 		},
 		custom: async (factory: unknown) => {
 			const selector = createCustomSelectorHarness(factory, 80);
 			if (screens++ === 0) {
-				selector.handleInput("\u001b[B");
+				selector.handleInput("\r");
 				selector.handleInput("\u001b[B");
 				selector.handleInput("\r");
 			} else {
@@ -494,6 +807,44 @@ test("lowered limit confirmation cannot apply to a replacement goal", async () =
 	assert.equal(state.activeGoal?.id, replacement.id);
 	assert.equal(state.activeGoal?.status, "active");
 	assert.match(context.notifications.at(-1)?.message ?? "", /goal changed/i);
+});
+
+test("confirming an already-reached automatic limit pauses the owned run", async () => {
+	const state = runtime();
+	state.activeGoal = createGoal("current objective", undefined, 0);
+	state.activeGoal.automaticModelTurns = 5;
+	state.beginAgentRun(state.activeGoal.id, "automatic");
+	let aborts = 0;
+	let screens = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		abort: () => aborts++,
+		input: async () => "3",
+		confirm: async () => true,
+		custom: async (factory: unknown) => {
+			const selector = createCustomSelectorHarness(factory, 80);
+			if (screens++ === 0) {
+				selector.handleInput("\r");
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\r");
+			} else {
+				selector.handleInput("\u001b");
+			}
+			await new Promise((resolve) => setImmediate(resolve));
+			return selector.result;
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save() {},
+	});
+
+	assert.equal(aborts, 1);
+	assert.equal(state.settings.continuationLimits.automaticTurns, 3);
+	assert.equal(state.activeGoal?.status, "paused");
+	assert.equal(state.activeGoal?.safetyPauseCause, "continuation_limit");
 });
 
 test("full goal status includes a pending priority objective", () => {
@@ -541,6 +892,9 @@ test("queue confirmations open only after the custom settings screen closes", as
 				const selector = createCustomSelectorHarness(factory, 80);
 				if (screens++ === 0) {
 					selector.handleInput("\u001b[B");
+					selector.handleInput("\u001b[B");
+					selector.handleInput("\r");
+					selector.handleInput("\u001b[B");
 					selector.handleInput("\r");
 				} else {
 					selector.handleInput("\u001b");
@@ -577,6 +931,9 @@ test("settings screen resumes retained work after enabling the queue", async () 
 			const selector = createCustomSelectorHarness(factory, 80);
 			if (screens++ === 0) {
 				selector.handleInput("\u001b[B");
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\r");
+				selector.handleInput("\u001b[B");
 				selector.handleInput("\r");
 			} else {
 				selector.handleInput("\u001b");
@@ -600,7 +957,33 @@ test("settings screen resumes retained work after enabling the queue", async () 
 	assert.equal(screens, 1);
 });
 
-test("settings screen fits narrow, normal, and wide terminal widths", async () => {
+test("narrow settings preserve an exact maximum safe automatic-response cap", async () => {
+	const state = runtime();
+	state.settings.continuationLimits.automaticTurns = Number.MAX_SAFE_INTEGER;
+	let render = "";
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			const selector = createCustomSelectorHarness(factory, 40);
+			render = selector.render().join("\n");
+			selector.handleInput("\u001b");
+			return selector.result;
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save() {
+			throw new Error("Rendering must not save.");
+		},
+	});
+
+	assert.match(render, new RegExp(`≤${Number.MAX_SAFE_INTEGER}`));
+	assert.doesNotMatch(render, /900719925474099(?!1)/);
+});
+
+test("settings, safety choices, and Advanced fit narrow, normal, and wide terminals", async () => {
 	for (const width of [40, 80, 120]) {
 		const state = runtime();
 		const context = createMockContext({
@@ -608,17 +991,24 @@ test("settings screen fits narrow, normal, and wide terminal widths", async () =
 			hasUI: true,
 			custom: async (factory: unknown) => {
 				const selector = createCustomSelectorHarness(factory, width);
-				const lines = selector.render();
-				assert.ok(lines.every((line) => visibleWidth(line) <= width));
+				for (const lines of [selector.render(), selector.handleInput("\r")]) {
+					assert.ok(lines.every((line) => visibleWidth(line) <= width));
+				}
+				selector.handleInput("\u001b");
+				selector.handleInput("\u001b[B");
+				selector.handleInput("\u001b[B");
+				const advanced = selector.handleInput("\r");
+				assert.ok(advanced.every((line) => visibleWidth(line) <= width));
+				selector.handleInput("\u001b");
 				selector.handleInput("\u001b");
 				await new Promise((resolve) => setImmediate(resolve));
 				return selector.result;
 			},
 		});
-		await showGoalSettings(state as never, context.ctx, {
+		await showGoalSettings(state, context.ctx, {
 			settingsPath: "/tmp/pi-goal.json",
 			save() {
-				throw new Error("Escape must not save.");
+				throw new Error("Navigation must not save.");
 			},
 		});
 	}

@@ -2,12 +2,27 @@ import { join } from "node:path";
 import {
 	type ExtensionCommandContext,
 	getAgentDir,
+	getSelectListTheme,
 	getSettingsListTheme,
 } from "@earendil-works/pi-coding-agent";
-import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	Container,
+	matchesKey,
+	type SelectItem,
+	SelectList,
+	type SettingItem,
+	SettingsList,
+	Text,
+} from "@earendil-works/pi-tui";
 import { checkpointGoalActiveTime } from "./accounting.js";
 import { abortCurrentTurn, type GoalRuntime, STATUS_KEY } from "./runtime.js";
-import { GOAL_SETTINGS_FILE, type GoalSettings, saveGoalSettings } from "./settings.js";
+import {
+	DEFAULT_GOAL_SETTINGS,
+	GOAL_SETTINGS_FILE,
+	type GoalSettings,
+	saveGoalSettings,
+} from "./settings.js";
 
 interface GoalSettingsUiOptions {
 	settingsPath?: string;
@@ -20,10 +35,23 @@ interface GoalSettingsApplyOptions {
 }
 
 type LimitField = "automaticTurns" | "noProgressTurns";
+type LimitSelection = "unlimited" | "default" | "custom" | "off";
 type SettingsScreenResult =
-	| { kind: "limit"; field: LimitField }
+	| {
+			kind: "limit";
+			field: LimitField;
+			selection: LimitSelection;
+			activeGoalId: string | null;
+	  }
 	| { kind: "queue"; enabled: boolean }
 	| undefined;
+
+interface LimitChoiceStyles {
+	title: (text: string) => string;
+	muted: (text: string) => string;
+}
+
+type EnqueueSettingsChange = (operation: () => void | Promise<void>) => Promise<void>;
 
 export async function showGoalSettings(
 	runtime: GoalRuntime,
@@ -41,7 +69,7 @@ export async function showGoalSettings(
 		if (!result) return;
 		if (result.kind === "queue") {
 			const next = await nextQueueSettings(runtime, ctx, result.enabled);
-			if (!next) return;
+			if (!next) continue;
 			const wasFrozen = runtime.queueFrozen;
 			try {
 				applyGoalSettings(runtime, next, ctx, {
@@ -52,27 +80,33 @@ export async function showGoalSettings(
 						await options.onQueueUnfrozen?.(ctx);
 					} catch (error) {
 						ctx.ui.notify(
-							`Goal queue enabled, but automatic resume failed: ${formatError(error)}. Reopen /goal to retry.`,
+							`Goal queue enabled, but automatic resume failed: ${safeTerminalText(formatError(error))}. Reopen /goal to retry.`,
 							"warning",
 						);
 					}
 				}
 				ctx.ui.notify(`Ordered goal queue: ${result.enabled ? "Experimental" : "Off"}.`, "info");
 			} catch (error) {
-				ctx.ui.notify(`pi-goal settings save failed: ${formatError(error)}`, "error");
+				notifySettingsFailure(ctx, settingsPath, error);
 			}
 			return;
 		}
 
+		if ((runtime.activeGoal?.id ?? null) !== result.activeGoalId) {
+			ctx.ui.notify(
+				"The active goal changed while the safety setting was open. No settings were changed.",
+				"warning",
+			);
+			continue;
+		}
 		const previous = runtime.settings.continuationLimits[result.field];
-		const raw = await ctx.ui.input(
-			result.field === "automaticTurns" ? "Automatic response limit" : "No-progress run limit",
-			formatGoalLimit(previous),
-		);
-		if (raw === undefined) continue;
-		const limit = parseGoalLimit(raw);
-		if (limit === undefined) {
-			ctx.ui.notify("Enter a positive whole number or Unlimited.", "warning");
+		const limit = await resolveLimitSelection(result, previous, ctx);
+		if (limit === undefined || limit === previous) continue;
+		if ((runtime.activeGoal?.id ?? null) !== result.activeGoalId) {
+			ctx.ui.notify(
+				"The active goal changed while editing the safety setting. No settings were changed.",
+				"warning",
+			);
 			continue;
 		}
 		const confirmation = await confirmLowerActiveLimit(runtime, ctx, result.field, limit);
@@ -89,12 +123,9 @@ export async function showGoalSettings(
 			applyGoalSettings(runtime, next, ctx, {
 				save: (settings) => (options.save ?? saveGoalSettings)(settings, settingsPath),
 			});
-			ctx.ui.notify(
-				`${result.field === "automaticTurns" ? "Automatic response" : "No-progress"} limit: ${formatGoalLimit(limit)}.`,
-				"info",
-			);
+			ctx.ui.notify(formatLimitSuccess(result.field, limit), "info");
 		} catch (error) {
-			ctx.ui.notify(`pi-goal settings save failed: ${formatError(error)}`, "error");
+			notifySettingsFailure(ctx, settingsPath, error);
 		}
 	}
 }
@@ -117,6 +148,7 @@ export function applyGoalSettings(
 		const abortOwnedRun = activeGoalId !== undefined && runtime.agentRunGoalId === activeGoalId;
 		const pausedByAutomaticLimit = runtime.enforceAutomaticTurnLimit(ctx, abortOwnedRun);
 		if (!pausedByAutomaticLimit) runtime.enforceNoProgressLimit(ctx, abortOwnedRun);
+		if (fileSaved) runtime.settingsLoadIssue = undefined;
 	} catch (error) {
 		const rollbackErrors: unknown[] = [];
 		try {
@@ -146,9 +178,8 @@ export function applyGoalSettings(
 	}
 }
 
-export function parseGoalLimit(value: string): number | null | undefined {
-	const normalized = value.trim().toLowerCase();
-	if (normalized === "unlimited" || normalized === "off") return null;
+export function parseGoalLimit(value: string): number | undefined {
+	const normalized = value.trim();
 	if (!/^\d+$/u.test(normalized)) return undefined;
 	const parsed = Number(normalized);
 	return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
@@ -164,94 +195,104 @@ async function showSettingsScreen(
 	settingsPath: string,
 	options: GoalSettingsUiOptions,
 ): Promise<SettingsScreenResult> {
+	if (runtime.settingsLoadIssue?.kind === "invalid") {
+		return showReadOnlySettingsScreen(runtime, ctx, settingsPath);
+	}
+
 	let saveQueue = Promise.resolve();
-	const latestRequested = new Map<string, string>();
+	const enqueueSettingsChange: EnqueueSettingsChange = (operation) => {
+		const queued = saveQueue.then(operation);
+		saveQueue = queued.catch(() => undefined);
+		return queued;
+	};
 	return ctx.ui.custom<SettingsScreenResult>((tui, theme, _keybindings, done) => {
-		const settings = runtime.settings;
-		const items: SettingItem[] = [
-			{
-				id: "toolVisibility",
-				label: "Goal tools",
-				description: "Keep terminal Goal tools visible, or reveal them after the first goal.",
-				currentValue: visibilityLabel(settings.toolVisibility),
-				values: ["Always", "After first goal"],
-			},
-			{
-				id: "experimentalGoals",
-				label: "Ordered goal queue",
-				description: "Enable experimental add, prioritize, skip, and drop-last workflows.",
-				currentValue: settings.experimental.goals ? "Experimental" : "Off",
-				values: ["Off", "Experimental"],
-			},
-			limitItem(
-				"automaticTurns",
-				"Automatic response limit",
-				"Pause after this many Goal-owned automatic model responses.",
-				settings.continuationLimits.automaticTurns,
-			),
-			limitItem(
-				"noProgressTurns",
-				"No-progress limit",
-				"Pause after this many repeated or empty tool-free automatic runs.",
-				settings.continuationLimits.noProgressTurns,
-			),
-		];
 		const container = new Container();
-		container.addChild(new Text(theme.fg("accent", theme.bold("Pi Goal Settings")), 1, 0));
 		container.addChild(
-			new Text(theme.fg("muted", `User settings · ${safeTerminalText(settingsPath)}`), 1, 0),
+			dynamicText("Pi Goal Settings", (text) => theme.fg("accent", theme.bold(text))),
 		);
-		let settingsList: SettingsList;
+		container.addChild(
+			dynamicText(`User settings · ${safeTerminalText(settingsPath)}`, (text) =>
+				theme.fg("muted", text),
+			),
+		);
+		if (runtime.settingsLoadIssue?.kind === "create-failed") {
+			container.addChild(
+				dynamicText(
+					() => settingsIssueBanner(runtime),
+					(text) => theme.fg("warning", text),
+				),
+			);
+		}
 		let closing = false;
 		const closeAfterSaves = (result: SettingsScreenResult) => {
 			if (closing) return;
 			closing = true;
 			void saveQueue.then(() => done(result));
 		};
-		settingsList = new SettingsList(
+		const updateIssueText = () => tui.requestRender();
+		const previewGoalIds = new Map<LimitField, string | null>();
+		const styles: LimitChoiceStyles = {
+			title: (text) => theme.fg("accent", theme.bold(text)),
+			muted: (text) => theme.fg("muted", text),
+		};
+		const items: SettingItem[] = [
+			limitItem(
+				"automaticTurns",
+				"Automatic work",
+				"Choose whether Goal can continue without a response-count cap.",
+				runtime.settings.continuationLimits.automaticTurns,
+				(doneSelection) => {
+					previewGoalIds.set("automaticTurns", runtime.activeGoal?.id ?? null);
+					return createLimitChoiceComponent(runtime, "automaticTurns", styles, doneSelection);
+				},
+			),
+			limitItem(
+				"noProgressTurns",
+				"No-progress guard",
+				"Pause after repeated or empty tool-free automatic runs.",
+				runtime.settings.continuationLimits.noProgressTurns,
+				(doneSelection) => {
+					previewGoalIds.set("noProgressTurns", runtime.activeGoal?.id ?? null);
+					return createLimitChoiceComponent(runtime, "noProgressTurns", styles, doneSelection);
+				},
+			),
+			{
+				id: "advanced",
+				label: "Advanced…",
+				description: "Configure Goal tools and the experimental ordered queue.",
+				currentValue: "Open…",
+				submenu: (_currentValue, back) =>
+					createAdvancedSettingsComponent({
+						runtime,
+						ctx,
+						settingsPath,
+						options,
+						enqueueSettingsChange,
+						closeAfterSaves,
+						onApplied: updateIssueText,
+						onBack: () => back(),
+						title: (text) => theme.fg("accent", theme.bold(text)),
+					}),
+			},
+		];
+		const settingsList = new SettingsList(
 			items,
 			Math.min(items.length + 2, 15),
-			getSettingsListTheme(),
+			goalSettingsListTheme("Goal menu"),
 			(id, newValue) => {
-				if (closing) return;
-				if ((id === "automaticTurns" || id === "noProgressTurns") && newValue === "Edit…") {
-					closeAfterSaves({ kind: "limit", field: id });
-					return;
-				}
-				if (id === "experimentalGoals") {
-					closeAfterSaves({ kind: "queue", enabled: newValue === "Experimental" });
-					return;
-				}
-				if (id !== "toolVisibility") return;
-				latestRequested.set(id, newValue);
-				const operation = saveQueue.then(async () => {
-					const previousValue = visibilityLabel(runtime.settings.toolVisibility);
-					try {
-						const next = {
-							...structuredClone(runtime.settings),
-							toolVisibility: newValue === "Always" ? "always" : "after-first-goal",
-						} satisfies GoalSettings;
-						applyGoalSettings(runtime, next, ctx, {
-							save: (value) => (options.save ?? saveGoalSettings)(value, settingsPath),
-						});
-						ctx.ui.notify(`Goal tools: ${newValue}.`, "info");
-					} catch (error) {
-						if (latestRequested.get(id) === newValue) {
-							settingsList.updateValue(id, previousValue);
-						}
-						ctx.ui.notify(`pi-goal settings save failed: ${formatError(error)}`, "error");
-						tui.requestRender();
-					}
+				if (closing || (id !== "automaticTurns" && id !== "noProgressTurns")) return;
+				if (!isLimitSelection(newValue)) return;
+				closeAfterSaves({
+					kind: "limit",
+					field: id,
+					selection: newValue,
+					activeGoalId: previewGoalIds.get(id) ?? null,
 				});
-				saveQueue = operation.catch(() => undefined);
 			},
 			() => closeAfterSaves(undefined),
 			{ enableSearch: false },
 		);
 		container.addChild(settingsList);
-		container.addChild(
-			new Text(theme.fg("dim", "↑↓ navigate · enter/space change · esc close"), 1, 0),
-		);
 		return {
 			render: (width: number) => container.render(width),
 			invalidate: () => container.invalidate(),
@@ -262,6 +303,260 @@ async function showSettingsScreen(
 			},
 		};
 	});
+}
+
+function showReadOnlySettingsScreen(
+	runtime: GoalRuntime,
+	ctx: ExtensionCommandContext,
+	settingsPath: string,
+): Promise<SettingsScreenResult> {
+	return ctx.ui.custom<SettingsScreenResult>((_tui, theme, keybindings, done) => {
+		const container = new Container();
+		container.addChild(
+			dynamicText("Pi Goal Settings · Read only", (text) => theme.fg("accent", theme.bold(text))),
+		);
+		container.addChild(
+			dynamicText(
+				`Invalid settings file. Pi-goal is using built-in defaults. Fix ${safeTerminalText(settingsPath)} and run /reload. The file will not be overwritten.`,
+				(text) => theme.fg("warning", text),
+			),
+		);
+		container.addChild(
+			dynamicText(() =>
+				[
+					`Automatic work: ${formatAutomaticWork(runtime.settings.continuationLimits.automaticTurns)}`,
+					`No-progress guard: ${formatNoProgressProtection(runtime.settings.continuationLimits.noProgressTurns)}`,
+					`Goal tools: ${visibilityLabel(runtime.settings.toolVisibility)}`,
+					`Ordered goal queue: ${runtime.settings.experimental.goals ? "Experimental" : "Off"}`,
+				].join("\n"),
+			),
+		);
+		container.addChild(dynamicText("Esc back to Goal menu", (text) => theme.fg("dim", text)));
+		return {
+			render: (width: number) => container.render(width),
+			invalidate: () => container.invalidate(),
+			handleInput(data: string) {
+				if (
+					keybindings.matches(data, "tui.select.cancel") ||
+					matchesKey(data, "escape") ||
+					matchesKey(data, "ctrl+c")
+				) {
+					done(undefined);
+				}
+			},
+		};
+	});
+}
+
+function createLimitChoiceComponent(
+	runtime: GoalRuntime,
+	field: LimitField,
+	styles: LimitChoiceStyles,
+	done: (selectedValue?: string) => void,
+): Component {
+	const value = runtime.settings.continuationLimits[field];
+	const goal = runtime.activeGoal;
+	const items = limitChoices(field, value, goal?.automaticModelTurns);
+	const selectionItems = items.map(({ value: itemValue, label }) => ({
+		value: itemValue,
+		label,
+	}));
+	const descriptions = new Map(items.map((item) => [item.value, item.description ?? ""]));
+	const container = new Container();
+	container.addChild(
+		dynamicText(field === "automaticTurns" ? "Automatic work" : "No-progress guard", styles.title),
+	);
+	container.addChild(
+		dynamicText(
+			field === "automaticTurns"
+				? `Current: ${formatAutomaticWork(value)}`
+				: `Current: ${formatNoProgressProtection(value)}`,
+			styles.muted,
+		),
+	);
+	if (goal) {
+		container.addChild(
+			dynamicText(
+				field === "automaticTurns"
+					? `Active goal: ${goal.automaticModelTurns} automatic responses used`
+					: `Active goal: ${goal.toolFreeRepeatCount} repeated or empty runs detected`,
+				styles.muted,
+			),
+		);
+	}
+	const selectedIndex = selectedLimitChoiceIndex(field, value);
+	const selectList = new SelectList(
+		selectionItems,
+		Math.min(selectionItems.length, 8),
+		getSelectListTheme(),
+	);
+	selectList.setSelectedIndex(selectedIndex);
+	let selectedDescription = descriptions.get(selectionItems[selectedIndex]?.value ?? "") ?? "";
+	const description = dynamicText(() => selectedDescription, styles.muted);
+	selectList.onSelectionChange = (item) => {
+		selectedDescription = descriptions.get(item.value) ?? "";
+	};
+	selectList.onSelect = (item) => done(item.value);
+	selectList.onCancel = () => done();
+	container.addChild(selectList);
+	container.addChild(description);
+	container.addChild(dynamicText("↑↓ navigate · Enter select · Esc back", styles.muted));
+	return {
+		render: (width: number) => container.render(width),
+		invalidate: () => container.invalidate(),
+		handleInput(data: string) {
+			selectList.handleInput(data);
+		},
+	};
+}
+
+function limitChoices(
+	field: LimitField,
+	value: number | null,
+	automaticTurnsUsed: number | undefined,
+): SelectItem[] {
+	if (field === "automaticTurns") {
+		const unlimitedDescription =
+			value === null
+				? "No response-count cap. Completion, manual pause, blockers, provider limits, and other configured guards still apply."
+				: automaticTurnsUsed === undefined
+					? `Remove the current ${value}-response cap. Goal work will have no response-count cap; other configured stop conditions remain.`
+					: `Remove the current ${value}-response cap. The active goal has used ${automaticTurnsUsed} responses; other configured stop conditions remain.`;
+		return [
+			{ value: "unlimited", label: "Unlimited (default)", description: unlimitedDescription },
+			{
+				value: "custom",
+				label: "Set a maximum…",
+				description: "Pause after a whole number of Goal-owned automatic responses.",
+			},
+		];
+	}
+	const defaultLimit = DEFAULT_GOAL_SETTINGS.continuationLimits.noProgressTurns;
+	return [
+		{
+			value: "default",
+			label: `After ${defaultLimit} repeated runs (default)`,
+			description: "Pause after the default number of repeated or empty tool-free runs.",
+		},
+		{
+			value: "custom",
+			label: "Set threshold…",
+			description: "Choose a whole number of repeated or empty runs before pausing.",
+		},
+		{
+			value: "off",
+			label: "Off",
+			description: "Do not pause based on repeated or empty tool-free runs.",
+		},
+	];
+}
+
+function selectedLimitChoiceIndex(field: LimitField, value: number | null) {
+	if (field === "automaticTurns") return value === null ? 0 : 1;
+	if (value === null) return 2;
+	return value === DEFAULT_GOAL_SETTINGS.continuationLimits.noProgressTurns ? 0 : 1;
+}
+
+function createAdvancedSettingsComponent(options: {
+	runtime: GoalRuntime;
+	ctx: ExtensionCommandContext;
+	settingsPath: string;
+	options: GoalSettingsUiOptions;
+	enqueueSettingsChange: EnqueueSettingsChange;
+	closeAfterSaves: (result: SettingsScreenResult) => void;
+	onApplied: () => void;
+	onBack: () => void;
+	title: (text: string) => string;
+}): Component {
+	const { runtime, ctx, settingsPath } = options;
+	const container = new Container();
+	container.addChild(dynamicText("Advanced Goal Settings", options.title));
+	const items: SettingItem[] = [
+		{
+			id: "toolVisibility",
+			label: "Goal tools",
+			description: "Keep terminal Goal tools visible, or reveal them after the first goal.",
+			currentValue: visibilityLabel(runtime.settings.toolVisibility),
+			values: ["Always", "After first goal"],
+		},
+		{
+			id: "experimentalGoals",
+			label: "Ordered goal queue",
+			description: "Enable experimental add, prioritize, skip, and drop-last workflows.",
+			currentValue: runtime.settings.experimental.goals ? "Experimental" : "Off",
+			values: ["Off", "Experimental"],
+		},
+	];
+	const latestRequested = new Map<string, string>();
+	let settingsList: SettingsList;
+	settingsList = new SettingsList(
+		items,
+		Math.min(items.length + 2, 15),
+		goalSettingsListTheme("Goal Settings"),
+		(id, newValue) => {
+			if (id === "experimentalGoals") {
+				options.closeAfterSaves({ kind: "queue", enabled: newValue === "Experimental" });
+				return;
+			}
+			if (id !== "toolVisibility") return;
+			latestRequested.set(id, newValue);
+			void options.enqueueSettingsChange(async () => {
+				const previousValue = visibilityLabel(runtime.settings.toolVisibility);
+				try {
+					const next = {
+						...structuredClone(runtime.settings),
+						toolVisibility: newValue === "Always" ? "always" : "after-first-goal",
+					} satisfies GoalSettings;
+					applyGoalSettings(runtime, next, ctx, {
+						save: (value) => (options.options.save ?? saveGoalSettings)(value, settingsPath),
+					});
+					options.onApplied();
+					ctx.ui.notify(`Goal tools: ${newValue}.`, "info");
+				} catch (error) {
+					if (latestRequested.get(id) === newValue) {
+						settingsList.updateValue(id, previousValue);
+					}
+					notifySettingsFailure(ctx, settingsPath, error);
+				}
+			});
+		},
+		options.onBack,
+		{ enableSearch: false },
+	);
+	container.addChild(settingsList);
+	return {
+		render: (width: number) => container.render(width),
+		invalidate: () => container.invalidate(),
+		handleInput(data: string) {
+			settingsList.handleInput?.(data);
+		},
+	};
+}
+
+async function resolveLimitSelection(
+	result: Extract<SettingsScreenResult, { kind: "limit" }>,
+	previous: number | null,
+	ctx: ExtensionCommandContext,
+): Promise<number | null | undefined> {
+	if (result.selection === "unlimited" || result.selection === "off") return null;
+	if (result.selection === "default") {
+		return DEFAULT_GOAL_SETTINGS.continuationLimits.noProgressTurns;
+	}
+	while (true) {
+		const raw = await ctx.ui.input(
+			result.field === "automaticTurns"
+				? "Maximum automatic responses (whole number greater than 0)"
+				: "Repeated-run threshold (whole number greater than 0)",
+			previous === null ? "Positive whole number" : String(previous),
+		);
+		if (raw === undefined) return undefined;
+		const parsed = parseGoalLimit(raw);
+		if (parsed !== undefined) return parsed;
+		ctx.ui.notify(
+			`Enter a whole number greater than 0. Choose ${result.field === "automaticTurns" ? "Unlimited" : "Off"} from the previous screen if you do not want a limit.`,
+			"warning",
+		);
+	}
 }
 
 async function nextQueueSettings(
@@ -378,7 +673,7 @@ async function confirmLowerActiveLimit(
 	if (used < limit) return { apply: true };
 	return {
 		apply: await ctx.ui.confirm(
-			"Apply reached safety limit?",
+			"Apply limit and pause now?",
 			`The active goal has already used ${used}. Setting this limit to ${limit} will pause it immediately without deleting progress.`,
 		),
 		goalId: goal.id,
@@ -392,15 +687,63 @@ function withLimit(settings: GoalSettings, field: LimitField, value: number | nu
 	};
 }
 
-function limitItem(id: LimitField, label: string, description: string, value: number | null) {
-	const currentValue = formatGoalLimit(value);
+function limitItem(
+	id: LimitField,
+	label: string,
+	description: string,
+	value: number | null,
+	submenu: (done: (selectedValue?: string) => void) => Component,
+): SettingItem {
 	return {
 		id,
 		label,
 		description,
-		currentValue,
-		values: [currentValue, "Edit…"],
-	} satisfies SettingItem;
+		currentValue:
+			id === "automaticTurns"
+				? formatAutomaticSettingValue(value)
+				: formatNoProgressSettingValue(value),
+		submenu: (_currentValue, done) => submenu(done),
+	};
+}
+
+function formatAutomaticSettingValue(value: number | null) {
+	return value === null ? "Unlimited" : `≤${value}`;
+}
+
+function formatNoProgressSettingValue(value: number | null) {
+	if (value === null) return "Off";
+	return `${value} ${value === 1 ? "run" : "runs"}`;
+}
+
+function formatAutomaticWork(value: number | null) {
+	return value === null ? "Unlimited" : `Up to ${value} responses`;
+}
+
+function formatNoProgressProtection(value: number | null) {
+	if (value === null) return "Off";
+	return `After ${value} repeated ${value === 1 ? "run" : "runs"}`;
+}
+
+function formatLimitSuccess(field: LimitField, value: number | null) {
+	return field === "automaticTurns"
+		? `Automatic work: ${formatAutomaticWork(value)}.`
+		: `No-progress guard: ${formatNoProgressProtection(value)}.`;
+}
+
+function goalSettingsListTheme(backTarget: string) {
+	const theme = getSettingsListTheme();
+	return {
+		...theme,
+		hint(text: string) {
+			return text.includes("Enter/Space to change")
+				? theme.hint(`  Enter/Space to select · Esc back to ${backTarget}`)
+				: theme.hint(text);
+		},
+	};
+}
+
+function isLimitSelection(value: string): value is LimitSelection {
+	return value === "unlimited" || value === "default" || value === "custom" || value === "off";
 }
 
 function visibilityLabel(value: GoalSettings["toolVisibility"]) {
@@ -413,6 +756,36 @@ function retainedGoalCount(runtime: GoalRuntime) {
 		runtime.queuedGoals.length +
 		(runtime.pendingQueueAction?.kind === "prioritize" ? 1 : 0)
 	);
+}
+
+function settingsIssueBanner(runtime: GoalRuntime) {
+	return runtime.settingsLoadIssue?.kind === "create-failed"
+		? "Built-in defaults are active because the settings file could not be created. Saving a change will retry."
+		: "";
+}
+
+function notifySettingsFailure(ctx: ExtensionCommandContext, settingsPath: string, error: unknown) {
+	const path = safeTerminalText(settingsPath);
+	const detail = safeTerminalText(formatError(error));
+	ctx.ui.notify(
+		error instanceof AggregateError
+			? `Could not apply Goal settings, and rollback was incomplete. Check ${path}, run /reload, and verify the effective settings before retrying: ${detail}`
+			: `Could not save Goal settings; the previous value remains. Check ${path} and retry: ${detail}`,
+		"error",
+	);
+}
+
+function dynamicText(
+	content: string | (() => string),
+	style: (text: string) => string = (text) => text,
+): Component {
+	return {
+		render(width: number) {
+			const value = typeof content === "function" ? content() : content;
+			return new Text(style(value), 1, 0).render(width);
+		},
+		invalidate() {},
+	};
 }
 
 function safeTerminalText(value: string) {

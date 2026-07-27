@@ -56,12 +56,17 @@ export function buildGoalMenuState(runtime: GoalMenuRuntimeView): GoalMenuState 
 		: runtime.pendingQueueAction
 			? "Waiting for Pi to settle"
 			: displayStatus(goal?.status);
+	const automaticTurnLimit = runtime.settings.continuationLimits.automaticTurns;
+	const automaticResponses =
+		automaticTurnLimit === null
+			? `${goal?.automaticModelTurns ?? 0} automatic responses · Unlimited`
+			: `${goal?.automaticModelTurns ?? 0}/${automaticTurnLimit} automatic responses`;
 	const details = goal
 		? [
 				goal.tokenBudget === undefined
 					? formatDuration(goal.timeUsedSeconds)
 					: `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`,
-				`${goal.automaticModelTurns} automatic responses`,
+				automaticResponses,
 				...(queueCount > 0 ? [`${queueCount} queued`] : []),
 			].join(" · ")
 		: "No goal is currently set";

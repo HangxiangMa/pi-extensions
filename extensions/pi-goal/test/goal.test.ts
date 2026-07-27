@@ -3,7 +3,11 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import {
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+} from "../../../test/support.js";
 import goal, {
 	assistantUsageTokens,
 	buildGoalSystemPrompt,
@@ -253,6 +257,32 @@ test("missing and invalid settings fall back to always-visible tools", () => {
 			expectsWarning,
 		);
 	}
+});
+
+test("invalid settings remain read-only in the Goal settings UI", async () => {
+	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
+	registerGoalWithSettingsPath(mock.pi, INVALID_SETTINGS_PATH);
+	const selections = ["Settings…", "Close"];
+	let settingsRender = "";
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		select: async () => selections.shift(),
+		custom: async (factory: unknown) => {
+			const selector = createCustomSelectorHarness(factory, 80);
+			settingsRender = selector.render().join("\n");
+			selector.handleInput("\u001b");
+			return selector.result;
+		},
+	});
+	mock.events.get("session_start")?.[0]?.({}, context.ctx);
+
+	await mock.commands.get("goal")?.handler("", context.ctx);
+
+	assert.match(settingsRender, /Read only/i);
+	assert.match(settingsRender, /invalid settings file/i);
+	assert.match(settingsRender, /using built-in defaults/i);
+	assert.equal(readFileSync(INVALID_SETTINGS_PATH, "utf8"), '{"toolVisibility":"sometimes"}\n');
 });
 
 test("after-first-goal hides tools until activation, then keeps them visible", async () => {

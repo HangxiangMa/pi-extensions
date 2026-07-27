@@ -24,7 +24,11 @@ import { nextToolFreeRepeatState, resetGoalSafetyEpoch } from "./safety.js";
 
 export { queueGoalSafetyReset, resetGoalSafetyEpoch } from "./safety.js";
 
-import { DEFAULT_GOAL_SETTINGS, type GoalSettings } from "./settings.js";
+import {
+	DEFAULT_GOAL_SETTINGS,
+	type GoalSettings,
+	type GoalSettingsLoadIssue,
+} from "./settings.js";
 
 export interface ContinuationTicket {
 	goalId: string;
@@ -167,6 +171,7 @@ const CONTRADICTORY_COMPLETION_PATTERNS = [
 // budget, safety, and tool-policy transitions share ordering-sensitive invariants.
 export class GoalRuntime {
 	settings: GoalSettings = DEFAULT_GOAL_SETTINGS;
+	settingsLoadIssue?: GoalSettingsLoadIssue;
 	activeGoal?: ActiveGoal;
 	/** Terminal details captured for the matching cross-extension state event. */
 	private terminalDetails?: GoalTerminalDetails;

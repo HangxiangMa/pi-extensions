@@ -23,7 +23,7 @@ export interface GoalSettings {
 export const DEFAULT_GOAL_SETTINGS: GoalSettings = {
 	toolVisibility: "always",
 	experimental: { goals: false },
-	continuationLimits: { automaticTurns: 25, noProgressTurns: 3 },
+	continuationLimits: { automaticTurns: null, noProgressTurns: 3 },
 };
 
 export const DEFAULT_GOAL_SETTINGS_DOCUMENT = `${JSON.stringify(DEFAULT_GOAL_SETTINGS, null, 2)}\n`;
@@ -36,6 +36,8 @@ export type GoalSettingsLoadResult =
 export type GoalSettingsInitializationResult =
 	| Exclude<GoalSettingsLoadResult, { kind: "missing" }>
 	| { kind: "create-failed"; reason: string };
+
+export type GoalSettingsLoadIssue = Exclude<GoalSettingsInitializationResult, { kind: "loaded" }>;
 
 interface GoalSettingsInitializationFileSystem {
 	mkdirSync: typeof mkdirSync;
