@@ -149,7 +149,6 @@ export function applyGoalSettings(
 		const abortOwnedRun = activeGoalId !== undefined && runtime.agentRunGoalId === activeGoalId;
 		const pausedByAutomaticLimit = runtime.enforceAutomaticTurnLimit(ctx, abortOwnedRun);
 		if (!pausedByAutomaticLimit) runtime.enforceNoProgressLimit(ctx, abortOwnedRun);
-		if (fileSaved) runtime.settingsLoadIssue = undefined;
 	} catch (error) {
 		const rollbackErrors: unknown[] = [];
 		try {
@@ -216,21 +215,13 @@ async function showSettingsScreen(
 				theme.fg("muted", text),
 			),
 		);
-		if (runtime.settingsLoadIssue?.kind === "create-failed") {
-			container.addChild(
-				dynamicText(
-					() => settingsIssueBanner(runtime),
-					(text) => theme.fg("warning", text),
-				),
-			);
-		}
 		let closing = false;
 		const closeAfterSaves = (result: SettingsScreenResult) => {
 			if (closing) return;
 			closing = true;
 			void saveQueue.then(() => done(result));
 		};
-		const updateIssueText = () => tui.requestRender();
+		const requestRender = () => tui.requestRender();
 		const previewGoalIds = new Map<LimitField, string | null>();
 		const styles: LimitChoiceStyles = {
 			title: (text) => theme.fg("accent", theme.bold(text)),
@@ -315,7 +306,7 @@ async function showSettingsScreen(
 						applyGoalSettings(runtime, next, ctx, {
 							save: (value) => (options.save ?? saveGoalSettings)(value, settingsPath),
 						});
-						updateIssueText();
+						requestRender();
 						ctx.ui.notify(`Goal tools: ${newValue}.`, "info");
 					} catch (error) {
 						if (latestRequested.get(id) === newValue) {
@@ -716,12 +707,6 @@ function retainedGoalCount(runtime: GoalRuntime) {
 		runtime.queuedGoals.length +
 		(runtime.pendingQueueAction?.kind === "prioritize" ? 1 : 0)
 	);
-}
-
-function settingsIssueBanner(runtime: GoalRuntime) {
-	return runtime.settingsLoadIssue?.kind === "create-failed"
-		? "Built-in defaults are active because the settings file could not be created. Saving a change will retry."
-		: "";
 }
 
 function notifySettingsFailure(ctx: ExtensionCommandContext, settingsPath: string, error: unknown) {
