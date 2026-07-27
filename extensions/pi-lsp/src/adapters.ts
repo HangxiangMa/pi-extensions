@@ -286,10 +286,6 @@ export function consumeLspConfigNotice() {
 	return notice;
 }
 
-function formatError(error: unknown) {
-	return error instanceof Error ? error.message : String(error);
-}
-
 function parseConfigSource(source: string, cwd: string, label: string): LspConfig {
 	if (source.startsWith("{")) return normalizeConfig(JSON.parse(source), label);
 	const expandedSource = expandHome(source);
