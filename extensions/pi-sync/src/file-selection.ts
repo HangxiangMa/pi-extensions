@@ -83,16 +83,21 @@ export async function showFileSelection(
 				...(draft.sessions ? ["sessions"] : []),
 			];
 			if (signal?.aborted) return;
-			await updateSyncSetup(config.setupName, (setup) => ({
-				...setup,
-				sync: { ...setup.sync, include },
-			}));
+			await updateSyncSetup(
+				config.setupName,
+				(setup) => ({
+					...setup,
+					sync: { ...setup.sync, include },
+				}),
+				{ expectedInclude: config.include, signal },
+			);
 			if (signal?.aborted) return;
 			ctx.ui.notify(
 				`Saved included content for sync setup “${safeTerminalText(config.setupName)}”. It applies to the next manual or automatic sync.`,
 				"info",
 			);
 		} catch (error) {
+			if (signal?.aborted) return;
 			ctx.ui.notify(
 				`Could not save pi-sync file selection: ${safeTerminalText(error instanceof Error ? error.message : String(error))}`,
 				"error",

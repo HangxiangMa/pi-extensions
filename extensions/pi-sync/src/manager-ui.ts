@@ -10,6 +10,7 @@ import {
 	localConfigPath,
 	readLocalConfigObject,
 	readStateForConfig,
+	syncConfigReviewIdentity,
 } from "./config.js";
 import { showAddGitTarget, showEditGitTarget, showGitSetup } from "./git-ui.js";
 import { inspectLock, isStaleLock } from "./lock.js";
@@ -458,26 +459,29 @@ export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: Abo
 		{ signal },
 	);
 	if (signal?.aborted || choice !== "Save sync setup") return false;
-	await saveNewV3Settings({
-		setupName: targetName,
-		connectionName,
-		connection: {
-			type: "s3",
-			endpoint,
-			region,
-			credentials: {
-				accessKeyId: credentials.profileFields.accessKeyId ?? "",
-				secretAccessKey: credentials.profileFields.secretAccessKey ?? "",
+	await saveNewV3Settings(
+		{
+			setupName: targetName,
+			connectionName,
+			connection: {
+				type: "s3",
+				endpoint,
+				region,
+				credentials: {
+					accessKeyId: credentials.profileFields.accessKeyId ?? "",
+					secretAccessKey: credentials.profileFields.secretAccessKey ?? "",
+				},
+			},
+			setup: {
+				storage: { connection: connectionName, bucket, path: storagePath },
+				sync: {
+					include: [...syncFiles, ...(syncSessions ? ["sessions"] : [])],
+					automatic: autoSync,
+				},
 			},
 		},
-		setup: {
-			storage: { connection: connectionName, bucket, path: storagePath },
-			sync: {
-				include: [...syncFiles, ...(syncSessions ? ["sessions"] : [])],
-				automatic: autoSync,
-			},
-		},
-	});
+		signal,
+	);
 	if (signal?.aborted) return false;
 	await refreshTargetCompletions();
 	if (signal?.aborted) return true;
@@ -597,6 +601,7 @@ async function showSetupSwitcher(
 				),
 			onSwitch,
 			signal,
+			syncConfigReviewIdentity(config),
 		);
 		return result.pullApplied ? "pull-attempted" : "switched";
 	} catch (error) {
@@ -719,10 +724,14 @@ async function showAddTarget(ctx: ExtensionCommandContext, signal?: AbortSignal)
 		{ signal },
 	);
 	if (signal?.aborted || choice !== "Add sync setup") return;
-	await addSyncSetup(name, {
-		storage: { connection: profile, bucket, path: storagePath },
-		sync: { include: syncFiles, automatic: true },
-	});
+	await addSyncSetup(
+		name,
+		{
+			storage: { connection: profile, bucket, path: storagePath },
+			sync: { include: syncFiles, automatic: true },
+		},
+		signal,
+	);
 	if (signal?.aborted) return;
 	await refreshTargetCompletions();
 	ctx.ui.notify(`Added sync setup “${safeTerminalText(name)}”.`, "info");
@@ -760,15 +769,19 @@ async function showEditTarget(ctx: ExtensionCommandContext, name: string, signal
 		{ signal },
 	);
 	if (signal?.aborted || choice !== "Save sync setup") return;
-	await updateSyncSetup(partial.setupName, (setup) => {
-		if (typeof setup.storage.bucket !== "string") {
-			throw new Error("Sync setup storage type changed; reopen it.");
-		}
-		return {
-			...setup,
-			storage: { ...setup.storage, bucket, path: normalizedPath },
-		};
-	});
+	await updateSyncSetup(
+		partial.setupName,
+		(setup) => {
+			if (typeof setup.storage.bucket !== "string") {
+				throw new Error("Sync setup storage type changed; reopen it.");
+			}
+			return {
+				...setup,
+				storage: { ...setup.storage, bucket, path: normalizedPath },
+			};
+		},
+		{ expectedStorage: partial, signal },
+	);
 	if (signal?.aborted) return;
 	ctx.ui.notify(`Saved sync setup “${safeTerminalText(partial.setupName)}”.`, "info");
 }
@@ -780,7 +793,7 @@ async function showRemoveTarget(ctx: ExtensionCommandContext, name: string, sign
 		{ signal },
 	);
 	if (signal?.aborted || !confirmed) return;
-	await removeSyncSetup(name);
+	await removeSyncSetup(name, signal);
 	if (signal?.aborted) return;
 	await refreshTargetCompletions();
 	ctx.ui.notify(

@@ -71,22 +71,25 @@ export async function showWebDavSetup(
 	throwIfAborted(signal);
 	await awaitActive(
 		signal,
-		saveNewV3Settings({
-			setupName: targetName,
-			connectionName: profileName,
-			connection: {
-				type: "webdav",
-				url: connection.url,
-				credentials: { username: connection.username, password: connection.password ?? "" },
-			},
-			setup: {
-				storage: { connection: profileName, path: destination.path },
-				sync: {
-					include: [...content, ...(sessions ? ["sessions"] : [])],
-					automatic: automatic === "Enable automatic sync",
+		saveNewV3Settings(
+			{
+				setupName: targetName,
+				connectionName: profileName,
+				connection: {
+					type: "webdav",
+					url: connection.url,
+					credentials: { username: connection.username, password: connection.password ?? "" },
+				},
+				setup: {
+					storage: { connection: profileName, path: destination.path },
+					sync: {
+						include: [...content, ...(sessions ? ["sessions"] : [])],
+						automatic: automatic === "Enable automatic sync",
+					},
 				},
 			},
-		}),
+			signal,
+		),
 	);
 	ctx.ui.notify(`Sync setup “${safe(targetName)}” is ready. Use Sync now when ready.`, "info");
 	return true;
@@ -114,10 +117,14 @@ export async function showAddWebDavTarget(
 	throwIfAborted(signal);
 	await awaitActive(
 		signal,
-		addSyncSetup(name, {
-			storage: { connection: profile, path: destination.path },
-			sync: { include: content, automatic: true },
-		}),
+		addSyncSetup(
+			name,
+			{
+				storage: { connection: profile, path: destination.path },
+				sync: { include: content, automatic: true },
+			},
+			signal,
+		),
 	);
 	ctx.ui.notify(`Added sync setup “${safe(name)}”.`, "info");
 	return true;
@@ -142,10 +149,14 @@ export async function showEditWebDavTarget(
 	throwIfAborted(signal);
 	await awaitActive(
 		signal,
-		updateSyncSetup(partial.setupName, (setup) => ({
-			...setup,
-			storage: { ...setup.storage, path: destination.path },
-		})),
+		updateSyncSetup(
+			partial.setupName,
+			(setup) => ({
+				...setup,
+				storage: { ...setup.storage, path: destination.path },
+			}),
+			{ expectedStorage: partial, signal },
+		),
 	);
 	ctx.ui.notify(`Saved sync setup “${safe(partial.setupName)}”.`, "info");
 	return true;
@@ -180,11 +191,15 @@ export async function showAddWebDavStorageProfile(
 	throwIfAborted(signal);
 	await awaitActive(
 		signal,
-		addStorageConnection(name, {
-			type: "webdav",
-			url: connection.url,
-			credentials: { username: connection.username, password: connection.password ?? "" },
-		}),
+		addStorageConnection(
+			name,
+			{
+				type: "webdav",
+				url: connection.url,
+				credentials: { username: connection.username, password: connection.password ?? "" },
+			},
+			signal,
+		),
 	);
 	ctx.ui.notify(`Added storage connection “${safe(name)}”.`, "info");
 	return true;
@@ -260,6 +275,7 @@ export async function showEditWebDavStorageProfile(
 				};
 			},
 			affectedSetups,
+			signal,
 		),
 	);
 	ctx.ui.notify(`Saved storage connection “${safe(name)}”.`, "info");

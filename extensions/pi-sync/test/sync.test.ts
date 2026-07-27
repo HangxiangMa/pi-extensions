@@ -16,7 +16,7 @@ import {
 	usage,
 	validateCommandOptions,
 } from "../src/command.js";
-import { localConfigPath, readLocalConfigObject } from "../src/config.js";
+import { localConfigPath, readLocalConfigObject, updateLocalConfig } from "../src/config.js";
 import { showFileSelection } from "../src/file-selection.js";
 import sync from "../src/sync.js";
 import { syncBoth } from "../src/sync-operations.js";
@@ -140,6 +140,41 @@ test("included-content TUI renders textual state at narrow and wide widths", asy
 			assert.ok(lines.every((line) => visibleWidth(line) <= width));
 			assert.match(lines.join("\n"), /Included Content|included|excluded/u);
 		}
+	});
+});
+
+test("included-content save preserves a concurrent include change", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 60);
+				harness.handleInput("\r");
+				harness.handleInput("tui.select.cancel");
+				return harness.result;
+			},
+			select: async () => {
+				await updateLocalConfig((current) => ({
+					...current,
+					syncSetups: {
+						...current.syncSetups,
+						home: {
+							...current.syncSetups.home,
+							sync: { ...current.syncSetups.home.sync, include: ["models.json"] },
+						},
+					},
+				}));
+				return "Save changes";
+			},
+		});
+		await showFileSelection(ctx, "home");
+		assert.deepEqual((await readLocalConfigObject())?.syncSetups.home.sync.include, [
+			"models.json",
+		]);
+		assert.match(notifications.at(-1)?.message ?? "", /included content changed.*reopen/iu);
 	});
 });
 

@@ -7,6 +7,7 @@ import {
 	loadPartialConfig,
 	localConfigPath,
 	readLocalConfigObject,
+	updateLocalConfig,
 } from "../src/config.js";
 import {
 	showAddGitStorageProfile,
@@ -100,6 +101,77 @@ test("Git setup edit persists one reviewed branch and complete storage path", as
 		if (config.backend.type !== "git") return;
 		assert.equal(config.backend.destination.branch, "pi-sync/archive");
 		assert.equal(config.storagePath, "archives/work");
+	});
+});
+
+test("Git setup edit requires a new branch when changing the storage path", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const settings = v3S3Settings();
+		(settings.storageConnections as Record<string, unknown>).git = {
+			type: "git",
+			remote: "git@github.com:user/pi-sync.git",
+		};
+		(settings.syncSetups as Record<string, unknown>).work = {
+			storage: { connection: "git", branch: "pi-sync/work", path: "pi-sync/work" },
+			sync: { include: ["settings.json"], automatic: false },
+		};
+		writeFileSync(localConfigPath(), JSON.stringify(settings), { mode: 0o600 });
+		const before = readFileSync(localConfigPath());
+		const inputs = ["pi-sync/work", "archives/work"];
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => inputs.shift(),
+			select: async () => "Save sync setup",
+		});
+		assert.equal(await showEditGitTarget(ctx, await loadPartialConfig("work")), false);
+		assert.match(notifications.at(-1)?.message ?? "", /storage path.*new Git branch/iu);
+		assert.deepEqual(readFileSync(localConfigPath()), before);
+	});
+});
+
+test("Git setup edit rejects coordinates changed while its review is open", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const settings = v3S3Settings();
+		Object.assign(settings.storageConnections, {
+			git: { type: "git", remote: "git@github.com:user/pi-sync.git" },
+			archive: { type: "git", remote: "git@github.com:user/archive.git" },
+		});
+		(settings.syncSetups as Record<string, unknown>).work = {
+			storage: { connection: "git", branch: "pi-sync/work", path: "pi-sync/work" },
+			sync: { include: ["settings.json"], automatic: false },
+		};
+		writeFileSync(localConfigPath(), JSON.stringify(settings), { mode: 0o600 });
+		const partial = await loadPartialConfig("work");
+		const inputs = ["pi-sync/new", "archives/new"];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => inputs.shift(),
+			select: async () => {
+				await updateLocalConfig((current) => ({
+					...current,
+					syncSetups: {
+						...current.syncSetups,
+						work: {
+							...current.syncSetups.work,
+							storage: {
+								connection: "archive",
+								branch: "pi-sync/rebound",
+								path: "pi-sync/rebound",
+							},
+						},
+					},
+				}));
+				return "Save sync setup";
+			},
+		});
+		await assert.rejects(showEditGitTarget(ctx, partial), /changed while it was open/u);
+		const config = await loadConfig("work");
+		assert.equal(config.connectionName, "archive");
+		assert.equal(config.storagePath, "pi-sync/rebound");
 	});
 });
 

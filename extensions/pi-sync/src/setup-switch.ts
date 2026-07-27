@@ -4,6 +4,8 @@ import {
 	configuredSyncSetupNames,
 	loadConfig,
 	normalizeOnSwitch,
+	syncConfigReviewIdentity,
+	syncSetupReviewIdentity,
 	updateLocalConfig,
 } from "./config.js";
 import { safeTerminalText } from "./sync-format.js";
@@ -26,8 +28,8 @@ export function setupSwitchActionFromLabel(label: string): OnSwitchAction | unde
 	return SETUP_SWITCH_ACTION_OPTIONS.find((option) => option.label === label)?.value;
 }
 
-export async function saveOnSwitch(action: OnSwitchAction) {
-	await updateLocalConfig((settings) => ({ ...settings, onSwitch: action }));
+export async function saveOnSwitch(action: OnSwitchAction, signal?: AbortSignal) {
+	await updateLocalConfig((settings) => ({ ...settings, onSwitch: action }), signal);
 }
 
 export type SetupPullOutcome = "applied" | "cancelled";
@@ -44,10 +46,12 @@ export async function useSyncSetup(
 	pullCurrentSetup?: (setup: string) => Promise<SetupPullOutcome | undefined>,
 	expectedAction?: OnSwitchAction,
 	signal?: AbortSignal,
+	expectedSetupIdentity?: string,
 ): Promise<SetupSwitchResult> {
 	const normalized = name.trim();
 	if (!normalized) throw new Error("Usage: /sync use <setup>");
-	await loadConfig(normalized);
+	const loadedConfig = await loadConfig(normalized);
+	const reviewedSetupIdentity = expectedSetupIdentity ?? syncConfigReviewIdentity(loadedConfig);
 	throwIfAborted(signal);
 	const switchResult: { action: OnSwitchAction; switched: boolean } = {
 		action: "ask-before-pull",
@@ -55,8 +59,20 @@ export async function useSyncSetup(
 	};
 	await updateLocalConfig((current) => {
 		throwIfAborted(signal);
-		if (!Object.hasOwn(current.syncSetups, normalized)) {
+		const setup = current.syncSetups[normalized];
+		if (!setup) {
 			throw new Error(`Sync setup “${safeTerminalText(normalized)}” no longer exists.`);
+		}
+		const connectionName = setup.storage.connection;
+		const connection = current.storageConnections[connectionName];
+		if (
+			!connection ||
+			syncSetupReviewIdentity(normalized, setup, connectionName, connection) !==
+				reviewedSetupIdentity
+		) {
+			throw new Error(
+				`Sync setup “${safeTerminalText(normalized)}” changed while the switch preview was open; reopen it and review the current destination.`,
+			);
 		}
 		switchResult.action = normalizeOnSwitch(current.onSwitch);
 		if (expectedAction !== undefined && switchResult.action !== expectedAction) {
@@ -72,7 +88,7 @@ export async function useSyncSetup(
 		if (current.activeSyncSetup === normalized) return current;
 		switchResult.switched = true;
 		return { ...current, activeSyncSetup: normalized };
-	});
+	}, signal);
 	throwIfAborted(signal);
 	if (!switchResult.switched) {
 		ctx.ui.notify(`Sync setup “${safeTerminalText(normalized)}” is already current.`, "info");

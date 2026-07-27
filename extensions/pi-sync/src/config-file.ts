@@ -139,8 +139,10 @@ export function updateLocalConfigDocument<T extends Record<string, unknown>>(
 	defaultValue: T,
 	update: (current: T) => T,
 	validate: (value: Record<string, unknown>) => void,
+	signal?: AbortSignal,
 ): Promise<T> {
 	return withLocalConfigFileLock(async () => {
+		signal?.throwIfAborted();
 		const configPath = await prepareLocalConfigPath(validate);
 		const snapshot = await readConfigSnapshotIfExists(configPath);
 		const document = snapshot ? { path: configPath, ...snapshot } : undefined;
@@ -149,6 +151,7 @@ export function updateLocalConfigDocument<T extends Record<string, unknown>>(
 			: structuredClone(defaultValue);
 		const next = update(current);
 		validate(next);
+		signal?.throwIfAborted();
 		if (document && JSON.stringify(document.parsed) === JSON.stringify(next)) return next;
 		if (document) await replaceLocalConfigDocumentUnlocked(document, next);
 		else await installPrivateConfigExclusively(localConfigPath(), serializedConfig(next), true);

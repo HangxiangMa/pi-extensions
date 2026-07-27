@@ -48,6 +48,10 @@ async function showSettingsList(
 	const switchValue = setupSwitchActionLabel(config.onSwitch);
 	let saveQueue = Promise.resolve();
 	const latestRequested = new Map<string, string>();
+	const mutationController = new AbortController();
+	const mutationSignal = signal
+		? AbortSignal.any([signal, mutationController.signal])
+		: mutationController.signal;
 
 	return ctx.ui.custom<"files" | undefined>((tui, theme, _keybindings, done) => {
 		const items: SettingItem[] = [
@@ -120,10 +124,14 @@ async function showSettingsList(
 						if (id === "automatic") {
 							previousValue = latest.automatic ? "On" : "Off";
 							const automatic = newValue === "On";
-							await updateSyncSetup(config.setupName, (setup) => ({
-								...setup,
-								sync: { ...setup.sync, automatic },
-							}));
+							await updateSyncSetup(
+								config.setupName,
+								(setup) => ({
+									...setup,
+									sync: { ...setup.sync, automatic },
+								}),
+								{ signal: mutationSignal },
+							);
 							if (disposed || signal?.aborted) return;
 							ctx.ui.notify(
 								`Automatic sync ${automatic ? "enabled" : "disabled"} for “${safeTerminalText(config.setupName)}”.`,
@@ -133,7 +141,7 @@ async function showSettingsList(
 							previousValue = setupSwitchActionLabel(latest.onSwitch);
 							const action = setupSwitchActionFromLabel(newValue);
 							if (!action) throw new Error(`Invalid setup-switch action: ${newValue}`);
-							await saveOnSwitch(action);
+							await saveOnSwitch(action, mutationSignal);
 							if (disposed || signal?.aborted) return;
 							ctx.ui.notify(`After switching setup: ${newValue}.`, "info");
 						}
@@ -162,6 +170,7 @@ async function showSettingsList(
 			},
 			dispose() {
 				disposed = true;
+				mutationController.abort(new DOMException("Settings UI disposed", "AbortError"));
 				signal?.removeEventListener("abort", onAbort);
 			},
 		};

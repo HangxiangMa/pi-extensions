@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import test from "node:test";
 import { createMockContext } from "../../../test/support.js";
-import { loadConfig, localConfigPath, readLocalConfigObject } from "../src/config.js";
+import {
+	loadConfig,
+	localConfigPath,
+	readLocalConfigObject,
+	updateLocalConfig,
+} from "../src/config.js";
+import { showSyncManager } from "../src/manager-ui.js";
 import {
 	addSyncSetup,
 	updateStorageConnection,
@@ -39,6 +45,112 @@ test("setup edits are validated as one complete document before publication", as
 			/safe relative path/u,
 		);
 		assert.deepEqual(readFileSync(localConfigPath()), before);
+	});
+});
+
+test("S3 setup edit rejects coordinates changed while its review is open", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const settings = v3S3Settings();
+		(settings.storageConnections as Record<string, unknown>).secondary = {
+			type: "s3",
+			endpoint: "https://secondary.example.com",
+			region: "us-east-1",
+			credentials: { accessKeyId: "secondary", secretAccessKey: "secondary-secret" },
+		};
+		writeFileSync(localConfigPath(), JSON.stringify(settings), { mode: 0o600 });
+		const choices = [
+			"More…",
+			"Sync setups…",
+			"home (current)",
+			"Edit sync setup…",
+			"Back",
+			"Back",
+			"Back",
+			undefined,
+		];
+		const inputs = ["reviewed-bucket", "reviewed/path"];
+		let rebound = false;
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => inputs.shift(),
+			select: async (title: string) => {
+				if (title.startsWith("Review sync setup")) {
+					rebound = true;
+					await updateLocalConfig((current) => ({
+						...current,
+						syncSetups: {
+							...current.syncSetups,
+							home: {
+								...current.syncSetups.home,
+								storage: {
+									connection: "secondary",
+									bucket: "rebound-bucket",
+									path: "rebound/path",
+								},
+							},
+						},
+					}));
+					return "Save sync setup";
+				}
+				return choices.shift();
+			},
+		});
+		await showSyncManager(ctx, async () => undefined);
+		assert.equal(rebound, true);
+		assert.match(notifications.at(-1)?.message ?? "", /changed while it was open/u);
+		const config = await loadConfig();
+		assert.equal(config.connectionName, "secondary");
+		assert.equal(config.storagePath, "rebound/path");
+	});
+});
+
+test("setup switch rejects a destination changed while its review is open", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const settings = v3S3Settings();
+		settings.onSwitch = "switch-only";
+		(settings.syncSetups as Record<string, unknown>).work = {
+			storage: { connection: "r2", bucket: "pi-sync-test", path: "pi-sync/work" },
+			sync: { include: ["settings.json"], automatic: false },
+		};
+		writeFileSync(localConfigPath(), JSON.stringify(settings), { mode: 0o600 });
+		let mainVisits = 0;
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async (title: string, options: string[]) => {
+				if (title.startsWith("Manage sync")) {
+					mainVisits += 1;
+					return mainVisits === 1 ? "Switch sync setup" : undefined;
+				}
+				if (title.includes("Current sync setup:")) {
+					return options.find((option) => option.startsWith("work ·"));
+				}
+				if (title.includes("To: work")) {
+					await updateLocalConfig((current) => ({
+						...current,
+						syncSetups: {
+							...current.syncSetups,
+							work: {
+								...current.syncSetups.work,
+								storage: {
+									connection: "r2",
+									bucket: "pi-sync-test",
+									path: "changed/work",
+								},
+							},
+						},
+					}));
+					return "Switch to work";
+				}
+				return undefined;
+			},
+		});
+		await showSyncManager(ctx, async () => undefined);
+		assert.equal((await readLocalConfigObject())?.activeSyncSetup, "home");
+		assert.match(notifications.at(-1)?.message ?? "", /changed while.*preview/u);
 	});
 });
 

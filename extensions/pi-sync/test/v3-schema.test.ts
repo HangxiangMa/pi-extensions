@@ -91,6 +91,19 @@ test("version 3 accepts an empty catalog only without an active setup", async ()
 	});
 });
 
+test("version 3 rejects whitespace-normalized setup references", () => {
+	const active = settings("s3");
+	active.activeSyncSetup = " home ";
+	assert.throws(() => effectiveValidated(active), /activeSyncSetup.*whitespace/u);
+
+	const connectionReference = settings("s3");
+	connectionReference.syncSetups.home.storage.connection = " store ";
+	assert.throws(
+		() => effectiveValidated(connectionReference),
+		/storage connection reference.*whitespace/u,
+	);
+});
+
 test("version 3 rejects missing references and backend-field mixing", async () => {
 	await withTempHome(async (agentDir) => {
 		const missing = settings("s3");

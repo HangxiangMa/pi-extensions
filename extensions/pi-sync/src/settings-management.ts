@@ -1,17 +1,23 @@
 import {
 	effectiveSyncSetupRemoteIdentity,
 	localConfigPath,
+	normalizeSyncInclude,
+	type SyncSetupStorageReview,
+	syncSetupStorageReview,
 	updateLocalConfig,
 	validateConfigName,
 } from "./config.js";
 import type { PiSyncSettingsV3, StorageConnectionSettings, SyncSetupSettings } from "./types.js";
 
-export async function saveNewV3Settings(input: {
-	setupName: string;
-	connectionName: string;
-	connection: StorageConnectionSettings;
-	setup: SyncSetupSettings;
-}) {
+export async function saveNewV3Settings(
+	input: {
+		setupName: string;
+		connectionName: string;
+		connection: StorageConnectionSettings;
+		setup: SyncSetupSettings;
+	},
+	signal?: AbortSignal,
+) {
 	validateConfigName(input.setupName, "sync setup");
 	validateConfigName(input.connectionName, "storage connection");
 	const settings: PiSyncSettingsV3 = {
@@ -31,11 +37,15 @@ export async function saveNewV3Settings(input: {
 			throw new Error(`Settings already exist: ${localConfigPath()}`);
 		}
 		return settings;
-	});
+	}, signal);
 	return settings;
 }
 
-export async function addStorageConnection(name: string, connection: StorageConnectionSettings) {
+export async function addStorageConnection(
+	name: string,
+	connection: StorageConnectionSettings,
+	signal?: AbortSignal,
+) {
 	validateConfigName(name, "storage connection");
 	await updateSettings((settings) => {
 		if (Object.hasOwn(settings.storageConnections, name)) {
@@ -48,13 +58,14 @@ export async function addStorageConnection(name: string, connection: StorageConn
 				[name]: structuredClone(connection),
 			},
 		};
-	});
+	}, signal);
 }
 
 export async function updateStorageConnection(
 	name: string,
 	update: (connection: StorageConnectionSettings) => StorageConnectionSettings,
 	expectedSetups?: readonly string[],
+	signal?: AbortSignal,
 ) {
 	validateConfigName(name, "storage connection");
 	await updateSettings((settings) => {
@@ -70,10 +81,10 @@ export async function updateStorageConnection(
 		const nextConnections = { ...settings.storageConnections, [name]: nextConnection };
 		assertUniqueLocations(settings.syncSetups, nextConnections);
 		return { ...settings, storageConnections: nextConnections };
-	});
+	}, signal);
 }
 
-export async function addSyncSetup(name: string, setup: SyncSetupSettings) {
+export async function addSyncSetup(name: string, setup: SyncSetupSettings, signal?: AbortSignal) {
 	validateConfigName(name, "sync setup");
 	await updateSettings((settings) => {
 		if (Object.hasOwn(settings.syncSetups, name))
@@ -88,17 +99,45 @@ export async function addSyncSetup(name: string, setup: SyncSetupSettings) {
 			syncSetups: nextSetups,
 			...(settings.activeSyncSetup ? {} : { activeSyncSetup: name }),
 		};
-	});
+	}, signal);
 }
 
 export async function updateSyncSetup(
 	name: string,
 	update: (setup: SyncSetupSettings) => SyncSetupSettings,
+	options: {
+		expectedStorage?: SyncSetupStorageReview;
+		expectedInclude?: readonly string[];
+		signal?: AbortSignal;
+	} = {},
 ) {
 	validateConfigName(name, "sync setup");
 	await updateSettings((settings) => {
 		const setup = settings.syncSetups[name];
 		if (!setup) throw new Error(`Sync setup not found: ${name}`);
+		if (
+			options.expectedInclude &&
+			!sameNames(normalizeSyncInclude(setup.sync.include), options.expectedInclude)
+		) {
+			throw new Error(
+				`Sync setup “${name}” included content changed while it was open; reopen it and review the current selection.`,
+			);
+		}
+		if (options.expectedStorage) {
+			const connectionName = setup.storage.connection;
+			const connection = settings.storageConnections[connectionName];
+			if (
+				!connection ||
+				!sameStorageReview(
+					syncSetupStorageReview(name, setup, connectionName, connection),
+					options.expectedStorage,
+				)
+			) {
+				throw new Error(
+					`Sync setup “${name}” storage changed while it was open; reopen it and review the current storage location.`,
+				);
+			}
+		}
 		const nextSetup = update(structuredClone(setup));
 		if (!Object.hasOwn(settings.storageConnections, nextSetup.storage.connection)) {
 			throw new Error(`Storage connection not found: ${nextSetup.storage.connection}`);
@@ -106,23 +145,26 @@ export async function updateSyncSetup(
 		const nextSetups = { ...settings.syncSetups, [name]: nextSetup };
 		assertUniqueLocations(nextSetups, settings.storageConnections);
 		return { ...settings, syncSetups: nextSetups };
-	});
+	}, options.signal);
 }
 
-export async function removeSyncSetup(name: string) {
+export async function removeSyncSetup(name: string, signal?: AbortSignal) {
 	validateConfigName(name, "sync setup");
 	await updateSettings((settings) => {
 		if (!Object.hasOwn(settings.syncSetups, name)) throw new Error(`Sync setup not found: ${name}`);
-		if (settings.activeSyncSetup === name) {
+		const isCurrent = settings.activeSyncSetup === name;
+		if (isCurrent && Object.keys(settings.syncSetups).length > 1) {
 			throw new Error("Switch to another sync setup before removing the current setup.");
 		}
 		const syncSetups = { ...settings.syncSetups };
 		delete syncSetups[name];
-		return { ...settings, syncSetups };
-	});
+		const next = { ...settings, syncSetups };
+		if (isCurrent) delete next.activeSyncSetup;
+		return next;
+	}, signal);
 }
 
-export async function removeStorageConnection(name: string) {
+export async function removeStorageConnection(name: string, signal?: AbortSignal) {
 	validateConfigName(name, "storage connection");
 	await updateSettings((settings) => {
 		const referenced = referencingSetupNames(settings.syncSetups, name)[0];
@@ -135,16 +177,19 @@ export async function removeStorageConnection(name: string) {
 		const storageConnections = { ...settings.storageConnections };
 		delete storageConnections[name];
 		return { ...settings, storageConnections };
-	});
+	}, signal);
 }
 
-async function updateSettings(update: (settings: PiSyncSettingsV3) => PiSyncSettingsV3) {
+async function updateSettings(
+	update: (settings: PiSyncSettingsV3) => PiSyncSettingsV3,
+	signal?: AbortSignal,
+) {
 	return updateLocalConfig((settings) => {
 		if (settings.version !== 3) {
 			throw new Error("Storage connections and sync setups require version 3 pi-sync settings.");
 		}
 		return update(settings);
-	});
+	}, signal);
 }
 
 function referencingSetupNames(setups: Record<string, SyncSetupSettings>, connection: string) {
@@ -173,4 +218,14 @@ function assertUniqueLocations(
 
 function sameNames(left: readonly string[], right: readonly string[]) {
 	return left.length === right.length && left.every((name, index) => name === right[index]);
+}
+
+function sameStorageReview(left: SyncSetupStorageReview, right: SyncSetupStorageReview) {
+	return (
+		left.connectionName === right.connectionName &&
+		left.storageKind === right.storageKind &&
+		left.storagePath === right.storagePath &&
+		left.bucket === right.bucket &&
+		left.branch === right.branch
+	);
 }

@@ -219,7 +219,7 @@ TUI mode provides custom components. RPC uses Pi's supported dialog/notification
 | WebDAV | Verified strong conditional requests | Private settings username/app password | `<url>/<storage.path>` |
 | R2/S3 | Read-check-write-verify | Private settings credentials | `<bucket>/<storage.path>` |
 
-Git requires Git 2.30 or newer and a SHA-1-format remote repository. HTTPS userinfo, URL passwords, local paths, `file`, `git`, `ext`, and remote-helper transports are rejected. The private bare cache under `.pisync/git/` is rebuildable.
+Git requires Git 2.30 or newer and a SHA-1-format remote repository. HTTPS userinfo, URL passwords, local paths, `file`, `git`, `ext`, and remote-helper transports are rejected. When editing a Git setup, changing its storage path also requires a new owned branch so the existing branch remains readable at its reviewed path. The private bare cache under `.pisync/git/` is rebuildable.
 
 WebDAV requires HTTPS except loopback tests. URL credentials, query strings, fragments, unsafe redirects, weak/missing ETags, and ignored conditional headers fail closed. `/sync doctor` verifies collection and conditional-write behavior with an isolated probe.
 

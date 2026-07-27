@@ -17,7 +17,7 @@ import {
 	readLocalConfigObject,
 	updateLocalConfig,
 } from "../src/config.js";
-import { withConfigFileLinkForTest } from "../src/config-file.js";
+import { withConfigFileLinkForTest, withLocalConfigFileLock } from "../src/config-file.js";
 import {
 	addStorageConnection,
 	addSyncSetup,
@@ -220,6 +220,42 @@ test("S3 storage connection edit preserves masked credentials and reviews depend
 	});
 });
 
+test("replacing stored S3 credentials drops the prior session token", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const settings = v3S3Settings();
+		(settings.storageConnections.r2.credentials as Record<string, string>).sessionToken =
+			"stale-session-token";
+		writeSettings(settings);
+		const choices = [
+			"r2",
+			"Edit storage connection…",
+			"Change credential source",
+			"Store credentials privately",
+			"Save storage connection",
+			"Back",
+			"Back",
+		];
+		const inputs = [
+			settings.storageConnections.r2.endpoint,
+			settings.storageConnections.r2.region,
+			"replacement-access-key",
+		];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async () => choices.shift(),
+			input: async () => inputs.shift(),
+			custom: secretInput("replacement-secret-key"),
+		});
+		await showStorageConnections(ctx);
+		assert.deepEqual((await readLocalConfigObject())?.storageConnections.r2.credentials, {
+			accessKeyId: "replacement-access-key",
+			secretAccessKey: "replacement-secret-key",
+		});
+	});
+});
+
 test("S3 manager reuses a connection and derives a separate complete path", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
@@ -285,13 +321,29 @@ test("duplicate normalized remote locations fail before publication", async () =
 	});
 });
 
-test("referenced connections and the current setup cannot be removed", async () => {
+test("referenced connections and a current setup with alternatives cannot be removed", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeSettings();
+		await addSyncSetup("work", {
+			storage: { connection: "r2", bucket: "pi-sync-test", path: "pi-sync/work" },
+			sync: { include: ["settings.json"], automatic: false },
+		});
 		await assert.rejects(removeStorageConnection("r2"), /used by sync setup “home”/u);
 		await assert.rejects(removeSyncSetup("home"), /another sync setup/u);
 		assert.equal((await readLocalConfigObject())?.activeSyncSetup, "home");
+	});
+});
+
+test("removing the sole current setup clears the active reference", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeSettings();
+		await removeSyncSetup("home");
+		const settings = await readLocalConfigObject();
+		assert.deepEqual(settings?.syncSetups, {});
+		assert.equal(Object.hasOwn(settings ?? {}, "activeSyncSetup"), false);
+		assert.ok(settings?.storageConnections.r2);
 	});
 });
 
@@ -420,6 +472,72 @@ test("concurrent settings mutations serialize without dropping either update", a
 	});
 });
 
+test("an aborted settings mutation waiting on the update queue never publishes", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeSettings();
+		let releaseLock = () => {};
+		let reportLockHeld = () => {};
+		const lockHeld = new Promise<void>((resolve) => {
+			reportLockHeld = () => resolve();
+		});
+		const release = new Promise<void>((resolve) => {
+			releaseLock = () => resolve();
+		});
+		const blocker = withLocalConfigFileLock(async () => {
+			reportLockHeld();
+			await release;
+		});
+		await lockHeld;
+		const first = updateLocalConfig((settings) => ({ ...settings, firstQueued: true }));
+		const controller = new AbortController();
+		const second = updateLocalConfig(
+			(settings) => ({ ...settings, abortedQueued: true }),
+			controller.signal,
+		);
+		const rejected = assert.rejects(second, { name: "AbortError" });
+		controller.abort(new DOMException("Session replaced", "AbortError"));
+		releaseLock();
+		await blocker;
+		await first;
+		await rejected;
+		const saved = await readLocalConfigObject();
+		assert.equal(saved?.firstQueued, true);
+		assert.equal(saved?.abortedQueued, undefined);
+	});
+});
+
+test("an aborted settings mutation waiting on the cross-process lock never publishes", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeSettings();
+		let releaseLock = () => {};
+		let reportLockHeld = () => {};
+		const lockHeld = new Promise<void>((resolve) => {
+			reportLockHeld = () => resolve();
+		});
+		const release = new Promise<void>((resolve) => {
+			releaseLock = () => resolve();
+		});
+		const blocker = withLocalConfigFileLock(async () => {
+			reportLockHeld();
+			await release;
+		});
+		await lockHeld;
+		const controller = new AbortController();
+		const update = updateLocalConfig(
+			(settings) => ({ ...settings, abortedWhileLocked: true }),
+			controller.signal,
+		);
+		const rejected = assert.rejects(update, { name: "AbortError" });
+		controller.abort(new DOMException("Session replaced", "AbortError"));
+		releaseLock();
+		await blocker;
+		await rejected;
+		assert.equal((await readLocalConfigObject())?.abortedWhileLocked, undefined);
+	});
+});
+
 test("settings UI disposes on session replacement without mutating settings", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
@@ -431,6 +549,7 @@ test("settings UI disposes on session replacement without mutating settings", as
 			mode: "tui",
 			custom: async (factory: unknown) => {
 				const harness = createCustomSelectorHarness(factory, 80);
+				harness.handleInput("\r");
 				controller.abort(new DOMException("Session replaced", "AbortError"));
 				harness.dispose();
 				return harness.result;

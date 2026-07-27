@@ -117,6 +117,30 @@ test("Storage connections list and detail are symmetric and redact credentials",
 	});
 });
 
+test("the sole current sync setup offers removal to return to an empty catalog", async () => {
+	const value = settings();
+	delete (value.syncSetups as Record<string, unknown>).work;
+	delete (value.storageConnections as Record<string, unknown>).git;
+	await withSettings(async () => {
+		const titles: string[] = [];
+		const optionsSeen: string[][] = [];
+		const choices = ["More…", "Sync setups…", "home (current)", "Back", "Back", "Back", undefined];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async (title: string, options: string[]) => {
+				titles.push(title);
+				optionsSeen.push(options);
+				return choices.shift();
+			},
+		});
+		await showSyncManager(ctx, async () => undefined);
+		const detail = optionsSeen.find((items) => items.includes("Edit sync setup…"));
+		assert.deepEqual(detail, ["Edit sync setup…", "Remove sync setup…", "Back"]);
+		assert.doesNotMatch(titles.join("\n"), /Remove unavailable/u);
+	}, value);
+});
+
 test("S3-compatible lookalike hosts are not labeled as Cloudflare R2", async () => {
 	const value = settings();
 	value.storageConnections.r2.endpoint =

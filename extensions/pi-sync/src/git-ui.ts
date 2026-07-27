@@ -61,22 +61,25 @@ export async function showGitSetup(
 	);
 	throwIfAborted(signal);
 	if (choice !== "Save setup") return false;
-	await saveNewV3Settings({
-		setupName: targetName,
-		connectionName: profileName,
-		connection: { type: "git", remote },
-		setup: {
-			storage: {
-				connection: profileName,
-				branch: destination.branch,
-				path: destination.directory,
-			},
-			sync: {
-				include: [...DEFAULT_SYNC_INCLUDE],
-				automatic: automatic === "Enable automatic sync",
+	await saveNewV3Settings(
+		{
+			setupName: targetName,
+			connectionName: profileName,
+			connection: { type: "git", remote },
+			setup: {
+				storage: {
+					connection: profileName,
+					branch: destination.branch,
+					path: destination.directory,
+				},
+				sync: {
+					include: [...DEFAULT_SYNC_INCLUDE],
+					automatic: automatic === "Enable automatic sync",
+				},
 			},
 		},
-	});
+		signal,
+	);
 	if (signal?.aborted) return true;
 	ctx.ui.notify(
 		`Saved Git sync setup “${safeTerminalText(targetName)}”. Run /sync doctor.`,
@@ -110,7 +113,7 @@ export async function showAddGitStorageProfile(ctx: ExtensionCommandContext, sig
 	);
 	throwIfAborted(signal);
 	if (choice !== "Add storage connection") return false;
-	await addStorageConnection(name, { type: "git", remote });
+	await addStorageConnection(name, { type: "git", remote }, signal);
 	if (signal?.aborted) return true;
 	ctx.ui.notify(`Added storage connection “${safeTerminalText(name)}”.`, "info");
 	return true;
@@ -154,6 +157,7 @@ export async function showEditGitStorageProfile(
 			return { ...current, remote };
 		},
 		affectedSetups,
+		signal,
 	);
 	if (signal?.aborted) return true;
 	ctx.ui.notify(`Saved storage connection “${safeTerminalText(name)}”.`, "info");
@@ -191,17 +195,21 @@ export async function showAddGitTarget(
 	);
 	throwIfAborted(signal);
 	if (choice !== "Add sync setup") return false;
-	await addSyncSetup(name, {
-		storage: {
-			connection: profile,
-			branch: destination.branch,
-			path: destination.directory,
+	await addSyncSetup(
+		name,
+		{
+			storage: {
+				connection: profile,
+				branch: destination.branch,
+				path: destination.directory,
+			},
+			sync: {
+				include: syncFiles,
+				automatic: automatic === "Enable automatic sync",
+			},
 		},
-		sync: {
-			include: syncFiles,
-			automatic: automatic === "Enable automatic sync",
-		},
-	});
+		signal,
+	);
 	if (signal?.aborted) return true;
 	ctx.ui.notify(`Added sync setup “${safeTerminalText(name)}”.`, "info");
 	return true;
@@ -215,6 +223,13 @@ export async function showEditGitTarget(
 	const targetName = partial.setupName;
 	const destination = await promptGitDestination(ctx, targetName, signal, partial);
 	if (!destination) return false;
+	if (destination.directory !== partial.storagePath && destination.branch === partial.branch) {
+		ctx.ui.notify(
+			"Changing a Git storage path requires a new Git branch so the existing branch remains readable.",
+			"warning",
+		);
+		return false;
+	}
 	const choice = await ctx.ui.select(
 		`Review sync setup “${safeTerminalText(targetName)}”\n\nBranch: ${safeTerminalText(partial.branch ?? "pi-sync")} → ${safeTerminalText(destination.branch)}\nStorage path: ${safeTerminalText(partial.storagePath)} → ${safeTerminalText(destination.directory)}\nSaving changes the future storage location only; it does not move or delete remote history.`,
 		["Save sync setup", "Cancel"],
@@ -222,19 +237,23 @@ export async function showEditGitTarget(
 	);
 	throwIfAborted(signal);
 	if (choice !== "Save sync setup") return false;
-	await updateSyncSetup(targetName, (setup) => {
-		if (typeof setup.storage.branch !== "string") {
-			throw new Error("Sync setup storage type changed; reopen it.");
-		}
-		return {
-			...setup,
-			storage: {
-				...setup.storage,
-				branch: destination.branch,
-				path: destination.directory,
-			},
-		};
-	});
+	await updateSyncSetup(
+		targetName,
+		(setup) => {
+			if (typeof setup.storage.branch !== "string") {
+				throw new Error("Sync setup storage type changed; reopen it.");
+			}
+			return {
+				...setup,
+				storage: {
+					...setup.storage,
+					branch: destination.branch,
+					path: destination.directory,
+				},
+			};
+		},
+		{ expectedStorage: partial, signal },
+	);
 	if (signal?.aborted) return true;
 	ctx.ui.notify(`Saved sync setup “${safeTerminalText(targetName)}”.`, "info");
 	return true;

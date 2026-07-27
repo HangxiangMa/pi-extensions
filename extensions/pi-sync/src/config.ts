@@ -92,17 +92,60 @@ export async function loadConfig(setupName?: string): Promise<AnySyncConfig> {
 	return resolveSyncConfig(selectedName, setup, connectionName, connection, settings.onSwitch);
 }
 
+export type SyncSetupStorageReview = Pick<
+	PartialConfig,
+	"connectionName" | "storageKind" | "storagePath" | "bucket" | "branch"
+>;
+
 /** A validated setup-facing projection used by manager and settings UI. */
 export async function loadPartialConfig(setupName?: string): Promise<PartialConfig> {
 	const config = await loadConfig(setupName);
 	return {
 		setupName: config.setupName,
-		connectionName: config.connectionName,
-		storageKind: config.backend.type,
-		storagePath: config.storagePath,
+		...storageReviewFromConfig(config),
 		include: [...config.include],
 		automatic: config.automatic,
 		onSwitch: config.onSwitch,
+	};
+}
+
+export function syncSetupStorageReview(
+	setupName: string,
+	setup: SyncSetupSettings,
+	connectionName: string,
+	connection: StorageConnectionSettings,
+): SyncSetupStorageReview {
+	return storageReviewFromConfig(
+		resolveSyncConfig(setupName, setup, connectionName, connection, DEFAULT_ON_SWITCH),
+	);
+}
+
+export function syncSetupReviewIdentity(
+	setupName: string,
+	setup: SyncSetupSettings,
+	connectionName: string,
+	connection: StorageConnectionSettings,
+) {
+	return syncConfigReviewIdentity(
+		resolveSyncConfig(setupName, setup, connectionName, connection, DEFAULT_ON_SWITCH),
+	);
+}
+
+export function syncConfigReviewIdentity(config: AnySyncConfig) {
+	return JSON.stringify([
+		config.setupName,
+		config.connectionName,
+		backendIdentityCoordinates(config),
+		config.include,
+		config.automatic,
+	]);
+}
+
+function storageReviewFromConfig(config: AnySyncConfig): SyncSetupStorageReview {
+	return {
+		connectionName: config.connectionName,
+		storageKind: config.backend.type,
+		storagePath: config.storagePath,
 		...(config.backend.type === "s3"
 			? { bucket: config.backend.destination.bucket }
 			: config.backend.type === "git"
@@ -257,7 +300,7 @@ export function validateSettingsDocument(value: Record<string, unknown>): PiSync
 		);
 	}
 	const names = Object.keys(syncSetups);
-	const activeSyncSetup = optionalString(value.activeSyncSetup, "activeSyncSetup");
+	const activeSyncSetup = optionalCanonicalReference(value.activeSyncSetup, "activeSyncSetup");
 	if (names.length === 0) {
 		if (activeSyncSetup !== undefined) {
 			throw new Error("Invalid pi-sync settings: empty syncSetups cannot have activeSyncSetup.");
@@ -361,7 +404,10 @@ function validateSyncSetup(
 		["autoSync", "syncFiles", "syncSessions", "extraFiles"],
 		`sync policy for sync setup “${name}”`,
 	);
-	const connectionName = requiredString(storage.connection, `connection for sync setup “${name}”`);
+	const connectionName = requiredCanonicalReference(
+		storage.connection,
+		`storage connection reference for sync setup “${name}”`,
+	);
 	validateConfigName(connectionName, "storage connection reference");
 	const connection = ownObject<Record<string, unknown>>(connections, connectionName);
 	if (!connection) {
@@ -506,6 +552,22 @@ function requiredString(value: unknown, field: string) {
 		throw new Error(`Invalid pi-sync settings: ${field} must be a non-empty string.`);
 	}
 	return value.trim();
+}
+
+function requiredCanonicalReference(value: unknown, field: string) {
+	const normalized = requiredString(value, field);
+	if (value !== normalized) {
+		throw new Error(`Invalid pi-sync settings: ${field} must not have surrounding whitespace.`);
+	}
+	return normalized;
+}
+
+function optionalCanonicalReference(value: unknown, field: string) {
+	const normalized = optionalString(value, field);
+	if (normalized !== undefined && value !== normalized) {
+		throw new Error(`Invalid pi-sync settings: ${field} must not have surrounding whitespace.`);
+	}
+	return normalized;
 }
 
 function requiredSecret(value: unknown, field: string) {
@@ -716,8 +778,14 @@ export async function readLocalConfigObject(): Promise<PiSyncSettingsV3 | undefi
 
 let configUpdateQueue: Promise<void> = Promise.resolve();
 
-export function updateLocalConfig(update: (current: PiSyncSettingsV3) => PiSyncSettingsV3) {
-	const operation = configUpdateQueue.then(() => performLocalConfigUpdate(update));
+export function updateLocalConfig(
+	update: (current: PiSyncSettingsV3) => PiSyncSettingsV3,
+	signal?: AbortSignal,
+) {
+	const operation = configUpdateQueue.then(() => {
+		signal?.throwIfAborted();
+		return performLocalConfigUpdate(update, signal);
+	});
 	configUpdateQueue = operation.then(
 		() => undefined,
 		() => undefined,
@@ -725,8 +793,11 @@ export function updateLocalConfig(update: (current: PiSyncSettingsV3) => PiSyncS
 	return operation;
 }
 
-async function performLocalConfigUpdate(update: (current: PiSyncSettingsV3) => PiSyncSettingsV3) {
-	return updateLocalConfigDocument(localConfigTemplate(), update, validateSettingsDocument);
+async function performLocalConfigUpdate(
+	update: (current: PiSyncSettingsV3) => PiSyncSettingsV3,
+	signal?: AbortSignal,
+) {
+	return updateLocalConfigDocument(localConfigTemplate(), update, validateSettingsDocument, signal);
 }
 
 export async function writeLocalConfigObject(value: PiSyncSettingsV3 | Record<string, unknown>) {

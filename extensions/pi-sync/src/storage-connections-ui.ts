@@ -2,7 +2,11 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { isCloudflareR2Endpoint, readLocalConfigObject } from "./config.js";
 import { showAddGitStorageProfile, showEditGitStorageProfile } from "./git-ui.js";
 import { errorMessage, ownRecord, requiredInput, safeTerminalText } from "./manager-helpers.js";
-import { chooseS3Credentials, chooseS3CredentialUpdate } from "./s3-credentials-ui.js";
+import {
+	applyS3CredentialUpdate,
+	chooseS3Credentials,
+	chooseS3CredentialUpdate,
+} from "./s3-credentials-ui.js";
 import {
 	addStorageConnection,
 	removeStorageConnection,
@@ -92,7 +96,7 @@ async function showStorageConnectionDetail(
 					{ signal },
 				);
 				if (!confirmed || signal?.aborted) continue;
-				await removeStorageConnection(name);
+				await removeStorageConnection(name, signal);
 				ctx.ui.notify(`Removed storage connection “${safeTerminalText(name)}”.`, "info");
 				return;
 			}
@@ -172,15 +176,18 @@ async function editStorageConnection(
 			if (current.type !== "s3") {
 				throw new Error("Storage connection type changed; reopen it.");
 			}
-			const retained = current.credentials;
 			return {
 				...current,
 				endpoint,
 				region,
-				credentials: { ...retained, ...credentials.profileFields },
+				credentials: applyS3CredentialUpdate(
+					current.credentials,
+					credentials,
+				) as typeof current.credentials,
 			};
 		},
 		usedBy,
+		signal,
 	);
 	if (signal?.aborted) return;
 	ctx.ui.notify(`Saved storage connection “${safeTerminalText(name)}”.`, "info");
@@ -238,15 +245,19 @@ export async function showAddStorageConnection(ctx: ExtensionCommandContext, sig
 		{ signal },
 	);
 	if (save !== "Add storage connection" || signal?.aborted) return false;
-	await addStorageConnection(name, {
-		type: "s3",
-		endpoint,
-		region,
-		credentials: {
-			accessKeyId: credentials.profileFields.accessKeyId ?? "",
-			secretAccessKey: credentials.profileFields.secretAccessKey ?? "",
+	await addStorageConnection(
+		name,
+		{
+			type: "s3",
+			endpoint,
+			region,
+			credentials: {
+				accessKeyId: credentials.profileFields.accessKeyId ?? "",
+				secretAccessKey: credentials.profileFields.secretAccessKey ?? "",
+			},
 		},
-	});
+		signal,
+	);
 	if (signal?.aborted) return true;
 	ctx.ui.notify(`Added storage connection “${safeTerminalText(name)}”.`, "info");
 	return true;
