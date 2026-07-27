@@ -2,11 +2,20 @@
 
 ## Status
 
-Accepted for implementation on 2026-07-27.
+Accepted on 2026-07-27. Implemented on the `feat/pi-sync-git-backend` branch in PR #434.
 
 ## Context
 
 pi-sync already separates immutable snapshot creation and safe local apply from remote persistence through `SyncBackend`. S3/R2 publishes a managed pointer with weak read-check-write-verify consistency; WebDAV publishes the pointer conditionally. Git must fit the same contract while retaining native commit history and exact ref-update leases, without touching a user's working tree.
+
+## Decision drivers
+
+- Preserve the backend-neutral `SyncBackend` contract and existing S3/R2/WebDAV bytes, settings, state identities, and behavior.
+- Use native Git commits and reusable raw blobs rather than one opaque compressed archive per publication.
+- Publish with an exact expected-ref lease and reconcile ambiguous transport outcomes without guessing.
+- Keep all Git operations out of the user's working tree and avoid storing or rendering credentials.
+- Fail closed on malformed or unrelated branch content, unsafe paths, unsupported object formats, excessive payloads, and untrusted terminal text.
+- Keep setup, status, doctor, history, rollback, cancellation, and automatic sync behavior consistent with extension conventions.
 
 ## Decision
 
@@ -131,7 +140,32 @@ Git reuses identical blobs and can delta-compress changed raw content, but retai
 
 The pre-release gzip manifest version is intentionally unsupported because Git support had not shipped when the representation changed. A test branch using that format fails closed with guidance to recreate only the pi-sync-owned test branch.
 
-## Alternatives rejected
+## Consequences
+
+### Positive
+
+- Git becomes a first-class backend without changing the orchestration contract or the S3/R2/WebDAV wire formats.
+- Stable raw blobs allow native object reuse and pack delta compression, while first-parent commits provide directly addressable publication history.
+- Exact ref leases make concurrent changes observable, including safe missing-branch creation and force-resolution races.
+- A private, disposable bare cache isolates Git state from the current repository and makes local corruption recoverable without remote or settings changes.
+- Strict manifest, full-tree, checksum, size, path, timestamp, and object-format validation makes malformed or unrelated branch state fail closed before replacement.
+
+### Negative
+
+- Git 2.30 or newer is an additional runtime dependency, and the current cache model supports only SHA-1 repositories.
+- Each target exclusively owns one complete branch tree; unrelated files cannot coexist on that branch, and changing directory or namespace requires a new branch.
+- Git history retains previous content, including opted-in sessions and secrets, until the repository owner deliberately rewrites and prunes history.
+- Provider file limits and cumulative repository growth make Git unsuitable for large or high-churn binary/session archives.
+- Snapshot-ID lookup is bounded and duplicate snapshot IDs require an explicit commit reference from history.
+
+### Operational consequences
+
+- A remote can accept a push and become unreachable before reconciliation; pi-sync reports an unknown publication outcome and requires status inspection rather than claiming success or failure.
+- User-approved credential helpers, SSH configuration, `ProxyCommand`, and agents remain trusted external code; pi-sync suppresses interaction and redacts output but does not sandbox them.
+- Doctor and deterministic local-bare-repository tests verify Git/ref behavior, while live GitHub/GitLab/Forgejo interoperability continues to depend on standard SSH/HTTPS Git behavior.
+- Removing the private cache is safe recovery; deleting a target/cache or publishing a newer snapshot does not remove retained remote history.
+
+## Alternatives considered and rejected
 
 - **One gzip bundle per commit:** defeats much of Git's blob reuse/delta advantage, retains another compressed binary for every publication, and can exceed provider file limits.
 - **Git LFS or release assets:** adds provider-specific authentication, pointer, availability, and atomic-publication dependencies.
@@ -150,8 +184,9 @@ npm test -- --test-name-pattern='git contract|Git backend|Git config|Git runner|
 
 Full acceptance additionally requires `npm run check` and `just pack-sync`.
 
-## Accepted risks
+## References
 
-- User-approved Git credential helpers and SSH configuration can execute external code; pi-sync documents and does not sandbox these existing authentication mechanisms.
-- A remote service can accept a ref update and become unreachable before reconciliation; this is reported as outcome unknown rather than guessed.
-- No live GitHub/GitLab/Forgejo account is required by deterministic tests; local bare repositories verify Git protocol/ref semantics, while vendor interoperability depends on standard Git SSH/HTTPS behavior.
+- Git backend issues: #272, #273, and #274.
+- Implementation and review: PR #434.
+- Completed implementation plan: `docs/plans/archived/2026-07-27_pi-sync-git-backend-plan.md`.
+- Completed native-storage plan: `docs/plans/archived/2026-07-27_pi-sync-git-native-storage-plan.md`.

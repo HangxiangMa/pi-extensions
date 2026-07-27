@@ -31,7 +31,7 @@ Implement the approved Git storage design for `@narumitw/pi-sync`: add a lease-p
 
 ## Plan
 
-- [x] Add and approve `docs/plans/2026-07-27_pi-sync-git-backend-adr.md` with representation, schema, identity, publication, authentication/process, cache, history, cancellation, and session-retention decisions; verified every updated #272 decision is resolved in the accepted ADR.
+- [x] Add and approve `docs/adr/pi-sync-git-backend.md` with representation, schema, identity, publication, authentication/process, cache, history, cancellation, and session-retention decisions; verified every updated #272 decision is resolved in the accepted ADR.
 - [x] Add failing config/factory/state tests for valid Git profiles/targets, incompatible fields, URL/ref/path validation, secret-free destination identity, and duplicate destinations; `npm test -- --test-name-pattern='Git config'` failed first because Git was absent from the config union/normalization.
 - [x] Implement exhaustive Git types, normalization, validation, remote identity, state paths, and backend factory selection while retaining explicit S3/WebDAV formulas; focused config/state tests passed within the 1,636-test compiled run.
 - [x] Add failing Git process/backend contract tests for bootstrap, reads, repeated-content history, exact leases, unrelated refs, prompt/hook suppression, timeout/cancellation, corrupt/symlink cache handling, outcome reconciliation, and redaction; the initial focused run timed out because the new runner had not closed child stdin.
