@@ -36,6 +36,10 @@ test("Git remote identity preserves absolute versus home-relative scp paths", ()
 		normalizeGitRemoteIdentity("git@EXAMPLE.com:owner/repo.git/"),
 		normalizeGitRemoteIdentity("git@example.com:owner/repo.git"),
 	);
+	assert.equal(
+		normalizeGitRemoteIdentity("ssh://git@example.com:22/owner/repo.git"),
+		normalizeGitRemoteIdentity("ssh://git@example.com/owner/repo.git"),
+	);
 });
 
 test("Git config resolves an exhaustive secret-free backend destination", async () => {

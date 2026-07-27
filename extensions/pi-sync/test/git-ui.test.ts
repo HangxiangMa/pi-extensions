@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import test from "node:test";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import {
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+} from "../../../test/support.js";
 import { loadConfig, readLocalConfigObject } from "../src/config.js";
 import {
 	showAddGitStorageProfile,
@@ -11,8 +16,11 @@ import {
 	showGitSetup,
 } from "../src/git-ui.js";
 import { updateStorageProfile, updateSyncTarget } from "../src/settings-management.js";
+import { showSyncSettings } from "../src/settings-ui.js";
 import sync from "../src/sync.js";
-import { withTempHome } from "./helpers.js";
+import { withEnv, withTempHome } from "./helpers.js";
+
+initTheme("dark", false);
 
 test("Git setup stores a backend-specific destination without credentials", async () => {
 	await withTempHome(async (agentDir) => {
@@ -47,6 +55,72 @@ test("Git setup stores a backend-specific destination without credentials", asyn
 		assert.doesNotMatch(reviews.join("\n"), /token|password/i);
 		assert.match(reviews.join("\n"), /existing non-interactive Git\/SSH credentials/i);
 	});
+});
+
+test("Git setup review preserves a credential-free custom SSH port", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const inputs = [
+			"self-hosted",
+			"ssh://git@example.com:2222/private/pi-sync.git",
+			"pi-sync/home",
+			"pi-sync",
+			"home",
+		];
+		const reviews: string[] = [];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => inputs.shift(),
+			select: async (title: string) => {
+				reviews.push(title);
+				return "Cancel";
+			},
+		});
+		assert.equal(await showGitSetup(ctx, "home"), false);
+		assert.match(reviews.join("\n"), /ssh:\/\/example\.com:2222\/private\/pi-sync\.git/);
+		assert.doesNotMatch(reviews.join("\n"), /git@example\.com/);
+	});
+});
+
+test("Git settings ignore deprecated S3 automatic-sync environment overrides", async () => {
+	await withEnv({ PI_SYNC_AUTO_SYNC: "false" }, () =>
+		withTempHome(async (agentDir) => {
+			mkdirSync(agentDir, { recursive: true });
+			const setupInputs = [
+				"git",
+				"git@example.com:private/pi-sync.git",
+				"pi-sync/home",
+				"pi-sync",
+				"home",
+			];
+			const setup = createMockContext({
+				hasUI: true,
+				mode: "tui",
+				input: async () => setupInputs.shift(),
+				select: async () => "Save setup",
+			});
+			assert.equal(await showGitSetup(setup.ctx, "home"), true);
+			let rendered = "";
+			const settings = createMockContext({
+				hasUI: true,
+				mode: "tui",
+				custom: async (factory: unknown) => {
+					const selector = createCustomSelectorHarness(factory, 80);
+					rendered = selector.render().join("\n");
+					selector.handleInput("\r");
+					await new Promise((resolve) => setImmediate(resolve));
+					selector.handleInput("\u001b");
+					return selector.result;
+				},
+			});
+			await showSyncSettings(settings.ctx, async () => undefined);
+			assert.match(rendered, /Automatic sync/);
+			assert.doesNotMatch(rendered, /environment override/i);
+			const config = await loadConfig();
+			assert.equal(config.autoSync, false);
+		}),
+	);
 });
 
 test("Git setup stops after session cancellation without persisting a destination", async () => {
@@ -152,6 +226,28 @@ test("Git saved connections and targets add and edit through one destination mod
 			...target,
 			futureTargetField: ["retained"],
 		}));
+
+		const invalidTargetInputs = ["pi-sync/work", "settings-v2", "work"];
+		const invalidTarget = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => invalidTargetInputs.shift(),
+			select: async () => "Save target",
+		});
+		assert.equal(
+			await showEditGitTarget(invalidTarget.ctx, {
+				settingsVersion: 2,
+				storageKind: "git",
+				target: "work",
+				storageProfile: "backup",
+				remote: "https://git.example.com/owner/pi-sync.git",
+				branch: "pi-sync/work",
+				directory: "settings",
+				profile: "work",
+			}),
+			false,
+		);
+		assert.match(invalidTarget.notifications.at(-1)?.message ?? "", /choose a new owned branch/i);
 
 		const editProfileInputs = ["git@git.example.com:owner/new.git"];
 		const editProfile = createMockContext({

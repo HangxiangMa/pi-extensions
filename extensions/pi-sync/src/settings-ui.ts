@@ -51,7 +51,8 @@ async function showSettingsList(
 	version2: boolean,
 ) {
 	const targetName = version2 ? partial.target : undefined;
-	const automaticSyncOverridden = Object.hasOwn(process.env, "PI_SYNC_AUTO_SYNC");
+	const s3 = partial.storageKind !== "webdav" && partial.storageKind !== "git";
+	const automaticSyncOverridden = s3 && Object.hasOwn(process.env, "PI_SYNC_AUTO_SYNC");
 	const automaticSyncValue = isEnabled(partial.autoSync, true) ? "On" : "Off";
 	const targetSwitchAction = await loadTargetSwitchAction();
 	const targetSwitchValue = targetSwitchActionLabel(targetSwitchAction);

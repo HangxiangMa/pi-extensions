@@ -95,16 +95,16 @@ export class GitSyncBackend implements SyncBackend {
 	}
 
 	async readSnapshot(reference: string, signal?: AbortSignal): Promise<Snapshot> {
-		requireCommitSha(reference);
 		const head = await this.fetchRemoteHead(signal);
 		if (!head) throw new Error(`Git snapshot publication was not found: ${reference}`);
+		const commit = await this.resolveSnapshotReference(reference, head, signal);
 		try {
-			await this.git(["cat-file", "-e", `${reference}^{commit}`], { signal });
-			await this.git(["merge-base", "--is-ancestor", reference, head], { signal });
+			await this.git(["cat-file", "-e", `${commit}^{commit}`], { signal });
+			await this.git(["merge-base", "--is-ancestor", commit, head], { signal });
 		} catch (error) {
 			throw new Error(`Git snapshot publication was not found: ${reference}`, { cause: error });
 		}
-		const { manifest, payloadEntries } = await this.readPublication(reference, signal);
+		const { manifest, payloadEntries } = await this.readPublication(commit, signal);
 		let blobs: Buffer[];
 		try {
 			blobs = await readGitBlobs(
@@ -121,7 +121,7 @@ export class GitSyncBackend implements SyncBackend {
 			if (error instanceof Error && /exceeds/u.test(error.message)) {
 				throw new Error("Git snapshot file content exceeds its manifest size.", { cause: error });
 			}
-			throw error;
+			throw this.redactedError(error);
 		}
 		throwIfAborted(signal);
 		const files: SnapshotFile[] = manifest.files.map((file, index) => {
@@ -180,7 +180,12 @@ export class GitSyncBackend implements SyncBackend {
 				size,
 			})),
 		};
-		const candidate = await this.createCommit(snapshot, files, manifest, observed, options.signal);
+		let candidate: string;
+		try {
+			candidate = await this.createCommit(snapshot, files, manifest, observed, options.signal);
+		} catch (error) {
+			throw this.redactedError(error);
+		}
 		throwIfAborted(options.signal);
 		options.onCommit?.();
 
@@ -302,6 +307,34 @@ export class GitSyncBackend implements SyncBackend {
 			});
 		}
 		return diagnostics;
+	}
+
+	private async resolveSnapshotReference(reference: string, head: string, signal?: AbortSignal) {
+		if (isCommitSha(reference) || /^[0-9a-f]{64}$/u.test(reference)) {
+			requireCommitSha(reference);
+			return reference;
+		}
+		if (!reference || reference.length > 512 || !/^[A-Za-z0-9._-]+$/u.test(reference)) {
+			throw new Error("Invalid Git publication reference.");
+		}
+		const result = await this.git(["rev-list", "--first-parent", "--max-count=100", head], {
+			signal,
+		});
+		const commits = result.stdout.toString("utf8").trim().split("\n").filter(Boolean);
+		const matches: string[] = [];
+		for (const commit of commits) {
+			const { manifest } = await this.readPublication(commit, signal);
+			if (manifest.snapshotId === reference) matches.push(commit);
+		}
+		if (matches.length === 0) {
+			throw new Error(`Git snapshot publication was not found: ${reference}`);
+		}
+		if (matches.length > 1) {
+			throw new Error(
+				`Git snapshot id is ambiguous; use a commit reference from /sync history: ${reference}`,
+			);
+		}
+		return matches[0] as string;
 	}
 
 	private async headForSha(sha: string, signal?: AbortSignal) {
@@ -434,10 +467,10 @@ export class GitSyncBackend implements SyncBackend {
 					return `100644 ${object}\t${this.filePath(file.path)}`;
 				}),
 			];
-			await this.git(["update-index", "--index-info"], {
+			await this.git(["update-index", "-z", "--index-info"], {
 				env,
 				signal,
-				input: `${indexLines.join("\n")}\n`,
+				input: Buffer.from(`${indexLines.join("\0")}\0`, "utf8"),
 			});
 			const tree = (await this.git(["write-tree"], { env, signal })).stdout.toString("utf8").trim();
 			const date = Number.isNaN(Date.parse(snapshot.createdAt))
@@ -473,10 +506,11 @@ export class GitSyncBackend implements SyncBackend {
 				() => this.initializeCache(signal),
 				signal,
 			);
-			this.cacheReady = operation.catch((error) => {
-				if (this.cacheReady === operation) this.cacheReady = undefined;
-				throw error;
+			const wrapped = operation.catch((error) => {
+				if (this.cacheReady === wrapped) this.cacheReady = undefined;
+				throw this.redactedError(error);
 			});
+			this.cacheReady = wrapped;
 		}
 		return this.cacheReady;
 	}
@@ -558,6 +592,8 @@ export class GitSyncBackend implements SyncBackend {
 			allowFileProtocol: this.allowLocalRemotes,
 			timeoutMs: options.timeoutMs ?? this.commandTimeoutMs,
 			...options,
+		}).catch((error) => {
+			throw this.redactedError(error);
 		});
 	}
 
@@ -602,6 +638,11 @@ export class GitSyncBackend implements SyncBackend {
 		return parseGitTree(result.stdout);
 	}
 
+	private redactedError(error: unknown) {
+		if (error instanceof Error && error.name === "AbortError") return error;
+		return new Error(this.safeError(error));
+	}
+
 	private safeError(error: unknown) {
 		const raw =
 			error instanceof GitCommandError
@@ -634,7 +675,7 @@ function gitDestination(config: ResolvedGitBackend) {
 	const remote = config.profile.remote;
 	if (remote.includes("://")) {
 		try {
-			host = new URL(remote).hostname;
+			host = new URL(remote).host;
 		} catch {
 			host = "Git remote";
 		}

@@ -191,6 +191,18 @@ export async function showEditGitTarget(
 	const targetName = partial.target;
 	const destination = await promptGitDestination(ctx, targetName, signal, partial);
 	if (!destination) return false;
+	const currentBranch = normalizeGitBranch(partial.branch);
+	const currentDirectory = normalizeGitDirectory(partial.directory);
+	const currentNamespace = partial.profile ?? targetName;
+	const treeLocationChanged =
+		destination.directory !== currentDirectory || destination.namespace !== currentNamespace;
+	if (treeLocationChanged && destination.branch === currentBranch) {
+		ctx.ui.notify(
+			"Choose a new owned branch when changing the Git directory or namespace; pi-sync does not move existing remote history.",
+			"error",
+		);
+		return false;
+	}
 	const choice = await ctx.ui.select(
 		`Review target “${safeTerminalText(targetName)}”\n\nBranch: ${safeTerminalText(partial.branch ?? "pi-sync")} → ${safeTerminalText(destination.branch)}\nDirectory: ${safeTerminalText(partial.directory ?? "pi-sync")} → ${safeTerminalText(destination.directory)}\nNamespace: ${safeTerminalText(partial.profile ?? targetName)} → ${safeTerminalText(destination.namespace)}\nSaving changes future sync destination only; it does not move or delete remote history.`,
 		["Save target", "Cancel"],
@@ -252,7 +264,7 @@ function throwIfAborted(signal?: AbortSignal) {
 function safeGitRemote(remote: string) {
 	try {
 		const url = new URL(remote);
-		return safeTerminalText(`${url.protocol}//${url.hostname}${url.pathname}`);
+		return safeTerminalText(`${url.protocol}//${url.host}${url.pathname}`);
 	} catch {
 		return safeTerminalText(remote);
 	}

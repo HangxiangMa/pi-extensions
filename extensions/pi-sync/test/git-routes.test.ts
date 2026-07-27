@@ -93,7 +93,7 @@ test("all backend-neutral sync routes operate against a Git target", async () =>
 						'{"theme":"dark"}\n',
 					);
 					await syncBoth(ctx, options(), factory);
-					await rollback(ctx, options([first.snapshotRef]), factory);
+					await rollback(ctx, options([first.snapshotId]), factory);
 					assert.notEqual((await backend.readHead())?.snapshotRef, first.snapshotRef);
 
 					const mock = createMockPi();

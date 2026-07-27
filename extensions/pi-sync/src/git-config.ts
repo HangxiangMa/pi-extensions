@@ -125,6 +125,7 @@ export function normalizeGitRemoteIdentity(value: string) {
 	}
 	const url = new URL(normalized);
 	url.hostname = url.hostname.toLowerCase();
+	if (url.protocol === "ssh:" && url.port === "22") url.port = "";
 	url.pathname = url.pathname.replace(/\/+$/gu, "");
 	return url.toString();
 }
