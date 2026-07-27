@@ -3,7 +3,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { createMockContext } from "../../../test/support.js";
-import { loadConfig, localConfigPath, readState, statePathForConfig } from "../src/config.js";
+import {
+	loadConfig,
+	localConfigPath,
+	readStateForConfig,
+	statePathForConfig,
+} from "../src/config.js";
 import { expectedRemoteHead } from "../src/sync-backend.js";
 import {
 	diff,
@@ -18,31 +23,29 @@ import {
 	syncBoth,
 } from "../src/sync-operations.js";
 import type { CommandOptions, Snapshot, SyncConfig } from "../src/types.js";
-import { requiredConfig, snapshot, withTempHome } from "./helpers.js";
+import { v3S3Settings as requiredConfig, snapshot, withTempHome } from "./helpers.js";
 import { MemorySyncBackend } from "./memory-sync-backend.js";
 
 test("fake backend exercises push, pull, history, rollback, and revision state", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(path.join(agentDir, "settings.json"), '{"local":true}\n');
-		writeFileSync(
-			localConfigPath(),
-			JSON.stringify({ ...requiredConfig(), syncFiles: ["settings.json"] }),
-		);
+		writeFileSync(localConfigPath(), JSON.stringify(requiredConfig()));
 		const backend = new MemorySyncBackend();
 		const factory = () => backend;
 		const { ctx, notifications } = createMockContext({ hasUI: true });
+		const config = await loadConfig();
 
 		await push(ctx, commandOptions(), undefined, factory);
 		const pushed = await backend.readHead();
 		assert.ok(pushed);
-		assert.equal((await readState("default")).lastRemoteRevision, pushed.revision);
+		assert.equal((await readStateForConfig(config)).lastRemoteRevision, pushed.revision);
 		const pushedSnapshot = await backend.readSnapshot(pushed.snapshotRef);
 		const revisionOnly = await backend.publishSnapshot(pushedSnapshot, expectedRemoteHead(pushed));
 		await status(ctx, commandOptions(), factory);
 		assert.match(notifications.at(-1)?.message ?? "", /remote changed since last sync: yes/);
 		await syncBoth(ctx, commandOptions(), factory);
-		assert.equal((await readState("default")).lastRemoteRevision, revisionOnly.head.revision);
+		assert.equal((await readStateForConfig(config)).lastRemoteRevision, revisionOnly.head.revision);
 
 		const remote = {
 			...snapshot([{ path: "settings.json", content: Buffer.from('{"remote":true}\n') }]),
@@ -54,7 +57,7 @@ test("fake backend exercises push, pull, history, rollback, and revision state",
 		);
 		await pull(ctx, commandOptions(), factory);
 		assert.equal(readFileSync(path.join(agentDir, "settings.json"), "utf8"), '{"remote":true}\n');
-		assert.equal((await readState("default")).lastRemoteRevision, remoteResult.head.revision);
+		assert.equal((await readStateForConfig(config)).lastRemoteRevision, remoteResult.head.revision);
 
 		await history(ctx, commandOptions(), factory);
 		assert.match(notifications.map((item) => item.message).join("\n"), /remote-change/);
@@ -69,7 +72,7 @@ test("fake backend exercises push, pull, history, rollback, and revision state",
 			[pushed.snapshotId, remote.id, restoredHead.snapshotId],
 		);
 		assert.equal(readFileSync(path.join(agentDir, "settings.json"), "utf8"), '{"local":true}\n');
-		assert.equal((await readState("default")).lastRemoteRevision, restoredHead.revision);
+		assert.equal((await readStateForConfig(config)).lastRemoteRevision, restoredHead.revision);
 	});
 });
 
@@ -77,11 +80,7 @@ test("history rollback aborts if the selected backend destination changes", asyn
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(path.join(agentDir, "settings.json"), '{"current":true}\n');
-		const initialSettings = {
-			...requiredConfig(),
-			bucket: "first-bucket",
-			syncFiles: ["settings.json"],
-		};
+		const initialSettings = v3SettingsWithBucket("first-bucket");
 		writeFileSync(localConfigPath(), JSON.stringify(initialSettings));
 		const first = new MemorySyncBackend("memory:first", "memory · first");
 		const second = new MemorySyncBackend("memory:second", "memory · second");
@@ -101,10 +100,7 @@ test("history rollback aborts if the selected backend destination changes", asyn
 			hasUI: true,
 			mode: "tui",
 			select: async (_title: string, options: string[]) => {
-				writeFileSync(
-					localConfigPath(),
-					JSON.stringify({ ...initialSettings, bucket: "second-bucket" }),
-				);
+				writeFileSync(localConfigPath(), JSON.stringify(v3SettingsWithBucket("second-bucket")));
 				return options[0];
 			},
 		});
@@ -120,10 +116,7 @@ test("rollback reports a typed local/remote partial failure with its backup", as
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(path.join(agentDir, "settings.json"), '{"current":true}\n');
-		writeFileSync(
-			localConfigPath(),
-			JSON.stringify({ ...requiredConfig(), syncFiles: ["settings.json"] }),
-		);
+		writeFileSync(localConfigPath(), JSON.stringify(requiredConfig()));
 		const backend = new ConflictingRollbackBackend();
 		const historical = {
 			...snapshot([{ path: "settings.json", content: Buffer.from('{"historical":true}\n') }]),
@@ -159,10 +152,7 @@ test("rollback rejects a remote head change that lands during confirmation", asy
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(path.join(agentDir, "settings.json"), '{"current":true}\n');
-		writeFileSync(
-			localConfigPath(),
-			JSON.stringify({ ...requiredConfig(), syncFiles: ["settings.json"] }),
-		);
+		writeFileSync(localConfigPath(), JSON.stringify(requiredConfig()));
 		const backend = new MemorySyncBackend();
 		const historical = {
 			...snapshot([{ path: "settings.json", content: Buffer.from('{"historical":true}\n') }]),
@@ -198,10 +188,7 @@ test("push reports a typed partial outcome when remote commits but local state c
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(path.join(agentDir, "settings.json"), '{"local":true}\n');
-		writeFileSync(
-			localConfigPath(),
-			JSON.stringify({ ...requiredConfig(), syncFiles: ["settings.json"] }),
-		);
+		writeFileSync(localConfigPath(), JSON.stringify(requiredConfig()));
 		const config = await loadConfig();
 		const backend = new StateBreakingBackend(statePathForConfig(config));
 		const { ctx } = createMockContext({ hasUI: true });
@@ -222,10 +209,7 @@ test("fake backend exercises status, diff, sync, and backend diagnostics", async
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(path.join(agentDir, "settings.json"), '{"local":true}\n');
-		writeFileSync(
-			localConfigPath(),
-			JSON.stringify({ ...requiredConfig(), syncFiles: ["settings.json"] }),
-		);
+		writeFileSync(localConfigPath(), JSON.stringify(requiredConfig()));
 		const backend = new MemorySyncBackend();
 		const factory = () => backend;
 		const { ctx, notifications } = createMockContext({ hasUI: true });
@@ -251,10 +235,7 @@ test("forced fake-backend push re-reads the head and preserves newly observed un
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(path.join(agentDir, "settings.json"), '{"local":true}\n');
-		writeFileSync(
-			localConfigPath(),
-			JSON.stringify({ ...requiredConfig(), syncFiles: ["settings.json"] }),
-		);
+		writeFileSync(localConfigPath(), JSON.stringify(requiredConfig()));
 		const backend = new AdvancingMemoryBackend();
 		const initial = {
 			...snapshot([{ path: "settings.json", content: Buffer.from('{"initial":true}\n') }]),
@@ -336,6 +317,12 @@ class AdvancingMemoryBackend extends MemorySyncBackend {
 		}
 		return super.readHead(signal);
 	}
+}
+
+function v3SettingsWithBucket(bucket: string) {
+	const settings = requiredConfig();
+	settings.syncSetups.home.storage.bucket = bucket;
+	return settings;
 }
 
 function commandOptions(): CommandOptions {

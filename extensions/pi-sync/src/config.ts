@@ -10,462 +10,576 @@ import {
 import {
 	activeLocalConfigPath,
 	consumeLocalConfigMigrationNotice,
+	createLocalConfigDocument,
 	legacyLocalConfigPath,
 	localConfigPath,
 	quarantineAndRemoveConfigIfMatches,
 	readActiveLocalConfigDocumentForRepair,
 	readMigratingLocalConfigDocument,
 	replaceLocalConfigDocument,
-	withLocalConfigFileLock,
+	updateLocalConfigDocument,
 } from "./config-file.js";
 import {
-	gitRemoteDestinationIdentity,
 	normalizeGitBranch,
 	normalizeGitDirectory,
+	normalizeGitRemote,
 	normalizeGitRemoteIdentity,
-	resolveGitBackendConfig,
-	resolveGitV2PartialConfig,
 } from "./git-config.js";
 import { safeName } from "./paths.js";
-import { DEFAULT_SYNC_FILES, normalizeExtraFiles, normalizeSyncFiles } from "./sync-policy.js";
+import { normalizeSyncInclude } from "./sync-policy.js";
 import type {
 	AnySyncConfig,
+	OnSwitchAction,
 	PartialConfig,
+	PiSyncSettingsV3,
 	Snapshot,
-	StorageProfileKind,
+	StorageConnectionSettings,
+	SyncSetupSettings,
 	SyncState,
-	TargetSwitchAction,
 } from "./types.js";
 import {
 	normalizeWebDavIdentityUrl,
 	normalizeWebDavPath,
 	normalizeWebDavUrl,
 	validateWebDavCredentials,
-	validateWebDavNamespace,
 } from "./webdav-config.js";
 
-export { extraFilePathsByLower, normalizeExtraFiles, normalizeSyncFiles } from "./sync-policy.js";
+const STATE_VERSION = 2;
+export const DEFAULT_ON_SWITCH: OnSwitchAction = "ask-before-pull";
 
-const VERSION = 1;
-const DEFAULT_PROFILE = "default";
-const DEFAULT_PREFIX = "pi-sync";
-const DEFAULT_REGION = "auto";
-export const DEFAULT_TARGET_SWITCH_ACTION: TargetSwitchAction = "ask";
-
+export { normalizeExtraFiles, normalizeSyncFiles } from "./sync-policy.js";
 export {
 	activeLocalConfigPath,
 	consumeLocalConfigMigrationNotice,
+	createLocalConfigDocument,
 	legacyLocalConfigPath,
 	localConfigPath,
+	normalizeSyncInclude,
 	quarantineAndRemoveConfigIfMatches,
 	readActiveLocalConfigDocumentForRepair,
 	replaceLocalConfigDocument,
+	updateLocalConfigDocument,
 };
-
-export const DEPRECATED_PI_SYNC_ENV_NAMES = [
-	"PI_SYNC_ENDPOINT",
-	"PI_SYNC_BUCKET",
-	"PI_SYNC_REGION",
-	"PI_SYNC_ACCESS_KEY_ID",
-	"PI_SYNC_SECRET_ACCESS_KEY",
-	"PI_SYNC_SESSION_TOKEN",
-	"PI_SYNC_PROFILE",
-	"PI_SYNC_PREFIX",
-	"PI_SYNC_AUTO_SYNC",
-	"PI_SYNC_SESSIONS",
-] as const;
-
-function trimSlashes(value: string) {
-	return value.replace(/^\/+|\/+$/g, "");
-}
-
-function decodeBase64Strict(value: string, filePath: string) {
-	if (!/^[A-Za-z0-9+/]*={0,2}$/.test(value) || value.length % 4 !== 0) {
-		throw new Error(`Invalid base64 content in snapshot file: ${filePath}`);
-	}
-	return Buffer.from(value, "base64");
-}
 
 function sessionDirFromContext(ctx: ExtensionCommandContext | ExtensionContext) {
 	const manager = ctx.sessionManager as typeof ctx.sessionManager & {
 		usesDefaultSessionDir?: () => boolean;
 	};
-	const usesDefaultSessionDir = manager.usesDefaultSessionDir;
-	if (typeof usesDefaultSessionDir === "function" && usesDefaultSessionDir.call(manager)) {
-		return undefined;
-	}
-	const getSessionDir = manager.getSessionDir;
-	return typeof getSessionDir === "function"
-		? (getSessionDir.call(manager) as string | undefined)
+	if (manager.usesDefaultSessionDir?.call(manager)) return undefined;
+	return typeof manager.getSessionDir === "function"
+		? (manager.getSessionDir.call(manager) as string | undefined)
 		: undefined;
 }
 
-export async function loadConfigInternal(targetName?: string): Promise<AnySyncConfig> {
-	const partial = await loadPartialConfig(targetName);
-	const namespace = normalizeOptionalString(partial.profile) ?? DEFAULT_PROFILE;
-	const common = {
-		profile: namespace,
-		target: partial.target ?? DEFAULT_PROFILE,
-		storageProfile: partial.storageProfile ?? DEFAULT_PROFILE,
-		autoSync: isEnabled(partial.autoSync, true),
-		settingsVersion: partial.settingsVersion ?? 1,
-		syncFiles: normalizeSyncFiles(partial.syncFiles),
-		syncSessions: isExplicitlyEnabled(partial.syncSessions),
-		extraFiles: normalizeExtraFiles(partial.extraFiles),
-	};
-	if (partial.storageKind === "git") {
-		return resolveGitBackendConfig(partial, common, localConfigPath());
+export async function loadConfig(setupName?: string): Promise<AnySyncConfig> {
+	const settings = await requireSettings();
+	const selectedName = setupName ?? settings.activeSyncSetup;
+	if (!selectedName) throw new Error("No sync setups are configured.");
+	validateConfigName(selectedName, "sync setup");
+	const setup = ownObject<SyncSetupSettings>(settings.syncSetups, selectedName);
+	if (!setup)
+		throw new Error(`Invalid pi-sync settings: sync setup “${selectedName}” was not found.`);
+	const connectionName = setup.storage.connection;
+	const connection = ownObject<StorageConnectionSettings>(
+		settings.storageConnections,
+		connectionName,
+	);
+	if (!connection) {
+		throw new Error(
+			`Invalid pi-sync settings: sync setup “${selectedName}” references missing storage connection “${connectionName}”.`,
+		);
 	}
-	if (partial.storageKind === "webdav") {
-		validateWebDavNamespace(namespace);
-		const url = normalizeWebDavUrl(partial.url);
-		const username = normalizeConfiguredString(partial.username);
-		const password = normalizeConfiguredSecret(partial.password);
-		const remotePath = normalizeWebDavPath(partial.path);
-		const missing = [
-			["url", url],
-			["username", username],
-			["password", password],
-		]
-			.filter(([, value]) => !value)
-			.map(([name]) => name);
-		if (missing.length > 0 || !url || !username || !password) {
-			throw new Error(
-				`Missing pi-sync WebDAV config: ${missing.join(", ")}. Use /sync setup or edit ${localConfigPath()}.`,
-			);
-		}
-		validateWebDavCredentials(username, password);
+	return resolveSyncConfig(selectedName, setup, connectionName, connection, settings.onSwitch);
+}
+
+/** A validated setup-facing projection used by manager and settings UI. */
+export async function loadPartialConfig(setupName?: string): Promise<PartialConfig> {
+	const config = await loadConfig(setupName);
+	return {
+		setupName: config.setupName,
+		connectionName: config.connectionName,
+		storageKind: config.backend.type,
+		storagePath: config.storagePath,
+		include: [...config.include],
+		automatic: config.automatic,
+		onSwitch: config.onSwitch,
+		...(config.backend.type === "s3"
+			? { bucket: config.backend.destination.bucket }
+			: config.backend.type === "git"
+				? { branch: config.backend.destination.branch }
+				: {}),
+	};
+}
+
+export async function configuredSyncSetupNames() {
+	const settings = await readLocalConfigObject();
+	return settings
+		? Object.keys(settings.syncSetups).sort((left, right) => left.localeCompare(right))
+		: [];
+}
+
+export async function loadOnSwitch(): Promise<OnSwitchAction> {
+	return (await requireSettings()).onSwitch;
+}
+
+export function normalizeOnSwitch(value: unknown): OnSwitchAction {
+	if (value === "ask-before-pull" || value === "pull-after-switch" || value === "switch-only") {
+		return value;
+	}
+	throw new Error(
+		'Invalid pi-sync settings: onSwitch must be "ask-before-pull", "pull-after-switch", or "switch-only".',
+	);
+}
+
+function resolveSyncConfig(
+	setupName: string,
+	setup: SyncSetupSettings,
+	connectionName: string,
+	connection: StorageConnectionSettings,
+	onSwitch: OnSwitchAction,
+): AnySyncConfig {
+	const storagePath = normalizeStoragePath(setup.storage.path);
+	const namespace = storagePath.slice(storagePath.lastIndexOf("/") + 1);
+	const include = normalizeSyncInclude(setup.sync.include);
+	const common = {
+		setupName,
+		connectionName,
+		storagePath,
+		snapshotIdentity: namespace,
+		include,
+		automatic: setup.sync.automatic,
+		onSwitch,
+	};
+	if (connection.type === "git") {
+		return {
+			...common,
+			backend: {
+				type: "git",
+				profile: { kind: "git", remote: normalizeGitRemote(connection.remote) as string },
+				destination: {
+					branch: normalizeGitBranch(setup.storage.branch),
+					directory: normalizeGitDirectory(storagePath),
+					namespace,
+				},
+			},
+		};
+	}
+	if (connection.type === "webdav") {
 		return {
 			...common,
 			backend: {
 				type: "webdav",
-				profile: { kind: "webdav", url, username, password },
-				destination: { path: remotePath, namespace },
+				profile: {
+					kind: "webdav",
+					url: normalizeWebDavUrl(connection.url) as string,
+					username: connection.credentials.username,
+					password: connection.credentials.password,
+				},
+				destination: { path: normalizeWebDavPath(storagePath), namespace },
 			},
 		};
 	}
-
-	const endpoint = normalizeConfiguredString(partial.endpoint);
-	const bucket = normalizeConfiguredString(partial.bucket);
-	const accessKeyId = normalizeConfiguredString(partial.accessKeyId);
-	const secretAccessKey = normalizeConfiguredString(partial.secretAccessKey);
-	const missing = [
-		["endpoint", endpoint],
-		["bucket", bucket],
-		["accessKeyId", accessKeyId],
-		["secretAccessKey", secretAccessKey],
-	]
-		.filter(([, value]) => !value)
-		.map(([name]) => name);
-	if (missing.length > 0 || !endpoint || !bucket || !accessKeyId || !secretAccessKey) {
-		throw new Error(
-			`Missing pi-sync config: ${missing.join(", ")}. Use /sync setup or edit ${localConfigPath()}.`,
-		);
-	}
-	const prefix = trimSlashes(normalizeOptionalString(partial.prefix) ?? DEFAULT_PREFIX);
 	return {
 		...common,
 		backend: {
 			type: "s3",
 			profile: {
-				kind: partial.storageKind ?? (isCloudflareR2Endpoint(endpoint) ? "r2" : "s3-compatible"),
-				endpoint,
-				region: normalizeOptionalString(partial.region) ?? DEFAULT_REGION,
-				accessKeyId,
-				secretAccessKey,
-				sessionToken: normalizeOptionalString(partial.sessionToken),
+				kind: isCloudflareR2Endpoint(connection.endpoint) ? "r2" : "s3-compatible",
+				endpoint: normalizeS3Endpoint(connection.endpoint),
+				region: requiredString(connection.region, "S3 region"),
+				accessKeyId: connection.credentials.accessKeyId,
+				secretAccessKey: connection.credentials.secretAccessKey,
+				sessionToken: optionalString(connection.credentials.sessionToken, "S3 session token"),
 			},
-			destination: { bucket, prefix, namespace },
+			destination: {
+				bucket: normalizeS3Bucket(setup.storage.bucket),
+				prefix: storagePath,
+				namespace,
+			},
 		},
 	};
 }
 
-export async function loadConfig(targetName?: string): Promise<AnySyncConfig> {
-	return loadConfigInternal(targetName);
-}
-
-export async function configuredTargetNames() {
+async function requireSettings() {
 	const settings = await readLocalConfigObject();
-	if (!settings) return [];
-	if (!isV2SettingsObject(settings)) return [];
-	return Object.keys(requireNamedObjectMap(settings.targets, "targets")).sort((left, right) =>
-		left.localeCompare(right),
-	);
-}
-
-export async function loadPartialConfig(targetName?: string): Promise<PartialConfig> {
-	const fileConfig = (await readLocalConfigObject()) ?? {};
-	if (isV2SettingsObject(fileConfig)) return resolveV2PartialConfig(fileConfig, targetName);
-	if (targetName !== undefined) {
-		throw new Error("--target requires version 2 pi-sync settings with named targets.");
+	if (!settings) {
+		throw new Error(`Missing pi-sync settings. Use /sync setup or create ${localConfigPath()}.`);
 	}
-	return resolveLegacyPartialConfig(fileConfig as PartialConfig);
+	return settings;
 }
 
-export async function loadTargetSwitchAction(): Promise<TargetSwitchAction> {
-	const settings = await readLocalConfigObject();
-	if (!settings || !isV2SettingsObject(settings)) return DEFAULT_TARGET_SWITCH_ACTION;
-	return normalizeTargetSwitchAction(settings.targetSwitchAction);
-}
-
-export function normalizeTargetSwitchAction(value: unknown): TargetSwitchAction {
-	if (value === undefined) return DEFAULT_TARGET_SWITCH_ACTION;
-	if (value === "ask" || value === "pull" || value === "switch-only") return value;
-	throw new Error(
-		'Invalid pi-sync settings: targetSwitchAction must be "ask", "pull", or "switch-only".',
-	);
-}
-
-export function deprecatedPiSyncEnvironmentNames() {
-	return DEPRECATED_PI_SYNC_ENV_NAMES.filter((name) => hasEnv(name));
-}
-
-export function deprecatedPiSyncEnvironmentWarnings() {
-	const names = deprecatedPiSyncEnvironmentNames();
-	if (names.length === 0) return [];
-	return [
-		`deprecated environment: ${names.join(", ")} still override pi-sync settings but will be removed in a future major version. Move them to ${localConfigPath()}; values are not shown.`,
-	];
-}
-
-export function resolveLegacyPartialConfig(fileConfig: PartialConfig): PartialConfig {
-	return {
-		...fileConfig,
-		target: DEFAULT_PROFILE,
-		storageProfile: DEFAULT_PROFILE,
-		settingsVersion: 1,
-		endpoint: process.env.PI_SYNC_ENDPOINT ?? process.env.R2_ENDPOINT ?? fileConfig.endpoint,
-		bucket: process.env.PI_SYNC_BUCKET ?? process.env.R2_BUCKET ?? fileConfig.bucket,
-		region: process.env.PI_SYNC_REGION ?? process.env.AWS_REGION ?? fileConfig.region,
-		accessKeyId:
-			process.env.PI_SYNC_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID ?? fileConfig.accessKeyId,
-		secretAccessKey:
-			process.env.PI_SYNC_SECRET_ACCESS_KEY ??
-			process.env.AWS_SECRET_ACCESS_KEY ??
-			fileConfig.secretAccessKey,
-		sessionToken: selectSessionToken(fileConfig.sessionToken),
-		profile: process.env.PI_SYNC_PROFILE ?? fileConfig.profile,
-		prefix: process.env.PI_SYNC_PREFIX ?? fileConfig.prefix,
-		autoSync: process.env.PI_SYNC_AUTO_SYNC ?? fileConfig.autoSync,
-		syncSessions: process.env.PI_SYNC_SESSIONS ?? fileConfig.syncSessions,
-	};
-}
-
-export function resolveV2PartialConfig(
-	settings: Record<string, unknown>,
-	targetName?: string,
-): PartialConfig {
-	normalizeTargetSwitchAction(settings.targetSwitchAction);
-	const targets = requireNamedObjectMap(settings.targets, "targets");
-	const profiles = requireNamedObjectMap(settings.profiles, "profiles");
-	validateUniqueRemoteTargets(targets, profiles);
-	const selectedTarget =
-		targetName ?? normalizeOptionalString(asOptionalString(settings.activeTarget));
-	if (!selectedTarget) throw new Error("Invalid pi-sync settings: activeTarget is required.");
-	validateConfigName(selectedTarget, "target");
-	const target = ownObject(targets, selectedTarget);
-	if (!target)
-		throw new Error(`Invalid pi-sync settings: target "${selectedTarget}" was not found.`);
-	const storageProfile = normalizeOptionalString(asOptionalString(target.profile));
-	if (!storageProfile) {
-		throw new Error(`Invalid pi-sync settings: target "${selectedTarget}" is missing profile.`);
-	}
-	validateConfigName(storageProfile, "storage profile");
-	const profile = ownObject(profiles, storageProfile);
-	if (!profile) {
+export function validateSettingsDocument(value: Record<string, unknown>): PiSyncSettingsV3 {
+	if (value.version !== 3) {
 		throw new Error(
-			`Invalid pi-sync settings: target "${selectedTarget}" references missing profile "${storageProfile}".`,
+			`Unsupported pi-sync settings: version 3 is required. Keep the existing file for recovery, then create a new version 3 ${path.basename(localConfigPath())}; pi-sync will not migrate or overwrite old settings.`,
 		);
 	}
-	const kind = asOptionalString(profile.kind);
-	if (
-		kind !== undefined &&
-		kind !== "r2" &&
-		kind !== "s3-compatible" &&
-		kind !== "webdav" &&
-		kind !== "git"
-	) {
-		throw new Error(
-			`Invalid pi-sync settings: profile "${storageProfile}" has unsupported kind "${kind}".`,
+	rejectLegacyFields(
+		value,
+		[
+			"profiles",
+			"targets",
+			"activeTarget",
+			"targetSwitchAction",
+			"endpoint",
+			"bucket",
+			"region",
+			"accessKeyId",
+			"secretAccessKey",
+			"sessionToken",
+			"profile",
+			"prefix",
+			"autoSync",
+			"syncFiles",
+			"syncSessions",
+			"extraFiles",
+		],
+		"top level",
+	);
+	normalizeOnSwitch(value.onSwitch);
+	const storageConnections = requireNamedObjectMap(
+		value.storageConnections,
+		"storageConnections",
+		"storage connection",
+	);
+	const syncSetups = requireNamedObjectMap(value.syncSetups, "syncSetups", "sync setup");
+	for (const name of Object.keys(storageConnections)) {
+		validateStorageConnection(
+			name,
+			requireOwnObject(storageConnections, name, "storage connection") as Record<string, unknown>,
 		);
 	}
-	const common = {
-		target: selectedTarget,
-		storageProfile,
-		storageKind: kind as StorageProfileKind | undefined,
-		settingsVersion: 2 as const,
-		syncFiles: target.syncFiles,
-		extraFiles: target.extraFiles,
-	};
-	if (kind === "git") {
-		return resolveGitV2PartialConfig(profile, target, common, selectedTarget);
+	for (const name of Object.keys(syncSetups)) {
+		validateSyncSetup(
+			name,
+			requireOwnObject(syncSetups, name, "sync setup") as Record<string, unknown>,
+			storageConnections,
+		);
 	}
-	if (kind === "webdav") {
-		if (
-			["endpoint", "region", "accessKeyId", "secretAccessKey", "sessionToken", "remote"].some(
-				(field) => Object.hasOwn(profile, field),
-			) ||
-			["bucket", "prefix", "branch", "directory"].some((field) => Object.hasOwn(target, field))
-		) {
-			throw new Error("Invalid pi-sync settings: WebDAV profile or target mixes backend fields.");
+	const names = Object.keys(syncSetups);
+	const activeSyncSetup = optionalString(value.activeSyncSetup, "activeSyncSetup");
+	if (names.length === 0) {
+		if (activeSyncSetup !== undefined) {
+			throw new Error("Invalid pi-sync settings: empty syncSetups cannot have activeSyncSetup.");
 		}
-		return {
-			...common,
-			url: asOptionalString(profile.url),
-			username: asOptionalString(profile.username),
-			password: asOptionalString(profile.password),
-			path: asOptionalString(target.path),
-			profile: asOptionalString(target.namespace) ?? selectedTarget,
-			autoSync: asOptionalBoolean(target.autoSync),
-			syncSessions: asOptionalBoolean(target.syncSessions),
-		};
+	} else if (!activeSyncSetup || !Object.hasOwn(syncSetups, activeSyncSetup)) {
+		throw new Error(
+			"Invalid pi-sync settings: activeSyncSetup must reference an existing own-property sync setup.",
+		);
 	}
-	if (
-		["url", "username", "password", "remote"].some((field) => Object.hasOwn(profile, field)) ||
-		["path", "branch", "directory"].some((field) => Object.hasOwn(target, field))
-	) {
-		throw new Error("Invalid pi-sync settings: S3 profile or target mixes backend fields.");
-	}
-	return {
-		...common,
-		endpoint:
-			process.env.PI_SYNC_ENDPOINT ?? process.env.R2_ENDPOINT ?? asOptionalString(profile.endpoint),
-		bucket: process.env.PI_SYNC_BUCKET ?? process.env.R2_BUCKET ?? asOptionalString(target.bucket),
-		region:
-			process.env.PI_SYNC_REGION ?? process.env.AWS_REGION ?? asOptionalString(profile.region),
-		accessKeyId:
-			process.env.PI_SYNC_ACCESS_KEY_ID ??
-			process.env.AWS_ACCESS_KEY_ID ??
-			asOptionalString(profile.accessKeyId),
-		secretAccessKey:
-			process.env.PI_SYNC_SECRET_ACCESS_KEY ??
-			process.env.AWS_SECRET_ACCESS_KEY ??
-			asOptionalString(profile.secretAccessKey),
-		sessionToken: selectSessionToken(asOptionalString(profile.sessionToken)),
-		profile: process.env.PI_SYNC_PROFILE ?? asOptionalString(target.namespace) ?? selectedTarget,
-		prefix: process.env.PI_SYNC_PREFIX ?? asOptionalString(target.prefix),
-		autoSync: process.env.PI_SYNC_AUTO_SYNC ?? asOptionalBoolean(target.autoSync),
-		syncSessions: process.env.PI_SYNC_SESSIONS ?? asOptionalBoolean(target.syncSessions),
-	};
+	validateUniqueRemoteSyncSetups(syncSetups, storageConnections);
+	return value as PiSyncSettingsV3;
 }
 
-function isV2SettingsObject(value: Record<string, unknown>) {
-	const hasV2Fields =
-		Object.hasOwn(value, "profiles") ||
-		Object.hasOwn(value, "targets") ||
-		Object.hasOwn(value, "activeTarget");
-	if (!hasV2Fields) return false;
-	if (value.version !== 2) {
-		throw new Error("Invalid pi-sync settings: version must be 2 for profiles and targets.");
+function validateStorageConnection(name: string, value: Record<string, unknown>) {
+	rejectLegacyFields(
+		value,
+		["kind", "accessKeyId", "secretAccessKey", "sessionToken", "username", "password"],
+		`storage connection “${name}”`,
+	);
+	const type = requiredString(value.type, `storage connection “${name}” type`);
+	if (type !== "s3" && type !== "git" && type !== "webdav") {
+		throw new Error(`Invalid pi-sync settings: storage connection “${name}” has unsupported type.`);
 	}
-	return true;
+	const known = ["endpoint", "region", "remote", "url", "credentials"];
+	const allowed =
+		type === "s3"
+			? new Set(["endpoint", "region", "credentials"])
+			: type === "git"
+				? new Set(["remote"])
+				: new Set(["url", "credentials"]);
+	if (known.some((field) => Object.hasOwn(value, field) && !allowed.has(field))) {
+		throw new Error(
+			`Invalid pi-sync settings: ${type.toUpperCase()} storage connection “${name}” mixes backend fields.`,
+		);
+	}
+	if (type === "git") {
+		if (!normalizeGitRemote(requiredString(value.remote, `Git remote for “${name}”`))) {
+			throw new Error(`Invalid pi-sync settings: Git remote for “${name}” is required.`);
+		}
+		return;
+	}
+	const credentials = requireRecord(
+		value.credentials,
+		`credentials for storage connection “${name}”`,
+	);
+	if (type === "webdav") {
+		normalizeWebDavUrl(requiredString(value.url, `WebDAV URL for “${name}”`));
+		const username = requiredString(credentials.username, `WebDAV username for “${name}”`);
+		const password = requiredSecret(credentials.password, `WebDAV password for “${name}”`);
+		if (
+			["accessKeyId", "secretAccessKey", "sessionToken"].some((field) =>
+				Object.hasOwn(credentials, field),
+			)
+		) {
+			throw new Error(`Invalid pi-sync settings: WebDAV credentials for “${name}” mix fields.`);
+		}
+		validateWebDavCredentials(username, password);
+		return;
+	}
+	normalizeS3Endpoint(requiredString(value.endpoint, `S3 endpoint for “${name}”`));
+	requiredString(value.region, `S3 region for “${name}”`);
+	requiredString(credentials.accessKeyId, `S3 access key id for “${name}”`);
+	requiredSecret(credentials.secretAccessKey, `S3 secret access key for “${name}”`);
+	optionalString(credentials.sessionToken, `S3 session token for “${name}”`);
+	if (["username", "password"].some((field) => Object.hasOwn(credentials, field))) {
+		throw new Error(`Invalid pi-sync settings: S3 credentials for “${name}” mix fields.`);
+	}
 }
 
-export function validateUniqueRemoteTargets(
-	targets: Record<string, unknown>,
-	profiles?: Record<string, unknown>,
+function validateSyncSetup(
+	name: string,
+	value: Record<string, unknown>,
+	connections: Record<string, unknown>,
+) {
+	rejectLegacyFields(
+		value,
+		[
+			"profile",
+			"bucket",
+			"branch",
+			"path",
+			"prefix",
+			"directory",
+			"namespace",
+			"autoSync",
+			"syncFiles",
+			"syncSessions",
+			"extraFiles",
+		],
+		`sync setup “${name}”`,
+	);
+	const storage = requireRecord(value.storage, `storage for sync setup “${name}”`);
+	const sync = requireRecord(value.sync, `sync policy for sync setup “${name}”`);
+	rejectLegacyFields(
+		storage,
+		["profile", "prefix", "directory", "namespace"],
+		`storage for sync setup “${name}”`,
+	);
+	rejectLegacyFields(
+		sync,
+		["autoSync", "syncFiles", "syncSessions", "extraFiles"],
+		`sync policy for sync setup “${name}”`,
+	);
+	const connectionName = requiredString(storage.connection, `connection for sync setup “${name}”`);
+	validateConfigName(connectionName, "storage connection reference");
+	const connection = ownObject<Record<string, unknown>>(connections, connectionName);
+	if (!connection) {
+		throw new Error(
+			`Invalid pi-sync settings: sync setup “${name}” references missing storage connection “${connectionName}”.`,
+		);
+	}
+	const type = connection.type;
+	normalizeStoragePath(requiredString(storage.path, `storage path for sync setup “${name}”`));
+	if (type === "s3") {
+		normalizeS3Bucket(requiredString(storage.bucket, `S3 bucket for sync setup “${name}”`));
+		if (Object.hasOwn(storage, "branch")) mixedSetupError("S3", name);
+	} else if (type === "git") {
+		normalizeGitBranch(requiredString(storage.branch, `Git branch for sync setup “${name}”`));
+		if (Object.hasOwn(storage, "bucket")) mixedSetupError("Git", name);
+	} else if (type === "webdav") {
+		if (Object.hasOwn(storage, "bucket") || Object.hasOwn(storage, "branch")) {
+			mixedSetupError("WebDAV", name);
+		}
+	}
+	if (!Object.hasOwn(sync, "include")) {
+		throw new Error(`Invalid pi-sync settings: sync setup “${name}” is missing sync.include.`);
+	}
+	normalizeSyncInclude(sync.include);
+	if (typeof sync.automatic !== "boolean") {
+		throw new Error(
+			`Invalid pi-sync settings: sync setup “${name}” sync.automatic must be boolean.`,
+		);
+	}
+}
+
+function mixedSetupError(type: string, name: string): never {
+	throw new Error(`Invalid pi-sync settings: ${type} sync setup “${name}” mixes backend fields.`);
+}
+
+export function validateUniqueRemoteSyncSetups(
+	setups: Record<string, unknown>,
+	connections: Record<string, unknown>,
 ) {
 	const identities = new Map<string, string>();
-	for (const name of Object.keys(targets)) {
-		const target = ownObject(targets, name);
-		if (!target || typeof target.profile !== "string") continue;
-		const profile = profiles ? ownObject(profiles, target.profile) : undefined;
-		const identity = effectiveTargetRemoteIdentity(target, name, profile);
+	for (const name of Object.keys(setups)) {
+		const setup = requireOwnObject(setups, name, "sync setup") as unknown as SyncSetupSettings;
+		const connection = requireOwnObject(
+			connections,
+			setup.storage.connection,
+			"storage connection",
+		) as unknown as StorageConnectionSettings;
+		const identity = effectiveSyncSetupRemoteIdentity(setup, connection);
 		const existing = identities.get(identity);
 		if (existing) {
 			throw new Error(
-				`Invalid pi-sync settings: targets "${existing}" and "${name}" use the same remote destination.`,
+				`Invalid pi-sync settings: sync setups “${existing}” and “${name}” use the same normalized remote location.`,
 			);
 		}
 		identities.set(identity, name);
 	}
 }
 
-export function effectiveTargetRemoteIdentity(
-	target: Record<string, unknown>,
-	name: string,
-	profile?: Record<string, unknown>,
+export function effectiveSyncSetupRemoteIdentity(
+	setup: SyncSetupSettings,
+	connection: StorageConnectionSettings,
 ) {
-	const profileName = typeof target.profile === "string" ? target.profile.trim() : "";
-	if (profile?.kind === "git" || Object.hasOwn(target, "branch")) {
-		return gitRemoteDestinationIdentity(profile, target);
-	}
-	if (profile?.kind === "webdav" || Object.hasOwn(target, "path")) {
+	const storagePath = normalizeStoragePath(setup.storage.path);
+	if (connection.type === "git") {
 		return JSON.stringify([
-			"webdav",
-			normalizeWebDavIdentityUrl(typeof profile?.url === "string" ? profile.url : profileName),
-			typeof profile?.username === "string" ? profile.username.trim() : "",
-			normalizeRemoteKeySegment(typeof target.path === "string" ? target.path : DEFAULT_PREFIX),
-			normalizeRemoteKeySegment(typeof target.namespace === "string" ? target.namespace : name),
+			"git",
+			normalizeGitRemoteIdentity(connection.remote),
+			normalizeGitBranch(setup.storage.branch),
+			normalizeGitDirectory(storagePath),
 		]);
 	}
-	const bucket = normalizeRemoteKeySegment(
-		process.env.PI_SYNC_BUCKET ??
-			process.env.R2_BUCKET ??
-			(typeof target.bucket === "string" ? target.bucket : ""),
-	);
-	const prefix = normalizeRemoteKeySegment(
-		process.env.PI_SYNC_PREFIX ??
-			(typeof target.prefix === "string" ? target.prefix : DEFAULT_PREFIX),
-	);
-	const namespace = normalizeRemoteKeySegment(
-		process.env.PI_SYNC_PROFILE ?? (typeof target.namespace === "string" ? target.namespace : name),
-	);
-	return JSON.stringify([profileName, bucket, prefix, namespace]);
+	if (connection.type === "webdav") {
+		return JSON.stringify([
+			"webdav",
+			normalizeWebDavIdentityUrl(connection.url),
+			connection.credentials.username.trim(),
+			normalizeWebDavPath(storagePath),
+		]);
+	}
+	return JSON.stringify([
+		"s3",
+		normalizeEndpointIdentity(connection.endpoint),
+		normalizeS3Bucket(setup.storage.bucket),
+		storagePath,
+	]);
 }
 
-function normalizeRemoteKeySegment(value: string) {
-	return trimSlashes(value.trim());
+function rejectLegacyFields(
+	value: Record<string, unknown>,
+	fields: readonly string[],
+	context: string,
+) {
+	const field = fields.find((candidate) => Object.hasOwn(value, candidate));
+	if (field) {
+		throw new Error(
+			`Invalid pi-sync settings: ${context} contains unsupported version 1/2 field “${field}”.`,
+		);
+	}
 }
 
-function requireNamedObjectMap(value: unknown, field: string): Record<string, unknown> {
+function requireNamedObjectMap(value: unknown, field: string, itemLabel: string) {
+	const result = requireRecord(value, field);
+	for (const name of Object.keys(result)) validateConfigName(name, itemLabel);
+	return result;
+}
+
+function requireOwnObject(value: Record<string, unknown>, key: string, label: string) {
+	const item = ownObject(value, key);
+	if (!item) throw new Error(`Invalid pi-sync settings: ${label} “${key}” must be an object.`);
+	return item;
+}
+
+function ownObject<T extends object>(value: Record<string, unknown>, key: string): T | undefined {
+	if (!Object.hasOwn(value, key)) return undefined;
+	const item = value[key];
+	return item && typeof item === "object" && !Array.isArray(item) ? (item as T) : undefined;
+}
+
+function requireRecord(value: unknown, field: string): Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		throw new Error(`Invalid pi-sync settings: ${field} must be an object.`);
 	}
-	for (const name of Object.keys(value)) validateConfigName(name, field.slice(0, -1));
 	return value as Record<string, unknown>;
 }
 
-function ownObject(
-	value: Record<string, unknown>,
-	key: string,
-): Record<string, unknown> | undefined {
-	if (!Object.hasOwn(value, key)) return undefined;
-	const item = value[key];
-	return item && typeof item === "object" && !Array.isArray(item)
-		? (item as Record<string, unknown>)
-		: undefined;
-}
-
-function validateConfigName(value: string, field: string) {
+export function validateConfigName(value: string, field: string) {
 	if (
 		!value.trim() ||
+		value !== value.trim() ||
 		value.length > 100 ||
 		value === "__proto__" ||
 		value === "prototype" ||
 		value === "constructor" ||
-		// biome-ignore lint/suspicious/noControlCharactersInRegex: Config identifiers cannot render terminal controls.
-		/[\u0000-\u001f\u007f-\u009f]/u.test(value)
+		hasControlCharacter(value)
 	) {
 		throw new Error(`Invalid pi-sync settings: invalid ${field} name.`);
 	}
 }
 
-function asOptionalString(value: unknown) {
-	if (value === undefined) return undefined;
-	if (typeof value !== "string") throw new Error("Invalid pi-sync settings: expected a string.");
+function requiredString(value: unknown, field: string) {
+	if (typeof value !== "string" || !value.trim() || hasControlCharacter(value)) {
+		throw new Error(`Invalid pi-sync settings: ${field} must be a non-empty string.`);
+	}
+	return value.trim();
+}
+
+function requiredSecret(value: unknown, field: string) {
+	if (typeof value !== "string" || !value || hasControlCharacter(value)) {
+		throw new Error(`Invalid pi-sync settings: ${field} must be configured.`);
+	}
 	return value;
 }
 
-function asOptionalBoolean(value: unknown) {
+function optionalString(value: unknown, field: string) {
 	if (value === undefined) return undefined;
-	if (typeof value !== "boolean") throw new Error("Invalid pi-sync settings: expected a boolean.");
-	return value;
+	if (typeof value !== "string" || hasControlCharacter(value)) {
+		throw new Error(`Invalid pi-sync settings: ${field} must be a string.`);
+	}
+	return value.trim() || undefined;
+}
+
+export function normalizeStoragePath(value: string) {
+	const normalized = value.trim().replace(/^\/+|\/+$/gu, "");
+	if (
+		!normalized ||
+		normalized.length > 1024 ||
+		normalized.startsWith("-") ||
+		normalized.includes("\\") ||
+		hasControlCharacter(normalized) ||
+		normalized.split("/").some((segment) => !segment || segment === "." || segment === "..")
+	) {
+		throw new Error("Invalid pi-sync settings: storage.path must be a safe relative path.");
+	}
+	return normalized;
+}
+
+function normalizeS3Endpoint(value: string) {
+	let url: URL;
+	try {
+		url = new URL(value.trim());
+	} catch {
+		throw new Error("Invalid pi-sync S3 endpoint.");
+	}
+	const loopback =
+		url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
+	if (
+		(url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) ||
+		url.username ||
+		url.password ||
+		url.search ||
+		url.hash
+	) {
+		throw new Error("Invalid pi-sync S3 endpoint: HTTPS is required except for loopback.");
+	}
+	url.pathname = url.pathname.replace(/\/+$/gu, "");
+	return url.toString().replace(/\/$/u, "");
+}
+
+function normalizeS3Bucket(value: string | undefined) {
+	const bucket = requiredString(value, "S3 bucket");
+	if (bucket.includes("/") || bucket.includes("\\") || bucket.startsWith("-")) {
+		throw new Error("Invalid pi-sync S3 bucket.");
+	}
+	return bucket;
+}
+
+function normalizeEndpointIdentity(endpoint: string) {
+	try {
+		const url = new URL(endpoint.trim());
+		url.hostname = url.hostname.toLowerCase();
+		url.pathname = url.pathname.replace(/\/+$/gu, "");
+		return url.toString().replace(/\/$/u, "");
+	} catch {
+		return endpoint.trim();
+	}
 }
 
 export async function configuredSessionDir() {
-	const envSessionDir = normalizeOptionalString(process.env.PI_CODING_AGENT_SESSION_DIR);
-	if (envSessionDir) return expandHome(envSessionDir);
 	const settings = await readJsonIfExists<{ sessionDir?: string }>(
 		path.join(agentDir(), "settings.json"),
 	);
@@ -477,9 +591,6 @@ export async function sessionDirForApply(
 	snapshot: Snapshot,
 ) {
 	const contextSessionDir = sessionDirFromContext(ctx);
-	const envSessionDir = normalizeOptionalString(process.env.PI_CODING_AGENT_SESSION_DIR);
-	if (envSessionDir) return contextSessionDir ?? expandHome(envSessionDir);
-
 	const localSessionDir = await configuredSessionDir();
 	if (
 		contextSessionDir &&
@@ -503,10 +614,17 @@ function sessionDirFromSnapshot(snapshot: Snapshot) {
 	}
 }
 
+function decodeBase64Strict(value: string, filePath: string) {
+	if (!/^[A-Za-z0-9+/]*={0,2}$/.test(value) || value.length % 4 !== 0) {
+		throw new Error(`Invalid base64 content in snapshot file: ${filePath}`);
+	}
+	return Buffer.from(value, "base64");
+}
+
 export async function readState(profile: string): Promise<SyncState> {
 	return (
 		(await readJsonIfExists<SyncState>(statePath(profile))) ?? {
-			version: VERSION,
+			version: STATE_VERSION,
 			profile,
 			lastFileHashes: {},
 		}
@@ -518,14 +636,10 @@ export async function writeState(profile: string, state: SyncState) {
 }
 
 export async function readStateForConfig(config: AnySyncConfig): Promise<SyncState> {
-	if (config.settingsVersion !== 2) return readState(config.profile);
-	const destination = statePathForConfig(config);
-	const state = await readJsonIfExists<SyncState>(destination);
-	if (state) return state;
 	return (
-		(await migrateLegacyV2State(config, destination)) ?? {
-			version: VERSION,
-			profile: config.profile,
+		(await readJsonIfExists<SyncState>(statePathForConfig(config))) ?? {
+			version: STATE_VERSION,
+			profile: config.snapshotIdentity,
 			lastFileHashes: {},
 		}
 	);
@@ -536,141 +650,34 @@ export async function writeStateForConfig(config: AnySyncConfig, state: SyncStat
 }
 
 export function statePathForConfig(config: AnySyncConfig) {
-	if (config.settingsVersion !== 2) return statePath(config.profile);
-	const target = config.target ?? DEFAULT_PROFILE;
-	let identity: string;
+	const identity = backendIdentityCoordinates(config);
+	const hash = createHash("sha256").update(identity).digest("hex").slice(0, 16);
+	return path.join(stateDir(), "setups", `${config.backend.type}-${hash}.state.json`);
+}
+
+function backendIdentityCoordinates(config: AnySyncConfig) {
 	switch (config.backend.type) {
 		case "s3":
-			identity = JSON.stringify([
-				target,
+			return JSON.stringify([
+				"s3",
 				normalizeEndpointIdentity(config.backend.profile.endpoint),
-				normalizeRemoteKeySegment(config.backend.destination.bucket),
-				normalizeRemoteKeySegment(config.backend.destination.prefix),
-				normalizeRemoteKeySegment(config.profile),
+				config.backend.destination.bucket,
+				config.storagePath,
 			]);
-			break;
-		case "webdav":
-			identity = JSON.stringify([
-				target,
-				normalizeEndpointIdentity(config.backend.profile.url),
-				config.backend.profile.username,
-				normalizeRemoteKeySegment(config.backend.destination.path),
-				normalizeRemoteKeySegment(config.profile),
-			]);
-			break;
 		case "git":
-			identity = JSON.stringify([
-				target,
+			return JSON.stringify([
+				"git",
 				normalizeGitRemoteIdentity(config.backend.profile.remote),
 				config.backend.destination.branch,
-				config.backend.destination.directory,
-				normalizeRemoteKeySegment(config.backend.destination.namespace),
+				config.storagePath,
 			]);
-			break;
-	}
-	const hash = createHash("sha256").update(identity).digest("hex").slice(0, 10);
-	return path.join(stateDir(), "targets", `${safeName(target)}-${hash}.state.json`);
-}
-
-export function statePathForPartialConfig(partial: PartialConfig) {
-	const profile = normalizeOptionalString(partial.profile) ?? DEFAULT_PROFILE;
-	if (partial.settingsVersion !== 2) return statePath(profile);
-	if (partial.storageKind === "git") {
-		return statePathForConfig({
-			settingsVersion: 2,
-			target: partial.target ?? DEFAULT_PROFILE,
-			profile,
-			backend: {
-				type: "git",
-				profile: { kind: "git", remote: normalizeConfiguredString(partial.remote) ?? "" },
-				destination: {
-					branch: normalizeGitBranch(partial.branch),
-					directory: normalizeGitDirectory(partial.directory),
-					namespace: profile,
-				},
-			},
-		} as AnySyncConfig);
-	}
-	if (partial.storageKind === "webdav") {
-		return statePathForConfig({
-			settingsVersion: 2,
-			target: partial.target ?? DEFAULT_PROFILE,
-			profile,
-			backend: {
-				type: "webdav",
-				profile: {
-					url: normalizeConfiguredString(partial.url) ?? "",
-					username: normalizeConfiguredString(partial.username) ?? "",
-				},
-				destination: {
-					path: normalizeWebDavPath(partial.path),
-					namespace: profile,
-				},
-			},
-		} as AnySyncConfig);
-	}
-	return statePathForConfig({
-		settingsVersion: 2,
-		target: partial.target ?? DEFAULT_PROFILE,
-		profile,
-		backend: {
-			type: "s3",
-			profile: { endpoint: normalizeConfiguredString(partial.endpoint) ?? "" },
-			destination: {
-				bucket: normalizeConfiguredString(partial.bucket) ?? "",
-				prefix: trimSlashes(normalizeOptionalString(partial.prefix) ?? DEFAULT_PREFIX),
-				namespace: profile,
-			},
-		},
-	} as AnySyncConfig);
-}
-
-async function migrateLegacyV2State(config: AnySyncConfig, destination: string) {
-	if (config.backend.type !== "s3") return readJsonIfExists<SyncState>(destination);
-	const target = config.target ?? DEFAULT_PROFILE;
-	const legacyHash = createHash("sha256").update(target).digest("hex").slice(0, 10);
-	const legacyPath = path.join(
-		stateDir(),
-		"targets",
-		`${safeName(target)}-${legacyHash}.state.json`,
-	);
-	const claimPath = `${legacyPath}.migrating-to-${path.basename(destination)}`;
-	if (!(await pathExists(claimPath))) {
-		try {
-			await fs.rename(legacyPath, claimPath);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-		}
-	}
-	if (!(await pathExists(claimPath))) return readJsonIfExists<SyncState>(destination);
-
-	await fs.mkdir(path.dirname(destination), { recursive: true });
-	try {
-		await fs.link(claimPath, destination);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-	}
-	const migrated = await readJsonIfExists<SyncState>(destination);
-	if (migrated) await fs.rm(claimPath, { force: true });
-	return migrated;
-}
-
-async function pathExists(filePath: string) {
-	try {
-		await fs.lstat(filePath);
-		return true;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-		throw error;
-	}
-}
-
-function normalizeEndpointIdentity(endpoint: string) {
-	const normalized = endpoint.trim();
-	try {
-		return new URL(normalized).toString();
-	} catch {
-		return normalized;
+		case "webdav":
+			return JSON.stringify([
+				"webdav",
+				normalizeWebDavIdentityUrl(config.backend.profile.url),
+				config.backend.profile.username,
+				config.storagePath,
+			]);
 	}
 }
 
@@ -686,164 +693,30 @@ export function stateDir() {
 	return path.join(agentDir(), ".pisync");
 }
 
-export function localConfigTemplate(): Record<string, unknown> {
+export function localConfigTemplate(): PiSyncSettingsV3 {
 	return {
-		version: 2,
-		activeTarget: DEFAULT_PROFILE,
-		targetSwitchAction: DEFAULT_TARGET_SWITCH_ACTION,
-		profiles: {
-			[DEFAULT_PROFILE]: {
-				kind: "r2",
-				endpoint: "https://<account-id>.r2.cloudflarestorage.com",
-				region: DEFAULT_REGION,
-				accessKeyId: "<access-key-id>",
-				secretAccessKey: "<secret-access-key>",
-			},
-		},
-		targets: {
-			[DEFAULT_PROFILE]: {
-				profile: DEFAULT_PROFILE,
-				bucket: "pi-sync",
-				namespace: DEFAULT_PROFILE,
-				prefix: DEFAULT_PREFIX,
-				autoSync: true,
-				syncFiles: [...DEFAULT_SYNC_FILES],
-				syncSessions: false,
-				extraFiles: [],
-			},
-		},
+		version: 3,
+		onSwitch: DEFAULT_ON_SWITCH,
+		storageConnections: {},
+		syncSetups: {},
 	};
 }
 
 export async function readLocalConfigDocument() {
-	return readMigratingLocalConfigDocument(validateConfigDocumentForMigration);
+	const document = await readMigratingLocalConfigDocument((settings) => {
+		validateSettingsDocument(settings);
+	});
+	if (document) validateSettingsDocument(document.parsed);
+	return document;
 }
 
-export async function readLocalConfigObject(): Promise<Record<string, unknown> | undefined> {
-	return (await readLocalConfigDocument())?.parsed;
-}
-
-function validateConfigDocumentForMigration(settings: Record<string, unknown>) {
-	if (!isV2SettingsObject(settings)) {
-		for (const field of [
-			"endpoint",
-			"bucket",
-			"region",
-			"accessKeyId",
-			"secretAccessKey",
-			"sessionToken",
-			"profile",
-			"prefix",
-		] as const) {
-			asOptionalString(settings[field]);
-		}
-		for (const field of ["autoSync", "syncSessions"] as const) {
-			const value = settings[field];
-			if (value !== undefined && typeof value !== "boolean" && typeof value !== "string") {
-				throw new Error(`Invalid pi-sync settings: ${field} must be a boolean or string.`);
-			}
-		}
-		normalizeSyncFiles(settings.syncFiles);
-		normalizeExtraFiles(settings.extraFiles);
-		return;
-	}
-
-	normalizeTargetSwitchAction(settings.targetSwitchAction);
-	const profiles = requireNamedObjectMap(settings.profiles, "profiles");
-	const targets = requireNamedObjectMap(settings.targets, "targets");
-	validateUniqueRemoteTargets(targets, profiles);
-	for (const [name, value] of Object.entries(profiles)) {
-		const profile = ownObject(profiles, name);
-		if (!profile || value !== profile) {
-			throw new Error(`Invalid pi-sync settings: storage profile "${name}" must be an object.`);
-		}
-		const kind = asOptionalString(profile.kind);
-		if (
-			kind !== undefined &&
-			kind !== "r2" &&
-			kind !== "s3-compatible" &&
-			kind !== "webdav" &&
-			kind !== "git"
-		) {
-			throw new Error(
-				`Invalid pi-sync settings: profile "${name}" has unsupported kind "${kind}".`,
-			);
-		}
-		const fields =
-			kind === "webdav"
-				? (["url", "username", "password"] as const)
-				: kind === "git"
-					? (["remote"] as const)
-					: (["endpoint", "region", "accessKeyId", "secretAccessKey", "sessionToken"] as const);
-		for (const field of fields) asOptionalString(profile[field]);
-		const incompatible =
-			kind === "webdav"
-				? ["endpoint", "region", "accessKeyId", "secretAccessKey", "sessionToken", "remote"]
-				: kind === "git"
-					? [
-							"endpoint",
-							"region",
-							"accessKeyId",
-							"secretAccessKey",
-							"sessionToken",
-							"url",
-							"username",
-							"password",
-						]
-					: ["url", "username", "password", "remote"];
-		if (incompatible.some((field) => Object.hasOwn(profile, field))) {
-			throw new Error(`Invalid pi-sync settings: profile "${name}" mixes backend fields.`);
-		}
-	}
-	for (const [name, value] of Object.entries(targets)) {
-		const target = ownObject(targets, name);
-		if (!target || value !== target) {
-			throw new Error(`Invalid pi-sync settings: target "${name}" must be an object.`);
-		}
-		const profileName = normalizeOptionalString(asOptionalString(target.profile));
-		if (!profileName || !Object.hasOwn(profiles, profileName)) {
-			throw new Error(`Invalid pi-sync settings: target "${name}" references a missing profile.`);
-		}
-		const linkedProfile = ownObject(profiles, profileName);
-		const kind = linkedProfile?.kind;
-		const fields =
-			kind === "webdav"
-				? (["path", "namespace"] as const)
-				: kind === "git"
-					? (["branch", "directory", "namespace"] as const)
-					: (["bucket", "prefix", "namespace"] as const);
-		for (const field of fields) asOptionalString(target[field]);
-		const incompatible =
-			kind === "webdav"
-				? ["bucket", "prefix", "branch", "directory"]
-				: kind === "git"
-					? ["bucket", "prefix", "path"]
-					: ["path", "branch", "directory"];
-		if (incompatible.some((field) => Object.hasOwn(target, field))) {
-			throw new Error(`Invalid pi-sync settings: target "${name}" mixes backend fields.`);
-		}
-		asOptionalBoolean(target.autoSync);
-		asOptionalBoolean(target.syncSessions);
-		normalizeSyncFiles(target.syncFiles);
-		normalizeExtraFiles(target.extraFiles);
-	}
-	const activeTarget = normalizeOptionalString(asOptionalString(settings.activeTarget));
-	if (Object.keys(targets).length === 0) {
-		if (activeTarget) {
-			throw new Error("Invalid pi-sync settings: targetless settings cannot have activeTarget.");
-		}
-		return;
-	}
-	if (!activeTarget || !Object.hasOwn(targets, activeTarget)) {
-		throw new Error("Invalid pi-sync settings: activeTarget must reference an existing target.");
-	}
+export async function readLocalConfigObject(): Promise<PiSyncSettingsV3 | undefined> {
+	return (await readLocalConfigDocument())?.parsed as PiSyncSettingsV3 | undefined;
 }
 
 let configUpdateQueue: Promise<void> = Promise.resolve();
 
-export function updateLocalConfig(
-	update: (current: Record<string, unknown>) => Record<string, unknown>,
-) {
+export function updateLocalConfig(update: (current: PiSyncSettingsV3) => PiSyncSettingsV3) {
 	const operation = configUpdateQueue.then(() => performLocalConfigUpdate(update));
 	configUpdateQueue = operation.then(
 		() => undefined,
@@ -852,31 +725,22 @@ export function updateLocalConfig(
 	return operation;
 }
 
-async function performLocalConfigUpdate(
-	update: (current: Record<string, unknown>) => Record<string, unknown>,
-) {
-	const current = (await readLocalConfigObject()) ?? localConfigTemplate();
-	const next = update({ ...current });
-	await writeLocalConfigObject(next);
-	return next;
+async function performLocalConfigUpdate(update: (current: PiSyncSettingsV3) => PiSyncSettingsV3) {
+	return updateLocalConfigDocument(localConfigTemplate(), update, validateSettingsDocument);
 }
 
-export function writeLocalConfigObject(value: Record<string, unknown>) {
-	return withLocalConfigFileLock(() => writeLocalConfigObjectUnlocked(value));
-}
-
-async function writeLocalConfigObjectUnlocked(value: Record<string, unknown>) {
+export async function writeLocalConfigObject(value: PiSyncSettingsV3 | Record<string, unknown>) {
+	validateSettingsDocument(value as Record<string, unknown>);
 	const configPath = localConfigPath();
 	await fs.mkdir(path.dirname(configPath), { recursive: true });
 	try {
 		const stat = await fs.lstat(configPath);
 		if (stat.isSymbolicLink())
-			throw new Error(`Refusing to overwrite symlinked pi-sync config: ${configPath}`);
-		if (!stat.isFile()) throw new Error(`pi-sync config is not a regular file: ${configPath}`);
+			throw new Error(`Refusing to overwrite symlinked pi-sync settings: ${configPath}`);
+		if (!stat.isFile()) throw new Error(`pi-sync settings are not a regular file: ${configPath}`);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
-
 	const temporaryPath = path.join(
 		path.dirname(configPath),
 		`.${path.basename(configPath)}.${process.pid}.${randomUUID()}.tmp`,
@@ -920,16 +784,10 @@ async function readJsonIfExists<T>(filePath: string): Promise<T | undefined> {
 
 export async function writeJson(filePath: string, value: unknown) {
 	await fs.mkdir(path.dirname(filePath), { recursive: true });
-	await fs.writeFile(filePath, `${JSON.stringify(value, null, "\t")}\n`);
-}
-
-function selectSessionToken(fileSessionToken: string | undefined) {
-	if (hasEnv("PI_SYNC_SESSION_TOKEN"))
-		return normalizeOptionalString(process.env.PI_SYNC_SESSION_TOKEN);
-	return (
-		normalizeOptionalString(process.env.AWS_SESSION_TOKEN) ??
-		normalizeOptionalString(fileSessionToken)
-	);
+	const temp = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+	await fs.writeFile(temp, `${JSON.stringify(value, null, "\t")}\n`, { mode: 0o600 });
+	if (process.platform !== "win32") await fs.chmod(temp, 0o600);
+	await fs.rename(temp, filePath);
 }
 
 export function sessionTokenWarnings(config: { endpoint?: string; sessionToken?: string }) {
@@ -939,10 +797,10 @@ export function sessionTokenWarnings(config: { endpoint?: string; sessionToken?:
 	];
 }
 
-export function syncSessionsWarnings(config: { syncSessions?: boolean }) {
-	if (!config.syncSessions) return [];
+export function syncSessionsWarnings(config: { include: readonly string[] }) {
+	if (!config.include.includes("sessions")) return [];
 	return [
-		"sessions: enabled; Pi session JSONL can contain prompts, tool output, file paths, images, and secrets. Sync sessions only to storage you trust.",
+		"sessions: included; Pi session JSONL can contain prompts, tool output, file paths, images, and secrets. Sync sessions only to storage you trust.",
 	];
 }
 
@@ -959,27 +817,6 @@ export function isCloudflareR2Endpoint(endpoint: string | undefined) {
 	}
 }
 
-function normalizeOptionalString(value: string | undefined) {
-	const normalized = value?.trim();
-	return normalized ? normalized : undefined;
-}
-
-function normalizeConfiguredString(value: string | undefined) {
-	const normalized = normalizeOptionalString(value);
-	return normalized && !/^<[^>]+>$/u.test(normalized) && !normalized.includes("<account-id>")
-		? normalized
-		: undefined;
-}
-
-function normalizeConfiguredSecret(value: string | undefined) {
-	if (!value?.trim() || /^<[^>]+>$/u.test(value.trim())) return undefined;
-	return value;
-}
-
-function hasEnv(name: string) {
-	return Object.hasOwn(process.env, name);
-}
-
 export function isEnabled(value: boolean | string | undefined, defaultValue: boolean) {
 	if (value === undefined) return defaultValue;
 	if (typeof value === "boolean") return value;
@@ -989,6 +826,11 @@ export function isEnabled(value: boolean | string | undefined, defaultValue: boo
 export function isExplicitlyEnabled(value: boolean | string | undefined) {
 	if (typeof value === "boolean") return value;
 	return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
+}
+
+function hasControlCharacter(value: string) {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: Stored settings cannot contain controls.
+	return /[\u0000-\u001f\u007f-\u009f]/u.test(value);
 }
 
 export { isMissingConfigError } from "./config-errors.js";

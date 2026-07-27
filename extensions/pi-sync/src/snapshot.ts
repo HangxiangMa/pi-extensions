@@ -10,20 +10,25 @@ export { isDeniedPath } from "./paths.js";
 
 import {
 	canonicalSnapshotPathForConfig,
-	DEFAULT_SYNC_FILES,
-	extraFilePathsByLower,
+	customIncludePathsByLower,
+	DEFAULT_SYNC_INCLUDE,
+	includeFromSelectionConfig,
 	isConfiguredSnapshotPath,
 	isPreservableUnmanagedSnapshotPath,
 	normalizeExtraFiles,
 	normalizeSyncFiles,
+	type SyncSelectionConfig,
+	syncIncludeSelection,
 } from "./sync-policy.js";
-import type { Snapshot, SnapshotFile, SnapshotOptions, SyncConfig } from "./types.js";
+import type { Snapshot, SnapshotFile, SnapshotOptions } from "./types.js";
 
 export { canonicalSnapshotPathForConfig, isConfiguredSnapshotPath } from "./sync-policy.js";
 
 const VERSION = 1;
-const TOP_LEVEL_FILES: readonly string[] = DEFAULT_SYNC_FILES.filter((name) => name.includes("."));
-const TOP_LEVEL_DIRS = new Set<string>(DEFAULT_SYNC_FILES.filter((name) => !name.includes(".")));
+const TOP_LEVEL_FILES: readonly string[] = DEFAULT_SYNC_INCLUDE.filter((name) =>
+	name.includes("."),
+);
+const TOP_LEVEL_DIRS = new Set<string>(DEFAULT_SYNC_INCLUDE.filter((name) => !name.includes(".")));
 const SECRET_PATTERNS = [
 	/AWS_SECRET_ACCESS_KEY\s*[=:]\s*['"]?[A-Za-z0-9/+]{35,}/i,
 	/(ANTHROPIC|OPENAI|GEMINI|GOOGLE|FIRECRAWL|GITHUB|CLOUDFLARE|R2|S3)_[A-Z0-9_]*(KEY|TOKEN|SECRET)\s*[=:]\s*['"]?[^\s'"]{12,}/i,
@@ -91,12 +96,11 @@ export async function createSnapshot(
 	profile: string,
 	options: SnapshotOptions = {},
 ): Promise<Snapshot> {
-	const syncSessions = Boolean(options.syncSessions);
+	const include = effectiveInclude(options);
+	const syncSessions = include.includes("sessions");
 	const files = await collectFiles(agentDir(), {
-		syncFiles: options.syncFiles,
-		syncSessions,
+		include,
 		sessionDir: options.sessionDir ?? (await configuredSessionDir()),
-		extraFiles: options.extraFiles,
 	});
 	return {
 		version: VERSION,
@@ -109,13 +113,23 @@ export async function createSnapshot(
 	};
 }
 
+function effectiveInclude(options: SnapshotOptions) {
+	if (options.include) return options.include;
+	return [
+		...normalizeSyncFiles(options.syncFiles),
+		...normalizeExtraFiles(options.extraFiles),
+		...(options.syncSessions ? ["sessions"] : []),
+	];
+}
+
 export async function collectFiles(
 	root: string,
 	options: SnapshotOptions = {},
 ): Promise<SnapshotFile[]> {
 	const results: SnapshotFile[] = [];
 	const entries = await fs.readdir(root, { withFileTypes: true });
-	const selectedFiles = new Set<string>(normalizeSyncFiles(options.syncFiles));
+	const selection = syncIncludeSelection(effectiveInclude(options));
+	const selectedFiles = new Set<string>(selection.builtIns);
 	for (const entry of entries) {
 		if (entry.isDirectory() && TOP_LEVEL_DIRS.has(entry.name) && selectedFiles.has(entry.name)) {
 			await collectDirectory(results, root, entry.name);
@@ -126,11 +140,10 @@ export async function collectFiles(
 		const entry = selectTopLevelFileEntry(entries, fileName);
 		if (entry) await addFile(results, root, entry.name, fileName);
 	}
-	for (const extraFileName of normalizeExtraFiles(options.extraFiles)) {
-		const entry = selectTopLevelFileEntry(entries, extraFileName);
-		if (entry) await addFile(results, root, entry.name, extraFileName);
+	for (const relativePath of selection.custom) {
+		await collectIncludedPath(results, root, relativePath);
 	}
-	if (options.syncSessions) {
+	if (selection.sessions) {
 		try {
 			await collectDirectory(results, sessionStorageRoot(root, options.sessionDir), "", {
 				sessionsOnly: true,
@@ -141,6 +154,22 @@ export async function collectFiles(
 		}
 	}
 	return results.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+async function collectIncludedPath(results: SnapshotFile[], root: string, relativePath: string) {
+	const absolutePath = safeJoin(root, relativePath);
+	try {
+		const stat = await fs.lstat(absolutePath);
+		if (stat.isFile()) await addFile(results, root, relativePath);
+		else if (stat.isDirectory()) await collectDirectory(results, root, relativePath);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		if (!relativePath.includes("/")) {
+			const entries = await fs.readdir(root, { withFileTypes: true });
+			const entry = selectTopLevelFileEntry(entries, relativePath);
+			if (entry) await addFile(results, root, entry.name, relativePath);
+		}
+	}
 }
 
 async function collectDirectory(
@@ -225,15 +254,15 @@ export function snapshotIncludesSessions(snapshot: Snapshot) {
 
 export function filterSnapshotForConfigPolicy(
 	snapshot: Snapshot,
-	config: Pick<SyncConfig, "syncFiles" | "syncSessions" | "extraFiles">,
+	config: SyncSelectionConfig,
 	options: { regenerateId?: boolean } = {},
 ) {
-	const extraFilePaths = extraFilePathsByLower(config.extraFiles);
-	const extraFiles = new Set(extraFilePaths.keys());
+	const include = includeFromSelectionConfig(config);
+	const includePaths = customIncludePathsByLower(include);
 	const filtered = {
 		...snapshot,
-		syncSessions: config.syncSessions ? snapshot.syncSessions : false,
-		files: canonicalizeSnapshotFilesForConfig(snapshot.files, config, extraFiles, extraFilePaths),
+		syncSessions: include.includes("sessions") ? snapshot.syncSessions : false,
+		files: canonicalizeSnapshotFilesForConfig(snapshot.files, config, includePaths),
 	};
 	if (!options.regenerateId || snapshotsMatch(snapshot, filtered)) return filtered;
 	return {
@@ -246,9 +275,8 @@ export function filterSnapshotForConfigPolicy(
 
 function canonicalizeSnapshotFilesForConfig(
 	files: SnapshotFile[],
-	config: Pick<SyncConfig, "syncFiles" | "syncSessions">,
-	extraFiles: Set<string>,
-	extraFilePaths: Map<string, string>,
+	config: SyncSelectionConfig,
+	includePaths: Map<string, string>,
 ) {
 	const configuredFiles: SnapshotFile[] = [];
 	const extraCandidates = new Map<
@@ -257,17 +285,14 @@ function canonicalizeSnapshotFilesForConfig(
 	>();
 	for (const file of files) {
 		const normalized = toPosix(file.path);
-		if (
-			!isSafeSnapshotPath(file.path) ||
-			!isConfiguredSnapshotPath(normalized, config, extraFiles)
-		) {
+		if (!isSafeSnapshotPath(file.path) || !isConfiguredSnapshotPath(normalized, config)) {
 			continue;
 		}
 		if (normalized.includes("/")) {
 			configuredFiles.push(normalized === file.path ? file : { ...file, path: normalized });
 			continue;
 		}
-		const topLevelPath = canonicalSnapshotPathForConfig(normalized, extraFilePaths);
+		const topLevelPath = canonicalSnapshotPathForConfig(normalized, includePaths);
 		const candidate = {
 			exact: normalized === topLevelPath,
 			file: { ...file, path: topLevelPath },
@@ -324,12 +349,9 @@ export function scanSnapshot(snapshot: Snapshot) {
 export function mergeRemotePreservedFiles(
 	local: Snapshot,
 	remote: Snapshot,
-	config: Pick<SyncConfig, "syncFiles" | "syncSessions" | "extraFiles">,
+	config: SyncSelectionConfig,
 ) {
 	const localPathNames = new Set(local.files.map((file) => file.path.toLowerCase()));
-	const configuredExtraFiles = new Set(
-		normalizeExtraFiles(config.extraFiles).map((file) => file.toLowerCase()),
-	);
 	const preservedPathNames = new Set<string>();
 	const preserved = remote.files.filter((file) => {
 		const normalized = toPosix(file.path);
@@ -338,7 +360,7 @@ export function mergeRemotePreservedFiles(
 			localPathNames.has(lower) ||
 			preservedPathNames.has(lower) ||
 			!isSafeSnapshotPath(file.path) ||
-			isConfiguredSnapshotPath(normalized, config, configuredExtraFiles) ||
+			isConfiguredSnapshotPath(normalized, config) ||
 			!isPreservableUnmanagedSnapshotPath(normalized)
 		) {
 			return false;

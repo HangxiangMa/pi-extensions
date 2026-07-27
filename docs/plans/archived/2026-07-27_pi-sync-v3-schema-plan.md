@@ -196,98 +196,159 @@ backend-field combination fail closed without exposing secrets or damaging the s
 
 ### Milestone 1 — wording and symmetric management
 
-- [ ] Inventory every user-visible pi-sync occurrence of `target`, `profile`, `destination`, saved
+- [x] Inventory every user-visible pi-sync occurrence of `target`, `profile`, `destination`, saved
       connection, and connection across `extensions/pi-sync/src/`, tests, and `README.md`; record the
       intended replacement or justified technical-only retention in this plan so the wording pass is
       complete rather than limited to the main menu.
-- [ ] Add focused failing menu and wording tests for `Manage sync`, symmetric `Sync setups` and
+- [x] Add focused failing menu and wording tests for `Manage sync`, symmetric `Sync setups` and
       `Storage connections` list/detail flows, current markers, Make current, add/edit/remove, Back and
       Escape, notifications, errors, command descriptions, and completion labels while keeping version
       2 fixture bytes unchanged; verify the intended red state with a focused compiled Node test run.
-- [ ] Refactor `extensions/pi-sync/src/manager-ui.ts`, `storage-connections-ui.ts`, backend setup UIs,
+- [x] Refactor `extensions/pi-sync/src/manager-ui.ts`, `storage-connections-ui.ts`, backend setup UIs,
       and settings UI so the current version 2 data is presented only as sync setups and storage
       connections, with symmetric add/select/edit/remove navigation and no behavior or persistence
       change; verify main, empty, invalid, partial, cancellation, disposal, session replacement,
       shutdown, narrow-width, and RPC fallback tests.
-- [ ] Update command descriptions, completion labels, status/help text, validation errors, and
+- [x] Update command descriptions, completion labels, status/help text, validation errors, and
       notifications to use sync setup and storage connection consistently; introduce `--setup` as the
       documented spelling while retaining `--target` as a tested compatibility alias until the
       version 3 milestone, and verify TUI/RPC/print/JSON argument and mode tests.
-- [ ] Update the workflow portions of `extensions/pi-sync/README.md` to use the approved vocabulary
+- [x] Update the workflow portions of `extensions/pi-sync/README.md` to use the approved vocabulary
       while labeling `profiles` and `targets` only as temporary version 2 JSON field names; verify links,
       documented commands, and JSON examples without changing the stored schema examples yet.
-- [ ] Run the focused pi-sync tests and `npm run check`, then exercise `/sync` with an isolated
+- [x] Run the focused pi-sync tests and `npm run check`, then exercise `/sync` with an isolated
       temporary agent directory and record the main, sync-setup, and storage-connection menu wording;
       obtain explicit user approval of this milestone before starting version 3 work.
 
 ### Milestone 2 — version 3 schema
 
-- [ ] Add focused version 3 schema fixtures and failing tests in `extensions/pi-sync/test/` for all
+- [x] Add focused version 3 schema fixtures and failing tests in `extensions/pi-sync/test/` for all
       three connection/setup shapes, empty settings, every required field, mixed backend fields,
       missing references, prototype names, duplicate remote identities, normalized paths, complete
       `sync.include` semantics, and redaction; verify the intended red state with a focused compiled
       Node test run.
-- [ ] Replace the persisted settings and normalized domain types in `extensions/pi-sync/src/types.ts`
+- [x] Replace the persisted settings and normalized domain types in `extensions/pi-sync/src/types.ts`
       with exhaustive version 3 storage-connection and sync-setup unions; verify TypeScript rejects
       impossible backend combinations with `npm run typecheck`.
-- [ ] Refactor `extensions/pi-sync/src/config.ts` and backend-specific config modules to parse only
+- [x] Refactor `extensions/pi-sync/src/config.ts` and backend-specific config modules to parse only
       `version: 3`, resolve a setup through its referenced connection, normalize `storage.path`, map
       `sync.include`, and reject unsupported/invalid documents before updating effective state;
       verify with the focused schema and backend-config tests.
-- [ ] Update remote identity and state-path derivation to use normalized version 3 connection and
+- [x] Update remote identity and state-path derivation to use normalized version 3 connection and
       setup coordinates without treating the setup name as an implicit remote path; verify distinct,
       equivalent, renamed, and duplicated S3/Git/WebDAV fixtures in backend identity/state tests.
-- [ ] Replace profile/target mutation helpers in `extensions/pi-sync/src/settings-management.ts` with
+- [x] Replace profile/target mutation helpers in `extensions/pi-sync/src/settings-management.ts` with
       symmetric storage-connection and sync-setup CRUD that preserves unknown fields, rejects removal
       of referenced connections/current setups, and atomically publishes one valid document; verify
       add/edit/remove, concurrent mutation, invalid-file, write-failure, permissions, and
       last-known-state tests.
-- [ ] Refactor sync policy and file-selection boundaries to consume `sync.include`, recognize the
+- [x] Refactor sync policy and file-selection boundaries to consume `sync.include`, recognize the
       reserved `sessions` entry, validate safe relative paths, preserve privacy confirmation and
       live-session exclusion, and treat an empty list as no selected content; verify focused policy,
       snapshot, cancellation, symlink/path, and session tests.
-- [ ] Update S3/R2, Git, and WebDAV setup/edit flows to write the exact version 3 connection and setup
+- [x] Update S3/R2, Git, and WebDAV setup/edit flows to write the exact version 3 connection and setup
       shapes with complete reviewed storage paths and masked credentials while preserving the approved
       milestone 1 navigation and wording; verify each backend's first setup, connection reuse, edit,
       cancellation, invalid credentials/path, narrow rendering, and secret-redaction tests.
-- [ ] Update `extensions/pi-sync/src/command.ts` and route handling to make `--setup` canonical for
+- [x] Update `extensions/pi-sync/src/command.ts` and route handling to make `--setup` canonical for
       version 3, remove the temporary version 2 `--target` alias under the approved breaking reset,
       retain every other approved direct workflow, complete known values, and reject unsupported modes
       and trailing input observably; verify the full command catalog, completion chaining,
       TUI/RPC/print/JSON behavior, and safety confirmation tests.
-- [ ] Remove version 1/2 migration and compatibility code only after version 3 loading, UI, and command
+- [x] Remove version 1/2 migration and compatibility code only after version 3 loading, UI, and command
       tests pass; verify unsupported old/unversioned files remain byte-for-byte unchanged and produce
       actionable, secret-free errors rather than migration prompts or writes.
-- [ ] Update `extensions/pi-sync/README.md` with the version 3 schema, S3/R2/Git/WebDAV examples,
+- [x] Update `extensions/pi-sync/README.md` with the version 3 schema, S3/R2/Git/WebDAV examples,
       storage connection/sync setup terminology, defaults, path meaning, settings permissions,
       unsupported old-version behavior, direct commands, and recovery guidance; verify every JSON
       example parses and every documented route has deterministic coverage.
-- [ ] Audit the complete pi-sync diff against `docs/extension-conventions.md` and
+- [x] Audit the complete pi-sync diff against `docs/extension-conventions.md` and
       `docs/extension-settings.md`, including async cancellation/disposal/session/shutdown, settings
       concurrency and failure recovery, unknown-field preservation, secret handling, mode behavior,
       and established-route policy; record any approved deviation in this plan before completion.
-- [ ] Run `npm run check`, then `just pack-sync` and inspect the tarball, then load the extension in an
+- [x] Run `npm run check`, then `just pack-sync` and inspect the tarball, then load the extension in an
       isolated temporary agent directory with `pi -e ./extensions/pi-sync`; record passing commands,
       package contents, and any unverified external backend smoke.
 
 ## Completion Checklist
 
-- [ ] Milestone 1 passes focused tests and `npm run check`, preserves version 2 settings bytes and sync
+- [x] Milestone 1 passes focused tests and `npm run check`, preserves version 2 settings bytes and sync
       behavior, and has explicit user approval of the runtime menu wording before milestone 2 begins.
-- [ ] `pi-sync.json` accepts exactly the documented version 3 shapes for S3-compatible/R2, Git, and
+- [x] `pi-sync.json` accepts exactly the documented version 3 shapes for S3-compatible/R2, Git, and
       WebDAV storage connections and sync setups.
-- [ ] Loading, empty, valid, malformed, unsupported-version, missing-reference, mixed-backend,
+- [x] Loading, empty, valid, malformed, unsupported-version, missing-reference, mixed-backend,
       duplicate-remote, no-content, secret-bearing, and partial states are deterministic and tested.
-- [ ] Storage connection and sync setup CRUD are symmetric, atomic, concurrency-safe, private,
+- [x] Storage connection and sync setup CRUD are symmetric, atomic, concurrency-safe, private,
       unknown-field preserving, and cancellation-safe.
-- [ ] UI, commands, completions, errors, tests, and README consistently use storage connection and sync
+- [x] UI, commands, completions, errors, tests, and README consistently use storage connection and sync
       setup terminology with no managed-resource `profile`, `target`, `destination`, or saved
       connection wording left.
-- [ ] S3/R2, Git, and WebDAV resolve the exact reviewed remote location and retain publication,
+- [x] S3/R2, Git, and WebDAV resolve the exact reviewed remote location and retain publication,
       conflict, backup, recovery, and session-privacy safeguards.
-- [ ] Version 1/2 and unversioned non-empty settings are never migrated or overwritten and receive
+- [x] Version 1/2 and unversioned non-empty settings are never migrated or overwritten and receive
       documented recovery guidance.
-- [ ] `npm run check`, `just pack-sync`, and the isolated Pi runtime smoke pass, with any unavailable
+- [x] `npm run check`, `just pack-sync`, and the isolated Pi runtime smoke pass, with any unavailable
       live backend validation explicitly recorded.
-- [ ] The final semantic audit names the guides read, touched areas checked, accepted deviations, and
+- [x] The final semantic audit names the guides read, touched areas checked, accepted deviations, and
       any genuinely unverified path before the completed plan is archived.
+
+
+## Implementation record
+
+### Approval and milestone evidence
+
+- Milestone 1 was delivered by `2fbdfb7` and merged by `abedd1c`. The subsequent approved
+  breaking-v3 plan and explicit request to implement it satisfied the gate to begin milestone 2.
+- The wording inventory was re-audited across source, tests, and README. Managed resources now render
+  only as **storage connections** and **sync setups**. Retained `profile`, `destination`, and
+  `namespace` identifiers are backend-adapter or snapshot/wire fields; filesystem `target` identifiers
+  are mutation destinations. Tests mention removed version-2 words only in negative fixtures and
+  rejection assertions.
+
+### Final semantic audit
+
+Guides read: `docs/extension-conventions.md`, `docs/extension-settings.md`, Pi
+`docs/extensions.md`, `docs/tui.md`, `docs/packages.md`, and `docs/rpc.md`.
+
+Touched areas audited:
+
+- strict version-3 parsing, exhaustive cross-object/backend validation, old-field rejection, and
+  unsupported-version recovery;
+- one-lock cross-process read/validate/write serialization, no-op byte stability, stale-write and
+  publication-failure recovery, private permissions, and unknown-field preservation at retained
+  top-level, connection, credential, setup, storage, and sync-policy boundaries;
+- exact S3/R2, Git, and WebDAV path mapping, normalized duplicate identity, backend/state identity,
+  and setup-rename independence;
+- symmetric manager CRUD, setup switching, included-content/session privacy, secret masking,
+  cancellation, component disposal, session replacement, shutdown, RPC dialogs/notifications, and
+  explicit print/JSON rejection;
+- backend publication, conflict, immutable staging, rollback, local backup/journal, symlink/path, and
+  live-session protections through the retained backend-neutral and backend contract suites;
+- command catalog, canonical `--setup`, completion chaining, trailing/unknown rejection, README JSON,
+  package boundaries, and published file contents.
+
+Verification evidence:
+
+- Red-first schema compile gate failed on the initially missing v3 exports before implementation.
+- `npm run check` passes the repository CI-equivalent formatter, boundaries, workspace typechecks, and
+  test suite.
+- `just pack-sync` passes; the dry-run tarball contains 43 files, including the thin entry point,
+  README/LICENSE/package metadata, and v3 source, with tests and obsolete switch source excluded.
+- Isolated runtime smokes using
+  `pi --mode rpc --offline --no-session --no-extensions -e ./extensions/pi-sync` pass for `/sync help`
+  with no-settings lifecycle silence and `/sync config` with a private valid v3 fixture. The latter
+  reports the exact setup/connection/path and only `configured` credential states; exact fixture
+  secrets do not appear. The isolated settings file remains POSIX `0600`.
+- Automated TUI harnesses cover main/list/detail navigation, Back/Escape, current/Make current,
+  add/edit/remove, masked credential entry, narrow 32/60/100-column rendering, cancellation,
+  disposal, and failed-save display rollback.
+
+Accepted deviations and unverified external paths:
+
+- Print/JSON command invocation is rejected before execution because those Pi modes provide no
+  observable extension UI channel; TUI and RPC remain supported.
+- No live external S3/R2 account, Git host, or WebDAV server credentials were available. Deterministic
+  backend contract suites verify exact keys/trees/URLs, conditional publication, leases, conflict
+  handling, cancellation boundaries, and secret redaction. An interactive visual TUI smoke was not
+  launched from this non-interactive coding harness; the approved milestone-1 runtime review and
+  automated TUI harness are the UI evidence.

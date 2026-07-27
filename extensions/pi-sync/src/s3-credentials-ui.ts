@@ -49,37 +49,12 @@ export async function chooseS3Credentials(
 	signal?: AbortSignal,
 ): Promise<ChosenS3Credentials | undefined> {
 	const choice = await ctx.ui.select(
-		"Credentials\n\nStored secret values are masked during input and never shown afterward.",
-		[
-			"Use environment credentials",
-			"Store credentials privately",
-			"Create private settings template",
-			"Cancel",
-		],
+		"Credentials\n\nCredentials are stored in the private pi-sync settings file. Secret values are masked during input and never shown afterward.",
+		["Store credentials privately", "Cancel"],
 		{ signal },
 	);
 	throwIfAborted(signal);
-	if (!choice || choice === "Cancel") return undefined;
-	if (choice === "Use environment credentials") {
-		const ready = Boolean(
-			(process.env.PI_SYNC_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID) &&
-				(process.env.PI_SYNC_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY),
-		);
-		return {
-			profileFields: {},
-			summary: ready
-				? "Environment credentials detected"
-				: "Environment credentials are currently missing",
-			ready,
-		};
-	}
-	if (choice === "Create private settings template") {
-		return {
-			profileFields: {},
-			summary: "Credentials must be completed later in the private settings file",
-			ready: false,
-		};
-	}
+	if (choice !== "Store credentials privately") return undefined;
 	const accessKeyId = await requiredCredentialInput(ctx, "Access key ID", "access-key-id", signal);
 	if (!accessKeyId) return undefined;
 	const secretAccessKey = await promptSecret(ctx, "Secret access key", { signal });

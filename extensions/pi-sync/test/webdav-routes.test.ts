@@ -40,25 +40,20 @@ test("all backend-neutral sync routes operate against a WebDAV target", async ()
 			writeFileSync(
 				localConfigPath(),
 				JSON.stringify({
-					version: 2,
-					activeTarget: "home",
-					profiles: {
+					version: 3,
+					activeSyncSetup: "home",
+					onSwitch: "ask-before-pull",
+					storageConnections: {
 						dav: {
-							kind: "webdav",
+							type: "webdav",
 							url: server.url,
-							username: "user",
-							password: "pass",
+							credentials: { username: "user", password: "pass" },
 						},
 					},
-					targets: {
+					syncSetups: {
 						home: {
-							profile: "dav",
-							path: "pi-sync",
-							namespace: "home",
-							autoSync: true,
-							syncFiles: ["settings.json"],
-							syncSessions: false,
-							extraFiles: [],
+							storage: { connection: "dav", path: "pi-sync/home" },
+							sync: { include: ["settings.json"], automatic: true },
 						},
 					},
 				}),
@@ -69,7 +64,7 @@ test("all backend-neutral sync routes operate against a WebDAV target", async ()
 			await diff(ctx, options());
 			await push(ctx, options());
 			const pointer = JSON.parse(
-				server.resources.get("/dav/pi-sync/profiles/home/latest.json")?.toString("utf8") ?? "null",
+				server.resources.get("/dav/pi-sync/home/latest.json")?.toString("utf8") ?? "null",
 			) as { snapshot: string };
 			assert.ok(pointer.snapshot);
 			await history(ctx, options());

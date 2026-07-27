@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isDeniedPath, toPosix } from "./paths.js";
 
-export const DEFAULT_SYNC_FILES = [
+export const BUILT_IN_SYNC_ROOTS = [
 	"settings.json",
 	"keybindings.json",
 	"models.json",
@@ -13,100 +13,148 @@ export const DEFAULT_SYNC_FILES = [
 	"extensions",
 ] as const;
 
-export type BuiltInSyncFile = (typeof DEFAULT_SYNC_FILES)[number];
+export const DEFAULT_SYNC_INCLUDE = [...BUILT_IN_SYNC_ROOTS] as const;
+export type BuiltInSyncFile = (typeof BUILT_IN_SYNC_ROOTS)[number];
 
 const BUILT_IN_BY_LOWER = new Map<string, BuiltInSyncFile>(
-	DEFAULT_SYNC_FILES.map((fileName) => [fileName.toLowerCase(), fileName]),
+	BUILT_IN_SYNC_ROOTS.map((fileName) => [fileName.toLowerCase(), fileName]),
 );
 const TOP_LEVEL_FILE_PATHS = new Map<string, string>(
-	DEFAULT_SYNC_FILES.filter((fileName) => fileName.includes(".")).map((fileName) => [
+	BUILT_IN_SYNC_ROOTS.filter((fileName) => fileName.includes(".")).map((fileName) => [
 		fileName.toLowerCase(),
 		fileName,
 	]),
 );
-const TOP_LEVEL_FILE_NAMES = new Set<string>(TOP_LEVEL_FILE_PATHS.keys());
 const TOP_LEVEL_DIRS = new Set<string>(
-	DEFAULT_SYNC_FILES.filter((fileName) => !fileName.includes(".")),
+	BUILT_IN_SYNC_ROOTS.filter((fileName) => !fileName.includes(".")),
 );
 const RESERVED_TOP_LEVEL_NAMES = new Set<string>([...TOP_LEVEL_DIRS, "sessions"]);
 
-export function normalizeSyncFiles(value: unknown): BuiltInSyncFile[] {
-	if (value === undefined) return [...DEFAULT_SYNC_FILES];
-	if (!Array.isArray(value)) throw new Error("syncFiles must be an array of built-in file names.");
-
-	const result: BuiltInSyncFile[] = [];
+export function normalizeSyncInclude(value: unknown): string[] {
+	if (!Array.isArray(value)) {
+		throw new Error("Invalid pi-sync settings: sync.include must be an array.");
+	}
+	const result: string[] = [];
 	const seen = new Set<string>();
 	for (const item of value) {
-		if (typeof item !== "string") throw new Error("syncFiles items must be strings.");
-		const canonical = BUILT_IN_BY_LOWER.get(item.trim().toLowerCase());
-		if (!canonical) throw new Error(`Unknown syncFiles item: ${item}`);
-		const lower = canonical.toLowerCase();
-		if (seen.has(lower)) continue;
-		seen.add(lower);
-		result.push(canonical);
+		if (typeof item !== "string") {
+			throw new Error("Invalid pi-sync settings: sync.include items must be strings.");
+		}
+		const trimmed = item.trim();
+		const builtIn = BUILT_IN_BY_LOWER.get(trimmed.toLowerCase());
+		const normalized = builtIn ?? (trimmed.toLowerCase() === "sessions" ? "sessions" : trimmed);
+		if (!builtIn && normalized !== "sessions") validateAgentRelativeInclude(normalized);
+		const identity = normalized.toLowerCase();
+		if (seen.has(identity)) {
+			throw new Error(`Invalid pi-sync settings: duplicate sync.include item: ${item}`);
+		}
+		for (const previous of seen) {
+			if (identity.startsWith(`${previous}/`) || previous.startsWith(`${identity}/`)) {
+				throw new Error(
+					`Invalid pi-sync settings: overlapping sync.include items are ambiguous: ${item}`,
+				);
+			}
+		}
+		seen.add(identity);
+		result.push(normalized);
 	}
 	return result;
 }
 
-export function normalizeExtraFiles(value: unknown) {
-	if (!Array.isArray(value)) return [];
-	const seen = new Set<string>();
-	return value
-		.filter((item): item is string => typeof item === "string")
-		.map((item) => item.trim())
-		.filter((item) => {
-			const lower = item.toLowerCase();
-			if (
-				item === "" ||
-				item === "." ||
-				item === ".." ||
-				item.includes("/") ||
-				item.includes("\\") ||
-				TOP_LEVEL_FILE_NAMES.has(lower) ||
-				isDeniedPath(item) ||
-				RESERVED_TOP_LEVEL_NAMES.has(lower) ||
-				seen.has(lower)
-			) {
-				return false;
-			}
-			seen.add(lower);
-			return true;
-		});
+function validateAgentRelativeInclude(value: string) {
+	const normalized = toPosix(value);
+	const topLevel = normalized.split("/")[0]?.toLowerCase();
+	if (
+		!normalized ||
+		normalized === "." ||
+		normalized === ".." ||
+		normalized.startsWith("../") ||
+		path.posix.isAbsolute(normalized) ||
+		normalized.includes("\\") ||
+		path.posix.normalize(normalized) !== normalized ||
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: Include paths cannot contain controls.
+		/[\u0000-\u001f\u007f-\u009f]/u.test(normalized)
+	) {
+		throw new Error(
+			`Invalid pi-sync settings: sync.include item must be a safe agent-relative path: ${value}`,
+		);
+	}
+	if (isDeniedPath(normalized)) {
+		throw new Error(`Invalid pi-sync settings: ${value} cannot be synced.`);
+	}
+	if (topLevel && RESERVED_TOP_LEVEL_NAMES.has(topLevel)) {
+		throw new Error(
+			`Invalid pi-sync settings: use the canonical ${topLevel} root instead of a nested sync.include path.`,
+		);
+	}
 }
 
-export function extraFilePathsByLower(value: unknown) {
-	return new Map(normalizeExtraFiles(value).map((fileName) => [fileName.toLowerCase(), fileName]));
+export function syncIncludeSelection(value: unknown) {
+	const include = normalizeSyncInclude(value);
+	const builtIns = include.filter((item): item is BuiltInSyncFile =>
+		BUILT_IN_BY_LOWER.has(item.toLowerCase()),
+	);
+	const custom = include.filter(
+		(item) => item !== "sessions" && !BUILT_IN_BY_LOWER.has(item.toLowerCase()),
+	);
+	return { include, builtIns, custom, sessions: include.includes("sessions") };
 }
 
-export function selectedSyncFileSet(value: unknown) {
-	return new Set(normalizeSyncFiles(value));
+export function customIncludePathsByLower(value: unknown) {
+	return new Map(
+		syncIncludeSelection(value).custom.map((relativePath) => [
+			relativePath.toLowerCase(),
+			relativePath,
+		]),
+	);
+}
+
+export interface SyncSelectionConfig {
+	include?: unknown;
+	syncFiles?: unknown;
+	syncSessions?: boolean;
+	extraFiles?: unknown;
+}
+
+export function includeFromSelectionConfig(config: SyncSelectionConfig) {
+	if (config.include !== undefined) return normalizeSyncInclude(config.include);
+	return [
+		...normalizeSyncFiles(config.syncFiles),
+		...normalizeExtraFiles(config.extraFiles),
+		...(config.syncSessions ? ["sessions"] : []),
+	];
 }
 
 export function isConfiguredSnapshotPath(
 	relativePath: string,
-	config: { syncFiles?: unknown; syncSessions: boolean },
-	extraFiles: Set<string>,
+	config: SyncSelectionConfig,
+	_legacyExtraFiles?: Set<string>,
 ) {
 	const normalized = toPosix(relativePath);
-	if (normalized.startsWith("sessions/")) return config.syncSessions;
-	const selected = selectedSyncFileSet(config.syncFiles);
+	const selection = syncIncludeSelection(includeFromSelectionConfig(config));
+	if (normalized.startsWith("sessions/")) return selection.sessions;
+	const lower = normalized.toLowerCase();
 	if (!normalized.includes("/")) {
-		const lower = normalized.toLowerCase();
 		const builtIn = BUILT_IN_BY_LOWER.get(lower);
-		return builtIn ? selected.has(builtIn) && !TOP_LEVEL_DIRS.has(builtIn) : extraFiles.has(lower);
+		if (builtIn) return selection.builtIns.includes(builtIn) && !TOP_LEVEL_DIRS.has(builtIn);
 	}
 	const topLevel = normalized.slice(0, normalized.indexOf("/"));
-	return selected.has(topLevel as BuiltInSyncFile) && TOP_LEVEL_DIRS.has(topLevel);
+	if (selection.builtIns.includes(topLevel as BuiltInSyncFile) && TOP_LEVEL_DIRS.has(topLevel)) {
+		return true;
+	}
+	return selection.custom.some((candidate) => {
+		const candidateLower = candidate.toLowerCase();
+		return lower === candidateLower || lower.startsWith(`${candidateLower}/`);
+	});
 }
 
 export function canonicalSnapshotPathForConfig(
 	relativePath: string,
-	extraFilePaths: Map<string, string>,
+	includePaths: Map<string, string>,
 ) {
 	const normalized = toPosix(relativePath);
-	if (normalized.includes("/")) return normalized;
 	const lower = normalized.toLowerCase();
-	return TOP_LEVEL_FILE_PATHS.get(lower) ?? extraFilePaths.get(lower) ?? normalized;
+	return TOP_LEVEL_FILE_PATHS.get(lower) ?? includePaths.get(lower) ?? normalized;
 }
 
 export function isPreservableUnmanagedSnapshotPath(relativePath: string) {
@@ -115,15 +163,43 @@ export function isPreservableUnmanagedSnapshotPath(relativePath: string) {
 	if (normalized.startsWith("sessions/")) return normalized.endsWith(".jsonl");
 	if (!normalized.includes("/")) {
 		const lower = normalized.toLowerCase();
-		return TOP_LEVEL_FILE_NAMES.has(lower) || !RESERVED_TOP_LEVEL_NAMES.has(lower);
+		return TOP_LEVEL_FILE_PATHS.has(lower) || !RESERVED_TOP_LEVEL_NAMES.has(lower);
 	}
-	return TOP_LEVEL_DIRS.has(normalized.slice(0, normalized.indexOf("/")));
+	return true;
 }
 
-export function isSafeExtraFileName(fileName: string) {
-	return normalizeExtraFiles([fileName]).length === 1;
+export function isSafeCustomIncludePath(relativePath: string) {
+	try {
+		validateAgentRelativeInclude(relativePath);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 export function isBuiltInTopLevelFile(fileName: string) {
-	return TOP_LEVEL_FILE_NAMES.has(path.posix.basename(fileName).toLowerCase());
+	return TOP_LEVEL_FILE_PATHS.has(path.posix.basename(fileName).toLowerCase());
 }
+
+/** Compatibility projection for backend-neutral output while callers move to sync.include. */
+export function normalizeSyncFiles(value: unknown): BuiltInSyncFile[] {
+	if (value === undefined) return [...DEFAULT_SYNC_INCLUDE];
+	if (Array.isArray(value)) {
+		return normalizeSyncInclude(value).filter((item): item is BuiltInSyncFile =>
+			BUILT_IN_BY_LOWER.has(item.toLowerCase()),
+		);
+	}
+	throw new Error("Invalid pi-sync settings: expected an include array.");
+}
+
+/** Compatibility projection for old rendering helpers; v3 persistence never writes this split field. */
+export function normalizeExtraFiles(value: unknown) {
+	if (!Array.isArray(value)) return [];
+	return value.filter(
+		(item): item is string => typeof item === "string" && isSafeCustomIncludePath(item),
+	);
+}
+
+export const extraFilePathsByLower = customIncludePathsByLower;
+export const isSafeExtraFileName = isSafeCustomIncludePath;
+export const selectedSyncFileSet = (value: unknown) => new Set(normalizeSyncFiles(value));

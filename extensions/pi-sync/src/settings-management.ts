@@ -1,363 +1,176 @@
-import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import {
-	DEFAULT_TARGET_SWITCH_ACTION,
-	effectiveTargetRemoteIdentity,
+	effectiveSyncSetupRemoteIdentity,
 	localConfigPath,
-	readLocalConfigDocument,
-	readLocalConfigObject,
-	replaceLocalConfigDocument,
-	resolveLegacyPartialConfig,
-	resolveV2PartialConfig,
-	stateDir,
-	statePathForPartialConfig,
-	validateUniqueRemoteTargets,
-	writeLocalConfigObject,
+	updateLocalConfig,
+	validateConfigName,
 } from "./config.js";
-import { withLock } from "./lock.js";
-import type { PartialConfig, StorageProfileSettings, SyncTargetSettings } from "./types.js";
+import type { PiSyncSettingsV3, StorageConnectionSettings, SyncSetupSettings } from "./types.js";
 
-let afterLegacySettingsReadHook: () => Promise<void> = async () => undefined;
-
-export async function withLegacySettingsReadHookForTest<T>(
-	hook: () => Promise<void>,
-	run: () => Promise<T>,
-) {
-	const previous = afterLegacySettingsReadHook;
-	afterLegacySettingsReadHook = hook;
-	try {
-		return await run();
-	} finally {
-		afterLegacySettingsReadHook = previous;
-	}
-}
-
-const LEGACY_FIELDS = new Set([
-	"endpoint",
-	"bucket",
-	"region",
-	"accessKeyId",
-	"secretAccessKey",
-	"sessionToken",
-	"profile",
-	"prefix",
-	"autoSync",
-	"syncFiles",
-	"syncSessions",
-	"extraFiles",
-]);
-
-export interface MigrationResult {
-	settings: Record<string, unknown>;
-	backupPath: string;
-}
-
-export async function migrateLegacySettings(
-	targetName: string,
-	storageProfileName: string,
-): Promise<MigrationResult> {
-	validateName(targetName, "target");
-	validateName(storageProfileName, "storage profile");
-	return withLock("settings-migration", async () => {
-		const document = await readLocalConfigDocument();
-		if (!document) throw new Error("No legacy pi-sync settings are available to migrate.");
-		const { bytes: originalBytes, parsed: current } = document;
-		if (current.version === 2) {
-			throw new Error("pi-sync settings already use storage connections and sync setups.");
-		}
-		await afterLegacySettingsReadHook();
-		const next = legacySettingsAsV2(current, targetName, storageProfileName);
-		const backupPath = await writeMigrationBackup(originalBytes);
-		await adoptLegacyState(current, next, targetName);
-		await replaceLocalConfigDocument(document, next);
-		return { settings: next, backupPath };
-	});
-}
-
-export function legacySettingsAsV2(
-	legacy: Record<string, unknown>,
-	targetName: string,
-	storageProfileName: string,
-) {
-	validateName(targetName, "target");
-	validateName(storageProfileName, "storage profile");
-	const unknown = Object.fromEntries(
-		Object.entries(legacy).filter(([key]) => !LEGACY_FIELDS.has(key) && key !== "version"),
-	);
-	const profile = compactObject({
-		kind: inferKind(legacy.endpoint),
-		endpoint: legacy.endpoint,
-		region: legacy.region,
-		accessKeyId: legacy.accessKeyId,
-		secretAccessKey: legacy.secretAccessKey,
-		sessionToken: legacy.sessionToken,
-	});
-	const target = compactObject({
-		profile: storageProfileName,
-		bucket: legacy.bucket,
-		prefix: legacy.prefix,
-		namespace: legacy.profile ?? targetName,
-		autoSync: legacy.autoSync,
-		syncFiles: legacy.syncFiles,
-		syncSessions: legacy.syncSessions,
-		extraFiles: legacy.extraFiles,
-		legacyStateProfile: legacy.profile ?? "default",
-	});
-	return {
-		...unknown,
-		version: 2,
-		activeTarget: targetName,
-		profiles: { [storageProfileName]: profile },
-		targets: { [targetName]: target },
-	};
-}
-
-export async function saveNewV2Settings(input: {
-	targetName: string;
-	storageProfileName: string;
-	profile: StorageProfileSettings;
-	target: SyncTargetSettings;
+export async function saveNewV3Settings(input: {
+	setupName: string;
+	connectionName: string;
+	connection: StorageConnectionSettings;
+	setup: SyncSetupSettings;
 }) {
-	validateName(input.targetName, "target");
-	validateName(input.storageProfileName, "storage profile");
-	const current = (await readLocalConfigObject()) ?? {};
-	if (Object.keys(current).length > 0)
-		throw new Error(`Settings already exist: ${localConfigPath()}`);
-	const settings = {
-		version: 2,
-		activeTarget: input.targetName,
-		targetSwitchAction: DEFAULT_TARGET_SWITCH_ACTION,
-		profiles: { [input.storageProfileName]: { ...input.profile } },
-		targets: {
-			[input.targetName]: { ...input.target, profile: input.storageProfileName },
+	validateConfigName(input.setupName, "sync setup");
+	validateConfigName(input.connectionName, "storage connection");
+	const settings: PiSyncSettingsV3 = {
+		version: 3,
+		activeSyncSetup: input.setupName,
+		onSwitch: "ask-before-pull",
+		storageConnections: { [input.connectionName]: structuredClone(input.connection) },
+		syncSetups: {
+			[input.setupName]: {
+				...structuredClone(input.setup),
+				storage: { ...input.setup.storage, connection: input.connectionName },
+			},
 		},
 	};
-	await writeLocalConfigObject(settings);
+	await updateLocalConfig((current) => {
+		if (Object.keys(current.storageConnections).length || Object.keys(current.syncSetups).length) {
+			throw new Error(`Settings already exist: ${localConfigPath()}`);
+		}
+		return settings;
+	});
 	return settings;
 }
 
-export async function addStorageProfile(name: string, profile: StorageProfileSettings) {
-	validateName(name, "storage profile");
-	await updateV2Settings((settings) => {
-		const profiles = requireObject(settings.profiles, "profiles");
-		if (Object.hasOwn(profiles, name))
+export async function addStorageConnection(name: string, connection: StorageConnectionSettings) {
+	validateConfigName(name, "storage connection");
+	await updateSettings((settings) => {
+		if (Object.hasOwn(settings.storageConnections, name)) {
 			throw new Error(`Storage connection already exists: ${name}`);
-		return { ...settings, profiles: { ...profiles, [name]: { ...profile } } };
-	});
-}
-
-export async function updateStorageProfile(
-	name: string,
-	update: (profile: Record<string, unknown>) => Record<string, unknown>,
-	expectedSetups?: readonly string[],
-) {
-	validateName(name, "storage profile");
-	await updateV2Settings((settings) => {
-		const profiles = requireObject(settings.profiles, "profiles");
-		const targets = requireObject(settings.targets, "targets");
-		if (expectedSetups) {
-			const currentSetups = referencingTargetNames(targets, name);
-			if (
-				currentSetups.length !== expectedSetups.length ||
-				currentSetups.some((setup, index) => setup !== expectedSetups[index])
-			) {
-				throw new Error(
-					`Storage connection “${name}” usage changed while it was open; reopen it and review the affected sync setups.`,
-				);
-			}
 		}
-		const profile = requireObject(profiles[name], "storage profile");
-		const nextProfiles = { ...profiles, [name]: update(profile) };
-		validateUniqueRemoteTargets(targets, nextProfiles);
-		return { ...settings, profiles: nextProfiles };
-	});
-}
-
-export async function addSyncTarget(name: string, target: SyncTargetSettings) {
-	validateName(name, "target");
-	await updateV2Settings((settings) => {
-		const targets = requireObject(settings.targets, "targets");
-		const profiles = requireObject(settings.profiles, "profiles");
-		if (Object.hasOwn(targets, name)) throw new Error(`Sync setup already exists: ${name}`);
-		if (!target.profile || !Object.hasOwn(profiles, target.profile)) {
-			throw new Error(`Storage connection not found: ${target.profile ?? "missing"}`);
-		}
-		assertUniqueRemoteIdentity(targets, profiles, name, target);
-		return { ...settings, targets: { ...targets, [name]: { ...target } } };
-	});
-}
-
-export async function updateSyncTarget(
-	name: string,
-	update: (target: Record<string, unknown>) => Record<string, unknown>,
-) {
-	validateName(name, "target");
-	await updateV2Settings((settings) => {
-		const targets = requireObject(settings.targets, "targets");
-		const target = requireObject(targets[name], "target");
-		const nextTarget = update(target);
-		assertUniqueRemoteIdentity(
-			targets,
-			requireObject(settings.profiles, "profiles"),
-			name,
-			nextTarget,
-		);
-		return { ...settings, targets: { ...targets, [name]: nextTarget } };
-	});
-}
-
-export async function removeSyncTarget(name: string) {
-	validateName(name, "target");
-	await updateV2Settings((settings) => {
-		const targets = requireObject(settings.targets, "targets");
-		if (!Object.hasOwn(targets, name)) throw new Error(`Sync setup not found: ${name}`);
-		if (settings.activeTarget === name && Object.keys(targets).length > 1) {
-			throw new Error("Switch to another sync setup before removing the current setup.");
-		}
-		const nextTargets = { ...targets };
-		delete nextTargets[name];
 		return {
 			...settings,
-			targets: nextTargets,
-			activeTarget:
-				settings.activeTarget === name ? Object.keys(nextTargets)[0] : settings.activeTarget,
+			storageConnections: {
+				...settings.storageConnections,
+				[name]: structuredClone(connection),
+			},
 		};
 	});
 }
 
-export async function removeStorageProfile(name: string) {
-	validateName(name, "storage profile");
-	await updateV2Settings((settings) => {
-		const profiles = requireObject(settings.profiles, "profiles");
-		const targets = requireObject(settings.targets, "targets");
-		const referenced = Object.entries(targets).find(
-			([, target]) => requireObject(target, "target").profile === name,
-		)?.[0];
-		if (referenced)
-			throw new Error(`Storage connection “${name}” is used by sync setup “${referenced}”.`);
-		if (!Object.hasOwn(profiles, name)) throw new Error(`Storage connection not found: ${name}`);
-		const nextProfiles = { ...profiles };
-		delete nextProfiles[name];
-		return { ...settings, profiles: nextProfiles };
-	});
-}
-
-async function updateV2Settings(
-	update: (settings: Record<string, unknown>) => Record<string, unknown>,
+export async function updateStorageConnection(
+	name: string,
+	update: (connection: StorageConnectionSettings) => StorageConnectionSettings,
+	expectedSetups?: readonly string[],
 ) {
-	return withLock("settings", async () => {
-		const current = await readLocalConfigObject();
-		if (current?.version !== 2) {
-			throw new Error("Storage connections and sync setups require version 2 pi-sync settings.");
+	validateConfigName(name, "storage connection");
+	await updateSettings((settings) => {
+		const connection = settings.storageConnections[name];
+		if (!connection) throw new Error(`Storage connection not found: ${name}`);
+		const currentSetups = referencingSetupNames(settings.syncSetups, name);
+		if (expectedSetups && !sameNames(currentSetups, expectedSetups)) {
+			throw new Error(
+				`Storage connection “${name}” usage changed while it was open; reopen it and review the affected sync setups.`,
+			);
 		}
-		const next = update(current);
-		await writeLocalConfigObject(next);
-		return next;
+		const nextConnection = update(structuredClone(connection));
+		const nextConnections = { ...settings.storageConnections, [name]: nextConnection };
+		assertUniqueLocations(settings.syncSetups, nextConnections);
+		return { ...settings, storageConnections: nextConnections };
 	});
 }
 
-async function writeMigrationBackup(bytes: Buffer) {
-	const directory = path.join(stateDir(), "backups", "config");
-	await fs.mkdir(directory, { recursive: true });
-	const backupPath = path.join(
-		directory,
-		`pi-sync.local.${new Date().toISOString().replace(/[:.]/gu, "-")}.${randomUUID().slice(0, 8)}.json`,
-	);
-	await fs.writeFile(backupPath, bytes, { flag: "wx", mode: 0o600 });
-	if (process.platform !== "win32") await fs.chmod(backupPath, 0o600);
-	return backupPath;
+export async function addSyncSetup(name: string, setup: SyncSetupSettings) {
+	validateConfigName(name, "sync setup");
+	await updateSettings((settings) => {
+		if (Object.hasOwn(settings.syncSetups, name))
+			throw new Error(`Sync setup already exists: ${name}`);
+		if (!Object.hasOwn(settings.storageConnections, setup.storage.connection)) {
+			throw new Error(`Storage connection not found: ${setup.storage.connection}`);
+		}
+		const nextSetups = { ...settings.syncSetups, [name]: structuredClone(setup) };
+		assertUniqueLocations(nextSetups, settings.storageConnections);
+		return {
+			...settings,
+			syncSetups: nextSetups,
+			...(settings.activeSyncSetup ? {} : { activeSyncSetup: name }),
+		};
+	});
 }
 
-async function adoptLegacyState(
-	legacy: Record<string, unknown>,
-	next: Record<string, unknown>,
-	targetName: string,
+export async function updateSyncSetup(
+	name: string,
+	update: (setup: SyncSetupSettings) => SyncSetupSettings,
 ) {
-	const legacyConfig = resolveLegacyPartialConfig(legacy as PartialConfig);
-	const source = statePathForPartialConfig(legacyConfig);
-	let bytes: Buffer;
-	try {
-		bytes = await fs.readFile(source);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-		throw error;
-	}
-	const destination = statePathForPartialConfig(resolveV2PartialConfig(next, targetName));
-	await fs.mkdir(path.dirname(destination), { recursive: true });
-	try {
-		await fs.writeFile(destination, bytes, { flag: "wx", mode: 0o600 });
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-	}
+	validateConfigName(name, "sync setup");
+	await updateSettings((settings) => {
+		const setup = settings.syncSetups[name];
+		if (!setup) throw new Error(`Sync setup not found: ${name}`);
+		const nextSetup = update(structuredClone(setup));
+		if (!Object.hasOwn(settings.storageConnections, nextSetup.storage.connection)) {
+			throw new Error(`Storage connection not found: ${nextSetup.storage.connection}`);
+		}
+		const nextSetups = { ...settings.syncSetups, [name]: nextSetup };
+		assertUniqueLocations(nextSetups, settings.storageConnections);
+		return { ...settings, syncSetups: nextSetups };
+	});
 }
 
-function referencingTargetNames(targets: Record<string, unknown>, profileName: string) {
-	return Object.entries(targets)
-		.filter(([, value]) => requireObject(value, "target").profile === profileName)
+export async function removeSyncSetup(name: string) {
+	validateConfigName(name, "sync setup");
+	await updateSettings((settings) => {
+		if (!Object.hasOwn(settings.syncSetups, name)) throw new Error(`Sync setup not found: ${name}`);
+		if (settings.activeSyncSetup === name) {
+			throw new Error("Switch to another sync setup before removing the current setup.");
+		}
+		const syncSetups = { ...settings.syncSetups };
+		delete syncSetups[name];
+		return { ...settings, syncSetups };
+	});
+}
+
+export async function removeStorageConnection(name: string) {
+	validateConfigName(name, "storage connection");
+	await updateSettings((settings) => {
+		const referenced = referencingSetupNames(settings.syncSetups, name)[0];
+		if (referenced) {
+			throw new Error(`Storage connection “${name}” is used by sync setup “${referenced}”.`);
+		}
+		if (!Object.hasOwn(settings.storageConnections, name)) {
+			throw new Error(`Storage connection not found: ${name}`);
+		}
+		const storageConnections = { ...settings.storageConnections };
+		delete storageConnections[name];
+		return { ...settings, storageConnections };
+	});
+}
+
+async function updateSettings(update: (settings: PiSyncSettingsV3) => PiSyncSettingsV3) {
+	return updateLocalConfig((settings) => {
+		if (settings.version !== 3) {
+			throw new Error("Storage connections and sync setups require version 3 pi-sync settings.");
+		}
+		return update(settings);
+	});
+}
+
+function referencingSetupNames(setups: Record<string, SyncSetupSettings>, connection: string) {
+	return Object.entries(setups)
+		.filter(([, setup]) => setup.storage.connection === connection)
 		.map(([name]) => name)
 		.sort((left, right) => left.localeCompare(right));
 }
 
-function assertUniqueRemoteIdentity(
-	targets: Record<string, unknown>,
-	profiles: Record<string, unknown>,
-	name: string,
-	target: SyncTargetSettings,
+function assertUniqueLocations(
+	setups: Record<string, SyncSetupSettings>,
+	connections: Record<string, StorageConnectionSettings>,
 ) {
-	const profileName = typeof target.profile === "string" ? target.profile : "";
-	const profile = requireObject(profiles[profileName], "storage profile");
-	const identity = effectiveTargetRemoteIdentity(target as Record<string, unknown>, name, profile);
-	for (const [otherName, value] of Object.entries(targets)) {
-		if (
-			otherName !== name &&
-			effectiveTargetRemoteIdentity(
-				requireObject(value, "target"),
-				otherName,
-				requireObject(
-					profiles[String(requireObject(value, "target").profile ?? "")],
-					"storage profile",
-				),
-			) === identity
-		) {
-			throw new Error(`Sync setup “${name}” duplicates the storage location of “${otherName}”.`);
+	const identities = new Map<string, string>();
+	for (const [name, setup] of Object.entries(setups)) {
+		const connection = connections[setup.storage.connection];
+		if (!connection) throw new Error(`Storage connection not found: ${setup.storage.connection}`);
+		const identity = effectiveSyncSetupRemoteIdentity(setup, connection);
+		const previous = identities.get(identity);
+		if (previous) {
+			throw new Error(`Sync setup “${name}” duplicates the storage location of “${previous}”.`);
 		}
+		identities.set(identity, name);
 	}
 }
 
-function compactObject(value: Record<string, unknown>) {
-	return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
-}
-
-function inferKind(endpoint: unknown) {
-	return typeof endpoint === "string" && endpoint.includes(".r2.cloudflarestorage.com")
-		? "r2"
-		: "s3-compatible";
-}
-
-function requireObject(value: unknown, name: string): Record<string, unknown> {
-	if (!value || typeof value !== "object" || Array.isArray(value)) {
-		throw new Error(`Invalid pi-sync settings: ${name} must be an object.`);
-	}
-	return value as Record<string, unknown>;
-}
-
-function validateName(value: string, label: string) {
-	if (
-		!value.trim() ||
-		value.length > 100 ||
-		value === "__proto__" ||
-		value === "prototype" ||
-		value === "constructor" ||
-		// biome-ignore lint/suspicious/noControlCharactersInRegex: Stored identifiers cannot contain controls.
-		/[\u0000-\u001f\u007f-\u009f]/u.test(value)
-	) {
-		const displayLabel =
-			label === "target"
-				? "sync setup"
-				: label === "storage profile"
-					? "storage connection"
-					: label;
-		throw new Error(`Invalid ${displayLabel} name.`);
-	}
+function sameNames(left: readonly string[], right: readonly string[]) {
+	return left.length === right.length && left.every((name, index) => name === right[index]);
 }

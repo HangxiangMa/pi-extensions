@@ -602,11 +602,7 @@ export class GitSyncBackend implements SyncBackend {
 	}
 
 	private publicationPath() {
-		return posixJoin(
-			this.config.destination.directory,
-			"profiles",
-			this.config.destination.namespace,
-		);
+		return this.config.destination.directory;
 	}
 
 	private manifestPath() {
@@ -664,7 +660,6 @@ export function gitBackendIdentity(config: ResolvedGitBackend) {
 		remoteIdentity,
 		config.destination.branch,
 		config.destination.directory,
-		config.destination.namespace,
 	]);
 	return `git:${sha256(Buffer.from(canonical))}`;
 }
@@ -682,7 +677,7 @@ function gitDestination(config: ResolvedGitBackend) {
 		const match = /^(?:[^@]+@)?(?<host>\[[^\]]+\]|[^:]+):/u.exec(remote);
 		if (match?.groups?.host) host = match.groups.host;
 	}
-	return `${host} · ${config.destination.branch}:${posixJoin(config.destination.directory, "profiles", config.destination.namespace)}`;
+	return `${host} · ${config.destination.branch}:${config.destination.directory}`;
 }
 
 function remoteHead(sha: string, manifest: GitManifest, identity: string): RemoteHead {
@@ -741,11 +736,11 @@ function assertGitDestination(config: ResolvedGitBackend) {
 			normalizeGitBranch(config.destination.branch) !== config.destination.branch ||
 			normalizeGitDirectory(config.destination.directory) !== config.destination.directory
 		) {
-			throw new Error("Git destination is not normalized.");
+			throw new Error("Git storage location is not normalized.");
 		}
 		validateGitNamespace(config.destination.namespace);
 	} catch (error) {
-		throw new Error("Invalid Git destination.", { cause: error });
+		throw new Error("Invalid Git storage location.", { cause: error });
 	}
 }
 

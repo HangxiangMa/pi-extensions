@@ -27,7 +27,7 @@ test("S3 factory exposes a stable secret-free identity, weak capability, and dia
 				sessionToken: "different-token",
 			},
 		},
-		target: "other-local-target",
+		setupName: "other-local-setup",
 	});
 
 	assert.equal(backend.identity, sameDestination.identity);
@@ -38,17 +38,27 @@ test("S3 factory exposes a stable secret-free identity, weak capability, and dia
 		{
 			key: "s3-config",
 			level: "info",
-			message: "s3 config: ok (pi-sync-test/pi-sync/profiles/default)",
+			message: "s3 config: ok (pi-sync-test/pi-sync)",
 		},
 	]);
+	assert.equal(
+		backend.identity,
+		createSyncBackend({
+			...config,
+			snapshotIdentity: "work",
+			backend: {
+				...config.backend,
+				destination: { ...config.backend.destination, namespace: "work" },
+			},
+		}).identity,
+	);
 	assert.notEqual(
 		backend.identity,
 		createSyncBackend({
 			...config,
-			profile: "work",
 			backend: {
 				...config.backend,
-				destination: { ...config.backend.destination, namespace: "work" },
+				destination: { ...config.backend.destination, prefix: "pi-sync/work" },
 			},
 		}).identity,
 	);
@@ -89,7 +99,7 @@ test("S3 rejects unsafe snapshot references and mismatched immutable bundle iden
 	assert.throws(() => snapshotKey(config.backend, "../foreign"), /snapshot reference/i);
 	const unsafeDestination = s3Config();
 	unsafeDestination.backend.destination.prefix = "../foreign";
-	assert.throws(() => createSyncBackend(unsafeDestination), /destination/i);
+	assert.throws(() => createSyncBackend(unsafeDestination), /storage location/i);
 
 	const remote = snapshot([{ path: "settings.json", content: Buffer.from("remote") }]);
 	const harness = new S3Harness(remote);
@@ -300,11 +310,13 @@ function s3Config(): SyncConfig {
 			},
 			destination: { bucket: "pi-sync-test", prefix: "pi-sync", namespace: "default" },
 		},
-		profile: "default",
-		target: "default",
-		storageProfile: "default",
-		syncSessions: false,
-		extraFiles: [],
+		setupName: "default",
+		connectionName: "default",
+		storagePath: "pi-sync",
+		snapshotIdentity: "default",
+		include: [],
+		automatic: false,
+		onSwitch: "switch-only",
 	};
 }
 

@@ -1,96 +1,91 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { setSyncTargetCompletions } from "./command.js";
+import { setSyncSetupCompletions } from "./command.js";
 import {
-	configuredTargetNames,
+	configuredSyncSetupNames,
 	loadConfig,
-	normalizeTargetSwitchAction,
+	normalizeOnSwitch,
 	updateLocalConfig,
 } from "./config.js";
 import { safeTerminalText } from "./sync-format.js";
-import type { TargetSwitchAction } from "./types.js";
+import type { OnSwitchAction } from "./types.js";
 
-export const TARGET_SWITCH_ACTION_OPTIONS: ReadonlyArray<{
+export const SETUP_SWITCH_ACTION_OPTIONS: ReadonlyArray<{
 	label: string;
-	value: TargetSwitchAction;
+	value: OnSwitchAction;
 }> = [
-	{ label: "Ask before pull", value: "ask" },
-	{ label: "Start pull", value: "pull" },
+	{ label: "Ask before pull", value: "ask-before-pull" },
+	{ label: "Start pull", value: "pull-after-switch" },
 	{ label: "Switch only", value: "switch-only" },
 ];
 
-export function targetSwitchActionLabel(action: TargetSwitchAction) {
-	return TARGET_SWITCH_ACTION_OPTIONS.find((option) => option.value === action)?.label ?? action;
+export function setupSwitchActionLabel(action: OnSwitchAction) {
+	return SETUP_SWITCH_ACTION_OPTIONS.find((option) => option.value === action)?.label ?? action;
 }
 
-export function targetSwitchActionFromLabel(label: string): TargetSwitchAction | undefined {
-	return TARGET_SWITCH_ACTION_OPTIONS.find((option) => option.label === label)?.value;
+export function setupSwitchActionFromLabel(label: string): OnSwitchAction | undefined {
+	return SETUP_SWITCH_ACTION_OPTIONS.find((option) => option.label === label)?.value;
 }
 
-export async function saveTargetSwitchAction(action: TargetSwitchAction) {
-	await updateLocalConfig((settings) => {
-		if (settings.version !== 2) {
-			throw new Error("Setup-switch settings require version 2 settings.");
-		}
-		return { ...settings, targetSwitchAction: action };
-	});
+export async function saveOnSwitch(action: OnSwitchAction) {
+	await updateLocalConfig((settings) => ({ ...settings, onSwitch: action }));
 }
 
-export type TargetPullOutcome = "applied" | "cancelled";
+export type SetupPullOutcome = "applied" | "cancelled";
 
-export class TargetPullRequiresUiError extends Error {}
+export class SetupPullRequiresUiError extends Error {}
 
-export interface TargetSwitchResult {
+export interface SetupSwitchResult {
 	pullApplied: boolean;
 }
 
-export async function useSyncTarget(
+export async function useSyncSetup(
 	ctx: ExtensionCommandContext,
 	name: string,
-	pullCurrentTarget?: (target: string) => Promise<TargetPullOutcome | undefined>,
-	expectedAction?: TargetSwitchAction,
-): Promise<TargetSwitchResult> {
+	pullCurrentSetup?: (setup: string) => Promise<SetupPullOutcome | undefined>,
+	expectedAction?: OnSwitchAction,
+	signal?: AbortSignal,
+): Promise<SetupSwitchResult> {
 	const normalized = name.trim();
 	if (!normalized) throw new Error("Usage: /sync use <setup>");
 	await loadConfig(normalized);
-	const switchResult: { action: TargetSwitchAction; switched: boolean } = {
-		action: "ask",
+	throwIfAborted(signal);
+	const switchResult: { action: OnSwitchAction; switched: boolean } = {
+		action: "ask-before-pull",
 		switched: false,
 	};
 	await updateLocalConfig((current) => {
-		if (current.version !== 2) throw new Error("Sync setup switching requires version 2 settings.");
-		const targets = current.targets;
-		if (!targets || typeof targets !== "object" || Array.isArray(targets)) {
-			throw new Error("No sync setups are configured.");
-		}
-		if (!Object.hasOwn(targets, normalized)) {
+		throwIfAborted(signal);
+		if (!Object.hasOwn(current.syncSetups, normalized)) {
 			throw new Error(`Sync setup “${safeTerminalText(normalized)}” no longer exists.`);
 		}
-		switchResult.action = normalizeTargetSwitchAction(current.targetSwitchAction);
+		switchResult.action = normalizeOnSwitch(current.onSwitch);
 		if (expectedAction !== undefined && switchResult.action !== expectedAction) {
 			throw new Error(
 				"Setup-switch behavior changed while the preview was open; reopen it and retry.",
 			);
 		}
-		if (switchResult.action === "pull" && !ctx.hasUI) {
-			throw new TargetPullRequiresUiError(
+		if (switchResult.action === "pull-after-switch" && !ctx.hasUI) {
+			throw new SetupPullRequiresUiError(
 				`Automatic setup pulls require interactive confirmation; sync setup “${safeTerminalText(normalized)}” was not switched. Use TUI or RPC mode.`,
 			);
 		}
-		if (current.activeTarget === normalized) return current;
+		if (current.activeSyncSetup === normalized) return current;
 		switchResult.switched = true;
-		return { ...current, activeTarget: normalized };
+		return { ...current, activeSyncSetup: normalized };
 	});
+	throwIfAborted(signal);
 	if (!switchResult.switched) {
 		ctx.ui.notify(`Sync setup “${safeTerminalText(normalized)}” is already current.`, "info");
 		return { pullApplied: false };
 	}
-	setSyncTargetCompletions(await configuredTargetNames());
+	setSyncSetupCompletions(await configuredSyncSetupNames());
+	throwIfAborted(signal);
 
 	if (switchResult.action === "switch-only") {
 		ctx.ui.notify(`Switched to “${safeTerminalText(normalized)}”. No files were pulled.`, "info");
 		return { pullApplied: false };
 	}
-	if (switchResult.action === "ask") {
+	if (switchResult.action === "ask-before-pull") {
 		if (ctx.mode !== "tui") {
 			ctx.ui.notify(
 				`Switched to “${safeTerminalText(normalized)}”. No files were pulled because confirmation requires TUI mode; run /sync pull to apply this setup.`,
@@ -101,7 +96,9 @@ export async function useSyncTarget(
 		const confirmed = await ctx.ui.confirm(
 			`Review a pull for sync setup “${safeTerminalText(normalized)}” now?`,
 			"pi-sync will check the remote snapshot and show the exact local writes and deletions before applying anything.",
+			{ signal },
 		);
+		throwIfAborted(signal);
 		if (!confirmed) {
 			ctx.ui.notify(
 				`Switched to “${safeTerminalText(normalized)}”; files were not pulled.`,
@@ -115,10 +112,11 @@ export async function useSyncTarget(
 		`Switched to “${safeTerminalText(normalized)}”. Checking remote files for a reviewed pull…`,
 		"info",
 	);
-	if (!pullCurrentTarget) {
+	if (!pullCurrentSetup) {
 		throw new Error(`Switched to “${safeTerminalText(normalized)}”, but pull is unavailable.`);
 	}
-	const pullOutcome = await pullCurrentTarget(normalized);
+	const pullOutcome = await pullCurrentSetup(normalized);
+	throwIfAborted(signal);
 	if (pullOutcome === "cancelled") {
 		ctx.ui.notify(
 			`Pull cancelled; sync setup “${safeTerminalText(normalized)}” remains current and synced files were not changed.`,
@@ -126,4 +124,11 @@ export async function useSyncTarget(
 		);
 	}
 	return { pullApplied: pullOutcome === "applied" };
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+	if (!signal?.aborted) return;
+	throw signal.reason instanceof Error
+		? signal.reason
+		: new DOMException("The operation was aborted", "AbortError");
 }

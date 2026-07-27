@@ -116,7 +116,7 @@
 - Runtime-auth generation guards prevent stale credential mutation but not stale outer status or connection-invalidation publication; overlapping provider syncs also need latest-task ownership at the lifecycle boundary.
 - Credential-file path and permission checks must run on every locked read, not only startup migration; reject symlinks and repair `0600` through the opened descriptor.
 - Credential filename migrations cannot safely delete a legacy path while uncoordinated older writers may still replace it; install the canonical file exclusively, retain a private legacy recovery copy, and deny canonical, legacy, temporary, and recovery names from sync/export paths.
-- Pi-sync v2 settings may legitimately have no targets or active target after removing the last target. Filename migration can keep the legacy path active when exclusive canonical installation is unavailable, so resolve the effective path and cross-process lock any cleanup that temporarily vacates the canonical path.
+- Pi-sync settings read-modify-write must hold one cross-process lock across the read, complete v3 validation, and atomic replacement; separate read/write lock windows only detect stale edits and can still reject otherwise serializable concurrent saves.
 
 ## TASTE
 
@@ -126,7 +126,7 @@
 
 ### General
 
-- Prefer destination-oriented pi-sync setup that completes credentials in a masked TUI; keep the profile/target split as an advanced persistence detail rather than a required user concept.
+- Prefer storage-oriented pi-sync setup that completes credentials in a masked TUI and reviews one exact backend path; storage connections and sync setups are the only managed user concepts.
 - Prefer direct, user-owned context selection; avoid dedicated shortcuts or manual copy steps for routine quoting workflows.
 - Prefer reading GitHub issue and pull request links with `gh --json` first; use web tools only when `gh` cannot access the needed content.
 - Live provider smokes are acceptable when relevant, but stop after one clear external or entitlement failure; use deterministic tests instead of repeatedly retrying unless the user explicitly asks.

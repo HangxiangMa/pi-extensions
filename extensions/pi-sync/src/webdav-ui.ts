@@ -1,18 +1,13 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import {
-	readActiveLocalConfigDocumentForRepair,
-	replaceLocalConfigDocument,
-	resolveV2PartialConfig,
-} from "./config.js";
 import { promptSecret } from "./secret-input.js";
 import {
-	addStorageProfile,
-	addSyncTarget,
-	saveNewV2Settings,
-	updateStorageProfile,
-	updateSyncTarget,
+	addStorageConnection,
+	addSyncSetup,
+	saveNewV3Settings,
+	updateStorageConnection,
+	updateSyncSetup,
 } from "./settings-management.js";
-import { DEFAULT_SYNC_FILES } from "./sync-policy.js";
+import { DEFAULT_SYNC_INCLUDE } from "./sync-policy.js";
 import type { PartialConfig } from "./types.js";
 import {
 	normalizeWebDavPath,
@@ -20,128 +15,6 @@ import {
 	validateWebDavCredentials,
 	validateWebDavNamespace,
 } from "./webdav-config.js";
-
-export async function repairableWebDavDestinationName(signal?: AbortSignal) {
-	const document = await awaitActive(signal, readActiveLocalConfigDocumentForRepair());
-	const settings = document?.parsed;
-	if (settings?.version !== 2) return undefined;
-	const profiles = record(settings.profiles);
-	const targets = record(settings.targets);
-	if (!profiles || !targets) return undefined;
-	const names = Object.keys(targets).filter((name) => {
-		const target = record(targets[name]);
-		if (!target) return false;
-		const profile =
-			typeof target.profile === "string" ? record(profiles[target.profile]) : undefined;
-		return (
-			profile?.kind === "webdav" &&
-			(Object.hasOwn(target, "bucket") ||
-				Object.hasOwn(target, "prefix") ||
-				["endpoint", "region", "accessKeyId", "secretAccessKey", "sessionToken"].some((field) =>
-					Object.hasOwn(profile, field),
-				) ||
-				typeof profile.password !== "string" ||
-				profile.password.length === 0)
-		);
-	});
-	const active = typeof settings.activeTarget === "string" ? settings.activeTarget : undefined;
-	return active && names.includes(active) ? active : names.length === 1 ? names[0] : undefined;
-}
-
-export async function showRepairableWebDavDestination(
-	ctx: ExtensionCommandContext,
-	signal?: AbortSignal,
-) {
-	const name = await repairableWebDavDestinationName(signal);
-	return name ? showRepairWebDavDestination(ctx, name, signal) : false;
-}
-
-export async function showRepairWebDavDestination(
-	ctx: ExtensionCommandContext,
-	targetName: string,
-	signal?: AbortSignal,
-) {
-	const document = await awaitActive(signal, readActiveLocalConfigDocumentForRepair());
-	if (document?.parsed.version !== 2) return false;
-	const profiles = record(document.parsed.profiles);
-	const targets = record(document.parsed.targets);
-	const target = targets && record(targets[targetName]);
-	const profileName = target && typeof target.profile === "string" ? target.profile : undefined;
-	const profile = profileName && profiles ? record(profiles[profileName]) : undefined;
-	if (!target || !profileName || !profile || profile.kind !== "webdav") return false;
-	const url = typeof profile.url === "string" ? profile.url : "";
-	const username = typeof profile.username === "string" ? profile.username : "";
-	let password =
-		typeof profile.password === "string" && profile.password ? profile.password : undefined;
-	if (!password) {
-		password = await awaitActive(signal, promptSecret(ctx, "WebDAV password", { signal }));
-		if (password === undefined) return false;
-	}
-	const path = await requiredInput(
-		ctx,
-		"WebDAV remote path",
-		typeof target.path === "string"
-			? target.path
-			: typeof target.prefix === "string"
-				? target.prefix
-				: "pi-sync",
-		signal,
-	);
-	if (!path) return false;
-	const namespace = await requiredInput(
-		ctx,
-		"Remote namespace",
-		typeof target.namespace === "string" ? target.namespace : targetName,
-		signal,
-	);
-	if (!namespace) return false;
-	const connection = validateConnection(ctx, url, username, password);
-	const destination = validateDestination(ctx, path, namespace);
-	if (!connection || !destination) return false;
-	const removedTargetFields = ["bucket", "prefix"].filter((field) => Object.hasOwn(target, field));
-	const removedProfileFields = [
-		"endpoint",
-		"region",
-		"accessKeyId",
-		"secretAccessKey",
-		"sessionToken",
-	].filter((field) => Object.hasOwn(profile, field));
-	const review = await select(
-		ctx,
-		[
-			"Repair WebDAV storage location",
-			"",
-			`Sync setup: ${safe(targetName)}`,
-			`Storage connection: ${safe(profileName)}`,
-			`Storage location: ${safe(`${destination.path}/profiles/${destination.namespace}/`)}`,
-			`Password: configured (value hidden)`,
-			...(removedTargetFields.length > 0
-				? [`Remove incompatible storage-location fields: ${removedTargetFields.join(", ")}`]
-				: []),
-			...(removedProfileFields.length > 0
-				? [`Remove incompatible connection fields: ${removedProfileFields.join(", ")}`]
-				: []),
-			"Unknown settings and every other sync setup remain unchanged.",
-		].join("\n"),
-		["Repair storage location", "Cancel"],
-		signal,
-	);
-	if (review !== "Repair storage location") return false;
-	const nextProfile: Record<string, unknown> = { ...profile, ...connection };
-	for (const field of removedProfileFields) delete nextProfile[field];
-	const nextTarget: Record<string, unknown> = { ...target, ...destination };
-	for (const field of removedTargetFields) delete nextTarget[field];
-	const next = {
-		...document.parsed,
-		profiles: { ...profiles, [profileName]: nextProfile },
-		targets: { ...targets, [targetName]: nextTarget },
-	};
-	resolveV2PartialConfig(next, targetName);
-	throwIfAborted(signal);
-	await awaitActive(signal, replaceLocalConfigDocument(document, next));
-	ctx.ui.notify(`Repaired WebDAV storage location for sync setup “${safe(targetName)}”.`, "info");
-	return true;
-}
 
 export async function showWebDavSetup(
 	ctx: ExtensionCommandContext,
@@ -162,7 +35,7 @@ export async function showWebDavSetup(
 	const location = await chooseDestination(ctx, targetName, signal);
 	if (!location) return false;
 	const connection = validateConnection(ctx, url, username, password);
-	const destination = validateDestination(ctx, location.path, location.namespace);
+	const destination = validateDestination(ctx, location.path);
 	if (!connection || !destination) return false;
 	const content = await chooseContent(ctx, signal);
 	if (!content) return false;
@@ -184,7 +57,7 @@ export async function showWebDavSetup(
 			`Sync setup: ${safe(targetName)}`,
 			`Storage connection: ${profileName} (WebDAV)`,
 			`URL: ${displayUrl(connection.url)}`,
-			`Storage location: ${safe(`${destination.path}/profiles/${destination.namespace}/`)}`,
+			`Storage location: ${safe(destination.path)}`,
 			"Username: stored in the private settings file (value hidden)",
 			"Password: configured (value hidden)",
 			`Conditional writes: /sync doctor verifies atomic If-Match and If-None-Match support before publication.`,
@@ -198,18 +71,20 @@ export async function showWebDavSetup(
 	throwIfAborted(signal);
 	await awaitActive(
 		signal,
-		saveNewV2Settings({
-			targetName,
-			storageProfileName: profileName,
-			profile: { kind: "webdav", ...connection },
-			target: {
-				profile: profileName,
-				path: destination.path,
-				namespace: destination.namespace,
-				autoSync: automatic === "Enable automatic sync",
-				syncFiles: content,
-				syncSessions: sessions,
-				extraFiles: [],
+		saveNewV3Settings({
+			setupName: targetName,
+			connectionName: profileName,
+			connection: {
+				type: "webdav",
+				url: connection.url,
+				credentials: { username: connection.username, password: connection.password ?? "" },
+			},
+			setup: {
+				storage: { connection: profileName, path: destination.path },
+				sync: {
+					include: [...content, ...(sessions ? ["sessions"] : [])],
+					automatic: automatic === "Enable automatic sync",
+				},
 			},
 		}),
 	);
@@ -225,13 +100,13 @@ export async function showAddWebDavTarget(
 ) {
 	const location = await chooseDestination(ctx, name, signal);
 	if (!location) return false;
-	const destination = validateDestination(ctx, location.path, location.namespace);
+	const destination = validateDestination(ctx, location.path);
 	if (!destination) return false;
 	const content = await chooseContent(ctx, signal);
 	if (!content) return false;
 	const review = await select(
 		ctx,
-		`Review WebDAV sync setup\n\nSync setup: ${safe(name)}\nStorage connection: ${safe(profile)}\nStorage location: ${safe(`${destination.path}/profiles/${destination.namespace}/`)}\nIncluded content: ${content.length} built-in groups · Sessions: Off\nAdding this setup does not sync or modify remote data.`,
+		`Review WebDAV sync setup\n\nSync setup: ${safe(name)}\nStorage connection: ${safe(profile)}\nStorage location: ${safe(destination.path)}\nIncluded content: ${content.length} built-in groups · Sessions: Off\nAdding this setup does not sync or modify remote data.`,
 		["Add sync setup", "Cancel"],
 		signal,
 	);
@@ -239,14 +114,9 @@ export async function showAddWebDavTarget(
 	throwIfAborted(signal);
 	await awaitActive(
 		signal,
-		addSyncTarget(name, {
-			profile,
-			path: destination.path,
-			namespace: destination.namespace,
-			autoSync: true,
-			syncFiles: content,
-			syncSessions: false,
-			extraFiles: [],
+		addSyncSetup(name, {
+			storage: { connection: profile, path: destination.path },
+			sync: { include: content, automatic: true },
 		}),
 	);
 	ctx.ui.notify(`Added sync setup “${safe(name)}”.`, "info");
@@ -258,26 +128,13 @@ export async function showEditWebDavTarget(
 	partial: PartialConfig,
 	signal?: AbortSignal,
 ) {
-	if (!partial.target) return false;
-	const remotePath = await requiredInput(
-		ctx,
-		"WebDAV remote path",
-		partial.path ?? "pi-sync",
-		signal,
-	);
+	const remotePath = await requiredInput(ctx, "WebDAV storage path", partial.storagePath, signal);
 	if (!remotePath) return false;
-	const namespace = await requiredInput(
-		ctx,
-		"Remote namespace",
-		partial.profile ?? partial.target,
-		signal,
-	);
-	if (!namespace) return false;
-	const destination = validateDestination(ctx, remotePath, namespace);
+	const destination = validateDestination(ctx, remotePath);
 	if (!destination) return false;
 	const review = await select(
 		ctx,
-		`Review sync setup “${safe(partial.target)}”\n\nPath: ${safe(partial.path ?? "pi-sync")} → ${safe(destination.path)}\nNamespace: ${safe(partial.profile ?? partial.target)} → ${safe(destination.namespace)}\nSaving changes the future storage location only; it does not move or delete remote data.`,
+		`Review sync setup “${safe(partial.setupName)}”\n\nStorage path: ${safe(partial.storagePath)} → ${safe(destination.path)}\nSaving changes the future storage location only; it does not move or delete remote data.`,
 		["Save sync setup", "Cancel"],
 		signal,
 	);
@@ -285,9 +142,12 @@ export async function showEditWebDavTarget(
 	throwIfAborted(signal);
 	await awaitActive(
 		signal,
-		updateSyncTarget(partial.target, (target) => ({ ...target, ...destination })),
+		updateSyncSetup(partial.setupName, (setup) => ({
+			...setup,
+			storage: { ...setup.storage, path: destination.path },
+		})),
 	);
-	ctx.ui.notify(`Saved sync setup “${safe(partial.target)}”.`, "info");
+	ctx.ui.notify(`Saved sync setup “${safe(partial.setupName)}”.`, "info");
 	return true;
 }
 
@@ -318,7 +178,14 @@ export async function showAddWebDavStorageProfile(
 	);
 	if (review !== "Add storage connection") return false;
 	throwIfAborted(signal);
-	await awaitActive(signal, addStorageProfile(name, { kind: "webdav", ...connection }));
+	await awaitActive(
+		signal,
+		addStorageConnection(name, {
+			type: "webdav",
+			url: connection.url,
+			credentials: { username: connection.username, password: connection.password ?? "" },
+		}),
+	);
 	ctx.ui.notify(`Added storage connection “${safe(name)}”.`, "info");
 	return true;
 }
@@ -374,13 +241,24 @@ export async function showEditWebDavStorageProfile(
 	throwIfAborted(signal);
 	await awaitActive(
 		signal,
-		updateStorageProfile(
+		updateStorageConnection(
 			name,
-			(current) => ({
-				...current,
-				...connection,
-				...(replacePassword ? { password } : {}),
-			}),
+			(current) => {
+				if (current.type !== "webdav") {
+					throw new Error("Storage connection type changed; reopen it.");
+				}
+				return {
+					...current,
+					url: connection.url,
+					credentials: {
+						...current.credentials,
+						username: connection.username,
+						password: replacePassword
+							? (connection.password ?? current.credentials.password)
+							: current.credentials.password,
+					},
+				};
+			},
 			affectedSetups,
 		),
 	);
@@ -393,10 +271,13 @@ async function chooseDestination(
 	targetName: string,
 	signal?: AbortSignal,
 ) {
-	const remotePath = await requiredInput(ctx, "WebDAV remote path", "pi-sync", signal);
-	if (!remotePath) return undefined;
-	const namespace = await requiredInput(ctx, "Remote namespace", targetName, signal);
-	return namespace ? { path: remotePath, namespace } : undefined;
+	const remotePath = await requiredInput(
+		ctx,
+		"WebDAV storage path",
+		`pi-sync/${targetName}`,
+		signal,
+	);
+	return remotePath ? validateDestination(ctx, remotePath) : undefined;
 }
 
 async function chooseContent(ctx: ExtensionCommandContext, signal?: AbortSignal) {
@@ -407,7 +288,7 @@ async function chooseContent(ctx: ExtensionCommandContext, signal?: AbortSignal)
 		signal,
 	);
 	if (!choice || choice === "Cancel") return undefined;
-	return choice === "Minimal settings" ? ["settings.json", "AGENTS.md"] : [...DEFAULT_SYNC_FILES];
+	return choice === "Minimal settings" ? ["settings.json", "AGENTS.md"] : [...DEFAULT_SYNC_INCLUDE];
 }
 
 async function chooseSessions(ctx: ExtensionCommandContext, signal?: AbortSignal) {
@@ -495,11 +376,15 @@ function validateConnection(
 	}
 }
 
-function validateDestination(ctx: ExtensionCommandContext, path: string, namespace: string) {
+function validateDestination(ctx: ExtensionCommandContext, path: string, namespace?: string) {
 	try {
-		const normalizedPath = normalizeWebDavPath(path);
-		validateWebDavNamespace(namespace.trim());
-		return { path: normalizedPath, namespace: namespace.trim() };
+		const basePath = normalizeWebDavPath(path);
+		const normalizedPath = namespace
+			? normalizeWebDavPath(`${basePath}/${namespace.trim()}`)
+			: basePath;
+		const resolvedNamespace = normalizedPath.slice(normalizedPath.lastIndexOf("/") + 1);
+		validateWebDavNamespace(resolvedNamespace);
+		return { path: normalizedPath, namespace: resolvedNamespace };
 	} catch (error) {
 		ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 		return undefined;
@@ -512,12 +397,6 @@ function displayUrl(value: string) {
 	} catch {
 		return "invalid URL (value hidden)";
 	}
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-	return value && typeof value === "object" && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: undefined;
 }
 
 function safe(value: string) {

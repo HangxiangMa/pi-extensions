@@ -135,6 +135,41 @@ export async function readMigratingLocalConfigDocument(
 	});
 }
 
+export function updateLocalConfigDocument<T extends Record<string, unknown>>(
+	defaultValue: T,
+	update: (current: T) => T,
+	validate: (value: Record<string, unknown>) => void,
+): Promise<T> {
+	return withLocalConfigFileLock(async () => {
+		const configPath = await prepareLocalConfigPath(validate);
+		const snapshot = await readConfigSnapshotIfExists(configPath);
+		const document = snapshot ? { path: configPath, ...snapshot } : undefined;
+		const current = document
+			? (structuredClone(document.parsed) as T)
+			: structuredClone(defaultValue);
+		const next = update(current);
+		validate(next);
+		if (document && JSON.stringify(document.parsed) === JSON.stringify(next)) return next;
+		if (document) await replaceLocalConfigDocumentUnlocked(document, next);
+		else await installPrivateConfigExclusively(localConfigPath(), serializedConfig(next), true);
+		return next;
+	});
+}
+
+export function createLocalConfigDocument(value: Record<string, unknown>) {
+	return withLocalConfigFileLock(async () => {
+		const bytes = serializedConfig(value);
+		try {
+			await installPrivateConfigExclusively(localConfigPath(), bytes, true);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+				throw new Error("Pi-sync settings were created concurrently; reopen settings and retry.");
+			}
+			throw error;
+		}
+	});
+}
+
 export function replaceLocalConfigDocument(
 	document: LocalConfigDocument,
 	value: Record<string, unknown>,
@@ -146,7 +181,7 @@ async function replaceLocalConfigDocumentUnlocked(
 	document: LocalConfigDocument,
 	value: Record<string, unknown>,
 ) {
-	const nextBytes = Buffer.from(`${JSON.stringify(value, null, "\t")}\n`, "utf8");
+	const nextBytes = serializedConfig(value);
 	const canonicalPath = localConfigPath();
 	if (document.path !== canonicalPath) {
 		if (!(await configDocumentStillMatches(document))) throw settingsChangedError();
@@ -177,13 +212,18 @@ async function replaceLocalConfigDocumentUnlocked(
 		}
 		throw error;
 	}
-	await afterReplacementInstalledHook();
-	if (!(await fileIdentityAndContentsMatch(quarantinePath, document.identity, document.bytes))) {
+	try {
+		await afterReplacementInstalledHook();
+		if (!(await fileIdentityAndContentsMatch(quarantinePath, document.identity, document.bytes))) {
+			throw settingsChangedError();
+		}
+		if (process.platform !== "win32") await fs.chmod(quarantinePath, 0o600);
+	} catch (error) {
 		await quarantineAndRemoveConfigIfMatchesUnlocked(canonicalPath, installed, nextBytes);
 		await restoreQuarantinedConfig(canonicalPath, quarantinePath);
-		throw settingsChangedError();
+		throw error;
 	}
-	if (process.platform !== "win32") await fs.chmod(quarantinePath, 0o600);
+	await fs.rm(quarantinePath).catch(() => undefined);
 	await syncParentDirectory(canonicalPath).catch(() => undefined);
 }
 
@@ -310,6 +350,10 @@ async function readConfigSnapshotIfExists(filePath: string): Promise<ConfigSnaps
 	} finally {
 		await handle.close();
 	}
+}
+
+function serializedConfig(value: Record<string, unknown>) {
+	return Buffer.from(`${JSON.stringify(value, null, "\t")}\n`, "utf8");
 }
 
 function parseConfigObject(bytes: Buffer, filePath: string) {
@@ -477,7 +521,7 @@ async function restoreQuarantinedConfig(filePath: string, quarantinePath: string
 		await syncParentDirectory(filePath);
 		return;
 	} catch (error) {
-		if (isUnsupportedLinkError(error)) {
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
 			try {
 				await fs.copyFile(quarantinePath, filePath, fsConstants.COPYFILE_EXCL);
 				if (process.platform !== "win32") {
@@ -489,8 +533,6 @@ async function restoreQuarantinedConfig(filePath: string, quarantinePath: string
 			} catch (copyError) {
 				if ((copyError as NodeJS.ErrnoException).code !== "EEXIST") return;
 			}
-		} else if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-			return;
 		}
 	}
 	try {

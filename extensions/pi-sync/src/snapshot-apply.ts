@@ -36,16 +36,18 @@ function fileHashMap(snapshot: Snapshot) {
 export async function applySnapshot(
 	snapshot: Snapshot,
 	protectedRelativePaths = new Set<string>(),
-	options: Pick<SnapshotOptions, "syncFiles" | "sessionDir" | "extraFiles"> = {},
+	options: Pick<
+		SnapshotOptions,
+		"include" | "sessionDir" | "syncFiles" | "syncSessions" | "extraFiles"
+	> = {},
 ) {
 	const root = agentDir();
 	const { sessionDir } = options;
 	await recoverPendingSnapshotTransactions();
 	const current = await createSnapshot(snapshot.profile, {
-		syncFiles: options.syncFiles,
-		syncSessions: snapshotIncludesSessions(snapshot),
+		...options,
+		...(options.include === undefined ? { syncSessions: snapshotIncludesSessions(snapshot) } : {}),
 		sessionDir,
-		extraFiles: options.extraFiles,
 	});
 	const plan = await addTopLevelCaseVariantDeletes(
 		root,

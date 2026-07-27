@@ -49,7 +49,7 @@ test("WebDAV cancellation before and after the commit boundary is classified cor
 			publication,
 			(error: unknown) => error instanceof Error && error.name === "AbortError",
 		);
-		assert.equal(delayed.resources.has("/dav/pi-sync/profiles/default/latest.json"), false);
+		assert.equal(delayed.resources.has("/dav/pi-sync/latest.json"), false);
 	} finally {
 		await delayed.close();
 	}
@@ -94,7 +94,7 @@ test("WebDAV servers that ignore preconditions remain read-only", async () => {
 			backend.publishSnapshot(snapshot([]), { kind: "missing" }),
 			/ignored If-None-Match|read-only/i,
 		);
-		assert.equal(server.resources.has("/dav/pi-sync/profiles/default/latest.json"), false);
+		assert.equal(server.resources.has("/dav/pi-sync/latest.json"), false);
 		assert.ok((await backend.diagnose()).some((item) => item.level === "error"));
 		assert.equal(backend.capability, "conditional-required");
 	} finally {
@@ -110,7 +110,7 @@ test("WebDAV rejects control-bearing remote pointer metadata and references", as
 		const server = await new MockWebDavServer().start();
 		try {
 			server.resources.set(
-				"/dav/pi-sync/profiles/default/latest.json",
+				"/dav/pi-sync/latest.json",
 				Buffer.from(
 					JSON.stringify({
 						version: 1,

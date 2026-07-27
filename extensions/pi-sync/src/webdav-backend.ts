@@ -30,7 +30,7 @@ export class WebDavSyncBackend implements SyncBackend {
 	) {
 		assertSafeDestination(config);
 		this.identity = webDavBackendIdentity(config);
-		this.destination = webDavDestination(config);
+		this.destination = webDavStorageLocation(config);
 	}
 
 	get capability() {
@@ -195,7 +195,7 @@ export class WebDavSyncBackend implements SyncBackend {
 			{
 				key: "webdav-url",
 				level: "info",
-				message: `webdav URL/TLS/auth: configured (${webDavDestination(this.config)})`,
+				message: `webdav URL/TLS/auth: configured (${webDavStorageLocation(this.config)})`,
 			},
 		];
 		try {
@@ -381,7 +381,7 @@ export class WebDavSyncBackend implements SyncBackend {
 }
 
 export function rootPath(config: ResolvedWebDavBackend) {
-	return joinRemote(config.destination.path, "profiles", config.destination.namespace);
+	return config.destination.path;
 }
 
 export function latestPath(config: ResolvedWebDavBackend) {
@@ -403,17 +403,11 @@ export function snapshotPath(config: ResolvedWebDavBackend, reference: string) {
 
 export function webDavBackendIdentity(config: ResolvedWebDavBackend) {
 	return `webdav:${sha256(
-		Buffer.from(
-			JSON.stringify([
-				secretFreeUrl(config.profile.url),
-				config.destination.path,
-				config.destination.namespace,
-			]),
-		),
+		Buffer.from(JSON.stringify([secretFreeUrl(config.profile.url), config.destination.path])),
 	)}`;
 }
 
-function webDavDestination(config: ResolvedWebDavBackend) {
+function webDavStorageLocation(config: ResolvedWebDavBackend) {
 	const url = new URL(secretFreeUrl(config.profile.url));
 	return `${url.host} · ${rootPath(config)}`;
 }
@@ -598,7 +592,7 @@ function assertSafeDestination(config: ResolvedWebDavBackend) {
 			}) ||
 			value.split("/").some((part) => part === "." || part === "..")
 		) {
-			throw new Error("Invalid WebDAV destination.");
+			throw new Error("Invalid WebDAV storage location.");
 		}
 	}
 }

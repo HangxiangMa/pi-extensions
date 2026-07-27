@@ -6,10 +6,15 @@ import {
 	isSessionPath,
 } from "./snapshot.js";
 import type { RemoteHead } from "./sync-backend.js";
-import { extraFilePathsByLower, normalizeExtraFiles, normalizeSyncFiles } from "./sync-policy.js";
-import type { Snapshot, SyncConfig, SyncState } from "./types.js";
+import {
+	customIncludePathsByLower,
+	includeFromSelectionConfig,
+	normalizeSyncInclude,
+	type SyncSelectionConfig,
+} from "./sync-policy.js";
+import type { Snapshot, SyncState } from "./types.js";
 
-type SyncPolicyConfig = Pick<SyncConfig, "syncFiles" | "syncSessions" | "extraFiles">;
+type SyncPolicyConfig = SyncSelectionConfig;
 
 export function hasLocalChanges(local: Snapshot, state: SyncState, config: SyncPolicyConfig) {
 	return !sameHashes(fileHashMap(local), stateHashMapForConfig(state, config));
@@ -23,11 +28,14 @@ export function remoteChangedSinceState(
 ) {
 	if (!head) return Boolean(state.lastAppliedSnapshot);
 	if (head.snapshotId !== state.lastAppliedSnapshot) return true;
-	if (state.lastRemoteRevision && !sameRevision(head.revision, state.lastRemoteRevision)) {
+	if (state.lastRemoteRevision && !sameRevision(head.revision, state.lastRemoteRevision))
 		return true;
-	}
-	if (syncFilesChanged(state, config) || extraFilesChanged(state, config)) return true;
-	return config.syncSessions && state.syncSessions !== true && head.syncSessions;
+	if (syncIncludeChanged(state, config)) return true;
+	return (
+		includeFromSelectionConfig(config).includes("sessions") &&
+		!state.include?.includes("sessions") &&
+		head.syncSessions
+	);
 }
 
 export function hasRemoteChanges(
@@ -47,9 +55,7 @@ export function hasRemoteChanges(
 
 export function sameHashes(left: Record<string, string>, right: Record<string, string>) {
 	const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
-	for (const key of keys) {
-		if (left[key] !== right[key]) return false;
-	}
+	for (const key of keys) if (left[key] !== right[key]) return false;
 	return true;
 }
 
@@ -57,23 +63,19 @@ export function fileHashMap(snapshot: Snapshot) {
 	return Object.fromEntries(snapshot.files.map((file) => [file.path, file.sha256]));
 }
 
-function stateHashMapForConfig(
-	state: SyncState,
-	config: Pick<SyncConfig, "syncFiles" | "syncSessions" | "extraFiles">,
-) {
-	const extraFilePaths = extraFilePathsByLower(config.extraFiles);
-	const extraFiles = new Set(extraFilePaths.keys());
+function stateHashMapForConfig(state: SyncState, config: SyncPolicyConfig) {
+	const includePaths = customIncludePathsByLower(includeFromSelectionConfig(config));
 	return Object.fromEntries(
 		Object.entries(state.lastFileHashes)
-			.filter(([filePath]) => isConfiguredSnapshotPath(filePath, config, extraFiles))
-			.map(([filePath, hash]) => [canonicalSnapshotPathForConfig(filePath, extraFilePaths), hash]),
+			.filter(([filePath]) => isConfiguredSnapshotPath(filePath, config))
+			.map(([filePath, hash]) => [canonicalSnapshotPathForConfig(filePath, includePaths), hash]),
 	);
 }
 
 export function snapshotHashesMatchState(
 	snapshot: Snapshot,
 	state: SyncState,
-	config: Pick<SyncConfig, "syncFiles" | "syncSessions" | "extraFiles">,
+	config: SyncPolicyConfig,
 	ignoredPaths = new Set<string>(),
 ) {
 	return sameHashes(
@@ -95,22 +97,15 @@ function withoutHashPaths(hashes: Record<string, string>, ignoredPaths: Set<stri
 	);
 }
 
-export function syncPolicyChanged(
-	state: SyncState,
-	config: Pick<SyncConfig, "syncFiles" | "syncSessions" | "extraFiles">,
-) {
-	return (
-		syncFilesChanged(state, config) ||
-		(state.syncSessions ?? false) !== config.syncSessions ||
-		extraFilesChanged(state, config)
-	);
+export function syncPolicyChanged(state: SyncState, config: SyncPolicyConfig) {
+	return syncIncludeChanged(state, config);
 }
 
 export function shouldRefreshSyncedState(
 	remote: Snapshot,
 	head: RemoteHead | undefined,
 	state: SyncState,
-	config: Pick<SyncConfig, "syncFiles" | "syncSessions" | "extraFiles">,
+	config: SyncPolicyConfig,
 	sameRevision: (left: string, right: string) => boolean,
 ) {
 	return (
@@ -122,22 +117,12 @@ export function shouldRefreshSyncedState(
 	);
 }
 
-function syncFilesChanged(state: SyncState, config: Pick<SyncConfig, "syncFiles">) {
-	return !sameStringSet(normalizeSyncFiles(state.syncFiles), normalizeSyncFiles(config.syncFiles));
-}
-
-function extraFilesChanged(state: SyncState, config: Pick<SyncConfig, "extraFiles">) {
-	return !sameStringSet(
-		normalizeExtraFiles(state.extraFiles),
-		normalizeExtraFiles(config.extraFiles),
-	);
-}
-
-function sameStringSet(left: string[], right: string[]) {
-	const leftSet = new Set(left);
-	const rightSet = new Set(right);
-	if (leftSet.size !== rightSet.size) return false;
-	return [...leftSet].every((item) => rightSet.has(item));
+function syncIncludeChanged(state: SyncState, config: SyncPolicyConfig) {
+	const stored = state.include
+		? normalizeSyncInclude(state.include)
+		: includeFromSelectionConfig(state);
+	const current = includeFromSelectionConfig(config);
+	return stored.length !== current.length || stored.some((item, index) => item !== current[index]);
 }
 
 export function settingsHashMap(snapshot: Snapshot) {
