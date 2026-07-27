@@ -70,11 +70,12 @@ with the complete current defaults:
 }
 ```
 
-Use `/goal` → **Settings…** in the TUI to edit these values interactively, or edit the generated file directly. The primary screen keeps the two Goal safety policies visible:
+Use `/goal` → **Settings…** in the TUI to edit these values interactively, or edit the generated file directly. The screen keeps all four controls on one level in task order:
 
 - **Automatic work** shows **Unlimited** or an exact **≤_N_** response cap. Choose **Unlimited** directly, or choose **Set a maximum…** and enter a safe whole number greater than zero.
 - **No-progress guard** shows **_N_ runs** or **Off**. Choose the default threshold, **Off**, or **Set threshold…** and enter a safe whole number greater than zero.
-- **Advanced…** contains Goal tool visibility and the experimental ordered queue.
+- **Goal tools** controls whether terminal Goal tools are always visible or appear after the first goal.
+- **Ordered goal queue** controls the experimental ordered-goal workflows.
 
 Custom number inputs reject zero, negative numbers, decimals, text, and unsafe integers without saving; use the explicit **Unlimited** or **Off** choice instead. Interactive changes are serialized, written atomically, preserve unknown fields, and apply to the current runtime. A successful change updates the visible state immediately. A failed save restores the prior value and reports the settings path so it can be retried. Tool-visibility changes that would alter the active tool schema are rejected while Pi is busy; retry after Pi settles. Escape returns to the previous screen without reverting changes that were already saved.
 

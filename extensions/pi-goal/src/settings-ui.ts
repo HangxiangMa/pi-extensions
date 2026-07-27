@@ -14,6 +14,7 @@ import {
 	type SettingItem,
 	SettingsList,
 	Text,
+	truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { checkpointGoalActiveTime } from "./accounting.js";
 import { abortCurrentTurn, type GoalRuntime, STATUS_KEY } from "./runtime.js";
@@ -235,6 +236,7 @@ async function showSettingsScreen(
 			title: (text) => theme.fg("accent", theme.bold(text)),
 			muted: (text) => theme.fg("muted", text),
 		};
+		let limitChoiceOpen = false;
 		const items: SettingItem[] = [
 			limitItem(
 				"automaticTurns",
@@ -243,7 +245,11 @@ async function showSettingsScreen(
 				runtime.settings.continuationLimits.automaticTurns,
 				(doneSelection) => {
 					previewGoalIds.set("automaticTurns", runtime.activeGoal?.id ?? null);
-					return createLimitChoiceComponent(runtime, "automaticTurns", styles, doneSelection);
+					limitChoiceOpen = true;
+					return createLimitChoiceComponent(runtime, "automaticTurns", styles, (selection) => {
+						limitChoiceOpen = false;
+						doneSelection(selection);
+					});
 				},
 			),
 			limitItem(
@@ -253,46 +259,76 @@ async function showSettingsScreen(
 				runtime.settings.continuationLimits.noProgressTurns,
 				(doneSelection) => {
 					previewGoalIds.set("noProgressTurns", runtime.activeGoal?.id ?? null);
-					return createLimitChoiceComponent(runtime, "noProgressTurns", styles, doneSelection);
+					limitChoiceOpen = true;
+					return createLimitChoiceComponent(runtime, "noProgressTurns", styles, (selection) => {
+						limitChoiceOpen = false;
+						doneSelection(selection);
+					});
 				},
 			),
 			{
-				id: "advanced",
-				label: "Advanced…",
-				description: "Configure Goal tools and the experimental ordered queue.",
-				currentValue: "Open…",
-				submenu: (_currentValue, back) =>
-					createAdvancedSettingsComponent({
-						runtime,
-						ctx,
-						settingsPath,
-						options,
-						enqueueSettingsChange,
-						closeAfterSaves,
-						onApplied: updateIssueText,
-						onBack: () => back(),
-						title: (text) => theme.fg("accent", theme.bold(text)),
-					}),
+				id: "toolVisibility",
+				label: "Goal tools",
+				description: "Keep terminal Goal tools visible, or reveal them after the first goal.",
+				currentValue: visibilityLabel(runtime.settings.toolVisibility),
+				values: ["Always", "After first goal"],
+			},
+			{
+				id: "experimentalGoals",
+				label: "Ordered goal queue",
+				description: "Enable experimental add, prioritize, skip, and drop-last workflows.",
+				currentValue: runtime.settings.experimental.goals ? "Experimental" : "Off",
+				values: ["Off", "Experimental"],
 			},
 		];
-		const settingsList = new SettingsList(
+		const latestRequested = new Map<string, string>();
+		let settingsList: SettingsList;
+		settingsList = new SettingsList(
 			items,
 			Math.min(items.length + 2, 15),
 			goalSettingsListTheme("Goal menu"),
 			(id, newValue) => {
-				if (closing || (id !== "automaticTurns" && id !== "noProgressTurns")) return;
-				if (!isLimitSelection(newValue)) return;
-				closeAfterSaves({
-					kind: "limit",
-					field: id,
-					selection: newValue,
-					activeGoalId: previewGoalIds.get(id) ?? null,
+				if (closing) return;
+				if (id === "automaticTurns" || id === "noProgressTurns") {
+					if (!isLimitSelection(newValue)) return;
+					closeAfterSaves({
+						kind: "limit",
+						field: id,
+						selection: newValue,
+						activeGoalId: previewGoalIds.get(id) ?? null,
+					});
+					return;
+				}
+				if (id === "experimentalGoals") {
+					closeAfterSaves({ kind: "queue", enabled: newValue === "Experimental" });
+					return;
+				}
+				if (id !== "toolVisibility") return;
+				latestRequested.set(id, newValue);
+				void enqueueSettingsChange(async () => {
+					const previousValue = visibilityLabel(runtime.settings.toolVisibility);
+					try {
+						const next = {
+							...structuredClone(runtime.settings),
+							toolVisibility: newValue === "Always" ? "always" : "after-first-goal",
+						} satisfies GoalSettings;
+						applyGoalSettings(runtime, next, ctx, {
+							save: (value) => (options.save ?? saveGoalSettings)(value, settingsPath),
+						});
+						updateIssueText();
+						ctx.ui.notify(`Goal tools: ${newValue}.`, "info");
+					} catch (error) {
+						if (latestRequested.get(id) === newValue) {
+							settingsList.updateValue(id, previousValue);
+						}
+						notifySettingsFailure(ctx, settingsPath, error);
+					}
 				});
 			},
 			() => closeAfterSaves(undefined),
 			{ enableSearch: false },
 		);
-		container.addChild(settingsList);
+		container.addChild(goalSettingsListComponent(settingsList, () => limitChoiceOpen));
 		return {
 			render: (width: number) => container.render(width),
 			invalidate: () => container.invalidate(),
@@ -455,82 +491,6 @@ function selectedLimitChoiceIndex(field: LimitField, value: number | null) {
 	if (field === "automaticTurns") return value === null ? 0 : 1;
 	if (value === null) return 2;
 	return value === DEFAULT_GOAL_SETTINGS.continuationLimits.noProgressTurns ? 0 : 1;
-}
-
-function createAdvancedSettingsComponent(options: {
-	runtime: GoalRuntime;
-	ctx: ExtensionCommandContext;
-	settingsPath: string;
-	options: GoalSettingsUiOptions;
-	enqueueSettingsChange: EnqueueSettingsChange;
-	closeAfterSaves: (result: SettingsScreenResult) => void;
-	onApplied: () => void;
-	onBack: () => void;
-	title: (text: string) => string;
-}): Component {
-	const { runtime, ctx, settingsPath } = options;
-	const container = new Container();
-	container.addChild(dynamicText("Advanced Goal Settings", options.title));
-	const items: SettingItem[] = [
-		{
-			id: "toolVisibility",
-			label: "Goal tools",
-			description: "Keep terminal Goal tools visible, or reveal them after the first goal.",
-			currentValue: visibilityLabel(runtime.settings.toolVisibility),
-			values: ["Always", "After first goal"],
-		},
-		{
-			id: "experimentalGoals",
-			label: "Ordered goal queue",
-			description: "Enable experimental add, prioritize, skip, and drop-last workflows.",
-			currentValue: runtime.settings.experimental.goals ? "Experimental" : "Off",
-			values: ["Off", "Experimental"],
-		},
-	];
-	const latestRequested = new Map<string, string>();
-	let settingsList: SettingsList;
-	settingsList = new SettingsList(
-		items,
-		Math.min(items.length + 2, 15),
-		goalSettingsListTheme("Goal Settings"),
-		(id, newValue) => {
-			if (id === "experimentalGoals") {
-				options.closeAfterSaves({ kind: "queue", enabled: newValue === "Experimental" });
-				return;
-			}
-			if (id !== "toolVisibility") return;
-			latestRequested.set(id, newValue);
-			void options.enqueueSettingsChange(async () => {
-				const previousValue = visibilityLabel(runtime.settings.toolVisibility);
-				try {
-					const next = {
-						...structuredClone(runtime.settings),
-						toolVisibility: newValue === "Always" ? "always" : "after-first-goal",
-					} satisfies GoalSettings;
-					applyGoalSettings(runtime, next, ctx, {
-						save: (value) => (options.options.save ?? saveGoalSettings)(value, settingsPath),
-					});
-					options.onApplied();
-					ctx.ui.notify(`Goal tools: ${newValue}.`, "info");
-				} catch (error) {
-					if (latestRequested.get(id) === newValue) {
-						settingsList.updateValue(id, previousValue);
-					}
-					notifySettingsFailure(ctx, settingsPath, error);
-				}
-			});
-		},
-		options.onBack,
-		{ enableSearch: false },
-	);
-	container.addChild(settingsList);
-	return {
-		render: (width: number) => container.render(width),
-		invalidate: () => container.invalidate(),
-		handleInput(data: string) {
-			settingsList.handleInput?.(data);
-		},
-	};
 }
 
 async function resolveLimitSelection(
@@ -773,6 +733,20 @@ function notifySettingsFailure(ctx: ExtensionCommandContext, settingsPath: strin
 			: `Could not save Goal settings; the previous value remains. Check ${path} and retry: ${detail}`,
 		"error",
 	);
+}
+
+function goalSettingsListComponent(
+	settingsList: SettingsList,
+	isLimitChoiceOpen: () => boolean,
+): Component {
+	return {
+		render(width: number) {
+			// Reclaim one of SettingsList's two trailing cells so a safe 16-digit cap stays exact at 40 columns.
+			const renderWidth = isLimitChoiceOpen() ? width : width + 1;
+			return settingsList.render(renderWidth).map((line) => truncateToWidth(line, width, ""));
+		},
+		invalidate: () => settingsList.invalidate(),
+	};
 }
 
 function dynamicText(

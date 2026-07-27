@@ -423,23 +423,19 @@ test("unfreezing a pending priority dispatches it at the idle boundary", async (
 	assert.equal(mock.sentUserMessages.length, 1);
 });
 
-test("settings screen prioritizes safety state and keeps internal controls under Advanced", async () => {
+test("settings screen keeps all four settings in task order on one level", async () => {
 	const state = runtime();
 	let initialRender = "";
-	let advancedRender = "";
-	let screens = 0;
+	let selectedQueueRender = "";
 	const context = createMockContext({
 		mode: "tui",
 		hasUI: true,
 		custom: async (factory: unknown) => {
-			if (screens++ > 0) throw new Error("Navigation unexpectedly reopened settings.");
 			const selector = createCustomSelectorHarness(factory, 80);
 			initialRender = selector.render().join("\n");
 			selector.handleInput("\u001b[B");
 			selector.handleInput("\u001b[B");
-			advancedRender = selector.handleInput("\r").join("\n");
-			const mainAgain = selector.handleInput("\u001b").join("\n");
-			assert.match(mainAgain, /Automatic work/);
+			selectedQueueRender = selector.handleInput("\u001b[B").join("\n");
 			selector.handleInput("\u001b");
 			await new Promise((resolve) => setImmediate(resolve));
 			return selector.result;
@@ -456,14 +452,46 @@ test("settings screen prioritizes safety state and keeps internal controls under
 	assert.match(initialRender, /Pi Goal Settings/);
 	assert.match(initialRender, /Automatic work.*Unlimited/is);
 	assert.match(initialRender, /No-progress guard.*3 runs/is);
-	assert.match(initialRender, /Advanced.*Open/is);
+	assert.match(initialRender, /Goal tools.*Always/is);
+	assert.match(initialRender, /Ordered goal queue.*Off/is);
+	assert.ok(initialRender.indexOf("Automatic work") < initialRender.indexOf("No-progress guard"));
+	assert.ok(initialRender.indexOf("No-progress guard") < initialRender.indexOf("Goal tools"));
+	assert.ok(initialRender.indexOf("Goal tools") < initialRender.indexOf("Ordered goal queue"));
 	assert.match(initialRender, /Esc back to Goal menu/);
-	assert.doesNotMatch(initialRender, /Goal tools/);
+	assert.doesNotMatch(initialRender, /Advanced/);
 	assert.doesNotMatch(initialRender, /Type to search/);
-	assert.match(advancedRender, /Advanced Goal Settings/);
-	assert.match(advancedRender, /Goal tools/);
-	assert.match(advancedRender, /Ordered goal queue/);
-	assert.match(advancedRender, /Esc back to Goal Settings/);
+	assert.match(selectedQueueRender, /→ .*Ordered goal queue/s);
+});
+
+test("Goal tools changes directly from the main settings screen", async () => {
+	const state = runtime();
+	const saved: GoalSettings[] = [];
+	let changedRender = "";
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			const selector = createCustomSelectorHarness(factory, 80);
+			selector.handleInput("\u001b[B");
+			selector.handleInput("\u001b[B");
+			changedRender = selector.handleInput("\r").join("\n");
+			await new Promise((resolve) => setImmediate(resolve));
+			selector.handleInput("\u001b");
+			return selector.result;
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save(settings) {
+			saved.push(structuredClone(settings));
+		},
+	});
+
+	assert.match(changedRender, /Goal tools.*After first goal/is);
+	assert.equal(state.settings.toolVisibility, "after-first-goal");
+	assert.equal(saved.length, 1);
+	assert.match(context.notifications.at(-1)?.message ?? "", /Goal tools: After first goal/i);
 });
 
 test("Automatic work offers an explicit Unlimited choice with concrete active-goal state", async () => {
@@ -893,7 +921,6 @@ test("queue confirmations open only after the custom settings screen closes", as
 				if (screens++ === 0) {
 					selector.handleInput("\u001b[B");
 					selector.handleInput("\u001b[B");
-					selector.handleInput("\r");
 					selector.handleInput("\u001b[B");
 					selector.handleInput("\r");
 				} else {
@@ -932,7 +959,6 @@ test("settings screen resumes retained work after enabling the queue", async () 
 			if (screens++ === 0) {
 				selector.handleInput("\u001b[B");
 				selector.handleInput("\u001b[B");
-				selector.handleInput("\r");
 				selector.handleInput("\u001b[B");
 				selector.handleInput("\r");
 			} else {
@@ -983,7 +1009,7 @@ test("narrow settings preserve an exact maximum safe automatic-response cap", as
 	assert.doesNotMatch(render, /900719925474099(?!1)/);
 });
 
-test("settings, safety choices, and Advanced fit narrow, normal, and wide terminals", async () => {
+test("settings and safety choices fit narrow, normal, and wide terminals", async () => {
 	for (const width of [40, 80, 120]) {
 		const state = runtime();
 		const context = createMockContext({
@@ -997,9 +1023,8 @@ test("settings, safety choices, and Advanced fit narrow, normal, and wide termin
 				selector.handleInput("\u001b");
 				selector.handleInput("\u001b[B");
 				selector.handleInput("\u001b[B");
-				const advanced = selector.handleInput("\r");
-				assert.ok(advanced.every((line) => visibleWidth(line) <= width));
-				selector.handleInput("\u001b");
+				const queueSelected = selector.handleInput("\u001b[B");
+				assert.ok(queueSelected.every((line) => visibleWidth(line) <= width));
 				selector.handleInput("\u001b");
 				await new Promise((resolve) => setImmediate(resolve));
 				return selector.result;
