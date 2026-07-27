@@ -30,7 +30,7 @@ Contract mapping:
 - `snapshotId` is the snapshot content identity embedded in the validated manifest.
 - `snapshotRef` is the publication commit SHA, so repeated publication of identical content remains independently addressable.
 - `revision` is a backend-scoped opaque encoding of the same owned-ref tip SHA. Only the Git backend decodes or compares it.
-- `listHistory` walks first-parent commits on the owned ref and returns each valid publication in oldest-first order. `readSnapshot` accepts only a full commit SHA retained by the owned branch and validates the exact manifest/tree/blob representation.
+- `listHistory` walks first-parent commits on the owned ref, validates each exact manifest/tree shape, and returns each valid publication in oldest-first order. `readSnapshot` accepts only a full commit SHA retained by the owned branch and validates the exact manifest/tree/blob representation.
 
 Rollback reads a historical commit, applies current local policy through existing orchestration, regenerates snapshot identity, and creates a new child commit. It never resets or rewrites history.
 
@@ -72,7 +72,7 @@ Each backend identity owns a private bare repository under:
 
 The backend never discovers, opens, or modifies the process cwd's repository, working tree, index, hooks, or config. Cache initialization is idempotent; a partial or malformed bare repository is removed and rebuilt on the next operation. Every Git command supplies `--git-dir` and, for commit construction, a private temporary `GIT_INDEX_FILE`. Payloads are decoded into a private temporary directory, hashed in one bounded `hash-object -w --no-filters --stdin-paths` operation, and removed on every completion path; reads use exact tree inspection and one bounded `cat-file --batch` operation. No checkout, attributes, clean/smudge filters, or user working tree participate. Cache paths are derived only from the backend identity and remain within `.pisync/git` after resolution.
 
-A missing cache is initialized. A non-bare, symlinked, malformed, or unusable cache is recreated without modifying settings, local sync state, backups, or remote data. The existing pi-sync operation lock serializes publications; an abort-aware in-process queue per cache serializes bare-repository initialization and uniquely named temporary-ref fetches across concurrent read-only backend instances. Temporary refs are deleted after each fetch, and automatic Git maintenance is disabled so fetched history remains readable without accumulating cross-process ref conflicts.
+A missing cache is initialized explicitly with SHA-1 object format. A non-bare, non-SHA-1, symlinked, malformed, or unusable cache is recreated without modifying settings, local sync state, backups, or remote data. The existing pi-sync operation lock serializes publications; an abort-aware in-process queue per cache serializes bare-repository initialization and uniquely named temporary-ref fetches across concurrent read-only backend instances. Temporary refs are deleted after each fetch, and automatic Git maintenance is disabled so fetched history remains readable without accumulating cross-process ref conflicts.
 
 ### Bootstrap and ownership
 

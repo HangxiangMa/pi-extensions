@@ -90,7 +90,7 @@ export class GitSyncBackend implements SyncBackend {
 	async readHead(signal?: AbortSignal): Promise<RemoteHead | undefined> {
 		const sha = await this.fetchRemoteHead(signal);
 		if (!sha) return undefined;
-		const manifest = await this.readManifest(sha, signal);
+		const { manifest } = await this.readPublication(sha, signal);
 		return remoteHead(sha, manifest, this.identity);
 	}
 
@@ -104,14 +104,7 @@ export class GitSyncBackend implements SyncBackend {
 		} catch (error) {
 			throw new Error(`Git snapshot publication was not found: ${reference}`, { cause: error });
 		}
-		const manifest = await this.readManifest(reference, signal);
-		const entries = await this.readPublicationTree(reference, signal);
-		const payloadEntries = validateGitPublicationTree(
-			entries,
-			manifest,
-			this.manifestPath(),
-			(filePath) => this.filePath(filePath),
-		);
+		const { manifest, payloadEntries } = await this.readPublication(reference, signal);
 		let blobs: Buffer[];
 		try {
 			blobs = await readGitBlobs(
@@ -255,7 +248,7 @@ export class GitSyncBackend implements SyncBackend {
 		const commits = result.stdout.toString("utf8").trim().split("\n").filter(Boolean);
 		const entries: RemoteHistoryEntry[] = [];
 		for (const commit of commits) {
-			const manifest = await this.readManifest(commit, signal);
+			const { manifest } = await this.readPublication(commit, signal);
 			entries.push({
 				snapshotRef: commit,
 				snapshotId: manifest.snapshotId,
@@ -312,7 +305,8 @@ export class GitSyncBackend implements SyncBackend {
 	}
 
 	private async headForSha(sha: string, signal?: AbortSignal) {
-		return remoteHead(sha, await this.readManifest(sha, signal), this.identity);
+		const { manifest } = await this.readPublication(sha, signal);
+		return remoteHead(sha, manifest, this.identity);
 	}
 
 	private async fetchRemoteHead(signal?: AbortSignal) {
@@ -515,8 +509,7 @@ export class GitSyncBackend implements SyncBackend {
 			if (!stat.isDirectory()) recreate = true;
 			else {
 				try {
-					const result = await this.git(["rev-parse", "--is-bare-repository"], { signal });
-					recreate = result.stdout.toString("utf8").trim() !== "true";
+					recreate = !(await this.cacheUsesSha1(signal));
 				} catch {
 					recreate = true;
 				}
@@ -529,19 +522,24 @@ export class GitSyncBackend implements SyncBackend {
 			await fs.access(this.cacheDir);
 		} catch {
 			try {
-				await runGit(["init", "--bare", this.cacheDir], {
+				await runGit(["init", "--bare", "--object-format=sha1", this.cacheDir], {
 					signal,
 					timeoutMs: this.commandTimeoutMs,
 					allowFileProtocol: this.allowLocalRemotes,
 				});
 			} catch (initError) {
-				const concurrent = await this.git(["rev-parse", "--is-bare-repository"], {
-					signal,
-				}).catch(() => undefined);
-				if (concurrent?.stdout.toString("utf8").trim() !== "true") throw initError;
+				const concurrent = await this.cacheUsesSha1(signal).catch(() => false);
+				if (!concurrent) throw initError;
 			}
 		}
 		if (process.platform !== "win32") await fs.chmod(parent, 0o700);
+	}
+
+	private async cacheUsesSha1(signal?: AbortSignal) {
+		const result = await this.git(["rev-parse", "--is-bare-repository", "--show-object-format"], {
+			signal,
+		});
+		return result.stdout.toString("utf8").trim() === "true\nsha1";
 	}
 
 	private git(
@@ -583,8 +581,21 @@ export class GitSyncBackend implements SyncBackend {
 		return posixJoin(this.publicationPath(), "files", filePath);
 	}
 
+	private async readPublication(commit: string, signal?: AbortSignal) {
+		const manifest = await this.readManifest(commit, signal);
+		const entries = await this.readPublicationTree(commit, signal);
+		const payloadEntries = validateGitPublicationTree(
+			entries,
+			manifest,
+			this.manifestPath(),
+			(filePath) => this.filePath(filePath),
+		);
+		return { manifest, payloadEntries };
+	}
+
 	private async readPublicationTree(commit: string, signal?: AbortSignal) {
-		const result = await this.git(["ls-tree", "-r", "-z", commit, "--", this.publicationPath()], {
+		const literalPathspec = `:(top,literal)${this.publicationPath()}`;
+		const result = await this.git(["ls-tree", "-r", "-z", commit, "--", literalPathspec], {
 			signal,
 			maxOutputBytes: MAX_GIT_TREE_OUTPUT_BYTES,
 		});

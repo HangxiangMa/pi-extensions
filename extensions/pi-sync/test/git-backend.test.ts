@@ -106,6 +106,27 @@ test("Git backend publishes lease-protected commits and preserves repeated-conte
 	}
 });
 
+test("Git backend reads literal publication paths containing pathspec metacharacters", async () => {
+	const fixture = createBareRemote();
+	try {
+		const config = gitConfig(fixture.remote);
+		config.destination.directory = ":(glob)archive*";
+		config.destination.namespace = "[home]?";
+		const backend = new GitSyncBackend(config, {
+			cacheRoot: path.join(fixture.root, "cache"),
+			allowLocalRemotes: true,
+		});
+		const content = snapshot([{ path: "settings.json", content: Buffer.from("literal") }]);
+		content.profile = "[home]?";
+		const publication = await backend.publishSnapshot(content, { kind: "missing" });
+		assert.equal((await backend.readHead())?.snapshotRef, publication.head.snapshotRef);
+		assert.deepEqual(await backend.readSnapshot(publication.head.snapshotRef), content);
+		assert.equal((await backend.listHistory()).length, 1);
+	} finally {
+		rmSync(fixture.root, { recursive: true, force: true });
+	}
+});
+
 test("Git backend rejects cached publications removed from owned-branch history", async () => {
 	const fixture = createBareRemote();
 	try {
@@ -312,6 +333,24 @@ test("Git backend repairs a corrupt private cache but refuses a symlinked cache"
 			"true",
 		);
 
+		const sha256Root = path.join(fixture.root, "sha256-cache");
+		const sha256Cache = path.join(sha256Root, identity, "repository.git");
+		mkdirSync(path.dirname(sha256Cache), { recursive: true });
+		execFileSync("git", ["init", "--bare", "--object-format=sha256", sha256Cache], {
+			stdio: "ignore",
+		});
+		const repairedFormat = new GitSyncBackend(config, {
+			cacheRoot: sha256Root,
+			allowLocalRemotes: true,
+		});
+		assert.equal(await repairedFormat.readHead(), undefined);
+		assert.equal(
+			execFileSync("git", ["--git-dir", sha256Cache, "rev-parse", "--show-object-format"], {
+				encoding: "utf8",
+			}).trim(),
+			"sha1",
+		);
+
 		if (process.platform !== "win32") {
 			const symlinkRoot = path.join(fixture.root, "symlink-cache");
 			const cache = path.join(symlinkRoot, identity, "repository.git");
@@ -486,17 +525,20 @@ test("Git backend fails closed on malformed native publication trees", async (t)
 		name: string;
 		expected: RegExp;
 		mutate: (work: string, manifestPath: string, filePath: string) => void;
+		verify?: (backend: GitSyncBackend, commit: string) => Promise<unknown>;
 		skip?: boolean;
 	}> = [
 		{
 			name: "missing payload",
 			expected: /missing or extra/i,
 			mutate: (_work, _manifestPath, filePath) => rmSync(filePath),
+			verify: (backend) => backend.listHistory(),
 		},
 		{
 			name: "extra payload",
 			expected: /missing or extra/i,
 			mutate: (work) => writeFileSync(path.join(work, "pi-sync/profiles/default/files/extra"), "x"),
+			verify: (backend) => backend.readHead(),
 		},
 		{
 			name: "non-regular payload",
@@ -573,7 +615,7 @@ test("Git backend fails closed on malformed native publication trees", async (t)
 	];
 	for (const entry of cases) {
 		await t.test(entry.name, { skip: entry.skip }, async () => {
-			const error = await malformedPublicationError(entry.mutate);
+			const error = await malformedPublicationError(entry.mutate, entry.verify);
 			assert.match(error, entry.expected);
 		});
 	}
@@ -669,6 +711,7 @@ test("Git backend requires a supported Git version", () => {
 
 async function malformedPublicationError(
 	mutate: (work: string, manifestPath: string, filePath: string) => void,
+	verify?: (backend: GitSyncBackend, commit: string) => Promise<unknown>,
 ) {
 	const fixture = createBareRemote();
 	const work = path.join(fixture.root, "mutated-work");
@@ -704,7 +747,7 @@ async function malformedPublicationError(
 			encoding: "utf8",
 		}).trim();
 		try {
-			await backend.readSnapshot(commit);
+			await (verify?.(backend, commit) ?? backend.readSnapshot(commit));
 		} catch (error) {
 			return error instanceof Error ? error.message : String(error);
 		}
