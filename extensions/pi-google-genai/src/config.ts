@@ -222,10 +222,6 @@ export async function writeGoogleGenaiConfig(config: GoogleGenaiConfig) {
 	}
 }
 
-function formatError(error: unknown) {
-	return error instanceof Error ? error.message : String(error);
-}
-
 async function ensureConfigPermissions(path: string, warnings: string[]) {
 	try {
 		const current = await stat(path);
