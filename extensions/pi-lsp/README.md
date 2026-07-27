@@ -78,15 +78,16 @@ go install golang.org/x/tools/gopls@latest
 
 Ensure the Go install directory (`$GOBIN` or `$(go env GOPATH)/bin`) is also on `PATH`.
 
-Custom config can be supplied in one of these locations:
+Custom config is resolved in this order:
 
 1. `PI_LSP_CONFIG` as inline JSON or a path to a JSON file
-2. `<workspace>/.pi/pi-lsp.json`
+2. `<workspace>/.pi/pi-lsp.json`, only when Pi trusts the current project
 3. `~/.pi/agent/pi-lsp.json`
+4. the built-in server catalog
 
-`PI_LSP_CONFIG` only accepts JSON or a JSON file path; JavaScript and TypeScript config files are not evaluated.
+`PI_LSP_CONFIG` only accepts JSON or a JSON file path; JavaScript and TypeScript config files are not evaluated. An untrusted project's canonical and legacy files are ignored. A `root` passed to an LSP tool selects files and the server working directory; it does not grant that directory authority to provide project settings. Project settings always come from the trusted Pi session workspace.
 
-Compatibility: a user-scoped legacy `lsp.json` is migrated automatically. A project-scoped legacy `.pi/lsp.json` remains readable with a warning but is not renamed automatically, so the extension never modifies a repository working tree. New paths take precedence when both names exist.
+Compatibility: a user-scoped legacy `lsp.json` is migrated automatically. A trusted project-scoped legacy `.pi/lsp.json` remains readable with a warning but is not renamed automatically, so the extension never modifies a repository working tree. New paths take precedence when both names exist.
 
 Providing custom config replaces the default server map. The following `pi-lsp.json` example intentionally keeps five selected servers:
 

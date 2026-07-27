@@ -12,7 +12,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { InternalLspServer, LspConfig, LspServerAdapter } from "./types.js";
 
 const COMMON_SKIP_DIRECTORIES = new Set([
@@ -231,16 +231,20 @@ export const DEFAULT_SERVER_CONFIGS: InternalLspServer[] = [
 	},
 ];
 
-export function loadRuntime(cwd = process.cwd()) {
-	const config = loadConfig(cwd);
+export interface LspConfigLoadOptions {
+	projectTrusted?: boolean;
+}
+
+export function loadRuntime(cwd = process.cwd(), options: LspConfigLoadOptions = {}) {
+	const config = loadConfig(cwd, options);
 	return {
 		adapters: config.servers.map(configToAdapter),
 		timeoutMs: config.timeout ?? 20_000,
 	};
 }
 
-export function loadConfig(cwd = process.cwd()): LspConfig {
-	const configured = loadConfiguredConfig(cwd);
+export function loadConfig(cwd = process.cwd(), options: LspConfigLoadOptions = {}): LspConfig {
+	const configured = loadConfiguredConfig(cwd, options.projectTrusted === true);
 	return (
 		configured ?? {
 			servers: DEFAULT_SERVER_CONFIGS.map((server) => ({ ...server, isDefault: true })),
@@ -250,23 +254,24 @@ export function loadConfig(cwd = process.cwd()): LspConfig {
 
 let pendingConfigNotice: string | undefined;
 
-function loadConfiguredConfig(cwd: string): LspConfig | undefined {
+function loadConfiguredConfig(cwd: string, projectTrusted: boolean): LspConfig | undefined {
 	pendingConfigNotice = undefined;
 	const rawConfig = process.env.PI_LSP_CONFIG?.trim();
 	if (rawConfig) return parseConfigSource(rawConfig, cwd, "PI_LSP_CONFIG");
 
-	const projectConfig = path.join(cwd, ".pi", "pi-lsp.json");
-	const legacyProjectConfig = path.join(cwd, ".pi", "lsp.json");
-	if (existsSync(projectConfig)) {
-		if (existsSync(legacyProjectConfig)) {
-			pendingConfigNotice = ".pi/lsp.json ignored because .pi/pi-lsp.json takes precedence.";
+	if (projectTrusted) {
+		const projectConfig = path.join(cwd, CONFIG_DIR_NAME, "pi-lsp.json");
+		const legacyProjectConfig = path.join(cwd, CONFIG_DIR_NAME, "lsp.json");
+		if (existsSync(projectConfig)) {
+			if (existsSync(legacyProjectConfig)) {
+				pendingConfigNotice = `${CONFIG_DIR_NAME}/lsp.json ignored because ${CONFIG_DIR_NAME}/pi-lsp.json takes precedence.`;
+			}
+			return parseConfigFile(projectConfig);
 		}
-		return parseConfigFile(projectConfig);
-	}
-	if (existsSync(legacyProjectConfig)) {
-		pendingConfigNotice =
-			"Using legacy .pi/lsp.json. Rename it to .pi/pi-lsp.json; the repository file was not modified automatically.";
-		return parseConfigFile(legacyProjectConfig);
+		if (existsSync(legacyProjectConfig)) {
+			pendingConfigNotice = `Using legacy ${CONFIG_DIR_NAME}/lsp.json. Rename it to ${CONFIG_DIR_NAME}/pi-lsp.json; the repository file was not modified automatically.`;
+			return parseConfigFile(legacyProjectConfig);
+		}
 	}
 
 	const userConfig = path.join(getAgentDir(), "pi-lsp.json");
