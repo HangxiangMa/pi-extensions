@@ -62,7 +62,10 @@ export class WebDavClient {
 
 	async getBuffer(remotePath: string): Promise<RemoteObject<Buffer>> {
 		const response = await this.request(remotePath, { method: "GET" });
-		if (response.status === 404) return { missing: true };
+		if (response.status === 404) {
+			await response.body?.cancel();
+			return { missing: true };
+		}
 		await this.requireOk(response, "read");
 		return {
 			value: await readBounded(response, SNAPSHOT_LIMIT, "WebDAV response is too large"),
@@ -73,7 +76,10 @@ export class WebDavClient {
 
 	async getJson<T>(remotePath: string): Promise<RemoteObject<T>> {
 		const response = await this.request(remotePath, { method: "GET" });
-		if (response.status === 404) return { missing: true };
+		if (response.status === 404) {
+			await response.body?.cancel();
+			return { missing: true };
+		}
 		await this.requireOk(response, "read");
 		const bytes = await readBounded(response, JSON_LIMIT, "WebDAV JSON response is too large");
 		try {
@@ -101,7 +107,10 @@ export class WebDavClient {
 			headers,
 			body: body as unknown as BodyInit,
 		});
-		if (response.status === 412) throw new WebDavPreconditionError();
+		if (response.status === 412) {
+			await response.body?.cancel();
+			throw new WebDavPreconditionError();
+		}
 		await this.requireOk(response, "write");
 		await response.body?.cancel();
 		return response.headers.get("etag") ?? undefined;
@@ -140,7 +149,10 @@ export class WebDavClient {
 			headers: { depth: "1", "content-type": "application/xml; charset=utf-8" },
 			body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:getetag/><d:resourcetype/></d:prop></d:propfind>',
 		});
-		if (response.status === 404) throw new WebDavHttpError("WebDAV collection is missing.", 404);
+		if (response.status === 404) {
+			await response.body?.cancel();
+			throw new WebDavHttpError("WebDAV collection is missing.", 404);
+		}
 		if (response.status !== 207) await this.requireOk(response, "list collection");
 		const xml = (
 			await readBounded(response, XML_LIMIT, "WebDAV directory response is too large")
@@ -168,6 +180,10 @@ export class WebDavClient {
 		if (response.status === 404) {
 			await response.body?.cancel();
 			return;
+		}
+		if (response.status === 207) {
+			await response.body?.cancel();
+			throw new WebDavHttpError("WebDAV probe cleanup returned a partial response.", 207);
 		}
 		await this.requireOk(response, "delete probe resource");
 		await response.body?.cancel();

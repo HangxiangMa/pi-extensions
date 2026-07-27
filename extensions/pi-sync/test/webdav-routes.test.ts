@@ -87,7 +87,7 @@ test("all backend-neutral sync routes operate against a WebDAV target", async ()
 			const configOutput = notifications.at(-1)?.message ?? "";
 			assert.match(configOutput, /kind: webdav/);
 			assert.match(configOutput, /password: configured/);
-			assert.match(configOutput, /url: http:\/\/127\.0\.0\.1:\d+\/dav\//);
+			assert.match(configOutput, /url: http:\/\/127\.0\.0\.1:\d+\/…/u);
 			assert.doesNotMatch(configOutput, /endpoint:|bucket:|password: pass/);
 			assert.match(notifications.map((item) => item.message).join("\n"), /WebDAV|webdav|snapshot/i);
 		});

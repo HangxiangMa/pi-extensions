@@ -132,8 +132,11 @@ async function handleCommand(
 ) {
 	if (!rawArgs.trim()) {
 		try {
-			await showSyncManager(ctx, (route, signal, onCommit, target) =>
-				executeCommand(route, ctx, combineSignals(sessionSignal, signal), onCommit, target),
+			await showSyncManager(
+				ctx,
+				(route, signal, onCommit, target) =>
+					executeCommand(route, ctx, combineSignals(sessionSignal, signal), onCommit, target),
+				sessionSignal,
 			);
 		} catch (error) {
 			if (sessionSignal.aborted) return;
@@ -172,7 +175,7 @@ async function executeCommand(
 				);
 				return;
 			case "init":
-				await initConfig(ctx);
+				await initConfig(ctx, signal);
 				return;
 			case "config":
 				await showConfig(ctx, options);
@@ -221,7 +224,7 @@ async function autoSync(ctx: ExtensionContext, signal: AbortSignal) {
 	try {
 		const partial = await loadPartialConfig();
 		throwIfAborted(signal);
-		if (!isEnabled(partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC, true)) return;
+		if (!isEnabled(autoSyncSetting(partial), true)) return;
 		await ensureStateDir();
 		throwIfAborted(signal);
 		await loadConfig();
@@ -241,7 +244,7 @@ async function autoPushSessions(ctx: ExtensionContext, signal: AbortSignal) {
 	try {
 		const partial = await loadPartialConfig();
 		throwIfAborted(signal);
-		if (!isEnabled(partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC, true)) return;
+		if (!isEnabled(autoSyncSetting(partial), true)) return;
 		if (!isExplicitlyEnabled(partial.syncSessions)) return;
 		await ensureStateDir();
 		throwIfAborted(signal);
@@ -264,7 +267,7 @@ async function autoPushSessions(ctx: ExtensionContext, signal: AbortSignal) {
 	}
 }
 
-async function initConfig(ctx: ExtensionCommandContext) {
+async function initConfig(ctx: ExtensionCommandContext, signal?: AbortSignal) {
 	const configPath = localConfigPath();
 	if (await readLocalConfigObject()) {
 		ctx.ui.notify(`Config already exists: ${await activeLocalConfigPath()}`, "info");
@@ -272,7 +275,7 @@ async function initConfig(ctx: ExtensionCommandContext) {
 	}
 
 	if (ctx.mode === "tui") {
-		await showSetupWizard(ctx);
+		await showSetupWizard(ctx, signal);
 		return;
 	}
 	await writeLocalConfigObject(localConfigTemplate());
@@ -332,11 +335,16 @@ function displayWebDavUrl(value: string | undefined, username: string | undefine
 		url.password = "";
 		url.search = "";
 		url.hash = "";
-		const pathname = username ? url.pathname.split(username).join("[redacted]") : url.pathname;
-		return `${url.origin}${pathname}`;
+		return username ? `${url.origin}/…` : `${url.origin}${url.pathname}`;
 	} catch {
 		return "invalid (value hidden)";
 	}
+}
+
+function autoSyncSetting(partial: Awaited<ReturnType<typeof loadPartialConfig>>) {
+	return partial.storageKind === "webdav"
+		? partial.autoSync
+		: (partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC);
 }
 
 function throwIfAborted(signal: AbortSignal) {

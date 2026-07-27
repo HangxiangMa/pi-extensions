@@ -155,7 +155,7 @@ export async function updateStorageProfile(
 		const profiles = requireObject(settings.profiles, "profiles");
 		const profile = requireObject(profiles[name], "storage profile");
 		const nextProfiles = { ...profiles, [name]: update(profile) };
-		validateUniqueRemoteTargets(requireObject(settings.targets, "targets"));
+		validateUniqueRemoteTargets(requireObject(settings.targets, "targets"), nextProfiles);
 		return { ...settings, profiles: nextProfiles };
 	});
 }

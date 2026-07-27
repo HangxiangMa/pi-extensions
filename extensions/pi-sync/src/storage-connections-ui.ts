@@ -15,28 +15,28 @@ import { showAddWebDavStorageProfile, showEditWebDavStorageProfile } from "./web
 
 const BACK = "Back";
 
-export async function showStorageConnections(ctx: ExtensionCommandContext) {
+export async function showStorageConnections(ctx: ExtensionCommandContext, signal?: AbortSignal) {
 	const raw = await readLocalConfigObject();
 	if (raw?.version !== 2) {
 		ctx.ui.notify("Upgrade settings before managing saved connections.", "info");
 		return;
 	}
 	const profiles = ownRecord(raw.profiles) ?? {};
-	const selected = await ctx.ui.select("Saved connections", [
-		"Add saved connection",
-		...Object.keys(profiles).sort(),
-		BACK,
-	]);
+	const selected = await ctx.ui.select(
+		"Saved connections",
+		["Add saved connection", ...Object.keys(profiles).sort(), BACK],
+		{ signal },
+	);
 	if (!selected || selected === BACK) return;
 	if (selected === "Add saved connection") {
-		await showAddStorageConnection(ctx);
+		await showAddStorageConnection(ctx, signal);
 		return;
 	}
-	const action = await ctx.ui.select(`Saved connection “${safeTerminalText(selected)}”`, [
-		"Edit connection",
-		"Remove saved connection",
-		BACK,
-	]);
+	const action = await ctx.ui.select(
+		`Saved connection “${safeTerminalText(selected)}”`,
+		["Edit connection", "Remove saved connection", BACK],
+		{ signal },
+	);
 	if (!action || action === BACK) return;
 	if (action === "Remove saved connection") {
 		const confirmed = await ctx.ui.confirm(
@@ -51,7 +51,7 @@ export async function showStorageConnections(ctx: ExtensionCommandContext) {
 	const profile = ownRecord(profiles[selected]);
 	if (!profile) return;
 	if (profile.kind === "webdav") {
-		await showEditWebDavStorageProfile(ctx, selected, profile);
+		await showEditWebDavStorageProfile(ctx, selected, profile, signal);
 		return;
 	}
 	const endpoint = await requiredInput(
@@ -75,15 +75,14 @@ export async function showStorageConnections(ctx: ExtensionCommandContext) {
 	ctx.ui.notify(`Saved connection “${safeTerminalText(selected)}”.`, "info");
 }
 
-export async function showAddStorageConnection(ctx: ExtensionCommandContext) {
-	const preset = await ctx.ui.select("Storage type", [
-		"Cloudflare R2",
-		"Other S3-compatible storage",
-		"WebDAV",
-		"Cancel",
-	]);
+export async function showAddStorageConnection(ctx: ExtensionCommandContext, signal?: AbortSignal) {
+	const preset = await ctx.ui.select(
+		"Storage type",
+		["Cloudflare R2", "Other S3-compatible storage", "WebDAV", "Cancel"],
+		{ signal },
+	);
 	if (!preset || preset === "Cancel") return false;
-	if (preset === "WebDAV") return showAddWebDavStorageProfile(ctx);
+	if (preset === "WebDAV") return showAddWebDavStorageProfile(ctx, signal);
 	const name = await requiredInput(
 		ctx,
 		"Name this saved connection",

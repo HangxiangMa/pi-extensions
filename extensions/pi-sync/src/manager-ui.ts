@@ -67,14 +67,17 @@ type RunRoute = (
 export async function showSyncManager(
 	ctx: ExtensionCommandContext,
 	runRoute: RunRoute,
+	sessionSignal?: AbortSignal,
 ): Promise<void> {
 	if (!ctx.hasUI) {
 		await runRoute("help");
 		return;
 	}
 	while (true) {
-		const state = await describeManagerState();
-		const selected = await ctx.ui.select(state.title, state.actions);
+		const state = await describeManagerState(sessionSignal);
+		if (sessionSignal?.aborted) return;
+		const selected = await ctx.ui.select(state.title, state.actions, { signal: sessionSignal });
+		if (sessionSignal?.aborted) return;
 		if (!selected) return;
 		switch (
 			selected as
@@ -122,13 +125,13 @@ export async function showSyncManager(
 				await showSyncSettings(ctx, runRoute);
 				break;
 			case "More…":
-				if ((await showMoreMenu(ctx, runRoute)) === "exit") return;
+				if ((await showMoreMenu(ctx, runRoute, sessionSignal)) === "exit") return;
 				break;
 			case "Manage destinations":
-				await showManageMenu(ctx, runRoute);
+				await showManageMenu(ctx, runRoute, sessionSignal);
 				break;
 			case "Repair WebDAV destination":
-				await showRepairableWebDavDestination(ctx);
+				await showRepairableWebDavDestination(ctx, sessionSignal);
 				break;
 			case "History & recovery":
 				await showRecoveryMenu(ctx, runRoute);
@@ -144,10 +147,14 @@ export async function showSyncManager(
 	}
 }
 
-async function showMoreMenu(ctx: ExtensionCommandContext, runRoute: RunRoute) {
-	const selected = await ctx.ui.select("More options", [...MORE_MENU_ACTIONS]);
+async function showMoreMenu(
+	ctx: ExtensionCommandContext,
+	runRoute: RunRoute,
+	signal?: AbortSignal,
+) {
+	const selected = await ctx.ui.select("More options", [...MORE_MENU_ACTIONS], { signal });
 	if (!selected || selected === BACK) return;
-	if (selected === "Manage destinations") await showManageMenu(ctx, runRoute);
+	if (selected === "Manage destinations") await showManageMenu(ctx, runRoute, signal);
 	else if (selected === "History & recovery") await showRecoveryMenu(ctx, runRoute);
 	else {
 		await runRoute("help");
@@ -210,12 +217,14 @@ async function runCancellableOperation(
 	return routeResult;
 }
 
-async function describeManagerState(): Promise<{ title: string; actions: string[] }> {
+async function describeManagerState(
+	signal?: AbortSignal,
+): Promise<{ title: string; actions: string[] }> {
 	let raw: Record<string, unknown> | undefined;
 	try {
 		raw = await readLocalConfigObject();
 	} catch (error) {
-		const repairableWebDav = await repairableWebDavDestinationName().catch(() => undefined);
+		const repairableWebDav = await repairableWebDavDestinationName(signal).catch(() => undefined);
 		return {
 			title: [
 				"Pi Sync",
@@ -334,18 +343,17 @@ async function describeManagerState(): Promise<{ title: string; actions: string[
 	}
 }
 
-export async function showSetupWizard(ctx: ExtensionCommandContext) {
+export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: AbortSignal) {
 	if (ctx.mode !== "tui") return false;
-	const preset = await ctx.ui.select("Set up sync\n\nWhere will Pi settings be stored?", [
-		"Cloudflare R2",
-		"Other S3-compatible storage",
-		"WebDAV",
-		"Cancel",
-	]);
-	if (!preset || preset === "Cancel") return false;
+	const preset = await ctx.ui.select(
+		"Set up sync\n\nWhere will Pi settings be stored?",
+		["Cloudflare R2", "Other S3-compatible storage", "WebDAV", "Cancel"],
+		{ signal },
+	);
+	if (signal?.aborted || !preset || preset === "Cancel") return false;
 	const targetName = await chooseInitialTargetName(ctx);
 	if (!targetName) return false;
-	if (preset === "WebDAV") return showWebDavSetup(ctx, targetName);
+	if (preset === "WebDAV") return showWebDavSetup(ctx, targetName, signal);
 	const endpoint = await requiredInput(
 		ctx,
 		preset === "Cloudflare R2" ? "Cloudflare R2 endpoint" : "S3-compatible endpoint",
@@ -538,22 +546,30 @@ async function showTargetSwitcher(ctx: ExtensionCommandContext, runRoute: RunRou
 	return result.pullApplied ? "pull-attempted" : "switched";
 }
 
-async function showManageMenu(ctx: ExtensionCommandContext, _runRoute: RunRoute) {
-	const selected = await ctx.ui.select("Manage destinations", [
-		"Add destination",
-		"Edit current destination",
-		"Saved connections…",
-		"Remove destination",
-		BACK,
-	]);
+async function showManageMenu(
+	ctx: ExtensionCommandContext,
+	_runRoute: RunRoute,
+	signal?: AbortSignal,
+) {
+	const selected = await ctx.ui.select(
+		"Manage destinations",
+		[
+			"Add destination",
+			"Edit current destination",
+			"Saved connections…",
+			"Remove destination",
+			BACK,
+		],
+		{ signal },
+	);
 	if (!selected || selected === BACK) return;
-	if (selected === "Add destination") await showAddTarget(ctx);
-	else if (selected === "Edit current destination") await showEditCurrentTarget(ctx);
-	else if (selected === "Saved connections…") await showStorageConnections(ctx);
+	if (selected === "Add destination") await showAddTarget(ctx, signal);
+	else if (selected === "Edit current destination") await showEditCurrentTarget(ctx, signal);
+	else if (selected === "Saved connections…") await showStorageConnections(ctx, signal);
 	else await showRemoveTarget(ctx);
 }
 
-async function showAddTarget(ctx: ExtensionCommandContext) {
+async function showAddTarget(ctx: ExtensionCommandContext, signal?: AbortSignal) {
 	let raw = await readLocalConfigObject();
 	if (!raw)
 		return void ctx.ui.notify("Set up the first sync target before adding another.", "info");
@@ -591,14 +607,14 @@ async function showAddTarget(ctx: ExtensionCommandContext) {
 	if (!profile || profile === "Cancel") return;
 	if (profile === createConnection) {
 		const previousNames = new Set(Object.keys(profiles));
-		if (!(await showAddStorageConnection(ctx))) return;
+		if (!(await showAddStorageConnection(ctx, signal))) return;
 		raw = (await readLocalConfigObject()) ?? raw;
 		profiles = ownRecord(raw.profiles) ?? {};
 		profile = Object.keys(profiles).find((candidate) => !previousNames.has(candidate));
 		if (!profile) return;
 	}
 	if (ownRecord(profiles[profile])?.kind === "webdav") {
-		if (await showAddWebDavTarget(ctx, name, profile)) await refreshTargetCompletions();
+		if (await showAddWebDavTarget(ctx, name, profile, signal)) await refreshTargetCompletions();
 		return;
 	}
 	const location = await chooseAdditionalRemoteLocation(ctx, raw, profile, name);
@@ -652,14 +668,14 @@ async function showAddTarget(ctx: ExtensionCommandContext) {
 	ctx.ui.notify(`Added sync target “${safeTerminalText(name)}”.`, "info");
 }
 
-async function showEditCurrentTarget(ctx: ExtensionCommandContext) {
+async function showEditCurrentTarget(ctx: ExtensionCommandContext, signal?: AbortSignal) {
 	const partial = await loadPartialConfig();
 	if (partial.settingsVersion !== 2 || !partial.target) {
 		ctx.ui.notify("Upgrade settings before editing a named target.", "info");
 		return;
 	}
 	if (partial.storageKind === "webdav") {
-		await showEditWebDavTarget(ctx, partial);
+		await showEditWebDavTarget(ctx, partial, signal);
 		return;
 	}
 	const bucket = await requiredInput(ctx, "Bucket", partial.bucket ?? "pi-sync");

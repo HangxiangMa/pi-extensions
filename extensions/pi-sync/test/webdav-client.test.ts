@@ -61,6 +61,36 @@ test("WebDAV client reports authentication and malformed listing errors without 
 	}
 });
 
+test("WebDAV client cancels response bodies on early 404 and 412 exits", async () => {
+	const originalFetch = globalThis.fetch;
+	let cancelled = 0;
+	const responses = [404, 404, 404, 412];
+	globalThis.fetch = (async () => {
+		const status = responses.shift() ?? 500;
+		return new Response(
+			new ReadableStream({
+				cancel() {
+					cancelled += 1;
+				},
+			}),
+			{ status },
+		);
+	}) as typeof globalThis.fetch;
+	try {
+		const client = new WebDavClient(webDavConfig("http://127.0.0.1:1/dav/"));
+		assert.equal((await client.getBuffer("missing")).missing, true);
+		assert.equal((await client.getJson("missing")).missing, true);
+		await assert.rejects(client.listCollection("missing"), /missing/);
+		await assert.rejects(
+			client.putBuffer("item", Buffer.from("value"), "text/plain", { ifAbsent: true }),
+			/precondition/i,
+		);
+		assert.equal(cancelled, 4);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("WebDAV client refuses ambiguous redirects for mutating requests", async () => {
 	const options: { redirectTo?: string } = {};
 	const server = await new MockWebDavServer(options).start();

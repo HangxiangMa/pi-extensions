@@ -76,6 +76,36 @@ test("first-time WebDAV setup collects a masked password and stores a usable pro
 	});
 });
 
+test("WebDAV setup cannot continue after its session is aborted", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(localConfigPath(), JSON.stringify({ version: 2, profiles: {}, targets: {} }));
+		const controller = new AbortController();
+		let resolveInput: ((value: string) => void) | undefined;
+		let inputCalls = 0;
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => {
+				inputCalls += 1;
+				return await new Promise<string>((resolve) => {
+					resolveInput = resolve;
+				});
+			},
+		});
+		const setup = showAddWebDavStorageProfile(ctx, controller.signal);
+		while (!resolveInput) await new Promise((resolve) => setImmediate(resolve));
+		controller.abort(new DOMException("Session replaced", "AbortError"));
+		resolveInput("dav");
+		await assert.rejects(
+			setup,
+			(error: unknown) => error instanceof Error && error.name === "AbortError",
+		);
+		assert.equal(inputCalls, 1);
+		assert.deepEqual((await readLocalConfigObject())?.profiles, {});
+	});
+});
+
 test("WebDAV profile and target management preserve hidden credentials", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });

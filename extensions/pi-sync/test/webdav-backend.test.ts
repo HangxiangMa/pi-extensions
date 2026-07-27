@@ -72,6 +72,20 @@ test("WebDAV cancellation before and after the commit boundary is classified cor
 	}
 });
 
+test("WebDAV servers with non-rotating strong ETags remain read-only", async () => {
+	const server = await new MockWebDavServer({ constantEtag: true }).start();
+	try {
+		const backend = new WebDavSyncBackend(webDavConfig(server.url));
+		await assert.rejects(
+			backend.publishSnapshot(snapshot([]), { kind: "missing" }),
+			/strong ETag|rotate|changed/i,
+		);
+		assert.equal(backend.capability, "conditional-required");
+	} finally {
+		await server.close();
+	}
+});
+
 test("WebDAV servers that ignore preconditions remain read-only", async () => {
 	const server = await new MockWebDavServer({ ignoreConditions: true }).start();
 	try {
@@ -88,25 +102,30 @@ test("WebDAV servers that ignore preconditions remain read-only", async () => {
 	}
 });
 
-test("WebDAV rejects control-bearing remote pointer metadata", async () => {
-	const server = await new MockWebDavServer().start();
-	try {
-		server.resources.set(
-			"/dav/pi-sync/profiles/default/latest.json",
-			Buffer.from(
-				JSON.stringify({
-					version: 1,
-					profile: "default",
-					snapshot: "snapshot",
-					sha256: "a".repeat(64),
-					createdAt: "2026-01-01T00:00:00.000Z",
-					machine: "unsafe\u001b[31m",
-				}),
-			),
-		);
-		await assert.rejects(new WebDavSyncBackend(webDavConfig(server.url)).readHead(), /malformed/);
-	} finally {
-		await server.close();
+test("WebDAV rejects control-bearing remote pointer metadata and references", async () => {
+	for (const unsafe of [
+		{ snapshot: "snapshot", machine: "unsafe\u001b[31m" },
+		{ snapshot: "unsafe\u009b31m", machine: "machine" },
+	]) {
+		const server = await new MockWebDavServer().start();
+		try {
+			server.resources.set(
+				"/dav/pi-sync/profiles/default/latest.json",
+				Buffer.from(
+					JSON.stringify({
+						version: 1,
+						profile: "default",
+						snapshot: unsafe.snapshot,
+						sha256: "a".repeat(64),
+						createdAt: "2026-01-01T00:00:00.000Z",
+						machine: unsafe.machine,
+					}),
+				),
+			);
+			await assert.rejects(new WebDavSyncBackend(webDavConfig(server.url)).readHead(), /malformed/);
+		} finally {
+			await server.close();
+		}
 	}
 });
 
@@ -209,20 +228,24 @@ test("WebDAV authentication and permission diagnostics remain actionable", async
 });
 
 test("WebDAV probe cleanup failures are explicit without exposing credentials", async () => {
-	const server = await new MockWebDavServer({
-		cleanupFails: true,
-		username: "private-user",
-		password: "private-password",
-	}).start();
-	try {
-		const config = webDavConfig(server.url);
-		config.profile.username = "private-user";
-		config.profile.password = "private-password";
-		const diagnostics = await new WebDavSyncBackend(config).diagnose();
-		const output = diagnostics.map((item) => item.message).join("\n");
-		assert.match(output, /cleanup (also )?failed/);
-		assert.doesNotMatch(output, /private-user|private-password/);
-	} finally {
-		await server.close();
+	for (const cleanupOptions of [{ cleanupFails: true }, { cleanupMultiStatus: true }]) {
+		const server = await new MockWebDavServer({
+			...cleanupOptions,
+			username: "private-user",
+			password: "private-password",
+		}).start();
+		try {
+			const config = webDavConfig(server.url);
+			config.profile.username = "private-user";
+			config.profile.password = "private-password";
+			const backend = new WebDavSyncBackend(config);
+			const diagnostics = await backend.diagnose();
+			const output = diagnostics.map((item) => item.message).join("\n");
+			assert.match(output, /cleanup (also )?failed/);
+			assert.doesNotMatch(output, /private-user|private-password/);
+			assert.equal(backend.capability, "conditional-required");
+		} finally {
+			await server.close();
+		}
 	}
 });

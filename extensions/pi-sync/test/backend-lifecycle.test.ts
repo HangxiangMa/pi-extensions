@@ -15,6 +15,52 @@ test("session shutdown aborts an in-flight backend operation", async () => {
 	await withPendingStatusOperation("session_shutdown");
 });
 
+test("WebDAV lifecycle ignores deprecated S3 auto-sync environment overrides", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			localConfigPath(),
+			JSON.stringify({
+				version: 2,
+				activeTarget: "home",
+				profiles: {
+					dav: {
+						kind: "webdav",
+						url: "https://cloud.example.com/dav",
+						username: "user",
+						password: "pass",
+					},
+				},
+				targets: {
+					home: {
+						profile: "dav",
+						path: "pi-sync",
+						namespace: "home",
+						syncFiles: ["settings.json"],
+					},
+				},
+			}),
+		);
+		const originalFetch = globalThis.fetch;
+		let requests = 0;
+		globalThis.fetch = (async () => {
+			requests += 1;
+			return new Response("denied", { status: 401 });
+		}) as typeof globalThis.fetch;
+		process.env.PI_SYNC_AUTO_SYNC = "false";
+		try {
+			const mock = createMockPi();
+			sync(mock.pi);
+			const { ctx } = createMockContext({ hasUI: true });
+			await mock.events.get("session_start")?.[0]?.({}, ctx);
+			assert.ok(requests > 0);
+		} finally {
+			delete process.env.PI_SYNC_AUTO_SYNC;
+			globalThis.fetch = originalFetch;
+		}
+	});
+});
+
 test("session replacement aborts an in-flight WebDAV backend operation", async () => {
 	await withPendingStatusOperation("session_start", {
 		version: 2,

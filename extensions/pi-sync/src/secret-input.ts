@@ -13,9 +13,9 @@ const MASK = "•";
 export async function promptSecret(
 	ctx: ExtensionCommandContext,
 	title: string,
-	options: { required?: boolean } = { required: true },
+	options: { required?: boolean; signal?: AbortSignal } = { required: true },
 ) {
-	if (ctx.mode !== "tui") return undefined;
+	if (ctx.mode !== "tui" || options.signal?.aborted) return undefined;
 	const value = await ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) => {
 		const heading = new Text("", 0, 0);
 		const hint = new Text("", 0, 0);
@@ -25,6 +25,14 @@ export async function promptSecret(
 		};
 		applyTheme();
 		const input = new MaskedInput(keybindings);
+		let settled = false;
+		const finish = (result: string | undefined) => {
+			if (settled) return;
+			settled = true;
+			done(result);
+		};
+		const onAbort = () => finish(undefined);
+		options.signal?.addEventListener("abort", onAbort, { once: true });
 		const component: Focusable & {
 			render(width: number): string[];
 			invalidate(): void;
@@ -52,12 +60,13 @@ export async function promptSecret(
 				hint.invalidate();
 			},
 			handleInput(data: string) {
-				if (keybindings.matches(data, "tui.select.cancel")) done(undefined);
-				else if (keybindings.matches(data, "tui.input.submit")) done(input.getValue());
+				if (keybindings.matches(data, "tui.select.cancel")) finish(undefined);
+				else if (keybindings.matches(data, "tui.input.submit")) finish(input.getValue());
 				else input.handleInput(data);
 				tui.requestRender();
 			},
 			dispose() {
+				options.signal?.removeEventListener("abort", onAbort);
 				input.clear();
 			},
 		};

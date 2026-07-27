@@ -10,10 +10,12 @@ export interface MockWebDavOptions {
 	etag?: "strong" | "weak" | "missing";
 	deny?: boolean;
 	cleanupFails?: boolean;
+	cleanupMultiStatus?: boolean;
 	malformedXml?: boolean;
 	delayMs?: number;
 	redirectTo?: string;
 	failLatestPut?: boolean;
+	constantEtag?: boolean;
 }
 
 export function webDavConfig(url: string): ResolvedWebDavBackend {
@@ -138,6 +140,9 @@ export class MockWebDavServer {
 	private delete(path: string, response: ServerResponse) {
 		if (this.options.cleanupFails && path.includes(".pi-sync-probes"))
 			return send(response, 500, "cleanup failed");
+		if (this.options.cleanupMultiStatus && path.includes(".pi-sync-probes")) {
+			return send(response, 207, "partial cleanup failed");
+		}
 		let found = this.collections.delete(path) || this.resources.delete(path);
 		for (const key of [...this.collections]) {
 			if (key.startsWith(`${path}/`)) {
@@ -155,7 +160,9 @@ export class MockWebDavServer {
 	}
 
 	private etag(body: Buffer) {
-		const value = `"${createHash("sha256").update(body).digest("hex").slice(0, 16)}"`;
+		const value = this.options.constantEtag
+			? '"constant"'
+			: `"${createHash("sha256").update(body).digest("hex").slice(0, 16)}"`;
 		return this.options.etag === "weak" ? `W/${value}` : value;
 	}
 

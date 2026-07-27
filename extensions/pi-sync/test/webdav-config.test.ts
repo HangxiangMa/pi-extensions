@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { loadConfig, localConfigPath, statePathForConfig } from "../src/config.js";
+import { updateStorageProfile } from "../src/settings-management.js";
 import { withTempHome } from "./helpers.js";
 
 const settings = {
@@ -67,6 +68,33 @@ test("WebDAV settings reject aliased profiles that resolve to one remote destina
 			}),
 		);
 		await assert.rejects(loadConfig(), /same remote destination/);
+	});
+});
+
+test("WebDAV profile edits reject newly duplicated remote destinations", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			localConfigPath(),
+			JSON.stringify({
+				...settings,
+				profiles: {
+					first: settings.profiles.dav,
+					second: { ...settings.profiles.dav, url: "https://other.example.com/dav" },
+				},
+				targets: {
+					home: { profile: "first", path: "pi-sync", namespace: "shared" },
+					work: { profile: "second", path: "pi-sync", namespace: "shared" },
+				},
+			}),
+		);
+		await assert.rejects(
+			updateStorageProfile("second", (profile) => ({
+				...profile,
+				url: `${settings.profiles.dav.url}/`,
+			})),
+			/same remote destination/,
+		);
 	});
 });
 

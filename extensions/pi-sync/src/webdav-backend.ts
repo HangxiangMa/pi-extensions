@@ -264,6 +264,13 @@ export class WebDavSyncBackend implements SyncBackend {
 				throw new Error("WebDAV server changed a probe despite a failed precondition.");
 			}
 			await client.putBuffer(probe, Buffer.from("second"), "text/plain", { ifMatch: etag });
+			const changed = await client.getBuffer(probe);
+			const changedEtag = strongEtag(changed.etag);
+			if (!changed.value?.equals(Buffer.from("second")) || !changedEtag || changedEtag === etag) {
+				throw new Error(
+					"WebDAV server did not rotate its strong ETag after changing the capability probe.",
+				);
+			}
 		} catch (error) {
 			operationError = error;
 		}
@@ -580,7 +587,7 @@ function isSafeReference(value: string) {
 		!!value &&
 		value.length <= 512 &&
 		// biome-ignore lint/suspicious/noControlCharactersInRegex: Remote references cannot contain terminal controls.
-		!/[\\/\u0000-\u001f\u007f]/u.test(value) &&
+		!/[\\/\u0000-\u001f\u007f-\u009f]/u.test(value) &&
 		value !== "." &&
 		value !== ".."
 	);
