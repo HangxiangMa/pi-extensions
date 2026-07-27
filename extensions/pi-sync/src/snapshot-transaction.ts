@@ -34,6 +34,7 @@ export async function applySnapshotTransaction(
 			await fs.rm(target, { force: true, recursive: true });
 		}
 		for (const item of plan.writes) {
+			await fs.mkdir(path.dirname(item.target), { recursive: true });
 			await fs.writeFile(item.target, item.content);
 		}
 		await fs.rm(transaction.directory, { recursive: true, force: true });
@@ -125,7 +126,8 @@ async function prepareTransaction(plan: SnapshotApplyPlan, sessionDir?: string) 
 				throw new Error(`Unsupported existing snapshot target: ${target}`);
 			}
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
 			entries.push({ target, backupName, kind: "missing" });
 		}
 	}

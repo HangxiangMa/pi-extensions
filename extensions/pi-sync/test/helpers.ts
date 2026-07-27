@@ -25,6 +25,62 @@ export function snapshot(files: Array<{ path: string; content: Buffer }>) {
 	};
 }
 
+export function v3S3Settings(
+	options: { automatic?: boolean; include?: string[]; path?: string; bucket?: string } = {},
+) {
+	return {
+		version: 3,
+		activeSyncSetup: "home",
+		onSwitch: "ask-before-pull",
+		storageConnections: {
+			r2: {
+				type: "s3",
+				endpoint: "https://example.r2.cloudflarestorage.com",
+				region: "auto",
+				credentials: { accessKeyId: "access-key", secretAccessKey: "secret-key" },
+			},
+		},
+		syncSetups: {
+			home: {
+				storage: {
+					connection: "r2",
+					bucket: options.bucket ?? "pi-sync-test",
+					path: options.path ?? "pi-sync/home",
+				},
+				sync: {
+					include: options.include ?? ["settings.json"],
+					automatic: options.automatic ?? false,
+				},
+			},
+		},
+	};
+}
+
+export function v3WebDavSettings(options: { automatic?: boolean; include?: string[] } = {}) {
+	return {
+		version: 3,
+		activeSyncSetup: "home",
+		onSwitch: "ask-before-pull",
+		storageConnections: {
+			dav: {
+				type: "webdav",
+				url: "https://cloud.example.com/dav",
+				credentials: { username: "user", password: "pass" },
+			},
+		},
+		syncSetups: {
+			home: {
+				storage: { connection: "dav", path: "pi-sync/home" },
+				sync: {
+					include: options.include ?? ["settings.json"],
+					automatic: options.automatic ?? false,
+				},
+			},
+		},
+	};
+}
+
+/** Legacy flat fixture retained only by backend-unit tests that do not load settings. */
 export function requiredConfig() {
 	return {
 		backend: "s3" as const,

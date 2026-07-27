@@ -37,7 +37,14 @@ import sync, {
 	snapshotWithoutSessions,
 } from "../src/sync.js";
 
-import { requiredConfig, snapshot, withEnv, withTempHome, writeOldLock } from "./helpers.js";
+import {
+	requiredConfig,
+	snapshot,
+	v3S3Settings,
+	withEnv,
+	withTempHome,
+	writeOldLock,
+} from "./helpers.js";
 
 initTheme("dark", false);
 
@@ -569,7 +576,7 @@ test("old unreadable locks require explicit stale unlock before recovery", async
 		await ensureStateDir();
 		const mock = createMockPi();
 		sync(mock.pi);
-		const { ctx } = createMockContext();
+		const { ctx } = createMockContext({ hasUI: true });
 
 		for (const contents of ["", "{not valid json"]) {
 			writeOldLock(contents);
@@ -646,7 +653,7 @@ test("unlock keeps a fresh unreadable lock unless stale removal is explicit", as
 		writeFileSync(lockPath(), "");
 		const mock = createMockPi();
 		sync(mock.pi);
-		const { ctx, notifications } = createMockContext();
+		const { ctx, notifications } = createMockContext({ hasUI: true });
 
 		await mock.commands.get("sync")?.handler("unlock", ctx);
 		assert.equal(await lockFileExists(), true);
@@ -683,7 +690,7 @@ test("stale unlock rechecks unreadable metadata before removing it", async () =>
 		try {
 			const mock = createMockPi();
 			sync(mock.pi);
-			const { ctx, notifications } = createMockContext();
+			const { ctx, notifications } = createMockContext({ hasUI: true });
 			await mock.commands.get("sync")?.handler("unlock --stale", ctx);
 
 			assert.equal(await lockFileExists(), true);
@@ -713,7 +720,7 @@ test("unlock cannot remove the lock for an active guarded sync", async () => {
 
 		const mock = createMockPi();
 		sync(mock.pi);
-		const { ctx, notifications } = createMockContext();
+		const { ctx, notifications } = createMockContext({ hasUI: true });
 		try {
 			await mock.commands.get("sync")?.handler("unlock --stale", ctx);
 			assert.equal(await lockFileExists(), true);
@@ -741,7 +748,7 @@ test("unlock reports when a dead owner's guard is still expiring", async () => {
 		mkdirSync(`${lockPath()}.guard`);
 		const mock = createMockPi();
 		sync(mock.pi);
-		const { ctx, notifications } = createMockContext();
+		const { ctx, notifications } = createMockContext({ hasUI: true });
 
 		await mock.commands.get("sync")?.handler("unlock --stale", ctx);
 		assert.equal(await lockFileExists(), true);
@@ -820,7 +827,7 @@ test("doctor warns when lock metadata is unreadable", async () => {
 		writeFileSync(lockPath(), "{broken");
 		const mock = createMockPi();
 		sync(mock.pi);
-		const { ctx, notifications } = createMockContext();
+		const { ctx, notifications } = createMockContext({ hasUI: true });
 
 		await mock.commands.get("sync")?.handler("doctor", ctx);
 		assert.match(notifications.at(-1)?.message ?? "", /lock: unreadable/);
@@ -834,7 +841,7 @@ test("doctor warns when a lock guard is active without metadata", async () => {
 		mkdirSync(`${lockPath()}.guard`);
 		const mock = createMockPi();
 		sync(mock.pi);
-		const { ctx, notifications } = createMockContext();
+		const { ctx, notifications } = createMockContext({ hasUI: true });
 
 		await mock.commands.get("sync")?.handler("doctor", ctx);
 		assert.match(notifications.at(-1)?.message ?? "", /lock: guard active.*metadata/);
@@ -856,7 +863,7 @@ test("doctor warns when a valid lock owner has exited", async () => {
 		);
 		const mock = createMockPi();
 		sync(mock.pi);
-		const { ctx, notifications } = createMockContext();
+		const { ctx, notifications } = createMockContext({ hasUI: true });
 
 		await mock.commands.get("sync")?.handler("doctor", ctx);
 		assert.match(notifications.at(-1)?.message ?? "", /lock: stale.*unlock/);
@@ -867,7 +874,7 @@ test("doctor warns when a valid lock owner has exited", async () => {
 test("doctor reports live and free lock states", async () => {
 	await withTempHome(async () => {
 		await ensureStateDir();
-		writeFileSync(localConfigPath(), JSON.stringify(requiredConfig()));
+		writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()));
 		writeFileSync(
 			lockPath(),
 			JSON.stringify({
@@ -879,7 +886,7 @@ test("doctor reports live and free lock states", async () => {
 		);
 		const mock = createMockPi();
 		sync(mock.pi);
-		const { ctx, notifications } = createMockContext();
+		const { ctx, notifications } = createMockContext({ hasUI: true });
 
 		await mock.commands.get("sync")?.handler("doctor", ctx);
 		assert.match(notifications.at(-1)?.message ?? "", /lock: held by pid/);

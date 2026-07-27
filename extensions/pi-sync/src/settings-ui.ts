@@ -3,89 +3,77 @@ import {
 	getSettingsListTheme,
 } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
+import { loadConfig, localConfigPath } from "./config.js";
+import { updateSyncSetup } from "./settings-management.js";
 import {
-	isCloudflareR2Endpoint,
-	isEnabled,
-	loadPartialConfig,
-	loadTargetSwitchAction,
-	localConfigPath,
-	normalizeExtraFiles,
-	normalizeSyncFiles,
-	readLocalConfigObject,
-	updateLocalConfig,
-} from "./config.js";
-import { errorMessage, safeTerminalText } from "./sync-format.js";
-import {
-	saveTargetSwitchAction,
-	TARGET_SWITCH_ACTION_OPTIONS,
-	type TargetPullOutcome,
-	targetSwitchActionFromLabel,
-	targetSwitchActionLabel,
-} from "./target-switch.js";
+	SETUP_SWITCH_ACTION_OPTIONS,
+	type SetupPullOutcome,
+	saveOnSwitch,
+	setupSwitchActionFromLabel,
+	setupSwitchActionLabel,
+} from "./setup-switch.js";
+import { safeTerminalText } from "./sync-format.js";
 
 export type SyncSettingsRoute = (
 	route: string,
 	signal?: AbortSignal,
 	onCommit?: () => void,
-	target?: string,
-) => Promise<TargetPullOutcome | undefined>;
+	setup?: string,
+) => Promise<SetupPullOutcome | undefined>;
 
-export async function showSyncSettings(ctx: ExtensionCommandContext, runRoute: SyncSettingsRoute) {
+export async function showSyncSettings(
+	ctx: ExtensionCommandContext,
+	runRoute: SyncSettingsRoute,
+	signal?: AbortSignal,
+) {
 	if (ctx.mode !== "tui") {
 		ctx.ui.notify(`Edit pi-sync settings manually: ${safeTerminalText(localConfigPath())}`, "info");
 		return;
 	}
-	while (true) {
-		const raw = await readLocalConfigObject();
-		const version2 = raw?.version === 2;
-		const partial = await loadPartialConfig();
-		const action = await showSettingsList(ctx, partial, version2);
-		if (action !== "files") return;
-		await runRoute("files", undefined, undefined, version2 ? partial.target : undefined);
+	while (!signal?.aborted) {
+		const config = await loadConfig();
+		if (signal?.aborted) return;
+		const action = await showSettingsList(ctx, config, signal);
+		if (signal?.aborted || action !== "files") return;
+		await runRoute("files", signal, undefined, config.setupName);
 	}
 }
 
 async function showSettingsList(
 	ctx: ExtensionCommandContext,
-	partial: Awaited<ReturnType<typeof loadPartialConfig>>,
-	version2: boolean,
+	config: Awaited<ReturnType<typeof loadConfig>>,
+	signal?: AbortSignal,
 ) {
-	const targetName = version2 ? partial.target : undefined;
-	const s3 = partial.storageKind !== "webdav" && partial.storageKind !== "git";
-	const automaticSyncOverridden = s3 && Object.hasOwn(process.env, "PI_SYNC_AUTO_SYNC");
-	const automaticSyncValue = isEnabled(partial.autoSync, true) ? "On" : "Off";
-	const targetSwitchAction = await loadTargetSwitchAction();
-	const targetSwitchValue = targetSwitchActionLabel(targetSwitchAction);
+	const automaticValue = config.automatic ? "On" : "Off";
+	const switchValue = setupSwitchActionLabel(config.onSwitch);
 	let saveQueue = Promise.resolve();
 	const latestRequested = new Map<string, string>();
+	const mutationController = new AbortController();
+	const mutationSignal = signal
+		? AbortSignal.any([signal, mutationController.signal])
+		: mutationController.signal;
 
 	return ctx.ui.custom<"files" | undefined>((tui, theme, _keybindings, done) => {
 		const items: SettingItem[] = [
 			{
-				id: "automaticSync",
-				label: automaticSyncOverridden ? "Automatic sync (environment override)" : "Automatic sync",
-				description: automaticSyncOverridden
-					? "Read-only while deprecated PI_SYNC_AUTO_SYNC overrides this sync setup. Move the value into setup settings before the future major removal."
-					: "Run conservative synchronization automatically at session startup and shutdown.",
-				currentValue: automaticSyncValue,
-				...(automaticSyncOverridden ? {} : { values: ["On", "Off"] }),
+				id: "automatic",
+				label: "Automatic sync",
+				description: "Run conservative synchronization at session startup and shutdown.",
+				currentValue: automaticValue,
+				values: ["On", "Off"],
 			},
-			...(version2
-				? [
-						{
-							id: "targetSwitchAction",
-							label: "After switching setup",
-							description:
-								"Ask before starting a pull, start a pull review automatically, or switch without checking remote files. Every pull still shows exact changes before apply.",
-							currentValue: targetSwitchValue,
-							values: TARGET_SWITCH_ACTION_OPTIONS.map(({ label }) => label),
-						},
-					]
-				: []),
 			{
-				id: "syncFiles",
+				id: "onSwitch",
+				label: "After switching setup",
+				description:
+					"Ask before a reviewed pull, start a reviewed pull, or switch without checking remote files.",
+				currentValue: switchValue,
+				values: SETUP_SWITCH_ACTION_OPTIONS.map(({ label }) => label),
+			},
+			{
+				id: "include",
 				label: "Included content",
-				description: `${normalizeSyncFiles(partial.syncFiles).length} built-in groups and ${normalizeExtraFiles(partial.extraFiles).length} extra files. Opens the reviewed content-selection draft.`,
+				description: `${config.include.length} selected path${config.include.length === 1 ? "" : "s"}. Opens the reviewed content-selection draft.`,
 				currentValue: "Open editor",
 				values: ["Open editor"],
 			},
@@ -96,19 +84,7 @@ async function showSettingsList(
 			new Text(
 				theme.fg(
 					"muted",
-					`Sync setup: ${safeTerminalText(partial.target ?? "default")} · ${storageDescription(
-						partial.storageKind,
-						partial.storageKind === "webdav"
-							? partial.url
-							: partial.storageKind === "git"
-								? partial.remote
-								: partial.endpoint,
-						partial.storageKind === "webdav"
-							? partial.path
-							: partial.storageKind === "git"
-								? partial.branch
-								: partial.bucket,
-					)}`,
+					`Sync setup: ${safeTerminalText(config.setupName)} · Storage connection: ${safeTerminalText(config.connectionName)}`,
 				),
 				1,
 				0,
@@ -116,50 +92,66 @@ async function showSettingsList(
 		);
 		let settingsList: SettingsList;
 		let closing = false;
+		let disposed = false;
 		const closeAfterSaves = (result: "files" | undefined) => {
-			if (closing) return;
+			if (closing || disposed) return;
 			closing = true;
-			void saveQueue.then(() => done(result));
+			void saveQueue.then(() => {
+				if (!disposed) done(signal?.aborted ? undefined : result);
+			});
 		};
+		const onAbort = () => {
+			if (!closing && !disposed) done(undefined);
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
 		settingsList = new SettingsList(
 			items,
 			Math.min(items.length + 2, 15),
 			getSettingsListTheme(),
 			(id, newValue) => {
-				if (id === "syncFiles") {
+				if (id === "include") {
 					closeAfterSaves("files");
 					return;
 				}
 				latestRequested.set(id, newValue);
-				const fallbackValue = id === "automaticSync" ? automaticSyncValue : targetSwitchValue;
+				const fallback = id === "automatic" ? automaticValue : switchValue;
 				const operation = saveQueue.then(async () => {
-					let previousValue = fallbackValue;
+					if (disposed || signal?.aborted) return;
+					let previousValue = fallback;
 					try {
-						if (id === "automaticSync") {
-							const latest = await loadPartialConfig(targetName);
-							previousValue = isEnabled(latest.autoSync, true) ? "On" : "Off";
-							const enabled = newValue === "On";
-							await updateSettingsTarget(targetName, (target) => ({
-								...target,
-								autoSync: enabled,
-							}));
+						const latest = await loadConfig(config.setupName);
+						if (disposed || signal?.aborted) return;
+						if (id === "automatic") {
+							previousValue = latest.automatic ? "On" : "Off";
+							const automatic = newValue === "On";
+							await updateSyncSetup(
+								config.setupName,
+								(setup) => ({
+									...setup,
+									sync: { ...setup.sync, automatic },
+								}),
+								{ signal: mutationSignal },
+							);
+							if (disposed || signal?.aborted) return;
 							ctx.ui.notify(
-								`Automatic sync ${enabled ? "enabled" : "disabled"} for “${safeTerminalText(partial.target ?? "default")}”.`,
+								`Automatic sync ${automatic ? "enabled" : "disabled"} for “${safeTerminalText(config.setupName)}”.`,
 								"info",
 							);
-						} else if (id === "targetSwitchAction") {
-							const latest = await loadTargetSwitchAction();
-							previousValue = targetSwitchActionLabel(latest);
-							const action = targetSwitchActionFromLabel(newValue);
+						} else {
+							previousValue = setupSwitchActionLabel(latest.onSwitch);
+							const action = setupSwitchActionFromLabel(newValue);
 							if (!action) throw new Error(`Invalid setup-switch action: ${newValue}`);
-							await saveTargetSwitchAction(action);
+							await saveOnSwitch(action, mutationSignal);
+							if (disposed || signal?.aborted) return;
 							ctx.ui.notify(`After switching setup: ${newValue}.`, "info");
 						}
 					} catch (error) {
-						if (latestRequested.get(id) === newValue) {
-							settingsList.updateValue(id, previousValue);
-						}
-						ctx.ui.notify(`Pi Sync settings save failed: ${errorMessage(error)}`, "error");
+						if (disposed || signal?.aborted) return;
+						if (latestRequested.get(id) === newValue) settingsList.updateValue(id, previousValue);
+						ctx.ui.notify(
+							`Pi Sync settings save failed: ${error instanceof Error ? error.message : String(error)}`,
+							"error",
+						);
 						tui.requestRender();
 					}
 				});
@@ -172,61 +164,15 @@ async function showSettingsList(
 			render: (width: number) => container.render(width),
 			invalidate: () => container.invalidate(),
 			handleInput(data: string) {
+				if (disposed) return;
 				settingsList.handleInput?.(data);
 				tui.requestRender();
 			},
+			dispose() {
+				disposed = true;
+				mutationController.abort(new DOMException("Settings UI disposed", "AbortError"));
+				signal?.removeEventListener("abort", onAbort);
+			},
 		};
 	});
-}
-
-async function updateSettingsTarget(
-	targetName: string | undefined,
-	update: (target: Record<string, unknown>) => Record<string, unknown>,
-) {
-	await updateLocalConfig((current) => {
-		if (current.version !== 2) return update(current);
-		const targets = ownRecord(current.targets);
-		const selected =
-			targetName ?? (typeof current.activeTarget === "string" ? current.activeTarget : undefined);
-		if (!targets || !selected) throw new Error("Settings sync setup is not configured.");
-		const target = ownRecord(targets[selected]);
-		if (!target) throw new Error(`Settings sync setup “${selected}” is invalid.`);
-		return { ...current, targets: { ...targets, [selected]: update(target) } };
-	});
-}
-
-function storageDescription(
-	kind: string | undefined,
-	endpoint: string | undefined,
-	bucket: string | undefined,
-) {
-	if (kind === "git") {
-		let host = "remote missing";
-		try {
-			host = endpoint?.includes("://")
-				? new URL(endpoint).host
-				: (endpoint?.replace(/^(?:[^@]+@)?([^:]+):.*$/u, "$1") ?? host);
-		} catch {
-			host = "invalid remote";
-		}
-		return `Git · ${safeTerminalText(host)} · ${safeTerminalText(bucket ?? "branch missing")}`;
-	}
-	if (kind === "webdav") {
-		let host = "URL missing";
-		try {
-			host = endpoint ? new URL(endpoint).host : host;
-		} catch {
-			host = "invalid URL";
-		}
-		return `WebDAV · ${safeTerminalText(host)} · ${safeTerminalText(bucket ?? "path missing")}`;
-	}
-	const label =
-		kind === "r2" || isCloudflareR2Endpoint(endpoint) ? "Cloudflare R2" : "S3-compatible";
-	return `${label} · ${safeTerminalText(bucket ?? "bucket missing")}`;
-}
-
-function ownRecord(value: unknown): Record<string, unknown> | undefined {
-	return value && typeof value === "object" && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: undefined;
 }

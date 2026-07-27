@@ -2,28 +2,17 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-sync)](https://www.npmjs.com/package/@narumitw/pi-sync) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-sync` syncs selected Pi configuration through Git, WebDAV, Cloudflare R2, or other S3-compatible storage. Named sync setups such as `home` and `work` can reuse storage connections such as `github`, `webdav`, `r2`, and `s3`.
-
-The extension uses immutable snapshots, local locking, secret scanning, pre-apply backups, and recoverable local apply transactions. S3/WebDAV publish compressed bundles through a managed `latest.json` pointer; Git stores one strict manifest plus reusable raw Git blobs per commit on a pi-sync-owned branch. Remote persistence is isolated behind a backend-neutral contract, and normalized runtime config pairs each storage connection with its matching storage location. Git, WebDAV, and S3/R2 are production backends in this release. Conversation/session syncing remains opt-in because session JSONL can contain prompts, tool output, paths, screenshots, and secrets.
+`@narumitw/pi-sync` syncs selected Pi content through Git, WebDAV, Cloudflare R2, or other S3-compatible storage. A reusable **storage connection** holds access configuration. A named **sync setup** selects one connection, one exact remote storage path, included content, and automatic-sync behavior.
 
 ## ✨ Features
 
-- Opens a goal-oriented `/sync` manager showing the current sync setup, storage, automatic sync, session scope, and relevant next actions.
-- Supports multiple named **sync setups** and reusable Git/WebDAV/R2/S3 **storage connections**.
-- Publishes Git snapshots as one commit with an exact expected-ref lease, preserving native first-parent history without unconditional force pushes.
-- Uses verified `ETag`, `If-Match`, and `If-None-Match` preconditions for atomic WebDAV publication and fails closed when a server ignores them.
-- Asks to review a pull after switching sync setups by default, with settings to start that review automatically or switch only.
-- Previews concrete local or remote file changes before push, pull, force resolution, or rollback.
-- Uses transactional included-content drafts with explicit Save, Discard, and Continue editing choices.
-- Keeps direct `help`, `use`, `init`, `config`, `files`, `status`, `diff`, `doctor`, `push`, `pull`, `sync`, `history`, `rollback`, and `unlock` routes for compatibility and automation.
-- Syncs allowlisted Pi configuration from the Pi agent directory:
-  - `settings.json`, `keybindings.json`, `models.json`, `AGENTS.md`, and `APPEND_SYSTEM.md`
-  - recursive `skills/`, `prompts/`, `themes/`, and `extensions/` groups
-  - safe top-level files selected through `extraFiles`
-  - optionally denylist-filtered `sessions/**/*.jsonl`
-- Preserves files outside the addressed setup's selection locally and in remote uploads.
-- Creates backups before pull/rollback and journals multi-file applies so failures roll back; interrupted transactions recover before the next sync.
-- Refuses common secret patterns, unsafe paths, symlink escapes, live-lock removal, and unreviewed conflict overwrites.
+- A goal-oriented `/sync` manager with symmetric **Sync setups** and **Storage connections** list/detail flows.
+- S3-compatible storage, a Cloudflare R2 setup preset, Git, and WebDAV.
+- Immutable snapshots, secret scanning, local locks, conflict checks, pull backups, transactional apply, and recovery journals.
+- Exact reviewed storage paths that do not change when a local sync setup is renamed.
+- One ordered `sync.include` list for Pi roots, safe agent-relative paths, and the privacy-sensitive `sessions` root.
+- Atomic private settings writes that preserve unknown fields and reject stale concurrent edits.
+- Fail-closed validation for missing references, mixed backend fields, duplicate remote locations, unsafe paths, malformed credentials, and credential-bearing Git URLs.
 
 ## 📦 Install
 
@@ -37,7 +26,7 @@ Try without installing permanently:
 pi -e npm:@narumitw/pi-sync
 ```
 
-Try this package from a local checkout:
+Try a local checkout:
 
 ```bash
 pi -e ./extensions/pi-sync
@@ -45,438 +34,243 @@ pi -e ./extensions/pi-sync
 
 ## 🚀 Quick start
 
-Run the manager:
+Run:
 
 ```text
 /sync
 ```
 
-When pi-sync is not configured, choose **Set up sync**. The TUI guides you through:
+Choose **Set up sync**, then review the storage connection, exact storage path, included content, automatic-sync choice, and masked credentials before saving. Buckets and remote repositories must already exist. Git uses the user's existing non-interactive SSH or credential-helper configuration and never stores Git credentials.
 
-1. Git, WebDAV, Cloudflare R2, or another S3-compatible service
-2. `Personal / Home`, `Work`, or a custom setup purpose
-3. an endpoint and, for S3, the existing bucket name
-4. a recommended remote location or advanced customization
-5. existing Git/SSH authentication, masked WebDAV credentials, S3 environment credentials, or a private settings-file template
-6. an included-content preset
-7. an exact setup preview and **Save setup** confirmation
-
-For a first Cloudflare R2 setup, the recommended location requires no raw path questions:
-
-```json
-{
-  "profile": "r2",
-  "bucket": "pi-sync",
-  "prefix": "pi-sync",
-  "namespace": "home"
-}
-```
-
-The R2 bucket must already exist; pi-sync never creates buckets. Generic S3 setup asks for one existing, potentially globally unique bucket and derives storage connection `s3`, prefix `pi-sync`, and namespace `home` or `work`. **Customize storage location** retains direct control over the connection name, bucket, prefix, and namespace.
-
-The setup wizard can store WebDAV passwords and S3-compatible static credentials entirely through the TUI. Its package-owned masked input renders only bullets, and secret values are never shown in reviews, menus, status, notifications, warnings, or errors. S3 environment credentials and a manual private-settings template remain available; WebDAV has no environment-variable credential mirrors.
-
-### Git setup
-
-Git storage connections contain only a remote URL; credentials remain in your existing Git credential helper, SSH agent, or SSH configuration. Sync setups select a pi-sync-owned branch, repository directory, and namespace:
-
-```json
-{
-  "profiles": {
-    "github": {
-      "kind": "git",
-      "remote": "git@github.com:owner/private-pi-sync.git"
-    }
-  },
-  "targets": {
-    "home": {
-      "profile": "github",
-      "branch": "pi-sync/home",
-      "directory": "pi-sync",
-      "namespace": "home"
-    }
-  }
-}
-```
-
-The remote repository must already exist; the owned branch may be absent and is created on first push with an exact missing-ref lease. Setup asks whether automatic sync should be enabled and shows that choice before saving. Each effective repository/branch pair belongs to exactly one pi-sync setup; equivalent scp-like and `ssh://` spellings are treated as the same remote, and another namespace or setup must use a distinct branch. Existing non-empty repositories are safe because pi-sync reads and updates only the configured branch. If that branch already exists, its complete tip tree must contain only the valid pi-sync manifest and its exact declared regular files; pi-sync rejects rather than deletes any other branch content.
-
-Supported production remotes are HTTPS without embedded credentials, `ssh://` URLs, and conservative scp-like SSH remotes such as `git@github.com:owner/repo.git`. Local paths and `file`, `git`, `ext`, and arbitrary remote-helper transports are rejected. Automatic commands disable repository hooks, editors, pagers, terminal prompts, and askpass interaction. User-configured credential helpers, SSH agents/configuration, and SSH `ProxyCommand` remain trusted external authentication mechanisms; pi-sync does not sandbox or store them.
-
-Git 2.30 or newer and a SHA-1-format remote repository are currently required; SHA-256-format refs fail explicitly rather than being misread. Run `/sync doctor` to check the Git executable/version, non-interactive remote access, owned branch, private bare cache, and lease-protected publication capability. Cache corruption can be recovered by removing only the matching private cache under `${PI_CODING_AGENT_DIR:-~/.pi/agent}/.pisync/git/`; settings, local sync state, backups, and remote history remain untouched and the cache is rebuilt on the next operation.
-
-### WebDAV setup
-
-Generic WebDAV storage connections use the authenticated collection URL, a username, and a password. Sync setups add a relative `path` and `namespace`:
-
-```json
-{
-  "profiles": {
-    "webdav": {
-      "kind": "webdav",
-      "url": "https://cloud.example.com/remote.php/dav/files/user",
-      "username": "user",
-      "password": "<app-password>"
-    }
-  },
-  "targets": {
-    "home": {
-      "profile": "webdav",
-      "path": "pi-sync",
-      "namespace": "home"
-    }
-  }
-}
-```
-
-- **Nextcloud/ownCloud:** use the user DAV collection, commonly `https://HOST/remote.php/dav/files/USERNAME`, and prefer an app password.
-- **Synology:** use the HTTPS WebDAV Server endpoint and user collection exposed by your DSM configuration. Confirm its exact path and certificate in a browser or WebDAV client first.
-- **Generic servers:** Basic authentication is supported over HTTPS. Plain HTTP is rejected except on loopback for local tests. URL-embedded credentials, query strings, fragments, and cross-origin authenticated redirects are rejected.
-
-Run `/sync doctor` after setup. It creates an unpredictable temporary probe, verifies collection listing/read/write/cleanup plus strong ETags and stale conditional writes, and removes the probe. A server without working strong `If-Match` and `If-None-Match` remains readable but publication is rejected before `latest.json` changes; pi-sync never silently degrades WebDAV automatic sync to an unsafe overwrite.
-
-A configured manager shows locally available state without contacting remote storage:
+The manager shows local state without contacting remote storage:
 
 ```text
 Current sync setup: home
 Storage: Cloudflare R2 · r2 · personal-pi
-Included: 9 built-in groups · 0 extra files · Sessions off
+Included: 5 built-in groups · 0 extra files · Sessions off
 Automatic sync: On
-Last applied: snapshot-id (or Never synced)
 Remote status: Not checked
 ```
 
-Its primary actions are:
-
-- **Sync now (recommended)** — conservatively decide whether to push, pull, or do nothing
-- **Switch sync setup** — shown when multiple setups exist; preview the change and configured pull behavior
-- **Status & changes** — perform a cancellable read-only remote check
-- **Settings** — control post-switch pulling, automatic sync, and included content
-- **More…** — open explicit Pull/Push, Sync setups, Storage connections, history/recovery, Help, and Back
-
-Explicit **Pull from remote…** and **Push to remote…** remain available under More and through their documented direct commands. The ellipsis indicates that each action checks and previews concrete effects before confirmation.
-
-The menu does not query remote storage merely to open. It shows the last locally applied snapshot and marks remote changes as unchecked until an operation runs. When no included content is selected, transfer actions are hidden and Settings becomes the first action. During an active or recoverable lock, mutation actions remain unavailable.
-
-Push and pull keep their existing concrete previews and confirmation prompts. Pull creates a local backup before applying; push scans locally managed content for likely secrets before publication. Escape cancels a pre-commit check without changing local or remote files. Once publication or apply begins, cancellation is disabled. Conflicts never force automatically; inspect **Status & changes** and use an explicit direct route only after reviewing the conflict.
-
-Escape exits the main menu. **More…** and secondary menus provide Back; dirty synced-content drafts provide Save, Discard, and Continue editing. Cancellation before publication has no side effects.
+Primary actions include **Sync now**, **Switch sync setup**, **Status & changes**, **Settings**, and **More…**. Secondary screens provide **Back**; Escape closes the flow. Destructive and externally visible operations show exact previews and confirmations.
 
 ## ⚙️ Settings
 
-The private user settings file is:
+The canonical private user file is:
 
 ```text
-${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-sync.json
+~/.pi/agent/pi-sync.json
 ```
 
-On first read, an existing `pi-sync.local.json` is migrated byte-for-byte to `pi-sync.json`
-with private POSIX `0600` permissions. The private legacy file is retained as a recovery copy and may
-be deleted after verifying the new file. If both files exist, `pi-sync.json` takes precedence and the
-legacy file remains untouched. Malformed, invalid, symlinked, changed, or otherwise unsafe legacy
-files are never overwritten automatically.
+Pi's configured agent directory replaces `~/.pi/agent` when applicable. On POSIX, pi-sync creates and replaces this file with mode `0600`. Credentials stay in this canonical private file and are never shown in menus, reviews, status, notifications, errors, logs, or completion metadata.
 
-A version 2 example:
+An existing private `pi-sync.local.json` containing a valid version 3 document is copied byte-for-byte to `pi-sync.json`; the old file remains as a recovery copy. If both paths exist, `pi-sync.json` wins and the other path remains untouched.
+
+### Complete version 3 example
 
 ```json
 {
-  "version": 2,
-  "activeTarget": "home",
-  "targetSwitchAction": "ask",
-  "profiles": {
+  "version": 3,
+  "activeSyncSetup": "home",
+  "onSwitch": "ask-before-pull",
+  "storageConnections": {
+    "r2": {
+      "type": "s3",
+      "endpoint": "https://example.r2.cloudflarestorage.com",
+      "region": "auto",
+      "credentials": {
+        "accessKeyId": "<access-key-id>",
+        "secretAccessKey": "<secret-access-key>"
+      }
+    },
     "github": {
-      "kind": "git",
+      "type": "git",
       "remote": "git@github.com:owner/private-pi-sync.git"
     },
-    "r2": {
-      "kind": "r2",
-      "endpoint": "https://<account-id>.r2.cloudflarestorage.com",
-      "region": "auto",
-      "accessKeyId": "<access-key-id>",
-      "secretAccessKey": "<secret-access-key>"
-    },
-    "s3": {
-      "kind": "s3-compatible",
-      "endpoint": "https://s3.example.com",
-      "region": "ap-northeast-1",
-      "accessKeyId": "<access-key-id>",
-      "secretAccessKey": "<secret-access-key>"
+    "nextcloud": {
+      "type": "webdav",
+      "url": "https://cloud.example.com/remote.php/dav/files/user",
+      "credentials": {
+        "username": "user",
+        "password": "<app-password>"
+      }
     }
   },
-  "targets": {
+  "syncSetups": {
     "home": {
-      "profile": "r2",
-      "bucket": "personal-pi",
-      "prefix": "pi-sync",
-      "namespace": "home",
-      "autoSync": true,
-      "syncFiles": ["settings.json", "skills", "prompts", "themes"],
-      "syncSessions": false,
-      "extraFiles": []
+      "storage": {
+        "connection": "r2",
+        "bucket": "personal-pi",
+        "path": "pi-sync/home"
+      },
+      "sync": {
+        "include": ["settings.json", "AGENTS.md", "skills", "prompts", "themes"],
+        "automatic": true
+      }
     },
     "git-backup": {
-      "profile": "github",
-      "branch": "pi-sync/backup",
-      "directory": "pi-sync",
-      "namespace": "backup",
-      "autoSync": false,
-      "syncFiles": ["settings.json", "skills", "prompts", "themes"],
-      "syncSessions": false,
-      "extraFiles": []
+      "storage": {
+        "connection": "github",
+        "branch": "pi-sync/home",
+        "path": "pi-sync/home"
+      },
+      "sync": {
+        "include": ["settings.json", "AGENTS.md"],
+        "automatic": false
+      }
     },
-    "work": {
-      "profile": "s3",
-      "bucket": "company-pi",
-      "prefix": "developers/narumi",
-      "namespace": "work",
-      "autoSync": true,
-      "syncFiles": ["AGENTS.md", "prompts"],
-      "syncSessions": false,
-      "extraFiles": []
+    "webdav-backup": {
+      "storage": {
+        "connection": "nextcloud",
+        "path": "pi-sync/home"
+      },
+      "sync": {
+        "include": ["settings.json", "sessions"],
+        "automatic": false
+      }
     }
   }
 }
 ```
 
-### Terminology
+Cloudflare R2 is persisted as `"type": "s3"`; R2 is a setup preset, not another schema type. Temporary S3 credentials may additionally include `credentials.sessionToken`.
 
-The interactive UI has two managed concepts:
+### Required backend shapes
 
-- A **storage connection** is reusable access configuration. Git connections own a credential-free `remote`; WebDAV connections own `url`, `username`, and `password`; S3/R2 connections own `endpoint`, `region`, `accessKeyId`, `secretAccessKey`, and optional `sessionToken`.
-- A **sync setup** is a named, switchable combination of one storage connection, its storage location, included content, session choice, and automatic-sync behavior.
-- A **storage location** is descriptive setup data such as bucket/prefix/namespace, branch/directory/namespace, or WebDAV path/namespace. It is not independently managed.
+- **S3/R2 connection:** `type`, `endpoint`, `region`, and `credentials.accessKeyId` / `credentials.secretAccessKey`.
+- **S3/R2 setup storage:** `connection`, `bucket`, and complete relative `path`; `branch` is rejected.
+- **Git connection:** `type` and a credential-free SSH or HTTPS `remote`.
+- **Git setup storage:** `connection`, `branch`, and complete repository `path`; `bucket` is rejected.
+- **WebDAV connection:** `type`, HTTPS `url`, and `credentials.username` / `credentials.password`.
+- **WebDAV setup storage:** `connection` and complete relative `path`; `bucket` and `branch` are rejected.
 
-Version 2 JSON retains compatibility field names: `profiles` stores storage connections, `targets` stores sync setups, `activeTarget` names the current setup, and `targetSwitchAction` controls behavior after switching. The remote layout and snapshot wire field also retain `profiles`/`profile`; these stored names are not interactive menu terminology.
+Every setup requires `sync.include` and explicit `sync.automatic`. `activeSyncSetup` must reference an own-property setup when any setups exist and must be absent when the setup catalog is empty. A referenced connection cannot be removed. The current setup must be switched before removal. Two setups cannot resolve to the same normalized backend location.
 
-When adding another sync setup with the same storage connection, pi-sync recommends reusing the current setup's bucket and prefix while deriving a separate namespace from the new setup name. For example, `home` and `work` may both use connection `r2`, bucket `pi-sync`, and prefix `pi-sync`, producing `pi-sync/profiles/home/` and `pi-sync/profiles/work/`.
+`onSwitch` accepts:
 
-Two setups may intentionally overlap local files, but only one is automatic. pi-sync rejects duplicate effective storage locations—including deprecated bucket/prefix/namespace environment overrides—to prevent independent local states from controlling the same remote pointer. Removing a setup/connection removes local configuration only; it never deletes buckets or snapshots. A referenced connection cannot be removed, and users must switch away before removing one of several current setups.
-
-### Sync setup switching
-
-The default `targetSwitchAction: "ask"` changes `activeTarget` atomically, then asks in TUI mode whether to review a pull for that setup. Choosing not to review leaves local files unchanged. Accepting starts the normal pull flow, which fetches the remote snapshot and shows the exact writes and deletions before apply. In print, JSON, or RPC mode, `ask` switches without pulling and directs interactive users to `/sync pull` where notifications are available.
-
-Set `targetSwitchAction` to `"pull"` to start that reviewed pull automatically after a confirmed sync setup switch. The exact pull summary and apply confirmation remain enabled, conflict detection still stops unsafe merges, a local backup is created before apply, and pi-sync never adds `--force`; Pi may separately ask whether to reload changed resources after a successful pull. Because that confirmation requires observable UI, `/sync use` rejects `"pull"` in print and JSON modes before changing `activeTarget`; use TUI or RPC mode instead. Set it to `"switch-only"` to retain the previous no-pull behavior. Selecting the current setup is a no-op. If a pull fails or its concrete review is declined, the new setup remains current and pi-sync reports that synced files were not changed before `/sync pull` is retried.
+- `ask-before-pull` — switch, then ask in TUI whether to start a reviewed pull;
+- `pull-after-switch` — require observable UI and start the normal reviewed pull;
+- `switch-only` — switch without reading or applying remote content.
 
 ### Included content
 
-The **Settings → Choose included content** screen edits a draft. Arrow keys navigate, Enter or Space toggles, and Escape opens the Save/Discard/Continue decision. A single Save atomically updates the setup while preserving unknown fields and POSIX `0600` permissions. Saving settings never starts network sync.
+`sync.include` is ordered and duplicate-free. Supported Pi roots are:
 
-Omitting `syncFiles` preserves the legacy default of every built-in item. An empty array is valid and means the setup includes nothing; **Sync now** reports that state instead of publishing an empty sync. Unknown built-in names fail validation.
+```text
+settings.json, keybindings.json, models.json, AGENTS.md, APPEND_SYSTEM.md,
+skills, prompts, themes, extensions, sessions
+```
 
-Unselected items are unmanaged: pi-sync does not compare, pull, overwrite, or delete their local content, and pushes preserve their existing remote content.
+Safe agent-relative custom files or directories may also be included. Absolute paths, `..`, backslashes, controls, denied secret/settings paths, duplicate case variants, and ambiguous nested paths under reserved roots are rejected.
 
-### Environment precedence and deprecation
+An empty array is valid. It means no useful transfer is selected: **Sync now** reports the condition and does not claim that the setup is up to date. Unselected content remains unmanaged locally and is preserved when republishing existing remote snapshots.
 
-The existing `PI_SYNC_*` family still works in this release with its existing highest precedence, but it is deprecated and will be removed in a future major version. pi-sync shows variable names—not values—and migration guidance when any are active.
+Adding `sessions` requires a privacy acknowledgement in interactive flows. Session JSONL can contain prompts, tool output, file paths, images, and secrets. Automatic apply protects the currently open session file; restart Pi or resume a pulled session to use newly synchronized conversations.
 
-Move these fields into a storage connection (`profiles` in version 2 JSON):
+### Unsupported old settings and recovery
 
-- `PI_SYNC_ENDPOINT`
-- `PI_SYNC_REGION`
-- `PI_SYNC_ACCESS_KEY_ID`
-- `PI_SYNC_SECRET_ACCESS_KEY`
-- `PI_SYNC_SESSION_TOKEN`
+Version 1, version 2, and non-empty unversioned documents are intentionally unsupported by this breaking schema reset. pi-sync does **not** migrate, partially interpret, downgrade, or overwrite them. Automatic sync pauses and reports an actionable version 3 error without displaying secrets.
 
-Move these fields into a sync setup (`targets` in version 2 JSON):
+Recovery:
 
-- `PI_SYNC_BUCKET`
-- `PI_SYNC_PROFILE` → `namespace`
-- `PI_SYNC_PREFIX`
-- `PI_SYNC_AUTO_SYNC`
-- `PI_SYNC_SESSIONS`
+1. retain the old file byte-for-byte;
+2. move it aside manually;
+3. create a new version 3 document or run the setup manager;
+4. run `/sync doctor`, inspect the exact storage path, and review the first pull or push;
+5. restore the retained file and a compatible older package only if rolling back.
 
-`PI_SYNC_PROFILE` continues to mean only the remote namespace during the deprecation period; it never selects a storage connection or current setup.
-
-Standard compatibility aliases remain below `PI_SYNC_*` precedence:
-
-- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`
-- `R2_ENDPOINT`, `R2_BUCKET`
-
-Environment-overridden fields are read-only in interactive settings. Cloudflare R2 static keys commonly reject `X-Amz-Security-Token`; pi-sync retains its one-time retry without the configured token for that R2 response.
-
-### Legacy flat settings
-
-Existing flat settings continue to work unchanged as a synthetic `default` setup/connection, including settings migrated from the legacy `pi-sync.local.json` filename. The old flat `profile` remains the remote namespace.
-
-Adding a second sync setup offers an explicit migration preview. On confirmation pi-sync:
-
-1. takes an exact private backup of the original JSON bytes;
-2. preserves unknown top-level fields;
-3. maps existing connection and policy fields without changing the storage location;
-4. adopts the existing local sync state for the migrated setup;
-5. publishes the version 2 file atomically.
-
-Malformed, invalid, symlinked, or concurrently changed settings are never overwritten automatically. Version 2 settings require the multi-setup pi-sync release or newer. For a manual downgrade, restore the exact `.legacy-<timestamp>.bak` flat-config backup; no remote migration or rollback is needed.
+Malformed, invalid, unsupported, symlinked, or concurrently changed documents remain untouched. Failed UI saves keep the previous file and displayed/effective state.
 
 ## 💬 Commands
 
-The menu is the preferred interactive workflow. Existing deterministic routes remain available:
+The menu is preferred, while deterministic routes remain available:
 
 ```text
 /sync help
 /sync use <setup>
 /sync init
-/sync config [--target <name>]
-/sync files [--target <name>]
-/sync status [--target <name>]
-/sync diff [--target <name>]
-/sync doctor [--target <name>]
-/sync push [--target <name>]
-/sync pull [--target <name>]
-/sync sync [--target <name>]
-/sync history [--target <name>]
-/sync rollback <snapshot-id> [--target <name>]
+/sync config [--setup <name>]
+/sync files [--setup <name>]
+/sync status [--setup <name>]
+/sync diff [--setup <name>]
+/sync doctor [--setup <name>]
+/sync push [--setup <name>]
+/sync pull [--setup <name>]
+/sync sync [--setup <name>]
+/sync history [--setup <name>]
+/sync rollback <snapshot-id> [--setup <name>]
 /sync unlock --stale
 ```
 
-Flags:
-
-- `--target <name>` addresses a sync setup without switching it.
-- `--yes` / `-y` skips an explicit direct command's confirmation.
-- `--force` resolves a reviewed conflict for push/pull/sync.
+- `--setup <name>` addresses a setup without switching it.
+- `--yes` / `-y` skips a direct route's confirmation.
+- `--force` accepts a reviewed content conflict but never disables backend concurrency protection.
 - `--stale` requests guarded stale-lock recovery.
 
-Unknown flags, unexpected values, and missing setup/snapshot values are rejected. Argument completion includes configured setup names after session start.
+The former version 2 setup-addressing flag is rejected. Unknown flags, unknown commands, trailing values, and missing setup/snapshot values are rejected. Completion includes known setup names and preserves preceding command tokens.
 
-TUI mode provides the full manager and custom settings components. RPC uses Pi's dialog/notification protocol and does not call TUI-only components. Print/JSON modes cannot display extension UI; use explicit direct routes for compatible automation and do not expect notification-only status output.
+TUI mode provides custom components. RPC uses Pi's supported dialog/notification protocol. Print and JSON modes never enter TUI-only screens; unsupported interactive routes reject or remain protocol-safe rather than relying on no-op output.
 
-## 🧭 Backend comparison and migration
+## 🔄 Backend and recovery model
 
-| Backend | Publication guarantee | Authentication | History and rollback | Local dependency/cache | Session suitability |
-| --- | --- | --- | --- | --- | --- |
-| Git | Exact expected-ref lease (`lease-protected`) | Existing SSH agent/config or non-interactive HTTPS credential helper | Native first-parent commits; rollback creates a new commit | Git executable and rebuildable private bare cache | Use cautiously: old session content remains in permanent commit history |
-| WebDAV | Verified strong `If-Match`/`If-None-Match` (`atomic-conditional`) | Private settings-file username/app password over HTTPS | Managed snapshot history; rollback publishes a new pointer | No extra executable; conditional-capability probe | Suitable only on a trusted server; server retention still applies |
-| R2/S3 | Read-check-write-verify; an unobserved simultaneous race remains possible | Private settings or existing compatibility environment variables | Managed snapshot history; rollback publishes a new pointer | No extra executable | Suitable only on trusted storage with an explicit retention policy |
+| Backend | Publication guarantee | Authentication | Remote path |
+| --- | --- | --- | --- |
+| Git | Exact expected-ref lease | Existing SSH/configured credential helper | `<branch>:<storage.path>` |
+| WebDAV | Verified strong conditional requests | Private settings username/app password | `<url>/<storage.path>` |
+| R2/S3 | Read-check-write-verify | Private settings credentials | `<bucket>/<storage.path>` |
 
-`--force` has the same meaning on every backend: accept reviewed content divergence, re-read the storage location, and retain the backend's concurrency protection. It never authorizes an unconditional Git force push or pointer overwrite.
+Git requires Git 2.30 or newer and a SHA-1-format remote repository. HTTPS userinfo, URL passwords, local paths, `file`, `git`, `ext`, and remote-helper transports are rejected. When editing a Git setup, changing its storage path also requires a new owned branch so the existing branch remains readable at its reviewed path. The private bare cache under `.pisync/git/` is rebuildable.
 
-To migrate between backends manually:
+WebDAV requires HTTPS except loopback tests. URL credentials, query strings, fragments, unsafe redirects, weak/missing ETags, and ignored conditional headers fail closed. `/sync doctor` verifies collection and conditional-write behavior with an isolated probe.
 
-1. Disable automatic sync for the source setup.
-2. Run source diagnostics, inspect status, pull the intended current state, and retain the local backup.
-3. Add a separate sync setup and storage connection for the new backend, then run `/sync doctor --target <setup>`.
-4. Switch deliberately, review the exact storage-location push, and publish only after confirming that an empty location or its existing content is expected.
-5. Verify storage-location status and history before removing any local source configuration.
+S3/R2 stages immutable bundles, rechecks the visible head before publication, and verifies afterward. Unlike Git/WebDAV, generic S3 does not provide an atomic compare-and-swap for `latest.json`; status review remains important for simultaneous writers.
 
-Do not run source and new-setup automatic sync simultaneously over overlapping local files. Cancelling before publication leaves the new storage location unchanged; after publication begins, an ambiguous transport result requires `/sync status` before retrying. Migration publishes only the current selected snapshot—it does not copy S3/WebDAV managed history or Git native commit history. Removing a local setup/connection never deletes remote data.
-
-## 🔄 Sync and recovery model
-
-For the current sync setup, startup automatic sync uses conservative decisions:
-
-- local changed or remote empty → preview/confirm manually, or push in the existing quiet automatic path
-- identical first sync → initialize local state
-- safe remote-only change → pull with backup
-- first-sync mismatch or both changed → stop and require review
-- no selected content → report/skip
-
-Switching sync setups first changes `activeTarget`, then follows `targetSwitchAction`: ask before reviewing a pull in TUI by default, start a reviewed pull automatically when configured, or stop after switching. Pulls remain pinned to the selected setup and retain exact summaries, locking, backups, and conflict safeguards. The next startup uses the new setup's `autoSync` regardless of the switch action.
-
-S3/WebDAV remote layout remains compatible:
-
-```text
-<prefix>/
-└── profiles/
-    └── <namespace>/
-        ├── latest.json
-        ├── history.json
-        └── snapshots/
-            └── <snapshot-id>.json.gz
-```
-
-Git uses one commit per publication on the owned branch:
-
-```text
-<directory>/
-└── profiles/
-    └── <namespace>/
-        ├── manifest.json
-        └── files/
-            ├── settings.json
-            ├── keybindings.json
-            └── sessions/…
-```
-
-The manifest declares each logical path, byte size, and SHA-256. File contents are ordinary `100644` Git blobs, so unchanged or duplicate content is reused and changed content remains eligible for Git pack deltas. gzip is not used for Git and would not provide encryption: anyone who can read the private repository can inspect all retained synchronized content. [GitHub warns above 50 MiB and blocks regular-Git files above 100 MiB](https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-large-files-on-github); pi-sync rejects a decoded Git payload above 100 MiB before creating a commit. Prefer S3/WebDAV for large or high-churn binary/session archives. The earlier PR-only gzip Git format was never released and is intentionally not read; if a disposable test branch contains it, recreate only that pi-sync-owned test branch and its private cache.
-
-Snapshot upload is staging; `latest.json` is the S3/WebDAV active publication boundary, while the Git owned-ref update is its publication boundary. pi-sync records the backend's opaque remote revision separately from the applied snapshot identity, while continuing to read legacy state that has no revision or contains the old `lastRemoteEtag` field. Rollback verifies the selected snapshot against the active head or retained history, mints a new snapshot identity, and publishes a new history entry instead of rewriting the old one. If remote rollback publication fails after local apply, the error identifies that partial outcome and its local backup. A failed history update after publication is reported as “snapshot active, history needs repair” instead of falsely claiming no remote change. A transport failure at the active-head boundary is reported as an unknown publication outcome and directs the user to check status rather than claiming that nothing changed.
-
-Before pull/rollback, pi-sync writes a backup under `.pisync/backups/`. It then preflights all paths, stages a private transaction journal, applies changes, and restores every affected path if a later mutation fails. An interrupted journal is recovered before the next session/snapshot apply. Filesystem-wide replacement cannot be one OS primitive, so the guarantee is a complete previous or complete new accepted state after rollback/recovery—not an unrecoverable partial accepted state.
-
-WebDAV is conservatively reported as `conditional-required` until an isolated probe passes, then as `atomic-conditional`: each publication verifies the server's precondition behavior, stages the immutable bundle with `If-None-Match: *`, and changes `latest.json` with `If-Match` or `If-None-Match: *`. Unsupported servers remain read-only and are reported by doctor.
-
-Git is reported as `lease-protected`. Each publication creates a child commit in a private bare cache and pushes it with an exact expected branch SHA (or an exact missing-ref expectation). A timeout or transport failure after push starts is reconciled against the candidate commit; if the result cannot be proven, pi-sync reports an unknown publication outcome instead of claiming cancellation.
-
-R2/S3 is explicitly reported as `read-check-write-verify`, not atomic compare-and-swap. pi-sync re-reads `latest.json` immediately before publication and verifies afterward, but simultaneous writers can still race. `--force` accepts a reviewed content conflict, re-reads the head, and never disables the backend revision check; it is not an unconditional overwrite. Review status before important forced updates.
-
-## 🔒 Session syncing
-
-`syncSessions` defaults to `false`. Enabling it includes configured Pi session JSONL files and makes the privacy warning visible in settings, status, previews, and confirmations.
-
-Only JSONL session files are included. Denylisted names and paths such as `.env*`, `.pisync`, `node_modules`, `token`, and `secret` are ignored. The currently open session file is protected during pull; restart Pi or resume a pulled session to use newly synced conversations.
-
-Sessions can contain prompts, model output, tool results, file paths, images, and secrets. Use only storage you trust. Git is especially persistent: disabling session sync, deleting a cache/setup, or publishing a later snapshot does not remove session content from old commits; removal requires an explicit repository history-retention or rewrite procedure outside pi-sync.
+Before pull or rollback, pi-sync writes a backup under `.pisync/backups/`. Apply preflights paths and checksums, journals all mutations, restores the prior state after failures, and recovers interrupted journals on startup. Removing a local setup or connection never deletes remote data.
 
 ## 🛡️ Safety notes
 
-- Credentials stay local; canonical, legacy, temporary, and migration-recovery settings files are always excluded from snapshots. Git remote URLs with embedded HTTPS credentials are rejected, and rendered Git storage locations contain only host, owned branch, directory, and namespace.
-- Push refuses common secret patterns in locally managed files.
-- Pull/rollback reject unsafe paths, duplicate paths, checksum mismatches, symlink parents, and file/directory replacement hazards before mutation. Git additionally rejects missing/extra/non-regular tree entries, file/directory path collisions, payloads above 100 MiB, and aggregate content above 512 MiB. Remote JSON and WebDAV XML responses are limited to 1 MiB, error bodies to 64 KiB, compressed S3/WebDAV snapshot downloads to 256 MiB, and decompressed bundles to 512 MiB.
-- Unmanaged local/remote files remain preserved.
-- A live local lock disables destructive work. Stale/unreadable lock recovery retains process-liveness and guard checks.
-- Force operations remain explicit direct/conflict-recovery actions and retain exact confirmations.
-- Terminal-bound config, remote metadata, machine names, paths, and errors are control-character sanitized.
+- Canonical, legacy, temporary, and recovery settings paths are denied from snapshots.
+- Push scans managed local content for common secret patterns.
+- Remote snapshot references, checksums, paths, manifests, response sizes, and publication revisions are validated.
+- Symlink parents, path escapes, duplicate paths, and unsafe file/directory replacement fail before local mutation.
+- Live locks block mutation; stale recovery rechecks process and guard ownership.
+- Cancellation aborts preparation and dialogs. Publication/apply commit boundaries finish with bounded signals and report ambiguous outcomes explicitly.
+- Terminal-bound names, paths, metadata, and errors are control-character sanitized.
 
 ## ♿ Conditional terminal accessibility smoke
 
-Pi exposes terminal components rather than a semantic/ARIA tree, so automated tests verify textual state, keyboard paths, control-character escaping, and 32/60/100-column fitting rather than claiming semantic announcements. When validating a release in a supported environment:
-
-1. open `/sync` using only the keyboard and verify arrows, Enter, Space, search typing, paging where available, Back, and Escape;
-2. enter a Unicode sync-setup/storage-connection name with an IME and confirm focus returns to Pi after closing;
-3. check the main, warning, preview, saved, cancelled, and invalid states with the terminal screen reader in use;
-4. repeat under a light and dark Pi theme and at 32, 60, and 100 columns.
-
-Critical meaning is always present in text such as `(current)`, `Warning`, `Invalid`, `Saved`, `Cancelled`, or `Applied`; color is supplementary.
+Pi exposes terminal components rather than a semantic/ARIA tree. Release validation checks textual state, keyboard operation, Escape/Back, control escaping, and narrow rendering. Critical meaning appears in text such as `(current)`, `Warning`, `Invalid`, `Saved`, `Cancelled`, and `Applied`; color is supplementary.
 
 ## 🗂️ Package layout
 
 ```text
 extensions/pi-sync/
 ├── src/
-│   ├── index.ts                 # Thin Pi entrypoint
-│   ├── sync.ts                  # Command registration and session lifecycle
-│   ├── sync-operations.ts       # Backend-neutral sync orchestration
-│   ├── sync-backend.ts          # Backend contract, revisions, capabilities, and errors
-│   ├── backend-factory.ts       # Backend selection from normalized settings
-│   ├── s3-backend.ts            # S3/R2 persistence, publication, history, and diagnostics
-│   ├── s3-client.ts             # Bounded, signed S3 transport
-│   ├── webdav-backend.ts        # Conditional WebDAV publication and diagnostics
-│   ├── webdav-client.ts         # Bounded authenticated WebDAV transport
-│   ├── webdav-ui.ts             # WebDAV setup and connection/setup management
-│   ├── git-backend.ts           # Lease-protected Git commits, history, cache, and diagnostics
-│   ├── git-storage.ts           # Strict Git manifest, tree, blob, and size validation
-│   ├── git-runner.ts            # Bounded non-interactive Git subprocess lifecycle
-│   ├── git-ui.ts                # Git setup and connection/setup management
-│   ├── snapshot-codec.ts        # S3/WebDAV immutable snapshot bundle codec
-│   ├── manager-ui.ts            # Goal-oriented menus and setup/management flows
-│   ├── file-selection.ts        # Transactional synced-content editor
-│   ├── config-file.ts           # Private settings I/O and legacy filename migration
-│   ├── settings-management.ts   # Connections, setups, migration, and atomic saves
-│   ├── settings-ui.ts           # SettingsList interaction and serialized saves
-│   ├── target-switch.ts         # Post-switch prompt, policy, and setup handoff
-│   ├── snapshot-transaction.ts  # Local apply journal, rollback, and recovery
-│   └── *.ts                     # Config, policy, snapshot, S3, lock, and format modules
+│   ├── index.ts
+│   ├── sync.ts
+│   ├── config.ts
+│   ├── config-file.ts
+│   ├── settings-management.ts
+│   ├── manager-ui.ts
+│   ├── storage-connections-ui.ts
+│   ├── sync-setups-ui.ts
+│   ├── file-selection.ts
+│   ├── sync-operations.ts
+│   ├── sync-backend.ts
+│   ├── s3-backend.ts
+│   ├── webdav-backend.ts
+│   ├── git-backend.ts
+│   ├── snapshot.ts
+│   └── *.ts
 ├── test/
 ├── README.md
 ├── LICENSE
-├── tsconfig.json
 └── package.json
 ```
 
 ## 🔎 Keywords
 
-Pi extension, Pi coding agent, settings sync, Git, GitHub, GitLab, Forgejo, WebDAV, Nextcloud, ownCloud, Synology, Cloudflare R2, S3-compatible storage, storage connections, sync setups, snapshot sync, dotfiles sync.
+Pi extension, Pi coding agent, settings sync, Git, WebDAV, Nextcloud, Cloudflare R2, S3-compatible storage, storage connections, sync setups, snapshot sync, dotfiles sync.
 
 ## 📄 License
 

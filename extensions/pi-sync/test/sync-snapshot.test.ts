@@ -253,6 +253,46 @@ test("snapshot apply leaves unselected local files and directories untouched", a
 	});
 });
 
+test("snapshot apply replaces a configured custom file with a remote directory", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(path.join(agentDir, "custom"), "local file\n");
+		const remote = snapshot([{ path: "custom/child.txt", content: Buffer.from("remote child\n") }]);
+
+		await applySnapshot(remote, new Set(), { include: ["custom"] });
+
+		assert.deepEqual(readdirSync(path.join(agentDir, "custom")), ["child.txt"]);
+		assert.equal(
+			readFileSync(path.join(agentDir, "custom", "child.txt"), "utf8"),
+			"remote child\n",
+		);
+	});
+});
+
+test("snapshot apply restores a custom file when directory replacement fails", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const customPath = path.join(agentDir, "custom");
+		const childPath = path.join(customPath, "child.txt");
+		writeFileSync(customPath, "local file\n");
+		const remote = snapshot([{ path: "custom/child.txt", content: Buffer.from("remote child\n") }]);
+		const originalWriteFile = fs.writeFile;
+		fs.writeFile = (async (...args: Parameters<typeof fs.writeFile>) => {
+			if (String(args[0]) === childPath) throw new Error("injected custom child failure");
+			return originalWriteFile(...args);
+		}) as typeof fs.writeFile;
+		try {
+			await assert.rejects(
+				applySnapshot(remote, new Set(), { include: ["custom"] }),
+				/injected custom child failure/u,
+			);
+		} finally {
+			fs.writeFile = originalWriteFile;
+		}
+		assert.equal(readFileSync(customPath, "utf8"), "local file\n");
+	});
+});
+
 test("snapshot apply deletes stale top-level case variants", async () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-sync-apply-case-"));
 	writeFileSync(path.join(root, "append_system.md"), "old\n");

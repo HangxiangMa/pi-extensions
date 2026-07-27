@@ -1,331 +1,188 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import test from "node:test";
+import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
 import {
-	createCustomSelectorHarness,
-	createMockContext,
-	createMockPi,
-} from "../../../test/support.js";
-import { completeSyncArguments, setSyncTargetCompletions } from "../src/command.js";
-import { loadConfig, localConfigPath, readLocalConfigObject } from "../src/config.js";
-import sync from "../src/sync.js";
+	loadConfig,
+	loadPartialConfig,
+	localConfigPath,
+	readLocalConfigObject,
+	updateLocalConfig,
+} from "../src/config.js";
 import {
-	repairableWebDavDestinationName,
 	showAddWebDavStorageProfile,
 	showAddWebDavTarget,
-	showEditWebDavStorageProfile,
 	showEditWebDavTarget,
-	showRepairWebDavDestination,
+	showWebDavSetup,
 } from "../src/webdav-ui.js";
-import { withTempHome } from "./helpers.js";
+import { v3S3Settings, withTempHome } from "./helpers.js";
 
-test("first-time WebDAV setup collects a masked password and stores a usable profile", async () => {
+test("first WebDAV setup stores masked credentials in the exact version 3 shape", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
-		const mock = createMockPi();
-		sync(mock.pi);
-		const selections = [
-			"Set up sync",
-			"WebDAV",
-			"Personal / Home",
+		const inputs = ["https://cloud.example.com/remote.php/dav/files/user", "user", "pi-sync/home"];
+		const choices = [
 			"Recommended Pi settings",
 			"Enable automatic sync",
 			"Keep sessions off (recommended)",
 			"Save setup",
-			undefined,
 		];
-		const inputs = [
-			"https://cloud.example.com/remote.php/dav/files/user",
-			"user",
-			"pi-sync",
-			"home",
-		];
-		const inputTitles: string[] = [];
 		const rendered: string[] = [];
 		const { ctx } = createMockContext({
 			hasUI: true,
 			mode: "tui",
+			input: async () => inputs.shift(),
 			select: async (title: string) => {
 				rendered.push(title);
-				return selections.shift();
-			},
-			input: async (title: string) => {
-				inputTitles.push(title);
-				return inputs.shift();
+				return choices.shift();
 			},
 			custom: secretInput("app-password", rendered),
 		});
-
-		setSyncTargetCompletions([]);
-		await mock.commands.get("sync")?.handler("", ctx);
-
-		const saved = await readLocalConfigObject();
-		const profile = (saved?.profiles as Record<string, Record<string, unknown>>)?.webdav;
-		const target = (saved?.targets as Record<string, Record<string, unknown>>)?.home;
-		assert.equal(profile.kind, "webdav");
-		assert.equal(profile.url, "https://cloud.example.com/remote.php/dav/files/user/");
-		assert.equal(profile.username, "user");
-		assert.equal(profile.password, "app-password");
-		assert.equal(target.path, "pi-sync");
-		assert.equal(target.namespace, "home");
-		assert.ok(completeSyncArguments("use h")?.some((item) => item.value === "use home"));
-		assert.deepEqual(inputTitles, [
-			"WebDAV collection URL",
-			"WebDAV username",
-			"WebDAV remote path",
-			"Remote namespace",
-		]);
-		assert.doesNotMatch(rendered.join("\n"), /app-password/);
-		assert.match(rendered.join("\n"), /Password: configured/i);
-	});
-});
-
-test("WebDAV setup cannot continue after its session is aborted", async () => {
-	await withTempHome(async (agentDir) => {
-		mkdirSync(agentDir, { recursive: true });
-		writeFileSync(localConfigPath(), JSON.stringify({ version: 2, profiles: {}, targets: {} }));
-		const controller = new AbortController();
-		let resolveInput: ((value: string) => void) | undefined;
-		let inputCalls = 0;
-		const { ctx } = createMockContext({
-			hasUI: true,
-			mode: "tui",
-			input: async () => {
-				inputCalls += 1;
-				return await new Promise<string>((resolve) => {
-					resolveInput = resolve;
-				});
-			},
+		assert.equal(await showWebDavSetup(ctx, "home"), true);
+		const raw = await readLocalConfigObject();
+		assert.deepEqual(raw?.storageConnections.webdav, {
+			type: "webdav",
+			url: "https://cloud.example.com/remote.php/dav/files/user/",
+			credentials: { username: "user", password: "app-password" },
 		});
-		const setup = showAddWebDavStorageProfile(ctx, controller.signal);
-		while (!resolveInput) await new Promise((resolve) => setImmediate(resolve));
-		controller.abort(new DOMException("Session replaced", "AbortError"));
-		resolveInput("dav");
-		await assert.rejects(
-			setup,
-			(error: unknown) => error instanceof Error && error.name === "AbortError",
-		);
-		assert.equal(inputCalls, 1);
-		assert.deepEqual((await readLocalConfigObject())?.profiles, {});
-	});
-});
-
-test("WebDAV storage connection and sync setup management preserve hidden credentials", async () => {
-	await withTempHome(async (agentDir) => {
-		mkdirSync(agentDir, { recursive: true });
-		writeFileSync(
-			localConfigPath(),
-			JSON.stringify({ version: 2, profiles: {}, targets: {}, futureField: "preserved" }),
-		);
-		const selections = [
-			"Add storage connection",
-			"Recommended Pi settings",
-			"Add sync setup",
-			"Keep current password",
-			"Save storage connection",
-			"Save sync setup",
-		];
-		const inputs = [
-			"dav",
-			"https://cloud.example.com/remote.php/dav/files/user",
-			"private-user",
-			"pi-sync",
-			"home",
-			"https://cloud.example.com/remote.php/dav/files/private-user",
-			"new-private-user",
-			"new-path",
-			"new-space",
-		];
-		const rendered: string[] = [];
-		const { ctx } = createMockContext({
-			hasUI: true,
-			mode: "tui",
-			select: async (title: string) => {
-				rendered.push(title);
-				return selections.shift();
-			},
-			input: async () => inputs.shift(),
-			custom: secretInput("private-password", rendered),
+		assert.deepEqual(raw?.syncSetups.home.storage, {
+			connection: "webdav",
+			path: "pi-sync/home",
 		});
-		assert.equal(await showAddWebDavStorageProfile(ctx), true);
-		assert.equal(await showAddWebDavTarget(ctx, "home", "dav"), true);
-		let saved = await readLocalConfigObject();
-		const originalProfile = requireRecord(saved?.profiles).dav;
-		assert.equal(await showEditWebDavStorageProfile(ctx, "dav", originalProfile), true);
-		assert.equal(
-			await showEditWebDavTarget(ctx, {
-				settingsVersion: 2,
-				storageKind: "webdav",
-				target: "home",
-				path: "pi-sync",
-				profile: "home",
-			}),
-			true,
-		);
-		saved = await readLocalConfigObject();
-		const profile = requireRecord(saved?.profiles).dav;
-		const target = requireRecord(saved?.targets).home;
-		assert.equal(profile.username, "new-private-user");
-		assert.equal(target.path, "new-path");
-		assert.equal(target.namespace, "new-space");
-		assert.equal(saved?.futureField, "preserved");
-		const output = rendered.join("\n");
-		assert.doesNotMatch(output, /private-user|new-private-user|remote\.php/);
-		assert.match(output, /value hidden/);
-
-		const beforeInvalidEdit = readFileSync(localConfigPath());
-		const invalidInputs = ["http://cloud.example.com/dav", "private-user"];
-		const { ctx: invalidCtx } = createMockContext({
-			hasUI: true,
-			mode: "tui",
-			input: async () => invalidInputs.shift(),
-		});
-		assert.equal(await showEditWebDavStorageProfile(invalidCtx, "dav", profile), false);
-		assert.deepEqual(readFileSync(localConfigPath()), beforeInvalidEdit);
+		assert.doesNotMatch(rendered.join("\n"), /app-password/u);
 	});
 });
 
-test("Add sync setup can create a WebDAV connection without leaving the manager flow", async () => {
+test("WebDAV connection reuse adds a second setup without exposing credentials", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
-		writeFileSync(
-			localConfigPath(),
-			JSON.stringify({
-				version: 2,
-				activeTarget: "home",
-				profiles: {
-					r2: {
-						kind: "r2",
-						endpoint: "https://account.r2.cloudflarestorage.com",
-						region: "auto",
-						accessKeyId: "access",
-						secretAccessKey: "secret",
-					},
-				},
-				targets: {
-					home: {
-						profile: "r2",
-						bucket: "pi-sync",
-						prefix: "pi-sync",
-						namespace: "home",
-					},
-				},
-			}),
-		);
-		const selections = [
-			"More…",
-			"Sync setups…",
-			"Add sync setup",
-			"Add a new storage connection…",
-			"WebDAV",
-			"Add storage connection",
-			"Recommended Pi settings",
-			"Add sync setup",
-			undefined,
-		];
-		const inputs = ["work", "dav", "https://cloud.example.com/dav", "user", "pi-sync", "work"];
-		const rendered: string[] = [];
-		const mock = createMockPi();
-		sync(mock.pi);
-		const { ctx } = createMockContext({
-			hasUI: true,
-			mode: "tui",
-			select: async (title: string) => {
-				rendered.push(title);
-				return selections.shift();
-			},
-			input: async () => inputs.shift(),
-			custom: secretInput("app-password", rendered),
-		});
-
-		await mock.commands.get("sync")?.handler("", ctx);
-
-		const saved = await readLocalConfigObject();
-		assert.equal(requireRecord(saved?.profiles).dav.password, "app-password");
-		assert.equal(requireRecord(saved?.targets).work.profile, "dav");
-		assert.equal(requireRecord(saved?.targets).work.path, "pi-sync");
-		assert.doesNotMatch(rendered.join("\n"), /app-password/);
-	});
-});
-
-test("WebDAV repair detection includes incompatible profile-only fields", async () => {
-	await withTempHome(async (agentDir) => {
-		mkdirSync(agentDir, { recursive: true });
-		writeFileSync(
-			localConfigPath(),
-			JSON.stringify({
-				version: 2,
-				activeTarget: "webdav",
-				profiles: {
-					webdav: {
-						kind: "webdav",
-						url: "https://cloud.example.com/dav",
-						username: "user",
-						password: "secret",
-						accessKeyId: "incompatible",
-					},
-				},
-				targets: {
-					webdav: { profile: "webdav", path: "pi-sync", namespace: "webdav" },
-				},
-			}),
-		);
-		assert.equal(await repairableWebDavDestinationName(), "webdav");
-	});
-});
-
-test("WebDAV repair removes incompatible fields and fills missing credentials through TUI", async () => {
-	await withTempHome(async (agentDir) => {
-		mkdirSync(agentDir, { recursive: true });
-		writeFileSync(
-			localConfigPath(),
-			JSON.stringify({
-				version: 2,
-				activeTarget: "webdav",
-				futureField: { preserved: true },
-				profiles: {
-					webdav: {
-						kind: "webdav",
-						url: "https://cloud.example.com/dav",
-						username: "user",
-					},
-				},
-				targets: {
-					webdav: {
-						profile: "webdav",
-						bucket: "pi-sync",
-						prefix: "pi-sync",
-						namespace: "webdav",
-						futureTarget: "preserved",
-					},
-				},
-			}),
-		);
-		const inputs = ["pi-sync", "webdav"];
+		writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+		const connectionInputs = ["dav", "https://cloud.example.com/dav", "user"];
 		const reviews: string[] = [];
-		const { ctx } = createMockContext({
+		const connectionCtx = createMockContext({
 			hasUI: true,
 			mode: "tui",
-			custom: secretInput("app-password", reviews),
-			input: async () => inputs.shift(),
+			input: async () => connectionInputs.shift(),
 			select: async (title: string) => {
 				reviews.push(title);
-				return "Repair storage location";
+				return "Add storage connection";
+			},
+			custom: secretInput("private-password", reviews),
+		});
+		assert.equal(await showAddWebDavStorageProfile(connectionCtx.ctx), true);
+
+		const targetInputs = ["backups/work"];
+		const targetChoices = ["Minimal settings", "Add sync setup"];
+		const targetCtx = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => targetInputs.shift(),
+			select: async (title: string) => {
+				reviews.push(title);
+				return targetChoices.shift();
 			},
 		});
+		assert.equal(await showAddWebDavTarget(targetCtx.ctx, "work", "dav"), true);
+		const config = await loadConfig("work");
+		assert.equal(config.connectionName, "dav");
+		assert.equal(config.storagePath, "backups/work");
+		assert.doesNotMatch(reviews.join("\n"), /private-password/u);
+	});
+});
 
-		assert.equal(await showRepairWebDavDestination(ctx, "webdav"), true);
-		const saved = await readLocalConfigObject();
-		const profile = requireRecord(saved?.profiles).webdav;
-		const target = requireRecord(saved?.targets).webdav;
-		assert.equal(profile.password, "app-password");
-		assert.equal(target.path, "pi-sync");
-		assert.equal(Object.hasOwn(target, "bucket"), false);
-		assert.equal(Object.hasOwn(target, "prefix"), false);
-		assert.equal(target.futureTarget, "preserved");
-		assert.deepEqual(saved?.futureField, { preserved: true });
-		assert.equal((await loadConfig()).backend.type, "webdav");
-		assert.doesNotMatch(reviews.join("\n"), /app-password/);
+test("WebDAV setup edit persists one complete path and rejects unsafe paths", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const settings = v3S3Settings();
+		(settings.storageConnections as Record<string, unknown>).dav = {
+			type: "webdav",
+			url: "https://cloud.example.com/dav",
+			credentials: { username: "user", password: "password" },
+		};
+		(settings.syncSetups as Record<string, unknown>).work = {
+			storage: { connection: "dav", path: "pi-sync/work" },
+			sync: { include: ["settings.json"], automatic: false },
+		};
+		writeFileSync(localConfigPath(), JSON.stringify(settings), { mode: 0o600 });
+		const inputs = ["archives/work"];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => inputs.shift(),
+			select: async () => "Save sync setup",
+		});
+		await showEditWebDavTarget(ctx, await loadPartialConfig("work"));
+		assert.equal((await loadConfig("work")).storagePath, "archives/work");
+
+		const before = readFileSync(localConfigPath());
+		const invalid = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => "../escape",
+			select: async () => "Save sync setup",
+		});
+		assert.equal(await showEditWebDavTarget(invalid.ctx, await loadPartialConfig("work")), false);
+		assert.match(invalid.notifications.at(-1)?.message ?? "", /Invalid pi-sync WebDAV path/u);
+		assert.deepEqual(readFileSync(localConfigPath()), before);
+	});
+});
+
+test("WebDAV setup edit rejects a backend rebind while its review is open", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const settings = v3S3Settings();
+		(settings.storageConnections as Record<string, unknown>).dav = {
+			type: "webdav",
+			url: "https://cloud.example.com/dav",
+			credentials: { username: "user", password: "password" },
+		};
+		(settings.syncSetups as Record<string, unknown>).work = {
+			storage: { connection: "dav", path: "pi-sync/work" },
+			sync: { include: ["settings.json"], automatic: false },
+		};
+		writeFileSync(localConfigPath(), JSON.stringify(settings), { mode: 0o600 });
+		const partial = await loadPartialConfig("work");
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => "archives/work",
+			select: async () => {
+				await updateLocalConfig((current) => ({
+					...current,
+					syncSetups: {
+						...current.syncSetups,
+						work: {
+							...current.syncSetups.work,
+							storage: {
+								connection: "r2",
+								bucket: "pi-sync-test",
+								path: "rebound/work",
+							},
+						},
+					},
+				}));
+				return "Save sync setup";
+			},
+		});
+		await assert.rejects(showEditWebDavTarget(ctx, partial), /changed while it was open/u);
+		const config = await loadConfig("work");
+		assert.equal(config.connectionName, "r2");
+		assert.equal(config.storagePath, "rebound/work");
+	});
+});
+
+test("cancelled WebDAV setup leaves settings byte-for-byte unchanged", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const before = Buffer.from(`${JSON.stringify(v3S3Settings())}\n`);
+		writeFileSync(localConfigPath(), before, { mode: 0o600 });
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => undefined,
+		});
+		assert.equal(await showAddWebDavStorageProfile(ctx), false);
+		assert.deepEqual(readFileSync(localConfigPath()), before);
 	});
 });
 
@@ -336,9 +193,4 @@ function secretInput(secret: string, rendered: string[] = []) {
 		harness.handleInput("tui.input.submit");
 		return harness.result;
 	};
-}
-
-function requireRecord(value: unknown): Record<string, Record<string, unknown>> {
-	assert.ok(value && typeof value === "object" && !Array.isArray(value));
-	return value as Record<string, Record<string, unknown>>;
 }

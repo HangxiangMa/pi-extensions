@@ -59,29 +59,29 @@ test("Git backend publishes lease-protected commits and preserves repeated-conte
 		const firstTree = publicationTree(fixture.remote, first.head.snapshotRef);
 		const thirdTree = publicationTree(fixture.remote, third.head.snapshotRef);
 		assert.deepEqual([...firstTree.keys()].sort(), [
-			"pi-sync/profiles/default/files/copies/keybindings.json",
-			"pi-sync/profiles/default/files/keybindings.json",
-			"pi-sync/profiles/default/files/settings.json",
-			"pi-sync/profiles/default/manifest.json",
+			"pi-sync/files/copies/keybindings.json",
+			"pi-sync/files/keybindings.json",
+			"pi-sync/files/settings.json",
+			"pi-sync/manifest.json",
 		]);
 		assert.equal(
-			firstTree.get("pi-sync/profiles/default/files/keybindings.json"),
-			firstTree.get("pi-sync/profiles/default/files/copies/keybindings.json"),
+			firstTree.get("pi-sync/files/keybindings.json"),
+			firstTree.get("pi-sync/files/copies/keybindings.json"),
 		);
 		assert.equal(
-			firstTree.get("pi-sync/profiles/default/files/keybindings.json"),
-			thirdTree.get("pi-sync/profiles/default/files/keybindings.json"),
+			firstTree.get("pi-sync/files/keybindings.json"),
+			thirdTree.get("pi-sync/files/keybindings.json"),
 		);
 		assert.notEqual(
-			firstTree.get("pi-sync/profiles/default/files/settings.json"),
-			thirdTree.get("pi-sync/profiles/default/files/settings.json"),
+			firstTree.get("pi-sync/files/settings.json"),
+			thirdTree.get("pi-sync/files/settings.json"),
 		);
 		assert.deepEqual(
 			execFileSync("git", [
 				"--git-dir",
 				fixture.remote,
 				"show",
-				`${third.head.snapshotRef}:pi-sync/profiles/default/files/settings.json`,
+				`${third.head.snapshotRef}:pi-sync/files/settings.json`,
 			]),
 			Buffer.from("two"),
 		);
@@ -309,7 +309,7 @@ test("Git backend bootstraps its owned branch in an existing non-empty repositor
 		assert.deepEqual(await backend.readSnapshot(publication.head.snapshotRef), empty);
 		assert.deepEqual(
 			[...publicationTree(fixture.remote, publication.head.snapshotRef).keys()],
-			["pi-sync/profiles/default/manifest.json"],
+			["pi-sync/manifest.json"],
 		);
 		assert.equal(
 			execFileSync("git", ["--git-dir", fixture.remote, "rev-parse", "refs/heads/main"], {
@@ -580,7 +580,7 @@ test("Git backend fails closed on malformed native publication trees", async (t)
 		{
 			name: "extra payload",
 			expected: /missing or extra/i,
-			mutate: (work) => writeFileSync(path.join(work, "pi-sync/profiles/default/files/extra"), "x"),
+			mutate: (work) => writeFileSync(path.join(work, "pi-sync/files/extra"), "x"),
 			verify: (backend) => backend.readHead(),
 		},
 		{
@@ -694,10 +694,7 @@ test("Git doctor rejects a corrupt active snapshot blob", async () => {
 		execFileSync("git", ["clone", "--branch", "pi-sync/default", fixture.remote, corruptWork], {
 			stdio: "ignore",
 		});
-		writeFileSync(
-			path.join(corruptWork, "pi-sync", "profiles", "default", "files", "settings.json"),
-			"corrupt",
-		);
+		writeFileSync(path.join(corruptWork, "pi-sync", "files", "settings.json"), "corrupt");
 		execFileSync("git", ["add", "."], { cwd: corruptWork });
 		execFileSync(
 			"git",
@@ -807,8 +804,8 @@ async function malformedPublicationError(
 		});
 		mutate(
 			work,
-			path.join(work, "pi-sync", "profiles", "default", "manifest.json"),
-			path.join(work, "pi-sync", "profiles", "default", "files", "settings.json"),
+			path.join(work, "pi-sync", "manifest.json"),
+			path.join(work, "pi-sync", "files", "settings.json"),
 		);
 		execFileSync("git", ["add", "--all"], { cwd: work });
 		execFileSync(

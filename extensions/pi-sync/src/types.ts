@@ -1,73 +1,102 @@
-export type StorageProfileKind = "r2" | "s3-compatible" | "webdav" | "git";
-export type TargetSwitchAction = "ask" | "pull" | "switch-only";
+export type StorageConnectionType = "s3" | "git" | "webdav";
+export type OnSwitchAction = "ask-before-pull" | "pull-after-switch" | "switch-only";
 
-export interface S3StorageProfileFields {
-	endpoint?: string;
-	region?: string;
-	accessKeyId?: string;
-	secretAccessKey?: string;
+export interface S3CredentialsSettings {
+	accessKeyId: string;
+	secretAccessKey: string;
 	sessionToken?: string;
-}
-
-export type S3StorageProfileSettings = S3StorageProfileFields &
-	({ kind?: undefined } | { kind: "r2" } | { kind: "s3-compatible" });
-
-export interface WebDavStorageProfileSettings {
-	kind: "webdav";
-	url?: string;
-	username?: string;
-	password?: string;
-}
-
-export interface GitStorageProfileSettings {
-	kind: "git";
-	remote?: string;
-}
-
-export type StorageProfileSettings =
-	| S3StorageProfileSettings
-	| WebDavStorageProfileSettings
-	| GitStorageProfileSettings;
-
-export interface CommonSyncTargetSettings {
-	profile?: string;
-	autoSync?: boolean;
-	syncFiles?: unknown;
-	syncSessions?: boolean;
-	extraFiles?: unknown;
-}
-
-export interface S3SyncTargetSettings extends CommonSyncTargetSettings {
-	bucket?: string;
-	prefix?: string;
-	namespace?: string;
-}
-
-export interface WebDavSyncTargetSettings extends CommonSyncTargetSettings {
-	path?: string;
-	namespace?: string;
-}
-
-export interface GitSyncTargetSettings extends CommonSyncTargetSettings {
-	branch?: string;
-	directory?: string;
-	namespace?: string;
-}
-
-export type SyncTargetSettings =
-	| S3SyncTargetSettings
-	| WebDavSyncTargetSettings
-	| GitSyncTargetSettings;
-
-export interface PiSyncSettingsV2 {
-	version: 2;
-	activeTarget?: string;
-	targetSwitchAction?: TargetSwitchAction;
-	profiles?: Record<string, StorageProfileSettings>;
-	targets?: Record<string, SyncTargetSettings>;
 	[key: string]: unknown;
 }
 
+export interface WebDavCredentialsSettings {
+	username: string;
+	password: string;
+	[key: string]: unknown;
+}
+
+export interface S3StorageConnectionSettings {
+	type: "s3";
+	endpoint: string;
+	region: string;
+	credentials: S3CredentialsSettings;
+	remote?: never;
+	url?: never;
+	[key: string]: unknown;
+}
+
+export interface GitStorageConnectionSettings {
+	type: "git";
+	remote: string;
+	endpoint?: never;
+	region?: never;
+	credentials?: never;
+	url?: never;
+	[key: string]: unknown;
+}
+
+export interface WebDavStorageConnectionSettings {
+	type: "webdav";
+	url: string;
+	credentials: WebDavCredentialsSettings;
+	endpoint?: never;
+	region?: never;
+	remote?: never;
+	[key: string]: unknown;
+}
+
+export type StorageConnectionSettings =
+	| S3StorageConnectionSettings
+	| GitStorageConnectionSettings
+	| WebDavStorageConnectionSettings;
+
+export interface CommonSyncSetupStorageSettings {
+	connection: string;
+	path: string;
+	[key: string]: unknown;
+}
+
+export interface S3SyncSetupStorageSettings extends CommonSyncSetupStorageSettings {
+	bucket: string;
+	branch?: never;
+}
+
+export interface GitSyncSetupStorageSettings extends CommonSyncSetupStorageSettings {
+	branch: string;
+	bucket?: never;
+}
+
+export interface WebDavSyncSetupStorageSettings extends CommonSyncSetupStorageSettings {
+	bucket?: never;
+	branch?: never;
+}
+
+export type SyncSetupStorageSettings =
+	| S3SyncSetupStorageSettings
+	| GitSyncSetupStorageSettings
+	| WebDavSyncSetupStorageSettings;
+
+export interface SyncPolicySettings {
+	include: string[];
+	automatic: boolean;
+	[key: string]: unknown;
+}
+
+export interface SyncSetupSettings {
+	storage: SyncSetupStorageSettings;
+	sync: SyncPolicySettings;
+	[key: string]: unknown;
+}
+
+export interface PiSyncSettingsV3 {
+	version: 3;
+	activeSyncSetup?: string;
+	onSwitch: OnSwitchAction;
+	storageConnections: Record<string, StorageConnectionSettings>;
+	syncSetups: Record<string, SyncSetupSettings>;
+	[key: string]: unknown;
+}
+
+/** Backend-only resolved S3 connection fields. */
 export interface ResolvedS3StorageProfile {
 	kind: "r2" | "s3-compatible";
 	endpoint: string;
@@ -77,9 +106,11 @@ export interface ResolvedS3StorageProfile {
 	sessionToken?: string;
 }
 
+/** Backend-only coordinates. `prefix` is the complete reviewed v3 storage path. */
 export interface ResolvedS3Destination {
 	bucket: string;
 	prefix: string;
+	/** Snapshot/wire identity; never derived from the local setup name. */
 	namespace: string;
 }
 
@@ -94,20 +125,12 @@ export interface ResolvedWebDavStorageProfile {
 	url: string;
 	username: string;
 	password: string;
-	/** S3-only compatibility properties remain absent at runtime. */
-	endpoint?: string;
-	region?: string;
-	accessKeyId?: string;
-	secretAccessKey?: string;
-	sessionToken?: string;
 }
 
+/** Backend-only coordinates. `path` is the complete reviewed v3 storage path. */
 export interface ResolvedWebDavDestination {
 	path: string;
 	namespace: string;
-	/** S3-only compatibility properties remain absent at runtime. */
-	bucket?: string;
-	prefix?: string;
 }
 
 export interface ResolvedWebDavBackend {
@@ -119,25 +142,13 @@ export interface ResolvedWebDavBackend {
 export interface ResolvedGitStorageProfile {
 	kind: "git";
 	remote: string;
-	/** S3/WebDAV-only compatibility properties remain absent at runtime. */
-	endpoint?: string;
-	region?: string;
-	accessKeyId?: string;
-	secretAccessKey?: string;
-	sessionToken?: string;
-	url?: string;
-	username?: string;
-	password?: string;
 }
 
+/** Backend-only coordinates. `directory` is the complete reviewed v3 storage path. */
 export interface ResolvedGitDestination {
 	branch: string;
 	directory: string;
 	namespace: string;
-	/** S3/WebDAV-only compatibility properties remain absent at runtime. */
-	bucket?: string;
-	prefix?: string;
-	path?: string;
 }
 
 export interface ResolvedGitBackend {
@@ -148,50 +159,32 @@ export interface ResolvedGitBackend {
 
 export type ResolvedSyncBackend = ResolvedS3Backend | ResolvedWebDavBackend | ResolvedGitBackend;
 
-export interface CommonSyncConfig {
-	/** Remote namespace retained as `profile` for snapshot/wire compatibility. */
-	profile: string;
-	target?: string;
-	storageProfile?: string;
-	autoSync?: boolean;
-	settingsVersion?: 1 | 2;
-	syncFiles?: string[];
-	syncSessions: boolean;
-	extraFiles: string[];
+export interface SyncConfig<Backend extends ResolvedSyncBackend = ResolvedS3Backend> {
+	setupName: string;
+	connectionName: string;
+	storagePath: string;
+	/** Snapshot/wire identity retained behind the settings normalization boundary. */
+	snapshotIdentity: string;
+	include: string[];
+	automatic: boolean;
+	onSwitch: OnSwitchAction;
+	backend: Backend;
 }
 
-/** Discriminated union extended by each production backend. */
-export type SyncConfig<Backend extends ResolvedSyncBackend = ResolvedS3Backend> =
-	CommonSyncConfig & {
-		backend: Backend;
-	};
-
 export type AnySyncConfig = SyncConfig<ResolvedSyncBackend>;
+export type CommonSyncConfig = Omit<AnySyncConfig, "backend">;
 
+/** UI projection over a fully validated v3 setup; it is never persisted directly. */
 export interface PartialConfig {
-	target?: string;
-	storageProfile?: string;
-	storageKind?: StorageProfileKind;
-	settingsVersion?: 1 | 2;
-	endpoint?: string;
-	url?: string;
-	username?: string;
-	password?: string;
-	remote?: string;
+	setupName: string;
+	connectionName: string;
+	storageKind: StorageConnectionType;
+	storagePath: string;
+	include: string[];
+	automatic: boolean;
+	onSwitch: OnSwitchAction;
 	bucket?: string;
-	path?: string;
 	branch?: string;
-	directory?: string;
-	region?: string;
-	accessKeyId?: string;
-	secretAccessKey?: string;
-	sessionToken?: string;
-	profile?: string;
-	prefix?: string;
-	autoSync?: boolean | string;
-	syncFiles?: unknown;
-	syncSessions?: boolean | string;
-	extraFiles?: unknown;
 }
 
 export interface SnapshotFile {
@@ -205,6 +198,7 @@ export interface Snapshot {
 	id: string;
 	createdAt: string;
 	machine: string;
+	/** Backend-scoped remote identity retained in the snapshot wire format. */
 	profile: string;
 	syncSessions?: boolean;
 	files: SnapshotFile[];
@@ -231,9 +225,10 @@ export interface SyncState {
 	profile: string;
 	lastAppliedSnapshot?: string;
 	lastRemoteRevision?: string;
-	/** Legacy state field accepted for compatibility but never reinterpreted. */
 	lastRemoteEtag?: string;
 	lastFileHashes: Record<string, string>;
+	include?: string[];
+	/** Legacy state fields are read only so v3 can detect and replace stale policy state. */
 	syncFiles?: string[];
 	syncSessions?: boolean;
 	extraFiles?: string[];
@@ -253,7 +248,7 @@ export interface CommandOptions {
 	silent: boolean;
 	reload: boolean;
 	auto: boolean;
-	target?: string;
+	setup?: string;
 	signal?: AbortSignal;
 	onCommit?: () => void;
 	args: string[];
@@ -266,9 +261,11 @@ export interface CommandArgumentCompletion {
 }
 
 export interface SnapshotOptions {
+	include?: string[];
+	sessionDir?: string;
+	/** Temporary internal projections while snapshot storage remains wire-compatible. */
 	syncFiles?: string[];
 	syncSessions?: boolean;
-	sessionDir?: string;
 	extraFiles?: string[];
 }
 

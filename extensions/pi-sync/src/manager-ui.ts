@@ -1,22 +1,21 @@
 import { BorderedLoader, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { setSyncTargetCompletions } from "./command.js";
+import { setSyncSetupCompletions } from "./command.js";
 import {
 	activeLocalConfigPath,
-	configuredTargetNames,
-	deprecatedPiSyncEnvironmentWarnings,
+	configuredSyncSetupNames,
 	isCloudflareR2Endpoint,
 	loadConfig,
+	loadOnSwitch,
 	loadPartialConfig,
-	loadTargetSwitchAction,
-	normalizeSyncFiles,
+	localConfigPath,
 	readLocalConfigObject,
 	readStateForConfig,
+	syncConfigReviewIdentity,
 } from "./config.js";
 import { showAddGitTarget, showEditGitTarget, showGitSetup } from "./git-ui.js";
 import { inspectLock, isStaleLock } from "./lock.js";
 import {
 	errorMessage,
-	formatRemotePath,
 	ownRecord,
 	requiredExistingBucket,
 	requiredInput,
@@ -24,25 +23,18 @@ import {
 } from "./manager-helpers.js";
 import { chooseS3Credentials } from "./s3-credentials-ui.js";
 import {
-	addSyncTarget,
-	migrateLegacySettings,
-	removeSyncTarget,
-	saveNewV2Settings,
-	updateSyncTarget,
+	addSyncSetup,
+	removeSyncSetup,
+	saveNewV3Settings,
+	updateSyncSetup,
 } from "./settings-management.js";
 import { showSyncSettings } from "./settings-ui.js";
+import { type SetupPullOutcome, useSyncSetup } from "./setup-switch.js";
 import { showAddStorageConnection, showStorageConnections } from "./storage-connections-ui.js";
-import { DEFAULT_SYNC_FILES } from "./sync-policy.js";
+import { DEFAULT_SYNC_INCLUDE, syncIncludeSelection } from "./sync-policy.js";
 import { countValidSyncSetups, showSyncSetups } from "./sync-setups-ui.js";
-import { type TargetPullOutcome, useSyncTarget } from "./target-switch.js";
 import type { AnySyncConfig } from "./types.js";
-import {
-	repairableWebDavDestinationName,
-	showAddWebDavTarget,
-	showEditWebDavTarget,
-	showRepairableWebDavDestination,
-	showWebDavSetup,
-} from "./webdav-ui.js";
+import { showAddWebDavTarget, showEditWebDavTarget, showWebDavSetup } from "./webdav-ui.js";
 
 export const MAIN_MENU_ACTIONS = [
 	"Sync now (recommended)",
@@ -68,7 +60,7 @@ type RunRoute = (
 	signal?: AbortSignal,
 	onCommit?: () => void,
 	target?: string,
-) => Promise<TargetPullOutcome | undefined>;
+) => Promise<SetupPullOutcome | undefined>;
 
 export async function showSyncManager(
 	ctx: ExtensionCommandContext,
@@ -94,13 +86,12 @@ export async function showSyncManager(
 				| "Help"
 				| "Set up sync"
 				| "Use existing settings"
-				| "Repair WebDAV storage location"
 		) {
 			case "Sync now (recommended)":
 				await runCancellableOperation(ctx, "Checking current sync setup…", "sync", runRoute, true);
 				break;
 			case "Switch sync setup": {
-				const result = await showTargetSwitcher(ctx, runRoute);
+				const result = await showSetupSwitcher(ctx, runRoute, undefined, sessionSignal);
 				if (result === "pull-attempted") return;
 				if (result === "switched") continue;
 				break;
@@ -109,7 +100,7 @@ export async function showSyncManager(
 				await runCancellableOperation(ctx, "Checking current sync setup…", "diff", runRoute);
 				break;
 			case "Settings":
-				await showSyncSettings(ctx, runRoute);
+				await showSyncSettings(ctx, runRoute, sessionSignal);
 				break;
 			case "More…":
 				if ((await showMoreMenu(ctx, runRoute, sessionSignal)) === "exit") return;
@@ -119,9 +110,6 @@ export async function showSyncManager(
 				break;
 			case "Storage connections…":
 				await showStorageConnections(ctx, sessionSignal);
-				break;
-			case "Repair WebDAV storage location":
-				await showRepairableWebDavDestination(ctx, sessionSignal);
 				break;
 			case "History & recovery…":
 				await showRecoveryMenu(ctx, runRoute);
@@ -190,7 +178,7 @@ async function runCancellableOperation(
 	}
 	let commitStarted = false;
 	let operation: Promise<void> | undefined;
-	let routeResult: TargetPullOutcome | undefined;
+	let routeResult: SetupPullOutcome | undefined;
 	const result = await ctx.ui.custom<{ cancelled?: boolean; error?: unknown }>(
 		(tui, theme, _kb, done) => {
 			const loader = new BorderedLoader(tui, theme, message, { cancellable: true });
@@ -238,10 +226,9 @@ async function describeManagerState(
 	try {
 		raw = await readLocalConfigObject();
 	} catch (error) {
-		const repairableWebDav = await repairableWebDavDestinationName(signal).catch(() => undefined);
 		return {
 			title: [
-				"Pi Sync",
+				"Manage sync",
 				"",
 				"Settings file needs repair. Automatic sync and settings writes are paused.",
 				`Error: ${safeTerminalText(errorMessage(error))}`,
@@ -249,20 +236,20 @@ async function describeManagerState(
 				"",
 				"Repair the JSON file, then reopen /sync.",
 			].join("\n"),
-			actions: repairableWebDav ? ["Repair WebDAV storage location", "Help"] : ["Help"],
+			actions: ["Help"],
 		};
 	}
 	if (!raw) {
 		return {
-			title: ["Pi Sync", "", "Not set up.", "", "What do you want to do?"].join("\n"),
+			title: ["Manage sync", "", "Not set up.", "", "What do you want to do?"].join("\n"),
 			actions: ["Set up sync", "Help"],
 		};
 	}
-	const configuredTargets = ownRecord(raw.targets);
-	if (raw.version === 2 && configuredTargets && Object.keys(configuredTargets).length === 0) {
+	const configuredTargets = ownRecord(raw.syncSetups);
+	if (raw.version === 3 && configuredTargets && Object.keys(configuredTargets).length === 0) {
 		return {
 			title: [
-				"Pi Sync",
+				"Manage sync",
 				"",
 				"No sync setups are configured.",
 				"Add a sync setup using an existing storage connection.",
@@ -274,16 +261,17 @@ async function describeManagerState(
 	}
 	try {
 		const config = await loadConfig();
-		const target = config.target ?? "default";
+		const target = config.setupName;
 		const storage = backendStorageDescription(config);
-		const warnings = config.backend.type === "s3" ? deprecatedPiSyncEnvironmentWarnings() : [];
+		const warnings: string[] = [];
 		const lock = await inspectLock();
 		const liveLock = lock.status === "valid" && !isStaleLock(lock.lock);
 		const recoverableLock =
 			lock.status === "unreadable" || (lock.status === "valid" && isStaleLock(lock.lock));
-		const builtInCount = normalizeSyncFiles(config.syncFiles).length;
-		const extraFileCount = config.extraFiles.length;
-		const noSyncedContent = builtInCount === 0 && extraFileCount === 0 && !config.syncSessions;
+		const selection = syncIncludeSelection(config.include);
+		const builtInCount = selection.builtIns.length;
+		const extraFileCount = selection.custom.length;
+		const noSyncedContent = config.include.length === 0;
 		const stateReadDisabled = liveLock || recoverableLock;
 		const syncState = stateReadDisabled
 			? undefined
@@ -301,12 +289,12 @@ async function describeManagerState(
 		);
 		return {
 			title: [
-				"Pi Sync",
+				"Manage sync",
 				"",
 				`Current sync setup: ${safeTerminalText(target)}`,
 				`Storage: ${storage}`,
-				`Included: ${builtInCount} built-in group${builtInCount === 1 ? "" : "s"} · ${extraFileCount} extra file${extraFileCount === 1 ? "" : "s"} · Sessions ${config.syncSessions ? "on" : "off"}`,
-				`Automatic sync: ${config.autoSync ? "On" : "Off"}`,
+				`Included: ${builtInCount} built-in group${builtInCount === 1 ? "" : "s"} · ${extraFileCount} extra path${extraFileCount === 1 ? "" : "s"} · Sessions ${selection.sessions ? "on" : "off"}`,
+				`Automatic sync: ${config.automatic ? "On" : "Off"}`,
 				`Last applied: ${lastAppliedSnapshot}`,
 				"Remote status: Not checked",
 				...warnings.map((warning) => `Warning: ${safeTerminalText(warning)}`),
@@ -339,10 +327,10 @@ async function describeManagerState(
 		if (signal?.aborted) throw error;
 		return {
 			title: [
-				"Pi Sync",
+				"Manage sync",
 				"",
 				"Settings need attention. Automatic sync is paused.",
-				`Current sync setup: ${safeTerminalText(typeof raw.activeTarget === "string" ? raw.activeTarget : "default")}`,
+				`Current sync setup: ${safeTerminalText(typeof raw.activeSyncSetup === "string" ? raw.activeSyncSetup : "none")}`,
 				`Error: ${safeTerminalText(errorMessage(error))}`,
 				`File: ${safeTerminalText(await activeLocalConfigPath())}`,
 				"",
@@ -354,7 +342,7 @@ async function describeManagerState(
 }
 
 function backendStorageDescription(config: AnySyncConfig) {
-	const connection = safeTerminalText(config.storageProfile ?? "default");
+	const connection = safeTerminalText(config.connectionName);
 	switch (config.backend.type) {
 		case "s3": {
 			const type =
@@ -372,14 +360,20 @@ function backendStorageDescription(config: AnySyncConfig) {
 }
 
 export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: AbortSignal) {
-	if (ctx.mode !== "tui") return false;
+	if (ctx.mode !== "tui") {
+		ctx.ui.notify(
+			`Guided sync setup requires TUI mode for masked credential input. Create version 3 settings in ${safeTerminalText(localConfigPath())}.`,
+			"warning",
+		);
+		return false;
+	}
 	const preset = await ctx.ui.select(
 		"Set up sync\n\nWhere will Pi settings be stored?",
 		["Cloudflare R2", "Other S3-compatible storage", "WebDAV", "Git", "Cancel"],
 		{ signal },
 	);
 	if (signal?.aborted || !preset || preset === "Cancel") return false;
-	const targetName = await chooseInitialTargetName(ctx);
+	const targetName = await chooseInitialTargetName(ctx, signal);
 	if (!targetName) return false;
 	if (preset === "WebDAV") {
 		const saved = await showWebDavSetup(ctx, targetName, signal);
@@ -399,17 +393,18 @@ export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: Abo
 		preset === "Cloudflare R2"
 			? "https://<account-id>.r2.cloudflarestorage.com"
 			: "https://s3.example.com",
+		signal,
 	);
 	if (!endpoint) return false;
 	let region = "auto";
 	if (preset !== "Cloudflare R2") {
-		const selectedRegion = await requiredInput(ctx, "Storage region", "us-east-1");
+		const selectedRegion = await requiredInput(ctx, "Storage region", "us-east-1", signal);
 		if (!selectedRegion) return false;
 		region = selectedRegion;
 	}
-	const location = await chooseInitialRemoteLocation(ctx, preset, targetName);
+	const location = await chooseInitialRemoteLocation(ctx, preset, targetName, signal);
 	if (!location) return false;
-	const { profileName, bucket, prefix, namespace } = location;
+	const { connectionName, bucket, path: storagePath } = location;
 	const credentials = await chooseS3Credentials(ctx, signal);
 	if (!credentials) return false;
 	const contentChoice = await ctx.ui.select(
@@ -419,7 +414,9 @@ export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: Abo
 	);
 	if (signal?.aborted || !contentChoice || contentChoice === "Cancel") return false;
 	const syncFiles =
-		contentChoice === "Minimal settings" ? ["settings.json", "AGENTS.md"] : [...DEFAULT_SYNC_FILES];
+		contentChoice === "Minimal settings"
+			? ["settings.json", "AGENTS.md"]
+			: [...DEFAULT_SYNC_INCLUDE];
 	const automaticChoice = await ctx.ui.select(
 		"Automatic sync for this setup",
 		["Enable automatic sync", "Keep automatic sync off", "Cancel"],
@@ -449,10 +446,10 @@ export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: Abo
 			"Review sync setup",
 			"",
 			`Sync setup: ${safeTerminalText(targetName)}`,
-			`Storage connection: ${safeTerminalText(profileName)} (${preset})`,
+			`Storage connection: ${safeTerminalText(connectionName)} (${preset})`,
 			`Endpoint: ${safeTerminalText(endpoint)}`,
 			`Bucket: ${safeTerminalText(bucket)}`,
-			`Storage location: ${formatRemotePath(prefix, namespace)}`,
+			`Storage location: ${safeTerminalText(storagePath)}`,
 			"Bucket must already exist. pi-sync will not create it.",
 			`Included content: ${syncFiles.length} built-in groups · Sessions: ${syncSessions ? "On — privacy warning acknowledged" : "Off"}`,
 			`Automatic sync: ${autoSync ? "On" : "Off"}`,
@@ -462,27 +459,32 @@ export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: Abo
 		{ signal },
 	);
 	if (signal?.aborted || choice !== "Save sync setup") return false;
-	await saveNewV2Settings({
-		targetName,
-		storageProfileName: profileName,
-		profile: {
-			kind: preset === "Cloudflare R2" ? "r2" : "s3-compatible",
-			endpoint,
-			region,
-			...credentials.profileFields,
+	await saveNewV3Settings(
+		{
+			setupName: targetName,
+			connectionName,
+			connection: {
+				type: "s3",
+				endpoint,
+				region,
+				credentials: {
+					accessKeyId: credentials.profileFields.accessKeyId ?? "",
+					secretAccessKey: credentials.profileFields.secretAccessKey ?? "",
+				},
+			},
+			setup: {
+				storage: { connection: connectionName, bucket, path: storagePath },
+				sync: {
+					include: [...syncFiles, ...(syncSessions ? ["sessions"] : [])],
+					automatic: autoSync,
+				},
+			},
 		},
-		target: {
-			bucket,
-			prefix,
-			namespace,
-			autoSync,
-			syncFiles,
-			syncSessions,
-			extraFiles: [],
-		},
-	});
+		signal,
+	);
 	if (signal?.aborted) return false;
 	await refreshTargetCompletions();
+	if (signal?.aborted) return true;
 	ctx.ui.notify(
 		credentials.ready
 			? `Sync setup “${safeTerminalText(targetName)}” is ready. Use Sync now when ready.`
@@ -492,36 +494,39 @@ export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: Abo
 	return true;
 }
 
-async function showTargetSwitcher(
+async function showSetupSwitcher(
 	ctx: ExtensionCommandContext,
 	runRoute: RunRoute,
 	selectedName?: string,
+	signal?: AbortSignal,
 ) {
 	const raw = await readLocalConfigObject();
-	if (raw?.version !== 2) {
+	if (signal?.aborted) return false;
+	if (raw?.version !== 3) {
 		ctx.ui.notify("Add a second sync setup before switching setups.", "info");
 		return false;
 	}
-	const targets = ownRecord(raw.targets);
+	const targets = ownRecord(raw.syncSetups);
 	if (!targets) {
 		ctx.ui.notify("No sync setups are configured.", "warning");
 		return false;
 	}
-	const active = typeof raw.activeTarget === "string" ? raw.activeTarget : undefined;
+	const active = typeof raw.activeSyncSetup === "string" ? raw.activeSyncSetup : undefined;
 	let name = selectedName;
 	if (!name) {
-		const profiles = ownRecord(raw.profiles);
+		const profiles = ownRecord(raw.storageConnections);
 		const labels = new Map<string, string>();
 		for (const candidate of Object.keys(targets).sort((left, right) => left.localeCompare(right))) {
 			const target = ownRecord(targets[candidate]);
-			const profileName = typeof target?.profile === "string" ? target.profile : undefined;
+			const storage = ownRecord(target?.storage);
+			const profileName = typeof storage?.connection === "string" ? storage.connection : undefined;
 			const profile = profileName && profiles ? ownRecord(profiles[profileName]) : undefined;
 			const location = profile
-				? profile.kind === "webdav"
-					? String(target?.path ?? "pi-sync")
-					: profile.kind === "git"
-						? String(target?.branch ?? "pi-sync")
-						: String(target?.bucket ?? "missing bucket")
+				? profile.type === "git"
+					? `${String(storage?.branch ?? "missing branch")}:${String(storage?.path ?? "missing path")}`
+					: profile.type === "s3"
+						? `${String(storage?.bucket ?? "missing bucket")}/${String(storage?.path ?? "missing path")}`
+						: String(storage?.path ?? "missing path")
 				: `invalid: missing connection ${profileName ?? "reference"}`;
 			const label = `${safeTerminalText(candidate)}${candidate === active ? " (current)" : ""} · ${safeTerminalText(profileName ?? "unknown")} · ${safeTerminalText(location)}`;
 			labels.set(label, candidate);
@@ -529,6 +534,7 @@ async function showTargetSwitcher(
 		const selected = await ctx.ui.select(
 			`Switch sync setup\n\nCurrent sync setup: ${safeTerminalText(active ?? "none")}`,
 			[...labels.keys(), BACK],
+			{ signal },
 		);
 		if (!selected || selected === BACK) return false;
 		name = labels.get(selected);
@@ -547,6 +553,7 @@ async function showTargetSwitcher(
 	let config: AnySyncConfig;
 	try {
 		config = await loadConfig(name);
+		if (signal?.aborted) return false;
 	} catch (error) {
 		ctx.ui.notify(
 			`Cannot use sync setup “${safeTerminalText(name)}”: ${safeTerminalText(errorMessage(error))}`,
@@ -554,11 +561,12 @@ async function showTargetSwitcher(
 		);
 		return false;
 	}
-	const targetSwitchAction = await loadTargetSwitchAction();
+	const onSwitch = await loadOnSwitch();
+	if (signal?.aborted) return false;
 	const switchEffect =
-		targetSwitchAction === "ask"
+		onSwitch === "ask-before-pull"
 			? "After switching, pi-sync will ask whether to review a pull for this setup."
-			: targetSwitchAction === "pull"
+			: onSwitch === "pull-after-switch"
 				? "After switching, pi-sync will check this setup and show exact changes before applying them."
 				: "After switching, pi-sync will not pull or modify synced files.";
 	const choice = await ctx.ui.select(
@@ -568,16 +576,17 @@ async function showTargetSwitcher(
 			`From: ${safeTerminalText(active ?? "none")}`,
 			`To: ${safeTerminalText(name)}`,
 			`Storage: ${backendStorageDescription(config)}`,
-			`Included content: ${normalizeSyncFiles(config.syncFiles).length} built-in groups · ${config.extraFiles.length} extra files`,
-			`Automatic sync: ${config.autoSync ? "On" : "Off"} · Sessions: ${config.syncSessions ? "On" : "Off"}`,
+			`Included content: ${config.include.length} paths`,
+			`Automatic sync: ${config.automatic ? "On" : "Off"} · Sessions: ${config.include.includes("sessions") ? "On" : "Off"}`,
 			"",
 			switchEffect,
 		].join("\n"),
 		[`Switch to ${safeTerminalText(name)}`, "Cancel"],
+		{ signal },
 	);
-	if (choice !== `Switch to ${safeTerminalText(name)}`) return false;
+	if (signal?.aborted || choice !== `Switch to ${safeTerminalText(name)}`) return false;
 	try {
-		const result = await useSyncTarget(
+		const result = await useSyncSetup(
 			ctx,
 			name,
 			(selectedTarget) =>
@@ -590,10 +599,13 @@ async function showTargetSwitcher(
 					null,
 					selectedTarget,
 				),
-			targetSwitchAction,
+			onSwitch,
+			signal,
+			syncConfigReviewIdentity(config),
 		);
 		return result.pullApplied ? "pull-attempted" : "switched";
 	} catch (error) {
+		if (signal?.aborted) return false;
 		ctx.ui.notify(
 			`Sync setup “${safeTerminalText(name)}” was not switched: ${safeTerminalText(errorMessage(error))}`,
 			"error",
@@ -616,12 +628,12 @@ async function showSyncSetupManager(
 			edit: async (name, setupSignal) => {
 				await showEditTarget(ctx, name, setupSignal);
 			},
-			makeCurrent: async (name) => {
-				const result = await showTargetSwitcher(ctx, runRoute, name);
+			makeCurrent: async (name, setupSignal) => {
+				const result = await showSetupSwitcher(ctx, runRoute, name, setupSignal);
 				return result === "pull-attempted" ? "exit" : undefined;
 			},
-			remove: async (name) => {
-				await showRemoveTarget(ctx, name);
+			remove: async (name, setupSignal) => {
+				await showRemoveTarget(ctx, name, setupSignal);
 			},
 		},
 		signal,
@@ -630,53 +642,36 @@ async function showSyncSetupManager(
 
 async function showAddTarget(ctx: ExtensionCommandContext, signal?: AbortSignal) {
 	let raw = await readLocalConfigObject();
+	if (signal?.aborted) return;
 	if (!raw) return void ctx.ui.notify("Set up the first sync setup before adding another.", "info");
-	if (raw.version !== 2) {
-		const choice = await ctx.ui.select(
-			[
-				"Upgrade settings for multiple sync setups",
-				"",
-				"The existing storage location, unknown fields, and local sync state will be preserved.",
-				"An exact private backup is created before the atomic conversion.",
-			].join("\n"),
-			["Upgrade settings", "Cancel"],
-		);
-		if (choice !== "Upgrade settings") return;
-		const currentTarget = await requiredInput(ctx, "Name the existing sync setup", "default");
-		if (!currentTarget) return;
-		const currentProfile = await requiredInput(
-			ctx,
-			"Name the existing storage connection",
-			"default",
-		);
-		if (!currentProfile) return;
-		const migration = await migrateLegacySettings(currentTarget, currentProfile);
+	if (raw.version !== 3) {
 		ctx.ui.notify(
-			`Upgraded pi-sync settings. Backup: ${safeTerminalText(migration.backupPath)}`,
-			"info",
+			"Version 1 and version 2 settings are unsupported and are never migrated.",
+			"error",
 		);
-		raw = migration.settings;
+		return;
 	}
-	let profiles = ownRecord(raw.profiles) ?? {};
-	const name = await requiredInput(ctx, "Name the new sync setup", "work");
+	let profiles = ownRecord(raw.storageConnections) ?? {};
+	const name = await requiredInput(ctx, "Name the new sync setup", "work", signal);
 	if (!name) return;
 	const createConnection = "Add a new storage connection…";
-	let profile = await ctx.ui.select("Choose a storage connection", [
-		...Object.keys(profiles).sort(),
-		createConnection,
-		"Cancel",
-	]);
+	let profile = await ctx.ui.select(
+		"Choose a storage connection",
+		[...Object.keys(profiles).sort(), createConnection, "Cancel"],
+		{ signal },
+	);
 	if (!profile || profile === "Cancel") return;
 	if (profile === createConnection) {
 		const previousNames = new Set(Object.keys(profiles));
 		if (!(await showAddStorageConnection(ctx, signal))) return;
 		if (signal?.aborted) return;
 		raw = (await readLocalConfigObject()) ?? raw;
-		profiles = ownRecord(raw.profiles) ?? {};
+		if (signal?.aborted) return;
+		profiles = ownRecord(raw.storageConnections) ?? {};
 		profile = Object.keys(profiles).find((candidate) => !previousNames.has(candidate));
 		if (!profile) return;
 	}
-	const storageKind = ownRecord(profiles[profile])?.kind;
+	const storageKind = ownRecord(profiles[profile])?.type;
 	if (storageKind === "webdav") {
 		const saved = await showAddWebDavTarget(ctx, name, profile, signal);
 		if (signal?.aborted) return;
@@ -689,21 +684,23 @@ async function showAddTarget(ctx: ExtensionCommandContext, signal?: AbortSignal)
 		if (saved) await refreshTargetCompletions();
 		return;
 	}
-	const location = await chooseAdditionalRemoteLocation(ctx, raw, profile, name);
+	const location = await chooseAdditionalRemoteLocation(ctx, raw, profile, name, signal);
 	if (!location) return;
-	const { bucket, prefix, namespace } = location;
-	const preset = await ctx.ui.select("Choose included content", [
-		"Recommended Pi settings",
-		"Minimal settings",
-		"Cancel",
-	]);
+	const { bucket, path: storagePath } = location;
+	const preset = await ctx.ui.select(
+		"Choose included content",
+		["Recommended Pi settings", "Minimal settings", "Cancel"],
+		{ signal },
+	);
 	if (!preset || preset === "Cancel") return;
 	const syncFiles =
-		preset === "Minimal settings" ? ["settings.json", "AGENTS.md"] : [...DEFAULT_SYNC_FILES];
-	const overlapsExistingTarget = Object.values(ownRecord(raw.targets) ?? {}).some((value) => {
-		const existing =
-			value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-		const selected = normalizeSyncFiles(existing?.syncFiles as string[] | undefined);
+		preset === "Minimal settings" ? ["settings.json", "AGENTS.md"] : [...DEFAULT_SYNC_INCLUDE];
+	const overlapsExistingTarget = Object.values(ownRecord(raw.syncSetups) ?? {}).some((value) => {
+		const existing = ownRecord(value);
+		const sync = ownRecord(existing?.sync);
+		const selected = syncIncludeSelection(
+			Array.isArray(sync?.include) ? sync.include : [],
+		).builtIns;
 		return selected.some((item) => syncFiles.includes(item));
 	});
 	const choice = await ctx.ui.select(
@@ -713,7 +710,7 @@ async function showAddTarget(ctx: ExtensionCommandContext, signal?: AbortSignal)
 			`Sync setup: ${safeTerminalText(name)}`,
 			`Storage connection: ${safeTerminalText(profile)}`,
 			`Bucket: ${safeTerminalText(bucket)}`,
-			`Storage location: ${formatRemotePath(prefix, namespace)}`,
+			`Storage location: ${safeTerminalText(storagePath)}`,
 			"Bucket must already exist. pi-sync will not create it.",
 			`Included content: ${syncFiles.length} built-in groups · Sessions: Off`,
 			...(overlapsExistingTarget
@@ -724,18 +721,17 @@ async function showAddTarget(ctx: ExtensionCommandContext, signal?: AbortSignal)
 			"Adding this setup does not sync or modify remote data.",
 		].join("\n"),
 		["Add sync setup", "Cancel"],
+		{ signal },
 	);
-	if (choice !== "Add sync setup") return;
-	await addSyncTarget(name, {
-		profile,
-		bucket,
-		prefix,
-		namespace,
-		autoSync: true,
-		syncFiles,
-		syncSessions: false,
-		extraFiles: [],
-	});
+	if (signal?.aborted || choice !== "Add sync setup") return;
+	await addSyncSetup(
+		name,
+		{
+			storage: { connection: profile, bucket, path: storagePath },
+			sync: { include: syncFiles, automatic: true },
+		},
+		signal,
+	);
 	if (signal?.aborted) return;
 	await refreshTargetCompletions();
 	ctx.ui.notify(`Added sync setup “${safeTerminalText(name)}”.`, "info");
@@ -743,8 +739,9 @@ async function showAddTarget(ctx: ExtensionCommandContext, signal?: AbortSignal)
 
 async function showEditTarget(ctx: ExtensionCommandContext, name: string, signal?: AbortSignal) {
 	const partial = await loadPartialConfig(name);
-	if (partial.settingsVersion !== 2 || !partial.target) {
-		ctx.ui.notify("Upgrade settings before editing a named sync setup.", "info");
+	if (signal?.aborted) return;
+	if (!partial.setupName) {
+		ctx.ui.notify("Create version 3 settings before editing a named sync setup.", "info");
 		return;
 	}
 	if (partial.storageKind === "webdav") {
@@ -755,35 +752,49 @@ async function showEditTarget(ctx: ExtensionCommandContext, name: string, signal
 		await showEditGitTarget(ctx, partial, signal);
 		return;
 	}
-	const bucket = await requiredInput(ctx, "Bucket", partial.bucket ?? "pi-sync");
+	const bucket = await requiredInput(ctx, "Bucket", partial.bucket ?? "pi-sync", signal);
 	if (!bucket) return;
-	const prefix = await requiredInput(ctx, "Remote prefix", partial.prefix ?? "pi-sync");
-	if (!prefix) return;
-	const namespace = await requiredInput(ctx, "Remote namespace", partial.profile ?? partial.target);
-	if (!namespace) return;
+	const storagePath = await requiredInput(ctx, "Storage path", partial.storagePath, signal);
+	if (!storagePath) return;
+	const normalizedPath = storagePath.replace(/^\/+|\/+$/gu, "");
 	const choice = await ctx.ui.select(
 		[
-			`Review sync setup “${safeTerminalText(partial.target)}”`,
+			`Review sync setup “${safeTerminalText(partial.setupName)}”`,
 			"",
 			`Bucket: ${safeTerminalText(partial.bucket ?? "missing")} → ${safeTerminalText(bucket)}`,
-			`Prefix: ${safeTerminalText(partial.prefix ?? "pi-sync")} → ${safeTerminalText(prefix)}`,
-			`Namespace: ${safeTerminalText(partial.profile ?? partial.target)} → ${safeTerminalText(namespace)}`,
+			`Storage path: ${safeTerminalText(partial.storagePath ?? "missing")} → ${safeTerminalText(normalizedPath)}`,
 			"Saving changes the future storage location only; it does not move or delete remote data.",
 		].join("\n"),
 		["Save sync setup", "Cancel"],
+		{ signal },
 	);
-	if (choice !== "Save sync setup") return;
-	await updateSyncTarget(partial.target, (target) => ({ ...target, bucket, prefix, namespace }));
-	ctx.ui.notify(`Saved sync setup “${safeTerminalText(partial.target)}”.`, "info");
+	if (signal?.aborted || choice !== "Save sync setup") return;
+	await updateSyncSetup(
+		partial.setupName,
+		(setup) => {
+			if (typeof setup.storage.bucket !== "string") {
+				throw new Error("Sync setup storage type changed; reopen it.");
+			}
+			return {
+				...setup,
+				storage: { ...setup.storage, bucket, path: normalizedPath },
+			};
+		},
+		{ expectedStorage: partial, signal },
+	);
+	if (signal?.aborted) return;
+	ctx.ui.notify(`Saved sync setup “${safeTerminalText(partial.setupName)}”.`, "info");
 }
 
-async function showRemoveTarget(ctx: ExtensionCommandContext, name: string) {
+async function showRemoveTarget(ctx: ExtensionCommandContext, name: string, signal?: AbortSignal) {
 	const confirmed = await ctx.ui.confirm(
 		"Remove sync setup?",
 		`Remove local sync setup “${safeTerminalText(name)}”? Remote data and history are not deleted.`,
+		{ signal },
 	);
-	if (!confirmed) return;
-	await removeSyncTarget(name);
+	if (signal?.aborted || !confirmed) return;
+	await removeSyncSetup(name, signal);
+	if (signal?.aborted) return;
 	await refreshTargetCompletions();
 	ctx.ui.notify(
 		`Removed sync setup “${safeTerminalText(name)}”; remote data was not deleted.`,
@@ -792,7 +803,7 @@ async function showRemoveTarget(ctx: ExtensionCommandContext, name: string) {
 }
 
 async function refreshTargetCompletions() {
-	setSyncTargetCompletions(await configuredTargetNames());
+	setSyncSetupCompletions(await configuredSyncSetupNames());
 }
 
 async function showRecoveryMenu(ctx: ExtensionCommandContext, runRoute: RunRoute) {
@@ -812,60 +823,59 @@ async function showRecoveryMenu(ctx: ExtensionCommandContext, runRoute: RunRoute
 }
 
 interface ChosenRemoteLocation {
-	profileName: string;
+	connectionName: string;
 	bucket: string;
-	prefix: string;
-	namespace: string;
+	path: string;
 }
 
-async function chooseInitialTargetName(ctx: ExtensionCommandContext) {
-	const purpose = await ctx.ui.select("What will this sync setup be used for?", [
-		"Personal / Home",
-		"Work",
-		"Custom",
-		"Cancel",
-	]);
+async function chooseInitialTargetName(ctx: ExtensionCommandContext, signal?: AbortSignal) {
+	const purpose = await ctx.ui.select(
+		"What will this sync setup be used for?",
+		["Personal / Home", "Work", "Custom", "Cancel"],
+		{ signal },
+	);
 	if (!purpose || purpose === "Cancel") return undefined;
 	if (purpose === "Personal / Home") return "home";
 	if (purpose === "Work") return "work";
-	return requiredInput(ctx, "Name this sync setup", "default");
+	return requiredInput(ctx, "Name this sync setup", "default", signal);
 }
 
 async function chooseInitialRemoteLocation(
 	ctx: ExtensionCommandContext,
 	preset: string,
-	targetName: string,
+	setupName: string,
+	signal?: AbortSignal,
 ): Promise<ChosenRemoteLocation | undefined> {
-	const profileName = preset === "Cloudflare R2" ? "r2" : "s3";
+	const connectionName = preset === "Cloudflare R2" ? "r2" : "s3";
 	const suggested = {
-		profileName,
+		connectionName,
 		bucket: "pi-sync",
-		prefix: "pi-sync",
-		namespace: targetName,
+		path: `pi-sync/${setupName}`,
 	};
 	if (preset === "Cloudflare R2") {
 		const choice = await ctx.ui.select(
 			[
 				"Choose storage location",
 				"",
-				`Suggested storage connection: ${profileName}`,
+				`Suggested storage connection: ${connectionName}`,
 				`Suggested bucket: ${suggested.bucket}`,
-				`Remote path: ${formatRemotePath(suggested.prefix, suggested.namespace)}`,
+				`Remote path: ${safeTerminalText(suggested.path)}`,
 				"Bucket must already exist. pi-sync will not create it.",
 			].join("\n"),
 			["Use suggested location (recommended)", "Customize remote location", "Cancel"],
+			{ signal },
 		);
 		if (!choice || choice === "Cancel") return undefined;
 		if (choice === "Use suggested location (recommended)") return suggested;
-		return chooseCustomRemoteLocation(ctx, targetName, profileName, true);
+		return chooseCustomRemoteLocation(ctx, setupName, connectionName, true, signal);
 	}
 
 	const choice = await ctx.ui.select(
 		[
 			"Choose storage location",
 			"",
-			`Suggested storage connection: ${profileName}`,
-			`Suggested path: ${formatRemotePath("pi-sync", targetName)}`,
+			`Suggested storage connection: ${connectionName}`,
+			`Suggested path: ${safeTerminalText(suggested.path)}`,
 			"S3 bucket names may need to be globally unique and the bucket must already exist.",
 		].join("\n"),
 		[
@@ -873,102 +883,101 @@ async function chooseInitialRemoteLocation(
 			"Customize remote location",
 			"Cancel",
 		],
+		{ signal },
 	);
 	if (!choice || choice === "Cancel") return undefined;
 	if (choice === "Customize remote location") {
-		return chooseCustomRemoteLocation(ctx, targetName, profileName, true);
+		return chooseCustomRemoteLocation(ctx, setupName, connectionName, true, signal);
 	}
-	const bucket = await requiredExistingBucket(ctx, "pi-sync-your-name");
+	const bucket = await requiredExistingBucket(ctx, "pi-sync-your-name", signal);
 	return bucket ? { ...suggested, bucket } : undefined;
 }
 
 async function chooseAdditionalRemoteLocation(
 	ctx: ExtensionCommandContext,
 	settings: Record<string, unknown>,
-	profileName: string,
-	targetName: string,
-): Promise<Omit<ChosenRemoteLocation, "profileName"> | undefined> {
-	const targets = ownRecord(settings.targets) ?? {};
-	const activeTarget =
-		typeof settings.activeTarget === "string" ? settings.activeTarget : undefined;
-	const candidates = Object.entries(targets)
-		.map(([name, value]) => ({ name, target: ownRecord(value) }))
+	connectionName: string,
+	setupName: string,
+	signal?: AbortSignal,
+): Promise<Omit<ChosenRemoteLocation, "connectionName"> | undefined> {
+	const setups = ownRecord(settings.syncSetups) ?? {};
+	const currentSetup =
+		typeof settings.activeSyncSetup === "string" ? settings.activeSyncSetup : undefined;
+	const candidates = Object.entries(setups)
+		.map(([name, value]) => ({ name, storage: ownRecord(ownRecord(value)?.storage) }))
 		.filter(
-			(item): item is { name: string; target: Record<string, unknown> } =>
-				item.target?.profile === profileName && typeof item.target.bucket === "string",
+			(item): item is { name: string; storage: Record<string, unknown> } =>
+				item.storage?.connection === connectionName && typeof item.storage.bucket === "string",
 		);
 	const source =
-		candidates.find((item) => item.name === activeTarget) ??
+		candidates.find((item) => item.name === currentSetup) ??
 		candidates.sort((left, right) => left.name.localeCompare(right.name))[0];
 	if (source) {
-		const sourcePrefix =
-			typeof source.target.prefix === "string" ? source.target.prefix : "pi-sync";
+		const sourcePath =
+			typeof source.storage.path === "string" ? source.storage.path : "pi-sync/home";
+		const sourceParent = sourcePath.includes("/")
+			? sourcePath.slice(0, sourcePath.lastIndexOf("/"))
+			: "pi-sync";
+		const suggestedPath = `${sourceParent}/${setupName}`;
 		const sameBucketLabel = `Same bucket as “${safeTerminalText(source.name)}” (recommended)`;
 		const choice = await ctx.ui.select(
 			[
-				`Storage location for “${safeTerminalText(targetName)}”`,
+				`Storage location for “${safeTerminalText(setupName)}”`,
 				"",
-				`Recommended bucket: ${safeTerminalText(String(source.target.bucket))}`,
-				`Remote path: ${formatRemotePath(sourcePrefix, targetName)}`,
-				"The namespace and local sync state remain separate.",
+				`Recommended bucket: ${safeTerminalText(String(source.storage.bucket))}`,
+				`Remote path: ${safeTerminalText(suggestedPath)}`,
+				"The complete path and local sync state remain separate.",
 			].join("\n"),
 			[sameBucketLabel, "Use a different bucket", "Customize remote location", "Cancel"],
+			{ signal },
 		);
 		if (!choice || choice === "Cancel") return undefined;
 		if (choice === sameBucketLabel) {
-			return {
-				bucket: String(source.target.bucket),
-				prefix: sourcePrefix,
-				namespace: targetName,
-			};
+			return { bucket: String(source.storage.bucket), path: suggestedPath };
 		}
 		if (choice === "Use a different bucket") {
-			const bucket = await requiredExistingBucket(ctx, "pi-sync");
-			return bucket ? { bucket, prefix: "pi-sync", namespace: targetName } : undefined;
+			const bucket = await requiredExistingBucket(ctx, "pi-sync", signal);
+			return bucket ? { bucket, path: `pi-sync/${setupName}` } : undefined;
 		}
-		const custom = await chooseCustomRemoteLocation(ctx, targetName, profileName, false);
-		return custom
-			? { bucket: custom.bucket, prefix: custom.prefix, namespace: custom.namespace }
-			: undefined;
+		const custom = await chooseCustomRemoteLocation(ctx, setupName, connectionName, false, signal);
+		return custom ? { bucket: custom.bucket, path: custom.path } : undefined;
 	}
 
-	const profileSettings = ownRecord(ownRecord(settings.profiles)?.[profileName]);
-	const isR2 =
-		profileSettings?.kind === "r2" ||
-		isCloudflareR2Endpoint(String(profileSettings?.endpoint ?? ""));
+	const connectionSettings = ownRecord(ownRecord(settings.storageConnections)?.[connectionName]);
+	const isR2 = isCloudflareR2Endpoint(String(connectionSettings?.endpoint ?? ""));
+	const suggestedPath = `pi-sync/${setupName}`;
 	const suggestedLabel = isR2
 		? "Use suggested location (recommended)"
 		: "Use existing bucket with suggested path (recommended)";
 	const choice = await ctx.ui.select(
-		`Storage location for “${safeTerminalText(targetName)}”\n\nSuggested path: ${formatRemotePath("pi-sync", targetName)}`,
+		`Storage location for “${safeTerminalText(setupName)}”\n\nSuggested path: ${safeTerminalText(suggestedPath)}`,
 		[suggestedLabel, "Customize remote location", "Cancel"],
+		{ signal },
 	);
 	if (!choice || choice === "Cancel") return undefined;
 	if (choice === "Customize remote location") {
-		const custom = await chooseCustomRemoteLocation(ctx, targetName, profileName, false);
-		return custom
-			? { bucket: custom.bucket, prefix: custom.prefix, namespace: custom.namespace }
-			: undefined;
+		const custom = await chooseCustomRemoteLocation(ctx, setupName, connectionName, false, signal);
+		return custom ? { bucket: custom.bucket, path: custom.path } : undefined;
 	}
-	if (isR2) return { bucket: "pi-sync", prefix: "pi-sync", namespace: targetName };
-	const bucket = await requiredExistingBucket(ctx, "pi-sync-your-name");
-	return bucket ? { bucket, prefix: "pi-sync", namespace: targetName } : undefined;
+	if (isR2) return { bucket: "pi-sync", path: suggestedPath };
+	const bucket = await requiredExistingBucket(ctx, "pi-sync-your-name", signal);
+	return bucket ? { bucket, path: suggestedPath } : undefined;
 }
 
 async function chooseCustomRemoteLocation(
 	ctx: ExtensionCommandContext,
-	targetName: string,
-	initialProfileName: string,
-	customizeProfileName: boolean,
+	setupName: string,
+	initialConnectionName: string,
+	customizeConnectionName: boolean,
+	signal?: AbortSignal,
 ): Promise<ChosenRemoteLocation | undefined> {
-	const profileName = customizeProfileName
-		? await requiredInput(ctx, "Storage connection name", initialProfileName)
-		: initialProfileName;
-	if (!profileName) return undefined;
-	const bucket = await requiredExistingBucket(ctx, "pi-sync");
+	const connectionName = customizeConnectionName
+		? await requiredInput(ctx, "Storage connection name", initialConnectionName, signal)
+		: initialConnectionName;
+	if (!connectionName) return undefined;
+	const bucket = await requiredExistingBucket(ctx, "pi-sync", signal);
 	if (!bucket) return undefined;
-	const prefix = await requiredInput(ctx, "Remote prefix", "pi-sync");
-	if (!prefix) return undefined;
-	const namespace = await requiredInput(ctx, "Remote namespace", targetName);
-	return namespace ? { profileName, bucket, prefix, namespace } : undefined;
+	const storagePath = await requiredInput(ctx, "Storage path", `pi-sync/${setupName}`, signal);
+	if (!storagePath) return undefined;
+	return { connectionName, bucket, path: storagePath.replace(/^\/+|\/+$/gu, "") };
 }

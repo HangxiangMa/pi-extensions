@@ -36,16 +36,18 @@ function fileHashMap(snapshot: Snapshot) {
 export async function applySnapshot(
 	snapshot: Snapshot,
 	protectedRelativePaths = new Set<string>(),
-	options: Pick<SnapshotOptions, "syncFiles" | "sessionDir" | "extraFiles"> = {},
+	options: Pick<
+		SnapshotOptions,
+		"include" | "sessionDir" | "syncFiles" | "syncSessions" | "extraFiles"
+	> = {},
 ) {
 	const root = agentDir();
 	const { sessionDir } = options;
 	await recoverPendingSnapshotTransactions();
 	const current = await createSnapshot(snapshot.profile, {
-		syncFiles: options.syncFiles,
-		syncSessions: snapshotIncludesSessions(snapshot),
+		...options,
+		...(options.include === undefined ? { syncSessions: snapshotIncludesSessions(snapshot) } : {}),
 		sessionDir,
-		extraFiles: options.extraFiles,
 	});
 	const plan = await addTopLevelCaseVariantDeletes(
 		root,
@@ -228,7 +230,8 @@ function rootForTarget(root: string, target: string, sessionDir?: string) {
 }
 
 async function prepareSnapshotWrite(root: string, target: string, deletePaths: Set<string>) {
-	await ensureSafeDirectory(root, path.dirname(target));
+	const parentWillBeReplaced = await ensureSafeDirectory(root, path.dirname(target), deletePaths);
+	if (parentWillBeReplaced) return;
 	try {
 		const stat = await fs.lstat(target);
 		if (stat.isSymbolicLink())
@@ -241,7 +244,7 @@ async function prepareSnapshotWrite(root: string, target: string, deletePaths: S
 	}
 }
 
-async function ensureSafeDirectory(root: string, directory: string) {
+async function ensureSafeDirectory(root: string, directory: string, deletePaths: Set<string>) {
 	assertWithinRoot(root, directory);
 	const rootPath = path.resolve(root);
 	const relative = path.relative(rootPath, path.resolve(directory));
@@ -252,13 +255,16 @@ async function ensureSafeDirectory(root: string, directory: string) {
 			const stat = await fs.lstat(current);
 			if (stat.isSymbolicLink())
 				throw new Error(`Refusing to follow symlink during snapshot apply: ${current}`);
-			if (!stat.isDirectory())
+			if (!stat.isDirectory()) {
+				if (deletePaths.has(current)) return true;
 				throw new Error(`Snapshot path parent is not a directory: ${current}`);
+			}
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 			await fs.mkdir(current);
 		}
 	}
+	return false;
 }
 
 async function assertNoSymlinkParents(root: string, target: string) {

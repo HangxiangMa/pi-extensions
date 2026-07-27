@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { readLocalConfigObject } from "./config.js";
+import { isCloudflareR2Endpoint, readLocalConfigObject } from "./config.js";
 import { showAddGitStorageProfile, showEditGitStorageProfile } from "./git-ui.js";
 import { errorMessage, ownRecord, requiredInput, safeTerminalText } from "./manager-helpers.js";
 import {
@@ -8,9 +8,9 @@ import {
 	chooseS3CredentialUpdate,
 } from "./s3-credentials-ui.js";
 import {
-	addStorageProfile,
-	removeStorageProfile,
-	updateStorageProfile,
+	addStorageConnection,
+	removeStorageConnection,
+	updateStorageConnection,
 } from "./settings-management.js";
 import { showAddWebDavStorageProfile, showEditWebDavStorageProfile } from "./webdav-ui.js";
 
@@ -19,11 +19,12 @@ const BACK = "Back";
 export async function showStorageConnections(ctx: ExtensionCommandContext, signal?: AbortSignal) {
 	while (!signal?.aborted) {
 		const raw = await readLocalConfigObject();
-		if (raw?.version !== 2) {
-			ctx.ui.notify("Upgrade settings before managing storage connections.", "info");
+		if (signal?.aborted) return;
+		if (raw?.version !== 3) {
+			ctx.ui.notify("Create version 3 settings before managing storage connections.", "info");
 			return;
 		}
-		const profiles = ownRecord(raw.profiles) ?? {};
+		const profiles = ownRecord(raw.storageConnections) ?? {};
 		const labels = new Map(
 			Object.keys(profiles)
 				.sort((left, right) => left.localeCompare(right))
@@ -39,6 +40,7 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
 			try {
 				await showAddStorageConnection(ctx, signal);
 			} catch (error) {
+				if (signal?.aborted) return;
 				ctx.ui.notify(
 					`Storage connection was not added: ${safeTerminalText(errorMessage(error))} Retry from Add storage connection.`,
 					"error",
@@ -58,7 +60,8 @@ async function showStorageConnectionDetail(
 ) {
 	while (!signal?.aborted) {
 		const raw = await readLocalConfigObject();
-		const profiles = ownRecord(raw?.profiles) ?? {};
+		if (signal?.aborted) return;
+		const profiles = ownRecord(raw?.storageConnections) ?? {};
 		const profile = ownRecord(profiles[name]);
 		if (!profile) {
 			ctx.ui.notify(`Storage connection “${safeTerminalText(name)}” no longer exists.`, "warning");
@@ -93,12 +96,13 @@ async function showStorageConnectionDetail(
 					{ signal },
 				);
 				if (!confirmed || signal?.aborted) continue;
-				await removeStorageProfile(name);
+				await removeStorageConnection(name, signal);
 				ctx.ui.notify(`Removed storage connection “${safeTerminalText(name)}”.`, "info");
 				return;
 			}
 			await editStorageConnection(ctx, name, profile, usedBy, signal);
 		} catch (error) {
+			if (signal?.aborted) return;
 			ctx.ui.notify(
 				`Storage connection “${safeTerminalText(name)}” was not changed: ${safeTerminalText(errorMessage(error))} Reopen it and retry.`,
 				"error",
@@ -114,23 +118,42 @@ async function editStorageConnection(
 	usedBy: string[],
 	signal?: AbortSignal,
 ) {
-	if (profile.kind === "webdav") {
-		await showEditWebDavStorageProfile(ctx, name, profile, signal, usedBy);
+	if (ctx.mode !== "tui") {
+		ctx.ui.notify(
+			"Editing storage connections requires TUI mode for safe credential handling. Edit the private version 3 settings file instead.",
+			"warning",
+		);
 		return;
 	}
-	if (profile.kind === "git") {
-		await showEditGitStorageProfile(ctx, name, profile, signal, usedBy);
+	if (profile.type === "webdav") {
+		await showEditWebDavStorageProfile(
+			ctx,
+			name,
+			{ ...profile, kind: "webdav", ...(ownRecord(profile.credentials) ?? {}) },
+			signal,
+			usedBy,
+		);
+		return;
+	}
+	if (profile.type === "git") {
+		await showEditGitStorageProfile(ctx, name, { ...profile, kind: "git" }, signal, usedBy);
 		return;
 	}
 	const endpoint = await requiredInput(
 		ctx,
 		"Endpoint",
 		String(profile.endpoint ?? "https://s3.example.com"),
+		signal,
 	);
 	if (!endpoint || signal?.aborted) return;
-	const region = await requiredInput(ctx, "Region", String(profile.region ?? "auto"));
+	const region = await requiredInput(ctx, "Region", String(profile.region ?? "auto"), signal);
 	if (!region || signal?.aborted) return;
-	const credentials = await chooseS3CredentialUpdate(ctx, profile, signal);
+	const storedCredentials = ownRecord(profile.credentials) ?? {};
+	const credentials = await chooseS3CredentialUpdate(
+		ctx,
+		{ ...profile, ...storedCredentials },
+		signal,
+	);
 	if (!credentials || signal?.aborted) return;
 	const save = await ctx.ui.select(
 		[
@@ -147,16 +170,37 @@ async function editStorageConnection(
 		{ signal },
 	);
 	if (save !== "Save storage connection" || signal?.aborted) return;
-	await updateStorageProfile(
+	await updateStorageConnection(
 		name,
-		(current) => applyS3CredentialUpdate({ ...current, endpoint, region }, credentials),
+		(current) => {
+			if (current.type !== "s3") {
+				throw new Error("Storage connection type changed; reopen it.");
+			}
+			return {
+				...current,
+				endpoint,
+				region,
+				credentials: applyS3CredentialUpdate(
+					current.credentials,
+					credentials,
+				) as typeof current.credentials,
+			};
+		},
 		usedBy,
+		signal,
 	);
 	if (signal?.aborted) return;
 	ctx.ui.notify(`Saved storage connection “${safeTerminalText(name)}”.`, "info");
 }
 
 export async function showAddStorageConnection(ctx: ExtensionCommandContext, signal?: AbortSignal) {
+	if (ctx.mode !== "tui") {
+		ctx.ui.notify(
+			"Adding storage connections requires TUI mode for safe credential handling. Edit the private version 3 settings file instead.",
+			"warning",
+		);
+		return false;
+	}
 	const preset = await ctx.ui.select(
 		"Storage type",
 		["Cloudflare R2", "Other S3-compatible storage", "WebDAV", "Git", "Cancel"],
@@ -169,6 +213,7 @@ export async function showAddStorageConnection(ctx: ExtensionCommandContext, sig
 		ctx,
 		"Name this storage connection",
 		preset === "Cloudflare R2" ? "r2" : "s3",
+		signal,
 	);
 	if (!name || signal?.aborted) return false;
 	const endpoint = await requiredInput(
@@ -177,10 +222,11 @@ export async function showAddStorageConnection(ctx: ExtensionCommandContext, sig
 		preset === "Cloudflare R2"
 			? "https://<account-id>.r2.cloudflarestorage.com"
 			: "https://s3.example.com",
+		signal,
 	);
 	if (!endpoint || signal?.aborted) return false;
 	const region =
-		preset === "Cloudflare R2" ? "auto" : await requiredInput(ctx, "Region", "us-east-1");
+		preset === "Cloudflare R2" ? "auto" : await requiredInput(ctx, "Region", "us-east-1", signal);
 	if (!region || signal?.aborted) return false;
 	const credentials = await chooseS3Credentials(ctx, signal);
 	if (!credentials || signal?.aborted) return false;
@@ -199,40 +245,53 @@ export async function showAddStorageConnection(ctx: ExtensionCommandContext, sig
 		{ signal },
 	);
 	if (save !== "Add storage connection" || signal?.aborted) return false;
-	await addStorageProfile(name, {
-		kind: preset === "Cloudflare R2" ? "r2" : "s3-compatible",
-		endpoint,
-		region,
-		...credentials.profileFields,
-	});
+	await addStorageConnection(
+		name,
+		{
+			type: "s3",
+			endpoint,
+			region,
+			credentials: {
+				accessKeyId: credentials.profileFields.accessKeyId ?? "",
+				secretAccessKey: credentials.profileFields.secretAccessKey ?? "",
+			},
+		},
+		signal,
+	);
 	if (signal?.aborted) return true;
 	ctx.ui.notify(`Added storage connection “${safeTerminalText(name)}”.`, "info");
 	return true;
 }
 
 function referencingSetups(raw: Record<string, unknown> | undefined, connection: string) {
-	return Object.entries(ownRecord(raw?.targets) ?? {})
-		.filter(([, value]) => ownRecord(value)?.profile === connection)
+	return Object.entries(ownRecord(raw?.syncSetups) ?? {})
+		.filter(([, value]) => ownRecord(ownRecord(value)?.storage)?.connection === connection)
 		.map(([name]) => name)
 		.sort((left, right) => left.localeCompare(right));
 }
 
 function connectionType(profile: Record<string, unknown>) {
-	if (profile.kind === "git") return "Git";
-	if (profile.kind === "webdav") return "WebDAV";
-	if (profile.kind === "r2") return "Cloudflare R2";
+	if (profile.type === "git") return "Git";
+	if (profile.type === "webdav") return "WebDAV";
+	if (
+		profile.type === "s3" &&
+		typeof profile.endpoint === "string" &&
+		isCloudflareR2Endpoint(profile.endpoint)
+	) {
+		return "Cloudflare R2";
+	}
 	return "S3-compatible";
 }
 
 function connectionEndpoint(profile: Record<string, unknown>) {
 	const value =
-		profile.kind === "git"
+		profile.type === "git"
 			? profile.remote
-			: profile.kind === "webdav"
+			: profile.type === "webdav"
 				? profile.url
 				: profile.endpoint;
 	if (typeof value !== "string" || value.length === 0) return "Missing";
-	if (profile.kind === "git") return safeTerminalText(value);
+	if (profile.type === "git") return safeTerminalText(value);
 	try {
 		return safeTerminalText(new URL(value).host);
 	} catch {
@@ -241,8 +300,9 @@ function connectionEndpoint(profile: Record<string, unknown>) {
 }
 
 function credentialSource(profile: Record<string, unknown>) {
-	if (profile.kind === "git") return "Git credential helper or SSH configuration";
-	if (profile.kind === "webdav") return profile.password ? "Settings file" : "Missing";
-	if (profile.accessKeyId && profile.secretAccessKey) return "Settings file";
-	return "Environment or missing";
+	if (profile.type === "git") return "Git credential helper or SSH configuration";
+	const credentials = ownRecord(profile.credentials);
+	if (profile.type === "webdav") return credentials?.password ? "Settings file" : "Missing";
+	if (credentials?.accessKeyId && credentials.secretAccessKey) return "Settings file";
+	return "Missing";
 }

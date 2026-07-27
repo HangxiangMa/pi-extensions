@@ -81,11 +81,13 @@ function s3Config(): SyncConfig {
 			},
 			destination: { bucket: "pi-sync-test", prefix: "pi-sync", namespace: "default" },
 		},
-		profile: "default",
-		target: "default",
-		storageProfile: "default",
-		syncSessions: false,
-		extraFiles: [],
+		setupName: "default",
+		connectionName: "default",
+		storagePath: "pi-sync",
+		snapshotIdentity: "default",
+		include: [],
+		automatic: false,
+		onSwitch: "switch-only",
 	};
 }
 

@@ -48,21 +48,20 @@ test("all backend-neutral sync routes operate against a Git target", async () =>
 					writeFileSync(
 						localConfigPath(),
 						JSON.stringify({
-							version: 2,
-							activeTarget: "home",
-							profiles: {
-								github: { kind: "git", remote: "ssh://git@example.com/private/pi-sync.git" },
+							version: 3,
+							activeSyncSetup: "home",
+							onSwitch: "ask-before-pull",
+							storageConnections: {
+								github: { type: "git", remote: "ssh://git@example.com/private/pi-sync.git" },
 							},
-							targets: {
+							syncSetups: {
 								home: {
-									profile: "github",
-									branch: "pi-sync/home",
-									directory: "pi-sync",
-									namespace: "home",
-									autoSync: true,
-									syncFiles: ["settings.json"],
-									syncSessions: false,
-									extraFiles: [],
+									storage: {
+										connection: "github",
+										branch: "pi-sync/home",
+										path: "pi-sync/home",
+									},
+									sync: { include: ["settings.json"], automatic: true },
 								},
 							},
 						}),
@@ -70,7 +69,7 @@ test("all backend-neutral sync routes operate against a Git target", async () =>
 					const backendConfig: ResolvedGitBackend = {
 						type: "git",
 						profile: { kind: "git", remote: fixture.remote },
-						destination: { branch: "pi-sync/home", directory: "pi-sync", namespace: "home" },
+						destination: { branch: "pi-sync/home", directory: "pi-sync/home", namespace: "home" },
 					};
 					const backend = new GitSyncBackend(backendConfig, {
 						cacheRoot: path.join(fixture.root, "cache"),

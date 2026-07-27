@@ -74,6 +74,7 @@
 - Symptom: Chrome DevTools `/json/new` may reject unsafe `GET`. Cause: modern Chrome expects `PUT` for target creation. Fix: use `PUT /json/new?${encodeURIComponent(url)}`.
 - For pi-sync on Cloudflare R2, keep session-token support for temporary credentials but retry once without the token when R2 static keys reject `X-Amz-Security-Token`.
 - Pi-sync backend integrations must keep snapshot content IDs, backend snapshot references, and backend-scoped opaque revisions distinct; `--force` re-reads and republishes against the observed revision instead of disabling concurrency protection. Stage immutable S3 bundles with `If-None-Match: *`, validate remote references before key construction, and require decoded bundle identity to match the retained reference.
+- Symptom: pulling `custom/child` fails when local `custom` is a file. Cause: preflight and transaction journaling inspect the child before the planned ancestor deletion. Fix: defer the scheduled parent replacement, journal `ENOTDIR` descendants as missing, create write parents after deletes, and verify rollback restores the file.
 - Non-interactive Git subprocesses must close stdin even when they have no input; otherwise local fetch/push and plumbing commands can remain open until timeout. Strip inherited Git control variables, disable prompts/hooks/pagers/editors, serialize shared-cache mutations, use literal pathspecs for validated user-derived paths, verify disposable-cache object format, trust the ref actually fetched rather than an earlier `ls-remote` SHA, and reconcile the remote ref after any post-push transport failure.
 - Pi-sync post-switch pulls cross a concurrency boundary after changing `activeTarget`; skip already-current targets, carry the selected target explicitly through locking, and retain the exact pull summary before apply.
 - Symptom: Pi extension async/timer/command continuations can crash after reload or session replacement. Cause: captured `ExtensionContext` becomes stale. Fix: pass plain data into delayed callbacks, catch stale-context errors, and scope cleanup to the failing ctx/request.
@@ -116,7 +117,7 @@
 - Runtime-auth generation guards prevent stale credential mutation but not stale outer status or connection-invalidation publication; overlapping provider syncs also need latest-task ownership at the lifecycle boundary.
 - Credential-file path and permission checks must run on every locked read, not only startup migration; reject symlinks and repair `0600` through the opened descriptor.
 - Credential filename migrations cannot safely delete a legacy path while uncoordinated older writers may still replace it; install the canonical file exclusively, retain a private legacy recovery copy, and deny canonical, legacy, temporary, and recovery names from sync/export paths.
-- Pi-sync v2 settings may legitimately have no targets or active target after removing the last target. Filename migration can keep the legacy path active when exclusive canonical installation is unavailable, so resolve the effective path and cross-process lock any cleanup that temporarily vacates the canonical path.
+- Pi-sync settings read-modify-write must hold one cross-process lock across the read, complete v3 validation, and atomic replacement; separate read/write lock windows only detect stale edits and can still reject otherwise serializable concurrent saves.
 
 ## TASTE
 
@@ -126,7 +127,7 @@
 
 ### General
 
-- Prefer destination-oriented pi-sync setup that completes credentials in a masked TUI; keep the profile/target split as an advanced persistence detail rather than a required user concept.
+- Prefer storage-oriented pi-sync setup that completes credentials in a masked TUI and reviews one exact backend path; storage connections and sync setups are the only managed user concepts.
 - Prefer direct, user-owned context selection; avoid dedicated shortcuts or manual copy steps for routine quoting workflows.
 - Prefer reading GitHub issue and pull request links with `gh --json` first; use web tools only when `gh` cannot access the needed content.
 - Live provider smokes are acceptable when relevant, but stop after one clear external or entitlement failure; use deterministic tests instead of repeatedly retrying unless the user explicitly asks.

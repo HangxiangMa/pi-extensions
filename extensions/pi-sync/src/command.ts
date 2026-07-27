@@ -27,39 +27,39 @@ export type SyncCommandName = (typeof SYNC_COMMANDS)[number]["name"];
 const SYNC_COMMAND_COMPLETIONS: readonly CommandArgumentCompletion[] = SYNC_COMMANDS.map(
 	({ name, description }) => ({ value: name, label: name, description }),
 );
-let targetCompletionNames: string[] = [];
+let setupCompletionNames: string[] = [];
 
-export function setSyncTargetCompletions(names: readonly string[]) {
-	targetCompletionNames = [...new Set(names)].sort((left, right) => left.localeCompare(right));
+export function setSyncSetupCompletions(names: readonly string[]) {
+	setupCompletionNames = [...new Set(names)].sort((left, right) => left.localeCompare(right));
 }
-const TARGET_FLAG_COMPLETION = {
-	value: "--target",
-	label: "--target",
+const SETUP_FLAG_COMPLETION = {
+	value: "--setup",
+	label: "--setup",
 	description: "Address a sync setup without switching",
 } as const;
 const SYNC_FLAG_COMPLETIONS: Record<string, readonly CommandArgumentCompletion[]> = {
-	config: [TARGET_FLAG_COMPLETION],
-	files: [TARGET_FLAG_COMPLETION],
-	status: [TARGET_FLAG_COMPLETION],
-	diff: [TARGET_FLAG_COMPLETION],
-	doctor: [TARGET_FLAG_COMPLETION],
+	config: [SETUP_FLAG_COMPLETION],
+	files: [SETUP_FLAG_COMPLETION],
+	status: [SETUP_FLAG_COMPLETION],
+	diff: [SETUP_FLAG_COMPLETION],
+	doctor: [SETUP_FLAG_COMPLETION],
 	push: [
 		...YES_FLAG_COMPLETIONS,
 		{ value: "--force", label: "--force", description: "Overwrite visible remote changes" },
-		TARGET_FLAG_COMPLETION,
+		SETUP_FLAG_COMPLETION,
 	],
 	pull: [
 		...YES_FLAG_COMPLETIONS,
 		{ value: "--force", label: "--force", description: "Overwrite local changes" },
-		TARGET_FLAG_COMPLETION,
+		SETUP_FLAG_COMPLETION,
 	],
 	sync: [
 		...YES_FLAG_COMPLETIONS,
 		{ value: "--force", label: "--force", description: "Resolve conflicts by forcing action" },
-		TARGET_FLAG_COMPLETION,
+		SETUP_FLAG_COMPLETION,
 	],
-	history: [TARGET_FLAG_COMPLETION],
-	rollback: [...YES_FLAG_COMPLETIONS, TARGET_FLAG_COMPLETION],
+	history: [SETUP_FLAG_COMPLETION],
+	rollback: [...YES_FLAG_COMPLETIONS, SETUP_FLAG_COMPLETION],
 	unlock: [{ value: "--stale", label: "--stale", description: "Remove only a stale lock" }],
 };
 
@@ -75,17 +75,17 @@ export function parseOptions(args: string[]): CommandOptions {
 	let yes = false;
 	let force = false;
 	let stale = false;
-	let target: string | undefined;
+	let setup: string | undefined;
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index];
 		if (arg === "--yes" || arg === "-y") yes = true;
 		else if (arg === "--force") force = true;
 		else if (arg === "--stale") stale = true;
-		else if (arg === "--target") {
+		else if (arg === "--setup") {
 			const name = args[index + 1];
-			if (!name || name.startsWith("-")) throw new Error("--target requires a sync setup name.");
-			if (target !== undefined) throw new Error("--target may be provided only once.");
-			target = name;
+			if (!name || name.startsWith("-")) throw new Error("--setup requires a sync setup name.");
+			if (setup !== undefined) throw new Error("--setup may be provided only once.");
+			setup = name;
 			index += 1;
 		} else if (arg.startsWith("-")) {
 			throw new Error(`Unknown sync option: ${arg}`);
@@ -98,13 +98,13 @@ export function parseOptions(args: string[]): CommandOptions {
 		silent: false,
 		reload: true,
 		auto: false,
-		...(target === undefined ? {} : { target }),
+		...(setup === undefined ? {} : { setup }),
 		args: values,
 	};
 }
 
 export function validateCommandOptions(command: string, options: CommandOptions) {
-	const targetAllowed = new Set([
+	const setupAllowed = new Set([
 		"config",
 		"files",
 		"status",
@@ -116,8 +116,8 @@ export function validateCommandOptions(command: string, options: CommandOptions)
 		"history",
 		"rollback",
 	]);
-	if (options.target && !targetAllowed.has(command)) {
-		throw new Error(`--target is not supported by /sync ${command}.`);
+	if (options.setup && !setupAllowed.has(command)) {
+		throw new Error(`--setup is not supported by /sync ${command}.`);
 	}
 	if ((options.yes || options.force) && !["push", "pull", "sync", "rollback"].includes(command)) {
 		throw new Error(`Confirmation/force options are not supported by /sync ${command}.`);
@@ -128,7 +128,7 @@ export function validateCommandOptions(command: string, options: CommandOptions)
 	const expectedValues = command === "rollback" || command === "use" ? 1 : 0;
 	if (options.args.length !== expectedValues) {
 		if (command === "rollback")
-			throw new Error("Usage: /sync rollback <snapshot-id> [--yes] [--target <name>]");
+			throw new Error("Usage: /sync rollback <snapshot-id> [--yes] [--setup <name>]");
 		if (command === "use") throw new Error("Usage: /sync use <setup>");
 		throw new Error(`Unexpected argument for /sync ${command}: ${options.args.join(" ")}`);
 	}
@@ -151,12 +151,12 @@ export function completeSyncArguments(argumentPrefix: string): CommandArgumentCo
 	const args = tokens.slice(1);
 	if (command === "use") {
 		if (args.length > 1 || (trailingSpace && args.length > 0)) return null;
-		return completeTargetValue(prefix, trailingSpace ? "" : (args[0] ?? ""));
+		return completeSetupValue(prefix, trailingSpace ? "" : (args[0] ?? ""));
 	}
-	const targetFlagIndex = args.lastIndexOf("--target");
-	if (targetFlagIndex >= 0 && targetFlagIndex === args.length - (trailingSpace ? 1 : 2)) {
-		const currentTarget = trailingSpace ? "" : (args.at(-1) ?? "");
-		if (!currentTarget.startsWith("-")) return completeTargetValue(prefix, currentTarget);
+	const setupFlagIndex = args.lastIndexOf("--setup");
+	if (setupFlagIndex >= 0 && setupFlagIndex === args.length - (trailingSpace ? 1 : 2)) {
+		const currentSetup = trailingSpace ? "" : (args.at(-1) ?? "");
+		if (!currentSetup.startsWith("-")) return completeSetupValue(prefix, currentSetup);
 	}
 
 	const flagCompletions = SYNC_FLAG_COMPLETIONS[command];
@@ -181,10 +181,10 @@ export function completeSyncArguments(argumentPrefix: string): CommandArgumentCo
 		: null;
 }
 
-function completeTargetValue(prefix: string, current: string) {
+function completeSetupValue(prefix: string, current: string) {
 	const currentRaw = current ? (prefix.match(/\S+$/u)?.[0] ?? "") : "";
 	const completionPrefix = currentRaw ? prefix.slice(0, prefix.length - currentRaw.length) : prefix;
-	const matches = targetCompletionNames.filter((name) => name.startsWith(current));
+	const matches = setupCompletionNames.filter((name) => name.startsWith(current));
 	return matches.length > 0
 		? matches.map((name) => ({
 				value: `${completionPrefix}${name}`,
@@ -230,6 +230,6 @@ export function usage() {
 	return [
 		"Usage: /sync <command>",
 		`Commands: ${commands}`,
-		"Settings: use /sync init or edit storage connections (`profiles`) and sync setups (`targets`) in ~/.pi/agent/pi-sync.json (or $PI_CODING_AGENT_DIR/pi-sync.json). Existing S3-only PI_SYNC_* overrides still work but are deprecated for future major-version removal.",
+		"Settings: use /sync init or edit storage connections and sync setups in ~/.pi/agent/pi-sync.json (or the configured Pi agent directory). Version 1 and version 2 settings are unsupported and are never rewritten.",
 	].join("\n");
 }

@@ -192,7 +192,7 @@ export class S3SyncBackend implements SyncBackend {
 			{
 				key: "s3-config",
 				level: "info",
-				message: `s3 config: ok (${this.config.destination.bucket}/${profilePrefix(this.config)})`,
+				message: `s3 config: ok (${this.config.destination.bucket}/${storageRoot(this.config)})`,
 			},
 			...sessionTokenWarnings(this.config.profile).map((message) => ({
 				key: "s3-session-token",
@@ -243,20 +243,20 @@ export class S3SyncBackend implements SyncBackend {
 }
 
 export function latestKey(config: ResolvedS3Backend) {
-	return posixJoin(profilePrefix(config), "latest.json");
+	return posixJoin(storageRoot(config), "latest.json");
 }
 
 export function historyKey(config: ResolvedS3Backend) {
-	return posixJoin(profilePrefix(config), "history.json");
+	return posixJoin(storageRoot(config), "history.json");
 }
 
 export function snapshotKey(config: ResolvedS3Backend, id: string) {
 	requireSnapshotReference(id);
-	return posixJoin(profilePrefix(config), "snapshots", `${id}.json.gz`);
+	return posixJoin(storageRoot(config), "snapshots", `${id}.json.gz`);
 }
 
-export function profilePrefix(config: ResolvedS3Backend) {
-	return posixJoin(config.destination.prefix, "profiles", config.destination.namespace);
+export function storageRoot(config: ResolvedS3Backend) {
+	return config.destination.prefix;
 }
 
 export function pointerFor(
@@ -282,7 +282,6 @@ export function s3BackendIdentity(config: ResolvedS3Backend) {
 		secretFreeEndpoint(config.profile.endpoint),
 		trimSlashes(config.destination.bucket),
 		trimSlashes(config.destination.prefix),
-		trimSlashes(config.destination.namespace),
 	]);
 	return `s3:${sha256(Buffer.from(destination))}`;
 }
@@ -294,7 +293,7 @@ function s3Destination(config: ResolvedS3Backend) {
 	} catch {
 		host = "invalid S3 endpoint";
 	}
-	return `${host} · ${config.destination.bucket}/${profilePrefix(config)}`;
+	return `${host} · ${config.destination.bucket}/${storageRoot(config)}`;
 }
 
 function secretFreeEndpoint(value: string) {
@@ -447,7 +446,7 @@ function assertSafeDestination(config: ResolvedS3Backend) {
 			hasControlCharacter(value) ||
 			value.split("/").some((segment) => segment === "." || segment === "..")
 		) {
-			throw new Error(`Invalid S3 destination ${label}.`);
+			throw new Error(`Invalid S3 storage location ${label}.`);
 		}
 	}
 }

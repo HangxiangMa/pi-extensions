@@ -44,7 +44,7 @@ export function formatPushSummary(
 	remote?: Snapshot,
 ) {
 	return [
-		`Sync setup: ${safeTerminalText(config.target ?? "default")}`,
+		`Sync setup: ${safeTerminalText(config.setupName)}`,
 		`Storage location: ${safeTerminalText(destination)}`,
 		`Upload ${upload.files.length} files from ${safeTerminalText(agentDir())}.`,
 		`Sessions: ${upload.syncSessions ? "included — may contain private conversations" : "not included"}`,
@@ -73,7 +73,7 @@ export function formatPullSummary(
 	protectedSessionCount: number,
 ) {
 	return [
-		`Sync setup: ${safeTerminalText(config.target ?? "default")}`,
+		`Sync setup: ${safeTerminalText(config.setupName)}`,
 		`Storage location: ${safeTerminalText(destination)}`,
 		`Snapshot: ${safeTerminalText(remote.id)}`,
 		`Sessions: ${remote.syncSessions ? "included — may contain private conversations" : "not included"}`,
@@ -92,7 +92,7 @@ export function formatRollbackSummary(
 	protectedSessionCount: number,
 ) {
 	return [
-		`Sync setup: ${safeTerminalText(config.target ?? "default")}`,
+		`Sync setup: ${safeTerminalText(config.setupName)}`,
 		`Storage location: ${safeTerminalText(destination)}`,
 		`Snapshot: ${safeTerminalText(requestedSnapshot)}`,
 		`Sessions: ${remote.syncSessions ? "included — may contain private conversations" : "not included"}`,

@@ -1,11 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import {
-	loadConfig,
-	normalizeExtraFiles,
-	normalizeSyncFiles,
-	readLocalConfigObject,
-} from "./config.js";
+import { loadConfig, readLocalConfigObject } from "./config.js";
 import { errorMessage, ownRecord, safeTerminalText } from "./manager-helpers.js";
+import { syncIncludeSelection } from "./sync-policy.js";
 
 const BACK = "Back";
 
@@ -39,8 +35,8 @@ function throwIfAborted(signal?: AbortSignal) {
 type SyncSetupActions = {
 	add(signal?: AbortSignal): Promise<void>;
 	edit(name: string, signal?: AbortSignal): Promise<void>;
-	makeCurrent(name: string): Promise<"exit" | undefined>;
-	remove(name: string): Promise<void>;
+	makeCurrent(name: string, signal?: AbortSignal): Promise<"exit" | undefined>;
+	remove(name: string, signal?: AbortSignal): Promise<void>;
 };
 
 export async function showSyncSetups(
@@ -50,8 +46,9 @@ export async function showSyncSetups(
 ): Promise<"exit" | undefined> {
 	while (!signal?.aborted) {
 		const raw = await readLocalConfigObject();
-		const setups = ownRecord(raw?.targets) ?? {};
-		const active = typeof raw?.activeTarget === "string" ? raw.activeTarget : undefined;
+		throwIfAborted(signal);
+		const setups = ownRecord(raw?.syncSetups) ?? {};
+		const active = typeof raw?.activeSyncSetup === "string" ? raw.activeSyncSetup : undefined;
 		const labels = new Map<string, string>();
 		for (const name of Object.keys(setups).sort((left, right) => left.localeCompare(right))) {
 			const label = `${safeTerminalText(name)}${name === active ? " (current)" : ""}`;
@@ -67,6 +64,7 @@ export async function showSyncSetups(
 			try {
 				await actions.add(signal);
 			} catch (error) {
+				if (signal?.aborted) return;
 				ctx.ui.notify(
 					`Sync setup was not added: ${menuErrorMessage(error)} Retry from Add sync setup.`,
 					"error",
@@ -89,27 +87,30 @@ async function showSyncSetupDetail(
 ): Promise<"exit" | undefined> {
 	while (!signal?.aborted) {
 		const raw = await readLocalConfigObject();
-		const setups = ownRecord(raw?.targets) ?? {};
+		throwIfAborted(signal);
+		const setups = ownRecord(raw?.syncSetups) ?? {};
 		const setup = ownRecord(setups[name]);
 		if (!setup) {
 			ctx.ui.notify(`Sync setup “${safeTerminalText(name)}” no longer exists.`, "warning");
 			return;
 		}
-		const active = typeof raw?.activeTarget === "string" ? raw.activeTarget : undefined;
+		const active = typeof raw?.activeSyncSetup === "string" ? raw.activeSyncSetup : undefined;
 		const setupCount = Object.keys(setups).length;
 		const isCurrent = name === active;
 		let detail: string[];
 		let valid = true;
 		try {
 			const config = await loadConfig(name);
+			throwIfAborted(signal);
+			const selection = syncIncludeSelection(config.include);
 			detail = [
 				`Status: ${isCurrent ? "Current" : "Not current"}`,
-				`Storage connection: ${safeTerminalText(config.storageProfile ?? "default")}`,
+				`Storage connection: ${safeTerminalText(config.connectionName)}`,
 				`Endpoint: ${storageEndpoint(config)}`,
 				`Storage location: ${storageLocation(config)}`,
-				`Included content: ${normalizeSyncFiles(config.syncFiles).length} built-in groups · ${normalizeExtraFiles(config.extraFiles).length} extra files`,
-				`Sessions: ${config.syncSessions ? "On — privacy-sensitive" : "Off"}`,
-				`Automatic sync: ${config.autoSync ? "On" : "Off"}`,
+				`Included content: ${selection.builtIns.length} built-in groups · ${selection.custom.length} extra paths`,
+				`Sessions: ${selection.sessions ? "On — privacy-sensitive" : "Off"}`,
+				`Automatic sync: ${config.automatic ? "On" : "Off"}`,
 			];
 		} catch (error) {
 			valid = false;
@@ -133,13 +134,14 @@ async function showSyncSetupDetail(
 		);
 		if (signal?.aborted || !selected || selected === BACK) return;
 		try {
-			if (selected === "Make current…") return actions.makeCurrent(name);
+			if (selected === "Make current…") return actions.makeCurrent(name, signal);
 			if (selected === "Edit sync setup…") await actions.edit(name, signal);
 			else if (selected === "Remove sync setup…") {
-				await actions.remove(name);
+				await actions.remove(name, signal);
 				return;
 			}
 		} catch (error) {
+			if (signal?.aborted) return;
 			ctx.ui.notify(
 				`Sync setup “${safeTerminalText(name)}” was not changed: ${menuErrorMessage(error)} Reopen it and retry.`,
 				"error",
@@ -149,12 +151,7 @@ async function showSyncSetupDetail(
 }
 
 function menuErrorMessage(error: unknown) {
-	return safeTerminalText(errorMessage(error))
-		.replace(/storage profile/giu, "storage connection")
-		.replace(/missing profile/giu, "missing storage connection")
-		.replace(/\btargets\b/giu, "sync setups")
-		.replace(/\btarget\b/giu, "sync setup")
-		.replace(/remote destination/giu, "storage location");
+	return safeTerminalText(errorMessage(error));
 }
 
 function storageEndpoint(config: Awaited<ReturnType<typeof loadConfig>>) {
@@ -171,16 +168,10 @@ function storageEndpoint(config: Awaited<ReturnType<typeof loadConfig>>) {
 function storageLocation(config: Awaited<ReturnType<typeof loadConfig>>) {
 	switch (config.backend.type) {
 		case "s3":
-			return safeTerminalText(
-				`${config.backend.destination.bucket}/${config.backend.destination.prefix}/profiles/${config.backend.destination.namespace}`,
-			);
+			return safeTerminalText(`${config.backend.destination.bucket}/${config.storagePath}`);
 		case "git":
-			return safeTerminalText(
-				`Git · ${config.backend.destination.branch}/${config.backend.destination.directory}/profiles/${config.backend.destination.namespace}`,
-			);
+			return safeTerminalText(`Git · ${config.backend.destination.branch}:${config.storagePath}`);
 		case "webdav":
-			return safeTerminalText(
-				`WebDAV · ${config.backend.destination.path}/profiles/${config.backend.destination.namespace}`,
-			);
+			return safeTerminalText(`WebDAV · ${config.storagePath}`);
 	}
 }

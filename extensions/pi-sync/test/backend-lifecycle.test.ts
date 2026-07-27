@@ -5,7 +5,7 @@ import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { localConfigPath } from "../src/config.js";
 import sync from "../src/sync.js";
-import { requiredConfig, withTempHome } from "./helpers.js";
+import { v3S3Settings, v3WebDavSettings, withTempHome } from "./helpers.js";
 
 test("session replacement aborts an in-flight backend operation owned by the old session", async () => {
 	await withPendingStatusOperation("session_start");
@@ -18,29 +18,7 @@ test("session shutdown aborts an in-flight backend operation", async () => {
 test("WebDAV lifecycle ignores deprecated S3 auto-sync environment overrides", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
-		writeFileSync(
-			localConfigPath(),
-			JSON.stringify({
-				version: 2,
-				activeTarget: "home",
-				profiles: {
-					dav: {
-						kind: "webdav",
-						url: "https://cloud.example.com/dav",
-						username: "user",
-						password: "pass",
-					},
-				},
-				targets: {
-					home: {
-						profile: "dav",
-						path: "pi-sync",
-						namespace: "home",
-						syncFiles: ["settings.json"],
-					},
-				},
-			}),
-		);
+		writeFileSync(localConfigPath(), JSON.stringify(v3WebDavSettings({ automatic: true })));
 		const originalFetch = globalThis.fetch;
 		let requests = 0;
 		globalThis.fetch = (async () => {
@@ -62,29 +40,7 @@ test("WebDAV lifecycle ignores deprecated S3 auto-sync environment overrides", a
 });
 
 test("session replacement aborts an in-flight WebDAV backend operation", async () => {
-	await withPendingStatusOperation("session_start", {
-		version: 2,
-		activeTarget: "home",
-		profiles: {
-			dav: {
-				kind: "webdav",
-				url: "https://cloud.example.com/dav",
-				username: "user",
-				password: "pass",
-			},
-		},
-		targets: {
-			home: {
-				profile: "dav",
-				path: "pi-sync",
-				namespace: "home",
-				autoSync: false,
-				syncFiles: ["settings.json"],
-				syncSessions: false,
-				extraFiles: [],
-			},
-		},
-	});
+	await withPendingStatusOperation("session_start", v3WebDavSettings());
 });
 
 test("session replacement cancels a still-preparing shutdown publication", async () => {
@@ -92,12 +48,7 @@ test("session replacement cancels a still-preparing shutdown publication", async
 		mkdirSync(path.join(agentDir, "sessions", "--project--"), { recursive: true });
 		writeFileSync(path.join(agentDir, "settings.json"), "{}\n");
 		writeFileSync(path.join(agentDir, "sessions", "--project--", "session.jsonl"), "{}\n");
-		const enabled = {
-			...requiredConfig(),
-			autoSync: true,
-			syncFiles: ["settings.json"],
-			syncSessions: true,
-		};
+		const enabled = v3S3Settings({ automatic: true, include: ["settings.json", "sessions"] });
 		writeFileSync(localConfigPath(), JSON.stringify(enabled));
 		let markStarted: (() => void) | undefined;
 		const started = new Promise<void>((resolve) => {
@@ -124,7 +75,10 @@ test("session replacement cancels a still-preparing shutdown publication", async
 			const { ctx: shutdownCtx } = createMockContext({ hasUI: true });
 			const shutdown = mock.events.get("session_shutdown")?.[0]?.({ reason: "exit" }, shutdownCtx);
 			await started;
-			writeFileSync(localConfigPath(), JSON.stringify({ ...enabled, autoSync: false }));
+			writeFileSync(
+				localConfigPath(),
+				JSON.stringify(v3S3Settings({ automatic: false, include: ["settings.json", "sessions"] })),
+			);
 			const { ctx: replacementCtx } = createMockContext({ hasUI: true });
 			await mock.events.get("session_start")?.[0]?.({}, replacementCtx);
 			await shutdown;
@@ -143,12 +97,7 @@ test("session shutdown owns an opt-in session publication with a bounded signal"
 		writeFileSync(path.join(agentDir, "sessions", "--project--", "session.jsonl"), "{}\n");
 		writeFileSync(
 			localConfigPath(),
-			JSON.stringify({
-				...requiredConfig(),
-				autoSync: true,
-				syncFiles: ["settings.json"],
-				syncSessions: true,
-			}),
+			JSON.stringify(v3S3Settings({ automatic: true, include: ["settings.json", "sessions"] })),
 		);
 		let activePointer: Record<string, unknown> | undefined;
 		let snapshotSignal: AbortSignal | null | undefined;
@@ -193,11 +142,7 @@ test("session shutdown owns an opt-in session publication with a bounded signal"
 
 async function withPendingStatusOperation(
 	event: "session_start" | "session_shutdown",
-	settings: Record<string, unknown> = {
-		...requiredConfig(),
-		autoSync: false,
-		syncFiles: ["settings.json"],
-	},
+	settings: Record<string, unknown> = v3S3Settings(),
 ) {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });

@@ -7,37 +7,33 @@ import {
 	completeSyncArguments,
 	parseOptions,
 	resolveSyncCommand,
-	setSyncTargetCompletions,
+	setSyncSetupCompletions,
 	usage,
 	validateCommandOptions,
 } from "./command.js";
 import {
 	activeLocalConfigPath,
-	configuredTargetNames,
+	configuredSyncSetupNames,
 	consumeLocalConfigMigrationNotice,
-	deprecatedPiSyncEnvironmentWarnings,
+	createLocalConfigDocument,
 	ensureStateDir,
-	isEnabled,
-	isExplicitlyEnabled,
 	isMissingConfigError,
 	loadConfig,
 	loadPartialConfig,
 	localConfigPath,
 	localConfigTemplate,
-	normalizeExtraFiles,
-	normalizeSyncFiles,
 	readLocalConfigObject,
 	readStateForConfig,
 	sessionTokenWarnings,
 	syncSessionsWarnings,
-	writeLocalConfigObject,
 } from "./config.js";
 import { showFileSelection } from "./file-selection.js";
 import { unlock, withLock } from "./lock.js";
 import { showSetupWizard, showSyncManager } from "./manager-ui.js";
+import { SetupPullRequiresUiError, useSyncSetup } from "./setup-switch.js";
 import { createSnapshot } from "./snapshot.js";
 import { recoverSnapshotTransactionsOnStartup } from "./snapshot-transaction.js";
-import { errorMessage, redact } from "./sync-format.js";
+import { errorMessage } from "./sync-format.js";
 import {
 	diff,
 	doctor,
@@ -49,13 +45,9 @@ import {
 	syncBoth,
 } from "./sync-operations.js";
 import { hasLocalChanges } from "./sync-state.js";
-import { TargetPullRequiresUiError, useSyncTarget } from "./target-switch.js";
 import type { AnySyncConfig, CommandOptions, SnapshotOptions } from "./types.js";
 
 const STATUS_KEY = "sync";
-const DEFAULT_PROFILE = "default";
-const DEFAULT_PREFIX = "pi-sync";
-const DEFAULT_REGION = "auto";
 
 const AUTO_SYNC_OPTIONS: CommandOptions = {
 	yes: true,
@@ -74,6 +66,11 @@ export default function sync(pi: ExtensionAPI) {
 		description: "Sync Pi settings through Git, WebDAV, R2, or S3-compatible storage",
 		getArgumentCompletions: completeSyncArguments,
 		handler: async (args, ctx) => {
+			if (!ctx.hasUI) {
+				throw new Error(
+					"/sync requires TUI or RPC mode so results and safety prompts are observable.",
+				);
+			}
 			await handleCommand(args, ctx, sessionAbort.signal);
 		},
 	});
@@ -94,19 +91,15 @@ export default function sync(pi: ExtensionAPI) {
 			return;
 		}
 		try {
-			setSyncTargetCompletions(await configuredTargetNames());
+			setSyncSetupCompletions(await configuredSyncSetupNames());
 			if (signal.aborted) return;
 		} catch {
 			if (signal.aborted) return;
-			setSyncTargetCompletions([]);
+			setSyncSetupCompletions([]);
 		}
 		const migrationNotice = consumeLocalConfigMigrationNotice();
 		if (migrationNotice) ctx.ui.notify(migrationNotice, "warning");
-		const partial = await loadPartialConfig().catch(() => undefined);
 		if (signal.aborted) return;
-		const s3 = partial?.storageKind !== "webdav" && partial?.storageKind !== "git";
-		const warnings = s3 ? deprecatedPiSyncEnvironmentWarnings() : [];
-		if (warnings.length > 0) ctx.ui.notify(warnings.join("\n"), "warning");
 		await autoSync(ctx, signal);
 	});
 
@@ -156,14 +149,14 @@ async function executeCommand(
 	ctx: ExtensionCommandContext,
 	signal?: AbortSignal,
 	onCommit?: () => void,
-	target?: string,
+	setup?: string,
 ) {
 	try {
 		const command = await resolveSyncCommand(rawArgs, ctx);
 		if (signal?.aborted || !command) return;
 		const { subcommand, rest } = command;
 		const options = parseOptions(rest);
-		if (target !== undefined) options.target = target;
+		if (setup !== undefined) options.setup = setup;
 		if (signal) options.signal = signal;
 		if (onCommit) options.onCommit = onCommit;
 		validateCommandOptions(subcommand, options);
@@ -173,8 +166,13 @@ async function executeCommand(
 				ctx.ui.notify(usage(), "info");
 				return;
 			case "use":
-				await useSyncTarget(ctx, options.args[0] ?? "", (selectedTarget) =>
-					withLock("pull", () => pull(ctx, { ...options, target: selectedTarget })),
+				await useSyncSetup(
+					ctx,
+					options.args[0] ?? "",
+					(selectedSetup) =>
+						withLock("pull", () => pull(ctx, { ...options, setup: selectedSetup })),
+					undefined,
+					options.signal,
 				);
 				return;
 			case "init":
@@ -184,7 +182,7 @@ async function executeCommand(
 				await showConfig(ctx, options);
 				return;
 			case "files":
-				await showFileSelection(ctx, options.target);
+				await showFileSelection(ctx, options.setup, options.signal);
 				return;
 			case "status":
 				await status(ctx, options);
@@ -218,7 +216,7 @@ async function executeCommand(
 	} catch (error) {
 		if (signal?.aborted) return;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
-		if (error instanceof TargetPullRequiresUiError) throw error;
+		if (error instanceof SetupPullRequiresUiError) throw error;
 		ctx.ui.notify(errorMessage(error), "error");
 	}
 }
@@ -227,7 +225,7 @@ async function autoSync(ctx: ExtensionContext, signal: AbortSignal) {
 	try {
 		const partial = await loadPartialConfig();
 		throwIfAborted(signal);
-		if (!isEnabled(autoSyncSetting(partial), true)) return;
+		if (!partial.automatic) return;
 		await ensureStateDir();
 		throwIfAborted(signal);
 		await loadConfig();
@@ -247,18 +245,21 @@ async function autoPushSessions(ctx: ExtensionContext, signal: AbortSignal) {
 	try {
 		const partial = await loadPartialConfig();
 		throwIfAborted(signal);
-		if (!isEnabled(autoSyncSetting(partial), true)) return;
-		if (!isExplicitlyEnabled(partial.syncSessions)) return;
+		if (!partial.automatic) return;
+		if (!partial.include.includes("sessions")) return;
 		await ensureStateDir();
 		throwIfAborted(signal);
 		const config = await loadConfig();
 		throwIfAborted(signal);
-		if (!config.syncSessions) return;
+		if (!config.include.includes("sessions")) return;
 		await withLock("auto-session-push", async () => {
 			throwIfAborted(signal);
 			const state = await readStateForConfig(config);
 			throwIfAborted(signal);
-			const local = await createSnapshot(config.profile, snapshotOptionsForContext(ctx, config));
+			const local = await createSnapshot(
+				config.snapshotIdentity,
+				snapshotOptionsForContext(ctx, config),
+			);
 			throwIfAborted(signal);
 			if (!hasLocalChanges(local, state, config)) return;
 			await push(ctx, { ...AUTO_SYNC_OPTIONS, signal }, { config, state, local });
@@ -281,30 +282,30 @@ async function initConfig(ctx: ExtensionCommandContext, signal?: AbortSignal) {
 		await showSetupWizard(ctx, signal);
 		return;
 	}
-	await writeLocalConfigObject(localConfigTemplate());
-	ctx.ui.notify(`Created ${configPath}. Fill in R2 credentials, then run /sync doctor.`, "info");
+	await createLocalConfigDocument(localConfigTemplate());
+	ctx.ui.notify(
+		`Created ${configPath}. Add a storage connection and sync setup before syncing.`,
+		"info",
+	);
 }
 
 async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions) {
-	const partial = await loadPartialConfig(options.target);
-	const s3 = partial.storageKind !== "webdav" && partial.storageKind !== "git";
-	const syncSessions = isExplicitlyEnabled(partial.syncSessions);
+	const config = await loadConfig(options.setup);
 	const warnings = [
-		...(s3 ? deprecatedPiSyncEnvironmentWarnings() : []),
-		...(s3 ? sessionTokenWarnings(partial) : []),
-		...syncSessionsWarnings({ syncSessions }),
+		...(config.backend.type === "s3" ? sessionTokenWarnings(config.backend.profile) : []),
+		...syncSessionsWarnings(config),
 	];
-	const storageLines = configStorageLines(partial);
+	const storageLines = configStorageLines(config);
 	ctx.ui.notify(
 		[
 			"pi-sync config:",
-			`sync setup: ${partial.target ?? "default"}`,
-			`storage connection: ${partial.storageProfile ?? "default"}`,
+			`sync setup: ${config.setupName}`,
+			`storage connection: ${config.connectionName}`,
 			...storageLines,
-			`automatic sync: ${isEnabled(s3 ? (partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC) : partial.autoSync, true) ? "enabled" : "disabled"}`,
-			`included built-ins: ${normalizeSyncFiles(partial.syncFiles).join(", ") || "none"}`,
-			`sessions: ${syncSessions ? "included" : "not included"}`,
-			`extra included files: ${normalizeExtraFiles(partial.extraFiles).join(", ") || "none"}`,
+			`storage path: ${config.storagePath}`,
+			`automatic sync: ${config.automatic ? "enabled" : "disabled"}`,
+			`included content: ${config.include.join(", ") || "none"}`,
+			`sessions: ${config.include.includes("sessions") ? "included" : "not included"}`,
 			`settings file: ${localConfigPath()}`,
 			...warnings,
 		].join("\n"),
@@ -312,36 +313,31 @@ async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions)
 	);
 }
 
-function configStorageLines(partial: Awaited<ReturnType<typeof loadPartialConfig>>) {
-	switch (partial.storageKind) {
+function configStorageLines(config: AnySyncConfig) {
+	switch (config.backend.type) {
 		case "git":
 			return [
 				"kind: git",
-				`remote: ${displayGitRemote(partial.remote)}`,
-				`authentication: existing Git/SSH credentials (not stored)`,
-				`branch: ${partial.branch ?? "pi-sync"}`,
-				`directory: ${partial.directory ?? DEFAULT_PREFIX}`,
-				`namespace: ${partial.profile ?? DEFAULT_PROFILE}`,
+				`remote: ${displayGitRemote(config.backend.profile.remote)}`,
+				"authentication: existing Git/SSH credentials (not stored)",
+				`branch: ${config.backend.destination.branch}`,
 			];
 		case "webdav":
 			return [
 				"kind: webdav",
-				`url: ${displayWebDavUrl(partial.url, partial.username)}`,
-				`username: ${partial.username ? "configured (value hidden)" : "missing"}`,
-				`password: ${partial.password ? "configured" : "missing"}`,
-				`path: ${partial.path ?? DEFAULT_PREFIX}`,
-				`namespace: ${partial.profile ?? DEFAULT_PROFILE}`,
+				`url: ${displayWebDavUrl(config.backend.profile.url, config.backend.profile.username)}`,
+				"username: configured (value hidden)",
+				"password: configured",
 			];
-		default:
+		case "s3":
 			return [
-				`endpoint: ${partial.endpoint ?? "missing"}`,
-				`bucket: ${partial.bucket ?? "missing"}`,
-				`region: ${partial.region ?? DEFAULT_REGION}`,
-				`accessKeyId: ${partial.accessKeyId ? redact(partial.accessKeyId) : "missing"}`,
-				`secretAccessKey: ${partial.secretAccessKey ? "configured" : "missing"}`,
-				`sessionToken: ${partial.sessionToken ? "configured" : "not configured"}`,
-				`namespace: ${partial.profile ?? DEFAULT_PROFILE}`,
-				`prefix: ${partial.prefix ?? DEFAULT_PREFIX}`,
+				"kind: s3",
+				`endpoint: ${config.backend.profile.endpoint}`,
+				`bucket: ${config.backend.destination.bucket}`,
+				`region: ${config.backend.profile.region}`,
+				"access key id: configured",
+				"secret access key: configured",
+				`session token: ${config.backend.profile.sessionToken ? "configured" : "not configured"}`,
 			];
 	}
 }
@@ -374,12 +370,6 @@ function displayWebDavUrl(value: string | undefined, username: string | undefine
 	}
 }
 
-function autoSyncSetting(partial: Awaited<ReturnType<typeof loadPartialConfig>>) {
-	return partial.storageKind === "webdav" || partial.storageKind === "git"
-		? partial.autoSync
-		: (partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC);
-}
-
 function throwIfAborted(signal: AbortSignal) {
 	if (!signal.aborted) return;
 	throw signal.reason instanceof Error
@@ -396,10 +386,8 @@ function snapshotOptionsForContext(
 	config: AnySyncConfig,
 ): SnapshotOptions {
 	return {
-		syncFiles: config.syncFiles,
-		syncSessions: config.syncSessions,
+		include: config.include,
 		sessionDir: sessionDirFromContext(ctx),
-		extraFiles: config.extraFiles,
 	};
 }
 

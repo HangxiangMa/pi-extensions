@@ -1,309 +1,193 @@
 import assert from "node:assert/strict";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import test from "node:test";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { createMockContext } from "../../../test/support.js";
 import {
-	createCustomSelectorHarness,
-	createMockContext,
-	createMockPi,
-} from "../../../test/support.js";
-import { loadConfig, readLocalConfigObject } from "../src/config.js";
+	loadConfig,
+	loadPartialConfig,
+	localConfigPath,
+	readLocalConfigObject,
+	updateLocalConfig,
+} from "../src/config.js";
 import {
 	showAddGitStorageProfile,
 	showAddGitTarget,
-	showEditGitStorageProfile,
 	showEditGitTarget,
 	showGitSetup,
 } from "../src/git-ui.js";
-import { updateStorageProfile, updateSyncTarget } from "../src/settings-management.js";
-import { showSyncSettings } from "../src/settings-ui.js";
-import sync from "../src/sync.js";
-import { withEnv, withTempHome } from "./helpers.js";
+import { v3S3Settings, withTempHome } from "./helpers.js";
 
-initTheme("dark", false);
-
-test("Git setup stores a backend-specific destination without credentials", async () => {
+test("first Git setup writes the exact version 3 connection and setup shapes", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
-		const inputs = [
-			"github",
-			"git@github.com:owner/private-pi-sync.git",
-			"pi-sync/home",
-			"pi-sync",
-			"home",
-		];
-		const reviews: string[] = [];
-		const { ctx } = createMockContext({
-			hasUI: true,
-			mode: "tui",
-			input: async () => inputs.shift(),
-			select: async (title: string) => {
-				reviews.push(title);
-				return title === "Automatic sync for this setup" ? "Keep automatic sync off" : "Save setup";
-			},
-		});
-		assert.equal(await showGitSetup(ctx, "home"), true);
-		const config = await loadConfig();
-		assert.equal(config.backend.type, "git");
-		if (config.backend.type !== "git") return;
-		assert.equal(config.backend.profile.remote, "git@github.com:owner/private-pi-sync.git");
-		assert.deepEqual(config.backend.destination, {
-			branch: "pi-sync/home",
-			directory: "pi-sync",
-			namespace: "home",
-		});
-		assert.equal(config.autoSync, false);
-		assert.match(reviews.join("\n"), /Automatic sync: Off/);
-		assert.doesNotMatch(reviews.join("\n"), /token|password/i);
-		assert.match(reviews.join("\n"), /existing non-interactive Git\/SSH credentials/i);
-	});
-});
-
-test("Git setup review preserves a credential-free custom SSH port", async () => {
-	await withTempHome(async (agentDir) => {
-		mkdirSync(agentDir, { recursive: true });
-		const inputs = [
-			"self-hosted",
-			"ssh://git@example.com:2222/private/pi-sync.git",
-			"pi-sync/home",
-			"pi-sync",
-			"home",
-		];
-		const reviews: string[] = [];
-		const { ctx } = createMockContext({
-			hasUI: true,
-			mode: "tui",
-			input: async () => inputs.shift(),
-			select: async (title: string) => {
-				reviews.push(title);
-				return title === "Automatic sync for this setup" ? "Keep automatic sync off" : "Cancel";
-			},
-		});
-		assert.equal(await showGitSetup(ctx, "home"), false);
-		assert.match(reviews.join("\n"), /ssh:\/\/example\.com:2222\/private\/pi-sync\.git/);
-		assert.doesNotMatch(reviews.join("\n"), /git@example\.com/);
-	});
-});
-
-test("Git settings ignore deprecated S3 automatic-sync environment overrides", async () => {
-	await withEnv({ PI_SYNC_AUTO_SYNC: "false" }, () =>
-		withTempHome(async (agentDir) => {
-			mkdirSync(agentDir, { recursive: true });
-			const setupInputs = [
-				"git",
-				"git@example.com:private/pi-sync.git",
-				"pi-sync/home",
-				"pi-sync",
-				"home",
-			];
-			const setup = createMockContext({
-				hasUI: true,
-				mode: "tui",
-				input: async () => setupInputs.shift(),
-				select: async (title: string) =>
-					title === "Automatic sync for this setup" ? "Enable automatic sync" : "Save setup",
-			});
-			assert.equal(await showGitSetup(setup.ctx, "home"), true);
-			let rendered = "";
-			const settings = createMockContext({
-				hasUI: true,
-				mode: "tui",
-				custom: async (factory: unknown) => {
-					const selector = createCustomSelectorHarness(factory, 80);
-					rendered = selector.render().join("\n");
-					selector.handleInput("\r");
-					await new Promise((resolve) => setImmediate(resolve));
-					selector.handleInput("\u001b");
-					return selector.result;
-				},
-			});
-			await showSyncSettings(settings.ctx, async () => undefined);
-			assert.match(rendered, /Automatic sync/);
-			assert.doesNotMatch(rendered, /environment override/i);
-			const config = await loadConfig();
-			assert.equal(config.autoSync, false);
-		}),
-	);
-});
-
-test("Git setup stops after session cancellation without persisting a destination", async () => {
-	await withTempHome(async (agentDir) => {
-		mkdirSync(agentDir, { recursive: true });
-		const controller = new AbortController();
-		let resolveInput: ((value: string) => void) | undefined;
-		const { ctx } = createMockContext({
-			hasUI: true,
-			mode: "tui",
-			input: async () =>
-				new Promise<string>((resolve) => {
-					resolveInput = resolve;
-				}),
-		});
-		const setup = showAddGitStorageProfile(ctx, controller.signal);
-		while (!resolveInput) await new Promise((resolve) => setImmediate(resolve));
-		controller.abort(new DOMException("Session replaced", "AbortError"));
-		resolveInput("git");
-		await assert.rejects(
-			setup,
-			(error: unknown) => error instanceof Error && error.name === "AbortError",
-		);
-		assert.equal(await readLocalConfigObject(), undefined);
-	});
-});
-
-test("Git is available through the existing setup manager and config route", async () => {
-	await withTempHome(async (agentDir) => {
-		mkdirSync(agentDir, { recursive: true });
-		const mock = createMockPi();
-		sync(mock.pi);
-		const selections = [
-			"Set up sync",
-			"Git",
-			"Personal / Home",
-			"Keep automatic sync off",
-			"Save setup",
-			undefined,
-		];
-		const inputs = [
-			"github",
-			"git@github.com:owner/private-pi-sync.git",
-			"pi-sync/home",
-			"pi-sync",
-			"home",
-		];
-		const rendered: string[] = [];
+		const inputs = ["github", "git@github.com:user/pi-sync.git", "pi-sync/home", "pi-sync/home"];
+		const choices = ["Enable automatic sync", "Save setup"];
 		const { ctx, notifications } = createMockContext({
 			hasUI: true,
 			mode: "tui",
-			select: async (title: string) => {
-				rendered.push(title);
-				return selections.shift();
-			},
 			input: async () => inputs.shift(),
+			select: async () => choices.shift(),
 		});
-		await mock.commands.get("sync")?.handler("", ctx);
-		assert.equal((await loadConfig()).backend.type, "git");
-		await mock.commands.get("sync")?.handler("config", ctx);
-		const output = notifications.map((item) => item.message).join("\n");
-		assert.match(output, /kind: git/i);
-		assert.match(output, /branch: pi-sync\/home/i);
-		assert.doesNotMatch(output, /accessKeyId|secretAccessKey|password:/i);
-		assert.doesNotMatch(rendered.join("\n"), /Consistency:/);
-		assert.match(rendered.join("\n"), /Storage: Git · github · pi-sync\/home/);
+		assert.equal(await showGitSetup(ctx, "home"), true);
+		const raw = await readLocalConfigObject();
+		assert.deepEqual(raw?.storageConnections.github, {
+			type: "git",
+			remote: "git@github.com:user/pi-sync.git",
+		});
+		assert.deepEqual(raw?.syncSetups.home.storage, {
+			connection: "github",
+			branch: "pi-sync/home",
+			path: "pi-sync/home",
+		});
+		assert.equal(raw?.syncSetups.home.sync.automatic, true);
+		assert.doesNotMatch(JSON.stringify(raw), /password|secretAccessKey/u);
+		assert.match(notifications.at(-1)?.message ?? "", /Saved Git sync setup/u);
 	});
 });
 
-test("Git storage connections and sync setups add and edit through one model", async () => {
+test("Git connection reuse adds an independent setup with a reviewed path", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
-		const setupInputs = [
-			"git",
-			"ssh://git@example.com/pi-sync.git",
-			"pi-sync/home",
-			"pi-sync",
-			"home",
-		];
-		const setup = createMockContext({
+		const settings = v3S3Settings();
+		writeFileSync(localConfigPath(), JSON.stringify(settings), { mode: 0o600 });
+		const connectionInputs = ["git", "https://github.com/user/pi-sync.git"];
+		const connectionCtx = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => connectionInputs.shift(),
+			select: async () => "Add storage connection",
+		});
+		assert.equal(await showAddGitStorageProfile(connectionCtx.ctx), true);
+
+		const setupInputs = ["pi-sync/work", "pi-sync/work"];
+		const choices = ["Minimal settings", "Keep automatic sync off", "Add sync setup"];
+		const setupCtx = createMockContext({
 			hasUI: true,
 			mode: "tui",
 			input: async () => setupInputs.shift(),
-			select: async () => "Save setup",
+			select: async () => choices.shift(),
 		});
-		await showGitSetup(setup.ctx, "home");
+		assert.equal(await showAddGitTarget(setupCtx.ctx, "work", "git"), true);
+		const config = await loadConfig("work");
+		assert.equal(config.connectionName, "git");
+		assert.equal(config.storagePath, "pi-sync/work");
+		assert.equal(config.automatic, false);
+	});
+});
 
-		const addProfileInputs = ["backup", "https://git.example.com/owner/pi-sync.git"];
-		const addProfile = createMockContext({
+test("Git setup edit persists one reviewed branch and complete storage path", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const settings = v3S3Settings();
+		(settings.storageConnections as Record<string, unknown>).git = {
+			type: "git",
+			remote: "git@github.com:user/pi-sync.git",
+		};
+		(settings.syncSetups as Record<string, unknown>).work = {
+			storage: { connection: "git", branch: "pi-sync/work", path: "pi-sync/work" },
+			sync: { include: ["settings.json"], automatic: false },
+		};
+		writeFileSync(localConfigPath(), JSON.stringify(settings), { mode: 0o600 });
+		const inputs = ["pi-sync/archive", "archives/work"];
+		const { ctx } = createMockContext({
 			hasUI: true,
 			mode: "tui",
-			input: async () => addProfileInputs.shift(),
-			select: async () => "Add storage connection",
-		});
-		assert.equal(await showAddGitStorageProfile(addProfile.ctx), true);
-
-		const addTargetInputs = ["pi-sync/work", "settings", "work"];
-		const targetSelections = ["Minimal settings", "Keep automatic sync off", "Add sync setup"];
-		const addTarget = createMockContext({
-			hasUI: true,
-			mode: "tui",
-			input: async () => addTargetInputs.shift(),
-			select: async () => targetSelections.shift(),
-		});
-		assert.equal(await showAddGitTarget(addTarget.ctx, "work", "backup"), true);
-		await updateStorageProfile("backup", (profile) => ({
-			...profile,
-			futureProfileField: { retained: true },
-		}));
-		await updateSyncTarget("work", (target) => ({
-			...target,
-			futureTargetField: ["retained"],
-		}));
-
-		const invalidTargetInputs = ["pi-sync/work", "settings-v2", "work"];
-		const invalidTarget = createMockContext({
-			hasUI: true,
-			mode: "tui",
-			input: async () => invalidTargetInputs.shift(),
+			input: async () => inputs.shift(),
 			select: async () => "Save sync setup",
 		});
-		assert.equal(
-			await showEditGitTarget(invalidTarget.ctx, {
-				settingsVersion: 2,
-				storageKind: "git",
-				target: "work",
-				storageProfile: "backup",
-				remote: "https://git.example.com/owner/pi-sync.git",
-				branch: "pi-sync/work",
-				directory: "settings",
-				profile: "work",
-			}),
-			false,
-		);
-		assert.match(invalidTarget.notifications.at(-1)?.message ?? "", /choose a new owned branch/i);
+		await showEditGitTarget(ctx, await loadPartialConfig("work"));
+		const config = await loadConfig("work");
+		assert.equal(config.backend.type, "git");
+		if (config.backend.type !== "git") return;
+		assert.equal(config.backend.destination.branch, "pi-sync/archive");
+		assert.equal(config.storagePath, "archives/work");
+	});
+});
 
-		const editProfileInputs = ["git@git.example.com:owner/new.git"];
-		const editProfile = createMockContext({
+test("Git setup edit requires a new branch when changing the storage path", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const settings = v3S3Settings();
+		(settings.storageConnections as Record<string, unknown>).git = {
+			type: "git",
+			remote: "git@github.com:user/pi-sync.git",
+		};
+		(settings.syncSetups as Record<string, unknown>).work = {
+			storage: { connection: "git", branch: "pi-sync/work", path: "pi-sync/work" },
+			sync: { include: ["settings.json"], automatic: false },
+		};
+		writeFileSync(localConfigPath(), JSON.stringify(settings), { mode: 0o600 });
+		const before = readFileSync(localConfigPath());
+		const inputs = ["pi-sync/work", "archives/work"];
+		const { ctx, notifications } = createMockContext({
 			hasUI: true,
 			mode: "tui",
-			input: async () => editProfileInputs.shift(),
-			select: async () => "Save storage connection",
-		});
-		await showEditGitStorageProfile(editProfile.ctx, "backup", {
-			kind: "git",
-			remote: "https://git.example.com/owner/pi-sync.git",
-		});
-
-		const editTargetInputs = ["pi-sync/work-v2", "settings-v2", "work"];
-		const editTarget = createMockContext({
-			hasUI: true,
-			mode: "tui",
-			input: async () => editTargetInputs.shift(),
+			input: async () => inputs.shift(),
 			select: async () => "Save sync setup",
 		});
-		await showEditGitTarget(editTarget.ctx, {
-			settingsVersion: 2,
-			storageKind: "git",
-			target: "work",
-			storageProfile: "backup",
-			remote: "git@git.example.com:owner/new.git",
-			branch: "pi-sync/work",
-			directory: "settings",
-			profile: "work",
-		});
+		assert.equal(await showEditGitTarget(ctx, await loadPartialConfig("work")), false);
+		assert.match(notifications.at(-1)?.message ?? "", /storage path.*new Git branch/iu);
+		assert.deepEqual(readFileSync(localConfigPath()), before);
+	});
+});
 
-		const saved = await readLocalConfigObject();
-		const profiles = saved?.profiles as Record<string, Record<string, unknown>>;
-		const targets = saved?.targets as Record<string, Record<string, unknown>>;
-		assert.equal(profiles.backup.remote, "git@git.example.com:owner/new.git");
-		assert.deepEqual(profiles.backup.futureProfileField, { retained: true });
-		assert.deepEqual(targets.work.futureTargetField, ["retained"]);
-		assert.equal(targets.work.autoSync, false);
-		assert.deepEqual(
-			{
-				branch: targets.work.branch,
-				directory: targets.work.directory,
-				namespace: targets.work.namespace,
+test("Git setup edit rejects coordinates changed while its review is open", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const settings = v3S3Settings();
+		Object.assign(settings.storageConnections, {
+			git: { type: "git", remote: "git@github.com:user/pi-sync.git" },
+			archive: { type: "git", remote: "git@github.com:user/archive.git" },
+		});
+		(settings.syncSetups as Record<string, unknown>).work = {
+			storage: { connection: "git", branch: "pi-sync/work", path: "pi-sync/work" },
+			sync: { include: ["settings.json"], automatic: false },
+		};
+		writeFileSync(localConfigPath(), JSON.stringify(settings), { mode: 0o600 });
+		const partial = await loadPartialConfig("work");
+		const inputs = ["pi-sync/new", "archives/new"];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => inputs.shift(),
+			select: async () => {
+				await updateLocalConfig((current) => ({
+					...current,
+					syncSetups: {
+						...current.syncSetups,
+						work: {
+							...current.syncSetups.work,
+							storage: {
+								connection: "archive",
+								branch: "pi-sync/rebound",
+								path: "pi-sync/rebound",
+							},
+						},
+					},
+				}));
+				return "Save sync setup";
 			},
-			{ branch: "pi-sync/work-v2", directory: "settings-v2", namespace: "work" },
-		);
+		});
+		await assert.rejects(showEditGitTarget(ctx, partial), /changed while it was open/u);
+		const config = await loadConfig("work");
+		assert.equal(config.connectionName, "archive");
+		assert.equal(config.storagePath, "pi-sync/rebound");
+	});
+});
+
+test("Git setup cancellation and secret-bearing remotes leave settings unchanged", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const before = Buffer.from(`${JSON.stringify(v3S3Settings())}\n`);
+		writeFileSync(localConfigPath(), before, { mode: 0o600 });
+		const inputs = ["bad", "https://user:secret@example.com/repo.git"];
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => inputs.shift(),
+		});
+		assert.equal(await showAddGitStorageProfile(ctx), false);
+		assert.deepEqual(readFileSync(localConfigPath()), before);
+		assert.doesNotMatch(notifications.at(-1)?.message ?? "", /secret/u);
 	});
 });

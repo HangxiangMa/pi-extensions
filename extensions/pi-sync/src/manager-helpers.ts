@@ -1,12 +1,17 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { isCloudflareR2Endpoint } from "./config.js";
 
-export function formatRemotePath(prefix: string, namespace: string) {
-	return safeTerminalText(`${prefix}/profiles/${namespace}/`);
-}
-
-export async function requiredExistingBucket(ctx: ExtensionCommandContext, example: string) {
-	const value = await ctx.ui.input("Existing bucket", `Example: ${example}`);
+export async function requiredExistingBucket(
+	ctx: ExtensionCommandContext,
+	example: string,
+	signal?: AbortSignal,
+) {
+	const value = await ctx.ui.input("Existing bucket", `Example: ${example}`, { signal });
+	if (signal?.aborted) {
+		throw signal.reason instanceof Error
+			? signal.reason
+			: new DOMException("The operation was aborted", "AbortError");
+	}
 	if (value === undefined) return undefined;
 	const normalized = value.trim();
 	if (!normalized) {

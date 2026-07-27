@@ -7,7 +7,7 @@ import { gzipSync } from "node:zlib";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { localConfigPath } from "../src/config.js";
 import sync from "../src/sync.js";
-import { requiredConfig, snapshot, withTempHome } from "./helpers.js";
+import { v3S3Settings as requiredConfig, snapshot, withTempHome } from "./helpers.js";
 
 test("snapshot staging failure leaves the prior latest pointer active", async () => {
 	await withPublicationHarness({ failSnapshot: true }, async ({ counts, notifications }) => {
@@ -59,17 +59,15 @@ async function withPublicationHarness(
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(path.join(agentDir, "settings.json"), '{"local":"new"}\n');
-		writeFileSync(
-			localConfigPath(),
-			JSON.stringify({ ...requiredConfig(), syncFiles: ["settings.json"] }),
-		);
-		const remote = snapshot([
-			{ path: "settings.json", content: Buffer.from('{"remote":"old"}\n') },
-		]);
+		writeFileSync(localConfigPath(), JSON.stringify(requiredConfig()));
+		const remote = {
+			...snapshot([{ path: "settings.json", content: Buffer.from('{"remote":"old"}\n') }]),
+			profile: "home",
+		};
 		const remoteEncoded = gzipSync(Buffer.from(JSON.stringify(remote)));
 		let activePointer: Record<string, unknown> = {
 			version: 1,
-			profile: "default",
+			profile: "home",
 			snapshot: remote.id,
 			sha256: createHash("sha256").update(remoteEncoded).digest("hex"),
 			createdAt: remote.createdAt,
