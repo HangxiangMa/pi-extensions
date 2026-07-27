@@ -194,6 +194,27 @@ test("WebDAV opaque revisions retain If-Match across backend instances", async (
 	}
 });
 
+test("WebDAV doctor repairs a missing active snapshot history entry", async () => {
+	const options: { failHistoryPut?: boolean } = { failHistoryPut: true };
+	const server = await new MockWebDavServer(options).start();
+	try {
+		const backend = new WebDavSyncBackend(webDavConfig(server.url));
+		const published = await backend.publishSnapshot(snapshot([]), { kind: "missing" });
+		assert.match(published.warnings.join("\n"), /history could not be updated/);
+		assert.deepEqual(await backend.listHistory(), []);
+
+		options.failHistoryPut = false;
+		const diagnostics = await backend.diagnose();
+		assert.ok(diagnostics.some((item) => /history.*repaired/i.test(item.message)));
+		assert.deepEqual(
+			(await backend.listHistory()).map((item) => item.snapshotId),
+			["snap"],
+		);
+	} finally {
+		await server.close();
+	}
+});
+
 test("WebDAV active-head transport failures report an unknown publication outcome", async () => {
 	const server = await new MockWebDavServer({ failLatestPut: true }).start();
 	try {

@@ -579,6 +579,7 @@ export function statePathForPartialConfig(partial: PartialConfig) {
 }
 
 async function migrateLegacyV2State(config: AnySyncConfig, destination: string) {
+	if (config.backend.type !== "s3") return readJsonIfExists<SyncState>(destination);
 	const target = config.target ?? DEFAULT_PROFILE;
 	const legacyHash = createHash("sha256").update(target).digest("hex").slice(0, 10);
 	const legacyPath = path.join(

@@ -61,6 +61,28 @@ test("WebDAV client reports authentication and malformed listing errors without 
 	}
 });
 
+test("WebDAV client redacts percent-encoded usernames from error bodies", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (async () =>
+		new Response("principal alice%40example.com denied", {
+			status: 403,
+		})) as typeof globalThis.fetch;
+	try {
+		const config = webDavConfig("http://127.0.0.1:1/dav/");
+		config.profile.username = "alice@example.com";
+		await assert.rejects(
+			new WebDavClient(config).getBuffer("item"),
+			(error: unknown) =>
+				error instanceof Error &&
+				/HTTP 403/.test(error.message) &&
+				!error.message.includes("alice@example.com") &&
+				!error.message.includes("alice%40example.com"),
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("WebDAV client cancels response bodies on early 404 and 412 exits", async () => {
 	const originalFetch = globalThis.fetch;
 	let cancelled = 0;

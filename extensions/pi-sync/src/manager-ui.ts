@@ -353,7 +353,11 @@ export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: Abo
 	if (signal?.aborted || !preset || preset === "Cancel") return false;
 	const targetName = await chooseInitialTargetName(ctx);
 	if (!targetName) return false;
-	if (preset === "WebDAV") return showWebDavSetup(ctx, targetName, signal);
+	if (preset === "WebDAV") {
+		const saved = await showWebDavSetup(ctx, targetName, signal);
+		if (saved) await refreshTargetCompletions();
+		return saved;
+	}
 	const endpoint = await requiredInput(
 		ctx,
 		preset === "Cloudflare R2" ? "Cloudflare R2 endpoint" : "S3-compatible endpoint",
@@ -371,33 +375,35 @@ export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: Abo
 	const location = await chooseInitialRemoteLocation(ctx, preset, targetName);
 	if (!location) return false;
 	const { profileName, bucket, prefix, namespace } = location;
-	const credentials = await chooseS3Credentials(ctx);
+	const credentials = await chooseS3Credentials(ctx, signal);
 	if (!credentials) return false;
-	const contentChoice = await ctx.ui.select("Choose an initial sync preset", [
-		"Recommended Pi settings",
-		"Minimal settings",
-		"Cancel",
-	]);
-	if (!contentChoice || contentChoice === "Cancel") return false;
+	const contentChoice = await ctx.ui.select(
+		"Choose an initial sync preset",
+		["Recommended Pi settings", "Minimal settings", "Cancel"],
+		{ signal },
+	);
+	if (signal?.aborted || !contentChoice || contentChoice === "Cancel") return false;
 	const syncFiles =
 		contentChoice === "Minimal settings" ? ["settings.json", "AGENTS.md"] : [...DEFAULT_SYNC_FILES];
-	const automaticChoice = await ctx.ui.select("Automatic sync for this target", [
-		"Enable automatic sync",
-		"Keep automatic sync off",
-		"Cancel",
-	]);
-	if (!automaticChoice || automaticChoice === "Cancel") return false;
+	const automaticChoice = await ctx.ui.select(
+		"Automatic sync for this target",
+		["Enable automatic sync", "Keep automatic sync off", "Cancel"],
+		{ signal },
+	);
+	if (signal?.aborted || !automaticChoice || automaticChoice === "Cancel") return false;
 	const sessionChoice = await ctx.ui.select(
 		"Session conversations\n\nSessions can contain prompts, tool output, paths, screenshots, and secrets.",
 		["Keep sessions off (recommended)", "Include session conversations", "Cancel"],
+		{ signal },
 	);
-	if (!sessionChoice || sessionChoice === "Cancel") return false;
+	if (signal?.aborted || !sessionChoice || sessionChoice === "Cancel") return false;
 	const syncSessions = sessionChoice === "Include session conversations";
 	if (
 		syncSessions &&
 		!(await ctx.ui.confirm(
 			"Include session conversations?",
 			"I understand that session JSONL can contain prompts, tool output, paths, screenshots, and secrets.",
+			{ signal },
 		))
 	) {
 		return false;
@@ -418,8 +424,9 @@ export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: Abo
 			`Credentials: ${safeTerminalText(credentials.summary)}`,
 		].join("\n"),
 		["Save setup", "Cancel"],
+		{ signal },
 	);
-	if (choice !== "Save setup") return false;
+	if (signal?.aborted || choice !== "Save setup") return false;
 	await saveNewV2Settings({
 		targetName,
 		storageProfileName: profileName,
@@ -439,6 +446,7 @@ export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: Abo
 			extraFiles: [],
 		},
 	});
+	if (signal?.aborted) return false;
 	await refreshTargetCompletions();
 	ctx.ui.notify(
 		credentials.ready

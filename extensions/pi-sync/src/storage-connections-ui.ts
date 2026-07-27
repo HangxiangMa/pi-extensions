@@ -62,7 +62,7 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
 	if (!endpoint) return;
 	const region = await requiredInput(ctx, "Region", String(profile.region ?? "auto"));
 	if (!region) return;
-	const credentials = await chooseS3CredentialUpdate(ctx, profile);
+	const credentials = await chooseS3CredentialUpdate(ctx, profile, signal);
 	if (!credentials) return;
 	const save = await ctx.ui.select(
 		`Review connection\n\nSaved connection: ${safeTerminalText(selected)}\nEndpoint: ${safeTerminalText(endpoint)}\nRegion: ${safeTerminalText(region)}\nCredentials: ${safeTerminalText(credentials.summary)}`,
@@ -100,7 +100,7 @@ export async function showAddStorageConnection(ctx: ExtensionCommandContext, sig
 	const region =
 		preset === "Cloudflare R2" ? "auto" : await requiredInput(ctx, "Region", "us-east-1");
 	if (!region) return false;
-	const credentials = await chooseS3Credentials(ctx);
+	const credentials = await chooseS3Credentials(ctx, signal);
 	if (!credentials) return false;
 	const save = await ctx.ui.select(
 		`Review saved connection\n\nName: ${safeTerminalText(name)}\nType: ${preset}\nEndpoint: ${safeTerminalText(endpoint)}\nRegion: ${safeTerminalText(region)}\nCredentials: ${safeTerminalText(credentials.summary)}`,

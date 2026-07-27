@@ -27,6 +27,35 @@ test("masked secret input never renders plaintext and submits pasted text", asyn
 	assert.equal(await promptSecret(ctx, "WebDAV password"), secret);
 });
 
+test("stored S3 credential setup aborts with its owning session", async () => {
+	const controller = new AbortController();
+	let resolveInput: ((value: string) => void) | undefined;
+	let customCalls = 0;
+	const { ctx } = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		select: async () => "Store credentials privately",
+		input: async () =>
+			await new Promise<string>((resolve) => {
+				resolveInput = resolve;
+			}),
+		custom: async () => {
+			customCalls += 1;
+			return "secret";
+		},
+	});
+	const setup = chooseS3Credentials(ctx, controller.signal);
+	while (!resolveInput) await new Promise((resolve) => setImmediate(resolve));
+	controller.abort(new DOMException("Session replaced", "AbortError"));
+	resolveInput("access-key");
+
+	await assert.rejects(
+		setup,
+		(error: unknown) => error instanceof Error && error.name === "AbortError",
+	);
+	assert.equal(customCalls, 0);
+});
+
 test("stored S3 credentials reject a blank access key ID", async () => {
 	const { ctx, notifications } = createMockContext({
 		hasUI: true,

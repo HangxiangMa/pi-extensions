@@ -15,6 +15,7 @@ export interface MockWebDavOptions {
 	delayMs?: number;
 	redirectTo?: string;
 	failLatestPut?: boolean;
+	failHistoryPut?: boolean;
 	constantEtag?: boolean;
 }
 
@@ -122,6 +123,9 @@ export class MockWebDavServer {
 	private async put(path: string, request: IncomingMessage, response: ServerResponse) {
 		if (this.options.failLatestPut && path.endsWith("/latest.json")) {
 			return send(response, 500, "interrupted publication");
+		}
+		if (this.options.failHistoryPut && path.endsWith("/history.json")) {
+			return send(response, 500, "history update failed");
 		}
 		if (!this.collections.has(parent(path))) return send(response, 409, "parent missing");
 		const chunks: Buffer[] = [];

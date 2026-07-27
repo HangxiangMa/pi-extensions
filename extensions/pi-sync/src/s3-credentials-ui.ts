@@ -11,21 +11,23 @@ export interface ChosenS3Credentials {
 export async function chooseS3CredentialUpdate(
 	ctx: ExtensionCommandContext,
 	profile: Record<string, unknown>,
+	signal?: AbortSignal,
 ) {
 	const hasStored =
 		typeof profile.accessKeyId === "string" && typeof profile.secretAccessKey === "string";
 	if (hasStored) {
-		const action = await ctx.ui.select("Credentials", [
-			"Keep current credentials",
-			"Change credential source",
-			"Cancel",
-		]);
+		const action = await ctx.ui.select(
+			"Credentials",
+			["Keep current credentials", "Change credential source", "Cancel"],
+			{ signal },
+		);
+		throwIfAborted(signal);
 		if (!action || action === "Cancel") return undefined;
 		if (action === "Keep current credentials") {
 			return { profileFields: {}, summary: "Unchanged (values hidden)", ready: true };
 		}
 	}
-	const selected = await chooseS3Credentials(ctx);
+	const selected = await chooseS3Credentials(ctx, signal);
 	return selected ? { ...selected, replace: true } : undefined;
 }
 
@@ -44,6 +46,7 @@ export function applyS3CredentialUpdate(
 
 export async function chooseS3Credentials(
 	ctx: ExtensionCommandContext,
+	signal?: AbortSignal,
 ): Promise<ChosenS3Credentials | undefined> {
 	const choice = await ctx.ui.select(
 		"Credentials\n\nStored secret values are masked during input and never shown afterward.",
@@ -53,7 +56,9 @@ export async function chooseS3Credentials(
 			"Create private settings template",
 			"Cancel",
 		],
+		{ signal },
 	);
+	throwIfAborted(signal);
 	if (!choice || choice === "Cancel") return undefined;
 	if (choice === "Use environment credentials") {
 		const ready = Boolean(
@@ -75,9 +80,10 @@ export async function chooseS3Credentials(
 			ready: false,
 		};
 	}
-	const accessKeyId = await requiredCredentialInput(ctx, "Access key ID", "access-key-id");
+	const accessKeyId = await requiredCredentialInput(ctx, "Access key ID", "access-key-id", signal);
 	if (!accessKeyId) return undefined;
-	const secretAccessKey = await promptSecret(ctx, "Secret access key");
+	const secretAccessKey = await promptSecret(ctx, "Secret access key", { signal });
+	throwIfAborted(signal);
 	if (secretAccessKey === undefined) return undefined;
 	return {
 		profileFields: { accessKeyId, secretAccessKey },
@@ -90,8 +96,10 @@ async function requiredCredentialInput(
 	ctx: ExtensionCommandContext,
 	title: string,
 	placeholder: string,
+	signal?: AbortSignal,
 ) {
-	const value = await ctx.ui.input(title, placeholder);
+	const value = await ctx.ui.input(title, placeholder, { signal });
+	throwIfAborted(signal);
 	if (value === undefined) return undefined;
 	const normalized = value.trim();
 	if (!normalized) {
@@ -99,4 +107,11 @@ async function requiredCredentialInput(
 		return undefined;
 	}
 	return normalized.includes("<") || normalized.includes(">") ? undefined : normalized;
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+	if (!signal?.aborted) return;
+	throw signal.reason instanceof Error
+		? signal.reason
+		: new DOMException("The operation was aborted", "AbortError");
 }

@@ -368,11 +368,18 @@ function redactError(error: unknown, config: ResolvedWebDavBackend) {
 function redactText(value: string, config: ResolvedWebDavBackend) {
 	let result = value;
 	for (const secret of [config.profile.username, config.profile.password, config.profile.url]) {
-		if (secret) result = result.split(secret).join("[redacted]");
+		if (!secret) continue;
+		for (const variant of new Set([secret, encodeURIComponent(secret)])) {
+			result = result.replace(new RegExp(escapeRegExp(variant), "giu"), "[redacted]");
+		}
 	}
 	return result
 		.replace(/basic\s+[a-z0-9+/=]+/giu, "Basic [redacted]")
 		.replace(/\?[^\s]*/gu, "?[redacted]");
+}
+
+function escapeRegExp(value: string) {
+	return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function throwIfAborted(signal?: AbortSignal) {

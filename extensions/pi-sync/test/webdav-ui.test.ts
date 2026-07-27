@@ -6,6 +6,7 @@ import {
 	createMockContext,
 	createMockPi,
 } from "../../../test/support.js";
+import { completeSyncArguments, setSyncTargetCompletions } from "../src/command.js";
 import { loadConfig, localConfigPath, readLocalConfigObject } from "../src/config.js";
 import sync from "../src/sync.js";
 import {
@@ -55,6 +56,7 @@ test("first-time WebDAV setup collects a masked password and stores a usable pro
 			custom: secretInput("app-password", rendered),
 		});
 
+		setSyncTargetCompletions([]);
 		await mock.commands.get("sync")?.handler("", ctx);
 
 		const saved = await readLocalConfigObject();
@@ -66,6 +68,7 @@ test("first-time WebDAV setup collects a masked password and stores a usable pro
 		assert.equal(profile.password, "app-password");
 		assert.equal(target.path, "pi-sync");
 		assert.equal(target.namespace, "home");
+		assert.ok(completeSyncArguments("use h")?.some((item) => item.value === "use home"));
 		assert.deepEqual(inputTitles, [
 			"WebDAV collection URL",
 			"WebDAV username",

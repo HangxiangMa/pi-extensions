@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { loadConfig, localConfigPath, statePathForConfig } from "../src/config.js";
+import {
+	loadConfig,
+	localConfigPath,
+	readStateForConfig,
+	stateDir,
+	statePathForConfig,
+} from "../src/config.js";
 import { updateStorageProfile } from "../src/settings-management.js";
 import { withTempHome } from "./helpers.js";
 
@@ -47,6 +54,33 @@ test("version 2 resolves a WebDAV profile and destination without environment ov
 			delete process.env.PI_SYNC_AUTO_SYNC;
 			delete process.env.PI_SYNC_SESSIONS;
 		}
+	});
+});
+
+test("WebDAV targets do not adopt target-name-only legacy S3 state", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(localConfigPath(), JSON.stringify(settings));
+		const config = await loadConfig();
+		const legacyPath = path.join(
+			stateDir(),
+			"targets",
+			`home-${createHash("sha256").update("home").digest("hex").slice(0, 10)}.state.json`,
+		);
+		mkdirSync(path.dirname(legacyPath), { recursive: true });
+		writeFileSync(
+			legacyPath,
+			JSON.stringify({
+				version: 1,
+				profile: "home",
+				lastAppliedSnapshot: "unrelated-s3-snapshot",
+				lastFileHashes: {},
+			}),
+		);
+
+		assert.equal((await readStateForConfig(config)).lastAppliedSnapshot, undefined);
+		assert.equal(existsSync(legacyPath), true);
+		assert.equal(existsSync(statePathForConfig(config)), false);
 	});
 });
 

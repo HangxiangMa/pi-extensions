@@ -218,6 +218,21 @@ export class WebDavSyncBackend implements SyncBackend {
 				level: "error",
 				message: `webdav publication is read-only until diagnostics pass: ${errorMessage(error)}`,
 			});
+			return diagnostics;
+		}
+		try {
+			diagnostics.push({
+				key: "webdav-history",
+				level: "info",
+				message: await this.reconcileActiveHistory(signal),
+			});
+		} catch (error) {
+			if (error instanceof Error && error.name === "AbortError") throw error;
+			diagnostics.push({
+				key: "webdav-history",
+				level: "error",
+				message: `webdav history repair failed: ${errorMessage(error)}`,
+			});
 		}
 		return diagnostics;
 	}
@@ -316,26 +331,48 @@ export class WebDavSyncBackend implements SyncBackend {
 		);
 	}
 
+	private async reconcileActiveHistory(signal?: AbortSignal) {
+		const client = new WebDavClient(this.config, signal);
+		const object = await client.getJson<LatestPointer>(latestPath(this.config));
+		throwIfAborted(signal);
+		if (object.missing) return "webdav history: no active snapshot";
+		const pointer = requirePointer(object.value, this.config.destination.namespace);
+		this.registerChecksum(pointer.snapshot, pointer.sha256);
+		const repaired = await this.ensureHistoryPointer(client, pointer);
+		return repaired
+			? "webdav history: repaired active snapshot entry"
+			: "webdav history: active snapshot entry present";
+	}
+
+	private async ensureHistoryPointer(client: WebDavClient, pointer: LatestPointer) {
+		const object = await client.getJson<{ version: number; snapshots: LatestPointer[] }>(
+			historyPath(this.config),
+		);
+		const snapshots = object.missing
+			? []
+			: requireHistory(object.value, this.config.destination.namespace);
+		const existing = snapshots.find((entry) => entry.snapshot === pointer.snapshot);
+		if (existing) {
+			if (!samePointer(existing, pointer)) {
+				throw new Error("Remote history rebound an immutable snapshot reference.");
+			}
+			return false;
+		}
+		const next = [...snapshots, pointer].slice(-100);
+		const condition = object.missing
+			? { ifAbsent: true }
+			: { ifMatch: requireStrongEtag(object.etag, "history") };
+		await client.putJson(
+			historyPath(this.config),
+			{ version: VERSION, snapshots: next },
+			condition,
+		);
+		return true;
+	}
+
 	private async updateHistorySafely(client: WebDavClient, pointer: LatestPointer) {
 		try {
-			const object = await client.getJson<{ version: number; snapshots: LatestPointer[] }>(
-				historyPath(this.config),
-			);
-			const snapshots = object.missing
-				? []
-				: requireHistory(object.value, this.config.destination.namespace);
-			const next = [
-				...snapshots.filter((entry) => entry.snapshot !== pointer.snapshot),
-				pointer,
-			].slice(-100);
-			const condition = object.missing
-				? { ifAbsent: true }
-				: { ifMatch: requireStrongEtag(object.etag, "history") };
-			await client.putJson(
-				historyPath(this.config),
-				{ version: VERSION, snapshots: next },
-				condition,
-			);
+			await this.ensureHistoryPointer(client, pointer);
 			return undefined;
 		} catch (error) {
 			return `Remote snapshot is active, but history could not be updated: ${errorMessage(error)}. Run /sync doctor before relying on history.`;
