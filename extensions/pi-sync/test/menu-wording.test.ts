@@ -33,10 +33,13 @@ function settings() {
 	};
 }
 
-async function withSettings(run: () => Promise<void>) {
+async function withSettings(
+	run: () => Promise<void>,
+	value: ReturnType<typeof settings> = settings(),
+) {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
-		writeFileSync(localConfigPath(), JSON.stringify(settings()), { mode: 0o600 });
+		writeFileSync(localConfigPath(), JSON.stringify(value), { mode: 0o600 });
 		await run();
 	});
 }
@@ -112,6 +115,28 @@ test("Storage connections list and detail are symmetric and redact credentials",
 		assert.match(detail, /Used by: home/u);
 		assert.doesNotMatch(detail, /access|secret/u);
 	});
+});
+
+test("S3-compatible lookalike hosts are not labeled as Cloudflare R2", async () => {
+	const value = settings();
+	value.storageConnections.r2.endpoint =
+		"https://example.r2.cloudflarestorage.com.attacker.example";
+	await withSettings(async () => {
+		const titles: string[] = [];
+		const choices = ["More…", "Storage connections…", "r2", "Back", "Back", "Back", undefined];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async (title: string) => {
+				titles.push(title);
+				return choices.shift();
+			},
+		});
+		await showSyncManager(ctx, async () => undefined);
+		const detail = titles.find((title) => title.includes("Storage connection “r2”")) ?? "";
+		assert.match(detail, /Type: S3-compatible/u);
+		assert.doesNotMatch(detail, /Type: Cloudflare R2/u);
+	}, value);
 });
 
 test("invalid settings open a read-only repair state without mutating bytes", async () => {

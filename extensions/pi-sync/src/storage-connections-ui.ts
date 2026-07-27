@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { readLocalConfigObject } from "./config.js";
+import { isCloudflareR2Endpoint, readLocalConfigObject } from "./config.js";
 import { showAddGitStorageProfile, showEditGitStorageProfile } from "./git-ui.js";
 import { errorMessage, ownRecord, requiredInput, safeTerminalText } from "./manager-helpers.js";
 import { chooseS3Credentials, chooseS3CredentialUpdate } from "./s3-credentials-ui.js";
@@ -262,7 +262,13 @@ function referencingSetups(raw: Record<string, unknown> | undefined, connection:
 function connectionType(profile: Record<string, unknown>) {
 	if (profile.type === "git") return "Git";
 	if (profile.type === "webdav") return "WebDAV";
-	if (profile.type === "s3" && isR2Endpoint(profile.endpoint)) return "Cloudflare R2";
+	if (
+		profile.type === "s3" &&
+		typeof profile.endpoint === "string" &&
+		isCloudflareR2Endpoint(profile.endpoint)
+	) {
+		return "Cloudflare R2";
+	}
 	return "S3-compatible";
 }
 
@@ -288,8 +294,4 @@ function credentialSource(profile: Record<string, unknown>) {
 	if (profile.type === "webdav") return credentials?.password ? "Settings file" : "Missing";
 	if (credentials?.accessKeyId && credentials.secretAccessKey) return "Settings file";
 	return "Missing";
-}
-
-function isR2Endpoint(value: unknown) {
-	return typeof value === "string" && value.includes(".r2.cloudflarestorage.com");
 }
