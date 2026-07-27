@@ -12,6 +12,7 @@ import {
 	readLocalConfigObject,
 	readStateForConfig,
 } from "./config.js";
+import { showAddGitTarget, showEditGitTarget, showGitSetup } from "./git-ui.js";
 import { inspectLock, isStaleLock } from "./lock.js";
 import {
 	errorMessage,
@@ -261,15 +262,8 @@ async function describeManagerState(
 	try {
 		const config = await loadConfig();
 		const target = config.target ?? "default";
-		const storage =
-			config.backend.type === "webdav"
-				? `WebDAV · ${safeTerminalText(config.backend.destination.path)}`
-				: storageDescription(
-						config.backend.profile.kind,
-						config.backend.profile.endpoint,
-						config.backend.destination.bucket,
-					);
-		const warnings = deprecatedPiSyncEnvironmentWarnings();
+		const storage = backendStorageDescription(config);
+		const warnings = config.backend.type === "s3" ? deprecatedPiSyncEnvironmentWarnings() : [];
 		const lock = await inspectLock();
 		const liveLock = lock.status === "valid" && !isStaleLock(lock.lock);
 		const recoverableLock =
@@ -294,6 +288,7 @@ async function describeManagerState(
 				"",
 				`Current target: ${safeTerminalText(target)}`,
 				`Storage: ${storage}`,
+				`Consistency: ${backendConsistencyDescription(config)}`,
 				`Synced content: ${builtInCount} built-in group${builtInCount === 1 ? "" : "s"} · ${extraFileCount} extra file${extraFileCount === 1 ? "" : "s"} · Sessions: ${config.syncSessions ? "On" : "Off"}`,
 				`Auto-sync: ${config.autoSync ? "On" : "Off"}`,
 				`Last applied snapshot: ${lastAppliedSnapshot}`,
@@ -343,11 +338,37 @@ async function describeManagerState(
 	}
 }
 
+function backendConsistencyDescription(config: AnySyncConfig) {
+	switch (config.backend.type) {
+		case "git":
+			return "Exact expected-branch lease";
+		case "webdav":
+			return "Verified atomic conditional update required";
+		case "s3":
+			return "Read, check, write, and verify; simultaneous unseen races remain possible";
+	}
+}
+
+function backendStorageDescription(config: AnySyncConfig) {
+	switch (config.backend.type) {
+		case "s3":
+			return storageDescription(
+				config.backend.profile.kind,
+				config.backend.profile.endpoint,
+				config.backend.destination.bucket,
+			);
+		case "webdav":
+			return `WebDAV · ${safeTerminalText(config.backend.destination.path)}`;
+		case "git":
+			return `Git · ${safeTerminalText(config.backend.destination.branch)}`;
+	}
+}
+
 export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: AbortSignal) {
 	if (ctx.mode !== "tui") return false;
 	const preset = await ctx.ui.select(
 		"Set up sync\n\nWhere will Pi settings be stored?",
-		["Cloudflare R2", "Other S3-compatible storage", "WebDAV", "Cancel"],
+		["Cloudflare R2", "Other S3-compatible storage", "WebDAV", "Git", "Cancel"],
 		{ signal },
 	);
 	if (signal?.aborted || !preset || preset === "Cancel") return false;
@@ -355,6 +376,11 @@ export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: Abo
 	if (!targetName) return false;
 	if (preset === "WebDAV") {
 		const saved = await showWebDavSetup(ctx, targetName, signal);
+		if (saved) await refreshTargetCompletions();
+		return saved;
+	}
+	if (preset === "Git") {
+		const saved = await showGitSetup(ctx, targetName, signal);
 		if (saved) await refreshTargetCompletions();
 		return saved;
 	}
@@ -482,7 +508,9 @@ async function showTargetSwitcher(ctx: ExtensionCommandContext, runRoute: RunRou
 				? `${safeTerminalText(profileName ?? "unknown")} · ${safeTerminalText(
 						profile.kind === "webdav"
 							? String(target?.path ?? "pi-sync")
-							: String(target?.bucket ?? "missing bucket"),
+							: profile.kind === "git"
+								? String(target?.branch ?? "pi-sync")
+								: String(target?.bucket ?? "missing bucket"),
 					)}`
 				: `Invalid: missing storage profile ${safeTerminalText(profileName ?? "reference")}`,
 			`${normalizeSyncFiles(target?.syncFiles as string[] | undefined).length} groups · Sessions: ${target?.syncSessions === true ? "On" : "Off"}`,
@@ -523,15 +551,7 @@ async function showTargetSwitcher(ctx: ExtensionCommandContext, runRoute: RunRou
 			"",
 			`From: ${safeTerminalText(active ?? "none")}`,
 			`To: ${safeTerminalText(name)}`,
-			`Storage: ${
-				config.backend.type === "webdav"
-					? `WebDAV · ${safeTerminalText(config.backend.destination.path)}`
-					: storageDescription(
-							config.backend.profile.kind,
-							config.backend.profile.endpoint,
-							config.backend.destination.bucket,
-						)
-			}`,
+			`Storage: ${backendStorageDescription(config)}`,
 			`Synced content: ${normalizeSyncFiles(config.syncFiles).length} built-in groups · ${config.extraFiles.length} extra files`,
 			`Auto-sync: ${config.autoSync ? "On" : "Off"} · Sessions: ${config.syncSessions ? "On" : "Off"}`,
 			"",
@@ -621,8 +641,13 @@ async function showAddTarget(ctx: ExtensionCommandContext, signal?: AbortSignal)
 		profile = Object.keys(profiles).find((candidate) => !previousNames.has(candidate));
 		if (!profile) return;
 	}
-	if (ownRecord(profiles[profile])?.kind === "webdav") {
+	const storageKind = ownRecord(profiles[profile])?.kind;
+	if (storageKind === "webdav") {
 		if (await showAddWebDavTarget(ctx, name, profile, signal)) await refreshTargetCompletions();
+		return;
+	}
+	if (storageKind === "git") {
+		if (await showAddGitTarget(ctx, name, profile, signal)) await refreshTargetCompletions();
 		return;
 	}
 	const location = await chooseAdditionalRemoteLocation(ctx, raw, profile, name);
@@ -686,6 +711,10 @@ async function showEditCurrentTarget(ctx: ExtensionCommandContext, signal?: Abor
 		await showEditWebDavTarget(ctx, partial, signal);
 		return;
 	}
+	if (partial.storageKind === "git") {
+		await showEditGitTarget(ctx, partial, signal);
+		return;
+	}
 	const bucket = await requiredInput(ctx, "Bucket", partial.bucket ?? "pi-sync");
 	if (!bucket) return;
 	const prefix = await requiredInput(ctx, "Remote prefix", partial.prefix ?? "pi-sync");
@@ -722,7 +751,7 @@ async function showRemoveTarget(ctx: ExtensionCommandContext) {
 	if (!selected || selected === "Cancel") return;
 	const confirmed = await ctx.ui.confirm(
 		"Remove sync target?",
-		`Remove local target “${safeTerminalText(selected)}”? Remote buckets and snapshots are not deleted.`,
+		`Remove local target “${safeTerminalText(selected)}”? Remote data and history are not deleted.`,
 	);
 	if (!confirmed) return;
 	await removeSyncTarget(selected);

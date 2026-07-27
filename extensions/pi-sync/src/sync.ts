@@ -71,7 +71,7 @@ export default function sync(pi: ExtensionAPI) {
 	let shutdownAbort: AbortController | undefined;
 
 	pi.registerCommand("sync", {
-		description: "Sync Pi settings through Cloudflare R2 or S3-compatible storage",
+		description: "Sync Pi settings through Git, WebDAV, R2, or S3-compatible storage",
 		getArgumentCompletions: completeSyncArguments,
 		handler: async (args, ctx) => {
 			await handleCommand(args, ctx, sessionAbort.signal);
@@ -102,7 +102,10 @@ export default function sync(pi: ExtensionAPI) {
 		}
 		const migrationNotice = consumeLocalConfigMigrationNotice();
 		if (migrationNotice) ctx.ui.notify(migrationNotice, "warning");
-		const warnings = deprecatedPiSyncEnvironmentWarnings();
+		const partial = await loadPartialConfig().catch(() => undefined);
+		if (signal.aborted) return;
+		const s3 = partial?.storageKind !== "webdav" && partial?.storageKind !== "git";
+		const warnings = s3 ? deprecatedPiSyncEnvironmentWarnings() : [];
 		if (warnings.length > 0) ctx.ui.notify(warnings.join("\n"), "warning");
 		await autoSync(ctx, signal);
 	});
@@ -284,23 +287,53 @@ async function initConfig(ctx: ExtensionCommandContext, signal?: AbortSignal) {
 
 async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions) {
 	const partial = await loadPartialConfig(options.target);
-	const webdav = partial.storageKind === "webdav";
+	const s3 = partial.storageKind !== "webdav" && partial.storageKind !== "git";
 	const syncSessions = isExplicitlyEnabled(partial.syncSessions);
 	const warnings = [
-		...(webdav ? [] : deprecatedPiSyncEnvironmentWarnings()),
-		...(webdav ? [] : sessionTokenWarnings(partial)),
+		...(s3 ? deprecatedPiSyncEnvironmentWarnings() : []),
+		...(s3 ? sessionTokenWarnings(partial) : []),
 		...syncSessionsWarnings({ syncSessions }),
 	];
-	const storageLines = webdav
-		? [
-				`kind: webdav`,
+	const storageLines = configStorageLines(partial);
+	ctx.ui.notify(
+		[
+			"pi-sync config:",
+			`target: ${partial.target ?? "default"}`,
+			`storage profile: ${partial.storageProfile ?? "default"}`,
+			...storageLines,
+			`autoSync: ${isEnabled(s3 ? (partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC) : partial.autoSync, true) ? "enabled" : "disabled"}`,
+			`syncFiles: ${normalizeSyncFiles(partial.syncFiles).join(", ") || "none"}`,
+			`syncSessions: ${syncSessions ? "enabled" : "disabled"}`,
+			`extraFiles: ${normalizeExtraFiles(partial.extraFiles).join(", ") || "none"}`,
+			`local config: ${localConfigPath()}`,
+			...warnings,
+		].join("\n"),
+		warnings.length > 0 ? "warning" : "info",
+	);
+}
+
+function configStorageLines(partial: Awaited<ReturnType<typeof loadPartialConfig>>) {
+	switch (partial.storageKind) {
+		case "git":
+			return [
+				"kind: git",
+				`remote: ${displayGitRemote(partial.remote)}`,
+				`authentication: existing Git/SSH credentials (not stored)`,
+				`branch: ${partial.branch ?? "pi-sync"}`,
+				`directory: ${partial.directory ?? DEFAULT_PREFIX}`,
+				`namespace: ${partial.profile ?? DEFAULT_PROFILE}`,
+			];
+		case "webdav":
+			return [
+				"kind: webdav",
 				`url: ${displayWebDavUrl(partial.url, partial.username)}`,
 				`username: ${partial.username ? "configured (value hidden)" : "missing"}`,
 				`password: ${partial.password ? "configured" : "missing"}`,
 				`path: ${partial.path ?? DEFAULT_PREFIX}`,
 				`namespace: ${partial.profile ?? DEFAULT_PROFILE}`,
-			]
-		: [
+			];
+		default:
+			return [
 				`endpoint: ${partial.endpoint ?? "missing"}`,
 				`bucket: ${partial.bucket ?? "missing"}`,
 				`region: ${partial.region ?? DEFAULT_REGION}`,
@@ -310,21 +343,21 @@ async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions)
 				`profile: ${partial.profile ?? DEFAULT_PROFILE}`,
 				`prefix: ${partial.prefix ?? DEFAULT_PREFIX}`,
 			];
-	ctx.ui.notify(
-		[
-			"pi-sync config:",
-			`target: ${partial.target ?? "default"}`,
-			`storage profile: ${partial.storageProfile ?? "default"}`,
-			...storageLines,
-			`autoSync: ${isEnabled(webdav ? partial.autoSync : (partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC), true) ? "enabled" : "disabled"}`,
-			`syncFiles: ${normalizeSyncFiles(partial.syncFiles).join(", ") || "none"}`,
-			`syncSessions: ${syncSessions ? "enabled" : "disabled"}`,
-			`extraFiles: ${normalizeExtraFiles(partial.extraFiles).join(", ") || "none"}`,
-			`local config: ${localConfigPath()}`,
-			...warnings,
-		].join("\n"),
-		warnings.length > 0 ? "warning" : "info",
-	);
+	}
+}
+
+function displayGitRemote(value: string | undefined) {
+	if (!value) return "missing";
+	try {
+		const url = new URL(value);
+		url.username = "";
+		url.password = "";
+		url.search = "";
+		url.hash = "";
+		return url.toString();
+	} catch {
+		return value.replace(/^(?:[^@\s]+@)?(?<host>[^:]+):.+$/u, "$<host>:…");
+	}
 }
 
 function displayWebDavUrl(value: string | undefined, username: string | undefined) {
@@ -342,7 +375,7 @@ function displayWebDavUrl(value: string | undefined, username: string | undefine
 }
 
 function autoSyncSetting(partial: Awaited<ReturnType<typeof loadPartialConfig>>) {
-	return partial.storageKind === "webdav"
+	return partial.storageKind === "webdav" || partial.storageKind === "git"
 		? partial.autoSync
 		: (partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC);
 }

@@ -39,6 +39,7 @@ import {
 	formatPushSummary,
 	formatRollbackSummary,
 	formatSnapshotOnlyDiff,
+	publicationCapabilityDescription,
 	safeTerminalText,
 } from "./sync-format.js";
 import {
@@ -129,14 +130,17 @@ export async function status(
 	const remoteChanged = remoteChangedSinceState(head, state, config, (left, right) =>
 		backend.sameRevision(left, right),
 	);
-	const warnings = [...deprecatedPiSyncEnvironmentWarnings(), ...syncSessionsWarnings(config)];
+	const warnings = [
+		...(config.backend.type === "s3" ? deprecatedPiSyncEnvironmentWarnings() : []),
+		...syncSessionsWarnings(config),
+	];
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 	ctx.ui.notify(
 		[
 			`target: ${config.target ?? "default"}`,
 			`storage profile: ${config.storageProfile ?? "default"}`,
 			`destination: ${safeTerminalText(backend.destination)}`,
-			`publication safety: ${backend.capability}`,
+			`publication safety: ${publicationCapabilityDescription(backend.capability)}`,
 			`remote namespace: ${config.profile}`,
 			`sync files: ${normalizeSyncFiles(config.syncFiles).join(", ") || "none"}`,
 			`extra files: ${config.extraFiles.join(", ") || "none"}`,
@@ -166,7 +170,10 @@ export async function diff(
 	throwIfAborted(options.signal);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 
-	const warnings = [...deprecatedPiSyncEnvironmentWarnings(), ...syncSessionsWarnings(config)];
+	const warnings = [
+		...(config.backend.type === "s3" ? deprecatedPiSyncEnvironmentWarnings() : []),
+		...syncSessionsWarnings(config),
+	];
 	const header = [
 		`target: ${config.target ?? "default"}`,
 		`storage profile: ${config.storageProfile ?? "default"}`,
@@ -197,27 +204,29 @@ export async function doctor(
 	let level: "info" | "warning" = "info";
 	let snapshotOptions: SnapshotOptions = {};
 	let profile = DEFAULT_PROFILE;
+	let backend: SyncBackend | undefined;
+	let backendSummary: string[] = [];
 
 	try {
 		const config = await loadConfig(options.target);
 		throwIfAborted(options.signal);
-		const backend = backendFor(config, factory);
+		backend = backendFor(config, factory);
 		profile = config.profile;
 		snapshotOptions = snapshotOptionsForContext(ctx, config);
 		messages.push(
-			`config: ok (target ${config.target ?? "default"}; ${safeTerminalText(backend.destination)})`,
+			`config: ok (target ${config.target ?? "default"})`,
+			`sync files: ${normalizeSyncFiles(config.syncFiles).join(", ") || "none"}`,
+			`extra files: ${config.extraFiles.join(", ") || "none"}`,
+			`sessions: ${config.syncSessions ? "included" : "excluded"}`,
 		);
-		const diagnostics = await backend.diagnose(options.signal);
-		throwIfAborted(options.signal);
-		messages.push(`publication safety: ${backend.capability}`);
-		for (const diagnostic of diagnostics) {
-			messages.push(diagnostic.message);
-			if (diagnostic.level !== "info") level = "warning";
-		}
-		messages.push(`sync files: ${normalizeSyncFiles(config.syncFiles).join(", ") || "none"}`);
-		messages.push(`extra files: ${config.extraFiles.join(", ") || "none"}`);
-		messages.push(`sessions: ${config.syncSessions ? "included" : "excluded"}`);
-		const warnings = [...deprecatedPiSyncEnvironmentWarnings(), ...syncSessionsWarnings(config)];
+		backendSummary = [
+			`destination: ${safeTerminalText(backend.destination)}`,
+			`publication safety: ${publicationCapabilityDescription(backend.capability)}`,
+		];
+		const warnings = [
+			...(config.backend.type === "s3" ? deprecatedPiSyncEnvironmentWarnings() : []),
+			...syncSessionsWarnings(config),
+		];
 		if (warnings.length > 0) {
 			level = "warning";
 			messages.push(...warnings);
@@ -259,6 +268,16 @@ export async function doctor(
 		messages.push("lock: guard active while metadata is missing or still being initialized");
 	} else {
 		messages.push("lock: free");
+	}
+
+	if (backend) {
+		messages.push(...backendSummary);
+		const diagnostics = await backend.diagnose(options.signal);
+		throwIfAborted(options.signal);
+		for (const diagnostic of diagnostics) {
+			messages.push(diagnostic.message);
+			if (diagnostic.level !== "info") level = "warning";
+		}
 	}
 	ctx.ui.notify(messages.join("\n"), level);
 }

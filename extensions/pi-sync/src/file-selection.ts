@@ -37,7 +37,8 @@ export async function showFileSelection(ctx: ExtensionCommandContext, targetName
 		sessions: isExplicitlyEnabled(partial.syncSessions),
 	};
 	const draft = cloneDraft(original);
-	const sessionEnvironmentOverride = Object.hasOwn(process.env, "PI_SYNC_SESSIONS");
+	const s3 = partial.storageKind !== "webdav" && partial.storageKind !== "git";
+	const sessionEnvironmentOverride = s3 && Object.hasOwn(process.env, "PI_SYNC_SESSIONS");
 	const extraCandidates = await listExtraFileCandidates(draft.extras);
 
 	if (ctx.mode !== "tui") {
@@ -48,7 +49,7 @@ export async function showFileSelection(ctx: ExtensionCommandContext, targetName
 				`sessions: ${draft.sessions ? INCLUDED : EXCLUDED}${sessionEnvironmentOverride ? " (PI_SYNC_SESSIONS, deprecated)" : ""}`,
 				`extra files: ${[...draft.extras].map(safeTerminalText).join(", ") || "none"}`,
 				`Edit syncFiles, syncSessions, and extraFiles in ${safeTerminalText(localConfigPath())}.`,
-				...deprecatedPiSyncEnvironmentWarnings(),
+				...(s3 ? deprecatedPiSyncEnvironmentWarnings() : []),
 			].join("\n"),
 			"info",
 		);

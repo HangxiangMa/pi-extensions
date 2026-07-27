@@ -1,3 +1,4 @@
+import { GitSyncBackend } from "./git-backend.js";
 import { S3SyncBackend } from "./s3-backend.js";
 import type { SyncBackend } from "./sync-backend.js";
 import type { AnySyncConfig } from "./types.js";
@@ -13,5 +14,7 @@ export const createSyncBackend: SyncBackendFactory = (config) => {
 			return new S3SyncBackend(config.backend);
 		case "webdav":
 			return new WebDavSyncBackend(config.backend);
+		case "git":
+			return new GitSyncBackend(config.backend);
 	}
 };

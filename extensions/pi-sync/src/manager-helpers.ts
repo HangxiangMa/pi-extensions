@@ -20,8 +20,14 @@ export async function requiredInput(
 	ctx: ExtensionCommandContext,
 	title: string,
 	placeholder: string,
+	signal?: AbortSignal,
 ) {
-	const value = await ctx.ui.input(title, placeholder);
+	const value = await ctx.ui.input(title, placeholder, { signal });
+	if (signal?.aborted) {
+		throw signal.reason instanceof Error
+			? signal.reason
+			: new DOMException("The operation was aborted", "AbortError");
+	}
 	if (value === undefined) return undefined;
 	const normalized = value.trim() || placeholder;
 	return normalized.includes("<") || normalized.includes(">") ? undefined : normalized;

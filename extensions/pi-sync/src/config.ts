@@ -18,6 +18,14 @@ import {
 	replaceLocalConfigDocument,
 	withLocalConfigFileLock,
 } from "./config-file.js";
+import {
+	gitRemoteDestinationIdentity,
+	normalizeGitBranch,
+	normalizeGitDirectory,
+	normalizeGitRemoteIdentity,
+	resolveGitBackendConfig,
+	resolveGitV2PartialConfig,
+} from "./git-config.js";
 import { safeName } from "./paths.js";
 import { DEFAULT_SYNC_FILES, normalizeExtraFiles, normalizeSyncFiles } from "./sync-policy.js";
 import type {
@@ -28,6 +36,13 @@ import type {
 	SyncState,
 	TargetSwitchAction,
 } from "./types.js";
+import {
+	normalizeWebDavIdentityUrl,
+	normalizeWebDavPath,
+	normalizeWebDavUrl,
+	validateWebDavCredentials,
+	validateWebDavNamespace,
+} from "./webdav-config.js";
 
 export { extraFilePathsByLower, normalizeExtraFiles, normalizeSyncFiles } from "./sync-policy.js";
 
@@ -98,6 +113,9 @@ export async function loadConfigInternal(targetName?: string): Promise<AnySyncCo
 		syncSessions: isExplicitlyEnabled(partial.syncSessions),
 		extraFiles: normalizeExtraFiles(partial.extraFiles),
 	};
+	if (partial.storageKind === "git") {
+		return resolveGitBackendConfig(partial, common, localConfigPath());
+	}
 	if (partial.storageKind === "webdav") {
 		validateWebDavNamespace(namespace);
 		const url = normalizeWebDavUrl(partial.url);
@@ -260,7 +278,13 @@ export function resolveV2PartialConfig(
 		);
 	}
 	const kind = asOptionalString(profile.kind);
-	if (kind !== undefined && kind !== "r2" && kind !== "s3-compatible" && kind !== "webdav") {
+	if (
+		kind !== undefined &&
+		kind !== "r2" &&
+		kind !== "s3-compatible" &&
+		kind !== "webdav" &&
+		kind !== "git"
+	) {
 		throw new Error(
 			`Invalid pi-sync settings: profile "${storageProfile}" has unsupported kind "${kind}".`,
 		);
@@ -273,12 +297,15 @@ export function resolveV2PartialConfig(
 		syncFiles: target.syncFiles,
 		extraFiles: target.extraFiles,
 	};
+	if (kind === "git") {
+		return resolveGitV2PartialConfig(profile, target, common, selectedTarget);
+	}
 	if (kind === "webdav") {
 		if (
-			["endpoint", "region", "accessKeyId", "secretAccessKey", "sessionToken"].some((field) =>
-				Object.hasOwn(profile, field),
+			["endpoint", "region", "accessKeyId", "secretAccessKey", "sessionToken", "remote"].some(
+				(field) => Object.hasOwn(profile, field),
 			) ||
-			["bucket", "prefix"].some((field) => Object.hasOwn(target, field))
+			["bucket", "prefix", "branch", "directory"].some((field) => Object.hasOwn(target, field))
 		) {
 			throw new Error("Invalid pi-sync settings: WebDAV profile or target mixes backend fields.");
 		}
@@ -294,8 +321,8 @@ export function resolveV2PartialConfig(
 		};
 	}
 	if (
-		["url", "username", "password"].some((field) => Object.hasOwn(profile, field)) ||
-		Object.hasOwn(target, "path")
+		["url", "username", "password", "remote"].some((field) => Object.hasOwn(profile, field)) ||
+		["path", "branch", "directory"].some((field) => Object.hasOwn(target, field))
 	) {
 		throw new Error("Invalid pi-sync settings: S3 profile or target mixes backend fields.");
 	}
@@ -360,6 +387,9 @@ export function effectiveTargetRemoteIdentity(
 	profile?: Record<string, unknown>,
 ) {
 	const profileName = typeof target.profile === "string" ? target.profile.trim() : "";
+	if (profile?.kind === "git" || Object.hasOwn(target, "branch")) {
+		return gitRemoteDestinationIdentity(profile, target);
+	}
 	if (profile?.kind === "webdav" || Object.hasOwn(target, "path")) {
 		return JSON.stringify([
 			"webdav",
@@ -382,20 +412,6 @@ export function effectiveTargetRemoteIdentity(
 		process.env.PI_SYNC_PROFILE ?? (typeof target.namespace === "string" ? target.namespace : name),
 	);
 	return JSON.stringify([profileName, bucket, prefix, namespace]);
-}
-
-function normalizeWebDavIdentityUrl(value: string) {
-	try {
-		const url = new URL(value.trim());
-		url.username = "";
-		url.password = "";
-		url.search = "";
-		url.hash = "";
-		url.pathname = `${url.pathname.replace(/\/+$/u, "")}/`;
-		return url.toString();
-	} catch {
-		return value.trim();
-	}
 }
 
 function normalizeRemoteKeySegment(value: string) {
@@ -522,22 +538,36 @@ export async function writeStateForConfig(config: AnySyncConfig, state: SyncStat
 export function statePathForConfig(config: AnySyncConfig) {
 	if (config.settingsVersion !== 2) return statePath(config.profile);
 	const target = config.target ?? DEFAULT_PROFILE;
-	const identity =
-		config.backend.type === "s3"
-			? JSON.stringify([
-					target,
-					normalizeEndpointIdentity(config.backend.profile.endpoint),
-					normalizeRemoteKeySegment(config.backend.destination.bucket),
-					normalizeRemoteKeySegment(config.backend.destination.prefix),
-					normalizeRemoteKeySegment(config.profile),
-				])
-			: JSON.stringify([
-					target,
-					normalizeEndpointIdentity(config.backend.profile.url),
-					config.backend.profile.username,
-					normalizeRemoteKeySegment(config.backend.destination.path),
-					normalizeRemoteKeySegment(config.profile),
-				]);
+	let identity: string;
+	switch (config.backend.type) {
+		case "s3":
+			identity = JSON.stringify([
+				target,
+				normalizeEndpointIdentity(config.backend.profile.endpoint),
+				normalizeRemoteKeySegment(config.backend.destination.bucket),
+				normalizeRemoteKeySegment(config.backend.destination.prefix),
+				normalizeRemoteKeySegment(config.profile),
+			]);
+			break;
+		case "webdav":
+			identity = JSON.stringify([
+				target,
+				normalizeEndpointIdentity(config.backend.profile.url),
+				config.backend.profile.username,
+				normalizeRemoteKeySegment(config.backend.destination.path),
+				normalizeRemoteKeySegment(config.profile),
+			]);
+			break;
+		case "git":
+			identity = JSON.stringify([
+				target,
+				normalizeGitRemoteIdentity(config.backend.profile.remote),
+				config.backend.destination.branch,
+				config.backend.destination.directory,
+				normalizeRemoteKeySegment(config.backend.destination.namespace),
+			]);
+			break;
+	}
 	const hash = createHash("sha256").update(identity).digest("hex").slice(0, 10);
 	return path.join(stateDir(), "targets", `${safeName(target)}-${hash}.state.json`);
 }
@@ -545,6 +575,22 @@ export function statePathForConfig(config: AnySyncConfig) {
 export function statePathForPartialConfig(partial: PartialConfig) {
 	const profile = normalizeOptionalString(partial.profile) ?? DEFAULT_PROFILE;
 	if (partial.settingsVersion !== 2) return statePath(profile);
+	if (partial.storageKind === "git") {
+		return statePathForConfig({
+			settingsVersion: 2,
+			target: partial.target ?? DEFAULT_PROFILE,
+			profile,
+			backend: {
+				type: "git",
+				profile: { kind: "git", remote: normalizeConfiguredString(partial.remote) ?? "" },
+				destination: {
+					branch: normalizeGitBranch(partial.branch),
+					directory: normalizeGitDirectory(partial.directory),
+					namespace: profile,
+				},
+			},
+		} as AnySyncConfig);
+	}
 	if (partial.storageKind === "webdav") {
 		return statePathForConfig({
 			settingsVersion: 2,
@@ -712,7 +758,13 @@ function validateConfigDocumentForMigration(settings: Record<string, unknown>) {
 			throw new Error(`Invalid pi-sync settings: storage profile "${name}" must be an object.`);
 		}
 		const kind = asOptionalString(profile.kind);
-		if (kind !== undefined && kind !== "r2" && kind !== "s3-compatible" && kind !== "webdav") {
+		if (
+			kind !== undefined &&
+			kind !== "r2" &&
+			kind !== "s3-compatible" &&
+			kind !== "webdav" &&
+			kind !== "git"
+		) {
 			throw new Error(
 				`Invalid pi-sync settings: profile "${name}" has unsupported kind "${kind}".`,
 			);
@@ -720,12 +772,25 @@ function validateConfigDocumentForMigration(settings: Record<string, unknown>) {
 		const fields =
 			kind === "webdav"
 				? (["url", "username", "password"] as const)
-				: (["endpoint", "region", "accessKeyId", "secretAccessKey", "sessionToken"] as const);
+				: kind === "git"
+					? (["remote"] as const)
+					: (["endpoint", "region", "accessKeyId", "secretAccessKey", "sessionToken"] as const);
 		for (const field of fields) asOptionalString(profile[field]);
 		const incompatible =
 			kind === "webdav"
-				? ["endpoint", "region", "accessKeyId", "secretAccessKey", "sessionToken"]
-				: ["url", "username", "password"];
+				? ["endpoint", "region", "accessKeyId", "secretAccessKey", "sessionToken", "remote"]
+				: kind === "git"
+					? [
+							"endpoint",
+							"region",
+							"accessKeyId",
+							"secretAccessKey",
+							"sessionToken",
+							"url",
+							"username",
+							"password",
+						]
+					: ["url", "username", "password", "remote"];
 		if (incompatible.some((field) => Object.hasOwn(profile, field))) {
 			throw new Error(`Invalid pi-sync settings: profile "${name}" mixes backend fields.`);
 		}
@@ -740,13 +805,20 @@ function validateConfigDocumentForMigration(settings: Record<string, unknown>) {
 			throw new Error(`Invalid pi-sync settings: target "${name}" references a missing profile.`);
 		}
 		const linkedProfile = ownObject(profiles, profileName);
-		const webdav = linkedProfile?.kind === "webdav";
-		for (const field of webdav
-			? (["path", "namespace"] as const)
-			: (["bucket", "prefix", "namespace"] as const)) {
-			asOptionalString(target[field]);
-		}
-		const incompatible = webdav ? ["bucket", "prefix"] : ["path"];
+		const kind = linkedProfile?.kind;
+		const fields =
+			kind === "webdav"
+				? (["path", "namespace"] as const)
+				: kind === "git"
+					? (["branch", "directory", "namespace"] as const)
+					: (["bucket", "prefix", "namespace"] as const);
+		for (const field of fields) asOptionalString(target[field]);
+		const incompatible =
+			kind === "webdav"
+				? ["bucket", "prefix", "branch", "directory"]
+				: kind === "git"
+					? ["bucket", "prefix", "path"]
+					: ["path", "branch", "directory"];
 		if (incompatible.some((field) => Object.hasOwn(target, field))) {
 			throw new Error(`Invalid pi-sync settings: target "${name}" mixes backend fields.`);
 		}
@@ -887,74 +959,6 @@ export function isCloudflareR2Endpoint(endpoint: string | undefined) {
 	}
 }
 
-export function normalizeWebDavUrl(value: string | undefined) {
-	const normalized = normalizeConfiguredString(value);
-	if (!normalized) return undefined;
-	let url: URL;
-	try {
-		url = new URL(normalized);
-	} catch {
-		throw new Error("Invalid pi-sync WebDAV URL.");
-	}
-	if (url.username || url.password || url.search || url.hash) {
-		throw new Error(
-			"Invalid pi-sync WebDAV URL: credentials, query, and fragment are not allowed.",
-		);
-	}
-	const loopback =
-		url.hostname === "127.0.0.1" ||
-		url.hostname === "localhost" ||
-		url.hostname === "[::1]" ||
-		url.hostname === "::1";
-	if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
-		throw new Error("Invalid pi-sync WebDAV URL: HTTPS is required except for loopback.");
-	}
-	url.pathname = `${url.pathname.replace(/\/+$/u, "")}/`;
-	return url.toString();
-}
-
-export function normalizeWebDavPath(value: string | undefined) {
-	const normalized = trimSlashes(normalizeOptionalString(value) ?? DEFAULT_PREFIX);
-	if (
-		!normalized ||
-		normalized.includes("\\") ||
-		hasControlCharacter(normalized) ||
-		normalized.split("/").some((segment) => !segment || segment === "." || segment === "..")
-	) {
-		throw new Error("Invalid pi-sync WebDAV path.");
-	}
-	return normalized;
-}
-
-export function validateWebDavNamespace(value: string) {
-	if (
-		value === "." ||
-		value === ".." ||
-		value.includes("/") ||
-		value.includes("\\") ||
-		hasControlCharacter(value)
-	) {
-		throw new Error("Invalid pi-sync WebDAV namespace.");
-	}
-}
-
-export function validateWebDavCredentials(username: string, password?: string) {
-	if (
-		username.includes(":") ||
-		hasControlCharacter(username) ||
-		(password !== undefined && hasControlCharacter(password))
-	) {
-		throw new Error("Invalid pi-sync WebDAV credentials.");
-	}
-}
-
-function hasControlCharacter(value: string) {
-	return [...value].some((character) => {
-		const code = character.codePointAt(0) ?? 0;
-		return code < 0x20 || (code >= 0x7f && code <= 0x9f);
-	});
-}
-
 function normalizeOptionalString(value: string | undefined) {
 	const normalized = value?.trim();
 	return normalized ? normalized : undefined;
@@ -987,10 +991,4 @@ export function isExplicitlyEnabled(value: boolean | string | undefined) {
 	return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
 }
 
-export function isMissingConfigError(error: unknown) {
-	return (
-		error instanceof Error &&
-		(error.message.startsWith("Missing pi-sync config:") ||
-			error.message.startsWith("Missing pi-sync WebDAV config:"))
-	);
-}
+export { isMissingConfigError } from "./config-errors.js";

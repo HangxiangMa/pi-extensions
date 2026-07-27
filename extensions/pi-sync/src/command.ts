@@ -230,6 +230,6 @@ export function usage() {
 	return [
 		"Usage: /sync <command>",
 		`Commands: ${commands}`,
-		"Settings: use /sync init or edit profiles and targets in ~/.pi/agent/pi-sync.json (or $PI_CODING_AGENT_DIR/pi-sync.json). Existing PI_SYNC_* overrides still work but are deprecated for future major-version removal.",
+		"Settings: use /sync init or edit profiles and targets in ~/.pi/agent/pi-sync.json (or $PI_CODING_AGENT_DIR/pi-sync.json). Existing S3-only PI_SYNC_* overrides still work but are deprecated for future major-version removal.",
 	].join("\n");
 }

@@ -1,4 +1,4 @@
-export type StorageProfileKind = "r2" | "s3-compatible" | "webdav";
+export type StorageProfileKind = "r2" | "s3-compatible" | "webdav" | "git";
 export type TargetSwitchAction = "ask" | "pull" | "switch-only";
 
 export interface S3StorageProfileFields {
@@ -19,7 +19,15 @@ export interface WebDavStorageProfileSettings {
 	password?: string;
 }
 
-export type StorageProfileSettings = S3StorageProfileSettings | WebDavStorageProfileSettings;
+export interface GitStorageProfileSettings {
+	kind: "git";
+	remote?: string;
+}
+
+export type StorageProfileSettings =
+	| S3StorageProfileSettings
+	| WebDavStorageProfileSettings
+	| GitStorageProfileSettings;
 
 export interface CommonSyncTargetSettings {
 	profile?: string;
@@ -40,7 +48,16 @@ export interface WebDavSyncTargetSettings extends CommonSyncTargetSettings {
 	namespace?: string;
 }
 
-export type SyncTargetSettings = S3SyncTargetSettings | WebDavSyncTargetSettings;
+export interface GitSyncTargetSettings extends CommonSyncTargetSettings {
+	branch?: string;
+	directory?: string;
+	namespace?: string;
+}
+
+export type SyncTargetSettings =
+	| S3SyncTargetSettings
+	| WebDavSyncTargetSettings
+	| GitSyncTargetSettings;
 
 export interface PiSyncSettingsV2 {
 	version: 2;
@@ -99,7 +116,37 @@ export interface ResolvedWebDavBackend {
 	destination: ResolvedWebDavDestination;
 }
 
-export type ResolvedSyncBackend = ResolvedS3Backend | ResolvedWebDavBackend;
+export interface ResolvedGitStorageProfile {
+	kind: "git";
+	remote: string;
+	/** S3/WebDAV-only compatibility properties remain absent at runtime. */
+	endpoint?: string;
+	region?: string;
+	accessKeyId?: string;
+	secretAccessKey?: string;
+	sessionToken?: string;
+	url?: string;
+	username?: string;
+	password?: string;
+}
+
+export interface ResolvedGitDestination {
+	branch: string;
+	directory: string;
+	namespace: string;
+	/** S3/WebDAV-only compatibility properties remain absent at runtime. */
+	bucket?: string;
+	prefix?: string;
+	path?: string;
+}
+
+export interface ResolvedGitBackend {
+	type: "git";
+	profile: ResolvedGitStorageProfile;
+	destination: ResolvedGitDestination;
+}
+
+export type ResolvedSyncBackend = ResolvedS3Backend | ResolvedWebDavBackend | ResolvedGitBackend;
 
 export interface CommonSyncConfig {
 	/** Remote namespace retained as `profile` for snapshot/wire compatibility. */
@@ -130,8 +177,11 @@ export interface PartialConfig {
 	url?: string;
 	username?: string;
 	password?: string;
+	remote?: string;
 	bucket?: string;
 	path?: string;
+	branch?: string;
+	directory?: string;
 	region?: string;
 	accessKeyId?: string;
 	secretAccessKey?: string;

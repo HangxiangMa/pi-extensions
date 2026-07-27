@@ -1,5 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { readLocalConfigObject } from "./config.js";
+import { showAddGitStorageProfile, showEditGitStorageProfile } from "./git-ui.js";
 import { ownRecord, requiredInput, safeTerminalText } from "./manager-helpers.js";
 import {
 	applyS3CredentialUpdate,
@@ -41,7 +42,7 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
 	if (action === "Remove saved connection") {
 		const confirmed = await ctx.ui.confirm(
 			"Remove saved connection?",
-			`Remove saved connection “${safeTerminalText(selected)}”? Remote buckets and snapshots are not deleted.`,
+			`Remove saved connection “${safeTerminalText(selected)}”? Remote data and history are not deleted.`,
 		);
 		if (!confirmed) return;
 		await removeStorageProfile(selected);
@@ -52,6 +53,10 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
 	if (!profile) return;
 	if (profile.kind === "webdav") {
 		await showEditWebDavStorageProfile(ctx, selected, profile, signal);
+		return;
+	}
+	if (profile.kind === "git") {
+		await showEditGitStorageProfile(ctx, selected, profile, signal);
 		return;
 	}
 	const endpoint = await requiredInput(
@@ -78,11 +83,12 @@ export async function showStorageConnections(ctx: ExtensionCommandContext, signa
 export async function showAddStorageConnection(ctx: ExtensionCommandContext, signal?: AbortSignal) {
 	const preset = await ctx.ui.select(
 		"Storage type",
-		["Cloudflare R2", "Other S3-compatible storage", "WebDAV", "Cancel"],
+		["Cloudflare R2", "Other S3-compatible storage", "WebDAV", "Git", "Cancel"],
 		{ signal },
 	);
 	if (!preset || preset === "Cancel") return false;
 	if (preset === "WebDAV") return showAddWebDavStorageProfile(ctx, signal);
+	if (preset === "Git") return showAddGitStorageProfile(ctx, signal);
 	const name = await requiredInput(
 		ctx,
 		"Name this saved connection",

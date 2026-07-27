@@ -1,12 +1,8 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
-	normalizeWebDavPath,
-	normalizeWebDavUrl,
 	readActiveLocalConfigDocumentForRepair,
 	replaceLocalConfigDocument,
 	resolveV2PartialConfig,
-	validateWebDavCredentials,
-	validateWebDavNamespace,
 } from "./config.js";
 import { promptSecret } from "./secret-input.js";
 import {
@@ -18,6 +14,12 @@ import {
 } from "./settings-management.js";
 import { DEFAULT_SYNC_FILES } from "./sync-policy.js";
 import type { PartialConfig } from "./types.js";
+import {
+	normalizeWebDavPath,
+	normalizeWebDavUrl,
+	validateWebDavCredentials,
+	validateWebDavNamespace,
+} from "./webdav-config.js";
 
 export async function repairableWebDavDestinationName(signal?: AbortSignal) {
 	const document = await awaitActive(signal, readActiveLocalConfigDocumentForRepair());
