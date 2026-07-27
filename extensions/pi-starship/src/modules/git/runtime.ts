@@ -198,12 +198,31 @@ export function parseGitStatusPorcelain(output: string): GitStatusSnapshot {
 }
 
 export function parseGitDiffShortstat(output: string): GitMetricsSnapshot {
-	const added = /(\d+) insertions?\(\+\)/u.exec(output)?.[1];
-	const deleted = /(\d+) deletions?\(-\)/u.exec(output)?.[1];
 	return {
-		added: added ? Number(added) : 0,
-		deleted: deleted ? Number(deleted) : 0,
+		added: parseShortstatMetric(output, "insertion(+)", "insertions(+)") ?? 0,
+		deleted: parseShortstatMetric(output, "deletion(-)", "deletions(-)") ?? 0,
 	};
+}
+
+function parseShortstatMetric(
+	output: string,
+	singularLabel: string,
+	pluralLabel: string,
+): number | undefined {
+	for (const field of output.split(",")) {
+		const trimmed = field.trim();
+		const separator = trimmed.indexOf(" ");
+		if (separator <= 0) continue;
+		const label = trimmed.slice(separator + 1).trimStart();
+		if (label !== singularLabel && label !== pluralLabel) continue;
+		const countText = trimmed.slice(0, separator);
+		for (const character of countText) {
+			if (character < "0" || character > "9") return undefined;
+		}
+		const count = Number(countText);
+		return Number.isSafeInteger(count) ? count : undefined;
+	}
+	return undefined;
 }
 
 export function parseGitState(gitDirectory: string): GitStateSnapshot | undefined {

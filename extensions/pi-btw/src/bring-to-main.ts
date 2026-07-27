@@ -853,7 +853,7 @@ function escapeBringToMainText(text: string): string {
 		.join("")
 		.replace(/<btw_context(?=[ \t\r\n>])/g, "&lt;btw_context")
 		.replace(/<\/btw_context[ \t\r\n]*>/g, (terminator) =>
-			terminator.replace("<", "&lt;").replace(">", "&gt;"),
+			terminator.replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
 		);
 }
 

@@ -89,6 +89,11 @@ test("Git diff shortstat parser returns added and deleted line totals", () => {
 		deleted: 0,
 	});
 	assert.deepEqual(parseGitDiffShortstat(""), { added: 0, deleted: 0 });
+
+	const adversarial = `${"0".repeat(100_000)} insertionX(+)`;
+	const startedAt = performance.now();
+	assert.deepEqual(parseGitDiffShortstat(adversarial), { added: 0, deleted: 0 });
+	assert.ok(performance.now() - startedAt < 500, "malformed counts must be parsed linearly");
 });
 
 test("Git snapshot refresh collects optional commit tags and line metrics outside render", async () => {

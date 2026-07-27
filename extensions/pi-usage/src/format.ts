@@ -174,11 +174,13 @@ function normalizedModelKeys(model: UsageModel): Set<string> {
 }
 
 function normalizeKey(value: string | undefined): string | undefined {
-	const normalized = value
-		?.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "");
-	return normalized || undefined;
+	const separated = value?.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+	if (!separated) return undefined;
+	let start = 0;
+	let end = separated.length;
+	while (separated[start] === "-") start += 1;
+	while (end > start && separated[end - 1] === "-") end -= 1;
+	return separated.slice(start, end) || undefined;
 }
 
 function normalizedKeyHasToken(key: string, token: string): boolean {
@@ -192,9 +194,9 @@ function normalizedKeyHasToken(key: string, token: string): boolean {
 
 function compactLimitLabel(label: string): string {
 	const normalized = label.replace(/[_-]+/g, " ").trim();
-	return (normalized.match(/\bcodex\s+(.+)$/i)?.[1]?.trim() || normalized)
-		.toLowerCase()
-		.replace(/\s+/g, " ");
+	const codex = /\bcodex\s/iu.exec(normalized);
+	const suffix = codex ? normalized.slice(codex.index + codex[0].length).trim() : "";
+	return (suffix || normalized).toLowerCase().replace(/\s+/g, " ");
 }
 
 function formatPercentBucket(bucket: UsageBucket): string {
