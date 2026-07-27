@@ -239,8 +239,11 @@ test("fake backend exercises status, diff, sync, and backend diagnostics", async
 		assert.match(output, /remote: empty/);
 		assert.match(output, /Remote is empty\. Local push would upload/);
 		assert.match(output, /Pushed 1 files/);
-		assert.match(output, /publication safety: atomic-conditional/);
+		assert.match(output, /publication safety: atomic-conditional \(verified atomic precondition\)/);
 		assert.match(output, /memory backend: ok/);
+		const doctorOutput = notifications.at(-1)?.message ?? "";
+		assert.ok(doctorOutput.indexOf("secret scan:") < doctorOutput.indexOf("destination:"));
+		assert.ok(doctorOutput.indexOf("lock:") < doctorOutput.indexOf("publication safety:"));
 	});
 });
 

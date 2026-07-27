@@ -1,5 +1,5 @@
 import { agentDir } from "./config.js";
-import type { RemoteHead } from "./sync-backend.js";
+import type { PublicationCapability, RemoteHead } from "./sync-backend.js";
 import { fileHashMap } from "./sync-state.js";
 import type { CommonSyncConfig, Snapshot } from "./types.js";
 
@@ -137,6 +137,19 @@ function formatDirectionalChanges(
 export function countPreservedRemoteFiles(local: Snapshot, upload: Snapshot) {
 	const localPaths = new Set(local.files.map((file) => file.path));
 	return upload.files.filter((file) => !localPaths.has(file.path)).length;
+}
+
+export function publicationCapabilityDescription(capability: PublicationCapability) {
+	switch (capability) {
+		case "lease-protected":
+			return "lease-protected (exact expected-ref update)";
+		case "atomic-conditional":
+			return "atomic-conditional (verified atomic precondition)";
+		case "conditional-required":
+			return "conditional-required (read-only until atomic preconditions are verified)";
+		case "read-check-write-verify":
+			return "read-check-write-verify (visible races rejected; simultaneous unseen races remain possible)";
+	}
 }
 
 export function safeTerminalText(value: string) {

@@ -1,15 +1,16 @@
-# ☁️ pi-sync — WebDAV/R2/S3 Pi Settings Sync
+# ☁️ pi-sync — Git/WebDAV/R2/S3 Pi Settings Sync
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-sync)](https://www.npmjs.com/package/@narumitw/pi-sync) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-sync` syncs selected Pi configuration through WebDAV, Cloudflare R2, or other S3-compatible storage. Named sync targets such as `home` and `work` can reuse storage profiles such as `webdav`, `r2`, and `s3`.
+`@narumitw/pi-sync` syncs selected Pi configuration through Git, WebDAV, Cloudflare R2, or other S3-compatible storage. Named sync targets such as `home` and `work` can reuse saved connections such as `github`, `webdav`, `r2`, and `s3`.
 
-The extension uses immutable snapshot bundles, a `latest.json` publication pointer, local locking, secret scanning, pre-apply backups, and recoverable local apply transactions. Remote persistence is isolated behind a backend-neutral contract; normalized runtime config pairs a discriminated backend profile with its matching destination before factory selection, while the persisted settings shape remains compatible. WebDAV and S3/R2 are production backends in this release. Conversation/session syncing remains opt-in because session JSONL can contain prompts, tool output, paths, screenshots, and secrets.
+The extension uses immutable snapshot bundles, local locking, secret scanning, pre-apply backups, and recoverable local apply transactions. S3/WebDAV publish through a managed `latest.json` pointer; Git stores one validated bundle and manifest per commit on a pi-sync-owned branch. Remote persistence is isolated behind a backend-neutral contract, and normalized runtime config pairs each discriminated storage profile with its matching destination. Git, WebDAV, and S3/R2 are production backends in this release. Conversation/session syncing remains opt-in because session JSONL can contain prompts, tool output, paths, screenshots, and secrets.
 
 ## ✨ Features
 
 - Opens a goal-oriented `/sync` manager showing the current target, storage, auto-sync, session scope, and relevant next actions.
-- Supports multiple named **sync targets** and reusable WebDAV/R2/S3 **storage profiles**.
+- Supports multiple named **sync targets** and reusable Git/WebDAV/R2/S3 **storage profiles**.
+- Publishes Git snapshots as one commit with an exact expected-ref lease, preserving native first-parent history without unconditional force pushes.
 - Uses verified `ETag`, `If-Match`, and `If-None-Match` preconditions for atomic WebDAV publication and fails closed when a server ignores them.
 - Asks to review a pull after switching targets by default, with settings to start that review automatically or switch only.
 - Previews concrete local or remote file changes before push, pull, force resolution, or rollback.
@@ -52,11 +53,11 @@ Run the manager:
 
 When pi-sync is not configured, choose **Set up sync**. The TUI guides you through:
 
-1. WebDAV, Cloudflare R2, or another S3-compatible service
+1. Git, WebDAV, Cloudflare R2, or another S3-compatible service
 2. `Personal / Home`, `Work`, or a custom target purpose
 3. an endpoint and, for S3, the existing bucket name
 4. a recommended remote location or advanced customization
-5. environment credentials or a private settings-file template
+5. existing Git/SSH authentication, masked WebDAV credentials, S3 environment credentials, or a private settings-file template
 6. a synced-content preset
 7. an exact setup preview and **Save setup** confirmation
 
@@ -74,6 +75,35 @@ For a first Cloudflare R2 target, the recommended location requires no raw path 
 The R2 bucket must already exist; pi-sync never creates buckets. Generic S3 setup asks for one existing, potentially globally unique bucket and derives storage profile `s3`, prefix `pi-sync`, and namespace `home` or `work`. **Customize remote location** retains direct control over profile name, bucket, prefix, and namespace.
 
 The setup wizard can store WebDAV passwords and S3-compatible static credentials entirely through the TUI. Its package-owned masked input renders only bullets, and secret values are never shown in reviews, menus, status, notifications, warnings, or errors. S3 environment credentials and a manual private-settings template remain available; WebDAV has no environment-variable credential mirrors.
+
+### Git setup
+
+Git profiles contain only a remote URL; credentials remain in your existing Git credential helper, SSH agent, or SSH configuration. Targets select a pi-sync-owned branch, repository directory, and namespace:
+
+```json
+{
+  "profiles": {
+    "github": {
+      "kind": "git",
+      "remote": "git@github.com:owner/private-pi-sync.git"
+    }
+  },
+  "targets": {
+    "home": {
+      "profile": "github",
+      "branch": "pi-sync/home",
+      "directory": "pi-sync",
+      "namespace": "home"
+    }
+  }
+}
+```
+
+The remote repository must already exist; the owned branch may be absent and is created on first push with an exact missing-ref lease. Each effective repository/branch pair belongs to exactly one pi-sync target; use a distinct branch for another namespace or target. Existing non-empty repositories are safe because pi-sync reads and updates only the configured branch. If that branch already exists, its tip must contain a valid pi-sync manifest and bundle.
+
+Supported production remotes are HTTPS without embedded credentials, `ssh://` URLs, and conservative scp-like SSH remotes such as `git@github.com:owner/repo.git`. Local paths and `file`, `git`, `ext`, and arbitrary remote-helper transports are rejected. Automatic commands disable repository hooks, editors, pagers, terminal prompts, and askpass interaction. User-configured credential helpers, SSH agents/configuration, and SSH `ProxyCommand` remain trusted external authentication mechanisms; pi-sync does not sandbox or store them.
+
+Git 2.30 or newer and a SHA-1-format remote repository are currently required; SHA-256-format refs fail explicitly rather than being misread. Run `/sync doctor` to check the Git executable/version, non-interactive remote access, owned branch, private bare cache, and lease-protected publication capability. Cache corruption can be recovered by removing only the matching private cache under `${PI_CODING_AGENT_DIR:-~/.pi/agent}/.pisync/git/`; settings, local sync state, backups, and remote history remain untouched and the cache is rebuilt on the next operation.
 
 ### WebDAV setup
 
@@ -154,6 +184,10 @@ A version 2 example:
   "activeTarget": "home",
   "targetSwitchAction": "ask",
   "profiles": {
+    "github": {
+      "kind": "git",
+      "remote": "git@github.com:owner/private-pi-sync.git"
+    },
     "r2": {
       "kind": "r2",
       "endpoint": "https://<account-id>.r2.cloudflarestorage.com",
@@ -180,6 +214,16 @@ A version 2 example:
       "syncSessions": false,
       "extraFiles": []
     },
+    "git-backup": {
+      "profile": "github",
+      "branch": "pi-sync/backup",
+      "directory": "pi-sync",
+      "namespace": "backup",
+      "autoSync": false,
+      "syncFiles": ["settings.json", "skills", "prompts", "themes"],
+      "syncSessions": false,
+      "extraFiles": []
+    },
     "work": {
       "profile": "s3",
       "bucket": "company-pi",
@@ -198,8 +242,8 @@ A version 2 example:
 
 The TUI presents each profile/target pair as a **destination**. **Add destination** is the primary flow; reusable **saved connections** are available as an advanced action. The version 2 JSON names remain unchanged for compatibility.
 
-- An S3/R2 **storage profile** owns `kind`, `endpoint`, `region`, `accessKeyId`, `secretAccessKey`, and optional `sessionToken`; a WebDAV profile owns `kind: "webdav"`, `url`, `username`, and `password`.
-- An S3/R2 **sync target** owns `bucket`, `prefix`, and `namespace`; a WebDAV target owns `path` and `namespace`. Every target also owns `autoSync` and its synced-content policy.
+- A Git **storage profile** owns `kind: "git"` and a credential-free `remote`; a WebDAV profile owns `kind: "webdav"`, `url`, `username`, and `password`; an S3/R2 profile owns `kind`, `endpoint`, `region`, `accessKeyId`, `secretAccessKey`, and optional `sessionToken`.
+- A Git **sync target** owns `branch`, `directory`, and `namespace`; a WebDAV target owns `path` and `namespace`; an S3/R2 target owns `bucket`, `prefix`, and `namespace`. Every target also owns `autoSync` and its synced-content policy.
 - `activeTarget` is used by bare commands and automatic sync.
 - `targetSwitchAction` controls what happens after a target switch: `ask` (default), `pull`, or `switch-only`.
 - `namespace` is the old flat `profile` concept. The remote layout and snapshot wire field remain named `profiles`/`profile` for compatibility.
@@ -297,6 +341,26 @@ Unknown flags, unexpected values, and missing target/snapshot values are rejecte
 
 TUI mode provides the full manager and custom settings components. RPC uses Pi's dialog/notification protocol and does not call TUI-only components. Print/JSON modes cannot display extension UI; use explicit direct routes for compatible automation and do not expect notification-only status output.
 
+## 🧭 Backend comparison and migration
+
+| Backend | Publication guarantee | Authentication | History and rollback | Local dependency/cache | Session suitability |
+| --- | --- | --- | --- | --- | --- |
+| Git | Exact expected-ref lease (`lease-protected`) | Existing SSH agent/config or non-interactive HTTPS credential helper | Native first-parent commits; rollback creates a new commit | Git executable and rebuildable private bare cache | Use cautiously: old session content remains in permanent commit history |
+| WebDAV | Verified strong `If-Match`/`If-None-Match` (`atomic-conditional`) | Private settings-file username/app password over HTTPS | Managed snapshot history; rollback publishes a new pointer | No extra executable; conditional-capability probe | Suitable only on a trusted server; server retention still applies |
+| R2/S3 | Read-check-write-verify; an unobserved simultaneous race remains possible | Private settings or existing compatibility environment variables | Managed snapshot history; rollback publishes a new pointer | No extra executable | Suitable only on trusted storage with an explicit retention policy |
+
+`--force` has the same meaning on every backend: accept reviewed content divergence, re-read the destination, and retain the backend's concurrency protection. It never authorizes an unconditional Git force push or pointer overwrite.
+
+To migrate between backends manually:
+
+1. Disable automatic sync for the source target.
+2. Run source diagnostics, inspect status, pull the intended current state, and retain the local backup.
+3. Add a separate destination/saved connection for the new backend and run `/sync doctor --target <destination>`.
+4. Switch deliberately, review the exact destination push, and publish only after confirming that an empty destination or its existing content is expected.
+5. Verify destination status and history before removing any local source configuration.
+
+Do not run source and destination automatic sync simultaneously over overlapping local files. Cancelling before destination publication leaves it unchanged; after publication begins, an ambiguous transport result requires `/sync status` before retrying. Migration publishes only the current selected snapshot—it does not copy S3/WebDAV managed history or Git native commit history. Removing a local target/profile never deletes remote data.
+
 ## 🔄 Sync and recovery model
 
 For the current target, startup auto-sync uses conservative decisions:
@@ -309,7 +373,7 @@ For the current target, startup auto-sync uses conservative decisions:
 
 Switching targets first changes `activeTarget`, then follows `targetSwitchAction`: ask before reviewing a pull in TUI by default, start a reviewed pull automatically when configured, or stop after switching. Pulls remain pinned to the selected target and retain exact summaries, locking, backups, and conflict safeguards. The next startup uses the new target's `autoSync` regardless of the switch action.
 
-Remote layout remains compatible:
+S3/WebDAV remote layout remains compatible:
 
 ```text
 <prefix>/
@@ -321,11 +385,23 @@ Remote layout remains compatible:
             └── <snapshot-id>.json.gz
 ```
 
-Snapshot upload is staging; `latest.json` is the active publication boundary. pi-sync records the backend's opaque remote revision separately from the applied snapshot identity, while continuing to read legacy state that has no revision or contains the old `lastRemoteEtag` field. Rollback verifies the selected snapshot against the active head or retained history, mints a new snapshot identity, and publishes a new history entry instead of rewriting the old one. If remote rollback publication fails after local apply, the error identifies that partial outcome and its local backup. A failed history update after publication is reported as “snapshot active, history needs repair” instead of falsely claiming no remote change. A transport failure at the active-head boundary is reported as an unknown publication outcome and directs the user to check status rather than claiming that nothing changed.
+Git uses one commit per publication on the owned branch:
+
+```text
+<directory>/
+└── profiles/
+    └── <namespace>/
+        ├── manifest.json
+        └── snapshot.json.gz
+```
+
+Snapshot upload is staging; `latest.json` is the S3/WebDAV active publication boundary, while the Git owned-ref update is its publication boundary. pi-sync records the backend's opaque remote revision separately from the applied snapshot identity, while continuing to read legacy state that has no revision or contains the old `lastRemoteEtag` field. Rollback verifies the selected snapshot against the active head or retained history, mints a new snapshot identity, and publishes a new history entry instead of rewriting the old one. If remote rollback publication fails after local apply, the error identifies that partial outcome and its local backup. A failed history update after publication is reported as “snapshot active, history needs repair” instead of falsely claiming no remote change. A transport failure at the active-head boundary is reported as an unknown publication outcome and directs the user to check status rather than claiming that nothing changed.
 
 Before pull/rollback, pi-sync writes a backup under `.pisync/backups/`. It then preflights all paths, stages a private transaction journal, applies changes, and restores every affected path if a later mutation fails. An interrupted journal is recovered before the next session/snapshot apply. Filesystem-wide replacement cannot be one OS primitive, so the guarantee is a complete previous or complete new accepted state after rollback/recovery—not an unrecoverable partial accepted state.
 
 WebDAV is conservatively reported as `conditional-required` until an isolated probe passes, then as `atomic-conditional`: each publication verifies the server's precondition behavior, stages the immutable bundle with `If-None-Match: *`, and changes `latest.json` with `If-Match` or `If-None-Match: *`. Unsupported servers remain read-only and are reported by doctor.
+
+Git is reported as `lease-protected`. Each publication creates a child commit in a private bare cache and pushes it with an exact expected branch SHA (or an exact missing-ref expectation). A timeout or transport failure after push starts is reconciled against the candidate commit; if the result cannot be proven, pi-sync reports an unknown publication outcome instead of claiming cancellation.
 
 R2/S3 is explicitly reported as `read-check-write-verify`, not atomic compare-and-swap. pi-sync re-reads `latest.json` immediately before publication and verifies afterward, but simultaneous writers can still race. `--force` accepts a reviewed content conflict, re-reads the head, and never disables the backend revision check; it is not an unconditional overwrite. Review status before important forced updates.
 
@@ -335,11 +411,11 @@ R2/S3 is explicitly reported as `read-check-write-verify`, not atomic compare-an
 
 Only JSONL session files are included. Denylisted names and paths such as `.env*`, `.pisync`, `node_modules`, `token`, and `secret` are ignored. The currently open session file is protected during pull; restart Pi or resume a pulled session to use newly synced conversations.
 
-Sessions can contain prompts, model output, tool results, file paths, images, and secrets. Use only storage you trust.
+Sessions can contain prompts, model output, tool results, file paths, images, and secrets. Use only storage you trust. Git is especially persistent: disabling session sync, deleting a cache/target, or publishing a later snapshot does not remove session content from old commits; removal requires an explicit repository history-retention or rewrite procedure outside pi-sync.
 
 ## 🛡️ Safety notes
 
-- Credentials stay local; canonical, legacy, temporary, and migration-recovery settings files are always excluded from snapshots.
+- Credentials stay local; canonical, legacy, temporary, and migration-recovery settings files are always excluded from snapshots. Git remote URLs with embedded HTTPS credentials are rejected, and rendered Git destinations contain only host, owned branch, directory, and namespace.
 - Push refuses common secret patterns in locally managed files.
 - Pull/rollback reject unsafe paths, duplicate paths, checksum mismatches, symlink parents, and file/directory replacement hazards before mutation. Remote JSON and WebDAV XML responses are limited to 1 MiB, error bodies to 64 KiB, compressed snapshot downloads to 256 MiB, and decompressed snapshot bundles to 512 MiB.
 - Unmanaged local/remote files remain preserved.
@@ -373,6 +449,9 @@ extensions/pi-sync/
 │   ├── webdav-backend.ts        # Conditional WebDAV publication and diagnostics
 │   ├── webdav-client.ts         # Bounded authenticated WebDAV transport
 │   ├── webdav-ui.ts             # WebDAV setup and profile/target management
+│   ├── git-backend.ts           # Lease-protected Git commits, history, cache, and diagnostics
+│   ├── git-runner.ts            # Bounded non-interactive Git subprocess lifecycle
+│   ├── git-ui.ts                # Git setup and profile/target management
 │   ├── snapshot-codec.ts        # Shared immutable snapshot bundle codec
 │   ├── manager-ui.ts            # Goal-oriented menus and setup/management flows
 │   ├── file-selection.ts        # Transactional synced-content editor
@@ -391,7 +470,7 @@ extensions/pi-sync/
 
 ## 🔎 Keywords
 
-Pi extension, Pi coding agent, settings sync, WebDAV, Nextcloud, ownCloud, Synology, Cloudflare R2, S3-compatible storage, multi-profile sync, sync targets, snapshot sync, dotfiles sync.
+Pi extension, Pi coding agent, settings sync, Git, GitHub, GitLab, Forgejo, WebDAV, Nextcloud, ownCloud, Synology, Cloudflare R2, S3-compatible storage, multi-profile sync, sync targets, snapshot sync, dotfiles sync.
 
 ## 📄 License
 

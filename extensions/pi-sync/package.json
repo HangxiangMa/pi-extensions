@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-sync",
 	"version": "0.33.0",
-	"description": "Pi extension that syncs Pi configuration through WebDAV, Cloudflare R2, or S3-compatible storage.",
+	"description": "Pi extension that syncs Pi configuration through Git, WebDAV, Cloudflare R2, or S3-compatible storage.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -14,7 +14,11 @@
 		"s3",
 		"webdav",
 		"nextcloud",
-		"synology"
+		"synology",
+		"git",
+		"github",
+		"gitlab",
+		"forgejo"
 	],
 	"files": [
 		"src",

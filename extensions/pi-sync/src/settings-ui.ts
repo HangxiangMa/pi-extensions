@@ -97,8 +97,16 @@ async function showSettingsList(
 					"muted",
 					`Target: ${safeTerminalText(partial.target ?? "default")} · ${storageDescription(
 						partial.storageKind,
-						partial.storageKind === "webdav" ? partial.url : partial.endpoint,
-						partial.storageKind === "webdav" ? partial.path : partial.bucket,
+						partial.storageKind === "webdav"
+							? partial.url
+							: partial.storageKind === "git"
+								? partial.remote
+								: partial.endpoint,
+						partial.storageKind === "webdav"
+							? partial.path
+							: partial.storageKind === "git"
+								? partial.branch
+								: partial.bucket,
 					)}`,
 				),
 				1,
@@ -191,6 +199,17 @@ function storageDescription(
 	endpoint: string | undefined,
 	bucket: string | undefined,
 ) {
+	if (kind === "git") {
+		let host = "remote missing";
+		try {
+			host = endpoint?.includes("://")
+				? new URL(endpoint).host
+				: (endpoint?.replace(/^(?:[^@]+@)?([^:]+):.*$/u, "$1") ?? host);
+		} catch {
+			host = "invalid remote";
+		}
+		return `Git · ${safeTerminalText(host)} · ${safeTerminalText(bucket ?? "branch missing")}`;
+	}
 	if (kind === "webdav") {
 		let host = "URL missing";
 		try {
