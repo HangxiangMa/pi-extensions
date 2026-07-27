@@ -31,6 +31,7 @@ export interface ChromeDevToolsState {
 	launchPromise?: Promise<void>;
 	lastLaunchAttempt?: BrowserLaunchAttempt;
 	shuttingDown: boolean;
+	sessionGeneration: number;
 	settingsNotice?: string;
 }
 
@@ -82,4 +83,5 @@ export const state: ChromeDevToolsState = {
 	autoLaunchEnabled: process.env.PI_CHROME_DEVTOOLS_AUTO_LAUNCH !== "0",
 	browserExecutable: process.env.PI_CHROME_DEVTOOLS_BROWSER,
 	shuttingDown: false,
+	sessionGeneration: 0,
 };

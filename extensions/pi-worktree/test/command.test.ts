@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import { createWorktreeSettingsRuntime } from "../src/settings.js";
+import { createWorktreeSettingsRuntime, type WorktreeSettingsRuntime } from "../src/settings.js";
 import worktreeExtension from "../src/worktree.js";
 
 const oid = "0123456789abcdef0123456789abcdef01234567";
@@ -72,6 +72,47 @@ test("session_start reloads settings and warns through the replacement context",
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("session replacement drops a delayed settings reload continuation", async () => {
+	let resolveFirst!: (value: Awaited<ReturnType<WorktreeSettingsRuntime["reload"]>>) => void;
+	const firstReload = new Promise<Awaited<ReturnType<WorktreeSettingsRuntime["reload"]>>>(
+		(resolve) => {
+			resolveFirst = resolve;
+		},
+	);
+	let reloads = 0;
+	const state = {
+		effectiveRoot: "/srv/worktrees",
+		source: "user" as const,
+		configuredRoot: "/srv/worktrees",
+		canSave: true,
+	};
+	const settings: WorktreeSettingsRuntime = {
+		get: () => state,
+		getPath: () => "/agent/pi-worktree.json",
+		reload: () => {
+			reloads += 1;
+			return reloads === 1
+				? firstReload
+				: Promise.resolve({ ...state, warning: "replacement warning" });
+		},
+		save: async () => state,
+		flush: async () => undefined,
+	};
+	const mock = createMockPi();
+	worktreeExtension(mock.pi, { settings });
+	const sessionStart = mock.events.get("session_start")?.[0];
+	assert.ok(sessionStart);
+	const first = createMockContext({ hasUI: true, mode: "tui" });
+	const pending = sessionStart({}, first.ctx);
+	const replacement = createMockContext({ hasUI: true, mode: "tui" });
+	await sessionStart({}, replacement.ctx);
+	resolveFirst({ ...state, warning: "stale warning" });
+	await pending;
+
+	assert.deepEqual(first.notifications, []);
+	assert.match(replacement.notifications.at(-1)?.message ?? "", /replacement warning/);
 });
 
 test("/worktree rejects hidden text arguments and non-UI mode without Git calls", async () => {

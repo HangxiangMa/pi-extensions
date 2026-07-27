@@ -48,7 +48,7 @@ Run the interactive manager, then choose **Set up Langfuse for this Pi agent dir
 /langfuse
 ```
 
-The setup flow prompts for the secret key, public key, and base URL in the same order Langfuse presents them. Leave either key blank to preserve its existing value when updating a valid config. Leave the base URL blank to use `https://us.cloud.langfuse.com`. The file is saved atomically with mode `0600`.
+The setup flow prompts for the secret key, public key, and base URL in the same order Langfuse presents them. Leave either key blank to preserve its existing value when updating a valid config. Leave the base URL blank to use `https://us.cloud.langfuse.com`. The first successful setup creates the file. Within one Pi process, updates run in invocation order, reread the latest valid private document, preserve unknown fields, and save atomically with mode `0600`. Malformed JSON or invalid recognized fields block setup and update writes until repaired; errors redact entered and stored credentials. A failed save leaves the current session and prior file unchanged.
 
 Configuration belongs to the displayed Pi agent directory, not just the current conversation. Restart each running Pi process after saving; the new connection applies to subsequent sessions in that process. `/reload` is not sufficient because the isolated Langfuse runtime is initialized once per process. In print or JSON mode, edit the file manually because the interactive manager is unavailable.
 

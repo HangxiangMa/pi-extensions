@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -12,6 +20,7 @@ import caffeinate, {
 	splitCommand,
 	windowsInhibitorScript,
 } from "../src/caffeinate.js";
+import { saveSettings } from "../src/settings.js";
 
 const NEW_SETTINGS_FILE = "pi-caffeinate.json";
 const LEGACY_SETTINGS_FILE = "pi-caffeinate-settings.json";
@@ -285,7 +294,10 @@ test("caffeinate ignores invalid legacy settings without creating the new file",
 
 test("caffeinate saves mode only to the new settings file and preserves quiet mode", async () => {
 	await withTempAgentDir(async (agentDir) => {
-		writeSettings(agentDir, NEW_SETTINGS_FILE, "display", true);
+		writeFileSync(
+			path.join(agentDir, NEW_SETTINGS_FILE),
+			JSON.stringify({ mode: "display", quiet: true, updatedAt: 1, future: { kept: true } }),
+		);
 		writeSettings(agentDir, LEGACY_SETTINGS_FILE, "display");
 		const caffeinateModule = await importFreshCaffeinate();
 		const mock = createMockPi();
@@ -298,8 +310,89 @@ test("caffeinate saves mode only to the new settings file and preserves quiet mo
 		assert.equal(savedSettings.mode, "sleep");
 		assert.equal(savedSettings.quiet, true);
 		assert.equal(typeof savedSettings.updatedAt, "number");
+		assert.deepEqual(savedSettings.future, { kept: true });
 		assert.equal(readSettings(agentDir, LEGACY_SETTINGS_FILE).mode, "display");
 		assert.match(notifications.at(-1)?.message ?? "", /mode set to system-awake and saved/);
+	});
+});
+
+test("caffeinate failed publication preserves the prior file and removes its temporary", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, NEW_SETTINGS_FILE, "display", true);
+		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		const original = readFileSync(settingsPath, "utf8");
+
+		await assert.rejects(
+			saveSettings(
+				{ mode: "sleep", updatedAt: 2 },
+				{ rename: async () => Promise.reject(new Error("publish failed")) },
+			),
+			/publish failed/,
+		);
+
+		assert.equal(readFileSync(settingsPath, "utf8"), original);
+		assert.deepEqual(readdirSync(agentDir), [NEW_SETTINGS_FILE]);
+	});
+});
+
+test("caffeinate mode saves preserve a newer quiet setting", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, NEW_SETTINGS_FILE, "display", false);
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx } = createMockContext();
+		caffeinateModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		writeFileSync(
+			path.join(agentDir, NEW_SETTINGS_FILE),
+			JSON.stringify({ mode: "display", quiet: true, updatedAt: 2, future: 2 }),
+		);
+
+		await mock.commands.get("caffeinate")?.handler("sleep", ctx);
+
+		const saved = readSettings(agentDir, NEW_SETTINGS_FILE);
+		assert.equal(saved.mode, "sleep");
+		assert.equal(saved.quiet, true);
+		assert.equal(saved.future, 2);
+	});
+});
+
+test("caffeinate refuses to overwrite invalid settings when changing mode", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		const invalid = '{"mode":"invalid","future":"preserved"}\n';
+		writeFileSync(settingsPath, invalid);
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx, notifications } = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		await mock.commands.get("caffeinate")?.handler("sleep", ctx);
+
+		assert.equal(readFileSync(settingsPath, "utf8"), invalid);
+		assert.match(notifications.at(-1)?.message ?? "", /not saved/i);
+
+		writeSettings(agentDir, NEW_SETTINGS_FILE, "display");
+		await mock.commands.get("caffeinate")?.handler("sleep", ctx);
+		assert.equal(readSettings(agentDir, NEW_SETTINGS_FILE).mode, "sleep");
+	});
+});
+
+test("caffeinate serializes rapid mode saves in invocation order", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, NEW_SETTINGS_FILE, "display", true);
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const { ctx } = createMockContext();
+		caffeinateModule.default(mock.pi);
+
+		const first = mock.commands.get("caffeinate")?.handler("sleep", ctx);
+		const second = mock.commands.get("caffeinate")?.handler("display", ctx);
+		await Promise.all([first, second]);
+
+		assert.equal(readSettings(agentDir, NEW_SETTINGS_FILE).mode, "display");
+		assert.equal(readSettings(agentDir, NEW_SETTINGS_FILE).quiet, true);
 	});
 });
 
@@ -437,6 +530,7 @@ function readSettings(agentDir: string, fileName: string) {
 		mode: string;
 		quiet?: boolean;
 		updatedAt: number;
+		future?: unknown;
 	};
 }
 

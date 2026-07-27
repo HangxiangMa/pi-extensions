@@ -177,12 +177,16 @@ export async function loadSettings(path = settingsFilePath()): Promise<SettingsL
 
 export async function saveSettings(
 	settings: WebUISettings,
-	document: Record<string, unknown>,
+	_document: Record<string, unknown>,
 	path = settingsFilePath(),
 	operations: Partial<SettingsFileOperations> = {},
 ): Promise<Record<string, unknown>> {
+	const latest = await loadSettings(path);
+	if (latest.kind === "invalid") {
+		throw new Error(`Cannot save pi-webui settings until the existing file is repaired.`);
+	}
 	const nextDocument = {
-		...document,
+		...latest.document,
 		startOnSessionStart: settings.startOnSessionStart,
 		retainSentImages: settings.retainSentImages,
 		maxRetainedImages: settings.maxRetainedImages,

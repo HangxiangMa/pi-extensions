@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadLangfuseConfig, normalizeLangfuseConfig } from "../src/config.js";
+import {
+	DEFAULT_BASE_URL,
+	loadLangfuseConfig,
+	normalizeLangfuseConfig,
+	writeLangfuseConfig,
+} from "../src/config.js";
 
 test("loadLangfuseConfig reads pi-langfuse.json and enforces private permissions", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-langfuse-config-"));
@@ -58,6 +63,74 @@ test("loadLangfuseConfig reports missing and unsafe settings without environment
 	if (!invalid.ok) assert.match(invalid.reason, /publicKey must be literal/i);
 });
 
+test("Langfuse updates preserve unknown fields and refuse malformed files", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-langfuse-update-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const path = join(dir, "pi-langfuse.json");
+	await writeFile(
+		path,
+		JSON.stringify({ publicKey: "old-pk", secretKey: "old-sk", future: { kept: true } }),
+		{ mode: 0o600 },
+	);
+	await writeLangfuseConfig(
+		{
+			publicKey: "new-pk",
+			secretKey: "new-sk",
+			baseUrl: "https://us.cloud.langfuse.com",
+			captureContent: false,
+		},
+		path,
+	);
+	const updated = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+	assert.deepEqual(updated.future, { kept: true });
+	assert.equal(updated.secretKey, "new-sk");
+	assert.equal((await stat(path)).mode & 0o777, 0o600);
+
+	const malformed = '{"publicKey":"secret-marker"';
+	await writeFile(path, malformed, { mode: 0o600 });
+	await assert.rejects(
+		writeLangfuseConfig(
+			{
+				publicKey: "replacement",
+				secretKey: "replacement-secret",
+				baseUrl: "https://us.cloud.langfuse.com",
+				captureContent: true,
+			},
+			path,
+		),
+		/invalid|read|repair/i,
+	);
+	assert.equal(await readFile(path, "utf8"), malformed);
+
+	await writeFile(
+		path,
+		JSON.stringify({ publicKey: "repair", secretKey: "repair-secret", future: 2 }),
+		{ mode: 0o600 },
+	);
+	const first = writeLangfuseConfig(
+		{
+			publicKey: "first",
+			secretKey: "first-secret",
+			baseUrl: DEFAULT_BASE_URL,
+			captureContent: true,
+		},
+		path,
+	);
+	const second = writeLangfuseConfig(
+		{
+			publicKey: "second",
+			secretKey: "second-secret",
+			baseUrl: DEFAULT_BASE_URL,
+			captureContent: false,
+		},
+		path,
+	);
+	await Promise.all([first, second]);
+	const final = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+	assert.equal(final.publicKey, "second");
+	assert.equal(final.future, 2);
+});
+
 test("configuration covers malformed JSON, normalization, and captureContent false", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-langfuse-invalid-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
@@ -65,7 +138,10 @@ test("configuration covers malformed JSON, normalization, and captureContent fal
 	await writeFile(path, "{broken", { mode: 0o600 });
 	const malformed = await loadLangfuseConfig(path);
 	assert.equal(malformed.ok, false);
-	if (!malformed.ok) assert.match(malformed.reason, /failed to read/i);
+	if (!malformed.ok) {
+		assert.match(malformed.reason, /failed to parse/i);
+		assert.doesNotMatch(malformed.reason, /broken/);
+	}
 
 	assert.deepEqual(
 		normalizeLangfuseConfig({ publicKey: " pk ", secretKey: " sk ", baseUrl: "https://x.test///" }),

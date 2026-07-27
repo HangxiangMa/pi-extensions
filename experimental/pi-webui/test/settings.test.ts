@@ -124,6 +124,36 @@ test("saving is atomic and preserves unknown fields", async () => {
 	}
 });
 
+test("save rereads the latest document and refuses concurrent invalid edits", async () => {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-webui-settings-latest-"));
+	const settingsPath = path.join(directory, "pi-webui.json");
+	try {
+		await writeFile(settingsPath, '{"startOnSessionStart":false,"future":{"version":1}}\n');
+		const loaded = await loadSettings(settingsPath);
+		await writeFile(settingsPath, '{"startOnSessionStart":false,"future":{"version":2}}\n');
+		await saveSettings(
+			{ ...DEFAULT_SETTINGS, startOnSessionStart: true },
+			loaded.document ?? {},
+			settingsPath,
+		);
+		assert.equal(
+			(JSON.parse(await readFile(settingsPath, "utf8")) as { future: { version: number } }).future
+				.version,
+			2,
+		);
+
+		const invalid = '{"startOnSessionStart":"invalid","future":"kept"}\n';
+		await writeFile(settingsPath, invalid);
+		await assert.rejects(
+			() => saveSettings(DEFAULT_SETTINGS, loaded.document ?? {}, settingsPath),
+			/invalid|repair/i,
+		);
+		assert.equal(await readFile(settingsPath, "utf8"), invalid);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("failed atomic publish keeps the previous settings file", async () => {
 	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-webui-settings-"));
 	const settingsPath = path.join(directory, "pi-webui.json");

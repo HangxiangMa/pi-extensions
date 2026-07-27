@@ -39,26 +39,32 @@ interface ToolStatusSummary {
 }
 
 export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
-	if (!ctx.hasUI) {
-		ctx.ui.notify(
-			`Chrome DevTools tool selection needs an interactive UI.
-
-${await buildToolStatusMessage(pi)}`,
-			"info",
-		);
+	const generation = state.sessionGeneration;
+	if (!ctx.hasUI) return;
+	if (ctx.mode !== "tui") {
+		await showDialogToolSelector(pi, ctx, generation);
 		return;
 	}
 
 	let selectedTools = new Set<ChromeDevToolsToolName>(getActiveChromeDevtoolsTools(pi));
 	let persistQueue = Promise.resolve();
+	let requestedRevision = 0;
+	let requestRender: () => void = () => undefined;
 	const commitSelectedTools = () => {
 		const nextSelectedTools = orderedChromeDevtoolsTools(selectedTools);
-		applyChromeDevtoolsTools(pi, nextSelectedTools);
-		persistQueue = persistQueue.then(() => persistSettings(ctx, nextSelectedTools));
+		const revision = ++requestedRevision;
+		persistQueue = persistQueue.then(async () => {
+			const saved = await transactSelectedTools(pi, ctx, nextSelectedTools, generation);
+			if (!saved && generation === state.sessionGeneration && revision === requestedRevision) {
+				selectedTools = new Set(getActiveChromeDevtoolsTools(pi));
+				requestRender();
+			}
+		});
 	};
 
 	const customResult = await ctx.ui.custom<"closed" | undefined>(
 		(tui, theme, keybindings, done) => {
+			requestRender = () => tui.requestRender();
 			const rows = chromeDevtoolsToolSelectorRows();
 			let selectedIndex = 0;
 			const moveSelection = (delta: number) => {
@@ -140,22 +146,26 @@ ${await buildToolStatusMessage(pi)}`,
 		},
 	);
 
+	if (generation !== state.sessionGeneration) return;
 	if (customResult !== "closed") {
-		await showDialogToolSelector(pi, ctx);
+		await showDialogToolSelector(pi, ctx, generation);
 		return;
 	}
 
 	await persistQueue;
-	ctx.ui.notify(await buildToolStatusMessage(pi), "info");
+	if (generation !== state.sessionGeneration) return;
+	const status = await buildToolStatusMessage(pi);
+	if (generation !== state.sessionGeneration) return;
+	ctx.ui.notify(status, "info");
 }
 
-async function showDialogToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
+async function showDialogToolSelector(pi: ExtensionAPI, ctx: CommandContext, generation: number) {
 	let selectedTools = new Set<ChromeDevToolsToolName>(getActiveChromeDevtoolsTools(pi));
 	while (true) {
 		const rows = chromeDevtoolsToolSelectorRows();
 		const choices = rows.map((row) => formatToolSelectorRow(row, selectedTools));
 		const choice = await ctx.ui.select(toolSelectorTitle(selectedTools), choices);
-		if (!choice) break;
+		if (generation !== state.sessionGeneration || !choice) break;
 
 		const row = rows[choices.indexOf(choice)];
 		if (!row) continue;
@@ -170,10 +180,20 @@ async function showDialogToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
 			selectedTools = new Set();
 		}
 
-		await setSelectedChromeDevtoolsTools(pi, ctx, orderedChromeDevtoolsTools(selectedTools));
+		const saved = await transactSelectedTools(
+			pi,
+			ctx,
+			orderedChromeDevtoolsTools(selectedTools),
+			generation,
+		);
+		if (generation !== state.sessionGeneration) return;
+		if (!saved) selectedTools = new Set(getActiveChromeDevtoolsTools(pi));
 	}
 
-	ctx.ui.notify(await buildToolStatusMessage(pi), "info");
+	if (generation !== state.sessionGeneration) return;
+	const status = await buildToolStatusMessage(pi);
+	if (generation !== state.sessionGeneration) return;
+	ctx.ui.notify(status, "info");
 }
 
 export async function updateChromeDevtoolsTools(
@@ -182,22 +202,75 @@ export async function updateChromeDevtoolsTools(
 	selectedTools: readonly ChromeDevToolsToolName[],
 	action: string,
 ) {
-	await setSelectedChromeDevtoolsTools(pi, ctx, selectedTools);
-	ctx.ui.notify(
-		`Chrome DevTools tools ${action}.
-
-${await buildToolStatusMessage(pi)}`,
-		"info",
-	);
+	const generation = state.sessionGeneration;
+	const saved = await transactSelectedTools(pi, ctx, selectedTools, generation);
+	if (!saved || generation !== state.sessionGeneration) return;
+	const status = await buildToolStatusMessage(pi);
+	if (generation !== state.sessionGeneration) return;
+	ctx.ui.notify(`Chrome DevTools tools ${action}.\n\n${status}`, "info");
 }
 
 export async function setSelectedChromeDevtoolsTools(
 	pi: ExtensionAPI,
 	ctx: CommandContext,
 	selectedTools: readonly ChromeDevToolsToolName[],
-) {
-	applyChromeDevtoolsTools(pi, selectedTools);
-	await persistSettings(ctx, selectedTools);
+): Promise<boolean> {
+	return transactSelectedTools(pi, ctx, selectedTools, state.sessionGeneration);
+}
+
+let toolTransactionQueue = Promise.resolve();
+
+export async function waitForChromeDevtoolsSettings(): Promise<void> {
+	await toolTransactionQueue;
+}
+
+function transactSelectedTools(
+	pi: ExtensionAPI,
+	ctx: CommandContext,
+	selectedTools: readonly ChromeDevToolsToolName[],
+	expectedGeneration: number,
+): Promise<boolean> {
+	const operation = toolTransactionQueue.then(() =>
+		transactSelectedToolsNow(pi, ctx, selectedTools, expectedGeneration),
+	);
+	toolTransactionQueue = operation.then(
+		() => undefined,
+		() => undefined,
+	);
+	return operation;
+}
+
+async function transactSelectedToolsNow(
+	pi: ExtensionAPI,
+	ctx: CommandContext,
+	selectedTools: readonly ChromeDevToolsToolName[],
+	expectedGeneration: number,
+): Promise<boolean> {
+	if (expectedGeneration !== state.sessionGeneration) return false;
+	const previousActiveTools = pi.getActiveTools();
+	try {
+		applyChromeDevtoolsTools(pi, selectedTools);
+		await persistSettings(selectedTools);
+		return expectedGeneration === state.sessionGeneration;
+	} catch (error) {
+		if (expectedGeneration !== state.sessionGeneration) return false;
+		let rollbackError: unknown;
+		try {
+			const previousChromeTools = previousActiveTools.filter((name) =>
+				CHROME_DEVTOOLS_TOOL_NAMES.includes(name as ChromeDevToolsToolName),
+			) as ChromeDevToolsToolName[];
+			applyChromeDevtoolsTools(pi, previousChromeTools);
+		} catch (caught) {
+			rollbackError = caught;
+		}
+		ctx.ui.notify(
+			rollbackError
+				? `Chrome DevTools settings save failed: ${formatError(error)}; active-tool rollback failed: ${formatError(rollbackError)}`
+				: `Chrome DevTools settings save failed; active tools restored: ${formatError(error)}`,
+			"warning",
+		);
+		return false;
+	}
 }
 
 export function applyChromeDevtoolsTools(
@@ -327,13 +400,6 @@ function formatPersistedSelection(tools: readonly ChromeDevToolsToolName[]) {
 	return `${tools.length}/${CHROME_DEVTOOLS_TOOL_NAMES.length} selected: ${tools.join(", ")}`;
 }
 
-async function persistSettings(
-	ctx: CommandContext,
-	selectedTools: readonly ChromeDevToolsToolName[],
-) {
-	try {
-		await saveSettings({ tools: [...selectedTools], updatedAt: Date.now() });
-	} catch (error) {
-		ctx.ui.notify(`Chrome DevTools settings save failed: ${formatError(error)}`, "warning");
-	}
+async function persistSettings(selectedTools: readonly ChromeDevToolsToolName[]) {
+	await saveSettings({ tools: [...selectedTools], updatedAt: Date.now() });
 }

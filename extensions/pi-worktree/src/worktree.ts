@@ -15,15 +15,17 @@ export default function worktreeExtension(
 	options: WorktreeExtensionOptions = {},
 ): void {
 	const settings = options.settings ?? createWorktreeSettingsRuntime({ path: settingsFilePath });
+	let sessionGeneration = 0;
 	registerWorktreeCommand(pi, settings);
 
 	pi.on("session_start", async (_event, ctx) => {
+		const generation = ++sessionGeneration;
 		const loaded = await settings.reload();
-		if (!loaded.warning || !ctx.hasUI) return;
-		try {
-			ctx.ui.notify(loaded.warning, "warning");
-		} catch {
-			// A replacement session may invalidate its predecessor context during async startup.
-		}
+		if (generation !== sessionGeneration || !loaded.warning || !ctx.hasUI) return;
+		ctx.ui.notify(loaded.warning, "warning");
+	});
+	pi.on("session_shutdown", async () => {
+		sessionGeneration += 1;
+		await settings.flush?.();
 	});
 }

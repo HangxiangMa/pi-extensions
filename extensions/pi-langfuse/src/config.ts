@@ -23,23 +23,56 @@ export function langfuseConfigPath(): string {
 	return join(getAgentDir(), CONFIG_FILE_NAME);
 }
 
-export async function writeLangfuseConfig(
+const configSaveQueues = new Map<string, Promise<void>>();
+
+export async function waitForLangfuseConfigWrites(path = langfuseConfigPath()): Promise<void> {
+	await configSaveQueues.get(path);
+}
+
+export function writeLangfuseConfig(
 	config: LangfuseConfig,
 	path = langfuseConfigPath(),
 ): Promise<LangfuseConfig> {
+	const previous = configSaveQueues.get(path) ?? Promise.resolve();
+	const operation = previous.then(() => writeLangfuseConfigNow(config, path));
+	const tail = operation.then(
+		() => undefined,
+		() => undefined,
+	);
+	configSaveQueues.set(path, tail);
+	void tail.then(() => {
+		if (configSaveQueues.get(path) === tail) configSaveQueues.delete(path);
+	});
+	return operation;
+}
+
+async function writeLangfuseConfigNow(
+	config: LangfuseConfig,
+	path: string,
+): Promise<LangfuseConfig> {
 	const normalized = normalizeLangfuseConfig(config);
 	if (!normalized.ok) throw new Error(normalized.reason);
+	const currentDocument = await readLangfuseDocumentForUpdate(path);
+	const {
+		publicKey: _publicKey,
+		secretKey: _secretKey,
+		baseUrl: _baseUrl,
+		environment: _environment,
+		release: _release,
+		captureContent: _captureContent,
+		...unknownFields
+	} = currentDocument;
+	const nextDocument = { ...unknownFields, ...normalized.config };
 
 	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
 	const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
 	try {
-		await writeFile(tempPath, `${JSON.stringify(normalized.config, null, 2)}\n`, {
+		await writeFile(tempPath, `${JSON.stringify(nextDocument, null, 2)}\n`, {
 			encoding: "utf8",
 			mode: 0o600,
 		});
 		await chmod(tempPath, 0o600);
 		await rename(tempPath, path);
-		await chmod(path, 0o600);
 		return normalized.config;
 	} catch (error) {
 		await rm(tempPath, { force: true }).catch(() => undefined);
@@ -47,9 +80,29 @@ export async function writeLangfuseConfig(
 	}
 }
 
+async function readLangfuseDocumentForUpdate(path: string): Promise<Record<string, unknown>> {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
+	} catch (error) {
+		if (isNodeError(error) && error.code === "ENOENT") return {};
+		throw new Error(
+			`Cannot update ${CONFIG_FILE_NAME} because the existing file is malformed or unreadable; repair it first.`,
+		);
+	}
+	const normalized = normalizeLangfuseConfig(parsed);
+	if (!normalized.ok) {
+		throw new Error(
+			`Cannot update ${CONFIG_FILE_NAME} because the existing file has invalid recognized fields; repair it first.`,
+		);
+	}
+	return { ...(parsed as Record<string, unknown>) };
+}
+
 export async function loadLangfuseConfig(
 	path = langfuseConfigPath(),
 ): Promise<LangfuseConfigResult> {
+	await configSaveQueues.get(path);
 	const warnings: string[] = [];
 	const permissionFailure = await ensurePrivatePermissions(path, warnings);
 	if (permissionFailure) {
@@ -61,9 +114,9 @@ export async function loadLangfuseConfig(
 		};
 	}
 
-	let parsed: unknown;
+	let text: string;
 	try {
-		parsed = JSON.parse(await readFile(path, "utf8"));
+		text = await readFile(path, "utf8");
 	} catch (error) {
 		if (isNodeError(error) && error.code === "ENOENT") {
 			return { ok: false, path, warnings, reason: `Configuration file not found: ${path}` };
@@ -73,6 +126,18 @@ export async function loadLangfuseConfig(
 			path,
 			warnings,
 			reason: `Failed to read ${path}: ${formatError(error)}`,
+		};
+	}
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text) as unknown;
+	} catch {
+		return {
+			ok: false,
+			path,
+			warnings,
+			reason: `Failed to parse ${path} as JSON; repair the file before retrying.`,
 		};
 	}
 

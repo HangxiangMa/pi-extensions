@@ -20,6 +20,7 @@ import {
 	createMockPi,
 	driveCustomSelector,
 } from "../../../test/support.js";
+import { saveToolSelection } from "../src/config.js";
 import googleGenai, {
 	buildStatusMessage,
 	commandCompletions,
@@ -190,7 +191,8 @@ test("config loading repairs permissions and ignores invalid payloads", async ()
 
 		let loaded = await loadGoogleGenaiConfig();
 
-		assert.match(loaded.warnings.join("\n"), /Failed to read/);
+		assert.match(loaded.warnings.join("\n"), /Failed to parse/);
+		assert.doesNotMatch(loaded.warnings.join("\n"), /secret/);
 		assert.equal(loaded.configLoaded, false);
 		assert.equal((await stat(path)).mode & 0o777, 0o600);
 
@@ -566,7 +568,19 @@ test("commands init, status, and tool selection merge config and preserve unrela
 				notify(message: string, level?: string) {
 					notifications.push({ message, level });
 				},
-				input: async () => inputs.shift(),
+				input: async () => {
+					const value = inputs.shift();
+					if (value === "new-model") {
+						await writeConfig({
+							apiKey: "old-key",
+							model: "external-model",
+							timeoutMs: 12_345,
+							tools: ["google_maps"],
+							future: { kept: true },
+						});
+					}
+					return value;
+				},
 				select: async () => selections.shift() ?? "Done",
 				custom: async () => undefined,
 				setStatus() {},
@@ -578,7 +592,9 @@ test("commands init, status, and tool selection merge config and preserve unrela
 		const config = JSON.parse(await readFile(join(agentDir, "pi-google-genai.json"), "utf8"));
 		assert.equal(config.apiKey, "old-key");
 		assert.equal(config.model, "new-model");
-		assert.deepEqual(config.tools, ["google_search"]);
+		assert.deepEqual(config.tools, ["google_maps"]);
+		assert.equal(config.timeoutMs, 12_345);
+		assert.deepEqual(config.future, { kept: true });
 		assert.equal((await stat(join(agentDir, "pi-google-genai.json"))).mode & 0o777, 0o600);
 
 		await command.handler("tools", ctx);
@@ -605,12 +621,17 @@ test("commands init, status, and tool selection merge config and preserve unrela
 
 test("Google GenAI tool selection keeps the cursor on the toggled row", async () => {
 	await withTempAgentDir(async () => {
-		await writeConfig({ tools: [...GOOGLE_GENAI_TOOL_NAMES] });
+		await writeConfig({
+			apiKey: "literal-secret",
+			tools: [...GOOGLE_GENAI_TOOL_NAMES],
+			future: { kept: true },
+		});
 		const mock = createMockPi({ activeTools: ["read", ...GOOGLE_GENAI_TOOL_NAMES] });
 		googleGenai(mock.pi);
 		let customCalled = false;
 		const { ctx } = createMockContext({
 			hasUI: true,
+			mode: "tui",
 			custom: async (factory: unknown) => {
 				customCalled = true;
 				const { renders, result } = driveCustomSelector(factory, [
@@ -630,6 +651,72 @@ test("Google GenAI tool selection keeps the cursor on the toggled row", async ()
 			"google_search",
 			"google_url_context",
 		]);
+		const persisted = JSON.parse(await readFile(googleGenaiConfigPath(), "utf8")) as {
+			apiKey?: string;
+			future?: unknown;
+		};
+		assert.equal(persisted.apiKey, "literal-secret");
+		assert.deepEqual(persisted.future, { kept: true });
+	});
+});
+
+test("Google GenAI tool selection uses dialogs instead of custom TUI in RPC mode", async () => {
+	await withTempAgentDir(async () => {
+		const mock = createMockPi({ activeTools: ["read"] });
+		googleGenai(mock.pi);
+		let customCalls = 0;
+		const context = createMockContext({
+			hasUI: true,
+			mode: "rpc",
+			select: async () => "Done",
+			custom: async () => {
+				customCalls += 1;
+			},
+		});
+
+		await mock.commands.get("google-genai")?.handler("tools", context.ctx);
+
+		assert.equal(customCalls, 0);
+	});
+});
+
+test("Google GenAI patch saves reread and serialize the latest private document", async () => {
+	await withTempAgentDir(async () => {
+		await writeConfig({
+			apiKey: "literal-secret",
+			tools: [...GOOGLE_GENAI_TOOL_NAMES],
+			future: { version: 1 },
+		});
+		const first = saveToolSelection(["google_search"]);
+		const second = saveToolSelection(["google_maps"]);
+		await Promise.all([first, second]);
+		const persisted = JSON.parse(await readFile(googleGenaiConfigPath(), "utf8")) as {
+			apiKey: string;
+			tools: string[];
+			future: unknown;
+		};
+		assert.equal(persisted.apiKey, "literal-secret");
+		assert.deepEqual(persisted.tools, ["google_maps"]);
+		assert.deepEqual(persisted.future, { version: 1 });
+		assert.equal((await stat(googleGenaiConfigPath())).mode & 0o777, 0o600);
+	});
+});
+
+test("Google GenAI rejects invalid settings updates and restores active tools", async () => {
+	await withTempAgentDir(async () => {
+		const configPath = googleGenaiConfigPath();
+		const invalid = '{"tools":"invalid","apiKey":"literal-secret"}\n';
+		await writeFile(configPath, invalid, { mode: 0o600 });
+		const mock = createMockPi({ activeTools: ["read", ...GOOGLE_GENAI_TOOL_NAMES] });
+		googleGenai(mock.pi);
+		const context = createMockContext();
+
+		await mock.commands.get("google-genai")?.handler("disable", context.ctx);
+
+		assert.equal(await readFile(configPath, "utf8"), invalid);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", ...GOOGLE_GENAI_TOOL_NAMES]);
+		assert.match(context.notifications.at(-1)?.message ?? "", /save failed/i);
+		assert.doesNotMatch(context.notifications.at(-1)?.message ?? "", /literal-secret/);
 	});
 });
 
@@ -642,6 +729,7 @@ test("Google GenAI tool persistence recovers after a transient save failure", as
 		let notificationLog: Array<{ message: string }> = [];
 		const context = createMockContext({
 			hasUI: true,
+			mode: "tui",
 			custom: async (factory: unknown) => {
 				const harness = createCustomSelectorHarness(factory);
 				harness.handleInput("tui.select.down");
@@ -651,13 +739,16 @@ test("Google GenAI tool persistence recovers after a transient save failure", as
 						/Google GenAI tool selection save failed/.test(item.message),
 					),
 				);
+				assert.deepEqual(mock.rawPi.getActiveTools(), ["read", ...GOOGLE_GENAI_TOOL_NAMES]);
 
 				await rm(configPath, { recursive: true, force: true });
 				harness.handleInput("tui.select.down");
 				harness.handleInput("tui.select.confirm");
 				await waitFor(async () => {
 					try {
-						return (await loadGoogleGenaiConfig()).config.tools.join(",") === "google_search";
+						return (
+							(await loadGoogleGenaiConfig()).config.tools.join(",") === "google_search,google_maps"
+						);
 					} catch {
 						return false;
 					}
@@ -670,8 +761,11 @@ test("Google GenAI tool persistence recovers after a transient save failure", as
 		notificationLog = context.notifications;
 		await mock.commands.get("google-genai")?.handler("tools", context.ctx);
 
-		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "google_search"]);
-		assert.deepEqual((await loadGoogleGenaiConfig()).config.tools, ["google_search"]);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "google_search", "google_maps"]);
+		assert.deepEqual((await loadGoogleGenaiConfig()).config.tools, [
+			"google_search",
+			"google_maps",
+		]);
 	});
 });
 

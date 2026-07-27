@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
 	existsSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	statSync,
@@ -27,6 +28,7 @@ import firecrawl, {
 	parseCommand,
 	parseResponseBody,
 } from "../src/firecrawl.js";
+import { saveSettings } from "../src/settings.js";
 
 const NEW_SETTINGS_FILE = "pi-firecrawl.json";
 const LEGACY_SETTINGS_FILE = "pi-firecrawl-settings.json";
@@ -491,6 +493,7 @@ test("Firecrawl tool selection keeps the cursor on the toggled row", async () =>
 		mock.rawPi.setActiveTools(["other_tool", ...toolNames]);
 		const { ctx } = createMockContext({
 			hasUI: true,
+			mode: "tui",
 			custom: async (factory: unknown) => {
 				const { renders, result } = driveCustomSelector(factory, [
 					"tui.select.down",
@@ -516,6 +519,10 @@ test("Firecrawl tool selection keeps the cursor on the toggled row", async () =>
 
 test("firecrawl saves tool selection only to the new settings file", async () => {
 	await withTempAgentDir(async (agentDir) => {
+		writeFileSync(
+			path.join(agentDir, NEW_SETTINGS_FILE),
+			JSON.stringify({ tools: [CRAWL_TOOL], updatedAt: 1, future: { kept: true } }),
+		);
 		const firecrawlModule = await importFreshFirecrawl();
 		const mock = createMockPi({ activeTools: ["other_tool", CRAWL_TOOL] });
 		const { ctx, notifications } = createMockContext();
@@ -525,8 +532,86 @@ test("firecrawl saves tool selection only to the new settings file", async () =>
 
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool"]);
 		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, []);
+		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).future, { kept: true });
 		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), false);
 		assert.match(notifications[0]?.message ?? "", /Settings file: .*pi-firecrawl\.json/);
+	});
+});
+
+test("firecrawl failed publication preserves the prior file and removes its temporary", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, NEW_SETTINGS_FILE, [CRAWL_TOOL]);
+		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		const original = readFileSync(settingsPath, "utf8");
+
+		await assert.rejects(
+			saveSettings(
+				{ tools: [], updatedAt: 2 },
+				{ rename: async () => Promise.reject(new Error("publish failed")) },
+			),
+			/publish failed/,
+		);
+
+		assert.equal(readFileSync(settingsPath, "utf8"), original);
+		assert.deepEqual(readdirSync(agentDir), [NEW_SETTINGS_FILE]);
+	});
+});
+
+test("firecrawl rejects invalid settings updates and restores active tools", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		const invalid = '{"tools":["invalid"],"future":"kept"}\n';
+		writeFileSync(settingsPath, invalid);
+		const firecrawlModule = await importFreshFirecrawl();
+		const mock = createMockPi({ activeTools: ["other_tool", CRAWL_TOOL] });
+		const { ctx, notifications } = createMockContext();
+
+		firecrawlModule.default(mock.pi);
+		await mock.commands.get("firecrawl")?.handler("disable", ctx);
+
+		assert.equal(readFileSync(settingsPath, "utf8"), invalid);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", CRAWL_TOOL]);
+		assert.match(notifications.at(-1)?.message ?? "", /settings save failed/i);
+
+		writeSettings(agentDir, NEW_SETTINGS_FILE, [CRAWL_TOOL]);
+		await mock.commands.get("firecrawl")?.handler("disable", ctx);
+		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, []);
+	});
+});
+
+test("firecrawl serializes rapid tool saves in invocation order", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const firecrawlModule = await importFreshFirecrawl();
+		const mock = createMockPi({ activeTools: ["other_tool"] });
+		const { ctx } = createMockContext();
+		firecrawlModule.default(mock.pi);
+
+		const first = mock.commands.get("firecrawl")?.handler("enable", ctx);
+		const second = mock.commands.get("firecrawl")?.handler("disable", ctx);
+		await Promise.all([first, second]);
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool"]);
+		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, []);
+	});
+});
+
+test("Firecrawl tool selection uses dialogs instead of custom TUI in RPC mode", async () => {
+	await withTempAgentDir(async () => {
+		const mock = createMockPi({ activeTools: ["other_tool"] });
+		firecrawl(mock.pi);
+		let customCalls = 0;
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "rpc",
+			select: async () => "Done",
+			custom: async () => {
+				customCalls += 1;
+			},
+		});
+
+		await mock.commands.get("firecrawl")?.handler("tools", ctx);
+
+		assert.equal(customCalls, 0);
 	});
 });
 
@@ -556,5 +641,8 @@ function writeSettings(agentDir: string, fileName: string, tools: string[]) {
 }
 
 function readSettings(agentDir: string, fileName: string) {
-	return JSON.parse(readFileSync(path.join(agentDir, fileName), "utf8")) as { tools: string[] };
+	return JSON.parse(readFileSync(path.join(agentDir, fileName), "utf8")) as {
+		tools: string[];
+		future?: unknown;
+	};
 }
