@@ -1,11 +1,14 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
-	localConfigPath,
 	normalizeWebDavPath,
 	normalizeWebDavUrl,
+	readActiveLocalConfigDocumentForRepair,
+	replaceLocalConfigDocument,
+	resolveV2PartialConfig,
 	validateWebDavCredentials,
 	validateWebDavNamespace,
 } from "./config.js";
+import { promptSecret } from "./secret-input.js";
 import {
 	addStorageProfile,
 	addSyncTarget,
@@ -16,6 +19,116 @@ import {
 import { DEFAULT_SYNC_FILES } from "./sync-policy.js";
 import type { PartialConfig } from "./types.js";
 
+export async function repairableWebDavDestinationName() {
+	const document = await readActiveLocalConfigDocumentForRepair();
+	const settings = document?.parsed;
+	if (settings?.version !== 2) return undefined;
+	const profiles = record(settings.profiles);
+	const targets = record(settings.targets);
+	if (!profiles || !targets) return undefined;
+	const names = Object.keys(targets).filter((name) => {
+		const target = record(targets[name]);
+		if (!target) return false;
+		const profile =
+			typeof target.profile === "string" ? record(profiles[target.profile]) : undefined;
+		return (
+			profile?.kind === "webdav" &&
+			(Object.hasOwn(target, "bucket") ||
+				Object.hasOwn(target, "prefix") ||
+				typeof profile.password !== "string" ||
+				profile.password.length === 0)
+		);
+	});
+	const active = typeof settings.activeTarget === "string" ? settings.activeTarget : undefined;
+	return active && names.includes(active) ? active : names.length === 1 ? names[0] : undefined;
+}
+
+export async function showRepairableWebDavDestination(ctx: ExtensionCommandContext) {
+	const name = await repairableWebDavDestinationName();
+	return name ? showRepairWebDavDestination(ctx, name) : false;
+}
+
+export async function showRepairWebDavDestination(
+	ctx: ExtensionCommandContext,
+	targetName: string,
+) {
+	const document = await readActiveLocalConfigDocumentForRepair();
+	if (document?.parsed.version !== 2) return false;
+	const profiles = record(document.parsed.profiles);
+	const targets = record(document.parsed.targets);
+	const target = targets && record(targets[targetName]);
+	const profileName = target && typeof target.profile === "string" ? target.profile : undefined;
+	const profile = profileName && profiles ? record(profiles[profileName]) : undefined;
+	if (!target || !profileName || !profile || profile.kind !== "webdav") return false;
+	const url = typeof profile.url === "string" ? profile.url : "";
+	const username = typeof profile.username === "string" ? profile.username : "";
+	let password =
+		typeof profile.password === "string" && profile.password ? profile.password : undefined;
+	if (!password) {
+		password = await promptSecret(ctx, "WebDAV password");
+		if (password === undefined) return false;
+	}
+	const path = await requiredInput(
+		ctx,
+		"WebDAV remote path",
+		typeof target.path === "string"
+			? target.path
+			: typeof target.prefix === "string"
+				? target.prefix
+				: "pi-sync",
+	);
+	if (!path) return false;
+	const namespace = await requiredInput(
+		ctx,
+		"Remote namespace",
+		typeof target.namespace === "string" ? target.namespace : targetName,
+	);
+	if (!namespace) return false;
+	const connection = validateConnection(ctx, url, username, password);
+	const destination = validateDestination(ctx, path, namespace);
+	if (!connection || !destination) return false;
+	const removedTargetFields = ["bucket", "prefix"].filter((field) => Object.hasOwn(target, field));
+	const removedProfileFields = [
+		"endpoint",
+		"region",
+		"accessKeyId",
+		"secretAccessKey",
+		"sessionToken",
+	].filter((field) => Object.hasOwn(profile, field));
+	const review = await ctx.ui.select(
+		[
+			"Repair WebDAV destination",
+			"",
+			`Destination: ${safe(targetName)}`,
+			`Saved connection: ${safe(profileName)}`,
+			`Remote path: ${safe(`${destination.path}/profiles/${destination.namespace}/`)}`,
+			`Password: configured (value hidden)`,
+			...(removedTargetFields.length > 0
+				? [`Remove incompatible destination fields: ${removedTargetFields.join(", ")}`]
+				: []),
+			...(removedProfileFields.length > 0
+				? [`Remove incompatible connection fields: ${removedProfileFields.join(", ")}`]
+				: []),
+			"Unknown settings and every other destination remain unchanged.",
+		].join("\n"),
+		["Repair destination", "Cancel"],
+	);
+	if (review !== "Repair destination") return false;
+	const nextProfile: Record<string, unknown> = { ...profile, ...connection };
+	for (const field of removedProfileFields) delete nextProfile[field];
+	const nextTarget: Record<string, unknown> = { ...target, ...destination };
+	for (const field of removedTargetFields) delete nextTarget[field];
+	const next = {
+		...document.parsed,
+		profiles: { ...profiles, [profileName]: nextProfile },
+		targets: { ...targets, [targetName]: nextTarget },
+	};
+	resolveV2PartialConfig(next, targetName);
+	await replaceLocalConfigDocument(document, next);
+	ctx.ui.notify(`Repaired WebDAV destination “${safe(targetName)}”.`, "info");
+	return true;
+}
+
 export async function showWebDavSetup(ctx: ExtensionCommandContext, targetName: string) {
 	const url = await requiredInput(
 		ctx,
@@ -25,9 +138,11 @@ export async function showWebDavSetup(ctx: ExtensionCommandContext, targetName: 
 	if (!url) return false;
 	const username = await requiredInput(ctx, "WebDAV username", "user");
 	if (!username) return false;
+	const password = await promptSecret(ctx, "WebDAV password");
+	if (password === undefined) return false;
 	const location = await chooseDestination(ctx, targetName);
 	if (!location) return false;
-	const connection = validateConnection(ctx, url, username);
+	const connection = validateConnection(ctx, url, username, password);
 	const destination = validateDestination(ctx, location.path, location.namespace);
 	if (!connection || !destination) return false;
 	const content = await chooseContent(ctx);
@@ -50,7 +165,7 @@ export async function showWebDavSetup(ctx: ExtensionCommandContext, targetName: 
 			`URL: ${displayUrl(connection.url)}`,
 			`Remote path: ${safe(`${destination.path}/profiles/${destination.namespace}/`)}`,
 			"Username: stored in the private settings file (value hidden)",
-			`Password: add it privately in ${safe(localConfigPath())}; pi-sync never requests secrets in an unmasked dialog.`,
+			"Password: configured (value hidden)",
 			`Conditional writes: /sync doctor verifies atomic If-Match and If-None-Match support before publication.`,
 			`Synced content: ${content.length} built-in groups · Sessions: ${sessions ? "On — privacy warning acknowledged" : "Off"}`,
 			`Auto-sync: ${automatic === "Enable automatic sync" ? "On" : "Off"}`,
@@ -72,10 +187,7 @@ export async function showWebDavSetup(ctx: ExtensionCommandContext, targetName: 
 			extraFiles: [],
 		},
 	});
-	ctx.ui.notify(
-		`Saved target “${safe(targetName)}”; add the WebDAV password in ${safe(localConfigPath())} before syncing.`,
-		"info",
-	);
+	ctx.ui.notify(`Destination “${safe(targetName)}” is ready. Use Sync now when ready.`, "info");
 	return true;
 }
 
@@ -133,10 +245,12 @@ export async function showAddWebDavStorageProfile(ctx: ExtensionCommandContext) 
 	if (!url) return false;
 	const username = await requiredInput(ctx, "WebDAV username", "user");
 	if (!username) return false;
-	const connection = validateConnection(ctx, url, username);
+	const password = await promptSecret(ctx, "WebDAV password");
+	if (password === undefined) return false;
+	const connection = validateConnection(ctx, url, username, password);
 	if (!connection) return false;
 	const review = await ctx.ui.select(
-		`Review storage profile\n\nName: ${safe(name)}\nType: WebDAV\nURL: ${displayUrl(connection.url)}\nUsername: stored privately (value hidden)\nAdd the password privately in ${safe(localConfigPath())}; it is never requested or displayed.`,
+		`Review saved connection\n\nName: ${safe(name)}\nType: WebDAV\nURL: ${displayUrl(connection.url)}\nUsername: stored privately (value hidden)\nPassword: configured (value hidden)`,
 		["Add profile", "Cancel"],
 	);
 	if (review !== "Add profile") return false;
@@ -158,14 +272,35 @@ export async function showEditWebDavStorageProfile(
 	if (!url) return false;
 	const username = await requiredInput(ctx, "WebDAV username", String(profile.username ?? "user"));
 	if (!username) return false;
-	const connection = validateConnection(ctx, url, username);
+	let password: string | undefined;
+	let replacePassword = false;
+	if (typeof profile.password === "string" && profile.password.length > 0) {
+		const passwordAction = await ctx.ui.select("WebDAV password", [
+			"Keep current password",
+			"Replace password",
+			"Cancel",
+		]);
+		if (!passwordAction || passwordAction === "Cancel") return false;
+		replacePassword = passwordAction === "Replace password";
+	} else {
+		replacePassword = true;
+	}
+	if (replacePassword) {
+		password = await promptSecret(ctx, "New WebDAV password");
+		if (password === undefined) return false;
+	}
+	const connection = validateConnection(ctx, url, username, password);
 	if (!connection) return false;
 	const review = await ctx.ui.select(
-		`Review connection\n\nProfile: ${safe(name)}\nURL: ${displayUrl(connection.url)}\nUsername: stored privately (value hidden)\nPassword remains unchanged and is never shown.`,
+		`Review connection\n\nSaved connection: ${safe(name)}\nURL: ${displayUrl(connection.url)}\nUsername: stored privately (value hidden)\nPassword: ${replacePassword ? "will be replaced" : "unchanged"} (value hidden)`,
 		["Save profile", "Cancel"],
 	);
 	if (review !== "Save profile") return false;
-	await updateStorageProfile(name, (current) => ({ ...current, ...connection }));
+	await updateStorageProfile(name, (current) => ({
+		...current,
+		...connection,
+		...(replacePassword ? { password } : {}),
+	}));
 	ctx.ui.notify(`Saved storage profile “${safe(name)}”.`, "info");
 	return true;
 }
@@ -211,12 +346,21 @@ async function requiredInput(ctx: ExtensionCommandContext, title: string, placeh
 	return trimmed;
 }
 
-function validateConnection(ctx: ExtensionCommandContext, url: string, username: string) {
+function validateConnection(
+	ctx: ExtensionCommandContext,
+	url: string,
+	username: string,
+	password?: string,
+) {
 	try {
 		const normalizedUrl = normalizeWebDavUrl(url);
 		if (!normalizedUrl) throw new Error("WebDAV URL is required.");
-		validateWebDavCredentials(username);
-		return { url: normalizedUrl, username: username.trim() };
+		validateWebDavCredentials(username, password);
+		return {
+			url: normalizedUrl,
+			username: username.trim(),
+			...(password === undefined ? {} : { password }),
+		};
 	} catch (error) {
 		ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 		return undefined;
@@ -240,6 +384,12 @@ function displayUrl(value: string) {
 	} catch {
 		return "invalid URL (value hidden)";
 	}
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
 }
 
 function safe(value: string) {

@@ -13,6 +13,7 @@ import {
 	legacyLocalConfigPath,
 	localConfigPath,
 	quarantineAndRemoveConfigIfMatches,
+	readActiveLocalConfigDocumentForRepair,
 	readMigratingLocalConfigDocument,
 	replaceLocalConfigDocument,
 	withLocalConfigFileLock,
@@ -42,6 +43,7 @@ export {
 	legacyLocalConfigPath,
 	localConfigPath,
 	quarantineAndRemoveConfigIfMatches,
+	readActiveLocalConfigDocumentForRepair,
 	replaceLocalConfigDocument,
 };
 

@@ -73,7 +73,7 @@ For a first Cloudflare R2 target, the recommended location requires no raw path 
 
 The R2 bucket must already exist; pi-sync never creates buckets. Generic S3 setup asks for one existing, potentially globally unique bucket and derives storage profile `s3`, prefix `pi-sync`, and namespace `home` or `work`. **Customize remote location** retains direct control over profile name, bucket, prefix, and namespace.
 
-Pi's extension input API does not provide masked secret entry, so pi-sync never asks for a secret in an unmasked dialog. Use existing S3 environment credentials or add credentials manually to the private settings file. WebDAV credentials are settings-file only; there are no WebDAV environment-variable mirrors. Secret values are never shown in menus, status, warnings, or errors.
+The setup wizard can store WebDAV passwords and S3-compatible static credentials entirely through the TUI. Its package-owned masked input renders only bullets, and secret values are never shown in reviews, menus, status, notifications, warnings, or errors. S3 environment credentials and a manual private-settings template remain available; WebDAV has no environment-variable credential mirrors.
 
 ### WebDAV setup
 
@@ -124,7 +124,7 @@ Its primary actions are:
 - **Switch target** — preview the target change, then follow the configured pull behavior
 - **Status & changes** — perform a cancellable read-only remote check
 - **Settings** — control post-switch pulling, automatic sync, and synced content
-- **More…** — open one shallow level containing target/storage management, history/recovery, Help, and Back
+- **More…** — open one shallow level containing destination management, history/recovery, Help, and Back
 
 The menu does not query remote storage merely to open. It shows the last locally applied snapshot and marks remote changes as unchecked until an operation runs. When no synced content is selected, transfer actions are hidden and Settings becomes the first action. During an active or recoverable lock, mutation actions remain unavailable.
 
@@ -195,6 +195,8 @@ A version 2 example:
 ```
 
 ### Terminology
+
+The TUI presents each profile/target pair as a **destination**. **Add destination** is the primary flow; reusable **saved connections** are available as an advanced action. The version 2 JSON names remain unchanged for compatibility.
 
 - An S3/R2 **storage profile** owns `kind`, `endpoint`, `region`, `accessKeyId`, `secretAccessKey`, and optional `sessionToken`; a WebDAV profile owns `kind: "webdav"`, `url`, `username`, and `password`.
 - An S3/R2 **sync target** owns `bucket`, `prefix`, and `namespace`; a WebDAV target owns `path` and `namespace`. Every target also owns `autoSync` and its synced-content policy.

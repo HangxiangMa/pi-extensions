@@ -165,7 +165,7 @@ test("targetless v2 legacy settings migrate and retain the recoverable manager f
 		});
 		await mock.commands.get("sync")?.handler("", ctx);
 
-		assert.deepEqual(options, ["Manage targets & storage", "Help"]);
+		assert.deepEqual(options, ["Manage destinations", "Help"]);
 	});
 });
 
