@@ -14,7 +14,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createMockPi } from "../../../test/support.js";
+import { createMockContext, createMockPi } from "../../../test/support.js";
 import {
 	consumeLspConfigNotice,
 	DEFAULT_SERVER_CONFIGS,
@@ -445,27 +445,28 @@ test("LSP config uses canonical paths while preserving project legacy files", ()
 	const config = (name: string) => ({
 		servers: { [name]: { command: [name], extensions: [`.${name}`] } },
 	});
+	const loadTrustedConfig = () => loadConfig(project, { projectTrusted: true });
 	try {
 		const userLegacy = path.join(agentDir, "lsp.json");
 		writeFileSync(userLegacy, JSON.stringify(config("user")));
 		chmodSync(userLegacy, 0o600);
-		assert.equal(loadConfig(project).servers[0]?.name, "user");
+		assert.equal(loadTrustedConfig().servers[0]?.name, "user");
 		assert.equal(existsSync(path.join(agentDir, "pi-lsp.json")), true);
 		assert.equal(statSync(path.join(agentDir, "pi-lsp.json")).mode & 0o777, 0o600);
 		assert.equal(existsSync(userLegacy), false);
 
 		const projectLegacy = path.join(project, ".pi", "lsp.json");
 		writeFileSync(projectLegacy, JSON.stringify(config("legacy-project")));
-		assert.equal(loadConfig(project).servers[0]?.name, "legacy-project");
+		assert.equal(loadTrustedConfig().servers[0]?.name, "legacy-project");
 		assert.equal(existsSync(projectLegacy), true);
 		assert.equal(existsSync(path.join(project, ".pi", "pi-lsp.json")), false);
 
 		const projectCanonical = path.join(project, ".pi", "pi-lsp.json");
 		writeFileSync(projectCanonical, JSON.stringify(config("project")));
-		assert.equal(loadConfig(project).servers[0]?.name, "project");
+		assert.equal(loadTrustedConfig().servers[0]?.name, "project");
 
 		writeFileSync(projectCanonical, "invalid");
-		assert.throws(() => loadConfig(project));
+		assert.throws(loadTrustedConfig);
 		assert.equal(existsSync(projectLegacy), true);
 		unlinkSync(projectCanonical);
 		unlinkSync(projectLegacy);
@@ -473,14 +474,64 @@ test("LSP config uses canonical paths while preserving project legacy files", ()
 		writeFileSync(userLegacy, JSON.stringify(config("fallback")));
 		unlinkSync(path.join(agentDir, "pi-lsp.json"));
 		symlinkSync("missing-target", path.join(agentDir, "pi-lsp.json"));
-		assert.equal(loadConfig(project).servers[0]?.name, "fallback");
+		assert.equal(loadTrustedConfig().servers[0]?.name, "fallback");
 		assert.equal(existsSync(userLegacy), true);
 
 		process.env.PI_LSP_CONFIG = JSON.stringify(config("explicit"));
-		assert.equal(loadConfig(project).servers[0]?.name, "explicit");
+		assert.equal(loadTrustedConfig().servers[0]?.name, "explicit");
 		assert.equal(consumeLspConfigNotice(), undefined);
 	} finally {
 		delete process.env.PI_LSP_CONFIG;
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("LSP project config requires trust across loaders and command handlers", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-trust-"));
+	const agentDir = path.join(root, "agent");
+	const project = path.join(root, "project");
+	mkdirSync(agentDir, { recursive: true });
+	mkdirSync(path.join(project, ".pi"), { recursive: true });
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const previousConfig = process.env.PI_LSP_CONFIG;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	delete process.env.PI_LSP_CONFIG;
+	const config = (name: string) => ({
+		servers: { [name]: { command: [name], extensions: [`.${name}`] } },
+	});
+	writeFileSync(path.join(agentDir, "pi-lsp.json"), JSON.stringify(config("user")));
+	writeFileSync(path.join(project, ".pi", "lsp.json"), JSON.stringify(config("legacy-project")));
+	writeFileSync(path.join(project, ".pi", "pi-lsp.json"), JSON.stringify(config("project")));
+	try {
+		assert.equal(loadConfig(project, { projectTrusted: false }).servers[0]?.name, "user");
+		assert.equal(loadConfig(project, { projectTrusted: true }).servers[0]?.name, "project");
+		unlinkSync(path.join(project, ".pi", "pi-lsp.json"));
+		assert.equal(loadConfig(project, { projectTrusted: true }).servers[0]?.name, "legacy-project");
+		assert.equal(loadConfig(project, { projectTrusted: false }).servers[0]?.name, "user");
+
+		process.env.PI_LSP_CONFIG = JSON.stringify(config("explicit"));
+		assert.equal(loadConfig(project, { projectTrusted: false }).servers[0]?.name, "explicit");
+		delete process.env.PI_LSP_CONFIG;
+
+		const mock = createMockPi();
+		lsp(mock.pi);
+		const context = createMockContext({ cwd: project, isProjectTrusted: () => false });
+		await mock.commands.get("lsp")?.handler("", context.ctx);
+		assert.match(context.notifications.at(-1)?.message ?? "", /user LSP command/u);
+		assert.doesNotMatch(context.notifications.at(-1)?.message ?? "", /legacy-project/u);
+
+		const diagnostics = mock.tools.find((tool) => tool.name === "lsp_diagnostics");
+		assert.ok(diagnostics);
+		const executeDiagnostics = diagnostics.execute as (...args: unknown[]) => Promise<unknown>;
+		await assert.rejects(
+			executeDiagnostics("trust-test", { server: "missing" }, undefined, undefined, context.ctx),
+			/Configured LSP servers: user/u,
+		);
+	} finally {
+		delete process.env.PI_LSP_CONFIG;
+		if (previousConfig !== undefined) process.env.PI_LSP_CONFIG = previousConfig;
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		rmSync(root, { recursive: true, force: true });

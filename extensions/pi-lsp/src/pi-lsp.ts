@@ -59,7 +59,9 @@ const lspDiagnosticsTool = defineTool({
 	parameters: DiagnosticsParameters,
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		const requestedRoot = resolveRoot(params.root);
-		const { adapters, timeoutMs } = loadRuntime(requestedRoot);
+		const { adapters, timeoutMs } = loadRuntime(ctx.cwd, {
+			projectTrusted: ctx.isProjectTrusted(),
+		});
 		const { root, routes, skipped } = selectDiagnosticRoutes(
 			adapters,
 			{ ...params, root: requestedRoot },
@@ -125,7 +127,9 @@ const lspFixTool = defineTool({
 	}),
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		const requestedRoot = resolveRoot(params.root);
-		const { adapters, timeoutMs } = loadRuntime(requestedRoot);
+		const { adapters, timeoutMs } = loadRuntime(ctx.cwd, {
+			projectTrusted: ctx.isProjectTrusted(),
+		});
 		const { root, route } = selectFixRoute(adapters, { ...params, root: requestedRoot });
 		return runFix(
 			route.adapter,
@@ -146,7 +150,9 @@ export default function lsp(pi: ExtensionAPI) {
 		description: "Show shared LSP extension configuration",
 		handler: async (_args, ctx) => {
 			try {
-				const { adapters } = loadRuntime(ctx.cwd);
+				const { adapters } = loadRuntime(ctx.cwd, {
+					projectTrusted: ctx.isProjectTrusted(),
+				});
 				const notice = consumeLspConfigNotice();
 				if (notice) ctx.ui.notify(notice, "warning");
 				ctx.ui.notify(buildStatusMessage(adapters, ctx.cwd), statusLevel(adapters, ctx.cwd));
@@ -159,7 +165,7 @@ export default function lsp(pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		try {
-			loadRuntime(ctx.cwd);
+			loadRuntime(ctx.cwd, { projectTrusted: ctx.isProjectTrusted() });
 			const notice = consumeLspConfigNotice();
 			if (notice) ctx.ui.notify(notice, "warning");
 		} catch (error) {
