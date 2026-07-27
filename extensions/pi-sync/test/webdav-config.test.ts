@@ -122,6 +122,28 @@ test("WebDAV settings reject aliased profiles that resolve to one remote destina
 	});
 });
 
+test("WebDAV settings allow separate authenticated users at one collection URL", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			localConfigPath(),
+			JSON.stringify({
+				...settings,
+				profiles: {
+					first: { ...settings.profiles.dav, username: "alice" },
+					second: { ...settings.profiles.dav, username: "bob" },
+				},
+				targets: {
+					home: { profile: "first", path: "pi-sync", namespace: "shared" },
+					work: { profile: "second", path: "pi-sync", namespace: "shared" },
+				},
+			}),
+		);
+
+		await assert.doesNotReject(loadConfig());
+	});
+});
+
 test("WebDAV profile edits reject newly duplicated remote destinations", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });

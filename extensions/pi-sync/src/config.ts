@@ -364,6 +364,7 @@ export function effectiveTargetRemoteIdentity(
 		return JSON.stringify([
 			"webdav",
 			normalizeWebDavIdentityUrl(typeof profile?.url === "string" ? profile.url : profileName),
+			typeof profile?.username === "string" ? profile.username.trim() : "",
 			normalizeRemoteKeySegment(typeof target.path === "string" ? target.path : DEFAULT_PREFIX),
 			normalizeRemoteKeySegment(typeof target.namespace === "string" ? target.namespace : name),
 		]);
