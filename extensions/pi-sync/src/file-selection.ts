@@ -44,7 +44,7 @@ export async function showFileSelection(ctx: ExtensionCommandContext, targetName
 	if (ctx.mode !== "tui") {
 		ctx.ui.notify(
 			[
-				`pi-sync selected files for target ${safeTerminalText(partial.target ?? "default")}:`,
+				`pi-sync included content for sync setup ${safeTerminalText(partial.target ?? "default")}:`,
 				`built-ins: ${[...draft.builtIns].join(", ") || "none"}`,
 				`sessions: ${draft.sessions ? INCLUDED : EXCLUDED}${sessionEnvironmentOverride ? " (PI_SYNC_SESSIONS, deprecated)" : ""}`,
 				`extra files: ${[...draft.extras].map(safeTerminalText).join(", ") || "none"}`,
@@ -78,7 +78,7 @@ export async function showFileSelection(ctx: ExtensionCommandContext, targetName
 		try {
 			await persistSelectionDraft(draft, targetName, sessionEnvironmentOverride);
 			ctx.ui.notify(
-				`Saved synced content for target “${safeTerminalText(partial.target ?? "default")}”. It applies to the next manual or automatic sync.`,
+				`Saved included content for sync setup “${safeTerminalText(partial.target ?? "default")}”. It applies to the next manual or automatic sync.`,
 				"info",
 			);
 		} catch (error) {
@@ -109,7 +109,7 @@ async function showDraftEditor(
 			id: SESSIONS_ID,
 			label: "sessions",
 			description: sessionEnvironmentOverride
-				? "Read-only because deprecated PI_SYNC_SESSIONS currently overrides this target. Move it into target settings before the future major removal."
+				? "Read-only because deprecated PI_SYNC_SESSIONS currently overrides this setup. Move it into sync setup settings before the future major removal."
 				: "Session JSONL may contain prompts, tool output, paths, images, and secrets. Sync only to storage you trust.",
 			currentValue: sessionEnvironmentOverride
 				? `${draft.sessions ? INCLUDED : EXCLUDED} (environment, deprecated)`
@@ -134,7 +134,7 @@ async function showDraftEditor(
 		const hint = new Text("", 1, 0);
 		const updateChrome = () => {
 			title.setText(
-				theme.fg("accent", theme.bold(`Synced Content · ${safeTerminalText(targetName)}`)),
+				theme.fg("accent", theme.bold(`Included Content · ${safeTerminalText(targetName)}`)),
 			);
 			hint.setText(theme.fg("dim", "Draft only · Esc reviews Save, Discard, or Continue editing."));
 		};
@@ -200,9 +200,9 @@ async function persistSelectionDraft(
 		const targets = asObject(current.targets);
 		const selectedTarget =
 			targetName ?? (typeof current.activeTarget === "string" ? current.activeTarget : undefined);
-		if (!targets || !selectedTarget) throw new Error("Current sync target is not configured.");
+		if (!targets || !selectedTarget) throw new Error("Current sync setup is not configured.");
 		const target = asObject(targets[selectedTarget]);
-		if (!target) throw new Error(`Sync target not found: ${selectedTarget}`);
+		if (!target) throw new Error(`Sync setup not found: ${selectedTarget}`);
 		return {
 			...current,
 			targets: { ...targets, [selectedTarget]: { ...target, ...selection } },

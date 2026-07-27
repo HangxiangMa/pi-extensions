@@ -109,7 +109,7 @@ test("history rollback aborts if the selected backend destination changes", asyn
 			},
 		});
 
-		await assert.rejects(history(ctx, commandOptions(), factory), /destination changed/i);
+		await assert.rejects(history(ctx, commandOptions(), factory), /storage location changed/i);
 		assert.equal(readFileSync(path.join(agentDir, "settings.json"), "utf8"), '{"current":true}\n');
 		assert.equal((await first.readHead())?.snapshotId, current.id);
 		assert.equal(await second.readHead(), undefined);
@@ -242,7 +242,7 @@ test("fake backend exercises status, diff, sync, and backend diagnostics", async
 		assert.match(output, /publication safety: atomic-conditional \(verified atomic precondition\)/);
 		assert.match(output, /memory backend: ok/);
 		const doctorOutput = notifications.at(-1)?.message ?? "";
-		assert.ok(doctorOutput.indexOf("secret scan:") < doctorOutput.indexOf("destination:"));
+		assert.ok(doctorOutput.indexOf("secret scan:") < doctorOutput.indexOf("storage location:"));
 		assert.ok(doctorOutput.indexOf("lock:") < doctorOutput.indexOf("publication safety:"));
 	});
 });

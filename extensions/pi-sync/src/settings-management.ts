@@ -64,7 +64,7 @@ export async function migrateLegacySettings(
 		if (!document) throw new Error("No legacy pi-sync settings are available to migrate.");
 		const { bytes: originalBytes, parsed: current } = document;
 		if (current.version === 2) {
-			throw new Error("pi-sync settings already use profiles and targets.");
+			throw new Error("pi-sync settings already use storage connections and sync setups.");
 		}
 		await afterLegacySettingsReadHook();
 		const next = legacySettingsAsV2(current, targetName, storageProfileName);
@@ -141,7 +141,8 @@ export async function addStorageProfile(name: string, profile: StorageProfileSet
 	validateName(name, "storage profile");
 	await updateV2Settings((settings) => {
 		const profiles = requireObject(settings.profiles, "profiles");
-		if (Object.hasOwn(profiles, name)) throw new Error(`Storage profile already exists: ${name}`);
+		if (Object.hasOwn(profiles, name))
+			throw new Error(`Storage connection already exists: ${name}`);
 		return { ...settings, profiles: { ...profiles, [name]: { ...profile } } };
 	});
 }
@@ -149,13 +150,26 @@ export async function addStorageProfile(name: string, profile: StorageProfileSet
 export async function updateStorageProfile(
 	name: string,
 	update: (profile: Record<string, unknown>) => Record<string, unknown>,
+	expectedSetups?: readonly string[],
 ) {
 	validateName(name, "storage profile");
 	await updateV2Settings((settings) => {
 		const profiles = requireObject(settings.profiles, "profiles");
+		const targets = requireObject(settings.targets, "targets");
+		if (expectedSetups) {
+			const currentSetups = referencingTargetNames(targets, name);
+			if (
+				currentSetups.length !== expectedSetups.length ||
+				currentSetups.some((setup, index) => setup !== expectedSetups[index])
+			) {
+				throw new Error(
+					`Storage connection “${name}” usage changed while it was open; reopen it and review the affected sync setups.`,
+				);
+			}
+		}
 		const profile = requireObject(profiles[name], "storage profile");
 		const nextProfiles = { ...profiles, [name]: update(profile) };
-		validateUniqueRemoteTargets(requireObject(settings.targets, "targets"), nextProfiles);
+		validateUniqueRemoteTargets(targets, nextProfiles);
 		return { ...settings, profiles: nextProfiles };
 	});
 }
@@ -165,9 +179,9 @@ export async function addSyncTarget(name: string, target: SyncTargetSettings) {
 	await updateV2Settings((settings) => {
 		const targets = requireObject(settings.targets, "targets");
 		const profiles = requireObject(settings.profiles, "profiles");
-		if (Object.hasOwn(targets, name)) throw new Error(`Sync target already exists: ${name}`);
+		if (Object.hasOwn(targets, name)) throw new Error(`Sync setup already exists: ${name}`);
 		if (!target.profile || !Object.hasOwn(profiles, target.profile)) {
-			throw new Error(`Storage profile not found: ${target.profile ?? "missing"}`);
+			throw new Error(`Storage connection not found: ${target.profile ?? "missing"}`);
 		}
 		assertUniqueRemoteIdentity(targets, profiles, name, target);
 		return { ...settings, targets: { ...targets, [name]: { ...target } } };
@@ -197,9 +211,9 @@ export async function removeSyncTarget(name: string) {
 	validateName(name, "target");
 	await updateV2Settings((settings) => {
 		const targets = requireObject(settings.targets, "targets");
-		if (!Object.hasOwn(targets, name)) throw new Error(`Sync target not found: ${name}`);
+		if (!Object.hasOwn(targets, name)) throw new Error(`Sync setup not found: ${name}`);
 		if (settings.activeTarget === name && Object.keys(targets).length > 1) {
-			throw new Error("Switch to another target before removing the current target.");
+			throw new Error("Switch to another sync setup before removing the current setup.");
 		}
 		const nextTargets = { ...targets };
 		delete nextTargets[name];
@@ -220,8 +234,9 @@ export async function removeStorageProfile(name: string) {
 		const referenced = Object.entries(targets).find(
 			([, target]) => requireObject(target, "target").profile === name,
 		)?.[0];
-		if (referenced) throw new Error(`Storage profile “${name}” is used by target “${referenced}”.`);
-		if (!Object.hasOwn(profiles, name)) throw new Error(`Storage profile not found: ${name}`);
+		if (referenced)
+			throw new Error(`Storage connection “${name}” is used by sync setup “${referenced}”.`);
+		if (!Object.hasOwn(profiles, name)) throw new Error(`Storage connection not found: ${name}`);
 		const nextProfiles = { ...profiles };
 		delete nextProfiles[name];
 		return { ...settings, profiles: nextProfiles };
@@ -234,7 +249,7 @@ async function updateV2Settings(
 	return withLock("settings", async () => {
 		const current = await readLocalConfigObject();
 		if (current?.version !== 2) {
-			throw new Error("Profiles and targets require version 2 pi-sync settings.");
+			throw new Error("Storage connections and sync setups require version 2 pi-sync settings.");
 		}
 		const next = update(current);
 		await writeLocalConfigObject(next);
@@ -277,6 +292,13 @@ async function adoptLegacyState(
 	}
 }
 
+function referencingTargetNames(targets: Record<string, unknown>, profileName: string) {
+	return Object.entries(targets)
+		.filter(([, value]) => requireObject(value, "target").profile === profileName)
+		.map(([name]) => name)
+		.sort((left, right) => left.localeCompare(right));
+}
+
 function assertUniqueRemoteIdentity(
 	targets: Record<string, unknown>,
 	profiles: Record<string, unknown>,
@@ -298,7 +320,7 @@ function assertUniqueRemoteIdentity(
 				),
 			) === identity
 		) {
-			throw new Error(`Target “${name}” duplicates the remote destination of “${otherName}”.`);
+			throw new Error(`Sync setup “${name}” duplicates the storage location of “${otherName}”.`);
 		}
 	}
 }
@@ -330,6 +352,12 @@ function validateName(value: string, label: string) {
 		// biome-ignore lint/suspicious/noControlCharactersInRegex: Stored identifiers cannot contain controls.
 		/[\u0000-\u001f\u007f-\u009f]/u.test(value)
 	) {
-		throw new Error(`Invalid ${label} name.`);
+		const displayLabel =
+			label === "target"
+				? "sync setup"
+				: label === "storage profile"
+					? "storage connection"
+					: label;
+		throw new Error(`Invalid ${displayLabel} name.`);
 	}
 }

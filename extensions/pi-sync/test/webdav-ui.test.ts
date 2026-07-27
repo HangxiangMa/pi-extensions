@@ -110,7 +110,7 @@ test("WebDAV setup cannot continue after its session is aborted", async () => {
 	});
 });
 
-test("WebDAV profile and target management preserve hidden credentials", async () => {
+test("WebDAV storage connection and sync setup management preserve hidden credentials", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(
@@ -118,12 +118,12 @@ test("WebDAV profile and target management preserve hidden credentials", async (
 			JSON.stringify({ version: 2, profiles: {}, targets: {}, futureField: "preserved" }),
 		);
 		const selections = [
-			"Add profile",
+			"Add storage connection",
 			"Recommended Pi settings",
-			"Add target",
+			"Add sync setup",
 			"Keep current password",
-			"Save profile",
-			"Save target",
+			"Save storage connection",
+			"Save sync setup",
 		];
 		const inputs = [
 			"dav",
@@ -185,7 +185,7 @@ test("WebDAV profile and target management preserve hidden credentials", async (
 	});
 });
 
-test("Add destination can create a WebDAV connection without leaving the manager flow", async () => {
+test("Add sync setup can create a WebDAV connection without leaving the manager flow", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(
@@ -214,13 +214,13 @@ test("Add destination can create a WebDAV connection without leaving the manager
 		);
 		const selections = [
 			"More…",
-			"Manage destinations",
-			"Add destination",
-			"Create a new saved connection…",
+			"Sync setups…",
+			"Add sync setup",
+			"Add a new storage connection…",
 			"WebDAV",
-			"Add profile",
+			"Add storage connection",
 			"Recommended Pi settings",
-			"Add target",
+			"Add sync setup",
 			undefined,
 		];
 		const inputs = ["work", "dav", "https://cloud.example.com/dav", "user", "pi-sync", "work"];
@@ -310,7 +310,7 @@ test("WebDAV repair removes incompatible fields and fills missing credentials th
 			input: async () => inputs.shift(),
 			select: async (title: string) => {
 				reviews.push(title);
-				return "Repair destination";
+				return "Repair storage location";
 			},
 		});
 

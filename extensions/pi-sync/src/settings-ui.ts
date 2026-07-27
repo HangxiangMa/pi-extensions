@@ -65,7 +65,7 @@ async function showSettingsList(
 				id: "automaticSync",
 				label: automaticSyncOverridden ? "Automatic sync (environment override)" : "Automatic sync",
 				description: automaticSyncOverridden
-					? "Read-only while deprecated PI_SYNC_AUTO_SYNC overrides this target. Move the value into target settings before the future major removal."
+					? "Read-only while deprecated PI_SYNC_AUTO_SYNC overrides this sync setup. Move the value into setup settings before the future major removal."
 					: "Run conservative synchronization automatically at session startup and shutdown.",
 				currentValue: automaticSyncValue,
 				...(automaticSyncOverridden ? {} : { values: ["On", "Off"] }),
@@ -74,7 +74,7 @@ async function showSettingsList(
 				? [
 						{
 							id: "targetSwitchAction",
-							label: "After target switch",
+							label: "After switching setup",
 							description:
 								"Ask before starting a pull, start a pull review automatically, or switch without checking remote files. Every pull still shows exact changes before apply.",
 							currentValue: targetSwitchValue,
@@ -84,7 +84,7 @@ async function showSettingsList(
 				: []),
 			{
 				id: "syncFiles",
-				label: "Synced content",
+				label: "Included content",
 				description: `${normalizeSyncFiles(partial.syncFiles).length} built-in groups and ${normalizeExtraFiles(partial.extraFiles).length} extra files. Opens the reviewed content-selection draft.`,
 				currentValue: "Open editor",
 				values: ["Open editor"],
@@ -96,7 +96,7 @@ async function showSettingsList(
 			new Text(
 				theme.fg(
 					"muted",
-					`Target: ${safeTerminalText(partial.target ?? "default")} · ${storageDescription(
+					`Sync setup: ${safeTerminalText(partial.target ?? "default")} · ${storageDescription(
 						partial.storageKind,
 						partial.storageKind === "webdav"
 							? partial.url
@@ -151,9 +151,9 @@ async function showSettingsList(
 							const latest = await loadTargetSwitchAction();
 							previousValue = targetSwitchActionLabel(latest);
 							const action = targetSwitchActionFromLabel(newValue);
-							if (!action) throw new Error(`Invalid target-switch action: ${newValue}`);
+							if (!action) throw new Error(`Invalid setup-switch action: ${newValue}`);
 							await saveTargetSwitchAction(action);
-							ctx.ui.notify(`After target switch: ${newValue}.`, "info");
+							ctx.ui.notify(`After switching setup: ${newValue}.`, "info");
 						}
 					} catch (error) {
 						if (latestRequested.get(id) === newValue) {
@@ -188,9 +188,9 @@ async function updateSettingsTarget(
 		const targets = ownRecord(current.targets);
 		const selected =
 			targetName ?? (typeof current.activeTarget === "string" ? current.activeTarget : undefined);
-		if (!targets || !selected) throw new Error("Settings target is not configured.");
+		if (!targets || !selected) throw new Error("Settings sync setup is not configured.");
 		const target = ownRecord(targets[selected]);
-		if (!target) throw new Error(`Settings target “${selected}” is invalid.`);
+		if (!target) throw new Error(`Settings sync setup “${selected}” is invalid.`);
 		return { ...current, targets: { ...targets, [selected]: update(target) } };
 	});
 }
