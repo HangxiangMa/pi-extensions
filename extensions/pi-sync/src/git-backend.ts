@@ -630,8 +630,7 @@ export class GitSyncBackend implements SyncBackend {
 	}
 
 	private async readPublicationTree(commit: string, signal?: AbortSignal) {
-		const literalPathspec = `:(top,literal)${this.publicationPath()}`;
-		const result = await this.git(["ls-tree", "-r", "-z", commit, "--", literalPathspec], {
+		const result = await this.git(["ls-tree", "-r", "-z", commit], {
 			signal,
 			maxOutputBytes: MAX_GIT_TREE_OUTPUT_BYTES,
 		});

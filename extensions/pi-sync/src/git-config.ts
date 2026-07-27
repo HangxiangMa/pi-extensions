@@ -121,12 +121,19 @@ export function normalizeGitRemoteIdentity(value: string) {
 				normalized,
 			);
 		if (!match?.groups) return normalized;
-		return `${match.groups.user ?? ""}${match.groups.host.toLowerCase()}:${match.groups.path.replace(/\/+$/gu, "")}`;
+		const userAndHost = `${match.groups.user ?? ""}${match.groups.host.toLowerCase()}`;
+		const remotePath = match.groups.path.replace(/\/+$/gu, "");
+		return remotePath.startsWith("/")
+			? `scp-absolute://${userAndHost}${remotePath}`
+			: `ssh://${userAndHost}/${remotePath}`;
 	}
 	const url = new URL(normalized);
 	url.hostname = url.hostname.toLowerCase();
 	if (url.protocol === "ssh:" && url.port === "22") url.port = "";
 	url.pathname = url.pathname.replace(/\/+$/gu, "");
+	if (url.protocol === "ssh:") {
+		return `ssh://${url.username ? `${url.username}@` : ""}${url.host}${url.pathname}`;
+	}
 	return url.toString();
 }
 
@@ -171,6 +178,7 @@ export function normalizeGitDirectory(value: string | undefined) {
 
 export function validateGitNamespace(value: string) {
 	if (
+		value.length > 256 ||
 		value === "." ||
 		value === ".." ||
 		value.includes("/") ||

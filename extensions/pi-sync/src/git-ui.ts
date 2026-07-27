@@ -32,6 +32,13 @@ export async function showGitSetup(
 	if (!remoteInput) return false;
 	const destination = await promptGitDestination(ctx, targetName, signal);
 	if (!destination) return false;
+	const automatic = await ctx.ui.select(
+		"Automatic sync for this target",
+		["Enable automatic sync", "Keep automatic sync off", "Cancel"],
+		{ signal },
+	);
+	throwIfAborted(signal);
+	if (!automatic || automatic === "Cancel") return false;
 	let remote: string | undefined;
 	try {
 		remote = normalizeGitRemote(remoteInput);
@@ -50,6 +57,7 @@ export async function showGitSetup(
 			`Owned branch: ${safeTerminalText(destination.branch)}`,
 			`Remote directory: ${safeTerminalText(`${destination.directory}/profiles/${destination.namespace}/`)}`,
 			`Synced content: ${DEFAULT_SYNC_FILES.length} built-in groups · Sessions: Off`,
+			`Auto-sync: ${automatic === "Enable automatic sync" ? "On" : "Off"}`,
 			"Authentication: existing non-interactive Git/SSH credentials; no credentials are stored by pi-sync.",
 			"The remote repository must already exist. The owned branch may be created on first push.",
 		].join("\n"),
@@ -64,7 +72,7 @@ export async function showGitSetup(
 		profile: { kind: "git", remote },
 		target: {
 			...destination,
-			autoSync: true,
+			autoSync: automatic === "Enable automatic sync",
 			syncFiles: [...DEFAULT_SYNC_FILES],
 			syncSessions: false,
 			extraFiles: [],
@@ -162,8 +170,15 @@ export async function showAddGitTarget(
 	if (!preset || preset === "Cancel") return false;
 	const syncFiles =
 		preset === "Minimal settings" ? ["settings.json", "AGENTS.md"] : [...DEFAULT_SYNC_FILES];
+	const automatic = await ctx.ui.select(
+		"Automatic sync for this target",
+		["Enable automatic sync", "Keep automatic sync off", "Cancel"],
+		{ signal },
+	);
+	throwIfAborted(signal);
+	if (!automatic || automatic === "Cancel") return false;
 	const choice = await ctx.ui.select(
-		`Review Git target\n\nTarget: ${safeTerminalText(name)}\nSaved connection: ${safeTerminalText(profile)}\nOwned branch: ${safeTerminalText(destination.branch)}\nRemote directory: ${safeTerminalText(`${destination.directory}/profiles/${destination.namespace}/`)}\nSynced content: ${syncFiles.length} built-in groups · Sessions: Off`,
+		`Review Git target\n\nTarget: ${safeTerminalText(name)}\nSaved connection: ${safeTerminalText(profile)}\nOwned branch: ${safeTerminalText(destination.branch)}\nRemote directory: ${safeTerminalText(`${destination.directory}/profiles/${destination.namespace}/`)}\nSynced content: ${syncFiles.length} built-in groups · Sessions: Off\nAuto-sync: ${automatic === "Enable automatic sync" ? "On" : "Off"}`,
 		["Add target", "Cancel"],
 		{ signal },
 	);
@@ -172,7 +187,7 @@ export async function showAddGitTarget(
 	await addSyncTarget(name, {
 		profile,
 		...destination,
-		autoSync: true,
+		autoSync: automatic === "Enable automatic sync",
 		syncFiles,
 		syncSessions: false,
 		extraFiles: [],

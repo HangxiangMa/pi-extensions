@@ -427,6 +427,10 @@ test("Git backend rejects unsafe metadata, duplicate paths, and non-canonical co
 			backend.publishSnapshot({ ...snapshot([]), machine: `bad\u001b[31m` }, { kind: "missing" }),
 			/invalid Git snapshot/i,
 		);
+		await assert.rejects(
+			backend.publishSnapshot({ ...snapshot([]), createdAt: "\n2026-01-01" }, { kind: "missing" }),
+			/invalid Git snapshot/i,
+		);
 		const file = snapshot([{ path: "settings.json", content: Buffer.from("one") }]).files[0];
 		assert.ok(file);
 		await assert.rejects(
@@ -580,6 +584,12 @@ test("Git backend fails closed on malformed native publication trees", async (t)
 			verify: (backend) => backend.readHead(),
 		},
 		{
+			name: "entry outside the owned publication",
+			expected: /missing or extra/i,
+			mutate: (work) => writeFileSync(path.join(work, "unowned.txt"), "must not be deleted"),
+			verify: (backend) => backend.readHead(),
+		},
+		{
 			name: "non-regular payload",
 			expected: /non-regular/i,
 			skip: process.platform === "win32",
@@ -638,6 +648,15 @@ test("Git backend fails closed on malformed native publication trees", async (t)
 			mutate: (_work, manifestPath) => {
 				const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
 				manifest.unknown = true;
+				writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
+			},
+		},
+		{
+			name: "control character in timestamp",
+			expected: /manifest.*malformed/i,
+			mutate: (_work, manifestPath) => {
+				const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+				manifest.createdAt = "\n2026-01-01";
 				writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
 			},
 		},

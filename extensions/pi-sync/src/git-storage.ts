@@ -59,6 +59,7 @@ export function requireGitManifest(value: unknown): GitManifest {
 		!/^[A-Za-z0-9._-]+$/u.test(manifest.snapshotId) ||
 		typeof manifest.createdAt !== "string" ||
 		manifest.createdAt.length > 64 ||
+		hasControlCharacter(manifest.createdAt) ||
 		Number.isNaN(Date.parse(manifest.createdAt)) ||
 		typeof manifest.machine !== "string" ||
 		manifest.machine.length > 256 ||
@@ -152,6 +153,7 @@ export function prepareGitSnapshot(snapshot: Snapshot, namespace: string) {
 		typeof snapshot.createdAt !== "string" ||
 		!snapshot.createdAt ||
 		snapshot.createdAt.length > 64 ||
+		hasControlCharacter(snapshot.createdAt) ||
 		Number.isNaN(Date.parse(snapshot.createdAt)) ||
 		typeof snapshot.machine !== "string" ||
 		snapshot.machine.length > 256 ||

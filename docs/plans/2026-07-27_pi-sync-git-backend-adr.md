@@ -23,14 +23,14 @@ Each publication is one commit on one pi-sync-owned branch. Its target subtree c
     └── sessions/…
 ```
 
-`manifest.json` is the authoritative Git wire format. It records snapshot metadata and an ordered list of `{ path, sha256, size }` entries. Each declared `files/<path>` entry is a regular `100644` blob containing the exact decoded snapshot bytes. Reads require exact tree membership and validate mode, size, SHA-256, metadata, path safety, uniqueness, and file/directory prefix consistency before reconstructing the existing in-memory snapshot. Stable paths let Git reuse identical blobs and delta-compress changed content; gzip is not used by this backend and was never an encryption boundary. S3/R2/WebDAV continue using the existing snapshot codec unchanged.
+`manifest.json` is the authoritative Git wire format. It records snapshot metadata and an ordered list of `{ path, sha256, size }` entries. Each declared `files/<path>` entry is a regular `100644` blob containing the exact decoded snapshot bytes. Reads require the complete commit tree to contain only the exact publication membership and validate mode, size, SHA-256, metadata, terminal-safe timestamps, path safety, uniqueness, and file/directory prefix consistency before reconstructing the existing in-memory snapshot. Stable paths let Git reuse identical blobs and delta-compress changed content; gzip is not used by this backend and was never an encryption boundary. S3/R2/WebDAV continue using the existing snapshot codec unchanged.
 
 Contract mapping:
 
 - `snapshotId` is the snapshot content identity embedded in the validated manifest.
 - `snapshotRef` is the publication commit SHA, so repeated publication of identical content remains independently addressable.
 - `revision` is a backend-scoped opaque encoding of the same owned-ref tip SHA. Only the Git backend decodes or compares it.
-- `listHistory` walks first-parent commits on the owned ref, validates each exact manifest/tree shape, and returns each valid publication in oldest-first order. `readSnapshot` accepts only a full commit SHA retained by the owned branch and validates the exact manifest/tree/blob representation.
+- `listHistory` walks first-parent commits on the owned ref, validates each exact manifest/tree shape, and returns each valid publication in oldest-first order. `readSnapshot` accepts a full commit SHA retained by the owned branch or resolves an unambiguous snapshot ID through bounded first-parent history, then validates the exact manifest/tree/blob representation.
 
 Rollback reads a historical commit, applies current local policy through existing orchestration, regenerates snapshot identity, and creates a new child commit. It never resets or rewrites history.
 
@@ -56,11 +56,11 @@ A target owns destination addressing:
 }
 ```
 
-`branch` is stored without `refs/heads/`; full refs, ref traversal, control characters, option-like values, and ambiguous names are rejected. `directory` and `namespace` are normalized relative POSIX paths/segments with no empty, dot, dot-dot, `.git`, or control-character components.
+`branch` is stored without `refs/heads/`; full refs, ref traversal, control characters, option-like values, and ambiguous names are rejected. `directory` and `namespace` are normalized relative POSIX paths/segments with no empty, dot, dot-dot, `.git`, or control-character components; namespace is capped at the manifest profile limit of 256 characters.
 
 Git has no flat-settings or environment-variable compatibility mode. Existing deprecated `PI_SYNC_*`, AWS, and R2 variables remain S3-only.
 
-The backend identity hashes canonical secret-free remote identity plus branch, directory, and namespace. One effective remote repository/branch pair is reserved for exactly one pi-sync target because each publication owns the branch tree; settings reject a second target on the same branch even when its directory or namespace differs. Remote URLs with userinfo passwords/tokens are rejected. SSH usernames are addressing data, not credentials. Duplicate effective Git destinations are rejected. Git gets a new target-state hash tuple; existing S3 and WebDAV tuples remain byte-for-byte unchanged.
+The backend identity hashes canonical secret-free remote identity plus branch, directory, and namespace. Equivalent scp-like and `ssh://` SSH spellings share one identity. One effective remote repository/branch pair is reserved for exactly one pi-sync target because each publication owns the complete branch tree; settings reject a second target on the same branch even when its directory or namespace differs. Remote URLs with userinfo passwords/tokens are rejected. SSH usernames are addressing data, not credentials. Duplicate effective Git destinations are rejected. Git gets a new target-state hash tuple; existing S3 and WebDAV tuples remain byte-for-byte unchanged.
 
 ### Cache and filesystem ownership
 
@@ -76,7 +76,7 @@ A missing cache is initialized explicitly with SHA-1 object format. A non-bare, 
 
 ### Bootstrap and ownership
 
-The remote repository must already exist, but the owned branch may be absent. Missing-branch publication uses an exact missing-ref lease. An existing non-empty repository is accepted because pi-sync owns only its configured branch. An existing owned branch is accepted only when its tip contains a valid manifest and declared blob tree at the configured path; malformed or unrelated history fails closed with recovery guidance. Other refs are never fetched into or modified by publication except as required by remote negotiation.
+The remote repository must already exist, but the owned branch may be absent. Setup asks whether automatic sync is enabled and includes that choice in its save review. Missing-branch publication uses an exact missing-ref lease. An existing non-empty repository is accepted because pi-sync owns only its configured branch. An existing owned branch is accepted only when its complete tip tree contains the valid manifest and declared blobs and nothing else; malformed, unrelated, or additional branch content fails closed with recovery guidance rather than being deleted. Other refs are never fetched into or modified by publication except as required by remote negotiation.
 
 ### Publication and consistency
 

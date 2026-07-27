@@ -40,6 +40,10 @@ test("Git remote identity preserves absolute versus home-relative scp paths", ()
 		normalizeGitRemoteIdentity("ssh://git@example.com:22/owner/repo.git"),
 		normalizeGitRemoteIdentity("ssh://git@example.com/owner/repo.git"),
 	);
+	assert.equal(
+		normalizeGitRemoteIdentity("git@example.com:owner/repo.git"),
+		normalizeGitRemoteIdentity("ssh://git@example.com/owner/repo.git"),
+	);
 });
 
 test("Git config resolves an exhaustive secret-free backend destination", async () => {
@@ -124,6 +128,7 @@ test("Git config rejects mixed backend fields and unsafe remotes, refs, and path
 		["option branch", { branch: "--upload-pack=evil" }, /branch/i],
 		["traversal directory", { directory: "../escape" }, /directory/i],
 		["git metadata directory", { directory: ".git/hooks" }, /directory/i],
+		["overlong namespace", { namespace: "n".repeat(257) }, /namespace/i],
 		["mixed profile", { endpoint: "https://s3.example.com" }, /mixes backend fields/i],
 		["mixed target", { bucket: "bucket" }, /mixes backend fields/i],
 	];
@@ -172,7 +177,7 @@ test("Git settings reject duplicate effective destinations across profile aliase
 				...settings,
 				profiles: {
 					one: settings.profiles.github,
-					two: { ...settings.profiles.github },
+					two: { kind: "git", remote: "ssh://git@github.com/owner/private-pi-sync.git" },
 				},
 				targets: {
 					home: { ...settings.targets.home, profile: "one" },

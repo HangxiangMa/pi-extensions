@@ -39,7 +39,9 @@ test("Git setup stores a backend-specific destination without credentials", asyn
 			input: async () => inputs.shift(),
 			select: async (title: string) => {
 				reviews.push(title);
-				return "Save setup";
+				return title === "Automatic sync for this target"
+					? "Keep automatic sync off"
+					: "Save setup";
 			},
 		});
 		assert.equal(await showGitSetup(ctx, "home"), true);
@@ -52,6 +54,8 @@ test("Git setup stores a backend-specific destination without credentials", asyn
 			directory: "pi-sync",
 			namespace: "home",
 		});
+		assert.equal(config.autoSync, false);
+		assert.match(reviews.join("\n"), /Auto-sync: Off/);
 		assert.doesNotMatch(reviews.join("\n"), /token|password/i);
 		assert.match(reviews.join("\n"), /existing non-interactive Git\/SSH credentials/i);
 	});
@@ -74,7 +78,7 @@ test("Git setup review preserves a credential-free custom SSH port", async () =>
 			input: async () => inputs.shift(),
 			select: async (title: string) => {
 				reviews.push(title);
-				return "Cancel";
+				return title === "Automatic sync for this target" ? "Keep automatic sync off" : "Cancel";
 			},
 		});
 		assert.equal(await showGitSetup(ctx, "home"), false);
@@ -98,7 +102,8 @@ test("Git settings ignore deprecated S3 automatic-sync environment overrides", a
 				hasUI: true,
 				mode: "tui",
 				input: async () => setupInputs.shift(),
-				select: async () => "Save setup",
+				select: async (title: string) =>
+					title === "Automatic sync for this target" ? "Enable automatic sync" : "Save setup",
 			});
 			assert.equal(await showGitSetup(setup.ctx, "home"), true);
 			let rendered = "";
@@ -153,7 +158,14 @@ test("Git is available through the existing setup manager and config route", asy
 		mkdirSync(agentDir, { recursive: true });
 		const mock = createMockPi();
 		sync(mock.pi);
-		const selections = ["Set up sync", "Git", "Personal / Home", "Save setup", undefined];
+		const selections = [
+			"Set up sync",
+			"Git",
+			"Personal / Home",
+			"Keep automatic sync off",
+			"Save setup",
+			undefined,
+		];
 		const inputs = [
 			"github",
 			"git@github.com:owner/private-pi-sync.git",
@@ -210,7 +222,7 @@ test("Git saved connections and targets add and edit through one destination mod
 		assert.equal(await showAddGitStorageProfile(addProfile.ctx), true);
 
 		const addTargetInputs = ["pi-sync/work", "settings", "work"];
-		const targetSelections = ["Minimal settings", "Add target"];
+		const targetSelections = ["Minimal settings", "Keep automatic sync off", "Add target"];
 		const addTarget = createMockContext({
 			hasUI: true,
 			mode: "tui",
@@ -285,6 +297,7 @@ test("Git saved connections and targets add and edit through one destination mod
 		assert.equal(profiles.backup.remote, "git@git.example.com:owner/new.git");
 		assert.deepEqual(profiles.backup.futureProfileField, { retained: true });
 		assert.deepEqual(targets.work.futureTargetField, ["retained"]);
+		assert.equal(targets.work.autoSync, false);
 		assert.deepEqual(
 			{
 				branch: targets.work.branch,
