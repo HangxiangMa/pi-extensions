@@ -13,7 +13,7 @@ Goal mode uses Codex-like persistence instructions and sends guarded continuatio
 - Keeps direct goal management available through `/goal` subcommands: `status`, `pause`, `resume`, `clear`, and `edit`.
 - Exposes only one top-level command: `/goal`, including when ordered goals are enabled.
 - Optionally adds ordered-goal operations through `/goal add`, `prioritize`, `drop-last`, and `skip`, while accepting `push`, `unshift`, `pop`, and `shift` as hidden compatibility aliases.
-- Bounds automatic work by default to 25 normal model responses, including responses inside automatic tool loops and Pi-owned retry/compaction recovery; set `continuationLimits.automaticTurns` explicitly to `null` only when unbounded automatic work is intended.
+- Leaves automatic response count unlimited by default; set `continuationLimits.automaticTurns` to a positive whole number when an authoritative response cap is wanted.
 - Pauses after three consecutive empty or normalized-identical tool-free automatic runs, while distinct short output and tool activity reset the repeat detector.
 - Supports optional token budgets such as `/goal --tokens 100k <goal>`, using provider-reported total-token accounting with a cache-inclusive compatibility fallback.
 - Tracks distinct `active`, `paused`, `blocked`, `usage_limited`, `budget_limited`, and `complete` states.
@@ -64,13 +64,20 @@ with the complete current defaults:
     "goals": false
   },
   "continuationLimits": {
-    "automaticTurns": 25,
+    "automaticTurns": null,
     "noProgressTurns": 3
   }
 }
 ```
 
-Use `/goal` → **Settings…** in the TUI to edit these values interactively, or edit the generated file directly. Interactive changes are serialized, written atomically, preserve unknown fields, and apply to the current runtime. Tool-visibility changes that would alter the active tool schema are rejected while Pi is busy; retry after Pi settles. Escape closes the settings screen without reverting changes that were already saved.
+Use `/goal` → **Settings…** in the TUI to edit these values interactively, or edit the generated file directly. The screen keeps all four controls on one level in task order:
+
+- **Automatic work** shows **Unlimited** or an exact **≤_N_** response cap. Choose **Unlimited** directly, or choose **Set a maximum…** and enter a safe whole number greater than zero.
+- **No-progress guard** shows **_N_ runs** or **Off**. Choose the default threshold, **Off**, or **Set threshold…** and enter a safe whole number greater than zero.
+- **Goal tools** controls whether terminal Goal tools are always visible or appear after the first goal.
+- **Ordered goal queue** controls the experimental ordered-goal workflows.
+
+Custom number inputs reject zero, negative numbers, decimals, text, and unsafe integers without saving; use the explicit **Unlimited** or **Off** choice instead. Interactive changes are serialized, written atomically, preserve unknown fields, and apply to the current runtime. A successful change updates the visible state immediately. A failed save restores the prior value and reports the settings path so it can be retried. Tool-visibility changes that would alter the active tool schema are rejected while Pi is busy; retry after Pi settles. Escape returns to the previous screen without reverting changes that were already saved.
 
 `toolVisibility` accepts:
 
@@ -79,18 +86,15 @@ Use `/goal` → **Settings…** in the TUI to edit these values interactively, o
 
 `experimental.goals` accepts a boolean and defaults to `false`. Set it to `true` to enable the ordered-goal subcommands and automatic queue advancement described below. Enabled sessions show one warning because command behavior and persisted queue state remain experimental.
 
-`continuationLimits` controls the default-on runaway guards:
+`continuationLimits` controls the runaway guards:
 
-- `automaticTurns` is a positive safe integer and defaults to `25`. It counts every completed normal `turn_end` owned by automatically started Goal work, including model responses inside tool loops and matching Pi-owned retries. The user-triggered kickoff, resume, edit, and ordinary user runs are not charged. At the limit, the goal becomes `paused` with cause `continuation_limit`, pending continuation/recovery is cancelled, and the current operation is aborted. Pi may invoke a provider adapter once more with an already-aborted signal to produce its synthetic terminal event; that event is not counted and cannot resume Goal work. Set this field to `null` to remove the authoritative hard bound.
+- `automaticTurns` accepts a positive safe integer or `null` and defaults to `null` (unlimited). When configured, it counts every completed normal `turn_end` owned by automatically started Goal work, including model responses inside tool loops and matching Pi-owned retries. The user-triggered kickoff, resume, edit, and ordinary user runs are not charged. At the limit, the goal becomes `paused` with cause `continuation_limit`, pending continuation/recovery is cancelled, and the current operation is aborted. Pi may invoke a provider adapter once more with an already-aborted signal to produce its synthetic terminal event; that event is not counted and cannot resume Goal work. Set this field to `null` to remove the authoritative hard bound.
 - `noProgressTurns` is a positive safe integer and defaults to `3`. At the end of an automatic run, pi-goal compares visible assistant text after Unicode normalization, lowercasing, control-character removal, and whitespace collapse. Thinking and tool blocks are excluded; empty and punctuation-only output are equivalent. Consecutive empty or identical tool-free outputs increment the repeat count. Different non-empty output starts a new run at one, and any attempted tool call resets it. Set this field to `null` to disable only this heuristic.
 
 Settings are reread at Pi startup, session replacement, and `/reload`; direct external file edits are not watched live, while changes made through the Goal menu apply immediately. A missing file is created during any of those session starts, while an existing file is read without being rewritten. Initialization publishes the generated file atomically and never overwrites a file
 created concurrently by another process.
 
-Omitted fields use the defaults above. Invalid or malformed existing settings are never overwritten;
-they produce a warning and fall back to all defaults. If the default file cannot be created, pi-goal
-warns, continues with the built-in defaults, and retries on the next session start. Reload Pi after
-changing the file. If a live runtime reloads settings, switching `toolVisibility` to `"always"`
+Omitted fields use the defaults above. Invalid or malformed existing settings are never overwritten; they produce a warning and fall back to all defaults. In the TUI, Goal Settings becomes a read-only summary that identifies the invalid file and directs the user to fix it and run `/reload`. If the default file cannot be created, pi-goal warns, continues with the built-in defaults, and retries when a setting is saved or on the next session start. Reload Pi after changing the file. If a live runtime reloads settings, switching `toolVisibility` to `"always"`
 restores only the exact tools that pi-goal previously hid, while switching to
 `"after-first-goal"` locks a runtime that has no unfinished goal.
 
@@ -115,7 +119,7 @@ Tool visibility is a baseline, not ownership of Pi's global active-tool list. Pl
 /goal skip
 ```
 
-- In the TUI, `/goal` opens a state-aware manager. Its first action follows the current state: start when empty, pause when active, resume when stopped, or increase the budget when exhausted. Status, Settings, Help, queue management, Clear, and Close remain shallow, labeled routes. Arrow keys navigate, Enter selects, and Escape cancels or closes without changing state.
+- In the TUI, `/goal` opens a state-aware manager. Its first action follows the current state: start when empty, pause when active, resume when stopped, or increase the budget when exhausted. An active goal shows automatic-response state as **_used_ automatic responses · Unlimited** or **_used_/_limit_ automatic responses**. Status, Settings, Help, queue management, Clear, and Close remain shallow, labeled routes. Arrow keys navigate, Enter selects, and Escape cancels or returns without changing state.
 - In RPC mode, bare `/goal` and `/goal status` report the current summary through an observable notification without opening terminal UI. Pi exposes no extension-command output channel in print or JSON mode, so those routes reject with an explicit unsupported-mode error instead of misreporting stderr as status output.
 - Menu-driven Replace, Clear, Prioritize, Skip, and Drop last actions preview the exact affected goals and require confirmation. Existing direct routes remain immediate for compatibility and automation.
 - `/goal <goal_to_complete>` starts goal mode. If another unfinished goal exists, Pi asks for confirmation before replacing it with a new active goal and resetting its usage counters. Failed kickoff delivery clears a new goal or restores the prior goal; a previously active goal is restored as paused.
@@ -167,7 +171,7 @@ For each persisted assistant message, `pi-goal` uses finite, non-negative `usage
 
 Provider usage becomes authoritative only when an assistant message finishes, so a budget can overshoot by one model call. When completed tool activity first exposes exhaustion, the goal transitions once to `budget_limited`, cancels continuation, and queues one bounded custom wrap-up instruction before the next model call. The instruction permits only a concise progress/results/blockers summary; a substantive tool attempt is blocked and aborts the remaining wrap-up. A rejected `goal_complete` also terminates the wrap-up, while accepted completion still requires existing evidence that proves every requirement—budget exhaustion itself never means completion. If exhaustion is first visible at `agent_end` and no turn remains, the extension stops without creating another model turn.
 
-The automatic-response cap is a call-count boundary, not a fixed cost ceiling: context size, cache pricing, output length, and provider rates vary, and the 25th response is still retained. No default token budget is imposed. For stricter spend control, combine the default circuit breakers with `/goal --tokens`.
+When configured, the automatic-response cap is a call-count boundary, not a fixed cost ceiling: context size, cache pricing, output length, and provider rates vary, and the final capped response is still retained. No default automatic-response cap or token budget is imposed. For stricter spend control, configure `automaticTurns` and/or use `/goal --tokens`.
 
 Elapsed time is accumulated only while status is `active`. Pause, blocked, usage-limited, budget-limited, shutdown, and offline periods do not increase it. Legacy session entries are migrated by preserving their accumulated seconds and starting a fresh active clock when loaded.
 

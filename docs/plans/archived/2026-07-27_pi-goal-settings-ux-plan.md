@@ -1,0 +1,24 @@
+# pi-goal settings UX redesign plan
+
+## Goal
+
+Make Goal settings understandable from `/goal` without magic input values or unnecessary navigation: show the active automatic-response policy in the Goal menu, offer explicit Unlimited/Off choices, accept only positive whole numbers in custom limit inputs, and keep Goal tools and the ordered queue directly below the two safety controls while preserving settings safety and compatibility.
+
+## Plan
+
+- [x] Add focused menu and settings-UI tests for visible Unlimited/capped state, explicit safety choices, positive-integer validation, cancellation, reached-limit confirmation, stale-goal protection, advanced navigation, load/save failure recovery, keyboard behavior, and 40/80/120-column rendering; focused menu/settings run failed in 10 intended behavior assertions before implementation.
+- [x] Update `extensions/pi-goal/src/menu.ts`, `src/settings-ui.ts`, and the minimal runtime settings-load state needed to implement the approved information architecture and interaction flows without changing the persisted `number | null` schema; 282 compiled pi-goal tests pass.
+- [x] Update `extensions/pi-goal/README.md` to document the explicit Unlimited/Off choices, positive-number-only custom input, persistence, and error behavior.
+- [x] Move Goal tools and Ordered goal queue from Advanced onto the main Goal Settings screen below Automatic work and No-progress guard; three focused assertions first failed because the controls and queue action still required Advanced.
+- [x] Update the README and responsive-width/keyboard tests for the final four-row Goal Settings screen, including direct tool/queue operation and exact safe-integer display at 40/80/120 columns.
+- [x] Run the focused compiled pi-goal tests, pi-goal runtime smoke, `git diff --check`, and the repository `npm run check`; 282 focused tests, the runtime smoke, and the 1,658-test repository gate pass, with final settings/TUI review against `docs/extension-conventions.md` and `docs/extension-settings.md`.
+
+## Completion Checklist
+
+- [x] `/goal` displays `Unlimited` or `used/limit` automatic-response state for an active goal.
+- [x] Goal Settings presents Automatic work, No-progress guard, Goal tools, and Ordered goal queue in that order on one screen.
+- [x] Unlimited and Off are explicit choices; custom inputs accept only safe whole numbers greater than zero and reject every other value without saving.
+- [x] Consequential reached-limit changes preview their immediate pause effect; cancellation and stale-goal changes have no side effects.
+- [x] Successful changes save atomically and apply immediately; failures retain the prior valid state and show actionable feedback; invalid files remain untouched.
+- [x] Existing numeric/null settings, unknown fields, non-TUI fallback, queue/tool behavior, theme/keybindings, and supported terminal widths remain compatible.
+- [x] README and deterministic tests match the final behavior, all required checks pass, and this completed plan is archived here.

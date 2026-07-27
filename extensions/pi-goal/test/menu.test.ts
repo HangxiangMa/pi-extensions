@@ -55,8 +55,15 @@ test("buildGoalMenuState prioritizes actions for empty, active, stopped, budget,
 
 	const active = createGoal("ship the release", 100, 0);
 	active.tokensUsed = 20;
-	assert.equal(buildGoalMenuState(runtime(active)).actions[0], GOAL_MENU_ACTIONS.pause);
-	assert.match(buildGoalMenuState(runtime(active)).title, /Active.*20\/100/is);
+	active.automaticModelTurns = 12;
+	const unlimited = runtime(active);
+	assert.equal(buildGoalMenuState(unlimited).actions[0], GOAL_MENU_ACTIONS.pause);
+	assert.match(buildGoalMenuState(unlimited).title, /Active.*20\/100/is);
+	assert.match(buildGoalMenuState(unlimited).title, /12 automatic responses.*Unlimited/is);
+
+	const capped = runtime(active);
+	capped.settings.continuationLimits.automaticTurns = 25;
+	assert.match(buildGoalMenuState(capped).title, /12\/25 automatic responses/is);
 
 	for (const status of ["paused", "blocked", "usage_limited"] as const) {
 		const stopped = runtime(transitionGoal(active, status));

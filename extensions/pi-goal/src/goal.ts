@@ -493,6 +493,7 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		);
 		runtime.settings =
 			settingsResult.kind === "loaded" ? settingsResult.settings : DEFAULT_GOAL_SETTINGS;
+		runtime.settingsLoadIssue = settingsResult.kind === "loaded" ? undefined : settingsResult;
 		if (settingsResult.kind === "invalid") {
 			ctx.ui.notify(
 				`pi-goal settings ignored: ${settingsResult.reason}. Using default settings.`,
