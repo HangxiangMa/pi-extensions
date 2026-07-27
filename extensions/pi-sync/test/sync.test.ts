@@ -743,6 +743,35 @@ test("sync config output reports session sync and privacy warning", async () => 
 	});
 });
 
+test("sync config output redacts percent-encoded WebDAV usernames from URLs", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			localConfigPath(),
+			JSON.stringify({
+				version: 2,
+				activeTarget: "home",
+				profiles: {
+					dav: {
+						kind: "webdav",
+						url: "https://cloud.example.com/dav/files/alice%40example.com",
+						username: "alice@example.com",
+						password: "secret",
+					},
+				},
+				targets: { home: { profile: "dav", path: "pi-sync", namespace: "home" } },
+			}),
+		);
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext();
+		await mock.commands.get("sync")?.handler("config", ctx);
+		const output = notifications.at(-1)?.message ?? "";
+		assert.doesNotMatch(output, /alice(?:%40|@)example\.com/iu);
+		assert.match(output, /url: https:\/\/cloud\.example\.com\/…/u);
+	});
+});
+
 test("argument and option helpers parse quoted command lines", () => {
 	assert.deepEqual(splitArgs("push --yes 'snapshot one' \"two words\""), [
 		"push",

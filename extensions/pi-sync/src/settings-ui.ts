@@ -95,7 +95,11 @@ async function showSettingsList(
 			new Text(
 				theme.fg(
 					"muted",
-					`Target: ${safeTerminalText(partial.target ?? "default")} · ${storageDescription(partial.storageKind, partial.endpoint, partial.bucket)}`,
+					`Target: ${safeTerminalText(partial.target ?? "default")} · ${storageDescription(
+						partial.storageKind,
+						partial.storageKind === "webdav" ? partial.url : partial.endpoint,
+						partial.storageKind === "webdav" ? partial.path : partial.bucket,
+					)}`,
 				),
 				1,
 				0,
@@ -187,6 +191,15 @@ function storageDescription(
 	endpoint: string | undefined,
 	bucket: string | undefined,
 ) {
+	if (kind === "webdav") {
+		let host = "URL missing";
+		try {
+			host = endpoint ? new URL(endpoint).host : host;
+		} catch {
+			host = "invalid URL";
+		}
+		return `WebDAV · ${safeTerminalText(host)} · ${safeTerminalText(bucket ?? "path missing")}`;
+	}
 	const label =
 		kind === "r2" || isCloudflareR2Endpoint(endpoint) ? "Cloudflare R2" : "S3-compatible";
 	return `${label} · ${safeTerminalText(bucket ?? "bucket missing")}`;

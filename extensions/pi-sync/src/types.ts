@@ -1,4 +1,4 @@
-export type StorageProfileKind = "r2" | "s3-compatible";
+export type StorageProfileKind = "r2" | "s3-compatible" | "webdav";
 export type TargetSwitchAction = "ask" | "pull" | "switch-only";
 
 export interface S3StorageProfileFields {
@@ -11,6 +11,15 @@ export interface S3StorageProfileFields {
 
 export type S3StorageProfileSettings = S3StorageProfileFields &
 	({ kind?: undefined } | { kind: "r2" } | { kind: "s3-compatible" });
+
+export interface WebDavStorageProfileSettings {
+	kind: "webdav";
+	url?: string;
+	username?: string;
+	password?: string;
+}
+
+export type StorageProfileSettings = S3StorageProfileSettings | WebDavStorageProfileSettings;
 
 export interface CommonSyncTargetSettings {
 	profile?: string;
@@ -26,17 +35,24 @@ export interface S3SyncTargetSettings extends CommonSyncTargetSettings {
 	namespace?: string;
 }
 
+export interface WebDavSyncTargetSettings extends CommonSyncTargetSettings {
+	path?: string;
+	namespace?: string;
+}
+
+export type SyncTargetSettings = S3SyncTargetSettings | WebDavSyncTargetSettings;
+
 export interface PiSyncSettingsV2 {
 	version: 2;
 	activeTarget?: string;
 	targetSwitchAction?: TargetSwitchAction;
-	profiles?: Record<string, S3StorageProfileSettings>;
-	targets?: Record<string, S3SyncTargetSettings>;
+	profiles?: Record<string, StorageProfileSettings>;
+	targets?: Record<string, SyncTargetSettings>;
 	[key: string]: unknown;
 }
 
 export interface ResolvedS3StorageProfile {
-	kind: StorageProfileKind;
+	kind: "r2" | "s3-compatible";
 	endpoint: string;
 	region: string;
 	accessKeyId: string;
@@ -56,6 +72,35 @@ export interface ResolvedS3Backend {
 	destination: ResolvedS3Destination;
 }
 
+export interface ResolvedWebDavStorageProfile {
+	kind: "webdav";
+	url: string;
+	username: string;
+	password: string;
+	/** S3-only compatibility properties remain absent at runtime. */
+	endpoint?: string;
+	region?: string;
+	accessKeyId?: string;
+	secretAccessKey?: string;
+	sessionToken?: string;
+}
+
+export interface ResolvedWebDavDestination {
+	path: string;
+	namespace: string;
+	/** S3-only compatibility properties remain absent at runtime. */
+	bucket?: string;
+	prefix?: string;
+}
+
+export interface ResolvedWebDavBackend {
+	type: "webdav";
+	profile: ResolvedWebDavStorageProfile;
+	destination: ResolvedWebDavDestination;
+}
+
+export type ResolvedSyncBackend = ResolvedS3Backend | ResolvedWebDavBackend;
+
 export interface CommonSyncConfig {
 	/** Remote namespace retained as `profile` for snapshot/wire compatibility. */
 	profile: string;
@@ -69,9 +114,12 @@ export interface CommonSyncConfig {
 }
 
 /** Discriminated union extended by each production backend. */
-export type SyncConfig = CommonSyncConfig & {
-	backend: ResolvedS3Backend;
-};
+export type SyncConfig<Backend extends ResolvedSyncBackend = ResolvedS3Backend> =
+	CommonSyncConfig & {
+		backend: Backend;
+	};
+
+export type AnySyncConfig = SyncConfig<ResolvedSyncBackend>;
 
 export interface PartialConfig {
 	target?: string;
@@ -79,7 +127,11 @@ export interface PartialConfig {
 	storageKind?: StorageProfileKind;
 	settingsVersion?: 1 | 2;
 	endpoint?: string;
+	url?: string;
+	username?: string;
+	password?: string;
 	bucket?: string;
+	path?: string;
 	region?: string;
 	accessKeyId?: string;
 	secretAccessKey?: string;

@@ -16,7 +16,7 @@ import {
 	writeLocalConfigObject,
 } from "./config.js";
 import { withLock } from "./lock.js";
-import type { PartialConfig, S3StorageProfileSettings, S3SyncTargetSettings } from "./types.js";
+import type { PartialConfig, StorageProfileSettings, SyncTargetSettings } from "./types.js";
 
 let afterLegacySettingsReadHook: () => Promise<void> = async () => undefined;
 
@@ -116,8 +116,8 @@ export function legacySettingsAsV2(
 export async function saveNewV2Settings(input: {
 	targetName: string;
 	storageProfileName: string;
-	profile: S3StorageProfileSettings;
-	target: S3SyncTargetSettings;
+	profile: StorageProfileSettings;
+	target: SyncTargetSettings;
 }) {
 	validateName(input.targetName, "target");
 	validateName(input.storageProfileName, "storage profile");
@@ -137,7 +137,7 @@ export async function saveNewV2Settings(input: {
 	return settings;
 }
 
-export async function addStorageProfile(name: string, profile: S3StorageProfileSettings) {
+export async function addStorageProfile(name: string, profile: StorageProfileSettings) {
 	validateName(name, "storage profile");
 	await updateV2Settings((settings) => {
 		const profiles = requireObject(settings.profiles, "profiles");
@@ -155,12 +155,12 @@ export async function updateStorageProfile(
 		const profiles = requireObject(settings.profiles, "profiles");
 		const profile = requireObject(profiles[name], "storage profile");
 		const nextProfiles = { ...profiles, [name]: update(profile) };
-		validateUniqueRemoteTargets(requireObject(settings.targets, "targets"));
+		validateUniqueRemoteTargets(requireObject(settings.targets, "targets"), nextProfiles);
 		return { ...settings, profiles: nextProfiles };
 	});
 }
 
-export async function addSyncTarget(name: string, target: S3SyncTargetSettings) {
+export async function addSyncTarget(name: string, target: SyncTargetSettings) {
 	validateName(name, "target");
 	await updateV2Settings((settings) => {
 		const targets = requireObject(settings.targets, "targets");
@@ -169,7 +169,7 @@ export async function addSyncTarget(name: string, target: S3SyncTargetSettings) 
 		if (!target.profile || !Object.hasOwn(profiles, target.profile)) {
 			throw new Error(`Storage profile not found: ${target.profile ?? "missing"}`);
 		}
-		assertUniqueRemoteIdentity(targets, name, target);
+		assertUniqueRemoteIdentity(targets, profiles, name, target);
 		return { ...settings, targets: { ...targets, [name]: { ...target } } };
 	});
 }
@@ -183,7 +183,12 @@ export async function updateSyncTarget(
 		const targets = requireObject(settings.targets, "targets");
 		const target = requireObject(targets[name], "target");
 		const nextTarget = update(target);
-		assertUniqueRemoteIdentity(targets, name, nextTarget);
+		assertUniqueRemoteIdentity(
+			targets,
+			requireObject(settings.profiles, "profiles"),
+			name,
+			nextTarget,
+		);
 		return { ...settings, targets: { ...targets, [name]: nextTarget } };
 	});
 }
@@ -274,14 +279,24 @@ async function adoptLegacyState(
 
 function assertUniqueRemoteIdentity(
 	targets: Record<string, unknown>,
+	profiles: Record<string, unknown>,
 	name: string,
-	target: S3SyncTargetSettings,
+	target: SyncTargetSettings,
 ) {
-	const identity = effectiveTargetRemoteIdentity(target as Record<string, unknown>, name);
+	const profileName = typeof target.profile === "string" ? target.profile : "";
+	const profile = requireObject(profiles[profileName], "storage profile");
+	const identity = effectiveTargetRemoteIdentity(target as Record<string, unknown>, name, profile);
 	for (const [otherName, value] of Object.entries(targets)) {
 		if (
 			otherName !== name &&
-			effectiveTargetRemoteIdentity(requireObject(value, "target"), otherName) === identity
+			effectiveTargetRemoteIdentity(
+				requireObject(value, "target"),
+				otherName,
+				requireObject(
+					profiles[String(requireObject(value, "target").profile ?? "")],
+					"storage profile",
+				),
+			) === identity
 		) {
 			throw new Error(`Target “${name}” duplicates the remote destination of “${otherName}”.`);
 		}

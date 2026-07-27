@@ -50,7 +50,7 @@ import {
 } from "./sync-operations.js";
 import { hasLocalChanges } from "./sync-state.js";
 import { TargetPullRequiresUiError, useSyncTarget } from "./target-switch.js";
-import type { CommandOptions, SnapshotOptions, SyncConfig } from "./types.js";
+import type { AnySyncConfig, CommandOptions, SnapshotOptions } from "./types.js";
 
 const STATUS_KEY = "sync";
 const DEFAULT_PROFILE = "default";
@@ -132,8 +132,11 @@ async function handleCommand(
 ) {
 	if (!rawArgs.trim()) {
 		try {
-			await showSyncManager(ctx, (route, signal, onCommit, target) =>
-				executeCommand(route, ctx, combineSignals(sessionSignal, signal), onCommit, target),
+			await showSyncManager(
+				ctx,
+				(route, signal, onCommit, target) =>
+					executeCommand(route, ctx, combineSignals(sessionSignal, signal), onCommit, target),
+				sessionSignal,
 			);
 		} catch (error) {
 			if (sessionSignal.aborted) return;
@@ -172,7 +175,7 @@ async function executeCommand(
 				);
 				return;
 			case "init":
-				await initConfig(ctx);
+				await initConfig(ctx, signal);
 				return;
 			case "config":
 				await showConfig(ctx, options);
@@ -221,7 +224,7 @@ async function autoSync(ctx: ExtensionContext, signal: AbortSignal) {
 	try {
 		const partial = await loadPartialConfig();
 		throwIfAborted(signal);
-		if (!isEnabled(partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC, true)) return;
+		if (!isEnabled(autoSyncSetting(partial), true)) return;
 		await ensureStateDir();
 		throwIfAborted(signal);
 		await loadConfig();
@@ -241,7 +244,7 @@ async function autoPushSessions(ctx: ExtensionContext, signal: AbortSignal) {
 	try {
 		const partial = await loadPartialConfig();
 		throwIfAborted(signal);
-		if (!isEnabled(partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC, true)) return;
+		if (!isEnabled(autoSyncSetting(partial), true)) return;
 		if (!isExplicitlyEnabled(partial.syncSessions)) return;
 		await ensureStateDir();
 		throwIfAborted(signal);
@@ -264,7 +267,7 @@ async function autoPushSessions(ctx: ExtensionContext, signal: AbortSignal) {
 	}
 }
 
-async function initConfig(ctx: ExtensionCommandContext) {
+async function initConfig(ctx: ExtensionCommandContext, signal?: AbortSignal) {
 	const configPath = localConfigPath();
 	if (await readLocalConfigObject()) {
 		ctx.ui.notify(`Config already exists: ${await activeLocalConfigPath()}`, "info");
@@ -272,7 +275,7 @@ async function initConfig(ctx: ExtensionCommandContext) {
 	}
 
 	if (ctx.mode === "tui") {
-		await showSetupWizard(ctx);
+		await showSetupWizard(ctx, signal);
 		return;
 	}
 	await writeLocalConfigObject(localConfigTemplate());
@@ -281,26 +284,39 @@ async function initConfig(ctx: ExtensionCommandContext) {
 
 async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions) {
 	const partial = await loadPartialConfig(options.target);
+	const webdav = partial.storageKind === "webdav";
 	const syncSessions = isExplicitlyEnabled(partial.syncSessions);
 	const warnings = [
-		...deprecatedPiSyncEnvironmentWarnings(),
-		...sessionTokenWarnings(partial),
+		...(webdav ? [] : deprecatedPiSyncEnvironmentWarnings()),
+		...(webdav ? [] : sessionTokenWarnings(partial)),
 		...syncSessionsWarnings({ syncSessions }),
 	];
+	const storageLines = webdav
+		? [
+				`kind: webdav`,
+				`url: ${displayWebDavUrl(partial.url, partial.username)}`,
+				`username: ${partial.username ? "configured (value hidden)" : "missing"}`,
+				`password: ${partial.password ? "configured" : "missing"}`,
+				`path: ${partial.path ?? DEFAULT_PREFIX}`,
+				`namespace: ${partial.profile ?? DEFAULT_PROFILE}`,
+			]
+		: [
+				`endpoint: ${partial.endpoint ?? "missing"}`,
+				`bucket: ${partial.bucket ?? "missing"}`,
+				`region: ${partial.region ?? DEFAULT_REGION}`,
+				`accessKeyId: ${partial.accessKeyId ? redact(partial.accessKeyId) : "missing"}`,
+				`secretAccessKey: ${partial.secretAccessKey ? "configured" : "missing"}`,
+				`sessionToken: ${partial.sessionToken ? "configured" : "not configured"}`,
+				`profile: ${partial.profile ?? DEFAULT_PROFILE}`,
+				`prefix: ${partial.prefix ?? DEFAULT_PREFIX}`,
+			];
 	ctx.ui.notify(
 		[
 			"pi-sync config:",
 			`target: ${partial.target ?? "default"}`,
 			`storage profile: ${partial.storageProfile ?? "default"}`,
-			`endpoint: ${partial.endpoint ?? "missing"}`,
-			`bucket: ${partial.bucket ?? "missing"}`,
-			`region: ${partial.region ?? DEFAULT_REGION}`,
-			`accessKeyId: ${partial.accessKeyId ? redact(partial.accessKeyId) : "missing"}`,
-			`secretAccessKey: ${partial.secretAccessKey ? "configured" : "missing"}`,
-			`sessionToken: ${partial.sessionToken ? "configured" : "not configured"}`,
-			`profile: ${partial.profile ?? DEFAULT_PROFILE}`,
-			`prefix: ${partial.prefix ?? DEFAULT_PREFIX}`,
-			`autoSync: ${isEnabled(partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC, true) ? "enabled" : "disabled"}`,
+			...storageLines,
+			`autoSync: ${isEnabled(webdav ? partial.autoSync : (partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC), true) ? "enabled" : "disabled"}`,
 			`syncFiles: ${normalizeSyncFiles(partial.syncFiles).join(", ") || "none"}`,
 			`syncSessions: ${syncSessions ? "enabled" : "disabled"}`,
 			`extraFiles: ${normalizeExtraFiles(partial.extraFiles).join(", ") || "none"}`,
@@ -309,6 +325,26 @@ async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions)
 		].join("\n"),
 		warnings.length > 0 ? "warning" : "info",
 	);
+}
+
+function displayWebDavUrl(value: string | undefined, username: string | undefined) {
+	if (!value) return "missing";
+	try {
+		const url = new URL(value);
+		url.username = "";
+		url.password = "";
+		url.search = "";
+		url.hash = "";
+		return username ? `${url.origin}/…` : `${url.origin}${url.pathname}`;
+	} catch {
+		return "invalid (value hidden)";
+	}
+}
+
+function autoSyncSetting(partial: Awaited<ReturnType<typeof loadPartialConfig>>) {
+	return partial.storageKind === "webdav"
+		? partial.autoSync
+		: (partial.autoSync ?? process.env.PI_SYNC_AUTO_SYNC);
 }
 
 function throwIfAborted(signal: AbortSignal) {
@@ -324,7 +360,7 @@ function combineSignals(primary: AbortSignal, secondary?: AbortSignal) {
 
 function snapshotOptionsForContext(
 	ctx: ExtensionCommandContext | ExtensionContext,
-	config: SyncConfig,
+	config: AnySyncConfig,
 ): SnapshotOptions {
 	return {
 		syncFiles: config.syncFiles,

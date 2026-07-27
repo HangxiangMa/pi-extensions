@@ -114,6 +114,17 @@ export function consumeLocalConfigMigrationNotice() {
 	return notice;
 }
 
+export async function readActiveLocalConfigDocumentForRepair(): Promise<
+	LocalConfigDocument | undefined
+> {
+	return withLocalConfigFileLock(async () => {
+		const canonicalPath = localConfigPath();
+		const filePath = (await pathExists(canonicalPath)) ? canonicalPath : legacyLocalConfigPath();
+		const snapshot = await readConfigSnapshotIfExists(filePath);
+		return snapshot ? { path: filePath, ...snapshot } : undefined;
+	});
+}
+
 export async function readMigratingLocalConfigDocument(
 	validateForMigration: (settings: Record<string, unknown>) => void,
 ): Promise<LocalConfigDocument | undefined> {

@@ -223,7 +223,7 @@ test("main menu exposes shallow secondary navigation with Back", async () => {
 
 		assert.match(calls[1]?.title ?? "", /More options/);
 		assert.deepEqual(calls[1]?.options, [
-			"Manage targets & storage",
+			"Manage destinations",
 			"History & recovery",
 			"Help",
 			"Back",
@@ -1187,7 +1187,7 @@ test("first-time R2 setup recommends home/r2/pi-sync defaults without raw path q
 		assert.deepEqual(inputTitles, ["Cloudflare R2 endpoint"]);
 		assert.match(rendered.join("\n"), /Bucket must already exist/);
 		assert.match(rendered.join("\n"), /pi-sync\/profiles\/home/);
-		assert.match(notifications.at(-1)?.message ?? "", /Target “home” is ready/);
+		assert.match(notifications.at(-1)?.message ?? "", /Destination “home” is ready/);
 		assert.doesNotMatch(rendered.join("\n"), /setup-access-secret|setup-secret-value/);
 	});
 });
@@ -1231,6 +1231,50 @@ test("first-time S3 setup asks only for the existing bucket and derives work def
 		assert.equal(target?.prefix, "pi-sync");
 		assert.equal(target?.namespace, "work");
 		assert.deepEqual(inputTitles, ["S3-compatible endpoint", "Storage region", "Existing bucket"]);
+	});
+});
+
+test("first-time S3 setup can store masked credentials entirely through TUI", async () => {
+	await withTempSettings(async () => {
+		const mock = createMockPi();
+		sync(mock.pi);
+		const selections = [
+			"Set up sync",
+			"Other S3-compatible storage",
+			"Personal / Home",
+			"Use existing bucket with suggested path (recommended)",
+			"Store credentials privately",
+			"Minimal settings",
+			"Keep automatic sync off",
+			"Keep sessions off (recommended)",
+			"Save setup",
+			undefined,
+		];
+		const inputs = ["https://s3.example.com", "us-east-1", "personal-pi", "access-key-id"];
+		const rendered: string[] = [];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async (title: string) => {
+				rendered.push(title);
+				return selections.shift();
+			},
+			input: async () => inputs.shift(),
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 48);
+				rendered.push(harness.handleInput("secret-access-key").join("\n"));
+				harness.handleInput("tui.input.submit");
+				return harness.result;
+			},
+		});
+
+		await mock.commands.get("sync")?.handler("", ctx);
+
+		const saved = await readLocalConfigObject();
+		const profile = (saved?.profiles as Record<string, Record<string, unknown>> | undefined)?.s3;
+		assert.equal(profile?.accessKeyId, "access-key-id");
+		assert.equal(profile?.secretAccessKey, "secret-access-key");
+		assert.doesNotMatch(rendered.join("\n"), /secret-access-key/);
 	});
 });
 
@@ -1308,8 +1352,8 @@ test("manage flow recommends the current profile bucket and derives a separate n
 		sync(mock.pi);
 		const selections = [
 			"More…",
-			"Manage targets & storage",
-			"Add sync target",
+			"Manage destinations",
+			"Add destination",
 			"r2",
 			"Same bucket as “home” (recommended)",
 			"Recommended Pi settings",

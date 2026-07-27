@@ -1,7 +1,7 @@
 import { agentDir } from "./config.js";
 import type { RemoteHead } from "./sync-backend.js";
 import { fileHashMap } from "./sync-state.js";
-import type { Snapshot, SyncConfig } from "./types.js";
+import type { CommonSyncConfig, Snapshot } from "./types.js";
 
 export function formatDiff(local: Snapshot, remote: Snapshot) {
 	const localMap = fileHashMap(local);
@@ -36,7 +36,7 @@ export function formatSnapshotOnlyDiff(title: string, snapshot: Snapshot) {
 }
 
 export function formatPushSummary(
-	config: SyncConfig,
+	config: CommonSyncConfig,
 	destination: string,
 	upload: Snapshot,
 	head: RemoteHead | undefined,
@@ -66,7 +66,7 @@ export function formatApplyPreview(local: Snapshot, remote: Snapshot) {
 }
 
 export function formatPullSummary(
-	config: SyncConfig,
+	config: CommonSyncConfig,
 	destination: string,
 	local: Snapshot,
 	remote: Snapshot,
@@ -84,7 +84,7 @@ export function formatPullSummary(
 }
 
 export function formatRollbackSummary(
-	config: SyncConfig,
+	config: CommonSyncConfig,
 	destination: string,
 	local: Snapshot,
 	remote: Snapshot,

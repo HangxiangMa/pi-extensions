@@ -54,7 +54,13 @@ import {
 	snapshotsMatch,
 	syncPolicyChanged,
 } from "./sync-state.js";
-import type { CommandOptions, Snapshot, SnapshotOptions, SyncConfig, SyncState } from "./types.js";
+import type {
+	AnySyncConfig,
+	CommandOptions,
+	Snapshot,
+	SnapshotOptions,
+	SyncState,
+} from "./types.js";
 
 const STATUS_KEY = "sync";
 const VERSION = 1;
@@ -90,13 +96,13 @@ export class RollbackPublicationError extends Error {
 }
 
 interface PushInput {
-	config: SyncConfig;
+	config: AnySyncConfig;
 	state: SyncState;
 	local: Snapshot;
 	backend?: SyncBackend;
 }
 
-function backendFor(config: SyncConfig, factory: SyncBackendFactory) {
+function backendFor(config: AnySyncConfig, factory: SyncBackendFactory) {
 	return factory(config);
 }
 
@@ -201,9 +207,9 @@ export async function doctor(
 		messages.push(
 			`config: ok (target ${config.target ?? "default"}; ${safeTerminalText(backend.destination)})`,
 		);
-		messages.push(`publication safety: ${backend.capability}`);
 		const diagnostics = await backend.diagnose(options.signal);
 		throwIfAborted(options.signal);
+		messages.push(`publication safety: ${backend.capability}`);
 		for (const diagnostic of diagnostics) {
 			messages.push(diagnostic.message);
 			if (diagnostic.level !== "info") level = "warning";
@@ -742,7 +748,7 @@ function protectedSessionPaths(ctx: ExtensionCommandContext | ExtensionContext) 
 
 function snapshotOptionsForContext(
 	ctx: ExtensionCommandContext | ExtensionContext,
-	config: SyncConfig,
+	config: AnySyncConfig,
 ): SnapshotOptions {
 	return {
 		syncFiles: config.syncFiles,
@@ -782,7 +788,7 @@ async function maybeReload(ctx: ExtensionCommandContext | ExtensionContext, sign
 
 async function readRemoteSnapshotForUpload(
 	backend: SyncBackend,
-	config: SyncConfig,
+	config: AnySyncConfig,
 	head: RemoteHead | undefined,
 	state: SyncState,
 	signal?: AbortSignal,
@@ -800,7 +806,7 @@ async function readRemoteSnapshotForUpload(
 
 async function snapshotForUpload(
 	backend: SyncBackend,
-	config: SyncConfig,
+	config: AnySyncConfig,
 	local: Snapshot,
 	head: RemoteHead | undefined,
 	remote?: Snapshot,
@@ -820,7 +826,11 @@ async function snapshotForUpload(
 	return mergeRemotePreservedFiles(local, snapshot, config);
 }
 
-async function readRemoteSnapshot(backend: SyncBackend, config: SyncConfig, signal?: AbortSignal) {
+async function readRemoteSnapshot(
+	backend: SyncBackend,
+	config: AnySyncConfig,
+	signal?: AbortSignal,
+) {
 	const head = await backend.readHead(signal);
 	if (!head) return { head: undefined, snapshot: undefined };
 	const snapshot = await backend.readSnapshot(head.snapshotRef, signal);
@@ -835,7 +845,7 @@ async function readRemoteSnapshot(backend: SyncBackend, config: SyncConfig, sign
 async function confirmPush(
 	ctx: ExtensionCommandContext | ExtensionContext,
 	options: CommandOptions,
-	config: SyncConfig,
+	config: AnySyncConfig,
 	backend: SyncBackend,
 	local: Snapshot,
 	upload: Snapshot,
