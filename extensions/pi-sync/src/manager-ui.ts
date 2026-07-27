@@ -8,7 +8,6 @@ import {
 	loadConfig,
 	loadPartialConfig,
 	loadTargetSwitchAction,
-	localConfigPath,
 	normalizeSyncFiles,
 	readLocalConfigObject,
 	readStateForConfig,
@@ -23,25 +22,24 @@ import {
 	safeTerminalText,
 	storageDescription,
 } from "./manager-helpers.js";
+import { chooseS3Credentials } from "./s3-credentials-ui.js";
 import {
-	addStorageProfile,
 	addSyncTarget,
 	migrateLegacySettings,
-	removeStorageProfile,
 	removeSyncTarget,
 	saveNewV2Settings,
-	updateStorageProfile,
 	updateSyncTarget,
 } from "./settings-management.js";
 import { showSyncSettings } from "./settings-ui.js";
+import { showAddStorageConnection, showStorageConnections } from "./storage-connections-ui.js";
 import { DEFAULT_SYNC_FILES } from "./sync-policy.js";
 import { type TargetPullOutcome, useSyncTarget } from "./target-switch.js";
 import type { AnySyncConfig } from "./types.js";
 import {
-	showAddWebDavStorageProfile,
+	repairableWebDavDestinationName,
 	showAddWebDavTarget,
-	showEditWebDavStorageProfile,
 	showEditWebDavTarget,
+	showRepairableWebDavDestination,
 	showWebDavSetup,
 } from "./webdav-ui.js";
 
@@ -54,17 +52,11 @@ export const MAIN_MENU_ACTIONS = [
 	"Settings",
 	"More…",
 ] as const;
-
-const MORE_MENU_ACTIONS = [
-	"Manage targets & storage",
-	"History & recovery",
-	"Help",
-	"Back",
-] as const;
+const MORE_MENU_ACTIONS = ["Manage destinations", "History & recovery", "Help", "Back"] as const;
 const BACK = "Back";
 
 type MainMenuAction = (typeof MAIN_MENU_ACTIONS)[number];
-type ContextualMenuAction = "Manage targets & storage" | "History & recovery" | "Help";
+type ContextualMenuAction = "Manage destinations" | "History & recovery" | "Help";
 type RunRoute = (
 	route: string,
 	signal?: AbortSignal,
@@ -85,7 +77,12 @@ export async function showSyncManager(
 		const selected = await ctx.ui.select(state.title, state.actions);
 		if (!selected) return;
 		switch (
-			selected as MainMenuAction | ContextualMenuAction | "Set up sync" | "Use existing settings"
+			selected as
+				| MainMenuAction
+				| ContextualMenuAction
+				| "Set up sync"
+				| "Use existing settings"
+				| "Repair WebDAV destination"
 		) {
 			case "Sync now (recommended)":
 				await runCancellableOperation(ctx, "Checking current target…", "sync", runRoute, true);
@@ -127,8 +124,11 @@ export async function showSyncManager(
 			case "More…":
 				if ((await showMoreMenu(ctx, runRoute)) === "exit") return;
 				break;
-			case "Manage targets & storage":
+			case "Manage destinations":
 				await showManageMenu(ctx, runRoute);
+				break;
+			case "Repair WebDAV destination":
+				await showRepairableWebDavDestination(ctx);
 				break;
 			case "History & recovery":
 				await showRecoveryMenu(ctx, runRoute);
@@ -147,7 +147,7 @@ export async function showSyncManager(
 async function showMoreMenu(ctx: ExtensionCommandContext, runRoute: RunRoute) {
 	const selected = await ctx.ui.select("More options", [...MORE_MENU_ACTIONS]);
 	if (!selected || selected === BACK) return;
-	if (selected === "Manage targets & storage") await showManageMenu(ctx, runRoute);
+	if (selected === "Manage destinations") await showManageMenu(ctx, runRoute);
 	else if (selected === "History & recovery") await showRecoveryMenu(ctx, runRoute);
 	else {
 		await runRoute("help");
@@ -215,6 +215,7 @@ async function describeManagerState(): Promise<{ title: string; actions: string[
 	try {
 		raw = await readLocalConfigObject();
 	} catch (error) {
+		const repairableWebDav = await repairableWebDavDestinationName().catch(() => undefined);
 		return {
 			title: [
 				"Pi Sync",
@@ -225,7 +226,7 @@ async function describeManagerState(): Promise<{ title: string; actions: string[
 				"",
 				"Repair the JSON file, then reopen /sync.",
 			].join("\n"),
-			actions: ["Help"],
+			actions: repairableWebDav ? ["Repair WebDAV destination", "Help"] : ["Help"],
 		};
 	}
 	if (!raw) {
@@ -245,7 +246,7 @@ async function describeManagerState(): Promise<{ title: string; actions: string[
 				"",
 				"What do you want to do?",
 			].join("\n"),
-			actions: ["Manage targets & storage", "Help"],
+			actions: ["Manage destinations", "Help"],
 		};
 	}
 	try {
@@ -326,7 +327,7 @@ async function describeManagerState(): Promise<{ title: string; actions: string[
 			].join("\n"),
 			actions: [
 				...(targets && Object.keys(targets).length > 1 ? ["Switch target"] : []),
-				"Manage targets & storage",
+				"Manage destinations",
 				"Help",
 			],
 		};
@@ -362,11 +363,8 @@ export async function showSetupWizard(ctx: ExtensionCommandContext) {
 	const location = await chooseInitialRemoteLocation(ctx, preset, targetName);
 	if (!location) return false;
 	const { profileName, bucket, prefix, namespace } = location;
-	const credentialChoice = await ctx.ui.select(
-		"Credentials\n\nSecret values are never shown in pi-sync screens.",
-		["Use environment credentials", "Create private settings template", "Cancel"],
-	);
-	if (!credentialChoice || credentialChoice === "Cancel") return false;
+	const credentials = await chooseS3Credentials(ctx);
+	if (!credentials) return false;
 	const contentChoice = await ctx.ui.select("Choose an initial sync preset", [
 		"Recommended Pi settings",
 		"Minimal settings",
@@ -397,16 +395,6 @@ export async function showSetupWizard(ctx: ExtensionCommandContext) {
 		return false;
 	}
 	const autoSync = automaticChoice === "Enable automatic sync";
-	const hasEnvironmentCredentials = Boolean(
-		(process.env.PI_SYNC_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID) &&
-			(process.env.PI_SYNC_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY),
-	);
-	const credentialSummary =
-		credentialChoice === "Use environment credentials"
-			? hasEnvironmentCredentials
-				? "Environment credentials detected"
-				: "Environment credentials are currently missing"
-			: `Complete accessKeyId and secretAccessKey in ${localConfigPath()}`;
 	const choice = await ctx.ui.select(
 		[
 			"Review setup",
@@ -419,7 +407,7 @@ export async function showSetupWizard(ctx: ExtensionCommandContext) {
 			"Bucket must already exist. pi-sync will not create it.",
 			`Synced content: ${syncFiles.length} built-in groups · Sessions: ${syncSessions ? "On — privacy warning acknowledged" : "Off"}`,
 			`Auto-sync: ${autoSync ? "On" : "Off"}`,
-			`Credentials: ${safeTerminalText(credentialSummary)}`,
+			`Credentials: ${safeTerminalText(credentials.summary)}`,
 		].join("\n"),
 		["Save setup", "Cancel"],
 	);
@@ -431,6 +419,7 @@ export async function showSetupWizard(ctx: ExtensionCommandContext) {
 			kind: preset === "Cloudflare R2" ? "r2" : "s3-compatible",
 			endpoint,
 			region,
+			...credentials.profileFields,
 		},
 		target: {
 			bucket,
@@ -444,9 +433,9 @@ export async function showSetupWizard(ctx: ExtensionCommandContext) {
 	});
 	await refreshTargetCompletions();
 	ctx.ui.notify(
-		hasEnvironmentCredentials || credentialChoice !== "Use environment credentials"
-			? `Target “${safeTerminalText(targetName)}” is ready. Use Sync now when ready.`
-			: `Saved target “${safeTerminalText(targetName)}”; add credentials before syncing.`,
+		credentials.ready
+			? `Destination “${safeTerminalText(targetName)}” is ready. Use Sync now when ready.`
+			: `Saved destination “${safeTerminalText(targetName)}”; add credentials before syncing.`,
 		"info",
 	);
 	return true;
@@ -550,17 +539,17 @@ async function showTargetSwitcher(ctx: ExtensionCommandContext, runRoute: RunRou
 }
 
 async function showManageMenu(ctx: ExtensionCommandContext, _runRoute: RunRoute) {
-	const selected = await ctx.ui.select("Manage targets & storage", [
-		"Add sync target",
-		"Edit current target",
-		"Manage storage profiles",
-		"Remove sync target",
+	const selected = await ctx.ui.select("Manage destinations", [
+		"Add destination",
+		"Edit current destination",
+		"Saved connections…",
+		"Remove destination",
 		BACK,
 	]);
 	if (!selected || selected === BACK) return;
-	if (selected === "Add sync target") await showAddTarget(ctx);
-	else if (selected === "Edit current target") await showEditCurrentTarget(ctx);
-	else if (selected === "Manage storage profiles") await showStorageProfiles(ctx);
+	if (selected === "Add destination") await showAddTarget(ctx);
+	else if (selected === "Edit current destination") await showEditCurrentTarget(ctx);
+	else if (selected === "Saved connections…") await showStorageConnections(ctx);
 	else await showRemoveTarget(ctx);
 }
 
@@ -590,18 +579,24 @@ async function showAddTarget(ctx: ExtensionCommandContext) {
 		);
 		raw = migration.settings;
 	}
-	const profiles = ownRecord(raw.profiles);
-	if (!profiles || Object.keys(profiles).length === 0) {
-		ctx.ui.notify("Add a storage profile before adding a sync target.", "warning");
-		return;
-	}
-	const name = await requiredInput(ctx, "Name the new sync target", "work");
+	let profiles = ownRecord(raw.profiles) ?? {};
+	const name = await requiredInput(ctx, "Name the new destination", "work");
 	if (!name) return;
-	const profile = await ctx.ui.select("Choose storage for this target", [
+	const createConnection = "Create a new saved connection…";
+	let profile = await ctx.ui.select("Choose a saved connection", [
 		...Object.keys(profiles).sort(),
+		createConnection,
 		"Cancel",
 	]);
 	if (!profile || profile === "Cancel") return;
+	if (profile === createConnection) {
+		const previousNames = new Set(Object.keys(profiles));
+		if (!(await showAddStorageConnection(ctx))) return;
+		raw = (await readLocalConfigObject()) ?? raw;
+		profiles = ownRecord(raw.profiles) ?? {};
+		profile = Object.keys(profiles).find((candidate) => !previousNames.has(candidate));
+		if (!profile) return;
+	}
 	if (ownRecord(profiles[profile])?.kind === "webdav") {
 		if (await showAddWebDavTarget(ctx, name, profile)) await refreshTargetCompletions();
 		return;
@@ -687,104 +682,6 @@ async function showEditCurrentTarget(ctx: ExtensionCommandContext) {
 	if (choice !== "Save target") return;
 	await updateSyncTarget(partial.target, (target) => ({ ...target, bucket, prefix, namespace }));
 	ctx.ui.notify(`Saved target “${safeTerminalText(partial.target)}”.`, "info");
-}
-
-async function showStorageProfiles(ctx: ExtensionCommandContext) {
-	const raw = await readLocalConfigObject();
-	if (raw?.version !== 2) {
-		ctx.ui.notify("Upgrade settings before managing storage profiles.", "info");
-		return;
-	}
-	const profiles = ownRecord(raw.profiles) ?? {};
-	const selected = await ctx.ui.select("Storage profiles", [
-		"Add storage profile",
-		...Object.keys(profiles).sort(),
-		BACK,
-	]);
-	if (!selected || selected === BACK) return;
-	if (selected === "Add storage profile") {
-		await showAddStorageProfile(ctx);
-		return;
-	}
-	const action = await ctx.ui.select(`Storage profile “${safeTerminalText(selected)}”`, [
-		"Edit connection",
-		"Remove storage profile",
-		BACK,
-	]);
-	if (!action || action === BACK) return;
-	if (action === "Remove storage profile") {
-		const confirmed = await ctx.ui.confirm(
-			"Remove storage profile?",
-			`Remove local profile “${safeTerminalText(selected)}”? Remote buckets and snapshots are not deleted.`,
-		);
-		if (!confirmed) return;
-		await removeStorageProfile(selected);
-		ctx.ui.notify(`Removed storage profile “${safeTerminalText(selected)}”.`, "info");
-		return;
-	}
-	const profile = ownRecord(profiles[selected]);
-	if (!profile) return;
-	if (profile.kind === "webdav") {
-		await showEditWebDavStorageProfile(ctx, selected, profile);
-		return;
-	}
-	const endpoint = await requiredInput(
-		ctx,
-		"Endpoint",
-		String(profile.endpoint ?? "https://s3.example.com"),
-	);
-	if (!endpoint) return;
-	const region = await requiredInput(ctx, "Region", String(profile.region ?? "auto"));
-	if (!region) return;
-	const save = await ctx.ui.select(
-		`Review connection\n\nProfile: ${safeTerminalText(selected)}\nEndpoint: ${safeTerminalText(endpoint)}\nRegion: ${safeTerminalText(region)}\nCredentials remain unchanged and are never shown.`,
-		["Save profile", "Cancel"],
-	);
-	if (save !== "Save profile") return;
-	await updateStorageProfile(selected, (current) => ({ ...current, endpoint, region }));
-	ctx.ui.notify(`Saved storage profile “${safeTerminalText(selected)}”.`, "info");
-}
-
-async function showAddStorageProfile(ctx: ExtensionCommandContext) {
-	const preset = await ctx.ui.select("Storage type", [
-		"Cloudflare R2",
-		"Other S3-compatible storage",
-		"WebDAV",
-		"Cancel",
-	]);
-	if (!preset || preset === "Cancel") return;
-	if (preset === "WebDAV") {
-		await showAddWebDavStorageProfile(ctx);
-		return;
-	}
-	const name = await requiredInput(
-		ctx,
-		"Name the storage profile",
-		preset === "Cloudflare R2" ? "r2" : "s3",
-	);
-	if (!name) return;
-	const endpoint = await requiredInput(
-		ctx,
-		"Endpoint",
-		preset === "Cloudflare R2"
-			? "https://<account-id>.r2.cloudflarestorage.com"
-			: "https://s3.example.com",
-	);
-	if (!endpoint) return;
-	const region =
-		preset === "Cloudflare R2" ? "auto" : await requiredInput(ctx, "Region", "us-east-1");
-	if (!region) return;
-	const save = await ctx.ui.select(
-		`Review storage profile\n\nName: ${safeTerminalText(name)}\nType: ${preset}\nEndpoint: ${safeTerminalText(endpoint)}\nRegion: ${safeTerminalText(region)}\nAdd credentials privately in ${safeTerminalText(localConfigPath())} or use environment credentials.`,
-		["Add profile", "Cancel"],
-	);
-	if (save !== "Add profile") return;
-	await addStorageProfile(name, {
-		kind: preset === "Cloudflare R2" ? "r2" : "s3-compatible",
-		endpoint,
-		region,
-	});
-	ctx.ui.notify(`Added storage profile “${safeTerminalText(name)}”.`, "info");
 }
 
 async function showRemoveTarget(ctx: ExtensionCommandContext) {
