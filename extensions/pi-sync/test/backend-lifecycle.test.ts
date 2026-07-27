@@ -15,6 +15,32 @@ test("session shutdown aborts an in-flight backend operation", async () => {
 	await withPendingStatusOperation("session_shutdown");
 });
 
+test("session replacement aborts an in-flight WebDAV backend operation", async () => {
+	await withPendingStatusOperation("session_start", {
+		version: 2,
+		activeTarget: "home",
+		profiles: {
+			dav: {
+				kind: "webdav",
+				url: "https://cloud.example.com/dav",
+				username: "user",
+				password: "pass",
+			},
+		},
+		targets: {
+			home: {
+				profile: "dav",
+				path: "pi-sync",
+				namespace: "home",
+				autoSync: false,
+				syncFiles: ["settings.json"],
+				syncSessions: false,
+				extraFiles: [],
+			},
+		},
+	});
+});
+
 test("session replacement cancels a still-preparing shutdown publication", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(path.join(agentDir, "sessions", "--project--"), { recursive: true });
@@ -119,13 +145,17 @@ test("session shutdown owns an opt-in session publication with a bounded signal"
 	});
 });
 
-async function withPendingStatusOperation(event: "session_start" | "session_shutdown") {
+async function withPendingStatusOperation(
+	event: "session_start" | "session_shutdown",
+	settings: Record<string, unknown> = {
+		...requiredConfig(),
+		autoSync: false,
+		syncFiles: ["settings.json"],
+	},
+) {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
-		writeFileSync(
-			localConfigPath(),
-			JSON.stringify({ ...requiredConfig(), autoSync: false, syncFiles: ["settings.json"] }),
-		);
+		writeFileSync(localConfigPath(), JSON.stringify(settings));
 		let markStarted: (() => void) | undefined;
 		const started = new Promise<void>((resolve) => {
 			markStarted = resolve;

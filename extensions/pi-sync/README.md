@@ -1,15 +1,16 @@
-# ☁️ pi-sync — R2/S3 Pi Settings Sync
+# ☁️ pi-sync — WebDAV/R2/S3 Pi Settings Sync
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-sync)](https://www.npmjs.com/package/@narumitw/pi-sync) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-sync` syncs selected Pi configuration through Cloudflare R2 or other S3-compatible object storage. Named sync targets such as `home` and `work` can reuse storage profiles such as `r2` and `s3`.
+`@narumitw/pi-sync` syncs selected Pi configuration through WebDAV, Cloudflare R2, or other S3-compatible storage. Named sync targets such as `home` and `work` can reuse storage profiles such as `webdav`, `r2`, and `s3`.
 
-The extension uses immutable snapshot bundles, a `latest.json` publication pointer, local locking, secret scanning, pre-apply backups, and recoverable local apply transactions. Remote persistence is isolated behind a backend-neutral contract; normalized runtime config pairs a discriminated backend profile with its matching destination before factory selection, while the persisted settings shape remains compatible. S3/R2 remains the only production backend in this release. Conversation/session syncing remains opt-in because session JSONL can contain prompts, tool output, paths, screenshots, and secrets.
+The extension uses immutable snapshot bundles, a `latest.json` publication pointer, local locking, secret scanning, pre-apply backups, and recoverable local apply transactions. Remote persistence is isolated behind a backend-neutral contract; normalized runtime config pairs a discriminated backend profile with its matching destination before factory selection, while the persisted settings shape remains compatible. WebDAV and S3/R2 are production backends in this release. Conversation/session syncing remains opt-in because session JSONL can contain prompts, tool output, paths, screenshots, and secrets.
 
 ## ✨ Features
 
 - Opens a goal-oriented `/sync` manager showing the current target, storage, auto-sync, session scope, and relevant next actions.
-- Supports multiple named **sync targets** and reusable R2/S3 **storage profiles**.
+- Supports multiple named **sync targets** and reusable WebDAV/R2/S3 **storage profiles**.
+- Uses verified `ETag`, `If-Match`, and `If-None-Match` preconditions for atomic WebDAV publication and fails closed when a server ignores them.
 - Asks to review a pull after switching targets by default, with settings to start that review automatically or switch only.
 - Previews concrete local or remote file changes before push, pull, force resolution, or rollback.
 - Uses transactional synced-content drafts with explicit Save, Discard, and Continue editing choices.
@@ -51,7 +52,7 @@ Run the manager:
 
 When pi-sync is not configured, choose **Set up sync**. The TUI guides you through:
 
-1. Cloudflare R2 or another S3-compatible service
+1. WebDAV, Cloudflare R2, or another S3-compatible service
 2. `Personal / Home`, `Work`, or a custom target purpose
 3. an endpoint and, for S3, the existing bucket name
 4. a recommended remote location or advanced customization
@@ -72,7 +73,37 @@ For a first Cloudflare R2 target, the recommended location requires no raw path 
 
 The R2 bucket must already exist; pi-sync never creates buckets. Generic S3 setup asks for one existing, potentially globally unique bucket and derives storage profile `s3`, prefix `pi-sync`, and namespace `home` or `work`. **Customize remote location** retains direct control over profile name, bucket, prefix, and namespace.
 
-Pi's extension input API does not provide masked secret entry, so pi-sync never asks for a secret in an unmasked dialog. Use existing environment credentials or add credentials manually to the private settings file. Secret values are never shown in menus, status, warnings, or errors.
+Pi's extension input API does not provide masked secret entry, so pi-sync never asks for a secret in an unmasked dialog. Use existing S3 environment credentials or add credentials manually to the private settings file. WebDAV credentials are settings-file only; there are no WebDAV environment-variable mirrors. Secret values are never shown in menus, status, warnings, or errors.
+
+### WebDAV setup
+
+Generic WebDAV profiles use the authenticated collection URL, a username, and a password. Targets add a relative `path` and `namespace`:
+
+```json
+{
+  "profiles": {
+    "webdav": {
+      "kind": "webdav",
+      "url": "https://cloud.example.com/remote.php/dav/files/user",
+      "username": "user",
+      "password": "<app-password>"
+    }
+  },
+  "targets": {
+    "home": {
+      "profile": "webdav",
+      "path": "pi-sync",
+      "namespace": "home"
+    }
+  }
+}
+```
+
+- **Nextcloud/ownCloud:** use the user DAV collection, commonly `https://HOST/remote.php/dav/files/USERNAME`, and prefer an app password.
+- **Synology:** use the HTTPS WebDAV Server endpoint and user collection exposed by your DSM configuration. Confirm its exact path and certificate in a browser or WebDAV client first.
+- **Generic servers:** Basic authentication is supported over HTTPS. Plain HTTP is rejected except on loopback for local tests. URL-embedded credentials, query strings, fragments, and cross-origin authenticated redirects are rejected.
+
+Run `/sync doctor` after setup. It creates an unpredictable temporary probe, verifies collection listing/read/write/cleanup plus strong ETags and stale conditional writes, and removes the probe. A server without working strong `If-Match` and `If-None-Match` remains readable but publication is rejected before `latest.json` changes; pi-sync never silently degrades WebDAV automatic sync to an unsafe overwrite.
 
 A configured manager shows:
 
@@ -165,8 +196,8 @@ A version 2 example:
 
 ### Terminology
 
-- A **storage profile** owns connection/authentication fields: `kind`, `endpoint`, `region`, `accessKeyId`, `secretAccessKey`, and optional `sessionToken`.
-- A **sync target** references a storage profile and owns `bucket`, `prefix`, `namespace`, `autoSync`, and its synced-content policy.
+- An S3/R2 **storage profile** owns `kind`, `endpoint`, `region`, `accessKeyId`, `secretAccessKey`, and optional `sessionToken`; a WebDAV profile owns `kind: "webdav"`, `url`, `username`, and `password`.
+- An S3/R2 **sync target** owns `bucket`, `prefix`, and `namespace`; a WebDAV target owns `path` and `namespace`. Every target also owns `autoSync` and its synced-content policy.
 - `activeTarget` is used by bare commands and automatic sync.
 - `targetSwitchAction` controls what happens after a target switch: `ask` (default), `pull`, or `switch-only`.
 - `namespace` is the old flat `profile` concept. The remote layout and snapshot wire field remain named `profiles`/`profile` for compatibility.
@@ -292,6 +323,8 @@ Snapshot upload is staging; `latest.json` is the active publication boundary. pi
 
 Before pull/rollback, pi-sync writes a backup under `.pisync/backups/`. It then preflights all paths, stages a private transaction journal, applies changes, and restores every affected path if a later mutation fails. An interrupted journal is recovered before the next session/snapshot apply. Filesystem-wide replacement cannot be one OS primitive, so the guarantee is a complete previous or complete new accepted state after rollback/recovery—not an unrecoverable partial accepted state.
 
+WebDAV is conservatively reported as `conditional-required` until an isolated probe passes, then as `atomic-conditional`: each publication verifies the server's precondition behavior, stages the immutable bundle with `If-None-Match: *`, and changes `latest.json` with `If-Match` or `If-None-Match: *`. Unsupported servers remain read-only and are reported by doctor.
+
 R2/S3 is explicitly reported as `read-check-write-verify`, not atomic compare-and-swap. pi-sync re-reads `latest.json` immediately before publication and verifies afterward, but simultaneous writers can still race. `--force` accepts a reviewed content conflict, re-reads the head, and never disables the backend revision check; it is not an unconditional overwrite. Review status before important forced updates.
 
 ## 🔒 Session syncing
@@ -306,7 +339,7 @@ Sessions can contain prompts, model output, tool results, file paths, images, an
 
 - Credentials stay local; canonical, legacy, temporary, and migration-recovery settings files are always excluded from snapshots.
 - Push refuses common secret patterns in locally managed files.
-- Pull/rollback reject unsafe paths, duplicate paths, checksum mismatches, symlink parents, and file/directory replacement hazards before mutation. Remote JSON responses are limited to 1 MiB, error bodies to 64 KiB, compressed snapshot downloads to 256 MiB, and decompressed snapshot bundles to 512 MiB.
+- Pull/rollback reject unsafe paths, duplicate paths, checksum mismatches, symlink parents, and file/directory replacement hazards before mutation. Remote JSON and WebDAV XML responses are limited to 1 MiB, error bodies to 64 KiB, compressed snapshot downloads to 256 MiB, and decompressed snapshot bundles to 512 MiB.
 - Unmanaged local/remote files remain preserved.
 - A live local lock disables destructive work. Stale/unreadable lock recovery retains process-liveness and guard checks.
 - Force operations remain explicit direct/conflict-recovery actions and retain exact confirmations.
@@ -335,6 +368,9 @@ extensions/pi-sync/
 │   ├── backend-factory.ts       # Backend selection from normalized settings
 │   ├── s3-backend.ts            # S3/R2 persistence, publication, history, and diagnostics
 │   ├── s3-client.ts             # Bounded, signed S3 transport
+│   ├── webdav-backend.ts        # Conditional WebDAV publication and diagnostics
+│   ├── webdav-client.ts         # Bounded authenticated WebDAV transport
+│   ├── webdav-ui.ts             # WebDAV setup and profile/target management
 │   ├── snapshot-codec.ts        # Shared immutable snapshot bundle codec
 │   ├── manager-ui.ts            # Goal-oriented menus and setup/management flows
 │   ├── file-selection.ts        # Transactional synced-content editor
@@ -353,7 +389,7 @@ extensions/pi-sync/
 
 ## 🔎 Keywords
 
-Pi extension, Pi coding agent, settings sync, Cloudflare R2, S3-compatible storage, multi-profile sync, sync targets, snapshot sync, dotfiles sync.
+Pi extension, Pi coding agent, settings sync, WebDAV, Nextcloud, ownCloud, Synology, Cloudflare R2, S3-compatible storage, multi-profile sync, sync targets, snapshot sync, dotfiles sync.
 
 ## 📄 License
 

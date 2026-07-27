@@ -2,6 +2,7 @@ import type { Snapshot } from "./types.js";
 
 export type PublicationCapability =
 	| "read-check-write-verify"
+	| "conditional-required"
 	| "atomic-conditional"
 	| "lease-protected";
 

@@ -15,6 +15,15 @@ import {
 } from "./config.js";
 import { inspectLock, isStaleLock } from "./lock.js";
 import {
+	errorMessage,
+	formatRemotePath,
+	ownRecord,
+	requiredExistingBucket,
+	requiredInput,
+	safeTerminalText,
+	storageDescription,
+} from "./manager-helpers.js";
+import {
 	addStorageProfile,
 	addSyncTarget,
 	migrateLegacySettings,
@@ -27,7 +36,14 @@ import {
 import { showSyncSettings } from "./settings-ui.js";
 import { DEFAULT_SYNC_FILES } from "./sync-policy.js";
 import { type TargetPullOutcome, useSyncTarget } from "./target-switch.js";
-import type { SyncConfig } from "./types.js";
+import type { AnySyncConfig } from "./types.js";
+import {
+	showAddWebDavStorageProfile,
+	showAddWebDavTarget,
+	showEditWebDavStorageProfile,
+	showEditWebDavTarget,
+	showWebDavSetup,
+} from "./webdav-ui.js";
 
 export const MAIN_MENU_ACTIONS = [
 	"Sync now (recommended)",
@@ -235,11 +251,14 @@ async function describeManagerState(): Promise<{ title: string; actions: string[
 	try {
 		const config = await loadConfig();
 		const target = config.target ?? "default";
-		const storage = storageDescription(
-			config.backend.profile.kind,
-			config.backend.profile.endpoint,
-			config.backend.destination.bucket,
-		);
+		const storage =
+			config.backend.type === "webdav"
+				? `WebDAV · ${safeTerminalText(config.backend.destination.path)}`
+				: storageDescription(
+						config.backend.profile.kind,
+						config.backend.profile.endpoint,
+						config.backend.destination.bucket,
+					);
 		const warnings = deprecatedPiSyncEnvironmentWarnings();
 		const lock = await inspectLock();
 		const liveLock = lock.status === "valid" && !isStaleLock(lock.lock);
@@ -319,11 +338,13 @@ export async function showSetupWizard(ctx: ExtensionCommandContext) {
 	const preset = await ctx.ui.select("Set up sync\n\nWhere will Pi settings be stored?", [
 		"Cloudflare R2",
 		"Other S3-compatible storage",
+		"WebDAV",
 		"Cancel",
 	]);
 	if (!preset || preset === "Cancel") return false;
 	const targetName = await chooseInitialTargetName(ctx);
 	if (!targetName) return false;
+	if (preset === "WebDAV") return showWebDavSetup(ctx, targetName);
 	const endpoint = await requiredInput(
 		ctx,
 		preset === "Cloudflare R2" ? "Cloudflare R2 endpoint" : "S3-compatible endpoint",
@@ -453,7 +474,11 @@ async function showTargetSwitcher(ctx: ExtensionCommandContext, runRoute: RunRou
 		const label = [
 			`${safeTerminalText(name)}${name === active ? " (current)" : ""}`,
 			profile
-				? `${safeTerminalText(profileName ?? "unknown")} · ${safeTerminalText(String(target?.bucket ?? "missing bucket"))}`
+				? `${safeTerminalText(profileName ?? "unknown")} · ${safeTerminalText(
+						profile.kind === "webdav"
+							? String(target?.path ?? "pi-sync")
+							: String(target?.bucket ?? "missing bucket"),
+					)}`
 				: `Invalid: missing storage profile ${safeTerminalText(profileName ?? "reference")}`,
 			`${normalizeSyncFiles(target?.syncFiles as string[] | undefined).length} groups · Sessions: ${target?.syncSessions === true ? "On" : "Off"}`,
 		].join(" · ");
@@ -470,7 +495,7 @@ async function showTargetSwitcher(ctx: ExtensionCommandContext, runRoute: RunRou
 		ctx.ui.notify(`Target “${safeTerminalText(name)}” is already current.`, "info");
 		return false;
 	}
-	let config: SyncConfig;
+	let config: AnySyncConfig;
 	try {
 		config = await loadConfig(name);
 	} catch (error) {
@@ -493,11 +518,15 @@ async function showTargetSwitcher(ctx: ExtensionCommandContext, runRoute: RunRou
 			"",
 			`From: ${safeTerminalText(active ?? "none")}`,
 			`To: ${safeTerminalText(name)}`,
-			`Storage: ${storageDescription(
-				config.backend.profile.kind,
-				config.backend.profile.endpoint,
-				config.backend.destination.bucket,
-			)}`,
+			`Storage: ${
+				config.backend.type === "webdav"
+					? `WebDAV · ${safeTerminalText(config.backend.destination.path)}`
+					: storageDescription(
+							config.backend.profile.kind,
+							config.backend.profile.endpoint,
+							config.backend.destination.bucket,
+						)
+			}`,
 			`Synced content: ${normalizeSyncFiles(config.syncFiles).length} built-in groups · ${config.extraFiles.length} extra files`,
 			`Auto-sync: ${config.autoSync ? "On" : "Off"} · Sessions: ${config.syncSessions ? "On" : "Off"}`,
 			"",
@@ -573,6 +602,10 @@ async function showAddTarget(ctx: ExtensionCommandContext) {
 		"Cancel",
 	]);
 	if (!profile || profile === "Cancel") return;
+	if (ownRecord(profiles[profile])?.kind === "webdav") {
+		if (await showAddWebDavTarget(ctx, name, profile)) await refreshTargetCompletions();
+		return;
+	}
 	const location = await chooseAdditionalRemoteLocation(ctx, raw, profile, name);
 	if (!location) return;
 	const { bucket, prefix, namespace } = location;
@@ -628,6 +661,10 @@ async function showEditCurrentTarget(ctx: ExtensionCommandContext) {
 	const partial = await loadPartialConfig();
 	if (partial.settingsVersion !== 2 || !partial.target) {
 		ctx.ui.notify("Upgrade settings before editing a named target.", "info");
+		return;
+	}
+	if (partial.storageKind === "webdav") {
+		await showEditWebDavTarget(ctx, partial);
 		return;
 	}
 	const bucket = await requiredInput(ctx, "Bucket", partial.bucket ?? "pi-sync");
@@ -687,6 +724,10 @@ async function showStorageProfiles(ctx: ExtensionCommandContext) {
 	}
 	const profile = ownRecord(profiles[selected]);
 	if (!profile) return;
+	if (profile.kind === "webdav") {
+		await showEditWebDavStorageProfile(ctx, selected, profile);
+		return;
+	}
 	const endpoint = await requiredInput(
 		ctx,
 		"Endpoint",
@@ -708,9 +749,14 @@ async function showAddStorageProfile(ctx: ExtensionCommandContext) {
 	const preset = await ctx.ui.select("Storage type", [
 		"Cloudflare R2",
 		"Other S3-compatible storage",
+		"WebDAV",
 		"Cancel",
 	]);
 	if (!preset || preset === "Cancel") return;
+	if (preset === "WebDAV") {
+		await showAddWebDavStorageProfile(ctx);
+		return;
+	}
 	const name = await requiredInput(
 		ctx,
 		"Name the storage profile",
@@ -946,51 +992,4 @@ async function chooseCustomRemoteLocation(
 	if (!prefix) return undefined;
 	const namespace = await requiredInput(ctx, "Remote namespace", targetName);
 	return namespace ? { profileName, bucket, prefix, namespace } : undefined;
-}
-
-function formatRemotePath(prefix: string, namespace: string) {
-	return safeTerminalText(`${prefix}/profiles/${namespace}/`);
-}
-
-async function requiredExistingBucket(ctx: ExtensionCommandContext, example: string) {
-	const value = await ctx.ui.input("Existing bucket", `Example: ${example}`);
-	if (value === undefined) return undefined;
-	const normalized = value.trim();
-	if (!normalized) {
-		ctx.ui.notify("Enter the name of an existing R2/S3 bucket, or cancel setup.", "warning");
-		return undefined;
-	}
-	return normalized;
-}
-
-async function requiredInput(ctx: ExtensionCommandContext, title: string, placeholder: string) {
-	const value = await ctx.ui.input(title, placeholder);
-	if (value === undefined) return undefined;
-	const normalized = value.trim() || placeholder;
-	return normalized.includes("<") || normalized.includes(">") ? undefined : normalized;
-}
-
-function storageDescription(
-	kind: string | undefined,
-	endpoint: string | undefined,
-	bucket: string | undefined,
-) {
-	const label =
-		kind === "r2" || isCloudflareR2Endpoint(endpoint) ? "Cloudflare R2" : "S3-compatible";
-	return `${label} · ${safeTerminalText(bucket ?? "bucket missing")}`;
-}
-
-function ownRecord(value: unknown): Record<string, unknown> | undefined {
-	return value && typeof value === "object" && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: undefined;
-}
-
-function safeTerminalText(value: string) {
-	// biome-ignore lint/suspicious/noControlCharactersInRegex: Escape untrusted terminal controls.
-	return value.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?");
-}
-
-function errorMessage(error: unknown) {
-	return error instanceof Error ? error.message : String(error);
 }
