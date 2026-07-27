@@ -6,12 +6,12 @@ import { join } from "node:path";
 import test from "node:test";
 import {
 	DEFAULT_GOAL_SETTINGS,
-	DEFAULT_GOAL_SETTINGS_DOCUMENT,
-	loadOrCreateGoalSettings,
 	normalizeGoalSettings,
 	readGoalSettings,
 	saveGoalSettings,
 } from "../src/settings.js";
+
+const DEFAULT_GOAL_SETTINGS_DOCUMENT = `${JSON.stringify(DEFAULT_GOAL_SETTINGS, null, 2)}\n`;
 
 test("normalizeGoalSettings applies defaults and accepts bounded continuation limits", () => {
 	assert.equal(DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns, null);
@@ -70,106 +70,22 @@ test("normalizeGoalSettings applies defaults and accepts bounded continuation li
 	}
 });
 
-test("loadOrCreateGoalSettings creates a readable complete default document", async (t) => {
+test("saveGoalSettings creates a complete document only on explicit save", async (t) => {
 	const directory = await mkdtemp(join(tmpdir(), "pi-goal-settings-create-"));
 	t.after(() => rm(directory, { recursive: true, force: true }));
-	const settingsPath = join(directory, "nested", "pi-goal.json");
+	const parent = join(directory, "nested");
+	const settingsPath = join(parent, "pi-goal.json");
 
-	assert.deepEqual(loadOrCreateGoalSettings(settingsPath), {
-		kind: "loaded",
-		settings: DEFAULT_GOAL_SETTINGS,
-	});
-	assert.equal(readFileSync(settingsPath, "utf8"), DEFAULT_GOAL_SETTINGS_DOCUMENT);
+	assert.deepEqual(readGoalSettings(settingsPath), { kind: "missing" });
+	assert.equal(existsSync(parent), false);
+
+	saveGoalSettings(DEFAULT_GOAL_SETTINGS, settingsPath);
+
 	assert.equal(
-		DEFAULT_GOAL_SETTINGS_DOCUMENT,
+		readFileSync(settingsPath, "utf8"),
 		`${JSON.stringify(DEFAULT_GOAL_SETTINGS, null, 2)}\n`,
 	);
-});
-
-test("loadOrCreateGoalSettings never overwrites existing valid or invalid settings", async (t) => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-goal-settings-existing-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
-	const settingsPath = join(directory, "pi-goal.json");
-	const validDocument = '{"toolVisibility":"after-first-goal"}\n';
-	writeFileSync(settingsPath, validDocument);
-
-	assert.deepEqual(loadOrCreateGoalSettings(settingsPath), {
-		kind: "loaded",
-		settings: {
-			...DEFAULT_GOAL_SETTINGS,
-			toolVisibility: "after-first-goal",
-		},
-	});
-	assert.equal(readFileSync(settingsPath, "utf8"), validDocument);
-
-	const invalidDocument = "{invalid";
-	writeFileSync(settingsPath, invalidDocument);
-	assert.equal(loadOrCreateGoalSettings(settingsPath).kind, "invalid");
-	assert.equal(readFileSync(settingsPath, "utf8"), invalidDocument);
-});
-
-test("loadOrCreateGoalSettings reports creation failures and removes temporary files", async (t) => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-goal-settings-failure-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
-
-	for (const [name, overrides] of [
-		[
-			"directory",
-			{
-				mkdirSync() {
-					throw new Error("mkdir failed");
-				},
-			},
-		],
-		[
-			"temporary file",
-			{
-				writeFileSync() {
-					throw new Error("write failed");
-				},
-			},
-		],
-		[
-			"publish",
-			{
-				linkSync() {
-					throw new Error("publish failed");
-				},
-			},
-		],
-	] as const) {
-		const parent = join(directory, name);
-		const settingsPath = join(parent, "pi-goal.json");
-		const result = loadOrCreateGoalSettings(settingsPath, overrides);
-		assert.equal(result.kind, "create-failed");
-		assert.match(result.kind === "create-failed" ? result.reason : "", /failed/);
-		assert.equal(existsSync(settingsPath), false);
-		assert.deepEqual(existsSync(parent) ? readdirSync(parent) : [], []);
-	}
-});
-
-test("loadOrCreateGoalSettings adopts a concurrent winner without overwriting it", async (t) => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-goal-settings-race-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
-	const settingsPath = join(directory, "pi-goal.json");
-	const winnerDocument = '{"experimental":{"goals":true}}\n';
-
-	const result = loadOrCreateGoalSettings(settingsPath, {
-		linkSync(_temporaryPath, targetPath) {
-			writeFileSync(targetPath, winnerDocument);
-			throw Object.assign(new Error("already exists"), { code: "EEXIST" });
-		},
-	});
-
-	assert.deepEqual(result, {
-		kind: "loaded",
-		settings: {
-			...DEFAULT_GOAL_SETTINGS,
-			experimental: { goals: true },
-		},
-	});
-	assert.equal(readFileSync(settingsPath, "utf8"), winnerDocument);
-	assert.deepEqual(readdirSync(directory), ["pi-goal.json"]);
+	assert.deepEqual(readdirSync(parent), ["pi-goal.json"]);
 });
 
 test("saveGoalSettings atomically preserves unknown top-level and nested fields", async (t) => {

@@ -54,8 +54,8 @@ pi -e ./extensions/pi-goal
 
 ## ⚙️ Configuration
 
-On the first session start, pi-goal automatically creates `~/.pi/agent/pi-goal.json`
-with the complete current defaults:
+Settings are optional. When `~/.pi/agent/pi-goal.json` is absent, pi-goal uses these
+built-in defaults without creating the file:
 
 ```json
 {
@@ -70,7 +70,7 @@ with the complete current defaults:
 }
 ```
 
-Use `/goal` → **Settings…** in the TUI to edit these values interactively, or edit the generated file directly. The screen keeps all four controls on one level in task order:
+Use `/goal` → **Settings…** in the TUI to create or update the file interactively, or create and edit it directly. The screen keeps all four controls on one level in task order:
 
 - **Automatic work** shows **Unlimited** or an exact **≤_N_** response cap. Choose **Unlimited** directly, or choose **Set a maximum…** and enter a safe whole number greater than zero.
 - **No-progress guard** shows **_N_ runs** or **Off**. Choose the default threshold, **Off**, or **Set threshold…** and enter a safe whole number greater than zero.
@@ -91,10 +91,9 @@ Custom number inputs reject zero, negative numbers, decimals, text, and unsafe i
 - `automaticTurns` accepts a positive safe integer or `null` and defaults to `null` (unlimited). When configured, it counts every completed normal `turn_end` owned by automatically started Goal work, including model responses inside tool loops and matching Pi-owned retries. The user-triggered kickoff, resume, edit, and ordinary user runs are not charged. At the limit, the goal becomes `paused` with cause `continuation_limit`, pending continuation/recovery is cancelled, and the current operation is aborted. Pi may invoke a provider adapter once more with an already-aborted signal to produce its synthetic terminal event; that event is not counted and cannot resume Goal work. Set this field to `null` to remove the authoritative hard bound.
 - `noProgressTurns` is a positive safe integer and defaults to `3`. At the end of an automatic run, pi-goal compares visible assistant text after Unicode normalization, lowercasing, control-character removal, and whitespace collapse. Thinking and tool blocks are excluded; empty and punctuation-only output are equivalent. Consecutive empty or identical tool-free outputs increment the repeat count. Different non-empty output starts a new run at one, and any attempted tool call resets it. Set this field to `null` to disable only this heuristic.
 
-Settings are reread at Pi startup, session replacement, and `/reload`; direct external file edits are not watched live, while changes made through the Goal menu apply immediately. A missing file is created during any of those session starts, while an existing file is read without being rewritten. Initialization publishes the generated file atomically and never overwrites a file
-created concurrently by another process.
+Settings are reread at Pi startup, session replacement, and `/reload`; direct external file edits are not watched live, while changes made through the Goal menu apply immediately. A missing file remains absent and uses the built-in defaults. The first successful settings change creates the file atomically; later saves preserve unknown fields.
 
-Omitted fields use the defaults above. Invalid or malformed existing settings are never overwritten; they produce a warning and fall back to all defaults. In the TUI, Goal Settings becomes a read-only summary that identifies the invalid file and directs the user to fix it and run `/reload`. If the default file cannot be created, pi-goal warns, continues with the built-in defaults, and retries when a setting is saved or on the next session start. Reload Pi after changing the file. If a live runtime reloads settings, switching `toolVisibility` to `"always"`
+Omitted fields use the defaults above. Invalid or malformed existing settings are never overwritten; they produce a warning and fall back to all defaults. In the TUI, Goal Settings becomes a read-only summary that identifies the invalid file and directs the user to fix it and run `/reload`. Reload Pi after changing the file. If a live runtime reloads settings, switching `toolVisibility` to `"always"`
 restores only the exact tools that pi-goal previously hid, while switching to
 `"after-first-goal"` locks a runtime that has no unfinished goal.
 

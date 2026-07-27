@@ -31,7 +31,7 @@ import {
 	truncateNotification,
 } from "./runtime.js";
 import { hasAssistantToolCall } from "./safety.js";
-import { DEFAULT_GOAL_SETTINGS, loadOrCreateGoalSettings } from "./settings.js";
+import { DEFAULT_GOAL_SETTINGS, readGoalSettings } from "./settings.js";
 import { showGoalSettings } from "./settings-ui.js";
 
 // goal.ts remains the Pi-facing composition root despite its size because tool contracts and
@@ -54,7 +54,6 @@ interface GoalBlockedDetails {
 
 interface GoalOptions {
 	settingsPath?: string;
-	settingsFileSystem?: Parameters<typeof loadOrCreateGoalSettings>[1];
 }
 
 const EXPERIMENTAL_GOALS_WARNING =
@@ -487,21 +486,13 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		runtime.clearTerminalDetails();
 		rpc.bindSession(ctx);
 		const previousToolVisibility = runtime.settings.toolVisibility;
-		const settingsResult = loadOrCreateGoalSettings(
-			options.settingsPath,
-			options.settingsFileSystem,
-		);
+		const settingsResult = readGoalSettings(options.settingsPath);
 		runtime.settings =
 			settingsResult.kind === "loaded" ? settingsResult.settings : DEFAULT_GOAL_SETTINGS;
-		runtime.settingsLoadIssue = settingsResult.kind === "loaded" ? undefined : settingsResult;
+		runtime.settingsLoadIssue = settingsResult.kind === "invalid" ? settingsResult : undefined;
 		if (settingsResult.kind === "invalid") {
 			ctx.ui.notify(
 				`pi-goal settings ignored: ${settingsResult.reason}. Using default settings.`,
-				"warning",
-			);
-		} else if (settingsResult.kind === "create-failed") {
-			ctx.ui.notify(
-				`Could not create pi-goal settings: ${settingsResult.reason}. Using default settings.`,
 				"warning",
 			);
 		}

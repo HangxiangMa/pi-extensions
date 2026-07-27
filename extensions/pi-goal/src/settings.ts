@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -26,25 +26,12 @@ export const DEFAULT_GOAL_SETTINGS: GoalSettings = {
 	continuationLimits: { automaticTurns: null, noProgressTurns: 3 },
 };
 
-export const DEFAULT_GOAL_SETTINGS_DOCUMENT = `${JSON.stringify(DEFAULT_GOAL_SETTINGS, null, 2)}\n`;
-
 export type GoalSettingsLoadResult =
 	| { kind: "missing" }
 	| { kind: "invalid"; reason: string }
 	| { kind: "loaded"; settings: GoalSettings };
 
-export type GoalSettingsInitializationResult =
-	| Exclude<GoalSettingsLoadResult, { kind: "missing" }>
-	| { kind: "create-failed"; reason: string };
-
-export type GoalSettingsLoadIssue = Exclude<GoalSettingsInitializationResult, { kind: "loaded" }>;
-
-interface GoalSettingsInitializationFileSystem {
-	mkdirSync: typeof mkdirSync;
-	writeFileSync: typeof writeFileSync;
-	linkSync: typeof linkSync;
-	rmSync: typeof rmSync;
-}
+export type GoalSettingsLoadIssue = Extract<GoalSettingsLoadResult, { kind: "invalid" }>;
 
 interface GoalSettingsSaveFileSystem {
 	mkdirSync: typeof mkdirSync;
@@ -116,51 +103,6 @@ function normalizeContinuationLimit(
 	if (value === undefined) return fallback;
 	if (value === null) return null;
 	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
-export function loadOrCreateGoalSettings(
-	settingsPath = join(getAgentDir(), GOAL_SETTINGS_FILE),
-	overrides: Partial<GoalSettingsInitializationFileSystem> = {},
-): GoalSettingsInitializationResult {
-	const loaded = readGoalSettings(settingsPath);
-	if (loaded.kind !== "missing") return loaded;
-
-	const fs = { mkdirSync, writeFileSync, linkSync, rmSync, ...overrides };
-	const temporaryPath = join(
-		dirname(settingsPath),
-		`.${basename(settingsPath)}.${randomUUID()}.tmp`,
-	);
-	try {
-		fs.mkdirSync(dirname(settingsPath), { recursive: true });
-		fs.writeFileSync(temporaryPath, DEFAULT_GOAL_SETTINGS_DOCUMENT, {
-			encoding: "utf8",
-			flag: "wx",
-		});
-		try {
-			fs.linkSync(temporaryPath, settingsPath);
-		} catch (error) {
-			if (!isAlreadyExistsError(error)) throw error;
-		}
-
-		const published = readGoalSettings(settingsPath);
-		return published.kind === "missing"
-			? {
-					kind: "create-failed",
-					reason: `${settingsPath}: settings file disappeared during initialization`,
-				}
-			: published;
-	} catch (error) {
-		return {
-			kind: "create-failed",
-			reason: `${settingsPath}: ${formatError(error)}`,
-		};
-	} finally {
-		try {
-			fs.rmSync(temporaryPath, { force: true });
-		} catch {
-			// Best-effort cleanup must not replace the initialization result.
-		}
-	}
 }
 
 export function saveGoalSettings(
@@ -248,10 +190,6 @@ function ownRecord(value: unknown): Record<string, unknown> | undefined {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 	return error instanceof Error && "code" in error;
-}
-
-function isAlreadyExistsError(error: unknown): boolean {
-	return isNodeError(error) && error.code === "EEXIST";
 }
 
 function formatError(error: unknown) {

@@ -716,41 +716,6 @@ test("invalid settings render read-only defaults and cannot overwrite the file",
 	assert.match(render, /Automatic work.*Unlimited/is);
 });
 
-test("a create-failed fallback clears after a successful settings save", async () => {
-	const state = runtime() as GoalRuntime & {
-		settingsLoadIssue?: { kind: "create-failed"; reason: string };
-	};
-	state.settingsLoadIssue = { kind: "create-failed", reason: "publish failed" };
-	let screens = 0;
-	const context = createMockContext({
-		mode: "tui",
-		hasUI: true,
-		input: async () => "25",
-		custom: async (factory: unknown) => {
-			const selector = createCustomSelectorHarness(factory, 80);
-			if (screens++ === 0) {
-				assert.match(selector.render().join("\n"), /Built-in defaults.*retry/is);
-				selector.handleInput("\r");
-				selector.handleInput("\u001b[B");
-				selector.handleInput("\r");
-			} else {
-				assert.doesNotMatch(selector.render().join("\n"), /Built-in defaults/i);
-				selector.handleInput("\u001b");
-			}
-			await new Promise((resolve) => setImmediate(resolve));
-			return selector.result;
-		},
-	});
-
-	await showGoalSettings(state, context.ctx, {
-		settingsPath: "/tmp/pi-goal.json",
-		save() {},
-	});
-
-	assert.equal(state.settingsLoadIssue, undefined);
-	assert.equal(state.settings.continuationLimits.automaticTurns, 25);
-});
-
 test("a failed safety-setting save keeps the previous state and gives actionable feedback", async () => {
 	const state = runtime();
 	let screens = 0;
