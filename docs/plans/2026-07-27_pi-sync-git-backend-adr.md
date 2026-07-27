@@ -12,22 +12,25 @@ pi-sync already separates immutable snapshot creation and safe local apply from 
 
 ### Repository representation
 
-Each publication is one commit on one pi-sync-owned branch. Its tree contains exactly two regular files below the target directory and namespace:
+Each publication is one commit on one pi-sync-owned branch. Its target subtree contains one strict manifest plus regular Git blobs at stable logical paths:
 
 ```text
 <directory>/profiles/<namespace>/
 ├── manifest.json
-└── snapshot.json.gz
+└── files/
+    ├── settings.json
+    ├── keybindings.json
+    └── sessions/…
 ```
 
-The gzip file uses the existing snapshot codec. `manifest.json` records format version, snapshot id, encoded bundle SHA-256, creation time, machine, and session inclusion. A readable Pi file tree was rejected because it would duplicate snapshot validation, policy, unmanaged-file, and session handling and would create a second wire representation.
+`manifest.json` is the authoritative Git wire format. It records snapshot metadata and an ordered list of `{ path, sha256, size }` entries. Each declared `files/<path>` entry is a regular `100644` blob containing the exact decoded snapshot bytes. Reads require exact tree membership and validate mode, size, SHA-256, metadata, path safety, uniqueness, and file/directory prefix consistency before reconstructing the existing in-memory snapshot. Stable paths let Git reuse identical blobs and delta-compress changed content; gzip is not used by this backend and was never an encryption boundary. S3/R2/WebDAV continue using the existing snapshot codec unchanged.
 
 Contract mapping:
 
-- `snapshotId` is the snapshot content identity embedded in the validated bundle.
+- `snapshotId` is the snapshot content identity embedded in the validated manifest.
 - `snapshotRef` is the publication commit SHA, so repeated publication of identical content remains independently addressable.
 - `revision` is a backend-scoped opaque encoding of the same owned-ref tip SHA. Only the Git backend decodes or compares it.
-- `listHistory` walks first-parent commits on the owned ref and returns each valid publication in oldest-first order. `readSnapshot` accepts only a full commit SHA returned by this backend and validates both manifest and bundle.
+- `listHistory` walks first-parent commits on the owned ref and returns each valid publication in oldest-first order. `readSnapshot` accepts only a full commit SHA retained by the owned branch and validates the exact manifest/tree/blob representation.
 
 Rollback reads a historical commit, applies current local policy through existing orchestration, regenerates snapshot identity, and creates a new child commit. It never resets or rewrites history.
 
@@ -67,13 +70,13 @@ Each backend identity owns a private bare repository under:
 <agent-dir>/.pisync/git/<identity-hash>/repository.git
 ```
 
-The backend never discovers, opens, or modifies the process cwd's repository, working tree, index, hooks, or config. Cache initialization is idempotent; a partial or malformed bare repository is removed and rebuilt on the next operation. Every Git command supplies `--git-dir` and, for commit construction, a private temporary `GIT_INDEX_FILE`. Cache paths are derived only from the backend identity and remain within `.pisync/git` after resolution.
+The backend never discovers, opens, or modifies the process cwd's repository, working tree, index, hooks, or config. Cache initialization is idempotent; a partial or malformed bare repository is removed and rebuilt on the next operation. Every Git command supplies `--git-dir` and, for commit construction, a private temporary `GIT_INDEX_FILE`. Payloads are decoded into a private temporary directory, hashed in one bounded `hash-object -w --no-filters --stdin-paths` operation, and removed on every completion path; reads use exact tree inspection and one bounded `cat-file --batch` operation. No checkout, attributes, clean/smudge filters, or user working tree participate. Cache paths are derived only from the backend identity and remain within `.pisync/git` after resolution.
 
 A missing cache is initialized. A non-bare, symlinked, malformed, or unusable cache is recreated without modifying settings, local sync state, backups, or remote data. The existing pi-sync operation lock serializes publications; an abort-aware in-process queue per cache serializes bare-repository initialization and uniquely named temporary-ref fetches across concurrent read-only backend instances. Temporary refs are deleted after each fetch, and automatic Git maintenance is disabled so fetched history remains readable without accumulating cross-process ref conflicts.
 
 ### Bootstrap and ownership
 
-The remote repository must already exist, but the owned branch may be absent. Missing-branch publication uses an exact missing-ref lease. An existing non-empty repository is accepted because pi-sync owns only its configured branch. An existing owned branch is accepted only when its tip contains a valid manifest/bundle at the configured path; malformed or unrelated history fails closed with recovery guidance. Other refs are never fetched into or modified by publication except as required by remote negotiation.
+The remote repository must already exist, but the owned branch may be absent. Missing-branch publication uses an exact missing-ref lease. An existing non-empty repository is accepted because pi-sync owns only its configured branch. An existing owned branch is accepted only when its tip contains a valid manifest and declared blob tree at the configured path; malformed or unrelated history fails closed with recovery guidance. Other refs are never fetched into or modified by publication except as required by remote negotiation.
 
 ### Publication and consistency
 
@@ -124,11 +127,14 @@ Doctor checks Git availability and the minimum supported version, SHA-1 cache/re
 
 Session sync remains opt-in. Git history permanently retains prior session content until repository history is deliberately rewritten outside pi-sync; rollback does not erase it. Documentation warns that deleting a local target/cache or pushing a later snapshot does not remove old secrets.
 
-One compressed bundle per publication grows repository history. Users may archive or replace the dedicated repository/ref under their own retention policy; pi-sync does not run automatic history rewriting or garbage collection on remotes. Local cache recovery removes/recreates only the private bare cache and fetches the owned ref again.
+Git reuses identical blobs and can delta-compress changed raw content, but retained commit history still grows cumulatively. GitHub warns for regular-Git files larger than 50 MiB and blocks files larger than 100 MiB; pi-sync rejects a decoded payload above 100 MiB before commit construction and recommends S3/WebDAV for large or high-churn binary/session archives. Users may archive or replace the dedicated repository/ref under their own retention policy; pi-sync does not run automatic history rewriting or garbage collection on remotes. Local cache recovery removes/recreates only the private bare cache and fetches the owned ref again.
+
+The pre-release gzip manifest version is intentionally unsupported because Git support had not shipped when the representation changed. A test branch using that format fails closed with guidance to recreate only the pi-sync-owned test branch.
 
 ## Alternatives rejected
 
-- **Readable file tree:** duplicates policy and validation semantics and increases secret/history surface.
+- **One gzip bundle per commit:** defeats much of Git's blob reuse/delta advantage, retains another compressed binary for every publication, and can exceed provider file limits.
+- **Git LFS or release assets:** adds provider-specific authentication, pointer, availability, and atomic-publication dependencies.
 - **One mutable bundle outside commits:** loses native publication history and exact historical addressing.
 - **Normal push without exact lease:** cannot protect reviewed force resolution or missing-ref creation races.
 - **User working tree:** risks hooks, dirty index/worktree changes, discovery of unrelated repository config, and destructive cleanup.

@@ -4,7 +4,7 @@
 
 `@narumitw/pi-sync` syncs selected Pi configuration through Git, WebDAV, Cloudflare R2, or other S3-compatible storage. Named sync targets such as `home` and `work` can reuse saved connections such as `github`, `webdav`, `r2`, and `s3`.
 
-The extension uses immutable snapshot bundles, local locking, secret scanning, pre-apply backups, and recoverable local apply transactions. S3/WebDAV publish through a managed `latest.json` pointer; Git stores one validated bundle and manifest per commit on a pi-sync-owned branch. Remote persistence is isolated behind a backend-neutral contract, and normalized runtime config pairs each discriminated storage profile with its matching destination. Git, WebDAV, and S3/R2 are production backends in this release. Conversation/session syncing remains opt-in because session JSONL can contain prompts, tool output, paths, screenshots, and secrets.
+The extension uses immutable snapshots, local locking, secret scanning, pre-apply backups, and recoverable local apply transactions. S3/WebDAV publish compressed bundles through a managed `latest.json` pointer; Git stores one strict manifest plus reusable raw Git blobs per commit on a pi-sync-owned branch. Remote persistence is isolated behind a backend-neutral contract, and normalized runtime config pairs each discriminated storage profile with its matching destination. Git, WebDAV, and S3/R2 are production backends in this release. Conversation/session syncing remains opt-in because session JSONL can contain prompts, tool output, paths, screenshots, and secrets.
 
 ## ✨ Features
 
@@ -99,7 +99,7 @@ Git profiles contain only a remote URL; credentials remain in your existing Git 
 }
 ```
 
-The remote repository must already exist; the owned branch may be absent and is created on first push with an exact missing-ref lease. Each effective repository/branch pair belongs to exactly one pi-sync target; use a distinct branch for another namespace or target. Existing non-empty repositories are safe because pi-sync reads and updates only the configured branch. If that branch already exists, its tip must contain a valid pi-sync manifest and bundle.
+The remote repository must already exist; the owned branch may be absent and is created on first push with an exact missing-ref lease. Each effective repository/branch pair belongs to exactly one pi-sync target; use a distinct branch for another namespace or target. Existing non-empty repositories are safe because pi-sync reads and updates only the configured branch. If that branch already exists, its tip must contain a valid pi-sync manifest and its exact declared regular-file tree.
 
 Supported production remotes are HTTPS without embedded credentials, `ssh://` URLs, and conservative scp-like SSH remotes such as `git@github.com:owner/repo.git`. Local paths and `file`, `git`, `ext`, and arbitrary remote-helper transports are rejected. Automatic commands disable repository hooks, editors, pagers, terminal prompts, and askpass interaction. User-configured credential helpers, SSH agents/configuration, and SSH `ProxyCommand` remain trusted external authentication mechanisms; pi-sync does not sandbox or store them.
 
@@ -392,8 +392,13 @@ Git uses one commit per publication on the owned branch:
 └── profiles/
     └── <namespace>/
         ├── manifest.json
-        └── snapshot.json.gz
+        └── files/
+            ├── settings.json
+            ├── keybindings.json
+            └── sessions/…
 ```
+
+The manifest declares each logical path, byte size, and SHA-256. File contents are ordinary `100644` Git blobs, so unchanged or duplicate content is reused and changed content remains eligible for Git pack deltas. gzip is not used for Git and would not provide encryption: anyone who can read the private repository can inspect all retained synchronized content. [GitHub warns above 50 MiB and blocks regular-Git files above 100 MiB](https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-large-files-on-github); pi-sync rejects a decoded Git payload above 100 MiB before creating a commit. Prefer S3/WebDAV for large or high-churn binary/session archives. The earlier PR-only gzip Git format was never released and is intentionally not read; if a disposable test branch contains it, recreate only that pi-sync-owned test branch and its private cache.
 
 Snapshot upload is staging; `latest.json` is the S3/WebDAV active publication boundary, while the Git owned-ref update is its publication boundary. pi-sync records the backend's opaque remote revision separately from the applied snapshot identity, while continuing to read legacy state that has no revision or contains the old `lastRemoteEtag` field. Rollback verifies the selected snapshot against the active head or retained history, mints a new snapshot identity, and publishes a new history entry instead of rewriting the old one. If remote rollback publication fails after local apply, the error identifies that partial outcome and its local backup. A failed history update after publication is reported as “snapshot active, history needs repair” instead of falsely claiming no remote change. A transport failure at the active-head boundary is reported as an unknown publication outcome and directs the user to check status rather than claiming that nothing changed.
 
@@ -417,7 +422,7 @@ Sessions can contain prompts, model output, tool results, file paths, images, an
 
 - Credentials stay local; canonical, legacy, temporary, and migration-recovery settings files are always excluded from snapshots. Git remote URLs with embedded HTTPS credentials are rejected, and rendered Git destinations contain only host, owned branch, directory, and namespace.
 - Push refuses common secret patterns in locally managed files.
-- Pull/rollback reject unsafe paths, duplicate paths, checksum mismatches, symlink parents, and file/directory replacement hazards before mutation. Remote JSON and WebDAV XML responses are limited to 1 MiB, error bodies to 64 KiB, compressed snapshot downloads to 256 MiB, and decompressed snapshot bundles to 512 MiB.
+- Pull/rollback reject unsafe paths, duplicate paths, checksum mismatches, symlink parents, and file/directory replacement hazards before mutation. Git additionally rejects missing/extra/non-regular tree entries, file/directory path collisions, payloads above 100 MiB, and aggregate content above 512 MiB. Remote JSON and WebDAV XML responses are limited to 1 MiB, error bodies to 64 KiB, compressed S3/WebDAV snapshot downloads to 256 MiB, and decompressed bundles to 512 MiB.
 - Unmanaged local/remote files remain preserved.
 - A live local lock disables destructive work. Stale/unreadable lock recovery retains process-liveness and guard checks.
 - Force operations remain explicit direct/conflict-recovery actions and retain exact confirmations.
@@ -450,9 +455,10 @@ extensions/pi-sync/
 │   ├── webdav-client.ts         # Bounded authenticated WebDAV transport
 │   ├── webdav-ui.ts             # WebDAV setup and profile/target management
 │   ├── git-backend.ts           # Lease-protected Git commits, history, cache, and diagnostics
+│   ├── git-storage.ts           # Strict Git manifest, tree, blob, and size validation
 │   ├── git-runner.ts            # Bounded non-interactive Git subprocess lifecycle
 │   ├── git-ui.ts                # Git setup and profile/target management
-│   ├── snapshot-codec.ts        # Shared immutable snapshot bundle codec
+│   ├── snapshot-codec.ts        # S3/WebDAV immutable snapshot bundle codec
 │   ├── manager-ui.ts            # Goal-oriented menus and setup/management flows
 │   ├── file-selection.ts        # Transactional synced-content editor
 │   ├── config-file.ts           # Private settings I/O and legacy filename migration

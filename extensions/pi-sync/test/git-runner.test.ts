@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { runGit } from "../src/git-runner.js";
+import { parseGitBlobBatch, readGitBlobs, runGit } from "../src/git-runner.js";
 
 test("Git runner strips inherited Git control variables and closes stdin", async () => {
 	const previous = process.env.GIT_DIR;
@@ -40,6 +44,45 @@ test("Git runner bounds time and honors caller cancellation", async () => {
 	await assert.rejects(
 		runGit(["-c", "alias.wait=!sleep 10", "wait"], { signal: controller.signal }),
 		(error: unknown) => error instanceof Error && error.name === "AbortError",
+	);
+});
+
+test("Git runner parses bounded binary cat-file batches", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-sync-git-batch-"));
+	const gitDir = path.join(root, "repository.git");
+	try {
+		execFileSync("git", ["init", "--bare", gitDir], { stdio: "ignore" });
+		const first = execFileSync("git", ["--git-dir", gitDir, "hash-object", "-w", "--stdin"], {
+			input: Buffer.from("one\nline\n"),
+			encoding: "utf8",
+		}).trim();
+		const second = execFileSync("git", ["--git-dir", gitDir, "hash-object", "-w", "--stdin"], {
+			input: Buffer.from([0, 1, 2, 10, 255]),
+			encoding: "utf8",
+		}).trim();
+		assert.deepEqual(await readGitBlobs([first, second], { gitDir, maxOutputBytes: 1024 }), [
+			Buffer.from("one\nline\n"),
+			Buffer.from([0, 1, 2, 10, 255]),
+		]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("Git batch parser rejects missing, malformed, truncated, extra, and oversized data", () => {
+	assert.throws(() => parseGitBlobBatch(Buffer.from("deadbeef missing\n"), 1, 1024), /missing/i);
+	assert.throws(() => parseGitBlobBatch(Buffer.from("bad header\n"), 1, 1024), /malformed/i);
+	assert.throws(
+		() => parseGitBlobBatch(Buffer.from(`${"a".repeat(40)} blob 5\nabc\n`), 1, 1024),
+		/truncated/i,
+	);
+	assert.throws(
+		() => parseGitBlobBatch(Buffer.from(`${"a".repeat(40)} blob 1\na\nextra`), 1, 1024),
+		/trailing/i,
+	);
+	assert.throws(
+		() => parseGitBlobBatch(Buffer.from(`${"a".repeat(40)} blob 2\nab\n`), 1, 1),
+		/exceeds/i,
 	);
 });
 

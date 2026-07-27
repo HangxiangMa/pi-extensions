@@ -6,6 +6,7 @@ const DEFAULT_OUTPUT_LIMIT = 1024 * 1024;
 
 export interface GitRunOptions {
 	gitDir?: string;
+	cwd?: string;
 	input?: Buffer | string;
 	env?: NodeJS.ProcessEnv;
 	signal?: AbortSignal;
@@ -99,6 +100,7 @@ export async function runGit(args: string[], options: GitRunOptions = {}): Promi
 		GIT_SSH_COMMAND: "ssh -oBatchMode=yes",
 	};
 	const child = spawn("git", commandArgs, {
+		cwd: options.cwd,
 		env,
 		stdio: ["pipe", "pipe", "pipe"],
 		detached: process.platform !== "win32",
@@ -205,6 +207,65 @@ export async function runGit(args: string[], options: GitRunOptions = {}): Promi
 		options.signal?.removeEventListener("abort", onAbort);
 	}
 	return result;
+}
+
+export function parseGitBlobBatch(output: Buffer, expectedCount: number, maxContentBytes: number) {
+	if (!Number.isSafeInteger(expectedCount) || expectedCount < 0) {
+		throw new Error("Invalid Git batch object count.");
+	}
+	if (!Number.isSafeInteger(maxContentBytes) || maxContentBytes < 0) {
+		throw new Error("Invalid Git batch content limit.");
+	}
+	const blobs: Buffer[] = [];
+	let offset = 0;
+	let contentBytes = 0;
+	for (let index = 0; index < expectedCount; index += 1) {
+		const headerEnd = output.indexOf(0x0a, offset);
+		if (headerEnd < 0) throw new Error("Git cat-file batch response is truncated.");
+		const header = output.subarray(offset, headerEnd).toString("utf8");
+		if (header.endsWith(" missing")) throw new Error("Git cat-file batch object is missing.");
+		const match = /^(?<object>[0-9a-f]{40}) blob (?<size>0|[1-9][0-9]*)$/u.exec(header);
+		if (!match?.groups) throw new Error("Git cat-file batch response is malformed.");
+		const size = Number(match.groups.size);
+		if (!Number.isSafeInteger(size)) throw new Error("Git cat-file batch size is malformed.");
+		contentBytes += size;
+		if (contentBytes > maxContentBytes) {
+			throw new Error(`Git cat-file batch content exceeds the ${maxContentBytes}-byte limit.`);
+		}
+		const contentStart = headerEnd + 1;
+		const contentEnd = contentStart + size;
+		if (contentEnd >= output.length) throw new Error("Git cat-file batch response is truncated.");
+		if (output[contentEnd] !== 0x0a) {
+			throw new Error("Git cat-file batch response is malformed.");
+		}
+		blobs.push(Buffer.from(output.subarray(contentStart, contentEnd)));
+		offset = contentEnd + 1;
+	}
+	if (offset !== output.length) throw new Error("Git cat-file batch response has trailing data.");
+	return blobs;
+}
+
+export async function readGitBlobs(
+	objects: string[],
+	options: Omit<GitRunOptions, "input" | "maxOutputBytes"> & { maxOutputBytes: number },
+) {
+	if (objects.length === 0) return [];
+	if (!Number.isSafeInteger(options.maxOutputBytes) || options.maxOutputBytes < 0) {
+		throw new Error("Invalid Git batch output limit.");
+	}
+	if (objects.some((object) => !/^[0-9a-f]{40}$/u.test(object))) {
+		throw new Error("Invalid Git blob object id.");
+	}
+	const protocolOverhead = objects.length * 96;
+	if (!Number.isSafeInteger(protocolOverhead + options.maxOutputBytes)) {
+		throw new Error("Invalid Git batch output limit.");
+	}
+	const result = await runGit(["cat-file", "--batch"], {
+		...options,
+		input: `${objects.join("\n")}\n`,
+		maxOutputBytes: options.maxOutputBytes + protocolOverhead,
+	});
+	return parseGitBlobBatch(result.stdout, objects.length, options.maxOutputBytes);
 }
 
 function throwIfAborted(signal?: AbortSignal) {

@@ -9,9 +9,20 @@ import {
 	normalizeGitRemoteIdentity,
 	validateGitNamespace,
 } from "./git-config.js";
-import { GitCommandError, runGit } from "./git-runner.js";
+import { GitCommandError, readGitBlobs, runGit } from "./git-runner.js";
+import {
+	GIT_MANIFEST_VERSION,
+	type GitManifest,
+	MAX_GIT_MANIFEST_BYTES,
+	MAX_GIT_TREE_OUTPUT_BYTES,
+	type PreparedGitFile,
+	parseGitTree,
+	prepareGitSnapshot,
+	requireGitManifest,
+	validateGitPublicationTree,
+	validateGitSnapshot,
+} from "./git-storage.js";
 import { posixJoin } from "./paths.js";
-import { decodeSnapshot, encodeSnapshot } from "./snapshot-codec.js";
 import {
 	type BackendDiagnostic,
 	type ExpectedRemoteHead,
@@ -23,22 +34,11 @@ import {
 	SyncBackendConflictError,
 	SyncBackendPublicationOutcomeUnknownError,
 } from "./sync-backend.js";
-import type { ResolvedGitBackend, Snapshot } from "./types.js";
+import type { ResolvedGitBackend, Snapshot, SnapshotFile } from "./types.js";
 
-const MANIFEST_VERSION = 1;
 const COMMAND_TIMEOUT_MS = 30_000;
 const POST_COMMIT_TIMEOUT_MS = 45_000;
-const MAX_BUNDLE_BYTES = 256 * 1024 * 1024;
 const gitCacheMutationQueues = new Map<string, Promise<void>>();
-
-interface GitManifest {
-	version: number;
-	snapshotId: string;
-	sha256: string;
-	createdAt: string;
-	machine: string;
-	syncSessions: boolean;
-}
 
 export interface GitBackendOptions {
 	cacheRoot?: string;
@@ -48,6 +48,7 @@ export interface GitBackendOptions {
 	/** Deterministic fault injection used only by the local backend test suite. */
 	afterPushForTest?: () => void | Promise<void>;
 	afterLsRemoteForTest?: () => void | Promise<void>;
+	afterPayloadWriteForTest?: () => void | Promise<void>;
 }
 
 export class GitSyncBackend implements SyncBackend {
@@ -61,6 +62,7 @@ export class GitSyncBackend implements SyncBackend {
 	private readonly postCommitTimeoutMs: number;
 	private readonly afterPushForTest?: () => void | Promise<void>;
 	private readonly afterLsRemoteForTest?: () => void | Promise<void>;
+	private readonly afterPayloadWriteForTest?: () => void | Promise<void>;
 	private cacheReady?: Promise<void>;
 
 	constructor(
@@ -78,6 +80,7 @@ export class GitSyncBackend implements SyncBackend {
 		this.postCommitTimeoutMs = options.postCommitTimeoutMs ?? POST_COMMIT_TIMEOUT_MS;
 		this.afterPushForTest = options.afterPushForTest;
 		this.afterLsRemoteForTest = options.afterLsRemoteForTest;
+		this.afterPayloadWriteForTest = options.afterPayloadWriteForTest;
 	}
 
 	sameRevision(left: string, right: string) {
@@ -102,12 +105,51 @@ export class GitSyncBackend implements SyncBackend {
 			throw new Error(`Git snapshot publication was not found: ${reference}`, { cause: error });
 		}
 		const manifest = await this.readManifest(reference, signal);
-		const bundle = await this.showFile(reference, this.bundlePath(), signal, MAX_BUNDLE_BYTES);
-		if (sha256(bundle) !== manifest.sha256) {
-			throw new Error("Git snapshot bundle checksum mismatch.");
+		const entries = await this.readPublicationTree(reference, signal);
+		const payloadEntries = validateGitPublicationTree(
+			entries,
+			manifest,
+			this.manifestPath(),
+			(filePath) => this.filePath(filePath),
+		);
+		let blobs: Buffer[];
+		try {
+			blobs = await readGitBlobs(
+				payloadEntries.map((entry) => entry.object),
+				{
+					gitDir: this.cacheDir,
+					signal,
+					timeoutMs: this.commandTimeoutMs,
+					allowFileProtocol: this.allowLocalRemotes,
+					maxOutputBytes: manifest.files.reduce((total, file) => total + file.size, 0),
+				},
+			);
+		} catch (error) {
+			if (error instanceof Error && /exceeds/u.test(error.message)) {
+				throw new Error("Git snapshot file content exceeds its manifest size.", { cause: error });
+			}
+			throw error;
 		}
-		const snapshot = await decodeSnapshot(bundle, { signal });
-		validateSnapshot(snapshot, manifest, this.config.destination.namespace);
+		throwIfAborted(signal);
+		const files: SnapshotFile[] = manifest.files.map((file, index) => {
+			const content = blobs[index];
+			if (!content || content.byteLength !== file.size || sha256(content) !== file.sha256) {
+				throw new Error(`Git snapshot file checksum or size mismatch: ${file.path}`);
+			}
+			return { path: file.path, contentBase64: content.toString("base64"), sha256: file.sha256 };
+		});
+		const snapshot: Snapshot = {
+			version: manifest.snapshotVersion,
+			id: manifest.snapshotId,
+			createdAt: manifest.createdAt,
+			machine: manifest.machine,
+			profile: manifest.profile,
+			...(manifest.snapshotSyncSessions === undefined
+				? {}
+				: { syncSessions: manifest.snapshotSyncSessions }),
+			files,
+		};
+		validateGitSnapshot(snapshot, manifest, this.config.destination.namespace);
 		return snapshot;
 	}
 
@@ -117,7 +159,7 @@ export class GitSyncBackend implements SyncBackend {
 		options: PublishSnapshotOptions = {},
 	): Promise<PublishSnapshotResult> {
 		throwIfAborted(options.signal);
-		validateSnapshotForPublication(snapshot, this.config.destination.namespace);
+		const files = prepareGitSnapshot(snapshot, this.config.destination.namespace);
 		const observed = await this.fetchRemoteHead(options.signal);
 		if (!matchesExpected(observed, expected, this.identity)) {
 			throw new SyncBackendConflictError(
@@ -125,28 +167,27 @@ export class GitSyncBackend implements SyncBackend {
 				{ currentHead: observed ? await this.headForSha(observed, options.signal) : undefined },
 			);
 		}
-		const encoded = await encodeSnapshot(snapshot);
-		if (encoded.byteLength > MAX_BUNDLE_BYTES) {
-			throw new Error(`Git snapshot bundle exceeds the ${MAX_BUNDLE_BYTES}-byte limit.`);
-		}
 		throwIfAborted(options.signal);
 		const manifest: GitManifest = {
-			version: MANIFEST_VERSION,
+			version: GIT_MANIFEST_VERSION,
+			snapshotVersion: snapshot.version,
 			snapshotId: snapshot.id,
-			sha256: sha256(encoded),
 			createdAt: snapshot.createdAt,
 			machine: snapshot.machine,
+			profile: snapshot.profile,
 			syncSessions:
 				snapshot.syncSessions === true ||
 				snapshot.files.some((file) => file.path.startsWith("sessions/")),
+			...(snapshot.syncSessions === undefined
+				? {}
+				: { snapshotSyncSessions: snapshot.syncSessions }),
+			files: files.map(({ path: filePath, sha256: fileSha, size }) => ({
+				path: filePath,
+				sha256: fileSha,
+				size,
+			})),
 		};
-		const candidate = await this.createCommit(
-			snapshot,
-			encoded,
-			manifest,
-			observed,
-			options.signal,
-		);
+		const candidate = await this.createCommit(snapshot, files, manifest, observed, options.signal);
 		throwIfAborted(options.signal);
 		options.onCommit?.();
 
@@ -320,14 +361,14 @@ export class GitSyncBackend implements SyncBackend {
 
 	private async readManifest(commit: string, signal?: AbortSignal): Promise<GitManifest> {
 		requireCommitSha(commit);
-		const bytes = await this.showFile(commit, this.manifestPath(), signal, 1024 * 1024);
+		const bytes = await this.showFile(commit, this.manifestPath(), signal, MAX_GIT_MANIFEST_BYTES);
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(bytes.toString("utf8"));
 		} catch (error) {
 			throw new Error("Git publication manifest is malformed.", { cause: error });
 		}
-		return requireManifest(parsed);
+		return requireGitManifest(parsed);
 	}
 
 	private showFile(
@@ -343,32 +384,66 @@ export class GitSyncBackend implements SyncBackend {
 
 	private async createCommit(
 		snapshot: Snapshot,
-		encoded: Buffer,
+		files: PreparedGitFile[],
 		manifest: GitManifest,
 		parent: string | undefined,
 		signal?: AbortSignal,
 	) {
+		const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`, "utf8");
+		if (manifestBytes.byteLength > MAX_GIT_MANIFEST_BYTES) {
+			throw new Error(`Git publication manifest exceeds the ${MAX_GIT_MANIFEST_BYTES}-byte limit.`);
+		}
 		await this.ensureCache(signal);
 		const temporaryDirectory = await fs.mkdtemp(path.join(path.dirname(this.cacheDir), ".index-"));
 		const indexPath = path.join(temporaryDirectory, "index");
+		const payloadDirectory = path.join(temporaryDirectory, "payloads");
 		const env = { GIT_INDEX_FILE: indexPath };
 		try {
-			const bundleBlob = (
-				await this.git(["hash-object", "-w", "--stdin"], { input: encoded, signal })
-			).stdout
-				.toString("utf8")
-				.trim();
-			const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`, "utf8");
+			await fs.mkdir(payloadDirectory, { mode: 0o700 });
+			const uniqueFiles = [...new Map(files.map((file) => [file.sha256, file])).values()].sort(
+				(left, right) => left.sha256.localeCompare(right.sha256),
+			);
+			for (const file of uniqueFiles) {
+				throwIfAborted(signal);
+				await fs.writeFile(path.join(payloadDirectory, file.sha256), file.content, {
+					flag: "wx",
+					mode: 0o600,
+				});
+			}
+			await this.afterPayloadWriteForTest?.();
+			throwIfAborted(signal);
+			const hashed = await this.git(["hash-object", "-w", "--no-filters", "--stdin-paths"], {
+				cwd: payloadDirectory,
+				input: uniqueFiles.map((file) => file.sha256).join("\n") + (uniqueFiles.length ? "\n" : ""),
+				signal,
+				maxOutputBytes: Math.max(1024, uniqueFiles.length * 64),
+			});
+			const objectIds = hashed.stdout.toString("utf8").trim().split("\n").filter(Boolean);
+			if (objectIds.length !== uniqueFiles.length || objectIds.some((id) => !isCommitSha(id))) {
+				throw new Error("Git hash-object returned a malformed payload response.");
+			}
+			const objectsBySha256 = new Map(
+				uniqueFiles.map((file, index) => [file.sha256, objectIds[index] as string]),
+			);
 			const manifestBlob = (
 				await this.git(["hash-object", "-w", "--stdin"], { input: manifestBytes, signal })
 			).stdout
 				.toString("utf8")
 				.trim();
+			if (!isCommitSha(manifestBlob)) throw new Error("Git returned an invalid manifest blob id.");
 			await this.git(["read-tree", "--empty"], { env, signal });
+			const indexLines = [
+				`100644 ${manifestBlob}\t${this.manifestPath()}`,
+				...files.map((file) => {
+					const object = objectsBySha256.get(file.sha256);
+					if (!object) throw new Error("Git payload object is missing after hashing.");
+					return `100644 ${object}\t${this.filePath(file.path)}`;
+				}),
+			];
 			await this.git(["update-index", "--index-info"], {
 				env,
 				signal,
-				input: `100644 ${manifestBlob}\t${this.manifestPath()}\n100644 ${bundleBlob}\t${this.bundlePath()}\n`,
+				input: `${indexLines.join("\n")}\n`,
 			});
 			const tree = (await this.git(["write-tree"], { env, signal })).stdout.toString("utf8").trim();
 			const date = Number.isNaN(Date.parse(snapshot.createdAt))
@@ -472,6 +547,7 @@ export class GitSyncBackend implements SyncBackend {
 	private git(
 		args: string[],
 		options: {
+			cwd?: string;
 			input?: Buffer | string;
 			env?: NodeJS.ProcessEnv;
 			signal?: AbortSignal;
@@ -491,22 +567,28 @@ export class GitSyncBackend implements SyncBackend {
 		return `refs/heads/${this.config.destination.branch}`;
 	}
 
-	private manifestPath() {
+	private publicationPath() {
 		return posixJoin(
 			this.config.destination.directory,
 			"profiles",
 			this.config.destination.namespace,
-			"manifest.json",
 		);
 	}
 
-	private bundlePath() {
-		return posixJoin(
-			this.config.destination.directory,
-			"profiles",
-			this.config.destination.namespace,
-			"snapshot.json.gz",
-		);
+	private manifestPath() {
+		return posixJoin(this.publicationPath(), "manifest.json");
+	}
+
+	private filePath(filePath: string) {
+		return posixJoin(this.publicationPath(), "files", filePath);
+	}
+
+	private async readPublicationTree(commit: string, signal?: AbortSignal) {
+		const result = await this.git(["ls-tree", "-r", "-z", commit, "--", this.publicationPath()], {
+			signal,
+			maxOutputBytes: MAX_GIT_TREE_OUTPUT_BYTES,
+		});
+		return parseGitTree(result.stdout);
 	}
 
 	private safeError(error: unknown) {
@@ -563,91 +645,6 @@ function remoteHead(sha: string, manifest: GitManifest, identity: string): Remot
 	};
 }
 
-function requireManifest(value: unknown): GitManifest {
-	if (!value || typeof value !== "object")
-		throw new Error("Git publication manifest is malformed.");
-	const manifest = value as Partial<GitManifest>;
-	if (
-		manifest.version !== MANIFEST_VERSION ||
-		typeof manifest.snapshotId !== "string" ||
-		manifest.snapshotId.length > 512 ||
-		!/^[A-Za-z0-9._-]+$/u.test(manifest.snapshotId) ||
-		typeof manifest.sha256 !== "string" ||
-		!/^[0-9a-f]{64}$/u.test(manifest.sha256) ||
-		typeof manifest.createdAt !== "string" ||
-		manifest.createdAt.length > 64 ||
-		Number.isNaN(Date.parse(manifest.createdAt)) ||
-		typeof manifest.machine !== "string" ||
-		manifest.machine.length > 256 ||
-		hasControlCharacter(manifest.machine) ||
-		typeof manifest.syncSessions !== "boolean"
-	) {
-		throw new Error("Git publication manifest is malformed.");
-	}
-	return manifest as GitManifest;
-}
-
-function validateSnapshot(snapshot: Snapshot, manifest: GitManifest, namespace: string) {
-	validateSnapshotForPublication(snapshot, namespace);
-	const syncSessions =
-		snapshot.syncSessions === true ||
-		snapshot.files.some((file) => file.path.startsWith("sessions/"));
-	if (
-		snapshot.id !== manifest.snapshotId ||
-		snapshot.createdAt !== manifest.createdAt ||
-		snapshot.machine !== manifest.machine ||
-		syncSessions !== manifest.syncSessions
-	) {
-		throw new Error("Git snapshot identity does not match its publication manifest.");
-	}
-}
-
-function validateSnapshotForPublication(snapshot: Snapshot, namespace: string) {
-	if (
-		snapshot.version !== 1 ||
-		!snapshot.id ||
-		snapshot.id.length > 512 ||
-		!/^[A-Za-z0-9._-]+$/u.test(snapshot.id) ||
-		snapshot.profile !== namespace ||
-		!Array.isArray(snapshot.files) ||
-		!snapshot.createdAt ||
-		snapshot.createdAt.length > 64 ||
-		Number.isNaN(Date.parse(snapshot.createdAt)) ||
-		snapshot.machine.length > 256 ||
-		hasControlCharacter(snapshot.machine)
-	) {
-		throw new Error("Invalid Git snapshot publication.");
-	}
-	const paths = new Set<string>();
-	for (const file of snapshot.files) {
-		if (
-			!isSafeSnapshotPath(file.path) ||
-			typeof file.contentBase64 !== "string" ||
-			!/^[0-9a-f]{64}$/u.test(file.sha256) ||
-			paths.has(file.path)
-		) {
-			throw new Error("Invalid Git snapshot file.");
-		}
-		const content = Buffer.from(file.contentBase64, "base64");
-		if (content.toString("base64") !== file.contentBase64 || sha256(content) !== file.sha256) {
-			throw new Error("Git snapshot file checksum mismatch.");
-		}
-		paths.add(file.path);
-	}
-}
-
-function isSafeSnapshotPath(value: unknown): value is string {
-	return (
-		typeof value === "string" &&
-		value.length > 0 &&
-		value.length <= 4096 &&
-		!value.startsWith("/") &&
-		!value.includes("\\") &&
-		!hasControlCharacter(value) &&
-		value.split("/").every((segment) => segment && segment !== "." && segment !== "..")
-	);
-}
-
 function matchesExpected(
 	current: string | undefined,
 	expected: ExpectedRemoteHead,
@@ -666,6 +663,10 @@ function decodeRevision(revision: string, identity: string) {
 	const sha = revision.startsWith(prefix) ? revision.slice(prefix.length) : "";
 	if (!/^[0-9a-f]{40}$/u.test(sha)) throw new Error("Invalid Git remote revision.");
 	return sha;
+}
+
+function isCommitSha(value: string) {
+	return /^[0-9a-f]{40}$/u.test(value);
 }
 
 function requireCommitSha(value: string) {
@@ -772,13 +773,6 @@ function redactGitError(value: string, remote: string, cacheDir: string) {
 
 function sha256(value: Buffer) {
 	return createHash("sha256").update(value).digest("hex");
-}
-
-function hasControlCharacter(value: string) {
-	return [...value].some((character) => {
-		const code = character.codePointAt(0) ?? 0;
-		return code < 0x20 || (code >= 0x7f && code <= 0x9f);
-	});
 }
 
 function abortReason(signal: AbortSignal) {
