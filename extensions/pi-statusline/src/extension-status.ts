@@ -309,7 +309,7 @@ function packageNameForSource(source: string, baseDirectory: string): string | u
 
 export function npmPackageName(source: string): string {
 	const spec = source.slice("npm:".length);
-	if (spec.startsWith("@")) return spec.split("@").slice(0, 2).join("@").replace(/^@/, "@");
+	if (spec.startsWith("@")) return spec.split("@").slice(0, 2).join("@");
 	return spec.split("@")[0] ?? spec;
 }
 

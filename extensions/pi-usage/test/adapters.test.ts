@@ -176,4 +176,16 @@ test("Codex adapter preserves windows, credits, and model-specific statusline bu
 		}),
 		"codex spark 90% 5h",
 	);
+
+	const sparkBucket = report.buckets.find((bucket) => bucket.groupId === "gpt-5.3-codex-spark");
+	assert.ok(sparkBucket);
+	sparkBucket.groupLabel = `Codex${"\t".repeat(100_000)}Spark`;
+	assert.equal(
+		formatUsageStatusline(report, {
+			id: "gpt-5.3-codex-spark",
+			name: "-".repeat(100_000),
+			provider: "openai-codex",
+		}),
+		"codex spark 90% 5h",
+	);
 });

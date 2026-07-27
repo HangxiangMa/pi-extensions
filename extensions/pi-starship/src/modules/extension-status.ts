@@ -179,6 +179,6 @@ export function buildExtensionStatusIconAliases(
 
 function npmPackageName(source: string): string {
 	const spec = source.slice("npm:".length);
-	if (spec.startsWith("@")) return spec.split("@").slice(0, 2).join("@").replace(/^@/u, "@");
+	if (spec.startsWith("@")) return spec.split("@").slice(0, 2).join("@");
 	return spec.split("@")[0] ?? spec;
 }

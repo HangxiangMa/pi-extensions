@@ -449,16 +449,16 @@ export class WebUIServer {
 			}
 			throw new HttpError(404, "Not found");
 		} catch (error) {
-			const status =
+			const expectedError =
 				error instanceof HttpError ||
 				error instanceof AttachmentError ||
 				error instanceof DraftError ||
-				error instanceof SentImageError
-					? error.status
-					: 500;
+				error instanceof SentImageError;
+			const status = expectedError ? error.status : 500;
+			const message = expectedError ? error.message : "Internal server error";
 			if (error instanceof HttpError && error.closeConnection)
 				response.setHeader("Connection", "close");
-			this.json(response, status, { error: formatError(error) });
+			this.json(response, status, { error: message });
 			if (error instanceof HttpError && error.closeConnection) request.socket?.destroySoon?.();
 		}
 	}

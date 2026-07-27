@@ -93,7 +93,9 @@ test("bootstrap links rotate and exchange once for isolated secure cookies", asy
 test("assets and APIs require auth and carry restrictive headers", async () => {
 	const { server } = await harness();
 	try {
-		assert.equal((await api(server, "/")).status, 401);
+		const unauthorized = await api(server, "/");
+		assert.equal(unauthorized.status, 401);
+		assert.deepEqual(await unauthorized.json(), { error: "Authentication required" });
 		const cookie = await authenticate(server);
 		const page = await api(server, "/", { cookie });
 		assert.equal(page.status, 200);
@@ -312,10 +314,9 @@ test("failed sends release their request id for an unchanged browser retry", asy
 			draftRevision: draft.revision,
 			delivery: "next",
 		});
-		assert.equal(
-			(await api(server, "/api/messages", { method: "POST", cookie, client, body })).status,
-			500,
-		);
+		const failed = await api(server, "/api/messages", { method: "POST", cookie, client, body });
+		assert.equal(failed.status, 500);
+		assert.deepEqual(await failed.json(), { error: "Internal server error" });
 		assert.equal(
 			(await api(server, "/api/messages", { method: "POST", cookie, client, body })).status,
 			202,
