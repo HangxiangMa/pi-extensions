@@ -133,9 +133,6 @@ pack-lsp:
 pack-plan-mode:
     just pack plan-mode
 
-pack-retry:
-    just pack retry
-
 pack-starship:
     just pack starship
 
@@ -196,9 +193,6 @@ try-lsp:
 
 try-plan-mode:
     just try plan-mode
-
-try-retry:
-    just try retry
 
 try-starship:
     just try starship
@@ -261,9 +255,6 @@ install-lsp:
 install-plan-mode:
     just install plan-mode
 
-install-retry:
-    just install retry
-
 install-statusline:
     just install statusline
 
@@ -321,9 +312,6 @@ publish-lsp:
 
 publish-plan-mode:
     just publish plan-mode
-
-publish-retry:
-    just publish retry
 
 publish-starship:
     just publish starship
