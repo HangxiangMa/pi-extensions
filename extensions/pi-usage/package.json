@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-usage",
-	"version": "0.34.1",
+	"version": "0.35.0",
 	"description": "Pi extension that shows current-account usage across supported model providers.",
 	"type": "module",
 	"license": "MIT",
