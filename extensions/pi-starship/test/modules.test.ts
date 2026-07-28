@@ -190,27 +190,25 @@ test("cache read and write remain available when the latest rate is unknown", ()
 	config.format = "$cache";
 	config.formatAst = parseFormat(config.format);
 	config.modules.cache.disabled = false;
-	config.modules.cache.format = "$read/$write/$rate";
+	config.modules.cache.format = "$symbol:$read/$write/$rate";
 	config.modules.cache.formatAst = parseFormat(config.modules.cache.format);
+	config.modules.cache.symbol = "C";
 
-	assert.equal(
-		stripAnsi(
-			renderStatusline(
-				config,
-				fixture({
-					tokenTotals: {
-						input: 100,
-						output: 20,
-						cacheRead: 2300,
-						cacheWrite: 1500,
-						cost: 0.1,
-						latestCacheHitRate: undefined,
-					},
-				}),
-			).ansi,
-		),
-		"2.3k/1.5k/",
-	);
+	const runtime = fixture({
+		tokenTotals: {
+			input: 100,
+			output: 20,
+			cacheRead: 2300,
+			cacheWrite: 1500,
+			cost: 0.1,
+			latestCacheHitRate: undefined,
+		},
+	});
+	assert.equal(stripAnsi(renderStatusline(config, runtime).ansi), "C:2.3k/1.5k/");
+
+	config.modules.cache.format = BUILT_IN_CONFIG.modules.cache.format;
+	config.modules.cache.formatAst = parseFormat(config.modules.cache.format);
+	assert.equal(stripAnsi(renderStatusline(config, runtime).ansi).trim(), "C");
 });
 
 test("git branch consumes github-pr only when its module format references pr", () => {

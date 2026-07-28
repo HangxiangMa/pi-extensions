@@ -25,6 +25,7 @@
 - pi-lsp defaults must use dialect-specific language IDs, nest workspace settings under the server-requested section, and avoid save-only settings unless diagnostics emit `didSave`.
 - Keep pi-lsp Docker profiles synchronized with production initialization as well as diagnostics policy; compare their commands against Linux launchers rather than host-evaluated platform wrappers.
 - pi-statusline owns footer rendering and its `/statusline` settings command; keep it out of prompt interception.
+- Symptom: a pi-starship module's configured `$symbol` disappears when an optional value is absent. Cause: module values override the renderer-provided symbol. Fix: keep `$symbol` standard and make optional labels conditional in the default format.
 - Symptom: an idle optional statusline segment leaves a blank multiline row. Cause: filtering the segment while preserving both adjacent `line_break` entries. Fix: group configured rows first, drop only dynamically empty rows, then flatten while preserving explicitly empty rows.
 - In Pi extensions, do not call action methods such as `getThinkingLevel()` during the factory load; defer them to `session_start` or later handlers.
 - Symptom: extension actions from `agent_end` may not trigger a new turn. Cause: follow-ups can miss the late drain point. Fix: when Pi exposes `agent_settled`, record intent in `agent_end` and dispatch from that settled boundary; standalone manual compaction does not emit it, so use a narrowly idle-gated `session_compact` fallback when needed.
