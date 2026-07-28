@@ -62,7 +62,6 @@ export interface SettingsScreen<ActionId extends string> {
 	title: string;
 	lines?: readonly string[];
 	items: readonly MenuSettingItem<ActionId>[];
-	enableSearch?: boolean;
 }
 
 export interface MenuMultiSelectItem extends MenuItemBase {

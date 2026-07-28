@@ -184,6 +184,53 @@ test("RPC uses dialog adaptation without custom TUI and print mode delegates uns
 	assert.equal(unsupportedMode, "tui");
 });
 
+test("RPC choices preserve item identity across duplicate and exit labels", async () => {
+	let selectCalls = 0;
+	const invoked: string[] = [];
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		select: async (_title: string, choices: string[]) => {
+			selectCalls += 1;
+			assert.equal(new Set(choices).size, choices.length);
+			if (selectCalls === 1) return choices[1];
+			if (selectCalls === 2) return choices[2];
+			return choices.at(-1);
+		},
+	});
+	const definition = defineMenu<undefined, "tools", "toggle" | "bulk">({
+		start: "tools",
+		screens: {
+			tools: () => ({
+				kind: "multiSelect",
+				title: "Tools",
+				items: [],
+				action: "toggle",
+				actions: [
+					{ id: "first", label: "Same", action: "bulk" },
+					{ id: "second", label: "Same", action: "bulk" },
+					{ id: "done-action", label: "Done", action: "bulk" },
+				],
+				hint: "close",
+				doneLabel: "Done",
+			}),
+		},
+		actions: {
+			toggle: async () => ({ kind: "stay" }),
+			bulk: async ({ itemId }) => {
+				invoked.push(itemId);
+				return { kind: "stay" };
+			},
+		},
+	});
+
+	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
+		kind: "closed",
+	});
+	assert.deepEqual(invoked, ["second", "done-action"]);
+	assert.equal(selectCalls, 3);
+});
+
 test("a stale action continuation cannot render another screen or report success", async () => {
 	let current = true;
 	let release: (() => void) | undefined;
@@ -222,6 +269,118 @@ test("a stale action continuation cannot render another screen or report success
 	assert.deepEqual(await running, { kind: "stale" });
 	assert.equal(customCalls, 1);
 	assert.equal(errorCalls, 0);
+});
+
+test("an owner signal aborts in-flight state loading", async () => {
+	const owner = new AbortController();
+	let releaseState: (() => void) | undefined;
+	let reportStarted: (() => void) | undefined;
+	let observedAbort = false;
+	const stateGate = new Promise<void>((resolve) => {
+		releaseState = resolve;
+	});
+	const stateStarted = new Promise<void>((resolve) => {
+		reportStarted = resolve;
+	});
+	const context = createMockContext({ mode: "tui", hasUI: true });
+	const options = {
+		signal: owner.signal,
+		getState: async ({ signal }: { signal: AbortSignal }) => {
+			reportStarted?.();
+			signal.addEventListener(
+				"abort",
+				() => {
+					observedAbort = true;
+				},
+				{ once: true },
+			);
+			await stateGate;
+			return { count: 0 };
+		},
+	};
+	const running = runMenu(context.ctx, runtimeMenu(), options);
+	await stateStarted;
+	owner.abort(new DOMException("Session replaced", "AbortError"));
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	const observedBeforeRelease = observedAbort;
+	releaseState?.();
+
+	assert.equal(observedBeforeRelease, true);
+	assert.deepEqual(await running, { kind: "stale" });
+});
+
+test("an owner signal closes an idle custom screen", async () => {
+	const owner = new AbortController();
+	let reportOpened: (() => void) | undefined;
+	let closedByOwner = false;
+	const opened = new Promise<void>((resolve) => {
+		reportOpened = resolve;
+	});
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 40);
+			reportOpened?.();
+			await new Promise<void>((resolve) => {
+				owner.signal.addEventListener("abort", () => resolve(), { once: true });
+			});
+			closedByOwner = harness.result !== undefined;
+			return harness.result;
+		},
+	});
+	const running = runMenu(context.ctx, runtimeMenu(), {
+		getState: () => ({ count: 0 }),
+		signal: owner.signal,
+	});
+	await opened;
+	owner.abort(new DOMException("Session replaced", "AbortError"));
+
+	assert.deepEqual(await running, { kind: "stale" });
+	assert.equal(closedByOwner, true);
+});
+
+test("an owner signal aborts and drains an in-flight non-busy action", async () => {
+	const owner = new AbortController();
+	let reportStarted: (() => void) | undefined;
+	let observedAbort = false;
+	const actionStarted = new Promise<void>((resolve) => {
+		reportStarted = resolve;
+	});
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) =>
+			driveCustomSelector(factory, ["tui.select.confirm"], 40).result,
+	});
+	const running = runMenu(
+		context.ctx,
+		runtimeMenu({
+			run: async ({ signal }) => {
+				reportStarted?.();
+				await new Promise<void>((resolve) => {
+					if (signal.aborted) resolve();
+					else {
+						signal.addEventListener(
+							"abort",
+							() => {
+								observedAbort = true;
+								resolve();
+							},
+							{ once: true },
+						);
+					}
+				});
+				return { kind: "stay" };
+			},
+		}),
+		{ getState: () => ({ count: 0 }), signal: owner.signal },
+	);
+	await actionStarted;
+	owner.abort(new DOMException("Session replaced", "AbortError"));
+
+	assert.deepEqual(await running, { kind: "stale" });
+	assert.equal(observedAbort, true);
 });
 
 test("a cancellable busy action receives abort, drains, and leaves the menu usable", async () => {
@@ -270,6 +429,70 @@ test("a cancellable busy action receives abort, drains, and leaves the menu usab
 	assert.deepEqual(result, { kind: "closed" });
 	assert.equal(aborted, true);
 	assert.equal(customCalls, 3);
+});
+
+test("component disposal aborts and drains pending setting work before returning", async () => {
+	let releaseAction: (() => void) | undefined;
+	let reportStarted: (() => void) | undefined;
+	const actionGate = new Promise<void>((resolve) => {
+		releaseAction = resolve;
+	});
+	const actionStarted = new Promise<void>((resolve) => {
+		reportStarted = resolve;
+	});
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 80);
+			harness.handleInput("tui.select.confirm");
+			await actionStarted;
+			harness.dispose();
+			return undefined;
+		},
+	});
+	const running = runMenu(context.ctx, runtimeMenu(), { getState: () => undefined });
+	let settled = false;
+	const completion = running.then((result) => {
+		settled = true;
+		return result;
+	});
+	await actionStarted;
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	const settledBeforeRelease = settled;
+	releaseAction?.();
+	const result = await completion;
+
+	assert.equal(settledBeforeRelease, false);
+	assert.deepEqual(result, { kind: "stale" });
+
+	function runtimeMenu() {
+		return defineMenu<undefined, "settings", "save">({
+			start: "settings",
+			screens: {
+				settings: () => ({
+					kind: "settings",
+					title: "Settings",
+					items: [
+						{
+							id: "mode",
+							label: "Mode",
+							currentValue: "Off",
+							values: ["Off", "On"],
+							action: "save",
+						},
+					],
+				}),
+			},
+			actions: {
+				save: async () => {
+					reportStarted?.();
+					await actionGate;
+					return { kind: "stay" };
+				},
+			},
+		});
+	}
 });
 
 test("settings refreshes preserve the changed row cursor", async () => {

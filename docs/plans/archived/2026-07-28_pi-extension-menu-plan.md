@@ -25,7 +25,8 @@ settings files, active-tool policy, or non-TUI behavior.
 - The archived persistent-selector plan records a repository-wide invariant that in-place toggle
   menus retain their cursor and serialize saves. The new library should own that invariant once.
 - Pi already provides `SelectList`, `SettingsList`, `BorderedLoader`, theme helpers, and injected
-  keybindings. The library should compose those controls rather than replace them.
+  keybindings. The library should compose those controls where their public contracts support the
+  required behavior and keep any necessary adapter local.
 - Node rejects direct TypeScript loading from `node_modules` with
   `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`; this runtime library therefore needs generated JavaScript
   and declarations rather than publishing TypeScript-only exports.
@@ -106,8 +107,7 @@ Each extension continues to own:
 
 - TypeScript with NodeNext/ES2022 and a package-local emitting build configuration.
 - `@earendil-works/pi-coding-agent` for extension contexts, theme helpers, and `BorderedLoader`.
-- `@earendil-works/pi-tui` for `SelectList`, `SettingsList`, width utilities, components, and
-  keybindings.
+- `@earendil-works/pi-tui` for `SelectList`, width utilities, components, and keybindings.
 - Node's built-in test runner through the repository compile-and-run harness.
 - Biome and the existing root `npm run check` gate.
 
@@ -217,9 +217,9 @@ Each extension continues to own:
       rollback, and close-after-pending-save behavior. Evidence: the red run failed to compile only on
       the absent `screen-components.js` module and its callback types.
 
-- [x] Implement the standard screen adapters with Pi's `SelectList`, `SettingsList`, and width/theme
-      utilities, disabling search by default where the installed `SettingsList` cannot expose a
-      public focus-forwarding contract. Evidence: the focused component suite passes 5/5 across all
+- [x] Implement the standard screen adapters with Pi's `SelectList` and width/theme utilities; use a
+      local settings adapter because the installed `SettingsList` cannot initialize its cursor,
+      enforce disabled rows, or expose search focus. Evidence: the focused component suite covers all
       four screen kinds, 20/40/80/120-column bounds, remapped keys, invalidation, settings rollback,
       and multi-select cursor retention.
 

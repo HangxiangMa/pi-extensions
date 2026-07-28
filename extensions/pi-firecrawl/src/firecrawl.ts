@@ -12,6 +12,7 @@ import {
 	buildStatusMessage,
 	clearSettingsNotice,
 	currentFirecrawlSessionGeneration,
+	currentFirecrawlSessionSignal,
 	isCurrentFirecrawlSession,
 	recordSettingsNotice,
 	showToolSelector,
@@ -186,6 +187,7 @@ async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: numbe
 	});
 	await runMenu(ctx, menu, {
 		getState: () => undefined,
+		signal: currentFirecrawlSessionSignal(),
 		isCurrent: () => isCurrentFirecrawlSession(generation),
 	});
 }

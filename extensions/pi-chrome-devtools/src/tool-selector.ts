@@ -96,6 +96,7 @@ export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
 	});
 	const result = await runMenu(ctx, menu, {
 		getState: () => undefined,
+		signal: state.sessionController.signal,
 		isCurrent: () => generation === state.sessionGeneration,
 	});
 	if (result.kind !== "closed" || generation !== state.sessionGeneration) return;

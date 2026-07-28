@@ -60,6 +60,7 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++state.sessionGeneration;
+		replaceSessionController("Chrome DevTools session replaced");
 		state.shuttingDown = false;
 		state.settingsNotice = undefined;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -78,6 +79,7 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		state.sessionGeneration += 1;
+		replaceSessionController("Chrome DevTools session shut down");
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		const browserShutdown = shutdownManagedBrowser(undefined, { cancelLaunch: true });
 		await waitForChromeDevtoolsSettings();
@@ -181,8 +183,14 @@ async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: numbe
 	});
 	await runMenu(ctx, menu, {
 		getState: () => undefined,
+		signal: state.sessionController.signal,
 		isCurrent: () => generation === state.sessionGeneration,
 	});
+}
+
+function replaceSessionController(reason: string) {
+	state.sessionController.abort(new DOMException(reason, "AbortError"));
+	state.sessionController = new AbortController();
 }
 
 export function parseCommand(args: string): CommandAction | "unknown" {

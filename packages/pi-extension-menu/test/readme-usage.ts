@@ -11,6 +11,7 @@ declare function refreshDomainState(signal: AbortSignal): Promise<void>;
 declare function saveMode(mode: State["mode"], signal: AbortSignal): Promise<void>;
 declare function loadState(signal: AbortSignal): Promise<State>;
 declare function currentGeneration(): number;
+declare function currentSessionSignal(): AbortSignal;
 declare function formatError(error: unknown): string;
 
 const menu = defineMenu<State, Screen, Action>({
@@ -56,6 +57,7 @@ const menu = defineMenu<State, Screen, Action>({
 export async function showMenu(ctx: ExtensionCommandContext, generation: number) {
 	return runMenu(ctx, menu, {
 		getState: ({ signal }) => loadState(signal),
+		signal: currentSessionSignal(),
 		isCurrent: () => generation === currentGeneration(),
 		onError: (_ctx, error) => ctx.ui.notify(formatError(error), "error"),
 		onUnsupportedMode: (_ctx, mode) => {

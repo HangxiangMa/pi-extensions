@@ -5,9 +5,6 @@ import {
 	matchesKey,
 	type SelectItem,
 	SelectList,
-	type SettingItem,
-	SettingsList,
-	type SettingsListTheme,
 	truncateToWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
@@ -170,22 +167,21 @@ function createDetailComponent<ScreenId extends string, ActionId extends string>
 	};
 }
 
+// Pi's current SettingsList cannot initialize its cursor, enforce disabled rows, or expose search
+// focus. Keep this adapter local until those behaviors are available through its public API.
 function createSettingsComponent<ScreenId extends string, ActionId extends string>(
 	options: SettingsOptions<ScreenId, ActionId>,
 ): MenuScreenComponent {
 	const committed = new Map(options.screen.items.map((item) => [item.id, item.currentValue]));
+	const displayed = new Map(committed);
 	const latestRequested = new Map<string, string>();
+	let selectedIndex = Math.max(
+		0,
+		options.screen.items.findIndex((item) => item.id === options.selectedItemId),
+	);
 	let pending = Promise.resolve();
 	let disposed = false;
 	let closing = false;
-	let list: SettingsList;
-	const items: SettingItem[] = options.screen.items.map((item) => ({
-		id: item.id,
-		label: safeMenuText(item.label),
-		description: item.description ? safeMenuText(item.description) : undefined,
-		currentValue: item.currentValue,
-		values: [...(item.values ?? [item.currentValue])],
-	}));
 	const closeAfterPending = (kind: "back" | "close") => {
 		if (closing || disposed) return;
 		closing = true;
@@ -193,66 +189,110 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
 			if (!disposed) options.onEvent({ kind });
 		});
 	};
-	list = new SettingsList(
-		items,
-		Math.min(items.length + 2, 15),
-		settingsTheme(options.theme),
-		(id, value) => {
-			if (closing || disposed) return;
-			latestRequested.set(id, value);
-			const operation = pending.then(async () => {
-				if (disposed) return;
-				const previousValue = committed.get(id) ?? "";
-				let response: MenuChangeResponse<ScreenId> = false;
-				try {
-					response =
-						(await options.onSettingChange?.({ itemId: id, value, previousValue })) ?? false;
-				} catch (error) {
-					options.onError?.(error);
-				}
-				if (disposed) return;
-				const accepted = typeof response === "boolean" ? response : response.accepted;
-				if (accepted) committed.set(id, value);
-				else if (latestRequested.get(id) === value) list.updateValue(id, previousValue);
-				options.tui.requestRender();
-				if (accepted && typeof response !== "boolean") {
-					closing = true;
-					void pending.then(() => {
-						if (!disposed) options.onTransition?.(response.transition);
-					});
-				}
-			});
-			pending = operation.catch(() => undefined);
-		},
-		() => closeAfterPending("back"),
-		{ enableSearch: options.screen.enableSearch === true },
-	);
-	setInitialSettingsSelection(list, items, options.selectedItemId);
+	const select = (index: number) => {
+		if (options.screen.items.length === 0) return;
+		selectedIndex = (index + options.screen.items.length) % options.screen.items.length;
+		const item = options.screen.items[selectedIndex];
+		if (item) options.onSelectionChange?.(item.id);
+	};
+	const activate = () => {
+		const item = options.screen.items[selectedIndex];
+		if (!item || item.disabled || closing || disposed) return;
+		const values = item.values ?? [item.currentValue];
+		if (values.length === 0) return;
+		const currentValue = displayed.get(item.id) ?? item.currentValue;
+		const currentIndex = values.indexOf(currentValue);
+		const value = values[(currentIndex + 1) % values.length] ?? currentValue;
+		displayed.set(item.id, value);
+		latestRequested.set(item.id, value);
+		const operation = pending.then(async () => {
+			if (disposed) return;
+			const previousValue = committed.get(item.id) ?? item.currentValue;
+			let response: MenuChangeResponse<ScreenId> = false;
+			try {
+				response =
+					(await options.onSettingChange?.({
+						itemId: item.id,
+						value,
+						previousValue,
+					})) ?? false;
+			} catch (error) {
+				options.onError?.(error);
+			}
+			if (disposed) return;
+			const accepted = typeof response === "boolean" ? response : response.accepted;
+			if (accepted) committed.set(item.id, value);
+			else if (latestRequested.get(item.id) === value) displayed.set(item.id, previousValue);
+			options.tui.requestRender();
+			if (accepted && typeof response !== "boolean") {
+				closing = true;
+				void pending.then(() => {
+					if (!disposed) options.onTransition?.(response.transition);
+				});
+			}
+		});
+		pending = operation.catch(() => undefined);
+	};
 	return {
 		render(width) {
+			const maxVisible = Math.min(options.screen.items.length, 13);
+			const startIndex = Math.max(
+				0,
+				Math.min(
+					selectedIndex - Math.floor(maxVisible / 2),
+					options.screen.items.length - maxVisible,
+				),
+			);
+			const visibleItems = options.screen.items.slice(startIndex, startIndex + maxVisible);
+			const content = visibleItems.map((item, offset) => {
+				const selected = startIndex + offset === selectedIndex;
+				const label = safeMenuText(item.label);
+				const value = safeMenuText(displayed.get(item.id) ?? item.currentValue);
+				const unavailable = item.disabled ? " (unavailable)" : "";
+				const text = `${selected ? "→ " : "  "}${label}  ${value}${unavailable}`;
+				return selected ? options.theme.fg("accent", text) : text;
+			});
+			if (maxVisible < options.screen.items.length) {
+				content.push(
+					options.theme.fg("dim", `  (${selectedIndex + 1}/${options.screen.items.length})`),
+				);
+			}
+			const selectedItem = options.screen.items[selectedIndex];
+			if (selectedItem?.description) {
+				content.push(
+					"",
+					...wrapTextWithAnsi(
+						options.theme.fg("dim", `  ${safeMenuText(selectedItem.description)}`),
+						Math.max(1, width),
+					),
+				);
+			}
 			return renderFrame(
 				options.screen.title,
 				options.screen.lines ?? [],
-				list.render(Math.max(1, width)),
+				content,
 				"back",
 				width,
 				options,
+				"change",
 			);
 		},
-		invalidate() {
-			list.invalidate();
-		},
+		invalidate() {},
 		handleInput(data) {
 			if (disposed || closing) return;
-			if (matchesKey(data, Key.ctrl("c"))) {
-				closeAfterPending("close");
-				return;
-			}
-			if (options.keybindings.matches(data, "tui.select.cancel")) {
+			if (matchesKey(data, Key.ctrl("c"))) closeAfterPending("close");
+			else if (options.keybindings.matches(data, "tui.select.cancel")) {
 				closeAfterPending("back");
-				return;
+			} else if (options.keybindings.matches(data, "tui.select.up")) {
+				select(selectedIndex - 1);
+			} else if (options.keybindings.matches(data, "tui.select.down")) {
+				select(selectedIndex + 1);
+			} else if (options.keybindings.matches(data, "tui.select.pageUp")) select(0);
+			else if (options.keybindings.matches(data, "tui.select.pageDown")) {
+				select(options.screen.items.length - 1);
+			} else if (options.keybindings.matches(data, "tui.select.confirm") || data === " ") {
+				activate();
 			}
-			handleListInput(list, data, options.keybindings);
 			options.tui.requestRender();
 		},
 		waitForPending: () => pending,
@@ -272,6 +312,7 @@ function createMultiSelectComponent<ScreenId extends string, ActionId extends st
 		...(options.screen.actions ?? []).map((item) => ({ kind: "action" as const, item })),
 	];
 	const selected = new Map(options.screen.items.map((item) => [item.id, item.selected]));
+	const committedSelected = new Map(selected);
 	const revisions = new Map<string, number>();
 	let selectedIndex = Math.max(
 		0,
@@ -325,8 +366,9 @@ function createMultiSelectComponent<ScreenId extends string, ActionId extends st
 			}
 			if (disposed) return;
 			const accepted = typeof response === "boolean" ? response : response.accepted;
-			if (!accepted && revisions.get(item.id) === revision) {
-				selected.set(item.id, previousSelected);
+			if (accepted) committedSelected.set(item.id, nextSelected);
+			else if (revisions.get(item.id) === revision) {
+				selected.set(item.id, committedSelected.get(item.id) ?? false);
 			}
 			options.tui.requestRender();
 			if (accepted && typeof response !== "boolean") {
@@ -366,8 +408,12 @@ function createMultiSelectComponent<ScreenId extends string, ActionId extends st
 			else if (options.keybindings.matches(data, "tui.select.down")) move(1);
 			else if (options.keybindings.matches(data, "tui.select.pageUp")) {
 				selectedIndex = 0;
+				const row = rows[selectedIndex];
+				if (row) options.onSelectionChange?.(row.item.id);
 			} else if (options.keybindings.matches(data, "tui.select.pageDown")) {
 				selectedIndex = Math.max(0, rows.length - 1);
+				const row = rows[selectedIndex];
+				if (row) options.onSelectionChange?.(row.item.id);
 			} else if (options.keybindings.matches(data, "tui.select.confirm") || data === " ") {
 				activate();
 			}
@@ -413,7 +459,7 @@ function commonListComponent<ScreenId extends string, ActionId extends string>(
 				options.onEvent({ kind: destination });
 				return;
 			}
-			handleListInput(list, data, options.keybindings);
+			list.handleInput(data);
 			options.tui.requestRender();
 		},
 		async waitForPending() {},
@@ -423,19 +469,6 @@ function commonListComponent<ScreenId extends string, ActionId extends string>(
 			options.onDispose?.();
 		},
 	};
-}
-
-function handleListInput(
-	list: SelectList | SettingsList,
-	data: string,
-	keybindings: MenuKeybindings,
-) {
-	if (keybindings.matches(data, "tui.select.up")) list.handleInput("\u001b[A");
-	else if (keybindings.matches(data, "tui.select.down")) list.handleInput("\u001b[B");
-	else if (keybindings.matches(data, "tui.select.pageUp")) list.handleInput("\u001b[5~");
-	else if (keybindings.matches(data, "tui.select.pageDown")) list.handleInput("\u001b[6~");
-	else if (keybindings.matches(data, "tui.select.confirm")) list.handleInput("\r");
-	else list.handleInput(data);
 }
 
 function renderFrame<ScreenId extends string, ActionId extends string>(
@@ -495,16 +528,6 @@ function bindingText(keybindings: MenuKeybindings, binding: MenuBinding, exclude
 		.join("/");
 }
 
-function settingsTheme(theme: Pick<Theme, "fg">): SettingsListTheme {
-	return {
-		label: (text, selected) => (selected ? theme.fg("accent", text) : text),
-		value: (text, selected) => (selected ? theme.fg("accent", text) : theme.fg("muted", text)),
-		description: (text) => theme.fg("dim", text),
-		cursor: theme.fg("accent", "→ "),
-		hint: (text) => theme.fg("dim", text),
-	};
-}
-
 function selectTheme(theme: Pick<Theme, "fg">) {
 	return {
 		selectedPrefix: (text: string) => theme.fg("accent", text),
@@ -519,16 +542,6 @@ function setInitialSelection(list: SelectList, items: readonly SelectItem[], sel
 	if (!selectedId) return;
 	const index = items.findIndex((item) => item.value === selectedId);
 	if (index >= 0) list.setSelectedIndex(index);
-}
-
-function setInitialSettingsSelection(
-	list: SettingsList,
-	items: readonly SettingItem[],
-	selectedId?: string,
-) {
-	if (!selectedId) return;
-	const index = items.findIndex((item) => item.id === selectedId);
-	for (let step = 0; step < index; step += 1) list.handleInput("\u001b[B");
 }
 
 export function safeMenuText(value: unknown) {

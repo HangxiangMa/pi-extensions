@@ -5,6 +5,7 @@ import { createMenuNavigator } from "./navigator.js";
 import {
 	createMenuScreenComponent,
 	type MenuMultiSelectChange,
+	type MenuScreenComponent,
 	type MenuScreenEvent,
 	type MenuSettingChange,
 	safeMenuText,
@@ -27,6 +28,7 @@ export type RunMenuResult =
 
 export interface RunMenuOptions<State> {
 	getState(context: { ctx: ExtensionCommandContext; signal: AbortSignal }): State | Promise<State>;
+	signal?: AbortSignal;
 	isCurrent?(): boolean;
 	onError?(ctx: ExtensionCommandContext, error: unknown): void | Promise<void>;
 	onUnsupportedMode?(ctx: ExtensionCommandContext, mode: ExtensionMode): void | Promise<void>;
@@ -59,10 +61,13 @@ async function runTuiMenu<State, ScreenId extends string, ActionId extends strin
 	options: RunMenuOptions<State>,
 ): Promise<RunMenuResult> {
 	const menuController = new AbortController();
+	const menuSignal = options.signal
+		? AbortSignal.any([menuController.signal, options.signal])
+		: menuController.signal;
 	const navigator = createMenuNavigator(definition.start);
 	try {
 		while (!navigator.closed) {
-			const loaded = await loadState(ctx, options, menuController.signal);
+			const loaded = await loadState(ctx, options, menuSignal);
 			if (loaded.kind !== "loaded") return loaded.result;
 			const state = loaded.state;
 			const screen = resolveMenuScreen(definition, navigator.current, state);
@@ -71,6 +76,7 @@ async function runTuiMenu<State, ScreenId extends string, ActionId extends strin
 				ctx,
 				screen,
 				navigator.selectionFor(navigator.current, selectableItemIds(screen)),
+				menuSignal,
 				{
 					onSelectionChange: (itemId) => navigator.rememberSelection(navigator.current, itemId),
 					onSettingChange: async (change, signal) => {
@@ -78,13 +84,13 @@ async function runTuiMenu<State, ScreenId extends string, ActionId extends strin
 							screen.kind === "settings"
 								? screen.items.find((candidate) => candidate.id === change.itemId)
 								: undefined;
-						if (!item) return rejected();
+						if (!item || item.disabled) return rejected();
 						navigator.rememberSelection(navigator.current, change.itemId);
 						const invocation = await invokeAction(
 							ctx,
 							definition.actions[item.action],
 							state,
-							signal,
+							AbortSignal.any([menuSignal, signal]),
 							change.itemId,
 							options,
 							{ value: change.value },
@@ -94,12 +100,14 @@ async function runTuiMenu<State, ScreenId extends string, ActionId extends strin
 					},
 					onMultiSelectChange: async (change, signal) => {
 						if (screen.kind !== "multiSelect") return rejected();
+						const item = screen.items.find((candidate) => candidate.id === change.itemId);
+						if (!item || item.disabled) return rejected();
 						navigator.rememberSelection(navigator.current, change.itemId);
 						const invocation = await invokeAction(
 							ctx,
 							definition.actions[screen.action],
 							state,
-							signal,
+							AbortSignal.any([menuSignal, signal]),
 							change.itemId,
 							options,
 							{ selected: change.selected },
@@ -109,7 +117,7 @@ async function runTuiMenu<State, ScreenId extends string, ActionId extends strin
 					},
 				},
 			);
-			if (staleAction || !isCurrent(options) || menuController.signal.aborted) {
+			if (staleAction || !isCurrent(options) || menuSignal.aborted) {
 				return { kind: "stale" };
 			}
 			if (!event) {
@@ -133,22 +141,15 @@ async function runTuiMenu<State, ScreenId extends string, ActionId extends strin
 			const item = actionItems.find((candidate) => candidate.id === event.itemId);
 			if (!item || item.disabled) continue;
 			navigator.rememberSelection(navigator.current, item.id);
-			const outcome = await activateActionItem(
-				ctx,
-				definition,
-				item,
-				state,
-				menuController.signal,
-				options,
-			);
+			const outcome = await activateActionItem(ctx, definition, item, state, menuSignal, options);
 			if (outcome.stale) return { kind: "stale" };
 			navigator.apply(outcome.transition);
 		}
 		return { kind: "closed" };
 	} catch (error) {
-		if (!isCurrent(options) || menuController.signal.aborted) return { kind: "stale" };
+		if (!isCurrent(options) || menuSignal.aborted) return { kind: "stale" };
 		await reportError(ctx, options, error);
-		if (!isCurrent(options) || menuController.signal.aborted) return { kind: "stale" };
+		if (!isCurrent(options) || menuSignal.aborted) return { kind: "stale" };
 		return { kind: "error", error };
 	} finally {
 		menuController.abort(new DOMException("Menu closed", "AbortError"));
@@ -169,6 +170,7 @@ async function showTuiScreen<ScreenId extends string, ActionId extends string>(
 	ctx: ExtensionCommandContext,
 	screen: MenuScreen<ScreenId, ActionId>,
 	selectedItemId: string | undefined,
+	menuSignal: AbortSignal,
 	callbacks: {
 		onSelectionChange(itemId: string): void;
 		onSettingChange(
@@ -181,33 +183,49 @@ async function showTuiScreen<ScreenId extends string, ActionId extends string>(
 		): Promise<ActionInvocation<ScreenId>>;
 	},
 ): Promise<InternalScreenEvent<ScreenId> | undefined> {
-	return ctx.ui.custom<InternalScreenEvent<ScreenId> | undefined>(
-		(tui, theme, keybindings, done) => {
-			const screenController = new AbortController();
-			let finished = false;
-			const finish = (event: InternalScreenEvent<ScreenId>) => {
-				if (finished) return;
-				finished = true;
-				done(event);
-			};
-			return createMenuScreenComponent({
-				screen,
-				selectedItemId,
-				tui,
-				theme,
-				keybindings,
-				onEvent: finish,
-				onSelectionChange: callbacks.onSelectionChange,
-				onSettingChange: (change) => callbacks.onSettingChange(change, screenController.signal),
-				onMultiSelectChange: (change) =>
-					callbacks.onMultiSelectChange(change, screenController.signal),
-				onTransition: (transition) => finish({ kind: "transition", transition }),
-				onDispose: () => {
-					screenController.abort(new DOMException("Menu screen disposed", "AbortError"));
-				},
-			});
-		},
-	);
+	let component: MenuScreenComponent | undefined;
+	let removeAbortListener = () => {};
+	try {
+		return await ctx.ui.custom<InternalScreenEvent<ScreenId> | undefined>(
+			(tui, theme, keybindings, done) => {
+				const screenController = new AbortController();
+				let finished = false;
+				const finish = (event: InternalScreenEvent<ScreenId>) => {
+					if (finished) return;
+					finished = true;
+					done(event);
+				};
+				const abortScreen = () => {
+					screenController.abort(new DOMException("Menu owner disposed", "AbortError"));
+					finish({ kind: "close" });
+				};
+				menuSignal.addEventListener("abort", abortScreen, { once: true });
+				removeAbortListener = () => menuSignal.removeEventListener("abort", abortScreen);
+				if (menuSignal.aborted) abortScreen();
+				component = createMenuScreenComponent({
+					screen,
+					selectedItemId,
+					tui,
+					theme,
+					keybindings,
+					onEvent: finish,
+					onSelectionChange: callbacks.onSelectionChange,
+					onSettingChange: (change) => callbacks.onSettingChange(change, screenController.signal),
+					onMultiSelectChange: (change) =>
+						callbacks.onMultiSelectChange(change, screenController.signal),
+					onTransition: (transition) => finish({ kind: "transition", transition }),
+					onDispose: () => {
+						removeAbortListener();
+						screenController.abort(new DOMException("Menu screen disposed", "AbortError"));
+					},
+				});
+				return component;
+			},
+		);
+	} finally {
+		removeAbortListener();
+		await component?.waitForPending();
+	}
 }
 
 async function activateActionItem<State, ScreenId extends string, ActionId extends string>(
@@ -331,44 +349,43 @@ async function runDialogMenu<State, ScreenId extends string, ActionId extends st
 	options: RunMenuOptions<State>,
 ): Promise<RunMenuResult> {
 	const controller = new AbortController();
+	const menuSignal = options.signal
+		? AbortSignal.any([controller.signal, options.signal])
+		: controller.signal;
 	const navigator = createMenuNavigator(definition.start);
 	try {
 		while (!navigator.closed) {
-			const loaded = await loadState(ctx, options, controller.signal);
+			const loaded = await loadState(ctx, options, menuSignal);
 			if (loaded.kind !== "loaded") return loaded.result;
 			const state = loaded.state;
 			const screen = resolveMenuScreen(definition, navigator.current, state);
-			const choice = await ctx.ui.select(dialogTitle(screen), dialogChoices(screen));
-			if (!isCurrent(options)) return { kind: "stale" };
+			const rows = dialogRows(screen);
+			const choice = await ctx.ui.select(
+				dialogTitle(screen),
+				rows.map((row) => row.label),
+			);
+			if (!isCurrent(options) || menuSignal.aborted) return { kind: "stale" };
 			if (!choice) {
 				navigator.apply({ kind: "back" });
 				continue;
 			}
-			const exitChoice = dialogExitChoice(screen);
-			if (screen.kind === "detail" || choice === exitChoice) {
+			const selectedRow = rows.find((row) => row.label === choice);
+			if (!selectedRow) continue;
+			if (selectedRow.kind === "exit" || screen.kind === "detail") {
 				const destination = "hint" in screen ? (screen.hint ?? "back") : "back";
 				navigator.apply({ kind: destination });
 				continue;
 			}
 			if (screen.kind === "actions") {
-				const index = dialogChoices(screen).indexOf(choice);
-				const item = screen.items[index];
+				const item = screen.items[selectedRow.index];
 				if (!item || item.disabled) continue;
-				const outcome = await activateActionItem(
-					ctx,
-					definition,
-					item,
-					state,
-					controller.signal,
-					options,
-				);
+				const outcome = await activateActionItem(ctx, definition, item, state, menuSignal, options);
 				if (outcome.stale) return { kind: "stale" };
 				navigator.apply(outcome.transition);
 				continue;
 			}
 			if (screen.kind === "settings") {
-				const index = dialogChoices(screen).indexOf(choice);
-				const item = screen.items[index];
+				const item = screen.items[selectedRow.index];
 				if (!item || item.disabled) continue;
 				const values = item.values ?? [item.currentValue];
 				const currentIndex = Math.max(0, values.indexOf(item.currentValue));
@@ -377,7 +394,7 @@ async function runDialogMenu<State, ScreenId extends string, ActionId extends st
 					ctx,
 					definition.actions[item.action],
 					state,
-					controller.signal,
+					menuSignal,
 					item.id,
 					options,
 					{ value },
@@ -386,29 +403,28 @@ async function runDialogMenu<State, ScreenId extends string, ActionId extends st
 				navigator.apply(outcome.transition);
 				continue;
 			}
-			const index = dialogChoices(screen).indexOf(choice);
-			const item = screen.items[index];
-			if (!item) {
-				const actionItem = screen.actions?.[index - screen.items.length];
+			if (selectedRow.kind === "action") {
+				const actionItem = screen.actions?.[selectedRow.index];
 				if (!actionItem || actionItem.disabled) continue;
 				const outcome = await activateActionItem(
 					ctx,
 					definition,
 					actionItem,
 					state,
-					controller.signal,
+					menuSignal,
 					options,
 				);
 				if (outcome.stale) return { kind: "stale" };
 				navigator.apply(outcome.transition);
 				continue;
 			}
-			if (item.disabled) continue;
+			const item = screen.items[selectedRow.index];
+			if (!item || item.disabled) continue;
 			const outcome = await invokeAction(
 				ctx,
 				definition.actions[screen.action],
 				state,
-				controller.signal,
+				menuSignal,
 				item.id,
 				options,
 				{ selected: !item.selected },
@@ -418,9 +434,9 @@ async function runDialogMenu<State, ScreenId extends string, ActionId extends st
 		}
 		return { kind: "closed" };
 	} catch (error) {
-		if (!isCurrent(options) || controller.signal.aborted) return { kind: "stale" };
+		if (!isCurrent(options) || menuSignal.aborted) return { kind: "stale" };
 		await reportError(ctx, options, error);
-		if (!isCurrent(options) || controller.signal.aborted) return { kind: "stale" };
+		if (!isCurrent(options) || menuSignal.aborted) return { kind: "stale" };
 		return { kind: "error", error };
 	} finally {
 		controller.abort(new DOMException("Menu closed", "AbortError"));
@@ -438,26 +454,64 @@ function dialogTitle<ScreenId extends string, ActionId extends string>(
 		.join("\n");
 }
 
-function dialogChoices<ScreenId extends string, ActionId extends string>(
+interface DialogRow {
+	kind: "item" | "action" | "exit";
+	index: number;
+	label: string;
+}
+
+function dialogRows<ScreenId extends string, ActionId extends string>(
 	screen: MenuScreen<ScreenId, ActionId>,
-) {
-	if (screen.kind === "detail") return [dialogExitChoice(screen)];
-	if (screen.kind === "actions") return screen.items.map((item) => safeMenuText(item.label));
-	if (screen.kind === "settings") {
-		return [
-			...screen.items.map(
-				(item) => `${safeMenuText(item.label)} (${safeMenuText(item.currentValue)})`,
-			),
-			dialogExitChoice(screen),
+): DialogRow[] {
+	let rows: DialogRow[];
+	if (screen.kind === "detail") {
+		rows = [{ kind: "exit", index: 0, label: dialogExitChoice(screen) }];
+	} else if (screen.kind === "actions") {
+		rows = screen.items.map((item, index) => ({
+			kind: "item",
+			index,
+			label: safeMenuText(item.label),
+		}));
+	} else if (screen.kind === "settings") {
+		rows = [
+			...screen.items.map((item, index) => ({
+				kind: "item" as const,
+				index,
+				label: `${safeMenuText(item.label)} (${safeMenuText(item.currentValue)})`,
+			})),
+			{ kind: "exit", index: 0, label: dialogExitChoice(screen) },
+		];
+	} else {
+		rows = [
+			...screen.items.map((item, index) => ({
+				kind: "item" as const,
+				index,
+				label: `${item.selected ? "[x]" : "[ ]"} ${safeMenuText(item.label)}`,
+			})),
+			...(screen.actions ?? []).map((item, index) => ({
+				kind: "action" as const,
+				index,
+				label: safeMenuText(item.label),
+			})),
+			{ kind: "exit", index: 0, label: dialogExitChoice(screen) },
 		];
 	}
-	const choices = [
-		...screen.items.map((item) => `${item.selected ? "[x]" : "[ ]"} ${safeMenuText(item.label)}`),
-		...(screen.actions ?? []).map((item) => safeMenuText(item.label)),
-	];
-	const exitChoice = dialogExitChoice(screen);
-	if (!choices.includes(exitChoice)) choices.push(exitChoice);
-	return choices;
+	return uniqueDialogRows(rows);
+}
+
+function uniqueDialogRows(rows: readonly DialogRow[]): DialogRow[] {
+	const used = new Set<string>();
+	return rows.map((row) => {
+		const base = row.label;
+		let label = base;
+		let suffix = 2;
+		while (used.has(label)) {
+			label = `${base} [${suffix}]`;
+			suffix += 1;
+		}
+		used.add(label);
+		return { ...row, label };
+	});
 }
 
 function dialogExitChoice<ScreenId extends string, ActionId extends string>(

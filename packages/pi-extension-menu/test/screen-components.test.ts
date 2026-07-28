@@ -1,11 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import {
+	KeybindingsManager,
+	setKeybindings,
+	TUI_KEYBINDINGS,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import { createMenuScreenComponent, type MenuScreenEvent } from "../src/screen-components.js";
 import type { MenuScreen, MenuTransition } from "../src/types.js";
 
 initTheme("dark", false);
+const testKeybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
+	"tui.select.up": "k",
+	"tui.select.down": "j",
+	"tui.select.confirm": "l",
+	"tui.select.cancel": "q",
+});
+setKeybindings(testKeybindings);
 
 type ScreenId = "main" | "detail";
 type ActionId = "run" | "setting" | "toggle";
@@ -111,6 +123,59 @@ test("settings restore a selected row when the screen is reopened", () => {
 	assert.match(harness.component.render(80).join("\n"), /→ .*Manual mode/);
 });
 
+test("disabled settings cannot invoke their action", async () => {
+	let changes = 0;
+	const firstSetting = settingsScreen.items[0];
+	assert.ok(firstSetting);
+	const harness = componentHarness(
+		{
+			...settingsScreen,
+			items: [{ ...firstSetting, disabled: true }],
+		},
+		{
+			onSettingChange: async () => {
+				changes += 1;
+				return true;
+			},
+		},
+	);
+	harness.component.handleInput("l");
+	await harness.component.waitForPending();
+	assert.equal(changes, 0);
+});
+
+test("settings sanitize display values without changing action payloads", async () => {
+	const currentValue = "Off\u001b]8;;unsafe\u0007\nvalue";
+	const nextValue = "On\u001b[31m\nraw";
+	let receivedValue = "";
+	const harness = componentHarness(
+		{
+			kind: "settings",
+			title: "Settings",
+			items: [
+				{
+					id: "unsafe",
+					label: "Unsafe",
+					currentValue,
+					values: [currentValue, nextValue],
+					action: "setting",
+				},
+			],
+		},
+		{
+			onSettingChange: async ({ value }) => {
+				receivedValue = value;
+				return true;
+			},
+		},
+	);
+	assert.equal(harness.component.render(80).join("\n").includes("\u001b]8"), false);
+	harness.component.handleInput("l");
+	await harness.component.waitForPending();
+	assert.equal(receivedValue, nextValue);
+	assert.equal(harness.component.render(80).join("\n").includes("\u001b[31m"), false);
+});
+
 test("settings changes serialize, roll back rejection, and drain before Back", async () => {
 	let releaseFirst: (() => void) | undefined;
 	const requests: string[] = [];
@@ -165,6 +230,34 @@ test("multi-select retains its cursor and restores a rejected optimistic toggle"
 	assert.match(rendered, /› \[ \] tool_two/);
 });
 
+test("multi-select rejection restores the last committed value after rapid toggles", async () => {
+	let releaseFirst: (() => void) | undefined;
+	let calls = 0;
+	const firstGate = new Promise<void>((resolve) => {
+		releaseFirst = resolve;
+	});
+	const harness = componentHarness(
+		{
+			...multiSelectScreen,
+			items: [{ id: "one", label: "tool_one", selected: false }],
+			actions: [],
+		},
+		{
+			onMultiSelectChange: async () => {
+				calls += 1;
+				if (calls === 1) await firstGate;
+				return false;
+			},
+		},
+	);
+	harness.component.handleInput("l");
+	harness.component.handleInput("l");
+	releaseFirst?.();
+	await harness.component.waitForPending();
+	assert.equal(calls, 2);
+	assert.match(harness.component.render(80).join("\n"), /› \[ \] tool_one/);
+});
+
 test("multi-select supports explicit bulk action rows", async () => {
 	const harness = componentHarness(multiSelectScreen, { selectedItemId: "two" });
 	harness.component.handleInput("j");
@@ -206,26 +299,7 @@ function componentHarness(
 				return text;
 			},
 		},
-		keybindings: {
-			matches(data: string, binding: string) {
-				const keys: Record<string, string> = {
-					"tui.select.up": "k",
-					"tui.select.down": "j",
-					"tui.select.confirm": "l",
-					"tui.select.cancel": "q",
-				};
-				return keys[binding] === data;
-			},
-			getKeys(binding: string) {
-				const keys: Record<string, readonly string[]> = {
-					"tui.select.up": ["k"],
-					"tui.select.down": ["j"],
-					"tui.select.confirm": ["l"],
-					"tui.select.cancel": ["q", "ctrl+c"],
-				};
-				return keys[binding] ?? [];
-			},
-		},
+		keybindings: testKeybindings,
 		onEvent: (event) => events.push(event),
 		onSettingChange: options.onSettingChange,
 		onMultiSelectChange: options.onMultiSelectChange,

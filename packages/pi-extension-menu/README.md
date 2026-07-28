@@ -79,6 +79,7 @@ const menu = defineMenu<State, Screen, Action>({
 export async function showMenu(ctx: ExtensionCommandContext, generation: number) {
   return runMenu(ctx, menu, {
     getState: ({ signal }) => loadState(signal),
+    signal: currentSessionSignal(),
     isCurrent: () => generation === currentGeneration(),
     onError: (_ctx, error) => ctx.ui.notify(formatError(error), "error"),
     onUnsupportedMode: (_ctx, mode) => {
@@ -124,7 +125,8 @@ recovery behavior and is routed through `onError`.
 `runMenu()` accepts Pi's `ExtensionCommandContext`, a definition, and runtime options:
 
 - `getState({ ctx, signal })` loads extension-owned state.
-- `isCurrent()` lets the extension invalidate work after session replacement or shutdown.
+- `signal` aborts state loads and actions immediately when the owning session is replaced or shut down.
+- `isCurrent()` prevents stale continuations after session replacement or shutdown.
 - `onError(ctx, error)` customizes observable failure reporting.
 - `onUnsupportedMode(ctx, mode)` provides print/JSON fallback behavior.
 

@@ -21,8 +21,11 @@ interface ToolStatusSummary {
 
 let settingsNotice: string | undefined;
 let sessionGeneration = 0;
+let sessionController = new AbortController();
 
 export function advanceFirecrawlSessionGeneration(): number {
+	sessionController.abort(new DOMException("Firecrawl session replaced", "AbortError"));
+	sessionController = new AbortController();
 	return ++sessionGeneration;
 }
 
@@ -32,6 +35,10 @@ export function currentFirecrawlSessionGeneration(): number {
 
 export function isCurrentFirecrawlSession(generation: number): boolean {
 	return generation === sessionGeneration;
+}
+
+export function currentFirecrawlSessionSignal(): AbortSignal {
+	return sessionController.signal;
 }
 
 export function clearSettingsNotice() {
@@ -103,6 +110,7 @@ export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
 	});
 	const result = await runMenu(ctx, menu, {
 		getState: () => undefined,
+		signal: sessionController.signal,
 		isCurrent: () => isCurrentFirecrawlSession(generation),
 	});
 	if (result.kind !== "closed" || !isCurrentFirecrawlSession(generation)) return;
