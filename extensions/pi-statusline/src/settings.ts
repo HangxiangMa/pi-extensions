@@ -290,7 +290,7 @@ export function loadStatuslineSettings(settingsPath: string): LoadedStatuslineSe
 	try {
 		rawDocument = readFileSync(settingsPath, "utf8");
 	} catch (error) {
-		if (!pathExists(settingsPath)) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT" && !pathExists(settingsPath)) {
 			return builtInSettings(settingsPath);
 		}
 		return builtInSettings(settingsPath, [
@@ -323,24 +323,27 @@ export function loadStatuslineSettingsForAgent(agentDir = getAgentDir()): Loaded
 	pendingSettingsNotice = undefined;
 	const canonicalPath = settingsFilePath(agentDir);
 	const legacyPath = join(agentDir, LEGACY_SETTINGS_FILE_NAME);
-	if (pathExists(canonicalPath)) {
-		if (pathExists(legacyPath)) {
+	const canonical = loadStatuslineSettings(canonicalPath);
+	if (!isMissingStatuslineSettings(canonical)) {
+		if (!isMissingStatuslineSettings(loadStatuslineSettings(legacyPath))) {
 			pendingSettingsNotice = `${LEGACY_SETTINGS_FILE_NAME} ignored because ${SETTINGS_FILE_NAME} takes precedence.`;
 		}
-		return loadStatuslineSettings(canonicalPath);
+		return canonical;
 	}
-	if (pathExists(legacyPath)) return migrateLegacySettings(canonicalPath, legacyPath);
-	return builtInSettings(canonicalPath);
+	const legacy = loadStatuslineSettings(legacyPath);
+	return isMissingStatuslineSettings(legacy)
+		? canonical
+		: migrateLegacySettings(canonicalPath, legacy);
 }
 
 function migrateLegacySettings(
 	canonicalPath: string,
-	legacyPath: string,
+	legacy: LoadedStatuslineSettings,
 ): LoadedStatuslineSettings {
-	const legacy = loadStatuslineSettings(legacyPath);
-	if (pathExists(canonicalPath)) {
+	const racedCanonical = loadStatuslineSettings(canonicalPath);
+	if (!isMissingStatuslineSettings(racedCanonical)) {
 		pendingSettingsNotice = `${LEGACY_SETTINGS_FILE_NAME} ignored because ${SETTINGS_FILE_NAME} was created concurrently.`;
-		return loadStatuslineSettings(canonicalPath);
+		return racedCanonical;
 	}
 	if (
 		legacy.source !== "user" ||
@@ -352,6 +355,14 @@ function migrateLegacySettings(
 	}
 	pendingSettingsNotice = `Using legacy ${LEGACY_SETTINGS_FILE_NAME}; rename it to ${SETTINGS_FILE_NAME}. Future saves write ${SETTINGS_FILE_NAME} without modifying the legacy file.`;
 	return legacy;
+}
+
+function isMissingStatuslineSettings(settings: LoadedStatuslineSettings): boolean {
+	return (
+		settings.source === "built-in" &&
+		settings.rawDocument === undefined &&
+		settings.diagnostics.length === 0
+	);
 }
 
 export function saveStatuslineSettingsDocument(
@@ -372,6 +383,7 @@ export function saveStatuslineSettingsDocument(
 	}
 
 	const fs = { mkdirSync, writeFileSync, renameSync, rmSync, ...overrides };
+	const replaceExisting = pathEntryExists(settingsPath);
 	const temporaryPath = temporarySettingsPath(settingsPath);
 	let fileIdentity: { dev: number; ino: number } | undefined;
 	try {
@@ -379,6 +391,9 @@ export function saveStatuslineSettingsDocument(
 		fs.writeFileSync(temporaryPath, rawDocument, { encoding: "utf8", flag: "wx" });
 		const info = lstatSync(temporaryPath);
 		fileIdentity = { dev: info.dev, ino: info.ino };
+		if (!replaceExisting && pathEntryExists(settingsPath)) {
+			throw new Error(`${SETTINGS_FILE_NAME} was created concurrently; reopen settings and retry.`);
+		}
 		fs.renameSync(temporaryPath, settingsPath);
 	} finally {
 		removeTemporaryFile(fs.rmSync, temporaryPath);
@@ -618,6 +633,16 @@ function pathExists(path: string): boolean {
 		return true;
 	} catch {
 		return false;
+	}
+}
+
+function pathEntryExists(path: string): boolean {
+	try {
+		lstatSync(path);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
 	}
 }
 

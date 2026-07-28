@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, {
+	existsSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -332,6 +340,31 @@ test("missing settings use defaults without materializing a document", () => {
 	}
 });
 
+test("unreadable statusline settings report an I/O diagnostic instead of appearing missing", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-unreadable-"));
+	const path = join(root, "inaccessible", "pi-statusline.json");
+	const originalReadFileSync = fs.readFileSync;
+	fs.readFileSync = ((filePath: Parameters<typeof fs.readFileSync>[0], ...args: unknown[]) => {
+		if (String(filePath) === path) {
+			throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+		}
+		return (originalReadFileSync as (...values: unknown[]) => unknown)(filePath, ...args);
+	}) as typeof fs.readFileSync;
+	syncBuiltinESMExports();
+	try {
+		const loaded = loadStatuslineSettingsForAgent(join(root, "inaccessible"));
+		assert.equal(loaded.source, "built-in");
+		assert.match(
+			loaded.diagnostics[0]?.message ?? "",
+			/Unable to read settings.*permission denied/i,
+		);
+	} finally {
+		fs.readFileSync = originalReadFileSync;
+		syncBuiltinESMExports();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("malformed existing settings are never overwritten", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-settings-"));
 	const path = settingsFilePath(root);
@@ -388,6 +421,28 @@ test("transactional saves preserve unknown fields and roll back publish failures
 		assert.deepEqual(readdirSync(root), ["pi-statusline.json"]);
 		assert.throws(() => saveStatuslineSettingsDocument(path, "{broken"), /parse JSON/i);
 		assert.equal(existsSync(path), true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("first statusline saves preserve settings created before publication", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-first-save-race-"));
+	const path = settingsFilePath(root);
+	const concurrent = `${JSON.stringify({ palettePreset: "ocean", future: "newer" })}\n`;
+	try {
+		assert.throws(
+			() =>
+				saveStatuslineSettingsDocument(path, DEFAULT_STATUSLINE_DOCUMENT, {
+					writeFileSync(temporaryPath, data, options) {
+						writeFileSync(temporaryPath, data, options);
+						writeFileSync(path, concurrent);
+					},
+				}),
+			/created concurrently.*retry/i,
+		);
+		assert.equal(readFileSync(path, "utf8"), concurrent);
+		assert.deepEqual(readdirSync(root), ["pi-statusline.json"]);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

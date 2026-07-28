@@ -160,7 +160,7 @@ export function loadStarshipConfig(settingsPath: string): LoadedStarshipConfig {
 	try {
 		rawDocument = readFileSync(settingsPath, "utf8");
 	} catch (error) {
-		if (!existsSync(settingsPath)) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT" && !existsSync(settingsPath)) {
 			return {
 				config: cloneBuiltInConfig(),
 				source: "built-in",
@@ -488,11 +488,15 @@ function atomicWriteConfigDocument(
 	overrides: Partial<AtomicFileSystem>,
 ): { dev: number; ino: number } {
 	const fs = { mkdirSync, writeFileSync, renameSync, rmSync, ...overrides };
+	const replaceExisting = pathEntryExists(settingsPath);
 	fs.mkdirSync(dirname(settingsPath), { recursive: true });
 	const tempPath = join(dirname(settingsPath), `.${CONFIG_FILE_NAME}.${randomUUID()}.tmp`);
 	try {
 		fs.writeFileSync(tempPath, rawDocument, { encoding: "utf8", flag: "wx" });
 		const info = lstatSync(tempPath);
+		if (!replaceExisting && pathEntryExists(settingsPath)) {
+			throw new Error(`${CONFIG_FILE_NAME} was created concurrently; reopen settings and retry.`);
+		}
 		fs.renameSync(tempPath, settingsPath);
 		return { dev: info.dev, ino: info.ino };
 	} finally {
@@ -646,6 +650,16 @@ function diagnostic(
 	message: string,
 ): ConfigDiagnostic {
 	return { severity, path, message };
+}
+
+function pathEntryExists(path: string): boolean {
+	try {
+		lstatSync(path);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
+	}
 }
 
 function formatError(error: unknown): string {

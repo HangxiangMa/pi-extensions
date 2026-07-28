@@ -296,12 +296,11 @@ function restorePreviousConfiguration(
 	saved: LoadedStarshipConfig,
 ): unknown {
 	try {
-		if (previous.rawDocument === undefined) {
-			if (saved.rawDocument === undefined || saved.fileIdentity === undefined) {
-				throw new Error("The saved settings document identity is unavailable");
-			}
-			removeConfigDocumentIfMatches(options.settingsPath, saved.rawDocument, saved.fileIdentity);
-		} else {
+		if (saved.rawDocument === undefined || saved.fileIdentity === undefined) {
+			throw new Error("The saved settings document identity is unavailable");
+		}
+		removeConfigDocumentIfMatches(options.settingsPath, saved.rawDocument, saved.fileIdentity);
+		if (previous.rawDocument !== undefined) {
 			(options.restore ?? atomicRestoreConfigDocument)(options.settingsPath, previous.rawDocument);
 		}
 		options.apply(previous, ctx);

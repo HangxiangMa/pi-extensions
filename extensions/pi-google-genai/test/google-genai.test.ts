@@ -734,6 +734,40 @@ test("Google GenAI patch saves reread and serialize the latest private document"
 	});
 });
 
+test("Google GenAI legacy-seeded saves preserve canonical settings created before publication", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const legacyPath = join(agentDir, "google-genai.json");
+		const canonicalPath = googleGenaiConfigPath();
+		const legacy = JSON.stringify({ apiKey: "legacy-key", model: "legacy", legacy: true });
+		const concurrent = JSON.stringify({ apiKey: "new-key", model: "newer", newer: true });
+		await writeFile(legacyPath, legacy, { mode: 0o600 });
+
+		const originalWriteFile = fs.promises.writeFile;
+		let createCanonical = true;
+		fs.promises.writeFile = (async (...args: Parameters<typeof fs.promises.writeFile>) => {
+			const result = await originalWriteFile(...args);
+			if (createCanonical && String(args[0]).startsWith(`${canonicalPath}.`)) {
+				createCanonical = false;
+				await originalWriteFile(canonicalPath, concurrent, { mode: 0o600 });
+			}
+			return result;
+		}) as typeof fs.promises.writeFile;
+		syncBuiltinESMExports();
+		try {
+			await assert.rejects(
+				updateGoogleGenaiSetup({ model: "requested" }),
+				/created concurrently.*retry/i,
+			);
+		} finally {
+			fs.promises.writeFile = originalWriteFile;
+			syncBuiltinESMExports();
+		}
+
+		assert.equal(await readFile(canonicalPath, "utf8"), concurrent);
+		assert.equal(await readFile(legacyPath, "utf8"), legacy);
+	});
+});
+
 test("Google GenAI setup preserves forward-compatible tool names", async () => {
 	await withTempAgentDir(async () => {
 		await writeConfig({

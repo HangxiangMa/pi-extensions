@@ -1,5 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { access, chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+	access,
+	chmod,
+	lstat,
+	mkdir,
+	readFile,
+	rename,
+	rm,
+	stat,
+	writeFile,
+} from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -259,8 +269,8 @@ function updateGoogleGenaiConfig(patch: object): Promise<GoogleGenaiConfig> {
 
 async function writeGoogleGenaiConfigNow(patch: object): Promise<GoogleGenaiConfig> {
 	const path = googleGenaiConfigPath();
-	const currentDocument = await readDocumentForUpdate(path);
-	const nextDocument = { ...currentDocument, ...patch };
+	const current = await readDocumentForUpdate(path);
+	const nextDocument = { ...current.document, ...patch };
 	await mkdir(dirname(path), { recursive: true });
 	const tempFile = `${path}.${process.pid}.${randomUUID()}.tmp`;
 	try {
@@ -268,7 +278,11 @@ async function writeGoogleGenaiConfigNow(patch: object): Promise<GoogleGenaiConf
 			mode: 0o600,
 		});
 		await chmod(tempFile, 0o600);
+		if (!current.replaceCanonical && (await pathEntryExists(path))) {
+			throw new Error(`${CONFIG_FILE_NAME} was created concurrently; reopen settings and retry.`);
+		}
 		await rename(tempFile, path);
+		await chmod(path, 0o600);
 		return normalizeGoogleGenaiSettings(nextDocument);
 	} catch (error) {
 		await rm(tempFile, { force: true }).catch(() => undefined);
@@ -276,9 +290,23 @@ async function writeGoogleGenaiConfigNow(patch: object): Promise<GoogleGenaiConf
 	}
 }
 
-async function readDocumentForUpdate(canonicalPath: string): Promise<Record<string, unknown>> {
+async function pathEntryExists(filePath: string) {
+	try {
+		await lstat(filePath);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
+	}
+}
+
+async function readDocumentForUpdate(canonicalPath: string): Promise<{
+	document: Record<string, unknown>;
+	replaceCanonical: boolean;
+}> {
 	const legacyPath = join(dirname(canonicalPath), LEGACY_CONFIG_FILE_NAME);
 	let text: string;
+	let replaceCanonical = true;
 	try {
 		text = await readFile(canonicalPath, "utf8");
 	} catch (error) {
@@ -287,10 +315,13 @@ async function readDocumentForUpdate(canonicalPath: string): Promise<Record<stri
 				`Cannot update ${CONFIG_FILE_NAME} because the existing file is unreadable; repair it first.`,
 			);
 		}
+		replaceCanonical = false;
 		try {
 			text = await readFile(legacyPath, "utf8");
 		} catch (legacyError) {
-			if ((legacyError as NodeJS.ErrnoException).code === "ENOENT") return {};
+			if ((legacyError as NodeJS.ErrnoException).code === "ENOENT") {
+				return { document: {}, replaceCanonical };
+			}
 			throw new Error(
 				`Cannot update ${CONFIG_FILE_NAME} because the legacy file is unreadable; repair it first.`,
 			);
@@ -310,7 +341,7 @@ async function readDocumentForUpdate(canonicalPath: string): Promise<Record<stri
 			`Cannot update ${CONFIG_FILE_NAME} because the existing file has invalid recognized fields; repair it first.`,
 		);
 	}
-	return { ...document };
+	return { document: { ...document }, replaceCanonical };
 }
 
 function isValidGoogleGenaiDocument(value: unknown): value is Record<string, unknown> {

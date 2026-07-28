@@ -335,6 +335,36 @@ test("caffeinate failed publication preserves the prior file and removes its tem
 	});
 });
 
+test("caffeinate legacy-seeded saves preserve canonical settings created before publication", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const legacyPath = path.join(agentDir, LEGACY_SETTINGS_FILE);
+		const canonicalPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		const legacy = JSON.stringify({ mode: "display", quiet: true, updatedAt: 1, legacy: true });
+		const concurrent = JSON.stringify({ mode: "display", quiet: false, updatedAt: 2, newer: true });
+		writeFileSync(legacyPath, legacy);
+
+		await assert.rejects(
+			saveSettings(
+				{ mode: "sleep", updatedAt: 3 },
+				{
+					write: async (temporaryPath, data) => {
+						writeFileSync(temporaryPath, data);
+						writeFileSync(canonicalPath, concurrent);
+					},
+				},
+			),
+			/created concurrently.*retry/i,
+		);
+
+		assert.equal(readFileSync(canonicalPath, "utf8"), concurrent);
+		assert.equal(readFileSync(legacyPath, "utf8"), legacy);
+		assert.deepEqual(
+			readdirSync(agentDir).sort(),
+			[LEGACY_SETTINGS_FILE, NEW_SETTINGS_FILE].sort(),
+		);
+	});
+});
+
 test("caffeinate mode saves preserve a newer quiet setting", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		writeSettings(agentDir, NEW_SETTINGS_FILE, "display", false);

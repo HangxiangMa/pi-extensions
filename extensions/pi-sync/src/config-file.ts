@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-	constants as fsConstants,
 	mkdir,
 	mkdirSync,
 	realpath,
@@ -426,16 +425,32 @@ async function installPrivateConfigExclusively(filePath: string, bytes: Buffer) 
 		handle = undefined;
 		await publishConfigFile(temporaryPath, filePath);
 		const installed = await fs.lstat(filePath);
+		let publishedHandle: fs.FileHandle | undefined;
+		let publicationError: unknown;
 		try {
-			if (process.platform !== "win32") await fs.chmod(filePath, 0o600);
-			await syncParentDirectory(filePath).catch(() => undefined);
+			if (installed.isSymbolicLink() || !installed.isFile()) {
+				throw new Error(`Published pi-sync settings are not a regular file: ${filePath}`);
+			}
+			publishedHandle = await fs.open(filePath, "r+");
+			const published = await publishedHandle.stat();
+			if (published.dev !== installed.dev || published.ino !== installed.ino) {
+				throw new Error(`Published pi-sync settings changed while opening: ${filePath}`);
+			}
+			if (process.platform !== "win32") await publishedHandle.chmod(0o600);
+			await publishedHandle.sync();
+			await syncParentDirectory(filePath);
 		} catch (error) {
+			publicationError = error;
+		} finally {
+			await publishedHandle?.close().catch(() => undefined);
+		}
+		if (publicationError) {
 			await quarantineAndRemoveConfigIfMatchesUnlocked(
 				filePath,
 				{ dev: installed.dev, ino: installed.ino },
 				bytes,
 			);
-			throw error;
+			throw publicationError;
 		}
 		return { dev: installed.dev, ino: installed.ino };
 	} finally {
@@ -543,10 +558,8 @@ async function fileIdentityAndContentsMatch(
 
 async function restoreQuarantinedConfig(filePath: string, quarantinePath: string) {
 	try {
-		await copyFileWithoutReplacement(quarantinePath, filePath);
+		await renameFileWithoutReplacement(quarantinePath, filePath);
 		if (process.platform !== "win32") await fs.chmod(filePath, 0o600);
-		await syncParentDirectory(filePath);
-		await fs.rm(quarantinePath);
 		await syncParentDirectory(filePath);
 		return;
 	} catch (error) {
@@ -601,12 +614,14 @@ async function syncParentDirectory(filePath: string) {
 
 async function publishFileWithoutReplacement(source: string, destination: string) {
 	await beforeConfigPublicationHook();
-	await copyFileWithoutReplacement(source, destination);
+	await renameFileWithoutReplacement(source, destination);
 }
 
-async function copyFileWithoutReplacement(source: string, destination: string) {
-	// COPYFILE_EXCL is a portable no-replace operation and does not require Android-blocked hard links.
-	await fs.copyFile(source, destination, fsConstants.COPYFILE_EXCL);
+async function renameFileWithoutReplacement(source: string, destination: string) {
+	if (await pathExists(destination)) {
+		throw Object.assign(new Error(`Settings already exist: ${destination}`), { code: "EEXIST" });
+	}
+	await fs.rename(source, destination);
 }
 
 async function pathExists(filePath: string) {

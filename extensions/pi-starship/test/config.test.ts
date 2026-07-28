@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, {
+	existsSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -25,6 +33,31 @@ test("config path uses the agent directory and missing settings use built-in def
 		assert.deepEqual(loaded.diagnostics, []);
 		assert.equal(existsSync(path), false);
 	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("unreadable Starship settings report an I/O diagnostic instead of appearing missing", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-unreadable-"));
+	const path = join(root, "inaccessible", CONFIG_FILE_NAME);
+	const originalReadFileSync = fs.readFileSync;
+	fs.readFileSync = ((filePath: Parameters<typeof fs.readFileSync>[0], ...args: unknown[]) => {
+		if (String(filePath) === path) {
+			throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+		}
+		return (originalReadFileSync as (...values: unknown[]) => unknown)(filePath, ...args);
+	}) as typeof fs.readFileSync;
+	syncBuiltinESMExports();
+	try {
+		const loaded = loadStarshipConfig(path);
+		assert.equal(loaded.source, "built-in");
+		assert.match(
+			loaded.diagnostics[0]?.message ?? "",
+			/Unable to read settings.*permission denied/i,
+		);
+	} finally {
+		fs.readFileSync = originalReadFileSync;
+		syncBuiltinESMExports();
 		rmSync(root, { recursive: true, force: true });
 	}
 });
@@ -312,6 +345,28 @@ test("atomic publish failure keeps the previous file and removes temp files", ()
 			requireDirectory(root).filter((name) => name.endsWith(".tmp")),
 			[],
 		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("first Starship saves preserve settings created before publication", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-first-save-race-"));
+	const path = settingsFilePath(root);
+	const concurrent = "format = 'concurrent'\n";
+	try {
+		assert.throws(
+			() =>
+				atomicSaveConfigDocument(path, "format = 'requested'\n", {
+					writeFileSync(temporaryPath, data, options) {
+						writeFileSync(temporaryPath, data, options);
+						writeFileSync(path, concurrent);
+					},
+				}),
+			/created concurrently.*retry/i,
+		);
+		assert.equal(readFileSync(path, "utf8"), concurrent);
+		assert.deepEqual(readdirSync(root), [CONFIG_FILE_NAME]);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

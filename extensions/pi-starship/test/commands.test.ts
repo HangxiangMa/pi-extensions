@@ -292,6 +292,49 @@ test("a failed first runtime apply preserves settings replaced concurrently", as
 	}
 });
 
+test("a failed Starship update preserves existing settings replaced before rollback", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-update-race-"));
+	const path = settingsFilePath(root);
+	const original = "format = 'original'\n";
+	const concurrent = "format = 'concurrent'\n";
+	writeFileSync(path, original);
+	try {
+		const mock = createMockPi();
+		const loaded = loadStarshipConfig(path);
+		let previewCalls = 0;
+		registerStarshipCommand(mock.pi, {
+			getLoaded: () => loaded,
+			apply(next) {
+				if (next.rawDocument !== original) {
+					writeFileSync(path, concurrent);
+					throw new Error("renderer rejected config");
+				}
+			},
+			settingsPath: path,
+		});
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			editor: async () => "format = 'new'\n",
+			custom: async (factory: unknown) => {
+				const inputs = previewCalls++ === 0 ? ["\r"] : ["\u001b"];
+				return driveCustomSelector(factory, inputs, 36).result;
+			},
+			confirm: async () => true,
+		});
+
+		await mock.commands.get("starship")?.handler("settings", context.ctx);
+
+		assert.equal(readFileSync(path, "utf8"), concurrent);
+		assert.match(
+			context.notifications.at(-1)?.message ?? "",
+			/restoring.*failed.*newer file was preserved/iu,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("non-TUI settings never opens an editor and status/help are protocol-safe", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-starship-command-"));
 	try {

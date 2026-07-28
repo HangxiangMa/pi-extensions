@@ -819,15 +819,15 @@ function restoreStatuslineSettings(
 	saved: LoadedStatuslineSettings,
 ): unknown {
 	try {
+		if (saved.rawDocument === undefined || saved.fileIdentity === undefined) {
+			throw new Error("The saved settings document identity is unavailable");
+		}
+		removeStatuslineSettingsDocumentIfMatches(
+			options.settingsPath,
+			saved.rawDocument,
+			saved.fileIdentity,
+		);
 		if (previous.rawDocument === undefined || previous.settingsPath !== options.settingsPath) {
-			if (saved.rawDocument === undefined || saved.fileIdentity === undefined) {
-				throw new Error("The saved settings document identity is unavailable");
-			}
-			removeStatuslineSettingsDocumentIfMatches(
-				options.settingsPath,
-				saved.rawDocument,
-				saved.fileIdentity,
-			);
 			options.apply(previous, ctx);
 			return undefined;
 		}

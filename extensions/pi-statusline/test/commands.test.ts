@@ -194,6 +194,44 @@ test("failed first-run statusline application restores the missing file", async 
 	}
 });
 
+test("failed statusline application preserves a canonical file replaced before rollback", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-concurrent-rollback-"));
+	const path = settingsFilePath(root);
+	const original = `${JSON.stringify({ palettePreset: "sunset", future: "original" })}\n`;
+	const concurrent = `${JSON.stringify({ palettePreset: "ocean", future: "newer" })}\n`;
+	writeFileSync(path, original);
+	try {
+		const loaded = loadStatuslineSettings(path);
+		const mock = createMockPi();
+		registerStatuslineCommand(mock.pi, {
+			settingsPath: path,
+			getLoaded: () => loaded,
+			apply(next) {
+				if (next.rawDocument !== original) {
+					writeFileSync(path, concurrent);
+					throw new Error("footer rejected settings");
+				}
+			},
+		});
+		const context = createMockContext({
+			mode: "tui",
+			select: (title: string, choices: string[]) =>
+				title === "pi-statusline" ? choices[0] : undefined,
+			custom: customPalettePicker(["\r"]),
+		});
+
+		await mock.commands.get("statusline")?.handler("", context.ctx);
+
+		assert.equal(readFileSync(path, "utf8"), concurrent);
+		assert.match(
+			context.notifications.at(-1)?.message ?? "",
+			/rollback failed.*newer file was preserved/iu,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("failed updates from legacy statusline settings remove the new canonical file", async (t) => {
 	const scenarios = [
 		{

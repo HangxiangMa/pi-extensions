@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { CHROME_DEVTOOLS_TOOL_NAMES, type ChromeDevToolsToolName } from "./tool-names.js";
@@ -105,6 +105,16 @@ async function fileExists(filePath: string) {
 	}
 }
 
+async function pathEntryExists(filePath: string) {
+	try {
+		await lstat(filePath);
+		return true;
+	} catch (error) {
+		if (isNodeError(error) && error.code === "ENOENT") return false;
+		throw error;
+	}
+}
+
 export function normalizeChromeDevtoolsSettings(
 	value: unknown,
 ): ChromeDevToolsSettings | undefined {
@@ -148,9 +158,8 @@ async function saveSettingsNow(
 ): Promise<void> {
 	const filePath = settingsFilePath();
 	let current = await readSettingsDocument(filePath);
-	if (current.result.kind === "missing") {
-		current = await readSettingsDocument(legacySettingsFilePath());
-	}
+	const replaceCanonical = current.result.kind !== "missing";
+	if (!replaceCanonical) current = await readSettingsDocument(legacySettingsFilePath());
 	if (current.result.kind === "invalid") {
 		throw new Error(
 			`Cannot save Chrome DevTools settings until you repair ${current.result.reason}`,
@@ -168,6 +177,11 @@ async function saveSettingsNow(
 			tempFile,
 			`${JSON.stringify(nextDocument, null, 2)}\n`,
 		);
+		if (!replaceCanonical && (await pathEntryExists(filePath))) {
+			throw new Error(
+				`${NEW_SETTINGS_FILE_NAME} was created concurrently; reopen settings and retry.`,
+			);
+		}
 		await (operations.rename ?? DEFAULT_FILE_OPERATIONS.rename)(tempFile, filePath);
 	} catch (error) {
 		await rm(tempFile, { force: true }).catch(() => undefined);

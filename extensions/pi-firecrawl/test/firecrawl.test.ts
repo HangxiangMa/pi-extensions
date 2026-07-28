@@ -558,6 +558,36 @@ test("firecrawl failed publication preserves the prior file and removes its temp
 	});
 });
 
+test("firecrawl legacy-seeded saves preserve canonical settings created before publication", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const legacyPath = path.join(agentDir, LEGACY_SETTINGS_FILE);
+		const canonicalPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		const legacy = JSON.stringify({ tools: [SCRAPE_TOOL], updatedAt: 1, legacy: true });
+		const concurrent = JSON.stringify({ tools: [SEARCH_TOOL], updatedAt: 2, newer: true });
+		writeFileSync(legacyPath, legacy);
+
+		await assert.rejects(
+			saveSettings(
+				{ tools: [MAP_TOOL], updatedAt: 3 },
+				{
+					write: async (temporaryPath, data) => {
+						writeFileSync(temporaryPath, data);
+						writeFileSync(canonicalPath, concurrent);
+					},
+				},
+			),
+			/created concurrently.*retry/i,
+		);
+
+		assert.equal(readFileSync(canonicalPath, "utf8"), concurrent);
+		assert.equal(readFileSync(legacyPath, "utf8"), legacy);
+		assert.deepEqual(
+			readdirSync(agentDir).sort(),
+			[LEGACY_SETTINGS_FILE, NEW_SETTINGS_FILE].sort(),
+		);
+	});
+});
+
 test("firecrawl rejects invalid settings updates and restores active tools", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
