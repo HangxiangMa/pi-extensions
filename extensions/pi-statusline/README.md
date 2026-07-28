@@ -125,12 +125,13 @@ The extension uses one user-level file:
 <getAgentDir()>/pi-statusline.json
 ```
 
-There are no project or environment overrides. On first session start, pi-statusline atomically
-creates a complete editable default. It never overwrites malformed or unreadable settings. Settings
-reload on startup, `/reload`, and session replacement.
+There are no project or environment overrides. When the file is absent, pi-statusline uses its
+built-in defaults without creating the file or parent directory. The first successful settings save
+creates a complete editable document atomically. Malformed or unreadable settings are never
+overwritten. Settings reload on startup, `/reload`, and session replacement.
 
-A valid legacy `pi-statusline-settings.json` is migrated without rewriting its contents. If both files
-exist, `pi-statusline.json` wins.
+A valid legacy `pi-statusline-settings.json` remains readable with a warning and is never modified
+automatically; rename it to `pi-statusline.json`. If both files exist, `pi-statusline.json` wins.
 
 ### Settings reference
 

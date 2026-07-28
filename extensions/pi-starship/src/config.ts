@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
 	existsSync,
-	linkSync,
+	lstatSync,
 	mkdirSync,
 	readFileSync,
 	renameSync,
@@ -69,6 +69,7 @@ export interface LoadedStarshipConfig {
 	source: "built-in" | "user";
 	settingsPath: string;
 	rawDocument?: string;
+	fileIdentity?: { dev: number; ino: number };
 	diagnostics: ConfigDiagnostic[];
 }
 
@@ -157,7 +158,7 @@ export function loadStarshipConfig(settingsPath: string): LoadedStarshipConfig {
 	try {
 		rawDocument = readFileSync(settingsPath, "utf8");
 	} catch (error) {
-		if (!existsSync(settingsPath)) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT" && !existsSync(settingsPath)) {
 			return {
 				config: cloneBuiltInConfig(),
 				source: "built-in",
@@ -192,48 +193,6 @@ export function loadStarshipConfig(settingsPath: string): LoadedStarshipConfig {
 		settingsPath,
 		rawDocument,
 	};
-}
-
-interface InitialFileSystem {
-	mkdirSync: typeof mkdirSync;
-	writeFileSync: typeof writeFileSync;
-	linkSync: typeof linkSync;
-	rmSync: typeof rmSync;
-}
-
-export function loadOrCreateStarshipConfig(
-	settingsPath: string,
-	overrides: Partial<InitialFileSystem> = {},
-): LoadedStarshipConfig {
-	const loaded = loadStarshipConfig(settingsPath);
-	if (loaded.source === "user" || loaded.diagnostics.length > 0) return loaded;
-
-	const fs = { mkdirSync, writeFileSync, linkSync, rmSync, ...overrides };
-	const tempPath = join(dirname(settingsPath), `.${CONFIG_FILE_NAME}.${randomUUID()}.tmp`);
-	try {
-		fs.mkdirSync(dirname(settingsPath), { recursive: true });
-		fs.writeFileSync(tempPath, BUILT_IN_EXAMPLE, { encoding: "utf8", flag: "wx" });
-		try {
-			fs.linkSync(tempPath, settingsPath);
-		} catch (error) {
-			if (isAlreadyExistsError(error)) return loadStarshipConfig(settingsPath);
-			throw error;
-		}
-		return loadStarshipConfig(settingsPath);
-	} catch (error) {
-		return {
-			...loaded,
-			diagnostics: [
-				diagnostic("warning", "", `Unable to create default settings: ${formatError(error)}`),
-			],
-		};
-	} finally {
-		try {
-			fs.rmSync(tempPath, { force: true });
-		} catch {
-			// Best-effort cleanup must not replace the initialization result.
-		}
-	}
 }
 
 export function normalizeConfig(value: unknown): {
@@ -472,8 +431,10 @@ export function atomicSaveConfigDocument(
 	overrides: Partial<AtomicFileSystem> = {},
 ): LoadedStarshipConfig {
 	const validated = validateConfigDocument(settingsPath, rawDocument);
-	atomicWriteConfigDocument(settingsPath, rawDocument, overrides);
-	return validated;
+	return {
+		...validated,
+		fileIdentity: atomicWriteConfigDocument(settingsPath, rawDocument, overrides),
+	};
 }
 
 export function atomicRestoreConfigDocument(
@@ -484,17 +445,58 @@ export function atomicRestoreConfigDocument(
 	atomicWriteConfigDocument(settingsPath, rawDocument, overrides);
 }
 
+export function removeConfigDocumentIfMatches(
+	settingsPath: string,
+	expectedRawDocument: string,
+	expectedIdentity: { dev: number; ino: number },
+	overrides: Pick<Partial<AtomicFileSystem>, "rmSync"> = {},
+) {
+	const quarantinePath = join(
+		dirname(settingsPath),
+		`.${CONFIG_FILE_NAME}.${randomUUID()}.rollback`,
+	);
+	const before = lstatSync(settingsPath);
+	if (before.dev !== expectedIdentity.dev || before.ino !== expectedIdentity.ino) {
+		throw new Error("Starship settings changed concurrently; the newer file was preserved");
+	}
+	renameSync(settingsPath, quarantinePath);
+	const quarantined = lstatSync(quarantinePath);
+	const quarantinedSavedFile =
+		quarantined.isFile() &&
+		!quarantined.isSymbolicLink() &&
+		quarantined.dev === expectedIdentity.dev &&
+		quarantined.ino === expectedIdentity.ino;
+	if (quarantinedSavedFile && readFileSync(quarantinePath, "utf8") === expectedRawDocument) {
+		(overrides.rmSync ?? rmSync)(quarantinePath);
+		return;
+	}
+	if (quarantinedSavedFile && !pathEntryExists(settingsPath)) {
+		try {
+			renameSync(quarantinePath, settingsPath);
+		} catch {
+			// Keep the quarantine for recovery when its atomic restoration fails.
+		}
+	}
+	throw new Error("Starship settings changed concurrently; the newer file was preserved");
+}
+
 function atomicWriteConfigDocument(
 	settingsPath: string,
 	rawDocument: string,
 	overrides: Partial<AtomicFileSystem>,
-) {
+): { dev: number; ino: number } {
 	const fs = { mkdirSync, writeFileSync, renameSync, rmSync, ...overrides };
+	const replaceExisting = pathEntryExists(settingsPath);
 	fs.mkdirSync(dirname(settingsPath), { recursive: true });
 	const tempPath = join(dirname(settingsPath), `.${CONFIG_FILE_NAME}.${randomUUID()}.tmp`);
 	try {
 		fs.writeFileSync(tempPath, rawDocument, { encoding: "utf8", flag: "wx" });
+		const info = lstatSync(tempPath);
+		if (!replaceExisting && pathEntryExists(settingsPath)) {
+			throw new Error(`${CONFIG_FILE_NAME} was created concurrently; reopen settings and retry.`);
+		}
 		fs.renameSync(tempPath, settingsPath);
+		return { dev: info.dev, ino: info.ino };
 	} finally {
 		try {
 			fs.rmSync(tempPath, { force: true });
@@ -648,8 +650,14 @@ function diagnostic(
 	return { severity, path, message };
 }
 
-function isAlreadyExistsError(error: unknown): boolean {
-	return error instanceof Error && "code" in error && error.code === "EEXIST";
+function pathEntryExists(path: string): boolean {
+	try {
+		lstatSync(path);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
+	}
 }
 
 function formatError(error: unknown): string {

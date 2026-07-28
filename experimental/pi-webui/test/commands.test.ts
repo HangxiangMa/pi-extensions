@@ -13,10 +13,12 @@ initTheme("dark", false);
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((done) => {
+	let reject!: (error: Error) => void;
+	const promise = new Promise<T>((done, fail) => {
 		resolve = done;
+		reject = fail;
 	});
-	return { promise, resolve };
+	return { promise, reject, resolve };
 }
 
 async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<void> {
@@ -437,12 +439,59 @@ test("init creates defaults without TUI in non-TUI modes and opens settings in T
 	assert.match(tui.notifications[0]?.message ?? "", /already exists/i);
 });
 
+test("session replacement drops a delayed init continuation", async () => {
+	const initializing = deferred<"created" | "exists">();
+	let loads = 0;
+	const { mock, runtime } = createRuntime({
+		initializeSettings: () => initializing.promise,
+		loadSettings: async () => {
+			loads += 1;
+			return {
+				kind: "missing",
+				path: "/agent/pi-webui.json",
+				settings: { ...DEFAULT_SETTINGS },
+				source: "defaults",
+				document: {},
+			};
+		},
+	});
+	const first = createMockContext({ hasUI: true, mode: "rpc" });
+	await runtime.start(first.ctx);
+	const notificationsBeforeInit = first.notifications.length;
+	const pending = mock.commands.get("webui")?.handler("init", first.ctx);
+	const replacement = createMockContext({ hasUI: true, mode: "rpc" });
+	await runtime.start(replacement.ctx);
+	initializing.resolve("created");
+	await pending;
+
+	assert.equal(first.notifications.length, notificationsBeforeInit);
+	assert.equal(loads, 2);
+});
+
+test("session replacement drops a delayed init failure", async () => {
+	const initializing = deferred<"created" | "exists">();
+	const { mock, runtime } = createRuntime({
+		initializeSettings: () => initializing.promise,
+	});
+	const first = createMockContext({ hasUI: true, mode: "rpc" });
+	await runtime.start(first.ctx);
+	const notificationsBeforeInit = first.notifications.length;
+	const pending = mock.commands.get("webui")?.handler("init", first.ctx);
+	const replacement = createMockContext({ hasUI: true, mode: "rpc" });
+	await runtime.start(replacement.ctx);
+	initializing.reject(new Error("init lock compromised"));
+	await pending;
+
+	assert.equal(first.notifications.length, notificationsBeforeInit);
+	assert.doesNotMatch(replacement.notifications.at(-1)?.message ?? "", /init lock compromised/i);
+});
+
 test("settings changes save in action order and update effective status", async () => {
 	const first = deferred<void>();
-	const requested: boolean[] = [];
+	const requested: Array<{ startOnSessionStart?: boolean }> = [];
 	const { mock, runtime } = createRuntime({
 		saveSettings: async (settings, document) => {
-			requested.push(settings.startOnSessionStart);
+			requested.push(settings);
 			if (requested.length === 1) await first.promise;
 			return { ...document, ...settings };
 		},
@@ -459,7 +508,7 @@ test("settings changes save in action order and update effective status", async 
 			selector.handleInput("\r");
 			selector.handleInput("\r");
 			await waitFor(() => requested.length === 1);
-			assert.deepEqual(requested, [true]);
+			assert.deepEqual(requested, [{ startOnSessionStart: true }]);
 			first.resolve(undefined);
 			await waitFor(() => requested.length === 2);
 			selector.handleInput("\u001b");
@@ -470,7 +519,7 @@ test("settings changes save in action order and update effective status", async 
 	await mock.commands.get("webui")?.handler("settings", context.ctx);
 	assert.deepEqual(
 		requested,
-		[true, false],
+		[{ startOnSessionStart: true }, { startOnSessionStart: false }],
 		context.notifications.map((item) => item.message).join("\n"),
 	);
 	await mock.commands.get("webui")?.handler("status", context.ctx);

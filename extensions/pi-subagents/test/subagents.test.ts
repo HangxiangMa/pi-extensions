@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {
+import fs, {
 	existsSync,
 	lstatSync,
 	mkdirSync,
@@ -10,6 +10,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -1013,7 +1014,7 @@ test("session start re-reads settings before reporting warnings", async () => {
 	}
 });
 
-test("subagent settings migrate and save to the canonical package filename", () => {
+test("subagent settings read legacy files and save to the canonical package filename", () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-migration-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
@@ -1022,26 +1023,51 @@ test("subagent settings migrate and save to the canonical package filename", () 
 		const canonicalPath = path.join(directory, "pi-subagents.json");
 		writeFileSync(
 			legacyPath,
-			JSON.stringify({ agents: { scout: { tools: ["read"] } }, futureOption: true }),
+			JSON.stringify({
+				agents: { scout: { tools: ["read"] } },
+				blocking: { enabled: false },
+				stateful: { completionDelivery: "auto-resume" },
+				futureOption: true,
+			}),
 		);
+		assert.deepEqual(inspectDelegationWorkflowSettings(), {
+			path: legacyPath,
+			value: "async-only",
+			source: "user settings",
+		});
+		assert.deepEqual(inspectCompletionDeliverySettings(), {
+			path: legacyPath,
+			value: "auto-resume",
+			source: "user settings",
+		});
 		const migrationMock = createMockPi();
 		subagents(migrationMock.pi);
-		assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), {
+		assert.equal(existsSync(canonicalPath), false);
+		assert.deepEqual(JSON.parse(readFileSync(legacyPath, "utf8")), {
 			agents: { scout: { tools: ["read"] } },
+			blocking: { enabled: false },
+			stateful: { completionDelivery: "auto-resume" },
 			futureOption: true,
 		});
-		assert.equal(existsSync(legacyPath), false);
 		const migrationContext = createMockContext();
 		migrationMock.events.get("session_start")?.[0]?.({}, migrationContext.ctx);
-		assert.match(migrationContext.notifications[0]?.message ?? "", /migrated/i);
+		assert.match(migrationContext.notifications[0]?.message ?? "", /using legacy/i);
 
 		writeFileSync(legacyPath, JSON.stringify({ agents: { scout: { tools: ["bash"] } } }));
 		writeFileSync(canonicalPath, JSON.stringify({ agents: { scout: { tools: ["read"] } } }));
 		assert.deepEqual(readSubagentSettings(), { agents: { scout: { tools: ["read"] } } });
+		assert.deepEqual(inspectDelegationWorkflowSettings(), {
+			path: canonicalPath,
+			value: "all",
+			source: "default",
+		});
+		assert.equal(inspectCompletionDeliverySettings().path, canonicalPath);
 		assert.equal(existsSync(legacyPath), true);
 
 		writeFileSync(canonicalPath, "invalid");
 		assert.equal(readSubagentSettings(), undefined);
+		assert.equal(inspectDelegationWorkflowSettings().path, canonicalPath);
+		assert.match(inspectDelegationWorkflowSettings().error ?? "", /JSON/i);
 		assert.equal(readFileSync(legacyPath, "utf8").includes("bash"), true);
 		unlinkSync(legacyPath);
 		writeFileSync(canonicalPath, JSON.stringify({ agents: { scout: { tools: ["read"] } } }));
@@ -1072,6 +1098,176 @@ test("subagent settings migrate and save to the canonical package filename", () 
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("subagent settings loaders recheck canonical paths after legacy reads", () => {
+	const loaders = [
+		{
+			name: "runtime",
+			load: () => readSubagentSettings()?.blocking?.enabled,
+			expected: true,
+			expectNotice: true,
+		},
+		{
+			name: "inspector",
+			load: () => inspectDelegationWorkflowSettings().value,
+			expected: "all",
+			expectNotice: false,
+		},
+	] as const;
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	try {
+		for (const loader of loaders) {
+			const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-legacy-read-race-"));
+			process.env.PI_CODING_AGENT_DIR = directory;
+			try {
+				const legacyPath = path.join(directory, "pi-subagents-config.json");
+				const canonicalPath = path.join(directory, "pi-subagents.json");
+				writeFileSync(legacyPath, JSON.stringify({ blocking: { enabled: false } }));
+
+				const originalReadFileSync = fs.readFileSync;
+				let createCanonical = true;
+				fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+					const result = originalReadFileSync(...args);
+					if (createCanonical && path.resolve(String(args[0])) === legacyPath) {
+						createCanonical = false;
+						writeFileSync(canonicalPath, JSON.stringify({ blocking: { enabled: true } }));
+					}
+					return result;
+				}) as typeof fs.readFileSync;
+				syncBuiltinESMExports();
+				try {
+					assert.equal(loader.load(), loader.expected, loader.name);
+					const notice = consumeSubagentSettingsNotice();
+					if (loader.expectNotice) assert.match(notice ?? "", /ignored.*created concurrently/i);
+					else assert.equal(notice, undefined);
+				} finally {
+					fs.readFileSync = originalReadFileSync;
+					syncBuiltinESMExports();
+				}
+			} finally {
+				rmSync(directory, { recursive: true, force: true });
+			}
+		}
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+	}
+});
+
+test("first subagent settings publication renames a complete temporary inside the mutation lock", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-first-publication-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	const settingsPath = path.join(directory, "pi-subagents.json");
+	const expected = { stateful: { enabled: false }, future: true };
+	const originalRenameSync = fs.renameSync;
+	let publicationObserved = false;
+	fs.renameSync = ((source, destination) => {
+		if (path.resolve(String(destination)) === settingsPath) {
+			publicationObserved = true;
+			assert.deepEqual(JSON.parse(readFileSync(source, "utf8")), expected);
+			assert.equal(lstatSync(`${settingsPath}.mutation-lock`).isDirectory(), true);
+		}
+		return originalRenameSync(source, destination);
+	}) as typeof fs.renameSync;
+	syncBuiltinESMExports();
+	try {
+		saveSubagentConfig(expected);
+		assert.equal(publicationObserved, true);
+		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), expected);
+	} finally {
+		fs.renameSync = originalRenameSync;
+		syncBuiltinESMExports();
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("subagent setting controls seed canonical updates from the active legacy document", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-legacy-update-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const legacyPath = path.join(directory, "pi-subagents-config.json");
+		const canonicalPath = path.join(directory, "pi-subagents.json");
+		const legacy = {
+			future: { retained: true },
+			blocking: { enabled: false, futureBlocking: 1 },
+			stateful: { completionDelivery: "auto-resume", futureStateful: 2 },
+		};
+		writeFileSync(legacyPath, JSON.stringify(legacy));
+
+		updateCompletionDeliverySetting("next-turn");
+
+		assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), {
+			...legacy,
+			stateful: { ...legacy.stateful, completionDelivery: "next-turn" },
+		});
+		assert.deepEqual(JSON.parse(readFileSync(legacyPath, "utf8")), legacy);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("legacy-seeded updates preserve canonical settings created before publication", () => {
+	const updates = [
+		["completion delivery", () => updateCompletionDeliverySetting("next-turn")],
+		["delegation workflow", () => updateDelegationWorkflowSetting("async-only")],
+		["agent tools", () => updateAgentToolsSetting("scout", ["read"])],
+	] as const;
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	try {
+		for (const [name, update] of updates) {
+			const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-legacy-race-"));
+			process.env.PI_CODING_AGENT_DIR = directory;
+			try {
+				const legacyPath = path.join(directory, "pi-subagents-config.json");
+				const canonicalPath = path.join(directory, "pi-subagents.json");
+				const legacy = { stateful: { completionDelivery: "auto-resume" }, legacyOnly: true };
+				const concurrent = { stateful: { completionDelivery: "auto-resume" }, concurrent: true };
+				writeFileSync(legacyPath, JSON.stringify(legacy));
+
+				const originalWriteFileSync = fs.writeFileSync;
+				let createCanonical = true;
+				fs.writeFileSync = ((...args: Parameters<typeof fs.writeFileSync>) => {
+					const result = originalWriteFileSync(...args);
+					const writtenPath = path.resolve(String(args[0]));
+					if (
+						createCanonical &&
+						path.dirname(writtenPath) === path.resolve(directory) &&
+						path.basename(writtenPath).startsWith(".pi-subagents.json.")
+					) {
+						createCanonical = false;
+						originalWriteFileSync(canonicalPath, JSON.stringify(concurrent));
+					}
+					return result;
+				}) as typeof fs.writeFileSync;
+				syncBuiltinESMExports();
+				try {
+					assert.throws(
+						update,
+						/created concurrently.*reopen settings and retry/i,
+						`${name} should reject the raced-in canonical file`,
+					);
+				} finally {
+					fs.writeFileSync = originalWriteFileSync;
+					syncBuiltinESMExports();
+				}
+
+				assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), concurrent);
+				assert.deepEqual(JSON.parse(readFileSync(legacyPath, "utf8")), legacy);
+			} finally {
+				rmSync(directory, { recursive: true, force: true });
+			}
+		}
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 	}
 });
 

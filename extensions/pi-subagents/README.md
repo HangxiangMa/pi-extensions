@@ -266,7 +266,7 @@ The direct routes remain predictable: `/subagents settings` changes user complet
 }
 ```
 
-The settings UI patches the raw JSON atomically and preserves unknown fields; it refuses to overwrite malformed or invalid settings. `blocking.enabled` defaults to `true`; set it to `false` for async-only delegation. `stateful.enabled` also defaults to `true`; its existing `false` value remains the blocking-only workflow. When stateful tools are enabled, their membership stays fixed across spawn, completion, interrupt, close, and mailbox transitions. This avoids lifecycle-driven tool-schema churn and preserves a stable provider prompt prefix for KV caching.
+The settings UI patches the raw JSON atomically and preserves unknown fields; it refuses to overwrite malformed or invalid settings. Supported Pi writers serialize the latest-document read and same-directory temporary-file rename through `pi-subagents.json.mutation-lock`. Editors and older extension versions do not participate in that lock, so avoid manual edits while a settings save is in progress. `blocking.enabled` defaults to `true`; set it to `false` for async-only delegation. `stateful.enabled` also defaults to `true`; its existing `false` value remains the blocking-only workflow. When stateful tools are enabled, their membership stays fixed across spawn, completion, interrupt, close, and mailbox transitions. This avoids lifecycle-driven tool-schema churn and preserves a stable provider prompt prefix for KV caching.
 
 | Tool | Purpose |
 | --- | --- |
@@ -384,7 +384,7 @@ Built-in agents inherit the active/default Pi model instead of forcing a provide
 
 Open `/subagents`, choose **Advanced settings**, then **Agent tool settings** in an interactive Pi session to edit the tools each subagent may use. These are user settings stored in `~/.pi/agent/pi-subagents.json` and affect future sessions.
 
-Compatibility: a valid legacy `pi-subagents-config.json` is migrated automatically to `pi-subagents.json`. If both files exist, the new filename takes precedence.
+Compatibility: a valid legacy `pi-subagents-config.json` remains readable with a warning and is never modified automatically; rename it to `pi-subagents.json`. The first subsequent settings save writes the canonical file. If both files exist, the new filename takes precedence.
 
 - Select an agent, then press Enter or Space to toggle tools.
 - Press `S` to save, or Esc to cancel and return to agent selection.

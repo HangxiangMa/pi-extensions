@@ -3,15 +3,19 @@ import { hasApiKey } from "./client.js";
 import { cleanupResponseArtifacts, openResponseArtifacts } from "./response-format.js";
 import { loadSettings } from "./settings.js";
 import {
+	advanceFirecrawlSessionGeneration,
 	allFirecrawlTools,
 	applyFirecrawlTools,
 	buildCommandGuide,
 	buildConfigMessage,
 	buildStatusMessage,
 	clearSettingsNotice,
+	currentFirecrawlSessionGeneration,
+	isCurrentFirecrawlSession,
 	recordSettingsNotice,
 	showToolSelector,
 	updateFirecrawlTools,
+	waitForFirecrawlSettings,
 } from "./tool-selector.js";
 import { crawlStatusTool, crawlTool, mapTool, scrapeTool, searchTool } from "./tools.js";
 
@@ -55,15 +59,18 @@ export default function firecrawl(pi: ExtensionAPI) {
 		description: "Open Firecrawl help and tool controls",
 		getArgumentCompletions: (prefix) => commandCompletions(prefix),
 		handler: async (args, ctx) => {
-			await handleFirecrawlCommand(pi, args, ctx);
+			const generation = currentFirecrawlSessionGeneration();
+			await handleFirecrawlCommand(pi, args, ctx, generation);
 		},
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		const generation = advanceFirecrawlSessionGeneration();
 		openResponseArtifacts(ctx.sessionManager);
 		clearSettingsNotice();
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		const settings = await loadSettings();
+		if (!isCurrentFirecrawlSession(generation)) return;
 		recordSettingsNotice(settings);
 		if (settings.notice) ctx.ui.notify(settings.notice, "warning");
 		if (settings.kind === "loaded") {
@@ -76,16 +83,24 @@ export default function firecrawl(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		advanceFirecrawlSessionGeneration();
 		ctx.ui.setStatus(STATUS_KEY, undefined);
-		await cleanupResponseArtifacts(ctx.sessionManager);
+		const artifactOwner = ctx.sessionManager;
+		await waitForFirecrawlSettings();
+		await cleanupResponseArtifacts(artifactOwner);
 	});
 }
 
-async function handleFirecrawlCommand(pi: ExtensionAPI, args: string, ctx: CommandContext) {
+async function handleFirecrawlCommand(
+	pi: ExtensionAPI,
+	args: string,
+	ctx: CommandContext,
+	generation: number,
+) {
 	const command = parseCommand(args);
 	switch (command) {
 		case "menu":
-			await showMenu(pi, ctx);
+			await showMenu(pi, ctx, generation);
 			return;
 		case "help":
 			ctx.ui.notify(buildCommandGuide(), "info");
@@ -94,9 +109,12 @@ async function handleFirecrawlCommand(pi: ExtensionAPI, args: string, ctx: Comma
 		case "quickstart":
 			ctx.ui.notify(buildConfigMessage(), hasApiKey() ? "info" : "warning");
 			return;
-		case "status":
-			ctx.ui.notify(await buildStatusMessage(pi), hasApiKey() ? "info" : "warning");
+		case "status": {
+			const status = await buildStatusMessage(pi);
+			if (!isCurrentFirecrawlSession(generation)) return;
+			ctx.ui.notify(status, hasApiKey() ? "info" : "warning");
 			return;
+		}
 		case "tools":
 			await showToolSelector(pi, ctx);
 			return;
@@ -111,16 +129,16 @@ async function handleFirecrawlCommand(pi: ExtensionAPI, args: string, ctx: Comma
 	ctx.ui.notify(`Unknown /firecrawl command: ${args.trim()}\n\n${buildCommandGuide()}`, "warning");
 }
 
-async function showMenu(pi: ExtensionAPI, ctx: CommandContext) {
+async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: number) {
 	if (!ctx.hasUI) {
-		ctx.ui.notify(
-			`${buildCommandGuide()}\n\n${await buildStatusMessage(pi)}`,
-			hasApiKey() ? "info" : "warning",
-		);
+		const status = await buildStatusMessage(pi);
+		if (!isCurrentFirecrawlSession(generation)) return;
+		ctx.ui.notify(`${buildCommandGuide()}\n\n${status}`, hasApiKey() ? "info" : "warning");
 		return;
 	}
 
 	const choice = await ctx.ui.select("Firecrawl", Object.values(MENU_OPTIONS));
+	if (!isCurrentFirecrawlSession(generation)) return;
 	switch (choice) {
 		case MENU_OPTIONS.config:
 			ctx.ui.notify(buildConfigMessage(), hasApiKey() ? "info" : "warning");
@@ -128,9 +146,12 @@ async function showMenu(pi: ExtensionAPI, ctx: CommandContext) {
 		case MENU_OPTIONS.help:
 			ctx.ui.notify(buildCommandGuide(), "info");
 			return;
-		case MENU_OPTIONS.status:
-			ctx.ui.notify(await buildStatusMessage(pi), hasApiKey() ? "info" : "warning");
+		case MENU_OPTIONS.status: {
+			const status = await buildStatusMessage(pi);
+			if (!isCurrentFirecrawlSession(generation)) return;
+			ctx.ui.notify(status, hasApiKey() ? "info" : "warning");
 			return;
+		}
 		case MENU_OPTIONS.tools:
 			await showToolSelector(pi, ctx);
 			return;
@@ -175,5 +196,5 @@ export {
 	parseResponseBody,
 } from "./client.js";
 export { cleanupResponseArtifacts } from "./response-format.js";
-export { installSettingsFileExclusively, normalizeFirecrawlSettings } from "./settings.js";
+export { normalizeFirecrawlSettings } from "./settings.js";
 export { formatPersistedSelection, orderedFirecrawlTools } from "./tool-selector.js";

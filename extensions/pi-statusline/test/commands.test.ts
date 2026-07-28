@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,6 +10,7 @@ import { registerStatuslineCommand } from "../src/commands.js";
 import {
 	DEFAULT_STATUSLINE_DOCUMENT,
 	loadStatuslineSettings,
+	loadStatuslineSettingsForAgent,
 	saveStatuslineSettingsDocument,
 	settingsFilePath,
 } from "../src/settings.js";
@@ -95,6 +96,218 @@ test("/statusline keeps compatibility subcommands and an argument-free interacti
 	await command.handler("palette", context.ctx);
 	assert.equal(selectCalls, 1);
 	assert.match(context.notifications.at(-1)?.message ?? "", /unknown.*palette/iu);
+});
+
+test("fresh explicit statusline controls seed their first save without passive creation", async (t) => {
+	const scenarios = [
+		{
+			name: "appearance",
+			select: (title: string, choices: string[]) =>
+				title === "pi-statusline" ? choices[0] : undefined,
+			inputs: ["\r"],
+		},
+		{
+			name: "information",
+			select: (title: string, choices: string[]) =>
+				title === "pi-statusline" ? choices[1] : undefined,
+			inputs: ["\r"],
+		},
+		{
+			name: "custom layout",
+			select: selectCustomLayout,
+			inputs: ["\r", "\u001b"],
+		},
+	] as const;
+
+	for (const scenario of scenarios) {
+		await t.test(scenario.name, async () => {
+			const root = mkdtempSync(join(tmpdir(), "pi-statusline-first-control-"));
+			const path = settingsFilePath(root);
+			try {
+				let loaded = loadStatuslineSettings(path);
+				assert.equal(existsSync(path), false);
+				const mock = createMockPi();
+				registerStatuslineCommand(mock.pi, {
+					settingsPath: path,
+					getLoaded: () => loaded,
+					apply(next) {
+						loaded = next;
+					},
+				});
+				const context = createMockContext({
+					mode: "tui",
+					select: scenario.select,
+					custom: customPalettePicker([...scenario.inputs]),
+				});
+
+				await mock.commands.get("statusline")?.handler("", context.ctx);
+
+				assert.equal(existsSync(path), true);
+				assert.equal(loaded.source, "user");
+				assert.equal(typeof JSON.parse(readFileSync(path, "utf8")), "object");
+				assert.doesNotMatch(context.notifications.at(-1)?.message ?? "", /Fix pi-statusline/u);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+	}
+});
+
+test("failed first-run statusline application restores the missing file", async (t) => {
+	for (const scenario of [
+		{ name: "appearance", menuIndex: 0 },
+		{ name: "information", menuIndex: 1 },
+	] as const) {
+		await t.test(scenario.name, async () => {
+			const root = mkdtempSync(join(tmpdir(), "pi-statusline-first-rollback-"));
+			const path = settingsFilePath(root);
+			try {
+				let loaded = loadStatuslineSettings(path);
+				const mock = createMockPi();
+				registerStatuslineCommand(mock.pi, {
+					settingsPath: path,
+					getLoaded: () => loaded,
+					apply(next) {
+						if (next.source === "user") throw new Error("footer rejected settings");
+						loaded = next;
+					},
+				});
+				const context = createMockContext({
+					mode: "tui",
+					select: (title: string, choices: string[]) =>
+						title === "pi-statusline" ? choices[scenario.menuIndex] : undefined,
+					custom: customPalettePicker(["\r"]),
+				});
+
+				await mock.commands.get("statusline")?.handler("", context.ctx);
+
+				assert.equal(existsSync(path), false);
+				assert.equal(loaded.source, "built-in");
+				assert.match(
+					context.notifications.at(-1)?.message ?? "",
+					/could not be applied|not saved/iu,
+				);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+	}
+});
+
+test("failed statusline application preserves a canonical file replaced before rollback", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-concurrent-rollback-"));
+	const path = settingsFilePath(root);
+	const original = `${JSON.stringify({ palettePreset: "sunset", future: "original" })}\n`;
+	const concurrent = `${JSON.stringify({ palettePreset: "ocean", future: "newer" })}\n`;
+	writeFileSync(path, original);
+	try {
+		const loaded = loadStatuslineSettings(path);
+		const mock = createMockPi();
+		registerStatuslineCommand(mock.pi, {
+			settingsPath: path,
+			getLoaded: () => loaded,
+			apply(next) {
+				if (next.rawDocument !== original) {
+					writeFileSync(path, concurrent);
+					throw new Error("footer rejected settings");
+				}
+			},
+		});
+		const context = createMockContext({
+			mode: "tui",
+			select: (title: string, choices: string[]) =>
+				title === "pi-statusline" ? choices[0] : undefined,
+			custom: customPalettePicker(["\r"]),
+		});
+
+		await mock.commands.get("statusline")?.handler("", context.ctx);
+
+		assert.equal(readFileSync(path, "utf8"), concurrent);
+		assert.match(
+			context.notifications.at(-1)?.message ?? "",
+			/rollback failed.*newer file was preserved/iu,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("failed updates from legacy statusline settings remove the new canonical file", async (t) => {
+	const scenarios = [
+		{
+			name: "appearance",
+			select: (title: string, choices: string[]) =>
+				title === "pi-statusline" ? choices[0] : undefined,
+			inputs: ["\r"],
+		},
+		{
+			name: "information",
+			select: (title: string, choices: string[]) =>
+				title === "pi-statusline" ? choices[1] : undefined,
+			inputs: ["\r"],
+		},
+		{
+			name: "custom layout",
+			select: selectCustomLayout,
+			inputs: ["\r", "\u001b"],
+		},
+		{
+			name: "JSON editor",
+			select: (title: string) =>
+				title === "pi-statusline"
+					? "Advanced"
+					: title === "pi-statusline — Advanced"
+						? "Edit settings JSON"
+						: undefined,
+			inputs: [],
+			editor: async () => JSON.stringify({ palettePreset: "ocean" }),
+		},
+	] as const;
+
+	for (const scenario of scenarios) {
+		await t.test(scenario.name, async () => {
+			const root = mkdtempSync(join(tmpdir(), "pi-statusline-legacy-rollback-"));
+			const canonicalPath = settingsFilePath(root);
+			const legacyPath = join(root, "pi-statusline-settings.json");
+			const legacyDocument = `${JSON.stringify({
+				palettePreset: "sunset",
+				segments: ["model", "cwd"],
+				future: { retained: true },
+			})}\n`;
+			writeFileSync(legacyPath, legacyDocument);
+			try {
+				let loaded = loadStatuslineSettingsForAgent(root);
+				let applyCalls = 0;
+				const mock = createMockPi();
+				registerStatuslineCommand(mock.pi, {
+					settingsPath: canonicalPath,
+					getLoaded: () => loaded,
+					apply(next) {
+						loaded = next;
+						applyCalls += 1;
+						if (applyCalls === 1) throw new Error("footer rejected settings");
+					},
+				});
+				const context = createMockContext({
+					mode: "tui",
+					select: scenario.select,
+					custom: customPalettePicker([...scenario.inputs]),
+					...("editor" in scenario ? { editor: scenario.editor } : {}),
+				});
+
+				await mock.commands.get("statusline")?.handler("", context.ctx);
+
+				assert.equal(existsSync(canonicalPath), false);
+				assert.equal(readFileSync(legacyPath, "utf8"), legacyDocument);
+				assert.equal(loaded.settingsPath, legacyPath);
+				assert.equal(loaded.rawDocument, legacyDocument);
+				assert.equal(applyCalls, 2);
+				assert.match(context.notifications.at(-1)?.message ?? "", /footer rejected settings/iu);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+	}
 });
 
 test("segment menu toggles displayed segments and preserves JSON fields and layout order", async () => {
@@ -869,6 +1082,32 @@ test("cancelled, invalid, and failed settings edits preserve file and runtime st
 		assert.equal(readFileSync(path, "utf8"), original);
 		assert.deepEqual(loaded.config.segments, ["model"]);
 		assert.equal(applied, 0);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("status distinguishes the loaded legacy path from the canonical save target", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-legacy-status-"));
+	const canonicalPath = settingsFilePath(root);
+	const legacyPath = join(root, "pi-statusline-settings.json");
+	writeFileSync(legacyPath, DEFAULT_STATUSLINE_DOCUMENT);
+	try {
+		const loaded = loadStatuslineSettingsForAgent(root);
+		assert.equal(existsSync(canonicalPath), false);
+		const mock = createMockPi();
+		registerStatuslineCommand(mock.pi, {
+			settingsPath: canonicalPath,
+			getLoaded: () => loaded,
+			apply() {},
+		});
+		const context = createMockContext({ mode: "rpc", hasUI: true });
+
+		await mock.commands.get("statusline")?.handler("status", context.ctx);
+
+		const status = context.notifications.at(-1)?.message ?? "";
+		assert.match(status, new RegExp(`active path: ${legacyPath}`, "u"));
+		assert.match(status, new RegExp(`save target: ${canonicalPath}`, "u"));
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

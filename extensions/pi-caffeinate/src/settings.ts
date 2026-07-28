@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, link, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { access, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import process from "node:process";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 const NEW_SETTINGS_FILE = "pi-caffeinate.json";
 const LEGACY_SETTINGS_FILE = "pi-caffeinate-settings.json";
@@ -15,17 +16,23 @@ export interface CaffeinateSettings {
 	updatedAt: number;
 }
 
+export interface SettingsFileOperations {
+	write(path: string, data: string): Promise<void>;
+	rename(source: string, destination: string): Promise<void>;
+}
+
+const DEFAULT_FILE_OPERATIONS: SettingsFileOperations = {
+	write: (path, data) => writeFile(path, data, "utf8").then(() => undefined),
+	rename,
+};
+
 export type SettingsLoadResult =
 	| { kind: "missing"; notice?: string }
 	| { kind: "invalid"; reason: string; notice?: string }
 	| { kind: "loaded"; settings: CaffeinateSettings; notice?: string };
 
-type SettingsMigrationResult = {
-	kind: "migrated" | "failed";
-	notice: string;
-};
-
 export async function loadSettings(): Promise<SettingsLoadResult> {
+	await settingsSaveQueue;
 	const newPath = settingsFilePath();
 	const newSettings = await readSettingsFile(newPath);
 	if (newSettings.kind !== "missing") return withLegacyIgnoredNotice(newSettings);
@@ -39,34 +46,47 @@ export async function loadSettings(): Promise<SettingsLoadResult> {
 	if (legacySettings.kind === "missing") return { kind: "missing" };
 	if (legacySettings.kind === "invalid") return legacySettings;
 
-	const migration = await migrateLegacySettings(legacyPath);
-	if (migration.kind === "failed") {
-		const settingsCreatedDuringMigration = await readSettingsFile(newPath);
-		if (settingsCreatedDuringMigration.kind !== "missing") {
-			return withLegacyIgnoredNotice(settingsCreatedDuringMigration);
-		}
-	}
-	return { ...legacySettings, notice: migration.notice };
+	return {
+		...legacySettings,
+		notice: `Using legacy ${LEGACY_SETTINGS_FILE}; rename it to ${NEW_SETTINGS_FILE}. Future saves write ${NEW_SETTINGS_FILE} without modifying the legacy file.`,
+	};
 }
 
-async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
+interface SettingsDocumentResult {
+	result: SettingsLoadResult;
+	document?: Record<string, unknown>;
+}
+
+async function readSettingsDocument(filePath: string): Promise<SettingsDocumentResult> {
 	let text: string;
 	try {
 		text = await readFile(filePath, "utf8");
 	} catch (error) {
-		if (isNodeError(error) && error.code === "ENOENT") return { kind: "missing" };
-		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
+		if (isNodeError(error) && error.code === "ENOENT") return { result: { kind: "missing" } };
+		return { result: { kind: "invalid", reason: `${filePath}: ${formatError(error)}` } };
 	}
 	try {
-		const settings = normalizeCaffeinateSettings(JSON.parse(text) as unknown);
-		if (settings) return { kind: "loaded", settings };
+		const document = JSON.parse(text) as unknown;
+		const settings = normalizeCaffeinateSettings(document);
+		if (settings) {
+			return {
+				result: { kind: "loaded", settings },
+				document: { ...(document as Record<string, unknown>) },
+			};
+		}
 		return {
-			kind: "invalid",
-			reason: `${filePath}: expected { "mode": "sleep" | "display", optional "quiet": boolean }`,
+			result: {
+				kind: "invalid",
+				reason: `${filePath}: expected { "mode": "sleep" | "display", optional "quiet": boolean }`,
+			},
 		};
 	} catch (error) {
-		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
+		return { result: { kind: "invalid", reason: `${filePath}: ${formatError(error)}` } };
 	}
+}
+
+async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
+	return (await readSettingsDocument(filePath)).result;
 }
 
 async function withLegacyIgnoredNotice(settings: SettingsLoadResult): Promise<SettingsLoadResult> {
@@ -77,36 +97,22 @@ async function withLegacyIgnoredNotice(settings: SettingsLoadResult): Promise<Se
 	};
 }
 
-async function migrateLegacySettings(legacyPath: string): Promise<SettingsMigrationResult> {
-	const newPath = settingsFilePath();
-	try {
-		await link(legacyPath, newPath);
-	} catch (error) {
-		return {
-			kind: "failed",
-			notice: `pi-caffeinate legacy settings migration failed: could not migrate ${legacyPath} to ${newPath}: ${formatError(error)}. The legacy file was used for this session; future saves will write ${NEW_SETTINGS_FILE}.`,
-		};
-	}
-	try {
-		await rm(legacyPath, { force: true });
-	} catch (error) {
-		return {
-			kind: "migrated",
-			notice: `pi-caffeinate settings migrated from ${legacyPath} to ${newPath}, but the legacy file could not be removed: ${formatError(error)}. Delete ${LEGACY_SETTINGS_FILE} after confirming your settings.`,
-		};
-	}
-	return {
-		kind: "migrated",
-		notice: `pi-caffeinate settings migrated from ${legacyPath} to ${newPath}. ${LEGACY_SETTINGS_FILE} is deprecated and will be removed in a future major release.`,
-	};
-}
-
 async function fileExists(filePath: string) {
 	try {
 		await access(filePath, constants.F_OK);
 		return true;
 	} catch {
 		return false;
+	}
+}
+
+async function pathEntryExists(filePath: string) {
+	try {
+		await lstat(filePath);
+		return true;
+	} catch (error) {
+		if (isNodeError(error) && error.code === "ENOENT") return false;
+		throw error;
 	}
 }
 
@@ -127,13 +133,48 @@ function isCaffeinateMode(value: unknown): value is CaffeinateMode {
 	return value === "sleep" || value === "display";
 }
 
-export async function saveSettings(settings: CaffeinateSettings) {
+let settingsSaveQueue: Promise<unknown> = Promise.resolve();
+
+export function saveSettings(
+	settings: Omit<CaffeinateSettings, "quiet"> & { quiet?: boolean },
+	operations: Partial<SettingsFileOperations> = {},
+): Promise<CaffeinateSettings> {
+	const operation = settingsSaveQueue.then(() => saveSettingsNow(settings, operations));
+	settingsSaveQueue = operation.catch(() => undefined);
+	return operation;
+}
+
+async function saveSettingsNow(
+	settings: Omit<CaffeinateSettings, "quiet"> & { quiet?: boolean },
+	operations: Partial<SettingsFileOperations>,
+): Promise<CaffeinateSettings> {
 	const filePath = settingsFilePath();
+	let current = await readSettingsDocument(filePath);
+	const replaceCanonical = current.result.kind !== "missing";
+	if (!replaceCanonical) current = await readSettingsDocument(legacySettingsFilePath());
+	if (current.result.kind === "invalid") {
+		throw new Error(`Cannot save pi-caffeinate settings until you repair ${current.result.reason}`);
+	}
+	const document = current.document ?? {};
+	const quiet =
+		settings.quiet ?? (current.result.kind === "loaded" ? current.result.settings.quiet : false);
+	const nextSettings = { mode: settings.mode, quiet, updatedAt: settings.updatedAt };
+	const nextDocument = {
+		...document,
+		...nextSettings,
+	};
 	await mkdir(dirname(filePath), { recursive: true });
-	const tempFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+	const tempFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
 	try {
-		await writeFile(tempFile, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
-		await rename(tempFile, filePath);
+		await (operations.write ?? DEFAULT_FILE_OPERATIONS.write)(
+			tempFile,
+			`${JSON.stringify(nextDocument, null, 2)}\n`,
+		);
+		if (!replaceCanonical && (await pathEntryExists(filePath))) {
+			throw new Error(`${NEW_SETTINGS_FILE} was created concurrently; reopen settings and retry.`);
+		}
+		await (operations.rename ?? DEFAULT_FILE_OPERATIONS.rename)(tempFile, filePath);
+		return nextSettings;
 	} catch (error) {
 		await rm(tempFile, { force: true }).catch(() => undefined);
 		throw error;
@@ -149,7 +190,7 @@ function legacySettingsFilePath() {
 }
 
 function agentDir() {
-	return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+	return getAgentDir();
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

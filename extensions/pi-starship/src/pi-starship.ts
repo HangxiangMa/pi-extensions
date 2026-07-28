@@ -9,7 +9,6 @@ import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { registerStarshipCommand } from "./commands.js";
 import {
 	type LoadedStarshipConfig,
-	loadOrCreateStarshipConfig,
 	loadStarshipConfig,
 	type StarshipConfig,
 	settingsFilePath,
@@ -237,7 +236,7 @@ export default function piStarship(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		loaded = loadOrCreateStarshipConfig(configPath);
+		loaded = loadStarshipConfig(configPath);
 		if (loaded.diagnostics.length > 0 && (ctx.mode === "tui" || ctx.hasUI)) {
 			ctx.ui.notify(formatDiagnostics(loaded), "warning");
 		}

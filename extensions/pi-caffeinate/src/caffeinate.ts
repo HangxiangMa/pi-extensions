@@ -7,7 +7,13 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { startInhibitorProcess, stopInhibitorProcess } from "./inhibitor-process.js";
 import { formatMode, getInhibitorCommand, type InhibitorCommand } from "./inhibitors.js";
-import { type CaffeinateMode, loadSettings, saveSettings, settingsFilePath } from "./settings.js";
+import {
+	type CaffeinateMode,
+	type CaffeinateSettings,
+	loadSettings,
+	saveSettings,
+	settingsFilePath,
+} from "./settings.js";
 
 const STATUS_KEY = "caffeinate";
 const DISABLED_VALUES = new Set(["1", "true", "yes", "on"]);
@@ -49,6 +55,7 @@ interface CaffeinateState {
 	settingsError?: string;
 	settingsNotice?: string;
 	iconWarningShown: boolean;
+	sessionGeneration: number;
 }
 
 const state: CaffeinateState = {
@@ -59,19 +66,24 @@ const state: CaffeinateState = {
 	quiet: false,
 	settingsLoaded: false,
 	iconWarningShown: false,
+	sessionGeneration: 0,
 };
 
 export default function caffeinate(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
+		const generation = ++state.sessionGeneration;
 		state.iconWarningShown = false;
 		state.settingsNotice = undefined;
 		warnDeprecatedIcon(ctx);
-		await loadSettingsIntoState(ctx);
+		await loadSettingsIntoState(ctx, generation);
+		if (generation !== state.sessionGeneration) return;
 		updateStatus(ctx);
 	});
 
 	pi.on("agent_start", async (_event, ctx) => {
-		await ensureSettingsLoaded(ctx);
+		const generation = state.sessionGeneration;
+		await ensureSettingsLoaded(ctx, generation);
+		if (generation !== state.sessionGeneration) return;
 		state.activeTurns += 1;
 		startInhibitor(ctx, { notify: !state.quiet });
 	});
@@ -84,27 +96,36 @@ export default function caffeinate(pi: ExtensionAPI) {
 		updateStatus(ctx);
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => {
+	pi.on("session_shutdown", async (_event, ctx) => {
+		state.sessionGeneration += 1;
 		state.activeTurns = 0;
 		stopInhibitor(ctx, "session shutdown", { notify: false });
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		await modeOperationQueue;
 	});
 
 	pi.registerCommand("caffeinate", {
 		description: "Open pi-caffeinate keep-awake controls",
 		getArgumentCompletions: (prefix) => commandCompletions(prefix),
 		handler: async (args, ctx) => {
-			await ensureSettingsLoaded(ctx);
-			await handleCaffeinateCommand(args, ctx);
+			const generation = state.sessionGeneration;
+			const command = parseCommand(args);
+			if (command === "sleep" || command === "display") {
+				await setModeAfterSettingsLoad(ctx, command, generation);
+				return;
+			}
+			await ensureSettingsLoaded(ctx, generation);
+			if (generation !== state.sessionGeneration) return;
+			await handleCaffeinateCommand(args, ctx, generation);
 		},
 	});
 }
 
-async function handleCaffeinateCommand(args: string, ctx: CommandContext) {
+async function handleCaffeinateCommand(args: string, ctx: CommandContext, generation: number) {
 	const command = parseCommand(args);
 	switch (command) {
 		case "menu":
-			await showMenu(ctx);
+			await showMenu(ctx, generation);
 			return;
 		case "help":
 			ctx.ui.notify(buildCommandGuide(), "info");
@@ -113,13 +134,13 @@ async function handleCaffeinateCommand(args: string, ctx: CommandContext) {
 			showStatus(ctx);
 			return;
 		case "mode":
-			await showModeSelector(ctx);
+			await showModeSelector(ctx, generation);
 			return;
 		case "sleep":
-			await setMode(ctx, "sleep");
+			await setMode(ctx, "sleep", generation);
 			return;
 		case "display":
-			await setMode(ctx, "display");
+			await setMode(ctx, "display", generation);
 			return;
 		case "stop":
 			stopCaffeinate(ctx, "manual stop");
@@ -129,7 +150,7 @@ async function handleCaffeinateCommand(args: string, ctx: CommandContext) {
 	ctx.ui.notify(`Unknown /caffeinate command: ${args.trim()}\n\n${buildCommandGuide()}`, "warning");
 }
 
-async function showMenu(ctx: CommandContext) {
+async function showMenu(ctx: CommandContext, generation: number) {
 	if (!ctx.hasUI) {
 		ctx.ui.notify(`${buildCommandGuide()}\n\n${describeState()}`, statusLevel());
 		updateStatus(ctx);
@@ -137,15 +158,16 @@ async function showMenu(ctx: CommandContext) {
 	}
 
 	const choice = await ctx.ui.select("pi-caffeinate controls", Object.values(MENU_OPTIONS));
+	if (generation !== state.sessionGeneration) return;
 	switch (choice) {
 		case MENU_OPTIONS.status:
 			showStatus(ctx);
 			return;
 		case MENU_OPTIONS.sleep:
-			await setMode(ctx, "sleep");
+			await setMode(ctx, "sleep", generation);
 			return;
 		case MENU_OPTIONS.display:
-			await setMode(ctx, "display");
+			await setMode(ctx, "display", generation);
 			return;
 		case MENU_OPTIONS.stop:
 			stopCaffeinate(ctx, "manual stop");
@@ -156,7 +178,7 @@ async function showMenu(ctx: CommandContext) {
 	}
 }
 
-async function showModeSelector(ctx: CommandContext) {
+async function showModeSelector(ctx: CommandContext, generation: number) {
 	if (!ctx.hasUI) {
 		ctx.ui.notify(
 			`Mode selection needs an interactive UI. Run /caffeinate sleep or /caffeinate display.\n\n${describeState()}`,
@@ -170,40 +192,95 @@ async function showModeSelector(ctx: CommandContext) {
 		`pi-caffeinate mode (current: ${formatMode(state.mode)})`,
 		Object.values(MODE_OPTIONS),
 	);
+	if (generation !== state.sessionGeneration) return;
 	if (choice === MODE_OPTIONS.sleep) {
-		await setMode(ctx, "sleep");
+		await setMode(ctx, "sleep", generation);
 		return;
 	}
 	if (choice === MODE_OPTIONS.display) {
-		await setMode(ctx, "display");
+		await setMode(ctx, "display", generation);
 	}
 }
 
-async function setMode(ctx: ExtensionContext, mode: CaffeinateMode) {
+let modeOperationQueue = Promise.resolve();
+
+function setModeAfterSettingsLoad(
+	ctx: ExtensionContext,
+	mode: CaffeinateMode,
+	generation: number,
+): Promise<void> {
+	return enqueueModeOperation(async () => {
+		await ensureSettingsLoaded(ctx, generation);
+		if (generation !== state.sessionGeneration) return;
+		await setModeNow(ctx, mode, generation);
+	});
+}
+
+function setMode(ctx: ExtensionContext, mode: CaffeinateMode, generation: number): Promise<void> {
+	return enqueueModeOperation(() => setModeNow(ctx, mode, generation));
+}
+
+function enqueueModeOperation(operation: () => Promise<void>): Promise<void> {
+	const queued = modeOperationQueue.then(operation);
+	modeOperationQueue = queued.catch(() => undefined);
+	return queued;
+}
+
+async function setModeNow(ctx: ExtensionContext, mode: CaffeinateMode, generation: number) {
+	if (generation !== state.sessionGeneration) return;
 	const previousMode = state.mode;
-	state.mode = mode;
+	const previousQuiet = state.quiet;
+	const restartRequired = Boolean(state.process && previousMode !== mode && !state.command?.custom);
 	state.settingsError = undefined;
 
-	let saved = true;
-	try {
-		await saveSettings({ mode, quiet: state.quiet, updatedAt: Date.now() });
-	} catch (error) {
-		saved = false;
-		state.settingsError = `settings save failed: ${formatError(error)}`;
-		ctx.ui.notify(`pi-caffeinate settings save failed: ${formatError(error)}`, "warning");
-	}
-
-	if (state.process && previousMode !== mode && !state.command?.custom) {
+	if (restartRequired) {
+		state.mode = mode;
 		stopInhibitor(ctx, "mode changed", { notify: false });
-		startInhibitor(ctx, { notify: !state.quiet });
+		startInhibitor(ctx, { notify: false });
+		if (!state.process) {
+			const applicationError = state.lastError ?? "the inhibitor could not be restarted";
+			state.mode = previousMode;
+			startInhibitor(ctx, { notify: false });
+			const rollbackError = state.process
+				? undefined
+				: (state.lastError ?? "the previous inhibitor could not be restored");
+			state.settingsError = rollbackError
+				? `mode application failed (${applicationError}); runtime rollback failed: ${rollbackError}`
+				: `mode application failed and was rolled back: ${applicationError}`;
+			ctx.ui.notify(`pi-caffeinate ${state.settingsError}`, "warning");
+			updateStatus(ctx);
+			return;
+		}
 	}
 
-	ctx.ui.notify(
-		saved
-			? `pi-caffeinate mode set to ${formatMode(mode)} and saved.`
-			: `pi-caffeinate mode set to ${formatMode(mode)} for this session, but settings were not saved.`,
-		saved ? "info" : "warning",
-	);
+	let savedSettings: CaffeinateSettings;
+	try {
+		savedSettings = await saveSettings({ mode, updatedAt: Date.now() });
+	} catch (error) {
+		if (generation !== state.sessionGeneration) return;
+		let rollbackError: string | undefined;
+		if (restartRequired) {
+			state.mode = previousMode;
+			state.quiet = previousQuiet;
+			stopInhibitor(ctx, "settings save failed", { notify: false });
+			startInhibitor(ctx, { notify: false });
+			if (!state.process) rollbackError = state.lastError ?? "the prior inhibitor was not restored";
+		}
+		state.settingsError = rollbackError
+			? `settings save failed (${formatError(error)}); runtime rollback failed: ${rollbackError}`
+			: `settings save failed: ${formatError(error)}`;
+		ctx.ui.notify(
+			`pi-caffeinate mode remains ${formatMode(previousMode)}; settings were not saved: ${state.settingsError}`,
+			"warning",
+		);
+		updateStatus(ctx);
+		return;
+	}
+
+	if (generation !== state.sessionGeneration) return;
+	state.mode = mode;
+	state.quiet = savedSettings.quiet;
+	ctx.ui.notify(`pi-caffeinate mode set to ${formatMode(mode)} and saved.`, "info");
 	updateStatus(ctx);
 }
 
@@ -382,12 +459,12 @@ function statusModeLabel() {
 	return formatMode(state.mode);
 }
 
-async function ensureSettingsLoaded(ctx: ExtensionContext) {
+async function ensureSettingsLoaded(ctx: ExtensionContext, generation: number) {
 	if (state.disabled || state.settingsLoaded) return;
-	await loadSettingsIntoState(ctx);
+	await loadSettingsIntoState(ctx, generation);
 }
 
-async function loadSettingsIntoState(ctx: ExtensionContext) {
+async function loadSettingsIntoState(ctx: ExtensionContext, generation: number) {
 	if (state.disabled) {
 		state.settingsLoaded = true;
 		state.settingsError = undefined;
@@ -396,6 +473,7 @@ async function loadSettingsIntoState(ctx: ExtensionContext) {
 	}
 
 	const settings = await loadSettings();
+	if (generation !== state.sessionGeneration) return;
 	state.settingsLoaded = true;
 	state.settingsError = undefined;
 	if (settings.notice) {

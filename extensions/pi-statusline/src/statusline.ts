@@ -15,8 +15,8 @@ import { type RuntimeState, renderExtensionStatusline, renderStatusline } from "
 import {
 	consumeStatuslineSettingsNotice,
 	type LoadedStatuslineSettings,
-	loadOrCreateStatuslineSettings,
 	loadStatuslineSettings,
+	loadStatuslineSettingsForAgent,
 	settingsFilePath,
 } from "./settings.js";
 import type { PalettePreset } from "./types.js";
@@ -197,7 +197,7 @@ export default function statusline(pi: ExtensionAPI) {
 		runtime.turnCount = 0;
 		runtime.activeTools.clear();
 		runtime.isStreaming = false;
-		loaded = loadOrCreateStatuslineSettings(agentDir);
+		loaded = loadStatuslineSettingsForAgent(agentDir);
 		const settingsNotice = consumeStatuslineSettingsNotice();
 		if (settingsNotice) ctx.ui.notify(settingsNotice, "warning");
 		if (loaded.diagnostics.length > 0) {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {
+import fs, {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -9,6 +9,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -567,7 +568,7 @@ test("statusline settings load extension icon overrides", () => {
 	assert.equal(typeof readStatuslineSettings(settingsPath).palette, "object");
 });
 
-test("statusline settings migrate to the canonical package filename", async () => {
+test("statusline settings read legacy files and prefer the canonical package filename", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-migration-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = root;
@@ -579,11 +580,12 @@ test("statusline settings migrate to the canonical package filename", async () =
 			JSON.stringify({ extensionStatusIcons: { goal: "🎯" }, futureOption: true }),
 		);
 		assert.equal(readStatuslineSettings().extensionStatusIcons.goal, "🎯");
-		assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), {
+		assert.equal(existsSync(canonicalPath), false);
+		assert.deepEqual(JSON.parse(readFileSync(legacyPath, "utf8")), {
 			extensionStatusIcons: { goal: "🎯" },
 			futureOption: true,
 		});
-		assert.equal(existsSync(legacyPath), false);
+		assert.match(consumeStatuslineSettingsNotice() ?? "", /using legacy/i);
 
 		writeFileSync(legacyPath, JSON.stringify({ extensionStatusIcons: { goal: "old" } }));
 		writeFileSync(canonicalPath, JSON.stringify({ extensionStatusIcons: { goal: "new" } }));
@@ -612,6 +614,42 @@ test("statusline settings migrate to the canonical package filename", async () =
 		await emit(mock.events, "session_start", {}, context.ctx);
 		assert.match(context.notifications[0]?.message ?? "", /takes precedence/i);
 		assert.match(context.notifications[1]?.message ?? "", /read settings/i);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("statusline settings recheck the canonical path after reading the legacy fallback", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-legacy-race-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = root;
+	try {
+		const legacyPath = join(root, "pi-statusline-settings.json");
+		const canonicalPath = join(root, "pi-statusline.json");
+		writeFileSync(legacyPath, JSON.stringify({ extensionStatusIcons: { goal: "legacy" } }));
+		const originalReadFileSync = fs.readFileSync;
+		let createCanonical = true;
+		fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+			const result = originalReadFileSync(...args);
+			if (createCanonical && String(args[0]) === legacyPath) {
+				createCanonical = false;
+				writeFileSync(
+					canonicalPath,
+					JSON.stringify({ extensionStatusIcons: { goal: "canonical" } }),
+				);
+			}
+			return result;
+		}) as typeof fs.readFileSync;
+		syncBuiltinESMExports();
+		try {
+			assert.equal(readStatuslineSettings().extensionStatusIcons.goal, "canonical");
+			assert.match(consumeStatuslineSettingsNotice() ?? "", /ignored.*created concurrently/i);
+		} finally {
+			fs.readFileSync = originalReadFileSync;
+			syncBuiltinESMExports();
+		}
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

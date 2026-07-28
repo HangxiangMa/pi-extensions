@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
 	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
@@ -21,7 +22,6 @@ import firecrawl, {
 	firecrawlRequest,
 	formatPayload,
 	formatPersistedSelection,
-	installSettingsFileExclusively,
 	jsonResult,
 	normalizeApiUrl,
 	normalizeFirecrawlSettings,
@@ -29,6 +29,7 @@ import firecrawl, {
 	parseCommand,
 	parseResponseBody,
 } from "../src/firecrawl.js";
+import { saveSettings } from "../src/settings.js";
 
 const NEW_SETTINGS_FILE = "pi-firecrawl.json";
 const LEGACY_SETTINGS_FILE = "pi-firecrawl-settings.json";
@@ -337,21 +338,6 @@ test("formatPersistedSelection summarizes all, none, and partial selections", ()
 	assert.equal(formatPersistedSelection(["firecrawl_scrape"]), "1/5 selected: firecrawl_scrape");
 });
 
-test("firecrawl installs migrated settings exclusively without leaving temp files", async () => {
-	await withTempAgentDir(async (agentDir) => {
-		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
-		await installSettingsFileExclusively(settingsPath, "first\n");
-
-		await assert.rejects(
-			installSettingsFileExclusively(settingsPath, "replacement\n"),
-			(error: NodeJS.ErrnoException) => error.code === "EEXIST",
-		);
-
-		assert.equal(readFileSync(settingsPath, "utf8"), "first\n");
-		assert.deepEqual(readdirSync(agentDir), [NEW_SETTINGS_FILE]);
-	});
-});
-
 test("firecrawl preserves active tools when settings are missing", async () => {
 	await withTempAgentDir(async () => {
 		const firecrawlModule = await importFreshFirecrawl();
@@ -381,7 +367,7 @@ test("firecrawl loads the new settings file without a migration warning", async 
 	});
 });
 
-test("firecrawl migrates a legacy-only settings file and warns", async () => {
+test("firecrawl reads legacy-only settings without modifying either path", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		writeSettings(agentDir, LEGACY_SETTINGS_FILE, [SCRAPE_TOOL]);
 		const firecrawlModule = await importFreshFirecrawl();
@@ -392,19 +378,14 @@ test("firecrawl migrates a legacy-only settings file and warns", async () => {
 		await mock.events.get("session_start")?.[0]?.({}, ctx);
 
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", SCRAPE_TOOL]);
-		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, [SCRAPE_TOOL]);
-		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), false);
-		assert.match(notifications[0]?.message ?? "", /migrated/i);
-		assert.match(notifications[0]?.message ?? "", /pi-firecrawl-settings\.json/);
-		assert.match(notifications[0]?.message ?? "", /pi-firecrawl\.json/);
-
-		await mock.commands.get("firecrawl")?.handler("disable", ctx);
-		await mock.commands.get("firecrawl")?.handler("status", ctx);
-		assert.match(notifications.at(-1)?.message ?? "", /migrated/i);
+		assert.equal(existsSync(path.join(agentDir, NEW_SETTINGS_FILE)), false);
+		assert.deepEqual(readSettings(agentDir, LEGACY_SETTINGS_FILE).tools, [SCRAPE_TOOL]);
+		assert.match(notifications[0]?.message ?? "", /using legacy/i);
+		assert.match(notifications[0]?.message ?? "", /rename.*pi-firecrawl\.json/i);
 	});
 });
 
-test("firecrawl falls back to valid legacy settings when migration fails", async () => {
+test("firecrawl reads valid legacy settings beside a missing canonical symlink target", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		writeSettings(agentDir, LEGACY_SETTINGS_FILE, [SCRAPE_TOOL]);
 		symlinkSync("missing-firecrawl-settings-target", path.join(agentDir, NEW_SETTINGS_FILE));
@@ -417,8 +398,8 @@ test("firecrawl falls back to valid legacy settings when migration fails", async
 
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", SCRAPE_TOOL]);
 		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), true);
-		assert.match(notifications[0]?.message ?? "", /migration failed/i);
-		assert.match(notifications[0]?.message ?? "", /legacy file was used for this session/i);
+		assert.match(notifications[0]?.message ?? "", /using legacy/i);
+		assert.match(notifications[0]?.message ?? "", /without modifying the legacy file/i);
 	});
 });
 
@@ -513,6 +494,7 @@ test("Firecrawl tool selection keeps the cursor on the toggled row", async () =>
 		mock.rawPi.setActiveTools(["other_tool", ...toolNames]);
 		const { ctx } = createMockContext({
 			hasUI: true,
+			mode: "tui",
 			custom: async (factory: unknown) => {
 				const { renders, result } = driveCustomSelector(factory, [
 					"tui.select.down",
@@ -538,6 +520,10 @@ test("Firecrawl tool selection keeps the cursor on the toggled row", async () =>
 
 test("firecrawl saves tool selection only to the new settings file", async () => {
 	await withTempAgentDir(async (agentDir) => {
+		writeFileSync(
+			path.join(agentDir, NEW_SETTINGS_FILE),
+			JSON.stringify({ tools: [CRAWL_TOOL], updatedAt: 1, future: { kept: true } }),
+		);
 		const firecrawlModule = await importFreshFirecrawl();
 		const mock = createMockPi({ activeTools: ["other_tool", CRAWL_TOOL] });
 		const { ctx, notifications } = createMockContext();
@@ -547,8 +533,135 @@ test("firecrawl saves tool selection only to the new settings file", async () =>
 
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool"]);
 		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, []);
+		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).future, { kept: true });
 		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), false);
 		assert.match(notifications[0]?.message ?? "", /Settings file: .*pi-firecrawl\.json/);
+	});
+});
+
+test("firecrawl failed publication preserves the prior file and removes its temporary", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, NEW_SETTINGS_FILE, [CRAWL_TOOL]);
+		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		const original = readFileSync(settingsPath, "utf8");
+
+		await assert.rejects(
+			saveSettings(
+				{ tools: [], updatedAt: 2 },
+				{ rename: async () => Promise.reject(new Error("publish failed")) },
+			),
+			/publish failed/,
+		);
+
+		assert.equal(readFileSync(settingsPath, "utf8"), original);
+		assert.deepEqual(readdirSync(agentDir), [NEW_SETTINGS_FILE]);
+	});
+});
+
+test("firecrawl legacy-seeded saves preserve canonical settings created before publication", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const legacyPath = path.join(agentDir, LEGACY_SETTINGS_FILE);
+		const canonicalPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		const legacy = JSON.stringify({ tools: [SCRAPE_TOOL], updatedAt: 1, legacy: true });
+		const concurrent = JSON.stringify({ tools: [SEARCH_TOOL], updatedAt: 2, newer: true });
+		writeFileSync(legacyPath, legacy);
+
+		await assert.rejects(
+			saveSettings(
+				{ tools: [MAP_TOOL], updatedAt: 3 },
+				{
+					write: async (temporaryPath, data) => {
+						writeFileSync(temporaryPath, data);
+						writeFileSync(canonicalPath, concurrent);
+					},
+				},
+			),
+			/created concurrently.*retry/i,
+		);
+
+		assert.equal(readFileSync(canonicalPath, "utf8"), concurrent);
+		assert.equal(readFileSync(legacyPath, "utf8"), legacy);
+		assert.deepEqual(
+			readdirSync(agentDir).sort(),
+			[LEGACY_SETTINGS_FILE, NEW_SETTINGS_FILE].sort(),
+		);
+	});
+});
+
+test("firecrawl rejects invalid settings updates and restores active tools", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		const invalid = '{"tools":["invalid"],"future":"kept"}\n';
+		writeFileSync(settingsPath, invalid);
+		const firecrawlModule = await importFreshFirecrawl();
+		const mock = createMockPi({ activeTools: ["other_tool", CRAWL_TOOL] });
+		const { ctx, notifications } = createMockContext();
+
+		firecrawlModule.default(mock.pi);
+		await mock.commands.get("firecrawl")?.handler("disable", ctx);
+
+		assert.equal(readFileSync(settingsPath, "utf8"), invalid);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", CRAWL_TOOL]);
+		assert.match(notifications.at(-1)?.message ?? "", /settings save failed/i);
+
+		writeSettings(agentDir, NEW_SETTINGS_FILE, [CRAWL_TOOL]);
+		await mock.commands.get("firecrawl")?.handler("disable", ctx);
+		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, []);
+	});
+});
+
+test("firecrawl rolls back a failed save after shutdown invalidates its session", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		mkdirSync(path.join(agentDir, NEW_SETTINGS_FILE));
+		const firecrawlModule = await importFreshFirecrawl();
+		const mock = createMockPi({ activeTools: ["other_tool", CRAWL_TOOL] });
+		const { ctx, notifications } = createMockContext();
+		firecrawlModule.default(mock.pi);
+
+		const command = mock.commands.get("firecrawl")?.handler("disable", ctx);
+		await Promise.resolve();
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool"]);
+		const shutdown = mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+
+		await Promise.all([command, shutdown]);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", CRAWL_TOOL]);
+		assert.deepEqual(notifications, []);
+	});
+});
+
+test("firecrawl serializes rapid tool saves in invocation order", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const firecrawlModule = await importFreshFirecrawl();
+		const mock = createMockPi({ activeTools: ["other_tool"] });
+		const { ctx } = createMockContext();
+		firecrawlModule.default(mock.pi);
+
+		const first = mock.commands.get("firecrawl")?.handler("enable", ctx);
+		const second = mock.commands.get("firecrawl")?.handler("disable", ctx);
+		await Promise.all([first, second]);
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool"]);
+		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, []);
+	});
+});
+
+test("Firecrawl tool selection uses dialogs instead of custom TUI in RPC mode", async () => {
+	await withTempAgentDir(async () => {
+		const mock = createMockPi({ activeTools: ["other_tool"] });
+		firecrawl(mock.pi);
+		let customCalls = 0;
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "rpc",
+			select: async () => "Done",
+			custom: async () => {
+				customCalls += 1;
+			},
+		});
+
+		await mock.commands.get("firecrawl")?.handler("tools", ctx);
+
+		assert.equal(customCalls, 0);
 	});
 });
 
@@ -578,5 +691,8 @@ function writeSettings(agentDir: string, fileName: string, tools: string[]) {
 }
 
 function readSettings(agentDir: string, fileName: string) {
-	return JSON.parse(readFileSync(path.join(agentDir, fileName), "utf8")) as { tools: string[] };
+	return JSON.parse(readFileSync(path.join(agentDir, fileName), "utf8")) as {
+		tools: string[];
+		future?: unknown;
+	};
 }

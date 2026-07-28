@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { access, link, lstat, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { access, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
 	SAFE_GH_SUBCOMMAND_PATHS,
@@ -119,82 +118,15 @@ export async function readPlanModeSettings(
 			: canonical;
 	}
 
-	const legacySnapshot = await readSettingsSnapshot(legacyPath);
-	const legacy = legacySnapshot.result;
+	const legacy = await readSettingsFile(legacyPath);
 	const raced = await readSettingsFile(canonicalPath);
 	if (raced.kind !== "missing") return raced;
-	if (legacy.kind !== "loaded") return legacy;
-	let installedIdentity: FileIdentity;
-	try {
-		installedIdentity = await installFileExclusively(canonicalPath, legacySnapshot.contents ?? "");
-	} catch (error) {
-		const created = await readSettingsFile(canonicalPath);
-		if (created.kind !== "missing") {
-			return {
-				...created,
-				notice: `${LEGACY_PLAN_MODE_SETTINGS_FILE} ignored because ${PLAN_MODE_SETTINGS_FILE} was created concurrently.`,
-			};
-		}
-		return {
-			...legacy,
-			notice: `Plan-mode settings migration failed: ${formatError(error)}. The legacy file was used for this session.`,
-		};
-	}
-	if (!(await fileContentsEqual(legacyPath, legacySnapshot.contents ?? ""))) {
-		const removed = await removeFileIfIdentityMatches(
-			canonicalPath,
-			installedIdentity,
-			legacySnapshot.contents ?? "",
-		);
-		return {
-			...legacy,
-			notice: removed
-				? `${LEGACY_PLAN_MODE_SETTINGS_FILE} changed during migration; the stale ${PLAN_MODE_SETTINGS_FILE} snapshot was removed.`
-				: `${LEGACY_PLAN_MODE_SETTINGS_FILE} changed during migration, but ${PLAN_MODE_SETTINGS_FILE} was replaced concurrently and takes precedence on the next load.`,
-		};
-	}
-	try {
-		await rm(legacyPath);
-		return {
-			...legacy,
-			notice: `Plan-mode settings migrated from ${LEGACY_PLAN_MODE_SETTINGS_FILE} to ${PLAN_MODE_SETTINGS_FILE}.`,
-		};
-	} catch (error) {
-		return {
-			...legacy,
-			notice: `Plan-mode settings migrated to ${PLAN_MODE_SETTINGS_FILE}, but ${LEGACY_PLAN_MODE_SETTINGS_FILE} could not be removed: ${formatError(error)}.`,
-		};
-	}
-}
-
-type FileIdentity = { dev: number; ino: number };
-
-async function installFileExclusively(filePath: string, contents: string): Promise<FileIdentity> {
-	const tempFile = join(dirname(filePath), `.${PLAN_MODE_SETTINGS_FILE}.${randomUUID()}.tmp`);
-	try {
-		await writeFile(tempFile, contents, { encoding: "utf8", flag: "wx" });
-		const identity = await lstat(tempFile);
-		await link(tempFile, filePath);
-		return { dev: identity.dev, ino: identity.ino };
-	} finally {
-		await rm(tempFile, { force: true }).catch(() => undefined);
-	}
-}
-
-async function removeFileIfIdentityMatches(
-	filePath: string,
-	expected: FileIdentity,
-	expectedContents: string,
-) {
-	try {
-		const current = await lstat(filePath);
-		if (current.dev !== expected.dev || current.ino !== expected.ino) return false;
-		if ((await readFile(filePath, "utf8")) !== expectedContents) return false;
-		await rm(filePath);
-		return true;
-	} catch {
-		return false;
-	}
+	return legacy.kind === "loaded"
+		? {
+				...legacy,
+				notice: `Using legacy ${LEGACY_PLAN_MODE_SETTINGS_FILE}; rename it to ${PLAN_MODE_SETTINGS_FILE}. The legacy file was not modified.`,
+			}
+		: legacy;
 }
 
 async function readSettingsFile(settingsPath: string): Promise<PlanModeSettingsLoadResult> {
@@ -229,14 +161,6 @@ export function configuredThinkingLevel(
 	settings: PlanModeSettings,
 ): PlanModeFixedThinkingLevel | undefined {
 	return settings.thinkingLevel === "inherit" ? undefined : settings.thinkingLevel;
-}
-
-async function fileContentsEqual(path: string, expected: string) {
-	try {
-		return (await readFile(path, "utf8")) === expected;
-	} catch {
-		return false;
-	}
 }
 
 async function exists(path: string) {

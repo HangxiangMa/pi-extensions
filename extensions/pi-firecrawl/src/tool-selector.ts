@@ -25,6 +25,19 @@ interface ToolStatusSummary {
 }
 
 let settingsNotice: string | undefined;
+let sessionGeneration = 0;
+
+export function advanceFirecrawlSessionGeneration(): number {
+	return ++sessionGeneration;
+}
+
+export function currentFirecrawlSessionGeneration(): number {
+	return sessionGeneration;
+}
+
+export function isCurrentFirecrawlSession(generation: number): boolean {
+	return generation === sessionGeneration;
+}
 
 export function clearSettingsNotice() {
 	settingsNotice = undefined;
@@ -35,24 +48,32 @@ export function recordSettingsNotice(settings: SettingsLoadResult) {
 }
 
 export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
-	if (!ctx.hasUI) {
-		ctx.ui.notify(
-			`Firecrawl tool selection needs an interactive UI.\n\n${await buildStatusMessage(pi)}`,
-			hasApiKey() ? "info" : "warning",
-		);
+	const generation = sessionGeneration;
+	if (!ctx.hasUI) return;
+	if (ctx.mode !== "tui") {
+		await showDialogToolSelector(pi, ctx, generation);
 		return;
 	}
 
 	let selectedTools = new Set<FirecrawlToolName>(getActiveFirecrawlTools(pi));
 	let persistQueue = Promise.resolve();
+	let requestedRevision = 0;
+	let requestRender: () => void = () => undefined;
 	const commitSelectedTools = () => {
 		const nextSelectedTools = orderedFirecrawlTools(selectedTools);
-		applyFirecrawlTools(pi, nextSelectedTools);
-		persistQueue = persistQueue.then(() => persistSettings(ctx, nextSelectedTools));
+		const revision = ++requestedRevision;
+		persistQueue = persistQueue.then(async () => {
+			const saved = await transactSelectedTools(pi, ctx, nextSelectedTools, generation);
+			if (!saved && isCurrentFirecrawlSession(generation) && revision === requestedRevision) {
+				selectedTools = new Set(getActiveFirecrawlTools(pi));
+				requestRender();
+			}
+		});
 	};
 
 	const customResult = await ctx.ui.custom<"closed" | undefined>(
 		(tui, theme, keybindings, done) => {
+			requestRender = () => tui.requestRender();
 			const rows = firecrawlToolSelectorRows();
 			let selectedIndex = 0;
 			const moveSelection = (delta: number) => {
@@ -134,22 +155,26 @@ export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
 		},
 	);
 
+	if (!isCurrentFirecrawlSession(generation)) return;
 	if (customResult !== "closed") {
-		await showDialogToolSelector(pi, ctx);
+		await showDialogToolSelector(pi, ctx, generation);
 		return;
 	}
 
 	await persistQueue;
-	ctx.ui.notify(await buildStatusMessage(pi), hasApiKey() ? "info" : "warning");
+	if (!isCurrentFirecrawlSession(generation)) return;
+	const status = await buildStatusMessage(pi);
+	if (!isCurrentFirecrawlSession(generation)) return;
+	ctx.ui.notify(status, hasApiKey() ? "info" : "warning");
 }
 
-async function showDialogToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
+async function showDialogToolSelector(pi: ExtensionAPI, ctx: CommandContext, generation: number) {
 	let selectedTools = new Set<FirecrawlToolName>(getActiveFirecrawlTools(pi));
 	while (true) {
 		const rows = firecrawlToolSelectorRows();
 		const choices = rows.map((row) => formatToolSelectorRow(row, selectedTools));
 		const choice = await ctx.ui.select(toolSelectorTitle(selectedTools), choices);
-		if (!choice) break;
+		if (!isCurrentFirecrawlSession(generation) || !choice) break;
 
 		const row = rows[choices.indexOf(choice)];
 		if (!row) continue;
@@ -164,10 +189,20 @@ async function showDialogToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
 			selectedTools = new Set();
 		}
 
-		await setSelectedFirecrawlTools(pi, ctx, orderedFirecrawlTools(selectedTools));
+		const saved = await transactSelectedTools(
+			pi,
+			ctx,
+			orderedFirecrawlTools(selectedTools),
+			generation,
+		);
+		if (!isCurrentFirecrawlSession(generation)) return;
+		if (!saved) selectedTools = new Set(getActiveFirecrawlTools(pi));
 	}
 
-	ctx.ui.notify(await buildStatusMessage(pi), hasApiKey() ? "info" : "warning");
+	if (!isCurrentFirecrawlSession(generation)) return;
+	const status = await buildStatusMessage(pi);
+	if (!isCurrentFirecrawlSession(generation)) return;
+	ctx.ui.notify(status, hasApiKey() ? "info" : "warning");
 }
 
 export async function updateFirecrawlTools(
@@ -176,20 +211,75 @@ export async function updateFirecrawlTools(
 	selectedTools: readonly FirecrawlToolName[],
 	action: string,
 ) {
-	await setSelectedFirecrawlTools(pi, ctx, selectedTools);
-	ctx.ui.notify(
-		`Firecrawl tools ${action}.\n\n${await buildStatusMessage(pi)}`,
-		hasApiKey() ? "info" : "warning",
-	);
+	const generation = sessionGeneration;
+	const saved = await transactSelectedTools(pi, ctx, selectedTools, generation);
+	if (!saved || !isCurrentFirecrawlSession(generation)) return;
+	const status = await buildStatusMessage(pi);
+	if (!isCurrentFirecrawlSession(generation)) return;
+	ctx.ui.notify(`Firecrawl tools ${action}.\n\n${status}`, hasApiKey() ? "info" : "warning");
 }
 
 export async function setSelectedFirecrawlTools(
 	pi: ExtensionAPI,
 	ctx: CommandContext,
 	selectedTools: readonly FirecrawlToolName[],
-) {
-	applyFirecrawlTools(pi, selectedTools);
-	await persistSettings(ctx, selectedTools);
+): Promise<boolean> {
+	return transactSelectedTools(pi, ctx, selectedTools, sessionGeneration);
+}
+
+let toolTransactionQueue = Promise.resolve();
+
+export async function waitForFirecrawlSettings(): Promise<void> {
+	await toolTransactionQueue;
+}
+
+function transactSelectedTools(
+	pi: ExtensionAPI,
+	ctx: CommandContext,
+	selectedTools: readonly FirecrawlToolName[],
+	expectedGeneration: number,
+): Promise<boolean> {
+	const operation = toolTransactionQueue.then(() =>
+		transactSelectedToolsNow(pi, ctx, selectedTools, expectedGeneration),
+	);
+	toolTransactionQueue = operation.then(
+		() => undefined,
+		() => undefined,
+	);
+	return operation;
+}
+
+async function transactSelectedToolsNow(
+	pi: ExtensionAPI,
+	ctx: CommandContext,
+	selectedTools: readonly FirecrawlToolName[],
+	expectedGeneration: number,
+): Promise<boolean> {
+	if (!isCurrentFirecrawlSession(expectedGeneration)) return false;
+	const previousActiveTools = pi.getActiveTools();
+	try {
+		applyFirecrawlTools(pi, selectedTools);
+		await persistSettings(selectedTools);
+		return isCurrentFirecrawlSession(expectedGeneration);
+	} catch (error) {
+		let rollbackError: unknown;
+		try {
+			const previousFirecrawlTools = previousActiveTools.filter((name) =>
+				FIRECRAWL_TOOL_NAMES.includes(name as FirecrawlToolName),
+			) as FirecrawlToolName[];
+			applyFirecrawlTools(pi, previousFirecrawlTools);
+		} catch (caught) {
+			rollbackError = caught;
+		}
+		if (!isCurrentFirecrawlSession(expectedGeneration)) return false;
+		ctx.ui.notify(
+			rollbackError
+				? `Firecrawl settings save failed: ${formatError(error)}; active-tool rollback failed: ${formatError(rollbackError)}`
+				: `Firecrawl settings save failed; active tools restored: ${formatError(error)}`,
+			"warning",
+		);
+		return false;
+	}
 }
 
 export function applyFirecrawlTools(pi: ExtensionAPI, selectedTools: readonly FirecrawlToolName[]) {
@@ -323,10 +413,6 @@ function formatError(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
 }
 
-async function persistSettings(ctx: CommandContext, selectedTools: readonly FirecrawlToolName[]) {
-	try {
-		await saveSettings({ tools: [...selectedTools], updatedAt: Date.now() });
-	} catch (error) {
-		ctx.ui.notify(`Firecrawl settings save failed: ${formatError(error)}`, "warning");
-	}
+async function persistSettings(selectedTools: readonly FirecrawlToolName[]) {
+	await saveSettings({ tools: [...selectedTools], updatedAt: Date.now() });
 }

@@ -305,6 +305,8 @@ export class WebUIRuntime {
 		this.cancelBrowserInputs("The Pi session ended before the browser prompt was accepted.");
 		this.acceptedBrowserInputs.clear();
 		this.conversation?.close();
+		await this.settingsSaveQueue;
+		if (generation !== this.generation) return;
 		await this.releaseServer();
 		if (generation !== this.generation) return;
 		this.context = undefined;
@@ -533,10 +535,11 @@ export class WebUIRuntime {
 							}
 							const next = { ...this.settings, startOnSessionStart: requested };
 							const document = await this.dependencies.saveSettings(
-								next,
+								{ startOnSessionStart: requested },
 								this.settingsDocument,
 								this.settingsPath,
 							);
+							if (settingsGeneration !== this.generation || this.closed) return;
 							this.settings = next;
 							this.settingsDocument = document;
 							this.settingsSource = "settings file";
@@ -615,7 +618,15 @@ export class WebUIRuntime {
 	}
 
 	private async initializeSettings(ctx: ExtensionCommandContext): Promise<void> {
-		const result = await this.dependencies.initializeSettings(this.settingsPath);
+		const generation = this.generation;
+		let result: "created" | "exists";
+		try {
+			result = await this.dependencies.initializeSettings(this.settingsPath);
+		} catch (error) {
+			if (generation !== this.generation || this.closed) return;
+			throw error;
+		}
+		if (generation !== this.generation || this.closed) return;
 		if (ctx.hasUI) {
 			ctx.ui.notify(
 				result === "created"
@@ -625,6 +636,7 @@ export class WebUIRuntime {
 			);
 		}
 		const loaded = await this.dependencies.loadSettings(this.settingsPath);
+		if (generation !== this.generation || this.closed) return;
 		this.applySettingsResult(loaded);
 		if (loaded.warning && ctx.hasUI) ctx.ui.notify(loaded.warning, "warning");
 		if (ctx.mode === "tui") await this.showSettings(ctx);

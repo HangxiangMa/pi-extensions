@@ -113,12 +113,16 @@ ${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-firecrawl.json
 
 When the file is missing or invalid, the extension preserves Pi's current active-tool policy
 instead of enabling tools by itself. A valid saved selection is restored on Pi startup and
-`/reload`. The settings file stores only tool names and a timestamp; it never stores
-`FIRECRAWL_API_KEY`, request headers, or other secrets.
+`/reload`. A missing file is created by the first successful selection change. Within one Pi process, selection saves run in invocation order, reread the latest valid document, and preserve unknown fields. Malformed JSON
+or invalid recognized fields block the save without replacement; a failed save restores the prior
+Firecrawl tool selection while preserving other extensions' current tools. The settings file
+stores only tool names and a timestamp; it never stores `FIRECRAWL_API_KEY`, request headers, or
+other secrets.
 
-Compatibility: older versions used `pi-firecrawl-settings.json`. During the migration window,
-a legacy-only file is automatically migrated to `pi-firecrawl.json` with a warning. If both
-files exist, `pi-firecrawl.json` wins and the legacy file is ignored. The legacy filename is
+Compatibility: older versions used `pi-firecrawl-settings.json`. A legacy-only file remains
+readable with a warning and is never modified automatically; rename it to `pi-firecrawl.json`.
+The first subsequent settings save writes the canonical file. If both files exist,
+`pi-firecrawl.json` wins and the legacy file is ignored. The legacy filename is
 deprecated and will be removed in a future major release.
 
 ## 🚀 Examples

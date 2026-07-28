@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,7 +16,6 @@ import chromeDevtools, {
 	commandCompletions,
 	formatHostForUrl,
 	hasParentPathSegment,
-	installSettingsFileExclusively,
 	isLocalDevToolsHost,
 	isPathInsideRoot,
 	normalizeChromeDevtoolsSettings,
@@ -19,6 +26,7 @@ import chromeDevtools, {
 	resolveScreenshotPath,
 	selectAllowedRoot,
 } from "../src/chrome-devtools.js";
+import { saveSettings } from "../src/settings.js";
 
 const NEW_SETTINGS_FILE = "pi-chrome-devtools.json";
 const LEGACY_SETTINGS_FILE = "pi-chrome-devtools-settings.json";
@@ -70,21 +78,6 @@ test("chrome-devtools settings normalize ordered unique tool names", () => {
 	assert.deepEqual(orderedChromeDevtoolsTools(new Set([EVALUATE_TOOL])), [EVALUATE_TOOL]);
 });
 
-test("chrome-devtools installs migrated settings exclusively without leaving temp files", async () => {
-	await withTempAgentDir(async (agentDir) => {
-		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
-		await installSettingsFileExclusively(settingsPath, "first\n");
-
-		await assert.rejects(
-			installSettingsFileExclusively(settingsPath, "replacement\n"),
-			(error: NodeJS.ErrnoException) => error.code === "EEXIST",
-		);
-
-		assert.equal(readFileSync(settingsPath, "utf8"), "first\n");
-		assert.deepEqual(readdirSync(agentDir), [NEW_SETTINGS_FILE]);
-	});
-});
-
 test("chrome-devtools preserves active tools when settings are missing", async () => {
 	await withTempAgentDir(async () => {
 		const chromeDevtoolsModule = await importFreshChromeDevtools();
@@ -114,7 +107,7 @@ test("chrome-devtools loads the new settings file without a migration warning", 
 	});
 });
 
-test("chrome-devtools migrates a legacy-only settings file and warns", async () => {
+test("chrome-devtools reads legacy-only settings without modifying either path", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		writeSettings(agentDir, LEGACY_SETTINGS_FILE, [LIST_PAGES_TOOL]);
 		const chromeDevtoolsModule = await importFreshChromeDevtools();
@@ -125,15 +118,10 @@ test("chrome-devtools migrates a legacy-only settings file and warns", async () 
 		await mock.events.get("session_start")?.[0]?.({}, ctx);
 
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LIST_PAGES_TOOL]);
-		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, [LIST_PAGES_TOOL]);
-		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), false);
-		assert.match(notifications[0]?.message ?? "", /migrated/i);
-		assert.match(notifications[0]?.message ?? "", /pi-chrome-devtools-settings\.json/);
-		assert.match(notifications[0]?.message ?? "", /pi-chrome-devtools\.json/);
-
-		await mock.commands.get("chrome-devtools")?.handler("disable", ctx);
-		await mock.commands.get("chrome-devtools")?.handler("status", ctx);
-		assert.match(notifications.at(-1)?.message ?? "", /migrated/i);
+		assert.equal(existsSync(path.join(agentDir, NEW_SETTINGS_FILE)), false);
+		assert.deepEqual(readSettings(agentDir, LEGACY_SETTINGS_FILE).tools, [LIST_PAGES_TOOL]);
+		assert.match(notifications[0]?.message ?? "", /using legacy/i);
+		assert.match(notifications[0]?.message ?? "", /rename.*pi-chrome-devtools\.json/i);
 	});
 });
 
@@ -222,6 +210,10 @@ test("chrome-devtools does not fall back to legacy settings when the new file is
 
 test("chrome-devtools saves tool selection only to the new settings file", async () => {
 	await withTempAgentDir(async (agentDir) => {
+		writeFileSync(
+			path.join(agentDir, NEW_SETTINGS_FILE),
+			JSON.stringify({ tools: [LIST_PAGES_TOOL], updatedAt: 1, future: { kept: true } }),
+		);
 		const chromeDevtoolsModule = await importFreshChromeDevtools();
 		const mock = createMockPi({ activeTools: ["other_tool", LIST_PAGES_TOOL] });
 		const { ctx, notifications } = createMockContext();
@@ -231,8 +223,115 @@ test("chrome-devtools saves tool selection only to the new settings file", async
 
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool"]);
 		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, []);
+		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).future, { kept: true });
 		assert.equal(existsSync(path.join(agentDir, LEGACY_SETTINGS_FILE)), false);
 		assert.match(notifications[0]?.message ?? "", /Settings file: .*pi-chrome-devtools\.json/);
+	});
+});
+
+test("chrome-devtools failed publication preserves the prior file and removes its temporary", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, NEW_SETTINGS_FILE, [LIST_PAGES_TOOL]);
+		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		const original = readFileSync(settingsPath, "utf8");
+
+		await assert.rejects(
+			saveSettings(
+				{ tools: [], updatedAt: 2 },
+				{ rename: async () => Promise.reject(new Error("publish failed")) },
+			),
+			/publish failed/,
+		);
+
+		assert.equal(readFileSync(settingsPath, "utf8"), original);
+		assert.deepEqual(readdirSync(agentDir), [NEW_SETTINGS_FILE]);
+	});
+});
+
+test("chrome-devtools legacy-seeded saves preserve canonical settings created before publication", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const legacyPath = path.join(agentDir, LEGACY_SETTINGS_FILE);
+		const canonicalPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		const legacy = JSON.stringify({ tools: [LIST_PAGES_TOOL], updatedAt: 1, legacy: true });
+		const concurrent = JSON.stringify({ tools: [SCREENSHOT_TOOL], updatedAt: 2, newer: true });
+		writeFileSync(legacyPath, legacy);
+
+		await assert.rejects(
+			saveSettings(
+				{ tools: [EVALUATE_TOOL], updatedAt: 3 },
+				{
+					write: async (temporaryPath, data) => {
+						writeFileSync(temporaryPath, data);
+						writeFileSync(canonicalPath, concurrent);
+					},
+				},
+			),
+			/created concurrently.*retry/i,
+		);
+
+		assert.equal(readFileSync(canonicalPath, "utf8"), concurrent);
+		assert.equal(readFileSync(legacyPath, "utf8"), legacy);
+		assert.deepEqual(
+			readdirSync(agentDir).sort(),
+			[LEGACY_SETTINGS_FILE, NEW_SETTINGS_FILE].sort(),
+		);
+	});
+});
+
+test("chrome-devtools rejects invalid settings updates and restores active tools", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const settingsPath = path.join(agentDir, NEW_SETTINGS_FILE);
+		const invalid = '{"tools":["invalid"],"future":"kept"}\n';
+		writeFileSync(settingsPath, invalid);
+		const chromeDevtoolsModule = await importFreshChromeDevtools();
+		const mock = createMockPi({ activeTools: ["other_tool", LIST_PAGES_TOOL] });
+		const { ctx, notifications } = createMockContext();
+
+		chromeDevtoolsModule.default(mock.pi);
+		await mock.commands.get("chrome-devtools")?.handler("disable", ctx);
+
+		assert.equal(readFileSync(settingsPath, "utf8"), invalid);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LIST_PAGES_TOOL]);
+		assert.match(notifications.at(-1)?.message ?? "", /settings save failed/i);
+
+		writeSettings(agentDir, NEW_SETTINGS_FILE, [LIST_PAGES_TOOL]);
+		await mock.commands.get("chrome-devtools")?.handler("disable", ctx);
+		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, []);
+	});
+});
+
+test("chrome-devtools rolls back a failed save after shutdown invalidates its session", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		mkdirSync(path.join(agentDir, NEW_SETTINGS_FILE));
+		const chromeDevtoolsModule = await importFreshChromeDevtools();
+		const mock = createMockPi({ activeTools: ["other_tool", LIST_PAGES_TOOL] });
+		const { ctx, notifications } = createMockContext();
+		chromeDevtoolsModule.default(mock.pi);
+
+		const command = mock.commands.get("chrome-devtools")?.handler("disable", ctx);
+		await Promise.resolve();
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool"]);
+		const shutdown = mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+
+		await Promise.all([command, shutdown]);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LIST_PAGES_TOOL]);
+		assert.deepEqual(notifications, []);
+	});
+});
+
+test("chrome-devtools serializes rapid tool saves in invocation order", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const chromeDevtoolsModule = await importFreshChromeDevtools();
+		const mock = createMockPi({ activeTools: ["other_tool"] });
+		const { ctx } = createMockContext();
+		chromeDevtoolsModule.default(mock.pi);
+
+		const first = mock.commands.get("chrome-devtools")?.handler("enable", ctx);
+		const second = mock.commands.get("chrome-devtools")?.handler("disable", ctx);
+		await Promise.all([first, second]);
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool"]);
+		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, []);
 	});
 });
 
@@ -255,6 +354,7 @@ test("Chrome DevTools tool selection keeps the cursor on the toggled row", async
 		mock.rawPi.setActiveTools(["other_tool", ...toolNames]);
 		const { ctx } = createMockContext({
 			hasUI: true,
+			mode: "tui",
 			custom: async (factory: unknown) => {
 				const { renders, result } = driveCustomSelector(factory, [
 					"tui.select.down",
@@ -274,6 +374,26 @@ test("Chrome DevTools tool selection keeps the cursor on the toggled row", async
 		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, [
 			...toolNames.filter((name) => name !== "chrome_devtools_select_page"),
 		]);
+	});
+});
+
+test("Chrome DevTools tool selection uses dialogs instead of custom TUI in RPC mode", async () => {
+	await withTempAgentDir(async () => {
+		const mock = createMockPi({ activeTools: ["other_tool"] });
+		chromeDevtools(mock.pi);
+		let customCalls = 0;
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "rpc",
+			select: async () => "Done",
+			custom: async () => {
+				customCalls += 1;
+			},
+		});
+
+		await mock.commands.get("chrome-devtools")?.handler("tools", ctx);
+
+		assert.equal(customCalls, 0);
 	});
 });
 
@@ -316,5 +436,8 @@ function writeSettings(agentDir: string, fileName: string, tools: string[]) {
 }
 
 function readSettings(agentDir: string, fileName: string) {
-	return JSON.parse(readFileSync(path.join(agentDir, fileName), "utf8")) as { tools: string[] };
+	return JSON.parse(readFileSync(path.join(agentDir, fileName), "utf8")) as {
+		tools: string[];
+		future?: unknown;
+	};
 }

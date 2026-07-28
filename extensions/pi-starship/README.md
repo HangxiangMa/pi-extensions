@@ -8,7 +8,7 @@ A native Pi footer configured with Starship-style TOML. It parses and renders fo
 
 ## ✨ Features
 
-- Automatically creates a readable Tokyo Night configuration on first session start.
+- Uses a readable built-in Tokyo Night configuration until the user explicitly saves settings.
 - Starship-style root/module formats, conditional groups, `$all`, styles, and palettes.
 - Pi modules for model, thinking, activity, context, tokens, cost, turn, and extension statuses.
 - Cached Git branch, commit, operation state, line metrics, detailed status, and linked-worktree identity.
@@ -40,7 +40,7 @@ The only configuration source is:
 <getAgentDir()>/pi-starship.toml
 ```
 
-On the first session start, the extension atomically creates this file from its readable Tokyo Night default. It never overwrites an existing document, including a malformed one. If initialization fails, the built-in configuration remains active and the failure is reported as a warning.
+When this file is absent, the extension uses its readable Tokyo Night default without creating the file or parent directory. The first successful settings save creates it atomically. Existing malformed documents are never overwritten.
 
 The extension does **not** read project overrides, `pi-statusline.json`, `PI_STATUSLINE_PRESET`, or `~/.config/starship.toml`, and does not migrate statusline settings.
 

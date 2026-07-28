@@ -95,9 +95,9 @@ For a default Pi installation this is typically `~/.pi/agent/pi-worktree.json`. 
 
 `worktreeRoot` accepts `~`, a home-prefixed path such as `~/worktrees`, or a native-platform absolute path. It does not expand `$VAR`, `%VAR%`, or other shell syntax. Empty, relative, NUL-containing, non-string, and invalid paths are rejected. There is no project override or extension-specific environment variable.
 
-A missing `worktreeRoot` uses `~/.worktrees`. Submitting a blank value in the interactive action removes the override. Unknown JSON fields survive interactive saves and resets. Settings reload on every `session_start`, including `/reload` and workspace replacement; a successful interactive save applies immediately to the next Add flow.
+A missing `worktreeRoot` uses `~/.worktrees`; the settings file is created only by a successful interactive change. Submitting a blank value in the interactive action removes the override. Within one Pi process, queued saves run in invocation order, reread the latest valid document immediately before merging `worktreeRoot`, and preserve concurrent unknown-field edits. Settings reload on every `session_start`, including `/reload` and workspace replacement; a successful interactive save applies immediately to the next Add flow.
 
-Malformed or invalid settings are warned about but never overwritten. An initial failure uses `~/.worktrees`; a later failure retains the last valid effective root. Interactive configuration remains blocked until the invalid file is fixed manually.
+Malformed or invalid settings are warned about but never overwritten, including an invalid edit made while a settings action is open. An initial failure uses `~/.worktrees`; a later failure retains the last valid effective root. Interactive configuration remains blocked until the invalid file is fixed manually. Failed publication leaves the prior file and effective runtime root unchanged, and the save queue remains usable after rejection.
 
 ## 🔀 Pi workspace switching
 

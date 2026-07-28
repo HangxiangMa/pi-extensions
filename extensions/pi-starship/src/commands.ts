@@ -11,6 +11,7 @@ import {
 	atomicSaveConfigDocument,
 	BUILT_IN_EXAMPLE,
 	type LoadedStarshipConfig,
+	removeConfigDocumentIfMatches,
 	validateConfigDocument,
 } from "./config.js";
 
@@ -264,7 +265,7 @@ async function reviewAndApply(
 		try {
 			options.apply(saved, ctx);
 		} catch (error) {
-			const rollbackError = restorePreviousConfiguration(ctx, options, previous);
+			const rollbackError = restorePreviousConfiguration(ctx, options, previous, saved);
 			ctx.ui.notify(
 				rollbackError
 					? `Footer settings could not be applied: ${safeText(formatError(error))}. Restoring the previous configuration also failed: ${safeText(formatError(rollbackError))}.`
@@ -292,12 +293,16 @@ function restorePreviousConfiguration(
 	ctx: ExtensionCommandContext,
 	options: StarshipCommandOptions,
 	previous: LoadedStarshipConfig,
+	saved: LoadedStarshipConfig,
 ): unknown {
 	try {
-		if (previous.rawDocument === undefined) {
-			throw new Error("The previous settings document is unavailable");
+		if (saved.rawDocument === undefined || saved.fileIdentity === undefined) {
+			throw new Error("The saved settings document identity is unavailable");
 		}
-		(options.restore ?? atomicRestoreConfigDocument)(options.settingsPath, previous.rawDocument);
+		removeConfigDocumentIfMatches(options.settingsPath, saved.rawDocument, saved.fileIdentity);
+		if (previous.rawDocument !== undefined) {
+			(options.restore ?? atomicRestoreConfigDocument)(options.settingsPath, previous.rawDocument);
+		}
 		options.apply(previous, ctx);
 		return undefined;
 	} catch (error) {

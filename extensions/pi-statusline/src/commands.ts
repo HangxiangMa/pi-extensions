@@ -24,6 +24,7 @@ import { segmentPaletteForPreset } from "./presets/index.js";
 import {
 	DEFAULT_STATUSLINE_DOCUMENT,
 	type LoadedStatuslineSettings,
+	removeStatuslineSettingsDocumentIfMatches,
 	saveStatuslineSettingsDocument,
 } from "./settings.js";
 import {
@@ -193,21 +194,31 @@ async function choosePalettePreset(
 	}
 	if (selection === undefined) return;
 
+	let loaded: LoadedStatuslineSettings;
 	try {
 		const rawDocument = palettePresetDocument(current, selection);
-		const loaded = (options.save ?? saveStatuslineSettingsDocument)(
-			options.settingsPath,
-			rawDocument,
-		);
-		options.apply(loaded, ctx);
-		const message =
-			loaded.config.palettePreset === "custom"
-				? "Custom palette applied. Edit colors via /statusline → Advanced → Edit settings JSON."
-				: `Palette preset applied: ${loaded.config.palettePreset}.`;
-		ctx.ui.notify(message, "info");
+		loaded = (options.save ?? saveStatuslineSettingsDocument)(options.settingsPath, rawDocument);
 	} catch (error) {
 		ctx.ui.notify(`Palette preset was not saved: ${formatError(error)}`, "error");
+		return;
 	}
+	try {
+		options.apply(loaded, ctx);
+	} catch (error) {
+		const rollbackError = restoreStatuslineSettings(ctx, options, current, loaded);
+		ctx.ui.notify(
+			rollbackError
+				? `Palette preset could not be applied: ${formatError(error)}; rollback failed: ${formatError(rollbackError)}`
+				: `Palette preset could not be applied: ${formatError(error)}; previous settings restored.`,
+			"error",
+		);
+		return;
+	}
+	const message =
+		loaded.config.palettePreset === "custom"
+			? "Custom palette applied. Edit colors via /statusline → Advanced → Edit settings JSON."
+			: `Palette preset applied: ${loaded.config.palettePreset}.`;
+	ctx.ui.notify(message, "info");
 }
 
 async function showPalettePresetPicker(
@@ -587,17 +598,30 @@ async function editSettings(ctx: ExtensionCommandContext, options: StatuslineCom
 		current.rawDocument ?? DEFAULT_STATUSLINE_DOCUMENT,
 	);
 	if (edited === undefined) return;
+	let loaded: LoadedStatuslineSettings;
 	try {
-		const loaded = (options.save ?? saveStatuslineSettingsDocument)(options.settingsPath, edited);
-		options.apply(loaded, ctx);
-		const suffix =
-			loaded.diagnostics.length > 0
-				? ` (${loaded.diagnostics.length} warning${loaded.diagnostics.length === 1 ? "" : "s"})`
-				: "";
-		ctx.ui.notify(`pi-statusline settings saved and applied${suffix}.`, "info");
+		loaded = (options.save ?? saveStatuslineSettingsDocument)(options.settingsPath, edited);
 	} catch (error) {
 		ctx.ui.notify(`pi-statusline settings were not saved: ${formatError(error)}`, "error");
+		return;
 	}
+	try {
+		options.apply(loaded, ctx);
+	} catch (error) {
+		const rollbackError = restoreStatuslineSettings(ctx, options, current, loaded);
+		ctx.ui.notify(
+			rollbackError
+				? `pi-statusline settings could not be applied: ${formatError(error)}; rollback failed: ${formatError(rollbackError)}`
+				: `pi-statusline settings could not be applied: ${formatError(error)}; previous settings restored.`,
+			"error",
+		);
+		return;
+	}
+	const suffix =
+		loaded.diagnostics.length > 0
+			? ` (${loaded.diagnostics.length} warning${loaded.diagnostics.length === 1 ? "" : "s"})`
+			: "";
+	ctx.ui.notify(`pi-statusline settings saved and applied${suffix}.`, "info");
 }
 
 function palettePresetDocument(
@@ -771,15 +795,14 @@ function applySegmentsDocumentChange(
 	ctx: ExtensionCommandContext,
 	options: StatuslineCommandOptions,
 ): LoadedStatuslineSettings {
+	const previous = options.getLoaded();
 	const save = options.save ?? saveStatuslineSettingsDocument;
 	const next = save(options.settingsPath, change.nextDocument);
 	try {
 		options.apply(next, ctx);
 	} catch (applyError) {
-		try {
-			const restored = save(options.settingsPath, change.previousDocument);
-			options.apply(restored, ctx);
-		} catch (rollbackError) {
+		const rollbackError = restoreStatuslineSettings(ctx, options, previous, next);
+		if (rollbackError) {
 			throw new Error(
 				`runtime update failed: ${formatError(applyError)}; rollback failed: ${formatError(rollbackError)}`,
 			);
@@ -787,6 +810,36 @@ function applySegmentsDocumentChange(
 		throw applyError;
 	}
 	return next;
+}
+
+function restoreStatuslineSettings(
+	ctx: ExtensionCommandContext,
+	options: StatuslineCommandOptions,
+	previous: LoadedStatuslineSettings,
+	saved: LoadedStatuslineSettings,
+): unknown {
+	try {
+		if (saved.rawDocument === undefined || saved.fileIdentity === undefined) {
+			throw new Error("The saved settings document identity is unavailable");
+		}
+		removeStatuslineSettingsDocumentIfMatches(
+			options.settingsPath,
+			saved.rawDocument,
+			saved.fileIdentity,
+		);
+		if (previous.rawDocument === undefined || previous.settingsPath !== options.settingsPath) {
+			options.apply(previous, ctx);
+			return undefined;
+		}
+		const restored = (options.save ?? saveStatuslineSettingsDocument)(
+			options.settingsPath,
+			previous.rawDocument,
+		);
+		options.apply(restored, ctx);
+		return undefined;
+	} catch (error) {
+		return error;
+	}
 }
 
 function normalizeLineBreaks(segments: readonly ConfigSegmentName[]): ConfigSegmentName[] {
@@ -808,14 +861,17 @@ function editableSettings(
 	current: LoadedStatuslineSettings,
 	action: string,
 ): { parsed: Record<string, unknown>; rawDocument: string } {
-	if (
-		current.source !== "user" ||
-		current.rawDocument === undefined ||
-		current.diagnostics.some((item) => item.code !== "unknown")
-	) {
+	const rawDocument =
+		current.source === "user" && current.rawDocument !== undefined
+			? current.rawDocument
+			: current.source === "built-in" &&
+					current.rawDocument === undefined &&
+					current.diagnostics.length === 0
+				? DEFAULT_STATUSLINE_DOCUMENT
+				: undefined;
+	if (rawDocument === undefined || current.diagnostics.some((item) => item.code !== "unknown")) {
 		throw new Error(`Fix pi-statusline.json before ${action}`);
 	}
-	const rawDocument = current.rawDocument;
 	const parsed = JSON.parse(rawDocument) as unknown;
 	if (!isRecord(parsed)) throw new Error("Settings must contain a JSON object");
 	return { parsed, rawDocument };
@@ -831,7 +887,8 @@ function showStatus(ctx: ExtensionCommandContext, options: StatuslineCommandOpti
 	ctx.ui.notify(
 		[
 			`pi-statusline source: ${loaded.source}`,
-			`path: ${options.settingsPath}`,
+			`active path: ${loaded.settingsPath}`,
+			`save target: ${options.settingsPath}`,
 			`palette preset: ${loaded.config.palettePreset}`,
 			`density: ${loaded.config.density}`,
 			`separator: ${loaded.config.separator}`,

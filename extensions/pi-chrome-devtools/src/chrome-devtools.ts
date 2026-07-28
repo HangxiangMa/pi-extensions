@@ -10,6 +10,7 @@ import {
 	buildToolStatusMessage,
 	showToolSelector,
 	updateChromeDevtoolsTools,
+	waitForChromeDevtoolsSettings,
 } from "./tool-selector.js";
 import {
 	evaluateTool,
@@ -51,15 +52,18 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 		description: "Open Chrome DevTools help and tool controls",
 		getArgumentCompletions: (prefix) => commandCompletions(prefix),
 		handler: async (args, ctx) => {
-			await handleChromeDevtoolsCommand(pi, args, ctx);
+			const generation = state.sessionGeneration;
+			await handleChromeDevtoolsCommand(pi, args, ctx, generation);
 		},
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		const generation = ++state.sessionGeneration;
 		state.shuttingDown = false;
 		state.settingsNotice = undefined;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		const settings = await loadSettings();
+		if (generation !== state.sessionGeneration) return;
 		state.settingsNotice = settings.notice;
 		if (settings.notice) ctx.ui.notify(settings.notice, "warning");
 		if (settings.kind === "loaded") {
@@ -72,16 +76,24 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		state.sessionGeneration += 1;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
-		await shutdownManagedBrowser(undefined, { cancelLaunch: true });
+		const browserShutdown = shutdownManagedBrowser(undefined, { cancelLaunch: true });
+		await waitForChromeDevtoolsSettings();
+		await browserShutdown;
 	});
 }
 
-async function handleChromeDevtoolsCommand(pi: ExtensionAPI, args: string, ctx: CommandContext) {
+async function handleChromeDevtoolsCommand(
+	pi: ExtensionAPI,
+	args: string,
+	ctx: CommandContext,
+	generation: number,
+) {
 	const command = parseCommand(args);
 	switch (command) {
 		case "menu":
-			await showMenu(pi, ctx);
+			await showMenu(pi, ctx, generation);
 			return;
 		case "help":
 			ctx.ui.notify(buildCommandGuide(), "info");
@@ -89,9 +101,12 @@ async function handleChromeDevtoolsCommand(pi: ExtensionAPI, args: string, ctx: 
 		case "quickstart":
 			ctx.ui.notify(buildQuickstartMessage(), "info");
 			return;
-		case "status":
-			ctx.ui.notify(await buildToolStatusMessage(pi), "info");
+		case "status": {
+			const status = await buildToolStatusMessage(pi);
+			if (generation !== state.sessionGeneration) return;
+			ctx.ui.notify(status, "info");
 			return;
+		}
 		case "tools":
 			await showToolSelector(pi, ctx);
 			return;
@@ -111,18 +126,16 @@ ${buildCommandGuide()}`,
 	);
 }
 
-async function showMenu(pi: ExtensionAPI, ctx: CommandContext) {
+async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: number) {
 	if (!ctx.hasUI) {
-		ctx.ui.notify(
-			`${buildCommandGuide()}
-
-${await buildToolStatusMessage(pi)}`,
-			"info",
-		);
+		const status = await buildToolStatusMessage(pi);
+		if (generation !== state.sessionGeneration) return;
+		ctx.ui.notify(`${buildCommandGuide()}\n\n${status}`, "info");
 		return;
 	}
 
 	const choice = await ctx.ui.select("Chrome DevTools", Object.values(MENU_OPTIONS));
+	if (generation !== state.sessionGeneration) return;
 	switch (choice) {
 		case MENU_OPTIONS.quickstart:
 			ctx.ui.notify(buildQuickstartMessage(), "info");
@@ -130,9 +143,12 @@ ${await buildToolStatusMessage(pi)}`,
 		case MENU_OPTIONS.help:
 			ctx.ui.notify(buildCommandGuide(), "info");
 			return;
-		case MENU_OPTIONS.status:
-			ctx.ui.notify(await buildToolStatusMessage(pi), "info");
+		case MENU_OPTIONS.status: {
+			const status = await buildToolStatusMessage(pi);
+			if (generation !== state.sessionGeneration) return;
+			ctx.ui.notify(status, "info");
 			return;
+		}
 		case MENU_OPTIONS.tools:
 			await showToolSelector(pi, ctx);
 			return;
@@ -179,5 +195,5 @@ export {
 	resolveScreenshotPath,
 	selectAllowedRoot,
 } from "./screenshot.js";
-export { installSettingsFileExclusively, normalizeChromeDevtoolsSettings } from "./settings.js";
+export { normalizeChromeDevtoolsSettings } from "./settings.js";
 export { orderedChromeDevtoolsTools } from "./tool-selector.js";

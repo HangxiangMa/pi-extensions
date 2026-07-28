@@ -6,6 +6,7 @@ import type {
 import {
 	DEFAULT_BASE_URL,
 	type LangfuseConfig,
+	type LangfuseConfigPatch,
 	type LangfuseConfigResult,
 	loadLangfuseConfig,
 	normalizeLangfuseConfig,
@@ -20,7 +21,7 @@ import {
 
 interface ExtensionDependencies {
 	loadConfig(path?: string): Promise<LangfuseConfigResult>;
-	writeConfig(config: LangfuseConfig, path?: string): Promise<LangfuseConfig>;
+	writeConfig(config: LangfuseConfigPatch, path?: string): Promise<unknown>;
 	createBackend(config: LangfuseConfig): Promise<TraceBackend>;
 	resolveGitMetadata(cwd: string): Promise<GitMetadata | undefined>;
 }
@@ -54,6 +55,7 @@ export function createLangfuseExtension(
 		let hasStoredConfig = false;
 		let configurationNotice: string | undefined;
 		let sessionGeneration = 0;
+		let configWriteQueue = Promise.resolve();
 		let nextAttemptReason: string | undefined;
 
 		pi.registerCommand("langfuse", {
@@ -100,10 +102,19 @@ export function createLangfuseExtension(
 					const loaded = await loadConfig(configPath);
 					if (menuGeneration !== sessionGeneration) return;
 					configPath = loaded.path;
-					const next = await promptForConfig(ctx, loaded.ok ? loaded.config : undefined);
+					const next = await promptForConfig(
+						ctx,
+						loaded.ok ? loaded.config : undefined,
+						() => menuGeneration === sessionGeneration,
+					);
 					if (!next || menuGeneration !== sessionGeneration) return;
 					try {
-						await writeConfig(next, loaded.path);
+						const write = configWriteQueue.then(() => writeConfig(next, loaded.path));
+						configWriteQueue = write.then(
+							() => undefined,
+							() => undefined,
+						);
+						await write;
 						if (menuGeneration !== sessionGeneration) return;
 						hasStoredConfig = true;
 						configurationNotice =
@@ -126,7 +137,7 @@ export function createLangfuseExtension(
 		});
 
 		pi.on("session_start", async (_event, ctx) => {
-			sessionGeneration += 1;
+			const generation = ++sessionGeneration;
 			recorder = undefined;
 			activeConfig = undefined;
 			configPath = undefined;
@@ -135,7 +146,10 @@ export function createLangfuseExtension(
 			configurationNotice = undefined;
 			nextAttemptReason = undefined;
 
+			await configWriteQueue;
+			if (generation !== sessionGeneration) return;
 			const result = await loadConfig();
+			if (generation !== sessionGeneration) return;
 			configPath = result.path;
 			for (const warning of result.warnings) ctx.ui.notify(warning, "warning");
 			if (!result.ok) {
@@ -147,6 +161,10 @@ export function createLangfuseExtension(
 			hasStoredConfig = true;
 			try {
 				const backend = await createBackend(result.config);
+				if (generation !== sessionGeneration) {
+					await backend.shutdown().catch(() => undefined);
+					return;
+				}
 				activeConfig = result.config;
 				recorder = new TraceRecorder(backend, {
 					sessionId: ctx.sessionManager.getSessionId(),
@@ -155,6 +173,7 @@ export function createLangfuseExtension(
 					captureContent: result.config.captureContent,
 				});
 			} catch (error) {
+				if (generation !== sessionGeneration) return;
 				initializationError = `Langfuse tracing could not start: ${formatError(error, result.config)}`;
 				ctx.ui.notify(initializationError, "warning");
 			}
@@ -280,23 +299,26 @@ export function createLangfuseExtension(
 		});
 
 		pi.on("session_shutdown", async (event, ctx) => {
-			sessionGeneration += 1;
+			const generation = ++sessionGeneration;
 			const activeRecorder = recorder;
 			const shutdownConfig = activeConfig;
+			const pendingConfigWrite = configWriteQueue;
+			const shutdownSnapshot = activeRecorder ? contextSnapshot(ctx) : undefined;
 			recorder = undefined;
 			activeConfig = undefined;
+			await pendingConfigWrite;
 			if (!activeRecorder) return;
 			try {
-				const snapshot = contextSnapshot(ctx);
-				if (event.reason === "quit") await activeRecorder.shutdown(snapshot);
+				if (event.reason === "quit") await activeRecorder.shutdown(shutdownSnapshot);
 				else {
 					activeRecorder.interrupt(
 						`Pi session ended before settlement (${event.reason}).`,
-						snapshot,
+						shutdownSnapshot,
 					);
 					await activeRecorder.flush();
 				}
 			} catch (error) {
+				if (generation !== sessionGeneration) return;
 				ctx.ui.notify(
 					`Langfuse shutdown export failed: ${formatError(error, shutdownConfig)}`,
 					"error",
@@ -417,13 +439,16 @@ function normalizeGitBranch(value: string): string | undefined {
 async function promptForConfig(
 	ctx: ExtensionCommandContext,
 	current: LangfuseConfig | undefined,
-): Promise<LangfuseConfig | undefined> {
+	isCurrent: () => boolean,
+): Promise<LangfuseConfigPatch | undefined> {
 	const secretKey = await ctx.ui.input("Langfuse secret key (leave blank to keep existing):");
+	if (!isCurrent()) return undefined;
 	if (secretKey === undefined) {
 		ctx.ui.notify("Cancelled", "info");
 		return undefined;
 	}
 	const publicKey = await ctx.ui.input("Langfuse public key (leave blank to keep existing):");
+	if (!isCurrent()) return undefined;
 	if (publicKey === undefined) {
 		ctx.ui.notify("Cancelled", "info");
 		return undefined;
@@ -432,23 +457,23 @@ async function promptForConfig(
 		`Langfuse base URL (leave blank for default ${DEFAULT_BASE_URL}):`,
 		DEFAULT_BASE_URL,
 	);
+	if (!isCurrent()) return undefined;
 	if (baseUrl === undefined) {
 		ctx.ui.notify("Cancelled", "info");
 		return undefined;
 	}
 
-	const normalized = normalizeLangfuseConfig({
-		...current,
-		publicKey: publicKey.trim() || current?.publicKey || "",
-		secretKey: secretKey.trim() || current?.secretKey || "",
+	const patch: LangfuseConfigPatch = {
+		...(publicKey.trim() ? { publicKey: publicKey.trim() } : {}),
+		...(secretKey.trim() ? { secretKey: secretKey.trim() } : {}),
 		baseUrl: baseUrl.trim() || DEFAULT_BASE_URL,
-		captureContent: current?.captureContent ?? true,
-	});
+	};
+	const normalized = normalizeLangfuseConfig({ ...current, ...patch });
 	if (!normalized.ok) {
 		ctx.ui.notify(`Invalid Langfuse config: ${normalized.reason}`, "error");
 		return undefined;
 	}
-	return normalized.config;
+	return patch;
 }
 
 function formatMenuTitle(
@@ -524,7 +549,7 @@ function formatConfigError(result: Extract<LangfuseConfigResult, { ok: false }>)
 	return `Langfuse tracing is disabled: ${result.reason}${setupHint}`;
 }
 
-function formatError(error: unknown, config?: LangfuseConfig): string {
+function formatError(error: unknown, config?: LangfuseConfigPatch): string {
 	let message = error instanceof Error ? error.message : String(error);
 	const secrets = [config?.publicKey, config?.secretKey]
 		.filter((secret): secret is string => Boolean(secret))

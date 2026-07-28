@@ -1,17 +1,13 @@
-import { randomUUID } from "node:crypto";
 import {
-	chmodSync,
 	closeSync,
 	constants,
 	fchmodSync,
 	fstatSync,
-	linkSync,
 	lstatSync,
 	openSync,
 	readdirSync,
 	readFileSync,
 	rmSync,
-	writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { OAuthCredential } from "@earendil-works/pi-ai";
@@ -48,11 +44,11 @@ export class AccountStore {
 	constructor(private readonly backend: AccountStorageBackend = createDefaultBackend()) {}
 
 	read(): AccountsData {
-		return this.backend.withLock((current) => ({ result: parseAccountsData(current) }));
+		return this.backend.read((current) => parseAccountsData(current));
 	}
 
 	async readAsync(): Promise<AccountsData> {
-		return this.backend.withLockAsync(async (current) => ({ result: parseAccountsData(current) }));
+		return this.backend.readAsync(async (current) => parseAccountsData(current));
 	}
 
 	async write(data: AccountsData): Promise<void> {
@@ -275,28 +271,14 @@ export async function migrateLegacyCodexAccountsFile(
 	const backend = new FileAccountStorageBackend(legacyPath, {
 		syncLockTimeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
 	});
-	return backend.withLockAsync<MigrationResult>(async (raw) => {
-		if (pathEntryExists(canonicalPath)) {
-			validateCanonicalAccountsFile(canonicalPath);
-			return { result: { status: "canonical" as const } };
-		}
-		const migrated = migrateReleasedCodexData(raw);
-		const contents = stringifyAccountsData(migrated);
-		try {
-			installPrivateFileExclusively(canonicalPath, contents);
-		} catch (error) {
-			if (hasErrorCode(error, "EEXIST")) {
-				validateCanonicalAccountsFile(canonicalPath);
-				return { result: { status: "canonical" as const } };
-			}
-			throw error;
-		}
+	return backend.readAsync<MigrationResult>(async (raw) => {
+		const contents = stringifyAccountsData(migrateReleasedCodexData(raw));
+		const status = await installMigratedAccountsFile(canonicalPath, contents);
+		if (status === "canonical") return { status };
 		enforcePrivateRegularFile(legacyPath);
 		return {
-			result: {
-				status: "migrated" as const,
-				notice: `${LEGACY_CODEX_ACCOUNTS_FILE} was copied into ${ACCOUNTS_FILE}. The private legacy file was retained for rollback but may become stale after OAuth refresh; do not load both extensions together.`,
-			},
+			status,
+			notice: `${LEGACY_CODEX_ACCOUNTS_FILE} was copied into ${ACCOUNTS_FILE}. The private legacy file was retained for rollback but may become stale after OAuth refresh; do not load both extensions together.`,
 		};
 	});
 }
@@ -355,27 +337,14 @@ function migrateLegacyCodexAccountsFileSync(
 	enforcePrivateRegularFile(legacyPath);
 	return new FileAccountStorageBackend(legacyPath, {
 		syncLockTimeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
-	}).withLock<MigrationResult>((raw) => {
-		if (pathEntryExists(canonicalPath)) {
-			validateCanonicalAccountsFile(canonicalPath);
-			return { result: { status: "canonical" as const } };
-		}
+	}).read<MigrationResult>((raw) => {
 		const contents = stringifyAccountsData(migrateReleasedCodexData(raw));
-		try {
-			installPrivateFileExclusively(canonicalPath, contents);
-		} catch (error) {
-			if (hasErrorCode(error, "EEXIST")) {
-				validateCanonicalAccountsFile(canonicalPath);
-				return { result: { status: "canonical" as const } };
-			}
-			throw error;
-		}
+		const status = installMigratedAccountsFileSync(canonicalPath, contents);
+		if (status === "canonical") return { status };
 		enforcePrivateRegularFile(legacyPath);
 		return {
-			result: {
-				status: "migrated" as const,
-				notice: `${legacyPath.endsWith(OLDEST_CODEX_ACCOUNTS_FILE) ? OLDEST_CODEX_ACCOUNTS_FILE : LEGACY_CODEX_ACCOUNTS_FILE} was copied into ${ACCOUNTS_FILE}. The private legacy file was retained for rollback but may become stale after OAuth refresh; do not load both extensions together.`,
-			},
+			status,
+			notice: `${legacyPath.endsWith(OLDEST_CODEX_ACCOUNTS_FILE) ? OLDEST_CODEX_ACCOUNTS_FILE : LEGACY_CODEX_ACCOUNTS_FILE} was copied into ${ACCOUNTS_FILE}. The private legacy file was retained for rollback but may become stale after OAuth refresh; do not load both extensions together.`,
 		};
 	});
 }
@@ -402,16 +371,34 @@ function cleanupStaleMigrationTemps(canonicalPath: string): void {
 	}
 }
 
-function installPrivateFileExclusively(filePath: string, contents: string): void {
-	const temp = join(dirname(filePath), `.${basename(filePath)}.${randomUUID()}.tmp`);
-	try {
-		writeFileSync(temp, contents, { encoding: "utf8", flag: "wx", mode: 0o600 });
-		chmodSync(temp, 0o600);
-		linkSync(temp, filePath);
-		chmodSync(filePath, 0o600);
-	} finally {
-		rmSync(temp, { force: true });
-	}
+async function installMigratedAccountsFile(
+	filePath: string,
+	contents: string,
+): Promise<"canonical" | "migrated"> {
+	return new FileAccountStorageBackend(filePath, {
+		syncLockTimeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
+	}).withLockAsync(async (current) => {
+		if (current !== undefined) {
+			parseAccountsData(current);
+			return { result: "canonical" as const };
+		}
+		return { result: "migrated" as const, next: contents };
+	});
+}
+
+function installMigratedAccountsFileSync(
+	filePath: string,
+	contents: string,
+): "canonical" | "migrated" {
+	return new FileAccountStorageBackend(filePath, {
+		syncLockTimeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
+	}).withLock((current) => {
+		if (current !== undefined) {
+			parseAccountsData(current);
+			return { result: "canonical" as const };
+		}
+		return { result: "migrated" as const, next: contents };
+	});
 }
 
 function validateCanonicalAccountsFile(filePath: string): void {

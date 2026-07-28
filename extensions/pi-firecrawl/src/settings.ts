@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, link, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { access, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { FIRECRAWL_TOOL_NAMES, type FirecrawlToolName } from "./tools.js";
 
 const NEW_SETTINGS_FILE = "pi-firecrawl.json";
@@ -13,17 +13,23 @@ export interface FirecrawlSettings {
 	updatedAt: number;
 }
 
+export interface SettingsFileOperations {
+	write(path: string, data: string): Promise<void>;
+	rename(source: string, destination: string): Promise<void>;
+}
+
+const DEFAULT_FILE_OPERATIONS: SettingsFileOperations = {
+	write: (path, data) => writeFile(path, data, "utf8").then(() => undefined),
+	rename,
+};
+
 export type SettingsLoadResult =
 	| { kind: "missing"; notice?: string }
 	| { kind: "invalid"; reason: string; notice?: string }
 	| { kind: "loaded"; settings: FirecrawlSettings; notice?: string };
 
-type SettingsMigrationResult = {
-	kind: "migrated" | "failed";
-	notice: string;
-};
-
 export async function loadSettings(): Promise<SettingsLoadResult> {
+	await settingsSaveQueue;
 	const newPath = settingsFilePath();
 	const newSettings = await readSettingsFile(newPath);
 	if (newSettings.kind !== "missing") {
@@ -39,37 +45,48 @@ export async function loadSettings(): Promise<SettingsLoadResult> {
 	if (legacySettings.kind === "missing") return { kind: "missing" };
 	if (legacySettings.kind === "invalid") return legacySettings;
 
-	const migration = await migrateLegacySettings(legacyPath, legacySettings.settings);
-	if (migration.kind === "failed") {
-		const settingsCreatedDuringMigration = await readSettingsFile(newPath);
-		if (settingsCreatedDuringMigration.kind !== "missing") {
-			return withLegacyIgnoredNotice(settingsCreatedDuringMigration);
-		}
-	}
-
-	return { ...legacySettings, notice: migration.notice };
+	return {
+		...legacySettings,
+		notice: `Using legacy ${LEGACY_SETTINGS_FILE}; rename it to ${NEW_SETTINGS_FILE}. Future saves write ${NEW_SETTINGS_FILE} without modifying the legacy file.`,
+	};
 }
 
-async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
+interface SettingsDocumentResult {
+	result: SettingsLoadResult;
+	document?: Record<string, unknown>;
+}
+
+async function readSettingsDocument(filePath: string): Promise<SettingsDocumentResult> {
 	let text: string;
 	try {
 		text = await readFile(filePath, "utf8");
 	} catch (error) {
-		if (isNodeError(error) && error.code === "ENOENT") return { kind: "missing" };
-		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
+		if (isNodeError(error) && error.code === "ENOENT") return { result: { kind: "missing" } };
+		return { result: { kind: "invalid", reason: `${filePath}: ${formatError(error)}` } };
 	}
 
 	try {
 		const parsed = JSON.parse(text) as unknown;
 		const settings = normalizeFirecrawlSettings(parsed);
-		if (settings) return { kind: "loaded", settings };
+		if (settings) {
+			return {
+				result: { kind: "loaded", settings },
+				document: { ...(parsed as Record<string, unknown>) },
+			};
+		}
 		return {
-			kind: "invalid",
-			reason: `${filePath}: expected tools to be an array of Firecrawl tool names`,
+			result: {
+				kind: "invalid",
+				reason: `${filePath}: expected tools to be an array of Firecrawl tool names`,
+			},
 		};
 	} catch (error) {
-		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
+		return { result: { kind: "invalid", reason: `${filePath}: ${formatError(error)}` } };
 	}
+}
+
+async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
+	return (await readSettingsDocument(filePath)).result;
 }
 
 async function withLegacyIgnoredNotice(settings: SettingsLoadResult): Promise<SettingsLoadResult> {
@@ -80,52 +97,22 @@ async function withLegacyIgnoredNotice(settings: SettingsLoadResult): Promise<Se
 	};
 }
 
-export async function installSettingsFileExclusively(filePath: string, contents: string) {
-	await mkdir(dirname(filePath), { recursive: true });
-	const tempFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-	try {
-		await writeFile(tempFile, contents, { encoding: "utf8", flag: "wx" });
-		await link(tempFile, filePath);
-	} finally {
-		await rm(tempFile, { force: true }).catch(() => undefined);
-	}
-}
-
-async function migrateLegacySettings(
-	legacyPath: string,
-	settings: FirecrawlSettings,
-): Promise<SettingsMigrationResult> {
-	const newPath = settingsFilePath();
-	try {
-		await installSettingsFileExclusively(newPath, `${JSON.stringify(settings, null, 2)}\n`);
-	} catch (error) {
-		return {
-			kind: "failed",
-			notice: `Firecrawl legacy settings migration failed: could not migrate ${legacyPath} to ${newPath}: ${formatError(error)}. The legacy file was used for this session; future saves will write ${NEW_SETTINGS_FILE}.`,
-		};
-	}
-
-	try {
-		await rm(legacyPath, { force: true });
-	} catch (error) {
-		return {
-			kind: "migrated",
-			notice: `Firecrawl settings migrated from ${legacyPath} to ${newPath}, but the legacy file could not be removed: ${formatError(error)}. Delete ${LEGACY_SETTINGS_FILE} after confirming your settings.`,
-		};
-	}
-
-	return {
-		kind: "migrated",
-		notice: `Firecrawl settings migrated from ${legacyPath} to ${newPath}. ${LEGACY_SETTINGS_FILE} is deprecated and will be removed in a future major release.`,
-	};
-}
-
 async function fileExists(filePath: string) {
 	try {
 		await access(filePath, constants.F_OK);
 		return true;
 	} catch {
 		return false;
+	}
+}
+
+async function pathEntryExists(filePath: string) {
+	try {
+		await lstat(filePath);
+		return true;
+	} catch (error) {
+		if (isNodeError(error) && error.code === "ENOENT") return false;
+		throw error;
 	}
 }
 
@@ -147,13 +134,44 @@ function orderedUniqueFirecrawlTools(tools: readonly FirecrawlToolName[]) {
 	return FIRECRAWL_TOOL_NAMES.filter((toolName) => selectedTools.has(toolName));
 }
 
-export async function saveSettings(settings: FirecrawlSettings) {
+let settingsSaveQueue = Promise.resolve();
+
+export function saveSettings(
+	settings: FirecrawlSettings,
+	operations: Partial<SettingsFileOperations> = {},
+): Promise<void> {
+	const operation = settingsSaveQueue.then(() => saveSettingsNow(settings, operations));
+	settingsSaveQueue = operation.catch(() => undefined);
+	return operation;
+}
+
+async function saveSettingsNow(
+	settings: FirecrawlSettings,
+	operations: Partial<SettingsFileOperations>,
+): Promise<void> {
 	const filePath = settingsFilePath();
+	let current = await readSettingsDocument(filePath);
+	const replaceCanonical = current.result.kind !== "missing";
+	if (!replaceCanonical) current = await readSettingsDocument(legacySettingsFilePath());
+	if (current.result.kind === "invalid") {
+		throw new Error(`Cannot save Firecrawl settings until you repair ${current.result.reason}`);
+	}
+	const nextDocument = {
+		...(current.document ?? {}),
+		tools: [...settings.tools],
+		updatedAt: settings.updatedAt,
+	};
 	await mkdir(dirname(filePath), { recursive: true });
-	const tempFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+	const tempFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
 	try {
-		await writeFile(tempFile, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
-		await rename(tempFile, filePath);
+		await (operations.write ?? DEFAULT_FILE_OPERATIONS.write)(
+			tempFile,
+			`${JSON.stringify(nextDocument, null, 2)}\n`,
+		);
+		if (!replaceCanonical && (await pathEntryExists(filePath))) {
+			throw new Error(`${NEW_SETTINGS_FILE} was created concurrently; reopen settings and retry.`);
+		}
+		await (operations.rename ?? DEFAULT_FILE_OPERATIONS.rename)(tempFile, filePath);
 	} catch (error) {
 		await rm(tempFile, { force: true }).catch(() => undefined);
 		throw error;
@@ -169,7 +187,7 @@ function legacySettingsFilePath() {
 }
 
 function agentDir() {
-	return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+	return getAgentDir();
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

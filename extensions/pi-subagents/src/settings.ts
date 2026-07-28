@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import lockfile from "proper-lockfile";
 import {
 	type AgentConfig,
 	type CompletionDelivery,
@@ -141,13 +142,42 @@ export function normalizeSubagentSettings(value: unknown): SubagentSettings | un
 const SETTINGS_FILE = "pi-subagents.json";
 const LEGACY_SETTINGS_FILE = "pi-subagents-config.json";
 const DEFAULT_COMPLETION_DELIVERY: CompletionDelivery = "next-turn";
+const SETTINGS_LOCK_FS_ADAPTER = {
+	mkdir: fs.mkdir,
+	mkdirSync: fs.mkdirSync,
+	realpath: fs.realpath,
+	realpathSync: fs.realpathSync,
+	rmdir: fs.rmdir,
+	rmdirSync: fs.rmdirSync,
+	stat: fs.stat,
+	statSync: fs.statSync,
+	utimes: fs.utimes,
+	utimesSync: fs.utimesSync,
+};
 let pendingSettingsNotice: string | undefined;
+
+function resolveSubagentSettingsPaths(): {
+	canonicalPath: string;
+	legacyPath: string;
+	activePath?: string;
+} {
+	const canonicalPath = path.join(getAgentDir(), SETTINGS_FILE);
+	const legacyPath = path.join(getAgentDir(), LEGACY_SETTINGS_FILE);
+	return {
+		canonicalPath,
+		legacyPath,
+		activePath: fs.existsSync(canonicalPath)
+			? canonicalPath
+			: fs.existsSync(legacyPath)
+				? legacyPath
+				: undefined,
+	};
+}
 
 export function readSubagentSettings(): SubagentSettings | undefined {
 	pendingSettingsNotice = undefined;
-	const canonicalPath = path.join(getAgentDir(), SETTINGS_FILE);
-	const legacyPath = path.join(getAgentDir(), LEGACY_SETTINGS_FILE);
-	if (fs.existsSync(canonicalPath)) {
+	const { canonicalPath, legacyPath, activePath } = resolveSubagentSettingsPaths();
+	if (activePath === canonicalPath) {
 		const canonical = readSettingsFile(canonicalPath);
 		const notices: string[] = [];
 		if (!canonical) notices.push(`${SETTINGS_FILE} is invalid and was ignored.`);
@@ -157,87 +187,22 @@ export function readSubagentSettings(): SubagentSettings | undefined {
 		if (notices.length > 0) pendingSettingsNotice = notices.join("\n");
 		return canonical;
 	}
-	if (!fs.existsSync(legacyPath)) return undefined;
-	const legacySnapshot = readSettingsSnapshot(legacyPath);
-	const legacy = legacySnapshot.settings;
+	if (activePath === undefined) return undefined;
+	const legacy = readSettingsFile(legacyPath);
+	if (fs.existsSync(canonicalPath)) {
+		const canonical = readSettingsFile(canonicalPath);
+		pendingSettingsNotice = [
+			...(!canonical ? [`${SETTINGS_FILE} is invalid and was ignored.`] : []),
+			`${LEGACY_SETTINGS_FILE} ignored because ${SETTINGS_FILE} was created concurrently.`,
+		].join("\n");
+		return canonical;
+	}
 	if (!legacy) {
 		pendingSettingsNotice = `${LEGACY_SETTINGS_FILE} is invalid and was ignored.`;
 		return undefined;
 	}
-	let installedIdentity: FileIdentity;
-	try {
-		installedIdentity = installFileExclusively(canonicalPath, legacySnapshot.contents ?? "");
-	} catch (error) {
-		if (fs.existsSync(canonicalPath)) {
-			const canonical = readSettingsFile(canonicalPath);
-			pendingSettingsNotice = [
-				...(!canonical ? [`${SETTINGS_FILE} is invalid and was ignored.`] : []),
-				`${LEGACY_SETTINGS_FILE} ignored because ${SETTINGS_FILE} was created concurrently.`,
-			].join("\n");
-			return canonical;
-		}
-		pendingSettingsNotice = `Subagent settings migration failed: ${formatError(error)}. The legacy file was used for this session.`;
-		return legacy;
-	}
-	if (!fileContentsEqual(legacyPath, legacySnapshot.contents ?? "")) {
-		pendingSettingsNotice = removeFileIfIdentityMatches(
-			canonicalPath,
-			installedIdentity,
-			legacySnapshot.contents ?? "",
-		)
-			? `${LEGACY_SETTINGS_FILE} changed during migration; the stale ${SETTINGS_FILE} snapshot was removed.`
-			: `${LEGACY_SETTINGS_FILE} changed during migration, but ${SETTINGS_FILE} was replaced concurrently and takes precedence on the next load.`;
-		return legacy;
-	}
-	try {
-		fs.rmSync(legacyPath);
-		pendingSettingsNotice = `Subagent settings migrated from ${LEGACY_SETTINGS_FILE} to ${SETTINGS_FILE}.`;
-	} catch (error) {
-		pendingSettingsNotice = `Subagent settings migrated to ${SETTINGS_FILE}, but ${LEGACY_SETTINGS_FILE} could not be removed: ${formatError(error)}.`;
-	}
+	pendingSettingsNotice = `Using legacy ${LEGACY_SETTINGS_FILE}; rename it to ${SETTINGS_FILE}. Future saves write ${SETTINGS_FILE} without modifying the legacy file.`;
 	return legacy;
-}
-
-type FileIdentity = { dev: number; ino: number };
-
-function installFileExclusively(filePath: string, contents: string): FileIdentity {
-	const tempFile = path.join(path.dirname(filePath), `.${SETTINGS_FILE}.${randomUUID()}.tmp`);
-	try {
-		fs.writeFileSync(tempFile, contents, { encoding: "utf8", flag: "wx" });
-		const identity = fs.lstatSync(tempFile);
-		fs.linkSync(tempFile, filePath);
-		return { dev: identity.dev, ino: identity.ino };
-	} finally {
-		try {
-			fs.rmSync(tempFile, { force: true });
-		} catch {
-			// Preserve the migration result if best-effort temp cleanup fails.
-		}
-	}
-}
-
-function removeFileIfIdentityMatches(
-	filePath: string,
-	expected: FileIdentity,
-	expectedContents: string,
-) {
-	try {
-		const current = fs.lstatSync(filePath);
-		if (current.dev !== expected.dev || current.ino !== expected.ino) return false;
-		if (fs.readFileSync(filePath, "utf8") !== expectedContents) return false;
-		fs.rmSync(filePath);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-function fileContentsEqual(filePath: string, expected: string) {
-	try {
-		return fs.readFileSync(filePath, "utf8") === expected;
-	} catch {
-		return false;
-	}
 }
 
 export function consumeSubagentSettingsNotice() {
@@ -280,157 +245,207 @@ export function resolveDelegationWorkflow(
 	return "disabled";
 }
 
-export function inspectDelegationWorkflowSettings(): DelegationWorkflowSettingsSnapshot {
-	const configPath = subagentSettingsFilePath();
-	if (!fs.existsSync(configPath)) {
-		return { path: configPath, value: "all", source: "default" };
-	}
+function inspectSubagentSettingsDocument(): {
+	path: string;
+	raw?: Record<string, unknown>;
+	settings?: SubagentSettings;
+	error?: string;
+} {
+	const { canonicalPath, activePath } = resolveSubagentSettingsPaths();
+	if (activePath === undefined) return { path: canonicalPath };
+	const inspected = inspectSubagentSettingsPath(activePath);
+	return activePath !== canonicalPath && fs.existsSync(canonicalPath)
+		? inspectSubagentSettingsPath(canonicalPath)
+		: inspected;
+}
+
+function inspectSubagentSettingsPath(configPath: string): {
+	path: string;
+	raw?: Record<string, unknown>;
+	settings?: SubagentSettings;
+	error?: string;
+} {
 	try {
-		const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
+		const raw: unknown = JSON.parse(fs.readFileSync(configPath, "utf8"));
 		const settings = normalizeSubagentSettings(raw);
-		if (!settings) throw new Error(`${SETTINGS_FILE} is not a valid settings object`);
-		const explicit =
-			(isPlainObject(raw.blocking) && hasOwn(raw.blocking, "enabled")) ||
-			(isPlainObject(raw.stateful) && hasOwn(raw.stateful, "enabled"));
-		return {
-			path: configPath,
-			value: resolveDelegationWorkflow(
-				settings.blocking?.enabled !== false,
-				settings.stateful?.enabled !== false,
-			),
-			source: explicit ? "user settings" : "default",
-		};
+		if (!isPlainObject(raw) || !settings) {
+			throw new Error(`${path.basename(configPath)} is not a valid settings object`);
+		}
+		return { path: configPath, raw, settings };
 	} catch (error) {
-		return {
-			path: configPath,
-			value: "all",
-			source: "default",
-			error: formatError(error),
-		};
+		return { path: configPath, error: formatError(error) };
 	}
 }
 
-export function inspectCompletionDeliverySettings(): CompletionDeliverySettingsSnapshot {
-	const configPath = subagentSettingsFilePath();
-	if (!fs.existsSync(configPath)) {
-		return { path: configPath, value: DEFAULT_COMPLETION_DELIVERY, source: "default" };
-	}
-	try {
-		const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
-		const settings = normalizeSubagentSettings(raw);
-		if (!settings) throw new Error(`${SETTINGS_FILE} is not a valid settings object`);
-		const explicit = isPlainObject(raw.stateful) && hasOwn(raw.stateful, "completionDelivery");
+export function inspectDelegationWorkflowSettings(): DelegationWorkflowSettingsSnapshot {
+	const inspected = inspectSubagentSettingsDocument();
+	if (!inspected.raw || !inspected.settings) {
 		return {
-			path: configPath,
-			value: settings.stateful?.completionDelivery ?? DEFAULT_COMPLETION_DELIVERY,
-			source: explicit ? "user settings" : "default",
+			path: inspected.path,
+			value: "all",
+			source: "default",
+			...(inspected.error ? { error: inspected.error } : {}),
 		};
-	} catch (error) {
+	}
+	const explicit =
+		(isPlainObject(inspected.raw.blocking) && hasOwn(inspected.raw.blocking, "enabled")) ||
+		(isPlainObject(inspected.raw.stateful) && hasOwn(inspected.raw.stateful, "enabled"));
+	return {
+		path: inspected.path,
+		value: resolveDelegationWorkflow(
+			inspected.settings.blocking?.enabled !== false,
+			inspected.settings.stateful?.enabled !== false,
+		),
+		source: explicit ? "user settings" : "default",
+	};
+}
+
+export function inspectCompletionDeliverySettings(): CompletionDeliverySettingsSnapshot {
+	const inspected = inspectSubagentSettingsDocument();
+	if (!inspected.raw || !inspected.settings) {
 		return {
-			path: configPath,
+			path: inspected.path,
 			value: DEFAULT_COMPLETION_DELIVERY,
 			source: "default",
-			error: formatError(error),
+			...(inspected.error ? { error: inspected.error } : {}),
 		};
 	}
+	const explicit =
+		isPlainObject(inspected.raw.stateful) && hasOwn(inspected.raw.stateful, "completionDelivery");
+	return {
+		path: inspected.path,
+		value: inspected.settings.stateful?.completionDelivery ?? DEFAULT_COMPLETION_DELIVERY,
+		source: explicit ? "user settings" : "default",
+	};
 }
 
 export function updateDelegationWorkflowSetting(
 	value: Exclude<DelegationWorkflow, "disabled">,
 ): void {
-	const raw = readSettingsObjectForUpdate();
-	const blocking = raw.blocking;
-	if (blocking !== undefined && !isPlainObject(blocking)) {
-		throw new Error(`Cannot update invalid ${SETTINGS_FILE} blocking settings`);
-	}
-	const stateful = raw.stateful;
-	if (stateful !== undefined && !isPlainObject(stateful)) {
-		throw new Error(`Cannot update invalid ${SETTINGS_FILE} stateful settings`);
-	}
-	writeSettingsObject({
-		...raw,
-		blocking: {
-			...(blocking ?? {}),
-			enabled: value !== "async-only",
-		},
-		stateful: {
-			...(stateful ?? {}),
-			enabled: value !== "blocking-only",
-		},
+	withSettingsMutationLock(() => {
+		const update = readSettingsObjectForUpdate();
+		const raw = update.document;
+		const blocking = raw.blocking;
+		if (blocking !== undefined && !isPlainObject(blocking)) {
+			throw new Error(`Cannot update invalid ${SETTINGS_FILE} blocking settings`);
+		}
+		const stateful = raw.stateful;
+		if (stateful !== undefined && !isPlainObject(stateful)) {
+			throw new Error(`Cannot update invalid ${SETTINGS_FILE} stateful settings`);
+		}
+		writeSettingsObjectUnlocked(
+			{
+				...raw,
+				blocking: {
+					...(blocking ?? {}),
+					enabled: value !== "async-only",
+				},
+				stateful: {
+					...(stateful ?? {}),
+					enabled: value !== "blocking-only",
+				},
+			},
+			update.replaceCanonical,
+		);
 	});
 }
 
 export function updateCompletionDeliverySetting(value: CompletionDelivery): void {
-	const raw = readSettingsObjectForUpdate();
-	const stateful = raw.stateful;
-	if (stateful !== undefined && !isPlainObject(stateful)) {
-		throw new Error(`Cannot update invalid ${SETTINGS_FILE} stateful settings`);
-	}
-	writeSettingsObject({
-		...raw,
-		stateful: {
-			...(stateful ?? {}),
-			completionDelivery: value,
-		},
+	withSettingsMutationLock(() => {
+		const update = readSettingsObjectForUpdate();
+		const raw = update.document;
+		const stateful = raw.stateful;
+		if (stateful !== undefined && !isPlainObject(stateful)) {
+			throw new Error(`Cannot update invalid ${SETTINGS_FILE} stateful settings`);
+		}
+		writeSettingsObjectUnlocked(
+			{
+				...raw,
+				stateful: {
+					...(stateful ?? {}),
+					completionDelivery: value,
+				},
+			},
+			update.replaceCanonical,
+		);
 	});
 }
 
 export function updateAgentToolsSetting(name: string, tools: string[] | undefined): void {
-	const raw = readSettingsObjectForUpdate();
-	const rawAgents = raw.agents;
-	if (rawAgents !== undefined && !isPlainObject(rawAgents)) {
-		throw new Error(`Cannot update invalid ${SETTINGS_FILE} agent settings`);
-	}
-	const agents = { ...(rawAgents ?? {}) };
-	const rawAgent = hasOwn(agents, name) ? agents[name] : undefined;
-	if (rawAgent !== undefined && !isPlainObject(rawAgent)) {
-		throw new Error(`Cannot update invalid ${SETTINGS_FILE} settings for ${name}`);
-	}
-	const agent = { ...(rawAgent ?? {}) };
-	if (tools === undefined) delete agent.tools;
-	else agent.tools = tools;
-	if (Object.keys(agent).length > 0) {
-		Object.defineProperty(agents, name, {
-			value: agent,
-			enumerable: true,
-			configurable: true,
-			writable: true,
-		});
-	} else {
-		delete agents[name];
-	}
+	withSettingsMutationLock(() => {
+		const update = readSettingsObjectForUpdate();
+		const raw = update.document;
+		const rawAgents = raw.agents;
+		if (rawAgents !== undefined && !isPlainObject(rawAgents)) {
+			throw new Error(`Cannot update invalid ${SETTINGS_FILE} agent settings`);
+		}
+		const agents = { ...(rawAgents ?? {}) };
+		const rawAgent = hasOwn(agents, name) ? agents[name] : undefined;
+		if (rawAgent !== undefined && !isPlainObject(rawAgent)) {
+			throw new Error(`Cannot update invalid ${SETTINGS_FILE} settings for ${name}`);
+		}
+		const agent = { ...(rawAgent ?? {}) };
+		if (tools === undefined) delete agent.tools;
+		else agent.tools = tools;
+		if (Object.keys(agent).length > 0) {
+			Object.defineProperty(agents, name, {
+				value: agent,
+				enumerable: true,
+				configurable: true,
+				writable: true,
+			});
+		} else {
+			delete agents[name];
+		}
 
-	const updated = { ...raw };
-	if (Object.keys(agents).length > 0) updated.agents = agents;
-	else delete updated.agents;
-	writeSettingsObject(updated);
+		const updated = { ...raw };
+		if (Object.keys(agents).length > 0) updated.agents = agents;
+		else delete updated.agents;
+		writeSettingsObjectUnlocked(updated, update.replaceCanonical);
+	});
 }
 
-function readSettingsObjectForUpdate(): Record<string, unknown> {
-	const configPath = subagentSettingsFilePath();
-	if (!fs.existsSync(configPath)) return {};
+interface SettingsObjectForUpdate {
+	document: Record<string, unknown>;
+	replaceCanonical: boolean;
+}
+
+function readSettingsObjectForUpdate(): SettingsObjectForUpdate {
+	const { canonicalPath, activePath } = resolveSubagentSettingsPaths();
+	if (activePath === undefined) return { document: {}, replaceCanonical: false };
+	const activeFile = path.basename(activePath);
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+		parsed = JSON.parse(fs.readFileSync(activePath, "utf8"));
 	} catch (error) {
-		throw new Error(`Cannot update malformed ${SETTINGS_FILE}: ${formatError(error)}`);
+		throw new Error(`Cannot update malformed ${activeFile}: ${formatError(error)}`);
 	}
 	if (!isPlainObject(parsed) || !normalizeSubagentSettings(parsed)) {
-		throw new Error(`Cannot update invalid ${SETTINGS_FILE}`);
+		throw new Error(`Cannot update invalid ${activeFile}`);
 	}
-	return parsed;
+	return { document: parsed, replaceCanonical: activePath === canonicalPath };
 }
 
-function writeSettingsObject(settings: object): void {
+function writeSettingsObject(settings: object, replaceCanonical?: boolean): void {
+	withSettingsMutationLock(() => writeSettingsObjectUnlocked(settings, replaceCanonical));
+}
+
+function writeSettingsObjectUnlocked(settings: object, replaceCanonical?: boolean): void {
 	const agentDir = getAgentDir();
 	fs.mkdirSync(agentDir, { recursive: true });
 	const configPath = path.join(agentDir, SETTINGS_FILE);
 	const tempFile = path.join(agentDir, `.${SETTINGS_FILE}.${randomUUID()}.tmp`);
+	// Updates seeded from a missing or legacy document must remain exclusive even if the
+	// canonical path appears after the read and before publication.
+	const firstCanonicalPublication = !(replaceCanonical ?? pathEntryExists(configPath));
 	try {
 		fs.writeFileSync(tempFile, `${JSON.stringify(settings, null, "\t")}\n`, {
 			encoding: "utf8",
 			flag: "wx",
 		});
+		if (firstCanonicalPublication && pathEntryExists(configPath)) {
+			throw new Error(`${SETTINGS_FILE} was created concurrently; reopen settings and retry`);
+		}
 		fs.renameSync(tempFile, configPath);
 	} finally {
 		try {
@@ -438,6 +453,32 @@ function writeSettingsObject(settings: object): void {
 		} catch {
 			// Preserve the save result if best-effort temp cleanup fails.
 		}
+	}
+}
+
+function withSettingsMutationLock<T>(mutate: () => T): T {
+	const agentDir = getAgentDir();
+	fs.mkdirSync(agentDir, { recursive: true });
+	const configPath = path.join(agentDir, SETTINGS_FILE);
+	const release = lockfile.lockSync(configPath, {
+		fs: SETTINGS_LOCK_FS_ADAPTER,
+		lockfilePath: `${configPath}.mutation-lock`,
+		realpath: false,
+	});
+	try {
+		return mutate();
+	} finally {
+		release();
+	}
+}
+
+function pathEntryExists(filePath: string): boolean {
+	try {
+		fs.lstatSync(filePath);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
 	}
 }
 

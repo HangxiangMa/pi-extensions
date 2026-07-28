@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import {
 	access,
 	chmod,
-	link,
 	lstat,
 	mkdir,
 	readFile,
@@ -11,9 +10,8 @@ import {
 	stat,
 	writeFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const DEFAULT_MODEL = "gemini-3.5-flash";
 export const DEFAULT_API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
@@ -42,7 +40,7 @@ export interface LoadedGoogleGenaiConfig {
 }
 
 export function googleGenaiConfigPath() {
-	return join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), CONFIG_FILE_NAME);
+	return join(getAgentDir(), CONFIG_FILE_NAME);
 }
 
 export function normalizeGoogleGenaiSettings(value: unknown): GoogleGenaiConfig {
@@ -50,11 +48,26 @@ export function normalizeGoogleGenaiSettings(value: unknown): GoogleGenaiConfig 
 }
 
 export async function loadGoogleGenaiConfig(): Promise<LoadedGoogleGenaiConfig> {
+	await configSaveQueue;
 	const path = googleGenaiConfigPath();
 	const warnings: string[] = [];
-	const readPath = await prepareGoogleGenaiConfigPath(path, warnings);
+	let readPath = await prepareGoogleGenaiConfigPath(path, warnings);
 	await ensureConfigPermissions(readPath, warnings);
-	const raw = await readJsonIfExists(readPath, warnings);
+	let raw = await readJsonIfExists(readPath, warnings);
+	if (readPath !== path) {
+		if (await exists(path)) {
+			readPath = path;
+			await ensureConfigPermissions(readPath, warnings);
+			raw = await readJsonIfExists(readPath, warnings);
+			warnings.push(
+				`${LEGACY_CONFIG_FILE_NAME} ignored because ${CONFIG_FILE_NAME} was created concurrently.`,
+			);
+		} else {
+			warnings.push(
+				`Using legacy ${LEGACY_CONFIG_FILE_NAME}; rename it to ${CONFIG_FILE_NAME}. Future saves write ${CONFIG_FILE_NAME} without modifying the legacy file.`,
+			);
+		}
+	}
 	const configLoaded = isObject(raw);
 	if (raw !== undefined && !configLoaded) {
 		warnings.push(`${basename(readPath)} must contain a JSON object; ignoring config.`);
@@ -191,98 +204,7 @@ async function prepareGoogleGenaiConfigPath(canonicalPath: string, warnings: str
 	if (!(await exists(legacyPath))) return canonicalPath;
 
 	await ensureConfigPermissions(legacyPath, warnings);
-	const legacyWarnings: string[] = [];
-	const legacy = await readJsonIfExists(legacyPath, legacyWarnings);
-	if (!isObject(legacy)) {
-		warnings.push(...legacyWarnings);
-		return legacyPath;
-	}
-	try {
-		const installedContents = `${JSON.stringify(legacy, null, "\t")}\n`;
-		const installedIdentity = await installPrivateConfigExclusively(
-			canonicalPath,
-			installedContents,
-		);
-		await chmod(canonicalPath, 0o600);
-		if (!(await jsonFileEquals(legacyPath, legacy))) {
-			if (await removeFileIfIdentityMatches(canonicalPath, installedIdentity, installedContents)) {
-				warnings.push(
-					`${LEGACY_CONFIG_FILE_NAME} changed during migration; the stale ${CONFIG_FILE_NAME} snapshot was removed and the legacy file was used for this session.`,
-				);
-				return legacyPath;
-			}
-			warnings.push(
-				`${LEGACY_CONFIG_FILE_NAME} changed during migration, but ${CONFIG_FILE_NAME} was replaced concurrently and takes precedence.`,
-			);
-			return canonicalPath;
-		}
-		try {
-			await rm(legacyPath);
-			warnings.push(
-				`Google GenAI config migrated from ${LEGACY_CONFIG_FILE_NAME} to ${CONFIG_FILE_NAME}.`,
-			);
-		} catch (error) {
-			warnings.push(
-				`Google GenAI config migrated to ${CONFIG_FILE_NAME}, but ${LEGACY_CONFIG_FILE_NAME} could not be removed: ${formatError(error)}.`,
-			);
-		}
-		return canonicalPath;
-	} catch (error) {
-		if (await exists(canonicalPath)) {
-			warnings.push(
-				`${LEGACY_CONFIG_FILE_NAME} ignored because ${CONFIG_FILE_NAME} was created concurrently.`,
-			);
-			return canonicalPath;
-		}
-		warnings.push(
-			`Google GenAI config migration failed: ${formatError(error)}. The legacy file was used for this session.`,
-		);
-		return legacyPath;
-	}
-}
-
-async function jsonFileEquals(filePath: string, expected: object) {
-	try {
-		return (
-			JSON.stringify(JSON.parse(await readFile(filePath, "utf8"))) === JSON.stringify(expected)
-		);
-	} catch {
-		return false;
-	}
-}
-
-type FileIdentity = Pick<Awaited<ReturnType<typeof lstat>>, "dev" | "ino">;
-
-async function installPrivateConfigExclusively(
-	filePath: string,
-	contents: string,
-): Promise<FileIdentity> {
-	const tempFile = join(dirname(filePath), `.${CONFIG_FILE_NAME}.${randomUUID()}.tmp`);
-	try {
-		await writeFile(tempFile, contents, { encoding: "utf8", flag: "wx", mode: 0o600 });
-		await chmod(tempFile, 0o600);
-		const identity = await lstat(tempFile);
-		await link(tempFile, filePath);
-		return { dev: identity.dev, ino: identity.ino };
-	} finally {
-		await rm(tempFile, { force: true }).catch(() => undefined);
-	}
-}
-
-async function removeFileIfIdentityMatches(
-	filePath: string,
-	expected: FileIdentity,
-	expectedContents: string,
-) {
-	try {
-		const current = await lstat(filePath);
-		if (current.dev !== expected.dev || current.ino !== expected.ino) return false;
-		if ((await readFile(filePath, "utf8")) !== expectedContents) return false;
-		await rm(filePath);
-		return true;
-	} catch {
-		return false;
-	}
+	return legacyPath;
 }
 
 async function exists(path: string) {
@@ -295,8 +217,9 @@ async function exists(path: string) {
 }
 
 async function readJsonIfExists(path: string, warnings: string[]) {
+	let text: string;
 	try {
-		return JSON.parse(await readFile(path, "utf8"));
+		text = await readFile(path, "utf8");
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		warnings.push(
@@ -304,27 +227,134 @@ async function readJsonIfExists(path: string, warnings: string[]) {
 		);
 		return undefined;
 	}
+	try {
+		return JSON.parse(text) as unknown;
+	} catch {
+		warnings.push(`Failed to parse ${path} as JSON; ignoring config until it is repaired.`);
+		return undefined;
+	}
 }
 
-export async function writeGoogleGenaiConfig(config: GoogleGenaiConfig) {
+let configSaveQueue = Promise.resolve();
+
+export async function waitForGoogleGenaiConfigWrites(): Promise<void> {
+	await configSaveQueue;
+}
+
+export async function writeGoogleGenaiConfig(config: GoogleGenaiConfig): Promise<void> {
+	await updateGoogleGenaiConfig(cleanObject(config));
+}
+
+export function updateGoogleGenaiSetup(patch: {
+	model: string;
+	apiKey?: string;
+}): Promise<GoogleGenaiConfig> {
+	const model = normalizeString(patch.model);
+	if (!model) throw new Error(`${CONFIG_FILE_NAME} model must be a non-empty string.`);
+	const apiKey = patch.apiKey === undefined ? undefined : normalizeString(patch.apiKey);
+	if (patch.apiKey !== undefined && (!apiKey || isUnsupportedConfigApiKey(apiKey))) {
+		throw new Error(`${CONFIG_FILE_NAME} apiKey must be a non-empty literal string.`);
+	}
+	return updateGoogleGenaiConfig({ model, ...(apiKey ? { apiKey } : {}) });
+}
+
+function updateGoogleGenaiConfig(patch: object): Promise<GoogleGenaiConfig> {
+	const operation = configSaveQueue.then(() => writeGoogleGenaiConfigNow(patch));
+	configSaveQueue = operation.then(
+		() => undefined,
+		() => undefined,
+	);
+	return operation;
+}
+
+async function writeGoogleGenaiConfigNow(patch: object): Promise<GoogleGenaiConfig> {
 	const path = googleGenaiConfigPath();
+	const current = await readDocumentForUpdate(path);
+	const nextDocument = { ...current.document, ...patch };
 	await mkdir(dirname(path), { recursive: true });
-	const tempFile = `${path}.${process.pid}.${Date.now()}.tmp`;
+	const tempFile = `${path}.${process.pid}.${randomUUID()}.tmp`;
 	try {
-		await writeFile(tempFile, `${JSON.stringify(cleanObject(config), null, "\t")}\n`, {
+		await writeFile(tempFile, `${JSON.stringify(nextDocument, null, "\t")}\n`, {
 			mode: 0o600,
 		});
 		await chmod(tempFile, 0o600);
+		if (!current.replaceCanonical && (await pathEntryExists(path))) {
+			throw new Error(`${CONFIG_FILE_NAME} was created concurrently; reopen settings and retry.`);
+		}
 		await rename(tempFile, path);
 		await chmod(path, 0o600);
+		return normalizeGoogleGenaiSettings(nextDocument);
 	} catch (error) {
 		await rm(tempFile, { force: true }).catch(() => undefined);
 		throw error;
 	}
 }
 
-function formatError(error: unknown) {
-	return error instanceof Error ? error.message : String(error);
+async function pathEntryExists(filePath: string) {
+	try {
+		await lstat(filePath);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
+	}
+}
+
+async function readDocumentForUpdate(canonicalPath: string): Promise<{
+	document: Record<string, unknown>;
+	replaceCanonical: boolean;
+}> {
+	const legacyPath = join(dirname(canonicalPath), LEGACY_CONFIG_FILE_NAME);
+	let text: string;
+	let replaceCanonical = true;
+	try {
+		text = await readFile(canonicalPath, "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+			throw new Error(
+				`Cannot update ${CONFIG_FILE_NAME} because the existing file is unreadable; repair it first.`,
+			);
+		}
+		replaceCanonical = false;
+		try {
+			text = await readFile(legacyPath, "utf8");
+		} catch (legacyError) {
+			if ((legacyError as NodeJS.ErrnoException).code === "ENOENT") {
+				return { document: {}, replaceCanonical };
+			}
+			throw new Error(
+				`Cannot update ${CONFIG_FILE_NAME} because the legacy file is unreadable; repair it first.`,
+			);
+		}
+	}
+
+	let document: unknown;
+	try {
+		document = JSON.parse(text) as unknown;
+	} catch {
+		throw new Error(
+			`Cannot update ${CONFIG_FILE_NAME} because the existing file is malformed; repair it first.`,
+		);
+	}
+	if (!isValidGoogleGenaiDocument(document)) {
+		throw new Error(
+			`Cannot update ${CONFIG_FILE_NAME} because the existing file has invalid recognized fields; repair it first.`,
+		);
+	}
+	return { document: { ...document }, replaceCanonical };
+}
+
+function isValidGoogleGenaiDocument(value: unknown): value is Record<string, unknown> {
+	if (!isObject(value)) return false;
+	if (value.model !== undefined && !normalizeString(value.model)) return false;
+	if (value.apiUrl !== undefined && !normalizeString(value.apiUrl)) return false;
+	if (value.apiKey !== undefined) {
+		const apiKey = normalizeString(value.apiKey);
+		if (!apiKey || isUnsupportedConfigApiKey(apiKey)) return false;
+	}
+	if (value.timeoutMs !== undefined && !isValidTimeoutMs(value.timeoutMs)) return false;
+	if (value.tools !== undefined && !Array.isArray(value.tools)) return false;
+	return true;
 }
 
 async function ensureConfigPermissions(path: string, warnings: string[]) {
@@ -348,13 +378,12 @@ export function cleanObject<T>(value: T): T {
 	return result as T;
 }
 
-export async function saveToolSelection(tools: GoogleGenaiToolName[]) {
-	const loaded = await loadGoogleGenaiConfig();
-	await writeGoogleGenaiConfig({ ...loaded.config, tools });
+export async function saveToolSelection(tools: GoogleGenaiToolName[]): Promise<void> {
+	await updateGoogleGenaiConfig({ tools: [...tools] });
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function isGoogleGenaiToolName(value: string): value is GoogleGenaiToolName {

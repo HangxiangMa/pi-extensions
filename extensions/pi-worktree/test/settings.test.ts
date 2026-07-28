@@ -153,6 +153,38 @@ test("atomic save and reset preserve unknown fields and publish failures preserv
 	}
 });
 
+test("runtime rereads the latest valid document and blocks concurrent invalid edits", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-worktree-settings-latest-"));
+	const settingsPath = join(directory, "pi-worktree.json");
+	try {
+		await writeFile(settingsPath, '{"worktreeRoot":"/old","future":{"version":1}}\n');
+		const runtime = createWorktreeSettingsRuntime({
+			path: settingsPath,
+			home: "/home/alice",
+			platform: "linux",
+		});
+		await runtime.reload();
+		await writeFile(settingsPath, '{"worktreeRoot":"/external","future":{"version":2}}\n');
+		await runtime.save("/new");
+		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+			worktreeRoot: "/new",
+			future: { version: 2 },
+		});
+
+		const invalid = '{"worktreeRoot":42,"future":"kept"}\n';
+		await writeFile(settingsPath, invalid);
+		const before = runtime.get();
+		await assert.rejects(() => runtime.save("/blocked"), /fix|invalid/i);
+		assert.equal(await readFile(settingsPath, "utf8"), invalid);
+		assert.equal(runtime.get().effectiveRoot, before.effectiveRoot);
+		assert.equal(runtime.get().source, before.source);
+		assert.equal(runtime.get().canSave, false);
+		assert.match(runtime.get().warning ?? "", /ignored/i);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("runtime serializes saves in invocation order and remains usable after queued work", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "pi-worktree-settings-order-"));
 	const settingsPath = join(directory, "pi-worktree.json");

@@ -62,7 +62,7 @@ The canonical private user file is:
 ~/.pi/agent/pi-sync.json
 ```
 
-Pi's configured agent directory replaces `~/.pi/agent` when applicable. On POSIX, pi-sync creates and replaces this file with mode `0600`. Credentials stay in this canonical private file and are never shown in menus, reviews, status, notifications, errors, logs, or completion metadata.
+Pi's configured agent directory replaces `~/.pi/agent` when applicable. Missing settings load as unconfigured without creating an agent directory, file, temporary, or lock. An explicit setup creates the file atomically. On POSIX, pi-sync creates and replaces it with mode `0600`. Pi-sync processes coordinate settings access through `pi-sync.json.mutation-lock`; lock-unaware editors are outside that serialization boundary and should not save the file while a pi-sync settings operation is running. Credentials stay in this canonical private file and are never shown in menus, reviews, status, notifications, errors, logs, or completion metadata.
 
 An existing private `pi-sync.local.json` containing a valid version 3 document is copied byte-for-byte to `pi-sync.json`; the old file remains as a recovery copy. If both paths exist, `pi-sync.json` wins and the other path remains untouched.
 
