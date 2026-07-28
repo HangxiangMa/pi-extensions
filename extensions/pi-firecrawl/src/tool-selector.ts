@@ -262,7 +262,6 @@ async function transactSelectedToolsNow(
 		await persistSettings(selectedTools);
 		return isCurrentFirecrawlSession(expectedGeneration);
 	} catch (error) {
-		if (!isCurrentFirecrawlSession(expectedGeneration)) return false;
 		let rollbackError: unknown;
 		try {
 			const previousFirecrawlTools = previousActiveTools.filter((name) =>
@@ -272,6 +271,7 @@ async function transactSelectedToolsNow(
 		} catch (caught) {
 			rollbackError = caught;
 		}
+		if (!isCurrentFirecrawlSession(expectedGeneration)) return false;
 		ctx.ui.notify(
 			rollbackError
 				? `Firecrawl settings save failed: ${formatError(error)}; active-tool rollback failed: ${formatError(rollbackError)}`

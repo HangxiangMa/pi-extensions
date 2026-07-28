@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
 	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
@@ -576,6 +577,25 @@ test("firecrawl rejects invalid settings updates and restores active tools", asy
 		writeSettings(agentDir, NEW_SETTINGS_FILE, [CRAWL_TOOL]);
 		await mock.commands.get("firecrawl")?.handler("disable", ctx);
 		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, []);
+	});
+});
+
+test("firecrawl rolls back a failed save after shutdown invalidates its session", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		mkdirSync(path.join(agentDir, NEW_SETTINGS_FILE));
+		const firecrawlModule = await importFreshFirecrawl();
+		const mock = createMockPi({ activeTools: ["other_tool", CRAWL_TOOL] });
+		const { ctx, notifications } = createMockContext();
+		firecrawlModule.default(mock.pi);
+
+		const command = mock.commands.get("firecrawl")?.handler("disable", ctx);
+		await Promise.resolve();
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool"]);
+		const shutdown = mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+
+		await Promise.all([command, shutdown]);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", CRAWL_TOOL]);
+		assert.deepEqual(notifications, []);
 	});
 });
 

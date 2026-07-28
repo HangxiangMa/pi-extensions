@@ -739,6 +739,24 @@ test("Google GenAI rejects invalid settings updates and restores active tools", 
 	});
 });
 
+test("Google GenAI rolls back a failed tool save after shutdown invalidates its session", async () => {
+	await withTempAgentDir(async () => {
+		await mkdir(googleGenaiConfigPath());
+		const mock = createMockPi({ activeTools: ["read", ...GOOGLE_GENAI_TOOL_NAMES] });
+		googleGenai(mock.pi);
+		const { ctx, notifications } = createMockContext();
+
+		const command = mock.commands.get("google-genai")?.handler("disable", ctx);
+		await Promise.resolve();
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read"]);
+		const shutdown = mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+
+		await Promise.all([command, shutdown]);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", ...GOOGLE_GENAI_TOOL_NAMES]);
+		assert.deepEqual(notifications, []);
+	});
+});
+
 test("Google GenAI tool persistence recovers after a transient save failure", async () => {
 	await withTempAgentDir(async () => {
 		const configPath = googleGenaiConfigPath();

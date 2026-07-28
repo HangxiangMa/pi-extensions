@@ -85,8 +85,9 @@ export default function firecrawl(pi: ExtensionAPI) {
 	pi.on("session_shutdown", async (_event, ctx) => {
 		advanceFirecrawlSessionGeneration();
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		const artifactOwner = ctx.sessionManager;
 		await waitForFirecrawlSettings();
-		await cleanupResponseArtifacts(ctx.sessionManager);
+		await cleanupResponseArtifacts(artifactOwner);
 	});
 }
 

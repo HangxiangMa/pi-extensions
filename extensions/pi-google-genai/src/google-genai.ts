@@ -134,27 +134,33 @@ async function handleCommand(
 		case "tools":
 			await selectTools(ctx, pi, isCurrent);
 			return;
-		case "enable":
-			if (
-				await transactGoogleToolSelection(
-					pi,
-					ctx,
-					[...GOOGLE_GENAI_TOOL_NAMES],
-					() => saveToolSelection([...GOOGLE_GENAI_TOOL_NAMES]),
-					isCurrent,
-				)
-			) {
-				ctx.ui.notify("Enabled all Google GenAI tools.", "info");
-			}
+		case "enable": {
+			const saved = await transactGoogleToolSelection(
+				pi,
+				ctx,
+				[...GOOGLE_GENAI_TOOL_NAMES],
+				() => saveToolSelection([...GOOGLE_GENAI_TOOL_NAMES]),
+				isCurrent,
+			);
+			if (saved && isCurrent()) ctx.ui.notify("Enabled all Google GenAI tools.", "info");
 			return;
-		case "disable":
-			if (await transactGoogleToolSelection(pi, ctx, [], () => saveToolSelection([]), isCurrent)) {
+		}
+		case "disable": {
+			const saved = await transactGoogleToolSelection(
+				pi,
+				ctx,
+				[],
+				() => saveToolSelection([]),
+				isCurrent,
+			);
+			if (saved && isCurrent()) {
 				ctx.ui.notify(
 					"Disabled all Google GenAI tools. Use /google-genai enable to restore them.",
 					"info",
 				);
 			}
 			return;
+		}
 		case "unknown":
 			ctx.ui.notify(helpText(), "warning");
 			return;
@@ -215,7 +221,7 @@ async function initConfig(
 async function showStatus(ctx: ExtensionCommandContext, isCurrent: () => boolean) {
 	const loaded = await loadGoogleGenaiConfig();
 	if (!isCurrent()) return;
-	ctx.ui.notify(buildStatusMessage(loaded, await authSource(loaded.config, ctx)), "info");
+	ctx.ui.notify(buildStatusMessage(loaded, authSource(loaded.config, ctx)), "info");
 }
 
 async function selectTools(
@@ -477,13 +483,13 @@ async function transactGoogleToolSelectionNow(
 		await persist();
 		return isCurrent();
 	} catch (error) {
-		if (!isCurrent()) return false;
 		let rollbackError: unknown;
 		try {
 			applyGoogleToolSelection(pi, previousActiveTools.filter(isGoogleGenaiToolName));
 		} catch (caught) {
 			rollbackError = caught;
 		}
+		if (!isCurrent()) return false;
 		const message = error instanceof Error ? error.message : String(error);
 		const rollbackMessage = rollbackError
 			? `; active-tool rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`

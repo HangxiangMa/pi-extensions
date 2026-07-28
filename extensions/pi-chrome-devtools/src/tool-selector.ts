@@ -253,7 +253,6 @@ async function transactSelectedToolsNow(
 		await persistSettings(selectedTools);
 		return expectedGeneration === state.sessionGeneration;
 	} catch (error) {
-		if (expectedGeneration !== state.sessionGeneration) return false;
 		let rollbackError: unknown;
 		try {
 			const previousChromeTools = previousActiveTools.filter((name) =>
@@ -263,6 +262,7 @@ async function transactSelectedToolsNow(
 		} catch (caught) {
 			rollbackError = caught;
 		}
+		if (expectedGeneration !== state.sessionGeneration) return false;
 		ctx.ui.notify(
 			rollbackError
 				? `Chrome DevTools settings save failed: ${formatError(error)}; active-tool rollback failed: ${formatError(rollbackError)}`

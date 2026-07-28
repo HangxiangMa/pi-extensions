@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -259,6 +267,25 @@ test("chrome-devtools rejects invalid settings updates and restores active tools
 		writeSettings(agentDir, NEW_SETTINGS_FILE, [LIST_PAGES_TOOL]);
 		await mock.commands.get("chrome-devtools")?.handler("disable", ctx);
 		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, []);
+	});
+});
+
+test("chrome-devtools rolls back a failed save after shutdown invalidates its session", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		mkdirSync(path.join(agentDir, NEW_SETTINGS_FILE));
+		const chromeDevtoolsModule = await importFreshChromeDevtools();
+		const mock = createMockPi({ activeTools: ["other_tool", LIST_PAGES_TOOL] });
+		const { ctx, notifications } = createMockContext();
+		chromeDevtoolsModule.default(mock.pi);
+
+		const command = mock.commands.get("chrome-devtools")?.handler("disable", ctx);
+		await Promise.resolve();
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool"]);
+		const shutdown = mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+
+		await Promise.all([command, shutdown]);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LIST_PAGES_TOOL]);
+		assert.deepEqual(notifications, []);
 	});
 });
 
