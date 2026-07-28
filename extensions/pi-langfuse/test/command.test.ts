@@ -325,7 +325,6 @@ test("/langfuse keeps an active session on its original connection after an upda
 		publicKey: "pk-updated",
 		secretKey: "sk-updated",
 		baseUrl: "https://updated.example",
-		captureContent: true,
 	});
 	assert.equal(backendCreations, 1);
 	assert.match(menuCalls[1]?.title ?? "", /Endpoint: https:\/\/original\.example/);

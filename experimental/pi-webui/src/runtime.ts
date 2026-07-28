@@ -535,7 +535,7 @@ export class WebUIRuntime {
 							}
 							const next = { ...this.settings, startOnSessionStart: requested };
 							const document = await this.dependencies.saveSettings(
-								next,
+								{ startOnSessionStart: requested },
 								this.settingsDocument,
 								this.settingsPath,
 							);

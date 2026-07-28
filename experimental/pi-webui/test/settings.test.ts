@@ -130,17 +130,17 @@ test("save rereads the latest document and refuses concurrent invalid edits", as
 	try {
 		await writeFile(settingsPath, '{"startOnSessionStart":false,"future":{"version":1}}\n');
 		const loaded = await loadSettings(settingsPath);
-		await writeFile(settingsPath, '{"startOnSessionStart":false,"future":{"version":2}}\n');
-		await saveSettings(
-			{ ...DEFAULT_SETTINGS, startOnSessionStart: true },
-			loaded.document ?? {},
+		await writeFile(
 			settingsPath,
+			'{"startOnSessionStart":false,"maxImages":3,"future":{"version":2}}\n',
 		);
-		assert.equal(
-			(JSON.parse(await readFile(settingsPath, "utf8")) as { future: { version: number } }).future
-				.version,
-			2,
-		);
+		await saveSettings({ startOnSessionStart: true }, loaded.document ?? {}, settingsPath);
+		const updated = JSON.parse(await readFile(settingsPath, "utf8")) as {
+			future: { version: number };
+			maxImages: number;
+		};
+		assert.equal(updated.future.version, 2);
+		assert.equal(updated.maxImages, 3);
 
 		const invalid = '{"startOnSessionStart":"invalid","future":"kept"}\n';
 		await writeFile(settingsPath, invalid);

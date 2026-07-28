@@ -126,7 +126,7 @@ async function handleCommand(
 			await showStatus(ctx, isCurrent);
 			return;
 		case "init":
-			await initConfig(ctx, isCurrent);
+			await initConfig(ctx, pi, isCurrent);
 			return;
 		case "help":
 			ctx.ui.notify(helpText(), "info");
@@ -161,7 +161,11 @@ async function handleCommand(
 	}
 }
 
-async function initConfig(ctx: ExtensionCommandContext, isCurrent: () => boolean) {
+async function initConfig(
+	ctx: ExtensionCommandContext,
+	pi: ExtensionAPI,
+	isCurrent: () => boolean,
+) {
 	if (!ctx.hasUI) {
 		ctx.ui.notify(
 			"/google-genai init requires interactive UI. Edit pi-google-genai.json manually or use /login google.",
@@ -187,10 +191,15 @@ async function initConfig(ctx: ExtensionCommandContext, isCurrent: () => boolean
 	}
 
 	try {
-		await updateGoogleGenaiSetup({
-			...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
-			model: model.trim() || loaded.config.model || DEFAULT_MODEL,
-		});
+		const updated = await updateGoogleSetupAndTools(
+			pi,
+			{
+				...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+				model: model.trim() || loaded.config.model || DEFAULT_MODEL,
+			},
+			isCurrent,
+		);
+		if (!updated) return;
 	} catch (error) {
 		if (!isCurrent()) return;
 		ctx.ui.notify(
@@ -413,6 +422,25 @@ function authSource(config: GoogleGenaiConfig, ctx: ExtensionCommandContext) {
 }
 
 let toolTransactionQueue = Promise.resolve();
+
+function updateGoogleSetupAndTools(
+	pi: ExtensionAPI,
+	patch: { model: string; apiKey?: string },
+	isCurrent: () => boolean,
+): Promise<GoogleGenaiConfig | undefined> {
+	const operation = toolTransactionQueue.then(async () => {
+		if (!isCurrent()) return undefined;
+		const updated = await updateGoogleGenaiSetup(patch);
+		if (!isCurrent()) return undefined;
+		applyGoogleToolSelection(pi, updated.tools);
+		return updated;
+	});
+	toolTransactionQueue = operation.then(
+		() => undefined,
+		() => undefined,
+	);
+	return operation;
+}
 
 async function waitForGoogleToolSettings(): Promise<void> {
 	await toolTransactionQueue;

@@ -86,6 +86,24 @@ test("Langfuse updates preserve unknown fields and refuse malformed files", asyn
 	assert.equal(updated.secretKey, "new-sk");
 	assert.equal((await stat(path)).mode & 0o777, 0o600);
 
+	await writeFile(
+		path,
+		JSON.stringify({
+			...updated,
+			secretKey: "rotated-sk",
+			environment: "concurrent",
+			release: "v2",
+			captureContent: false,
+		}),
+		{ mode: 0o600 },
+	);
+	await writeLangfuseConfig({ baseUrl: "https://updated.example" }, path);
+	const patched = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+	assert.equal(patched.secretKey, "rotated-sk");
+	assert.equal(patched.environment, "concurrent");
+	assert.equal(patched.release, "v2");
+	assert.equal(patched.captureContent, false);
+
 	const malformed = '{"publicKey":"secret-marker"';
 	await writeFile(path, malformed, { mode: 0o600 });
 	await assert.rejects(

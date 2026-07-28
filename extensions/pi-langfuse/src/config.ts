@@ -15,6 +15,8 @@ export interface LangfuseConfig {
 	captureContent: boolean;
 }
 
+export type LangfuseConfigPatch = Partial<LangfuseConfig>;
+
 export type LangfuseConfigResult =
 	| { ok: true; config: LangfuseConfig; path: string; warnings: string[] }
 	| { ok: false; path: string; warnings: string[]; reason: string };
@@ -30,11 +32,11 @@ export async function waitForLangfuseConfigWrites(path = langfuseConfigPath()): 
 }
 
 export function writeLangfuseConfig(
-	config: LangfuseConfig,
+	patch: LangfuseConfigPatch,
 	path = langfuseConfigPath(),
 ): Promise<LangfuseConfig> {
 	const previous = configSaveQueues.get(path) ?? Promise.resolve();
-	const operation = previous.then(() => writeLangfuseConfigNow(config, path));
+	const operation = previous.then(() => writeLangfuseConfigNow(patch, path));
 	const tail = operation.then(
 		() => undefined,
 		() => undefined,
@@ -47,12 +49,12 @@ export function writeLangfuseConfig(
 }
 
 async function writeLangfuseConfigNow(
-	config: LangfuseConfig,
+	patch: LangfuseConfigPatch,
 	path: string,
 ): Promise<LangfuseConfig> {
-	const normalized = normalizeLangfuseConfig(config);
-	if (!normalized.ok) throw new Error(normalized.reason);
 	const currentDocument = await readLangfuseDocumentForUpdate(path);
+	const normalized = normalizeLangfuseConfig({ ...currentDocument, ...patch });
+	if (!normalized.ok) throw new Error(normalized.reason);
 	const {
 		publicKey: _publicKey,
 		secretKey: _secretKey,

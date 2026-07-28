@@ -176,7 +176,7 @@ export async function loadSettings(path = settingsFilePath()): Promise<SettingsL
 }
 
 export async function saveSettings(
-	settings: WebUISettings,
+	settings: Partial<WebUISettings>,
 	_document: Record<string, unknown>,
 	path = settingsFilePath(),
 	operations: Partial<SettingsFileOperations> = {},
@@ -185,17 +185,10 @@ export async function saveSettings(
 	if (latest.kind === "invalid") {
 		throw new Error(`Cannot save pi-webui settings until the existing file is repaired.`);
 	}
-	const nextDocument = {
-		...latest.document,
-		startOnSessionStart: settings.startOnSessionStart,
-		retainSentImages: settings.retainSentImages,
-		maxRetainedImages: settings.maxRetainedImages,
-		maxRetainedBytes: settings.maxRetainedBytes,
-		maxImages: settings.maxImages,
-		maxImageBytes: settings.maxImageBytes,
-		maxBatchBytes: settings.maxBatchBytes,
-		maxImagePixels: settings.maxImagePixels,
-	};
+	const nextDocument = { ...latest.document, ...settings };
+	if (!normalizeSettings(nextDocument)) {
+		throw new Error("Cannot save invalid pi-webui settings.");
+	}
 	const directory = dirname(path);
 	await mkdir(directory, { recursive: true });
 	const temporaryPath = temporaryFilePath(path);

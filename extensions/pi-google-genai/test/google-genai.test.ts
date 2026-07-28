@@ -20,7 +20,7 @@ import {
 	createMockPi,
 	driveCustomSelector,
 } from "../../../test/support.js";
-import { saveToolSelection } from "../src/config.js";
+import { saveToolSelection, updateGoogleGenaiSetup } from "../src/config.js";
 import googleGenai, {
 	buildStatusMessage,
 	commandCompletions,
@@ -560,7 +560,7 @@ test("commands init, status, and tool selection merge config and preserve unrela
 		const command = mock.commands.get("google-genai");
 		assert.ok(command);
 		const inputs = ["", "new-model"];
-		const selections = ["[x] google_search", "Done"];
+		const selections = ["[x] google_maps", "Done"];
 		const notifications: Array<{ message: string; level?: string }> = [];
 		const ctx = {
 			hasUI: true,
@@ -593,6 +593,7 @@ test("commands init, status, and tool selection merge config and preserve unrela
 		assert.equal(config.apiKey, "old-key");
 		assert.equal(config.model, "new-model");
 		assert.deepEqual(config.tools, ["google_maps"]);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "google_maps"]);
 		assert.equal(config.timeoutMs, 12_345);
 		assert.deepEqual(config.future, { kept: true });
 		assert.equal((await stat(join(agentDir, "pi-google-genai.json"))).mode & 0o777, 0o600);
@@ -699,6 +700,24 @@ test("Google GenAI patch saves reread and serialize the latest private document"
 		assert.deepEqual(persisted.tools, ["google_maps"]);
 		assert.deepEqual(persisted.future, { version: 1 });
 		assert.equal((await stat(googleGenaiConfigPath())).mode & 0o777, 0o600);
+	});
+});
+
+test("Google GenAI setup preserves forward-compatible tool names", async () => {
+	await withTempAgentDir(async () => {
+		await writeConfig({
+			apiKey: "literal-secret",
+			model: "old-model",
+			tools: ["google_maps", "future_google_tool", 42],
+		});
+
+		await updateGoogleGenaiSetup({ model: "new-model" });
+		const persisted = JSON.parse(await readFile(googleGenaiConfigPath(), "utf8")) as {
+			model: string;
+			tools: unknown[];
+		};
+		assert.equal(persisted.model, "new-model");
+		assert.deepEqual(persisted.tools, ["google_maps", "future_google_tool", 42]);
 	});
 });
 

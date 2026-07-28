@@ -220,11 +220,14 @@ export async function waitForGoogleGenaiConfigWrites(): Promise<void> {
 	await configSaveQueue;
 }
 
-export function writeGoogleGenaiConfig(config: GoogleGenaiConfig): Promise<void> {
-	return updateGoogleGenaiConfig(cleanObject(config));
+export async function writeGoogleGenaiConfig(config: GoogleGenaiConfig): Promise<void> {
+	await updateGoogleGenaiConfig(cleanObject(config));
 }
 
-export function updateGoogleGenaiSetup(patch: { model: string; apiKey?: string }): Promise<void> {
+export function updateGoogleGenaiSetup(patch: {
+	model: string;
+	apiKey?: string;
+}): Promise<GoogleGenaiConfig> {
 	const model = normalizeString(patch.model);
 	if (!model) throw new Error(`${CONFIG_FILE_NAME} model must be a non-empty string.`);
 	const apiKey = patch.apiKey === undefined ? undefined : normalizeString(patch.apiKey);
@@ -234,13 +237,16 @@ export function updateGoogleGenaiSetup(patch: { model: string; apiKey?: string }
 	return updateGoogleGenaiConfig({ model, ...(apiKey ? { apiKey } : {}) });
 }
 
-function updateGoogleGenaiConfig(patch: object): Promise<void> {
+function updateGoogleGenaiConfig(patch: object): Promise<GoogleGenaiConfig> {
 	const operation = configSaveQueue.then(() => writeGoogleGenaiConfigNow(patch));
-	configSaveQueue = operation.catch(() => undefined);
+	configSaveQueue = operation.then(
+		() => undefined,
+		() => undefined,
+	);
 	return operation;
 }
 
-async function writeGoogleGenaiConfigNow(patch: object): Promise<void> {
+async function writeGoogleGenaiConfigNow(patch: object): Promise<GoogleGenaiConfig> {
 	const path = googleGenaiConfigPath();
 	const currentDocument = await readDocumentForUpdate(path);
 	const nextDocument = { ...currentDocument, ...patch };
@@ -252,6 +258,7 @@ async function writeGoogleGenaiConfigNow(patch: object): Promise<void> {
 		});
 		await chmod(tempFile, 0o600);
 		await rename(tempFile, path);
+		return normalizeGoogleGenaiSettings(nextDocument);
 	} catch (error) {
 		await rm(tempFile, { force: true }).catch(() => undefined);
 		throw error;
@@ -304,9 +311,7 @@ function isValidGoogleGenaiDocument(value: unknown): value is Record<string, unk
 		if (!apiKey || isUnsupportedConfigApiKey(apiKey)) return false;
 	}
 	if (value.timeoutMs !== undefined && !isValidTimeoutMs(value.timeoutMs)) return false;
-	if (value.tools !== undefined) {
-		if (!Array.isArray(value.tools) || !value.tools.every(isGoogleGenaiToolName)) return false;
-	}
+	if (value.tools !== undefined && !Array.isArray(value.tools)) return false;
 	return true;
 }
 
@@ -331,8 +336,8 @@ export function cleanObject<T>(value: T): T {
 	return result as T;
 }
 
-export function saveToolSelection(tools: GoogleGenaiToolName[]): Promise<void> {
-	return updateGoogleGenaiConfig({ tools: [...tools] });
+export async function saveToolSelection(tools: GoogleGenaiToolName[]): Promise<void> {
+	await updateGoogleGenaiConfig({ tools: [...tools] });
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

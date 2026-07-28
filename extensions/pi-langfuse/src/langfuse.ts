@@ -6,6 +6,7 @@ import type {
 import {
 	DEFAULT_BASE_URL,
 	type LangfuseConfig,
+	type LangfuseConfigPatch,
 	type LangfuseConfigResult,
 	loadLangfuseConfig,
 	normalizeLangfuseConfig,
@@ -20,7 +21,7 @@ import {
 
 interface ExtensionDependencies {
 	loadConfig(path?: string): Promise<LangfuseConfigResult>;
-	writeConfig(config: LangfuseConfig, path?: string): Promise<LangfuseConfig>;
+	writeConfig(config: LangfuseConfigPatch, path?: string): Promise<unknown>;
 	createBackend(config: LangfuseConfig): Promise<TraceBackend>;
 	resolveGitMetadata(cwd: string): Promise<GitMetadata | undefined>;
 }
@@ -439,7 +440,7 @@ async function promptForConfig(
 	ctx: ExtensionCommandContext,
 	current: LangfuseConfig | undefined,
 	isCurrent: () => boolean,
-): Promise<LangfuseConfig | undefined> {
+): Promise<LangfuseConfigPatch | undefined> {
 	const secretKey = await ctx.ui.input("Langfuse secret key (leave blank to keep existing):");
 	if (!isCurrent()) return undefined;
 	if (secretKey === undefined) {
@@ -462,18 +463,17 @@ async function promptForConfig(
 		return undefined;
 	}
 
-	const normalized = normalizeLangfuseConfig({
-		...current,
-		publicKey: publicKey.trim() || current?.publicKey || "",
-		secretKey: secretKey.trim() || current?.secretKey || "",
+	const patch: LangfuseConfigPatch = {
+		...(publicKey.trim() ? { publicKey: publicKey.trim() } : {}),
+		...(secretKey.trim() ? { secretKey: secretKey.trim() } : {}),
 		baseUrl: baseUrl.trim() || DEFAULT_BASE_URL,
-		captureContent: current?.captureContent ?? true,
-	});
+	};
+	const normalized = normalizeLangfuseConfig({ ...current, ...patch });
 	if (!normalized.ok) {
 		ctx.ui.notify(`Invalid Langfuse config: ${normalized.reason}`, "error");
 		return undefined;
 	}
-	return normalized.config;
+	return patch;
 }
 
 function formatMenuTitle(
@@ -549,7 +549,7 @@ function formatConfigError(result: Extract<LangfuseConfigResult, { ok: false }>)
 	return `Langfuse tracing is disabled: ${result.reason}${setupHint}`;
 }
 
-function formatError(error: unknown, config?: LangfuseConfig): string {
+function formatError(error: unknown, config?: LangfuseConfigPatch): string {
 	let message = error instanceof Error ? error.message : String(error);
 	const secrets = [config?.publicKey, config?.secretKey]
 		.filter((secret): secret is string => Boolean(secret))
