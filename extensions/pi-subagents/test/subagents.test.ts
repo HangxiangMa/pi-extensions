@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {
+import fs, {
 	existsSync,
 	lstatSync,
 	mkdirSync,
@@ -10,6 +10,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -1125,6 +1126,58 @@ test("subagent setting controls seed canonical updates from the active legacy do
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("legacy-seeded updates preserve canonical settings created before publication", () => {
+	const updates = [
+		["completion delivery", () => updateCompletionDeliverySetting("next-turn")],
+		["delegation workflow", () => updateDelegationWorkflowSetting("async-only")],
+		["agent tools", () => updateAgentToolsSetting("scout", ["read"])],
+	] as const;
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	try {
+		for (const [name, update] of updates) {
+			const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-legacy-race-"));
+			process.env.PI_CODING_AGENT_DIR = directory;
+			try {
+				const legacyPath = path.join(directory, "pi-subagents-config.json");
+				const canonicalPath = path.join(directory, "pi-subagents.json");
+				const legacy = { stateful: { completionDelivery: "auto-resume" }, legacyOnly: true };
+				const concurrent = { stateful: { completionDelivery: "auto-resume" }, concurrent: true };
+				writeFileSync(legacyPath, JSON.stringify(legacy));
+
+				const originalMkdirSync = fs.mkdirSync;
+				let createCanonical = true;
+				fs.mkdirSync = ((...args: Parameters<typeof fs.mkdirSync>) => {
+					const result = originalMkdirSync(...args);
+					if (createCanonical && path.resolve(String(args[0])) === path.resolve(directory)) {
+						createCanonical = false;
+						writeFileSync(canonicalPath, JSON.stringify(concurrent));
+					}
+					return result;
+				}) as typeof fs.mkdirSync;
+				syncBuiltinESMExports();
+				try {
+					assert.throws(
+						update,
+						/created concurrently.*reopen settings and retry/i,
+						`${name} should reject the raced-in canonical file`,
+					);
+				} finally {
+					fs.mkdirSync = originalMkdirSync;
+					syncBuiltinESMExports();
+				}
+
+				assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), concurrent);
+				assert.deepEqual(JSON.parse(readFileSync(legacyPath, "utf8")), legacy);
+			} finally {
+				rmSync(directory, { recursive: true, force: true });
+			}
+		}
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 	}
 });
 

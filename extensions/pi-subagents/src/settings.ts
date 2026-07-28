@@ -290,7 +290,8 @@ export function inspectCompletionDeliverySettings(): CompletionDeliverySettingsS
 export function updateDelegationWorkflowSetting(
 	value: Exclude<DelegationWorkflow, "disabled">,
 ): void {
-	const raw = readSettingsObjectForUpdate();
+	const update = readSettingsObjectForUpdate();
+	const raw = update.document;
 	const blocking = raw.blocking;
 	if (blocking !== undefined && !isPlainObject(blocking)) {
 		throw new Error(`Cannot update invalid ${SETTINGS_FILE} blocking settings`);
@@ -299,36 +300,44 @@ export function updateDelegationWorkflowSetting(
 	if (stateful !== undefined && !isPlainObject(stateful)) {
 		throw new Error(`Cannot update invalid ${SETTINGS_FILE} stateful settings`);
 	}
-	writeSettingsObject({
-		...raw,
-		blocking: {
-			...(blocking ?? {}),
-			enabled: value !== "async-only",
+	writeSettingsObject(
+		{
+			...raw,
+			blocking: {
+				...(blocking ?? {}),
+				enabled: value !== "async-only",
+			},
+			stateful: {
+				...(stateful ?? {}),
+				enabled: value !== "blocking-only",
+			},
 		},
-		stateful: {
-			...(stateful ?? {}),
-			enabled: value !== "blocking-only",
-		},
-	});
+		update.replaceCanonical,
+	);
 }
 
 export function updateCompletionDeliverySetting(value: CompletionDelivery): void {
-	const raw = readSettingsObjectForUpdate();
+	const update = readSettingsObjectForUpdate();
+	const raw = update.document;
 	const stateful = raw.stateful;
 	if (stateful !== undefined && !isPlainObject(stateful)) {
 		throw new Error(`Cannot update invalid ${SETTINGS_FILE} stateful settings`);
 	}
-	writeSettingsObject({
-		...raw,
-		stateful: {
-			...(stateful ?? {}),
-			completionDelivery: value,
+	writeSettingsObject(
+		{
+			...raw,
+			stateful: {
+				...(stateful ?? {}),
+				completionDelivery: value,
+			},
 		},
-	});
+		update.replaceCanonical,
+	);
 }
 
 export function updateAgentToolsSetting(name: string, tools: string[] | undefined): void {
-	const raw = readSettingsObjectForUpdate();
+	const update = readSettingsObjectForUpdate();
+	const raw = update.document;
 	const rawAgents = raw.agents;
 	if (rawAgents !== undefined && !isPlainObject(rawAgents)) {
 		throw new Error(`Cannot update invalid ${SETTINGS_FILE} agent settings`);
@@ -355,12 +364,17 @@ export function updateAgentToolsSetting(name: string, tools: string[] | undefine
 	const updated = { ...raw };
 	if (Object.keys(agents).length > 0) updated.agents = agents;
 	else delete updated.agents;
-	writeSettingsObject(updated);
+	writeSettingsObject(updated, update.replaceCanonical);
 }
 
-function readSettingsObjectForUpdate(): Record<string, unknown> {
-	const { activePath } = resolveSubagentSettingsPaths();
-	if (activePath === undefined) return {};
+interface SettingsObjectForUpdate {
+	document: Record<string, unknown>;
+	replaceCanonical: boolean;
+}
+
+function readSettingsObjectForUpdate(): SettingsObjectForUpdate {
+	const { canonicalPath, activePath } = resolveSubagentSettingsPaths();
+	if (activePath === undefined) return { document: {}, replaceCanonical: false };
 	const activeFile = path.basename(activePath);
 	let parsed: unknown;
 	try {
@@ -371,15 +385,17 @@ function readSettingsObjectForUpdate(): Record<string, unknown> {
 	if (!isPlainObject(parsed) || !normalizeSubagentSettings(parsed)) {
 		throw new Error(`Cannot update invalid ${activeFile}`);
 	}
-	return parsed;
+	return { document: parsed, replaceCanonical: activePath === canonicalPath };
 }
 
-function writeSettingsObject(settings: object): void {
+function writeSettingsObject(settings: object, replaceCanonical?: boolean): void {
 	const agentDir = getAgentDir();
 	fs.mkdirSync(agentDir, { recursive: true });
 	const configPath = path.join(agentDir, SETTINGS_FILE);
 	const tempFile = path.join(agentDir, `.${SETTINGS_FILE}.${randomUUID()}.tmp`);
-	const firstCanonicalPublication = !pathEntryExists(configPath);
+	// Updates seeded from a missing or legacy document must remain exclusive even if the
+	// canonical path appears after the read and before publication.
+	const firstCanonicalPublication = !(replaceCanonical ?? pathEntryExists(configPath));
 	try {
 		fs.writeFileSync(tempFile, `${JSON.stringify(settings, null, "\t")}\n`, {
 			encoding: "utf8",
