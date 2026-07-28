@@ -194,6 +194,84 @@ test("failed first-run statusline application restores the missing file", async 
 	}
 });
 
+test("failed updates from legacy statusline settings remove the new canonical file", async (t) => {
+	const scenarios = [
+		{
+			name: "appearance",
+			select: (title: string, choices: string[]) =>
+				title === "pi-statusline" ? choices[0] : undefined,
+			inputs: ["\r"],
+		},
+		{
+			name: "information",
+			select: (title: string, choices: string[]) =>
+				title === "pi-statusline" ? choices[1] : undefined,
+			inputs: ["\r"],
+		},
+		{
+			name: "custom layout",
+			select: selectCustomLayout,
+			inputs: ["\r", "\u001b"],
+		},
+		{
+			name: "JSON editor",
+			select: (title: string) =>
+				title === "pi-statusline"
+					? "Advanced"
+					: title === "pi-statusline — Advanced"
+						? "Edit settings JSON"
+						: undefined,
+			inputs: [],
+			editor: async () => JSON.stringify({ palettePreset: "ocean" }),
+		},
+	] as const;
+
+	for (const scenario of scenarios) {
+		await t.test(scenario.name, async () => {
+			const root = mkdtempSync(join(tmpdir(), "pi-statusline-legacy-rollback-"));
+			const canonicalPath = settingsFilePath(root);
+			const legacyPath = join(root, "pi-statusline-settings.json");
+			const legacyDocument = `${JSON.stringify({
+				palettePreset: "sunset",
+				segments: ["model", "cwd"],
+				future: { retained: true },
+			})}\n`;
+			writeFileSync(legacyPath, legacyDocument);
+			try {
+				let loaded = loadStatuslineSettingsForAgent(root);
+				let applyCalls = 0;
+				const mock = createMockPi();
+				registerStatuslineCommand(mock.pi, {
+					settingsPath: canonicalPath,
+					getLoaded: () => loaded,
+					apply(next) {
+						loaded = next;
+						applyCalls += 1;
+						if (applyCalls === 1) throw new Error("footer rejected settings");
+					},
+				});
+				const context = createMockContext({
+					mode: "tui",
+					select: scenario.select,
+					custom: customPalettePicker([...scenario.inputs]),
+					...("editor" in scenario ? { editor: scenario.editor } : {}),
+				});
+
+				await mock.commands.get("statusline")?.handler("", context.ctx);
+
+				assert.equal(existsSync(canonicalPath), false);
+				assert.equal(readFileSync(legacyPath, "utf8"), legacyDocument);
+				assert.equal(loaded.settingsPath, legacyPath);
+				assert.equal(loaded.rawDocument, legacyDocument);
+				assert.equal(applyCalls, 2);
+				assert.match(context.notifications.at(-1)?.message ?? "", /footer rejected settings/iu);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+	}
+});
+
 test("segment menu toggles displayed segments and preserves JSON fields and layout order", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
 	const path = settingsFilePath(root);

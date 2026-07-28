@@ -598,17 +598,30 @@ async function editSettings(ctx: ExtensionCommandContext, options: StatuslineCom
 		current.rawDocument ?? DEFAULT_STATUSLINE_DOCUMENT,
 	);
 	if (edited === undefined) return;
+	let loaded: LoadedStatuslineSettings;
 	try {
-		const loaded = (options.save ?? saveStatuslineSettingsDocument)(options.settingsPath, edited);
-		options.apply(loaded, ctx);
-		const suffix =
-			loaded.diagnostics.length > 0
-				? ` (${loaded.diagnostics.length} warning${loaded.diagnostics.length === 1 ? "" : "s"})`
-				: "";
-		ctx.ui.notify(`pi-statusline settings saved and applied${suffix}.`, "info");
+		loaded = (options.save ?? saveStatuslineSettingsDocument)(options.settingsPath, edited);
 	} catch (error) {
 		ctx.ui.notify(`pi-statusline settings were not saved: ${formatError(error)}`, "error");
+		return;
 	}
+	try {
+		options.apply(loaded, ctx);
+	} catch (error) {
+		const rollbackError = restoreStatuslineSettings(ctx, options, current, loaded);
+		ctx.ui.notify(
+			rollbackError
+				? `pi-statusline settings could not be applied: ${formatError(error)}; rollback failed: ${formatError(rollbackError)}`
+				: `pi-statusline settings could not be applied: ${formatError(error)}; previous settings restored.`,
+			"error",
+		);
+		return;
+	}
+	const suffix =
+		loaded.diagnostics.length > 0
+			? ` (${loaded.diagnostics.length} warning${loaded.diagnostics.length === 1 ? "" : "s"})`
+			: "";
+	ctx.ui.notify(`pi-statusline settings saved and applied${suffix}.`, "info");
 }
 
 function palettePresetDocument(
@@ -806,7 +819,7 @@ function restoreStatuslineSettings(
 	saved: LoadedStatuslineSettings,
 ): unknown {
 	try {
-		if (previous.rawDocument === undefined) {
+		if (previous.rawDocument === undefined || previous.settingsPath !== options.settingsPath) {
 			if (saved.rawDocument === undefined || saved.fileIdentity === undefined) {
 				throw new Error("The saved settings document identity is unavailable");
 			}
