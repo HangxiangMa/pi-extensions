@@ -227,6 +227,7 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
 		() => closeAfterPending("back"),
 		{ enableSearch: options.screen.enableSearch === true },
 	);
+	setInitialSettingsSelection(list, items, options.selectedItemId);
 	return {
 		render(width) {
 			return renderFrame(
@@ -518,6 +519,16 @@ function setInitialSelection(list: SelectList, items: readonly SelectItem[], sel
 	if (!selectedId) return;
 	const index = items.findIndex((item) => item.value === selectedId);
 	if (index >= 0) list.setSelectedIndex(index);
+}
+
+function setInitialSettingsSelection(
+	list: SettingsList,
+	items: readonly SettingItem[],
+	selectedId?: string,
+) {
+	if (!selectedId) return;
+	const index = items.findIndex((item) => item.id === selectedId);
+	for (let step = 0; step < index; step += 1) list.handleInput("\u001b[B");
 }
 
 export function safeMenuText(value: unknown) {

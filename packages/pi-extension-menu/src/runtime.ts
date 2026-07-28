@@ -79,6 +79,7 @@ async function runTuiMenu<State, ScreenId extends string, ActionId extends strin
 								? screen.items.find((candidate) => candidate.id === change.itemId)
 								: undefined;
 						if (!item) return rejected();
+						navigator.rememberSelection(navigator.current, change.itemId);
 						const invocation = await invokeAction(
 							ctx,
 							definition.actions[item.action],
@@ -93,6 +94,7 @@ async function runTuiMenu<State, ScreenId extends string, ActionId extends strin
 					},
 					onMultiSelectChange: async (change, signal) => {
 						if (screen.kind !== "multiSelect") return rejected();
+						navigator.rememberSelection(navigator.current, change.itemId);
 						const invocation = await invokeAction(
 							ctx,
 							definition.actions[screen.action],

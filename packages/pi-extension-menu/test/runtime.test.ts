@@ -102,6 +102,32 @@ test("runMenu navigates, refreshes dynamic state, restores selection, and closes
 	assert.match(screens[3] ?? "", /Main 1/);
 });
 
+test("Escape back restores the cursor on the parent row", async () => {
+	let customCalls = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			customCalls += 1;
+			const harness = createCustomSelectorHarness(factory, 80);
+			if (customCalls === 1) {
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
+			} else if (customCalls === 2) harness.handleInput("tui.select.cancel");
+			else {
+				assert.match(harness.render().join("\n"), /→ Status/);
+				harness.handleInput("\u0003");
+			}
+			return harness.result;
+		},
+	});
+
+	assert.deepEqual(await runMenu(context.ctx, runtimeMenu(), { getState: () => ({ count: 0 }) }), {
+		kind: "closed",
+	});
+	assert.equal(customCalls, 3);
+});
+
 test("RPC uses dialog adaptation without custom TUI and print mode delegates unsupported behavior", async () => {
 	let count = 0;
 	let customCalls = 0;
@@ -244,6 +270,61 @@ test("a cancellable busy action receives abort, drains, and leaves the menu usab
 	assert.deepEqual(result, { kind: "closed" });
 	assert.equal(aborted, true);
 	assert.equal(customCalls, 3);
+});
+
+test("settings refreshes preserve the changed row cursor", async () => {
+	let customCalls = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			customCalls += 1;
+			const harness = createCustomSelectorHarness(factory, 80);
+			if (customCalls === 1) {
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
+			} else {
+				assert.match(harness.render().join("\n"), /→ .*Manual mode/);
+				harness.handleInput("\u0003");
+			}
+			for (let turn = 0; harness.result === undefined && turn < 100; turn += 1) {
+				await new Promise<void>((resolve) => setImmediate(resolve));
+			}
+			assert.notEqual(harness.result, undefined);
+			return harness.result;
+		},
+	});
+	const definition = defineMenu<undefined, "settings", "save">({
+		start: "settings",
+		screens: {
+			settings: () => ({
+				kind: "settings",
+				title: "Settings",
+				items: [
+					{
+						id: "automatic",
+						label: "Automatic mode",
+						currentValue: "Off",
+						values: ["Off", "On"],
+						action: "save",
+					},
+					{
+						id: "manual",
+						label: "Manual mode",
+						currentValue: "Off",
+						values: ["Off", "On"],
+						action: "save",
+					},
+				],
+			}),
+		},
+		actions: { save: async () => ({ kind: "stay" }) },
+	});
+
+	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
+		kind: "closed",
+	});
+	assert.equal(customCalls, 2);
 });
 
 test("stale settings saves are rejected and drained before the runtime exits", async () => {

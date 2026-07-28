@@ -44,6 +44,13 @@ const settingsScreen: MenuScreen<ScreenId, ActionId> = {
 			values: ["Off", "On"],
 			action: "setting",
 		},
+		{
+			id: "manual",
+			label: "Manual mode",
+			currentValue: "Off",
+			values: ["Off", "On"],
+			action: "setting",
+		},
 	],
 };
 
@@ -97,6 +104,11 @@ test("theme invalidation rebuilds themed title content", () => {
 	accent = "second";
 	harness.component.invalidate();
 	assert.match(harness.component.render(80).join("\n"), /second:Unsafe/);
+});
+
+test("settings restore a selected row when the screen is reopened", () => {
+	const harness = componentHarness(settingsScreen, { selectedItemId: "manual" });
+	assert.match(harness.component.render(80).join("\n"), /→ .*Manual mode/);
 });
 
 test("settings changes serialize, roll back rejection, and drain before Back", async () => {

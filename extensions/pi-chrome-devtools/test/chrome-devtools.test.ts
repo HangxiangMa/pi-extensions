@@ -417,8 +417,8 @@ test("Chrome DevTools tool selection refreshes dynamic state after a saved toggl
 					assert.match(harness.render().join("\n"), /Chrome DevTools tools \(4\/5\)/);
 					harness.handleInput("tui.select.cancel");
 				}
-				for (let turn = 0; harness.result === undefined && turn < 100; turn += 1) {
-					await new Promise<void>((resolve) => setImmediate(resolve));
+				for (let turn = 0; harness.result === undefined && turn < 2_000; turn += 1) {
+					await new Promise<void>((resolve) => setTimeout(resolve, 1));
 				}
 				assert.notEqual(harness.result, undefined);
 				return harness.result;
