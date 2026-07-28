@@ -475,6 +475,108 @@ test("a cancellable busy action receives abort, drains, and leaves the menu usab
 	assert.equal(customCalls, 3);
 });
 
+test("external busy-view disposal drains without reopening the obsolete menu", async () => {
+	let customCalls = 0;
+	let reportStarted: (() => void) | undefined;
+	let releaseAction: (() => void) | undefined;
+	const started = new Promise<void>((resolve) => {
+		reportStarted = resolve;
+	});
+	const actionGate = new Promise<void>((resolve) => {
+		releaseAction = resolve;
+	});
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			customCalls += 1;
+			const harness = createCustomSelectorHarness(factory, 40);
+			if (customCalls === 1) harness.handleInput("tui.select.confirm");
+			else if (customCalls === 2) {
+				await started;
+				harness.dispose();
+				releaseAction?.();
+			} else throw new Error("Disposed busy UI must not reopen its old menu");
+			return harness.result;
+		},
+	});
+
+	const result = await runMenu(
+		context.ctx,
+		runtimeMenu({
+			busy: true,
+			run: async () => {
+				reportStarted?.();
+				await actionGate;
+				return { kind: "stay" };
+			},
+		}),
+		{ getState: () => ({ count: 0 }) },
+	);
+
+	assert.deepEqual(result, { kind: "stale" });
+	assert.equal(customCalls, 2);
+});
+
+test("a rejecting error reporter cannot strand a busy action", async () => {
+	let customCalls = 0;
+	let reporterCalls = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			customCalls += 1;
+			const harness = createCustomSelectorHarness(factory, 40);
+			if (customCalls === 1) harness.handleInput("tui.select.confirm");
+			else if (customCalls === 2) {
+				for (let turn = 0; harness.result === undefined && turn < 100; turn += 1) {
+					await new Promise<void>((resolve) => setImmediate(resolve));
+				}
+				assert.notEqual(harness.result, undefined);
+				harness.dispose();
+			} else harness.handleInput("\u0003");
+			return harness.result;
+		},
+	});
+
+	const result = await runMenu(
+		context.ctx,
+		runtimeMenu({
+			busy: true,
+			run: async () => {
+				throw new Error("Action failed");
+			},
+		}),
+		{
+			getState: () => ({ count: 0 }),
+			onError: async () => {
+				reporterCalls += 1;
+				throw new Error("Reporter failed");
+			},
+		},
+	);
+
+	assert.deepEqual(result, { kind: "closed" });
+	assert.equal(customCalls, 3);
+	assert.equal(reporterCalls, 1);
+});
+
+test("a rejecting error reporter preserves the documented state-load error result", async () => {
+	const stateError = new Error("State failed");
+	const context = createMockContext({ mode: "tui", hasUI: true });
+
+	const result = await runMenu(context.ctx, runtimeMenu(), {
+		getState: () => {
+			throw stateError;
+		},
+		onError: async () => {
+			throw new Error("Reporter failed");
+		},
+	});
+
+	assert.deepEqual(result, { kind: "error", error: stateError });
+});
+
 test("component disposal aborts and drains pending setting work before returning", async () => {
 	let releaseAction: (() => void) | undefined;
 	let reportStarted: (() => void) | undefined;

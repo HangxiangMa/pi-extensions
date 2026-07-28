@@ -258,6 +258,7 @@ async function invokeBusyAction<State, ScreenId extends string>(
 	let actionTask: Promise<ActionInvocation<ScreenId>> | undefined;
 	let customFailed = false;
 	let customError: unknown;
+	let externallyDisposed = false;
 	let result: ActionInvocation<ScreenId> | undefined;
 	try {
 		result = await ctx.ui.custom<ActionInvocation<ScreenId> | undefined>(
@@ -265,25 +266,35 @@ async function invokeBusyAction<State, ScreenId extends string>(
 				const actionController = new AbortController();
 				const signal = AbortSignal.any([menuSignal, actionController.signal]);
 				const loader = new BorderedLoader(tui, theme, safeMenuText(label), { cancellable: true });
+				let cancelRequested = false;
+				let completed = false;
 				let disposed = false;
-				loader.onAbort = () => {
+				const cancelAction = () => {
+					cancelRequested = true;
 					actionController.abort(new DOMException("Menu action cancelled", "AbortError"));
 				};
+				loader.onAbort = cancelAction;
 				actionTask = invokeAction(ctx, handler, state, signal, itemId, options, {}, false);
-				void actionTask.then((outcome) => {
-					if (!disposed) done(outcome);
-				});
+				void actionTask.then(
+					(outcome) => {
+						completed = true;
+						if (!disposed) done(outcome);
+					},
+					() => {
+						completed = true;
+						if (!disposed) done(rejected());
+					},
+				);
 				return {
 					render: (width: number) => loader.render(width),
 					invalidate: () => loader.invalidate(),
 					handleInput(data: string) {
-						if (matchesKey(data, Key.ctrl("c"))) {
-							actionController.abort(new DOMException("Menu action cancelled", "AbortError"));
-						}
+						if (matchesKey(data, Key.ctrl("c"))) cancelAction();
 						loader.handleInput(data);
 					},
 					dispose() {
 						disposed = true;
+						if (!completed && !cancelRequested && !menuSignal.aborted) externallyDisposed = true;
 						actionController.abort(new DOMException("Menu action disposed", "AbortError"));
 						loader.dispose();
 					},
@@ -296,6 +307,7 @@ async function invokeBusyAction<State, ScreenId extends string>(
 	}
 	const actionOutcome = await actionTask;
 	if (customFailed) throw customError;
+	if (externallyDisposed) return { ...rejected<ScreenId>(), stale: true };
 	return result ?? actionOutcome ?? rejected();
 }
 
@@ -552,12 +564,20 @@ async function reportError<State>(
 	error: unknown,
 ) {
 	if (options.onError) {
-		await options.onError(ctx, error);
-		return;
+		try {
+			await options.onError(ctx, error);
+			return;
+		} catch {
+			// Fall back to Pi's notifier when a custom reporter is no longer available.
+		}
 	}
 	if (ctx.hasUI) {
 		const message = error instanceof Error ? error.message : String(error);
-		ctx.ui.notify(`Menu action failed: ${safeMenuText(message)}`, "error");
+		try {
+			ctx.ui.notify(`Menu action failed: ${safeMenuText(message)}`, "error");
+		} catch {
+			// Error reporting must never escape the documented menu result contract.
+		}
 	}
 }
 

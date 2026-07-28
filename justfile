@@ -85,11 +85,11 @@ publish-all:
     for package_json in packages/*/package.json extensions/*/package.json experimental/*/package.json; do just _publish-package-json "$package_json"; done
 
 # Preview individual packages that npm would publish
-pack-extension-menu:
-    npm --workspace @narumitw/pi-extension-menu pack --dry-run
+pack-tui-kit:
+    npm --workspace @narumitw/pi-tui-kit pack --dry-run
 
-publish-extension-menu:
-    just _publish-package-json ./packages/pi-extension-menu/package.json
+publish-tui-kit:
+    just _publish-package-json ./packages/pi-tui-kit/package.json
 
 pack-btw:
     just pack btw

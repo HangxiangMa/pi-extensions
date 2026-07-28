@@ -1,18 +1,20 @@
-# 🧭 Pi Extension Menu
+# 🧭 Pi TUI Kit
 
-[![npm](https://img.shields.io/npm/v/@narumitw/pi-extension-menu)](https://www.npmjs.com/package/@narumitw/pi-extension-menu)
+[![npm](https://img.shields.io/npm/v/@narumitw/pi-tui-kit)](https://www.npmjs.com/package/@narumitw/pi-tui-kit)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A typed, declarative menu runtime for independently installable [Pi](https://pi.dev) extensions.
-Extensions describe screens and domain actions; this package owns standard rendering, navigation,
-mode adaptation, cancellation, and menu lifecycle behavior.
+Reusable navigation helpers and typed, declarative interaction flows for independently installable
+[Pi](https://pi.dev) extensions, built on
+[`@earendil-works/pi-tui`](https://www.npmjs.com/package/@earendil-works/pi-tui). The initial
+high-level API lets extensions describe menu screens and domain actions while this package owns
+standard rendering, navigation, mode adaptation, cancellation, and lifecycle behavior.
 
 ## 📦 Install
 
 Add the library as a runtime dependency of the extension package:
 
 ```bash
-npm install @narumitw/pi-extension-menu
+npm install @narumitw/pi-tui-kit
 ```
 
 The published package contains built ESM and declarations in `dist/`; consumers do not need a
@@ -22,7 +24,7 @@ TypeScript loader for dependencies.
 
 ```ts
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-extension-menu";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 
 type Screen = "main" | "settings";
 type Action = "refresh" | "setMode";

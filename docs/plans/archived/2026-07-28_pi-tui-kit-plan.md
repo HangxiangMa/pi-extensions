@@ -1,9 +1,9 @@
-# Pi Extension Menu Library Plan
+# Pi TUI Kit Library Plan
 
 ## Goal
 
-Add a publishable `packages/pi-extension-menu` workspace named
-`@narumitw/pi-extension-menu` so new Pi extensions can declare typed, dynamic screens and actions
+Add a publishable `packages/pi-tui-kit` workspace named
+`@narumitw/pi-tui-kit` so new Pi extensions can declare typed, dynamic screens and actions
 while the library owns standard menu rendering, navigation, mode handling, cancellation, disposal,
 and stale-continuation protection. Prove the public contract by migrating the duplicated Chrome
 DevTools and Firecrawl manager/tool-selection menus without changing their established commands,
@@ -37,8 +37,8 @@ settings files, active-tool policy, or non-TUI behavior.
 
 ### Package boundary
 
-- Place the reusable library at `packages/pi-extension-menu` with package name
-  `@narumitw/pi-extension-menu` and no `pi` manifest or extension entrypoint.
+- Place the reusable library at `packages/pi-tui-kit` with package name
+  `@narumitw/pi-tui-kit` and no `pi` manifest or extension entrypoint.
 - Publish generated ESM and declarations from `dist/`; keep authored TypeScript under `src/` and
   exclude tests and build caches from the tarball.
 - Depend on Pi runtime packages through `peerDependencies` with `"*"` and repository-pinned
@@ -49,7 +49,7 @@ settings files, active-tool policy, or non-TUI behavior.
 
 ### Ownership
 
-`@narumitw/pi-extension-menu` owns:
+`@narumitw/pi-tui-kit` owns:
 
 - the typed `defineMenu()` and `runMenu()` public contract;
 - screen-stack navigation, stable per-screen selection by item id, Back, Close, Stay, Refresh, and
@@ -190,14 +190,14 @@ Each extension continues to own:
 - [x] Add a deterministic clean-checkout library build prerequisite to the root check/test workflow
       so generated runtime files exist before compiled extension tests import workspace libraries and
       parallel gates never race the same output. Evidence: after deleting
-      `packages/pi-extension-menu/dist`, `npm test` rebuilt the package first and passed all 1,739
+      `packages/pi-tui-kit/dist`, `npm test` rebuilt the package first and passed all 1,739
       tests.
 
-- [x] Scaffold `packages/pi-extension-menu/package.json`, `tsconfig.json`,
+- [x] Scaffold `packages/pi-tui-kit/package.json`, `tsconfig.json`,
       `tsconfig.build.json`, `src/index.ts`, `README.md`, `LICENSE`, and `test/` with ESM `dist`
       exports, generated declarations, Pi peer dependencies, pinned development dependencies, a
       package-local build/check command, and a `files` allowlist. Evidence:
-      `npm --workspace @narumitw/pi-extension-menu run build` generated `index.js` and `index.d.ts`,
+      `npm --workspace @narumitw/pi-tui-kit run build` generated `index.js` and `index.d.ts`,
       and a package-name dynamic import returned the expected API marker.
 
 - [x] Add failing package contract tests for typed screen/action references, root and nested
@@ -206,7 +206,7 @@ Each extension continues to own:
       compile on the missing model/navigator exports and their contextual state types.
 
 - [x] Implement the pure typed menu model and navigator in focused modules under
-      `packages/pi-extension-menu/src/`, including finite transitions, screen-stack state, stable
+      `packages/pi-tui-kit/src/`, including finite transitions, screen-stack state, stable
       item ids, and snapshot refresh boundaries without importing extension-specific state.
       Evidence: the focused compiled `menu-model.test.js` suite passes 3/3 and all authored modules
       remain below 200 lines.
@@ -242,7 +242,7 @@ Each extension continues to own:
       20-column selector bounds against the duplicated local renderers.
 
 - [x] Migrate `extensions/pi-chrome-devtools` to declare its main and tool-selection screens/actions
-      through `@narumitw/pi-extension-menu`, leaving settings persistence, status/help construction,
+      through `@narumitw/pi-tui-kit`, leaving settings persistence, status/help construction,
       active-tool transactions, session generation, and direct commands extension-owned. Evidence:
       the local custom/dialog selector loops were removed; the focused pilot suite passes, including
       dynamic count refresh, narrow widths, cursor retention, RPC adaptation, saves, and lifecycle
@@ -253,7 +253,7 @@ Each extension continues to own:
       existing settings/tool semantics. Evidence: the superseded custom/dialog selector loops were
       removed; its focused characterization/integration suite and workspace typecheck pass.
 
-- [x] Add `@narumitw/pi-extension-menu` as a runtime dependency of both pilot manifests with the
+- [x] Add `@narumitw/pi-tui-kit` as a runtime dependency of both pilot manifests with the
       current-major `<1` compatibility bound and regenerate the lockfile; shared major bumps advance
       internal workspace bounds automatically. Evidence: scoped `npm ls` for the library and both
       pilots resolves one deduplicated workspace helper and Pi `0.82.1` peers; the pilot pack
@@ -262,21 +262,21 @@ Each extension continues to own:
 - [x] Document the package's screen/action mental model, complete API, lifecycle and mode contract,
       settings-ownership boundary, specialized-UI escape guidance, installation, package layout,
       compatibility policy, and minimal new-extension example in
-      `packages/pi-extension-menu/README.md`. Evidence: `test/readme-usage.ts` mirrors and typechecks
+      `packages/pi-tui-kit/README.md`. Evidence: `test/readme-usage.ts` mirrors and typechecks
       the complete example against the exported API, and the packed README accompanies declarations.
 
 - [x] Update `docs/extension-conventions.md`, `AGENTS.md`, root workspace documentation, and relevant
-      command/pack references so new manager extensions prefer `@narumitw/pi-extension-menu` for the
+      command/pack references so new manager extensions prefer `@narumitw/pi-tui-kit` for the
       standard path while direct Pi controls remain allowed for tiny or specialized interactions.
       The guidance keeps commands, persistence, confirmations, and specialized UI extension-owned
       and retains independently installable extension boundaries.
 
-- [x] Run `npm --workspace @narumitw/pi-extension-menu run check`, the pilot workspace typechecks,
+- [x] Run `npm --workspace @narumitw/pi-tui-kit run check`, the pilot workspace typechecks,
       `npm run check:boundaries`, and the CI-equivalent `npm run check`. Evidence: the 14-file library
       check, both pilot typechecks, the boundary validator (1 library, 22 extensions), Biome (559
       files), all workspace typechecks, clean generated build, and all 1,746 tests passed.
 
-- [x] Run dry-run packs for `@narumitw/pi-extension-menu`, Chrome DevTools, and Firecrawl and inspect
+- [x] Run dry-run packs for `@narumitw/pi-tui-kit`, Chrome DevTools, and Firecrawl and inspect
       their contents. Evidence: the library has 15 files limited to `dist` ESM/declarations,
       package metadata, README, and license; Chrome has 14 intended source/docs/metadata files;
       Firecrawl has 10. A clean project installed all three tarballs with deduplicated Pi `0.82.1`
@@ -293,7 +293,7 @@ Each extension continues to own:
 
 ## Completion Checklist
 
-- [x] `packages/pi-extension-menu` is a publishable non-extension workspace with reproducible ESM and
+- [x] `packages/pi-tui-kit` is a publishable non-extension workspace with reproducible ESM and
       declaration output, correct peer/runtime metadata, focused tests, README, and license.
 - [x] A new manager extension can define dynamic action/detail/settings/multi-select screens and
       action handlers without implementing its own render loop, navigation stack, keybindings,
@@ -316,5 +316,5 @@ Each extension continues to own:
 - [x] Documentation and repository instructions make the shared menu path the default for new
       manager extensions while preserving justified direct Pi-component escape hatches.
 - [x] After every item is complete, move this plan to
-      `docs/plans/archived/2026-07-28_pi-extension-menu-plan.md` without overwriting an existing
+      `docs/plans/archived/2026-07-28_pi-tui-kit-plan.md` without overwriting an existing
       archive.

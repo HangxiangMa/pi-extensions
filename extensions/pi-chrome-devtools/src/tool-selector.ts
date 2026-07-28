@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-extension-menu";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import {
 	browserCandidateHint,
 	devToolsEndpoint,

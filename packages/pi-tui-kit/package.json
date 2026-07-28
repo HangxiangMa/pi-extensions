@@ -1,7 +1,7 @@
 {
-	"name": "@narumitw/pi-extension-menu",
+	"name": "@narumitw/pi-tui-kit",
 	"version": "0.35.0",
-	"description": "Declarative menu runtime for Pi extensions.",
+	"description": "Declarative UI flows and navigation helpers built on Pi TUI.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -9,8 +9,8 @@
 	"keywords": [
 		"pi",
 		"pi-extension",
-		"menu",
 		"tui",
+		"menu",
 		"library"
 	],
 	"files": [
@@ -46,6 +46,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "packages/pi-extension-menu"
+		"directory": "packages/pi-tui-kit"
 	}
 }

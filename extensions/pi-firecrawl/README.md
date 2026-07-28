@@ -16,7 +16,7 @@ Use it to give your AI coding agent reliable web research capabilities for docum
 - Supports Firecrawl API endpoint overrides.
 - Shows statusline activity only while Firecrawl tools are running.
 - Provides a `/firecrawl` menu with configuration help and tool controls.
-- Uses `@narumitw/pi-extension-menu` for width-safe menus and individual tool selection.
+- Uses `@narumitw/pi-tui-kit` for width-safe menus and individual tool selection.
 - Persists the selected Firecrawl tools across Pi restarts.
 - Bounds tool output to Pi's 50 KB or 2,000-line limit while preserving oversized responses in private temporary files.
 - Never logs, displays, or stores your Firecrawl API key.

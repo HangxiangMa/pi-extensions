@@ -25,7 +25,7 @@ This package is inspired by [`chrome-devtools-mcp`](https://github.com/ChromeDev
 - Retries briefly while Chrome is starting and reports actionable endpoint errors.
 - Shows statusline activity only while Chrome DevTools tools are running.
 - Provides a `/chrome-devtools` menu with quick-start help and tool controls.
-- Uses `@narumitw/pi-extension-menu` for width-safe menus and individual tool selection.
+- Uses `@narumitw/pi-tui-kit` for width-safe menus and individual tool selection.
 - Persists the selected Chrome DevTools tools across Pi restarts.
 
 ## 📦 Install
