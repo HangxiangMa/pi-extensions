@@ -297,9 +297,10 @@ function restorePreviousConfiguration(
 ): unknown {
 	try {
 		if (previous.rawDocument === undefined) {
-			if (saved.rawDocument === undefined)
-				throw new Error("The saved settings document is unavailable");
-			removeConfigDocumentIfMatches(options.settingsPath, saved.rawDocument);
+			if (saved.rawDocument === undefined || saved.fileIdentity === undefined) {
+				throw new Error("The saved settings document identity is unavailable");
+			}
+			removeConfigDocumentIfMatches(options.settingsPath, saved.rawDocument, saved.fileIdentity);
 		} else {
 			(options.restore ?? atomicRestoreConfigDocument)(options.settingsPath, previous.rawDocument);
 		}

@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
+	copyFileSync,
 	existsSync,
+	constants as fsConstants,
 	lstatSync,
 	mkdirSync,
 	readFileSync,
@@ -69,6 +71,7 @@ export interface LoadedStarshipConfig {
 	source: "built-in" | "user";
 	settingsPath: string;
 	rawDocument?: string;
+	fileIdentity?: { dev: number; ino: number };
 	diagnostics: ConfigDiagnostic[];
 }
 
@@ -430,8 +433,10 @@ export function atomicSaveConfigDocument(
 	overrides: Partial<AtomicFileSystem> = {},
 ): LoadedStarshipConfig {
 	const validated = validateConfigDocument(settingsPath, rawDocument);
-	atomicWriteConfigDocument(settingsPath, rawDocument, overrides);
-	return validated;
+	return {
+		...validated,
+		fileIdentity: atomicWriteConfigDocument(settingsPath, rawDocument, overrides),
+	};
 }
 
 export function atomicRestoreConfigDocument(
@@ -445,30 +450,51 @@ export function atomicRestoreConfigDocument(
 export function removeConfigDocumentIfMatches(
 	settingsPath: string,
 	expectedRawDocument: string,
+	expectedIdentity: { dev: number; ino: number },
 	overrides: Pick<Partial<AtomicFileSystem>, "rmSync"> = {},
 ) {
-	const info = lstatSync(settingsPath);
-	if (
-		!info.isFile() ||
-		info.isSymbolicLink() ||
-		readFileSync(settingsPath, "utf8") !== expectedRawDocument
-	) {
+	const quarantinePath = join(
+		dirname(settingsPath),
+		`.${CONFIG_FILE_NAME}.${randomUUID()}.rollback`,
+	);
+	const before = lstatSync(settingsPath);
+	if (before.dev !== expectedIdentity.dev || before.ino !== expectedIdentity.ino) {
 		throw new Error("Starship settings changed concurrently; the newer file was preserved");
 	}
-	(overrides.rmSync ?? rmSync)(settingsPath);
+	renameSync(settingsPath, quarantinePath);
+	const quarantined = lstatSync(quarantinePath);
+	if (
+		quarantined.isFile() &&
+		!quarantined.isSymbolicLink() &&
+		quarantined.dev === expectedIdentity.dev &&
+		quarantined.ino === expectedIdentity.ino &&
+		readFileSync(quarantinePath, "utf8") === expectedRawDocument
+	) {
+		(overrides.rmSync ?? rmSync)(quarantinePath);
+		return;
+	}
+	try {
+		copyFileSync(quarantinePath, settingsPath, fsConstants.COPYFILE_EXCL);
+		(overrides.rmSync ?? rmSync)(quarantinePath);
+	} catch {
+		// Preserve the quarantine when another writer owns the canonical path or restoration fails.
+	}
+	throw new Error("Starship settings changed concurrently; the newer file was preserved");
 }
 
 function atomicWriteConfigDocument(
 	settingsPath: string,
 	rawDocument: string,
 	overrides: Partial<AtomicFileSystem>,
-) {
+): { dev: number; ino: number } {
 	const fs = { mkdirSync, writeFileSync, renameSync, rmSync, ...overrides };
 	fs.mkdirSync(dirname(settingsPath), { recursive: true });
 	const tempPath = join(dirname(settingsPath), `.${CONFIG_FILE_NAME}.${randomUUID()}.tmp`);
 	try {
 		fs.writeFileSync(tempPath, rawDocument, { encoding: "utf8", flag: "wx" });
+		const info = lstatSync(tempPath);
 		fs.renameSync(tempPath, settingsPath);
+		return { dev: info.dev, ino: info.ino };
 	} finally {
 		try {
 			fs.rmSync(tempPath, { force: true });

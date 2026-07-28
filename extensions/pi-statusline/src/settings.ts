@@ -1,5 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	constants as fsConstants,
+	lstatSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { INFORMATION_PROFILES } from "./information-profiles.js";
@@ -101,6 +110,7 @@ export interface LoadedStatuslineSettings {
 	source: "built-in" | "user";
 	settingsPath: string;
 	rawDocument?: string;
+	fileIdentity?: { dev: number; ino: number };
 	diagnostics: StatuslineConfigDiagnostic[];
 }
 
@@ -359,9 +369,12 @@ export function saveStatuslineSettingsDocument(
 
 	const fs = { mkdirSync, writeFileSync, renameSync, rmSync, ...overrides };
 	const temporaryPath = temporarySettingsPath(settingsPath);
+	let fileIdentity: { dev: number; ino: number } | undefined;
 	try {
 		fs.mkdirSync(dirname(settingsPath), { recursive: true });
 		fs.writeFileSync(temporaryPath, rawDocument, { encoding: "utf8", flag: "wx" });
+		const info = lstatSync(temporaryPath);
+		fileIdentity = { dev: info.dev, ino: info.ino };
 		fs.renameSync(temporaryPath, settingsPath);
 	} finally {
 		removeTemporaryFile(fs.rmSync, temporaryPath);
@@ -371,6 +384,7 @@ export function saveStatuslineSettingsDocument(
 		source: "user",
 		settingsPath,
 		rawDocument,
+		...(fileIdentity ? { fileIdentity } : {}),
 		diagnostics: normalized.diagnostics,
 	};
 }
@@ -378,16 +392,35 @@ export function saveStatuslineSettingsDocument(
 export function removeStatuslineSettingsDocumentIfMatches(
 	settingsPath: string,
 	expectedRawDocument: string,
+	expectedIdentity: { dev: number; ino: number },
 ): void {
-	const info = lstatSync(settingsPath);
-	if (
-		!info.isFile() ||
-		info.isSymbolicLink() ||
-		readFileSync(settingsPath, "utf8") !== expectedRawDocument
-	) {
+	const quarantinePath = join(
+		dirname(settingsPath),
+		`.${SETTINGS_FILE_NAME}.${randomUUID()}.rollback`,
+	);
+	const before = lstatSync(settingsPath);
+	if (before.dev !== expectedIdentity.dev || before.ino !== expectedIdentity.ino) {
 		throw new Error("Statusline settings changed concurrently; the newer file was preserved");
 	}
-	rmSync(settingsPath);
+	renameSync(settingsPath, quarantinePath);
+	const quarantined = lstatSync(quarantinePath);
+	if (
+		quarantined.isFile() &&
+		!quarantined.isSymbolicLink() &&
+		quarantined.dev === expectedIdentity.dev &&
+		quarantined.ino === expectedIdentity.ino &&
+		readFileSync(quarantinePath, "utf8") === expectedRawDocument
+	) {
+		rmSync(quarantinePath);
+		return;
+	}
+	try {
+		copyFileSync(quarantinePath, settingsPath, fsConstants.COPYFILE_EXCL);
+		rmSync(quarantinePath);
+	} catch {
+		// Preserve the quarantine when another writer owns the canonical path or restoration fails.
+	}
+	throw new Error("Statusline settings changed concurrently; the newer file was preserved");
 }
 
 export function consumeStatuslineSettingsNotice(): string | undefined {
