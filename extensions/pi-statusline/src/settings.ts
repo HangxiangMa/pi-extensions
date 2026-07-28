@@ -334,10 +334,14 @@ export function loadStatuslineSettingsForAgent(agentDir = getAgentDir()): Loaded
 }
 
 function migrateLegacySettings(
-	_canonicalPath: string,
+	canonicalPath: string,
 	legacyPath: string,
 ): LoadedStatuslineSettings {
 	const legacy = loadStatuslineSettings(legacyPath);
+	if (pathExists(canonicalPath)) {
+		pendingSettingsNotice = `${LEGACY_SETTINGS_FILE_NAME} ignored because ${SETTINGS_FILE_NAME} was created concurrently.`;
+		return loadStatuslineSettings(canonicalPath);
+	}
 	if (
 		legacy.source !== "user" ||
 		legacy.rawDocument === undefined ||

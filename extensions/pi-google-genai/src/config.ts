@@ -41,9 +41,23 @@ export async function loadGoogleGenaiConfig(): Promise<LoadedGoogleGenaiConfig> 
 	await configSaveQueue;
 	const path = googleGenaiConfigPath();
 	const warnings: string[] = [];
-	const readPath = await prepareGoogleGenaiConfigPath(path, warnings);
+	let readPath = await prepareGoogleGenaiConfigPath(path, warnings);
 	await ensureConfigPermissions(readPath, warnings);
-	const raw = await readJsonIfExists(readPath, warnings);
+	let raw = await readJsonIfExists(readPath, warnings);
+	if (readPath !== path) {
+		if (await exists(path)) {
+			readPath = path;
+			await ensureConfigPermissions(readPath, warnings);
+			raw = await readJsonIfExists(readPath, warnings);
+			warnings.push(
+				`${LEGACY_CONFIG_FILE_NAME} ignored because ${CONFIG_FILE_NAME} was created concurrently.`,
+			);
+		} else {
+			warnings.push(
+				`Using legacy ${LEGACY_CONFIG_FILE_NAME}; rename it to ${CONFIG_FILE_NAME}. Future saves write ${CONFIG_FILE_NAME} without modifying the legacy file.`,
+			);
+		}
+	}
 	const configLoaded = isObject(raw);
 	if (raw !== undefined && !configLoaded) {
 		warnings.push(`${basename(readPath)} must contain a JSON object; ignoring config.`);
@@ -180,9 +194,6 @@ async function prepareGoogleGenaiConfigPath(canonicalPath: string, warnings: str
 	if (!(await exists(legacyPath))) return canonicalPath;
 
 	await ensureConfigPermissions(legacyPath, warnings);
-	warnings.push(
-		`Using legacy ${LEGACY_CONFIG_FILE_NAME}; rename it to ${CONFIG_FILE_NAME}. Future saves write ${CONFIG_FILE_NAME} without modifying the legacy file.`,
-	);
 	return legacyPath;
 }
 

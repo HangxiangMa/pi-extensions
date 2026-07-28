@@ -176,6 +176,14 @@ export function readSubagentSettings(): SubagentSettings | undefined {
 	}
 	if (activePath === undefined) return undefined;
 	const legacy = readSettingsFile(legacyPath);
+	if (fs.existsSync(canonicalPath)) {
+		const canonical = readSettingsFile(canonicalPath);
+		pendingSettingsNotice = [
+			...(!canonical ? [`${SETTINGS_FILE} is invalid and was ignored.`] : []),
+			`${LEGACY_SETTINGS_FILE} ignored because ${SETTINGS_FILE} was created concurrently.`,
+		].join("\n");
+		return canonical;
+	}
 	if (!legacy) {
 		pendingSettingsNotice = `${LEGACY_SETTINGS_FILE} is invalid and was ignored.`;
 		return undefined;
@@ -231,8 +239,19 @@ function inspectSubagentSettingsDocument(): {
 	error?: string;
 } {
 	const { canonicalPath, activePath } = resolveSubagentSettingsPaths();
-	const configPath = activePath ?? canonicalPath;
-	if (activePath === undefined) return { path: configPath };
+	if (activePath === undefined) return { path: canonicalPath };
+	const inspected = inspectSubagentSettingsPath(activePath);
+	return activePath !== canonicalPath && fs.existsSync(canonicalPath)
+		? inspectSubagentSettingsPath(canonicalPath)
+		: inspected;
+}
+
+function inspectSubagentSettingsPath(configPath: string): {
+	path: string;
+	raw?: Record<string, unknown>;
+	settings?: SubagentSettings;
+	error?: string;
+} {
 	try {
 		const raw: unknown = JSON.parse(fs.readFileSync(configPath, "utf8"));
 		const settings = normalizeSubagentSettings(raw);

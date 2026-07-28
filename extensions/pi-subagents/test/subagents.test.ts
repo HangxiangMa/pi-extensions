@@ -1101,6 +1101,61 @@ test("subagent settings read legacy files and save to the canonical package file
 	}
 });
 
+test("subagent settings loaders recheck canonical paths after legacy reads", () => {
+	const loaders = [
+		{
+			name: "runtime",
+			load: () => readSubagentSettings()?.blocking?.enabled,
+			expected: true,
+			expectNotice: true,
+		},
+		{
+			name: "inspector",
+			load: () => inspectDelegationWorkflowSettings().value,
+			expected: "all",
+			expectNotice: false,
+		},
+	] as const;
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	try {
+		for (const loader of loaders) {
+			const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-legacy-read-race-"));
+			process.env.PI_CODING_AGENT_DIR = directory;
+			try {
+				const legacyPath = path.join(directory, "pi-subagents-config.json");
+				const canonicalPath = path.join(directory, "pi-subagents.json");
+				writeFileSync(legacyPath, JSON.stringify({ blocking: { enabled: false } }));
+
+				const originalReadFileSync = fs.readFileSync;
+				let createCanonical = true;
+				fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+					const result = originalReadFileSync(...args);
+					if (createCanonical && path.resolve(String(args[0])) === legacyPath) {
+						createCanonical = false;
+						writeFileSync(canonicalPath, JSON.stringify({ blocking: { enabled: true } }));
+					}
+					return result;
+				}) as typeof fs.readFileSync;
+				syncBuiltinESMExports();
+				try {
+					assert.equal(loader.load(), loader.expected, loader.name);
+					const notice = consumeSubagentSettingsNotice();
+					if (loader.expectNotice) assert.match(notice ?? "", /ignored.*created concurrently/i);
+					else assert.equal(notice, undefined);
+				} finally {
+					fs.readFileSync = originalReadFileSync;
+					syncBuiltinESMExports();
+				}
+			} finally {
+				rmSync(directory, { recursive: true, force: true });
+			}
+		}
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+	}
+});
+
 test("subagent setting controls seed canonical updates from the active legacy document", () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-legacy-update-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;

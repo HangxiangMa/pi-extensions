@@ -259,8 +259,11 @@ function loadConfiguredConfig(cwd: string, projectTrusted: boolean): LspConfig |
 			return parseConfigFile(projectConfig);
 		}
 		if (existsSync(legacyProjectConfig)) {
-			pendingConfigNotice = `Using legacy ${CONFIG_DIR_NAME}/lsp.json. Rename it to ${CONFIG_DIR_NAME}/pi-lsp.json; the repository file was not modified automatically.`;
-			return parseConfigFile(legacyProjectConfig);
+			const legacy = parseLegacyConfigWithCanonicalRecheck(projectConfig, legacyProjectConfig);
+			pendingConfigNotice = legacy.canonicalCreated
+				? `${CONFIG_DIR_NAME}/lsp.json ignored because ${CONFIG_DIR_NAME}/pi-lsp.json was created concurrently.`
+				: `Using legacy ${CONFIG_DIR_NAME}/lsp.json. Rename it to ${CONFIG_DIR_NAME}/pi-lsp.json; the repository file was not modified automatically.`;
+			return legacy.config;
 		}
 	}
 
@@ -274,10 +277,11 @@ function loadConfiguredConfig(cwd: string, projectTrusted: boolean): LspConfig |
 	}
 	if (!existsSync(legacyUserConfig)) return undefined;
 
-	const legacy = parseConfigFile(legacyUserConfig);
-	pendingConfigNotice =
-		"Using legacy lsp.json; rename it to pi-lsp.json. Future settings use pi-lsp.json without modifying the legacy file.";
-	return legacy;
+	const legacy = parseLegacyConfigWithCanonicalRecheck(userConfig, legacyUserConfig);
+	pendingConfigNotice = legacy.canonicalCreated
+		? "lsp.json ignored because pi-lsp.json was created concurrently."
+		: "Using legacy lsp.json; rename it to pi-lsp.json. Future settings use pi-lsp.json without modifying the legacy file.";
+	return legacy.config;
 }
 
 export function consumeLspConfigNotice() {
@@ -297,6 +301,27 @@ function parseConfigSource(source: string, cwd: string, label: string): LspConfi
 
 function parseConfigFile(filePath: string): LspConfig {
 	return normalizeConfig(JSON.parse(readFileSync(filePath, "utf8")), filePath);
+}
+
+function parseLegacyConfigWithCanonicalRecheck(
+	canonicalPath: string,
+	legacyPath: string,
+): { config: LspConfig; canonicalCreated: boolean } {
+	const legacyContents = readFileSync(legacyPath, "utf8");
+	const canonicalIfPresent = () =>
+		existsSync(canonicalPath)
+			? { config: parseConfigFile(canonicalPath), canonicalCreated: true }
+			: undefined;
+	const beforeParse = canonicalIfPresent();
+	if (beforeParse) return beforeParse;
+	try {
+		const legacy = normalizeConfig(JSON.parse(legacyContents), legacyPath);
+		return canonicalIfPresent() ?? { config: legacy, canonicalCreated: false };
+	} catch (error) {
+		const afterFailure = canonicalIfPresent();
+		if (afterFailure) return afterFailure;
+		throw error;
+	}
 }
 
 function normalizeConfig(value: unknown, label: string): LspConfig {

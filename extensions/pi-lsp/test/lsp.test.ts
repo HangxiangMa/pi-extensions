@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {
+import fs, {
 	chmodSync,
 	existsSync,
 	mkdirSync,
@@ -11,6 +11,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -481,6 +482,63 @@ test("LSP config uses canonical paths while preserving project legacy files", ()
 		assert.equal(consumeLspConfigNotice(), undefined);
 	} finally {
 		delete process.env.PI_LSP_CONFIG;
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("LSP config rechecks canonical paths after reading legacy fallbacks", () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-config-race-"));
+	const agentDir = path.join(root, "agent");
+	const project = path.join(root, "project");
+	mkdirSync(agentDir);
+	mkdirSync(path.join(project, ".pi"), { recursive: true });
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	const config = (name: string) => ({
+		servers: { [name]: { command: [name], extensions: [`.${name}`] } },
+	});
+	const cases = [
+		{
+			name: "user",
+			legacyPath: path.join(agentDir, "lsp.json"),
+			canonicalPath: path.join(agentDir, "pi-lsp.json"),
+			load: () => loadConfig(project, { projectTrusted: false }),
+		},
+		{
+			name: "project",
+			legacyPath: path.join(project, ".pi", "lsp.json"),
+			canonicalPath: path.join(project, ".pi", "pi-lsp.json"),
+			load: () => loadConfig(project, { projectTrusted: true }),
+		},
+	] as const;
+	try {
+		for (const scenario of cases) {
+			writeFileSync(scenario.legacyPath, JSON.stringify(config(`legacy-${scenario.name}`)));
+			const originalReadFileSync = fs.readFileSync;
+			let createCanonical = true;
+			fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+				const result = originalReadFileSync(...args);
+				if (createCanonical && path.resolve(String(args[0])) === scenario.legacyPath) {
+					createCanonical = false;
+					writeFileSync(
+						scenario.canonicalPath,
+						JSON.stringify(config(`canonical-${scenario.name}`)),
+					);
+				}
+				return result;
+			}) as typeof fs.readFileSync;
+			syncBuiltinESMExports();
+			try {
+				assert.equal(scenario.load().servers[0]?.name, `canonical-${scenario.name}`);
+				assert.match(consumeLspConfigNotice() ?? "", /ignored.*created concurrently/i);
+			} finally {
+				fs.readFileSync = originalReadFileSync;
+				syncBuiltinESMExports();
+			}
+		}
+	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		rmSync(root, { recursive: true, force: true });

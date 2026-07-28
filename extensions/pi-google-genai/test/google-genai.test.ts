@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
 	chmod,
 	mkdir,
@@ -10,6 +11,7 @@ import {
 	unlink,
 	writeFile,
 } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -159,6 +161,35 @@ test("config loading reads legacy settings without mutation and keeps private pe
 		assert.equal(fallback.config.model, "fallback");
 		assert.match(fallback.warnings.join("\n"), /using legacy/i);
 		assert.equal((await stat(legacyPath)).mode & 0o777, 0o600);
+	});
+});
+
+test("config loading rechecks the canonical path after reading the legacy fallback", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const legacyPath = join(agentDir, "google-genai.json");
+		const canonicalPath = join(agentDir, "pi-google-genai.json");
+		await mkdir(agentDir, { recursive: true });
+		await writeFile(legacyPath, JSON.stringify({ model: "legacy" }), { mode: 0o600 });
+
+		const originalReadFile = fs.promises.readFile;
+		let createCanonical = true;
+		fs.promises.readFile = (async (...args: Parameters<typeof fs.promises.readFile>) => {
+			const result = await originalReadFile(...args);
+			if (createCanonical && String(args[0]) === legacyPath) {
+				createCanonical = false;
+				await writeFile(canonicalPath, JSON.stringify({ model: "canonical" }), { mode: 0o600 });
+			}
+			return result;
+		}) as typeof fs.promises.readFile;
+		syncBuiltinESMExports();
+		try {
+			const loaded = await loadGoogleGenaiConfig();
+			assert.equal(loaded.config.model, "canonical");
+			assert.match(loaded.warnings.join("\n"), /ignored.*created concurrently/i);
+		} finally {
+			fs.promises.readFile = originalReadFile;
+			syncBuiltinESMExports();
+		}
 	});
 });
 
