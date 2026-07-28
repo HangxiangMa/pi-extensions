@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
-	copyFileSync,
 	existsSync,
-	constants as fsConstants,
 	lstatSync,
 	mkdirSync,
 	readFileSync,
@@ -463,21 +461,21 @@ export function removeConfigDocumentIfMatches(
 	}
 	renameSync(settingsPath, quarantinePath);
 	const quarantined = lstatSync(quarantinePath);
-	if (
+	const quarantinedSavedFile =
 		quarantined.isFile() &&
 		!quarantined.isSymbolicLink() &&
 		quarantined.dev === expectedIdentity.dev &&
-		quarantined.ino === expectedIdentity.ino &&
-		readFileSync(quarantinePath, "utf8") === expectedRawDocument
-	) {
+		quarantined.ino === expectedIdentity.ino;
+	if (quarantinedSavedFile && readFileSync(quarantinePath, "utf8") === expectedRawDocument) {
 		(overrides.rmSync ?? rmSync)(quarantinePath);
 		return;
 	}
-	try {
-		copyFileSync(quarantinePath, settingsPath, fsConstants.COPYFILE_EXCL);
-		(overrides.rmSync ?? rmSync)(quarantinePath);
-	} catch {
-		// Preserve the quarantine when another writer owns the canonical path or restoration fails.
+	if (quarantinedSavedFile && !pathEntryExists(settingsPath)) {
+		try {
+			renameSync(quarantinePath, settingsPath);
+		} catch {
+			// Keep the quarantine for recovery when its atomic restoration fails.
+		}
 	}
 	throw new Error("Starship settings changed concurrently; the newer file was preserved");
 }

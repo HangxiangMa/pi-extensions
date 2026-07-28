@@ -1,5 +1,5 @@
 import * as nodeFs from "node:fs";
-import { copyFile, lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import lockfile from "proper-lockfile";
@@ -46,7 +46,6 @@ export interface SettingsLoadResult {
 export interface SettingsFileOperations {
 	write(path: string, data: string): Promise<void>;
 	rename(source: string, destination: string): Promise<void>;
-	publishExclusive(source: string, destination: string): Promise<void>;
 	lock(path: string, onCompromised: (error: Error) => void): Promise<() => Promise<void>>;
 }
 
@@ -54,10 +53,7 @@ const DEFAULT_FILE_OPERATIONS: SettingsFileOperations = {
 	write: (path, data) =>
 		writeFile(path, data, { encoding: "utf8", flag: "wx", mode: 0o600 }).then(() => undefined),
 	rename,
-	// Exclusive copy avoids POSIX rename replacement without Android-denied hard links.
-	publishExclusive: (source, destination) =>
-		copyFile(source, destination, nodeFs.constants.COPYFILE_EXCL),
-	lock: acquireInitializationLock,
+	lock: acquireSettingsMutationLock,
 };
 
 const LOCKFILE_FS_ADAPTER = {
@@ -187,43 +183,70 @@ export async function saveSettings(
 	path = settingsFilePath(),
 	operations: Partial<SettingsFileOperations> = {},
 ): Promise<Record<string, unknown>> {
-	const latest = await loadSettings(path);
-	if (latest.kind === "invalid") {
-		throw new Error(`Cannot save pi-webui settings until the existing file is repaired.`);
-	}
-	const nextDocument = { ...latest.document, ...settings };
-	if (!normalizeSettings(nextDocument)) {
-		throw new Error("Cannot save invalid pi-webui settings.");
-	}
-	const directory = dirname(path);
-	await mkdir(directory, { recursive: true });
-	const temporaryPath = temporaryFilePath(path);
-	try {
-		await (operations.write ?? DEFAULT_FILE_OPERATIONS.write)(
-			temporaryPath,
-			`${JSON.stringify(nextDocument, null, 2)}\n`,
-		);
-		await (operations.rename ?? DEFAULT_FILE_OPERATIONS.rename)(temporaryPath, path);
-		return nextDocument;
-	} catch (error) {
-		await unlink(temporaryPath).catch(() => undefined);
-		throw error;
-	}
+	await mkdir(dirname(path), { recursive: true });
+	return withSettingsMutationLock(path, operations, async (throwIfCompromised) => {
+		const latest = await loadSettings(path);
+		throwIfCompromised();
+		if (latest.kind === "invalid") {
+			throw new Error(`Cannot save pi-webui settings until the existing file is repaired.`);
+		}
+		const nextDocument = { ...latest.document, ...settings };
+		if (!normalizeSettings(nextDocument)) {
+			throw new Error("Cannot save invalid pi-webui settings.");
+		}
+		const temporaryPath = temporaryFilePath(path);
+		try {
+			await (operations.write ?? DEFAULT_FILE_OPERATIONS.write)(
+				temporaryPath,
+				`${JSON.stringify(nextDocument, null, 2)}\n`,
+			);
+			throwIfCompromised();
+			if (latest.kind === "missing" && (await pathEntryExists(path))) {
+				throw new Error(`${SETTINGS_FILE} was created concurrently; reopen settings and retry.`);
+			}
+			throwIfCompromised();
+			await (operations.rename ?? DEFAULT_FILE_OPERATIONS.rename)(temporaryPath, path);
+			throwIfCompromised();
+			return nextDocument;
+		} finally {
+			await unlink(temporaryPath).catch(() => undefined);
+		}
+	});
 }
 
 export async function initializeSettings(
 	path = settingsFilePath(),
 	operations: Partial<SettingsFileOperations> = {},
 ): Promise<"created" | "exists"> {
-	try {
-		await lstat(path);
-		return "exists";
-	} catch (error) {
-		if (!isNodeError(error) || error.code !== "ENOENT") throw error;
-	}
+	if (await pathEntryExists(path)) return "exists";
 
-	const directory = dirname(path);
-	await mkdir(directory, { recursive: true });
+	await mkdir(dirname(path), { recursive: true });
+	return withSettingsMutationLock(path, operations, async (throwIfCompromised) => {
+		if (await pathEntryExists(path)) return "exists";
+		throwIfCompromised();
+		const temporaryPath = temporaryFilePath(path);
+		try {
+			await (operations.write ?? DEFAULT_FILE_OPERATIONS.write)(
+				temporaryPath,
+				`${JSON.stringify(DEFAULT_SETTINGS, null, 2)}\n`,
+			);
+			throwIfCompromised();
+			if (await pathEntryExists(path)) return "exists";
+			throwIfCompromised();
+			await (operations.rename ?? DEFAULT_FILE_OPERATIONS.rename)(temporaryPath, path);
+			throwIfCompromised();
+			return "created";
+		} finally {
+			await unlink(temporaryPath).catch(() => undefined);
+		}
+	});
+}
+
+async function withSettingsMutationLock<T>(
+	path: string,
+	operations: Partial<SettingsFileOperations>,
+	mutate: (throwIfCompromised: () => void) => Promise<T>,
+): Promise<T> {
 	let compromisedError: Error | undefined;
 	const release = await (operations.lock ?? DEFAULT_FILE_OPERATIONS.lock)(path, (error) => {
 		compromisedError ??= error;
@@ -231,63 +254,54 @@ export async function initializeSettings(
 	const throwIfCompromised = () => {
 		if (compromisedError) throw compromisedError;
 	};
-	const temporaryPath = temporaryFilePath(path);
-	let outcome: "created" | "exists" | undefined;
+	let result: T | undefined;
+	let completed = false;
+	let operationFailed = false;
 	let operationError: unknown;
 	try {
 		throwIfCompromised();
-		try {
-			await lstat(path);
-			outcome = "exists";
-		} catch (error) {
-			if (!isNodeError(error) || error.code !== "ENOENT") throw error;
-		}
+		result = await mutate(throwIfCompromised);
 		throwIfCompromised();
-		if (!outcome) {
-			await (operations.write ?? DEFAULT_FILE_OPERATIONS.write)(
-				temporaryPath,
-				`${JSON.stringify(DEFAULT_SETTINGS, null, 2)}\n`,
-			);
-			throwIfCompromised();
-			try {
-				await (operations.publishExclusive ?? DEFAULT_FILE_OPERATIONS.publishExclusive)(
-					temporaryPath,
-					path,
-				);
-				outcome = "created";
-			} catch (error) {
-				if (!isNodeError(error) || error.code !== "EEXIST") throw error;
-				outcome = "exists";
-			}
-			throwIfCompromised();
-		}
+		completed = true;
 	} catch (error) {
+		operationFailed = true;
 		operationError = error;
-	} finally {
-		await unlink(temporaryPath).catch(() => undefined);
-		try {
-			await release();
-		} catch (error) {
-			if (!compromisedError && !operationError) operationError = error;
+	}
+	try {
+		await release();
+	} catch (error) {
+		if (!compromisedError && !operationFailed) {
+			operationFailed = true;
+			operationError = error;
 		}
 	}
 	if (compromisedError) throw compromisedError;
-	if (operationError) throw operationError;
-	if (!outcome) throw new Error("Settings initialization completed without an outcome.");
-	return outcome;
+	if (operationFailed) throw operationError;
+	if (!completed) throw new Error("Settings mutation completed without a result.");
+	return result as T;
 }
 
-function acquireInitializationLock(
+function acquireSettingsMutationLock(
 	path: string,
 	onCompromised: (error: Error) => void,
 ): Promise<() => Promise<void>> {
 	return lockfile.lock(path, {
 		fs: LOCKFILE_FS_ADAPTER,
-		lockfilePath: `${path}.init-lock`,
+		lockfilePath: `${path}.mutation-lock`,
 		realpath: false,
 		retries: { retries: 20, factor: 1.2, minTimeout: 5, maxTimeout: 50 },
 		onCompromised,
 	});
+}
+
+async function pathEntryExists(path: string): Promise<boolean> {
+	try {
+		await lstat(path);
+		return true;
+	} catch (error) {
+		if (isNodeError(error) && error.code === "ENOENT") return false;
+		throw error;
+	}
 }
 
 function elevatedLimitWarning(settings: WebUISettings): string | undefined {

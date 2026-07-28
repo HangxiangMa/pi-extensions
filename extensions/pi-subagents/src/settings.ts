@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import lockfile from "proper-lockfile";
 import {
 	type AgentConfig,
 	type CompletionDelivery,
@@ -141,6 +142,18 @@ export function normalizeSubagentSettings(value: unknown): SubagentSettings | un
 const SETTINGS_FILE = "pi-subagents.json";
 const LEGACY_SETTINGS_FILE = "pi-subagents-config.json";
 const DEFAULT_COMPLETION_DELIVERY: CompletionDelivery = "next-turn";
+const SETTINGS_LOCK_FS_ADAPTER = {
+	mkdir: fs.mkdir,
+	mkdirSync: fs.mkdirSync,
+	realpath: fs.realpath,
+	realpathSync: fs.realpathSync,
+	rmdir: fs.rmdir,
+	rmdirSync: fs.rmdirSync,
+	stat: fs.stat,
+	statSync: fs.statSync,
+	utimes: fs.utimes,
+	utimesSync: fs.utimesSync,
+};
 let pendingSettingsNotice: string | undefined;
 
 function resolveSubagentSettingsPaths(): {
@@ -309,81 +322,87 @@ export function inspectCompletionDeliverySettings(): CompletionDeliverySettingsS
 export function updateDelegationWorkflowSetting(
 	value: Exclude<DelegationWorkflow, "disabled">,
 ): void {
-	const update = readSettingsObjectForUpdate();
-	const raw = update.document;
-	const blocking = raw.blocking;
-	if (blocking !== undefined && !isPlainObject(blocking)) {
-		throw new Error(`Cannot update invalid ${SETTINGS_FILE} blocking settings`);
-	}
-	const stateful = raw.stateful;
-	if (stateful !== undefined && !isPlainObject(stateful)) {
-		throw new Error(`Cannot update invalid ${SETTINGS_FILE} stateful settings`);
-	}
-	writeSettingsObject(
-		{
-			...raw,
-			blocking: {
-				...(blocking ?? {}),
-				enabled: value !== "async-only",
+	withSettingsMutationLock(() => {
+		const update = readSettingsObjectForUpdate();
+		const raw = update.document;
+		const blocking = raw.blocking;
+		if (blocking !== undefined && !isPlainObject(blocking)) {
+			throw new Error(`Cannot update invalid ${SETTINGS_FILE} blocking settings`);
+		}
+		const stateful = raw.stateful;
+		if (stateful !== undefined && !isPlainObject(stateful)) {
+			throw new Error(`Cannot update invalid ${SETTINGS_FILE} stateful settings`);
+		}
+		writeSettingsObjectUnlocked(
+			{
+				...raw,
+				blocking: {
+					...(blocking ?? {}),
+					enabled: value !== "async-only",
+				},
+				stateful: {
+					...(stateful ?? {}),
+					enabled: value !== "blocking-only",
+				},
 			},
-			stateful: {
-				...(stateful ?? {}),
-				enabled: value !== "blocking-only",
-			},
-		},
-		update.replaceCanonical,
-	);
+			update.replaceCanonical,
+		);
+	});
 }
 
 export function updateCompletionDeliverySetting(value: CompletionDelivery): void {
-	const update = readSettingsObjectForUpdate();
-	const raw = update.document;
-	const stateful = raw.stateful;
-	if (stateful !== undefined && !isPlainObject(stateful)) {
-		throw new Error(`Cannot update invalid ${SETTINGS_FILE} stateful settings`);
-	}
-	writeSettingsObject(
-		{
-			...raw,
-			stateful: {
-				...(stateful ?? {}),
-				completionDelivery: value,
+	withSettingsMutationLock(() => {
+		const update = readSettingsObjectForUpdate();
+		const raw = update.document;
+		const stateful = raw.stateful;
+		if (stateful !== undefined && !isPlainObject(stateful)) {
+			throw new Error(`Cannot update invalid ${SETTINGS_FILE} stateful settings`);
+		}
+		writeSettingsObjectUnlocked(
+			{
+				...raw,
+				stateful: {
+					...(stateful ?? {}),
+					completionDelivery: value,
+				},
 			},
-		},
-		update.replaceCanonical,
-	);
+			update.replaceCanonical,
+		);
+	});
 }
 
 export function updateAgentToolsSetting(name: string, tools: string[] | undefined): void {
-	const update = readSettingsObjectForUpdate();
-	const raw = update.document;
-	const rawAgents = raw.agents;
-	if (rawAgents !== undefined && !isPlainObject(rawAgents)) {
-		throw new Error(`Cannot update invalid ${SETTINGS_FILE} agent settings`);
-	}
-	const agents = { ...(rawAgents ?? {}) };
-	const rawAgent = hasOwn(agents, name) ? agents[name] : undefined;
-	if (rawAgent !== undefined && !isPlainObject(rawAgent)) {
-		throw new Error(`Cannot update invalid ${SETTINGS_FILE} settings for ${name}`);
-	}
-	const agent = { ...(rawAgent ?? {}) };
-	if (tools === undefined) delete agent.tools;
-	else agent.tools = tools;
-	if (Object.keys(agent).length > 0) {
-		Object.defineProperty(agents, name, {
-			value: agent,
-			enumerable: true,
-			configurable: true,
-			writable: true,
-		});
-	} else {
-		delete agents[name];
-	}
+	withSettingsMutationLock(() => {
+		const update = readSettingsObjectForUpdate();
+		const raw = update.document;
+		const rawAgents = raw.agents;
+		if (rawAgents !== undefined && !isPlainObject(rawAgents)) {
+			throw new Error(`Cannot update invalid ${SETTINGS_FILE} agent settings`);
+		}
+		const agents = { ...(rawAgents ?? {}) };
+		const rawAgent = hasOwn(agents, name) ? agents[name] : undefined;
+		if (rawAgent !== undefined && !isPlainObject(rawAgent)) {
+			throw new Error(`Cannot update invalid ${SETTINGS_FILE} settings for ${name}`);
+		}
+		const agent = { ...(rawAgent ?? {}) };
+		if (tools === undefined) delete agent.tools;
+		else agent.tools = tools;
+		if (Object.keys(agent).length > 0) {
+			Object.defineProperty(agents, name, {
+				value: agent,
+				enumerable: true,
+				configurable: true,
+				writable: true,
+			});
+		} else {
+			delete agents[name];
+		}
 
-	const updated = { ...raw };
-	if (Object.keys(agents).length > 0) updated.agents = agents;
-	else delete updated.agents;
-	writeSettingsObject(updated, update.replaceCanonical);
+		const updated = { ...raw };
+		if (Object.keys(agents).length > 0) updated.agents = agents;
+		else delete updated.agents;
+		writeSettingsObjectUnlocked(updated, update.replaceCanonical);
+	});
 }
 
 interface SettingsObjectForUpdate {
@@ -408,6 +427,10 @@ function readSettingsObjectForUpdate(): SettingsObjectForUpdate {
 }
 
 function writeSettingsObject(settings: object, replaceCanonical?: boolean): void {
+	withSettingsMutationLock(() => writeSettingsObjectUnlocked(settings, replaceCanonical));
+}
+
+function writeSettingsObjectUnlocked(settings: object, replaceCanonical?: boolean): void {
 	const agentDir = getAgentDir();
 	fs.mkdirSync(agentDir, { recursive: true });
 	const configPath = path.join(agentDir, SETTINGS_FILE);
@@ -420,24 +443,32 @@ function writeSettingsObject(settings: object, replaceCanonical?: boolean): void
 			encoding: "utf8",
 			flag: "wx",
 		});
-		if (firstCanonicalPublication) {
-			try {
-				fs.copyFileSync(tempFile, configPath, fs.constants.COPYFILE_EXCL);
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-					throw new Error(`${SETTINGS_FILE} was created concurrently; reopen settings and retry`);
-				}
-				throw error;
-			}
-		} else {
-			fs.renameSync(tempFile, configPath);
+		if (firstCanonicalPublication && pathEntryExists(configPath)) {
+			throw new Error(`${SETTINGS_FILE} was created concurrently; reopen settings and retry`);
 		}
+		fs.renameSync(tempFile, configPath);
 	} finally {
 		try {
 			fs.rmSync(tempFile, { force: true });
 		} catch {
 			// Preserve the save result if best-effort temp cleanup fails.
 		}
+	}
+}
+
+function withSettingsMutationLock<T>(mutate: () => T): T {
+	const agentDir = getAgentDir();
+	fs.mkdirSync(agentDir, { recursive: true });
+	const configPath = path.join(agentDir, SETTINGS_FILE);
+	const release = lockfile.lockSync(configPath, {
+		fs: SETTINGS_LOCK_FS_ADAPTER,
+		lockfilePath: `${configPath}.mutation-lock`,
+		realpath: false,
+	});
+	try {
+		return mutate();
+	} finally {
+		release();
 	}
 }
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -290,6 +290,66 @@ test("compromised init locks reject normally after temporary and lock cleanup", 
 	}
 });
 
+test("init renames one complete temporary while holding the settings mutation lock", async () => {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-webui-settings-publication-"));
+	const settingsPath = path.join(directory, "pi-webui.json");
+	let locked = false;
+	let publicationObserved = false;
+	try {
+		assert.equal(
+			await initializeSettings(settingsPath, {
+				lock: async () => {
+					assert.equal(locked, false);
+					locked = true;
+					return async () => {
+						locked = false;
+					};
+				},
+				rename: async (source, destination) => {
+					assert.equal(locked, true);
+					assert.equal(
+						await readFile(source, "utf8"),
+						`${JSON.stringify(DEFAULT_SETTINGS, null, 2)}\n`,
+					);
+					publicationObserved = true;
+					await rename(source, destination);
+				},
+			}),
+			"created",
+		);
+		assert.equal(publicationObserved, true);
+		assert.equal(locked, false);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("save holds the settings mutation lock through reread and rename", async () => {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-webui-settings-save-lock-"));
+	const settingsPath = path.join(directory, "pi-webui.json");
+	let locked = false;
+	try {
+		await writeFile(settingsPath, "{}\n");
+		await saveSettings({ startOnSessionStart: true }, {}, settingsPath, {
+			lock: async () => {
+				assert.equal(locked, false);
+				locked = true;
+				return async () => {
+					locked = false;
+				};
+			},
+			rename: async (source, destination) => {
+				assert.equal(locked, true);
+				await rename(source, destination);
+			},
+		});
+		assert.equal(locked, false);
+		assert.equal(JSON.parse(await readFile(settingsPath, "utf8")).startOnSessionStart, true);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("concurrent init calls publish one complete default document", async () => {
 	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-webui-settings-"));
 	const settingsPath = path.join(directory, "pi-webui.json");
@@ -319,7 +379,7 @@ test("failed init publish leaves no canonical or temporary file", async () => {
 		await assert.rejects(
 			() =>
 				initializeSettings(settingsPath, {
-					publishExclusive: async () => {
+					rename: async () => {
 						throw Object.assign(new Error("publish failed"), { code: "EACCES" });
 					},
 				}),

@@ -1156,6 +1156,36 @@ test("subagent settings loaders recheck canonical paths after legacy reads", () 
 	}
 });
 
+test("first subagent settings publication renames a complete temporary inside the mutation lock", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-first-publication-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	const settingsPath = path.join(directory, "pi-subagents.json");
+	const expected = { stateful: { enabled: false }, future: true };
+	const originalRenameSync = fs.renameSync;
+	let publicationObserved = false;
+	fs.renameSync = ((source, destination) => {
+		if (path.resolve(String(destination)) === settingsPath) {
+			publicationObserved = true;
+			assert.deepEqual(JSON.parse(readFileSync(source, "utf8")), expected);
+			assert.equal(lstatSync(`${settingsPath}.mutation-lock`).isDirectory(), true);
+		}
+		return originalRenameSync(source, destination);
+	}) as typeof fs.renameSync;
+	syncBuiltinESMExports();
+	try {
+		saveSubagentConfig(expected);
+		assert.equal(publicationObserved, true);
+		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), expected);
+	} finally {
+		fs.renameSync = originalRenameSync;
+		syncBuiltinESMExports();
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
 test("subagent setting controls seed canonical updates from the active legacy document", () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-legacy-update-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -1202,16 +1232,21 @@ test("legacy-seeded updates preserve canonical settings created before publicati
 				const concurrent = { stateful: { completionDelivery: "auto-resume" }, concurrent: true };
 				writeFileSync(legacyPath, JSON.stringify(legacy));
 
-				const originalMkdirSync = fs.mkdirSync;
+				const originalWriteFileSync = fs.writeFileSync;
 				let createCanonical = true;
-				fs.mkdirSync = ((...args: Parameters<typeof fs.mkdirSync>) => {
-					const result = originalMkdirSync(...args);
-					if (createCanonical && path.resolve(String(args[0])) === path.resolve(directory)) {
+				fs.writeFileSync = ((...args: Parameters<typeof fs.writeFileSync>) => {
+					const result = originalWriteFileSync(...args);
+					const writtenPath = path.resolve(String(args[0]));
+					if (
+						createCanonical &&
+						path.dirname(writtenPath) === path.resolve(directory) &&
+						path.basename(writtenPath).startsWith(".pi-subagents.json.")
+					) {
 						createCanonical = false;
-						writeFileSync(canonicalPath, JSON.stringify(concurrent));
+						originalWriteFileSync(canonicalPath, JSON.stringify(concurrent));
 					}
 					return result;
-				}) as typeof fs.mkdirSync;
+				}) as typeof fs.writeFileSync;
 				syncBuiltinESMExports();
 				try {
 					assert.throws(
@@ -1220,7 +1255,7 @@ test("legacy-seeded updates preserve canonical settings created before publicati
 						`${name} should reject the raced-in canonical file`,
 					);
 				} finally {
-					fs.mkdirSync = originalMkdirSync;
+					fs.writeFileSync = originalWriteFileSync;
 					syncBuiltinESMExports();
 				}
 

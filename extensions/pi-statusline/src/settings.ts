@@ -1,14 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-	copyFileSync,
-	constants as fsConstants,
-	lstatSync,
-	mkdirSync,
-	readFileSync,
-	renameSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { INFORMATION_PROFILES } from "./information-profiles.js";
@@ -423,21 +414,21 @@ export function removeStatuslineSettingsDocumentIfMatches(
 	}
 	renameSync(settingsPath, quarantinePath);
 	const quarantined = lstatSync(quarantinePath);
-	if (
+	const quarantinedSavedFile =
 		quarantined.isFile() &&
 		!quarantined.isSymbolicLink() &&
 		quarantined.dev === expectedIdentity.dev &&
-		quarantined.ino === expectedIdentity.ino &&
-		readFileSync(quarantinePath, "utf8") === expectedRawDocument
-	) {
+		quarantined.ino === expectedIdentity.ino;
+	if (quarantinedSavedFile && readFileSync(quarantinePath, "utf8") === expectedRawDocument) {
 		rmSync(quarantinePath);
 		return;
 	}
-	try {
-		copyFileSync(quarantinePath, settingsPath, fsConstants.COPYFILE_EXCL);
-		rmSync(quarantinePath);
-	} catch {
-		// Preserve the quarantine when another writer owns the canonical path or restoration fails.
+	if (quarantinedSavedFile && !pathEntryExists(settingsPath)) {
+		try {
+			renameSync(quarantinePath, settingsPath);
+		} catch {
+			// Keep the quarantine for recovery when its atomic restoration fails.
+		}
 	}
 	throw new Error("Statusline settings changed concurrently; the newer file was preserved");
 }
