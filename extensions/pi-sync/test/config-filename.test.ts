@@ -1,18 +1,36 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	statSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import {
+	activeLocalConfigPath,
 	consumeLocalConfigMigrationNotice,
+	createLocalConfigDocument,
 	legacyLocalConfigPath,
 	localConfigPath,
+	quarantineAndRemoveConfigIfMatches,
+	readActiveLocalConfigDocumentForRepair,
 	readLocalConfigObject,
 	updateLocalConfig,
+	validateSettingsDocument,
 	writeLocalConfigObject,
 } from "../src/config.js";
 import {
+	readMigratingLocalConfigDocument,
 	withConfigFilePublicationForTest,
+	withConfigPublicationReadyHookForTest,
+	withConfigQuarantinedHookForTest,
 	withConfigReplacementInstalledHookForTest,
+	withLocalConfigFileLock,
+	withMissingConfigReadProbeHookForTest,
 } from "../src/config-file.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 
@@ -21,6 +39,160 @@ test("missing pi-sync settings load without materializing the agent directory", 
 		assert.equal(existsSync(agentDir), false);
 		assert.equal(await readLocalConfigObject(), undefined);
 		assert.equal(existsSync(agentDir), false);
+	});
+});
+
+test("missing pi-sync read fast paths wait for an existing first-save mutation lock", async () => {
+	const cases: Array<{
+		name: string;
+		read: () => Promise<unknown>;
+		verify: (result: unknown) => void;
+	}> = [
+		{
+			name: "active path",
+			read: () => activeLocalConfigPath(),
+			verify: (result: unknown) => assert.equal(result, localConfigPath()),
+		},
+		{
+			name: "repair read",
+			read: () => readActiveLocalConfigDocumentForRepair(),
+			verify: (result: unknown) =>
+				assert.equal((result as { parsed?: { version?: number } } | undefined)?.parsed?.version, 3),
+		},
+		{
+			name: "migrating read",
+			read: () => readMigratingLocalConfigDocument(validateSettingsDocument),
+			verify: (result: unknown) =>
+				assert.equal((result as { parsed?: { version?: number } } | undefined)?.parsed?.version, 3),
+		},
+	];
+
+	for (const readCase of cases) {
+		await withTempHome(async () => {
+			let reportLockHeld = () => {};
+			let releaseLock = () => {};
+			const lockHeld = new Promise<void>((resolve) => {
+				reportLockHeld = resolve;
+			});
+			const release = new Promise<void>((resolve) => {
+				releaseLock = resolve;
+			});
+			const blocker = withLocalConfigFileLock(async () => {
+				reportLockHeld();
+				await release;
+			});
+			await lockHeld;
+
+			let reportMissingProbe = () => {};
+			let resumeMissingProbe = () => {};
+			const missingProbeReached = new Promise<void>((resolve) => {
+				reportMissingProbe = resolve;
+			});
+			const resumeProbe = new Promise<void>((resolve) => {
+				resumeMissingProbe = resolve;
+			});
+			let settled = false;
+			const read = withMissingConfigReadProbeHookForTest(async () => {
+				reportMissingProbe();
+				await resumeProbe;
+			}, readCase.read).finally(() => {
+				settled = true;
+			});
+			await missingProbeReached;
+			resumeMissingProbe();
+			writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			const settledBeforeSaveReleased = settled;
+			releaseLock();
+			await blocker;
+			const result = await read;
+
+			assert.equal(
+				settledBeforeSaveReleased,
+				false,
+				`${readCase.name} did not wait for the first save`,
+			);
+			readCase.verify(result);
+		});
+	}
+});
+
+test("exclusive first publication preserves settings raced in at the publication boundary", async () => {
+	await withTempHome(async (agentDir) => {
+		const concurrent = Buffer.from(`${JSON.stringify(v3S3Settings({ path: "concurrent" }))}\n`);
+		await assert.rejects(
+			withConfigPublicationReadyHookForTest(
+				async () => {
+					writeFileSync(localConfigPath(), concurrent, { mode: 0o600 });
+				},
+				() => createLocalConfigDocument(v3S3Settings({ path: "first-save" })),
+			),
+			/created concurrently/u,
+		);
+		assert.deepEqual(readFileSync(localConfigPath()), concurrent);
+		assert.equal(
+			readdirSync(agentDir).some((name) => name.endsWith(".migrate")),
+			false,
+		);
+	});
+});
+
+test("failed replacement retains quarantine without replacing raced-in settings", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const before = Buffer.from(`${JSON.stringify(v3S3Settings({ path: "before" }))}\n`);
+		const concurrent = Buffer.from(`${JSON.stringify(v3S3Settings({ path: "concurrent" }))}\n`);
+		writeFileSync(localConfigPath(), before, { mode: 0o600 });
+		await assert.rejects(
+			withConfigFilePublicationForTest(
+				async (_source, destination) => {
+					writeFileSync(destination, concurrent, { mode: 0o600 });
+					throw Object.assign(new Error("concurrent publication"), { code: "EEXIST" });
+				},
+				() => updateLocalConfig((settings) => ({ ...settings, onSwitch: "switch-only" })),
+			),
+			/changed concurrently/u,
+		);
+		assert.deepEqual(readFileSync(localConfigPath()), concurrent);
+		const quarantines = readdirSync(agentDir).filter((name) =>
+			name.endsWith(".schema-migration-source"),
+		);
+		assert.equal(quarantines.length, 1);
+		assert.deepEqual(readFileSync(path.join(agentDir, quarantines[0])), before);
+	});
+});
+
+test("quarantine cleanup never restores over settings raced in after removal", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const before = Buffer.from(`${JSON.stringify(v3S3Settings({ path: "before" }))}\n`);
+		const changedQuarantine = Buffer.from(
+			`${JSON.stringify(v3S3Settings({ path: "changed-quarantine" }))}\n`,
+		);
+		const concurrent = Buffer.from(`${JSON.stringify(v3S3Settings({ path: "concurrent" }))}\n`);
+		writeFileSync(localConfigPath(), before, { mode: 0o600 });
+		const identity = statSync(localConfigPath());
+		const removed = await withConfigQuarantinedHookForTest(
+			async () => {
+				const quarantine = readdirSync(agentDir).find((name) =>
+					name.endsWith(".migration-retired"),
+				);
+				assert.ok(quarantine);
+				writeFileSync(path.join(agentDir, quarantine), changedQuarantine, { mode: 0o600 });
+				writeFileSync(localConfigPath(), concurrent, { mode: 0o600 });
+			},
+			() =>
+				quarantineAndRemoveConfigIfMatches(
+					localConfigPath(),
+					{ dev: identity.dev, ino: identity.ino },
+					before,
+				),
+		);
+		assert.equal(removed, false);
+		assert.deepEqual(readFileSync(localConfigPath()), concurrent);
+		const quarantines = readdirSync(agentDir).filter((name) => name.endsWith(".migration-retired"));
+		assert.equal(quarantines.length, 1);
+		assert.deepEqual(readFileSync(path.join(agentDir, quarantines[0])), changedQuarantine);
 	});
 });
 

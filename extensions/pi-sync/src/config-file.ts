@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+	constants as fsConstants,
 	mkdir,
 	mkdirSync,
 	realpath,
@@ -37,6 +38,8 @@ const LOCKFILE_FS_ADAPTER = {
 
 type PublishFile = (source: string, destination: string) => Promise<void>;
 let publishConfigFile: PublishFile = publishFileWithoutReplacement;
+let beforeConfigPublicationHook: () => Promise<void> = async () => undefined;
+let afterMissingConfigReadProbeHook: () => Promise<void> = async () => undefined;
 let afterReplacementInstalledHook: () => Promise<void> = async () => undefined;
 let afterConfigQuarantinedHook: () => Promise<void> = async () => undefined;
 
@@ -52,6 +55,32 @@ export async function withConfigFilePublicationForTest<T>(
 		return await run();
 	} finally {
 		publishConfigFile = previous;
+	}
+}
+
+export async function withConfigPublicationReadyHookForTest<T>(
+	hook: () => Promise<void>,
+	run: () => Promise<T>,
+): Promise<T> {
+	const previous = beforeConfigPublicationHook;
+	beforeConfigPublicationHook = hook;
+	try {
+		return await run();
+	} finally {
+		beforeConfigPublicationHook = previous;
+	}
+}
+
+export async function withMissingConfigReadProbeHookForTest<T>(
+	hook: () => Promise<void>,
+	run: () => Promise<T>,
+): Promise<T> {
+	const previous = afterMissingConfigReadProbeHook;
+	afterMissingConfigReadProbeHook = hook;
+	try {
+		return await run();
+	} finally {
+		afterMissingConfigReadProbeHook = previous;
 	}
 }
 
@@ -100,8 +129,7 @@ export function legacyLocalConfigPath() {
 export async function activeLocalConfigPath() {
 	const canonicalPath = localConfigPath();
 	const legacyPath = legacyLocalConfigPath();
-	if (!(await pathExists(canonicalPath)) && !(await pathExists(legacyPath))) return canonicalPath;
-	return withLocalConfigFileLock(async () => {
+	return withLocalConfigReadLockIfNeeded(async () => {
 		if (await pathExists(canonicalPath)) return canonicalPath;
 		return (await pathExists(legacyPath)) ? legacyPath : canonicalPath;
 	});
@@ -119,8 +147,7 @@ export async function readActiveLocalConfigDocumentForRepair(): Promise<
 > {
 	const canonicalPath = localConfigPath();
 	const legacyPath = legacyLocalConfigPath();
-	if (!(await pathExists(canonicalPath)) && !(await pathExists(legacyPath))) return undefined;
-	return withLocalConfigFileLock(async () => {
+	return withLocalConfigReadLockIfNeeded(async () => {
 		const filePath = (await pathExists(canonicalPath)) ? canonicalPath : legacyPath;
 		const snapshot = await readConfigSnapshotIfExists(filePath);
 		return snapshot ? { path: filePath, ...snapshot } : undefined;
@@ -130,14 +157,20 @@ export async function readActiveLocalConfigDocumentForRepair(): Promise<
 export async function readMigratingLocalConfigDocument(
 	validateForMigration: (settings: Record<string, unknown>) => void,
 ): Promise<LocalConfigDocument | undefined> {
-	if (!(await pathExists(localConfigPath())) && !(await pathExists(legacyLocalConfigPath()))) {
-		return undefined;
-	}
-	return withLocalConfigFileLock(async () => {
+	return withLocalConfigReadLockIfNeeded(async () => {
 		const configPath = await prepareLocalConfigPath(validateForMigration);
 		const snapshot = await readConfigSnapshotIfExists(configPath);
 		return snapshot ? { path: configPath, ...snapshot } : undefined;
 	});
+}
+
+async function withLocalConfigReadLockIfNeeded<T>(read: () => Promise<T>): Promise<T> {
+	if ((await pathExists(localConfigPath())) || (await pathExists(legacyLocalConfigPath()))) {
+		return withLocalConfigFileLock(read);
+	}
+	await afterMissingConfigReadProbeHook();
+	if (await pathExists(configMutationLockPath())) return withLocalConfigFileLock(read);
+	return read();
 }
 
 export function updateLocalConfigDocument<T extends Record<string, unknown>>(
@@ -510,23 +543,25 @@ async function fileIdentityAndContentsMatch(
 
 async function restoreQuarantinedConfig(filePath: string, quarantinePath: string) {
 	try {
-		await fs.rename(quarantinePath, filePath);
+		await copyFileWithoutReplacement(quarantinePath, filePath);
+		if (process.platform !== "win32") await fs.chmod(filePath, 0o600);
+		await syncParentDirectory(filePath);
+		await fs.rm(quarantinePath);
 		await syncParentDirectory(filePath);
 		return;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EEXIST") return;
 	}
 	try {
-		const [current, quarantined] = await Promise.all([
-			fs.readFile(filePath),
-			fs.readFile(quarantinePath),
-		]);
-		if (current.equals(quarantined)) await fs.rm(quarantinePath);
-		else if (process.platform !== "win32") await fs.chmod(quarantinePath, 0o600);
+		if (process.platform !== "win32") await fs.chmod(quarantinePath, 0o600);
 		await syncParentDirectory(filePath);
 	} catch {
 		// Preserve the quarantine rather than risk deleting settings that changed concurrently.
 	}
+}
+
+function configMutationLockPath() {
+	return `${localConfigPath()}.mutation-lock`;
 }
 
 export async function withLocalConfigFileLock<T>(run: () => Promise<T>): Promise<T> {
@@ -535,7 +570,7 @@ export async function withLocalConfigFileLock<T>(run: () => Promise<T>): Promise
 	let compromisedError: Error | undefined;
 	const release = await lockfile.lock(configPath, {
 		fs: LOCKFILE_FS_ADAPTER,
-		lockfilePath: `${configPath}.mutation-lock`,
+		lockfilePath: configMutationLockPath(),
 		realpath: false,
 		stale: CONFIG_LOCK_STALE_MS,
 		update: CONFIG_LOCK_UPDATE_MS,
@@ -565,10 +600,13 @@ async function syncParentDirectory(filePath: string) {
 }
 
 async function publishFileWithoutReplacement(source: string, destination: string) {
-	if (await pathExists(destination)) {
-		throw Object.assign(new Error(`Settings already exist: ${destination}`), { code: "EEXIST" });
-	}
-	await fs.rename(source, destination);
+	await beforeConfigPublicationHook();
+	await copyFileWithoutReplacement(source, destination);
+}
+
+async function copyFileWithoutReplacement(source: string, destination: string) {
+	// COPYFILE_EXCL is a portable no-replace operation and does not require Android-blocked hard links.
+	await fs.copyFile(source, destination, fsConstants.COPYFILE_EXCL);
 }
 
 async function pathExists(filePath: string) {
