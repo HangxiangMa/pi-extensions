@@ -94,7 +94,7 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
 	) {}
 
 	read<T>(reader: (current: string | undefined) => T): T {
-		if (!pathEntryExists(this.filePath)) return reader(undefined);
+		if (!this.fileOrLockExistsForRead()) return reader(undefined);
 		let release: (() => void) | undefined;
 		try {
 			release = this.acquireLockSyncWithRetry();
@@ -105,12 +105,23 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
 	}
 
 	async readAsync<T>(reader: (current: string | undefined) => Promise<T>): Promise<T> {
-		if (!pathEntryExists(this.filePath)) return reader(undefined);
-		const release = await this.acquireLockAsync();
+		if (!this.fileOrLockExistsForRead()) return reader(undefined);
+		let release: (() => Promise<void>) | undefined;
+		let compromisedError: Error | undefined;
+		const throwIfCompromised = () => {
+			if (compromisedError) throw compromisedError;
+		};
+
 		try {
-			return await reader(readPrivateRegularFileIfExists(this.filePath));
+			release = await this.acquireLockAsync((error) => {
+				compromisedError = error;
+			});
+			throwIfCompromised();
+			const result = await reader(readPrivateRegularFileIfExists(this.filePath));
+			throwIfCompromised();
+			return result;
 		} finally {
-			await release().catch(() => undefined);
+			if (release) await release().catch(() => undefined);
 		}
 	}
 
@@ -158,16 +169,22 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
 		}
 	}
 
+	private fileOrLockExistsForRead(): boolean {
+		if (pathEntryExists(this.filePath)) return true;
+		if (pathEntryExists(`${this.filePath}.lock`)) return true;
+		// Close the publication race between checking the file and its lock.
+		return pathEntryExists(this.filePath);
+	}
+
 	private ensureParentDirectory(): void {
 		const parent = dirname(this.filePath);
 		mkdirSync(parent, { recursive: true, mode: 0o700 });
 		chmodSync(parent, 0o700);
 	}
 
-	private acquireLockAsync(onCompromised?: (error: Error) => void) {
+	private acquireLockAsync(onCompromised: (error: Error) => void) {
 		return lockfile.lock(this.filePath, {
 			fs: LOCKFILE_FS_ADAPTER,
-			lockfilePath: `${this.filePath}.mutation-lock`,
 			realpath: false,
 			retries: {
 				retries: 10,
@@ -177,7 +194,7 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
 				randomize: true,
 			},
 			stale: 30_000,
-			...(onCompromised ? { onCompromised } : {}),
+			onCompromised,
 		});
 	}
 
@@ -188,7 +205,6 @@ export class FileAccountStorageBackend implements AccountStorageBackend {
 			try {
 				return lockfile.lockSync(this.filePath, {
 					fs: LOCKFILE_FS_ADAPTER,
-					lockfilePath: `${this.filePath}.mutation-lock`,
 					realpath: false,
 				});
 			} catch (error) {

@@ -1,9 +1,20 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { chmod, lstat, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	lstat,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	symlink,
+	utimes,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import lockfile from "proper-lockfile";
 import {
 	ACCOUNTS_FILE,
 	AccountStore,
@@ -124,12 +135,134 @@ test("missing account storage reads as empty without materializing its directory
 	const file = join(agentDir, ACCOUNTS_FILE);
 	try {
 		const store = new AccountStore(new FileAccountStorageBackend(file));
-		const loaded = await store.readAsync();
-		assert.equal(loaded.version, 1);
-		assert.deepEqual(Object.keys(loaded.providers), []);
+		const loadedSync = store.read();
+		const loadedAsync = await store.readAsync();
+		assert.equal(loadedSync.version, 1);
+		assert.deepEqual(Object.keys(loadedSync.providers), []);
+		assert.deepEqual(loadedAsync, loadedSync);
 		assert.equal(existsSync(agentDir), false);
 	} finally {
 		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("account storage keeps the previous version's default lock path", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-accounts-store-compatible-lock-"));
+	const file = join(dir, ACCOUNTS_FILE);
+	const legacyLock = `${file}.lock`;
+	try {
+		await mkdir(legacyLock);
+		const backend = new FileAccountStorageBackend(file);
+		let entered = false;
+		const write = backend.withLockAsync(async () => {
+			entered = true;
+			return { result: undefined, next: "published" };
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		const enteredWhileLegacyLockHeld = entered;
+		await rm(legacyLock, { recursive: true });
+		await write;
+
+		assert.equal(enteredWhileLegacyLockHeld, false);
+		assert.equal(await readFile(file, "utf8"), "published");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("sync missing account reads wait on an existing default lock", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-accounts-store-compatible-sync-lock-"));
+	const file = join(dir, ACCOUNTS_FILE);
+	try {
+		await mkdir(`${file}.lock`);
+		const backend = new FileAccountStorageBackend(file, { syncLockTimeoutMs: 20 });
+		let entered = false;
+
+		assert.throws(
+			() =>
+				backend.read(() => {
+					entered = true;
+				}),
+			(error: unknown) => error instanceof Error && "code" in error && error.code === "ELOCKED",
+		);
+		assert.equal(entered, false);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("missing account reads wait for an in-progress first write", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-accounts-store-first-write-"));
+	const file = join(dir, ACCOUNTS_FILE);
+	try {
+		const backend = new FileAccountStorageBackend(file);
+		let allowWrite: () => void = () => undefined;
+		const writeAllowed = new Promise<void>((resolve) => {
+			allowWrite = resolve;
+		});
+		let markWriteEntered: () => void = () => undefined;
+		const writeEntered = new Promise<void>((resolve) => {
+			markWriteEntered = resolve;
+		});
+		const write = backend.withLockAsync(async () => {
+			markWriteEntered();
+			await writeAllowed;
+			return { result: undefined, next: "published" };
+		});
+		await writeEntered;
+
+		let readSettled = false;
+		const read = backend
+			.readAsync(async (current) => current)
+			.finally(() => {
+				readSettled = true;
+			});
+		await new Promise((resolve) => setImmediate(resolve));
+		const settledWhileWriteHeld = readSettled;
+		allowWrite();
+		await write;
+
+		assert.equal(settledWhileWriteHeld, false);
+		assert.equal(await read, "published");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("async account reads reject contained lock compromise errors", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-accounts-store-compromised-read-"));
+	const file = join(dir, ACCOUNTS_FILE);
+	try {
+		await writeFile(file, "published", { mode: 0o600 });
+		const backend = new FileAccountStorageBackend(file);
+		const lockOwner = backend as unknown as {
+			acquireLockAsync(onCompromised?: (error: Error) => void): Promise<() => Promise<void>>;
+		};
+		lockOwner.acquireLockAsync = (onCompromised) =>
+			lockfile.lock(file, {
+				realpath: false,
+				stale: 2_000,
+				update: 1_000,
+				...(onCompromised ? { onCompromised } : {}),
+			});
+		let markReaderEntered: () => void = () => undefined;
+		const readerEntered = new Promise<void>((resolve) => {
+			markReaderEntered = resolve;
+		});
+		const read = backend.readAsync(async () => {
+			markReaderEntered();
+			await new Promise((resolve) => setTimeout(resolve, 1_200));
+			return "read";
+		});
+		await readerEntered;
+		await rm(`${file}.lock`, { recursive: true });
+
+		await assert.rejects(read, (error: unknown) => {
+			return error instanceof Error && "code" in error && error.code === "ECOMPROMISED";
+		});
+	} finally {
+		await rm(dir, { recursive: true, force: true });
 	}
 });
 
