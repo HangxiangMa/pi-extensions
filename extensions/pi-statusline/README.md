@@ -8,12 +8,12 @@ without setup and keeps useful context visible as the terminal narrows.
 A representative uncolored layout:
 
 ```text
-░▒▓ 🤖 sonnet-4 🧠 high 📁 pi-extensions 🌿 main ~2 🪟 ctx 42% 💸 $0.184
+░▒▓ 🤖 sonnet-4 🧠 high 📁 pi-extensions 🌿 main ~2 🪟 ctx 42% 🕒 16:42
 ```
 
 ## ✨ Features
 
-- **Zero-config default:** model, thinking, workspace, Git/PR state, context use, and cost.
+- **Zero-config default:** model, thinking, workspace, Git/PR state, context use, and local time.
 - **Responsive:** removes lower-priority segments before important information gets clipped.
 - **Quiet when idle:** activity appears only while Pi is streaming or running tools.
 - **Easy choices:** three information levels and seven previewable color presets.
@@ -73,7 +73,7 @@ preserved.
 | Level | Included segments |
 | --- | --- |
 | **Minimal** | `model cwd branch context` |
-| **Balanced** (default) | `model thinking cwd branch tools context cost` |
+| **Balanced** (default) | `model thinking cwd branch tools context time` |
 | **Detailed** | `provider model thinking cwd branch tools context tokens cost time` |
 | **Custom** | Any other segment order, including explicit line breaks |
 

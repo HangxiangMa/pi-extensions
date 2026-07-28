@@ -70,7 +70,8 @@ test("balanced footer fits common widths and keeps context visible at narrow wid
 		assert.match(wide, /sonnet-4/u);
 		assert.match(wide, /pi-extensions/u);
 		assert.match(wide, /main/u);
-		assert.match(wide, /💸/u);
+		assert.match(wide, /🕒/u);
+		assert.doesNotMatch(wide, /💸/u);
 		assert.doesNotMatch(wide, /💤|✅/u);
 	} finally {
 		footer.dispose();
