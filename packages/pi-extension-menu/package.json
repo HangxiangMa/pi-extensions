@@ -1,0 +1,51 @@
+{
+	"name": "@narumitw/pi-extension-menu",
+	"version": "0.35.0",
+	"description": "Declarative menu runtime for Pi extensions.",
+	"type": "module",
+	"license": "MIT",
+	"private": false,
+	"sideEffects": false,
+	"keywords": [
+		"pi",
+		"pi-extension",
+		"menu",
+		"tui",
+		"library"
+	],
+	"files": [
+		"dist",
+		"README.md",
+		"LICENSE"
+	],
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"scripts": {
+		"build": "node ./scripts/build.mjs",
+		"prepack": "npm run build",
+		"check": "biome check src test scripts package.json tsconfig.json tsconfig.build.json && npm run typecheck && npm run build",
+		"format": "biome check --write src test scripts package.json tsconfig.json tsconfig.build.json",
+		"typecheck": "tsc --noEmit"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": ">=0.82.0 <1",
+		"@earendil-works/pi-tui": ">=0.82.0 <1"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.5",
+		"@earendil-works/pi-coding-agent": "0.82.1",
+		"@earendil-works/pi-tui": "0.82.1",
+		"typescript": "7.0.2"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/narumiruna/pi-extensions",
+		"directory": "packages/pi-extension-menu"
+	}
+}
