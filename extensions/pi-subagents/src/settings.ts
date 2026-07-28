@@ -379,18 +379,40 @@ function writeSettingsObject(settings: object): void {
 	fs.mkdirSync(agentDir, { recursive: true });
 	const configPath = path.join(agentDir, SETTINGS_FILE);
 	const tempFile = path.join(agentDir, `.${SETTINGS_FILE}.${randomUUID()}.tmp`);
+	const firstCanonicalPublication = !pathEntryExists(configPath);
 	try {
 		fs.writeFileSync(tempFile, `${JSON.stringify(settings, null, "\t")}\n`, {
 			encoding: "utf8",
 			flag: "wx",
 		});
-		fs.renameSync(tempFile, configPath);
+		if (firstCanonicalPublication) {
+			try {
+				fs.copyFileSync(tempFile, configPath, fs.constants.COPYFILE_EXCL);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+					throw new Error(`${SETTINGS_FILE} was created concurrently; reopen settings and retry`);
+				}
+				throw error;
+			}
+		} else {
+			fs.renameSync(tempFile, configPath);
+		}
 	} finally {
 		try {
 			fs.rmSync(tempFile, { force: true });
 		} catch {
 			// Preserve the save result if best-effort temp cleanup fails.
 		}
+	}
+}
+
+function pathEntryExists(filePath: string): boolean {
+	try {
+		fs.lstatSync(filePath);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
 	}
 }
 

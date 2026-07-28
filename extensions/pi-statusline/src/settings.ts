@@ -375,6 +375,21 @@ export function saveStatuslineSettingsDocument(
 	};
 }
 
+export function removeStatuslineSettingsDocumentIfMatches(
+	settingsPath: string,
+	expectedRawDocument: string,
+): void {
+	const info = lstatSync(settingsPath);
+	if (
+		!info.isFile() ||
+		info.isSymbolicLink() ||
+		readFileSync(settingsPath, "utf8") !== expectedRawDocument
+	) {
+		throw new Error("Statusline settings changed concurrently; the newer file was preserved");
+	}
+	rmSync(settingsPath);
+}
+
 export function consumeStatuslineSettingsNotice(): string | undefined {
 	const notice = pendingSettingsNotice;
 	pendingSettingsNotice = undefined;

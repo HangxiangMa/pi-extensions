@@ -153,6 +153,47 @@ test("fresh explicit statusline controls seed their first save without passive c
 	}
 });
 
+test("failed first-run statusline application restores the missing file", async (t) => {
+	for (const scenario of [
+		{ name: "appearance", menuIndex: 0 },
+		{ name: "information", menuIndex: 1 },
+	] as const) {
+		await t.test(scenario.name, async () => {
+			const root = mkdtempSync(join(tmpdir(), "pi-statusline-first-rollback-"));
+			const path = settingsFilePath(root);
+			try {
+				let loaded = loadStatuslineSettings(path);
+				const mock = createMockPi();
+				registerStatuslineCommand(mock.pi, {
+					settingsPath: path,
+					getLoaded: () => loaded,
+					apply(next) {
+						if (next.source === "user") throw new Error("footer rejected settings");
+						loaded = next;
+					},
+				});
+				const context = createMockContext({
+					mode: "tui",
+					select: (title: string, choices: string[]) =>
+						title === "pi-statusline" ? choices[scenario.menuIndex] : undefined,
+					custom: customPalettePicker(["\r"]),
+				});
+
+				await mock.commands.get("statusline")?.handler("", context.ctx);
+
+				assert.equal(existsSync(path), false);
+				assert.equal(loaded.source, "built-in");
+				assert.match(
+					context.notifications.at(-1)?.message ?? "",
+					/could not be applied|not saved/iu,
+				);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+	}
+});
+
 test("segment menu toggles displayed segments and preserves JSON fields and layout order", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
 	const path = settingsFilePath(root);

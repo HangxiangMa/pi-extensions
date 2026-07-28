@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { parse, type TomlTable } from "smol-toml";
 import {
@@ -434,11 +442,20 @@ export function atomicRestoreConfigDocument(
 	atomicWriteConfigDocument(settingsPath, rawDocument, overrides);
 }
 
-export function removeConfigDocument(
+export function removeConfigDocumentIfMatches(
 	settingsPath: string,
+	expectedRawDocument: string,
 	overrides: Pick<Partial<AtomicFileSystem>, "rmSync"> = {},
 ) {
-	(overrides.rmSync ?? rmSync)(settingsPath, { force: true });
+	const info = lstatSync(settingsPath);
+	if (
+		!info.isFile() ||
+		info.isSymbolicLink() ||
+		readFileSync(settingsPath, "utf8") !== expectedRawDocument
+	) {
+		throw new Error("Starship settings changed concurrently; the newer file was preserved");
+	}
+	(overrides.rmSync ?? rmSync)(settingsPath);
 }
 
 function atomicWriteConfigDocument(
