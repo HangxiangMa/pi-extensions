@@ -231,6 +231,50 @@ test("RPC choices preserve item identity across duplicate and exit labels", asyn
 	assert.equal(selectCalls, 3);
 });
 
+test("an owner signal dismisses an unanswered RPC selector", async () => {
+	const owner = new AbortController();
+	let releaseFallback: (() => void) | undefined;
+	let reportOpened: (() => void) | undefined;
+	let selectorSettled = false;
+	const fallback = new Promise<void>((resolve) => {
+		releaseFallback = resolve;
+	});
+	const opened = new Promise<void>((resolve) => {
+		reportOpened = resolve;
+	});
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		select: async (
+			_title: string,
+			_choices: string[],
+			dialogOptions?: { signal?: AbortSignal },
+		) => {
+			reportOpened?.();
+			if (dialogOptions?.signal) {
+				await new Promise<void>((resolve) => {
+					if (dialogOptions.signal?.aborted) resolve();
+					else dialogOptions.signal?.addEventListener("abort", () => resolve(), { once: true });
+				});
+			} else await fallback;
+			selectorSettled = true;
+			return undefined;
+		},
+	});
+	const running = runMenu(context.ctx, runtimeMenu(), {
+		getState: () => ({ count: 0 }),
+		signal: owner.signal,
+	});
+	await opened;
+	owner.abort(new DOMException("Session replaced", "AbortError"));
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	const settledBeforeFallback = selectorSettled;
+	releaseFallback?.();
+
+	assert.equal(settledBeforeFallback, true);
+	assert.deepEqual(await running, { kind: "stale" });
+});
+
 test("a stale action continuation cannot render another screen or report success", async () => {
 	let current = true;
 	let release: (() => void) | undefined;

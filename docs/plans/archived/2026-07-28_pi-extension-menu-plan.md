@@ -126,8 +126,8 @@ Each extension continues to own:
 ## Assumptions
 
 - The initial public API may evolve while the package remains pre-1, but versions accepted by the
-  initial `<1` consumer range remain backward compatible; a breaking redesign requires narrowing or
-  updating consumer ranges before release.
+  initial `<1` consumer range remain backward compatible. Shared major bumps advance internal
+  workspace upper bounds so newly published consumers admit their matching library major.
 - Standard action/detail/settings/multi-select screens cover the common manager-extension path;
   extensions with genuinely specialized interaction may continue using Pi components directly.
 - Chrome DevTools and Firecrawl are sufficient production pilots for the first package release;
@@ -254,9 +254,10 @@ Each extension continues to own:
       removed; its focused characterization/integration suite and workspace typecheck pass.
 
 - [x] Add `@narumitw/pi-extension-menu` as a runtime dependency of both pilot manifests with the
-      documented `<1` compatibility bound and regenerate the lockfile. Evidence: scoped `npm ls` for
-      the library and both pilots resolves one deduplicated workspace helper and Pi `0.82.1` peers;
-      the pilot pack inventories contain source and dependency metadata without bundled Pi packages.
+      current-major `<1` compatibility bound and regenerate the lockfile; shared major bumps advance
+      internal workspace bounds automatically. Evidence: scoped `npm ls` for the library and both
+      pilots resolves one deduplicated workspace helper and Pi `0.82.1` peers; the pilot pack
+      inventories contain source and dependency metadata without bundled Pi packages.
 
 - [x] Document the package's screen/action mental model, complete API, lifecycle and mode contract,
       settings-ownership boundary, specialized-UI escape guidance, installation, package layout,

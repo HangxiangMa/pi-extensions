@@ -363,6 +363,7 @@ async function runDialogMenu<State, ScreenId extends string, ActionId extends st
 			const choice = await ctx.ui.select(
 				dialogTitle(screen),
 				rows.map((row) => row.label),
+				{ signal: menuSignal },
 			);
 			if (!isCurrent(options) || menuSignal.aborted) return { kind: "stale" };
 			if (!choice) {
