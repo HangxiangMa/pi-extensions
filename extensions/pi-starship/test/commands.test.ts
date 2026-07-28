@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -207,6 +207,43 @@ test("runtime apply failures restore the previous file and effective configurati
 		await mock.commands.get("starship")?.handler("settings", context.ctx);
 		assert.equal(readFileSync(path, "utf8"), "format = 'old'\n");
 		assert.equal(loaded.config.format, "old");
+		assert.match(context.notifications.at(-1)?.message ?? "", /previous.*restored/iu);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a failed first runtime apply restores the missing Starship settings file", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-first-save-"));
+	const path = settingsFilePath(root);
+	try {
+		const mock = createMockPi();
+		let loaded = loadStarshipConfig(path);
+		let previewCalls = 0;
+		registerStarshipCommand(mock.pi, {
+			getLoaded: () => loaded,
+			apply(next) {
+				if (next.source === "user") throw new Error("renderer rejected config");
+				loaded = next;
+			},
+			settingsPath: path,
+		});
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			editor: async () => "format = 'new'\n",
+			custom: async (factory: unknown) => {
+				const inputs = previewCalls++ === 0 ? ["\r"] : ["\u001b"];
+				return driveCustomSelector(factory, inputs, 36).result;
+			},
+			confirm: async () => true,
+		});
+
+		assert.equal(existsSync(path), false);
+		await mock.commands.get("starship")?.handler("settings", context.ctx);
+
+		assert.equal(existsSync(path), false);
+		assert.equal(loaded.source, "built-in");
 		assert.match(context.notifications.at(-1)?.message ?? "", /previous.*restored/iu);
 	} finally {
 		rmSync(root, { recursive: true, force: true });

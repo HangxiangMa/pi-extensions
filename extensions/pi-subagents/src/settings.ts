@@ -143,11 +143,28 @@ const LEGACY_SETTINGS_FILE = "pi-subagents-config.json";
 const DEFAULT_COMPLETION_DELIVERY: CompletionDelivery = "next-turn";
 let pendingSettingsNotice: string | undefined;
 
-export function readSubagentSettings(): SubagentSettings | undefined {
-	pendingSettingsNotice = undefined;
+function resolveSubagentSettingsPaths(): {
+	canonicalPath: string;
+	legacyPath: string;
+	activePath?: string;
+} {
 	const canonicalPath = path.join(getAgentDir(), SETTINGS_FILE);
 	const legacyPath = path.join(getAgentDir(), LEGACY_SETTINGS_FILE);
-	if (fs.existsSync(canonicalPath)) {
+	return {
+		canonicalPath,
+		legacyPath,
+		activePath: fs.existsSync(canonicalPath)
+			? canonicalPath
+			: fs.existsSync(legacyPath)
+				? legacyPath
+				: undefined,
+	};
+}
+
+export function readSubagentSettings(): SubagentSettings | undefined {
+	pendingSettingsNotice = undefined;
+	const { canonicalPath, legacyPath, activePath } = resolveSubagentSettingsPaths();
+	if (activePath === canonicalPath) {
 		const canonical = readSettingsFile(canonicalPath);
 		const notices: string[] = [];
 		if (!canonical) notices.push(`${SETTINGS_FILE} is invalid and was ignored.`);
@@ -157,7 +174,7 @@ export function readSubagentSettings(): SubagentSettings | undefined {
 		if (notices.length > 0) pendingSettingsNotice = notices.join("\n");
 		return canonical;
 	}
-	if (!fs.existsSync(legacyPath)) return undefined;
+	if (activePath === undefined) return undefined;
 	const legacy = readSettingsFile(legacyPath);
 	if (!legacy) {
 		pendingSettingsNotice = `${LEGACY_SETTINGS_FILE} is invalid and was ignored.`;
@@ -207,59 +224,67 @@ export function resolveDelegationWorkflow(
 	return "disabled";
 }
 
-export function inspectDelegationWorkflowSettings(): DelegationWorkflowSettingsSnapshot {
-	const configPath = subagentSettingsFilePath();
-	if (!fs.existsSync(configPath)) {
-		return { path: configPath, value: "all", source: "default" };
-	}
+function inspectSubagentSettingsDocument(): {
+	path: string;
+	raw?: Record<string, unknown>;
+	settings?: SubagentSettings;
+	error?: string;
+} {
+	const { canonicalPath, activePath } = resolveSubagentSettingsPaths();
+	const configPath = activePath ?? canonicalPath;
+	if (activePath === undefined) return { path: configPath };
 	try {
-		const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
+		const raw: unknown = JSON.parse(fs.readFileSync(configPath, "utf8"));
 		const settings = normalizeSubagentSettings(raw);
-		if (!settings) throw new Error(`${SETTINGS_FILE} is not a valid settings object`);
-		const explicit =
-			(isPlainObject(raw.blocking) && hasOwn(raw.blocking, "enabled")) ||
-			(isPlainObject(raw.stateful) && hasOwn(raw.stateful, "enabled"));
-		return {
-			path: configPath,
-			value: resolveDelegationWorkflow(
-				settings.blocking?.enabled !== false,
-				settings.stateful?.enabled !== false,
-			),
-			source: explicit ? "user settings" : "default",
-		};
+		if (!isPlainObject(raw) || !settings) {
+			throw new Error(`${path.basename(configPath)} is not a valid settings object`);
+		}
+		return { path: configPath, raw, settings };
 	} catch (error) {
-		return {
-			path: configPath,
-			value: "all",
-			source: "default",
-			error: formatError(error),
-		};
+		return { path: configPath, error: formatError(error) };
 	}
 }
 
-export function inspectCompletionDeliverySettings(): CompletionDeliverySettingsSnapshot {
-	const configPath = subagentSettingsFilePath();
-	if (!fs.existsSync(configPath)) {
-		return { path: configPath, value: DEFAULT_COMPLETION_DELIVERY, source: "default" };
-	}
-	try {
-		const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
-		const settings = normalizeSubagentSettings(raw);
-		if (!settings) throw new Error(`${SETTINGS_FILE} is not a valid settings object`);
-		const explicit = isPlainObject(raw.stateful) && hasOwn(raw.stateful, "completionDelivery");
+export function inspectDelegationWorkflowSettings(): DelegationWorkflowSettingsSnapshot {
+	const inspected = inspectSubagentSettingsDocument();
+	if (!inspected.raw || !inspected.settings) {
 		return {
-			path: configPath,
-			value: settings.stateful?.completionDelivery ?? DEFAULT_COMPLETION_DELIVERY,
-			source: explicit ? "user settings" : "default",
+			path: inspected.path,
+			value: "all",
+			source: "default",
+			...(inspected.error ? { error: inspected.error } : {}),
 		};
-	} catch (error) {
+	}
+	const explicit =
+		(isPlainObject(inspected.raw.blocking) && hasOwn(inspected.raw.blocking, "enabled")) ||
+		(isPlainObject(inspected.raw.stateful) && hasOwn(inspected.raw.stateful, "enabled"));
+	return {
+		path: inspected.path,
+		value: resolveDelegationWorkflow(
+			inspected.settings.blocking?.enabled !== false,
+			inspected.settings.stateful?.enabled !== false,
+		),
+		source: explicit ? "user settings" : "default",
+	};
+}
+
+export function inspectCompletionDeliverySettings(): CompletionDeliverySettingsSnapshot {
+	const inspected = inspectSubagentSettingsDocument();
+	if (!inspected.raw || !inspected.settings) {
 		return {
-			path: configPath,
+			path: inspected.path,
 			value: DEFAULT_COMPLETION_DELIVERY,
 			source: "default",
-			error: formatError(error),
+			...(inspected.error ? { error: inspected.error } : {}),
 		};
 	}
+	const explicit =
+		isPlainObject(inspected.raw.stateful) && hasOwn(inspected.raw.stateful, "completionDelivery");
+	return {
+		path: inspected.path,
+		value: inspected.settings.stateful?.completionDelivery ?? DEFAULT_COMPLETION_DELIVERY,
+		source: explicit ? "user settings" : "default",
+	};
 }
 
 export function updateDelegationWorkflowSetting(
@@ -334,16 +359,17 @@ export function updateAgentToolsSetting(name: string, tools: string[] | undefine
 }
 
 function readSettingsObjectForUpdate(): Record<string, unknown> {
-	const configPath = subagentSettingsFilePath();
-	if (!fs.existsSync(configPath)) return {};
+	const { activePath } = resolveSubagentSettingsPaths();
+	if (activePath === undefined) return {};
+	const activeFile = path.basename(activePath);
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+		parsed = JSON.parse(fs.readFileSync(activePath, "utf8"));
 	} catch (error) {
-		throw new Error(`Cannot update malformed ${SETTINGS_FILE}: ${formatError(error)}`);
+		throw new Error(`Cannot update malformed ${activeFile}: ${formatError(error)}`);
 	}
 	if (!isPlainObject(parsed) || !normalizeSubagentSettings(parsed)) {
-		throw new Error(`Cannot update invalid ${SETTINGS_FILE}`);
+		throw new Error(`Cannot update invalid ${activeFile}`);
 	}
 	return parsed;
 }

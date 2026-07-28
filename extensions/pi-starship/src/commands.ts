@@ -11,6 +11,7 @@ import {
 	atomicSaveConfigDocument,
 	BUILT_IN_EXAMPLE,
 	type LoadedStarshipConfig,
+	removeConfigDocument,
 	validateConfigDocument,
 } from "./config.js";
 
@@ -295,9 +296,10 @@ function restorePreviousConfiguration(
 ): unknown {
 	try {
 		if (previous.rawDocument === undefined) {
-			throw new Error("The previous settings document is unavailable");
+			removeConfigDocument(options.settingsPath);
+		} else {
+			(options.restore ?? atomicRestoreConfigDocument)(options.settingsPath, previous.rawDocument);
 		}
-		(options.restore ?? atomicRestoreConfigDocument)(options.settingsPath, previous.rawDocument);
 		options.apply(previous, ctx);
 		return undefined;
 	} catch (error) {

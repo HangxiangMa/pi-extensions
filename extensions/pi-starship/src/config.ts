@@ -434,6 +434,13 @@ export function atomicRestoreConfigDocument(
 	atomicWriteConfigDocument(settingsPath, rawDocument, overrides);
 }
 
+export function removeConfigDocument(
+	settingsPath: string,
+	overrides: Pick<Partial<AtomicFileSystem>, "rmSync"> = {},
+) {
+	(overrides.rmSync ?? rmSync)(settingsPath, { force: true });
+}
+
 function atomicWriteConfigDocument(
 	settingsPath: string,
 	rawDocument: string,

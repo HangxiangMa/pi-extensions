@@ -808,14 +808,17 @@ function editableSettings(
 	current: LoadedStatuslineSettings,
 	action: string,
 ): { parsed: Record<string, unknown>; rawDocument: string } {
-	if (
-		current.source !== "user" ||
-		current.rawDocument === undefined ||
-		current.diagnostics.some((item) => item.code !== "unknown")
-	) {
+	const rawDocument =
+		current.source === "user" && current.rawDocument !== undefined
+			? current.rawDocument
+			: current.source === "built-in" &&
+					current.rawDocument === undefined &&
+					current.diagnostics.length === 0
+				? DEFAULT_STATUSLINE_DOCUMENT
+				: undefined;
+	if (rawDocument === undefined || current.diagnostics.some((item) => item.code !== "unknown")) {
 		throw new Error(`Fix pi-statusline.json before ${action}`);
 	}
-	const rawDocument = current.rawDocument;
 	const parsed = JSON.parse(rawDocument) as unknown;
 	if (!isRecord(parsed)) throw new Error("Settings must contain a JSON object");
 	return { parsed, rawDocument };
@@ -831,7 +834,8 @@ function showStatus(ctx: ExtensionCommandContext, options: StatuslineCommandOpti
 	ctx.ui.notify(
 		[
 			`pi-statusline source: ${loaded.source}`,
-			`path: ${options.settingsPath}`,
+			`active path: ${loaded.settingsPath}`,
+			`save target: ${options.settingsPath}`,
 			`palette preset: ${loaded.config.palettePreset}`,
 			`density: ${loaded.config.density}`,
 			`separator: ${loaded.config.separator}`,

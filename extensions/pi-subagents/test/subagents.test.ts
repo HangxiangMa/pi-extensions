@@ -1022,13 +1022,30 @@ test("subagent settings read legacy files and save to the canonical package file
 		const canonicalPath = path.join(directory, "pi-subagents.json");
 		writeFileSync(
 			legacyPath,
-			JSON.stringify({ agents: { scout: { tools: ["read"] } }, futureOption: true }),
+			JSON.stringify({
+				agents: { scout: { tools: ["read"] } },
+				blocking: { enabled: false },
+				stateful: { completionDelivery: "auto-resume" },
+				futureOption: true,
+			}),
 		);
+		assert.deepEqual(inspectDelegationWorkflowSettings(), {
+			path: legacyPath,
+			value: "async-only",
+			source: "user settings",
+		});
+		assert.deepEqual(inspectCompletionDeliverySettings(), {
+			path: legacyPath,
+			value: "auto-resume",
+			source: "user settings",
+		});
 		const migrationMock = createMockPi();
 		subagents(migrationMock.pi);
 		assert.equal(existsSync(canonicalPath), false);
 		assert.deepEqual(JSON.parse(readFileSync(legacyPath, "utf8")), {
 			agents: { scout: { tools: ["read"] } },
+			blocking: { enabled: false },
+			stateful: { completionDelivery: "auto-resume" },
 			futureOption: true,
 		});
 		const migrationContext = createMockContext();
@@ -1038,10 +1055,18 @@ test("subagent settings read legacy files and save to the canonical package file
 		writeFileSync(legacyPath, JSON.stringify({ agents: { scout: { tools: ["bash"] } } }));
 		writeFileSync(canonicalPath, JSON.stringify({ agents: { scout: { tools: ["read"] } } }));
 		assert.deepEqual(readSubagentSettings(), { agents: { scout: { tools: ["read"] } } });
+		assert.deepEqual(inspectDelegationWorkflowSettings(), {
+			path: canonicalPath,
+			value: "all",
+			source: "default",
+		});
+		assert.equal(inspectCompletionDeliverySettings().path, canonicalPath);
 		assert.equal(existsSync(legacyPath), true);
 
 		writeFileSync(canonicalPath, "invalid");
 		assert.equal(readSubagentSettings(), undefined);
+		assert.equal(inspectDelegationWorkflowSettings().path, canonicalPath);
+		assert.match(inspectDelegationWorkflowSettings().error ?? "", /JSON/i);
 		assert.equal(readFileSync(legacyPath, "utf8").includes("bash"), true);
 		unlinkSync(legacyPath);
 		writeFileSync(canonicalPath, JSON.stringify({ agents: { scout: { tools: ["read"] } } }));
@@ -1068,6 +1093,34 @@ test("subagent settings read legacy files and save to the canonical package file
 		const ignoredContext = createMockContext();
 		ignoredMock.events.get("session_start")?.[0]?.({}, ignoredContext.ctx);
 		assert.match(ignoredContext.notifications[0]?.message ?? "", /ignored/i);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("subagent setting controls seed canonical updates from the active legacy document", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-legacy-update-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const legacyPath = path.join(directory, "pi-subagents-config.json");
+		const canonicalPath = path.join(directory, "pi-subagents.json");
+		const legacy = {
+			future: { retained: true },
+			blocking: { enabled: false, futureBlocking: 1 },
+			stateful: { completionDelivery: "auto-resume", futureStateful: 2 },
+		};
+		writeFileSync(legacyPath, JSON.stringify(legacy));
+
+		updateCompletionDeliverySetting("next-turn");
+
+		assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), {
+			...legacy,
+			stateful: { ...legacy.stateful, completionDelivery: "next-turn" },
+		});
+		assert.deepEqual(JSON.parse(readFileSync(legacyPath, "utf8")), legacy);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
