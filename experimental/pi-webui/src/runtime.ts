@@ -305,6 +305,8 @@ export class WebUIRuntime {
 		this.cancelBrowserInputs("The Pi session ended before the browser prompt was accepted.");
 		this.acceptedBrowserInputs.clear();
 		this.conversation?.close();
+		await this.settingsSaveQueue;
+		if (generation !== this.generation) return;
 		await this.releaseServer();
 		if (generation !== this.generation) return;
 		this.context = undefined;
@@ -533,10 +535,11 @@ export class WebUIRuntime {
 							}
 							const next = { ...this.settings, startOnSessionStart: requested };
 							const document = await this.dependencies.saveSettings(
-								next,
+								{ startOnSessionStart: requested },
 								this.settingsDocument,
 								this.settingsPath,
 							);
+							if (settingsGeneration !== this.generation || this.closed) return;
 							this.settings = next;
 							this.settingsDocument = document;
 							this.settingsSource = "settings file";

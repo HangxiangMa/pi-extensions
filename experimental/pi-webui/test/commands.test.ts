@@ -468,10 +468,10 @@ test("session replacement drops a delayed init continuation", async () => {
 
 test("settings changes save in action order and update effective status", async () => {
 	const first = deferred<void>();
-	const requested: boolean[] = [];
+	const requested: Array<{ startOnSessionStart?: boolean }> = [];
 	const { mock, runtime } = createRuntime({
 		saveSettings: async (settings, document) => {
-			requested.push(settings.startOnSessionStart);
+			requested.push(settings);
 			if (requested.length === 1) await first.promise;
 			return { ...document, ...settings };
 		},
@@ -488,7 +488,7 @@ test("settings changes save in action order and update effective status", async 
 			selector.handleInput("\r");
 			selector.handleInput("\r");
 			await waitFor(() => requested.length === 1);
-			assert.deepEqual(requested, [true]);
+			assert.deepEqual(requested, [{ startOnSessionStart: true }]);
 			first.resolve(undefined);
 			await waitFor(() => requested.length === 2);
 			selector.handleInput("\u001b");
@@ -499,7 +499,7 @@ test("settings changes save in action order and update effective status", async 
 	await mock.commands.get("webui")?.handler("settings", context.ctx);
 	assert.deepEqual(
 		requested,
-		[true, false],
+		[{ startOnSessionStart: true }, { startOnSessionStart: false }],
 		context.notifications.map((item) => item.message).join("\n"),
 	);
 	await mock.commands.get("webui")?.handler("status", context.ctx);

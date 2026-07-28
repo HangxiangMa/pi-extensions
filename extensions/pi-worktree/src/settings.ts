@@ -35,6 +35,7 @@ export interface WorktreeSettingsRuntime {
 	getPath(): string;
 	reload(): Promise<Readonly<WorktreeSettingsState>>;
 	save(configuredRoot: string | undefined): Promise<Readonly<WorktreeSettingsState>>;
+	flush?(): Promise<void>;
 }
 
 interface RuntimeOptions {
@@ -187,7 +188,6 @@ export function createWorktreeSettingsRuntime(
 			typeof options.path === "function" ? options.path() : (options.path ?? settingsFilePath());
 		return resolvedPath;
 	};
-	let document: Record<string, unknown> = {};
 	let operationQueue = Promise.resolve();
 	const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
 		const result = operationQueue.then(operation, operation);
@@ -206,6 +206,9 @@ export function createWorktreeSettingsRuntime(
 	return {
 		get: () => Object.freeze({ ...state }),
 		getPath,
+		async flush() {
+			await operationQueue;
+		},
 		reload() {
 			return enqueue(async () => {
 				const loaded = await loadWorktreeSettings(getPath(), home, platform);
@@ -213,7 +216,6 @@ export function createWorktreeSettingsRuntime(
 					state = { ...state, warning: loaded.warning, canSave: false };
 					return Object.freeze({ ...state });
 				}
-				document = loaded.document ?? {};
 				state = stateFromLoaded(loaded);
 				return Object.freeze({ ...state });
 			});
@@ -227,13 +229,17 @@ export function createWorktreeSettingsRuntime(
 					configuredRoot === undefined
 						? defaultWorktreeRoot(home, platform)
 						: resolveWorktreeRoot(configuredRoot, home, platform);
-				const nextDocument = await saveWorktreeSettings(
-					document,
+				const latest = await loadWorktreeSettings(getPath(), home, platform);
+				if (latest.kind === "invalid") {
+					state = { ...state, warning: latest.warning, canSave: false };
+					throw new Error(`Fix the pi-worktree settings file at ${getPath()} before changing it.`);
+				}
+				await saveWorktreeSettings(
+					latest.document ?? {},
 					configuredRoot,
 					getPath(),
 					options.operations,
 				);
-				document = nextDocument;
 				state = {
 					effectiveRoot,
 					source: configuredRoot === undefined ? "default" : "user",

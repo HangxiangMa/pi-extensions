@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -15,12 +16,23 @@ export interface CaffeinateSettings {
 	updatedAt: number;
 }
 
+export interface SettingsFileOperations {
+	write(path: string, data: string): Promise<void>;
+	rename(source: string, destination: string): Promise<void>;
+}
+
+const DEFAULT_FILE_OPERATIONS: SettingsFileOperations = {
+	write: (path, data) => writeFile(path, data, "utf8").then(() => undefined),
+	rename,
+};
+
 export type SettingsLoadResult =
 	| { kind: "missing"; notice?: string }
 	| { kind: "invalid"; reason: string; notice?: string }
 	| { kind: "loaded"; settings: CaffeinateSettings; notice?: string };
 
 export async function loadSettings(): Promise<SettingsLoadResult> {
+	await settingsSaveQueue;
 	const newPath = settingsFilePath();
 	const newSettings = await readSettingsFile(newPath);
 	if (newSettings.kind !== "missing") return withLegacyIgnoredNotice(newSettings);
@@ -40,24 +52,41 @@ export async function loadSettings(): Promise<SettingsLoadResult> {
 	};
 }
 
-async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
+interface SettingsDocumentResult {
+	result: SettingsLoadResult;
+	document?: Record<string, unknown>;
+}
+
+async function readSettingsDocument(filePath: string): Promise<SettingsDocumentResult> {
 	let text: string;
 	try {
 		text = await readFile(filePath, "utf8");
 	} catch (error) {
-		if (isNodeError(error) && error.code === "ENOENT") return { kind: "missing" };
-		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
+		if (isNodeError(error) && error.code === "ENOENT") return { result: { kind: "missing" } };
+		return { result: { kind: "invalid", reason: `${filePath}: ${formatError(error)}` } };
 	}
 	try {
-		const settings = normalizeCaffeinateSettings(JSON.parse(text) as unknown);
-		if (settings) return { kind: "loaded", settings };
+		const document = JSON.parse(text) as unknown;
+		const settings = normalizeCaffeinateSettings(document);
+		if (settings) {
+			return {
+				result: { kind: "loaded", settings },
+				document: { ...(document as Record<string, unknown>) },
+			};
+		}
 		return {
-			kind: "invalid",
-			reason: `${filePath}: expected { "mode": "sleep" | "display", optional "quiet": boolean }`,
+			result: {
+				kind: "invalid",
+				reason: `${filePath}: expected { "mode": "sleep" | "display", optional "quiet": boolean }`,
+			},
 		};
 	} catch (error) {
-		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
+		return { result: { kind: "invalid", reason: `${filePath}: ${formatError(error)}` } };
 	}
+}
+
+async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
+	return (await readSettingsDocument(filePath)).result;
 }
 
 async function withLegacyIgnoredNotice(settings: SettingsLoadResult): Promise<SettingsLoadResult> {
@@ -94,13 +123,46 @@ function isCaffeinateMode(value: unknown): value is CaffeinateMode {
 	return value === "sleep" || value === "display";
 }
 
-export async function saveSettings(settings: CaffeinateSettings) {
+let settingsSaveQueue: Promise<unknown> = Promise.resolve();
+
+export function saveSettings(
+	settings: Omit<CaffeinateSettings, "quiet"> & { quiet?: boolean },
+	operations: Partial<SettingsFileOperations> = {},
+): Promise<CaffeinateSettings> {
+	const operation = settingsSaveQueue.then(() => saveSettingsNow(settings, operations));
+	settingsSaveQueue = operation.catch(() => undefined);
+	return operation;
+}
+
+async function saveSettingsNow(
+	settings: Omit<CaffeinateSettings, "quiet"> & { quiet?: boolean },
+	operations: Partial<SettingsFileOperations>,
+): Promise<CaffeinateSettings> {
 	const filePath = settingsFilePath();
+	let current = await readSettingsDocument(filePath);
+	if (current.result.kind === "missing") {
+		current = await readSettingsDocument(legacySettingsFilePath());
+	}
+	if (current.result.kind === "invalid") {
+		throw new Error(`Cannot save pi-caffeinate settings until you repair ${current.result.reason}`);
+	}
+	const document = current.document ?? {};
+	const quiet =
+		settings.quiet ?? (current.result.kind === "loaded" ? current.result.settings.quiet : false);
+	const nextSettings = { mode: settings.mode, quiet, updatedAt: settings.updatedAt };
+	const nextDocument = {
+		...document,
+		...nextSettings,
+	};
 	await mkdir(dirname(filePath), { recursive: true });
-	const tempFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+	const tempFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
 	try {
-		await writeFile(tempFile, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
-		await rename(tempFile, filePath);
+		await (operations.write ?? DEFAULT_FILE_OPERATIONS.write)(
+			tempFile,
+			`${JSON.stringify(nextDocument, null, 2)}\n`,
+		);
+		await (operations.rename ?? DEFAULT_FILE_OPERATIONS.rename)(tempFile, filePath);
+		return nextSettings;
 	} catch (error) {
 		await rm(tempFile, { force: true }).catch(() => undefined);
 		throw error;

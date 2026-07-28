@@ -169,7 +169,9 @@ ${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-chrome-devtools.json
 
 When the file is missing or invalid, the extension preserves Pi's current active-tool policy
 instead of enabling tools by itself. A valid saved selection is restored on Pi startup and
-`/reload`.
+`/reload`. A missing file is created by the first successful selection change. Within one Pi process, selection saves run in invocation order, reread the latest valid document, and preserve unknown fields. Malformed JSON
+or invalid recognized fields block the save without replacement; a failed save restores the prior
+Chrome DevTools tool selection while preserving other extensions' current tools.
 
 Compatibility: older versions used `pi-chrome-devtools-settings.json`. A legacy-only file remains
 readable with a warning and is never modified automatically; rename it to

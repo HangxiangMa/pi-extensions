@@ -51,7 +51,12 @@ Example:
 }
 ```
 
-The file is written as `0600`.
+The file is written as `0600`. A missing file is created by the first successful `init` or tool
+selection save. Within one Pi process, updates are serialized, reread the latest valid document, preserve unknown fields,
+and keep literal credentials unchanged when only tools change. Malformed JSON, invalid recognized
+fields, or unsupported key interpolation block menu and tool-selection writes without replacing the
+file or exposing the key. A failed tool-selection save restores the previous Google tool state while
+preserving other extensions' current tools.
 
 Compatibility: a valid legacy `google-genai.json` remains readable with a warning and private permissions and is never modified automatically; rename it to `pi-google-genai.json`. The first subsequent save writes the canonical file. If both files exist, the new filename takes precedence.
 

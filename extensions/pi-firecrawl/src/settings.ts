@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -12,12 +13,23 @@ export interface FirecrawlSettings {
 	updatedAt: number;
 }
 
+export interface SettingsFileOperations {
+	write(path: string, data: string): Promise<void>;
+	rename(source: string, destination: string): Promise<void>;
+}
+
+const DEFAULT_FILE_OPERATIONS: SettingsFileOperations = {
+	write: (path, data) => writeFile(path, data, "utf8").then(() => undefined),
+	rename,
+};
+
 export type SettingsLoadResult =
 	| { kind: "missing"; notice?: string }
 	| { kind: "invalid"; reason: string; notice?: string }
 	| { kind: "loaded"; settings: FirecrawlSettings; notice?: string };
 
 export async function loadSettings(): Promise<SettingsLoadResult> {
+	await settingsSaveQueue;
 	const newPath = settingsFilePath();
 	const newSettings = await readSettingsFile(newPath);
 	if (newSettings.kind !== "missing") {
@@ -39,26 +51,42 @@ export async function loadSettings(): Promise<SettingsLoadResult> {
 	};
 }
 
-async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
+interface SettingsDocumentResult {
+	result: SettingsLoadResult;
+	document?: Record<string, unknown>;
+}
+
+async function readSettingsDocument(filePath: string): Promise<SettingsDocumentResult> {
 	let text: string;
 	try {
 		text = await readFile(filePath, "utf8");
 	} catch (error) {
-		if (isNodeError(error) && error.code === "ENOENT") return { kind: "missing" };
-		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
+		if (isNodeError(error) && error.code === "ENOENT") return { result: { kind: "missing" } };
+		return { result: { kind: "invalid", reason: `${filePath}: ${formatError(error)}` } };
 	}
 
 	try {
 		const parsed = JSON.parse(text) as unknown;
 		const settings = normalizeFirecrawlSettings(parsed);
-		if (settings) return { kind: "loaded", settings };
+		if (settings) {
+			return {
+				result: { kind: "loaded", settings },
+				document: { ...(parsed as Record<string, unknown>) },
+			};
+		}
 		return {
-			kind: "invalid",
-			reason: `${filePath}: expected tools to be an array of Firecrawl tool names`,
+			result: {
+				kind: "invalid",
+				reason: `${filePath}: expected tools to be an array of Firecrawl tool names`,
+			},
 		};
 	} catch (error) {
-		return { kind: "invalid", reason: `${filePath}: ${formatError(error)}` };
+		return { result: { kind: "invalid", reason: `${filePath}: ${formatError(error)}` } };
 	}
+}
+
+async function readSettingsFile(filePath: string): Promise<SettingsLoadResult> {
+	return (await readSettingsDocument(filePath)).result;
 }
 
 async function withLegacyIgnoredNotice(settings: SettingsLoadResult): Promise<SettingsLoadResult> {
@@ -96,13 +124,42 @@ function orderedUniqueFirecrawlTools(tools: readonly FirecrawlToolName[]) {
 	return FIRECRAWL_TOOL_NAMES.filter((toolName) => selectedTools.has(toolName));
 }
 
-export async function saveSettings(settings: FirecrawlSettings) {
+let settingsSaveQueue = Promise.resolve();
+
+export function saveSettings(
+	settings: FirecrawlSettings,
+	operations: Partial<SettingsFileOperations> = {},
+): Promise<void> {
+	const operation = settingsSaveQueue.then(() => saveSettingsNow(settings, operations));
+	settingsSaveQueue = operation.catch(() => undefined);
+	return operation;
+}
+
+async function saveSettingsNow(
+	settings: FirecrawlSettings,
+	operations: Partial<SettingsFileOperations>,
+): Promise<void> {
 	const filePath = settingsFilePath();
+	let current = await readSettingsDocument(filePath);
+	if (current.result.kind === "missing") {
+		current = await readSettingsDocument(legacySettingsFilePath());
+	}
+	if (current.result.kind === "invalid") {
+		throw new Error(`Cannot save Firecrawl settings until you repair ${current.result.reason}`);
+	}
+	const nextDocument = {
+		...(current.document ?? {}),
+		tools: [...settings.tools],
+		updatedAt: settings.updatedAt,
+	};
 	await mkdir(dirname(filePath), { recursive: true });
-	const tempFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+	const tempFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
 	try {
-		await writeFile(tempFile, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
-		await rename(tempFile, filePath);
+		await (operations.write ?? DEFAULT_FILE_OPERATIONS.write)(
+			tempFile,
+			`${JSON.stringify(nextDocument, null, 2)}\n`,
+		);
+		await (operations.rename ?? DEFAULT_FILE_OPERATIONS.rename)(tempFile, filePath);
 	} catch (error) {
 		await rm(tempFile, { force: true }).catch(() => undefined);
 		throw error;

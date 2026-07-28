@@ -119,7 +119,11 @@ when omitted. The file is read at startup and on `/reload`; run `/reload` after 
 running Pi session before using mode commands.
 
 Missing, invalid, or deleted settings default back to `display` mode with quiet mode disabled on
-every supported OS.
+every supported OS. A missing file stays absent until the first successful mode change. Within one Pi process, mode saves run in invocation order, reread the latest valid document, and preserve unknown fields. Malformed
+JSON or an invalid recognized field blocks mode saves until repaired instead of being overwritten.
+A failed save keeps the prior runtime mode; if restarting an active inhibitor fails after publication,
+the extension restores the prior saved mode and inhibitor behavior or reports an explicit rollback
+failure.
 
 Compatibility: older versions used `pi-caffeinate-settings.json`. A legacy-only file remains
 readable with a warning and is never modified automatically; rename it to `pi-caffeinate.json`.

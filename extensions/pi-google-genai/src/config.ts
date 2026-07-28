@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { access, chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -37,6 +38,7 @@ export function normalizeGoogleGenaiSettings(value: unknown): GoogleGenaiConfig 
 }
 
 export async function loadGoogleGenaiConfig(): Promise<LoadedGoogleGenaiConfig> {
+	await configSaveQueue;
 	const path = googleGenaiConfigPath();
 	const warnings: string[] = [];
 	const readPath = await prepareGoogleGenaiConfigPath(path, warnings);
@@ -194,8 +196,9 @@ async function exists(path: string) {
 }
 
 async function readJsonIfExists(path: string, warnings: string[]) {
+	let text: string;
 	try {
-		return JSON.parse(await readFile(path, "utf8"));
+		text = await readFile(path, "utf8");
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		warnings.push(
@@ -203,23 +206,113 @@ async function readJsonIfExists(path: string, warnings: string[]) {
 		);
 		return undefined;
 	}
+	try {
+		return JSON.parse(text) as unknown;
+	} catch {
+		warnings.push(`Failed to parse ${path} as JSON; ignoring config until it is repaired.`);
+		return undefined;
+	}
 }
 
-export async function writeGoogleGenaiConfig(config: GoogleGenaiConfig) {
+let configSaveQueue = Promise.resolve();
+
+export async function waitForGoogleGenaiConfigWrites(): Promise<void> {
+	await configSaveQueue;
+}
+
+export async function writeGoogleGenaiConfig(config: GoogleGenaiConfig): Promise<void> {
+	await updateGoogleGenaiConfig(cleanObject(config));
+}
+
+export function updateGoogleGenaiSetup(patch: {
+	model: string;
+	apiKey?: string;
+}): Promise<GoogleGenaiConfig> {
+	const model = normalizeString(patch.model);
+	if (!model) throw new Error(`${CONFIG_FILE_NAME} model must be a non-empty string.`);
+	const apiKey = patch.apiKey === undefined ? undefined : normalizeString(patch.apiKey);
+	if (patch.apiKey !== undefined && (!apiKey || isUnsupportedConfigApiKey(apiKey))) {
+		throw new Error(`${CONFIG_FILE_NAME} apiKey must be a non-empty literal string.`);
+	}
+	return updateGoogleGenaiConfig({ model, ...(apiKey ? { apiKey } : {}) });
+}
+
+function updateGoogleGenaiConfig(patch: object): Promise<GoogleGenaiConfig> {
+	const operation = configSaveQueue.then(() => writeGoogleGenaiConfigNow(patch));
+	configSaveQueue = operation.then(
+		() => undefined,
+		() => undefined,
+	);
+	return operation;
+}
+
+async function writeGoogleGenaiConfigNow(patch: object): Promise<GoogleGenaiConfig> {
 	const path = googleGenaiConfigPath();
+	const currentDocument = await readDocumentForUpdate(path);
+	const nextDocument = { ...currentDocument, ...patch };
 	await mkdir(dirname(path), { recursive: true });
-	const tempFile = `${path}.${process.pid}.${Date.now()}.tmp`;
+	const tempFile = `${path}.${process.pid}.${randomUUID()}.tmp`;
 	try {
-		await writeFile(tempFile, `${JSON.stringify(cleanObject(config), null, "\t")}\n`, {
+		await writeFile(tempFile, `${JSON.stringify(nextDocument, null, "\t")}\n`, {
 			mode: 0o600,
 		});
 		await chmod(tempFile, 0o600);
 		await rename(tempFile, path);
-		await chmod(path, 0o600);
+		return normalizeGoogleGenaiSettings(nextDocument);
 	} catch (error) {
 		await rm(tempFile, { force: true }).catch(() => undefined);
 		throw error;
 	}
+}
+
+async function readDocumentForUpdate(canonicalPath: string): Promise<Record<string, unknown>> {
+	const legacyPath = join(dirname(canonicalPath), LEGACY_CONFIG_FILE_NAME);
+	let text: string;
+	try {
+		text = await readFile(canonicalPath, "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+			throw new Error(
+				`Cannot update ${CONFIG_FILE_NAME} because the existing file is unreadable; repair it first.`,
+			);
+		}
+		try {
+			text = await readFile(legacyPath, "utf8");
+		} catch (legacyError) {
+			if ((legacyError as NodeJS.ErrnoException).code === "ENOENT") return {};
+			throw new Error(
+				`Cannot update ${CONFIG_FILE_NAME} because the legacy file is unreadable; repair it first.`,
+			);
+		}
+	}
+
+	let document: unknown;
+	try {
+		document = JSON.parse(text) as unknown;
+	} catch {
+		throw new Error(
+			`Cannot update ${CONFIG_FILE_NAME} because the existing file is malformed; repair it first.`,
+		);
+	}
+	if (!isValidGoogleGenaiDocument(document)) {
+		throw new Error(
+			`Cannot update ${CONFIG_FILE_NAME} because the existing file has invalid recognized fields; repair it first.`,
+		);
+	}
+	return { ...document };
+}
+
+function isValidGoogleGenaiDocument(value: unknown): value is Record<string, unknown> {
+	if (!isObject(value)) return false;
+	if (value.model !== undefined && !normalizeString(value.model)) return false;
+	if (value.apiUrl !== undefined && !normalizeString(value.apiUrl)) return false;
+	if (value.apiKey !== undefined) {
+		const apiKey = normalizeString(value.apiKey);
+		if (!apiKey || isUnsupportedConfigApiKey(apiKey)) return false;
+	}
+	if (value.timeoutMs !== undefined && !isValidTimeoutMs(value.timeoutMs)) return false;
+	if (value.tools !== undefined && !Array.isArray(value.tools)) return false;
+	return true;
 }
 
 async function ensureConfigPermissions(path: string, warnings: string[]) {
@@ -243,13 +336,12 @@ export function cleanObject<T>(value: T): T {
 	return result as T;
 }
 
-export async function saveToolSelection(tools: GoogleGenaiToolName[]) {
-	const loaded = await loadGoogleGenaiConfig();
-	await writeGoogleGenaiConfig({ ...loaded.config, tools });
+export async function saveToolSelection(tools: GoogleGenaiToolName[]): Promise<void> {
+	await updateGoogleGenaiConfig({ tools: [...tools] });
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function isGoogleGenaiToolName(value: string): value is GoogleGenaiToolName {
