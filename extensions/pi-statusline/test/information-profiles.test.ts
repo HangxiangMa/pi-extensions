@@ -11,7 +11,7 @@ test("information profiles expose curated segment sets in deterministic order", 
 		"branch",
 		"tools",
 		"context",
-		"cost",
+		"time",
 	]);
 	assert.deepEqual(INFORMATION_PROFILES.detailed, [
 		"provider",

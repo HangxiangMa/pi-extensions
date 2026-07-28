@@ -80,7 +80,7 @@ test("information picker previews exact contents and atomically applies a curate
 		for (const label of ["Minimal", "Balanced", "Detailed"]) {
 			assert.match(pickerText, new RegExp(label, "u"));
 		}
-		assert.match(pickerText, /Segments: model · thinking · cwd · branch · tools · context · cost/u);
+		assert.match(pickerText, /Segments: model · thinking · cwd · branch · tools · context · time/u);
 		assert.ok(narrowLines.length > 0);
 		assert.ok(narrowLines.every((line) => visibleWidth(line) <= 20));
 		assert.deepEqual(loaded.config.segments, [
@@ -90,10 +90,10 @@ test("information picker previews exact contents and atomically applies a curate
 			"branch",
 			"tools",
 			"context",
-			"cost",
+			"time",
 		]);
 		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
-			segments: ["model", "thinking", "cwd", "branch", "tools", "context", "cost"],
+			segments: ["model", "thinking", "cwd", "branch", "tools", "context", "time"],
 			future: true,
 		});
 		assert.equal(applied, 1);

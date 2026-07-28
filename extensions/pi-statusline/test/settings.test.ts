@@ -35,7 +35,7 @@ test("initial JSON exposes active defaults without materializing an inactive pal
 		"branch",
 		"tools",
 		"context",
-		"cost",
+		"time",
 	]);
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.segmentText.provider.prefix, "🔌 ");
 	assert.equal(DEFAULT_STATUSLINE_CONFIG.segmentText.turn.prefix, "🔁 #");
@@ -51,7 +51,7 @@ test("initial JSON exposes active defaults without materializing an inactive pal
 		palettePreset: "tokyo-night",
 		density: "compact",
 		separator: "none",
-		segments: ["model", "thinking", "cwd", "branch", "tools", "context", "cost"],
+		segments: ["model", "thinking", "cwd", "branch", "tools", "context", "time"],
 		segmentText: DEFAULT_STATUSLINE_CONFIG.segmentText,
 		extensionStatusIcons: {
 			accounts: "👤",

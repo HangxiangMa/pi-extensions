@@ -8,7 +8,7 @@ export const INFORMATION_PROFILES: Readonly<
 	Record<InformationProfileName, readonly SegmentName[]>
 > = {
 	minimal: ["model", "cwd", "branch", "context"],
-	balanced: ["model", "thinking", "cwd", "branch", "tools", "context", "cost"],
+	balanced: ["model", "thinking", "cwd", "branch", "tools", "context", "time"],
 	detailed: [
 		"provider",
 		"model",
