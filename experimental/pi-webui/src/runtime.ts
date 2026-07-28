@@ -619,7 +619,13 @@ export class WebUIRuntime {
 
 	private async initializeSettings(ctx: ExtensionCommandContext): Promise<void> {
 		const generation = this.generation;
-		const result = await this.dependencies.initializeSettings(this.settingsPath);
+		let result: "created" | "exists";
+		try {
+			result = await this.dependencies.initializeSettings(this.settingsPath);
+		} catch (error) {
+			if (generation !== this.generation || this.closed) return;
+			throw error;
+		}
 		if (generation !== this.generation || this.closed) return;
 		if (ctx.hasUI) {
 			ctx.ui.notify(

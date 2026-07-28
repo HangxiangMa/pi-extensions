@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,6 +10,7 @@ import {
 	loadSettings,
 	normalizeSettings,
 	RETENTION_HARD_LIMITS,
+	type SettingsFileOperations,
 	saveSettings,
 } from "../src/settings.js";
 
@@ -59,6 +60,19 @@ test("loaded limits above defaults warn while omitted values and unknown fields 
 		assert.equal(loaded.settings.maxImageBytes, DEFAULT_IMAGE_LIMITS.maxImageBytes);
 		assert.match(loaded.warning ?? "", /above safe defaults.*maxImages/i);
 		assert.deepEqual(loaded.document, { maxImages: 9, future: "kept" });
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("missing settings loads do not create the file or its parent directory", async () => {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-webui-settings-missing-"));
+	const settingsDirectory = path.join(directory, "agent");
+	const settingsPath = path.join(settingsDirectory, "pi-webui.json");
+	try {
+		const missing = await loadSettings(settingsPath);
+		assert.equal(missing.kind, "missing");
+		await assert.rejects(lstat(settingsDirectory), { code: "ENOENT" });
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
@@ -221,6 +235,61 @@ test("init creates formatted defaults once and never overwrites existing content
 	}
 });
 
+test("init never overwrites a canonical file raced in by a lock-unaware creator", async () => {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-webui-settings-race-"));
+	const settingsPath = path.join(directory, "pi-webui.json");
+	const racedContent = '{"startOnSessionStart":true,"owner":"raced"}\n';
+	try {
+		const result = await initializeSettings(settingsPath, {
+			write: async (temporaryPath, data) => {
+				await writeFile(temporaryPath, data, { encoding: "utf8", flag: "wx", mode: 0o600 });
+				await writeFile(settingsPath, racedContent, { encoding: "utf8", flag: "wx", mode: 0o600 });
+			},
+		});
+		assert.equal(result, "exists");
+		assert.equal(await readFile(settingsPath, "utf8"), racedContent);
+		assert.deepEqual(await import("node:fs/promises").then(({ readdir }) => readdir(directory)), [
+			"pi-webui.json",
+		]);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("compromised init locks reject normally after temporary and lock cleanup", async () => {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-webui-settings-compromised-"));
+	const settingsPath = path.join(directory, "pi-webui.json");
+	let compromise: ((error: Error) => void) | undefined;
+	let releaseAttempted = false;
+	const operations: Partial<SettingsFileOperations> = {
+		lock: async (_path, onCompromised) => {
+			compromise = onCompromised;
+			return async () => {
+				releaseAttempted = true;
+				throw Object.assign(new Error("lock is already released"), { code: "ERELEASED" });
+			};
+		},
+		write: async (temporaryPath, data) => {
+			await writeFile(temporaryPath, data, { encoding: "utf8", flag: "wx", mode: 0o600 });
+			compromise?.(Object.assign(new Error("init lock compromised"), { code: "ECOMPROMISED" }));
+		},
+	};
+	try {
+		await assert.rejects(
+			() => initializeSettings(settingsPath, operations),
+			/init lock compromised/,
+		);
+		assert.equal(releaseAttempted, true);
+		await assert.rejects(readFile(settingsPath, "utf8"), { code: "ENOENT" });
+		assert.deepEqual(
+			await import("node:fs/promises").then(({ readdir }) => readdir(directory)),
+			[],
+		);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("concurrent init calls publish one complete default document", async () => {
 	const directory = await mkdtemp(path.join(os.tmpdir(), "pi-webui-settings-"));
 	const settingsPath = path.join(directory, "pi-webui.json");
@@ -250,7 +319,7 @@ test("failed init publish leaves no canonical or temporary file", async () => {
 		await assert.rejects(
 			() =>
 				initializeSettings(settingsPath, {
-					rename: async () => {
+					publishExclusive: async () => {
 						throw Object.assign(new Error("publish failed"), { code: "EACCES" });
 					},
 				}),

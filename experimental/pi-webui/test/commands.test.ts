@@ -13,10 +13,12 @@ initTheme("dark", false);
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((done) => {
+	let reject!: (error: Error) => void;
+	const promise = new Promise<T>((done, fail) => {
 		resolve = done;
+		reject = fail;
 	});
-	return { promise, resolve };
+	return { promise, reject, resolve };
 }
 
 async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<void> {
@@ -464,6 +466,24 @@ test("session replacement drops a delayed init continuation", async () => {
 
 	assert.equal(first.notifications.length, notificationsBeforeInit);
 	assert.equal(loads, 2);
+});
+
+test("session replacement drops a delayed init failure", async () => {
+	const initializing = deferred<"created" | "exists">();
+	const { mock, runtime } = createRuntime({
+		initializeSettings: () => initializing.promise,
+	});
+	const first = createMockContext({ hasUI: true, mode: "rpc" });
+	await runtime.start(first.ctx);
+	const notificationsBeforeInit = first.notifications.length;
+	const pending = mock.commands.get("webui")?.handler("init", first.ctx);
+	const replacement = createMockContext({ hasUI: true, mode: "rpc" });
+	await runtime.start(replacement.ctx);
+	initializing.reject(new Error("init lock compromised"));
+	await pending;
+
+	assert.equal(first.notifications.length, notificationsBeforeInit);
+	assert.doesNotMatch(replacement.notifications.at(-1)?.message ?? "", /init lock compromised/i);
 });
 
 test("settings changes save in action order and update effective status", async () => {

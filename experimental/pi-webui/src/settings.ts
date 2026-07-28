@@ -1,5 +1,5 @@
 import * as nodeFs from "node:fs";
-import { lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import lockfile from "proper-lockfile";
@@ -46,12 +46,18 @@ export interface SettingsLoadResult {
 export interface SettingsFileOperations {
 	write(path: string, data: string): Promise<void>;
 	rename(source: string, destination: string): Promise<void>;
+	publishExclusive(source: string, destination: string): Promise<void>;
+	lock(path: string, onCompromised: (error: Error) => void): Promise<() => Promise<void>>;
 }
 
 const DEFAULT_FILE_OPERATIONS: SettingsFileOperations = {
 	write: (path, data) =>
 		writeFile(path, data, { encoding: "utf8", flag: "wx", mode: 0o600 }).then(() => undefined),
 	rename,
+	// Exclusive copy avoids POSIX rename replacement without Android-denied hard links.
+	publishExclusive: (source, destination) =>
+		copyFile(source, destination, nodeFs.constants.COPYFILE_EXCL),
+	lock: acquireInitializationLock,
 };
 
 const LOCKFILE_FS_ADAPTER = {
@@ -218,30 +224,70 @@ export async function initializeSettings(
 
 	const directory = dirname(path);
 	await mkdir(directory, { recursive: true });
-	const release = await lockfile.lock(path, {
+	let compromisedError: Error | undefined;
+	const release = await (operations.lock ?? DEFAULT_FILE_OPERATIONS.lock)(path, (error) => {
+		compromisedError ??= error;
+	});
+	const throwIfCompromised = () => {
+		if (compromisedError) throw compromisedError;
+	};
+	const temporaryPath = temporaryFilePath(path);
+	let outcome: "created" | "exists" | undefined;
+	let operationError: unknown;
+	try {
+		throwIfCompromised();
+		try {
+			await lstat(path);
+			outcome = "exists";
+		} catch (error) {
+			if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+		}
+		throwIfCompromised();
+		if (!outcome) {
+			await (operations.write ?? DEFAULT_FILE_OPERATIONS.write)(
+				temporaryPath,
+				`${JSON.stringify(DEFAULT_SETTINGS, null, 2)}\n`,
+			);
+			throwIfCompromised();
+			try {
+				await (operations.publishExclusive ?? DEFAULT_FILE_OPERATIONS.publishExclusive)(
+					temporaryPath,
+					path,
+				);
+				outcome = "created";
+			} catch (error) {
+				if (!isNodeError(error) || error.code !== "EEXIST") throw error;
+				outcome = "exists";
+			}
+			throwIfCompromised();
+		}
+	} catch (error) {
+		operationError = error;
+	} finally {
+		await unlink(temporaryPath).catch(() => undefined);
+		try {
+			await release();
+		} catch (error) {
+			if (!compromisedError && !operationError) operationError = error;
+		}
+	}
+	if (compromisedError) throw compromisedError;
+	if (operationError) throw operationError;
+	if (!outcome) throw new Error("Settings initialization completed without an outcome.");
+	return outcome;
+}
+
+function acquireInitializationLock(
+	path: string,
+	onCompromised: (error: Error) => void,
+): Promise<() => Promise<void>> {
+	return lockfile.lock(path, {
 		fs: LOCKFILE_FS_ADAPTER,
 		lockfilePath: `${path}.init-lock`,
 		realpath: false,
 		retries: { retries: 20, factor: 1.2, minTimeout: 5, maxTimeout: 50 },
+		onCompromised,
 	});
-	const temporaryPath = temporaryFilePath(path);
-	try {
-		try {
-			await lstat(path);
-			return "exists";
-		} catch (error) {
-			if (!isNodeError(error) || error.code !== "ENOENT") throw error;
-		}
-		await (operations.write ?? DEFAULT_FILE_OPERATIONS.write)(
-			temporaryPath,
-			`${JSON.stringify(DEFAULT_SETTINGS, null, 2)}\n`,
-		);
-		await (operations.rename ?? DEFAULT_FILE_OPERATIONS.rename)(temporaryPath, path);
-		return "created";
-	} finally {
-		await unlink(temporaryPath).catch(() => undefined);
-		await release();
-	}
 }
 
 function elevatedLimitWarning(settings: WebUISettings): string | undefined {
