@@ -109,6 +109,11 @@ export default function caffeinate(pi: ExtensionAPI) {
 		getArgumentCompletions: (prefix) => commandCompletions(prefix),
 		handler: async (args, ctx) => {
 			const generation = state.sessionGeneration;
+			const command = parseCommand(args);
+			if (command === "sleep" || command === "display") {
+				await setModeAfterSettingsLoad(ctx, command, generation);
+				return;
+			}
 			await ensureSettingsLoaded(ctx, generation);
 			if (generation !== state.sessionGeneration) return;
 			await handleCaffeinateCommand(args, ctx, generation);
@@ -199,10 +204,26 @@ async function showModeSelector(ctx: CommandContext, generation: number) {
 
 let modeOperationQueue = Promise.resolve();
 
+function setModeAfterSettingsLoad(
+	ctx: ExtensionContext,
+	mode: CaffeinateMode,
+	generation: number,
+): Promise<void> {
+	return enqueueModeOperation(async () => {
+		await ensureSettingsLoaded(ctx, generation);
+		if (generation !== state.sessionGeneration) return;
+		await setModeNow(ctx, mode, generation);
+	});
+}
+
 function setMode(ctx: ExtensionContext, mode: CaffeinateMode, generation: number): Promise<void> {
-	const operation = modeOperationQueue.then(() => setModeNow(ctx, mode, generation));
-	modeOperationQueue = operation.catch(() => undefined);
-	return operation;
+	return enqueueModeOperation(() => setModeNow(ctx, mode, generation));
+}
+
+function enqueueModeOperation(operation: () => Promise<void>): Promise<void> {
+	const queued = modeOperationQueue.then(operation);
+	modeOperationQueue = queued.catch(() => undefined);
+	return queued;
 }
 
 async function setModeNow(ctx: ExtensionContext, mode: CaffeinateMode, generation: number) {

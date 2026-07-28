@@ -120,6 +120,7 @@
 - Pi-sync settings read-modify-write must hold one cross-process lock across the read, complete v3 validation, and atomic replacement; separate read/write lock windows only detect stale edits and can still reject otherwise serializable concurrent saves.
 - Symptom: first-run settings publication fails in Android/Termux despite a writable directory. Cause: SELinux forbids hard links for `untrusted_app`. Fix: keep missing-file loads side-effect free and publish explicit saves with same-directory temporary files plus rename.
 - Node has no hard-link-free atomic no-replace rename primitive. Keep supported writers inside one lock protocol, recheck an initially absent destination immediately before same-directory rename, state that lock-unaware editors are outside the boundary, and never `copyFile` directly into the canonical path because readers can observe partial bytes.
+- To preserve mutating command invocation order, enqueue the whole mutation before prerequisite awaits; queuing only the eventual persistence step lets asynchronous settings loads reorder rapid commands.
 
 ## TASTE
 
