@@ -28,9 +28,11 @@ test("stamp registers one entry renderer, one menu command, and no tools", () =>
 		"agent_end",
 		"message_end",
 		"message_start",
+		"message_update",
 		"session_shutdown",
 		"session_start",
 		"turn_end",
+		"turn_start",
 	]);
 });
 
@@ -41,7 +43,7 @@ test("formatStampTime uses zero-padded local 24-hour time and rejects invalid va
 	assert.equal(formatStampTime(10 ** 20), undefined);
 });
 
-test("isMessageStampData accepts exact finite version 1 and version 2 schemas", () => {
+test("isMessageStampData accepts exact finite version 1, version 2, and assistant version 3 schemas", () => {
 	assert.equal(isMessageStampData({ version: 1, role: "user", timestamp: USER_TIMESTAMP }), true);
 	assert.equal(
 		isMessageStampData({ version: 2, role: "assistant", timestamp: ASSISTANT_TIMESTAMP }),
@@ -74,6 +76,48 @@ test("isMessageStampData accepts exact finite version 1 and version 2 schemas", 
 		}),
 		false,
 	);
+	assert.equal(
+		isMessageStampData({
+			version: 3,
+			role: "assistant",
+			timestamp: USER_TIMESTAMP,
+			previousTimestamp: USER_TIMESTAMP - 1_000,
+			completedAt: USER_TIMESTAMP + 3_200,
+			firstContentAt: USER_TIMESTAMP + 800,
+		}),
+		true,
+	);
+	for (const value of [
+		{
+			version: 3,
+			role: "user",
+			timestamp: USER_TIMESTAMP,
+			completedAt: USER_TIMESTAMP + 1_000,
+		},
+		{ version: 3, role: "assistant", timestamp: USER_TIMESTAMP },
+		{
+			version: 3,
+			role: "assistant",
+			timestamp: USER_TIMESTAMP,
+			completedAt: USER_TIMESTAMP - 1,
+		},
+		{
+			version: 3,
+			role: "assistant",
+			timestamp: USER_TIMESTAMP,
+			completedAt: USER_TIMESTAMP + 1_000,
+			firstContentAt: USER_TIMESTAMP + 2_000,
+		},
+		{
+			version: 3,
+			role: "assistant",
+			timestamp: USER_TIMESTAMP,
+			completedAt: USER_TIMESTAMP + 1_000,
+			future: true,
+		},
+	]) {
+		assert.equal(isMessageStampData(value), false);
+	}
 	assert.equal(
 		isMessageStampData({ version: 1, role: "toolResult", timestamp: USER_TIMESTAMP }),
 		false,
@@ -108,10 +152,34 @@ test("entry renderer reads live settings, uses the callback theme, and stays wid
 	assert.equal(component.render(30).join("\n"), "         2026-07-30 · 00:01:02");
 	settings = { ...settings, showSeconds: false, dateContext: "never" };
 	assert.equal(component.render(12).join("\n"), "       00:01");
+	settings = { ...settings, showSeconds: true, responseTiming: "duration" };
+	const timedComponent = renderer(
+		{
+			data: {
+				version: 3,
+				role: "assistant",
+				timestamp: Date.UTC(2026, 6, 30, 0, 1, 2),
+				completedAt: Date.UTC(2026, 6, 30, 0, 1, 5, 200),
+				firstContentAt: Date.UTC(2026, 6, 30, 0, 1, 2, 800),
+			},
+		} as never,
+		{ expanded: false },
+		{ fg: (_color: string, text: string) => text } as never,
+	);
+	assert.ok(timedComponent);
+	assert.equal(timedComponent.render(50).join("\n").trim(), "00:01:02 · 3.2s");
+	settings = { ...settings, responseTiming: "detailed" };
+	assert.equal(
+		timedComponent.render(50).join("\n"),
+		"                00:01:02 · first 0.8s · total 3.2s",
+	);
 	assert.deepEqual(colors, ["dim", "dim"]);
+	const renderedComponents = [component, timedComponent];
 	for (const width of [1, 4, 8, 10]) {
-		for (const line of component.render(width)) {
-			assert.ok(visibleWidth(line) <= width, `${JSON.stringify(line)} exceeded width ${width}`);
+		for (const renderedComponent of renderedComponents) {
+			for (const line of renderedComponent.render(width)) {
+				assert.ok(visibleWidth(line) <= width, `${JSON.stringify(line)} exceeded width ${width}`);
+			}
 		}
 	}
 
@@ -126,10 +194,12 @@ test("Pi persists stamp entries across reopen without adding them to model conte
 	t.after(() => rmSync(sessionDir, { recursive: true, force: true }));
 	const session = SessionManager.create(process.cwd(), sessionDir);
 	const stampData = {
-		version: 2,
-		role: "user",
+		version: 3,
+		role: "assistant",
 		timestamp: USER_TIMESTAMP,
 		previousTimestamp: USER_TIMESTAMP - 1_000,
+		completedAt: USER_TIMESTAMP + 3_200,
+		firstContentAt: USER_TIMESTAMP + 800,
 	} as const;
 
 	session.appendMessage(userMessage(USER_TIMESTAMP));
@@ -154,9 +224,10 @@ test("Pi persists stamp entries across reopen without adding them to model conte
 	);
 });
 
-test("TUI lifecycle appends one user stamp before the assistant and one assistant stamp at turn end", async () => {
+test("TUI lifecycle appends one user stamp before the assistant and measured assistant timing at turn end", async () => {
 	const mock = createMockPi();
-	stamp(mock.pi);
+	const times = [ASSISTANT_TIMESTAMP + 800, ASSISTANT_TIMESTAMP + 3_200];
+	stamp(mock.pi, { now: () => times.shift() ?? assert.fail("Unexpected clock read") });
 	const { ctx } = createMockContext({ mode: "tui" });
 	const user = userMessage(USER_TIMESTAMP);
 	const assistant = assistantMessage(ASSISTANT_TIMESTAMP);
@@ -168,12 +239,32 @@ test("TUI lifecycle appends one user stamp before the assistant and one assistan
 
 	await emit(mock, "message_start", { message: assistant }, ctx);
 	assert.deepEqual(mock.entries, [stampEntry("user", USER_TIMESTAMP)]);
-
+	await emit(
+		mock,
+		"message_update",
+		{ message: assistant, assistantMessageEvent: { type: "text_start", contentIndex: 0 } },
+		ctx,
+	);
+	await emit(
+		mock,
+		"message_update",
+		{ message: assistant, assistantMessageEvent: { type: "text_delta", delta: "" } },
+		ctx,
+	);
+	await emit(
+		mock,
+		"message_update",
+		{ message: assistant, assistantMessageEvent: { type: "text_delta", delta: "hello" } },
+		ctx,
+	);
 	await emit(mock, "message_end", { message: assistant }, ctx);
 	await emit(mock, "turn_end", { message: assistant, toolResults: [], turnIndex: 0 }, ctx);
 	assert.deepEqual(mock.entries, [
 		stampEntry("user", USER_TIMESTAMP),
-		stampEntry("assistant", ASSISTANT_TIMESTAMP, USER_TIMESTAMP),
+		timedAssistantStamp(ASSISTANT_TIMESTAMP, ASSISTANT_TIMESTAMP + 3_200, {
+			previousTimestamp: USER_TIMESTAMP,
+			firstContentAt: ASSISTANT_TIMESTAMP + 800,
+		}),
 	]);
 
 	await emit(mock, "agent_end", { messages: [user, assistant] }, ctx);
@@ -181,6 +272,75 @@ test("TUI lifecycle appends one user stamp before the assistant and one assistan
 	assert.equal(mock.entries.length, 2);
 	assert.deepEqual(mock.sentMessages, []);
 	assert.deepEqual(mock.sentUserMessages, []);
+});
+
+test("thinking, completed blocks, and tool calls can be the first meaningful assistant content", async () => {
+	const events = [
+		{ type: "thinking_delta", delta: "reasoning" },
+		{ type: "text_end", content: "complete" },
+		{ type: "toolcall_end", toolCall: { id: "call-1", name: "read", arguments: {} } },
+	] as const;
+	for (const [index, assistantMessageEvent] of events.entries()) {
+		const mock = createMockPi();
+		const timestamp = ASSISTANT_TIMESTAMP + index * 10_000;
+		let now = timestamp + 700;
+		stamp(mock.pi, { now: () => now });
+		const { ctx } = createMockContext({ mode: "tui" });
+		const assistant = assistantMessage(timestamp);
+		await emit(mock, "session_start", { reason: "startup" }, ctx);
+		await emit(mock, "turn_start", { turnIndex: 0, timestamp: timestamp - 10 }, ctx);
+		await emit(mock, "message_start", { message: assistant }, ctx);
+		await emit(mock, "message_update", { message: assistant, assistantMessageEvent }, ctx);
+		now = timestamp + 2_000;
+		await emit(mock, "message_end", { message: assistant }, ctx);
+		now = timestamp + 20_000;
+		await emit(mock, "turn_end", { message: assistant, toolResults: [], turnIndex: 0 }, ctx);
+		assert.deepEqual(
+			mock.entries,
+			[timedAssistantStamp(timestamp, timestamp + 2_000, { firstContentAt: timestamp + 700 })],
+			assistantMessageEvent.type,
+		);
+	}
+});
+
+test("missing first content stays unavailable and tool execution does not extend completion", async () => {
+	const mock = createMockPi();
+	let now = ASSISTANT_TIMESTAMP + 3_200;
+	stamp(mock.pi, { now: () => now });
+	const { ctx } = createMockContext({ mode: "tui" });
+	const assistant = assistantMessage(ASSISTANT_TIMESTAMP, "toolUse");
+	await emit(mock, "session_start", { reason: "startup" }, ctx);
+	await emit(mock, "message_start", { message: assistant }, ctx);
+	await emit(mock, "message_end", { message: assistant }, ctx);
+	now = ASSISTANT_TIMESTAMP + 30_000;
+	await emit(
+		mock,
+		"message_end",
+		{
+			message: {
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "read",
+				content: [],
+				isError: false,
+				timestamp: now,
+			},
+		},
+		ctx,
+	);
+	await emit(mock, "turn_end", { message: assistant, toolResults: [], turnIndex: 0 }, ctx);
+	assert.deepEqual(mock.entries, [
+		timedAssistantStamp(ASSISTANT_TIMESTAMP, ASSISTANT_TIMESTAMP + 3_200),
+	]);
+	const renderer = createStampEntryRenderer(() => ({
+		...DEFAULT_STAMP_SETTINGS,
+		responseTiming: "detailed",
+	}));
+	const component = renderer({ data: mock.entries[0]?.data } as never, { expanded: false }, {
+		fg: (_color: string, text: string) => text,
+	} as never);
+	assert.ok(component);
+	assert.match(component.render(80).join("\n"), /first n\/a · total 3\.2s$/u);
 });
 
 test("successive user messages flush in source order at the following message boundaries", async () => {
@@ -201,6 +361,89 @@ test("successive user messages flush in source order at the following message bo
 		stampEntry("user", USER_TIMESTAMP),
 		stampEntry("user", USER_TIMESTAMP + 1_000, USER_TIMESTAMP),
 	]);
+});
+
+test("error and aborted assistant messages retain completion timing", async () => {
+	for (const [index, stopReason] of ["error", "aborted"].entries()) {
+		const mock = createMockPi();
+		const timestamp = ASSISTANT_TIMESTAMP + index * 10_000;
+		stamp(mock.pi, { now: () => timestamp + 1_500 });
+		const { ctx } = createMockContext({ mode: "tui" });
+		const assistant = assistantMessage(timestamp, stopReason as "error" | "aborted");
+		await emit(mock, "session_start", { reason: "startup" }, ctx);
+		await emit(mock, "message_start", { message: assistant }, ctx);
+		await emit(mock, "message_end", { message: assistant }, ctx);
+		await emit(mock, "turn_end", { message: assistant, toolResults: [], turnIndex: 0 }, ctx);
+		assert.deepEqual(mock.entries, [timedAssistantStamp(timestamp, timestamp + 1_500)]);
+	}
+});
+
+test("mismatched and reversed timing degrades without leaking into a later response", async () => {
+	const mock = createMockPi();
+	let now = ASSISTANT_TIMESTAMP + 500;
+	stamp(mock.pi, { now: () => now });
+	const { ctx } = createMockContext({ mode: "tui" });
+	const first = assistantMessage(ASSISTANT_TIMESTAMP);
+	const mismatch = assistantMessage(ASSISTANT_TIMESTAMP + 1_000);
+	await emit(mock, "session_start", { reason: "startup" }, ctx);
+	await emit(mock, "message_start", { message: first }, ctx);
+	await emit(
+		mock,
+		"message_update",
+		{ message: first, assistantMessageEvent: { type: "text_delta", delta: "x" } },
+		ctx,
+	);
+	now = ASSISTANT_TIMESTAMP + 900;
+	await emit(mock, "message_end", { message: first }, ctx);
+	await emit(mock, "turn_end", { message: mismatch, toolResults: [], turnIndex: 0 }, ctx);
+
+	const reversed = assistantMessage(ASSISTANT_TIMESTAMP + 2_000);
+	await emit(mock, "turn_start", { turnIndex: 1, timestamp: ASSISTANT_TIMESTAMP + 1_500 }, ctx);
+	await emit(mock, "message_start", { message: reversed }, ctx);
+	now = reversed.timestamp - 1;
+	await emit(mock, "message_end", { message: reversed }, ctx);
+	await emit(mock, "turn_end", { message: reversed, toolResults: [], turnIndex: 1 }, ctx);
+
+	assert.deepEqual(mock.entries, [
+		stampEntry("assistant", mismatch.timestamp),
+		stampEntry("assistant", reversed.timestamp, mismatch.timestamp),
+	]);
+});
+
+test("an out-of-order first-content clock is omitted while valid completion remains", async () => {
+	const mock = createMockPi();
+	let now = ASSISTANT_TIMESTAMP - 1;
+	stamp(mock.pi, { now: () => now });
+	const { ctx } = createMockContext({ mode: "tui" });
+	const assistant = assistantMessage(ASSISTANT_TIMESTAMP);
+	await emit(mock, "session_start", { reason: "startup" }, ctx);
+	await emit(mock, "message_start", { message: assistant }, ctx);
+	await emit(
+		mock,
+		"message_update",
+		{ message: assistant, assistantMessageEvent: { type: "text_delta", delta: "x" } },
+		ctx,
+	);
+	now = ASSISTANT_TIMESTAMP + 1_000;
+	await emit(mock, "message_end", { message: assistant }, ctx);
+	await emit(mock, "turn_end", { message: assistant, toolResults: [], turnIndex: 0 }, ctx);
+	assert.deepEqual(mock.entries, [
+		timedAssistantStamp(ASSISTANT_TIMESTAMP, ASSISTANT_TIMESTAMP + 1_000),
+	]);
+});
+
+test("session replacement clears finalized timing owned by the prior session", async () => {
+	const mock = createMockPi();
+	stamp(mock.pi, { now: () => ASSISTANT_TIMESTAMP + 2_000 });
+	const first = createMockContext({ mode: "tui" });
+	const second = createMockContext({ mode: "tui" });
+	const assistant = assistantMessage(ASSISTANT_TIMESTAMP);
+	await emit(mock, "session_start", { reason: "startup" }, first.ctx);
+	await emit(mock, "message_start", { message: assistant }, first.ctx);
+	await emit(mock, "message_end", { message: assistant }, first.ctx);
+	await emit(mock, "session_start", { reason: "resume" }, second.ctx);
+	await emit(mock, "turn_end", { message: assistant, toolResults: [], turnIndex: 0 }, second.ctx);
+	assert.deepEqual(mock.entries, [stampEntry("assistant", ASSISTANT_TIMESTAMP)]);
 });
 
 test("assistant tool and error turns receive one stamp without stamping tool results", async () => {
@@ -249,7 +492,17 @@ test("session start rebuilds the predecessor cursor from the active branch", asy
 				{
 					type: "custom",
 					customType: STAMP_ENTRY_TYPE,
-					data: { version: 1, role: "user", timestamp: previous },
+					data: { version: 1, role: "user", timestamp: previous - 60_000 },
+				},
+				{
+					type: "custom",
+					customType: STAMP_ENTRY_TYPE,
+					data: {
+						version: 3,
+						role: "assistant",
+						timestamp: previous,
+						completedAt: previous + 2_000,
+					},
 				},
 			],
 		},
@@ -379,11 +632,34 @@ function stampEntry(role: "user" | "assistant", timestamp: number, previousTimes
 	};
 }
 
+function timedAssistantStamp(
+	timestamp: number,
+	completedAt: number,
+	options: { previousTimestamp?: number; firstContentAt?: number } = {},
+) {
+	return {
+		customType: STAMP_ENTRY_TYPE,
+		data: {
+			version: 3,
+			role: "assistant",
+			timestamp,
+			...(options.previousTimestamp === undefined
+				? {}
+				: { previousTimestamp: options.previousTimestamp }),
+			completedAt,
+			...(options.firstContentAt === undefined ? {} : { firstContentAt: options.firstContentAt }),
+		},
+	};
+}
+
 function userMessage(timestamp: number) {
 	return { role: "user" as const, content: "hello", timestamp };
 }
 
-function assistantMessage(timestamp: number, stopReason: "stop" | "toolUse" | "error" = "stop") {
+function assistantMessage(
+	timestamp: number,
+	stopReason: "stop" | "toolUse" | "error" | "aborted" = "stop",
+) {
 	return {
 		role: "assistant" as const,
 		content: [{ type: "text" as const, text: "hello" }],
@@ -423,6 +699,7 @@ function defaultSettingsState(): Readonly<StampSettingsState> {
 			dateContext: "built-in",
 			locale: "built-in",
 			timeZone: "built-in",
+			responseTiming: "built-in",
 		},
 		canSave: true,
 	};

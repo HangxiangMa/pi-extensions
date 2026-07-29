@@ -9,6 +9,7 @@ right-aligned timestamp after each user and assistant message in the interactive
 
 - Shows each message's recorded creation time on a dim, right-aligned transcript row.
 - Supports 12/24-hour clocks, optional seconds, automatic date context, locales, and time zones.
+- Optionally shows assistant response duration and detailed first-content/total timing.
 - Stores versioned custom session entries that survive reload and resume.
 - Keeps stamp entries outside LLM context, so timestamp text is never sent to the model.
 - Uses Pi's current theme and remains width-safe in narrow terminals.
@@ -51,7 +52,7 @@ Run `/stamp` to open the presentation menu:
 
 ```text
 Stamp
-24-hour · seconds · Day changes · Invariant · Local
+24-hour · seconds · Day changes · Invariant · Local · Timing off
 
 Settings
 Status
@@ -73,6 +74,7 @@ The `/stamp` Settings screen provides these controls:
 | `dateContext` | `"day-change"`, `"always"`, `"never"` | `"day-change"` | Adds a date at recorded day boundaries, every time, or never. |
 | `locale` | `"invariant"`, `"system"`, or one BCP 47 tag | `"invariant"` | Controls localized date/time presentation. |
 | `timeZone` | `"local"` or one supported IANA zone | `"local"` | Controls time and day-boundary interpretation; `UTC` is accepted. |
+| `responseTiming` | `"off"`, `"duration"`, `"detailed"` | `"off"` | Keeps timestamps minimal, adds total assistant duration, or labels first-content and total timing. |
 
 The compatibility defaults produce local `HH:mm:ss` for ordinary same-day messages. `invariant`
 uses Gregorian ISO dates, Latin digits, and English `AM`/`PM`. `system` uses the operating system
@@ -91,7 +93,8 @@ object, so this is enough to show 12-hour Taipei time without seconds:
 {
   "hourCycle": "12h",
   "showSeconds": false,
-  "timeZone": "Asia/Taipei"
+  "timeZone": "Asia/Taipei",
+  "responseTiming": "duration"
 }
 ```
 
@@ -115,19 +118,40 @@ publication.
 `/stamp` supports TUI and RPC dialog modes. Print and JSON command invocations reject without writing
 ad hoc protocol output. Transcript stamps themselves are appended only in TUI mode.
 
-## 🕰️ Timestamp semantics
+## 🕰️ Timestamp and response-timing semantics
 
 - A **user** stamp is the timestamp recorded when Pi creates the submitted user message.
-- An **assistant** stamp is the timestamp recorded when Pi creates the response stream/message. It is
-  not the response completion time.
-- If an assistant message invokes tools, its stamp appears after the complete tool block. Tool calls
-  and results do not receive their own stamps.
+- An **assistant** clock is the timestamp recorded when Pi creates the response stream/message.
+- New assistant entries separately record when this extension observes Pi's final `message_end`.
+  `responseTiming: "duration"` shows creation-to-completion elapsed time:
+
+  ```text
+  14:32:08 · 3.2s
+  ```
+
+- `responseTiming: "detailed"` distinguishes the first meaningful streamed content observed by Pi
+  from total completion:
+
+  ```text
+  14:32:08 · first 0.8s · total 3.2s
+  ```
+
+  First content is the first non-empty text, thinking, or tool-call update—not a provider-server
+  timestamp or guaranteed time-to-first-token. `first n/a` means Pi finalized the response without
+  such an update; completion time is never substituted.
+- If an assistant message invokes tools, its stamp appears after the complete tool block, but total
+  response timing ends at the assistant's `message_end` and excludes tool execution. Tool calls and
+  results do not receive their own stamps.
+- Error and aborted assistant messages use the same local completion boundary. Invalid or backwards
+  clock observations degrade to timestamp-only data rather than showing a negative or clamped value.
 - `dateContext: "day-change"` compares each newly recorded stamp with its persisted predecessor in
   the currently selected time zone. The first known stamp stays time-only.
-- Changing locale or time zone re-renders recorded version-2 stamps without rewriting session files.
+- Changing presentation settings re-renders compatible recorded stamps without rewriting session
+  files.
 
-Relative labels such as `3m ago` are intentionally unavailable because they would require periodic
-background refresh and lifecycle cleanup.
+Timing labels are local Pi lifecycle observations, not provider latency telemetry. They require no
+network request or refresh task. Relative labels such as `3m ago` remain unavailable because they
+would require periodic background refresh and lifecycle cleanup.
 
 ## 🔒 Context and persistence
 
@@ -135,8 +159,11 @@ Stamps use Pi custom session entries. Pi renders those entries in the interactiv
 excludes them from model context. The extension does not modify user or assistant message content.
 
 Version-2 entries retain the previous recorded stamp timestamp so day changes can be recomputed for
-the active presentation settings. Existing version-1 entries remain readable. They can show their
-own date with `dateContext: "always"`, but `day-change` cannot infer a missing predecessor.
+the active presentation settings. Version-3 assistant entries add absolute extension-observed
+completion and optional first-content boundaries; elapsed labels are derived during rendering.
+Existing version-1 and version-2 entries remain readable and timestamp-only because they contain no
+timing observations. Version-1 entries can show their own date with `dateContext: "always"`, but
+`day-change` cannot infer a missing predecessor.
 
 Once recorded, a stamp survives `/reload` and session resume while the extension remains loaded.
 Messages created before `pi-stamp` recorded them are not backfilled because Pi's current public API
@@ -148,8 +175,8 @@ cannot insert a new custom entry into an older position in the session tree.
   separate transcript rows rather than inside the original message bubble.
 - Another extension can append transcript entries at the same lifecycle boundary, so strict visual
   adjacency between independently loaded extensions is not guaranteed.
-- There are no arbitrary format strings, relative labels, duration, model, token, cost, or
-  tool-timing controls.
+- There are no arbitrary format strings, relative labels, provider-server latency, model, token,
+  cost, timing aggregates, or tool-timing controls.
 
 See the
 [pi-stamp roadmap](https://github.com/narumiruna/pi-extensions/blob/main/docs/roadmaps/pi-stamp-roadmap.md)
@@ -161,10 +188,10 @@ for possible future metadata stamps.
 extensions/pi-stamp/
 ├── src/
 │   ├── index.ts       # Thin Pi package entrypoint
-│   ├── format.ts      # Locale, time-zone, date, and clock formatting
+│   ├── format.ts      # Date, clock, and response-elapsed formatting
 │   ├── menu.ts        # /stamp presentation menu
 │   ├── settings.ts    # Validation and atomic user settings
-│   └── stamp.ts       # Renderer, payload compatibility, and lifecycle hooks
+│   └── stamp.ts       # Renderer, payload compatibility, and timing lifecycle
 ├── test/
 │   ├── format.test.ts
 │   ├── menu.test.ts

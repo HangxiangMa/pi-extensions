@@ -1,8 +1,10 @@
 export const HOUR_CYCLES = ["24h", "12h"] as const;
 export const DATE_CONTEXTS = ["day-change", "always", "never"] as const;
+export const RESPONSE_TIMING_MODES = ["off", "duration", "detailed"] as const;
 
 export type StampHourCycle = (typeof HOUR_CYCLES)[number];
 export type StampDateContext = (typeof DATE_CONTEXTS)[number];
+export type StampResponseTimingMode = (typeof RESPONSE_TIMING_MODES)[number];
 export type StampLocale = "invariant" | "system" | string;
 export type StampTimeZone = "local" | string;
 
@@ -12,6 +14,7 @@ export interface StampSettings {
 	dateContext: StampDateContext;
 	locale: StampLocale;
 	timeZone: StampTimeZone;
+	responseTiming: StampResponseTimingMode;
 }
 
 export const DEFAULT_STAMP_SETTINGS: Readonly<StampSettings> = Object.freeze({
@@ -20,11 +23,19 @@ export const DEFAULT_STAMP_SETTINGS: Readonly<StampSettings> = Object.freeze({
 	dateContext: "day-change",
 	locale: "invariant",
 	timeZone: "local",
+	responseTiming: "off",
 });
 
 export interface StampFormatEnvironment {
 	systemLocale?: string;
 	localTimeZone?: string;
+}
+
+export interface MessageStampFormatInput {
+	timestamp: number;
+	previousTimestamp?: number;
+	completedAt?: number;
+	firstContentAt?: number;
 }
 
 interface ZonedParts {
@@ -73,6 +84,33 @@ export function formatStampLabel(
 	} catch {
 		return undefined;
 	}
+}
+
+export function formatMessageStampLabel(
+	input: Readonly<MessageStampFormatInput>,
+	settings: Readonly<StampSettings>,
+	environment: StampFormatEnvironment = {},
+): string | undefined {
+	const label = formatStampLabel(input.timestamp, input.previousTimestamp, settings, environment);
+	if (!label || settings.responseTiming === "off") return label;
+	if (!isValidTimestamp(input.completedAt) || input.completedAt < input.timestamp) return label;
+	const total = formatResponseElapsed(input.completedAt - input.timestamp);
+	if (!total) return label;
+	if (settings.responseTiming === "duration") return `${label} · ${total}`;
+	const first =
+		isValidTimestamp(input.firstContentAt) &&
+		input.firstContentAt >= input.timestamp &&
+		input.firstContentAt <= input.completedAt
+			? formatResponseElapsed(input.firstContentAt - input.timestamp)
+			: undefined;
+	return `${label} · first ${first ?? "n/a"} · total ${total}`;
+}
+
+export function formatResponseElapsed(elapsedMilliseconds: number): string | undefined {
+	if (!Number.isFinite(elapsedMilliseconds) || elapsedMilliseconds < 0) return undefined;
+	if (elapsedMilliseconds > 0 && elapsedMilliseconds < 100) return "<0.1s";
+	const tenths = Math.round(elapsedMilliseconds / 100);
+	return `${(tenths / 10).toFixed(1)}s`;
 }
 
 function formatInvariant(

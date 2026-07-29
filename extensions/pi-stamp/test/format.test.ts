@@ -4,7 +4,10 @@ import {
 	canonicalizeLocale,
 	canonicalizeTimeZone,
 	DEFAULT_STAMP_SETTINGS,
+	formatMessageStampLabel,
+	formatResponseElapsed,
 	formatStampLabel,
+	RESPONSE_TIMING_MODES,
 } from "../src/format.js";
 
 const BEFORE_MIDNIGHT_UTC = Date.UTC(2026, 6, 29, 23, 59, 58);
@@ -117,4 +120,74 @@ test("formatStampLabel rejects invalid timestamps", () => {
 		undefined,
 	);
 	assert.equal(formatStampLabel(10 ** 20, undefined, DEFAULT_STAMP_SETTINGS, UTC_ENV), undefined);
+});
+
+test("response timing modes preserve the default and compose with date context", () => {
+	assert.deepEqual(RESPONSE_TIMING_MODES, ["off", "duration", "detailed"]);
+	const input = {
+		timestamp: AFTER_MIDNIGHT_UTC,
+		previousTimestamp: BEFORE_MIDNIGHT_UTC,
+		completedAt: AFTER_MIDNIGHT_UTC + 3_200,
+		firstContentAt: AFTER_MIDNIGHT_UTC + 800,
+	};
+	assert.equal(
+		formatMessageStampLabel(input, DEFAULT_STAMP_SETTINGS, UTC_ENV),
+		"2026-07-30 · 00:01:02",
+	);
+	assert.equal(
+		formatMessageStampLabel(
+			input,
+			{ ...DEFAULT_STAMP_SETTINGS, responseTiming: "duration" },
+			UTC_ENV,
+		),
+		"2026-07-30 · 00:01:02 · 3.2s",
+	);
+	assert.equal(
+		formatMessageStampLabel(
+			input,
+			{ ...DEFAULT_STAMP_SETTINGS, responseTiming: "detailed" },
+			UTC_ENV,
+		),
+		"2026-07-30 · 00:01:02 · first 0.8s · total 3.2s",
+	);
+});
+
+test("response timing labels unavailable first content without fabricating legacy timing", () => {
+	const detailed = { ...DEFAULT_STAMP_SETTINGS, responseTiming: "detailed" } as const;
+	assert.equal(
+		formatMessageStampLabel(
+			{ timestamp: AFTER_MIDNIGHT_UTC, completedAt: AFTER_MIDNIGHT_UTC + 1_500 },
+			detailed,
+			UTC_ENV,
+		),
+		"00:01:02 · first n/a · total 1.5s",
+	);
+	assert.equal(
+		formatMessageStampLabel({ timestamp: AFTER_MIDNIGHT_UTC }, detailed, UTC_ENV),
+		"00:01:02",
+	);
+	assert.equal(
+		formatMessageStampLabel(
+			{
+				timestamp: AFTER_MIDNIGHT_UTC,
+				completedAt: AFTER_MIDNIGHT_UTC + 1_500,
+				firstContentAt: AFTER_MIDNIGHT_UTC - 1,
+			},
+			detailed,
+			UTC_ENV,
+		),
+		"00:01:02 · first n/a · total 1.5s",
+	);
+});
+
+test("response elapsed formatting is exact at boundaries and rejects invalid values", () => {
+	assert.equal(formatResponseElapsed(0), "0.0s");
+	assert.equal(formatResponseElapsed(1), "<0.1s");
+	assert.equal(formatResponseElapsed(99), "<0.1s");
+	assert.equal(formatResponseElapsed(100), "0.1s");
+	assert.equal(formatResponseElapsed(3_249), "3.2s");
+	assert.equal(formatResponseElapsed(3_250), "3.3s");
+	assert.equal(formatResponseElapsed(-1), undefined);
+	assert.equal(formatResponseElapsed(Number.NaN), undefined);
+	assert.equal(formatResponseElapsed(Number.POSITIVE_INFINITY), undefined);
 });

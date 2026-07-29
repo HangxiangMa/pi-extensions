@@ -40,6 +40,7 @@ test("normalization accepts partial settings, canonicalizes locale and zone, and
 			hourCycle: "12h",
 			locale: "EN-us",
 			timeZone: "utc",
+			responseTiming: "detailed",
 			future: { retained: true },
 		}),
 		{
@@ -48,6 +49,7 @@ test("normalization accepts partial settings, canonicalizes locale and zone, and
 				hourCycle: "12h",
 				locale: "en-US",
 				timeZone: "UTC",
+				responseTiming: "detailed",
 			},
 			sources: {
 				hourCycle: "user",
@@ -55,6 +57,7 @@ test("normalization accepts partial settings, canonicalizes locale and zone, and
 				dateContext: "built-in",
 				locale: "user",
 				timeZone: "user",
+				responseTiming: "user",
 			},
 		},
 	);
@@ -66,8 +69,16 @@ test("normalization accepts partial settings, canonicalizes locale and zone, and
 		{ dateContext: "sometimes" },
 		{ locale: "not_a_locale" },
 		{ timeZone: "Moon/Base" },
+		{ responseTiming: "sometimes" },
+		{ responseTiming: false },
 	]) {
 		assert.equal(normalizeStampSettingsDocument(value), undefined);
+	}
+	for (const responseTiming of ["off", "duration", "detailed"] as const) {
+		assert.equal(
+			normalizeStampSettingsDocument({ responseTiming })?.settings.responseTiming,
+			responseTiming,
+		);
 	}
 });
 
@@ -81,17 +92,21 @@ test("updates preserve unknown and omitted fields and publish private JSON atomi
 	const runtime = createStampSettingsRuntime({ path: settingsPath });
 	await runtime.reload();
 	await runtime.update({ hourCycle: "12h" });
+	await runtime.update({ responseTiming: "duration" });
 
 	assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
 		showSeconds: false,
 		future: { retained: true },
 		hourCycle: "12h",
+		responseTiming: "duration",
 	});
 	assert.deepEqual(runtime.get().settings, {
 		...DEFAULT_STAMP_SETTINGS,
 		showSeconds: false,
 		hourCycle: "12h",
+		responseTiming: "duration",
 	});
+	assert.equal(runtime.get().sources.responseTiming, "user");
 	if (process.platform !== "win32") {
 		assert.equal(statSync(settingsPath).mode & 0o777, 0o600);
 	}
