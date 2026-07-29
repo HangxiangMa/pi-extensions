@@ -1,14 +1,16 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "../src/index.js";
 
-type Screen = "main" | "settings";
-type Action = "refresh" | "setMode";
+type Screen = "main" | "profile" | "settings";
+type Action = "refresh" | "setMode" | "setProfile";
 interface State {
 	mode: "Safe" | "Fast";
+	profile: "Minimal" | "Balanced" | "Custom";
 }
 
 declare function refreshDomainState(signal: AbortSignal): Promise<void>;
 declare function saveMode(mode: State["mode"], signal: AbortSignal): Promise<void>;
+declare function saveProfile(profile: string, signal: AbortSignal): Promise<void>;
 declare function loadState(signal: AbortSignal): Promise<State>;
 declare function currentGeneration(): number;
 declare function currentSessionSignal(): AbortSignal;
@@ -23,10 +25,22 @@ const menu = defineMenu<State, Screen, Action>({
 			lines: [`Current mode: ${state.mode}`],
 			items: [
 				{ id: "refresh", label: "Refresh", action: "refresh", busyLabel: "Refreshing" },
+				{ id: "profile", label: "Profile", to: "profile" },
 				{ id: "settings", label: "Settings", to: "settings" },
 				{ id: "close", label: "Close", close: true },
 			],
 			hint: "close",
+		}),
+		profile: ({ state }) => ({
+			kind: "choice",
+			title: "Profile",
+			items: [
+				{ id: "minimal", label: "Minimal", details: ["Only essential information"] },
+				{ id: "balanced", label: "Balanced", details: ["Recommended information"] },
+			],
+			action: "setProfile",
+			currentItemId: state.profile.toLowerCase(),
+			initialItemId: state.profile === "Custom" ? "balanced" : state.profile.toLowerCase(),
 		}),
 		settings: ({ state }) => ({
 			kind: "settings",
@@ -50,6 +64,10 @@ const menu = defineMenu<State, Screen, Action>({
 		setMode: async ({ value, signal }) => {
 			await saveMode(value === "Fast" ? "Fast" : "Safe", signal);
 			return { kind: "stay" };
+		},
+		setProfile: async ({ itemId, signal }) => {
+			await saveProfile(itemId, signal);
+			return { kind: "back" };
 		},
 	},
 });

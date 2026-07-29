@@ -54,6 +54,16 @@ function validateScreen<
 		for (const item of screen.items) validateActionItem(definition, item);
 		return;
 	}
+	if (screen.kind === "choice") {
+		assertAction(definition, `choice screen ${screen.title}`, screen.action);
+		if (
+			screen.viewportSize !== undefined &&
+			(!Number.isInteger(screen.viewportSize) || screen.viewportSize <= 0)
+		) {
+			throw new Error("Menu choice viewport size must be a positive integer");
+		}
+		return;
+	}
 	if (screen.kind === "settings") {
 		for (const item of screen.items) {
 			assertAction(definition, item.id, item.action);

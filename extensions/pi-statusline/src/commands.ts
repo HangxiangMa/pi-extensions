@@ -125,8 +125,8 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCom
 		signal: fallbackController.signal,
 		isCurrent: () => !fallbackController.signal.aborted,
 	};
-	type Screen = "main" | "advanced";
-	type Action = "appearance" | "information" | "layout" | "edit" | "status" | "help" | "back";
+	type Screen = "main" | "advanced" | "information";
+	type Action = "appearance" | "setInformation" | "layout" | "edit" | "status" | "help" | "back";
 	const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
 		start: "main",
 		screens: {
@@ -144,12 +144,30 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCom
 						{
 							id: "information",
 							label: `Information (${inferInformationProfile(config.segments)})`,
-							action: "information",
+							to: "information",
 						},
 						{ id: "advanced", label: "Advanced", to: "advanced" },
 						{ id: "status", label: "Status", action: "status" },
 						{ id: "help", label: "Help", action: "help" },
 					],
+					hint: "close",
+				};
+			},
+			information: () => {
+				const current = inferInformationProfile(options.getLoaded().config.segments);
+				return {
+					kind: "choice",
+					title: "Information level",
+					lines: [`Current profile: ${current}`],
+					items: INFORMATION_PROFILE_NAMES.map((profile) => ({
+						id: profile,
+						label: `${profile[0]?.toUpperCase() ?? ""}${profile.slice(1)}`,
+						description: `${INFORMATION_PROFILES[profile].length} segments`,
+						details: [`Segments: ${INFORMATION_PROFILES[profile].join(" · ")}`],
+					})),
+					action: "setInformation",
+					currentItemId: current,
+					initialItemId: current === "custom" ? "balanced" : current,
 					hint: "close",
 				};
 			},
@@ -179,8 +197,10 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCom
 				await choosePalettePreset(ctx, options);
 				return { kind: "close" };
 			},
-			information: async () => {
-				await chooseInformationProfile(ctx, options);
+			setInformation: async ({ itemId }) => {
+				const profile = INFORMATION_PROFILE_NAMES.find((candidate) => candidate === itemId);
+				if (!profile) return { kind: "rejected" };
+				applyInformationProfile(ctx, options, profile);
 				return { kind: "close" };
 			},
 			layout: async () => {
@@ -317,19 +337,12 @@ async function showPalettePresetPicker(
 	return result ?? undefined;
 }
 
-async function chooseInformationProfile(
+function applyInformationProfile(
 	ctx: ExtensionCommandContext,
 	options: StatuslineCommandOptions,
+	selection: InformationProfileName,
 ) {
-	if (ctx.mode !== "tui") {
-		if (ctx.hasUI) ctx.ui.notify(`Edit segments manually: ${options.settingsPath}`, "info");
-		return;
-	}
 	const current = options.getLoaded();
-	const currentProfile = inferInformationProfile(current.config.segments);
-	const selection = await showInformationProfilePicker(ctx, currentProfile);
-	if (selection === undefined) return;
-
 	try {
 		const change = informationProfileDocument(current, selection);
 		const loaded = applySegmentsDocumentChange(change, ctx, options);
@@ -340,69 +353,6 @@ async function chooseInformationProfile(
 	} catch (error) {
 		ctx.ui.notify(`Information level was not saved: ${formatError(error)}`, "error");
 	}
-}
-
-async function showInformationProfilePicker(
-	ctx: ExtensionCommandContext,
-	current: ReturnType<typeof inferInformationProfile>,
-): Promise<InformationProfileName | undefined> {
-	const items: SelectItem[] = INFORMATION_PROFILE_NAMES.map((profile) => ({
-		value: profile,
-		label: `${profile[0]?.toUpperCase() ?? ""}${profile.slice(1)}`,
-		description: `${INFORMATION_PROFILES[profile].length} segments${profile === current ? " • current" : ""}`,
-	}));
-	const initialProfile = current === "custom" ? "balanced" : current;
-	const selectedIndex = INFORMATION_PROFILE_NAMES.indexOf(initialProfile);
-	const result = await ctx.ui.custom<InformationProfileName | null>(
-		(tui, theme, _keybindings, done) => {
-			const container = new Container();
-			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
-			const title = new Text("", 1, 0);
-			container.addChild(title);
-			const list = new SelectList(items, items.length, {
-				selectedPrefix: (text) => theme.fg("accent", text),
-				selectedText: (text) => theme.fg("accent", text),
-				description: (text) => theme.fg("muted", text),
-				scrollInfo: (text) => theme.fg("dim", text),
-				noMatch: (text) => theme.fg("warning", text),
-			});
-			list.setSelectedIndex(selectedIndex);
-			let selectedProfile = initialProfile;
-			const details = new Text("", 1, 0);
-			const hint = new Text("", 1, 0);
-			const updateThemedText = () => {
-				title.setText(theme.fg("accent", theme.bold(`Information level (current: ${current})`)));
-				details.setText(
-					theme.fg("muted", `Segments: ${INFORMATION_PROFILES[selectedProfile].join(" · ")}`),
-				);
-				hint.setText(theme.fg("dim", "↑↓ preview contents • enter apply • esc cancel"));
-			};
-			list.onSelectionChange = (item) => {
-				selectedProfile = item.value as InformationProfileName;
-				updateThemedText();
-			};
-			list.onSelect = (item) => done(item.value as InformationProfileName);
-			list.onCancel = () => done(null);
-			container.addChild(list);
-			container.addChild(details);
-			container.addChild(hint);
-			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
-			updateThemedText();
-
-			return {
-				render: (width: number) => container.render(width),
-				invalidate() {
-					container.invalidate();
-					updateThemedText();
-				},
-				handleInput(data: string) {
-					list.handleInput(data);
-					tui.requestRender();
-				},
-			};
-		},
-	);
-	return result ?? undefined;
 }
 
 async function chooseSegments(ctx: ExtensionCommandContext, options: StatuslineCommandOptions) {

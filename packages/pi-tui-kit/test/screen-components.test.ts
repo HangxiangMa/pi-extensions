@@ -29,7 +29,7 @@ const testKeybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
 setKeybindings(testKeybindings);
 
 type ScreenId = "main" | "detail";
-type ActionId = "run" | "setting" | "toggle";
+type ActionId = "run" | "choose" | "setting" | "toggle";
 
 const actionScreen: MenuScreen<ScreenId, ActionId> = {
 	kind: "actions",
@@ -49,6 +49,39 @@ const detailScreen: MenuScreen<ScreenId, ActionId> = {
 	lines: [
 		"One very long detail line that must remain visible without crossing the terminal width.",
 	],
+	hint: "back",
+};
+
+const choiceScreen: MenuScreen<ScreenId, ActionId> = {
+	kind: "choice",
+	title: "Information profile",
+	lines: ["Current profile: Custom"],
+	items: [
+		{
+			id: "minimal",
+			label: "Minimal",
+			description: "Small output",
+			details: ["Segments: model · git"],
+		},
+		{
+			id: "balanced",
+			label: "Balanced",
+			description: "Recommended",
+			details: ["Segments: model · tokens · git"],
+		},
+		{
+			id: "verbose",
+			label: "Verbose\u001b]8;;unsafe\u0007",
+			description: "Everything",
+			details: ["Unsafe\u001b[31m detail", "Second detail"],
+			disabled: true,
+			disabledReason: "Unavailable\u0007 here",
+		},
+	],
+	action: "choose",
+	currentItemId: "minimal",
+	initialItemId: "balanced",
+	viewportSize: 2,
 	hint: "back",
 };
 
@@ -87,7 +120,13 @@ const multiSelectScreen: MenuScreen<ScreenId, ActionId> = {
 };
 
 test("standard screens remain bounded and sanitize terminal controls", () => {
-	for (const screen of [actionScreen, detailScreen, settingsScreen, multiSelectScreen]) {
+	for (const screen of [
+		actionScreen,
+		detailScreen,
+		choiceScreen,
+		settingsScreen,
+		multiSelectScreen,
+	]) {
 		for (const width of [20, 40, 80, 120]) {
 			const harness = componentHarness(screen);
 			const lines = harness.component.render(width);
@@ -114,6 +153,82 @@ test("action screens honor injected navigation and distinguish Back from Ctrl+C 
 	const close = componentHarness({ ...actionScreen, hint: "back" });
 	close.component.handleInput("\u0003");
 	assert.deepEqual(close.events, [{ kind: "close" }]);
+});
+
+test("choice screens render current state, initial selection, details, and disabled reasons", () => {
+	const harness = componentHarness(choiceScreen, {
+		plainTheme: true,
+		selectedItemId: "balanced",
+	});
+	const lines = plainRender(harness.component, 80);
+	assert.equal(lines[0], "─".repeat(80));
+	assert.equal(lines.at(-1), "─".repeat(80));
+	assert.match(lines.join("\n"), /Minimal.*✓ current/);
+	assert.match(lines.join("\n"), /→ Balanced/);
+	assert.match(lines.join("\n"), /Segments: model · tokens · git/);
+	assert.doesNotMatch(lines.join("\n"), /Unsafe.*detail/);
+	for (const width of [1, 20, 40, 80, 120]) {
+		assert.ok(harness.component.render(width).every((line) => visibleWidth(line) <= width));
+	}
+});
+
+test("choice screens use injected navigation, block disabled activation, and distinguish exits", () => {
+	const disabled = componentHarness(choiceScreen, { selectedItemId: "balanced" });
+	disabled.component.handleInput("j");
+	assert.match(
+		stripVTControlCharacters(disabled.component.render(80).join("\n")),
+		/Unavailable here/,
+	);
+	disabled.component.handleInput("l");
+	assert.deepEqual(disabled.events, []);
+	disabled.component.handleInput("q");
+	assert.deepEqual(disabled.events, [{ kind: "back" }]);
+
+	const selected = componentHarness(choiceScreen, { selectedItemId: "minimal" });
+	selected.component.handleInput("j");
+	selected.component.handleInput(" ");
+	assert.deepEqual(selected.events, [{ kind: "activate", itemId: "balanced" }]);
+
+	const closed = componentHarness(choiceScreen);
+	closed.component.handleInput("\u0003");
+	assert.deepEqual(closed.events, [{ kind: "close" }]);
+});
+
+test("disposed choice screens ignore later input and dispose once", () => {
+	const harness = componentHarness(choiceScreen, { selectedItemId: "balanced" });
+	harness.component.dispose?.();
+	harness.component.dispose?.();
+	harness.component.handleInput("l");
+	assert.deepEqual(harness.events, []);
+});
+
+test("choice screens page through a bounded viewport and sanitize all displayed text", () => {
+	const items = Array.from({ length: 12 }, (_, index) => ({
+		id: `choice-${index}`,
+		label:
+			index === 10 ? "詳細 🧭" : index === 11 ? "Unsafe\u001b]8;;label\u0007" : `Choice ${index}`,
+		details: index === 11 ? ["Unsafe\u001b[31m detail"] : [`Detail ${index}`],
+	}));
+	const screen: MenuScreen<ScreenId, ActionId> = {
+		kind: "choice",
+		title: "Large choice",
+		items,
+		action: "choose",
+		viewportSize: 3,
+	};
+	const harness = componentHarness(screen, { selectedItemId: "choice-0", plainTheme: true });
+	harness.component.handleInput("d");
+	assert.deepEqual(harness.selectionChanges, ["choice-3"]);
+	const unicode = componentHarness(screen, { selectedItemId: "choice-10", plainTheme: true });
+	assert.ok(unicode.component.render(8).every((line) => visibleWidth(line) <= 8));
+	const unsafe = componentHarness(screen, { selectedItemId: "choice-11", plainTheme: true });
+	const raw = unsafe.component.render(24).join("\n");
+	const rendered = stripVTControlCharacters(raw);
+	assert.equal(raw.includes("\u001b]8;;label"), false);
+	assert.equal(raw.includes("\u001b[31m detail"), false);
+	assert.match(rendered, /Unsafe .*label/);
+	assert.match(rendered, /Unsafe .*detail/);
+	assert.ok(harness.component.render(24).every((line) => visibleWidth(line) <= 24));
 });
 
 test("theme invalidation rebuilds themed title content", () => {

@@ -87,6 +87,9 @@ export function createMenuScreenComponent<ScreenId extends string, ActionId exte
 		case "detail":
 			component = createDetailComponent(options as DetailOptions<ScreenId, ActionId>);
 			break;
+		case "choice":
+			component = createChoiceComponent(options as ChoiceOptions<ScreenId, ActionId>);
+			break;
 		case "settings":
 			component = createSettingsComponent(options as SettingsOptions<ScreenId, ActionId>);
 			break;
@@ -109,6 +112,12 @@ type DetailOptions<ScreenId extends string, ActionId extends string> = MenuScree
 	ActionId
 > & {
 	screen: Extract<MenuScreen<ScreenId, ActionId>, { kind: "detail" }>;
+};
+type ChoiceOptions<ScreenId extends string, ActionId extends string> = MenuScreenComponentOptions<
+	ScreenId,
+	ActionId
+> & {
+	screen: Extract<MenuScreen<ScreenId, ActionId>, { kind: "choice" }>;
 };
 type SettingsOptions<ScreenId extends string, ActionId extends string> = MenuScreenComponentOptions<
 	ScreenId,
@@ -169,6 +178,124 @@ function createDetailComponent<ScreenId extends string, ActionId extends string>
 			else if (options.keybindings.matches(data, "tui.select.cancel")) {
 				options.onEvent({ kind: options.screen.hint ?? "back" });
 			}
+		},
+		async waitForPending() {},
+		dispose() {
+			if (disposed) return;
+			disposed = true;
+			options.onDispose?.();
+		},
+	};
+}
+
+function createChoiceComponent<ScreenId extends string, ActionId extends string>(
+	options: ChoiceOptions<ScreenId, ActionId>,
+): MenuScreenComponent {
+	const border = new DynamicBorder((text: string) => options.theme.fg("border", text));
+	const items: SelectItem[] = options.screen.items.map((item) => {
+		const current = item.id === options.screen.currentItemId ? " ✓ current" : "";
+		const unavailable = item.disabled
+			? `unavailable${item.disabledReason ? `: ${safeMenuText(item.disabledReason)}` : ""}`
+			: undefined;
+		return {
+			value: item.id,
+			label: `${item.disabled ? "[-] " : ""}${safeMenuText(item.label)}${current}`,
+			description:
+				[unavailable, item.description ? safeMenuText(item.description) : undefined]
+					.filter((value): value is string => Boolean(value))
+					.join(" · ") || undefined,
+		};
+	});
+	const viewportSize = Math.min(items.length, options.screen.viewportSize ?? 10);
+	const list = new SelectList(items, viewportSize, selectTheme(options.theme));
+	const initialId = items.some((item) => item.value === options.selectedItemId)
+		? options.selectedItemId
+		: items[0]?.value;
+	let selectedItemId = initialId;
+	setInitialSelection(list, items, initialId);
+	const select = (index: number) => {
+		if (items.length === 0) return;
+		const selectedIndex = Math.max(0, Math.min(index, items.length - 1));
+		list.setSelectedIndex(selectedIndex);
+		selectedItemId = items[selectedIndex]?.value;
+		if (selectedItemId) options.onSelectionChange?.(selectedItemId);
+	};
+	const activate = (itemId: string | undefined) => {
+		if (!itemId) return;
+		const item = options.screen.items.find((candidate) => candidate.id === itemId);
+		if (!item?.disabled) options.onEvent({ kind: "activate", itemId });
+	};
+	list.onSelectionChange = (item) => {
+		selectedItemId = item.value;
+		options.onSelectionChange?.(item.value);
+	};
+	list.onSelect = (item) => activate(item.value);
+	list.onCancel = () => options.onEvent({ kind: options.screen.hint ?? "back" });
+	let disposed = false;
+	return {
+		render(width) {
+			const safeWidth = Math.max(1, width);
+			const selected = options.screen.items.find((item) => item.id === selectedItemId);
+			const details = [
+				...(selected?.disabledReason
+					? [`Unavailable: ${safeMenuText(selected.disabledReason)}`]
+					: []),
+				...(selected?.details ?? []).map(safeMenuText),
+			];
+			const content =
+				items.length === 0
+					? [options.theme.fg("dim", "  No choices available")]
+					: [
+							...list.render(safeWidth),
+							...(details.length > 0
+								? [
+										"",
+										...details.flatMap((line) =>
+											wrapTextWithAnsi(options.theme.fg("muted", line), safeWidth),
+										),
+									]
+								: []),
+						];
+			const result = [
+				...border.render(safeWidth),
+				...wrapTextWithAnsi(
+					options.theme.fg("accent", options.theme.bold(safeMenuText(options.screen.title))),
+					safeWidth,
+				),
+				...(options.screen.lines ?? []).flatMap((line) =>
+					wrapTextWithAnsi(options.theme.fg("muted", safeMenuText(line)), safeWidth),
+				),
+				"",
+				...content,
+				...wrapTextWithAnsi(
+					options.theme.fg(
+						"dim",
+						menuHint(options.keybindings, options.screen.hint ?? "back", "select"),
+					),
+					safeWidth,
+				),
+				...border.render(safeWidth),
+			];
+			return result.map((line) => truncateToWidth(line, safeWidth, ""));
+		},
+		invalidate() {
+			border.invalidate();
+			list.invalidate();
+		},
+		handleInput(data) {
+			if (disposed) return;
+			if (matchesKey(data, Key.ctrl("c"))) options.onEvent({ kind: "close" });
+			else if (options.keybindings.matches(data, "tui.select.cancel")) {
+				options.onEvent({ kind: options.screen.hint ?? "back" });
+			} else if (options.keybindings.matches(data, "tui.select.pageUp")) {
+				const index = items.findIndex((item) => item.value === selectedItemId);
+				select(index - Math.max(1, viewportSize));
+			} else if (options.keybindings.matches(data, "tui.select.pageDown")) {
+				const index = items.findIndex((item) => item.value === selectedItemId);
+				select(index + Math.max(1, viewportSize));
+			} else if (data === " ") activate(selectedItemId);
+			else list.handleInput(data);
+			options.tui.requestRender();
 		},
 		async waitForPending() {},
 		dispose() {

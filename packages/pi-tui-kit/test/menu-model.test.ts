@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	type ChoiceScreen,
 	createMenuNavigator,
 	defineMenu,
 	type MenuDefinition,
+	PI_EXTENSION_MENU_API_VERSION,
 	resolveMenuScreen,
 } from "../src/index.js";
 
@@ -35,6 +37,10 @@ function testMenu(): MenuDefinition<State, ScreenId, ActionId> {
 		},
 	});
 }
+
+test("the declarative API version includes choice screens", () => {
+	assert.equal(PI_EXTENSION_MENU_API_VERSION, 2);
+});
 
 test("menu definitions resolve dynamic screens and reject invalid references", () => {
 	const definition = testMenu();
@@ -119,6 +125,90 @@ test("multi-select viewports must be positive integers", () => {
 			/viewport.*positive integer/i,
 		);
 	}
+});
+
+test("choice screens accept stable items and optional missing current and initial ids", () => {
+	const screen: ChoiceScreen<"choose"> = {
+		kind: "choice",
+		title: "Profile",
+		items: [
+			{ id: "safe", label: "Safe", details: ["One", "Two"] },
+			{ id: "fast", label: "Fast", disabled: true, disabledReason: "Unavailable" },
+		],
+		action: "choose",
+		currentItemId: "custom",
+		initialItemId: "balanced",
+		viewportSize: 5,
+	};
+	const definition = defineMenu<undefined, "choice", "choose">({
+		start: "choice",
+		screens: { choice: () => screen },
+		actions: { choose: async () => ({ kind: "close" }) },
+	});
+	assert.equal(resolveMenuScreen(definition, "choice", undefined), screen);
+});
+
+test("choice screens require a known action and positive integer viewport", () => {
+	const definition = defineMenu<undefined, "choice", "choose">({
+		start: "choice",
+		screens: {
+			choice: () => ({
+				kind: "choice",
+				title: "Profile",
+				items: [{ id: "safe", label: "Safe" }],
+				action: "missing" as "choose",
+			}),
+		},
+		actions: { choose: async () => ({ kind: "close" }) },
+	});
+	assert.throws(
+		() => resolveMenuScreen(definition, "choice", undefined),
+		/choice.*unknown action.*missing/i,
+	);
+	for (const viewportSize of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+		assert.throws(
+			() =>
+				resolveMenuScreen(
+					{
+						...definition,
+						screens: {
+							choice: () => ({
+								kind: "choice" as const,
+								title: "Profile",
+								items: [{ id: "safe", label: "Safe" }],
+								action: "choose" as const,
+								viewportSize,
+							}),
+						},
+					},
+					"choice",
+					undefined,
+				),
+			/choice.*viewport.*positive integer/i,
+		);
+	}
+});
+
+test("choice screens reject blank and duplicate raw ids", () => {
+	const resolve = (ids: readonly string[]) =>
+		resolveMenuScreen(
+			defineMenu<undefined, "choice", "choose">({
+				start: "choice",
+				screens: {
+					choice: () => ({
+						kind: "choice",
+						title: "Profile",
+						items: ids.map((id) => ({ id, label: "Same" })),
+						action: "choose",
+					}),
+				},
+				actions: { choose: async () => ({ kind: "close" }) },
+			}),
+			"choice",
+			undefined,
+		);
+	assert.throws(() => resolve([" "]), /id must not be empty/i);
+	assert.throws(() => resolve(["same", "same"]), /id must be unique.*same/i);
 });
 
 test("navigator owns nested Back and Close transitions", () => {
