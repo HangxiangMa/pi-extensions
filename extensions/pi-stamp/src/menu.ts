@@ -5,6 +5,7 @@ import {
 	canonicalizeTimeZone,
 	type StampDateContext,
 	type StampHourCycle,
+	type StampResponseTimingMode,
 } from "./format.js";
 import type { StampSettingsPatch, StampSettingsRuntime, StampSettingsState } from "./settings.js";
 
@@ -13,6 +14,7 @@ type StampAction =
 	| "set-hour-cycle"
 	| "set-seconds"
 	| "set-date-context"
+	| "set-response-timing"
 	| "open-locale"
 	| "choose-invariant-locale"
 	| "choose-system-locale"
@@ -93,6 +95,14 @@ export function createStampMenu(runtime: StampSettingsRuntime) {
 						currentValue: timeZoneLabel(state.settings.timeZone),
 						action: "open-time-zone",
 					},
+					{
+						id: "responseTiming",
+						label: "Response timing",
+						description: "Show no timing, total duration, or detailed first/total timing.",
+						currentValue: responseTimingLabel(state.settings.responseTiming),
+						values: ["Off", "Duration", "Detailed"],
+						action: "set-response-timing",
+					},
 				],
 			}),
 			locale: ({ state }) => ({
@@ -166,6 +176,12 @@ export function createStampMenu(runtime: StampSettingsRuntime) {
 					),
 					settingStatus("Locale", localeLabel(state.settings.locale), state, "locale"),
 					settingStatus("Time zone", timeZoneLabel(state.settings.timeZone), state, "timeZone"),
+					settingStatus(
+						"Response timing",
+						responseTimingLabel(state.settings.responseTiming),
+						state,
+						"responseTiming",
+					),
 					`Settings file: ${safeTerminalText(runtime.getPath())}`,
 					...(state.issue ? [`Issue: ${safeTerminalText(state.issue.message)}`] : []),
 				],
@@ -175,11 +191,13 @@ export function createStampMenu(runtime: StampSettingsRuntime) {
 				kind: "detail",
 				title: "Stamp Help",
 				lines: [
-					"Stamps show each message's recorded creation time, not assistant completion time.",
+					"The clock shows message creation; response timing ends at assistant message completion.",
+					"First content is Pi's first non-empty text, thinking, or tool-call stream update.",
+					"First n/a means no meaningful update was observed; no other boundary is substituted.",
+					"Assistant timing excludes tool execution and is unavailable on legacy stamp entries.",
 					"Day changes compare the previous recorded stamp in the selected time zone.",
 					"Changes save immediately and reformat mounted and future stamps.",
-					"Relative labels are not available because they require background refresh work.",
-					"Stamp entries remain outside model context.",
+					"Stamp entries remain outside model context and never use a refresh timer.",
 				],
 				hint: "back",
 			}),
@@ -209,6 +227,11 @@ export function createStampMenu(runtime: StampSettingsRuntime) {
 				const dateContext: StampDateContext =
 					value === "Always" ? "always" : value === "Never" ? "never" : "day-change";
 				return savePatch(runtime, ctx, signal, { dateContext }, `Date context: ${value}.`);
+			},
+			"set-response-timing": ({ ctx, value, signal }) => {
+				const responseTiming: StampResponseTimingMode =
+					value === "Detailed" ? "detailed" : value === "Duration" ? "duration" : "off";
+				return savePatch(runtime, ctx, signal, { responseTiming }, `Response timing: ${value}.`);
 			},
 			"open-locale": async () => ({ kind: "to", screen: "locale" }),
 			"choose-invariant-locale": ({ ctx, signal }) =>
@@ -307,6 +330,7 @@ function formatCompactStatus(state: StampSettingsState): string {
 		dateContextLabel(state.settings.dateContext),
 		localeLabel(state.settings.locale),
 		timeZoneLabel(state.settings.timeZone),
+		`Timing ${responseTimingLabel(state.settings.responseTiming).toLowerCase()}`,
 	].join(" · ");
 }
 
@@ -328,6 +352,12 @@ function localeLabel(value: string): string {
 
 function timeZoneLabel(value: string): string {
 	return value === "local" ? "Local" : safeTerminalText(value);
+}
+
+function responseTimingLabel(value: StampResponseTimingMode): string {
+	if (value === "duration") return "Duration";
+	if (value === "detailed") return "Detailed";
+	return "Off";
 }
 
 function safeTerminalText(value: string): string {

@@ -9,6 +9,7 @@ import {
 	DATE_CONTEXTS,
 	DEFAULT_STAMP_SETTINGS,
 	HOUR_CYCLES,
+	RESPONSE_TIMING_MODES,
 	type StampSettings,
 } from "./format.js";
 
@@ -75,6 +76,7 @@ const SETTING_FIELDS = [
 	"dateContext",
 	"locale",
 	"timeZone",
+	"responseTiming",
 ] as const satisfies readonly StampSettingsField[];
 const SETTING_FIELD_SET = new Set<string>(SETTING_FIELDS);
 
@@ -119,6 +121,13 @@ export function normalizeStampSettingsDocument(
 		if (!timeZone) return undefined;
 		settings.timeZone = timeZone;
 		sources.timeZone = "user";
+	}
+	if (Object.hasOwn(value, "responseTiming")) {
+		if (!RESPONSE_TIMING_MODES.includes(value.responseTiming as StampSettings["responseTiming"])) {
+			return undefined;
+		}
+		settings.responseTiming = value.responseTiming as StampSettings["responseTiming"];
+		sources.responseTiming = "user";
 	}
 	return { settings, sources };
 }
@@ -353,6 +362,7 @@ function builtInSources(): Record<StampSettingsField, StampSettingsSource> {
 		dateContext: "built-in",
 		locale: "built-in",
 		timeZone: "built-in",
+		responseTiming: "built-in",
 	};
 }
 

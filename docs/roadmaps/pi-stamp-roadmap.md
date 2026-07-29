@@ -67,6 +67,9 @@ publication.
 
 ### Phase 3 — Response timing
 
+**Status:** implemented; see the archived
+[response-timing plan](../plans/archived/2026-07-29_pi-stamp-response-timing-plan.md)
+
 - Record assistant completion time at `message_end` separately from `message.timestamp`.
 - Derive response duration from request/message creation to completion.
 - Evaluate time-to-first-content using the first meaningful assistant `message_update`.

@@ -33,13 +33,16 @@ test("stamp menu exposes Main, Settings, Status, Help, and read-only invalid sta
 			["dateContext", "Day changes"],
 			["locale", "Invariant"],
 			["timeZone", "Local"],
+			["responseTiming", "Off"],
 		],
 	);
+	assert.match((main.lines ?? []).join("\n"), /Timing off/u);
 
 	const status = resolveMenuScreen(menu, "status", state);
 	assert.equal(status.kind, "detail");
 	if (status.kind !== "detail") assert.fail("Expected detail screen");
 	assert.match(status.lines.join("\n"), /24-hour.*Built-in/u);
+	assert.match(status.lines.join("\n"), /Response timing: Off · Built-in/u);
 	assert.match(status.lines.join("\n"), /\/tmp\/pi-stamp\.json/u);
 
 	const invalidState = {
@@ -88,10 +91,34 @@ test("bounded setting actions persist exact patches", async () => {
 		itemId: "dateContext",
 		value: "Always",
 	});
+	await menu.actions["set-response-timing"]({
+		ctx,
+		state: runtime.get(),
+		signal: new AbortController().signal,
+		itemId: "responseTiming",
+		value: "Duration",
+	});
+	await menu.actions["set-response-timing"]({
+		ctx,
+		state: runtime.get(),
+		signal: new AbortController().signal,
+		itemId: "responseTiming",
+		value: "Detailed",
+	});
+	await menu.actions["set-response-timing"]({
+		ctx,
+		state: runtime.get(),
+		signal: new AbortController().signal,
+		itemId: "responseTiming",
+		value: "Off",
+	});
 	assert.deepEqual(runtime.patches, [
 		{ hourCycle: "12h" },
 		{ showSeconds: false },
 		{ dateContext: "always" },
+		{ responseTiming: "duration" },
+		{ responseTiming: "detailed" },
+		{ responseTiming: "off" },
 	]);
 	assert.equal(notifications.at(-1)?.level, "info");
 });
@@ -188,6 +215,7 @@ function memorySettingsRuntime(
 			dateContext: "built-in",
 			locale: "built-in",
 			timeZone: "built-in",
+			responseTiming: "built-in",
 		},
 		canSave: true,
 	};
