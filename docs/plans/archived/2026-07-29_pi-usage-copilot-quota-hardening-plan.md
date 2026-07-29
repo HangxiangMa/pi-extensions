@@ -28,8 +28,8 @@ observed Copilot Free `limited_user_quotas`/`monthly_quotas` shape.
       load smoke; package checks, 38 focused tests, pack, and load smoke pass. The root gate reached
       1,767 passing tests but failed two unrelated `pi-github-pr` branch-watch tests; a focused rerun
       passed one and reproduced the other without touching that package.
-- [ ] Archive this completed plan, commit only the intended paths, push the new branch, and open a
-      pull request to `main` that supersedes PR #451.
+- [x] Archive this completed plan, commit only the intended paths, push the new branch, and open
+      replacement PR #453 to `main`, superseding PR #451.
 
 ## Completion Checklist
 
@@ -37,4 +37,4 @@ observed Copilot Free `limited_user_quotas`/`monthly_quotas` shape.
 - [x] User-visible detail and statusline text use the correct quota unit.
 - [x] Runtime credential matching and official-origin fail-closed behavior remain intact.
 - [x] Required checks and package/runtime smokes pass or have an explicit unrelated-failure record.
-- [ ] The worktree is clean after the focused commit and the new pull request is open.
+- [x] The worktree is clean after the focused commits and replacement PR #453 is open.
