@@ -1,3 +1,5 @@
+// Cohesion justification: this account-manager integration matrix shares credential/provider
+// fixtures and cross-covers menus, OAuth, replacement, switching, persistence, and lifecycle safety.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
@@ -293,7 +295,7 @@ test("accounts menu summarizes all supported providers and prioritizes current p
 
 	await mock.commands.get("accounts")?.handler("ignored", ctx);
 
-	assert.match(selectCalls[0]?.title ?? "", /Current model:\n {2}Anthropic \/ claude/);
+	assert.match(selectCalls[0]?.title ?? "", /Current model:\nAnthropic \/ claude/);
 	assert.match(selectCalls[0]?.title ?? "", /Anthropic: work/);
 	assert.match(selectCalls[0]?.title ?? "", /OpenAI Codex: default/);
 	assert.match(selectCalls[0]?.title ?? "", /GitHub Copilot: default/);

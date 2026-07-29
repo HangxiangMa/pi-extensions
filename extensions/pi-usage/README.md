@@ -46,7 +46,8 @@ Run:
 /usage
 ```
 
-The menu first queries the current model provider and presents its state with these actions:
+In TUI or RPC mode, the standard menu first queries the current model provider and presents its state
+with these actions:
 
 ```text
 Refresh current usage
@@ -55,7 +56,11 @@ View all configured providers…
 Close
 ```
 
-There are intentionally no `/usage --refresh`, `/usage <provider>`, or `/usage --all` argument paths. Cross-provider traffic requires an explicit interactive choice.
+There are intentionally no `/usage --refresh`, `/usage <provider>`, or `/usage --all` argument paths.
+Cross-provider traffic requires an explicit interactive choice. Escape returns from provider selection
+and closes the root menu. Print and JSON modes reject `/usage` observably because they cannot host the
+interactive flow. The cancellable live-query progress view remains extension-owned because it streams
+provider work and supports in-flight abort rather than presenting a standard menu screen.
 
 ## 📋 Provider semantics
 

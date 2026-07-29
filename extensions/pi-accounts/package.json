@@ -32,6 +32,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@narumitw/pi-tui-kit": "<1",
 		"proper-lockfile": "^4.1.2"
 	},
 	"peerDependencies": {

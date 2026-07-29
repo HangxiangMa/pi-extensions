@@ -79,6 +79,48 @@ test("menu definitions resolve dynamic screens and reject invalid references", (
 	);
 });
 
+test("multi-select viewports must be positive integers", () => {
+	const definition = defineMenu<undefined, "tools", "toggle">({
+		start: "tools",
+		screens: {
+			tools: () => ({
+				kind: "multiSelect",
+				title: "Tools",
+				viewportSize: 0,
+				items: [],
+				action: "toggle",
+			}),
+		},
+		actions: { toggle: async () => ({ kind: "stay" }) },
+	});
+	assert.throws(
+		() => resolveMenuScreen(definition, "tools", undefined),
+		/viewport.*positive integer/i,
+	);
+	for (const viewportSize of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+		assert.throws(
+			() =>
+				resolveMenuScreen(
+					{
+						...definition,
+						screens: {
+							tools: () => ({
+								kind: "multiSelect" as const,
+								title: "Tools",
+								viewportSize,
+								items: [],
+								action: "toggle" as const,
+							}),
+						},
+					},
+					"tools",
+					undefined,
+				),
+			/viewport.*positive integer/i,
+		);
+	}
+});
+
 test("navigator owns nested Back and Close transitions", () => {
 	const navigator = createMenuNavigator<ScreenId>("main");
 	assert.equal(navigator.current, "main");

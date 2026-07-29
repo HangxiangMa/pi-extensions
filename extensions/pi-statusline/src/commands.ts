@@ -14,6 +14,7 @@ import {
 	truncateToWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import {
 	INFORMATION_PROFILE_NAMES,
 	INFORMATION_PROFILES,
@@ -68,6 +69,7 @@ export interface StatuslineCommandOptions {
 	apply(loaded: LoadedStatuslineSettings, ctx: ExtensionCommandContext): void;
 	preview?(palettePreset: PalettePreset | undefined, ctx: ExtensionCommandContext): void;
 	save?: (settingsPath: string, rawDocument: string) => LoadedStatuslineSettings;
+	getMenuOwner?(): { signal: AbortSignal; isCurrent(): boolean };
 }
 
 export function registerStatuslineCommand(pi: ExtensionAPI, options: StatuslineCommandOptions) {
@@ -115,67 +117,100 @@ export function registerStatuslineCommand(pi: ExtensionAPI, options: StatuslineC
 
 async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCommandOptions) {
 	if (ctx.mode !== "tui") {
-		if (ctx.hasUI) ctx.ui.notify("/statusline requires an interactive Pi UI.", "error");
+		if (ctx.hasUI) ctx.ui.notify("/statusline requires an interactive Pi UI in TUI mode.", "error");
 		return;
 	}
-	while (true) {
-		const config = options.getLoaded().config;
-		const appearanceItem = `Appearance (${config.palettePreset})`;
-		const informationItem = `Information (${inferInformationProfile(config.segments)})`;
-		const selection = await ctx.ui.select("pi-statusline", [
-			appearanceItem,
-			informationItem,
-			"Advanced",
-			"Status",
-			"Help",
-		]);
-		if (selection === appearanceItem) {
-			await choosePalettePreset(ctx, options);
-			return;
-		}
-		if (selection === informationItem) {
-			await chooseInformationProfile(ctx, options);
-			return;
-		}
-		switch (selection) {
-			case "Advanced":
-				if (await showAdvancedMenu(ctx, options)) continue;
-				return;
-			case "Status":
+	const fallbackController = new AbortController();
+	const owner = options.getMenuOwner?.() ?? {
+		signal: fallbackController.signal,
+		isCurrent: () => !fallbackController.signal.aborted,
+	};
+	type Screen = "main" | "advanced";
+	type Action = "appearance" | "information" | "layout" | "edit" | "status" | "help" | "back";
+	const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
+		start: "main",
+		screens: {
+			main: () => {
+				const config = options.getLoaded().config;
+				return {
+					kind: "actions",
+					title: "pi-statusline",
+					items: [
+						{
+							id: "appearance",
+							label: `Appearance (${config.palettePreset})`,
+							action: "appearance",
+						},
+						{
+							id: "information",
+							label: `Information (${inferInformationProfile(config.segments)})`,
+							action: "information",
+						},
+						{ id: "advanced", label: "Advanced", to: "advanced" },
+						{ id: "status", label: "Status", action: "status" },
+						{ id: "help", label: "Help", action: "help" },
+					],
+					hint: "close",
+				};
+			},
+			advanced: () => {
+				const config = options.getLoaded().config;
+				const visibleSegmentCount = config.segments.filter(
+					(segment): segment is SegmentName => segment !== LINE_BREAK_SEGMENT_NAME,
+				).length;
+				return {
+					kind: "actions",
+					title: "pi-statusline — Advanced",
+					items: [
+						{
+							id: "layout",
+							label: `Custom layout (${visibleSegmentCount}/${SEGMENT_NAMES.length} shown)`,
+							action: "layout",
+						},
+						{ id: "edit", label: EDIT_SETTINGS_LABEL, action: "edit" },
+						{ id: "back", label: "Back", action: "back" },
+					],
+					hint: "back",
+				};
+			},
+		},
+		actions: {
+			appearance: async () => {
+				await choosePalettePreset(ctx, options);
+				return { kind: "close" };
+			},
+			information: async () => {
+				await chooseInformationProfile(ctx, options);
+				return { kind: "close" };
+			},
+			layout: async () => {
+				await chooseSegments(ctx, options);
+				return { kind: "close" };
+			},
+			edit: async () => {
+				await editSettings(ctx, options);
+				return { kind: "close" };
+			},
+			status: async () => {
 				showStatus(ctx, options);
-				return;
-			case "Help":
+				return { kind: "close" };
+			},
+			help: async () => {
 				showHelp(ctx, options.settingsPath);
-				return;
-			default:
-				return;
-		}
+				return { kind: "close" };
+			},
+			back: async () => ({ kind: "back" }),
+		},
+	});
+	try {
+		await runMenu(ctx, menu, {
+			getState: () => undefined,
+			signal: owner.signal,
+			isCurrent: owner.isCurrent,
+		});
+	} finally {
+		fallbackController.abort(new DOMException("Statusline menu closed", "AbortError"));
 	}
-}
-
-async function showAdvancedMenu(
-	ctx: ExtensionCommandContext,
-	options: StatuslineCommandOptions,
-): Promise<boolean> {
-	const config = options.getLoaded().config;
-	const visibleSegmentCount = config.segments.filter(
-		(segment): segment is SegmentName => segment !== LINE_BREAK_SEGMENT_NAME,
-	).length;
-	const layoutItem = `Custom layout (${visibleSegmentCount}/${SEGMENT_NAMES.length} shown)`;
-	const selection = await ctx.ui.select("pi-statusline — Advanced", [
-		layoutItem,
-		EDIT_SETTINGS_LABEL,
-		"Back",
-	]);
-	if (selection === layoutItem) {
-		await chooseSegments(ctx, options);
-		return false;
-	}
-	if (selection === EDIT_SETTINGS_LABEL) {
-		await editSettings(ctx, options);
-		return false;
-	}
-	return selection === "Back";
 }
 
 async function choosePalettePreset(

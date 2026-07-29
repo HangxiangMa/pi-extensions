@@ -1,4 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { isCloudflareR2Endpoint, readLocalConfigObject } from "./config.js";
 import { showAddGitStorageProfile, showEditGitStorageProfile } from "./git-ui.js";
 import { errorMessage, ownRecord, requiredInput, safeTerminalText } from "./manager-helpers.js";
@@ -14,64 +15,151 @@ import {
 } from "./settings-management.js";
 import { showAddWebDavStorageProfile, showEditWebDavStorageProfile } from "./webdav-ui.js";
 
-const BACK = "Back";
-
 export async function showStorageConnections(ctx: ExtensionCommandContext, signal?: AbortSignal) {
-	while (!signal?.aborted) {
-		const raw = await readLocalConfigObject();
-		if (signal?.aborted) return;
-		if (raw?.version !== 3) {
-			ctx.ui.notify("Create version 3 settings before managing storage connections.", "info");
-			return;
-		}
-		const profiles = ownRecord(raw.storageConnections) ?? {};
-		const labels = new Map(
-			Object.keys(profiles)
-				.sort((left, right) => left.localeCompare(right))
-				.map((name) => [safeTerminalText(name), name]),
-		);
-		const selected = await ctx.ui.select(
-			"Storage connections",
-			["Add storage connection", ...labels.keys(), BACK],
-			{ signal },
-		);
-		if (signal?.aborted || !selected || selected === BACK) return;
-		if (selected === "Add storage connection") {
-			try {
-				await showAddStorageConnection(ctx, signal);
-			} catch (error) {
-				if (signal?.aborted) return;
-				ctx.ui.notify(
-					`Storage connection was not added: ${safeTerminalText(errorMessage(error))} Retry from Add storage connection.`,
-					"error",
+	let selectedName: string | undefined;
+	const nameById = new Map<string, string>();
+	type Screen = "list" | "detail";
+	type Action = "add" | "select" | "edit" | "remove" | "back";
+	const menu = defineMenu<
+		Awaited<ReturnType<typeof loadStorageMenuState>>,
+		Screen,
+		Action,
+		ExtensionCommandContext
+	>({
+		start: "list",
+		screens: {
+			list: ({ state }) => {
+				nameById.clear();
+				const names = Object.keys(state.profiles).sort((left, right) => left.localeCompare(right));
+				return {
+					kind: "actions",
+					title: "Storage connections",
+					lines: state.version3
+						? []
+						: ["Create version 3 settings before managing storage connections."],
+					items: state.version3
+						? [
+								{ id: "add", label: "Add storage connection", action: "add" as const },
+								...names.map((name, index) => {
+									const id = `connection:${index}`;
+									nameById.set(id, name);
+									return {
+										id,
+										label: safeTerminalText(name),
+										action: "select" as const,
+									};
+								}),
+							]
+						: [],
+					hint: "back",
+				};
+			},
+			detail: ({ state }) => ({
+				kind: "actions",
+				title: state.selected
+					? `Storage connection “${safeTerminalText(state.selected.name)}”`
+					: "Storage connection",
+				lines: state.selected?.lines ?? ["This storage connection no longer exists."],
+				items: state.selected
+					? [
+							{ id: "edit", label: "Edit storage connection…", action: "edit" },
+							...(state.selected.usedBy.length === 0
+								? [
+										{
+											id: "remove",
+											label: "Remove storage connection…",
+											action: "remove" as const,
+										},
+									]
+								: []),
+							{ id: "back", label: "Back", action: "back" },
+						]
+					: [{ id: "back", label: "Back", action: "back" }],
+				hint: "back",
+			}),
+		},
+		actions: {
+			add: async () => {
+				try {
+					await showAddStorageConnection(ctx, signal);
+				} catch (error) {
+					if (!signal?.aborted) {
+						ctx.ui.notify(
+							`Storage connection was not added: ${safeTerminalText(errorMessage(error))} Retry from Add storage connection.`,
+							"error",
+						);
+					}
+				}
+				return { kind: "stay" };
+			},
+			select: async ({ itemId }) => {
+				selectedName = nameById.get(itemId);
+				return selectedName ? { kind: "to", screen: "detail" } : { kind: "rejected" };
+			},
+			edit: async ({ state }) => {
+				if (!state.selected || state.selected.name !== selectedName) return { kind: "rejected" };
+				try {
+					await editStorageConnection(
+						ctx,
+						state.selected.name,
+						state.selected.profile,
+						state.selected.usedBy,
+						signal,
+					);
+				} catch (error) {
+					notifyConnectionError(ctx, state.selected.name, error, signal);
+				}
+				return { kind: "stay" };
+			},
+			remove: async ({ state }) => {
+				if (!state.selected || state.selected.name !== selectedName) return { kind: "rejected" };
+				const name = state.selected.name;
+				const confirmed = await ctx.ui.confirm(
+					"Remove storage connection?",
+					`Remove local storage connection “${safeTerminalText(name)}”? Remote data and history are not deleted.`,
+					{ signal },
 				);
-			}
-			continue;
-		}
-		const name = labels.get(selected);
-		if (name) await showStorageConnectionDetail(ctx, name, signal);
-	}
+				if (!confirmed || signal?.aborted) return { kind: "rejected" };
+				try {
+					await removeStorageConnection(name, signal);
+					ctx.ui.notify(`Removed storage connection “${safeTerminalText(name)}”.`, "info");
+					selectedName = undefined;
+					return { kind: "back" };
+				} catch (error) {
+					notifyConnectionError(ctx, name, error, signal);
+					return { kind: "stay" };
+				}
+			},
+			back: async () => {
+				selectedName = undefined;
+				return { kind: "back" };
+			},
+		},
+	});
+	await runMenu(ctx, menu, {
+		getState: () => loadStorageMenuState(selectedName, signal),
+		signal,
+		isCurrent: () => !signal?.aborted,
+	});
 }
 
-async function showStorageConnectionDetail(
-	ctx: ExtensionCommandContext,
-	name: string,
-	signal?: AbortSignal,
-) {
-	while (!signal?.aborted) {
-		const raw = await readLocalConfigObject();
-		if (signal?.aborted) return;
-		const profiles = ownRecord(raw?.storageConnections) ?? {};
-		const profile = ownRecord(profiles[name]);
-		if (!profile) {
-			ctx.ui.notify(`Storage connection “${safeTerminalText(name)}” no longer exists.`, "warning");
-			return;
-		}
-		const usedBy = referencingSetups(raw, name);
-		const selected = await ctx.ui.select(
-			[
-				`Storage connection “${safeTerminalText(name)}”`,
-				"",
+async function loadStorageMenuState(selectedName: string | undefined, signal?: AbortSignal) {
+	const raw = await readLocalConfigObject();
+	if (signal?.aborted) throw signal.reason;
+	const profiles = ownRecord(raw?.storageConnections) ?? {};
+	const profile = selectedName ? ownRecord(profiles[selectedName]) : undefined;
+	if (!selectedName || !profile) {
+		return { version3: raw?.version === 3, profiles, selected: undefined };
+	}
+	const usedBy = referencingSetups(raw, selectedName);
+	return {
+		version3: raw?.version === 3,
+		profiles,
+		selected: {
+			name: selectedName,
+			profile,
+			usedBy,
+			lines: [
 				`Type: ${connectionType(profile)}`,
 				`Endpoint: ${connectionEndpoint(profile)}`,
 				`Credentials: ${credentialSource(profile)}`,
@@ -79,36 +167,22 @@ async function showStorageConnectionDetail(
 				...(usedBy.length > 0
 					? ["Remove unavailable: edit or remove the listed sync setups first."]
 					: []),
-			].join("\n"),
-			[
-				"Edit storage connection…",
-				...(usedBy.length === 0 ? ["Remove storage connection…"] : []),
-				BACK,
 			],
-			{ signal },
-		);
-		if (signal?.aborted || !selected || selected === BACK) return;
-		try {
-			if (selected === "Remove storage connection…") {
-				const confirmed = await ctx.ui.confirm(
-					"Remove storage connection?",
-					`Remove local storage connection “${safeTerminalText(name)}”? Remote data and history are not deleted.`,
-					{ signal },
-				);
-				if (!confirmed || signal?.aborted) continue;
-				await removeStorageConnection(name, signal);
-				ctx.ui.notify(`Removed storage connection “${safeTerminalText(name)}”.`, "info");
-				return;
-			}
-			await editStorageConnection(ctx, name, profile, usedBy, signal);
-		} catch (error) {
-			if (signal?.aborted) return;
-			ctx.ui.notify(
-				`Storage connection “${safeTerminalText(name)}” was not changed: ${safeTerminalText(errorMessage(error))} Reopen it and retry.`,
-				"error",
-			);
-		}
-	}
+		},
+	};
+}
+
+function notifyConnectionError(
+	ctx: ExtensionCommandContext,
+	name: string,
+	error: unknown,
+	signal?: AbortSignal,
+) {
+	if (signal?.aborted) return;
+	ctx.ui.notify(
+		`Storage connection “${safeTerminalText(name)}” was not changed: ${safeTerminalText(errorMessage(error))} Reopen it and retry.`,
+		"error",
+	);
 }
 
 async function editStorageConnection(

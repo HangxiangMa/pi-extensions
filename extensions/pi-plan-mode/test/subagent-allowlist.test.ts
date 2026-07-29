@@ -149,9 +149,9 @@ test("a session-level Plan tools selection remains guarded", async () => {
 		const context = createMockContext({
 			hasUI: true,
 			select: async (_title: unknown, choices: string[]) => {
-				if (selectedSubagent) return "Done";
+				if (selectedSubagent) return undefined;
 				selectedSubagent = true;
-				return choices.find((choice) => choice.includes(". subagent "));
+				return choices.find((choice) => choice === "subagent");
 			},
 		});
 

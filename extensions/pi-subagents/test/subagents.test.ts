@@ -1,3 +1,5 @@
+// Cohesion justification: this established integration matrix shares transport/runtime fixtures and
+// cross-covers command, settings, agent lifecycle, and completion-delivery invariants.
 import assert from "node:assert/strict";
 import fs, {
 	existsSync,
@@ -18,11 +20,7 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
 import { discoverAgents, formatAgentList } from "../src/agents.js";
-import {
-	registerSubagentConfigCommand,
-	type SubagentSettingsRuntime,
-	ToolToggleList,
-} from "../src/config-ui.js";
+import { registerSubagentConfigCommand, type SubagentSettingsRuntime } from "../src/config-ui.js";
 import { hasUsableAggregator } from "../src/params.js";
 import type { ManagedAgent } from "../src/registry.js";
 import { consumeSubagentSettingsNotice } from "../src/settings.js";
@@ -193,10 +191,9 @@ test("bare subagents opens a current-session manager and keeps direct routes pre
 			},
 		});
 		await command.handler("", nestedContext.ctx);
-		assert.equal(nestedCall, 3, "settings closes back to a fresh manager before final Escape");
+		assert.equal(nestedCall, 2, "settings uses the manager's integrated screen stack");
 		assert.match(nestedRenders[0]?.join("\n") ?? "", /Delegation:/);
 		assert.match(nestedRenders[1]?.join("\n") ?? "", /Subagent User Settings/);
-		assert.match(nestedRenders[2]?.join("\n") ?? "", /Delegation:/);
 
 		let agentRouteCall = 0;
 		const agentRouteRenders: string[][] = [];
@@ -309,14 +306,11 @@ test("delegation workflow preview applies async-only on confirmation and cancell
 			},
 		});
 		await command.handler("", applyContext.ctx);
-		assert.equal(applyCall, 3);
+		assert.equal(applyCall, 2);
 		assert.equal(reloads, 1);
 		assert.match(applyContext.notifications.at(-1)?.message ?? "", /run \/reload/i);
 		assert.match(applyRenders[0]?.join("\n") ?? "", /Delegation: All delegation methods/);
 		assert.match(applyRenders[1]?.join("\n") ?? "", /Async only/);
-		assert.match(applyRenders[2]?.join("\n") ?? "", /Current: All delegation methods/);
-		assert.match(applyRenders[2]?.join("\n") ?? "", /New: Async only/);
-		assert.match(applyRenders[2]?.join("\n") ?? "", /Remove blocking `subagent`/);
 		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
 			future: true,
 			blocking: { enabled: false },
@@ -333,6 +327,7 @@ test("delegation workflow preview applies async-only on confirmation and cancell
 		const cancelContext = createMockContext({
 			mode: "tui",
 			hasUI: true,
+			confirm: async () => false,
 			custom: async (factory: unknown) => {
 				const inputs =
 					cancelCall === 0
@@ -378,37 +373,30 @@ test("configured workflow differences reload from the active tool surface", asyn
 				reloads++;
 			},
 			custom: async (factory: unknown) => {
-				if (call >= 3) throw new Error("workflow should reload after the third screen");
-				const driven = driveCustomSelector(factory, ["\r"], 40);
+				if (call >= 2) throw new Error("workflow should reload after the choice screen");
+				const driven = driveCustomSelector(factory, call === 1 ? ["\u001b[B", "\r"] : ["\r"], 40);
 				renders[call++] = driven.renders.flat();
 				return driven.result;
 			},
 		});
 		await command.handler("", context.ctx);
-		assert.equal(call, 3);
+		assert.equal(call, 2);
 		assert.equal(reloads, 1);
 		assert.match(renders[0]?.join("\n") ?? "", /Configured after reload: Async only/);
 		assert.match(renders[1]?.join("\n") ?? "", /Current: All delegation methods/);
-		assert.match(renders[2]?.join("\n") ?? "", /Current: All delegation methods/);
-		assert.match(renders[2]?.join("\n") ?? "", /Remove blocking `subagent`/);
 		assert.ok(renders.flat().every((line) => visibleWidth(line) <= 40));
 
 		reloads = 0;
-		call = 0;
+		const revertChoices = ["Change delegation", "All delegation methods", undefined, undefined];
 		const revertContext = createMockContext({
 			mode: "tui",
 			hasUI: true,
 			reload: async () => {
 				reloads++;
 			},
-			custom: async (factory: unknown) => {
-				const inputs = call === 1 ? ["\u001b[A", "\r"] : call === 3 ? ["\u001b"] : ["\r"];
-				call++;
-				return driveCustomSelector(factory, inputs, 60).result;
-			},
+			select: async () => revertChoices.shift(),
 		});
 		await command.handler("", revertContext.ctx);
-		assert.equal(call, 4);
 		assert.equal(reloads, 0);
 		assert.equal(inspectDelegationWorkflowSettings().value, "all");
 		assert.match(
@@ -483,7 +471,7 @@ test("delegation workflow blocks reload while detached agents are retained", asy
 			},
 		});
 		await command.handler("", context.ctx);
-		assert.equal(call, 3);
+		assert.equal(call, 4);
 		assert.equal(reloads, 0);
 		assert.equal(readFileSync(settingsPath, "utf8"), "{}\n");
 		assert.match(
@@ -517,14 +505,14 @@ test("delegation workflow save failure does not reload or claim application", as
 				reloads++;
 			},
 			custom: async (factory: unknown) => {
-				const inputs =
-					call === 0 ? ["\r"] : call === 1 ? ["\u001b[B", "\r"] : call === 2 ? ["\r"] : ["\u001b"];
-				if (call === 2) {
-					rmSync(settingsPath);
-					mkdirSync(settingsPath);
-				}
+				const inputs = call === 0 ? ["\r"] : call === 1 ? ["\u001b[B", "\r"] : ["\u001b"];
 				call++;
 				return driveCustomSelector(factory, inputs, 60).result;
+			},
+			confirm: async () => {
+				rmSync(settingsPath);
+				mkdirSync(settingsPath);
+				return true;
 			},
 		});
 		await command.handler("", context.ctx);
@@ -797,21 +785,17 @@ test("subagent settings UI rolls back after an atomic save failure", async () =>
 		subagents(mock.pi);
 		const command = mock.commands.get("subagents");
 		assert.ok(command);
-		let renders: string[][] = [];
 		const context = createMockContext({
 			mode: "tui",
 			hasUI: true,
 			custom: async (factory: unknown) => {
 				rmSync(settingsPath);
 				mkdirSync(settingsPath);
-				const driven = driveCustomSelector(factory, ["\r", "\u001b"]);
-				renders = driven.renders;
-				return driven.result;
+				return driveCustomSelector(factory, ["\r", "\u001b"]).result;
 			},
 		});
 		await command.handler("settings", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /were not saved/i);
-		assert.ok(renders[0]?.some((line) => line.includes("Wait until my next turn")));
 		await command.handler("status", context.ctx);
 		assert.match(
 			context.notifications.at(-1)?.message ?? "",
@@ -822,28 +806,6 @@ test("subagent settings UI rolls back after an atomic save failure", async () =>
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		rmSync(directory, { recursive: true, force: true });
 	}
-});
-
-test("subagent tool selection keeps the cursor on the toggled row", () => {
-	const list = new ToolToggleList(["first", "second", "third"], new Set());
-	list.handleInput("\u001b[B");
-	list.handleInput("\r");
-	assert.ok(list.render(100).some((line) => line.includes("> ✓ second")));
-});
-
-test("subagent tool selection escapes display controls without changing saved names", () => {
-	const names = ["read\u001b]8;;https://example.com\u0007linked", "line\nbreak"];
-	const list = new ToolToggleList(names, new Set(names));
-	for (const renderedLine of list.render(100)) {
-		// biome-ignore lint/suspicious/noControlCharactersInRegex: Verify terminal-control escaping.
-		assert.doesNotMatch(renderedLine, /[\u0000-\u001f\u007f-\u009f]/u);
-	}
-	let saved: string[] | undefined;
-	list.onDone = (tools) => {
-		saved = tools;
-	};
-	list.handleInput("s");
-	assert.deepEqual(saved, names);
 });
 
 test("subagent recursion guard rejects nested delegation before spawning", async () => {

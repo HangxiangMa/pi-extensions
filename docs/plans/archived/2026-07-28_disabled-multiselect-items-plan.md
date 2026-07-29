@@ -52,26 +52,26 @@ migrating its tool selector.
 
 ## Plan
 
-- [ ] Add failing model/component/runtime tests for inherited `disabled` compatibility, focused
+- [x] Add failing model/component/runtime tests for inherited `disabled` compatibility, focused
       disabled rows, textual reasons, Enter/Space no-op, refreshed disabled state, raw ids,
       sanitization, RPC visibility/no-op, and no `onToggle` calls for disabled rows.
-- [ ] Extend `MenuMultiSelectItem` with `disabledReason` validation and implement explicit disabled
+- [x] Extend `MenuMultiSelectItem` with `disabledReason` validation and implement explicit disabled
       rendering in TUI and RPC while preserving the existing activation guard, enabled-row callback
       serialization, and rollback behavior.
-- [ ] Add a large-catalog integration fixture combining disabled rows with the bounded viewport so
+- [x] Add a large-catalog integration fixture combining disabled rows with the bounded viewport so
       off-screen blocked choices, descriptions, paging, and cursor restoration compose correctly.
-- [ ] Update the README API reference and example, including bulk-action guidance and the RPC
+- [x] Update the README API reference and example, including bulk-action guidance and the RPC
       representation.
-- [ ] Run package/root checks, existing Chrome DevTools/Firecrawl tests, declarations inspection, and
+- [x] Run package/root checks, existing Chrome DevTools/Firecrawl tests, declarations inspection, and
       `just pack-tui-kit`; verify no existing consumer source change is required.
-- [ ] Audit API compatibility, accessibility, sanitization, activation-time state, pending work,
+- [x] Audit API compatibility, accessibility, sanitization, activation-time state, pending work,
       TUI/RPC modes, and package conventions before archiving.
 
 ## Completion Checklist
 
-- [ ] Disabled rows are visible, focusable, explained, and impossible to toggle in TUI and RPC.
-- [ ] Existing `disabled?: boolean` definitions stay source-compatible; no second enablement flag is
+- [x] Disabled rows are visible, focusable, explained, and impossible to toggle in TUI and RPC.
+- [x] Existing `disabled?: boolean` definitions stay source-compatible; no second enablement flag is
       introduced.
-- [ ] Enabled rows retain current toggle, action, rollback, ordering, and cancellation semantics.
-- [ ] Refreshed state and bounded viewport composition use stable ids without stale activation.
-- [ ] Existing consumers compile and pass unchanged; checks, declarations, and pack inspection pass.
+- [x] Enabled rows retain current toggle, action, rollback, ordering, and cancellation semantics.
+- [x] Refreshed state and bounded viewport composition use stable ids without stale activation.
+- [x] Existing consumers compile and pass unchanged; checks, declarations, and pack inspection pass.

@@ -202,7 +202,7 @@ test("menu waits for settings persistence before rebuilding current state", asyn
 				assert.match(selector.render().join("\n"), /Startup: Every session/);
 				selector.handleInput("\u001b");
 			}
-			return selector.result;
+			return selector.resultPromise;
 		},
 	});
 	await runtime.start(context.ctx);
@@ -496,6 +496,7 @@ test("settings changes save in action order and update effective status", async 
 			return { ...document, ...settings };
 		},
 	});
+	let settingsScreens = 0;
 	const context = createMockContext({
 		hasUI: true,
 		mode: "tui",
@@ -505,14 +506,18 @@ test("settings changes save in action order and update effective status", async 
 				selector.render().join("\n"),
 				/maxImages|maxImageBytes|maxBatchBytes|maxImagePixels/,
 			);
-			selector.handleInput("\r");
-			selector.handleInput("\r");
-			await waitFor(() => requested.length === 1);
-			assert.deepEqual(requested, [{ startOnSessionStart: true }]);
-			first.resolve(undefined);
-			await waitFor(() => requested.length === 2);
+			settingsScreens += 1;
+			if (settingsScreens === 1) {
+				selector.handleInput("\r");
+				selector.handleInput("\r");
+				await waitFor(() => requested.length === 1);
+				assert.deepEqual(requested, [{ startOnSessionStart: true }]);
+				first.resolve(undefined);
+				await waitFor(() => requested.length === 2);
+				return selector.resultPromise;
+			}
 			selector.handleInput("\u001b");
-			return selector.result;
+			return selector.resultPromise;
 		},
 	});
 	await runtime.start(context.ctx);

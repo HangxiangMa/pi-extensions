@@ -12,13 +12,15 @@ import {
 } from "./screen-components.js";
 import type {
 	ActionMenuItem,
+	MenuActionHandler,
 	MenuActionResult,
+	MenuContext,
 	MenuDefinition,
 	MenuScreen,
 	MenuTransition,
 } from "./types.js";
 
-type ExtensionMode = ExtensionCommandContext["mode"];
+type ExtensionMode = MenuContext["mode"];
 
 export type RunMenuResult =
 	| { kind: "closed" }
@@ -26,12 +28,12 @@ export type RunMenuResult =
 	| { kind: "unsupported"; mode: ExtensionMode }
 	| { kind: "error"; error: unknown };
 
-export interface RunMenuOptions<State> {
-	getState(context: { ctx: ExtensionCommandContext; signal: AbortSignal }): State | Promise<State>;
+export interface RunMenuOptions<State, Context extends MenuContext = ExtensionCommandContext> {
+	getState(context: { ctx: Context; signal: AbortSignal }): State | Promise<State>;
 	signal?: AbortSignal;
 	isCurrent?(): boolean;
-	onError?(ctx: ExtensionCommandContext, error: unknown): void | Promise<void>;
-	onUnsupportedMode?(ctx: ExtensionCommandContext, mode: ExtensionMode): void | Promise<void>;
+	onError?(ctx: Context, error: unknown): void | Promise<void>;
+	onUnsupportedMode?(ctx: Context, mode: ExtensionMode): void | Promise<void>;
 }
 
 interface ActionInvocation<ScreenId extends string> {
@@ -44,10 +46,15 @@ type InternalScreenEvent<ScreenId extends string> =
 	| MenuScreenEvent
 	| { kind: "transition"; transition: MenuTransition<ScreenId> };
 
-export async function runMenu<State, ScreenId extends string, ActionId extends string>(
-	ctx: ExtensionCommandContext,
-	definition: MenuDefinition<State, ScreenId, ActionId>,
-	options: RunMenuOptions<State>,
+export async function runMenu<
+	State,
+	ScreenId extends string,
+	ActionId extends string,
+	Context extends MenuContext = ExtensionCommandContext,
+>(
+	ctx: Context,
+	definition: MenuDefinition<State, ScreenId, ActionId, Context>,
+	options: RunMenuOptions<State, Context>,
 ): Promise<RunMenuResult> {
 	if (ctx.mode === "tui" && ctx.hasUI) return runTuiMenu(ctx, definition, options);
 	if (ctx.mode === "rpc" && ctx.hasUI) return runDialogMenu(ctx, definition, options);
@@ -55,10 +62,15 @@ export async function runMenu<State, ScreenId extends string, ActionId extends s
 	return { kind: "unsupported", mode: ctx.mode };
 }
 
-async function runTuiMenu<State, ScreenId extends string, ActionId extends string>(
-	ctx: ExtensionCommandContext,
-	definition: MenuDefinition<State, ScreenId, ActionId>,
-	options: RunMenuOptions<State>,
+async function runTuiMenu<
+	State,
+	ScreenId extends string,
+	ActionId extends string,
+	Context extends MenuContext,
+>(
+	ctx: Context,
+	definition: MenuDefinition<State, ScreenId, ActionId, Context>,
+	options: RunMenuOptions<State, Context>,
 ): Promise<RunMenuResult> {
 	const menuController = new AbortController();
 	const menuSignal = options.signal
@@ -166,8 +178,12 @@ function selectableItemIds<ScreenId extends string, ActionId extends string>(
 	return screen.items.map((item) => item.id);
 }
 
-async function showTuiScreen<ScreenId extends string, ActionId extends string>(
-	ctx: ExtensionCommandContext,
+async function showTuiScreen<
+	ScreenId extends string,
+	ActionId extends string,
+	Context extends MenuContext,
+>(
+	ctx: Context,
 	screen: MenuScreen<ScreenId, ActionId>,
 	selectedItemId: string | undefined,
 	menuSignal: AbortSignal,
@@ -186,7 +202,7 @@ async function showTuiScreen<ScreenId extends string, ActionId extends string>(
 	let component: MenuScreenComponent | undefined;
 	let removeAbortListener = () => {};
 	try {
-		return await ctx.ui.custom<InternalScreenEvent<ScreenId> | undefined>(
+		return await uiFor(ctx).custom<InternalScreenEvent<ScreenId> | undefined>(
 			(tui, theme, keybindings, done) => {
 				const screenController = new AbortController();
 				let finished = false;
@@ -228,13 +244,18 @@ async function showTuiScreen<ScreenId extends string, ActionId extends string>(
 	}
 }
 
-async function activateActionItem<State, ScreenId extends string, ActionId extends string>(
-	ctx: ExtensionCommandContext,
-	definition: MenuDefinition<State, ScreenId, ActionId>,
+async function activateActionItem<
+	State,
+	ScreenId extends string,
+	ActionId extends string,
+	Context extends MenuContext,
+>(
+	ctx: Context,
+	definition: MenuDefinition<State, ScreenId, ActionId, Context>,
 	item: ActionMenuItem<ScreenId, ActionId>,
 	state: State,
 	menuSignal: AbortSignal,
-	options: RunMenuOptions<State>,
+	options: RunMenuOptions<State, Context>,
 ): Promise<ActionInvocation<ScreenId>> {
 	if ("to" in item && item.to !== undefined) return accepted({ kind: "to", screen: item.to });
 	if ("close" in item) return accepted({ kind: "close" });
@@ -246,14 +267,14 @@ async function activateActionItem<State, ScreenId extends string, ActionId exten
 	return invokeAction(ctx, handler, state, menuSignal, item.id, options);
 }
 
-async function invokeBusyAction<State, ScreenId extends string>(
-	ctx: ExtensionCommandContext,
-	handler: MenuDefinition<State, ScreenId, string>["actions"][string],
+async function invokeBusyAction<State, ScreenId extends string, Context extends MenuContext>(
+	ctx: Context,
+	handler: MenuActionHandler<State, ScreenId, Context>,
 	state: State,
 	itemId: string,
 	label: string,
 	menuSignal: AbortSignal,
-	options: RunMenuOptions<State>,
+	options: RunMenuOptions<State, Context>,
 ): Promise<ActionInvocation<ScreenId>> {
 	let actionTask: Promise<ActionInvocation<ScreenId>> | undefined;
 	let customFailed = false;
@@ -261,7 +282,7 @@ async function invokeBusyAction<State, ScreenId extends string>(
 	let externallyDisposed = false;
 	let result: ActionInvocation<ScreenId> | undefined;
 	try {
-		result = await ctx.ui.custom<ActionInvocation<ScreenId> | undefined>(
+		result = await uiFor(ctx).custom<ActionInvocation<ScreenId> | undefined>(
 			(tui, theme, _keybindings, done) => {
 				const actionController = new AbortController();
 				const signal = AbortSignal.any([menuSignal, actionController.signal]);
@@ -311,13 +332,13 @@ async function invokeBusyAction<State, ScreenId extends string>(
 	return result ?? actionOutcome ?? rejected();
 }
 
-async function invokeAction<State, ScreenId extends string>(
-	ctx: ExtensionCommandContext,
-	handler: MenuDefinition<State, ScreenId, string>["actions"][string],
+async function invokeAction<State, ScreenId extends string, Context extends MenuContext>(
+	ctx: Context,
+	handler: MenuActionHandler<State, ScreenId, Context>,
 	state: State,
 	signal: AbortSignal,
 	itemId: string,
-	options: RunMenuOptions<State>,
+	options: RunMenuOptions<State, Context>,
 	input: { value?: string; selected?: boolean } = {},
 	abortIsStale = true,
 ): Promise<ActionInvocation<ScreenId>> {
@@ -355,10 +376,15 @@ async function invokeAction<State, ScreenId extends string>(
 	return accepted(result ?? { kind: "stay" });
 }
 
-async function runDialogMenu<State, ScreenId extends string, ActionId extends string>(
-	ctx: ExtensionCommandContext,
-	definition: MenuDefinition<State, ScreenId, ActionId>,
-	options: RunMenuOptions<State>,
+async function runDialogMenu<
+	State,
+	ScreenId extends string,
+	ActionId extends string,
+	Context extends MenuContext,
+>(
+	ctx: Context,
+	definition: MenuDefinition<State, ScreenId, ActionId, Context>,
+	options: RunMenuOptions<State, Context>,
 ): Promise<RunMenuResult> {
 	const controller = new AbortController();
 	const menuSignal = options.signal
@@ -372,7 +398,7 @@ async function runDialogMenu<State, ScreenId extends string, ActionId extends st
 			const state = loaded.state;
 			const screen = resolveMenuScreen(definition, navigator.current, state);
 			const rows = dialogRows(screen);
-			const choice = await ctx.ui.select(
+			const choice = await uiFor(ctx).select(
 				dialogTitle(screen),
 				rows.map((row) => row.label),
 				{ signal: menuSignal },
@@ -499,7 +525,9 @@ function dialogRows<ScreenId extends string, ActionId extends string>(
 			...screen.items.map((item, index) => ({
 				kind: "item" as const,
 				index,
-				label: `${item.selected ? "[x]" : "[ ]"} ${safeMenuText(item.label)}`,
+				label: item.disabled
+					? `[-] ${safeMenuText(item.label)} (unavailable${item.disabledReason ? `: ${safeMenuText(item.disabledReason)}` : ""})`
+					: `${item.selected ? "[x]" : "[ ]"} ${safeMenuText(item.label)}`,
 			})),
 			...(screen.actions ?? []).map((item, index) => ({
 				kind: "action" as const,
@@ -534,9 +562,9 @@ function dialogExitChoice<ScreenId extends string, ActionId extends string>(
 	return "hint" in screen && screen.hint === "close" ? "Done" : "Back";
 }
 
-async function loadState<State>(
-	ctx: ExtensionCommandContext,
-	options: RunMenuOptions<State>,
+async function loadState<State, Context extends MenuContext>(
+	ctx: Context,
+	options: RunMenuOptions<State, Context>,
 	signal: AbortSignal,
 ): Promise<{ kind: "loaded"; state: State } | { kind: "result"; result: RunMenuResult }> {
 	if (signal.aborted || !isCurrent(options)) return { kind: "result", result: { kind: "stale" } };
@@ -558,9 +586,9 @@ async function loadState<State>(
 	}
 }
 
-async function reportError<State>(
-	ctx: ExtensionCommandContext,
-	options: RunMenuOptions<State>,
+async function reportError<State, Context extends MenuContext>(
+	ctx: Context,
+	options: RunMenuOptions<State, Context>,
 	error: unknown,
 ) {
 	if (options.onError) {
@@ -574,7 +602,7 @@ async function reportError<State>(
 	if (ctx.hasUI) {
 		const message = error instanceof Error ? error.message : String(error);
 		try {
-			ctx.ui.notify(`Menu action failed: ${safeMenuText(message)}`, "error");
+			uiFor(ctx).notify(`Menu action failed: ${safeMenuText(message)}`, "error");
 		} catch {
 			// Error reporting must never escape the documented menu result contract.
 		}
@@ -591,6 +619,12 @@ function rejected<ScreenId extends string>(): ActionInvocation<ScreenId> {
 	return { accepted: false, stale: false, transition: { kind: "stay" } };
 }
 
-function isCurrent<State>(options: RunMenuOptions<State>) {
+function isCurrent<State, Context extends MenuContext>(options: RunMenuOptions<State, Context>) {
 	return options.isCurrent?.() ?? true;
+}
+
+function uiFor(ctx: MenuContext): ExtensionCommandContext["ui"] {
+	// Pi core packages are peers and can be typechecked at multiple compatible versions in one tree.
+	// The runtime uses only this stable UI surface and never adds command-only context capabilities.
+	return ctx.ui as ExtensionCommandContext["ui"];
 }

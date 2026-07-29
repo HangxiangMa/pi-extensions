@@ -216,9 +216,9 @@ test("the tool selector persists a session override and shutdown restores prior 
 		const context = createMockContext({
 			hasUI: true,
 			select: async (_title: unknown, choices: string[]) => {
-				if (selectedRead) return "Done";
+				if (selectedRead) return undefined;
 				selectedRead = true;
-				return choices.find((choice) => choice.includes(". read "));
+				return choices.find((choice) => choice === "read");
 			},
 		});
 
@@ -285,7 +285,7 @@ test("the Plan-mode tool selector keeps the cursor on the toggled row", async ()
 					"tui.select.confirm",
 					"tui.select.cancel",
 				]);
-				assert.ok(renders[1]?.some((line) => line.includes("› [x] 2. read")));
+				assert.ok(renders[1]?.some((line) => line.includes("› [x] read")));
 				return result;
 			},
 		});

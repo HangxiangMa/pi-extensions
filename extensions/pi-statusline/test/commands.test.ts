@@ -1,3 +1,5 @@
+// Cohesion justification: this command regression matrix shares settings and selector fixtures while
+// cross-checking standard navigation against specialized preview, layout, and editor workflows.
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,9 +24,13 @@ interface PickerComponent {
 	handleInput?(data: string): void;
 }
 
+function screenTitle(title: string) {
+	return title.split("\n")[0] ?? title;
+}
+
 function selectCustomLayout(title: string, choices: string[]): string | undefined {
-	if (title === "pi-statusline") return "Advanced";
-	if (title === "pi-statusline — Advanced") {
+	if (screenTitle(title) === "pi-statusline") return "Advanced";
+	if (screenTitle(title) === "pi-statusline — Advanced") {
 		return choices.find((choice) => choice.startsWith("Custom layout ("));
 	}
 	return undefined;
@@ -103,13 +109,13 @@ test("fresh explicit statusline controls seed their first save without passive c
 		{
 			name: "appearance",
 			select: (title: string, choices: string[]) =>
-				title === "pi-statusline" ? choices[0] : undefined,
+				screenTitle(title) === "pi-statusline" ? choices[0] : undefined,
 			inputs: ["\r"],
 		},
 		{
 			name: "information",
 			select: (title: string, choices: string[]) =>
-				title === "pi-statusline" ? choices[1] : undefined,
+				screenTitle(title) === "pi-statusline" ? choices[1] : undefined,
 			inputs: ["\r"],
 		},
 		{
@@ -175,7 +181,7 @@ test("failed first-run statusline application restores the missing file", async 
 				const context = createMockContext({
 					mode: "tui",
 					select: (title: string, choices: string[]) =>
-						title === "pi-statusline" ? choices[scenario.menuIndex] : undefined,
+						screenTitle(title) === "pi-statusline" ? choices[scenario.menuIndex] : undefined,
 					custom: customPalettePicker(["\r"]),
 				});
 
@@ -216,7 +222,7 @@ test("failed statusline application preserves a canonical file replaced before r
 		const context = createMockContext({
 			mode: "tui",
 			select: (title: string, choices: string[]) =>
-				title === "pi-statusline" ? choices[0] : undefined,
+				screenTitle(title) === "pi-statusline" ? choices[0] : undefined,
 			custom: customPalettePicker(["\r"]),
 		});
 
@@ -237,13 +243,13 @@ test("failed updates from legacy statusline settings remove the new canonical fi
 		{
 			name: "appearance",
 			select: (title: string, choices: string[]) =>
-				title === "pi-statusline" ? choices[0] : undefined,
+				screenTitle(title) === "pi-statusline" ? choices[0] : undefined,
 			inputs: ["\r"],
 		},
 		{
 			name: "information",
 			select: (title: string, choices: string[]) =>
-				title === "pi-statusline" ? choices[1] : undefined,
+				screenTitle(title) === "pi-statusline" ? choices[1] : undefined,
 			inputs: ["\r"],
 		},
 		{
@@ -254,9 +260,9 @@ test("failed updates from legacy statusline settings remove the new canonical fi
 		{
 			name: "JSON editor",
 			select: (title: string) =>
-				title === "pi-statusline"
+				screenTitle(title) === "pi-statusline"
 					? "Advanced"
-					: title === "pi-statusline — Advanced"
+					: screenTitle(title) === "pi-statusline — Advanced"
 						? "Edit settings JSON"
 						: undefined,
 			inputs: [],
@@ -1065,7 +1071,7 @@ test("cancelled, invalid, and failed settings edits preserve file and runtime st
 		const context = createMockContext({
 			mode: "tui",
 			select: async (title: string) =>
-				title === "pi-statusline" ? "Advanced" : "Edit settings JSON",
+				screenTitle(title) === "pi-statusline" ? "Advanced" : "Edit settings JSON",
 			editor: async () => nextEdit,
 		});
 

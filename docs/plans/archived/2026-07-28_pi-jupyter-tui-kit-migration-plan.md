@@ -59,35 +59,35 @@ to the shared package.
 
 ## Plan
 
-- [ ] Add the `<1` kit runtime dependency and lockfile edge to experimental `pi-jupyter`; verify
+- [x] Add the `<1` kit runtime dependency and lockfile edge to experimental `pi-jupyter`; verify
       package boundaries, experimental publishing metadata, and `npm run pack:jupyter` contents.
-- [ ] Add failing screen/runtime tests for no-selection, closed, open, focused, stale-error,
+- [x] Add failing screen/runtime tests for no-selection, closed, open, focused, stale-error,
       narrow-threshold, empty/multiple-notebook, current-path, explicit-path, duplicate-looking label,
       Back/Close, cursor restoration, owner abort, and TUI-only states.
-- [ ] Replace `createJupyterMenuComponent()` and `createJupyterHelpComponent()` with typed action/detail
+- [x] Replace `createJupyterMenuComponent()` and `createJupyterHelpComponent()` with typed action/detail
       screens, retaining current-state ordering and selected action identity; verify Open, Focus,
       Refresh, Close, Help, and cancellation do not alter overlay lifecycle unexpectedly.
-- [ ] Replace `createNotebookPickerComponent()` with a dynamic action screen, preserving discovery,
+- [x] Replace `createNotebookPickerComponent()` with a dynamic action screen, preserving discovery,
       raw path identity, explicit input, outside-workspace confirmation, Back versus Close, and
       successful-load-only selection replacement.
-- [ ] Wire selected-path actions through the existing cancellable loader and session/generation
+- [x] Wire selected-path actions through the existing cancellable loader and session/generation
       signals; add disposal and replacement tests proving aborted loads cannot start a watcher,
       replace the model, open an overlay, or publish stale status.
-- [ ] Remove only superseded selector/hint code after overlay, watcher, mouse, width, scroll, direct
+- [x] Remove only superseded selector/hint code after overlay, watcher, mouse, width, scroll, direct
       command, and shortcut tests remain green; keep the experimental warning and specialized panel
       modules unchanged.
-- [ ] Update the README for standard menu navigation and the unchanged TUI-only/experimental
+- [x] Update the README for standard menu navigation and the unchanged TUI-only/experimental
       contract, then run the package typecheck, root tests, `npm run check`, `npm run pack:jupyter`,
       and an isolated `pi -e ./experimental/pi-jupyter` load plus TUI-harness smoke with a temporary
       notebook.
-- [ ] Audit command, TUI, overlay, cancellation/disposal, watcher/session lifecycle, filesystem
+- [x] Audit command, TUI, overlay, cancellation/disposal, watcher/session lifecycle, filesystem
       safety, experimental packaging, and verification conventions before archiving.
 
 ## Completion Checklist
 
-- [ ] Main, Notebook Picker, and Help use `pi-tui-kit` standard screens.
-- [ ] Overlay/panel, loader, input/confirmation, watcher, atomic switch, focus/scroll, and direct routes
+- [x] Main, Notebook Picker, and Help use `pi-tui-kit` standard screens.
+- [x] Overlay/panel, loader, input/confirmation, watcher, atomic switch, focus/scroll, and direct routes
       remain extension-owned and unchanged.
-- [ ] Back/Close, cancellation, disposal, replacement, TUI-only behavior, and experimental warning are
+- [x] Back/Close, cancellation, disposal, replacement, TUI-only behavior, and experimental warning are
       covered.
-- [ ] Focused tests, root checks, runtime/TUI smoke, and pack inspection pass.
+- [x] Focused tests, root checks, runtime/TUI smoke, and pack inspection pass.

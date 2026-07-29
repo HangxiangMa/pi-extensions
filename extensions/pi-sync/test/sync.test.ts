@@ -147,16 +147,15 @@ test("included-content save preserves a concurrent include change", async () => 
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+		let editorVisits = 0;
 		const { ctx, notifications } = createMockContext({
 			hasUI: true,
 			mode: "tui",
-			custom: async (factory: unknown) => {
-				const harness = createCustomSelectorHarness(factory, 60);
-				harness.handleInput("\r");
-				harness.handleInput("tui.select.cancel");
-				return harness.result;
-			},
-			select: async () => {
+			select: async (title: string) => {
+				if (title.includes("Included Content")) {
+					editorVisits += 1;
+					return editorVisits === 1 ? "settings.json" : undefined;
+				}
 				await updateLocalConfig((current) => ({
 					...current,
 					syncSetups: {

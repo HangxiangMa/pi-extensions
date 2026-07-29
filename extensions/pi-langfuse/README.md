@@ -144,7 +144,11 @@ Completed observations are exported in batches while Pi remains live. Neither `a
 /langfuse
 ```
 
-The command opens one context-aware menu. Its title shows the current session's tracing state, endpoint, content-capture mode, initialization failure when applicable, and private configuration path. It never displays credentials.
+The command opens one context-aware standard menu in TUI or RPC mode. Its state lines show the
+current session's tracing state, endpoint, content-capture mode, initialization failure when
+applicable, and private configuration path. It never displays credentials. Escape closes the menu.
+Credential and endpoint text inputs remain extension-owned because they enforce secret-preserving
+setup/update semantics rather than standard navigation.
 
 Available actions depend on that state:
 
@@ -153,7 +157,10 @@ Available actions depend on that state:
 - **Update Langfuse for this Pi agent directory** appears when a valid config exists.
 - **Show setup and privacy help** explains the agent-directory scope, manual configuration path, and content-capture risk.
 
-Connection actions state their agent-directory scope and per-process restart requirement before selection. Command arguments are intentionally ignored so remembered subcommands cannot silently bypass the menu. In non-interactive modes, the command reports that the menu is unavailable and points to the manual config path.
+Connection actions state their agent-directory scope and per-process restart requirement before
+selection. Command arguments are intentionally ignored so remembered subcommands cannot silently
+bypass the menu. Print and JSON modes reject the interactive command with an observable error that
+includes current tracing state and the manual configuration path.
 
 ## 🔐 Privacy
 

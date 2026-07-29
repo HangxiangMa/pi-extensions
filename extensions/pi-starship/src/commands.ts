@@ -6,6 +6,7 @@ import {
 	truncateToWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import {
 	atomicRestoreConfigDocument,
 	atomicSaveConfigDocument,
@@ -52,6 +53,7 @@ export interface StarshipCommandOptions {
 	save?: (settingsPath: string, rawDocument: string) => LoadedStarshipConfig;
 	restore?: (settingsPath: string, rawDocument: string) => void;
 	validate?: (settingsPath: string, rawDocument: string) => LoadedStarshipConfig;
+	getMenuOwner?(): { signal: AbortSignal; isCurrent(): boolean };
 }
 
 interface MenuItem extends SelectItem {
@@ -95,80 +97,138 @@ export function registerStarshipCommand(pi: ExtensionAPI, options: StarshipComma
 }
 
 async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipCommandOptions) {
-	while (true) {
-		const loaded = options.getLoaded();
-		const state = configurationState(loaded);
-		const health = configurationHealth(loaded);
-		const selection = await showActionMenu(ctx, "pi-starship", () => [`${state} · ${health}`], [
-			{
-				value: MAIN_ACTIONS.customize,
-				label: "Customize footer",
-				description: `${state} · preview before applying`,
+	const fallbackController = new AbortController();
+	const owner = options.getMenuOwner?.() ?? {
+		signal: fallbackController.signal,
+		isCurrent: () => !fallbackController.signal.aborted,
+	};
+	type Screen = "main" | "advanced" | "diagnostics" | "details" | "help";
+	type Action = "customize" | "restore" | "back";
+	const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
+		start: "main",
+		screens: {
+			main: () => {
+				const loaded = options.getLoaded();
+				const state = configurationState(loaded);
+				const health = configurationHealth(loaded);
+				return {
+					kind: "actions",
+					title: "pi-starship",
+					lines: [`${state} · ${health}`],
+					items: [
+						{
+							id: MAIN_ACTIONS.customize,
+							label: "Customize footer",
+							description: `${state} · preview before applying`,
+							action: "customize",
+						},
+						{
+							id: MAIN_ACTIONS.diagnostics,
+							label: "Check configuration",
+							description: health,
+							to: "diagnostics",
+						},
+						{
+							id: MAIN_ACTIONS.help,
+							label: "Help",
+							description: "Formats, modules, and commands",
+							to: "help",
+						},
+						{
+							id: MAIN_ACTIONS.advanced,
+							label: "Advanced",
+							description: "Details and restore controls",
+							to: "advanced",
+						},
+					],
+					hint: "close",
+				};
 			},
-			{
-				value: MAIN_ACTIONS.diagnostics,
-				label: "Check configuration",
-				description: health,
+			advanced: () => {
+				const loaded = options.getLoaded();
+				const alreadyBuiltIn = loaded.rawDocument === BUILT_IN_EXAMPLE;
+				return {
+					kind: "actions",
+					title: "Advanced",
+					lines: [configurationState(loaded)],
+					items: [
+						{
+							id: ADVANCED_ACTIONS.details,
+							label: "Configuration details",
+							description: `${configurationSource(loaded)} · ${fileName(options.settingsPath)}`,
+							to: "details",
+						},
+						{
+							id: ADVANCED_ACTIONS.restore,
+							label: "Restore built-in",
+							description: alreadyBuiltIn
+								? "Already active"
+								: "Preview before replacing the document",
+							action: "restore",
+						},
+						{
+							id: ADVANCED_ACTIONS.back,
+							label: "Back",
+							description: "Return to pi-starship",
+							action: "back",
+						},
+					],
+					hint: "back",
+				};
 			},
-			{ value: MAIN_ACTIONS.help, label: "Help", description: "Formats, modules, and commands" },
-			{
-				value: MAIN_ACTIONS.advanced,
-				label: "Advanced",
-				description: "Details and restore controls",
+			diagnostics: () => ({
+				kind: "detail",
+				title: "Configuration health",
+				lines: diagnosticLines(options.getLoaded(), false),
+				hint: "back",
+			}),
+			details: () => {
+				const loaded = options.getLoaded();
+				return {
+					kind: "detail",
+					title: "Configuration details",
+					lines: [
+						`State: ${configurationState(loaded)}`,
+						`Source: ${configurationSource(loaded)}`,
+						`Path: ${safeText(options.settingsPath)}`,
+						...diagnosticLines(loaded, true),
+					],
+					hint: "back",
+				};
 			},
-		]);
-		switch (selection) {
-			case MAIN_ACTIONS.customize:
-				if (await editSettings(ctx, options)) return;
-				break;
-			case MAIN_ACTIONS.diagnostics:
-				await showDiagnosticsScreen(ctx, loaded);
-				break;
-			case MAIN_ACTIONS.help:
-				await showHelpScreen(ctx, options.settingsPath);
-				break;
-			case MAIN_ACTIONS.advanced:
-				if (!(await showAdvancedMenu(ctx, options))) return;
-				break;
-			default:
-				return;
-		}
-	}
-}
-
-async function showAdvancedMenu(
-	ctx: ExtensionCommandContext,
-	options: StarshipCommandOptions,
-): Promise<boolean> {
-	while (true) {
-		const loaded = options.getLoaded();
-		const alreadyBuiltIn = loaded.rawDocument === BUILT_IN_EXAMPLE;
-		const selection = await showActionMenu(ctx, "Advanced", () => [configurationState(loaded)], [
-			{
-				value: ADVANCED_ACTIONS.details,
-				label: "Configuration details",
-				description: `${configurationSource(loaded)} · ${fileName(options.settingsPath)}`,
+			help: () => ({
+				kind: "detail",
+				title: "pi-starship help",
+				lines: [
+					"Customize footer opens the TOML editor, then previews and confirms before saving.",
+					"Check configuration explains warnings without changing the footer.",
+					`Settings: ${safeText(options.settingsPath)}`,
+					"Docs: https://github.com/narumiruna/pi-extensions/tree/main/extensions/pi-starship",
+				],
+				hint: "back",
+			}),
+		},
+		actions: {
+			customize: async () =>
+				(await editSettings(ctx, options)) ? { kind: "close" } : { kind: "stay" },
+			restore: async () => {
+				if (options.getLoaded().rawDocument === BUILT_IN_EXAMPLE) {
+					ctx.ui.notify("The built-in footer configuration is already active.", "info");
+					return { kind: "stay" };
+				}
+				return (await restoreBuiltIn(ctx, options)) ? { kind: "close" } : { kind: "stay" };
 			},
-			{
-				value: ADVANCED_ACTIONS.restore,
-				label: "Restore built-in",
-				description: alreadyBuiltIn ? "Already active" : "Preview before replacing the document",
-			},
-			{ value: ADVANCED_ACTIONS.back, label: "Back", description: "Return to pi-starship" },
-		]);
-		if (selection === ADVANCED_ACTIONS.details) {
-			await showConfigurationDetails(ctx, loaded, options.settingsPath);
-			continue;
-		}
-		if (selection === ADVANCED_ACTIONS.restore) {
-			if (alreadyBuiltIn) {
-				ctx.ui.notify("The built-in footer configuration is already active.", "info");
-				continue;
-			}
-			if (await restoreBuiltIn(ctx, options)) return false;
-			continue;
-		}
-		return selection === ADVANCED_ACTIONS.back;
+			back: async () => ({ kind: "back" }),
+		},
+	});
+	try {
+		await runMenu(ctx, menu, {
+			getState: () => undefined,
+			signal: owner.signal,
+			isCurrent: owner.isCurrent,
+		});
+	} finally {
+		fallbackController.abort(new DOMException("Starship menu closed", "AbortError"));
 	}
 }
 
@@ -190,7 +250,7 @@ async function editSettings(
 			validated = (options.validate ?? validateConfigDocument)(options.settingsPath, draft);
 		} catch (error) {
 			ctx.ui.notify(`Footer draft is invalid: ${safeText(formatError(error))}`, "error");
-			const action = await showActionMenu(
+			const action = await showPreviewActionMenu(
 				ctx,
 				"Configuration needs attention",
 				() => [safeText(formatError(error)), "The current footer has not changed."],
@@ -228,7 +288,7 @@ async function reviewAndApply(
 	restore: boolean,
 ): Promise<"applied" | "edit" | "cancel"> {
 	while (true) {
-		const selection = await showActionMenu(
+		const selection = await showPreviewActionMenu(
 			ctx,
 			title,
 			(width) => previewBody(ctx, options, validated, width),
@@ -332,45 +392,7 @@ function previewBody(
 	return [...lines, "", warning];
 }
 
-async function showDiagnosticsScreen(ctx: ExtensionCommandContext, loaded: LoadedStarshipConfig) {
-	await showActionMenu(ctx, "Configuration health", () => diagnosticLines(loaded, false), [
-		{ value: ADVANCED_ACTIONS.back, label: "Back" },
-	]);
-}
-
-async function showConfigurationDetails(
-	ctx: ExtensionCommandContext,
-	loaded: LoadedStarshipConfig,
-	settingsPath: string,
-) {
-	await showActionMenu(
-		ctx,
-		"Configuration details",
-		() => [
-			`State: ${configurationState(loaded)}`,
-			`Source: ${configurationSource(loaded)}`,
-			`Path: ${safeText(settingsPath)}`,
-			...diagnosticLines(loaded, true),
-		],
-		[{ value: ADVANCED_ACTIONS.back, label: "Back" }],
-	);
-}
-
-async function showHelpScreen(ctx: ExtensionCommandContext, settingsPath: string) {
-	await showActionMenu(
-		ctx,
-		"pi-starship help",
-		() => [
-			"Customize footer opens the TOML editor, then previews and confirms before saving.",
-			"Check configuration explains warnings without changing the footer.",
-			`Settings: ${safeText(settingsPath)}`,
-			"Docs: https://github.com/narumiruna/pi-extensions/tree/main/extensions/pi-starship",
-		],
-		[{ value: ADVANCED_ACTIONS.back, label: "Back" }],
-	);
-}
-
-async function showActionMenu(
+async function showPreviewActionMenu(
 	ctx: ExtensionCommandContext,
 	title: string,
 	body: (width: number) => readonly string[],

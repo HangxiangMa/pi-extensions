@@ -4,6 +4,7 @@ import {
 	type ExtensionCommandContext,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import {
 	awaitWithDeadline,
 	errorMessage,
@@ -39,7 +40,6 @@ const REFRESH_CURRENT = "Refresh current usage";
 const VIEW_ANOTHER = "View another configured provider…";
 const VIEW_ALL = "View all configured providers…";
 const CLOSE = "Close";
-const MENU_ACTIONS = [REFRESH_CURRENT, VIEW_ANOTHER, VIEW_ALL, CLOSE];
 
 type QueryOutcome = {
 	state: ProviderUsageState;
@@ -455,11 +455,9 @@ export default function usageExtension(pi: ExtensionAPI) {
 	};
 
 	const showMenu = async (ctx: ExtensionCommandContext): Promise<void> => {
-		if (!ctx.hasUI) {
-			ctx.ui.notify("/usage requires an interactive Pi mode.", "warning");
-			return;
-		}
+		if (!ctx.hasUI) throw new Error("/usage requires TUI or RPC mode.");
 		statusGeneration += 1;
+		const menuGeneration = statusGeneration;
 		statusController?.abort();
 		statusController = undefined;
 		clearStatusTimer();
@@ -476,116 +474,149 @@ export default function usageExtension(pi: ExtensionAPI) {
 			publishStableCurrent(ctx, stableCurrent);
 			let current = stableCurrent.outcome;
 			let visibleStates: ProviderUsageState[] = [current.state];
-
-			while (!controller.signal.aborted) {
-				const action = await ctx.ui.select(formatProviderStates(visibleStates), [...MENU_ACTIONS], {
-					signal: controller.signal,
-				});
-				if (!action || action === CLOSE) return;
-				if (action === REFRESH_CURRENT) {
-					stableCurrent = await queryStableCurrent(
-						ctx,
-						true,
-						controller,
-						"Refreshing current usage…",
-					);
-					if (!stableCurrent) continue;
-					publishStableCurrent(ctx, stableCurrent);
-					current = stableCurrent.outcome;
-					visibleStates = [current.state];
-					continue;
-				}
-				if (action === VIEW_ANOTHER) {
-					const others = configuredAdapters(ctx).filter(
-						(adapter) => adapter.id !== ctx.model?.provider,
-					);
-					if (others.length === 0) {
-						ctx.ui.notify("No other supported provider has configured runtime auth.", "info");
-						continue;
-					}
-					const choice = await ctx.ui.select(
-						"Select a configured provider",
-						others.map((adapter) => adapter.displayName),
-						{ signal: controller.signal },
-					);
-					const adapter = others.find((candidate) => candidate.displayName === choice);
-					if (!adapter) continue;
-					const outcome = await runMenuOperation(
-						ctx,
-						`Checking ${adapter.displayName} usage…`,
-						controller.signal,
-						(signal) => queryAdapterState(ctx, adapter, "configured", false, signal),
-					);
-					if (!outcome) continue;
-					const revalidated = await queryStableCurrent(
-						ctx,
-						false,
-						controller,
-						"Revalidating current usage…",
-					);
-					if (!revalidated) continue;
-					stableCurrent = revalidated;
-					current = revalidated.outcome;
-					visibleStates = [
-						outcome.state.providerId === current.state.providerId
-							? current.state
-							: { ...outcome.state, displayState: "configured" },
-					];
-					continue;
-				}
-				if (action === VIEW_ALL) {
-					const adapters = configuredAdapters(ctx);
-					const currentProviderId = ctx.model?.provider;
-					const settled = await runMenuOperation(
-						ctx,
-						"Checking configured provider usage…",
-						controller.signal,
-						(signal) =>
-							runWithConcurrency(
-								adapters,
-								ALL_PROVIDER_CONCURRENCY,
-								(adapter, _index, workerSignal) =>
-									queryAdapterState(
-										ctx,
-										adapter,
-										adapter.id === currentProviderId ? "current" : "configured",
-										true,
-										workerSignal,
-									),
-								signal,
-							),
-					);
-					if (!settled) continue;
-					const queriedStates: ProviderUsageState[] = settled.map((result, index) => {
-						if (result.status === "fulfilled") {
-							return { ...result.value.state, displayState: "configured" };
+			type Screen = "main" | "providers";
+			type Action = "refresh" | "another" | "all" | "provider";
+			const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
+				start: "main",
+				screens: {
+					main: () => ({
+						kind: "actions",
+						title: "Provider usage",
+						lines: formatProviderStates(visibleStates).split("\n"),
+						items: [
+							{ id: "refresh", label: REFRESH_CURRENT, action: "refresh" },
+							{ id: "another", label: VIEW_ANOTHER, action: "another" },
+							{ id: "all", label: VIEW_ALL, action: "all" },
+							{ id: "close", label: CLOSE, close: true },
+						],
+						hint: "close",
+					}),
+					providers: () => ({
+						kind: "actions",
+						title: "Select a configured provider",
+						items: configuredAdapters(ctx)
+							.filter((adapter) => adapter.id !== ctx.model?.provider)
+							.map((adapter) => ({
+								id: adapter.id,
+								label: adapter.displayName,
+								action: "provider" as const,
+							})),
+						hint: "back",
+					}),
+				},
+				actions: {
+					refresh: async () => {
+						const refreshed = await queryStableCurrent(
+							ctx,
+							true,
+							controller,
+							"Refreshing current usage…",
+						);
+						if (!refreshed) return { kind: "stay" };
+						stableCurrent = refreshed;
+						publishStableCurrent(ctx, refreshed);
+						current = refreshed.outcome;
+						visibleStates = [current.state];
+						return { kind: "stay" };
+					},
+					another: async () => {
+						const others = configuredAdapters(ctx).filter(
+							(adapter) => adapter.id !== ctx.model?.provider,
+						);
+						if (others.length === 0) {
+							ctx.ui.notify("No other supported provider has configured runtime auth.", "info");
+							return { kind: "stay" };
 						}
-						const adapter = adapters[index] as UsageProviderAdapter;
-						return {
-							providerId: adapter.id,
-							providerName: adapter.displayName,
-							displayState: "configured",
-							status: "query-failed",
-							message: errorMessage(result.reason),
-						};
-					});
-					const revalidated = await queryStableCurrent(
-						ctx,
-						false,
-						controller,
-						"Revalidating current usage…",
-					);
-					if (!revalidated) continue;
-					stableCurrent = revalidated;
-					current = revalidated.outcome;
-					visibleStates = [
-						current.state,
-						...queriedStates.filter((state) => state.providerId !== current.state.providerId),
-					];
-				}
-			}
+						return { kind: "to", screen: "providers" };
+					},
+					provider: async ({ itemId }) => {
+						const adapter = configuredAdapters(ctx).find(
+							(candidate) => candidate.id === itemId && candidate.id !== ctx.model?.provider,
+						);
+						if (!adapter) return { kind: "back" };
+						const outcome = await runMenuOperation(
+							ctx,
+							`Checking ${adapter.displayName} usage…`,
+							controller.signal,
+							(signal) => queryAdapterState(ctx, adapter, "configured", false, signal),
+						);
+						if (!outcome) return { kind: "back" };
+						const revalidated = await queryStableCurrent(
+							ctx,
+							false,
+							controller,
+							"Revalidating current usage…",
+						);
+						if (!revalidated) return { kind: "back" };
+						stableCurrent = revalidated;
+						current = revalidated.outcome;
+						visibleStates = [
+							outcome.state.providerId === current.state.providerId
+								? current.state
+								: { ...outcome.state, displayState: "configured" },
+						];
+						return { kind: "back" };
+					},
+					all: async () => {
+						const adapters = configuredAdapters(ctx);
+						const currentProviderId = ctx.model?.provider;
+						const settled = await runMenuOperation(
+							ctx,
+							"Checking configured provider usage…",
+							controller.signal,
+							(signal) =>
+								runWithConcurrency(
+									adapters,
+									ALL_PROVIDER_CONCURRENCY,
+									(adapter, _index, workerSignal) =>
+										queryAdapterState(
+											ctx,
+											adapter,
+											adapter.id === currentProviderId ? "current" : "configured",
+											true,
+											workerSignal,
+										),
+									signal,
+								),
+						);
+						if (!settled) return { kind: "stay" };
+						const queriedStates: ProviderUsageState[] = settled.map((result, index) => {
+							if (result.status === "fulfilled") {
+								return { ...result.value.state, displayState: "configured" };
+							}
+							const adapter = adapters[index] as UsageProviderAdapter;
+							return {
+								providerId: adapter.id,
+								providerName: adapter.displayName,
+								displayState: "configured",
+								status: "query-failed",
+								message: errorMessage(result.reason),
+							};
+						});
+						const revalidated = await queryStableCurrent(
+							ctx,
+							false,
+							controller,
+							"Revalidating current usage…",
+						);
+						if (!revalidated) return { kind: "stay" };
+						stableCurrent = revalidated;
+						current = revalidated.outcome;
+						visibleStates = [
+							current.state,
+							...queriedStates.filter((state) => state.providerId !== current.state.providerId),
+						];
+						return { kind: "stay" };
+					},
+				},
+			});
+			await runMenu(ctx, menu, {
+				getState: () => undefined,
+				signal: controller.signal,
+				isCurrent: () => statusGeneration === menuGeneration && !controller.signal.aborted,
+			});
 		} finally {
-			controller.abort();
+			controller.abort(new DOMException("Usage menu closed", "AbortError"));
 			activeControllers.delete(controller);
 		}
 	};

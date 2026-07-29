@@ -1,13 +1,11 @@
+// Cohesion justification: this established integration matrix shares one Goal lifecycle harness and
+// cross-covers command, tool, queue, continuation, and stale-turn invariants.
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
-import {
-	createCustomSelectorHarness,
-	createMockContext,
-	createMockPi,
-} from "../../../test/support.js";
+import { createMockContext, createMockPi } from "../../../test/support.js";
 import goal, {
 	assistantUsageTokens,
 	buildGoalSystemPrompt,
@@ -154,7 +152,7 @@ test("bare goal is menu-first in TUI, observable in RPC, and rejects headless mo
 
 	await mock.commands.get("goal")?.handler("", tui.ctx);
 	assert.equal(selections.length, 1);
-	assert.match(selections[0]?.title ?? "", /Goal · No goal/i);
+	assert.match(selections[0]?.title ?? "", /Goal\nNo goal is currently set/i);
 	assert.ok(selections[0]?.actions.includes("Start a goal…"));
 	assert.equal(tui.notifications.length, 0);
 
@@ -234,17 +232,14 @@ test("missing and invalid settings fall back to always-visible tools", () => {
 test("invalid settings remain read-only in the Goal settings UI", async () => {
 	const mock = createMockPi({ activeTools: ["goal_complete", "goal_blocked"] });
 	registerGoalWithSettingsPath(mock.pi, INVALID_SETTINGS_PATH);
-	const selections = ["Settings…", "Close"];
+	const selections = ["Settings…", undefined, "Close"];
 	let settingsRender = "";
 	const context = createMockContext({
 		mode: "tui",
 		hasUI: true,
-		select: async () => selections.shift(),
-		custom: async (factory: unknown) => {
-			const selector = createCustomSelectorHarness(factory, 80);
-			settingsRender = selector.render().join("\n");
-			selector.handleInput("\u001b");
-			return selector.result;
+		select: async (title: string) => {
+			if (/Read only/i.test(title)) settingsRender = title;
+			return selections.shift();
 		},
 	});
 	mock.events.get("session_start")?.[0]?.({}, context.ctx);

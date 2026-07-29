@@ -15,7 +15,7 @@ The page never contains a prompt or Attach button: Pi remains the only place whe
 - Applies orientation, strips private metadata, and enforces Pi-compatible image limits.
 - Keeps bounded sent-image history for explicit re-attachment during the live session.
 - Uses Radix UI for an adaptive light/dark design system, accessible dialogs and disclosures, semantic colors, and consistent action icons.
-- Opens a side-effect-free TUI menu with current draft state, Status, Settings, and Help.
+- Opens a side-effect-free standard TUI menu with current draft state, Status, Settings, and Help.
 - Reports batch state above Pi's editor and can start automatically with each session.
 
 ## 📦 Install
@@ -49,7 +49,8 @@ By default, the loopback service starts lazily only when you choose **Open stagi
 
 ## 💬 Command menu
 
-Run `/image-drop` without arguments in TUI mode. The menu shows the current draft and service state, then offers:
+Run `/image-drop` without arguments in TUI mode. The standard menu shows the current draft and
+service state, then offers:
 
 - **Open staging page** — start or reuse the private browser service and create a one-time link.
 - **Status** — inspect draft readiness, sent-history usage, model image support, Pi image policy, and auto-resize behavior.
@@ -57,7 +58,12 @@ Run `/image-drop` without arguments in TUI mode. The menu shows the current draf
 - **Help** — review the send workflow, privacy lifecycle, and remote forwarding guidance.
 - **Close** — return to Pi without side effects.
 
-Use the configured navigation and confirmation keys. Escape returns from a subview or closes the main menu; Ctrl+C closes from any menu level. `/image-drop` accepts no arguments. The interactive menu is unavailable in RPC, JSON, and print modes and rejects those invocations before starting the service; manual settings remain available through the JSON file below.
+Use the configured navigation and confirmation keys. Escape returns from a standard subview or closes
+the main menu; Ctrl+C closes from any menu level. Status, settings, limits, and help share one
+lifecycle-owned navigation flow. Exact three-way confirmations, numeric inputs, and cancellable
+loaders remain specialized. `/image-drop` accepts no arguments. The interactive menu is unavailable
+in RPC, JSON, and print modes and rejects those invocations before starting the service; manual
+settings remain available through the JSON file below.
 
 ## 🖼️ Supported images
 
@@ -158,7 +164,7 @@ Then open the unchanged `http://127.0.0.1:45678/...` link locally. Image Drop do
 src/index.ts            Pi package entrypoint
 src/image-drop.ts       extension registration and command orchestration
 src/runtime.ts          Pi lifecycle, command menu, and message orchestration
-src/menu.ts             responsive TUI menus, status, help, and settings views
+src/menu.ts             specialized loaders, confirmations, inputs, and menu-state helpers
 src/batch.ts            in-memory draft and sent-history state machine
 src/images.ts           bounded image processing
 src/server.ts           authenticated loopback HTTP/SSE server

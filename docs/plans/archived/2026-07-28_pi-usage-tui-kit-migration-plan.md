@@ -44,25 +44,25 @@ relying on no-op notification output. `/usage` continues to reject all arguments
 
 ## Plan
 
-- [ ] Add the `<1` kit dependency and lockfile edge; verify package boundaries and pack metadata.
-- [ ] Add failing tests for initial current state, refresh, another-provider navigation, all-provider
+- [x] Add the `<1` kit dependency and lockfile edge; verify package boundaries and pack metadata.
+- [x] Add failing tests for initial current state, refresh, another-provider navigation, all-provider
       partial results, cursor restoration, stable ids, RPC, no-UI rejection, cancellation, model/auth
       changes, and session shutdown.
-- [ ] Introduce typed Main/provider screens backed by menu-local visible state and the existing
+- [x] Introduce typed Main/provider screens backed by menu-local visible state and the existing
       invocation controller, replacing selector loops without moving query work into `getState()`;
       verify focused menu tests pass.
-- [ ] Route actions through existing cancellable query/revalidation helpers and retain status
+- [x] Route actions through existing cancellable query/revalidation helpers and retain status
       publication only for the stable current provider; verify cache, auth-origin, concurrency,
       partial-failure, and status lifecycle tests pass.
-- [ ] Update README only for standard navigation/mode wording, then run package/root checks, root
+- [x] Update README only for standard navigation/mode wording, then run package/root checks, root
       tests, `npm run pack:usage`, and an isolated RPC smoke with mocked provider endpoints.
-- [ ] Audit menu, cancellation, auth/redaction, status, command, package, and verification conventions
+- [x] Audit menu, cancellation, auth/redaction, status, command, package, and verification conventions
       before archiving.
 
 ## Completion Checklist
 
-- [ ] Standard usage and provider screens use `pi-tui-kit` with no implicit network-on-navigation.
-- [ ] Auth/model stability, cache, provider semantics, partial results, and current-only status remain
+- [x] Standard usage and provider screens use `pi-tui-kit` with no implicit network-on-navigation.
+- [x] Auth/model stability, cache, provider semantics, partial results, and current-only status remain
       unchanged.
-- [ ] TUI/RPC/no-UI, cancellation, disposal, replacement, and shutdown behavior is tested.
-- [ ] Checks, tests, pack inspection, and runtime smoke pass.
+- [x] TUI/RPC/no-UI, cancellation, disposal, replacement, and shutdown behavior is tested.
+- [x] Checks, tests, pack inspection, and runtime smoke pass.

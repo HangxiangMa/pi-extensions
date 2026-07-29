@@ -559,38 +559,33 @@ test("diagnostics, Help, and configuration details stay shallow and fit narrow t
 			apply() {},
 			settingsPath: path,
 		});
-		let call = 0;
-		const screens: string[] = [];
-		const inputSets = [
-			["\u001b[B", "\r"],
-			["\r"],
-			["\u001b[B", "\u001b[B", "\r"],
-			["\r"],
-			["\u001b[B", "\u001b[B", "\u001b[B", "\r"],
-			["\r"],
-			["\r"],
-			["\u001b[B", "\u001b[B", "\r"],
-			["\u001b"],
+		const choices = [
+			"Check configuration",
+			undefined,
+			"Help",
+			undefined,
+			"Advanced",
+			"Configuration details",
+			undefined,
+			"Back",
+			undefined,
 		];
+		const screens: string[] = [];
 		const context = createMockContext({
 			mode: "tui",
 			hasUI: true,
-			custom: async (factory: unknown) => {
-				const driven = driveCustomSelector(factory, inputSets[call] ?? ["\u001b"], 24);
-				screens[call++] = driven.renders.flat().join("\n");
-				assert.ok(driven.renders.flat().every((line) => visibleWidth(line) <= 24));
-				return driven.result;
+			select: async (title: string) => {
+				screens.push(title);
+				return choices.shift();
 			},
 		});
 		await mock.commands.get("starship")?.handler("", context.ctx);
-		assert.equal(call, 9);
-		assert.match(screens[0] ?? "", /1\s+warning/u);
-		assert.match(screens[1] ?? "", /Configuration health/u);
-		assert.match(screens[1] ?? "", /future/u);
-		assert.match(screens[3] ?? "", /pi-starship help/u);
-		assert.match(screens[6] ?? "", /Configuration details/u);
-		assert.match(screens[6] ?? "", /Path:/u);
-		assert.match(screens[7] ?? "", /Back/u);
+		assert.equal(screens.length, 9);
+		assert.match(screens.join("\n"), /1 warning/u);
+		assert.match(screens.join("\n"), /Configuration health/u);
+		assert.match(screens.join("\n"), /pi-starship help/u);
+		assert.match(screens.join("\n"), /Configuration details/u);
+		assert.match(screens.join("\n"), /Path:/u);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -614,20 +609,16 @@ test("restore preview cancellation has no side effects in a narrow terminal", as
 			settingsPath: path,
 			renderPreview: (draft, width) => [draft.config.format.slice(0, width)],
 		});
-		let call = 0;
+		const choices = ["Advanced", "Restore built-in", undefined, "Back", undefined];
+		let previewCalls = 0;
 		const context = createMockContext({
 			mode: "tui",
 			hasUI: true,
+			select: async () => choices.shift(),
 			custom: async (factory: unknown) => {
-				const inputs =
-					call === 0
-						? ["\u001b[B", "\u001b[B", "\u001b[B", "\r"]
-						: call === 1
-							? ["\u001b[B", "\r"]
-							: ["\u001b"];
-				const driven = driveCustomSelector(factory, inputs, 20);
+				previewCalls += 1;
+				const driven = driveCustomSelector(factory, ["\u001b"], 20);
 				assert.ok(driven.renders.flat().every((line) => visibleWidth(line) <= 20));
-				call += 1;
 				return driven.result;
 			},
 			confirm: async () => {
@@ -636,7 +627,7 @@ test("restore preview cancellation has no side effects in a narrow terminal", as
 			},
 		});
 		await mock.commands.get("starship")?.handler("", context.ctx);
-		assert.equal(call, 4);
+		assert.equal(previewCalls, 1);
 		assert.equal(confirmations, 0);
 		assert.equal(applied, 0);
 		assert.equal(readFileSync(path, "utf8"), original);

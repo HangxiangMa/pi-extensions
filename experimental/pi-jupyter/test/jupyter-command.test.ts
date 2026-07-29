@@ -1,14 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createCustomSelectorHarness, createMockPi } from "../../../test/support.js";
+import { createMockPi } from "../../../test/support.js";
 import { parseJupyterCommand, registerJupyterCommand } from "../src/jupyter-command.js";
-import {
-	createJupyterHelpComponent,
-	createJupyterMenuComponent,
-	createNotebookPickerComponent,
-	jupyterMenuItems,
-	jupyterMenuSummary,
-} from "../src/jupyter-menu.js";
+import { jupyterHelpLines, jupyterMenuItems, jupyterMenuSummary } from "../src/jupyter-menu.js";
 
 function createActions() {
 	return {
@@ -100,45 +94,11 @@ test("current-state menu prioritizes the next notebook goal and exposes exact st
 	assert.match(jupyterMenuSummary(openState, 72), /hidden below 90 columns/);
 });
 
-test("menu and notebook picker distinguish back from closing the flow", () => {
-	const state = { cwd: "/workspace", visible: false, focused: false, scroll: 0 };
-	let mainResult: unknown;
-	const menu = createCustomSelectorHarness((tui: unknown, theme: unknown, keys: unknown) =>
-		createJupyterMenuComponent(state, 120, tui as never, theme as never, keys as never, (value) => {
-			mainResult = value;
-		}),
-	);
-	menu.handleInput("tui.select.confirm");
-	assert.equal(mainResult, "choose");
-
-	let pickerResult: unknown;
-	const picker = createCustomSelectorHarness((tui: unknown, theme: unknown, keys: unknown) =>
-		createNotebookPickerComponent(
-			["/workspace/a.ipynb"],
-			undefined,
-			tui as never,
-			theme as never,
-			keys as never,
-			(value) => {
-				pickerResult = value;
-			},
-		),
-	);
-	picker.handleInput("tui.select.cancel");
-	assert.deepEqual(pickerResult, { action: "back" });
-	pickerResult = undefined;
-	picker.handleInput("\u0003");
-	assert.deepEqual(pickerResult, { action: "close" });
-
-	let helpResult: unknown;
-	const help = createCustomSelectorHarness((tui: unknown, theme: unknown, keys: unknown) =>
-		createJupyterHelpComponent(tui as never, theme as never, keys as never, (value) => {
-			helpResult = value;
-		}),
-	);
-	help.handleInput("tui.select.cancel");
-	assert.equal(helpResult, "back");
-	helpResult = undefined;
-	help.handleInput("\u0003");
-	assert.equal(helpResult, "close");
+test("Jupyter help keeps direct routes and specialized panel controls visible", () => {
+	assert.deepEqual(jupyterHelpLines(), [
+		"F8 toggles the preview; Shift+F8 focuses it.",
+		"Ctrl+Alt+J/K scroll; Ctrl+Alt+D/U page.",
+		"While focused: arrows, PgUp/PgDn, Home, j/k/u/d/g; Escape returns.",
+		"Direct routes: /jupyter open, focus, refresh, close, toggle, and scroll.",
+	]);
 });

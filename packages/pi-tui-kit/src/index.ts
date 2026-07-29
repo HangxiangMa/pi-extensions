@@ -8,6 +8,7 @@ export type {
 	MenuActionContext,
 	MenuActionHandler,
 	MenuActionResult,
+	MenuContext,
 	MenuDefinition,
 	MenuMultiSelectItem,
 	MenuScreen,

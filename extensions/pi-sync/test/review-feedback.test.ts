@@ -120,32 +120,31 @@ test("setup switch rejects a destination changed while its review is open", asyn
 		const { ctx, notifications } = createMockContext({
 			hasUI: true,
 			mode: "tui",
-			select: async (title: string, options: string[]) => {
+			select: async (title: string) => {
 				if (title.startsWith("Manage sync")) {
 					mainVisits += 1;
 					return mainVisits === 1 ? "Switch sync setup" : undefined;
 				}
-				if (title.includes("Current sync setup:")) {
-					return options.find((option) => option.startsWith("work ·"));
-				}
-				if (title.includes("To: work")) {
-					await updateLocalConfig((current) => ({
-						...current,
-						syncSetups: {
-							...current.syncSetups,
-							work: {
-								...current.syncSetups.work,
-								storage: {
-									connection: "r2",
-									bucket: "pi-sync-test",
-									path: "changed/work",
-								},
+				if (title.includes("Current sync setup:")) return "work";
+				return undefined;
+			},
+			confirm: async (title: string) => {
+				if (!title.includes("Switch sync setup")) return true;
+				await updateLocalConfig((current) => ({
+					...current,
+					syncSetups: {
+						...current.syncSetups,
+						work: {
+							...current.syncSetups.work,
+							storage: {
+								connection: "r2",
+								bucket: "pi-sync-test",
+								path: "changed/work",
 							},
 						},
-					}));
-					return "Switch to work";
-				}
-				return undefined;
+					},
+				}));
+				return true;
 			},
 		});
 		await showSyncManager(ctx, async () => undefined);

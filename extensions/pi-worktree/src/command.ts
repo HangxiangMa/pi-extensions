@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import {
 	addWorktree,
 	administrativeHistoryOids,
@@ -37,14 +38,29 @@ const ACTION_SWITCH = "Switch worktree";
 const ACTION_REMOVE = "Remove worktree";
 const ACTION_PRUNE = "Prune stale metadata";
 const ACTION_CONFIGURE_ROOT = "Configure worktree root";
-const ACTIONS = [ACTION_ADD, ACTION_SWITCH, ACTION_REMOVE, ACTION_PRUNE, ACTION_CONFIGURE_ROOT];
+const ACTIONS = {
+	add: ACTION_ADD,
+	switch: ACTION_SWITCH,
+	remove: ACTION_REMOVE,
+	prune: ACTION_PRUNE,
+	configure: ACTION_CONFIGURE_ROOT,
+} as const;
+
+interface WorktreeMenuOwner {
+	signal: AbortSignal;
+	isCurrent(): boolean;
+}
 
 interface AdministrativeHistoryRisk {
 	label: string;
 	oids: string[];
 }
 
-export function registerWorktreeCommand(pi: ExtensionAPI, settings: WorktreeSettingsRuntime): void {
+export function registerWorktreeCommand(
+	pi: ExtensionAPI,
+	settings: WorktreeSettingsRuntime,
+	getMenuOwner: () => WorktreeMenuOwner,
+): void {
 	pi.registerCommand("worktree", {
 		description: "Interactively manage Git worktrees and their default root",
 		handler: async (args, ctx) => {
@@ -57,7 +73,7 @@ export function registerWorktreeCommand(pi: ExtensionAPI, settings: WorktreeSett
 				return;
 			}
 			if (!ctx.hasUI) {
-				safeNotify(ctx, "/worktree requires an interactive Pi UI.", "error");
+				safeNotify(ctx, "/worktree requires TUI or RPC mode.", "error");
 				return;
 			}
 
@@ -67,29 +83,49 @@ export function registerWorktreeCommand(pi: ExtensionAPI, settings: WorktreeSett
 				const currentPath = await currentWorktreePath(pi, ctx.cwd, ctx.signal);
 				const root = settings.get();
 				const warning = root.warning ? " — settings warning" : "";
-				const action = await ctx.ui.select(
-					stripTerminalControls(
-						`Git worktrees (${records.length}) — current: ${currentPath}\nWorktree root: ${root.effectiveRoot} (${root.source})${warning}`,
-					),
-					ACTIONS,
-				);
-				switch (action) {
-					case ACTION_ADD:
-						await addFlow(pi, ctx, records, root.effectiveRoot);
-						return;
-					case ACTION_SWITCH:
-						await switchFlow(pi, ctx, records, currentPath);
-						return;
-					case ACTION_REMOVE:
-						await removeFlow(pi, ctx, records, currentPath);
-						return;
-					case ACTION_PRUNE:
-						await pruneFlow(pi, ctx, records);
-						return;
-					case ACTION_CONFIGURE_ROOT:
-						await configureRootFlow(ctx, settings);
-						return;
-				}
+				const owner = getMenuOwner();
+				const runFlow = async (flow: () => Promise<void>) => {
+					try {
+						await flow();
+					} catch (error) {
+						safeNotify(ctx, formatError(error), "error");
+					}
+					return { kind: "close" } as const;
+				};
+				type Screen = "main";
+				type Action = keyof typeof ACTIONS;
+				const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
+					start: "main",
+					screens: {
+						main: () => ({
+							kind: "actions",
+							title: "Git worktrees",
+							lines: [
+								`Registered: ${records.length}`,
+								`Current: ${currentPath}`,
+								`Worktree root: ${root.effectiveRoot} (${root.source})${warning}`,
+							],
+							items: Object.entries(ACTIONS).map(([id, label]) => ({
+								id,
+								label,
+								action: id as Action,
+							})),
+							hint: "close",
+						}),
+					},
+					actions: {
+						add: async () => runFlow(() => addFlow(pi, ctx, records, root.effectiveRoot)),
+						switch: async () => runFlow(() => switchFlow(pi, ctx, records, currentPath)),
+						remove: async () => runFlow(() => removeFlow(pi, ctx, records, currentPath)),
+						prune: async () => runFlow(() => pruneFlow(pi, ctx, records)),
+						configure: async () => runFlow(() => configureRootFlow(ctx, settings)),
+					},
+				});
+				await runMenu(ctx, menu, {
+					getState: () => undefined,
+					signal: owner.signal,
+					isCurrent: owner.isCurrent,
+				});
 			} catch (error) {
 				safeNotify(ctx, formatError(error), "error");
 			}

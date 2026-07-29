@@ -8,12 +8,13 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, OverlayOptions } from "@earendil-works/pi-tui";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { type JupyterScrollDirection, registerJupyterCommand } from "./jupyter-command.js";
 import {
-	createJupyterHelpComponent,
-	createJupyterMenuComponent,
-	createNotebookPickerComponent,
-	type JupyterMenuAction,
+	jupyterHelpLines,
+	jupyterMenuItems,
+	jupyterMenuSummary,
+	MIN_PREVIEW_TERMINAL_WIDTH,
 } from "./jupyter-menu.js";
 import { type LoadedNotebook, loadNotebook, sanitizeTerminalText } from "./notebook.js";
 import {
@@ -75,6 +76,8 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 	let selectionGeneration = 0;
 	let refreshGeneration = 0;
 	let pendingSelectionPath: string | undefined;
+	let sessionGeneration = 0;
+	let menuController = new AbortController();
 
 	function stopWatcher(): void {
 		watchGeneration += 1;
@@ -327,7 +330,11 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 		ctx.ui.setStatus(STATUS_KEY, `notebook: ${sanitizeTerminalText(basename(state.path))}${stale}`);
 	}
 
-	async function loadFromMenu(ctx: ExtensionCommandContext, path: string): Promise<boolean> {
+	async function loadFromMenu(
+		ctx: ExtensionCommandContext,
+		path: string,
+		parentSignal?: AbortSignal,
+	): Promise<boolean> {
 		return ctx.ui.custom<boolean>((tui, theme, _keybindings, done) => {
 			const loader = new BorderedLoader(
 				tui,
@@ -342,92 +349,135 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 				done(result);
 			};
 			loader.onAbort = () => finish(false);
-			void setNotebookPath(path, ctx, loader.signal).then(finish);
+			const signal = parentSignal ? AbortSignal.any([parentSignal, loader.signal]) : loader.signal;
+			const abort = () => finish(false);
+			parentSignal?.addEventListener("abort", abort, { once: true });
+			if (parentSignal?.aborted) abort();
+			void setNotebookPath(path, ctx, signal)
+				.then(finish)
+				.finally(() => parentSignal?.removeEventListener("abort", abort));
 			return loader;
 		});
 	}
 
 	async function showJupyterMenu(ctx: ExtensionCommandContext): Promise<void> {
 		requireTui(ctx);
-		let selectedAction: JupyterMenuAction | undefined;
-		while (true) {
-			const action = await ctx.ui.custom<JupyterMenuAction | undefined>(
-				(tui, theme, keybindings, done) =>
-					createJupyterMenuComponent(
+		const generation = sessionGeneration;
+		let notebookPaths: string[] = [];
+		const current = () => generation === sessionGeneration && !menuController.signal.aborted;
+		type Screen = "main" | "picker" | "help";
+		type Action = "open" | "choose" | "focus" | "refresh" | "close" | "pick";
+		const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
+			start: "main",
+			screens: {
+				main: () => {
+					const menuState = {
+						...state,
+						cellCount: state.model?.cells?.length,
+					};
+					return {
+						kind: "actions",
+						title: "Jupyter Preview",
+						lines: [
+							jupyterMenuSummary(menuState, MIN_PREVIEW_TERMINAL_WIDTH),
+							`The preview auto-hides below ${MIN_PREVIEW_TERMINAL_WIDTH} columns.`,
+						],
+						items: jupyterMenuItems(menuState).map((item) =>
+							item.value === "help"
+								? {
+										id: item.value,
+										label: item.label,
+										description: item.description,
+										to: "help" as const,
+									}
+								: {
+										id: item.value,
+										label: item.label,
+										description: item.description,
+										action: item.value as Exclude<Action, "pick">,
+									},
+						),
+						hint: "close",
+					};
+				},
+				picker: () => ({
+					kind: "actions",
+					title: "Choose a notebook",
+					items: [
+						...notebookPaths.map((path) => ({
+							id: path,
+							label: sanitizeTerminalText(basename(path)),
+							description: path === state.path ? "Currently selected" : sanitizeTerminalText(path),
+							action: "pick" as const,
+						})),
 						{
-							...state,
-							cellCount: state.model?.cells?.length,
+							id: "__enter_path__",
+							label: "Enter a path…",
+							description: "Open an explicit .ipynb path, including a path outside this workspace.",
+							action: "pick" as const,
 						},
-						tui.terminal.columns,
-						tui,
-						theme,
-						keybindings,
-						done,
-						selectedAction,
-					),
-			);
-			if (!action) return;
-			selectedAction = action;
-			switch (action) {
-				case "open":
-					if (state.path && (await loadFromMenu(ctx, state.path))) openPanel(ctx);
-					return;
-				case "choose": {
-					const selection = await chooseNotebook(ctx);
-					if (selection === "back") continue;
-					return;
-				}
-				case "focus":
+					],
+					hint: "back",
+				}),
+				help: () => ({
+					kind: "detail",
+					title: "Jupyter controls",
+					lines: jupyterHelpLines(),
+					hint: "back",
+				}),
+			},
+			actions: {
+				open: async ({ signal }) => {
+					if (state.path && (await loadFromMenu(ctx, state.path, signal)) && current()) {
+						openPanel(ctx);
+					}
+					return { kind: "close" };
+				},
+				choose: async () => {
+					notebookPaths = await findNotebooks(ctx.cwd);
+					return current() ? { kind: "to", screen: "picker" } : { kind: "close" };
+				},
+				focus: async () => {
 					focusPanel(ctx);
-					return;
-				case "refresh":
+					return { kind: "close" };
+				},
+				refresh: async () => {
 					await reloadSelectedNotebook(ctx);
-					requestRender?.();
-					return;
-				case "close":
+					if (current()) requestRender?.();
+					return { kind: "close" };
+				},
+				close: async () => {
 					await hidePanel(ctx);
-					ctx.ui.notify("Jupyter preview closed.", "info");
-					return;
-				case "help": {
-					const result = await ctx.ui.custom<"back" | "close">((tui, theme, keybindings, done) =>
-						createJupyterHelpComponent(tui, theme, keybindings, done),
-					);
-					if (result === "close") return;
-					continue;
-				}
-			}
-		}
-	}
-
-	async function chooseNotebook(ctx: ExtensionCommandContext): Promise<"back" | "closed"> {
-		const paths = await findNotebooks(ctx.cwd);
-		const result = await ctx.ui.custom<
-			| { action: "select"; path: string }
-			| { action: "enter-path" }
-			| { action: "back" }
-			| { action: "close" }
-		>((tui, theme, keybindings, done) =>
-			createNotebookPickerComponent(paths, state.path, tui, theme, keybindings, done),
-		);
-		if (result.action === "back") return "back";
-		if (result.action === "close") return "closed";
-		let selectedPath = result.action === "select" ? result.path : undefined;
-		if (!selectedPath) {
-			const entered = await ctx.ui.input("Notebook path", "path/to/notebook.ipynb");
-			if (!entered?.trim()) return "back";
-			selectedPath = entered.trim();
-			const resolved = resolveNotebookPath(selectedPath, ctx.cwd);
-			const local = relative(ctx.cwd, resolved);
-			if (local === ".." || local.startsWith(`..${sep}`) || isAbsolute(local)) {
-				const confirmed = await ctx.ui.confirm(
-					"Open notebook outside workspace?",
-					sanitizeTerminalText(resolved),
-				);
-				if (!confirmed) return "back";
-			}
-		}
-		if (await loadFromMenu(ctx, selectedPath)) openPanel(ctx);
-		return "closed";
+					if (current()) ctx.ui.notify("Jupyter preview closed.", "info");
+					return { kind: "close" };
+				},
+				pick: async ({ itemId, signal }) => {
+					let selectedPath = notebookPaths.find((path) => path === itemId);
+					if (itemId === "__enter_path__") {
+						const entered = await ctx.ui.input("Notebook path", "path/to/notebook.ipynb");
+						if (!entered?.trim() || !current()) return { kind: "back" };
+						selectedPath = entered.trim();
+						const resolved = resolveNotebookPath(selectedPath, ctx.cwd);
+						const local = relative(ctx.cwd, resolved);
+						if (local === ".." || local.startsWith(`..${sep}`) || isAbsolute(local)) {
+							const confirmed = await ctx.ui.confirm(
+								"Open notebook outside workspace?",
+								sanitizeTerminalText(resolved),
+							);
+							if (!confirmed || !current()) return { kind: "back" };
+						}
+					}
+					if (!selectedPath) return { kind: "rejected" };
+					if ((await loadFromMenu(ctx, selectedPath, signal)) && current()) openPanel(ctx);
+					return { kind: "close" };
+				},
+			},
+		});
+		await runMenu(ctx, menu, {
+			getState: () => undefined,
+			signal: menuController.signal,
+			isCurrent: current,
+		});
 	}
 
 	registerJupyterCommand(pi, {
@@ -482,6 +532,9 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
+		sessionGeneration += 1;
+		menuController.abort(new DOMException("Jupyter session replaced", "AbortError"));
+		menuController = new AbortController();
 		if (ctx.hasUI) ctx.ui.notify(EXPERIMENTAL_WARNING, "warning");
 	});
 	pi.on("tool_result", async (event, ctx) => {
@@ -494,6 +547,8 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 		} else await showPanel(ctx, candidate);
 	});
 	pi.on("session_shutdown", async (_event, ctx) => {
+		sessionGeneration += 1;
+		menuController.abort(new DOMException("Jupyter session shut down", "AbortError"));
 		await hidePanel(ctx);
 		if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
 	});

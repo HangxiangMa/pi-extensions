@@ -1,16 +1,27 @@
-import type { ActionMenuItem, MenuDefinition, MenuScreen } from "./types.js";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ActionMenuItem, MenuContext, MenuDefinition, MenuScreen } from "./types.js";
 
-export function defineMenu<State, ScreenId extends string, ActionId extends string>(
-	definition: MenuDefinition<State, ScreenId, ActionId>,
-): MenuDefinition<State, ScreenId, ActionId> {
+export function defineMenu<
+	State,
+	ScreenId extends string,
+	ActionId extends string,
+	Context extends MenuContext = ExtensionCommandContext,
+>(
+	definition: MenuDefinition<State, ScreenId, ActionId, Context>,
+): MenuDefinition<State, ScreenId, ActionId, Context> {
 	if (!hasOwn(definition.screens, definition.start)) {
 		throw new Error(`Menu starts at unknown screen: ${definition.start}`);
 	}
 	return definition;
 }
 
-export function resolveMenuScreen<State, ScreenId extends string, ActionId extends string>(
-	definition: MenuDefinition<State, ScreenId, ActionId>,
+export function resolveMenuScreen<
+	State,
+	ScreenId extends string,
+	ActionId extends string,
+	Context extends MenuContext,
+>(
+	definition: MenuDefinition<State, ScreenId, ActionId, Context>,
 	screenId: ScreenId,
 	state: State,
 ): MenuScreen<ScreenId, ActionId> {
@@ -21,8 +32,13 @@ export function resolveMenuScreen<State, ScreenId extends string, ActionId exten
 	return screen;
 }
 
-function validateScreen<State, ScreenId extends string, ActionId extends string>(
-	definition: MenuDefinition<State, ScreenId, ActionId>,
+function validateScreen<
+	State,
+	ScreenId extends string,
+	ActionId extends string,
+	Context extends MenuContext,
+>(
+	definition: MenuDefinition<State, ScreenId, ActionId, Context>,
 	screen: MenuScreen<ScreenId, ActionId>,
 ) {
 	if (!screen.title.trim()) throw new Error("Menu screen title must not be empty");
@@ -52,12 +68,23 @@ function validateScreen<State, ScreenId extends string, ActionId extends string>
 	}
 	if (screen.kind === "multiSelect") {
 		assertAction(definition, screen.title, screen.action);
+		if (
+			screen.viewportSize !== undefined &&
+			(!Number.isInteger(screen.viewportSize) || screen.viewportSize <= 0)
+		) {
+			throw new Error("Menu multi-select viewport size must be a positive integer");
+		}
 		for (const item of screen.actions ?? []) validateActionItem(definition, item);
 	}
 }
 
-function validateActionItem<State, ScreenId extends string, ActionId extends string>(
-	definition: MenuDefinition<State, ScreenId, ActionId>,
+function validateActionItem<
+	State,
+	ScreenId extends string,
+	ActionId extends string,
+	Context extends MenuContext,
+>(
+	definition: MenuDefinition<State, ScreenId, ActionId, Context>,
 	item: ActionMenuItem<ScreenId, ActionId>,
 ) {
 	const targetCount = Number("to" in item) + Number("action" in item) + Number("close" in item);
@@ -72,11 +99,12 @@ function validateActionItem<State, ScreenId extends string, ActionId extends str
 	}
 }
 
-function assertAction<State, ScreenId extends string, ActionId extends string>(
-	definition: MenuDefinition<State, ScreenId, ActionId>,
-	owner: string,
-	action: ActionId,
-) {
+function assertAction<
+	State,
+	ScreenId extends string,
+	ActionId extends string,
+	Context extends MenuContext,
+>(definition: MenuDefinition<State, ScreenId, ActionId, Context>, owner: string, action: ActionId) {
 	if (!hasOwn(definition.actions, action)) {
 		throw new Error(`Menu item ${owner} references unknown action: ${action}`);
 	}

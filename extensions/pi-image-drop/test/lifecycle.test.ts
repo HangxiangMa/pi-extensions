@@ -1,3 +1,5 @@
+// Cohesion justification: these lifecycle regressions share one server/batch/session harness and
+// verify ordering across menu, browser processing, message attachment, replacement, and shutdown.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
@@ -108,28 +110,13 @@ function createHarness(
 			if (options.startError) throw options.startError;
 			return server;
 		},
-		showMainMenu: options.showMainMenu ?? (async () => options.menuActions?.shift() ?? "close"),
-		showStatus: async (_ctx, lines) => {
-			options.onStatus?.(lines);
-			return options.statusActions?.shift() ?? "back";
-		},
+		observeLimits: options.onLimits,
 		loadStatus: async (_ctx, _label, task) => {
 			try {
 				return { kind: "completed", value: await task(new AbortController().signal) };
 			} catch (error) {
 				return { kind: "error", error };
 			}
-		},
-		showHelp: async () => "back",
-		showSettingsMenu: async (_ctx, menuOptions) => {
-			const action = options.settingsActions?.shift() ?? "back";
-			if (action !== "toggle-start") return action;
-			await menuOptions.onStartChange(!menuOptions.startOnSessionStart);
-			return "back";
-		},
-		showLimitsMenu: async (_ctx, state) => {
-			options.onLimits?.(state);
-			return options.limitActions?.shift() ?? "back";
 		},
 		showConfirm: async (_ctx, title, message) => {
 			options.onConfirm?.(title, message);
@@ -152,6 +139,51 @@ function createHarness(
 		hasUI: true,
 		confirm: options.confirm,
 		input: options.input,
+		select: async (title: string) => {
+			if (/Image Drop Status/u.test(title)) {
+				options.onStatus?.(title.split("\n").slice(1));
+				return {
+					open: "Open staging page",
+					refresh: "Refresh status",
+					back: undefined,
+					close: "Close",
+				}[options.statusActions?.shift() ?? "back"];
+			}
+			if (/Image Drop Settings/u.test(title)) {
+				const action = options.settingsActions?.shift() ?? "back";
+				return action === "toggle-start"
+					? "Start with each Pi session"
+					: action === "limits"
+						? "Image limits"
+						: undefined;
+			}
+			if (/Image limits/u.test(title)) {
+				const action = options.limitActions?.shift() ?? "back";
+				const labels: Record<string, string | undefined> = {
+					maxImages: "Images per message",
+					maxImageBytes: "Max file size per image",
+					maxBatchBytes: "Max total size per message",
+					maxImagePixels: "Max image resolution",
+					maxRetainedImages: "Staged + sent image count",
+					maxRetainedBytes: "Staged + sent image memory",
+					save: "Review changes before saving",
+					defaults: "Restore recommended defaults",
+					back: "Back to Settings",
+					close: "Close Image Drop",
+				};
+				return labels[action];
+			}
+			const action = options.showMainMenu
+				? await options.showMainMenu()
+				: (options.menuActions?.shift() ?? "close");
+			return {
+				open: "Add images in browser",
+				status: "Check image status",
+				settings: "Change Image Drop settings",
+				help: "How Image Drop works",
+				close: "Close menu",
+			}[action];
+		},
 		model: { id: "vision", provider: "test", input: ["text", "image"] },
 		isIdle: options.idle ?? (() => true),
 		hasPendingMessages: options.pending ?? (() => false),
@@ -654,11 +686,12 @@ test("browser processing re-reads Pi settings and guards model and blockImages",
 				close: async () => {},
 			};
 		},
-		showMainMenu: async () => "open",
 	});
 	runtime.register();
 	const context = createMockContext({
 		mode: "tui",
+		hasUI: true,
+		select: async () => "Add images in browser",
 		model: { id: "vision", provider: "test", input: ["text", "image"] },
 	});
 	await emit(mock, "session_start", {}, context.ctx);
@@ -987,10 +1020,14 @@ test("a stale session start cannot close the newer batch after slow server shutd
 				});
 			},
 		}),
-		showMainMenu: async () => "open",
 	});
 	runtime.register();
-	const initialContext = createMockContext({ cwd: "/workspace/initial", mode: "tui" });
+	const initialContext = createMockContext({
+		cwd: "/workspace/initial",
+		mode: "tui",
+		hasUI: true,
+		select: async () => "Add images in browser",
+	});
 	const staleContext = createMockContext({ cwd: "/workspace/stale" });
 	const currentContext = createMockContext({ cwd: "/workspace/current" });
 	await runtime.start(initialContext.ctx);
@@ -1027,10 +1064,14 @@ test("a stale shutdown cannot clear a newer batch after slow server shutdown", a
 				});
 			},
 		}),
-		showMainMenu: async () => "open",
 	});
 	runtime.register();
-	const oldContext = createMockContext({ cwd: "/workspace/old", mode: "tui" });
+	const oldContext = createMockContext({
+		cwd: "/workspace/old",
+		mode: "tui",
+		hasUI: true,
+		select: async () => "Add images in browser",
+	});
 	const currentContext = createMockContext({ cwd: "/workspace/current" });
 	await runtime.start(oldContext.ctx);
 	await mock.commands.get("image-drop")?.handler("", oldContext.ctx);

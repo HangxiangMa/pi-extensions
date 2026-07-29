@@ -55,16 +55,19 @@ Avoid loading both a global npm installation and the local workspace at the same
 
 ## 💬 Command
 
-Pi-jupyter registers only `/jupyter`, and it requires Pi's interactive TUI mode. With no arguments it opens a shallow current-state menu. The menu shows the selected filename, open/closed state, cell count, load time, stale errors, and whether an open preview is hidden below 90 terminal columns.
+Pi-jupyter registers only `/jupyter`, and it requires Pi's interactive TUI mode. With no arguments
+it opens a standard shallow current-state menu. The menu shows the selected filename, open/closed
+state, cell count, load time, stale errors, and the fixed 90-column auto-hide threshold.
 
 Primary menu actions depend on the current state:
 
-- **Choose a notebook…** lists top-level notebooks or accepts an explicit path; Escape returns without changing the preview.
+- **Choose a notebook…** opens a standard dynamic picker for top-level notebooks or an explicit path;
+  Escape returns without changing the preview and Ctrl+C closes the flow.
 - **Open / Focus preview** performs the most relevant next viewing action.
 - **Refresh from disk** keeps the last valid version when a save is incomplete or invalid.
 - **Switch notebook…** commits the new path and watcher only after the candidate loads successfully.
 - **Close preview** closes the panel and watcher but retains the selection for a later reopen.
-- **Controls and shortcuts** shows keyboard help; Escape goes back and Ctrl+C closes the flow.
+- **Controls and shortcuts** opens a standard Back-navigable detail screen.
 
 Loading from the menu is cancellable with Escape. A cancelled or failed load leaves the previous path, content, watcher, scroll position, and panel state unchanged.
 

@@ -93,34 +93,34 @@ Other migrations use the current kit API and must not add package-specific hooks
 
 ## Plan
 
-- [ ] Implement and verify `docs/plans/pi-tui-kit/2026-07-28_extension-context-plan.md` before starting
+- [x] Implement and verify `docs/plans/pi-tui-kit/2026-07-28_extension-context-plan.md` before starting
       `pi-plan-mode`; evidence must include backwards-compatible type fixtures, runtime lifecycle
       tests, package checks, and a pack inspection.
-- [ ] Implement and verify `docs/plans/pi-tui-kit/2026-07-28_bounded-multiselect-plan.md` before migrating the
+- [x] Implement and verify `docs/plans/pi-tui-kit/2026-07-28_bounded-multiselect-plan.md` before migrating the
       Plan mode or Subagents tool catalogs; evidence must include bounded rendering, dynamic cursor,
       pending rollback, pilot compatibility, package checks, and a pack inspection.
-- [ ] Implement and verify `docs/plans/pi-tui-kit/2026-07-28_disabled-multiselect-items-plan.md` before
+- [x] Implement and verify `docs/plans/pi-tui-kit/2026-07-28_disabled-multiselect-items-plan.md` before
       migrating the Plan mode tool catalog; evidence must cover TUI/RPC no-op behavior, dynamic
       enablement, bounded composition, pilot compatibility, package checks, and pack inspection.
-- [ ] Execute the production extension migration plans independently, keeping each package's focused
+- [x] Execute the production extension migration plans independently, keeping each package's focused
       tests, CI-equivalent checks, pack inspection, and runtime smoke recorded in that plan before it
       is archived.
-- [ ] Execute the experimental `pi-jupyter` and `pi-webui` plans with their runtime warning, shared
+- [x] Execute the experimental `pi-jupyter` and `pi-webui` plans with their runtime warning, shared
       versioning, browser/overlay boundaries, generated assets, and experimental documentation intact.
-- [ ] After all package plans complete, rescan active manifests and source for standard menu loops,
+- [x] After all package plans complete, rescan active manifests and source for standard menu loops,
       direct `SettingsList`/`SelectList` wrappers, and `ctx.ui.select()` loops; classify every remaining
       occurrence as one-off/specialized or migrate it through a new bounded follow-up plan.
-- [ ] Run `npm run check`, inspect every migrated package with its `pack:*` dry run, and verify the
+- [x] Run `npm run check`, inspect every migrated package with its `pack:*` dry run, and verify the
       dependency/publish ordering lists `pi-tui-kit` before all changed consumers.
 
 ## Completion Checklist
 
-- [ ] Every package in the migration table has completed and archived its package-specific plan.
-- [ ] The shared ExtensionContext feature is complete before Plan mode consumes it.
-- [ ] The bounded multi-select feature is complete before Plan mode or Subagents consumes it.
-- [ ] Disabled multi-select items are complete before Plan mode consumes them.
-- [ ] `pi-chrome-devtools` and `pi-firecrawl` remain passing reference consumers.
-- [ ] Every remaining non-kit UI occurrence has a reviewed specialized/one-off rationale recorded in
+- [x] Every package in the migration table has completed and archived its package-specific plan.
+- [x] The shared ExtensionContext feature is complete before Plan mode consumes it.
+- [x] The bounded multi-select feature is complete before Plan mode or Subagents consumes it.
+- [x] Disabled multi-select items are complete before Plan mode consumes them.
+- [x] `pi-chrome-devtools` and `pi-firecrawl` remain passing reference consumers.
+- [x] Every remaining non-kit UI occurrence has a reviewed specialized/one-off rationale recorded in
       this inventory or its owning package documentation.
-- [ ] Root checks, package previews, runtime smokes, and the final conventions audit pass without an
+- [x] Root checks, package previews, runtime smokes, and the final conventions audit pass without an
       unexplained mode, lifecycle, settings, or publishing deviation.

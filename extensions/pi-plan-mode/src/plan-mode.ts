@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import {
 	normalizePlanModeCompletion,
 	PLAN_MODE_COMPLETE_PARAMS,
@@ -25,7 +26,6 @@ import {
 	planModeQuestionAnswered,
 	planModeQuestionCancelled,
 } from "./question-tool.js";
-import { showPersistentSelector } from "./selector-ui.js";
 import {
 	configuredThinkingLevel,
 	type PlanModeFixedThinkingLevel,
@@ -49,7 +49,7 @@ const PLAN_WIDGET_KEY = "plan-mode-plan";
 const PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
 const BLOCKED_BUILTIN_TOOLS = new Set(["edit", "write"]);
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
-const TOOL_SELECTOR_PAGE_SIZE = 10;
+const TOOL_SELECTOR_VIEWPORT_SIZE = 10;
 
 type AgentSettledHandler = (event: unknown, ctx: ExtensionContext) => unknown;
 
@@ -77,10 +77,6 @@ interface ReadyPresentationIntent {
 	source: PlanCompletionSource;
 }
 
-type PlanToolSelectorValue =
-	| { kind: "tool"; tool: ToolInfo }
-	| { kind: "action"; action: "previous" | "next" | "done" };
-
 const PLAN_COMMAND_COMPLETIONS: readonly CommandArgumentCompletion[] = [
 	{ value: "show", label: "show", description: "Show the completed plan" },
 	{ value: "finalize", label: "finalize", description: "Request a completed plan" },
@@ -96,6 +92,8 @@ export default function planMode(pi: ExtensionAPI) {
 	let previousTools: string[] | undefined;
 	let readyPresentationIntent: ReadyPresentationIntent | undefined;
 	let nextReadyPresentationNonce = 0;
+	let menuGeneration = 0;
+	let menuController = new AbortController();
 
 	pi.registerFlag("plan", {
 		description: "Start in Codex-like Plan mode",
@@ -217,6 +215,9 @@ export default function planMode(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		menuGeneration += 1;
+		menuController.abort(new DOMException("Plan-mode session replaced", "AbortError"));
+		menuController = new AbortController();
 		readyPresentationIntent = undefined;
 		settings = { thinkingLevel: "inherit" };
 		const loadedSettings = await readPlanModeSettings();
@@ -248,6 +249,8 @@ export default function planMode(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
+		menuGeneration += 1;
+		menuController.abort(new DOMException("Plan-mode session shut down", "AbortError"));
 		readyPresentationIntent = undefined;
 		captureManualThinkingLevel();
 		persistState();
@@ -529,55 +532,102 @@ export default function planMode(pi: ExtensionAPI) {
 			ctx.ui.notify(planStatusText(), "info");
 			return;
 		}
-
-		const choices = state.latestPlan
-			? [
-					"Show latest proposed plan",
-					"Implement this plan",
-					"Configure Plan-mode tools",
-					"Stay in Plan mode",
-					"Exit Plan mode",
-				]
-			: ["Request final plan", "Configure Plan-mode tools", "Stay in Plan mode", "Exit Plan mode"];
-		const choice = await ctx.ui.select(planStatusText(), choices);
-		if (choice === "Show latest proposed plan") {
-			showStoredPlan(ctx);
-			return;
-		}
-		if (choice === "Request final plan") {
-			requestFinalPlan(ctx);
-			return;
-		}
-		if (choice === "Implement this plan") {
-			startImplementation(ctx);
-			return;
-		}
-		if (choice === "Configure Plan-mode tools") {
-			await showToolSelector(ctx);
-			return;
-		}
-		if (choice === "Exit Plan mode") {
-			exitPlanMode(ctx);
-			ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
-			return;
-		}
-		updateUi(ctx);
+		const generation = menuGeneration;
+		type Action = "show" | "finalize" | "implement" | "tools" | "stay" | "exit";
+		const menu = defineMenu<undefined, "main", Action, ExtensionContext>({
+			start: "main",
+			screens: {
+				main: () => ({
+					kind: "actions",
+					title: "Plan mode",
+					lines: [planStatusText()],
+					items: state.latestPlan
+						? [
+								{ id: "show", label: "Show latest proposed plan", action: "show" },
+								{ id: "implement", label: "Implement this plan", action: "implement" },
+								{ id: "tools", label: "Configure Plan-mode tools", action: "tools" },
+								{ id: "stay", label: "Stay in Plan mode", action: "stay" },
+								{ id: "exit", label: "Exit Plan mode", action: "exit" },
+							]
+						: [
+								{ id: "finalize", label: "Request final plan", action: "finalize" },
+								{ id: "tools", label: "Configure Plan-mode tools", action: "tools" },
+								{ id: "stay", label: "Stay in Plan mode", action: "stay" },
+								{ id: "exit", label: "Exit Plan mode", action: "exit" },
+							],
+					hint: "close",
+				}),
+			},
+			actions: {
+				show: async () => {
+					showStoredPlan(ctx);
+					return { kind: "close" };
+				},
+				finalize: async () => {
+					requestFinalPlan(ctx);
+					return { kind: "close" };
+				},
+				implement: async () => {
+					startImplementation(ctx);
+					return { kind: "close" };
+				},
+				tools: async () => {
+					await showToolSelector(ctx);
+					return { kind: "stay" };
+				},
+				stay: async () => {
+					updateUi(ctx);
+					return { kind: "close" };
+				},
+				exit: async () => {
+					exitPlanMode(ctx);
+					ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
+					return { kind: "close" };
+				},
+			},
+		});
+		await runMenu(ctx, menu, {
+			getState: () => undefined,
+			signal: menuController.signal,
+			isCurrent: () => generation === menuGeneration && !menuController.signal.aborted,
+		});
 	}
 
 	async function showPlanReadyMenu(ctx: ExtensionContext) {
-		const choice = await ctx.ui.select("Proposed plan ready. What next?", [
-			"Implement this plan",
-			"Stay in Plan mode",
-			"Exit Plan mode",
-		]);
-		if (choice === "Implement this plan") {
-			startImplementation(ctx);
-			return;
-		}
-		if (choice === "Exit Plan mode") {
-			exitPlanMode(ctx);
-			ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
-		}
+		const generation = menuGeneration;
+		type Action = "implement" | "stay" | "exit";
+		const menu = defineMenu<undefined, "ready", Action, ExtensionContext>({
+			start: "ready",
+			screens: {
+				ready: () => ({
+					kind: "actions",
+					title: "Proposed plan ready. What next?",
+					items: [
+						{ id: "implement", label: "Implement this plan", action: "implement" },
+						{ id: "stay", label: "Stay in Plan mode", action: "stay" },
+						{ id: "exit", label: "Exit Plan mode", action: "exit" },
+					],
+					hint: "close",
+				}),
+			},
+			actions: {
+				implement: async () => {
+					startImplementation(ctx);
+					return { kind: "close" };
+				},
+				stay: async () => ({ kind: "close" }),
+				exit: async () => {
+					exitPlanMode(ctx);
+					ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
+					return { kind: "close" };
+				},
+			},
+		});
+		await runMenu(ctx, menu, {
+			getState: () => undefined,
+			signal: menuController.signal,
+			isCurrent: () => generation === menuGeneration && !menuController.signal.aborted,
+		});
 	}
 
 	async function showToolSelector(ctx: ExtensionContext) {
@@ -585,110 +635,64 @@ export default function planMode(pi: ExtensionAPI) {
 			ctx.ui.notify(formatToolSummary(), "info");
 			return;
 		}
-
+		const generation = menuGeneration;
 		const tools = selectableTools();
-		const pageCount = toolSelectorPageCount(tools);
-		let pageIndex = 0;
-		const customHandled = await showPersistentSelector(
-			ctx,
-			() => {
-				pageIndex = Math.min(pageIndex, pageCount - 1);
-				const pageStart = pageIndex * TOOL_SELECTOR_PAGE_SIZE;
-				const pageTools = tools.slice(pageStart, pageStart + TOOL_SELECTOR_PAGE_SIZE);
-				const selectedNames = planModeSelectedNames(tools);
-				const rows: Array<{ value: PlanToolSelectorValue; label: string }> = pageTools.map(
-					(tool, index) => ({
-						value: { kind: "tool", tool },
-						label: formatToolChoice(tool, selectedNames.has(tool.name), pageStart + index),
-					}),
-				);
-				if (pageIndex > 0) {
-					rows.push({ value: { kind: "action", action: "previous" }, label: "Previous page" });
-				}
-				if (pageIndex < pageCount - 1) {
-					rows.push({ value: { kind: "action", action: "next" }, label: "Next page" });
-				}
-				rows.push({ value: { kind: "action", action: "done" }, label: "Done" });
-				return {
-					title: `Plan-mode tools (${pageIndex + 1}/${pageCount}). Non-built-in tools run at user risk.`,
-					rows,
-				};
+		const toolById = new Map(tools.map((tool, index) => [`${index}:${tool.name}`, tool]));
+		const menu = defineMenu<undefined, "tools", "toggle", ExtensionContext>({
+			start: "tools",
+			screens: {
+				tools: () => {
+					const selectedNames = planModeSelectedNames(tools);
+					return {
+						kind: "multiSelect",
+						title: "Plan-mode tools",
+						lines: ["Non-built-in tools run at user risk."],
+						viewportSize: TOOL_SELECTOR_VIEWPORT_SIZE,
+						items: tools.map((tool, index) => {
+							const selectable = canSelectToolInPlanMode(tool);
+							return {
+								id: `${index}:${tool.name}`,
+								label: tool.name,
+								description: `${toolPolicyLabel(tool)} · ${tool.description}`,
+								selected: selectedNames.has(tool.name),
+								disabled: !selectable,
+								disabledReason: selectable ? undefined : "Blocked by Plan-mode policy",
+							};
+						}),
+						action: "toggle",
+						hint: "close",
+						doneLabel: "Done",
+					};
+				},
 			},
-			(value) => {
-				if (value.kind === "action") {
-					if (value.action === "done") return "close";
-					pageIndex += value.action === "previous" ? -1 : 1;
-					return "reset";
-				}
-				if (!canSelectToolInPlanMode(value.tool)) {
-					ctx.ui.notify(`${value.tool.name} is blocked in Plan mode.`, "warning");
-					return "stay";
-				}
-				togglePlanModeTool(value.tool, tools, ctx);
-				return "stay";
+			actions: {
+				toggle: async ({ itemId, selected }) => {
+					const tool = toolById.get(itemId);
+					if (!tool || !canSelectToolInPlanMode(tool)) return { kind: "rejected" };
+					const names = planModeSelectedNames(tools);
+					if (selected) names.add(tool.name);
+					else names.delete(tool.name);
+					state = {
+						...state,
+						selectedToolNames: filterAvailableSelectedNames(Array.from(names), tools),
+					};
+					applyPlanModeTools();
+					persistState();
+					updateUi(ctx);
+					return { kind: "stay" };
+				},
 			},
-		);
-		if (!customHandled) await showDialogToolSelector(ctx);
-
+		});
+		await runMenu(ctx, menu, {
+			getState: () => undefined,
+			signal: menuController.signal,
+			isCurrent: () => generation === menuGeneration && !menuController.signal.aborted,
+		});
 		applyPlanModeTools();
-		persistState();
-		updateUi(ctx);
-	}
-
-	async function showDialogToolSelector(ctx: ExtensionContext) {
-		let pageIndex = 0;
-		while (true) {
-			const tools = selectableTools();
-			const pageCount = toolSelectorPageCount(tools);
-			pageIndex = Math.min(pageIndex, pageCount - 1);
-			const pageStart = pageIndex * TOOL_SELECTOR_PAGE_SIZE;
-			const pageTools = tools.slice(pageStart, pageStart + TOOL_SELECTOR_PAGE_SIZE);
-			const selectedNames = planModeSelectedNames(tools);
-			const choices = pageTools.map((tool, index) =>
-				formatToolChoice(tool, selectedNames.has(tool.name), pageStart + index),
-			);
-			const previousChoice = "Previous page";
-			const nextChoice = "Next page";
-			const doneChoice = "Done";
-			const navigationChoices = [
-				...(pageIndex > 0 ? [previousChoice] : []),
-				...(pageIndex < pageCount - 1 ? [nextChoice] : []),
-				doneChoice,
-			];
-			const choice = await ctx.ui.select(
-				`Plan-mode tools (${pageIndex + 1}/${pageCount}). Non-built-in tools run at user risk.`,
-				[...choices, ...navigationChoices],
-			);
-			if (!choice || choice === doneChoice) return;
-			if (choice === previousChoice) {
-				pageIndex = Math.max(0, pageIndex - 1);
-				continue;
-			}
-			if (choice === nextChoice) {
-				pageIndex = Math.min(pageCount - 1, pageIndex + 1);
-				continue;
-			}
-			const tool = pageTools[choices.indexOf(choice)];
-			if (!tool) continue;
-			if (!canSelectToolInPlanMode(tool)) {
-				ctx.ui.notify(`${tool.name} is blocked in Plan mode.`, "warning");
-				continue;
-			}
-			togglePlanModeTool(tool, tools, ctx);
+		if (generation === menuGeneration) {
+			persistState();
+			updateUi(ctx);
 		}
-	}
-
-	function togglePlanModeTool(tool: ToolInfo, tools: ToolInfo[], ctx: ExtensionContext) {
-		const nextSelectedNames = planModeSelectedNames(tools);
-		if (nextSelectedNames.has(tool.name)) nextSelectedNames.delete(tool.name);
-		else nextSelectedNames.add(tool.name);
-		state = {
-			...state,
-			selectedToolNames: filterAvailableSelectedNames(Array.from(nextSelectedNames), tools),
-		};
-		applyPlanModeTools();
-		persistState();
-		updateUi(ctx);
 	}
 
 	function activatePlanModeTools() {
@@ -759,10 +763,6 @@ export default function planMode(pi: ExtensionAPI) {
 					tool.name !== PLAN_MODE_QUESTION_TOOL_NAME && tool.name !== PLAN_MODE_COMPLETE_TOOL_NAME,
 			)
 			.sort(compareTools);
-	}
-
-	function toolSelectorPageCount(tools: ToolInfo[]) {
-		return Math.max(1, Math.ceil(tools.length / TOOL_SELECTOR_PAGE_SIZE));
 	}
 
 	function safeGetAllTools() {
@@ -917,11 +917,6 @@ function compareTools(left: ToolInfo, right: ToolInfo) {
 	const rightBuiltin = isBuiltinTool(right);
 	if (leftBuiltin !== rightBuiltin) return leftBuiltin ? -1 : 1;
 	return left.name.localeCompare(right.name);
-}
-
-function formatToolChoice(tool: ToolInfo, selected: boolean, index: number) {
-	const marker = selected ? "[x]" : "[ ]";
-	return `${marker} ${index + 1}. ${tool.name} (${toolPolicyLabel(tool)})`;
 }
 
 function toolPolicyLabel(tool: ToolInfo) {

@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
-import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { agentDir, loadConfig, localConfigPath } from "./config.js";
 import { updateSyncSetup } from "./settings-management.js";
 import {
@@ -10,8 +9,6 @@ import {
 	syncIncludeSelection,
 } from "./sync-policy.js";
 
-const INCLUDED = "included";
-const EXCLUDED = "excluded";
 const BUILT_IN_PREFIX = "builtin:";
 const CUSTOM_PREFIX = "custom:";
 const SESSIONS_ID = "sessions";
@@ -53,11 +50,7 @@ export async function showFileSelection(
 	while (!signal?.aborted) {
 		await showDraftEditor(ctx, config.setupName, draft, customCandidates, signal);
 		if (signal?.aborted || sameDraft(original, draft)) return;
-		const choice = await ctx.ui.select(
-			formatDraftPreview(original, draft),
-			["Save changes", "Discard changes", "Continue editing"],
-			{ signal },
-		);
+		const choice = await showDraftReview(ctx, original, draft, signal);
 		if (signal?.aborted) return;
 		if (choice === "Continue editing") continue;
 		if (choice !== "Save changes") {
@@ -114,74 +107,96 @@ async function showDraftEditor(
 	customCandidates: string[],
 	signal?: AbortSignal,
 ) {
-	const items: SettingItem[] = [
-		...BUILT_IN_SYNC_ROOTS.map((relativePath) => ({
-			id: `${BUILT_IN_PREFIX}${relativePath}`,
-			label: relativePath,
-			description: relativePath.includes(".")
-				? `Sync the top-level ${relativePath} file when present.`
-				: `Recursively sync every safe file under ${relativePath}/.`,
-			currentValue: draft.builtIns.has(relativePath) ? INCLUDED : EXCLUDED,
-			values: [INCLUDED, EXCLUDED],
-		})),
-		{
-			id: SESSIONS_ID,
-			label: "sessions",
-			description:
-				"Session JSONL may contain prompts, tool output, paths, images, and secrets. Sync only to storage you trust.",
-			currentValue: draft.sessions ? INCLUDED : EXCLUDED,
-			values: [INCLUDED, EXCLUDED],
+	const menu = defineMenu<undefined, "editor", "toggle", ExtensionCommandContext>({
+		start: "editor",
+		screens: {
+			editor: () => ({
+				kind: "multiSelect",
+				title: `Included Content · ${safeTerminalText(setupName)}`,
+				lines: ["Draft only · leaving this screen opens Save, Discard, or Continue editing."],
+				viewportSize: 12,
+				items: [
+					...BUILT_IN_SYNC_ROOTS.map((relativePath) => ({
+						id: `${BUILT_IN_PREFIX}${relativePath}`,
+						label: relativePath,
+						description: relativePath.includes(".")
+							? `Sync the top-level ${relativePath} file when present.`
+							: `Recursively sync every safe file under ${relativePath}/.`,
+						selected: draft.builtIns.has(relativePath),
+					})),
+					...customCandidates.map((relativePath) => ({
+						id: `${CUSTOM_PREFIX}${relativePath}`,
+						label: safeTerminalText(relativePath),
+						description: "Additional safe agent-relative file or directory.",
+						selected: draft.custom.has(relativePath),
+					})),
+					{
+						id: SESSIONS_ID,
+						label: "sessions",
+						description:
+							"Session JSONL may contain prompts, tool output, paths, images, and secrets. Sync only to storage you trust.",
+						selected: draft.sessions,
+					},
+				],
+				action: "toggle",
+				hint: "close",
+				doneLabel: "Review changes",
+			}),
 		},
-		...customCandidates.map((relativePath) => ({
-			id: `${CUSTOM_PREFIX}${relativePath}`,
-			label: safeTerminalText(relativePath),
-			description: "Additional safe agent-relative file or directory.",
-			currentValue: draft.custom.has(relativePath) ? INCLUDED : EXCLUDED,
-			values: [INCLUDED, EXCLUDED],
-		})),
-	];
-
-	await ctx.ui.custom((tui, theme, _keybindings, done) => {
-		const container = new Container();
-		let disposed = false;
-		const onAbort = () => done(undefined);
-		signal?.addEventListener("abort", onAbort, { once: true });
-		const title = new Text("", 1, 0);
-		const hint = new Text("", 1, 0);
-		const updateChrome = () => {
-			title.setText(
-				theme.fg("accent", theme.bold(`Included Content · ${safeTerminalText(setupName)}`)),
-			);
-			hint.setText(theme.fg("dim", "Draft only · Esc reviews Save, Discard, or Continue editing."));
-		};
-		updateChrome();
-		container.addChild(title);
-		const list = new SettingsList(
-			items,
-			Math.min(items.length + 2, 15),
-			getSettingsListTheme(),
-			(id, newValue) => updateDraft(draft, id, newValue === INCLUDED),
-			() => done(undefined),
-		);
-		container.addChild(list);
-		container.addChild(hint);
-		return {
-			render: (width: number) => container.render(width),
-			invalidate() {
-				updateChrome();
-				container.invalidate();
+		actions: {
+			toggle: async ({ itemId, selected }) => {
+				updateDraft(draft, itemId, selected === true);
+				return { kind: "stay" };
 			},
-			handleInput(data: string) {
-				if (disposed) return;
-				list.handleInput(data);
-				tui.requestRender();
-			},
-			dispose() {
-				disposed = true;
-				signal?.removeEventListener("abort", onAbort);
-			},
-		};
+		},
 	});
+	await runMenu(ctx, menu, {
+		getState: () => undefined,
+		signal,
+		isCurrent: () => !signal?.aborted,
+	});
+}
+
+async function showDraftReview(
+	ctx: ExtensionCommandContext,
+	original: SelectionDraft,
+	draft: SelectionDraft,
+	signal?: AbortSignal,
+) {
+	let choice: "Save changes" | "Discard changes" | "Continue editing" | undefined;
+	const menu = defineMenu<undefined, "review", "choose", ExtensionCommandContext>({
+		start: "review",
+		screens: {
+			review: () => ({
+				kind: "actions",
+				title: "Review included-content changes",
+				lines: formatDraftPreview(original, draft).split("\n").slice(2),
+				items: [
+					{ id: "save", label: "Save changes", action: "choose" },
+					{ id: "discard", label: "Discard changes", action: "choose" },
+					{ id: "continue", label: "Continue editing", action: "choose" },
+				],
+				hint: "close",
+			}),
+		},
+		actions: {
+			choose: async ({ itemId }) => {
+				choice =
+					itemId === "save"
+						? "Save changes"
+						: itemId === "continue"
+							? "Continue editing"
+							: "Discard changes";
+				return { kind: "close" };
+			},
+		},
+	});
+	await runMenu(ctx, menu, {
+		getState: () => undefined,
+		signal,
+		isCurrent: () => !signal?.aborted,
+	});
+	return choice;
 }
 
 function updateDraft(draft: SelectionDraft, id: string, included: boolean) {

@@ -40,6 +40,7 @@ export default function statusline(pi: ExtensionAPI) {
 	};
 
 	let sessionGeneration = 0;
+	let menuController = new AbortController();
 	let gitStatusRequestId = 0;
 	let activeGitStatusTarget: { cwd: string; generation: number } | undefined;
 	let gitStatusRefreshInFlight = false;
@@ -114,6 +115,8 @@ export default function statusline(pi: ExtensionAPI) {
 
 	const installFooter = (ctx: ExtensionContext) => {
 		const generation = ++sessionGeneration;
+		menuController.abort(new DOMException("Statusline session context replaced", "AbortError"));
+		menuController = new AbortController();
 		const cwd = ctx.cwd;
 		activeSessionManager = ctx.sessionManager;
 		previewPalettePreset = undefined;
@@ -180,6 +183,13 @@ export default function statusline(pi: ExtensionAPI) {
 	registerStatuslineCommand(pi, {
 		settingsPath: configPath,
 		getLoaded: () => loaded ?? loadStatuslineSettings(configPath),
+		getMenuOwner: () => {
+			const generation = sessionGeneration;
+			return {
+				signal: menuController.signal,
+				isCurrent: () => generation === sessionGeneration && !menuController.signal.aborted,
+			};
+		},
 		apply(next, ctx) {
 			if (ctx.sessionManager !== activeSessionManager) return;
 			previewPalettePreset = undefined;
@@ -215,6 +225,7 @@ export default function statusline(pi: ExtensionAPI) {
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (!ownsRuntime(ctx)) return;
 		sessionGeneration += 1;
+		menuController.abort(new DOMException("Statusline session shut down", "AbortError"));
 		activeSessionManager = undefined;
 		previewPalettePreset = undefined;
 		activeGitStatusTarget = undefined;

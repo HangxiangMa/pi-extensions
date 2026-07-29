@@ -42,24 +42,24 @@ screen rather than duplicate labels.
 
 ## Plan
 
-- [ ] Add the `<1` kit dependency and lockfile edge; verify package boundaries and runtime resolution.
-- [ ] Add failing multi-select tests for initial selection, stable cursor, toggle, rapid toggle,
+- [x] Add the `<1` kit dependency and lockfile edge; verify package boundaries and runtime resolution.
+- [x] Add failing multi-select tests for initial selection, stable cursor, toggle, rapid toggle,
       Enable all, Disable all, Done, persistence ordering, rejected rollback, RPC adaptation, owner
       abort, and session replacement.
-- [ ] Replace both selector implementations with one typed multi-select definition and session-owned
+- [x] Replace both selector implementations with one typed multi-select definition and session-owned
       signal, delegating persistence/runtime application to existing transaction helpers; verify
       focused tool-selection tests pass.
-- [ ] Remove superseded render/clip/row dispatch code only after proving active tool preservation,
+- [x] Remove superseded render/clip/row dispatch code only after proving active tool preservation,
       unknown-field/credential preservation, malformed settings, and enable/disable direct routes.
-- [ ] Update README wording only if standard key/Back behavior differs, then run package/root checks,
+- [x] Update README wording only if standard key/Back behavior differs, then run package/root checks,
       root tests, `npm run pack:google-genai`, and an isolated RPC selector smoke without live Google
       traffic.
-- [ ] Audit menu, settings, shared-tool ownership, lifecycle, credential redaction, and package
+- [x] Audit menu, settings, shared-tool ownership, lifecycle, credential redaction, and package
       conventions before archiving.
 
 ## Completion Checklist
 
-- [ ] TUI and RPC tool selection share one `pi-tui-kit` multi-select model.
-- [ ] Ordered saves, rollback, sibling-tool preservation, credentials, and direct routes are unchanged.
-- [ ] Cancellation/disposal/session replacement cannot apply stale tool state.
-- [ ] Tests, checks, pack inspection, and runtime smoke pass.
+- [x] TUI and RPC tool selection share one `pi-tui-kit` multi-select model.
+- [x] Ordered saves, rollback, sibling-tool preservation, credentials, and direct routes are unchanged.
+- [x] Cancellation/disposal/session replacement cannot apply stale tool state.
+- [x] Tests, checks, pack inspection, and runtime smoke pass.

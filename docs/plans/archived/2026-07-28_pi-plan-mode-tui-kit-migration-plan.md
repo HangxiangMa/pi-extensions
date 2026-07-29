@@ -61,36 +61,36 @@ multi-select rendering with selected descriptions, and disabled multi-select row
 
 ## Plan
 
-- [ ] Complete and archive the three prerequisite kit plans; verify package declarations expose the
+- [x] Complete and archive the three prerequisite kit plans; verify package declarations expose the
       `ExtensionContext` generic, bounded viewport/descriptions, and disabled multi-select rows before
       adding the consumer dependency.
-- [ ] Add the `<1` kit runtime dependency and lockfile edge to `pi-plan-mode`; verify package
+- [x] Add the `<1` kit runtime dependency and lockfile edge to `pi-plan-mode`; verify package
       boundaries and `npm run pack:plan-mode` resolve the built package independently.
-- [ ] Add failing screen/runtime tests for active planning with/without a completed plan, ready-menu
+- [x] Add failing screen/runtime tests for active planning with/without a completed plan, ready-menu
       settlement, duplicate/replacement completions, TUI/RPC navigation, print/JSON behavior, owner
       abort, disposal, stale context, and direct-route compatibility.
-- [ ] Replace `showPlanMenu()` and `showPlanReadyMenu()` with typed command/lifecycle menu definitions
+- [x] Replace `showPlanMenu()` and `showPlanReadyMenu()` with typed command/lifecycle menu definitions
       using the new context generic and session owner; verify implementation, exit, stay, show,
       finalize, and failed-handoff paths preserve state, tools, status, widget, and one-time delivery.
-- [ ] Add failing large-catalog tests for first/middle/last viewport positions, injected paging,
+- [x] Add failing large-catalog tests for first/middle/last viewport positions, injected paging,
       selected policy/source descriptions, blocked rows, duplicate-looking labels, catalog refresh,
       RPC parity, rapid toggles, and restoration after cancellation/session replacement.
-- [ ] Replace `showPersistentSelector()` and `showDialogToolSelector()` with one bounded multi-select;
+- [x] Replace `showPersistentSelector()` and `showDialogToolSelector()` with one bounded multi-select;
       revalidate each raw tool name and policy before `setActiveTools()`, preserve required Plan tools,
       persist selected names in invocation order, and verify blocked tools cannot activate.
-- [ ] Remove the superseded selector and manual page code after all policy, default-tool, legacy-key,
+- [x] Remove the superseded selector and manual page code after all policy, default-tool, legacy-key,
       settings, thinking-level, completion, and session-restore tests pass unchanged; retain
       `plan_mode_question` dialogs as one-off UI.
-- [ ] Update the README for standard tool-selector navigation and explicit mode behavior, then run the
+- [x] Update the README for standard tool-selector navigation and explicit mode behavior, then run the
       package typecheck, root tests, `npm run check`, `npm run pack:plan-mode`, and isolated TUI/RPC
       load smokes with a synthetic large tool catalog.
-- [ ] Audit command, TUI/RPC, lifecycle settlement, cancellation/disposal, shared-tool ownership,
+- [x] Audit command, TUI/RPC, lifecycle settlement, cancellation/disposal, shared-tool ownership,
       persistence, package, and verification conventions before archiving.
 
 ## Completion Checklist
 
-- [ ] Active and ready Plan menus use context-safe `pi-tui-kit` action screens.
-- [ ] The tool catalog uses one bounded, descriptive, disabled-aware multi-select in TUI and RPC.
-- [ ] Plan completion ownership, tool policy/restoration, persisted state, thinking level, direct
+- [x] Active and ready Plan menus use context-safe `pi-tui-kit` action screens.
+- [x] The tool catalog uses one bounded, descriptive, disabled-aware multi-select in TUI and RPC.
+- [x] Plan completion ownership, tool policy/restoration, persisted state, thinking level, direct
       routes, question prompts, and implementation handoff are unchanged.
-- [ ] Prerequisites, focused tests, root checks, pack inspection, and lifecycle/runtime smokes pass.
+- [x] Prerequisites, focused tests, root checks, pack inspection, and lifecycle/runtime smokes pass.

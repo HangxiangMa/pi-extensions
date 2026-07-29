@@ -60,37 +60,37 @@ extension-owned.
 
 ## Plan
 
-- [ ] Complete and archive the bounded multi-select prerequisite; verify large catalogs, descriptions,
+- [x] Complete and archive the bounded multi-select prerequisite; verify large catalogs, descriptions,
       pending rollback, cursor restoration, and existing consumers before changing `pi-subagents`.
-- [ ] Add the `<1` kit runtime dependency and lockfile edge; verify `npm run check:boundaries` and
+- [x] Add the `<1` kit runtime dependency and lockfile edge; verify `npm run check:boundaries` and
       `npm run pack:subagents` show correct independent runtime metadata.
-- [ ] Add failing screen/runtime tests for every manager state and route: all/async-only/blocking-only,
+- [x] Add failing screen/runtime tests for every manager state and route: all/async-only/blocking-only,
       configured-after-reload, invalid settings, active/retained/closed agents, completion values,
       TUI Back/cursor restoration, RPC status fallback, print/JSON behavior, owner abort, and session
       replacement.
-- [ ] Replace Main, Delegation, Review, Current Agents, Advanced, Runtime Details, and Help wrappers
+- [x] Replace Main, Delegation, Review, Current Agents, Advanced, Runtime Details, and Help wrappers
       with typed action/detail screens; preserve exact effect previews, retained-agent guards,
       confirmation, save failure behavior, and terminal `ctx.reload()` handling.
-- [ ] Replace the completion `SettingsList` with a kit Settings screen whose action runs the existing
+- [x] Replace the completion `SettingsList` with a kit Settings screen whose action runs the existing
       locked update and runtime application as one ordered operation; verify unknown-field
       preservation, immediate prompt-guidance changes, rollback, malformed-file protection, and
       direct `settings` behavior.
-- [ ] Add failing bounded tool-draft tests for many tools, unavailable configured names, default
+- [x] Add failing bounded tool-draft tests for many tools, unavailable configured names, default
       restoration, raw control-bearing names, rapid toggles, Save/Cancel, failed locked writes, agent
       rediscovery, disposal, and session replacement.
-- [ ] Replace the agent picker and `ToolToggleList` with action and bounded multi-select screens,
+- [x] Replace the agent picker and `ToolToggleList` with action and bounded multi-select screens,
       keeping discovery/default comparison and one-shot persistence extension-owned; remove custom
       wrappers only after no-op saves and cancelled drafts prove byte-for-byte settings preservation.
-- [ ] Update the README for standard navigation without changing direct routes, then run the package
+- [x] Update the README for standard navigation without changing direct routes, then run the package
       typecheck, root tests, `npm run check`, `npm run pack:subagents`, and isolated TUI/RPC load
       smokes with mocked subagents and a synthetic large tool catalog.
-- [ ] Audit command, TUI, settings concurrency, reload, retained-agent lifecycle, sanitization,
+- [x] Audit command, TUI, settings concurrency, reload, retained-agent lifecycle, sanitization,
       package, and verification conventions before archiving.
 
 ## Completion Checklist
 
-- [ ] Standard manager, workflow, detail, settings, agent, and tool-draft screens use `pi-tui-kit`.
-- [ ] Tool changes remain a cancellable one-save draft with unavailable-name/default preservation.
-- [ ] Settings locking, reload safety, runtime values, retained agents, direct routes, and execution
+- [x] Standard manager, workflow, detail, settings, agent, and tool-draft screens use `pi-tui-kit`.
+- [x] Tool changes remain a cancellable one-save draft with unavailable-name/default preservation.
+- [x] Settings locking, reload safety, runtime values, retained agents, direct routes, and execution
       behavior are unchanged.
-- [ ] Prerequisite, focused tests, root checks, pack inspection, and mode/lifecycle smokes pass.
+- [x] Prerequisite, focused tests, root checks, pack inspection, and mode/lifecycle smokes pass.
