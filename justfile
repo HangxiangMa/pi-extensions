@@ -133,6 +133,9 @@ pack-lsp:
 pack-plan-mode:
     just pack plan-mode
 
+pack-stamp:
+    just pack stamp
+
 pack-starship:
     just pack starship
 
@@ -193,6 +196,9 @@ try-lsp:
 
 try-plan-mode:
     just try plan-mode
+
+try-stamp:
+    just try stamp
 
 try-starship:
     just try starship
@@ -255,6 +261,9 @@ install-lsp:
 install-plan-mode:
     just install plan-mode
 
+install-stamp:
+    just install stamp
+
 install-statusline:
     just install statusline
 
@@ -312,6 +321,9 @@ publish-lsp:
 
 publish-plan-mode:
     just publish plan-mode
+
+publish-stamp:
+    just publish stamp
 
 publish-starship:
     just publish starship
