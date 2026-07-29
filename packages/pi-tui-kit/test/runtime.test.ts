@@ -679,6 +679,7 @@ test("component disposal aborts and drains pending setting work before returning
 		hasUI: true,
 		custom: async (factory: unknown) => {
 			const harness = createCustomSelectorHarness(factory, 80);
+			harness.handleInput("m");
 			harness.handleInput("tui.select.confirm");
 			await actionStarted;
 			harness.dispose();
@@ -738,7 +739,8 @@ test("settings refreshes preserve the changed row cursor", async () => {
 			customCalls += 1;
 			const harness = createCustomSelectorHarness(factory, 80);
 			if (customCalls === 1) {
-				harness.handleInput("tui.select.down");
+				for (const input of ["m", "a", "n"]) harness.handleInput(input);
+				assert.doesNotMatch(harness.render().join("\n"), /Automatic mode/);
 				harness.handleInput("tui.select.confirm");
 			} else {
 				assert.match(harness.render().join("\n"), /→ .*Manual mode/);

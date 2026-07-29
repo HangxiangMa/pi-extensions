@@ -1,11 +1,15 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, type Theme } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
+	type Focusable,
+	fuzzyFilter,
+	Input,
 	Key,
 	matchesKey,
 	type SelectItem,
 	SelectList,
 	truncateToWidth,
+	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { MenuScreen, MenuSettingItem, MenuTransition } from "./types.js";
@@ -175,21 +179,29 @@ function createDetailComponent<ScreenId extends string, ActionId extends string>
 	};
 }
 
-// Pi's current SettingsList cannot initialize its cursor, enforce disabled rows, or expose search
-// focus. Keep this adapter local until those behaviors are available through its public API.
+// Pi's current SettingsList cannot initialize its cursor, enforce disabled rows, expose search
+// focus, or await rejected saves. Keep this adapter local while matching its public presentation.
 function createSettingsComponent<ScreenId extends string, ActionId extends string>(
 	options: SettingsOptions<ScreenId, ActionId>,
 ): MenuScreenComponent {
+	const searchInput = new Input();
+	const border = new DynamicBorder((text: string) => options.theme.fg("border", text));
+	const searchableItems = options.screen.items.map((item) => ({
+		item,
+		label: safeMenuText(item.label),
+	}));
+	let filteredItems = searchableItems;
 	const committed = new Map(options.screen.items.map((item) => [item.id, item.currentValue]));
 	const displayed = new Map(committed);
 	const latestRequested = new Map<string, string>();
 	let selectedIndex = Math.max(
 		0,
-		options.screen.items.findIndex((item) => item.id === options.selectedItemId),
+		filteredItems.findIndex(({ item }) => item.id === options.selectedItemId),
 	);
 	let pending = Promise.resolve();
 	let disposed = false;
 	let closing = false;
+	const selectedItem = () => filteredItems[selectedIndex]?.item;
 	const closeAfterPending = (kind: "back" | "close") => {
 		if (closing || disposed) return;
 		closing = true;
@@ -198,13 +210,23 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
 		});
 	};
 	const select = (index: number) => {
-		if (options.screen.items.length === 0) return;
-		selectedIndex = (index + options.screen.items.length) % options.screen.items.length;
-		const item = options.screen.items[selectedIndex];
+		if (filteredItems.length === 0) return;
+		selectedIndex = (index + filteredItems.length) % filteredItems.length;
+		const item = selectedItem();
+		if (item) options.onSelectionChange?.(item.id);
+	};
+	const applyFilter = () => {
+		filteredItems = fuzzyFilter(
+			searchableItems,
+			searchInput.getValue(),
+			(candidate) => candidate.label,
+		);
+		selectedIndex = 0;
+		const item = selectedItem();
 		if (item) options.onSelectionChange?.(item.id);
 	};
 	const activate = () => {
-		const item = options.screen.items[selectedIndex];
+		const item = selectedItem();
 		if (!item || item.disabled || closing || disposed) return;
 		const values = item.values ?? [item.currentValue];
 		if (values.length === 0) return;
@@ -241,51 +263,45 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
 		});
 		pending = operation.catch(() => undefined);
 	};
-	return {
-		render(width) {
-			const maxVisible = Math.min(options.screen.items.length, 13);
-			const startIndex = Math.max(
-				0,
-				Math.min(
-					selectedIndex - Math.floor(maxVisible / 2),
-					options.screen.items.length - maxVisible,
-				),
-			);
-			const visibleItems = options.screen.items.slice(startIndex, startIndex + maxVisible);
-			const content = visibleItems.map((item, offset) => {
-				const selected = startIndex + offset === selectedIndex;
-				const label = safeMenuText(item.label);
-				const value = safeMenuText(displayed.get(item.id) ?? item.currentValue);
-				const unavailable = item.disabled ? " (unavailable)" : "";
-				const text = `${selected ? "→ " : "  "}${label}  ${value}${unavailable}`;
-				return selected ? options.theme.fg("accent", text) : text;
-			});
-			if (maxVisible < options.screen.items.length) {
-				content.push(
-					options.theme.fg("dim", `  (${selectedIndex + 1}/${options.screen.items.length})`),
-				);
-			}
-			const selectedItem = options.screen.items[selectedIndex];
-			if (selectedItem?.description) {
-				content.push(
-					"",
-					...wrapTextWithAnsi(
-						options.theme.fg("dim", `  ${safeMenuText(selectedItem.description)}`),
-						Math.max(1, width),
-					),
-				);
-			}
-			return renderFrame(
-				options.screen.title,
-				options.screen.lines ?? [],
-				content,
-				"back",
-				width,
-				options,
-				"change",
-			);
+	const component: MenuScreenComponent & Focusable = {
+		get focused() {
+			return searchInput.focused;
 		},
-		invalidate() {},
+		set focused(value: boolean) {
+			searchInput.focused = value;
+		},
+		render(width) {
+			const safeWidth = Math.max(1, width);
+			const result = [
+				...border.render(safeWidth),
+				...wrapTextWithAnsi(
+					options.theme.fg("accent", options.theme.bold(safeMenuText(options.screen.title))),
+					safeWidth,
+				),
+				...(options.screen.lines ?? []).flatMap((line) =>
+					wrapTextWithAnsi(options.theme.fg("muted", safeMenuText(line)), safeWidth),
+				),
+				"",
+				...searchInput.render(safeWidth),
+				"",
+				...renderSettingsRows(
+					filteredItems,
+					searchableItems,
+					selectedIndex,
+					displayed,
+					safeWidth,
+					options,
+				),
+				"",
+				...wrapTextWithAnsi(options.theme.fg("dim", settingsHint(options.keybindings)), safeWidth),
+				...border.render(safeWidth),
+			];
+			return result.map((line) => truncateToWidth(line, safeWidth, ""));
+		},
+		invalidate() {
+			border.invalidate();
+			searchInput.invalidate();
+		},
 		handleInput(data) {
 			if (disposed || closing) return;
 			if (matchesKey(data, Key.ctrl("c"))) closeAfterPending("close");
@@ -297,9 +313,17 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
 				select(selectedIndex + 1);
 			} else if (options.keybindings.matches(data, "tui.select.pageUp")) select(0);
 			else if (options.keybindings.matches(data, "tui.select.pageDown")) {
-				select(options.screen.items.length - 1);
+				select(filteredItems.length - 1);
 			} else if (options.keybindings.matches(data, "tui.select.confirm") || data === " ") {
 				activate();
+			} else {
+				const searchData = data.replaceAll(" ", "");
+				if (searchData) {
+					searchInput.handleInput(searchData);
+					const query = replaceTerminalControls(searchInput.getValue());
+					if (query !== searchInput.getValue()) searchInput.setValue(query);
+					applyFilter();
+				}
 			}
 			options.tui.requestRender();
 		},
@@ -310,6 +334,95 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
 			options.onDispose?.();
 		},
 	};
+	return component;
+}
+
+function renderSettingsRows<ScreenId extends string, ActionId extends string>(
+	filteredItems: readonly { item: MenuSettingItem<ActionId>; label: string }[],
+	allItems: readonly { item: MenuSettingItem<ActionId>; label: string }[],
+	selectedIndex: number,
+	displayed: ReadonlyMap<string, string>,
+	width: number,
+	options: SettingsOptions<ScreenId, ActionId>,
+): string[] {
+	if (allItems.length === 0) return [options.theme.fg("dim", "  No settings available")];
+	if (filteredItems.length === 0) return [options.theme.fg("dim", "  No matching settings")];
+
+	const maxVisible = Math.min(filteredItems.length, 10);
+	const startIndex = Math.max(
+		0,
+		Math.min(selectedIndex - Math.floor(maxVisible / 2), filteredItems.length - maxVisible),
+	);
+	const endIndex = Math.min(startIndex + maxVisible, filteredItems.length);
+	const maxLabelWidth = Math.min(
+		30,
+		Math.max(...allItems.map((candidate) => visibleWidth(candidate.label))),
+	);
+	const lines: string[] = [];
+	for (let index = startIndex; index < endIndex; index += 1) {
+		const candidate = filteredItems[index];
+		if (!candidate) continue;
+		const { item, label } = candidate;
+		const selected = index === selectedIndex;
+		const prefix = selected ? options.theme.fg("accent", "→ ") : "  ";
+		const labelPadded = label + " ".repeat(Math.max(0, maxLabelWidth - visibleWidth(label)));
+		const currentValue = safeMenuText(displayed.get(item.id) ?? item.currentValue);
+		const value = item.disabled ? `(unavailable) ${currentValue}` : currentValue;
+		const valueWidth = Math.max(0, width - visibleWidth(prefix) - maxLabelWidth - 2);
+		let labelText = labelPadded;
+		let valueText = truncateToWidth(value, valueWidth, "");
+		if (selected) {
+			labelText = options.theme.fg("accent", labelText);
+			valueText = options.theme.fg("accent", valueText);
+		} else if (item.disabled) {
+			labelText = options.theme.fg("dim", labelText);
+			valueText = options.theme.fg("dim", valueText);
+		} else {
+			valueText = options.theme.fg("muted", valueText);
+		}
+		lines.push(truncateToWidth(`${prefix}${labelText}  ${valueText}`, width, ""));
+	}
+	if (startIndex > 0 || endIndex < filteredItems.length) {
+		lines.push(options.theme.fg("dim", `  (${selectedIndex + 1}/${filteredItems.length})`));
+	}
+	const selected = filteredItems[selectedIndex]?.item;
+	if (selected?.description) {
+		lines.push("");
+		for (const line of wrapTextWithAnsi(
+			safeMenuText(selected.description),
+			Math.max(1, width - 4),
+		)) {
+			lines.push(options.theme.fg("dim", `  ${line}`));
+		}
+	}
+	return lines;
+}
+
+function settingsHint(keybindings: MenuKeybindings) {
+	const confirmKeys = uniqueHintKeys([...keybindings.getKeys("tui.select.confirm"), "space"]);
+	const cancelKeys = uniqueHintKeys(
+		keybindings.getKeys("tui.select.cancel").filter((key) => key !== "ctrl+c"),
+	);
+	return [
+		"Type to search",
+		...(confirmKeys ? [`${confirmKeys} to change`] : []),
+		...(cancelKeys ? [`${cancelKeys} to go back`] : []),
+		"Ctrl+C to close",
+	].join(" · ");
+}
+
+function uniqueHintKeys(keys: readonly string[]) {
+	return [...new Set(keys.map(displayHintKey).filter(Boolean))].join("/");
+}
+
+function displayHintKey(key: string) {
+	if (key === "enter") return "Enter";
+	if (key === "space") return "Space";
+	if (key === "escape") return "Esc";
+	if (key === "ctrl+c") return "Ctrl+C";
+	if (key === "up") return "↑";
+	if (key === "down") return "↓";
+	return safeMenuText(key);
 }
 
 function createMultiSelectComponent<ScreenId extends string, ActionId extends string>(
@@ -570,8 +683,9 @@ function bindingText(keybindings: MenuKeybindings, binding: MenuBinding, exclude
 			if (key === "up") return "↑";
 			if (key === "down") return "↓";
 			if (key === "escape") return "esc";
-			return key;
+			return safeMenuText(key);
 		})
+		.filter(Boolean)
 		.join("/");
 }
 
@@ -592,13 +706,14 @@ function setInitialSelection(list: SelectList, items: readonly SelectItem[], sel
 }
 
 export function safeMenuText(value: unknown) {
+	return replaceTerminalControls(value).replace(/\s+/gu, " ").trim();
+}
+
+function replaceTerminalControls(value: unknown) {
 	return Array.from(String(value), (character) => {
 		const codePoint = character.codePointAt(0) ?? 0;
 		return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
-	})
-		.join("")
-		.replace(/\s+/gu, " ")
-		.trim();
+	}).join("");
 }
 
 export function settingForAction<ActionId extends string>(

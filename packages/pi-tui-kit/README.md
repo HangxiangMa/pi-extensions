@@ -101,13 +101,22 @@ remain pure projections of current extension state.
 - **`actions`** — navigation targets, domain actions, close rows, and optional cancellable busy
   labels.
 - **`detail`** — read-only wrapped text with Back or Close behavior.
-- **`settings`** — immediate value changes with serialized saves and rollback when an action rejects.
+- **`settings`** — Pi-style searchable, aligned settings rows with immediate value changes,
+  serialized saves, and rollback when an action rejects.
 - **`multiSelect`** — optimistic toggles with stable cursor restoration, serialized saves, rollback,
   selected-row descriptions, optional bulk action rows, and a bounded TUI viewport.
 
 All standard TUI screens use Pi's injected keybindings, sanitize display text, rebuild themed
 content after invalidation, and bound rendered output to the supplied terminal width. Escape follows
 the screen's Back/Close hint; `Ctrl+C` closes the menu.
+
+TUI settings screens retain the extension title and supporting context above Pi's familiar search
+field, aligned label/value columns, ten-row viewport, position indicator, selected-row description,
+and keyboard hint. Typing fuzzy-filters labels, arrows navigate, and Enter or Space changes the
+selected value. Changes save immediately, so Back or Close never implies rollback. The embedded
+search input forwards focus for IME positioning. The kit owns this adapter because Pi's public
+`SettingsList` does not currently expose restored-cursor, disabled-row, async rollback, and search
+focus behavior together.
 
 Action handlers return one of these results:
 
