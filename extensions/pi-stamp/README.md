@@ -7,8 +7,9 @@ quiet local timestamp after each user and assistant message in the interactive t
 
 ## ✨ Features
 
-- Shows local 24-hour time as `HH:mm:ss` for user and assistant messages.
-- Uses each message's own persisted timestamp rather than the extension handler's current time.
+- Shows local 24-hour time as `HH:mm:ss` on a dim, right-aligned transcript row.
+- Uses each user and assistant message's own persisted timestamp rather than the extension handler's
+  current time.
 - Stores stamps as versioned custom session entries that survive reload and resume.
 - Keeps stamp entries outside LLM context, so timestamp text is never sent to the model.
 - Uses Pi's current theme and remains width-safe in narrow terminals.
@@ -37,17 +38,18 @@ pi -e ./extensions/pi-stamp
 ## 🚀 Quick start
 
 Load the extension and use Pi normally. There is no command to run or setting to configure.
-Each new user and assistant message receives a separate dim timestamp row:
+Each new user and assistant message receives a separate dim timestamp row aligned to the terminal's
+right edge:
 
 ```text
 Your message
-14:32:08
+                                 14:32:08
 
 Assistant reply
-14:32:11
+                                 14:32:11
 ```
 
-The exact foreground color follows the active Pi theme.
+The exact spacing adapts to the terminal width, and the foreground color follows the active Pi theme.
 
 ## 🕰️ Timestamp semantics
 

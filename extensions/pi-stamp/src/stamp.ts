@@ -1,5 +1,5 @@
 import type { EntryRenderer, ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { type Component, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 export const STAMP_ENTRY_TYPE = "pi-stamp";
 
@@ -29,11 +29,24 @@ export function isMessageStampData(value: unknown): value is MessageStampData {
 	);
 }
 
+function rightAlignedText(text: string): Component {
+	return {
+		render(width) {
+			if (width < 1) return [];
+			return wrapTextWithAnsi(text, width).map((line) => {
+				const leftPadding = " ".repeat(Math.max(0, width - visibleWidth(line)));
+				return `${leftPadding}${line}`;
+			});
+		},
+		invalidate() {},
+	};
+}
+
 export const renderStampEntry: EntryRenderer<MessageStampData> = (entry, _options, theme) => {
 	if (!isMessageStampData(entry.data)) return undefined;
 	const time = formatStampTime(entry.data.timestamp);
 	if (!time) return undefined;
-	return new Text(theme.fg("dim", time), 0, 0);
+	return rightAlignedText(theme.fg("dim", time));
 };
 
 export default function stampExtension(pi: ExtensionAPI): void {

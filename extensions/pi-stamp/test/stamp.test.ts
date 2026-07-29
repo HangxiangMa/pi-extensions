@@ -49,7 +49,7 @@ test("isMessageStampData accepts only the current finite persisted schema", () =
 	assert.equal(isMessageStampData(null), false);
 });
 
-test("entry renderer uses the callback theme, stays width-safe, and ignores malformed data", () => {
+test("entry renderer uses the callback theme, right-aligns, and stays width-safe", () => {
 	const mock = createMockPi();
 	stamp(mock.pi);
 	const renderer = mock.entryRenderers.get(STAMP_ENTRY_TYPE);
@@ -71,7 +71,8 @@ test("entry renderer uses the callback theme, stays width-safe, and ignores malf
 
 	assert.ok(component);
 	assert.deepEqual(colors, ["dim"]);
-	assert.match(component.render(80).join("\n"), /05:06:07/);
+	assert.equal(component.render(12).join("\n"), "    05:06:07");
+	assert.equal(component.render(8).join("\n"), "05:06:07");
 	for (const width of [1, 4, 8, 10]) {
 		for (const line of component.render(width)) {
 			assert.ok(visibleWidth(line) <= width, `${JSON.stringify(line)} exceeded width ${width}`);

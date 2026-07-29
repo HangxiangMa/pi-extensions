@@ -42,7 +42,8 @@ historical backfill is not planned under the current API.
 **Status:** implemented; see the archived
 [initial-version plan](../plans/archived/2026-07-29_pi-stamp-initial-version-plan.md)
 
-- Show one dim, local `HH:mm:ss` stamp for each new user and assistant message in TUI mode.
+- Show one dim, right-aligned local `HH:mm:ss` stamp for each new user and assistant message in TUI
+  mode.
 - Use the message's persisted `timestamp`, not the extension handler's wall-clock time.
 - Persist stamps as versioned `pi-stamp` custom entries so they survive session reloads.
 - Remain passive: no command, settings file, status item, tool, network access, or background task.
