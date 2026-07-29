@@ -52,10 +52,13 @@ historical backfill is not planned under the current API.
 
 ### Phase 2 — Presentation controls
 
+**Status:** implemented; see the archived
+[presentation-controls plan](../plans/archived/2026-07-29_pi-stamp-presentation-controls-plan.md)
+
 - Add date context when a conversation crosses a local day boundary.
-- Consider 12/24-hour display, seconds visibility, locale, and explicit time-zone selection.
-- Consider absolute versus relative labels such as `14:32:08` and `3m ago`; relative labels require
-  a bounded refresh strategy and lifecycle cleanup.
+- Support 12/24-hour display, seconds visibility, locale, and explicit time-zone selection.
+- Keep absolute labels such as `14:32:08`; relative labels such as `3m ago` remain deferred because
+  they require a bounded refresh strategy and lifecycle cleanup.
 - Keep the existing minimal format as the compatibility default.
 
 This phase introduces extension-owned settings and must follow `docs/extension-settings.md`,

@@ -1,0 +1,345 @@
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import {
+	canonicalizeLocale,
+	canonicalizeTimeZone,
+	type StampDateContext,
+	type StampHourCycle,
+} from "./format.js";
+import type { StampSettingsPatch, StampSettingsRuntime, StampSettingsState } from "./settings.js";
+
+type StampScreen = "main" | "settings" | "locale" | "time-zone" | "status" | "help" | "invalid";
+type StampAction =
+	| "set-hour-cycle"
+	| "set-seconds"
+	| "set-date-context"
+	| "open-locale"
+	| "choose-invariant-locale"
+	| "choose-system-locale"
+	| "choose-custom-locale"
+	| "open-time-zone"
+	| "choose-local-time-zone"
+	| "choose-utc-time-zone"
+	| "choose-custom-time-zone";
+
+export interface StampMenuOwner {
+	signal: AbortSignal;
+	isCurrent(): boolean;
+}
+
+export function createStampMenu(runtime: StampSettingsRuntime) {
+	return defineMenu<StampSettingsState, StampScreen, StampAction, ExtensionCommandContext>({
+		start: "main",
+		screens: {
+			main: ({ state }) => ({
+				kind: "actions",
+				title: "Stamp",
+				lines: [formatCompactStatus(state)],
+				items: [
+					state.issue
+						? {
+								id: "settings",
+								label: "Settings",
+								description: "Read-only until the invalid settings file is fixed.",
+								to: "invalid" as const,
+							}
+						: { id: "settings", label: "Settings", to: "settings" as const },
+					{ id: "status", label: "Status", to: "status" },
+					{ id: "help", label: "Help", to: "help" },
+					{ id: "close", label: "Close", close: true },
+				],
+				hint: "close",
+			}),
+			settings: ({ state }) => ({
+				kind: "settings",
+				title: "Stamp Settings",
+				lines: [`User settings · ${safeTerminalText(runtime.getPath())}`],
+				items: [
+					{
+						id: "hourCycle",
+						label: "Hour cycle",
+						description: "Choose a 24-hour or 12-hour clock.",
+						currentValue: hourCycleLabel(state.settings.hourCycle),
+						values: ["24-hour", "12-hour"],
+						action: "set-hour-cycle",
+					},
+					{
+						id: "showSeconds",
+						label: "Seconds",
+						description: "Show or hide seconds in each stamp.",
+						currentValue: state.settings.showSeconds ? "Show" : "Hide",
+						values: ["Show", "Hide"],
+						action: "set-seconds",
+					},
+					{
+						id: "dateContext",
+						label: "Date context",
+						description: "Show dates at day changes, always, or never.",
+						currentValue: dateContextLabel(state.settings.dateContext),
+						values: ["Day changes", "Always", "Never"],
+						action: "set-date-context",
+					},
+					{
+						id: "locale",
+						label: "Locale",
+						description: "Use invariant, system, or an explicit BCP 47 locale.",
+						currentValue: localeLabel(state.settings.locale),
+						action: "open-locale",
+					},
+					{
+						id: "timeZone",
+						label: "Time zone",
+						description: "Use local time, UTC, or an explicit IANA time zone.",
+						currentValue: timeZoneLabel(state.settings.timeZone),
+						action: "open-time-zone",
+					},
+				],
+			}),
+			locale: ({ state }) => ({
+				kind: "actions",
+				title: "Stamp Locale",
+				lines: [`Current: ${localeLabel(state.settings.locale)}`],
+				items: [
+					{
+						id: "invariant",
+						label: "Invariant (default)",
+						description: "ISO date, Latin digits, and English AM/PM.",
+						action: "choose-invariant-locale",
+					},
+					{
+						id: "system",
+						label: "System locale",
+						description: "Use the operating system locale.",
+						action: "choose-system-locale",
+					},
+					{
+						id: "custom",
+						label: "Custom BCP 47 locale…",
+						description: "Examples: en-US, fr-FR, zh-TW.",
+						action: "choose-custom-locale",
+					},
+				],
+				hint: "back",
+			}),
+			"time-zone": ({ state }) => ({
+				kind: "actions",
+				title: "Stamp Time Zone",
+				lines: [`Current: ${timeZoneLabel(state.settings.timeZone)}`],
+				items: [
+					{
+						id: "local",
+						label: "Local (default)",
+						description: "Follow the operating system time zone.",
+						action: "choose-local-time-zone",
+					},
+					{
+						id: "UTC",
+						label: "UTC",
+						description: "Use Coordinated Universal Time.",
+						action: "choose-utc-time-zone",
+					},
+					{
+						id: "custom",
+						label: "Custom IANA time zone…",
+						description: "Examples: Asia/Taipei, America/New_York.",
+						action: "choose-custom-time-zone",
+					},
+				],
+				hint: "back",
+			}),
+			status: ({ state }) => ({
+				kind: "detail",
+				title: "Stamp Status",
+				lines: [
+					settingStatus("Hour cycle", hourCycleLabel(state.settings.hourCycle), state, "hourCycle"),
+					settingStatus(
+						"Seconds",
+						state.settings.showSeconds ? "Show" : "Hide",
+						state,
+						"showSeconds",
+					),
+					settingStatus(
+						"Date context",
+						dateContextLabel(state.settings.dateContext),
+						state,
+						"dateContext",
+					),
+					settingStatus("Locale", localeLabel(state.settings.locale), state, "locale"),
+					settingStatus("Time zone", timeZoneLabel(state.settings.timeZone), state, "timeZone"),
+					`Settings file: ${safeTerminalText(runtime.getPath())}`,
+					...(state.issue ? [`Issue: ${safeTerminalText(state.issue.message)}`] : []),
+				],
+				hint: "back",
+			}),
+			help: () => ({
+				kind: "detail",
+				title: "Stamp Help",
+				lines: [
+					"Stamps show each message's recorded creation time, not assistant completion time.",
+					"Day changes compare the previous recorded stamp in the selected time zone.",
+					"Changes save immediately and reformat mounted and future stamps.",
+					"Relative labels are not available because they require background refresh work.",
+					"Stamp entries remain outside model context.",
+				],
+				hint: "back",
+			}),
+			invalid: ({ state }) => ({
+				kind: "detail",
+				title: "Stamp Settings · Read only",
+				lines: [
+					`Invalid settings file. Fix ${safeTerminalText(runtime.getPath())} and run /reload. The file will not be overwritten.`,
+					...(state.issue ? [`Issue: ${safeTerminalText(state.issue.message)}`] : []),
+					formatCompactStatus(state),
+				],
+				hint: "back",
+			}),
+		},
+		actions: {
+			"set-hour-cycle": ({ ctx, value, signal }) =>
+				savePatch(
+					runtime,
+					ctx,
+					signal,
+					{ hourCycle: value === "12-hour" ? "12h" : "24h" },
+					`Hour cycle: ${value}.`,
+				),
+			"set-seconds": ({ ctx, value, signal }) =>
+				savePatch(runtime, ctx, signal, { showSeconds: value !== "Hide" }, `Seconds: ${value}.`),
+			"set-date-context": ({ ctx, value, signal }) => {
+				const dateContext: StampDateContext =
+					value === "Always" ? "always" : value === "Never" ? "never" : "day-change";
+				return savePatch(runtime, ctx, signal, { dateContext }, `Date context: ${value}.`);
+			},
+			"open-locale": async () => ({ kind: "to", screen: "locale" }),
+			"choose-invariant-locale": ({ ctx, signal }) =>
+				savePatch(runtime, ctx, signal, { locale: "invariant" }, "Locale: Invariant.", "back"),
+			"choose-system-locale": ({ ctx, signal }) =>
+				savePatch(runtime, ctx, signal, { locale: "system" }, "Locale: System.", "back"),
+			"choose-custom-locale": async ({ ctx, signal }) => {
+				const raw = await ctx.ui.input("BCP 47 locale", "Examples: en-US, fr-FR, zh-TW");
+				if (signal.aborted) return { kind: "rejected" };
+				if (raw === undefined) return { kind: "back" };
+				const locale = canonicalizeLocale(raw.trim());
+				if (!locale || locale === "invariant" || locale === "system") {
+					ctx.ui.notify("Enter one valid BCP 47 locale, such as en-US.", "warning");
+					return { kind: "rejected" };
+				}
+				return savePatch(runtime, ctx, signal, { locale }, `Locale: ${locale}.`, "back");
+			},
+			"open-time-zone": async () => ({ kind: "to", screen: "time-zone" }),
+			"choose-local-time-zone": ({ ctx, signal }) =>
+				savePatch(runtime, ctx, signal, { timeZone: "local" }, "Time zone: Local.", "back"),
+			"choose-utc-time-zone": ({ ctx, signal }) =>
+				savePatch(runtime, ctx, signal, { timeZone: "UTC" }, "Time zone: UTC.", "back"),
+			"choose-custom-time-zone": async ({ ctx, signal }) => {
+				const raw = await ctx.ui.input("IANA time zone", "Examples: Asia/Taipei, America/New_York");
+				if (signal.aborted) return { kind: "rejected" };
+				if (raw === undefined) return { kind: "back" };
+				const timeZone = canonicalizeTimeZone(raw.trim());
+				if (!timeZone || timeZone === "local") {
+					ctx.ui.notify("Enter one valid IANA time zone, such as Asia/Taipei.", "warning");
+					return { kind: "rejected" };
+				}
+				return savePatch(runtime, ctx, signal, { timeZone }, `Time zone: ${timeZone}.`, "back");
+			},
+		},
+	});
+}
+
+export function showStampMenu(
+	ctx: ExtensionCommandContext,
+	runtime: StampSettingsRuntime,
+	owner: StampMenuOwner,
+) {
+	return runMenu(ctx, createStampMenu(runtime), {
+		getState: () => runtime.get(),
+		signal: owner.signal,
+		isCurrent: owner.isCurrent,
+		onError: (errorCtx, error) => {
+			if (owner.isCurrent()) {
+				errorCtx.ui.notify(`Stamp menu failed: ${safeTerminalText(formatError(error))}`, "error");
+			}
+		},
+		onUnsupportedMode: (_unsupportedCtx, mode) => {
+			throw new Error(`/stamp is unavailable in ${mode} mode; use TUI or RPC mode.`);
+		},
+	});
+}
+
+async function savePatch(
+	runtime: StampSettingsRuntime,
+	ctx: ExtensionCommandContext,
+	signal: AbortSignal,
+	patch: StampSettingsPatch,
+	successMessage: string,
+	successTransition: "stay" | "back" = "stay",
+) {
+	if (signal.aborted) return { kind: "rejected" as const };
+	try {
+		await runtime.update(patch);
+		if (signal.aborted) return { kind: "rejected" as const };
+		ctx.ui.notify(successMessage, "info");
+		return { kind: successTransition } as const;
+	} catch (error) {
+		if (!signal.aborted) {
+			ctx.ui.notify(
+				`Could not save Stamp settings; the previous value remains: ${safeTerminalText(formatError(error))}`,
+				"error",
+			);
+		}
+		return { kind: "rejected" as const };
+	}
+}
+
+function settingStatus(
+	label: string,
+	value: string,
+	state: StampSettingsState,
+	field: keyof StampSettingsState["settings"],
+): string {
+	return `${label}: ${value} · ${state.sources[field] === "user" ? "User" : "Built-in"}`;
+}
+
+function formatCompactStatus(state: StampSettingsState): string {
+	return [
+		hourCycleLabel(state.settings.hourCycle),
+		state.settings.showSeconds ? "seconds" : "no seconds",
+		dateContextLabel(state.settings.dateContext),
+		localeLabel(state.settings.locale),
+		timeZoneLabel(state.settings.timeZone),
+	].join(" · ");
+}
+
+function hourCycleLabel(value: StampHourCycle): string {
+	return value === "24h" ? "24-hour" : "12-hour";
+}
+
+function dateContextLabel(value: StampDateContext): string {
+	if (value === "always") return "Always";
+	if (value === "never") return "Never";
+	return "Day changes";
+}
+
+function localeLabel(value: string): string {
+	if (value === "invariant") return "Invariant";
+	if (value === "system") return "System";
+	return safeTerminalText(value);
+}
+
+function timeZoneLabel(value: string): string {
+	return value === "local" ? "Local" : safeTerminalText(value);
+}
+
+function safeTerminalText(value: string): string {
+	return [...value]
+		.map((character) => {
+			const codePoint = character.codePointAt(0) ?? 0;
+			return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
+		})
+		.join("")
+		.trim();
+}
+
+function formatError(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
