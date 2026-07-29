@@ -1,13 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
+	CURSOR_MARKER,
+	type Focusable,
 	KeybindingsManager,
 	setKeybindings,
 	TUI_KEYBINDINGS,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { createMenuScreenComponent, type MenuScreenEvent } from "../src/screen-components.js";
+import {
+	createMenuScreenComponent,
+	type MenuScreenComponent,
+	type MenuScreenEvent,
+} from "../src/screen-components.js";
 import type { MenuScreen, MenuTransition } from "../src/types.js";
 
 initTheme("dark", false);
@@ -123,6 +130,159 @@ test("theme invalidation rebuilds themed title content", () => {
 test("settings restore a selected row when the screen is reopened", () => {
 	const harness = componentHarness(settingsScreen, { selectedItemId: "manual" });
 	assert.match(harness.component.render(80).join("\n"), /→ .*Manual mode/);
+});
+
+test("settings use Pi's searchable, aligned, bounded presentation", () => {
+	const harness = componentHarness(largeSettingsScreen(), {
+		plainTheme: true,
+		selectedItemId: "setting-0",
+	});
+	const lines = plainRender(harness.component, 60);
+
+	assert.equal(lines[0], "─".repeat(60));
+	assert.equal(lines.at(-1), "─".repeat(60));
+	assert.ok(lines.includes("Large settings"));
+	assert.ok(lines.includes("Changes save immediately."));
+	assert.ok(lines.some((line) => line.startsWith("> ")));
+	const firstRow = lines.find((line) => line.includes("Setting 0"));
+	const secondRow = lines.find((line) => line.includes("Longer setting 1"));
+	assert.ok(firstRow);
+	assert.ok(secondRow);
+	assert.equal(firstRow.indexOf("Off"), secondRow.indexOf("On"));
+	assert.ok(lines.some((line) => line.includes("Setting 9")));
+	assert.equal(
+		lines.some((line) => line.includes("Setting 10")),
+		false,
+	);
+	assert.ok(lines.some((line) => line.includes("(1/12)")));
+	assert.ok(lines.some((line) => line.includes("Description for setting 0")));
+	const rendered = lines.join("\n");
+	for (const hint of ["Type to search", "change", "back", "close"]) {
+		assert.ok(rendered.includes(hint));
+	}
+});
+
+test("settings search reports no matches and all presentation remains width-safe", () => {
+	const harness = componentHarness(
+		{
+			kind: "settings",
+			title: "介面設定",
+			lines: ["搜尋並立即儲存設定。"],
+			items: [
+				{
+					id: "display",
+					label: "介面顯示設定",
+					description: "選取項目的詳細說明",
+					currentValue: "開啟",
+					values: ["開啟", "關閉"],
+					action: "setting",
+				},
+			],
+		},
+		{ plainTheme: true },
+	);
+
+	harness.component.handleInput("z");
+	assert.ok(
+		plainRender(harness.component, 40).some((line) => line.includes("No matching settings")),
+	);
+	harness.component.handleInput("\u007f");
+	assert.ok(plainRender(harness.component, 40).some((line) => line.includes("介面顯示設定")));
+
+	const empty = componentHarness(
+		{ kind: "settings", title: "Empty settings", items: [] },
+		{ plainTheme: true },
+	);
+	assert.ok(
+		plainRender(empty.component, 40).some((line) => line.includes("No settings available")),
+	);
+	for (const width of [1, 2, 8, 20, 40]) {
+		assert.ok(
+			harness.component.render(width).every((line) => visibleWidth(line) <= width),
+			`settings search at ${width}`,
+		);
+	}
+});
+
+test("settings fuzzy search activates stable raw rows and values", async () => {
+	const rawValue = "On\u0007raw";
+	const requests: Array<{ itemId: string; value: string; previousValue: string }> = [];
+	const harness = componentHarness(
+		{
+			kind: "settings",
+			title: "Settings",
+			items: [
+				{
+					id: "automatic",
+					label: "Automatic mode",
+					currentValue: "Off",
+					values: ["Off", "On"],
+					action: "setting",
+				},
+				{
+					id: "manual-raw",
+					label: "Manual\u0007 mode",
+					currentValue: "Off",
+					values: ["Off", rawValue],
+					action: "setting",
+				},
+			],
+		},
+		{
+			plainTheme: true,
+			onSettingChange: async (request) => {
+				requests.push(request);
+				return true;
+			},
+		},
+	);
+
+	for (const input of ["m", "a", "n"]) harness.component.handleInput(input);
+	const filtered = plainRender(harness.component, 60).join("\n");
+	assert.match(filtered, /Manual mode/);
+	assert.doesNotMatch(filtered, /Automatic mode/);
+	harness.component.handleInput("l");
+	await harness.component.waitForPending();
+	assert.deepEqual(requests, [{ itemId: "manual-raw", value: rawValue, previousValue: "Off" }]);
+	assert.equal(harness.selectionChanges.at(-1), "manual-raw");
+});
+
+test("settings search keeps disabled rows inert and distinguishes Back from Close", async () => {
+	let changes = 0;
+	const disabled = settingsScreen.items[1];
+	assert.ok(disabled);
+	const automatic = settingsScreen.items[0];
+	assert.ok(automatic);
+	const back = componentHarness(
+		{ ...settingsScreen, items: [automatic, { ...disabled, disabled: true }] },
+		{
+			onSettingChange: async () => {
+				changes += 1;
+				return true;
+			},
+		},
+	);
+	for (const input of ["m", "a", "n"]) back.component.handleInput(input);
+	back.component.handleInput("l");
+	await back.component.waitForPending();
+	assert.equal(changes, 0);
+	back.component.handleInput("q");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.deepEqual(back.events, [{ kind: "back" }]);
+
+	const close = componentHarness(settingsScreen);
+	close.component.handleInput("\u0003");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.deepEqual(close.events, [{ kind: "close" }]);
+});
+
+test("settings forward component focus to the search input for IME", () => {
+	const harness = componentHarness(settingsScreen, { plainTheme: true });
+	const focusable = harness.component as MenuScreenComponent & Focusable;
+	assert.equal("focused" in focusable, true);
+	assert.equal(focusable.focused, false);
+	focusable.focused = true;
+	assert.equal(harness.component.render(80).join("\n").includes(CURSOR_MARKER), true);
 });
 
 test("disabled settings cannot invoke their action", async () => {
@@ -390,11 +550,32 @@ function largeMultiSelectScreen(): MenuScreen<ScreenId, ActionId> {
 	};
 }
 
+function largeSettingsScreen(): MenuScreen<ScreenId, ActionId> {
+	return {
+		kind: "settings",
+		title: "Large settings",
+		lines: ["Changes save immediately."],
+		items: Array.from({ length: 12 }, (_, index) => ({
+			id: `setting-${index}`,
+			label: index === 1 ? "Longer setting 1" : `Setting ${index}`,
+			description: `Description for setting ${index}`,
+			currentValue: index % 2 === 0 ? "Off" : "On",
+			values: ["Off", "On"],
+			action: "setting" as const,
+		})),
+	};
+}
+
+function plainRender(component: MenuScreenComponent, width: number) {
+	return component.render(width).map((line) => stripVTControlCharacters(line));
+}
+
 function componentHarness(
 	screen: MenuScreen<ScreenId, ActionId>,
 	options: {
 		selectedItemId?: string;
 		themePrefix?: () => string;
+		plainTheme?: boolean;
 		onSettingChange?: (request: {
 			itemId: string;
 			value: string;
@@ -409,6 +590,7 @@ function componentHarness(
 ) {
 	const events: MenuScreenEvent[] = [];
 	const transitions: MenuTransition<ScreenId>[] = [];
+	const selectionChanges: string[] = [];
 	const themePrefix = options.themePrefix ?? (() => "accent");
 	const component = createMenuScreenComponent({
 		screen,
@@ -416,6 +598,7 @@ function componentHarness(
 		tui: { requestRender() {} },
 		theme: {
 			fg(color: string, text: string) {
+				if (options.plainTheme) return text;
 				return color === "accent" ? `${themePrefix()}:${text}` : text;
 			},
 			bold(text: string) {
@@ -424,9 +607,10 @@ function componentHarness(
 		},
 		keybindings: testKeybindings,
 		onEvent: (event) => events.push(event),
+		onSelectionChange: (itemId) => selectionChanges.push(itemId),
 		onSettingChange: options.onSettingChange,
 		onMultiSelectChange: options.onMultiSelectChange,
 		onTransition: (transition) => transitions.push(transition),
 	});
-	return { component, events, transitions };
+	return { component, events, transitions, selectionChanges };
 }
