@@ -85,6 +85,7 @@
 - Treat session text rendered in custom TUI components as untrusted terminal input: escape C0/C1 controls before `wrapTextWithAnsi`, while retaining the raw value only for non-rendered payloads.
 - `wrapTextWithAnsi` performs word wrapping that trims whitespace at wrap boundaries; exact code/text previews need cell-aware hard wrapping or horizontal scrolling instead.
 - A Pi custom component that embeds an `Input` or `Editor` must implement `Focusable` and forward `focused` to the child. If the installed search-enabled `SettingsList` hides an `Input` without implementing `Focusable`, disable its search unless a public focus-forwarding path exists.
+- In `pi-tui-kit` RPC adaptation, selecting a settings row cycles directly to its next configured value and then re-renders the settings screen; clients should not wait for a separate value-choice dialog.
 - Tests that instantiate `BorderedLoader` must initialize Pi's theme first (for example, `initTheme("dark", false)`), because its keybinding hint reads the global theme during construction; dispose the loader-backed harness after `done()` so its animation timer cannot keep the test process alive.
 - Pi `ctx.ui.select()` returns `undefined` for both Escape and Ctrl+C; when back and close must differ, use a custom selector that handles Ctrl+C first and honors the injected named keybindings for navigation, confirmation, and cancellation.
 - Pi `Editor.getText()` retains large pastes as `[paste #…]` markers; use `getExpandedText()` whenever preserving or moving an editor draft outside that editor instance.

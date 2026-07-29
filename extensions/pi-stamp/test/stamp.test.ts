@@ -5,17 +5,24 @@ import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import stamp, { formatStampTime, isMessageStampData, STAMP_ENTRY_TYPE } from "../src/stamp.js";
+import { DEFAULT_STAMP_SETTINGS, type StampSettings } from "../src/format.js";
+import type { StampSettingsRuntime, StampSettingsState } from "../src/settings.js";
+import stamp, {
+	createStampEntryRenderer,
+	formatStampTime,
+	isMessageStampData,
+	STAMP_ENTRY_TYPE,
+} from "../src/stamp.js";
 
 const USER_TIMESTAMP = new Date(2026, 0, 2, 5, 6, 7, 123).getTime();
 const ASSISTANT_TIMESTAMP = new Date(2026, 0, 2, 5, 6, 9, 456).getTime();
 
-test("stamp registers one entry renderer and only passive lifecycle handlers", () => {
+test("stamp registers one entry renderer, one menu command, and no tools", () => {
 	const mock = createMockPi();
 	stamp(mock.pi);
 
 	assert.deepEqual([...mock.entryRenderers.keys()], [STAMP_ENTRY_TYPE]);
-	assert.equal(mock.commands.size, 0);
+	assert.deepEqual([...mock.commands.keys()], ["stamp"]);
 	assert.equal(mock.tools.length, 0);
 	assert.deepEqual([...mock.events.keys()].sort(), [
 		"agent_end",
@@ -34,13 +41,39 @@ test("formatStampTime uses zero-padded local 24-hour time and rejects invalid va
 	assert.equal(formatStampTime(10 ** 20), undefined);
 });
 
-test("isMessageStampData accepts only the current finite persisted schema", () => {
+test("isMessageStampData accepts exact finite version 1 and version 2 schemas", () => {
 	assert.equal(isMessageStampData({ version: 1, role: "user", timestamp: USER_TIMESTAMP }), true);
 	assert.equal(
-		isMessageStampData({ version: 1, role: "assistant", timestamp: ASSISTANT_TIMESTAMP }),
+		isMessageStampData({ version: 2, role: "assistant", timestamp: ASSISTANT_TIMESTAMP }),
 		true,
 	);
-	assert.equal(isMessageStampData({ version: 2, role: "user", timestamp: USER_TIMESTAMP }), false);
+	assert.equal(
+		isMessageStampData({
+			version: 2,
+			role: "user",
+			timestamp: USER_TIMESTAMP,
+			previousTimestamp: USER_TIMESTAMP - 1_000,
+		}),
+		true,
+	);
+	assert.equal(
+		isMessageStampData({
+			version: 1,
+			role: "user",
+			timestamp: USER_TIMESTAMP,
+			previousTimestamp: USER_TIMESTAMP - 1_000,
+		}),
+		false,
+	);
+	assert.equal(
+		isMessageStampData({
+			version: 2,
+			role: "user",
+			timestamp: USER_TIMESTAMP,
+			previousTimestamp: NaN,
+		}),
+		false,
+	);
 	assert.equal(
 		isMessageStampData({ version: 1, role: "toolResult", timestamp: USER_TIMESTAMP }),
 		false,
@@ -49,30 +82,33 @@ test("isMessageStampData accepts only the current finite persisted schema", () =
 	assert.equal(isMessageStampData(null), false);
 });
 
-test("entry renderer uses the callback theme, right-aligns, and stays width-safe", () => {
-	const mock = createMockPi();
-	stamp(mock.pi);
-	const renderer = mock.entryRenderers.get(STAMP_ENTRY_TYPE);
-	assert.ok(renderer);
-
+test("entry renderer reads live settings, uses the callback theme, and stays width-safe", () => {
+	let settings: StampSettings = { ...DEFAULT_STAMP_SETTINGS, timeZone: "UTC" };
+	const renderer = createStampEntryRenderer(() => settings);
 	const colors: string[] = [];
 	const component = renderer(
 		{
-			data: { version: 1, role: "user", timestamp: USER_TIMESTAMP },
-		},
+			data: {
+				version: 2,
+				role: "user",
+				timestamp: Date.UTC(2026, 6, 30, 0, 1, 2),
+				previousTimestamp: Date.UTC(2026, 6, 29, 23, 59, 58),
+			},
+		} as never,
 		{ expanded: false },
 		{
 			fg(color: string, text: string) {
 				colors.push(color);
 				return text;
 			},
-		},
-	) as { render(width: number): string[] } | undefined;
+		} as never,
+	);
 
 	assert.ok(component);
-	assert.deepEqual(colors, ["dim"]);
-	assert.equal(component.render(12).join("\n"), "    05:06:07");
-	assert.equal(component.render(8).join("\n"), "05:06:07");
+	assert.equal(component.render(30).join("\n"), "         2026-07-30 · 00:01:02");
+	settings = { ...settings, showSeconds: false, dateContext: "never" };
+	assert.equal(component.render(12).join("\n"), "       00:01");
+	assert.deepEqual(colors, ["dim", "dim"]);
 	for (const width of [1, 4, 8, 10]) {
 		for (const line of component.render(width)) {
 			assert.ok(visibleWidth(line) <= width, `${JSON.stringify(line)} exceeded width ${width}`);
@@ -80,7 +116,7 @@ test("entry renderer uses the callback theme, right-aligns, and stays width-safe
 	}
 
 	assert.equal(
-		renderer({ data: { version: 99 } }, { expanded: false }, { fg: () => "" }),
+		renderer({ data: { version: 99 } } as never, { expanded: false }, { fg: () => "" } as never),
 		undefined,
 	);
 });
@@ -89,7 +125,12 @@ test("Pi persists stamp entries across reopen without adding them to model conte
 	const sessionDir = mkdtempSync(`${os.tmpdir()}/pi-stamp-session-`);
 	t.after(() => rmSync(sessionDir, { recursive: true, force: true }));
 	const session = SessionManager.create(process.cwd(), sessionDir);
-	const stampData = { version: 1, role: "user", timestamp: USER_TIMESTAMP } as const;
+	const stampData = {
+		version: 2,
+		role: "user",
+		timestamp: USER_TIMESTAMP,
+		previousTimestamp: USER_TIMESTAMP - 1_000,
+	} as const;
 
 	session.appendMessage(userMessage(USER_TIMESTAMP));
 	session.appendCustomEntry(STAMP_ENTRY_TYPE, stampData);
@@ -132,7 +173,7 @@ test("TUI lifecycle appends one user stamp before the assistant and one assistan
 	await emit(mock, "turn_end", { message: assistant, toolResults: [], turnIndex: 0 }, ctx);
 	assert.deepEqual(mock.entries, [
 		stampEntry("user", USER_TIMESTAMP),
-		stampEntry("assistant", ASSISTANT_TIMESTAMP),
+		stampEntry("assistant", ASSISTANT_TIMESTAMP, USER_TIMESTAMP),
 	]);
 
 	await emit(mock, "agent_end", { messages: [user, assistant] }, ctx);
@@ -158,7 +199,7 @@ test("successive user messages flush in source order at the following message bo
 
 	assert.deepEqual(mock.entries, [
 		stampEntry("user", USER_TIMESTAMP),
-		stampEntry("user", USER_TIMESTAMP + 1_000),
+		stampEntry("user", USER_TIMESTAMP + 1_000, USER_TIMESTAMP),
 	]);
 });
 
@@ -190,8 +231,81 @@ test("assistant tool and error turns receive one stamp without stamping tool res
 
 	assert.deepEqual(mock.entries, [
 		stampEntry("assistant", ASSISTANT_TIMESTAMP),
-		stampEntry("assistant", ASSISTANT_TIMESTAMP + 2_000),
+		stampEntry("assistant", ASSISTANT_TIMESTAMP + 2_000, ASSISTANT_TIMESTAMP),
 	]);
+});
+
+test("session start rebuilds the predecessor cursor from the active branch", async () => {
+	const mock = createMockPi();
+	stamp(mock.pi);
+	const previous = USER_TIMESTAMP - 60_000;
+	const { ctx } = createMockContext({
+		mode: "tui",
+		sessionManager: {
+			getSessionId: () => "test-session",
+			getSessionName: () => undefined,
+			getEntries: () => [],
+			getBranch: () => [
+				{
+					type: "custom",
+					customType: STAMP_ENTRY_TYPE,
+					data: { version: 1, role: "user", timestamp: previous },
+				},
+			],
+		},
+	});
+
+	await emit(mock, "session_start", { reason: "resume" }, ctx);
+	const assistant = assistantMessage(ASSISTANT_TIMESTAMP);
+	await emit(mock, "turn_end", { message: assistant, toolResults: [], turnIndex: 0 }, ctx);
+	assert.deepEqual(mock.entries, [stampEntry("assistant", ASSISTANT_TIMESTAMP, previous)]);
+});
+
+test("a delayed settings reload cannot notify through a replaced session", async () => {
+	const mock = createMockPi();
+	const delayed = deferred<Readonly<StampSettingsState>>();
+	const activeState = defaultSettingsState();
+	let reloads = 0;
+	const runtime = testSettingsRuntime({
+		reload: async () => {
+			reloads += 1;
+			return reloads === 1 ? delayed.promise : activeState;
+		},
+	});
+	stamp(mock.pi, { settingsRuntime: runtime });
+	const first = createMockContext({ mode: "tui" });
+	const second = createMockContext({ mode: "tui" });
+
+	const firstStart = emit(mock, "session_start", { reason: "startup" }, first.ctx);
+	await Promise.resolve();
+	await emit(mock, "session_start", { reason: "switch" }, second.ctx);
+	delayed.resolve({
+		...activeState,
+		issue: { kind: "invalid", message: "stale issue" },
+		canSave: false,
+	});
+	await firstStart;
+
+	assert.deepEqual(first.notifications, []);
+	assert.deepEqual(second.notifications, []);
+});
+
+test("session shutdown waits for an in-flight settings durability boundary", async () => {
+	const mock = createMockPi();
+	const flushing = deferred<void>();
+	const runtime = testSettingsRuntime({ flush: () => flushing.promise });
+	stamp(mock.pi, { settingsRuntime: runtime });
+	const { ctx } = createMockContext({ mode: "tui" });
+	await emit(mock, "session_start", { reason: "startup" }, ctx);
+	let settled = false;
+	const shutdown = emit(mock, "session_shutdown", { reason: "quit" }, ctx).then(() => {
+		settled = true;
+	});
+	await Promise.resolve();
+	assert.equal(settled, false);
+	flushing.resolve();
+	await shutdown;
+	assert.equal(settled, true);
 });
 
 test("agent end and shutdown flush a pending user at most once and reload resets state", async () => {
@@ -217,6 +331,24 @@ test("agent end and shutdown flush a pending user at most once and reload resets
 	]);
 });
 
+test("/stamp is argument-free, supports TUI, and rejects print and JSON observably", async () => {
+	const mock = createMockPi();
+	stamp(mock.pi);
+	const command = mock.commands.get("stamp");
+	assert.ok(command);
+	const tui = createMockContext({
+		mode: "tui",
+		select: async (_title: string, options: string[]) =>
+			options.find((option) => option === "Close"),
+	});
+	await command.handler("", tui.ctx);
+	await assert.rejects(async () => command.handler("extra", tui.ctx), /does not accept arguments/u);
+	for (const mode of ["print", "json"] as const) {
+		const { ctx } = createMockContext({ mode });
+		await assert.rejects(async () => command.handler("", ctx), new RegExp(`${mode} mode`, "u"));
+	}
+});
+
 test("print, JSON, and RPC sessions never append stamp entries", async () => {
 	for (const mode of ["print", "json", "rpc"] as const) {
 		const mock = createMockPi();
@@ -235,10 +367,15 @@ test("print, JSON, and RPC sessions never append stamp entries", async () => {
 	}
 });
 
-function stampEntry(role: "user" | "assistant", timestamp: number) {
+function stampEntry(role: "user" | "assistant", timestamp: number, previousTimestamp?: number) {
 	return {
 		customType: STAMP_ENTRY_TYPE,
-		data: { version: 1, role, timestamp },
+		data: {
+			version: 2,
+			role,
+			timestamp,
+			...(previousTimestamp === undefined ? {} : { previousTimestamp }),
+		},
 	};
 }
 
@@ -275,4 +412,40 @@ async function emit(
 	for (const handler of mock.events.get(name) ?? []) {
 		await handler(event, ctx);
 	}
+}
+
+function defaultSettingsState(): Readonly<StampSettingsState> {
+	return {
+		settings: { ...DEFAULT_STAMP_SETTINGS },
+		sources: {
+			hourCycle: "built-in",
+			showSeconds: "built-in",
+			dateContext: "built-in",
+			locale: "built-in",
+			timeZone: "built-in",
+		},
+		canSave: true,
+	};
+}
+
+function testSettingsRuntime(overrides: Partial<StampSettingsRuntime> = {}): StampSettingsRuntime {
+	const state = defaultSettingsState();
+	return {
+		get: () => state,
+		getPath: () => "/tmp/pi-stamp.json",
+		reload: async () => state,
+		update: async () => state,
+		flush: async () => undefined,
+		...overrides,
+	};
+}
+
+function deferred<T>() {
+	let resolve!: (value: T | PromiseLike<T>) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
 }
