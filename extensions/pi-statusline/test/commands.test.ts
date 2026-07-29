@@ -1141,6 +1141,7 @@ test("status and help remain available from the main menu", async () => {
 		selection = "Help";
 		await mock.commands.get("statusline")?.handler("", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /segmentText/u);
+		assert.match(context.notifications.at(-1)?.message ?? "", /truncationDirection/u);
 		assert.match(context.notifications.at(-1)?.message ?? "", /palettePreset/u);
 		assert.match(context.notifications.at(-1)?.message ?? "", /line_break/u);
 		assert.match(context.notifications.at(-1)?.message ?? "", /M.*move mode/u);

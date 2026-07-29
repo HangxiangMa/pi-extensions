@@ -72,6 +72,9 @@ format = "[ $symbol$model ]($style)"
 symbol = "◆ "
 style = "bold fg:header_fg bg:header"
 disabled = false
+truncation_length = 36
+truncation_symbol = "…"
+truncation_direction = "middle"
 
 [activity]
 format = "([ $text ]($style))"
@@ -215,6 +218,31 @@ An invalid root format falls back to the built-in root format. An invalid module
   value is usage cost, not proof of an amount billed under a subscription.
 - Pi's public extension API does not expose the current auto-compaction toggle, so pi-starship cannot
   reliably provide the native `(auto)` marker.
+
+### Model truncation
+
+The model module accepts Starship-style `truncation_length` and `truncation_symbol` options plus the
+Pi-specific `truncation_direction` option:
+
+```toml
+[model]
+truncation_length = 36
+truncation_symbol = "…"
+truncation_direction = "middle"
+```
+
+`truncation_length` counts model grapheme clusters retained before the symbol; `0` disables
+truncation and is the default. The direction names the removed portion: `start` retains the suffix,
+`end` retains the prefix and is the default, and `middle` retains both ends. Truncation runs after the
+built-in Claude/GPT shortening rules and changes display only—the provider model ID is untouched.
+Terminal control sequences in model IDs and truncation symbols are removed at render time. An empty
+symbol truncates without a marker. For example, `middle` can retain both a Hugging Face model
+family and its variant, while `start` is useful when a llama.cpp server reports an absolute model path.
+pi-starship treats model IDs as opaque strings and does not parse paths, repositories, GGUF suffixes,
+or quantization names.
+
+`truncation_direction` is a pi-starship adaptation; upstream Starship has no model module or generic
+truncation-direction setting.
 
 `git_worktree` is empty in the primary worktree. In a linked worktree it defaults to the top-level directory name; use `$path` when the full absolute path is needed.
 

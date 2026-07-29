@@ -955,6 +955,7 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
 			"Press M for move mode, Alt+Up/Alt+Down for quick move, and B for a line break.",
 			"Line breaks (line_break) may repeat when separated by data segments, but cannot be consecutive.",
 			"segmentText supports prefix and suffix strings around Pi-owned dynamic values.",
+			"segmentText.model also supports truncationLength, truncationSymbol, and truncationDirection (start, middle, end).",
 		].join("\n"),
 		"info",
 	);

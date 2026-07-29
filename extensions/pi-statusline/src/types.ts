@@ -40,11 +40,20 @@ export type Density = (typeof DENSITIES)[number];
 export const SEPARATOR_NAMES = ["none", "dot", "bar", "powerline", "round"] as const;
 export type SeparatorName = (typeof SEPARATOR_NAMES)[number];
 
+export const TRUNCATION_DIRECTIONS = ["start", "middle", "end"] as const;
+export type TruncationDirection = (typeof TRUNCATION_DIRECTIONS)[number];
+
 export type PowerlineBlockName = "header" | "directory" | "git" | "runtime" | "meter";
 
 export interface SegmentTextConfig {
 	prefix: string;
 	suffix: string;
+}
+
+export interface ModelSegmentTextConfig extends SegmentTextConfig {
+	truncationLength: number;
+	truncationSymbol: string;
+	truncationDirection: TruncationDirection;
 }
 
 export interface SegmentPaletteColor {
@@ -60,7 +69,7 @@ export interface StatuslineConfig {
 	density: Density;
 	separator: SeparatorName;
 	segments: ConfigSegmentName[];
-	segmentText: Record<SegmentName, SegmentTextConfig>;
+	segmentText: Record<SegmentName, SegmentTextConfig> & { model: ModelSegmentTextConfig };
 	extensionStatusIcons: Record<string, string>;
 }
 

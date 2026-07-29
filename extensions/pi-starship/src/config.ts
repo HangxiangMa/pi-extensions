@@ -18,7 +18,7 @@ import {
 } from "./format/formatter.js";
 import { type ColorPalette, isValidStyle, parseColor } from "./format/style.js";
 import { MODULE_DEFINITIONS, MODULE_NAMES, type ModuleName } from "./modules/catalog.js";
-import type { ModuleOptionSchema } from "./modules/types.js";
+import type { ModuleOptionSchema, ModuleOptionValue } from "./modules/types.js";
 
 export const CONFIG_FILE_NAME = "pi-starship.toml";
 export { MODULE_NAMES, type ModuleName } from "./modules/catalog.js";
@@ -26,13 +26,6 @@ export { MODULE_NAMES, type ModuleName } from "./modules/catalog.js";
 const MODULE_CONTENT_VARIABLES = Object.fromEntries(
 	MODULE_DEFINITIONS.map((definition) => [definition.name, definition.variables]),
 ) as Record<ModuleName, readonly string[]>;
-
-export type ModuleOptionValue =
-	| string
-	| boolean
-	| number
-	| readonly string[]
-	| Readonly<Record<string, string>>;
 
 export interface ModuleConfig {
 	format: string;
@@ -576,6 +569,13 @@ function normalizeModuleOption(
 			return typeof value === "string" && (schema.allowEmpty !== false || value.length > 0)
 				? { ok: true, value }
 				: { ok: false, message: "Expected a non-empty string; using the default value" };
+		case "string-enum":
+			return typeof value === "string" && schema.values.includes(value)
+				? { ok: true, value }
+				: {
+						ok: false,
+						message: `Expected one of: ${schema.values.join(", ")}; using the default value`,
+					};
 		case "boolean":
 			return typeof value === "boolean"
 				? { ok: true, value }

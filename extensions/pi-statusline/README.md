@@ -162,7 +162,7 @@ automatically; rename it to `pi-statusline.json`. If both files exist, `pi-statu
 | `density` | `compact`, `cozy` | Control horizontal padding |
 | `separator` | `none`, `dot`, `bar`, `powerline`, `round` | Separate adjacent segments in one color block |
 | `segments` | Ordered unique segment names and `line_break` | Control visibility, order, and rows |
-| `segmentText` | Per-segment `prefix` and `suffix` | Wrap Pi-owned dynamic values |
+| `segmentText` | Per-segment `prefix` and `suffix`; model truncation fields | Format Pi-owned dynamic values |
 | `extensionStatusIcons` | Raw status key or `namespace:*` to icon string | Customize extension status icons |
 
 All fields are optional in an existing document. Missing fields use defaults. Unknown fields produce a
@@ -178,6 +178,11 @@ A compact customization example:
   "separator": "dot",
   "segments": ["model", "thinking", "cwd", "branch", "context", "cache", "cost"],
   "segmentText": {
+    "model": {
+      "truncationLength": 40,
+      "truncationSymbol": "…",
+      "truncationDirection": "middle"
+    },
     "context": { "prefix": "ctx ", "suffix": "" }
   },
   "extensionStatusIcons": {
@@ -217,6 +222,37 @@ When `palettePreset` is `custom`, `palette` maps segment names to foreground/bac
 
 `segmentText` values must be single-line text without terminal control characters. Use `line_break`
 for another row rather than inserting a newline into a prefix or suffix.
+
+### Model truncation
+
+Long model IDs are truncated out of the box so the balanced footer can retain useful model context:
+
+```json
+{
+  "segmentText": {
+    "model": {
+      "truncationLength": 36,
+      "truncationSymbol": "…",
+      "truncationDirection": "start"
+    }
+  }
+}
+```
+
+`truncationLength` counts model grapheme clusters retained before the symbol. The built-in value is
+`36`; set it to `0` to display the complete ID. The direction names the removed portion:
+
+- `start` retains the suffix and is the default, which is useful for long llama.cpp paths and model
+  variants.
+- `middle` retains both ends.
+- `end` retains the prefix.
+
+Truncation runs after the built-in Claude/GPT shortening rules but before the configured model prefix
+and suffix. It changes display only—the provider model ID is untouched. Terminal control sequences
+in model IDs are removed at render time, and unsafe configured symbols are rejected. An empty
+`truncationSymbol` truncates without a marker. pi-statusline treats model IDs as opaque strings and
+does not parse paths, repositories, GGUF suffixes, or quantization names. At very narrow widths, the
+existing responsive priorities may still omit the model rather than overflow the terminal.
 
 ## 🧩 Advanced layout
 
