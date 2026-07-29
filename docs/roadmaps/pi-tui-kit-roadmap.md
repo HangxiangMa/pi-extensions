@@ -1,208 +1,280 @@
-# Pi TUI Kit Native Composite Patterns Roadmap
+# Pi TUI Kit Roadmap
+
+## Vision
+
+`@narumitw/pi-tui-kit` should give Pi extensions a small, dependable set of declarative interaction
+patterns that feel native to Pi without depending on Pi's private UI implementation. Extensions
+should spend their effort on domain state, persistence, safety, and product language instead of
+rebuilding navigation, selection, search, mode adaptation, and lifecycle handling.
 
 ## Goal
 
-Evolve `@narumitw/pi-tui-kit` with a small set of reusable interaction patterns inspired by Pi's
-non-public composite components, while using only public Pi APIs, preserving existing menu contracts,
-and admitting a new abstraction only when at least two repository consumers can adopt it without
-losing behavior.
+Add only the reusable composite screens that have demonstrated demand from at least two compatible
+repository consumers, using public Pi APIs and preserving existing extension behavior across TUI,
+RPC, cancellation, session replacement, and shutdown.
 
-## Context
+## Objectives
 
-Pi already publicly exports primitives that consumers should use directly: `SelectList`, `Input`,
-`SettingsList`, `DynamicBorder`, `BorderedLoader`, and `ctx.ui.input()`, `select()`, and `confirm()`.
-The kit should not copy those controls.
+- Qualify every proposed abstraction against at least two concrete consumer workflows before adding
+  it to the public API.
+- Deliver a static choice screen as the first candidate, followed by searchable catalog and contextual
+  decision screens only when their qualification gates pass.
+- Complete two behavior-preserving consumer migrations for every screen that becomes public.
+- Provide deterministic TUI and RPC coverage for every admitted screen, including width, Unicode,
+  terminal safety, keybindings, stable identity, cancellation, disposal, and stale-session behavior.
+- Keep private Pi imports at zero and document an API-version decision for every new public screen kind.
 
-The useful references that cannot safely be imported are private composites under Pi's interactive
-implementation, including `ModelSelectorComponent`, `SessionSelectorComponent`, the settings
-`SelectSubmenu`, `TrustSelectorComponent`, `TreeSelectorComponent`, and `LoginDialogComponent`.
-Their package paths and implementation details are not public compatibility contracts.
+## Current State
+
+The kit currently provides four declarative screen kinds:
+
+- `actions` for navigation and domain actions;
+- `detail` for read-only text;
+- `settings` for Pi-style searchable settings with serialized saves and rollback;
+- `multiSelect` for bounded optimistic toggles and bulk actions.
+
+The runtime already owns screen-stack navigation, per-screen cursor memory, TUI/RPC adaptation,
+Back/Close semantics, cancellable busy actions, terminal-safe rendering, and stale-continuation
+checks. Consumers retain domain state, transactional persistence, confirmations, specialized UI, and
+session ownership.
+
+Pi publicly exports primitives that should be used directly: `SelectList`, `Input`, `SettingsList`,
+`DynamicBorder`, `BorderedLoader`, and `ctx.ui.input()`, `select()`, and `confirm()`. The patterns worth
+studying are private composites such as Pi's model, session, settings-submenu, trust, tree, and login
+selectors. Their `dist/*` locations are not public compatibility contracts and must not be imported.
 
 Current repository evidence includes:
 
-- `pi-statusline` owns palette and information-profile pickers with current markers, descriptions,
-  selected details, and optional live preview;
-- `pi-starship` owns a framed action selector with a width-dependent preview;
-- `pi-image-drop` owns contextual input and confirmation dialogs;
-- `pi-file-context` owns an experimental searchable file catalog and multi-mode explorer;
-- `pi-sync`, `pi-btw`, and `pi-usage` retain specialized UIs whose domain behavior should not be
-  generalized accidentally.
+- `pi-statusline` palette and information-profile pickers with current markers, details, and optional
+  preview;
+- `pi-starship` framed action selection with width-dependent preview content;
+- `pi-image-drop` contextual input and decision dialogs;
+- `pi-file-context` experimental searchable file navigation;
+- specialized UIs in `pi-sync`, `pi-btw`, and `pi-usage` that should remain local unless they share a
+  proven contract with another consumer.
 
-The kit currently supports `actions`, `detail`, `settings`, and `multiSelect` screens.
+The primary challenge is avoiding an over-configurable generic list that erases domain ownership or
+adds lifecycle complexity for a single extension.
 
-## Architecture
+## Guiding Principles
 
-- Import Pi runtime APIs only from supported package exports; never import
-  `@earendil-works/pi-coding-agent/dist/*` or copy a private component wholesale.
-- Model reusable behavior declaratively with stable IDs and action IDs. The kit owns rendering,
-  navigation, keybindings, mode adaptation, cancellation, and stale-continuation safety; extensions
-  retain domain state, persistence, confirmations, preview side effects, and recovery policy.
-- Every admitted screen must define TUI and RPC behavior. Print and JSON continue through the
-  existing unsupported-mode contract unless a public deterministic route is explicitly designed.
-- Require two compatible consumers before adding a public abstraction. Migrate consumers in separate
-  focused changes after the library contract lands; do not combine unrelated domain refactors with
-  the kit feature.
-- Treat each new screen kind as a public API change. Decide and document whether
-  `PI_EXTENSION_MENU_API_VERSION` changes before implementation rather than inferring it after release.
-- Apply the same TUI boundary as settings: width-safe output, terminal-control sanitization,
-  callback-provided theme/keybindings, `Focusable` forwarding, stable selection, explicit Back/Close,
-  and disposal/session/shutdown cancellation.
+- **Public Pi APIs only:** never import `@earendil-works/pi-coding-agent/dist/*` or copy a private
+  component wholesale.
+- **Two-consumer gate:** require two compatible workflows before adding an abstraction.
+- **Preserve capability:** migrations must retain preview, persistence, validation, failure recovery,
+  safety, and non-TUI behavior.
+- **Declarative boundary:** expose stable IDs, display data, and action IDs—not TUI instances or
+  renderer callbacks that leak implementation details.
+- **Task-oriented screens:** keep choice, catalog, decision, settings, and multi-select contracts
+  distinct instead of building one universal component.
+- **Mode parity:** define TUI and RPC behavior before implementation; use the existing unsupported-mode
+  route for print and JSON unless a deterministic public behavior is designed.
+- **Lifecycle ownership:** audit user cancellation, component disposal, session replacement, and
+  shutdown independently for every async path.
+- **Safe display boundary:** sanitize labels, metadata, values, keybinding hints, pasted queries, and
+  errors while preserving raw IDs and action payloads.
+- **Bounded delivery:** land one kit capability per focused PR and migrate consumers separately.
 
-## Non-Goals
+## Roadmap Themes
 
-- Do not reproduce Pi's model, session, trust, tree, authentication, or provider domain logic.
-- Do not expose Pi TUI objects through the declarative API to support one specialized preview.
-- Do not replace extension-owned editors, pagers, diff viewers, secret inputs, OAuth flows, or
-  multi-step forms.
-- Do not add a generic abstraction merely to remove a single local `ctx.ui.custom()` call.
-- Do not make all action menus searchable or add live preview side effects by default.
+### Evidence-driven abstraction
+
+Inventory real workflows, identify their common interaction contract, and stop when a candidate needs
+consumer-specific hooks to appear reusable.
+
+### Native-feeling standard screens
+
+Reuse Pi's public primitives and interaction conventions for borders, focus, search, current markers,
+descriptions, hints, and viewport behavior without treating private source as an API.
+
+### Cross-mode and lifecycle correctness
+
+Keep TUI, RPC, cancellation, stale generation, and disposal semantics together rather than adding
+visual components first and runtime behavior later.
+
+### Safe, incremental adoption
+
+Prove each screen through two migrations, retain specialized UIs when they own unique behavior, and
+avoid unrelated domain refactors during adoption.
 
 ## Plan
 
-### Milestone 0 — Qualify each abstraction
+Execute the phases below in order. A phase may be explicitly deferred when its admission criteria are
+not met; deferral is preferable to widening the API speculatively.
 
-- [ ] Create a consumer-compatibility matrix for the candidate flows in `pi-statusline`,
-      `pi-starship`, `pi-image-drop`, `pi-file-context`, `pi-sync`, `pi-btw`, and `pi-usage`; record
-      required states, inputs, side effects, cancellation, RPC behavior, and features that must remain
-      extension-owned, and admit a candidate only when two consumers share one bounded contract.
-- [ ] Audit Pi's installed public exports and private composite references before each admitted
-      feature; verify the proposed implementation can be composed from root-exported APIs without a
-      `dist/*` import or private type dependency.
-- [ ] Define the additive API/versioning decision for each admitted screen in its implementation
-      plan; verify existing four-kind definitions continue compiling unchanged and document any
-      intentional API-version increment.
+## Phases and Milestones
 
-### Milestone 1 — Static choice screen
+### Phase 1: Foundation and Qualification
 
-Model the reusable core of Pi's private theme/thinking/select-submenu pattern without live side
-effects.
+**Milestones:**
 
-MVP contract:
+- Create a consumer-compatibility matrix for `pi-statusline`, `pi-starship`, `pi-image-drop`,
+  `pi-file-context`, `pi-sync`, `pi-btw`, and `pi-usage`, covering inputs, states, side effects,
+  cancellation, RPC behavior, and extension-owned responsibilities.
+- Audit installed Pi exports before each candidate and prove the implementation can use root-exported
+  APIs without private types or `dist/*` imports.
+- Identify two compatible consumers for each admitted pattern; record why rejected or deferred
+  candidates do not meet the shared contract.
+- Decide whether each additive screen changes `PI_EXTENSION_MENU_API_VERSION`, and verify existing
+  four-kind menu definitions remain source compatible.
+- Write a focused implementation plan for each admitted screen before coding.
 
-- stable item ID, label, description, optional selected-item detail lines, disabled state;
-- current item ID and textual current marker;
-- restored initial cursor and bounded viewport;
-- Enter/Space confirmation, Escape Back, `Ctrl+C` Close;
-- one action only after confirmation; no action merely from moving the cursor.
+**Outcome:** A verified contract and two migration candidates for each admitted screen, with
+specialized or unsupported patterns explicitly deferred.
 
-- [ ] Write `docs/plans/<date>_pi-tui-kit-choice-screen-plan.md` from the qualification matrix, naming
-      two migration candidates and explicitly excluding any live preview behavior they cannot preserve;
-      obtain acceptance evidence from the current consumer tests and UI contracts before coding.
-- [ ] Add red model/type tests in `packages/pi-tui-kit/test/menu-model.test.ts` for valid choice items,
-      duplicate/blank IDs, missing actions, current-item fallback, disabled rows, and unchanged existing
-      definitions; verify failures identify the absent choice contract.
-- [ ] Add the declarative choice types and validation in `packages/pi-tui-kit/src/types.ts` and
-      `packages/pi-tui-kit/src/model.ts`; verify package typechecking and model tests pass without
-      widening action, settings, or multi-select semantics.
-- [ ] Implement the choice TUI in `packages/pi-tui-kit/src/screen-components.ts` with Pi-style borders,
-      current marker, selected details, stable cursor, width bounds, terminal sanitization, injected
-      keybindings, and Back/Close behavior; verify focused rendering, Unicode, narrow-width, disabled,
-      focus, cancellation, and disposal tests.
-- [ ] Implement choice navigation and RPC adaptation in `packages/pi-tui-kit/src/runtime.ts`; verify
-      stable raw identity, duplicate display labels, current-item restoration, rejected actions,
-      owner abort, stale generation, and RPC cancellation through deterministic runtime tests.
-- [ ] Document the choice screen and ownership boundary in `packages/pi-tui-kit/README.md`, rebuild the
-      package, and verify `npm run check --workspace @narumitw/pi-tui-kit`, `npm run check`, and
-      `just pack-tui-kit`.
-- [ ] Migrate each qualified choice consumer in its own PR without removing preview, persistence,
-      failure recovery, or non-TUI behavior; verify the extension's focused tests, root gate, package
-      dry run when applicable, and a representative Pi runtime smoke before declaring the abstraction
-      proven.
+---
 
-### Milestone 2 — Searchable catalog screen
+### Phase 2: Static Choice Screen
 
-Model the reusable list/search shell seen in Pi's private model, session, and extension selectors.
-Keep it separate from short action menus.
+The first candidate models the reusable core of Pi's private theme, thinking, and settings-submenu
+selectors without cursor-movement side effects.
 
-MVP contract:
+**Milestones:**
 
-- focus-forwarded search input and fuzzy matching over declared search text;
-- stable ID, label, description, optional badge/metadata, current marker, disabled state;
-- ten-row default viewport with optional bounded override and position indicator;
-- selected-item details, no-match/empty states, cursor restoration, Back/Close;
-- no regex grammar, asynchronous refresh, scope tabs, or domain-specific sorting in the MVP.
+- Define stable item IDs, labels, descriptions, optional selected-item details, disabled state,
+  current item ID, and a textual current marker.
+- Add restored initial selection, bounded viewport, Enter/Space confirmation, Escape Back, and
+  `Ctrl+C` Close.
+- Trigger one domain action only after confirmation; keep live preview and preview rollback
+  extension-owned.
+- Add model validation and deterministic TUI/RPC tests for duplicate labels, current-item fallback,
+  raw identity, width, Unicode, sanitization, custom keybindings, disabled rows, cancellation,
+  disposal, and stale sessions.
+- Document the screen and ownership boundary, build the package, run repository checks, and inspect
+  the package dry run.
+- Migrate both qualified consumers in separate PRs without removing existing capability.
 
-- [ ] Admit the catalog only after the compatibility matrix identifies two active consumers whose
-      search, selection, and RPC needs fit the MVP; otherwise mark the milestone deferred with the
-      missing shared requirement rather than broadening the API speculatively.
-- [ ] Write `docs/plans/<date>_pi-tui-kit-catalog-screen-plan.md` with raw/display/search identity,
-      filtering order, cursor behavior, mode adaptation, and lifecycle acceptance cases; verify the
-      proposal against both consumer flows before implementation.
-- [ ] Add red model, component, and runtime tests for catalog validation, bracketed-paste sanitization,
-      CJK/emoji widths, custom keybindings, filtering to zero/one/many rows, duplicate labels, current
-      markers, disabled activation, resize/scroll anchoring, RPC identity, cancellation, disposal, and
-      session replacement.
-- [ ] Implement the declarative catalog contract across `types.ts`, `model.ts`,
-      `screen-components.ts`, and `runtime.ts` using public `Input`/fuzzy/width primitives; verify the
-      focused suites and existing screen behavior remain green.
-- [ ] Document, build, pack, and migrate both qualifying consumers in separate PRs; verify each
-      migration preserves domain sorting, actions, failure states, and any specialized preview outside
-      the kit before running the root gate and Pi runtime smoke.
+**Outcome:** A proven declarative choice screen with two behavior-preserving adopters and no
+consumer-specific preview hook.
 
-### Milestone 3 — Contextual decision screen
+---
 
-Model the reusable presentation contract of Pi's private trust selector only when plain
-`ctx.ui.confirm()` or `ctx.ui.select()` cannot preserve required context.
+### Phase 3: Searchable Catalog and Contextual Decision
 
-MVP contract:
+These screens proceed independently; either may be deferred if it lacks two compatible consumers.
 
-- title plus exact subject/context lines;
-- separately labeled saved and current state;
-- choices with consequences, current marker, disabled explanation, and safe initial selection;
-- explicit Apply/Save, Back, and Close semantics;
-- domain confirmation wording and mutation remain consumer-owned.
+**Searchable catalog milestones:**
 
-- [ ] Admit the decision screen only if two active consumers require the same contextual state and
-      choice presentation beyond public Pi dialogs; otherwise continue using extension-owned dialogs.
-- [ ] Write `docs/plans/<date>_pi-tui-kit-decision-screen-plan.md` with the two exact workflows,
-      safety/default rules, cancellation semantics, and RPC representation; verify destructive or
-      externally visible effects remain outside the renderer.
-- [ ] Add red validation, rendering, action, cancellation, stale-session, disabled-state, and RPC tests,
-      then implement the smallest declarative decision contract across the kit modules; verify no
-      decision is emitted before explicit confirmation and cancellation leaves domain state unchanged.
-- [ ] Document, build, pack, and migrate the qualifying consumers separately; verify exact summaries,
-      safe defaults, failure recovery, root checks, and representative Pi runtime smokes.
+- Define focus-forwarded search, fuzzy matching over declared search text, stable identity, optional
+  badge/metadata, current marker, disabled state, selected details, and bounded viewport.
+- Cover empty, no-match, singleton, large, duplicate-label, CJK/emoji, resize, scroll-anchor,
+  bracketed-paste, custom-keybinding, RPC, cancellation, disposal, and replacement cases.
+- Keep regex grammar, asynchronous refresh, scope tabs, and domain sorting out of the first contract.
+- Migrate two qualified catalog consumers while retaining specialized sorting, previews, and actions
+  outside the kit.
 
-### Milestone 4 — Deferred patterns
+**Contextual decision milestones:**
 
-- [ ] Re-evaluate a snapshot-first asynchronous catalog only after two consumers need cached-first
-      rendering plus background refresh; require bounded timeout, abort on cancel/dispose/session
-      replacement/shutdown, post-`await` generation checks, stale-result rejection, and observable
-      cached/error states before admitting it.
-- [ ] Re-evaluate a generic tree browser only after two consumers share hierarchy, expand/collapse,
-      active-path, scroll-anchor, and filter semantics; keep Pi session-tree logic and extension-specific
-      node actions out of the kit.
-- [ ] Keep login/OAuth wizards, secret inputs, editors, pagers, diffs, and width-dependent live previews
-      permanently extension-owned unless a separate approved architecture establishes a safe public
-      contract and multiple concrete consumers.
+- Admit the screen only when public `ctx.ui.confirm()` or `ctx.ui.select()` cannot preserve the
+  context required by two workflows.
+- Define exact subject/context lines, separately labeled saved and current state, consequences,
+  current marker, disabled explanation, safe initial selection, and explicit Apply/Back/Close.
+- Keep domain confirmation wording, authorization, validation, and mutation extension-owned.
+- Prove no decision is emitted before confirmation and cancellation leaves domain state unchanged in
+  both TUI and RPC modes.
+- Migrate two qualified consumers with exact summaries, safe defaults, and failure recovery intact.
 
-## Risks
+**Outcome:** Qualified large-list and decision workflows use standard kit screens; candidates without
+shared contracts remain extension-owned.
 
-- **Private-UI drift:** visual copying can age quickly. Preserve interaction contracts and public theme
-  tokens rather than private class structure or exact internal strings.
-- **API sprawl:** catalog, choice, and decision can collapse into an over-configurable generic list.
-  Keep separate task-oriented kinds and reject one-consumer hooks.
-- **Lost capability during migration:** local UIs may own preview rollback, dynamic width, or
-  persistence. Compare behavior before deleting them and leave specialized flows local when needed.
-- **RPC mismatch:** rich TUI metadata may flatten poorly. Define stable identity and observable Back,
-  disabled, and confirmation behavior before shipping each screen.
-- **Lifecycle regression:** search, preview, or refresh work can outlive the component. Audit user
-  cancellation, disposal, replacement, and shutdown independently for every async addition.
-- **Display trust:** labels, metadata, values, keybinding hints, pasted queries, and errors can contain
-  terminal controls. Sanitize at the final display boundary while preserving raw IDs and payloads.
+---
+
+### Phase 4: Evolution and Deferred Patterns
+
+**Milestones:**
+
+- Re-evaluate snapshot-first asynchronous catalogs only after two consumers need cached-first
+  rendering plus background refresh, bounded timeout, cancellation, stale-result rejection, and
+  observable cached/error states.
+- Re-evaluate a generic tree browser only after two consumers share hierarchy, expand/collapse,
+  active-path, scroll-anchor, and filtering semantics.
+- Keep Pi session-tree domain logic out of a future generic tree contract.
+- Keep login/OAuth wizards, secret inputs, editors, pagers, diffs, and width-dependent live previews
+  extension-owned unless a separate approved architecture establishes a safe contract and multiple
+  consumers.
+- Review shipped screens against newer public Pi exports and replace kit-owned composites when Pi
+  eventually exposes an equivalent stable public component.
+
+**Outcome:** The kit evolves only where repeated evidence justifies new lifecycle and API surface,
+and retires local abstractions when a stable public Pi replacement becomes available.
+
+## Technical Health
+
+- Keep TypeScript strict, NodeNext-compatible, and built as published JavaScript plus declarations.
+- Keep authored source files below the repository's review threshold or split them along clear screen,
+  rendering, and runtime responsibilities when cohesion improves.
+- Maintain deterministic model, component, runtime, and README usage tests for every public contract.
+- Run `npm run check --workspace @narumitw/pi-tui-kit`, the root `npm run check`, and
+  `just pack-tui-kit` for each kit feature.
+- Use representative Pi runtime smokes for new TUI behavior and record any path that cannot be
+  exercised non-interactively.
+- Keep terminal sanitization at the final display boundary and preserve raw domain identities only in
+  non-rendered action payloads.
+- Avoid retained tasks or state without explicit cancellation, disposal, generation checks, and
+  bounded cleanup.
+
+## Risks and Dependencies
+
+- **Private-UI drift:** Pi's private visuals and strings may change. Depend on public primitives and
+  preserve interaction contracts rather than source structure.
+- **API sprawl:** consumer-specific hooks can turn the kit into a generic UI framework. Enforce the
+  qualification gate and task-oriented screen boundaries.
+- **Lost capability:** local UIs may own preview rollback, dynamic width, or persistence. Compare
+  behavior before migration and retain specialized implementations where necessary.
+- **RPC flattening:** rich TUI metadata may not map clearly to dialogs. Define stable identity,
+  disabled behavior, Back, and confirmation semantics before shipping.
+- **Lifecycle regressions:** search, preview, or refresh work may outlive its owner. Require controlled
+  cancellation tests for every async addition.
+- **Display trust:** terminal controls may enter through labels, keybindings, errors, or paste. Keep
+  sanitization and width checks mandatory.
+- **Pi compatibility:** new public exports may make a kit component redundant; review dependency
+  updates before extending a local replacement.
+
+## Success Metrics
+
+- Zero imports from Pi private `dist/*` paths in package source.
+- At least two completed consumer migrations for every new public screen kind.
+- All existing menu definitions continue typechecking unless an approved API-version change includes
+  migration evidence.
+- Every admitted screen has passing TUI and RPC tests for its documented states and lifecycle paths.
+- Every kit feature passes focused tests, the root CI-equivalent gate, package dry run, and a
+  representative runtime smoke.
+- No migration removes documented preview, persistence, safety, recovery, or non-TUI capability.
+- Deferred candidates record the missing shared requirement instead of expanding the API without
+  evidence.
+
+## Non-Goals
+
+- Reproducing Pi's model, session, trust, tree, authentication, or provider domain logic.
+- Copying public controls that consumers can import directly.
+- Exposing Pi TUI objects through the declarative API.
+- Replacing extension-owned editors, pagers, diff viewers, secret inputs, OAuth flows, or multi-step
+  forms.
+- Adding a generic abstraction solely to eliminate one `ctx.ui.custom()` call.
+- Making all action menus searchable or enabling live preview side effects by default.
+- Committing to delivery dates or speculative release versions before qualification.
+
+## Decisions and Changes
+
+| Date | Decision or change | Rationale |
+| --- | --- | --- |
+| 2026-07-30 | Store the roadmap under `docs/roadmaps/`. | Roadmaps describe long-term product direction; executable feature plans remain under `docs/plans/`. |
+| 2026-07-30 | Use private Pi composites only as interaction references. | Their implementation paths are not public compatibility contracts. |
+| 2026-07-30 | Require two compatible consumers before adding a screen. | Prevents one-off hooks and unsupported abstraction growth. |
+| 2026-07-30 | Prioritize a static choice screen. | It is bounded, broadly recognizable, and can avoid live-preview lifecycle complexity. |
+| 2026-07-30 | Keep async catalogs, trees, login flows, and live previews deferred. | These patterns require stronger shared evidence or remain domain-specific. |
 
 ## Completion Checklist
 
-- [ ] Every shipped composite passed the two-consumer qualification gate and has two completed,
-      behavior-preserving migrations or an explicitly deferred milestone with evidence.
-- [ ] No package source imports Pi private `dist/*` modules or exposes TUI implementation objects in
-      the public declarative contract.
+- [ ] Every shipped composite passed the two-consumer qualification gate and completed two
+      behavior-preserving migrations, or its phase is explicitly deferred with evidence.
+- [ ] Package source contains no Pi private `dist/*` imports or public contracts exposing TUI objects.
 - [ ] Existing action, detail, settings, and multi-select consumers remain source compatible unless an
-      explicitly approved API-version change documents migration.
-- [ ] Each admitted screen has deterministic TUI and RPC coverage for identity, width, Unicode,
+      approved API-version change documents migration.
+- [ ] Every admitted screen has deterministic TUI and RPC coverage for identity, width, Unicode,
       terminal sanitization, keybindings, Back/Close, disabled state, failures, cancellation,
-      disposal, session replacement, and shutdown where applicable.
-- [ ] Each feature and consumer migration passed focused tests, `npm run check`, applicable package
-      dry runs, and a representative Pi runtime smoke with unverified paths recorded.
-- [ ] README ownership guidance clearly distinguishes public Pi primitives to reuse, private Pi
-      composites used only as references, kit-owned standard behavior, and extension-owned domain UI.
+      disposal, replacement, and shutdown where applicable.
+- [ ] Each feature and migration passed focused tests, root checks, package dry runs, and a
+      representative Pi runtime smoke with unverified paths recorded.
+- [ ] README ownership guidance distinguishes public Pi primitives to reuse, private composites used
+      only as references, kit-owned standard behavior, and extension-owned domain UI.
