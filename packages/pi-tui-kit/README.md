@@ -96,11 +96,13 @@ remain pure projections of current extension state.
 
 ## 🖥️ Standard screens
 
-`defineMenu()` supports four standard screen kinds:
+`defineMenu()` supports five standard screen kinds:
 
 - **`actions`** — navigation targets, domain actions, close rows, and optional cancellable busy
   labels.
 - **`detail`** — read-only wrapped text with Back or Close behavior.
+- **`choice`** — one confirmed value from a static list, with separate current and initial items,
+  selected details, disabled explanations, and a bounded viewport.
 - **`settings`** — Pi-style searchable, aligned settings rows with immediate value changes,
   serialized saves, and rollback when an action rejects.
 - **`multiSelect`** — optimistic toggles with stable cursor restoration, serialized saves, rollback,
@@ -109,6 +111,43 @@ remain pure projections of current extension state.
 All standard TUI screens use Pi's injected keybindings, sanitize display text, rebuild themed
 content after invalidation, and bound rendered output to the supplied terminal width. Escape follows
 the screen's Back/Close hint; `Ctrl+C` closes the menu.
+
+Choice screens are for bounded static alternatives rather than actions that run while the cursor
+moves. `currentItemId` adds the textual current marker; `initialItemId` controls the first cursor when
+there is no remembered selection. They remain separate so a custom or legacy current value can focus
+a safe fallback. A confirmed row invokes the screen action with its raw `itemId`; moving the cursor
+only changes selected details. Rejected or thrown actions retain the selection. Disabled rows stay
+focusable for their explanation but never invoke the action. RPC flattens choice rows to unique dialog
+labels while preserving raw identity.
+
+```ts
+const profileScreen = {
+  kind: "choice" as const,
+  title: "Information profile",
+  lines: ["Current profile: custom"],
+  items: [
+    {
+      id: "minimal",
+      label: "Minimal",
+      description: "Four segments",
+      details: ["Segments: model · cwd · branch · context"],
+    },
+    {
+      id: "balanced",
+      label: "Balanced",
+      description: "Recommended",
+      details: ["Segments: model · thinking · cwd · branch · tools · context · time"],
+    },
+  ],
+  action: "setProfile" as const,
+  currentItemId: "custom", // May be absent from items; no false current marker is shown.
+  initialItemId: "balanced",
+  viewportSize: 8,
+};
+```
+
+Keep live previews, preview rollback, persistence, and confirmation policy in the consuming extension;
+a specialized UI remains appropriate when cursor movement itself has side effects.
 
 TUI settings screens retain the extension title and supporting context above Pi's familiar search
 field, aligned label/value columns, ten-row viewport, position indicator, selected-row description,
@@ -202,6 +241,11 @@ shutdown. The kit does not create lifecycle ownership for the extension.
 
 ## 🧩 Ownership boundary
 
+Reuse Pi primitives and domain components from their package root whenever their public contract fits.
+Use non-exported Pi composites only as interaction references; never deep-import Pi's `dist/*`
+implementation paths. The kit owns a composite only when public controls do not provide the complete
+cross-mode and lifecycle contract shared by multiple extensions.
+
 The library owns:
 
 - width-safe standard rendering and injected keybindings;
@@ -227,8 +271,8 @@ Keep specialized UI local rather than adding package hooks that expose Pi TUI in
 - `runMenu()` — runs the definition in the current Pi mode.
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.
 - `createMenuNavigator()` — lower-level stack and selection state helper.
-- exported screen, action, transition, runtime option, and result types.
-- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`1`).
+- exported screen, item, action, transition, runtime option, and result types.
+- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`2`).
 
 ## 🗂️ Package layout
 

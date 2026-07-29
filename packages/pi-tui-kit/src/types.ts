@@ -62,6 +62,23 @@ export interface DetailScreen {
 	hint?: "back" | "close";
 }
 
+export interface MenuChoiceItem extends MenuItemBase {
+	details?: readonly string[];
+	disabledReason?: string;
+}
+
+export interface ChoiceScreen<ActionId extends string> {
+	kind: "choice";
+	title: string;
+	lines?: readonly string[];
+	items: readonly MenuChoiceItem[];
+	action: ActionId;
+	currentItemId?: string;
+	initialItemId?: string;
+	viewportSize?: number;
+	hint?: "back" | "close";
+}
+
 export interface MenuSettingItem<ActionId extends string> extends MenuItemBase {
 	currentValue: string;
 	values?: readonly string[];
@@ -95,6 +112,7 @@ export interface MultiSelectScreen<ScreenId extends string, ActionId extends str
 export type MenuScreen<ScreenId extends string, ActionId extends string> =
 	| ActionsScreen<ScreenId, ActionId>
 	| DetailScreen
+	| ChoiceScreen<ActionId>
 	| SettingsScreen<ActionId>
 	| MultiSelectScreen<ScreenId, ActionId>;
 

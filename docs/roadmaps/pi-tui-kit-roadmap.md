@@ -26,10 +26,11 @@ RPC, cancellation, session replacement, and shutdown.
 
 ## Current State
 
-The kit currently provides four declarative screen kinds:
+The kit currently provides five declarative screen kinds:
 
 - `actions` for navigation and domain actions;
 - `detail` for read-only text;
+- `choice` for confirmed static alternatives with current/initial state and selected details;
 - `settings` for Pi-style searchable settings with serialized saves and rollback;
 - `multiSelect` for bounded optimistic toggles and bulk actions.
 
@@ -39,9 +40,10 @@ checks. Consumers retain domain state, transactional persistence, confirmations,
 session ownership.
 
 Pi publicly exports primitives that should be used directly: `SelectList`, `Input`, `SettingsList`,
-`DynamicBorder`, `BorderedLoader`, and `ctx.ui.input()`, `select()`, and `confirm()`. The patterns worth
-studying are private composites such as Pi's model, session, settings-submenu, trust, tree, and login
-selectors. Their `dist/*` locations are not public compatibility contracts and must not be imported.
+`DynamicBorder`, `BorderedLoader`, and `ctx.ui.input()`, `select()`, and `confirm()`. Pi also root-exports
+several domain-coupled composites, including its theme, thinking, model, session, tree, and login
+selectors; use those directly only when their domain contract fits. Generic patterns such as the
+settings selector's internal `SelectSubmenu` are not exported. Never deep-import a `dist/*` path.
 
 Current repository evidence includes:
 
@@ -50,6 +52,7 @@ Current repository evidence includes:
 - `pi-starship` framed action selection with width-dependent preview content;
 - `pi-image-drop` contextual input and decision dialogs;
 - `pi-file-context` experimental searchable file navigation;
+- `pi-worktree` worktree selection with display-derived identity mapping;
 - specialized UIs in `pi-sync`, `pi-btw`, and `pi-usage` that should remain local unless they share a
   proven contract with another consumer.
 
@@ -58,8 +61,8 @@ adds lifecycle complexity for a single extension.
 
 ## Guiding Principles
 
-- **Public Pi APIs only:** never import `@earendil-works/pi-coding-agent/dist/*` or copy a private
-  component wholesale.
+- **Public Pi APIs only:** import root-exported components directly when their domain contract fits;
+  never deep-import `@earendil-works/pi-coding-agent/dist/*` or copy an internal component wholesale.
 - **Two-consumer gate:** require two compatible workflows before adding an abstraction.
 - **Preserve capability:** migrations must retain preview, persistence, validation, failure recovery,
   safety, and non-TUI behavior.
@@ -73,7 +76,8 @@ adds lifecycle complexity for a single extension.
   shutdown independently for every async path.
 - **Safe display boundary:** sanitize labels, metadata, values, keybinding hints, pasted queries, and
   errors while preserving raw IDs and action payloads.
-- **Bounded delivery:** land one kit capability per focused PR and migrate consumers separately.
+- **Bounded delivery:** land one kit capability per focused rollout; keep unrelated consumer and
+  domain changes separate.
 
 ## Roadmap Themes
 
@@ -142,7 +146,7 @@ selectors without cursor-movement side effects.
   disposal, and stale sessions.
 - Document the screen and ownership boundary, build the package, run repository checks, and inspect
   the package dry run.
-- Migrate both qualified consumers in separate PRs without removing existing capability.
+- Migrate both qualified consumers in the focused rollout without removing existing capability.
 
 **Outcome:** A proven declarative choice screen with two behavior-preserving adopters and no
 consumer-specific preview hook.
@@ -259,9 +263,9 @@ and retires local abstractions when a stable public Pi replacement becomes avail
 | Date | Decision or change | Rationale |
 | --- | --- | --- |
 | 2026-07-30 | Store the roadmap under `docs/roadmaps/`. | Roadmaps describe long-term product direction; executable feature plans remain under `docs/plans/`. |
-| 2026-07-30 | Use private Pi composites only as interaction references. | Their implementation paths are not public compatibility contracts. |
+| 2026-07-30 | Reuse root-exported Pi composites only when their domain contract fits; use non-exported composites only as interaction references. | Deep implementation paths are not compatibility contracts, while public exports should not be copied. |
 | 2026-07-30 | Require two compatible consumers before adding a screen. | Prevents one-off hooks and unsupported abstraction growth. |
-| 2026-07-30 | Prioritize a static choice screen. | It is bounded, broadly recognizable, and can avoid live-preview lifecycle complexity. |
+| 2026-07-30 | Deliver the static choice screen with `pi-statusline` information profiles and `pi-worktree` selection in one focused rollout. | Both need confirmed static selection with raw identity and no cursor-movement side effect; an atomic proof rollout keeps preview, decision, and editor-preserving flows specialized. |
 | 2026-07-30 | Keep async catalogs, trees, login flows, and live previews deferred. | These patterns require stronger shared evidence or remain domain-specific. |
 
 ## Completion Checklist
@@ -276,5 +280,6 @@ and retires local abstractions when a stable public Pi replacement becomes avail
       disposal, replacement, and shutdown where applicable.
 - [ ] Each feature and migration passed focused tests, root checks, package dry runs, and a
       representative Pi runtime smoke with unverified paths recorded.
-- [ ] README ownership guidance distinguishes public Pi primitives to reuse, private composites used
-      only as references, kit-owned standard behavior, and extension-owned domain UI.
+- [ ] README ownership guidance distinguishes public Pi primitives and domain composites to reuse,
+      non-exported composites used only as references, kit-owned standard behavior, and
+      extension-owned domain UI.

@@ -7,7 +7,11 @@ import { join } from "node:path";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import {
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+} from "../../../test/support.js";
 import { registerStatuslineCommand } from "../src/commands.js";
 import {
 	DEFAULT_STATUSLINE_DOCUMENT,
@@ -33,6 +37,12 @@ function selectCustomLayout(title: string, choices: string[]): string | undefine
 	if (screenTitle(title) === "pi-statusline — Advanced") {
 		return choices.find((choice) => choice.startsWith("Custom layout ("));
 	}
+	return undefined;
+}
+
+function selectInformationProfile(title: string, choices: string[]): string | undefined {
+	if (screenTitle(title) === "pi-statusline") return choices[1];
+	if (title.includes("Information level")) return choices[0];
 	return undefined;
 }
 
@@ -104,6 +114,43 @@ test("/statusline keeps compatibility subcommands and an argument-free interacti
 	assert.match(context.notifications.at(-1)?.message ?? "", /unknown.*palette/iu);
 });
 
+test("information profiles use the standard choice screen with current state and details", async () => {
+	const mock = createMockPi();
+	registerStatuslineCommand(mock.pi, {
+		settingsPath: "/tmp/missing-pi-statusline-choice.json",
+		getLoaded: () => loadStatuslineSettings("/tmp/missing-pi-statusline-choice.json"),
+		apply() {},
+	});
+	let customCalls = 0;
+	let informationWasStandard = false;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			customCalls += 1;
+			const harness = createCustomSelectorHarness(factory, 80);
+			if (customCalls === 1) {
+				assert.equal(harness.isPiTuiKitScreen, true);
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
+			} else {
+				informationWasStandard = harness.isPiTuiKitScreen;
+				if (informationWasStandard) {
+					const rendered = harness.render().join("\n");
+					assert.match(rendered, /Balanced.*✓ current/);
+					assert.match(rendered, /Segments:/);
+				}
+				harness.handleInput("tui.select.cancel");
+			}
+			return harness.result;
+		},
+	});
+
+	await mock.commands.get("statusline")?.handler("", context.ctx);
+	assert.equal(customCalls, 2);
+	assert.equal(informationWasStandard, true);
+});
+
 test("fresh explicit statusline controls seed their first save without passive creation", async (t) => {
 	const scenarios = [
 		{
@@ -114,8 +161,7 @@ test("fresh explicit statusline controls seed their first save without passive c
 		},
 		{
 			name: "information",
-			select: (title: string, choices: string[]) =>
-				screenTitle(title) === "pi-statusline" ? choices[1] : undefined,
+			select: selectInformationProfile,
 			inputs: ["\r"],
 		},
 		{
@@ -180,8 +226,13 @@ test("failed first-run statusline application restores the missing file", async 
 				});
 				const context = createMockContext({
 					mode: "tui",
-					select: (title: string, choices: string[]) =>
-						screenTitle(title) === "pi-statusline" ? choices[scenario.menuIndex] : undefined,
+					select: (title: string, choices: string[]) => {
+						if (screenTitle(title) === "pi-statusline") return choices[scenario.menuIndex];
+						if (scenario.name === "information" && title.includes("Information level")) {
+							return choices[0];
+						}
+						return undefined;
+					},
 					custom: customPalettePicker(["\r"]),
 				});
 
@@ -248,8 +299,7 @@ test("failed updates from legacy statusline settings remove the new canonical fi
 		},
 		{
 			name: "information",
-			select: (title: string, choices: string[]) =>
-				screenTitle(title) === "pi-statusline" ? choices[1] : undefined,
+			select: selectInformationProfile,
 			inputs: ["\r"],
 		},
 		{

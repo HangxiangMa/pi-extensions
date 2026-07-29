@@ -4,10 +4,12 @@ export { type RunMenuOptions, type RunMenuResult, runMenu } from "./runtime.js";
 export type {
 	ActionMenuItem,
 	ActionsScreen,
+	ChoiceScreen,
 	DetailScreen,
 	MenuActionContext,
 	MenuActionHandler,
 	MenuActionResult,
+	MenuChoiceItem,
 	MenuContext,
 	MenuDefinition,
 	MenuMultiSelectItem,
@@ -20,4 +22,4 @@ export type {
 	SettingsScreen,
 } from "./types.js";
 
-export const PI_EXTENSION_MENU_API_VERSION = 1;
+export const PI_EXTENSION_MENU_API_VERSION = 2;

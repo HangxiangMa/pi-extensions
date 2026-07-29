@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import {
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+} from "../../../test/support.js";
 import { createWorktreeSettingsRuntime, type WorktreeSettingsRuntime } from "../src/settings.js";
 import worktreeExtension from "../src/worktree.js";
 
@@ -927,15 +931,28 @@ test("switch choices use unique ordinals when sanitized worktree labels collide"
 		return result(`${main}\n`);
 	};
 	worktreeExtension(mock.pi);
-	let selectCount = 0;
+	let customCalls = 0;
 	let switchedCwd = "";
 	const context = createMockContext({
 		cwd: main,
 		hasUI: true,
 		mode: "tui",
 		sessionManager: { getSessionFile: () => undefined, getEntries: () => [] },
-		select: async (_title: string, items: string[]) =>
-			selectCount++ === 0 ? "Switch worktree" : items[1],
+		custom: async (factory: unknown) => {
+			customCalls += 1;
+			const harness = createCustomSelectorHarness(factory, 80);
+			assert.equal(harness.isPiTuiKitScreen, true);
+			if (customCalls === 1) {
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
+			} else {
+				assert.match(harness.render().join("\n"), /1\..*wt-.*same/);
+				assert.match(harness.render().join("\n"), /2\..*wt-same/);
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
+			}
+			return harness.result;
+		},
 		switchSession: async (
 			path: string,
 			options: { withSession?: (ctx: unknown) => Promise<void> },
@@ -948,6 +965,7 @@ test("switch choices use unique ordinals when sanitized worktree labels collide"
 	});
 	try {
 		await mock.commands.get("worktree")?.handler("", context.ctx);
+		assert.equal(customCalls, 2);
 		assert.equal(switchedCwd, second);
 	} finally {
 		rmSync(root, { recursive: true, force: true });

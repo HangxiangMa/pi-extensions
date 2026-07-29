@@ -115,8 +115,10 @@ export function registerWorktreeCommand(
 					},
 					actions: {
 						add: async () => runFlow(() => addFlow(pi, ctx, records, root.effectiveRoot)),
-						switch: async () => runFlow(() => switchFlow(pi, ctx, records, currentPath)),
-						remove: async () => runFlow(() => removeFlow(pi, ctx, records, currentPath)),
+						switch: async ({ signal }) =>
+							runFlow(() => switchFlow(pi, ctx, records, currentPath, signal)),
+						remove: async ({ signal }) =>
+							runFlow(() => removeFlow(pi, ctx, records, currentPath, signal)),
 						prune: async () => runFlow(() => pruneFlow(pi, ctx, records)),
 						configure: async () => runFlow(() => configureRootFlow(ctx, settings)),
 					},
@@ -273,6 +275,7 @@ async function switchFlow(
 	ctx: ExtensionCommandContext,
 	records: readonly WorktreeRecord[],
 	currentPath: string,
+	signal?: AbortSignal,
 ): Promise<void> {
 	const candidates = records.filter(
 		(record) =>
@@ -281,7 +284,7 @@ async function switchFlow(
 			existsSync(record.path) &&
 			!pathsEqual(record.path, currentPath),
 	);
-	const selected = await selectWorktree(ctx, "Switch to worktree", candidates, currentPath);
+	const selected = await selectWorktree(ctx, "Switch to worktree", candidates, currentPath, signal);
 	if (!selected) return;
 	const latest = await revalidateWorktreeIdentity(pi, ctx, selected);
 	if (
@@ -300,11 +303,18 @@ async function removeFlow(
 	ctx: ExtensionCommandContext,
 	records: readonly WorktreeRecord[],
 	currentPath: string,
+	signal?: AbortSignal,
 ): Promise<void> {
 	const candidates = records.filter(
 		(record) => !record.isMain && !record.bare && !pathsEqual(record.path, currentPath),
 	);
-	const selected = await selectWorktree(ctx, "Remove linked worktree", candidates, currentPath);
+	const selected = await selectWorktree(
+		ctx,
+		"Remove linked worktree",
+		candidates,
+		currentPath,
+		signal,
+	);
 	if (!selected) return;
 	if (selected.lockedReason !== undefined) {
 		throw new Error(
@@ -630,17 +640,40 @@ async function selectWorktree(
 	title: string,
 	records: readonly WorktreeRecord[],
 	currentPath: string,
+	signal?: AbortSignal,
 ): Promise<WorktreeRecord | undefined> {
 	if (records.length === 0) {
 		ctx.ui.notify("No eligible worktrees are available for this action.", "info");
 		return undefined;
 	}
-	const labels = records.map(
-		(record, index) => `${index + 1}. ${formatWorktree(record, currentPath)}`,
-	);
-	const selected = await ctx.ui.select(title, labels);
-	const index = selected === undefined ? -1 : labels.indexOf(selected);
-	return index < 0 ? undefined : records[index];
+	let selected: WorktreeRecord | undefined;
+	const menu = defineMenu<undefined, "worktrees", "choose", ExtensionCommandContext>({
+		start: "worktrees",
+		screens: {
+			worktrees: () => ({
+				kind: "choice",
+				title,
+				items: records.map((record, index) => ({
+					id: record.path,
+					label: `${index + 1}. ${formatWorktree(record, currentPath)}`,
+				})),
+				action: "choose",
+				hint: "close",
+			}),
+		},
+		actions: {
+			choose: async ({ itemId }) => {
+				selected = records.find((record) => record.path === itemId);
+				return selected ? { kind: "close" } : { kind: "rejected" };
+			},
+		},
+	});
+	await runMenu(ctx, menu, {
+		getState: () => undefined,
+		signal,
+		isCurrent: () => !signal?.aborted,
+	});
+	return selected;
 }
 
 function safeNotify(

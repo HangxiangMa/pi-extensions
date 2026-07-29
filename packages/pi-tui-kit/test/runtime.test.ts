@@ -184,6 +184,240 @@ test("RPC uses dialog adaptation without custom TUI and print mode delegates uns
 	assert.equal(unsupportedMode, "tui");
 });
 
+test("choice TUI prefers initial over current and invokes the confirmed raw item id", async () => {
+	const invoked: string[] = [];
+	let customCalls = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			customCalls += 1;
+			assert.equal(customCalls, 1);
+			const harness = createCustomSelectorHarness(factory, 80);
+			const rendered = harness.render().join("\n");
+			assert.match(rendered, /Safe.*✓ current/);
+			assert.match(rendered, /→ Balanced/);
+			harness.handleInput(" ");
+			return harness.result;
+		},
+	});
+	const definition = defineMenu<undefined, "profile", "choose">({
+		start: "profile",
+		screens: {
+			profile: () => ({
+				kind: "choice",
+				title: "Profile",
+				items: [
+					{ id: "safe", label: "Safe" },
+					{ id: "balanced", label: "Balanced", details: ["Recommended"] },
+				],
+				action: "choose",
+				currentItemId: "safe",
+				initialItemId: "balanced",
+			}),
+		},
+		actions: {
+			choose: async ({ itemId }) => {
+				invoked.push(itemId);
+				return { kind: "close" };
+			},
+		},
+	});
+
+	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
+		kind: "closed",
+	});
+	assert.deepEqual(invoked, ["balanced"]);
+});
+
+test("choice TUI falls back from a missing initial id to the current item", async () => {
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 80);
+			assert.match(harness.render().join("\n"), /→ Safe.*✓ current/);
+			harness.handleInput("\u0003");
+			return harness.result;
+		},
+	});
+	const definition = defineMenu<undefined, "profile", "choose">({
+		start: "profile",
+		screens: {
+			profile: () => ({
+				kind: "choice",
+				title: "Profile",
+				items: [
+					{ id: "balanced", label: "Balanced" },
+					{ id: "safe", label: "Safe" },
+				],
+				action: "choose",
+				currentItemId: "safe",
+				initialItemId: "missing",
+			}),
+		},
+		actions: { choose: async () => ({ kind: "close" }) },
+	});
+
+	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
+		kind: "closed",
+	});
+});
+
+test("choice rejection restores remembered selection and falls back when that item disappears", async () => {
+	let includeFast = true;
+	let customCalls = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			customCalls += 1;
+			const harness = createCustomSelectorHarness(factory, 80);
+			if (customCalls === 1) {
+				assert.match(harness.render().join("\n"), /→ Balanced/);
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
+			} else {
+				assert.match(harness.render().join("\n"), /→ Balanced/);
+				assert.doesNotMatch(harness.render().join("\n"), /Fast/);
+				harness.handleInput("\u0003");
+			}
+			return harness.result;
+		},
+	});
+	const definition = defineMenu<undefined, "profile", "choose">({
+		start: "profile",
+		screens: {
+			profile: () => ({
+				kind: "choice",
+				title: "Profile",
+				items: [
+					{ id: "safe", label: "Safe" },
+					{ id: "balanced", label: "Balanced" },
+					...(includeFast ? [{ id: "fast", label: "Fast" }] : []),
+				],
+				action: "choose",
+				currentItemId: "safe",
+				initialItemId: "balanced",
+			}),
+		},
+		actions: {
+			choose: async ({ itemId }) => {
+				assert.equal(itemId, "fast");
+				includeFast = false;
+				return { kind: "rejected" };
+			},
+		},
+	});
+
+	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
+		kind: "closed",
+	});
+	assert.equal(customCalls, 2);
+});
+
+test("choice actions receive owner abort and drain before stale exit", async () => {
+	const owner = new AbortController();
+	let reportStarted: (() => void) | undefined;
+	let observedAbort = false;
+	const started = new Promise<void>((resolve) => {
+		reportStarted = resolve;
+	});
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) =>
+			driveCustomSelector(factory, ["tui.select.confirm"], 40).result,
+	});
+	const definition = defineMenu<undefined, "choice", "choose">({
+		start: "choice",
+		screens: {
+			choice: () => ({
+				kind: "choice",
+				title: "Choose",
+				items: [{ id: "safe", label: "Safe" }],
+				action: "choose",
+			}),
+		},
+		actions: {
+			choose: async ({ signal }) => {
+				reportStarted?.();
+				await new Promise<void>((resolve) => {
+					if (signal.aborted) resolve();
+					else {
+						signal.addEventListener(
+							"abort",
+							() => {
+								observedAbort = true;
+								resolve();
+							},
+							{ once: true },
+						);
+					}
+				});
+				return { kind: "stay" };
+			},
+		},
+	});
+	const running = runMenu(context.ctx, definition, {
+		getState: () => undefined,
+		signal: owner.signal,
+	});
+	await started;
+	owner.abort(new DOMException("Session replaced", "AbortError"));
+
+	assert.deepEqual(await running, { kind: "stale" });
+	assert.equal(observedAbort, true);
+});
+
+test("choice RPC preserves duplicate-label identity and keeps disabled rows inert", async () => {
+	const invoked: string[] = [];
+	let selectCalls = 0;
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		select: async (_title: string, choices: string[]) => {
+			selectCalls += 1;
+			assert.equal(new Set(choices).size, choices.length);
+			if (selectCalls === 1) return choices.find((choice) => choice.startsWith("[-]"));
+			return choices.find((choice) => choice === "Same [2]");
+		},
+	});
+	const definition = defineMenu<undefined, "choice", "choose">({
+		start: "choice",
+		screens: {
+			choice: () => ({
+				kind: "choice",
+				title: "Choose",
+				items: [
+					{ id: "raw-one", label: "Same" },
+					{ id: "raw-two", label: "Same" },
+					{
+						id: "disabled",
+						label: "Same",
+						disabled: true,
+						disabledReason: "Policy",
+					},
+				],
+				action: "choose",
+				hint: "close",
+			}),
+		},
+		actions: {
+			choose: async ({ itemId }) => {
+				invoked.push(itemId);
+				return { kind: "close" };
+			},
+		},
+	});
+
+	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
+		kind: "closed",
+	});
+	assert.deepEqual(invoked, ["raw-two"]);
+	assert.equal(selectCalls, 2);
+});
+
 test("RPC choices preserve item identity across duplicate and exit labels", async () => {
 	let selectCalls = 0;
 	const invoked: string[] = [];

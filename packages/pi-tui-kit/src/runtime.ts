@@ -144,6 +144,22 @@ async function runTuiMenu<
 				navigator.apply(event.transition);
 				continue;
 			}
+			if (screen.kind === "choice") {
+				const item = screen.items.find((candidate) => candidate.id === event.itemId);
+				if (!item || item.disabled) continue;
+				navigator.rememberSelection(navigator.current, item.id);
+				const outcome = await invokeAction(
+					ctx,
+					definition.actions[screen.action],
+					state,
+					menuSignal,
+					item.id,
+					options,
+				);
+				if (outcome.stale) return { kind: "stale" };
+				navigator.apply(outcome.transition);
+				continue;
+			}
 			const actionItems =
 				screen.kind === "actions"
 					? screen.items
@@ -175,7 +191,12 @@ function selectableItemIds<ScreenId extends string, ActionId extends string>(
 	if (screen.kind === "multiSelect") {
 		return [...screen.items, ...(screen.actions ?? [])].map((item) => item.id);
 	}
-	return screen.items.map((item) => item.id);
+	const itemIds = screen.items.map((item) => item.id);
+	if (screen.kind !== "choice") return itemIds;
+	const preferred = [screen.initialItemId, screen.currentItemId].find(
+		(itemId): itemId is string => itemId !== undefined && itemIds.includes(itemId),
+	);
+	return preferred ? [preferred, ...itemIds.filter((itemId) => itemId !== preferred)] : itemIds;
 }
 
 async function showTuiScreen<
@@ -442,6 +463,21 @@ async function runDialogMenu<
 				navigator.apply(outcome.transition);
 				continue;
 			}
+			if (screen.kind === "choice") {
+				const item = screen.items[selectedRow.index];
+				if (!item || item.disabled) continue;
+				const outcome = await invokeAction(
+					ctx,
+					definition.actions[screen.action],
+					state,
+					menuSignal,
+					item.id,
+					options,
+				);
+				if (outcome.stale) return { kind: "stale" };
+				navigator.apply(outcome.transition);
+				continue;
+			}
 			if (selectedRow.kind === "action") {
 				const actionItem = screen.actions?.[selectedRow.index];
 				if (!actionItem || actionItem.disabled) continue;
@@ -518,6 +554,18 @@ function dialogRows<ScreenId extends string, ActionId extends string>(
 				index,
 				label: `${safeMenuText(item.label)} (${safeMenuText(item.currentValue)})`,
 			})),
+			{ kind: "exit", index: 0, label: dialogExitChoice(screen) },
+		];
+	} else if (screen.kind === "choice") {
+		rows = [
+			...screen.items.map((item, index) => {
+				const label = safeMenuText(item.label);
+				const current = item.id === screen.currentItemId ? " (current)" : "";
+				const unavailable = item.disabled
+					? `[-] ${label} (unavailable${item.disabledReason ? `: ${safeMenuText(item.disabledReason)}` : ""})`
+					: `${label}${current}`;
+				return { kind: "item" as const, index, label: unavailable };
+			}),
 			{ kind: "exit", index: 0, label: dialogExitChoice(screen) },
 		];
 	} else {

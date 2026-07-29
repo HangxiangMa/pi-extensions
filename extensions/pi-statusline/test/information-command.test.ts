@@ -3,43 +3,33 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import {
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+} from "../../../test/support.js";
 import { registerStatuslineCommand } from "../src/commands.js";
 import { loadStatuslineSettings, settingsFilePath } from "../src/settings.js";
 
-interface PickerComponent {
-	render?(width: number): string[];
-	handleInput?(data: string): void;
-}
-
-function profilePicker(
-	inputs: string[],
+function informationChoice(
+	getInputs: () => readonly string[],
 	inspect?: (lines: string[]) => void,
 	inspectNarrow?: (lines: string[]) => void,
 ) {
-	return async (factory: (...args: unknown[]) => unknown) => {
-		let result: unknown;
-		const component = factory(
-			{ requestRender() {} },
-			{
-				fg: (_color: string, text: string) => text,
-				bold: (text: string) => text,
-			},
-			getKeybindings(),
-			(value: unknown) => {
-				result = value;
-			},
-		) as PickerComponent;
-		if (inspect && component.render) inspect(component.render(100));
-		if (inspectNarrow && component.render) inspectNarrow(component.render(20));
-		for (const input of inputs) component.handleInput?.(input);
-		return result;
+	return async (factory: unknown) => {
+		const harness = createCustomSelectorHarness(factory, 100);
+		const lines = harness.render();
+		if (lines.join("\n").includes("Information level")) {
+			inspect?.(lines);
+			inspectNarrow?.(harness.render(20));
+			for (const input of getInputs()) harness.handleInput(input);
+		} else {
+			harness.handleInput("tui.select.down");
+			harness.handleInput("tui.select.confirm");
+		}
+		return harness.result;
 	};
-}
-
-function selectInformation(_title: string, choices: string[]): string | undefined {
-	return choices.find((choice) => choice.startsWith("Information ("));
 }
 
 test("information picker previews exact contents and atomically applies a curated profile", async () => {
@@ -62,9 +52,8 @@ test("information picker previews exact contents and atomically applies a curate
 		let narrowLines: string[] = [];
 		const context = createMockContext({
 			mode: "tui",
-			select: selectInformation,
-			custom: profilePicker(
-				["\r"],
+			custom: informationChoice(
+				() => ["tui.select.confirm"],
 				(lines) => {
 					pickerText = lines.join("\n");
 				},
@@ -76,7 +65,8 @@ test("information picker previews exact contents and atomically applies a curate
 
 		await mock.commands.get("statusline")?.handler("", context.ctx);
 
-		assert.match(pickerText, /Information level \(current: custom\)/u);
+		assert.match(pickerText, /Information level/u);
+		assert.match(pickerText, /Current profile: custom/u);
 		for (const label of ["Minimal", "Balanced", "Detailed"]) {
 			assert.match(pickerText, new RegExp(label, "u"));
 		}
@@ -115,7 +105,7 @@ test("information picker cancellation and save failure leave custom settings unc
 		const mock = createMockPi();
 		const loaded = loadStatuslineSettings(path);
 		let applied = 0;
-		let pickerInputs = ["\u001b"];
+		let pickerInputs = ["tui.select.cancel"];
 		registerStatuslineCommand(mock.pi, {
 			settingsPath: path,
 			getLoaded: () => loaded,
@@ -128,15 +118,14 @@ test("information picker cancellation and save failure leave custom settings unc
 		});
 		const context = createMockContext({
 			mode: "tui",
-			select: selectInformation,
-			custom: (factory: (...args: unknown[]) => unknown) => profilePicker(pickerInputs)(factory),
+			custom: informationChoice(() => pickerInputs),
 		});
 
 		await mock.commands.get("statusline")?.handler("", context.ctx);
 		assert.equal(readFileSync(path, "utf8"), original);
 		assert.equal(applied, 0);
 
-		pickerInputs = ["\r"];
+		pickerInputs = ["tui.select.confirm"];
 		await mock.commands.get("statusline")?.handler("", context.ctx);
 		assert.equal(readFileSync(path, "utf8"), original);
 		assert.equal(applied, 0);
