@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-stamp",
 	"version": "0.38.0",
-	"description": "Pi extension that shows timestamps for user and assistant messages.",
+	"description": "Pi extension for transcript timestamps, assistant metadata, and tool timing.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -10,6 +10,9 @@
 		"pi-extension",
 		"pi",
 		"timestamp",
+		"metadata",
+		"provenance",
+		"tool-timing",
 		"messages",
 		"tui"
 	],

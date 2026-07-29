@@ -34,15 +34,21 @@ test("stamp menu exposes Main, Settings, Status, Help, and read-only invalid sta
 			["locale", "Invariant"],
 			["timeZone", "Local"],
 			["responseTiming", "Off"],
+			["assistantMetadata", "Off"],
+			["toolStamps", "Hide"],
 		],
 	);
 	assert.match((main.lines ?? []).join("\n"), /Timing off/u);
+	assert.match((main.lines ?? []).join("\n"), /Metadata off/u);
+	assert.match((main.lines ?? []).join("\n"), /Tool stamps hidden/u);
 
 	const status = resolveMenuScreen(menu, "status", state);
 	assert.equal(status.kind, "detail");
 	if (status.kind !== "detail") assert.fail("Expected detail screen");
 	assert.match(status.lines.join("\n"), /24-hour.*Built-in/u);
 	assert.match(status.lines.join("\n"), /Response timing: Off · Built-in/u);
+	assert.match(status.lines.join("\n"), /Assistant metadata: Off · Built-in/u);
+	assert.match(status.lines.join("\n"), /Tool stamps: Hide · Built-in/u);
 	assert.match(status.lines.join("\n"), /\/tmp\/pi-stamp\.json/u);
 
 	const invalidState = {
@@ -112,6 +118,24 @@ test("bounded setting actions persist exact patches", async () => {
 		itemId: "responseTiming",
 		value: "Off",
 	});
+	for (const value of ["Compact", "Expanded", "Off"] as const) {
+		await menu.actions["set-assistant-metadata"]({
+			ctx,
+			state: runtime.get(),
+			signal: new AbortController().signal,
+			itemId: "assistantMetadata",
+			value,
+		});
+	}
+	for (const value of ["Show", "Hide"] as const) {
+		await menu.actions["set-tool-stamps"]({
+			ctx,
+			state: runtime.get(),
+			signal: new AbortController().signal,
+			itemId: "toolStamps",
+			value,
+		});
+	}
 	assert.deepEqual(runtime.patches, [
 		{ hourCycle: "12h" },
 		{ showSeconds: false },
@@ -119,6 +143,11 @@ test("bounded setting actions persist exact patches", async () => {
 		{ responseTiming: "duration" },
 		{ responseTiming: "detailed" },
 		{ responseTiming: "off" },
+		{ assistantMetadata: "compact" },
+		{ assistantMetadata: "expanded" },
+		{ assistantMetadata: "off" },
+		{ toolStamps: true },
+		{ toolStamps: false },
 	]);
 	assert.equal(notifications.at(-1)?.level, "info");
 });
@@ -216,6 +245,8 @@ function memorySettingsRuntime(
 			locale: "built-in",
 			timeZone: "built-in",
 			responseTiming: "built-in",
+			assistantMetadata: "built-in",
+			toolStamps: "built-in",
 		},
 		canSave: true,
 	};

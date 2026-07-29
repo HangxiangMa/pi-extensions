@@ -4,6 +4,7 @@ import { lstat, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
+	ASSISTANT_METADATA_MODES,
 	canonicalizeLocale,
 	canonicalizeTimeZone,
 	DATE_CONTEXTS,
@@ -77,6 +78,8 @@ const SETTING_FIELDS = [
 	"locale",
 	"timeZone",
 	"responseTiming",
+	"assistantMetadata",
+	"toolStamps",
 ] as const satisfies readonly StampSettingsField[];
 const SETTING_FIELD_SET = new Set<string>(SETTING_FIELDS);
 
@@ -128,6 +131,22 @@ export function normalizeStampSettingsDocument(
 		}
 		settings.responseTiming = value.responseTiming as StampSettings["responseTiming"];
 		sources.responseTiming = "user";
+	}
+	if (Object.hasOwn(value, "assistantMetadata")) {
+		if (
+			!ASSISTANT_METADATA_MODES.includes(
+				value.assistantMetadata as StampSettings["assistantMetadata"],
+			)
+		) {
+			return undefined;
+		}
+		settings.assistantMetadata = value.assistantMetadata as StampSettings["assistantMetadata"];
+		sources.assistantMetadata = "user";
+	}
+	if (Object.hasOwn(value, "toolStamps")) {
+		if (typeof value.toolStamps !== "boolean") return undefined;
+		settings.toolStamps = value.toolStamps;
+		sources.toolStamps = "user";
 	}
 	return { settings, sources };
 }
@@ -363,6 +382,8 @@ function builtInSources(): Record<StampSettingsField, StampSettingsSource> {
 		locale: "built-in",
 		timeZone: "built-in",
 		responseTiming: "built-in",
+		assistantMetadata: "built-in",
+		toolStamps: "built-in",
 	};
 }
 

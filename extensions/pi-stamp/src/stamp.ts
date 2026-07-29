@@ -7,9 +7,19 @@ import {
 	type StampSettings,
 } from "./format.js";
 import { showStampMenu } from "./menu.js";
+import {
+	type AssistantMetadataData,
+	captureAssistantMetadata,
+	formatAssistantMetadataLines,
+	formatToolStampLabel,
+	isAssistantMetadataData,
+	sanitizeMetadataText,
+	type ToolStampOutcome,
+} from "./metadata.js";
 import { createStampSettingsRuntime, type StampSettingsRuntime } from "./settings.js";
 
 export const STAMP_ENTRY_TYPE = "pi-stamp";
+export const MAX_TOOL_STAMP_OBSERVATIONS = 256;
 
 export interface MessageStampDataV1 {
 	version: 1;
@@ -33,10 +43,32 @@ export interface AssistantMessageStampDataV3 {
 	firstContentAt?: number;
 }
 
+export interface AssistantMessageStampDataV4 {
+	version: 4;
+	role: "assistant";
+	timestamp: number;
+	previousTimestamp?: number;
+	completedAt?: number;
+	firstContentAt?: number;
+	metadata: AssistantMetadataData;
+}
+
+export interface ToolStampDataV1 {
+	version: 1;
+	kind: "tool";
+	toolCallId: string;
+	toolName: string;
+	startedAt: number;
+	completedAt: number;
+	outcome: ToolStampOutcome;
+}
+
 export type MessageStampData =
 	| MessageStampDataV1
 	| MessageStampDataV2
-	| AssistantMessageStampDataV3;
+	| AssistantMessageStampDataV3
+	| AssistantMessageStampDataV4;
+export type StampEntryData = MessageStampData | ToolStampDataV1;
 
 export interface StampExtensionOptions {
 	settingsRuntime?: StampSettingsRuntime;
@@ -50,6 +82,14 @@ interface AssistantTimingObservation {
 
 interface FinalizedAssistantTiming extends AssistantTimingObservation {
 	completedAt: number;
+}
+
+interface ToolTimingObservation {
+	toolCallId: string;
+	toolName: string;
+	startedAt: number;
+	completedAt?: number;
+	outcome?: ToolStampOutcome;
 }
 
 export function formatStampTime(timestamp: number): string | undefined {
@@ -72,9 +112,28 @@ export function isMessageStampData(value: unknown): value is MessageStampData {
 			(!Object.hasOwn(value, "previousTimestamp") || isValidTimestamp(value.previousTimestamp))
 		);
 	}
+	if (value.version === 3) {
+		return (
+			value.role === "assistant" &&
+			hasOnlyKeys(value, [
+				"version",
+				"role",
+				"timestamp",
+				"previousTimestamp",
+				"completedAt",
+				"firstContentAt",
+			]) &&
+			isValidTimestamp(value.completedAt) &&
+			value.completedAt >= value.timestamp &&
+			(!Object.hasOwn(value, "previousTimestamp") || isValidTimestamp(value.previousTimestamp)) &&
+			(!Object.hasOwn(value, "firstContentAt") ||
+				(isValidTimestamp(value.firstContentAt) &&
+					value.firstContentAt >= value.timestamp &&
+					value.firstContentAt <= value.completedAt))
+		);
+	}
+	if (value.version !== 4 || value.role !== "assistant") return false;
 	if (
-		value.version !== 3 ||
-		value.role !== "assistant" ||
 		!hasOnlyKeys(value, [
 			"version",
 			"role",
@@ -82,58 +141,107 @@ export function isMessageStampData(value: unknown): value is MessageStampData {
 			"previousTimestamp",
 			"completedAt",
 			"firstContentAt",
+			"metadata",
 		]) ||
-		!isValidTimestamp(value.completedAt) ||
-		value.completedAt < value.timestamp ||
-		(Object.hasOwn(value, "previousTimestamp") && !isValidTimestamp(value.previousTimestamp))
+		(Object.hasOwn(value, "previousTimestamp") && !isValidTimestamp(value.previousTimestamp)) ||
+		!isAssistantMetadataData(value.metadata)
 	) {
 		return false;
 	}
+	if (!Object.hasOwn(value, "completedAt")) return !Object.hasOwn(value, "firstContentAt");
 	return (
-		!Object.hasOwn(value, "firstContentAt") ||
-		(isValidTimestamp(value.firstContentAt) &&
-			value.firstContentAt >= value.timestamp &&
-			value.firstContentAt <= value.completedAt)
+		isValidTimestamp(value.completedAt) &&
+		value.completedAt >= value.timestamp &&
+		(!Object.hasOwn(value, "firstContentAt") ||
+			(isValidTimestamp(value.firstContentAt) &&
+				value.firstContentAt >= value.timestamp &&
+				value.firstContentAt <= value.completedAt))
+	);
+}
+
+export function isToolStampData(value: unknown): value is ToolStampDataV1 {
+	return (
+		isRecord(value) &&
+		value.version === 1 &&
+		value.kind === "tool" &&
+		hasOnlyKeys(value, [
+			"version",
+			"kind",
+			"toolCallId",
+			"toolName",
+			"startedAt",
+			"completedAt",
+			"outcome",
+		]) &&
+		isSafePersistedText(value.toolCallId) &&
+		isSafePersistedText(value.toolName) &&
+		isValidTimestamp(value.startedAt) &&
+		isValidTimestamp(value.completedAt) &&
+		value.completedAt >= value.startedAt &&
+		(value.outcome === "success" || value.outcome === "error")
 	);
 }
 
 export function createStampEntryRenderer(
 	getSettings: () => Readonly<StampSettings>,
-): EntryRenderer<MessageStampData> {
-	return (entry, _options, theme) => {
+): EntryRenderer<StampEntryData> {
+	return (entry, options, theme) => {
+		if (isToolStampData(entry.data)) {
+			const data = entry.data;
+			return dynamicRightAlignedText(() => {
+				const settings = getSettings();
+				if (!settings.toolStamps) return [];
+				const label = formatToolStampLabel(
+					data.toolName,
+					data.completedAt - data.startedAt,
+					data.outcome,
+				);
+				return label ? [theme.fg("dim", label)] : [];
+			});
+		}
 		if (!isMessageStampData(entry.data)) return undefined;
 		const data = entry.data;
 		return dynamicRightAlignedText(() => {
+			const settings = getSettings();
 			const label = formatMessageStampLabel(
 				{
 					timestamp: data.timestamp,
 					...(data.version === 1 ? {} : { previousTimestamp: data.previousTimestamp }),
-					...(data.version === 3
+					...(data.version === 3 || data.version === 4
 						? {
 								completedAt: data.completedAt,
 								firstContentAt: data.firstContentAt,
 							}
 						: {}),
 				},
-				getSettings(),
+				settings,
 			);
-			return label ? theme.fg("dim", label) : undefined;
+			if (!label) return [];
+			const metadataLines =
+				data.version === 4
+					? formatAssistantMetadataLines(
+							data.metadata,
+							settings.assistantMetadata,
+							options.expanded,
+						)
+					: [];
+			return [label, ...metadataLines].map((line) => theme.fg("dim", line));
 		});
 	};
 }
 
 export const renderStampEntry = createStampEntryRenderer(() => DEFAULT_STAMP_SETTINGS);
 
-function dynamicRightAlignedText(getText: () => string | undefined): Component {
+function dynamicRightAlignedText(getLines: () => readonly string[]): Component {
 	return {
 		render(width) {
 			if (width < 1) return [];
-			const text = getText();
-			if (!text) return [];
-			return wrapTextWithAnsi(text, width).map((line) => {
-				const leftPadding = " ".repeat(Math.max(0, width - visibleWidth(line)));
-				return `${leftPadding}${line}`;
-			});
+			return getLines().flatMap((text) =>
+				wrapTextWithAnsi(text, width).map((line) => {
+					const leftPadding = " ".repeat(Math.max(0, width - visibleWidth(line)));
+					return `${leftPadding}${line}`;
+				}),
+			);
 		},
 		invalidate() {},
 	};
@@ -156,10 +264,11 @@ export default function stampExtension(
 	let lastStampTimestamp: number | undefined;
 	let activeAssistantTiming: AssistantTimingObservation | undefined;
 	let finalizedAssistantTiming: FinalizedAssistantTiming | undefined;
+	const activeToolTimings = new Map<string, ToolTimingObservation>();
 	const pendingUserStamps: Array<{ role: "user"; timestamp: number }> = [];
 
 	pi.registerCommand("stamp", {
-		description: "Configure message timestamp presentation",
+		description: "Configure transcript timestamp and metadata stamps",
 		handler: async (args, ctx) => {
 			if (args.trim()) throw new Error("/stamp does not accept arguments.");
 			if (ctx.mode === "print" || ctx.mode === "json") {
@@ -192,8 +301,36 @@ export default function stampExtension(
 	const appendAssistantStamp = (
 		timestamp: number,
 		timing: FinalizedAssistantTiming | undefined,
+		message: unknown,
 	): void => {
-		if (!timing || timing.timestamp !== timestamp) {
+		const matchingTiming = timing?.timestamp === timestamp ? timing : undefined;
+		const metadata =
+			settingsRuntime.get().settings.assistantMetadata === "off"
+				? undefined
+				: captureAssistantMetadata(message);
+		if (metadata) {
+			const stamp: AssistantMessageStampDataV4 = {
+				version: 4,
+				role: "assistant",
+				timestamp,
+				...(lastStampTimestamp === undefined ? {} : { previousTimestamp: lastStampTimestamp }),
+				...(matchingTiming
+					? {
+							completedAt: matchingTiming.completedAt,
+							...(matchingTiming.firstContentAt === undefined
+								? {}
+								: { firstContentAt: matchingTiming.firstContentAt }),
+						}
+					: {}),
+				metadata,
+			};
+			if (isMessageStampData(stamp)) {
+				pi.appendEntry<AssistantMessageStampDataV4>(STAMP_ENTRY_TYPE, stamp);
+				lastStampTimestamp = timestamp;
+				return;
+			}
+		}
+		if (!matchingTiming) {
 			appendVersion2Stamp("assistant", timestamp);
 			return;
 		}
@@ -202,8 +339,10 @@ export default function stampExtension(
 			role: "assistant",
 			timestamp,
 			...(lastStampTimestamp === undefined ? {} : { previousTimestamp: lastStampTimestamp }),
-			completedAt: timing.completedAt,
-			...(timing.firstContentAt === undefined ? {} : { firstContentAt: timing.firstContentAt }),
+			completedAt: matchingTiming.completedAt,
+			...(matchingTiming.firstContentAt === undefined
+				? {}
+				: { firstContentAt: matchingTiming.firstContentAt }),
 		};
 		if (!isMessageStampData(stamp)) {
 			appendVersion2Stamp("assistant", timestamp);
@@ -226,6 +365,32 @@ export default function stampExtension(
 		}
 	};
 
+	const flushToolStamps = (toolResults: readonly unknown[]): void => {
+		try {
+			if (!tuiSessionActive || !settingsRuntime.get().settings.toolStamps) return;
+			for (const result of toolResults) {
+				if (!isRecord(result) || typeof result.toolCallId !== "string") continue;
+				const timing = activeToolTimings.get(result.toolCallId);
+				if (!timing || timing.completedAt === undefined || timing.outcome === undefined) {
+					continue;
+				}
+				activeToolTimings.delete(result.toolCallId);
+				const stamp: ToolStampDataV1 = {
+					version: 1,
+					kind: "tool",
+					toolCallId: timing.toolCallId,
+					toolName: timing.toolName,
+					startedAt: timing.startedAt,
+					completedAt: timing.completedAt,
+					outcome: timing.outcome,
+				};
+				if (isToolStampData(stamp)) pi.appendEntry<ToolStampDataV1>(STAMP_ENTRY_TYPE, stamp);
+			}
+		} finally {
+			activeToolTimings.clear();
+		}
+	};
+
 	pi.on("session_start", async (_event, ctx) => {
 		sessionController.abort(new Error("pi-stamp session replaced"));
 		sessionController = new AbortController();
@@ -234,6 +399,7 @@ export default function stampExtension(
 		pendingUserStamps.length = 0;
 		activeAssistantTiming = undefined;
 		finalizedAssistantTiming = undefined;
+		activeToolTimings.clear();
 		tuiSessionActive = ctx.mode === "tui";
 		lastStampTimestamp = lastStampTimestampFromBranch(ctx.sessionManager.getBranch());
 		try {
@@ -262,6 +428,40 @@ export default function stampExtension(
 	pi.on("turn_start", () => {
 		activeAssistantTiming = undefined;
 		finalizedAssistantTiming = undefined;
+		activeToolTimings.clear();
+	});
+
+	pi.on("tool_execution_start", (event) => {
+		if (
+			!tuiSessionActive ||
+			!settingsRuntime.get().settings.toolStamps ||
+			activeToolTimings.size >= MAX_TOOL_STAMP_OBSERVATIONS ||
+			activeToolTimings.has(event.toolCallId) ||
+			!isSafePersistedText(event.toolCallId)
+		) {
+			return;
+		}
+		const toolName = sanitizeMetadataText(event.toolName);
+		if (!toolName) return;
+		const startedAt = now();
+		if (!isValidTimestamp(startedAt)) return;
+		activeToolTimings.set(event.toolCallId, {
+			toolCallId: event.toolCallId,
+			toolName,
+			startedAt,
+		});
+	});
+
+	pi.on("tool_execution_end", (event) => {
+		const timing = activeToolTimings.get(event.toolCallId);
+		if (!tuiSessionActive || !timing || timing.completedAt !== undefined) return;
+		const completedAt = now();
+		if (!isValidTimestamp(completedAt) || completedAt < timing.startedAt) {
+			activeToolTimings.delete(event.toolCallId);
+			return;
+		}
+		timing.completedAt = completedAt;
+		timing.outcome = event.isError ? "error" : "success";
 	});
 
 	pi.on("message_start", (event) => {
@@ -321,17 +521,20 @@ export default function stampExtension(
 	});
 
 	pi.on("turn_end", (event) => {
-		if (!tuiSessionActive || event.message.role !== "assistant") return;
 		const timing = finalizedAssistantTiming;
 		activeAssistantTiming = undefined;
 		finalizedAssistantTiming = undefined;
-		appendAssistantStamp(event.message.timestamp, timing);
+		if (tuiSessionActive && event.message.role === "assistant") {
+			appendAssistantStamp(event.message.timestamp, timing, event.message);
+		}
+		flushToolStamps(event.toolResults);
 	});
 
 	pi.on("agent_end", () => {
 		flushPendingUsers();
 		activeAssistantTiming = undefined;
 		finalizedAssistantTiming = undefined;
+		activeToolTimings.clear();
 	});
 
 	pi.on("session_shutdown", async () => {
@@ -341,6 +544,7 @@ export default function stampExtension(
 		pendingUserStamps.length = 0;
 		activeAssistantTiming = undefined;
 		finalizedAssistantTiming = undefined;
+		activeToolTimings.clear();
 		tuiSessionActive = false;
 		lastStampTimestamp = undefined;
 		await settingsRuntime.flush();
@@ -394,6 +598,10 @@ function isValidTimestamp(value: unknown): value is number {
 	return (
 		typeof value === "number" && Number.isFinite(value) && !Number.isNaN(new Date(value).getTime())
 	);
+}
+
+function isSafePersistedText(value: unknown): value is string {
+	return typeof value === "string" && sanitizeMetadataText(value) === value;
 }
 
 function safeTerminalText(value: string): string {

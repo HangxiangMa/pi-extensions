@@ -3,6 +3,7 @@ import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import {
 	canonicalizeLocale,
 	canonicalizeTimeZone,
+	type StampAssistantMetadataMode,
 	type StampDateContext,
 	type StampHourCycle,
 	type StampResponseTimingMode,
@@ -15,6 +16,8 @@ type StampAction =
 	| "set-seconds"
 	| "set-date-context"
 	| "set-response-timing"
+	| "set-assistant-metadata"
+	| "set-tool-stamps"
 	| "open-locale"
 	| "choose-invariant-locale"
 	| "choose-system-locale"
@@ -103,6 +106,22 @@ export function createStampMenu(runtime: StampSettingsRuntime) {
 						values: ["Off", "Duration", "Detailed"],
 						action: "set-response-timing",
 					},
+					{
+						id: "assistantMetadata",
+						label: "Assistant metadata",
+						description: "Show no provenance, a compact summary, or expanded reported fields.",
+						currentValue: assistantMetadataLabel(state.settings.assistantMetadata),
+						values: ["Off", "Compact", "Expanded"],
+						action: "set-assistant-metadata",
+					},
+					{
+						id: "toolStamps",
+						label: "Tool stamps",
+						description: "Show duration and outcome after newly observed tool blocks.",
+						currentValue: toolStampsLabel(state.settings.toolStamps),
+						values: ["Hide", "Show"],
+						action: "set-tool-stamps",
+					},
 				],
 			}),
 			locale: ({ state }) => ({
@@ -182,6 +201,18 @@ export function createStampMenu(runtime: StampSettingsRuntime) {
 						state,
 						"responseTiming",
 					),
+					settingStatus(
+						"Assistant metadata",
+						assistantMetadataLabel(state.settings.assistantMetadata),
+						state,
+						"assistantMetadata",
+					),
+					settingStatus(
+						"Tool stamps",
+						toolStampsLabel(state.settings.toolStamps),
+						state,
+						"toolStamps",
+					),
 					`Settings file: ${safeTerminalText(runtime.getPath())}`,
 					...(state.issue ? [`Issue: ${safeTerminalText(state.issue.message)}`] : []),
 				],
@@ -194,10 +225,13 @@ export function createStampMenu(runtime: StampSettingsRuntime) {
 					"The clock shows message creation; response timing ends at assistant message completion.",
 					"First content is Pi's first non-empty text, thinking, or tool-call stream update.",
 					"First n/a means no meaningful update was observed; no other boundary is substituted.",
+					"Assistant metadata is captured only when enabled and missing provider fields stay absent.",
+					"Expand transcript details to show sanitized response IDs and diagnostic type/name/code.",
+					"Tool stamps pair start/end by ID, exclude tool data, and appear after the complete block.",
 					"Assistant timing excludes tool execution and is unavailable on legacy stamp entries.",
-					"Day changes compare the previous recorded stamp in the selected time zone.",
-					"Changes save immediately and reformat mounted and future stamps.",
-					"Stamp entries remain outside model context and never use a refresh timer.",
+					"Day changes compare the previous recorded message stamp in the selected time zone.",
+					"Changes save immediately and reformat compatible mounted and future stamps.",
+					"Stamp entries remain outside model context and never use a network request or refresh timer.",
 				],
 				hint: "back",
 			}),
@@ -233,6 +267,19 @@ export function createStampMenu(runtime: StampSettingsRuntime) {
 					value === "Detailed" ? "detailed" : value === "Duration" ? "duration" : "off";
 				return savePatch(runtime, ctx, signal, { responseTiming }, `Response timing: ${value}.`);
 			},
+			"set-assistant-metadata": ({ ctx, value, signal }) => {
+				const assistantMetadata: StampAssistantMetadataMode =
+					value === "Expanded" ? "expanded" : value === "Compact" ? "compact" : "off";
+				return savePatch(
+					runtime,
+					ctx,
+					signal,
+					{ assistantMetadata },
+					`Assistant metadata: ${value}.`,
+				);
+			},
+			"set-tool-stamps": ({ ctx, value, signal }) =>
+				savePatch(runtime, ctx, signal, { toolStamps: value === "Show" }, `Tool stamps: ${value}.`),
 			"open-locale": async () => ({ kind: "to", screen: "locale" }),
 			"choose-invariant-locale": ({ ctx, signal }) =>
 				savePatch(runtime, ctx, signal, { locale: "invariant" }, "Locale: Invariant.", "back"),
@@ -331,6 +378,8 @@ function formatCompactStatus(state: StampSettingsState): string {
 		localeLabel(state.settings.locale),
 		timeZoneLabel(state.settings.timeZone),
 		`Timing ${responseTimingLabel(state.settings.responseTiming).toLowerCase()}`,
+		`Metadata ${assistantMetadataLabel(state.settings.assistantMetadata).toLowerCase()}`,
+		`Tool stamps ${state.settings.toolStamps ? "shown" : "hidden"}`,
 	].join(" · ");
 }
 
@@ -358,6 +407,16 @@ function responseTimingLabel(value: StampResponseTimingMode): string {
 	if (value === "duration") return "Duration";
 	if (value === "detailed") return "Detailed";
 	return "Off";
+}
+
+function assistantMetadataLabel(value: StampAssistantMetadataMode): string {
+	if (value === "compact") return "Compact";
+	if (value === "expanded") return "Expanded";
+	return "Off";
+}
+
+function toolStampsLabel(value: boolean): string {
+	return value ? "Show" : "Hide";
 }
 
 function safeTerminalText(value: string): string {

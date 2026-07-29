@@ -41,6 +41,8 @@ test("normalization accepts partial settings, canonicalizes locale and zone, and
 			locale: "EN-us",
 			timeZone: "utc",
 			responseTiming: "detailed",
+			assistantMetadata: "expanded",
+			toolStamps: true,
 			future: { retained: true },
 		}),
 		{
@@ -50,6 +52,8 @@ test("normalization accepts partial settings, canonicalizes locale and zone, and
 				locale: "en-US",
 				timeZone: "UTC",
 				responseTiming: "detailed",
+				assistantMetadata: "expanded",
+				toolStamps: true,
 			},
 			sources: {
 				hourCycle: "user",
@@ -58,6 +62,8 @@ test("normalization accepts partial settings, canonicalizes locale and zone, and
 				locale: "user",
 				timeZone: "user",
 				responseTiming: "user",
+				assistantMetadata: "user",
+				toolStamps: "user",
 			},
 		},
 	);
@@ -71,6 +77,9 @@ test("normalization accepts partial settings, canonicalizes locale and zone, and
 		{ timeZone: "Moon/Base" },
 		{ responseTiming: "sometimes" },
 		{ responseTiming: false },
+		{ assistantMetadata: "verbose" },
+		{ assistantMetadata: true },
+		{ toolStamps: "yes" },
 	]) {
 		assert.equal(normalizeStampSettingsDocument(value), undefined);
 	}
@@ -79,6 +88,15 @@ test("normalization accepts partial settings, canonicalizes locale and zone, and
 			normalizeStampSettingsDocument({ responseTiming })?.settings.responseTiming,
 			responseTiming,
 		);
+	}
+	for (const assistantMetadata of ["off", "compact", "expanded"] as const) {
+		assert.equal(
+			normalizeStampSettingsDocument({ assistantMetadata })?.settings.assistantMetadata,
+			assistantMetadata,
+		);
+	}
+	for (const toolStamps of [false, true]) {
+		assert.equal(normalizeStampSettingsDocument({ toolStamps })?.settings.toolStamps, toolStamps);
 	}
 });
 
@@ -93,20 +111,28 @@ test("updates preserve unknown and omitted fields and publish private JSON atomi
 	await runtime.reload();
 	await runtime.update({ hourCycle: "12h" });
 	await runtime.update({ responseTiming: "duration" });
+	await runtime.update({ assistantMetadata: "compact" });
+	await runtime.update({ toolStamps: true });
 
 	assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
 		showSeconds: false,
 		future: { retained: true },
 		hourCycle: "12h",
 		responseTiming: "duration",
+		assistantMetadata: "compact",
+		toolStamps: true,
 	});
 	assert.deepEqual(runtime.get().settings, {
 		...DEFAULT_STAMP_SETTINGS,
 		showSeconds: false,
 		hourCycle: "12h",
 		responseTiming: "duration",
+		assistantMetadata: "compact",
+		toolStamps: true,
 	});
 	assert.equal(runtime.get().sources.responseTiming, "user");
+	assert.equal(runtime.get().sources.assistantMetadata, "user");
+	assert.equal(runtime.get().sources.toolStamps, "user");
 	if (process.platform !== "win32") {
 		assert.equal(statSync(settingsPath).mode & 0o777, 0o600);
 	}
