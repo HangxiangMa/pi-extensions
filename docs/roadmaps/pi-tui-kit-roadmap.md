@@ -130,8 +130,11 @@ specialized or unsupported patterns explicitly deferred.
 
 ### Phase 2: Static Choice Screen
 
-The first candidate models the reusable core of Pi's private theme, thinking, and settings-submenu
-selectors without cursor-movement side effects.
+**Status:** implemented in [PR #463](https://github.com/narumiruna/pi-extensions/pull/463); see the
+[choice-screen plan](../plans/archived/2026-07-30_pi-tui-kit-choice-screen-plan.md).
+
+The first candidate models the reusable core of Pi's theme, thinking, and settings-submenu selectors
+without cursor-movement side effects.
 
 **Milestones:**
 

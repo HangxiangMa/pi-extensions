@@ -262,11 +262,14 @@ interface ChoiceScreen<ActionId extends string> {
       revalidation/safety tests, root checks, and all pack contents pass review. Accepted deviations:
       the first capability and proof migrations share one atomic rollout PR, and deterministic TUI
       harnesses plus a real RPC smoke replace an interactive TUI command forbidden in this agent run.
-- [ ] Open one focused rollout PR containing qualification, the choice contract, both proof
-      migrations, tests, and documentation; verify CI and CodeQL pass and the PR remains mergeable.
-- [ ] Confirm every plan item and completion check has evidence, archive this completed plan under
+- [x] Open one focused rollout PR containing qualification, the choice contract, both proof
+      migrations, tests, and documentation. Evidence: PR #463 is open and mergeable at commit
+      `838ed491ece0a944f844e9a382eea8d7f1d1cffb`; CI, both CodeQL analyses, and the aggregate CodeQL
+      check completed successfully.
+- [x] Confirm every plan item and completion check has evidence, archive this completed plan under
       `docs/plans/archived/2026-07-30_pi-tui-kit-choice-screen-plan.md`, and verify the active plan path
-      no longer exists and the archive did not overwrite another file.
+      no longer exists and the archive did not overwrite another file. Evidence: the destination was
+      absent before the move and the final repository check confirms only the archived path remains.
 
 ## Completion Checklist
 
@@ -279,9 +282,9 @@ interface ChoiceScreen<ActionId extends string> {
 - [x] Choice model, TUI, and RPC tests cover validation, identity, current/initial selection, details,
       disabled state, width, Unicode, sanitization, keybindings, navigation, failures, cancellation,
       disposal, replacement, and shutdown.
-- [ ] The focused rollout PR passes package checks, root `npm run check`, all three pack dry runs,
+- [x] The focused rollout PR passes package checks, root `npm run check`, all three pack dry runs,
       CI/CodeQL, and the noninteractive RPC runtime smoke.
 - [x] Both migrations preserve domain state, settings persistence, rollback, editor state, preview
       ownership, established commands, revalidation safety, and relevant non-TUI behavior.
-- [ ] The roadmap, package README, API version declaration, and archived plan agree on the delivered
+- [x] The roadmap, package README, API version declaration, and archived plan agree on the delivered
       Phase 1–2 outcome.
