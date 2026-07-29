@@ -71,6 +71,7 @@ function valueContext(
 	return {
 		runtime,
 		symbol: config.modules[name].symbol,
+		options: config.modules[name].options,
 		extensionStatus: config.extensionStatus,
 		hiddenExtensionStatusKeys,
 	};

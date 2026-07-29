@@ -143,6 +143,84 @@ test("idle contextual activity rows collapse while explicit empty rows remain", 
 	assert.deepEqual(explicitEmptyRows.split("\n"), ["", "░▒▓ 🤖 sonnet-4", ""]);
 });
 
+test("model truncation supports all directions before prefixes and responsive fitting", () => {
+	const config = createDefaultConfig();
+	config.segments = ["model"];
+	config.segmentText.model.truncationLength = 6;
+	const footerData: ReadonlyFooterDataProvider = {
+		getGitBranch: () => "main",
+		getExtensionStatuses: () => new Map<string, string>(),
+		onBranchChange: () => () => undefined,
+		getAvailableProviderCount: () => 1,
+	};
+	const runtime: RuntimeState = {
+		turnCount: 0,
+		activeTools: new Map(),
+		isStreaming: false,
+		thinkingLevel: "off",
+		duplicateExtensions: [],
+		extensionStatusIconAliases: new Map(),
+	};
+	const renderModel = (id: string) => {
+		const context = createMockContext({ model: { id, provider: "llama.cpp" } });
+		return plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime));
+	};
+
+	config.segmentText.model.truncationDirection = "end";
+	assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 abcdef…");
+	config.segmentText.model.truncationDirection = "start";
+	assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 …jklmno");
+	config.segmentText.model.truncationDirection = "middle";
+	assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 abc…mno");
+	config.segmentText.model.truncationLength = 5;
+	assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 abc…no");
+
+	config.segmentText.model.truncationLength = 6;
+	config.segmentText.model.truncationSymbol = "";
+	assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 abcmno");
+	config.segmentText.model.truncationLength = 0;
+	assert.equal(renderModel("abcdefghijklmno"), "░▒▓ 🤖 abcdefghijklmno");
+
+	config.segmentText.model.truncationLength = 6;
+	config.segmentText.model.truncationSymbol = "…";
+	config.segmentText.model.truncationDirection = "end";
+	assert.equal(renderModel("claude-sonnet-20241022"), "░▒▓ 🤖 sonnet");
+	assert.equal(renderModel("A👨‍👩‍👧‍👦BCDEFG"), "░▒▓ 🤖 A👨‍👩‍👧‍👦BCDE…");
+});
+
+test("default model truncation retains useful llama.cpp path detail at standard width", () => {
+	const config = createDefaultConfig();
+	const id = "/home/willow/program/llama.cpp/models/Qwen3.6-35B-A3B-UDT-Q4_K_XL_MTP.gguf";
+	const model = { id, provider: "llama.cpp", contextWindow: 72_000 };
+	const context = createMockContext({
+		model,
+		getContextUsage: () => ({ percent: 25.4, contextWindow: 72_000 }),
+	});
+	const footerData: ReadonlyFooterDataProvider = {
+		getGitBranch: () => "main",
+		getExtensionStatuses: () => new Map<string, string>(),
+		onBranchChange: () => () => undefined,
+		getAvailableProviderCount: () => 1,
+	};
+	const runtime: RuntimeState = {
+		turnCount: 0,
+		activeTools: new Map(),
+		isStreaming: false,
+		thinkingLevel: "off",
+		duplicateExtensions: [],
+		extensionStatusIconAliases: new Map(),
+	};
+
+	const rendered = plain(
+		renderStatusline(80, context.ctx, footerData, {} as Theme, config, runtime),
+	);
+	assert.match(rendered, /🤖 …Qwen3\.6-35B-A3B-UDT-Q4_K_XL_MTP\.gguf/u);
+	assert.match(rendered, /🌿 main/u);
+	assert.match(rendered, /ctx 25\.4%\/72k/u);
+	assert.ok(visibleWidth(rendered) <= 80);
+	assert.equal(model.id, id);
+});
+
 test("responsive fitting keeps primary and active information ahead of decorative segments", () => {
 	const config = createDefaultConfig();
 	const items = [

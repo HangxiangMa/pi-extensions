@@ -100,7 +100,13 @@ test("normalization supports partial icon-only settings and structured overrides
 	assert.equal(normalized.config.density, "cozy");
 	assert.equal(normalized.config.separator, "dot");
 	assert.deepEqual(normalized.config.segments, ["model", "cwd", "cache", "turn"]);
-	assert.deepEqual(normalized.config.segmentText.model, { prefix: "Model: ", suffix: "" });
+	assert.deepEqual(normalized.config.segmentText.model, {
+		prefix: "Model: ",
+		suffix: "",
+		truncationLength: 36,
+		truncationSymbol: "…",
+		truncationDirection: "start",
+	});
 	assert.deepEqual(normalized.config.segmentText.cache, { prefix: "Cache: ", suffix: "" });
 	assert.deepEqual(normalized.config.segmentText.turn, { prefix: "🔁 #", suffix: " turns" });
 	assert.equal(normalized.config.extensionStatusIcons.goal, "");
@@ -111,6 +117,84 @@ test("normalization supports partial icon-only settings and structured overrides
 	assert.equal(iconOnly.config.palettePreset, "tokyo-night");
 	assert.deepEqual(iconOnly.config.segments, DEFAULT_STATUSLINE_CONFIG.segments);
 	assert.equal(iconOnly.config.extensionStatusIcons.goal, "◎");
+});
+
+test("model truncation settings use approachable defaults and normalize partial overrides", () => {
+	assert.deepEqual(DEFAULT_STATUSLINE_CONFIG.segmentText.model, {
+		prefix: "🤖 ",
+		suffix: "",
+		truncationLength: 36,
+		truncationSymbol: "…",
+		truncationDirection: "start",
+	});
+
+	const valid = normalizeStatuslineConfig({
+		segmentText: {
+			model: {
+				truncationLength: 0,
+				truncationSymbol: "",
+				truncationDirection: "middle",
+			},
+		},
+	});
+	assert.deepEqual(valid.config.segmentText.model, {
+		prefix: "🤖 ",
+		suffix: "",
+		truncationLength: 0,
+		truncationSymbol: "",
+		truncationDirection: "middle",
+	});
+	assert.deepEqual(valid.diagnostics, []);
+});
+
+test("model truncation settings reject invalid fields independently", () => {
+	const normalized = normalizeStatuslineConfig({
+		segmentText: {
+			model: {
+				prefix: "Model: ",
+				truncationLength: -1,
+				truncationSymbol: "bad\nmarker",
+				truncationDirection: "left",
+			},
+		},
+	});
+	assert.deepEqual(normalized.config.segmentText.model, {
+		prefix: "Model: ",
+		suffix: "",
+		truncationLength: 36,
+		truncationSymbol: "…",
+		truncationDirection: "start",
+	});
+	assert.deepEqual(
+		normalized.diagnostics.map((item) => item.path),
+		[
+			"segmentText.model.truncationLength",
+			"segmentText.model.truncationSymbol",
+			"segmentText.model.truncationDirection",
+		],
+	);
+
+	const oversized = normalizeStatuslineConfig({
+		segmentText: { model: { truncationLength: 1001 } },
+	});
+	assert.equal(oversized.config.segmentText.model.truncationLength, 36);
+	assert.equal(oversized.diagnostics[0]?.path, "segmentText.model.truncationLength");
+
+	const controlled = normalizeStatuslineConfig({
+		segmentText: { model: { truncationSymbol: "\u001b[31m" } },
+	});
+	assert.equal(controlled.config.segmentText.model.truncationSymbol, "…");
+	assert.equal(controlled.diagnostics[0]?.path, "segmentText.model.truncationSymbol");
+});
+
+test("model truncation fields remain model-specific", () => {
+	const normalized = normalizeStatuslineConfig({
+		segmentText: {
+			provider: { truncationLength: 10 },
+		},
+	});
+	assert.equal(normalized.diagnostics[0]?.code, "unknown");
+	assert.equal(normalized.diagnostics[0]?.path, "segmentText.provider.truncationLength");
 });
 
 test("legacy status icon keys inherit into canonical keys without rewriting settings", () => {
@@ -240,7 +324,13 @@ test("segment text rejects embedded line breaks and terminal control sequences",
 		segments: ["model"],
 		segmentText: { model: { prefix: "before\nafter", suffix: "\u001b[31m" } },
 	});
-	assert.deepEqual(normalized.config.segmentText.model, { prefix: "🤖 ", suffix: "" });
+	assert.deepEqual(normalized.config.segmentText.model, {
+		prefix: "🤖 ",
+		suffix: "",
+		truncationLength: 36,
+		truncationSymbol: "…",
+		truncationDirection: "start",
+	});
 	assert.equal(normalized.diagnostics[0]?.path, "segmentText.model.prefix");
 	assert.match(normalized.diagnostics[0]?.message ?? "", /use line_break/iu);
 	assert.equal(normalized.diagnostics[1]?.path, "segmentText.model.suffix");
@@ -267,7 +357,13 @@ test("normalization falls back by field and reports unknown, duplicate, and inva
 	assert.equal(normalized.config.density, "compact");
 	assert.equal(normalized.config.separator, "bar");
 	assert.deepEqual(normalized.config.segments, ["model", "time"]);
-	assert.deepEqual(normalized.config.segmentText.model, { prefix: "🤖 ", suffix: "!" });
+	assert.deepEqual(normalized.config.segmentText.model, {
+		prefix: "🤖 ",
+		suffix: "!",
+		truncationLength: 36,
+		truncationSymbol: "…",
+		truncationDirection: "start",
+	});
 	assert.equal(normalized.config.extensionStatusIcons.goal, "◎");
 	assert.equal(Object.hasOwn(normalized.config.extensionStatusIcons, "bad"), false);
 	const paths = normalized.diagnostics.map((item) => item.path);

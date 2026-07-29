@@ -106,15 +106,24 @@ export interface ExtensionStatusPresentation {
 	icons: Readonly<Record<string, string>>;
 }
 
+export type ModuleOptionValue =
+	| string
+	| boolean
+	| number
+	| readonly string[]
+	| Readonly<Record<string, string>>;
+
 export interface ModuleValueContext {
 	runtime: StarshipRuntimeSnapshot;
 	symbol: string;
+	options: Readonly<Record<string, ModuleOptionValue>>;
 	extensionStatus: ExtensionStatusPresentation;
 	hiddenExtensionStatusKeys: ReadonlySet<string>;
 }
 
 export type ModuleOptionSchema =
 	| { kind: "string"; default: string; allowEmpty?: boolean }
+	| { kind: "string-enum"; default: string; values: readonly string[] }
 	| { kind: "boolean"; default: boolean }
 	| { kind: "integer"; default: number; minimum: number; maximum: number }
 	| { kind: "string-array"; default: readonly string[]; allowNegative?: boolean }

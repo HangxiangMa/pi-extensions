@@ -177,6 +177,41 @@ test("catalog-owned module options normalize values and diagnose invalid input",
 	assert.match(invalidMessages, /cache\.future/iu);
 });
 
+test("model truncation options normalize values and reject invalid directions independently", () => {
+	assert.deepEqual(BUILT_IN_CONFIG.modules.model.options, {
+		truncation_length: 0,
+		truncation_symbol: "…",
+		truncation_direction: "end",
+	});
+
+	const valid = loadFromText(
+		"[model]\ntruncation_length = 36\ntruncation_symbol = ''\ntruncation_direction = 'middle'\n",
+	);
+	assert.deepEqual(valid.config.modules.model.options, {
+		truncation_length: 36,
+		truncation_symbol: "",
+		truncation_direction: "middle",
+	});
+	assert.deepEqual(valid.diagnostics, []);
+
+	const invalid = loadFromText(
+		"[model]\ntruncation_length = -1\ntruncation_symbol = 7\ntruncation_direction = 'left'\n",
+	);
+	assert.deepEqual(invalid.config.modules.model.options, {
+		truncation_length: 0,
+		truncation_symbol: "…",
+		truncation_direction: "end",
+	});
+	assert.deepEqual(
+		invalid.diagnostics.map((item) => item.path),
+		["model.truncation_length", "model.truncation_symbol", "model.truncation_direction"],
+	);
+
+	const oversized = loadFromText("[model]\ntruncation_length = 1001\n");
+	assert.equal(oversized.config.modules.model.options.truncation_length, 0);
+	assert.equal(oversized.diagnostics[0]?.path, "model.truncation_length");
+});
+
 test("valid TOML loads root, palette, module, and extension status settings", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-starship-config-"));
 	const path = join(root, CONFIG_FILE_NAME);

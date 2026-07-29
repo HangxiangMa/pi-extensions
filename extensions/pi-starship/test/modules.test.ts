@@ -284,6 +284,43 @@ test("module format, symbol, style, and disabled settings apply", () => {
 	assert.equal(renderStatusline(config, fixture()).ansi, "");
 });
 
+test("model truncation keeps the configured portions after built-in shortening", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$model";
+	config.formatAst = [{ type: "variable", name: "model" }];
+	config.modules.model.format = "$model";
+	config.modules.model.formatAst = [{ type: "variable", name: "model" }];
+	config.modules.model.options.truncation_length = 6;
+
+	const renderModel = (id: string) =>
+		stripAnsi(renderStatusline(config, fixture({ model: { provider: "llama.cpp", id } })).ansi);
+
+	config.modules.model.options.truncation_direction = "end";
+	assert.equal(renderModel("abcdefghijklmno"), "abcdef…");
+	config.modules.model.options.truncation_direction = "start";
+	assert.equal(renderModel("abcdefghijklmno"), "…jklmno");
+	config.modules.model.options.truncation_direction = "middle";
+	assert.equal(renderModel("abcdefghijklmno"), "abc…mno");
+	config.modules.model.options.truncation_length = 5;
+	assert.equal(renderModel("abcdefghijklmno"), "abc…no");
+
+	config.modules.model.options.truncation_length = 6;
+	config.modules.model.options.truncation_symbol = "";
+	assert.equal(renderModel("abcdefghijklmno"), "abcmno");
+	config.modules.model.options.truncation_length = 0;
+	assert.equal(renderModel("abcdefghijklmno"), "abcdefghijklmno");
+
+	config.modules.model.options.truncation_length = 6;
+	config.modules.model.options.truncation_symbol = "…";
+	config.modules.model.options.truncation_direction = "end";
+	assert.equal(renderModel("claude-sonnet-20241022"), "sonnet");
+	assert.equal(renderModel("A👨‍👩‍👧‍👦BCDEFG"), "A👨‍👩‍👧‍👦BCDE…");
+
+	const model = { provider: "llama.cpp", id: "ggml-org/gemma-4-E2B-it-GGUF:Q8_0" };
+	renderStatusline(config, fixture({ model }));
+	assert.equal(model.id, "ggml-org/gemma-4-E2B-it-GGUF:Q8_0");
+});
+
 test("$all expands enabled modules in default order without explicit duplicates", () => {
 	const config = structuredClone(BUILT_IN_CONFIG);
 	config.format = "$model$all";

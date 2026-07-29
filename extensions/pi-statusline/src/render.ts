@@ -20,6 +20,7 @@ import {
 	type RenderSegment,
 	type SegmentName,
 	type StatuslineConfig,
+	type TruncationDirection,
 } from "./types.js";
 import { type FooterUsageSummary, summarizeFooterUsage } from "./usage.js";
 
@@ -107,8 +108,16 @@ function buildSegment(
 			return segment(name, "π", config, "accent", "header", true);
 		case "provider":
 			return segment(name, ctx.model?.provider ?? "no-provider", config, "accent", "header");
-		case "model":
-			return segment(name, shortenModel(ctx.model?.id ?? "no-model"), config, "accent", "header");
+		case "model": {
+			const presentation = config.segmentText.model;
+			const model = truncateModel(
+				shortenModel(ctx.model?.id ?? "no-model"),
+				presentation.truncationLength,
+				presentation.truncationSymbol,
+				presentation.truncationDirection,
+			);
+			return segment(name, model, config, "accent", "header");
+		}
 		case "thinking":
 			return segment(
 				name,
@@ -301,6 +310,32 @@ function formatTime(): string {
 	const hours = now.getHours().toString().padStart(2, "0");
 	const minutes = now.getMinutes().toString().padStart(2, "0");
 	return `${hours}:${minutes}`;
+}
+
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+export function truncateModel(
+	model: string,
+	length: number,
+	symbol: string,
+	direction: TruncationDirection,
+): string {
+	if (length === 0) return model;
+	const graphemes = [...graphemeSegmenter.segment(model)].map(({ segment }) => segment);
+	if (graphemes.length <= length) return model;
+
+	switch (direction) {
+		case "start":
+			return `${symbol}${graphemes.slice(-length).join("")}`;
+		case "middle": {
+			const headLength = Math.ceil(length / 2);
+			const tailLength = Math.floor(length / 2);
+			const tail = tailLength > 0 ? graphemes.slice(-tailLength).join("") : "";
+			return `${graphemes.slice(0, headLength).join("")}${symbol}${tail}`;
+		}
+		case "end":
+			return `${graphemes.slice(0, length).join("")}${symbol}`;
+	}
 }
 
 export function shortenModel(model: string): string {

@@ -1,5 +1,9 @@
 import { defineModule } from "./types.js";
 
+const TRUNCATION_DIRECTIONS = ["start", "middle", "end"] as const;
+type TruncationDirection = (typeof TRUNCATION_DIRECTIONS)[number];
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 export const modelModule = defineModule({
 	name: "model",
 	variables: ["symbol", "model"],
@@ -9,8 +13,55 @@ export const modelModule = defineModule({
 		style: "fg:header_fg bg:header",
 		disabled: false,
 	},
-	values: ({ runtime }) => (runtime.model ? { model: shortenModel(runtime.model.id) } : undefined),
+	options: {
+		truncation_length: { kind: "integer", default: 0, minimum: 0, maximum: 1000 },
+		truncation_symbol: { kind: "string", default: "…" },
+		truncation_direction: {
+			kind: "string-enum",
+			default: "end",
+			values: TRUNCATION_DIRECTIONS,
+		},
+	},
+	values: ({ runtime, options }) => {
+		if (!runtime.model) return undefined;
+		const length = typeof options.truncation_length === "number" ? options.truncation_length : 0;
+		const symbol = typeof options.truncation_symbol === "string" ? options.truncation_symbol : "…";
+		const direction = isTruncationDirection(options.truncation_direction)
+			? options.truncation_direction
+			: "end";
+		return {
+			model: truncateModel(shortenModel(runtime.model.id), length, symbol, direction),
+		};
+	},
 });
+
+export function truncateModel(
+	model: string,
+	length: number,
+	symbol: string,
+	direction: TruncationDirection,
+): string {
+	if (length === 0) return model;
+	const graphemes = [...graphemeSegmenter.segment(model)].map(({ segment }) => segment);
+	if (graphemes.length <= length) return model;
+
+	switch (direction) {
+		case "start":
+			return `${symbol}${graphemes.slice(-length).join("")}`;
+		case "middle": {
+			const headLength = Math.ceil(length / 2);
+			const tailLength = Math.floor(length / 2);
+			const tail = tailLength > 0 ? graphemes.slice(-tailLength).join("") : "";
+			return `${graphemes.slice(0, headLength).join("")}${symbol}${tail}`;
+		}
+		case "end":
+			return `${graphemes.slice(0, length).join("")}${symbol}`;
+	}
+}
+
+function isTruncationDirection(value: unknown): value is TruncationDirection {
+	return TRUNCATION_DIRECTIONS.includes(value as TruncationDirection);
+}
 
 export function shortenModel(model: string): string {
 	return model

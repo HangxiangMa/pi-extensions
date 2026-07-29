@@ -16,6 +16,7 @@ import {
 	type SegmentName,
 	type SegmentPalette,
 	type StatuslineConfig,
+	TRUNCATION_DIRECTIONS,
 } from "./types.js";
 
 export const SETTINGS_FILE_NAME = "pi-statusline.json";
@@ -60,7 +61,13 @@ export const DEFAULT_STATUSLINE_CONFIG: StatuslineConfig = {
 	segmentText: {
 		brand: { prefix: "", suffix: "" },
 		provider: { prefix: "🔌 ", suffix: "" },
-		model: { prefix: "🤖 ", suffix: "" },
+		model: {
+			prefix: "🤖 ",
+			suffix: "",
+			truncationLength: 36,
+			truncationSymbol: "…",
+			truncationDirection: "start",
+		},
 		thinking: { prefix: "🧠 ", suffix: "" },
 		cwd: { prefix: "📁 ", suffix: "" },
 		branch: { prefix: "🌿 ", suffix: "" },
@@ -203,31 +210,24 @@ export function normalizeStatuslineConfig(value: unknown): {
 					diagnostics.push(invalidDiagnostic(path, "Expected an object"));
 					continue;
 				}
+				const knownFields = new Set([
+					"prefix",
+					"suffix",
+					...(name === "model"
+						? ["truncationLength", "truncationSymbol", "truncationDirection"]
+						: []),
+				]);
 				for (const key of Object.keys(presentation)) {
-					if (key !== "prefix" && key !== "suffix") {
-						diagnostics.push(unknownDiagnostic(`${path}.${key}`));
-					}
+					if (!knownFields.has(key)) diagnostics.push(unknownDiagnostic(`${path}.${key}`));
 				}
 				for (const field of ["prefix", "suffix"] as const) {
 					const fieldValue = presentation[field];
 					if (fieldValue === undefined) continue;
-					if (typeof fieldValue !== "string") {
-						diagnostics.push(invalidDiagnostic(`${path}.${field}`, "Expected a string"));
-						continue;
-					}
-					if (/[\r\n\u2028\u2029]/u.test(fieldValue)) {
-						diagnostics.push(
-							invalidDiagnostic(`${path}.${field}`, "Line breaks are not allowed; use line_break"),
-						);
-						continue;
-					}
-					if (hasControlCharacter(fieldValue)) {
-						diagnostics.push(
-							invalidDiagnostic(`${path}.${field}`, "Control characters are not allowed"),
-						);
-						continue;
-					}
+					if (!isSafeSegmentText(fieldValue, `${path}.${field}`, diagnostics)) continue;
 					config.segmentText[name][field] = fieldValue;
+				}
+				if (name === "model") {
+					normalizeModelTruncation(presentation, config, diagnostics);
 				}
 			}
 		}
@@ -503,6 +503,65 @@ function normalizePalette(
 	}
 	config.palette = palette;
 	config.palettePreset = "custom";
+}
+
+function normalizeModelTruncation(
+	presentation: Record<string, unknown>,
+	config: StatuslineConfig,
+	diagnostics: StatuslineConfigDiagnostic[],
+) {
+	const path = "segmentText.model";
+	const length = presentation.truncationLength;
+	if (length !== undefined) {
+		if (typeof length !== "number" || !Number.isInteger(length) || length < 0 || length > 1000) {
+			diagnostics.push(
+				invalidDiagnostic(`${path}.truncationLength`, "Expected an integer from 0 through 1000"),
+			);
+		} else config.segmentText.model.truncationLength = length;
+	}
+
+	const symbol = presentation.truncationSymbol;
+	if (symbol !== undefined && isSafeSegmentText(symbol, `${path}.truncationSymbol`, diagnostics)) {
+		config.segmentText.model.truncationSymbol = symbol;
+	}
+
+	const direction = presentation.truncationDirection;
+	if (direction !== undefined) {
+		if (
+			typeof direction !== "string" ||
+			!TRUNCATION_DIRECTIONS.includes(direction as (typeof TRUNCATION_DIRECTIONS)[number])
+		) {
+			diagnostics.push(
+				invalidDiagnostic(
+					`${path}.truncationDirection`,
+					`Expected one of: ${TRUNCATION_DIRECTIONS.join(", ")}`,
+				),
+			);
+		} else {
+			config.segmentText.model.truncationDirection =
+				direction as (typeof TRUNCATION_DIRECTIONS)[number];
+		}
+	}
+}
+
+function isSafeSegmentText(
+	value: unknown,
+	path: string,
+	diagnostics: StatuslineConfigDiagnostic[],
+): value is string {
+	if (typeof value !== "string") {
+		diagnostics.push(invalidDiagnostic(path, "Expected a string"));
+		return false;
+	}
+	if (/[\r\n\u2028\u2029]/u.test(value)) {
+		diagnostics.push(invalidDiagnostic(path, "Line breaks are not allowed; use line_break"));
+		return false;
+	}
+	if (hasControlCharacter(value)) {
+		diagnostics.push(invalidDiagnostic(path, "Control characters are not allowed"));
+		return false;
+	}
+	return true;
 }
 
 function normalizeEnum<
