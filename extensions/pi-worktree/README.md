@@ -56,7 +56,12 @@ Choose one action:
 - **Prune stale metadata** — inspect Git's dry-run output, then optionally run the matching prune.
 - **Configure worktree root** — set a machine-local default root or submit a blank value to restore `~/.worktrees`.
 
-The menu title shows the effective worktree root and whether it comes from the built-in default or the user settings file. `/worktree` intentionally does not accept text subcommands or expose argument autocomplete. Every change is initiated and confirmed through the interactive UI.
+The standard root menu shows the registered count, current path, effective worktree root, its source,
+and any settings warning. Escape closes it. `/worktree` intentionally does not accept text
+subcommands or expose argument autocomplete. Every change is initiated and confirmed through TUI or
+RPC dialogs; print and JSON modes reject the command observably. Operation-specific branch/path
+inputs, worktree identity selectors, preflight previews, and destructive confirmations remain
+extension-owned because they carry Git safety and commit-aware revalidation.
 
 ## 🌿 Add defaults
 

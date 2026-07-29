@@ -14,6 +14,8 @@ initTheme("dark", false);
 const testKeybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
 	"tui.select.up": "k",
 	"tui.select.down": "j",
+	"tui.select.pageUp": "u",
+	"tui.select.pageDown": "d",
 	"tui.select.confirm": "l",
 	"tui.select.cancel": "q",
 });
@@ -266,6 +268,127 @@ test("multi-select supports explicit bulk action rows", async () => {
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	assert.deepEqual(harness.events, [{ kind: "activate", itemId: "all" }]);
 });
+
+test("bounded multi-select keeps first, middle, last, and paged selections visible", () => {
+	const screen = largeMultiSelectScreen();
+	const middle = componentHarness(screen, { selectedItemId: "tool-10" });
+	const middleText = middle.component.render(80).join("\n");
+	assert.match(middleText, /tool_8/);
+	assert.match(middleText, /› \[ \] tool_10/);
+	assert.match(middleText, /tool_12/);
+	assert.doesNotMatch(middleText, /tool_7|tool_13/);
+	assert.match(middleText, /11\/21/);
+	assert.match(middleText, /Description for tool 10/);
+
+	const first = componentHarness(screen, { selectedItemId: "tool-0" });
+	assert.match(first.component.render(80).join("\n"), /tool_0[\s\S]*tool_4/);
+	assert.doesNotMatch(first.component.render(80).join("\n"), /tool_5/);
+
+	const last = componentHarness(screen, { selectedItemId: "all" });
+	const lastText = last.component.render(80).join("\n");
+	assert.match(lastText, /tool_16[\s\S]*› Enable all/);
+	assert.doesNotMatch(lastText, /tool_15/);
+
+	const pageDown = testKeybindings.getKeys("tui.select.pageDown")[0];
+	const pageUp = testKeybindings.getKeys("tui.select.pageUp")[0];
+	assert.ok(pageDown);
+	assert.ok(pageUp);
+	first.component.handleInput(pageDown);
+	assert.match(first.component.render(80).join("\n"), /› \[ \] tool_5/);
+	first.component.handleInput(pageDown);
+	first.component.handleInput(pageDown);
+	first.component.handleInput(pageDown);
+	assert.match(first.component.render(80).join("\n"), /› Enable all/);
+	first.component.handleInput(pageUp);
+	assert.match(first.component.render(80).join("\n"), /› \[ \] tool_15/);
+});
+
+test("bounded multi-select remains width-safe and small lists stay visually unchanged", () => {
+	const small = componentHarness({ ...multiSelectScreen, viewportSize: 5 });
+	const original = componentHarness(multiSelectScreen);
+	assert.deepEqual(small.component.render(80), original.component.render(80));
+
+	const narrow = componentHarness(largeMultiSelectScreen(), { selectedItemId: "tool-10" });
+	for (const line of narrow.component.render(18)) assert.ok(visibleWidth(line) <= 18);
+});
+
+test("off-screen multi-select rollback settles by stable id before Back", async () => {
+	let release: (() => void) | undefined;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const harness = componentHarness(largeMultiSelectScreen(), {
+		selectedItemId: "tool-0",
+		onMultiSelectChange: async () => {
+			await gate;
+			return false;
+		},
+	});
+	harness.component.handleInput("l");
+	harness.component.handleInput("d");
+	assert.match(harness.component.render(80).join("\n"), /› \[ \] tool_5/);
+	release?.();
+	await harness.component.waitForPending();
+	harness.component.handleInput("u");
+	assert.match(harness.component.render(80).join("\n"), /› \[ \] tool_0/);
+	harness.component.handleInput("l");
+	harness.component.handleInput("q");
+	assert.deepEqual(harness.events, []);
+	await harness.component.waitForPending();
+	assert.deepEqual(harness.events, [{ kind: "back" }]);
+});
+
+test("disabled multi-select rows are focusable, explained, sanitized, and never toggle", async () => {
+	let toggles = 0;
+	const harness = componentHarness(
+		{
+			kind: "multiSelect",
+			title: "Tools",
+			items: [
+				{ id: "enabled", label: "enabled", selected: false },
+				{
+					id: "blocked\u001b]8;;raw\u0007",
+					label: "blocked\u001b[31m",
+					selected: false,
+					disabled: true,
+					disabledReason: "Policy\u001b]8;;unsafe\u0007 blocks this tool",
+				},
+			],
+			action: "toggle",
+		},
+		{
+			selectedItemId: "blocked\u001b]8;;raw\u0007",
+			onMultiSelectChange: async () => {
+				toggles += 1;
+				return true;
+			},
+		},
+	);
+	const rendered = harness.component.render(80).join("\n");
+	assert.match(rendered, /› \[-\] blocked .*unavailable/);
+	assert.match(rendered, /Policy .*blocks this tool/);
+	assert.equal(rendered.includes("\u001b]8;;unsafe"), false);
+	harness.component.handleInput("l");
+	harness.component.handleInput(" ");
+	await harness.component.waitForPending();
+	assert.equal(toggles, 0);
+});
+
+function largeMultiSelectScreen(): MenuScreen<ScreenId, ActionId> {
+	return {
+		kind: "multiSelect",
+		title: "Large tools",
+		viewportSize: 5,
+		items: Array.from({ length: 20 }, (_, index) => ({
+			id: `tool-${index}`,
+			label: `tool_${index}`,
+			description: `Description for tool ${index}`,
+			selected: false,
+		})),
+		action: "toggle",
+		actions: [{ id: "all", label: "Enable all", action: "run" }],
+	};
+}
 
 function componentHarness(
 	screen: MenuScreen<ScreenId, ActionId>,

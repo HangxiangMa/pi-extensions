@@ -53,29 +53,29 @@ not a broad cast or a global type downgrade.
 
 ## Plan
 
-- [ ] Add failing compile-time fixtures under `packages/pi-tui-kit/test/` proving an
+- [x] Add failing compile-time fixtures under `packages/pi-tui-kit/test/` proving an
       `ExtensionContext` menu currently cannot be passed to `runMenu()`, existing three-generic command
       definitions retain command-only `ctx` methods, and incompatible context definitions are rejected;
       verify `npm --workspace @narumitw/pi-tui-kit run typecheck` fails only on the missing generic API.
-- [ ] Introduce the backwards-compatible context generic in `src/types.ts`, `src/model.ts`, and
+- [x] Introduce the backwards-compatible context generic in `src/types.ts`, `src/model.ts`, and
       `src/runtime.ts` without casts that add command-only capabilities; verify existing Chrome
       DevTools and Firecrawl source still typechecks unchanged and the new fixtures pass.
-- [ ] Add runtime tests that launch equivalent TUI and RPC menus with an `ExtensionContext`, abort the
+- [x] Add runtime tests that launch equivalent TUI and RPC menus with an `ExtensionContext`, abort the
       owner signal during state loading and action execution, dispose an open screen, and reject stale
       continuations; verify results match the existing command-context contract.
-- [ ] Update `packages/pi-tui-kit/README.md` with one lifecycle-handler example and an ownership warning
+- [x] Update `packages/pi-tui-kit/README.md` with one lifecycle-handler example and an ownership warning
       that consumers must pass a session signal and `isCurrent()` guard and must never retain a replaced
       context.
-- [ ] Run the package check, root tests, root CI-equivalent check, and `just pack-tui-kit`; inspect
+- [x] Run the package check, root tests, root CI-equivalent check, and `just pack-tui-kit`; inspect
       generated declarations and tarball contents, then typecheck the two existing consumers and the
       planned Plan-mode usage fixture.
-- [ ] Audit the final diff against Pi TUI lifecycle, cancellation, disposal, mode, package, and public
+- [x] Audit the final diff against Pi TUI lifecycle, cancellation, disposal, mode, package, and public
       API conventions; record any inference or compatibility deviation before archiving the plan.
 
 ## Completion Checklist
 
-- [ ] Existing command-menu source compiles unchanged and keeps `ExtensionCommandContext` action typing.
-- [ ] Lifecycle menus can opt into `ExtensionContext` without casts or command-only methods.
-- [ ] TUI, RPC, unsupported-mode, cancellation, disposal, stale-action, and error behavior is unchanged.
-- [ ] Generated declarations, README examples, package checks, root checks, and pack inspection pass.
-- [ ] No Plan-mode-specific policy or consumer state was added to `pi-tui-kit`.
+- [x] Existing command-menu source compiles unchanged and keeps `ExtensionCommandContext` action typing.
+- [x] Lifecycle menus can opt into `ExtensionContext` without casts or command-only methods.
+- [x] TUI, RPC, unsupported-mode, cancellation, disposal, stale-action, and error behavior is unchanged.
+- [x] Generated declarations, README examples, package checks, root checks, and pack inspection pass.
+- [x] No Plan-mode-specific policy or consumer state was added to `pi-tui-kit`.

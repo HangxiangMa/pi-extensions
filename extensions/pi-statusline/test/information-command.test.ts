@@ -168,5 +168,8 @@ test("Advanced provides a shallow Back path to the refreshed main menu", async (
 
 	await mock.commands.get("statusline")?.handler("", context.ctx);
 
-	assert.deepEqual(titles, ["pi-statusline", "pi-statusline — Advanced", "pi-statusline"]);
+	assert.deepEqual(
+		titles.map((title) => title.split("\n")[0]),
+		["pi-statusline", "pi-statusline — Advanced", "pi-statusline"],
+	);
 });

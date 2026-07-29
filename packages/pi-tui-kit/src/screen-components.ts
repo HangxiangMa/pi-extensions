@@ -47,6 +47,7 @@ export interface MenuMultiSelectChange {
 }
 
 export interface MenuScreenComponent extends Component {
+	readonly __piTuiKitScreen?: true;
 	handleInput(data: string): void;
 	waitForPending(): Promise<void>;
 	dispose?(): void;
@@ -74,16 +75,23 @@ export interface MenuScreenComponentOptions<ScreenId extends string, ActionId ex
 export function createMenuScreenComponent<ScreenId extends string, ActionId extends string>(
 	options: MenuScreenComponentOptions<ScreenId, ActionId>,
 ): MenuScreenComponent {
+	let component: MenuScreenComponent;
 	switch (options.screen.kind) {
 		case "actions":
-			return createActionsComponent(options as ActionsOptions<ScreenId, ActionId>);
+			component = createActionsComponent(options as ActionsOptions<ScreenId, ActionId>);
+			break;
 		case "detail":
-			return createDetailComponent(options as DetailOptions<ScreenId, ActionId>);
+			component = createDetailComponent(options as DetailOptions<ScreenId, ActionId>);
+			break;
 		case "settings":
-			return createSettingsComponent(options as SettingsOptions<ScreenId, ActionId>);
+			component = createSettingsComponent(options as SettingsOptions<ScreenId, ActionId>);
+			break;
 		case "multiSelect":
-			return createMultiSelectComponent(options as MultiSelectOptions<ScreenId, ActionId>);
+			component = createMultiSelectComponent(options as MultiSelectOptions<ScreenId, ActionId>);
+			break;
 	}
+	Object.defineProperty(component, "__piTuiKitScreen", { value: true });
+	return component;
 }
 
 type ActionsOptions<ScreenId extends string, ActionId extends string> = MenuScreenComponentOptions<
@@ -328,11 +336,15 @@ function createMultiSelectComponent<ScreenId extends string, ActionId extends st
 			if (!disposed) options.onEvent({ kind });
 		});
 	};
-	const move = (delta: number) => {
+	const selectIndex = (index: number) => {
 		if (rows.length === 0) return;
-		selectedIndex = (selectedIndex + delta + rows.length) % rows.length;
+		selectedIndex = Math.max(0, Math.min(index, rows.length - 1));
 		const row = rows[selectedIndex];
 		if (row) options.onSelectionChange?.(row.item.id);
+	};
+	const move = (delta: number) => {
+		if (rows.length === 0) return;
+		selectIndex((selectedIndex + delta + rows.length) % rows.length);
 	};
 	const activate = () => {
 		const row = rows[selectedIndex];
@@ -382,12 +394,51 @@ function createMultiSelectComponent<ScreenId extends string, ActionId extends st
 	};
 	return {
 		render(width) {
-			const content = rows.map((row, index) => {
-				const prefix = index === selectedIndex ? "› " : "  ";
-				const marker = row.kind === "toggle" ? `${selected.get(row.item.id) ? "[x]" : "[ ]"} ` : "";
-				const label = `${prefix}${marker}${safeMenuText(row.item.label)}`;
-				return index === selectedIndex ? options.theme.fg("accent", label) : label;
+			const requestedViewport = options.screen.viewportSize ?? 13;
+			const viewportSize = Math.min(requestedViewport, rows.length);
+			const viewportStart = Math.max(
+				0,
+				Math.min(selectedIndex - Math.floor(viewportSize / 2), rows.length - viewportSize),
+			);
+			const visibleRows = rows.slice(viewportStart, viewportStart + viewportSize);
+			const content = visibleRows.map((row, offset) => {
+				const index = viewportStart + offset;
+				const isSelected = index === selectedIndex;
+				const prefix = isSelected ? "› " : "  ";
+				const marker =
+					row.kind === "toggle"
+						? `${row.item.disabled ? "[-]" : selected.get(row.item.id) ? "[x]" : "[ ]"} `
+						: "";
+				const unavailable = row.item.disabled ? " (unavailable)" : "";
+				const label = `${prefix}${marker}${safeMenuText(row.item.label)}${unavailable}`;
+				if (isSelected) return options.theme.fg("accent", label);
+				return row.item.disabled ? options.theme.fg("dim", label) : label;
 			});
+			if (viewportSize < rows.length) {
+				content.push(options.theme.fg("dim", `  (${selectedIndex + 1}/${rows.length})`));
+			}
+			const selectedRow = rows[selectedIndex];
+			const descriptions = selectedRow
+				? [
+						selectedRow.item.description,
+						selectedRow.kind === "toggle" && selectedRow.item.disabled
+							? selectedRow.item.disabledReason
+								? `Unavailable: ${selectedRow.item.disabledReason}`
+								: "Unavailable"
+							: undefined,
+					].filter((value): value is string => Boolean(value))
+				: [];
+			if (descriptions.length > 0) {
+				content.push(
+					"",
+					...descriptions.flatMap((description) =>
+						wrapTextWithAnsi(
+							options.theme.fg("dim", `  ${safeMenuText(description)}`),
+							Math.max(1, width),
+						),
+					),
+				);
+			}
 			return renderFrame(
 				options.screen.title,
 				options.screen.lines ?? [],
@@ -407,13 +458,9 @@ function createMultiSelectComponent<ScreenId extends string, ActionId extends st
 			} else if (options.keybindings.matches(data, "tui.select.up")) move(-1);
 			else if (options.keybindings.matches(data, "tui.select.down")) move(1);
 			else if (options.keybindings.matches(data, "tui.select.pageUp")) {
-				selectedIndex = 0;
-				const row = rows[selectedIndex];
-				if (row) options.onSelectionChange?.(row.item.id);
+				selectIndex(selectedIndex - (options.screen.viewportSize ?? 13));
 			} else if (options.keybindings.matches(data, "tui.select.pageDown")) {
-				selectedIndex = Math.max(0, rows.length - 1);
-				const row = rows[selectedIndex];
-				if (row) options.onSelectionChange?.(row.item.id);
+				selectIndex(selectedIndex + (options.screen.viewportSize ?? 13));
 			} else if (options.keybindings.matches(data, "tui.select.confirm") || data === " ") {
 				activate();
 			}

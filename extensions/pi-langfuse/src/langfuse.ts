@@ -3,6 +3,7 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import {
 	DEFAULT_BASE_URL,
 	type LangfuseConfig,
@@ -55,89 +56,118 @@ export function createLangfuseExtension(
 		let hasStoredConfig = false;
 		let configurationNotice: string | undefined;
 		let sessionGeneration = 0;
+		let menuController = new AbortController();
 		let configWriteQueue = Promise.resolve();
 		let nextAttemptReason: string | undefined;
 
+		async function showLangfuseMenu(ctx: ExtensionCommandContext) {
+			if (!ctx.hasUI) {
+				ctx.ui.notify(
+					formatNonInteractiveStatus(activeConfig, configPath, initializationError),
+					"warning",
+				);
+				return;
+			}
+			const menuGeneration = sessionGeneration;
+			type Screen = "main";
+			type Action = "flush" | "configure" | "help";
+			const menu = defineMenu<undefined, Screen, Action>({
+				start: "main",
+				screens: {
+					main: () => ({
+						kind: "actions",
+						title: "Langfuse",
+						lines: formatMenuTitle(
+							activeConfig,
+							configPath,
+							initializationError,
+							configurationNotice,
+						)
+							.split("\n")
+							.slice(1),
+						items: [
+							...(recorder ? [{ id: "flush", label: FLUSH_ACTION, action: "flush" as const }] : []),
+							{
+								id: "configure",
+								label: hasStoredConfig ? UPDATE_ACTION : SET_UP_ACTION,
+								action: "configure",
+							},
+							{ id: "help", label: HELP_ACTION, action: "help" },
+						],
+						hint: "close",
+					}),
+				},
+				actions: {
+					flush: async () => {
+						const menuRecorder = recorder;
+						const menuConfig = activeConfig;
+						if (!menuRecorder) {
+							ctx.ui.notify("Langfuse tracing is not enabled for this session.", "warning");
+							return { kind: "close" };
+						}
+						try {
+							await menuRecorder.flush();
+							if (menuGeneration !== sessionGeneration) return { kind: "close" };
+							ctx.ui.notify("Langfuse traces flushed for this session.", "info");
+						} catch (error) {
+							if (menuGeneration !== sessionGeneration) return { kind: "close" };
+							ctx.ui.notify(`Langfuse flush failed: ${formatError(error, menuConfig)}`, "error");
+						}
+						return { kind: "close" };
+					},
+					configure: async () => {
+						const loaded = await loadConfig(configPath);
+						if (menuGeneration !== sessionGeneration) return { kind: "close" };
+						configPath = loaded.path;
+						const next = await promptForConfig(
+							ctx,
+							loaded.ok ? loaded.config : undefined,
+							() => menuGeneration === sessionGeneration,
+						);
+						if (!next || menuGeneration !== sessionGeneration) return { kind: "close" };
+						try {
+							const write = configWriteQueue.then(() => writeConfig(next, loaded.path));
+							configWriteQueue = write.then(
+								() => undefined,
+								() => undefined,
+							);
+							await write;
+							if (menuGeneration !== sessionGeneration) return { kind: "close" };
+							hasStoredConfig = true;
+							configurationNotice =
+								"Saved; restart each Pi process to use it in subsequent sessions.";
+							ctx.ui.notify(
+								`Saved Langfuse config to ${loaded.path} for this Pi agent directory. Restart each Pi process to apply it to subsequent sessions.`,
+								"info",
+							);
+						} catch (error) {
+							if (menuGeneration !== sessionGeneration) return { kind: "close" };
+							ctx.ui.notify(`Failed to save Langfuse config: ${formatError(error, next)}`, "error");
+						}
+						return { kind: "close" };
+					},
+					help: async () => {
+						ctx.ui.notify(formatHelp(configPath), "info");
+						return { kind: "close" };
+					},
+				},
+			});
+			await runMenu(ctx, menu, {
+				getState: () => undefined,
+				signal: menuController.signal,
+				isCurrent: () => menuGeneration === sessionGeneration,
+			});
+		}
+
 		pi.registerCommand("langfuse", {
 			description: "Open interactive Langfuse tracing controls",
-			handler: async (_args, ctx) => {
-				if (!ctx.hasUI) {
-					ctx.ui.notify(
-						formatNonInteractiveStatus(activeConfig, configPath, initializationError),
-						"warning",
-					);
-					return;
-				}
-
-				const menuGeneration = sessionGeneration;
-				const menuRecorder = recorder;
-				const menuConfig = activeConfig;
-				const choice = await ctx.ui.select(
-					formatMenuTitle(activeConfig, configPath, initializationError, configurationNotice),
-					[
-						...(menuRecorder ? [FLUSH_ACTION] : []),
-						hasStoredConfig ? UPDATE_ACTION : SET_UP_ACTION,
-						HELP_ACTION,
-					],
-				);
-				if (!choice || menuGeneration !== sessionGeneration) return;
-
-				if (choice === FLUSH_ACTION) {
-					if (!menuRecorder) {
-						ctx.ui.notify("Langfuse tracing is not enabled for this session.", "warning");
-						return;
-					}
-					try {
-						await menuRecorder.flush();
-						if (menuGeneration !== sessionGeneration) return;
-						ctx.ui.notify("Langfuse traces flushed for this session.", "info");
-					} catch (error) {
-						if (menuGeneration !== sessionGeneration) return;
-						ctx.ui.notify(`Langfuse flush failed: ${formatError(error, menuConfig)}`, "error");
-					}
-					return;
-				}
-
-				if (choice === SET_UP_ACTION || choice === UPDATE_ACTION) {
-					const loaded = await loadConfig(configPath);
-					if (menuGeneration !== sessionGeneration) return;
-					configPath = loaded.path;
-					const next = await promptForConfig(
-						ctx,
-						loaded.ok ? loaded.config : undefined,
-						() => menuGeneration === sessionGeneration,
-					);
-					if (!next || menuGeneration !== sessionGeneration) return;
-					try {
-						const write = configWriteQueue.then(() => writeConfig(next, loaded.path));
-						configWriteQueue = write.then(
-							() => undefined,
-							() => undefined,
-						);
-						await write;
-						if (menuGeneration !== sessionGeneration) return;
-						hasStoredConfig = true;
-						configurationNotice =
-							"Saved; restart each Pi process to use it in subsequent sessions.";
-						ctx.ui.notify(
-							`Saved Langfuse config to ${loaded.path} for this Pi agent directory. Restart each Pi process to apply it to subsequent sessions.`,
-							"info",
-						);
-					} catch (error) {
-						if (menuGeneration !== sessionGeneration) return;
-						ctx.ui.notify(`Failed to save Langfuse config: ${formatError(error, next)}`, "error");
-					}
-					return;
-				}
-
-				if (choice === HELP_ACTION) {
-					ctx.ui.notify(formatHelp(configPath), "info");
-				}
-			},
+			handler: async (_args, ctx) => showLangfuseMenu(ctx),
 		});
 
 		pi.on("session_start", async (_event, ctx) => {
 			const generation = ++sessionGeneration;
+			menuController.abort(new DOMException("Langfuse session replaced", "AbortError"));
+			menuController = new AbortController();
 			recorder = undefined;
 			activeConfig = undefined;
 			configPath = undefined;
@@ -300,6 +330,7 @@ export function createLangfuseExtension(
 
 		pi.on("session_shutdown", async (event, ctx) => {
 			const generation = ++sessionGeneration;
+			menuController.abort(new DOMException("Langfuse session shut down", "AbortError"));
 			const activeRecorder = recorder;
 			const shutdownConfig = activeConfig;
 			const pendingConfigWrite = configWriteQueue;

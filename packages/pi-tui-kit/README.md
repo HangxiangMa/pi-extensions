@@ -103,7 +103,7 @@ remain pure projections of current extension state.
 - **`detail`** — read-only wrapped text with Back or Close behavior.
 - **`settings`** — immediate value changes with serialized saves and rollback when an action rejects.
 - **`multiSelect`** — optimistic toggles with stable cursor restoration, serialized saves, rollback,
-  and optional bulk action rows.
+  selected-row descriptions, optional bulk action rows, and a bounded TUI viewport.
 
 All standard TUI screens use Pi's injected keybindings, sanitize display text, rebuild themed
 content after invalidation, and bound rendered output to the supplied terminal width. Escape follows
@@ -122,9 +122,40 @@ Action handlers return one of these results:
 A rejected settings or multi-select action restores the last accepted value. Throwing has the same
 recovery behavior and is routed through `onError`.
 
+For a large catalog, set `viewportSize` to the maximum number of toggle and action rows rendered at
+once. Up and Down wrap; Page Up and Page Down move by one viewport and clamp at the first or last row.
+The viewport applies only to TUI rendering—RPC keeps one flat list of unique dialog choices.
+Descriptions for the selected row appear below the viewport.
+
+```ts
+const tools = {
+  kind: "multiSelect" as const,
+  title: "Tool permissions",
+  viewportSize: 9,
+  items: allTools.map((tool) => ({
+    id: tool.name, // raw stable identity; never recover it from the display label
+    label: tool.name,
+    description: tool.description,
+    selected: enabledTools.has(tool.name),
+    disabled: blockedTools.has(tool.name),
+    disabledReason: blockedTools.has(tool.name) ? "Blocked by the active policy" : undefined,
+  })),
+  action: "toggleTool" as const,
+  actions: [
+    // Bulk domain handlers must exclude disabled rows themselves.
+    { id: "enable-all", label: "Enable all available", action: "enableAll" as const },
+  ],
+};
+```
+
+Disabled multi-select rows stay visible and focusable, use a textual `[-]`/`unavailable` marker, show
+`disabledReason` with the selected description, and never invoke the toggle handler. RPC exposes the
+same unavailable reason and safely returns to the screen when the row is selected. Keep policy and
+bulk-set validation in the consuming extension and revalidate it again before mutation.
+
 ## 🔌 Runtime and mode behavior
 
-`runMenu()` accepts Pi's `ExtensionCommandContext`, a definition, and runtime options:
+`runMenu()` accepts Pi's `ExtensionCommandContext` by default, a definition, and runtime options:
 
 - `getState({ ctx, signal })` loads extension-owned state.
 - `signal` aborts state loads and actions immediately when the owning session is replaced or shut down.
@@ -135,6 +166,30 @@ recovery behavior and is routed through `onError`.
 In TUI mode the runtime uses `ctx.ui.custom()`. In RPC mode it adapts standard screens to
 `ctx.ui.select()` dialogs. Print and JSON modes never attempt custom UI and instead call the
 unsupported-mode hook. `runMenu()` resolves to `closed`, `unsupported`, `stale`, or `error`.
+
+Lifecycle handlers can opt into the shared `ExtensionContext` surface without a cast. Existing
+three-generic command menus keep `ExtensionCommandContext`, including command-only methods.
+
+```ts
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+const settledMenu = defineMenu<State, Screen, Action, ExtensionContext>({
+  // screens and actions; action ctx is ExtensionContext here
+});
+
+pi.on("agent_settled", async (_event, ctx) => {
+  const generation = currentGeneration();
+  await runMenu(ctx, settledMenu, {
+    getState: ({ signal }) => loadState(signal),
+    signal: currentSessionSignal(),
+    isCurrent: () => generation === currentGeneration(),
+  });
+});
+```
+
+The consumer must own and abort the session signal, check its generation or equivalent identity after
+every await, and never retain or use an `ExtensionContext` after session replacement, reload, or
+shutdown. The kit does not create lifecycle ownership for the extension.
 
 ## 🧩 Ownership boundary
 

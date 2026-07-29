@@ -61,7 +61,13 @@ If another installed extension also registers `/webui`, Pi assigns numeric comma
 
 Argument completion is available for all subcommands. Bare `/webui` is menu-first; scripts and users migrating from the earlier direct behavior should use `/webui open`.
 
-The menu keeps the consequential current state beside each decision: whether the session server is running, whether startup is **Manual** or **Every session**, and whether values come from defaults or the settings file. **Open WebUI** previews that it starts a private session server. **Get a fresh link** previews that it keeps the server but invalidates any earlier unused bootstrap link. Escape closes the main menu without starting a server, issuing a link, or saving settings. Settings, Status & diagnostics, and Help are one level deep and return to the menu.
+The standard menu keeps the consequential current state beside each decision: whether the session
+server is running, whether startup is **Manual** or **Every session**, and whether values come from
+defaults or the settings file. **Open WebUI** explains that it starts a private session server.
+**Get a fresh link** explains that it keeps the server but invalidates any earlier unused bootstrap
+link. Escape closes the main menu without starting a server, issuing a link, or saving settings.
+Settings, Status & diagnostics, Repair, and Help are standard one-level screens that return to the
+menu.
 
 ## ⚙️ Settings
 
@@ -152,7 +158,9 @@ A loopback page is local to the operating-system network namespace. WebUI does n
 
 ## ♿ Accessibility and browsers
 
-The terminal menu uses Pi's configured selection keybindings, textual state that does not depend on color, stable focus when returning from a secondary screen, and responsive wrapping without hiding consequential previews. Pi's terminal accessibility remains subject to terminal and screen-reader capabilities.
+The terminal menu uses Pi's configured selection keybindings, textual state that does not depend on
+color, stable focus when returning from a secondary screen, and width-bounded wrapping. Pi's terminal
+accessibility remains subject to terminal and screen-reader capabilities.
 
 The browser page uses semantic headings, native disclosure/dialog controls, concise status/alert live regions, accessible labels, visible keyboard focus, at least 44 px controls, keyboard image preview/removal/reordering, `Ctrl/Command+Enter` submission, reduced-motion handling, dark mode, and responsive reflow. It targets current stable desktop Chrome, Edge, Firefox, and Safari.
 

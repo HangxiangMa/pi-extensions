@@ -59,36 +59,36 @@ confirmation previews, browser assets, and draft/commit logic remain extension-o
 
 ## Plan
 
-- [ ] Add the `<1` kit runtime dependency and lockfile edge to `pi-image-drop`; verify boundaries and
+- [x] Add the `<1` kit runtime dependency and lockfile edge to `pi-image-drop`; verify boundaries and
       `npm run pack:image-drop` include the built library dependency without changing browser assets.
-- [ ] Add failing declarative screen/runtime tests for empty, processing, blocked, reserved, retained,
+- [x] Add failing declarative screen/runtime tests for empty, processing, blocked, reserved, retained,
       running-server, text-only-model, invalid-settings, recommended/custom-limit, pending-draft, and
       failed-refresh states; cover stable ids, Back/Close, cursor restoration, narrow widths, owner
       abort, and TUI-only rejection.
-- [ ] Replace the Main, Status, and Help wrappers with typed action/detail screens wired to the
+- [x] Replace the Main, Status, and Help wrappers with typed action/detail screens wired to the
       existing generation and session signal; verify opening/cancelling the menu remains side-effect
       free and only the Open action can start or rotate the server link.
-- [ ] Replace the settings wrapper with a kit Settings screen while preserving loader cancellation,
+- [x] Replace the settings wrapper with a kit Settings screen while preserving loader cancellation,
       unknown-field-safe atomic updates, rapid-change ordering, failed-save rollback, invalid-file
       read-only guidance, and next-session-only application.
-- [ ] Replace the Limits action wrapper with a standard screen backed by the existing draft, keeping
+- [x] Replace the Limits action wrapper with a standard screen backed by the existing draft, keeping
       `showImageDropInputDialog()`, `showImageDropConfirmDialog()`, validation, Restore Defaults, and
       review/save commit extension-owned; verify Escape/Back and Ctrl+C/Close outcomes at every nested
       step.
-- [ ] Remove only superseded `SelectList`/`SettingsList` and hint code after focused tests prove IME
+- [x] Remove only superseded `SelectList`/`SettingsList` and hint code after focused tests prove IME
       focus forwarding, theme invalidation, width bounds, loader disposal, pending-save draining, and
       stale-session suppression remain covered.
-- [ ] Update the package README only for standard menu navigation, then run the package typecheck and
+- [x] Update the package README only for standard menu navigation, then run the package typecheck and
       web asset check, root tests, `npm run check`, `npm run pack:image-drop`, and an isolated
       `pi -e ./extensions/pi-image-drop` load/TUI-harness smoke; inspect generated assets and tarball
       contents for unintended changes.
-- [ ] Audit command, TUI, cancellation, disposal, session replacement, settings, batch/server
+- [x] Audit command, TUI, cancellation, disposal, session replacement, settings, batch/server
       lifecycle, package, generated-asset, and verification conventions before archiving.
 
 ## Completion Checklist
 
-- [ ] Main, Status, Help, Settings, Limits, and invalid-settings standard screens use `pi-tui-kit`.
-- [ ] Loader, input, confirmation, limit draft, browser server, processor, batch, and settings
+- [x] Main, Status, Help, Settings, Limits, and invalid-settings standard screens use `pi-tui-kit`.
+- [x] Loader, input, confirmation, limit draft, browser server, processor, batch, and settings
       transactions remain extension-owned and behaviorally unchanged.
-- [ ] Escape/Ctrl+C, disposal, session replacement, TUI-only modes, and pending writes are covered.
-- [ ] Focused tests, web checks, root checks, runtime load, and pack inspection pass.
+- [x] Escape/Ctrl+C, disposal, session replacement, TUI-only modes, and pending writes are covered.
+- [x] Focused tests, web checks, root checks, runtime load, and pack inspection pass.

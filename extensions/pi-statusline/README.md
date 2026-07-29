@@ -48,7 +48,8 @@ For the best result, use a terminal font that includes Powerline glyphs and emoj
 
 1. Install the extension and start Pi.
 2. Run `/statusline`.
-3. Choose an appearance or information level; changes apply immediately.
+3. Use the standard Main/Advanced navigation, then choose an appearance or information level;
+   specialized previews still apply changes immediately.
 
 ```text
 Appearance (tokyo-night)
@@ -90,8 +91,11 @@ reads or writes.
 | `/statusline status` | Show the effective settings and diagnostics |
 | `/statusline help` | Show command and schema guidance |
 
-The direct `settings`, `status`, and `help` routes remain for compatibility. RPC receives observable
-notifications instead of TUI-only controls. Unknown subcommands and trailing arguments are rejected.
+The direct `settings`, `status`, and `help` routes remain for compatibility. The root standard menu
+is TUI-only; Escape returns from Advanced or closes Main. RPC receives observable notifications
+instead of TUI-only controls. Unknown subcommands and trailing arguments are rejected. Palette and
+information previews, the width-aware layout editor, and the JSON editor remain specialized UI
+because they provide live preview/edit behavior rather than standard navigation.
 
 ## 📐 Runtime behavior
 

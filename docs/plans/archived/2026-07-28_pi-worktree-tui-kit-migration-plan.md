@@ -42,23 +42,23 @@ No-UI modes must reject observably; `/worktree` continues to reject arguments.
 
 ## Plan
 
-- [ ] Add the `<1` kit dependency and lockfile edge; verify package boundaries and independent install.
-- [ ] Add failing tests for summary/action screens, argument/no-UI rejection, settings warnings,
+- [x] Add the `<1` kit dependency and lockfile edge; verify package boundaries and independent install.
+- [x] Add failing tests for summary/action screens, argument/no-UI rejection, settings warnings,
       action routing, owner cancellation, and successful Switch causing a stale menu result without
       old-context notification.
-- [ ] Add a session-owned menu controller to `worktree.ts`, pass ownership into the command module,
+- [x] Add a session-owned menu controller to `worktree.ts`, pass ownership into the command module,
       and replace only the top-level selector with `runMenu()`; verify focused command/lifecycle tests.
-- [ ] Retain specialized worktree selectors and all operation preflights, then run existing Add,
+- [x] Retain specialized worktree selectors and all operation preflights, then run existing Add,
       Switch, Remove, ignored-data, administrative-history, Prune, settings, and session tests to prove
       no safety path was weakened.
-- [ ] Update README only for standard menu key/mode behavior, then run package/root checks, root tests,
+- [x] Update README only for standard menu key/mode behavior, then run package/root checks, root tests,
       `npm run pack:worktree`, and an isolated non-mutating Pi/Git menu smoke in a temporary repository.
-- [ ] Audit command, session replacement, Git safety, settings, package, and verification conventions
+- [x] Audit command, session replacement, Git safety, settings, package, and verification conventions
       before archiving.
 
 ## Completion Checklist
 
-- [ ] Only the standard root action menu migrated; specialized Git prompts remain extension-owned.
-- [ ] Session switching cannot resume or notify through a stale menu context.
-- [ ] All Git, settings, branch/data, and direct command safety behavior is unchanged.
-- [ ] Tests, checks, temporary-repository smoke, and pack inspection pass.
+- [x] Only the standard root action menu migrated; specialized Git prompts remain extension-owned.
+- [x] Session switching cannot resume or notify through a stale menu context.
+- [x] All Git, settings, branch/data, and direct command safety behavior is unchanged.
+- [x] Tests, checks, temporary-repository smoke, and pack inspection pass.

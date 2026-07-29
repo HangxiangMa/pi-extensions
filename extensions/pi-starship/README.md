@@ -52,7 +52,9 @@ Open the interactive menu in TUI mode:
 
 Choose **Customize footer** to edit the TOML. Closing the editor validates the draft and opens a width-aware preview; saving happens only after a separate confirmation. Confirmed changes are atomically saved and applied immediately. Editor cancellation, preview cancellation, invalid drafts, write failures, and runtime application failures preserve the previous file and effective footer.
 
-The **Advanced** menu is one level deep and contains configuration details plus **Restore built-in**. Restore shows the concrete built-in preview and requires explicit overwrite confirmation.
+The standard **Advanced** menu is one level deep and contains configuration details plus **Restore
+built-in**. Standard diagnostics, details, and help are Back-navigable detail screens. Restore still
+shows the specialized width-aware preview and requires explicit overwrite confirmation.
 
 ### 📝 Example
 
@@ -339,7 +341,10 @@ at eight parents.
 | `/starship status` | Show config source/path and diagnostics |
 | `/starship help` | Show command and configuration help |
 
-The main menu keeps frequent goals visible: **Customize footer**, **Check configuration**, and **Help**. It shows whether the footer uses the built-in or custom document and displays the current warning count. **Advanced** contains uncommon details and the confirmed restore action, with an explicit **Back** path.
+The standard main menu keeps frequent goals visible: **Customize footer**, **Check configuration**,
+and **Help**. It shows whether the footer uses the built-in or custom document and displays the
+current warning count. **Advanced** contains uncommon details and the confirmed restore action, with
+an explicit **Back** path. The TOML editor and live footer previews remain specialized extension UI.
 
 Status and help remain safe in TUI, RPC, JSON, and print modes. RPC receives notifications but never opens custom terminal UI; print and JSON modes produce no ad hoc output. Footer/timer/Git lifecycle work starts only in TUI mode.
 

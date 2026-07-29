@@ -56,35 +56,35 @@ state, image processing, conversation projection, and settings storage remain ex
 
 ## Plan
 
-- [ ] Add the `<1` kit runtime dependency and lockfile edge to experimental `pi-webui`; verify package
+- [x] Add the `<1` kit runtime dependency and lockfile edge to experimental `pi-webui`; verify package
       boundaries, dependency ordering, experimental publishing metadata, and `npm run pack:webui`.
-- [ ] Add failing screen/runtime tests for stopped/running server, Manual/Every session, defaults/file/
+- [x] Add failing screen/runtime tests for stopped/running server, Manual/Every session, defaults/file/
       invalid sources, repair, image limits, selected-row descriptions, stable cursor, duplicate-safe
       ids, TUI/RPC navigation, print/JSON side effects, owner abort, and session replacement.
-- [ ] Replace `createWebUIMenuComponent()`, the TUI/RPC loops, and custom detail component with one
+- [x] Replace `createWebUIMenuComponent()`, the TUI/RPC loops, and custom detail component with one
       typed menu definition using the existing session signal/generation; verify cancellation and
       secondary-screen Back preserve selection and never start the server.
-- [ ] Route Open through the existing server/link action and activity status; verify success, failure,
+- [x] Route Open through the existing server/link action and activity status; verify success, failure,
       repeated fresh-link issuance, replacement, and shutdown retain secret handling and valid server
       state.
-- [ ] Replace the startup `SettingsList` with a kit Settings screen in TUI only, enqueue the complete
+- [x] Replace the startup `SettingsList` with a kit Settings screen in TUI only, enqueue the complete
       read-modify-write/runtime-publication operation through `settingsSaveQueue`, and verify rapid
       ordering, unknown-field preservation, private atomic writes, failed-save rollback, pending-save
       shutdown, and invalid-file read-only behavior.
-- [ ] Preserve direct routes and their mode contracts, especially RPC manual settings and headless
+- [x] Preserve direct routes and their mode contracts, especially RPC manual settings and headless
       side-effect-free Open/menu paths; update matching README and compatibility tests without
       expanding the public command surface.
-- [ ] Remove only superseded TUI wrappers, then run the package typecheck and `check:web`, root tests,
+- [x] Remove only superseded TUI wrappers, then run the package typecheck and `check:web`, root tests,
       `npm run check`, `npm run pack:webui`, an authenticated server/browser asset smoke, and an
       isolated TUI/RPC menu load; verify `npm run build:web --workspace @narumitw/pi-webui -- --check`
       reports no generated-asset drift.
-- [ ] Audit command, TUI/RPC, settings concurrency, server/session lifecycle, secret redaction,
+- [x] Audit command, TUI/RPC, settings concurrency, server/session lifecycle, secret redaction,
       generated assets, experimental package, and verification conventions before archiving.
 
 ## Completion Checklist
 
-- [ ] Main, Status, Repair, Help, and TUI Startup Settings use `pi-tui-kit`.
-- [ ] RPC settings remain manual/read-only; print/JSON remain side-effect free.
-- [ ] Server, links, conversation, settings, invalid-file, assets, direct routes, and experimental
+- [x] Main, Status, Repair, Help, and TUI Startup Settings use `pi-tui-kit`.
+- [x] RPC settings remain manual/read-only; print/JSON remain side-effect free.
+- [x] Server, links, conversation, settings, invalid-file, assets, direct routes, and experimental
       behavior are unchanged.
-- [ ] Focused tests, web/root checks, authenticated/runtime smokes, and pack inspection pass.
+- [x] Focused tests, web/root checks, authenticated/runtime smokes, and pack inspection pass.

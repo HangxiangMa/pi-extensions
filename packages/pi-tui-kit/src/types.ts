@@ -1,4 +1,11 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+/** Common, version-neutral Pi context capabilities used by the menu runtime. */
+export interface MenuContext {
+	mode: ExtensionContext["mode"];
+	hasUI: boolean;
+	ui: object;
+}
 
 export type MenuTransition<ScreenId extends string> =
 	| { kind: "stay" }
@@ -11,8 +18,8 @@ export type MenuActionResult<ScreenId extends string> =
 	| { kind: "rejected"; error?: unknown }
 	| undefined;
 
-export interface MenuActionContext<State> {
-	ctx: ExtensionCommandContext;
+export interface MenuActionContext<State, Context extends MenuContext = ExtensionCommandContext> {
+	ctx: Context;
 	state: State;
 	signal: AbortSignal;
 	itemId: string;
@@ -20,8 +27,12 @@ export interface MenuActionContext<State> {
 	selected?: boolean;
 }
 
-export type MenuActionHandler<State, ScreenId extends string> = (
-	context: MenuActionContext<State>,
+export type MenuActionHandler<
+	State,
+	ScreenId extends string,
+	Context extends MenuContext = ExtensionCommandContext,
+> = (
+	context: MenuActionContext<State, Context>,
 ) => MenuActionResult<ScreenId> | Promise<MenuActionResult<ScreenId>>;
 
 interface MenuItemBase {
@@ -66,6 +77,7 @@ export interface SettingsScreen<ActionId extends string> {
 
 export interface MenuMultiSelectItem extends MenuItemBase {
 	selected: boolean;
+	disabledReason?: string;
 }
 
 export interface MultiSelectScreen<ScreenId extends string, ActionId extends string> {
@@ -74,6 +86,7 @@ export interface MultiSelectScreen<ScreenId extends string, ActionId extends str
 	lines?: readonly string[];
 	items: readonly MenuMultiSelectItem[];
 	action: ActionId;
+	viewportSize?: number;
 	actions?: readonly ActionMenuItem<ScreenId, ActionId>[];
 	hint?: "back" | "close";
 	doneLabel?: string;
@@ -93,8 +106,13 @@ export type MenuScreenFactory<State, ScreenId extends string, ActionId extends s
 	context: MenuScreenContext<State>,
 ) => MenuScreen<ScreenId, ActionId>;
 
-export interface MenuDefinition<State, ScreenId extends string, ActionId extends string> {
+export interface MenuDefinition<
+	State,
+	ScreenId extends string,
+	ActionId extends string,
+	Context extends MenuContext = ExtensionCommandContext,
+> {
 	start: ScreenId;
 	screens: Record<ScreenId, MenuScreenFactory<State, ScreenId, ActionId>>;
-	actions: Record<ActionId, MenuActionHandler<State, ScreenId>>;
+	actions: Record<ActionId, MenuActionHandler<State, ScreenId, Context>>;
 }

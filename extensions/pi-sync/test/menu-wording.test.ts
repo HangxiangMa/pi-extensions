@@ -72,7 +72,7 @@ test("Sync setups list and detail expose current marker, Make current, edit, rem
 	await withSettings(async () => {
 		const titles: string[] = [];
 		const optionsSeen: string[][] = [];
-		const choices = ["More…", "Sync setups…", "work", "Back", "Back", "Back", undefined];
+		const choices = ["More…", "Sync setups…", "work", "Back", undefined, "Back", undefined];
 		const { ctx } = createMockContext({
 			hasUI: true,
 			mode: "tui",
@@ -85,7 +85,6 @@ test("Sync setups list and detail expose current marker, Make current, edit, rem
 		await showSyncManager(ctx, async () => undefined);
 		const list = optionsSeen.find((items) => items.includes("home (current)"));
 		assert.ok(list?.includes("Add sync setup"));
-		assert.ok(list?.includes("Back"));
 		const detail = optionsSeen.find((items) => items.includes("Make current…"));
 		assert.deepEqual(detail, ["Make current…", "Edit sync setup…", "Remove sync setup…", "Back"]);
 		assert.match(titles.join("\n"), /Storage connection: git/u);
@@ -96,7 +95,7 @@ test("Storage connections list and detail are symmetric and redact credentials",
 	await withSettings(async () => {
 		const titles: string[] = [];
 		const optionsSeen: string[][] = [];
-		const choices = ["More…", "Storage connections…", "r2", "Back", "Back", "Back", undefined];
+		const choices = ["More…", "Storage connections…", "r2", "Back", undefined, "Back", undefined];
 		const { ctx } = createMockContext({
 			hasUI: true,
 			mode: "tui",
@@ -109,7 +108,6 @@ test("Storage connections list and detail are symmetric and redact credentials",
 		await showSyncManager(ctx, async () => undefined);
 		const list = optionsSeen.find((items) => items.includes("Add storage connection"));
 		assert.ok(list?.includes("r2"));
-		assert.ok(list?.includes("Back"));
 		const detail = titles.find((title) => title.includes("Storage connection “r2”")) ?? "";
 		assert.match(detail, /Credentials: Settings file/u);
 		assert.match(detail, /Used by: home/u);
@@ -147,7 +145,7 @@ test("S3-compatible lookalike hosts are not labeled as Cloudflare R2", async () 
 		"https://example.r2.cloudflarestorage.com.attacker.example";
 	await withSettings(async () => {
 		const titles: string[] = [];
-		const choices = ["More…", "Storage connections…", "r2", "Back", "Back", "Back", undefined];
+		const choices = ["More…", "Storage connections…", "r2", "Back", undefined, "Back", undefined];
 		const { ctx } = createMockContext({
 			hasUI: true,
 			mode: "tui",

@@ -46,24 +46,24 @@ session; specialized components retain their own cancellation and rollback.
 
 ## Plan
 
-- [ ] Add the `<1` kit dependency and lockfile edge; verify boundaries and package metadata.
-- [ ] Add failing tests for Main/Advanced dynamic labels, fixed action ids, Back/cursor restoration,
+- [x] Add the `<1` kit dependency and lockfile edge; verify boundaries and package metadata.
+- [x] Add failing tests for Main/Advanced dynamic labels, fixed action ids, Back/cursor restoration,
       specialized handoffs, cancelled palette preview restoration, TUI-only behavior, and session
       disposal.
-- [ ] Extract typed Main/Advanced screen definitions and replace only their selector loops with
+- [x] Extract typed Main/Advanced screen definitions and replace only their selector loops with
       `runMenu()`, keeping the command module below the 1,000-line boundary; verify focused tests pass.
-- [ ] Reconnect palette, information, layout, editor, status, and help actions to existing specialized
+- [x] Reconnect palette, information, layout, editor, status, and help actions to existing specialized
       flows and reload committed state after each return; verify preview, narrow-layout, immediate-save,
       malformed-file, runtime-apply, and rollback suites pass.
-- [ ] Update README only for standard navigation behavior and package layout if extraction adds a
+- [x] Update README only for standard navigation behavior and package layout if extraction adds a
       module; run package/root checks, root tests, `npm run pack:statusline`, and isolated TUI-harness
       and RPC/direct-route smokes.
-- [ ] Audit menu, settings, specialized UI, footer ownership, lifecycle, package, and verification
+- [x] Audit menu, settings, specialized UI, footer ownership, lifecycle, package, and verification
       conventions before archiving.
 
 ## Completion Checklist
 
-- [ ] Main and Advanced use `pi-tui-kit`; all specialized preview/layout/editor surfaces remain local.
-- [ ] Cancelled previews, committed labels, immediate saves, rollback, and footer behavior are unchanged.
-- [ ] TUI/RPC/direct route and lifecycle behavior is tested.
-- [ ] Checks, tests, pack inspection, and smokes pass.
+- [x] Main and Advanced use `pi-tui-kit`; all specialized preview/layout/editor surfaces remain local.
+- [x] Cancelled previews, committed labels, immediate saves, rollback, and footer behavior are unchanged.
+- [x] TUI/RPC/direct route and lifecycle behavior is tested.
+- [x] Checks, tests, pack inspection, and smokes pass.

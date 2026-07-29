@@ -63,40 +63,40 @@ the existing full-status route rather than exposing new goal mutations through t
 
 ## Plan
 
-- [ ] Add the `<1` `@narumitw/pi-tui-kit` runtime dependency and lockfile edge to `pi-goal`; verify
+- [x] Add the `<1` `@narumitw/pi-tui-kit` runtime dependency and lockfile edge to `pi-goal`; verify
       `npm run check:boundaries` and `npm run pack:goal` show one independently installable runtime
       dependency with no extension-to-extension edge.
-- [ ] Add failing screen-model and runtime tests for empty, active, paused, blocked, usage-limited,
+- [x] Add failing screen-model and runtime tests for empty, active, paused, blocked, usage-limited,
       budget-limited, completed, pending-action, and frozen-queue states; cover stable ids, Main/Queue
       Back behavior, cursor restoration, TUI cancellation, session abort, RPC/print/JSON status-only
       behavior, and terminal-safe goal text.
-- [ ] Replace the Main and Queue selector loops with typed action screens and a session-owned menu
+- [x] Replace the Main and Queue selector loops with typed action screens and a session-owned menu
       signal, delegating start/edit/budget input and exact destructive confirmations to the existing
       command controller; verify goal/queue replacement races still reject every stale mutation.
-- [ ] Extract reusable Status and Help lines and expose them as kit detail screens from the manager
+- [x] Extract reusable Status and Help lines and expose them as kit detail screens from the manager
       while retaining the documented direct status/help routes and mode-appropriate notifications;
       verify no manager action becomes available outside TUI.
-- [ ] Replace the custom settings shell and limit selectors with one Settings screen plus Automatic
+- [x] Replace the custom settings shell and limit selectors with one Settings screen plus Automatic
       Work, No-progress Guard, Ordered Queue, and invalid-file screens; preserve the four-item order,
       positive-integer validation, active-goal snapshots, post-screen confirmations, queue-unfreeze
       dispatch, immediate Goal-tools application, ordered saves, and rollback after persistence or
       runtime failures.
-- [ ] Remove only superseded `SelectList`/`SettingsList` wrappers after focused menu and settings tests
+- [x] Remove only superseded `SelectList`/`SettingsList` wrappers after focused menu and settings tests
       prove narrow-width rendering, exact maximum-safe-integer display, theme invalidation,
       cancellation/disposal, and pending-save draining through the kit contract.
-- [ ] Update `extensions/pi-goal/README.md` for standard navigation and unchanged mode behavior, then
+- [x] Update `extensions/pi-goal/README.md` for standard navigation and unchanged mode behavior, then
       run the package typecheck, root tests, `npm run check`, `npm run pack:goal`, and
       `npm run test:runtime --workspace @narumitw/pi-goal`; inspect the tarball and declared entrypoint.
-- [ ] Audit the final diff against command, TUI, asynchronous lifecycle, settings, persistence,
+- [x] Audit the final diff against command, TUI, asynchronous lifecycle, settings, persistence,
       status, package, and verification conventions; record any accepted behavior deviation before
       archiving the plan.
 
 ## Completion Checklist
 
-- [ ] Main, Queue, Settings, limit choices, Status, Help, and invalid-settings guidance use
+- [x] Main, Queue, Settings, limit choices, Status, Help, and invalid-settings guidance use
       `pi-tui-kit`; editors, inputs, confirmations, and Goal transactions remain extension-owned.
-- [ ] Goal ids, queue identity, usage accounting, safety guards, tool visibility, persistence,
+- [x] Goal ids, queue identity, usage accounting, safety guards, tool visibility, persistence,
       rollback, and resume behavior are unchanged.
-- [ ] TUI cancellation/disposal/replacement and RPC/print/JSON status-only behavior are explicit and
+- [x] TUI cancellation/disposal/replacement and RPC/print/JSON status-only behavior are explicit and
       tested.
-- [ ] Focused tests, runtime smoke, package/root checks, entrypoint load, and pack inspection pass.
+- [x] Focused tests, runtime smoke, package/root checks, entrypoint load, and pack inspection pass.

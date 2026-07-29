@@ -83,9 +83,13 @@ the 60000ms default. Timeout values must be integer milliseconds from 1 to 21474
 /google-genai disable
 ```
 
-- `init`: interactively creates or updates config. API key may be blank; blank keeps an existing key or uses Pi auth fallback.
+- `init`: interactively creates or updates config. Its API-key and model text inputs remain
+  extension-owned because they collect free-form configuration rather than menu choices. The API key
+  may be blank; blank keeps an existing key or uses Pi auth fallback.
 - `status` / `config`: shows config path, model, API URL, timeout, auth source, and enabled tools. It never prints the key.
-- `tools`: select which Google GenAI tools are active and persist the selection.
+- `tools`: open one standard multi-select in TUI or RPC mode. Toggles and Enable all/Disable all
+  actions save immediately in invocation order; Escape/Done closes it. Print and JSON reject this
+  interactive route observably.
 - `enable`: enable all three tools.
 - `disable`: disable all three tools. The slash command remains available so you can re-enable them.
 

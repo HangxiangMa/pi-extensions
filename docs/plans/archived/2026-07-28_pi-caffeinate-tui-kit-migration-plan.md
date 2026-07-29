@@ -39,24 +39,24 @@ rejection or documented direct-route alternative.
 
 ## Plan
 
-- [ ] Add the `<1` kit dependency and lockfile edge; verify package boundaries and pack dependency
+- [x] Add the `<1` kit dependency and lockfile edge; verify package boundaries and pack dependency
       metadata.
-- [ ] Add failing screen/runtime tests for available, unavailable, disabled, active, custom-command,
+- [x] Add failing screen/runtime tests for available, unavailable, disabled, active, custom-command,
       settings-error, current-mode, RPC, no-UI, Back, cancellation, and generation-replacement states.
-- [ ] Replace `showMenu()` and `showModeSelector()` with typed Main/Mode action screens and a
+- [x] Replace `showMenu()` and `showModeSelector()` with typed Main/Mode action screens and a
       session-owned menu signal while retaining existing domain queues and generation checks; verify
       focused tests and inhibitor lifecycle tests pass.
-- [ ] Audit direct route and non-TUI behavior, adding an explicit print/JSON rejection where current
+- [x] Audit direct route and non-TUI behavior, adding an explicit print/JSON rejection where current
       notifications are no-ops without changing supported TUI/RPC routes; update matching README/tests.
-- [ ] Remove only superseded selector constants/dispatch code, then run the package check, root tests,
+- [x] Remove only superseded selector constants/dispatch code, then run the package check, root tests,
       root check, `npm run pack:caffeinate`, and an isolated RPC smoke.
-- [ ] Audit menu, settings, process lifecycle, status cleanup, command compatibility, and package
+- [x] Audit menu, settings, process lifecycle, status cleanup, command compatibility, and package
       conventions before archiving the plan.
 
 ## Completion Checklist
 
-- [ ] Standard controls and mode navigation use `pi-tui-kit` with stable ids and lifecycle ownership.
-- [ ] Inhibitor start/restart/stop, save ordering, rollback, quiet mode, and shutdown cleanup are
+- [x] Standard controls and mode navigation use `pi-tui-kit` with stable ids and lifecycle ownership.
+- [x] Inhibitor start/restart/stop, save ordering, rollback, quiet mode, and shutdown cleanup are
       unchanged.
-- [ ] Direct commands and all documented modes remain observable and tested.
-- [ ] Checks, tests, pack inspection, and runtime smoke pass.
+- [x] Direct commands and all documented modes remain observable and tested.
+- [x] Checks, tests, pack inspection, and runtime smoke pass.

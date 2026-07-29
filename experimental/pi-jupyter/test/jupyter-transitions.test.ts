@@ -132,7 +132,10 @@ function createMenuCustomDriver(inputs: Array<string | undefined>) {
 						fg: (_color: string, text: string) => text,
 						bold: (text: string) => text,
 					},
-					{ matches: (data: string, key: string) => data === key },
+					{
+						matches: (data: string, key: string) => data === key,
+						getKeys: (key: string) => [key],
+					},
 					done,
 				);
 				if (input !== undefined) queueMicrotask(() => component.handleInput?.(input));
@@ -154,7 +157,7 @@ test("the primary menu chooses, loads, and opens a notebook atomically", async (
 		const mock = createMockPi();
 		Object.assign(mock.rawPi, { registerShortcut() {} });
 		let watcherStarts = 0;
-		const driver = createMenuCustomDriver(["tui.select.confirm", "tui.select.confirm", undefined]);
+		const driver = createMenuCustomDriver(["\r", "\r", undefined]);
 		createJupyterPreview({
 			loadNotebook: async () => loaded(2),
 			watchNotebook() {
@@ -188,7 +191,7 @@ test("cancelling explicit path entry returns to the menu without loading or watc
 		Object.assign(mock.rawPi, { registerShortcut() {} });
 		let loadStarts = 0;
 		let watcherStarts = 0;
-		const driver = createMenuCustomDriver(["tui.select.confirm", "tui.select.confirm", "\u0003"]);
+		const driver = createMenuCustomDriver(["\r", "\r", "\u0003"]);
 		createJupyterPreview({
 			loadNotebook: async () => {
 				loadStarts++;
@@ -348,7 +351,7 @@ test("cancelling the menu loader leaves notebook state and watchers unchanged", 
 			hasUI: true,
 			mode: "tui",
 			custom: async (factory: unknown) => {
-				const input = customStep++ < 2 ? "tui.select.confirm" : "\x1b";
+				const input = customStep++ < 2 ? "\r" : "\x1b";
 				return new Promise((resolve) => {
 					let component: { handleInput?(data: string): void; dispose?(): void };
 					const done = (value: unknown) => {
@@ -366,6 +369,7 @@ test("cancelling the menu loader leaves notebook state and watchers unchanged", 
 						},
 						{
 							matches: (data: string, key: string) => data === key,
+							getKeys: (key: string) => [key],
 						},
 						done,
 					);

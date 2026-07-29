@@ -122,6 +122,7 @@
 - Node has no hard-link-free atomic no-replace rename primitive. Keep supported writers inside one lock protocol, recheck an initially absent destination immediately before same-directory rename, state that lock-unaware editors are outside the boundary, and never `copyFile` directly into the canonical path because readers can observe partial bytes.
 - To preserve mutating command invocation order, enqueue the whole mutation before prerequisite awaits; queuing only the eventual persistence step lets asynchronous settings loads reorder rapid commands.
 - Symptom: the subagent disposable-worktree test reports that a nested cwd is outside its freshly initialized repository on macOS. Cause: temp paths may use `/var/...` while Git canonicalizes the same path to `/private/var/...`; lexical containment fails. Fix: compare canonical realpaths.
+- Kit settings and multi-select actions settle asynchronously; test adapters that drive `ctx.ui.custom()` must drain `waitForPending()`, observe an accepted transition, and close a rejected screen instead of returning before the callback settles.
 
 ## TASTE
 

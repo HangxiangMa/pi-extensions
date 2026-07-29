@@ -48,30 +48,30 @@ ignored because that compatibility behavior is explicitly documented and tested.
 
 ## Plan
 
-- [ ] Add the `<1` `@narumitw/pi-tui-kit` runtime dependency and intended lockfile edge; verify
+- [x] Add the `<1` `@narumitw/pi-tui-kit` runtime dependency and intended lockfile edge; verify
       package boundaries and production dependency resolution.
-- [ ] Add failing tests for declarative empty/configured Main screens, current-provider ordering,
+- [x] Add failing tests for declarative empty/configured Main screens, current-provider ordering,
       provider/account navigation, Back/cursor restoration, duplicate-safe ids, TUI/RPC behavior,
       no-UI rejection, and session cancellation; verify the red run fails on the legacy selectors.
-- [ ] Introduce a typed account menu definition and session-owned menu controller, then replace main,
+- [x] Introduce a typed account menu definition and session-owned menu controller, then replace main,
       provider, switch, and removal selectors with `runMenu()` screens while retaining raw domain
       identity and state reloads; verify focused menu tests pass.
-- [ ] Route login, OAuth interaction, replacement, switching, and removal actions to the existing
+- [x] Route login, OAuth interaction, replacement, switching, and removal actions to the existing
       domain functions, revalidating generation and latest storage after every await; verify existing
       provider independence, default restoration, fail-closed auth, stale login, and removal tests pass.
-- [ ] Update tests that assert selector call order to assert resolved screens and runtime transitions;
+- [x] Update tests that assert selector call order to assert resolved screens and runtime transitions;
       retain direct OAuth/dialog tests and add disposal/shutdown coverage proving no stale menu callback
       mutates credentials or runtime providers.
-- [ ] Update the README only for standard navigation/mode wording, then run the package check, root
+- [x] Update the README only for standard navigation/mode wording, then run the package check, root
       tests, root check, `npm run pack:accounts`, and an isolated RPC load/menu smoke.
-- [ ] Audit command, TUI, lifecycle, credential, redaction, package, and verification conventions and
+- [x] Audit command, TUI, lifecycle, credential, redaction, package, and verification conventions and
       record any compatibility deviation before archiving the plan.
 
 ## Completion Checklist
 
-- [ ] All standard account manager screens use `pi-tui-kit`; OAuth and confirmations remain owned by
+- [x] All standard account manager screens use `pi-tui-kit`; OAuth and confirmations remain owned by
       `pi-accounts`.
-- [ ] Provider/account identities, credentials, migration, model filtering, and fail-closed behavior
+- [x] Provider/account identities, credentials, migration, model filtering, and fail-closed behavior
       are unchanged.
-- [ ] TUI, RPC, print/JSON, cancellation, disposal, replacement, and shutdown paths are covered.
-- [ ] Focused tests, package/root checks, pack inspection, and runtime smoke pass.
+- [x] TUI, RPC, print/JSON, cancellation, disposal, replacement, and shutdown paths are covered.
+- [x] Focused tests, package/root checks, pack inspection, and runtime smoke pass.

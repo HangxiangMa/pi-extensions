@@ -39,7 +39,7 @@ test("/langfuse shows enabled current-session state and context-aware next actio
 	await command?.handler("legacy arguments are ignored", ctx);
 
 	assert.equal(command?.getArgumentCompletions, undefined);
-	assert.match(selectCalls[0]?.title ?? "", /Current session:\n {2}Tracing: enabled/);
+	assert.match(selectCalls[0]?.title ?? "", /Current session:\nTracing: enabled/);
 	assert.match(selectCalls[0]?.title ?? "", /Endpoint: https:\/\/example\.test/);
 	assert.match(selectCalls[0]?.title ?? "", /Content capture: enabled/);
 	assert.match(selectCalls[0]?.title ?? "", /Configuration: \/private\/pi-langfuse\.json/);
@@ -189,7 +189,7 @@ test("/langfuse disabled state prioritizes agent-directory setup and routes priv
 
 	await mock.commands.get("langfuse")?.handler("status", ctx);
 
-	assert.match(selectCalls[0]?.title ?? "", /Current session:\n {2}Tracing: disabled/);
+	assert.match(selectCalls[0]?.title ?? "", /Current session:\nTracing: disabled/);
 	assert.match(selectCalls[0]?.title ?? "", /Configuration file not found/);
 	assert.deepEqual(selectCalls[0]?.options, [
 		"Set up Langfuse for this Pi agent directory (restart required)",
@@ -212,7 +212,6 @@ test("/langfuse interactively creates and updates a private agent-directory conf
 	const session = createMockContext({ hasUI: false });
 	await mock.events.get("session_start")?.[0]?.({}, session.ctx);
 	const command = mock.commands.get("langfuse");
-	const notifications: Array<{ message: string; level?: string }> = [];
 	const prompts: Array<{ title: string; placeholder?: string }> = [];
 	const menuTitles: string[] = [];
 	const answers = ["sk-new", "pk-new", ""];
@@ -220,24 +219,20 @@ test("/langfuse interactively creates and updates a private agent-directory conf
 		"Set up Langfuse for this Pi agent directory (restart required)",
 		"Update Langfuse for this Pi agent directory (restart required)",
 	];
-	const ctx = {
+	const context = createMockContext({
 		hasUI: true,
-		ui: {
-			select: async (title: string) => {
-				menuTitles.push(title);
-				return selections.shift();
-			},
-			input: async (title: string, placeholder?: string) => {
-				prompts.push({ title, placeholder });
-				return answers.shift();
-			},
-			notify(message: string, level?: string) {
-				notifications.push({ message, level });
-			},
+		mode: "tui",
+		select: async (title: string) => {
+			menuTitles.push(title);
+			return selections.shift();
 		},
-	};
+		input: async (title: string, placeholder?: string) => {
+			prompts.push({ title, placeholder });
+			return answers.shift();
+		},
+	});
 
-	await command?.handler("init", ctx);
+	await command?.handler("init", context.ctx);
 
 	assert.deepEqual(
 		prompts.slice(0, 3).map(({ title }) => title),
@@ -256,13 +251,13 @@ test("/langfuse interactively creates and updates a private agent-directory conf
 	});
 	assert.equal((await stat(path)).mode & 0o777, 0o600);
 	assert.match(
-		notifications.at(-1)?.message ?? "",
+		context.notifications.at(-1)?.message ?? "",
 		/this Pi agent directory.*restart each Pi process/i,
 	);
-	assert.equal(notifications.at(-1)?.level, "info");
+	assert.equal(context.notifications.at(-1)?.level, "info");
 
 	answers.push("", "", "https://self-hosted.example/");
-	await command?.handler("anything", ctx);
+	await command?.handler("anything", context.ctx);
 	assert.match(menuTitles[1] ?? "", /State: tracing remains disabled until Pi restarts/i);
 	assert.match(
 		menuTitles[1] ?? "",

@@ -42,5 +42,8 @@
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
 		"directory": "experimental/pi-jupyter"
+	},
+	"dependencies": {
+		"@narumitw/pi-tui-kit": "<1"
 	}
 }

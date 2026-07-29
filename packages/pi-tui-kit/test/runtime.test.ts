@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { type ExtensionContext, initTheme } from "@earendil-works/pi-coding-agent";
 import {
 	createCustomSelectorHarness,
 	createMockContext,
@@ -229,6 +229,94 @@ test("RPC choices preserve item identity across duplicate and exit labels", asyn
 	});
 	assert.deepEqual(invoked, ["second", "done-action"]);
 	assert.equal(selectCalls, 3);
+});
+
+test("RPC exposes disabled multi-select reasons and never invokes toggle actions", async () => {
+	let selectCalls = 0;
+	let toggles = 0;
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		select: async (_title: string, choices: string[]) => {
+			selectCalls += 1;
+			if (selectCalls === 1) {
+				assert.match(choices[0] ?? "", /unavailable.*policy blocks it/i);
+				return choices[0];
+			}
+			return choices.at(-1);
+		},
+	});
+	const definition = defineMenu<undefined, "tools", "toggle">({
+		start: "tools",
+		screens: {
+			tools: () => ({
+				kind: "multiSelect",
+				title: "Tools",
+				items: [
+					{
+						id: "blocked-raw",
+						label: "Blocked",
+						selected: false,
+						disabled: true,
+						disabledReason: "Policy blocks it",
+					},
+				],
+				action: "toggle",
+			}),
+		},
+		actions: {
+			toggle: async ({ itemId }) => {
+				assert.equal(itemId, "blocked-raw");
+				toggles += 1;
+				return { kind: "stay" };
+			},
+		},
+	});
+
+	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
+		kind: "closed",
+	});
+	assert.equal(toggles, 0);
+	assert.equal(selectCalls, 2);
+});
+
+test("lifecycle ExtensionContext menus retain runtime cancellation behavior", async () => {
+	const owner = new AbortController();
+	let reportOpened: (() => void) | undefined;
+	const opened = new Promise<void>((resolve) => {
+		reportOpened = resolve;
+	});
+	const commandContext = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 40);
+			reportOpened?.();
+			await new Promise<void>((resolve) => {
+				owner.signal.addEventListener("abort", () => resolve(), { once: true });
+			});
+			return harness.result;
+		},
+	});
+	const ctx: ExtensionContext = commandContext.ctx;
+	const definition = defineMenu<undefined, "main", "run", ExtensionContext>({
+		start: "main",
+		screens: {
+			main: () => ({
+				kind: "actions",
+				title: "Lifecycle",
+				items: [{ id: "run", label: "Run", action: "run" }],
+			}),
+		},
+		actions: { run: async () => ({ kind: "stay" }) },
+	});
+	const running = runMenu(ctx, definition, {
+		getState: () => undefined,
+		signal: owner.signal,
+	});
+	await opened;
+	owner.abort(new DOMException("Session replaced", "AbortError"));
+	assert.deepEqual(await running, { kind: "stale" });
 });
 
 test("an owner signal dismisses an unanswered RPC selector", async () => {

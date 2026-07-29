@@ -193,74 +193,74 @@ recover from a menu-only regression.
 
 ## Plan
 
-- [ ] Add `@narumitw/pi-tui-kit` as a `<1` runtime dependency of
+- [x] Add `@narumitw/pi-tui-kit` as a `<1` runtime dependency of
       `extensions/pi-sync/package.json` and update only the intended lockfile edges; verify with
       `npm run check:boundaries` and inspection that Pi Sync remains independently installable and
       keeps its existing Pi peer dependencies.
-- [ ] Add focused failing manager integration tests for declarative Main/More navigation, dynamic
+- [x] Add focused failing manager integration tests for declarative Main/More navigation, dynamic
       setup/connection list and detail states, stable item identity, cursor restoration, lock/invalid/
       empty-content states, TUI owner cancellation, and RPC dialog adaptation; verify the initial
       `npm test` failure is limited to the not-yet-migrated menu contract.
-- [ ] Extract the standard manager state, screen definition, and action routing from
+- [x] Extract the standard manager state, screen definition, and action routing from
       `extensions/pi-sync/src/manager-ui.ts` into cohesive menu-owned module(s), wire `runMenu()` to
       the captured session signal and current-state loader, and preserve no-network-on-open behavior;
       verify the focused manager tests pass and every touched source file remains below the 1,000-line
       review boundary or has a documented cohesion justification.
-- [ ] Replace the repeated Main, More, Sync setups, Storage connections, and History/recovery selector
+- [x] Replace the repeated Main, More, Sync setups, Storage connections, and History/recovery selector
       loops with action/detail screens while retaining explicit selected-resource revalidation,
       current/invalid/unavailable text, credential redaction, and existing specialized add/edit/remove/
       switch actions; verify existing `menu-wording.test.ts`, stale-resource, redaction, switching,
       cancellation, and removal-guard coverage passes after adapting tests away from label-driven
       selector mocks.
-- [ ] Add focused failing settings integration tests for immediate Automatic sync and After switching
+- [x] Add focused failing settings integration tests for immediate Automatic sync and After switching
       setup saves, action-order serialization, displayed rollback, Back after pending work, stale
       session disposal, and unchanged RPC manual-path behavior; verify the failures identify the old
       local `SettingsList` orchestration rather than persistence helpers.
-- [ ] Replace `extensions/pi-sync/src/settings-ui.ts`'s standard settings component and save queue with
+- [x] Replace `extensions/pi-sync/src/settings-ui.ts`'s standard settings component and save queue with
       a `pi-tui-kit` settings screen whose handlers call the existing persistence functions and whose
       Included content row invokes the separate file-selection coordinator; verify settings ordering,
       failure recovery, unknown-field preservation, atomic publication, and mode behavior tests pass.
-- [ ] Add focused failing Included Content tests for kit multi-select rendering at 32/60/100 columns,
+- [x] Add focused failing Included Content tests for kit multi-select rendering at 32/60/100 columns,
       memory-only toggles, Escape-to-review, Save/Discard/Continue behavior, cursor/draft retention,
       session privacy acknowledgement, exact include ordering, concurrent `expectedInclude` failure,
       owner cancellation, disposal draining, and unchanged RPC summary; verify the initial failure is
       limited to the not-yet-migrated editor/review implementation.
-- [ ] Refactor `extensions/pi-sync/src/file-selection.ts` to coordinate `runMenu()` multi-select and
+- [x] Refactor `extensions/pi-sync/src/file-selection.ts` to coordinate `runMenu()` multi-select and
       review screens while preserving custom candidate discovery, raw domain values, display
       sanitization, transactional persistence, privacy confirmation, stale-write rejection, and
       success/error wording; verify the focused Included Content and existing snapshot/include policy
       tests pass without modifying settings or remote semantics.
-- [ ] Remove only superseded menu loops, local standard screen components, and save-queue code; retain
+- [x] Remove only superseded menu loops, local standard screen components, and save-queue code; retain
       specialized wizard, secret-input, exact-confirmation, and commit-aware loader code, then audit
       imports and package boundaries to prove no dead Pi TUI dependency or duplicated menu path remains.
-- [ ] Update `extensions/pi-sync/README.md` only where runtime navigation or standard key behavior
+- [x] Update `extensions/pi-sync/README.md` only where runtime navigation or standard key behavior
       changed, document that Included Content remains a reviewed draft and that RPC stays read-only,
       and verify every documented command, safety statement, mode claim, and package-layout path still
       matches source and tests.
-- [ ] Run `npm --workspace @narumitw/pi-sync run check`, `npm test`, and `npm run check`; then run
+- [x] Run `npm --workspace @narumitw/pi-sync run check`, `npm test`, and `npm run check`; then run
       `npm run pack:sync`, inspect the tarball for the declared source/README/license and runtime
       dependency metadata, and perform an isolated non-interactive Pi RPC load/menu smoke with a
       temporary agent directory and no credential-bearing real settings.
-- [ ] Audit the final diff against the TUI, command, settings, lifecycle, cancellation, persistence,
+- [x] Audit the final diff against the TUI, command, settings, lifecycle, cancellation, persistence,
       redaction, verification, and touched-area checklists in `docs/extension-conventions.md` and
       `docs/extension-settings.md`; record any accepted deviation or unverified path before marking
       the plan complete and archiving it.
 
 ## Completion Checklist
 
-- [ ] Pi Sync's standard Main, More, Settings, setup/connection list/detail, recovery, and Included
+- [x] Pi Sync's standard Main, More, Settings, setup/connection list/detail, recovery, and Included
       Content screens run through `@narumitw/pi-tui-kit`; specialized forms and operations remain
       extension-owned.
-- [ ] Included Content remains a transactional reviewed draft: no write before Save, Discard and
+- [x] Included Content remains a transactional reviewed draft: no write before Save, Discard and
       cancellation preserve bytes, Continue retains the draft, session inclusion is acknowledged,
       ordering is unchanged, and concurrent changes fail closed.
-- [ ] Main-menu state, action hierarchy, Back/Close behavior, explicit selected-resource ownership,
+- [x] Main-menu state, action hierarchy, Back/Close behavior, explicit selected-resource ownership,
       remote-no-contact behavior, lock/error/empty states, and credential redaction remain compatible.
-- [ ] TUI, RPC, print, and JSON behavior remains exactly as documented; no `ctx.ui.custom()` call can
+- [x] TUI, RPC, print, and JSON behavior remains exactly as documented; no `ctx.ui.custom()` call can
       occur outside TUI and RPC does not gain an unintended settings mutation surface.
-- [ ] Session replacement, shutdown, component disposal, user cancellation, action completion, and
+- [x] Session replacement, shutdown, component disposal, user cancellation, action completion, and
       settings publication each cancel or drain their owned work without stale context use.
-- [ ] Direct commands, completions, version 3 settings, unknown fields, permissions, locks, storage
+- [x] Direct commands, completions, version 3 settings, unknown fields, permissions, locks, storage
       paths, snapshot/state formats, backend behavior, and remote safety semantics are unchanged.
-- [ ] Focused tests, workspace checks, root CI-equivalent checks, package inspection, and the isolated
+- [x] Focused tests, workspace checks, root CI-equivalent checks, package inspection, and the isolated
       Pi runtime smoke pass with no unexplained deviation.

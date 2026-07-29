@@ -52,7 +52,11 @@ Automatic sync: On
 Remote status: Not checked
 ```
 
-Primary actions include **Sync now**, **Switch sync setup**, **Status & changes**, **Settings**, and **More…**. Secondary screens provide **Back**; Escape closes the flow. Destructive and externally visible operations show exact previews and confirmations.
+Primary actions include **Sync now**, **Switch sync setup**, **Status & changes**, **Settings**, and
+**More…**. The standard manager also owns setup and connection lists/details plus history and
+recovery. Secondary screens provide **Back**; Escape goes back and Ctrl+C closes the flow.
+Destructive, credential-bearing, and externally visible operations retain exact specialized previews
+and confirmations.
 
 ## ⚙️ Settings
 
@@ -165,6 +169,12 @@ Safe agent-relative custom files or directories may also be included. Absolute p
 
 An empty array is valid. It means no useful transfer is selected: **Sync now** reports the condition and does not claim that the setup is up to date. Unselected content remains unmanaged locally and is preserved when republishing existing remote snapshots.
 
+The Included Content editor is a standard bounded multi-select backed by one in-memory draft. Toggles
+never write settings. Leaving the editor opens an exact Include/Exclude review with **Save changes**,
+**Discard changes**, and **Continue editing**; only reviewed Save publishes, while Continue preserves
+the draft and Discard/cancellation preserves the settings bytes. RPC remains a read-only summary with
+the manual `sync.include` path.
+
 Adding `sessions` requires a privacy acknowledgement in interactive flows. Session JSONL can contain prompts, tool output, file paths, images, and secrets. Automatic apply protects the currently open session file; restart Pi or resume a pulled session to use newly synchronized conversations.
 
 ### Unsupported old settings and recovery
@@ -209,7 +219,9 @@ The menu is preferred, while deterministic routes remain available:
 
 The former version 2 setup-addressing flag is rejected. Unknown flags, unknown commands, trailing values, and missing setup/snapshot values are rejected. Completion includes known setup names and preserves preceding command tokens.
 
-TUI mode provides custom components. RPC uses Pi's supported dialog/notification protocol. Print and JSON modes never enter TUI-only screens; unsupported interactive routes reject or remain protocol-safe rather than relying on no-op output.
+TUI mode uses standard manager, settings, resource, and included-content screens plus specialized
+secret, wizard, confirmation, and commit-aware loader components. RPC uses Pi's supported
+dialog/notification protocol and does not gain settings mutation. Print and JSON modes never enter TUI-only screens; unsupported interactive routes reject or remain protocol-safe rather than relying on no-op output.
 
 ## 🔄 Backend and recovery model
 

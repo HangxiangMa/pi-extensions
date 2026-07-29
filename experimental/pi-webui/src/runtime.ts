@@ -1,13 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import {
-	type ExtensionAPI,
-	type ExtensionCommandContext,
-	type ExtensionContext,
-	getSettingsListTheme,
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
+import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import type { PreparedAttachment } from "./attachments.js";
 import { ConversationProjection, projectBranchMessages } from "./conversation.js";
 import { DEFAULT_IMAGE_LIMITS, type ImageLimits, imageLimits } from "./image-limits.js";
@@ -19,15 +18,7 @@ import {
 	processStagedImage,
 	validateStagedBrowserImages,
 } from "./images.js";
-import {
-	createWebUIDetailComponent,
-	createWebUIMenuComponent,
-	safeTerminalText,
-	type WebUIMenuAction,
-	type WebUIMenuState,
-	webUIMenuItems,
-	webUIMenuTitle,
-} from "./menu.js";
+import { safeTerminalText, type WebUIMenuState, webUIMenuItems, webUIMenuTitle } from "./menu.js";
 import { type EffectivePiImageSettings, readEffectivePiImageSettings } from "./pi-settings.js";
 import {
 	type WebSendRequest,
@@ -425,151 +416,135 @@ export class WebUIRuntime {
 
 	private async showMenu(ctx: ExtensionCommandContext): Promise<void> {
 		if (!ctx.hasUI) return;
-		const generation = this.generation;
-		let selectedAction: WebUIMenuAction | undefined;
-		while (generation === this.generation) {
-			const state = this.menuState();
-			let action: WebUIMenuAction | undefined;
-			if (ctx.mode === "tui") {
-				action = await ctx.ui.custom<WebUIMenuAction | undefined>(
-					(tui, theme, _keybindings, done) =>
-						createWebUIMenuComponent(state, tui, theme, done, selectedAction),
-				);
-			} else {
-				const items = webUIMenuItems(state);
-				const options = items.map((item) => `${item.label} — ${item.description ?? ""}`);
-				const selected = await ctx.ui.select(webUIMenuTitle(state), options);
-				const selectedIndex = selected === undefined ? -1 : options.indexOf(selected);
-				action = items[selectedIndex]?.value;
-			}
-			if (generation !== this.generation || !action) return;
-			selectedAction = action;
-			if (action === "open") {
-				await this.openWebUI(ctx);
-				return;
-			}
-			if (action === "settings") {
-				await this.showSettings(ctx);
-				if (generation !== this.generation) return;
-				continue;
-			}
-			if (action === "repair") {
-				await this.showDetail(ctx, "Repair WebUI settings", this.repairLines());
-				if (generation !== this.generation) return;
-				continue;
-			}
-			if (action === "status") {
-				await this.showDetail(ctx, "Pi WebUI status", this.statusLines());
-				if (generation !== this.generation) return;
-				continue;
-			}
-			await this.showDetail(ctx, "Pi WebUI help", this.helpLines());
-			if (generation !== this.generation) return;
-		}
-	}
-
-	private async showDetail(
-		ctx: ExtensionCommandContext,
-		title: string,
-		lines: readonly string[],
-	): Promise<void> {
-		if (ctx.mode === "tui") {
-			await ctx.ui.custom<void>((tui, theme, keybindings, done) =>
-				createWebUIDetailComponent(title, lines, tui, theme, keybindings, done),
-			);
-			return;
-		}
-		await ctx.ui.select([title, "", ...lines].join("\n"), ["Back"]);
+		await this.runStandardMenu(ctx, "main");
 	}
 
 	private async showSettings(ctx: ExtensionCommandContext): Promise<void> {
 		if (this.settingsDocument === undefined) {
-			if (ctx.mode === "tui") {
-				await this.showDetail(ctx, "Repair WebUI settings", this.repairLines());
-			} else if (ctx.hasUI) {
-				ctx.ui.notify(this.repairLines().join("\n"), "warning");
-			}
+			if (ctx.mode === "tui") await this.runStandardMenu(ctx, "repair");
+			else if (ctx.hasUI) ctx.ui.notify(this.repairLines().join("\n"), "warning");
 			return;
 		}
 		if (ctx.mode !== "tui") {
-			if (ctx.hasUI) {
-				ctx.ui.notify(`Edit WebUI settings manually: ${this.settingsPath}`, "info");
-			}
+			if (ctx.hasUI) ctx.ui.notify(`Edit WebUI settings manually: ${this.settingsPath}`, "info");
 			return;
 		}
+		await this.runStandardMenu(ctx, "settings");
+	}
 
-		const settingsGeneration = this.generation;
-		const items: SettingItem[] = [
-			{
-				id: "startOnSessionStart",
-				label: "Start WebUI automatically",
-				description: "Choose whether future Pi session initializations display a WebUI link",
-				currentValue: this.settings.startOnSessionStart ? "Every session" : "Manual",
-				values: ["Manual", "Every session"],
+	private async runStandardMenu(
+		ctx: ExtensionCommandContext,
+		start: "main" | "settings" | "repair",
+	): Promise<void> {
+		const generation = this.generation;
+		type Screen = "main" | "settings" | "repair" | "status" | "help";
+		type Action = "open" | "settings" | "save-startup";
+		const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
+			start,
+			screens: {
+				main: () => {
+					const state = this.menuState();
+					return {
+						kind: "actions",
+						title: "Pi WebUI",
+						lines: webUIMenuTitle(state).split("\n").slice(1),
+						items: webUIMenuItems(state).map((item) => {
+							if (item.value === "open") {
+								return { ...item, id: item.value, action: "open" as const };
+							}
+							if (item.value === "settings") {
+								return { ...item, id: item.value, action: "settings" as const };
+							}
+							return { ...item, id: item.value, to: item.value as "repair" | "status" | "help" };
+						}),
+						hint: "close",
+					};
+				},
+				settings: () => ({
+					kind: "settings",
+					title: "Pi WebUI Settings",
+					lines: [
+						"Changes save immediately. Startup changes apply on the next session initialization or reload.",
+						`Advanced settings: ${safeTerminalText(this.settingsPath)}`,
+					],
+					items: [
+						{
+							id: "startOnSessionStart",
+							label: "Start WebUI automatically",
+							description: "Choose whether future Pi session initializations display a WebUI link",
+							currentValue: this.settings.startOnSessionStart ? "Every session" : "Manual",
+							values: ["Manual", "Every session"],
+							action: "save-startup",
+						},
+					],
+				}),
+				repair: () => ({
+					kind: "detail",
+					title: "Repair WebUI settings",
+					lines: this.repairLines(),
+					hint: "back",
+				}),
+				status: () => ({
+					kind: "detail",
+					title: "Pi WebUI status",
+					lines: this.statusLines(),
+					hint: "back",
+				}),
+				help: () => ({
+					kind: "detail",
+					title: "Pi WebUI help",
+					lines: this.helpLines(),
+					hint: "back",
+				}),
 			},
-		];
-
-		await ctx.ui.custom((tui, theme, _keybindings, done) => {
-			const container = new Container();
-			const title = new Text(theme.fg("accent", theme.bold("Pi WebUI Settings")), 1, 1);
-			container.addChild(title);
-			container.addChild(
-				new Text(
-					`Changes save immediately. Startup changes apply on the next session initialization or reload.\nAdvanced settings: ${safeTerminalText(this.settingsPath)}`,
-					1,
-					0,
-				),
-			);
-			const list = new SettingsList(
-				items,
-				Math.min(items.length + 2, 15),
-				getSettingsListTheme(),
-				(id, value) => {
-					if (id !== "startOnSessionStart") return;
+			actions: {
+				open: async () => {
+					await this.openWebUI(ctx);
+					return { kind: "close" };
+				},
+				settings: async () => {
+					if (this.settingsDocument === undefined) return { kind: "to", screen: "repair" };
+					if (ctx.mode !== "tui") {
+						ctx.ui.notify(`Edit WebUI settings manually: ${this.settingsPath}`, "info");
+						return { kind: "stay" };
+					}
+					return { kind: "to", screen: "settings" };
+				},
+				"save-startup": async ({ value }) => {
 					const requested = value === "Every session";
+					let accepted = false;
 					const operation = this.settingsSaveQueue.then(async () => {
-						const previous = this.settings.startOnSessionStart;
-						try {
-							if (!this.settingsDocument) {
-								throw new Error("the invalid settings file must be repaired manually first");
-							}
-							const next = { ...this.settings, startOnSessionStart: requested };
-							const document = await this.dependencies.saveSettings(
-								{ startOnSessionStart: requested },
-								this.settingsDocument,
-								this.settingsPath,
-							);
-							if (settingsGeneration !== this.generation || this.closed) return;
-							this.settings = next;
-							this.settingsDocument = document;
-							this.settingsSource = "settings file";
-						} catch (error) {
-							if (settingsGeneration === this.generation) {
-								list.updateValue(id, previous ? "Every session" : "Manual");
-								ctx.ui.notify(`WebUI settings save failed: ${formatError(error)}`, "error");
-								tui.requestRender();
-							}
+						if (!this.settingsDocument) {
+							throw new Error("the invalid settings file must be repaired manually first");
 						}
+						const document = await this.dependencies.saveSettings(
+							{ startOnSessionStart: requested },
+							this.settingsDocument,
+							this.settingsPath,
+						);
+						if (generation !== this.generation || this.closed) return;
+						this.settings = { ...this.settings, startOnSessionStart: requested };
+						this.settingsDocument = document;
+						this.settingsSource = "settings file";
+						accepted = true;
 					});
 					this.settingsSaveQueue = operation.catch(() => undefined);
+					try {
+						await operation;
+					} catch (error) {
+						if (generation === this.generation && !this.closed) {
+							ctx.ui.notify(`WebUI settings save failed: ${formatError(error)}`, "error");
+						}
+					}
+					return accepted ? { kind: "stay" } : { kind: "rejected" };
 				},
-				() => done(undefined),
-				{ enableSearch: false },
-			);
-			container.addChild(list);
-			return {
-				render: (width: number) => container.render(width),
-				invalidate: () => {
-					title.setText(theme.fg("accent", theme.bold("Pi WebUI Settings")));
-					container.invalidate();
-				},
-				handleInput(data: string) {
-					list.handleInput?.(data);
-					tui.requestRender();
-				},
-			};
+			},
 		});
-		await this.settingsSaveQueue;
+		await runMenu(ctx, menu, {
+			getState: () => undefined,
+			signal: this.sessionAbort.signal,
+			isCurrent: () => generation === this.generation && !this.closed,
+		});
 	}
 
 	private statusLines(): string[] {

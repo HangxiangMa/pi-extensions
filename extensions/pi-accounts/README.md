@@ -60,7 +60,11 @@ Open the interactive account manager:
 /accounts
 ```
 
-The command requires interactive UI. Any extra text after `/accounts` is ignored so the entry point stays singular.
+The standard manager runs in TUI or RPC mode; Back returns through provider/account screens and
+Escape closes the root. Print and JSON modes reject it observably. Any extra text after `/accounts`
+is ignored so the entry point stays singular. Provider-owned OAuth challenges, account-name text
+input, and exact replacement/removal confirmations remain specialized dialogs because they carry
+credential and destructive-action policy rather than ordinary navigation.
 
 When no accounts are saved yet, the menu starts with login:
 

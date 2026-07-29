@@ -1,7 +1,7 @@
 import { BorderedLoader, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { type ActionMenuItem, defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { setSyncSetupCompletions } from "./command.js";
 import {
-	activeLocalConfigPath,
 	configuredSyncSetupNames,
 	isCloudflareR2Endpoint,
 	loadConfig,
@@ -9,7 +9,6 @@ import {
 	loadPartialConfig,
 	localConfigPath,
 	readLocalConfigObject,
-	readStateForConfig,
 	syncConfigReviewIdentity,
 } from "./config.js";
 import { showAddGitTarget, showEditGitTarget, showGitSetup } from "./git-ui.js";
@@ -21,6 +20,7 @@ import {
 	requiredInput,
 	safeTerminalText,
 } from "./manager-helpers.js";
+import { backendStorageDescription, describeManagerState } from "./manager-state.js";
 import { chooseS3Credentials } from "./s3-credentials-ui.js";
 import {
 	addSyncSetup,
@@ -32,29 +32,10 @@ import { showSyncSettings } from "./settings-ui.js";
 import { type SetupPullOutcome, useSyncSetup } from "./setup-switch.js";
 import { showAddStorageConnection, showStorageConnections } from "./storage-connections-ui.js";
 import { DEFAULT_SYNC_INCLUDE, syncIncludeSelection } from "./sync-policy.js";
-import { countValidSyncSetups, showSyncSetups } from "./sync-setups-ui.js";
+import { showSyncSetups } from "./sync-setups-ui.js";
 import type { AnySyncConfig } from "./types.js";
 import { showAddWebDavTarget, showEditWebDavTarget, showWebDavSetup } from "./webdav-ui.js";
 
-export const MAIN_MENU_ACTIONS = [
-	"Sync now (recommended)",
-	"Switch sync setup",
-	"Status & changes",
-	"Settings",
-	"More…",
-] as const;
-const MORE_MENU_ACTIONS = [
-	"Pull from remote…",
-	"Push to remote…",
-	"Sync setups…",
-	"Storage connections…",
-	"History & recovery…",
-	"Help",
-	"Back",
-] as const;
-const BACK = "Back";
-
-type MainMenuAction = (typeof MAIN_MENU_ACTIONS)[number];
 type RunRoute = (
 	route: string,
 	signal?: AbortSignal,
@@ -71,97 +52,178 @@ export async function showSyncManager(
 		await runRoute("help");
 		return;
 	}
-	while (true) {
-		const state = await describeManagerState(sessionSignal);
-		if (sessionSignal?.aborted) return;
-		const selected = await ctx.ui.select(state.title, state.actions, { signal: sessionSignal });
-		if (sessionSignal?.aborted) return;
-		if (!selected) return;
-		switch (
-			selected as
-				| MainMenuAction
-				| "Sync setups…"
-				| "Storage connections…"
-				| "History & recovery…"
-				| "Help"
-				| "Set up sync"
-				| "Use existing settings"
-		) {
-			case "Sync now (recommended)":
-				await runCancellableOperation(ctx, "Checking current sync setup…", "sync", runRoute, true);
-				break;
-			case "Switch sync setup": {
-				const result = await showSetupSwitcher(ctx, runRoute, undefined, sessionSignal);
-				if (result === "pull-attempted") return;
-				if (result === "switched") continue;
-				break;
-			}
-			case "Status & changes":
-				await runCancellableOperation(ctx, "Checking current sync setup…", "diff", runRoute);
-				break;
-			case "Settings":
-				await showSyncSettings(ctx, runRoute, sessionSignal);
-				break;
-			case "More…":
-				if ((await showMoreMenu(ctx, runRoute, sessionSignal)) === "exit") return;
-				break;
-			case "Sync setups…":
-				if ((await showSyncSetupManager(ctx, runRoute, sessionSignal)) === "exit") return;
-				break;
-			case "Storage connections…":
-				await showStorageConnections(ctx, sessionSignal);
-				break;
-			case "History & recovery…":
-				await showRecoveryMenu(ctx, runRoute);
-				break;
-			case "Help":
-				await runRoute("help");
-				return;
-			case "Set up sync":
-			case "Use existing settings":
-				await runRoute("init");
-				continue;
-		}
+	type Screen = "main" | "more" | "recovery";
+	type Action =
+		| "sync"
+		| "switch"
+		| "diff"
+		| "settings"
+		| "pull"
+		| "push"
+		| "setups"
+		| "connections"
+		| "history"
+		| "doctor"
+		| "unlock"
+		| "help"
+		| "init"
+		| "back";
+	interface State {
+		manager: Awaited<ReturnType<typeof describeManagerState>>;
+		canRecover: boolean;
 	}
+	const menu = defineMenu<State, Screen, Action, ExtensionCommandContext>({
+		start: "main",
+		screens: {
+			main: ({ state }) => ({
+				kind: "actions",
+				title: "Manage sync",
+				lines: state.manager.title.split("\n").slice(1),
+				items: state.manager.actions.map(syncMainMenuItem),
+				hint: "close",
+			}),
+			more: () => ({
+				kind: "actions",
+				title: "More options",
+				items: [
+					{ id: "pull", label: "Pull from remote…", action: "pull" },
+					{ id: "push", label: "Push to remote…", action: "push" },
+					{ id: "setups", label: "Sync setups…", action: "setups" },
+					{
+						id: "connections",
+						label: "Storage connections…",
+						action: "connections",
+					},
+					{ id: "recovery", label: "History & recovery…", to: "recovery" },
+					{ id: "help", label: "Help", action: "help" },
+					{ id: "back", label: "Back", action: "back" },
+				],
+				hint: "back",
+			}),
+			recovery: ({ state }) => ({
+				kind: "actions",
+				title: "History & recovery",
+				items: [
+					{ id: "history", label: "Browse history", action: "history" },
+					{ id: "doctor", label: "Check setup", action: "doctor" },
+					...(state.canRecover
+						? [{ id: "unlock", label: "Recover stale operation", action: "unlock" as const }]
+						: []),
+					{ id: "back", label: "Back", action: "back" },
+				],
+				hint: "back",
+			}),
+		},
+		actions: {
+			sync: async () => {
+				await runCancellableOperation(ctx, "Checking current sync setup…", "sync", runRoute, true);
+				return { kind: "stay" };
+			},
+			switch: async () => {
+				const result = await showSetupSwitcher(ctx, runRoute, undefined, sessionSignal);
+				return result === "pull-attempted" ? { kind: "close" } : { kind: "stay" };
+			},
+			diff: async () => {
+				await runCancellableOperation(ctx, "Checking current sync setup…", "diff", runRoute);
+				return { kind: "stay" };
+			},
+			settings: async () => {
+				await showSyncSettings(ctx, runRoute, sessionSignal);
+				return { kind: "stay" };
+			},
+			pull: async () => {
+				const result = await runCancellableOperation(
+					ctx,
+					"Checking remote changes…",
+					"pull",
+					runRoute,
+					true,
+					"Pull check cancelled; no local files were changed.",
+				);
+				return result === "applied" ? { kind: "close" } : { kind: "stay" };
+			},
+			push: async () => {
+				await runCancellableOperation(
+					ctx,
+					"Preparing push preview…",
+					"push",
+					runRoute,
+					true,
+					"Push preparation cancelled; no remote files were changed.",
+				);
+				return { kind: "stay" };
+			},
+			setups: async () => {
+				const result = await showSyncSetupManager(ctx, runRoute, sessionSignal);
+				return result === "exit" ? { kind: "close" } : { kind: "stay" };
+			},
+			connections: async () => {
+				await showStorageConnections(ctx, sessionSignal);
+				return { kind: "stay" };
+			},
+			history: async () => {
+				await runRoute("history");
+				return { kind: "stay" };
+			},
+			doctor: async () => {
+				await runRoute("doctor");
+				return { kind: "stay" };
+			},
+			unlock: async () => {
+				await runRoute("unlock --stale");
+				return { kind: "stay" };
+			},
+			help: async () => {
+				await runRoute("help");
+				return { kind: "close" };
+			},
+			init: async () => {
+				await runRoute("init");
+				return { kind: "stay" };
+			},
+			back: async () => ({ kind: "back" }),
+		},
+	});
+	await runMenu(ctx, menu, {
+		getState: async () => {
+			const [manager, lock] = await Promise.all([
+				describeManagerState(sessionSignal),
+				inspectLock(),
+			]);
+			return {
+				manager,
+				canRecover:
+					lock.status === "unreadable" || (lock.status === "valid" && isStaleLock(lock.lock)),
+			};
+		},
+		signal: sessionSignal,
+		isCurrent: () => !sessionSignal?.aborted,
+	});
 }
 
-async function showMoreMenu(
-	ctx: ExtensionCommandContext,
-	runRoute: RunRoute,
-	signal?: AbortSignal,
-) {
-	const selected = await ctx.ui.select("More options", [...MORE_MENU_ACTIONS], { signal });
-	if (!selected || selected === BACK) return;
-	if (selected === "Pull from remote…") {
-		const result = await runCancellableOperation(
-			ctx,
-			"Checking remote changes…",
-			"pull",
-			runRoute,
-			true,
-			"Pull check cancelled; no local files were changed.",
-		);
-		if (result === "applied") return "exit" as const;
-		return;
-	}
-	if (selected === "Push to remote…") {
-		await runCancellableOperation(
-			ctx,
-			"Preparing push preview…",
-			"push",
-			runRoute,
-			true,
-			"Push preparation cancelled; no remote files were changed.",
-		);
-		return;
-	}
-	if (selected === "Sync setups…") return showSyncSetupManager(ctx, runRoute, signal);
-	else if (selected === "Storage connections…") await showStorageConnections(ctx, signal);
-	else if (selected === "History & recovery…") await showRecoveryMenu(ctx, runRoute);
-	else {
-		await runRoute("help");
-		return "exit" as const;
-	}
+function syncMainMenuItem(
+	label: string,
+): ActionMenuItem<
+	"main" | "more" | "recovery",
+	"sync" | "switch" | "diff" | "settings" | "setups" | "connections" | "help" | "init"
+> {
+	if (label === "More…") return { id: "more", label, to: "more" };
+	if (label === "History & recovery…") return { id: "recovery", label, to: "recovery" };
+	const actions = new Map<
+		string,
+		"sync" | "switch" | "diff" | "settings" | "setups" | "connections" | "help" | "init"
+	>([
+		["Sync now (recommended)", "sync"],
+		["Switch sync setup", "switch"],
+		["Status & changes", "diff"],
+		["Settings", "settings"],
+		["Sync setups…", "setups"],
+		["Storage connections…", "connections"],
+		["Help", "help"],
+		["Set up sync", "init"],
+		["Use existing settings", "init"],
+	]);
+	return { id: actions.get(label) ?? "help", label, action: actions.get(label) ?? "help" };
 }
 
 async function runCancellableOperation(
@@ -217,146 +279,6 @@ async function runCancellableOperation(
 	}
 	if (result?.error) throw result.error;
 	return routeResult;
-}
-
-async function describeManagerState(
-	signal?: AbortSignal,
-): Promise<{ title: string; actions: string[] }> {
-	let raw: Record<string, unknown> | undefined;
-	try {
-		raw = await readLocalConfigObject();
-	} catch (error) {
-		return {
-			title: [
-				"Manage sync",
-				"",
-				"Settings file needs repair. Automatic sync and settings writes are paused.",
-				`Error: ${safeTerminalText(errorMessage(error))}`,
-				`File: ${safeTerminalText(await activeLocalConfigPath())}`,
-				"",
-				"Repair the JSON file, then reopen /sync.",
-			].join("\n"),
-			actions: ["Help"],
-		};
-	}
-	if (!raw) {
-		return {
-			title: ["Manage sync", "", "Not set up.", "", "What do you want to do?"].join("\n"),
-			actions: ["Set up sync", "Help"],
-		};
-	}
-	const configuredTargets = ownRecord(raw.syncSetups);
-	if (raw.version === 3 && configuredTargets && Object.keys(configuredTargets).length === 0) {
-		return {
-			title: [
-				"Manage sync",
-				"",
-				"No sync setups are configured.",
-				"Add a sync setup using an existing storage connection.",
-				"",
-				"What do you want to do?",
-			].join("\n"),
-			actions: ["Sync setups…", "Storage connections…", "Help"],
-		};
-	}
-	try {
-		const config = await loadConfig();
-		const target = config.setupName;
-		const storage = backendStorageDescription(config);
-		const warnings: string[] = [];
-		const lock = await inspectLock();
-		const liveLock = lock.status === "valid" && !isStaleLock(lock.lock);
-		const recoverableLock =
-			lock.status === "unreadable" || (lock.status === "valid" && isStaleLock(lock.lock));
-		const selection = syncIncludeSelection(config.include);
-		const builtInCount = selection.builtIns.length;
-		const extraFileCount = selection.custom.length;
-		const noSyncedContent = config.include.length === 0;
-		const stateReadDisabled = liveLock || recoverableLock;
-		const syncState = stateReadDisabled
-			? undefined
-			: await readStateForConfig(config).catch(() => undefined);
-		const lastAppliedSnapshot = stateReadDisabled
-			? "Unavailable while operations are locked"
-			: syncState?.lastAppliedSnapshot
-				? safeTerminalText(syncState.lastAppliedSnapshot)
-				: syncState
-					? "Never synced"
-					: "Unavailable";
-		const canSwitch = (await countValidSyncSetups(configuredTargets, signal)) > 1;
-		const mainActions = MAIN_MENU_ACTIONS.filter(
-			(action) => action !== "Switch sync setup" || canSwitch,
-		);
-		return {
-			title: [
-				"Manage sync",
-				"",
-				`Current sync setup: ${safeTerminalText(target)}`,
-				`Storage: ${storage}`,
-				`Included: ${builtInCount} built-in group${builtInCount === 1 ? "" : "s"} · ${extraFileCount} extra path${extraFileCount === 1 ? "" : "s"} · Sessions ${selection.sessions ? "on" : "off"}`,
-				`Automatic sync: ${config.automatic ? "On" : "Off"}`,
-				`Last applied: ${lastAppliedSnapshot}`,
-				"Remote status: Not checked",
-				...warnings.map((warning) => `Warning: ${safeTerminalText(warning)}`),
-				...(noSyncedContent
-					? [
-							"",
-							"No included content is selected. Choose included content in Settings before syncing.",
-						]
-					: []),
-				...(liveLock
-					? [
-							"",
-							`Operation in progress: ${safeTerminalText(lock.lock.command)} (pid ${lock.lock.pid}). Sync and settings changes are disabled.`,
-						]
-					: []),
-				...(recoverableLock
-					? ["", "Recovery required: lock metadata is stale or unreadable."]
-					: []),
-				"",
-				"What do you want to do?",
-			].join("\n"),
-			actions:
-				liveLock || recoverableLock
-					? ["Status & changes", "History & recovery…", "Help"]
-					: noSyncedContent
-						? ["Settings", ...(canSwitch ? ["Switch sync setup"] : []), "Status & changes", "More…"]
-						: mainActions,
-		};
-	} catch (error) {
-		if (signal?.aborted) throw error;
-		return {
-			title: [
-				"Manage sync",
-				"",
-				"Settings need attention. Automatic sync is paused.",
-				`Current sync setup: ${safeTerminalText(typeof raw.activeSyncSetup === "string" ? raw.activeSyncSetup : "none")}`,
-				`Error: ${safeTerminalText(errorMessage(error))}`,
-				`File: ${safeTerminalText(await activeLocalConfigPath())}`,
-				"",
-				"What do you want to do?",
-			].join("\n"),
-			actions: ["Sync setups…", "Storage connections…", "History & recovery…", "Help"],
-		};
-	}
-}
-
-function backendStorageDescription(config: AnySyncConfig) {
-	const connection = safeTerminalText(config.connectionName);
-	switch (config.backend.type) {
-		case "s3": {
-			const type =
-				config.backend.profile.kind === "r2" ||
-				isCloudflareR2Endpoint(config.backend.profile.endpoint)
-					? "Cloudflare R2"
-					: "S3-compatible";
-			return `${type} · ${connection} · ${safeTerminalText(config.backend.destination.bucket)}`;
-		}
-		case "webdav":
-			return `WebDAV · ${connection} · ${safeTerminalText(config.backend.destination.path)}`;
-		case "git":
-			return `Git · ${connection} · ${safeTerminalText(config.backend.destination.branch)}`;
-	}
 }
 
 export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: AbortSignal) {
@@ -494,6 +416,65 @@ export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: Abo
 	return true;
 }
 
+async function selectSetupForSwitch(
+	ctx: ExtensionCommandContext,
+	raw: Record<string, unknown>,
+	targets: Record<string, unknown>,
+	active: string | undefined,
+	signal?: AbortSignal,
+) {
+	let selectedName: string | undefined;
+	const nameById = new Map<string, string>();
+	const profiles = ownRecord(raw.storageConnections);
+	const menu = defineMenu<undefined, "setups", "select", ExtensionCommandContext>({
+		start: "setups",
+		screens: {
+			setups: () => ({
+				kind: "actions",
+				title: "Switch sync setup",
+				lines: [`Current sync setup: ${safeTerminalText(active ?? "none")}`],
+				items: Object.keys(targets)
+					.sort((left, right) => left.localeCompare(right))
+					.map((candidate, index) => {
+						const target = ownRecord(targets[candidate]);
+						const storage = ownRecord(target?.storage);
+						const profileName =
+							typeof storage?.connection === "string" ? storage.connection : undefined;
+						const profile = profileName && profiles ? ownRecord(profiles[profileName]) : undefined;
+						const location = profile
+							? profile.type === "git"
+								? `${String(storage?.branch ?? "missing branch")}:${String(storage?.path ?? "missing path")}`
+								: profile.type === "s3"
+									? `${String(storage?.bucket ?? "missing bucket")}/${String(storage?.path ?? "missing path")}`
+									: String(storage?.path ?? "missing path")
+							: `invalid: missing connection ${profileName ?? "reference"}`;
+						const id = `setup:${index}`;
+						nameById.set(id, candidate);
+						return {
+							id,
+							label: `${safeTerminalText(candidate)}${candidate === active ? " (current)" : ""}`,
+							description: `${safeTerminalText(profileName ?? "unknown")} · ${safeTerminalText(location)}`,
+							action: "select" as const,
+						};
+					}),
+				hint: "close",
+			}),
+		},
+		actions: {
+			select: async ({ itemId }) => {
+				selectedName = nameById.get(itemId);
+				return { kind: "close" };
+			},
+		},
+	});
+	await runMenu(ctx, menu, {
+		getState: () => undefined,
+		signal,
+		isCurrent: () => !signal?.aborted,
+	});
+	return selectedName;
+}
+
 async function showSetupSwitcher(
 	ctx: ExtensionCommandContext,
 	runRoute: RunRoute,
@@ -514,30 +495,8 @@ async function showSetupSwitcher(
 	const active = typeof raw.activeSyncSetup === "string" ? raw.activeSyncSetup : undefined;
 	let name = selectedName;
 	if (!name) {
-		const profiles = ownRecord(raw.storageConnections);
-		const labels = new Map<string, string>();
-		for (const candidate of Object.keys(targets).sort((left, right) => left.localeCompare(right))) {
-			const target = ownRecord(targets[candidate]);
-			const storage = ownRecord(target?.storage);
-			const profileName = typeof storage?.connection === "string" ? storage.connection : undefined;
-			const profile = profileName && profiles ? ownRecord(profiles[profileName]) : undefined;
-			const location = profile
-				? profile.type === "git"
-					? `${String(storage?.branch ?? "missing branch")}:${String(storage?.path ?? "missing path")}`
-					: profile.type === "s3"
-						? `${String(storage?.bucket ?? "missing bucket")}/${String(storage?.path ?? "missing path")}`
-						: String(storage?.path ?? "missing path")
-				: `invalid: missing connection ${profileName ?? "reference"}`;
-			const label = `${safeTerminalText(candidate)}${candidate === active ? " (current)" : ""} · ${safeTerminalText(profileName ?? "unknown")} · ${safeTerminalText(location)}`;
-			labels.set(label, candidate);
-		}
-		const selected = await ctx.ui.select(
-			`Switch sync setup\n\nCurrent sync setup: ${safeTerminalText(active ?? "none")}`,
-			[...labels.keys(), BACK],
-			{ signal },
-		);
-		if (!selected || selected === BACK) return false;
-		name = labels.get(selected);
+		name = await selectSetupForSwitch(ctx, raw, targets, active, signal);
+		if (!name) return false;
 	}
 	if (!name || !Object.hasOwn(targets, name)) {
 		ctx.ui.notify(
@@ -569,10 +528,9 @@ async function showSetupSwitcher(
 			: onSwitch === "pull-after-switch"
 				? "After switching, pi-sync will check this setup and show exact changes before applying them."
 				: "After switching, pi-sync will not pull or modify synced files.";
-	const choice = await ctx.ui.select(
+	const confirmed = await ctx.ui.confirm(
+		"Switch sync setup?",
 		[
-			"Switch sync setup",
-			"",
 			`From: ${safeTerminalText(active ?? "none")}`,
 			`To: ${safeTerminalText(name)}`,
 			`Storage: ${backendStorageDescription(config)}`,
@@ -581,10 +539,9 @@ async function showSetupSwitcher(
 			"",
 			switchEffect,
 		].join("\n"),
-		[`Switch to ${safeTerminalText(name)}`, "Cancel"],
 		{ signal },
 	);
-	if (signal?.aborted || choice !== `Switch to ${safeTerminalText(name)}`) return false;
+	if (signal?.aborted || !confirmed) return false;
 	try {
 		const result = await useSyncSetup(
 			ctx,
@@ -804,22 +761,6 @@ async function showRemoveTarget(ctx: ExtensionCommandContext, name: string, sign
 
 async function refreshTargetCompletions() {
 	setSyncSetupCompletions(await configuredSyncSetupNames());
-}
-
-async function showRecoveryMenu(ctx: ExtensionCommandContext, runRoute: RunRoute) {
-	const lock = await inspectLock();
-	const canRecover =
-		lock.status === "unreadable" || (lock.status === "valid" && isStaleLock(lock.lock));
-	const selected = await ctx.ui.select("History & recovery", [
-		"Browse history",
-		"Check setup",
-		...(canRecover ? ["Recover stale operation"] : []),
-		BACK,
-	]);
-	if (!selected || selected === BACK) return;
-	if (selected === "Browse history") await runRoute("history");
-	else if (selected === "Check setup") await runRoute("doctor");
-	else await runRoute("unlock --stale");
 }
 
 interface ChosenRemoteLocation {

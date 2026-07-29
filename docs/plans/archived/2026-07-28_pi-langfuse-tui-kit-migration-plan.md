@@ -42,23 +42,23 @@ notification.
 
 ## Plan
 
-- [ ] Add the `<1` kit dependency and lockfile edge; verify independent install and package metadata.
-- [ ] Add failing tests for no-config, active-recorder, initialization-error, notice, setup/update,
+- [x] Add the `<1` kit dependency and lockfile edge; verify independent install and package metadata.
+- [x] Add failing tests for no-config, active-recorder, initialization-error, notice, setup/update,
       flush, help, RPC, no-UI, menu cancellation, and session-replacement screens/actions.
-- [ ] Replace the selector with a typed dynamic action screen and session-owned signal while retaining
+- [x] Replace the selector with a typed dynamic action screen and session-owned signal while retaining
       existing recorder/config snapshots and generation checks; verify focused menu tests pass.
-- [ ] Route Flush and setup/update actions through existing domain flows, revalidating state after
+- [x] Route Flush and setup/update actions through existing domain flows, revalidating state after
       recorder flush, config load, each prompt, and queued write; verify tracing, redaction,
       permissions, unknown-field, malformed-file, and shutdown-drain tests pass.
-- [ ] Audit and document observable non-TUI behavior without changing the ignored-argument public
+- [x] Audit and document observable non-TUI behavior without changing the ignored-argument public
       contract, then run package/root checks, root tests, `npm run pack:langfuse`, and isolated RPC
       loading with mocked/no external exporter traffic.
-- [ ] Audit menu, settings, credentials, lifecycle, error redaction, package, and verification
+- [x] Audit menu, settings, credentials, lifecycle, error redaction, package, and verification
       conventions before archiving.
 
 ## Completion Checklist
 
-- [ ] `/langfuse` standard rendering/navigation uses `pi-tui-kit` in TUI/RPC.
-- [ ] Setup, update, flush, tracing, restart, credential, redaction, and shutdown behavior is unchanged.
-- [ ] Stale/cancelled menu actions cannot write config or report recorder success.
-- [ ] Focused tests, package/root checks, pack inspection, and runtime smoke pass.
+- [x] `/langfuse` standard rendering/navigation uses `pi-tui-kit` in TUI/RPC.
+- [x] Setup, update, flush, tracing, restart, credential, redaction, and shutdown behavior is unchanged.
+- [x] Stale/cancelled menu actions cannot write config or report recorder success.
+- [x] Focused tests, package/root checks, pack inspection, and runtime smoke pass.

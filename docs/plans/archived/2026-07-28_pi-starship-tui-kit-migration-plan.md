@@ -42,24 +42,24 @@ replacement; otherwise use the command invocation boundary and explicit current 
 
 ## Plan
 
-- [ ] Add the `<1` kit dependency and lockfile edge; verify package boundaries and runtime metadata.
-- [ ] Add failing tests for Main/Advanced/detail navigation, dynamic health/source state, Back/cursor
+- [x] Add the `<1` kit dependency and lockfile edge; verify package boundaries and runtime metadata.
+- [x] Add failing tests for Main/Advanced/detail navigation, dynamic health/source state, Back/cursor
       restoration, restore availability, TUI cancellation, and non-TUI direct-route fallbacks.
-- [ ] Replace standard `showActionMenu()` uses with typed action/detail screens while retaining a
+- [x] Replace standard `showActionMenu()` uses with typed action/detail screens while retaining a
       dedicated preview UI for width-rendered footer drafts and invalid-draft recovery; verify focused
       menu and width tests pass.
-- [ ] Route Customize and Restore through existing editor, validation, preview, confirmation,
+- [x] Route Customize and Restore through existing editor, validation, preview, confirmation,
       save/apply, and rollback code; verify malformed-file, warning, atomic publication, application
       failure, and rollback tests remain green.
-- [ ] Remove only the superseded standard wrapper code and update README navigation/key wording if
+- [x] Remove only the superseded standard wrapper code and update README navigation/key wording if
       needed; run package/root checks, root tests, `npm run pack:starship`, and an isolated TUI-harness
       plus noninteractive load smoke.
-- [ ] Audit menu, settings, custom preview, footer lifecycle, package, and verification conventions
+- [x] Audit menu, settings, custom preview, footer lifecycle, package, and verification conventions
       before archiving.
 
 ## Completion Checklist
 
-- [ ] Main/Advanced/details/diagnostics/help use `pi-tui-kit`.
-- [ ] TOML editing and width-aware review remain specialized and fully transactional.
-- [ ] Direct routes, settings, footer behavior, rollback, and mode behavior are unchanged.
-- [ ] Tests, checks, pack inspection, and smokes pass.
+- [x] Main/Advanced/details/diagnostics/help use `pi-tui-kit`.
+- [x] TOML editing and width-aware review remain specialized and fully transactional.
+- [x] Direct routes, settings, footer behavior, rollback, and mode behavior are unchanged.
+- [x] Tests, checks, pack inspection, and smokes pass.

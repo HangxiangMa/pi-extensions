@@ -240,7 +240,13 @@ Auto-resume is best-effort because Pi's custom-message API is fire-and-forget. S
 
 The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history. Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
 
-Run `/subagents` in TUI mode to open the primary manager. It leads with the current delegation workflow, human-readable async completion behavior, and active/retained counts. **Change delegation**, **Current agents**, and **Completion behavior** cover the common workflows; agent permissions, transport/runtime details, source, and settings path remain under **Advanced settings**. Escape returns from a nested screen to a newly refreshed manager and then closes it.
+Run `/subagents` in TUI mode to open the standard primary manager. It leads with the current
+delegation workflow, human-readable async completion behavior, and active/retained counts. **Change
+delegation**, **Current agents**, and **Completion behavior** cover the common workflows; agent
+permissions, transport/runtime details, source, and settings path remain under **Advanced settings**.
+Escape returns from a nested screen to a newly refreshed manager; Ctrl+C closes the full flow.
+Exact workflow/reload and project-agent safety confirmations remain extension-owned because they
+guard live agent and trust-boundary policy rather than ordinary navigation.
 
 The direct routes remain predictable: `/subagents settings` changes user completion delivery and applies it immediately, including refreshing the model-facing spawn guidance; `/subagents status` reports current-session runtime values separately from the configured value, source, and path; `/subagents help` summarizes the single-command interface. In RPC mode, bare `/subagents` emits the same bounded status through Pi's notification protocol instead of opening a custom TUI. JSON and print modes do not emit ad hoc command output. Manual edits use `~/.pi/agent/pi-subagents.json` and take effect after reloading Pi:
 
@@ -382,7 +388,10 @@ Built-in agents inherit the active/default Pi model instead of forcing a provide
 
 ## ⚙️ Configure agent tools
 
-Open `/subagents`, choose **Advanced settings**, then **Agent tool settings** in an interactive Pi session to edit the tools each subagent may use. These are user settings stored in `~/.pi/agent/pi-subagents.json` and affect future sessions.
+Open `/subagents`, choose **Advanced settings**, then **Agent tool permissions** in an interactive
+Pi session to edit the tools each subagent may use. The standard bounded multi-select keeps a
+one-save draft: toggles do not write until **Save changes**, Escape discards the draft, and unavailable
+configured tool names remain visible and preserved. These are user settings stored in `~/.pi/agent/pi-subagents.json` and affect future sessions.
 
 Compatibility: a valid legacy `pi-subagents-config.json` remains readable with a warning and is never modified automatically; rename it to `pi-subagents.json`. The first subsequent settings save writes the canonical file. If both files exist, the new filename takes precedence.
 

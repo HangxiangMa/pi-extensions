@@ -68,6 +68,7 @@ export default function piStarship(pi: ExtensionAPI) {
 	};
 	let conflictWarningShown = false;
 	let sessionGeneration = 0;
+	let menuController = new AbortController();
 	let activeTarget: RefreshTarget | undefined;
 	let eventDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -139,6 +140,8 @@ export default function piStarship(pi: ExtensionAPI) {
 
 	const installFooter = (ctx: ExtensionContext) => {
 		const generation = ++sessionGeneration;
+		menuController.abort(new DOMException("Starship session context replaced", "AbortError"));
+		menuController = new AbortController();
 		const target = { cwd: ctx.cwd, generation };
 		clearDebounce();
 		gitController.stop();
@@ -221,6 +224,13 @@ export default function piStarship(pi: ExtensionAPI) {
 	registerStarshipCommand(pi, {
 		settingsPath: configPath,
 		getLoaded: () => loaded ?? loadStarshipConfig(configPath),
+		getMenuOwner: () => {
+			const generation = sessionGeneration;
+			return {
+				signal: menuController.signal,
+				isCurrent: () => generation === sessionGeneration && !menuController.signal.aborted,
+			};
+		},
 		apply(next) {
 			loaded = next;
 			const target = activeTarget;
@@ -252,6 +262,7 @@ export default function piStarship(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		sessionGeneration += 1;
+		menuController.abort(new DOMException("Starship session shut down", "AbortError"));
 		activeTarget = undefined;
 		clearDebounce();
 		gitController.stop();

@@ -53,7 +53,16 @@ pi -e ./extensions/pi-plan-mode
 /plan exit
 ```
 
-Use `/plan` to enter Plan mode before writing your planning prompt. Use `/plan <prompt>` to enter Plan mode and immediately submit `<prompt>` as the first Plan-mode user message. Use `/plan tools` to choose which tools are active while Plan mode is enabled; the selector is paginated at 10 tools per page. `/plan show` displays the stored plan without starting a model turn, `/plan finalize` explicitly asks the agent to complete the plan or ask one remaining material question, and `/plan implement` hands a stored plan to a normal implementation turn. `show` and `implement` fail closed when no plan is stored; `finalize` requires active Plan mode.
+Use `/plan` to enter Plan mode before writing your planning prompt. Use `/plan <prompt>` to enter
+Plan mode and immediately submit `<prompt>` as the first Plan-mode user message. Use `/plan tools`
+to choose which tools are active while Plan mode is enabled; the standard bounded multi-select shows
+10 rows at a time, supports viewport paging, descriptions, and explicit unavailable rows for blocked
+tools. The `plan_mode_question` tool keeps its one-off question/choice dialog because it is a
+model-requested planning interaction, not command-menu navigation. `/plan show` displays the stored
+plan without starting a model turn, `/plan finalize`
+explicitly asks the agent to complete the plan or ask one remaining material question, and
+`/plan implement` hands a stored plan to a normal implementation turn. `show` and `implement` fail
+closed when no plan is stored; `finalize` requires active Plan mode.
 
 When Plan mode is active, ask the agent to design the change. The agent may inspect files and run read-only commands, but it should not edit files or execute the implementation. It should explore first, then use structured questions when your preference or a tradeoff materially changes the plan.
 
@@ -63,7 +72,9 @@ Limited `bash` uses a fail-closed policy, including when an extension overrides 
 
 `plan_mode_question` follows Codex's `request_user_input` pattern: the agent can ask 1-3 concise questions, each with meaningful options and a free-form Other path. If you cancel or no interactive UI is available, the agent should ask a concise plain-text question or proceed only with a clearly stated low-risk assumption instead of prematurely producing a final plan.
 
-Pi activates tools by tool name. The `/plan tools` selector stores selections by name and shows each currently effective tool's source from Pi metadata, such as `built-in`, a user extension path, or a project extension path. If an extension overrides a built-in tool with the same name, Pi exposes the effective tool for that name and the selector shows that source.
+Pi activates tools by tool name. The `/plan tools` standard selector stores selections by name and
+shows each currently effective tool's source from Pi metadata, such as `built-in`, a user extension
+path, or a project extension path. If an extension overrides a built-in tool with the same name, Pi exposes the effective tool for that name and the selector shows that source.
 
 A complete Plan mode answer should appear only after the agent has resolved discoverable facts and high-impact user decisions. The agent must call `plan_mode_complete({ plan })` alone as its final action, passing the complete Markdown plan. The tool rejects empty or whitespace-only plans and plans longer than 50,000 JavaScript characters; it does not truncate. Its visible result contains the full plan, and versioned result details let the extension restore it safely from the active session branch.
 

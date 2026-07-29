@@ -51,28 +51,28 @@ unbounded terminal height and hide source/risk details in long labels.
 
 ## Plan
 
-- [ ] Add failing model/component tests for invalid viewport sizes, long catalogs, first/middle/last
+- [x] Add failing model/component tests for invalid viewport sizes, long catalogs, first/middle/last
       viewport placement, selected descriptions, narrow widths, paging, dynamic item changes, stable
       selected ids, pending rollback off-screen, and unchanged small-list rendering.
-- [ ] Extend the public multi-select type/model validation with optional `viewportSize` and implement
+- [x] Extend the public multi-select type/model validation with optional `viewportSize` and implement
       bounded rendering, position text, and selected descriptions in `screen-components.ts`; verify
       the focused tests pass without changing RPC row identity.
-- [ ] Add runtime tests for TUI navigation across viewport boundaries, Back/Close while work is
+- [x] Add runtime tests for TUI navigation across viewport boundaries, Back/Close while work is
       pending, dynamic state refresh with cursor restoration, and equivalent RPC toggle/bulk actions.
-- [ ] Update the README public API and multi-select example, including the TUI-only viewport behavior
+- [x] Update the README public API and multi-select example, including the TUI-only viewport behavior
       and guidance for large tool catalogs.
-- [ ] Run package checks, root tests, root CI-equivalent checks, existing Chrome DevTools/Firecrawl
+- [x] Run package checks, root tests, root CI-equivalent checks, existing Chrome DevTools/Firecrawl
       consumer tests, and `just pack-tui-kit`; inspect declarations and tarball contents.
-- [ ] Audit public API compatibility, width bounds, keybindings, cancellation, pending work,
+- [x] Audit public API compatibility, width bounds, keybindings, cancellation, pending work,
       sanitization, and package conventions before archiving.
 
 ## Completion Checklist
 
-- [ ] Large multi-select catalogs render within the configured/default viewport at narrow and wide
+- [x] Large multi-select catalogs render within the configured/default viewport at narrow and wide
       widths, with the selected row always visible.
-- [ ] Selected descriptions and scroll position are textual, sanitized, and width-safe.
-- [ ] Stable ids, toggles, bulk actions, rollback, pending drain, Back/Close, and RPC behavior remain
+- [x] Selected descriptions and scroll position are textual, sanitized, and width-safe.
+- [x] Stable ids, toggles, bulk actions, rollback, pending drain, Back/Close, and RPC behavior remain
       correct.
-- [ ] Existing small consumers remain source-compatible and visually equivalent apart from documented
+- [x] Existing small consumers remain source-compatible and visually equivalent apart from documented
       injected-key paging behavior.
-- [ ] Package/root checks, pilot tests, declarations, and pack inspection pass.
+- [x] Package/root checks, pilot tests, declarations, and pack inspection pass.

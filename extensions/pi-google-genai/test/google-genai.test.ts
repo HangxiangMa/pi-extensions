@@ -1,3 +1,5 @@
+// Cohesion justification: this provider integration matrix shares configuration and tool fixtures and
+// cross-covers command routing, menu persistence, credentials, requests, and lifecycle behavior.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
@@ -591,35 +593,28 @@ test("commands init, status, and tool selection merge config and preserve unrela
 		const command = mock.commands.get("google-genai");
 		assert.ok(command);
 		const inputs = ["", "new-model"];
-		const selections = ["[x] google_maps", "Done"];
-		const notifications: Array<{ message: string; level?: string }> = [];
-		const ctx = {
+		const selections = ["google_maps", "Done"];
+		const context = createMockContext({
 			hasUI: true,
-			ui: {
-				notify(message: string, level?: string) {
-					notifications.push({ message, level });
-				},
-				input: async () => {
-					const value = inputs.shift();
-					if (value === "new-model") {
-						await writeConfig({
-							apiKey: "old-key",
-							model: "external-model",
-							timeoutMs: 12_345,
-							tools: ["google_maps"],
-							future: { kept: true },
-						});
-					}
-					return value;
-				},
-				select: async () => selections.shift() ?? "Done",
-				custom: async () => undefined,
-				setStatus() {},
+			mode: "tui",
+			input: async () => {
+				const value = inputs.shift();
+				if (value === "new-model") {
+					await writeConfig({
+						apiKey: "old-key",
+						model: "external-model",
+						timeoutMs: 12_345,
+						tools: ["google_maps"],
+						future: { kept: true },
+					});
+				}
+				return value;
 			},
+			select: async () => selections.shift(),
 			modelRegistry: { getApiKeyForProvider: async () => "pi-key" },
-		};
+		});
 
-		await command.handler("init", ctx);
+		await command.handler("init", context.ctx);
 		const config = JSON.parse(await readFile(join(agentDir, "pi-google-genai.json"), "utf8"));
 		assert.equal(config.apiKey, "old-key");
 		assert.equal(config.model, "new-model");
@@ -629,24 +624,24 @@ test("commands init, status, and tool selection merge config and preserve unrela
 		assert.deepEqual(config.future, { kept: true });
 		assert.equal((await stat(join(agentDir, "pi-google-genai.json"))).mode & 0o777, 0o600);
 
-		await command.handler("tools", ctx);
+		await command.handler("tools", context.ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["read"]);
 		assert.deepEqual(
 			JSON.parse(await readFile(join(agentDir, "pi-google-genai.json"), "utf8")).tools,
 			[],
 		);
 
-		await command.handler("enable", ctx);
+		await command.handler("enable", context.ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), [
 			"read",
 			"google_search",
 			"google_maps",
 			"google_url_context",
 		]);
-		await command.handler("disable", ctx);
+		await command.handler("disable", context.ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["read"]);
-		await command.handler("status", ctx);
-		assert.match(notifications.at(-1)?.message ?? "", /auth: config apiKey/);
+		await command.handler("status", context.ctx);
+		assert.match(context.notifications.at(-1)?.message ?? "", /auth: config apiKey/);
 		assert.match(buildStatusMessage(await loadGoogleGenaiConfig(), "config apiKey"), /apiUrl:/);
 	});
 });
