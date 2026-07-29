@@ -78,24 +78,44 @@ function formatCodexReport(lines: string[], report: UsageReport): void {
 }
 
 function formatGitHubCopilotReport(lines: string[], report: UsageReport): void {
-	const premium = report.buckets.find((bucket) => bucket.id === "premium-requests");
-	if (!premium || premium.limit === undefined || premium.remaining === undefined) {
-		lines.push(`${"Premium requests:".padEnd(VALUE_COLUMN)}unlimited`);
+	const quota = findGitHubCopilotQuota(report);
+	if (!quota || quota.limit === undefined || quota.remaining === undefined) {
+		lines.push(`${`${quota?.label ?? "Copilot quota"}:`.padEnd(VALUE_COLUMN)}unlimited`);
 		return;
 	}
-	const percent = percentRemaining(premium);
-	const reset = premium.resetsAt ? ` (resets ${formatReset(premium.resetsAt)})` : "";
+	const percent = percentRemaining(quota);
+	const reset = quota.resetsAt ? ` (resets ${formatReset(quota.resetsAt)})` : "";
 	lines.push(
-		`${"Premium requests:".padEnd(VALUE_COLUMN)}${premium.remaining} of ${premium.limit} left · ${percent}%${reset}`,
+		`${`${quota.label}:`.padEnd(VALUE_COLUMN)}${quota.remaining} of ${quota.limit} left · ${percent}%${reset}`,
 	);
+	const overage = report.metrics.find((metric) => metric.id === "overage-used");
+	if (typeof overage?.value === "number" && overage.value > 0) {
+		lines.push(`${"Additional usage:".padEnd(VALUE_COLUMN)}${overage.value} ${quota.label}`);
+	}
 }
 
 function formatGitHubCopilotStatusline(report: UsageReport): string {
-	const premium = report.buckets.find((bucket) => bucket.id === "premium-requests");
-	if (!premium || premium.limit === undefined || premium.remaining === undefined) {
-		return "copilot premium unlimited";
+	const quota = findGitHubCopilotQuota(report);
+	const kind = compactGitHubCopilotQuotaKind(quota);
+	if (!quota || quota.limit === undefined || quota.remaining === undefined) {
+		return `copilot ${kind} unlimited`;
 	}
-	return `copilot ${premium.remaining}/${premium.limit} ${percentRemaining(premium)}%`;
+	const overage = report.metrics.find((metric) => metric.id === "overage-used");
+	const overageSuffix =
+		typeof overage?.value === "number" && overage.value > 0 ? ` +${overage.value} over` : "";
+	return `copilot ${kind === "premium" ? "" : `${kind} `}${quota.remaining}/${quota.limit} ${percentRemaining(quota)}%${overageSuffix}`;
+}
+
+function findGitHubCopilotQuota(report: UsageReport): UsageBucket | undefined {
+	return report.buckets.find((bucket) =>
+		["ai-credits", "premium-requests", "chat-requests"].includes(bucket.id),
+	);
+}
+
+function compactGitHubCopilotQuotaKind(bucket: UsageBucket | undefined): string {
+	if (bucket?.id === "ai-credits") return "credits";
+	if (bucket?.id === "chat-requests") return "chat";
+	return "premium";
 }
 
 function percentRemaining(bucket: UsageBucket): number {

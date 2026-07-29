@@ -8,7 +8,7 @@ import {
 	normalizeOpenRouterKeyPayload,
 } from "../src/index.js";
 
-test("GitHub Copilot adapter normalizes premium request quota", () => {
+test("GitHub Copilot adapter normalizes legacy premium request quota", () => {
 	const report = normalizeGitHubCopilotUsagePayload(
 		{
 			login: "octocat",
@@ -19,6 +19,7 @@ test("GitHub Copilot adapter normalizes premium request quota", () => {
 					entitlement: 300,
 					remaining: 245,
 					percent_remaining: 81.7,
+					token_based_billing: false,
 					unlimited: false,
 				},
 			},
@@ -28,6 +29,10 @@ test("GitHub Copilot adapter normalizes premium request quota", () => {
 
 	assert.equal(report.providerId, "github-copilot");
 	assert.equal(report.accountLabel, "octocat");
+	assert.deepEqual(report.semantics, {
+		kind: "consumer-subscription",
+		label: "GitHub Copilot premium request quota",
+	});
 	assert.deepEqual(report.buckets[0], {
 		id: "premium-requests",
 		label: "Premium requests",
@@ -42,6 +47,96 @@ test("GitHub Copilot adapter normalizes premium request quota", () => {
 	assert.equal(formatUsageStatusline(report), "copilot 245/300 82%");
 });
 
+test("GitHub Copilot adapter preserves AI-credit billing semantics", () => {
+	const report = normalizeGitHubCopilotUsagePayload(
+		{
+			quota_reset_date_utc: "2026-08-01T00:00:00Z",
+			quota_snapshots: {
+				premium_interactions: {
+					credits_used: 300,
+					entitlement: 1_500,
+					remaining: 1_200,
+					token_based_billing: true,
+					unlimited: false,
+				},
+			},
+		},
+		550,
+	);
+
+	assert.deepEqual(report.semantics, {
+		kind: "consumer-subscription",
+		label: "GitHub Copilot AI Credits allowance",
+	});
+	assert.deepEqual(report.buckets[0], {
+		id: "ai-credits",
+		label: "AI credits",
+		used: 300,
+		remaining: 1_200,
+		limit: 1_500,
+		unit: "count",
+		period: "monthly",
+		resetsAt: 1_785_542_400,
+	});
+	assert.match(formatUsageReport(report, "current"), /AI credits:\s+1200 of 1500 left · 80%/);
+	assert.equal(formatUsageStatusline(report), "copilot credits 1200/1500 80%");
+});
+
+test("GitHub Copilot adapter represents overage without rejecting negative remaining quota", () => {
+	const report = normalizeGitHubCopilotUsagePayload(
+		{
+			quota_snapshots: {
+				premium_interactions: {
+					entitlement: 1_500,
+					overage_count: 100,
+					overage_permitted: true,
+					remaining: -100,
+					token_based_billing: true,
+					unlimited: false,
+				},
+			},
+		},
+		575,
+	);
+
+	assert.equal(report.buckets[0]?.remaining, 0);
+	assert.equal(report.buckets[0]?.used, 1_600);
+	assert.deepEqual(report.metrics, [
+		{ id: "overage-used", label: "Additional usage", value: 100, unit: "count" },
+	]);
+	assert.match(formatUsageReport(report, "current"), /Additional usage:\s+100 AI credits/);
+	assert.equal(formatUsageStatusline(report), "copilot credits 0/1500 0% +100 over");
+});
+
+test("GitHub Copilot adapter normalizes the free-tier quota shape", () => {
+	const report = normalizeGitHubCopilotUsagePayload(
+		{
+			access_type_sku: "free_limited_copilot",
+			limited_user_quotas: { chat: 40, completions: 1_900 },
+			limited_user_reset_date: "2026-08-01T00:00:00Z",
+			monthly_quotas: { chat: 50, completions: 2_000 },
+		},
+		590,
+	);
+
+	assert.deepEqual(report.semantics, {
+		kind: "consumer-subscription",
+		label: "GitHub Copilot Free chat quota",
+	});
+	assert.deepEqual(report.buckets[0], {
+		id: "chat-requests",
+		label: "Chat requests",
+		used: 10,
+		remaining: 40,
+		limit: 50,
+		unit: "count",
+		period: "monthly",
+		resetsAt: 1_785_542_400,
+	});
+	assert.match(formatUsageReport(report, "current"), /Chat requests:\s+40 of 50 left · 80%/);
+	assert.equal(formatUsageStatusline(report), "copilot chat 40/50 80%");
+});
+
 test("GitHub Copilot adapter handles unlimited quota and rejects incomplete responses", () => {
 	const unlimited = normalizeGitHubCopilotUsagePayload(
 		{
@@ -52,7 +147,33 @@ test("GitHub Copilot adapter handles unlimited quota and rejects incomplete resp
 	assert.match(formatUsageReport(unlimited, "configured"), /Premium requests:\s+unlimited/);
 	assert.equal(formatUsageStatusline(unlimited), "copilot premium unlimited");
 
-	assert.throws(() => normalizeGitHubCopilotUsagePayload({}, 0), /premium request quota/iu);
+	const unlimitedCredits = normalizeGitHubCopilotUsagePayload(
+		{
+			quota_snapshots: {
+				premium_interactions: { token_based_billing: true, unlimited: true },
+			},
+		},
+		650,
+	);
+	assert.match(formatUsageReport(unlimitedCredits, "current"), /AI credits:\s+unlimited/);
+	assert.equal(formatUsageStatusline(unlimitedCredits), "copilot credits unlimited");
+
+	const derivedOverage = normalizeGitHubCopilotUsagePayload(
+		{
+			quota_snapshots: {
+				premium_interactions: {
+					entitlement: 300,
+					quota_remaining: -20,
+					unlimited: false,
+				},
+			},
+		},
+		675,
+	);
+	assert.equal(derivedOverage.metrics[0]?.value, 20);
+	assert.equal(formatUsageStatusline(derivedOverage), "copilot 0/300 0% +20 over");
+
+	assert.throws(() => normalizeGitHubCopilotUsagePayload({}, 0), /supported quota/iu);
 	assert.throws(
 		() =>
 			normalizeGitHubCopilotUsagePayload(

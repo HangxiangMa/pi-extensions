@@ -46,7 +46,7 @@ export const SUPPORTED_ADAPTERS: readonly UsageProviderAdapter[] = [
 		displayName: "GitHub Copilot",
 		semantics: {
 			kind: "consumer-subscription",
-			label: "GitHub Copilot premium request quota",
+			label: "GitHub Copilot account allowance",
 		},
 		async query(auth, signal, timeoutMs) {
 			const payload = await fetchProviderJson(

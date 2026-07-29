@@ -81,6 +81,9 @@ export type GitHubCopilotUsagePayload = {
 	login?: unknown;
 	copilot_plan?: unknown;
 	access_type_sku?: unknown;
+	limited_user_quotas?: unknown;
+	limited_user_reset_date?: unknown;
+	monthly_quotas?: unknown;
 	quota_reset_date?: unknown;
 	quota_reset_date_utc?: unknown;
 	quota_snapshots?: unknown;

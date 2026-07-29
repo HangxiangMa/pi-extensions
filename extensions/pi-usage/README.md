@@ -2,14 +2,14 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-usage)](https://www.npmjs.com/package/@narumitw/pi-usage) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-usage` is a native [Pi coding agent](https://pi.dev) extension that adds one interactive `/usage` command for reading usage from the account Pi is actually using. It supports OpenAI Codex ChatGPT subscription windows, GitHub Copilot premium request quota, and OpenRouter API-key spend limits without pretending those limits have the same semantics.
+`@narumitw/pi-usage` is a native [Pi coding agent](https://pi.dev) extension that adds one interactive `/usage` command for reading usage from the account Pi is actually using. It supports OpenAI Codex ChatGPT subscription windows, GitHub Copilot allowances, and OpenRouter API-key spend limits without pretending those limits have the same semantics.
 
 ## ✨ Features
 
 - Opens one interactive `/usage` menu with current state and next actions.
 - Automatically queries the selected model provider and active runtime account.
 - Supports OpenAI Codex subscription windows, resets, credits, and model-specific buckets.
-- Supports GitHub Copilot premium request entitlement, remaining requests, percentage, and reset time.
+- Supports GitHub Copilot AI Credits, legacy premium requests, Free chat quota, additional usage, percentage, and reset time.
 - Supports OpenRouter per-key credit limits plus daily, weekly, monthly, and all-time spend.
 - Provides explicit refresh, another-provider, and all-configured-provider actions.
 - Runs manually requested all-provider queries with concurrency limited to two and preserves partial results.
@@ -72,12 +72,12 @@ The statusline selects a returned bucket that matches the current Codex model wh
 ### GitHub Copilot
 
 - Provider ID: `github-copilot`
-- Semantics: GitHub Copilot consumer subscription quota
+- Semantics: the allowance reported for the active Copilot plan—AI credits for current usage-based billing, premium requests for legacy annual billing, or chat requests for Copilot Free's limited response shape
 - Source: GitHub's undocumented `GET /copilot_internal/user` endpoint
-- Displayed data: premium request entitlement, remaining requests, percentage, reset time, and plan
-- Statusline example: `copilot 245/300 82%`
+- Displayed data: entitlement, remaining allowance, percentage, reset time, plan, and any additional usage beyond the included allowance
+- Statusline examples: `copilot credits 1200/1500 80%`, `copilot 245/300 82%`, or `copilot chat 40/50 80%`
 
-GitHub's quota endpoint requires the original GitHub OAuth token rather than the short-lived Copilot inference token exposed by runtime auth. `pi-usage` therefore supports Copilot accounts created through Pi's `/login` flow, reads that stored credential through Pi's public API, and uses it only when its short-lived access token matches the active runtime credential. API-key credentials, account mismatches, GitHub Enterprise accounts, and proxy/custom provider origins fail closed.
+GitHub's quota endpoint requires the original GitHub OAuth token rather than the short-lived Copilot inference token exposed by runtime auth. `pi-usage` therefore supports Copilot accounts created through Pi's `/login` flow, reads that stored credential through Pi's public API, and uses it only when its short-lived access token matches the active runtime credential. API-key credentials, account mismatches, GitHub Enterprise accounts, and proxy/custom provider origins fail closed. The detailed report follows the endpoint's `token_based_billing` marker so AI credits are not mislabeled as legacy premium requests, and it reports overage without treating a negative included balance as a malformed response.
 
 ### OpenRouter
 
@@ -152,7 +152,7 @@ extensions/pi-usage/
 
 ## 🔎 Keywords
 
-Pi extension, Pi coding agent, usage, quota, OpenAI Codex usage, ChatGPT subscription limits, GitHub Copilot premium requests, OpenRouter credits, API-key spend limits, TypeScript Pi package, npm Pi extension.
+Pi extension, Pi coding agent, usage, quota, OpenAI Codex usage, ChatGPT subscription limits, GitHub Copilot AI credits, GitHub Copilot premium requests, OpenRouter credits, API-key spend limits, TypeScript Pi package, npm Pi extension.
 
 ## 📄 License
 
