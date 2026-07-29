@@ -179,7 +179,7 @@ test("explicit all-provider query labels current/configured and retains provider
 	assert.equal(statuses.get("usage"), "openrouter $75.00 left");
 });
 
-test("another-provider queries remain configured and never replace current status", async (t) => {
+test("another-provider queries show only the selected provider and preserve current status", async (t) => {
 	const originalFetch = globalThis.fetch;
 	t.after(() => {
 		globalThis.fetch = originalFetch;
@@ -211,6 +211,7 @@ test("another-provider queries remain configured and never replace current statu
 	await command.handler("", ctx);
 
 	assert.match(titles.at(-1) ?? "", /OpenAI Codex Usage · Configured/);
+	assert.doesNotMatch(titles.at(-1) ?? "", /OpenRouter Usage · Current/);
 	assert.equal(statuses.get("usage"), "openrouter $75.00 left");
 });
 

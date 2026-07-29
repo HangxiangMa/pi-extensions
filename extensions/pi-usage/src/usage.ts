@@ -526,10 +526,11 @@ export default function usageExtension(pi: ExtensionAPI) {
 					if (!revalidated) continue;
 					stableCurrent = revalidated;
 					current = revalidated.outcome;
-					visibleStates =
+					visibleStates = [
 						outcome.state.providerId === current.state.providerId
-							? [current.state]
-							: [current.state, { ...outcome.state, displayState: "configured" }];
+							? current.state
+							: { ...outcome.state, displayState: "configured" },
+					];
 					continue;
 				}
 				if (action === VIEW_ALL) {
