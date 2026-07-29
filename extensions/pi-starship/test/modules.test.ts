@@ -321,6 +321,27 @@ test("model truncation keeps the configured portions after built-in shortening",
 	assert.equal(model.id, "ggml-org/gemma-4-E2B-it-GGUF:Q8_0");
 });
 
+test("model rendering strips terminal sequences from runtime IDs and truncation symbols", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$model";
+	config.formatAst = [{ type: "variable", name: "model" }];
+	config.modules.model.format = "$model";
+	config.modules.model.formatAst = [{ type: "variable", name: "model" }];
+	config.modules.model.options.truncation_length = 0;
+	const renderModel = (id: string) =>
+		renderStatusline(config, fixture({ model: { provider: "llama.cpp", id } })).ansi;
+
+	assert.equal(
+		renderModel("safe\x1b]8;;https://evil.example\x07click\x1b]8;;\x07\nmodel"),
+		"safeclick model",
+	);
+	assert.equal(renderModel("a\u009d0;title\u009cb"), "ab");
+
+	config.modules.model.options.truncation_length = 3;
+	config.modules.model.options.truncation_symbol = "\x1b[31m!\x1b[0m";
+	assert.equal(renderModel("abcdef"), "abc!");
+});
+
 test("$all expands enabled modules in default order without explicit duplicates", () => {
 	const config = structuredClone(BUILT_IN_CONFIG);
 	config.format = "$model$all";

@@ -248,7 +248,8 @@ Long model IDs are truncated out of the box so the balanced footer can retain us
 - `end` retains the prefix.
 
 Truncation runs after the built-in Claude/GPT shortening rules but before the configured model prefix
-and suffix. It changes display only—the provider model ID is untouched. An empty
+and suffix. It changes display only—the provider model ID is untouched. Terminal control sequences
+in model IDs are removed at render time, and unsafe configured symbols are rejected. An empty
 `truncationSymbol` truncates without a marker. pi-statusline treats model IDs as opaque strings and
 does not parse paths, repositories, GGUF suffixes, or quantization names. At very narrow widths, the
 existing responsive priorities may still omit the model rather than overflow the terminal.

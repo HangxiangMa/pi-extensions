@@ -4,7 +4,12 @@ import type { ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-codin
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext } from "../../../test/support.js";
 import { powerlineExtensionSeparator, renderPowerlineStatusline } from "../src/powerline.js";
-import { formatConfiguredSegment, type RuntimeState, renderStatusline } from "../src/render.js";
+import {
+	formatConfiguredSegment,
+	type RuntimeState,
+	renderStatusline,
+	truncateModel,
+} from "../src/render.js";
 import { createDefaultConfig, normalizeStatuslineConfig } from "../src/settings.js";
 import type { RenderItem, RenderSegment, SegmentName } from "../src/types.js";
 
@@ -186,6 +191,15 @@ test("model truncation supports all directions before prefixes and responsive fi
 	config.segmentText.model.truncationDirection = "end";
 	assert.equal(renderModel("claude-sonnet-20241022"), "░▒▓ 🤖 sonnet");
 	assert.equal(renderModel("A👨‍👩‍👧‍👦BCDEFG"), "░▒▓ 🤖 A👨‍👩‍👧‍👦BCDE…");
+});
+
+test("model rendering strips terminal sequences from runtime IDs and truncation symbols", () => {
+	assert.equal(
+		truncateModel("safe\x1b]8;;https://evil.example\x07click\x1b]8;;\x07\nmodel", 0, "…", "end"),
+		"safeclick model",
+	);
+	assert.equal(truncateModel("a\u009d0;title\u009cb", 0, "…", "end"), "ab");
+	assert.equal(truncateModel("abcdef", 3, "\x1b[31m!\x1b[0m", "end"), "abc!");
 });
 
 test("default model truncation retains useful llama.cpp path detail at standard width", () => {

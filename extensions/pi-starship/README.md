@@ -235,7 +235,8 @@ truncation_direction = "middle"
 truncation and is the default. The direction names the removed portion: `start` retains the suffix,
 `end` retains the prefix and is the default, and `middle` retains both ends. Truncation runs after the
 built-in Claude/GPT shortening rules and changes display only—the provider model ID is untouched.
-An empty symbol truncates without a marker. For example, `middle` can retain both a Hugging Face model
+Terminal control sequences in model IDs and truncation symbols are removed at render time. An empty
+symbol truncates without a marker. For example, `middle` can retain both a Hugging Face model
 family and its variant, while `start` is useful when a llama.cpp server reports an absolute model path.
 pi-starship treats model IDs as opaque strings and does not parse paths, repositories, GGUF suffixes,
 or quantization names.
