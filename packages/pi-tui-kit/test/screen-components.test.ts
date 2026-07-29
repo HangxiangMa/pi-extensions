@@ -285,6 +285,44 @@ test("settings forward component focus to the search input for IME", () => {
 	assert.equal(harness.component.render(80).join("\n").includes(CURSOR_MARKER), true);
 });
 
+test("settings sanitize terminal controls from bracketed search paste", () => {
+	const harness = componentHarness(settingsScreen, { plainTheme: true });
+	const pasted =
+		"\u001b[200~man\u001b]8;;https://unsafe.example\u0007ual\u009dtitle\u009c\u001b[201~";
+	harness.component.handleInput(pasted);
+	const rendered = harness.component.render(80).join("\n");
+	assert.equal(rendered.includes("\u001b]8;;https://unsafe.example"), false);
+	assert.equal(rendered.includes("\u0007"), false);
+	assert.equal(rendered.includes("\u009d"), false);
+	assert.equal(rendered.includes("\u009c"), false);
+});
+
+test("menu hints sanitize configured keybinding labels", () => {
+	const unsafeKey = "\u001b]8;;https://unsafe.example\u0007enter";
+	const keybindings = {
+		matches: () => false,
+		getKeys: (binding: string) => (binding === "tui.select.confirm" ? [unsafeKey] : []),
+	};
+	for (const screen of [actionScreen, settingsScreen]) {
+		const harness = componentHarness(screen, { keybindings, plainTheme: true });
+		const rendered = harness.component.render(80).join("\n");
+		assert.equal(rendered.includes("\u001b]8;;https://unsafe.example"), false);
+	}
+});
+
+test("disabled settings keep their unavailable marker when long values truncate", () => {
+	const setting = settingsScreen.items[0];
+	assert.ok(setting);
+	const harness = componentHarness(
+		{
+			...settingsScreen,
+			items: [{ ...setting, currentValue: "x".repeat(100), disabled: true }],
+		},
+		{ plainTheme: true },
+	);
+	assert.ok(plainRender(harness.component, 50).some((line) => line.includes("unavailable")));
+});
+
 test("disabled settings cannot invoke their action", async () => {
 	let changes = 0;
 	const firstSetting = settingsScreen.items[0];
@@ -576,6 +614,10 @@ function componentHarness(
 		selectedItemId?: string;
 		themePrefix?: () => string;
 		plainTheme?: boolean;
+		keybindings?: {
+			matches(data: string, binding: string): boolean;
+			getKeys(binding: string): readonly string[];
+		};
 		onSettingChange?: (request: {
 			itemId: string;
 			value: string;
@@ -605,7 +647,7 @@ function componentHarness(
 				return text;
 			},
 		},
-		keybindings: testKeybindings,
+		keybindings: options.keybindings ?? testKeybindings,
 		onEvent: (event) => events.push(event),
 		onSelectionChange: (itemId) => selectionChanges.push(itemId),
 		onSettingChange: options.onSettingChange,

@@ -320,6 +320,8 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
 				const searchData = data.replaceAll(" ", "");
 				if (searchData) {
 					searchInput.handleInput(searchData);
+					const query = replaceTerminalControls(searchInput.getValue());
+					if (query !== searchInput.getValue()) searchInput.setValue(query);
 					applyFilter();
 				}
 			}
@@ -364,8 +366,8 @@ function renderSettingsRows<ScreenId extends string, ActionId extends string>(
 		const selected = index === selectedIndex;
 		const prefix = selected ? options.theme.fg("accent", "→ ") : "  ";
 		const labelPadded = label + " ".repeat(Math.max(0, maxLabelWidth - visibleWidth(label)));
-		const unavailable = item.disabled ? " (unavailable)" : "";
-		const value = `${safeMenuText(displayed.get(item.id) ?? item.currentValue)}${unavailable}`;
+		const currentValue = safeMenuText(displayed.get(item.id) ?? item.currentValue);
+		const value = item.disabled ? `(unavailable) ${currentValue}` : currentValue;
 		const valueWidth = Math.max(0, width - visibleWidth(prefix) - maxLabelWidth - 2);
 		let labelText = labelPadded;
 		let valueText = truncateToWidth(value, valueWidth, "");
@@ -410,7 +412,7 @@ function settingsHint(keybindings: MenuKeybindings) {
 }
 
 function uniqueHintKeys(keys: readonly string[]) {
-	return [...new Set(keys.map(displayHintKey))].join("/");
+	return [...new Set(keys.map(displayHintKey).filter(Boolean))].join("/");
 }
 
 function displayHintKey(key: string) {
@@ -420,7 +422,7 @@ function displayHintKey(key: string) {
 	if (key === "ctrl+c") return "Ctrl+C";
 	if (key === "up") return "↑";
 	if (key === "down") return "↓";
-	return key;
+	return safeMenuText(key);
 }
 
 function createMultiSelectComponent<ScreenId extends string, ActionId extends string>(
@@ -681,8 +683,9 @@ function bindingText(keybindings: MenuKeybindings, binding: MenuBinding, exclude
 			if (key === "up") return "↑";
 			if (key === "down") return "↓";
 			if (key === "escape") return "esc";
-			return key;
+			return safeMenuText(key);
 		})
+		.filter(Boolean)
 		.join("/");
 }
 
@@ -703,13 +706,14 @@ function setInitialSelection(list: SelectList, items: readonly SelectItem[], sel
 }
 
 export function safeMenuText(value: unknown) {
+	return replaceTerminalControls(value).replace(/\s+/gu, " ").trim();
+}
+
+function replaceTerminalControls(value: unknown) {
 	return Array.from(String(value), (character) => {
 		const codePoint = character.codePointAt(0) ?? 0;
 		return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
-	})
-		.join("")
-		.replace(/\s+/gu, " ")
-		.trim();
+	}).join("");
 }
 
 export function settingForAction<ActionId extends string>(
