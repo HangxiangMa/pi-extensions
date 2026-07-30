@@ -151,7 +151,10 @@ test("duplicate, malformed, and reversed tool events never create duplicate or f
 
 test("tool observation state is bounded and disabled stamps do not read the clock", async () => {
 	const disabled = createMockPi();
-	stamp(disabled.pi, { now: () => assert.fail("Disabled tool stamps must not read the clock") });
+	stamp(disabled.pi, {
+		settingsRuntime: settingsRuntimeWithToolStamps(false),
+		now: () => assert.fail("Disabled tool stamps must not read the clock"),
+	});
 	const disabledContext = createMockContext({ mode: "tui" });
 	await emit(disabled, "session_start", { reason: "startup" }, disabledContext.ctx);
 	await emit(
@@ -255,9 +258,9 @@ test("turn replacement, cancellation, session replacement, and shutdown clear pe
 	}
 });
 
-function settingsRuntimeWithToolStamps(): StampSettingsRuntime {
+function settingsRuntimeWithToolStamps(toolStamps = true): StampSettingsRuntime {
 	const state: StampSettingsState = {
-		settings: { ...DEFAULT_STAMP_SETTINGS, toolStamps: true },
+		settings: { ...DEFAULT_STAMP_SETTINGS, toolStamps },
 		sources: {
 			hourCycle: "built-in",
 			showSeconds: "built-in",

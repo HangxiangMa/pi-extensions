@@ -14,6 +14,7 @@ import {
 	formatToolStampLabel,
 	isAssistantMetadataData,
 	sanitizeMetadataText,
+	sanitizeTerminalText,
 	type ToolStampOutcome,
 } from "./metadata.js";
 import { createStampSettingsRuntime, type StampSettingsRuntime } from "./settings.js";
@@ -187,6 +188,7 @@ export function createStampEntryRenderer(
 ): EntryRenderer<StampEntryData> {
 	return (entry, options, theme) => {
 		if (isToolStampData(entry.data)) {
+			if (!getSettings().toolStamps) return undefined;
 			const data = entry.data;
 			return dynamicRightAlignedText(() => {
 				const settings = getSettings();
@@ -605,13 +607,7 @@ function isSafePersistedText(value: unknown): value is string {
 }
 
 function safeTerminalText(value: string): string {
-	return [...value]
-		.map((character) => {
-			const codePoint = character.codePointAt(0) ?? 0;
-			return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
-		})
-		.join("")
-		.trim();
+	return sanitizeTerminalText(value).trim();
 }
 
 function formatError(error: unknown): string {

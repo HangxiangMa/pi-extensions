@@ -188,7 +188,9 @@ test("custom locale and time-zone input validates, cancels without mutation, and
 });
 
 test("save failure is rejected without changing effective settings", async () => {
-	const runtime = memorySettingsRuntime({ rejectUpdate: new Error("save\u001b[31m rejected") });
+	const runtime = memorySettingsRuntime({
+		rejectUpdate: new Error("save\u001b[31m\u202espoofed rejected"),
+	});
 	const menu = createStampMenu(runtime);
 	const { ctx, notifications } = createMockContext({ mode: "tui" });
 	const result = await menu.actions["set-seconds"]({
@@ -200,7 +202,9 @@ test("save failure is rejected without changing effective settings", async () =>
 	});
 	assert.deepEqual(result, { kind: "rejected" });
 	assert.equal(runtime.get().settings.showSeconds, true);
-	assert.equal((notifications.at(-1)?.message ?? "").includes("\u001b"), false);
+	const message = notifications.at(-1)?.message ?? "";
+	assert.equal(message.includes("\u001b"), false);
+	assert.equal(message.includes("\u202e"), false);
 });
 
 test("RPC adapts the standard menu and an aborted owner closes stale work", async () => {

@@ -102,7 +102,7 @@ test("assistant metadata capture sanitizes and bounds terminal-facing strings", 
 	const metadata = captureAssistantMetadata({
 		...COMPLETE_MESSAGE,
 		api: `openai\u001b[31m\napi`,
-		provider: "provider\u009b31m",
+		provider: "provider\u009b31m\u202eevil\u2066name\u2069",
 		model: "m".repeat(400),
 		responseModel: "",
 		responseId: "response\u0000id",
@@ -111,6 +111,9 @@ test("assistant metadata capture sanitizes and bounds terminal-facing strings", 
 	assert.ok(metadata);
 	assert.equal(JSON.stringify(metadata).includes("\u001b"), false);
 	assert.equal(JSON.stringify(metadata).includes("\u009b"), false);
+	assert.equal(JSON.stringify(metadata).includes("\u202e"), false);
+	assert.equal(JSON.stringify(metadata).includes("\u2066"), false);
+	assert.equal(metadata.provider, "provider 31m evil name");
 	assert.equal(metadata.model.length, 160);
 	assert.equal(metadata.responseModel, undefined);
 	assert.equal(metadata.responseId, "response id");
@@ -201,6 +204,25 @@ test("assistant metadata bounds diagnostic summaries while retaining the reporte
 		formatAssistantMetadataLines(metadata, "compact", true)[2] ?? "",
 		/7 \(showing 5\)/u,
 	);
+});
+
+test("assistant metadata capture bounds work across malformed diagnostic collections", () => {
+	let inspected = 0;
+	const diagnostics = new Proxy(new Array(1_000), {
+		get(target, property, receiver) {
+			if (typeof property === "string" && /^\d+$/u.test(property)) {
+				inspected += 1;
+				if (inspected > 32) throw new Error("diagnostic inspection exceeded its bound");
+				return undefined;
+			}
+			return Reflect.get(target, property, receiver);
+		},
+	});
+	const metadata = captureAssistantMetadata({ ...COMPLETE_MESSAGE, diagnostics });
+	assert.ok(metadata);
+	assert.equal(metadata.diagnosticCount, 1_000);
+	assert.equal(metadata.diagnostics, undefined);
+	assert.equal(inspected, 32);
 });
 
 test("assistant metadata validator rejects unknown, malformed, and oversized persisted data", () => {

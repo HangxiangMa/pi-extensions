@@ -306,28 +306,28 @@ test("entry renderer composes opt-in assistant metadata, explicit debug details,
 	assert.equal(debug.render(120).join("\n").includes("raw secret"), false);
 
 	settings = { ...settings, toolStamps: false };
-	const tool = renderer(
-		{
-			data: {
-				version: 1,
-				kind: "tool",
-				toolCallId: "call-1",
-				toolName: "read",
-				startedAt: assistant.timestamp,
-				completedAt: assistant.timestamp + 1_250,
-				outcome: "success",
-			},
-		} as never,
-		{ expanded: false },
-		theme,
-	);
-	assert.ok(tool);
-	assert.deepEqual(tool.render(80), []);
+	const toolEntry = {
+		data: {
+			version: 1,
+			kind: "tool",
+			toolCallId: "call-1",
+			toolName: "read",
+			startedAt: assistant.timestamp,
+			completedAt: assistant.timestamp + 1_250,
+			outcome: "success",
+		},
+	} as never;
+	assert.equal(renderer(toolEntry, { expanded: false }, theme), undefined);
 	settings = { ...settings, toolStamps: true };
+	const tool = renderer(toolEntry, { expanded: false }, theme);
+	assert.ok(tool);
 	assert.deepEqual(
 		tool.render(80).map((line) => line.trim()),
 		["tool read · 1.3s · success"],
 	);
+	settings = { ...settings, toolStamps: false };
+	assert.deepEqual(tool.render(80), []);
+	settings = { ...settings, toolStamps: true };
 	for (const width of [1, 4, 8, 12]) {
 		for (const line of [...debug.render(width), ...tool.render(width)]) {
 			assert.ok(visibleWidth(line) <= width, `${JSON.stringify(line)} exceeded width ${width}`);
@@ -376,7 +376,10 @@ test("Pi persists stamp entries across reopen without adding them to model conte
 test("TUI lifecycle appends one user stamp before the assistant and measured assistant timing at turn end", async () => {
 	const mock = createMockPi();
 	const times = [ASSISTANT_TIMESTAMP + 800, ASSISTANT_TIMESTAMP + 3_200];
-	stamp(mock.pi, { now: () => times.shift() ?? assert.fail("Unexpected clock read") });
+	stamp(mock.pi, {
+		settingsRuntime: testSettingsRuntime(),
+		now: () => times.shift() ?? assert.fail("Unexpected clock read"),
+	});
 	const { ctx } = createMockContext({ mode: "tui" });
 	const user = userMessage(USER_TIMESTAMP);
 	const assistant = assistantMessage(ASSISTANT_TIMESTAMP);
@@ -487,7 +490,7 @@ test("thinking, completed blocks, and tool calls can be the first meaningful ass
 		const mock = createMockPi();
 		const timestamp = ASSISTANT_TIMESTAMP + index * 10_000;
 		let now = timestamp + 700;
-		stamp(mock.pi, { now: () => now });
+		stamp(mock.pi, { settingsRuntime: testSettingsRuntime(), now: () => now });
 		const { ctx } = createMockContext({ mode: "tui" });
 		const assistant = assistantMessage(timestamp);
 		await emit(mock, "session_start", { reason: "startup" }, ctx);
@@ -509,7 +512,7 @@ test("thinking, completed blocks, and tool calls can be the first meaningful ass
 test("missing first content stays unavailable and tool execution does not extend completion", async () => {
 	const mock = createMockPi();
 	let now = ASSISTANT_TIMESTAMP + 3_200;
-	stamp(mock.pi, { now: () => now });
+	stamp(mock.pi, { settingsRuntime: testSettingsRuntime(), now: () => now });
 	const { ctx } = createMockContext({ mode: "tui" });
 	const assistant = assistantMessage(ASSISTANT_TIMESTAMP, "toolUse");
 	await emit(mock, "session_start", { reason: "startup" }, ctx);
@@ -548,7 +551,7 @@ test("missing first content stays unavailable and tool execution does not extend
 
 test("successive user messages flush in source order at the following message boundaries", async () => {
 	const mock = createMockPi();
-	stamp(mock.pi);
+	stamp(mock.pi, { settingsRuntime: testSettingsRuntime() });
 	const { ctx } = createMockContext({ mode: "tui" });
 	const first = userMessage(USER_TIMESTAMP);
 	const second = userMessage(USER_TIMESTAMP + 1_000);
@@ -570,7 +573,10 @@ test("error and aborted assistant messages retain completion timing", async () =
 	for (const [index, stopReason] of ["error", "aborted"].entries()) {
 		const mock = createMockPi();
 		const timestamp = ASSISTANT_TIMESTAMP + index * 10_000;
-		stamp(mock.pi, { now: () => timestamp + 1_500 });
+		stamp(mock.pi, {
+			settingsRuntime: testSettingsRuntime(),
+			now: () => timestamp + 1_500,
+		});
 		const { ctx } = createMockContext({ mode: "tui" });
 		const assistant = assistantMessage(timestamp, stopReason as "error" | "aborted");
 		await emit(mock, "session_start", { reason: "startup" }, ctx);
@@ -584,7 +590,7 @@ test("error and aborted assistant messages retain completion timing", async () =
 test("mismatched and reversed timing degrades without leaking into a later response", async () => {
 	const mock = createMockPi();
 	let now = ASSISTANT_TIMESTAMP + 500;
-	stamp(mock.pi, { now: () => now });
+	stamp(mock.pi, { settingsRuntime: testSettingsRuntime(), now: () => now });
 	const { ctx } = createMockContext({ mode: "tui" });
 	const first = assistantMessage(ASSISTANT_TIMESTAMP);
 	const mismatch = assistantMessage(ASSISTANT_TIMESTAMP + 1_000);
@@ -616,7 +622,7 @@ test("mismatched and reversed timing degrades without leaking into a later respo
 test("an out-of-order first-content clock is omitted while valid completion remains", async () => {
 	const mock = createMockPi();
 	let now = ASSISTANT_TIMESTAMP - 1;
-	stamp(mock.pi, { now: () => now });
+	stamp(mock.pi, { settingsRuntime: testSettingsRuntime(), now: () => now });
 	const { ctx } = createMockContext({ mode: "tui" });
 	const assistant = assistantMessage(ASSISTANT_TIMESTAMP);
 	await emit(mock, "session_start", { reason: "startup" }, ctx);
@@ -637,7 +643,10 @@ test("an out-of-order first-content clock is omitted while valid completion rema
 
 test("session replacement clears finalized timing owned by the prior session", async () => {
 	const mock = createMockPi();
-	stamp(mock.pi, { now: () => ASSISTANT_TIMESTAMP + 2_000 });
+	stamp(mock.pi, {
+		settingsRuntime: testSettingsRuntime(),
+		now: () => ASSISTANT_TIMESTAMP + 2_000,
+	});
 	const first = createMockContext({ mode: "tui" });
 	const second = createMockContext({ mode: "tui" });
 	const assistant = assistantMessage(ASSISTANT_TIMESTAMP);
@@ -651,7 +660,7 @@ test("session replacement clears finalized timing owned by the prior session", a
 
 test("assistant tool and error turns receive one stamp without stamping tool results", async () => {
 	const mock = createMockPi();
-	stamp(mock.pi);
+	stamp(mock.pi, { settingsRuntime: testSettingsRuntime() });
 	const { ctx } = createMockContext({ mode: "tui" });
 	const toolAssistant = assistantMessage(ASSISTANT_TIMESTAMP, "toolUse");
 	const errorAssistant = assistantMessage(ASSISTANT_TIMESTAMP + 2_000, "error");
@@ -683,7 +692,7 @@ test("assistant tool and error turns receive one stamp without stamping tool res
 
 test("session start rebuilds the predecessor cursor from the active branch", async () => {
 	const mock = createMockPi();
-	stamp(mock.pi);
+	stamp(mock.pi, { settingsRuntime: testSettingsRuntime() });
 	const previous = USER_TIMESTAMP - 60_000;
 	const { ctx } = createMockContext({
 		mode: "tui",
@@ -766,7 +775,7 @@ test("session shutdown waits for an in-flight settings durability boundary", asy
 
 test("agent end and shutdown flush a pending user at most once and reload resets state", async () => {
 	const mock = createMockPi();
-	stamp(mock.pi);
+	stamp(mock.pi, { settingsRuntime: testSettingsRuntime() });
 	const { ctx } = createMockContext({ mode: "tui" });
 
 	await emit(mock, "session_start", { reason: "startup" }, ctx);
@@ -808,7 +817,7 @@ test("/stamp is argument-free, supports TUI, and rejects print and JSON observab
 test("print, JSON, and RPC sessions never append stamp entries", async () => {
 	for (const mode of ["print", "json", "rpc"] as const) {
 		const mock = createMockPi();
-		stamp(mock.pi);
+		stamp(mock.pi, { settingsRuntime: testSettingsRuntime() });
 		const { ctx } = createMockContext({ mode });
 		const assistant = assistantMessage(ASSISTANT_TIMESTAMP);
 

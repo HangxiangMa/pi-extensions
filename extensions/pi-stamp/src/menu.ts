@@ -8,6 +8,7 @@ import {
 	type StampHourCycle,
 	type StampResponseTimingMode,
 } from "./format.js";
+import { sanitizeTerminalText } from "./metadata.js";
 import type { StampSettingsPatch, StampSettingsRuntime, StampSettingsState } from "./settings.js";
 
 type StampScreen = "main" | "settings" | "locale" | "time-zone" | "status" | "help" | "invalid";
@@ -420,13 +421,7 @@ function toolStampsLabel(value: boolean): string {
 }
 
 function safeTerminalText(value: string): string {
-	return [...value]
-		.map((character) => {
-			const codePoint = character.codePointAt(0) ?? 0;
-			return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
-		})
-		.join("")
-		.trim();
+	return sanitizeTerminalText(value).trim();
 }
 
 function formatError(error: unknown): string {

@@ -35,6 +35,7 @@ export interface AssistantMetadataData {
 
 const MAX_METADATA_TEXT_LENGTH = 160;
 const MAX_DIAGNOSTIC_SUMMARIES = 5;
+const MAX_DIAGNOSTIC_INSPECTIONS = 32;
 const USAGE_FIELDS = [
 	"input",
 	"output",
@@ -167,19 +168,20 @@ export function formatElapsedSeconds(elapsedMilliseconds: number): string | unde
 	return `${(tenths / 10).toFixed(1)}s`;
 }
 
+export function sanitizeTerminalText(value: string): string {
+	return [...value]
+		.map((character) =>
+			isUnsafeTerminalCodePoint(character.codePointAt(0) ?? 0) ? " " : character,
+		)
+		.join("");
+}
+
 export function sanitizeMetadataText(
 	value: unknown,
 	maximumLength = MAX_METADATA_TEXT_LENGTH,
 ): string | undefined {
 	if (typeof value !== "string" || maximumLength < 1) return undefined;
-	const safe = [...value]
-		.map((character) => {
-			const codePoint = character.codePointAt(0) ?? 0;
-			return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
-		})
-		.join("")
-		.replace(/\s+/gu, " ")
-		.trim();
+	const safe = sanitizeTerminalText(value).replace(/\s+/gu, " ").trim();
 	if (!safe) return undefined;
 	return [...safe].slice(0, maximumLength).join("");
 }
@@ -202,8 +204,10 @@ function captureDiagnostics(
 ): Pick<AssistantMetadataData, "diagnosticCount" | "diagnostics"> {
 	if (!Array.isArray(value) || value.length === 0) return {};
 	const diagnostics: AssistantStampDiagnosticSummary[] = [];
-	for (const item of value) {
+	const inspections = Math.min(value.length, MAX_DIAGNOSTIC_INSPECTIONS);
+	for (let index = 0; index < inspections; index += 1) {
 		if (diagnostics.length >= MAX_DIAGNOSTIC_SUMMARIES) break;
+		const item = value[index];
 		if (!isRecord(item)) continue;
 		const type = sanitizeMetadataText(item.type);
 		if (!type) continue;
@@ -316,6 +320,18 @@ function isSafeMetadataText(value: unknown): value is string {
 
 function isAssistantStopReason(value: unknown): value is AssistantStopReason {
 	return ASSISTANT_STOP_REASONS.includes(value as AssistantStopReason);
+}
+
+function isUnsafeTerminalCodePoint(codePoint: number): boolean {
+	return (
+		codePoint <= 0x1f ||
+		(codePoint >= 0x7f && codePoint <= 0x9f) ||
+		codePoint === 0x061c ||
+		codePoint === 0x200e ||
+		codePoint === 0x200f ||
+		(codePoint >= 0x202a && codePoint <= 0x202e) ||
+		(codePoint >= 0x2066 && codePoint <= 0x2069)
+	);
 }
 
 function isReportedTokenCount(value: unknown): value is number {
