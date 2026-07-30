@@ -69,6 +69,8 @@ behavior, and the existing version 3 settings schema.
   tests in pi-github-pr and pi-worktree fail consistently on this macOS checkout; one concurrent root
   run also timed out an experimental pi-jupyter FIFO test. The same `origin/main` commit has a passing
   hosted CI run, so the pull request's hosted CI is the remaining authoritative root-gate evidence.
+- Pull request: https://github.com/narumiruna/pi-extensions/pull/470. Its initial CodeQL checks pass;
+  the repository CI check is still pending dispatch.
 
 ## Plan
 
