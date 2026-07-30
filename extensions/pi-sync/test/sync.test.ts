@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -20,9 +21,19 @@ import { localConfigPath, readLocalConfigObject, updateLocalConfig } from "../sr
 import { showFileSelection } from "../src/file-selection.js";
 import sync from "../src/sync.js";
 import { syncBoth } from "../src/sync-operations.js";
+import { BUILT_IN_SYNC_ROOTS } from "../src/sync-policy.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 
 initTheme("dark", false);
+
+function selectedMultiSelectLabel(lines: readonly string[]) {
+	const line = lines.find((candidate) => candidate.startsWith("→ ") || candidate.startsWith("› "));
+	return line
+		?.slice(2)
+		.replace(/^\[(?:x| |-)\]\s+/u, "")
+		.split(/\s{2,}/u)[0]
+		?.trim();
+}
 
 test("sync command catalog and usage document setup-addressing routes", () => {
 	assert.ok(SYNC_COMMANDS.some((command) => command.name === "use"));
@@ -140,6 +151,80 @@ test("included-content TUI renders textual state at narrow and wide widths", asy
 			assert.ok(lines.every((line) => visibleWidth(line) <= width));
 			assert.match(lines.join("\n"), /Included Content|included|excluded/u);
 		}
+	});
+});
+
+test("included-content TUI lists built-in and custom paths exactly once", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		for (const root of BUILT_IN_SYNC_ROOTS) {
+			const target = path.join(agentDir, root);
+			if (root.includes(".")) writeFileSync(target, "{}\n");
+			else mkdirSync(target);
+		}
+		writeFileSync(path.join(agentDir, "custom.json"), "{}\n");
+		const before = Buffer.from(`${JSON.stringify(v3S3Settings())}\n`);
+		writeFileSync(localConfigPath(), before, { mode: 0o600 });
+		let customCalls = 0;
+		const labels: string[] = [];
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				customCalls += 1;
+				const harness = createCustomSelectorHarness(factory, 100);
+				for (let index = 0; index < 32; index += 1) {
+					const label = selectedMultiSelectLabel(harness.render());
+					if (!label || labels.includes(label)) break;
+					labels.push(label);
+					harness.handleInput("tui.select.down");
+				}
+				harness.handleInput("tui.select.cancel");
+				return harness.result;
+			},
+		});
+		await showFileSelection(ctx, "home");
+		assert.equal(customCalls, 1);
+		assert.deepEqual(labels, [...BUILT_IN_SYNC_ROOTS, "custom.json", "sessions"]);
+		assert.deepEqual(readFileSync(localConfigPath()), before);
+	});
+});
+
+test("included-content TUI saves a discovered custom path once", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(path.join(agentDir, "settings.json"), "{}\n");
+		writeFileSync(path.join(agentDir, "custom.json"), "{}\n");
+		writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+		let screen = 0;
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				screen += 1;
+				const harness = createCustomSelectorHarness(factory, 100);
+				if (screen === 1) {
+					for (let index = 0; index < BUILT_IN_SYNC_ROOTS.length; index += 1) {
+						harness.handleInput("tui.select.down");
+					}
+					harness.handleInput("tui.select.confirm");
+					await harness.waitForPending();
+					await Promise.resolve();
+				} else if (screen === 2) {
+					harness.handleInput("tui.select.cancel");
+				} else {
+					harness.handleInput("tui.select.confirm");
+				}
+				return harness.result;
+			},
+		});
+		await showFileSelection(ctx, "home");
+		assert.equal(screen, 3);
+		assert.deepEqual((await readLocalConfigObject())?.syncSetups.home.sync.include, [
+			"settings.json",
+			"custom.json",
+		]);
+		assert.match(notifications.at(-1)?.message ?? "", /Saved included content/u);
 	});
 });
 

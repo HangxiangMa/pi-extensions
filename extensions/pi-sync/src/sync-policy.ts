@@ -28,7 +28,7 @@ const TOP_LEVEL_FILE_PATHS = new Map<string, string>(
 const TOP_LEVEL_DIRS = new Set<string>(
 	BUILT_IN_SYNC_ROOTS.filter((fileName) => !fileName.includes(".")),
 );
-const RESERVED_TOP_LEVEL_NAMES = new Set<string>([...TOP_LEVEL_DIRS, "sessions"]);
+const RESERVED_TOP_LEVEL_NAMES = new Set<string>([...BUILT_IN_BY_LOWER.keys(), "sessions"]);
 
 export function normalizeSyncInclude(value: unknown): string[] {
 	if (!Array.isArray(value)) {
