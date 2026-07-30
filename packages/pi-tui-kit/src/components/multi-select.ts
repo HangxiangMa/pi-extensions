@@ -6,13 +6,9 @@ import {
 	matchesKey,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type {
-	MenuChangeResponse,
-	MenuScreenComponent,
-	MultiSelectOptions,
-} from "./screen-component-contracts.js";
-import { handleSearchInput, renderFrame, safeMenuText } from "./screen-component-rendering.js";
-import type { ActionMenuItem, MenuMultiSelectItem } from "./types.js";
+import type { ActionMenuItem, MenuMultiSelectItem } from "../types.js";
+import type { MenuChangeResponse, MenuScreenComponent, MultiSelectOptions } from "./contracts.js";
+import { handleSearchInput, renderFrame, safeMenuText } from "./rendering.js";
 
 type ToggleRow = { kind: "toggle"; item: MenuMultiSelectItem };
 type ActionRow<ScreenId extends string, ActionId extends string> = {

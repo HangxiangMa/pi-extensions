@@ -11,21 +11,16 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { createMultiSelectComponent } from "./multi-select-component.js";
+import type { MenuScreen, MenuSettingItem } from "../types.js";
 import type {
 	MenuChangeResponse,
 	MenuKeybindings,
 	MenuScreenComponent,
 	MenuScreenComponentOptions,
 	MultiSelectOptions,
-} from "./screen-component-contracts.js";
-import {
-	handleSearchInput,
-	menuHint,
-	renderFrame,
-	safeMenuText,
-} from "./screen-component-rendering.js";
-import type { MenuScreen, MenuSettingItem } from "./types.js";
+} from "./contracts.js";
+import { createMultiSelectComponent } from "./multi-select.js";
+import { handleSearchInput, menuHint, renderFrame, safeMenuText } from "./rendering.js";
 
 export type {
 	MenuMultiSelectChange,
@@ -33,8 +28,8 @@ export type {
 	MenuScreenComponentOptions,
 	MenuScreenEvent,
 	MenuSettingChange,
-} from "./screen-component-contracts.js";
-export { safeMenuText } from "./screen-component-rendering.js";
+} from "./contracts.js";
+export { safeMenuText } from "./rendering.js";
 
 export function createMenuScreenComponent<ScreenId extends string, ActionId extends string>(
 	options: MenuScreenComponentOptions<ScreenId, ActionId>,
