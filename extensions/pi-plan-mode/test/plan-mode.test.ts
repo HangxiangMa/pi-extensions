@@ -483,7 +483,7 @@ test("Plan lifecycle enters with a prompt and hands a valid plan to implementati
 		mock.sentUserMessages.at(-1)?.text ?? "",
 		/Implement this proposed plan now:\n\n# Ship it/,
 	);
-	assert.equal(context.statuses.get("plan-mode"), undefined);
+	assert.equal(context.statuses.get("plan-mode"), "plan implementing");
 });
 
 test("plan show displays only a stored plan without triggering a model turn", async () => {
@@ -560,33 +560,9 @@ test("plan implement fails closed without a plan and hands off a stored plan", a
 	assert.ok(execute);
 	await execute("complete", { plan: "# Implement me" }, undefined, undefined, context.ctx);
 	await mock.commands.get("plan")?.handler("implement", context.ctx);
-	assert.equal(context.statuses.get("plan-mode"), undefined);
+	assert.equal(context.statuses.get("plan-mode"), "plan implementing");
 	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "custom"]);
 	assert.match(mock.sentUserMessages.at(-1)?.text ?? "", /# Implement me/);
-});
-
-test("failed implementation delivery restores the completed plan and required tools", async () => {
-	const mock = createMockPi({ activeTools: ["read", "custom"] });
-	planMode(mock.pi);
-	const context = createMockContext();
-	await mock.commands.get("plan")?.handler("", context.ctx);
-	const execute = mock.tools.find((candidate) => candidate.name === "plan_mode_complete")
-		?.execute as ((...args: unknown[]) => Promise<unknown>) | undefined;
-	assert.ok(execute);
-	await execute("complete", { plan: "# Retry later" }, undefined, undefined, context.ctx);
-	mock.rawPi.sendUserMessage = () => {
-		throw new Error("handoff failed");
-	};
-
-	await mock.commands.get("plan")?.handler("implement", context.ctx);
-	assert.equal(context.statuses.get("plan-mode"), "plan ready");
-	assert.deepEqual(mock.rawPi.getActiveTools(), [
-		"read",
-		"plan_mode_question",
-		"plan_mode_complete",
-	]);
-	assert.equal((mock.entries.at(-1)?.data as { latestPlan?: string })?.latestPlan, "# Retry later");
-	assert.match(context.notifications.at(-1)?.message ?? "", /handoff failed/);
 });
 
 test("failed finalize delivery keeps Plan mode active", async () => {

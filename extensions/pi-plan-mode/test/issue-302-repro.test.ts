@@ -24,7 +24,7 @@ test("issue 302: re-entered Plan Mode hides the previous implementation handoff"
 	const implementationHandoff = mock.sentUserMessages.at(-1)?.text ?? "";
 	assert.match(implementationHandoff, /Plan mode is now disabled/);
 	assert.match(implementationHandoff, /Implement this proposed plan now/);
-	assert.equal(context.statuses.get("plan-mode"), undefined);
+	assert.equal(context.statuses.get("plan-mode"), "plan implementing");
 
 	const contextHook = mock.events.get("context")?.[0];
 	assert.ok(contextHook);
