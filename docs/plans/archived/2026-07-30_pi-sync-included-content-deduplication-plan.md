@@ -68,9 +68,9 @@ behavior, and the existing version 3 settings schema.
   signing disabled. All 27 focused pi-sync tests and all non-test gates pass, but unrelated existing
   tests in pi-github-pr and pi-worktree fail consistently on this macOS checkout; one concurrent root
   run also timed out an experimental pi-jupyter FIFO test. The same `origin/main` commit has a passing
-  hosted CI run, so the pull request's hosted CI is the remaining authoritative root-gate evidence.
-- Pull request: https://github.com/narumiruna/pi-extensions/pull/470. Its initial CodeQL checks pass;
-  the repository CI check is still pending dispatch.
+  hosted CI run, so the pull request's hosted CI provides the authoritative root-gate evidence.
+- Pull request: https://github.com/narumiruna/pi-extensions/pull/470. CodeQL and hosted CI pass;
+  CI run 30523865002 completed the repository root gate successfully.
 
 ## Plan
 
@@ -98,7 +98,7 @@ behavior, and the existing version 3 settings schema.
       changes, cancellation/disposal, Save/Discard review, and custom-entry selection; verify no row
       exceeds its supplied width, cancellation and session replacement remain read-only, and a saved
       include contains one canonical identity per path.
-- [ ] Run the focused compiled pi-sync tests, `npm run check --workspace @narumitw/pi-sync`, root
+- [x] Run the focused compiled pi-sync tests, `npm run check --workspace @narumitw/pi-sync`, root
       `npm test`, root `npm run check`, and `git diff --check`; leave any unavailable or failing gate
       open and report it rather than inferring success. A pack dry run or Pi load smoke is not required
       unless implementation unexpectedly changes package metadata, dependencies, exports, or runtime
@@ -109,6 +109,21 @@ behavior, and the existing version 3 settings schema.
       recovery, invalid-file protection, unknown-field preservation, and atomic publication; record
       that unchanged paths were reviewed rather than claiming tests alone cover them.
 
+## Verification Evidence
+
+- Red-first focused run: 2 expected failures for built-in/custom classification and duplicate TUI
+  projection.
+- Final focused run: 27 passing tests across `sync.test.js` and `v3-schema.test.js`.
+- `npm run check --workspace @narumitw/pi-sync`: passed Biome and TypeScript checks.
+- `git diff --check`: passed before each commit.
+- Local root `npm test` and `npm run check`: attempted; touched tests and non-test gates passed, with
+  unrelated macOS-local failures recorded above.
+- Hosted PR checks: CI, CodeQL actions analysis, CodeQL JavaScript/TypeScript analysis, and CodeQL all
+  passed on the committed branch.
+- Pack and Pi runtime smokes were not applicable because package metadata, dependencies, exports, and
+  runtime loading were unchanged; deterministic policy and component-harness tests exercise the
+  changed behavior directly.
+
 ## Completion Checklist
 
 - [x] `settings.json`, `models.json`, and every other built-in root render once even when physically
@@ -118,7 +133,7 @@ behavior, and the existing version 3 settings schema.
       nested reserved-root values remain or become correctly rejected.
 - [x] Save, Discard, Escape, cancellation/disposal, concurrent-change detection, and settings bytes
       retain their existing behavior.
-- [ ] Focused tests, pi-sync workspace checks, root tests, root `npm run check`, and `git diff --check`
+- [x] Focused tests, pi-sync workspace checks, root tests, root `npm run check`, and `git diff --check`
       pass, with any exception documented.
 - [x] No unrelated source, package metadata, README contract, version, or generated dependency output
       changes are included.
