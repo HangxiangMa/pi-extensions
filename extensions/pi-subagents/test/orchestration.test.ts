@@ -220,16 +220,29 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			() => manage.execute("id", { action: "interrupt" }, undefined, undefined, context.ctx),
 			/subagent_manage action "interrupt" requires agentId/,
 		);
+		const listedWithProviderDefaults = await manage.execute(
+			"id",
+			{
+				action: "list",
+				agentId: "sa_unused",
+				includeClosed: false,
+				subtree: false,
+			},
+			undefined,
+			undefined,
+			context.ctx,
+		);
+		assert.equal(listedWithProviderDefaults.content[0].text, "No stateful subagents.");
 		await assert.rejects(
 			() =>
 				manage.execute(
 					"id",
-					{ action: "list", agentId: "sa_unused" },
+					{ action: "list", unexpected: true },
 					undefined,
 					undefined,
 					context.ctx,
 				),
-			/subagent_manage action "list" does not accept agentId/,
+			/subagent_manage does not accept unexpected/,
 		);
 		await assert.rejects(
 			() => manage.execute("id", { action: 1 }, undefined, undefined, context.ctx),
@@ -250,12 +263,17 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			() =>
 				manage.execute(
 					"id",
-					{ action: "interrupt", agentId: "sa_unknown", includeClosed: false },
+					{
+						action: "interrupt",
+						agentId: "sa_unknown",
+						includeClosed: false,
+						subtree: false,
+					},
 					undefined,
 					undefined,
 					context.ctx,
 				),
-			/subagent_manage action "interrupt" does not accept includeClosed/,
+			/Unknown subagent/,
 		);
 		await assert.rejects(
 			() =>
@@ -277,23 +295,48 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			() =>
 				mailbox.execute(
 					"id",
-					{ action: "read", agentId: "sa_unknown", message: "wrong action" },
+					{
+						action: "read",
+						agentId: "sa_unknown",
+						message: "provider default",
+						senderId: "provider default",
+						deduplicationKey: "provider-default",
+						acknowledge: true,
+						limit: 20,
+					},
 					undefined,
 					undefined,
 					context.ctx,
 				),
-			/subagent_mailbox action "read" does not accept message/,
+			/Unknown subagent/,
 		);
 		await assert.rejects(
 			() =>
 				mailbox.execute(
 					"id",
-					{ action: "send", agentId: "sa_unknown", message: "ok", acknowledge: true },
+					{ action: "read", agentId: "sa_unknown", unexpected: true },
 					undefined,
 					undefined,
 					context.ctx,
 				),
-			/subagent_mailbox action "send" does not accept acknowledge/,
+			/subagent_mailbox does not accept unexpected/,
+		);
+		await assert.rejects(
+			() =>
+				mailbox.execute(
+					"id",
+					{
+						action: "send",
+						agentId: "sa_unknown",
+						message: "ok",
+						acknowledge: true,
+						limit: 20,
+					},
+					undefined,
+					undefined,
+					context.ctx,
+				),
+			/Unknown subagent/,
 		);
 		await assert.rejects(
 			() =>
