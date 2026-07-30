@@ -142,16 +142,16 @@ cleanup.
 - [x] Run `just pack-tui-kit` and inspect the dry-run tarball listing; evidence: the 21-file package
       contains all four `dist/components/*` JS/declaration pairs, no former generated component paths,
       and the expected root entrypoint, README, package metadata, and license.
-- [ ] Run root `npm run check`; verify the CI-equivalent build, Biome, boundaries, workspace
-      typechecks, and tests pass, leaving any unavailable or failing evidence open rather than
-      inferring success from focused checks.
+- [x] Run root `npm run check`; evidence: the local parallel run reached all touched suites before an
+      unrelated timeout, and PR #468's hosted CI passed the complete build, Biome, boundaries,
+      workspace typechecks, and test gate.
 - [x] Audit the final diff against the package-layout, TUI, documentation, and verification MUST rules
       in `docs/extension-conventions.md`; evidence: library boundaries, generated JS/declarations,
       TUI contracts, source thresholds, current docs, and pack contents comply; no settings guide rule,
       Pi runtime smoke, API-version change, migration, or accepted semantic deviation is applicable.
-- [ ] After every plan item and completion check has evidence, move this plan to
-      `docs/plans/archived/2026-07-30_pi-tui-kit-components-directory-plan.md`; verify the active path is
-      gone, the archive exists, and no existing archived file was overwritten.
+- [x] After every plan item and completion check has evidence, move this plan to
+      `docs/plans/archived/2026-07-30_pi-tui-kit-components-directory-plan.md`; evidence: the active
+      path is gone, the archive exists, and no existing archived file was overwritten.
 
 ## Verification Evidence
 
@@ -161,19 +161,19 @@ cleanup.
   contained only the new generated component paths.
 - A local root `npm run check` attempt reached the complete touched kit suites successfully but timed
   out after 600 seconds while unrelated timing-sensitive LSP, Subagents, and Statusline tests were
-  contending under the parallel runner. The root item remains open pending hosted CI evidence.
+  contending under the parallel runner. PR #468's hosted CI then passed the complete root gate.
 
 ## Completion Checklist
 
-- [ ] All four component subsystem files live under `packages/pi-tui-kit/src/components/`, and no
+- [x] All four component subsystem files live under `packages/pi-tui-kit/src/components/`, and no
       obsolete top-level source or generated component module remains.
-- [ ] `runtime.ts` and component tests use the single internal component facade; private component
+- [x] `runtime.ts` and component tests use the single internal component facade; private component
       modules preserve a one-way dependency on shared types and do not leak through package exports.
-- [ ] Public root exports, declarations, declarative API version, TUI/RPC behavior, lifecycle behavior,
+- [x] Public root exports, declarations, declarative API version, TUI/RPC behavior, lifecycle behavior,
       and consumer contracts are unchanged.
-- [ ] README and current roadmap architecture text describe the new layout while archived plans remain
+- [x] README and current roadmap architecture text describe the new layout while archived plans remain
       historical.
-- [ ] Focused tests, workspace checks, the clean-build module smoke, root `npm run check`, diff checks,
-      and the package dry run pass with inspectable evidence.
-- [ ] The completed plan is archived at
+- [x] Focused tests, workspace checks, the clean-build module smoke, hosted root CI, diff checks, and
+      the package dry run pass with inspectable evidence.
+- [x] The completed plan is archived at
       `docs/plans/archived/2026-07-30_pi-tui-kit-components-directory-plan.md`.
