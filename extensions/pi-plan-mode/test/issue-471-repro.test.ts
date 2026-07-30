@@ -24,6 +24,7 @@ function stateEntry(data: Record<string, unknown>) {
 function latestState(entries: readonly { data: unknown }[]) {
 	return entries.at(-1)?.data as
 		| {
+				enabled?: boolean;
 				latestPlan?: string;
 				activeImplementation?: ActiveImplementationPlan;
 		  }
@@ -275,6 +276,32 @@ test("failed implementation delivery restores ready state without retained imple
 	assert.equal(restored?.latestPlan, PLAN);
 	assert.equal(restored?.activeImplementation, undefined);
 	assert.match(context.notifications.at(-1)?.message ?? "", /no longer active/);
+});
+
+test("a failed superseding prompt restores the exact active implementation", async () => {
+	const mock = createMockPi({ activeTools: ["read", "edit"] });
+	planMode(mock.pi);
+	const context = createMockContext();
+	await mock.commands.get("plan")?.handler("", context.ctx);
+	const complete = mock.tools.find((candidate) => candidate.name === "plan_mode_complete")
+		?.execute as ((...args: unknown[]) => Promise<unknown>) | undefined;
+	assert.ok(complete);
+	await complete("complete", { plan: PLAN }, undefined, undefined, context.ctx);
+	await mock.commands.get("plan")?.handler("implement", context.ctx);
+	const activeBeforeFailure = latestState(mock.entries)?.activeImplementation;
+	assert.ok(activeBeforeFailure);
+	mock.rawPi.sendUserMessage = () => {
+		throw new Error("replacement delivery failed");
+	};
+
+	await mock.commands.get("plan")?.handler("design a replacement", context.ctx);
+
+	assert.equal(context.statuses.get("plan-mode"), "plan implementing");
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "edit"]);
+	const restored = latestState(mock.entries);
+	assert.equal(restored?.enabled, false);
+	assert.deepEqual(restored?.activeImplementation, activeBeforeFailure);
+	assert.match(context.notifications.at(-1)?.message ?? "", /replacement delivery failed/);
 });
 
 test("active context avoids exact handoff duplication and replaces stale injected blocks", async () => {
@@ -659,6 +686,8 @@ test("the --plan flag supersedes a resumed active implementation", async () => {
 
 	await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 	assert.equal(context.statuses.get("plan-mode"), "plan active");
+	assert.equal(latestState(mock.entries)?.enabled, true);
+	assert.equal(latestState(mock.entries)?.activeImplementation, undefined);
 	await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
 	assert.equal(latestState(mock.entries)?.activeImplementation, undefined);
 });

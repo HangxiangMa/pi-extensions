@@ -28,6 +28,11 @@ import {
 	stripPlanModeCompletionCallsFromMessage,
 	stripProposedPlanBlocksFromMessage,
 } from "./message-transform.js";
+import {
+	clearPlanModeUi,
+	planModeStatusText as formatPlanModeStatusText,
+	updatePlanModeUi,
+} from "./presentation.js";
 import { buildPlanModePrompt } from "./prompt.js";
 import {
 	answerPlanModeQuestions,
@@ -55,8 +60,6 @@ import {
 import { compareTools, toolNameFromLegacyKey, toolPolicyLabel, unique } from "./tool-selection.js";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
-const STATUS_KEY = "plan-mode";
-const PLAN_WIDGET_KEY = "plan-mode-plan";
 const PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
 const BLOCKED_BUILTIN_TOOLS = new Set(["edit", "write"]);
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
@@ -221,13 +224,15 @@ export default function planMode(
 			ctx.ui.notify(`pi-plan-mode settings ignored: ${loadedSettings.reason}`, "warning");
 		}
 		if (loadedSettings.notice) ctx.ui.notify(loadedSettings.notice, "warning");
-		if (pi.getFlag("plan") === true) {
+		const persistFlagActivation = pi.getFlag("plan") === true && !state.enabled;
+		if (persistFlagActivation) {
 			state = { ...state, enabled: true, activeImplementation: undefined };
 		}
 		if (state.enabled) {
 			activatePlanModeTools();
 			applyPlanThinkingLevel();
 		} else deactivatePlanModeQuestionTool();
+		if (persistFlagActivation) persistState();
 		updateUi(ctx);
 	});
 
@@ -404,12 +409,20 @@ export default function planMode(
 	}
 
 	function enterPlanModeWithPrompt(prompt: string, ctx: ExtensionContext) {
+		const previousState = state;
 		const wasEnabled = state.enabled;
 		enterPlanMode(ctx);
 		if (!wasEnabled) {
 			ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
 		}
-		if (!sendPlanModeUserMessage(prompt, ctx) && !wasEnabled) exitPlanMode(ctx);
+		if (sendPlanModeUserMessage(prompt, ctx)) return;
+		if (!previousState.enabled) {
+			restoreTools();
+			restoreThinkingLevel();
+		}
+		state = previousState;
+		persistState();
+		updateUi(ctx);
 	}
 
 	function exitPlanMode(ctx: ExtensionContext) {
@@ -929,50 +942,15 @@ export default function planMode(
 	}
 
 	function updateUi(ctx: ExtensionContext) {
-		ctx.ui.setStatus(STATUS_KEY, formatStatus());
-		if (state.enabled && state.latestPlan) {
-			ctx.ui.setWidget(PLAN_WIDGET_KEY, [
-				"Proposed plan ready",
-				"Use /plan to implement, revise, or exit Plan mode.",
-			]);
-		} else if (state.enabled) {
-			ctx.ui.setWidget(PLAN_WIDGET_KEY, [
-				"Plan mode: planning",
-				formatToolSummary(),
-				"Finish with plan_mode_complete when decision-ready.",
-			]);
-		} else if (state.activeImplementation) {
-			ctx.ui.setWidget(PLAN_WIDGET_KEY, [
-				"Implementation plan active",
-				"Use /plan to show, replace, or clear it.",
-			]);
-		} else {
-			ctx.ui.setWidget(PLAN_WIDGET_KEY, undefined);
-		}
-	}
-
-	function formatStatus() {
-		if (state.enabled) {
-			if (state.awaitingAction || state.latestPlan) return "plan ready";
-			return "plan active";
-		}
-		if (state.activeImplementation) return "plan implementing";
-		return undefined;
+		updatePlanModeUi(ctx, state, formatToolSummary);
 	}
 
 	function clearUi(ctx: ExtensionContext) {
-		ctx.ui.setStatus(STATUS_KEY, undefined);
-		ctx.ui.setWidget(PLAN_WIDGET_KEY, undefined);
+		clearPlanModeUi(ctx);
 	}
 
 	function planStatusText() {
-		if (state.enabled) {
-			if (state.latestPlan)
-				return `Plan mode is active and a proposed plan is ready. ${formatToolSummary()}`;
-			return `Plan mode is active. ${formatToolSummary()} Explore, ask, and finish with plan_mode_complete when decision-ready.`;
-		}
-		if (state.activeImplementation) return "An implementation plan is active.";
-		return "Plan mode is off.";
+		return formatPlanModeStatusText(state, formatToolSummary);
 	}
 
 	function formatToolSummary() {
