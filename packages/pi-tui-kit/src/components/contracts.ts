@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import type { MenuScreen, MenuTransition } from "./types.js";
+import type { MenuScreen, MenuTransition } from "../types.js";
 
 const MENU_BINDINGS = [
 	"tui.select.up",

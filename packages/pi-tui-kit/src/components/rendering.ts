@@ -1,9 +1,5 @@
 import { type Input, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type {
-	MenuBinding,
-	MenuKeybindings,
-	MenuScreenComponentOptions,
-} from "./screen-component-contracts.js";
+import type { MenuBinding, MenuKeybindings, MenuScreenComponentOptions } from "./contracts.js";
 
 export function renderFrame<ScreenId extends string, ActionId extends string>(
 	title: string,

@@ -1,7 +1,5 @@
 import { BorderedLoader, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
-import { resolveMenuScreen } from "./model.js";
-import { createMenuNavigator } from "./navigator.js";
 import {
 	createMenuScreenComponent,
 	type MenuMultiSelectChange,
@@ -9,7 +7,9 @@ import {
 	type MenuScreenEvent,
 	type MenuSettingChange,
 	safeMenuText,
-} from "./screen-components.js";
+} from "./components/index.js";
+import { resolveMenuScreen } from "./model.js";
+import { createMenuNavigator } from "./navigator.js";
 import type {
 	ActionMenuItem,
 	MenuActionHandler,

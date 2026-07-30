@@ -228,9 +228,9 @@ and retires local abstractions when a stable public Pi replacement becomes avail
 
 - Keep TypeScript strict, NodeNext-compatible, and built as published JavaScript plus declarations.
 - Keep authored source files below the repository's review threshold or split them along clear screen,
-  rendering, and runtime responsibilities when cohesion improves. Multi-select state/rendering now
-  lives in `multi-select-component.ts`, with shared contracts and rendering helpers separated from the
-  screen dispatcher.
+  rendering, and runtime responsibilities when cohesion improves. Internal TUI adapters now live
+  under `src/components/`; multi-select state/rendering is isolated in `multi-select.ts`, with shared
+  contracts and rendering helpers separated from the screen dispatcher.
 - Maintain deterministic model, component, runtime, and README usage tests for every public contract.
 - Run `npm run check --workspace @narumitw/pi-tui-kit`, the root `npm run check`, and
   `just pack-tui-kit` for each kit feature.

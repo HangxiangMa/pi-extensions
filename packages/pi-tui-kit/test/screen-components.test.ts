@@ -14,7 +14,7 @@ import {
 	createMenuScreenComponent,
 	type MenuScreenComponent,
 	type MenuScreenEvent,
-} from "../src/screen-components.js";
+} from "../src/components/index.js";
 import type { MenuScreen, MenuTransition } from "../src/types.js";
 
 initTheme("dark", false);

@@ -291,7 +291,8 @@ Keep specialized UI local rather than adding package hooks that expose Pi TUI in
 
 ## 🗂️ Package layout
 
-- `src/` — authored TypeScript
+- `src/` — authored TypeScript and the public package entrypoint
+- `src/components/` — internal TUI screen adapters, contracts, and rendering helpers
 - `dist/` — generated ESM and declarations included in the npm package
 - `test/` — contract, renderer, navigation, and lifecycle coverage
 
