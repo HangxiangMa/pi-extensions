@@ -11,6 +11,7 @@ import {
 	readLocalConfigObject,
 	validateSettingsDocument,
 } from "../src/config.js";
+import { BUILT_IN_SYNC_ROOTS, isSafeCustomIncludePath } from "../src/sync-policy.js";
 import { withTempHome } from "./helpers.js";
 
 function connection(type: "s3" | "git" | "webdav") {
@@ -118,6 +119,20 @@ test("version 3 rejects missing references and backend-field mixing", async () =
 		await writeSettings(agentDir, mixed);
 		await assert.rejects(loadConfig(), /Git sync setup.*mixes backend fields/u);
 	});
+});
+
+test("built-in sync roots stay canonical and cannot become custom paths", () => {
+	for (const root of BUILT_IN_SYNC_ROOTS) {
+		const caseVariant = root.toUpperCase();
+		assert.deepEqual(normalizeSyncInclude([caseVariant]), [root]);
+		assert.equal(isSafeCustomIncludePath(root), false, root);
+		assert.equal(isSafeCustomIncludePath(caseVariant), false, caseVariant);
+		assert.equal(isSafeCustomIncludePath(`${root}/child`), false, `${root}/child`);
+		assert.throws(() => normalizeSyncInclude([`${root}/child`]), /canonical .* root/u);
+		assert.equal(isSafeCustomIncludePath(`${root}.backup`), true, `${root}.backup`);
+	}
+	assert.equal(isSafeCustomIncludePath("custom.json"), true);
+	assert.equal(isSafeCustomIncludePath("custom"), true);
 });
 
 test("version 3 rejects reserved names, duplicate remotes, and invalid include values", async () => {
