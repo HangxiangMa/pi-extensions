@@ -437,6 +437,25 @@ test("settings sanitize terminal controls from bracketed search paste", () => {
 	assert.equal(rendered.includes("\u009c"), false);
 });
 
+test("settings preserve pasted query spaces without stealing Space activation", async () => {
+	let changedItemId: string | undefined;
+	const harness = componentHarness(settingsScreen, {
+		plainTheme: true,
+		keybindings: inputFriendlyKeybindings,
+		onSettingChange: async ({ itemId }) => {
+			changedItemId = itemId;
+			return true;
+		},
+	});
+	harness.component.handleInput("\u001b[200~mode manual\u001b[201~");
+	const rendered = plainRender(harness.component, 80).join("\n");
+	assert.match(rendered, /Manual mode/);
+	assert.doesNotMatch(rendered, /Automatic start/);
+	harness.component.handleInput(" ");
+	await harness.component.waitForPending();
+	assert.equal(changedItemId, "manual");
+});
+
 test("menu hints sanitize configured keybinding labels", () => {
 	const unsafeKey = "\u001b]8;;https://unsafe.example\u0007enter";
 	const keybindings = {
@@ -815,6 +834,32 @@ test("searchable multi-select forwards focus and sanitizes bracketed paste", () 
 	for (const width of [1, 2, 8, 20, 40, 80]) {
 		assert.ok(harness.component.render(width).every((line) => visibleWidth(line) <= width));
 	}
+});
+
+test("searchable multi-select preserves pasted query spaces without stealing Space", async () => {
+	let toggledItemId: string | undefined;
+	const harness = componentHarness(
+		{
+			kind: "multiSelect",
+			title: "Searchable tools",
+			enableSearch: true,
+			items: [{ id: "target", label: "bar foo", selected: false }],
+			action: "toggle",
+		},
+		{
+			plainTheme: true,
+			keybindings: inputFriendlyKeybindings,
+			onMultiSelectChange: async ({ itemId }) => {
+				toggledItemId = itemId;
+				return true;
+			},
+		},
+	);
+	harness.component.handleInput("\u001b[200~foo bar\u001b[201~");
+	assert.match(plainRender(harness.component, 80).join("\n"), /bar foo/);
+	harness.component.handleInput(" ");
+	await harness.component.waitForPending();
+	assert.equal(toggledItemId, "target");
 });
 
 test("searchable multi-select rollback remains keyed by hidden item id", async () => {

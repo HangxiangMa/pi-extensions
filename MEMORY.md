@@ -128,6 +128,7 @@
 - Symptom: the subagent disposable-worktree test reports that a nested cwd is outside its freshly initialized repository on macOS. Cause: temp paths may use `/var/...` while Git canonicalizes the same path to `/private/var/...`; lexical containment fails. Fix: compare canonical realpaths.
 - Kit settings and multi-select actions settle asynchronously; test adapters that drive `ctx.ui.custom()` must drain `waitForPending()`, observe an accepted transition, and close a rejected screen instead of returning before the callback settles.
 - Consumer tests load `@narumitw/pi-tui-kit` from its built `dist/`; rebuild the kit after source changes or consumer behavior tests can exercise stale UI code.
+- Searchable TUI wrappers should reserve only a standalone Space key for activation; stripping spaces from whole input chunks corrupts bracketed-paste token queries.
 
 ## TASTE
 

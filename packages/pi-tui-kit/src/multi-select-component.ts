@@ -11,11 +11,7 @@ import type {
 	MenuScreenComponent,
 	MultiSelectOptions,
 } from "./screen-component-contracts.js";
-import {
-	renderFrame,
-	replaceTerminalControls,
-	safeMenuText,
-} from "./screen-component-rendering.js";
+import { handleSearchInput, renderFrame, safeMenuText } from "./screen-component-rendering.js";
 import type { ActionMenuItem, MenuMultiSelectItem } from "./types.js";
 
 type ToggleRow = { kind: "toggle"; item: MenuMultiSelectItem };
@@ -230,13 +226,8 @@ export function createMultiSelectComponent<ScreenId extends string, ActionId ext
 			} else if (options.keybindings.matches(data, "tui.select.confirm") || data === " ") {
 				activate();
 			} else if (options.screen.enableSearch) {
-				const searchData = data.replaceAll(" ", "");
-				if (searchData) {
-					searchInput.handleInput(searchData);
-					const query = replaceTerminalControls(searchInput.getValue());
-					if (query !== searchInput.getValue()) searchInput.setValue(query);
-					applyFilter();
-				}
+				handleSearchInput(searchInput, data);
+				applyFilter();
 			}
 			options.tui.requestRender();
 		},

@@ -1,4 +1,4 @@
-import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type Input, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type {
 	MenuBinding,
 	MenuKeybindings,
@@ -65,6 +65,12 @@ function bindingText(keybindings: MenuKeybindings, binding: MenuBinding, exclude
 
 export function safeMenuText(value: unknown) {
 	return replaceTerminalControls(value).replace(/\s+/gu, " ").trim();
+}
+
+export function handleSearchInput(input: Input, data: string) {
+	input.handleInput(data);
+	const value = replaceTerminalControls(input.getValue());
+	if (value !== input.getValue()) input.setValue(value);
 }
 
 export function replaceTerminalControls(value: unknown) {

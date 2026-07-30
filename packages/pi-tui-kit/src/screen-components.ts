@@ -20,9 +20,9 @@ import type {
 	MultiSelectOptions,
 } from "./screen-component-contracts.js";
 import {
+	handleSearchInput,
 	menuHint,
 	renderFrame,
-	replaceTerminalControls,
 	safeMenuText,
 } from "./screen-component-rendering.js";
 import type { MenuScreen, MenuSettingItem } from "./types.js";
@@ -397,13 +397,8 @@ function createSettingsComponent<ScreenId extends string, ActionId extends strin
 			} else if (options.keybindings.matches(data, "tui.select.confirm") || data === " ") {
 				activate();
 			} else {
-				const searchData = data.replaceAll(" ", "");
-				if (searchData) {
-					searchInput.handleInput(searchData);
-					const query = replaceTerminalControls(searchInput.getValue());
-					if (query !== searchInput.getValue()) searchInput.setValue(query);
-					applyFilter();
-				}
+				handleSearchInput(searchInput, data);
+				applyFilter();
 			}
 			options.tui.requestRender();
 		},
