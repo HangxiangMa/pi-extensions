@@ -3,8 +3,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { stripVTControlCharacters } from "node:util";
 import {
 	builtinTool,
+	createCustomSelectorHarness,
 	createMockContext,
 	createMockPi,
 	driveCustomSelector,
@@ -301,6 +303,50 @@ test("the Plan-mode tool selector keeps the cursor on the toggled row", async ()
 			"custom",
 			...REQUIRED_PLAN_TOOLS,
 		]);
+	});
+});
+
+test("the Plan-mode tool selector searches metadata and toggles the stable tool name", async () => {
+	await withAgentDir(async (agentDir) => {
+		await writeFile(
+			join(agentDir, "pi-plan-mode.json"),
+			JSON.stringify({ defaultPlanTools: ["bash", "custom"] }),
+		);
+		const allTools = [
+			builtinTool("read"),
+			builtinTool("bash"),
+			builtinTool("write"),
+			{ ...extensionTool("custom"), description: "Remote inspection helper" },
+		];
+		const mock = createMockPi({ activeTools: ["write"], allTools });
+		planMode(mock.pi);
+		let customCalled = false;
+		const context = createMockContext({
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				customCalled = true;
+				const harness = createCustomSelectorHarness(factory, 60);
+				for (const input of ["r", "e", "m", "o", "t", "e"]) harness.handleInput(input);
+				const filtered = stripVTControlCharacters(harness.render().join("\n"));
+				assert.match(filtered, /custom/);
+				assert.doesNotMatch(filtered, /› .*bash|› .*read|› .*write/);
+				harness.handleInput("tui.select.confirm");
+				for (let index = 0; index < 6; index += 1) harness.handleInput("\u007f");
+				assert.match(stripVTControlCharacters(harness.render().join("\n")), /› \[ \] custom/);
+				harness.handleInput("tui.select.cancel");
+				await harness.waitForPending();
+				return harness.result;
+			},
+		});
+
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("tools", context.ctx);
+
+		assert.equal(customCalled, true);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["bash", ...REQUIRED_PLAN_TOOLS]);
+		const persisted = mock.entries.at(-1)?.data as { selectedToolNames?: string[] } | undefined;
+		assert.deepEqual(persisted?.selectedToolNames, ["bash"]);
 	});
 });
 

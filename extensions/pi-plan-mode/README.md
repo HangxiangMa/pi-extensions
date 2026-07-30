@@ -57,7 +57,9 @@ Use `/plan` to enter Plan mode before writing your planning prompt. Use `/plan <
 Plan mode and immediately submit `<prompt>` as the first Plan-mode user message. Use `/plan tools`
 to choose which tools are active while Plan mode is enabled; the standard bounded multi-select shows
 10 rows at a time, supports viewport paging, descriptions, and explicit unavailable rows for blocked
-tools. The `plan_mode_question` tool keeps its one-off question/choice dialog because it is a
+tools. In TUI mode, type to fuzzy-search tool names, descriptions, policy, and source metadata; clear
+the query to restore the stable tool cursor. RPC keeps the complete unfiltered tool list. The
+`plan_mode_question` tool keeps its one-off question/choice dialog because it is a
 model-requested planning interaction, not command-menu navigation. `/plan show` displays the stored
 plan without starting a model turn, `/plan finalize`
 explicitly asks the agent to complete the plan or ask one remaining material question, and

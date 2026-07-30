@@ -32,7 +32,7 @@ The kit currently provides five declarative screen kinds:
 - `detail` for read-only text;
 - `choice` for confirmed static alternatives with current/initial state and selected details;
 - `settings` for Pi-style searchable settings with serialized saves and rollback;
-- `multiSelect` for bounded optimistic toggles and bulk actions.
+- `multiSelect` for bounded optimistic toggles, optional TUI fuzzy search, and pinned bulk actions.
 
 The runtime already owns screen-stack navigation, per-screen cursor memory, TUI/RPC adaptation,
 Back/Close semantics, cancellable busy actions, terminal-safe rendering, and stale-continuation
@@ -52,6 +52,8 @@ Current repository evidence includes:
 - `pi-starship` framed action selection with width-dependent preview content;
 - `pi-image-drop` contextual input and decision dialogs;
 - `pi-file-context` experimental searchable file navigation;
+- `pi-plan-mode` searchable installed-tool selection with immediate session-owned activation;
+- `pi-subagents` searchable agent-tool drafts with explicit Save and Discard actions;
 - `pi-worktree` worktree selection with display-derived identity mapping;
 - specialized UIs in `pi-sync`, `pi-btw`, and `pi-usage` that should remain local unless they share a
   proven contract with another consumer.
@@ -158,7 +160,19 @@ consumer-specific preview hook.
 
 ### Phase 3: Searchable Catalog and Contextual Decision
 
-These screens proceed independently; either may be deferred if it lacks two compatible consumers.
+**Qualification status:** completed. Searchable catalog and contextual decision remain deferred; see
+[the next-capabilities qualification plan](../plans/archived/2026-07-30_pi-tui-kit-next-capabilities-qualification-plan.md).
+The qualification found a smaller already-proven prerequisite: optional search on the existing
+`multiSelect` screen. It passed the two-consumer gate and shipped through Plan mode and Subagents; see
+[the searchable multi-select plan](../plans/archived/2026-07-30_pi-tui-kit-searchable-multi-select-plan.md).
+Because the change adds optional fields rather than a screen kind, `PI_EXTENSION_MENU_API_VERSION`
+remains `2`; older version-2 runtimes retain a valid unfiltered multi-select.
+
+**Searchable catalog status:** deferred. Jupyter's notebook picker needs a manual-path route,
+asynchronous loading, outside-workspace confirmation, and TUI-only preview ownership. Subagents has a
+compatible static agent picker but not a second proven large-list workflow. Sync setup/resource lists
+mix creation and refreshed manager state, Accounts owns credential mutations, and `pi-file-context`
+requires dual activation, asynchronous preview, history, revision, diff, and range selection.
 
 **Searchable catalog milestones:**
 
@@ -169,6 +183,11 @@ These screens proceed independently; either may be deferred if it lacks two comp
 - Keep regex grammar, asynchronous refresh, scope tabs, and domain sorting out of the first contract.
 - Migrate two qualified catalog consumers while retaining specialized sorting, previews, and actions
   outside the kit.
+
+**Contextual decision status:** deferred. Image Drop has the only compatible need to distinguish
+Confirm, Escape cancellation, and `Ctrl+C` Close. Starship requires width-dependent live preview plus
+multiple actions, while Sync and Accounts retain their required context and safe defaults with public
+`ctx.ui.confirm()` or `ctx.ui.select()`.
 
 **Contextual decision milestones:**
 
@@ -209,7 +228,9 @@ and retires local abstractions when a stable public Pi replacement becomes avail
 
 - Keep TypeScript strict, NodeNext-compatible, and built as published JavaScript plus declarations.
 - Keep authored source files below the repository's review threshold or split them along clear screen,
-  rendering, and runtime responsibilities when cohesion improves.
+  rendering, and runtime responsibilities when cohesion improves. Multi-select state/rendering now
+  lives in `multi-select-component.ts`, with shared contracts and rendering helpers separated from the
+  screen dispatcher.
 - Maintain deterministic model, component, runtime, and README usage tests for every public contract.
 - Run `npm run check --workspace @narumitw/pi-tui-kit`, the root `npm run check`, and
   `just pack-tui-kit` for each kit feature.
@@ -270,19 +291,22 @@ and retires local abstractions when a stable public Pi replacement becomes avail
 | 2026-07-30 | Require two compatible consumers before adding a screen. | Prevents one-off hooks and unsupported abstraction growth. |
 | 2026-07-30 | Deliver the static choice screen with `pi-statusline` information profiles and `pi-worktree` selection in one focused rollout. | Both need confirmed static selection with raw identity and no cursor-movement side effect; an atomic proof rollout keeps preview, decision, and editor-preserving flows specialized. |
 | 2026-07-30 | Keep async catalogs, trees, login flows, and live previews deferred. | These patterns require stronger shared evidence or remain domain-specific. |
+| 2026-07-30 | Admit optional searchable multi-select with Plan mode and Subagents as proof consumers; keep API version 2. | Both share stable tool IDs and filtering while retaining different persistence ownership; optional fields degrade safely to the existing unfiltered screen. |
+| 2026-07-30 | Defer searchable catalog. | Jupyter is specialized and only Subagents currently fits the bounded static contract without proving a second large-list need. |
+| 2026-07-30 | Defer contextual decision. | Image Drop has no second compatible consumer; Starship preview and existing public confirmation flows require different contracts. |
 
 ## Completion Checklist
 
-- [ ] Every shipped composite passed the two-consumer qualification gate and completed two
+- [x] Every shipped composite passed the two-consumer qualification gate and completed two
       behavior-preserving migrations, or its phase is explicitly deferred with evidence.
-- [ ] Package source contains no Pi private `dist/*` imports or public contracts exposing TUI objects.
-- [ ] Existing action, detail, settings, and multi-select consumers remain source compatible unless an
+- [x] Package source contains no Pi private `dist/*` imports or public contracts exposing TUI objects.
+- [x] Existing action, detail, settings, and multi-select consumers remain source compatible unless an
       approved API-version change documents migration.
-- [ ] Every admitted screen has deterministic TUI and RPC coverage for identity, width, Unicode,
+- [x] Every admitted screen has deterministic TUI and RPC coverage for identity, width, Unicode,
       terminal sanitization, keybindings, Back/Close, disabled state, failures, cancellation,
       disposal, replacement, and shutdown where applicable.
-- [ ] Each feature and migration passed focused tests, root checks, package dry runs, and a
+- [x] Each feature and migration passed focused tests, root checks, package dry runs, and a
       representative Pi runtime smoke with unverified paths recorded.
-- [ ] README ownership guidance distinguishes public Pi primitives and domain composites to reuse,
+- [x] README ownership guidance distinguishes public Pi primitives and domain composites to reuse,
       non-exported composites used only as references, kit-owned standard behavior, and
       extension-owned domain UI.

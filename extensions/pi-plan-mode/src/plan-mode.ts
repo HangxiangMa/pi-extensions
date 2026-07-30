@@ -647,6 +647,7 @@ export default function planMode(pi: ExtensionAPI) {
 						kind: "multiSelect",
 						title: "Plan-mode tools",
 						lines: ["Non-built-in tools run at user risk."],
+						enableSearch: true,
 						viewportSize: TOOL_SELECTOR_VIEWPORT_SIZE,
 						items: tools.map((tool, index) => {
 							const selectable = canSelectToolInPlanMode(tool);
@@ -654,6 +655,7 @@ export default function planMode(pi: ExtensionAPI) {
 								id: `${index}:${tool.name}`,
 								label: tool.name,
 								description: `${toolPolicyLabel(tool)} · ${tool.description}`,
+								searchText: [toolPolicyLabel(tool), tool.description].filter(Boolean).join(" "),
 								selected: selectedNames.has(tool.name),
 								disabled: !selectable,
 								disabledReason: selectable ? undefined : "Blocked by Plan-mode policy",

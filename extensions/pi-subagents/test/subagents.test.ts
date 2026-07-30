@@ -16,9 +16,17 @@ import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
+import {
+	builtinTool,
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+	driveCustomSelector,
+	extensionTool,
+} from "../../../test/support.js";
 import { discoverAgents, formatAgentList } from "../src/agents.js";
 import { registerSubagentConfigCommand, type SubagentSettingsRuntime } from "../src/config-ui.js";
 import { hasUsableAggregator } from "../src/params.js";
@@ -271,6 +279,157 @@ test("bare subagents opens a current-session manager and keeps direct routes pre
 		for (const handler of mock.events.get("session_shutdown") ?? []) {
 			await handler({}, managerContext.ctx);
 		}
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("agent tool drafts preserve settings across searchable save, discard, and Escape", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-tool-search-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({
+				future: { kept: true },
+				agents: { scout: { tools: ["read", "missing-tool"] } },
+			}),
+		);
+		const mock = createMockPi({
+			allTools: [builtinTool("read"), builtinTool("bash"), extensionTool("remote-tool")],
+		});
+		const runtime: SubagentSettingsRuntime = {
+			getBlockingEnabled: () => true,
+			getCompletionDelivery: () => "next-turn",
+			setCompletionDelivery: () => undefined,
+			getRuntimeStatus: () => ({
+				enabled: true,
+				initialized: true,
+				transport: "subprocess",
+				completionDelivery: "next-turn",
+				activeAgents: 0,
+				retainedAgents: 0,
+			}),
+			listAgents: () => [],
+			clearAgents: async () => 0,
+		};
+		registerSubagentConfigCommand(mock.pi, runtime);
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		let call = 0;
+		const openedScreens: string[] = [];
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 70);
+				openedScreens.push(stripVTControlCharacters(harness.render().join("\n")));
+				if (call === 0) {
+					for (let index = 0; index < 3; index += 1) {
+						harness.handleInput("tui.select.down");
+					}
+					harness.handleInput("tui.select.confirm");
+				} else if (call === 1 || call === 2) {
+					harness.handleInput("tui.select.confirm");
+				} else if (call === 3) {
+					assert.match(stripVTControlCharacters(harness.render().join("\n")), /missing-tool/);
+					for (const input of ["r", "e", "m", "o", "t", "e"]) harness.handleInput(input);
+					const filtered = stripVTControlCharacters(harness.render().join("\n"));
+					assert.match(filtered, /remote-tool/);
+					assert.doesNotMatch(filtered, /\bread\b|\bbash\b|missing-tool/);
+					assert.match(filtered, /Save changes/);
+					assert.match(filtered, /Discard draft/);
+					harness.handleInput("tui.select.confirm");
+					for (let index = 0; index < 6; index += 1) harness.handleInput("\u007f");
+					const cleared = stripVTControlCharacters(harness.render().join("\n"));
+					assert.match(cleared, /› \[x\] remote-tool/);
+					assert.match(cleared, /missing-tool.*unavailable/);
+					harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.confirm");
+					await harness.waitForPending();
+					await new Promise<void>((resolve) => setImmediate(resolve));
+				} else {
+					harness.handleInput("\u0003");
+				}
+				call += 1;
+				return harness.result;
+			},
+		});
+
+		await command.handler("", context.ctx);
+		assert.equal(call, 5, openedScreens.join("\n---\n"));
+		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
+			future: { kept: true },
+			agents: { scout: { tools: ["read", "missing-tool", "remote-tool"] } },
+		});
+		const savedDocument = readFileSync(settingsPath, "utf8");
+
+		let discardCall = 0;
+		const discardContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 70);
+				if (discardCall === 0) {
+					for (let index = 0; index < 3; index += 1) {
+						harness.handleInput("tui.select.down");
+					}
+					harness.handleInput("tui.select.confirm");
+				} else if (discardCall === 1 || discardCall === 2) {
+					harness.handleInput("tui.select.confirm");
+				} else if (discardCall === 3) {
+					for (const input of ["b", "a", "s", "h"]) harness.handleInput(input);
+					harness.handleInput("tui.select.confirm");
+					harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.down");
+					assert.match(stripVTControlCharacters(harness.render().join("\n")), /› Discard draft/);
+					harness.handleInput("tui.select.confirm");
+					await harness.waitForPending();
+					await new Promise<void>((resolve) => setImmediate(resolve));
+				} else {
+					harness.handleInput("\u0003");
+				}
+				discardCall += 1;
+				return harness.result;
+			},
+		});
+		await command.handler("", discardContext.ctx);
+		assert.equal(discardCall, 5);
+		assert.equal(readFileSync(settingsPath, "utf8"), savedDocument);
+
+		let escapeCall = 0;
+		const escapeContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 70);
+				if (escapeCall === 0) {
+					for (let index = 0; index < 3; index += 1) {
+						harness.handleInput("tui.select.down");
+					}
+					harness.handleInput("tui.select.confirm");
+				} else if (escapeCall === 1 || escapeCall === 2) {
+					harness.handleInput("tui.select.confirm");
+				} else if (escapeCall === 3) {
+					for (const input of ["b", "a", "s", "h"]) harness.handleInput(input);
+					harness.handleInput("tui.select.confirm");
+					harness.handleInput("tui.select.cancel");
+					await harness.waitForPending();
+					await new Promise<void>((resolve) => setImmediate(resolve));
+				} else {
+					harness.handleInput("\u0003");
+				}
+				escapeCall += 1;
+				return harness.result;
+			},
+		});
+		await command.handler("", escapeContext.ctx);
+		assert.equal(escapeCall, 5);
+		assert.equal(readFileSync(settingsPath, "utf8"), savedDocument);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

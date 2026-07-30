@@ -418,6 +418,93 @@ test("choice RPC preserves duplicate-label identity and keeps disabled rows iner
 	assert.equal(selectCalls, 2);
 });
 
+test("searchable multi-select TUI dispatches the filtered raw item id", async () => {
+	const invoked: string[] = [];
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 60);
+			harness.handleInput("f");
+			harness.handleInput("s");
+			harness.handleInput("tui.select.confirm");
+			await harness.waitForPending();
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			return harness.result;
+		},
+	});
+	const definition = defineMenu<undefined, "tools", "toggle">({
+		start: "tools",
+		screens: {
+			tools: () => ({
+				kind: "multiSelect",
+				title: "Tools",
+				enableSearch: true,
+				items: [
+					{ id: "raw-one", label: "Same", searchText: "alpha", selected: false },
+					{ id: "raw-two", label: "Same", searchText: "filesystem", selected: false },
+				],
+				action: "toggle",
+			}),
+		},
+		actions: {
+			toggle: async ({ itemId }) => {
+				invoked.push(itemId);
+				return { kind: "close" };
+			},
+		},
+	});
+
+	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
+		kind: "closed",
+	});
+	assert.deepEqual(invoked, ["raw-two"]);
+});
+
+test("searchable multi-select RPC keeps the full unfiltered unique row list", async () => {
+	const invoked: string[] = [];
+	let choicesSeen: string[] = [];
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		select: async (_title: string, choices: string[]) => {
+			choicesSeen = choices;
+			return choices[1];
+		},
+	});
+	const definition = defineMenu<undefined, "tools", "toggle">({
+		start: "tools",
+		screens: {
+			tools: () => ({
+				kind: "multiSelect",
+				title: "Tools",
+				enableSearch: true,
+				items: [
+					{ id: "raw-one", label: "Same", searchText: "alpha", selected: false },
+					{ id: "raw-two", label: "Same", searchText: "filesystem", selected: false },
+				],
+				action: "toggle",
+				hint: "close",
+			}),
+		},
+		actions: {
+			toggle: async ({ itemId }) => {
+				invoked.push(itemId);
+				return { kind: "close" };
+			},
+		},
+	});
+
+	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
+		kind: "closed",
+	});
+	assert.deepEqual(invoked, ["raw-two"]);
+	assert.equal(new Set(choicesSeen).size, choicesSeen.length);
+	assert.match(choicesSeen[0] ?? "", /Same/);
+	assert.match(choicesSeen[1] ?? "", /Same/);
+	assert.doesNotMatch(choicesSeen.join("\n"), /alpha|filesystem/);
+});
+
 test("RPC choices preserve item identity across duplicate and exit labels", async () => {
 	let selectCalls = 0;
 	const invoked: string[] = [];
