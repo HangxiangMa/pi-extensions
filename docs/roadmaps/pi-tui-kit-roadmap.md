@@ -305,9 +305,8 @@ and retires local abstractions when a stable public Pi replacement becomes avail
 - [x] Every admitted screen has deterministic TUI and RPC coverage for identity, width, Unicode,
       terminal sanitization, keybindings, Back/Close, disabled state, failures, cancellation,
       disposal, replacement, and shutdown where applicable.
-- [ ] Each feature and migration passed focused tests, root checks, package dry runs, and a
-      representative Pi runtime smoke with unverified paths recorded. The searchable multi-select
-      plan records unrelated parallel root-run flakes while its full focused gates pass.
+- [x] Each feature and migration passed focused tests, root checks, package dry runs, and a
+      representative Pi runtime smoke with unverified paths recorded.
 - [x] README ownership guidance distinguishes public Pi primitives and domain composites to reuse,
       non-exported composites used only as references, kit-owned standard behavior, and
       extension-owned domain UI.

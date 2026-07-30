@@ -295,10 +295,10 @@ The extraction is behavior-preserving and must stay green before the first searc
   option list, cancelled it, and exited without extension errors. Deterministic custom-component tests
   substitute for a non-automatable interactive TUI smoke and cover focus, keys, width, paste, filtering,
   pending work, and disposal semantics.
-- Root `npm run check` was attempted repeatedly. All touched tests and non-test gates pass, but the
-  parallel root test runner exposed unrelated pre-existing timing/path flakes. A full sequential run
-  passed 1,847 of 1,848 tests; the sole remaining `pi-github-pr` periodic-refresh failure passes when
-  focused and is outside this diff. The root-pass completion item remains explicitly unchecked.
+- Root `npm run check` was attempted repeatedly. All touched tests and non-test gates passed, but the
+  local parallel runner exposed unrelated timing/path flakes. A full sequential run passed 1,847 of
+  1,848 tests and the remaining `pi-github-pr` periodic-refresh test passed when focused. PR #467's
+  hosted CI subsequently passed the complete root gate.
 
 ## Completion Checklist
 
@@ -311,8 +311,7 @@ The extraction is behavior-preserving and must stay green before the first searc
       non-TUI behavior.
 - [x] Subagents preserves draft-only mutation, Save/Discard/Escape, unavailable names, malformed-file
       protection, unknown fields, locking, atomic publication, and reload behavior.
-- [ ] Focused suites and workspace checks pass, as do all three pack dry runs and the recorded Pi
-      runtime smoke; root `npm run check` remains open because unrelated parallel-run flakes are
-      recorded above.
+- [x] Focused suites, workspace checks, hosted root CI, all three pack dry runs, and the recorded Pi
+      runtime smoke pass.
 - [x] Roadmap, README, generated declarations, API-version declaration, and archived plan agree on the
       delivered behavior.

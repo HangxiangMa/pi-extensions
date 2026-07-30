@@ -197,10 +197,9 @@ preview callbacks for Starship would violate the declarative boundary.
 - Kit, Plan-mode, and Subagents workspace checks passed, as did all three package dry runs and the
   Plan-mode RPC smoke.
 - Root `npm run check` was executed repeatedly. Its build, Biome, boundaries, typechecks, and all
-  touched tests passed, but unrelated pre-existing timing/path tests varied under the parallel root
-  runner. A full sequential run passed 1,847 of 1,848 tests; the remaining `pi-github-pr` periodic
-  refresh test passes when focused and is outside this diff. This unavailable clean root-run evidence
-  is reported rather than inferred.
+  touched tests passed, but unrelated timing/path tests varied under the local parallel runner. A full
+  sequential run passed 1,847 of 1,848 tests and the remaining `pi-github-pr` periodic-refresh test
+  passed when focused. PR #467's hosted CI subsequently passed the complete root gate.
 
 ## Completion Checklist
 
