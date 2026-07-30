@@ -297,6 +297,7 @@ async function showSubagentManager(
 			"tool-draft": () => ({
 				kind: "multiSelect",
 				title: toolDraft ? `${safeTerminalText(toolDraft.agentName)} tools` : "Agent tools",
+				enableSearch: true,
 				lines: toolDraft
 					? [
 							`Source: ${safeTerminalText(toolDraft.agentSource)}`,
@@ -311,6 +312,7 @@ async function showSubagentManager(
 							id: name,
 							label: safeTerminalText(name),
 							description: available ? "Available tool" : "Configured tool is not currently loaded",
+							searchText: available ? "available tool" : "configured unavailable preserved",
 							selected: toolDraft?.selected.has(name) ?? false,
 							disabled: !available,
 							disabledReason: available

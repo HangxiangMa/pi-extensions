@@ -95,6 +95,8 @@ export interface SettingsScreen<ActionId extends string> {
 export interface MenuMultiSelectItem extends MenuItemBase {
 	selected: boolean;
 	disabledReason?: string;
+	/** Additional non-rendered text used by optional TUI fuzzy search. */
+	searchText?: string;
 }
 
 export interface MultiSelectScreen<ScreenId extends string, ActionId extends string> {
@@ -103,6 +105,8 @@ export interface MultiSelectScreen<ScreenId extends string, ActionId extends str
 	lines?: readonly string[];
 	items: readonly MenuMultiSelectItem[];
 	action: ActionId;
+	/** Enables TUI-only fuzzy filtering over labels and item search text. */
+	enableSearch?: boolean;
 	viewportSize?: number;
 	actions?: readonly ActionMenuItem<ScreenId, ActionId>[];
 	hint?: "back" | "close";

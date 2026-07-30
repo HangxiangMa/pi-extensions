@@ -1,6 +1,5 @@
 import { DynamicBorder, type Theme } from "@earendil-works/pi-coding-agent";
 import {
-	type Component,
 	type Focusable,
 	fuzzyFilter,
 	Input,
@@ -12,69 +11,30 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type { MenuScreen, MenuSettingItem, MenuTransition } from "./types.js";
+import { createMultiSelectComponent } from "./multi-select-component.js";
+import type {
+	MenuChangeResponse,
+	MenuKeybindings,
+	MenuScreenComponent,
+	MenuScreenComponentOptions,
+	MultiSelectOptions,
+} from "./screen-component-contracts.js";
+import {
+	menuHint,
+	renderFrame,
+	replaceTerminalControls,
+	safeMenuText,
+} from "./screen-component-rendering.js";
+import type { MenuScreen, MenuSettingItem } from "./types.js";
 
-const MENU_BINDINGS = [
-	"tui.select.up",
-	"tui.select.down",
-	"tui.select.pageUp",
-	"tui.select.pageDown",
-	"tui.select.confirm",
-	"tui.select.cancel",
-] as const;
-type MenuBinding = (typeof MENU_BINDINGS)[number];
-
-interface RenderHost {
-	requestRender(): void;
-}
-
-interface MenuKeybindings {
-	matches(data: string, binding: MenuBinding): boolean;
-	getKeys(binding: MenuBinding): readonly string[];
-}
-
-export type MenuScreenEvent =
-	| { kind: "activate"; itemId: string }
-	| { kind: "back" }
-	| { kind: "close" };
-
-export interface MenuSettingChange {
-	itemId: string;
-	value: string;
-	previousValue: string;
-}
-
-export interface MenuMultiSelectChange {
-	itemId: string;
-	selected: boolean;
-	previousSelected: boolean;
-}
-
-export interface MenuScreenComponent extends Component {
-	readonly __piTuiKitScreen?: true;
-	handleInput(data: string): void;
-	waitForPending(): Promise<void>;
-	dispose?(): void;
-}
-
-type MenuChangeResponse<ScreenId extends string> =
-	| boolean
-	| { accepted: boolean; transition: MenuTransition<ScreenId> };
-
-export interface MenuScreenComponentOptions<ScreenId extends string, ActionId extends string> {
-	screen: MenuScreen<ScreenId, ActionId>;
-	selectedItemId?: string;
-	tui: RenderHost;
-	theme: Pick<Theme, "fg" | "bold">;
-	keybindings: MenuKeybindings;
-	onEvent(event: MenuScreenEvent): void;
-	onSelectionChange?(itemId: string): void;
-	onSettingChange?(change: MenuSettingChange): Promise<MenuChangeResponse<ScreenId>>;
-	onMultiSelectChange?(change: MenuMultiSelectChange): Promise<MenuChangeResponse<ScreenId>>;
-	onTransition?(transition: MenuTransition<ScreenId>): void;
-	onError?(error: unknown): void;
-	onDispose?(): void;
-}
+export type {
+	MenuMultiSelectChange,
+	MenuScreenComponent,
+	MenuScreenComponentOptions,
+	MenuScreenEvent,
+	MenuSettingChange,
+} from "./screen-component-contracts.js";
+export { safeMenuText } from "./screen-component-rendering.js";
 
 export function createMenuScreenComponent<ScreenId extends string, ActionId extends string>(
 	options: MenuScreenComponentOptions<ScreenId, ActionId>,
@@ -125,13 +85,6 @@ type SettingsOptions<ScreenId extends string, ActionId extends string> = MenuScr
 > & {
 	screen: Extract<MenuScreen<ScreenId, ActionId>, { kind: "settings" }>;
 };
-type MultiSelectOptions<
-	ScreenId extends string,
-	ActionId extends string,
-> = MenuScreenComponentOptions<ScreenId, ActionId> & {
-	screen: Extract<MenuScreen<ScreenId, ActionId>, { kind: "multiSelect" }>;
-};
-
 function createActionsComponent<ScreenId extends string, ActionId extends string>(
 	options: ActionsOptions<ScreenId, ActionId>,
 ): MenuScreenComponent {
@@ -552,169 +505,6 @@ function displayHintKey(key: string) {
 	return safeMenuText(key);
 }
 
-function createMultiSelectComponent<ScreenId extends string, ActionId extends string>(
-	options: MultiSelectOptions<ScreenId, ActionId>,
-): MenuScreenComponent {
-	const rows = [
-		...options.screen.items.map((item) => ({ kind: "toggle" as const, item })),
-		...(options.screen.actions ?? []).map((item) => ({ kind: "action" as const, item })),
-	];
-	const selected = new Map(options.screen.items.map((item) => [item.id, item.selected]));
-	const committedSelected = new Map(selected);
-	const revisions = new Map<string, number>();
-	let selectedIndex = Math.max(
-		0,
-		rows.findIndex(({ item }) => item.id === options.selectedItemId),
-	);
-	let pending = Promise.resolve();
-	let closing = false;
-	let disposed = false;
-	const closeAfterPending = (kind: "back" | "close") => {
-		if (closing || disposed) return;
-		closing = true;
-		void pending.then(() => {
-			if (!disposed) options.onEvent({ kind });
-		});
-	};
-	const selectIndex = (index: number) => {
-		if (rows.length === 0) return;
-		selectedIndex = Math.max(0, Math.min(index, rows.length - 1));
-		const row = rows[selectedIndex];
-		if (row) options.onSelectionChange?.(row.item.id);
-	};
-	const move = (delta: number) => {
-		if (rows.length === 0) return;
-		selectIndex((selectedIndex + delta + rows.length) % rows.length);
-	};
-	const activate = () => {
-		const row = rows[selectedIndex];
-		if (!row || row.item.disabled) return;
-		if (row.kind === "action") {
-			if (closing || disposed) return;
-			closing = true;
-			void pending.then(() => {
-				if (!disposed) options.onEvent({ kind: "activate", itemId: row.item.id });
-			});
-			return;
-		}
-		const item = row.item;
-		const previousSelected = selected.get(item.id) ?? false;
-		const nextSelected = !previousSelected;
-		selected.set(item.id, nextSelected);
-		const revision = (revisions.get(item.id) ?? 0) + 1;
-		revisions.set(item.id, revision);
-		const operation = pending.then(async () => {
-			if (disposed) return;
-			let response: MenuChangeResponse<ScreenId> = false;
-			try {
-				response =
-					(await options.onMultiSelectChange?.({
-						itemId: item.id,
-						selected: nextSelected,
-						previousSelected,
-					})) ?? false;
-			} catch (error) {
-				options.onError?.(error);
-			}
-			if (disposed) return;
-			const accepted = typeof response === "boolean" ? response : response.accepted;
-			if (accepted) committedSelected.set(item.id, nextSelected);
-			else if (revisions.get(item.id) === revision) {
-				selected.set(item.id, committedSelected.get(item.id) ?? false);
-			}
-			options.tui.requestRender();
-			if (accepted && typeof response !== "boolean") {
-				closing = true;
-				void pending.then(() => {
-					if (!disposed) options.onTransition?.(response.transition);
-				});
-			}
-		});
-		pending = operation.catch(() => undefined);
-	};
-	return {
-		render(width) {
-			const requestedViewport = options.screen.viewportSize ?? 13;
-			const viewportSize = Math.min(requestedViewport, rows.length);
-			const viewportStart = Math.max(
-				0,
-				Math.min(selectedIndex - Math.floor(viewportSize / 2), rows.length - viewportSize),
-			);
-			const visibleRows = rows.slice(viewportStart, viewportStart + viewportSize);
-			const content = visibleRows.map((row, offset) => {
-				const index = viewportStart + offset;
-				const isSelected = index === selectedIndex;
-				const prefix = isSelected ? "› " : "  ";
-				const marker =
-					row.kind === "toggle"
-						? `${row.item.disabled ? "[-]" : selected.get(row.item.id) ? "[x]" : "[ ]"} `
-						: "";
-				const unavailable = row.item.disabled ? " (unavailable)" : "";
-				const label = `${prefix}${marker}${safeMenuText(row.item.label)}${unavailable}`;
-				if (isSelected) return options.theme.fg("accent", label);
-				return row.item.disabled ? options.theme.fg("dim", label) : label;
-			});
-			if (viewportSize < rows.length) {
-				content.push(options.theme.fg("dim", `  (${selectedIndex + 1}/${rows.length})`));
-			}
-			const selectedRow = rows[selectedIndex];
-			const descriptions = selectedRow
-				? [
-						selectedRow.item.description,
-						selectedRow.kind === "toggle" && selectedRow.item.disabled
-							? selectedRow.item.disabledReason
-								? `Unavailable: ${selectedRow.item.disabledReason}`
-								: "Unavailable"
-							: undefined,
-					].filter((value): value is string => Boolean(value))
-				: [];
-			if (descriptions.length > 0) {
-				content.push(
-					"",
-					...descriptions.flatMap((description) =>
-						wrapTextWithAnsi(
-							options.theme.fg("dim", `  ${safeMenuText(description)}`),
-							Math.max(1, width),
-						),
-					),
-				);
-			}
-			return renderFrame(
-				options.screen.title,
-				options.screen.lines ?? [],
-				content,
-				options.screen.hint ?? "back",
-				width,
-				options,
-				rows[selectedIndex]?.kind === "action" ? "select" : "toggle",
-			);
-		},
-		invalidate() {},
-		handleInput(data) {
-			if (disposed || closing) return;
-			if (matchesKey(data, Key.ctrl("c"))) closeAfterPending("close");
-			else if (options.keybindings.matches(data, "tui.select.cancel")) {
-				closeAfterPending(options.screen.hint ?? "back");
-			} else if (options.keybindings.matches(data, "tui.select.up")) move(-1);
-			else if (options.keybindings.matches(data, "tui.select.down")) move(1);
-			else if (options.keybindings.matches(data, "tui.select.pageUp")) {
-				selectIndex(selectedIndex - (options.screen.viewportSize ?? 13));
-			} else if (options.keybindings.matches(data, "tui.select.pageDown")) {
-				selectIndex(selectedIndex + (options.screen.viewportSize ?? 13));
-			} else if (options.keybindings.matches(data, "tui.select.confirm") || data === " ") {
-				activate();
-			}
-			options.tui.requestRender();
-		},
-		waitForPending: () => pending,
-		dispose() {
-			if (disposed) return;
-			disposed = true;
-			options.onDispose?.();
-		},
-	};
-}
-
 function commonListComponent<ScreenId extends string, ActionId extends string>(
 	options: MenuScreenComponentOptions<ScreenId, ActionId>,
 	list: SelectList,
@@ -758,64 +548,6 @@ function commonListComponent<ScreenId extends string, ActionId extends string>(
 	};
 }
 
-function renderFrame<ScreenId extends string, ActionId extends string>(
-	title: string,
-	lines: readonly string[],
-	content: readonly string[],
-	destination: "back" | "close",
-	width: number,
-	options: MenuScreenComponentOptions<ScreenId, ActionId>,
-	confirmAction = "select",
-): string[] {
-	const safeWidth = Math.max(1, width);
-	const result = [
-		...wrapTextWithAnsi(
-			options.theme.fg("accent", options.theme.bold(safeMenuText(title))),
-			safeWidth,
-		),
-		...lines.flatMap((line) =>
-			wrapTextWithAnsi(options.theme.fg("muted", safeMenuText(line)), safeWidth),
-		),
-		...(content.length > 0 ? ["", ...content] : []),
-		...wrapTextWithAnsi(
-			options.theme.fg("dim", menuHint(options.keybindings, destination, confirmAction)),
-			safeWidth,
-		),
-	];
-	return result.map((line) => truncateToWidth(line, safeWidth, ""));
-}
-
-function menuHint(
-	keybindings: MenuKeybindings,
-	destination: "back" | "close",
-	confirmAction: string,
-) {
-	const up = bindingText(keybindings, "tui.select.up");
-	const down = bindingText(keybindings, "tui.select.down");
-	const confirm = bindingText(keybindings, "tui.select.confirm");
-	const cancel = bindingText(keybindings, "tui.select.cancel", "ctrl+c");
-	return [
-		...(up || down ? [`${[up, down].filter(Boolean).join("/")} navigate`] : []),
-		...(confirm ? [`${confirm} ${confirmAction}`] : []),
-		...(cancel ? [`${cancel} ${destination}`] : []),
-		...(destination === "back" ? ["ctrl+c close"] : []),
-	].join(" • ");
-}
-
-function bindingText(keybindings: MenuKeybindings, binding: MenuBinding, excluded?: string) {
-	return keybindings
-		.getKeys(binding)
-		.filter((key) => key !== excluded)
-		.map((key) => {
-			if (key === "up") return "↑";
-			if (key === "down") return "↓";
-			if (key === "escape") return "esc";
-			return safeMenuText(key);
-		})
-		.filter(Boolean)
-		.join("/");
-}
-
 function selectTheme(theme: Pick<Theme, "fg">) {
 	return {
 		selectedPrefix: (text: string) => theme.fg("accent", text),
@@ -830,17 +562,6 @@ function setInitialSelection(list: SelectList, items: readonly SelectItem[], sel
 	if (!selectedId) return;
 	const index = items.findIndex((item) => item.value === selectedId);
 	if (index >= 0) list.setSelectedIndex(index);
-}
-
-export function safeMenuText(value: unknown) {
-	return replaceTerminalControls(value).replace(/\s+/gu, " ").trim();
-}
-
-function replaceTerminalControls(value: unknown) {
-	return Array.from(String(value), (character) => {
-		const codePoint = character.codePointAt(0) ?? 0;
-		return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
-	}).join("");
 }
 
 export function settingForAction<ActionId extends string>(

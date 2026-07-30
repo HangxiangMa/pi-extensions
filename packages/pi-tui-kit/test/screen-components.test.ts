@@ -28,6 +28,31 @@ const testKeybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
 });
 setKeybindings(testKeybindings);
 
+const inputFriendlyKeybindings = {
+	matches(data: string, binding: string) {
+		const inputs: Record<string, string> = {
+			"tui.select.up": "\u001b[A",
+			"tui.select.down": "\u001b[B",
+			"tui.select.pageUp": "\u001b[5~",
+			"tui.select.pageDown": "\u001b[6~",
+			"tui.select.confirm": "\r",
+			"tui.select.cancel": "\u001b",
+		};
+		return data === inputs[binding];
+	},
+	getKeys(binding: string) {
+		const keys: Record<string, readonly string[]> = {
+			"tui.select.up": ["up"],
+			"tui.select.down": ["down"],
+			"tui.select.pageUp": ["pageup"],
+			"tui.select.pageDown": ["pagedown"],
+			"tui.select.confirm": ["enter"],
+			"tui.select.cancel": ["escape", "ctrl+c"],
+		};
+		return keys[binding] ?? [];
+	},
+};
+
 type ScreenId = "main" | "detail";
 type ActionId = "run" | "choose" | "setting" | "toggle";
 
@@ -685,6 +710,156 @@ test("disabled multi-select rows are focusable, explained, sanitized, and never 
 	harness.component.handleInput(" ");
 	await harness.component.waitForPending();
 	assert.equal(toggles, 0);
+});
+
+test("searchable multi-select filters label and declared search text by stable raw id", async () => {
+	const requests: Array<{ itemId: string; selected: boolean; previousSelected: boolean }> = [];
+	const screen: MenuScreen<ScreenId, ActionId> = {
+		kind: "multiSelect",
+		title: "Searchable tools",
+		enableSearch: true,
+		items: [
+			{
+				id: "read\u0007raw",
+				label: "讀取 📖",
+				searchText: "filesystem inspect\u001b]8;;unsafe\u0007 built-in",
+				selected: false,
+			},
+			{ id: "write", label: "Write", searchText: "mutation", selected: true },
+		],
+		action: "toggle",
+		actions: [{ id: "save", label: "Save changes", action: "run" }],
+	};
+	const harness = componentHarness(screen, {
+		plainTheme: true,
+		selectedItemId: "write",
+		keybindings: inputFriendlyKeybindings,
+		onMultiSelectChange: async (request) => {
+			requests.push(request);
+			return true;
+		},
+	});
+
+	for (const input of ["f", "s"]) harness.component.handleInput(input);
+	const filtered = plainRender(harness.component, 60).join("\n");
+	assert.match(filtered, /讀取 📖/);
+	assert.doesNotMatch(filtered, /Write/);
+	assert.match(filtered, /Save changes/);
+	harness.component.handleInput("\r");
+	await harness.component.waitForPending();
+	assert.deepEqual(requests, [
+		{ itemId: "read\u0007raw", selected: true, previousSelected: false },
+	]);
+
+	for (const input of ["\u007f", "\u007f"]) harness.component.handleInput(input);
+	assert.match(plainRender(harness.component, 60).join("\n"), /› \[x\] 讀取 📖/);
+});
+
+test("searchable multi-select keeps actions available for no matches and distinguishes empty", async () => {
+	const screen: MenuScreen<ScreenId, ActionId> = {
+		kind: "multiSelect",
+		title: "Searchable tools",
+		enableSearch: true,
+		items: [{ id: "read", label: "Read", selected: false }],
+		action: "toggle",
+		actions: [{ id: "save", label: "Save changes", action: "run" }],
+	};
+	const noMatch = componentHarness(screen, {
+		plainTheme: true,
+		keybindings: inputFriendlyKeybindings,
+	});
+	for (const input of ["z", "z", "z"]) noMatch.component.handleInput(input);
+	const rendered = plainRender(noMatch.component, 60).join("\n");
+	assert.match(rendered, /No matching items/);
+	assert.match(rendered, /› Save changes/);
+	noMatch.component.handleInput("\r");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.deepEqual(noMatch.events, [{ kind: "activate", itemId: "save" }]);
+
+	const empty = componentHarness(
+		{ ...screen, items: [] },
+		{ plainTheme: true, keybindings: inputFriendlyKeybindings },
+	);
+	assert.match(plainRender(empty.component, 60).join("\n"), /No items available/);
+	assert.doesNotMatch(plainRender(empty.component, 60).join("\n"), /No matching items/);
+});
+
+test("searchable multi-select forwards focus and sanitizes bracketed paste", () => {
+	const harness = componentHarness(
+		{
+			kind: "multiSelect",
+			title: "Searchable tools",
+			enableSearch: true,
+			items: [
+				{ id: "read", label: "讀取 📖", searchText: "filesystem", selected: false },
+				{ id: "write", label: "Write", selected: false },
+			],
+			action: "toggle",
+		},
+		{ plainTheme: true, keybindings: inputFriendlyKeybindings },
+	);
+	const focusable = harness.component as MenuScreenComponent & Focusable;
+	assert.equal("focused" in focusable, true);
+	focusable.focused = true;
+	assert.equal(harness.component.render(80).join("\n").includes(CURSOR_MARKER), true);
+	focusable.focused = false;
+
+	harness.component.handleInput("\u001b[200~📖\u0007\u009d\u009c\u001b[201~");
+	const rendered = harness.component.render(80).join("\n");
+	assert.match(stripVTControlCharacters(rendered), /讀取 📖/);
+	assert.doesNotMatch(stripVTControlCharacters(rendered), /Write/);
+	assert.equal(rendered.includes("\u001b[200~"), false);
+	assert.equal(rendered.includes("\u0007"), false);
+	assert.equal(rendered.includes("\u009d"), false);
+	assert.equal(rendered.includes("\u009c"), false);
+	for (const width of [1, 2, 8, 20, 40, 80]) {
+		assert.ok(harness.component.render(width).every((line) => visibleWidth(line) <= width));
+	}
+});
+
+test("searchable multi-select rollback remains keyed by hidden item id", async () => {
+	let release: (() => void) | undefined;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const harness = componentHarness(
+		{
+			kind: "multiSelect",
+			title: "Searchable tools",
+			enableSearch: true,
+			items: [
+				{ id: "read", label: "Read", searchText: "filesystem", selected: false },
+				{ id: "write", label: "Write", searchText: "mutation", selected: false },
+			],
+			action: "toggle",
+		},
+		{
+			plainTheme: true,
+			keybindings: inputFriendlyKeybindings,
+			onMultiSelectChange: async () => {
+				await gate;
+				return false;
+			},
+		},
+	);
+	for (const input of ["f", "s", "\r", "z"]) harness.component.handleInput(input);
+	assert.match(plainRender(harness.component, 60).join("\n"), /No matching items/);
+	release?.();
+	await harness.component.waitForPending();
+	for (const input of ["\u007f", "\u007f", "\u007f"]) harness.component.handleInput(input);
+	assert.match(plainRender(harness.component, 60).join("\n"), /› \[ \] Read/);
+});
+
+test("multi-select search is opt-in and default rendering remains unchanged", () => {
+	const harness = componentHarness(multiSelectScreen, {
+		plainTheme: true,
+		keybindings: inputFriendlyKeybindings,
+	});
+	const before = harness.component.render(80);
+	assert.equal("focused" in harness.component, false);
+	harness.component.handleInput("f");
+	assert.deepEqual(harness.component.render(80), before);
+	assert.doesNotMatch(before.join("\n"), /Type to search/);
 });
 
 function largeMultiSelectScreen(): MenuScreen<ScreenId, ActionId> {

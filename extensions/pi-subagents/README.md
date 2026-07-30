@@ -390,13 +390,16 @@ Built-in agents inherit the active/default Pi model instead of forcing a provide
 
 Open `/subagents`, choose **Advanced settings**, then **Agent tool permissions** in an interactive
 Pi session to edit the tools each subagent may use. The standard bounded multi-select keeps a
-one-save draft: toggles do not write until **Save changes**, Escape discards the draft, and unavailable
-configured tool names remain visible and preserved. These are user settings stored in `~/.pi/agent/pi-subagents.json` and affect future sessions.
+one-save draft: toggles do not write until **Save changes**, Escape leaves the draft without writing,
+and unavailable configured tool names remain visible and preserved. In TUI mode, type to fuzzy-search
+tool names and availability metadata; Save and Discard remain pinned below the matches. These are user
+settings stored in `~/.pi/agent/pi-subagents.json` and affect future sessions.
 
 Compatibility: a valid legacy `pi-subagents-config.json` remains readable with a warning and is never modified automatically; rename it to `pi-subagents.json`. The first subsequent settings save writes the canonical file. If both files exist, the new filename takes precedence.
 
 - Select an agent, then press Enter or Space to toggle tools.
-- Press `S` to save, or Esc to cancel and return to agent selection.
+- Choose **Save changes** to write the draft, choose **Discard draft** to abandon it, or press Esc to
+  return to agent selection without writing.
 - Save the default selection to remove a custom override and use the agent defaults again.
 - Deselect every tool and save to run that agent with no tools.
 

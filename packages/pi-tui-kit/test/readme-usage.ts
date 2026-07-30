@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "../src/index.js";
+import { defineMenu, type MultiSelectScreen, runMenu } from "../src/index.js";
 
 type Screen = "main" | "profile" | "settings";
 type Action = "refresh" | "setMode" | "setProfile";
@@ -15,6 +15,22 @@ declare function loadState(signal: AbortSignal): Promise<State>;
 declare function currentGeneration(): number;
 declare function currentSessionSignal(): AbortSignal;
 declare function formatError(error: unknown): string;
+
+const searchableToolsScreen: MultiSelectScreen<Screen, Action> = {
+	kind: "multiSelect",
+	title: "Tool permissions",
+	enableSearch: true,
+	items: [
+		{
+			id: "read",
+			label: "read",
+			searchText: "built-in filesystem inspection",
+			selected: true,
+		},
+	],
+	action: "refresh",
+};
+void searchableToolsScreen;
 
 const menu = defineMenu<State, Screen, Action>({
 	start: "main",

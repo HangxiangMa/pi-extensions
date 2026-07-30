@@ -38,7 +38,7 @@ function testMenu(): MenuDefinition<State, ScreenId, ActionId> {
 	});
 }
 
-test("the declarative API version includes choice screens", () => {
+test("additive multi-select search remains compatible with declarative API version 2", () => {
 	assert.equal(PI_EXTENSION_MENU_API_VERSION, 2);
 });
 

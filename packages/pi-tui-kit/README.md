@@ -106,7 +106,7 @@ remain pure projections of current extension state.
 - **`settings`** — Pi-style searchable, aligned settings rows with immediate value changes,
   serialized saves, and rollback when an action rejects.
 - **`multiSelect`** — optimistic toggles with stable cursor restoration, serialized saves, rollback,
-  selected-row descriptions, optional bulk action rows, and a bounded TUI viewport.
+  selected-row descriptions, optional fuzzy search and bulk action rows, and a bounded TUI viewport.
 
 All standard TUI screens use Pi's injected keybindings, sanitize display text, rebuild themed
 content after invalidation, and bound rendered output to the supplied terminal width. Escape follows
@@ -170,20 +170,33 @@ Action handlers return one of these results:
 A rejected settings or multi-select action restores the last accepted value. Throwing has the same
 recovery behavior and is routed through `onError`.
 
-For a large catalog, set `viewportSize` to the maximum number of toggle and action rows rendered at
-once. Up and Down wrap; Page Up and Page Down move by one viewport and clamp at the first or last row.
-The viewport applies only to TUI rendering—RPC keeps one flat list of unique dialog choices.
-Descriptions for the selected row appear below the viewport.
+For a large multi-select, set `viewportSize` to the maximum number of toggle and action rows rendered
+at once. Up and Down wrap; Page Up and Page Down move by one viewport and clamp at the first or last
+row. Descriptions for the selected row appear below the viewport.
+
+Set `enableSearch: true` when toggle rows can become difficult to scan. TUI typing fuzzy-filters each
+sanitized label plus optional non-rendered `searchText`; use that field for source, policy, aliases, or
+other useful metadata without parsing display labels or raw IDs. The query is local to the current
+screen instance. Rows in `actions` remain pinned below the matches, including when there are no
+matching toggle rows, so Save, Discard, and bulk workflows stay reachable. Clearing the query restores
+a valid stable-ID selection. The embedded public Pi `Input` forwards focus for IME positioning and
+sanitizes pasted terminal controls before filtering.
+
+Search and the viewport affect TUI presentation only. RPC deliberately keeps one flat, unfiltered
+list of unique dialog choices, preserving raw identity, disabled rows, toggle semantics, and action
+rows without introducing a second query protocol.
 
 ```ts
 const tools = {
   kind: "multiSelect" as const,
   title: "Tool permissions",
+  enableSearch: true,
   viewportSize: 9,
   items: allTools.map((tool) => ({
     id: tool.name, // raw stable identity; never recover it from the display label
     label: tool.name,
     description: tool.description,
+    searchText: `${tool.source} ${tool.description}`,
     selected: enabledTools.has(tool.name),
     disabled: blockedTools.has(tool.name),
     disabledReason: blockedTools.has(tool.name) ? "Blocked by the active policy" : undefined,
@@ -272,7 +285,9 @@ Keep specialized UI local rather than adding package hooks that expose Pi TUI in
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.
 - `createMenuNavigator()` — lower-level stack and selection state helper.
 - exported screen, item, action, transition, runtime option, and result types.
-- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`2`).
+- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`2`). Optional multi-select
+  search is additive: version-2 runtimes that do not implement it safely retain the full unfiltered
+  multi-select rather than rejecting an otherwise compatible screen.
 
 ## 🗂️ Package layout
 
