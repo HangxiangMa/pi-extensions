@@ -18,8 +18,8 @@ Pi core intentionally does not ship a built-in plan mode; this package provides 
 - Adds required `plan_mode_question` and `plan_mode_complete` tools for structured questions and completion.
 - Presents the complete plan and prompts you to implement, stay in Plan mode, or exit and discard it.
 - Keeps legacy `<proposed_plan>` responses compatible without advertising XML as the primary workflow.
-- Shows Plan mode state in Pi's statusline as `plan active` or `plan ready`; `@narumitw/pi-statusline` adds the default `📝` icon unless configured otherwise.
-- Persists Plan mode state in the Pi session so resume restores the mode.
+- Shows Plan mode state in Pi's statusline as `plan active`, `plan ready`, or `plan implementing`; `@narumitw/pi-statusline` adds the default `📝` icon unless configured otherwise.
+- Persists Plan mode and active implementation state in the Pi session so resume and compaction retain the exact accepted plan.
 
 ## 📦 Install
 
@@ -61,10 +61,10 @@ tools. In TUI mode, type to fuzzy-search tool names, descriptions, policy, and s
 the query to restore the stable tool cursor. RPC keeps the complete unfiltered tool list. The
 `plan_mode_question` tool keeps its one-off question/choice dialog because it is a
 model-requested planning interaction, not command-menu navigation. `/plan show` displays the stored
-plan without starting a model turn, `/plan finalize`
-explicitly asks the agent to complete the plan or ask one remaining material question, and
-`/plan implement` hands a stored plan to a normal implementation turn. `show` and `implement` fail
-closed when no plan is stored; `finalize` requires active Plan mode.
+plan without starting a model turn, including the accepted plan while implementation is active.
+`/plan finalize` explicitly asks the agent to complete the plan or ask one remaining material
+question, and `/plan implement` hands a stored plan to a normal implementation turn. `show` and
+`implement` fail closed when no applicable plan is stored; `finalize` requires active Plan mode.
 
 When Plan mode is active, ask the agent to design the change. The agent may inspect files and run read-only commands, but it should not edit files or execute the implementation. It should explore first, then use structured questions when your preference or a tradeoff materially changes the plan.
 
@@ -84,14 +84,17 @@ A complete Plan mode answer should appear only after the agent has resolved disc
 
 Legacy sessions and models may still submit one non-empty `<proposed_plan>` block with tags on their own lines. That compatibility path remains accepted, but it is not the primary workflow. Empty, malformed, unclosed, or multiple legacy blocks keep Plan mode active and produce a warning.
 
-After completion, `/plan` opens the ready actions when interactive UI is available. Choosing implementation—or running `/plan implement`—disables Plan mode, restores full tool access, and starts an implementation turn with the stored plan. Choosing Stay keeps the plan ready. Revision feedback starts another Plan-mode turn and clears the previous implementable plan until an updated completion arrives. For clarification-only follow-ups, the agent answers and resubmits the complete unchanged plan so it remains implementable. Exit/off discards the plan and removes its completion result from later non-Plan model context. Without interactive UI, the plan remains visible in the tool result and stored as `plan ready`; use `/plan show`, `/plan implement`, or `/plan exit` directly.
+After completion, `/plan` opens the ready actions when interactive UI is available. Choosing implementation—or running `/plan implement`—disables Plan mode, restores full tool access, and starts an implementation turn with the stored plan. The exact accepted plan then remains active across later turns, session resume, and manual or automatic compaction without depending on the compaction summary. Plan mode avoids a duplicate context block while the original implementation handoff remains available and injects one hidden canonical copy after that handoff is compacted away. This can consume up to the existing 50,000-character plan limit in model context when reinjection is needed.
+
+While implementation is active, `/plan show` displays the accepted plan. Interactive `/plan` offers Show, Start a new plan, and Clear; `/plan exit` and `/plan off` are the direct clear routes. Starting a new Plan-mode workflow or implementing a replacement plan supersedes the previous active plan. The extension deliberately does not infer completion from assistant prose or agent settlement, so clear the active plan when the implementation no longer applies. Choosing Stay before implementation keeps the plan ready. Revision feedback starts another Plan-mode turn and clears the previous implementable plan until an updated completion arrives. For clarification-only follow-ups, the agent answers and resubmits the complete unchanged plan so it remains implementable. Before implementation, exit/off discards the ready plan and removes its completion result from later non-Plan model context. Without interactive UI, use `/plan show`, `/plan implement`, or `/plan exit` directly.
 
 While Plan mode is enabled, the extension also publishes a compact status for Pi statuslines. With `@narumitw/pi-statusline`, this appears in the extension status area:
 
 - `plan active`: Plan mode is enabled and still gathering context or drafting a plan.
 - `plan ready`: A completed plan is stored until you implement it, continue planning, or exit Plan mode.
+- `plan implementing`: The exact accepted plan remains active until you clear or supersede it.
 
-You can also exit directly. Direct exit discards the latest proposed plan instead of treating it as an implementation request:
+You can also exit directly. Before implementation, direct exit discards the latest proposed plan instead of treating it as an implementation request. During implementation, it removes both the original implementation handoff and the extension's canonical active-plan block from later model calls; an earlier Pi-generated compaction summary may still describe prior work:
 
 ```text
 /plan exit
@@ -184,7 +187,7 @@ This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
 - The agent should use `plan_mode_question` for important non-discoverable preferences or tradeoffs before finalizing.
 - The agent completes with a standalone `plan_mode_complete` tool call instead of relying on semantic prose detection.
 - `update_plan` checklist use is blocked while Plan mode is active.
-- The implementation boundary is explicit: Plan mode restores tools before starting implementation, choosing implementation immediately triggers a normal agent turn with full tool access, and plain exit/off discards the stored plan.
+- The implementation boundary is explicit: Plan mode restores tools before starting implementation, choosing implementation immediately triggers a normal agent turn with full tool access, and the accepted plan remains active across compaction until exit/off or a replacement workflow clears it.
 - Pi extension safety is approximated with tool classification and fail-closed filtering for every effective tool named `bash`; other non-built-in tools remain user-selected at user risk because Pi does not expose standardized tool mutability metadata.
 - Unlike native Codex, this extension uses a terminating Pi tool plus an `agent_settled` ready flow; Pi cannot provide sandbox-level enforcement.
 
