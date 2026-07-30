@@ -6,11 +6,13 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { DEFAULT_STAMP_SETTINGS, type StampSettings } from "../src/format.js";
+import { captureAssistantMetadata } from "../src/metadata.js";
 import type { StampSettingsRuntime, StampSettingsState } from "../src/settings.js";
 import stamp, {
 	createStampEntryRenderer,
 	formatStampTime,
 	isMessageStampData,
+	isToolStampData,
 	STAMP_ENTRY_TYPE,
 } from "../src/stamp.js";
 
@@ -31,6 +33,8 @@ test("stamp registers one entry renderer, one menu command, and no tools", () =>
 		"message_update",
 		"session_shutdown",
 		"session_start",
+		"tool_execution_end",
+		"tool_execution_start",
 		"turn_end",
 		"turn_start",
 	]);
@@ -43,7 +47,7 @@ test("formatStampTime uses zero-padded local 24-hour time and rejects invalid va
 	assert.equal(formatStampTime(10 ** 20), undefined);
 });
 
-test("isMessageStampData accepts exact finite version 1, version 2, and assistant version 3 schemas", () => {
+test("isMessageStampData accepts exact message versions 1 through 4", () => {
 	assert.equal(isMessageStampData({ version: 1, role: "user", timestamp: USER_TIMESTAMP }), true);
 	assert.equal(
 		isMessageStampData({ version: 2, role: "assistant", timestamp: ASSISTANT_TIMESTAMP }),
@@ -87,6 +91,24 @@ test("isMessageStampData accepts exact finite version 1, version 2, and assistan
 		}),
 		true,
 	);
+	const metadata = captureAssistantMetadata(assistantMessage(ASSISTANT_TIMESTAMP));
+	assert.ok(metadata);
+	assert.equal(
+		isMessageStampData({
+			version: 4,
+			role: "assistant",
+			timestamp: USER_TIMESTAMP,
+			previousTimestamp: USER_TIMESTAMP - 1_000,
+			completedAt: USER_TIMESTAMP + 3_200,
+			firstContentAt: USER_TIMESTAMP + 800,
+			metadata,
+		}),
+		true,
+	);
+	assert.equal(
+		isMessageStampData({ version: 4, role: "assistant", timestamp: USER_TIMESTAMP, metadata }),
+		true,
+	);
 	for (const value of [
 		{
 			version: 3,
@@ -115,6 +137,22 @@ test("isMessageStampData accepts exact finite version 1, version 2, and assistan
 			completedAt: USER_TIMESTAMP + 1_000,
 			future: true,
 		},
+		{ version: 4, role: "user", timestamp: USER_TIMESTAMP, metadata },
+		{ version: 4, role: "assistant", timestamp: USER_TIMESTAMP },
+		{
+			version: 4,
+			role: "assistant",
+			timestamp: USER_TIMESTAMP,
+			firstContentAt: USER_TIMESTAMP + 1,
+			metadata,
+		},
+		{
+			version: 4,
+			role: "assistant",
+			timestamp: USER_TIMESTAMP,
+			completedAt: USER_TIMESTAMP + 1_000,
+			metadata: { ...metadata, future: true },
+		},
 	]) {
 		assert.equal(isMessageStampData(value), false);
 	}
@@ -124,6 +162,31 @@ test("isMessageStampData accepts exact finite version 1, version 2, and assistan
 	);
 	assert.equal(isMessageStampData({ version: 1, role: "user", timestamp: Number.NaN }), false);
 	assert.equal(isMessageStampData(null), false);
+});
+
+test("isToolStampData accepts only exact ordered version-1 tool observations", () => {
+	const valid = {
+		version: 1,
+		kind: "tool",
+		toolCallId: "call-1",
+		toolName: "read",
+		startedAt: USER_TIMESTAMP,
+		completedAt: USER_TIMESTAMP + 1_250,
+		outcome: "success",
+	};
+	assert.equal(isToolStampData(valid), true);
+	assert.equal(isToolStampData({ ...valid, outcome: "error" }), true);
+	for (const value of [
+		{ ...valid, version: 2 },
+		{ ...valid, kind: "message" },
+		{ ...valid, toolCallId: "" },
+		{ ...valid, toolName: "x".repeat(161) },
+		{ ...valid, completedAt: USER_TIMESTAMP - 1 },
+		{ ...valid, outcome: "cancelled" },
+		{ ...valid, future: true },
+	]) {
+		assert.equal(isToolStampData(value), false);
+	}
 });
 
 test("entry renderer reads live settings, uses the callback theme, and stays width-safe", () => {
@@ -189,17 +252,103 @@ test("entry renderer reads live settings, uses the callback theme, and stays wid
 	);
 });
 
+test("entry renderer composes opt-in assistant metadata, explicit debug details, and tool stamps", () => {
+	let settings: StampSettings = {
+		...DEFAULT_STAMP_SETTINGS,
+		timeZone: "UTC",
+		assistantMetadata: "compact",
+	};
+	const renderer = createStampEntryRenderer(() => settings);
+	const assistant = {
+		...assistantMessage(Date.UTC(2026, 6, 30, 0, 1, 2)),
+		responseModel: "actual-model",
+		responseId: "response-1",
+		diagnostics: [
+			{
+				type: "retry",
+				timestamp: Date.UTC(2026, 6, 30, 0, 1, 3),
+				error: { name: "HTTPError", code: 429, message: "raw secret" },
+			},
+		],
+	};
+	const metadata = captureAssistantMetadata(assistant);
+	assert.ok(metadata);
+	const data = {
+		version: 4,
+		role: "assistant",
+		timestamp: assistant.timestamp,
+		completedAt: assistant.timestamp + 3_200,
+		firstContentAt: assistant.timestamp + 800,
+		metadata,
+	} as const;
+	const theme = { fg: (_color: string, text: string) => text } as never;
+	const compact = renderer({ data } as never, { expanded: false }, theme);
+	assert.ok(compact);
+	assert.deepEqual(
+		compact.render(80).map((line) => line.trim()),
+		["00:01:02", "test-model → actual-model · 2 tok · est $0"],
+	);
+
+	settings = { ...settings, assistantMetadata: "expanded", responseTiming: "duration" };
+	const debug = renderer({ data } as never, { expanded: true }, theme);
+	assert.ok(debug);
+	assert.deepEqual(
+		debug.render(120).map((line) => line.trim()),
+		[
+			"00:01:02 · 3.2s",
+			"api anthropic-messages · provider anthropic · requested test-model · response actual-model · stop stop",
+			"tokens in 1 · out 1 · cache read 0 · cache write 0 · total 2 · est cost $0",
+			"debug · response id response-1",
+			"debug · diagnostics 1",
+			"debug · retry · HTTPError · code 429",
+		],
+	);
+	assert.equal(debug.render(120).join("\n").includes("raw secret"), false);
+
+	settings = { ...settings, toolStamps: false };
+	const toolEntry = {
+		data: {
+			version: 1,
+			kind: "tool",
+			toolCallId: "call-1",
+			toolName: "read",
+			startedAt: assistant.timestamp,
+			completedAt: assistant.timestamp + 1_250,
+			outcome: "success",
+		},
+	} as never;
+	assert.equal(renderer(toolEntry, { expanded: false }, theme), undefined);
+	settings = { ...settings, toolStamps: true };
+	const tool = renderer(toolEntry, { expanded: false }, theme);
+	assert.ok(tool);
+	assert.deepEqual(
+		tool.render(80).map((line) => line.trim()),
+		["tool read · 1.3s · success"],
+	);
+	settings = { ...settings, toolStamps: false };
+	assert.deepEqual(tool.render(80), []);
+	settings = { ...settings, toolStamps: true };
+	for (const width of [1, 4, 8, 12]) {
+		for (const line of [...debug.render(width), ...tool.render(width)]) {
+			assert.ok(visibleWidth(line) <= width, `${JSON.stringify(line)} exceeded width ${width}`);
+		}
+	}
+});
+
 test("Pi persists stamp entries across reopen without adding them to model context", (t) => {
 	const sessionDir = mkdtempSync(`${os.tmpdir()}/pi-stamp-session-`);
 	t.after(() => rmSync(sessionDir, { recursive: true, force: true }));
 	const session = SessionManager.create(process.cwd(), sessionDir);
+	const metadata = captureAssistantMetadata(assistantMessage(ASSISTANT_TIMESTAMP));
+	assert.ok(metadata);
 	const stampData = {
-		version: 3,
+		version: 4,
 		role: "assistant",
 		timestamp: USER_TIMESTAMP,
 		previousTimestamp: USER_TIMESTAMP - 1_000,
 		completedAt: USER_TIMESTAMP + 3_200,
 		firstContentAt: USER_TIMESTAMP + 800,
+		metadata,
 	} as const;
 
 	session.appendMessage(userMessage(USER_TIMESTAMP));
@@ -227,7 +376,10 @@ test("Pi persists stamp entries across reopen without adding them to model conte
 test("TUI lifecycle appends one user stamp before the assistant and measured assistant timing at turn end", async () => {
 	const mock = createMockPi();
 	const times = [ASSISTANT_TIMESTAMP + 800, ASSISTANT_TIMESTAMP + 3_200];
-	stamp(mock.pi, { now: () => times.shift() ?? assert.fail("Unexpected clock read") });
+	stamp(mock.pi, {
+		settingsRuntime: testSettingsRuntime(),
+		now: () => times.shift() ?? assert.fail("Unexpected clock read"),
+	});
 	const { ctx } = createMockContext({ mode: "tui" });
 	const user = userMessage(USER_TIMESTAMP);
 	const assistant = assistantMessage(ASSISTANT_TIMESTAMP);
@@ -274,6 +426,60 @@ test("TUI lifecycle appends one user stamp before the assistant and measured ass
 	assert.deepEqual(mock.sentUserMessages, []);
 });
 
+test("opt-in assistant metadata persists a sanitized version-4 snapshot with measured timing", async () => {
+	const mock = createMockPi();
+	const runtime = settingsRuntimeWith({ assistantMetadata: "compact" });
+	stamp(mock.pi, {
+		settingsRuntime: runtime,
+		now: () => ASSISTANT_TIMESTAMP + 3_200,
+	});
+	const { ctx } = createMockContext({ mode: "tui" });
+	const assistant = {
+		...assistantMessage(ASSISTANT_TIMESTAMP),
+		responseModel: "reported-model",
+		responseId: "response-1",
+	};
+	await emit(mock, "session_start", { reason: "startup" }, ctx);
+	await emit(mock, "message_start", { message: assistant }, ctx);
+	await emit(mock, "message_end", { message: assistant }, ctx);
+	await emit(mock, "turn_end", { message: assistant, toolResults: [], turnIndex: 0 }, ctx);
+	const metadata = captureAssistantMetadata(assistant);
+	assert.ok(metadata);
+	assert.deepEqual(mock.entries, [
+		{
+			customType: STAMP_ENTRY_TYPE,
+			data: {
+				version: 4,
+				role: "assistant",
+				timestamp: ASSISTANT_TIMESTAMP,
+				completedAt: ASSISTANT_TIMESTAMP + 3_200,
+				metadata,
+			},
+		},
+	]);
+
+	const reversed = createMockPi();
+	stamp(reversed.pi, {
+		settingsRuntime: settingsRuntimeWith({ assistantMetadata: "compact" }),
+		now: () => ASSISTANT_TIMESTAMP - 1,
+	});
+	await emit(reversed, "session_start", { reason: "startup" }, ctx);
+	await emit(reversed, "message_start", { message: assistant }, ctx);
+	await emit(reversed, "message_end", { message: assistant }, ctx);
+	await emit(reversed, "turn_end", { message: assistant, toolResults: [], turnIndex: 0 }, ctx);
+	assert.deepEqual(reversed.entries, [
+		{
+			customType: STAMP_ENTRY_TYPE,
+			data: {
+				version: 4,
+				role: "assistant",
+				timestamp: ASSISTANT_TIMESTAMP,
+				metadata,
+			},
+		},
+	]);
+});
+
 test("thinking, completed blocks, and tool calls can be the first meaningful assistant content", async () => {
 	const events = [
 		{ type: "thinking_delta", delta: "reasoning" },
@@ -284,7 +490,7 @@ test("thinking, completed blocks, and tool calls can be the first meaningful ass
 		const mock = createMockPi();
 		const timestamp = ASSISTANT_TIMESTAMP + index * 10_000;
 		let now = timestamp + 700;
-		stamp(mock.pi, { now: () => now });
+		stamp(mock.pi, { settingsRuntime: testSettingsRuntime(), now: () => now });
 		const { ctx } = createMockContext({ mode: "tui" });
 		const assistant = assistantMessage(timestamp);
 		await emit(mock, "session_start", { reason: "startup" }, ctx);
@@ -306,7 +512,7 @@ test("thinking, completed blocks, and tool calls can be the first meaningful ass
 test("missing first content stays unavailable and tool execution does not extend completion", async () => {
 	const mock = createMockPi();
 	let now = ASSISTANT_TIMESTAMP + 3_200;
-	stamp(mock.pi, { now: () => now });
+	stamp(mock.pi, { settingsRuntime: testSettingsRuntime(), now: () => now });
 	const { ctx } = createMockContext({ mode: "tui" });
 	const assistant = assistantMessage(ASSISTANT_TIMESTAMP, "toolUse");
 	await emit(mock, "session_start", { reason: "startup" }, ctx);
@@ -345,7 +551,7 @@ test("missing first content stays unavailable and tool execution does not extend
 
 test("successive user messages flush in source order at the following message boundaries", async () => {
 	const mock = createMockPi();
-	stamp(mock.pi);
+	stamp(mock.pi, { settingsRuntime: testSettingsRuntime() });
 	const { ctx } = createMockContext({ mode: "tui" });
 	const first = userMessage(USER_TIMESTAMP);
 	const second = userMessage(USER_TIMESTAMP + 1_000);
@@ -367,7 +573,10 @@ test("error and aborted assistant messages retain completion timing", async () =
 	for (const [index, stopReason] of ["error", "aborted"].entries()) {
 		const mock = createMockPi();
 		const timestamp = ASSISTANT_TIMESTAMP + index * 10_000;
-		stamp(mock.pi, { now: () => timestamp + 1_500 });
+		stamp(mock.pi, {
+			settingsRuntime: testSettingsRuntime(),
+			now: () => timestamp + 1_500,
+		});
 		const { ctx } = createMockContext({ mode: "tui" });
 		const assistant = assistantMessage(timestamp, stopReason as "error" | "aborted");
 		await emit(mock, "session_start", { reason: "startup" }, ctx);
@@ -381,7 +590,7 @@ test("error and aborted assistant messages retain completion timing", async () =
 test("mismatched and reversed timing degrades without leaking into a later response", async () => {
 	const mock = createMockPi();
 	let now = ASSISTANT_TIMESTAMP + 500;
-	stamp(mock.pi, { now: () => now });
+	stamp(mock.pi, { settingsRuntime: testSettingsRuntime(), now: () => now });
 	const { ctx } = createMockContext({ mode: "tui" });
 	const first = assistantMessage(ASSISTANT_TIMESTAMP);
 	const mismatch = assistantMessage(ASSISTANT_TIMESTAMP + 1_000);
@@ -413,7 +622,7 @@ test("mismatched and reversed timing degrades without leaking into a later respo
 test("an out-of-order first-content clock is omitted while valid completion remains", async () => {
 	const mock = createMockPi();
 	let now = ASSISTANT_TIMESTAMP - 1;
-	stamp(mock.pi, { now: () => now });
+	stamp(mock.pi, { settingsRuntime: testSettingsRuntime(), now: () => now });
 	const { ctx } = createMockContext({ mode: "tui" });
 	const assistant = assistantMessage(ASSISTANT_TIMESTAMP);
 	await emit(mock, "session_start", { reason: "startup" }, ctx);
@@ -434,7 +643,10 @@ test("an out-of-order first-content clock is omitted while valid completion rema
 
 test("session replacement clears finalized timing owned by the prior session", async () => {
 	const mock = createMockPi();
-	stamp(mock.pi, { now: () => ASSISTANT_TIMESTAMP + 2_000 });
+	stamp(mock.pi, {
+		settingsRuntime: testSettingsRuntime(),
+		now: () => ASSISTANT_TIMESTAMP + 2_000,
+	});
 	const first = createMockContext({ mode: "tui" });
 	const second = createMockContext({ mode: "tui" });
 	const assistant = assistantMessage(ASSISTANT_TIMESTAMP);
@@ -448,7 +660,7 @@ test("session replacement clears finalized timing owned by the prior session", a
 
 test("assistant tool and error turns receive one stamp without stamping tool results", async () => {
 	const mock = createMockPi();
-	stamp(mock.pi);
+	stamp(mock.pi, { settingsRuntime: testSettingsRuntime() });
 	const { ctx } = createMockContext({ mode: "tui" });
 	const toolAssistant = assistantMessage(ASSISTANT_TIMESTAMP, "toolUse");
 	const errorAssistant = assistantMessage(ASSISTANT_TIMESTAMP + 2_000, "error");
@@ -480,7 +692,7 @@ test("assistant tool and error turns receive one stamp without stamping tool res
 
 test("session start rebuilds the predecessor cursor from the active branch", async () => {
 	const mock = createMockPi();
-	stamp(mock.pi);
+	stamp(mock.pi, { settingsRuntime: testSettingsRuntime() });
 	const previous = USER_TIMESTAMP - 60_000;
 	const { ctx } = createMockContext({
 		mode: "tui",
@@ -563,7 +775,7 @@ test("session shutdown waits for an in-flight settings durability boundary", asy
 
 test("agent end and shutdown flush a pending user at most once and reload resets state", async () => {
 	const mock = createMockPi();
-	stamp(mock.pi);
+	stamp(mock.pi, { settingsRuntime: testSettingsRuntime() });
 	const { ctx } = createMockContext({ mode: "tui" });
 
 	await emit(mock, "session_start", { reason: "startup" }, ctx);
@@ -605,7 +817,7 @@ test("/stamp is argument-free, supports TUI, and rejects print and JSON observab
 test("print, JSON, and RPC sessions never append stamp entries", async () => {
 	for (const mode of ["print", "json", "rpc"] as const) {
 		const mock = createMockPi();
-		stamp(mock.pi);
+		stamp(mock.pi, { settingsRuntime: testSettingsRuntime() });
 		const { ctx } = createMockContext({ mode });
 		const assistant = assistantMessage(ASSISTANT_TIMESTAMP);
 
@@ -700,9 +912,27 @@ function defaultSettingsState(): Readonly<StampSettingsState> {
 			locale: "built-in",
 			timeZone: "built-in",
 			responseTiming: "built-in",
+			assistantMetadata: "built-in",
+			toolStamps: "built-in",
 		},
 		canSave: true,
 	};
+}
+
+function settingsRuntimeWith(settings: Partial<StampSettings>): StampSettingsRuntime {
+	const state: Readonly<StampSettingsState> = {
+		...defaultSettingsState(),
+		settings: { ...DEFAULT_STAMP_SETTINGS, ...settings },
+		sources: {
+			...defaultSettingsState().sources,
+			...Object.fromEntries(Object.keys(settings).map((key) => [key, "user"])),
+		},
+	};
+	return testSettingsRuntime({
+		get: () => state,
+		reload: async () => state,
+		update: async () => state,
+	});
 }
 
 function testSettingsRuntime(overrides: Partial<StampSettingsRuntime> = {}): StampSettingsRuntime {

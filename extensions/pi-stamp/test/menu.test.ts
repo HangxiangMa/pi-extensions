@@ -34,15 +34,21 @@ test("stamp menu exposes Main, Settings, Status, Help, and read-only invalid sta
 			["locale", "Invariant"],
 			["timeZone", "Local"],
 			["responseTiming", "Off"],
+			["assistantMetadata", "Off"],
+			["toolStamps", "Hide"],
 		],
 	);
 	assert.match((main.lines ?? []).join("\n"), /Timing off/u);
+	assert.match((main.lines ?? []).join("\n"), /Metadata off/u);
+	assert.match((main.lines ?? []).join("\n"), /Tool stamps hidden/u);
 
 	const status = resolveMenuScreen(menu, "status", state);
 	assert.equal(status.kind, "detail");
 	if (status.kind !== "detail") assert.fail("Expected detail screen");
 	assert.match(status.lines.join("\n"), /24-hour.*Built-in/u);
 	assert.match(status.lines.join("\n"), /Response timing: Off · Built-in/u);
+	assert.match(status.lines.join("\n"), /Assistant metadata: Off · Built-in/u);
+	assert.match(status.lines.join("\n"), /Tool stamps: Hide · Built-in/u);
 	assert.match(status.lines.join("\n"), /\/tmp\/pi-stamp\.json/u);
 
 	const invalidState = {
@@ -112,6 +118,24 @@ test("bounded setting actions persist exact patches", async () => {
 		itemId: "responseTiming",
 		value: "Off",
 	});
+	for (const value of ["Compact", "Expanded", "Off"] as const) {
+		await menu.actions["set-assistant-metadata"]({
+			ctx,
+			state: runtime.get(),
+			signal: new AbortController().signal,
+			itemId: "assistantMetadata",
+			value,
+		});
+	}
+	for (const value of ["Show", "Hide"] as const) {
+		await menu.actions["set-tool-stamps"]({
+			ctx,
+			state: runtime.get(),
+			signal: new AbortController().signal,
+			itemId: "toolStamps",
+			value,
+		});
+	}
 	assert.deepEqual(runtime.patches, [
 		{ hourCycle: "12h" },
 		{ showSeconds: false },
@@ -119,6 +143,11 @@ test("bounded setting actions persist exact patches", async () => {
 		{ responseTiming: "duration" },
 		{ responseTiming: "detailed" },
 		{ responseTiming: "off" },
+		{ assistantMetadata: "compact" },
+		{ assistantMetadata: "expanded" },
+		{ assistantMetadata: "off" },
+		{ toolStamps: true },
+		{ toolStamps: false },
 	]);
 	assert.equal(notifications.at(-1)?.level, "info");
 });
@@ -159,7 +188,9 @@ test("custom locale and time-zone input validates, cancels without mutation, and
 });
 
 test("save failure is rejected without changing effective settings", async () => {
-	const runtime = memorySettingsRuntime({ rejectUpdate: new Error("save\u001b[31m rejected") });
+	const runtime = memorySettingsRuntime({
+		rejectUpdate: new Error("save\u001b[31m\u202espoofed rejected"),
+	});
 	const menu = createStampMenu(runtime);
 	const { ctx, notifications } = createMockContext({ mode: "tui" });
 	const result = await menu.actions["set-seconds"]({
@@ -171,7 +202,9 @@ test("save failure is rejected without changing effective settings", async () =>
 	});
 	assert.deepEqual(result, { kind: "rejected" });
 	assert.equal(runtime.get().settings.showSeconds, true);
-	assert.equal((notifications.at(-1)?.message ?? "").includes("\u001b"), false);
+	const message = notifications.at(-1)?.message ?? "";
+	assert.equal(message.includes("\u001b"), false);
+	assert.equal(message.includes("\u202e"), false);
 });
 
 test("RPC adapts the standard menu and an aborted owner closes stale work", async () => {
@@ -216,6 +249,8 @@ function memorySettingsRuntime(
 			locale: "built-in",
 			timeZone: "built-in",
 			responseTiming: "built-in",
+			assistantMetadata: "built-in",
+			toolStamps: "built-in",
 		},
 		canSave: true,
 	};

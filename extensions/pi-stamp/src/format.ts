@@ -1,3 +1,8 @@
+import { formatElapsedSeconds, type StampAssistantMetadataMode } from "./metadata.js";
+
+export type { StampAssistantMetadataMode } from "./metadata.js";
+export { ASSISTANT_METADATA_MODES } from "./metadata.js";
+
 export const HOUR_CYCLES = ["24h", "12h"] as const;
 export const DATE_CONTEXTS = ["day-change", "always", "never"] as const;
 export const RESPONSE_TIMING_MODES = ["off", "duration", "detailed"] as const;
@@ -15,6 +20,8 @@ export interface StampSettings {
 	locale: StampLocale;
 	timeZone: StampTimeZone;
 	responseTiming: StampResponseTimingMode;
+	assistantMetadata: StampAssistantMetadataMode;
+	toolStamps: boolean;
 }
 
 export const DEFAULT_STAMP_SETTINGS: Readonly<StampSettings> = Object.freeze({
@@ -24,6 +31,8 @@ export const DEFAULT_STAMP_SETTINGS: Readonly<StampSettings> = Object.freeze({
 	locale: "invariant",
 	timeZone: "local",
 	responseTiming: "off",
+	assistantMetadata: "off",
+	toolStamps: false,
 });
 
 export interface StampFormatEnvironment {
@@ -107,10 +116,7 @@ export function formatMessageStampLabel(
 }
 
 export function formatResponseElapsed(elapsedMilliseconds: number): string | undefined {
-	if (!Number.isFinite(elapsedMilliseconds) || elapsedMilliseconds < 0) return undefined;
-	if (elapsedMilliseconds > 0 && elapsedMilliseconds < 100) return "<0.1s";
-	const tenths = Math.round(elapsedMilliseconds / 100);
-	return `${(tenths / 10).toFixed(1)}s`;
+	return formatElapsedSeconds(elapsedMilliseconds);
 }
 
 function formatInvariant(
