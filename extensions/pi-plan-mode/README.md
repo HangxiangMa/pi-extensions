@@ -94,7 +94,7 @@ While Plan mode is enabled, the extension also publishes a compact status for Pi
 - `plan ready`: A completed plan is stored until you implement it, continue planning, or exit Plan mode.
 - `plan implementing`: The exact accepted plan remains active until you clear or supersede it.
 
-You can also exit directly. Before implementation, direct exit discards the latest proposed plan instead of treating it as an implementation request. During implementation, it clears the extension's canonical active-plan block; an earlier Pi-generated compaction summary may still describe prior work:
+You can also exit directly. Before implementation, direct exit discards the latest proposed plan instead of treating it as an implementation request. During implementation, it removes both the original implementation handoff and the extension's canonical active-plan block from later model calls; an earlier Pi-generated compaction summary may still describe prior work:
 
 ```text
 /plan exit

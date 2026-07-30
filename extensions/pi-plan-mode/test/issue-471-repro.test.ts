@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import {
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+} from "../../../test/support.js";
 import { PLAN_MODE_MAX_CHARS } from "../src/completion-tool.js";
 import planMode from "../src/plan-mode.js";
 import { type ActiveImplementationPlan, restorePlanModeState } from "../src/state.js";
@@ -24,6 +28,14 @@ function latestState(entries: readonly { data: unknown }[]) {
 				activeImplementation?: ActiveImplementationPlan;
 		  }
 		| undefined;
+}
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((settle) => {
+		resolve = settle;
+	});
+	return { promise, resolve };
 }
 
 test("active implementation state restores independently from Plan mode", () => {
@@ -291,6 +303,16 @@ test("active context avoids exact handoff duplication and replaces stale injecte
 	);
 	assert.deepEqual(withHandoff.messages, [{ role: "user", content: "plan it" }, handoff]);
 
+	const staleHandoff = {
+		role: "user",
+		content: String(mock.sentUserMessages.at(-1)?.text).replace(PLAN, "# Superseded plan"),
+	};
+	const withStaleHandoff = (await contextHook(
+		{ messages: [staleHandoff, handoff, handoff] },
+		context.ctx,
+	)) as { messages: Array<Record<string, unknown>> };
+	assert.deepEqual(withStaleHandoff.messages, [handoff]);
+
 	const toolCall = {
 		role: "assistant",
 		content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "a" } }],
@@ -354,15 +376,132 @@ test("active plans can be shown and cleared through existing direct routes", asy
 	const contextHook = mock.events.get("context")?.[0];
 	assert.ok(contextHook);
 	const transformed = (await contextHook(
-		{ messages: [{ role: "compactionSummary", summary: "lossy" }] },
+		{
+			messages: [
+				{ role: "compactionSummary", summary: "lossy" },
+				{ role: "user", content: mock.sentUserMessages.at(-1)?.text },
+			],
+		},
 		context.ctx,
 	)) as { messages: Array<Record<string, unknown>> };
-	assert.equal(
-		transformed.messages.some(
-			(message) => message.customType === "plan-mode-implementation-context",
-		),
-		false,
+	assert.deepEqual(transformed.messages, [{ role: "compactionSummary", summary: "lossy" }]);
+});
+
+test("a Plan-mode question cannot commit or open its next prompt after Plan mode exits", async () => {
+	const selection = deferred<string | undefined>();
+	const selectStarted = deferred<void>();
+	let selectCalls = 0;
+	const mock = createMockPi({ activeTools: ["read"] });
+	planMode(mock.pi);
+	const context = createMockContext({
+		hasUI: true,
+		select: async () => {
+			selectCalls += 1;
+			if (selectCalls > 1) throw new Error("stale question prompt reopened");
+			selectStarted.resolve();
+			return selection.promise;
+		},
+	});
+	await mock.commands.get("plan")?.handler("", context.ctx);
+	const question = mock.tools.find((candidate) => candidate.name === "plan_mode_question")
+		?.execute as ((...args: unknown[]) => Promise<unknown>) | undefined;
+	assert.ok(question);
+	const pendingAnswer = question(
+		"question",
+		{
+			questions: [
+				{
+					id: "scope",
+					header: "Scope",
+					question: "Which scope?",
+					options: [
+						{ label: "Narrow", description: "Change only this path." },
+						{ label: "Broad", description: "Change sibling paths too." },
+					],
+				},
+				{
+					id: "tests",
+					header: "Tests",
+					question: "Which tests?",
+					options: [
+						{ label: "Focused", description: "Run focused tests." },
+						{ label: "Full", description: "Run every test." },
+					],
+				},
+			],
+		},
+		undefined,
+		undefined,
+		context.ctx,
 	);
+	await selectStarted.promise;
+	await mock.commands.get("plan")?.handler("exit", context.ctx);
+	await mock.commands.get("plan")?.handler("", context.ctx);
+	selection.resolve("1. Narrow — Change only this path.");
+
+	const result = (await pendingAnswer) as { details?: { cancelled?: boolean; reason?: string } };
+	assert.equal(result.details?.cancelled, true);
+	assert.equal(result.details?.reason, "cancelled");
+	assert.equal(selectCalls, 1);
+});
+
+test("shutdown cancellation cannot let a stale tool menu reactivate Plan-mode tools", async () => {
+	const selectStarted = deferred<void>();
+	const mock = createMockPi({
+		activeTools: ["read", "edit"],
+		allTools: [
+			{ name: "read", description: "Read", sourceInfo: { source: "builtin", scope: "builtin" } },
+			{ name: "edit", description: "Edit", sourceInfo: { source: "builtin", scope: "builtin" } },
+		],
+	});
+	planMode(mock.pi);
+	const context = createMockContext({
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory);
+			selectStarted.resolve();
+			return harness.resultPromise;
+		},
+	});
+	await mock.commands.get("plan")?.handler("", context.ctx);
+	const pendingMenu = mock.commands.get("plan")?.handler("tools", context.ctx);
+	await selectStarted.promise;
+	await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+	await pendingMenu;
+
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "edit"]);
+	assert.equal(context.statuses.get("plan-mode"), undefined);
+});
+
+test("exiting Plan mode while a tool menu is open cannot reactivate Plan-mode tools", async () => {
+	const selectStarted = deferred<void>();
+	let menuHarness: ReturnType<typeof createCustomSelectorHarness> | undefined;
+	const mock = createMockPi({
+		activeTools: ["read", "edit"],
+		allTools: [
+			{ name: "read", description: "Read", sourceInfo: { source: "builtin", scope: "builtin" } },
+			{ name: "edit", description: "Edit", sourceInfo: { source: "builtin", scope: "builtin" } },
+		],
+	});
+	planMode(mock.pi);
+	const context = createMockContext({
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			menuHarness = createCustomSelectorHarness(factory);
+			selectStarted.resolve();
+			return menuHarness.resultPromise;
+		},
+	});
+	await mock.commands.get("plan")?.handler("", context.ctx);
+	const pendingMenu = mock.commands.get("plan")?.handler("tools", context.ctx);
+	await selectStarted.promise;
+	await mock.commands.get("plan")?.handler("exit", context.ctx);
+	assert.ok(menuHarness);
+	menuHarness.handleInput("tui.select.cancel");
+	await pendingMenu;
+
+	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "edit"]);
+	assert.equal(context.statuses.get("plan-mode"), undefined);
 });
 
 test("the active-plan menu shows without superseding and cancellation is read-only", async () => {
@@ -443,6 +582,55 @@ test("starting a new Plan-mode workflow supersedes the active implementation", a
 		context.ctx,
 	)) as { messages: Array<Record<string, unknown>> };
 	assert.deepEqual(transformed.messages, [{ role: "user", content: "design a replacement" }]);
+});
+
+test("a superseded session start cannot publish stale settings or UI state", async () => {
+	const settingsLoads: Array<ReturnType<typeof deferred<{ kind: "missing" }>>> = [];
+	const mock = createMockPi({ activeTools: ["read", "edit"] });
+	planMode(mock.pi, {
+		readSettings: () => {
+			const load = deferred<{ kind: "missing" }>();
+			settingsLoads.push(load);
+			return load.promise;
+		},
+	});
+	const sessionStart = mock.events.get("session_start")?.[0];
+	const contextHook = mock.events.get("context")?.[0];
+	assert.ok(sessionStart);
+	assert.ok(contextHook);
+	const activeImplementation: ActiveImplementationPlan = {
+		id: "implementation-1",
+		plan: PLAN,
+		source: "plan_mode_complete",
+		startedAt: 42,
+	};
+	const staleContext = createMockContext({
+		sessionManager: {
+			getBranch: () => [
+				stateEntry({ enabled: false, awaitingAction: false, activeImplementation }),
+			],
+			getEntries: () => [],
+		},
+	});
+	const currentContext = createMockContext();
+
+	const staleStart = sessionStart({}, staleContext.ctx) as Promise<void>;
+	assert.equal(settingsLoads.length, 1);
+	const currentStart = sessionStart({}, currentContext.ctx) as Promise<void>;
+	assert.equal(settingsLoads.length, 2);
+	settingsLoads[1]?.resolve({ kind: "missing" });
+	await currentStart;
+	settingsLoads[0]?.resolve({ kind: "missing" });
+	await staleStart;
+
+	assert.equal(staleContext.statuses.has("plan-mode"), false);
+	assert.equal(staleContext.notifications.length, 0);
+	assert.equal(currentContext.statuses.get("plan-mode"), undefined);
+	const transformed = (await contextHook(
+		{ messages: [{ role: "branchSummary", summary: "current session" }] },
+		currentContext.ctx,
+	)) as { messages: Array<Record<string, unknown>> };
+	assert.deepEqual(transformed.messages, [{ role: "branchSummary", summary: "current session" }]);
 });
 
 test("the --plan flag supersedes a resumed active implementation", async () => {

@@ -10,7 +10,11 @@ import {
 	planModeCompleted,
 	renderPlanModeCompletion,
 } from "./completion-tool.js";
-import { isStaleExtensionContextError } from "./extension-errors.js";
+import {
+	isStaleExtensionContextError,
+	onAgentSettled,
+	setPlanThinkingLevel,
+} from "./extension-runtime.js";
 import {
 	injectActiveImplementationContext,
 	invalidPlanMessage,
@@ -26,17 +30,15 @@ import {
 } from "./message-transform.js";
 import { buildPlanModePrompt } from "./prompt.js";
 import {
-	askPlanModeQuestions,
+	answerPlanModeQuestions,
 	normalizePlanModeQuestionParams,
 	PLAN_MODE_QUESTION_PARAMS,
 	PLAN_MODE_QUESTION_TOOL_NAME,
-	planModeQuestionAnswered,
 	planModeQuestionCancelled,
 } from "./question-tool.js";
 import { withoutRequiredPlanModeTools, withRequiredPlanModeTools } from "./required-tools.js";
 import {
 	configuredThinkingLevel,
-	type PlanModeFixedThinkingLevel,
 	type PlanModeSettings,
 	readPlanModeSettings,
 } from "./settings.js";
@@ -60,33 +62,23 @@ const BLOCKED_BUILTIN_TOOLS = new Set(["edit", "write"]);
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
 const TOOL_SELECTOR_VIEWPORT_SIZE = 10;
 
-type AgentSettledHandler = (event: unknown, ctx: ExtensionContext) => unknown;
-
-function onAgentSettled(pi: ExtensionAPI, handler: AgentSettledHandler) {
-	(
-		pi as unknown as {
-			on(event: "agent_settled", callback: AgentSettledHandler): void;
-		}
-	).on("agent_settled", handler);
-}
-
-function setPlanThinkingLevel(pi: ExtensionAPI, level: PlanModeFixedThinkingLevel) {
-	(pi.setThinkingLevel as unknown as (level: PlanModeFixedThinkingLevel) => void)(level);
-}
-
 interface ReadyPresentationIntent {
 	nonce: number;
 	plan: string;
 	source: PlanCompletionSource;
 }
 
-export default function planMode(pi: ExtensionAPI) {
+export default function planMode(
+	pi: ExtensionAPI,
+	dependencies: { readSettings?(): ReturnType<typeof readPlanModeSettings> } = {},
+) {
 	let state: PlanModeState = { enabled: false, awaitingAction: false };
 	let settings: PlanModeSettings = { thinkingLevel: "inherit" };
 	let previousTools: string[] | undefined;
 	let readyPresentationIntent: ReadyPresentationIntent | undefined;
 	let nextReadyPresentationNonce = 0;
 	let menuGeneration = 0;
+	let workflowGeneration = 0;
 	let menuController = new AbortController();
 
 	pi.registerFlag("plan", {
@@ -127,16 +119,13 @@ export default function planMode(pi: ExtensionAPI) {
 				);
 			}
 
-			const answers = await askPlanModeQuestions(parsed.questions, ctx);
-			if (!answers) {
-				return planModeQuestionCancelled(
-					parsed.questions,
-					"cancelled",
-					"User cancelled the Plan-mode question prompt.",
-				);
-			}
-
-			return planModeQuestionAnswered(parsed.questions, answers);
+			const sessionGeneration = menuGeneration;
+			const questionWorkflowGeneration = workflowGeneration;
+			return answerPlanModeQuestions(parsed.questions, ctx, {
+				isCurrent: () =>
+					sessionGeneration === menuGeneration && questionWorkflowGeneration === workflowGeneration,
+				isEnabled: () => state.enabled,
+			});
 		},
 	});
 
@@ -219,18 +208,19 @@ export default function planMode(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		menuGeneration += 1;
+		const generation = ++menuGeneration;
 		menuController.abort(new DOMException("Plan-mode session replaced", "AbortError"));
 		menuController = new AbortController();
 		readyPresentationIntent = undefined;
 		settings = { thinkingLevel: "inherit" };
-		const loadedSettings = await readPlanModeSettings();
+		restoreState(ctx);
+		const loadedSettings = await (dependencies.readSettings?.() ?? readPlanModeSettings());
+		if (generation !== menuGeneration || menuController.signal.aborted) return;
 		if (loadedSettings.kind === "loaded") settings = loadedSettings.settings;
 		else if (loadedSettings.kind === "invalid") {
 			ctx.ui.notify(`pi-plan-mode settings ignored: ${loadedSettings.reason}`, "warning");
 		}
 		if (loadedSettings.notice) ctx.ui.notify(loadedSettings.notice, "warning");
-		restoreState(ctx);
 		if (pi.getFlag("plan") === true) {
 			state = { ...state, enabled: true, activeImplementation: undefined };
 		}
@@ -322,7 +312,12 @@ export default function planMode(pi: ExtensionAPI) {
 				),
 			};
 		}
-		const messages = messagesWithoutPlanContext
+		const inactiveMessages = state.activeImplementation
+			? messagesWithoutPlanContext
+			: messagesWithoutPlanContext.filter(
+					(message: unknown) => !messageContainsPlanModeImplementationHandoff(message),
+				);
+		const messages = inactiveMessages
 			.filter((message: unknown) => !messageContainsInactivePlanModeArtifact(message))
 			.map(stripProposedPlanBlocksFromMessage)
 			.map(stripPlanModeCompletionCallsFromMessage)
@@ -394,6 +389,7 @@ export default function planMode(pi: ExtensionAPI) {
 	});
 
 	function enterPlanMode(ctx: ExtensionContext) {
+		workflowGeneration += 1;
 		if (!state.enabled) previousTools = withoutRequiredPlanModeTools(safeGetActiveTools());
 		state = {
 			...state,
@@ -417,6 +413,7 @@ export default function planMode(pi: ExtensionAPI) {
 	}
 
 	function exitPlanMode(ctx: ExtensionContext) {
+		workflowGeneration += 1;
 		const wasEnabled = state.enabled;
 		readyPresentationIntent = undefined;
 		state = {
@@ -538,6 +535,7 @@ export default function planMode(pi: ExtensionAPI) {
 			return;
 		}
 
+		workflowGeneration += 1;
 		const wasEnabled = state.enabled;
 		readyPresentationIntent = undefined;
 		state = {
@@ -579,11 +577,11 @@ export default function planMode(pi: ExtensionAPI) {
 			ctx.ui.notify(planStatusText(), "info");
 			return;
 		}
-		const generation = menuGeneration;
+		const lifecycle = captureMenuLifecycle();
 		await showActiveImplementationMenu(ctx, {
 			statusText: planStatusText(),
-			signal: menuController.signal,
-			isCurrent: () => generation === menuGeneration && !menuController.signal.aborted,
+			signal: lifecycle.signal,
+			isCurrent: lifecycle.isCurrent,
 			show: () => showStoredPlan(ctx),
 			startNew: () => {
 				enterPlanMode(ctx);
@@ -601,7 +599,7 @@ export default function planMode(pi: ExtensionAPI) {
 			ctx.ui.notify(planStatusText(), "info");
 			return;
 		}
-		const generation = menuGeneration;
+		const lifecycle = captureMenuLifecycle();
 		type Action = "show" | "finalize" | "implement" | "tools" | "stay" | "exit";
 		const menu = defineMenu<undefined, "main", Action, ExtensionContext>({
 			start: "main",
@@ -657,13 +655,12 @@ export default function planMode(pi: ExtensionAPI) {
 		});
 		await runMenu(ctx, menu, {
 			getState: () => undefined,
-			signal: menuController.signal,
-			isCurrent: () => generation === menuGeneration && !menuController.signal.aborted,
+			...lifecycle,
 		});
 	}
 
 	async function showPlanReadyMenu(ctx: ExtensionContext) {
-		const generation = menuGeneration;
+		const lifecycle = captureMenuLifecycle();
 		type Action = "implement" | "stay" | "exit";
 		const menu = defineMenu<undefined, "ready", Action, ExtensionContext>({
 			start: "ready",
@@ -694,8 +691,7 @@ export default function planMode(pi: ExtensionAPI) {
 		});
 		await runMenu(ctx, menu, {
 			getState: () => undefined,
-			signal: menuController.signal,
-			isCurrent: () => generation === menuGeneration && !menuController.signal.aborted,
+			...lifecycle,
 		});
 	}
 
@@ -704,7 +700,7 @@ export default function planMode(pi: ExtensionAPI) {
 			ctx.ui.notify(formatToolSummary(), "info");
 			return;
 		}
-		const generation = menuGeneration;
+		const lifecycle = captureMenuLifecycle();
 		const tools = selectableTools();
 		const toolById = new Map(tools.map((tool, index) => [`${index}:${tool.name}`, tool]));
 		const menu = defineMenu<undefined, "tools", "toggle", ExtensionContext>({
@@ -756,14 +752,25 @@ export default function planMode(pi: ExtensionAPI) {
 		});
 		await runMenu(ctx, menu, {
 			getState: () => undefined,
-			signal: menuController.signal,
-			isCurrent: () => generation === menuGeneration && !menuController.signal.aborted,
+			...lifecycle,
 		});
+		if (!lifecycle.isCurrent()) return;
 		applyPlanModeTools();
-		if (generation === menuGeneration) {
-			persistState();
-			updateUi(ctx);
-		}
+		persistState();
+		updateUi(ctx);
+	}
+
+	function captureMenuLifecycle() {
+		const sessionGeneration = menuGeneration;
+		const planWorkflowGeneration = workflowGeneration;
+		const controller = menuController;
+		return {
+			signal: controller.signal,
+			isCurrent: () =>
+				sessionGeneration === menuGeneration &&
+				planWorkflowGeneration === workflowGeneration &&
+				!controller.signal.aborted,
+		};
 	}
 
 	function activatePlanModeTools() {

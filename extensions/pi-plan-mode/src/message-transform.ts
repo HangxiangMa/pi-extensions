@@ -81,16 +81,20 @@ export function injectActiveImplementationContext(
 	messages: unknown[],
 	activeImplementation: ActiveImplementationPlan,
 ) {
-	const messagesWithoutStaleContext = messages.filter(
-		(message) => !messageContainsPlanModeImplementationContextArtifact(message),
-	);
-	if (
-		messagesWithoutStaleContext.some((message) =>
-			messageContainsExactPlanModeImplementationHandoff(message, activeImplementation.plan),
-		)
-	) {
-		return messagesWithoutStaleContext;
-	}
+	let foundCurrentHandoff = false;
+	const messagesWithoutStaleContext = messages.filter((message) => {
+		if (messageContainsPlanModeImplementationContextArtifact(message)) return false;
+		if (!messageContainsPlanModeImplementationHandoff(message)) return true;
+		if (
+			!foundCurrentHandoff &&
+			messageContainsExactPlanModeImplementationHandoff(message, activeImplementation.plan)
+		) {
+			foundCurrentHandoff = true;
+			return true;
+		}
+		return false;
+	});
+	if (foundCurrentHandoff) return messagesWithoutStaleContext;
 
 	let insertionIndex = 0;
 	while (isSummaryMessage(messagesWithoutStaleContext[insertionIndex])) insertionIndex += 1;
