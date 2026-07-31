@@ -67,10 +67,32 @@ export function goalRunEventChannel(runId: string) {
 	return `pi-goal:v1:event:${runId}`;
 }
 
+function isPayloadRecord(data: unknown): data is object {
+	if (!data || typeof data !== "object") return false;
+	try {
+		return !Array.isArray(data);
+	} catch {
+		return false;
+	}
+}
+
+function readPayloadProperty(
+	data: object,
+	key: "runId" | "objective" | "tokenBudget" | "reason",
+): { ok: true; value: unknown } | { ok: false } {
+	try {
+		return { ok: true, value: Reflect.get(data, key) };
+	} catch {
+		return { ok: false };
+	}
+}
+
 function parseRunId(data: unknown): string | undefined {
-	if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
-	const runId = Reflect.get(data, "runId");
-	return typeof runId === "string" && RUN_ID_PATTERN.test(runId) ? runId : undefined;
+	if (!isPayloadRecord(data)) return undefined;
+	const runId = readPayloadProperty(data, "runId");
+	return runId.ok && typeof runId.value === "string" && RUN_ID_PATTERN.test(runId.value)
+		? runId.value
+		: undefined;
 }
 
 function currentActiveGoal(runtime: GoalRuntime) {
@@ -78,35 +100,39 @@ function currentActiveGoal(runtime: GoalRuntime) {
 }
 
 function parseStartPayload(data: unknown): string | Omit<GoalRunStartPayload, "runId"> {
-	if (!data || typeof data !== "object" || Array.isArray(data)) {
-		return "start payload must be an object";
+	if (!isPayloadRecord(data)) return "start payload must be an object";
+	const objectiveValue = readPayloadProperty(data, "objective");
+	if (!objectiveValue.ok || typeof objectiveValue.value !== "string") {
+		return "objective must be a string";
 	}
-	const objectiveValue = Reflect.get(data, "objective");
-	if (typeof objectiveValue !== "string") return "objective must be a string";
-	const objective = objectiveValue.trim();
+	const objective = objectiveValue.value.trim();
 	const objectiveError = validateObjective(objective);
 	if (objectiveError) return objectiveError;
-	const tokenBudgetValue = Reflect.get(data, "tokenBudget");
+	const tokenBudgetValue = readPayloadProperty(data, "tokenBudget");
 	if (
-		tokenBudgetValue !== undefined &&
-		(typeof tokenBudgetValue !== "number" ||
-			!Number.isFinite(tokenBudgetValue) ||
-			!Number.isSafeInteger(tokenBudgetValue) ||
-			tokenBudgetValue <= 0)
+		!tokenBudgetValue.ok ||
+		(tokenBudgetValue.value !== undefined &&
+			(typeof tokenBudgetValue.value !== "number" ||
+				!Number.isFinite(tokenBudgetValue.value) ||
+				!Number.isSafeInteger(tokenBudgetValue.value) ||
+				tokenBudgetValue.value <= 0))
 	) {
 		return "tokenBudget must be a positive integer";
 	}
-	return { objective, tokenBudget: tokenBudgetValue as number | undefined };
+	return { objective, tokenBudget: tokenBudgetValue.value as number | undefined };
 }
 
 function parseCancelReason(data: unknown): string | undefined | { error: string } {
-	if (!data || typeof data !== "object" || Array.isArray(data)) {
-		return { error: "cancel payload must be an object" };
+	if (!isPayloadRecord(data)) return { error: "cancel payload must be an object" };
+	const reasonValue = readPayloadProperty(data, "reason");
+	if (
+		!reasonValue.ok ||
+		(reasonValue.value !== undefined && typeof reasonValue.value !== "string")
+	) {
+		return { error: "reason must be a string" };
 	}
-	const reasonValue = Reflect.get(data, "reason");
-	if (reasonValue === undefined) return undefined;
-	if (typeof reasonValue !== "string") return { error: "reason must be a string" };
-	const reason = reasonValue.trim();
+	if (reasonValue.value === undefined) return undefined;
+	const reason = reasonValue.value.trim();
 	if (reason.length > MAX_CANCEL_REASON_LENGTH) {
 		return { error: `reason must be at most ${MAX_CANCEL_REASON_LENGTH} characters` };
 	}
@@ -128,9 +154,7 @@ export class GoalRunController {
 	}
 
 	register(pi: ExtensionAPI) {
-		pi.events.on(GOAL_RUN_START_CHANNEL, (data) => {
-			void this.handleStart(data);
-		});
+		pi.events.on(GOAL_RUN_START_CHANNEL, (data) => this.handleStart(data));
 		pi.events.on(GOAL_RUN_CANCEL_CHANNEL, (data) => {
 			this.handleCancel(data);
 		});
@@ -169,6 +193,19 @@ export class GoalRunController {
 		const parsed = parseStartPayload(data);
 		if (typeof parsed === "string") {
 			this.emitError(runId, "start", "INVALID_REQUEST", parsed);
+			return;
+		}
+		if (this.session !== session || this.generation !== session.generation) {
+			this.emitError(
+				runId,
+				"start",
+				"SUPERSEDED",
+				"The pi-goal session changed while validating the request.",
+			);
+			return;
+		}
+		if (this.usedRunIds.has(runId)) {
+			this.emitError(runId, "start", "RUN_ID_IN_USE", "runId was already used in this session.");
 			return;
 		}
 		if (this.runtime.activeGoal || (this.run && !this.run.closed)) {
@@ -267,9 +304,26 @@ export class GoalRunController {
 
 	private handleGoalState(snapshot: GoalStateSnapshot) {
 		const run = this.run;
-		if (!run || run.closed || !run.goalId || run.goalId !== snapshot.goalId) return;
+		if (!run || run.closed || !run.goalId) return;
+		if (run.goalId !== snapshot.goalId) {
+			if (currentActiveGoal(this.runtime)?.id !== snapshot.goalId) return;
+			this.publishStateEvent(run, {
+				goalId: run.goalId,
+				status: "cleared",
+				reason: "managed Goal superseded by another Goal",
+			});
+			return;
+		}
 		if (snapshot.status === "queued" || run.lastStatus === snapshot.status) return;
+		this.publishStateEvent(run, snapshot);
+	}
+
+	private publishStateEvent(
+		run: ManagedRun,
+		snapshot: Pick<GoalStateSnapshot, "goalId" | "status" | "summary" | "reason">,
+	) {
 		const status = snapshot.status;
+		if (status === "queued") return;
 		run.lastStatus = status;
 		const event: GoalRunEvent = {
 			type: "state",
@@ -279,11 +333,21 @@ export class GoalRunController {
 			...(snapshot.summary ? { summary: snapshot.summary } : {}),
 			...(snapshot.reason ? { reason: snapshot.reason } : {}),
 		};
-		if (isTerminalGoalStatus(status)) {
-			run.closed = true;
-			this.run = undefined;
+		if (!isTerminalGoalStatus(status)) {
+			this.runtime.pi.events.emit(goalRunEventChannel(run.runId), event);
+			return;
 		}
-		this.runtime.pi.events.emit(goalRunEventChannel(run.runId), event);
+
+		run.closed = true;
+		this.run = undefined;
+		const generation = run.generation;
+		// Active stays synchronous so a listener can cancel before kickoff. Terminal
+		// publication waits until the transition finishes, preventing listener work
+		// from being overwritten by the old transition's remaining UI or cleanup.
+		queueMicrotask(() => {
+			if (this.generation !== generation) return;
+			this.runtime.pi.events.emit(goalRunEventChannel(run.runId), event);
+		});
 	}
 
 	private emitError(
