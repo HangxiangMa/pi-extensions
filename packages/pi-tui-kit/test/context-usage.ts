@@ -2,7 +2,9 @@ import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/
 import {
 	defineMenu,
 	type InputScreen,
+	type MenuCloseReason,
 	type ReviewScreen,
+	type RunMenuResult,
 	type RunTaskResult,
 	runMenu,
 	runTask,
@@ -82,6 +84,33 @@ declare const lifecycleContext: ExtensionContext;
 
 void runMenu(commandContext, commandMenu, { getState: () => undefined });
 void runMenu(lifecycleContext, lifecycleMenu, { getState: () => undefined });
+
+function describeMenuResult(result: RunMenuResult): string {
+	switch (result.kind) {
+		case "closed": {
+			const reason: MenuCloseReason = result.reason;
+			return reason;
+		}
+		case "stale":
+			return "stale";
+		case "unsupported":
+			return result.mode;
+		case "error":
+			return String(result.error);
+		default: {
+			const unreachable: never = result;
+			return unreachable;
+		}
+	}
+}
+void describeMenuResult;
+
+// @ts-expect-error Closed menu results require a termination reason.
+const invalidClosedResult: RunMenuResult = { kind: "closed" };
+// @ts-expect-error Menu close reasons are interaction-level Back or Close only.
+const invalidCloseReason: MenuCloseReason = "cancelled";
+void invalidClosedResult;
+void invalidCloseReason;
 
 const commandTask: Promise<RunTaskResult<number>> = runTask(commandContext, {
 	label: "Command task",

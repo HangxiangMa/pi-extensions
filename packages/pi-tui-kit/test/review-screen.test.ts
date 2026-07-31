@@ -127,6 +127,7 @@ test("TUI review invokes its raw confirmation action", async () => {
 	});
 	assert.deepEqual(await runMenu(context.ctx, menu, { getState: () => undefined }), {
 		kind: "closed",
+		reason: "close",
 	});
 	assert.deepEqual(invoked, ["raw-apply"]);
 });
@@ -171,6 +172,7 @@ test("RPC review paginates bounded content and preserves colliding confirmation 
 
 	assert.deepEqual(await runMenu(context.ctx, menu, { getState: () => undefined }), {
 		kind: "closed",
+		reason: "close",
 	});
 	assert.equal(call, 2);
 	assert.match(titles[0] ?? "", /row 1/);

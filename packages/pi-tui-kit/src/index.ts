@@ -12,6 +12,7 @@ export type {
 	MenuActionHandler,
 	MenuActionResult,
 	MenuChoiceItem,
+	MenuCloseReason,
 	MenuContext,
 	MenuDefinition,
 	MenuMultiSelectItem,
@@ -27,4 +28,4 @@ export type {
 	SettingsScreen,
 } from "./types.js";
 
-export const PI_EXTENSION_MENU_API_VERSION = 3;
+export const PI_EXTENSION_MENU_API_VERSION = 4;

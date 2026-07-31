@@ -38,8 +38,9 @@ function testMenu(): MenuDefinition<State, ScreenId, ActionId> {
 	});
 }
 
-test("agent-level input and review screens use declarative API version 3", () => {
-	assert.equal(PI_EXTENSION_MENU_API_VERSION, 3);
+test("mandatory menu termination reasons use declarative API version 4", () => {
+	assert.equal(PI_EXTENSION_MENU_API_VERSION, 4);
+	assert.equal(resolveMenuScreen(testMenu(), "main", { count: 0 }).kind, "actions");
 });
 
 test("menu definitions resolve dynamic screens and reject invalid references", () => {
@@ -327,15 +328,30 @@ test("review screens validate viewport and confirmation identity", () => {
 	);
 });
 
-test("navigator owns nested Back and Close transitions", () => {
+test("navigator records root Back only after nested Back returns to the parent", () => {
 	const navigator = createMenuNavigator<ScreenId>("main");
 	assert.equal(navigator.current, "main");
+	assert.equal(navigator.closeReason, undefined);
 	assert.equal(navigator.apply({ kind: "to", screen: "status" }), "active");
 	assert.equal(navigator.current, "status");
 	assert.equal(navigator.apply({ kind: "back" }), "active");
 	assert.equal(navigator.current, "main");
+	assert.equal(navigator.closeReason, undefined);
 	assert.equal(navigator.apply({ kind: "back" }), "closed");
 	assert.equal(navigator.closed, true);
+	assert.equal(navigator.closeReason, "back");
+	assert.equal(navigator.apply({ kind: "close" }), "closed");
+	assert.equal(navigator.closeReason, "back");
+});
+
+test("navigator records explicit Close and never replaces the terminal reason", () => {
+	const navigator = createMenuNavigator<ScreenId>("main");
+	assert.equal(navigator.apply({ kind: "to", screen: "status" }), "active");
+	assert.equal(navigator.apply({ kind: "close" }), "closed");
+	assert.equal(navigator.closed, true);
+	assert.equal(navigator.closeReason, "close");
+	assert.equal(navigator.apply({ kind: "back" }), "closed");
+	assert.equal(navigator.closeReason, "close");
 });
 
 test("navigator restores stable selections and falls back when an item disappears", () => {

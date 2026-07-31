@@ -2,6 +2,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
 	defineMenu,
 	type InputScreen,
+	type MenuCloseReason,
 	type MultiSelectScreen,
 	type ReviewScreen,
 	runMenu,
@@ -112,7 +113,7 @@ const menu = defineMenu<State, Screen, Action>({
 });
 
 export async function showMenu(ctx: ExtensionCommandContext, generation: number) {
-	return runMenu(ctx, menu, {
+	const result = await runMenu(ctx, menu, {
 		getState: ({ signal }) => loadState(signal),
 		signal: currentSessionSignal(),
 		isCurrent: () => generation === currentGeneration(),
@@ -121,4 +122,9 @@ export async function showMenu(ctx: ExtensionCommandContext, generation: number)
 			ctx.ui.notify(`The menu is unavailable in ${mode} mode.`, "warning");
 		},
 	});
+	if (result.kind === "closed") {
+		const reason: MenuCloseReason = result.reason;
+		if (reason === "back") ctx.ui.notify("Returned from the root menu", "info");
+	}
+	return result;
 }

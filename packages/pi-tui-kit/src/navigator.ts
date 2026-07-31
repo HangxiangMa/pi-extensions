@@ -1,8 +1,9 @@
-import type { MenuTransition } from "./types.js";
+import type { MenuCloseReason, MenuTransition } from "./types.js";
 
 export interface MenuNavigator<ScreenId extends string> {
 	readonly current: ScreenId;
 	readonly closed: boolean;
+	readonly closeReason: MenuCloseReason | undefined;
 	apply(transition: MenuTransition<ScreenId>): "active" | "closed";
 	rememberSelection(screen: ScreenId, itemId: string): void;
 	selectionFor(screen: ScreenId, availableItemIds: readonly string[]): string | undefined;
@@ -14,6 +15,7 @@ export function createMenuNavigator<ScreenId extends string>(
 	const stack = [start];
 	const selections = new Map<ScreenId, string>();
 	let closed = false;
+	let closeReason: MenuCloseReason | undefined;
 	return {
 		get current() {
 			const current = stack.at(-1);
@@ -22,6 +24,9 @@ export function createMenuNavigator<ScreenId extends string>(
 		},
 		get closed() {
 			return closed;
+		},
+		get closeReason() {
+			return closeReason;
 		},
 		apply(transition) {
 			if (closed) return "closed";
@@ -33,10 +38,14 @@ export function createMenuNavigator<ScreenId extends string>(
 					break;
 				case "back":
 					if (stack.length > 1) stack.pop();
-					else closed = true;
+					else {
+						closed = true;
+						closeReason = "back";
+					}
 					break;
 				case "close":
 					closed = true;
+					closeReason = "close";
 					break;
 			}
 			return closed ? "closed" : "active";

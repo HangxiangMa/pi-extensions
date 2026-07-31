@@ -25,7 +25,7 @@ TypeScript loader for dependencies.
 
 ```ts
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import { defineMenu, type MenuCloseReason, runMenu } from "@narumitw/pi-tui-kit";
 
 type Screen = "main" | "settings";
 type Action = "refresh" | "setMode";
@@ -80,7 +80,7 @@ const menu = defineMenu<State, Screen, Action>({
 });
 
 export async function showMenu(ctx: ExtensionCommandContext, generation: number) {
-  return runMenu(ctx, menu, {
+  const result = await runMenu(ctx, menu, {
     getState: ({ signal }) => loadState(signal),
     signal: currentSessionSignal(),
     isCurrent: () => generation === currentGeneration(),
@@ -89,11 +89,21 @@ export async function showMenu(ctx: ExtensionCommandContext, generation: number)
       ctx.ui.notify(`The menu is unavailable in ${mode} mode.`, "warning");
     },
   });
+  if (result.kind === "closed") {
+    const reason: MenuCloseReason = result.reason;
+    if (reason === "back") ctx.ui.notify("Returned from the root menu", "info");
+  }
+  return result;
 }
 ```
 
 The state loader runs again whenever a screen is entered or refreshed, so screen factories can
-remain pure projections of current extension state.
+remain pure projections of current extension state. An ordinary terminal result is
+`{ kind: "closed", reason: "back" | "close" }`: root Back reports `back`; Ctrl+C, a Close hint,
+a close row, or an accepted action that returns Close reports `close`. Nested Back remains inside the
+menu. RPC preserves each adapter's existing transition: a generic cancelled selector applies Back,
+while input and review cancellation follow their declared hint. Owner replacement remains `stale`
+and takes precedence over any racing Close event.
 
 For abort-aware work outside a menu, use `runTask()`. TUI mode shows Pi's cancellable bordered
 loader; RPC, print, and JSON execute the same task directly. User cancellation, owner replacement,
@@ -286,7 +296,8 @@ bulk-set validation in the consuming extension and revalidate it again before mu
 
 In TUI mode the runtime uses `ctx.ui.custom()`. In RPC mode it adapts standard screens to
 `ctx.ui.select()` dialogs. Print and JSON modes never attempt custom UI and instead call the
-unsupported-mode hook. `runMenu()` resolves to `closed`, `unsupported`, `stale`, or `error`.
+unsupported-mode hook. `runMenu()` resolves to `closed`, `unsupported`, `stale`, or `error`; only the
+`closed` result carries the mandatory interaction-level `reason`.
 
 Lifecycle handlers can opt into the shared `ExtensionContext` surface without a cast. Existing
 three-generic command menus keep `ExtensionCommandContext`, including command-only methods.
@@ -346,13 +357,14 @@ Keep specialized UI local rather than adding package hooks that expose Pi TUI in
 ## 📚 Public API
 
 - `defineMenu()` — validates and returns a typed menu definition.
-- `runMenu()` — runs the definition in the current Pi mode.
+- `runMenu()` — runs the definition in the current Pi mode and preserves root Back versus Close.
 - `runTask()` — runs typed abort-aware work with a cancellable TUI loader and direct non-TUI fallback.
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.
 - `createMenuNavigator()` — lower-level stack and selection state helper.
-- exported screen, item, action, transition, runtime option, and result types.
-- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`3`). Version 3 adds `input`
-  and `review` screen discriminants; existing version-2 menu definitions remain source-compatible.
+- exported screen, item, action, transition, runtime option, `MenuCloseReason`, and result types.
+- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`4`). Version 4 requires
+  `RunMenuResult` to report a reason when closed; version-3 screen definitions remain valid on the
+  version-4 runtime.
 
 ## 🗂️ Package layout
 
