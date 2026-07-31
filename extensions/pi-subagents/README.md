@@ -102,8 +102,9 @@ names and descriptions are not read into metadata for untrusted projects. If a p
 shares a name with a user or built-in definition, the user version is the default and the project
 version is used only for `"project"`/`"both"`. A user override of a built-in also shows the
 built-in fallback available with `agentScope: "project"`; `"both"` keeps the user definition. The
-catalog is bounded and reports its omission count, and refreshed metadata replaces the previous
-session's catalog rather than accumulating stale entries.
+catalog is bounded and reports its omission count; metadata discovery also caps files and bytes read
+per scope. Refreshed metadata replaces the previous session's catalog rather than accumulating stale
+entries.
 
 Count-selection guidance:
 

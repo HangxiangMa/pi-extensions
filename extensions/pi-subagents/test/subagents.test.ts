@@ -1132,10 +1132,28 @@ test("formatAgentCatalog advertises scope variants deterministically and within 
 		assert.match(first.text, /both.*selects the user definition/);
 		assert.ok(first.text.length <= 5_000);
 
+		const incomplete = formatAgentCatalog({
+			user: { ...user, omittedAgentDefinitions: 1 },
+			project,
+		});
+		assert.doesNotMatch(incomplete.text, /source: built-in/);
+		const failedDiscovery = formatAgentCatalog({
+			user: { ...user, metadataDiscoveryIncomplete: true },
+			project,
+		});
+		assert.match(failedDiscovery.text, /metadata discovery was incomplete/);
+
+		writeFileSync(
+			path.join(projectAgentsDir, "huge.md"),
+			`---\nname: huge\ndescription: Huge\n---\n${"x".repeat(70 * 1024)}`,
+		);
+		const boundedProject = discoverAgentCatalog(cwd, true).project;
 		const bounded = formatAgentCatalog(
-			{ user, project },
+			{ user, project: boundedProject },
 			{ maxItems: 2, maxDescriptionLength: 8, maxCharacters: 2_000 },
 		);
+		assert.match(bounded.text, /additional agent definition.*omitted/);
+		assert.doesNotMatch(bounded.text, /x{100}/);
 		assert.ok(bounded.omitted > 0);
 		assert.match(
 			bounded.text,
@@ -1158,11 +1176,19 @@ test("session start refreshes both catalogs and gates project metadata on trust"
 			path.join(agentDir, "agents", "api-reviewer.md"),
 			"---\nname: api-reviewer\ndescription: Reviews API compatibility\n---\nReview APIs.",
 		);
+		writeFileSync(
+			path.join(agentDir, "agents", "scout.md"),
+			"---\nname: scout\ndescription: User scout override\n---\nUser scout.",
+		);
 		for (const cwd of [trustedCwd, untrustedCwd]) {
 			mkdirSync(path.join(cwd, ".pi", "agents"), { recursive: true });
 			writeFileSync(
 				path.join(cwd, ".pi", "agents", "local.md"),
 				"---\nname: local\ndescription: Project-only description\n---\nProject work.",
+			);
+			writeFileSync(
+				path.join(cwd, ".pi", "agents", "scout.md"),
+				"---\nname: scout\ndescription: Project scout override\n---\nProject scout.",
 			);
 		}
 		const mock = createMockPi();
@@ -1183,13 +1209,21 @@ test("session start refreshes both catalogs and gates project metadata on trust"
 		};
 		const untrusted = await start(untrustedCwd, false);
 		assert.match(untrusted.blocking, /api-reviewer/);
-		assert.doesNotMatch(untrusted.blocking, /Project-only description|local \[source: project/);
-		assert.doesNotMatch(untrusted.spawn, /Project-only description|local \[source: project/);
+		assert.match(untrusted.blocking, /User scout override/);
+		assert.doesNotMatch(
+			untrusted.blocking,
+			/Project-only description|Project scout override|local \[source: project|scout \[source: project/,
+		);
+		assert.doesNotMatch(
+			untrusted.spawn,
+			/Project-only description|Project scout override|scout \[source: project/,
+		);
 		const trusted = await start(trustedCwd, true);
 		assert.match(trusted.blocking, /local \[source: project/);
 		assert.match(trusted.blocking, /agentScope: "project" or "both"/);
 		assert.match(trusted.spawn, /local \[source: project/);
 		assert.match(trusted.spawn, /Project-only description/);
+		assert.match(trusted.blocking, /Project scout override/);
 		assert.doesNotMatch(trusted.blocking, /untrusted/);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
