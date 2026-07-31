@@ -1,5 +1,11 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, type MultiSelectScreen, runMenu } from "../src/index.js";
+import {
+	defineMenu,
+	type InputScreen,
+	type MultiSelectScreen,
+	type ReviewScreen,
+	runMenu,
+} from "../src/index.js";
 
 type Screen = "main" | "profile" | "settings";
 type Action = "refresh" | "setMode" | "setProfile";
@@ -31,6 +37,23 @@ const searchableToolsScreen: MultiSelectScreen<Screen, Action> = {
 	action: "refresh",
 };
 void searchableToolsScreen;
+
+const boundedInputScreen: InputScreen<Action> = {
+	kind: "input",
+	title: "Refresh label",
+	placeholder: "Label",
+	action: "refresh",
+};
+void boundedInputScreen;
+
+const reviewChangesScreen: ReviewScreen<Action> = {
+	kind: "review",
+	title: "Review changes",
+	content: "+1 enabled=true",
+	format: { kind: "diff", filePath: "settings.json" },
+	confirm: { id: "apply", label: "Apply", action: "refresh" },
+};
+void reviewChangesScreen;
 
 const menu = defineMenu<State, Screen, Action>({
 	start: "main",

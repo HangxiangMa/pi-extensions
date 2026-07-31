@@ -19,10 +19,13 @@ import type {
 	MenuScreenComponentOptions,
 	MultiSelectOptions,
 } from "./contracts.js";
+import { createInputComponent, type InputOptions } from "./input.js";
 import { createMultiSelectComponent } from "./multi-select.js";
 import { handleSearchInput, menuHint, renderFrame, safeMenuText } from "./rendering.js";
+import { createReviewComponent, type ReviewOptions } from "./review.js";
 
 export type {
+	MenuInputSubmit,
 	MenuMultiSelectChange,
 	MenuScreenComponent,
 	MenuScreenComponentOptions,
@@ -30,6 +33,7 @@ export type {
 	MenuSettingChange,
 } from "./contracts.js";
 export { safeMenuText } from "./rendering.js";
+export { reviewDialogPages } from "./review.js";
 
 export function createMenuScreenComponent<ScreenId extends string, ActionId extends string>(
 	options: MenuScreenComponentOptions<ScreenId, ActionId>,
@@ -47,6 +51,12 @@ export function createMenuScreenComponent<ScreenId extends string, ActionId exte
 			break;
 		case "settings":
 			component = createSettingsComponent(options as SettingsOptions<ScreenId, ActionId>);
+			break;
+		case "input":
+			component = createInputComponent(options as InputOptions<ScreenId, ActionId>);
+			break;
+		case "review":
+			component = createReviewComponent(options as ReviewOptions<ScreenId, ActionId>);
 			break;
 		case "multiSelect":
 			component = createMultiSelectComponent(options as MultiSelectOptions<ScreenId, ActionId>);

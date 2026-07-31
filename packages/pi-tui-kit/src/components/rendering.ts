@@ -39,7 +39,7 @@ export function menuHint(
 	const cancel = bindingText(keybindings, "tui.select.cancel", "ctrl+c");
 	return [
 		...(up || down ? [`${[up, down].filter(Boolean).join("/")} navigate`] : []),
-		...(confirm ? [`${confirm} ${confirmAction}`] : []),
+		...(confirm && confirmAction ? [`${confirm} ${confirmAction}`] : []),
 		...(cancel ? [`${cancel} ${destination}`] : []),
 		...(destination === "back" ? ["ctrl+c close"] : []),
 	].join(" • ");

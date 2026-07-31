@@ -1,5 +1,11 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { ActionMenuItem, MenuContext, MenuDefinition, MenuScreen } from "./types.js";
+import {
+	type ActionMenuItem,
+	MAX_REVIEW_VIEWPORT_SIZE,
+	type MenuContext,
+	type MenuDefinition,
+	type MenuScreen,
+} from "./types.js";
 
 export function defineMenu<
 	State,
@@ -73,6 +79,32 @@ function validateScreen<
 			if (item.values && !item.values.includes(item.currentValue)) {
 				throw new Error(`Menu setting ${item.id} values must include its current value`);
 			}
+		}
+		return;
+	}
+	if (screen.kind === "input") {
+		assertAction(definition, `input screen ${screen.title}`, screen.action);
+		return;
+	}
+	if (screen.kind === "review") {
+		if (
+			screen.viewportSize !== undefined &&
+			(!Number.isInteger(screen.viewportSize) ||
+				screen.viewportSize <= 0 ||
+				screen.viewportSize > MAX_REVIEW_VIEWPORT_SIZE)
+		) {
+			throw new Error(
+				`Menu review viewport size must be a positive integer no greater than ${MAX_REVIEW_VIEWPORT_SIZE}`,
+			);
+		}
+		if (screen.confirm) {
+			if (!screen.confirm.id.trim()) {
+				throw new Error("Menu review confirmation id must not be empty");
+			}
+			if (!screen.confirm.label.trim()) {
+				throw new Error("Menu review confirmation label must not be empty");
+			}
+			assertAction(definition, `review screen ${screen.title}`, screen.confirm.action);
 		}
 		return;
 	}

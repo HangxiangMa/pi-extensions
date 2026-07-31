@@ -7,7 +7,8 @@ Reusable navigation helpers and typed, declarative interaction flows for indepen
 [Pi](https://pi.dev) extensions, built on
 [`@earendil-works/pi-tui`](https://www.npmjs.com/package/@earendil-works/pi-tui). The initial
 high-level API lets extensions describe menu screens and domain actions while this package owns
-standard rendering, navigation, mode adaptation, cancellation, and lifecycle behavior.
+standard rendering, navigation, mode adaptation, cancellation, and lifecycle behavior. It also
+provides a standalone task runner for abort-aware work that needs Pi's cancellable TUI loader.
 
 ## 📦 Install
 
@@ -94,9 +95,30 @@ export async function showMenu(ctx: ExtensionCommandContext, generation: number)
 The state loader runs again whenever a screen is entered or refreshed, so screen factories can
 remain pure projections of current extension state.
 
+For abort-aware work outside a menu, use `runTask()`. TUI mode shows Pi's cancellable bordered
+loader; RPC, print, and JSON execute the same task directly. User cancellation, owner replacement,
+external component disposal, errors, and successful completion remain distinct typed results.
+
+```ts
+import { runTask } from "@narumitw/pi-tui-kit";
+
+const result = await runTask(ctx, {
+  label: "Refreshing domain state…",
+  signal: currentSessionSignal(),
+  isCurrent: () => generation === currentGeneration(),
+  task: ({ signal }) => refreshDomainState(signal),
+  onError: (_ctx, error) => ctx.ui.notify(formatError(error), "error"),
+});
+
+if (result.kind === "completed") ctx.ui.notify("Refreshed", "info");
+```
+
+A task must honor its supplied signal. The runner aborts and drains owned work before returning; it
+does not hide an uncooperative task behind an arbitrary timeout.
+
 ## 🖥️ Standard screens
 
-`defineMenu()` supports five standard screen kinds:
+`defineMenu()` supports seven standard screen kinds:
 
 - **`actions`** — navigation targets, domain actions, close rows, and optional cancellable busy
   labels.
@@ -105,6 +127,10 @@ remain pure projections of current extension state.
   selected details, disabled explanations, and a bounded viewport.
 - **`settings`** — Pi-style searchable, aligned settings rows with immediate value changes,
   serialized saves, and rollback when an action rejects.
+- **`input`** — single-line text entry inside the menu stack with IME focus, serialized submission,
+  rejected-draft retention, and TUI/RPC adaptation.
+- **`review`** — bounded, scrollable exact text, code, or diff content with an optional primary
+  confirmation action and paginated RPC fallback.
 - **`multiSelect`** — optimistic toggles with stable cursor restoration, serialized saves, rollback,
   selected-row descriptions, optional fuzzy search and bulk action rows, and a bounded TUI viewport.
 
@@ -156,6 +182,40 @@ selected value. Changes save immediately, so Back or Close never implies rollbac
 search input forwards focus for IME positioning. The kit owns this adapter because Pi's public
 `SettingsList` does not currently expose restored-cursor, disabled-row, async rollback, and search
 focus behavior together.
+
+Input screens submit through the existing action `value`. Validation, normalization, persistence,
+and product copy remain extension-owned. Rejection keeps the TUI draft available for correction;
+RPC reopens its signal-aware input dialog.
+
+```ts
+const inputScreen = {
+  kind: "input" as const,
+  title: "Maximum image count",
+  lines: ["Current: 20"],
+  placeholder: "Enter a positive integer",
+  action: "setMaximum" as const,
+};
+```
+
+Review screens preserve indentation and hard-wrap by terminal cells rather than prose words. Their
+viewport supports Up, Down, Page Up, Page Down, Home, and End. RPC sends bounded pages instead of one
+unbounded dialog title. Treat `content` as untrusted display input; the kit strips terminal controls
+before formatting it.
+
+```ts
+const reviewScreen = {
+  kind: "review" as const,
+  title: "Review configuration changes",
+  content: unifiedDiff,
+  format: { kind: "diff" as const, filePath: settingsPath },
+  viewportSize: 14,
+  confirm: { id: "apply", label: "Apply", action: "apply" as const },
+};
+```
+
+Review formats are `{ kind: "text" }`, `{ kind: "code", language?, filePath? }`, and
+`{ kind: "diff", filePath? }`. The viewport maximum is 50 rows. A review without `confirm` is
+read-only. Escape follows Back/Close and `Ctrl+C` closes the whole menu.
 
 Action handlers return one of these results:
 
@@ -250,7 +310,9 @@ pi.on("agent_settled", async (_event, ctx) => {
 
 The consumer must own and abort the session signal, check its generation or equivalent identity after
 every await, and never retain or use an `ExtensionContext` after session replacement, reload, or
-shutdown. The kit does not create lifecycle ownership for the extension.
+shutdown. The kit does not create lifecycle ownership for the extension. `input` uses a signal-aware
+RPC dialog; a multi-line `editor` screen is intentionally deferred because Pi's current RPC editor
+contract does not accept an `AbortSignal`.
 
 ## 🧩 Ownership boundary
 
@@ -261,11 +323,13 @@ cross-mode and lifecycle contract shared by multiple extensions.
 
 The library owns:
 
+- standalone task-mode adaptation, cancellation, stale checks, error routing, and draining;
 - width-safe standard rendering and injected keybindings;
 - screen-stack navigation, Back/Close semantics, and per-screen cursor memory;
 - serial settings and multi-select updates, optimistic rollback, and pending-update draining;
 - menu, screen, and busy-action cancellation;
 - stale-continuation checks around asynchronous work;
+- input draft/pending behavior and exact review formatting, scrolling, and RPC pagination;
 - TUI/RPC adaptation and unsupported-mode routing.
 
 The consuming extension still owns:
@@ -274,7 +338,8 @@ The consuming extension still owns:
 - transactional persistence and preservation of unknown settings fields;
 - confirmations and product-specific copy;
 - session generation and shutdown policy supplied through `isCurrent()`;
-- specialized editors, previews, forms, or other custom TUI.
+- multi-line editors, secret inputs, live side-effecting previews, multi-field forms, or other
+  specialized custom TUI.
 
 Keep specialized UI local rather than adding package hooks that expose Pi TUI internals.
 
@@ -282,17 +347,18 @@ Keep specialized UI local rather than adding package hooks that expose Pi TUI in
 
 - `defineMenu()` — validates and returns a typed menu definition.
 - `runMenu()` — runs the definition in the current Pi mode.
+- `runTask()` — runs typed abort-aware work with a cancellable TUI loader and direct non-TUI fallback.
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.
 - `createMenuNavigator()` — lower-level stack and selection state helper.
 - exported screen, item, action, transition, runtime option, and result types.
-- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`2`). Optional multi-select
-  search is additive: version-2 runtimes that do not implement it safely retain the full unfiltered
-  multi-select rather than rejecting an otherwise compatible screen.
+- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`3`). Version 3 adds `input`
+  and `review` screen discriminants; existing version-2 menu definitions remain source-compatible.
 
 ## 🗂️ Package layout
 
 - `src/` — authored TypeScript and the public package entrypoint
-- `src/components/` — internal TUI screen adapters, contracts, and rendering helpers
+- `src/components/` — internal TUI input, review, list, settings, and rendering adapters
+- `src/task.ts` — standalone and menu-shared task lifecycle orchestration
 - `dist/` — generated ESM and declarations included in the npm package
 - `test/` — contract, renderer, navigation, and lifecycle coverage
 
