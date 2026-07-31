@@ -249,6 +249,8 @@ A successful start produces canonical state on `pi-goal:v1:event:${runId}`:
 
 Subsequent state events use `active`, `complete`, `blocked`, `paused`, `usage_limited`, `budget_limited`, or `cleared`. `complete` is the only successful terminal outcome. A matching completion may include `summary`; other terminal outcomes may include `reason`. Events come only from canonical Goal persistence and only for the matching managed run. Manual and restored Goals are not adopted or broadcast, unchanged persistence does not duplicate a status, and each run emits at most one terminal event.
 
+Terminal events are dispatched after the underlying Goal transition settles, so a listener can start the next managed run directly after `complete` without re-entering completion cleanup. Other terminal statuses leave a stopped Goal that must be resolved or cleared first. If a manual edit, replacement, skip, or priority transition rotates the Goal id, the prior managed run ends as `cleared` with a superseded reason; the replacement remains outside that run.
+
 To cancel before or after activation, emit the same `runId`:
 
 ```ts

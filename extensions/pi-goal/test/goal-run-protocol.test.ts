@@ -238,6 +238,76 @@ test("valid run ids receive structured request validation errors", async () => {
 	}
 });
 
+test("payload access failures are contained as invalid requests", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash"] });
+	registerGoal(mock);
+	bindSession(mock);
+	const startEvents = observeRun(mock, "throwing-start");
+	const throwingStart = {
+		runId: "throwing-start",
+		get objective(): string {
+			throw new Error("objective accessor failed");
+		},
+	};
+
+	mock.eventBus.emit(START_CHANNEL, throwingStart);
+	await flush();
+
+	assert.deepEqual(
+		errors(startEvents).map((event) => event.error.code),
+		["INVALID_REQUEST"],
+	);
+	assert.equal(lastPersistedGoal(mock), undefined);
+
+	const revoked = Proxy.revocable({}, {});
+	revoked.revoke();
+	mock.eventBus.emit(START_CHANNEL, revoked.proxy);
+	await flush();
+	assert.equal(lastPersistedGoal(mock), undefined);
+
+	const cancelEvents = observeRun(mock, "throwing-cancel");
+	startRun(mock, "throwing-cancel");
+	await flush();
+	const throwingCancel = {
+		runId: "throwing-cancel",
+		get reason(): string {
+			throw new Error("reason accessor failed");
+		},
+	};
+	mock.eventBus.emit(CANCEL_CHANNEL, throwingCancel);
+	await flush();
+
+	assert.deepEqual(
+		errors(cancelEvents).map((event) => event.error.code),
+		["INVALID_REQUEST"],
+	);
+	assert.equal(lastPersistedGoal(mock)?.status, "active");
+});
+
+test("payload evaluation cannot revive a replaced session", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash"] });
+	registerGoal(mock);
+	const context = bindSession(mock);
+	const events = observeRun(mock, "session-changing-payload");
+	const payload = {
+		runId: "session-changing-payload",
+		get objective() {
+			mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+			return "must not start after shutdown";
+		},
+	};
+
+	mock.eventBus.emit(START_CHANNEL, payload);
+	await flush();
+
+	assert.deepEqual(
+		errors(events).map((event) => event.error.code),
+		["SUPERSEDED"],
+	);
+	assert.equal(lastPersistedGoal(mock), undefined);
+	assert.equal(mock.sentUserMessages.length, 0);
+});
+
 test("start rejects a pre-existing manual goal without replacement confirmation", async () => {
 	const mock = createMockPi({ activeTools: ["read", "bash"] });
 	registerGoal(mock);
@@ -371,6 +441,28 @@ test("cancel rejects malformed reasons without mutating the run", async () => {
 	}
 });
 
+test("manual edits terminate the prior managed run as superseded", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash"] });
+	registerGoal(mock);
+	const context = bindSession(mock);
+	const events = observeRun(mock, "edited-run");
+	startRun(mock, "edited-run", { objective: "managed objective" });
+	await flush();
+	const managedGoalId = states(events)[0]?.goalId;
+	assert.ok(managedGoalId);
+
+	await mock.commands.get("goal")?.handler("edit manually revised objective", context.ctx);
+	await flush();
+
+	assert.deepEqual(
+		states(events).map((event) => event.status),
+		["active", "cleared"],
+	);
+	assert.match(states(events).at(-1)?.reason ?? "", /superseded/i);
+	assert.notEqual(lastPersistedGoal(mock)?.id, managedGoalId);
+	assert.equal(lastPersistedGoal(mock)?.text, "manually revised objective");
+});
+
 test("completion emits one terminal event with summary and suppresses clear duplication", async () => {
 	const mock = createMockPi({ activeTools: ["read", "bash"] });
 	registerGoal(mock);
@@ -401,6 +493,81 @@ test("completion emits one terminal event with summary and suppresses clear dupl
 	assert.deepEqual(
 		errors(events).map((event) => event.error.code),
 		["RUN_ID_IN_USE"],
+	);
+});
+
+test("a completion listener can start the next managed run", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash"] });
+	registerGoal(mock);
+	const context = bindSession(mock);
+	const firstEvents = observeRun(mock, "chained-first");
+	const secondEvents = observeRun(mock, "chained-second");
+	mock.eventBus.on(runEventChannel("chained-first"), (data) => {
+		const event = data as RunEvent;
+		if (event.type === "state" && event.status === "complete") {
+			startRun(mock, "chained-second", { objective: "second managed objective" });
+		}
+	});
+	startRun(mock, "chained-first", { objective: "first managed objective" });
+	await flush();
+	const goalId = states(firstEvents)[0]?.goalId;
+	assert.ok(goalId);
+
+	await requireGoalTool(mock, "goal_complete").execute(
+		"complete-chained-first",
+		{ goal_id: goalId, summary: "First run verified." },
+		new AbortController().signal,
+		() => undefined,
+		context.ctx,
+	);
+	await flush();
+
+	assert.deepEqual(
+		states(firstEvents).map((event) => event.status),
+		["active", "complete"],
+	);
+	assert.deepEqual(
+		states(secondEvents).map((event) => event.status),
+		["active"],
+	);
+	assert.deepEqual(errors(secondEvents), []);
+	assert.equal(lastPersistedGoal(mock)?.text, "second managed objective");
+	assert.equal(lastPersistedGoal(mock)?.status, "active");
+});
+
+test("terminal listeners cannot make stale pause work mutate a replacement", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash"] });
+	registerGoal(mock);
+	const context = bindSession(mock);
+	const firstEvents = observeRun(mock, "pause-first");
+	const secondEvents = observeRun(mock, "pause-second");
+	mock.eventBus.on(runEventChannel("pause-first"), (data) => {
+		const event = data as RunEvent;
+		if (event.type === "state" && event.status === "paused") {
+			void mock.commands.get("goal")?.handler("clear", context.ctx);
+			startRun(mock, "pause-second", { objective: "replacement after pause" });
+		}
+	});
+	startRun(mock, "pause-first", { objective: "cancelled managed objective" });
+	await flush();
+
+	cancelRun(mock, "pause-first", { reason: "advance to replacement" });
+	await flush();
+
+	assert.deepEqual(
+		states(firstEvents).map((event) => event.status),
+		["active", "paused"],
+	);
+	assert.deepEqual(
+		states(secondEvents).map((event) => event.status),
+		["active"],
+	);
+	assert.equal(lastPersistedGoal(mock)?.text, "replacement after pause");
+	assert.equal(
+		context.notifications.some(
+			(notification) => notification.message === "Goal paused: replacement after pause",
+		),
+		false,
 	);
 });
 
@@ -446,6 +613,7 @@ test("blocked and usage-limited transitions preserve terminal reasons", async ()
 		},
 		usageContext.ctx,
 	);
+	await flush();
 	assert.equal(states(usageEvents).at(-1)?.status, "usage_limited");
 	assert.match(states(usageEvents).at(-1)?.reason ?? "", /usage limit/i);
 });
@@ -602,6 +770,25 @@ test("disabling RPC rejects new starts while the accepted run can drain", async 
 		["active", "paused"],
 	);
 	assert.equal(states(acceptedEvents).at(-1)?.reason, "drained after disable");
+});
+
+test("shutdown cancels a queued terminal publication from the old session", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash"] });
+	registerGoal(mock);
+	const context = bindSession(mock);
+	const events = observeRun(mock, "shutdown-terminal");
+	startRun(mock, "shutdown-terminal");
+	await flush();
+
+	cancelRun(mock, "shutdown-terminal");
+	mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+	await flush();
+
+	assert.deepEqual(
+		states(events).map((event) => event.status),
+		["active"],
+	);
+	assert.equal(lastPersistedGoal(mock)?.status, "paused");
 });
 
 test("shutdown invalidates a start continuation still awaiting kickoff delivery", async () => {
