@@ -34,6 +34,8 @@ export interface StampMenuOwner {
 }
 
 export function createStampMenu(runtime: StampSettingsRuntime) {
+	let localeEntry = false;
+	let timeZoneEntry = false;
 	return defineMenu<StampSettingsState, StampScreen, StampAction, ExtensionCommandContext>({
 		start: "main",
 		screens: {
@@ -125,58 +127,78 @@ export function createStampMenu(runtime: StampSettingsRuntime) {
 					},
 				],
 			}),
-			locale: ({ state }) => ({
-				kind: "actions",
-				title: "Stamp Locale",
-				lines: [`Current: ${localeLabel(state.settings.locale)}`],
-				items: [
-					{
-						id: "invariant",
-						label: "Invariant (default)",
-						description: "ISO date, Latin digits, and English AM/PM.",
-						action: "choose-invariant-locale",
-					},
-					{
-						id: "system",
-						label: "System locale",
-						description: "Use the operating system locale.",
-						action: "choose-system-locale",
-					},
-					{
-						id: "custom",
-						label: "Custom BCP 47 locale…",
-						description: "Examples: en-US, fr-FR, zh-TW.",
-						action: "choose-custom-locale",
-					},
-				],
-				hint: "back",
-			}),
-			"time-zone": ({ state }) => ({
-				kind: "actions",
-				title: "Stamp Time Zone",
-				lines: [`Current: ${timeZoneLabel(state.settings.timeZone)}`],
-				items: [
-					{
-						id: "local",
-						label: "Local (default)",
-						description: "Follow the operating system time zone.",
-						action: "choose-local-time-zone",
-					},
-					{
-						id: "UTC",
-						label: "UTC",
-						description: "Use Coordinated Universal Time.",
-						action: "choose-utc-time-zone",
-					},
-					{
-						id: "custom",
-						label: "Custom IANA time zone…",
-						description: "Examples: Asia/Taipei, America/New_York.",
-						action: "choose-custom-time-zone",
-					},
-				],
-				hint: "back",
-			}),
+			locale: ({ state }) =>
+				localeEntry
+					? {
+							kind: "input",
+							title: "Custom BCP 47 locale",
+							lines: [`Current: ${localeLabel(state.settings.locale)}`],
+							placeholder: "Examples: en-US, fr-FR, zh-TW",
+							action: "choose-custom-locale",
+							hint: "back",
+						}
+					: {
+							kind: "actions",
+							title: "Stamp Locale",
+							lines: [`Current: ${localeLabel(state.settings.locale)}`],
+							items: [
+								{
+									id: "invariant",
+									label: "Invariant (default)",
+									description: "ISO date, Latin digits, and English AM/PM.",
+									action: "choose-invariant-locale",
+								},
+								{
+									id: "system",
+									label: "System locale",
+									description: "Use the operating system locale.",
+									action: "choose-system-locale",
+								},
+								{
+									id: "custom",
+									label: "Custom BCP 47 locale…",
+									description: "Examples: en-US, fr-FR, zh-TW.",
+									action: "choose-custom-locale",
+								},
+							],
+							hint: "back",
+						},
+			"time-zone": ({ state }) =>
+				timeZoneEntry
+					? {
+							kind: "input",
+							title: "Custom IANA time zone",
+							lines: [`Current: ${timeZoneLabel(state.settings.timeZone)}`],
+							placeholder: "Examples: Asia/Taipei, America/New_York",
+							action: "choose-custom-time-zone",
+							hint: "back",
+						}
+					: {
+							kind: "actions",
+							title: "Stamp Time Zone",
+							lines: [`Current: ${timeZoneLabel(state.settings.timeZone)}`],
+							items: [
+								{
+									id: "local",
+									label: "Local (default)",
+									description: "Follow the operating system time zone.",
+									action: "choose-local-time-zone",
+								},
+								{
+									id: "UTC",
+									label: "UTC",
+									description: "Use Coordinated Universal Time.",
+									action: "choose-utc-time-zone",
+								},
+								{
+									id: "custom",
+									label: "Custom IANA time zone…",
+									description: "Examples: Asia/Taipei, America/New_York.",
+									action: "choose-custom-time-zone",
+								},
+							],
+							hint: "back",
+						},
 			status: ({ state }) => ({
 				kind: "detail",
 				title: "Stamp Status",
@@ -281,37 +303,63 @@ export function createStampMenu(runtime: StampSettingsRuntime) {
 			},
 			"set-tool-stamps": ({ ctx, value, signal }) =>
 				savePatch(runtime, ctx, signal, { toolStamps: value === "Show" }, `Tool stamps: ${value}.`),
-			"open-locale": async () => ({ kind: "to", screen: "locale" }),
+			"open-locale": async () => {
+				localeEntry = false;
+				return { kind: "to", screen: "locale" };
+			},
 			"choose-invariant-locale": ({ ctx, signal }) =>
 				savePatch(runtime, ctx, signal, { locale: "invariant" }, "Locale: Invariant.", "back"),
 			"choose-system-locale": ({ ctx, signal }) =>
 				savePatch(runtime, ctx, signal, { locale: "system" }, "Locale: System.", "back"),
-			"choose-custom-locale": async ({ ctx, signal }) => {
-				const raw = await ctx.ui.input("BCP 47 locale", "Examples: en-US, fr-FR, zh-TW");
-				if (signal.aborted) return { kind: "rejected" };
-				if (raw === undefined) return { kind: "back" };
-				const locale = canonicalizeLocale(raw.trim());
+			"choose-custom-locale": async ({ ctx, signal, value }) => {
+				if (value === undefined) {
+					localeEntry = true;
+					return { kind: "stay" };
+				}
+				const locale = canonicalizeLocale(value.trim());
 				if (!locale || locale === "invariant" || locale === "system") {
 					ctx.ui.notify("Enter one valid BCP 47 locale, such as en-US.", "warning");
 					return { kind: "rejected" };
 				}
-				return savePatch(runtime, ctx, signal, { locale }, `Locale: ${locale}.`, "back");
+				const result = await savePatch(
+					runtime,
+					ctx,
+					signal,
+					{ locale },
+					`Locale: ${locale}.`,
+					"back",
+				);
+				if (result.kind === "back") localeEntry = false;
+				return result;
 			},
-			"open-time-zone": async () => ({ kind: "to", screen: "time-zone" }),
+			"open-time-zone": async () => {
+				timeZoneEntry = false;
+				return { kind: "to", screen: "time-zone" };
+			},
 			"choose-local-time-zone": ({ ctx, signal }) =>
 				savePatch(runtime, ctx, signal, { timeZone: "local" }, "Time zone: Local.", "back"),
 			"choose-utc-time-zone": ({ ctx, signal }) =>
 				savePatch(runtime, ctx, signal, { timeZone: "UTC" }, "Time zone: UTC.", "back"),
-			"choose-custom-time-zone": async ({ ctx, signal }) => {
-				const raw = await ctx.ui.input("IANA time zone", "Examples: Asia/Taipei, America/New_York");
-				if (signal.aborted) return { kind: "rejected" };
-				if (raw === undefined) return { kind: "back" };
-				const timeZone = canonicalizeTimeZone(raw.trim());
+			"choose-custom-time-zone": async ({ ctx, signal, value }) => {
+				if (value === undefined) {
+					timeZoneEntry = true;
+					return { kind: "stay" };
+				}
+				const timeZone = canonicalizeTimeZone(value.trim());
 				if (!timeZone || timeZone === "local") {
 					ctx.ui.notify("Enter one valid IANA time zone, such as Asia/Taipei.", "warning");
 					return { kind: "rejected" };
 				}
-				return savePatch(runtime, ctx, signal, { timeZone }, `Time zone: ${timeZone}.`, "back");
+				const result = await savePatch(
+					runtime,
+					ctx,
+					signal,
+					{ timeZone },
+					`Time zone: ${timeZone}.`,
+					"back",
+				);
+				if (result.kind === "back") timeZoneEntry = false;
+				return result;
 			},
 		},
 	});

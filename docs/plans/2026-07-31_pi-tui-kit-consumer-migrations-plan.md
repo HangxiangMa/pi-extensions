@@ -156,23 +156,29 @@ behavior-preserving consumer migrations, then make an evidence-based go/no-go de
 
 ### 2. PR 2 — migrate `pi-stamp` custom values to declarative input
 
-- [ ] Add red-first menu/component tests in `extensions/pi-stamp/test/menu.test.ts` proving custom
+- [x] Add red-first menu/component tests in `extensions/pi-stamp/test/menu.test.ts` proving custom
   locale and time-zone rows transition to `input` projections, raw values reach domain validation,
   invalid submissions retain the TUI draft, valid values canonicalize and save once, Escape returns
-  to Settings, Ctrl+C closes, owner abort saves nothing, and RPC retries a rejected value.
-- [ ] Update `extensions/pi-stamp/package.json` and `package-lock.json` to the API-version-3-compatible
+  to Settings, Ctrl+C closes, owner abort saves nothing, and RPC retries a rejected value. Evidence:
+  the initial compile failed because the consumer still exposed only action screens; all seven final
+  tests pass, including a real component draft-retry flow and rejected-then-valid RPC flow.
+- [x] Update `extensions/pi-stamp/package.json` and `package-lock.json` to the API-version-3-compatible
   kit range; verify `pi-stamp` resolves the intended kit version in `npm ls` and packed metadata.
-- [ ] Refactor `createStampMenu()` so per-menu closure state switches the existing `locale` and
+  Evidence: both report the workspace 0.41.0 kit and no stamp-local 0.40 package remains.
+- [x] Refactor `createStampMenu()` so per-menu closure state switches the existing `locale` and
   `time-zone` screen ids between their choice and `input` projections; reset entry mode whenever the
-  corresponding chooser is opened so a cancelled input never reopens unexpectedly.
-- [ ] Split the custom-entry actions into navigation and submission actions. Keep
+  corresponding chooser is opened so a cancelled input never reopens unexpectedly. Evidence: screen
+  resolution and end-to-end navigation tests cover chooser, input, Back, and Close transitions.
+- [x] Split the custom-entry actions into navigation and submission actions. Keep
   `canonicalizeLocale()`, `canonicalizeTimeZone()`, warning copy, `savePatch()`, persistence ordering,
   rollback, and unknown-field behavior extension-owned; verify a rejected save retains the draft and
-  the previous effective setting.
-- [ ] Audit the final stamp diff against `docs/extension-settings.md`: no missing-file read creates a
+  the previous effective setting. Evidence: the same typed actions distinguish missing navigation
+  values from raw submissions, and focused tests prove canonical patch identity and rejection.
+- [x] Audit the final stamp diff against `docs/extension-settings.md`: no missing-file read creates a
   file, invalid files remain protected, updates stay serialized/atomic, unknown fields remain
   preserved, and every post-save continuation checks the action signal before notifying or
-  transitioning.
+  transitioning. Evidence: persistence code is unchanged; submissions still use `savePatch()`, which
+  checks the action signal before and after `runtime.update()`, and failures return `rejected`.
 - [ ] Run stamp focused tests, `npm run check --workspace @narumitw/pi-stamp`, `npm test`,
   `npm run check`, and `just pack-stamp`; inspect dependency and source contents and perform a
   deterministic RPC menu smoke for rejected-then-valid input.
