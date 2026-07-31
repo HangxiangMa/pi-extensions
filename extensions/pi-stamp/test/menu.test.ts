@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveMenuScreen } from "@narumitw/pi-tui-kit";
-import { createMockContext } from "../../../test/support.js";
+import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
 import { DEFAULT_STAMP_SETTINGS } from "../src/format.js";
 import { createStampMenu, showStampMenu } from "../src/menu.js";
 import type {
@@ -152,39 +152,129 @@ test("bounded setting actions persist exact patches", async () => {
 	assert.equal(notifications.at(-1)?.level, "info");
 });
 
-test("custom locale and time-zone input validates, cancels without mutation, and saves canonical values", async () => {
+test("custom locale and time-zone screens validate and save canonical raw input", async () => {
 	const runtime = memorySettingsRuntime();
-	const values = [undefined, "not_a_locale", "EN-us", "Moon/Base", "utc"];
-	const { ctx, notifications } = createMockContext({
-		mode: "tui",
-		input: async () => values.shift(),
-	});
+	const { ctx, notifications } = createMockContext({ mode: "tui" });
 	const menu = createStampMenu(runtime);
-	const actionContext = () => ({
+	const actionContext = (value?: string) => ({
 		ctx,
 		state: runtime.get(),
 		signal: new AbortController().signal,
 		itemId: "custom",
+		value,
 	});
 
 	assert.deepEqual(await menu.actions["choose-custom-locale"](actionContext()), {
-		kind: "back",
+		kind: "stay",
 	});
-	assert.deepEqual(runtime.patches, []);
-	assert.deepEqual(await menu.actions["choose-custom-locale"](actionContext()), {
+	const localeInput = resolveMenuScreen(menu, "locale", runtime.get());
+	assert.equal(localeInput.kind, "input");
+	if (localeInput.kind !== "input") assert.fail("Expected locale input screen");
+	assert.equal(localeInput.action, "choose-custom-locale");
+	assert.deepEqual(await menu.actions["choose-custom-locale"](actionContext("not_a_locale")), {
 		kind: "rejected",
 	});
-	assert.deepEqual(await menu.actions["choose-custom-locale"](actionContext()), {
+	assert.deepEqual(await menu.actions["choose-custom-locale"](actionContext("EN-us")), {
 		kind: "back",
 	});
+
 	assert.deepEqual(await menu.actions["choose-custom-time-zone"](actionContext()), {
+		kind: "stay",
+	});
+	const timeZoneInput = resolveMenuScreen(menu, "time-zone", runtime.get());
+	assert.equal(timeZoneInput.kind, "input");
+	if (timeZoneInput.kind !== "input") assert.fail("Expected time-zone input screen");
+	assert.equal(timeZoneInput.action, "choose-custom-time-zone");
+	assert.deepEqual(await menu.actions["choose-custom-time-zone"](actionContext("Moon/Base")), {
 		kind: "rejected",
 	});
-	assert.deepEqual(await menu.actions["choose-custom-time-zone"](actionContext()), {
+	assert.deepEqual(await menu.actions["choose-custom-time-zone"](actionContext("utc")), {
 		kind: "back",
 	});
+
 	assert.deepEqual(runtime.patches, [{ locale: "en-US" }, { timeZone: "UTC" }]);
 	assert.ok(notifications.some((notice) => notice.level === "warning"));
+});
+
+test("TUI custom input retains a rejected draft and Ctrl+C closes the menu", async () => {
+	const runtime = memorySettingsRuntime();
+	let customCalls = 0;
+	let rejectedRender = "";
+	const { ctx } = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			customCalls += 1;
+			const harness = createCustomSelectorHarness(factory, 60);
+			if (customCalls === 1) harness.handleInput("tui.select.confirm");
+			else if (customCalls === 2) {
+				for (let index = 0; index < 3; index += 1) harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
+			} else if (customCalls === 3) {
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
+			} else if (customCalls === 4) {
+				harness.setFocused(true);
+				harness.handleInput("not_a_locale");
+				harness.handleInput("tui.input.submit");
+				await harness.waitForPending();
+				rejectedRender = harness.render().join("\n");
+				harness.handleInput("\u0015");
+				harness.handleInput("EN-us");
+				harness.handleInput("tui.input.submit");
+				await harness.waitForPending();
+			} else harness.handleInput("\u0003");
+			return harness.result ?? harness.resultPromise;
+		},
+	});
+	const result = await showStampMenu(ctx, runtime, {
+		signal: new AbortController().signal,
+		isCurrent: () => true,
+	});
+
+	assert.equal(result.kind, "closed");
+	assert.equal(customCalls, 5);
+	assert.match(rejectedRender, /not_a_locale/u);
+	assert.deepEqual(runtime.patches, [{ locale: "en-US" }]);
+});
+
+test("RPC custom input retries a rejected value before saving", async () => {
+	const runtime = memorySettingsRuntime();
+	let mainVisits = 0;
+	let settingsVisits = 0;
+	let inputCalls = 0;
+	const values = ["not_a_locale", "EN-us"];
+	const { ctx } = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		input: async () => {
+			inputCalls += 1;
+			return values.shift();
+		},
+		select: async (title: string, options: string[]) => {
+			if (title.startsWith("Stamp Settings")) {
+				settingsVisits += 1;
+				return settingsVisits === 1
+					? options.find((option) => option.startsWith("Locale"))
+					: undefined;
+			}
+			if (title.startsWith("Stamp Locale")) {
+				return options.find((option) => option.startsWith("Custom BCP 47"));
+			}
+			mainVisits += 1;
+			return mainVisits === 1 ? "Settings" : "Close";
+		},
+	});
+
+	const result = await showStampMenu(ctx, runtime, {
+		signal: new AbortController().signal,
+		isCurrent: () => true,
+	});
+
+	assert.equal(result.kind, "closed");
+	assert.equal(inputCalls, 2);
+	assert.deepEqual(runtime.patches, [{ locale: "en-US" }]);
 });
 
 test("save failure is rejected without changing effective settings", async () => {
