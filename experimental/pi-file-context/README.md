@@ -78,6 +78,7 @@ RPC receives an observable warning. JSON and print modes do not enter custom UI.
 - File paths and symlink targets are checked against the real project root before reading.
 - Preview files are limited to 1 MB and NUL-containing files are treated as binary.
 - Discovery is limited to 5,000 files and skips symlinks.
+- File-search queries are limited to 256 characters before candidate scoring.
 - Terminal control characters are escaped before file names, Git refs, authors, summaries, or file contents are rendered.
 - Git is invoked read-only without a shell, pager, external diff, or text conversion; commands time out after 5 seconds and output is bounded to 1.1 MB.
 - Revision names are resolved to a commit before file loading. Historical files remain subject to the 1 MB and binary guards.
@@ -101,6 +102,7 @@ RPC receives an observable warning. JSON and print modes do not enter custom UI.
 src/index.ts                 Thin Pi entrypoint
 src/file-context.ts            Lifecycle, filesystem boundaries, quote injection
 src/file-context-explorer.ts   File list, Git detail views, and line-range TUI
+src/file-search.ts             Bounded native fuzzy matching and relevance ranking
 src/git-context.ts             Bounded read-only Git status, diff, blame, history, revisions
 
 test/file-context.test.ts      Filesystem, prompt, lifecycle, and TUI tests
