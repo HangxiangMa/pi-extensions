@@ -418,7 +418,7 @@ test("unfreezing a pending priority dispatches it at the idle boundary", async (
 	assert.equal(mock.sentUserMessages.length, 1);
 });
 
-test("standard settings keep all four controls on one level", async () => {
+test("standard settings keep all five controls on one level", async () => {
 	const state = runtime();
 	let title = "";
 	let options: string[] = [];
@@ -438,7 +438,77 @@ test("standard settings keep all four controls on one level", async () => {
 		"No-progress guard",
 		"Goal tools",
 		"Ordered goal queue",
+		"Managed run RPC",
 	]);
+});
+
+test("Managed run RPC setting defaults off and saves immediately", async () => {
+	const state = runtime();
+	let saved: GoalSettings | undefined;
+	const selections = ["Managed run RPC", undefined];
+	const context = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		select: async () => selections.shift(),
+	});
+
+	assert.equal(state.settings.rpc.enabled, false);
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save(settings) {
+			saved = structuredClone(settings);
+		},
+	});
+
+	assert.equal(saved?.rpc.enabled, true);
+	assert.equal(state.settings.rpc.enabled, true);
+	assert.match(context.notifications.at(-1)?.message ?? "", /Managed run RPC: On/i);
+});
+
+test("Managed run RPC setting disables immediately", async () => {
+	const state = runtime();
+	state.settings = {
+		...structuredClone(state.settings),
+		rpc: { enabled: true },
+	};
+	let saved: GoalSettings | undefined;
+	const selections = ["Managed run RPC", undefined];
+	const context = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		select: async () => selections.shift(),
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save(settings) {
+			saved = structuredClone(settings);
+		},
+	});
+
+	assert.equal(saved?.rpc.enabled, false);
+	assert.equal(state.settings.rpc.enabled, false);
+	assert.match(context.notifications.at(-1)?.message ?? "", /Managed run RPC: Off/i);
+});
+
+test("Managed run RPC setting rolls back when save fails", async () => {
+	const state = runtime();
+	const selections = ["Managed run RPC", undefined];
+	const context = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		select: async () => selections.shift(),
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save() {
+			throw new Error("disk full");
+		},
+	});
+
+	assert.equal(state.settings.rpc.enabled, false);
+	assert.match(context.notifications.at(-1)?.message ?? "", /previous value remains/i);
 });
 
 test("standard Goal tools setting saves and applies immediately", async () => {
@@ -476,6 +546,7 @@ test("invalid settings use a standard read-only detail screen", async () => {
 	assert.match(title, /Read only/i);
 	assert.match(title, /Invalid settings file/i);
 	assert.match(title, /Automatic work: Unlimited/i);
+	assert.match(title, /Managed run RPC: Off/i);
 });
 
 test("showGoalSettings uses an observable manual fallback outside TUI", async () => {

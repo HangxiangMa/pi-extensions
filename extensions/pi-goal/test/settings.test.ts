@@ -15,6 +15,7 @@ const DEFAULT_GOAL_SETTINGS_DOCUMENT = `${JSON.stringify(DEFAULT_GOAL_SETTINGS, 
 
 test("normalizeGoalSettings applies defaults and accepts bounded continuation limits", () => {
 	assert.equal(DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns, null);
+	assert.deepEqual(DEFAULT_GOAL_SETTINGS.rpc, { enabled: false });
 	assert.deepEqual(normalizeGoalSettings({}), DEFAULT_GOAL_SETTINGS);
 	assert.deepEqual(normalizeGoalSettings({ futureOption: true }), DEFAULT_GOAL_SETTINGS);
 	assert.deepEqual(normalizeGoalSettings({ toolVisibility: "always" }), {
@@ -32,6 +33,15 @@ test("normalizeGoalSettings applies defaults and accepts bounded continuation li
 			experimental: { goals: true },
 		},
 	);
+	assert.deepEqual(normalizeGoalSettings({ rpc: {} }), DEFAULT_GOAL_SETTINGS);
+	assert.deepEqual(normalizeGoalSettings({ rpc: { enabled: true } }), {
+		...DEFAULT_GOAL_SETTINGS,
+		rpc: { enabled: true },
+	});
+	assert.deepEqual(normalizeGoalSettings({ rpc: { enabled: false, future: true } }), {
+		...DEFAULT_GOAL_SETTINGS,
+		rpc: { enabled: false },
+	});
 	assert.deepEqual(normalizeGoalSettings({ continuationLimits: {} }), DEFAULT_GOAL_SETTINGS);
 	assert.deepEqual(normalizeGoalSettings({ continuationLimits: { automaticTurns: 7 } }), {
 		...DEFAULT_GOAL_SETTINGS,
@@ -58,6 +68,9 @@ test("normalizeGoalSettings applies defaults and accepts bounded continuation li
 		{ toolVisibility: "sometimes" },
 		{ experimental: true },
 		{ experimental: { goals: "yes" } },
+		{ rpc: true },
+		{ rpc: [] },
+		{ rpc: { enabled: "yes" } },
 		{ continuationLimits: true },
 		{ continuationLimits: [] },
 		{ continuationLimits: { automaticTurns: 0 } },
@@ -98,6 +111,7 @@ test("saveGoalSettings atomically preserves unknown top-level and nested fields"
 			future: { enabled: true },
 			toolVisibility: "after-first-goal",
 			experimental: { goals: false, futureQueue: "keep" },
+			rpc: { enabled: true, futureRpc: "keep" },
 			continuationLimits: { automaticTurns: 25, noProgressTurns: 3, futureLimit: 9 },
 		}),
 	);
@@ -106,6 +120,7 @@ test("saveGoalSettings atomically preserves unknown top-level and nested fields"
 		{
 			toolVisibility: "always",
 			experimental: { goals: true },
+			rpc: { enabled: false },
 			continuationLimits: { automaticTurns: 40, noProgressTurns: null },
 		},
 		settingsPath,
@@ -115,6 +130,7 @@ test("saveGoalSettings atomically preserves unknown top-level and nested fields"
 		future: { enabled: true },
 		toolVisibility: "always",
 		experimental: { goals: true, futureQueue: "keep" },
+		rpc: { enabled: false, futureRpc: "keep" },
 		continuationLimits: { automaticTurns: 40, noProgressTurns: null, futureLimit: 9 },
 	});
 	assert.deepEqual(readdirSync(directory), ["pi-goal.json"]);
@@ -159,6 +175,7 @@ test("readGoalSettings distinguishes missing, loaded, malformed, and unreadable 
 		settings: {
 			toolVisibility: "after-first-goal",
 			experimental: { goals: true },
+			rpc: { enabled: false },
 			continuationLimits: { automaticTurns: null, noProgressTurns: 3 },
 		},
 	});

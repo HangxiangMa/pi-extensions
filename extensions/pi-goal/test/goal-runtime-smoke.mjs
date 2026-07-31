@@ -28,6 +28,7 @@ async function createHarness(
 	prepareSession,
 	goalSettings,
 	piSettings = {},
+	managedRun,
 ) {
 	const root = await mkdtemp(join(tmpdir(), "pi-goal-runtime-"));
 	const agentDir = join(root, "agent");
@@ -90,6 +91,7 @@ async function createHarness(
 		const model = modelRegistry.find(provider, faux.getModel().id);
 		assert.ok(model, "expected registered faux model");
 		faux.setResponses(responses);
+		const managedRunEvents = [];
 
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: false },
@@ -106,6 +108,14 @@ async function createHarness(
 				{
 					name: "runtime-smoke-observer",
 					factory: (pi) => {
+						if (managedRun) {
+							pi.events.on(`pi-goal:v1:event:${managedRun.runId}`, (event) => {
+								managedRunEvents.push(event);
+							});
+							pi.on("session_start", () => {
+								pi.events.emit("pi-goal:v1:start", managedRun);
+							});
+						}
 						pi.registerTool({
 							name: "budget_probe",
 							label: "Budget Probe",
@@ -157,6 +167,7 @@ async function createHarness(
 			})),
 			faux,
 			lifecycleEvents,
+			managedRunEvents,
 			session: result.session,
 			cleanup: cleanupResources,
 		};
@@ -599,6 +610,65 @@ async function budgetAgentEndFallbackScenario() {
 	}
 }
 
+async function managedRunRpcScenario() {
+	const runId = crypto.randomUUID();
+	const harness = await createHarness(
+		[completionResponse],
+		{},
+		undefined,
+		{ rpc: { enabled: true } },
+		{},
+		{ runId, objective: "complete a managed runtime run" },
+	);
+	try {
+		await waitFor(
+			() => harness.managedRunEvents.some((event) => event.status === "complete"),
+			"managed run completion",
+		);
+		await harness.session.agent.waitForIdle();
+		assert.deepEqual(
+			harness.managedRunEvents
+				.filter((event) => event.type === "state")
+				.map((event) => event.status),
+			["active", "complete"],
+		);
+		assert.equal(
+			harness.managedRunEvents.filter(
+				(event) => event.type === "state" && event.status !== "active",
+			).length,
+			1,
+		);
+	} finally {
+		await harness.cleanup();
+	}
+}
+
+async function managedRunDisabledScenario() {
+	const runId = crypto.randomUUID();
+	const harness = await createHarness(
+		[],
+		{},
+		undefined,
+		undefined,
+		{},
+		{ runId, objective: "must stay disabled" },
+	);
+	try {
+		await waitFor(() => harness.managedRunEvents.length > 0, "managed run disabled rejection");
+		assert.deepEqual(harness.managedRunEvents, [
+			{
+				type: "error",
+				runId,
+				operation: "start",
+				error: { code: "RPC_DISABLED", message: "Managed run RPC is disabled." },
+			},
+		]);
+		assert.equal(harness.faux.state.callCount, 0);
+	} finally {
+		await harness.cleanup();
+	}
+}
+
 async function manualCompactionScenario() {
 	const now = Date.now();
 	const harness = await createHarness(
@@ -673,7 +743,9 @@ await pauseScenario();
 await budgetBoundaryScenario();
 await budgetViolationScenario();
 await budgetAgentEndFallbackScenario();
+await managedRunRpcScenario();
+await managedRunDisabledScenario();
 await manualCompactionScenario();
 console.log(
-	"pi-goal runtime smoke: normal, runaway guards, retry and busy-edit ownership, ordered queue, queued input, pause, bounded budget behavior, and manual compaction passed",
+	"pi-goal runtime smoke: normal, runaway guards, retry and busy-edit ownership, ordered queue, queued input, pause, managed-run RPC, bounded budget behavior, and manual compaction passed",
 );
