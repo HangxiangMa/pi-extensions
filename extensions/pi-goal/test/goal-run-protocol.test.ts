@@ -6,8 +6,8 @@ import test, { after } from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import goal from "../src/goal.js";
 
-const START_CHANNEL = "pi-goal:v1:start";
-const CANCEL_CHANNEL = "pi-goal:v1:cancel";
+const START_CHANNEL = "pi-goal:start";
+const CANCEL_CHANNEL = "pi-goal:cancel";
 
 const SETTINGS_DIRECTORY = mkdtempSync(join(tmpdir(), "pi-goal-run-settings-"));
 const ENABLED_SETTINGS_PATH = join(SETTINGS_DIRECTORY, "enabled.json");
@@ -79,7 +79,7 @@ function bindSession(mock: ReturnType<typeof createMockPi>, context = createMock
 }
 
 function runEventChannel(runId: string) {
-	return `pi-goal:v1:event:${runId}`;
+	return `pi-goal:event:${runId}`;
 }
 
 function observeRun(mock: ReturnType<typeof createMockPi>, runId: string) {
@@ -875,24 +875,32 @@ test("session replacement invalidates old run ownership and terminal details", a
 	assert.equal(lastPersistedGoal(mock)?.status, "blocked");
 });
 
-test("removed RPC and global state channels are inert", async () => {
+test("removed RPC, global state, and versioned channels are inert", async () => {
 	const mock = createMockPi({ activeTools: ["read", "bash"] });
 	registerGoal(mock);
 	const context = bindSession(mock);
 	const oldReplies: unknown[] = [];
 	const oldStates: unknown[] = [];
+	const versionedEvents: unknown[] = [];
 	mock.eventBus.on("pi-goal:rpc:start:reply:legacy", (data) => oldReplies.push(data));
 	mock.eventBus.on("pi-goal:state", (data) => oldStates.push(data));
+	mock.eventBus.on("pi-goal:v1:event:unused-version", (data) => versionedEvents.push(data));
 
 	mock.eventBus.emit("pi-goal:rpc:start", {
 		requestId: "legacy",
 		objective: "legacy objective",
 	});
 	mock.eventBus.emit("pi-goal:rpc:pause", { requestId: "legacy" });
+	mock.eventBus.emit("pi-goal:v1:start", {
+		runId: "unused-version",
+		objective: "versioned objective",
+	});
+	mock.eventBus.emit("pi-goal:v1:cancel", { runId: "unused-version" });
 	await mock.commands.get("goal")?.handler("manual objective", context.ctx);
 	await flush();
 
 	assert.deepEqual(oldReplies, []);
 	assert.deepEqual(oldStates, []);
+	assert.deepEqual(versionedEvents, []);
 	assert.equal(lastPersistedGoal(mock)?.text, "manual objective");
 });

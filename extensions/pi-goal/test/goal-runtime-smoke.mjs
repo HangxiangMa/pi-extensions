@@ -109,11 +109,11 @@ async function createHarness(
 					name: "runtime-smoke-observer",
 					factory: (pi) => {
 						if (managedRun) {
-							pi.events.on(`pi-goal:v1:event:${managedRun.runId}`, (event) => {
+							pi.events.on(`pi-goal:event:${managedRun.runId}`, (event) => {
 								managedRunEvents.push(event);
 							});
 							pi.on("session_start", () => {
-								pi.events.emit("pi-goal:v1:start", managedRun);
+								pi.events.emit("pi-goal:start", managedRun);
 							});
 						}
 						pi.registerTool({

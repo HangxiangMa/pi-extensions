@@ -14,8 +14,8 @@ and add a user setting that keeps the protocol disabled by default.
 - PR #298 added that contract for the unmerged `tintinweb/pi-subagents` consumer PR #162. No
   extension in this repository currently consumes it.
 - A breaking replacement is explicitly accepted. The implementation will not retain old channels,
-  payloads, adapters, or a payload-level version field. The new contract begins at the `v1` channel
-  namespace, while package release versioning communicates removal of the former public API.
+  payloads, adapters, a payload-level version field, or a versioned channel namespace. Package
+  release versioning communicates removal of the former public API.
 - The accepted replacement is a managed-run protocol, not a general supervisor API. One
   caller-generated `runId` correlates start, state, cancellation, and terminal outcome.
 - The accepted setting shape is user-scoped `rpc.enabled`, with a built-in default of `false`:
@@ -44,14 +44,13 @@ and add a user setting that keeps the protocol disabled by default.
 Expose exactly these channel patterns:
 
 ```text
-pi-goal:v1:start
-pi-goal:v1:cancel
-pi-goal:v1:event:${runId}
+pi-goal:start
+pi-goal:cancel
+pi-goal:event:${runId}
 ```
 
-`v1` identifies this new contract rather than preserving the former RPC. Versioning at the channel
-boundary lets independently released consumers route only to a payload parser they implement; the
-payloads do not repeat a version field.
+The contract intentionally omits both channel-level and payload-level version fields. Package
+release versioning communicates future compatibility changes.
 
 A caller must subscribe to its run event channel before emitting start. `runId` is a
 caller-generated, session-local correlation identifier matching
@@ -174,8 +173,8 @@ persistence and avoids a second state machine or another event-bus hop.
 
 - Preserve `pi-goal:rpc:start`, `pi-goal:rpc:pause`, request-scoped replies, or global
   `pi-goal:state` broadcasts.
-- Add payload-level version fields, compatibility adapters, migration aliases, or two simultaneously
-  supported protocol implementations.
+- Add channel-level or payload-level version fields, compatibility adapters, migration aliases, or
+  two simultaneously supported protocol implementations.
 - Add Resume RPC, foreground-Goal supervision, blocked-proposal review, continuation hold, generic
   method dispatch, extension registration, caller allowlists, or authentication.
 - Split RPC into a second extension or add an extension-to-extension package dependency.
@@ -277,10 +276,10 @@ persistence and avoids a second state machine or another event-bus hop.
 - [x] Missing, omitted, malformed, and explicitly disabled settings reject new starts with RPC
       disabled by default; explicit enable survives save/reload and rollback preserves the previous
       effective policy.
-- [x] The only registered and advertised managed-run channels are `pi-goal:v1:start`,
-      `pi-goal:v1:cancel`, and `pi-goal:v1:event:${runId}`; former channel strings remain only in a
-      negative regression and the breaking migration note, with no handler, alias, reply envelope,
-      payload-level version field, or compatibility adapter.
+- [x] The only registered and advertised managed-run channels are `pi-goal:start`,
+      `pi-goal:cancel`, and `pi-goal:event:${runId}`; former channel strings remain only in a negative
+      regression and the breaking migration note, with no handler, alias, reply envelope,
+      channel-level or payload-level version field, or compatibility adapter.
 - [x] One safe `runId` correlates start, state, cancellation, and terminal outcome before and after
       activation without optional identifier ambiguity.
 - [x] Manual, restored, stale, replaced-session, and mismatched Goals cannot be adopted, cancelled, or

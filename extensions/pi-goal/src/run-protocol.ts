@@ -9,8 +9,8 @@ import {
 	type StatusContext,
 } from "./runtime.js";
 
-export const GOAL_RUN_START_CHANNEL = "pi-goal:v1:start";
-export const GOAL_RUN_CANCEL_CHANNEL = "pi-goal:v1:cancel";
+export const GOAL_RUN_START_CHANNEL = "pi-goal:start";
+export const GOAL_RUN_CANCEL_CHANNEL = "pi-goal:cancel";
 
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MAX_CANCEL_REASON_LENGTH = 1_000;
@@ -64,7 +64,7 @@ interface ManagedRun {
 }
 
 export function goalRunEventChannel(runId: string) {
-	return `pi-goal:v1:event:${runId}`;
+	return `pi-goal:event:${runId}`;
 }
 
 function isPayloadRecord(data: unknown): data is object {

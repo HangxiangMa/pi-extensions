@@ -216,18 +216,18 @@ A user pause or aborted turn produces `paused`; a terminal provider/account quot
 
 With `rpc.enabled: true`, pi-goal exposes a session-local, dependency-free protocol over Pi's shared `pi.events` bus. It is intended for trusted sibling extensions that need to start, observe, and cancel one Goal lifecycle without driving the `/goal` command. Installed Pi extensions remain fully privileged: this setting controls only whether pi-goal cooperates with these channels and is not authentication or sandboxing.
 
-The versioned public channels are:
+The public channels are:
 
 ```text
-pi-goal:v1:start
-pi-goal:v1:cancel
-pi-goal:v1:event:${runId}
+pi-goal:start
+pi-goal:cancel
+pi-goal:event:${runId}
 ```
 
-`v1` identifies this contract at routing time; payloads do not repeat a version field. Before starting, the caller must generate a session-unique `runId`, subscribe to its event channel, and then emit:
+The protocol intentionally has no separate version field or versioned channel namespace. Before starting, the caller must generate a session-unique `runId`, subscribe to its event channel, and then emit:
 
 ```ts
-pi.events.emit("pi-goal:v1:start", {
+pi.events.emit("pi-goal:start", {
   runId: "consumer-generated-run-id",
   objective: "Ship and verify the feature",
   tokenBudget: 100000, // optional positive integer
@@ -236,7 +236,7 @@ pi.events.emit("pi-goal:v1:start", {
 
 `runId` must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`; UUIDs are recommended. It is a correlation identifier, not a secret or authenticated caller identity. The objective uses the same 4,000-character validation as `/goal`, and `tokenBudget` is an absolute positive integer rather than a `k`/`m` string.
 
-A successful start produces canonical state on `pi-goal:v1:event:${runId}`:
+A successful start produces canonical state on `pi-goal:event:${runId}`:
 
 ```json
 {
@@ -254,7 +254,7 @@ Terminal events are dispatched after the underlying Goal transition settles, so 
 To cancel before or after activation, emit the same `runId`:
 
 ```ts
-pi.events.emit("pi-goal:v1:cancel", {
+pi.events.emit("pi-goal:cancel", {
   runId: "consumer-generated-run-id",
   reason: "Parent work was cancelled", // optional, at most 1,000 characters
 });
