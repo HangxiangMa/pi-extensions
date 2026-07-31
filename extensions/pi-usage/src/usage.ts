@@ -1,10 +1,9 @@
-import {
-	BorderedLoader,
-	type ExtensionAPI,
-	type ExtensionCommandContext,
-	type ExtensionContext,
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import { defineMenu, runMenu, runTask } from "@narumitw/pi-tui-kit";
 import {
 	awaitWithDeadline,
 	errorMessage,
@@ -51,8 +50,6 @@ type StableCurrent = {
 	outcome: QueryOutcome;
 	model: PiModel | undefined;
 };
-
-type LoaderResult<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
 export default function usageExtension(pi: ExtensionAPI) {
 	const cache = new UsageCache(CACHE_TTL_MS);
@@ -351,28 +348,21 @@ export default function usageExtension(pi: ExtensionAPI) {
 		parentSignal: AbortSignal,
 		operation: (signal: AbortSignal) => Promise<T>,
 	): Promise<T | undefined> => {
-		if (ctx.mode !== "tui") return operation(parentSignal);
-		const result = await ctx.ui.custom<LoaderResult<T> | null>((tui, theme, _keybindings, done) => {
-			const loader = new BorderedLoader(tui, theme, label);
-			let finished = false;
-			const finish = (value: LoaderResult<T> | null) => {
-				if (finished) return;
-				finished = true;
-				done(value);
-			};
-			loader.onAbort = () => finish(null);
-			const signal = AbortSignal.any([parentSignal, loader.signal]);
-			void operation(signal)
-				.then((value) => finish({ ok: true, value }))
-				.catch((error) => {
-					if (isAbortError(error)) finish(null);
-					else finish({ ok: false, error });
-				});
-			return loader;
+		const result = await runTask(ctx, {
+			label,
+			signal: parentSignal,
+			onError: () => undefined,
+			task: ({ signal }) => operation(signal),
 		});
-		if (!result) return undefined;
-		if (!result.ok) throw result.error;
-		return result.value;
+		switch (result.kind) {
+			case "completed":
+				return result.value;
+			case "cancelled":
+			case "stale":
+				return undefined;
+			case "error":
+				throw result.error;
+		}
 	};
 
 	const outcomeStillCurrent = async (
