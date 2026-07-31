@@ -4,11 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { digestImages, type ProcessedImage } from "../src/batch.js";
-import type {
-	ConfirmDialogResult,
-	ImageDropLimitsMenuState,
-	InputDialogResult,
-} from "../src/menu.js";
+import type { ConfirmDialogResult, ImageDropLimitsMenuState } from "../src/menu.js";
 import { ImageDropRuntime } from "../src/runtime.js";
 import type { ImageDropServerOptions } from "../src/server.js";
 import { DEFAULT_SETTINGS, type ImageDropSettings } from "../src/settings.js";
@@ -59,9 +55,11 @@ function createHarness(
 			| "close"
 		>;
 		confirm?: () => Promise<boolean>;
-		input?: () => Promise<string | undefined>;
+		input?: (render?: string) => Promise<string | undefined>;
 		confirmDialog?: () => Promise<ConfirmDialogResult>;
-		inputDialog?: () => Promise<InputDialogResult>;
+		inputDialog?: () => Promise<
+			{ kind: "submitted"; value: string } | { kind: "cancelled" } | { kind: "closed" }
+		>;
 		onConfirm?: (title: string, message: string) => void;
 		onStatus?: (lines: readonly string[]) => void;
 		onLimits?: (state: ImageDropLimitsMenuState) => void;
@@ -123,12 +121,6 @@ function createHarness(
 			if (options.confirmDialog) return options.confirmDialog();
 			return ((await options.confirm?.()) ?? true) ? "confirmed" : "cancelled";
 		},
-		showInput:
-			options.inputDialog ??
-			(async () => {
-				const value = await options.input?.();
-				return value === undefined ? { kind: "cancelled" } : { kind: "submitted", value };
-			}),
 		updateSettings: options.onSave ?? (async () => undefined),
 		settingsFilePath: () => "/agent/pi-image-drop.json",
 	});
@@ -138,7 +130,7 @@ function createHarness(
 		mode: "tui",
 		hasUI: true,
 		confirm: options.confirm,
-		input: options.input,
+		input: options.inputDialog ?? options.input,
 		select: async (title: string) => {
 			if (/Image Drop Status/u.test(title)) {
 				options.onStatus?.(title.split("\n").slice(1));
@@ -155,6 +147,19 @@ function createHarness(
 					? "Start with each Pi session"
 					: action === "limits"
 						? "Image limits"
+						: undefined;
+			}
+			if (/Review resource-limit changes/u.test(title)) {
+				options.onConfirm?.("Review resource-limit changes", title);
+				const result = options.confirmDialog
+					? await options.confirmDialog()
+					: ((await options.confirm?.()) ?? true)
+						? "confirmed"
+						: "cancelled";
+				return result === "close"
+					? "\u0003"
+					: result === "confirmed"
+						? "Save resource limits"
 						: undefined;
 			}
 			if (/Image limits/u.test(title)) {
@@ -539,9 +544,58 @@ test("Settings preview and save future limits without changing current-session l
 		current: "128",
 		defaultValue: "128",
 	});
+	assert.equal(menuStates.at(-1)?.unsavedChanges, 0);
+	assert.deepEqual(menuStates.at(-1)?.values.maxRetainedImages, {
+		current: "120",
+		defaultValue: "128",
+	});
 	assert.equal(harness.runtime.getBatchForTesting()?.publicHistoryState().maxImages, 128);
 	assert.match(confirmation, /Staged \+ sent image count/);
 	assert.match(harness.context.notifications.at(-1)?.message ?? "", /future Pi sessions/i);
+});
+
+test("limit input retains a rejected draft before saving the corrected value", async () => {
+	let inputCalls = 0;
+	let rejectedRender = "";
+	let saved: Partial<ImageDropSettings> | undefined;
+	const harness = createHarness({
+		menuActions: ["settings", "close"],
+		settingsActions: ["limits", "back"],
+		limitActions: ["maxImages", "save"],
+		input: async (render) => {
+			inputCalls += 1;
+			if (inputCalls === 2) rejectedRender = render ?? "";
+			return inputCalls === 1 ? "not-a-number" : "12";
+		},
+		confirm: async () => true,
+		onSave: async (patch) => {
+			saved = patch;
+		},
+	});
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
+
+	assert.equal(inputCalls, 2);
+	assert.match(rejectedRender, /not-a-number/u);
+	assert.deepEqual(saved, { maxImages: 12 });
+	assert.ok(harness.context.notifications.some((notice) => /positive value/u.test(notice.message)));
+});
+
+test("saving unchanged limits stays in the list without publishing", async () => {
+	let saves = 0;
+	const harness = createHarness({
+		menuActions: ["settings", "close"],
+		settingsActions: ["limits", "back"],
+		limitActions: ["save", "back"],
+		onSave: async () => {
+			saves += 1;
+		},
+	});
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
+
+	assert.equal(saves, 0);
+	assert.match(harness.context.notifications.at(-1)?.message ?? "", /no resource-limit changes/iu);
 });
 
 test("automatic-start updates patch only the toggled setting", async () => {
@@ -587,6 +641,53 @@ test("cancelled and failed settings changes preserve the previous valid state", 
 	assert.match(
 		failed.context.notifications.at(-1)?.message ?? "",
 		/previous settings remain active.*disk full/i,
+	);
+});
+
+test("session replacement during a limit save suppresses stale state and UI publication", async () => {
+	let releaseSave: () => void = () => undefined;
+	let saveStarted: () => void = () => undefined;
+	const started = new Promise<void>((resolve) => {
+		saveStarted = resolve;
+	});
+	const pendingSave = new Promise<void>((resolve) => {
+		releaseSave = resolve;
+	});
+	let saved: Partial<ImageDropSettings> | undefined;
+	const menuStates: ImageDropLimitsMenuState[] = [];
+	const harness = createHarness({
+		menuActions: ["settings"],
+		settingsActions: ["limits"],
+		limitActions: ["maxImages", "save"],
+		input: async () => "12",
+		confirm: async () => true,
+		onLimits: (state) => menuStates.push(state),
+		onSave: async (patch) => {
+			saved = patch;
+			saveStarted();
+			await pendingSave;
+		},
+	});
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	const command = Promise.resolve(
+		harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx),
+	);
+	await started;
+	const replacement = createMockContext({
+		cwd: "/workspace/image-drop",
+		mode: "tui",
+		hasUI: true,
+		model: { id: "vision", provider: "test", input: ["text", "image"] },
+	});
+	const replacing = Promise.resolve(emit(harness.mock, "session_start", {}, replacement.ctx));
+	releaseSave();
+	await Promise.all([command, replacing]);
+
+	assert.deepEqual(saved, { maxImages: 12 });
+	assert.equal(menuStates.at(-1)?.unsavedChanges, 1);
+	assert.equal(
+		harness.context.notifications.some((notice) => /resource limits saved/iu.test(notice.message)),
+		false,
 	);
 });
 

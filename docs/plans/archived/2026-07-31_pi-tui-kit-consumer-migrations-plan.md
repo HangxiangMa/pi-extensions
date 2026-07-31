@@ -108,6 +108,25 @@ behavior-preserving consumer migrations, then make an evidence-based go/no-go de
 - Delete any temporary `pi-btw` prototype after the go/no-go check. A no-go leaves `pi-btw` source and
   package metadata unchanged and records the missing seam for a future scoped decision.
 
+## pi-btw Gate Result
+
+| Contract | Current owner/evidence | Public `review` fit |
+| --- | --- | --- |
+| Exact raw draft delivery | `formatBtwBringToMain()` and caller-owned `choice.draft` | Fits; the review action can retain the raw id/content boundary. |
+| Terminal-control safety and cell wrapping | `BtwBringToMainPreview`; focused C0/C1, Unicode, and narrow-width tests | Fits through kit sanitization and grapheme/cell hard wrapping. |
+| Terminal-row viewport | `BtwBringToMainPreview` derives rows from `tui.terminal.rows` | **Missing:** kit review uses a fixed/default `viewportSize` and never reads terminal rows. |
+| Paging and configured keys | Preview tests cover page keys plus configured Bring/Back | Fits for paging and injected confirm/cancel keys. |
+| Bring vs Back vs Ctrl+C Close | `BtwBringToMainPreviewAction` has three distinct variants | **Missing:** a root `runMenu()` returns `{ kind: "closed" }` for both Back and Close. |
+| Main-editor preservation | `showBtwCustomPreservingEditor()` snapshots/restores around custom UI | Could remain extension-owned, but requires a new wrapper around `runMenu()`. |
+| Exact-selector restoration | Caller restores `selectionState` only after preview Back | Blocked by the missing Back/Close result distinction. |
+
+**Decision: no-go for this migration wave.** A disposable package-root harness drove Escape and
+Ctrl+C through the same `ReviewScreen`; both returned the identical `{ kind: "closed" }` result.
+Source inspection also confirmed `reviewViewportSize()` is fixed and does not observe terminal rows.
+Migrating now would weaken tested behavior or require a new kit close-reason/adaptive-viewport API,
+which is outside this plan. The disposable harness was deleted after the check, and `pi-btw`
+source/package metadata is unchanged.
+
 ## Plan
 
 ### 0. Isolate prerequisites and establish baselines
@@ -150,9 +169,11 @@ behavior-preserving consumer migrations, then make an evidence-based go/no-go de
   another-provider, all-provider, and revalidation paths still use only settled current-session data.
   Evidence: every call retains the menu controller signal; existing stable-current, provider,
   fan-out, shutdown, and model/account revalidation guards run after the awaited helper.
-- [ ] Run the pi-usage focused tests, `npm run check --workspace @narumitw/pi-usage`, `npm test`,
+- [x] Run the pi-usage focused tests, `npm run check --workspace @narumitw/pi-usage`, `npm test`,
   `npm run check`, and `just pack-usage`; inspect the dry-run tarball dependency metadata and record
-  any unavailable runtime smoke before marking this PR ready.
+  any unavailable runtime smoke before marking this PR ready. Evidence: 18 focused tests and the
+  package check passed; the final independent-clone root gates passed 1,914 tests; the 12-file pack
+  includes the compatible dependency; PR #479 CI/CodeQL passed and the PR merged.
 
 ### 2. PR 2 — migrate `pi-stamp` custom values to declarative input
 
@@ -179,96 +200,119 @@ behavior-preserving consumer migrations, then make an evidence-based go/no-go de
   preserved, and every post-save continuation checks the action signal before notifying or
   transitioning. Evidence: persistence code is unchanged; submissions still use `savePatch()`, which
   checks the action signal before and after `runtime.update()`, and failures return `rejected`.
-- [ ] Run stamp focused tests, `npm run check --workspace @narumitw/pi-stamp`, `npm test`,
+- [x] Run stamp focused tests, `npm run check --workspace @narumitw/pi-stamp`, `npm test`,
   `npm run check`, and `just pack-stamp`; inspect dependency and source contents and perform a
-  deterministic RPC menu smoke for rejected-then-valid input.
+  deterministic RPC menu smoke for rejected-then-valid input. Evidence: seven focused tests, package
+  check, final 1,914-test root gates, 9-file pack, TUI draft retry, and RPC retry all passed; PR #481
+  CI and CodeQL are green.
 
 ### 3. PR 3 — migrate `pi-image-drop` limits to input and review
 
-- [ ] Extend `extensions/pi-image-drop/test/lifecycle.test.ts` and `test/menu.test.ts` with failing
+- [x] Extend `extensions/pi-image-drop/test/lifecycle.test.ts` and `test/menu.test.ts` with failing
   contract tests for a standard limit input and review: exact current/default/pending copy, raw-value
   and hard-ceiling validation, the per-image-versus-batch cross-field invariant, rejected-draft
   retention, Back versus Ctrl+C, no-change save, cancel-without-save, owner abort, save-failure retry,
-  successful patch identity, and a refreshed zero-unsaved-changes limits screen.
-- [ ] Update `extensions/pi-image-drop/package.json` and `package-lock.json` to the
+  successful patch identity, and a refreshed zero-unsaved-changes limits screen. Evidence: the first
+  compile failed on the missing projection/validation exports; 42 final focused lifecycle/menu tests
+  pass, including rejected-draft inspection, no-op save, stale-save, and refreshed-state assertions.
+- [x] Update `extensions/pi-image-drop/package.json` and `package-lock.json` to the
   API-version-3-compatible kit range; verify standalone installation metadata cannot select
-  `pi-tui-kit@0.40.x` for the migrated source.
-- [ ] Move pure limit labels, prompt/units, formatting, parsing, hard-ceiling and cross-field
+  `pi-tui-kit@0.40.x` for the migrated source. Evidence: the image-local 0.40 lock entry was removed,
+  `npm ci` followed by `npm ls` resolves workspace 0.41.0, and the dry-run package has the new range.
+- [x] Move pure limit labels, prompt/units, formatting, parsing, hard-ceiling and cross-field
   validation, diff text, patch construction, and screen projection helpers from `src/runtime.ts`
   into extension-owned `src/menu.ts`; verify runtime lifecycle/generation and settings persistence
   remain in `ImageDropRuntime`, and recheck the existing over-1,000-line cohesion justification after
-  the move.
-- [ ] Add `limit-input` and `limit-review` screen ids and dedicated submit/confirm actions to the
+  the move. Evidence: runtime is now 972 lines, menu projection is 367 lines, and no persistence or
+  lifecycle owner moved out of `ImageDropRuntime`.
+- [x] Add `limit-input` and `limit-review` screen ids and dedicated submit/confirm actions to the
   existing Image Drop menu. Keep the selected limit and draft in the menu invocation, return input
   Back/review Back to the limits list, and preserve Ctrl+C as whole-menu Close through kit-owned
-  navigation.
-- [ ] On valid input, update only the in-memory draft and return to the limits list; on review confirm,
+  navigation. Evidence: lifecycle tests drive standard kit components through all transitions.
+- [x] On valid input, update only the in-memory draft and return to the limits list; on review confirm,
   publish exactly `limitSettingsPatch()`, revalidate generation/signal after the await, then advance
   `loadedSettings`, `originalLimits`, and `limitDraft` together so the reopened limits screen shows
   no pending changes. Verify failed or stale publication cannot update UI or in-memory committed
-  state.
-- [ ] Remove `showImageDropInputDialog`, `InputDialogResult`, the `showInput` runtime dependency, and
+  state. Evidence: focused tests assert exact patches, zero unsaved state after success, retry after
+  failure, and no stale state/UI publication after replacement during a pending save.
+- [x] Remove `showImageDropInputDialog`, `InputDialogResult`, the `showInput` runtime dependency, and
   superseded component tests/imports. Retain `runImageDropMenuLoad()` and
   `showImageDropConfirmDialog()` for their distinct loader and link-rotation three-way contracts;
-  verify those existing cancellation/close tests remain unchanged and pass.
-- [ ] Update `extensions/pi-image-drop/README.md` so command-menu, settings, and package-layout text
+  verify those existing cancellation/close tests remain unchanged and pass. Evidence: repository
+  search finds no removed symbol, while all specialized loader/confirmation tests pass.
+- [x] Update `extensions/pi-image-drop/README.md` so command-menu, settings, and package-layout text
   identify limit input/review as standard kit flows while loaders and link-rotation confirmation stay
   specialized; preserve the documented TUI-only command and future-session settings behavior.
-- [ ] Audit settings concurrency and lifecycle end to end: invalid-file protection, latest-document
+  Evidence: the command-menu and package-layout sections now state that ownership split explicitly.
+- [x] Audit settings concurrency and lifecycle end to end: invalid-file protection, latest-document
   writes, unknown fields, atomic publication, invocation ordering, failure recovery, session
   replacement, component disposal, and shutdown. Verify every post-await continuation uses the
-  original menu generation/signal and no stale `ExtensionContext` is touched.
-- [ ] Run Image Drop focused lifecycle/menu tests, its web-asset check,
+  original menu generation/signal and no stale `ExtensionContext` is touched. Evidence: settings
+  storage code is unchanged; both automatic-start and limit-save continuations now check their action
+  signal and captured generation before state/UI, and the replacement-during-save test passes.
+- [x] Run Image Drop focused lifecycle/menu tests, its web-asset check,
   `npm run check --workspace @narumitw/pi-image-drop`, `npm test`, `npm run check`, and
   `just pack-image-drop`; inspect the tarball and run an automated TUI-host smoke because repository
-  rules prohibit opening an interactive TUI.
+  rules prohibit opening an interactive TUI. Evidence: 42 focused tests, fresh browser assets,
+  package check, independent-clone 1,914-test root gates, and the 23-file pack passed; lifecycle tests
+  drive the real kit input/review components as the automated TUI-host smoke.
 
 ### 4. Gate — assess `pi-btw` preview against `review`
 
-- [ ] Write a contract matrix from `extensions/pi-btw/src/bring-to-main.ts`,
+- [x] Write a contract matrix from `extensions/pi-btw/src/bring-to-main.ts`,
   `extensions/pi-btw/src/btw.ts`, and `extensions/pi-btw/test/side-thread.test.ts` covering exact raw
   draft delivery, terminal-control escaping, grapheme/cell wrapping, terminal-row viewport sizing,
   paging, configured confirm/back keys, Ctrl+C Close, editor-text preservation, and restored
-  selection state; verify every current behavior has an explicit proposed owner.
-- [ ] Test the existing package-root `runMenu()`/`ReviewScreen` interface against that matrix with a
+  selection state; verify every current behavior has an explicit proposed owner. Evidence: the
+  matrix above maps all eight contracts and identifies the two missing public-kit seams.
+- [x] Test the existing package-root `runMenu()`/`ReviewScreen` interface against that matrix with a
   disposable local prototype or compile-time harness. Mark the gate **go** only if Bring, Back, and
   Close remain distinct and editor/viewport invariants survive without a new kit API or broad
   `chooseBringToMain()` rewrite; otherwise delete the prototype and record a no-go with the exact
-  missing seam.
-- [ ] If the gate is go, draft a separate implementation plan/PR boundary that adds the dependency,
+  missing seam. Evidence: `node node_modules/.cache/pi-btw-review-gate.mjs` passed an assertion that
+  root Escape and Ctrl+C both return `{ kind: "closed" }`; source inspection proves fixed viewport
+  sizing, so the gate is no-go.
+- [x] If the gate is go, draft a separate implementation plan/PR boundary that adds the dependency,
   replaces only `BtwBringToMainPreview`, maps its regression tests to the public review contract, and
   runs `just pack-btw`. If it is no-go, leave `pi-btw` source/package metadata unchanged and record
-  whether a future close-reason or adaptive-viewport contract would justify kit work.
+  whether a future close-reason or adaptive-viewport contract would justify kit work. Evidence:
+  `pi-btw` has no diff or new dependency; a future plan must first decide whether kit should expose a
+  close reason and terminal-adaptive viewport.
 
 ### 5. Cross-PR audit and handoff
 
-- [ ] For each migration diff, audit TUI versus RPC/unsupported modes, user cancellation, component
+- [x] For each migration diff, audit TUI versus RPC/unsupported modes, user cancellation, component
   disposal, session replacement, shutdown, post-await state use, package-root imports, metadata, and
   source-file size against `docs/extension-conventions.md`; record deviations or unavailable smokes
-  in that PR's handoff.
-- [ ] Verify each adopting extension has a compatible kit range while every non-adopting consumer's
+  in that PR's handoff. Evidence: all custom UI remains TUI-guarded; Usage/Stamp retain RPC behavior;
+  Image Drop stays TUI-only; cancellation/replacement tests pass; only package-root imports remain;
+  LSP reports zero diagnostics; and Image Drop runtime fell from 1,085 to 972 lines.
+- [x] Verify each adopting extension has a compatible kit range while every non-adopting consumer's
   range is untouched; use manifest diffs, lockfile inspection, `npm ls`, and each package dry run as
-  evidence.
-- [ ] Confirm the three implementation PRs remain independently revertible and the `pi-btw` decision
+  evidence. Evidence: only Usage, Stamp, and Image Drop changed to `^0.41.0`; all other 15 consumers
+  remain `^0.40.0`, all three local 0.40 lock entries were removed, and all packs passed.
+- [x] Confirm the three implementation PRs remain independently revertible and the `pi-btw` decision
   is finite. Do not combine unrelated dependency updates, generated artifacts, or deferred kit API
-  work into a migration commit.
+  work into a migration commit. Evidence: commits/PRs #479, #481, and #482 each expose one extension
+  diff; #482 is temporarily stacked on #481 and can retarget main unchanged; dependency updates stayed
+  in the invoking tree; the Btw gate is recorded as no-go with no Btw or kit diff.
 
 ## Completion Checklist
 
-- [ ] `pi-usage` delegates generic task lifecycle policy to `runTask()` with unchanged query,
+- [x] `pi-usage` delegates generic task lifecycle policy to `runTask()` with unchanged query,
   cancellation, stale-session, and error-reporting behavior.
-- [ ] `pi-stamp` custom locale/time-zone entry uses declarative input while preserving canonical
+- [x] `pi-stamp` custom locale/time-zone entry uses declarative input while preserving canonical
   validation, rejected drafts, settings safety, navigation, TUI focus, and RPC behavior.
-- [ ] `pi-image-drop` limit editing uses standard input/review screens while preserving draft-only
+- [x] `pi-image-drop` limit editing uses standard input/review screens while preserving draft-only
   edits, exact save patches, future-session semantics, failure recovery, and three-way specialized
   flows outside the limits workflow.
-- [ ] The `pi-btw` review migration has an evidence-backed go/no-go result; no interaction invariant
+- [x] The `pi-btw` review migration has an evidence-backed go/no-go result; no interaction invariant
   is silently weakened.
-- [ ] Only adopting packages require menu API version 3, and their manifests, lockfile edges, tests,
+- [x] Only adopting packages require menu API version 3, and their manifests, lockfile edges, tests,
   and dry-run tarballs agree on the dependency contract.
-- [ ] Focused tests, package checks, root `npm test`, root `npm run check`, applicable deterministic
-  smokes, and `just pack-*` checks pass for every completed migration, with any accepted unverified
-  path documented.
-- [ ] Guides read and audited in each handoff: `docs/extension-conventions.md` and, for Stamp and
+- [x] Focused tests, package checks, root `npm test`, root `npm run check`, applicable deterministic
+  smokes, and `just pack-*` checks pass for every completed migration. Accepted path: interactive TUI
+  launch is prohibited, so deterministic automated hosts exercised the real TUI components.
+- [x] Guides read and audited in each handoff: `docs/extension-conventions.md` and, for Stamp and
   Image Drop, `docs/extension-settings.md`; touched UI, lifecycle, settings, package, documentation,
   and verification areas have no unexplained MUST-rule deviation.
