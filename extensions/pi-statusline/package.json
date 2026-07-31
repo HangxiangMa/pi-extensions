@@ -40,6 +40,6 @@
 		"directory": "extensions/pi-statusline"
 	},
 	"dependencies": {
-		"@narumitw/pi-tui-kit": "<1"
+		"@narumitw/pi-tui-kit": "^0.40.0"
 	}
 }
