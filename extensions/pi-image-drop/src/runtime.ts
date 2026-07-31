@@ -12,20 +12,27 @@ import { BatchError, BatchStore, digestImages, type ProcessedImage } from "./bat
 import { ImageProcessor } from "./images.js";
 import {
 	type ConfirmDialogResult,
+	createLimitInputScreen,
+	createLimitReviewScreen,
+	formatBytes,
 	type ImageDropLimitsMenuState,
-	type InputDialogResult,
+	isLimitSettingAction,
 	type LimitSettingAction,
+	limitChanges,
+	limitMenuDescription,
+	limitMenuState,
+	limitSettingsPatch,
 	type MenuLoadResult,
 	menuSummary,
 	runImageDropMenuLoad,
 	showImageDropConfirmDialog,
-	showImageDropInputDialog,
+	usesSafeLimits,
+	validateLimitInput,
 } from "./menu.js";
 import { readEffectivePiImageSettings } from "./pi-settings.js";
 import { ImageDropServer, type ImageDropServerOptions } from "./server.js";
 import {
 	DEFAULT_SETTINGS,
-	HARD_LIMITS,
 	type ImageDropSettings,
 	loadSettings,
 	settingsFilePath,
@@ -57,7 +64,6 @@ export interface RuntimeDependencies {
 		task: (signal: AbortSignal) => Promise<T>,
 	): Promise<MenuLoadResult<T>>;
 	showConfirm(ctx: ExtensionContext, title: string, message: string): Promise<ConfirmDialogResult>;
-	showInput(ctx: ExtensionContext, title: string, initialValue: string): Promise<InputDialogResult>;
 	updateSettings: typeof updateSettings;
 	settingsFilePath: typeof settingsFilePath;
 }
@@ -69,7 +75,6 @@ const DEFAULT_DEPENDENCIES: RuntimeDependencies = {
 	createProcessor: () => new ImageProcessor(2),
 	loadStatus: runImageDropMenuLoad,
 	showConfirm: showImageDropConfirmDialog,
-	showInput: showImageDropInputDialog,
 	updateSettings,
 	settingsFilePath,
 };
@@ -327,8 +332,17 @@ export class ImageDropRuntime {
 		let loadedSettings: ImageDropSettings | undefined;
 		let originalLimits: ImageDropSettings | undefined;
 		let limitDraft: ImageDropSettings | undefined;
+		let selectedLimit: LimitSettingAction | undefined;
 		let settingsLines: string[] = [];
-		type Screen = "main" | "status" | "settings" | "limits" | "help" | "invalid-settings";
+		type Screen =
+			| "main"
+			| "status"
+			| "settings"
+			| "limits"
+			| "limit-input"
+			| "limit-review"
+			| "help"
+			| "invalid-settings";
 		type Action =
 			| "open"
 			| "load-status"
@@ -338,6 +352,8 @@ export class ImageDropRuntime {
 			| "set-start"
 			| "to-limits"
 			| "limit"
+			| "submit-limit"
+			| "save-limits"
 			| "back";
 		const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
 			start: "main",
@@ -464,6 +480,28 @@ export class ImageDropRuntime {
 						hint: "back",
 					};
 				},
+				"limit-input": () => {
+					if (!selectedLimit || !limitDraft || !originalLimits) {
+						return {
+							kind: "detail",
+							title: "Image limit unavailable",
+							lines: ["Return to Image limits and choose a value again."],
+							hint: "back",
+						};
+					}
+					return createLimitInputScreen(selectedLimit, limitDraft, originalLimits);
+				},
+				"limit-review": () => {
+					if (!limitDraft || !originalLimits) {
+						return {
+							kind: "detail",
+							title: "Resource-limit review unavailable",
+							lines: ["Return to Image limits and reload settings."],
+							hint: "back",
+						};
+					}
+					return createLimitReviewScreen(originalLimits, limitDraft);
+				},
 				help: () => ({
 					kind: "detail",
 					title: "How Image Drop works",
@@ -507,12 +545,12 @@ export class ImageDropRuntime {
 					settingsLines = outcome.lines;
 					return { kind: "to", screen: outcome.invalid ? "invalid-settings" : "settings" };
 				},
-				"set-start": async ({ value }) => {
-					if (!loadedSettings) return { kind: "rejected" };
+				"set-start": async ({ value, signal }) => {
+					if (signal.aborted || !loadedSettings) return { kind: "rejected" };
 					const enabled = value === "On";
 					try {
 						await this.dependencies.updateSettings({ startOnSessionStart: enabled });
-						if (!this.isCurrentMenu(generation)) return { kind: "rejected" };
+						if (signal.aborted || !this.isCurrentMenu(generation)) return { kind: "rejected" };
 						loadedSettings = { ...loadedSettings, startOnSessionStart: enabled };
 						if (originalLimits) originalLimits.startOnSessionStart = enabled;
 						if (limitDraft) limitDraft.startOnSessionStart = enabled;
@@ -522,7 +560,7 @@ export class ImageDropRuntime {
 						);
 						return { kind: "stay" };
 					} catch (error) {
-						if (this.isCurrentMenu(generation)) {
+						if (!signal.aborted && this.isCurrentMenu(generation)) {
 							ctx.ui.notify(
 								`Image Drop settings were not saved; the previous settings remain active: ${formatError(error)}`,
 								"error",
@@ -532,14 +570,69 @@ export class ImageDropRuntime {
 					}
 				},
 				"to-limits": async () => ({ kind: "to", screen: "limits" }),
-				limit: async ({ itemId }) =>
-					this.applyLimitMenuAction(ctx, generation, itemId, () => ({
-						original: originalLimits,
-						draft: limitDraft,
-						setDraft: (next) => {
-							limitDraft = next;
-						},
-					})),
+				limit: async ({ itemId }) => {
+					if (!originalLimits || !limitDraft) return { kind: "rejected" };
+					if (itemId === "defaults") {
+						limitDraft = {
+							...limitDraft,
+							...DEFAULT_SETTINGS,
+							startOnSessionStart: originalLimits.startOnSessionStart,
+						};
+						return { kind: "stay" };
+					}
+					if (itemId === "save") {
+						if (limitChanges(originalLimits, limitDraft).length === 0) {
+							ctx.ui.notify("No resource-limit changes to save.", "info");
+							return { kind: "stay" };
+						}
+						return { kind: "to", screen: "limit-review" };
+					}
+					if (!isLimitSettingAction(itemId)) return { kind: "rejected" };
+					selectedLimit = itemId;
+					return { kind: "to", screen: "limit-input" };
+				},
+				"submit-limit": async ({ value, signal }) => {
+					if (signal.aborted || !selectedLimit || !limitDraft || value === undefined) {
+						return { kind: "rejected" };
+					}
+					const validation = validateLimitInput(selectedLimit, value, limitDraft);
+					if (validation.kind === "invalid") {
+						ctx.ui.notify(validation.message, "warning");
+						return { kind: "rejected" };
+					}
+					limitDraft = { ...limitDraft, [selectedLimit]: validation.value };
+					return { kind: "back" };
+				},
+				"save-limits": async ({ signal }) => {
+					if (signal.aborted || !loadedSettings || !originalLimits || !limitDraft) {
+						return { kind: "rejected" };
+					}
+					const patch = limitSettingsPatch(originalLimits, limitDraft);
+					if (Object.keys(patch).length === 0) {
+						ctx.ui.notify("No resource-limit changes to save.", "info");
+						return { kind: "back" };
+					}
+					const committed = { ...limitDraft };
+					try {
+						await this.dependencies.updateSettings(patch);
+						if (signal.aborted || !this.isCurrentMenu(generation)) {
+							return { kind: "rejected" };
+						}
+						loadedSettings = { ...loadedSettings, ...patch };
+						originalLimits = committed;
+						limitDraft = { ...committed };
+						ctx.ui.notify("Resource limits saved for future Pi sessions.", "info");
+						return { kind: "back" };
+					} catch (error) {
+						if (!signal.aborted && this.isCurrentMenu(generation)) {
+							ctx.ui.notify(
+								`Resource limits were not saved; the previous settings remain active: ${formatError(error)}`,
+								"error",
+							);
+						}
+						return { kind: "rejected" };
+					}
+				},
 				back: async () => ({ kind: "back" }),
 			},
 		});
@@ -662,76 +755,6 @@ export class ImageDropRuntime {
 					]
 				: [`Settings file: ${result.kind === "missing" ? "Defaults (not created)" : path}`],
 		};
-	}
-
-	private async applyLimitMenuAction(
-		ctx: ExtensionCommandContext,
-		generation: number,
-		itemId: string,
-		state: () => {
-			original: ImageDropSettings | undefined;
-			draft: ImageDropSettings | undefined;
-			setDraft(next: ImageDropSettings): void;
-		},
-	): Promise<MenuActionResult<"main" | "settings" | "limits">> {
-		const current = state();
-		if (!current.original || !current.draft) return { kind: "rejected" };
-		if (itemId === "defaults") {
-			current.setDraft({
-				...current.draft,
-				...DEFAULT_SETTINGS,
-				startOnSessionStart: current.original.startOnSessionStart,
-			});
-			return { kind: "stay" };
-		}
-		if (itemId === "save") {
-			const changes = limitChanges(current.original, current.draft);
-			if (changes.length === 0) {
-				ctx.ui.notify("No resource-limit changes to save.", "info");
-				return { kind: "stay" };
-			}
-			const confirmation = await this.dependencies.showConfirm(
-				ctx,
-				"Save resource limits for future sessions?",
-				`${changes.join("\n")}\n\nThese limits apply when the next Pi session starts. Higher limits may increase memory use or provider failures.`,
-			);
-			if (!this.isCurrentMenu(generation) || confirmation === "close") return { kind: "close" };
-			if (confirmation !== "confirmed") return { kind: "stay" };
-			try {
-				await this.dependencies.updateSettings(limitSettingsPatch(current.original, current.draft));
-				if (!this.isCurrentMenu(generation)) return { kind: "close" };
-				ctx.ui.notify("Resource limits saved for future Pi sessions.", "info");
-				return { kind: "back" };
-			} catch (error) {
-				if (this.isCurrentMenu(generation)) {
-					ctx.ui.notify(
-						`Resource limits were not saved; the previous settings remain active: ${formatError(error)}`,
-						"error",
-					);
-				}
-				return { kind: "stay" };
-			}
-		}
-		if (!isLimitSettingAction(itemId)) return { kind: "rejected" };
-		const input = await this.dependencies.showInput(
-			ctx,
-			limitPrompt(itemId),
-			limitInputValue(itemId, current.draft),
-		);
-		if (!this.isCurrentMenu(generation) || input.kind === "closed") return { kind: "close" };
-		if (input.kind === "cancelled") return { kind: "stay" };
-		const parsed = parseLimitInput(itemId, input.value);
-		if (parsed === undefined || parsed > HARD_LIMITS[itemId]) {
-			ctx.ui.notify(`Enter ${limitRange(itemId)}.`, "warning");
-			return { kind: "stay" };
-		}
-		const next = { ...current.draft, [itemId]: parsed };
-		if (next.maxImageBytes > next.maxBatchBytes) {
-			ctx.ui.notify("Size per image cannot exceed the combined draft size.", "warning");
-			return { kind: "stay" };
-		}
-		current.setDraft(next);
-		return { kind: "stay" };
 	}
 
 	private batchStatusLine(state: ReturnType<BatchStore["publicState"]>): string {
@@ -910,142 +933,6 @@ export class ImageDropRuntime {
 			? "Resolve or delete failed images before sending."
 			: "Wait for every image to finish uploading before sending.";
 	}
-}
-
-const MIB = 1024 * 1024;
-const LIMIT_KEYS = [
-	"maxImages",
-	"maxImageBytes",
-	"maxBatchBytes",
-	"maxImagePixels",
-	"maxRetainedImages",
-	"maxRetainedBytes",
-] as const;
-type LimitKey = (typeof LIMIT_KEYS)[number];
-
-function isLimitSettingAction(value: string): value is LimitSettingAction {
-	return (LIMIT_KEYS as readonly string[]).includes(value);
-}
-
-function limitMenuDescription(
-	value: ImageDropLimitsMenuState["values"][LimitSettingAction],
-): string {
-	return value.pending === undefined
-		? `Current: ${value.current} · Default: ${value.defaultValue}`
-		: `Pending: ${value.pending} · Current: ${value.current} · Default: ${value.defaultValue}`;
-}
-
-function usesSafeLimits(settings: ImageDropSettings): boolean {
-	return LIMIT_KEYS.every((key) => settings[key] === DEFAULT_SETTINGS[key]);
-}
-
-function limitMenuState(
-	draft: ImageDropSettings,
-	original: ImageDropSettings,
-): ImageDropLimitsMenuState {
-	const value = (key: LimitSettingAction) => ({
-		current: formatLimitValue(key, original[key]),
-		defaultValue: formatLimitValue(key, DEFAULT_SETTINGS[key]),
-		...(draft[key] === original[key] ? {} : { pending: formatLimitValue(key, draft[key]) }),
-	});
-	return {
-		unsavedChanges: limitChanges(original, draft).length,
-		values: {
-			maxImages: value("maxImages"),
-			maxImageBytes: value("maxImageBytes"),
-			maxBatchBytes: value("maxBatchBytes"),
-			maxImagePixels: value("maxImagePixels"),
-			maxRetainedImages: value("maxRetainedImages"),
-			maxRetainedBytes: value("maxRetainedBytes"),
-		},
-	};
-}
-
-function formatLimitValue(key: LimitSettingAction, value: number): string {
-	if (key === "maxImageBytes" || key === "maxBatchBytes" || key === "maxRetainedBytes") {
-		return formatBytes(value);
-	}
-	if (key === "maxImagePixels" && value % 1_000_000 === 0) {
-		return `${value / 1_000_000} MP`;
-	}
-	return formatCount(value);
-}
-
-function limitChanges(original: ImageDropSettings, draft: ImageDropSettings): string[] {
-	return LIMIT_KEYS.filter((key) => original[key] !== draft[key]).map(
-		(key) =>
-			`${limitLabel(key)}: ${formatLimit(key, original[key])} → ${formatLimit(key, draft[key])}`,
-	);
-}
-
-function limitSettingsPatch(
-	original: ImageDropSettings,
-	draft: ImageDropSettings,
-): Partial<Record<LimitKey, number>> {
-	const patch: Partial<Record<LimitKey, number>> = {};
-	for (const key of LIMIT_KEYS) {
-		if (original[key] !== draft[key]) patch[key] = draft[key];
-	}
-	return patch;
-}
-
-function limitPrompt(key: LimitKey): string {
-	const unit = byteLimit(key) ? "MiB" : key === "maxImagePixels" ? "megapixels" : "images";
-	return `${limitLabel(key)} (${unit})`;
-}
-
-function limitInputValue(key: LimitKey, settings: ImageDropSettings): string {
-	const value = settings[key];
-	if (byteLimit(key)) return String(value / MIB);
-	if (key === "maxImagePixels") return String(value / 1_000_000);
-	return String(value);
-}
-
-function parseLimitInput(key: LimitKey, input: string): number | undefined {
-	const value = Number(input.trim());
-	if (!Number.isFinite(value) || value <= 0) return undefined;
-	const scaled = byteLimit(key)
-		? value * MIB
-		: key === "maxImagePixels"
-			? value * 1_000_000
-			: value;
-	return Number.isSafeInteger(scaled) ? scaled : undefined;
-}
-
-function limitRange(key: LimitKey): string {
-	return `a positive value no greater than ${formatLimit(key, HARD_LIMITS[key])}`;
-}
-
-function limitLabel(key: LimitKey): string {
-	return {
-		maxImages: "Images for next message",
-		maxImageBytes: "Per-image upload size",
-		maxBatchBytes: "Total upload size",
-		maxImagePixels: "Maximum image resolution",
-		maxRetainedImages: "Staged + sent image count",
-		maxRetainedBytes: "Staged + sent image memory",
-	}[key];
-}
-
-function formatLimit(key: LimitKey, value: number): string {
-	if (byteLimit(key)) return formatBytes(value);
-	return key === "maxImagePixels" ? formatCount(value) : String(value);
-}
-
-function byteLimit(key: LimitKey): boolean {
-	return key === "maxImageBytes" || key === "maxBatchBytes" || key === "maxRetainedBytes";
-}
-
-function formatBytes(value: number): string {
-	if (value < 1024) return `${value} B`;
-	if (value < MIB) return `${Math.round(value / 1024)} KiB`;
-	return `${Number((value / MIB).toFixed(1))} MiB`;
-}
-
-function formatCount(value: number): string {
-	return value >= 1_000_000
-		? `${Number((value / 1_000_000).toFixed(1))} megapixels`
-		: String(value);
 }
 
 function supportsImages(ctx: ExtensionContext): boolean {

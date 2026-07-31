@@ -1,16 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
 import {
+	createLimitInputScreen,
+	createLimitReviewScreen,
 	type ImageDropMenuState,
 	menuSummary,
 	runImageDropMenuLoad,
 	safeMenuText,
 	showImageDropConfirmDialog,
-	showImageDropInputDialog,
+	validateLimitInput,
 } from "../src/menu.js";
+import { DEFAULT_SETTINGS } from "../src/settings.js";
 
 initTheme("dark", false);
 
@@ -41,6 +43,42 @@ test("menu summaries expose empty, partial, and queued state without relying on 
 		/queued/,
 	);
 	assert.equal(safeMenuText("unsafe\u001b]8;;bad\u0007 value"), "unsafe ]8;;bad value");
+});
+
+test("limit input and review projections preserve exact domain values", () => {
+	const original = { ...DEFAULT_SETTINGS };
+	const draft = { ...original, maxRetainedImages: 120 };
+	const input = createLimitInputScreen("maxRetainedImages", draft, original);
+	assert.equal(input.kind, "input");
+	assert.equal(input.action, "submit-limit");
+	assert.match((input.lines ?? []).join("\n"), /Current: 120.*Default: 128/u);
+
+	assert.deepEqual(validateLimitInput("maxImages", "0", draft), {
+		kind: "invalid",
+		message: "Enter a positive value no greater than 32.",
+	});
+	assert.deepEqual(validateLimitInput("maxImages", "33", draft), {
+		kind: "invalid",
+		message: "Enter a positive value no greater than 32.",
+	});
+	assert.deepEqual(validateLimitInput("maxImageBytes", "41", draft), {
+		kind: "invalid",
+		message: "Size per image cannot exceed the combined draft size.",
+	});
+	assert.deepEqual(validateLimitInput("maxImageBytes", "5", draft), {
+		kind: "valid",
+		value: 5 * 1024 * 1024,
+	});
+
+	const review = createLimitReviewScreen(original, draft);
+	assert.equal(review.kind, "review");
+	assert.match(review.content, /Staged \+ sent image count: 128 → 120/u);
+	assert.match(review.content, /next Pi session/u);
+	assert.deepEqual(review.confirm, {
+		id: "save",
+		label: "Save resource limits",
+		action: "save-limits",
+	});
 });
 
 test("status loading distinguishes Escape back from Ctrl+C close", async () => {
@@ -111,26 +149,4 @@ test("specialized confirmation distinguishes cancellation from closing Image Dro
 	}
 	assert.equal(await drive("\u0003"), "close");
 	assert.equal(await drive("\u001b"), "cancelled");
-});
-
-test("specialized numeric input submits, closes, and remains width safe", async () => {
-	let focusedRender = "";
-	const context = createMockContext({
-		mode: "tui",
-		custom: async (factory: unknown) => {
-			const harness = createCustomSelectorHarness(factory, 20);
-			harness.setFocused(true);
-			harness.handleInput("1");
-			harness.handleInput("2");
-			focusedRender = harness.render().join("\n");
-			harness.handleInput("tui.input.submit");
-			return harness.result;
-		},
-	});
-	assert.deepEqual(await showImageDropInputDialog(context.ctx, "Limit", "4"), {
-		kind: "submitted",
-		value: "12",
-	});
-	assert.equal(focusedRender.includes(CURSOR_MARKER), true);
-	for (const line of focusedRender.split("\n")) assert.ok(visibleWidth(line) <= 20);
 });

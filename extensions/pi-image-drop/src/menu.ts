@@ -4,16 +4,14 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
-	type Focusable,
-	Input,
 	Key,
 	matchesKey,
 	SelectList,
-	Text,
 	truncateToWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { PublicBatchState, PublicHistoryState } from "./batch.js";
+import { DEFAULT_SETTINGS, HARD_LIMITS, type ImageDropSettings } from "./settings.js";
 
 export type LimitSettingAction =
 	| "maxImages"
@@ -44,6 +42,202 @@ export interface ImageDropMenuState {
 	batch: PublicBatchState;
 	history: PublicHistoryState;
 	serverRunning: boolean;
+}
+
+const MIB = 1024 * 1024;
+export const LIMIT_SETTING_ACTIONS = [
+	"maxImages",
+	"maxImageBytes",
+	"maxBatchBytes",
+	"maxImagePixels",
+	"maxRetainedImages",
+	"maxRetainedBytes",
+] as const satisfies readonly LimitSettingAction[];
+
+export function isLimitSettingAction(value: string): value is LimitSettingAction {
+	return (LIMIT_SETTING_ACTIONS as readonly string[]).includes(value);
+}
+
+export function createLimitInputScreen(
+	key: LimitSettingAction,
+	draft: ImageDropSettings,
+	original: ImageDropSettings,
+) {
+	return {
+		kind: "input" as const,
+		title: limitPrompt(key),
+		lines: [
+			`Current: ${formatLimit(key, draft[key])} · Saved: ${formatLimit(key, original[key])} · Default: ${formatLimit(key, DEFAULT_SETTINGS[key])}`,
+			`Allowed: ${limitRange(key)}.`,
+		],
+		placeholder: limitInputValue(key, draft),
+		action: "submit-limit" as const,
+		hint: "back" as const,
+	};
+}
+
+export function createLimitReviewScreen(original: ImageDropSettings, draft: ImageDropSettings) {
+	return {
+		kind: "review" as const,
+		title: "Review resource-limit changes",
+		content: [
+			...limitChanges(original, draft),
+			"",
+			"These limits apply when the next Pi session starts.",
+			"Higher limits may increase memory use or provider failures.",
+		].join("\n"),
+		format: { kind: "text" as const },
+		confirm: {
+			id: "save",
+			label: "Save resource limits",
+			action: "save-limits" as const,
+		},
+		hint: "back" as const,
+	};
+}
+
+export type LimitInputValidation =
+	| { kind: "valid"; value: number }
+	| { kind: "invalid"; message: string };
+
+export function validateLimitInput(
+	key: LimitSettingAction,
+	input: string,
+	draft: ImageDropSettings,
+): LimitInputValidation {
+	const value = parseLimitInput(key, input);
+	if (value === undefined || value > HARD_LIMITS[key]) {
+		return { kind: "invalid", message: `Enter ${limitRange(key)}.` };
+	}
+	const next = { ...draft, [key]: value };
+	if (next.maxImageBytes > next.maxBatchBytes) {
+		return {
+			kind: "invalid",
+			message: "Size per image cannot exceed the combined draft size.",
+		};
+	}
+	return { kind: "valid", value };
+}
+
+export function limitMenuDescription(
+	value: ImageDropLimitsMenuState["values"][LimitSettingAction],
+): string {
+	return value.pending === undefined
+		? `Current: ${value.current} · Default: ${value.defaultValue}`
+		: `Pending: ${value.pending} · Current: ${value.current} · Default: ${value.defaultValue}`;
+}
+
+export function usesSafeLimits(settings: ImageDropSettings): boolean {
+	return LIMIT_SETTING_ACTIONS.every((key) => settings[key] === DEFAULT_SETTINGS[key]);
+}
+
+export function limitMenuState(
+	draft: ImageDropSettings,
+	original: ImageDropSettings,
+): ImageDropLimitsMenuState {
+	const value = (key: LimitSettingAction) => ({
+		current: formatLimitValue(key, original[key]),
+		defaultValue: formatLimitValue(key, DEFAULT_SETTINGS[key]),
+		...(draft[key] === original[key] ? {} : { pending: formatLimitValue(key, draft[key]) }),
+	});
+	return {
+		unsavedChanges: limitChanges(original, draft).length,
+		values: {
+			maxImages: value("maxImages"),
+			maxImageBytes: value("maxImageBytes"),
+			maxBatchBytes: value("maxBatchBytes"),
+			maxImagePixels: value("maxImagePixels"),
+			maxRetainedImages: value("maxRetainedImages"),
+			maxRetainedBytes: value("maxRetainedBytes"),
+		},
+	};
+}
+
+export function limitChanges(original: ImageDropSettings, draft: ImageDropSettings): string[] {
+	return LIMIT_SETTING_ACTIONS.filter((key) => original[key] !== draft[key]).map(
+		(key) =>
+			`${limitLabel(key)}: ${formatLimit(key, original[key])} → ${formatLimit(key, draft[key])}`,
+	);
+}
+
+export function limitSettingsPatch(
+	original: ImageDropSettings,
+	draft: ImageDropSettings,
+): Partial<ImageDropSettings> {
+	const patch: Partial<ImageDropSettings> = {};
+	for (const key of LIMIT_SETTING_ACTIONS) {
+		if (original[key] !== draft[key]) patch[key] = draft[key];
+	}
+	return patch;
+}
+
+function formatLimitValue(key: LimitSettingAction, value: number): string {
+	if (key === "maxImageBytes" || key === "maxBatchBytes" || key === "maxRetainedBytes") {
+		return formatBytes(value);
+	}
+	if (key === "maxImagePixels" && value % 1_000_000 === 0) {
+		return `${value / 1_000_000} MP`;
+	}
+	return formatCount(value);
+}
+
+function limitPrompt(key: LimitSettingAction): string {
+	const unit = byteLimit(key) ? "MiB" : key === "maxImagePixels" ? "megapixels" : "images";
+	return `${limitLabel(key)} (${unit})`;
+}
+
+function limitInputValue(key: LimitSettingAction, settings: ImageDropSettings): string {
+	const value = settings[key];
+	if (byteLimit(key)) return String(value / MIB);
+	if (key === "maxImagePixels") return String(value / 1_000_000);
+	return String(value);
+}
+
+function parseLimitInput(key: LimitSettingAction, input: string): number | undefined {
+	const value = Number(input.trim());
+	if (!Number.isFinite(value) || value <= 0) return undefined;
+	const scaled = byteLimit(key)
+		? value * MIB
+		: key === "maxImagePixels"
+			? value * 1_000_000
+			: value;
+	return Number.isSafeInteger(scaled) ? scaled : undefined;
+}
+
+function limitRange(key: LimitSettingAction): string {
+	return `a positive value no greater than ${formatLimit(key, HARD_LIMITS[key])}`;
+}
+
+function limitLabel(key: LimitSettingAction): string {
+	return {
+		maxImages: "Images for next message",
+		maxImageBytes: "Per-image upload size",
+		maxBatchBytes: "Total upload size",
+		maxImagePixels: "Maximum image resolution",
+		maxRetainedImages: "Staged + sent image count",
+		maxRetainedBytes: "Staged + sent image memory",
+	}[key];
+}
+
+function formatLimit(key: LimitSettingAction, value: number): string {
+	if (byteLimit(key)) return formatBytes(value);
+	return key === "maxImagePixels" ? formatCount(value) : String(value);
+}
+
+function byteLimit(key: LimitSettingAction): boolean {
+	return key === "maxImageBytes" || key === "maxBatchBytes" || key === "maxRetainedBytes";
+}
+
+export function formatBytes(value: number): string {
+	if (value < 1024) return `${value} B`;
+	if (value < MIB) return `${Math.round(value / 1024)} KiB`;
+	return `${Number((value / MIB).toFixed(1))} MiB`;
+}
+
+function formatCount(value: number): string {
+	return value >= 1_000_000
+		? `${Number((value / 1_000_000).toFixed(1))} megapixels`
+		: String(value);
 }
 
 export function runImageDropMenuLoad<T>(
@@ -89,10 +283,6 @@ export function runImageDropMenuLoad<T>(
 }
 
 export type ConfirmDialogResult = "confirmed" | "cancelled" | "close";
-export type InputDialogResult =
-	| { kind: "submitted"; value: string }
-	| { kind: "cancelled" }
-	| { kind: "closed" };
 
 /** Specialized three-way confirmation retained to distinguish Escape from Ctrl+C. */
 export function showImageDropConfirmDialog(
@@ -101,63 +291,6 @@ export function showImageDropConfirmDialog(
 	message: string,
 ): Promise<ConfirmDialogResult> {
 	return showConfirmScreen(ctx, title, message.split(/\r?\n/));
-}
-
-/** Specialized numeric input retained because standard kit screens do not own text editing. */
-export function showImageDropInputDialog(
-	ctx: ExtensionContext,
-	title: string,
-	initialValue: string,
-): Promise<InputDialogResult> {
-	return ctx.ui.custom<InputDialogResult>((tui, theme, keybindings, done) => {
-		const input = new Input();
-		const heading = new Text("", 0, 0);
-		const current = new Text("", 0, 0);
-		const hint = new Text("", 0, 0);
-		const applyTheme = () => {
-			heading.setText(theme.fg("accent", theme.bold(safeMenuText(title))));
-			current.setText(theme.fg("muted", `Current: ${safeMenuText(initialValue)}`));
-			hint.setText(theme.fg("dim", "enter save • esc back • ctrl+c close"));
-		};
-		applyTheme();
-		const component: Focusable & {
-			render(width: number): string[];
-			invalidate(): void;
-			handleInput(data: string): void;
-		} = {
-			get focused() {
-				return input.focused;
-			},
-			set focused(value: boolean) {
-				input.focused = value;
-			},
-			render(width: number) {
-				const safeWidth = Math.max(1, width);
-				return [
-					...heading.render(safeWidth),
-					...current.render(safeWidth),
-					...input.render(safeWidth),
-					...hint.render(safeWidth),
-				].map((line) => truncateToWidth(line, safeWidth));
-			},
-			invalidate() {
-				applyTheme();
-				heading.invalidate();
-				current.invalidate();
-				input.invalidate();
-				hint.invalidate();
-			},
-			handleInput(data: string) {
-				if (matchesKey(data, Key.ctrl("c"))) done({ kind: "closed" });
-				else if (keybindings.matches(data, "tui.select.cancel")) done({ kind: "cancelled" });
-				else if (keybindings.matches(data, "tui.input.submit")) {
-					done({ kind: "submitted", value: input.getValue() });
-				} else input.handleInput(data);
-				tui.requestRender();
-			},
-		};
-		return component;
-	});
 }
 
 function showConfirmScreen(
