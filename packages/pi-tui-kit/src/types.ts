@@ -7,6 +7,8 @@ export interface MenuContext {
 	ui: object;
 }
 
+export type MenuCloseReason = "back" | "close";
+
 export type MenuTransition<ScreenId extends string> =
 	| { kind: "stay" }
 	| { kind: "back" }

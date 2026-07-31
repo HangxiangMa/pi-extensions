@@ -16,6 +16,7 @@ import type {
 	ActionMenuItem,
 	MenuActionHandler,
 	MenuActionResult,
+	MenuCloseReason,
 	MenuContext,
 	MenuDefinition,
 	MenuScreen,
@@ -25,7 +26,7 @@ import type {
 type ExtensionMode = MenuContext["mode"];
 
 export type RunMenuResult =
-	| { kind: "closed" }
+	| { kind: "closed"; reason: MenuCloseReason }
 	| { kind: "stale" }
 	| { kind: "unsupported"; mode: ExtensionMode }
 	| { kind: "error"; error: unknown };
@@ -206,7 +207,7 @@ async function runTuiMenu<
 			if (outcome.stale) return { kind: "stale" };
 			navigator.apply(outcome.transition);
 		}
-		return { kind: "closed" };
+		return closedMenuResult(navigator.closeReason);
 	} catch (error) {
 		if (!isCurrent(options) || menuSignal.aborted) return { kind: "stale" };
 		await reportError(ctx, options, error);
@@ -583,7 +584,7 @@ async function runDialogMenu<
 			if (outcome.stale) return { kind: "stale" };
 			navigator.apply(outcome.transition);
 		}
-		return { kind: "closed" };
+		return closedMenuResult(navigator.closeReason);
 	} catch (error) {
 		if (!isCurrent(options) || menuSignal.aborted) return { kind: "stale" };
 		await reportError(ctx, options, error);
@@ -744,6 +745,11 @@ async function reportError<State, Context extends MenuContext>(
 			// Error reporting must never escape the documented menu result contract.
 		}
 	}
+}
+
+function closedMenuResult(reason: MenuCloseReason | undefined): RunMenuResult {
+	if (reason === undefined) throw new Error("Menu navigator closed without a termination reason");
+	return { kind: "closed", reason };
 }
 
 function accepted<ScreenId extends string>(

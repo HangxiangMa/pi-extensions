@@ -120,6 +120,7 @@ test("RPC input retries a rejected value, preserves raw payload, and never opens
 
 	assert.deepEqual(await runMenu(context.ctx, menu, { getState: () => undefined }), {
 		kind: "closed",
+		reason: "close",
 	});
 	assert.deepEqual(values, [" bad ", " 42 "]);
 	assert.equal(inputCalls, 2);
@@ -155,6 +156,7 @@ test("TUI input rejection retains the same draft before a later accepted transit
 
 	assert.deepEqual(await runMenu(context.ctx, menu, { getState: () => undefined }), {
 		kind: "closed",
+		reason: "close",
 	});
 	assert.deepEqual(values, [" x ", " x "]);
 });

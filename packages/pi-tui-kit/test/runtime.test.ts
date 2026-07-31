@@ -65,6 +65,123 @@ function runtimeMenu(
 	});
 }
 
+function terminalDetailMenu(hint: "back" | "close") {
+	return defineMenu<undefined, "main", "unused">({
+		start: "main",
+		screens: {
+			main: () => ({ kind: "detail", title: "Terminal result", lines: [], hint }),
+		},
+		actions: { unused: async () => ({ kind: "stay" }) },
+	});
+}
+
+test("TUI root Back, hinted Close, and Ctrl+C preserve distinct close reasons", async () => {
+	async function drive(hint: "back" | "close", input: string) {
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 40);
+				harness.handleInput(input);
+				return harness.result;
+			},
+		});
+		return runMenu(context.ctx, terminalDetailMenu(hint), { getState: () => undefined });
+	}
+
+	assert.deepEqual(await drive("back", "tui.select.cancel"), {
+		kind: "closed",
+		reason: "back",
+	});
+	assert.deepEqual(await drive("close", "tui.select.cancel"), {
+		kind: "closed",
+		reason: "close",
+	});
+	assert.deepEqual(await drive("back", "\u0003"), { kind: "closed", reason: "close" });
+});
+
+test("TUI action Close, close rows, and implicit current-owner closure report Close", async () => {
+	async function drive(target: "action" | "row" | "implicit") {
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 40);
+				if (target !== "implicit") harness.handleInput("tui.select.confirm");
+				return target === "implicit" ? undefined : harness.result;
+			},
+		});
+		const menu = defineMenu<undefined, "main", "finish">({
+			start: "main",
+			screens: {
+				main: () => ({
+					kind: "actions",
+					title: "Finish",
+					items: [
+						target === "row"
+							? { id: "finish", label: "Finish", close: true }
+							: { id: "finish", label: "Finish", action: "finish" },
+					],
+				}),
+			},
+			actions: { finish: async () => ({ kind: "close" }) },
+		});
+		return runMenu(context.ctx, menu, { getState: () => undefined });
+	}
+
+	for (const target of ["action", "row", "implicit"] as const) {
+		assert.deepEqual(await drive(target), { kind: "closed", reason: "close" }, target);
+	}
+});
+
+test("RPC preserves generic Back and hint-driven input/review terminal reasons", async () => {
+	const generic = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		select: async () => undefined,
+	});
+	assert.deepEqual(
+		await runMenu(generic.ctx, terminalDetailMenu("close"), { getState: () => undefined }),
+		{ kind: "closed", reason: "back" },
+	);
+
+	async function driveInput(hint: "back" | "close") {
+		const context = createMockContext({ mode: "rpc", hasUI: true, input: async () => undefined });
+		const menu = defineMenu<undefined, "input", "submit">({
+			start: "input",
+			screens: {
+				input: () => ({ kind: "input", title: "Value", action: "submit", hint }),
+			},
+			actions: { submit: async () => ({ kind: "close" }) },
+		});
+		return runMenu(context.ctx, menu, { getState: () => undefined });
+	}
+	assert.deepEqual(await driveInput("back"), { kind: "closed", reason: "back" });
+	assert.deepEqual(await driveInput("close"), { kind: "closed", reason: "close" });
+
+	const review = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		select: async () => undefined,
+	});
+	const reviewMenu = defineMenu<undefined, "review", "apply">({
+		start: "review",
+		screens: {
+			review: () => ({
+				kind: "review",
+				title: "Review",
+				content: "content",
+				hint: "close",
+			}),
+		},
+		actions: { apply: async () => ({ kind: "close" }) },
+	});
+	assert.deepEqual(await runMenu(review.ctx, reviewMenu, { getState: () => undefined }), {
+		kind: "closed",
+		reason: "close",
+	});
+});
+
 test("runMenu navigates, refreshes dynamic state, restores selection, and closes", async () => {
 	let count = 0;
 	let customCalls = 0;
@@ -95,7 +212,7 @@ test("runMenu navigates, refreshes dynamic state, restores selection, and closes
 	});
 
 	const result = await runMenu(context.ctx, menu, { getState: () => ({ count }) });
-	assert.deepEqual(result, { kind: "closed" });
+	assert.deepEqual(result, { kind: "closed", reason: "close" });
 	assert.equal(count, 1);
 	assert.equal(customCalls, 4);
 	assert.match(screens[1] ?? "", /Count 0/);
@@ -124,6 +241,7 @@ test("Escape back restores the cursor on the parent row", async () => {
 
 	assert.deepEqual(await runMenu(context.ctx, runtimeMenu(), { getState: () => ({ count: 0 }) }), {
 		kind: "closed",
+		reason: "close",
 	});
 	assert.equal(customCalls, 3);
 });
@@ -148,6 +266,7 @@ test("RPC uses dialog adaptation without custom TUI and print mode delegates uns
 	});
 	assert.deepEqual(await runMenu(rpc.ctx, menu, { getState: () => ({ count }) }), {
 		kind: "closed",
+		reason: "back",
 	});
 	assert.equal(count, 1);
 	assert.equal(customCalls, 0);
@@ -226,6 +345,7 @@ test("choice TUI prefers initial over current and invokes the confirmed raw item
 
 	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
 		kind: "closed",
+		reason: "close",
 	});
 	assert.deepEqual(invoked, ["balanced"]);
 });
@@ -261,6 +381,7 @@ test("choice TUI falls back from a missing initial id to the current item", asyn
 
 	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
 		kind: "closed",
+		reason: "close",
 	});
 });
 
@@ -312,6 +433,7 @@ test("choice rejection restores remembered selection and falls back when that it
 
 	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
 		kind: "closed",
+		reason: "close",
 	});
 	assert.equal(customCalls, 2);
 });
@@ -413,6 +535,7 @@ test("choice RPC preserves duplicate-label identity and keeps disabled rows iner
 
 	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
 		kind: "closed",
+		reason: "close",
 	});
 	assert.deepEqual(invoked, ["raw-two"]);
 	assert.equal(selectCalls, 2);
@@ -457,6 +580,7 @@ test("searchable multi-select TUI dispatches the filtered raw item id", async ()
 
 	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
 		kind: "closed",
+		reason: "close",
 	});
 	assert.deepEqual(invoked, ["raw-two"]);
 });
@@ -497,6 +621,7 @@ test("searchable multi-select RPC keeps the full unfiltered unique row list", as
 
 	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
 		kind: "closed",
+		reason: "close",
 	});
 	assert.deepEqual(invoked, ["raw-two"]);
 	assert.equal(new Set(choicesSeen).size, choicesSeen.length);
@@ -547,6 +672,7 @@ test("RPC choices preserve item identity across duplicate and exit labels", asyn
 
 	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
 		kind: "closed",
+		reason: "close",
 	});
 	assert.deepEqual(invoked, ["second", "done-action"]);
 	assert.equal(selectCalls, 3);
@@ -596,6 +722,7 @@ test("RPC exposes disabled multi-select reasons and never invokes toggle actions
 
 	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
 		kind: "closed",
+		reason: "back",
 	});
 	assert.equal(toggles, 0);
 	assert.equal(selectCalls, 2);
@@ -879,7 +1006,7 @@ test("a cancellable busy action receives abort, drains, and leaves the menu usab
 		}),
 		{ getState: () => ({ count: 0 }) },
 	);
-	assert.deepEqual(result, { kind: "closed" });
+	assert.deepEqual(result, { kind: "closed", reason: "close" });
 	assert.equal(aborted, true);
 	assert.equal(customCalls, 3);
 });
@@ -965,7 +1092,7 @@ test("a rejecting error reporter cannot strand a busy action", async () => {
 		},
 	);
 
-	assert.deepEqual(result, { kind: "closed" });
+	assert.deepEqual(result, { kind: "closed", reason: "close" });
 	assert.equal(customCalls, 3);
 	assert.equal(reporterCalls, 1);
 });
@@ -1103,6 +1230,7 @@ test("settings refreshes preserve the changed row cursor", async () => {
 
 	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
 		kind: "closed",
+		reason: "close",
 	});
 	assert.equal(customCalls, 2);
 });
