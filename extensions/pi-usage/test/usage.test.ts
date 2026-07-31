@@ -305,23 +305,90 @@ test("automatic lifecycle refresh starts asynchronously", () => {
 	mock.events.get("session_shutdown")?.[0]?.({}, ctx);
 });
 
+test("TUI usage queries complete through the loader before opening the menu", async (t) => {
+	const originalFetch = globalThis.fetch;
+	t.after(() => {
+		globalThis.fetch = originalFetch;
+	});
+	globalThis.fetch = usageFetch;
+	const mock = createMockPi();
+	usageExtension(mock.pi);
+	const command = mock.commands.get("usage");
+	assert.ok(command);
+	let customCalls = 0;
+	const { ctx } = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		model: openRouterModel,
+		custom: async (factory: unknown) =>
+			new Promise<unknown>((resolve) => {
+				if (typeof factory !== "function") return resolve(undefined);
+				customCalls += 1;
+				let component: {
+					dispose?(): void;
+					handleInput(data: string): void;
+					render(width: number): string[];
+				};
+				const done = (value: unknown) => {
+					component.dispose?.();
+					resolve(value);
+				};
+				component = (
+					factory as (
+						tui: { requestRender(): void },
+						theme: { fg(_color: string, text: string): string },
+						keybindings: object,
+						done: (value: unknown) => void,
+					) => typeof component
+				)({ requestRender() {} }, { fg: (_color, text) => text }, {}, done);
+				if (customCalls === 2) setImmediate(() => component.handleInput("\u0003"));
+			}),
+		modelRegistry: {
+			getProviderAuth: async () => ({ auth: { apiKey: "openrouter-key" } }),
+			getAvailable: () => [openRouterModel],
+			getAll: () => [openRouterModel],
+			getProviderAuthStatus: () => ({ configured: true }),
+			getProviderDisplayName: (provider: string) => provider,
+		},
+	});
+
+	await command.handler("", ctx);
+
+	assert.equal(customCalls, 2);
+});
+
+test("a loader UI failure propagates once without an extra task notification", async () => {
+	const mock = createMockPi();
+	usageExtension(mock.pi);
+	const command = mock.commands.get("usage");
+	assert.ok(command);
+	const { ctx, notifications } = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		model: openRouterModel,
+		custom: async () => {
+			throw new Error("loader UI failed");
+		},
+	});
+
+	await assert.rejects(Promise.resolve(command.handler("", ctx)), /loader UI failed/u);
+	assert.deepEqual(notifications, []);
+});
+
 test("TUI usage queries can be cancelled with Escape", async () => {
 	const mock = createMockPi();
 	usageExtension(mock.pi);
 	const command = mock.commands.get("usage");
 	assert.ok(command);
-	let selected = false;
+	let customCalls = 0;
 	const { ctx } = createMockContext({
 		hasUI: true,
 		mode: "tui",
 		model: openRouterModel,
-		select: async () => {
-			selected = true;
-			return "Close";
-		},
 		custom: async (factory: unknown) =>
 			new Promise<unknown>((resolve) => {
 				if (typeof factory !== "function") return resolve(undefined);
+				customCalls += 1;
 				let component: { dispose?(): void; handleInput(data: string): void };
 				const done = (value: unknown) => {
 					component.dispose?.();
@@ -345,7 +412,7 @@ test("TUI usage queries can be cancelled with Escape", async () => {
 	});
 
 	await command.handler("", ctx);
-	assert.equal(selected, false);
+	assert.equal(customCalls, 1);
 });
 
 test("session shutdown aborts usage action and provider selectors", async (t) => {
