@@ -283,3 +283,161 @@ export function formatAgentList(
 		remaining,
 	};
 }
+
+export interface AgentCatalog {
+	/** The effective catalog for the default invocation scope. */
+	user: AgentDiscoveryResult;
+	/** The project-scope catalog; custom project definitions are loaded only after project trust. */
+	project?: AgentDiscoveryResult;
+}
+
+export interface AgentCatalogFormatOptions {
+	maxItems?: number;
+	maxDescriptionLength?: number;
+	maxCharacters?: number;
+}
+
+export interface AgentCatalogFormatResult {
+	text: string;
+	omitted: number;
+}
+
+export const DEFAULT_AGENT_CATALOG_MAX_ITEMS = 32;
+export const DEFAULT_AGENT_CATALOG_MAX_DESCRIPTION_LENGTH = 240;
+export const DEFAULT_AGENT_CATALOG_MAX_CHARACTERS = 6_000;
+
+const BUILT_IN_AGENT_ORDER = new Map(BUILT_IN_AGENTS.map((agent, index) => [agent.name, index]));
+
+function compareCatalogAgents(left: AgentConfig, right: AgentConfig): number {
+	const leftBuiltInOrder = BUILT_IN_AGENT_ORDER.get(left.name);
+	const rightBuiltInOrder = BUILT_IN_AGENT_ORDER.get(right.name);
+	if (leftBuiltInOrder !== undefined || rightBuiltInOrder !== undefined) {
+		if (leftBuiltInOrder === undefined) return 1;
+		if (rightBuiltInOrder === undefined) return -1;
+		return leftBuiltInOrder - rightBuiltInOrder;
+	}
+	return left.name.localeCompare(right.name);
+}
+
+function normalizeCatalogDescription(description: string, maxLength: number): string {
+	const normalized = description.replace(/\s+/gu, " ").trim();
+	if (normalized.length <= maxLength) return normalized;
+	const suffix = "…";
+	return `${normalized.slice(0, Math.max(0, maxLength - suffix.length)).trimEnd()}${suffix}`;
+}
+
+type CatalogScope = "user" | "project" | "project-fallback";
+
+function catalogAgentLine(
+	agent: AgentConfig,
+	scope: CatalogScope,
+	userNames: ReadonlySet<string>,
+	maxDescriptionLength: number,
+): string {
+	const scopeLabel =
+		scope === "user"
+			? 'agentScope: "user"'
+			: scope === "project"
+				? 'requires agentScope: "project" or "both"'
+				: 'requires agentScope: "project" ("both" selects the user definition)';
+	const collision =
+		scope !== "user" && userNames.has(agent.name)
+			? scope === "project"
+				? "; overrides the default user definition for project/both"
+				: "; scope-specific fallback for the default user override"
+			: "";
+	return `- ${agent.name} [source: ${agent.source}; ${scopeLabel}${collision}] — ${normalizeCatalogDescription(agent.description, maxDescriptionLength)}`;
+}
+
+/**
+ * Format the effective agent variants that the parent model can invoke.
+ *
+ * User-authored descriptions are prompt text, so this formatter deliberately normalizes and bounds
+ * them. Project definitions are supplied separately by the caller so an untrusted project is never
+ * read merely to build model-facing metadata.
+ */
+export function formatAgentCatalog(
+	catalog: AgentCatalog,
+	options: AgentCatalogFormatOptions = {},
+): AgentCatalogFormatResult {
+	const maxItems = Math.max(0, options.maxItems ?? DEFAULT_AGENT_CATALOG_MAX_ITEMS);
+	const maxDescriptionLength = Math.max(
+		1,
+		options.maxDescriptionLength ?? DEFAULT_AGENT_CATALOG_MAX_DESCRIPTION_LENGTH,
+	);
+	const maxCharacters = Math.max(1, options.maxCharacters ?? DEFAULT_AGENT_CATALOG_MAX_CHARACTERS);
+	const userAgents = [...catalog.user.agents].sort(compareCatalogAgents);
+	const projectScopeAgents = [...(catalog.project?.agents ?? [])].sort(compareCatalogAgents);
+	const projectAgents = projectScopeAgents.filter((agent) => agent.source === "project");
+	const userByName = new Map(userAgents.map((agent) => [agent.name, agent]));
+	const userNames = new Set(userByName.keys());
+	const projectFallbackAgents = projectScopeAgents.filter(
+		(agent) => agent.source === "built-in" && userByName.get(agent.name)?.source === "user",
+	);
+	const allEntries = [
+		...userAgents.map((agent) => ({ agent, scope: "user" as const })),
+		...projectAgents.map((agent) => ({ agent, scope: "project" as const })),
+		...projectFallbackAgents.map((agent) => ({ agent, scope: "project-fallback" as const })),
+	];
+	const boundedEntries = allEntries.slice(0, maxItems);
+
+	const render = (entries: typeof allEntries, omitted: number): string => {
+		const lines = [
+			"Available agent definitions (metadata only; runtime validation and trust remain authoritative).",
+		];
+		const userLines = entries
+			.filter((entry) => entry.scope === "user")
+			.map((entry) => catalogAgentLine(entry.agent, entry.scope, userNames, maxDescriptionLength));
+		if (userLines.length > 0) {
+			lines.push('Default scope (agentScope: "user"):');
+			lines.push(...userLines);
+		}
+		const projectLines = entries
+			.filter((entry) => entry.scope !== "user")
+			.map((entry) => catalogAgentLine(entry.agent, entry.scope, userNames, maxDescriptionLength));
+		if (projectLines.length > 0) {
+			lines.push("Trusted project/scope variants (use the required agentScope shown):");
+			lines.push(...projectLines);
+		}
+		const collisionNames = entries
+			.filter((entry) => entry.scope !== "user" && userNames.has(entry.agent.name))
+			.map((entry) => entry.agent.name);
+		if (collisionNames.length > 0 && projectLines.length > 0) {
+			const precedence = entries
+				.filter((entry) => entry.scope !== "user" && userNames.has(entry.agent.name))
+				.map((entry) =>
+					entry.scope === "project"
+						? `${entry.agent.name}: user with "user", project with "project"/"both"`
+						: `${entry.agent.name}: user with "user"/"both", built-in with "project"`,
+				);
+			lines.push(`Same-name precedence: ${precedence.join("; ")}.`);
+		}
+		if (omitted > 0) {
+			lines.push(
+				`[${omitted} additional agent definition${omitted === 1 ? "" : "s"} omitted due to metadata bounds.]`,
+			);
+		}
+		return lines.join("\n");
+	};
+
+	let listedCount = boundedEntries.length;
+	let text = render(boundedEntries.slice(0, listedCount), allEntries.length - listedCount);
+	while (text.length > maxCharacters && listedCount > 0) {
+		listedCount -= 1;
+		text = render(boundedEntries.slice(0, listedCount), allEntries.length - listedCount);
+	}
+	return { text, omitted: allEntries.length - listedCount };
+}
+
+export function discoverAgentCatalog(
+	cwd: string,
+	projectTrusted: boolean,
+	config?: SubagentSettings,
+): AgentCatalog {
+	return {
+		user: discoverAgents(cwd, "user", config),
+		project: projectTrusted
+			? discoverAgents(cwd, "project", config)
+			: { agents: BUILT_IN_AGENTS, projectAgentsDir: null },
+	};
+}

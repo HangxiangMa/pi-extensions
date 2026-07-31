@@ -162,6 +162,34 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			activeAgents: 0,
 			retainedAgents: 0,
 		});
+		const spawn = mock.tools.find((tool) => tool.name === "subagent_spawn") as unknown as {
+			name: string;
+			description: string;
+			promptGuidelines: string[];
+		};
+		controller.setAgentCatalog(
+			'Available agent definitions\n- api-reviewer [source: user; agentScope: "user"] — Reviews APIs',
+		);
+		const catalogRegistration = mock.tools
+			.filter((tool) => tool.name === "subagent_spawn")
+			.at(-1) as typeof spawn | undefined;
+		assert.match(catalogRegistration?.description ?? "", /api-reviewer/);
+		controller.setCompletionDelivery("auto-resume");
+		const autoResumeRegistration = mock.tools
+			.filter((tool) => tool.name === "subagent_spawn")
+			.at(-1) as typeof spawn | undefined;
+		assert.match(autoResumeRegistration?.description ?? "", /api-reviewer/);
+		assert.match(autoResumeRegistration?.promptGuidelines?.join("\n") ?? "", /auto-resume/);
+		controller.setAgentCatalog("Available agent definitions\n- worker [source: built-in]");
+		const refreshedRegistration = mock.tools
+			.filter((tool) => tool.name === "subagent_spawn")
+			.at(-1) as typeof spawn | undefined;
+		assert.match(refreshedRegistration?.description ?? "", /worker/);
+		assert.doesNotMatch(refreshedRegistration?.description ?? "", /api-reviewer/);
+		assert.match(refreshedRegistration?.promptGuidelines?.join("\n") ?? "", /auto-resume/);
+		controller.setCompletionDelivery("next-turn");
+		assert.equal(spawn.name, "subagent_spawn");
+
 		const send = mock.tools.find((tool) => tool.name === "subagent_send") as {
 			description: string;
 			promptSnippet?: string;
