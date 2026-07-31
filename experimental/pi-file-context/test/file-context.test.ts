@@ -100,9 +100,24 @@ test("ranks fuzzy file matches and tolerates typos", () => {
 		"file-context.ts-notes/README.md",
 	]);
 	assert.deepEqual(search.search("src/settings"), ["src/settings.ts"]);
+	assert.deepEqual(search.search("fc"), ["src/file-context.ts", "file-context.ts-notes/README.md"]);
+	assert.deepEqual(search.search("stg"), ["src/settings.ts"]);
 	assert.deepEqual(search.search("setxings"), ["src/settings.ts"]);
+	assert.deepEqual(search.search("settigns"), ["src/settings.ts"]);
+	assert.deepEqual(search.search("file-contexx.ts"), [
+		"src/file-context.ts",
+		"file-context.ts-notes/README.md",
+	]);
 	assert.deepEqual(search.search("zzzzzz"), []);
 	assert.deepEqual(search.search("  "), files);
+});
+
+test("bounds fuzzy search before scoring overlong pasted queries", () => {
+	const maximumQuery = "a".repeat(256);
+	const overlongQuery = `${maximumQuery}a`;
+
+	assert.deepEqual(new ProjectFileSearch([maximumQuery]).search(maximumQuery), [maximumQuery]);
+	assert.deepEqual(new ProjectFileSearch([overlongQuery]).search(overlongQuery), []);
 });
 
 test("explorer previews a file, selects a range, and keeps rendered rows width-safe", async () => {
