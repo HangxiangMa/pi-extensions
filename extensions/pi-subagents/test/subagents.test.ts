@@ -27,7 +27,12 @@ import {
 	driveCustomSelector,
 	extensionTool,
 } from "../../../test/support.js";
-import { discoverAgents, formatAgentList } from "../src/agents.js";
+import {
+	discoverAgentCatalog,
+	discoverAgents,
+	formatAgentCatalog,
+	formatAgentList,
+} from "../src/agents.js";
 import { registerSubagentConfigCommand, type SubagentSettingsRuntime } from "../src/config-ui.js";
 import { hasUsableAggregator } from "../src/params.js";
 import type { ManagedAgent } from "../src/registry.js";
@@ -129,6 +134,10 @@ test("subagents registers consistent blocking guidance and one management comman
 		parameters?.properties?.aggregator?.properties?.thinkingLevel?.enum,
 		thinkingLevels,
 	);
+	assert.equal(parameters?.properties?.agent?.enum, undefined);
+	assert.equal(parameters?.properties?.tasks?.items?.properties?.agent?.enum, undefined);
+	assert.equal(parameters?.properties?.chain?.items?.properties?.agent?.enum, undefined);
+	assert.equal(parameters?.properties?.aggregator?.properties?.agent?.enum, undefined);
 	assert.match(parameters?.properties?.aggregator?.description ?? "", /omit this key entirely/i);
 	assert.match(parameters?.properties?.aggregator?.description ?? "", /treated as absent/i);
 	assert.deepEqual(
@@ -1085,6 +1094,144 @@ test("formatAgentList returns concise text and remaining count", () => {
 
 	assert.match(formatted.text, /scout \(built-in\)/);
 	assert.equal(formatted.remaining, Math.max(0, agents.length - 2));
+});
+
+test("formatAgentCatalog advertises scope variants deterministically and within bounds", () => {
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-catalog-format-"));
+	try {
+		const projectAgentsDir = path.join(cwd, ".pi", "agents");
+		mkdirSync(projectAgentsDir, { recursive: true });
+		writeFileSync(
+			path.join(projectAgentsDir, "scout.md"),
+			"---\nname: scout\ndescription: Project\n---\nProject prompt.",
+		);
+		writeFileSync(
+			path.join(projectAgentsDir, "project.md"),
+			"---\nname: project\ndescription: First\n---\nProject prompt.",
+		);
+		const user = discoverAgentCatalog(cwd, false).user;
+		const worker = user.agents.find((agent) => agent.name === "worker");
+		assert.ok(worker);
+		user.agents = user.agents.map((agent) =>
+			agent.name === "worker"
+				? { ...agent, source: "user" as const, description: "User worker override" }
+				: agent,
+		);
+		const project = discoverAgentCatalog(cwd, true).project;
+		assert.ok(project);
+		const first = formatAgentCatalog({ user, project }, { maxCharacters: 5_000 });
+		const second = formatAgentCatalog({ user, project }, { maxCharacters: 5_000 });
+		assert.equal(first.text, second.text);
+		assert.match(first.text, /scout \[source: built-in; agentScope: "user"\]/);
+		assert.match(first.text, /scout \[source: project; requires agentScope: "project" or "both"/);
+		assert.match(first.text, /Project/);
+		assert.match(first.text, /Same-name precedence/);
+		assert.match(first.text, /project \[source: project/);
+		assert.match(first.text, /worker \[source: user; agentScope: "user"/);
+		assert.match(first.text, /worker \[source: built-in; requires agentScope: "project"/);
+		assert.match(first.text, /both.*selects the user definition/);
+		assert.ok(first.text.length <= 5_000);
+
+		const incomplete = formatAgentCatalog({
+			user: { ...user, omittedAgentDefinitions: 1 },
+			project,
+		});
+		assert.doesNotMatch(incomplete.text, /source: built-in/);
+		const failedDiscovery = formatAgentCatalog({
+			user: { ...user, metadataDiscoveryIncomplete: true },
+			project,
+		});
+		assert.match(failedDiscovery.text, /metadata discovery was incomplete/);
+
+		writeFileSync(
+			path.join(projectAgentsDir, "huge.md"),
+			`---\nname: huge\ndescription: Huge\n---\n${"x".repeat(70 * 1024)}`,
+		);
+		const boundedProject = discoverAgentCatalog(cwd, true).project;
+		const bounded = formatAgentCatalog(
+			{ user, project: boundedProject },
+			{ maxItems: 2, maxDescriptionLength: 8, maxCharacters: 2_000 },
+		);
+		assert.match(bounded.text, /additional agent definition.*omitted/);
+		assert.doesNotMatch(bounded.text, /x{100}/);
+		assert.ok(bounded.omitted > 0);
+		assert.match(
+			bounded.text,
+			new RegExp(`\\[${bounded.omitted} additional agent definitions? omitted`),
+		);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("session start refreshes both catalogs and gates project metadata on trust", async () => {
+	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-catalog-user-"));
+	const trustedCwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-catalog-trusted-"));
+	const untrustedCwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-catalog-untrusted-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	try {
+		mkdirSync(path.join(agentDir, "agents"), { recursive: true });
+		writeFileSync(
+			path.join(agentDir, "agents", "api-reviewer.md"),
+			"---\nname: api-reviewer\ndescription: Reviews API compatibility\n---\nReview APIs.",
+		);
+		writeFileSync(
+			path.join(agentDir, "agents", "scout.md"),
+			"---\nname: scout\ndescription: User scout override\n---\nUser scout.",
+		);
+		for (const cwd of [trustedCwd, untrustedCwd]) {
+			mkdirSync(path.join(cwd, ".pi", "agents"), { recursive: true });
+			writeFileSync(
+				path.join(cwd, ".pi", "agents", "local.md"),
+				"---\nname: local\ndescription: Project-only description\n---\nProject work.",
+			);
+			writeFileSync(
+				path.join(cwd, ".pi", "agents", "scout.md"),
+				"---\nname: scout\ndescription: Project scout override\n---\nProject scout.",
+			);
+		}
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const start = async (cwd: string, trusted: boolean) => {
+			const context = createMockContext({ cwd, isProjectTrusted: () => trusted });
+			for (const handler of mock.events.get("session_start") ?? []) {
+				await handler({}, context.ctx);
+			}
+			return {
+				blocking: String(
+					mock.tools.filter((tool) => tool.name === "subagent").at(-1)?.description ?? "",
+				),
+				spawn: String(
+					mock.tools.filter((tool) => tool.name === "subagent_spawn").at(-1)?.description ?? "",
+				),
+			};
+		};
+		const untrusted = await start(untrustedCwd, false);
+		assert.match(untrusted.blocking, /api-reviewer/);
+		assert.match(untrusted.blocking, /User scout override/);
+		assert.doesNotMatch(
+			untrusted.blocking,
+			/Project-only description|Project scout override|local \[source: project|scout \[source: project/,
+		);
+		assert.doesNotMatch(
+			untrusted.spawn,
+			/Project-only description|Project scout override|scout \[source: project/,
+		);
+		const trusted = await start(trustedCwd, true);
+		assert.match(trusted.blocking, /local \[source: project/);
+		assert.match(trusted.blocking, /agentScope: "project" or "both"/);
+		assert.match(trusted.spawn, /local \[source: project/);
+		assert.match(trusted.spawn, /Project-only description/);
+		assert.match(trusted.blocking, /Project scout override/);
+		assert.doesNotMatch(trusted.blocking, /untrusted/);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(agentDir, { recursive: true, force: true });
+		rmSync(trustedCwd, { recursive: true, force: true });
+		rmSync(untrustedCwd, { recursive: true, force: true });
+	}
 });
 
 test("subagent settings normalize known override fields only", () => {
