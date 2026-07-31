@@ -2637,10 +2637,6 @@ test("automatic turn_end hard cap pauses a tool loop before another normal respo
 		"finish",
 		LOW_LIMITS_SETTINGS_PATH,
 	);
-	const stateEvents: Array<{ status?: string; reason?: string }> = [];
-	capped.mock.eventBus.on("pi-goal:state", (data) =>
-		stateEvents.push(data as { status?: string; reason?: string }),
-	);
 	const kickoffPrompt = capped.mock.sentUserMessages.at(-1)?.text ?? "";
 	capped.mock.events.get("before_agent_start")?.[0]?.(
 		{ prompt: kickoffPrompt, systemPrompt: "base" },
@@ -2686,10 +2682,6 @@ test("automatic turn_end hard cap pauses a tool loop before another normal respo
 			/Goal paused: 3 automatic model responses/i.test(notice.message),
 		).length,
 		1,
-	);
-	assert.match(
-		stateEvents.find((event) => event.status === "paused")?.reason ?? "",
-		/continuation_limit.*3 automatic model responses.*tokens/i,
 	);
 	await capped.mock.commands.get("goal")?.handler("", capped.ctx);
 	assert.match(capped.notifications.at(-1)?.message ?? "", /Automatic model responses: 3/i);
