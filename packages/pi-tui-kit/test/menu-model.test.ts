@@ -38,8 +38,8 @@ function testMenu(): MenuDefinition<State, ScreenId, ActionId> {
 	});
 }
 
-test("additive multi-select search remains compatible with declarative API version 2", () => {
-	assert.equal(PI_EXTENSION_MENU_API_VERSION, 2);
+test("agent-level input and review screens use declarative API version 3", () => {
+	assert.equal(PI_EXTENSION_MENU_API_VERSION, 3);
 });
 
 test("menu definitions resolve dynamic screens and reject invalid references", () => {
@@ -209,6 +209,122 @@ test("choice screens reject blank and duplicate raw ids", () => {
 		);
 	assert.throws(() => resolve([" "]), /id must not be empty/i);
 	assert.throws(() => resolve(["same", "same"]), /id must be unique.*same/i);
+});
+
+test("input screens require a known action", () => {
+	const definition = defineMenu<undefined, "input", "submit">({
+		start: "input",
+		screens: {
+			input: () => ({
+				kind: "input",
+				title: "Value",
+				action: "missing" as "submit",
+			}),
+		},
+		actions: { submit: async () => ({ kind: "close" }) },
+	});
+	assert.throws(
+		() => resolveMenuScreen(definition, "input", undefined),
+		/input.*unknown action.*missing/i,
+	);
+});
+
+test("review screens validate viewport and confirmation identity", () => {
+	const definition = defineMenu<undefined, "review", "apply">({
+		start: "review",
+		screens: {
+			review: () => ({
+				kind: "review",
+				title: "Review",
+				content: "diff",
+				viewportSize: 0,
+				confirm: { id: " ", label: "Apply", action: "missing" as "apply" },
+			}),
+		},
+		actions: { apply: async () => ({ kind: "close" }) },
+	});
+	assert.throws(
+		() => resolveMenuScreen(definition, "review", undefined),
+		/review.*viewport.*positive integer/i,
+	);
+	for (const viewportSize of [-1, 1.5, 51, Number.NaN, Number.POSITIVE_INFINITY]) {
+		assert.throws(
+			() =>
+				resolveMenuScreen(
+					{
+						...definition,
+						screens: {
+							review: () => ({
+								kind: "review" as const,
+								title: "Review",
+								content: "diff",
+								viewportSize,
+							}),
+						},
+					},
+					"review",
+					undefined,
+				),
+			/review.*viewport.*positive integer/i,
+		);
+	}
+	const withViewport = {
+		...definition,
+		screens: {
+			review: () => ({
+				kind: "review" as const,
+				title: "Review",
+				content: "diff",
+				confirm: { id: " ", label: "Apply", action: "apply" as const },
+			}),
+		},
+	};
+	assert.throws(
+		() => resolveMenuScreen(withViewport, "review", undefined),
+		/review.*confirmation id.*empty/i,
+	);
+	assert.throws(
+		() =>
+			resolveMenuScreen(
+				{
+					...withViewport,
+					screens: {
+						review: () => ({
+							kind: "review" as const,
+							title: "Review",
+							content: "diff",
+							confirm: { id: "apply", label: " ", action: "apply" as const },
+						}),
+					},
+				},
+				"review",
+				undefined,
+			),
+		/review.*confirmation label.*empty/i,
+	);
+	assert.throws(
+		() =>
+			resolveMenuScreen(
+				{
+					...withViewport,
+					screens: {
+						review: () => ({
+							kind: "review" as const,
+							title: "Review",
+							content: "diff",
+							confirm: {
+								id: "apply",
+								label: "Apply",
+								action: "missing" as "apply",
+							},
+						}),
+					},
+				},
+				"review",
+				undefined,
+			),
+		/review.*unknown action.*missing/i,
+	);
 });
 
 test("navigator owns nested Back and Close transitions", () => {

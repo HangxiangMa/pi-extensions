@@ -92,6 +92,39 @@ export interface SettingsScreen<ActionId extends string> {
 	items: readonly MenuSettingItem<ActionId>[];
 }
 
+export interface InputScreen<ActionId extends string> {
+	kind: "input";
+	title: string;
+	lines?: readonly string[];
+	placeholder?: string;
+	action: ActionId;
+	hint?: "back" | "close";
+}
+
+export const MAX_REVIEW_VIEWPORT_SIZE = 50;
+
+export type ReviewFormat =
+	| { kind: "text" }
+	| { kind: "code"; language?: string; filePath?: string }
+	| { kind: "diff"; filePath?: string };
+
+export interface ReviewConfirmation<ActionId extends string> {
+	id: string;
+	label: string;
+	action: ActionId;
+}
+
+export interface ReviewScreen<ActionId extends string> {
+	kind: "review";
+	title: string;
+	lines?: readonly string[];
+	content: string;
+	format?: ReviewFormat;
+	viewportSize?: number;
+	confirm?: ReviewConfirmation<ActionId>;
+	hint?: "back" | "close";
+}
+
 export interface MenuMultiSelectItem extends MenuItemBase {
 	selected: boolean;
 	disabledReason?: string;
@@ -118,6 +151,8 @@ export type MenuScreen<ScreenId extends string, ActionId extends string> =
 	| DetailScreen
 	| ChoiceScreen<ActionId>
 	| SettingsScreen<ActionId>
+	| InputScreen<ActionId>
+	| ReviewScreen<ActionId>
 	| MultiSelectScreen<ScreenId, ActionId>;
 
 export interface MenuScreenContext<State> {

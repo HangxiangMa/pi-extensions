@@ -9,6 +9,7 @@ const MENU_BINDINGS = [
 	"tui.select.pageDown",
 	"tui.select.confirm",
 	"tui.select.cancel",
+	"tui.input.submit",
 ] as const;
 export type MenuBinding = (typeof MENU_BINDINGS)[number];
 
@@ -38,6 +39,10 @@ export interface MenuMultiSelectChange {
 	previousSelected: boolean;
 }
 
+export interface MenuInputSubmit {
+	value: string;
+}
+
 export interface MenuScreenComponent extends Component {
 	readonly __piTuiKitScreen?: true;
 	handleInput(data: string): void;
@@ -59,6 +64,7 @@ export interface MenuScreenComponentOptions<ScreenId extends string, ActionId ex
 	onSelectionChange?(itemId: string): void;
 	onSettingChange?(change: MenuSettingChange): Promise<MenuChangeResponse<ScreenId>>;
 	onMultiSelectChange?(change: MenuMultiSelectChange): Promise<MenuChangeResponse<ScreenId>>;
+	onInputSubmit?(change: MenuInputSubmit): Promise<MenuChangeResponse<ScreenId>>;
 	onTransition?(transition: MenuTransition<ScreenId>): void;
 	onError?(error: unknown): void;
 	onDispose?(): void;

@@ -1,15 +1,17 @@
-import { BorderedLoader, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey } from "@earendil-works/pi-tui";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
 	createMenuScreenComponent,
+	type MenuInputSubmit,
 	type MenuMultiSelectChange,
 	type MenuScreenComponent,
 	type MenuScreenEvent,
 	type MenuSettingChange,
+	reviewDialogPages,
 	safeMenuText,
 } from "./components/index.js";
 import { resolveMenuScreen } from "./model.js";
 import { createMenuNavigator } from "./navigator.js";
+import { runTask } from "./task.js";
 import type {
 	ActionMenuItem,
 	MenuActionHandler,
@@ -127,6 +129,23 @@ async function runTuiMenu<
 						if (invocation.stale) staleAction = true;
 						return invocation;
 					},
+					onInputSubmit: async (change, signal) => {
+						if (screen.kind !== "input") return rejected();
+						const invocation = await invokeAction(
+							ctx,
+							definition.actions[screen.action],
+							state,
+							AbortSignal.any([menuSignal, signal]),
+							"input",
+							options,
+							{ value: change.value },
+						);
+						if (invocation.stale) {
+							staleAction = true;
+							return accepted({ kind: "close" });
+						}
+						return invocation;
+					},
 				},
 			);
 			if (staleAction || !isCurrent(options) || menuSignal.aborted) {
@@ -154,6 +173,20 @@ async function runTuiMenu<
 					state,
 					menuSignal,
 					item.id,
+					options,
+				);
+				if (outcome.stale) return { kind: "stale" };
+				navigator.apply(outcome.transition);
+				continue;
+			}
+			if (screen.kind === "review") {
+				if (!screen.confirm || screen.confirm.id !== event.itemId) continue;
+				const outcome = await invokeAction(
+					ctx,
+					definition.actions[screen.confirm.action],
+					state,
+					menuSignal,
+					screen.confirm.id,
 					options,
 				);
 				if (outcome.stale) return { kind: "stale" };
@@ -218,6 +251,10 @@ async function showTuiScreen<
 			change: MenuMultiSelectChange,
 			signal: AbortSignal,
 		): Promise<ActionInvocation<ScreenId>>;
+		onInputSubmit(
+			change: MenuInputSubmit,
+			signal: AbortSignal,
+		): Promise<ActionInvocation<ScreenId>>;
 	},
 ): Promise<InternalScreenEvent<ScreenId> | undefined> {
 	let component: MenuScreenComponent | undefined;
@@ -250,6 +287,7 @@ async function showTuiScreen<
 					onSettingChange: (change) => callbacks.onSettingChange(change, screenController.signal),
 					onMultiSelectChange: (change) =>
 						callbacks.onMultiSelectChange(change, screenController.signal),
+					onInputSubmit: (change) => callbacks.onInputSubmit(change, screenController.signal),
 					onTransition: (transition) => finish({ kind: "transition", transition }),
 					onDispose: () => {
 						removeAbortListener();
@@ -297,60 +335,23 @@ async function invokeBusyAction<State, ScreenId extends string, Context extends 
 	menuSignal: AbortSignal,
 	options: RunMenuOptions<State, Context>,
 ): Promise<ActionInvocation<ScreenId>> {
-	let actionTask: Promise<ActionInvocation<ScreenId>> | undefined;
-	let customFailed = false;
-	let customError: unknown;
-	let externallyDisposed = false;
-	let result: ActionInvocation<ScreenId> | undefined;
-	try {
-		result = await uiFor(ctx).custom<ActionInvocation<ScreenId> | undefined>(
-			(tui, theme, _keybindings, done) => {
-				const actionController = new AbortController();
-				const signal = AbortSignal.any([menuSignal, actionController.signal]);
-				const loader = new BorderedLoader(tui, theme, safeMenuText(label), { cancellable: true });
-				let cancelRequested = false;
-				let completed = false;
-				let disposed = false;
-				const cancelAction = () => {
-					cancelRequested = true;
-					actionController.abort(new DOMException("Menu action cancelled", "AbortError"));
-				};
-				loader.onAbort = cancelAction;
-				actionTask = invokeAction(ctx, handler, state, signal, itemId, options, {}, false);
-				void actionTask.then(
-					(outcome) => {
-						completed = true;
-						if (!disposed) done(outcome);
-					},
-					() => {
-						completed = true;
-						if (!disposed) done(rejected());
-					},
-				);
-				return {
-					render: (width: number) => loader.render(width),
-					invalidate: () => loader.invalidate(),
-					handleInput(data: string) {
-						if (matchesKey(data, Key.ctrl("c"))) cancelAction();
-						loader.handleInput(data);
-					},
-					dispose() {
-						disposed = true;
-						if (!completed && !cancelRequested && !menuSignal.aborted) externallyDisposed = true;
-						actionController.abort(new DOMException("Menu action disposed", "AbortError"));
-						loader.dispose();
-					},
-				};
-			},
-		);
-	} catch (error) {
-		customFailed = true;
-		customError = error;
+	const result = await runTask(ctx, {
+		label,
+		signal: menuSignal,
+		isCurrent: options.isCurrent,
+		onError: () => undefined,
+		task: ({ signal }) => invokeAction(ctx, handler, state, signal, itemId, options, {}, false),
+	});
+	switch (result.kind) {
+		case "completed":
+			return result.value;
+		case "cancelled":
+			return rejected();
+		case "stale":
+			return { ...rejected<ScreenId>(), stale: true };
+		case "error":
+			throw result.error;
 	}
-	const actionOutcome = await actionTask;
-	if (customFailed) throw customError;
-	if (externallyDisposed) return { ...rejected<ScreenId>(), stale: true };
-	return result ?? actionOutcome ?? rejected();
 }
 
 async function invokeAction<State, ScreenId extends string, Context extends MenuContext>(
@@ -418,6 +419,81 @@ async function runDialogMenu<
 			if (loaded.kind !== "loaded") return loaded.result;
 			const state = loaded.state;
 			const screen = resolveMenuScreen(definition, navigator.current, state);
+			if (screen.kind === "input") {
+				const value = await uiFor(ctx).input(
+					dialogTitle(screen),
+					safeMenuText(screen.placeholder ?? ""),
+					{ signal: menuSignal },
+				);
+				if (!isCurrent(options) || menuSignal.aborted) return { kind: "stale" };
+				if (value === undefined) {
+					navigator.apply({ kind: screen.hint ?? "back" });
+					continue;
+				}
+				const outcome = await invokeAction(
+					ctx,
+					definition.actions[screen.action],
+					state,
+					menuSignal,
+					"input",
+					options,
+					{ value },
+				);
+				if (outcome.stale) return { kind: "stale" };
+				navigator.apply(outcome.transition);
+				continue;
+			}
+			if (screen.kind === "review") {
+				const pages = reviewDialogPages(screen);
+				let pageIndex = 0;
+				let finished = false;
+				while (!finished) {
+					const choices = uniqueReviewChoices([
+						...(pageIndex > 0 ? [{ kind: "previous" as const, label: "Previous" }] : []),
+						...(pageIndex < pages.length - 1 ? [{ kind: "next" as const, label: "Next" }] : []),
+						...(screen.confirm
+							? [{ kind: "confirm" as const, label: safeMenuText(screen.confirm.label) }]
+							: []),
+						{ kind: "exit" as const, label: dialogExitChoice(screen) },
+					]);
+					const pageTitle = [
+						dialogTitle(screen),
+						pages[pageIndex]?.join("\n") ?? "",
+						...(pages.length > 1 ? [`Page ${pageIndex + 1}/${pages.length}`] : []),
+					]
+						.filter(Boolean)
+						.join("\n");
+					const choice = await uiFor(ctx).select(
+						pageTitle,
+						choices.map((row) => row.label),
+						{ signal: menuSignal },
+					);
+					if (!isCurrent(options) || menuSignal.aborted) return { kind: "stale" };
+					const selected = choices.find((row) => row.label === choice);
+					if (!selected || selected.kind === "exit") {
+						navigator.apply({ kind: screen.hint ?? "back" });
+						finished = true;
+					} else if (selected.kind === "previous") pageIndex = Math.max(0, pageIndex - 1);
+					else if (selected.kind === "next") {
+						pageIndex = Math.min(pages.length - 1, pageIndex + 1);
+					} else if (screen.confirm) {
+						const outcome = await invokeAction(
+							ctx,
+							definition.actions[screen.confirm.action],
+							state,
+							menuSignal,
+							screen.confirm.id,
+							options,
+						);
+						if (outcome.stale) return { kind: "stale" };
+						if (outcome.accepted) {
+							navigator.apply(outcome.transition);
+							finished = true;
+						}
+					}
+				}
+				continue;
+			}
 			const rows = dialogRows(screen);
 			const choice = await uiFor(ctx).select(
 				dialogTitle(screen),
@@ -535,6 +611,11 @@ interface DialogRow {
 	label: string;
 }
 
+interface ReviewDialogChoice {
+	kind: "previous" | "next" | "confirm" | "exit";
+	label: string;
+}
+
 function dialogRows<ScreenId extends string, ActionId extends string>(
 	screen: MenuScreen<ScreenId, ActionId>,
 ): DialogRow[] {
@@ -556,6 +637,8 @@ function dialogRows<ScreenId extends string, ActionId extends string>(
 			})),
 			{ kind: "exit", index: 0, label: dialogExitChoice(screen) },
 		];
+	} else if (screen.kind === "input" || screen.kind === "review") {
+		rows = [];
 	} else if (screen.kind === "choice") {
 		rows = [
 			...screen.items.map((item, index) => {
@@ -588,19 +671,25 @@ function dialogRows<ScreenId extends string, ActionId extends string>(
 	return uniqueDialogRows(rows);
 }
 
+function uniqueReviewChoices(rows: readonly ReviewDialogChoice[]): ReviewDialogChoice[] {
+	const used = new Set<string>();
+	return rows.map((row) => ({ ...row, label: uniqueDialogLabel(row.label, used) }));
+}
+
 function uniqueDialogRows(rows: readonly DialogRow[]): DialogRow[] {
 	const used = new Set<string>();
-	return rows.map((row) => {
-		const base = row.label;
-		let label = base;
-		let suffix = 2;
-		while (used.has(label)) {
-			label = `${base} [${suffix}]`;
-			suffix += 1;
-		}
-		used.add(label);
-		return { ...row, label };
-	});
+	return rows.map((row) => ({ ...row, label: uniqueDialogLabel(row.label, used) }));
+}
+
+function uniqueDialogLabel(base: string, used: Set<string>) {
+	let label = base;
+	let suffix = 2;
+	while (used.has(label)) {
+		label = `${base} [${suffix}]`;
+		suffix += 1;
+	}
+	used.add(label);
+	return label;
 }
 
 function dialogExitChoice<ScreenId extends string, ActionId extends string>(
