@@ -2,6 +2,7 @@
 // verify ordering across menu, browser processing, message attachment, replacement, and shutdown.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { digestImages, type ProcessedImage } from "../src/batch.js";
 import type { ConfirmDialogResult, ImageDropLimitsMenuState } from "../src/menu.js";
@@ -55,6 +56,7 @@ function createHarness(
 			| "close"
 		>;
 		confirm?: () => Promise<boolean>;
+		custom?: ReturnType<typeof createTuiHarness>["custom"];
 		input?: (render?: string) => Promise<string | undefined>;
 		confirmDialog?: () => Promise<ConfirmDialogResult>;
 		inputDialog?: () => Promise<
@@ -130,65 +132,68 @@ function createHarness(
 		mode: "tui",
 		hasUI: true,
 		confirm: options.confirm,
-		input: options.inputDialog ?? options.input,
-		select: async (title: string) => {
-			if (/Image Drop Status/u.test(title)) {
-				options.onStatus?.(title.split("\n").slice(1));
-				return {
-					open: "Open staging page",
-					refresh: "Refresh status",
-					back: undefined,
-					close: "Close",
-				}[options.statusActions?.shift() ?? "back"];
-			}
-			if (/Image Drop Settings/u.test(title)) {
-				const action = options.settingsActions?.shift() ?? "back";
-				return action === "toggle-start"
-					? "Start with each Pi session"
-					: action === "limits"
-						? "Image limits"
-						: undefined;
-			}
-			if (/Review resource-limit changes/u.test(title)) {
-				options.onConfirm?.("Review resource-limit changes", title);
-				const result = options.confirmDialog
-					? await options.confirmDialog()
-					: ((await options.confirm?.()) ?? true)
-						? "confirmed"
-						: "cancelled";
-				return result === "close"
-					? "\u0003"
-					: result === "confirmed"
-						? "Save resource limits"
-						: undefined;
-			}
-			if (/Image limits/u.test(title)) {
-				const action = options.limitActions?.shift() ?? "back";
-				const labels: Record<string, string | undefined> = {
-					maxImages: "Images per message",
-					maxImageBytes: "Max file size per image",
-					maxBatchBytes: "Max total size per message",
-					maxImagePixels: "Max image resolution",
-					maxRetainedImages: "Staged + sent image count",
-					maxRetainedBytes: "Staged + sent image memory",
-					save: "Review changes before saving",
-					defaults: "Restore recommended defaults",
-					back: "Back to Settings",
-					close: "Close Image Drop",
-				};
-				return labels[action];
-			}
-			const action = options.showMainMenu
-				? await options.showMainMenu()
-				: (options.menuActions?.shift() ?? "close");
-			return {
-				open: "Add images in browser",
-				status: "Check image status",
-				settings: "Change Image Drop settings",
-				help: "How Image Drop works",
-				close: "Close menu",
-			}[action];
-		},
+		custom: options.custom,
+		input: options.custom ? undefined : (options.inputDialog ?? options.input),
+		select: options.custom
+			? undefined
+			: async (title: string) => {
+					if (/Image Drop Status/u.test(title)) {
+						options.onStatus?.(title.split("\n").slice(1));
+						return {
+							open: "Open staging page",
+							refresh: "Refresh status",
+							back: undefined,
+							close: "Close",
+						}[options.statusActions?.shift() ?? "back"];
+					}
+					if (/Image Drop Settings/u.test(title)) {
+						const action = options.settingsActions?.shift() ?? "back";
+						return action === "toggle-start"
+							? "Start with each Pi session"
+							: action === "limits"
+								? "Image limits"
+								: undefined;
+					}
+					if (/Review resource-limit changes/u.test(title)) {
+						options.onConfirm?.("Review resource-limit changes", title);
+						const result = options.confirmDialog
+							? await options.confirmDialog()
+							: ((await options.confirm?.()) ?? true)
+								? "confirmed"
+								: "cancelled";
+						return result === "close"
+							? "\u0003"
+							: result === "confirmed"
+								? "Save resource limits"
+								: undefined;
+					}
+					if (/Image limits/u.test(title)) {
+						const action = options.limitActions?.shift() ?? "back";
+						const labels: Record<string, string | undefined> = {
+							maxImages: "Images per message",
+							maxImageBytes: "Max file size per image",
+							maxBatchBytes: "Max total size per message",
+							maxImagePixels: "Max image resolution",
+							maxRetainedImages: "Staged + sent image count",
+							maxRetainedBytes: "Staged + sent image memory",
+							save: "Review changes before saving",
+							defaults: "Restore recommended defaults",
+							back: "Back to Settings",
+							close: "Close Image Drop",
+						};
+						return labels[action];
+					}
+					const action = options.showMainMenu
+						? await options.showMainMenu()
+						: (options.menuActions?.shift() ?? "close");
+					return {
+						open: "Add images in browser",
+						status: "Check image status",
+						settings: "Change Image Drop settings",
+						help: "How Image Drop works",
+						close: "Close menu",
+					}[action];
+				},
 		model: { id: "vision", provider: "test", input: ["text", "image"] },
 		isIdle: options.idle ?? (() => true),
 		hasPendingMessages: options.pending ?? (() => false),
@@ -555,27 +560,54 @@ test("Settings preview and save future limits without changing current-session l
 });
 
 test("limit input retains a rejected draft before saving the corrected value", async () => {
-	let inputCalls = 0;
-	let rejectedRender = "";
 	let saved: Partial<ImageDropSettings> | undefined;
+	const tui = createTuiHarness({ width: 80, rows: 24 });
 	const harness = createHarness({
-		menuActions: ["settings", "close"],
-		settingsActions: ["limits", "back"],
-		limitActions: ["maxImages", "save"],
-		input: async (render) => {
-			inputCalls += 1;
-			if (inputCalls === 2) rejectedRender = render ?? "";
-			return inputCalls === 1 ? "not-a-number" : "12";
-		},
-		confirm: async () => true,
+		custom: tui.custom,
 		onSave: async (patch) => {
 			saved = patch;
 		},
 	});
 	await emit(harness.mock, "session_start", {}, harness.context.ctx);
-	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
+	const running = Promise.resolve(
+		harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx),
+	);
 
-	assert.equal(inputCalls, 2);
+	await tui.waitForOpen();
+	tui.press("tui.select.down");
+	tui.press("tui.select.down");
+	tui.press("tui.select.confirm");
+	await tui.waitForPending();
+	await tui.waitForOpen();
+	tui.press("tui.select.down");
+	tui.press("tui.select.confirm");
+	await tui.waitForPending();
+	await tui.waitForOpen();
+	tui.press("tui.select.confirm");
+	await tui.waitForPending();
+	await tui.waitForOpen();
+	tui.setFocused(true);
+	tui.type("not-a-number");
+	tui.press("tui.input.submit");
+	await tui.waitForPending();
+	const rejectedRender = tui.render().join("\n");
+	tui.send("\u0015");
+	tui.type("12");
+	tui.press("tui.input.submit");
+	await tui.waitForPending();
+	await tui.waitForOpen();
+	for (let index = 0; index < 6; index += 1) tui.press("tui.select.down");
+	tui.press("tui.select.confirm");
+	await tui.waitForPending();
+	await tui.waitForOpen();
+	assert.match(tui.render().join("\n"), /Images for next message: 8 → 12/u);
+	tui.press("tui.select.confirm");
+	await tui.waitForPending();
+	await tui.waitForOpen();
+	tui.press("ctrl+c");
+	await running;
+
+	assert.equal(tui.openCount, 7);
 	assert.match(rejectedRender, /not-a-number/u);
 	assert.deepEqual(saved, { maxImages: 12 });
 	assert.ok(harness.context.notifications.some((notice) => /positive value/u.test(notice.message)));

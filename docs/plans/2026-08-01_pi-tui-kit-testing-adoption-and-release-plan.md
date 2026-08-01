@@ -222,31 +222,43 @@ components rather than approximating behavior.
   and root `npm run check`; verify all prior Stamp behavior and the repository gate remain green.
   Evidence: all 7 focused tests pass, Stamp's 14-file check/typecheck passes, LSP reports zero
   diagnostics, and root check passes all 1,937 tests.
-- [ ] Audit the Stamp diff against the test-adoption boundary, update this plan with evidence, open a
+- [x] Audit the Stamp diff against the test-adoption boundary, update this plan with evidence, open a
   focused PR, and merge only after CI passes; verify the merged PR changes tests/plan evidence only
   and leaves production source, package metadata, settings semantics, and root support unchanged.
+  Evidence: PR #488 merged as `67a8048` after CI and all CodeQL checks passed; its two-file diff is
+  limited to the active plan and Stamp menu test, with no production, metadata, lockfile, settings, or
+  root-support change.
 
 ### 3. Migrate Image Drop tests in an independent PR
 
-- [ ] Create an Image Drop-only branch from the latest merged `main` and update
+- [x] Create an Image Drop-only branch from the latest merged `main` and update
   `extensions/pi-image-drop/test/menu.test.ts` to compose `createTuiHarness()` with its existing
   context fixture; verify initialization still uses Pi's public theme setup required by
-  `BorderedLoader`.
-- [ ] Replace the loader and specialized-confirmation factory drivers with semantic harness operations
+  `BorderedLoader`. Evidence: branch `test/pi-image-drop-testing-harness` imports only the supported
+  testing subpath and retains `initTheme("dark", false)`; no production, manifest, or lockfile diff.
+- [x] Replace the loader and specialized-confirmation factory drivers with semantic harness operations
   covering Escape Back/cancel, Ctrl+C Close, abort-before-UI-close ordering, disposal, and ignored late
   input; verify loader work is drained or explicitly released so no animation/task keeps Node alive.
-- [ ] Migrate the representative rejected resource-limit input flow in
+  Evidence: three menu tests drive named keys through the supported host, assert closed ownership and
+  abort ordering, and all five menu tests terminate without retained loader timers.
+- [x] Migrate the representative rejected resource-limit input flow in
   `extensions/pi-image-drop/test/lifecycle.test.ts` from implicit select/input automation to an
   externally driven `createTuiHarness()` sequence; verify the invalid draft remains rendered, the
   corrected value persists once, review confirmation uses raw identity, and session/domain assertions
-  remain extension-owned.
-- [ ] Add or migrate one representative Image Drop RPC resource-limit flow to `createRpcHarness()` with
-  exact dialog order, cancellation/Close behavior, owner abort where applicable, complete-script
-  assertion, and a failing custom-TUI trap; do not convert unrelated lifecycle fixtures.
-- [ ] Compile and run focused Image Drop menu/lifecycle tests, then run
+  remain extension-owned. Evidence: one seven-screen host drives main/settings/limits/input/review,
+  retains the invalid draft, saves `{ maxImages: 12 }` once through the raw review action, closes with
+  Ctrl+C, and preserves notification/domain assertions.
+- [x] Not applicable: add or migrate one representative Image Drop RPC resource-limit flow to
+  `createRpcHarness()`. Authoritative `ImageDropRuntime.register()` rejects every non-TUI command at
+  line 117 before `runMenu()`, and the existing unsupported-mode test locks that contract. An attempted
+  harness integration recorded zero dialogs, proving an RPC script would require the forbidden
+  production-mode expansion; the attempt was removed and Stamp remains the consumer RPC proof.
+- [x] Compile and run focused Image Drop menu/lifecycle tests, then run
   `npm run check --workspace @narumitw/pi-image-drop`, `npm run check:web`, LSP diagnostics on touched
   TypeScript, and root `npm run check`; verify generated web assets and production source are
-  byte-for-byte unchanged.
+  byte-for-byte unchanged. Evidence: all 42 focused tests pass; the 30-file package check/typecheck and
+  both web checks pass; LSP reports zero diagnostics; root check passes all 1,937 tests; source,
+  generated web assets, package metadata, and lockfile have no diff.
 - [ ] Audit the Image Drop diff, update this plan with evidence, open a focused PR, and merge only after
   CI passes; verify the merged PR changes tests/plan evidence only and preserves settings,
   persistence, server, browser, and runtime behavior.
@@ -344,8 +356,9 @@ components rather than approximating behavior.
 
 - [ ] Stamp's representative TUI and RPC menu tests use `@narumitw/pi-tui-kit/testing` without changing
   Stamp production source, package metadata, settings behavior, or results.
-- [ ] Image Drop's representative loader, confirmation, rejected-input/review, and RPC tests use the
-  supported testing seam without changing production or generated web assets.
+- [ ] Image Drop's representative loader, confirmation, and rejected-input/review tests use the
+  supported testing seam without changing production or generated web assets; RPC is explicitly not
+  applicable because the command rejects non-TUI modes before opening any dialog.
 - [ ] Root test-support cleanup is evidence-based: only zero-consumer Kit automation is removed, and
   retained specialized/general fixtures have named owners and follow-up scope.
 - [ ] The shared minor release is canonical, all selected GitHub checks pass, and every selected npm

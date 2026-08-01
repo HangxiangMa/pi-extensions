@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+import { createMockContext } from "../../../test/support.js";
 import {
 	createLimitInputScreen,
 	createLimitReviewScreen,
@@ -82,71 +83,55 @@ test("limit input and review projections preserve exact domain values", () => {
 });
 
 test("status loading distinguishes Escape back from Ctrl+C close", async () => {
-	async function loadWith(input: string) {
-		const context = createMockContext({
-			mode: "tui",
-			custom: async (factory: unknown) => {
-				const harness = createCustomSelectorHarness(factory, 40);
-				harness.handleInput(input);
-				const result = harness.result;
-				harness.dispose();
-				return result;
-			},
-		});
-		return runImageDropMenuLoad(
+	async function loadWith(key: "tui.select.cancel" | "ctrl+c") {
+		const tui = createTuiHarness({ width: 40, rows: 24 });
+		const context = createMockContext({ mode: "tui", custom: tui.custom });
+		const running = runImageDropMenuLoad(
 			context.ctx,
 			"Refreshing Image Drop status…",
 			async () => new Promise<never>(() => undefined),
 		);
+		await tui.waitForOpen();
+		tui.press(key);
+		const result = await running;
+		assert.equal(tui.isOpen, false);
+		return result;
 	}
-	assert.equal((await loadWith("\u001b")).kind, "cancelled");
-	assert.equal((await loadWith("\u0003")).kind, "closed");
+	assert.equal((await loadWith("tui.select.cancel")).kind, "cancelled");
+	assert.equal((await loadWith("ctrl+c")).kind, "closed");
 });
 
 test("Ctrl+C aborts loader work before closing its UI", async () => {
 	let uiClosed = false;
 	let abortedBeforeClose = false;
-	const context = createMockContext({
-		mode: "tui",
-		custom: async (factory: unknown) => {
-			if (typeof factory !== "function") throw new Error("Expected a custom component factory");
-			let result: unknown;
-			const component = factory(
-				{ requestRender() {} },
-				{ fg: (_color: string, text: string) => text },
-				{},
-				(value: unknown) => {
-					uiClosed = true;
-					result = value;
-				},
-			) as { handleInput(data: string): void; dispose(): void };
-			component.handleInput("\u0003");
-			component.dispose();
-			return result;
-		},
-	});
-	const result = await runImageDropMenuLoad(context.ctx, "Loading…", async (signal) => {
+	const tui = createTuiHarness();
+	const context = createMockContext({ mode: "tui", custom: tui.custom });
+	const running = runImageDropMenuLoad(context.ctx, "Loading…", async (signal) => {
 		signal.addEventListener("abort", () => {
 			abortedBeforeClose = !uiClosed;
 		});
 		return new Promise<never>(() => undefined);
 	});
+	void running.then(() => {
+		uiClosed = true;
+	});
+	await tui.waitForOpen();
+	tui.press("ctrl+c");
+	const result = await running;
 	assert.equal(result.kind, "closed");
 	assert.equal(abortedBeforeClose, true);
+	assert.equal(tui.isOpen, false);
 });
 
 test("specialized confirmation distinguishes cancellation from closing Image Drop", async () => {
-	async function drive(input: string) {
-		const context = createMockContext({
-			mode: "tui",
-			custom: async (factory: unknown) => {
-				const harness = createCustomSelectorHarness(factory, 80);
-				harness.handleInput(input);
-				return harness.result;
-			},
-		});
-		return showImageDropConfirmDialog(context.ctx, "Save?", "Review");
+	async function drive(key: "tui.select.cancel" | "ctrl+c") {
+		const tui = createTuiHarness({ width: 80, rows: 24 });
+		const context = createMockContext({ mode: "tui", custom: tui.custom });
+		const running = showImageDropConfirmDialog(context.ctx, "Save?", "Review");
+		await tui.waitForOpen();
+		tui.press(key);
+		return running;
 	}
-	assert.equal(await drive("\u0003"), "close");
-	assert.equal(await drive("\u001b"), "cancelled");
+	assert.equal(await drive("ctrl+c"), "close");
+	assert.equal(await drive("tui.select.cancel"), "cancelled");
 });
