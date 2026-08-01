@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -19,6 +19,24 @@ function config(format: string, document: Record<string, unknown> = {}) {
 const noExec: WorkspaceExec = async () => {
 	throw new Error("unexpected command");
 };
+
+async function waitFor(predicate: () => boolean, timeout = 1_000): Promise<boolean> {
+	const deadline = Date.now() + timeout;
+	while (Date.now() < deadline) {
+		if (predicate()) return true;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	return predicate();
+}
+
+function processExists(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 test("workspace commands stream output and terminate at the byte limit", async () => {
 	const started = Date.now();
@@ -53,6 +71,54 @@ test("workspace commands honor caller cancellation", async () => {
 	const result = await resultPromise;
 	assert.equal(result.killed, true);
 	assert.ok(Date.now() - started < 1_000);
+});
+
+test("workspace cancellation force-kills descendants after the process-group leader exits", {
+	skip: process.platform === "win32",
+}, async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-process-tree-"));
+	const pidPath = join(root, "descendant.pid");
+	const readyPath = join(root, "descendant.ready");
+	const controller = new AbortController();
+	let descendantPid: number | undefined;
+	try {
+		const childScript = [
+			'const { writeFileSync } = require("node:fs");',
+			'process.on("SIGTERM", () => undefined);',
+			`writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
+			"setInterval(() => undefined, 10_000);",
+		].join("\n");
+		const parentScript = [
+			'const { spawn } = require("node:child_process");',
+			'const { writeFileSync } = require("node:fs");',
+			`const child = spawn(${JSON.stringify(process.execPath)}, ["-e", ${JSON.stringify(childScript)}], { stdio: "ignore" });`,
+			`writeFileSync(${JSON.stringify(pidPath)}, String(child.pid));`,
+			'process.on("SIGTERM", () => process.exit(0));',
+			"setInterval(() => undefined, 10_000);",
+		].join("\n");
+		const resultPromise = execWorkspaceCommand(process.execPath, ["-e", parentScript], {
+			cwd: root,
+			timeout: 2_000,
+			maxOutputBytes: 1_024,
+			environment: {},
+			signal: controller.signal,
+		});
+		assert.equal(await waitFor(() => existsSync(pidPath) && existsSync(readyPath)), true);
+		descendantPid = Number(readFileSync(pidPath, "utf8"));
+		assert.equal(Number.isSafeInteger(descendantPid), true);
+		assert.equal(processExists(descendantPid), true);
+
+		controller.abort();
+		const result = await resultPromise;
+		assert.equal(result.killed, true);
+		assert.equal(await waitFor(() => !processExists(descendantPid as number)), true);
+	} finally {
+		controller.abort();
+		if (descendantPid !== undefined && processExists(descendantPid)) {
+			process.kill(descendantPid, "SIGKILL");
+		}
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("workspace commands receive only the explicit allowlisted environment", async () => {
@@ -745,25 +811,32 @@ test("oversized and malformed metadata files fail empty without leaking source t
 	}
 });
 
-test("refresh controller aborts work from replaced and stopped generations", () => {
+test("refresh controller drains replaced work before starting its replacement", async () => {
+	const reads: string[] = [];
 	const signals: AbortSignal[] = [];
+	const pending: Array<(value: string) => void> = [];
 	const controller = new AsyncRefreshController<string, string>({
-		read: (_input, signal) => {
+		read: (input, signal) => {
+			reads.push(input);
 			signals.push(signal);
-			return new Promise(() => undefined);
+			return new Promise((resolve) => pending.push(resolve));
 		},
 		equal: (left, right) => left === right,
 		publish() {},
 	});
 	controller.start(1);
 	controller.request("old");
-	assert.equal(signals.length, 1);
+	assert.deepEqual(reads, ["old"]);
 	assert.equal(signals[0]?.aborted, false);
 
 	controller.start(2);
-	assert.equal(signals[0]?.aborted, true);
 	controller.request("replacement");
-	assert.equal(signals.length, 2);
+	assert.equal(signals[0]?.aborted, true);
+	assert.deepEqual(reads, ["old"]);
+
+	pending.shift()?.("stale");
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.deepEqual(reads, ["old", "replacement"]);
 	assert.equal(signals[1]?.aborted, false);
 
 	controller.stop();

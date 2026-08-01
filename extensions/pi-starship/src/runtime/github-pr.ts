@@ -6,6 +6,8 @@ const MAX_GH_OUTPUT_BYTES = 128 * 1024;
 const MAX_URL_LENGTH = 4_096;
 const MAX_CHECKS = 1_000;
 const MAX_FIELD_LENGTH = 128;
+const RFC3339_TIMESTAMP =
+	/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2}))$/u;
 export const TERMINAL_PR_LIFETIME_MS = 24 * 60 * 60 * 1_000;
 
 const GH_PR_FIELDS = [
@@ -268,9 +270,52 @@ function optionalUppercase(value: unknown): string | undefined {
 
 function optionalTimestamp(value: unknown): number | undefined {
 	if (value === null || value === undefined || value === "") return undefined;
-	const timestamp = Date.parse(requiredBoundedString(value, MAX_FIELD_LENGTH));
+	const text = requiredBoundedString(value, MAX_FIELD_LENGTH);
+	const match = RFC3339_TIMESTAMP.exec(text);
+	if (!match) throw new Error("Invalid PR timestamp");
+	const [
+		,
+		yearText,
+		monthText,
+		dayText,
+		hourText,
+		minuteText,
+		secondText,
+		offsetHourText,
+		offsetMinuteText,
+	] = match;
+	const year = Number(yearText);
+	const month = Number(monthText);
+	const day = Number(dayText);
+	const hour = Number(hourText);
+	const minute = Number(minuteText);
+	const second = Number(secondText);
+	const offsetHour = Number(offsetHourText ?? 0);
+	const offsetMinute = Number(offsetMinuteText ?? 0);
+	if (
+		month < 1 ||
+		month > 12 ||
+		day < 1 ||
+		day > daysInMonth(year, month) ||
+		hour > 23 ||
+		minute > 59 ||
+		second > 59 ||
+		offsetHour > 23 ||
+		offsetMinute > 59
+	) {
+		throw new Error("Invalid PR timestamp");
+	}
+	const timestamp = Date.parse(text);
 	if (!Number.isFinite(timestamp)) throw new Error("Invalid PR timestamp");
 	return timestamp;
+}
+
+function daysInMonth(year: number, month: number): number {
+	if (month === 2) {
+		const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+		return leapYear ? 29 : 28;
+	}
+	return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
 }
 
 function pullRequestState(value: unknown): PullRequestState {

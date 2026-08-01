@@ -177,12 +177,13 @@ test("native PR refresh clears branch state, aborts stale work, and stops on foo
 	await emit(mock.events, "agent_end", {}, context.ctx);
 	assert.equal(prCalls, 2);
 	branchChange?.();
-	assert.equal(prCalls, 3);
+	assert.equal(prCalls, 2);
 	assert.equal(prSignals[1]?.aborted, true);
 	assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#123/u);
 
 	stale.resolve(pullRequestResult(999));
 	await flushAsync();
+	assert.equal(prCalls, 3);
 	assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#999/u);
 	fresh.resolve(pullRequestResult(456));
 	await flushAsync();
@@ -250,6 +251,9 @@ test("accepted settings disable and re-enable native PR refresh immediately", as
 		assert.equal(prSignals[1]?.aborted, true);
 		assert.equal(prCalls, 2);
 		assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#123/u);
+		stale.resolve(pullRequestResult(999));
+		await flushAsync();
+		assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#999/u);
 
 		await mock.commands.get("starship")?.handler("settings", context.ctx);
 		await flushAsync();
@@ -407,6 +411,8 @@ test("reachable native PR refresh uses its own 60-second fallback", async (t) =>
 
 test("terminal native PR snapshots clear at their lifecycle expiry", async (t) => {
 	t.mock.timers.enable({ apis: ["setTimeout"] });
+	let now = Date.parse("2026-08-01T12:00:00.000Z");
+	t.mock.method(Date, "now", () => now);
 	const mock = createMockPi();
 	(
 		mock.rawPi as typeof mock.rawPi & {
@@ -432,11 +438,59 @@ test("terminal native PR snapshots clear at their lifecycle expiry", async (t) =
 			onBranchChange: () => () => undefined,
 		},
 	);
+	t.after(async () => {
+		footer.dispose();
+		await emit(mock.events, "session_shutdown", {}, context.ctx);
+	});
 	assert.match(stripAnsi(footer.render(300).join("\n")), /#123 · merged/u);
+	now += 1_000;
 	t.mock.timers.tick(1_000);
 	assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#123/u);
-	footer.dispose();
-	await emit(mock.events, "session_shutdown", {}, context.ctx);
+});
+
+test("terminal native PR expiry revalidates the wall clock before clearing", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	let now = Date.parse("2026-08-01T12:00:00.000Z");
+	t.mock.method(Date, "now", () => now);
+	const expiresAt = now + 500;
+	const mock = createMockPi();
+	(
+		mock.rawPi as typeof mock.rawPi & {
+			exec: (_command: string, args: string[]) => Promise<ExecResult>;
+		}
+	).exec = async (_command, args) =>
+		isGithubPrCall(args)
+			? pullRequestResult(123, {
+					state: "MERGED",
+					mergedAt: new Date(expiresAt - 24 * 60 * 60 * 1_000).toISOString(),
+				})
+			: gitResult();
+	piStarship(mock.pi);
+	const context = createMockContext({ mode: "tui" });
+	await emit(mock.events, "session_start", {}, context.ctx);
+	await flushAsync();
+	const footer = (context.footer as FooterFactory)(
+		{ requestRender() {} },
+		{},
+		{
+			getGitBranch: () => "feature",
+			getExtensionStatuses: () => new Map(),
+			onBranchChange: () => () => undefined,
+		},
+	);
+	t.after(async () => {
+		footer.dispose();
+		await emit(mock.events, "session_shutdown", {}, context.ctx);
+	});
+	assert.match(stripAnsi(footer.render(300).join("\n")), /#123 · merged/u);
+
+	now -= 10_000;
+	t.mock.timers.tick(500);
+	assert.match(stripAnsi(footer.render(300).join("\n")), /#123 · merged/u);
+
+	now = expiresAt;
+	t.mock.timers.tick(10_500);
+	assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#123/u);
 });
 
 test("turn module counts user messages instead of repeated LLM turns", async () => {

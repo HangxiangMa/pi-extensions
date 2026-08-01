@@ -38,6 +38,7 @@ import { summarizeFooterUsage } from "./usage.js";
 const REFRESH_INTERVAL_MS = 30_000;
 const GITHUB_PR_REFRESH_INTERVAL_MS = 60_000;
 const EVENT_DEBOUNCE_MS = 250;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const EMPTY_ALIASES: ExtensionStatusIconAliasMap = new Map();
 
 interface RuntimeState {
@@ -222,13 +223,14 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
 			refresh();
 			return;
 		}
-		githubPrExpiryTimer = setTimeout(() => {
-			githubPrExpiryTimer = undefined;
-			if (!isActiveTarget(target) || runtime.githubPr !== snapshot) return;
-			runtime.githubPr = undefined;
-			githubPrController.clear();
-			refresh();
-		}, delay);
+		githubPrExpiryTimer = setTimeout(
+			() => {
+				githubPrExpiryTimer = undefined;
+				if (!isActiveTarget(target) || runtime.githubPr !== snapshot) return;
+				scheduleGithubPrExpiry(snapshot);
+			},
+			Math.min(delay, MAX_TIMER_DELAY_MS),
+		);
 		githubPrExpiryTimer.unref?.();
 	}
 

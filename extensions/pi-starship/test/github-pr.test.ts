@@ -135,6 +135,20 @@ test("terminal pull requests expire at the exact 24-hour boundary", () => {
 	assert.equal(buildGithubPrSnapshot(rawPr({ state: "CLOSED", closedAt: null }), NOW), undefined);
 });
 
+test("terminal pull requests require GitHub-style RFC3339 timestamps", () => {
+	for (const mergedAt of [
+		"Sat, 01 Aug 2026 11:59:59 GMT",
+		"2026-08-01",
+		"2026-02-30T11:59:59Z",
+		"2026-08-01T11:59:59+24:00",
+	]) {
+		assert.equal(buildGithubPrSnapshot(rawPr({ state: "MERGED", mergedAt }), NOW), undefined);
+	}
+	assert.ok(
+		buildGithubPrSnapshot(rawPr({ state: "MERGED", mergedAt: "2026-08-01T13:59:59+02:00" }), NOW),
+	);
+});
+
 test("github_pr creates terminal-safe GitHub Enterprise links and falls back to plain text", () => {
 	const enterprise = buildGithubPrSnapshot(
 		rawPr({ url: "https://github.enterprise.test:8443/o/r/pull/123" }),

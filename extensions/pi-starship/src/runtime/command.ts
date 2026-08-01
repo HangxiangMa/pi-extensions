@@ -93,8 +93,12 @@ export const execWorkspaceCommand: WorkspaceExec = async (command, args, options
 
 		child.stdout?.on("data", collect(stdout));
 		child.stderr?.on("data", collect(stderr));
-		child.once("error", () => finish(1));
-		child.once("close", (code) => finish(code ?? 1));
+		child.once("error", () => {
+			if (!killed) finish(1);
+		});
+		child.once("close", (code) => {
+			if (!killed) finish(code ?? 1);
+		});
 		options.signal?.addEventListener("abort", terminate, { once: true });
 		if (options.signal?.aborted) terminate();
 		timeoutTimer = setTimeout(terminate, options.timeout);

@@ -94,9 +94,7 @@ export class AsyncRefreshController<Input, Snapshot> {
 	}
 
 	private cancelActive(reason: string): void {
-		const active = this.active;
-		this.active = undefined;
-		active?.controller.abort(new DOMException(reason, "AbortError"));
+		this.active?.controller.abort(new DOMException(reason, "AbortError"));
 	}
 
 	private isCurrentTarget(request: RefreshRequest<Input>): boolean {
