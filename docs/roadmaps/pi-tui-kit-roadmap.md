@@ -307,7 +307,7 @@ abstractions when Pi provides a better stable owner.
 | Proof for each new public flow | Two compatible consumers by default; exceptions require recorded evidence | Two completed proof migrations or an explicit no-go/deferral | Every expansion phase; archived plans and PRs |
 | Lifecycle verification | Existing deterministic package and consumer coverage | Every admitted contract covers TUI/RPC, cancellation, disposal, owner abort, stale state, and failure | Every phase; package and repository gates |
 | Runtime action/lifecycle ownership | TUI and RPC formerly coordinated screen actions in separate branches | One internal driver now owns shared semantic action policy; adapters retain presentation lifecycle | Phase 4 source-complete; seven-screen matrix plus source diff |
-| Regression gate | 1,939 tests at the BTW `0.42.1` release gate | No regression in the repository CI-equivalent gate | Every phase; `npm run check` |
+| Regression gate | 1,930 tests at the Phase 4 interaction-driver gate | No regression in the repository CI-equivalent gate | Every phase; `npm run check` |
 
 Delivery dates and capacity targets are unknown; this roadmap intentionally measures verified behavior
 and adoption rather than calendar output.

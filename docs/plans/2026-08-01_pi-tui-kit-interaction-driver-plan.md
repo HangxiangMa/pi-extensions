@@ -214,19 +214,30 @@ versions. Do not retain parallel old/new action-resolution paths.
 
 ### 4. Verification and roadmap evidence
 
-- [ ] Run LSP diagnostics on every touched TypeScript file and
+- [x] Run LSP diagnostics on every touched TypeScript file and
   `npm run check --workspace @narumitw/pi-tui-kit`; verify strict NodeNext types, Biome, generated
-  package output, and all focused Kit tests.
-- [ ] Run timeout-bounded generated-package TUI and strict RPC smokes covering one accepted action,
+  package output, and all focused Kit tests. Evidence: Biome LSP reports zero findings on all four
+  touched TypeScript files; the 34-file Kit check/typecheck/build passes; all 116 Kit tests pass.
+- [x] Run timeout-bounded generated-package TUI and strict RPC smokes covering one accepted action,
   one rejected retry, Back, Close, owner abort, and zero cross-mode custom-UI calls; compare observed
-  results/dialog cadence with the pre-refactor contract.
-- [ ] Run `npm test` and then `npm run check` sequentially after the shared Kit build; verify every
-  repository test passes without a build race.
-- [ ] Run `just pack-tui-kit`, inspect the tarball and generated declarations/exports, and verify no
-  internal driver type or new package content crosses the public boundary.
-- [ ] Update `docs/roadmaps/pi-tui-kit-roadmap.md` with the Phase 4 driver go/no-go, actual runtime line
+  results/dialog cadence with the pre-refactor contract. Evidence: the 30-second package-root smoke
+  passed rejected-then-accepted input, distinct TUI Back/Close, TUI/RPC owner abort, strict RPC Back
+  and hint-driven Close, and the RPC harness custom trap.
+- [x] Run `npm test` and then `npm run check` sequentially after the shared Kit build; verify every
+  repository test passes without a build race. Evidence: the linked worktree reproduced its documented
+  Git-admin `GIT_DIR` alias limitation, so an independent clone of the identical rebased tree ran the
+  commands sequentially; both passed 1,930/1,930 tests with zero failures, cancellations, skips, or
+  todos, and every CI-equivalent gate passed.
+- [x] Run `just pack-tui-kit`, inspect the tarball and generated declarations/exports, and verify no
+  internal driver type or new package content crosses the public boundary. Evidence: the 37-file pack
+  contains the built internal driver but no source/tests/dependencies; a clean tarball fixture exposes
+  exactly the unchanged production root and two testing factories, reports API 5, and rejects the
+  unexported `/interaction` subpath with `ERR_PACKAGE_PATH_NOT_EXPORTED`.
+- [x] Update `docs/roadmaps/pi-tui-kit-roadmap.md` with the Phase 4 driver go/no-go, actual runtime line
   count, behavior-matrix evidence, checks, and retained standalone-confirmation/deferred-multi-select
-  status; do not claim unrelated Phase 4 milestones.
+  status; do not claim unrelated Phase 4 milestones. Evidence: Phase 4 is accurately in progress with
+  only the driver checked; the roadmap records 526 runtime/285 driver lines, the internal ownership
+  boundary, the 1,930-test gate, and both still-open qualification milestones.
 - [ ] Audit the final diff against this plan, `docs/extension-conventions.md`, and the roadmap; verify
   public API/version, TUI/RPC cadence, lifecycle ownership, consumers, package metadata, settings,
   generated artifacts, and release state are unchanged, then open a focused PR and require green CI
