@@ -4,6 +4,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { type Static, Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
 import { resolveConsultTools } from "./consult-policy.js";
+import { renderInspectCall, renderInspectResult } from "./inspect-render.js";
 import type { AgentRunInspectionDetail, AgentRunInspectionSummary } from "./registry.js";
 import { boundedPrivateText, boundText, safeDisplayPath, safeTerminalLine } from "./safe-text.js";
 import {
@@ -78,6 +79,12 @@ export function registerSubagentInspect(pi: ExtensionAPI, runtime: SubagentInspe
 		parameters: SubagentInspectParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<InspectToolResult> {
 			return executeSubagentInspect(validateInspectParams(params), ctx, runtime);
+		},
+		renderCall(args, theme) {
+			return renderInspectCall(args, theme);
+		},
+		renderResult(result, options, theme, context) {
+			return renderInspectResult(result, options, theme, context);
 		},
 	});
 }

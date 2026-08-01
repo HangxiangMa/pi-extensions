@@ -19,6 +19,7 @@ Use it to split independent research, planning, implementation, and review work 
 - Optionally loads project agents from `.pi/agents/*.md` with confirmation.
 - Provides a current-session-first `/subagents` manager, direct `settings|status|help` routes, and compatibility aliases for agent tools and retained agents.
 - Supports per-task `cwd`, hard subprocess `timeoutMs`, task-selected `thinkingLevel`, abort propagation, and streaming progress.
+- Renders all seven tools with Pi-native compact/expanded transcript rows; long-running blocking and consultation calls show bounded live activity.
 - Bounds JSON lines, captured messages, stderr, final output, chain substitution, and fan-in context.
 - Enforces a recursion-depth guard and deterministic process-group termination.
 - Provides addressable stateful agents with follow-up, consolidated mailbox/management actions, context selection, and persistence.
@@ -62,6 +63,18 @@ The available tools are:
 - `subagent_spawn` and related lifecycle tools — when enabled, start reusable detached work, return immediately, and receive bounded completion messages automatically.
 - `subagent_inspect` — inspect agent/model/run/runtime metadata without launching work or changing state.
 - `subagent_consult` — run one ephemeral read-only consultation and wait for its answer.
+
+### Interactive tool rows
+
+In Pi's interactive TUI, every registered tool uses Pi's native tool shell and theme. Call rows identify the action, agent or retained id, scope, and a bounded task/message preview. Result rows use explicit `Starting`, `Running`, `Completed`, `Failed`, `Cancelled`, `Interrupted`, or `Closed` text in addition to icons and color.
+
+Collapsed rows stay scan-friendly: consultation and blocking calls show recent activity while running, completed answers show up to three lines, and list actions show up to five items. Use Pi's configured `app.tools.expand` keybinding (Ctrl+O by default) for the additional bounded task, policy, activity, answer, usage, inspection, or mailbox details available to that tool. The hint follows the user's keybinding rather than assuming Ctrl+O.
+
+`subagent_consult` emits an initial starting update before launching its child and then reports the actual provider/model, thinking request, usage, and a safe projection of recent `read`, `grep`, `find`, and `ls` activity. Progress never includes full child messages, prompts, credentials, headers, or environment values. Tool-row previews remove terminal controls and redact private text.
+
+`subagent_spawn` remains deliberately detached and non-polling: its tool row ends after returning the new `agentId` and initial retained state. It does not pretend to stream the background child after the tool call has completed; the existing completion message and configured delivery policy report eventual completion.
+
+Custom transcript rendering is TUI presentation only. Tool names, parameter schemas, model-facing final content/details, errors, completion delivery, and print/JSON/RPC final output remain unchanged; JSON/RPC observers may see additive bounded consultation partial-progress details.
 
 After each session starts, the descriptions of the registered `subagent`, `subagent_spawn`, and
 `subagent_consult` tools include the same bounded parent-facing catalog of the agents available in

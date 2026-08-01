@@ -3,6 +3,8 @@ import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import {
 	DEFAULT_MAX_CONTEXT_BYTES,
 	DEFAULT_MAX_OUTPUT_BYTES,
@@ -19,6 +21,15 @@ import {
 	type SubagentDetails,
 	terminateProcess,
 } from "../src/runner.js";
+
+initTheme("dark", false);
+
+const ESCAPE = String.fromCharCode(27);
+const SGR_PATTERN = new RegExp(`${ESCAPE}\\[[0-9;]*m`, "gu");
+
+function withoutSgr(value: string): string {
+	return value.replace(SGR_PATTERN, "");
+}
 
 test("buildPiArgs emits explicit read-only child launch policy flags", () => {
 	assert.deepEqual(
@@ -747,6 +758,85 @@ test("renderSubagentResult keeps collapsed partial output dense and current", ()
 			.join("\n");
 	assert.match(empty(true), /\(running\.\.\.\)/);
 	assert.match(empty(false), /\(no output\)/);
+});
+
+test("blocking subagent renderer uses safe text, explicit states, and native expansion hints", () => {
+	const identityTheme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+	};
+	const rawCall = renderSubagentCall(
+		{
+			agent: "worker <private>AGENT_SECRET</private>\u001b[31m",
+			task: "Inspect <private>TASK_SECRET</private> safely",
+		},
+		identityTheme as never,
+	)
+		.render(20)
+		.join("\n");
+	const call = withoutSgr(rawCall);
+	assert.doesNotMatch(call, /AGENT_SECRET|TASK_SECRET/u);
+	assert.equal(rawCall.includes(ESCAPE), false);
+
+	const result = {
+		content: [],
+		details: {
+			mode: "single",
+			agentScope: "user",
+			projectAgentsDir: null,
+			results: [
+				{
+					agent: "worker",
+					agentSource: "built-in",
+					task: "Inspect <private>TASK_SECRET</private>",
+					exitCode: 0,
+					messages: [],
+					stderr: "",
+					finalOutput:
+						"safe line\nsecond\nthird\nfourth <private>OUTPUT_SECRET</private>\u001b]8;;bad\u0007",
+					usage: {
+						input: 1,
+						output: 1,
+						cacheRead: 0,
+						cacheWrite: 0,
+						cost: 0,
+						contextTokens: 2,
+						turns: 1,
+					},
+					policy: {
+						inherited: ["read"],
+						overridden: ["grep"],
+						unsupported: ["missing"],
+					},
+				},
+			],
+		},
+	} as never;
+	const rendered = renderSubagentResult(
+		result,
+		{ expanded: false, isPartial: false } as never,
+		identityTheme as never,
+	);
+	const lines = rendered.render(12);
+	const text = withoutSgr(lines.join("\n"));
+	assert.match(text, /Completed/);
+	assert.match(text, /expand/);
+	assert.doesNotMatch(text, /\(Ctrl\+O to expand\)|OUTPUT_SECRET/u);
+	assert.equal(text.includes(ESCAPE), false);
+	assert.ok(lines.every((line) => visibleWidth(line) <= 12));
+	const expanded = withoutSgr(
+		renderSubagentResult(
+			result,
+			{ expanded: true, isPartial: false } as never,
+			identityTheme as never,
+		)
+			.render(80)
+			.join("\n"),
+	);
+	assert.match(expanded, /Policy/);
+	assert.match(expanded, /inherited: read/);
+	assert.match(expanded, /overridden: grep/);
+	assert.match(expanded, /unsupported: missing/);
 });
 
 test("renderSubagentResult keeps partial views running and renders final-only previews", () => {

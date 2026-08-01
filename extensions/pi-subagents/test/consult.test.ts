@@ -79,8 +79,12 @@ function execute(
 	params: Record<string, unknown>,
 	ctx = createMockContext().ctx,
 	signal?: AbortSignal,
+	onUpdate?: (result: {
+		content: Array<{ type: string; text: string }>;
+		details: Record<string, unknown>;
+	}) => void,
 ) {
-	return tool.execute("consult-1", params, signal, undefined, ctx);
+	return tool.execute("consult-1", params, signal, onUpdate, ctx);
 }
 
 test("subagent_consult registers a strict actionless single-agent schema", async () => {
@@ -204,6 +208,102 @@ test("subagent_consult enforces default, empty, and intersected tool policy with
 		assert.equal(result.usage?.cost.total, 0.25);
 		assert.doesNotMatch(JSON.stringify(result.details), /messages/);
 	}
+});
+
+test("subagent_consult emits safe starting and running progress projections", async () => {
+	const updates: Array<{
+		content: Array<{ type: string; text: string }>;
+		details: Record<string, unknown>;
+	}> = [];
+	const { tool } = setup({
+		runChild: async (request) => {
+			request.onUpdate?.(
+				childResult({
+					actualProvider: "actual-provider",
+					actualModel: "actual-model",
+					recentActivityTotal: 4,
+					recentActivity: [
+						{
+							type: "text",
+							text: "Planning <private>PROGRESS_SECRET</private>\u001b]8;;bad\u0007",
+						},
+						{
+							type: "toolCall",
+							name: "read",
+							args: {
+								path: "src/auth.ts\u001b[31m",
+								offset: 2,
+								limit: 5,
+								secret: "ARG_SECRET",
+							},
+						},
+						{ type: "toolCall", name: "bash", args: { command: "echo ARG_SECRET" } },
+					],
+				}),
+			);
+			return childResult();
+		},
+	});
+	const final = await execute(
+		tool,
+		{ agent: "worker", task: "inspect", thinkingLevel: "high" },
+		undefined,
+		undefined,
+		(update) => updates.push(structuredClone(update)),
+	);
+
+	assert.equal(updates.length, 2);
+	const starting = updates[0].details.progress as {
+		phase: string;
+		recentActivity: unknown[];
+		recentActivityTotal: number;
+	};
+	assert.equal(starting.phase, "starting");
+	assert.deepEqual(starting.recentActivity, []);
+	assert.equal(starting.recentActivityTotal, 0);
+	assert.match(updates[0].content[0].text, /starting/i);
+
+	const running = updates[1].details.progress as {
+		phase: string;
+		recentActivity: Array<{ type: string; name?: string; args?: Record<string, unknown> }>;
+		recentActivityTotal: number;
+		actualProvider: string;
+		actualModel: string;
+	};
+	assert.equal(running.phase, "running");
+	assert.equal(running.recentActivityTotal, 4);
+	assert.deepEqual(
+		running.recentActivity.map((item) => (item.type === "toolCall" ? item.name : item.type)),
+		["text", "read"],
+	);
+	assert.deepEqual(running.recentActivity[1].args, {
+		path: "src/auth.ts?[31m",
+		offset: 2,
+		limit: 5,
+	});
+	assert.equal(running.actualProvider, "actual-provider");
+	assert.equal(running.actualModel, "actual-model");
+	assert.doesNotMatch(JSON.stringify(updates), /PROGRESS_SECRET|ARG_SECRET|messages/);
+	assert.equal(final.details.progress, undefined);
+});
+
+test("subagent_consult revalidates cancellation after its starting update", async () => {
+	const controller = new AbortController();
+	let launches = 0;
+	const { tool } = setup({
+		runChild: async () => {
+			launches++;
+			return childResult();
+		},
+	});
+	await assert.rejects(
+		() =>
+			execute(tool, { agent: "worker", task: "inspect" }, undefined, controller.signal, () =>
+				controller.abort(),
+			),
+		(error) => error instanceof Error && error.name === "AbortError",
+	);
+	assert.equal(launches, 0);
 });
 
 test("subagent_consult production runner emits enforced child arguments without provider traffic", async () => {
