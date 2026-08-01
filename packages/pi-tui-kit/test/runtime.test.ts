@@ -6,7 +6,13 @@ import {
 	createMockContext,
 	driveCustomSelector,
 } from "../../../test/support.js";
-import { defineMenu, type MenuDefinition, type RunMenuResult, runMenu } from "../src/index.js";
+import {
+	defineMenu,
+	type MenuDefinition,
+	type MenuScreen,
+	type RunMenuResult,
+	runMenu,
+} from "../src/index.js";
 
 initTheme("dark", false);
 
@@ -301,6 +307,211 @@ test("RPC uses dialog adaptation without custom TUI and print mode delegates uns
 		{ kind: "unsupported", mode: "tui" },
 	);
 	assert.equal(unsupportedMode, "tui");
+});
+
+test("TUI and RPC preserve the seven-screen semantic action matrix", async () => {
+	type MatrixScreen = MenuScreen<"main", "act">;
+	type MatrixPayload = { itemId: string; value?: string; selected?: boolean };
+	const cases: Array<{
+		name: string;
+		screen: MatrixScreen;
+		expected?: MatrixPayload;
+	}> = [
+		{
+			name: "actions",
+			screen: {
+				kind: "actions",
+				title: "Actions",
+				items: [{ id: "action-raw", label: "Run", action: "act" }],
+			},
+			expected: { itemId: "action-raw", value: undefined, selected: undefined },
+		},
+		{
+			name: "detail",
+			screen: { kind: "detail", title: "Detail", lines: ["Read only"] },
+		},
+		{
+			name: "choice",
+			screen: {
+				kind: "choice",
+				title: "Choice",
+				items: [{ id: "choice-raw", label: "Choose" }],
+				action: "act",
+			},
+			expected: { itemId: "choice-raw", value: undefined, selected: undefined },
+		},
+		{
+			name: "settings",
+			screen: {
+				kind: "settings",
+				title: "Settings",
+				items: [
+					{
+						id: "setting-raw",
+						label: "Setting",
+						currentValue: "Off",
+						values: ["Off", "On\u0007raw"],
+						action: "act",
+					},
+				],
+			},
+			expected: { itemId: "setting-raw", value: "On\u0007raw", selected: undefined },
+		},
+		{
+			name: "input",
+			screen: { kind: "input", title: "Input", action: "act" },
+			expected: { itemId: "input", value: "input raw", selected: undefined },
+		},
+		{
+			name: "review",
+			screen: {
+				kind: "review",
+				title: "Review",
+				content: "Content",
+				confirm: { id: "confirm-raw", label: "Apply", action: "act" },
+			},
+			expected: { itemId: "confirm-raw", value: undefined, selected: undefined },
+		},
+		{
+			name: "multi-select toggle",
+			screen: {
+				kind: "multiSelect",
+				title: "Multi-select",
+				items: [{ id: "toggle-raw", label: "Toggle", selected: false }],
+				action: "act",
+			},
+			expected: { itemId: "toggle-raw", value: undefined, selected: true },
+		},
+		{
+			name: "multi-select action",
+			screen: {
+				kind: "multiSelect",
+				title: "Multi-select action",
+				items: [],
+				action: "act",
+				actions: [{ id: "bulk-raw", label: "Save", action: "act" }],
+			},
+			expected: { itemId: "bulk-raw", value: undefined, selected: undefined },
+		},
+	];
+
+	for (const entry of cases) {
+		for (const mode of ["tui", "rpc"] as const) {
+			const invoked: MatrixPayload[] = [];
+			const menu = defineMenu<undefined, "main", "act">({
+				start: "main",
+				screens: { main: () => entry.screen },
+				actions: {
+					act: async ({ itemId, value, selected }) => {
+						invoked.push({ itemId, value, selected });
+						return { kind: "close" };
+					},
+				},
+			});
+			const context = createMockContext(
+				mode === "tui"
+					? {
+							mode,
+							hasUI: true,
+							custom: async (factory: unknown) => {
+								const harness = createCustomSelectorHarness(factory, 80);
+								if (entry.name === "detail") {
+									harness.handleInput("tui.select.cancel");
+								} else if (entry.name === "settings") {
+									harness.handleInput("tui.select.confirm");
+								} else if (entry.name === "input") {
+									harness.setFocused(true);
+									harness.handleInput("input raw");
+									harness.handleInput("tui.input.submit");
+								} else {
+									harness.handleInput("tui.select.confirm");
+								}
+								await harness.waitForPending();
+								return harness.result;
+							},
+						}
+					: {
+							mode,
+							hasUI: true,
+							input: async () => "input raw",
+							select: async (_title: string, choices: string[]) =>
+								entry.name === "review"
+									? choices.find((choice) => choice.startsWith("Apply"))
+									: choices[0],
+						},
+			);
+
+			const result = await runMenu(context.ctx, menu, { getState: () => undefined });
+			assert.deepEqual(
+				result,
+				entry.name === "detail"
+					? { kind: "closed", reason: "back" }
+					: { kind: "closed", reason: "close" },
+				`${mode} ${entry.name} result`,
+			);
+			assert.deepEqual(invoked, entry.expected ? [entry.expected] : [], `${mode} ${entry.name}`);
+		}
+	}
+});
+
+test("TUI and RPC ordinary action failures report once and leave the menu usable", async () => {
+	for (const mode of ["tui", "rpc"] as const) {
+		const actionError = new Error(`${mode} action failed`);
+		let actionCalls = 0;
+		let reporterCalls = 0;
+		let customCalls = 0;
+		let selectCalls = 0;
+		const context = createMockContext(
+			mode === "tui"
+				? {
+						mode,
+						hasUI: true,
+						custom: async (factory: unknown) => {
+							customCalls += 1;
+							const harness = createCustomSelectorHarness(factory, 40);
+							harness.handleInput(customCalls === 1 ? "tui.select.confirm" : "\u0003");
+							return harness.result;
+						},
+					}
+				: {
+						mode,
+						hasUI: true,
+						select: async (_title: string, choices: string[]) => {
+							selectCalls += 1;
+							return selectCalls === 1 ? choices[0] : undefined;
+						},
+					},
+		);
+		const menu = defineMenu<undefined, "main", "run">({
+			start: "main",
+			screens: {
+				main: () => ({
+					kind: "actions",
+					title: "Retry",
+					items: [{ id: "run", label: "Run", action: "run" }],
+				}),
+			},
+			actions: {
+				run: async () => {
+					actionCalls += 1;
+					throw actionError;
+				},
+			},
+		});
+
+		assert.deepEqual(
+			await runMenu(context.ctx, menu, {
+				getState: () => undefined,
+				onError: (_ctx, error) => {
+					reporterCalls += 1;
+					assert.equal(error, actionError);
+				},
+			}),
+			mode === "tui" ? { kind: "closed", reason: "close" } : { kind: "closed", reason: "back" },
+		);
+		assert.equal(actionCalls, 1, mode);
+		assert.equal(reporterCalls, 1, mode);
+	}
 });
 
 test("choice TUI prefers initial over current and invokes the confirmed raw item id", async () => {
