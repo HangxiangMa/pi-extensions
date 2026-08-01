@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveMenuScreen } from "@narumitw/pi-tui-kit";
-import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
+import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+import { createMockContext } from "../../../test/support.js";
 import { DEFAULT_STAMP_SETTINGS } from "../src/format.js";
 import { createStampMenu, showStampMenu } from "../src/menu.js";
 import type {
@@ -198,73 +199,120 @@ test("custom locale and time-zone screens validate and save canonical raw input"
 
 test("TUI custom input retains a rejected draft and Ctrl+C closes the menu", async () => {
 	const runtime = memorySettingsRuntime();
-	let customCalls = 0;
-	let rejectedRender = "";
+	const tui = createTuiHarness({ width: 60, rows: 24 });
 	const { ctx } = createMockContext({
 		mode: "tui",
 		hasUI: true,
-		custom: async (factory: unknown) => {
-			customCalls += 1;
-			const harness = createCustomSelectorHarness(factory, 60);
-			if (customCalls === 1) harness.handleInput("tui.select.confirm");
-			else if (customCalls === 2) {
-				for (let index = 0; index < 3; index += 1) harness.handleInput("tui.select.down");
-				harness.handleInput("tui.select.confirm");
-			} else if (customCalls === 3) {
-				harness.handleInput("tui.select.down");
-				harness.handleInput("tui.select.down");
-				harness.handleInput("tui.select.confirm");
-			} else if (customCalls === 4) {
-				harness.setFocused(true);
-				harness.handleInput("not_a_locale");
-				harness.handleInput("tui.input.submit");
-				await harness.waitForPending();
-				rejectedRender = harness.render().join("\n");
-				harness.handleInput("\u0015");
-				harness.handleInput("EN-us");
-				harness.handleInput("tui.input.submit");
-				await harness.waitForPending();
-			} else harness.handleInput("\u0003");
-			return harness.result ?? harness.resultPromise;
-		},
+		custom: tui.custom,
 	});
-	const result = await showStampMenu(ctx, runtime, {
+	const running = showStampMenu(ctx, runtime, {
 		signal: new AbortController().signal,
 		isCurrent: () => true,
 	});
 
+	await tui.waitForOpen();
+	tui.press("tui.select.confirm");
+	await tui.waitForOpen();
+	for (let index = 0; index < 3; index += 1) tui.press("tui.select.down");
+	tui.press("tui.select.confirm");
+	await tui.waitForPending();
+	await tui.waitForOpen();
+	tui.press("tui.select.down");
+	tui.press("tui.select.down");
+	tui.press("tui.select.confirm");
+	await tui.waitForPending();
+	await tui.waitForOpen();
+	tui.setFocused(true);
+	tui.type("not_a_locale");
+	tui.press("tui.input.submit");
+	await tui.waitForPending();
+	const rejectedRender = tui.render().join("\n");
+	tui.send("\u0015");
+	tui.type("EN-us");
+	tui.press("tui.input.submit");
+	await tui.waitForPending();
+	await tui.waitForOpen();
+	tui.press("ctrl+c");
+
+	const result = await running;
 	assert.equal(result.kind, "closed");
-	assert.equal(customCalls, 5);
+	assert.equal(tui.openCount, 5);
 	assert.match(rejectedRender, /not_a_locale/u);
 	assert.deepEqual(runtime.patches, [{ locale: "en-US" }]);
 });
 
 test("RPC custom input retries a rejected value before saving", async () => {
 	const runtime = memorySettingsRuntime();
-	let mainVisits = 0;
-	let settingsVisits = 0;
-	let inputCalls = 0;
-	const values = ["not_a_locale", "EN-us"];
+	const rpc = createRpcHarness([
+		{
+			kind: "select",
+			title:
+				"Stamp\n24-hour · seconds · Day changes · Invariant · Local · Timing off · Metadata off · Tool stamps hidden",
+			options: ["Settings", "Status", "Help", "Close"],
+			response: "Settings",
+		},
+		{
+			kind: "select",
+			title: "Stamp Settings\nUser settings · /tmp/pi-stamp.json",
+			options: [
+				"Hour cycle (24-hour)",
+				"Seconds (Show)",
+				"Date context (Day changes)",
+				"Locale (Invariant)",
+				"Time zone (Local)",
+				"Response timing (Off)",
+				"Assistant metadata (Off)",
+				"Tool stamps (Hide)",
+				"Back",
+			],
+			response: "Locale (Invariant)",
+		},
+		{
+			kind: "select",
+			title: "Stamp Locale\nCurrent: Invariant",
+			options: ["Invariant (default)", "System locale", "Custom BCP 47 locale…"],
+			response: "Custom BCP 47 locale…",
+		},
+		{
+			kind: "input",
+			title: "Custom BCP 47 locale\nCurrent: Invariant",
+			placeholder: "Examples: en-US, fr-FR, zh-TW",
+			response: "not_a_locale",
+		},
+		{
+			kind: "input",
+			title: "Custom BCP 47 locale\nCurrent: Invariant",
+			placeholder: "Examples: en-US, fr-FR, zh-TW",
+			response: "EN-us",
+		},
+		{
+			kind: "select",
+			title: "Stamp Settings\nUser settings · /tmp/pi-stamp.json",
+			options: [
+				"Hour cycle (24-hour)",
+				"Seconds (Show)",
+				"Date context (Day changes)",
+				"Locale (en-US)",
+				"Time zone (Local)",
+				"Response timing (Off)",
+				"Assistant metadata (Off)",
+				"Tool stamps (Hide)",
+				"Back",
+			],
+			response: undefined,
+		},
+		{
+			kind: "select",
+			title:
+				"Stamp\n24-hour · seconds · Day changes · en-US · Local · Timing off · Metadata off · Tool stamps hidden",
+			options: ["Settings", "Status", "Help", "Close"],
+			response: "Close",
+		},
+	]);
 	const { ctx } = createMockContext({
 		mode: "rpc",
 		hasUI: true,
-		input: async () => {
-			inputCalls += 1;
-			return values.shift();
-		},
-		select: async (title: string, options: string[]) => {
-			if (title.startsWith("Stamp Settings")) {
-				settingsVisits += 1;
-				return settingsVisits === 1
-					? options.find((option) => option.startsWith("Locale"))
-					: undefined;
-			}
-			if (title.startsWith("Stamp Locale")) {
-				return options.find((option) => option.startsWith("Custom BCP 47"));
-			}
-			mainVisits += 1;
-			return mainVisits === 1 ? "Settings" : "Close";
-		},
+		...rpc.ui,
 	});
 
 	const result = await showStampMenu(ctx, runtime, {
@@ -273,8 +321,9 @@ test("RPC custom input retries a rejected value before saving", async () => {
 	});
 
 	assert.equal(result.kind, "closed");
-	assert.equal(inputCalls, 2);
+	assert.equal(rpc.dialogs.filter((dialog) => dialog.kind === "input").length, 2);
 	assert.deepEqual(runtime.patches, [{ locale: "en-US" }]);
+	rpc.assertConsumed();
 });
 
 test("save failure is rejected without changing effective settings", async () => {
