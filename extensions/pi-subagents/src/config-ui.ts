@@ -1,12 +1,19 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import { type CompletionDelivery, type ConsultResourcePolicy, discoverAgents } from "./agents.js";
+import {
+	type CompletionDelivery,
+	type ConsultationCwdPolicy,
+	type ConsultResourcePolicy,
+	type DelegationCwdPolicy,
+	discoverAgents,
+} from "./agents.js";
 import type { ManagedAgent } from "./registry.js";
 import {
 	type DelegationWorkflow,
 	hasOwn,
 	inspectCompletionDeliverySettings,
 	inspectConsultResourceSettings,
+	inspectCwdPolicySettings,
 	inspectDelegationWorkflowSettings,
 	readSubagentSettings,
 	sameToolSet,
@@ -14,6 +21,7 @@ import {
 	updateAgentToolsSetting,
 	updateCompletionDeliverySetting,
 	updateConsultResourceSetting,
+	updateCwdPolicySetting,
 	updateDelegationWorkflowSetting,
 } from "./settings.js";
 import { formatStatefulAgentLine, type StatefulSubagentRuntimeStatus } from "./stateful.js";
@@ -29,8 +37,12 @@ export interface SubagentSettingsRuntime {
 	getBlockingEnabled(): boolean;
 	getCompletionDelivery(): CompletionDelivery;
 	getConsultResourcePolicy(): ConsultResourcePolicy;
+	getConsultationCwdPolicy(): ConsultationCwdPolicy;
+	getDelegationCwdPolicy(): DelegationCwdPolicy;
 	setCompletionDelivery(value: CompletionDelivery): void;
 	setConsultResourcePolicy(value: ConsultResourcePolicy): void;
+	setConsultationCwdPolicy(value: ConsultationCwdPolicy): void;
+	setDelegationCwdPolicy(value: DelegationCwdPolicy): void;
 	getRuntimeStatus(): StatefulSubagentRuntimeStatus;
 	listAgents(includeClosed?: boolean): ManagedAgent[];
 	clearAgents(): Promise<number>;
@@ -90,7 +102,7 @@ function registerSubagentPrimaryCommand(
 					showSubagentStatus(ctx, runtime);
 					return;
 				case "help":
-					showSubagentHelp(ctx);
+					showSubagentHelp(ctx, runtime);
 					return;
 				default:
 					if (ctx.mode === "tui" || ctx.hasUI) {
@@ -129,6 +141,8 @@ async function showSubagentManager(
 		| "clear-agents"
 		| "set-completion"
 		| "set-consult-resources"
+		| "set-consultation-cwd"
+		| "set-delegation-cwd"
 		| "load-agent-picker"
 		| "pick-agent"
 		| "toggle-tool"
@@ -161,7 +175,7 @@ async function showSubagentManager(
 						{
 							id: "settings",
 							label: "Settings",
-							description: "Configure async completion and read-only consultation resources",
+							description: "Configure targets, trusted resources, and async completion",
 							to: "settings",
 						},
 						{
@@ -271,7 +285,7 @@ async function showSubagentManager(
 			help: () => ({
 				kind: "detail",
 				title: "Subagents help",
-				lines: helpLines(),
+				lines: helpLines(runtime),
 				hint: "back",
 			}),
 			"agent-picker": () => {
@@ -395,6 +409,8 @@ async function showSubagentManager(
 			"set-completion": async ({ value }) => applyCompletionSetting(value, ctx, runtime),
 			"set-consult-resources": async ({ value }) =>
 				applyConsultResourceSetting(value, ctx, runtime),
+			"set-consultation-cwd": async ({ value }) => applyConsultationCwdSetting(value, ctx, runtime),
+			"set-delegation-cwd": async ({ value }) => applyDelegationCwdSetting(value, ctx, runtime),
 			"load-agent-picker": async () => {
 				availableAgents = discoverAgents(ctx.cwd, "user", readSubagentSettings() ?? {}).agents;
 				if (availableAgents.length === 0) {
@@ -486,7 +502,11 @@ async function showSubagentSettings(
 		return;
 	}
 	const generation = owner.generation;
-	type SettingsAction = "set-completion" | "set-consult-resources";
+	type SettingsAction =
+		| "set-completion"
+		| "set-consult-resources"
+		| "set-consultation-cwd"
+		| "set-delegation-cwd";
 	const menu = defineMenu<undefined, "settings", SettingsAction, ExtensionCommandContext>({
 		start: "settings",
 		screens: { settings: () => subagentSettingsScreen(runtime) },
@@ -494,6 +514,8 @@ async function showSubagentSettings(
 			"set-completion": async ({ value }) => applyCompletionSetting(value, ctx, runtime),
 			"set-consult-resources": async ({ value }) =>
 				applyConsultResourceSetting(value, ctx, runtime),
+			"set-consultation-cwd": async ({ value }) => applyConsultationCwdSetting(value, ctx, runtime),
+			"set-delegation-cwd": async ({ value }) => applyDelegationCwdSetting(value, ctx, runtime),
 		},
 	});
 	await runMenu(ctx, menu, {
@@ -506,18 +528,52 @@ async function showSubagentSettings(
 function subagentSettingsScreen(runtime: SubagentSettingsRuntime) {
 	const completion = inspectCompletionDeliverySettings();
 	const consult = inspectConsultResourceSettings();
-	const error = completion.error ?? consult.error;
+	const cwdPolicy = inspectCwdPolicySettings();
+	const error = completion.error ?? consult.error ?? cwdPolicy.error;
 	return {
 		kind: "settings" as const,
 		title: error ? "Subagent User Settings · Read only" : "Subagent User Settings",
 		lines: [
 			"Applies now and to future sessions",
+			"Target and trust settings control startup resources, not filesystem access or sandboxing.",
+			"Manage folder trust with Pi /trust; restart Pi after changing it.",
 			safeTerminalText(consult.path),
 			...(error ? [`Settings cannot be edited: ${safeTerminalText(error)}`] : []),
 		],
 		items: error
 			? []
 			: [
+					{
+						id: "consultationCwd",
+						label: "Read-only consultation target",
+						description:
+							"Untrusted external targets inherit no target/project resources; agent and package read-only prompts remain.",
+						currentValue: consultationCwdLabel(runtime.getConsultationCwdPolicy()),
+						values: ["Anywhere · untrusted targets inherit nothing", "Current workspace only"],
+						action: "set-consultation-cwd" as const,
+					},
+					{
+						id: "delegationCwd",
+						label: "General delegation target",
+						description:
+							"Controls starting directories, not absolute paths, shell commands, or OS permissions.",
+						currentValue: delegationCwdLabel(runtime.getDelegationCwdPolicy()),
+						values: [
+							"Current or saved-trusted folders",
+							"Current workspace only",
+							"Anywhere · normal Pi permissions",
+						],
+						action: "set-delegation-cwd" as const,
+					},
+					{
+						id: "consultResources",
+						label: "Consultation resources for trusted targets",
+						description:
+							"Choose which trusted context, system, skill, and prompt resources a consultation inherits.",
+						currentValue: consultResourceLabel(runtime.getConsultResourcePolicy()),
+						values: ["Project context only", "No inherited resources", "All trusted resources"],
+						action: "set-consult-resources" as const,
+					},
 					{
 						id: "completionDelivery",
 						label: "When async work finishes",
@@ -526,15 +582,6 @@ function subagentSettingsScreen(runtime: SubagentSettingsRuntime) {
 						currentValue: completionLabel(runtime.getCompletionDelivery()),
 						values: ["Wait until my next turn", "Resume automatically when finished"],
 						action: "set-completion" as const,
-					},
-					{
-						id: "consultResources",
-						label: "Read-only consultation resources",
-						description:
-							"Choose which trusted context, system, skill, and prompt resources a consultation inherits.",
-						currentValue: consultResourceLabel(runtime.getConsultResourcePolicy()),
-						values: ["Project context only", "No inherited resources", "All trusted resources"],
-						action: "set-consult-resources" as const,
 					},
 				],
 	};
@@ -577,6 +624,50 @@ function applyConsultResourceSetting(
 		updateConsultResourceSetting(next);
 		runtime.setConsultResourcePolicy(next);
 		ctx.ui.notify(`Saved and applied: ${consultResourceLabel(next)}.`, "info");
+		return { kind: "stay" as const };
+	} catch (error) {
+		ctx.ui.notify(`Subagent settings were not saved: ${formatError(error)}`, "error");
+		return { kind: "rejected" as const };
+	}
+}
+
+function applyConsultationCwdSetting(
+	value: string | undefined,
+	ctx: ExtensionCommandContext,
+	runtime: SubagentSettingsRuntime,
+) {
+	const previous = runtime.getConsultationCwdPolicy();
+	const next: ConsultationCwdPolicy =
+		value === "Current workspace only" ? "current-workspace" : "anywhere";
+	if (next === previous) return { kind: "stay" as const };
+	try {
+		updateCwdPolicySetting("consultation", next);
+		runtime.setConsultationCwdPolicy(next);
+		ctx.ui.notify(`Saved and applied: ${consultationCwdLabel(next)}.`, "info");
+		return { kind: "stay" as const };
+	} catch (error) {
+		ctx.ui.notify(`Subagent settings were not saved: ${formatError(error)}`, "error");
+		return { kind: "rejected" as const };
+	}
+}
+
+function applyDelegationCwdSetting(
+	value: string | undefined,
+	ctx: ExtensionCommandContext,
+	runtime: SubagentSettingsRuntime,
+) {
+	const previous = runtime.getDelegationCwdPolicy();
+	const next: DelegationCwdPolicy =
+		value === "Current workspace only"
+			? "current-workspace"
+			: value === "Anywhere · normal Pi permissions"
+				? "anywhere"
+				: "trusted-targets";
+	if (next === previous) return { kind: "stay" as const };
+	try {
+		updateCwdPolicySetting("delegation", next);
+		runtime.setDelegationCwdPolicy(next);
+		ctx.ui.notify(`Saved and applied: ${delegationCwdLabel(next)}.`, "info");
 		return { kind: "stay" as const };
 	} catch (error) {
 		ctx.ui.notify(`Subagent settings were not saved: ${formatError(error)}`, "error");
@@ -628,9 +719,9 @@ function showSubagentStatus(ctx: ExtensionCommandContext, runtime: SubagentSetti
 	);
 }
 
-function showSubagentHelp(ctx: ExtensionCommandContext) {
+function showSubagentHelp(ctx: ExtensionCommandContext, runtime: SubagentSettingsRuntime) {
 	if (ctx.mode !== "tui" && !ctx.hasUI) return;
-	ctx.ui.notify(helpLines().join("\n"), "info");
+	ctx.ui.notify(helpLines(runtime).join("\n"), "info");
 }
 
 function statusLines(runtime: SubagentSettingsRuntime): string[] {
@@ -638,13 +729,20 @@ function statusLines(runtime: SubagentSettingsRuntime): string[] {
 	return formatStatus(runtime.getRuntimeStatus(), snapshot, runtime).split("\n");
 }
 
-function helpLines(): string[] {
+function helpLines(runtime: SubagentSettingsRuntime): string[] {
 	const snapshot = inspectCompletionDeliverySettings();
+	const cwdPolicy = inspectCwdPolicySettings();
 	return [
 		"/subagents — choose delegation workflow, manage current agents, and configure agent tools",
-		"/subagents settings — configure async completion and read-only consultation resources",
+		"/subagents settings — configure target locations, trusted resources, and async completion",
 		"/subagents status — show current-session and user-setting values",
 		"/subagents help — show this help",
+		"Target policies control startup directories and resources, not filesystem access or sandboxing.",
+		"Manage saved folder trust with Pi /trust and restart Pi after changing it.",
+		`Runtime consultation target: ${consultationCwdLabel(runtime.getConsultationCwdPolicy())}`,
+		`Configured consultation target: ${consultationCwdLabel(cwdPolicy.consultation.value)} (${cwdPolicy.consultation.source})`,
+		`Runtime delegation target: ${delegationCwdLabel(runtime.getDelegationCwdPolicy())}`,
+		`Configured delegation target: ${delegationCwdLabel(cwdPolicy.delegation.value)} (${cwdPolicy.delegation.source})`,
 		`User settings: ${safeTerminalText(snapshot.path)}`,
 	];
 }
@@ -655,10 +753,18 @@ function formatManagerSummary(
 	configured: ReturnType<typeof inspectDelegationWorkflowSettings>,
 ): string {
 	const current = currentWorkflow(runtime, status);
+	const cwdPolicy = inspectCwdPolicySettings();
+	const consult = inspectConsultResourceSettings();
 	return [
 		`Delegation: ${workflowLabel(current)}`,
 		`Completion: ${completionLabel(status.completionDelivery)}`,
+		`Consult target: ${consultationCwdLabel(runtime.getConsultationCwdPolicy())}`,
+		`Delegation target: ${delegationCwdLabel(runtime.getDelegationCwdPolicy())}`,
 		`Consult resources: ${consultResourceLabel(runtime.getConsultResourcePolicy())}`,
+		`Configured consult target: ${consultationCwdLabel(cwdPolicy.consultation.value)} · ${cwdPolicy.consultation.source}`,
+		`Configured delegation target: ${delegationCwdLabel(cwdPolicy.delegation.value)} · ${cwdPolicy.delegation.source}`,
+		`Configured consult resources: ${consultResourceLabel(consult.value)} · ${consult.source}`,
+		`Settings: ${safeTerminalText(cwdPolicy.path)}`,
 		`Agents: ${status.activeAgents} active · ${status.retainedAgents} retained`,
 		...(configured.value !== current
 			? [`Configured after reload: ${workflowLabel(configured.value)}`]
@@ -674,6 +780,7 @@ function formatStatus(
 ): string {
 	const configuredWorkflow = inspectDelegationWorkflowSettings();
 	const consult = inspectConsultResourceSettings();
+	const cwdPolicy = inspectCwdPolicySettings();
 	const current = runtime ? currentWorkflow(runtime, status) : configuredWorkflow.value;
 	return [
 		"Current session",
@@ -681,17 +788,24 @@ function formatStatus(
 		`  Async runtime: ${status.initialized ? "initialized" : status.enabled ? "not initialized" : "disabled"}`,
 		`  Transport: ${status.transport}`,
 		`  Completion: ${completionLabel(status.completionDelivery)}`,
+		`  Consultation target: ${consultationCwdLabel(runtime?.getConsultationCwdPolicy() ?? cwdPolicy.consultation.value)}`,
+		`  Delegation target: ${delegationCwdLabel(runtime?.getDelegationCwdPolicy() ?? cwdPolicy.delegation.value)}`,
+		`  Consultation resources: ${consultResourceLabel(runtime?.getConsultResourcePolicy() ?? consult.value)}`,
 		`  Agents: ${status.activeAgents} active, ${status.retainedAgents} retained`,
 		"User settings",
 		`  Delegation source: ${configuredWorkflow.source}`,
 		`  Configured delegation: ${workflowLabel(configuredWorkflow.value)}`,
 		`  Completion source: ${snapshot.source}`,
 		`  Configured completion: ${completionLabel(snapshot.value)}`,
-		`  Consultation resources: ${consultResourceLabel(runtime?.getConsultResourcePolicy() ?? consult.value)}`,
+		`  Configured consultation target: ${consultationCwdLabel(cwdPolicy.consultation.value)}`,
+		`  Consultation target source: ${cwdPolicy.consultation.source}`,
+		`  Configured delegation target: ${delegationCwdLabel(cwdPolicy.delegation.value)}`,
+		`  Delegation target source: ${cwdPolicy.delegation.source}`,
+		`  Configured consultation resources: ${consultResourceLabel(consult.value)}`,
 		`  Consultation resource source: ${consult.source}`,
 		`  Path: ${safeTerminalText(snapshot.path)}`,
-		configuredWorkflow.error || snapshot.error
-			? `  Warning: ${safeTerminalText(configuredWorkflow.error ?? snapshot.error ?? "invalid settings")}`
+		configuredWorkflow.error || snapshot.error || cwdPolicy.error
+			? `  Warning: ${safeTerminalText(configuredWorkflow.error ?? snapshot.error ?? cwdPolicy.error ?? "invalid settings")}`
 			: "  Warning: none",
 		configuredWorkflow.value !== current
 			? "Configured delegation differs from this session. Run /reload to apply it."
@@ -735,6 +849,23 @@ function workflowLabel(value: DelegationWorkflow): string {
 
 function completionLabel(value: CompletionDelivery): string {
 	return value === "auto-resume" ? "Resume automatically when finished" : "Wait until my next turn";
+}
+
+function consultationCwdLabel(value: ConsultationCwdPolicy): string {
+	return value === "current-workspace"
+		? "Current workspace only"
+		: "Anywhere · untrusted targets inherit nothing";
+}
+
+function delegationCwdLabel(value: DelegationCwdPolicy): string {
+	switch (value) {
+		case "trusted-targets":
+			return "Current or saved-trusted folders";
+		case "current-workspace":
+			return "Current workspace only";
+		case "anywhere":
+			return "Anywhere · normal Pi permissions";
+	}
 }
 
 function consultResourceLabel(value: ConsultResourcePolicy): string {

@@ -472,6 +472,40 @@ test("detached lifecycle renderers summarize calls and action-specific results",
 	assert.doesNotMatch(noActiveDescendants, /1 agent/);
 });
 
+test("collapsed mailbox rows flatten message blocks while expanded rows preserve them", () => {
+	const mailbox = registeredTools().get("subagent_mailbox");
+	assert.ok(mailbox);
+	const args = { action: "read", agentId: "sa_worker", acknowledge: true };
+	const result = {
+		content: [{ type: "text", text: "message" }],
+		details: {
+			messages: [
+				{
+					id: "msg_1",
+					senderId: "worker",
+					recipientId: "sa_worker",
+					content: `first line\nsecond line\n${"x".repeat(600)}`,
+				},
+			],
+		},
+	};
+
+	const collapsed = renderResult(
+		mailbox,
+		args,
+		result,
+		{ expanded: false, isPartial: false },
+		4096,
+	).map(withoutSgr);
+	assert.equal(collapsed.length, 3);
+	assert.match(collapsed[1] ?? "", /^• msg_1 from worker: first line second line .*… \[truncated/u);
+
+	const expanded = withoutSgr(
+		renderResult(mailbox, args, result, { expanded: true, isPartial: false }, 4096).join("\n"),
+	);
+	assert.match(expanded, /first line[ \t]*\nsecond line[ \t]*\n/u);
+});
+
 test("structured tool views remain width-safe when collapsed and expanded", () => {
 	const tools = registeredTools();
 	const fixtures = [

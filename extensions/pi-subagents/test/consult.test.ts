@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { SubagentSettings } from "../src/agents.js";
 import { type ConsultChildRequest, registerSubagentConsult } from "../src/consult.js";
@@ -362,13 +363,17 @@ test("subagent_consult bounds explicitly loaded base system prompts", async () =
 	}
 });
 
-test("subagent_consult maps resource policies and rejects unsafe external cwd", async () => {
+test("subagent_consult maps target trust to effective resources and cwd policy", async () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-consult-cwd-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	const agentDir = path.join(root, "agent-home");
+	process.env.PI_CODING_AGENT_DIR = agentDir;
 	const workspace = path.join(root, "workspace");
 	const external = path.join(root, "external");
 	mkdirSync(path.join(workspace, ".pi"), { recursive: true });
-	mkdirSync(external);
+	mkdirSync(path.join(external, ".pi"), { recursive: true });
 	writeFileSync(path.join(workspace, ".pi", "SYSTEM.md"), "trusted project system");
+	writeFileSync(path.join(external, ".pi", "SYSTEM.md"), "trusted external system");
 	try {
 		const trusted = createMockContext({ cwd: workspace, isProjectTrusted: () => true }).ctx;
 		const projectContext = setup({ settings: { consult: { resources: "project-context" } } });
@@ -381,18 +386,74 @@ test("subagent_consult maps resource policies and rejects unsafe external cwd", 
 			"trusted project system",
 		);
 
-		await assert.rejects(
-			() =>
-				execute(projectContext.tool, { agent: "worker", task: "inspect", cwd: external }, trusted),
-			/outside the current workspace/i,
+		const downgraded = await execute(
+			projectContext.tool,
+			{ agent: "worker", task: "inspect", cwd: external },
+			trusted,
+		);
+		assert.equal(projectContext.requests[1].resourcePolicy, "none");
+		assert.equal(projectContext.requests[1].launchPolicy.disableContextFiles, true);
+		assert.equal(
+			(downgraded.details.policy as { effectiveResources: { policy: string } }).effectiveResources
+				.policy,
+			"none",
+		);
+		assert.match(
+			(downgraded.details.policy as { resourceDowngradeReason: string }).resourceDowngradeReason,
+			/unsaved/,
 		);
 
-		const none = setup({ settings: { consult: { resources: "none" } } });
-		await execute(none.tool, { agent: "worker", task: "inspect", cwd: external }, trusted);
-		assert.equal(none.requests[0].launchPolicy.disableContextFiles, true);
-		assert.equal(none.requests[0].launchPolicy.disableSkills, true);
-		assert.match(none.requests[0].launchPolicy.baseSystemPrompt ?? "", /read-only consultation/i);
+		new ProjectTrustStore(agentDir).set(external, true);
+		const savedTrusted = setup({ settings: { consult: { resources: "project-context" } } });
+		await execute(savedTrusted.tool, { agent: "worker", task: "inspect", cwd: external }, trusted);
+		assert.equal(savedTrusted.requests[0].resourcePolicy, "project-context");
+		assert.equal(savedTrusted.requests[0].launchPolicy.projectTrust, true);
+		assert.equal(savedTrusted.requests[0].launchPolicy.baseSystemPrompt, "trusted external system");
+
+		new ProjectTrustStore(agentDir).set(external, false);
+		const denied = setup({ settings: { consult: { resources: "all" } } });
+		const deniedResult = await execute(
+			denied.tool,
+			{ agent: "worker", task: "inspect", cwd: external },
+			trusted,
+		);
+		assert.equal(denied.requests[0].resourcePolicy, "none");
+		assert.equal(
+			(deniedResult.details.policy as { targetTrust: { kind: string } }).targetTrust.kind,
+			"saved-denied",
+		);
+
+		writeFileSync(path.join(agentDir, "trust.json"), "{ broken");
+		const trustError = setup({ settings: { consult: { resources: "project-context" } } });
+		const trustErrorResult = await execute(
+			trustError.tool,
+			{ agent: "worker", task: "inspect", cwd: external },
+			trusted,
+		);
+		assert.equal(trustError.requests[0].resourcePolicy, "none");
+		const trustDetails = (
+			trustErrorResult.details.policy as {
+				targetTrust: { kind: string; warning: string };
+			}
+		).targetTrust;
+		assert.equal(trustDetails.kind, "trust-error");
+		assert.match(trustDetails.warning, /trust store/i);
+		assert.ok(Buffer.byteLength(trustDetails.warning, "utf8") <= 512);
+
+		const restricted = setup({
+			settings: {
+				consult: { resources: "none" },
+				cwdPolicy: { consultation: "current-workspace" },
+			},
+		});
+		await assert.rejects(
+			() => execute(restricted.tool, { agent: "worker", task: "inspect", cwd: external }, trusted),
+			/outside the current workspace/i,
+		);
+		assert.equal(restricted.requests.length, 0);
 	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
 		rmSync(root, { recursive: true, force: true });
 	}
 });

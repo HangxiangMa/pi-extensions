@@ -14,7 +14,9 @@
 
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
+	type ConsultationCwdPolicy,
 	type ConsultResourcePolicy,
+	type DelegationCwdPolicy,
 	discoverAgentCatalog,
 	formatAgentCatalog,
 	type SubagentSettings,
@@ -29,6 +31,9 @@ import type { SubagentDetails } from "./runner.js";
 import {
 	consumeSubagentSettingsNotice,
 	DEFAULT_CONSULT_RESOURCE_POLICY,
+	DEFAULT_CONSULTATION_CWD_POLICY,
+	DEFAULT_DELEGATION_CWD_POLICY,
+	inspectSubagentSettings,
 	readSubagentSettings,
 } from "./settings.js";
 import { registerStatefulSubagents } from "./stateful.js";
@@ -36,8 +41,11 @@ import { registerStatefulSubagents } from "./stateful.js";
 export default function (pi: ExtensionAPI) {
 	const settings = readSubagentSettings();
 	let currentSettings: SubagentSettings | undefined = settings;
+	let currentCatalog = "";
 	const blockingEnabled = settings?.blocking?.enabled !== false;
-	const refreshBlockingCatalog = blockingEnabled ? registerBlockingSubagent(pi) : () => undefined;
+	const refreshBlockingCatalog = blockingEnabled
+		? registerBlockingSubagent(pi, () => currentSettings)
+		: () => undefined;
 	let refreshStatefulCatalog: (catalog: string) => void = () => undefined;
 	let refreshConsultCatalog: (catalog: string) => void = () => undefined;
 
@@ -46,33 +54,40 @@ export default function (pi: ExtensionAPI) {
 		// validation against settings that may have changed before this session.
 		const loadNotice = consumeSubagentSettingsNotice();
 		const refreshedSettings = readSubagentSettings();
-		currentSettings = refreshedSettings;
 		const refreshedNotice = consumeSubagentSettingsNotice();
+		if (!inspectSubagentSettings().error) currentSettings = refreshedSettings;
 		const notice = [
 			...new Set([loadNotice, refreshedNotice].filter((value) => value !== undefined)),
 		].join("\n");
 		if (notice) ctx.ui.notify(notice, "warning");
 
-		const catalog = formatAgentCatalog(
+		currentCatalog = formatAgentCatalog(
 			discoverAgentCatalog(ctx.cwd, ctx.isProjectTrusted(), refreshedSettings),
 		).text;
-		refreshBlockingCatalog(catalog);
-		refreshStatefulCatalog(catalog);
-		refreshConsultCatalog(catalog);
+		refreshBlockingCatalog(currentCatalog);
+		refreshStatefulCatalog(currentCatalog);
+		refreshConsultCatalog(currentCatalog);
 	});
 
 	const statefulRuntime = registerStatefulSubagents(pi, {
 		blockingEnabled,
 		settings: settings?.stateful,
+		getSettings: () => currentSettings,
 	});
 	refreshStatefulCatalog = statefulRuntime.setAgentCatalog;
 	const getBlockingEnabled = () => blockingEnabled;
 	const getConsultResourcePolicy = () =>
 		currentSettings?.consult?.resources ?? DEFAULT_CONSULT_RESOURCE_POLICY;
+	const getConsultationCwdPolicy = () =>
+		currentSettings?.cwdPolicy?.consultation ?? DEFAULT_CONSULTATION_CWD_POLICY;
+	const getDelegationCwdPolicy = () =>
+		currentSettings?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY;
 	registerSubagentInspect(pi, {
 		...statefulRuntime,
 		getBlockingEnabled,
 		getConsultResourcePolicy,
+		getConsultationCwdPolicy,
+		getDelegationCwdPolicy,
 	});
 	if (blockingEnabled) {
 		refreshConsultCatalog = registerSubagentConsult(pi, {
@@ -83,29 +98,52 @@ export default function (pi: ExtensionAPI) {
 		...statefulRuntime,
 		getBlockingEnabled,
 		getConsultResourcePolicy,
+		getConsultationCwdPolicy,
+		getDelegationCwdPolicy,
 		setConsultResourcePolicy(value: ConsultResourcePolicy) {
 			currentSettings = {
 				...(currentSettings ?? {}),
 				consult: { ...(currentSettings?.consult ?? {}), resources: value },
 			};
+			refreshConsultCatalog(currentCatalog);
+		},
+		setConsultationCwdPolicy(value: ConsultationCwdPolicy) {
+			currentSettings = {
+				...(currentSettings ?? {}),
+				cwdPolicy: { ...(currentSettings?.cwdPolicy ?? {}), consultation: value },
+			};
+			refreshConsultCatalog(currentCatalog);
+		},
+		setDelegationCwdPolicy(value: DelegationCwdPolicy) {
+			currentSettings = {
+				...(currentSettings ?? {}),
+				cwdPolicy: { ...(currentSettings?.cwdPolicy ?? {}), delegation: value },
+			};
+			refreshBlockingCatalog(currentCatalog);
+			statefulRuntime.refreshSettingsGuidance();
 		},
 	});
 }
 
-function registerBlockingSubagent(pi: ExtensionAPI): (catalog: string) => void {
+function registerBlockingSubagent(
+	pi: ExtensionAPI,
+	getSettings: () => SubagentSettings | undefined,
+): (catalog: string) => void {
 	let catalog = "";
-	const baseDescription = [
-		"Run specialized subagents as a blocking operation with isolated contexts.",
-		"The call blocks the main agent until every worker and optional aggregator finishes, so queued steering waits.",
-		"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
-		"Parallel mode may include an aggregator fan-in step that receives all task outputs. Use subagent_consult instead for one synchronous child that must be executor-constrained to read-only tools.",
-		'Default agent scope is "user" (from ~/.pi/agent/agents).',
-		'To enable project-local agents in .pi/agents, pass agentScope: "both" (or "project") as a top-level argument for that call.',
-	].join(" ");
+	const baseDescription = () =>
+		[
+			"Run specialized subagents as a blocking operation with isolated contexts.",
+			"The call blocks the main agent until every worker and optional aggregator finishes, so queued steering waits.",
+			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+			"Parallel mode may include an aggregator fan-in step that receives all task outputs. Use subagent_consult instead for one synchronous child that must be executor-constrained to read-only tools.",
+			'Default agent scope is "user" (from ~/.pi/agent/agents).',
+			'To enable project-local agents in .pi/agents, pass agentScope: "both" (or "project") as a top-level argument for that call.',
+			`Working-directory target policy: ${getSettings()?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY}. This controls launch targets and protected project resources, not filesystem access or sandboxing.`,
+		].join(" ");
 	const definition: ToolDefinition<typeof SubagentParams, SubagentDetails> = {
 		name: "subagent",
 		label: "Blocking Subagent",
-		description: appendAgentCatalog(baseDescription, catalog),
+		description: appendAgentCatalog(baseDescription(), catalog),
 		promptSnippet:
 			"Run blocking isolated subagents only when their outputs are required before the main agent can continue.",
 		promptGuidelines: [
@@ -121,7 +159,7 @@ function registerBlockingSubagent(pi: ExtensionAPI): (catalog: string) => void {
 		parameters: SubagentParams,
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			return executeSubagent(toolCallId, params, signal, onUpdate, ctx);
+			return executeSubagent(toolCallId, params, signal, onUpdate, ctx, getSettings());
 		},
 
 		renderCall(args, theme) {
@@ -140,7 +178,7 @@ function registerBlockingSubagent(pi: ExtensionAPI): (catalog: string) => void {
 	});
 	return (nextCatalog: string) => {
 		catalog = nextCatalog;
-		definition.description = appendAgentCatalog(baseDescription, catalog);
+		definition.description = appendAgentCatalog(baseDescription(), catalog);
 		pi.registerTool<typeof SubagentParams, SubagentDetails>(definition);
 	};
 }
@@ -154,8 +192,11 @@ export { formatTokens, formatUsageStats } from "./render.js";
 export { buildPiArgs } from "./runner.js";
 export {
 	DEFAULT_CONSULT_RESOURCE_POLICY,
+	DEFAULT_CONSULTATION_CWD_POLICY,
+	DEFAULT_DELEGATION_CWD_POLICY,
 	inspectCompletionDeliverySettings,
 	inspectConsultResourceSettings,
+	inspectCwdPolicySettings,
 	inspectDelegationWorkflowSettings,
 	inspectSubagentSettings,
 	normalizeAgentSettings,
@@ -169,5 +210,6 @@ export {
 	updateAgentToolsSetting,
 	updateCompletionDeliverySetting,
 	updateConsultResourceSetting,
+	updateCwdPolicySetting,
 	updateDelegationWorkflowSetting,
 } from "./settings.js";

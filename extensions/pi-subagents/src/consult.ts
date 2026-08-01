@@ -22,6 +22,11 @@ import {
 } from "./agents.js";
 import { resolveConsultTools } from "./consult-policy.js";
 import { renderConsultCall, renderConsultResult } from "./consult-render.js";
+import {
+	assertConsultationTargetAllowed,
+	type ResolvedSubagentTarget,
+	resolveSubagentTarget,
+} from "./cwd-policy.js";
 import { assertSubagentDepthAllowed, resolveDefaultSubagentTimeoutMs } from "./execution.js";
 import {
 	DEFAULT_MAX_CONTEXT_BYTES,
@@ -38,7 +43,11 @@ import {
 	type SubagentDetails,
 } from "./runner.js";
 import { boundedPrivateText, boundText, safeDisplayPath, safeTerminalLine } from "./safe-text.js";
-import { DEFAULT_CONSULT_RESOURCE_POLICY, resolveSubagentThinkingLevel } from "./settings.js";
+import {
+	DEFAULT_CONSULT_RESOURCE_POLICY,
+	DEFAULT_CONSULTATION_CWD_POLICY,
+	resolveSubagentThinkingLevel,
+} from "./settings.js";
 
 const ConsultScopeSchema = StringEnum(["user", "project", "both"] as const, {
 	default: "user",
@@ -116,6 +125,13 @@ export interface ConsultDetails {
 	policy: {
 		requestedTools: string[] | null;
 		effectiveTools: string[];
+		cwdBoundary: "current-workspace" | "external";
+		targetTrust: {
+			kind: string;
+			projectTrusted: boolean;
+			sourcePath?: string;
+			warning?: string;
+		};
 		requestedResources: ConsultResourcePolicy;
 		effectiveResources: {
 			policy: ConsultResourcePolicy;
@@ -124,6 +140,7 @@ export interface ConsultDetails {
 			skills: boolean;
 			promptTemplates: boolean;
 		};
+		resourceDowngradeReason?: string;
 		extensions: "disabled";
 		sessionPersistence: "disabled";
 		retainedAgent: false;
@@ -169,12 +186,12 @@ export function registerSubagentConsult(
 		cancelAndWaitForChildren("Subagent consultation session shut down"),
 	);
 
-	const baseDescription =
-		"Run one ephemeral subagent synchronously under enforced read-only tool and resource policies and return its answer. The child can use only the effective subset of Pi's built-in read, grep, find, and ls tools. Shell commands, file writes, extension tools, detached lifecycle operations, and persistent agent state are disabled.";
+	const baseDescription = () =>
+		`Run one ephemeral subagent synchronously under enforced read-only tool and resource policies and return its answer. The child can use only the effective subset of Pi's built-in read, grep, find, and ls tools. Shell commands, file writes, extension tools, detached lifecycle operations, and persistent agent state are disabled. Working-directory target policy: ${options.getSettings()?.cwdPolicy?.consultation ?? DEFAULT_CONSULTATION_CWD_POLICY}; configured trusted-target resources: ${options.getSettings()?.consult?.resources ?? DEFAULT_CONSULT_RESOURCE_POLICY}; allowed targets without effective trust inherit no target/project resources. This is not a filesystem sandbox.`;
 	const definition: ToolDefinition<typeof SubagentConsultParams, ConsultDetails> = {
 		name: "subagent_consult",
 		label: "Consult Read-only Subagent",
-		description: baseDescription,
+		description: baseDescription(),
 		promptSnippet: "Consult one constrained read-only subagent and wait for its answer",
 		promptGuidelines: [
 			"Use subagent_consult for bounded reconnaissance, planning, or review whose result is required in the current turn.",
@@ -226,7 +243,7 @@ export function registerSubagentConsult(
 		if ((event.details as ConsultDetails | undefined)?.isError) return { isError: true };
 	});
 	return (catalog: string) => {
-		definition.description = catalog ? `${baseDescription}\n\n${catalog}` : baseDescription;
+		definition.description = catalog ? `${baseDescription()}\n\n${catalog}` : baseDescription();
 		pi.registerTool<typeof SubagentConsultParams, ConsultDetails>(definition);
 	};
 }
@@ -326,6 +343,15 @@ async function executeConsult(
 		throw new Error("Project-local subagent definitions require a trusted project");
 	}
 	const settings = options.getSettings();
+	const target = resolveSubagentTarget({
+		workspace: ctx.cwd,
+		requestedCwd: operation.cwd,
+		currentProjectTrusted: ctx.isProjectTrusted(),
+	});
+	assertConsultationTargetAllowed(
+		target,
+		settings?.cwdPolicy?.consultation ?? DEFAULT_CONSULTATION_CWD_POLICY,
+	);
 	const discovery = discoverAgents(ctx.cwd, operation.agentScope, settings);
 	const agent = discovery.agents.find((candidate) => candidate.name === operation.agent);
 	if (!agent) {
@@ -334,7 +360,7 @@ async function executeConsult(
 				`Available agents for agentScope "${operation.agentScope}": ${formatAvailableConsultAgents(discovery)}`,
 		);
 	}
-	const setup = resolveConsultSetup(operation, agent, settings, ctx);
+	const setup = resolveConsultSetup(operation, agent, settings, target);
 
 	if (agent.source === "project" && operation.confirmProjectAgents) {
 		if (!ctx.hasUI) {
@@ -410,19 +436,13 @@ function resolveConsultSetup(
 	operation: ReturnType<typeof validateConsultParams>,
 	agent: AgentConfig,
 	settings: SubagentSettings | undefined,
-	ctx: ExtensionContext,
+	target: ResolvedSubagentTarget,
 ) {
-	const cwd = canonicalDirectory(operation.cwd ?? ctx.cwd, "subagent consultation cwd");
-	const workspace = canonicalDirectory(ctx.cwd, "current workspace");
-	const resourcePolicy = settings?.consult?.resources ?? DEFAULT_CONSULT_RESOURCE_POLICY;
-	if (!isWithin(cwd, workspace) && resourcePolicy !== "none") {
-		throw new Error(
-			`Subagent consultation cwd is outside the current workspace; consult.resources must be "none": ${safeTerminalLine(cwd)}`,
-		);
-	}
+	const requestedResourcePolicy = settings?.consult?.resources ?? DEFAULT_CONSULT_RESOURCE_POLICY;
+	const resourcePolicy = target.trust.projectTrusted ? requestedResourcePolicy : "none";
 	const effectiveTools = resolveConsultTools(agent.tools);
-	const projectTrusted = ctx.isProjectTrusted();
-	const launchPolicy = resourceLaunchPolicy(resourcePolicy, projectTrusted, workspace);
+	const projectTrusted = target.trust.projectTrusted;
+	const launchPolicy = resourceLaunchPolicy(resourcePolicy, projectTrusted, target.cwd);
 	launchPolicy.tools = effectiveTools;
 	const thinkingLevel = resolveSubagentThinkingLevel([agent], agent.name, operation.thinkingLevel);
 	const timeoutMs = operation.timeoutMs ?? agent.timeoutMs ?? resolveDefaultSubagentTimeoutMs();
@@ -447,7 +467,7 @@ function resolveConsultSetup(
 		agent: boundedPrivateText(agent.name, 256),
 		agentSource: agent.source,
 		agentScope: operation.agentScope,
-		cwd: safeDisplayPath(cwd, workspace),
+		cwd: safeDisplayPath(target.cwd, target.workspace),
 		model: agent.model ? boundedPrivateText(agent.model, 256) : undefined,
 		thinkingLevel,
 		timeoutMs,
@@ -457,8 +477,20 @@ function resolveConsultSetup(
 					? null
 					: agent.tools.slice(0, 100).map((tool) => boundedPrivateText(tool, 256)),
 			effectiveTools,
-			requestedResources: resourcePolicy,
+			cwdBoundary: target.boundary,
+			targetTrust: {
+				kind: target.trust.kind,
+				projectTrusted,
+				sourcePath: target.trust.sourcePath
+					? safeDisplayPath(target.trust.sourcePath, target.workspace)
+					: undefined,
+				warning: target.trust.warning,
+			},
+			requestedResources: requestedResourcePolicy,
 			effectiveResources,
+			...(resourcePolicy !== requestedResourcePolicy
+				? { resourceDowngradeReason: `Target trust is ${target.trust.kind}` }
+				: {}),
 			extensions: "disabled",
 			sessionPersistence: "disabled",
 			retainedAgent: false,
@@ -466,7 +498,7 @@ function resolveConsultSetup(
 	};
 	return {
 		agent: childAgent,
-		cwd,
+		cwd: target.cwd,
 		resourcePolicy,
 		effectiveTools,
 		thinkingLevel,
@@ -732,22 +764,6 @@ function usageFromResult(result: SingleResult): Usage {
 			total: result.usage.cost,
 		},
 	};
-}
-
-function canonicalDirectory(value: string, label: string): string {
-	try {
-		const resolved = fs.realpathSync(value);
-		if (!fs.statSync(resolved).isDirectory()) throw new Error("not a directory");
-		return resolved;
-	} catch (error) {
-		const reason = error instanceof Error ? error.message : String(error);
-		throw new Error(`Invalid ${label}: ${safeTerminalLine(value)} (${safeTerminalLine(reason)})`);
-	}
-}
-
-function isWithin(candidate: string, root: string): boolean {
-	const relative = path.relative(root, candidate);
-	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function assertCurrentRequest(signal: AbortSignal, isCurrent: () => boolean): void {

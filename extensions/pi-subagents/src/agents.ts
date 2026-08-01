@@ -49,6 +49,21 @@ export interface SubagentConsultSettings {
 	resources?: ConsultResourcePolicy;
 }
 
+export const CONSULTATION_CWD_POLICIES = ["anywhere", "current-workspace"] as const;
+export type ConsultationCwdPolicy = (typeof CONSULTATION_CWD_POLICIES)[number];
+
+export const DELEGATION_CWD_POLICIES = [
+	"trusted-targets",
+	"current-workspace",
+	"anywhere",
+] as const;
+export type DelegationCwdPolicy = (typeof DELEGATION_CWD_POLICIES)[number];
+
+export interface SubagentCwdPolicySettings {
+	consultation?: ConsultationCwdPolicy;
+	delegation?: DelegationCwdPolicy;
+}
+
 export interface SubagentBlockingSettings {
 	enabled?: boolean;
 }
@@ -73,6 +88,7 @@ export interface SubagentSettings {
 	blocking?: SubagentBlockingSettings;
 	stateful?: SubagentRuntimeSettings;
 	consult?: SubagentConsultSettings;
+	cwdPolicy?: SubagentCwdPolicySettings;
 }
 
 const BUILT_IN_AGENTS: AgentConfig[] = [

@@ -6,6 +6,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, AgentScope, AgentSource, SubagentThinkingLevel } from "./agents.js";
+import type { TargetPolicyAudit } from "./cwd-policy.js";
 import {
 	appendBounded,
 	DEFAULT_MAX_CONTEXT_BYTES,
@@ -81,6 +82,7 @@ export interface SingleResult {
 	malformedEvents?: number;
 	launchFailed?: boolean;
 	processStarted?: boolean;
+	target?: TargetPolicyAudit;
 	policy?: {
 		inherited: string[];
 		overridden: string[];

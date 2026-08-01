@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SubagentThinkingLevel } from "./agents.js";
+import type { TargetPolicyAudit } from "./cwd-policy.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_OUTPUT_BYTES, truncateUtf8 } from "./limits.js";
 import { type AgentTurnRunner, normalizeTransport, type SubagentTransport } from "./transport.js";
 
@@ -50,6 +51,8 @@ export interface ManagedAgent {
 	context?: string;
 	contextSourceIds?: string[];
 	contextTruncated?: boolean;
+	workspaceMode?: "worktree";
+	target?: TargetPolicyAudit;
 	policy?: { inherited: string[]; overridden: string[]; unsupported: string[] };
 	mailbox: AgentMailboxMessage[];
 	currentMailboxMessageIds?: string[];
@@ -70,6 +73,8 @@ export interface AgentRunInspectionDetail extends AgentRunInspectionSummary {
 	thinkingLevel?: SubagentThinkingLevel;
 	currentTask?: string;
 	error?: string;
+	workspaceMode?: "worktree";
+	target?: TargetPolicyAudit;
 	policy?: { inherited: string[]; overridden: string[]; unsupported: string[] };
 }
 
@@ -243,6 +248,8 @@ export class AgentRegistry {
 		context?: string;
 		contextSourceIds?: string[];
 		contextTruncated?: boolean;
+		workspaceMode?: "worktree";
+		target?: TargetPolicyAudit;
 	}): Promise<ManagedAgent> {
 		if (!input.task.trim()) throw new Error("Subagent tasks cannot be empty");
 		const task = truncateUtf8(input.task, this.maxTaskBytes).text;
@@ -286,6 +293,8 @@ export class AgentRegistry {
 			context: input.context,
 			contextSourceIds: input.contextSourceIds,
 			contextTruncated: input.contextTruncated,
+			workspaceMode: input.workspaceMode,
+			target: input.target,
 		};
 		this.agents.set(record.id, record);
 		if (parent) {
@@ -549,6 +558,8 @@ export class AgentRegistry {
 			thinkingLevel: agent.thinkingLevel,
 			currentTask: agent.currentTask,
 			error: agent.error,
+			workspaceMode: agent.workspaceMode,
+			target: agent.target ? { ...agent.target, trust: { ...agent.target.trust } } : undefined,
 			policy: agent.policy
 				? {
 						inherited: [...agent.policy.inherited],
@@ -840,6 +851,7 @@ export class AgentRegistry {
 				: undefined,
 			history: agent.history.map((turn) => ({ ...turn })),
 			mailbox: agent.mailbox.map((message) => ({ ...message })),
+			target: agent.target ? { ...agent.target, trust: { ...agent.target.trust } } : undefined,
 			policy: agent.policy
 				? {
 						inherited: [...agent.policy.inherited],
