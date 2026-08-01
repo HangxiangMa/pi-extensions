@@ -39,6 +39,11 @@ test("fresh Plan mode uses configured default tools and restores previous tools"
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		await mock.commands.get("plan")?.handler("", context.ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["bash", "custom", ...REQUIRED_PLAN_TOOLS]);
+		const hook = mock.events.get("tool_call")?.[0];
+		assert.equal(
+			await hook?.({ toolName: "custom", input: { arbitrary: { nested: true } } }, context.ctx),
+			undefined,
+		);
 
 		await mock.commands.get("plan")?.handler("exit", context.ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "write"]);

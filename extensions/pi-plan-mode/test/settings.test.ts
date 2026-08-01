@@ -63,24 +63,14 @@ test("Plan-mode settings normalize default tool names strictly", async () => {
 	}
 });
 
-test("Plan-mode settings normalize allowed subagent names strictly", () => {
-	assert.deepEqual(normalizePlanModeSettings({}), { thinkingLevel: "inherit" });
+test("Plan-mode settings ignore unknown top-level fields", () => {
 	assert.deepEqual(
 		normalizePlanModeSettings({
-			allowedPlanSubagents: ["plan-scout", "plan-reviewer", "plan-scout"],
+			thinkingLevel: "medium",
+			futureOption: { enabled: true },
 		}),
-		{
-			thinkingLevel: "inherit",
-			allowedPlanSubagents: ["plan-scout", "plan-reviewer"],
-		},
+		{ thinkingLevel: "medium" },
 	);
-	assert.deepEqual(normalizePlanModeSettings({ allowedPlanSubagents: [] }), {
-		thinkingLevel: "inherit",
-		allowedPlanSubagents: [],
-	});
-	for (const allowedPlanSubagents of ["plan-scout", [""], ["   "], ["plan-scout", 42]]) {
-		assert.equal(normalizePlanModeSettings({ allowedPlanSubagents }), undefined);
-	}
 });
 
 test("Plan-mode settings validate safe subcommands strictly", async () => {
@@ -136,6 +126,10 @@ test("Plan-mode settings read legacy files without modifying them", async () => 
 		);
 		const loaded = await readPlanModeSettings();
 		assert.equal(loaded.kind, "loaded");
+		assert.deepEqual(loaded.kind === "loaded" ? loaded.settings : undefined, {
+			thinkingLevel: "high",
+			safeSubcommands: { gh: ["pr view"] },
+		});
 		assert.match(loaded.notice ?? "", /using legacy/i);
 		assert.deepEqual(JSON.parse(await readFile(join(directory, "plan-mode.json"), "utf8")), {
 			thinkingLevel: "high",

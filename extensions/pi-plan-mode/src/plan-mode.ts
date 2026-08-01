@@ -48,7 +48,6 @@ import {
 	readPlanModeSettings,
 } from "./settings.js";
 import { type PlanCompletionSource, type PlanModeState, restorePlanModeState } from "./state.js";
-import { enforcePlanSubagentAllowlist } from "./subagent-policy.js";
 import {
 	canSelectToolInPlanMode,
 	classifyPlanModeTool,
@@ -270,14 +269,6 @@ export default function planMode(
 				reason:
 					"Plan mode blocks update_plan because it tracks execution progress rather than conversational planning.",
 			};
-		}
-		if (settings.allowedPlanSubagents !== undefined) {
-			const blocked = enforcePlanSubagentAllowlist(
-				event.toolName,
-				event.input,
-				settings.allowedPlanSubagents,
-			);
-			if (blocked) return blocked;
 		}
 		const calledTool = toolByName(event.toolName);
 		if (calledTool && classifyPlanModeTool(calledTool) === "blocked") {
