@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -506,6 +506,30 @@ test("child resource loader excludes extensions while retaining the agent prompt
 	assert.deepEqual(loader.getExtensions().extensions, []);
 	assert.deepEqual(loader.getAppendSystemPrompt(), ["Agent role prompt."]);
 	assert.equal(loader.getAgentsFiles().agentsFiles.at(-1)?.content, "Trusted child context.");
+});
+
+test("untrusted in-process resource loading never reads project settings", async () => {
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-untrusted-cwd-"));
+	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-untrusted-agent-"));
+	mkdirSync(path.join(cwd, ".pi"));
+	writeFileSync(
+		path.join(cwd, ".pi", "settings.json"),
+		'{"SECRET_UNTRUSTED_PROJECT_SETTINGS":"unterminated',
+	);
+	try {
+		const { settingsManager } = await createInProcessResourceLoader(
+			cwd,
+			agentDir,
+			"Agent role prompt.",
+			false,
+		);
+		assert.equal(settingsManager.isProjectTrusted(), false);
+		assert.deepEqual(settingsManager.getProjectSettings(), {});
+		assert.deepEqual(settingsManager.drainErrors(), []);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+		rmSync(agentDir, { recursive: true, force: true });
+	}
 });
 
 test("registered detached spawn auto-resumes without exposing a wait tool", async () => {

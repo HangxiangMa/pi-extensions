@@ -671,6 +671,11 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	await persistence.save([
 		record({
 			thinkingLevel: "high",
+			target: {
+				cwd: process.cwd(),
+				boundary: "external",
+				trust: { kind: "saved-trusted", projectTrusted: true, sourcePath: process.cwd() },
+			},
 			context: "<private>secret</private>",
 			mailbox: [
 				{
@@ -698,6 +703,8 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	const restoredState = persistence.load()[0];
 	assert.equal(restoredState?.state, "idle");
 	assert.equal(restoredState?.thinkingLevel, "high");
+	assert.equal(restoredState?.target?.trust.kind, "saved-trusted");
+	assert.equal(restoredState?.target?.trust.projectTrusted, true);
 	assert.equal(restoredState?.mailbox[0]?.content, "[private content omitted]visible");
 	const competing = new AgentPersistence("session", { stateDir: dir, maxStoredAgents: 2 });
 	await Promise.all([

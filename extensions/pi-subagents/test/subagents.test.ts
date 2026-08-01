@@ -17,7 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { stripVTControlCharacters } from "node:util";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { initTheme, ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
 	builtinTool,
@@ -77,7 +77,10 @@ type SubagentTool = {
 	execute: (...args: unknown[]) => Promise<{
 		content?: Array<{ type: string; text: string }>;
 		details?: {
-			results: Array<{ thinkingLevel?: string }>;
+			results: Array<{
+				thinkingLevel?: string;
+				target?: { cwd: string; trust: { kind: string; projectTrusted: boolean } };
+			}>;
 			aggregator?: { thinkingLevel?: string };
 		};
 		isError?: boolean;
@@ -324,8 +327,12 @@ test("agent tool drafts preserve settings across searchable save, discard, and E
 			getBlockingEnabled: () => true,
 			getCompletionDelivery: () => "next-turn",
 			getConsultResourcePolicy: () => "project-context",
+			getConsultationCwdPolicy: () => "anywhere",
+			getDelegationCwdPolicy: () => "trusted-targets",
 			setCompletionDelivery: () => undefined,
 			setConsultResourcePolicy: () => undefined,
+			setConsultationCwdPolicy: () => undefined,
+			setDelegationCwdPolicy: () => undefined,
 			getRuntimeStatus: () => ({
 				enabled: true,
 				initialized: true,
@@ -622,8 +629,12 @@ test("delegation workflow blocks reload while detached agents are retained", asy
 			getBlockingEnabled: () => true,
 			getCompletionDelivery: () => "next-turn",
 			getConsultResourcePolicy: () => "project-context",
+			getConsultationCwdPolicy: () => "anywhere",
+			getDelegationCwdPolicy: () => "trusted-targets",
 			setCompletionDelivery: () => undefined,
 			setConsultResourcePolicy: () => undefined,
+			setConsultationCwdPolicy: () => undefined,
+			setDelegationCwdPolicy: () => undefined,
 			getRuntimeStatus: () => ({
 				enabled: true,
 				initialized: true,
@@ -732,8 +743,12 @@ test("current-session manager excludes already closed agent records", async () =
 			getBlockingEnabled: () => true,
 			getCompletionDelivery: () => "next-turn",
 			getConsultResourcePolicy: () => "project-context",
+			getConsultationCwdPolicy: () => "anywhere",
+			getDelegationCwdPolicy: () => "trusted-targets",
 			setCompletionDelivery: () => undefined,
 			setConsultResourcePolicy: () => undefined,
+			setConsultationCwdPolicy: () => undefined,
+			setDelegationCwdPolicy: () => undefined,
 			getRuntimeStatus: () => ({
 				enabled: true,
 				initialized: true,
@@ -914,7 +929,10 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 			hasUI: true,
 			custom: async (factory: unknown) => {
 				customCalls++;
-				const inputs = customCalls === 1 ? ["\r", "\u001b"] : ["\u001b[B", "\r", "\u001b"];
+				const inputs =
+					customCalls === 1
+						? ["\u001b[B", "\u001b[B", "\u001b[B", "\r", "\u001b"]
+						: ["\u001b[B", "\u001b[B", "\r", "\u001b"];
 				return driveCustomSelector(factory, inputs).result;
 			},
 		});
@@ -963,6 +981,10 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 		});
 		await command.handler("status", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /No inherited resources/);
+		const refreshedConsultDescription = mock.tools
+			.filter((tool) => tool.name === "subagent_consult")
+			.at(-1)?.description;
+		assert.match(String(refreshedConsultDescription), /configured trusted-target resources: none/i);
 
 		const nonTui = createMockContext({
 			mode: "json",
@@ -973,6 +995,61 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 		});
 		await command.handler("settings", nonTui.ctx);
 		assert.match(nonTui.notifications[0]?.message ?? "", /Edit settings manually/);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("subagent settings UI exposes and immediately applies both cwd policies", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-cwd-settings-ui-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		let call = 0;
+		let rendered = "";
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 90);
+				rendered += stripVTControlCharacters(harness.render().join("\n"));
+				const inputs = call++ === 0 ? ["\r", "\u001b"] : ["\u001b[B", "\r", "\u001b"];
+				for (const input of inputs) harness.handleInput(input);
+				return harness.result;
+			},
+		});
+		await command.handler("settings", context.ctx);
+		await command.handler("settings", context.ctx);
+		assert.match(rendered, /Read-only consultation target/);
+		assert.match(rendered, /General delegation target/);
+		assert.match(rendered, /Consultation resources for trusted targets/);
+		assert.match(rendered, /When async work finishes/);
+		assert.match(rendered, /not filesystem access or sandboxing/i);
+		assert.match(rendered, /Pi \/trust/);
+		assert.deepEqual(JSON.parse(readFileSync(path.join(directory, "pi-subagents.json"), "utf8")), {
+			cwdPolicy: {
+				consultation: "current-workspace",
+				delegation: "current-workspace",
+			},
+		});
+		const blockingDescription = mock.tools
+			.filter((tool) => tool.name === "subagent")
+			.at(-1)?.description;
+		const spawnDescription = mock.tools
+			.filter((tool) => tool.name === "subagent_spawn")
+			.at(-1)?.description;
+		const consultDescription = mock.tools
+			.filter((tool) => tool.name === "subagent_consult")
+			.at(-1)?.description;
+		assert.match(String(blockingDescription), /target policy: current-workspace/i);
+		assert.match(String(spawnDescription), /target policy: current-workspace/i);
+		assert.match(String(consultDescription), /target policy: current-workspace/i);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -1381,15 +1458,78 @@ test("session start re-reads settings before reporting warnings", async () => {
 	process.env.PI_CODING_AGENT_DIR = directory;
 	try {
 		const settingsPath = path.join(directory, "pi-subagents.json");
-		writeFileSync(settingsPath, "{}\n");
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({
+				cwdPolicy: {
+					consultation: "current-workspace",
+					delegation: "current-workspace",
+				},
+				consult: { resources: "none" },
+			}),
+		);
 		const mock = createMockPi();
 		subagents(mock.pi);
 		writeFileSync(settingsPath, "{ malformed");
-		const context = createMockContext();
+		const context = createMockContext({ mode: "tui", hasUI: true });
 		for (const handler of mock.events.get("session_start") ?? []) {
 			await handler({}, context.ctx);
 		}
 		assert.match(context.notifications[0]?.message ?? "", /pi-subagents\.json is invalid/i);
+		const latestDescription = (name: string) =>
+			String(mock.tools.filter((tool) => tool.name === name).at(-1)?.description);
+		assert.match(latestDescription("subagent"), /target policy: current-workspace/i);
+		assert.match(latestDescription("subagent_spawn"), /target policy: current-workspace/i);
+		assert.match(latestDescription("subagent_consult"), /target policy: current-workspace/i);
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		await command.handler("status", context.ctx);
+		assert.match(context.notifications.at(-1)?.message ?? "", /No inherited resources/);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("subagent status separates runtime cwd policy from manual configured edits", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-status-cwd-drift-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({
+				cwdPolicy: {
+					consultation: "current-workspace",
+					delegation: "current-workspace",
+				},
+			}),
+		);
+		const mock = createMockPi();
+		subagents(mock.pi);
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({
+				cwdPolicy: { consultation: "anywhere", delegation: "trusted-targets" },
+			}),
+		);
+		const context = createMockContext({ mode: "tui", hasUI: true });
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		await command.handler("status", context.ctx);
+		const message = context.notifications.at(-1)?.message ?? "";
+		assert.match(message, /Current session[\s\S]*Consultation target: Current workspace only/);
+		assert.match(message, /Current session[\s\S]*Delegation target: Current workspace only/);
+		assert.match(
+			message,
+			/User settings[\s\S]*Configured consultation target: Anywhere .* inherit nothing/,
+		);
+		assert.match(
+			message,
+			/User settings[\s\S]*Configured delegation target: Current or saved-trusted folders/,
+		);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -1833,6 +1973,101 @@ test("aggregator usability requires non-whitespace agent and task values", () =>
 	assert.equal(hasUsableAggregator({ agent: "", task: "Synthesize" }), false);
 	assert.equal(hasUsableAggregator({ agent: "reviewer", task: " \t" }), false);
 	assert.equal(hasUsableAggregator({ agent: "reviewer", task: "Synthesize" }), true);
+});
+
+test("blocking delegation preflights every target and passes explicit saved trust", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-blocking-cwd-"));
+	const agentDir = path.join(root, "agent-home");
+	const workspace = path.join(root, "workspace");
+	const external = path.join(root, "external");
+	const marker = path.join(root, "launched");
+	const fakePi = path.join(root, "fake-pi.mjs");
+	mkdirSync(agentDir);
+	mkdirSync(workspace);
+	mkdirSync(external);
+	writeFileSync(
+		fakePi,
+		[
+			"import{writeFileSync}from'node:fs';",
+			`writeFileSync(${JSON.stringify(marker)},'yes');`,
+			"const text=process.argv.slice(2).join(' ');",
+			"const message={role:'assistant',content:[{type:'text',text}],stopReason:'stop',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const previousScript = process.argv[1];
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	process.argv[1] = fakePi;
+	try {
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const tool = mock.tools.find((candidate) => candidate.name === "subagent") as SubagentTool;
+		const ctx = createMockContext({ cwd: workspace, isProjectTrusted: () => true }).ctx;
+		for (const params of [
+			{ agent: "scout", task: "single", cwd: external },
+			{
+				chain: [
+					{ agent: "scout", task: "first", cwd: workspace },
+					{ agent: "scout", task: "second", cwd: external },
+				],
+			},
+			{
+				tasks: [
+					{ agent: "scout", task: "first", cwd: workspace },
+					{ agent: "scout", task: "second", cwd: external },
+				],
+			},
+			{
+				tasks: [{ agent: "scout", task: "first", cwd: workspace }],
+				aggregator: { agent: "scout", task: "fan-in", cwd: external },
+			},
+		] as Array<Record<string, unknown>>) {
+			await assert.rejects(
+				() => tool.execute("cwd-policy", params, undefined, undefined, ctx),
+				/saved-trusted.*\/trust/i,
+			);
+			assert.equal(existsSync(marker), false);
+		}
+
+		new ProjectTrustStore(agentDir).set(external, true);
+		const accepted = await tool.execute(
+			"cwd-trusted",
+			{ agent: "scout", task: "trusted", cwd: external },
+			undefined,
+			undefined,
+			ctx,
+		);
+		assert.match(accepted.content?.[0]?.text ?? "", /--approve/);
+		assert.equal(accepted.details?.results[0]?.target?.trust.kind, "saved-trusted");
+		assert.equal(accepted.details?.results[0]?.target?.cwd, external);
+
+		rmSync(marker, { force: true });
+		writeFileSync(
+			path.join(agentDir, "pi-subagents.json"),
+			JSON.stringify({ cwdPolicy: { delegation: "anywhere" } }),
+		);
+		const anywhereMock = createMockPi();
+		subagents(anywhereMock.pi);
+		const anywhereTool = anywhereMock.tools.find(
+			(candidate) => candidate.name === "subagent",
+		) as SubagentTool;
+		new ProjectTrustStore(agentDir).set(external, false);
+		const anywhere = await anywhereTool.execute(
+			"cwd-anywhere",
+			{ agent: "scout", task: "anywhere", cwd: external },
+			undefined,
+			undefined,
+			ctx,
+		);
+		assert.match(anywhere.content?.[0]?.text ?? "", /--no-approve/);
+		assert.equal(anywhere.details?.results[0]?.target?.trust.kind, "saved-denied");
+	} finally {
+		process.argv[1] = previousScript;
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("parallel execution ignores an empty optional aggregator and preserves worker outputs", async () => {

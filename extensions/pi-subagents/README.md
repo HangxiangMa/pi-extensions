@@ -18,7 +18,7 @@ Use it to split independent research, planning, implementation, and review work 
 - Loads custom user agents from `~/.pi/agent/agents/*.md`.
 - Optionally loads project agents from `.pi/agents/*.md` with confirmation.
 - Provides a current-session-first `/subagents` manager, direct `settings|status|help` routes, and compatibility aliases for agent tools and retained agents.
-- Supports per-task `cwd`, hard subprocess `timeoutMs`, task-selected `thinkingLevel`, abort propagation, and streaming progress.
+- Supports trust-aware per-task `cwd` policies, hard subprocess `timeoutMs`, task-selected `thinkingLevel`, abort propagation, and streaming progress.
 - Renders all seven tools with Pi-native compact/expanded transcript rows; long-running blocking and consultation calls show bounded live activity.
 - Bounds JSON lines, captured messages, stderr, final output, chain substitution, and fan-in context.
 - Enforces a recursion-depth guard and deterministic process-group termination.
@@ -105,11 +105,28 @@ Execution modes:
 
 Common controls:
 
-- `cwd` — run a job from a different working directory.
+- `cwd` — choose a launch directory subject to the user-owned trust-aware target policy described below.
 - `timeoutMs` — set a hard subprocess timeout.
 - `thinkingLevel` — request `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` thinking for the spawned Pi process or in-process child.
 
 For `subagent_spawn`, the root agent selects the lowest thinking level sufficient for the delegated task. This is a tool-argument decision made from the task already in context; `pi-subagents` does not run a string heuristic or an extra classifier model call.
+
+## 🔐 Working-directory trust policy
+
+Pi records saved project trust in `~/.pi/agent/trust.json`. The closest saved decision for the canonical target or one of its parents wins, so trusting a worktree parent covers worktrees below it while a nearer `false` overrides a trusted parent. `pi-subagents` reads this through Pi's public `ProjectTrustStore`; it never parses, writes, or migrates the file. Open Pi in a folder and use `/trust` to manage trust, then restart Pi before expecting retained-runtime behavior to change.
+
+The default target policies are:
+
+| Setting | Values | Default behavior |
+| --- | --- | --- |
+| `cwdPolicy.consultation` | `"anywhere"`, `"current-workspace"` | `"anywhere"`: consultation may start in any existing directory, but a target without effective trust is forced to `resources: "none"` |
+| `cwdPolicy.delegation` | `"trusted-targets"`, `"current-workspace"`, `"anywhere"` | `"trusted-targets"`: blocking and detached delegation may target the current workspace or an external folder covered by a saved `true` decision |
+
+All paths are resolved relative to the current session workspace and canonicalized before containment and trust checks. Missing paths, non-directories, sibling paths, and symlink escapes cannot bypass the policy. Blocking parallel, chain, and fan-in calls preflight every target before any child starts. A generated `workspaceMode: "worktree"` inherits the resolved trust of its approved base cwd.
+
+`"anywhere"` for general delegation restores the previous external-target flexibility. An external target without effective trust starts with `projectTrusted: false`, so Pi-protected project settings, packages, extensions, skills, prompts, and system resources stay disabled. General agents still have their configured tools and ordinary Pi/OS permissions, and Pi may still load `AGENTS.md` or `CLAUDE.md` because those context files are not protected by project trust. Resource-free consultation is stricter: it also passes `--no-context-files`, `--no-skills`, `--no-prompt-templates`, `--no-approve`, and `--no-extensions`.
+
+These controls govern child starting directories and automatically loaded resources. They do **not** restrict absolute paths, shell commands, custom tools, network access, extension code, or filesystem access available to the Pi process. For real isolation, run Pi in a container, VM, micro-VM, or OS sandbox with only the required paths and credentials mounted.
 
 ## 🧭 Proactive use
 
@@ -203,7 +220,7 @@ A blocking fan-out is reserved for output that must be synthesized before the ro
 | `list_runs` | Optional `includeClosed` and `limit` (default 50, maximum 100) | Metadata-only retained-run summaries and unread counts |
 | `get_run` | Required `agentId` | Safe `cwd`, current-task/error summaries, thinking level, policy, history count, and unread count |
 | `list_models` | Optional `limit` (default 50, maximum 100) | Session-scoped models, or the already-loaded available snapshot |
-| `status` | No additional fields | Effective workflow, runtime counts/transport, completion delivery, and consultation-resource setting |
+| `status` | No additional fields | Effective workflow, runtime counts/transport, completion delivery, consultation resources, and configured/runtime cwd policies with per-field sources |
 | `diagnose` | No additional fields | Structured `pass`, `warning`, and `fail` checks; failed checks are report data rather than a tool error |
 
 The schema rejects fields that do not belong to the selected action. Explicit `project` or `both` scope fails before project-agent discovery unless Pi already trusts the project. Run inspection never returns history output, stored context, or mailbox content; unread counts come from a metadata-only snapshot and do not acknowledge messages. Paths beneath the Pi agent directory use `~`, project paths are workspace-relative, model objects are projected through an allow-list, and model-facing text is bounded to 50 KiB or 2,000 lines.
@@ -240,9 +257,11 @@ without launching or charging a child.
 | `"none"` | Use only the package consultation base, selected agent prompt, and enforced read-only instruction |
 | `"all"` | Keep ordinarily discoverable trusted context/system/append-system files, skills, and prompt templates |
 
-Extensions remain disabled for all three values. For an untrusted current project, project resources are omitted; because Pi's context-file switch cannot separate user and project `AGENTS.md` files, `project-context` and `all` fail closed by disabling context files while still permitting the user `SYSTEM.md` selected by the extension. The setting is user-owned in `~/.pi/agent/pi-subagents.json`; projects cannot override it. An external or symlink-escaped `cwd` is accepted only with `consult.resources: "none"`, but this is not a path sandbox: read-only tools can still read an explicitly requested accessible absolute path.
+Extensions remain disabled for all three values. A current target uses the session's effective project trust, including session-only or CLI overrides. An external target uses the nearest saved trust decision. For an untrusted, explicitly denied, unsaved, or trust-error target, consultation remains available when `cwdPolicy.consultation` permits it but automatically downgrades to `resources: "none"`. This also disables context files because Pi does not protect `AGENTS.md` and `CLAUDE.md` with project trust alone. A saved-trusted external target uses the configured resource policy and discovers `SYSTEM.md`, `APPEND_SYSTEM.md`, and ordinary child context from that target rather than the parent workspace.
 
-Result details report requested/effective tools and resources, agent/model/thinking/timeout metadata, and the facts that extensions, session persistence, and retained-agent state are disabled. Nested model usage is returned through Pi's usage field, so footer, `/session`, and RPC totals include consultation cost. Validation, trust, unsafe-cwd, and launch failures throw. Failures after model launch preserve bounded partial evidence and usage while the finalized Pi tool result is marked as an error. Abort, timeout, session replacement, and shutdown use the existing process-tree termination and temporary-file cleanup path.
+Both settings are user-owned in `~/.pi/agent/pi-subagents.json`; projects cannot override them. `cwdPolicy.consultation: "current-workspace"` rejects every canonical external target before agent discovery or launch even when that target is saved-trusted. This is not a path sandbox: read-only tools can still read an explicitly requested accessible absolute path.
+
+Result details report the canonical safe cwd, current/external boundary, bounded target-trust decision/source/warning, requested and effective tools/resources, downgrade reason, agent/model/thinking/timeout metadata, and the facts that extensions, session persistence, and retained-agent state are disabled. They never dump prompt contents or the full trust store. Nested model usage is returned through Pi's usage field, so footer, `/session`, and RPC totals include consultation cost. Validation, disallowed targets, and launch failures throw. Failures after model launch preserve bounded partial evidence and usage while the finalized Pi tool result is marked as an error. Abort, timeout, session replacement, and shutdown use the existing process-tree termination and temporary-file cleanup path.
 
 ## 🚀 Blocking batch examples
 
@@ -333,12 +352,12 @@ Auto-resume is best-effort because Pi's custom-message API is fire-and-forget. S
 The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history. Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
 
 Run `/subagents` in TUI mode to open the standard primary manager. It leads with the current
-delegation workflow, human-readable async completion behavior, consultation-resource policy, and active/retained counts. **Change delegation**, **Current agents**, and **Settings** cover the common workflows; agent permissions, transport/runtime details, source, and settings path remain under **Advanced settings**.
+delegation workflow, human-readable async completion behavior, consultation/delegation target policies, consultation-resource policy, and active/retained counts. **Change delegation**, **Current agents**, and **Settings** cover the common workflows; agent permissions, transport/runtime details, source, and settings path remain under **Advanced settings**.
 Escape returns from a nested screen to a newly refreshed manager; Ctrl+C closes the full flow.
 Exact workflow/reload and project-agent safety confirmations remain extension-owned because they
 guard live agent and trust-boundary policy rather than ordinary navigation.
 
-The direct routes remain predictable: `/subagents settings` changes completion delivery and consultation resources and applies them immediately, including refreshing model-facing spawn guidance; `/subagents status` reports current-session runtime values separately from configured values, sources, and path; `/subagents help` summarizes the single-command interface. In RPC mode, bare `/subagents` emits the same bounded status through Pi's notification protocol instead of opening a custom TUI. JSON and print modes do not emit ad hoc command output. Manual edits use `~/.pi/agent/pi-subagents.json` and take effect after reloading Pi:
+The direct routes remain predictable: `/subagents settings` changes both target policies, consultation resources, and completion delivery and applies them immediately, including refreshing model-facing tool guidance; `/subagents status` reports current-session runtime values separately from configured values, per-field sources, and path; `/subagents help` summarizes the single-command interface and the non-sandbox limitation. In RPC mode, bare `/subagents` emits the same bounded status through Pi's notification protocol instead of opening a custom TUI. JSON and print modes do not emit ad hoc command output. Manual edits use `~/.pi/agent/pi-subagents.json` and take effect after reloading Pi:
 
 ```json
 {
@@ -359,13 +378,17 @@ The direct routes remain predictable: `/subagents settings` changes completion d
     "retentionDays": 30,
     "maxStoredAgents": 50
   },
+  "cwdPolicy": {
+    "consultation": "anywhere",
+    "delegation": "trusted-targets"
+  },
   "consult": {
     "resources": "project-context"
   }
 }
 ```
 
-The settings UI patches the raw JSON atomically and preserves unknown fields; it refuses to overwrite malformed or invalid settings. Supported Pi writers serialize the latest-document read and same-directory temporary-file rename through `pi-subagents.json.mutation-lock`. Editors and older extension versions do not participate in that lock, so avoid manual edits while a settings save is in progress. `blocking.enabled` defaults to `true`; set it to `false` for async-only delegation. `stateful.enabled` also defaults to `true`; its existing `false` value remains the blocking-only workflow. `consult.resources` defaults to `"project-context"`; the Settings UI applies a saved change to subsequent consultations immediately, while manual edits take effect on session start or `/reload`. When stateful tools are enabled, their membership stays fixed across spawn, completion, interrupt, close, and mailbox transitions. This avoids lifecycle-driven tool-schema churn and preserves a stable provider prompt prefix for KV caching.
+The settings UI patches the raw JSON atomically and preserves unknown fields; it refuses to overwrite malformed or invalid settings. Supported Pi writers serialize the latest-document read and same-directory temporary-file rename through `pi-subagents.json.mutation-lock`. Editors and older extension versions do not participate in that lock, so avoid manual edits while a settings save is in progress. `blocking.enabled` defaults to `true`; set it to `false` for async-only delegation. `stateful.enabled` also defaults to `true`; its existing `false` value remains the blocking-only workflow. `cwdPolicy.consultation` defaults to `"anywhere"`, `cwdPolicy.delegation` defaults to `"trusted-targets"`, and `consult.resources` defaults to `"project-context"`. The Settings UI applies a saved change immediately to subsequent launches and refreshes the affected tool descriptions; manual edits take effect on session start or `/reload`. The UI explicitly states that target/trust settings are not filesystem sandboxing and directs trust changes to Pi `/trust`. When stateful tools are enabled, their membership stays fixed across spawn, completion, interrupt, close, and mailbox transitions. This avoids lifecycle-driven tool-schema churn and preserves a stable provider prompt prefix for KV caching.
 
 | Tool | Purpose |
 | --- | --- |
@@ -435,7 +458,7 @@ Stateful execution uses a transport boundary:
 
 - `subprocess` is the default compatibility and rollback path.
 - `in-process` uses only public Pi SDK APIs: `createAgentSession()`, `SessionManager.inMemory()`, `DefaultResourceLoader`, and normal session lifecycle methods. It isolates conversation/tool selection, not memory or crashes; child failures share the parent Node.js process.
-- Child resource loading sets `noExtensions: true`, preventing recursive `pi-subagents` loading and duplicate extension side effects while retaining normal context/skill resources and the selected agent prompt.
+- Child resource loading sets `noExtensions: true`, preventing recursive `pi-subagents` loading and duplicate extension side effects while retaining trust-eligible context/skill resources and the selected agent prompt. Both transports receive the same resolved target-trust boolean: subprocess children get explicit `--approve`/`--no-approve`, and in-process children set the same `SettingsManager.projectTrusted` value.
 - Agent model, thinking level, and built-in tool allow-list overrides are applied when the child is created. Parent model/thinking changes are snapshotted for subsequently created children; an existing child keeps its own session configuration.
 - Extension/custom tool names are rejected in-process with an actionable recommendation to use `subprocess`; permissions are never silently widened.
 - Timeout, parent abort, close, expiry, and session shutdown abort/dispose owned child sessions. A child that does not settle after abort grace is discarded rather than reused.
@@ -445,11 +468,11 @@ No private Pi imports, runtime casts, or `ExtensionAPI` monkey-patching are used
 
 Write-capable agents share the workspace by default. Concurrent write-capable starts in the same cwd are rejected unless `allowConcurrentWrites` is explicitly set. Classification is intentionally conservative: an agent with `bash`, `write`, or `edit` is write-capable even when its task prompt says “read only,” because prompt wording is not a filesystem sandbox. Prefer one detached agent when asynchronous work can be combined. If concurrent work is genuinely required, use the blocking batch only when synchronous outputs justify making the root unavailable, explicitly accept safe detached overlap with `allowConcurrentWrites`, or use isolated worktrees when repository isolation is needed.
 
-Set `workspaceMode: "worktree"` to opt into a disposable detached Git worktree; this requires a clean repository and the worktree is removed on close or session shutdown. Isolated worktree agents are intentionally not restored after shutdown.
+Set `workspaceMode: "worktree"` to opt into a disposable detached Git worktree; this requires a clean repository and the worktree is removed on close or session shutdown. The generated path inherits the approved base cwd's trust snapshot. Retained records mark disposable worktrees explicitly, so they are never restored even if cleanup could not remove the generated directory. Shared-workspace retained records store an additive bounded target-trust snapshot for transport and inspection parity; session restore canonicalizes the retained cwd and re-resolves current/saved trust rather than blindly trusting the persisted value. Older records without either field remain readable.
 
 ## 📜 Compatibility and failure contract
 
-Existing `subagent` requests remain unchanged:
+Existing `subagent` input schemas remain unchanged. The intentional compatibility change is that an external target without saved trust is rejected by the new default `cwdPolicy.delegation: "trusted-targets"`; set the user-owned policy to `"anywhere"` to restore the preceding target flexibility.
 
 | Mode | Ordering | Failure behavior |
 | --- | --- | --- |
@@ -461,7 +484,7 @@ Existing `subagent` requests remain unchanged:
 An aggregator whose `agent` or `task` is empty or whitespace-only is treated as absent, so successful
 parallel outputs remain available instead of being replaced by a malformed fan-in failure.
 
-Timeout precedence remains: task/step/aggregator → call → agent setting → `PI_SUBAGENT_TIMEOUT_MS` → 600000 ms. Blocking thinking precedence remains: task/step/aggregator → call → agent setting → child default. Stateful spawn thinking precedence is: `subagent_spawn.thinkingLevel` → agent setting → transport fallback. Project-agent resolution and confirmation behavior is unchanged.
+Timeout precedence remains: task/step/aggregator → call → agent setting → `PI_SUBAGENT_TIMEOUT_MS` → 600000 ms. Blocking thinking precedence remains: task/step/aggregator → call → agent setting → child default. Stateful spawn thinking precedence is: `subagent_spawn.thinkingLevel` → agent setting → transport fallback. Project-agent resolution and confirmation behavior is unchanged after target preflight. Blocking and retained result/inspection details add bounded target boundary and effective trust metadata.
 
 ## 🤖 Built-in agents
 
@@ -629,8 +652,12 @@ extensions/pi-subagents/
 │   ├── inspect.ts                # Side-effect-free metadata inspection tool
 │   ├── consult.ts                # Synchronous read-only consultation tool
 │   ├── consult-policy.ts         # Enforced read-only tool intersection
+│   ├── cwd-policy.ts             # Canonical target and saved-trust resolution
 │   ├── safe-text.ts              # Shared byte/line/path sanitization
 │   ├── stateful.ts               # Detached lifecycle registration and dispatch
+│   ├── stateful-guidance.ts      # Detached model-facing workflow guidance
+│   ├── stateful-lifecycle.ts     # Runtime disposal and spawn ownership guards
+│   ├── stateful-safety.ts        # Project-agent and shared-write safety checks
 │   ├── stateful-tool-params.ts   # Consolidated action schemas and validation
 │   └── *.ts                      # Package-local discovery, execution, rendering, and settings modules
 ├── README.md
@@ -639,7 +666,7 @@ extensions/pi-subagents/
 └── package.json
 ```
 
-`index.ts` is the Pi entrypoint and forwards to `subagents.ts`; the other source modules are internal. Workflow settings remain backward compatible: older files without `blocking.enabled` receive the seven-tool default, existing `stateful.enabled: false` files expose blocking delegation plus inspection/consultation, and older package releases ignore and preserve the optional `consult` object. The package exposes its Pi extension through `package.json`:
+`index.ts` is the Pi entrypoint and forwards to `subagents.ts`; the other source modules are internal. Workflow settings remain backward compatible: older files without `blocking.enabled` receive the seven-tool default, existing `stateful.enabled: false` files expose blocking delegation plus inspection/consultation, and older package releases ignore and preserve the optional `consult` and `cwdPolicy` objects. The package exposes its Pi extension through `package.json`:
 
 ```json
 {

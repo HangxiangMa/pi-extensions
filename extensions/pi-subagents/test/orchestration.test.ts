@@ -4,7 +4,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { AgentPersistence } from "../src/persistence.js";
 import { AgentRegistry, type ManagedAgent } from "../src/registry.js";
 import { normalizeSubagentSettings } from "../src/settings.js";
 import {
@@ -16,7 +18,10 @@ import {
 	resolveSpawnContextMode,
 	resolveStatefulTransportKind,
 } from "../src/stateful.js";
-import { resolveStatefulSubprocessThinkingLevel } from "../src/subprocess-transport.js";
+import {
+	resolveStatefulSubprocessThinkingLevel,
+	SubprocessTransport,
+} from "../src/subprocess-transport.js";
 import { WorkspaceManager } from "../src/workspace.js";
 
 function record(overrides: Partial<ManagedAgent> = {}): ManagedAgent {
@@ -422,6 +427,7 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			path.join(projectAgents, "project.md"),
 			"---\nname: project\ndescription: project agent\n---\nDo project work.",
 		);
+		new ProjectTrustStore(dir).set(project, true);
 		const untrusted = createMockContext({ cwd: project, isProjectTrusted: () => false });
 		const spawnTool = mock.tools.find((tool) => tool.name === "subagent_spawn") as {
 			description: string;
@@ -566,6 +572,391 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 	} finally {
 		if (originalDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalDir;
+	}
+});
+
+test("stateful spawn enforces trusted targets and carries trust into in-process children", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-stateful-cwd-"));
+	const agentDir = path.join(root, "agent-home");
+	const workspace = path.join(root, "workspace");
+	const external = path.join(root, "external");
+	const generated = path.join(root, "generated-worktree");
+	mkdirSync(agentDir);
+	mkdirSync(workspace);
+	mkdirSync(external);
+	mkdirSync(generated);
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	let delegation: "trusted-targets" | "anywhere" = "trusted-targets";
+	const created: ManagedAgent[] = [];
+	const createdTools: Array<string[] | undefined> = [];
+	try {
+		const mock = createMockPi();
+		const controller = registerStatefulSubagents(mock.pi, {
+			settings: { transport: "in-process" },
+			getSettings: () => ({
+				cwdPolicy: { delegation },
+				agents: { scout: { tools: [] } },
+			}),
+			workspaceManager: {
+				async create() {
+					return {
+						mode: "worktree" as const,
+						path: generated,
+						rootPath: generated,
+						repositoryRoot: workspace,
+					};
+				},
+				async cleanup() {},
+				async cleanupAll() {},
+			} as unknown as WorkspaceManager,
+			createInProcessSession: async (options) => {
+				created.push(structuredClone(options.agent));
+				createdTools.push(options.agentConfig.tools);
+				const messages: unknown[] = [];
+				return {
+					sessionId: `child-${created.length}`,
+					messages,
+					async prompt() {
+						messages.push({
+							role: "assistant",
+							content: [{ type: "text", text: "done" }],
+							stopReason: "stop",
+						});
+					},
+					subscribe: () => () => undefined,
+					abort: async () => undefined,
+					dispose: () => undefined,
+					getActiveToolNames: () => ["read", "grep", "find", "ls", "bash"],
+				};
+			},
+		});
+		const context = createMockContext({ cwd: workspace, isProjectTrusted: () => true });
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		const spawn = mock.tools.find((tool) => tool.name === "subagent_spawn") as
+			| { execute: (...args: unknown[]) => Promise<unknown> }
+			| undefined;
+		assert.ok(spawn);
+		await assert.rejects(
+			() =>
+				spawn.execute(
+					"unsaved",
+					{ agent: "scout", task: "inspect", cwd: external },
+					undefined,
+					undefined,
+					context.ctx,
+				),
+			/saved-trusted.*\/trust/i,
+		);
+		assert.deepEqual(controller.listAgents(), []);
+
+		new ProjectTrustStore(agentDir).set(external, true);
+		await spawn.execute(
+			"trusted",
+			{ agent: "scout", task: "inspect", cwd: external },
+			undefined,
+			undefined,
+			context.ctx,
+		);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.deepEqual(createdTools[0], []);
+		assert.equal(created[0]?.target?.trust.kind, "saved-trusted");
+		assert.equal(created[0]?.target?.trust.projectTrusted, true);
+		assert.equal(controller.listAgents()[0]?.target?.cwd, external);
+
+		new ProjectTrustStore(agentDir).set(external, false);
+		delegation = "anywhere";
+		await spawn.execute(
+			"anywhere",
+			{ agent: "scout", task: "inspect", cwd: external },
+			undefined,
+			undefined,
+			context.ctx,
+		);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(created[1]?.target?.trust.kind, "saved-denied");
+		assert.equal(created[1]?.target?.trust.projectTrusted, false);
+
+		await spawn.execute(
+			"worktree",
+			{ agent: "scout", task: "inspect", workspaceMode: "worktree" },
+			undefined,
+			undefined,
+			context.ctx,
+		);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(created[2]?.cwd, generated);
+		assert.equal(created[2]?.workspaceMode, "worktree");
+		assert.equal(created[2]?.target?.cwd, generated);
+		assert.equal(created[2]?.target?.trust.kind, "session-trusted");
+		assert.equal(created[2]?.target?.trust.projectTrusted, true);
+		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("stateful restore re-resolves target trust instead of trusting persisted snapshots", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-restore-trust-"));
+	const agentDir = path.join(root, "agent-home");
+	const workspace = path.join(root, "workspace");
+	const external = path.join(root, "external");
+	mkdirSync(agentDir);
+	mkdirSync(workspace);
+	mkdirSync(external);
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	try {
+		await new AgentPersistence("test-session").save([
+			record({
+				id: "sa_restored",
+				rootId: "sa_restored",
+				cwd: external,
+				updatedAt: Date.now(),
+				target: {
+					cwd: external,
+					boundary: "external",
+					trust: { kind: "saved-trusted", projectTrusted: true, sourcePath: external },
+				},
+			}),
+			record({
+				id: "sa_worktree",
+				rootId: "sa_worktree",
+				cwd: external,
+				updatedAt: Date.now(),
+				workspaceMode: "worktree",
+			}),
+		]);
+		new ProjectTrustStore(agentDir).set(external, false);
+		const mock = createMockPi();
+		const controller = registerStatefulSubagents(mock.pi);
+		const context = createMockContext({ cwd: workspace, isProjectTrusted: () => true });
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		const restoredAgents = controller.listAgents();
+		assert.equal(restoredAgents.length, 1);
+		const restored = restoredAgents[0];
+		assert.equal(restored?.id, "sa_restored");
+		assert.equal(restored?.target?.trust.kind, "saved-denied");
+		assert.equal(restored?.target?.trust.projectTrusted, false);
+		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("stateful worktree spawn revalidates session ownership and cleans stale work", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-stale-worktree-"));
+	const agentDir = path.join(root, "agent-home");
+	const workspace = path.join(root, "workspace");
+	const generated = path.join(root, "generated");
+	mkdirSync(agentDir);
+	mkdirSync(workspace);
+	mkdirSync(generated);
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	let beginCreate: (() => void) | undefined;
+	const createStarted = new Promise<void>((resolve) => {
+		beginCreate = resolve;
+	});
+	let finishCreate:
+		| ((value: {
+				mode: "worktree";
+				path: string;
+				rootPath: string;
+				repositoryRoot: string;
+		  }) => void)
+		| undefined;
+	const created = new Promise<{
+		mode: "worktree";
+		path: string;
+		rootPath: string;
+		repositoryRoot: string;
+	}>((resolve) => {
+		finishCreate = resolve;
+	});
+	let cleaned = 0;
+	let childCreates = 0;
+	const workspaceManager = {
+		async create() {
+			beginCreate?.();
+			return created;
+		},
+		async cleanup() {
+			cleaned++;
+		},
+		async cleanupAll() {},
+	} as unknown as WorkspaceManager;
+	try {
+		const mock = createMockPi();
+		const controller = registerStatefulSubagents(mock.pi, {
+			settings: { transport: "in-process" },
+			workspaceManager,
+			createInProcessSession: async () => {
+				childCreates++;
+				throw new Error("stale spawn must not create a child");
+			},
+		});
+		const first = createMockContext({ cwd: workspace, isProjectTrusted: () => true });
+		await mock.events.get("session_start")?.[0]?.({}, first.ctx);
+		const spawn = mock.tools.find((tool) => tool.name === "subagent_spawn") as
+			| { execute: (...args: unknown[]) => Promise<unknown> }
+			| undefined;
+		assert.ok(spawn);
+		const pending = spawn.execute(
+			"worktree",
+			{ agent: "scout", task: "inspect", workspaceMode: "worktree" },
+			undefined,
+			undefined,
+			first.ctx,
+		);
+		await createStarted;
+		const replacement = createMockContext({ cwd: workspace, isProjectTrusted: () => true });
+		await mock.events.get("session_start")?.[0]?.({}, replacement.ctx);
+		finishCreate?.({
+			mode: "worktree",
+			path: generated,
+			rootPath: generated,
+			repositoryRoot: workspace,
+		});
+		await assert.rejects(pending, (error) => error instanceof Error && error.name === "AbortError");
+		assert.equal(cleaned, 1);
+		assert.equal(childCreates, 0);
+		assert.deepEqual(controller.listAgents(), []);
+		await mock.events.get("session_shutdown")?.[0]?.({}, replacement.ctx);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("stateful clear and session replacement serialize active-child cleanup before the new runtime", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-runtime-replacement-"));
+	const agentDir = path.join(root, "agent-home");
+	const workspace = path.join(root, "workspace");
+	mkdirSync(agentDir);
+	mkdirSync(workspace);
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	let childStarted: (() => void) | undefined;
+	const started = new Promise<void>((resolve) => {
+		childStarted = resolve;
+	});
+	let finishPrompt: (() => void) | undefined;
+	let aborts = 0;
+	let disposals = 0;
+	try {
+		const mock = createMockPi();
+		const controller = registerStatefulSubagents(mock.pi, {
+			settings: { transport: "in-process" },
+			createInProcessSession: async () => {
+				const messages: unknown[] = [];
+				return {
+					sessionId: "active-child",
+					messages,
+					prompt: async () => {
+						childStarted?.();
+						await new Promise<void>((resolve) => {
+							finishPrompt = resolve;
+						});
+					},
+					subscribe: () => () => undefined,
+					abort: async () => {
+						aborts++;
+						finishPrompt?.();
+					},
+					dispose: () => {
+						disposals++;
+					},
+					getActiveToolNames: () => ["read", "grep", "find", "ls", "bash"],
+				};
+			},
+		});
+		const first = createMockContext({ cwd: workspace, isProjectTrusted: () => true });
+		await mock.events.get("session_start")?.[0]?.({}, first.ctx);
+		const spawn = mock.tools.find((tool) => tool.name === "subagent_spawn") as
+			| { execute: (...args: unknown[]) => Promise<unknown> }
+			| undefined;
+		assert.ok(spawn);
+		await spawn.execute(
+			"active",
+			{ agent: "scout", task: "wait" },
+			undefined,
+			undefined,
+			first.ctx,
+		);
+		await started;
+		const replacement = createMockContext({
+			cwd: workspace,
+			isProjectTrusted: () => true,
+			sessionManager: {
+				getSessionId: () => "replacement-session",
+				getSessionName: () => undefined,
+				getBranch: () => [],
+				getEntries: () => [],
+			},
+		});
+		const clearing = controller.clearAgents();
+		const replacing = mock.events.get("session_start")?.[0]?.({}, replacement.ctx);
+		await Promise.all([clearing, replacing]);
+		assert.ok(aborts >= 1);
+		assert.equal(disposals, 1);
+		assert.deepEqual(controller.listAgents(), []);
+		await mock.events.get("session_shutdown")?.[0]?.({}, replacement.ctx);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("stateful subprocess uses the retained resolved trust decision", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-stateful-subprocess-trust-"));
+	const fakePi = path.join(root, "fake-pi.mjs");
+	writeFileSync(
+		fakePi,
+		[
+			"const text=process.argv.slice(2).join(' ');",
+			"const message={role:'assistant',content:[{type:'text',text}],stopReason:'stop',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	const previousScript = process.argv[1];
+	process.argv[1] = fakePi;
+	try {
+		const transport = new SubprocessTransport({
+			getSettings: () => ({ agents: { scout: { tools: [] } } }),
+		});
+		for (const [projectTrusted, expected] of [
+			[true, "--approve"],
+			[false, "--no-approve"],
+		] as const) {
+			const outcome = await transport.runTurn(
+				record({
+					cwd: root,
+					target: {
+						cwd: root,
+						boundary: "external",
+						trust: {
+							kind: projectTrusted ? "saved-trusted" : "saved-denied",
+							projectTrusted,
+						},
+					},
+				}),
+				"inspect",
+				new AbortController().signal,
+			);
+			assert.equal(outcome.exitCode, 0);
+			assert.match(outcome.output, new RegExp(expected));
+			assert.match(outcome.output, /--no-tools/);
+		}
+	} finally {
+		process.argv[1] = previousScript;
+		rmSync(root, { recursive: true, force: true });
 	}
 });
 

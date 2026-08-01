@@ -339,7 +339,8 @@ export async function createSdkChildSession(
 		options.agent.cwd,
 		agentDir,
 		options.agentConfig.systemPrompt,
-		options.agent.agentScope === "project" || options.agent.agentScope === "both",
+		options.agent.target?.trust.projectTrusted ??
+			(options.agent.agentScope === "project" || options.agent.agentScope === "both"),
 	);
 	const resolved = await resolveChildModel(options);
 	const modelRuntime = await createChildModelRuntime(
@@ -508,8 +509,7 @@ export async function createInProcessResourceLoader(
 	agentSystemPrompt: string,
 	projectTrusted = false,
 ): Promise<{ loader: DefaultResourceLoader; settingsManager: SettingsManager }> {
-	const settingsManager = SettingsManager.create(cwd, agentDir);
-	settingsManager.setProjectTrusted(projectTrusted);
+	const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
 	const loader = new DefaultResourceLoader({
 		cwd,
 		agentDir,

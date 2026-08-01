@@ -6,8 +6,12 @@ import lockfile from "proper-lockfile";
 import {
 	type AgentConfig,
 	CONSULT_RESOURCE_POLICIES,
+	CONSULTATION_CWD_POLICIES,
 	type CompletionDelivery,
+	type ConsultationCwdPolicy,
 	type ConsultResourcePolicy,
+	DELEGATION_CWD_POLICIES,
+	type DelegationCwdPolicy,
 	isThinkingLevel,
 	type SubagentAgentConfig,
 	type SubagentSettings,
@@ -158,6 +162,29 @@ export function normalizeSubagentSettings(value: unknown): SubagentSettings | un
 		}
 		settings.consult = consult;
 	}
+	if (hasOwn(value, "cwdPolicy")) {
+		if (!isPlainObject(value.cwdPolicy)) return undefined;
+		const cwdPolicy: NonNullable<SubagentSettings["cwdPolicy"]> = {};
+		if (hasOwn(value.cwdPolicy, "consultation")) {
+			if (
+				typeof value.cwdPolicy.consultation !== "string" ||
+				!CONSULTATION_CWD_POLICIES.includes(value.cwdPolicy.consultation as ConsultationCwdPolicy)
+			) {
+				return undefined;
+			}
+			cwdPolicy.consultation = value.cwdPolicy.consultation as ConsultationCwdPolicy;
+		}
+		if (hasOwn(value.cwdPolicy, "delegation")) {
+			if (
+				typeof value.cwdPolicy.delegation !== "string" ||
+				!DELEGATION_CWD_POLICIES.includes(value.cwdPolicy.delegation as DelegationCwdPolicy)
+			) {
+				return undefined;
+			}
+			cwdPolicy.delegation = value.cwdPolicy.delegation as DelegationCwdPolicy;
+		}
+		settings.cwdPolicy = cwdPolicy;
+	}
 	return settings;
 }
 
@@ -165,6 +192,8 @@ const SETTINGS_FILE = "pi-subagents.json";
 const LEGACY_SETTINGS_FILE = "pi-subagents-config.json";
 const DEFAULT_COMPLETION_DELIVERY: CompletionDelivery = "next-turn";
 export const DEFAULT_CONSULT_RESOURCE_POLICY: ConsultResourcePolicy = "project-context";
+export const DEFAULT_CONSULTATION_CWD_POLICY: ConsultationCwdPolicy = "anywhere";
+export const DEFAULT_DELEGATION_CWD_POLICY: DelegationCwdPolicy = "trusted-targets";
 const SETTINGS_LOCK_FS_ADAPTER = {
 	mkdir: fs.mkdir,
 	mkdirSync: fs.mkdirSync,
@@ -261,6 +290,18 @@ export interface ConsultResourceSettingsSnapshot {
 	error?: string;
 }
 
+export interface CwdPolicyFieldSnapshot<T> {
+	value: T;
+	source: "default" | "user settings";
+}
+
+export interface CwdPolicySettingsSnapshot {
+	path: string;
+	consultation: CwdPolicyFieldSnapshot<ConsultationCwdPolicy>;
+	delegation: CwdPolicyFieldSnapshot<DelegationCwdPolicy>;
+	error?: string;
+}
+
 export interface SubagentSettingsSnapshot {
 	path: string;
 	settings?: SubagentSettings;
@@ -302,16 +343,28 @@ function inspectSubagentSettingsPath(configPath: string): {
 	settings?: SubagentSettings;
 	error?: string;
 } {
+	const fileName = path.basename(configPath);
+	let contents: string;
 	try {
-		const raw: unknown = JSON.parse(fs.readFileSync(configPath, "utf8"));
-		const settings = normalizeSubagentSettings(raw);
-		if (!isPlainObject(raw) || !settings) {
-			throw new Error(`${path.basename(configPath)} is not a valid settings object`);
-		}
-		return { path: configPath, raw, settings };
+		contents = fs.readFileSync(configPath, "utf8");
 	} catch (error) {
-		return { path: configPath, error: formatError(error) };
+		const code = (error as NodeJS.ErrnoException).code;
+		return {
+			path: configPath,
+			error: `${fileName} could not be read${code ? ` (${safeErrorCode(code)})` : ""}`,
+		};
 	}
+	let raw: unknown;
+	try {
+		raw = JSON.parse(contents);
+	} catch {
+		return { path: configPath, error: `${fileName} contains malformed JSON` };
+	}
+	const settings = normalizeSubagentSettings(raw);
+	if (!isPlainObject(raw) || !settings) {
+		return { path: configPath, error: `${fileName} is not a valid settings object` };
+	}
+	return { path: configPath, raw, settings };
 }
 
 export function inspectSubagentSettings(): SubagentSettingsSnapshot {
@@ -340,6 +393,30 @@ export function inspectConsultResourceSettings(): ConsultResourceSettingsSnapsho
 		path: inspected.path,
 		value: inspected.settings.consult?.resources ?? DEFAULT_CONSULT_RESOURCE_POLICY,
 		source: explicit ? "user settings" : "default",
+	};
+}
+
+export function inspectCwdPolicySettings(): CwdPolicySettingsSnapshot {
+	const inspected = inspectSubagentSettingsDocument();
+	if (!inspected.raw || !inspected.settings) {
+		return {
+			path: inspected.path,
+			consultation: { value: DEFAULT_CONSULTATION_CWD_POLICY, source: "default" },
+			delegation: { value: DEFAULT_DELEGATION_CWD_POLICY, source: "default" },
+			...(inspected.error ? { error: inspected.error } : {}),
+		};
+	}
+	const rawPolicy = isPlainObject(inspected.raw.cwdPolicy) ? inspected.raw.cwdPolicy : undefined;
+	return {
+		path: inspected.path,
+		consultation: {
+			value: inspected.settings.cwdPolicy?.consultation ?? DEFAULT_CONSULTATION_CWD_POLICY,
+			source: rawPolicy && hasOwn(rawPolicy, "consultation") ? "user settings" : "default",
+		},
+		delegation: {
+			value: inspected.settings.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY,
+			source: rawPolicy && hasOwn(rawPolicy, "delegation") ? "user settings" : "default",
+		},
 	};
 }
 
@@ -458,6 +535,29 @@ export function updateConsultResourceSetting(value: ConsultResourcePolicy): void
 	});
 }
 
+export function updateCwdPolicySetting(field: "consultation", value: ConsultationCwdPolicy): void;
+export function updateCwdPolicySetting(field: "delegation", value: DelegationCwdPolicy): void;
+export function updateCwdPolicySetting(
+	field: "consultation" | "delegation",
+	value: ConsultationCwdPolicy | DelegationCwdPolicy,
+): void {
+	withSettingsMutationLock(() => {
+		const update = readSettingsObjectForUpdate();
+		const raw = update.document;
+		const cwdPolicy = raw.cwdPolicy;
+		if (cwdPolicy !== undefined && !isPlainObject(cwdPolicy)) {
+			throw new Error(`Cannot update invalid ${SETTINGS_FILE} cwdPolicy settings`);
+		}
+		writeSettingsObjectUnlocked(
+			{
+				...raw,
+				cwdPolicy: { ...(cwdPolicy ?? {}), [field]: value },
+			},
+			update.replaceCanonical,
+		);
+	});
+}
+
 export function updateAgentToolsSetting(name: string, tools: string[] | undefined): void {
 	withSettingsMutationLock(() => {
 		const update = readSettingsObjectForUpdate();
@@ -504,8 +604,8 @@ function readSettingsObjectForUpdate(): SettingsObjectForUpdate {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(fs.readFileSync(activePath, "utf8"));
-	} catch (error) {
-		throw new Error(`Cannot update malformed ${activeFile}: ${formatError(error)}`);
+	} catch {
+		throw new Error(`Cannot update malformed ${activeFile}`);
 	}
 	if (!isPlainObject(parsed) || !normalizeSubagentSettings(parsed)) {
 		throw new Error(`Cannot update invalid ${activeFile}`);
@@ -585,8 +685,8 @@ function readSettingsSnapshot(configPath: string): {
 	}
 }
 
-function formatError(error: unknown) {
-	return error instanceof Error ? error.message : String(error);
+function safeErrorCode(value: string): string {
+	return value.replace(/[^A-Z0-9_-]/giu, "?").slice(0, 64);
 }
 
 export function uniqueToolNames(tools: string[]): string[] {

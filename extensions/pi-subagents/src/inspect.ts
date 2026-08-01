@@ -2,13 +2,21 @@ import * as path from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
-import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
+import {
+	type AgentConfig,
+	type AgentScope,
+	type ConsultationCwdPolicy,
+	type DelegationCwdPolicy,
+	discoverAgents,
+} from "./agents.js";
 import { resolveConsultTools } from "./consult-policy.js";
 import { renderInspectCall, renderInspectResult } from "./inspect-render.js";
 import type { AgentRunInspectionDetail, AgentRunInspectionSummary } from "./registry.js";
 import { boundedPrivateText, boundText, safeDisplayPath, safeTerminalLine } from "./safe-text.js";
 import {
+	inspectCompletionDeliverySettings,
 	inspectConsultResourceSettings,
+	inspectCwdPolicySettings,
 	inspectDelegationWorkflowSettings,
 	inspectSubagentSettings,
 	resolveDelegationWorkflow,
@@ -50,6 +58,8 @@ export type SubagentInspectParams = Static<typeof SubagentInspectParams>;
 export interface SubagentInspectRuntime {
 	getBlockingEnabled(): boolean;
 	getConsultResourcePolicy(): "project-context" | "none" | "all";
+	getConsultationCwdPolicy(): ConsultationCwdPolicy;
+	getDelegationCwdPolicy(): DelegationCwdPolicy;
 	getRuntimeStatus(): StatefulSubagentRuntimeStatus;
 	listRunInspection(includeClosed?: boolean): AgentRunInspectionSummary[];
 	getRunInspection(agentId: string): AgentRunInspectionDetail | undefined;
@@ -287,9 +297,26 @@ function projectRun(run: AgentRunInspectionDetail, ctx: ExtensionContext): Recor
 	return {
 		...projectRunSummary(run),
 		cwd: safeDisplayPath(run.cwd, ctx.cwd),
+		workspaceMode: run.workspaceMode ?? "shared",
 		thinkingLevel: run.thinkingLevel,
 		currentTask: run.currentTask ? boundedPrivateText(run.currentTask, 2 * 1024) : undefined,
 		error: run.error ? boundedPrivateText(run.error, 2 * 1024) : undefined,
+		target: run.target
+			? {
+					cwd: safeDisplayPath(run.target.cwd, ctx.cwd),
+					boundary: run.target.boundary,
+					trust: {
+						kind: run.target.trust.kind,
+						projectTrusted: run.target.trust.projectTrusted,
+						sourcePath: run.target.trust.sourcePath
+							? safeDisplayPath(run.target.trust.sourcePath, ctx.cwd)
+							: undefined,
+						warning: run.target.trust.warning
+							? boundedPrivateText(run.target.trust.warning, 512)
+							: undefined,
+					},
+				}
+			: undefined,
 		policy: run.policy
 			? {
 					inherited: projectToolNames(run.policy.inherited),
@@ -330,17 +357,31 @@ function projectStatus(runtime: SubagentInspectRuntime): Record<string, unknown>
 	const workflow = resolveDelegationWorkflow(runtime.getBlockingEnabled(), stateful.enabled);
 	const configured = inspectDelegationWorkflowSettings();
 	const resources = inspectConsultResourceSettings();
+	const cwdPolicy = inspectCwdPolicySettings();
+	const completion = inspectCompletionDeliverySettings();
 	return {
 		workflow,
 		configuredWorkflow: configured.value,
+		configuredWorkflowSource: configured.source,
 		stateful,
+		configuredCompletionDelivery: completion.value,
+		configuredCompletionDeliverySource: completion.source,
 		consultResources: runtime.getConsultResourcePolicy(),
+		consultationCwdPolicy: runtime.getConsultationCwdPolicy(),
+		configuredConsultationCwdPolicy: cwdPolicy.consultation.value,
+		consultationCwdPolicySource: cwdPolicy.consultation.source,
+		delegationCwdPolicy: runtime.getDelegationCwdPolicy(),
+		configuredDelegationCwdPolicy: cwdPolicy.delegation.value,
+		delegationCwdPolicySource: cwdPolicy.delegation.source,
 		configuredConsultResources: resources.value,
 		consultResourcesSource: resources.source,
 		settingsPath: safeDisplayPath(resources.path, process.cwd()),
 		settingsError:
-			configured.error || resources.error
-				? boundedPrivateText(configured.error ?? resources.error ?? "", 2 * 1024)
+			configured.error || resources.error || cwdPolicy.error || completion.error
+				? boundedPrivateText(
+						configured.error ?? resources.error ?? cwdPolicy.error ?? completion.error ?? "",
+						2 * 1024,
+					)
 				: undefined,
 	};
 }

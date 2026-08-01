@@ -17,6 +17,8 @@ function runtime(
 	return {
 		getBlockingEnabled: () => options.blocking ?? true,
 		getConsultResourcePolicy: () => "project-context" as const,
+		getConsultationCwdPolicy: () => "anywhere" as const,
+		getDelegationCwdPolicy: () => "trusted-targets" as const,
 		getRuntimeStatus: () => ({
 			enabled: true,
 			initialized: true,
@@ -153,6 +155,15 @@ test("subagent_inspect returns metadata-only run summaries", async () => {
 		thinkingLevel: "high",
 		currentTask: "current task\u001b[31m",
 		error: "bounded error",
+		target: {
+			cwd: process.cwd(),
+			boundary: "external",
+			trust: {
+				kind: "saved-trusted",
+				projectTrusted: true,
+				sourcePath: process.cwd(),
+			},
+		},
 		policy: { inherited: ["environment"], overridden: [], unsupported: [] },
 	};
 	const mock = createMockPi();
@@ -164,6 +175,10 @@ test("subagent_inspect returns metadata-only run summaries", async () => {
 	const got = await execute(tool, { action: "get_run", agentId: "sa_one" });
 	assert.match(String((got.details.run as { currentTask: string }).currentTask), /current task/);
 	assert.equal(JSON.stringify(got).includes("\u001b"), false);
+	assert.equal(
+		(got.details.run as { target: { trust: { kind: string } } }).target.trust.kind,
+		"saved-trusted",
+	);
 	await assert.rejects(
 		() => execute(tool, { action: "get_run", agentId: "missing" }),
 		/Unknown retained run/,
@@ -232,6 +247,17 @@ test("subagent_inspect uses scoped model snapshots and structured diagnostics wi
 		(result.details.models as Array<{ thinkingLevel: string }>)[0].thinkingLevel,
 		"medium",
 	);
+
+	const status = await execute(tool, { action: "status" }, ctx);
+	const statusDetails = status.details.status as Record<string, unknown>;
+	assert.equal(statusDetails.consultationCwdPolicy, "anywhere");
+	assert.equal(statusDetails.delegationCwdPolicy, "trusted-targets");
+	assert.equal(statusDetails.consultationCwdPolicySource, "default");
+	assert.equal(statusDetails.delegationCwdPolicySource, "default");
+	assert.equal(statusDetails.configuredWorkflowSource, "default");
+	assert.equal(statusDetails.configuredCompletionDelivery, "next-turn");
+	assert.equal(statusDetails.configuredCompletionDeliverySource, "default");
+	assert.doesNotMatch(JSON.stringify(status), /trust\.json/);
 
 	const diagnosed = await execute(tool, { action: "diagnose" }, ctx);
 	const checks = diagnosed.details.checks as Array<{ status: string }>;
