@@ -65,7 +65,7 @@ The package's separate supported `/testing` subpath provides semantic TUI drivin
 scripts without exporting raw components; Stamp and Image Drop completed representative adoption
 before publication.
 
-Eighteen extension or experimental packages depend on the kit, and 26 TypeScript source files import
+Nineteen extension or experimental packages depend on the kit, and 27 TypeScript source files import
 its API. Kit-dependent source still contains these literal direct Pi dialog calls:
 
 | Direct interaction | Current calls |
@@ -91,8 +91,9 @@ The latest proof migrations established the following baseline:
 
 The migrations exposed two concrete review gaps: root Back and Ctrl+C Close originally collapsed to
 one result, and `ReviewScreen` used fixed rather than terminal-derived viewport sizing. Published API
-versions 4 and 5 resolved those Kit seams in sequence. The `pi-btw` review migration remains deferred
-until its editor-preservation and restored-selection contracts pass the fresh post-release gate.
+versions 4 and 5 resolved those Kit seams in sequence. The `pi-btw` post-release gate then passed:
+standard choices and adaptive review migrated without weakening editor-preservation,
+restored-selection, Back/Close, resize, or exact-text contracts, and BTW `0.42.1` is published.
 
 Consumer tests had to extend `test/support.ts` to drive real input focus, rejected retries, Ctrl+C,
 disposal, pending action draining, and RPC dialog cadence. The published
@@ -192,9 +193,9 @@ three-way confirmation and preview composition.
 
 ### Phase 3: Adaptive Review and Supported Testability
 
-**Status:** Adaptive review, the [supported testing entrypoint][supported-testing-plan], and named
-Stamp/Image Drop test-host adoption are published in `0.42.0`; the BTW gate is go and its focused
-source migration is ready for review, while version bump and publication remain user-owned.
+**Status:** Complete. Adaptive review, the [supported testing entrypoint][supported-testing-plan],
+and named Stamp/Image Drop test-host adoption are published in Kit `0.42.0`; the successful BTW gate
+and focused migration are published in `@narumitw/pi-btw@0.42.1`.
 
 **Milestones:**
 
@@ -301,7 +302,7 @@ abstractions when Pi provides a better stable owner.
 | Proof for each new public flow | Two compatible consumers by default; exceptions require recorded evidence | Two completed proof migrations or an explicit no-go/deferral | Every expansion phase; archived plans and PRs |
 | Lifecycle verification | Existing deterministic package and consumer coverage | Every admitted contract covers TUI/RPC, cancellation, disposal, owner abort, stale state, and failure | Every phase; package and repository gates |
 | Runtime action/lifecycle ownership | TUI and RPC loops coordinate screen actions in separate branches | If the driver is admitted, one coordinator owns shared action and lifecycle policy | Phase 4; source diff plus behavior matrix |
-| Regression gate | 1,938 tests at the `0.42.0` release gate | No regression in the repository CI-equivalent gate | Every phase; `npm run check` |
+| Regression gate | 1,939 tests at the BTW `0.42.1` release gate | No regression in the repository CI-equivalent gate | Every phase; `npm run check` |
 
 Delivery dates and capacity targets are unknown; this roadmap intentionally measures verified behavior
 and adoption rather than calendar output.
@@ -346,4 +347,4 @@ and adoption rather than calendar output.
 | 2026-08-01 | Add the supported `@narumitw/pi-tui-kit/testing` subpath without changing production exports or menu API version. | Semantic TUI driving and strict input/select RPC scripts concentrate demonstrated test-host policy without exposing components or absorbing consumer context/domain mocks; adoption and release remain separate. |
 | 2026-08-01 | Adopt the supported testing subpath in Stamp and Image Drop before publication. | Two real consumers now prove sequential TUI screens, rejected input, pending drains, strict RPC where supported, loader cancellation, and three-way confirmation; broad root support remains only for its other inventoried owners. |
 | 2026-08-01 | Publish shared release `v0.42.0` with menu API 5 and the supported testing subpath. | The pinned-npm bump and provenance workflow passed all 1,938 tests and published all 23 workspaces; a clean registry fixture resolved both Kit roots, adaptive review, exact close results, and strict NodeNext declarations. |
-| 2026-08-01 | Admit BTW's standard choices and preview to Kit after the post-publication gate. | Supported-harness and real-Pi smokes preserve editor text, selected question/scope, Back/Close, raw choice identity, adaptive resize, and exact preview content; 238 lines of specialized menu/preview code are deleted while `BtwTextRangeSelector` remains local. Version bump and publication are explicitly user-owned. |
+| 2026-08-01 | Admit BTW's standard choices and preview to Kit after the post-publication gate. | Supported-harness and real-Pi smokes preserve editor text, selected question/scope, Back/Close, raw choice identity, adaptive resize, and exact preview content; 238 lines of specialized menu/preview code are deleted while `BtwTextRangeSelector` remains local. The user-owned patch workflow published only BTW `0.42.1` with provenance. |
