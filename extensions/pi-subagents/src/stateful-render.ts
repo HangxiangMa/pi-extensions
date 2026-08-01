@@ -201,7 +201,9 @@ function renderMailboxResult(
 	];
 	const selected = expanded ? messages : messages.slice(0, COLLAPSED_LIST_LIMIT);
 	for (const message of selected) {
-		const content = safeBlock(message.content, "(empty message)", expanded ? 2 * 1024 : 512);
+		const content = expanded
+			? safeBlock(message.content, "(empty message)", 2 * 1024)
+			: safeLine(message.content, "(empty message)", 512);
 		lines.push(
 			`${theme.fg("muted", "• ")}${theme.fg("accent", safeLine(message.id, "message", 256))} ${theme.fg("muted", `from ${safeLine(message.senderId, "unknown", 256)}: `)}${theme.fg("toolOutput", content)}`,
 		);
