@@ -34,10 +34,12 @@ and build the local workspace package.
   current Kit, production-extension, experimental, and deprecated tests still use it. The supported
   entrypoint replaces repeated Kit-host policy, not every specialized component fixture or the broad
   consumer-owned `createMockContext()`.
-- Since tag `v0.41.0`, the currently changed publish roots include Pi TUI Kit, Stamp, Image Drop, and
-  several unrelated packages, while `extensions/pi-btw` is unchanged. A canonical shared minor bump
-  should therefore bump BTW's source manifest but omit BTW from tag-triggered publication. Recheck
-  this immediately before release because concurrent merges can change the package selection.
+- Since tag `v0.41.0`, the changed publish roots include Pi TUI Kit, Stamp, Image Drop, and eight
+  other packages, while `extensions/pi-btw` is unchanged. Preflight proved that a zero-major minor
+  bump intentionally preserving `^0.41.0` Kit ranges adds nested `0.41.0` lock entries, so the
+  selector takes its safe fallback and publishes all 23 workspaces, matching the prior `v0.41.0`
+  release behavior. BTW will therefore publish unchanged at `0.42.0`; a successful later migration
+  uses an independently bumped `0.42.1`.
 - BTW currently owns `BtwMenuSelector`, `BtwBringToMainPreview`, and `BtwTextRangeSelector` plus
   `showBtwCustomPreservingEditor()`. Only the standard menu and preview are migration candidates;
   exact text-range selection remains specialized.
@@ -131,8 +133,9 @@ components rather than approximating behavior.
 - The shared minor workflow remains the version authority and preserves consumer-owned dependency
   ranges unless a migration explicitly requires a newer Kit API.
 - GitHub Actions retains trusted npm provenance credentials for tag-triggered publication.
-- BTW remains unchanged between `v0.41.0` and the release parent. If it becomes selected for the
-  shared release, pause and revise the BTW version/publication sequence before tagging.
+- BTW remains unchanged between `v0.41.0` and the release parent and is intentionally included by the
+  safe all-package fallback. If the post-release gate succeeds, `just bump @narumitw/pi-btw patch`
+  creates `0.42.1` after adding the published Kit range; no npm version is reused.
 - Pi 0.83 remains the runtime conformance target for this release.
 
 ## Risks
@@ -148,9 +151,9 @@ components rather than approximating behavior.
 - **Partial npm publication:** some packages may publish before a workflow failure. Mitigation: query
   every selected `name@version`, rerun the idempotent workflow or publish only missing artifacts, and
   never overwrite an existing version.
-- **BTW dependency mismatch:** a migrated BTW cannot depend on unpublished API 5 under `^0.41.0`.
-  Mitigation: gate after Kit `0.42.x` is visible and add a bounded `^0.42.0` dependency only in the
-  successful migration.
+- **BTW dependency mismatch:** a migrated BTW cannot depend on unpublished API 5 under `^0.41.0`,
+  and unchanged BTW `0.42.0` is selected by the shared-release fallback. Mitigation: gate after Kit
+  `0.42.x` is visible, add bounded `^0.42.0`, bump BTW alone to unused patch `0.42.1`, then publish.
 - **BTW capability loss:** a generic review/menu can erase editor or selection behavior. Mitigation:
   characterize invariants first and accept a documented no-go.
 
@@ -165,8 +168,9 @@ components rather than approximating behavior.
 - If publication is partial, preserve every published artifact, inventory missing packages with
   `npm view`, and resume only the missing versions. If npm shows a dist-tag but `npm view` returns 404,
   use `just npm-public <package>` after confirming the package exists.
-- If BTW's intended version was already published before migration, do not reuse it. Keep BTW on its
-  current implementation and schedule the migration for the next shared version.
+- Shared release `0.42.0` intentionally publishes BTW unchanged. A successful migration must use the
+  next unused BTW patch (expected `0.42.1`); if that patch already exists, derive another unused
+  version and never overwrite registry bytes.
 - A BTW no-go requires no runtime rollback: retain the specialized components, record evidence, and
   close the roadmap gate explicitly.
 
@@ -283,26 +287,44 @@ components rather than approximating behavior.
   test output. Evidence: Phase 3 and its success metric now mark named adoption complete, explicitly
   retain inventoried root owners, keep BTW/release open, record the two-consumer decision, and retain
   the verified 1,937-test regression count.
-- [ ] Open and merge a cleanup/roadmap PR only when it contains a real independently reviewable
+- [x] Open and merge a cleanup/roadmap PR only when it contains a real independently reviewable
   deletion or canonical roadmap update; verify CI passes and `main` is clean before release preflight.
+  Evidence: docs-only PR #490 merged as `db74305` after CI and all CodeQL checks passed; synchronized
+  `main` was clean before branch `chore/pi-tui-kit-release-preflight` began.
 
 ### 5. Preflight and publish the shared minor release
 
-- [ ] Fetch the latest `origin/main`, recompute the previous stable tag and all changed publish roots,
+- [x] Fetch the latest `origin/main`, recompute the previous stable tag and all changed publish roots,
   and verify Pi TUI Kit, Stamp, and Image Drop are selected while BTW is not; if BTW is selected or the
   list differs materially from reviewed evidence, stop and revise the release/BTW sequence before any
-  tag is created.
-- [ ] Derive the shared minor version with the repository version script in a disposable copy or by
+  tag is created. Evidence/revision: 11 roots changed, but both pinned-npm simulation and historical
+  `v0.41.0` verification show the safe selector fallback publishes all 23 workspaces, including
+  unchanged BTW. The sequence is revised above: publish BTW `0.42.0` unchanged and use `0.42.1` only
+  after a successful post-release gate.
+- [x] Derive the shared minor version with the repository version script in a disposable copy or by
   inspecting the current highest workspace version; verify the expected result is `0.42.0`, package
   versions are not edited in the working tree, and no target `name@version` already exists on npm.
-- [ ] Run `just doctor-all`, verify npm identity, registry, visibility, and current versions for every
+  Evidence: isolated shared clones using repository-pinned npm derive `0.42.0`; all 23 registry queries
+  confirm the target is unused, and the working tree retains source version `0.41.0`.
+- [x] Harden `.github/workflows/bump-version.yml` and `publish.yml` to install and verify the exact
+  `packageManager` npm before lockfile or registry work; verify a red-first repository-script test now
+  passes and the preflight simulation runs npm `12.0.2` rather than runner-default npm 11.
+- [x] Run `just doctor-all`, verify npm identity, registry, visibility, and current versions for every
   selected workspace, and resolve any scoped-package visibility anomaly before release approval.
-- [ ] Run `npm run check` sequentially, dry-pack every selected workspace, inspect each `files` boundary
+  Evidence: all 23 packages are public at `0.41.0` on `https://registry.npmjs.org/` with no visibility
+  anomaly. Local npm is intentionally unauthenticated (E401); trusted GitHub OIDC/provenance remains
+  the publishing identity and will be verified by the workflow, as in the prior release.
+- [x] Run `npm run check` sequentially, dry-pack every selected workspace, inspect each `files` boundary
   and dependency range, and run `just pack-tui-kit`, `just pack-stamp`, and `just pack-image-drop` as
   named evidence; verify no source tests, private files, or bundled Pi peers leak into tarballs.
-- [ ] Install the actual Kit tarball into a disposable non-workspace fixture and verify Node plus strict
+  Evidence: the workflow-hardening root gate passes 1,938 tests; all 23 selected workspaces dry-pack;
+  Kit/Stamp/Image Drop contain 35/9/23 expected files, and all manifests exclude tests, node_modules,
+  and private control paths. Named recipes use the same workspace pack commands.
+- [x] Install the actual Kit tarball into a disposable non-workspace fixture and verify Node plus strict
   NodeNext TypeScript resolve production and `/testing` imports, menu API version 5, adaptive review,
-  exact runtime exports, external Pi peers, and unchanged production compatibility.
+  exact runtime exports, external Pi peers, and unchanged production compatibility. Evidence: a real
+  35-file tarball installation passes strict NodeNext compilation, exact two-root runtime exports,
+  API 5, external Pi 0.83 peers, a seven-row adaptive TUI budget, and close-result behavior.
 - [ ] Present the exact version, selected package list/order, checks, tarball evidence, and rollback
   status to the user and obtain explicit approval immediately before triggering the irreversible
   release workflow.
@@ -320,9 +342,9 @@ components rather than approximating behavior.
 
 ### 6. Rerun the BTW gate against the published Kit
 
-- [ ] Confirm the shared release omitted `@narumitw/pi-btw@<version>` and that repository BTW remains
-  behaviorally identical to `v0.41.0`; if the target BTW version already exists, record the conflict
-  and move any migration to the next shared release rather than reusing a version.
+- [ ] Confirm the shared release published unchanged `@narumitw/pi-btw@0.42.0` and that repository BTW
+  remains behaviorally identical to `v0.41.0`; reserve unused patch `0.42.1` for a successful
+  migration, deriving another unused patch rather than reusing registry bytes if necessary.
 - [ ] Add focused characterization tests for editor text captured before custom UI, editor changes
   observed at completion, post-await restoration, root Back versus Ctrl+C Close, initial question
   selection, preview Back restoration, exact text-range state, narrow/large terminal bounds, resize,
@@ -334,8 +356,9 @@ components rather than approximating behavior.
   invariant, retain specialized code unchanged, run root `npm run check`, and complete Phase 3 with a
   durable no-go decision.
 - [ ] If the gate is go, create a BTW-only branch, add a bounded runtime dependency on the published
-  Kit minor (expected `^0.42.0`), run `npm install` to update the lockfile, and verify boundary checks
-  accept the library dependency without any extension-to-extension edge.
+  Kit minor (expected `^0.42.0`), bump BTW alone to unused patch `0.42.1` with
+  `just bump @narumitw/pi-btw patch`, run `npm install` to update the lockfile, and verify boundary
+  checks accept the library dependency without any extension-to-extension edge.
 - [ ] If the gate is go, replace only `BtwMenuSelector` and `BtwBringToMainPreview` ownership with
   declarative choice/adaptive-review flows, preserve the editor wrapper and generation checks across
   every await, and keep exact character/line selection specialized; verify obsolete classes/tests are
