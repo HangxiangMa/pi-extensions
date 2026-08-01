@@ -1269,7 +1269,7 @@ test("formatAgentCatalog advertises scope variants deterministically and within 
 	}
 });
 
-test("session start refreshes both catalogs and gates project metadata on trust", async () => {
+test("session start refreshes every agent catalog and gates project metadata on trust", async () => {
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-catalog-user-"));
 	const trustedCwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-catalog-trusted-"));
 	const untrustedCwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-catalog-untrusted-"));
@@ -1310,26 +1310,35 @@ test("session start refreshes both catalogs and gates project metadata on trust"
 				spawn: String(
 					mock.tools.filter((tool) => tool.name === "subagent_spawn").at(-1)?.description ?? "",
 				),
+				consult: String(
+					mock.tools.filter((tool) => tool.name === "subagent_consult").at(-1)?.description ?? "",
+				),
 			};
 		};
 		const untrusted = await start(untrustedCwd, false);
-		assert.match(untrusted.blocking, /api-reviewer/);
-		assert.match(untrusted.blocking, /User scout override/);
-		assert.doesNotMatch(
-			untrusted.blocking,
-			/Project-only description|Project scout override|local \[source: project|scout \[source: project/,
-		);
-		assert.doesNotMatch(
-			untrusted.spawn,
-			/Project-only description|Project scout override|scout \[source: project/,
-		);
+		for (const description of Object.values(untrusted)) {
+			assert.match(description, /api-reviewer/);
+			assert.match(description, /User scout override/);
+			assert.doesNotMatch(
+				description,
+				/Project-only description|Project scout override|local \[source: project|scout \[source: project/,
+			);
+		}
 		const trusted = await start(trustedCwd, true);
-		assert.match(trusted.blocking, /local \[source: project/);
-		assert.match(trusted.blocking, /agentScope: "project" or "both"/);
-		assert.match(trusted.spawn, /local \[source: project/);
-		assert.match(trusted.spawn, /Project-only description/);
-		assert.match(trusted.blocking, /Project scout override/);
-		assert.doesNotMatch(trusted.blocking, /untrusted/);
+		for (const description of Object.values(trusted)) {
+			assert.match(description, /local \[source: project/);
+			assert.match(description, /agentScope: "project" or "both"/);
+			assert.match(description, /Project-only description/);
+			assert.match(description, /Project scout override/);
+			assert.doesNotMatch(description, /untrusted/);
+		}
+		const untrustedAgain = await start(untrustedCwd, false);
+		for (const description of Object.values(untrustedAgain)) {
+			assert.doesNotMatch(
+				description,
+				/Project-only description|Project scout override|local \[source: project|scout \[source: project/,
+			);
+		}
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

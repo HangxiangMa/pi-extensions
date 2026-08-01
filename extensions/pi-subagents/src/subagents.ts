@@ -39,6 +39,7 @@ export default function (pi: ExtensionAPI) {
 	const blockingEnabled = settings?.blocking?.enabled !== false;
 	const refreshBlockingCatalog = blockingEnabled ? registerBlockingSubagent(pi) : () => undefined;
 	let refreshStatefulCatalog: (catalog: string) => void = () => undefined;
+	let refreshConsultCatalog: (catalog: string) => void = () => undefined;
 
 	pi.on("session_start", (_event, ctx) => {
 		// Preserve a one-shot migration notice from extension load while refreshing
@@ -57,6 +58,7 @@ export default function (pi: ExtensionAPI) {
 		).text;
 		refreshBlockingCatalog(catalog);
 		refreshStatefulCatalog(catalog);
+		refreshConsultCatalog(catalog);
 	});
 
 	const statefulRuntime = registerStatefulSubagents(pi, {
@@ -73,7 +75,9 @@ export default function (pi: ExtensionAPI) {
 		getConsultResourcePolicy,
 	});
 	if (blockingEnabled) {
-		registerSubagentConsult(pi, { getSettings: () => currentSettings });
+		refreshConsultCatalog = registerSubagentConsult(pi, {
+			getSettings: () => currentSettings,
+		});
 	}
 	registerSubagentConfigCommand(pi, {
 		...statefulRuntime,

@@ -63,11 +63,13 @@ The available tools are:
 - `subagent_inspect` — inspect agent/model/run/runtime metadata without launching work or changing state.
 - `subagent_consult` — run one ephemeral read-only consultation and wait for its answer.
 
-After each session starts, both delegation tools include a bounded parent-facing catalog of the agents
-available in that session. Entries show the source (`built-in`, `user`, or `project`) and the
-`agentScope` needed to invoke them; the `agent` parameters remain unconstrained strings for cwd and
-scope flexibility. The catalog is rebuilt on `/reload` or the next session start, and omitted entries
-are reported explicitly when the catalog exceeds its metadata bounds.
+After each session starts, the descriptions of the registered `subagent`, `subagent_spawn`, and
+`subagent_consult` tools include the same bounded parent-facing catalog of the agents available in
+that session. Entries show the source (`built-in`, `user`, or `project`) and the `agentScope` needed to
+invoke them; the `agent` parameters remain unconstrained strings for cwd and scope flexibility. The
+catalog is rebuilt on
+`/reload` or the next session start, and omitted entries are reported explicitly when the catalog
+exceeds its metadata bounds.
 
 Choose the API by lifecycle:
 
@@ -102,10 +104,11 @@ When registered, the blocking `subagent` tool advertises only blocking guidance.
 are registered, `subagent_spawn` adds detached guidance for the active completion-delivery policy.
 Changing the policy through `/subagents settings` refreshes that guidance immediately.
 
-The same descriptions also advertise the current agent catalog automatically; no preliminary list call is
-needed. Built-ins and user agents appear under the default `agentScope: "user"`. Trusted project
-agents appear separately and explicitly require `agentScope: "project"` or `"both"`; project-authored
-names and descriptions are not read into metadata for untrusted projects. If a project definition
+The `subagent`, `subagent_spawn`, and `subagent_consult` descriptions advertise the current agent
+catalog automatically; no preliminary list call is needed. Built-ins and user agents appear under the
+default `agentScope: "user"`. Trusted project agents appear separately and explicitly require
+`agentScope: "project"` or `"both"`; project-authored names and descriptions are not read into
+metadata for untrusted projects. If a project definition
 shares a name with a user or built-in definition, the user version is the default and the project
 version is used only for `"project"`/`"both"`. A user override of a built-in also shows the
 built-in fallback available with `agentScope: "project"`; `"both"` keeps the user definition. The
@@ -206,7 +209,15 @@ Compatibility: `subagent_manage({ "action": "list" })` remains supported with it
 }
 ```
 
-The actionless schema requires `agent` and `task` and accepts optional `agentScope`, `confirmProjectAgents`, `cwd`, `timeoutMs`, and `thinkingLevel`. Project scope is rejected before discovery when the project is untrusted. A trusted project agent still asks for confirmation by default; non-interactive calls fail closed unless they explicitly send `confirmProjectAgents: false`. Declining an interactive confirmation returns a normal cancelled result without launching or charging a child.
+The actionless schema requires `agent` and `task` and accepts optional `agentScope`,
+`confirmProjectAgents`, `cwd`, `timeoutMs`, and `thinkingLevel`. Any agent resolved from that scope may
+be selected; consultation always intersects its configured tools with the enforced read-only
+allow-list rather than defining a separate read-only agent category. An unknown name fails before
+launch with a bounded name/source list for the requested scope. Project scope is rejected before
+discovery when the project is untrusted. A trusted project agent still asks for confirmation by
+default; non-interactive calls fail closed unless they explicitly send
+`confirmProjectAgents: false`. Declining an interactive confirmation returns a normal cancelled result
+without launching or charging a child.
 
 `consult.resources` controls automatically inherited instruction resources:
 

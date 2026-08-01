@@ -6,12 +6,15 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 	getAgentDir,
+	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import {
 	type AgentConfig,
+	type AgentDiscoveryResult,
 	type AgentScope,
 	type ConsultResourcePolicy,
+	DEFAULT_AGENT_CATALOG_MAX_ITEMS,
 	discoverAgents,
 	isThinkingLevel,
 	type SubagentSettings,
@@ -115,11 +118,12 @@ const READ_ONLY_INSTRUCTION = [
 
 const MINIMAL_CONSULT_SYSTEM_PROMPT =
 	"You are a read-only consultation assistant. Analyze the delegated task using only executor-provided capabilities and return a grounded answer.";
+const MAX_UNKNOWN_AGENT_NAME_BYTES = 128;
 
 export function registerSubagentConsult(
 	pi: ExtensionAPI,
 	options: RegisterSubagentConsultOptions,
-): void {
+): (catalog: string) => void {
 	let generation = 0;
 	const active = new Set<AbortController>();
 	const activeChildren = new Set<Promise<SingleResult>>();
@@ -139,11 +143,12 @@ export function registerSubagentConsult(
 		cancelAndWaitForChildren("Subagent consultation session shut down"),
 	);
 
-	pi.registerTool<typeof SubagentConsultParams, ConsultDetails>({
+	const baseDescription =
+		"Run one ephemeral subagent synchronously under enforced read-only tool and resource policies and return its answer. The child can use only the effective subset of Pi's built-in read, grep, find, and ls tools. Shell commands, file writes, extension tools, detached lifecycle operations, and persistent agent state are disabled.";
+	const definition: ToolDefinition<typeof SubagentConsultParams, ConsultDetails> = {
 		name: "subagent_consult",
 		label: "Consult Read-only Subagent",
-		description:
-			"Run one ephemeral subagent synchronously under enforced read-only tool and resource policies and return its answer. The child can use only the effective subset of Pi's built-in read, grep, find, and ls tools. Shell commands, file writes, extension tools, detached lifecycle operations, and persistent agent state are disabled.",
+		description: baseDescription,
 		promptSnippet: "Consult one constrained read-only subagent and wait for its answer",
 		promptGuidelines: [
 			"Use subagent_consult for bounded reconnaissance, planning, or review whose result is required in the current turn.",
@@ -182,11 +187,33 @@ export function registerSubagentConsult(
 				active.delete(ownedController);
 			}
 		},
-	});
+	};
+	pi.registerTool<typeof SubagentConsultParams, ConsultDetails>(definition);
 	pi.on("tool_result", (event) => {
 		if (event.toolName !== "subagent_consult") return;
 		if ((event.details as ConsultDetails | undefined)?.isError) return { isError: true };
 	});
+	return (catalog: string) => {
+		definition.description = catalog ? `${baseDescription}\n\n${catalog}` : baseDescription;
+		pi.registerTool<typeof SubagentConsultParams, ConsultDetails>(definition);
+	};
+}
+
+function formatAvailableConsultAgents(discovery: AgentDiscoveryResult): string {
+	const listed = discovery.agents.slice(0, DEFAULT_AGENT_CATALOG_MAX_ITEMS);
+	const labels = listed.map(
+		(agent) => `${safeTerminalLine(agent.name, MAX_UNKNOWN_AGENT_NAME_BYTES)} (${agent.source})`,
+	);
+	const omitted =
+		discovery.agents.length - listed.length + (discovery.omittedAgentDefinitions ?? 0);
+	const parts = [labels.join(", ") || "none"];
+	if (omitted > 0) {
+		parts.push(`[${omitted} additional agent definition${omitted === 1 ? "" : "s"} omitted.]`);
+	}
+	if (discovery.metadataDiscoveryIncomplete) {
+		parts.push("[Agent metadata discovery was incomplete; some definitions may be unavailable.]");
+	}
+	return parts.join(" ");
 }
 
 function validateConsultParams(
@@ -270,7 +297,10 @@ async function executeConsult(
 	const discovery = discoverAgents(ctx.cwd, operation.agentScope, settings);
 	const agent = discovery.agents.find((candidate) => candidate.name === operation.agent);
 	if (!agent) {
-		throw new Error(`Unknown subagent definition: ${boundedPrivateText(operation.agent, 256)}`);
+		throw new Error(
+			`Unknown subagent definition: ${boundedPrivateText(operation.agent, 256)}. ` +
+				`Available agents for agentScope "${operation.agentScope}": ${formatAvailableConsultAgents(discovery)}`,
+		);
 	}
 	const setup = resolveConsultSetup(operation, agent, settings, ctx);
 
