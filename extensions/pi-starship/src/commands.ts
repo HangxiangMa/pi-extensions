@@ -1,12 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import {
-	type AutocompleteItem,
-	type SelectItem,
-	SelectList,
-	truncateToWidth,
-	wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import { type PreviewMenuResult, showPreviewActionMenu } from "./command-preview.js";
 import {
 	atomicRestoreConfigDocument,
 	atomicSaveConfigDocument,
@@ -24,15 +19,9 @@ const SUBCOMMANDS: AutocompleteItem[] = [
 
 const MAIN_ACTIONS = {
 	customize: "customize",
-	diagnostics: "diagnostics",
+	configuration: "configuration",
 	help: "help",
-	advanced: "advanced",
-} as const;
-
-const ADVANCED_ACTIONS = {
-	details: "details",
 	restore: "restore",
-	back: "back",
 } as const;
 
 const PREVIEW_ACTIONS = {
@@ -56,10 +45,6 @@ export interface StarshipCommandOptions {
 	getMenuOwner?(): { signal: AbortSignal; isCurrent(): boolean };
 }
 
-interface MenuItem extends SelectItem {
-	value: string;
-}
-
 interface WorkflowOwner {
 	signal: AbortSignal;
 	isCurrent(): boolean;
@@ -81,8 +66,19 @@ export function registerStarshipCommand(pi: ExtensionAPI, options: StarshipComma
 				return;
 			}
 
-			const subcommand = normalized.split(/\s+/u)[0]?.toLowerCase() ?? "";
-			switch (subcommand) {
+			const [subcommand = "", ...trailing] = normalized.split(/\s+/u);
+			const route = subcommand.toLowerCase();
+			if (trailing.length > 0 || !SUBCOMMANDS.some((item) => item.value === route)) {
+				if (canNotify(ctx)) {
+					const reason =
+						trailing.length > 0
+							? `Unexpected arguments for /starship ${safeText(route)}.`
+							: `Unknown /starship subcommand: ${safeText(route)}.`;
+					ctx.ui.notify(`${reason} Usage: /starship [settings|status|help]`, "warning");
+				}
+				return;
+			}
+			switch (route) {
 				case "settings":
 					await editSettings(ctx, options);
 					return;
@@ -92,10 +88,6 @@ export function registerStarshipCommand(pi: ExtensionAPI, options: StarshipComma
 				case "help":
 					showHelp(ctx, options.settingsPath);
 					return;
-				default:
-					if (canNotify(ctx)) {
-						ctx.ui.notify(`Unknown /starship subcommand: ${subcommand}`, "warning");
-					}
 			}
 		},
 	});
@@ -107,31 +99,30 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 		signal: fallbackController.signal,
 		isCurrent: () => !fallbackController.signal.aborted,
 	};
-	type Screen = "main" | "advanced" | "diagnostics" | "details" | "help";
-	type Action = "customize" | "restore" | "back";
+	type Screen = "main" | "configuration" | "help";
+	type Action = "customize" | "restore";
 	const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
 		start: "main",
 		screens: {
 			main: () => {
 				const loaded = options.getLoaded();
-				const state = configurationState(loaded);
-				const health = configurationHealth(loaded);
+				const presentation = configurationPresentation(loaded);
 				return {
 					kind: "actions",
 					title: "pi-starship",
-					lines: [`${state} · ${health}`],
+					lines: [`${presentation.state} · ${presentation.health}`],
 					items: [
 						{
 							id: MAIN_ACTIONS.customize,
 							label: "Customize footer",
-							description: `${state} · preview before applying`,
+							description: `${presentation.state} · preview before applying`,
 							action: "customize",
 						},
 						{
-							id: MAIN_ACTIONS.diagnostics,
-							label: "Check configuration",
-							description: health,
-							to: "diagnostics",
+							id: MAIN_ACTIONS.configuration,
+							label: "Configuration",
+							description: presentation.health,
+							to: "configuration",
 						},
 						{
 							id: MAIN_ACTIONS.help,
@@ -140,61 +131,25 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 							to: "help",
 						},
 						{
-							id: MAIN_ACTIONS.advanced,
-							label: "Advanced",
-							description: "Details and restore controls",
-							to: "advanced",
+							id: MAIN_ACTIONS.restore,
+							label: "Restore built-in…",
+							description: presentation.restoreDescription,
+							disabled: presentation.restoreDisabled,
+							action: "restore",
 						},
 					],
 					hint: "close",
 				};
 			},
-			advanced: () => {
+			configuration: () => {
 				const loaded = options.getLoaded();
-				const alreadyBuiltIn = loaded.rawDocument === BUILT_IN_EXAMPLE;
-				return {
-					kind: "actions",
-					title: "Advanced",
-					lines: [configurationState(loaded)],
-					items: [
-						{
-							id: ADVANCED_ACTIONS.details,
-							label: "Configuration details",
-							description: `${configurationSource(loaded)} · ${fileName(options.settingsPath)}`,
-							to: "details",
-						},
-						{
-							id: ADVANCED_ACTIONS.restore,
-							label: "Restore built-in",
-							description: alreadyBuiltIn
-								? "Already active"
-								: "Preview before replacing the document",
-							action: "restore",
-						},
-						{
-							id: ADVANCED_ACTIONS.back,
-							label: "Back",
-							description: "Return to pi-starship",
-							action: "back",
-						},
-					],
-					hint: "back",
-				};
-			},
-			diagnostics: () => ({
-				kind: "detail",
-				title: "Configuration health",
-				lines: diagnosticLines(options.getLoaded(), false),
-				hint: "back",
-			}),
-			details: () => {
-				const loaded = options.getLoaded();
+				const presentation = configurationPresentation(loaded);
 				return {
 					kind: "detail",
-					title: "Configuration details",
+					title: "Configuration",
 					lines: [
-						`State: ${configurationState(loaded)}`,
-						`Source: ${configurationSource(loaded)}`,
+						`State: ${presentation.state}`,
+						`Source: ${presentation.source}`,
 						`Path: ${safeText(options.settingsPath)}`,
 						...diagnosticLines(loaded, true),
 					],
@@ -206,7 +161,7 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 				title: "pi-starship help",
 				lines: [
 					"Customize footer opens the TOML editor, then previews and confirms before saving.",
-					"Check configuration explains warnings without changing the footer.",
+					"Configuration explains state, source, path, and warnings without changing the footer.",
 					`Settings: ${safeText(options.settingsPath)}`,
 					"Docs: https://github.com/narumiruna/pi-extensions/tree/main/extensions/pi-starship",
 				],
@@ -214,16 +169,19 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 			}),
 		},
 		actions: {
-			customize: async () =>
-				(await editSettings(ctx, options)) ? { kind: "close" } : { kind: "stay" },
+			customize: async () => {
+				const result = await editSettings(ctx, options);
+				return result === "applied" || result === "close" ? { kind: "close" } : { kind: "stay" };
+			},
 			restore: async () => {
-				if (options.getLoaded().rawDocument === BUILT_IN_EXAMPLE) {
-					ctx.ui.notify("The built-in footer configuration is already active.", "info");
+				const presentation = configurationPresentation(options.getLoaded());
+				if (presentation.restoreDisabled) {
+					ctx.ui.notify(presentation.restoreDescription, "info");
 					return { kind: "stay" };
 				}
-				return (await restoreBuiltIn(ctx, options)) ? { kind: "close" } : { kind: "stay" };
+				const result = await restoreBuiltIn(ctx, options);
+				return result === "applied" || result === "close" ? { kind: "close" } : { kind: "stay" };
 			},
-			back: async () => ({ kind: "back" }),
 		},
 	});
 	try {
@@ -240,17 +198,17 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 async function editSettings(
 	ctx: ExtensionCommandContext,
 	options: StarshipCommandOptions,
-): Promise<boolean> {
+): Promise<"applied" | "cancel" | "close"> {
 	const owner = workflowOwner(options);
-	if (!isCurrentOwner(owner)) return false;
+	if (!isCurrentOwner(owner)) return "cancel";
 	if (ctx.mode !== "tui") {
 		if (ctx.hasUI) ctx.ui.notify(`Edit settings manually: ${options.settingsPath}`, "info");
-		return false;
+		return "cancel";
 	}
 	let draft = options.getLoaded().rawDocument ?? BUILT_IN_EXAMPLE;
 	while (true) {
 		const edited = await ctx.ui.editor("Customize footer — close to preview", draft);
-		if (!isCurrentOwner(owner) || edited === undefined) return false;
+		if (!isCurrentOwner(owner) || edited === undefined) return "cancel";
 		draft = edited;
 		let validated: LoadedStarshipConfig;
 		try {
@@ -263,33 +221,34 @@ async function editSettings(
 				() => [safeText(formatError(error)), "The current footer has not changed."],
 				[
 					{ value: PREVIEW_ACTIONS.edit, label: "Continue editing" },
-					{ value: PREVIEW_ACTIONS.cancel, label: "Back" },
+					{ value: PREVIEW_ACTIONS.cancel, label: "Discard draft" },
 				],
+				owner.signal,
 			);
-			if (!isCurrentOwner(owner)) return false;
-			if (action === PREVIEW_ACTIONS.edit) continue;
-			return false;
+			if (!isCurrentOwner(owner)) return "cancel";
+			if (action?.kind === "closed") return "close";
+			if (selectedPreviewAction(action) === PREVIEW_ACTIONS.edit) continue;
+			return "cancel";
 		}
 
 		const result = await reviewAndApply(ctx, options, validated, "Footer preview", false, owner);
 		if (result === "edit") continue;
-		return result === "applied";
+		return result;
 	}
 }
 
 async function restoreBuiltIn(
 	ctx: ExtensionCommandContext,
 	options: StarshipCommandOptions,
-): Promise<boolean> {
+): Promise<"applied" | "cancel" | "close"> {
 	const owner = workflowOwner(options);
-	if (!isCurrentOwner(owner)) return false;
+	if (!isCurrentOwner(owner)) return "cancel";
 	const validated = (options.validate ?? validateConfigDocument)(
 		options.settingsPath,
 		BUILT_IN_EXAMPLE,
 	);
-	return (
-		(await reviewAndApply(ctx, options, validated, "Restore preview", true, owner)) === "applied"
-	);
+	const result = await reviewAndApply(ctx, options, validated, "Restore preview", true, owner);
+	return result === "edit" ? "cancel" : result;
 }
 
 async function reviewAndApply(
@@ -299,26 +258,38 @@ async function reviewAndApply(
 	title: string,
 	restore: boolean,
 	owner: WorkflowOwner,
-): Promise<"applied" | "edit" | "cancel"> {
+): Promise<"applied" | "edit" | "cancel" | "close"> {
 	while (true) {
 		const selection = await showPreviewActionMenu(
 			ctx,
 			title,
-			(width) => previewBody(ctx, options, validated, width),
+			(width) =>
+				restore
+					? restorePreviewBody(ctx, options, validated, width)
+					: previewBody(ctx, options, validated, width),
 			[
-				{ value: PREVIEW_ACTIONS.continue, label: "Continue to apply" },
+				{
+					value: PREVIEW_ACTIONS.continue,
+					label: restore ? "Replace with built-in…" : "Apply changes…",
+				},
 				...(restore ? [] : [{ value: PREVIEW_ACTIONS.edit, label: "Continue editing" }]),
-				{ value: PREVIEW_ACTIONS.cancel, label: "Cancel" },
+				{
+					value: PREVIEW_ACTIONS.cancel,
+					label: restore ? "Cancel" : "Discard draft",
+				},
 			],
+			owner.signal,
 		);
 		if (!isCurrentOwner(owner)) return "cancel";
-		if (selection === PREVIEW_ACTIONS.edit) return "edit";
-		if (selection !== PREVIEW_ACTIONS.continue) return "cancel";
+		if (selection?.kind === "closed") return "close";
+		const selected = selectedPreviewAction(selection);
+		if (selected === PREVIEW_ACTIONS.edit) return "edit";
+		if (selected !== PREVIEW_ACTIONS.continue) return "cancel";
 
 		const confirmed = await ctx.ui.confirm(
 			restore ? "Restore built-in footer?" : "Apply footer changes?",
 			restore
-				? `Replace ${options.settingsPath} with the built-in configuration?`
+				? `Replace ${safeText(options.settingsPath)} entirely with the built-in configuration? All custom settings, unknown fields, and comments will be removed. No backup is kept after success.`
 				: "Save this configuration and apply it immediately?",
 		);
 		if (!isCurrentOwner(owner)) return "cancel";
@@ -395,6 +366,23 @@ function restorePreviousConfiguration(
 	}
 }
 
+function restorePreviewBody(
+	ctx: ExtensionCommandContext,
+	options: StarshipCommandOptions,
+	loaded: LoadedStarshipConfig,
+	width: number,
+): string[] {
+	const current = configurationPresentation(options.getLoaded());
+	return [
+		`Current: ${current.state}`,
+		`Path: ${safeText(options.settingsPath)}`,
+		"The entire settings document will be replaced, including custom settings, unknown fields, and comments.",
+		"No backup is kept after a successful restore.",
+		"",
+		...previewBody(ctx, options, loaded, width),
+	];
+}
+
 function previewBody(
 	ctx: ExtensionCommandContext,
 	options: StarshipCommandOptions,
@@ -417,46 +405,10 @@ function previewBody(
 	return [...lines, "", warning];
 }
 
-async function showPreviewActionMenu(
-	ctx: ExtensionCommandContext,
-	title: string,
-	body: (width: number) => readonly string[],
-	items: readonly MenuItem[],
-): Promise<string | null> {
-	return ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
-		const list = new SelectList([...items], Math.min(items.length, 8), {
-			selectedPrefix: (text) => theme.fg("accent", text),
-			selectedText: (text) => theme.fg("accent", text),
-			description: (text) => theme.fg("muted", text),
-			scrollInfo: (text) => theme.fg("dim", text),
-			noMatch: (text) => theme.fg("warning", text),
-		});
-		list.onSelect = (item) => done(String(item.value));
-		list.onCancel = () => done(null);
-		return {
-			render(width: number): string[] {
-				const safeWidth = Math.max(1, width);
-				const content = [
-					...wrapTextWithAnsi(theme.fg("accent", theme.bold(title)), safeWidth),
-					...body(safeWidth).flatMap((line) => (line ? wrapTextWithAnsi(line, safeWidth) : [""])),
-					"",
-					...list.render(safeWidth),
-					...wrapTextWithAnsi(
-						theme.fg("dim", "↑↓ navigate • enter select • esc cancel"),
-						safeWidth,
-					),
-				];
-				return content.map((line) => truncateToWidth(line, safeWidth));
-			},
-			invalidate() {
-				list.invalidate();
-			},
-			handleInput(data: string) {
-				list.handleInput(data);
-				tui.requestRender();
-			},
-		};
-	});
+function selectedPreviewAction<Value extends string>(
+	result: PreviewMenuResult<Value> | undefined,
+): Value | null {
+	return result?.kind === "selected" ? result.value : null;
 }
 
 function diagnosticLines(loaded: LoadedStarshipConfig, includeSummary: boolean): string[] {
@@ -471,13 +423,44 @@ function diagnosticLines(loaded: LoadedStarshipConfig, includeSummary: boolean):
 	];
 }
 
-function configurationState(loaded: LoadedStarshipConfig): string {
-	if (loaded.source === "built-in") return "Built-in fallback";
-	return loaded.rawDocument === BUILT_IN_EXAMPLE ? "Built-in footer" : "Custom footer";
+interface ConfigurationPresentation {
+	state: string;
+	source: string;
+	health: string;
+	restoreDisabled: boolean;
+	restoreDescription: string;
 }
 
-function configurationSource(loaded: LoadedStarshipConfig): string {
-	return loaded.source === "user" ? "User file" : "Built-in fallback";
+function configurationPresentation(loaded: LoadedStarshipConfig): ConfigurationPresentation {
+	const healthyMissing =
+		loaded.source === "built-in" &&
+		loaded.rawDocument === undefined &&
+		loaded.diagnostics.length === 0;
+	const savedBuiltIn = loaded.source === "user" && loaded.rawDocument === BUILT_IN_EXAMPLE;
+	const fallback = loaded.source === "built-in" && loaded.diagnostics.length > 0;
+	return {
+		state: healthyMissing
+			? "Built-in defaults"
+			: savedBuiltIn
+				? "Saved built-in configuration"
+				: fallback
+					? "Built-in fallback"
+					: "Custom configuration",
+		source: healthyMissing
+			? "No settings file"
+			: loaded.source === "user"
+				? "User file"
+				: "Built-in fallback",
+		health: configurationHealth(loaded),
+		restoreDisabled: healthyMissing || savedBuiltIn,
+		restoreDescription: healthyMissing
+			? "Already using defaults · no file to replace"
+			: savedBuiltIn
+				? "Built-in configuration already saved"
+				: fallback
+					? "Preview before replacing invalid settings"
+					: "Preview before replacing the document",
+	};
 }
 
 function configurationHealth(loaded: LoadedStarshipConfig): string {
@@ -485,10 +468,6 @@ function configurationHealth(loaded: LoadedStarshipConfig): string {
 	if (errors > 0) return `${errors} error${errors === 1 ? "" : "s"}`;
 	const warnings = loaded.diagnostics.length;
 	return warnings === 0 ? "Healthy" : `${warnings} warning${warnings === 1 ? "" : "s"}`;
-}
-
-function fileName(path: string): string {
-	return path.replaceAll("\\", "/").split("/").at(-1) || path;
 }
 
 function showStatus(ctx: ExtensionCommandContext, options: StarshipCommandOptions) {

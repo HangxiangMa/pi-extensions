@@ -55,11 +55,21 @@ Open the interactive menu in TUI mode:
 /starship
 ```
 
-Choose **Customize footer** to edit the TOML. Closing the editor validates the draft and opens a width-aware preview; saving happens only after a separate confirmation. Confirmed changes are atomically saved and applied immediately. Manual TOML edits load on the next `session_start`, including `/reload` and session replacement. Editor cancellation, preview cancellation, invalid drafts, write failures, and runtime application failures preserve the previous file and effective footer.
+Choose **Customize footer** to edit the TOML. Closing the editor validates the draft and opens an
+adaptive, scrollable preview whose **Apply changes…**, **Continue editing**, and **Discard draft**
+actions remain reachable in short or narrow terminals. Saving happens only after a separate
+confirmation. Confirmed changes are atomically saved and applied immediately. Manual TOML edits load
+on the next `session_start`, including `/reload` and session replacement. Editor cancellation, preview
+cancellation, component disposal, invalid drafts, write failures, and runtime application failures
+preserve the previous file and effective footer.
 
-The standard **Advanced** menu is one level deep and contains configuration details plus **Restore
-built-in**. Standard diagnostics, details, and help are Back-navigable detail screens. Restore still
-shows the specialized width-aware preview and requires explicit overwrite confirmation.
+The shallow main menu also exposes **Configuration**, **Help**, and **Restore built-in…**.
+Configuration combines state, source, path, health, and diagnostics. A healthy missing file is shown
+as **Built-in defaults**, while **Built-in fallback** is reserved for read or parse errors. Restore is
+disabled when no settings document exists or the exact built-in document is already saved. For a
+custom or invalid document, Restore previews the result and warns that the complete document,
+including custom settings, unknown fields, and comments, will be replaced without a post-success
+backup before asking for confirmation.
 
 ### 📝 Example
 
@@ -247,8 +257,8 @@ Choose one migration:
    `fg:#e3e5e5 bg:#769ff0`.
 2. Define every needed alias under your own `[palettes.<name>]` table and explicitly select it with
    `palette = "<name>"`.
-3. Use **Advanced → Restore built-in** to preview and replace the document with the new plain
-   nine-module configuration.
+3. Use **Restore built-in…** from `/starship` to review and replace the complete document with the new
+   plain nine-module configuration.
 
 There is no hidden compatibility overlay or automatic migration.
 
@@ -521,12 +531,16 @@ Package's explicitly documented Cargo lookup is the only ancestor walk and is ca
 | `/starship status` | Show config source/path and diagnostics |
 | `/starship help` | Show command and configuration help |
 
-The standard main menu keeps frequent goals visible: **Customize footer**, **Check configuration**,
-and **Help**. It shows whether the footer uses the built-in or custom document and displays the
-current warning count. **Advanced** contains uncommon details and the confirmed restore action, with
-an explicit **Back** path. The TOML editor and live footer previews remain specialized extension UI.
+The standard main menu keeps four goals on one level: **Customize footer**, **Configuration**,
+**Help**, and **Restore built-in…**. It shows whether the footer uses built-in defaults, a saved
+built-in document, a custom document, or an error-driven fallback, together with the current health.
+Restore remains last and unavailable when there is no document to replace. The TOML editor and
+adaptive live footer previews remain specialized extension UI; preview hints follow Pi's injected
+keybindings, Escape discards the draft or restore review, and Ctrl+C closes the whole workflow.
 
-Status and help remain safe in TUI, RPC, JSON, and print modes. RPC receives notifications but never opens custom terminal UI; print and JSON modes produce no ad hoc output. Footer/timer/Git lifecycle work starts only in TUI mode.
+The direct routes accept no trailing arguments. Status and help remain safe in TUI, RPC, JSON, and
+print modes. RPC receives notifications but never opens custom terminal UI; print and JSON modes
+produce no ad hoc output. Footer/timer/Git lifecycle work starts only in TUI mode.
 
 ## 📐 Scope
 
@@ -552,7 +566,8 @@ Keep `extension_status` last in the catalog so arbitrary third-party statuses fo
 - `src/index.ts` — Pi package entrypoint.
 - `src/pi-starship.ts` — extension lifecycle, cached refresh binding, live preview, and footer.
 - `src/usage.ts` — native-aligned session usage and cache aggregation.
-- `src/commands.ts` — goal-oriented menu, preview/confirmation, diagnostics, and compatibility routes.
+- `src/commands.ts` — goal-oriented menu, preview/confirmation flow, diagnostics, and compatibility routes.
+- `src/command-preview.ts` — adaptive, scrollable, keybinding-aware preview action surface.
 - `src/config.ts` — TOML loading, draft validation, defaults, atomic persistence, and rollback.
 - `src/format/` — native format/style parser and renderer.
 - `src/modules/` — domain module definitions, ordered registry, reachability, and width-aware renderer.
