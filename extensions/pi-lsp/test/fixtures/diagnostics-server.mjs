@@ -30,6 +30,14 @@ function publish(uri, diagnostics) {
 
 function handle(message) {
 	if (message.method === "initialize") {
+		if (scenario === "require-environment" && process.env.PI_LSP_TEST_ENV !== "forwarded") {
+			send({
+				jsonrpc: "2.0",
+				id: message.id,
+				error: { code: -32002, message: "required server environment was not forwarded" },
+			});
+			return;
+		}
 		send({
 			jsonrpc: "2.0",
 			id: message.id,

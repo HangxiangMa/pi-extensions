@@ -119,14 +119,23 @@ Ensure the Go install directory (`$GOBIN` or `$(go env GOPATH)/bin`) is also on 
 
 Custom config is resolved in this order:
 
-1. `PI_LSP_CONFIG` as inline JSON or a path to a JSON file
-2. `<workspace>/.pi/pi-lsp.json`, only when Pi trusts the current project
-3. `~/.pi/agent/pi-lsp.json`
-4. the built-in server catalog
+1. `<workspace>/.pi/pi-lsp.json`, only when Pi trusts the current project
+2. `~/.pi/agent/pi-lsp.json`
+3. the built-in server catalog
 
-`PI_LSP_CONFIG` only accepts JSON or a JSON file path; JavaScript and TypeScript config files are not evaluated. An untrusted project's canonical and legacy files are ignored. A `root` passed to an LSP tool selects files and the server working directory; it does not grant that directory authority to provide project settings. Project settings always come from the trusted Pi session workspace.
+An untrusted project's canonical and legacy files are ignored. A `root` passed to an LSP tool selects files and the server working directory; it does not grant that directory authority to provide project settings. Project settings always come from the trusted Pi session workspace.
 
 Compatibility: user-scoped `lsp.json` and trusted project-scoped `.pi/lsp.json` remain readable with a warning and are never modified automatically; rename them to their canonical `pi-lsp.json` names. New paths take precedence when both names exist.
+
+pi-lsp-specific environment settings have been removed. Move their values into canonical JSON:
+
+| Removed setting | JSON replacement |
+| --- | --- |
+| `PI_LSP_CONFIG` inline JSON | Save the same object as user `pi-lsp.json` or trusted project `.pi/pi-lsp.json` |
+| `PI_LSP_CONFIG=/path/to/file.json` | Move or copy that configuration to one of the canonical paths above |
+| `PI_<SERVER>_LSP_COMMAND` | Set the server's `command` to an argv array, with one string per executable or argument |
+
+`servers[].env` remains supported because it configures the launched LSP child process rather than pi-lsp itself.
 
 Providing custom config replaces the default server map. The following `pi-lsp.json` example intentionally keeps five selected servers:
 
@@ -194,7 +203,7 @@ Each server entry supports:
 
 - `command`: argv array used to start the LSP server.
 - `extensions`: file extensions that should route to this server.
-- `env`: extra environment variables for the LSP server process.
+- `env`: environment overrides for the LSP server process. The child inherits Pi's environment, then applies these values; an `env.PATH` value is also used to resolve `command[0]`.
 - `initialization`: LSP initialization options and workspace configuration values.
 - `skipDirectories`: additional directory names to exclude from recursive discovery. Explicitly requested paths remain available.
 - `diagnosticsSettleMs`: positive number of milliseconds without another push-diagnostics publication before using the latest result. Defaults to `800`; the built-in intelephense route uses `4000`. The global timeout remains the upper bound.
@@ -207,12 +216,17 @@ Global options:
 
 pi-lsp infers `languageId` from common extensions and falls back to the extension without the leading dot.
 
-Per-server command overrides still use the normalized server name:
+For example, run the configured Ruff server through the project's uv environment without shell-string parsing:
 
-```bash
-PI_TY_LSP_COMMAND="uvx ty server" \
-PI_RUFF_LSP_COMMAND="uvx ruff server" \
-pi -e ./extensions/pi-lsp
+```json
+{
+  "servers": {
+    "ruff": {
+      "command": ["uv", "run", "--no-sync", "ruff", "server"],
+      "extensions": [".py", ".pyi"]
+    }
+  }
+}
 ```
 
 ## ⚠️ Tool changes

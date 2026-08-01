@@ -24,11 +24,9 @@ import {
 } from "../src/adapters.js";
 import {
 	commandExists,
-	commandFromEnv,
 	commandPathValue,
 	mergeEnvironment,
 	resolveCommandPath,
-	splitCommand,
 } from "../src/command.js";
 import { collectSupportedFiles, directoryUri, resolveSupportedFile } from "../src/files.js";
 import { resolveSpawnCommand } from "../src/lsp-client.js";
@@ -105,9 +103,7 @@ test("default catalog routes common languages and skips generated trees", () => 
 	writeFileSync(path.join(project, "target", "generated.rs"), "fn generated() {}\n");
 	writeFileSync(path.join(project, "vendor", "dependency.go"), "package dependency\n");
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-	const previousConfig = process.env.PI_LSP_CONFIG;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
-	delete process.env.PI_LSP_CONFIG;
 
 	try {
 		const { adapters } = loadRuntime(project);
@@ -365,13 +361,11 @@ test("default catalog routes common languages and skips generated trees", () => 
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		if (previousConfig === undefined) delete process.env.PI_LSP_CONFIG;
-		else process.env.PI_LSP_CONFIG = previousConfig;
 		rmSync(root, { recursive: true, force: true });
 	}
 });
 
-test("command helpers split shell-like strings and honor environment overrides", () => {
+test("command helpers honor server environments and platform wrappers", () => {
 	const windowsBin = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-windows-bin-"));
 	const commandShim = path.join(windowsBin, "language-server.cmd");
 	writeFileSync(commandShim, "@echo off\r\n");
@@ -400,22 +394,6 @@ test("command helpers split shell-like strings and honor environment overrides",
 		command: "language_server.sh",
 		args: [],
 	});
-	assert.deepEqual(splitCommand("cmd --flag 'two words' a\\ b"), [
-		"cmd",
-		"--flag",
-		"two words",
-		"a b",
-	]);
-	process.env.PI_TEST_LSP_COMMAND = "custom --stdio";
-	try {
-		assert.deepEqual(commandFromEnv("PI_TEST_LSP_COMMAND", { command: "fallback", args: [] }), {
-			command: "custom",
-			args: ["--stdio"],
-		});
-	} finally {
-		delete process.env.PI_TEST_LSP_COMMAND;
-	}
-
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-command-"));
 	const executable = path.join(root, "tool");
 	writeFileSync(executable, "#!/bin/sh\nexit 0\n");
@@ -442,6 +420,7 @@ test("LSP config uses canonical paths while preserving project legacy files", ()
 	mkdirSync(path.join(project, ".pi"), { recursive: true });
 	mkdirSync(agentDir, { recursive: true });
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const previousConfig = process.env.PI_LSP_CONFIG;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	const config = (name: string) => ({
 		servers: { [name]: { command: [name], extensions: [`.${name}`] } },
@@ -478,10 +457,11 @@ test("LSP config uses canonical paths while preserving project legacy files", ()
 		assert.equal(existsSync(userLegacy), true);
 
 		process.env.PI_LSP_CONFIG = JSON.stringify(config("explicit"));
-		assert.equal(loadTrustedConfig().servers[0]?.name, "explicit");
-		assert.equal(consumeLspConfigNotice(), undefined);
+		assert.equal(loadTrustedConfig().servers[0]?.name, "fallback");
+		assert.match(consumeLspConfigNotice() ?? "", /using legacy lsp\.json/i);
 	} finally {
-		delete process.env.PI_LSP_CONFIG;
+		if (previousConfig === undefined) delete process.env.PI_LSP_CONFIG;
+		else process.env.PI_LSP_CONFIG = previousConfig;
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		rmSync(root, { recursive: true, force: true });
@@ -553,6 +533,7 @@ test("LSP project config requires trust across loaders and command handlers", as
 	mkdirSync(path.join(project, ".pi"), { recursive: true });
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	const previousConfig = process.env.PI_LSP_CONFIG;
+	const previousUserCommand = process.env.PI_USER_LSP_COMMAND;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	delete process.env.PI_LSP_CONFIG;
 	const config = (name: string) => ({
@@ -569,14 +550,17 @@ test("LSP project config requires trust across loaders and command handlers", as
 		assert.equal(loadConfig(project, { projectTrusted: false }).servers[0]?.name, "user");
 
 		process.env.PI_LSP_CONFIG = JSON.stringify(config("explicit"));
-		assert.equal(loadConfig(project, { projectTrusted: false }).servers[0]?.name, "explicit");
+		assert.equal(loadConfig(project, { projectTrusted: false }).servers[0]?.name, "user");
+		assert.equal(loadConfig(project, { projectTrusted: true }).servers[0]?.name, "legacy-project");
 		delete process.env.PI_LSP_CONFIG;
+		process.env.PI_USER_LSP_COMMAND = "overridden-user --stdio";
 
 		const mock = createMockPi();
 		lsp(mock.pi);
 		const context = createMockContext({ cwd: project, isProjectTrusted: () => false });
 		await mock.commands.get("lsp")?.handler("", context.ctx);
-		assert.match(context.notifications.at(-1)?.message ?? "", /user LSP command/u);
+		assert.match(context.notifications.at(-1)?.message ?? "", /user LSP command: user/u);
+		assert.doesNotMatch(context.notifications.at(-1)?.message ?? "", /overridden-user/u);
 		assert.doesNotMatch(context.notifications.at(-1)?.message ?? "", /legacy-project/u);
 
 		const diagnostics = mock.tools.find((tool) => tool.name === "lsp_diagnostics");
@@ -589,6 +573,8 @@ test("LSP project config requires trust across loaders and command handlers", as
 	} finally {
 		delete process.env.PI_LSP_CONFIG;
 		if (previousConfig !== undefined) process.env.PI_LSP_CONFIG = previousConfig;
+		if (previousUserCommand === undefined) delete process.env.PI_USER_LSP_COMMAND;
+		else process.env.PI_USER_LSP_COMMAND = previousUserCommand;
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		rmSync(root, { recursive: true, force: true });
@@ -605,15 +591,17 @@ test("LSP config applies safe server-specific skip directories", () => {
 	writeFileSync(path.join(project, "src", "main.foo"), "source\n");
 	writeFileSync(path.join(project, "generated", "output.foo"), "generated\n");
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-	const previousConfig = process.env.PI_LSP_CONFIG;
+	const userConfig = path.join(agentDir, "pi-lsp.json");
+	const writeConfig = (config: unknown) => writeFileSync(userConfig, JSON.stringify(config));
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 
 	try {
-		process.env.PI_LSP_CONFIG = JSON.stringify({
+		writeConfig({
 			servers: {
 				custom: {
 					command: ["custom-lsp"],
 					extensions: [".foo"],
+					env: { LSP_LOG: "debug", PATH: path.join(project, "lsp-bin") },
 					skipDirectories: ["generated"],
 					diagnosticsSettleMs: 250,
 					pushDiagnosticsGraceMs: 375,
@@ -627,6 +615,10 @@ test("LSP config applies safe server-specific skip directories", () => {
 		assert.equal(adapter.diagnosticsSettleMs, 250);
 		assert.equal(adapter.pushDiagnosticsGraceMs, 375);
 		assert.equal(adapter.pullDiagnosticsGraceMs, 500);
+		assert.deepEqual(adapter.env, {
+			LSP_LOG: "debug",
+			PATH: path.join(project, "lsp-bin"),
+		});
 		assert.deepEqual(collectSupportedFiles(adapter, project, undefined, 50), [
 			path.join(project, "src", "main.foo"),
 		]);
@@ -634,7 +626,7 @@ test("LSP config applies safe server-specific skip directories", () => {
 			path.join(project, "generated", "output.foo"),
 		]);
 
-		process.env.PI_LSP_CONFIG = JSON.stringify({
+		writeConfig({
 			servers: {
 				custom: {
 					command: ["custom-lsp"],
@@ -645,7 +637,7 @@ test("LSP config applies safe server-specific skip directories", () => {
 		});
 		assert.throws(() => loadConfig(project), /skipDirectories.*directory names/);
 
-		process.env.PI_LSP_CONFIG = JSON.stringify({
+		writeConfig({
 			servers: {
 				custom: {
 					command: ["custom-lsp"],
@@ -656,7 +648,7 @@ test("LSP config applies safe server-specific skip directories", () => {
 		});
 		assert.throws(() => loadConfig(project), /diagnosticsSettleMs.*positive number/);
 
-		process.env.PI_LSP_CONFIG = JSON.stringify({
+		writeConfig({
 			servers: {
 				custom: {
 					command: ["custom-lsp"],
@@ -669,8 +661,6 @@ test("LSP config applies safe server-specific skip directories", () => {
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		if (previousConfig === undefined) delete process.env.PI_LSP_CONFIG;
-		else process.env.PI_LSP_CONFIG = previousConfig;
 		rmSync(root, { recursive: true, force: true });
 	}
 });
@@ -849,7 +839,6 @@ function testAdapter(name: string, extensions: string[]): LspServerAdapter {
 		isDefault: false,
 		extensions,
 		skipDirectories: new Set(["node_modules"]),
-		commandEnvVar: `PI_${name.toUpperCase()}_COMMAND`,
 		defaultCommand: { command: name, args: [] },
 		missingCommandHint: `install ${name}`,
 		languageIdFor() {

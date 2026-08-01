@@ -82,10 +82,13 @@ async function runCase(caseName, repeat) {
 		...profile.policy,
 	};
 	process.env.PI_CODING_AGENT_DIR = agentDir;
-	process.env.PI_LSP_CONFIG = JSON.stringify({
-		timeout: profile.timeoutMs ?? matrix.timeoutMs,
-		servers: { [profile.name]: serverConfig },
-	});
+	writeFileSync(
+		path.join(agentDir, "pi-lsp.json"),
+		JSON.stringify({
+			timeout: profile.timeoutMs ?? matrix.timeoutMs,
+			servers: { [profile.name]: serverConfig },
+		}),
+	);
 	process.env.PI_OFFLINE = "1";
 
 	const settingsManager = SettingsManager.inMemory({});
