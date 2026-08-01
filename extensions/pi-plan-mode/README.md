@@ -103,11 +103,6 @@ You can also exit directly. Before implementation, direct exit discards the late
 
 Create `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`) to configure Plan mode globally. The file is optional, is read at session start, and is never created automatically.
 
-> **Migration:** `allowedPlanSubagents` has been removed. Plan mode no longer interprets extension-tool
-> arguments, and an existing copy of this field is ignored without rewriting the settings file.
-> Before upgrading, remove any extension/custom tool from `defaultPlanTools` unless you trust the
-> whole effective tool during planning.
-
 ```json
 {
   "thinkingLevel": "inherit",

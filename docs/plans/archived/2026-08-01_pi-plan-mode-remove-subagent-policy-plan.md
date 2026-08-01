@@ -32,8 +32,8 @@ After this removal:
 Removing `allowedPlanSubagents` is a breaking safety change. Existing settings files are never
 rewritten; because Plan-mode settings already ignore unknown top-level fields, the removed field will
 become inert. A user who also keeps a delegation tool in `defaultPlanTools` will therefore trust that
-whole tool. The migration notice must tell users to remove any custom tool they do not trust in full
-before upgrading.
+whole tool. Communicate the break in the implementation PR and release process; per the user's final
+direction, do not retain a package README migration callout.
 
 ## Non-Goals
 
@@ -51,8 +51,8 @@ before upgrading.
 ## Risks
 
 - Existing users may believe `allowedPlanSubagents` still limits a custom tool. Remove current feature
-  documentation, add a concise migration notice that the setting is gone, and mark the implementation
-  PR as breaking.
+  documentation and mark the implementation PR as breaking; do not retain a package README migration
+  callout per the user's final direction.
 - Removing the policy also removes malformed/disallowed-role blocks. Preserve the generic rule that
   custom tools are disabled by default and verify explicit opt-in remains the only activation path.
 - Tightening unknown-field validation to catch the removed setting would break forward compatibility
@@ -88,10 +88,9 @@ release and revert the removal rather than adding a package-specific compatibili
   legacy-file test proves unknown JSON bytes remain unchanged.
 - [x] Update `extensions/pi-plan-mode/README.md`: remove the feature bullet, settings example field,
   and `Allowed Plan subagents` section; strengthen the generic custom-tool text to state that Plan
-  mode never interprets extension-tool arguments and trusts an explicitly enabled tool as a whole;
-  add a short migration notice for the removed public setting without documenting another
-  extension's schema. Evidence: targeted README/source/test search leaves only the bounded migration
-  notice for the removed setting and no foreign tool or schema names.
+  mode never interprets extension-tool arguments and trusts an explicitly enabled tool as a whole.
+  Evidence: after the user's final direction to omit a migration callout, targeted README/source/test
+  search finds no removed-setting, foreign-tool, or foreign-schema names in the active package.
 - [x] Update `docs/implementation-notes/extension-independence-audit.md` to remove the resolved
   `pi-plan-mode` row, change the known runtime-gap count from five to four, and remove
   `allowedPlanSubagents` from the remaining-risk examples. Evidence: the summary says four and the
@@ -115,11 +114,11 @@ release and revert the removal rather than adding a package-specific compatibili
 - [x] Audit the final diff against `AGENTS.md`, `docs/extension-conventions.md`, and
   `docs/extension-settings.md`; use a final targeted search to confirm active `pi-plan-mode` source,
   tests, and current feature documentation contain no `subagent-policy`, `subagent_spawn`, or foreign
-  argument-shape parsing, and that any remaining `allowedPlanSubagents` reference is limited to the
-  migration notice, this plan, or archived history. Evidence: source/test search is clean, the only
-  package match is the migration notice, LSP/Biome report zero diagnostics, and a direct compiled
-  settings assertion proves the removed field is inert. The settings audit found no writes or
-  concurrency changes; cancellation, disposal, replacement, and shutdown own no changed async flow.
+  argument-shape parsing, and that any remaining `allowedPlanSubagents` reference is limited to this
+  archived plan or historical records. Evidence: active package search is clean, LSP/Biome report
+  zero diagnostics, and a direct compiled settings assertion proves the removed field is inert. The
+  settings audit found no writes or concurrency changes; cancellation, disposal, replacement, and
+  shutdown own no changed async flow.
   The breaking safety migration is accepted and documented; version bump, publication, and live
   release validation remain intentionally unverified release work.
 
@@ -131,7 +130,7 @@ release and revert the removal rather than adding a package-specific compatibili
 - [x] Extension/custom tools remain disabled by default and are trusted only after explicit generic
   user opt-in, proven by focused hook and tool-selection tests.
 - [x] Existing settings files remain byte-for-byte untouched; the removed field is inert under the
-  existing generic unknown-field behavior, and migration risk is documented as breaking.
+  existing generic unknown-field behavior, and the implementation PR records the breaking behavior.
 - [x] The README and extension-independence audit reflect the new ownership boundary without claiming
   that Plan mode enforces another extension's internal safety.
 - [x] Focused checks, `npm test`, `npm run check`, and `just pack-plan-mode` pass with recorded
