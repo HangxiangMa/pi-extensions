@@ -28,9 +28,11 @@ import {
 	stripPlanModeCompletionCallsFromMessage,
 	stripProposedPlanBlocksFromMessage,
 } from "./message-transform.js";
+import { showPlanModeMenu, showReadyPlanMenu } from "./plan-action-menus.js";
 import {
 	clearPlanModeUi,
 	planModeStatusText as formatPlanModeStatusText,
+	showPlanModePlan,
 	updatePlanModeUi,
 } from "./presentation.js";
 import { buildPlanModePrompt } from "./prompt.js";
@@ -42,6 +44,11 @@ import {
 	planModeQuestionCancelled,
 } from "./question-tool.js";
 import { withoutRequiredPlanModeTools, withRequiredPlanModeTools } from "./required-tools.js";
+import { showSavedPlanMenu } from "./saved-plan-menu.js";
+import {
+	preflightSavedPlanImplementation,
+	savedPlanBlocksNewWorkflow,
+} from "./saved-plan-preflight.js";
 import {
 	configuredThinkingLevel,
 	type PlanModeSettings,
@@ -169,36 +176,49 @@ export default function planMode(
 				return;
 			}
 			if (command === "implement") {
-				if (!state.enabled || !state.latestPlan?.trim()) {
+				if (!(state.enabled && state.latestPlan?.trim()) && !state.savedPlan?.plan.trim()) {
 					ctx.ui.notify("No completed plan is available to implement.", "warning");
 					return;
 				}
-				startImplementation(ctx);
+				await startImplementation(ctx);
+				return;
+			}
+			if (command === "save") {
+				savePlanForLater(ctx);
 				return;
 			}
 			if (command === "exit" || command === "off") {
-				const hadActiveImplementation = state.activeImplementation !== undefined;
+				const notification = state.activeImplementation
+					? "Active implementation plan cleared."
+					: state.savedPlan
+						? "Saved plan cleared."
+						: state.latestPlan
+							? "Plan mode disabled. Proposed plan discarded."
+							: "Plan mode disabled.";
 				exitPlanMode(ctx);
-				ctx.ui.notify(
-					hadActiveImplementation
-						? "Active implementation plan cleared."
-						: "Plan mode disabled. Proposed plan discarded.",
-					"info",
-				);
+				ctx.ui.notify(notification, "info");
 				return;
 			}
 			if (command === "tools") {
+				if (savedPlanBlocksNewWorkflow(ctx, state.savedPlan !== undefined && !state.enabled))
+					return;
 				if (!state.enabled) enterPlanMode(ctx);
 				await showToolSelector(ctx);
 				return;
 			}
 			if (prompt) {
+				if (savedPlanBlocksNewWorkflow(ctx, state.savedPlan !== undefined && !state.enabled))
+					return;
 				enterPlanModeWithPrompt(prompt, ctx);
 				return;
 			}
 			if (!state.enabled) {
 				if (state.activeImplementation && ctx.hasUI) {
 					await showActivePlanMenu(ctx);
+					return;
+				}
+				if (state.savedPlan) {
+					await showSavedPlanActions(ctx);
 					return;
 				}
 				enterPlanMode(ctx);
@@ -225,7 +245,17 @@ export default function planMode(
 		if (loadedSettings.notice) ctx.ui.notify(loadedSettings.notice, "warning");
 		const persistFlagActivation = pi.getFlag("plan") === true && !state.enabled;
 		if (persistFlagActivation) {
-			state = { ...state, enabled: true, activeImplementation: undefined };
+			state = state.savedPlan
+				? {
+						...state,
+						enabled: true,
+						latestPlan: state.savedPlan.plan,
+						latestPlanSource: state.savedPlan.source,
+						awaitingAction: true,
+						savedPlan: undefined,
+						activeImplementation: undefined,
+					}
+				: { ...state, enabled: true, activeImplementation: undefined };
 		}
 		if (state.enabled) {
 			activatePlanModeTools();
@@ -391,6 +421,7 @@ export default function planMode(
 			...state,
 			enabled: true,
 			awaitingAction: false,
+			savedPlan: undefined,
 			activeImplementation: undefined,
 		};
 		activatePlanModeTools();
@@ -426,6 +457,7 @@ export default function planMode(
 			latestPlan: undefined,
 			latestPlanSource: undefined,
 			awaitingAction: false,
+			savedPlan: undefined,
 			activeImplementation: undefined,
 			manualThinkingLevel: undefined,
 		};
@@ -496,8 +528,12 @@ export default function planMode(
 
 	function showStoredPlan(ctx: ExtensionContext) {
 		const readyPlan = state.enabled ? state.latestPlan?.trim() : undefined;
+		const savedPlan = state.savedPlan?.plan.trim();
+		if (savedPlan && (ctx.mode === "print" || ctx.mode === "json")) {
+			throw new Error("Saved plan display is unavailable in print/JSON mode. Use TUI or RPC.");
+		}
 		const activePlan = state.activeImplementation?.plan.trim();
-		const plan = readyPlan ?? activePlan;
+		const plan = readyPlan ?? savedPlan ?? activePlan;
 		if (!plan) {
 			ctx.ui.notify(
 				"No completed plan is available. Use /plan finalize when planning is complete.",
@@ -505,19 +541,12 @@ export default function planMode(
 			);
 			return;
 		}
-		try {
-			pi.sendMessage(
-				{
-					customType: PROPOSED_PLAN_MESSAGE_TYPE,
-					content: `**${readyPlan ? "Proposed Plan" : "Active Implementation Plan"}**\n\n${plan}`,
-					display: true,
-				},
-				{ triggerTurn: false },
-			);
-		} catch (error: unknown) {
-			const detail = error instanceof Error ? error.message : String(error);
-			ctx.ui.notify(`Unable to show completed plan: ${detail}`, "error");
-		}
+		const title = readyPlan
+			? "Proposed Plan"
+			: savedPlan
+				? "Saved Plan"
+				: "Active Implementation Plan";
+		showPlanModePlan(pi, ctx, title, plan);
 	}
 
 	function requestFinalPlan(ctx: ExtensionContext) {
@@ -531,15 +560,59 @@ export default function planMode(
 		);
 	}
 
-	function startImplementation(ctx: ExtensionContext) {
-		const plan = state.latestPlan?.trim();
+	function savePlanForLater(ctx: ExtensionContext) {
+		const plan = state.enabled ? state.latestPlan?.trim() : undefined;
+		if (!plan) {
+			const message = "No completed plan is available to save.";
+			if (!ctx.hasUI) throw new Error(message);
+			ctx.ui.notify(message, "warning");
+			return;
+		}
 		const source = state.latestPlanSource ?? "legacy_proposed_plan";
+
+		workflowGeneration += 1;
+		readyPresentationIntent = undefined;
+		state = {
+			...state,
+			enabled: false,
+			latestPlan: undefined,
+			latestPlanSource: undefined,
+			awaitingAction: false,
+			savedPlan: { plan, source },
+			activeImplementation: undefined,
+			manualThinkingLevel: undefined,
+		};
+		restoreTools();
+		restoreThinkingLevel();
+		state = { ...state, manualThinkingLevel: undefined };
+		persistState();
+		updateUi(ctx);
+		ctx.ui.notify("Plan saved for later. Plan mode disabled.", "info");
+	}
+
+	async function startImplementation(ctx: ExtensionContext) {
+		const savedPlan = state.enabled ? undefined : state.savedPlan;
+		if (savedPlan) {
+			const sessionGeneration = menuGeneration;
+			const planWorkflowGeneration = workflowGeneration;
+			const isCurrent = () =>
+				sessionGeneration === menuGeneration &&
+				planWorkflowGeneration === workflowGeneration &&
+				!menuController.signal.aborted &&
+				!state.enabled &&
+				state.savedPlan === savedPlan;
+			if (!(await preflightSavedPlanImplementation(ctx, isCurrent))) return;
+		}
+		const plan = (state.enabled ? state.latestPlan : savedPlan?.plan)?.trim();
+		const source =
+			(state.enabled ? state.latestPlanSource : savedPlan?.source) ?? "legacy_proposed_plan";
 		if (!plan) {
 			ctx.ui.notify("Plan mode disabled. No proposed plan is available to implement.", "warning");
 			return;
 		}
 
 		workflowGeneration += 1;
+		const previousState = state;
 		const wasEnabled = state.enabled;
 		readyPresentationIntent = undefined;
 		state = {
@@ -548,6 +621,7 @@ export default function planMode(
 			latestPlan: undefined,
 			latestPlanSource: undefined,
 			awaitingAction: false,
+			savedPlan: undefined,
 			activeImplementation: {
 				id: randomUUID(),
 				plan,
@@ -569,8 +643,13 @@ export default function planMode(
 			ctx,
 		);
 		if (!sent) {
-			enterPlanMode(ctx);
-			state = { ...state, latestPlan: plan, latestPlanSource: source, awaitingAction: true };
+			if (savedPlan) {
+				state = previousState;
+			} else {
+				enterPlanMode(ctx);
+				state = previousState;
+				applyPlanThinkingLevel();
+			}
 			persistState();
 			updateUi(ctx);
 		}
@@ -598,104 +677,55 @@ export default function planMode(
 		});
 	}
 
+	async function showSavedPlanActions(ctx: ExtensionContext) {
+		const lifecycle = captureMenuLifecycle();
+		await showSavedPlanMenu(ctx, {
+			statusText: planStatusText(),
+			signal: lifecycle.signal,
+			isCurrent: lifecycle.isCurrent,
+			show: () => showStoredPlan(ctx),
+			implement: () => startImplementation(ctx),
+			clear: () => {
+				exitPlanMode(ctx);
+				ctx.ui.notify("Saved plan cleared.", "info");
+			},
+		});
+	}
+
 	async function showPlanMenu(ctx: ExtensionContext) {
 		if (!ctx.hasUI) {
 			ctx.ui.notify(planStatusText(), "info");
 			return;
 		}
 		const lifecycle = captureMenuLifecycle();
-		type Action = "show" | "finalize" | "implement" | "tools" | "stay" | "exit";
-		const menu = defineMenu<undefined, "main", Action, ExtensionContext>({
-			start: "main",
-			screens: {
-				main: () => ({
-					kind: "actions",
-					title: "Plan mode",
-					lines: [planStatusText()],
-					items: state.latestPlan
-						? [
-								{ id: "show", label: "Show latest proposed plan", action: "show" },
-								{ id: "implement", label: "Implement this plan", action: "implement" },
-								{ id: "tools", label: "Configure Plan-mode tools", action: "tools" },
-								{ id: "stay", label: "Stay in Plan mode", action: "stay" },
-								{ id: "exit", label: "Exit Plan mode", action: "exit" },
-							]
-						: [
-								{ id: "finalize", label: "Request final plan", action: "finalize" },
-								{ id: "tools", label: "Configure Plan-mode tools", action: "tools" },
-								{ id: "stay", label: "Stay in Plan mode", action: "stay" },
-								{ id: "exit", label: "Exit Plan mode", action: "exit" },
-							],
-					hint: "close",
-				}),
-			},
-			actions: {
-				show: async () => {
-					showStoredPlan(ctx);
-					return { kind: "close" };
-				},
-				finalize: async () => {
-					requestFinalPlan(ctx);
-					return { kind: "close" };
-				},
-				implement: async () => {
-					startImplementation(ctx);
-					return { kind: "close" };
-				},
-				tools: async () => {
-					await showToolSelector(ctx);
-					return { kind: "stay" };
-				},
-				stay: async () => {
-					updateUi(ctx);
-					return { kind: "close" };
-				},
-				exit: async () => {
-					exitPlanMode(ctx);
-					ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
-					return { kind: "close" };
-				},
-			},
-		});
-		await runMenu(ctx, menu, {
-			getState: () => undefined,
+		await showPlanModeMenu(ctx, {
+			statusText: planStatusText(),
+			hasReadyPlan: state.latestPlan !== undefined,
 			...lifecycle,
+			show: () => showStoredPlan(ctx),
+			finalize: () => requestFinalPlan(ctx),
+			implement: () => startImplementation(ctx),
+			save: () => savePlanForLater(ctx),
+			tools: () => showToolSelector(ctx),
+			stay: () => updateUi(ctx),
+			exit: () => {
+				exitPlanMode(ctx);
+				ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
+			},
 		});
 	}
 
 	async function showPlanReadyMenu(ctx: ExtensionContext) {
 		const lifecycle = captureMenuLifecycle();
-		type Action = "implement" | "stay" | "exit";
-		const menu = defineMenu<undefined, "ready", Action, ExtensionContext>({
-			start: "ready",
-			screens: {
-				ready: () => ({
-					kind: "actions",
-					title: "Proposed plan ready. What next?",
-					items: [
-						{ id: "implement", label: "Implement this plan", action: "implement" },
-						{ id: "stay", label: "Stay in Plan mode", action: "stay" },
-						{ id: "exit", label: "Exit Plan mode", action: "exit" },
-					],
-					hint: "close",
-				}),
-			},
-			actions: {
-				implement: async () => {
-					startImplementation(ctx);
-					return { kind: "close" };
-				},
-				stay: async () => ({ kind: "close" }),
-				exit: async () => {
-					exitPlanMode(ctx);
-					ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
-					return { kind: "close" };
-				},
-			},
-		});
-		await runMenu(ctx, menu, {
-			getState: () => undefined,
+		await showReadyPlanMenu(ctx, {
 			...lifecycle,
+			implement: () => startImplementation(ctx),
+			save: () => savePlanForLater(ctx),
+			stay: () => undefined,
+			exit: () => {
+				exitPlanMode(ctx);
+				ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
+			},
 		});
 	}
 

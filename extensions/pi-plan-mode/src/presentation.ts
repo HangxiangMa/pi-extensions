@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PlanModeState } from "./state.js";
 
 const STATUS_KEY = "plan-mode";
@@ -13,13 +13,18 @@ export function updatePlanModeUi(
 	if (state.enabled && state.latestPlan) {
 		ctx.ui.setWidget(PLAN_WIDGET_KEY, [
 			"Proposed plan ready",
-			"Use /plan to implement, revise, or exit Plan mode.",
+			"Use /plan to implement, save, revise, or exit Plan mode.",
 		]);
 	} else if (state.enabled) {
 		ctx.ui.setWidget(PLAN_WIDGET_KEY, [
 			"Plan mode: planning",
 			toolSummary(),
 			"Finish with plan_mode_complete when decision-ready.",
+		]);
+	} else if (state.savedPlan) {
+		ctx.ui.setWidget(PLAN_WIDGET_KEY, [
+			"Plan saved for later",
+			"Use /plan to show, implement, or clear it.",
 		]);
 	} else if (state.activeImplementation) {
 		ctx.ui.setWidget(PLAN_WIDGET_KEY, [
@@ -36,6 +41,27 @@ export function clearPlanModeUi(ctx: ExtensionContext) {
 	ctx.ui.setWidget(PLAN_WIDGET_KEY, undefined);
 }
 
+export function showPlanModePlan(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	title: string,
+	plan: string,
+) {
+	try {
+		pi.sendMessage(
+			{
+				customType: "proposed-plan",
+				content: `**${title}**\n\n${plan}`,
+				display: true,
+			},
+			{ triggerTurn: false },
+		);
+	} catch (error: unknown) {
+		const detail = error instanceof Error ? error.message : String(error);
+		ctx.ui.notify(`Unable to show completed plan: ${detail}`, "error");
+	}
+}
+
 export function planModeStatusText(state: PlanModeState, toolSummary: () => string) {
 	if (state.enabled) {
 		if (state.latestPlan) {
@@ -43,6 +69,7 @@ export function planModeStatusText(state: PlanModeState, toolSummary: () => stri
 		}
 		return `Plan mode is active. ${toolSummary()} Explore, ask, and finish with plan_mode_complete when decision-ready.`;
 	}
+	if (state.savedPlan) return "A plan is saved for later.";
 	if (state.activeImplementation) return "An implementation plan is active.";
 	return "Plan mode is off.";
 }
@@ -52,6 +79,7 @@ function formatStatus(state: PlanModeState) {
 		if (state.awaitingAction || state.latestPlan) return "plan ready";
 		return "plan active";
 	}
+	if (state.savedPlan) return "plan saved";
 	if (state.activeImplementation) return "plan implementing";
 	return undefined;
 }

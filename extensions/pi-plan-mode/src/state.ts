@@ -14,11 +14,17 @@ export interface ActiveImplementationPlan {
 	startedAt: number;
 }
 
+export interface SavedPlan {
+	plan: string;
+	source: PlanCompletionSource;
+}
+
 export interface PlanModeState {
 	enabled: boolean;
 	latestPlan?: string;
 	latestPlanSource?: PlanCompletionSource;
 	awaitingAction: boolean;
+	savedPlan?: SavedPlan;
 	activeImplementation?: ActiveImplementationPlan;
 	selectedToolNames?: string[];
 	selectedToolKeys?: string[];
@@ -60,6 +66,8 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
 	const activeImplementation = enabled
 		? undefined
 		: normalizeActiveImplementation(entry.data.activeImplementation);
+	const savedPlan =
+		enabled || activeImplementation ? undefined : normalizeSavedPlan(entry.data.savedPlan);
 	return {
 		enabled,
 		latestPlan,
@@ -68,6 +76,7 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
 				(recoveredPlan ? PLAN_MODE_COMPLETE_TOOL_NAME : undefined))
 			: undefined,
 		awaitingAction: enabled && latestPlan !== undefined,
+		savedPlan,
 		activeImplementation,
 		selectedToolNames: stringArray(entry.data.selectedToolNames),
 		selectedToolKeys: stringArray(entry.data.selectedToolKeys),
@@ -77,6 +86,14 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
 		appliedThinkingLevel: enabled ? fixedThinkingLevel(entry.data.appliedThinkingLevel) : undefined,
 		manualThinkingLevel: enabled ? fixedThinkingLevel(entry.data.manualThinkingLevel) : undefined,
 	};
+}
+
+function normalizeSavedPlan(value: unknown): SavedPlan | undefined {
+	if (!isRecord(value)) return undefined;
+	const source = planCompletionSource(value.source);
+	const normalized = normalizePlanModeCompletion({ plan: value.plan });
+	if (!source || !normalized.ok) return undefined;
+	return { plan: normalized.plan, source };
 }
 
 function normalizeActiveImplementation(value: unknown): ActiveImplementationPlan | undefined {
