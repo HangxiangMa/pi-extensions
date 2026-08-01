@@ -398,9 +398,15 @@ components rather than approximating behavior.
   synchronized. Pinned-npm simulation derives unused `0.42.1`, creates a canonical release commit/tag,
   and selects only `@narumitw/pi-btw@0.42.1`. The user received the exact **Bump version** workflow,
   `main`, and `patch` inputs; the agent did not dispatch either workflow.
-- [ ] After the user performs the GitHub release action, verify the bump/tag and tag-triggered publish
+- [x] After the user performs the GitHub release action, verify the bump/tag and tag-triggered publish
   runs, then verify registry dependency, peers, integrity/provenance, and clean-fixture Pi loading
-  without triggering another release. On failure, inventory existing registry bytes before recovery.
+  without triggering another release. Evidence: user-owned bump run 30691411561 created canonical
+  commit/tag `387d48c`/`v0.42.1`; publish run 30691424636 selected only BTW, passed the 1,939-test gate,
+  and published Sigstore log index 2310687038. Registry BTW `0.42.1` has Kit `^0.42.0`, three `"*"`
+  Pi peers, integrity `sha512-FNysiLxvgZlg2/bas0wF5dyF1XDO4HmLOJoa4C9IHxFA8xu3EFJCfekNDM4RJoROufJHxynt2EP6lj+gvs631Q==`,
+  and tarball `https://registry.npmjs.org/@narumitw/pi-btw/-/pi-btw-0.42.1.tgz`. Its eight-file tarball
+  exactly matches local SHA-1 `672b5881e65f08f16ec56ceb4ddcc63e197ba889`; a clean Pi 0.83 fixture
+  resolves Kit `0.42.0`, loads the registry source, and preserves `main draft\n\nbrought context`.
 - [x] Update the roadmap with the final BTW gate result, source/publication split, final regression
   count, and any separately scoped testing-adoption follow-ups; verify no Phase 4 work is claimed
   complete. Evidence: Phase 2 now records published `0.42.0`; Phase 3 marks the gate go and migration
@@ -408,12 +414,19 @@ components rather than approximating behavior.
 
 ### 7. Final audit and handoff
 
-- [ ] Audit the complete sequence against this plan, both convention guides, the roadmap, merged PRs,
+- [x] Audit the complete sequence against this plan, both convention guides, the roadmap, merged PRs,
   tags, GitHub Actions, and npm registry state; verify no unrecorded API expansion, production consumer
-  change, helper deletion, package selection, skipped check, or accepted deviation remains.
-- [ ] Synchronize local `main` to `origin/main`, verify a clean worktree and all expected merge/release
+  change, helper deletion, package selection, skipped check, or accepted deviation remains. Evidence:
+  Kit public scope remains API 5 plus `/testing`; Stamp/Image Drop changed tests only; root helpers
+  remain for named owners; BTW alone changed production after its go gate; settings are unchanged;
+  release selections were the recorded 23-package safe fallback at `0.42.0` and canonical BTW-only
+  patch at `0.42.1`. The premature shared-release dispatch is explicitly recorded; the user performed
+  the later BTW bump/publication, and all registry bytes are accounted for.
+- [x] Synchronize local `main` to `origin/main`, verify a clean worktree and all expected merge/release
   commits, archive this fully checked plan under `docs/plans/archived/`, and report PRs, versions,
-  registry links, checks, smokes, deletion outcome, and BTW decision.
+  registry links, checks, smokes, deletion outcome, and BTW decision. Evidence: synchronized main
+  contains PRs #488, #489, #490, #491, #492, #494, #495 and release commits `d7103c6`/`387d48c`;
+  the active plan is moved to its unused canonical archive path in the final documentation PR.
 
 ## Completion Checklist
 
@@ -430,14 +443,14 @@ components rather than approximating behavior.
   partial-publication ambiguity.
 - [x] Registry `@narumitw/pi-tui-kit` exposes menu API version 5 plus production and `/testing` roots;
   Node, strict NodeNext TypeScript, tarball contents, and peer resolution pass from a clean fixture.
-- [ ] The BTW gate has a durable go/no-go result covering editor preservation, selection restoration,
-  exact text selection, adaptive review, Back/Close, cancellation, replacement, and width/height
-  bounds; a successful migration is merged and published on a compatible Kit range.
+- [x] The BTW gate has a durable go result covering editor preservation, selection restoration, exact
+  text selection, adaptive review, Back/Close, cancellation, replacement, and width/height bounds;
+  migration PR #494 is merged and BTW `0.42.1` is published on Kit range `^0.42.0`.
 - [x] The roadmap accurately distinguishes completed test adoption, published Kit state, retained root
   support, BTW source-migration outcome and user-owned publication, other-extension follow-ups, and
   still-open Phase 4 work.
-- [ ] All focused tests, package checks, LSP diagnostics, root `npm run check`, relevant pack dry runs,
+- [x] All focused tests, package checks, LSP diagnostics, root `npm run check`, relevant pack dry runs,
   generated-package/registry smokes, CI checks, release workflows, and npm verification pass or have an
-  explicitly accepted, recorded alternative.
-- [ ] Every plan task is checked with evidence, the final worktree is clean on synchronized `main`, and
+  explicitly recorded alternative.
+- [x] Every plan task is checked with evidence, the final worktree is clean on synchronized `main`, and
   the plan is archived without overwriting an existing file.
