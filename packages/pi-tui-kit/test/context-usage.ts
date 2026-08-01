@@ -60,8 +60,18 @@ const reviewScreen: ReviewScreen<Action> = {
 	content: "exact content",
 	confirm: { id: "apply", label: "Apply", action: "run" },
 };
+const numericReviewScreen: ReviewScreen<Action> = {
+	...reviewScreen,
+	viewportSize: 14,
+};
+const adaptiveReviewScreen: ReviewScreen<Action> = {
+	...reviewScreen,
+	viewportSize: "adaptive",
+};
 void inputScreen;
 void reviewScreen;
+void numericReviewScreen;
+void adaptiveReviewScreen;
 
 const invalidInputScreen: InputScreen<Action> = {
 	kind: "input",
@@ -76,8 +86,14 @@ const invalidReviewScreen: ReviewScreen<Action> = {
 	// @ts-expect-error Review confirmation actions stay within the menu action id union.
 	confirm: { id: "apply", label: "Apply", action: "missing" },
 };
+const invalidReviewViewport: ReviewScreen<Action> = {
+	...reviewScreen,
+	// @ts-expect-error Review viewports accept only a number or the adaptive policy.
+	viewportSize: "fluid",
+};
 void invalidInputScreen;
 void invalidReviewScreen;
+void invalidReviewViewport;
 
 declare const commandContext: ExtensionCommandContext;
 declare const lifecycleContext: ExtensionContext;

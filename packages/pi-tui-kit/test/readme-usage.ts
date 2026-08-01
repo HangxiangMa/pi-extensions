@@ -52,6 +52,7 @@ const reviewChangesScreen: ReviewScreen<Action> = {
 	title: "Review changes",
 	content: "+1 enabled=true",
 	format: { kind: "diff", filePath: "settings.json" },
+	viewportSize: "adaptive",
 	confirm: { id: "apply", label: "Apply", action: "refresh" },
 };
 void reviewChangesScreen;

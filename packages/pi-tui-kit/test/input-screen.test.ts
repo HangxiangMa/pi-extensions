@@ -252,7 +252,7 @@ function inputComponentHarness(
 	const events: Array<{ kind: "back" | "close" } | { kind: "activate"; itemId: string }> = [];
 	const component = createMenuScreenComponent<ScreenId, ActionId>({
 		screen: inputScreen,
-		tui: { requestRender() {} },
+		tui: { terminal: { rows: 24 }, requestRender() {} },
 		theme: {
 			fg: (_color: string, text: string) => text,
 			bold: (text: string) => text,

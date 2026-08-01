@@ -14,6 +14,7 @@ const MENU_BINDINGS = [
 export type MenuBinding = (typeof MENU_BINDINGS)[number];
 
 export interface RenderHost {
+	readonly terminal: { readonly rows: number };
 	requestRender(): void;
 }
 

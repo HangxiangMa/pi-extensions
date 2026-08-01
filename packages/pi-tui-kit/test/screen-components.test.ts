@@ -972,7 +972,7 @@ function componentHarness(
 	const component = createMenuScreenComponent({
 		screen,
 		selectedItemId: options.selectedItemId,
-		tui: { requestRender() {} },
+		tui: { terminal: { rows: 24 }, requestRender() {} },
 		theme: {
 			fg(color: string, text: string) {
 				if (options.plainTheme) return text;
