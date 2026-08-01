@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-file-context",
-	"version": "0.42.0",
+	"version": "0.42.1",
 	"description": "Experimental Pi extension for attaching file ranges and Git provenance as context.",
 	"type": "module",
 	"license": "MIT",
