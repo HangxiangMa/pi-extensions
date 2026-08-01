@@ -146,6 +146,7 @@
 
 ### General
 
+- Prefer canonical JSON and explicit argv arrays for pi-lsp configuration; avoid pi-lsp-specific environment-variable settings while retaining `servers[].env` for child-process needs.
 - Prefer storage-oriented pi-sync setup that completes credentials in a masked TUI and reviews one exact backend path; storage connections and sync setups are the only managed user concepts.
 - Prefer direct, user-owned context selection; avoid dedicated shortcuts or manual copy steps for routine quoting workflows.
 - Prefer reading GitHub issue and pull request links with `gh --json` first; use web tools only when `gh` cannot access the needed content.

@@ -10,6 +10,21 @@ import type { LspServerAdapter } from "../src/types.js";
 
 const fixture = path.resolve("extensions/pi-lsp/test/fixtures/diagnostics-server.mjs");
 
+test("server environment overrides are forwarded to the LSP process", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-server-environment-"));
+	const adapter = fixtureAdapter("require-environment", 30);
+	adapter.env = { PI_LSP_TEST_ENV: "forwarded" };
+	const client = new LspClient(adapter, adapter.defaultCommand, root, 1_000);
+
+	try {
+		await client.start();
+		await client.initialize(root);
+	} finally {
+		await client.shutdown();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("pull diagnostics omit optional params when no values are available", async () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-pull-strict-optional-params-"));
 	const file = path.join(root, "main.go");
@@ -261,7 +276,6 @@ function fixtureAdapter(
 			command: process.execPath,
 			args: [fixture, scenario, ...(expectedFiles === undefined ? [] : [String(expectedFiles)])],
 		},
-		commandEnvVar: `PI_LSP_FIXTURE_${scenario.toUpperCase().replaceAll("-", "_")}_COMMAND`,
 		missingCommandHint: "Node is required for the test fixture.",
 		extensions: [".go"],
 		skipDirectories: new Set(),

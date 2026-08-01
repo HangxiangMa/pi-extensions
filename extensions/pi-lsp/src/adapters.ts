@@ -1,5 +1,4 @@
 import { existsSync, readFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -246,8 +245,6 @@ let pendingConfigNotice: string | undefined;
 
 function loadConfiguredConfig(cwd: string, projectTrusted: boolean): LspConfig | undefined {
 	pendingConfigNotice = undefined;
-	const rawConfig = process.env.PI_LSP_CONFIG?.trim();
-	if (rawConfig) return parseConfigSource(rawConfig, cwd, "PI_LSP_CONFIG");
 
 	if (projectTrusted) {
 		const projectConfig = path.join(cwd, CONFIG_DIR_NAME, "pi-lsp.json");
@@ -288,15 +285,6 @@ export function consumeLspConfigNotice() {
 	const notice = pendingConfigNotice;
 	pendingConfigNotice = undefined;
 	return notice;
-}
-
-function parseConfigSource(source: string, cwd: string, label: string): LspConfig {
-	if (source.startsWith("{")) return normalizeConfig(JSON.parse(source), label);
-	const expandedSource = expandHome(source);
-	const filePath = path.isAbsolute(expandedSource)
-		? expandedSource
-		: path.resolve(cwd, expandedSource);
-	return parseConfigFile(filePath);
 }
 
 function parseConfigFile(filePath: string): LspConfig {
@@ -397,8 +385,7 @@ function configToAdapter(config: InternalLspServer): LspServerAdapter {
 		name: config.name,
 		isDefault: config.isDefault ?? false,
 		defaultCommand: { command, args },
-		commandEnvVar: envName(config.name, "COMMAND"),
-		missingCommandHint: `Install ${config.name} or set ${envName(config.name, "COMMAND")}.`,
+		missingCommandHint: `Install ${config.name} or update its command in pi-lsp.json.`,
 		extensions: config.extensions,
 		env: config.env,
 		initialization: config.initialization,
@@ -486,17 +473,6 @@ const LANGUAGE_IDS: Record<string, string> = {
 	".zsh": "shellscript",
 };
 
-function commandFromEnvName(name: string): string {
-	return name
-		.replace(/[^a-zA-Z0-9]+/g, "_")
-		.replace(/^_+|_+$/g, "")
-		.toUpperCase();
-}
-
-function envName(name: string, suffix: "COMMAND") {
-	return `PI_${commandFromEnvName(name)}_LSP_${suffix}`;
-}
-
 function normalizeExtension(extension: string) {
 	return extension.startsWith(".") ? extension : `.${extension}`;
 }
@@ -556,14 +532,6 @@ function optionalDirectoryNamesField(value: Record<string, unknown>, field: stri
 		);
 	}
 	return [...new Set(names)];
-}
-
-function expandHome(filePath: string) {
-	if (filePath === "~") return os.homedir();
-	if (filePath.startsWith("~/") || filePath.startsWith("~\\")) {
-		return path.join(os.homedir(), filePath.slice(2));
-	}
-	return filePath;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
