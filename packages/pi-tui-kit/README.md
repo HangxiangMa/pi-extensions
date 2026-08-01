@@ -139,8 +139,8 @@ does not hide an uncooperative task behind an arbitrary timeout.
   serialized saves, and rollback when an action rejects.
 - **`input`** — single-line text entry inside the menu stack with IME focus, serialized submission,
   rejected-draft retention, and TUI/RPC adaptation.
-- **`review`** — bounded, scrollable exact text, code, or diff content with an optional primary
-  confirmation action and paginated RPC fallback.
+- **`review`** — fixed or terminal-adaptive scrollable exact text, code, or diff content with an
+  optional primary confirmation action and paginated RPC fallback.
 - **`multiSelect`** — optimistic toggles with stable cursor restoration, serialized saves, rollback,
   selected-row descriptions, optional fuzzy search and bulk action rows, and a bounded TUI viewport.
 
@@ -218,14 +218,25 @@ const reviewScreen = {
   title: "Review configuration changes",
   content: unifiedDiff,
   format: { kind: "diff" as const, filePath: settingsPath },
-  viewportSize: 14,
+  viewportSize: "adaptive",
   confirm: { id: "apply", label: "Apply", action: "apply" as const },
 };
 ```
 
 Review formats are `{ kind: "text" }`, `{ kind: "code", language?, filePath? }`, and
-`{ kind: "diff", filePath? }`. The viewport maximum is 50 rows. A review without `confirm` is
-read-only. Escape follows Back/Close and `Ctrl+C` closes the whole menu.
+`{ kind: "diff", filePath? }`. Omitted `viewportSize` keeps the fixed 14-row TUI viewport, and
+numeric values remain fixed integers from 1 through 50. Set `viewportSize: "adaptive"` to recompute
+from the live terminal height on every TUI render. Adaptive review reserves three terminal rows for
+Pi-owned UI and keeps the complete frame within `max(1, floor(terminal rows) - 3)` rows; this mode is
+not capped at the numeric 50-row maximum.
+
+At constrained heights, adaptive review prioritizes one content row, then a compact title, then a
+compact confirmation/Back-or-Close/navigation hint. From four available rows it shows position when
+content scrolls; additional space restores wrapped title and supporting context, the full keyboard
+hint, and the separator before enlarging the content viewport. Fixed and omitted review rendering is
+unchanged. RPC does not read terminal dimensions: adaptive and omitted reviews use deterministic
+pages of at most eight rows, while numeric values retain the existing eight-row cap. A review without
+`confirm` is read-only. Escape follows Back/Close and `Ctrl+C` closes the whole menu.
 
 Action handlers return one of these results:
 
@@ -362,9 +373,9 @@ Keep specialized UI local rather than adding package hooks that expose Pi TUI in
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.
 - `createMenuNavigator()` — lower-level stack and selection state helper.
 - exported screen, item, action, transition, runtime option, `MenuCloseReason`, and result types.
-- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`4`). Version 4 requires
-  `RunMenuResult` to report a reason when closed; version-3 screen definitions remain valid on the
-  version-4 runtime.
+- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`5`). Version 5 adds the
+  opt-in `ReviewScreen.viewportSize: "adaptive"` policy; version-4 definitions remain valid on the
+  version-5 runtime, including mandatory Back/Close reasons on closed menu results.
 
 ## 🗂️ Package layout
 

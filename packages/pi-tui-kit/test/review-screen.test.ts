@@ -42,6 +42,138 @@ test("review preserves whitespace, sanitizes controls, and bounds exact text at 
 	assert.match(rendered, /你🙂very-long-token/);
 });
 
+test("fixed and default review frames remain byte-for-byte compatible", () => {
+	const content = Array.from({ length: 20 }, (_, index) => `row ${index + 1}`).join("\n");
+	const fixed = reviewComponentHarness({ ...reviewScreen, content });
+	assert.deepEqual(plainLines(fixed.component, 80), [
+		"Review changes",
+		"",
+		"row 1",
+		"row 2",
+		"row 3",
+		"1-3/20",
+		"k/j navigate • l Apply • q back • ctrl+c close",
+	]);
+
+	const defaultViewport = reviewComponentHarness({
+		...reviewScreen,
+		content,
+		viewportSize: undefined,
+	});
+	assert.deepEqual(plainLines(defaultViewport.component, 80), [
+		"Review changes",
+		"",
+		...Array.from({ length: 14 }, (_, index) => `row ${index + 1}`),
+		"1-14/20",
+		"k/j navigate • l Apply • q back • ctrl+c close",
+	]);
+});
+
+test("adaptive review degrades explicitly at constrained terminal heights", () => {
+	const content = Array.from({ length: 10 }, (_, index) => `row ${index + 1}`).join("\n");
+	const harness = reviewComponentHarness(
+		{ ...reviewScreen, content, viewportSize: "adaptive" },
+		false,
+		4,
+	);
+	assert.deepEqual(plainLines(harness.component, 80), ["row 1"]);
+
+	harness.setTerminalRows(5);
+	assert.deepEqual(plainLines(harness.component, 80), ["Review changes", "row 1"]);
+
+	harness.setTerminalRows(6);
+	assert.deepEqual(plainLines(harness.component, 80), [
+		"Review changes",
+		"row 1",
+		"l Apply • q back • ctrl+c close • k/j navigate",
+	]);
+
+	harness.setTerminalRows(7);
+	assert.deepEqual(plainLines(harness.component, 80), [
+		"Review changes",
+		"row 1",
+		"1-1/10",
+		"l Apply • q back • ctrl+c close • k/j navigate",
+	]);
+
+	harness.setTerminalRows(8);
+	assert.deepEqual(plainLines(harness.component, 80), [
+		"Review changes",
+		"",
+		"row 1",
+		"1-1/10",
+		"k/j navigate • l Apply • q back • ctrl+c close",
+	]);
+});
+
+test("adaptive review restores wrapped context and exceeds the numeric viewport ceiling safely", () => {
+	const content = Array.from({ length: 100 }, (_, index) => `row ${index + 1}`).join("\n");
+	const typical = reviewComponentHarness(
+		{
+			...reviewScreen,
+			title: "Review configuration changes",
+			lines: ["Supporting context that wraps at narrow widths"],
+			content,
+			viewportSize: "adaptive",
+		},
+		false,
+		30,
+	);
+	const typicalLines = plainLines(typical.component, 18);
+	assert.equal(typicalLines.length, 27);
+	assert.ok(typicalLines.some((line) => line.includes("Supporting")));
+	assert.ok(typicalLines.some((line) => /\d+-\d+\/100/u.test(line)));
+	assert.ok(typicalLines.every((line) => visibleWidth(line) <= 18));
+
+	const large = reviewComponentHarness(
+		{ ...reviewScreen, content, viewportSize: "adaptive" },
+		false,
+		80,
+	);
+	const largeLines = plainLines(large.component, 80);
+	assert.equal(largeLines.length, 77);
+	assert.ok(largeLines.includes("row 73"));
+	assert.ok(largeLines.every((line) => visibleWidth(line) <= 80));
+});
+
+test("adaptive review resizes, reflows, clamps, and pages by the latest rendered viewport", () => {
+	const content = Array.from({ length: 20 }, (_, index) => `row ${index + 1}`).join("\n");
+	const harness = reviewComponentHarness(
+		{ ...reviewScreen, content, viewportSize: "adaptive" },
+		false,
+		12,
+	);
+	let rendered = plainRender(harness.component, 80);
+	assert.match(rendered, /row 1[\s\S]*row 5/);
+	assert.match(rendered, /1-5\/20/);
+
+	harness.component.handleInput("\u001b[F");
+	rendered = plainRender(harness.component, 80);
+	assert.match(rendered, /row 16[\s\S]*row 20/);
+	assert.match(rendered, /16-20\/20/);
+
+	harness.setTerminalRows(7);
+	rendered = plainRender(harness.component, 30);
+	assert.match(rendered, /row 16/);
+	assert.match(rendered, /16-16\/20/);
+
+	harness.setTerminalRows(14);
+	rendered = plainRender(harness.component, 80);
+	assert.match(rendered, /row 14[\s\S]*row 20/);
+	assert.match(rendered, /14-20\/20/);
+	harness.component.handleInput("u");
+	rendered = plainRender(harness.component, 80);
+	assert.match(rendered, /row 7[\s\S]*row 13/);
+
+	harness.setTerminalRows(9);
+	rendered = plainRender(harness.component, 80);
+	assert.match(rendered, /row 7[\s\S]*row 8/);
+	harness.component.handleInput("d");
+	rendered = plainRender(harness.component, 80);
+	assert.match(rendered, /row 9[\s\S]*row 10/);
+	assert.ok(harness.component.render(20).every((line) => visibleWidth(line) <= 20));
+});
+
 test("review scrolls by injected keys, pages, and clamps after resize", () => {
 	const harness = reviewComponentHarness({
 		...reviewScreen,
@@ -104,20 +236,30 @@ test("review formats code and diffs through theme-aware display paths", () => {
 	assert.match(rendered, /accent:@@ header/);
 });
 
-test("TUI review invokes its raw confirmation action", async () => {
+test("TUI adaptive review reads live host rows and invokes its raw confirmation action", async () => {
 	const invoked: string[] = [];
+	const frameHeights: number[] = [];
 	const context = createMockContext({
 		mode: "tui",
 		hasUI: true,
 		custom: async (factory: unknown) => {
-			const harness = createCustomSelectorHarness(factory, 40);
+			const harness = createCustomSelectorHarness(factory, 80, undefined, 7);
+			frameHeights.push(harness.render().length);
+			harness.setTerminalRows(12);
+			frameHeights.push(harness.render().length);
 			harness.handleInput("tui.select.confirm");
 			return harness.result;
 		},
 	});
 	const menu = defineMenu<undefined, ScreenId, ActionId>({
 		start: "review",
-		screens: { review: () => reviewScreen },
+		screens: {
+			review: () => ({
+				...reviewScreen,
+				content: Array.from({ length: 20 }, (_, index) => `row ${index + 1}`).join("\n"),
+				viewportSize: "adaptive",
+			}),
+		},
 		actions: {
 			apply: async ({ itemId }) => {
 				invoked.push(itemId);
@@ -130,6 +272,48 @@ test("TUI review invokes its raw confirmation action", async () => {
 		reason: "close",
 	});
 	assert.deepEqual(invoked, ["raw-apply"]);
+	assert.deepEqual(frameHeights, [4, 9]);
+});
+
+test("RPC adaptive review matches default bounded pagination without custom TUI", async () => {
+	async function collect(viewportSize: ReviewScreen<ActionId>["viewportSize"]) {
+		const titles: string[] = [];
+		const context = createMockContext({
+			mode: "rpc",
+			hasUI: true,
+			select: async (title: string, choices: string[]) => {
+				titles.push(title);
+				return choices.find((choice) => choice.startsWith("Next")) ?? "Back";
+			},
+			custom: async () => {
+				throw new Error("RPC review must not open custom TUI");
+			},
+		});
+		const menu = defineMenu<undefined, ScreenId, ActionId>({
+			start: "review",
+			screens: {
+				review: () => ({
+					...reviewScreen,
+					content: Array.from({ length: 20 }, (_, index) => `row ${index + 1}`).join("\n"),
+					viewportSize,
+					confirm: undefined,
+				}),
+			},
+			actions: { apply: async () => ({ kind: "close" }) },
+		});
+		assert.deepEqual(await runMenu(context.ctx, menu, { getState: () => undefined }), {
+			kind: "closed",
+			reason: "back",
+		});
+		return titles;
+	}
+
+	const omitted = await collect(undefined);
+	const adaptive = await collect("adaptive");
+	assert.deepEqual(adaptive, omitted);
+	assert.equal(adaptive.length, 3);
+	assert.match(adaptive[0] ?? "", /row 1[\s\S]*row 8/);
+	assert.match(adaptive[2] ?? "", /row 17[\s\S]*row 20/);
 });
 
 test("RPC review paginates bounded content and preserves colliding confirmation identity", async () => {
@@ -181,7 +365,7 @@ test("RPC review paginates bounded content and preserves colliding confirmation 
 	assert.equal(new Set(choicesSeen[1]).size, choicesSeen[1]?.length);
 });
 
-test("owner abort dismisses an unanswered RPC review without invoking confirmation", async () => {
+test("owner abort dismisses an unanswered adaptive RPC review without invoking confirmation", async () => {
 	const owner = new AbortController();
 	let reportOpened: (() => void) | undefined;
 	const opened = new Promise<void>((resolve) => {
@@ -202,7 +386,9 @@ test("owner abort dismisses an unanswered RPC review without invoking confirmati
 	});
 	const menu = defineMenu<undefined, ScreenId, ActionId>({
 		start: "review",
-		screens: { review: () => reviewScreen },
+		screens: {
+			review: () => ({ ...reviewScreen, viewportSize: "adaptive" }),
+		},
 		actions: {
 			apply: async () => {
 				invoked = true;
@@ -220,11 +406,12 @@ test("owner abort dismisses an unanswered RPC review without invoking confirmati
 	assert.equal(invoked, false);
 });
 
-function reviewComponentHarness(screen: ReviewScreen<ActionId>, themed = false) {
+function reviewComponentHarness(screen: ReviewScreen<ActionId>, themed = false, terminalRows = 24) {
 	const events: Array<{ kind: "back" | "close" } | { kind: "activate"; itemId: string }> = [];
+	const terminal = { rows: terminalRows };
 	const component = createMenuScreenComponent<ScreenId, ActionId>({
 		screen,
-		tui: { requestRender() {} },
+		tui: { terminal, requestRender() {} },
 		theme: {
 			fg: (color: string, text: string) => (themed ? `${color}:${text}` : text),
 			bold: (text: string) => text,
@@ -255,9 +442,19 @@ function reviewComponentHarness(screen: ReviewScreen<ActionId>, themed = false) 
 		},
 		onEvent: (event) => events.push(event),
 	});
-	return { component, events };
+	return {
+		component,
+		events,
+		setTerminalRows(rows: number) {
+			terminal.rows = rows;
+		},
+	};
+}
+
+function plainLines(component: { render(width: number): string[] }, width: number) {
+	return component.render(width).map((line) => stripVTControlCharacters(line));
 }
 
 function plainRender(component: { render(width: number): string[] }, width: number) {
-	return stripVTControlCharacters(component.render(width).join("\n"));
+	return plainLines(component, width).join("\n");
 }

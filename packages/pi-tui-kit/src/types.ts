@@ -122,7 +122,7 @@ export interface ReviewScreen<ActionId extends string> {
 	lines?: readonly string[];
 	content: string;
 	format?: ReviewFormat;
-	viewportSize?: number;
+	viewportSize?: number | "adaptive";
 	confirm?: ReviewConfirmation<ActionId>;
 	hint?: "back" | "close";
 }

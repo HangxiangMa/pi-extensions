@@ -38,8 +38,8 @@ function testMenu(): MenuDefinition<State, ScreenId, ActionId> {
 	});
 }
 
-test("mandatory menu termination reasons use declarative API version 4", () => {
-	assert.equal(PI_EXTENSION_MENU_API_VERSION, 4);
+test("adaptive review uses declarative API version 5", () => {
+	assert.equal(PI_EXTENSION_MENU_API_VERSION, 5);
 	assert.equal(resolveMenuScreen(testMenu(), "main", { count: 0 }).kind, "actions");
 });
 
@@ -231,6 +231,19 @@ test("input screens require a known action", () => {
 });
 
 test("review screens validate viewport and confirmation identity", () => {
+	const adaptiveScreen = {
+		kind: "review" as const,
+		title: "Adaptive review",
+		content: "diff",
+		viewportSize: "adaptive" as const,
+	};
+	const adaptiveDefinition = defineMenu<undefined, "review", "apply">({
+		start: "review",
+		screens: { review: () => adaptiveScreen },
+		actions: { apply: async () => ({ kind: "close" }) },
+	});
+	assert.equal(resolveMenuScreen(adaptiveDefinition, "review", undefined), adaptiveScreen);
+
 	const definition = defineMenu<undefined, "review", "apply">({
 		start: "review",
 		screens: {
@@ -248,7 +261,7 @@ test("review screens validate viewport and confirmation identity", () => {
 		() => resolveMenuScreen(definition, "review", undefined),
 		/review.*viewport.*positive integer/i,
 	);
-	for (const viewportSize of [-1, 1.5, 51, Number.NaN, Number.POSITIVE_INFINITY]) {
+	for (const viewportSize of [-1, 1.5, 51, Number.NaN, Number.POSITIVE_INFINITY, "fluid"]) {
 		assert.throws(
 			() =>
 				resolveMenuScreen(
@@ -259,7 +272,7 @@ test("review screens validate viewport and confirmation identity", () => {
 								kind: "review" as const,
 								title: "Review",
 								content: "diff",
-								viewportSize,
+								viewportSize: viewportSize as never,
 							}),
 						},
 					},

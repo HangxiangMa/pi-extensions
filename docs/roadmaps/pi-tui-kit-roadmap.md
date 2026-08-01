@@ -4,7 +4,7 @@
 - **Audience:** Pi TUI Kit maintainers and extension authors
 - **Planning horizon:** The next capability sequence after `@narumitw/pi-tui-kit@0.41.0`; no
   delivery dates are committed
-- **Repository source:** Menu API version 4 with distinct root Back and Close results
+- **Repository source:** Menu API version 5 with adaptive review and distinct root Back/Close results
 - **Latest published package:** `@narumitw/pi-tui-kit@0.41.0`, menu API version 3
 - **Migration evidence:** [archived consumer migration plan][consumer-migration-plan]
 
@@ -16,6 +16,8 @@
 [searchable-multi-select-plan]:
   ../plans/archived/2026-07-30_pi-tui-kit-searchable-multi-select-plan.md
 [agent-flows-plan]: ../plans/archived/2026-07-31_pi-tui-kit-agent-flows-plan.md
+[adaptive-review-plan]:
+  ../plans/archived/2026-08-01_pi-tui-kit-adaptive-review-viewport-plan.md
 
 ## Vision
 
@@ -53,9 +55,10 @@ The published `0.41.0` package exposes seven declarative screen kinds:
 
 The package also exposes `runTask()` for abort-aware work with a TUI loader and consistent completed,
 cancelled, stale, and error outcomes in other modes. Published menu API version 3 identifies runtimes
-that can interpret input and review screens. Repository source now uses API version 4 so ordinary
-`runMenu()` results distinguish root Back from explicit Close; package release remains a separate
-workflow.
+that can interpret input and review screens. Repository source now uses API version 5 so ordinary
+`runMenu()` results distinguish root Back from explicit Close and review screens can opt into a live
+terminal-height budget while fixed TUI sizing and deterministic RPC pagination remain compatible;
+package release remains a separate workflow.
 
 Eighteen extension or experimental packages depend on the kit, and 26 TypeScript source files import
 its API. Kit-dependent source still contains these literal direct Pi dialog calls:
@@ -82,9 +85,10 @@ The latest proof migrations established the following baseline:
 - all three migrations passed focused checks, package dry runs, CI, and the 1,914-test repository gate.
 
 The migrations exposed two concrete review gaps: root Back and Ctrl+C Close originally collapsed to
-one result, and `ReviewScreen` uses fixed rather than terminal-derived viewport sizing. Repository API
-version 4 now resolves the first gap. The `pi-btw` review migration remains deferred until adaptive
-sizing lands and its editor-preservation and restored-selection contracts pass a fresh gate.
+one result, and `ReviewScreen` used fixed rather than terminal-derived viewport sizing. Repository API
+versions 4 and 5 now resolve those Kit seams in sequence. The `pi-btw` review migration remains
+deferred until the separate supported testability milestone lands and its editor-preservation and
+restored-selection contracts pass a fresh gate.
 
 Consumer tests had to extend `test/support.ts` to drive real input focus, rejected retries, Ctrl+C,
 disposal, pending action draining, and RPC dialog cadence. That reusable lifecycle knowledge is not
@@ -182,18 +186,22 @@ three-way confirmation and preview composition.
 
 ### Phase 3: Adaptive Review and Supported Testability
 
+**Status:** Adaptive review complete in repository source through the
+[adaptive-review plan][adaptive-review-plan]; supported testability, the BTW gate, migration, and npm
+release remain open.
+
 **Milestones:**
 
-- Review accepts an opt-in terminal-adaptive viewport policy while existing fixed numeric sizing and
-  RPC pagination remain compatible.
-- Adaptive review stays within terminal row budgets at constrained, typical, and large heights,
+- [x] Review accepts an opt-in terminal-adaptive viewport policy while existing fixed numeric sizing
+  and RPC pagination remain compatible.
+- [x] Adaptive review stays within terminal row budgets at constrained, typical, and large heights,
   including wrapped headers, position indicators, resize, and scroll-offset clamping.
-- A separate `@narumitw/pi-tui-kit/testing` entry point drives real TUI components and RPC dialogs
+- [ ] A separate `@narumitw/pi-tui-kit/testing` entry point drives real TUI components and RPC dialogs
   through focus, text input, key events, rejected retries, pending actions, disposal, and owner abort.
-- Stamp and Image Drop consumer tests use the supported test host, allowing equivalent generic input
-  orchestration to leave repository-level `test/support.ts`.
-- The BTW review gate is rerun against close reasons and adaptive viewport; migration proceeds only if
-  editor-preservation and restored-selection invariants also remain explicit and testable.
+- [ ] Stamp and Image Drop consumer tests use the supported test host, allowing equivalent generic
+  input orchestration to leave repository-level `test/support.ts`.
+- [ ] The BTW review gate is rerun against close reasons and adaptive viewport; migration proceeds only
+  if editor-preservation and restored-selection invariants also remain explicit and testable.
 
 **Outcome:** Review behavior adapts to its host and consumer packages can verify kit lifecycle
 contracts without private component knowledge.
@@ -278,12 +286,12 @@ abstractions when Pi provides a better stable owner.
 | --- | --- | --- | --- |
 | Pi private `dist/*` imports in kit source | 0 | Remain 0 | Every phase; boundary check and source search |
 | Ordinary `runMenu()` close outcomes visible to callers | Published API 3 collapses Back and Close | Repository API 4 distinguishes root Back and explicit Close | Phase 2 complete in source; runtime TUI/RPC matrix |
-| Review TUI viewport policy | Fixed, default 14 rows | Opt-in adaptive policy stays within the terminal row budget | Phase 3; review component tests |
+| Review TUI viewport policy | Published API 3 is fixed, default 14 rows | Repository API 5 provides opt-in adaptive sizing within the live terminal budget | Adaptive source milestone complete; review component and built-package smokes |
 | Reusable consumer input-host logic | Generic behavior added to repository `test/support.ts` | Stamp and Image Drop use the supported testing entry point | Phase 3; consumer diffs and tests |
 | Proof for each new public flow | Two compatible consumers by default; exceptions require recorded evidence | Two completed proof migrations or an explicit no-go/deferral | Every expansion phase; archived plans and PRs |
 | Lifecycle verification | Existing deterministic package and consumer coverage | Every admitted contract covers TUI/RPC, cancellation, disposal, owner abort, stale state, and failure | Every phase; package and repository gates |
 | Runtime action/lifecycle ownership | TUI and RPC loops coordinate screen actions in separate branches | If the driver is admitted, one coordinator owns shared action and lifecycle policy | Phase 4; source diff plus behavior matrix |
-| Regression gate | 1,918 tests after menu termination reasons | No regression in the repository CI-equivalent gate | Every phase; `npm run check` |
+| Regression gate | 1,923 tests after adaptive review | No regression in the repository CI-equivalent gate | Every phase; `npm run check` |
 
 Delivery dates and capacity targets are unknown; this roadmap intentionally measures verified behavior
 and adoption rather than calendar output.
@@ -324,3 +332,4 @@ and adoption rather than calendar output.
 | 2026-08-01 | Move the internal interaction driver, standalone confirmation, and deferred multi-select behind the near-term lifecycle work. | Behavior matrices and explicit terminal outcomes should precede broad runtime refactoring or new public flows. |
 | 2026-08-01 | Merge the next-architecture implementation note into this canonical roadmap. | Maintaining one Pi TUI Kit roadmap avoids conflicting priorities while preserving the migration evidence and prior decision history. |
 | 2026-08-01 | Implement mandatory `RunMenuResult.closed.reason` and raise repository menu API to version 4. | The navigator already owns root Back versus Close; exposing that reason removes a proven composition blocker while leaving domain completion values local. Publication remains a separate workflow. |
+| 2026-08-01 | Implement opt-in adaptive review and raise repository menu API to version 5. | Live public TUI rows now bound complete review frames while fixed/default TUI output and deterministic RPC pages remain unchanged; the testing entry point, BTW gate/migration, and package release remain separate work. |

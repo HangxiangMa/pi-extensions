@@ -89,12 +89,13 @@ function validateScreen<
 	if (screen.kind === "review") {
 		if (
 			screen.viewportSize !== undefined &&
+			screen.viewportSize !== "adaptive" &&
 			(!Number.isInteger(screen.viewportSize) ||
 				screen.viewportSize <= 0 ||
 				screen.viewportSize > MAX_REVIEW_VIEWPORT_SIZE)
 		) {
 			throw new Error(
-				`Menu review viewport size must be a positive integer no greater than ${MAX_REVIEW_VIEWPORT_SIZE}`,
+				`Menu review viewport size must be "adaptive" or a positive integer no greater than ${MAX_REVIEW_VIEWPORT_SIZE}`,
 			);
 		}
 		if (screen.confirm) {
