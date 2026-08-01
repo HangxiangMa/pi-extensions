@@ -5,13 +5,13 @@
 			"source": "narumiruna/skills",
 			"sourceType": "github",
 			"skillPath": "skills/workflow-repository/applying-tdd/SKILL.md",
-			"computedHash": "bfb1256046d8e002e83f3a1acd9c00af15fe098f649d391374cc6852ffc243ec"
+			"computedHash": "d289e88b5f393fd201df11d6006592506190aaa6be5ba4cdc1b07bed2977cfb9"
 		},
 		"designing-user-experiences": {
 			"source": "narumiruna/skills",
 			"sourceType": "github",
 			"skillPath": "skills/ui-ux-design/designing-user-experiences/SKILL.md",
-			"computedHash": "b434e67f86e03e4dd084ab968b959102e189d6376160c4e44a0dec218f39d993"
+			"computedHash": "aca59a62bf81f7e42430c6ceecd22c3232fef3d3dcde006149b29e12944dde41"
 		},
 		"explaining-step-by-step": {
 			"source": "narumiruna/skills",
@@ -23,13 +23,13 @@
 			"source": "narumiruna/skills",
 			"sourceType": "github",
 			"skillPath": "skills/workflow-repository/hardening-code-paths/SKILL.md",
-			"computedHash": "3d8d1e4fcdbc9c56befd98cf986f075700b0fbd79e14a9c83cf8385617743a72"
+			"computedHash": "f9fa6e4c09b9094614e6eaf56a9c88256a64596edae83b1b5c8cb7865ca15af9"
 		},
 		"reviewing-code": {
 			"source": "narumiruna/skills",
 			"sourceType": "github",
 			"skillPath": "skills/workflow-repository/reviewing-code/SKILL.md",
-			"computedHash": "2920e6e8f54958f40afcfb0d8781e37aeb4eb1cf11b7c5b44166a4693ff13a43"
+			"computedHash": "1f09b4dfa6e4f57c86aff935f2816d8b8999a3895c17ed03ddc463dd875ee581"
 		},
 		"running-panel-review-loops": {
 			"source": "narumiruna/skills",
@@ -47,7 +47,7 @@
 			"source": "narumiruna/skills",
 			"sourceType": "github",
 			"skillPath": "skills/writing-research/writing-plans/SKILL.md",
-			"computedHash": "e31d2ff275c0bf89978fae40f88ef73e02a2eef5ad7cc6b5453440c3bd0e5b64"
+			"computedHash": "e90e203857ce95d0b3407f752c8c404d0033699bb02951569df179880767917d"
 		}
 	}
 }
