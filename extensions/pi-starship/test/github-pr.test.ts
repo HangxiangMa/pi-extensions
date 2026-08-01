@@ -43,7 +43,6 @@ function runtime(
 		gitBranch: "feature",
 		githubPr,
 		extensionStatuses: new Map(),
-		extensionStatusIconAliases: new Map(),
 		now: new Date(NOW),
 	};
 }

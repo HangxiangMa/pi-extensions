@@ -16,7 +16,6 @@ function fixture(): StarshipRuntimeSnapshot {
 		usingSubscription: false,
 		gitBranch: null,
 		extensionStatuses: new Map(),
-		extensionStatusIconAliases: new Map(),
 		now: new Date(0),
 	};
 }

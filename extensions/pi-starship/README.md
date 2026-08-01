@@ -31,7 +31,7 @@ Try it from a checkout:
 pi -e ./extensions/pi-starship
 ```
 
-Do not enable this together with `@narumitw/pi-statusline`: both own Pi's footer. `pi-starship` warns when it detects the conflict.
+Do not enable this together with `@narumitw/pi-statusline`: both own Pi's footer, and Pi does not arbitrate that conflict.
 
 ## ⚙️ Configuration
 
@@ -114,7 +114,7 @@ aliases = { "build.example.test" = "builder" }
 
 [extension_status]
 format = "([$statuses ]($style))"
-icons = { "foo:*" = "🧪", "@narumitw/pi-goal" = "◎", fallback = "•" }
+icons = { "foo:*" = "🧪", "third_party/key" = "◎", fallback = "•" }
 ```
 
 All module tables support `format`, `symbol`, `style`, and `disabled`. Module-specific
@@ -122,17 +122,19 @@ options are catalog-owned, type-checked, and listed below; unknown options warn 
 Version formats replace `$raw`. Detection arrays replace defaults when non-empty and inspect only one
 listing of the current directory. A leading `!` is supported by language detection arrays and rejects
 a matching project.
-`[extension_status].icons` accepts arbitrary exact Pi status keys, explicit colon namespace
-wildcards such as `foo:*`, and installed package IDs; `fallback` controls unmatched statuses. Icon
-matching uses exact key, longest `:*` wildcard, unambiguous package alias, leading status emoji,
-built-in icon, then `fallback`/`🔌`. An empty icon suppresses only the icon. `foo:*` matches
-`foo:server` but not `foo`, `foobar`, or `foo/server`.
+`[extension_status].icons` accepts arbitrary exact Pi status keys and explicit colon namespace
+wildcards such as `foo:*`; `fallback` controls unmatched statuses. Icon matching uses the exact key,
+the longest `:*` wildcard, a leading status emoji, then `fallback`/`🔌`. An empty configured icon
+suppresses only the icon. `foo:*` matches `foo:server` but not `foo`, `foobar`, or `foo/server`.
 
-Pi does not expose which package owns a status, so package aliases are best-effort conveniences and
-exact raw keys are the reliable third-party contract. Extension authors may adopt
-`<extension-id>` or `<extension-id>:<stable-slot>` for interoperability, but pi-starship cannot
-require that convention. Canonical built-ins use `sync` and `retry`; compatibility mappings keep
-`pisync` and `unknown-error-retry` settings and older producer versions working.
+Pi does not expose which package owns a status, so exact raw keys are the reliable third-party
+contract. pi-starship does not inspect installed packages, infer package aliases, assign icons to
+known extensions, or bridge compatibility keys. Extension authors may adopt `<extension-id>` or
+`<extension-id>:<stable-slot>` for interoperability, but pi-starship does not require that convention.
+
+**Icon migration:** configurations that relied on package-ID aliases, built-in known-extension icons,
+or compatibility mappings must use an exact raw status key, an explicit namespace wildcard, a
+leading emoji in the status value, or `fallback`.
 
 ## 🧩 Format grammar
 
