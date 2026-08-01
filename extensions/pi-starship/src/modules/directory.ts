@@ -7,7 +7,7 @@ export const directoryModule = defineModule({
 	defaults: {
 		format: "[ $symbol $path ]($style)",
 		symbol: "📁",
-		style: "fg:directory_fg bg:directory",
+		style: "cyan bold",
 		disabled: false,
 	},
 	values: ({ runtime }) => ({

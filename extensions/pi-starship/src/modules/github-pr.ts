@@ -6,7 +6,7 @@ export const githubPrModule = defineModule({
 	defaults: {
 		format: "[ $symbol$link( · $status) ]($style)",
 		symbol: "PR ",
-		style: "fg:git_fg bg:git",
+		style: "bold blue",
 		disabled: false,
 	},
 	values: ({ runtime }) => {

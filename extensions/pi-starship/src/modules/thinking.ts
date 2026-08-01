@@ -6,7 +6,7 @@ export const thinkingModule = defineModule({
 	defaults: {
 		format: "[$symbol $level ]($style)",
 		symbol: "🧠",
-		style: "fg:header_fg bg:header",
+		style: "bold purple",
 		disabled: false,
 	},
 	values: ({ runtime }) => ({ level: runtime.thinkingLevel }),

@@ -6,7 +6,7 @@ export const gitWorktreeModule = defineModule({
 	defaults: {
 		format: "[ $symbol $name ]($style)",
 		symbol: "🌳",
-		style: "fg:git_fg bg:git",
+		style: "cyan bold",
 		disabled: false,
 	},
 	values: ({ runtime }) =>

@@ -19,12 +19,15 @@ export type NamedColor =
 export type ColorSpec =
 	| { kind: "named"; name: NamedColor }
 	| { kind: "fixed"; value: number }
-	| { kind: "rgb"; red: number; green: number; blue: number }
-	| { kind: "previous"; source: "foreground" | "background" };
+	| { kind: "rgb"; red: number; green: number; blue: number };
+
+export type PreviousColorSource = "foreground" | "background";
 
 export interface TextStyle {
 	foreground?: ColorSpec;
 	background?: ColorSpec;
+	foregroundPrevious?: PreviousColorSource;
+	backgroundPrevious?: PreviousColorSource;
 	bold?: boolean;
 	italic?: boolean;
 	underline?: boolean;
@@ -34,6 +37,10 @@ export interface TextStyle {
 	hidden?: boolean;
 	strikethrough?: boolean;
 }
+
+export type StyleParseResult =
+	| { valid: true; style: TextStyle | undefined }
+	| { valid: false; style: undefined };
 
 export interface StyledChunk {
 	text: string;
@@ -92,41 +99,53 @@ const FOREGROUND_CODES: Record<NamedColor, number> = {
 };
 
 export function isValidStyle(styleString: string, palette: ColorPalette = {}): boolean {
-	for (const rawToken of styleString.split(/\s+/u).filter(Boolean)) {
-		const token = rawToken.toLowerCase();
-		if (token === "none" || token === "fg:none" || token === "bg:none") continue;
-		const probe: TextStyle = {};
-		if (applyModifier(probe, token)) continue;
-		const colorToken = token.startsWith("fg:") || token.startsWith("bg:") ? token.slice(3) : token;
-		if (!parseColor(colorToken, palette)) return false;
-	}
-	return true;
+	return parseStyleResult(styleString, palette).valid;
 }
 
-export function parseStyle(styleString: string, palette: ColorPalette = {}): TextStyle | undefined {
+export function parseStyleResult(
+	styleString: string,
+	palette: ColorPalette = {},
+): StyleParseResult {
+	const tokens = styleString.split(/\s+/u).filter(Boolean).map(normalizeStyleToken);
+	if (tokens.some(({ token, foreground }) => foreground && token === "none")) {
+		return { valid: true, style: undefined };
+	}
+
 	const style: TextStyle = {};
-	for (const rawToken of styleString.split(/\s+/u).filter(Boolean)) {
-		const token = rawToken.toLowerCase();
-		if (token === "none") return undefined;
-		if (token === "fg:none") {
-			delete style.foreground;
+	for (const { token, foreground } of tokens) {
+		if (applyModifier(style, token)) continue;
+		if (token === "prev_fg" || token === "prev_bg") {
+			const source = token === "prev_fg" ? "foreground" : "background";
+			if (foreground) style.foregroundPrevious = source;
+			else style.backgroundPrevious = source;
 			continue;
 		}
-		if (applyModifier(style, token)) continue;
-
-		const foreground = token.startsWith("fg:");
-		const background = token.startsWith("bg:");
-		const colorToken = foreground || background ? token.slice(3) : token;
-		if (background && colorToken === "none") {
+		const color = parseColor(token, palette);
+		if (!foreground && !color) {
 			delete style.background;
 			continue;
 		}
-		const color = parseColor(colorToken, palette);
-		if (!color) return undefined;
-		if (background) style.background = color;
-		else style.foreground = color;
+		if (!color) return { valid: false, style: undefined };
+		if (foreground) style.foreground = color;
+		else style.background = color;
 	}
-	return Object.keys(style).length > 0 ? style : undefined;
+	return { valid: true, style };
+}
+
+export function parseStyle(styleString: string, palette: ColorPalette = {}): TextStyle | undefined {
+	return parseStyleResult(styleString, palette).style;
+}
+
+function normalizeStyleToken(rawToken: string): { token: string; foreground: boolean } {
+	let token = rawToken.toLowerCase();
+	if (token.startsWith("fg:")) {
+		return { token: token.replace(/^(?:fg:)+/u, ""), foreground: true };
+	}
+	if (token.startsWith("bg:")) {
+		token = token.replace(/^(?:bg:)+/u, "");
+		return { token, foreground: false };
+	}
+	return { token, foreground: true };
 }
 
 function applyModifier(style: TextStyle, token: string): boolean {
@@ -161,8 +180,6 @@ function applyModifier(style: TextStyle, token: string): boolean {
 }
 
 export function parseColor(token: string, palette: ColorPalette = {}): ColorSpec | undefined {
-	if (token === "prev_fg") return { kind: "previous", source: "foreground" };
-	if (token === "prev_bg") return { kind: "previous", source: "background" };
 	const paletteValue = Object.hasOwn(palette, token) ? palette[token] : undefined;
 	if (paletteValue !== undefined) return parseColor(paletteValue.toLowerCase(), {});
 	if (NAMED_COLORS.has(token as NamedColor)) {
@@ -182,9 +199,13 @@ export function parseColor(token: string, palette: ColorPalette = {}): ColorSpec
 	};
 }
 
-interface ResolvedStyle extends Omit<TextStyle, "foreground" | "background"> {
-	foreground?: Exclude<ColorSpec, { kind: "previous" }>;
-	background?: Exclude<ColorSpec, { kind: "previous" }>;
+interface ResolvedStyle
+	extends Omit<
+		TextStyle,
+		"foreground" | "background" | "foregroundPrevious" | "backgroundPrevious"
+	> {
+	foreground?: ColorSpec;
+	background?: ColorSpec;
 }
 
 export function renderChunksToAnsi(chunks: readonly LayoutChunk[]): string {
@@ -215,20 +236,21 @@ function resolveStyle(
 	previous: ResolvedStyle | undefined,
 ): ResolvedStyle {
 	if (!style) return {};
+	const { foregroundPrevious, backgroundPrevious, ...resolved } = style;
 	return {
-		...style,
-		foreground: resolveColor(style.foreground, previous),
-		background: resolveColor(style.background, previous),
+		...resolved,
+		foreground: resolveColor(style.foreground, foregroundPrevious, previous),
+		background: resolveColor(style.background, backgroundPrevious, previous),
 	};
 }
 
 function resolveColor(
-	color: ColorSpec | undefined,
+	fallback: ColorSpec | undefined,
+	source: PreviousColorSource | undefined,
 	previous: ResolvedStyle | undefined,
-): ResolvedStyle["foreground"] {
-	if (!color) return undefined;
-	if (color.kind !== "previous") return color;
-	return color.source === "foreground" ? previous?.foreground : previous?.background;
+): ColorSpec | undefined {
+	if (!source || !previous) return fallback;
+	return source === "foreground" ? previous.foreground : previous.background;
 }
 
 function ansiCodes(style: ResolvedStyle): string[] {
@@ -246,10 +268,7 @@ function ansiCodes(style: ResolvedStyle): string[] {
 	return codes;
 }
 
-function colorCodes(
-	color: Exclude<ColorSpec, { kind: "previous" }>,
-	background: boolean,
-): string[] {
+function colorCodes(color: ColorSpec, background: boolean): string[] {
 	if (color.kind === "named") {
 		const foreground = FOREGROUND_CODES[color.name];
 		return [`${background ? foreground + 10 : foreground}`];

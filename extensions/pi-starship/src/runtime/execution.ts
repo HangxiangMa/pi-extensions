@@ -6,14 +6,23 @@ import {
 	optionStrings,
 	safeMetadata,
 } from "./helpers.js";
-import type { CollectorContext, MutableModuleSnapshot } from "./types.js";
+import {
+	type CollectorContext,
+	type MutableModuleSnapshot,
+	PRIVATE_STYLE_SELECTOR,
+} from "./types.js";
 
 export async function collectExecution(context: CollectorContext): Promise<MutableModuleSnapshot> {
 	if (context.input.reason === "periodic" && context.input.previous) {
 		const retained: MutableModuleSnapshot = {};
 		for (const name of ["os", "container", "hostname", "username"] as const) {
 			const values = context.input.previous.modules[name];
-			if (context.needs(name) && values) retained[name] = { ...values };
+			if (!context.needs(name) || !values) continue;
+			const selector = context.input.previous.styleSelectors?.[name];
+			retained[name] = {
+				...values,
+				...(selector === undefined ? {} : { [PRIVATE_STYLE_SELECTOR]: selector }),
+			};
 		}
 		return retained;
 	}
@@ -116,7 +125,10 @@ function usernameValues(context: CollectorContext): Record<string, string> | und
 	) {
 		return undefined;
 	}
-	return { user: exactAlias(user, optionMap(context, "username", "aliases")) ?? user };
+	return {
+		user: exactAlias(user, optionMap(context, "username", "aliases")) ?? user,
+		[PRIVATE_STYLE_SELECTOR]: privileged ? "root" : "user",
+	};
 }
 
 function isSsh(context: CollectorContext): boolean {

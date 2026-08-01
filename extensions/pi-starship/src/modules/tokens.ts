@@ -7,7 +7,7 @@ export const tokensModule = defineModule({
 	defaults: {
 		format: "[$symbol ↑$input ↓$output ]($style)",
 		symbol: "🔢",
-		style: "fg:runtime_fg bg:runtime",
+		style: "bold cyan",
 		disabled: false,
 	},
 	values: ({ runtime }) => ({

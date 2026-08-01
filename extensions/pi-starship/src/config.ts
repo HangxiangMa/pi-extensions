@@ -18,7 +18,11 @@ import {
 } from "./format/formatter.js";
 import { type ColorPalette, isValidStyle, parseColor } from "./format/style.js";
 import { MODULE_DEFINITIONS, MODULE_NAMES, type ModuleName } from "./modules/catalog.js";
-import type { ModuleOptionSchema, ModuleOptionValue } from "./modules/types.js";
+import type {
+	ModuleDisplayConfig,
+	ModuleOptionSchema,
+	ModuleOptionValue,
+} from "./modules/types.js";
 
 export const CONFIG_FILE_NAME = "pi-starship.toml";
 export { MODULE_NAMES, type ModuleName } from "./modules/catalog.js";
@@ -32,6 +36,8 @@ export interface ModuleConfig {
 	formatAst: FormatNode[];
 	symbol: string;
 	style: string;
+	styles: Record<string, string>;
+	display: ModuleDisplayConfig[];
 	disabled: boolean;
 	options: Record<string, ModuleOptionValue>;
 }
@@ -45,7 +51,7 @@ export interface ExtensionStatusConfig {
 export interface StarshipConfig {
 	format: string;
 	formatAst: FormatNode[];
-	palette: string;
+	palette?: string;
 	palettes: Record<string, Record<string, string>>;
 	modules: Record<ModuleName, ModuleConfig>;
 	extensionStatus: ExtensionStatusConfig;
@@ -67,52 +73,26 @@ export interface LoadedStarshipConfig {
 }
 
 const BUILT_IN_FORMAT_DOCUMENT = String.raw`format = """
-[░▒▓](lead)\
 $brand\
-$provider\
 $model\
 $thinking\
-[](fg:header bg:directory)\
 $directory\
-[](fg:directory bg:git)\
-$git_worktree\
 $git_branch\
-$github_pr\
 $git_status\
-[](fg:git bg:runtime)\
 $activity\
 $context\
-$tokens\
-$cache\
-[](fg:runtime bg:meter)\
-$cost\
-$time\
-[](fg:meter)\
-(\n$extension_status)"""`;
+$time"""`;
 
 const BUILT_IN_FORMAT = parseBuiltInFormat(BUILT_IN_FORMAT_DOCUMENT);
 
-const BUILT_IN_PALETTE = {
-	lead: "#a3aed2",
-	header: "#a3aed2",
-	header_fg: "#090c0c",
-	directory: "#769ff0",
-	directory_fg: "#e3e5e5",
-	git: "#394260",
-	git_fg: "#769ff0",
-	runtime: "#212736",
-	runtime_fg: "#769ff0",
-	meter: "#1d2230",
-	meter_fg: "#a0a9cb",
-	extension: "#a0a9cb",
-};
-
 const BUILT_IN_MODULES = Object.fromEntries(
-	MODULE_DEFINITIONS.map(({ name, defaults, options }) => [
+	MODULE_DEFINITIONS.map(({ name, defaults, styleDefaults, displayDefaults, options }) => [
 		name,
 		{
 			...defaults,
 			formatAst: parseFormat(defaults.format),
+			styles: { ...styleDefaults },
+			display: structuredClone(displayDefaults ?? []),
 			options: Object.fromEntries(
 				Object.entries(options ?? {}).map(([key, schema]) => [
 					key,
@@ -126,17 +106,13 @@ const BUILT_IN_MODULES = Object.fromEntries(
 export const BUILT_IN_CONFIG: StarshipConfig = {
 	format: BUILT_IN_FORMAT,
 	formatAst: parseFormat(BUILT_IN_FORMAT),
-	palette: "tokyo-night",
-	palettes: { "tokyo-night": BUILT_IN_PALETTE },
+	palette: undefined,
+	palettes: {},
 	modules: BUILT_IN_MODULES,
 	extensionStatus: { separator: " • ", maxStatuses: 5, icons: {} },
 };
 
-export const BUILT_IN_EXAMPLE = `# Native Pi modules with Starship-compatible format and style syntax.\n${BUILT_IN_FORMAT_DOCUMENT}\npalette = "tokyo-night"\n\n[palettes.tokyo-night]\n${Object.entries(
-	BUILT_IN_PALETTE,
-)
-	.map(([name, color]) => `${name} = "${color}"`)
-	.join("\n")}\n`;
+export const BUILT_IN_EXAMPLE = `# Native Pi modules with Starship-compatible format and style syntax.\n${BUILT_IN_FORMAT_DOCUMENT}\n`;
 
 function parseBuiltInFormat(document: string): string {
 	const format = parse(document).format;
@@ -253,11 +229,14 @@ export function normalizeConfig(value: unknown): {
 
 	if (value.palette !== undefined) {
 		if (typeof value.palette !== "string") diagnostics.push(typeDiagnostic("palette", "string"));
-		else if (!Object.hasOwn(config.palettes, value.palette)) {
-			diagnostics.push(
-				diagnostic("warning", "palette", `Unknown palette ${JSON.stringify(value.palette)}`),
-			);
-		} else config.palette = value.palette;
+		else {
+			config.palette = value.palette;
+			if (!Object.hasOwn(config.palettes, value.palette)) {
+				diagnostics.push(
+					diagnostic("warning", "palette", `Unknown palette ${JSON.stringify(value.palette)}`),
+				);
+			}
+		}
 	}
 
 	for (const name of MODULE_NAMES) {
@@ -278,7 +257,9 @@ export function normalizeConfig(value: unknown): {
 	);
 	validateStyleVariables(config.formatAst, new Set(), "format", diagnostics);
 	const palette = activePalette(config);
-	for (const name of MODULE_NAMES) {
+	validateLiteralStyles(config.formatAst, palette, "format", diagnostics);
+	for (const definition of MODULE_DEFINITIONS) {
+		const name = definition.name;
 		const module = config.modules[name];
 		validateFormatVariables(
 			module.formatAst,
@@ -286,16 +267,19 @@ export function normalizeConfig(value: unknown): {
 			`${name}.format`,
 			diagnostics,
 		);
-		validateStyleVariables(module.formatAst, new Set(["style"]), `${name}.format`, diagnostics);
-		if (!isValidStyle(module.style, palette)) {
-			diagnostics.push(
-				diagnostic(
-					"warning",
-					`${name}.style`,
-					`Invalid style ${JSON.stringify(module.style)}; using the module default`,
-				),
-			);
-			module.style = BUILT_IN_CONFIG.modules[name].style;
+		validateStyleVariables(
+			module.formatAst,
+			new Set(definition.styleVariables ?? ["style"]),
+			`${name}.format`,
+			diagnostics,
+		);
+		validateLiteralStyles(module.formatAst, palette, `${name}.format`, diagnostics);
+		if (definition.styleDefaults) {
+			for (const field of Object.keys(definition.styleDefaults)) {
+				validateModuleStyleField(name, field, module, palette, diagnostics);
+			}
+		} else if (!definition.displayDefaults) {
+			validateModuleStyleField(name, "style", module, palette, diagnostics);
 		}
 	}
 
@@ -309,8 +293,13 @@ function normalizeModule(
 	diagnostics: ConfigDiagnostic[],
 ) {
 	const definition = MODULE_DEFINITIONS.find((candidate) => candidate.name === name);
-	const optionSchemas: Readonly<Record<string, ModuleOptionSchema>> = definition?.options ?? {};
-	const known = new Set(["format", "symbol", "style", "disabled", ...Object.keys(optionSchemas)]);
+	if (!definition) return;
+	const optionSchemas: Readonly<Record<string, ModuleOptionSchema>> = definition.options ?? {};
+	const known = new Set(["format", "symbol", "disabled", ...Object.keys(optionSchemas)]);
+	if (definition.styleDefaults) {
+		for (const field of Object.keys(definition.styleDefaults)) known.add(field);
+	} else if (!definition.displayDefaults) known.add("style");
+	if (definition.displayDefaults) known.add("display");
 	if (name === "extension_status") {
 		known.add("separator");
 		known.add("max_statuses");
@@ -338,11 +327,31 @@ function normalizeModule(
 			}
 		}
 	}
-	for (const field of ["symbol", "style"] as const) {
-		if (value[field] === undefined) continue;
-		if (typeof value[field] !== "string") {
-			diagnostics.push(typeDiagnostic(`${name}.${field}`, "string"));
-		} else module[field] = value[field];
+	if (value.symbol !== undefined) {
+		if (typeof value.symbol !== "string") {
+			diagnostics.push(typeDiagnostic(`${name}.symbol`, "string"));
+		} else module.symbol = value.symbol;
+	}
+	if (definition.styleDefaults) {
+		for (const field of Object.keys(definition.styleDefaults)) {
+			if (value[field] === undefined) continue;
+			if (typeof value[field] !== "string") {
+				diagnostics.push(typeDiagnostic(`${name}.${field}`, "string"));
+			} else module.styles[field] = value[field];
+		}
+	} else if (!definition.displayDefaults && value.style !== undefined) {
+		if (typeof value.style !== "string") {
+			diagnostics.push(typeDiagnostic(`${name}.style`, "string"));
+		} else module.style = value.style;
+	}
+	if (definition.displayDefaults && value.display !== undefined) {
+		module.display = normalizeDisplay(
+			name,
+			value.display,
+			definition.displayDefaults,
+			activePalette(config),
+			diagnostics,
+		);
 	}
 	if (value.disabled !== undefined) {
 		if (typeof value.disabled !== "boolean") {
@@ -514,6 +523,8 @@ function cloneBuiltInConfig(): StarshipConfig {
 				{
 					...BUILT_IN_CONFIG.modules[name],
 					formatAst: structuredClone(BUILT_IN_CONFIG.modules[name].formatAst),
+					styles: { ...BUILT_IN_CONFIG.modules[name].styles },
+					display: structuredClone(BUILT_IN_CONFIG.modules[name].display),
 					options: structuredClone(BUILT_IN_CONFIG.modules[name].options),
 				},
 			]),
@@ -558,6 +569,107 @@ function validateStyleVariables(
 				`Unknown style variable ${JSON.stringify(variable)} in ${path} was ignored`,
 			),
 		);
+	}
+}
+
+function validateModuleStyleField(
+	name: ModuleName,
+	field: string,
+	module: ModuleConfig,
+	palette: ColorPalette,
+	diagnostics: ConfigDiagnostic[],
+) {
+	const style = field === "style" ? module.style : module.styles[field];
+	if (style === undefined || isValidStyle(style, palette)) return;
+	diagnostics.push(
+		diagnostic(
+			"warning",
+			`${name}.${field}`,
+			`Invalid style ${JSON.stringify(style)}; using the module default`,
+		),
+	);
+	if (field === "style") module.style = BUILT_IN_CONFIG.modules[name].style;
+	else {
+		const fallback = BUILT_IN_CONFIG.modules[name].styles[field];
+		if (fallback !== undefined) module.styles[field] = fallback;
+	}
+}
+
+function normalizeDisplay(
+	name: ModuleName,
+	value: unknown,
+	defaults: readonly ModuleDisplayConfig[],
+	palette: ColorPalette,
+	diagnostics: ConfigDiagnostic[],
+): ModuleDisplayConfig[] {
+	if (!Array.isArray(value)) {
+		diagnostics.push(typeDiagnostic(`${name}.display`, "array of tables"));
+		return defaults.map((entry) => ({ ...entry }));
+	}
+	const result: ModuleDisplayConfig[] = [];
+	for (const [index, entry] of value.entries()) {
+		const path = `${name}.display.${index}`;
+		if (!isRecord(entry)) {
+			diagnostics.push(typeDiagnostic(path, "table"));
+			continue;
+		}
+		for (const field of Object.keys(entry)) {
+			if (!new Set(["threshold", "style", "hidden"]).has(field)) {
+				diagnostics.push(unknownDiagnostic(`${path}.${field}`));
+			}
+		}
+		let valid = true;
+		if (typeof entry.threshold !== "number" || !Number.isFinite(entry.threshold)) {
+			diagnostics.push(diagnostic("warning", `${path}.threshold`, "Expected a finite number"));
+			valid = false;
+		}
+		if (typeof entry.style !== "string" || !isValidStyle(entry.style, palette)) {
+			diagnostics.push(
+				diagnostic("warning", `${path}.style`, "Expected a valid Starship style string"),
+			);
+			valid = false;
+		}
+		if (typeof entry.hidden !== "boolean") {
+			diagnostics.push(typeDiagnostic(`${path}.hidden`, "boolean"));
+			valid = false;
+		}
+		if (valid) {
+			result.push({
+				threshold: entry.threshold as number,
+				style: entry.style as string,
+				hidden: entry.hidden as boolean,
+			});
+		}
+	}
+	if (result.length > 0) return result;
+	diagnostics.push(
+		diagnostic("warning", `${name}.display`, "Expected at least one valid entry; using defaults"),
+	);
+	return defaults.map((entry) => ({ ...entry }));
+}
+
+function validateLiteralStyles(
+	ast: readonly FormatNode[],
+	palette: ColorPalette,
+	path: string,
+	diagnostics: ConfigDiagnostic[],
+) {
+	for (const node of ast) {
+		if (node.type === "group" && node.style.every((part) => part.type === "text")) {
+			const style = node.style.map((part) => (part.type === "text" ? part.value : "")).join("");
+			if (!isValidStyle(style, palette)) {
+				diagnostics.push(
+					diagnostic(
+						"warning",
+						path,
+						`Invalid literal style ${JSON.stringify(style)}; rendered unstyled`,
+					),
+				);
+			}
+		}
+		if (node.type === "group" || node.type === "conditional") {
+			validateLiteralStyles(node.children, palette, path, diagnostics);
+		}
 	}
 }
 
@@ -667,15 +779,12 @@ function formatError(error: unknown): string {
 }
 
 export function activePalette(config: StarshipConfig): ColorPalette {
-	return {
-		...ownPalette(config.palettes, BUILT_IN_CONFIG.palette),
-		...ownPalette(config.palettes, config.palette),
-	};
+	return ownPalette(config.palettes, config.palette) ?? {};
 }
 
 function ownPalette(
 	palettes: Readonly<Record<string, Record<string, string>>>,
-	name: string,
+	name: string | undefined,
 ): Record<string, string> | undefined {
-	return Object.hasOwn(palettes, name) ? palettes[name] : undefined;
+	return name !== undefined && Object.hasOwn(palettes, name) ? palettes[name] : undefined;
 }

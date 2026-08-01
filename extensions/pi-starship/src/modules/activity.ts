@@ -6,7 +6,7 @@ export const activityModule = defineModule({
 	defaults: {
 		format: "[ $text ]($style)",
 		symbol: "⚙",
-		style: "fg:runtime_fg bg:runtime",
+		style: "bold yellow",
 		disabled: false,
 	},
 	values: ({ runtime, symbol }) => {

@@ -54,9 +54,20 @@ export const usernameModule = defineModule({
 	defaults: {
 		format: "[$user]($style) in ",
 		symbol: "",
-		style: "yellow bold",
+		style: "none",
 		disabled: false,
 	},
+	styleDefaults: {
+		style_user: "yellow bold",
+		style_root: "red bold",
+	},
+	styleVariables: ["style"],
+	resolveStyleVariables: ({ runtime, styles }) => ({
+		style:
+			runtime.workspace?.styleSelectors?.username === "root"
+				? (styles.style_root ?? "")
+				: (styles.style_user ?? ""),
+	}),
 	options: {
 		show_always: { kind: "boolean", default: false },
 		aliases: { kind: "string-map", default: {} },

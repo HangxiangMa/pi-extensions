@@ -6,7 +6,7 @@ export const gitStateModule = defineModule({
 	defaults: {
 		format: "[ ($state( $progress_current/$progress_total)) ]($style)",
 		symbol: "",
-		style: "bold yellow bg:git",
+		style: "bold yellow",
 		disabled: false,
 	},
 	values: ({ runtime }) => {

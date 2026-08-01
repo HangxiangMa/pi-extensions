@@ -6,7 +6,7 @@ export const brandModule = defineModule({
 	defaults: {
 		format: "[ $symbol ]($style)",
 		symbol: "π",
-		style: "bold fg:header_fg bg:header",
+		style: "bold white",
 		disabled: false,
 	},
 	values: () => ({}),

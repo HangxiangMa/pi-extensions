@@ -6,7 +6,7 @@ export const turnModule = defineModule({
 	defaults: {
 		format: "[$symbol #$count ]($style)",
 		symbol: "🔁",
-		style: "fg:meter_fg bg:meter",
+		style: "bold purple",
 		disabled: false,
 	},
 	values: ({ runtime }) => ({ count: `${runtime.turnCount}` }),

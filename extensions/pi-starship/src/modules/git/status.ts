@@ -31,7 +31,7 @@ export const gitStatusModule = defineModule({
 	defaults: {
 		format: "[$all_status( $ahead_behind) ]($style)",
 		symbol: "",
-		style: "fg:git_fg bg:git",
+		style: "red bold",
 		disabled: false,
 	},
 	values: ({ runtime }) => {

@@ -6,7 +6,7 @@ export const extensionStatusModule = defineModule({
 	defaults: {
 		format: "[$statuses]($style)",
 		symbol: "",
-		style: "fg:extension",
+		style: "dimmed white",
 		disabled: false,
 	},
 	values: ({ runtime, extensionStatus }) => {

@@ -73,6 +73,7 @@ export interface GitSnapshot {
 
 export interface WorkspaceSnapshot {
 	modules: Readonly<Record<string, Readonly<Record<string, string>>>>;
+	styleSelectors?: Readonly<Record<string, string>>;
 }
 
 export interface StarshipRuntimeSnapshot {
@@ -138,6 +139,12 @@ export type ModuleOptionSchema =
 	| { kind: "string-array"; default: readonly string[]; allowNegative?: boolean }
 	| { kind: "string-map"; default: Readonly<Record<string, string>> };
 
+export interface ModuleDisplayConfig {
+	threshold: number;
+	style: string;
+	hidden: boolean;
+}
+
 export interface ModuleDefaults {
 	format: string;
 	symbol: string;
@@ -145,10 +152,22 @@ export interface ModuleDefaults {
 	disabled: boolean;
 }
 
+export interface ModuleStyleContext {
+	runtime: StarshipRuntimeSnapshot;
+	values: Readonly<Record<string, string>>;
+	style: string;
+	styles: Readonly<Record<string, string>>;
+	display: readonly ModuleDisplayConfig[];
+}
+
 export interface ModuleDefinition<Name extends string> {
 	name: Name;
 	variables: readonly string[];
 	defaults: ModuleDefaults;
+	styleDefaults?: Readonly<Record<string, string>>;
+	displayDefaults?: readonly ModuleDisplayConfig[];
+	styleVariables?: readonly string[];
+	resolveStyleVariables?(context: ModuleStyleContext): Readonly<Record<string, string>> | undefined;
 	options?: Readonly<Record<string, ModuleOptionSchema>>;
 	layout?: "fill";
 	values(context: ModuleValueContext): Record<string, string> | undefined;

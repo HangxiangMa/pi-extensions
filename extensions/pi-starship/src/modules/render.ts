@@ -24,12 +24,30 @@ export function renderStatusline(
 	}
 	for (const definition of MODULE_DEFINITIONS) {
 		const name = definition.name;
+		const module = config.modules[name];
 		const values = definition.values(valueContext(config, name, runtime));
 		if (!values) continue;
-		const rendered = renderModule(config.modules[name], values, palette);
+		const styleVariables = definition.resolveStyleVariables
+			? definition.resolveStyleVariables({
+					runtime,
+					values,
+					style: module.style,
+					styles: module.styles,
+					display: module.display,
+				})
+			: { style: module.style };
+		if (!styleVariables) continue;
+		const contentValues = Object.fromEntries(
+			definition.variables.flatMap((variable) =>
+				variable !== "symbol" && Object.hasOwn(values, variable)
+					? [[variable, values[variable]]]
+					: [],
+			),
+		);
+		const rendered = renderModule(module, contentValues, styleVariables, palette);
 		modules[name] = rendered;
 		layoutModules[name] =
-			definition.layout === "fill" && !config.modules[name].disabled
+			definition.layout === "fill" && !module.disabled
 				? [{ type: "fill", pattern: rendered }]
 				: rendered;
 	}
@@ -65,12 +83,13 @@ function valueContext(
 function renderModule(
 	module: ModuleConfig,
 	values: Readonly<Record<string, FormatValue>>,
+	styleVariables: Readonly<Record<string, string>>,
 	palette: Readonly<Record<string, string>>,
 ): StyledChunk[] {
 	if (module.disabled) return [];
 	return renderFormat(module.formatAst, {
 		variables: { symbol: module.symbol, ...values },
-		styleVariables: { style: module.style },
+		styleVariables,
 		palette,
 	}).filter((chunk): chunk is StyledChunk => !isFillChunk(chunk));
 }

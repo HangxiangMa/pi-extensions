@@ -6,7 +6,7 @@ export const timeModule = defineModule({
 	defaults: {
 		format: "[$symbol $time ]($style)",
 		symbol: "🕒",
-		style: "fg:meter_fg bg:meter",
+		style: "bold yellow",
 		disabled: false,
 	},
 	values: ({ runtime }) => ({ time: formatTime(runtime.now) }),

@@ -8,11 +8,12 @@ import { collectExecution } from "./execution.js";
 import { createFileSystem } from "./helpers.js";
 import { collectLanguages } from "./languages.js";
 import { collectPackage } from "./package.js";
-import type {
-	CollectorContext,
-	MutableModuleSnapshot,
-	WorkspaceEntry,
-	WorkspaceRefreshInput,
+import {
+	type CollectorContext,
+	type MutableModuleSnapshot,
+	PRIVATE_STYLE_SELECTOR,
+	type WorkspaceEntry,
+	type WorkspaceRefreshInput,
 } from "./types.js";
 
 export { parseTerraformVersion } from "./deployment.js";
@@ -108,6 +109,19 @@ function mergeModules(target: MutableModuleSnapshot, source: MutableModuleSnapsh
 }
 
 function freezeSnapshot(modules: MutableModuleSnapshot): WorkspaceSnapshot {
-	for (const values of Object.values(modules)) Object.freeze(values);
-	return Object.freeze({ modules: Object.freeze(modules) });
+	const styleSelectors: Record<string, string> = {};
+	for (const [name, values] of Object.entries(modules)) {
+		const selector = Object.hasOwn(values, PRIVATE_STYLE_SELECTOR)
+			? values[PRIVATE_STYLE_SELECTOR]
+			: undefined;
+		delete values[PRIVATE_STYLE_SELECTOR];
+		if (selector !== undefined) styleSelectors[name] = selector;
+		Object.freeze(values);
+	}
+	return Object.freeze({
+		modules: Object.freeze(modules),
+		...(Object.keys(styleSelectors).length > 0
+			? { styleSelectors: Object.freeze(styleSelectors) }
+			: {}),
+	});
 }
