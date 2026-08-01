@@ -18,6 +18,7 @@ import {
 	CONFIG_FILE_NAME,
 	loadStarshipConfig,
 	MODULE_NAMES,
+	normalizeConfig,
 	settingsFilePath,
 	validateConfigDocument,
 } from "../src/config.js";
@@ -84,6 +85,7 @@ test("built-in example uses readable TOML continuations without changing the for
 				"[](fg:directory bg:git)",
 				"$git_worktree",
 				"$git_branch",
+				"$github_pr",
 				"$git_status",
 				"[](fg:git bg:runtime)",
 				"$activity",
@@ -104,7 +106,7 @@ test("built-in example uses readable TOML continuations without changing the for
 	}
 });
 
-test("Git modules use Starship display order", () => {
+test("Git and GitHub PR modules use deterministic display order", () => {
 	const gitModules = MODULE_NAMES.filter((name) => name.startsWith("git_"));
 	assert.deepEqual(gitModules, [
 		"git_worktree",
@@ -114,6 +116,20 @@ test("Git modules use Starship display order", () => {
 		"git_metrics",
 		"git_status",
 	]);
+	assert.equal(MODULE_NAMES.indexOf("github_pr"), MODULE_NAMES.indexOf("git_branch") + 1);
+	assert.match(BUILT_IN_CONFIG.format, /\$git_branch\$github_pr\$git_status/u);
+});
+
+test("removed git_branch $pr settings use the generic unknown-variable diagnostic", () => {
+	const normalized = normalizeConfig({
+		format: "$git_branch",
+		git_branch: { format: "$branch$pr" },
+	});
+	assert.equal(BUILT_IN_CONFIG.modules.git_branch.format.includes("$pr"), false);
+	assert.match(
+		normalized.diagnostics.map((item) => `${item.path}: ${item.message}`).join("\n"),
+		/git_branch\.format.*unknown variable.*pr/iu,
+	);
 });
 
 test("first-wave modules are registered in deterministic domain order", () => {

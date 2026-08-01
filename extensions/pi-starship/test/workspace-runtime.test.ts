@@ -35,6 +35,26 @@ test("workspace commands stream output and terminate at the byte limit", async (
 	assert.ok(Date.now() - started < 1_500);
 });
 
+test("workspace commands honor caller cancellation", async () => {
+	const controller = new AbortController();
+	const started = Date.now();
+	const resultPromise = execWorkspaceCommand(
+		process.execPath,
+		["-e", "setInterval(() => {}, 10_000);"],
+		{
+			cwd: process.cwd(),
+			timeout: 2_000,
+			maxOutputBytes: 1_024,
+			environment: {},
+			signal: controller.signal,
+		},
+	);
+	setTimeout(() => controller.abort(), 20);
+	const result = await resultPromise;
+	assert.equal(result.killed, true);
+	assert.ok(Date.now() - started < 1_000);
+});
+
 test("workspace commands receive only the explicit allowlisted environment", async () => {
 	const secretName = `PI_STARSHIP_SENTINEL_${process.pid}`;
 	process.env[secretName] = "secret";
@@ -181,6 +201,32 @@ test("package parser supports Cargo inheritance and Python metadata without ance
 			exec: noExec,
 		});
 		assert.equal(snapshot.modules.package, undefined);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("workspace collectors forward refresh cancellation to commands", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-workspace-signal-"));
+	try {
+		writeFileSync(join(root, "package.json"), "{}");
+		const controller = new AbortController();
+		let received: AbortSignal | undefined;
+		await collectWorkspaceSnapshot({
+			cwd: root,
+			config: config("$nodejs", { nodejs: { format: "$version" } }),
+			environment: {},
+			homeDir: root,
+			platform: "linux",
+			hostname: "host",
+			username: "user",
+			signal: controller.signal,
+			exec: async (_command, _args, options) => {
+				received = options.signal;
+				return { stdout: "v22.1.0", stderr: "", code: 0, killed: false };
+			},
+		});
+		assert.equal(received, controller.signal);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -699,7 +745,60 @@ test("oversized and malformed metadata files fail empty without leaking source t
 	}
 });
 
-test("refresh controller coalesces, suppresses equality, and rejects stale generations", async () => {
+test("refresh controller aborts work from replaced and stopped generations", () => {
+	const signals: AbortSignal[] = [];
+	const controller = new AsyncRefreshController<string, string>({
+		read: (_input, signal) => {
+			signals.push(signal);
+			return new Promise(() => undefined);
+		},
+		equal: (left, right) => left === right,
+		publish() {},
+	});
+	controller.start(1);
+	controller.request("old");
+	assert.equal(signals.length, 1);
+	assert.equal(signals[0]?.aborted, false);
+
+	controller.start(2);
+	assert.equal(signals[0]?.aborted, true);
+	controller.request("replacement");
+	assert.equal(signals.length, 2);
+	assert.equal(signals[1]?.aborted, false);
+
+	controller.stop();
+	assert.equal(signals[1]?.aborted, true);
+});
+
+test("refresh controller keeps only the latest same-generation pending request", async () => {
+	const pending: Array<(value: string) => void> = [];
+	const reads: string[] = [];
+	const published: string[] = [];
+	const controller = new AsyncRefreshController<string, string>({
+		read: (input) => {
+			reads.push(input);
+			return new Promise((resolve) => pending.push(resolve));
+		},
+		equal: (left, right) => left === right,
+		publish: (value) => published.push(value),
+	});
+	controller.start(1);
+	controller.request("active");
+	controller.request("superseded");
+	controller.request("latest");
+	assert.deepEqual(reads, ["active"]);
+
+	pending.shift()?.("active-result");
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.deepEqual(published, []);
+	assert.deepEqual(reads, ["active", "latest"]);
+	pending.shift()?.("latest-result");
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.deepEqual(published, ["latest-result"]);
+	controller.stop();
+});
+
+test("refresh controller suppresses equality and rejects stale generations", async () => {
 	const pending: Array<(value: string) => void> = [];
 	const published: string[] = [];
 	const controller = new AsyncRefreshController<string, string>({

@@ -18,13 +18,13 @@ import type {
 export { parseTerraformVersion } from "./deployment.js";
 export { parseDirenvStatus, parseMiseHealth } from "./development.js";
 export { parseRuntimeVersion } from "./languages.js";
-export type { WorkspaceExec, WorkspaceRefreshInput } from "./types.js";
+export type { WorkspaceExec, WorkspaceExecResult, WorkspaceRefreshInput } from "./types.js";
 
 export async function collectWorkspaceSnapshot(
 	input: WorkspaceRefreshInput,
 ): Promise<WorkspaceSnapshot> {
 	const requirements = reachableModuleRequirements(input.config);
-	if (!hasWorkspaceRequirement(requirements)) return freezeSnapshot({});
+	if (input.signal?.aborted || !hasWorkspaceRequirement(requirements)) return freezeSnapshot({});
 	const fs = createFileSystem(input);
 	let listing: Promise<readonly WorkspaceEntry[]> | undefined;
 	const context: CollectorContext = {
@@ -45,6 +45,7 @@ export async function collectWorkspaceSnapshot(
 	};
 	const modules: MutableModuleSnapshot = {};
 	const packageValues = await collectPackage(context);
+	if (input.signal?.aborted) return freezeSnapshot({});
 	if (packageValues) modules.package = packageValues;
 	for (const collector of [
 		collectLanguages,
@@ -53,9 +54,10 @@ export async function collectWorkspaceSnapshot(
 		collectCloud,
 		collectExecution,
 	]) {
+		if (input.signal?.aborted) return freezeSnapshot({});
 		mergeModules(modules, await collector(context));
 	}
-	return freezeSnapshot(modules);
+	return input.signal?.aborted ? freezeSnapshot({}) : freezeSnapshot(modules);
 }
 
 export function workspaceSnapshotEqual(
@@ -79,6 +81,7 @@ const BUILT_IN_ONLY_MODULES = new Set<ModuleName>([
 	"directory",
 	"git_worktree",
 	"git_branch",
+	"github_pr",
 	"git_commit",
 	"git_state",
 	"git_metrics",

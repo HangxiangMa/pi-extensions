@@ -161,6 +161,7 @@ export async function runBounded(
 			cwd: context.input.cwd,
 			timeout: COMMAND_TIMEOUT_MS,
 			maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
+			signal: context.input.signal,
 			environment: context.input.environment,
 		});
 		if (result.code !== 0 || result.killed) return undefined;

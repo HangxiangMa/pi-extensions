@@ -7,7 +7,6 @@ import {
 	buildExtensionStatusIconAliases,
 	formatCount,
 	formatExtensionStatus,
-	prContextFromStatuses,
 	renderStatusline,
 	type StarshipRuntimeSnapshot,
 	shortenModel,
@@ -17,7 +16,16 @@ const LINK = "\x1b]8;;https://github.com/o/r/pull/123\x07#123\x1b]8;;\x07";
 
 function stripAnsi(value: string): string {
 	const escapeSequence = String.fromCharCode(27);
-	return value.replace(new RegExp(`${escapeSequence}\\[[0-9;]*m`, "gu"), "");
+	let result = value.replace(new RegExp(`${escapeSequence}\\[[0-9;]*m`, "gu"), "");
+	const osc8Prefix = `${escapeSequence}]8;;`;
+	const terminator = String.fromCharCode(7);
+	while (true) {
+		const start = result.indexOf(osc8Prefix);
+		if (start === -1) return result;
+		const end = result.indexOf(terminator, start + osc8Prefix.length);
+		if (end === -1) return result.slice(0, start);
+		result = result.slice(0, start) + result.slice(end + terminator.length);
+	}
 }
 
 function fixture(overrides: Partial<StarshipRuntimeSnapshot> = {}): StarshipRuntimeSnapshot {
@@ -41,6 +49,14 @@ function fixture(overrides: Partial<StarshipRuntimeSnapshot> = {}): StarshipRunt
 		gitBranch: "feature",
 		gitBranchDetails: { name: "feature", detached: false },
 		gitCommit: { hash: "0123456789abcdef", detached: false },
+		githubPr: {
+			number: "123",
+			link: LINK,
+			state: "open",
+			checks: "2 failing",
+			review: "approved",
+			status: "2 failing",
+		},
 		gitStatus: {
 			ahead: 2,
 			behind: 1,
@@ -61,10 +77,7 @@ function fixture(overrides: Partial<StarshipRuntimeSnapshot> = {}): StarshipRunt
 			indexModified: 0,
 			indexTypechanged: 0,
 		},
-		extensionStatuses: new Map([
-			["github-pr", `PR ${LINK}: checks failing (2), approved`],
-			["goal", "active"],
-		]),
+		extensionStatuses: new Map([["goal", "active"]]),
 		extensionStatusIconAliases: new Map(),
 		now: new Date(2026, 0, 1, 9, 5),
 		...overrides,
@@ -80,6 +93,7 @@ test("built-in modules expose Pi values through the default format", () => {
 	assert.match(plain, /high/);
 	assert.match(plain, /pi-extensions/);
 	assert.match(plain, /feature/);
+	assert.match(plain, /PR #123 · 2 failing/);
 	assert.match(plain, /=1 !4 \+3 \?5 ⇕⇡2⇣1/);
 	assert.match(plain, /read/);
 	assert.match(plain, /75\.0%/);
@@ -87,8 +101,6 @@ test("built-in modules expose Pi values through the default format", () => {
 	assert.match(plain, /\$0\.123/);
 	assert.match(plain, /09:05/);
 	assert.match(plain, /🎯 active/);
-	assert.doesNotMatch(plain, /PR .*checks failing/);
-	assert.ok(rendered.consumedExtensionStatusKeys.has("github-pr"));
 });
 
 test("context supports native percentage/window precision", () => {
@@ -211,19 +223,22 @@ test("cache read and write remain available when the latest rate is unknown", ()
 	assert.equal(stripAnsi(renderStatusline(config, runtime).ansi).trim(), "C");
 });
 
-test("git branch consumes github-pr only when its module format references pr", () => {
+test("external github-pr statuses remain generic extension statuses", () => {
 	const config = structuredClone(BUILT_IN_CONFIG);
-	config.format = "$git_branch\n$extension_status";
-	config.formatAst = [
-		{ type: "variable", name: "git_branch" },
-		{ type: "text", value: "\n" },
-		{ type: "variable", name: "extension_status" },
-	];
-	config.modules.git_branch.format = "$branch";
-	config.modules.git_branch.formatAst = [{ type: "variable", name: "branch" }];
-	const rendered = renderStatusline(config, fixture());
-	assert.equal(rendered.consumedExtensionStatusKeys.has("github-pr"), false);
-	assert.match(rendered.ansi, /checks failing/);
+	config.format = "$extension_status";
+	config.formatAst = [{ type: "variable", name: "extension_status" }];
+	const rendered = stripAnsi(
+		renderStatusline(
+			config,
+			fixture({
+				githubPr: undefined,
+				extensionStatuses: new Map([["github-pr", `PR ${LINK}: checks failing (2), approved`]]),
+			}),
+		).ansi,
+	);
+	assert.match(rendered, /🔌 PR/u);
+	assert.match(rendered, /checks failing/u);
+	assert.doesNotMatch(rendered, /🔎/u);
 });
 
 test("empty and disabled modules disappear and make conditionals empty", () => {
@@ -623,12 +638,8 @@ test("extension status icons honor exact keys, aliases, suppression, defaults, a
 	assert.doesNotMatch(rendered, /🔌 waiting/);
 });
 
-test("format helpers are compact and PR state is actionable", () => {
+test("format helpers stay compact and OSC links retain visible width", () => {
 	assert.equal(formatCount(1530), "1.5k");
 	assert.equal(shortenModel("claude-sonnet-4-20250514"), "sonnet-4");
-	assert.equal(
-		prContextFromStatuses(new Map([["github-pr", `PR ${LINK}: checks failing (2), approved`]])),
-		`${LINK} · 2 failing`,
-	);
 	assert.equal(visibleWidth(LINK), 4);
 });

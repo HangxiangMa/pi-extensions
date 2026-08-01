@@ -67,47 +67,55 @@ Lifecycle contract:
 
 ## Plan
 
-- [ ] Add failing behavior tests under `extensions/pi-starship/test/` for the `$github_pr` module
+- [x] Add failing behavior tests under `extensions/pi-starship/test/` for the `$github_pr` module
   variables, status priority, terminal-state expiry, OSC 8 safety, GitHub Enterprise URLs, no-PR and
   failure degradation, and the removal of `$git_branch.$pr`; verify the intended red state with
-  `npm test`.
-- [ ] Add a native PR snapshot type plus `extensions/pi-starship/src/modules/github-pr.ts`, register
+  `npm test`. Red evidence: TypeScript failed on the intentionally absent `github_pr` module/runtime,
+  snapshot property, and AbortSignal-aware controller contract.
+- [x] Add a native PR snapshot type plus `extensions/pi-starship/src/modules/github-pr.ts`, register
   `github_pr` immediately after `git_branch`, and update the built-in root/default module formats;
-  verify module and configuration behavior with the focused Starship tests.
-- [ ] Remove `$pr` and `prContextFromStatuses()` from
+  verify module and configuration behavior with the focused Starship tests. Evidence: focused config,
+  module, and GitHub PR tests pass.
+- [x] Remove `$pr` and `prContextFromStatuses()` from
   `extensions/pi-starship/src/modules/git/branch.ts`; rely on the existing generic unknown-variable
   diagnostic for old `$pr` settings and add a regression assertion proving no compatibility alias is
-  retained.
-- [ ] Add `extensions/pi-starship/src/runtime/github-pr.ts` to execute a cancellable, 10-second
+  retained. Evidence: focused config and module regressions pass.
+- [x] Add `extensions/pi-starship/src/runtime/github-pr.ts` to execute a cancellable, 10-second
   `gh pr view --json number,isDraft,url,state,closedAt,mergedAt,reviewDecision,statusCheckRollup`,
   infer the repository host without mutating process environment, validate bounded JSON fields, and
   build the immutable native snapshot; verify with mocked argv/result tests for POSIX, Windows,
-  GitHub Enterprise, malformed output, missing `gh`, missing auth, and no PR.
-- [ ] Integrate a PR refresh controller into `extensions/pi-starship/src/pi-starship.ts` for initial,
+  GitHub Enterprise, malformed output, missing `gh`, missing auth, and no PR. Evidence:
+  `github-pr.test.ts` passes all runtime cases.
+- [x] Integrate a PR refresh controller into `extensions/pi-starship/src/pi-starship.ts` for initial,
   branch-change, agent-end, settings-apply, and 60-second refreshes; verify immediate stale clearing,
   coalescing, cancellation, session replacement, footer disposal, shutdown, non-TUI behavior, and
-  unreachable/disabled no-exec behavior in lifecycle tests.
-- [ ] Extend `extensions/pi-starship/src/runtime/refresh-controller.ts` with AbortSignal-aware
+  unreachable/disabled no-exec behavior in lifecycle tests. Evidence: focused lifecycle tests pass.
+- [x] Extend `extensions/pi-starship/src/runtime/refresh-controller.ts` with AbortSignal-aware
   cancellation for started/stopped generations without weakening latest-request coalescing; verify
-  abort and stale-publication behavior in controller tests.
-- [ ] Remove `consumedExtensionStatusKeys`, `hiddenExtensionStatusKeys`, the renderer's `github-pr`
+  abort and stale-publication behavior in controller tests. Evidence: focused refresh-controller tests
+  pass.
+- [x] Remove `consumedExtensionStatusKeys`, `hiddenExtensionStatusKeys`, the renderer's `github-pr`
   suppression, and the built-in `github-pr` icon mapping so `extension_status` treats every external
   status generically; verify an independently supplied `github-pr` status remains visible rather than
-  being consumed.
-- [ ] Update `extensions/pi-starship/README.md` with the `$github_pr` module, variables and TOML
+  being consumed. Evidence: focused module tests render the independent status with generic policy.
+- [x] Update `extensions/pi-starship/README.md` with the `$github_pr` module, variables and TOML
   example; document `gh auth login`, GitHub Enterprise setup, network/privacy/refresh behavior, the
   accepted breaking migration, and that `pi-github-pr` is no longer required. Remove documentation
   that claims `$git_branch.$pr` consumes an extension status.
-- [ ] Audit the final diff against `docs/extension-conventions.md` and
+- [x] Audit the final diff against `docs/extension-conventions.md` and
   `docs/extension-settings.md`, covering module/settings ownership, package independence, subprocess
   trust boundaries, cancellation, footer disposal, session replacement, shutdown, and post-await
-  generation checks; record any accepted deviation in the handoff.
-- [ ] Run `npm test`, `npm run check --workspace @narumitw/pi-starship`, `npm run check`, and
+  generation checks; record any accepted deviation in the handoff. Evidence: manual audit plus final
+  independent reviewer PASS. Accepted limitation: already-started bounded local filesystem operations
+  may finish, but cancellation checks and generation ownership prevent stale publication.
+- [x] Run `npm test`, `npm run check --workspace @narumitw/pi-starship`, `npm run check`, and
   `just pack-starship`; inspect the dry-run tarball for the new runtime/module source and no unintended
-  files.
-- [ ] After every item and completion check has evidence, move this plan to
+  files. Evidence: package check passed; `npm test` and final `npm run check` each passed 2,044 tests;
+  the 58-file dry run includes `src/modules/github-pr.ts` and `src/runtime/github-pr.ts`.
+- [x] After every item and completion check has evidence, move this plan to
   `docs/plans/archived/2026-08-01_pi-starship-native-github-pr-plan.md` without overwriting an existing
-  archive and report the archived path.
+  archive and report the archived path. Evidence: the target was verified absent and this completed
+  plan now resides at that path.
 
 ## Risks
 
@@ -123,14 +131,14 @@ Lifecycle contract:
 
 ## Completion Checklist
 
-- [ ] No pi-starship production path reads, parses, consumes, hides, or otherwise coordinates the
+- [x] No pi-starship production path reads, parses, consumes, hides, or otherwise coordinates the
   `github-pr` extension status.
-- [ ] `git_branch` no longer exposes `$pr`, and no compatibility alias or migration remains.
-- [ ] `$github_pr` displays the current branch PR without installing `pi-github-pr`.
-- [ ] `$github_pr` exposes the documented variables and preserves compact checks/review semantics.
-- [ ] Unreachable, disabled, and non-TUI paths execute no `gh` command.
-- [ ] Branch, settings, footer, replacement, reload, and shutdown paths cancel owned work and reject
+- [x] `git_branch` no longer exposes `$pr`, and no compatibility alias or migration remains.
+- [x] `$github_pr` displays the current branch PR without installing `pi-github-pr`.
+- [x] `$github_pr` exposes the documented variables and preserves compact checks/review semantics.
+- [x] Unreachable, disabled, and non-TUI paths execute no `gh` command.
+- [x] Branch, settings, footer, replacement, reload, and shutdown paths cancel owned work and reject
   stale publication.
-- [ ] README behavior, prerequisites, privacy, failures, and breaking migration match implementation.
-- [ ] Focused tests, root tests, package check, CI-equivalent check, and package dry-run all pass.
-- [ ] The completed plan is archived with verification evidence and no open checklist items.
+- [x] README behavior, prerequisites, privacy, failures, and breaking migration match implementation.
+- [x] Focused tests, root tests, package check, CI-equivalent check, and package dry-run all pass.
+- [x] The completed plan is archived with verification evidence and no open checklist items.

@@ -77,6 +77,7 @@ $directory\
 [](fg:directory bg:git)\
 $git_worktree\
 $git_branch\
+$github_pr\
 $git_status\
 [](fg:git bg:runtime)\
 $activity\

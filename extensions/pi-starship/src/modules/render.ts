@@ -22,13 +22,9 @@ export function renderStatusline(
 		modules[name] = [];
 		layoutModules[name] = [];
 	}
-	const consumedExtensionStatusKeys = new Set<string>();
-
 	for (const definition of MODULE_DEFINITIONS) {
 		const name = definition.name;
-		const values = definition.values(
-			valueContext(config, name, runtime, consumedExtensionStatusKeys),
-		);
+		const values = definition.values(valueContext(config, name, runtime));
 		if (!values) continue;
 		const rendered = renderModule(config.modules[name], values, palette);
 		modules[name] = rendered;
@@ -36,14 +32,6 @@ export function renderStatusline(
 			definition.layout === "fill" && !config.modules[name].disabled
 				? [{ type: "fill", pattern: rendered }]
 				: rendered;
-		if (
-			name === "git_branch" &&
-			values.pr &&
-			formatVariables(config.modules.git_branch.formatAst).has("pr") &&
-			rendered.some((chunk) => chunk.text.includes(values.pr ?? ""))
-		) {
-			consumedExtensionStatusKeys.add("github-pr");
-		}
 	}
 
 	const explicitModules = formatVariables(config.formatAst);
@@ -58,7 +46,6 @@ export function renderStatusline(
 		ansi: renderChunksToAnsi(chunks),
 		chunks,
 		modules,
-		consumedExtensionStatusKeys,
 	};
 }
 
@@ -66,14 +53,12 @@ function valueContext(
 	config: StarshipConfig,
 	name: ModuleName,
 	runtime: StarshipRuntimeSnapshot,
-	hiddenExtensionStatusKeys: ReadonlySet<string>,
 ): ModuleValueContext {
 	return {
 		runtime,
 		symbol: config.modules[name].symbol,
 		options: config.modules[name].options,
 		extensionStatus: config.extensionStatus,
-		hiddenExtensionStatusKeys,
 	};
 }
 

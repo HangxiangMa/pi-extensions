@@ -16,6 +16,7 @@ import { gitMetricsModule } from "./git/metrics.js";
 import { gitStateModule } from "./git/state.js";
 import { gitStatusModule } from "./git/status.js";
 import { gitWorktreeModule } from "./git/worktree.js";
+import { githubPrModule } from "./github-pr.js";
 import { languageModules } from "./languages.js";
 import { modelModule } from "./model.js";
 import { packageModule } from "./package.js";
@@ -34,6 +35,7 @@ export const MODULE_DEFINITIONS = [
 	directoryModule,
 	gitWorktreeModule,
 	gitBranchModule,
+	githubPrModule,
 	gitCommitModule,
 	gitStateModule,
 	gitMetricsModule,
@@ -52,7 +54,7 @@ export const MODULE_DEFINITIONS = [
 	timeModule,
 	turnModule,
 	fillModule,
-	// Render last so earlier modules can consume extension-owned status values.
+	// Keep arbitrary third-party statuses after the native modules.
 	extensionStatusModule,
 ] as const satisfies readonly ModuleDefinition<string>[];
 
