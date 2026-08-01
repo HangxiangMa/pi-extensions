@@ -687,7 +687,8 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		assert.equal(created[2]?.cwd, generated);
 		assert.equal(created[2]?.workspaceMode, "worktree");
-		assert.equal(created[2]?.target?.cwd, generated);
+		assert.equal(created[2]?.target?.cwd, workspace);
+		assert.equal(created[2]?.target?.boundary, "current-workspace");
 		assert.equal(created[2]?.target?.trust.kind, "session-trusted");
 		assert.equal(created[2]?.target?.trust.projectTrusted, true);
 		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);

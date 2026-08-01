@@ -36,7 +36,6 @@ import {
 	type AgentTurnCompletion,
 	type ManagedAgent,
 } from "./registry.js";
-import { safeTerminalLine } from "./safe-text.js";
 import { DEFAULT_DELEGATION_CWD_POLICY, readSubagentSettings } from "./settings.js";
 import { createSpawnPromptGuidelines } from "./stateful-guidance.js";
 import { assertCurrentSpawn, disposeStatefulRuntime } from "./stateful-lifecycle.js";
@@ -461,7 +460,6 @@ export function registerStatefulSubagents(
 				throw error;
 			}
 			const targetSnapshot = targetPolicyAudit(target);
-			if (workspace) targetSnapshot.cwd = safeTerminalLine(workspace.path);
 			let agent: ManagedAgent | undefined;
 			try {
 				agent = await ownedRegistry.spawn({
