@@ -409,7 +409,7 @@ test("saved Plan blocks replacement workflows and --plan restores it as ready", 
 	assert.equal(mock.sentUserMessages.length, 0);
 	assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "edit"]);
 	assert.equal(context.statuses.get("plan-mode"), "plan saved");
-	assert.equal(latestState(mock.entries)?.savedPlan?.plan ?? PLAN, PLAN);
+	assert.equal(latestState(mock.entries)?.savedPlan?.plan, PLAN);
 	assert.match(context.notifications.at(-1)?.message ?? "", /implement or clear/i);
 
 	const flagged = createMockPi({ activeTools: ["read", "edit"] });
