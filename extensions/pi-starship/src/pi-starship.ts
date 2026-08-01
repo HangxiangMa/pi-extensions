@@ -13,10 +13,8 @@ import {
 	type StarshipConfig,
 	settingsFilePath,
 } from "./config.js";
-import { readInstalledPackageInfo } from "./installed-packages.js";
 import { gitSnapshotEqual, readGitSnapshot } from "./modules/git/runtime.js";
 import {
-	type ExtensionStatusIconAliasMap,
 	type GithubPrSnapshot,
 	type GitSnapshot,
 	reachableModuleRequirements,
@@ -39,7 +37,6 @@ const REFRESH_INTERVAL_MS = 30_000;
 const GITHUB_PR_REFRESH_INTERVAL_MS = 60_000;
 const EVENT_DEBOUNCE_MS = 250;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
-const EMPTY_ALIASES: ExtensionStatusIconAliasMap = new Map();
 
 interface RuntimeState {
 	activeTools: Map<string, number>;
@@ -49,7 +46,6 @@ interface RuntimeState {
 	git?: GitSnapshot;
 	githubPr?: GithubPrSnapshot;
 	workspace?: WorkspaceSnapshot;
-	extensionStatusIconAliases: ExtensionStatusIconAliasMap;
 	requestRender?: () => void;
 	renderPreview?: (loaded: LoadedStarshipConfig, width: number) => string[];
 }
@@ -75,9 +71,7 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
 		activeTools: new Map(),
 		isStreaming: false,
 		thinkingLevel: "off",
-		extensionStatusIconAliases: EMPTY_ALIASES,
 	};
-	let conflictWarningShown = false;
 	let sessionGeneration = 0;
 	let menuController = new AbortController();
 	let sessionOwner: ExtensionContext["sessionManager"] | undefined;
@@ -255,16 +249,6 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
 		workspaceController.start(generation);
 		startGithubPr(target);
 
-		const installed = readInstalledPackageInfo(getAgentDir(), target.cwd, ctx.isProjectTrusted());
-		runtime.extensionStatusIconAliases = installed.aliases;
-		if (installed.hasStatuslineConflict && !conflictWarningShown) {
-			conflictWarningShown = true;
-			ctx.ui.notify(
-				"pi-starship and pi-statusline both replace Pi's footer; disable one to avoid a footer conflict.",
-				"warning",
-			);
-		}
-
 		ctx.ui.setFooter((tui, _theme, footerData) => {
 			runtime.requestRender = () => tui.requestRender();
 			runtime.renderPreview = (preview, width) => {
@@ -385,7 +369,6 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
 		stopGithubPr();
 		runtime.git = undefined;
 		runtime.workspace = undefined;
-		runtime.extensionStatusIconAliases = EMPTY_ALIASES;
 		runtime.requestRender = undefined;
 		runtime.renderPreview = undefined;
 		ctx.ui.setFooter(undefined);
@@ -536,7 +519,6 @@ function runtimeSnapshot(
 		githubPr: runtime.githubPr,
 		workspace: runtime.workspace,
 		extensionStatuses: footerData.getExtensionStatuses(),
-		extensionStatusIconAliases: runtime.extensionStatusIconAliases,
 		now: new Date(),
 	};
 }

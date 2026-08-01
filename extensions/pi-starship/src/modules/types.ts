@@ -71,8 +71,6 @@ export interface GitSnapshot {
 	worktree?: GitWorktreeSnapshot;
 }
 
-export type ExtensionStatusIconAliasMap = ReadonlyMap<string, readonly string[]>;
-
 export interface WorkspaceSnapshot {
 	modules: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
@@ -108,7 +106,6 @@ export interface StarshipRuntimeSnapshot {
 	gitWorktree?: GitWorktreeSnapshot;
 	githubPr?: GithubPrSnapshot;
 	extensionStatuses: ReadonlyMap<string, string>;
-	extensionStatusIconAliases: ExtensionStatusIconAliasMap;
 	now: Date;
 	workspace?: WorkspaceSnapshot;
 }

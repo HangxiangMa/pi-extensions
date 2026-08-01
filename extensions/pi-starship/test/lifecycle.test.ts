@@ -771,7 +771,7 @@ test("stale worktree identity from a replaced session cannot overwrite the new f
 	await emit(mock.events, "session_shutdown", {}, newContext.ctx);
 });
 
-test("installed pi-statusline produces one conflict warning and package aliases", async () => {
+test("installed packages do not affect extension status presentation or produce warnings", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-starship-agent-"));
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = root;
@@ -795,10 +795,8 @@ test("installed pi-statusline produces one conflict warning and package aliases"
 		await emit(mock.events, "session_start", {}, context.ctx);
 		await emit(mock.events, "session_start", {}, context.ctx);
 		assert.equal(
-			context.notifications.filter((notice) =>
-				/pi-statusline.*footer conflict/iu.test(notice.message),
-			).length,
-			1,
+			context.notifications.filter((notice) => /pi-statusline/iu.test(notice.message)).length,
+			0,
 		);
 		const footer = (context.footer as FooterFactory)(
 			{ requestRender() {} },
@@ -809,7 +807,8 @@ test("installed pi-statusline produces one conflict warning and package aliases"
 				onBranchChange: () => () => undefined,
 			},
 		);
-		assert.match(footer.render(100).join(""), /🧪 running/);
+		assert.match(footer.render(100).join(""), /🔌 running/);
+		assert.doesNotMatch(footer.render(100).join(""), /🧪/u);
 		footer.dispose();
 		await emit(mock.events, "session_shutdown", {}, context.ctx);
 	} finally {

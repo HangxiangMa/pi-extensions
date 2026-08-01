@@ -4,7 +4,6 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { BUILT_IN_CONFIG } from "../src/config.js";
 import { parseFormat } from "../src/format/formatter.js";
 import {
-	buildExtensionStatusIconAliases,
 	formatCount,
 	formatExtensionStatus,
 	renderStatusline,
@@ -78,7 +77,6 @@ function fixture(overrides: Partial<StarshipRuntimeSnapshot> = {}): StarshipRunt
 			indexTypechanged: 0,
 		},
 		extensionStatuses: new Map([["goal", "active"]]),
-		extensionStatusIconAliases: new Map(),
 		now: new Date(2026, 0, 1, 9, 5),
 		...overrides,
 	};
@@ -100,7 +98,7 @@ test("built-in modules expose Pi values through the default format", () => {
 	assert.match(plain, /↑1\.5k ↓200/);
 	assert.match(plain, /\$0\.123/);
 	assert.match(plain, /09:05/);
-	assert.match(plain, /🎯 active/);
+	assert.match(plain, /🔌 active/);
 });
 
 test("context supports native percentage/window precision", () => {
@@ -542,71 +540,48 @@ test("activity handles parallel active tools, thinking, completed, and idle", ()
 });
 
 test("extension status icons match arbitrary exact keys and explicit namespace wildcards", () => {
-	const aliases = new Map<string, string[]>();
-
 	assert.equal(
-		formatExtensionStatus("third_party/key", "running", { "third_party/key": "🧩" }, aliases),
+		formatExtensionStatus("third_party/key", "running", { "third_party/key": "🧩" }),
 		"🧩 running",
 	);
 	assert.equal(
-		formatExtensionStatus("foo:server", "running", { "foo:*": "🧪", "foo:server": "🖥️" }, aliases),
+		formatExtensionStatus("foo:server", "running", {
+			"foo:*": "🧪",
+			"foo:server": "🖥️",
+		}),
 		"🖥️ running",
 	);
 	assert.equal(
-		formatExtensionStatus(
-			"foo:server:worker",
-			"running",
-			{ "foo:*": "🧪", "foo:server:*": "⚙️" },
-			aliases,
-		),
+		formatExtensionStatus("foo:server:worker", "running", {
+			"foo:*": "🧪",
+			"foo:server:*": "⚙️",
+		}),
 		"⚙️ running",
 	);
-	assert.equal(formatExtensionStatus("foo:worker", "running", { "foo:*": "" }, aliases), "running");
-	const packageAliases = buildExtensionStatusIconAliases([{ packageName: "@vendor/pi-foo" }]);
+	assert.equal(formatExtensionStatus("foo:worker", "running", { "foo:*": "" }), "running");
 	assert.equal(
-		formatExtensionStatus(
-			"foo:worker",
-			"running",
-			{ "foo:*": "WILDCARD", "@vendor/pi-foo": "PACKAGE" },
-			packageAliases,
-		),
-		"WILDCARD running",
+		formatExtensionStatus("foo:worker", "running", { "@vendor/pi-foo": "PACKAGE" }),
+		"🔌 running",
 	);
 	for (const key of ["foo", "foobar", "foo/server"]) {
-		assert.equal(formatExtensionStatus(key, "running", { "foo:*": "🧪" }, aliases), "🔌 running");
+		assert.equal(formatExtensionStatus(key, "running", { "foo:*": "🧪" }), "🔌 running");
 	}
 });
 
-test("extension status icons bridge canonical and legacy sync and retry keys", () => {
-	const aliases = new Map<string, string[]>();
-
-	assert.equal(formatExtensionStatus("sync", "pushing", {}, aliases), "🔄 pushing");
-	assert.equal(formatExtensionStatus("retry", "retrying", {}, aliases), "🔁 retrying");
-	assert.equal(formatExtensionStatus("pisync", "pushing", {}, aliases), "🔄 pushing");
-	assert.equal(
-		formatExtensionStatus("unknown-error-retry", "retrying", {}, aliases),
-		"🔁 retrying",
-	);
-	assert.equal(
-		formatExtensionStatus("sync", "pushing", { pisync: "CUSTOM-SYNC" }, aliases),
-		"CUSTOM-SYNC pushing",
-	);
-	assert.equal(
-		formatExtensionStatus("pisync", "pushing", { sync: "NEW-SYNC" }, aliases),
-		"NEW-SYNC pushing",
-	);
-	assert.equal(
-		formatExtensionStatus(
-			"retry",
-			"retrying",
-			{ "unknown-error-retry": "CUSTOM-RETRY", retry: "NEW-RETRY" },
-			aliases,
-		),
-		"NEW-RETRY retrying",
-	);
+test("extension status icons do not infer known or compatibility keys", () => {
+	for (const [key, value] of [
+		["sync", "pushing"],
+		["retry", "retrying"],
+		["pisync", "pushing"],
+		["unknown-error-retry", "retrying"],
+	] as const) {
+		assert.equal(formatExtensionStatus(key, value, {}), `🔌 ${value}`);
+	}
+	assert.equal(formatExtensionStatus("sync", "pushing", { pisync: "OTHER-KEY" }), "🔌 pushing");
+	assert.equal(formatExtensionStatus("retry", "retrying", { retry: "EXACT" }), "EXACT retrying");
 });
 
-test("extension status icons honor exact keys, aliases, suppression, defaults, and fallback", () => {
+test("extension status icons honor only explicit keys, suppression, leading icons, and fallback", () => {
 	const config = structuredClone(BUILT_IN_CONFIG);
 	config.format = "$extension_status";
 	config.formatAst = [{ type: "variable", name: "extension_status" }];
@@ -615,27 +590,25 @@ test("extension status icons honor exact keys, aliases, suppression, defaults, a
 		"@vendor/pi-foo": "🧪",
 		fallback: "•",
 	};
-	const aliases = buildExtensionStatusIconAliases([
-		{ packageName: "@vendor/pi-foo", source: "npm:@vendor/pi-foo@1.2.3" },
-	]);
 	const rendered = renderStatusline(
 		config,
 		fixture({
 			extensionStatuses: new Map([
 				["goal", "active"],
 				["foo:server", "running"],
-				["unknown", "waiting"],
+				["accounts", "active"],
+				["unknown", "⚡ waiting"],
 				["toString", "prototype safe"],
 			]),
-			extensionStatusIconAliases: aliases,
 		}),
 	).ansi;
 	assert.match(rendered, /active/);
 	assert.doesNotMatch(rendered, /🎯/);
-	assert.match(rendered, /🧪 running/);
-	assert.match(rendered, /• waiting/);
+	assert.match(rendered, /• running/);
+	assert.match(rendered, /• active/);
+	assert.match(rendered, /⚡ waiting/);
 	assert.match(rendered, /• prototype safe/);
-	assert.doesNotMatch(rendered, /🔌 waiting/);
+	assert.doesNotMatch(rendered, /🧪|👤/u);
 });
 
 test("format helpers stay compact and OSC links retain visible width", () => {
