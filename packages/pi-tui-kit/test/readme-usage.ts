@@ -7,6 +7,7 @@ import {
 	type ReviewScreen,
 	runMenu,
 } from "../src/index.js";
+import { createRpcHarness, createTuiHarness } from "../src/testing/index.js";
 
 type Screen = "main" | "profile" | "settings";
 type Action = "refresh" | "setMode" | "setProfile";
@@ -127,5 +128,50 @@ export async function showMenu(ctx: ExtensionCommandContext, generation: number)
 		const reason: MenuCloseReason = result.reason;
 		if (reason === "back") ctx.ui.notify("Returned from the root menu", "info");
 	}
+	return result;
+}
+
+declare const consumerContext: ExtensionCommandContext;
+
+export async function driveMenuWithSupportedTuiHarness() {
+	const tui = createTuiHarness({ width: 80, rows: 24 });
+	const ctx = {
+		...consumerContext,
+		mode: "tui" as const,
+		hasUI: true,
+		ui: { ...consumerContext.ui, custom: tui.custom },
+	};
+	const running = runMenu(ctx, menu, {
+		getState: ({ signal }) => loadState(signal),
+		signal: currentSessionSignal(),
+	});
+	await tui.waitForOpen();
+	tui.setFocused(true);
+	tui.type("12");
+	tui.press("tui.input.submit");
+	await tui.waitForPending();
+	tui.resize({ width: 60, rows: 12 });
+	const frame = tui.render();
+	const result = await running;
+	return { frame, result };
+}
+
+export async function driveMenuWithSupportedRpcHarness() {
+	const rpc = createRpcHarness([
+		{ kind: "input", title: "Value", placeholder: "", response: "not-a-number" },
+		{ kind: "input", title: "Value", placeholder: "", response: "12" },
+		{ kind: "select", options: ["Apply", "Back"], response: "Apply" },
+	]);
+	const ctx = {
+		...consumerContext,
+		mode: "rpc" as const,
+		hasUI: true,
+		ui: { ...consumerContext.ui, ...rpc.ui },
+	};
+	const result = await runMenu(ctx, menu, {
+		getState: ({ signal }) => loadState(signal),
+		signal: currentSessionSignal(),
+	});
+	rpc.assertConsumed();
 	return result;
 }
