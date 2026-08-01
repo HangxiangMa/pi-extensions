@@ -16,6 +16,7 @@ const GIT_TIMEOUT_MS = 3_000;
 export interface ReadGitSnapshotOptions {
 	includeMetrics: boolean;
 	includeTag: boolean;
+	signal?: AbortSignal;
 }
 
 export async function readGitSnapshot(
@@ -33,22 +34,24 @@ export async function readGitSnapshot(
 			"--show-stash",
 			"--untracked-files=normal",
 		],
-		{ cwd, timeout: GIT_TIMEOUT_MS },
+		{ cwd, signal: options.signal, timeout: GIT_TIMEOUT_MS },
 	);
 	const metadataPromise = pi.exec(
 		"git",
 		["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir", "--git-dir"],
-		{ cwd, timeout: GIT_TIMEOUT_MS },
+		{ cwd, signal: options.signal, timeout: GIT_TIMEOUT_MS },
 	);
 	const metricsPromise = options.includeMetrics
 		? pi.exec("git", ["--no-optional-locks", "diff", "--shortstat", "HEAD", "--"], {
 				cwd,
+				signal: options.signal,
 				timeout: GIT_TIMEOUT_MS,
 			})
 		: Promise.resolve(undefined);
 	const tagPromise = options.includeTag
 		? pi.exec("git", ["describe", "--tags", "--exact-match", "HEAD"], {
 				cwd,
+				signal: options.signal,
 				timeout: GIT_TIMEOUT_MS,
 			})
 		: Promise.resolve(undefined);

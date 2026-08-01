@@ -60,6 +60,11 @@ interface MenuItem extends SelectItem {
 	value: string;
 }
 
+interface WorkflowOwner {
+	signal: AbortSignal;
+	isCurrent(): boolean;
+}
+
 export function registerStarshipCommand(pi: ExtensionAPI, options: StarshipCommandOptions) {
 	pi.registerCommand("starship", {
 		description: "Customize or inspect the native Starship-style footer",
@@ -236,6 +241,8 @@ async function editSettings(
 	ctx: ExtensionCommandContext,
 	options: StarshipCommandOptions,
 ): Promise<boolean> {
+	const owner = workflowOwner(options);
+	if (!isCurrentOwner(owner)) return false;
 	if (ctx.mode !== "tui") {
 		if (ctx.hasUI) ctx.ui.notify(`Edit settings manually: ${options.settingsPath}`, "info");
 		return false;
@@ -243,7 +250,7 @@ async function editSettings(
 	let draft = options.getLoaded().rawDocument ?? BUILT_IN_EXAMPLE;
 	while (true) {
 		const edited = await ctx.ui.editor("Customize footer — close to preview", draft);
-		if (edited === undefined) return false;
+		if (!isCurrentOwner(owner) || edited === undefined) return false;
 		draft = edited;
 		let validated: LoadedStarshipConfig;
 		try {
@@ -259,11 +266,12 @@ async function editSettings(
 					{ value: PREVIEW_ACTIONS.cancel, label: "Back" },
 				],
 			);
+			if (!isCurrentOwner(owner)) return false;
 			if (action === PREVIEW_ACTIONS.edit) continue;
 			return false;
 		}
 
-		const result = await reviewAndApply(ctx, options, validated, "Footer preview", false);
+		const result = await reviewAndApply(ctx, options, validated, "Footer preview", false, owner);
 		if (result === "edit") continue;
 		return result === "applied";
 	}
@@ -273,11 +281,15 @@ async function restoreBuiltIn(
 	ctx: ExtensionCommandContext,
 	options: StarshipCommandOptions,
 ): Promise<boolean> {
+	const owner = workflowOwner(options);
+	if (!isCurrentOwner(owner)) return false;
 	const validated = (options.validate ?? validateConfigDocument)(
 		options.settingsPath,
 		BUILT_IN_EXAMPLE,
 	);
-	return (await reviewAndApply(ctx, options, validated, "Restore preview", true)) === "applied";
+	return (
+		(await reviewAndApply(ctx, options, validated, "Restore preview", true, owner)) === "applied"
+	);
 }
 
 async function reviewAndApply(
@@ -286,6 +298,7 @@ async function reviewAndApply(
 	validated: LoadedStarshipConfig,
 	title: string,
 	restore: boolean,
+	owner: WorkflowOwner,
 ): Promise<"applied" | "edit" | "cancel"> {
 	while (true) {
 		const selection = await showPreviewActionMenu(
@@ -298,6 +311,7 @@ async function reviewAndApply(
 				{ value: PREVIEW_ACTIONS.cancel, label: "Cancel" },
 			],
 		);
+		if (!isCurrentOwner(owner)) return "cancel";
 		if (selection === PREVIEW_ACTIONS.edit) return "edit";
 		if (selection !== PREVIEW_ACTIONS.continue) return "cancel";
 
@@ -307,6 +321,7 @@ async function reviewAndApply(
 				? `Replace ${options.settingsPath} with the built-in configuration?`
 				: "Save this configuration and apply it immediately?",
 		);
+		if (!isCurrentOwner(owner)) return "cancel";
 		if (!confirmed) continue;
 
 		const save = options.save ?? atomicSaveConfigDocument;
@@ -347,6 +362,16 @@ async function reviewAndApply(
 		);
 		return "applied";
 	}
+}
+
+function workflowOwner(options: StarshipCommandOptions): WorkflowOwner {
+	if (options.getMenuOwner) return options.getMenuOwner();
+	const controller = new AbortController();
+	return { signal: controller.signal, isCurrent: () => true };
+}
+
+function isCurrentOwner(owner: WorkflowOwner): boolean {
+	return !owner.signal.aborted && owner.isCurrent();
 }
 
 function restorePreviousConfiguration(

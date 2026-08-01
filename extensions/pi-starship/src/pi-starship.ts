@@ -17,6 +17,7 @@ import { readInstalledPackageInfo } from "./installed-packages.js";
 import { gitSnapshotEqual, readGitSnapshot } from "./modules/git/runtime.js";
 import {
 	type ExtensionStatusIconAliasMap,
+	type GithubPrSnapshot,
 	type GitSnapshot,
 	reachableModuleRequirements,
 	renderStatusline,
@@ -24,16 +25,20 @@ import {
 	type WorkspaceSnapshot,
 } from "./modules/index.js";
 import { execWorkspaceCommand } from "./runtime/command.js";
+import { githubPrSnapshotEqual, queryGithubPr } from "./runtime/github-pr.js";
 import { AsyncRefreshController } from "./runtime/refresh-controller.js";
 import {
 	collectWorkspaceSnapshot,
+	type WorkspaceExec,
 	type WorkspaceRefreshInput,
 	workspaceSnapshotEqual,
 } from "./runtime/workspace.js";
 import { summarizeFooterUsage } from "./usage.js";
 
 const REFRESH_INTERVAL_MS = 30_000;
+const GITHUB_PR_REFRESH_INTERVAL_MS = 60_000;
 const EVENT_DEBOUNCE_MS = 250;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const EMPTY_ALIASES: ExtensionStatusIconAliasMap = new Map();
 
 interface RuntimeState {
@@ -42,6 +47,7 @@ interface RuntimeState {
 	thinkingLevel: string;
 	lastCompletedTool?: string;
 	git?: GitSnapshot;
+	githubPr?: GithubPrSnapshot;
 	workspace?: WorkspaceSnapshot;
 	extensionStatusIconAliases: ExtensionStatusIconAliasMap;
 	requestRender?: () => void;
@@ -51,6 +57,7 @@ interface RuntimeState {
 interface RefreshTarget {
 	cwd: string;
 	generation: number;
+	sessionManager: ExtensionContext["sessionManager"];
 }
 
 interface GitRefreshInput {
@@ -58,7 +65,11 @@ interface GitRefreshInput {
 	config: StarshipConfig;
 }
 
-export default function piStarship(pi: ExtensionAPI) {
+interface PiStarshipOptions {
+	githubPrExec?: WorkspaceExec;
+}
+
+export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions = {}) {
 	let loaded: LoadedStarshipConfig | undefined;
 	const runtime: RuntimeState = {
 		activeTools: new Map(),
@@ -69,12 +80,17 @@ export default function piStarship(pi: ExtensionAPI) {
 	let conflictWarningShown = false;
 	let sessionGeneration = 0;
 	let menuController = new AbortController();
+	let sessionOwner: ExtensionContext["sessionManager"] | undefined;
 	let activeTarget: RefreshTarget | undefined;
 	let eventDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+	let githubPrRefreshTimer: ReturnType<typeof setInterval> | undefined;
+	let githubPrExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+	let githubPrGeneration = 0;
 
 	const refresh = () => runtime.requestRender?.();
+	const githubPrExec = options.githubPrExec ?? execWorkspaceCommand;
 	const gitController = new AsyncRefreshController<GitRefreshInput, GitSnapshot | undefined>({
-		async read(input) {
+		async read(input, signal) {
 			const requirements = reachableModuleRequirements(input.config);
 			const gitReachable = [...requirements.keys()].some((name) => name.startsWith("git_"));
 			if (!gitReachable) return undefined;
@@ -82,6 +98,7 @@ export default function piStarship(pi: ExtensionAPI) {
 				return await readGitSnapshot(pi, input.cwd, {
 					includeMetrics: requirements.has("git_metrics"),
 					includeTag: requirements.get("git_commit")?.has("tag") ?? false,
+					signal,
 				});
 			} catch {
 				return undefined;
@@ -93,10 +110,22 @@ export default function piStarship(pi: ExtensionAPI) {
 			refresh();
 		},
 	});
+	const githubPrController = new AsyncRefreshController<
+		Pick<RefreshTarget, "cwd">,
+		GithubPrSnapshot | undefined
+	>({
+		read: (input, signal) => queryGithubPr(githubPrExec, input.cwd, signal),
+		equal: githubPrSnapshotEqual,
+		publish(snapshot) {
+			runtime.githubPr = snapshot;
+			scheduleGithubPrExpiry(snapshot);
+			refresh();
+		},
+	});
 	const workspaceController = new AsyncRefreshController<WorkspaceRefreshInput, WorkspaceSnapshot>({
-		async read(input) {
+		async read(input, signal) {
 			try {
-				return await collectWorkspaceSnapshot(input);
+				return await collectWorkspaceSnapshot({ ...input, signal });
 			} catch {
 				return { modules: {} };
 			}
@@ -116,6 +145,7 @@ export default function piStarship(pi: ExtensionAPI) {
 	const isActiveTarget = (target: RefreshTarget) =>
 		activeTarget?.cwd === target.cwd &&
 		activeTarget.generation === target.generation &&
+		activeTarget.sessionManager === target.sessionManager &&
 		target.generation === sessionGeneration;
 
 	const requestRefresh = (
@@ -130,7 +160,9 @@ export default function piStarship(pi: ExtensionAPI) {
 	};
 	const scheduleRefresh = (ctx: ExtensionContext) => {
 		const target = activeTarget;
-		if (!target || target.cwd !== ctx.cwd) return;
+		if (!target || target.cwd !== ctx.cwd || target.sessionManager !== ctx.sessionManager) {
+			return;
+		}
 		clearDebounce();
 		eventDebounceTimer = setTimeout(() => {
 			eventDebounceTimer = undefined;
@@ -138,14 +170,80 @@ export default function piStarship(pi: ExtensionAPI) {
 		}, EVENT_DEBOUNCE_MS);
 	};
 
+	function restartLocalControllers(target: RefreshTarget) {
+		if (!isActiveTarget(target)) return;
+		gitController.start(target.generation);
+		workspaceController.start(target.generation);
+	}
+
+	function clearGithubPrTimers() {
+		if (githubPrRefreshTimer) clearInterval(githubPrRefreshTimer);
+		if (githubPrExpiryTimer) clearTimeout(githubPrExpiryTimer);
+		githubPrRefreshTimer = undefined;
+		githubPrExpiryTimer = undefined;
+	}
+
+	function stopGithubPr() {
+		clearGithubPrTimers();
+		githubPrController.stop();
+		runtime.githubPr = undefined;
+	}
+
+	function githubPrReachable(): boolean {
+		return Boolean(loaded && reachableModuleRequirements(loaded.config).has("github_pr"));
+	}
+
+	function startGithubPr(target: RefreshTarget): boolean {
+		if (!isActiveTarget(target)) return false;
+		stopGithubPr();
+		if (!githubPrReachable()) return false;
+		githubPrController.start(++githubPrGeneration);
+		githubPrRefreshTimer = setInterval(() => {
+			requestGithubPr(target);
+		}, GITHUB_PR_REFRESH_INTERVAL_MS);
+		githubPrRefreshTimer.unref?.();
+		return true;
+	}
+
+	function requestGithubPr(target: RefreshTarget) {
+		if (!isActiveTarget(target) || !githubPrReachable()) return;
+		githubPrController.request({ cwd: target.cwd });
+	}
+
+	function scheduleGithubPrExpiry(snapshot: GithubPrSnapshot | undefined) {
+		if (githubPrExpiryTimer) clearTimeout(githubPrExpiryTimer);
+		githubPrExpiryTimer = undefined;
+		if (snapshot?.expiresAt === undefined) return;
+		const target = activeTarget;
+		if (!target) return;
+		const delay = snapshot.expiresAt - Date.now();
+		if (delay <= 0) {
+			runtime.githubPr = undefined;
+			githubPrController.clear();
+			refresh();
+			return;
+		}
+		githubPrExpiryTimer = setTimeout(
+			() => {
+				githubPrExpiryTimer = undefined;
+				if (!isActiveTarget(target) || runtime.githubPr !== snapshot) return;
+				scheduleGithubPrExpiry(snapshot);
+			},
+			Math.min(delay, MAX_TIMER_DELAY_MS),
+		);
+		githubPrExpiryTimer.unref?.();
+	}
+
 	const installFooter = (ctx: ExtensionContext) => {
 		const generation = ++sessionGeneration;
+		sessionOwner = ctx.sessionManager;
 		menuController.abort(new DOMException("Starship session context replaced", "AbortError"));
 		menuController = new AbortController();
-		const target = { cwd: ctx.cwd, generation };
+		const target: RefreshTarget = { cwd: ctx.cwd, generation, sessionManager: ctx.sessionManager };
 		clearDebounce();
 		gitController.stop();
 		workspaceController.stop();
+		stopGithubPr();
 		runtime.git = undefined;
 		runtime.workspace = undefined;
 		runtime.requestRender = undefined;
@@ -155,6 +253,7 @@ export default function piStarship(pi: ExtensionAPI) {
 		if (!activeTarget || !loaded) return;
 		gitController.start(generation);
 		workspaceController.start(generation);
+		startGithubPr(target);
 
 		const installed = readInstalledPackageInfo(getAgentDir(), target.cwd, ctx.isProjectTrusted());
 		runtime.extensionStatusIconAliases = installed.aliases;
@@ -176,13 +275,17 @@ export default function piStarship(pi: ExtensionAPI) {
 				);
 			};
 			const unsubscribe = footerData.onBranchChange(() => {
+				if (!isActiveTarget(target)) return;
 				runtime.git = undefined;
-				gitController.clear();
+				restartLocalControllers(target);
 				clearDebounce();
+				startGithubPr(target);
 				requestRefresh(target);
+				requestGithubPr(target);
 				tui.requestRender();
 			});
 			const timer = setInterval(() => {
+				if (!isActiveTarget(target)) return;
 				clearDebounce();
 				requestRefresh(target, "periodic");
 				tui.requestRender();
@@ -200,6 +303,7 @@ export default function piStarship(pi: ExtensionAPI) {
 						clearDebounce();
 						gitController.stop();
 						workspaceController.stop();
+						stopGithubPr();
 						runtime.git = undefined;
 						runtime.workspace = undefined;
 						runtime.requestRender = undefined;
@@ -218,6 +322,7 @@ export default function piStarship(pi: ExtensionAPI) {
 			};
 		});
 		requestRefresh(target, "initial");
+		requestGithubPr(target);
 	};
 
 	const configPath = settingsFilePath(getAgentDir());
@@ -231,10 +336,18 @@ export default function piStarship(pi: ExtensionAPI) {
 				isCurrent: () => generation === sessionGeneration && !menuController.signal.aborted,
 			};
 		},
-		apply(next) {
+		apply(next, ctx) {
+			if (sessionOwner !== ctx.sessionManager) {
+				throw new Error("Starship session context was replaced");
+			}
 			loaded = next;
 			const target = activeTarget;
-			if (target) requestRefresh(target);
+			if (target) {
+				restartLocalControllers(target);
+				startGithubPr(target);
+				requestRefresh(target);
+				requestGithubPr(target);
+			}
 			refresh();
 		},
 		renderPreview(preview, width) {
@@ -261,12 +374,15 @@ export default function piStarship(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
+		if (sessionOwner !== ctx.sessionManager) return;
+		sessionOwner = undefined;
 		sessionGeneration += 1;
 		menuController.abort(new DOMException("Starship session shut down", "AbortError"));
 		activeTarget = undefined;
 		clearDebounce();
 		gitController.stop();
 		workspaceController.stop();
+		stopGithubPr();
 		runtime.git = undefined;
 		runtime.workspace = undefined;
 		runtime.extensionStatusIconAliases = EMPTY_ALIASES;
@@ -288,6 +404,8 @@ export default function piStarship(pi: ExtensionAPI) {
 	pi.on("agent_end", (_event, ctx) => {
 		runtime.isStreaming = false;
 		scheduleRefresh(ctx);
+		const target = activeTarget;
+		if (target?.sessionManager === ctx.sessionManager) requestGithubPr(target);
 		refresh();
 	});
 	pi.on("turn_start", () => {
@@ -415,6 +533,7 @@ function runtimeSnapshot(
 		gitMetrics: runtime.git?.metrics,
 		gitStatus: runtime.git?.status,
 		gitWorktree: runtime.git?.worktree,
+		githubPr: runtime.githubPr,
 		workspace: runtime.workspace,
 		extensionStatuses: footerData.getExtensionStatuses(),
 		extensionStatusIconAliases: runtime.extensionStatusIconAliases,

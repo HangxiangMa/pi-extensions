@@ -3,7 +3,6 @@ export {
 	buildExtensionStatusIconAliases,
 	formatExtensionStatus,
 } from "./extension-status.js";
-export { prContextFromStatuses } from "./git/branch.js";
 export { formatCount } from "./helpers.js";
 export { shortenModel } from "./model.js";
 export { reachableModuleRequirements, renderStatusline } from "./render.js";
@@ -11,6 +10,8 @@ export type {
 	ExtensionStatusIconAliasMap,
 	GitBranchSnapshot,
 	GitCommitSnapshot,
+	GithubPrSnapshot,
+	GithubPrState,
 	GitMetricsSnapshot,
 	GitSnapshot,
 	GitStateSnapshot,

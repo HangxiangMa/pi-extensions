@@ -1,5 +1,5 @@
 export interface AsyncRefreshControllerOptions<Input, Snapshot> {
-	read(input: Input): Promise<Snapshot>;
+	read(input: Input, signal: AbortSignal): Promise<Snapshot>;
 	equal(left: Snapshot | undefined, right: Snapshot): boolean;
 	publish(snapshot: Snapshot): void;
 	onError?(error: unknown): void;
@@ -11,17 +11,23 @@ interface RefreshRequest<Input> {
 	input: Input;
 }
 
+interface ActiveRefresh<Input> {
+	request: RefreshRequest<Input>;
+	controller: AbortController;
+}
+
 /** Coalesces refreshes to one active read plus the latest pending request. */
 export class AsyncRefreshController<Input, Snapshot> {
 	private generation: number | undefined;
 	private requestId = 0;
-	private inFlight = false;
+	private active: ActiveRefresh<Input> | undefined;
 	private pending: RefreshRequest<Input> | undefined;
 	private current: Snapshot | undefined;
 
 	constructor(private readonly options: AsyncRefreshControllerOptions<Input, Snapshot>) {}
 
 	start(generation: number): void {
+		this.cancelActive("Refresh generation replaced");
 		this.generation = generation;
 		this.requestId += 1;
 		this.pending = undefined;
@@ -39,7 +45,7 @@ export class AsyncRefreshController<Input, Snapshot> {
 			requestId: ++this.requestId,
 			input,
 		};
-		if (this.inFlight) {
+		if (this.active) {
 			this.pending = request;
 			return;
 		}
@@ -51,28 +57,44 @@ export class AsyncRefreshController<Input, Snapshot> {
 		this.requestId += 1;
 		this.pending = undefined;
 		this.current = undefined;
+		this.cancelActive("Refresh controller stopped");
 	}
 
 	private run(request: RefreshRequest<Input>): void {
 		if (!this.isCurrentTarget(request)) return;
-		this.inFlight = true;
+		const active: ActiveRefresh<Input> = {
+			request,
+			controller: new AbortController(),
+		};
+		this.active = active;
 		void this.options
-			.read(request.input)
+			.read(request.input, active.controller.signal)
 			.then((snapshot) => {
-				if (!this.isCurrentRequest(request)) return;
+				if (this.active !== active || !this.isCurrentRequest(request)) return;
 				if (this.options.equal(this.current, snapshot)) return;
 				this.current = snapshot;
 				this.options.publish(snapshot);
 			})
 			.catch((error: unknown) => {
-				if (this.isCurrentRequest(request)) this.options.onError?.(error);
+				if (
+					this.active === active &&
+					this.isCurrentRequest(request) &&
+					!active.controller.signal.aborted
+				) {
+					this.options.onError?.(error);
+				}
 			})
 			.finally(() => {
-				this.inFlight = false;
+				if (this.active !== active) return;
+				this.active = undefined;
 				const pending = this.pending;
 				this.pending = undefined;
 				if (pending) this.run(pending);
 			});
+	}
+
+	private cancelActive(reason: string): void {
+		this.active?.controller.abort(new DOMException(reason, "AbortError"));
 	}
 
 	private isCurrentTarget(request: RefreshRequest<Input>): boolean {

@@ -7,7 +7,18 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
 import { registerStarshipCommand } from "../src/commands.js";
 import { BUILT_IN_EXAMPLE, loadStarshipConfig, settingsFilePath } from "../src/config.js";
-import piStarship from "../src/pi-starship.js";
+import piStarshipRuntime from "../src/pi-starship.js";
+
+function piStarship(pi: Parameters<typeof piStarshipRuntime>[0]) {
+	return piStarshipRuntime(pi, {
+		githubPrExec: (command, args, options) =>
+			pi.exec(command, args, {
+				cwd: options.cwd,
+				signal: options.signal,
+				timeout: options.timeout,
+			}),
+	});
+}
 
 test("/starship keeps direct routes and opens a stateful narrow TUI menu", async () => {
 	const mock = createMockPi();

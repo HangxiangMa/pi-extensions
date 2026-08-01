@@ -16,6 +16,7 @@ export type WorkspaceExec = (
 		cwd: string;
 		timeout: number;
 		maxOutputBytes: number;
+		signal?: AbortSignal;
 		environment: Readonly<Record<string, string | undefined>>;
 	},
 ) => Promise<WorkspaceExecResult>;
@@ -45,6 +46,7 @@ export interface WorkspaceRefreshInput {
 	fileExists?(path: string): Promise<boolean>;
 	reason?: "initial" | "event" | "periodic";
 	previous?: WorkspaceSnapshot;
+	signal?: AbortSignal;
 }
 
 export interface CollectorContext {

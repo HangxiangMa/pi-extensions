@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { createMockContext, createMockPi } from "../../../test/support.js";
-import piStarship, {
+import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
+import piStarshipRuntime, {
 	parseGitStatusPorcelain,
 	parseGitWorktree,
 	wrapFormattedStatusline,
@@ -26,6 +26,17 @@ async function emit(
 	...args: unknown[]
 ) {
 	for (const handler of events.get(name) ?? []) await handler(...args);
+}
+
+function piStarship(pi: Parameters<typeof piStarshipRuntime>[0]) {
+	return piStarshipRuntime(pi, {
+		githubPrExec: (command, args, options) =>
+			pi.exec(command, args, {
+				cwd: options.cwd,
+				signal: options.signal,
+				timeout: options.timeout,
+			}),
+	});
 }
 
 type FooterFactory = (
@@ -69,7 +80,7 @@ test("session start uses built-in settings without materializing a missing file"
 	}
 });
 
-test("non-TUI sessions install no footer and execute no git subprocess", async () => {
+test("non-TUI sessions install no footer and execute no Git or GitHub subprocess", async () => {
 	const mock = createMockPi();
 	let calls = 0;
 	(mock.rawPi as typeof mock.rawPi & { exec: () => Promise<ExecResult> }).exec = async () => {
@@ -82,6 +93,404 @@ test("non-TUI sessions install no footer and execute no git subprocess", async (
 	await emit(mock.events, "tool_execution_end", { toolName: "read" }, context.ctx);
 	assert.equal(context.footer, undefined);
 	assert.equal(calls, 0);
+});
+
+test("unreachable and disabled native PR modules execute no gh command", async () => {
+	for (const source of ["format = '$model'\n", "[github_pr]\ndisabled = true\n"]) {
+		const root = mkdtempSync(join(tmpdir(), "pi-starship-pr-gate-"));
+		const previous = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = root;
+		try {
+			writeFileSync(join(root, "pi-starship.toml"), source);
+			const mock = createMockPi();
+			let prCalls = 0;
+			(
+				mock.rawPi as typeof mock.rawPi & {
+					exec: (_command: string, args: string[]) => Promise<ExecResult>;
+				}
+			).exec = async (_command, args) => {
+				if (isGithubPrCall(args)) prCalls += 1;
+				return gitResult();
+			};
+			piStarship(mock.pi);
+			const context = createMockContext({ mode: "tui" });
+			await emit(mock.events, "session_start", {}, context.ctx);
+			await flushAsync();
+			assert.equal(prCalls, 0, source);
+			await emit(mock.events, "session_shutdown", {}, context.ctx);
+		} finally {
+			if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previous;
+			rmSync(root, { recursive: true, force: true });
+		}
+	}
+});
+
+test("native PR refresh clears branch state, aborts stale work, and stops on footer disposal", async () => {
+	const mock = createMockPi();
+	const stale = deferred<ExecResult>();
+	const fresh = deferred<ExecResult>();
+	const disposal = deferred<ExecResult>();
+	const prResults: Array<Promise<ExecResult>> = [
+		Promise.resolve(pullRequestResult(123)),
+		stale.promise,
+		fresh.promise,
+		disposal.promise,
+	];
+	const prSignals: AbortSignal[] = [];
+	let prCalls = 0;
+	(
+		mock.rawPi as typeof mock.rawPi & {
+			exec: (
+				command: string,
+				args: string[],
+				options: { signal?: AbortSignal },
+			) => Promise<ExecResult>;
+		}
+	).exec = async (_command, args, options) => {
+		if (!isGithubPrCall(args)) return gitResult();
+		prCalls += 1;
+		if (options.signal) prSignals.push(options.signal);
+		const result = prResults.shift();
+		if (!result) throw new Error("unexpected gh pr view call");
+		return result;
+	};
+	piStarship(mock.pi);
+	const context = createMockContext({ mode: "tui" });
+	await emit(mock.events, "session_start", {}, context.ctx);
+	await flushAsync();
+	let branchChange: (() => void) | undefined;
+	const footer = (context.footer as FooterFactory)(
+		{ requestRender() {} },
+		{},
+		{
+			getGitBranch: () => "feature",
+			getExtensionStatuses: () => new Map(),
+			onBranchChange: (callback) => {
+				branchChange = callback;
+				return () => undefined;
+			},
+		},
+	);
+	assert.match(stripAnsi(footer.render(300).join("\n")), /PR #123 · checks passing/u);
+
+	await emit(mock.events, "agent_end", {}, context.ctx);
+	assert.equal(prCalls, 2);
+	branchChange?.();
+	assert.equal(prCalls, 2);
+	assert.equal(prSignals[1]?.aborted, true);
+	assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#123/u);
+
+	stale.resolve(pullRequestResult(999));
+	await flushAsync();
+	assert.equal(prCalls, 3);
+	assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#999/u);
+	fresh.resolve(pullRequestResult(456));
+	await flushAsync();
+	assert.match(stripAnsi(footer.render(300).join("\n")), /PR #456/u);
+
+	await emit(mock.events, "agent_end", {}, context.ctx);
+	assert.equal(prCalls, 4);
+	footer.dispose();
+	assert.equal(prSignals[3]?.aborted, true);
+	disposal.resolve(pullRequestResult(777));
+	await flushAsync();
+	await emit(mock.events, "session_shutdown", {}, context.ctx);
+});
+
+test("accepted settings disable and re-enable native PR refresh immediately", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-pr-settings-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = root;
+	try {
+		const mock = createMockPi();
+		const stale = deferred<ExecResult>();
+		const prSignals: AbortSignal[] = [];
+		let prCalls = 0;
+		(
+			mock.rawPi as typeof mock.rawPi & {
+				exec: (
+					command: string,
+					args: string[],
+					options: { signal?: AbortSignal },
+				) => Promise<ExecResult>;
+			}
+		).exec = async (_command, args, options) => {
+			if (!isGithubPrCall(args)) return gitResult();
+			prCalls += 1;
+			if (options.signal) prSignals.push(options.signal);
+			if (prCalls === 1) return pullRequestResult(123);
+			if (prCalls === 2) return stale.promise;
+			return pullRequestResult(456);
+		};
+		piStarship(mock.pi);
+		const drafts = ["format = '$model'\n", "format = '$github_pr'\n"];
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			editor: async () => drafts.shift(),
+			custom: async (factory: unknown) => driveCustomSelector(factory, ["\r"], 80).result,
+			confirm: async () => true,
+		});
+		await emit(mock.events, "session_start", {}, context.ctx);
+		await flushAsync();
+		const footer = (context.footer as FooterFactory)(
+			{ requestRender() {} },
+			{},
+			{
+				getGitBranch: () => "feature",
+				getExtensionStatuses: () => new Map(),
+				onBranchChange: () => () => undefined,
+			},
+		);
+		assert.match(stripAnsi(footer.render(300).join("\n")), /#123/u);
+
+		await emit(mock.events, "agent_end", {}, context.ctx);
+		assert.equal(prCalls, 2);
+		await mock.commands.get("starship")?.handler("settings", context.ctx);
+		assert.equal(prSignals[1]?.aborted, true);
+		assert.equal(prCalls, 2);
+		assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#123/u);
+		stale.resolve(pullRequestResult(999));
+		await flushAsync();
+		assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#999/u);
+
+		await mock.commands.get("starship")?.handler("settings", context.ctx);
+		await flushAsync();
+		assert.equal(prCalls, 3);
+		assert.match(stripAnsi(footer.render(300).join("\n")), /#456/u);
+		footer.dispose();
+		await emit(mock.events, "session_shutdown", {}, context.ctx);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("session replacement cancels an awaited settings edit before saving or applying", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-stale-settings-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = root;
+	try {
+		const mock = createMockPi();
+		(mock.rawPi as typeof mock.rawPi & { exec: () => Promise<ExecResult> }).exec = async () => ({
+			stdout: "",
+			stderr: "no PR",
+			code: 1,
+			killed: false,
+		});
+		piStarship(mock.pi);
+		const edited = deferred<string | undefined>();
+		const oldContext = createMockContext({ mode: "tui", editor: async () => edited.promise });
+		const newContext = createMockContext({ mode: "tui", cwd: "/work/replacement" });
+		await emit(mock.events, "session_start", {}, oldContext.ctx);
+		const command = mock.commands.get("starship")?.handler("settings", oldContext.ctx);
+		await flushAsync();
+		await emit(mock.events, "session_start", {}, newContext.ctx);
+		edited.resolve("format = '$github_pr'\n");
+		await command;
+		assert.equal(existsSync(join(root, "pi-starship.toml")), false);
+		await emit(mock.events, "session_shutdown", {}, newContext.ctx);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("same-cwd session replacement aborts and rejects stale native PR publication", async () => {
+	const mock = createMockPi();
+	const oldResult = deferred<ExecResult>();
+	const newResult = deferred<ExecResult>();
+	const shutdownResult = deferred<ExecResult>();
+	const results = [oldResult.promise, newResult.promise, shutdownResult.promise];
+	const signals: AbortSignal[] = [];
+	(
+		mock.rawPi as typeof mock.rawPi & {
+			exec: (
+				command: string,
+				args: string[],
+				options: { signal?: AbortSignal },
+			) => Promise<ExecResult>;
+		}
+	).exec = async (_command, args, options) => {
+		if (!isGithubPrCall(args)) return gitResult();
+		if (options.signal) signals.push(options.signal);
+		const result = results.shift();
+		if (!result) throw new Error("unexpected gh pr view call");
+		return result;
+	};
+	piStarship(mock.pi);
+	const oldContext = createMockContext({ mode: "tui", cwd: "/work/shared" });
+	const newContext = createMockContext({ mode: "tui", cwd: "/work/shared" });
+	await emit(mock.events, "session_start", {}, oldContext.ctx);
+	let staleBranchChange: (() => void) | undefined;
+	const oldFooter = (oldContext.footer as FooterFactory)(
+		{ requestRender() {} },
+		{},
+		{
+			getGitBranch: () => "feature",
+			getExtensionStatuses: () => new Map(),
+			onBranchChange: (callback) => {
+				staleBranchChange = callback;
+				return () => undefined;
+			},
+		},
+	);
+	await emit(mock.events, "session_start", {}, newContext.ctx);
+	assert.equal(signals[0]?.aborted, true);
+	oldResult.resolve(pullRequestResult(111));
+	newResult.resolve(pullRequestResult(222));
+	await flushAsync();
+	const footer = (newContext.footer as FooterFactory)(
+		{ requestRender() {} },
+		{},
+		{
+			getGitBranch: () => "feature",
+			getExtensionStatuses: () => new Map(),
+			onBranchChange: () => () => undefined,
+		},
+	);
+	const rendered = stripAnsi(footer.render(300).join("\n"));
+	assert.match(rendered, /#222/u);
+	assert.doesNotMatch(rendered, /#111/u);
+
+	staleBranchChange?.();
+	await emit(mock.events, "session_shutdown", {}, oldContext.ctx);
+	assert.equal(signals.length, 2);
+	assert.equal(signals[1]?.aborted, false);
+	assert.match(stripAnsi(footer.render(300).join("\n")), /#222/u);
+
+	await emit(mock.events, "agent_end", {}, newContext.ctx);
+	assert.equal(signals.length, 3);
+	await emit(mock.events, "session_shutdown", {}, newContext.ctx);
+	assert.equal(signals[2]?.aborted, true);
+	shutdownResult.resolve(pullRequestResult(333));
+	await flushAsync();
+	footer.dispose();
+	oldFooter.dispose();
+});
+
+test("reachable native PR refresh uses its own 60-second fallback", async (t) => {
+	t.mock.timers.enable({ apis: ["setInterval"] });
+	const mock = createMockPi();
+	let prCalls = 0;
+	(
+		mock.rawPi as typeof mock.rawPi & {
+			exec: (_command: string, args: string[]) => Promise<ExecResult>;
+		}
+	).exec = async (_command, args) => {
+		if (!isGithubPrCall(args)) return gitResult();
+		prCalls += 1;
+		return pullRequestResult(prCalls);
+	};
+	piStarship(mock.pi);
+	const context = createMockContext({ mode: "tui" });
+	await emit(mock.events, "session_start", {}, context.ctx);
+	await flushAsync();
+	assert.equal(prCalls, 1);
+	t.mock.timers.tick(59_999);
+	await flushAsync();
+	assert.equal(prCalls, 1);
+	t.mock.timers.tick(1);
+	await flushAsync();
+	assert.equal(prCalls, 2);
+	const footer = (context.footer as FooterFactory)(
+		{ requestRender() {} },
+		{},
+		{
+			getGitBranch: () => "feature",
+			getExtensionStatuses: () => new Map(),
+			onBranchChange: () => () => undefined,
+		},
+	);
+	footer.dispose();
+	await emit(mock.events, "session_shutdown", {}, context.ctx);
+});
+
+test("terminal native PR snapshots clear at their lifecycle expiry", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	let now = Date.parse("2026-08-01T12:00:00.000Z");
+	t.mock.method(Date, "now", () => now);
+	const mock = createMockPi();
+	(
+		mock.rawPi as typeof mock.rawPi & {
+			exec: (_command: string, args: string[]) => Promise<ExecResult>;
+		}
+	).exec = async (_command, args) =>
+		isGithubPrCall(args)
+			? pullRequestResult(123, {
+					state: "MERGED",
+					mergedAt: new Date(Date.now() - 24 * 60 * 60 * 1_000 + 500).toISOString(),
+				})
+			: gitResult();
+	piStarship(mock.pi);
+	const context = createMockContext({ mode: "tui" });
+	await emit(mock.events, "session_start", {}, context.ctx);
+	await flushAsync();
+	const footer = (context.footer as FooterFactory)(
+		{ requestRender() {} },
+		{},
+		{
+			getGitBranch: () => "feature",
+			getExtensionStatuses: () => new Map(),
+			onBranchChange: () => () => undefined,
+		},
+	);
+	t.after(async () => {
+		footer.dispose();
+		await emit(mock.events, "session_shutdown", {}, context.ctx);
+	});
+	assert.match(stripAnsi(footer.render(300).join("\n")), /#123 · merged/u);
+	now += 1_000;
+	t.mock.timers.tick(1_000);
+	assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#123/u);
+});
+
+test("terminal native PR expiry revalidates the wall clock before clearing", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	let now = Date.parse("2026-08-01T12:00:00.000Z");
+	t.mock.method(Date, "now", () => now);
+	const expiresAt = now + 500;
+	const mock = createMockPi();
+	(
+		mock.rawPi as typeof mock.rawPi & {
+			exec: (_command: string, args: string[]) => Promise<ExecResult>;
+		}
+	).exec = async (_command, args) =>
+		isGithubPrCall(args)
+			? pullRequestResult(123, {
+					state: "MERGED",
+					mergedAt: new Date(expiresAt - 24 * 60 * 60 * 1_000).toISOString(),
+				})
+			: gitResult();
+	piStarship(mock.pi);
+	const context = createMockContext({ mode: "tui" });
+	await emit(mock.events, "session_start", {}, context.ctx);
+	await flushAsync();
+	const footer = (context.footer as FooterFactory)(
+		{ requestRender() {} },
+		{},
+		{
+			getGitBranch: () => "feature",
+			getExtensionStatuses: () => new Map(),
+			onBranchChange: () => () => undefined,
+		},
+	);
+	t.after(async () => {
+		footer.dispose();
+		await emit(mock.events, "session_shutdown", {}, context.ctx);
+	});
+	assert.match(stripAnsi(footer.render(300).join("\n")), /#123 · merged/u);
+
+	now -= 10_000;
+	t.mock.timers.tick(500);
+	assert.match(stripAnsi(footer.render(300).join("\n")), /#123 · merged/u);
+
+	now = expiresAt;
+	t.mock.timers.tick(10_500);
+	assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#123/u);
 });
 
 test("turn module counts user messages instead of repeated LLM turns", async () => {
@@ -277,6 +686,7 @@ test("stale Git results from a replaced session cannot overwrite the new footer"
 			exec: (_command: string, args: string[]) => Promise<ExecResult>;
 		}
 	).exec = async (_command, args) => {
+		if (isGithubPrCall(args)) return { stdout: "", stderr: "no PR", code: 1, killed: false };
 		if (args[0] === "rev-parse") {
 			return gitResult("/work/main\n/work/main/.git\n/work/main/.git\n");
 		}
@@ -457,13 +867,45 @@ test("Git worktree parser distinguishes linked and primary worktrees", () => {
 
 type ExecResult = { stdout: string; stderr: string; code: number; killed: boolean };
 
+function isGithubPrCall(args: readonly string[]): boolean {
+	return args.includes("pr") && args.includes("view") && args.includes("--json");
+}
+
+function pullRequestResult(number: number, overrides: Record<string, unknown> = {}): ExecResult {
+	return {
+		stdout: JSON.stringify({
+			number,
+			isDraft: false,
+			url: `https://github.com/o/r/pull/${number}`,
+			state: "OPEN",
+			closedAt: null,
+			mergedAt: null,
+			reviewDecision: "",
+			statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
+			...overrides,
+		}),
+		stderr: "",
+		code: 0,
+		killed: false,
+	};
+}
+
 function gitResult(stdout = "## main\n"): ExecResult {
 	return { stdout, stderr: "", code: 0, killed: false };
 }
 
 function stripAnsi(value: string): string {
 	const escapeSequence = String.fromCharCode(27);
-	return value.replace(new RegExp(`${escapeSequence}\\[[0-9;]*m`, "gu"), "");
+	let result = value.replace(new RegExp(`${escapeSequence}\\[[0-9;]*m`, "gu"), "");
+	const osc8Prefix = `${escapeSequence}]8;;`;
+	const terminator = String.fromCharCode(7);
+	while (true) {
+		const start = result.indexOf(osc8Prefix);
+		if (start === -1) return result;
+		const end = result.indexOf(terminator, start + osc8Prefix.length);
+		if (end === -1) return result.slice(0, start);
+		result = result.slice(0, start) + result.slice(end + terminator.length);
+	}
 }
 
 function deferred<T>() {

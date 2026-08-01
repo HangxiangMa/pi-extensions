@@ -50,6 +50,18 @@ export interface GitWorktreeSnapshot {
 	path: string;
 }
 
+export type GithubPrState = "open" | "draft" | "merged" | "closed";
+
+export interface GithubPrSnapshot {
+	readonly number: string;
+	readonly link: string;
+	readonly state: GithubPrState;
+	readonly checks: string;
+	readonly review: string;
+	readonly status: string;
+	readonly expiresAt?: number;
+}
+
 export interface GitSnapshot {
 	branch?: GitBranchSnapshot;
 	commit?: GitCommitSnapshot;
@@ -94,6 +106,7 @@ export interface StarshipRuntimeSnapshot {
 	gitMetrics?: GitMetricsSnapshot;
 	gitStatus?: GitStatusSnapshot;
 	gitWorktree?: GitWorktreeSnapshot;
+	githubPr?: GithubPrSnapshot;
 	extensionStatuses: ReadonlyMap<string, string>;
 	extensionStatusIconAliases: ExtensionStatusIconAliasMap;
 	now: Date;
@@ -118,7 +131,6 @@ export interface ModuleValueContext {
 	symbol: string;
 	options: Readonly<Record<string, ModuleOptionValue>>;
 	extensionStatus: ExtensionStatusPresentation;
-	hiddenExtensionStatusKeys: ReadonlySet<string>;
 }
 
 export type ModuleOptionSchema =
@@ -155,5 +167,4 @@ export interface RenderedStatusline<Name extends string = string> {
 	ansi: string;
 	chunks: StyledChunk[];
 	modules: Record<Name, StyledChunk[]>;
-	consumedExtensionStatusKeys: ReadonlySet<string>;
 }

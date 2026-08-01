@@ -6,7 +6,6 @@ const DEFAULT_EXTENSION_STATUS_ICONS: Record<string, string> = {
 	"chrome-devtools": "🌐",
 	"codex-usage": "📊",
 	firecrawl: "🔥",
-	"github-pr": "🔎",
 	goal: "🎯",
 	"google-genai": "✨",
 	lsp: "🧰",
@@ -35,11 +34,9 @@ export const extensionStatusModule = defineModule({
 		style: "fg:extension",
 		disabled: false,
 	},
-	values: ({ runtime, extensionStatus, hiddenExtensionStatusKeys }) => {
+	values: ({ runtime, extensionStatus }) => {
 		const statuses = [...runtime.extensionStatuses.entries()]
-			.filter(
-				([key, value]) => key !== "starship" && !hiddenExtensionStatusKeys.has(key) && value.trim(),
-			)
+			.filter(([key, value]) => key !== "starship" && value.trim())
 			.map(([key, value]) =>
 				formatExtensionStatus(
 					key,

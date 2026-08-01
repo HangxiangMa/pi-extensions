@@ -12,6 +12,7 @@ A native Pi footer configured with Starship-style TOML. It parses and renders fo
 - Starship-style root/module formats, conditional groups, `$all`, styles, and palettes.
 - Pi modules for model, thinking, activity, context, tokens, prompt cache, cost, turn, and extension statuses.
 - Cached Git branch, commit, operation state, line metrics, detailed status, and linked-worktree identity.
+- Native current-branch GitHub pull request links, checks, review state, and terminal-state retention.
 - Opt-in package, language, development-shell, deployment, cloud, and execution-context modules.
 - Width-aware `$fill` alignment for native multiline left/right layouts.
 - Footer rendering is pure: no subprocess, network, filesystem, timer, or environment work runs from `render()`.
@@ -50,7 +51,7 @@ Open the interactive menu in TUI mode:
 /starship
 ```
 
-Choose **Customize footer** to edit the TOML. Closing the editor validates the draft and opens a width-aware preview; saving happens only after a separate confirmation. Confirmed changes are atomically saved and applied immediately. Editor cancellation, preview cancellation, invalid drafts, write failures, and runtime application failures preserve the previous file and effective footer.
+Choose **Customize footer** to edit the TOML. Closing the editor validates the draft and opens a width-aware preview; saving happens only after a separate confirmation. Confirmed changes are atomically saved and applied immediately. Manual TOML edits load on the next `session_start`, including `/reload` and session replacement. Editor cancellation, preview cancellation, invalid drafts, write failures, and runtime application failures preserve the previous file and effective footer.
 
 The standard **Advanced** menu is one level deep and contains configuration details plus **Restore
 built-in**. Standard diagnostics, details, and help are Back-navigable detail screens. Restore still
@@ -59,7 +60,7 @@ shows the specialized width-aware preview and requires explicit overwrite confir
 ### 📝 Example
 
 ```toml
-format = "$brand$provider$model$thinking\n$directory$git_branch$git_status\n$activity$context$tokens$cache$cost$time$turn\n$extension_status"
+format = "$brand$provider$model$thinking\n$directory$git_branch$github_pr$git_status\n$activity$context$tokens$cache$cost$time$turn\n$extension_status"
 palette = "tokyo-night"
 
 [palettes.tokyo-night]
@@ -91,7 +92,13 @@ disabled = false
 format = "[ $symbol \\$$cost( $subscription) ]($style)"
 
 [git_branch]
-format = "[ $symbol$branch$pr ]($style)"
+format = "[ $symbol $branch ]($style)"
+
+[github_pr]
+format = "[ $symbol$link( · $status) ]($style)"
+symbol = "PR "
+style = "fg:git_fg bg:git"
+disabled = false
 
 [package]
 version_format = "v$raw"
@@ -107,7 +114,7 @@ aliases = { "build.example.test" = "builder" }
 
 [extension_status]
 format = "([$statuses ]($style))"
-icons = { "github-pr" = "PR", "foo:*" = "🧪", "@narumitw/pi-goal" = "◎", fallback = "•" }
+icons = { "foo:*" = "🧪", "@narumitw/pi-goal" = "◎", fallback = "•" }
 ```
 
 All module tables support `format`, `symbol`, `style`, and `disabled`. Module-specific
@@ -162,7 +169,8 @@ An invalid root format falls back to the built-in root format. An invalid module
 | `thinking` | `$symbol`, `$level` | Thinking level |
 | `directory` | `$symbol`, `$path`, `$full_path` | Current working directory |
 | `git_worktree` | `$symbol`, `$name`, `$path` | Linked worktree name and top-level path |
-| `git_branch` | `$symbol`, `$branch`, `$remote_name`, `$remote_branch`, `$pr` | Branch, upstream, and actionable PR state |
+| `git_branch` | `$symbol`, `$branch`, `$remote_name`, `$remote_branch` | Local branch and upstream |
+| `github_pr` | `$symbol`, `$number`, `$link`, `$state`, `$checks`, `$review`, `$status` | Current-branch GitHub pull request |
 | `git_commit` | `$symbol`, `$hash`, `$tag` | Seven-character HEAD hash and optional exact tag |
 | `git_state` | `$symbol`, `$state`, `$progress_current`, `$progress_total` | Rebase, merge, revert, cherry-pick, bisect, or mail-apply state |
 | `git_metrics` | `$symbol`, `$added`, `$deleted` | Added/deleted line totals from the working tree diff |
@@ -248,7 +256,54 @@ truncation-direction setting.
 
 `git_commit`, `git_state`, and `git_metrics` are intentionally not present in the built-in root format. Add their variables to `format` to opt in; also set `[git_metrics].disabled = false`, matching Starship's opt-in metrics default. `$tag` resolves only an exact tag on HEAD and is queried only when the configured `git_commit` format references it.
 
-If `$git_branch.$pr` is present in the module format, its selected PR token is removed from `extension_status` to avoid duplication.
+### 🔎 Native GitHub pull requests
+
+`$github_pr` is independent of `pi-github-pr`; installing that extension is not required. It runs one
+bounded GitHub CLI query for the current branch:
+
+```text
+gh pr view --json number,isDraft,url,state,closedAt,mergedAt,reviewDecision,statusCheckRollup
+```
+
+Install and authenticate `gh` first:
+
+```bash
+gh auth login
+```
+
+For GitHub Enterprise Server, authenticate the repository host and keep that host in the repository
+remote, for example `gh auth login --hostname github.example.com`. pi-starship starts `gh` directly
+with child-only environment data that omits ambient `GH_HOST` and `GH_REPO` overrides, so `gh` resolves
+the correct repository and host from the current checkout. It never mutates Pi's environment, calls
+the GitHub API directly, or manages tokens.
+
+Variables have these values:
+
+- `$number`: digits such as `123`.
+- `$link`: an OSC 8 `#123` link for a safe HTTP(S) URL, otherwise plain `#123`.
+- `$state`: `open`, `draft`, `merged`, or `closed`.
+- `$checks`: `checks passing`, `<n> failing`, `<n> pending`, or `no checks`.
+- `$review`: `approved`, `changes requested`, `review required`, or empty when unknown.
+- `$status`: one compact result selected in this order: merged, closed, draft, failing, changes
+  requested, pending, approved, review required, passing, then no checks.
+
+The query runs only in TUI sessions when the enabled module is reachable from the root format. It
+refreshes at session start, immediately after a branch change, after each agent run, after accepted
+settings changes, and every 60 seconds. Each query has a 10-second timeout. Branch changes clear the
+old PR before querying the new branch. Closed and merged PRs remain visible for 24 hours, then expire
+without waiting for the next refresh. Missing `gh`, missing authentication, no current PR, timeout,
+malformed or oversized output, and network failures all render an empty module without exposing raw
+errors or credentials.
+
+The query sends the repository/current-branch context through authenticated `gh` to the GitHub host
+configured by the repository. It requests only the fields above—never comments, review bodies,
+inline comments, or review threads. Footer rendering and previews read only the immutable cached
+snapshot and perform no network or subprocess work.
+
+**Breaking migration:** `$git_branch.$pr` has been removed without a compatibility alias or automatic
+migration. Replace it with root `$github_pr` and an optional `[github_pr]` table. If `pi-github-pr`
+remains installed, its independent `github-pr` status can also appear under `$extension_status`;
+disable or remove that extension when adopting the native module to avoid duplicate information.
 
 ### 📦 Package and language modules
 
@@ -346,19 +401,22 @@ whole-catalog layout is intended. There is no `line_break` module; use literal n
 
 ### 🔄 Cached refresh lifecycle
 
-Workspace and Git readers start only in TUI sessions and only for reachable enabled modules. Root
-format reachability, `$all`, module `disabled`, and module-format variables determine file and command
-requirements. Refreshes run at session start, after accepted settings, branch changes, tool/turn
-completion, and a 30-second fallback. One read runs with at most one latest pending refresh; immutable
-snapshot equality suppresses redraws, and session/config generations reject stale results. Shutdown,
-replacement, and footer disposal stop timers, clear pending work, and prevent late publication.
-Execution identity is retained rather than re-read by the periodic fallback. Render and live preview
-consume snapshots synchronously and perform zero reads or commands.
+Workspace, Git, and GitHub PR readers start only in TUI sessions and only for reachable enabled
+modules. Root format reachability, `$all`, module `disabled`, and module-format variables determine
+file and command requirements. Workspace/Git refreshes run at session start, after accepted settings,
+branch changes, tool/turn completion, and a 30-second fallback. GitHub PR uses the narrower lifecycle
+and 60-second network refresh described above. One read runs with at most one latest pending refresh;
+immutable snapshot equality suppresses redraws, and session/request generations reject stale results.
+Shutdown, replacement, footer disposal, branch changes, and accepted settings abort active command
+work before starting replacements; disabling `github_pr` also stops its query and timers. Bounded local
+filesystem operations may finish, but stale generations cannot publish them. Execution identity is
+retained rather than re-read by the periodic fallback. Render and live preview consume snapshots
+synchronously and perform zero reads or commands.
 
 Missing, unreadable, malformed, oversized, timed-out, or unavailable sources fail to empty values.
-Readers cap direct files at 64 KiB, use one bounded current-directory listing, never recurse, and make
-no network calls. Package's explicitly documented Cargo lookup is the only ancestor walk and is capped
-at eight parents.
+Workspace/Git readers cap direct files at 64 KiB, use one bounded current-directory listing, never
+recurse, and make no network calls. The native GitHub PR query is the documented network exception.
+Package's explicitly documented Cargo lookup is the only ancestor walk and is capped at eight parents.
 
 ## 💬 Commands
 
@@ -393,7 +451,7 @@ modules until separately approved semantics exist.
 
 Create `src/modules/<name>.ts` with its format variables, defaults, and runtime value resolver, then register it in display order in `src/modules/catalog.ts`. Configuration names, validation variables, defaults, and `$all` ordering are derived from that catalog. Add the module to the built-in root format when it should be visible by default, then document and test its user-facing values.
 
-Keep `extension_status` last in the catalog so earlier modules can consume extension-owned status values without rendering duplicates.
+Keep `extension_status` last in the catalog so arbitrary third-party statuses follow native module output.
 
 ## 🗂️ Package layout
 
@@ -404,13 +462,15 @@ Keep `extension_status` last in the catalog so earlier modules can consume exten
 - `src/config.ts` — TOML loading, draft validation, defaults, atomic persistence, and rollback.
 - `src/format/` — native format/style parser and renderer.
 - `src/modules/` — domain module definitions, ordered registry, reachability, and width-aware renderer.
-- `src/modules/git/` — bounded Git reader plus branch, status, and worktree modules.
+- `src/modules/git/` — bounded local Git reader plus branch, status, and worktree modules.
+- `src/modules/github-pr.ts` — pure native GitHub PR snapshot presentation.
+- `src/runtime/github-pr.ts` — bounded `gh` query, validation, terminal-safe links, and expiry data.
 - `src/runtime/` — shared refresh controller and bounded package/language/context collectors.
 
 ## 🔎 Keywords
 
-Pi Coding Agent, Starship statusline, Starship TOML, terminal footer, native statusline, prompt cache,
-cache hit rate, Pi extension
+Pi Coding Agent, Starship statusline, Starship TOML, terminal footer, native statusline, GitHub pull
+request, prompt cache, cache hit rate, Pi extension
 
 ## 📄 License
 
