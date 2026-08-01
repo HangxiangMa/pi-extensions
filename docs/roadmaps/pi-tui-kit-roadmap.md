@@ -101,10 +101,11 @@ disposal, pending action draining, and RPC dialog cadence. The published
 Image Drop representative flows. Repository support remains for its explicitly inventoried Kit,
 specialized-component, experimental, and deprecated owners rather than being deleted prematurely.
 
-The main maintainability hotspot is `packages/pi-tui-kit/src/runtime.ts`, currently 767 lines. It owns
-both TUI and RPC loops, state loading, action dispatch, navigation, signal composition, stale checks,
-and error routing. The concern is not the line count alone: screen action semantics are recognized in
-multiple mode-specific branches, so new contracts can require coordinated central edits.
+The Phase 4 interaction-driver gate passed after a seven-screen TUI/RPC behavior matrix. Runtime is
+now 526 lines and retains adapter cadence, state loading, navigation, and component/dialog lifecycle;
+the 285-line internal `interaction.ts` owns screen-intent validation, raw action resolution, composed
+action signals, accepted/rejected/stale outcomes, error routing, and returned transitions once for
+both modes. This is an internal source boundary, not a new public API.
 
 ## Guiding Principles
 
@@ -219,19 +220,22 @@ contracts without private component knowledge.
 
 ### Phase 4: Qualified Shared Flows and Runtime Locality
 
+**Status:** In progress. The internal interaction driver is source-complete; standalone confirmation
+and deferred multi-select remain independently gated follow-ups.
+
 **Milestones:**
 
-- A decision on the internal semantic interaction driver is grounded in a complete TUI/RPC behavior
-  matrix. If admitted, one coordinator owns action invocation, accepted/rejected results,
-  transitions, composed signals, stale checks, and error routing while adapters retain presentation
-  cadence.
-- Standalone confirmation either proves confirmed, Back, Close, Stale, Unsupported, and Error through
-  Image Drop plus a second compatible consumer, or remains deferred with the missing shared contract
-  recorded.
-- Deferred or batched multi-select either proves common draft, Save, Discard, rejection, and RPC
+- [x] A complete seven-screen TUI/RPC behavior matrix admitted the internal semantic interaction
+  driver. One coordinator now owns action lookup/invocation, intent mismatch and disabled rejection,
+  transitions, composed action signals, stale checks, and error routing while adapters retain TUI
+  component and RPC dialog cadence.
+- [ ] Standalone confirmation either proves confirmed, Back, Close, Stale, Unsupported, and Error
+  through Image Drop plus a second compatible consumer, or remains deferred with the missing shared
+  contract recorded.
+- [ ] Deferred or batched multi-select either proves common draft, Save, Discard, rejection, and RPC
   semantics through Pi Sync and Subagents, or remains extension-owned.
-- Immediate-save multi-select behavior remains unchanged for Chrome DevTools, Firecrawl, Google GenAI,
-  and Plan mode.
+- [ ] Immediate-save multi-select behavior remains unchanged for Chrome DevTools, Firecrawl,
+  Google GenAI, and Plan mode during any deferred-flow work.
 
 **Outcome:** Repeated lifecycle policy moves behind bounded public or internal seams without absorbing
 consumer transactions or creating a universal UI framework.
@@ -255,8 +259,9 @@ abstractions when Pi provides a better stable owner.
 
 - Keep TypeScript strict, NodeNext-compatible, and built as published JavaScript plus declarations.
 - Keep Pi private `dist/*` imports at zero and package-root consumer imports as the supported boundary.
-- Treat the 767-line runtime as a change-locality hotspot; split only when responsibility ownership
-  becomes clearer and duplicated coordination is actually deleted.
+- Keep the 526-line runtime and 285-line interaction driver on their demonstrated ownership boundary:
+  adapters own presentation cadence and the driver owns semantic action coordination. Recombine or
+  split further only when a new behavior matrix proves better locality and deletes coordination.
 - Maintain deterministic model, component, runtime, package-root usage, and README tests for every
   public contract.
 - Maintain a TUI/RPC behavior matrix covering success, rejection, user cancellation, component
@@ -301,7 +306,7 @@ abstractions when Pi provides a better stable owner.
 | Reusable consumer input-host logic | Generic behavior added to repository `test/support.ts` | Supported `/testing` source plus Stamp and Image Drop adoption are complete; retained root owners are inventoried | Phase 3; package and consumer diffs/tests |
 | Proof for each new public flow | Two compatible consumers by default; exceptions require recorded evidence | Two completed proof migrations or an explicit no-go/deferral | Every expansion phase; archived plans and PRs |
 | Lifecycle verification | Existing deterministic package and consumer coverage | Every admitted contract covers TUI/RPC, cancellation, disposal, owner abort, stale state, and failure | Every phase; package and repository gates |
-| Runtime action/lifecycle ownership | TUI and RPC loops coordinate screen actions in separate branches | If the driver is admitted, one coordinator owns shared action and lifecycle policy | Phase 4; source diff plus behavior matrix |
+| Runtime action/lifecycle ownership | TUI and RPC formerly coordinated screen actions in separate branches | One internal driver now owns shared semantic action policy; adapters retain presentation lifecycle | Phase 4 source-complete; seven-screen matrix plus source diff |
 | Regression gate | 1,939 tests at the BTW `0.42.1` release gate | No regression in the repository CI-equivalent gate | Every phase; `npm run check` |
 
 Delivery dates and capacity targets are unknown; this roadmap intentionally measures verified behavior
@@ -348,3 +353,4 @@ and adoption rather than calendar output.
 | 2026-08-01 | Adopt the supported testing subpath in Stamp and Image Drop before publication. | Two real consumers now prove sequential TUI screens, rejected input, pending drains, strict RPC where supported, loader cancellation, and three-way confirmation; broad root support remains only for its other inventoried owners. |
 | 2026-08-01 | Publish shared release `v0.42.0` with menu API 5 and the supported testing subpath. | The pinned-npm bump and provenance workflow passed all 1,938 tests and published all 23 workspaces; a clean registry fixture resolved both Kit roots, adaptive review, exact close results, and strict NodeNext declarations. |
 | 2026-08-01 | Admit BTW's standard choices and preview to Kit after the post-publication gate. | Supported-harness and real-Pi smokes preserve editor text, selected question/scope, Back/Close, raw choice identity, adaptive resize, and exact preview content; 238 lines of specialized menu/preview code are deleted while `BtwTextRangeSelector` remains local. The user-owned patch workflow published only BTW `0.42.1` with provenance. |
+| 2026-08-01 | Admit the internal semantic interaction driver after the Phase 4 deletion gate. | A seven-screen TUI/RPC matrix proves compatible raw payloads, transitions, errors, cancellation, disposal, and stale ownership. Runtime falls from 773 to 526 lines; one 285-line internal owner replaces mode-specific action resolution without changing exports or API version 5. |
