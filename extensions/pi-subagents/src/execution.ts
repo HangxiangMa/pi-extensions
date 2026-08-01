@@ -19,6 +19,7 @@ import {
 	type SingleResult,
 	type SubagentDetails,
 } from "./runner.js";
+import { safeTerminalLine } from "./safe-text.js";
 import { readSubagentSettings, resolveSubagentThinkingLevel } from "./settings.js";
 
 const MAX_PARALLEL_TASKS = 8;
@@ -107,6 +108,9 @@ export async function executeSubagent(
 ): Promise<AgentToolResult<SubagentDetails> & { isError?: boolean }> {
 	assertSubagentDepthAllowed();
 	const agentScope: AgentScope = params.agentScope ?? "user";
+	if ((agentScope === "project" || agentScope === "both") && !ctx.isProjectTrusted()) {
+		throw new Error("Project-local subagent definitions require a trusted project");
+	}
 	const aggregator = hasUsableAggregator(params.aggregator) ? params.aggregator : undefined;
 	const config = readSubagentSettings();
 	const discovery = discoverAgents(ctx.cwd, agentScope, config);
@@ -168,8 +172,10 @@ export async function executeSubagent(
 				throw new Error("Project-local subagent definitions require a trusted project");
 			}
 			if (confirmProjectAgents && ctx.hasUI) {
-				const names = projectAgentsRequested.map((a) => a.name).join(", ");
-				const dir = discovery.projectAgentsDir ?? "(unknown)";
+				const names = projectAgentsRequested
+					.map((agent) => safeTerminalLine(agent.name, 256))
+					.join(", ");
+				const dir = safeTerminalLine(discovery.projectAgentsDir ?? "(unknown)");
 				const ok = await ctx.ui.confirm(
 					"Run project-local agents?",
 					`Agents: ${names}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,

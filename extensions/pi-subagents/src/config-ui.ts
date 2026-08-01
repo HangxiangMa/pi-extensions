@@ -1,23 +1,25 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import { type CompletionDelivery, discoverAgents } from "./agents.js";
+import { type CompletionDelivery, type ConsultResourcePolicy, discoverAgents } from "./agents.js";
 import type { ManagedAgent } from "./registry.js";
 import {
 	type DelegationWorkflow,
 	hasOwn,
 	inspectCompletionDeliverySettings,
+	inspectConsultResourceSettings,
 	inspectDelegationWorkflowSettings,
 	readSubagentSettings,
 	sameToolSet,
 	uniqueToolNames,
 	updateAgentToolsSetting,
 	updateCompletionDeliverySetting,
+	updateConsultResourceSetting,
 	updateDelegationWorkflowSetting,
 } from "./settings.js";
 import { formatStatefulAgentLine, type StatefulSubagentRuntimeStatus } from "./stateful.js";
 
 const SUBCOMMANDS = [
-	{ value: "settings", label: "settings", description: "Configure completion behavior" },
+	{ value: "settings", label: "settings", description: "Configure subagent user settings" },
 	{ value: "status", label: "status", description: "Show effective subagent settings" },
 	{ value: "help", label: "help", description: "Show subagent settings help" },
 ];
@@ -26,7 +28,9 @@ const TOOL_VIEWPORT_SIZE = 10;
 export interface SubagentSettingsRuntime {
 	getBlockingEnabled(): boolean;
 	getCompletionDelivery(): CompletionDelivery;
+	getConsultResourcePolicy(): ConsultResourcePolicy;
 	setCompletionDelivery(value: CompletionDelivery): void;
+	setConsultResourcePolicy(value: ConsultResourcePolicy): void;
 	getRuntimeStatus(): StatefulSubagentRuntimeStatus;
 	listAgents(includeClosed?: boolean): ManagedAgent[];
 	clearAgents(): Promise<number>;
@@ -114,7 +118,7 @@ async function showSubagentManager(
 		| "main"
 		| "workflow"
 		| "agents"
-		| "completion"
+		| "settings"
 		| "advanced"
 		| "status"
 		| "help"
@@ -124,6 +128,7 @@ async function showSubagentManager(
 		| "set-workflow"
 		| "clear-agents"
 		| "set-completion"
+		| "set-consult-resources"
 		| "load-agent-picker"
 		| "pick-agent"
 		| "toggle-tool"
@@ -154,10 +159,10 @@ async function showSubagentManager(
 							to: "agents",
 						},
 						{
-							id: "completion",
-							label: "Completion behavior",
-							description: "Choose whether async completion waits or resumes automatically",
-							to: "completion",
+							id: "settings",
+							label: "Settings",
+							description: "Configure async completion and read-only consultation resources",
+							to: "settings",
 						},
 						{
 							id: "advanced",
@@ -236,7 +241,7 @@ async function showSubagentManager(
 					hint: "back",
 				};
 			},
-			completion: () => completionSettingsScreen(),
+			settings: () => subagentSettingsScreen(runtime),
 			advanced: () => ({
 				kind: "actions",
 				title: "Advanced Subagent Settings",
@@ -388,6 +393,8 @@ async function showSubagentManager(
 				return { kind: "stay" };
 			},
 			"set-completion": async ({ value }) => applyCompletionSetting(value, ctx, runtime),
+			"set-consult-resources": async ({ value }) =>
+				applyConsultResourceSetting(value, ctx, runtime),
 			"load-agent-picker": async () => {
 				availableAgents = discoverAgents(ctx.cwd, "user", readSubagentSettings() ?? {}).agents;
 				if (availableAgents.length === 0) {
@@ -468,7 +475,7 @@ async function showSubagentSettings(
 	runtime: SubagentSettingsRuntime,
 	owner: MenuOwner,
 ) {
-	const snapshot = inspectCompletionDeliverySettings();
+	const snapshot = inspectConsultResourceSettings();
 	if (ctx.mode !== "tui") {
 		if (ctx.hasUI) {
 			ctx.ui.notify(
@@ -479,11 +486,14 @@ async function showSubagentSettings(
 		return;
 	}
 	const generation = owner.generation;
-	const menu = defineMenu<undefined, "completion", "set-completion", ExtensionCommandContext>({
-		start: "completion",
-		screens: { completion: () => completionSettingsScreen() },
+	type SettingsAction = "set-completion" | "set-consult-resources";
+	const menu = defineMenu<undefined, "settings", SettingsAction, ExtensionCommandContext>({
+		start: "settings",
+		screens: { settings: () => subagentSettingsScreen(runtime) },
 		actions: {
 			"set-completion": async ({ value }) => applyCompletionSetting(value, ctx, runtime),
+			"set-consult-resources": async ({ value }) =>
+				applyConsultResourceSetting(value, ctx, runtime),
 		},
 	});
 	await runMenu(ctx, menu, {
@@ -493,17 +503,19 @@ async function showSubagentSettings(
 	});
 }
 
-function completionSettingsScreen() {
-	const snapshot = inspectCompletionDeliverySettings();
+function subagentSettingsScreen(runtime: SubagentSettingsRuntime) {
+	const completion = inspectCompletionDeliverySettings();
+	const consult = inspectConsultResourceSettings();
+	const error = completion.error ?? consult.error;
 	return {
 		kind: "settings" as const,
-		title: snapshot.error ? "Subagent User Settings · Read only" : "Subagent User Settings",
+		title: error ? "Subagent User Settings · Read only" : "Subagent User Settings",
 		lines: [
 			"Applies now and to future sessions",
-			safeTerminalText(snapshot.path),
-			...(snapshot.error ? [`Settings cannot be edited: ${safeTerminalText(snapshot.error)}`] : []),
+			safeTerminalText(consult.path),
+			...(error ? [`Settings cannot be edited: ${safeTerminalText(error)}`] : []),
 		],
-		items: snapshot.error
+		items: error
 			? []
 			: [
 					{
@@ -511,9 +523,18 @@ function completionSettingsScreen() {
 						label: "When async work finishes",
 						description:
 							"Wait for your next turn, or request one synthesis turn after the root settles.",
-						currentValue: completionLabel(snapshot.value),
+						currentValue: completionLabel(runtime.getCompletionDelivery()),
 						values: ["Wait until my next turn", "Resume automatically when finished"],
 						action: "set-completion" as const,
+					},
+					{
+						id: "consultResources",
+						label: "Read-only consultation resources",
+						description:
+							"Choose which trusted context, system, skill, and prompt resources a consultation inherits.",
+						currentValue: consultResourceLabel(runtime.getConsultResourcePolicy()),
+						values: ["Project context only", "No inherited resources", "All trusted resources"],
+						action: "set-consult-resources" as const,
 					},
 				],
 	};
@@ -532,6 +553,30 @@ function applyCompletionSetting(
 		updateCompletionDeliverySetting(next);
 		runtime.setCompletionDelivery(next);
 		ctx.ui.notify(`Saved and applied: ${completionLabel(next)}.`, "info");
+		return { kind: "stay" as const };
+	} catch (error) {
+		ctx.ui.notify(`Subagent settings were not saved: ${formatError(error)}`, "error");
+		return { kind: "rejected" as const };
+	}
+}
+
+function applyConsultResourceSetting(
+	value: string | undefined,
+	ctx: ExtensionCommandContext,
+	runtime: SubagentSettingsRuntime,
+) {
+	const previous = runtime.getConsultResourcePolicy();
+	const next: ConsultResourcePolicy =
+		value === "No inherited resources"
+			? "none"
+			: value === "All trusted resources"
+				? "all"
+				: "project-context";
+	if (next === previous) return { kind: "stay" as const };
+	try {
+		updateConsultResourceSetting(next);
+		runtime.setConsultResourcePolicy(next);
+		ctx.ui.notify(`Saved and applied: ${consultResourceLabel(next)}.`, "info");
 		return { kind: "stay" as const };
 	} catch (error) {
 		ctx.ui.notify(`Subagent settings were not saved: ${formatError(error)}`, "error");
@@ -597,7 +642,7 @@ function helpLines(): string[] {
 	const snapshot = inspectCompletionDeliverySettings();
 	return [
 		"/subagents — choose delegation workflow, manage current agents, and configure agent tools",
-		"/subagents settings — configure async completion behavior",
+		"/subagents settings — configure async completion and read-only consultation resources",
 		"/subagents status — show current-session and user-setting values",
 		"/subagents help — show this help",
 		`User settings: ${safeTerminalText(snapshot.path)}`,
@@ -613,6 +658,7 @@ function formatManagerSummary(
 	return [
 		`Delegation: ${workflowLabel(current)}`,
 		`Completion: ${completionLabel(status.completionDelivery)}`,
+		`Consult resources: ${consultResourceLabel(runtime.getConsultResourcePolicy())}`,
 		`Agents: ${status.activeAgents} active · ${status.retainedAgents} retained`,
 		...(configured.value !== current
 			? [`Configured after reload: ${workflowLabel(configured.value)}`]
@@ -627,6 +673,7 @@ function formatStatus(
 	runtime?: SubagentSettingsRuntime,
 ): string {
 	const configuredWorkflow = inspectDelegationWorkflowSettings();
+	const consult = inspectConsultResourceSettings();
 	const current = runtime ? currentWorkflow(runtime, status) : configuredWorkflow.value;
 	return [
 		"Current session",
@@ -640,6 +687,8 @@ function formatStatus(
 		`  Configured delegation: ${workflowLabel(configuredWorkflow.value)}`,
 		`  Completion source: ${snapshot.source}`,
 		`  Configured completion: ${completionLabel(snapshot.value)}`,
+		`  Consultation resources: ${consultResourceLabel(runtime?.getConsultResourcePolicy() ?? consult.value)}`,
+		`  Consultation resource source: ${consult.source}`,
 		`  Path: ${safeTerminalText(snapshot.path)}`,
 		configuredWorkflow.error || snapshot.error
 			? `  Warning: ${safeTerminalText(configuredWorkflow.error ?? snapshot.error ?? "invalid settings")}`
@@ -688,13 +737,28 @@ function completionLabel(value: CompletionDelivery): string {
 	return value === "auto-resume" ? "Resume automatically when finished" : "Wait until my next turn";
 }
 
+function consultResourceLabel(value: ConsultResourcePolicy): string {
+	switch (value) {
+		case "project-context":
+			return "Project context only";
+		case "none":
+			return "No inherited resources";
+		case "all":
+			return "All trusted resources";
+	}
+}
+
 function workflowEffects(current: DelegationWorkflow, next: DelegationWorkflow): string[] {
 	const blockingEnabled = (value: DelegationWorkflow) =>
 		value === "all" || value === "blocking-only";
 	const asyncEnabled = (value: DelegationWorkflow) => value === "all" || value === "async-only";
 	const effects: string[] = [];
 	if (blockingEnabled(current) !== blockingEnabled(next)) {
-		effects.push(blockingEnabled(next) ? "Add blocking `subagent`" : "Remove blocking `subagent`");
+		effects.push(
+			blockingEnabled(next)
+				? "Add blocking `subagent` and read-only `subagent_consult`"
+				: "Remove blocking `subagent` and read-only `subagent_consult`",
+		);
 	}
 	if (asyncEnabled(current) !== asyncEnabled(next)) {
 		effects.push(

@@ -5,12 +5,15 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import lockfile from "proper-lockfile";
 import {
 	type AgentConfig,
+	CONSULT_RESOURCE_POLICIES,
 	type CompletionDelivery,
+	type ConsultResourcePolicy,
 	isThinkingLevel,
 	type SubagentAgentConfig,
 	type SubagentSettings,
 	type SubagentThinkingLevel,
 } from "./agents.js";
+import { MAX_SUBAGENT_TIMEOUT_MS } from "./limits.js";
 
 export function hasOwn(obj: object, key: PropertyKey): boolean {
 	return Object.hasOwn(obj, key);
@@ -61,7 +64,12 @@ export function normalizeAgentSettings(value: unknown): SubagentAgentConfig | un
 	}
 
 	if (hasOwn(value, "timeoutMs")) {
-		if (value.timeoutMs !== null && !isPositiveNumber(value.timeoutMs)) return undefined;
+		if (
+			value.timeoutMs !== null &&
+			(!isPositiveNumber(value.timeoutMs) || value.timeoutMs > MAX_SUBAGENT_TIMEOUT_MS)
+		) {
+			return undefined;
+		}
 		config.timeoutMs = value.timeoutMs;
 		hasKnownField = true;
 	}
@@ -136,12 +144,27 @@ export function normalizeSubagentSettings(value: unknown): SubagentSettings | un
 		}
 		settings.stateful = runtime;
 	}
+	if (hasOwn(value, "consult")) {
+		if (!isPlainObject(value.consult)) return undefined;
+		const consult: NonNullable<SubagentSettings["consult"]> = {};
+		if (hasOwn(value.consult, "resources")) {
+			if (
+				typeof value.consult.resources !== "string" ||
+				!CONSULT_RESOURCE_POLICIES.includes(value.consult.resources as ConsultResourcePolicy)
+			) {
+				return undefined;
+			}
+			consult.resources = value.consult.resources as ConsultResourcePolicy;
+		}
+		settings.consult = consult;
+	}
 	return settings;
 }
 
 const SETTINGS_FILE = "pi-subagents.json";
 const LEGACY_SETTINGS_FILE = "pi-subagents-config.json";
 const DEFAULT_COMPLETION_DELIVERY: CompletionDelivery = "next-turn";
+export const DEFAULT_CONSULT_RESOURCE_POLICY: ConsultResourcePolicy = "project-context";
 const SETTINGS_LOCK_FS_ADAPTER = {
 	mkdir: fs.mkdir,
 	mkdirSync: fs.mkdirSync,
@@ -231,6 +254,20 @@ export interface CompletionDeliverySettingsSnapshot {
 	error?: string;
 }
 
+export interface ConsultResourceSettingsSnapshot {
+	path: string;
+	value: ConsultResourcePolicy;
+	source: "default" | "user settings";
+	error?: string;
+}
+
+export interface SubagentSettingsSnapshot {
+	path: string;
+	settings?: SubagentSettings;
+	source: "default" | "user settings";
+	error?: string;
+}
+
 export function subagentSettingsFilePath(): string {
 	return path.join(getAgentDir(), SETTINGS_FILE);
 }
@@ -275,6 +312,35 @@ function inspectSubagentSettingsPath(configPath: string): {
 	} catch (error) {
 		return { path: configPath, error: formatError(error) };
 	}
+}
+
+export function inspectSubagentSettings(): SubagentSettingsSnapshot {
+	const inspected = inspectSubagentSettingsDocument();
+	return {
+		path: inspected.path,
+		settings: inspected.settings,
+		source: inspected.settings ? "user settings" : "default",
+		...(inspected.error ? { error: inspected.error } : {}),
+	};
+}
+
+export function inspectConsultResourceSettings(): ConsultResourceSettingsSnapshot {
+	const inspected = inspectSubagentSettingsDocument();
+	if (!inspected.raw || !inspected.settings) {
+		return {
+			path: inspected.path,
+			value: DEFAULT_CONSULT_RESOURCE_POLICY,
+			source: "default",
+			...(inspected.error ? { error: inspected.error } : {}),
+		};
+	}
+	const explicit =
+		isPlainObject(inspected.raw.consult) && hasOwn(inspected.raw.consult, "resources");
+	return {
+		path: inspected.path,
+		value: inspected.settings.consult?.resources ?? DEFAULT_CONSULT_RESOURCE_POLICY,
+		source: explicit ? "user settings" : "default",
+	};
 }
 
 export function inspectDelegationWorkflowSettings(): DelegationWorkflowSettingsSnapshot {
@@ -364,6 +430,27 @@ export function updateCompletionDeliverySetting(value: CompletionDelivery): void
 				stateful: {
 					...(stateful ?? {}),
 					completionDelivery: value,
+				},
+			},
+			update.replaceCanonical,
+		);
+	});
+}
+
+export function updateConsultResourceSetting(value: ConsultResourcePolicy): void {
+	withSettingsMutationLock(() => {
+		const update = readSettingsObjectForUpdate();
+		const raw = update.document;
+		const consult = raw.consult;
+		if (consult !== undefined && !isPlainObject(consult)) {
+			throw new Error(`Cannot update invalid ${SETTINGS_FILE} consult settings`);
+		}
+		writeSettingsObjectUnlocked(
+			{
+				...raw,
+				consult: {
+					...(consult ?? {}),
+					resources: value,
 				},
 			},
 			update.replaceCanonical,

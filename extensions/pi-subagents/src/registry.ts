@@ -55,6 +55,29 @@ export interface ManagedAgent {
 	currentMailboxMessageIds?: string[];
 }
 
+export interface AgentRunInspectionSummary {
+	id: string;
+	agent: string;
+	state: AgentLifecycleState;
+	createdAt: number;
+	updatedAt: number;
+	historyCount: number;
+	unreadMessages: number;
+}
+
+export interface AgentRunInspectionDetail extends AgentRunInspectionSummary {
+	cwd: string;
+	thinkingLevel?: SubagentThinkingLevel;
+	currentTask?: string;
+	error?: string;
+	policy?: { inherited: string[]; overridden: string[]; unsupported: string[] };
+}
+
+export interface AgentInspectionCounts {
+	activeAgents: number;
+	retainedAgents: number;
+}
+
 export interface TurnOutcome {
 	output: string;
 	exitCode: number;
@@ -500,6 +523,42 @@ export class AgentRegistry {
 		if (shutdownError) throw shutdownError;
 	}
 
+	inspectionCounts(): AgentInspectionCounts {
+		let activeAgents = 0;
+		let retainedAgents = 0;
+		for (const agent of this.agents.values()) {
+			if (agent.state === "starting" || agent.state === "running") activeAgents++;
+			if (agent.state !== "closed") retainedAgents++;
+		}
+		return { activeAgents, retainedAgents };
+	}
+
+	listInspection(includeClosed = false): AgentRunInspectionSummary[] {
+		return [...this.agents.values()]
+			.filter((agent) => includeClosed || agent.state !== "closed")
+			.sort((left, right) => left.createdAt - right.createdAt)
+			.map((agent) => this.inspectSummary(agent));
+	}
+
+	getInspection(id: string): AgentRunInspectionDetail | undefined {
+		const agent = this.agents.get(id);
+		if (!agent) return undefined;
+		return {
+			...this.inspectSummary(agent),
+			cwd: agent.cwd,
+			thinkingLevel: agent.thinkingLevel,
+			currentTask: agent.currentTask,
+			error: agent.error,
+			policy: agent.policy
+				? {
+						inherited: [...agent.policy.inherited],
+						overridden: [...agent.policy.overridden],
+						unsupported: [...agent.policy.unsupported],
+					}
+				: undefined,
+		};
+	}
+
 	list(includeClosed = false, rootId?: string): ManagedAgent[] {
 		return [...this.agents.values()]
 			.filter((agent) => !rootId || agent.rootId === rootId)
@@ -753,6 +812,22 @@ export class AgentRegistry {
 		});
 		this.changeQueue = next;
 		return next;
+	}
+
+	private inspectSummary(agent: ManagedAgent): AgentRunInspectionSummary {
+		let unreadMessages = 0;
+		for (const message of agent.mailbox) {
+			if (message.readAt === undefined) unreadMessages++;
+		}
+		return {
+			id: agent.id,
+			agent: agent.agent,
+			state: agent.state,
+			createdAt: agent.createdAt,
+			updatedAt: agent.updatedAt,
+			historyCount: agent.history.length,
+			unreadMessages,
+		};
 	}
 
 	private copy(agent: ManagedAgent): ManagedAgent {
