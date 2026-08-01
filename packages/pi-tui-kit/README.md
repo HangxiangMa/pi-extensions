@@ -365,6 +365,73 @@ The consuming extension still owns:
 
 Keep specialized UI local rather than adding package hooks that expose Pi TUI internals.
 
+## 🧪 Supported testing entrypoint
+
+The same npm package exposes test-only drivers from `@narumitw/pi-tui-kit/testing`; there is no
+second package to install. Keep production imports on the main entrypoint and import harnesses only
+from test code. The testing entrypoint drives Kit behavior through Pi's public custom-factory and RPC
+dialog boundaries without returning a raw component or creating a general `ExtensionContext` mock.
+
+Compose `createTuiHarness()` with the consumer's own context fixture:
+
+```ts
+import { runMenu } from "@narumitw/pi-tui-kit";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+
+const tui = createTuiHarness({ width: 80, rows: 24 });
+const ctx = {
+  ...consumerContext,
+  mode: "tui" as const,
+  hasUI: true,
+  ui: { ...consumerContext.ui, custom: tui.custom },
+};
+
+const running = runMenu(ctx, menu, options);
+await tui.waitForOpen();
+tui.setFocused(true);
+tui.type("12");
+tui.press("tui.input.submit");
+await tui.waitForPending();
+tui.resize({ width: 60, rows: 12 });
+const frame = tui.render();
+const result = await running;
+```
+
+The TUI harness supports semantic Kit bindings, explicit raw input, Ctrl+C/Home/End, focus,
+invalidation, live width/row changes, render-request observations, pending-action draining,
+sequential screens, result observation, and external disposal. `done`, disposal, factory failure,
+and obsolete async openings settle exactly once; input after closure is inert. Supply optional
+callback-compatible theme/keybinding overrides only when a test needs them.
+
+Use strict scripts for RPC:
+
+```ts
+import { createRpcHarness } from "@narumitw/pi-tui-kit/testing";
+
+const rpc = createRpcHarness([
+  { kind: "input", title: "Value", placeholder: "", response: "not-a-number" },
+  { kind: "input", title: "Value", placeholder: "", response: "12" },
+  { kind: "select", options: ["Apply", "Back"], response: "Apply" },
+]);
+const rpcCtx = {
+  ...consumerContext,
+  mode: "rpc" as const,
+  hasUI: true,
+  ui: { ...consumerContext.ui, ...rpc.ui },
+};
+
+await runMenu(rpcCtx, menu, options);
+rpc.assertConsumed();
+```
+
+RPC steps match call kind and optional exact title, placeholder, or choices. Responses are exact raw
+strings or `undefined` cancellation; the harness never fuzzy-matches labels. A `waitForAbort: true`
+step supports owner-abort tests without a timer. Dialog records are immutable, unexpected or leftover
+steps fail observably, and any RPC request for custom TUI throws. The current Kit runtime uses only
+signal-aware `input()` and `select()` in RPC, so the testing entrypoint deliberately does not mock
+confirmations, editors, notifications, sessions, models, settings, filesystems, clocks, or networks.
+Consumer fixtures continue to own domain state, persistence, generation checks, and owner signals.
+
 ## 📚 Public API
 
 - `defineMenu()` — validates and returns a typed menu definition.
@@ -373,6 +440,8 @@ Keep specialized UI local rather than adding package hooks that expose Pi TUI in
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.
 - `createMenuNavigator()` — lower-level stack and selection state helper.
 - exported screen, item, action, transition, runtime option, `MenuCloseReason`, and result types.
+- `@narumitw/pi-tui-kit/testing` — separate subpath for `createTuiHarness()`, `createRpcHarness()`,
+  strict scripts, and their public testing types; it is not re-exported from the production root.
 - `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`5`). Version 5 adds the
   opt-in `ReviewScreen.viewportSize: "adaptive"` policy; version-4 definitions remain valid on the
   version-5 runtime, including mandatory Back/Close reasons on closed menu results.
@@ -381,9 +450,10 @@ Keep specialized UI local rather than adding package hooks that expose Pi TUI in
 
 - `src/` — authored TypeScript and the public package entrypoint
 - `src/components/` — internal TUI input, review, list, settings, and rendering adapters
+- `src/testing/` — supported TUI/RPC test drivers exported only through the `/testing` subpath
 - `src/task.ts` — standalone and menu-shared task lifecycle orchestration
 - `dist/` — generated ESM and declarations included in the npm package
-- `test/` — contract, renderer, navigation, and lifecycle coverage
+- `test/` — contract, renderer, navigation, lifecycle, and public testing-entrypoint coverage
 
 ## 📄 License
 
