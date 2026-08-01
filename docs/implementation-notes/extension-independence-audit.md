@@ -15,7 +15,7 @@ Four extensions still contain extension-specific runtime knowledge:
 | Extension | Existing coupling |
 | --- | --- |
 | `pi-statusline` | Its extension-status settings and renderer contain known-extension icon/compatibility maps and parse the `github-pr` status format. |
-| `pi-starship` | Its extension-status modules contain known-extension icon/compatibility maps, parse the `github-pr` status format, and detect installed `pi-statusline` packages for a conflict warning. |
+| `pi-starship` | Its extension-status module still contains known-extension icon/compatibility maps, and installed-package discovery still detects `pi-statusline` for a conflict warning. Its native `github_pr` module is package-owned, while external `github-pr` statuses remain generic; it no longer has `pi-github-pr`-specific runtime behavior. |
 | `pi-accounts` | `src/account-store.ts` reads and migrates settings owned by the deprecated `pi-codex-accounts` extension. |
 | `pi-caffeinate` | Its deprecated-icon warning names `pi-statusline` and describes that extension's settings shape. This is message-only coupling. |
 
