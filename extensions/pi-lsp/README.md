@@ -16,6 +16,45 @@ The extension is language-agnostic: servers are selected by config and file exte
 - Starts language servers only for tool calls, then shuts them down.
 - Shows statusline activity only while LSP tools are running.
 
+## 🎯 When to use pi-lsp
+
+Use pi-lsp when an LSP can answer a targeted question about the files being edited faster than the
+project's authoritative validation commands. It is most useful when:
+
+- a full-project lint or typecheck is slow, but only a few files need intermediate feedback;
+- structured diagnostics with exact ranges and severity are easier to act on than CLI output;
+- a language server provides a useful source action such as `source.fixAll` or
+  `source.organizeImports`;
+- a multi-language repository benefits from one configurable interface for targeted diagnostics.
+
+For most repositories, first document the authoritative format, lint, typecheck, build, and test
+commands in `AGENTS.md`, then enforce them with pre-commit hooks or CI where appropriate. If those
+commands are already fast and reliable, pi-lsp may add little value.
+
+A practical workflow is:
+
+1. Use `lsp_diagnostics` during an edit only when targeted feedback is useful.
+2. Optionally use `lsp_fix` for a supported server-provided source action.
+3. Before considering the task complete, run the repository's authoritative validation commands.
+4. Treat pre-commit hooks and CI as the final enforcement layer.
+
+### Current limitations
+
+- Diagnostics are not continuously injected into the conversation; the agent must call
+  `lsp_diagnostics`.
+- Language servers start and stop for each tool call, so pi-lsp does not retain an editor-like
+  incremental session.
+- The current tools expose diagnostics and source code actions, not symbol navigation, references,
+  or semantic rename.
+- A clean LSP result does not replace the project's formatter, linter, type checker, build, or tests.
+- This project has not yet demonstrated through benchmarks that LSP improves agent task success,
+  latency, or tool usage.
+
+This outcome-first framing is informed by
+[Eric Traut's comment on LSP integration for coding agents](https://github.com/openai/codex/issues/8745#issuecomment-3713058579):
+the protocol was not designed specifically for coding agents, and repository-native checks may
+already provide much of the desired verification value.
+
 ## 📦 Install
 
 ```bash
