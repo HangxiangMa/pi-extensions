@@ -343,6 +343,75 @@ test("side-question completion maps thinking levels into provider-neutral option
 	}
 });
 
+test("btw command routes no arguments through the menu and preserves direct questions", async () => {
+	const mock = createMockPi({ thinkingLevel: "low" });
+	const selected = {
+		model: { provider: "test", id: "side", reasoning: true } as Model<Api>,
+		auth: { apiKey: "key" },
+	};
+	const menuCalls: string[] = [];
+	const threadStarts: Array<{
+		initialQuestion?: string;
+		thinkingLevel: string;
+		rememberThinkingLevelChanges?: boolean;
+	}> = [];
+	btw(mock.pi, {
+		showCommandMenu: async () => {
+			menuCalls.push("menu");
+			return "start";
+		},
+		loadSettings: async () => ({ thinkingLevel: "medium" }),
+		resolveModel: async () => ({ kind: "selected", selected }),
+		runThread: async (options) => {
+			threadStarts.push({
+				initialQuestion: options.initialQuestion,
+				thinkingLevel: options.thinkingLevel,
+				rememberThinkingLevelChanges: options.rememberThinkingLevelChanges,
+			});
+			return { kind: "closed" };
+		},
+	});
+	const command = mock.commands.get("btw");
+	assert.ok(command);
+	const interactive = createMockContext({ mode: "tui", hasUI: true });
+
+	await command.handler("", interactive.ctx);
+	await command.handler("direct question", interactive.ctx);
+
+	assert.deepEqual(menuCalls, ["menu"]);
+	assert.deepEqual(threadStarts, [
+		{
+			initialQuestion: undefined,
+			thinkingLevel: "medium",
+			rememberThinkingLevelChanges: true,
+		},
+		{
+			initialQuestion: "direct question",
+			thinkingLevel: "medium",
+			rememberThinkingLevelChanges: true,
+		},
+	]);
+	assert.deepEqual(mock.thinkingLevels, []);
+});
+
+test("btw command cancellation at the no-argument menu does not resolve a model", async () => {
+	const mock = createMockPi();
+	let modelResolutions = 0;
+	btw(mock.pi, {
+		showCommandMenu: async () => "closed",
+		loadSettings: async () => ({}),
+		resolveModel: async () => {
+			modelResolutions += 1;
+			return { kind: "unavailable" };
+		},
+	});
+	const command = mock.commands.get("btw");
+	assert.ok(command);
+	await command.handler("", createMockContext({ mode: "tui", hasUI: true }).ctx);
+
+	assert.equal(modelResolutions, 0);
+});
+
 test("btw command rejects non-TUI mode before reading the runtime thinking level", async () => {
 	const mock = createMockPi();
 	let thinkingLevelReads = 0;
