@@ -80,6 +80,81 @@ test("btw settings reject malformed or invalid documents without changing their 
 	});
 });
 
+test("btw settings reject invalid UTF-8 without rewriting its bytes", async () => {
+	await withTempSettings(async (settingsPath) => {
+		await updateBtwSettings({ thinkingLevel: "low" }, { settingsPath });
+		const contents = Buffer.concat([
+			Buffer.from('{"future":"', "utf8"),
+			Buffer.from([0xff]),
+			Buffer.from('","thinkingLevel":"low"}\n', "utf8"),
+		]);
+		await writeFile(settingsPath, contents);
+
+		const loaded = await readBtwSettings(settingsPath);
+		assert.equal(loaded.kind, "invalid");
+		assert.match(loaded.kind === "invalid" ? loaded.reason : "", /UTF-8/i);
+		await assert.rejects(updateBtwSettings({ thinkingLevel: "high" }, { settingsPath }), /UTF-8/i);
+		assert.deepEqual(await readFile(settingsPath), contents);
+	});
+});
+
+test("btw settings bound file reads and preserve oversized documents", async () => {
+	await withTempSettings(async (settingsPath) => {
+		await updateBtwSettings({ thinkingLevel: "low" }, { settingsPath });
+		const contents = Buffer.alloc(128 * 1024, 0x20);
+		await writeFile(settingsPath, contents);
+
+		const loaded = await readBtwSettings(settingsPath);
+		assert.equal(loaded.kind, "invalid");
+		assert.match(loaded.kind === "invalid" ? loaded.reason : "", /exceeds .* bytes/i);
+		await assert.rejects(
+			updateBtwSettings({ thinkingLevel: "high" }, { settingsPath }),
+			/exceeds .* bytes/i,
+		);
+		assert.deepEqual(await readFile(settingsPath), contents);
+	});
+});
+
+test("btw settings refuse to publish a document larger than their read boundary", async () => {
+	await withTempSettings(async (settingsPath) => {
+		await updateBtwSettings({ thinkingLevel: "low" }, { settingsPath });
+		const contents = `${JSON.stringify({
+			future: Array.from({ length: 20_000 }, () => 0),
+			thinkingLevel: "low",
+		})}\n`;
+		assert.ok(Buffer.byteLength(contents, "utf8") < 64 * 1024);
+		await writeFile(settingsPath, contents, "utf8");
+
+		await assert.rejects(
+			updateBtwSettings({ thinkingLevel: "high" }, { settingsPath }),
+			/settings document exceeds .* bytes/i,
+		);
+		assert.equal(await readFile(settingsPath, "utf8"), contents);
+	});
+});
+
+test("btw settings diagnostics never echo malformed document contents", async () => {
+	await withTempSettings(async (settingsPath) => {
+		await updateBtwSettings({ thinkingLevel: "low" }, { settingsPath });
+		const sensitiveMarker = "mock-sensitive-token";
+		await writeFile(settingsPath, sensitiveMarker, "utf8");
+
+		const loaded = await readBtwSettings(settingsPath);
+		assert.equal(loaded.kind, "invalid");
+		const reason = loaded.kind === "invalid" ? loaded.reason : "";
+		assert.match(reason, /invalid JSON/i);
+		assert.doesNotMatch(reason, new RegExp(sensitiveMarker));
+		await assert.rejects(
+			updateBtwSettings({ thinkingLevel: "high" }, { settingsPath }),
+			(error: unknown) => {
+				assert.match(String(error), /invalid JSON/i);
+				assert.doesNotMatch(String(error), new RegExp(sensitiveMarker));
+				return true;
+			},
+		);
+	});
+});
+
 test("btw settings atomic publication failure preserves the previous document", async () => {
 	await withTempSettings(async (settingsPath) => {
 		await updateBtwSettings({ thinkingLevel: "low" }, { settingsPath });

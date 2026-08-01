@@ -20,6 +20,7 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { BtwThinkingLevel, SideThreadTurn } from "./side-thread.js";
+import { sanitizeSingleLine } from "./text.js";
 
 const TRANSCRIPT_CHROME_LINES = 2;
 const OSC133_MARKERS = ["\u001b]133;A\u0007", "\u001b]133;B\u0007", "\u001b]133;C\u0007"];
@@ -415,7 +416,9 @@ function renderSideThreadHeader(
 }
 
 function thinkingKeyLabel(keybindings: KeybindingsManager): string {
-	const key = String(keybindings.getKeys("app.thinking.cycle")[0] ?? "shift+tab");
+	const key =
+		sanitizeSingleLine(String(keybindings.getKeys("app.thinking.cycle")[0] ?? "shift+tab")) ||
+		"Shift+Tab";
 	return key
 		.split("+")
 		.map((part) => {

@@ -982,6 +982,47 @@ test("side-thread save failure keeps the local thinking level and warns once", a
 	);
 });
 
+test("side-thread catches synchronous thinking persistence failures", async () => {
+	const notifications: Array<{ message: string; level: string }> = [];
+	let interactions = 0;
+	await runBtwThread({
+		initialQuestion: "Q1",
+		selected: {
+			model: { provider: "test", id: "side", reasoning: true } as Model<Api>,
+			auth: { apiKey: "key" },
+		},
+		thinkingLevel: "low",
+		rememberThinkingLevelChanges: true,
+		ctx: {
+			ui: {
+				notify(message: string, level: string) {
+					notifications.push({ message, level });
+				},
+			},
+			sessionManager: { getBranch: () => [] },
+		} as never,
+		dependencies: {
+			persistThinkingLevel: (() => {
+				throw new Error("synchronous persistence failure");
+			}) as never,
+			ask: async (thread, question) => {
+				const assistant = response("answer");
+				thread.turns.push({ kind: "answered", question, answer: "answer", response: assistant });
+				return { kind: "answered", response: assistant, answer: "answer" };
+			},
+			interact: async (_thread, _atBottom, _ctx, _draft, thinking) => {
+				interactions += 1;
+				thinking.onChange("high");
+				return { kind: "close" };
+			},
+		},
+	});
+
+	assert.equal(interactions, 1);
+	assert.equal(notifications.length, 1);
+	assert.match(notifications[0]?.message ?? "", /synchronous persistence failure/);
+});
+
 test("side-thread thinking starts clamped to the selected model's capabilities", async () => {
 	const captured: string[] = [];
 	await runBtwThread({
@@ -1043,6 +1084,31 @@ test("cancelling an in-progress side answer exits without reopening the composer
 
 	assert.equal(interactions, 0);
 	assert.deepEqual(notifications, [{ message: "Cancelled", level: "info" }]);
+});
+
+test("side-thread cancellation tolerates a replaced notification context", async () => {
+	const result = await runBtwThread({
+		initialQuestion: "Q1",
+		selected: {
+			model: { provider: "test", id: "side" } as Model<Api>,
+			auth: { apiKey: "key" },
+		},
+		thinkingLevel: "off",
+		ctx: {
+			ui: {
+				notify() {
+					throw new Error("Extension context is no longer active");
+				},
+			},
+			sessionManager: { getBranch: () => [] },
+		} as never,
+		dependencies: {
+			ask: async () => ({ kind: "aborted" }),
+			interact: async () => assert.fail("cancelled requests must not reopen the composer"),
+		},
+	});
+
+	assert.deepEqual(result, { kind: "closed" });
 });
 
 test("cancelled bring-to-main selection restores the unsubmitted side-question draft", async () => {

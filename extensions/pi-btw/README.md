@@ -142,9 +142,10 @@ A failed Settings-screen save instead restores the previous displayed value.
 A missing settings file is a side-effect-free read: pi-btw creates it only after a Settings change
 or a remembered shortcut change. Saves are ordered within the Pi process and published atomically
 with a same-directory temporary file and rename. They preserve `model` and unknown fields; malformed
-or invalid files block saves and remain unchanged. Separate Pi processes and external editors are
-outside this in-process ordering boundary. The file is read for each `/btw` invocation, so edits
-apply without `/reload`.
+or invalid files block saves and remain unchanged. Settings must be valid UTF-8 and no larger than
+64 KiB, so unexpectedly large or invalidly encoded files are rejected without being rewritten.
+Separate Pi processes and external editors are outside this in-process ordering boundary. The file
+is read for each `/btw` invocation, so edits apply without `/reload`.
 
 ## 🧠 Why use pi-btw?
 
@@ -161,6 +162,7 @@ extensions/pi-btw/
 │   ├── menu.ts
 │   ├── settings.ts
 │   ├── side-thread.ts
+│   ├── text.ts
 │   └── transcript-pager.ts
 ├── README.md
 ├── LICENSE

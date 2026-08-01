@@ -92,6 +92,9 @@ test("normalizeBtwSettings accepts optional model and thinking level", () => {
 	assert.equal(normalizeBtwSettings({ model: " provider/model" }), undefined);
 	assert.equal(normalizeBtwSettings({ model: "provider/model " }), undefined);
 	assert.equal(normalizeBtwSettings({ model: "provider/\nmodel" }), undefined);
+	assert.equal(normalizeBtwSettings({ model: "provider/model\u0000suffix" }), undefined);
+	assert.equal(normalizeBtwSettings({ model: "provider/\u001b]52;c;payload\u0007" }), undefined);
+	assert.equal(normalizeBtwSettings({ model: "provider/model\u009b31m" }), undefined);
 	assert.equal(normalizeBtwSettings({ thinkingLevel: null }), undefined);
 	assert.equal(normalizeBtwSettings({ thinkingLevel: "huge" }), undefined);
 });
@@ -410,6 +413,27 @@ test("btw command cancellation at the no-argument menu does not resolve a model"
 	await command.handler("", createMockContext({ mode: "tui", hasUI: true }).ctx);
 
 	assert.equal(modelResolutions, 0);
+});
+
+test("btw command ignores stale-context notification failures after an async boundary", async () => {
+	const mock = createMockPi();
+	btw(mock.pi, {
+		loadSettings: async () => ({}),
+		resolveModel: async () => ({ kind: "unavailable" }),
+	});
+	const command = mock.commands.get("btw");
+	assert.ok(command);
+	const interactive = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		ui: {
+			notify() {
+				throw new Error("Extension context is no longer active");
+			},
+		},
+	});
+
+	assert.equal(await command.handler("direct question", interactive.ctx), undefined);
 });
 
 test("btw command rejects non-TUI mode before reading the runtime thinking level", async () => {

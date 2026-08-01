@@ -44,6 +44,7 @@ import {
 	type SideQuestionAuth,
 	type SideThread,
 } from "./side-thread.js";
+import { sanitizeSingleLine } from "./text.js";
 import {
 	BtwAnsweringView,
 	type BtwThinkingControl,
@@ -66,6 +67,7 @@ export {
 	completeSideQuestion,
 	loadCompleteSimple,
 } from "./side-thread.js";
+export { sanitizeSingleLine } from "./text.js";
 
 const MAX_CONTEXT_CHARS = 40_000;
 
@@ -102,18 +104,19 @@ export async function resolveBtwModel({
 	modelRegistry,
 	warn,
 }: ResolveBtwModelOptions): Promise<ResolvedBtwModel | undefined> {
+	const reportWarning = (message: string) => warn?.(sanitizeSingleLine(message));
 	if (settings.model) {
 		const fallback = currentModel
 			? `${currentModel.provider}/${currentModel.id}`
 			: "the current model";
 		const reference = parseBtwModelReference(settings.model);
 		if (!reference) {
-			warn?.(`pi-btw model ${settings.model} is invalid; falling back to ${fallback}.`);
-			return resolveBtwModel({ settings: {}, currentModel, modelRegistry, warn });
+			reportWarning(`pi-btw model ${settings.model} is invalid; falling back to ${fallback}.`);
+			return resolveBtwModel({ settings: {}, currentModel, modelRegistry, warn: reportWarning });
 		}
 		const configuredModel = modelRegistry.find(reference.provider, reference.modelId);
 		if (!configuredModel) {
-			warn?.(`pi-btw model ${settings.model} was not found; falling back to ${fallback}.`);
+			reportWarning(`pi-btw model ${settings.model} was not found; falling back to ${fallback}.`);
 		} else {
 			const sameAsCurrent =
 				configuredModel === currentModel ||
@@ -126,9 +129,11 @@ export async function resolveBtwModel({
 				const auth = await modelRegistry.getApiKeyAndHeaders(configuredModel);
 				if (auth.ok && hasRequestAuth(auth)) return { model: configuredModel, auth };
 				const reason = auth.ok ? "has no request credentials" : auth.error;
-				warn?.(`pi-btw model ${settings.model} is unavailable (${reason}); ${fallbackAction}.`);
+				reportWarning(
+					`pi-btw model ${settings.model} is unavailable (${reason}); ${fallbackAction}.`,
+				);
 			} catch (error: unknown) {
-				warn?.(
+				reportWarning(
 					`pi-btw model ${settings.model} credentials failed (${formatError(error)}); ${fallbackAction}.`,
 				);
 			}
@@ -165,13 +170,27 @@ export async function loadBtwThinkingLevel(
 	}
 
 	options.warn?.(
-		`pi-btw settings ignored: ${settings.reason}; expected optional model "provider/model-id", thinkingLevel "${BTW_THINKING_LEVELS.join('" | "')}", and boolean rememberThinkingLevelChanges. Using current Pi thinking level.`,
+		sanitizeSingleLine(
+			`pi-btw settings ignored: ${settings.reason}; expected optional model "provider/model-id", thinkingLevel "${BTW_THINKING_LEVELS.join('" | "')}", and boolean rememberThinkingLevelChanges. Using current Pi thinking level.`,
+		),
 	);
 	return currentThinkingLevel;
 }
 
 function formatError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function notifySafely(
+	ctx: ExtensionCommandContext,
+	message: string,
+	level: Parameters<ExtensionCommandContext["ui"]["notify"]>[1],
+): void {
+	try {
+		ctx.ui.notify(sanitizeSingleLine(message), level);
+	} catch {
+		// Async command continuations may finish after their ExtensionContext is replaced.
+	}
 }
 
 export interface BtwExtensionDependencies {
@@ -202,11 +221,11 @@ export default function btw(pi: ExtensionAPI, dependencies: BtwExtensionDependen
 			const settings = await loadSettings(ctx);
 			const resolution = await resolveModel(settings, ctx);
 			if (resolution.kind === "cancelled") {
-				ctx.ui.notify("Cancelled", "info");
+				notifySafely(ctx, "Cancelled", "info");
 				return;
 			}
 			if (resolution.kind === "unavailable") {
-				ctx.ui.notify("No available model for /btw", "error");
+				notifySafely(ctx, "No available model for /btw", "error");
 				return;
 			}
 
@@ -225,15 +244,20 @@ async function showCommandMenuForBtw(
 	pi: ExtensionAPI,
 	ctx: ExtensionCommandContext,
 ): Promise<BtwCommandMenuResult> {
+	const currentModel = ctx.model;
+	const availableModels = ctx.modelRegistry.getAll();
+	const currentThinkingLevel = pi.getThinkingLevel();
 	const loaded = await readBtwSettings();
 	const settings = loaded.kind === "loaded" ? loaded.settings : {};
 	const configured = settings.model ? parseBtwModelReference(settings.model) : undefined;
 	const configuredModel = configured
-		? ctx.modelRegistry.find(configured.provider, configured.modelId)
+		? availableModels.find(
+				(model) => model.provider === configured.provider && model.id === configured.modelId,
+			)
 		: undefined;
-	const model = configuredModel ?? ctx.model;
+	const model = configuredModel ?? currentModel;
 	return showBtwCommandMenu(ctx, {
-		currentThinkingLevel: pi.getThinkingLevel(),
+		currentThinkingLevel,
 		availableThinkingLevels: model ? getSupportedThinkingLevels(model) : BTW_THINKING_LEVELS,
 	});
 }
@@ -242,7 +266,7 @@ async function loadSettingsForCommand(ctx: ExtensionCommandContext): Promise<Btw
 	const settingsResult = await readBtwSettings();
 	if (settingsResult.kind === "loaded") return settingsResult.settings;
 	if (settingsResult.kind === "invalid") {
-		ctx.ui.notify(`pi-btw settings ignored: ${settingsResult.reason}`, "warning");
+		notifySafely(ctx, `pi-btw settings ignored: ${settingsResult.reason}`, "warning");
 	}
 	return {};
 }
@@ -270,7 +294,7 @@ async function resolveBtwModelWithLoader(
 			currentModel: ctx.model,
 			modelRegistry: ctx.modelRegistry,
 			warn: (message) => {
-				if (!settled) ctx.ui.notify(message, "warning");
+				if (!settled) notifySafely(ctx, message, "warning");
 			},
 		})
 			.then((selected) => {
@@ -356,17 +380,15 @@ export async function runBtwThread({
 						activeThinkingLevel = level;
 						if (!rememberThinkingLevelChanges) return;
 						let write!: Promise<void>;
-						write = Promise.resolve(persistThinkingLevel(level))
+						write = Promise.resolve()
+							.then(() => persistThinkingLevel(level))
 							.then(() => undefined)
 							.catch((error: unknown) => {
-								try {
-									ctx.ui.notify(
-										`Thinking level changed to ${level}, but could not be remembered in pi-btw.json: ${formatError(error)}`,
-										"warning",
-									);
-								} catch {
-									// The side-thread change remains valid after a session context is replaced.
-								}
+								notifySafely(
+									ctx,
+									`Thinking level changed to ${level}, but could not be remembered in pi-btw.json: ${formatError(error)}`,
+									"warning",
+								);
 							})
 							.finally(() => pendingWrites.delete(write));
 						pendingWrites.add(write);
@@ -398,7 +420,7 @@ export async function runBtwThread({
 
 			const result = await ask(thread, pendingQuestion, selected, activeThinkingLevel, ctx);
 			if (result.kind === "aborted") {
-				ctx.ui.notify("Cancelled", "info");
+				notifySafely(ctx, "Cancelled", "info");
 				return { kind: "closed" };
 			}
 			if (result.kind === "error") {
@@ -431,13 +453,21 @@ async function showBtwCustomPreservingEditor<T>(
 	let completed = false;
 	const result = await ctx.ui.custom<T>((tui, theme, keybindings, done) =>
 		factory(tui, theme, keybindings, (value) => {
-			liveEditorText = ctx.ui.getEditorText();
+			try {
+				liveEditorText = ctx.ui.getEditorText();
+			} catch {
+				// Keep completion finite if session replacement invalidates the editor context.
+			}
 			completed = true;
 			done(value);
 		}),
 	);
-	if (completed && ctx.ui.getEditorText() !== liveEditorText) {
-		ctx.ui.setEditorText(liveEditorText);
+	if (completed) {
+		try {
+			if (ctx.ui.getEditorText() !== liveEditorText) ctx.ui.setEditorText(liveEditorText);
+		} catch {
+			// A replaced context owns a different editor and must not receive stale restoration.
+		}
 	}
 	return result;
 }
@@ -769,17 +799,6 @@ async function showThreadComposer(
 				thinking: { ...thinking, keybindings },
 			}),
 	);
-}
-
-export function sanitizeSingleLine(text: string) {
-	return [...text.replace(/[\r\n\t]/g, " ")]
-		.filter((character) => {
-			const code = character.charCodeAt(0);
-			return code > 31 && (code < 127 || code > 159);
-		})
-		.join("")
-		.replace(/ +/g, " ")
-		.trim();
 }
 
 type MessageContentBlock = {

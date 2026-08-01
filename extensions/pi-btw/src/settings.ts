@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { BTW_THINKING_LEVELS, type BtwThinkingLevel } from "./side-thread.js";
 
 export const BTW_SETTINGS_FILE = "pi-btw.json";
 export const DEFAULT_REMEMBER_THINKING_LEVEL_CHANGES = true;
+const MAX_SETTINGS_BYTES = 64 * 1024;
 
 export interface BtwSettings {
 	model?: string;
@@ -57,7 +59,7 @@ export function normalizeBtwSettings(value: unknown): BtwSettings | undefined {
 export function parseBtwModelReference(
 	reference: string,
 ): { provider: string; modelId: string } | undefined {
-	if (/\s/.test(reference)) return undefined;
+	if (/[\s\p{Cc}]/u.test(reference)) return undefined;
 	const separator = reference.indexOf("/");
 	if (separator <= 0 || separator === reference.length - 1) return undefined;
 	return { provider: reference.slice(0, separator), modelId: reference.slice(separator + 1) };
@@ -111,7 +113,7 @@ function enqueueMutation<T>(settingsPath: string, mutation: () => Promise<T>): P
 async function readBtwSettingsUncoordinated(settingsPath: string): Promise<BtwSettingsLoadResult> {
 	let contents: string;
 	try {
-		contents = await readFile(settingsPath, "utf8");
+		contents = await readSettingsContents(settingsPath);
 	} catch (error: unknown) {
 		if (isNodeError(error) && error.code === "ENOENT") return { kind: "missing" };
 		return { kind: "invalid", reason: `${settingsPath}: ${formatError(error)}` };
@@ -122,15 +124,15 @@ async function readBtwSettingsUncoordinated(settingsPath: string): Promise<BtwSe
 		return settings
 			? { kind: "loaded", settings }
 			: { kind: "invalid", reason: `${settingsPath}: invalid settings shape` };
-	} catch (error: unknown) {
-		return { kind: "invalid", reason: `${settingsPath}: invalid JSON (${formatError(error)})` };
+	} catch {
+		return { kind: "invalid", reason: `${settingsPath}: invalid JSON` };
 	}
 }
 
 async function readSettingsDocumentForUpdate(settingsPath: string): Promise<SettingsDocument> {
 	let contents: string;
 	try {
-		contents = await readFile(settingsPath, "utf8");
+		contents = await readSettingsContents(settingsPath);
 	} catch (error: unknown) {
 		if (isNodeError(error) && error.code === "ENOENT") return {};
 		throw invalidSettingsError(settingsPath, formatError(error));
@@ -139,13 +141,45 @@ async function readSettingsDocumentForUpdate(settingsPath: string): Promise<Sett
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(contents) as unknown;
-	} catch (error: unknown) {
-		throw invalidSettingsError(settingsPath, `invalid JSON (${formatError(error)})`);
+	} catch {
+		throw invalidSettingsError(settingsPath, "invalid JSON");
 	}
 	if (!isSettingsDocument(parsed) || !normalizeBtwSettings(parsed)) {
 		throw invalidSettingsError(settingsPath, "invalid settings shape");
 	}
 	return parsed;
+}
+
+async function readSettingsContents(settingsPath: string): Promise<string> {
+	const flags = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
+	const handle = await open(settingsPath, flags);
+	try {
+		const descriptorStats = await handle.stat();
+		if (!descriptorStats.isFile()) throw new Error("settings path is not a regular file");
+		if (descriptorStats.size > MAX_SETTINGS_BYTES) {
+			throw new Error(`settings file exceeds ${MAX_SETTINGS_BYTES} bytes`);
+		}
+
+		const buffer = Buffer.alloc(MAX_SETTINGS_BYTES + 1);
+		let offset = 0;
+		while (offset < buffer.byteLength) {
+			const { bytesRead } = await handle.read(buffer, offset, buffer.byteLength - offset, offset);
+			if (bytesRead === 0) break;
+			offset += bytesRead;
+		}
+		if (offset > MAX_SETTINGS_BYTES) {
+			throw new Error(`settings file exceeds ${MAX_SETTINGS_BYTES} bytes`);
+		}
+		try {
+			return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+				buffer.subarray(0, offset),
+			);
+		} catch {
+			throw new Error("settings file is not valid UTF-8");
+		}
+	} finally {
+		await handle.close();
+	}
 }
 
 async function publishSettings(
@@ -155,6 +189,10 @@ async function publishSettings(
 	beforeRename?: (temporaryPath: string, settingsPath: string) => Promise<void>,
 ): Promise<void> {
 	signal?.throwIfAborted();
+	const contents = `${JSON.stringify(document, null, 2)}\n`;
+	if (Buffer.byteLength(contents, "utf8") > MAX_SETTINGS_BYTES) {
+		throw new Error(`settings document exceeds ${MAX_SETTINGS_BYTES} bytes`);
+	}
 	const directory = dirname(settingsPath);
 	await mkdir(directory, { recursive: true });
 	signal?.throwIfAborted();
@@ -163,7 +201,7 @@ async function publishSettings(
 		`.${basename(settingsPath)}.${process.pid}.${randomUUID()}.tmp`,
 	);
 	try {
-		await writeFile(temporaryPath, `${JSON.stringify(document, null, 2)}\n`, {
+		await writeFile(temporaryPath, contents, {
 			encoding: "utf8",
 			flag: "wx",
 			mode: 0o600,
