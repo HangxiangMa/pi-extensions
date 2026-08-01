@@ -238,23 +238,27 @@ versions. Do not retain parallel old/new action-resolution paths.
   status; do not claim unrelated Phase 4 milestones. Evidence: Phase 4 is accurately in progress with
   only the driver checked; the roadmap records 526 runtime/285 driver lines, the internal ownership
   boundary, the 1,930-test gate, and both still-open qualification milestones.
-- [ ] Audit the final diff against this plan, `docs/extension-conventions.md`, and the roadmap; verify
+- [x] Audit the final diff against this plan, `docs/extension-conventions.md`, and the roadmap; verify
   public API/version, TUI/RPC cadence, lifecycle ownership, consumers, package metadata, settings,
   generated artifacts, and release state are unchanged, then open a focused PR and require green CI
-  and CodeQL before merge.
-- [ ] After merge, synchronize a clean worktree to `origin/main`, record the merge commit and checks,
+  and CodeQL before merge. Evidence: PR #500 changed exactly this plan, the roadmap, runtime/driver,
+  and their tests; no export, API, manifest, lockfile, consumer, settings, or release file changed.
+  CI and all three CodeQL checks passed before merge commit `ed3c980`.
+- [x] After merge, synchronize a clean worktree to `origin/main`, record the merge commit and checks,
   mark every task with evidence, archive this completed plan under `docs/plans/archived/`, and merge a
-  final documentation PR.
+  final documentation PR. Evidence: the dedicated worktree synchronized cleanly to `origin/main` at
+  `ed3c980`; every task is evidenced, and this plan is moved to its unused canonical archive path in
+  the final documentation branch for green-check merge.
 
 ## Completion Checklist
 
-- [ ] The admission decision is backed by a complete seven-screen TUI/RPC behavior matrix and an
+- [x] The admission decision is backed by a complete seven-screen TUI/RPC behavior matrix and an
   explicit deletion test.
-- [ ] If admitted, both adapters use one internal semantic interaction entry point and no parallel
-  action-resolution path remains; if rejected, no speculative driver source remains.
-- [ ] Public exports, API version 5, screen definitions, TUI output/cadence, RPC dialogs/pagination,
+- [x] Both adapters use one internal semantic interaction entry point and no parallel
+  action-resolution path remains.
+- [x] Public exports, API version 5, screen definitions, TUI output/cadence, RPC dialogs/pagination,
   raw action payloads, transitions, lifecycle outcomes, and consumers remain compatible.
-- [ ] Focused matrix/lifecycle tests, Kit checks, LSP diagnostics, generated-package smokes, root tests,
+- [x] Focused matrix/lifecycle tests, Kit checks, LSP diagnostics, generated-package smokes, root tests,
   root CI-equivalent checks, pack inspection, CI, and CodeQL pass with no unrecorded skip.
-- [ ] The roadmap records only the proven Phase 4 result, the completed plan is archived, and the final
-  worktree is clean and synchronized on `main`.
+- [x] The roadmap records only the proven Phase 4 result; the dedicated handoff worktree synchronized
+  cleanly to merged `main`, and the fully evidenced plan is archived without replacing another file.
