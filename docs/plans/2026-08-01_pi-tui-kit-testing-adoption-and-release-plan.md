@@ -354,40 +354,53 @@ components rather than approximating behavior.
   verified registry release, open a documentation-only PR, and merge after link/check validation.
   Evidence: the current docs branch updates overview/current state, Phase 3, success metrics, and the
   decision log to published `0.42.0`, API 5, `/testing`, registry smokes, 23 provenance publishes, and
-  the 1,938-test release gate; PR/merge evidence follows below.
+  the 1,938-test release gate; docs PR #492 merged as `fbc55ba` after CI and CodeQL passed.
 
 ### 6. Rerun the BTW gate against the published Kit
 
-- [ ] Confirm the shared release published unchanged `@narumitw/pi-btw@0.42.0` and that repository BTW
+- [x] Confirm the shared release published unchanged `@narumitw/pi-btw@0.42.0` and that repository BTW
   remains behaviorally identical to `v0.41.0`; reserve unused patch `0.42.1` for a successful
-  migration, deriving another unused patch rather than reusing registry bytes if necessary.
-- [ ] Add focused characterization tests for editor text captured before custom UI, editor changes
+  migration, deriving another unused patch rather than reusing registry bytes if necessary. Evidence:
+  `v0.41.0..v0.42.0` changes only BTW's manifest version; the 83-test baseline and package check/pack
+  pass;
+  registry `0.42.0` has no Kit dependency, and `0.42.1` remains unused.
+- [x] Add focused characterization tests for editor text captured before custom UI, editor changes
   observed at completion, post-await restoration, root Back versus Ctrl+C Close, initial question
   selection, preview Back restoration, exact text-range state, narrow/large terminal bounds, resize,
-  and owner/session replacement; verify all pass on the existing implementation before migration.
-- [ ] Build a disposable Kit-backed prototype or test-only adapter for standard BTW choice and adaptive
+  and owner/session replacement. Evidence: the original 83 tests passed; the new disposal case first
+  reproduced a finite-contract gap as `TypeError` after host disposal, then passed through Kit without
+  any obsolete-context editor write. A same-pattern exact-selector disposal test drove a bounded local
+  hardening fix; all existing exact-range behavior remained green.
+- [x] Build a disposable Kit-backed prototype or test-only adapter for standard BTW choice and adaptive
   review flows, leaving `BtwTextRangeSelector` untouched; verify every admission invariant in the
-  Architecture section and record a binary go/no-go decision in the roadmap.
-- [ ] If the gate is no-go, mark the migration/publication items below not applicable with the failed
-  invariant, retain specialized code unchanged, run root `npm run check`, and complete Phase 3 with a
-  durable no-go decision.
-- [ ] If the gate is go, create a BTW-only branch, add a bounded runtime dependency on the published
-  Kit minor (expected `^0.42.0`), bump BTW alone to unused patch `0.42.1` with
-  `just bump @narumitw/pi-btw patch`, run `npm install` to update the lockfile, and verify boundary
-  checks accept the library dependency without any extension-to-extension edge.
-- [ ] If the gate is go, replace only `BtwMenuSelector` and `BtwBringToMainPreview` ownership with
-  declarative choice/adaptive-review flows, preserve the editor wrapper and generation checks across
-  every await, and keep exact character/line selection specialized; verify obsolete classes/tests are
-  deleted only when no caller remains.
-- [ ] If the gate is go, run focused BTW tests, package typecheck/check, LSP diagnostics, root
-  `npm run check`, `just pack-btw`, and a timeout-bounded real Pi TUI smoke for editor preservation,
-  restored selection, Back, Close, adaptive resize, and bring-to-main completion.
-- [ ] If the gate is go, audit and merge the BTW PR after CI, obtain explicit publication approval,
-  run `just publish-btw` only if the target version is still absent, and verify the registry package
-  depends on the published Kit minor and installs/loads in a disposable Pi environment.
-- [ ] Update the roadmap with the final BTW gate result, package publication state when applicable,
-  final regression count, and any separately scoped testing-adoption follow-ups for other extensions;
-  verify no Phase 4 work is claimed complete.
+  Architecture section and record a binary go/no-go decision in the roadmap. Decision: **go**. Real
+  Kit screens preserve raw indexed identity, initial/restored question and scope, exact preview draft,
+  Back/Close, editor completion capture, adaptive 5/9/14-row resizing, and host disposal.
+- [x] Not applicable because the gate is go: retain all no-go recovery instructions for future
+  regressions, but proceed only with the admitted standard choices and preview boundary.
+- [x] Create a BTW-only branch and add bounded runtime dependency `@narumitw/pi-tui-kit: ^0.42.0` via
+  `npm install`; add the convention-required Pi runtime peers at `"*"`; verify boundary checks accept
+  the library dependency without any extension edge and the tarball remains host-resolved. Per the
+  user's clarified release ownership, keep source manifest version `0.42.0` in the PR and stop
+  before the user performs the still-unused `0.42.1` bump/publication action.
+- [x] Replace only `BtwMenuSelector` and `BtwBringToMainPreview` ownership with declarative
+  choice/adaptive-review flows, preserve editor completion/restoration checks across awaits, and keep
+  exact character/line selection specialized. Evidence: obsolete classes, types, wrapping helper,
+  and private-component tests are deleted; `BtwTextRangeSelector` and all exact selection tests remain.
+- [x] Run focused BTW tests, package typecheck/check, LSP diagnostics, root `npm run check`,
+  `just pack-btw`, and a timeout-bounded real Pi TUI smoke for editor preservation, restored selection,
+  Back, Close, adaptive resize, and bring-to-main completion. Evidence: 84/84 focused and 1,939/1,939
+  root tests pass; package/boundary checks, zero LSP findings, and eight-file dry pack pass; real Pi
+  0.83 at 9 terminal rows reports loaded append with exact editor text, Back, and Close, while supported
+  harness flows cover selected-question/scope restoration, 5/9/14-row resize, and exact completion.
+- [ ] Audit and merge the BTW PR after CI, then stop before all version-bump and publication actions.
+  Present the unused target (expected `0.42.1`), merged commit, exact checks, tarball/dependency state,
+  and registry recovery instructions so the user can perform the GitHub release action. After the user
+  publishes, verify registry dependency/install/load state without triggering another release.
+- [x] Update the roadmap with the final BTW gate result, source/publication split, final regression
+  count, and any separately scoped testing-adoption follow-ups; verify no Phase 4 work is claimed
+  complete. Evidence: Phase 2 now records published `0.42.0`; Phase 3 marks the gate go and migration
+  review-ready but publication user-owned; editor lifecycle and the decision log record the boundary.
 
 ### 7. Final audit and handoff
 

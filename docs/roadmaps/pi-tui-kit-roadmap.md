@@ -175,7 +175,7 @@ the next lifecycle contracts can be prioritized.
 
 ### Phase 2: Distinct Menu Session Outcomes
 
-**Status:** Complete in repository source; npm release remains separate.
+**Status:** Complete and published in `0.42.0`.
 
 **Milestones:**
 
@@ -193,7 +193,8 @@ three-way confirmation and preview composition.
 ### Phase 3: Adaptive Review and Supported Testability
 
 **Status:** Adaptive review, the [supported testing entrypoint][supported-testing-plan], and named
-Stamp/Image Drop test-host adoption are published in `0.42.0`; the BTW gate/migration remains open.
+Stamp/Image Drop test-host adoption are published in `0.42.0`; the BTW gate is go and its focused
+source migration is ready for review, while version bump and publication remain user-owned.
 
 **Milestones:**
 
@@ -207,8 +208,10 @@ Stamp/Image Drop test-host adoption are published in `0.42.0`; the BTW gate/migr
   ad hoc Kit drivers are gone; repository-level `test/support.ts` remains for explicitly inventoried
   Kit, specialized-component, experimental, and deprecated test owners rather than being deleted
   prematurely.
-- [ ] The BTW review gate is rerun against close reasons and adaptive viewport; migration proceeds only
-  if editor-preservation and restored-selection invariants also remain explicit and testable.
+- [x] The BTW review gate passed against published API 5. Kit choice and adaptive-review flows preserve
+  raw identity, initial/restored selection, root Back versus Ctrl+C Close, exact draft content,
+  constrained/expanded resize, editor changes observed at completion, and finite host disposal.
+  `BtwTextRangeSelector` remains specialized for exact character and line selection.
 
 **Outcome:** Review behavior adapts to its host and consumer packages can verify kit lifecycle
 contracts without private component knowledge.
@@ -276,9 +279,9 @@ abstractions when Pi provides a better stable owner.
   point, not raw private instances.
 - **RPC flattening:** Pi dialogs cannot express every TUI distinction or cadence. Mitigation: define
   deterministic RPC outcomes independently and do not claim parity Pi cannot expose.
-- **Editor lifecycle:** Pi's RPC editor lacks `AbortSignal` support, and BTW owns editor-preservation
-  behavior around custom UI. Dependency: no editor screen or BTW migration until those invariants have
-  a safe owner.
+- **Editor lifecycle:** Pi's RPC editor lacks `AbortSignal` support, and BTW retains a narrow wrapper
+  that captures live editor text at standard-menu completion, restores only a current completed flow,
+  and avoids writes after host disposal. Exact text selection remains extension-owned.
 - **Internal-refactor breadth:** a semantic driver can become a shallow extra layer. Mitigation: require
   a before/after deletion test and keep the refactor independently revertible.
 - **API sprawl:** direct-dialog counts can encourage speculative wrappers. Mitigation: retain the
@@ -343,3 +346,4 @@ and adoption rather than calendar output.
 | 2026-08-01 | Add the supported `@narumitw/pi-tui-kit/testing` subpath without changing production exports or menu API version. | Semantic TUI driving and strict input/select RPC scripts concentrate demonstrated test-host policy without exposing components or absorbing consumer context/domain mocks; adoption and release remain separate. |
 | 2026-08-01 | Adopt the supported testing subpath in Stamp and Image Drop before publication. | Two real consumers now prove sequential TUI screens, rejected input, pending drains, strict RPC where supported, loader cancellation, and three-way confirmation; broad root support remains only for its other inventoried owners. |
 | 2026-08-01 | Publish shared release `v0.42.0` with menu API 5 and the supported testing subpath. | The pinned-npm bump and provenance workflow passed all 1,938 tests and published all 23 workspaces; a clean registry fixture resolved both Kit roots, adaptive review, exact close results, and strict NodeNext declarations. |
+| 2026-08-01 | Admit BTW's standard choices and preview to Kit after the post-publication gate. | Supported-harness and real-Pi smokes preserve editor text, selected question/scope, Back/Close, raw choice identity, adaptive resize, and exact preview content; 238 lines of specialized menu/preview code are deleted while `BtwTextRangeSelector` remains local. Version bump and publication are explicitly user-owned. |

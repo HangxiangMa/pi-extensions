@@ -10,13 +10,10 @@ import {
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
+import { defineMenu, type MenuContext, type RunMenuResult, runMenu } from "@narumitw/pi-tui-kit";
 import {
-	BtwBringToMainPreview,
-	type BtwBringToMainPreviewAction,
 	type BtwBringToMainSegment,
 	type BtwBringToMainSummary,
-	BtwMenuSelector,
-	type BtwMenuSelectorAction,
 	BtwTextRangeSelector,
 	type BtwTextRangeSelectorState,
 	buildQuickBringToMainSegments,
@@ -391,15 +388,19 @@ type BtwCustomFactory<T> = (
 async function showBtwCustomPreservingEditor<T>(
 	ctx: ExtensionCommandContext,
 	factory: BtwCustomFactory<T>,
-): Promise<T> {
+): Promise<T | undefined> {
 	let liveEditorText = ctx.ui.getEditorText();
+	let completed = false;
 	const result = await ctx.ui.custom<T>((tui, theme, keybindings, done) =>
 		factory(tui, theme, keybindings, (value) => {
 			liveEditorText = ctx.ui.getEditorText();
+			completed = true;
 			done(value);
 		}),
 	);
-	if (ctx.ui.getEditorText() !== liveEditorText) ctx.ui.setEditorText(liveEditorText);
+	if (completed && ctx.ui.getEditorText() !== liveEditorText) {
+		ctx.ui.setEditorText(liveEditorText);
+	}
 	return result;
 }
 
@@ -501,6 +502,7 @@ export async function chooseBringToMain(
 					return selector;
 				},
 			);
+			if (!selectedRange) return { kind: "closed" };
 			if (selectedRange.kind === "closed") return selectedRange;
 			if (selectedRange.kind === "back") break;
 			const preview = await showPreview(ctx, selectedRange.draft, selectedRange.summary);
@@ -518,16 +520,47 @@ export async function chooseBringToMain(
 	}
 }
 
+type BtwMenuSelectorAction =
+	| { kind: "select"; value: string }
+	| { kind: "back" }
+	| { kind: "close" };
+
+type BtwBringToMainPreviewAction = { kind: "bring" } | { kind: "back" } | { kind: "close" };
+
 async function showBringToMainPreview(
 	ctx: ExtensionCommandContext,
 	draft: string,
 	summary: BtwBringToMainSummary,
 ): Promise<BtwBringToMainPreviewAction> {
-	return showBtwCustomPreservingEditor<BtwBringToMainPreviewAction>(
-		ctx,
-		(tui, theme, keybindings, done) =>
-			new BtwBringToMainPreview(tui, theme, keybindings, draft, summary, done),
+	let confirmed = false;
+	const count = summary.messages === 1 ? "1 message" : `${summary.messages} messages`;
+	const lineCount = summary.lines === 1 ? "1 line" : `${summary.lines} lines`;
+	const menu = defineMenu<void, "preview", "bring", MenuContext>({
+		start: "preview",
+		screens: {
+			preview: () => ({
+				kind: "review",
+				title: `Preview · ${count} · ${lineCount} · ~${summary.tokens} tokens`,
+				content: draft,
+				viewportSize: "adaptive",
+				hint: "back",
+				confirm: { id: "bring", label: "Bring", action: "bring" },
+			}),
+		},
+		actions: {
+			bring: async () => {
+				confirmed = true;
+				return { kind: "close" } as const;
+			},
+		},
+	});
+	const result = await runBtwMenuPreservingEditor(ctx, (menuContext) =>
+		runMenu(menuContext, menu, { getState: () => undefined }),
 	);
+	if (confirmed && result.kind === "closed" && result.reason === "close") {
+		return { kind: "bring" };
+	}
+	return terminalBtwMenuAction(result);
 }
 
 async function showBtwMenu(
@@ -536,11 +569,72 @@ async function showBtwMenu(
 	options: readonly string[],
 	initialValue?: string,
 ): Promise<BtwMenuSelectorAction> {
-	return showBtwCustomPreservingEditor<BtwMenuSelectorAction>(
-		ctx,
-		(tui, theme, keybindings, done) =>
-			new BtwMenuSelector(tui, theme, keybindings, title, options, done, initialValue),
+	const items = options.map((label, index) => ({ id: `option-${index}`, label }));
+	const initialIndex = initialValue === undefined ? -1 : options.indexOf(initialValue);
+	let selectedValue: string | undefined;
+	const menu = defineMenu<void, "choices", "select", MenuContext>({
+		start: "choices",
+		screens: {
+			choices: () => ({
+				kind: "choice",
+				title,
+				items,
+				action: "select",
+				initialItemId: initialIndex >= 0 ? `option-${initialIndex}` : undefined,
+				hint: "back",
+			}),
+		},
+		actions: {
+			select: async ({ itemId }: { itemId: string }) => {
+				const index = Number.parseInt(itemId.slice("option-".length), 10);
+				selectedValue = options[index];
+				return selectedValue === undefined
+					? ({ kind: "stay" } as const)
+					: ({ kind: "close" } as const);
+			},
+		},
+	});
+	const result = await runBtwMenuPreservingEditor(ctx, (menuContext) =>
+		runMenu(menuContext, menu, { getState: () => undefined }),
 	);
+	return selectedValue !== undefined && result.kind === "closed" && result.reason === "close"
+		? { kind: "select", value: selectedValue }
+		: terminalBtwMenuAction(result);
+}
+
+async function runBtwMenuPreservingEditor(
+	ctx: ExtensionCommandContext,
+	run: (menuContext: MenuContext) => Promise<RunMenuResult>,
+): Promise<RunMenuResult> {
+	let liveEditorText = ctx.ui.getEditorText();
+	let completed = false;
+	const ui = new Proxy(ctx.ui, {
+		get(target, property) {
+			if (property === "custom") {
+				return <Value>(factory: BtwCustomFactory<Value>) =>
+					target.custom<Value>((tui, theme, keybindings, done) =>
+						factory(tui, theme, keybindings, (value) => {
+							liveEditorText = target.getEditorText();
+							completed = true;
+							done(value);
+						}),
+					);
+			}
+			const value = Reflect.get(target, property, target) as unknown;
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	});
+	const result = await run({ mode: ctx.mode, hasUI: ctx.hasUI, ui });
+	if (result.kind !== "stale" && completed && ctx.ui.getEditorText() !== liveEditorText) {
+		ctx.ui.setEditorText(liveEditorText);
+	}
+	return result;
+}
+
+function terminalBtwMenuAction(result: RunMenuResult): { kind: "back" } | { kind: "close" } {
+	if (result.kind === "closed") return { kind: result.reason };
+	if (result.kind === "error") throw result.error;
+	return { kind: "close" };
 }
 
 export async function loadBringToMainDraft(
