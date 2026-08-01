@@ -31,6 +31,7 @@ import {
 	type AgentTurnCompletion,
 	type ManagedAgent,
 } from "./registry.js";
+import { safeTerminalLine } from "./safe-text.js";
 import { readSubagentSettings } from "./settings.js";
 import {
 	MailboxParamsSchema,
@@ -619,19 +620,19 @@ async function confirmProjectAgent(
 	cwd: string,
 ): Promise<void> {
 	if (scope !== "project" && scope !== "both") return;
-	const discovery = discoverAgents(cwd, scope, readSubagentSettings());
-	const agent = discovery.agents.find((candidate) => candidate.name === name);
-	if (agent?.source !== "project") return;
 	if (!isSameCwd(cwd, ctx.cwd)) {
 		throw new Error("Project-local subagent definitions cannot run with an overridden cwd");
 	}
 	if (!ctx.isProjectTrusted()) {
 		throw new Error("Project-local subagent definitions require a trusted project");
 	}
+	const discovery = discoverAgents(cwd, scope, readSubagentSettings());
+	const agent = discovery.agents.find((candidate) => candidate.name === name);
+	if (agent?.source !== "project") return;
 	if (confirm && ctx.hasUI) {
 		const approved = await ctx.ui.confirm(
 			"Run project-local agent?",
-			`Agent: ${name}\nSource: ${agent.filePath}`,
+			`Agent: ${safeTerminalLine(name, 256)}\nSource: ${safeTerminalLine(agent.filePath)}`,
 		);
 		if (!approved) throw new Error("Project-local subagent was not approved");
 	}

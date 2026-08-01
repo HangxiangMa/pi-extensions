@@ -30,6 +30,10 @@ test("agent frontmatter preserves missing, empty, and comma-separated tool inten
 			path.join(agentsDir, "selected.md"),
 			agentMarkdown("selected", "tools: read, grep, read"),
 		);
+		writeFileSync(
+			path.join(agentsDir, "array.md"),
+			agentMarkdown("array", 'tools: [read, " grep ", ""]'),
+		);
 
 		const agents = discoverAgents(directory, "user").agents;
 		assert.equal(agents.find((agent) => agent.name === "missing")?.tools, undefined);
@@ -40,6 +44,7 @@ test("agent frontmatter preserves missing, empty, and comma-separated tool inten
 			"grep",
 			"read",
 		]);
+		assert.deepEqual(agents.find((agent) => agent.name === "array")?.tools, ["read", "grep"]);
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;

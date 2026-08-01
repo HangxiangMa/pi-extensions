@@ -257,8 +257,11 @@ function loadAgentsFromDir(
 		const rawTools = frontmatter.tools;
 		let tools: string[] | undefined;
 		if (hasTools) {
-			if (rawTools === null || (Array.isArray(rawTools) && rawTools.length === 0)) {
+			if (rawTools === null) {
 				tools = [];
+			} else if (Array.isArray(rawTools)) {
+				if (!rawTools.every((tool): tool is string => typeof tool === "string")) continue;
+				tools = rawTools.map((tool) => tool.trim()).filter(Boolean);
 			} else if (typeof rawTools === "string") {
 				tools = rawTools
 					.split(",")

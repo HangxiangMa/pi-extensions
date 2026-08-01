@@ -61,7 +61,7 @@ function setup(
 				parameters: {
 					additionalProperties?: boolean;
 					required?: string[];
-					properties?: Record<string, { enum?: string[]; default?: unknown }>;
+					properties?: Record<string, { enum?: string[]; default?: unknown; maximum?: number }>;
 				};
 				execute: (...args: unknown[]) => Promise<{
 					content: Array<{ type: string; text: string }>;
@@ -91,6 +91,7 @@ test("subagent_consult registers a strict actionless single-agent schema", async
 	assert.deepEqual(tool.parameters.required?.sort(), ["agent", "task"]);
 	assert.equal(tool.parameters.properties?.agentScope?.default, "user");
 	assert.equal(tool.parameters.properties?.confirmProjectAgents?.default, true);
+	assert.equal(tool.parameters.properties?.timeoutMs?.maximum, 2_147_483_647);
 	assert.deepEqual(tool.parameters.properties?.thinkingLevel?.enum, [
 		"off",
 		"minimal",
@@ -105,6 +106,18 @@ test("subagent_consult registers a strict actionless single-agent schema", async
 		/does not accept tasks/,
 	);
 	await assert.rejects(() => execute(tool, { agent: "worker" }), /requires task/);
+});
+
+test("subagent_consult rejects unsafe CLI-bound tasks and timer overflow before launch", async () => {
+	for (const [params, expected] of [
+		[{ agent: "worker", task: "界".repeat(20_000) }, /UTF-8 bytes/i],
+		[{ agent: "worker", task: "inspect\0outside" }, /NUL/i],
+		[{ agent: "worker", task: "inspect", timeoutMs: 2_147_483_648 }, /timeoutMs.*2147483647/i],
+	] as Array<[Record<string, unknown>, RegExp]>) {
+		const { tool, requests } = setup();
+		await assert.rejects(() => execute(tool, params), expected);
+		assert.equal(requests.length, 0);
+	}
 });
 
 test("subagent_consult enforces default, empty, and intersected tool policy with nested usage", async () => {
@@ -163,6 +176,30 @@ test("subagent_consult production runner emits enforced child arguments without 
 	assert.match(result.content[0].text, /This is a read-only consultation/i);
 	assert.equal(result.usage?.totalTokens, 2);
 	assert.equal(result.usage?.cost.total, 0.3);
+});
+
+test("subagent_consult bounds explicitly loaded base system prompts", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-consult-system-prompt-"));
+	const workspace = path.join(root, "workspace");
+	mkdirSync(path.join(workspace, ".pi"), { recursive: true });
+	writeFileSync(
+		path.join(workspace, ".pi", "SYSTEM.md"),
+		`trusted-start\n${"界".repeat(30_000)}\nSHOULD_NOT_SURVIVE`,
+	);
+	try {
+		const { tool, requests } = setup({
+			settings: { consult: { resources: "project-context" } },
+		});
+		const trusted = createMockContext({ cwd: workspace, isProjectTrusted: () => true }).ctx;
+		await execute(tool, { agent: "worker", task: "inspect" }, trusted);
+		const prompt = requests[0].launchPolicy.baseSystemPrompt ?? "";
+		assert.ok(Buffer.byteLength(prompt, "utf8") <= 50 * 1024);
+		assert.match(prompt, /trusted-start/);
+		assert.match(prompt, /truncated by pi-subagents/);
+		assert.doesNotMatch(prompt, /SHOULD_NOT_SURVIVE/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("subagent_consult maps resource policies and rejects unsafe external cwd", async () => {
@@ -250,16 +287,20 @@ test("subagent_consult treats declined confirmation as normal cancellation", asy
 	const workspace = path.join(root, "workspace");
 	mkdirSync(path.join(workspace, ".pi", "agents"), { recursive: true });
 	writeFileSync(
-		path.join(workspace, ".pi", "agents", "project.md"),
+		path.join(workspace, ".pi", "agents", "project-\u001b[31m.md"),
 		"---\nname: project\ndescription: Project agent\n---\nprompt",
 	);
+	let confirmation = "";
 	try {
 		const { tool, requests } = setup();
 		const ctx = createMockContext({
 			cwd: workspace,
 			hasUI: true,
 			isProjectTrusted: () => true,
-			confirm: async () => false,
+			confirm: async (title: string, message: string) => {
+				confirmation = `${title}\n${message}`;
+				return false;
+			},
 		}).ctx;
 		const result = await execute(
 			tool,
@@ -269,6 +310,7 @@ test("subagent_consult treats declined confirmation as normal cancellation", asy
 		assert.equal(result.details.cancelled, true);
 		assert.equal(result.usage, undefined);
 		assert.equal(requests.length, 0);
+		assert.equal(confirmation.includes("\u001b"), false);
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;
@@ -281,8 +323,13 @@ test("subagent_consult bounds answer lines and structured details", async () => 
 		index % 2 === 0 ? "read" : `unavailable-${index}-${"x".repeat(500)}`,
 	);
 	const { tool } = setup({
-		settings: { agents: { worker: { tools } } },
-		runChild: async () => childResult({ finalOutput: "x\n".repeat(3_000) }),
+		settings: { agents: { worker: { tools, model: "model-".repeat(20_000) } } },
+		runChild: async () =>
+			childResult({
+				actualProvider: "provider-".repeat(20_000),
+				actualModel: "actual-model-".repeat(20_000),
+				finalOutput: "x\n".repeat(3_000),
+			}),
 	});
 	const result = await execute(tool, { agent: "worker", task: "inspect" });
 	assert.ok(Buffer.byteLength(result.content[0].text, "utf8") <= 50 * 1024);
@@ -299,12 +346,13 @@ test("subagent_consult preserves post-launch evidence and marks the finalized Pi
 				stopReason: "timeout",
 				timedOut: true,
 				finalOutput: "partial evidence",
-				errorMessage: "timed out",
+				errorMessage: "timed out <private>SECRET_ERROR</private>\n[subagent-private] SECRET_LINE",
 			}),
 	});
 	const result = await execute(tool, { agent: "worker", task: "inspect" });
 	assert.equal(result.details.isError, true);
 	assert.match(result.content[0].text, /partial evidence|timed out/);
+	assert.doesNotMatch(JSON.stringify(result), /SECRET_ERROR|SECRET_LINE/);
 	assert.equal(result.usage?.cost.total, 0.25);
 	const handler = mock.events
 		.get("tool_result")

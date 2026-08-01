@@ -19,17 +19,21 @@ import {
 } from "./agents.js";
 import { resolveConsultTools } from "./consult-policy.js";
 import { assertSubagentDepthAllowed, resolveDefaultSubagentTimeoutMs } from "./execution.js";
-import { DEFAULT_MAX_CONTEXT_BYTES } from "./limits.js";
+import {
+	DEFAULT_MAX_CONTEXT_BYTES,
+	DEFAULT_MAX_STDERR_BYTES,
+	MAX_SUBAGENT_TIMEOUT_MS,
+	truncateUtf8,
+} from "./limits.js";
 import {
 	type ChildLaunchPolicy,
-	formatResultFailure,
 	getResultFinalOutput,
 	isResultError,
 	runSingleAgent,
 	type SingleResult,
 	type SubagentDetails,
 } from "./runner.js";
-import { boundedPrivateText, boundText, safeDisplayPath, safeTerminalText } from "./safe-text.js";
+import { boundedPrivateText, boundText, safeDisplayPath, safeTerminalLine } from "./safe-text.js";
 import { DEFAULT_CONSULT_RESOURCE_POLICY, resolveSubagentThinkingLevel } from "./settings.js";
 
 const ConsultScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -45,7 +49,7 @@ export const SubagentConsultParams = Type.Object(
 		agentScope: Type.Optional(ConsultScopeSchema),
 		confirmProjectAgents: Type.Optional(Type.Boolean({ default: true })),
 		cwd: Type.Optional(Type.String({ minLength: 1 })),
-		timeoutMs: Type.Optional(Type.Number({ minimum: 1 })),
+		timeoutMs: Type.Optional(Type.Number({ minimum: 1, maximum: MAX_SUBAGENT_TIMEOUT_MS })),
 		thinkingLevel: Type.Optional(ConsultThinkingSchema),
 	},
 	{ additionalProperties: false },
@@ -208,9 +212,10 @@ function validateConsultParams(
 	if (unexpected) throw new Error(`subagent_consult does not accept ${unexpected}`);
 	const agent = requiredString(values.agent, "agent");
 	const task = requiredString(values.task, "task");
-	if (task.length > DEFAULT_MAX_CONTEXT_BYTES) {
+	if (task.includes("\0")) throw new Error("subagent_consult task must not contain NUL bytes");
+	if (Buffer.byteLength(task, "utf8") > DEFAULT_MAX_CONTEXT_BYTES) {
 		throw new Error(
-			`subagent_consult task must be at most ${DEFAULT_MAX_CONTEXT_BYTES} characters`,
+			`subagent_consult task must be at most ${DEFAULT_MAX_CONTEXT_BYTES} UTF-8 bytes`,
 		);
 	}
 	const agentScope = optionalScope(values.agentScope);
@@ -227,9 +232,10 @@ function validateConsultParams(
 		values.timeoutMs !== undefined &&
 		(typeof values.timeoutMs !== "number" ||
 			!Number.isFinite(values.timeoutMs) ||
-			values.timeoutMs < 1)
+			values.timeoutMs < 1 ||
+			values.timeoutMs > MAX_SUBAGENT_TIMEOUT_MS)
 	) {
-		throw new Error("subagent_consult timeoutMs must be a positive finite number");
+		throw new Error(`subagent_consult timeoutMs must be between 1 and ${MAX_SUBAGENT_TIMEOUT_MS}`);
 	}
 	if (values.thinkingLevel !== undefined && !isThinkingLevel(values.thinkingLevel)) {
 		throw new Error("subagent_consult thinkingLevel is invalid");
@@ -276,7 +282,7 @@ async function executeConsult(
 		}
 		const approved = await ctx.ui.confirm(
 			"Run project-local read-only agent?",
-			`Agent: ${safeTerminalText(agent.name)}\nSource: ${path.posix.join(".pi", "agents", path.basename(agent.filePath))}`,
+			`Agent: ${safeTerminalLine(agent.name, 256)}\nSource: ${safeTerminalLine(path.posix.join(".pi", "agents", path.basename(agent.filePath)))}`,
 		);
 		assertCurrentRequest(signal, isCurrent);
 		if (!approved) {
@@ -320,7 +326,7 @@ async function executeConsult(
 	}
 	const error = isResultError(result);
 	const output = error
-		? formatResultFailure(result)
+		? formatConsultFailure(result)
 		: getResultFinalOutput(result) || "(no output)";
 	const bounded = boundText(output);
 	const details: ConsultDetails = {
@@ -347,7 +353,7 @@ function resolveConsultSetup(
 	const resourcePolicy = settings?.consult?.resources ?? DEFAULT_CONSULT_RESOURCE_POLICY;
 	if (!isWithin(cwd, workspace) && resourcePolicy !== "none") {
 		throw new Error(
-			`Subagent consultation cwd is outside the current workspace; consult.resources must be "none": ${safeTerminalText(cwd)}`,
+			`Subagent consultation cwd is outside the current workspace; consult.resources must be "none": ${safeTerminalLine(cwd)}`,
 		);
 	}
 	const effectiveTools = resolveConsultTools(agent.tools);
@@ -356,6 +362,11 @@ function resolveConsultSetup(
 	launchPolicy.tools = effectiveTools;
 	const thinkingLevel = resolveSubagentThinkingLevel([agent], agent.name, operation.thinkingLevel);
 	const timeoutMs = operation.timeoutMs ?? agent.timeoutMs ?? resolveDefaultSubagentTimeoutMs();
+	if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_SUBAGENT_TIMEOUT_MS) {
+		throw new Error(
+			`Subagent consultation timeout must be between 1 and ${MAX_SUBAGENT_TIMEOUT_MS}ms`,
+		);
+	}
 	const childAgent: AgentConfig = {
 		...agent,
 		tools: effectiveTools,
@@ -373,7 +384,7 @@ function resolveConsultSetup(
 		agentSource: agent.source,
 		agentScope: operation.agentScope,
 		cwd: safeDisplayPath(cwd, workspace),
-		model: agent.model ? safeTerminalText(agent.model) : undefined,
+		model: agent.model ? boundedPrivateText(agent.model, 256) : undefined,
 		thinkingLevel,
 		timeoutMs,
 		policy: {
@@ -482,13 +493,38 @@ function discoverSystemPrompt(workspace: string, projectTrusted: boolean): strin
 		path.join(getAgentDir(), "SYSTEM.md"),
 	];
 	for (const candidate of candidates) {
-		try {
-			if (fs.statSync(candidate).isFile()) return fs.readFileSync(candidate, "utf8");
-		} catch {
-			// Match Pi resource discovery: an unreadable optional prompt is skipped.
-		}
+		const prompt = readBoundedOptionalPrompt(candidate);
+		if (prompt !== undefined) return prompt;
 	}
 	return undefined;
+}
+
+function readBoundedOptionalPrompt(filePath: string): string | undefined {
+	let descriptor: number | undefined;
+	try {
+		descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+		if (!fs.fstatSync(descriptor).isFile()) return undefined;
+		const buffer = Buffer.alloc(DEFAULT_MAX_CONTEXT_BYTES + 4);
+		let bytesRead = 0;
+		while (bytesRead < buffer.length) {
+			const next = fs.readSync(descriptor, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+			if (next === 0) break;
+			bytesRead += next;
+		}
+		return truncateUtf8(buffer.subarray(0, bytesRead).toString("utf8"), DEFAULT_MAX_CONTEXT_BYTES)
+			.text;
+	} catch {
+		// Match Pi resource discovery: an unreadable optional prompt is skipped.
+		return undefined;
+	} finally {
+		if (descriptor !== undefined) {
+			try {
+				fs.closeSync(descriptor);
+			} catch {
+				// Optional prompt cleanup must not make consultation discovery fail.
+			}
+		}
+	}
 }
 
 function discoverAppendSystemPrompts(cwd: string, projectTrusted: boolean): string[] {
@@ -508,20 +544,34 @@ function discoverAppendSystemPrompts(cwd: string, projectTrusted: boolean): stri
 function projectChildResult(result: SingleResult): Record<string, unknown> {
 	return {
 		exitCode: result.exitCode,
-		stopReason: result.stopReason,
+		stopReason:
+			typeof result.stopReason === "string"
+				? boundedPrivateText(result.stopReason, 256)
+				: undefined,
 		timedOut: result.timedOut,
 		aborted: result.aborted,
 		truncated: result.truncated,
 		malformedEvents: result.malformedEvents,
 		processStarted: result.processStarted,
-		actualProvider: result.actualProvider ? safeTerminalText(result.actualProvider) : undefined,
-		actualModel: result.actualModel ? safeTerminalText(result.actualModel) : undefined,
+		actualProvider: result.actualProvider
+			? boundedPrivateText(result.actualProvider, 256)
+			: undefined,
+		actualModel: result.actualModel ? boundedPrivateText(result.actualModel, 256) : undefined,
 		partialOutput: result.finalOutput
 			? boundedPrivateText(result.finalOutput, 8 * 1024)
 			: undefined,
 		error: result.errorMessage ? boundedPrivateText(result.errorMessage, 2 * 1024) : undefined,
 		usage: { ...result.usage },
 	};
+}
+
+function formatConsultFailure(result: SingleResult): string {
+	const rawError = result.errorMessage || result.stderr.trim();
+	const error = rawError ? boundedPrivateText(rawError, DEFAULT_MAX_STDERR_BYTES) : "";
+	const output = getResultFinalOutput(result);
+	return error && output
+		? `${error}\n\nPartial output:\n${output}`
+		: error || output || "(no output)";
 }
 
 function usageFromResult(result: SingleResult): Usage {
@@ -550,7 +600,7 @@ function canonicalDirectory(value: string, label: string): string {
 		return resolved;
 	} catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
-		throw new Error(`Invalid ${label}: ${safeTerminalText(value)} (${reason})`);
+		throw new Error(`Invalid ${label}: ${safeTerminalLine(value)} (${safeTerminalLine(reason)})`);
 	}
 }
 

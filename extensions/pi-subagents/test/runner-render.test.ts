@@ -7,6 +7,7 @@ import {
 	DEFAULT_MAX_CONTEXT_BYTES,
 	DEFAULT_MAX_OUTPUT_BYTES,
 	DEFAULT_MAX_STDERR_BYTES,
+	MAX_SUBAGENT_TIMEOUT_MS,
 } from "../src/limits.js";
 import { renderSubagentCall, renderSubagentResult } from "../src/render.js";
 import {
@@ -195,6 +196,35 @@ test("runSingleAgent normalizes invalid cwd without spawning or throwing", async
 	assert.equal(result.exitCode, 1);
 	assert.equal(result.stopReason, "error");
 	assert.match(result.errorMessage ?? "", /Invalid subagent cwd/);
+});
+
+test("runSingleAgent rejects timer overflow before spawning", async () => {
+	const result = await runSingleAgent(
+		process.cwd(),
+		[
+			{
+				name: "test",
+				description: "test",
+				systemPrompt: "",
+				source: "built-in",
+				filePath: "built-in:test",
+			},
+		],
+		"test",
+		"task",
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		MAX_SUBAGENT_TIMEOUT_MS + 1,
+		undefined,
+		(results) => ({ mode: "single", agentScope: "user", projectAgentsDir: null, results }),
+		{ command: path.join(os.tmpdir(), "missing-pi-subagent-command") },
+	);
+	assert.equal(result.exitCode, 1);
+	assert.equal(result.stopReason, "error");
+	assert.equal(result.launchFailed, undefined);
+	assert.match(result.errorMessage ?? "", /Invalid subagent timeout/);
 });
 
 test("runSingleAgent preserves partial output on mid-stream abort and handles pre-abort", async () => {
@@ -413,6 +443,32 @@ test("runSingleAgent preserves final text beyond its history budget and rejects 
 	assert.equal(rollingWindow.actualProvider, "actual-provider");
 	assert.equal(rollingWindow.actualModel, "actual-model");
 	assert.equal(rollingWindow.model, "requested-alias");
+
+	const malformedMetadata = await runScript(
+		[
+			"const message={role:'assistant',provider:{secret:'value'},responseModel:['bad'],content:[{type:'text',text:'SAFE_FINAL'}],stopReason:42,usage:{input:2,output:'bad',cacheRead:-3,cacheWrite:1.5,cost:{input:'bad',output:0.25,total:0.25}}};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	assert.equal(malformedMetadata.exitCode, 0);
+	assert.equal(malformedMetadata.finalOutput, "SAFE_FINAL");
+	assert.equal(malformedMetadata.actualProvider, undefined);
+	assert.equal(malformedMetadata.actualModel, undefined);
+	assert.equal(malformedMetadata.stopReason, undefined);
+	assert.deepEqual(malformedMetadata.usage, {
+		input: 2,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		cost: 0.25,
+		costInput: 0,
+		costOutput: 0.25,
+		costCacheRead: 0,
+		costCacheWrite: 0,
+		totalTokens: 2,
+		contextTokens: 2,
+		turns: 1,
+	});
 	assert.equal(rollingWindow.recentActivityTotal, 202);
 	assert.equal(rollingWindow.recentActivity?.length, 10);
 	assert.ok(Buffer.byteLength(JSON.stringify(rollingWindow.recentActivity), "utf8") <= 8 * 1024);

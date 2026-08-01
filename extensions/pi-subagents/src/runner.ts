@@ -12,6 +12,7 @@ import {
 	DEFAULT_MAX_MESSAGES,
 	DEFAULT_MAX_OUTPUT_BYTES,
 	DEFAULT_MAX_STDERR_BYTES,
+	MAX_SUBAGENT_TIMEOUT_MS,
 	truncateUtf8,
 } from "./limits.js";
 import { JsonLineDecoder } from "./protocol.js";
@@ -39,6 +40,21 @@ export type RecentActivityItem =
 const MAX_RECENT_ACTIVITY_ITEMS = 10;
 const MAX_RECENT_ACTIVITY_BYTES = 8 * 1024;
 const MAX_RECENT_ACTIVITY_ARGUMENT_BYTES = 1024;
+const MAX_USAGE_VALUE = Number.MAX_SAFE_INTEGER;
+
+function protocolUsageCount(value: unknown): number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function protocolUsageCost(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0
+		? Math.min(value, MAX_USAGE_VALUE)
+		: 0;
+}
+
+function addUsageValue(current: number, addition: number): number {
+	return Math.min(MAX_USAGE_VALUE, current + addition);
+}
 
 export interface SingleResult {
 	agent: string;
@@ -515,6 +531,14 @@ export async function runSingleAgent(
 			setErrorMessage("Subagent was aborted before start");
 			return currentResult;
 		}
+		if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_SUBAGENT_TIMEOUT_MS) {
+			currentResult.exitCode = 1;
+			currentResult.stopReason = "error";
+			setErrorMessage(
+				`Invalid subagent timeout: expected 1-${MAX_SUBAGENT_TIMEOUT_MS}ms, received ${timeoutMs}`,
+			);
+			return currentResult;
+		}
 
 		if (launchPolicy?.baseSystemPrompt?.trim()) {
 			const tmp = await writePromptToTempFile(`${agent.name}-base`, launchPolicy.baseSystemPrompt);
@@ -639,29 +663,62 @@ export async function runSingleAgent(
 					if (msg.role === "assistant") {
 						currentResult.usage.turns++;
 						const usage = msg.usage;
-						if (usage) {
-							currentResult.usage.input += usage.input || 0;
-							currentResult.usage.output += usage.output || 0;
-							currentResult.usage.cacheRead += usage.cacheRead || 0;
-							currentResult.usage.cacheWrite += usage.cacheWrite || 0;
-							currentResult.usage.cost += usage.cost?.total || 0;
-							currentResult.usage.costInput =
-								(currentResult.usage.costInput ?? 0) + (usage.cost?.input || 0);
-							currentResult.usage.costOutput =
-								(currentResult.usage.costOutput ?? 0) + (usage.cost?.output || 0);
-							currentResult.usage.costCacheRead =
-								(currentResult.usage.costCacheRead ?? 0) + (usage.cost?.cacheRead || 0);
-							currentResult.usage.costCacheWrite =
-								(currentResult.usage.costCacheWrite ?? 0) + (usage.cost?.cacheWrite || 0);
-							currentResult.usage.totalTokens =
-								(currentResult.usage.totalTokens ?? 0) + (usage.totalTokens || 0);
-							currentResult.usage.contextTokens = usage.totalTokens || 0;
+						if (usage && typeof usage === "object") {
+							const input = protocolUsageCount(usage.input);
+							const output = protocolUsageCount(usage.output);
+							const cacheRead = protocolUsageCount(usage.cacheRead);
+							const cacheWrite = protocolUsageCount(usage.cacheWrite);
+							const reportedTotal = protocolUsageCount(usage.totalTokens);
+							const turnTotal =
+								reportedTotal ||
+								addUsageValue(addUsageValue(input, output), addUsageValue(cacheRead, cacheWrite));
+							const cost = usage.cost && typeof usage.cost === "object" ? usage.cost : undefined;
+							currentResult.usage.input = addUsageValue(currentResult.usage.input, input);
+							currentResult.usage.output = addUsageValue(currentResult.usage.output, output);
+							currentResult.usage.cacheRead = addUsageValue(
+								currentResult.usage.cacheRead,
+								cacheRead,
+							);
+							currentResult.usage.cacheWrite = addUsageValue(
+								currentResult.usage.cacheWrite,
+								cacheWrite,
+							);
+							currentResult.usage.cost = addUsageValue(
+								currentResult.usage.cost,
+								protocolUsageCost(cost?.total),
+							);
+							currentResult.usage.costInput = addUsageValue(
+								currentResult.usage.costInput ?? 0,
+								protocolUsageCost(cost?.input),
+							);
+							currentResult.usage.costOutput = addUsageValue(
+								currentResult.usage.costOutput ?? 0,
+								protocolUsageCost(cost?.output),
+							);
+							currentResult.usage.costCacheRead = addUsageValue(
+								currentResult.usage.costCacheRead ?? 0,
+								protocolUsageCost(cost?.cacheRead),
+							);
+							currentResult.usage.costCacheWrite = addUsageValue(
+								currentResult.usage.costCacheWrite ?? 0,
+								protocolUsageCost(cost?.cacheWrite),
+							);
+							currentResult.usage.totalTokens = addUsageValue(
+								currentResult.usage.totalTokens ?? 0,
+								turnTotal,
+							);
+							currentResult.usage.contextTokens = turnTotal;
 						}
-						if (msg.provider) currentResult.actualProvider = msg.provider;
-						if (msg.responseModel ?? msg.model)
-							currentResult.actualModel = msg.responseModel ?? msg.model;
-						if (msg.stopReason) currentResult.stopReason = msg.stopReason;
-						if (msg.errorMessage) setErrorMessage(msg.errorMessage);
+						if (typeof msg.provider === "string") currentResult.actualProvider = msg.provider;
+						const actualModel =
+							typeof msg.responseModel === "string"
+								? msg.responseModel
+								: typeof msg.model === "string"
+									? msg.model
+									: undefined;
+						if (actualModel) currentResult.actualModel = actualModel;
+						if (typeof msg.stopReason === "string") currentResult.stopReason = msg.stopReason;
+						if (typeof msg.errorMessage === "string") setErrorMessage(msg.errorMessage);
 					}
 					emitUpdate();
 				} else if (event.type === "tool_result_end" && event.message) {

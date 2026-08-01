@@ -15,6 +15,11 @@ export function safeTerminalText(value: string): string {
 	);
 }
 
+export function safeTerminalLine(value: string, maxBytes = 2 * 1024): string {
+	const singleLine = safeTerminalText(redactPrivateText(value)).replace(/\s+/gu, " ").trim();
+	return truncateUtf8(singleLine, maxBytes).text.replace(/\s+/gu, " ").trim();
+}
+
 export function boundText(
 	value: string,
 	maxBytes = DEFAULT_MAX_OUTPUT_BYTES,
@@ -35,7 +40,7 @@ export function boundedPrivateText(value: string, maxBytes: number): string {
 }
 
 export function safeDisplayPath(value: string, workspace: string): string {
-	if (value.startsWith("built-in:")) return safeTerminalText(value);
+	if (value.startsWith("built-in:")) return safeTerminalLine(value);
 	const resolved = path.resolve(value);
 	const agentDir = path.resolve(getAgentDir());
 	const relativeAgent = path.relative(agentDir, resolved);
@@ -43,7 +48,7 @@ export function safeDisplayPath(value: string, workspace: string): string {
 		relativeAgent === "" ||
 		(!relativeAgent.startsWith("..") && !path.isAbsolute(relativeAgent))
 	) {
-		return relativeAgent ? `~/${safeTerminalText(relativeAgent)}` : "~";
+		return relativeAgent ? `~/${safeTerminalLine(relativeAgent)}` : "~";
 	}
 	const resolvedWorkspace = path.resolve(workspace);
 	const relativeWorkspace = path.relative(resolvedWorkspace, resolved);
@@ -51,12 +56,12 @@ export function safeDisplayPath(value: string, workspace: string): string {
 		relativeWorkspace === "" ||
 		(!relativeWorkspace.startsWith("..") && !path.isAbsolute(relativeWorkspace))
 	) {
-		return relativeWorkspace ? safeTerminalText(relativeWorkspace) : ".";
+		return relativeWorkspace ? safeTerminalLine(relativeWorkspace) : ".";
 	}
 	const home = path.resolve(os.homedir());
 	const relativeHome = path.relative(home, resolved);
 	if (relativeHome === "" || (!relativeHome.startsWith("..") && !path.isAbsolute(relativeHome))) {
-		return relativeHome ? `~/${safeTerminalText(relativeHome)}` : "~";
+		return relativeHome ? `~/${safeTerminalLine(relativeHome)}` : "~";
 	}
-	return safeTerminalText(resolved);
+	return safeTerminalLine(resolved);
 }

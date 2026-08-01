@@ -1049,22 +1049,89 @@ test("one-shot project agents require project trust even when confirmation is di
 	const mock = createMockPi();
 	subagents(mock.pi);
 	const tool = mock.tools[0] as SubagentTool;
-	await assert.rejects(
-		() =>
-			tool.execute(
-				"call",
-				{
-					agent: "project",
-					task: "task",
-					agentScope: "project",
-					confirmProjectAgents: false,
-				},
-				undefined,
-				undefined,
-				createMockContext({ cwd, isProjectTrusted: () => false }).ctx,
-			),
-		/trusted project/,
+	const spawn = mock.tools.find((candidate) => candidate.name === "subagent_spawn") as
+		| SubagentTool
+		| undefined;
+	assert.ok(spawn);
+	try {
+		await assert.rejects(
+			() =>
+				tool.execute(
+					"call",
+					{
+						agent: "project",
+						task: "task",
+						agentScope: "project",
+						confirmProjectAgents: false,
+					},
+					undefined,
+					undefined,
+					createMockContext({ cwd, isProjectTrusted: () => false }).ctx,
+				),
+			/trusted project/,
+		);
+		await assert.rejects(
+			() =>
+				tool.execute(
+					"call",
+					{ agent: "missing", task: "task", agentScope: "project" },
+					undefined,
+					undefined,
+					createMockContext({ cwd, isProjectTrusted: () => false }).ctx,
+				),
+			/trusted project/,
+		);
+		await assert.rejects(
+			() =>
+				spawn.execute(
+					"call",
+					{ agent: "missing", task: "task", agentScope: "project" },
+					undefined,
+					undefined,
+					createMockContext({ cwd, isProjectTrusted: () => false }).ctx,
+				),
+			/trusted project/,
+		);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("one-shot project confirmation renders project metadata as one safe line", async () => {
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-project-confirm-"));
+	const agentsDir = path.join(cwd, ".pi", "agents");
+	mkdirSync(agentsDir, { recursive: true });
+	const agentName = "project\u001b[31m\nspoof";
+	writeFileSync(
+		path.join(agentsDir, "project.md"),
+		`---\nname: "project\\u001b[31m\\nspoof"\ndescription: project agent\n---\nProject prompt.`,
 	);
+	let confirmation = "";
+	try {
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const tool = mock.tools[0] as SubagentTool;
+		const result = await tool.execute(
+			"call",
+			{ agent: agentName, task: "task", agentScope: "project" },
+			undefined,
+			undefined,
+			createMockContext({
+				cwd,
+				hasUI: true,
+				isProjectTrusted: () => true,
+				confirm: async (title: string, message: string) => {
+					confirmation = `${title}\n${message}`;
+					return false;
+				},
+			}).ctx,
+		);
+		assert.match(result.content?.[0]?.text ?? "", /Canceled/);
+		assert.equal(confirmation.includes("\u001b"), false);
+		assert.doesNotMatch(confirmation, /\nspoof\nSource:/);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
 });
 
 test("discoverAgents includes built-ins and lets project agents override by name", () => {
@@ -1282,6 +1349,7 @@ test("subagent settings normalize known override fields only", () => {
 				clearThinking: { thinkingLevel: null },
 				bad: { tools: [1] },
 				badThinking: { thinkingLevel: "huge" },
+				badTimeout: { timeoutMs: 2_147_483_648 },
 			},
 		}),
 		{

@@ -99,7 +99,7 @@ test("subagent_inspect projects safe agent metadata and gates project discovery 
 			"---\nname: safe\ndescription: Safe agent\ntools: read, bash\n---\nSECRET_SYSTEM_PROMPT",
 		);
 		writeFileSync(
-			path.join(workspace, ".pi", "agents", "project.md"),
+			path.join(workspace, ".pi", "agents", "project-\u001b[31m.md"),
 			"---\nname: project\ndescription: Project agent\n---\nUNTRUSTED_PROMPT",
 		);
 		const mock = createMockPi();
@@ -126,7 +126,9 @@ test("subagent_inspect projects safe agent metadata and gates project discovery 
 			{ action: "get_agent", agent: "project", agentScope: "project" },
 			trusted,
 		);
-		assert.equal((project.details.agent as { path: string }).path, ".pi/agents/project.md");
+		const projectPath = (project.details.agent as { path: string }).path;
+		assert.match(projectPath, /^\.pi\/agents\/project-/);
+		assert.equal(projectPath.includes("\u001b"), false);
 		assert.doesNotMatch(JSON.stringify(project), /UNTRUSTED_PROMPT/);
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;

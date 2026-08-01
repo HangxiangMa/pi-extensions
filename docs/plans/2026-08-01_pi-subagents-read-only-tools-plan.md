@@ -278,7 +278,7 @@ The optional `consult` object may remain in `pi-subagents.json`; preceding versi
 ## Implementation Evidence
 
 - Guides audited: `docs/extension-conventions.md` and `docs/extension-settings.md`; touched areas were public tool schemas, trust-gated discovery, settings inspection/persistence/UI, subprocess ownership, usage/error reporting, output bounds, workflow surfaces, and documentation.
-- Focused compiled tests passed for agents, settings, registry, inspection, consultation, runner launch policy/rendering, and extension registration. The final repository gate, `npm run check`, passed with 1,955 tests.
+- Focused compiled tests passed for agents, settings, registry, inspection, consultation, runner launch policy/rendering, and extension registration. The final repository gate, `npm run check`, passed with 1,959 tests after review and hardening fixes.
 - `lsp_diagnostics` reported zero diagnostics across all 36 `pi-subagents` source and test files.
 - An isolated RPC smoke loaded `pi-subagents`, ran `/subagents status`, and verified the consultation resource status without provider traffic. The production runner was separately exercised against a synthetic JSON child to verify exact launch arguments, appended read-only instructions, output, and usage aggregation.
 - `just pack-subagents` included the declared entrypoint, README, license, and all source modules (28 files), with no tests, caches, settings, credentials, or unrelated files.

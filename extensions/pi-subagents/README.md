@@ -497,6 +497,8 @@ You are an API review subagent. Do not edit files. Check compatibility,
 test coverage, and migration risks. Report PASS/FAIL/PARTIAL with evidence.
 ```
 
+`tools` accepts either the comma-separated form above or a YAML string array such as `tools: [read, grep]`. An omitted field keeps the agent's default tools; blank, `null`, or `[]` explicitly selects no tools.
+
 `agentScope` is a top-level tool argument supplied per invocation. It is not a setting in
 `~/.pi/agent/pi-subagents.json` and does not belong in agent frontmatter. The parent-facing tool
 metadata discovers these definitions after session start and labels their source and required scope.
@@ -543,6 +545,7 @@ Each subprocess has a hard timeout to avoid runaway workers.
 
 - Set `timeoutMs` on the top-level call to apply a default for all jobs.
 - Set `timeoutMs` on a task, chain step, or aggregator to override it locally.
+- Valid timeout values range from 1 to 2,147,483,647 milliseconds, matching the runtime timer limit.
 - If omitted, the default is `PI_SUBAGENT_TIMEOUT_MS`, or `600000` milliseconds (10 minutes) when unset.
 
 Set `thinkingLevel` to request one of Pi's supported levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Blocking subprocess calls pass the resolved value through `--thinking <level>`.

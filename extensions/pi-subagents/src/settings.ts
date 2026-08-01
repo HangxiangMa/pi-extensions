@@ -13,6 +13,7 @@ import {
 	type SubagentSettings,
 	type SubagentThinkingLevel,
 } from "./agents.js";
+import { MAX_SUBAGENT_TIMEOUT_MS } from "./limits.js";
 
 export function hasOwn(obj: object, key: PropertyKey): boolean {
 	return Object.hasOwn(obj, key);
@@ -63,7 +64,12 @@ export function normalizeAgentSettings(value: unknown): SubagentAgentConfig | un
 	}
 
 	if (hasOwn(value, "timeoutMs")) {
-		if (value.timeoutMs !== null && !isPositiveNumber(value.timeoutMs)) return undefined;
+		if (
+			value.timeoutMs !== null &&
+			(!isPositiveNumber(value.timeoutMs) || value.timeoutMs > MAX_SUBAGENT_TIMEOUT_MS)
+		) {
+			return undefined;
+		}
 		config.timeoutMs = value.timeoutMs;
 		hasKnownField = true;
 	}

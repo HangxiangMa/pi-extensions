@@ -5,7 +5,7 @@ import { type Static, Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
 import { resolveConsultTools } from "./consult-policy.js";
 import type { AgentRunInspectionDetail, AgentRunInspectionSummary } from "./registry.js";
-import { boundedPrivateText, boundText, safeDisplayPath } from "./safe-text.js";
+import { boundedPrivateText, boundText, safeDisplayPath, safeTerminalLine } from "./safe-text.js";
 import {
 	inspectConsultResourceSettings,
 	inspectDelegationWorkflowSettings,
@@ -253,7 +253,7 @@ function projectAgent(
 		scope: agent.source === "project" ? "project" : "user",
 		path:
 			agent.source === "project"
-				? path.posix.join(".pi", "agents", path.basename(agent.filePath))
+				? safeTerminalLine(path.posix.join(".pi", "agents", path.basename(agent.filePath)))
 				: safeDisplayPath(agent.filePath, ctx.cwd),
 		model: agent.model ? boundedPrivateText(agent.model, 256) : undefined,
 		thinkingLevel: agent.thinkingLevel,
