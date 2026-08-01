@@ -11,12 +11,56 @@ import {
 import { renderSubagentCall, renderSubagentResult } from "../src/render.js";
 import {
 	buildFanInContext,
+	buildPiArgs,
 	formatResultFailure,
 	isResultError,
 	runSingleAgent,
 	type SubagentDetails,
 	terminateProcess,
 } from "../src/runner.js";
+
+test("buildPiArgs emits explicit read-only child launch policy flags", () => {
+	assert.deepEqual(
+		buildPiArgs({
+			task: "inspect",
+			tools: ["read", "grep"],
+			disableExtensions: true,
+			disableSkills: true,
+			disablePromptTemplates: true,
+			disableContextFiles: true,
+			projectTrust: false,
+			baseSystemPromptPath: "/tmp/base.md",
+			appendSystemPromptPaths: ["/tmp/append.md", "/tmp/agent.md"],
+		}),
+		[
+			"--mode",
+			"json",
+			"-p",
+			"--no-session",
+			"--no-extensions",
+			"--no-skills",
+			"--no-prompt-templates",
+			"--no-context-files",
+			"--no-approve",
+			"--tools",
+			"read,grep",
+			"--system-prompt",
+			"/tmp/base.md",
+			"--append-system-prompt",
+			"/tmp/append.md",
+			"--append-system-prompt",
+			"/tmp/agent.md",
+			"Task: inspect",
+		],
+	);
+	assert.deepEqual(buildPiArgs({ task: "existing" }), [
+		"--mode",
+		"json",
+		"-p",
+		"--no-session",
+		"Task: existing",
+	]);
+});
 
 test("renderSubagentCall handles partial streaming arguments", () => {
 	const identityTheme = {
@@ -63,6 +107,67 @@ test("renderSubagentCall omits an empty optional aggregator", () => {
 
 	assert.match(rendered, /parallel \(1 tasks\)/);
 	assert.doesNotMatch(rendered, /fan-in/);
+});
+
+test("runSingleAgent launch policies preserve agent tools unless explicitly overridden", async () => {
+	const script = [
+		"const text=JSON.stringify(process.argv.slice(1));",
+		"const message={role:'assistant',content:[{type:'text',text}],stopReason:'stop',timestamp:Date.now()};",
+		"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+	].join("");
+	const result = await runSingleAgent(
+		process.cwd(),
+		[
+			{
+				name: "test",
+				description: "test",
+				tools: ["read"],
+				systemPrompt: "",
+				source: "built-in",
+				filePath: "built-in:test",
+			},
+		],
+		"test",
+		"task",
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		1_000,
+		undefined,
+		(results) => ({ mode: "single", agentScope: "user", projectAgentsDir: null, results }),
+		{ command: process.execPath, argsPrefix: ["-e", script, "--"] },
+		{ disableExtensions: true },
+	);
+	assert.match(result.finalOutput ?? "", /--tools/);
+	assert.match(result.finalOutput ?? "", /read/);
+});
+
+test("runSingleAgent distinguishes child launch failures", async () => {
+	const result = await runSingleAgent(
+		process.cwd(),
+		[
+			{
+				name: "test",
+				description: "test",
+				systemPrompt: "",
+				source: "built-in",
+				filePath: "built-in:test",
+			},
+		],
+		"test",
+		"task",
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		1_000,
+		undefined,
+		(results) => ({ mode: "single", agentScope: "user", projectAgentsDir: null, results }),
+		{ command: path.join(os.tmpdir(), "missing-pi-subagent-command") },
+	);
+	assert.equal(result.launchFailed, true);
+	assert.equal(result.exitCode, 1);
 });
 
 test("runSingleAgent normalizes invalid cwd without spawning or throwing", async () => {

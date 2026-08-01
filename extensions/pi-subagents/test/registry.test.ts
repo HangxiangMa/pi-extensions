@@ -24,6 +24,52 @@ function record(overrides: Partial<ManagedAgent> = {}): ManagedAgent {
 	};
 }
 
+test("AgentRegistry exposes metadata-only inspection snapshots", async () => {
+	let finish!: (value: { output: string; exitCode: number; error?: string }) => void;
+	const registry = new AgentRegistry(
+		async () =>
+			new Promise((resolve) => {
+				finish = resolve;
+			}),
+	);
+	const spawned = await registry.spawn({
+		agent: "scout",
+		task: "private current task",
+		cwd: process.cwd(),
+		thinkingLevel: "high",
+		context: "private parent context",
+	});
+	await registry.sendMessage(spawned.id, "private mailbox content");
+
+	assert.deepEqual(registry.inspectionCounts(), { activeAgents: 1, retainedAgents: 1 });
+	const listed = registry.listInspection();
+	assert.equal(listed.length, 1);
+	assert.deepEqual(listed[0], {
+		id: spawned.id,
+		agent: "scout",
+		state: "running",
+		createdAt: spawned.createdAt,
+		updatedAt: listed[0].updatedAt,
+		historyCount: 0,
+		unreadMessages: 1,
+	});
+	assert.doesNotMatch(JSON.stringify(listed), /private/);
+
+	const detail = registry.getInspection(spawned.id);
+	assert.equal(detail?.currentTask, "private current task");
+	assert.equal(detail?.cwd, process.cwd());
+	assert.equal(detail?.thinkingLevel, "high");
+	assert.doesNotMatch(JSON.stringify(detail), /mailbox content|parent context/);
+
+	finish({ output: "private history output", exitCode: 1, error: "private error" });
+	await registry.wait(spawned.id, 100);
+	assert.deepEqual(registry.inspectionCounts(), { activeAgents: 0, retainedAgents: 1 });
+	const completed = registry.getInspection(spawned.id);
+	assert.equal(completed?.historyCount, 1);
+	assert.equal(completed?.error, "private error");
+	assert.doesNotMatch(JSON.stringify(completed), /history output|mailbox content|parent context/);
+});
+
 test("AgentRegistry rejects invalid capacity and wait bounds", async () => {
 	assert.throws(
 		() => new AgentRegistry(async () => ({ output: "", exitCode: 0 }), { maxActiveTurns: 0 }),

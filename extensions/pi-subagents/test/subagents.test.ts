@@ -90,7 +90,15 @@ test("subagents registers consistent blocking guidance and one management comman
 
 	assert.deepEqual(
 		mock.tools.map((candidate) => candidate.name),
-		["subagent", "subagent_spawn", "subagent_send", "subagent_manage", "subagent_mailbox"],
+		[
+			"subagent",
+			"subagent_spawn",
+			"subagent_send",
+			"subagent_manage",
+			"subagent_mailbox",
+			"subagent_inspect",
+			"subagent_consult",
+		],
 	);
 	const tool = mock.tools[0];
 	assert.equal(tool?.name, "subagent");
@@ -145,7 +153,7 @@ test("subagents registers consistent blocking guidance and one management comman
 		["subagents"],
 	);
 	assert.deepEqual(mock.commands.get("subagents")?.getArgumentCompletions?.("s"), [
-		{ value: "settings", label: "settings", description: "Configure completion behavior" },
+		{ value: "settings", label: "settings", description: "Configure subagent user settings" },
 		{ value: "status", label: "status", description: "Show effective subagent settings" },
 	]);
 	const toolResultHandler = mock.events.get("tool_result")?.[0];
@@ -191,7 +199,8 @@ test("bare subagents opens a current-session manager and keeps direct routes pre
 		assert.match(managerText, /Agents: 0 active.*0 retained/);
 		assert.match(managerText, /Change delegation/);
 		assert.match(managerText, /Current agents/);
-		assert.match(managerText, /Completion behavior/);
+		assert.match(managerText, /Settings/);
+		assert.match(managerText, /Consult resources: Project context only/);
 		assert.match(managerText, /Advanced settings/);
 		assert.equal(managerContext.notifications.length, 0);
 
@@ -314,7 +323,9 @@ test("agent tool drafts preserve settings across searchable save, discard, and E
 		const runtime: SubagentSettingsRuntime = {
 			getBlockingEnabled: () => true,
 			getCompletionDelivery: () => "next-turn",
+			getConsultResourcePolicy: () => "project-context",
 			setCompletionDelivery: () => undefined,
+			setConsultResourcePolicy: () => undefined,
 			getRuntimeStatus: () => ({
 				enabled: true,
 				initialized: true,
@@ -610,7 +621,9 @@ test("delegation workflow blocks reload while detached agents are retained", asy
 		const runtime: SubagentSettingsRuntime = {
 			getBlockingEnabled: () => true,
 			getCompletionDelivery: () => "next-turn",
+			getConsultResourcePolicy: () => "project-context",
 			setCompletionDelivery: () => undefined,
+			setConsultResourcePolicy: () => undefined,
 			getRuntimeStatus: () => ({
 				enabled: true,
 				initialized: true,
@@ -718,7 +731,9 @@ test("current-session manager excludes already closed agent records", async () =
 		const runtime: SubagentSettingsRuntime = {
 			getBlockingEnabled: () => true,
 			getCompletionDelivery: () => "next-turn",
+			getConsultResourcePolicy: () => "project-context",
 			setCompletionDelivery: () => undefined,
+			setConsultResourcePolicy: () => undefined,
 			getRuntimeStatus: () => ({
 				enabled: true,
 				initialized: true,
@@ -776,22 +791,30 @@ test("delegation workflow settings control the registered tool surface", () => {
 					"subagent_send",
 					"subagent_manage",
 					"subagent_mailbox",
+					"subagent_inspect",
+					"subagent_consult",
 				],
 			},
 			{
 				name: "async only",
 				settings: { blocking: { enabled: false }, stateful: { enabled: true } },
-				tools: ["subagent_spawn", "subagent_send", "subagent_manage", "subagent_mailbox"],
+				tools: [
+					"subagent_spawn",
+					"subagent_send",
+					"subagent_manage",
+					"subagent_mailbox",
+					"subagent_inspect",
+				],
 			},
 			{
 				name: "blocking only",
 				settings: { blocking: { enabled: true }, stateful: { enabled: false } },
-				tools: ["subagent"],
+				tools: ["subagent", "subagent_inspect", "subagent_consult"],
 			},
 			{
 				name: "disabled",
 				settings: { blocking: { enabled: false }, stateful: { enabled: false } },
-				tools: [],
+				tools: ["subagent_inspect"],
 			},
 		] as const;
 		for (const scenario of cases) {
@@ -832,7 +855,7 @@ test("disabled stateful settings do not advertise unavailable lifecycle tools", 
 		subagents(mock.pi);
 		assert.deepEqual(
 			mock.tools.map((tool) => tool.name),
-			["subagent"],
+			["subagent", "subagent_inspect", "subagent_consult"],
 		);
 		const blockingTool = mock.tools[0];
 		assert.doesNotMatch(String(blockingTool?.description), /subagent_spawn/i);
@@ -891,7 +914,8 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 			hasUI: true,
 			custom: async (factory: unknown) => {
 				customCalls++;
-				return driveCustomSelector(factory, ["\r", "\u001b"]).result;
+				const inputs = customCalls === 1 ? ["\r", "\u001b"] : ["\u001b[B", "\r", "\u001b"];
+				return driveCustomSelector(factory, inputs).result;
 			},
 		});
 		await command.handler("settings", context.ctx);
@@ -925,6 +949,20 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 			/Completion: Resume automatically when finished/,
 		);
 		assert.match(context.notifications.at(-1)?.message ?? "", /User settings/);
+
+		await command.handler("settings", context.ctx);
+		assert.equal(customCalls, 2);
+		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
+			futureOption: true,
+			stateful: {
+				futureStatefulOption: "keep",
+				completionDelivery: "auto-resume",
+			},
+			agents: { scout: { tools: ["read"] } },
+			consult: { resources: "none" },
+		});
+		await command.handler("status", context.ctx);
+		assert.match(context.notifications.at(-1)?.message ?? "", /No inherited resources/);
 
 		const nonTui = createMockContext({
 			mode: "json",

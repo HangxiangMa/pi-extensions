@@ -24,6 +24,11 @@ export interface UsageStats {
 	cacheRead: number;
 	cacheWrite: number;
 	cost: number;
+	costInput?: number;
+	costOutput?: number;
+	costCacheRead?: number;
+	costCacheWrite?: number;
+	totalTokens?: number;
 	contextTokens: number;
 	turns: number;
 }
@@ -58,6 +63,8 @@ export interface SingleResult {
 	aborted?: boolean;
 	truncated?: boolean;
 	malformedEvents?: number;
+	launchFailed?: boolean;
+	processStarted?: boolean;
 	policy?: {
 		inherited: string[];
 		overridden: string[];
@@ -288,19 +295,40 @@ async function writePromptToTempFile(
 	return { dir: tmpDir, filePath };
 }
 
-export function buildPiArgs(options: {
+export interface PiArgsOptions {
 	model?: string;
 	thinkingLevel?: SubagentThinkingLevel;
 	tools?: string[];
+	disableExtensions?: boolean;
+	disableSkills?: boolean;
+	disablePromptTemplates?: boolean;
+	disableContextFiles?: boolean;
+	projectTrust?: boolean;
+	baseSystemPromptPath?: string;
+	appendSystemPromptPaths?: string[];
+	/** Existing single append prompt path retained for compatibility. */
 	systemPromptPath?: string;
 	task: string;
-}): string[] {
+}
+
+export function buildPiArgs(options: PiArgsOptions): string[] {
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
 	if (options.model) args.push("--model", options.model);
 	if (options.thinkingLevel) args.push("--thinking", options.thinkingLevel);
+	if (options.disableExtensions) args.push("--no-extensions");
+	if (options.disableSkills) args.push("--no-skills");
+	if (options.disablePromptTemplates) args.push("--no-prompt-templates");
+	if (options.disableContextFiles) args.push("--no-context-files");
+	if (options.projectTrust !== undefined) {
+		args.push(options.projectTrust ? "--approve" : "--no-approve");
+	}
 	if (Array.isArray(options.tools)) {
 		if (options.tools.length > 0) args.push("--tools", options.tools.join(","));
 		else args.push("--no-tools");
+	}
+	if (options.baseSystemPromptPath) args.push("--system-prompt", options.baseSystemPromptPath);
+	for (const promptPath of options.appendSystemPromptPaths ?? []) {
+		args.push("--append-system-prompt", promptPath);
 	}
 	if (options.systemPromptPath) args.push("--append-system-prompt", options.systemPromptPath);
 	args.push(`Task: ${options.task}`);
@@ -365,6 +393,17 @@ export function terminateProcess(
 
 export type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
+export interface ChildLaunchPolicy {
+	tools?: string[];
+	disableExtensions?: boolean;
+	disableSkills?: boolean;
+	disablePromptTemplates?: boolean;
+	disableContextFiles?: boolean;
+	projectTrust?: boolean;
+	baseSystemPrompt?: string;
+	appendSystemPromptPaths?: string[];
+}
+
 export async function runSingleAgent(
 	defaultCwd: string,
 	agents: AgentConfig[],
@@ -378,6 +417,7 @@ export async function runSingleAgent(
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
 	invocationOverride?: { command: string; argsPrefix?: string[] },
+	launchPolicy?: ChildLaunchPolicy,
 ): Promise<SingleResult> {
 	const agent = agents.find((a) => a.name === agentName);
 
@@ -405,8 +445,9 @@ export async function runSingleAgent(
 		};
 	}
 
-	let tmpPromptDir: string | null = null;
+	const temporaryPrompts: Array<{ dir: string; filePath: string }> = [];
 	let tmpPromptPath: string | null = null;
+	let baseSystemPromptPath: string | null = null;
 
 	let latestAssistantOutput = "";
 	let terminalAssistantOutput: string | undefined;
@@ -475,16 +516,37 @@ export async function runSingleAgent(
 			return currentResult;
 		}
 
+		if (launchPolicy?.baseSystemPrompt?.trim()) {
+			const tmp = await writePromptToTempFile(`${agent.name}-base`, launchPolicy.baseSystemPrompt);
+			temporaryPrompts.push(tmp);
+			baseSystemPromptPath = tmp.filePath;
+		}
 		if (agent.systemPrompt.trim()) {
 			const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
-			tmpPromptDir = tmp.dir;
+			temporaryPrompts.push(tmp);
 			tmpPromptPath = tmp.filePath;
 		}
+		if (signal?.aborted) {
+			currentResult.exitCode = 130;
+			currentResult.aborted = true;
+			currentResult.stopReason = "aborted";
+			setErrorMessage("Subagent was aborted before launch");
+			return currentResult;
+		}
 
+		const effectiveTools =
+			launchPolicy && Object.hasOwn(launchPolicy, "tools") ? launchPolicy.tools : agent.tools;
 		const args = buildPiArgs({
 			model: agent.model,
 			thinkingLevel,
-			tools: agent.tools,
+			tools: effectiveTools,
+			disableExtensions: launchPolicy?.disableExtensions,
+			disableSkills: launchPolicy?.disableSkills,
+			disablePromptTemplates: launchPolicy?.disablePromptTemplates,
+			disableContextFiles: launchPolicy?.disableContextFiles,
+			projectTrust: launchPolicy?.projectTrust,
+			baseSystemPromptPath: baseSystemPromptPath ?? undefined,
+			appendSystemPromptPaths: launchPolicy?.appendSystemPromptPaths,
 			systemPromptPath: tmpPromptPath ?? undefined,
 			task,
 		});
@@ -525,6 +587,7 @@ export async function runSingleAgent(
 					},
 				});
 			} catch (error) {
+				currentResult.launchFailed = true;
 				currentResult.stderr = setErrorMessage(
 					error instanceof Error ? error.message : String(error),
 				);
@@ -582,6 +645,16 @@ export async function runSingleAgent(
 							currentResult.usage.cacheRead += usage.cacheRead || 0;
 							currentResult.usage.cacheWrite += usage.cacheWrite || 0;
 							currentResult.usage.cost += usage.cost?.total || 0;
+							currentResult.usage.costInput =
+								(currentResult.usage.costInput ?? 0) + (usage.cost?.input || 0);
+							currentResult.usage.costOutput =
+								(currentResult.usage.costOutput ?? 0) + (usage.cost?.output || 0);
+							currentResult.usage.costCacheRead =
+								(currentResult.usage.costCacheRead ?? 0) + (usage.cost?.cacheRead || 0);
+							currentResult.usage.costCacheWrite =
+								(currentResult.usage.costCacheWrite ?? 0) + (usage.cost?.cacheWrite || 0);
+							currentResult.usage.totalTokens =
+								(currentResult.usage.totalTokens ?? 0) + (usage.totalTokens || 0);
 							currentResult.usage.contextTokens = usage.totalTokens || 0;
 						}
 						if (msg.provider) currentResult.actualProvider = msg.provider;
@@ -623,6 +696,9 @@ export async function runSingleAgent(
 			}, timeoutMs);
 			timeout.unref();
 
+			proc.once("spawn", () => {
+				currentResult.processStarted = true;
+			});
 			proc.stdout?.on("data", (data) => decoder.push(data));
 			proc.stderr?.on("data", (data) => {
 				const bounded = appendBounded(
@@ -638,6 +714,7 @@ export async function runSingleAgent(
 				finish(timedOut ? 124 : wasAborted ? 130 : (code ?? 0));
 			});
 			proc.on("error", (error) => {
+				currentResult.launchFailed = true;
 				const message = setErrorMessage(error.message);
 				const bounded = appendBounded(
 					currentResult.stderr,
@@ -682,23 +759,27 @@ export async function runSingleAgent(
 				"cwd",
 				...(agent.model ? ["model"] : []),
 				...(thinkingLevel ? ["thinkingLevel"] : []),
-				...(agent.tools ? ["tools"] : []),
+				...(effectiveTools !== undefined ? ["tools"] : []),
+				...(launchPolicy?.disableExtensions ? ["extensions"] : []),
+				...(launchPolicy?.disableSkills ? ["skills"] : []),
+				...(launchPolicy?.disablePromptTemplates ? ["promptTemplates"] : []),
+				...(launchPolicy?.disableContextFiles ? ["contextFiles"] : []),
 			],
 			unsupported: ["approvalPolicy", "sandboxProfile", "providerHeaders"],
 		};
 		return currentResult;
 	} finally {
-		if (tmpPromptPath)
+		for (const temporary of temporaryPrompts.reverse()) {
 			try {
-				fs.unlinkSync(tmpPromptPath);
+				fs.unlinkSync(temporary.filePath);
 			} catch {
 				/* ignore */
 			}
-		if (tmpPromptDir)
 			try {
-				fs.rmdirSync(tmpPromptDir);
+				fs.rmdirSync(temporary.dir);
 			} catch {
 				/* ignore */
 			}
+		}
 	}
 }

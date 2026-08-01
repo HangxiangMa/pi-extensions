@@ -13,17 +13,29 @@
  */
 
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { discoverAgentCatalog, formatAgentCatalog } from "./agents.js";
+import {
+	type ConsultResourcePolicy,
+	discoverAgentCatalog,
+	formatAgentCatalog,
+	type SubagentSettings,
+} from "./agents.js";
 import { registerSubagentConfigCommand } from "./config-ui.js";
+import { registerSubagentConsult } from "./consult.js";
 import { executeSubagent } from "./execution.js";
+import { registerSubagentInspect } from "./inspect.js";
 import { SubagentParams } from "./params.js";
 import { renderSubagentCall, renderSubagentResult } from "./render.js";
 import type { SubagentDetails } from "./runner.js";
-import { consumeSubagentSettingsNotice, readSubagentSettings } from "./settings.js";
+import {
+	consumeSubagentSettingsNotice,
+	DEFAULT_CONSULT_RESOURCE_POLICY,
+	readSubagentSettings,
+} from "./settings.js";
 import { registerStatefulSubagents } from "./stateful.js";
 
 export default function (pi: ExtensionAPI) {
 	const settings = readSubagentSettings();
+	let currentSettings: SubagentSettings | undefined = settings;
 	const blockingEnabled = settings?.blocking?.enabled !== false;
 	const refreshBlockingCatalog = blockingEnabled ? registerBlockingSubagent(pi) : () => undefined;
 	let refreshStatefulCatalog: (catalog: string) => void = () => undefined;
@@ -33,6 +45,7 @@ export default function (pi: ExtensionAPI) {
 		// validation against settings that may have changed before this session.
 		const loadNotice = consumeSubagentSettingsNotice();
 		const refreshedSettings = readSubagentSettings();
+		currentSettings = refreshedSettings;
 		const refreshedNotice = consumeSubagentSettingsNotice();
 		const notice = [
 			...new Set([loadNotice, refreshedNotice].filter((value) => value !== undefined)),
@@ -51,9 +64,27 @@ export default function (pi: ExtensionAPI) {
 		settings: settings?.stateful,
 	});
 	refreshStatefulCatalog = statefulRuntime.setAgentCatalog;
+	const getBlockingEnabled = () => blockingEnabled;
+	const getConsultResourcePolicy = () =>
+		currentSettings?.consult?.resources ?? DEFAULT_CONSULT_RESOURCE_POLICY;
+	registerSubagentInspect(pi, {
+		...statefulRuntime,
+		getBlockingEnabled,
+		getConsultResourcePolicy,
+	});
+	if (blockingEnabled) {
+		registerSubagentConsult(pi, { getSettings: () => currentSettings });
+	}
 	registerSubagentConfigCommand(pi, {
 		...statefulRuntime,
-		getBlockingEnabled: () => blockingEnabled,
+		getBlockingEnabled,
+		getConsultResourcePolicy,
+		setConsultResourcePolicy(value: ConsultResourcePolicy) {
+			currentSettings = {
+				...(currentSettings ?? {}),
+				consult: { ...(currentSettings?.consult ?? {}), resources: value },
+			};
+		},
 	});
 }
 
@@ -63,7 +94,7 @@ function registerBlockingSubagent(pi: ExtensionAPI): (catalog: string) => void {
 		"Run specialized subagents as a blocking operation with isolated contexts.",
 		"The call blocks the main agent until every worker and optional aggregator finishes, so queued steering waits.",
 		"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
-		"Parallel mode may include an aggregator fan-in step that receives all task outputs.",
+		"Parallel mode may include an aggregator fan-in step that receives all task outputs. Use subagent_consult instead for one synchronous child that must be executor-constrained to read-only tools.",
 		'Default agent scope is "user" (from ~/.pi/agent/agents).',
 		'To enable project-local agents in .pi/agents, pass agentScope: "both" (or "project") as a top-level argument for that call.',
 	].join(" ");
@@ -118,8 +149,11 @@ export { parsePositiveInteger } from "./execution.js";
 export { formatTokens, formatUsageStats } from "./render.js";
 export { buildPiArgs } from "./runner.js";
 export {
+	DEFAULT_CONSULT_RESOURCE_POLICY,
 	inspectCompletionDeliverySettings,
+	inspectConsultResourceSettings,
 	inspectDelegationWorkflowSettings,
+	inspectSubagentSettings,
 	normalizeAgentSettings,
 	normalizeSubagentSettings,
 	readSubagentSettings,
@@ -130,5 +164,6 @@ export {
 	uniqueToolNames,
 	updateAgentToolsSetting,
 	updateCompletionDeliverySetting,
+	updateConsultResourceSetting,
 	updateDelegationWorkflowSetting,
 } from "./settings.js";

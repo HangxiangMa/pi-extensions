@@ -24,7 +24,13 @@ import {
 } from "./in-process-transport.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
 import { AgentPersistence } from "./persistence.js";
-import { AgentRegistry, type AgentTurnCompletion, type ManagedAgent } from "./registry.js";
+import {
+	AgentRegistry,
+	type AgentRunInspectionDetail,
+	type AgentRunInspectionSummary,
+	type AgentTurnCompletion,
+	type ManagedAgent,
+} from "./registry.js";
 import { readSubagentSettings } from "./settings.js";
 import {
 	MailboxParamsSchema,
@@ -109,6 +115,8 @@ export interface StatefulSubagentController {
 	setAgentCatalog(value: string): void;
 	getRuntimeStatus(): StatefulSubagentRuntimeStatus;
 	listAgents(includeClosed?: boolean): ManagedAgent[];
+	listRunInspection(includeClosed?: boolean): AgentRunInspectionSummary[];
+	getRunInspection(agentId: string): AgentRunInspectionDetail | undefined;
 	clearAgents(): Promise<number>;
 }
 
@@ -168,20 +176,23 @@ export function registerStatefulSubagents(
 			refreshSpawnToolRegistration?.();
 		},
 		getRuntimeStatus() {
-			const agents = registry?.list(true) ?? [];
+			const counts = registry?.inspectionCounts() ?? { activeAgents: 0, retainedAgents: 0 };
 			return {
 				enabled,
 				initialized: registry !== undefined,
 				transport: transportKind,
 				completionDelivery,
-				activeAgents: agents.filter(
-					(agent) => agent.state === "starting" || agent.state === "running",
-				).length,
-				retainedAgents: agents.filter((agent) => agent.state !== "closed").length,
+				...counts,
 			};
 		},
 		listAgents(includeClosed = false) {
 			return registry?.list(includeClosed) ?? [];
+		},
+		listRunInspection(includeClosed = false) {
+			return registry?.listInspection(includeClosed) ?? [];
+		},
+		getRunInspection(agentId) {
+			return registry?.getInspection(agentId);
 		},
 		clearAgents,
 	};
@@ -450,7 +461,7 @@ export function registerStatefulSubagents(
 		name: "subagent_manage",
 		label: "Manage Subagents",
 		description:
-			"List retained subagents, interrupt active work while keeping an agent reusable, or close agents and release their resources.",
+			"List retained subagents through the compatibility route, interrupt active work while keeping an agent reusable, or close agents and release their resources. Prefer subagent_inspect when the whole activated capability must be read-only.",
 		promptSnippet: "List or control retained detached subagents",
 		parameters: ManageParamsSchema,
 		async execute(_id, params): Promise<StatefulActionToolResult> {
@@ -518,7 +529,7 @@ export function registerStatefulSubagents(
 		name: "subagent_mailbox",
 		label: "Subagent Mailbox",
 		description:
-			"Queue a bounded message without starting a turn, or read unread mailbox messages and optionally acknowledge them.",
+			"Queue a bounded message without starting a turn, or read unread mailbox messages. Read acknowledges returned messages by default; use subagent_inspect for metadata-only unread counts.",
 		promptSnippet: "Send or read queue-only detached-subagent mailbox messages",
 		parameters: MailboxParamsSchema,
 		async execute(_id, params): Promise<StatefulActionToolResult> {

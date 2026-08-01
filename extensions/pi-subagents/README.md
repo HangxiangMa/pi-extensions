@@ -2,13 +2,15 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-subagents)](https://www.npmjs.com/package/@narumitw/pi-subagents) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-subagents` is a native [Pi coding agent](https://pi.dev) extension for delegating work to specialized agents. By default, the blocking batch `subagent` tool uses isolated Pi subprocesses while four detached tools run reusable agents either as subprocess-backed logical sessions or as public-SDK in-process child sessions. Users can keep all five tools, choose async-only delegation, or retain only blocking batches.
+`@narumitw/pi-subagents` is a native [Pi coding agent](https://pi.dev) extension for delegating work to specialized agents. By default, it exposes seven capability-specific tools: blocking batches, four detached lifecycle tools, side-effect-free inspection, and synchronous read-only consultation. Users can keep every delegation method, choose async-only delegation, retain only blocking delegation, or disable delegation while keeping inspection available.
 
 Use it to split independent research, planning, implementation, and review work across focused workers. Under the default next-turn delivery policy, background delegation is for work the current response does not depend on. Opt-in auto-resume also supports final-answer-dependent background work by requesting a synthesis turn after completion.
 
 ## ✨ Features
 
-- Offers all delegation methods by default, with goal-oriented presets for async-only or blocking-only workflows.
+- Offers all delegation methods by default, with goal-oriented presets for async-only, blocking-only, or disabled delegation.
+- Adds `subagent_inspect` for bounded metadata without child launch, mailbox-content access, acknowledgement, or mutation.
+- Adds `subagent_consult` for one synchronous ephemeral child constrained to built-in `read`, `grep`, `find`, and `ls` tools (or a narrower agent allow-list).
 - Keeps batch workers isolated in `pi --mode json -p --no-session` subprocesses.
 - Registers detached stateful lifecycle tools by default; completion can stay queued for the next turn or opt into an idle root synthesis turn.
 - Supports an opt-in public-SDK `in-process` stateful transport with one reusable child `AgentSession` per `agentId`.
@@ -43,13 +45,14 @@ pi -e ./extensions/pi-subagents
 
 ## 🛠️ Pi tool
 
-`pi-subagents` registers all five tools by default. Run `/subagents`, choose **Change delegation**, review the concrete tool changes, then select **Save and reload** to apply one of these workflows:
+`pi-subagents` registers seven tools by default. Run `/subagents`, choose **Change delegation**, review the concrete tool changes, then select **Save and reload** to apply one of these workflows:
 
 | Workflow | Registered tools |
 | --- | --- |
-| **All delegation methods** (default) | Blocking `subagent` plus all four detached lifecycle tools |
-| **Async only** | `subagent_spawn`, `subagent_send`, `subagent_manage`, and `subagent_mailbox`; blocking `subagent` is omitted |
-| **Blocking only** | Blocking `subagent` only; equivalent to the existing `stateful.enabled: false` behavior |
+| **All delegation methods** (default) | Existing five delegation/lifecycle tools, `subagent_inspect`, and `subagent_consult` |
+| **Async only** | Four detached lifecycle tools plus `subagent_inspect`; blocking `subagent` and `subagent_consult` are omitted |
+| **Blocking only** | `subagent`, `subagent_consult`, and `subagent_inspect` |
+| **Disabled** | `subagent_inspect` only; delegation is disabled |
 
 The preview compares the selection with the tools registered in the current session, even when a manual settings edit is pending, and remains read-only until confirmation. Escape or **Cancel** leaves settings unchanged. Tool removal requires an extension reload because Pi does not expose extension tool unregistration. To avoid aborting work or removing isolated worktrees during `session_shutdown`, workflow changes are blocked while detached agents are retained; finish or clear them through **Current agents** first. Pi owns reload-error reporting and does not return a success result to extensions, so the save notification also tells users to run `/reload` if the tool surface does not refresh.
 
@@ -57,6 +60,8 @@ The available tools are:
 
 - `subagent` — delegate blocking single, parallel, fan-in, or chained batch work. The main agent cannot process queued steering until the call returns.
 - `subagent_spawn` and related lifecycle tools — when enabled, start reusable detached work, return immediately, and receive bounded completion messages automatically.
+- `subagent_inspect` — inspect agent/model/run/runtime metadata without launching work or changing state.
+- `subagent_consult` — run one ephemeral read-only consultation and wait for its answer.
 
 After each session starts, both delegation tools include a bounded parent-facing catalog of the agents
 available in that session. Entries show the source (`built-in`, `user`, or `project`) and the
@@ -72,6 +77,8 @@ Choose the API by lifecycle:
 | Broad research/review the current response does not depend on | Prefer one `subagent_spawn` covering related branches, when lifecycle tools are enabled |
 | Final-answer-dependent broad work with `completionDelivery: "auto-resume"` | Prefer one `subagent_spawn`; completion requests a synthesis turn |
 | Reusable history, follow-ups, or mailboxes | `subagent_spawn` and lifecycle tools, when enabled |
+| Side-effect-free agent/model/run diagnostics | `subagent_inspect` |
+| Synchronous reconnaissance, planning, or review that must not write | `subagent_consult`, when blocking delegation is enabled |
 | One simple or critical-path action the root can perform directly | No subagent |
 
 Execution modes:
@@ -169,6 +176,50 @@ A blocking fan-out is reserved for output that must be synthesized before the ro
 }
 ```
 
+## 🔎 Read-only inspection
+
+`subagent_inspect` is registered in every workflow, including disabled delegation. It never starts a child, sends or acknowledges mailbox messages, interrupts or closes a run, changes settings, refreshes providers, resolves credentials, or modifies files.
+
+| Action | Parameters | Result |
+| --- | --- | --- |
+| `list_agents` | Optional `agentScope` (default `user`) and `limit` (default 32, maximum 100) | Bounded agent metadata and omission counts |
+| `get_agent` | Required `agent`; optional `agentScope` | One resolved definition, safe source path, configured tools, and consultation-effective tools; never the system prompt |
+| `list_runs` | Optional `includeClosed` and `limit` (default 50, maximum 100) | Metadata-only retained-run summaries and unread counts |
+| `get_run` | Required `agentId` | Safe `cwd`, current-task/error summaries, thinking level, policy, history count, and unread count |
+| `list_models` | Optional `limit` (default 50, maximum 100) | Session-scoped models, or the already-loaded available snapshot |
+| `status` | No additional fields | Effective workflow, runtime counts/transport, completion delivery, and consultation-resource setting |
+| `diagnose` | No additional fields | Structured `pass`, `warning`, and `fail` checks; failed checks are report data rather than a tool error |
+
+The schema rejects fields that do not belong to the selected action. Explicit `project` or `both` scope fails before project-agent discovery unless Pi already trusts the project. Run inspection never returns history output, stored context, or mailbox content; unread counts come from a metadata-only snapshot and do not acknowledge messages. Paths beneath the Pi agent directory use `~`, project paths are workspace-relative, model objects are projected through an allow-list, and model-facing text is bounded to 50 KiB or 2,000 lines.
+
+Compatibility: `subagent_manage({ "action": "list" })` remains supported with its existing behavior. Prefer `subagent_inspect` when a whole tool must be safe to activate on a read-only surface.
+
+## 📖 Read-only consultation
+
+`subagent_consult` is registered whenever blocking delegation is enabled. It runs exactly one synchronous, non-retained child with `--no-session`, `--no-extensions`, and only the effective intersection of the agent tools with `read`, `grep`, `find`, and `ls`. A missing tool list receives those four defaults; an explicit `tools: []` receives `--no-tools`; write, shell, lifecycle, custom, and extension tools cannot enter the child allow-list. The executor policy remains authoritative even when the task or agent prompt asks for implementation.
+
+```json
+{
+  "agent": "reviewer",
+  "task": "Inspect the authentication changes and report correctness and security findings with paths.",
+  "thinkingLevel": "high"
+}
+```
+
+The actionless schema requires `agent` and `task` and accepts optional `agentScope`, `confirmProjectAgents`, `cwd`, `timeoutMs`, and `thinkingLevel`. Project scope is rejected before discovery when the project is untrusted. A trusted project agent still asks for confirmation by default; non-interactive calls fail closed unless they explicitly send `confirmProjectAgents: false`. Declining an interactive confirmation returns a normal cancelled result without launching or charging a child.
+
+`consult.resources` controls automatically inherited instruction resources:
+
+| Value | Behavior |
+| --- | --- |
+| `"project-context"` (default) | Keep ordinary user context/system files and trusted project `AGENTS.md`, `CLAUDE.md`, and `SYSTEM.md`; disable skills and prompt templates |
+| `"none"` | Use only the package consultation base, selected agent prompt, and enforced read-only instruction |
+| `"all"` | Keep ordinarily discoverable trusted context/system/append-system files, skills, and prompt templates |
+
+Extensions remain disabled for all three values. For an untrusted current project, project resources are omitted; because Pi's context-file switch cannot separate user and project `AGENTS.md` files, `project-context` and `all` fail closed by disabling context files while still permitting the user `SYSTEM.md` selected by the extension. The setting is user-owned in `~/.pi/agent/pi-subagents.json`; projects cannot override it. An external or symlink-escaped `cwd` is accepted only with `consult.resources: "none"`, but this is not a path sandbox: read-only tools can still read an explicitly requested accessible absolute path.
+
+Result details report requested/effective tools and resources, agent/model/thinking/timeout metadata, and the facts that extensions, session persistence, and retained-agent state are disabled. Nested model usage is returned through Pi's usage field, so footer, `/session`, and RPC totals include consultation cost. Validation, trust, unsafe-cwd, and launch failures throw. Failures after model launch preserve bounded partial evidence and usage while the finalized Pi tool result is marked as an error. Abort, timeout, session replacement, and shutdown use the existing process-tree termination and temporary-file cleanup path.
+
 ## 🚀 Blocking batch examples
 
 Every example in this section calls `subagent` and keeps the main agent unavailable until the batch
@@ -258,14 +309,12 @@ Auto-resume is best-effort because Pi's custom-message API is fire-and-forget. S
 The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history. Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
 
 Run `/subagents` in TUI mode to open the standard primary manager. It leads with the current
-delegation workflow, human-readable async completion behavior, and active/retained counts. **Change
-delegation**, **Current agents**, and **Completion behavior** cover the common workflows; agent
-permissions, transport/runtime details, source, and settings path remain under **Advanced settings**.
+delegation workflow, human-readable async completion behavior, consultation-resource policy, and active/retained counts. **Change delegation**, **Current agents**, and **Settings** cover the common workflows; agent permissions, transport/runtime details, source, and settings path remain under **Advanced settings**.
 Escape returns from a nested screen to a newly refreshed manager; Ctrl+C closes the full flow.
 Exact workflow/reload and project-agent safety confirmations remain extension-owned because they
 guard live agent and trust-boundary policy rather than ordinary navigation.
 
-The direct routes remain predictable: `/subagents settings` changes user completion delivery and applies it immediately, including refreshing the model-facing spawn guidance; `/subagents status` reports current-session runtime values separately from the configured value, source, and path; `/subagents help` summarizes the single-command interface. In RPC mode, bare `/subagents` emits the same bounded status through Pi's notification protocol instead of opening a custom TUI. JSON and print modes do not emit ad hoc command output. Manual edits use `~/.pi/agent/pi-subagents.json` and take effect after reloading Pi:
+The direct routes remain predictable: `/subagents settings` changes completion delivery and consultation resources and applies them immediately, including refreshing model-facing spawn guidance; `/subagents status` reports current-session runtime values separately from configured values, sources, and path; `/subagents help` summarizes the single-command interface. In RPC mode, bare `/subagents` emits the same bounded status through Pi's notification protocol instead of opening a custom TUI. JSON and print modes do not emit ad hoc command output. Manual edits use `~/.pi/agent/pi-subagents.json` and take effect after reloading Pi:
 
 ```json
 {
@@ -285,11 +334,14 @@ The direct routes remain predictable: `/subagents settings` changes user complet
     "idleTtlMs": 3600000,
     "retentionDays": 30,
     "maxStoredAgents": 50
+  },
+  "consult": {
+    "resources": "project-context"
   }
 }
 ```
 
-The settings UI patches the raw JSON atomically and preserves unknown fields; it refuses to overwrite malformed or invalid settings. Supported Pi writers serialize the latest-document read and same-directory temporary-file rename through `pi-subagents.json.mutation-lock`. Editors and older extension versions do not participate in that lock, so avoid manual edits while a settings save is in progress. `blocking.enabled` defaults to `true`; set it to `false` for async-only delegation. `stateful.enabled` also defaults to `true`; its existing `false` value remains the blocking-only workflow. When stateful tools are enabled, their membership stays fixed across spawn, completion, interrupt, close, and mailbox transitions. This avoids lifecycle-driven tool-schema churn and preserves a stable provider prompt prefix for KV caching.
+The settings UI patches the raw JSON atomically and preserves unknown fields; it refuses to overwrite malformed or invalid settings. Supported Pi writers serialize the latest-document read and same-directory temporary-file rename through `pi-subagents.json.mutation-lock`. Editors and older extension versions do not participate in that lock, so avoid manual edits while a settings save is in progress. `blocking.enabled` defaults to `true`; set it to `false` for async-only delegation. `stateful.enabled` also defaults to `true`; its existing `false` value remains the blocking-only workflow. `consult.resources` defaults to `"project-context"`; the Settings UI applies a saved change to subsequent consultations immediately, while manual edits take effect on session start or `/reload`. When stateful tools are enabled, their membership stays fixed across spawn, completion, interrupt, close, and mailbox transitions. This avoids lifecycle-driven tool-schema churn and preserves a stable provider prompt prefix for KV caching.
 
 | Tool | Purpose |
 | --- | --- |
@@ -318,7 +370,7 @@ The action schemas are flat for provider compatibility and reject parameters tha
 
 Use the **Current agents** action in `/subagents` to inspect the indented agent tree, lifecycle state, unread count, and available actions, or to confirm clearing retained agents. Active turns are FIFO-limited by `maxActiveTurns`; excess retained work remains in `starting` state until a slot is available. `maxAgents` separately bounds running, queued, and idle records. `parentId` creates a bounded child relationship; subtree interrupt and close operate child-first.
 
-### Migrating from the seven-tool lifecycle surface
+### Migrating from the previous seven-tool lifecycle surface
 
 The five replaced names are intentionally not registered as aliases. Update explicit prompts and integrations as follows:
 
@@ -418,7 +470,7 @@ Compatibility: a valid legacy `pi-subagents-config.json` remains readable with a
 - Choose **Save changes** to write the draft, choose **Discard draft** to abandon it, or press Esc to
   return to agent selection without writing.
 - Save the default selection to remove a custom override and use the agent defaults again.
-- Deselect every tool and save to run that agent with no tools.
+- Deselect every tool and save to run that agent with no tools. An explicit empty list remains distinct from an absent list; blank `tools:` or `tools: []` in agent frontmatter also means no tools.
 
 Configured tool names that are not currently registered are preserved, so settings for tools from
 other extension sessions are not silently dropped.
@@ -520,7 +572,7 @@ The child event protocol limits each JSON line to 256 KiB. Captured output uses 
 - stderr: 16 KiB;
 - captured messages: 200.
 
-Truncated text includes a `truncated by pi-subagents` marker and details expose `truncated: true`. `PI_SUBAGENT_MAX_DEPTH` controls nested delegation depth and defaults to 1; child processes receive `PI_SUBAGENT_DEPTH` automatically.
+Truncated text includes a `truncated by pi-subagents` marker and details expose `truncated: true`. Inspection and consultation model-facing content also stops at 2,000 lines, whichever limit is reached first. `PI_SUBAGENT_MAX_DEPTH` controls nested delegation depth and defaults to 1; child processes receive `PI_SUBAGENT_DEPTH` automatically.
 
 ## 📡 Runtime status
 
@@ -528,7 +580,7 @@ While the `subagent` tool is running, `pi-subagents` publishes compact activity 
 
 ## 🔒 Safety notes
 
-Subagents have separate processes and context windows, but they are **not security sandboxes**. They run as the same OS user, share the host filesystem and network access, and may conflict if they edit the same files. Tool allow-lists reduce available Pi tools but do not reduce operating-system permissions.
+Subagents have separate processes and context windows, but they are **not security sandboxes**. They run as the same OS user, share the host filesystem and network access, and may conflict if they edit the same files. Tool allow-lists reduce available Pi tools but do not reduce operating-system permissions. `subagent_consult` prevents writes through its Pi tool surface and disables extensions, but it can read accessible paths, call the configured model over the network, and incur cost; its instruction-resource policy is not a filesystem or confidentiality boundary.
 
 The runner explicitly reports policy continuity in result details:
 
@@ -547,16 +599,20 @@ extensions/pi-subagents/
 ├── src/
 │   ├── index.ts                  # Pi package entrypoint
 │   ├── subagents.ts              # Extension registration and blocking tool schema
+│   ├── inspect.ts                # Side-effect-free metadata inspection tool
+│   ├── consult.ts                # Synchronous read-only consultation tool
+│   ├── consult-policy.ts         # Enforced read-only tool intersection
+│   ├── safe-text.ts              # Shared byte/line/path sanitization
 │   ├── stateful.ts               # Detached lifecycle registration and dispatch
 │   ├── stateful-tool-params.ts   # Consolidated action schemas and validation
-│   └── *.ts                      # Package-local discovery, execution, rendering, and config modules
+│   └── *.ts                      # Package-local discovery, execution, rendering, and settings modules
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json
 └── package.json
 ```
 
-`index.ts` is the Pi entrypoint and forwards to `subagents.ts`; the other source modules are internal. Workflow settings remain backward compatible: older files without `blocking.enabled` keep the five-tool default, existing `stateful.enabled: false` files remain blocking-only, and older package releases ignore the new `blocking` object. The package exposes its Pi extension through `package.json`:
+`index.ts` is the Pi entrypoint and forwards to `subagents.ts`; the other source modules are internal. Workflow settings remain backward compatible: older files without `blocking.enabled` receive the seven-tool default, existing `stateful.enabled: false` files expose blocking delegation plus inspection/consultation, and older package releases ignore and preserve the optional `consult` object. The package exposes its Pi extension through `package.json`:
 
 ```json
 {
