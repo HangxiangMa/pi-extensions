@@ -21,6 +21,7 @@ import {
 	THINKING_LEVELS,
 } from "./agents.js";
 import { resolveConsultTools } from "./consult-policy.js";
+import { renderConsultCall, renderConsultResult } from "./consult-render.js";
 import { assertSubagentDepthAllowed, resolveDefaultSubagentTimeoutMs } from "./execution.js";
 import {
 	DEFAULT_MAX_CONTEXT_BYTES,
@@ -80,6 +81,30 @@ export interface RegisterSubagentConsultOptions {
 	invocationOverride?: { command: string; argsPrefix?: string[] };
 }
 
+export interface ConsultProgressActivity {
+	type: "text" | "toolCall";
+	text?: string;
+	name?: "read" | "grep" | "find" | "ls";
+	args?: Record<string, string | number | boolean>;
+}
+
+export interface ConsultProgress {
+	phase: "starting" | "running";
+	recentActivity: ConsultProgressActivity[];
+	recentActivityTotal: number;
+	actualProvider?: string;
+	actualModel?: string;
+	usage: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		cost: number;
+		contextTokens: number;
+		turns: number;
+	};
+}
+
 export interface ConsultDetails {
 	agent: string;
 	agentSource: string;
@@ -104,6 +129,7 @@ export interface ConsultDetails {
 		retainedAgent: false;
 	};
 	child?: Record<string, unknown>;
+	progress?: ConsultProgress;
 	cancelled?: boolean;
 	isError?: boolean;
 	truncated?: boolean;
@@ -186,6 +212,12 @@ export function registerSubagentConsult(
 				combined.dispose();
 				active.delete(ownedController);
 			}
+		},
+		renderCall(args, theme) {
+			return renderConsultCall(args, theme);
+		},
+		renderResult(result, renderOptions, theme, context) {
+			return renderConsultResult(result, renderOptions, theme, context);
 		},
 	};
 	pi.registerTool<typeof SubagentConsultParams, ConsultDetails>(definition);
@@ -322,6 +354,8 @@ async function executeConsult(
 			};
 		}
 	}
+	assertCurrentRequest(signal, isCurrent);
+	emitUpdate(consultStartingUpdate(setup.details));
 	assertCurrentRequest(signal, isCurrent);
 	const runChild = options.runChild ?? ((request) => runConsultChild(request, options));
 	const child = runChild({
@@ -471,6 +505,21 @@ async function runConsultChild(
 	);
 }
 
+function consultStartingUpdate(details: ConsultDetails): AgentToolResult<ConsultDetails> {
+	return {
+		content: [{ type: "text", text: "Read-only subagent consultation starting." }],
+		details: {
+			...details,
+			progress: {
+				phase: "starting",
+				recentActivity: [],
+				recentActivityTotal: 0,
+				usage: emptyProgressUsage(),
+			},
+		},
+	};
+}
+
 function consultUpdate(
 	result: SingleResult,
 	details: ConsultDetails,
@@ -478,7 +527,69 @@ function consultUpdate(
 	const output = boundText(getResultFinalOutput(result) || "(running...)");
 	return {
 		content: [{ type: "text", text: output.text }],
-		details: { ...details, child: projectChildResult(result) },
+		details: {
+			...details,
+			child: projectChildResult(result),
+			progress: projectConsultProgress(result),
+		},
+	};
+}
+
+const CONSULT_ACTIVITY_ARGUMENTS: Record<"read" | "grep" | "find" | "ls", readonly string[]> = {
+	read: ["path", "file_path", "offset", "limit"],
+	grep: ["pattern", "path", "glob", "limit"],
+	find: ["pattern", "path", "limit"],
+	ls: ["path", "limit"],
+};
+
+function projectConsultProgress(result: SingleResult): ConsultProgress {
+	const recentActivity: ConsultProgressActivity[] = [];
+	for (const item of result.recentActivity ?? []) {
+		if (item.type === "text") {
+			const text = boundedPrivateText(item.text, 1024).trim();
+			if (text) recentActivity.push({ type: "text", text });
+			continue;
+		}
+		if (!Object.hasOwn(CONSULT_ACTIVITY_ARGUMENTS, item.name)) continue;
+		const name = item.name as keyof typeof CONSULT_ACTIVITY_ARGUMENTS;
+		const args: Record<string, string | number | boolean> = {};
+		for (const key of CONSULT_ACTIVITY_ARGUMENTS[name]) {
+			const value = item.args[key];
+			if (typeof value === "string") args[key] = safeTerminalLine(value, 512);
+			else if (typeof value === "number" && Number.isFinite(value)) args[key] = value;
+			else if (typeof value === "boolean") args[key] = value;
+		}
+		recentActivity.push({ type: "toolCall", name, args });
+	}
+	return {
+		phase: "running",
+		recentActivity,
+		recentActivityTotal: Math.max(recentActivity.length, result.recentActivityTotal ?? 0),
+		actualProvider: result.actualProvider
+			? boundedPrivateText(result.actualProvider, 256)
+			: undefined,
+		actualModel: result.actualModel ? boundedPrivateText(result.actualModel, 256) : undefined,
+		usage: {
+			input: result.usage.input,
+			output: result.usage.output,
+			cacheRead: result.usage.cacheRead,
+			cacheWrite: result.usage.cacheWrite,
+			cost: result.usage.cost,
+			contextTokens: result.usage.contextTokens,
+			turns: result.usage.turns,
+		},
+	};
+}
+
+function emptyProgressUsage(): ConsultProgress["usage"] {
+	return {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		cost: 0,
+		contextTokens: 0,
+		turns: 0,
 	};
 }
 

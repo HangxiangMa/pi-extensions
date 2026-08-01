@@ -33,6 +33,7 @@ import {
 } from "./registry.js";
 import { safeTerminalLine } from "./safe-text.js";
 import { readSubagentSettings } from "./settings.js";
+import { createStatefulToolRenderer } from "./stateful-render.js";
 import {
 	MailboxParamsSchema,
 	ManageParamsSchema,
@@ -362,6 +363,7 @@ export function registerStatefulSubagents(
 				}),
 			),
 		}),
+		...createStatefulToolRenderer("spawn"),
 		async execute(_id, params, _signal, _update, ctx) {
 			const scope = (params.agentScope ?? "user") as AgentScope;
 			assertSubagentDepthAllowed();
@@ -437,6 +439,7 @@ export function registerStatefulSubagents(
 				Type.Boolean({ description: "Override the shared-workspace write conflict guard." }),
 			),
 		}),
+		...createStatefulToolRenderer("send"),
 		async execute(_id, params, _signal, _update, ctx) {
 			const existing = requireRegistry().get(params.agentId);
 			if (!existing) throw new Error(`Unknown subagent: ${params.agentId}`);
@@ -465,6 +468,7 @@ export function registerStatefulSubagents(
 			"List retained subagents through the compatibility route, interrupt active work while keeping an agent reusable, or close agents and release their resources. Prefer subagent_inspect when the whole activated capability must be read-only.",
 		promptSnippet: "List or control retained detached subagents",
 		parameters: ManageParamsSchema,
+		...createStatefulToolRenderer("manage"),
 		async execute(_id, params): Promise<StatefulActionToolResult> {
 			const operation = validateManageParams(params);
 			if (operation.action === "list") {
@@ -533,6 +537,7 @@ export function registerStatefulSubagents(
 			"Queue a bounded message without starting a turn, or read unread mailbox messages. Read acknowledges returned messages by default; use subagent_inspect for metadata-only unread counts.",
 		promptSnippet: "Send or read queue-only detached-subagent mailbox messages",
 		parameters: MailboxParamsSchema,
+		...createStatefulToolRenderer("mailbox"),
 		async execute(_id, params): Promise<StatefulActionToolResult> {
 			const operation = validateMailboxParams(params);
 			if (operation.action === "send") {
