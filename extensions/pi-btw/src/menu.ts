@@ -14,6 +14,7 @@ import {
 	updateBtwSettings,
 } from "./settings.js";
 import { BTW_THINKING_LEVELS, type BtwThinkingLevel } from "./side-thread.js";
+import { sanitizeSingleLine } from "./text.js";
 
 interface BtwMenuState {
 	kind: "valid" | "invalid";
@@ -57,6 +58,7 @@ export async function showBtwCommandMenu(
 		options.availableThinkingLevels.length > 0
 			? [...options.availableThinkingLevels]
 			: (["off"] satisfies BtwThinkingLevel[]);
+	const displaySettingsPath = sanitizeSingleLine(settingsPath);
 	let startSelected = false;
 
 	const loadState = async (): Promise<BtwMenuState> => {
@@ -97,7 +99,7 @@ export async function showBtwCommandMenu(
 			settings: ({ state }) => ({
 				kind: "settings",
 				title: "Pi BTW Settings",
-				lines: [`User settings · ${settingsPath}`],
+				lines: [`User settings · ${displaySettingsPath}`],
 				items: [
 					{
 						id: "thinkingLevel",
@@ -121,8 +123,8 @@ export async function showBtwCommandMenu(
 				kind: "detail",
 				title: "Pi BTW Settings · Read only",
 				lines: [
-					`Invalid settings file. Fix ${settingsPath} before saving.`,
-					state.reason ?? "The settings file is invalid.",
+					`Invalid settings file. Fix ${displaySettingsPath} before saving.`,
+					sanitizeSingleLine(state.reason ?? "The settings file is invalid."),
 				],
 				hint: "back",
 			}),
@@ -140,7 +142,7 @@ export async function showBtwCommandMenu(
 						{ settingsPath, signal },
 					);
 					if (signal.aborted) return { kind: "rejected" };
-					ctx.ui.notify(`Pi BTW thinking level: ${value}.`, "info");
+					notifySafely(ctx, `Pi BTW thinking level: ${value}.`, "info");
 					return { kind: "stay" };
 				} catch (error) {
 					if (!signal.aborted) notifySaveFailure(ctx, error);
@@ -155,7 +157,7 @@ export async function showBtwCommandMenu(
 						{ settingsPath, signal },
 					);
 					if (signal.aborted) return { kind: "rejected" };
-					ctx.ui.notify(`Remember thinking level changes: ${value}.`, "info");
+					notifySafely(ctx, `Remember thinking level changes: ${value}.`, "info");
 					return { kind: "stay" };
 				} catch (error) {
 					if (!signal.aborted) notifySaveFailure(ctx, error);
@@ -186,7 +188,11 @@ export async function runBtwMenuPreservingEditor(
 					target.custom<Value>(
 						(tui, theme, keybindings, done) =>
 							factory(tui, theme, keybindings, (value) => {
-								liveEditorText = target.getEditorText();
+								try {
+									liveEditorText = target.getEditorText();
+								} catch {
+									// Keep completion finite if session replacement invalidates the editor context.
+								}
 								completed = true;
 								done(value);
 							}),
@@ -198,8 +204,12 @@ export async function runBtwMenuPreservingEditor(
 		},
 	});
 	const result = await run({ mode: ctx.mode, hasUI: ctx.hasUI, ui });
-	if (result.kind !== "stale" && completed && ctx.ui.getEditorText() !== liveEditorText) {
-		ctx.ui.setEditorText(liveEditorText);
+	if (result.kind !== "stale" && completed) {
+		try {
+			if (ctx.ui.getEditorText() !== liveEditorText) ctx.ui.setEditorText(liveEditorText);
+		} catch {
+			// A replaced context owns a different editor and must not receive stale restoration.
+		}
 	}
 	return result;
 }
@@ -222,10 +232,23 @@ function clampToAvailableThinkingLevel(
 }
 
 function notifySaveFailure(ctx: ExtensionCommandContext, error: unknown): void {
-	ctx.ui.notify(
+	notifySafely(
+		ctx,
 		`Pi BTW settings were not saved; the previous value remains active: ${formatError(error)}`,
 		"error",
 	);
+}
+
+function notifySafely(
+	ctx: ExtensionCommandContext,
+	message: string,
+	level: Parameters<ExtensionCommandContext["ui"]["notify"]>[1],
+): void {
+	try {
+		ctx.ui.notify(sanitizeSingleLine(message), level);
+	} catch {
+		// A completed save remains valid if its command context was replaced before notification.
+	}
 }
 
 function formatError(error: unknown): string {

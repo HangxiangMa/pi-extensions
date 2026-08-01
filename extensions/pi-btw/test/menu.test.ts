@@ -7,7 +7,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { createMockContext } from "../../../test/support.js";
-import { showBtwCommandMenu } from "../src/menu.js";
+import { runBtwMenuPreservingEditor, showBtwCommandMenu } from "../src/menu.js";
 import { BTW_SETTINGS_FILE } from "../src/settings.js";
 
 async function withMenu(
@@ -38,6 +38,47 @@ async function withMenu(
 		await rm(directory, { recursive: true, force: true });
 	}
 }
+
+test("editor preservation finishes safely after its session context is replaced", async () => {
+	let stale = false;
+	const ctx = {
+		mode: "tui",
+		hasUI: true,
+		ui: {
+			getEditorText() {
+				if (stale) throw new Error("Extension context is no longer active");
+				return "draft";
+			},
+			setEditorText() {
+				assert.fail("a replacement editor must not receive a stale draft");
+			},
+			custom: async (factory: (...args: never[]) => unknown) => {
+				let result: unknown;
+				factory(
+					{} as never,
+					{} as never,
+					{} as never,
+					((value: unknown) => {
+						result = value;
+					}) as never,
+				);
+				return result;
+			},
+		},
+	} as never;
+
+	const result = await runBtwMenuPreservingEditor(ctx, async (menuContext) => {
+		const ui = menuContext.ui as ExtensionCommandContext["ui"];
+		await ui.custom((_tui, _theme, _keybindings, done) => {
+			stale = true;
+			done("completed");
+			return { render: () => [], invalidate() {} };
+		});
+		return { kind: "closed", reason: "close" };
+	});
+
+	assert.deepEqual(result, { kind: "closed", reason: "close" });
+});
 
 test("btw no-argument menu selects Start side thread first and preserves the editor", async () => {
 	await withMenu(async ({ settingsPath, tui, ctx }) => {
@@ -143,7 +184,7 @@ test("btw settings reject failed saves and restore the prior displayed value", a
 			currentThinkingLevel: "medium",
 			availableThinkingLevels: ["off", "low", "medium", "high"],
 			updateSettings: async () => {
-				throw new Error("disk full");
+				throw new Error("disk full\u001b]52;c;mock-terminal-payload\u0007");
 			},
 		});
 		await openSettings(tui);
@@ -153,8 +194,40 @@ test("btw settings reject failed saves and restore the prior displayed value", a
 		const narrow = tui.render(32);
 		assert.ok(narrow.every((line) => visibleWidth(line) <= 32));
 		assert.match(tui.render(80).join("\n"), /Thinking level\s+medium/);
-		assert.match(notifications[0]?.message ?? "", /previous value remains active.*disk full/i);
+		const failureMessage = notifications[0]?.message ?? "";
+		assert.match(failureMessage, /previous value remains active.*disk full/i);
+		assert.equal(
+			[...failureMessage].some((character) => {
+				const code = character.charCodeAt(0);
+				return code <= 31 || (code >= 127 && code <= 159);
+			}),
+			false,
+		);
 		await assert.rejects(readFile(settingsPath, "utf8"), { code: "ENOENT" });
+		tui.press("ctrl+c");
+		assert.equal(await running, "closed");
+	});
+});
+
+test("btw settings retain a completed save when its notification context is stale", async () => {
+	await withMenu(async ({ settingsPath, tui, ctx }) => {
+		ctx.ui.notify = () => {
+			throw new Error("Extension context is no longer active");
+		};
+		const running = showBtwCommandMenu(ctx, {
+			settingsPath,
+			currentThinkingLevel: "low",
+			availableThinkingLevels: ["off", "low", "medium"],
+		});
+		await openSettings(tui);
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+
+		assert.equal(
+			(JSON.parse(await readFile(settingsPath, "utf8")) as { thinkingLevel: string }).thinkingLevel,
+			"medium",
+		);
 		tui.press("ctrl+c");
 		assert.equal(await running, "closed");
 	});
