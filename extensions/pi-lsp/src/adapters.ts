@@ -249,14 +249,15 @@ function loadConfiguredConfig(cwd: string, projectTrusted: boolean): LspConfig |
 	if (projectTrusted) {
 		const projectConfig = path.join(cwd, CONFIG_DIR_NAME, "pi-lsp.json");
 		const legacyProjectConfig = path.join(cwd, CONFIG_DIR_NAME, "lsp.json");
-		if (existsSync(projectConfig)) {
+		const canonical = parseConfigFileIfPresent(projectConfig);
+		if (canonical) {
 			if (existsSync(legacyProjectConfig)) {
 				pendingConfigNotice = `${CONFIG_DIR_NAME}/lsp.json ignored because ${CONFIG_DIR_NAME}/pi-lsp.json takes precedence.`;
 			}
-			return parseConfigFile(projectConfig);
+			return canonical;
 		}
-		if (existsSync(legacyProjectConfig)) {
-			const legacy = parseLegacyConfigWithCanonicalRecheck(projectConfig, legacyProjectConfig);
+		const legacy = parseLegacyConfigWithCanonicalRecheck(projectConfig, legacyProjectConfig);
+		if (legacy) {
 			pendingConfigNotice = legacy.canonicalCreated
 				? `${CONFIG_DIR_NAME}/lsp.json ignored because ${CONFIG_DIR_NAME}/pi-lsp.json was created concurrently.`
 				: `Using legacy ${CONFIG_DIR_NAME}/lsp.json. Rename it to ${CONFIG_DIR_NAME}/pi-lsp.json; the repository file was not modified automatically.`;
@@ -266,15 +267,16 @@ function loadConfiguredConfig(cwd: string, projectTrusted: boolean): LspConfig |
 
 	const userConfig = path.join(getAgentDir(), "pi-lsp.json");
 	const legacyUserConfig = path.join(getAgentDir(), "lsp.json");
-	if (existsSync(userConfig)) {
+	const canonical = parseConfigFileIfPresent(userConfig);
+	if (canonical) {
 		if (existsSync(legacyUserConfig)) {
 			pendingConfigNotice = "lsp.json ignored because pi-lsp.json takes precedence.";
 		}
-		return parseConfigFile(userConfig);
+		return canonical;
 	}
-	if (!existsSync(legacyUserConfig)) return undefined;
 
 	const legacy = parseLegacyConfigWithCanonicalRecheck(userConfig, legacyUserConfig);
+	if (!legacy) return undefined;
 	pendingConfigNotice = legacy.canonicalCreated
 		? "lsp.json ignored because pi-lsp.json was created concurrently."
 		: "Using legacy lsp.json; rename it to pi-lsp.json. Future settings use pi-lsp.json without modifying the legacy file.";
@@ -291,15 +293,38 @@ function parseConfigFile(filePath: string): LspConfig {
 	return normalizeConfig(JSON.parse(readFileSync(filePath, "utf8")), filePath);
 }
 
+function parseConfigFileIfPresent(filePath: string) {
+	if (!existsSync(filePath)) return undefined;
+	try {
+		return parseConfigFile(filePath);
+	} catch (error) {
+		if (isMissingFileError(error)) return undefined;
+		throw error;
+	}
+}
+
 function parseLegacyConfigWithCanonicalRecheck(
 	canonicalPath: string,
 	legacyPath: string,
-): { config: LspConfig; canonicalCreated: boolean } {
-	const legacyContents = readFileSync(legacyPath, "utf8");
-	const canonicalIfPresent = () =>
-		existsSync(canonicalPath)
-			? { config: parseConfigFile(canonicalPath), canonicalCreated: true }
-			: undefined;
+): { config: LspConfig; canonicalCreated: boolean } | undefined {
+	const canonicalIfPresent = () => {
+		const config = parseConfigFileIfPresent(canonicalPath);
+		return config ? { config, canonicalCreated: true } : undefined;
+	};
+	const beforeRead = canonicalIfPresent();
+	if (beforeRead) return beforeRead;
+	if (!existsSync(legacyPath)) return canonicalIfPresent();
+
+	let legacyContents: string;
+	try {
+		legacyContents = readFileSync(legacyPath, "utf8");
+	} catch (error) {
+		const afterReadFailure = canonicalIfPresent();
+		if (afterReadFailure) return afterReadFailure;
+		if (isMissingFileError(error)) return undefined;
+		throw error;
+	}
+
 	const beforeParse = canonicalIfPresent();
 	if (beforeParse) return beforeParse;
 	try {
@@ -532,6 +557,15 @@ function optionalDirectoryNamesField(value: Record<string, unknown>, field: stri
 		);
 	}
 	return [...new Set(names)];
+}
+
+function isMissingFileError(error: unknown) {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error.code === "ENOENT" || error.code === "ENOTDIR")
+	);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

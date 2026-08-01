@@ -38,11 +38,12 @@ export async function runDiagnostics(
 
 	const client = new LspClient(adapter, command, root, timeoutMs);
 	const abort = () => client.close();
-	signal?.addEventListener("abort", abort, { once: true });
 	throwIfAborted(signal, adapter);
-	ctx.ui.setStatus(statusKey, `${adapter.name} diagnostics`);
+	signal?.addEventListener("abort", abort, { once: true });
 
 	try {
+		ctx.ui.setStatus(statusKey, `${adapter.name} diagnostics`);
+		throwIfAborted(signal, adapter);
 		await client.start();
 		await client.initialize(root);
 
@@ -94,11 +95,12 @@ export async function runFix(
 	const command = adapter.defaultCommand;
 	const client = new LspClient(adapter, command, root, timeoutMs);
 	const abort = () => client.close();
-	signal?.addEventListener("abort", abort, { once: true });
 	throwIfAborted(signal, adapter);
-	ctx.ui.setStatus(statusKey, `${adapter.name} fix`);
+	signal?.addEventListener("abort", abort, { once: true });
 
 	try {
+		ctx.ui.setStatus(statusKey, `${adapter.name} fix`);
+		throwIfAborted(signal, adapter);
 		await client.start();
 		await client.initialize(root);
 		throwIfAborted(signal, adapter);

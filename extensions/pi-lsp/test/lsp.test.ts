@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import fs, {
 	chmodSync,
 	existsSync,
@@ -32,6 +33,7 @@ import { collectSupportedFiles, directoryUri, resolveSupportedFile } from "../sr
 import { resolveSpawnCommand } from "../src/lsp-client.js";
 import lsp from "../src/pi-lsp.js";
 import { selectDiagnosticRoutes, selectFixRoute } from "../src/routes.js";
+import { runDiagnostics, runFix } from "../src/runner.js";
 import {
 	applyTextEdits,
 	collectWorkspaceEdits,
@@ -413,6 +415,45 @@ test("command helpers honor server environments and platform wrappers", () => {
 	rmSync(root, { recursive: true, force: true });
 });
 
+test("LSP operations cancelled before startup do not spawn or retain listeners", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-cancel-before-start-"));
+	const file = path.join(root, "main.go");
+	writeFileSync(file, "package main\n");
+	const adapter = testAdapter("custom", [".go"]);
+	const operations = [
+		(signal: AbortSignal, ctx: { ui: { setStatus: () => void } }) =>
+			runDiagnostics(adapter, { root, files: [file] }, 100, signal, ctx, "lsp"),
+		(signal: AbortSignal, ctx: { ui: { setStatus: () => void } }) =>
+			runFix(adapter, { root, path: "main.go" }, 100, signal, ctx, "lsp"),
+	];
+	try {
+		for (const operation of operations) {
+			const preAborted = new AbortController();
+			preAborted.abort();
+			await assert.rejects(
+				operation(preAborted.signal, { ui: { setStatus() {} } }),
+				/custom LSP request aborted/u,
+			);
+			assert.equal(getEventListeners(preAborted.signal, "abort").length, 0);
+
+			const cancelledByStatus = new AbortController();
+			await assert.rejects(
+				operation(cancelledByStatus.signal, {
+					ui: {
+						setStatus() {
+							cancelledByStatus.abort();
+						},
+					},
+				}),
+				/custom LSP request aborted/u,
+			);
+			assert.equal(getEventListeners(cancelledByStatus.signal, "abort").length, 0);
+		}
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("LSP config uses canonical paths while preserving project legacy files", () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-config-"));
 	const agentDir = path.join(root, "agent");
@@ -517,8 +558,77 @@ test("LSP config rechecks canonical paths after reading legacy fallbacks", () =>
 				fs.readFileSync = originalReadFileSync;
 				syncBuiltinESMExports();
 			}
+
+			unlinkSync(scenario.canonicalPath);
+			let replaceLegacy = true;
+			fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+				if (replaceLegacy && path.resolve(String(args[0])) === scenario.legacyPath) {
+					replaceLegacy = false;
+					writeFileSync(
+						scenario.canonicalPath,
+						JSON.stringify(config(`replacement-${scenario.name}`)),
+					);
+					unlinkSync(scenario.legacyPath);
+				}
+				return originalReadFileSync(...args);
+			}) as typeof fs.readFileSync;
+			syncBuiltinESMExports();
+			try {
+				assert.equal(scenario.load().servers[0]?.name, `replacement-${scenario.name}`);
+				assert.match(consumeLspConfigNotice() ?? "", /ignored.*created concurrently/i);
+			} finally {
+				fs.readFileSync = originalReadFileSync;
+				syncBuiltinESMExports();
+			}
 		}
 	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("LSP config treats files removed during a read as missing", () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-lsp-config-removal-race-"));
+	const agentDir = path.join(root, "agent");
+	const project = path.join(root, "project");
+	mkdirSync(agentDir);
+	mkdirSync(project);
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	const canonicalPath = path.join(agentDir, "pi-lsp.json");
+	const legacyPath = path.join(agentDir, "lsp.json");
+	const config = (name: string) => ({
+		servers: { [name]: { command: [name], extensions: [`.${name}`] } },
+	});
+	const originalReadFileSync = fs.readFileSync;
+	const removeDuringRead = (filePath: string) => {
+		let removeFile = true;
+		fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+			if (removeFile && path.resolve(String(args[0])) === filePath) {
+				removeFile = false;
+				unlinkSync(filePath);
+			}
+			return originalReadFileSync(...args);
+		}) as typeof fs.readFileSync;
+		syncBuiltinESMExports();
+	};
+	try {
+		writeFileSync(canonicalPath, JSON.stringify(config("canonical")));
+		writeFileSync(legacyPath, JSON.stringify(config("legacy")));
+		removeDuringRead(canonicalPath);
+		assert.equal(loadConfig(project).servers[0]?.name, "legacy");
+		assert.match(consumeLspConfigNotice() ?? "", /using legacy lsp\.json/i);
+
+		fs.readFileSync = originalReadFileSync;
+		syncBuiltinESMExports();
+		removeDuringRead(legacyPath);
+		const fallback = loadConfig(project);
+		assert.equal(fallback.servers[0]?.name, "biome");
+		assert.equal(fallback.servers[0]?.isDefault, true);
+	} finally {
+		fs.readFileSync = originalReadFileSync;
+		syncBuiltinESMExports();
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		rmSync(root, { recursive: true, force: true });
