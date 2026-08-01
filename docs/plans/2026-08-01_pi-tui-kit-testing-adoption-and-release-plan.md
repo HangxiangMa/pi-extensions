@@ -393,10 +393,14 @@ components rather than approximating behavior.
   root tests pass; package/boundary checks, zero LSP findings, and eight-file dry pack pass; real Pi
   0.83 at 9 terminal rows reports loaded append with exact editor text, Back, and Close, while supported
   harness flows cover selected-question/scope restoration, 5/9/14-row resize, and exact completion.
-- [ ] Audit and merge the BTW PR after CI, then stop before all version-bump and publication actions.
-  Present the unused target (expected `0.42.1`), merged commit, exact checks, tarball/dependency state,
-  and registry recovery instructions so the user can perform the GitHub release action. After the user
-  publishes, verify registry dependency/install/load state without triggering another release.
+- [x] Audit and merge the BTW PR after CI, then stop before all version-bump and publication actions.
+  Evidence: PR #494 merged as `deb3c93` after CI and all CodeQL checks passed; local/main are clean and
+  synchronized. Pinned-npm simulation derives unused `0.42.1`, creates a canonical release commit/tag,
+  and selects only `@narumitw/pi-btw@0.42.1`. The user received the exact **Bump version** workflow,
+  `main`, and `patch` inputs; the agent did not dispatch either workflow.
+- [ ] After the user performs the GitHub release action, verify the bump/tag and tag-triggered publish
+  runs, then verify registry dependency, peers, integrity/provenance, and clean-fixture Pi loading
+  without triggering another release. On failure, inventory existing registry bytes before recovery.
 - [x] Update the roadmap with the final BTW gate result, source/publication split, final regression
   count, and any separately scoped testing-adoption follow-ups; verify no Phase 4 work is claimed
   complete. Evidence: Phase 2 now records published `0.42.0`; Phase 3 marks the gate go and migration
@@ -429,8 +433,9 @@ components rather than approximating behavior.
 - [ ] The BTW gate has a durable go/no-go result covering editor preservation, selection restoration,
   exact text selection, adaptive review, Back/Close, cancellation, replacement, and width/height
   bounds; a successful migration is merged and published on a compatible Kit range.
-- [ ] The roadmap accurately distinguishes completed test adoption, published Kit state, retained root
-  support, BTW outcome, other-extension follow-ups, and still-open Phase 4 work.
+- [x] The roadmap accurately distinguishes completed test adoption, published Kit state, retained root
+  support, BTW source-migration outcome and user-owned publication, other-extension follow-ups, and
+  still-open Phase 4 work.
 - [ ] All focused tests, package checks, LSP diagnostics, root `npm run check`, relevant pack dry runs,
   generated-package/registry smokes, CI checks, release workflows, and npm verification pass or have an
   explicitly accepted, recorded alternative.
