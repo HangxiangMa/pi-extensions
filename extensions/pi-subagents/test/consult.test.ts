@@ -108,6 +108,66 @@ test("subagent_consult registers a strict actionless single-agent schema", async
 	await assert.rejects(() => execute(tool, { agent: "worker" }), /requires task/);
 });
 
+test("subagent_consult reports actionable available agents before launching a child", async () => {
+	const { tool, requests } = setup();
+	await assert.rejects(
+		() => execute(tool, { agent: "tester-one", task: "inspect" }),
+		(error: unknown) => {
+			assert.ok(error instanceof Error);
+			assert.match(error.message, /Unknown subagent definition: tester-one/);
+			assert.match(error.message, /Available agents for agentScope "user":/);
+			assert.match(error.message, /scout \(built-in\)/);
+			assert.match(error.message, /reviewer \(built-in\)/);
+			return true;
+		},
+	);
+	assert.equal(requests.length, 0);
+});
+
+test("subagent_consult bounds unknown-agent recovery metadata", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-consult-agent-error-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = path.join(root, "agent-home");
+	const agentsDir = path.join(process.env.PI_CODING_AGENT_DIR, "agents");
+	mkdirSync(agentsDir, { recursive: true });
+	try {
+		for (let index = 0; index < 40; index += 1) {
+			const name =
+				index === 0 ? `custom-${"x".repeat(300)}` : `custom-${String(index).padStart(2, "0")}`;
+			writeFileSync(
+				path.join(agentsDir, `${String(index).padStart(2, "0")}.md`),
+				`---\nname: ${name}\ndescription: Agent ${index}\n---\nInspect only.`,
+			);
+		}
+		const { tool, requests } = setup();
+		let message = "";
+		await assert.rejects(
+			() => execute(tool, { agent: "missing", task: "inspect" }),
+			(error: unknown) => {
+				assert.ok(error instanceof Error);
+				message = error.message;
+				return true;
+			},
+		);
+		assert.equal(requests.length, 0);
+		assert.ok(Buffer.byteLength(message, "utf8") <= 6 * 1024);
+		assert.doesNotMatch(message, /x{200}/);
+		assert.match(message, /14 additional agent definitions? omitted/);
+
+		rmSync(agentsDir, { recursive: true, force: true });
+		writeFileSync(agentsDir, "not a directory");
+		await assert.rejects(
+			() => execute(tool, { agent: "still-missing", task: "inspect" }),
+			/Agent metadata discovery was incomplete/,
+		);
+		assert.equal(requests.length, 0);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("subagent_consult rejects unsafe CLI-bound tasks and timer overflow before launch", async () => {
 	for (const [params, expected] of [
 		[{ agent: "worker", task: "界".repeat(20_000) }, /UTF-8 bytes/i],
