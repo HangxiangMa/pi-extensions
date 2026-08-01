@@ -259,23 +259,30 @@ components rather than approximating behavior.
   byte-for-byte unchanged. Evidence: all 42 focused tests pass; the 30-file package check/typecheck and
   both web checks pass; LSP reports zero diagnostics; root check passes all 1,937 tests; source,
   generated web assets, package metadata, and lockfile have no diff.
-- [ ] Audit the Image Drop diff, update this plan with evidence, open a focused PR, and merge only after
+- [x] Audit the Image Drop diff, update this plan with evidence, open a focused PR, and merge only after
   CI passes; verify the merged PR changes tests/plan evidence only and preserves settings,
-  persistence, server, browser, and runtime behavior.
+  persistence, server, browser, and runtime behavior. Evidence: PR #489 merged as `4d014d2` after CI
+  and all CodeQL checks passed; its three-file diff is limited to two tests and plan evidence, with no
+  production, settings, server/browser, manifest, generated asset, or lockfile change.
 
 ### 4. Apply the deletion test and update the roadmap
 
-- [ ] Re-run the repository-wide helper inventory after both consumer PRs; verify Stamp and Image Drop
+- [x] Re-run the repository-wide helper inventory after both consumer PRs; verify Stamp and Image Drop
   no longer import `createCustomSelectorHarness()` for the migrated Kit flows and list every remaining
-  owner by category.
-- [ ] Remove only root helper functions, branches, imports, or marker-based Kit automation with zero
-  remaining consumers; if no safe deletion exists, mark this item complete as not applicable with the
-  exact retained owners and do not manufacture a cleanup diff. Verify any deletion with focused
-  affected tests and root `npm run check`.
-- [ ] Update `docs/roadmaps/pi-tui-kit-roadmap.md` to mark Stamp/Image Drop supported-host adoption
+  owner by category. Evidence: neither named consumer has a direct import; 75 references remain in 19
+  files across Kit tests, active specialized/standard extension tests, one experiment, one deprecated
+  package, and root support, while nine files still use `driveCustomSelector`.
+- [x] Not applicable: remove root helper functions, branches, imports, or marker-based Kit automation.
+  `selectedKitRow`, the marker probe, `createCustomSelectorHarness`, and `driveCustomSelector` all
+  retain direct owners after the named migrations; deleting or reshaping them would broaden this
+  milestone into unrelated consumers. The green 1,937-test gates on both migration PRs prove retention
+  without manufacturing a cleanup diff.
+- [x] Update `docs/roadmaps/pi-tui-kit-roadmap.md` to mark Stamp/Image Drop supported-host adoption
   complete, state the bounded root-support result, keep unrelated consumer migrations and the BTW
   gate explicit, and record the new regression count; verify roadmap claims against merged files and
-  test output.
+  test output. Evidence: Phase 3 and its success metric now mark named adoption complete, explicitly
+  retain inventoried root owners, keep BTW/release open, record the two-consumer decision, and retain
+  the verified 1,937-test regression count.
 - [ ] Open and merge a cleanup/roadmap PR only when it contains a real independently reviewable
   deletion or canonical roadmap update; verify CI passes and `main` is clean before release preflight.
 
@@ -354,13 +361,14 @@ components rather than approximating behavior.
 
 ## Completion Checklist
 
-- [ ] Stamp's representative TUI and RPC menu tests use `@narumitw/pi-tui-kit/testing` without changing
+- [x] Stamp's representative TUI and RPC menu tests use `@narumitw/pi-tui-kit/testing` without changing
   Stamp production source, package metadata, settings behavior, or results.
-- [ ] Image Drop's representative loader, confirmation, and rejected-input/review tests use the
+- [x] Image Drop's representative loader, confirmation, and rejected-input/review tests use the
   supported testing seam without changing production or generated web assets; RPC is explicitly not
   applicable because the command rejects non-TUI modes before opening any dialog.
-- [ ] Root test-support cleanup is evidence-based: only zero-consumer Kit automation is removed, and
-  retained specialized/general fixtures have named owners and follow-up scope.
+- [x] Root test-support cleanup is evidence-based: only zero-consumer Kit automation is removed, and
+  retained specialized/general fixtures have named owners and follow-up scope. No candidate reached
+  zero consumers, so retention is the verified bounded outcome.
 - [ ] The shared minor release is canonical, all selected GitHub checks pass, and every selected npm
   package/version is visible and installable with no partial-publication ambiguity.
 - [ ] Registry `@narumitw/pi-tui-kit` exposes menu API version 5 plus production and `/testing` roots;

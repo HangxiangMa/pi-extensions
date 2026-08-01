@@ -192,8 +192,8 @@ three-way confirmation and preview composition.
 
 ### Phase 3: Adaptive Review and Supported Testability
 
-**Status:** Adaptive review and the [supported testing entrypoint][supported-testing-plan] are
-complete in repository source; Stamp/Image Drop test-host adoption, the BTW gate/migration, and npm
+**Status:** Adaptive review, the [supported testing entrypoint][supported-testing-plan], and named
+Stamp/Image Drop test-host adoption are complete in repository source; the BTW gate/migration and npm
 release remain open.
 
 **Milestones:**
@@ -204,8 +204,10 @@ release remain open.
   including wrapped headers, position indicators, resize, and scroll-offset clamping.
 - [x] A separate `@narumitw/pi-tui-kit/testing` entry point drives real TUI components and RPC dialogs
   through focus, text input, key events, rejected retries, pending actions, disposal, and owner abort.
-- [ ] Stamp and Image Drop consumer tests use the supported test host, allowing equivalent generic
-  input orchestration to leave repository-level `test/support.ts`.
+- [x] Stamp and Image Drop representative menu/input tests use the supported test host. Their direct
+  ad hoc Kit drivers are gone; repository-level `test/support.ts` remains for explicitly inventoried
+  Kit, specialized-component, experimental, and deprecated test owners rather than being deleted
+  prematurely.
 - [ ] The BTW review gate is rerun against close reasons and adaptive viewport; migration proceeds only
   if editor-preservation and restored-selection invariants also remain explicit and testable.
 
@@ -293,7 +295,7 @@ abstractions when Pi provides a better stable owner.
 | Pi private `dist/*` imports in kit source | 0 | Remain 0 | Every phase; boundary check and source search |
 | Ordinary `runMenu()` close outcomes visible to callers | Published API 3 collapses Back and Close | Repository API 4 distinguishes root Back and explicit Close | Phase 2 complete in source; runtime TUI/RPC matrix |
 | Review TUI viewport policy | Published API 3 is fixed, default 14 rows | Repository API 5 provides opt-in adaptive sizing within the live terminal budget | Adaptive source milestone complete; review component and built-package smokes |
-| Reusable consumer input-host logic | Generic behavior added to repository `test/support.ts` | Supported `/testing` source is complete; Stamp and Image Drop adoption remains | Phase 3; package and consumer diffs/tests |
+| Reusable consumer input-host logic | Generic behavior added to repository `test/support.ts` | Supported `/testing` source plus Stamp and Image Drop adoption are complete; retained root owners are inventoried | Phase 3; package and consumer diffs/tests |
 | Proof for each new public flow | Two compatible consumers by default; exceptions require recorded evidence | Two completed proof migrations or an explicit no-go/deferral | Every expansion phase; archived plans and PRs |
 | Lifecycle verification | Existing deterministic package and consumer coverage | Every admitted contract covers TUI/RPC, cancellation, disposal, owner abort, stale state, and failure | Every phase; package and repository gates |
 | Runtime action/lifecycle ownership | TUI and RPC loops coordinate screen actions in separate branches | If the driver is admitted, one coordinator owns shared action and lifecycle policy | Phase 4; source diff plus behavior matrix |
@@ -340,3 +342,4 @@ and adoption rather than calendar output.
 | 2026-08-01 | Implement mandatory `RunMenuResult.closed.reason` and raise repository menu API to version 4. | The navigator already owns root Back versus Close; exposing that reason removes a proven composition blocker while leaving domain completion values local. Publication remains a separate workflow. |
 | 2026-08-01 | Implement opt-in adaptive review and raise repository menu API to version 5. | Live public TUI rows now bound complete review frames while fixed/default TUI output and deterministic RPC pages remain unchanged; the testing entry point, BTW gate/migration, and package release remain separate work. |
 | 2026-08-01 | Add the supported `@narumitw/pi-tui-kit/testing` subpath without changing production exports or menu API version. | Semantic TUI driving and strict input/select RPC scripts concentrate demonstrated test-host policy without exposing components or absorbing consumer context/domain mocks; adoption and release remain separate. |
+| 2026-08-01 | Adopt the supported testing subpath in Stamp and Image Drop before publication. | Two real consumers now prove sequential TUI screens, rejected input, pending drains, strict RPC where supported, loader cancellation, and three-way confirmation; broad root support remains only for its other inventoried owners. |
