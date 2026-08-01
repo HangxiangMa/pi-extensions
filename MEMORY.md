@@ -29,6 +29,7 @@
 - Keep pi-lsp Docker profiles synchronized with production initialization as well as diagnostics policy; compare their commands against Linux launchers rather than host-evaluated platform wrappers.
 - pi-statusline owns footer rendering and its `/statusline` settings command; keep it out of prompt interception.
 - Symptom: a pi-starship module's configured `$symbol` disappears when an optional value is absent. Cause: module values override the renderer-provided symbol. Fix: keep `$symbol` standard and make optional labels conditional in the default format.
+- Pi-starship periodic workspace refreshes that retain module values must also retain separately stored private style selectors, or state-selected styles silently revert.
 - Symptom: an idle optional statusline segment leaves a blank multiline row. Cause: filtering the segment while preserving both adjacent `line_break` entries. Fix: group configured rows first, drop only dynamically empty rows, then flatten while preserving explicitly empty rows.
 - Model IDs can come from llama.cpp paths or custom providers and become terminal text; strip OSC, CSI, C0, and C1 sequences at the display boundary—including C1 string terminators—without mutating the runtime ID.
 - In Pi extensions, do not call action methods such as `getThinkingLevel()` during the factory load; defer them to `session_start` or later handlers.

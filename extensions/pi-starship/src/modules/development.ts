@@ -43,7 +43,7 @@ export const direnvModule = developmentModule({
 	variables: ["rc_path", "allowed", "loaded"],
 	format: "[$symbol$loaded]($style) ",
 	symbol: "direnv ",
-	style: "bold 208",
+	style: "bold bright-yellow",
 	options: directDetection,
 });
 

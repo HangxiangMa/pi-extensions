@@ -1,3 +1,4 @@
+import { resolveDisplayStyle } from "./display.js";
 import { defineModule } from "./types.js";
 
 export const costModule = defineModule({
@@ -6,8 +7,18 @@ export const costModule = defineModule({
 	defaults: {
 		format: "[ $symbol \\$$cost( $subscription) ]($style)",
 		symbol: "💸",
-		style: "fg:meter_fg bg:meter",
+		style: "none",
 		disabled: false,
+	},
+	displayDefaults: [
+		{ threshold: 0, style: "bold green", hidden: true },
+		{ threshold: 1, style: "bold yellow", hidden: false },
+		{ threshold: 5, style: "bold red", hidden: false },
+	],
+	styleVariables: ["style"],
+	resolveStyleVariables: ({ runtime, display }) => {
+		const style = resolveDisplayStyle(display, runtime.tokenTotals.cost);
+		return style === undefined ? undefined : { style };
 	},
 	values: ({ runtime }) => ({
 		cost: formatCost(runtime.tokenTotals.cost),

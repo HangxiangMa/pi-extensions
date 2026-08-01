@@ -58,4 +58,6 @@ export interface CollectorContext {
 	needs(name: ModuleName, variable?: string): boolean;
 }
 
+export const PRIVATE_STYLE_SELECTOR = "__pi_style_selector";
+
 export type MutableModuleSnapshot = Record<string, Record<string, string>>;

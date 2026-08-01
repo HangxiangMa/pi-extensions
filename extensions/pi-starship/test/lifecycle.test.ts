@@ -39,6 +39,12 @@ function piStarship(pi: Parameters<typeof piStarshipRuntime>[0]) {
 	});
 }
 
+function useLifecycleConfig(t: { after(callback: () => void): void }, rawDocument: string) {
+	const path = join(lifecycleAgentDir, "pi-starship.toml");
+	writeFileSync(path, rawDocument);
+	t.after(() => rmSync(path, { force: true }));
+}
+
 type FooterFactory = (
 	tui: { requestRender(): void },
 	theme: unknown,
@@ -126,7 +132,8 @@ test("unreachable and disabled native PR modules execute no gh command", async (
 	}
 });
 
-test("native PR refresh clears branch state, aborts stale work, and stops on footer disposal", async () => {
+test("native PR refresh clears branch state, aborts stale work, and stops on footer disposal", async (t) => {
+	useLifecycleConfig(t, "format = '$github_pr'\n");
 	const mock = createMockPi();
 	const stale = deferred<ExecResult>();
 	const fresh = deferred<ExecResult>();
@@ -203,6 +210,7 @@ test("accepted settings disable and re-enable native PR refresh immediately", as
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = root;
 	try {
+		writeFileSync(join(root, "pi-starship.toml"), "format = '$github_pr'\n");
 		const mock = createMockPi();
 		const stale = deferred<ExecResult>();
 		const prSignals: AbortSignal[] = [];
@@ -299,7 +307,8 @@ test("session replacement cancels an awaited settings edit before saving or appl
 	}
 });
 
-test("same-cwd session replacement aborts and rejects stale native PR publication", async () => {
+test("same-cwd session replacement aborts and rejects stale native PR publication", async (t) => {
+	useLifecycleConfig(t, "format = '$github_pr'\n");
 	const mock = createMockPi();
 	const oldResult = deferred<ExecResult>();
 	const newResult = deferred<ExecResult>();
@@ -373,6 +382,7 @@ test("same-cwd session replacement aborts and rejects stale native PR publicatio
 });
 
 test("reachable native PR refresh uses its own 60-second fallback", async (t) => {
+	useLifecycleConfig(t, "format = '$github_pr'\n");
 	t.mock.timers.enable({ apis: ["setInterval"] });
 	const mock = createMockPi();
 	let prCalls = 0;
@@ -410,6 +420,7 @@ test("reachable native PR refresh uses its own 60-second fallback", async (t) =>
 });
 
 test("terminal native PR snapshots clear at their lifecycle expiry", async (t) => {
+	useLifecycleConfig(t, "format = '$github_pr'\n");
 	t.mock.timers.enable({ apis: ["setTimeout"] });
 	let now = Date.parse("2026-08-01T12:00:00.000Z");
 	t.mock.method(Date, "now", () => now);
@@ -449,6 +460,7 @@ test("terminal native PR snapshots clear at their lifecycle expiry", async (t) =
 });
 
 test("terminal native PR expiry revalidates the wall clock before clearing", async (t) => {
+	useLifecycleConfig(t, "format = '$github_pr'\n");
 	t.mock.timers.enable({ apis: ["setTimeout"] });
 	let now = Date.parse("2026-08-01T12:00:00.000Z");
 	t.mock.method(Date, "now", () => now);
@@ -543,7 +555,7 @@ test("TUI footer uses all-entry usage totals and marks subscription-backed cost"
 	try {
 		writeFileSync(
 			join(root, "pi-starship.toml"),
-			"format = '$cache$tokens$cost'\n\n[cache]\ndisabled = false\nformat = 'R$read W$write CH$rate '\n",
+			"format = '$cache$tokens$cost'\n\n[cache]\ndisabled = false\nformat = 'R$read W$write CH$rate '\n\n[[cost.display]]\nthreshold = 0\nstyle = 'bold yellow'\nhidden = false\n",
 		);
 		const makeUsage = (
 			input: number,
@@ -620,7 +632,8 @@ test("TUI footer uses all-entry usage totals and marks subscription-backed cost"
 	}
 });
 
-test("TUI footer renders cached state and parallel tool activity without executing during render", async () => {
+test("TUI footer renders cached state and parallel tool activity without executing during render", async (t) => {
+	useLifecycleConfig(t, "format = '$git_worktree$git_status$activity'\n");
 	const mock = createMockPi({ thinkingLevel: "high" });
 	let calls = 0;
 	let worktreeCalls = 0;
@@ -725,7 +738,8 @@ test("stale Git results from a replaced session cannot overwrite the new footer"
 	await emit(mock.events, "session_shutdown", {}, newContext.ctx);
 });
 
-test("stale worktree identity from a replaced session cannot overwrite the new footer", async () => {
+test("stale worktree identity from a replaced session cannot overwrite the new footer", async (t) => {
+	useLifecycleConfig(t, "format = '$git_worktree'\n");
 	const mock = createMockPi();
 	const oldWorktree = deferred<ExecResult>();
 	const newWorktree = deferred<ExecResult>();

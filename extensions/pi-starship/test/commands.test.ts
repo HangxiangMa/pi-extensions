@@ -511,7 +511,8 @@ test("Advanced restore previews, confirms, and atomically applies the built-in f
 		});
 		await mock.commands.get("starship")?.handler("", context.ctx);
 		assert.match(restorePreview, /Restore preview/u);
-		assert.match(restorePreview, /░▒▓/u);
+		assert.match(restorePreview, /\$brand\$model/u);
+		assert.doesNotMatch(restorePreview, /░▒▓|/u);
 		assert.equal(applied, 1);
 		assert.equal(readFileSync(path, "utf8"), BUILT_IN_EXAMPLE);
 	} finally {

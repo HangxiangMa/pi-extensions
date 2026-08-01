@@ -7,7 +7,7 @@ export const cacheModule = defineModule({
 	defaults: {
 		format: "[$symbol (CH$rate )]($style)",
 		symbol: "📦",
-		style: "fg:runtime_fg bg:runtime",
+		style: "bold green",
 		disabled: true,
 	},
 	values: ({ runtime }) => {

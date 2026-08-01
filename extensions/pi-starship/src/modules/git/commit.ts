@@ -8,7 +8,7 @@ export const gitCommitModule = defineModule({
 	defaults: {
 		format: "[ ($hash) ]($style)",
 		symbol: "",
-		style: "fg:git_fg bg:git",
+		style: "green bold",
 		disabled: false,
 	},
 	values: ({ runtime }) => {

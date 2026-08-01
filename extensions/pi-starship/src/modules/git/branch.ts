@@ -6,7 +6,7 @@ export const gitBranchModule = defineModule({
 	defaults: {
 		format: "[ $symbol $branch ]($style)",
 		symbol: "🌿",
-		style: "fg:git_fg bg:git",
+		style: "bold purple",
 		disabled: false,
 	},
 	values: ({ runtime }) => {

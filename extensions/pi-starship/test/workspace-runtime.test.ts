@@ -433,6 +433,11 @@ test("execution context rules are fixture-driven and sanitize terminal metadata"
 	});
 	assert.equal(snapshot.modules.hostname?.hostname, "builder");
 	assert.equal(snapshot.modules.username?.user, "root");
+	assert.equal(snapshot.styleSelectors?.username, "root");
+	assert.equal(
+		Object.keys(snapshot.modules.username ?? {}).some((key) => key.startsWith("__")),
+		false,
+	);
 	assert.equal(snapshot.modules.container?.name, "Dev Container");
 	assert.equal(JSON.stringify(snapshot).includes(String.fromCharCode(27)), false);
 	assert.equal(JSON.stringify(snapshot).includes(String.fromCharCode(7)), false);
@@ -471,6 +476,7 @@ test("execution fixtures cover macOS, Windows, WSL, Docker, Podman, and contextu
 	const windows = await run("win32", {}, "Administrator");
 	assert.equal(windows.modules.os?.type, "windows");
 	assert.equal(windows.modules.username?.user, "Administrator");
+	assert.equal(windows.styleSelectors?.username, "root");
 	const wsl = await run("linux", { WSL_DISTRO_NAME: "Ubuntu" }, "developer");
 	assert.equal(wsl.modules.os?.type, "wsl");
 	assert.equal(wsl.modules.container?.type, "wsl");
@@ -754,12 +760,14 @@ test("ordinary local identity stays hidden and periodic refresh retains executio
 	});
 	assert.equal(contextual.modules.hostname?.hostname, "local");
 	assert.equal(contextual.modules.username?.user, "developer");
+	assert.equal(contextual.styleSelectors?.username, "user");
 	const periodic = await collectWorkspaceSnapshot({
 		...base,
 		reason: "periodic",
 		previous: contextual,
 	});
 	assert.deepEqual(periodic.modules, contextual.modules);
+	assert.deepEqual(periodic.styleSelectors, contextual.styleSelectors);
 });
 
 test("gcloud selector cannot escape its configuration directory", async () => {

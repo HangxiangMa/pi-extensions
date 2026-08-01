@@ -6,7 +6,7 @@ export const fillModule = defineModule({
 	defaults: {
 		format: "[$symbol]($style)",
 		symbol: " ",
-		style: "none",
+		style: "bold black",
 		disabled: false,
 	},
 	layout: "fill",

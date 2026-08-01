@@ -6,7 +6,7 @@ export const providerModule = defineModule({
 	defaults: {
 		format: "[$symbol $provider ]($style)",
 		symbol: "🔌",
-		style: "fg:header_fg bg:header",
+		style: "bold blue",
 		disabled: false,
 	},
 	values: ({ runtime }) => (runtime.model ? { provider: runtime.model.provider } : undefined),

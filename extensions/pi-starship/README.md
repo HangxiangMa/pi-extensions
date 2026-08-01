@@ -8,8 +8,8 @@ A native Pi footer configured with Starship-style TOML. It parses and renders fo
 
 ## ✨ Features
 
-- Uses a readable built-in Tokyo Night configuration until the user explicitly saves settings.
-- Starship-style root/module formats, conditional groups, `$all`, styles, and palettes.
+- Uses a readable, palette-free Starship-style built-in configuration until settings are saved.
+- Starship-style root/module formats, conditional groups, `$all`, styles, and opt-in palettes.
 - Pi modules for model, thinking, activity, context, tokens, prompt cache, cost, turn, and extension statuses.
 - Cached Git branch, commit, operation state, line metrics, detailed status, and linked-worktree identity.
 - Native current-branch GitHub pull request links, checks, review state, and terminal-state retention.
@@ -41,7 +41,11 @@ The only configuration source is:
 <getAgentDir()>/pi-starship.toml
 ```
 
-When this file is absent, the extension uses its readable Tokyo Night default without creating the file or parent directory. The first successful settings save creates it atomically. Existing malformed documents are never overwritten.
+When this file is absent, the extension uses its readable palette-free default without creating the
+file or parent directory. The built-in root is the explicit sequence `$brand$model$thinking$directory`
+`$git_branch$git_status$activity$context$time`; it does not start the opt-in GitHub PR query. The first
+successful settings save creates the file atomically. Existing malformed documents are never
+overwritten.
 
 The extension does **not** read project overrides, `pi-statusline.json`, `PI_STATUSLINE_PRESET`, or `~/.config/starship.toml`, and does not migrate statusline settings.
 
@@ -60,65 +64,72 @@ shows the specialized width-aware preview and requires explicit overwrite confir
 ### 📝 Example
 
 ```toml
-format = "$brand$provider$model$thinking\n$directory$git_branch$github_pr$git_status\n$activity$context$tokens$cache$cost$time$turn\n$extension_status"
-palette = "tokyo-night"
-
-[palettes.tokyo-night]
-header = "#7aa2f7"
-header_fg = "#1a1b26"
-custom = "208"
+format = """
+$brand\
+$model\
+$thinking\
+$directory\
+$git_branch\
+$git_status\
+$activity\
+$context\
+$time"""
 
 [model]
 format = "[ $symbol$model ]($style)"
 symbol = "◆ "
-style = "bold fg:header_fg bg:header"
-disabled = false
+style = "bold blue"
 truncation_length = 36
 truncation_symbol = "…"
 truncation_direction = "middle"
 
-[activity]
-format = "([ $text ]($style))"
-style = "fg:custom"
+[directory]
+style = "cyan bold"
+
+[git_branch]
+style = "bold purple"
 
 [context]
 format = "[$symbol $percentage/$window ]($style)"
 
-[cache]
-format = "[$symbol (R$read )(W$write )(CH$rate )]($style)"
+[[context.display]]
+threshold = 0
+style = "bold green"
+hidden = true
+
+[[context.display]]
+threshold = 30
+style = "bold green"
+hidden = false
+
+[[context.display]]
+threshold = 60
+style = "bold yellow"
+hidden = false
+
+[[context.display]]
+threshold = 80
+style = "bold red"
+hidden = false
+
+[git_metrics]
+added_style = "bold green"
+deleted_style = "bold red"
 disabled = false
 
-[cost]
-format = "[ $symbol \\$$cost( $subscription) ]($style)"
-
-[git_branch]
-format = "[ $symbol $branch ]($style)"
-
-[github_pr]
-format = "[ $symbol$link( · $status) ]($style)"
-symbol = "PR "
-style = "fg:git_fg bg:git"
-disabled = false
-
-[package]
-version_format = "v$raw"
-
-[nodejs]
-detect_files = ["package.json", "!deno.json"]
-detect_extensions = ["js", "ts"]
-
-[hostname]
-ssh_only = true
-trim_at = "."
-aliases = { "build.example.test" = "builder" }
+[username]
+style_user = "yellow bold"
+style_root = "red bold"
 
 [extension_status]
 format = "([$statuses ]($style))"
 icons = { "foo:*" = "🧪", "third_party/key" = "◎", fallback = "•" }
 ```
 
-All module tables support `format`, `symbol`, `style`, and `disabled`. Module-specific
-options are catalog-owned, type-checked, and listed below; unknown options warn and stay inactive.
+Every module table supports `format`, `symbol`, and `disabled`. Most modules also support one `style`.
+The exceptions are `git_metrics` (`added_style` and `deleted_style`), `username` (`style_user` and
+`style_root`), and the threshold-selected `context` and `cost` `display` arrays described below.
+Module-specific options are catalog-owned and type-checked; unknown options warn and stay inactive.
 Version formats replace `$raw`. Detection arrays replace defaults when non-empty and inspect only one
 listing of the current directory. A leading `!` is supported by language detection arrays and rejects
 a matching project.
@@ -155,11 +166,91 @@ Style expressions support:
 - Hex RGB (`#7aa2f7`).
 - `fg:<color>` and `bg:<color>`; an unprefixed color is foreground.
 - `bold`, `dimmed`, `italic`, `underline`, `blink`, `inverted`, `hidden`, and `strikethrough`.
-- `none`, `fg:none`, and `bg:none`.
-- `prev_fg` and `prev_bg` to inherit the previous rendered chunk's colors.
-- Color names from the active `[palettes.<name>]` table. The active palette overlays the built-in Tokyo Night colors so the default module styles remain available.
+- `none` and `fg:none`, which make the complete expression unstyled regardless of position.
+- `bg:none`, which clears only the absolute background; an unknown `bg:<value>` has the same
+  Starship-compatible reset behavior.
+- `prev_fg` and `prev_bg`, which use the previous rendered chunk's colors when present and retain any
+  absolute foreground/background in the expression as the no-previous fallback.
+- Direct color names from one explicitly selected `[palettes.<name>]` table.
 
-An invalid root format falls back to the built-in root format. An invalid module format or style falls back only for that module. `/starship status` reports warnings.
+There is no built-in or fallback palette. A custom palette is active only when its table is explicitly
+selected, and its values must be direct named, ANSI, or RGB colors—palette entries cannot reference
+other entries. Palette names override terminal color names such as `blue`:
+
+```toml
+palette = "company"
+
+[palettes.company]
+blue = "#86BBD8"
+accent = "208"
+
+[model]
+style = "bold blue"
+```
+
+Style tokens are case-insensitive and ordinary foreground/background colors are last-wins.
+`prev_fg`/`prev_bg` override their absolute fallback only when a previous chunk exists. Empty styled
+groups still advance previous-color state. Invalid literal style expressions warn and render
+unstyled. An invalid root format falls back to the built-in root format; an invalid module format or
+catalog-owned style field falls back only at that field's module scope. `/starship status` reports
+warnings.
+
+The background-free direct defaults are: `brand = "bold white"`, `provider`/`model` = `"bold blue"`,
+`thinking`/`git_branch`/`turn` = `"bold purple"`, `directory`/`git_worktree` = `"cyan bold"`,
+`github_pr = "bold blue"`, `git_commit = "green bold"`, `git_state`/`activity`/`time` =
+`"bold yellow"`, `git_status = "red bold"`, `tokens = "bold cyan"`, `cache = "bold green"`,
+`extension_status = "dimmed white"`, `direnv = "bold bright-yellow"`, and `fill = "bold black"`.
+Context, cost, Git metrics, and username use the state/multi-style defaults below.
+
+### State-selected styles
+
+`context` and `cost` select the last entry at the highest threshold less than or equal to the current
+value. A later entry wins when thresholds are equal. Each display entry requires a finite `threshold`,
+a valid `style`, and boolean `hidden`. Invalid entries warn and are ignored; module defaults are used
+if none remain.
+
+The default context thresholds are hidden at `0`, `bold green` at `30`, `bold yellow` at `60`, and
+`bold red` at `80`. The default cost thresholds are hidden at `0`, `bold yellow` at `1`, and `bold red`
+at `5`:
+
+```toml
+[[cost.display]]
+threshold = 0
+style = "bold green"
+hidden = true
+
+[[cost.display]]
+threshold = 1
+style = "bold yellow"
+hidden = false
+
+[[cost.display]]
+threshold = 5
+style = "bold red"
+hidden = false
+```
+
+`git_metrics` exposes `$added_style` and `$deleted_style` in its module format. `username` still uses
+`$style` in its format, but selects `style_user` or `style_root` from private execution metadata; the
+selector is not a format variable.
+
+### Breaking palette migration
+
+The previous implicit `tokyo-night` palette and its `lead`, `header`, `header_fg`, `directory`,
+`directory_fg`, `git`, `git_fg`, `runtime`, `runtime_fg`, `meter`, `meter_fg`, and `extension` aliases
+were removed. Existing files are not rewritten. Old alias-based module styles warn and fall back to
+the module's new direct-color default; alias-based literal Powerline groups warn and render unstyled.
+
+Choose one migration:
+
+1. Replace old aliases with direct styles such as `cyan bold`, `bold bright-yellow`, or
+   `fg:#e3e5e5 bg:#769ff0`.
+2. Define every needed alias under your own `[palettes.<name>]` table and explicitly select it with
+   `palette = "<name>"`.
+3. Use **Advanced → Restore built-in** to preview and replace the document with the new plain
+   nine-module configuration.
+
+There is no hidden compatibility overlay or automatic migration.
 
 ## 🧱 Modules
 
@@ -218,11 +309,10 @@ An invalid root format falls back to the built-in root format. An invalid module
 - Cache `$read` and `$write` are cumulative. `$rate` uses only the latest assistant prompt:
   `cacheRead / (input + cacheRead + cacheWrite) * 100`. The module is empty when Pi has reported no
   cache reads or writes.
-- `cache` is disabled by default, but the built-in root format already contains `$cache`; users who
-  inherit that format can enable it with only `[cache] disabled = false`. A custom root format must
-  reference `$cache` or `$all` normally.
-- Context `$percentage` uses native one-decimal precision. For a native-style display, use
-  `format = "[$symbol $percentage/$window ]($style)"` under `[context]`; the module name remains
+- `cache` is disabled and absent from the built-in root. Enable it and add `$cache` to a custom root
+  format (or use `$all`) to display it.
+- Context `$percentage` uses native one-decimal precision. Its default display hides values below 30%;
+  customize `[[context.display]]` when lower values should remain visible. The module name remains
   `context`, not `context_usage`.
 - Subscription-backed OAuth models and `kimi-coding` set cost `$subscription` to `(sub)`. The dollar
   value is usage cost, not proof of an amount billed under a subscription.
@@ -309,8 +399,10 @@ disable or remove that extension when adopting the native module to avoid duplic
 
 ### 📦 Package and language modules
 
-The native behavior is inspired by Starship pinned at
-`9f4d07ed45804e280d6884bb8ced7ea3d3033093`; it is not complete Starship compatibility.
+Module behavior is inspired by Starship pinned at
+`9f4d07ed45804e280d6884bb8ced7ea3d3033093`; formatter style semantics and the approved
+multi/state-style surfaces are aligned with the checked-in Starship source at `cad50cd8`. This is not
+complete Starship module or configuration compatibility.
 
 | Area | Adopted | Adapted | Intentionally omitted |
 | --- | --- | --- | --- |

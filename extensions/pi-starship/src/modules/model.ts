@@ -10,7 +10,7 @@ export const modelModule = defineModule({
 	defaults: {
 		format: "[$symbol $model ]($style)",
 		symbol: "🤖",
-		style: "fg:header_fg bg:header",
+		style: "bold blue",
 		disabled: false,
 	},
 	options: {

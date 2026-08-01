@@ -11,6 +11,7 @@ import {
 	shortenModel,
 } from "../src/modules/index.js";
 
+const ESC = String.fromCharCode(27);
 const LINK = "\x1b]8;;https://github.com/o/r/pull/123\x07#123\x1b]8;;\x07";
 
 function stripAnsi(value: string): string {
@@ -82,23 +83,26 @@ function fixture(overrides: Partial<StarshipRuntimeSnapshot> = {}): StarshipRunt
 	};
 }
 
-test("built-in modules expose Pi values through the default format", () => {
+test("built-in root renders exactly the reachable nine module categories without backgrounds", () => {
 	const rendered = renderStatusline(BUILT_IN_CONFIG, fixture());
 	const plain = stripAnsi(rendered.ansi);
-	assert.match(plain, /π/);
-	assert.match(plain, /anthropic/);
-	assert.match(plain, /sonnet-4/);
-	assert.match(plain, /high/);
-	assert.match(plain, /pi-extensions/);
-	assert.match(plain, /feature/);
-	assert.match(plain, /PR #123 · 2 failing/);
-	assert.match(plain, /=1 !4 \+3 \?5 ⇕⇡2⇣1/);
-	assert.match(plain, /read/);
-	assert.match(plain, /75\.0%/);
-	assert.match(plain, /↑1\.5k ↓200/);
-	assert.match(plain, /\$0\.123/);
-	assert.match(plain, /09:05/);
-	assert.match(plain, /🔌 active/);
+	for (const expected of [
+		/π/u,
+		/sonnet-4/u,
+		/high/u,
+		/pi-extensions/u,
+		/feature/u,
+		/=1 !4 \+3 \?5 ⇕⇡2⇣1/u,
+		/read/u,
+		/75\.0%/u,
+		/09:05/u,
+	]) {
+		assert.match(plain, expected);
+	}
+	for (const omitted of [/anthropic/u, /PR #123/u, /↑1\.5k/u, /\$0\.123/u, /🔌 active/u]) {
+		assert.doesNotMatch(plain, omitted);
+	}
+	assert.ok(rendered.chunks.every((chunk) => chunk.style?.background === undefined));
 });
 
 test("context supports native percentage/window precision", () => {
@@ -107,6 +111,7 @@ test("context supports native percentage/window precision", () => {
 	config.formatAst = parseFormat(config.format);
 	config.modules.context.format = "$percentage/$window";
 	config.modules.context.formatAst = parseFormat(config.modules.context.format);
+	config.modules.context.display = [{ threshold: 0, style: "bold green", hidden: false }];
 
 	assert.equal(
 		stripAnsi(
@@ -121,11 +126,97 @@ test("context supports native percentage/window precision", () => {
 	);
 });
 
+test("context display thresholds hide and select the highest matching style", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$context";
+	config.formatAst = parseFormat(config.format);
+	const renderAt = (percent: number) =>
+		renderStatusline(
+			config,
+			fixture({ contextUsage: { percent, tokens: 100, contextWindow: 1000 } }),
+		).ansi;
+
+	assert.equal(renderAt(0), "");
+	assert.equal(renderAt(29.999), "");
+	assert.ok(renderAt(30).includes(`${ESC}[32;1m`));
+	assert.ok(renderAt(59.999).includes(`${ESC}[32;1m`));
+	assert.ok(renderAt(60).includes(`${ESC}[33;1m`));
+	assert.ok(renderAt(79.999).includes(`${ESC}[33;1m`));
+	assert.ok(renderAt(80).includes(`${ESC}[31;1m`));
+
+	config.modules.context.display = [
+		{ threshold: 0, style: "green", hidden: false },
+		{ threshold: 50, style: "yellow", hidden: false },
+		{ threshold: 50, style: "blue", hidden: false },
+	];
+	assert.ok(renderAt(50).includes(`${ESC}[34m`));
+});
+
+test("cost display thresholds hide low values and select yellow then red", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$cost";
+	config.formatAst = parseFormat(config.format);
+	const renderAt = (cost: number) =>
+		renderStatusline(
+			config,
+			fixture({ tokenTotals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost } }),
+		).ansi;
+
+	assert.equal(renderAt(0), "");
+	assert.equal(renderAt(0.999), "");
+	assert.ok(renderAt(1).includes(`${ESC}[33;1m`));
+	assert.ok(renderAt(4.999).includes(`${ESC}[33;1m`));
+	assert.ok(renderAt(5).includes(`${ESC}[31;1m`));
+});
+
+test("git metrics render additions and deletions with independent styles", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$git_metrics";
+	config.formatAst = parseFormat(config.format);
+	config.modules.git_metrics.disabled = false;
+	const runtime = fixture({ gitMetrics: { added: 12, deleted: 3 } });
+	const rendered = renderStatusline(config, runtime).ansi;
+	assert.ok(rendered.includes(`${ESC}[32;1m+12`));
+	assert.ok(rendered.includes(`${ESC}[31;1m-3`));
+
+	config.modules.git_metrics.styles.added_style = "blue";
+	config.modules.git_metrics.styles.deleted_style = "yellow";
+	const custom = renderStatusline(config, runtime).ansi;
+	assert.ok(custom.includes(`${ESC}[34m+12`));
+	assert.ok(custom.includes(`${ESC}[33m-3`));
+});
+
+test("username selects user and root styles without exposing private selector metadata", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$username";
+	config.formatAst = parseFormat(config.format);
+	config.modules.username.format = "[$user]($style)$__pi_style_selector";
+	config.modules.username.formatAst = parseFormat(config.modules.username.format);
+	const renderUser = (selector: "user" | "root") =>
+		renderStatusline(
+			config,
+			fixture({
+				workspace: {
+					modules: { username: { user: selector === "root" ? "root" : "alice" } },
+					styleSelectors: { username: selector },
+				},
+			}),
+		).ansi;
+
+	assert.ok(renderUser("user").startsWith(`${ESC}[33;1malice`));
+	assert.ok(renderUser("root").startsWith(`${ESC}[31;1mroot`));
+	assert.doesNotMatch(stripAnsi(renderUser("root")), /selector/u);
+
+	config.modules.username.styles.style_root = "bright-purple";
+	assert.ok(renderUser("root").startsWith(`${ESC}[95mroot`));
+});
+
 test("cache and subscription modules expose native usage semantics", () => {
 	const config = structuredClone(BUILT_IN_CONFIG);
 	config.format = "$cache|$cost";
 	config.formatAst = parseFormat(config.format);
 	config.modules.cache.disabled = false;
+	config.modules.cost.display = [{ threshold: 0, style: "bold yellow", hidden: false }];
 	const runtime = fixture({
 		tokenTotals: {
 			input: 100,
@@ -293,6 +384,8 @@ test("module format, symbol, style, and disabled settings apply", () => {
 	config.modules.model.style = "red bold";
 	const rendered = renderStatusline(config, fixture()).ansi;
 	assert.ok(rendered.includes("\u001b[31;1mM:sonnet-4"));
+	config.modules.model.style = "bold bg:#86BBD8";
+	assert.ok(renderStatusline(config, fixture()).ansi.includes("\u001b[48;2;134;187;216;1m"));
 	config.modules.model.disabled = true;
 	assert.equal(renderStatusline(config, fixture()).ansi, "");
 });
