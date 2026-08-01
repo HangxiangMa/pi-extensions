@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import type {
 	Api,
@@ -64,6 +67,7 @@ function keybindings(mapping: Record<string, string> = {}) {
 		"tui.select.pageDown": "\u001b[6~",
 		"tui.select.confirm": "\r",
 		"tui.select.cancel": "\u001b",
+		"app.thinking.cycle": "\u001b[Z",
 	};
 	const labels: Record<string, string> = {
 		"tui.select.up": "up",
@@ -72,6 +76,7 @@ function keybindings(mapping: Record<string, string> = {}) {
 		"tui.select.pageDown": "pageDown",
 		"tui.select.confirm": "enter",
 		"tui.select.cancel": "escape",
+		"app.thinking.cycle": "shift+tab",
 	};
 	return {
 		matches(data: string, key: string) {
@@ -733,7 +738,7 @@ test("side-thread command loop immediately accepts another question after each a
 		},
 	} as never;
 	const selected: ResolvedBtwModel = {
-		model: { provider: "test", id: "side" } as Model<Api>,
+		model: { provider: "test", id: "side", reasoning: true } as Model<Api>,
 		auth: { apiKey: "key" },
 	};
 	const questions: string[] = [];
@@ -768,6 +773,243 @@ test("side-thread command loop immediately accepts another question after each a
 
 	assert.deepEqual(questions, ["Q1", "Q2"]);
 	assert.deepEqual(transcriptSizes, [1, 2]);
+});
+
+test("side-thread thinking changes apply to later questions without changing the initial level", async () => {
+	const ctx = {
+		ui: { notify() {} },
+		sessionManager: { getBranch: () => [] },
+	} as never;
+	const selected: ResolvedBtwModel = {
+		model: { provider: "test", id: "side", reasoning: true } as Model<Api>,
+		auth: { apiKey: "key" },
+	};
+	const thinkingLevels: string[] = [];
+	let interactions = 0;
+
+	await runBtwThread({
+		initialQuestion: "Q1",
+		selected,
+		thinkingLevel: "low",
+		ctx,
+		dependencies: {
+			ask: async (thread, question, _selected, thinkingLevel) => {
+				thinkingLevels.push(thinkingLevel);
+				const assistant = response("answer");
+				thread.turns.push({ kind: "answered", question, answer: "answer", response: assistant });
+				return { kind: "answered", response: assistant, answer: "answer" };
+			},
+			interact: async (_thread, _atBottom, _ctx, _draft, thinking) => {
+				interactions += 1;
+				if (interactions === 1) {
+					assert.equal(thinking.level, "low");
+					thinking.onChange("high");
+					return { kind: "submit", question: "Q2" };
+				}
+				assert.equal(thinking.level, "high");
+				return { kind: "close" };
+			},
+		},
+	});
+
+	assert.deepEqual(thinkingLevels, ["low", "high"]);
+});
+
+test("side-thread remembers rapid thinking changes in order and uses the latest level", async () => {
+	const persisted: string[] = [];
+	const askedWith: string[] = [];
+	let interactions = 0;
+	await runBtwThread({
+		initialQuestion: "Q1",
+		selected: {
+			model: { provider: "test", id: "side", reasoning: true } as Model<Api>,
+			auth: { apiKey: "key" },
+		},
+		thinkingLevel: "low",
+		rememberThinkingLevelChanges: true,
+		ctx: {
+			ui: { notify() {} },
+			sessionManager: { getBranch: () => [] },
+		} as never,
+		dependencies: {
+			persistThinkingLevel: async (level) => {
+				persisted.push(level);
+			},
+			ask: async (thread, question, _selected, level) => {
+				askedWith.push(level);
+				const assistant = response("answer");
+				thread.turns.push({ kind: "answered", question, answer: "answer", response: assistant });
+				return { kind: "answered", response: assistant, answer: "answer" };
+			},
+			interact: async (_thread, _atBottom, _ctx, _draft, thinking) => {
+				interactions += 1;
+				if (interactions === 1) {
+					thinking.onChange("medium");
+					thinking.onChange("high");
+					return { kind: "submit", question: "Q2" };
+				}
+				return { kind: "close" };
+			},
+		},
+	});
+
+	assert.deepEqual(askedWith, ["low", "high"]);
+	assert.deepEqual(persisted, ["medium", "high"]);
+});
+
+test("side-thread remembered thinking survives in pi-btw settings", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-btw-thread-settings-test-"));
+	const settingsPath = join(directory, "pi-btw.json");
+	try {
+		let interactions = 0;
+		await runBtwThread({
+			initialQuestion: "Q1",
+			selected: {
+				model: { provider: "test", id: "side", reasoning: true } as Model<Api>,
+				auth: { apiKey: "key" },
+			},
+			thinkingLevel: "low",
+			rememberThinkingLevelChanges: true,
+			settingsPath,
+			ctx: {
+				ui: { notify() {} },
+				sessionManager: { getBranch: () => [] },
+			} as never,
+			dependencies: {
+				ask: async (thread, question) => {
+					const assistant = response("answer");
+					thread.turns.push({ kind: "answered", question, answer: "answer", response: assistant });
+					return { kind: "answered", response: assistant, answer: "answer" };
+				},
+				interact: async (_thread, _atBottom, _ctx, _draft, thinking) => {
+					interactions += 1;
+					if (interactions === 1) thinking.onChange("high");
+					return { kind: "close" };
+				},
+			},
+		});
+		assert.equal(
+			(JSON.parse(await readFile(settingsPath, "utf8")) as { thinkingLevel: string }).thinkingLevel,
+			"high",
+		);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("side-thread remembering off changes locally without writing settings", async () => {
+	const askedWith: string[] = [];
+	let interactions = 0;
+	await runBtwThread({
+		initialQuestion: "Q1",
+		selected: {
+			model: { provider: "test", id: "side", reasoning: true } as Model<Api>,
+			auth: { apiKey: "key" },
+		},
+		thinkingLevel: "low",
+		rememberThinkingLevelChanges: false,
+		ctx: {
+			ui: { notify() {} },
+			sessionManager: { getBranch: () => [] },
+		} as never,
+		dependencies: {
+			persistThinkingLevel: async () => assert.fail("remembering off must not persist"),
+			ask: async (thread, question, _selected, level) => {
+				askedWith.push(level);
+				const assistant = response("answer");
+				thread.turns.push({ kind: "answered", question, answer: "answer", response: assistant });
+				return { kind: "answered", response: assistant, answer: "answer" };
+			},
+			interact: async (_thread, _atBottom, _ctx, _draft, thinking) => {
+				interactions += 1;
+				if (interactions === 1) {
+					thinking.onChange("high");
+					return { kind: "submit", question: "Q2" };
+				}
+				return { kind: "close" };
+			},
+		},
+	});
+
+	assert.deepEqual(askedWith, ["low", "high"]);
+});
+
+test("side-thread save failure keeps the local thinking level and warns once", async () => {
+	const notifications: Array<{ message: string; level: string }> = [];
+	const askedWith: string[] = [];
+	let interactions = 0;
+	await runBtwThread({
+		initialQuestion: "Q1",
+		selected: {
+			model: { provider: "test", id: "side", reasoning: true } as Model<Api>,
+			auth: { apiKey: "key" },
+		},
+		thinkingLevel: "low",
+		rememberThinkingLevelChanges: true,
+		ctx: {
+			ui: {
+				notify(message: string, level: string) {
+					notifications.push({ message, level });
+				},
+			},
+			sessionManager: { getBranch: () => [] },
+		} as never,
+		dependencies: {
+			persistThinkingLevel: async () => Promise.reject(new Error("read-only filesystem")),
+			ask: async (thread, question, _selected, level) => {
+				askedWith.push(level);
+				const assistant = response("answer");
+				thread.turns.push({ kind: "answered", question, answer: "answer", response: assistant });
+				return { kind: "answered", response: assistant, answer: "answer" };
+			},
+			interact: async (_thread, _atBottom, _ctx, _draft, thinking) => {
+				interactions += 1;
+				if (interactions === 1) {
+					thinking.onChange("high");
+					return { kind: "submit", question: "Q2" };
+				}
+				return { kind: "close" };
+			},
+		},
+	});
+
+	assert.deepEqual(askedWith, ["low", "high"]);
+	assert.equal(notifications.length, 1);
+	assert.equal(notifications[0]?.level, "warning");
+	assert.match(
+		notifications[0]?.message ?? "",
+		/changed to high.*could not be remembered.*read-only/i,
+	);
+});
+
+test("side-thread thinking starts clamped to the selected model's capabilities", async () => {
+	const captured: string[] = [];
+	await runBtwThread({
+		initialQuestion: "Q1",
+		selected: {
+			model: { provider: "test", id: "plain", reasoning: false } as Model<Api>,
+			auth: { apiKey: "key" },
+		},
+		thinkingLevel: "high",
+		ctx: {
+			ui: { notify() {} },
+			sessionManager: { getBranch: () => [] },
+		} as never,
+		dependencies: {
+			ask: async (thread, question, _selected, thinkingLevel) => {
+				captured.push(thinkingLevel);
+				const assistant = response("answer");
+				thread.turns.push({ kind: "answered", question, answer: "answer", response: assistant });
+				return { kind: "answered", response: assistant, answer: "answer" };
+			},
+			interact: async (_thread, _atBottom, _ctx, _draft, thinking) => {
+				captured.push(thinking.level);
+				return { kind: "close" };
+			},
+		},
+	});
+
+	assert.deepEqual(captured, ["off", "off"]);
 });
 
 test("cancelling an in-progress side answer exits without reopening the composer", async () => {
@@ -1108,6 +1350,58 @@ test("empty transcript composer accepts the first side-thread question", () => {
 	composer.handleInput("\r");
 
 	assert.deepEqual(actions, [{ kind: "submit", question: "first question" }]);
+});
+
+test("transcript cycles its local thinking level with Pi's configured thinking shortcut", () => {
+	initTheme("dark");
+	const changes: string[] = [];
+	const tui = { terminal: { rows: 24 }, requestRender() {} };
+	const theme = {
+		fg(_color: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+	const pager = new BtwTranscriptPager(
+		tui as never,
+		theme as never,
+		[{ question: "Q1", answer: "A1", kind: "answered", response: response("A1") }],
+		() => undefined,
+		{
+			thinking: {
+				level: "low",
+				levels: ["off", "low", "high"],
+				keybindings: keybindings({ "app.thinking.cycle": "t" }) as never,
+				onChange: (level) => changes.push(level),
+			},
+		},
+	);
+
+	assert.match(pager.render(80).join("\n"), /thinking low.*T cycle/i);
+	pager.handleInput("t");
+
+	assert.deepEqual(changes, ["high"]);
+	assert.match(pager.render(80).join("\n"), /thinking high/i);
+});
+
+test("disposing the side-thread composer closes it exactly once", () => {
+	const actions: unknown[] = [];
+	const pager = new BtwTranscriptPager(
+		{ terminal: { rows: 24 }, requestRender() {} } as never,
+		{
+			fg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		} as never,
+		[],
+		(action) => actions.push(action),
+	);
+	pager.dispose();
+	pager.dispose();
+	pager.handleInput("question");
+
+	assert.deepEqual(actions, [{ kind: "close" }]);
 });
 
 test("transcript offers opt-in bring-to-main action only after a successful answer", () => {
@@ -1918,6 +2212,28 @@ test("answering view preserves the transcript and offers compact cancellation", 
 	} finally {
 		view.dispose();
 	}
+});
+
+test("disposing an answering view aborts and closes it exactly once", () => {
+	initTheme("dark");
+	let cancelled = 0;
+	const view = new BtwAnsweringView(
+		{ terminal: { rows: 24 }, requestRender() {} } as never,
+		{
+			fg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		} as never,
+		[],
+		"question",
+		() => {
+			cancelled += 1;
+		},
+	);
+	view.dispose();
+	view.dispose();
+
+	assert.equal(cancelled, 1);
+	assert.equal(view.signal.aborted, true);
 });
 
 test("answering view never exceeds the available height in a short terminal", () => {
