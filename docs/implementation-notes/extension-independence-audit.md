@@ -10,11 +10,10 @@ The package/import boundary is healthy: `node scripts/check-extension-boundaries
 library and 22 active extensions. No active extension directly imports or declares a dependency on
 another extension package.
 
-Five extensions still contain extension-specific runtime knowledge:
+Four extensions still contain extension-specific runtime knowledge:
 
 | Extension | Existing coupling |
 | --- | --- |
-| `pi-plan-mode` | `src/subagent-policy.ts` and the `allowedPlanSubagents` path recognize `subagent`/`subagent_spawn` names and argument shapes owned by another extension. |
 | `pi-statusline` | Its extension-status settings and renderer contain known-extension icon/compatibility maps and parse the `github-pr` status format. |
 | `pi-starship` | Its extension-status modules contain known-extension icon/compatibility maps, parse the `github-pr` status format, and detect installed `pi-statusline` packages for a conflict warning. |
 | `pi-accounts` | `src/account-store.ts` reads and migrates settings owned by the deprecated `pi-codex-accounts` extension. |
@@ -27,6 +26,6 @@ observing lifecycle events without package-specific branching—is not a violati
 comparisons and migration instructions are also excluded here because they do not change runtime
 behavior.
 
-Removing these gaps may change published compatibility behavior, especially settings migration,
-status rendering, and `allowedPlanSubagents`. Review and verify each package independently rather than
-combining the cleanup into this guidance change.
+Removing these gaps may change published compatibility behavior, especially settings migration and
+status rendering. Review and verify each package independently rather than combining the cleanup into
+this guidance change.

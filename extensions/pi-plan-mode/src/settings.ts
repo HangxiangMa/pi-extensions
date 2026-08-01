@@ -27,7 +27,6 @@ export type PlanModeFixedThinkingLevel = Exclude<PlanModeThinkingLevel, "inherit
 export interface PlanModeSettings {
 	thinkingLevel: PlanModeThinkingLevel;
 	defaultPlanTools?: string[];
-	allowedPlanSubagents?: string[];
 	safeSubcommands?: SafeSubcommands;
 }
 export type PlanModeSettingsLoadResult =
@@ -50,11 +49,6 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
 		const defaultPlanTools = normalizeToolNames(Reflect.get(value, "defaultPlanTools"));
 		if (!defaultPlanTools) return undefined;
 		settings.defaultPlanTools = defaultPlanTools;
-	}
-	if (Object.hasOwn(value, "allowedPlanSubagents")) {
-		const allowedPlanSubagents = normalizeToolNames(Reflect.get(value, "allowedPlanSubagents"));
-		if (!allowedPlanSubagents) return undefined;
-		settings.allowedPlanSubagents = allowedPlanSubagents;
 	}
 	if (Object.hasOwn(value, "safeSubcommands")) {
 		const safeSubcommands = normalizeSafeSubcommands(Reflect.get(value, "safeSubcommands"));
