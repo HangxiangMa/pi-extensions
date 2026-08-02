@@ -19,7 +19,9 @@ npm install @narumitw/pi-tui-kit
 ```
 
 The published package contains built ESM and declarations in `dist/`; consumers do not need a
-TypeScript loader for dependencies.
+TypeScript loader for dependencies. Because the package is still zero-major, each consumer should
+raise its bounded caret-minor compatibility floor manually when it adopts a newer declarative API;
+do not automatically synchronize every extension to the workspace version.
 
 ## 🚀 Example
 
@@ -126,13 +128,38 @@ if (result.kind === "completed") ctx.ui.notify("Refreshed", "info");
 A task must honor its supplied signal. The runner aborts and drains owned work before returning; it
 does not hide an uncooperative task behind an arbitrary timeout.
 
+For a specialized custom component that does not belong in the declarative screen union, use
+`runCustomInteraction()`. It supplies an interaction-owned signal, classifies owner replacement and
+external component disposal as stale, disposes exactly once, and drains optional `waitForPending()`
+work before returning. The consumer still owns the component, its Back/Close value, and every domain
+side effect. Async factories and pending work must honor the supplied signal; the helper drains them
+but does not hide uncooperative work behind a timeout.
+
+```ts
+import { runCustomInteraction } from "@narumitw/pi-tui-kit";
+
+const result = await runCustomInteraction<{ kind: "back" | "close" }>(ctx, {
+  signal: currentSessionSignal(),
+  isCurrent: () => generation === currentGeneration(),
+  create: ({ keybindings, signal, complete }) => ({
+    render: () => [signal.aborted ? "Closing…" : "Specialized view"],
+    invalidate() {},
+    handleInput(data) {
+      if (keybindings.matches(data, "tui.select.cancel")) complete({ kind: "back" });
+    },
+  }),
+});
+```
+
 ## 🖥️ Standard screens
 
-`defineMenu()` supports seven standard screen kinds:
+`defineMenu()` supports eight standard screen kinds:
 
 - **`actions`** — navigation targets, domain actions, close rows, and optional cancellable busy
   labels.
 - **`detail`** — read-only wrapped text with Back or Close behavior.
+- **`browse`** — a read-only searchable catalog with textual status, adaptive list/detail views,
+  stable selection restoration, and paginated RPC details.
 - **`choice`** — one confirmed value from a static list, with separate current and initial items,
   selected details, disabled explanations, and a bounded viewport.
 - **`settings`** — Pi-style searchable, aligned settings rows with immediate value changes,
@@ -184,6 +211,36 @@ const profileScreen = {
 
 Keep live previews, preview rollback, persistence, and confirmation policy in the consuming extension;
 a specialized UI remains appropriate when cursor movement itself has side effects.
+
+Browse screens are read-only and invoke no action. TUI fuzzy-searches each sanitized label, textual
+`statusText`, description, and optional non-rendered `searchText`. Enter opens an adaptive scrolling
+detail view; Escape returns to the list without losing the query or selected raw id, then returns to
+the parent, while Ctrl+C closes the menu. Omitted or `"adaptive"` viewport size uses the live terminal
+row budget; a positive number caps item rows without disabling terminal bounds. RPC intentionally
+keeps one deterministic unfiltered list, then presents bounded detail pages; `searchText` is never
+rendered.
+
+```ts
+const modulesScreen = {
+  kind: "browse" as const,
+  title: "Modules",
+  items: modules.map((module) => ({
+    id: module.name,
+    label: module.name,
+    statusText: module.state,
+    description: module.description,
+    searchText: module.variables.join(" "),
+    details: [
+      `Preview: ${module.preview || "none"}`,
+      `Variables: ${module.variables.join(", ") || "none"}`,
+    ],
+  })),
+  viewportSize: "adaptive" as const,
+};
+```
+
+Use `choice` when confirmation invokes a domain action; use `browse` when selection only reveals
+information. Domain status meaning, catalog construction, and data freshness remain consumer-owned.
 
 TUI settings screens retain the extension title and supporting context above Pi's familiar search
 field, aligned label/value columns, ten-row viewport, position indicator, selected-row description,
@@ -346,12 +403,14 @@ cross-mode and lifecycle contract shared by multiple extensions.
 The library owns:
 
 - standalone task-mode adaptation, cancellation, stale checks, error routing, and draining;
+- lifecycle ownership, disposal, and pending-work draining around specialized custom interactions;
 - width-safe standard rendering and injected keybindings;
 - screen-stack navigation, Back/Close semantics, and per-screen cursor memory;
 - serial settings and multi-select updates, optimistic rollback, and pending-update draining;
 - menu, screen, and busy-action cancellation;
 - stale-continuation checks around asynchronous work;
 - input draft/pending behavior and exact review formatting, scrolling, and RPC pagination;
+- read-only browse search, list/detail disclosure, cursor restoration, and RPC pagination;
 - TUI/RPC adaptation and unsupported-mode routing.
 
 The consuming extension still owns:
@@ -437,14 +496,16 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `defineMenu()` — validates and returns a typed menu definition.
 - `runMenu()` — runs the definition in the current Pi mode and preserves root Back versus Close.
 - `runTask()` — runs typed abort-aware work with a cancellable TUI loader and direct non-TUI fallback.
+- `runCustomInteraction()` — owns cancellation, stale checks, exactly-once disposal, optional pending
+  work draining, and typed results around one extension-owned custom TUI component.
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.
 - `createMenuNavigator()` — lower-level stack and selection state helper.
 - exported screen, item, action, transition, runtime option, `MenuCloseReason`, and result types.
 - `@narumitw/pi-tui-kit/testing` — separate subpath for `createTuiHarness()`, `createRpcHarness()`,
   strict scripts, and their public testing types; it is not re-exported from the production root.
-- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`5`). Version 5 adds the
-  opt-in `ReviewScreen.viewportSize: "adaptive"` policy; version-4 definitions remain valid on the
-  version-5 runtime, including mandatory Back/Close reasons on closed menu results.
+- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`6`). Version 6 adds the
+  read-only `browse` screen and `runCustomInteraction()`; version-5 definitions remain valid on the
+  version-6 runtime, including adaptive review and mandatory Back/Close reasons.
 
 ## 🗂️ Package layout
 
@@ -452,6 +513,7 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `src/components/` — internal TUI input, review, list, settings, and rendering adapters
 - `src/testing/` — supported TUI/RPC test drivers exported only through the `/testing` subpath
 - `src/task.ts` — standalone and menu-shared task lifecycle orchestration
+- `src/custom-interaction.ts` — lifecycle ownership for specialized public custom components
 - `dist/` — generated ESM and declarations included in the npm package
 - `test/` — contract, renderer, navigation, lifecycle, and public testing-entrypoint coverage
 

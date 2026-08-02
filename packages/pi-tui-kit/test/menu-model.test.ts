@@ -38,8 +38,8 @@ function testMenu(): MenuDefinition<State, ScreenId, ActionId> {
 	});
 }
 
-test("adaptive review uses declarative API version 5", () => {
-	assert.equal(PI_EXTENSION_MENU_API_VERSION, 5);
+test("browse uses declarative API version 6", () => {
+	assert.equal(PI_EXTENSION_MENU_API_VERSION, 6);
 	assert.equal(resolveMenuScreen(testMenu(), "main", { count: 0 }).kind, "actions");
 });
 
@@ -210,6 +210,33 @@ test("choice screens reject blank and duplicate raw ids", () => {
 		);
 	assert.throws(() => resolve([" "]), /id must not be empty/i);
 	assert.throws(() => resolve(["same", "same"]), /id must be unique.*same/i);
+});
+
+test("browse screens accept adaptive viewports and reject invalid viewport sizes", () => {
+	const resolve = (viewportSize: unknown) =>
+		resolveMenuScreen(
+			defineMenu<undefined, "browse", "unused">({
+				start: "browse",
+				screens: {
+					browse: () =>
+						({
+							kind: "browse",
+							title: "Modules",
+							items: [{ id: "model", label: "Model", statusText: "Showing" }],
+							viewportSize,
+						}) as never,
+				},
+				actions: { unused: async () => ({ kind: "close" }) },
+			}),
+			"browse",
+			undefined,
+		);
+
+	assert.equal((resolve("adaptive") as { kind: string }).kind, "browse");
+	assert.equal((resolve(5) as { kind: string }).kind, "browse");
+	for (const viewportSize of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "fluid"]) {
+		assert.throws(() => resolve(viewportSize), /browse.*viewport.*adaptive.*positive integer/i);
+	}
 });
 
 test("input screens require a known action", () => {

@@ -1,11 +1,14 @@
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+	type BrowseScreen,
 	defineMenu,
 	type InputScreen,
 	type MenuCloseReason,
 	type ReviewScreen,
+	type RunCustomInteractionResult,
 	type RunMenuResult,
 	type RunTaskResult,
+	runCustomInteraction,
 	runMenu,
 	runTask,
 } from "../src/index.js";
@@ -49,6 +52,12 @@ const lifecycleMenu = defineMenu<undefined, Screen, Action, ExtensionContext>({
 	},
 });
 
+const browseScreen: BrowseScreen = {
+	kind: "browse",
+	title: "Catalog",
+	items: [{ id: "one", label: "One", statusText: "Showing" }],
+	viewportSize: "adaptive",
+};
 const inputScreen: InputScreen<Action> = {
 	kind: "input",
 	title: "Value",
@@ -68,6 +77,7 @@ const adaptiveReviewScreen: ReviewScreen<Action> = {
 	...reviewScreen,
 	viewportSize: "adaptive",
 };
+void browseScreen;
 void inputScreen;
 void reviewScreen;
 void numericReviewScreen;
@@ -137,6 +147,27 @@ const commandTask: Promise<RunTaskResult<number>> = runTask(commandContext, {
 	},
 });
 void commandTask;
+
+const commandInteraction: Promise<RunCustomInteractionResult<string>> = runCustomInteraction(
+	commandContext,
+	{
+		create: ({ ctx, complete }) => ({
+			render: () => [ctx.cwd],
+			invalidate() {},
+			handleInput: () => complete("done"),
+		}),
+	},
+);
+void commandInteraction;
+
+void runCustomInteraction(lifecycleContext, {
+	create: ({ ctx }) => ({
+		render: () => [String(ctx.isIdle())],
+		invalidate() {},
+		// @ts-expect-error Lifecycle custom interactions must not gain command-only session methods.
+		handleInput: () => void ctx.waitForIdle(),
+	}),
+});
 
 void runTask(lifecycleContext, {
 	label: "Lifecycle task",

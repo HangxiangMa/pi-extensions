@@ -1,10 +1,12 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
+	type BrowseScreen,
 	defineMenu,
 	type InputScreen,
 	type MenuCloseReason,
 	type MultiSelectScreen,
 	type ReviewScreen,
+	runCustomInteraction,
 	runMenu,
 } from "../src/index.js";
 import { createRpcHarness, createTuiHarness } from "../src/testing/index.js";
@@ -23,6 +25,23 @@ declare function loadState(signal: AbortSignal): Promise<State>;
 declare function currentGeneration(): number;
 declare function currentSessionSignal(): AbortSignal;
 declare function formatError(error: unknown): string;
+
+const modulesScreen: BrowseScreen = {
+	kind: "browse",
+	title: "Modules",
+	items: [
+		{
+			id: "model",
+			label: "model",
+			statusText: "Showing",
+			description: "Current model",
+			searchText: "provider llm",
+			details: ["Preview: claude"],
+		},
+	],
+	viewportSize: "adaptive",
+};
+void modulesScreen;
 
 const searchableToolsScreen: MultiSelectScreen<Screen, Action> = {
 	kind: "multiSelect",
@@ -132,6 +151,20 @@ export async function showMenu(ctx: ExtensionCommandContext, generation: number)
 }
 
 declare const consumerContext: ExtensionCommandContext;
+
+export function showSpecializedView(ctx: ExtensionCommandContext, generation: number) {
+	return runCustomInteraction<{ kind: "back" | "close" }>(ctx, {
+		signal: currentSessionSignal(),
+		isCurrent: () => generation === currentGeneration(),
+		create: ({ keybindings, signal, complete }) => ({
+			render: () => [signal.aborted ? "Closing…" : "Specialized view"],
+			invalidate() {},
+			handleInput(data) {
+				if (keybindings.matches(data, "tui.select.cancel")) complete({ kind: "back" });
+			},
+		}),
+	});
+}
 
 export async function driveMenuWithSupportedTuiHarness() {
 	const tui = createTuiHarness({ width: 80, rows: 24 });

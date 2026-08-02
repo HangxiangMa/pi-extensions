@@ -267,9 +267,9 @@ test("Modules honors injected keybindings and distinguishes Back from Close", as
 	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
 	const running = mock.commands.get("starship")?.handler("", context.ctx);
 	await tui.waitForOpen();
-	tui.send("\u001b[B");
-	tui.send("\u001b[B");
-	tui.send("\r");
+	tui.send("j");
+	tui.send("j");
+	tui.send("y");
 	await tui.waitForOpen();
 	const frame = tui.render().join("\n");
 	assert.match(frame, /k\/j navigate/u);

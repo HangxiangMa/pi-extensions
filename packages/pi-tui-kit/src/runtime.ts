@@ -1,5 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
+	browseDialogLabel,
+	browseDialogPages,
 	createMenuScreenComponent,
 	type MenuInputSubmit,
 	type MenuMultiSelectChange,
@@ -332,6 +334,62 @@ async function runDialogMenu<
 				}
 				continue;
 			}
+			if (screen.kind === "browse") {
+				let browsing = true;
+				while (browsing) {
+					const choices = uniqueBrowseChoices([
+						...screen.items.map((item) => ({
+							kind: "item" as const,
+							item,
+							label: browseDialogLabel(item),
+						})),
+						{ kind: "exit" as const, label: dialogExitChoice(screen) },
+					]);
+					const choice = await uiFor(ctx).select(
+						dialogTitle(screen),
+						choices.map((row) => row.label),
+						{ signal: menuSignal },
+					);
+					if (!isMenuCurrent(options) || menuSignal.aborted) return { kind: "stale" };
+					const selected = choices.find((row) => row.label === choice);
+					if (!selected || selected.kind === "exit") {
+						navigator.apply({ kind: screen.hint ?? "back" });
+						browsing = false;
+						continue;
+					}
+					const pages = browseDialogPages(selected.item);
+					let pageIndex = 0;
+					let viewingDetail = true;
+					while (viewingDetail) {
+						const pageChoices = uniqueReviewChoices([
+							...(pageIndex > 0 ? [{ kind: "previous" as const, label: "Previous" }] : []),
+							...(pageIndex < pages.length - 1 ? [{ kind: "next" as const, label: "Next" }] : []),
+							{ kind: "exit" as const, label: "Back" },
+						]);
+						const pageTitle = [
+							browseDialogLabel(selected.item),
+							pages[pageIndex]?.join("\n") ?? "",
+							...(pages.length > 1 ? [`Page ${pageIndex + 1}/${pages.length}`] : []),
+						]
+							.filter(Boolean)
+							.join("\n");
+						const pageChoice = await uiFor(ctx).select(
+							pageTitle,
+							pageChoices.map((row) => row.label),
+							{ signal: menuSignal },
+						);
+						if (!isMenuCurrent(options) || menuSignal.aborted) return { kind: "stale" };
+						const selectedPage = pageChoices.find((row) => row.label === pageChoice);
+						if (!selectedPage || selectedPage.kind === "exit") viewingDetail = false;
+						else if (selectedPage.kind === "previous") {
+							pageIndex = Math.max(0, pageIndex - 1);
+						} else if (selectedPage.kind === "next") {
+							pageIndex = Math.min(pages.length - 1, pageIndex + 1);
+						}
+					}
+				}
+				continue;
+			}
 			const rows = dialogRows(screen);
 			const choice = await uiFor(ctx).select(
 				dialogTitle(screen),
@@ -385,6 +443,14 @@ interface ReviewDialogChoice {
 	label: string;
 }
 
+type BrowseDialogChoice =
+	| {
+			kind: "item";
+			label: string;
+			item: Extract<MenuScreen<string, string>, { kind: "browse" }>["items"][number];
+	  }
+	| { kind: "exit"; label: string; item?: never };
+
 function dialogRows<ScreenId extends string, ActionId extends string>(
 	screen: MenuScreen<ScreenId, ActionId>,
 ): DialogRow[] {
@@ -416,6 +482,8 @@ function dialogRows<ScreenId extends string, ActionId extends string>(
 		];
 	} else if (screen.kind === "input" || screen.kind === "review") {
 		rows = [];
+	} else if (screen.kind === "browse") {
+		rows = [{ kind: "exit", label: dialogExitChoice(screen) }];
 	} else if (screen.kind === "choice") {
 		rows = [
 			...screen.items.map((item) => {
@@ -457,6 +525,11 @@ function dialogRows<ScreenId extends string, ActionId extends string>(
 }
 
 function uniqueReviewChoices(rows: readonly ReviewDialogChoice[]): ReviewDialogChoice[] {
+	const used = new Set<string>();
+	return rows.map((row) => ({ ...row, label: uniqueDialogLabel(row.label, used) }));
+}
+
+function uniqueBrowseChoices(rows: readonly BrowseDialogChoice[]): BrowseDialogChoice[] {
 	const used = new Set<string>();
 	return rows.map((row) => ({ ...row, label: uniqueDialogLabel(row.label, used) }));
 }

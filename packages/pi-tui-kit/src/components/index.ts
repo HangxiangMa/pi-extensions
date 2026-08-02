@@ -12,7 +12,9 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { MenuScreen, MenuSettingItem } from "../types.js";
+import { createBrowseComponent } from "./browse.js";
 import type {
+	BrowseOptions,
 	MenuChangeResponse,
 	MenuKeybindings,
 	MenuScreenComponent,
@@ -24,6 +26,7 @@ import { createMultiSelectComponent } from "./multi-select.js";
 import { handleSearchInput, menuHint, renderFrame, safeMenuText } from "./rendering.js";
 import { createReviewComponent, type ReviewOptions } from "./review.js";
 
+export { browseDialogLabel, browseDialogPages } from "./browse.js";
 export type {
 	MenuInputSubmit,
 	MenuMultiSelectChange,
@@ -45,6 +48,9 @@ export function createMenuScreenComponent<ScreenId extends string, ActionId exte
 			break;
 		case "detail":
 			component = createDetailComponent(options as DetailOptions<ScreenId, ActionId>);
+			break;
+		case "browse":
+			component = createBrowseComponent(options as BrowseOptions<ScreenId, ActionId>);
 			break;
 		case "choice":
 			component = createChoiceComponent(options as ChoiceOptions<ScreenId, ActionId>);
@@ -100,17 +106,16 @@ function createActionsComponent<ScreenId extends string, ActionId extends string
 	}));
 	const list = new SelectList(items, Math.min(items.length, 10), selectTheme(options.theme));
 	setInitialSelection(list, items, options.selectedItemId);
-	list.onSelectionChange = (item) => options.onSelectionChange?.(item.value);
-	list.onSelect = (item) => {
-		const source = options.screen.items.find((candidate) => candidate.id === item.value);
-		if (!source?.disabled) options.onEvent({ kind: "activate", itemId: item.value });
-	};
-	list.onCancel = () => options.onEvent({ kind: options.screen.hint ?? "back" });
 	return commonListComponent(
 		options,
 		list,
+		items,
 		options.screen.lines ?? [],
 		options.screen.hint ?? "back",
+		(itemId) => {
+			const source = options.screen.items.find((candidate) => candidate.id === itemId);
+			if (!source?.disabled) options.onEvent({ kind: "activate", itemId });
+		},
 	);
 }
 
@@ -178,17 +183,16 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
 		selectedItemId = items[selectedIndex]?.value;
 		if (selectedItemId) options.onSelectionChange?.(selectedItemId);
 	};
+	const move = (delta: number) => {
+		if (items.length === 0) return;
+		const index = items.findIndex((item) => item.value === selectedItemId);
+		select((index + delta + items.length) % items.length);
+	};
 	const activate = (itemId: string | undefined) => {
 		if (!itemId) return;
 		const item = options.screen.items.find((candidate) => candidate.id === itemId);
 		if (!item?.disabled) options.onEvent({ kind: "activate", itemId });
 	};
-	list.onSelectionChange = (item) => {
-		selectedItemId = item.value;
-		options.onSelectionChange?.(item.value);
-	};
-	list.onSelect = (item) => activate(item.value);
-	list.onCancel = () => options.onEvent({ kind: options.screen.hint ?? "back" });
 	let disposed = false;
 	return {
 		render(width) {
@@ -245,14 +249,19 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
 			if (matchesKey(data, Key.ctrl("c"))) options.onEvent({ kind: "close" });
 			else if (options.keybindings.matches(data, "tui.select.cancel")) {
 				options.onEvent({ kind: options.screen.hint ?? "back" });
-			} else if (options.keybindings.matches(data, "tui.select.pageUp")) {
+			} else if (options.keybindings.matches(data, "tui.select.up")) move(-1);
+			else if (options.keybindings.matches(data, "tui.select.down")) move(1);
+			else if (options.keybindings.matches(data, "tui.select.pageUp")) {
 				const index = items.findIndex((item) => item.value === selectedItemId);
 				select(index - Math.max(1, viewportSize));
 			} else if (options.keybindings.matches(data, "tui.select.pageDown")) {
 				const index = items.findIndex((item) => item.value === selectedItemId);
 				select(index + Math.max(1, viewportSize));
-			} else if (data === " ") activate(selectedItemId);
-			else list.handleInput(data);
+			} else if (matchesKey(data, Key.home)) select(0);
+			else if (matchesKey(data, Key.end)) select(items.length - 1);
+			else if (options.keybindings.matches(data, "tui.select.confirm") || data === " ") {
+				activate(selectedItemId);
+			}
 			options.tui.requestRender();
 		},
 		async waitForPending() {},
@@ -508,10 +517,26 @@ function displayHintKey(key: string) {
 function commonListComponent<ScreenId extends string, ActionId extends string>(
 	options: MenuScreenComponentOptions<ScreenId, ActionId>,
 	list: SelectList,
+	items: readonly SelectItem[],
 	lines: readonly string[],
 	destination: "back" | "close",
+	onActivate: (itemId: string) => void,
 ): MenuScreenComponent {
+	const initialIndex = Math.max(
+		0,
+		items.findIndex((item) => item.value === options.selectedItemId),
+	);
+	let selectedIndex = initialIndex;
 	let disposed = false;
+	const select = (index: number, wrap: boolean) => {
+		if (items.length === 0) return;
+		selectedIndex = wrap
+			? (index + items.length) % items.length
+			: Math.max(0, Math.min(index, items.length - 1));
+		list.setSelectedIndex(selectedIndex);
+		const itemId = items[selectedIndex]?.value;
+		if (itemId) options.onSelectionChange?.(itemId);
+	};
 	return {
 		render(width) {
 			return renderFrame(
@@ -536,7 +561,19 @@ function commonListComponent<ScreenId extends string, ActionId extends string>(
 				options.onEvent({ kind: destination });
 				return;
 			}
-			list.handleInput(data);
+			if (options.keybindings.matches(data, "tui.select.up")) select(selectedIndex - 1, true);
+			else if (options.keybindings.matches(data, "tui.select.down")) {
+				select(selectedIndex + 1, true);
+			} else if (options.keybindings.matches(data, "tui.select.pageUp")) {
+				select(selectedIndex - Math.max(1, Math.min(items.length, 10)), false);
+			} else if (options.keybindings.matches(data, "tui.select.pageDown")) {
+				select(selectedIndex + Math.max(1, Math.min(items.length, 10)), false);
+			} else if (matchesKey(data, Key.home)) select(0, false);
+			else if (matchesKey(data, Key.end)) select(items.length - 1, false);
+			else if (options.keybindings.matches(data, "tui.select.confirm")) {
+				const itemId = items[selectedIndex]?.value;
+				if (itemId) onActivate(itemId);
+			}
 			options.tui.requestRender();
 		},
 		async waitForPending() {},

@@ -23,6 +23,22 @@ function loaded(cellCount: number): LoadedNotebook {
 	};
 }
 
+function menuKeybindings() {
+	const inputs: Record<string, readonly string[]> = {
+		"tui.select.up": ["\u001b[A"],
+		"tui.select.down": ["\u001b[B"],
+		"tui.select.pageUp": ["\u001b[5~"],
+		"tui.select.pageDown": ["\u001b[6~"],
+		"tui.select.confirm": ["\r"],
+		"tui.select.cancel": ["\u001b", "\u0003"],
+		"tui.input.submit": ["\r"],
+	};
+	return {
+		matches: (data: string, key: string) => inputs[key]?.includes(data) ?? false,
+		getKeys: (key: string) => inputs[key] ?? [],
+	};
+}
+
 function createTransitionHarness(
 	load: (path: string, signal?: AbortSignal) => Promise<LoadedNotebook>,
 	cwd: string,
@@ -132,10 +148,7 @@ function createMenuCustomDriver(inputs: Array<string | undefined>) {
 						fg: (_color: string, text: string) => text,
 						bold: (text: string) => text,
 					},
-					{
-						matches: (data: string, key: string) => data === key,
-						getKeys: (key: string) => [key],
-					},
+					menuKeybindings(),
 					done,
 				);
 				if (input !== undefined) queueMicrotask(() => component.handleInput?.(input));
@@ -367,10 +380,7 @@ test("cancelling the menu loader leaves notebook state and watchers unchanged", 
 							fg: (_color: string, text: string) => text,
 							bold: (text: string) => text,
 						},
-						{
-							matches: (data: string, key: string) => data === key,
-							getKeys: (key: string) => [key],
-						},
+						menuKeybindings(),
 						done,
 					);
 					queueMicrotask(() => component.handleInput?.(input));
