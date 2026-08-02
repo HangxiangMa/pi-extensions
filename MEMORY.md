@@ -142,6 +142,7 @@
 - Kit settings and multi-select actions settle asynchronously; test adapters that drive `ctx.ui.custom()` must drain `waitForPending()`, observe an accepted transition, and close a rejected screen instead of returning before the callback settles.
 - Consumer tests load `@narumitw/pi-tui-kit` from its built `dist/`; rebuild the kit after source changes or consumer behavior tests can exercise stale UI code.
 - Symptom: a newer extension screen can make Pi focus `undefined` and crash. Cause: a broad zero-major helper range lets Pi's npm lock retain an older `pi-tui-kit` without that screen kind. Fix: use a bounded caret minor range and keep shared version bumps from rewriting consumer-owned compatibility ranges.
+- Before raising an internal dependency floor to the workspace's shared version, verify that exact minor exists on npm and that the consumer needs its API; selective publishing can leave manifest-only shared versions unavailable to later bumps.
 - Searchable TUI wrappers should reserve only a standalone Space key for activation; stripping spaces from whole input chunks corrupts bracketed-paste token queries.
 
 ## TASTE
