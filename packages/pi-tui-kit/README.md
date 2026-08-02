@@ -19,9 +19,20 @@ npm install @narumitw/pi-tui-kit
 ```
 
 The published package contains built ESM and declarations in `dist/`; consumers do not need a
-TypeScript loader for dependencies. Because the package is still zero-major, each consumer should
-raise its bounded caret-minor compatibility floor manually when it adopts a newer declarative API;
-do not automatically synchronize every extension to the workspace version.
+TypeScript loader for dependencies.
+
+### Compatibility floor
+
+Pi TUI Kit is still a zero-major package, so caret ranges are minor-bounded: for example,
+`^0.40.0` accepts releases from `0.40.0` up to, but not including, `0.41.0`. When an extension adopts
+an API introduced in a later Kit minor, raise that extension's minimum compatible minor rather than
+using a broad `<1` range. Otherwise an existing npm lock can retain an older Kit that lacks the
+screen or contract the extension expects.
+
+Compatibility ranges are consumer-owned. Review each extension against the APIs it imports and keep
+its tested minimum; do not automatically synchronize every consumer range with the current workspace
+package version during a shared release bump. In this monorepo, declare the dependency in the
+consuming package so local hoisting cannot hide an incompatible or missing published dependency.
 
 ## 🚀 Example
 

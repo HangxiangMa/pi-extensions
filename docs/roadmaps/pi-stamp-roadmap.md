@@ -88,8 +88,8 @@ provides an explicit stable seam.
 
 ### Phase 1: Establish message timestamps
 
-**Status:** Implemented; see the archived
-[initial-version plan](../plans/archived/2026-07-29_pi-stamp-initial-version-plan.md).
+**Status:** Implemented; maintained evidence is the version-1 payload/renderer coverage and current
+`extensions/pi-stamp` source.
 
 **Milestones:**
 
@@ -104,8 +104,8 @@ without commands, settings, network access, or background work.
 
 ### Phase 2: Add presentation controls
 
-**Status:** Implemented; see the archived
-[presentation-controls plan](../plans/archived/2026-07-29_pi-stamp-presentation-controls-plan.md).
+**Status:** Implemented; maintained evidence is the settings, persistence, renderer, and runtime
+coverage for presentation controls.
 
 **Milestones:**
 
@@ -122,8 +122,8 @@ remain compatible.
 
 ### Phase 3: Measure response timing
 
-**Status:** Implemented; see the archived
-[response-timing plan](../plans/archived/2026-07-29_pi-stamp-response-timing-plan.md).
+**Status:** Implemented; maintained evidence is the response-observation, payload-version, renderer,
+and lifecycle coverage.
 
 **Milestones:**
 
@@ -139,8 +139,8 @@ claiming provider telemetry.
 
 ### Phase 4: Expose assistant provenance and usage
 
-**Status:** Implemented; see the archived
-[roadmap-completion plan](../plans/archived/2026-07-30_pi-stamp-roadmap-completion-plan.md).
+**Status:** Implemented; maintained evidence is the assistant-metadata privacy, exact payload, and
+renderer coverage.
 
 **Milestones:**
 
@@ -160,8 +160,8 @@ truthfulness guarantees while timestamp-only sessions remain unchanged.
 
 ### Phase 5: Measure tool timing
 
-**Status:** Implemented; see the archived
-[roadmap-completion plan](../plans/archived/2026-07-30_pi-stamp-roadmap-completion-plan.md).
+**Status:** Implemented; maintained evidence is the tool observation, pairing, ordering, bound, and
+lifecycle-cleanup coverage.
 
 **Milestones:**
 
