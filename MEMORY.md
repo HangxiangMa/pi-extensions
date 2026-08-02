@@ -75,6 +75,8 @@
 - For detached subagents, snapshot terminal state before resolving waiters, inject completion with `deliverAs: "steer", triggerTurn: false`, and serialize persistence callbacks in invocation order.
 - Blocking a Pi `tool_call` returns a non-terminating error, so agent-core may continue. Abort the turn too when a bounded flow must stop after the blocked call.
 
+- Symptom: concurrent `@tursodatabase/database` file transactions fail with `statement was interrupted`, and `BEGIN CONCURRENT` fails unless MVCC is separately enabled. Cause: connection timeout does not serialize cross-connection exclusive/immediate transactions, and default file databases do not enable MVCC. Fix: use short immediate/exclusive transactions with bounded whole-transaction retry and in-transaction rechecks; pre-create/chmod the database and WAL because both defaulted to `0644`, and include both files in stopped-process backups because committed data can remain in the WAL.
+
 ## TASTE
 
 - Prefer canonical JSON and explicit argv arrays for pi-lsp configuration; avoid extension-specific environment-variable settings while retaining `servers[].env` for child-process needs.
