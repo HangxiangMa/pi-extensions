@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import {
 	createCustomSelectorHarness,
 	createMockContext,
@@ -612,9 +613,12 @@ test("invalid files block CRUD and remain byte-for-byte unchanged", async () => 
 
 function secretInput(secret: string, rendered: string[] = []) {
 	return async (factory: unknown) => {
-		const harness = createCustomSelectorHarness(factory, 48);
-		rendered.push(harness.handleInput(secret).join("\n"));
-		harness.handleInput("tui.input.submit");
-		return harness.result;
+		const tui = createTuiHarness({ width: 48 });
+		const running = tui.custom(factory as Parameters<typeof tui.custom>[0]);
+		await tui.waitForOpen();
+		tui.type(secret);
+		rendered.push(tui.render().join("\n"));
+		tui.press("tui.input.submit");
+		return running;
 	};
 }
