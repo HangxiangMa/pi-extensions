@@ -1,7 +1,7 @@
 # pi-subagents stateful runtime decision
 
 Date: 2026-07-11
-Updated: 2026-07-23
+Updated: 2026-08-02
 
 ## Decision
 
@@ -10,9 +10,24 @@ Keep the existing logical stateful registry and support two transports:
 - `subprocess` (default): start a fresh `pi --mode json -p --no-session` child for every turn and replay bounded sanitized history.
 - `in-process` (opt-in): retain one public Pi SDK `AgentSession` per stateful `agentId` and send follow-ups directly to that session.
 
-Stateful lifecycle tools are registered by default and can be removed with `stateful.enabled: false`. The default transport remains subprocess for compatibility and rollback safety.
+Stateful lifecycle tools are registered by default and can be removed with `stateful.enabled: false`.
+The default transport remains subprocess for compatibility and rollback safety. Read-only inspection is
+registered independently of delegation workflow, and synchronous consultation follows blocking-tool
+availability.
 
-Detached completion is configurable. `stateful.completionDelivery: "next-turn"` is the default Codex-style behavior: the lifecycle observer publishes final status/output with `deliverAs: "steer"` and `triggerTurn: false`. Opt-in `"auto-resume"` holds completion while the root is active, coalesces simultaneous completions, and requests at most one synthesis turn after the parent settles when no input is pending. Completion metadata/output/error fields are independently sanitized and bounded, and session-generation, shutdown, batching, and in-flight wake guards prevent stale or duplicate scheduling pressure. Delivery remains best-effort because Pi's custom-message API is fire-and-forget.
+Detached completion is configurable. `stateful.completionDelivery: "next-turn"` is the default
+Codex-style behavior: the lifecycle observer publishes final status/output with
+`deliverAs: "steer"` and `triggerTurn: false`. Opt-in `"auto-resume"` holds completion while the root
+is active, coalesces simultaneous completions, and requests at most one synthesis turn after the
+parent settles when no input is pending. Completion metadata/output/error fields are independently
+sanitized and bounded, and session-generation, shutdown, batching, and in-flight wake guards prevent
+stale or duplicate scheduling pressure. Delivery remains best-effort because Pi's custom-message API
+is fire-and-forget.
+
+One shared target resolver canonicalizes every requested cwd before discovery or launch. The current
+workspace uses session trust; external targets use Pi's nearest saved `ProjectTrustStore` decision.
+General delegation defaults to current or saved-trusted targets, while consultation defaults to any
+existing target and removes inherited target/project resources when effective trust is absent.
 
 ## In-process ownership
 
@@ -23,7 +38,10 @@ Each child receives:
 - the agent system prompt;
 - an in-memory session seeded once with sanitized parent context and prior user/assistant turn boundaries;
 - the selected cwd, model, thinking level, timeout, and built-in tool allow-list;
-- a resource loader configured with `noExtensions: true` to prevent recursive extension loading and duplicate side effects.
+- a resource loader configured with `noExtensions: true` to prevent recursive extension loading and
+  duplicate side effects; and
+- the same resolved target-trust boolean passed to subprocess launch policy, applied to
+  `SettingsManager` before project settings are read.
 
 An existing child keeps its session configuration. Parent model/thinking changes are snapshotted only when a later child is created. Explicit models resolve through public `ModelRegistry` exact provider/id or unique id/name/fuzzy matching, with CLI-compatible `:thinking` suffix parsing and bounded ambiguity errors. Unsupported extension/custom tools fail before child creation and recommend `subprocess`; the runtime never silently widens tools or falls back after a failed in-process start.
 
@@ -59,16 +77,62 @@ Subprocess cleanup retains process-group SIGTERM/SIGKILL escalation. In-process 
 
 ## Public surface
 
-The extension exposes five tools by default: blocking `subagent` plus detached `subagent_spawn`, `subagent_send`, `subagent_manage`, and `subagent_mailbox`. `blocking.enabled: false` omits the blocking tool for an async-only workflow; existing `stateful.enabled: false` still omits the four detached tools for blocking-only use. `subagent_manage` dispatches `list | interrupt | close`; `subagent_mailbox` dispatches queue-only `send | read`. Their flat provider-compatible schemas use action enums; runtime validation selects only the active action's fields and ignores other known fields that providers may auto-fill, while still enforcing that action's required values and bounds. Within an enabled stateful workflow, lifecycle tool membership does not change after spawn, completion, interrupt, close, or mailbox activity, preserving a stable provider tool-schema prefix for KV caching.
+The default `all` workflow exposes seven tools: blocking `subagent`; detached `subagent_spawn`,
+`subagent_send`, `subagent_manage`, and `subagent_mailbox`; metadata-only `subagent_inspect`; and
+synchronous read-only `subagent_consult`. Registration follows workflow capability:
 
-`subagent` remains the blocking API for single, parallel, chain, and fan-in work. Its model-facing guidance distinguishes root-doable critical-path work from delegated output required before the root can continue, warns that user steering waits, and never advertises optional lifecycle tools. `subagent_spawn` is the detached sidecar API when enabled: default next-turn sessions use it only when the current response does not depend on the result, while auto-resume sessions may use it for final-answer-dependent broad work. `subagent_send` starts a follow-up turn, while `subagent_mailbox` `send` only queues context. Scheduling and execution continue independently, settled turns notify the root session according to `completionDelivery`, and no wait operation is exposed.
+- `all`: all seven tools;
+- `async-only`: the four detached tools plus inspection;
+- `blocking-only`: blocking delegation, consultation, and inspection; and
+- `disabled`: inspection only.
 
-The consolidation intentionally removes `subagent_list`, `subagent_interrupt`, `subagent_close`, `subagent_message`, and `subagent_messages` without aliases. Persisted registry/mailbox data is unchanged; explicit callers migrate those operations to the matching `subagent_manage` or `subagent_mailbox` action. Rollback pins the prior package version and reuses the same state directory.
+Within an enabled stateful workflow, lifecycle tool membership does not change after spawn,
+completion, interrupt, close, or mailbox activity, preserving a stable provider tool-schema prefix.
+`subagent_manage` keeps the compatibility `list | interrupt | close` actions, and
+`subagent_mailbox` keeps `send | read`; model guidance prefers inspection when the whole operation
+must be read-only.
 
-Bare `/subagents` is the TUI manager and leads with the current delegation workflow, human-readable completion behavior, and agent counts. Common actions change delegation, inspect current agents, or change completion behavior; agent permissions, transport/runtime detail, source, and path use shallow advanced disclosure. A delegation change compares the selection with the active registered surface, previews the exact blocking/lifecycle tool additions or removals, refuses to reload while any detached agent is retained, then atomically patches `blocking.enabled` and `stateful.enabled` after confirmation; reverting a pending manual configuration to the already-active workflow saves without an unnecessary reload, and cancellation is read-only. The retained-agent gate prevents reload-driven shutdown from aborting work or deleting isolated worktrees. Pi owns reload-error reporting and exposes no success result to extensions, so the pre-reload save notification includes `/reload` fallback guidance if the tool surface does not refresh. `/subagents settings` remains the direct completion `SettingsList` route: it patches the canonical raw JSON atomically without dropping unknown fields, applies the runtime policy immediately, and re-registers `subagent_spawn` with matching prompt guidance. `/subagents status` separates configured values/source/path from runtime values, while `/subagents help` documents the single-command interface. Bare RPC invocation emits bounded status through `notify`; JSON and print modes stay silent. Per-agent tool settings and current-session lifecycle actions are available only through the goal-oriented `/subagents` manager, keeping command discovery to one top-level entry. Each `session_start` re-reads settings while preserving one-shot load/migration notices, then reports the deduplicated migration or validation warnings so file changes between sessions remain visible.
+`subagent` remains the blocking batch API for single, parallel, chain, and fan-in work. The full batch
+is target/trust-preflighted before any child starts. `subagent_spawn` is the detached sidecar API;
+`subagent_send` starts a follow-up turn, while mailbox `send` only queues context. No detached wait
+operation is exposed.
+
+`subagent_inspect` reads only pure settings and metadata snapshots. It never starts a child,
+acknowledges mailbox messages, exposes message/history/context content, refreshes providers, or
+changes registry/workspace state. `subagent_consult` runs one ephemeral non-retained child with
+extensions and persistent sessions disabled. Missing tool configuration selects the built-in
+read-only set, explicit empty configuration selects no tools, and explicit lists are intersected with
+`read`, `grep`, `find`, and `ls`. Pre-launch failures throw; post-launch failures preserve bounded
+partial evidence and nested usage and finalize as Pi-visible tool errors.
+
+Bare `/subagents` is the TUI manager and leads with delegation workflow, completion behavior, target
+policies, trusted-resource policy, and agent counts. Workflow changes preview the exact tool-surface
+change and refuse reload while detached agents are retained. The shared Settings route atomically
+updates completion delivery, consultation/delegation targets, and consultation resources while
+preserving unknown fields and prior runtime values on failure. Status separates configured values,
+sources, and path from current runtime policy. RPC uses bounded notifications; JSON and print modes
+remain silent. Each `session_start` re-reads settings and reports deduplicated migration or validation
+notices.
 
 ## Context and policy boundary
 
-Parent context is opt-in (`none`, `all`, `summary`, recent N user turns, or selected entry IDs), text-only, sanitized, and bounded. Tool results, reasoning, custom messages, and image data are excluded.
+Parent context is opt-in (`none`, `all`, `summary`, recent N user turns, or selected entry IDs),
+text-only, sanitized, and bounded. Tool results, reasoning, custom messages, and image data are
+excluded.
 
-Neither transport claims to clone parent approval decisions, sandbox profiles, provider-header extension hooks, or extension state. In-process children also do not provide global core scheduling or parent/child transcript switching. Result metadata marks these guarantees unsupported.
+Target policy controls where a child may start and whether protected project resources may load. It
+is not a filesystem, process, network, or confidentiality sandbox. Current-workspace trust comes from
+the session. External trust uses Pi's nearest saved decision, with a nearer denial taking precedence.
+General `trusted-targets` delegation rejects unsaved, denied, or unresolved external targets before
+any batch launch. `anywhere` delegation may start them with project trust disabled. Consultation may
+start in any existing target by default, but a target without effective trust is downgraded to
+`resources: "none"`; project context, skills, prompts, extensions, and sessions are disabled while
+agent/package read-only instructions remain.
+
+Disposable worktrees inherit the approved base target's resolved trust. Subprocess and in-process
+transports receive the same decision; restored retained records re-resolve trust rather than trusting
+a stale snapshot. Pi `/trust` remains the only trust writer.
+
+Neither transport claims to clone parent approval decisions, sandbox profiles, provider-header
+extension hooks, or extension state. In-process children also do not provide global core scheduling
+or parent/child transcript switching. Result metadata marks these guarantees unsupported.

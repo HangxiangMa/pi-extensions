@@ -1,216 +1,135 @@
-# pi-goal interruption research
+# pi-goal interruption and continuation lifecycle
 
-This note investigates why `@narumitw/pi-goal` can lose momentum or continue at the
-wrong time, and compares it with the native goal runtime in `third_party/codex`.
+This note records the current lifecycle contract behind `@narumitw/pi-goal`. It explains why Goal
+continuation waits for Pi's settled boundary, how retry and compaction ownership is retained, and
+which races cannot be eliminated by an extension.
 
-## Scope
+## Scope and authority
 
-Reviewed active code and docs only. Deprecated extensions are out of scope.
-
-Primary sources:
+The maintained implementation and tests are authoritative:
 
 - `extensions/pi-goal/src/goal.ts`
-- Pi extension docs for `before_agent_start`, `agent_end`, `sendUserMessage`,
-  `appendEntry`, `ctx.isIdle()`, and `ctx.hasPendingMessages()`
-- `third_party/codex/codex-rs/core/src/goals.rs`
-- `third_party/codex/codex-rs/core/src/context/goal_context.rs`
-- `third_party/codex/codex-rs/core/src/context/turn_aborted.rs`
-- `third_party/codex/codex-rs/core/templates/goals/*.md`
-- `third_party/codex/codex-rs/tui/src/bottom_pane/pending_input_preview.rs`
-- `third_party/codex/codex-rs/tui/src/chatwidget/input_queue.rs`
+- `extensions/pi-goal/src/runtime.ts`
+- `extensions/pi-goal/src/accounting.ts`
+- `extensions/pi-goal/src/safety.ts`
+- `extensions/pi-goal/src/prompts.ts`
+- `extensions/pi-goal/test/goal.test.ts`
+- `extensions/pi-goal/test/goal-runtime-smoke.mjs`
 
-## Current `pi-goal` behavior
+The package README owns the public command, settings, status, and interruption contract. This note
+keeps only the internal lifecycle rationale and remaining Pi-core boundary.
 
-`pi-goal` is implemented entirely as a Pi extension:
+## Settled continuation contract
 
-1. `/goal <objective>` creates an in-memory `activeGoal`, persists it as a
-   custom session entry, updates the statusline, and calls `pi.sendUserMessage()`
-   with a kickoff prompt.
-2. `before_agent_start` appends active-goal rules to the system prompt.
-3. `goal_complete` marks the goal complete, clears persisted state, and returns
-   `terminate: true`.
-4. `agent_end` increments the goal iteration, updates usage, checks token
-   budget, and sends a continuation prompt if the same goal id is still active.
-5. Continuation delivery is delegated to Pi messaging:
-   - if `ctx.isIdle()` is true, call `pi.sendUserMessage(prompt)`;
-   - otherwise call `pi.sendUserMessage(prompt, { deliverAs: "followUp" })`.
+`pi-goal` separates outcome classification from continuation dispatch:
 
-This is small and idiomatic for an extension, but the continuation policy is not
-owned by the agent runtime. That is the main source of fragility.
+1. `turn_end` accounts every completed model response owned by automatic Goal work and enforces an
+   optional configured response cap.
+2. `agent_end` records final usage, classifies the run outcome, applies the no-progress guard, and
+   creates an in-memory continuation intent for an eligible active goal. It does not send the normal
+   continuation.
+3. `agent_settled` runs after retry, automatic compaction, steering, and follow-up work drains. It
+   first finalizes matching exhausted recovery, then dispatches any pending queue transition, and
+   only then may dispatch an ordinary continuation.
+4. Continuation dispatch re-reads the active goal, requires matching ownership, `ctx.isIdle()`, and
+   no pending messages. Repeated settled events cannot consume one intent twice.
 
-## Where interruptions can break `pi-goal`
+Standalone manual compaction does not emit `agent_settled`, so `session_compact` invokes the same
+single-flight idle dispatcher as a narrow fallback. It does not introduce a second continuation
+path or bypass the idle and pending-message gates.
 
-### 1. User interrupt is not goal-aware
+## Ownership and stale-delivery protection
 
-`pi-goal` has no explicit `turn_aborted` or `interrupt` event. If Pi surfaces an
-aborted assistant message through normal turn/agent events, `agent_end` still has
-enough information to send another continuation unless `pi-goal` separately
-checks for aborted/error stop reasons.
+Goal-owned kickoff, resume, active-edit, and continuation prompts carry bounded markers tied to the
+originating goal id. Continuation tickets also include the goal iteration and a unique nonce. Intent
+and accepted delivery are tracked separately so cancellation can cover both a not-yet-dispatched
+continuation and a prompt that was accepted by Pi but lost the non-atomic start race.
 
-Codex treats `TurnAbortReason::Interrupted` as a first-class runtime event. The
-goal runtime accounts progress, clears the continuation turn id, and pauses the
-active goal. That makes Esc/user interrupt mean "stop this goal loop for now",
-not "immediately schedule another continuation".
+At `input`, `before_agent_start`, and later lifecycle boundaries, the runtime revalidates the active
+goal id, prompt marker, status, and run ownership before mutating state. Session replacement
+separately clears pending prompt, continuation, recovery, and run ownership. A newer user or extension
+turn can supersede old continuation intent. A delayed prompt from a replaced, stopped, cleared, or
+completed goal cannot reactivate work or overwrite a newer goal.
 
-### 2. Continuation is scheduled from `agent_end`, not from a runtime idle gate
+Pi extensions cannot atomically reserve an idle turn. Another extension can still win after
+`ctx.isIdle()` and pending-message checks. Goal markers, start-boundary revalidation, and later fresh
+intent recovery bound this race, but do not provide the runtime-owned idle reservation available to
+Pi core.
 
-`pi-goal` schedules the next turn from an extension `agent_end` handler. That
-handler is downstream of the agent loop and does not own the runtime's active
-turn reservation. Depending on exact event ordering, queued follow-ups,
-compaction, retry, or other extension work can race with the continuation.
+## Retry, compaction, and stopped states
 
-Codex separates "turn finished" from "maybe continue if idle". After a turn is
-fully cleared, it calls a runtime-owned `MaybeContinueIfIdle` path. That path
-first starts any pending non-goal work, then tries goal continuation only if the
-session is still idle.
+Retryable provider failures and context-overflow compaction remain Pi-owned recovery:
 
-### 3. Pending user input is not prioritized
+- `agent_end` keeps the matching goal active, cancels ordinary continuation pressure, and records
+  recovery ownership instead of blocking retry tools.
+- A retry or compaction start consumes or carries that ownership into the replacement run so
+  automatic accounting cannot be bypassed.
+- If matching recovery remains when `agent_settled` proves no retry, compaction, or follow-up is
+  pending, the goal becomes `blocked`.
+- Explicit subscription, quota, credit, or billing exhaustion becomes `usage_limited`; transient
+  rate limits and server failures remain retryable.
+- User interruption becomes `paused`. Other terminal non-usage failures become `blocked`.
 
-`pi-goal` does not check `ctx.hasPendingMessages()` before scheduling an
-automatic continuation. A user follow-up, steering message, or another extension
-message can be queued at the same boundary as the goal continuation.
+Stopped transitions cancel current continuation ownership and block stale Goal-owned tool calls.
+Successful resume rotates the goal id and starts a fresh blocker and safety audit. Clear removes Goal
+state and stale guards without aborting unrelated work.
 
-Codex explicitly skips active-goal continuation when queued response items or
-trigger-turn mailbox items are pending. User or inter-agent work wins over the
-automatic goal loop.
+## Compaction persistence
 
-### 4. No continuation lock or reserved continuation turn id
+Canonical Goal and queue state is stored in `goal-state` session entries. Before compaction, the
+runtime checkpoints active elapsed time and current safety/accounting state. Automatic compaction
+retries do not enqueue another Goal turn. Non-retrying manual compaction creates at most one fresh
+intent and uses the common idle dispatcher.
 
-`pi-goal` guards against stale goals by comparing the goal id before sending, but
-it does not keep a continuation lock or a reserved continuation turn id. Multiple
-`agent_end`-like boundaries, reload/resume timing, or queued messages can still
-produce duplicate or stale continuation pressure.
+Goal prompts and compacted context use the same objective trust boundary, stale goal id, full-scope
+rule, and requirement-by-requirement completion audit. Prompt wording is a guardrail; current files,
+commands, tests, runtime behavior, and external state remain the completion evidence.
 
-Codex has both a `continuation_lock` and a `continuation_turn_id`. It reserves an
-active turn before injecting continuation input, re-reads the goal from state,
-and clears the reservation if the goal changed or another turn appeared.
+## Usage, elapsed time, and circuit breakers
 
-### 5. The continuation prompt is a visible user message
+For each persisted assistant message, accounting prefers a finite non-negative
+`usage.totalTokens`. Older or partial records fall back to finite non-negative
+`input + output + cacheRead + cacheWrite`, without adding fields already included in those totals.
+Goal usage subtracts the branch baseline captured at activation and clamps branch rewinds at zero.
 
-`pi-goal` continuation uses normal `sendUserMessage()`. This makes continuation
-look like user input and subjects it to the same queue semantics as real user
-messages.
+`tool_execution_end` is the earliest reliable in-turn budget boundary because Pi persists the
+assistant message before this hook. It can transition once to `budget_limited` and inject one bounded
+wrap-up instruction; `agent_end` is the no-tool fallback. Active elapsed time is accumulated only
+while status is `active`, excluding stopped, shutdown, and offline periods.
 
-Codex injects hidden user-context fragments wrapped in `<goal_context>`. The
-model sees runtime-owned steering, but the UI and input queue can still treat
-real user input separately.
+Automatic-work safety is separate from the token budget:
 
-### 6. Goal objective text is not escaped inside prompt delimiters
+- `continuationLimits.automaticTurns` is `null` by default. When configured, `turn_end` counts normal
+  responses from automatic continuations, including tool loops and matching recovery work.
+- `continuationLimits.noProgressTurns` defaults to `3`. Repeated empty or normalized-identical
+  tool-free automatic runs pause the goal; attempted tool calls reset that heuristic.
+- The no-progress fingerprint is fixed-size and stores no raw assistant text.
+- Safety state persists across reload, compaction, shelving, and automatic queue activation. It
+  resets only at documented successful user-control boundaries.
 
-Codex escapes objective text before placing it inside XML-like tags in goal
-prompts. `pi-goal` currently interpolates the objective directly into plain text
-prompts. That is simpler, but a goal containing delimiter-like or instruction-like
-text can make the continuation prompt less robust.
+These guards pause rather than infer completion. `goal_complete` remains authoritative because plain
+assistant text cannot prove filesystem, test, runtime, PR, rendered, or external requirements.
 
-### 7. Budget handling happens only at turn end
+## Remaining Pi-core boundary
 
-`pi-goal` checks token budget in `agent_end`. Long turns with many tools can
-exceed the budget substantially before the extension can react.
+The extension deliberately does not claim Codex-style runtime ownership that Pi does not expose:
 
-Codex accounts goal usage after tool completion and at turn finish. When the
-budget is reached, it can inject a budget-limit steering item during the current
-turn and mark the goal `budget_limited` once.
+- no atomic idle-turn reservation;
+- no hidden runtime input that is distinct from normal message delivery;
+- no first-class Goal-aware abort event or queue priority;
+- no global scheduler coordinating Goal continuation with every extension.
 
-## Codex design points worth copying
+The current design uses public lifecycle hooks and bounded ownership markers. Moving continuation
+into Pi core could remove the residual idle race, but is not required for the extension's current
+settled, retry, compaction, accounting, and stale-delivery guarantees.
 
-### Runtime event dispatcher
+## Verification map
 
-Codex centralizes lifecycle policy behind `GoalRuntimeEvent`:
-
-- `TurnStarted`
-- `ToolCompleted`
-- `ToolCompletedGoal`
-- `TurnFinished`
-- `MaybeContinueIfIdle`
-- `TaskAborted`
-- `ExternalMutationStarting`
-- `ExternalSet`
-- `ExternalClear`
-- `ThreadResumed`
-
-This keeps accounting, continuation, abort, resume, and external goal mutation
-rules in one place.
-
-### Interrupt means pause
-
-On user interrupt, Codex accounts current progress and pauses the active goal.
-It also records model-visible interrupted-turn context so future turns do not
-assume commands or tools cleanly completed.
-
-### Continuation is idle-only and lock-protected
-
-Codex continuation is not just "send a follow-up". It:
-
-1. checks that goals are enabled and the current mode allows goals;
-2. checks no active turn exists;
-3. checks no queued user or trigger-turn mailbox input exists;
-4. reads the current persisted goal and requires `status == active`;
-5. acquires a continuation lock;
-6. reserves an active turn;
-7. re-reads the goal before launch;
-8. injects hidden goal context;
-9. marks the generated turn id as the continuation turn.
-
-### Hidden goal context
-
-Codex continuation, budget-limit, and objective-update prompts are runtime-owned
-hidden context fragments, not ordinary user messages. This preserves the user
-queue as user intent while still giving the model persistent goal guidance.
-
-### Completion audit prompt
-
-The Codex continuation template strongly warns the model not to redefine the
-goal into a smaller task, and requires evidence-based completion before calling
-`update_goal` with status `complete`. `pi-goal` has similar rules, but Codex's
-template is more explicit about requirement-by-requirement verification and
-using the current worktree/external state as authoritative.
-
-## Recommendations
-
-### Extension-only improvements
-
-These can be implemented inside `pi-goal` without Pi core changes:
-
-1. **Detect aborted/error agent endings.** If the final assistant message has
-   `stopReason: "aborted"`, pause the goal and do not auto-continue. If it has
-   `stopReason: "error"`, consider pausing or requiring explicit `/goal resume`.
-2. **Respect pending user work.** Before sending a continuation, check
-   `ctx.hasPendingMessages()` and skip or delay goal continuation when user or
-   extension messages are already queued.
-3. **Add a continuation-pending guard.** Track goal id + iteration for a queued
-   continuation so repeated end events cannot enqueue duplicates.
-4. **Escape objective text in XML-like prompts.** If prompts use delimiters,
-   escape `&`, `<`, and `>` like Codex does.
-5. **Strengthen continuation prompts.** Borrow Codex's "current state is
-   authoritative" and "completion audit" language.
-6. **Document interruption semantics.** Make `/goal pause` and user interrupt
-   behavior explicit in the README once implemented.
-
-### Pi core improvements needed for Codex parity
-
-Some Codex behavior cannot be faithfully reproduced by an extension alone:
-
-1. **Abort lifecycle event.** Extensions need a first-class event carrying abort
-   reason so goal-like extensions can distinguish user interrupt from normal
-   completion.
-2. **Runtime-owned continuation scheduling.** Pi needs an idle-only scheduling
-   API with pending-input checks, a lock, and a turn reservation, rather than
-   requiring extensions to call `sendUserMessage()` from `agent_end`.
-3. **Hidden contextual input.** A hidden context-message API would let runtime
-   steering reach the model without appearing as user-submitted text or fighting
-   the normal user queue.
-4. **Pending-input categories.** Codex's UI distinguishes pending steers,
-   rejected steers, and queued follow-ups. Pi goal continuation would be safer if
-   automatic continuation could be lower priority than all user-visible queues.
-5. **Tool-boundary accounting hooks.** Budget-aware goals need accounting after
-   tool completion, not only at agent end.
-
-## Suggested next step
-
-Implement the extension-only safety fixes first, especially abort/error detection
-and pending-message checks. That should reduce the most visible "goal keeps going
-after I interrupted it" and "goal races my next message" failures.
-
-If goal mode is expected to match Codex long-term, move the continuation policy
-into Pi core or add core APIs that let `pi-goal` request a locked, idle-only,
-hidden-context continuation.
+- Settled exactly-once dispatch, pending-message priority, replacement, pause, clear, and lost-start
+  races: `extensions/pi-goal/test/goal.test.ts` settled-continuation cases.
+- Retry, overflow, compaction, stopped-state, and exhausted-recovery classification: the retry and
+  compaction lifecycle cases in `goal.test.ts`.
+- Usage totals, active time, tool-boundary budgets, wrap-up ownership, and safety epochs: accounting,
+  budget, and automatic-turn cases in `goal.test.ts`, plus persistence/settings tests.
+- Real Pi event ordering, retries, manual compaction, no-progress stopping, automatic tool loops, and
+  bounded pre-aborted cleanup: `extensions/pi-goal/test/goal-runtime-smoke.mjs`.
