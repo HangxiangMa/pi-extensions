@@ -1,4 +1,3 @@
-import { basename } from "node:path";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -6,6 +5,7 @@ import type {
 	Theme,
 	ThemeColor,
 } from "@earendil-works/pi-coding-agent";
+import { formatDirectoryPath } from "./directory.js";
 import {
 	type ExtensionStatusRuntime,
 	formatExtensionStatuses,
@@ -26,6 +26,7 @@ import { type FooterUsageSummary, summarizeFooterUsage } from "./usage.js";
 
 type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 export interface RuntimeState extends ExtensionStatusRuntime {
+	homeDir?: string;
 	turnCount: number;
 	activeTools: Map<string, number>;
 	isStreaming: boolean;
@@ -138,7 +139,13 @@ function buildSegment(
 			);
 		}
 		case "cwd":
-			return segment(name, basename(ctx.cwd) || ctx.cwd, config, "accent", "directory");
+			return segment(
+				name,
+				formatDirectoryPath(ctx.cwd, runtime.homeDir, runtime.gitStatus?.root),
+				config,
+				"accent",
+				"directory",
+			);
 		case "tools": {
 			const activity = formatToolActivity(runtime);
 			return activity ? segment(name, activity, config, "accent", "runtime") : undefined;

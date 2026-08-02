@@ -21,6 +21,7 @@ export const modelModule = defineModule({
 			default: "end",
 			values: TRUNCATION_DIRECTIONS,
 		},
+		model_aliases: { kind: "string-map", default: {} },
 	},
 	values: ({ runtime, options }) => {
 		if (!runtime.model) return undefined;
@@ -29,8 +30,17 @@ export const modelModule = defineModule({
 		const direction = isTruncationDirection(options.truncation_direction)
 			? options.truncation_direction
 			: "end";
+		const aliases = options.model_aliases;
+		const aliasMap =
+			aliases && typeof aliases === "object" && !Array.isArray(aliases)
+				? (aliases as Readonly<Record<string, string>>)
+				: undefined;
+		const alias =
+			aliasMap && Object.hasOwn(aliasMap, runtime.model.id)
+				? aliasMap[runtime.model.id]
+				: undefined;
 		return {
-			model: truncateModel(shortenModel(runtime.model.id), length, symbol, direction),
+			model: truncateModel(alias ?? shortenModel(runtime.model.id), length, symbol, direction),
 		};
 	},
 });

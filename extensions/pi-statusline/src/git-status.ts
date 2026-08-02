@@ -1,8 +1,10 @@
+import { isAbsolute } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const GIT_STATUS_TIMEOUT_MS = 3_000;
 
 export interface GitStatusSummary {
+	root?: string;
 	ahead: number;
 	behind: number;
 	staged: number;
@@ -14,14 +16,29 @@ export interface GitStatusSummary {
 export async function readGitStatus(
 	pi: ExtensionAPI,
 	cwd: string,
+	signal?: AbortSignal,
 ): Promise<GitStatusSummary | undefined> {
-	const result = await pi.exec(
-		"git",
-		["--no-optional-locks", "status", "--porcelain=v1", "--branch", "--untracked-files=normal"],
-		{ cwd, timeout: GIT_STATUS_TIMEOUT_MS },
-	);
-	if (result.code !== 0 || result.killed) return undefined;
-	return parseGitStatusPorcelain(result.stdout);
+	const [statusResult, rootResult] = await Promise.all([
+		pi.exec(
+			"git",
+			["--no-optional-locks", "status", "--porcelain=v1", "--branch", "--untracked-files=normal"],
+			{ cwd, timeout: GIT_STATUS_TIMEOUT_MS, signal },
+		),
+		pi
+			.exec("git", ["rev-parse", "--path-format=absolute", "--show-toplevel"], {
+				cwd,
+				timeout: GIT_STATUS_TIMEOUT_MS,
+				signal,
+			})
+			.catch(() => undefined),
+	]);
+	if (statusResult.code !== 0 || statusResult.killed) return undefined;
+	const summary = parseGitStatusPorcelain(statusResult.stdout);
+	if (rootResult && rootResult.code === 0 && !rootResult.killed) {
+		const root = parseGitRoot(rootResult.stdout);
+		if (root) summary.root = root;
+	}
+	return summary;
 }
 
 export function parseGitStatusPorcelain(output: string): GitStatusSummary {
@@ -71,6 +88,11 @@ function isChangedStatus(status: string): boolean {
 	return status !== " " && status !== "?" && status !== "!";
 }
 
+export function parseGitRoot(output: string): string | undefined {
+	const root = output.split(/\r?\n/u)[0]?.trim();
+	return root && isAbsolute(root) ? root : undefined;
+}
+
 export function formatGitStatusSummary(summary: GitStatusSummary | undefined): string {
 	if (!summary) return "";
 	const tokens = [
@@ -111,6 +133,7 @@ export function gitStatusSummaryEqual(
 ): boolean {
 	if (!left || !right) return left === right;
 	return (
+		left.root === right.root &&
 		left.ahead === right.ahead &&
 		left.behind === right.behind &&
 		left.staged === right.staged &&

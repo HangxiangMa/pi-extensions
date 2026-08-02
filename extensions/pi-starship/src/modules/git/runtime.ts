@@ -77,6 +77,7 @@ export async function readGitSnapshot(
 
 	return {
 		...parsed,
+		root: metadata?.root,
 		commit,
 		state: metadata ? parseGitState(metadata.gitDirectory) : undefined,
 		metrics,
@@ -250,6 +251,7 @@ export function parseGitState(gitDirectory: string): GitStateSnapshot | undefine
 }
 
 interface GitRepositoryMetadata {
+	root: string;
 	gitDirectory: string;
 	worktree?: GitWorktreeSnapshot;
 }
@@ -261,6 +263,7 @@ function parseGitRepositoryMetadata(output: string): GitRepositoryMetadata | und
 	if (!path || !commonDir || !gitDirectory) return undefined;
 	if (![path, commonDir, gitDirectory].every(isAbsolute)) return undefined;
 	return {
+		root: path,
 		gitDirectory,
 		worktree: samePath(commonDir, gitDirectory)
 			? undefined

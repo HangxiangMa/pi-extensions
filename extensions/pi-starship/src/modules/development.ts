@@ -1,3 +1,4 @@
+import { truncatePathComponents } from "./truncation.js";
 import { defineModule, type ModuleDefinition, type ModuleOptionSchema } from "./types.js";
 import { workspaceModuleValues } from "./workspace-helpers.js";
 
@@ -47,13 +48,29 @@ export const direnvModule = developmentModule({
 	options: directDetection,
 });
 
-export const condaModule = developmentModule({
+export const condaModule = defineModule({
 	name: "conda",
-	variables: ["environment"],
-	format: "via [$symbol$environment]($style) ",
-	symbol: "🅒 ",
-	style: "green bold",
-	options: { ignore_base: { kind: "boolean", default: true } },
+	variables: ["symbol", "environment"],
+	defaults: {
+		format: "via [$symbol$environment]($style) ",
+		symbol: "🅒 ",
+		style: "green bold",
+		disabled: false,
+	},
+	options: {
+		ignore_base: { kind: "boolean", default: true },
+		truncation_length: { kind: "integer", default: 1, minimum: 0, maximum: 1_000_000 },
+	},
+	values: (context) => {
+		const values = workspaceModuleValues("conda", context);
+		const environment = values?.environment;
+		if (!environment) return undefined;
+		const length =
+			typeof context.options.truncation_length === "number" ? context.options.truncation_length : 1;
+		return {
+			environment: truncatePathComponents(environment, length).value,
+		};
+	},
 });
 
 export const pixiModule = developmentModule({

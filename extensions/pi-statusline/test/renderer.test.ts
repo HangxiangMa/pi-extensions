@@ -148,6 +148,49 @@ test("idle contextual activity rows collapse while explicit empty rows remain", 
 	assert.deepEqual(explicitEmptyRows.split("\n"), ["", "░▒▓ 🤖 sonnet-4", ""]);
 });
 
+test("cwd uses Starship repository and three-component directory defaults", () => {
+	const config = createDefaultConfig();
+	config.segments = ["cwd"];
+	const context = createMockContext({
+		cwd: "/home/alice/work/repository/src",
+	});
+	const footerData: ReadonlyFooterDataProvider = {
+		getGitBranch: () => "main",
+		getExtensionStatuses: () => new Map<string, string>(),
+		onBranchChange: () => () => undefined,
+		getAvailableProviderCount: () => 1,
+	};
+	const runtime: RuntimeState = {
+		homeDir: "/home/alice",
+		turnCount: 0,
+		activeTools: new Map(),
+		isStreaming: false,
+		thinkingLevel: "off",
+		gitStatus: {
+			root: "/home/alice/work/repository",
+			ahead: 0,
+			behind: 0,
+			staged: 0,
+			modified: 0,
+			untracked: 0,
+			conflicts: 0,
+		},
+		duplicateExtensions: [],
+		extensionStatusIconAliases: new Map(),
+	};
+
+	assert.equal(
+		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
+		"░▒▓ 📁 repository/src",
+	);
+
+	runtime.gitStatus = undefined;
+	assert.equal(
+		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
+		"░▒▓ 📁 work/repository/src",
+	);
+});
+
 test("model truncation supports all directions before prefixes and responsive fitting", () => {
 	const config = createDefaultConfig();
 	config.segments = ["model"];

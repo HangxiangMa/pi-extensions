@@ -417,7 +417,7 @@ test("execution context rules are fixture-driven and sanitize terminal metadata"
 		cwd: "/workspace",
 		config: config("$os$container$hostname$username", {
 			os: { disabled: false },
-			hostname: { aliases: { "build.example": "builder" } },
+			hostname: { aliases: { build: "builder" } },
 		}),
 		environment: {
 			SSH_CONNECTION: "local remote",
@@ -442,6 +442,18 @@ test("execution context rules are fixture-driven and sanitize terminal metadata"
 	assert.equal(JSON.stringify(snapshot).includes(String.fromCharCode(27)), false);
 	assert.equal(JSON.stringify(snapshot).includes(String.fromCharCode(7)), false);
 	assert.equal(JSON.stringify(snapshot).includes("\\ud800"), false);
+
+	const untrimmed = await collectWorkspaceSnapshot({
+		cwd: "/workspace",
+		config: config("$hostname", { hostname: { ssh_only: false, trim_at: "" } }),
+		environment: {},
+		homeDir: "/home/user",
+		platform: "linux",
+		hostname: "build.example",
+		username: "user",
+		exec: noExec,
+	});
+	assert.equal(untrimmed.modules.hostname?.hostname, "build.example");
 });
 
 test("execution fixtures cover macOS, Windows, WSL, Docker, Podman, and contextual users", async () => {
@@ -594,7 +606,7 @@ test("development environment modules use allowlisted activation data and lazy c
 		assert.deepEqual(calls, ["mise doctor", "direnv status --json", "pixi --version"]);
 		assert.deepEqual(snapshot.modules.mise, { health: "healthy" });
 		assert.equal(snapshot.modules.direnv?.allowed, "allowed");
-		assert.deepEqual(snapshot.modules.conda, { environment: "work" });
+		assert.deepEqual(snapshot.modules.conda, { environment: "/envs/work" });
 		assert.deepEqual(snapshot.modules.pixi, {
 			environment: "default",
 			project_name: "demo",

@@ -174,7 +174,7 @@ test("a replacement session reloads JSON settings and uses configured segment te
 		);
 		await emit(mock.events, "session_start", {}, context.ctx);
 		footer = createFooter(context.footer as FooterFactory);
-		assert.match(footer.render(200).join("\n"), /📁 project!/u);
+		assert.match(footer.render(200).join("\n"), /📁 \/workspace\/project!/u);
 		assert.doesNotMatch(footer.render(200).join("\n"), /sonnet-4/u);
 		footer.dispose();
 		await emit(mock.events, "session_shutdown", {}, context.ctx);
