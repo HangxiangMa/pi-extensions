@@ -79,7 +79,7 @@ test("Configuration combines state, source, path, health, and diagnostics", asyn
 		const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
 		const running = mock.commands.get("starship")?.handler("", context.ctx);
 		await tui.waitForOpen();
-		tui.press("tui.select.down");
+		for (let index = 0; index < 3; index += 1) tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
 		const frame = tui.render().join("\n");
@@ -119,7 +119,7 @@ test("healthy missing settings disable restore without creating a document", asy
 		});
 		const running = mock.commands.get("starship")?.handler("", context.ctx);
 		await tui.waitForOpen();
-		for (let index = 0; index < 3; index += 1) tui.press("tui.select.down");
+		for (let index = 0; index < 5; index += 1) tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /Already using defaults · no file to replace/u);

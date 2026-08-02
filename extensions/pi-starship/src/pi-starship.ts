@@ -17,9 +17,11 @@ import { gitSnapshotEqual, readGitSnapshot } from "./modules/git/runtime.js";
 import {
 	type GithubPrSnapshot,
 	type GitSnapshot,
+	inspectStatuslineModules,
 	reachableModuleRequirements,
 	renderStatusline,
 	type StarshipRuntimeSnapshot,
+	type StatuslineInspection,
 	type WorkspaceSnapshot,
 } from "./modules/index.js";
 import { execWorkspaceCommand } from "./runtime/command.js";
@@ -48,6 +50,8 @@ interface RuntimeState {
 	workspace?: WorkspaceSnapshot;
 	requestRender?: () => void;
 	renderPreview?: (loaded: LoadedStarshipConfig, width: number) => string[];
+	inspect?: (loaded: LoadedStarshipConfig) => StatuslineInspection;
+	footerWidth?: number;
 }
 
 interface RefreshTarget {
@@ -242,6 +246,8 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
 		runtime.workspace = undefined;
 		runtime.requestRender = undefined;
 		runtime.renderPreview = undefined;
+		runtime.inspect = undefined;
+		runtime.footerWidth = undefined;
 		activeTarget = ctx.mode === "tui" ? target : undefined;
 		ctx.ui.setStatus("starship", undefined);
 		if (!activeTarget || !loaded) return;
@@ -258,6 +264,12 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
 					width,
 				);
 			};
+			runtime.inspect = (current) =>
+				inspectStatuslineModules(
+					current.config,
+					runtimeSnapshot(ctx, footerData, runtime),
+					runtime.footerWidth ?? 80,
+				);
 			const unsubscribe = footerData.onBranchChange(() => {
 				if (!isActiveTarget(target)) return;
 				runtime.git = undefined;
@@ -292,10 +304,13 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
 						runtime.workspace = undefined;
 						runtime.requestRender = undefined;
 						runtime.renderPreview = undefined;
+						runtime.inspect = undefined;
+						runtime.footerWidth = undefined;
 					}
 				},
 				invalidate() {},
 				render(width: number): string[] {
+					runtime.footerWidth = width;
 					if (!loaded) return [];
 					const snapshot = runtimeSnapshot(ctx, footerData, runtime);
 					return wrapFormattedStatusline(
@@ -313,6 +328,10 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
 	registerStarshipCommand(pi, {
 		settingsPath: configPath,
 		getLoaded: () => loaded ?? loadStarshipConfig(configPath),
+		getInspection: () => {
+			const current = loaded ?? loadStarshipConfig(configPath);
+			return runtime.inspect?.(current);
+		},
 		getMenuOwner: () => {
 			const generation = sessionGeneration;
 			return {
@@ -371,6 +390,8 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
 		runtime.workspace = undefined;
 		runtime.requestRender = undefined;
 		runtime.renderPreview = undefined;
+		runtime.inspect = undefined;
+		runtime.footerWidth = undefined;
 		ctx.ui.setFooter(undefined);
 		ctx.ui.setStatus("starship", undefined);
 	});
