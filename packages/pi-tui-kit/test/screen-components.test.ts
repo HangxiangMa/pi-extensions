@@ -180,6 +180,26 @@ test("action screens honor injected navigation and distinguish Back from Ctrl+C 
 	assert.deepEqual(close.events, [{ kind: "close" }]);
 });
 
+test("static lists use callback keybindings when they differ from the global manager", () => {
+	const actions = componentHarness(actionScreen, {
+		selectedItemId: "run",
+		keybindings: inputFriendlyKeybindings,
+	});
+	actions.component.handleInput("\u001b[B");
+	actions.component.handleInput("\r");
+	assert.deepEqual(actions.events, [{ kind: "activate", itemId: "detail" }]);
+	assert.deepEqual(actions.selectionChanges, ["detail"]);
+
+	const choice = componentHarness(choiceScreen, {
+		selectedItemId: "minimal",
+		keybindings: inputFriendlyKeybindings,
+	});
+	choice.component.handleInput("\u001b[B");
+	choice.component.handleInput("\r");
+	assert.deepEqual(choice.events, [{ kind: "activate", itemId: "balanced" }]);
+	assert.deepEqual(choice.selectionChanges, ["balanced"]);
+});
+
 test("choice screens render current state, initial selection, details, and disabled reasons", () => {
 	const harness = componentHarness(choiceScreen, {
 		plainTheme: true,

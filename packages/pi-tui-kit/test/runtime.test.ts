@@ -309,7 +309,91 @@ test("RPC uses dialog adaptation without custom TUI and print mode delegates uns
 	assert.equal(unsupportedMode, "tui");
 });
 
-test("TUI and RPC preserve the seven-screen semantic action matrix", async () => {
+test("browse stays read-only across TUI detail navigation and RPC pagination", async () => {
+	const items = [
+		{
+			id: "first-raw",
+			label: "Same",
+			statusText: "Empty",
+			description: "First item",
+			details: ["Preview: first"],
+		},
+		{
+			id: "second-raw",
+			label: "Same\u001b]8;;unsafe\u0007",
+			statusText: "Empty\u001b[31m",
+			description: "Second item",
+			searchText: "must stay private in RPC",
+			details: Array.from({ length: 12 }, (_, index) => `Detail ${index}`),
+		},
+	];
+	const menu = defineMenu<undefined, "browse", "unused">({
+		start: "browse",
+		screens: {
+			browse: () => ({
+				kind: "browse",
+				title: "Resources",
+				items,
+				hint: "back",
+			}),
+		},
+		actions: {
+			unused: async () => {
+				throw new Error("browse must not invoke an action");
+			},
+		},
+	});
+
+	const tuiContext = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 50);
+			harness.handleInput("tui.select.down");
+			harness.handleInput("tui.select.confirm");
+			assert.match(harness.render().join("\n"), /Status: Empty/u);
+			harness.handleInput("tui.select.cancel");
+			assert.match(harness.render().join("\n"), /Same.*\[Empty\]/u);
+			harness.handleInput("tui.select.cancel");
+			return harness.result;
+		},
+	});
+	assert.deepEqual(await runMenu(tuiContext.ctx, menu, { getState: () => undefined }), {
+		kind: "closed",
+		reason: "back",
+	});
+
+	let rpcCall = 0;
+	const rpcContext = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		select: async (title: string, choices: string[]) => {
+			rpcCall += 1;
+			assert.equal(title.includes("\u001b"), false);
+			assert.equal(choices.join("\n").includes("must stay private"), false);
+			if (rpcCall === 1) {
+				assert.equal(new Set(choices).size, choices.length);
+				return choices[1];
+			}
+			if (rpcCall === 2) {
+				assert.match(title, /Status: Empty[\s\S]*Detail 0/u);
+				return choices.find((choice) => choice.startsWith("Next"));
+			}
+			if (rpcCall === 3) {
+				assert.match(title, /Detail 11/u);
+				return choices.find((choice) => choice.startsWith("Back"));
+			}
+			return choices.find((choice) => choice.startsWith("Back"));
+		},
+	});
+	assert.deepEqual(await runMenu(rpcContext.ctx, menu, { getState: () => undefined }), {
+		kind: "closed",
+		reason: "back",
+	});
+	assert.equal(rpcCall, 4);
+});
+
+test("TUI and RPC preserve the eight-screen semantic action matrix", async () => {
 	type MatrixScreen = MenuScreen<"main", "act">;
 	type MatrixPayload = { itemId: string; value?: string; selected?: boolean };
 	const cases: Array<{
@@ -329,6 +413,14 @@ test("TUI and RPC preserve the seven-screen semantic action matrix", async () =>
 		{
 			name: "detail",
 			screen: { kind: "detail", title: "Detail", lines: ["Read only"] },
+		},
+		{
+			name: "browse",
+			screen: {
+				kind: "browse",
+				title: "Browse",
+				items: [{ id: "browse-raw", label: "Browse item", details: ["Read only"] }],
+			},
 		},
 		{
 			name: "choice",
@@ -408,6 +500,7 @@ test("TUI and RPC preserve the seven-screen semantic action matrix", async () =>
 					},
 				},
 			});
+			let rpcCalls = 0;
 			const context = createMockContext(
 				mode === "tui"
 					? {
@@ -416,6 +509,10 @@ test("TUI and RPC preserve the seven-screen semantic action matrix", async () =>
 							custom: async (factory: unknown) => {
 								const harness = createCustomSelectorHarness(factory, 80);
 								if (entry.name === "detail") {
+									harness.handleInput("tui.select.cancel");
+								} else if (entry.name === "browse") {
+									harness.handleInput("tui.select.confirm");
+									harness.handleInput("tui.select.cancel");
 									harness.handleInput("tui.select.cancel");
 								} else if (entry.name === "settings") {
 									harness.handleInput("tui.select.confirm");
@@ -434,17 +531,21 @@ test("TUI and RPC preserve the seven-screen semantic action matrix", async () =>
 							mode,
 							hasUI: true,
 							input: async () => "input raw",
-							select: async (_title: string, choices: string[]) =>
-								entry.name === "review"
-									? choices.find((choice) => choice.startsWith("Apply"))
-									: choices[0],
+							select: async (_title: string, choices: string[]) => {
+								rpcCalls += 1;
+								if (entry.name === "review") {
+									return choices.find((choice) => choice.startsWith("Apply"));
+								}
+								if (entry.name === "browse") return rpcCalls === 1 ? choices[0] : choices.at(-1);
+								return choices[0];
+							},
 						},
 			);
 
 			const result = await runMenu(context.ctx, menu, { getState: () => undefined });
 			assert.deepEqual(
 				result,
-				entry.name === "detail"
+				entry.name === "detail" || entry.name === "browse"
 					? { kind: "closed", reason: "back" }
 					: { kind: "closed", reason: "close" },
 				`${mode} ${entry.name} result`,

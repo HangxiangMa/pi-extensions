@@ -71,6 +71,13 @@ export interface MenuScreenComponentOptions<ScreenId extends string, ActionId ex
 	onDispose?(): void;
 }
 
+export type BrowseOptions<
+	ScreenId extends string,
+	ActionId extends string,
+> = MenuScreenComponentOptions<ScreenId, ActionId> & {
+	screen: Extract<MenuScreen<ScreenId, ActionId>, { kind: "browse" }>;
+};
+
 export type MultiSelectOptions<
 	ScreenId extends string,
 	ActionId extends string,

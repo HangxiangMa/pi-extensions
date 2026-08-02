@@ -81,6 +81,27 @@ export interface ChoiceScreen<ActionId extends string> {
 	hint?: "back" | "close";
 }
 
+export interface MenuBrowseItem {
+	id: string;
+	label: string;
+	description?: string;
+	/** Textual state shown with the row and in detail. */
+	statusText?: string;
+	/** Additional non-rendered text used by TUI fuzzy search. */
+	searchText?: string;
+	details?: readonly string[];
+}
+
+export interface BrowseScreen {
+	kind: "browse";
+	title: string;
+	lines?: readonly string[];
+	items: readonly MenuBrowseItem[];
+	/** Omitted or "adaptive" fills the live terminal budget; a number caps visible item rows. */
+	viewportSize?: number | "adaptive";
+	hint?: "back" | "close";
+}
+
 export interface MenuSettingItem<ActionId extends string> extends MenuItemBase {
 	currentValue: string;
 	values?: readonly string[];
@@ -151,6 +172,7 @@ export interface MultiSelectScreen<ScreenId extends string, ActionId extends str
 export type MenuScreen<ScreenId extends string, ActionId extends string> =
 	| ActionsScreen<ScreenId, ActionId>
 	| DetailScreen
+	| BrowseScreen
 	| ChoiceScreen<ActionId>
 	| SettingsScreen<ActionId>
 	| InputScreen<ActionId>

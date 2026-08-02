@@ -60,6 +60,16 @@ function validateScreen<
 		for (const item of screen.items) validateActionItem(definition, item);
 		return;
 	}
+	if (screen.kind === "browse") {
+		if (
+			screen.viewportSize !== undefined &&
+			screen.viewportSize !== "adaptive" &&
+			(!Number.isInteger(screen.viewportSize) || screen.viewportSize <= 0)
+		) {
+			throw new Error('Menu browse viewport size must be "adaptive" or a positive integer');
+		}
+		return;
+	}
 	if (screen.kind === "choice") {
 		assertAction(definition, `choice screen ${screen.title}`, screen.action);
 		if (
