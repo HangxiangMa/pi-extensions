@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import { showFooterExplanation, showModuleBrowser } from "./command-inspector.js";
 import { type PreviewMenuResult, showPreviewActionMenu } from "./command-preview.js";
 import {
 	atomicRestoreConfigDocument,
@@ -10,6 +11,7 @@ import {
 	removeConfigDocumentIfMatches,
 	validateConfigDocument,
 } from "./config.js";
+import { inspectUnavailableModules, type StatuslineInspection } from "./modules/inspection.js";
 
 const SUBCOMMANDS: AutocompleteItem[] = [
 	{ value: "settings", label: "settings", description: "Customize the footer TOML" },
@@ -19,6 +21,8 @@ const SUBCOMMANDS: AutocompleteItem[] = [
 
 const MAIN_ACTIONS = {
 	customize: "customize",
+	explain: "explain",
+	modules: "modules",
 	configuration: "configuration",
 	help: "help",
 	restore: "restore",
@@ -32,6 +36,7 @@ const PREVIEW_ACTIONS = {
 
 export interface StarshipCommandOptions {
 	getLoaded(): LoadedStarshipConfig;
+	getInspection?(): StatuslineInspection | undefined;
 	apply(loaded: LoadedStarshipConfig, ctx: ExtensionCommandContext): void;
 	settingsPath: string;
 	renderPreview?(
@@ -100,7 +105,7 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 		isCurrent: () => !fallbackController.signal.aborted,
 	};
 	type Screen = "main" | "configuration" | "help";
-	type Action = "customize" | "restore";
+	type Action = "customize" | "explain" | "modules" | "restore";
 	const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
 		start: "main",
 		screens: {
@@ -117,6 +122,18 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 							label: "Customize footer",
 							description: `${presentation.state} · preview before applying`,
 							action: "customize",
+						},
+						{
+							id: MAIN_ACTIONS.explain,
+							label: "Explain footer",
+							description: "Why each visible module appears",
+							action: "explain",
+						},
+						{
+							id: MAIN_ACTIONS.modules,
+							label: "Modules",
+							description: "Browse supported modules and current states",
+							action: "modules",
 						},
 						{
 							id: MAIN_ACTIONS.configuration,
@@ -161,6 +178,8 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 				title: "pi-starship help",
 				lines: [
 					"Customize footer opens the TOML editor, then previews and confirms before saving.",
+					"Explain footer breaks down the modules currently showing from the existing snapshot.",
+					"Modules searches every supported module and explains its current read-only state.",
 					"Configuration explains state, source, path, and warnings without changing the footer.",
 					`Settings: ${safeText(options.settingsPath)}`,
 					"Docs: https://github.com/narumiruna/pi-extensions/tree/main/extensions/pi-starship",
@@ -172,6 +191,18 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 			customize: async () => {
 				const result = await editSettings(ctx, options);
 				return result === "applied" || result === "close" ? { kind: "close" } : { kind: "stay" };
+			},
+			explain: async () => {
+				const result = await showFooterExplanation(ctx, options.getInspection?.(), owner.signal);
+				if (!isCurrentOwner(owner)) return { kind: "stay" };
+				return result?.kind === "back" ? { kind: "stay" } : { kind: "close" };
+			},
+			modules: async () => {
+				const inspection =
+					options.getInspection?.() ?? inspectUnavailableModules(options.getLoaded().config);
+				const result = await showModuleBrowser(ctx, inspection, owner.signal);
+				if (!isCurrentOwner(owner)) return { kind: "stay" };
+				return result?.kind === "back" ? { kind: "stay" } : { kind: "close" };
 			},
 			restore: async () => {
 				const presentation = configurationPresentation(options.getLoaded());
@@ -491,7 +522,7 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
 	if (!canNotify(ctx)) return;
 	ctx.ui.notify(
 		[
-			"/starship — open the interactive footer menu",
+			"/starship — customize, explain, or inspect the footer in TUI mode",
 			"/starship settings — customize, preview, and apply TOML",
 			"/starship status — show source, path, and warnings",
 			"/starship help — show this help",

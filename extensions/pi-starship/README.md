@@ -17,7 +17,8 @@ A native Pi footer configured with Starship-style TOML. It parses and renders fo
 - Width-aware `$fill` alignment for native multiline left/right layouts.
 - Footer rendering is pure: no subprocess, network, filesystem, timer, or environment work runs from `render()`.
 - Multiline output wraps to the terminal width instead of truncating.
-- Goal-oriented `/starship` menu with configuration health, preview, confirmation, and recovery.
+- Goal-oriented `/starship` menu with footer explanation, searchable module inspection,
+  configuration health, transactional preview, and recovery.
 
 ## 📦 Install
 
@@ -63,7 +64,16 @@ on the next `session_start`, including `/reload` and session replacement. Editor
 cancellation, component disposal, invalid drafts, write failures, and runtime application failures
 preserve the previous file and effective footer.
 
-The shallow main menu also exposes **Configuration**, **Help**, and **Restore built-in…**.
+The shallow main menu also exposes **Explain footer**, **Modules**, **Configuration**, **Help**, and
+**Restore built-in…**. Explain footer uses the current immutable runtime snapshot to list each
+currently showing non-empty module once with its rendered value and description; it starts no new
+collection work. Modules opens a bounded searchable inspector for every registered module. Its
+textual states distinguish **Showing**, **Empty**, **Disabled**, **Not in format**, and
+**Unavailable** only when the current footer cannot provide an inspection snapshot. Module detail
+shows the current preview when available, description, root reference and reachability, format
+variables, style fields, display rules, and the known reason for absent output. Both views are
+read-only and never create or update the settings document.
+
 Configuration combines state, source, path, health, and diagnostics. A healthy missing file is shown
 as **Built-in defaults**, while **Built-in fallback** is reserved for read or parse errors. Restore is
 disabled when no settings document exists or the exact built-in document is already saved. For a
@@ -531,12 +541,17 @@ Package's explicitly documented Cargo lookup is the only ancestor walk and is ca
 | `/starship status` | Show config source/path and diagnostics |
 | `/starship help` | Show command and configuration help |
 
-The standard main menu keeps four goals on one level: **Customize footer**, **Configuration**,
-**Help**, and **Restore built-in…**. It shows whether the footer uses built-in defaults, a saved
-built-in document, a custom document, or an error-driven fallback, together with the current health.
-Restore remains last and unavailable when there is no document to replace. The TOML editor and
-adaptive live footer previews remain specialized extension UI; preview hints follow Pi's injected
-keybindings, Escape discards the draft or restore review, and Ctrl+C closes the whole workflow.
+The standard main menu keeps six goals on one level: **Customize footer**, **Explain footer**,
+**Modules**, **Configuration**, **Help**, and **Restore built-in…**. It shows whether the footer uses
+built-in defaults, a saved built-in document, a custom document, or an error-driven fallback,
+together with the current health. Explain and Modules are menu-only read paths; they do not add
+textual subcommands or change RPC, print, or JSON protocols. Restore remains last and unavailable
+when there is no document to replace.
+
+The TOML editor, adaptive live footer previews, Explain view, and searchable module inspector remain
+specialized extension UI. Their hints follow Pi's injected keybindings; list and detail content stay
+bounded across terminal resize. Escape returns from detail or to the main menu, while Ctrl+C closes
+the whole workflow.
 
 The direct routes accept no trailing arguments. Status and help remain safe in TUI, RPC, JSON, and
 print modes. RPC receives notifications but never opens custom terminal UI; print and JSON modes
@@ -567,6 +582,7 @@ Keep `extension_status` last in the catalog so arbitrary third-party statuses fo
 - `src/pi-starship.ts` — extension lifecycle, cached refresh binding, live preview, and footer.
 - `src/usage.ts` — native-aligned session usage and cache aggregation.
 - `src/commands.ts` — goal-oriented menu, preview/confirmation flow, diagnostics, and compatibility routes.
+- `src/command-inspector.ts` — adaptive Explain and searchable read-only module inspection surfaces.
 - `src/command-preview.ts` — adaptive, scrollable, keybinding-aware preview action surface.
 - `src/config.ts` — TOML loading, draft validation, defaults, atomic persistence, and rollback.
 - `src/format/` — native format/style parser and renderer.
