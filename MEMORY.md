@@ -159,6 +159,7 @@
 - Keep a predecessor extension active while its successor soaks; move it to `deprecated/` only after an explicit follow-up decision.
 - Prefer writing a repository plan before starting non-trivial implementation work; keep it executable, verify it, and archive it when complete.
 - Keep entries short and reusable.
+- Prefer manually reviewed `pi-tui-kit` dependency-floor bumps per consumer; do not automatically synchronize extension compatibility ranges with the workspace package.
 - Keep package versions out of long-lived guidance and memory; derive current versions from manifests, lockfiles, or workflows, while retaining versions in historical evidence and compatibility documentation when they are part of the fact being recorded.
 - Keep `just` install recipes resilient by verifying registry visibility and falling back only when it solves the current install path.
 - Earendil Works acquired the Pi tooling from mariozechner; prefer `@earendil-works/*` Pi packages because `@mariozechner/pi-*` packages are deprecated and should not be used for new extension work.
