@@ -95,7 +95,10 @@ export async function runCustomInteraction<
 				};
 				options.signal?.addEventListener("abort", finishStale, { once: true });
 				removeAbortListener = () => options.signal?.removeEventListener("abort", finishStale);
-				if (options.signal?.aborted || !isCurrent(options)) finishStale();
+				if (options.signal?.aborted || !isCurrent(options)) {
+					finishStale();
+					return { render: () => [], invalidate() {} };
+				}
 
 				component = await options.create({
 					ctx,

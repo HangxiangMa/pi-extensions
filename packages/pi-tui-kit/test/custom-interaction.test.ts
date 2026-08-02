@@ -149,6 +149,42 @@ test("runCustomInteraction cleans a custom UI that closes without component disp
 	assert.equal(observedAbort, true);
 });
 
+test("runCustomInteraction skips creation when ownership expires before the host factory runs", async () => {
+	let isCurrent = true;
+	let createCalls = 0;
+	let reportCustomStarted: () => void = () => undefined;
+	const customStarted = new Promise<void>((resolve) => {
+		reportCustomStarted = resolve;
+	});
+	let releaseCustom: () => void = () => undefined;
+	const customGate = new Promise<void>((resolve) => {
+		releaseCustom = resolve;
+	});
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			reportCustomStarted();
+			await customGate;
+			const harness = createCustomSelectorHarness(factory, 40);
+			return harness.resultPromise;
+		},
+	});
+	const running = runCustomInteraction(context.ctx, {
+		isCurrent: () => isCurrent,
+		create: () => {
+			createCalls += 1;
+			return { render: () => ["late"], invalidate() {} };
+		},
+	});
+	await customStarted;
+	isCurrent = false;
+	releaseCustom();
+
+	assert.deepEqual(await running, { kind: "stale" });
+	assert.equal(createCalls, 0);
+});
+
 test("runCustomInteraction settles an owner abort that races an async factory", async () => {
 	const owner = new AbortController();
 	let reportStarted: () => void = () => undefined;
