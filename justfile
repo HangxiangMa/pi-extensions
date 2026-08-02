@@ -103,6 +103,9 @@ pack-chrome-devtools:
 pack-accounts:
     just pack accounts
 
+pack-analytics:
+    just pack analytics
+
 pack-usage:
     just pack usage
 
@@ -166,6 +169,9 @@ try-chrome-devtools:
 
 try-accounts:
     just try accounts
+
+try-analytics:
+    just try analytics
 
 try-usage:
     just try usage
@@ -231,6 +237,9 @@ install-chrome-devtools:
 install-accounts:
     just install accounts
 
+install-analytics:
+    just install analytics
+
 install-usage:
     just install usage
 
@@ -291,6 +300,9 @@ publish-chrome-devtools:
 
 publish-accounts:
     just publish accounts
+
+publish-analytics:
+    just publish analytics
 
 publish-usage:
     just publish usage

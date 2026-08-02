@@ -1,0 +1,322 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { resolveMenuScreen, runMenu } from "@narumitw/pi-tui-kit";
+import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+import { createMockContext } from "../../../test/support.js";
+import {
+	type AnalyticsMenuDataSource,
+	type AnalyticsMenuState,
+	createAnalyticsMenu,
+	showAnalyticsMenu,
+} from "../src/menu.js";
+import type { AnalyticsSnapshot } from "../src/storage/queries.js";
+
+initTheme("dark", false);
+
+const snapshot: AnalyticsSnapshot = {
+	overview: {
+		responseCycles: 83,
+		llmCalls: 192,
+		callsPerResponse: 2.31,
+		p95CallsPerResponse: 6,
+		toolCalls: 414,
+		toolErrors: 7,
+		skillActivations: 31,
+		providerErrors: 4,
+		recoveredErrors: 3,
+	},
+	skills: [
+		{
+			name: "reviewing-code",
+			count: 18,
+			modelInitiated: 13,
+			userInitiated: 5,
+			lastOccurredAtMs: 1_786_000_000_000,
+			models: [{ provider: "openai", model: "gpt-test", count: 18 }],
+		},
+	],
+	tools: [
+		{
+			name: "read",
+			count: 182,
+			errors: 2,
+			averageDurationMs: 12.5,
+			lastOccurredAtMs: 1_786_000_000_000,
+			models: [{ provider: "openai", model: "gpt-test", count: 182 }],
+		},
+	],
+	reliability: {
+		http429: 3,
+		http5xx: 1,
+		recovered: 3,
+		terminal: 1,
+		categories: {
+			dns: 0,
+			timeout: 2,
+			connection_refused: 0,
+			connection_reset: 1,
+			tls: 0,
+			network_other: 0,
+			provider_other: 0,
+		},
+	},
+	responses: {
+		count: 83,
+		llmCalls: 192,
+		average: 2.31,
+		median: 2,
+		p95: 6,
+		maximum: 9,
+		distribution: { one: 31, twoToThree: 34, fourToSix: 15, sevenPlus: 3 },
+	},
+};
+
+function source(overrides: Partial<AnalyticsMenuDataSource> = {}): AnalyticsMenuDataSource {
+	return {
+		path: "/home/test/.pi/agent/pi-analytics.db",
+		async load() {
+			return { kind: "ready", snapshot };
+		},
+		async clearAll() {
+			return 83;
+		},
+		...overrides,
+	};
+}
+
+async function state(
+	controller: ReturnType<typeof createAnalyticsMenu>,
+): Promise<AnalyticsMenuState> {
+	return controller.getState({ signal: new AbortController().signal });
+}
+
+test("dashboard exposes seven primary rows and concise settled metrics", async () => {
+	const controller = createAnalyticsMenu(source());
+	const screen = resolveMenuScreen(controller.menu, "main", await state(controller));
+	assert.equal(screen.kind, "actions");
+	if (screen.kind !== "actions") return;
+	assert.equal(screen.items.length, 7);
+	assert.deepEqual(
+		screen.items.map(({ label }) => label),
+		[
+			"Change time range",
+			"Skills",
+			"Tools",
+			"Provider reliability",
+			"Response cycles",
+			"Data & privacy",
+			"Close",
+		],
+	);
+	assert.match(screen.title, /Last 7 days/);
+	assert.match(screen.lines?.join("\n") ?? "", /Response cycles\s+83/);
+	assert.match(screen.lines?.join("\n") ?? "", /Includes settled response cycles only/);
+});
+
+test("skill and tool browse details preserve attribution and model breakdowns", async () => {
+	const controller = createAnalyticsMenu(source());
+	const current = await state(controller);
+	const skills = resolveMenuScreen(controller.menu, "skills", current);
+	const tools = resolveMenuScreen(controller.menu, "tools", current);
+	assert.equal(skills.kind, "browse");
+	assert.equal(tools.kind, "browse");
+	if (skills.kind !== "browse" || tools.kind !== "browse") return;
+	assert.equal(skills.items[0]?.statusText, "18 · 13 model / 5 user");
+	assert.match(skills.items[0]?.details?.join("\n") ?? "", /openai\/gpt-test: 18/);
+	assert.equal(tools.items[0]?.statusText, "182 · 2 errors");
+	assert.match(tools.items[0]?.details?.join("\n") ?? "", /Average duration: 12.5 ms/);
+});
+
+test("range selection updates the next state load without creating settings", async () => {
+	const loaded: string[] = [];
+	const controller = createAnalyticsMenu(
+		source({
+			async load(range) {
+				loaded.push(range.id ?? "custom");
+				return { kind: "ready", snapshot };
+			},
+		}),
+	);
+	await state(controller);
+	const action = controller.menu.actions.setRange;
+	await action({
+		ctx: createMockContext({ hasUI: true, mode: "rpc" }).ctx,
+		state: await state(controller),
+		signal: new AbortController().signal,
+		itemId: "30d",
+	});
+	await state(controller);
+	assert.deepEqual(loaded, ["7d", "30d"]);
+});
+
+test("clear cancellation is side-effect free and confirmation clears committed rows", async () => {
+	let clears = 0;
+	const controller = createAnalyticsMenu(
+		source({
+			async clearAll() {
+				clears += 1;
+				return 83;
+			},
+		}),
+	);
+	const current = await state(controller);
+	const cancelled = createMockContext({ hasUI: true, mode: "rpc", confirm: async () => false });
+	await controller.menu.actions.clearData({
+		ctx: cancelled.ctx,
+		state: current,
+		signal: new AbortController().signal,
+		itemId: "clear",
+	});
+	assert.equal(clears, 0);
+	const confirmed = createMockContext({ hasUI: true, mode: "rpc", confirm: async () => true });
+	await controller.menu.actions.clearData({
+		ctx: confirmed.ctx,
+		state: current,
+		signal: new AbortController().signal,
+		itemId: "clear",
+	});
+	assert.equal(clears, 1);
+	assert.match(confirmed.notifications[0]?.message ?? "", /Deleted 83 response cycles/);
+});
+
+test("clear completion remains visible when cancellation races after confirmation", async () => {
+	let release!: () => void;
+	const blocked = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const controller = createAnalyticsMenu(
+		source({
+			async clearAll() {
+				await blocked;
+				return 83;
+			},
+		}),
+	);
+	const current = await state(controller);
+	const confirmed = createMockContext({ hasUI: true, mode: "rpc", confirm: async () => true });
+	const owner = new AbortController();
+	const clearing = controller.menu.actions.clearData({
+		ctx: confirmed.ctx,
+		state: current,
+		signal: owner.signal,
+		itemId: "clear",
+	});
+	await Promise.resolve();
+	owner.abort();
+	release();
+	assert.deepEqual(await clearing, { kind: "close" });
+	assert.match(confirmed.notifications[0]?.message ?? "", /Deleted 83 response cycles/);
+});
+
+test("empty and unavailable states remain actionable", async () => {
+	const emptySnapshot: AnalyticsSnapshot = {
+		...snapshot,
+		overview: { ...snapshot.overview, responseCycles: 0 },
+		skills: [],
+		tools: [],
+	};
+	const empty = createAnalyticsMenu(
+		source({
+			async load() {
+				return { kind: "ready", snapshot: emptySnapshot };
+			},
+		}),
+	);
+	const emptyMain = resolveMenuScreen(empty.menu, "main", await state(empty));
+	assert.match(emptyMain.lines?.join("\n") ?? "", /No analytics yet/);
+	const unavailable = createAnalyticsMenu(
+		source({
+			async load() {
+				return { kind: "unavailable", message: "Native binding unavailable on linux-arm64-musl" };
+			},
+		}),
+	);
+	const unavailableMain = resolveMenuScreen(unavailable.menu, "main", await state(unavailable));
+	assert.match(unavailableMain.lines?.join("\n") ?? "", /No analytics are being collected/);
+	assert.match(unavailableMain.lines?.join("\n") ?? "", /linux-arm64-musl/);
+});
+
+test("RPC adapts the same dashboard without opening custom TUI", async () => {
+	const rpc = createRpcHarness([{ kind: "select", response: "Close" }]);
+	const base = createMockContext({ hasUI: true, mode: "rpc" }).ctx as unknown as {
+		ui: Record<string, unknown>;
+		[key: string]: unknown;
+	};
+	const ctx = { ...base, ui: { ...base.ui, ...rpc.ui } } as never;
+	const owner = new AbortController();
+	await showAnalyticsMenu(ctx, source(), {
+		signal: owner.signal,
+		isCurrent: () => !owner.signal.aborted,
+	});
+	rpc.assertConsumed();
+});
+
+test("TUI shows a cancellable loader before opening the dashboard", async () => {
+	let customCalls = 0;
+	const { ctx } = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		custom: async (factory: unknown) =>
+			new Promise<unknown>((resolve) => {
+				if (typeof factory !== "function") return resolve(undefined);
+				customCalls += 1;
+				let component: { dispose?(): void; handleInput(data: string): void };
+				const done = (value: unknown) => {
+					component.dispose?.();
+					resolve(value);
+				};
+				component = (
+					factory as (
+						tui: { requestRender(): void },
+						theme: { fg(_color: string, text: string): string },
+						keybindings: object,
+						done: (value: unknown) => void,
+					) => typeof component
+				)({ requestRender() {} }, { fg: (_color, text) => text }, {}, done);
+				setImmediate(() => component.handleInput("\u001b"));
+			}),
+	});
+	const owner = new AbortController();
+	await showAnalyticsMenu(
+		ctx,
+		source({
+			async load(_range, signal) {
+				await new Promise<void>((_resolve, reject) => {
+					signal.addEventListener(
+						"abort",
+						() => reject(new DOMException("cancelled", "AbortError")),
+						{ once: true },
+					);
+				});
+				return { kind: "ready", snapshot };
+			},
+		}),
+		{ signal: owner.signal, isCurrent: () => !owner.signal.aborted },
+	);
+	assert.equal(customCalls, 1);
+});
+
+test("dashboard rendering is width-safe and owner cancellation settles the menu", async () => {
+	const controller = createAnalyticsMenu(source());
+	const tui = createTuiHarness({ width: 40, rows: 20 });
+	const owner = new AbortController();
+	const base = createMockContext({ hasUI: true, mode: "tui" }).ctx as unknown as {
+		ui: Record<string, unknown>;
+		[key: string]: unknown;
+	};
+	const ctx = { ...base, ui: { ...base.ui, custom: tui.custom } } as never;
+	const running = runMenu(ctx, controller.menu, {
+		getState: controller.getState,
+		signal: owner.signal,
+		isCurrent: () => !owner.signal.aborted,
+	});
+	await tui.waitForOpen();
+	for (const width of [40, 80, 120]) {
+		tui.resize({ width, rows: 20 });
+		for (const line of tui.render()) assert.ok(visibleWidth(line) <= width);
+	}
+	owner.abort();
+	assert.equal((await running).kind, "stale");
+});
