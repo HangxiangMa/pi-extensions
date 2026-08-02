@@ -1,5 +1,6 @@
-import { BorderedLoader, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { type ActionMenuItem, defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import { type RunRoute, runCancellableOperation } from "./cancellable-operation.js";
 import { setSyncSetupCompletions } from "./command.js";
 import {
 	configuredSyncSetupNames,
@@ -29,19 +30,12 @@ import {
 	updateSyncSetup,
 } from "./settings-management.js";
 import { showSyncSettings } from "./settings-ui.js";
-import { type SetupPullOutcome, useSyncSetup } from "./setup-switch.js";
+import { useSyncSetup } from "./setup-switch.js";
 import { showAddStorageConnection, showStorageConnections } from "./storage-connections-ui.js";
 import { DEFAULT_SYNC_INCLUDE, syncIncludeSelection } from "./sync-policy.js";
 import { showSyncSetups } from "./sync-setups-ui.js";
 import type { AnySyncConfig } from "./types.js";
 import { showAddWebDavTarget, showEditWebDavTarget, showWebDavSetup } from "./webdav-ui.js";
-
-type RunRoute = (
-	route: string,
-	signal?: AbortSignal,
-	onCommit?: () => void,
-	target?: string,
-) => Promise<SetupPullOutcome | undefined>;
 
 export async function showSyncManager(
 	ctx: ExtensionCommandContext,
@@ -116,16 +110,33 @@ export async function showSyncManager(
 		},
 		actions: {
 			sync: async () => {
-				await runCancellableOperation(ctx, "Checking current sync setup…", "sync", runRoute, true);
-				return { kind: "stay" };
+				const result = await runCancellableOperation(
+					ctx,
+					"Checking current sync setup…",
+					"sync",
+					runRoute,
+					{
+						commitAware: true,
+						signal: sessionSignal,
+					},
+				);
+				return result === "closed" ? { kind: "close" } : { kind: "stay" };
 			},
 			switch: async () => {
 				const result = await showSetupSwitcher(ctx, runRoute, undefined, sessionSignal);
-				return result === "pull-attempted" ? { kind: "close" } : { kind: "stay" };
+				return result === "pull-attempted" || result === "closed"
+					? { kind: "close" }
+					: { kind: "stay" };
 			},
 			diff: async () => {
-				await runCancellableOperation(ctx, "Checking current sync setup…", "diff", runRoute);
-				return { kind: "stay" };
+				const result = await runCancellableOperation(
+					ctx,
+					"Checking current sync setup…",
+					"diff",
+					runRoute,
+					{ signal: sessionSignal },
+				);
+				return result === "closed" ? { kind: "close" } : { kind: "stay" };
 			},
 			settings: async () => {
 				await showSyncSettings(ctx, runRoute, sessionSignal);
@@ -137,21 +148,27 @@ export async function showSyncManager(
 					"Checking remote changes…",
 					"pull",
 					runRoute,
-					true,
-					"Pull check cancelled; no local files were changed.",
+					{
+						commitAware: true,
+						cancelledMessage: "Pull check cancelled; no local files were changed.",
+						signal: sessionSignal,
+					},
 				);
-				return result === "applied" ? { kind: "close" } : { kind: "stay" };
+				return result === "applied" || result === "closed" ? { kind: "close" } : { kind: "stay" };
 			},
 			push: async () => {
-				await runCancellableOperation(
+				const result = await runCancellableOperation(
 					ctx,
 					"Preparing push preview…",
 					"push",
 					runRoute,
-					true,
-					"Push preparation cancelled; no remote files were changed.",
+					{
+						commitAware: true,
+						cancelledMessage: "Push preparation cancelled; no remote files were changed.",
+						signal: sessionSignal,
+					},
 				);
-				return { kind: "stay" };
+				return result === "closed" ? { kind: "close" } : { kind: "stay" };
 			},
 			setups: async () => {
 				const result = await showSyncSetupManager(ctx, runRoute, sessionSignal);
@@ -224,61 +241,6 @@ function syncMainMenuItem(
 		["Use existing settings", "init"],
 	]);
 	return { id: actions.get(label) ?? "help", label, action: actions.get(label) ?? "help" };
-}
-
-async function runCancellableOperation(
-	ctx: ExtensionCommandContext,
-	message: string,
-	route: string,
-	runRoute: RunRoute,
-	commitAware = false,
-	cancelledMessage: string | null = "Check cancelled; no settings or files were changed.",
-	target?: string,
-) {
-	if (ctx.mode !== "tui") {
-		return await runRoute(route, undefined, undefined, target);
-	}
-	let commitStarted = false;
-	let operation: Promise<void> | undefined;
-	let routeResult: SetupPullOutcome | undefined;
-	const result = await ctx.ui.custom<{ cancelled?: boolean; error?: unknown }>(
-		(tui, theme, _kb, done) => {
-			const loader = new BorderedLoader(tui, theme, message, { cancellable: true });
-			let closed = false;
-			loader.onAbort = () => {
-				if (commitStarted) {
-					ctx.ui.notify(
-						"Applying or publishing has started and cannot be cancelled safely.",
-						"warning",
-					);
-					return;
-				}
-				closed = true;
-				done({ cancelled: true });
-			};
-			operation = runRoute(
-				route,
-				loader.signal,
-				commitAware ? () => (commitStarted = true) : undefined,
-				target,
-			)
-				.then((result) => {
-					routeResult = result;
-					if (!closed) done({});
-				})
-				.catch((error) => {
-					if (!closed) done({ error });
-				});
-			return loader;
-		},
-	);
-	if (result?.cancelled) {
-		await operation;
-		if (cancelledMessage) ctx.ui.notify(cancelledMessage, "info");
-		return "cancelled";
-	}
-	if (result?.error) throw result.error;
-	return routeResult;
 }
 
 export async function showSetupWizard(ctx: ExtensionCommandContext, signal?: AbortSignal) {
@@ -543,23 +505,34 @@ async function showSetupSwitcher(
 	);
 	if (signal?.aborted || !confirmed) return false;
 	try {
+		let pullClosed = false;
 		const result = await useSyncSetup(
 			ctx,
 			name,
-			(selectedTarget) =>
-				runCancellableOperation(
+			async (selectedTarget) => {
+				const pullResult = await runCancellableOperation(
 					ctx,
 					`Pulling sync setup “${safeTerminalText(name)}”…`,
 					"pull",
 					runRoute,
-					true,
-					null,
-					selectedTarget,
-				),
+					{
+						commitAware: true,
+						cancelledMessage: null,
+						target: selectedTarget,
+						signal,
+					},
+				);
+				if (pullResult === "closed") {
+					pullClosed = true;
+					return undefined;
+				}
+				return pullResult;
+			},
 			onSwitch,
 			signal,
 			syncConfigReviewIdentity(config),
 		);
+		if (pullClosed) return "closed";
 		return result.pullApplied ? "pull-attempted" : "switched";
 	} catch (error) {
 		if (signal?.aborted) return false;
@@ -587,7 +560,7 @@ async function showSyncSetupManager(
 			},
 			makeCurrent: async (name, setupSignal) => {
 				const result = await showSetupSwitcher(ctx, runRoute, name, setupSignal);
-				return result === "pull-attempted" ? "exit" : undefined;
+				return result === "pull-attempted" || result === "closed" ? "exit" : undefined;
 			},
 			remove: async (name, setupSignal) => {
 				await showRemoveTarget(ctx, name, setupSignal);

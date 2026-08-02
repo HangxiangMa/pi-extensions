@@ -7,6 +7,7 @@ import {
 	Text,
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
+import { runCustomInteraction } from "@narumitw/pi-tui-kit";
 
 const MASK = "•";
 
@@ -16,63 +17,62 @@ export async function promptSecret(
 	options: { required?: boolean; signal?: AbortSignal } = { required: true },
 ) {
 	if (ctx.mode !== "tui" || options.signal?.aborted) return undefined;
-	const value = await ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) => {
-		const heading = new Text("", 0, 0);
-		const hint = new Text("", 0, 0);
-		const applyTheme = () => {
-			heading.setText(theme.fg("accent", theme.bold(title)));
-			hint.setText(theme.fg("dim", "Enter save • Escape cancel • Input is hidden"));
-		};
-		applyTheme();
-		const input = new MaskedInput(keybindings);
-		let settled = false;
-		const finish = (result: string | undefined) => {
-			if (settled) return;
-			settled = true;
-			done(result);
-		};
-		const onAbort = () => finish(undefined);
-		options.signal?.addEventListener("abort", onAbort, { once: true });
-		const component: Focusable & {
-			render(width: number): string[];
-			invalidate(): void;
-			handleInput(data: string): void;
-			dispose(): void;
-		} = {
-			get focused() {
-				return input.focused;
-			},
-			set focused(focused: boolean) {
-				input.focused = focused;
-			},
-			render(width: number) {
-				const safeWidth = Math.max(1, width);
-				return [
-					...heading.render(safeWidth),
-					...input.render(safeWidth),
-					...hint.render(safeWidth),
-				].map((line) => truncateToWidth(line, safeWidth));
-			},
-			invalidate() {
-				applyTheme();
-				heading.invalidate();
-				input.invalidate();
-				hint.invalidate();
-			},
-			handleInput(data: string) {
-				if (keybindings.matches(data, "tui.select.cancel")) finish(undefined);
-				else if (keybindings.matches(data, "tui.input.submit")) finish(input.getValue());
-				else input.handleInput(data);
-				tui.requestRender();
-			},
-			dispose() {
-				options.signal?.removeEventListener("abort", onAbort);
-				input.clear();
-			},
-		};
-		return component;
+	const result = await runCustomInteraction<string | undefined>(ctx, {
+		signal: options.signal,
+		isCurrent: () => !options.signal?.aborted,
+		create: ({ tui, theme, keybindings, complete }) => {
+			const heading = new Text("", 0, 0);
+			const hint = new Text("", 0, 0);
+			const submitKey = keybindingText(keybindings, "tui.input.submit", "enter");
+			const cancelKey = keybindingText(keybindings, "tui.select.cancel", "esc");
+			const applyTheme = () => {
+				heading.setText(theme.fg("accent", theme.bold(title)));
+				hint.setText(theme.fg("dim", `${submitKey} save • ${cancelKey} cancel • Input is hidden`));
+			};
+			applyTheme();
+			const input = new MaskedInput(keybindings);
+			const component: Focusable & {
+				render(width: number): string[];
+				invalidate(): void;
+				handleInput(data: string): void;
+				dispose(): void;
+			} = {
+				get focused() {
+					return input.focused;
+				},
+				set focused(focused: boolean) {
+					input.focused = focused;
+				},
+				render(width: number) {
+					const safeWidth = Math.max(1, width);
+					return [
+						...heading.render(safeWidth),
+						...input.render(safeWidth),
+						...hint.render(safeWidth),
+					].map((line) => truncateToWidth(line, safeWidth));
+				},
+				invalidate() {
+					applyTheme();
+					heading.invalidate();
+					input.invalidate();
+					hint.invalidate();
+				},
+				handleInput(data: string) {
+					if (keybindings.matches(data, "tui.select.cancel")) complete(undefined);
+					else if (keybindings.matches(data, "tui.input.submit")) complete(input.getValue());
+					else input.handleInput(data);
+					tui.requestRender();
+				},
+				dispose() {
+					input.clear();
+				},
+			};
+			return component;
+		},
 	});
-	if (value === undefined) return undefined;
+	if (result.kind === "error") throw result.error;
+	if (result.kind !== "completed" || result.value === undefined) return undefined;
+	const value = result.value;
 	if (options.required !== false && value.length === 0) {
 		ctx.ui.notify(`${title} is required.`, "warning");
 		return undefined;
@@ -189,6 +189,23 @@ class MaskedInput implements Focusable {
 		this.value.splice(this.cursor, 0, ...characters);
 		this.cursor += characters.length;
 	}
+}
+
+function keybindingText(
+	keybindings: Pick<KeybindingsManager, "getKeys">,
+	binding: Parameters<KeybindingsManager["getKeys"]>[0],
+	fallback: string,
+) {
+	const keys = keybindings
+		.getKeys(binding)
+		.map(String)
+		.map((key) => {
+			if (key === "return") return "enter";
+			if (key === "escape") return "esc";
+			return hasControlCharacter(key) ? "" : key;
+		})
+		.filter(Boolean);
+	return keys.join("/") || fallback;
 }
 
 function hasControlCharacter(value: string) {

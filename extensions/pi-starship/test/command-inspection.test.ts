@@ -183,7 +183,7 @@ test("Modules is searchable, adaptive, terminal-safe, and restores search after 
 		tui.press("tui.select.confirm");
 		frame = tui.render().join("\n");
 		assert.match(frame, /git_branch/u);
-		assert.match(frame, /State: Empty/u);
+		assert.match(frame, /Status: Empty/u);
 		assert.match(frame, /Root: Referenced/u);
 		assert.match(frame, /Reachable: Yes/u);
 		assert.equal(frame.includes("\u001b[31m"), false);
@@ -205,7 +205,7 @@ test("Modules is searchable, adaptive, terminal-safe, and restores search after 
 		assert.equal(tui.render().join("\n").includes(CURSOR_MARKER), true);
 		tui.send("\u0015");
 		tui.type("zzz");
-		assert.match(tui.render().join("\n"), /No matching modules/u);
+		assert.match(tui.render().join("\n"), /No matching items/u);
 		assert.equal(existsSync(path), false);
 		tui.press("ctrl+c");
 		await running;
@@ -213,6 +213,32 @@ test("Modules is searchable, adaptive, terminal-safe, and restores search after 
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("Modules searches non-rendered module metadata", async () => {
+	const mock = createMockPi();
+	const path = "/tmp/missing-pi-starship-module-metadata-search.toml";
+	registerStarshipCommand(mock.pi, {
+		getLoaded: () => loadStarshipConfig(path),
+		getInspection: () => INSPECTION,
+		apply() {},
+		settingsPath: path,
+	});
+	const tui = createTuiHarness({ width: 40, rows: 12 });
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const running = mock.commands.get("starship")?.handler("", context.ctx);
+	await tui.waitForOpen();
+	tui.press("tui.select.down");
+	tui.press("tui.select.down");
+	tui.press("tui.select.confirm");
+	await tui.waitForOpen();
+	tui.setFocused(true);
+	tui.type("remote_name");
+	const frame = tui.render().join("\n");
+	assert.match(frame, /git_branch/u);
+	assert.doesNotMatch(frame, /No matching items/u);
+	tui.press("ctrl+c");
+	await running;
 });
 
 test("external module-browser disposal releases the component without writing settings", async () => {

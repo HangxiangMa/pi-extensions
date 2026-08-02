@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import { showFooterExplanation, showModuleBrowser } from "./command-inspector.js";
+import { showFooterExplanation } from "./command-inspector.js";
 import { type PreviewMenuResult, showPreviewActionMenu } from "./command-preview.js";
 import {
 	atomicRestoreConfigDocument,
@@ -104,8 +104,8 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 		signal: fallbackController.signal,
 		isCurrent: () => !fallbackController.signal.aborted,
 	};
-	type Screen = "main" | "configuration" | "help";
-	type Action = "customize" | "explain" | "modules" | "restore";
+	type Screen = "main" | "modules" | "configuration" | "help";
+	type Action = "customize" | "explain" | "restore";
 	const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
 		start: "main",
 		screens: {
@@ -133,7 +133,7 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 							id: MAIN_ACTIONS.modules,
 							label: "Modules",
 							description: "Browse supported modules and current states",
-							action: "modules",
+							to: "modules",
 						},
 						{
 							id: MAIN_ACTIONS.configuration,
@@ -156,6 +156,34 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 						},
 					],
 					hint: "close",
+				};
+			},
+			modules: () => {
+				const inspection =
+					options.getInspection?.() ?? inspectUnavailableModules(options.getLoaded().config);
+				return {
+					kind: "browse",
+					title: "Modules",
+					items: inspection.modules.map((module) => ({
+						id: module.name,
+						label: module.name,
+						statusText: module.state,
+						description: module.description,
+						searchText: [...module.variables, ...module.styleFields, ...module.displayRules].join(
+							" ",
+						),
+						details: [
+							`Root: ${module.rootReferenced ? "Referenced" : "Not referenced"}`,
+							`Reachable: ${module.reachable ? "Yes" : "No"}`,
+							...modulePreviewDetails(module.preview),
+							`Reason: ${module.reason}`,
+							`Variables: ${module.variables.join(", ") || "none"}`,
+							`Style fields: ${module.styleFields.join(", ") || "none"}`,
+							`Display rules: ${module.displayRules.join(" · ") || "none"}`,
+						],
+					})),
+					viewportSize: "adaptive",
+					hint: "back",
 				};
 			},
 			configuration: () => {
@@ -194,13 +222,6 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 			},
 			explain: async () => {
 				const result = await showFooterExplanation(ctx, options.getInspection?.(), owner.signal);
-				if (!isCurrentOwner(owner)) return { kind: "stay" };
-				return result?.kind === "back" ? { kind: "stay" } : { kind: "close" };
-			},
-			modules: async () => {
-				const inspection =
-					options.getInspection?.() ?? inspectUnavailableModules(options.getLoaded().config);
-				const result = await showModuleBrowser(ctx, inspection, owner.signal);
 				if (!isCurrentOwner(owner)) return { kind: "stay" };
 				return result?.kind === "back" ? { kind: "stay" } : { kind: "close" };
 			},
@@ -364,6 +385,11 @@ async function reviewAndApply(
 		);
 		return "applied";
 	}
+}
+
+function modulePreviewDetails(preview: string): string[] {
+	const lines = preview ? preview.split("\n") : ["(no current preview)"];
+	return lines.map((line, index) => `${index === 0 ? "Preview: " : "         "}${line}`);
 }
 
 function workflowOwner(options: StarshipCommandOptions): WorkflowOwner {

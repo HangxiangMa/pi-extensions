@@ -36,7 +36,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@narumitw/pi-tui-kit": "^0.40.0",
+		"@narumitw/pi-tui-kit": "^0.45.0",
 		"fast-xml-parser": "^5.10.1",
 		"proper-lockfile": "^4.1.2"
 	},

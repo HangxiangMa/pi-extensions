@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import test from "node:test";
-import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+import { createMockContext } from "../../../test/support.js";
 import {
 	loadConfig,
 	loadPartialConfig,
@@ -188,9 +189,12 @@ test("cancelled WebDAV setup leaves settings byte-for-byte unchanged", async () 
 
 function secretInput(secret: string, rendered: string[] = []) {
 	return async (factory: unknown) => {
-		const harness = createCustomSelectorHarness(factory, 50);
-		rendered.push(harness.handleInput(secret).join("\n"));
-		harness.handleInput("tui.input.submit");
-		return harness.result;
+		const tui = createTuiHarness({ width: 50 });
+		const running = tui.custom(factory as Parameters<typeof tui.custom>[0]);
+		await tui.waitForOpen();
+		tui.type(secret);
+		rendered.push(tui.render().join("\n"));
+		tui.press("tui.input.submit");
+		return running;
 	};
 }
