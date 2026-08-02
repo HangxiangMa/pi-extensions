@@ -32,14 +32,13 @@ render, lifecycle, privacy, and settings boundaries.
   or load `~/.config/starship.toml`.
 - The built-in footer uses an explicit nine-module root. Module reachability controls whether cached
   filesystem, Git, command, timer, or network work starts; footer rendering itself is pure.
-- PR #516 and PR #517 are merged on `main`. Together they provide palette-free Starship-compatible
-  built-in style semantics plus a shallow four-action `/starship` menu, accurate built-in/fallback
-  states, adaptive transactional preview, strict direct routes, and lifecycle/settings regression
-  coverage. PR #517's required CI and CodeQL checks passed.
-- On the current implementation branch, the renderer's grouped output feeds a catalog that owns
-  module names, descriptions, variables, defaults, options, and ordering. One pure inspection model
-  combines those entries with effective config, root reachability, and the current immutable runtime
-  snapshot. This Phase 2–3 work is verified locally but not yet merged on `main`.
+- PR #516, PR #517, and PR #518 are merged on `main`. Together they provide palette-free
+  Starship-compatible built-in style semantics plus a shallow six-action `/starship` menu, accurate
+  built-in/fallback states, adaptive transactional preview, strict direct routes, and
+  lifecycle/settings regression coverage. Their required CI and CodeQL checks passed.
+- The renderer's grouped output feeds a catalog that owns module names, descriptions, variables,
+  defaults, options, and ordering. One pure inspection model combines those entries with effective
+  config, root reachability, and the current immutable runtime snapshot for Explain and Modules.
 - Configuration loading retains both a normalized effective config and the original document. No
   public computed-config projection currently excludes parser ASTs and private runtime metadata.
 - `/starship settings`, `/starship status`, and `/starship help` are the only direct routes. Print and
@@ -85,28 +84,29 @@ render, lifecycle, privacy, and settings boundaries.
 additional read-only capabilities without reopening foundational menu, preview, or persistence
 problems. npm publication is intentionally deferred and is not part of this phase.
 
-### Phase 2: Explain what is showing _(Implemented locally; merge pending)_
+### Phase 2: Explain what is showing
 
-- [ ] Every registered module exposes a concise catalog-owned description suitable for command UI and
-  documentation without changing its render behavior. Local evidence: catalog type coverage and
-  focused duplicate/non-empty description tests pass for all registered modules.
-- [ ] **Explain footer** presents each currently rendered non-empty module exactly once with rendered
+- [x] Every registered module exposes a concise catalog-owned description suitable for command UI and
+  documentation without changing its render behavior. Evidence: PR #518 merged as `a1834b9`; catalog
+  type coverage and focused duplicate/non-empty description tests pass for all registered modules.
+- [x] **Explain footer** presents each currently rendered non-empty module exactly once with rendered
   value, module name, description, and available snapshot state; it has explicit empty/unavailable
-  states and starts no collection work. Local evidence: responsive TUI and runtime collector-spy
-  tests pass.
+  states and starts no collection work. Evidence: PR #518's responsive TUI, runtime collector-spy,
+  lifecycle, CI, and CodeQL checks passed.
 
 **Outcome:** Users can answer “what is this footer showing, and why?” from the same data that produced
 the footer. This establishes the shared explanation model needed by module browsing and support.
 
-### Phase 3: Make module state discoverable _(Implemented locally; merge pending)_
+### Phase 3: Make module state discoverable
 
-- [ ] **Modules** provides a bounded searchable list in which every catalog module has one textual
+- [x] **Modules** provides a bounded searchable list in which every catalog module has one textual
   state: Showing, Empty, Disabled, Not in format, or Unavailable only when the current footer cannot
-  provide an inspection snapshot. Local evidence: catalog/state/search/resize/keybinding tests pass.
-- [ ] Module detail exposes its current preview when available, format variables, relevant style and
+  provide an inspection snapshot. Evidence: PR #518's catalog/state/search/resize/keybinding tests
+  passed.
+- [x] Module detail exposes its current preview when available, format variables, relevant style and
   display fields, root reference and reachability, and every reason the runtime can determine for
-  absent output without writing settings. Local evidence: detail, no-write, disposal, replacement,
-  and shutdown tests pass.
+  absent output without writing settings. Evidence: PR #518's detail, no-write, disposal,
+  replacement, shutdown, CI, and CodeQL checks passed.
 
 **Outcome:** Users can inspect supported and hidden capabilities without reading source or assuming
 that absence means disabled. The state model provides the prerequisite for honest module actions.
@@ -211,6 +211,7 @@ Prompt preview is not planned because Pi already displays the footer continuousl
 | Collectors have asynchronous cost while rendering is pure | Upstream `timings` semantics would be misleading | Instrument collector age/duration separately or reject the feature. |
 | Diagnostic context can contain paths, remotes, config, or terminal controls | Support output could leak data or inject terminal content | Use bounded allowlisted fields, sanitize at the display boundary, and preview before sharing. |
 | `main` is ahead of npm `0.44.0` while release is deferred | Users installing from npm do not yet receive the merged baseline or later roadmap capabilities | Distinguish merged source status from published availability and require separate release authorization. |
+| Zero-major pi-tui-kit ranges intentionally do not follow workspace minors | Consumers can miss newer shared lifecycle and keybinding behavior | Raise each consumer's compatibility floor only through a manually reviewed dependency change and verify its resolved package. |
 | No usage telemetry or validated preset demand | Prioritization and preset value are uncertain | Keep targets explicit unknowns and presets outside this roadmap until evidence supports a separate decision. |
 
 ## Decisions and Changes
@@ -218,10 +219,13 @@ Prompt preview is not planned because Pi already displays the footer continuousl
 - **2026-08-02 — Defer release:** Phase 1 now completes when the verified command baseline is merged
   on `main`. No version bump, npm publication, tag, or GitHub release is implied; published
   availability remains a separately authorized decision.
-- **2026-08-02 — Keep inspector compatibility local:** pi-starship's declared pi-tui-kit `^0.40.0`
-  dependency predates adaptive review screens. Explain and Modules therefore share an
-  extension-owned adaptive inspector rather than changing dependencies or relying on newer
-  monorepo-only APIs.
+- **2026-08-02 — Keep inspector compatibility local:** pi-starship initially retained its declared
+  pi-tui-kit compatibility floor, so Explain and Modules shipped through one extension-owned
+  adaptive inspector rather than relying on newer monorepo-only APIs.
+- **2026-08-02 — Raise the helper floor explicitly:** after Phase 2–3 merged, a separate manually
+  reviewed change raises pi-starship's pi-tui-kit floor to the shared API-v5 release. The inspector
+  remains extension-owned because the kit still has no searchable read-only browse/detail screen;
+  consumer ranges must not be synchronized automatically.
 
 ## Non-Goals
 
