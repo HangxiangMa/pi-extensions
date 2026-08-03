@@ -18,7 +18,7 @@ export function truncateLeadingGraphemes(value: string, length: number, symbol: 
 }
 
 export function toSlashPath(value: string): string {
-	return value.replaceAll("\\", "/");
+	return sep === "\\" ? value.replaceAll("\\", "/") : value;
 }
 
 export function truncatePathComponents(

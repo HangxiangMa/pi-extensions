@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { sep } from "node:path";
 import test from "node:test";
 import type { ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -188,6 +189,53 @@ test("cwd uses Starship repository and three-component directory defaults", () =
 	assert.equal(
 		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
 		"░▒▓ 📁 work/repository/src",
+	);
+
+	(context.ctx as { cwd: string }).cwd = "/home/alice";
+	runtime.gitStatus = {
+		root: "/home/alice/",
+		ahead: 0,
+		behind: 0,
+		staged: 0,
+		modified: 0,
+		untracked: 0,
+		conflicts: 0,
+	};
+	assert.equal(
+		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
+		"░▒▓ 📁 ~",
+	);
+});
+
+test("cwd preserves POSIX backslashes and strips terminal controls", { skip: sep !== "/" }, () => {
+	const config = createDefaultConfig();
+	config.segments = ["cwd"];
+	const context = createMockContext({ cwd: "/home/alice/team\\name/project" });
+	const footerData: ReadonlyFooterDataProvider = {
+		getGitBranch: () => null,
+		getExtensionStatuses: () => new Map(),
+		onBranchChange: () => () => undefined,
+		getAvailableProviderCount: () => 1,
+	};
+	const runtime: RuntimeState = {
+		homeDir: "/home/alice",
+		turnCount: 0,
+		activeTools: new Map(),
+		isStreaming: false,
+		thinkingLevel: "off",
+		duplicateExtensions: [],
+		extensionStatusIconAliases: new Map(),
+	};
+
+	assert.equal(
+		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
+		"░▒▓ 📁 ~/team\\name/project",
+	);
+	(context.ctx as { cwd: string }).cwd =
+		"/home/alice/team\x1b]8;;https://evil.example\x07click\x1b]8;;\x07/repo\nline";
+	assert.equal(
+		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
+		"░▒▓ 📁 ~/teamclick/repo line",
 	);
 });
 

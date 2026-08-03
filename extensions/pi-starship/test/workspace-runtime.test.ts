@@ -454,6 +454,18 @@ test("execution context rules are fixture-driven and sanitize terminal metadata"
 		exec: noExec,
 	});
 	assert.equal(untrimmed.modules.hostname?.hostname, "build.example");
+
+	const emptyTrimmed = await collectWorkspaceSnapshot({
+		cwd: "/workspace",
+		config: config("$hostname", { hostname: { ssh_only: false, trim_at: "build.example" } }),
+		environment: {},
+		homeDir: "/home/user",
+		platform: "linux",
+		hostname: "build.example",
+		username: "user",
+		exec: noExec,
+	});
+	assert.equal(emptyTrimmed.modules.hostname?.hostname, "");
 });
 
 test("execution fixtures cover macOS, Windows, WSL, Docker, Podman, and contextual users", async () => {

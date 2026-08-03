@@ -384,6 +384,36 @@ test("statusline aborts an in-flight Git refresh when its footer is disposed", a
 	await flushAsync();
 });
 
+test("statusline aborts an in-flight Git refresh during session shutdown", async () => {
+	const mock = createMockPi();
+	const pending = deferred<ExecResult>();
+	let statusSignal: AbortSignal | undefined;
+	(
+		mock.rawPi as typeof mock.rawPi & {
+			exec: (
+				command: string,
+				args: string[],
+				options?: { signal?: AbortSignal },
+			) => Promise<ExecResult>;
+		}
+	).exec = async (_command, args, options) => {
+		if (args[0] === "rev-parse") {
+			return { stdout: "/workspace\n", stderr: "", code: 0, killed: false };
+		}
+		statusSignal = options?.signal;
+		return pending.promise;
+	};
+	statusline(mock.pi);
+	const context = createMockContext({ mode: "tui" });
+	await emit(mock.events, "session_start", {}, context.ctx);
+
+	assert.equal(statusSignal?.aborted, false);
+	await emit(mock.events, "session_shutdown", {}, context.ctx);
+	assert.equal(statusSignal?.aborted, true);
+	pending.resolve({ stdout: "## main\n", stderr: "", code: 0, killed: false });
+	await flushAsync();
+});
+
 test("statusline does not render stale in-flight git status after a branch change", async () => {
 	const mock = createMockPi();
 	const firstStatus = deferred<ExecResult>();

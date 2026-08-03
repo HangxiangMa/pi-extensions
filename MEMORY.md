@@ -34,6 +34,7 @@
 ### TUI and rendering
 
 - Treat model IDs, session text, and pasted search text as untrusted terminal input. Strip or escape OSC, CSI, C0, and C1 controls at the display boundary without mutating raw payloads.
+- Sanitize terminal escapes before path splitting or truncation; OSC payloads can contain `/` and otherwise change path-component semantics before final-sink sanitization.
 - `wrapTextWithAnsi` trims whitespace at word-wrap boundaries; use cell-aware hard wrapping or horizontal scrolling for exact code/text previews.
 - A custom component embedding `Input` or `Editor` must implement `Focusable` and forward `focused`. Sanitize pasted input after handling but before rendering/filtering so the child retains its own cursor escapes.
 - Pi's public `SelectList.handleInput()` reads global keybindings, while `ctx.ui.select()` maps both Escape and Ctrl+C to `undefined`. Wrappers needing injected keys or distinct Back/Close outcomes must dispatch those keys themselves.

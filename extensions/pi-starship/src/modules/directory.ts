@@ -1,4 +1,5 @@
-import { basename } from "node:path";
+import { basename, isAbsolute, relative, sep } from "node:path";
+import { sanitizeTerminalText } from "./terminal.js";
 import {
 	graphemes,
 	toSlashPath,
@@ -27,18 +28,17 @@ export const directoryModule = defineModule({
 	},
 	values: ({ runtime, options }) => {
 		const fullPath = runtime.cwd;
-		const source = toSlashPath(fullPath);
-		const home = runtime.homeDir ? toSlashPath(runtime.homeDir) : undefined;
-		const repoRoot = runtime.gitRoot ? toSlashPath(runtime.gitRoot) : undefined;
+		const home = runtime.homeDir;
+		const repoRoot = runtime.gitRoot;
 		const homeSymbol = stringOption(options, "home_symbol", "~");
 		const truncateToRepo = booleanOption(options, "truncate_to_repo", true);
 		const substitutions = mapOption(options, "substitutions");
-		const homeContracted = contractPath(source, home, homeSymbol);
+		const homeContracted = contractPath(fullPath, home, homeSymbol);
 		const repoContracted =
-			truncateToRepo && repoRoot && repoRoot !== home
-				? contractRepositoryPath(source, repoRoot)
+			truncateToRepo && repoRoot && (!home || !samePath(repoRoot, home))
+				? contractRepositoryPath(fullPath, repoRoot)
 				: undefined;
-		let path = repoContracted ?? homeContracted;
+		let path = sanitizeTerminalText(repoContracted ?? homeContracted);
 		let truncated = repoContracted !== undefined;
 
 		for (const [from, to] of Object.entries(substitutions)) {
@@ -62,26 +62,37 @@ export const directoryModule = defineModule({
 		}
 
 		if (booleanOption(options, "use_os_path_sep", true)) path = useNativePathSeparator(path);
-		return { path: path || basename(fullPath) || fullPath, full_path: fullPath };
+		const fallback = basename(fullPath) || fullPath;
+		return {
+			path: sanitizeTerminalText(path || fallback),
+			full_path: sanitizeTerminalText(fullPath),
+		};
 	},
 });
 
 function contractPath(path: string, root: string | undefined, replacement: string): string {
-	if (!root || !isWithin(path, root)) return path;
-	if (path === root) return replacement;
-	return `${replacement}/${path.slice(root.length).replace(/^\/+/, "")}`;
+	if (!root) return toSlashPath(path);
+	const child = relativeWithin(path, root);
+	if (child === undefined) return toSlashPath(path);
+	return child ? `${replacement}/${child}` : replacement;
 }
 
 function contractRepositoryPath(path: string, root: string): string | undefined {
-	if (!isWithin(path, root)) return undefined;
-	const name = basename(root) || root;
-	if (path === root) return name;
-	return `${name}/${path.slice(root.length).replace(/^\/+/, "")}`;
+	const child = relativeWithin(path, root);
+	if (child === undefined) return undefined;
+	const name = basename(root) || toSlashPath(root);
+	return child ? `${name}/${child}` : name;
 }
 
-function isWithin(path: string, root: string): boolean {
-	const normalizedRoot = root.replace(/\/+$/u, "");
-	return path === normalizedRoot || path.startsWith(`${normalizedRoot}/`);
+function relativeWithin(path: string, root: string): string | undefined {
+	const child = relative(root, path);
+	if (child === "") return "";
+	if (child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)) return undefined;
+	return toSlashPath(child);
+}
+
+function samePath(left: string, right: string): boolean {
+	return relative(left, right) === "";
 }
 
 function fishPrefix(source: string, displayed: string, length: number): string {

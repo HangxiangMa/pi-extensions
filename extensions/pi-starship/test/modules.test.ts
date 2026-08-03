@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { sep } from "node:path";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { BUILT_IN_CONFIG } from "../src/config.js";
@@ -525,6 +526,66 @@ test("directory applies Starship home, repository, substitution, and component d
 	);
 });
 
+test("directory normalizes equivalent roots before contraction", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$directory";
+	config.formatAst = parseFormat(config.format);
+	config.modules.directory.format = "$path";
+	config.modules.directory.formatAst = parseFormat(config.modules.directory.format);
+	config.modules.directory.options.truncation_length = 0;
+
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({ cwd: "/repository", homeDir: "/home/alice", gitRoot: "/repository/" }),
+			).ansi,
+		),
+		"repository",
+	);
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({ cwd: "/home/alice", homeDir: "/home/alice", gitRoot: "/home/alice/" }),
+			).ansi,
+		),
+		"~",
+	);
+});
+
+test("directory preserves POSIX backslashes and strips terminal controls", {
+	skip: sep !== "/",
+}, () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$directory";
+	config.formatAst = parseFormat(config.format);
+	config.modules.directory.format = "$path|$full_path";
+	config.modules.directory.formatAst = parseFormat(config.modules.directory.format);
+
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({ cwd: "/home/alice/team\\name/project", homeDir: "/home/alice" }),
+			).ansi,
+		),
+		"~/team\\name/project|/home/alice/team\\name/project",
+	);
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({
+					cwd: "/home/alice/team\x1b]8;;https://evil.example\x07click\x1b]8;;\x07/repo\nline",
+					homeDir: "/home/alice",
+				}),
+			).ansi,
+		),
+		"~/teamclick/repo line|/home/alice/teamclick/repo line",
+	);
+});
+
 test("Git branch and commit honor Starship truncation options", () => {
 	const config = structuredClone(BUILT_IN_CONFIG);
 	config.format = "$git_branch|$git_commit";
@@ -708,6 +769,19 @@ test("Conda applies Starship path-component truncation in its owning module", ()
 	assert.equal(stripAnsi(renderStatusline(config, runtime).ansi), "team/work");
 	config.modules.conda.options.truncation_length = 0;
 	assert.equal(stripAnsi(renderStatusline(config, runtime).ansi), "/envs/team/work");
+
+	if (sep === "/") {
+		config.modules.conda.options.truncation_length = 1;
+		assert.equal(
+			stripAnsi(
+				renderStatusline(
+					config,
+					fixture({ workspace: { modules: { conda: { environment: "/envs/team\\work" } } } }),
+				).ansi,
+			),
+			"team\\work",
+		);
+	}
 });
 
 test("first-wave workspace modules render documented snapshot variables", () => {

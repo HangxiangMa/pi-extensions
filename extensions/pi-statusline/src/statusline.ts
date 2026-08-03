@@ -242,6 +242,7 @@ export default function statusline(pi: ExtensionAPI) {
 		activeSessionManager = undefined;
 		previewPalettePreset = undefined;
 		activeGitStatusTarget = undefined;
+		abortGitStatusRefresh("Statusline session shut down");
 		clearGitStatusDebounce();
 		pendingGitStatusRefresh = undefined;
 		runtime.gitStatus = undefined;

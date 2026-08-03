@@ -100,7 +100,7 @@ function hostnameValues(context: CollectorContext): Record<string, string> | und
 	const aliases = optionMap(context, "hostname", "aliases");
 	const trimAt = optionString(context, "hostname", "trim_at");
 	const index = trimAt ? raw.indexOf(trimAt) : -1;
-	const trimmed = index > 0 ? raw.slice(0, index) : raw;
+	const trimmed = index >= 0 ? raw.slice(0, index) : raw;
 	const hostname = exactAlias(trimmed, aliases) ?? trimmed;
 	return { hostname, ssh_symbol: ssh ? "🌐 " : "" };
 }
