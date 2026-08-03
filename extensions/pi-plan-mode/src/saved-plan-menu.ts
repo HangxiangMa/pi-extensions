@@ -8,6 +8,7 @@ interface SavedPlanMenuOptions {
 	show(): void;
 	implement(): void | Promise<void>;
 	exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
+	settings(signal: AbortSignal): Promise<boolean>;
 	clear(): void;
 }
 
@@ -18,7 +19,7 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
 		);
 	}
 	type Screen = "saved" | "export";
-	type Action = "show" | "implement" | "export" | "clear";
+	type Action = "show" | "implement" | "export" | "settings" | "clear";
 	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
 		start: "saved",
 		screens: {
@@ -30,6 +31,7 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
 					{ id: "show", label: "Show saved plan", action: "show" },
 					{ id: "implement", label: "Implement saved plan", action: "implement" },
 					{ id: "export", label: "Export plan…", to: "export" },
+					{ id: "settings", label: "Settings", action: "settings" },
 					{ id: "clear", label: "Clear saved plan", action: "clear" },
 				],
 				hint: "close",
@@ -54,6 +56,11 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
 			},
 			export: async ({ value, signal }) =>
 				(await options.exportPlan(value ?? "", signal)) ? { kind: "close" } : { kind: "rejected" },
+			settings: async ({ signal }) => {
+				const close = await options.settings(signal);
+				if (signal.aborted || !options.isCurrent()) return { kind: "rejected" };
+				return close ? { kind: "close" } : { kind: "stay" };
+			},
 			clear: async () => {
 				options.clear();
 				return { kind: "close" };

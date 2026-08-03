@@ -9,7 +9,6 @@ import {
 	createCustomSelectorHarness,
 	createMockContext,
 	createMockPi,
-	driveCustomSelector,
 	extensionTool,
 } from "../../../test/support.js";
 import planMode from "../src/plan-mode.js";
@@ -223,14 +222,13 @@ test("the tool selector persists a session override and shutdown restores prior 
 		const context = createMockContext({
 			hasUI: true,
 			select: async (_title: unknown, choices: string[]) => {
-				if (selectedRead) return undefined;
+				if (selectedRead) return "Done — start Plan mode";
 				selectedRead = true;
 				return choices.find((choice) => choice === "read");
 			},
 		});
 
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await mock.commands.get("plan")?.handler("tools", context.ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), [
 			"bash",
@@ -268,7 +266,7 @@ test("the tool selector persists a session override and shutdown restores prior 
 	});
 });
 
-test("the Plan-mode tool selector keeps the cursor on the toggled row", async () => {
+test("the pre-start tool selector keeps the cursor on a draft toggle", async () => {
 	await withAgentDir(async (agentDir) => {
 		await writeFile(
 			join(agentDir, "pi-plan-mode.json"),
@@ -287,27 +285,22 @@ test("the Plan-mode tool selector keeps the cursor on the toggled row", async ()
 			hasUI: true,
 			custom: async (factory: unknown) => {
 				customCalled = true;
-				const { renders, result } = driveCustomSelector(factory, [
-					"tui.select.down",
-					"tui.select.confirm",
-					"tui.select.cancel",
-				]);
-				assert.ok(renders[1]?.some((line) => line.includes("› [x] read")));
-				return result;
+				const harness = createCustomSelectorHarness(factory);
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
+				await harness.waitForPending();
+				assert.ok(harness.render().some((line) => line.includes("› [x] read")));
+				harness.handleInput("tui.select.cancel");
+				return harness.result;
 			},
 		});
 
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await mock.commands.get("plan")?.handler("tools", context.ctx);
 
 		assert.equal(customCalled, true);
-		assert.deepEqual(mock.rawPi.getActiveTools(), [
-			"bash",
-			"read",
-			"custom",
-			...REQUIRED_PLAN_TOOLS,
-		]);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["write"]);
+		assert.equal(mock.entries.length, 0);
 	});
 });
 
@@ -315,7 +308,7 @@ test("the Plan-mode tool selector searches metadata and toggles the stable tool 
 	await withAgentDir(async (agentDir) => {
 		await writeFile(
 			join(agentDir, "pi-plan-mode.json"),
-			JSON.stringify({ defaultPlanTools: ["bash", "custom"] }),
+			JSON.stringify({ defaultPlanTools: ["bash"] }),
 		);
 		const allTools = [
 			builtinTool("read"),
@@ -337,21 +330,21 @@ test("the Plan-mode tool selector searches metadata and toggles the stable tool 
 				assert.doesNotMatch(filtered, /› .*bash|› .*read|› .*write/);
 				harness.handleInput("tui.select.confirm");
 				for (let index = 0; index < 6; index += 1) harness.handleInput("\u007f");
-				assert.match(stripVTControlCharacters(harness.render().join("\n")), /› \[ \] custom/);
-				harness.handleInput("tui.select.cancel");
+				assert.match(stripVTControlCharacters(harness.render().join("\n")), /› \[x\] custom/);
+				harness.handleInput("tui.select.down");
+				harness.handleInput("tui.select.confirm");
 				await harness.waitForPending();
 				return harness.result;
 			},
 		});
 
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await mock.commands.get("plan")?.handler("tools", context.ctx);
 
 		assert.equal(customCalled, true);
-		assert.deepEqual(mock.rawPi.getActiveTools(), ["bash", ...REQUIRED_PLAN_TOOLS]);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["bash", "custom", ...REQUIRED_PLAN_TOOLS]);
 		const persisted = mock.entries.at(-1)?.data as { selectedToolNames?: string[] } | undefined;
-		assert.deepEqual(persisted?.selectedToolNames, ["bash"]);
+		assert.deepEqual(persisted?.selectedToolNames, ["bash", "custom"]);
 	});
 });
 

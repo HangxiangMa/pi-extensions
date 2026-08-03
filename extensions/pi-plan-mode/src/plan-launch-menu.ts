@@ -5,37 +5,39 @@ export interface PlanLaunchTool {
 	name: string;
 	description: string;
 	searchText: string;
-	selected: boolean;
 	disabled: boolean;
 	disabledReason?: string;
 }
 
 interface PlanLaunchMenuOptions {
 	statusText: string;
-	toolSummary: string;
+	toolSummary(selectedNames: ReadonlySet<string>): string;
+	getSelectedNames(): ReadonlySet<string>;
 	tools: readonly PlanLaunchTool[];
 	signal: AbortSignal;
 	isCurrent(): boolean;
+	initialScreen?: "main" | "tools";
 	start(signal: AbortSignal): void;
 	startWithTools(toolNames: string[], signal: AbortSignal): void;
+	settings(signal: AbortSignal): Promise<boolean>;
 }
 
 export async function showPlanLaunchMenu(ctx: ExtensionContext, options: PlanLaunchMenuOptions) {
 	type Screen = "main" | "tools" | "help";
-	type Action = "start" | "toggle-tool" | "start-with-tools";
-	const selectedNames = new Set(
-		options.tools.filter((tool) => tool.selected && !tool.disabled).map((tool) => tool.name),
-	);
+	type Action = "start" | "toggle-tool" | "start-with-tools" | "settings";
+	const selectedNames = new Set(options.getSelectedNames());
+	let draftChanged = false;
 	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
-		start: "main",
+		start: options.initialScreen ?? "main",
 		screens: {
 			main: () => ({
 				kind: "actions",
 				title: "Plan mode",
-				lines: [options.statusText, options.toolSummary],
+				lines: [options.statusText, options.toolSummary(selectedNames)],
 				items: [
 					{ id: "start", label: "Start Plan mode", action: "start" },
 					{ id: "tools", label: "Choose tools, then start…", to: "tools" },
+					{ id: "settings", label: "Settings", action: "settings" },
 					{ id: "help", label: "How Plan mode works", to: "help" },
 				],
 				hint: "close",
@@ -91,12 +93,24 @@ export async function showPlanLaunchMenu(ctx: ExtensionContext, options: PlanLau
 				if (!tool || tool.disabled) return { kind: "rejected" };
 				if (selected) selectedNames.add(tool.name);
 				else selectedNames.delete(tool.name);
+				draftChanged = true;
 				return { kind: "stay" };
 			},
 			"start-with-tools": async ({ signal }) => {
 				if (signal.aborted || !options.isCurrent()) return { kind: "rejected" };
 				options.startWithTools(Array.from(selectedNames), signal);
 				return { kind: "close" };
+			},
+			settings: async ({ signal }) => {
+				if (signal.aborted || !options.isCurrent()) return { kind: "rejected" };
+				const close = await options.settings(signal);
+				if (signal.aborted || !options.isCurrent()) return { kind: "rejected" };
+				if (close) return { kind: "close" };
+				if (!draftChanged) {
+					selectedNames.clear();
+					for (const name of options.getSelectedNames()) selectedNames.add(name);
+				}
+				return { kind: "stay" };
 			},
 		},
 	});

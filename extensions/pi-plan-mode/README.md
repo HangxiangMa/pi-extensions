@@ -11,7 +11,7 @@ Pi core intentionally does not ship a built-in plan mode; this package provides 
 - Adds a state-aware `/plan` launch and management menu, plus `/plan start` for direct activation.
 - Adds `--plan` to start a session in Plan mode.
 - Enables built-in read-only tools by default while Plan mode is active.
-- Disables extension and custom tools by default, with a `/plan tools` selector for explicit user-risk opt-in.
+- Disables extension and custom tools by default, with persistent pre-start Settings and a staged `/plan tools` compatibility shortcut for explicit user-risk opt-in.
 - Blocks `update_plan`, mutating built-in tools, and unsafe `bash` forms such as writes, substitutions, background jobs, dependency installs, and mutating Git commands.
 - Injects Codex-like Plan mode instructions: explore first, ask decision questions for high-impact ambiguity, do not mutate files, and finalize only when decision-complete.
 - Adds required `plan_mode_question` and `plan_mode_complete` tools for structured questions and completion.
@@ -58,24 +58,26 @@ pi -e ./extensions/pi-plan-mode
 
 In TUI and RPC, use bare `/plan` to open the menu for the current Plan state. When Plan mode is off
 and no plan is stored, the launch menu shows the effective next-start tools and offers **Start Plan
-mode**, **Choose tools, then start…**, and **How Plan mode works**. Launch-menu tool changes remain a
-draft until **Done — start Plan mode** is selected; Back, Escape, Ctrl+C, disposal, session
-replacement, and shutdown discard the draft without changing Plan state, active tools, thinking, or
-the stored selection.
+mode**, **Choose tools, then start…**, **Settings**, and **How Plan mode works**. Settings edits the
+persistent defaults for later workflows. Launch-menu tool changes remain a draft until **Done — start
+Plan mode** is selected; Back, Escape, Ctrl+C, disposal, session replacement, and shutdown discard
+the draft without changing Plan state, active tools, thinking, or the stored selection.
 
 Use `/plan start` when you want to enter Plan mode directly without sending a model message. Use
 `/plan <prompt>` to enter Plan mode and immediately submit `<prompt>` as the first Plan-mode user
 message. The exact argument `start` is reserved for direct activation; longer text such as `/plan
 start a migration` remains an inline planning prompt. `--plan` also remains a direct activation path.
 
-Use `/plan tools` to enter Plan mode when needed and choose which tools are active in the current
-Plan workflow; unlike the launch-menu draft, this active selector applies accepted toggles to the
-session immediately. The standard bounded multi-select shows 10 rows at a time, supports viewport
-paging, descriptions, and explicit unavailable rows for blocked tools. In TUI mode, type to
-fuzzy-search tool names, descriptions, policy, and source metadata; clear the query to restore the
-stable tool cursor. RPC keeps the complete unfiltered tool list. The `plan_mode_question` tool keeps
-its one-off question/choice dialog because it is a model-requested planning interaction, not
-command-menu navigation. `/plan show` displays the stored
+Use **Choose tools, then start…** or the `/plan tools` compatibility shortcut to choose a
+session-specific override before Planning starts. Both routes use the same draft selector: **Done —
+start Plan mode** stores the selection and starts the workflow, while cancellation leaves Plan mode
+off and changes nothing. The bounded multi-select shows 10 rows at a time, supports viewport paging,
+descriptions, and explicit unavailable rows for blocked tools. In TUI mode, type to fuzzy-search tool
+names, descriptions, policy, and source metadata; RPC keeps the complete unfiltered list. Once Plan
+mode is active, tools are locked: `/plan` no longer offers tool or Settings actions, and `/plan tools`
+rejects the request. Exit and start a new workflow if a different tool set is required. The
+`plan_mode_question` tool keeps its one-off question/choice dialog because it is a model-requested
+planning interaction, not command-menu navigation. `/plan show` displays the stored
 plan without starting a model turn, including the accepted plan while implementation is active.
 `/plan finalize` explicitly asks the agent to complete the plan or ask one remaining material
 question, `/plan save` stores a completed ready plan for later and leaves Plan mode, `/plan
@@ -102,17 +104,17 @@ failed TUI export retains the draft for correction; RPC reopens its input dialog
 the owning menu without writing a file. A successful ready-plan export closes the menu and ends Plan
 mode; saved and active implementation menus close without changing their stored state.
 
-When Plan mode is active, ask the agent to design the change. The agent may inspect files and run read-only commands, but it should not edit files or execute the implementation. It should explore first, then use structured questions when your preference or a tradeoff materially changes the plan.
+When Plan mode is active, ask the agent to design the change. The agent may inspect files and run read-only commands, but it should not edit files or execute the implementation. It should explore first, then use structured questions when your preference or a tradeoff materially changes the plan. Configure persistent defaults or a one-workflow tool override before activation; Planning and ready menus deliberately keep those controls locked.
 
-By default, Plan mode manages only Pi's built-in tools: `read`, limited `bash`, available read-only built-ins such as `grep`, `find`, and `ls`, plus the required `plan_mode_question` and `plan_mode_complete` tools. Built-in `edit` and `write` are blocked. `update_plan` is also blocked because it tracks execution progress rather than conversational planning. Extension and custom tools are disabled by default because Pi tools do not expose standardized mutability metadata; enable them from `/plan tools` only when you accept the risk for that session. For example, you can opt into `firecrawl_scrape`, `firecrawl_search`, or `lsp_diagnostics` if those extensions are loaded and you want to use them during planning.
+By default, Plan mode manages only Pi's built-in tools: `read`, limited `bash`, available read-only built-ins such as `grep`, `find`, and `ls`, plus the required `plan_mode_question` and `plan_mode_complete` tools. Built-in `edit` and `write` are blocked. `update_plan` is also blocked because it tracks execution progress rather than conversational planning. Extension and custom tools are disabled by default because Pi tools do not expose standardized mutability metadata; enable them before starting from Settings or the staged workflow selector only when you accept the risk. For example, you can opt into `firecrawl_scrape`, `firecrawl_search`, or `lsp_diagnostics` if those extensions are loaded and you want to use them during planning.
 
 Limited `bash` uses a fail-closed policy, including when an extension overrides the canonical `bash` tool name. It accepts common inspection commands, read-only Git and npm queries, pipelines and command lists composed entirely of accepted commands, plus selected checks such as `npm test`, `npm run typecheck`, and `cargo test`. It rejects output/input redirects, shell expansion, substitutions, subshells, background jobs, mutating flags, dependency changes, editors, and unknown commands. A rejected parsed command list or pipeline identifies its first blocked command segment; malformed or unsupported shell syntax reports the complete submitted input instead. Tests and builds may still write ignored caches or build artifacts and may execute project-defined hooks; enable or invoke them only when the repository is trusted. This is extension-level risk reduction, not an OS sandbox.
 
 `plan_mode_question` follows Codex's `request_user_input` pattern: the agent can ask 1-3 concise questions, each with meaningful options and a free-form Other path. If you cancel or no interactive UI is available, the agent should ask a concise plain-text question or proceed only with a clearly stated low-risk assumption instead of prematurely producing a final plan.
 
-Pi activates tools by tool name. The `/plan tools` standard selector stores selections by name and
-shows each currently effective tool's source from Pi metadata, such as `built-in`, a user extension
-path, or a project extension path. If an extension overrides a built-in tool with the same name, Pi exposes the effective tool for that name and the selector shows that source.
+Pi activates tools by tool name. The pre-start selector stores accepted session selections by name
+and shows each effective tool's source from Pi metadata, such as `built-in`, a user extension path,
+or a project extension path. If an extension overrides a built-in tool with the same name, Pi exposes the effective tool for that name and the selector shows that source.
 
 A complete Plan mode answer should appear only after the agent has resolved discoverable facts and high-impact user decisions. The agent must call `plan_mode_complete({ plan })` alone as its final action, passing the complete Markdown plan. The tool rejects empty or whitespace-only plans and plans longer than 50,000 JavaScript characters; it does not truncate. Its visible result contains the full plan, and versioned result details let the extension restore it safely from the active session branch.
 
@@ -122,11 +124,12 @@ Legacy sessions and models may still submit one non-empty `<proposed_plan>` bloc
 
 After completion, `/plan` opens the ready actions when interactive UI is available. Choosing implementation—or running `/plan implement`—disables Plan mode, restores full tool access, and starts an implementation turn with the stored plan. Choosing **Export plan…** asks for a destination, writes the plan, restores normal tools and thinking, and leaves Plan mode without starting a model turn. Choosing **Save for later**—or running `/plan save`—instead stores one plan in the current Pi session before leaving Plan mode.
 
-A saved plan appears as `plan saved` and remains available after reload, resume, branch-local fork, and compaction in that session. It does not expire automatically, cross into a new session, or participate in ordinary model context. Open `/plan` to Show, Implement, Export, or Clear it; `/plan show`, `/plan implement`, `/plan export [path]`, and `/plan exit`/`off` provide the same direct routes in TUI and RPC. Implementation checks the selected model and authentication before consuming the saved plan. Starting another workflow with `/plan start`, `/plan <prompt>`, or `/plan tools` is blocked until the saved plan is implemented or cleared, so the single saved slot is never silently overwritten. Resuming that session with `--plan` moves the saved plan back to ready Plan mode. Cancellation or failed implementation preflight leaves it unchanged.
+A saved plan appears as `plan saved` and remains available after reload, resume, branch-local fork, and compaction in that session. It does not expire automatically, cross into a new session, or participate in ordinary model context. Open `/plan` to Show, Implement, Export, open Settings, or Clear it; `/plan show`, `/plan implement`, `/plan export [path]`, and `/plan exit`/`off` provide the same direct routes in TUI and RPC. Implementation checks the selected model and authentication before consuming the saved plan. Starting another workflow with `/plan start`, `/plan <prompt>`, or `/plan tools` is blocked until the saved plan is implemented or cleared, so the single saved slot is never silently overwritten. Resuming that session with `--plan` moves the saved plan back to ready Plan mode. Cancellation or failed implementation preflight leaves it unchanged.
 
 Text print and JSON modes cannot display the bare `/plan` menu and reject that route before changing
 state; use `/plan start` for direct no-prompt activation or `/plan <prompt>` to start planning with a
-prompt. These modes can export any stored plan with `/plan export [path]`, save a ready plan with
+prompt. `/plan tools` also rejects before changing state because its staged selector requires TUI or
+RPC. These modes can export any stored plan with `/plan export [path]`, save a ready plan with
 `/plan save`, and clear it with `/plan exit` or `/plan off`. Successful export is observable through
 the created file; exporting a ready plan also leaves Plan mode, while saved and active implementation
 state remains unchanged. An existing target or missing plan fails the command without changing state.
@@ -136,7 +139,7 @@ session in TUI or RPC to show or implement it.
 
 Once implemented, the exact accepted plan remains active across later turns, session resume, and manual or automatic compaction without depending on the compaction summary. Plan mode avoids a duplicate context block while the original implementation handoff remains available and injects one hidden canonical copy after that handoff is compacted away. This can consume up to the existing 50,000-character plan limit in model context when reinjection is needed.
 
-While implementation is active, `/plan show` displays the accepted plan. Interactive `/plan` offers Show, Export plan…, Start a new plan, and Clear; `/plan exit` and `/plan off` are the direct clear routes. Starting a new Plan-mode workflow or implementing a replacement plan supersedes the previous active plan. The extension deliberately does not infer completion from assistant prose or agent settlement, so clear the active plan when the implementation no longer applies. Choosing Stay before implementation keeps the plan ready. Revision feedback starts another Plan-mode turn and clears the previous implementable plan until an updated completion arrives. For clarification-only follow-ups, the agent answers and resubmits the complete unchanged plan so it remains implementable. Before saving or implementation, exit/off discards the ready plan and removes its completion result from later non-Plan model context.
+While implementation is active, `/plan show` displays the accepted plan. Interactive `/plan` offers Show, Export plan…, Settings, Start a new plan, and Clear; `/plan exit` and `/plan off` are the direct clear routes. Starting a new Plan-mode workflow or implementing a replacement plan supersedes the previous active plan. The extension deliberately does not infer completion from assistant prose or agent settlement, so clear the active plan when the implementation no longer applies. Choosing Stay before implementation keeps the plan ready. Revision feedback starts another Plan-mode turn and clears the previous implementable plan until an updated completion arrives. For clarification-only follow-ups, the agent answers and resubmits the complete unchanged plan so it remains implementable. Before saving or implementation, exit/off discards the ready plan and removes its completion result from later non-Plan model context.
 
 While Plan mode is enabled, the extension also publishes a compact status for Pi statuslines. With `@narumitw/pi-statusline`, this appears in the extension status area:
 
@@ -153,7 +156,7 @@ You can also exit directly. Before implementation, direct exit discards the late
 
 ## ⚙️ Settings
 
-Create `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`) to configure Plan mode globally. The file is optional, is read at session start, and is never created automatically.
+Open **Settings** from an inactive `/plan` menu to edit the global default tools and Plan thinking level. You can also edit `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`) manually; `safeSubcommands` remains JSON-only. The file is optional, is read at session start, and is created only after an explicit Settings save or manual edit.
 
 ```json
 {
@@ -168,11 +171,11 @@ Create `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-m
 
 ### Default Plan tools
 
-`defaultPlanTools` defines the initial tool selection when a session has no stored `/plan tools` selection. Omit it to keep the available safe built-ins as the default. An explicit empty array is valid and enables only the required `plan_mode_question` and `plan_mode_complete` tools.
+`defaultPlanTools` defines the initial tool selection when a session has no stored pre-start selection. Omit it—or choose **Use automatic safe built-ins**—to keep the available safe built-ins as the default. An explicit empty array appears as **Required tools only** and enables only `plan_mode_question` and `plan_mode_complete`.
 
-Tool names must be non-empty strings; duplicates are removed in first-seen order. Unknown, unavailable, and Plan-mode-blocked names are ignored when tools are activated. A tool registered after Plan mode is already active is not added automatically; re-enter Plan mode or reopen `/plan tools` to reapply the selection. Non-built-in tools named in this global setting are an explicit user-risk opt-in, just like selecting them with `/plan tools`. Plan mode does not interpret their arguments or actions: enabling one trusts the whole effective tool. Pi resolves tools by name, so if an extension overrides a built-in name, the effective extension tool is selected instead. An effective tool named `bash` remains subject to the limited-shell policy regardless of its source metadata.
+Tool names must be non-empty strings; duplicates are removed in first-seen order. Unknown, unavailable, and Plan-mode-blocked names are ignored when tools are activated. Settings retains configured unavailable names and shows them as unavailable; resetting to automatic removes the entire override. A tool registered after Plan mode is already active is not added automatically; exit and start a new Plan workflow to apply another set. Non-built-in tools named in this global setting are an explicit user-risk opt-in, just like selecting them in the pre-start workflow selector. Plan mode does not interpret their arguments or actions: enabling one trusts the whole effective tool. Pi resolves tools by name, so if an extension overrides a built-in name, the effective extension tool is selected instead. An effective tool named `bash` remains subject to the limited-shell policy regardless of its source metadata.
 
-A selection made with `/plan tools` is stored in that Pi session and takes precedence over `defaultPlanTools` when the session resumes. The global setting remains the baseline for fresh sessions and sessions without an explicit selection.
+A selection accepted through **Choose tools, then start…** or `/plan tools` is stored in that Pi session and takes precedence over `defaultPlanTools` when the session resumes. The global setting remains the baseline for fresh sessions and sessions without an explicit selection. Settings saves immediately, but the saved tools and thinking level apply only when a later Plan workflow starts; they never mutate a workflow already in progress.
 
 ### Safe shell subcommands
 
@@ -217,9 +220,11 @@ Read-only does not mean private: Git inspection can expose repository history an
 
 ### Thinking level
 
-Plan mode inherits Pi's current thinking level by default. Set `thinkingLevel` to request a fixed level only while Plan mode is active. Supported values are `inherit`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. The extension snapshots the prior level and restores it on exit only if the level still matches the value it applied; a manual change made during Plan mode is preserved. The setting never changes Pi's default thinking level.
+Plan mode inherits Pi's current thinking level by default. Set `thinkingLevel` to request a fixed level only while Plan mode is active. Supported values are `inherit`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. The extension snapshots the prior level and restores it on exit only if the level still matches the value it applied; a manual change made during Plan mode is preserved. A Settings save does not change Pi's current or default thinking level and takes effect only when the next Plan workflow starts.
 
-Invalid settings produce a warning and fall back to inherited thinking plus the available safe-built-in tool defaults. Compatibility: a valid legacy `plan-mode.json` remains readable with a warning and is never modified automatically; rename it to `pi-plan-mode.json`. If both files exist, the new filename takes precedence.
+Settings saves are serialized in invocation order inside one Pi process. Each save re-reads the latest valid document, preserves unknown top-level fields and unedited `safeSubcommands`, then publishes through a same-directory temporary file and rename. A missing file stays absent until an explicit save. Invalid JSON, invalid values, oversized content, non-regular files, and read failures make Settings read-only; the existing bytes and previous effective settings remain. This in-process queue is not a cross-process lock, so concurrent separate Pi processes can still race.
+
+Invalid settings produce a warning and fall back to inherited thinking plus the available safe-built-in tool defaults. Compatibility: a valid legacy `plan-mode.json` remains readable with a warning and is never modified automatically. If Settings is explicitly saved while only that legacy file exists, the extension creates canonical `pi-plan-mode.json` from the complete legacy document, applies the selected change, preserves unknown fields, and leaves the legacy file untouched. If both files exist, the canonical filename takes precedence.
 
 ## 🧠 Codex-like behavior
 

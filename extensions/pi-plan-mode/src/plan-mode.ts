@@ -30,7 +30,6 @@ import {
 import { showPlanModeMenu, showReadyPlanMenu } from "./plan-action-menus.js";
 import { exportStoredPlan } from "./plan-export.js";
 import { showPlanLaunchMenu } from "./plan-launch-menu.js";
-import { showPlanToolMenu } from "./plan-tool-menu.js";
 import {
 	clearPlanModeUi,
 	planModeStatusText as formatPlanModeStatusText,
@@ -52,10 +51,12 @@ import {
 	savedPlanBlocksNewWorkflow,
 } from "./saved-plan-preflight.js";
 import {
+	awaitPlanModeSettingsWrites,
 	configuredThinkingLevel,
 	type PlanModeSettings,
 	readPlanModeSettings,
 } from "./settings.js";
+import { showPlanModeSettings } from "./settings-menu.js";
 import { type PlanCompletionSource, type PlanModeState, restorePlanModeState } from "./state.js";
 import {
 	canSelectToolInPlanMode,
@@ -80,10 +81,11 @@ interface ReadyPresentationIntent {
 	plan: string;
 	source: PlanCompletionSource;
 }
-export default function planMode(
-	pi: ExtensionAPI,
-	dependencies: { readSettings?(): ReturnType<typeof readPlanModeSettings> } = {},
-) {
+interface PlanModeDependencies {
+	readSettings?(): ReturnType<typeof readPlanModeSettings>;
+	settingsPath?: string;
+}
+export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDependencies = {}) {
 	let state: PlanModeState = { enabled: false, awaitingAction: false };
 	let settings: PlanModeSettings = { thinkingLevel: "inherit" };
 	let previousTools: string[] | undefined;
@@ -92,6 +94,7 @@ export default function planMode(
 	let menuGeneration = 0;
 	let workflowGeneration = 0;
 	let menuController = new AbortController();
+	const persistState = () => pi.appendEntry<PlanModeState>(STATE_ENTRY_TYPE, state);
 
 	pi.registerFlag("plan", {
 		description: "Start in Codex-like Plan mode",
@@ -227,8 +230,17 @@ export default function planMode(
 			if (command === "tools") {
 				if (savedPlanBlocksNewWorkflow(ctx, state.savedPlan !== undefined && !state.enabled))
 					return;
-				if (!state.enabled) enterPlanMode(ctx);
-				await showToolSelector(ctx);
+				if (state.enabled) {
+					const message =
+						"Plan-mode tools are locked while Planning is active. Exit Plan mode and choose tools before starting again.";
+					if (!ctx.hasUI) throw new Error(message);
+					ctx.ui.notify(message, "warning");
+					return;
+				}
+				if (!ctx.hasUI) {
+					throw new Error("/plan tools requires TUI or RPC mode and is unavailable here.");
+				}
+				await showLaunchMenu(ctx, "tools");
 				return;
 			}
 			if (prompt) {
@@ -307,10 +319,11 @@ export default function planMode(
 		}
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => {
+	pi.on("session_shutdown", async (_event, ctx) => {
 		menuGeneration += 1;
 		menuController.abort(new DOMException("Plan-mode session shut down", "AbortError"));
 		readyPresentationIntent = undefined;
+		await awaitPlanModeSettingsWrites(dependencies.settingsPath);
 		captureManualThinkingLevel();
 		persistState();
 		if (state.enabled) {
@@ -661,15 +674,15 @@ export default function planMode(
 		}
 	}
 
-	async function showLaunchMenu(ctx: ExtensionContext) {
+	async function showLaunchMenu(ctx: ExtensionContext, initialScreen: "main" | "tools" = "main") {
 		const lifecycle = captureMenuLifecycle();
 		const tools = selectableTools();
-		const selection = toolSelectionSnapshot();
-		const selectedNames = snapshotPlanModeSelectedNames(tools, selection);
-		const launchToolNames = snapshotPlanModeToolNames(tools, selectedNames, selection);
 		await showPlanLaunchMenu(ctx, {
 			statusText: "Status: Off — normal tools are active.",
-			toolSummary: `When started: ${launchToolNames.join(", ")}`,
+			initialScreen,
+			getSelectedNames: () => snapshotPlanModeSelectedNames(tools, toolSelectionSnapshot()),
+			toolSummary: (selectedNames) =>
+				`When started: ${snapshotPlanModeToolNames(tools, selectedNames, toolSelectionSnapshot()).join(", ")}`,
 			tools: tools.map((tool) => {
 				const selectable = canSelectToolInPlanMode(tool);
 				const policy = toolPolicyLabel(tool);
@@ -678,7 +691,6 @@ export default function planMode(
 					name: tool.name,
 					description: `${policy} · ${description}`,
 					searchText: [policy, description].join(" "),
-					selected: selectedNames.has(tool.name),
 					disabled: !selectable,
 					disabledReason: selectable ? undefined : "Blocked by Plan-mode policy",
 				};
@@ -699,6 +711,7 @@ export default function planMode(
 				enterPlanMode(ctx);
 				ctx.ui.notify("Plan mode enabled with the selected tools.", "info");
 			},
+			settings: (signal) => showSettings(ctx, signal, lifecycle.isCurrent),
 		});
 	}
 
@@ -715,6 +728,7 @@ export default function planMode(
 			show: () => showStoredPlan(pi, ctx, state),
 			exportPlan: (path, signal) =>
 				exportStoredPlan(state, path, ctx, exportOwner(ctx, signal, lifecycle.isCurrent)),
+			settings: (signal) => showSettings(ctx, signal, lifecycle.isCurrent),
 			startNew: () => {
 				enterPlanMode(ctx);
 				ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
@@ -736,6 +750,7 @@ export default function planMode(
 			implement: () => startImplementation(ctx),
 			exportPlan: (path, signal) =>
 				exportStoredPlan(state, path, ctx, exportOwner(ctx, signal, lifecycle.isCurrent)),
+			settings: (signal) => showSettings(ctx, signal, lifecycle.isCurrent),
 			clear: () => {
 				exitPlanMode(ctx);
 				ctx.ui.notify("Saved plan cleared.", "info");
@@ -759,7 +774,6 @@ export default function planMode(
 			exportPlan: (path, signal) =>
 				exportStoredPlan(state, path, ctx, exportOwner(ctx, signal, lifecycle.isCurrent)),
 			save: () => savePlanForLater(ctx),
-			tools: () => showToolSelector(ctx),
 			stay: () => updateUi(ctx),
 			exit: () => {
 				exitPlanMode(ctx);
@@ -784,36 +798,24 @@ export default function planMode(
 		});
 	}
 
-	async function showToolSelector(ctx: ExtensionContext) {
-		if (!ctx.hasUI) {
-			ctx.ui.notify(formatToolSummary(), "info");
-			return;
-		}
-		const lifecycle = captureMenuLifecycle();
-		const tools = selectableTools();
-		await showPlanToolMenu(ctx, {
-			tools,
-			...lifecycle,
-			getSelectedNames: () => snapshotPlanModeSelectedNames(tools, toolSelectionSnapshot()),
-			toggle: (toolName, selected, signal) => {
-				if (signal.aborted || !lifecycle.isCurrent()) return;
-				const names = snapshotPlanModeSelectedNames(tools, toolSelectionSnapshot());
-				if (selected) names.add(toolName);
-				else names.delete(toolName);
-				state = {
-					...state,
-					selectedToolNames: filterAvailableSelectedToolNames(Array.from(names), tools),
-					selectedToolKeys: undefined,
-				};
-				applyPlanModeTools();
-				persistState();
-				updateUi(ctx);
+	async function showSettings(
+		ctx: ExtensionContext,
+		signal: AbortSignal,
+		isCurrent: () => boolean,
+	) {
+		const result = await showPlanModeSettings(ctx, {
+			tools: selectableTools(),
+			signal,
+			isCurrent,
+			settingsPath: dependencies.settingsPath,
+			onSaved: (saved) => {
+				if (isCurrent()) settings = saved;
 			},
+			...(dependencies.readSettings
+				? { readSettings: async () => dependencies.readSettings?.() ?? { kind: "missing" } }
+				: {}),
 		});
-		if (!lifecycle.isCurrent()) return;
-		applyPlanModeTools();
-		persistState();
-		updateUi(ctx);
+		return result.kind === "closed" && "reason" in result && result.reason === "close";
 	}
 
 	function exportOwner(ctx: ExtensionContext, signal: AbortSignal, isCurrent: () => boolean) {
@@ -953,10 +955,6 @@ export default function planMode(
 		} catch {
 			return DEFAULT_TOOLS;
 		}
-	}
-
-	function persistState() {
-		pi.appendEntry<PlanModeState>(STATE_ENTRY_TYPE, state);
 	}
 
 	function restoreState(ctx: ExtensionContext) {
