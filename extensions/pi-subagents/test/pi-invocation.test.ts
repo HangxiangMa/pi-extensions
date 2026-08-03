@@ -164,6 +164,43 @@ test("Pi invocation reuses only a validated standalone Pi executable", () => {
 	});
 });
 
+test("Pi invocation treats a Node executable named pi as a script runtime", () => {
+	withRoot((root) => {
+		writeManifest(root, { name: CORE_PACKAGE, bin: { pi: "dist/cli.js" } });
+		const cliPath = writeCli(root);
+		const executable = path.join(root, process.platform === "win32" ? "pi.exe" : "pi");
+		writeFileSync(executable, "node runtime fixture\n");
+		chmodSync(executable, 0o755);
+		assert.deepEqual(
+			resolvePiInvocation(["--mode", "json"], {
+				execPath: executable,
+				packageDir: root,
+				runtimeKind: "node",
+			}),
+			{ command: executable, args: [cliPath, "--mode", "json"] },
+		);
+	});
+});
+
+test("Pi invocation rejects a standalone-looking executable from an unsupported runtime", () => {
+	withRoot((root) => {
+		writeManifest(root, { name: CORE_PACKAGE, bin: { pi: "dist/cli.js" } });
+		writeCli(root);
+		const executable = path.join(root, process.platform === "win32" ? "pi.exe" : "pi");
+		writeFileSync(executable, "unsupported standalone fixture\n");
+		chmodSync(executable, 0o755);
+		assert.throws(
+			() =>
+				resolvePiInvocation([], {
+					execPath: executable,
+					packageDir: root,
+					runtimeKind: "unsupported",
+				}),
+			/Unable to resolve the Pi CLI.*supported Node or Bun runtime/i,
+		);
+	});
+});
+
 test("Pi invocation rejects unsupported script runtimes", () => {
 	withRoot((root) => {
 		writeManifest(root, { name: CORE_PACKAGE, bin: { pi: "dist/cli.js" } });

@@ -115,7 +115,12 @@ function resolveExistingFile(packageDir: string, candidate: string, reason: stri
 	return resolved;
 }
 
-function resolveStandaloneExecutable(packageDir: string, execPath: string): string | undefined {
+function resolveStandaloneExecutable(
+	packageDir: string,
+	runtime: PiInvocationRuntime,
+): string | undefined {
+	if (runtime.runtimeKind !== "bun") return undefined;
+	const { execPath } = runtime;
 	if (!/^pi(?:\.exe)?$/i.test(path.basename(execPath))) return undefined;
 	let resolved: string;
 	let mode: number;
@@ -148,7 +153,7 @@ export function resolvePiInvocation(
 
 	const manifest = readCoreManifest(packageDir);
 	const declaredBin = resolveDeclaredBin(packageDir, manifest);
-	const standalone = resolveStandaloneExecutable(packageDir, runtime.execPath);
+	const standalone = resolveStandaloneExecutable(packageDir, runtime);
 	if (standalone) return { command: standalone, args: [...args] };
 
 	if (runtime.runtimeKind !== "node" && runtime.runtimeKind !== "bun") {
