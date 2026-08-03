@@ -539,6 +539,21 @@ test("untrusted in-process resource loading never reads project settings", async
 	}
 });
 
+test("in-process resource loading rejects a non-regular system prompt source", async () => {
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-special-system-cwd-"));
+	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-special-system-agent-"));
+	mkdirSync(path.join(cwd, ".pi", "SYSTEM.md"), { recursive: true });
+	try {
+		await assert.rejects(
+			() => createInProcessResourceLoader(cwd, agentDir, "Agent role prompt.", true),
+			/readable regular file/i,
+		);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+		rmSync(agentDir, { recursive: true, force: true });
+	}
+});
+
 test("registered detached spawn auto-resumes without exposing a wait tool", async () => {
 	const originalDir = process.env.PI_CODING_AGENT_DIR;
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-sdk-tools-"));

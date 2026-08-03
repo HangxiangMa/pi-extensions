@@ -512,6 +512,52 @@ test("subagent_consult follows Pi core prompt precedence without loading project
 	}
 });
 
+test("subagent_consult rejects non-regular Pi prompt sources before launch", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-consult-special-resource-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	const agentDir = path.join(root, "agent-home");
+	const workspace = path.join(root, "workspace");
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	mkdirSync(path.join(workspace, ".pi"), { recursive: true });
+	try {
+		for (const fileName of ["SYSTEM.md", "APPEND_SYSTEM.md"]) {
+			const source = path.join(workspace, ".pi", fileName);
+			mkdirSync(source);
+			const instance = setup({ settings: { consult: { resources: "all" } } });
+			const trusted = createMockContext({ cwd: workspace, isProjectTrusted: () => true }).ctx;
+			await assert.rejects(
+				() => execute(instance.tool, { agent: "worker", task: "inspect" }, trusted),
+				/readable regular file/i,
+			);
+			assert.equal(instance.requests.length, 0);
+			rmSync(source, { recursive: true, force: true });
+
+			writeFileSync(source, "trusted project prompt");
+			const shadowedGlobal = path.join(agentDir, fileName);
+			mkdirSync(shadowedGlobal, { recursive: true });
+			const shadowed = setup({ settings: { consult: { resources: "all" } } });
+			await execute(shadowed.tool, { agent: "worker", task: "inspect" }, trusted);
+			assert.equal(shadowed.requests.length, 1);
+			rmSync(source, { force: true });
+			rmSync(shadowedGlobal, { recursive: true, force: true });
+		}
+
+		const globalSource = path.join(agentDir, "SYSTEM.md");
+		mkdirSync(globalSource, { recursive: true });
+		const global = setup({ settings: { consult: { resources: "all" } } });
+		const trusted = createMockContext({ cwd: workspace, isProjectTrusted: () => true }).ctx;
+		await assert.rejects(
+			() => execute(global.tool, { agent: "worker", task: "inspect" }, trusted),
+			/readable regular file/i,
+		);
+		assert.equal(global.requests.length, 0);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("subagent_consult maps target trust to effective resources and cwd policy", async () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-consult-cwd-"));
 	const previous = process.env.PI_CODING_AGENT_DIR;

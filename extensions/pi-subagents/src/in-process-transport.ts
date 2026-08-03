@@ -13,6 +13,7 @@ import { type AgentConfig, discoverAgents, type SubagentThinkingLevel } from "./
 import { redactPrivateText } from "./context.js";
 import { resolveDefaultSubagentTimeoutMs } from "./execution.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_OUTPUT_BYTES, truncateUtf8 } from "./limits.js";
+import { assertPiPromptSourcesAreReadableFiles } from "./prompt-source-safety.js";
 import type { AgentTurn, ManagedAgent, TurnOutcome } from "./registry.js";
 import { readSubagentSettings } from "./settings.js";
 import type { SubagentTransport } from "./transport.js";
@@ -488,6 +489,7 @@ export async function createInProcessResourceLoader(
 	agentSystemPrompt: string,
 	projectTrusted = false,
 ): Promise<{ loader: DefaultResourceLoader; settingsManager: SettingsManager }> {
+	assertPiPromptSourcesAreReadableFiles(cwd, agentDir, projectTrusted, ["SYSTEM.md"]);
 	const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
 	const loader = new DefaultResourceLoader({
 		cwd,

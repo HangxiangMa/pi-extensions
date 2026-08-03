@@ -5,6 +5,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ConsultResourcePolicy } from "./agents.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
+import { assertPiPromptSourcesAreReadableFiles } from "./prompt-source-safety.js";
 import type { ChildLaunchPolicy } from "./runner.js";
 
 const MINIMAL_CONSULT_SYSTEM_PROMPT =
@@ -30,9 +31,14 @@ export async function resolveConsultResourceLaunchPolicy(
 		};
 	}
 
+	const agentDir = getAgentDir();
+	assertPiPromptSourcesAreReadableFiles(cwd, agentDir, projectTrusted, [
+		"SYSTEM.md",
+		"APPEND_SYSTEM.md",
+	]);
 	const loader = new DefaultResourceLoader({
 		cwd,
-		agentDir: getAgentDir(),
+		agentDir,
 		settingsManager: SettingsManager.inMemory({}, { projectTrusted }),
 		noExtensions: true,
 		noSkills: true,
