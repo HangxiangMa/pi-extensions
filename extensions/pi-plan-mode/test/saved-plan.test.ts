@@ -161,7 +161,7 @@ test("plan save exits Plan mode, restores runtime state, and keeps the plan out 
 test("automatic and manual ready menus expose Save for later", async () => {
 	for (const automatic of [true, false]) {
 		const mock = createMockPi({ activeTools: ["read", "edit"] });
-		planMode(mock.pi);
+		planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
 		const context = createMockContext({
 			hasUI: true,
 			select: async (title: string, options: string[]) => {
@@ -170,19 +170,21 @@ test("automatic and manual ready menus expose Save for later", async () => {
 					options.filter((option) => option !== "Close"),
 					automatic
 						? [
-								"Implement this plan",
+								"Implement here",
+								"Start fresh and implement",
 								"Export plan…",
 								"Save for later",
 								"Stay in Plan mode",
-								"Exit Plan mode",
+								"Discard plan and exit",
 							]
 						: [
 								"Show latest proposed plan",
-								"Implement this plan",
+								"Implement here",
+								"Start fresh and implement",
 								"Export plan…",
 								"Save for later",
 								"Stay in Plan mode",
-								"Exit Plan mode",
+								"Discard plan and exit",
 							],
 				);
 				return "Save for later";
@@ -201,7 +203,7 @@ test("automatic and manual ready menus expose Save for later", async () => {
 test("saved Plan management can show, implement, clear, or cancel", async () => {
 	for (const scenario of [
 		{ mode: "tui", selection: "Show saved plan", expected: "saved" },
-		{ mode: "rpc", selection: "Implement saved plan", expected: "implementing" },
+		{ mode: "rpc", selection: "Implement here", expected: "implementing" },
 		{ mode: "tui", selection: "Clear saved plan", expected: "cleared" },
 		{ mode: "tui", selection: undefined, expected: "saved" },
 	] as const) {
@@ -211,7 +213,7 @@ test("saved Plan management can show, implement, clear, or cancel", async () => 
 			savedPlan: { plan: PLAN, source: "plan_mode_complete" },
 		});
 		const mock = createMockPi({ activeTools: ["read", "edit"] });
-		planMode(mock.pi);
+		planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
 		const context = createMockContext({
 			mode: scenario.mode,
 			model: MODEL,
@@ -226,7 +228,8 @@ test("saved Plan management can show, implement, clear, or cancel", async () => 
 					options.filter((option) => option !== "Close"),
 					[
 						"Show saved plan",
-						"Implement saved plan",
+						"Implement here",
+						"Start fresh and implement",
 						"Export plan…",
 						"Settings",
 						"Clear saved plan",
