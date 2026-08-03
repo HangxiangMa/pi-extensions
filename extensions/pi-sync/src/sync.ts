@@ -3,6 +3,7 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import type { RunRouteResult } from "./cancellable-operation.js";
 import {
 	completeSyncArguments,
 	parseOptions,
@@ -33,6 +34,7 @@ import { showSetupWizard, showSyncManager } from "./manager-ui.js";
 import { SetupPullRequiresUiError, useSyncSetup } from "./setup-switch.js";
 import { createSnapshot } from "./snapshot.js";
 import { recoverSnapshotTransactionsOnStartup } from "./snapshot-transaction.js";
+import { isSyncDecisionRequiredError } from "./sync-decision.js";
 import { errorMessage } from "./sync-format.js";
 import {
 	diff,
@@ -141,7 +143,10 @@ async function handleCommand(
 		}
 		return;
 	}
-	await executeCommand(rawArgs, ctx, sessionSignal);
+	const result = await executeCommand(rawArgs, ctx, sessionSignal);
+	if (result.kind === "decision-required") {
+		ctx.ui.notify(result.decision.directMessage, "error");
+	}
 }
 
 async function executeCommand(
@@ -150,10 +155,10 @@ async function executeCommand(
 	signal?: AbortSignal,
 	onCommit?: () => void,
 	setup?: string,
-) {
+): Promise<RunRouteResult> {
 	try {
 		const command = await resolveSyncCommand(rawArgs, ctx);
-		if (signal?.aborted || !command) return;
+		if (signal?.aborted || !command) return { kind: "completed" };
 		const { subcommand, rest } = command;
 		const options = parseOptions(rest);
 		if (setup !== undefined) options.setup = setup;
@@ -164,7 +169,7 @@ async function executeCommand(
 		switch (subcommand) {
 			case "help":
 				ctx.ui.notify(usage(), "info");
-				return;
+				return { kind: "completed" };
 			case "use":
 				await useSyncSetup(
 					ctx,
@@ -174,50 +179,58 @@ async function executeCommand(
 					undefined,
 					options.signal,
 				);
-				return;
+				return { kind: "completed" };
 			case "init":
 				await initConfig(ctx, signal);
-				return;
+				return { kind: "completed" };
 			case "config":
 				await showConfig(ctx, options);
-				return;
+				return { kind: "completed" };
 			case "files":
 				await showFileSelection(ctx, options.setup, options.signal);
-				return;
+				return { kind: "completed" };
 			case "status":
 				await status(ctx, options);
-				return;
+				return { kind: "completed" };
 			case "diff":
 				await diff(ctx, options);
-				return;
+				return { kind: "completed" };
 			case "doctor":
 				await doctor(ctx, options);
-				return;
-			case "push":
-				await withLock("push", () => push(ctx, options));
-				return;
-			case "pull":
-				return await withLock("pull", () => pull(ctx, options));
+				return { kind: "completed" };
+			case "push": {
+				const outcome = await withLock("push", () => push(ctx, options));
+				return { kind: "completed", ...(outcome ? { outcome } : {}) };
+			}
+			case "pull": {
+				const outcome = await withLock("pull", () => pull(ctx, options));
+				return { kind: "completed", ...(outcome ? { outcome } : {}) };
+			}
 			case "sync":
 				await withLock("sync", () => syncBoth(ctx, options));
-				return;
+				return { kind: "completed" };
 			case "history":
 				await history(ctx, options);
-				return;
+				return { kind: "completed" };
 			case "rollback":
 				await withLock("rollback", () => rollback(ctx, options));
-				return;
+				return { kind: "completed" };
 			case "unlock":
 				await unlock(ctx, options);
-				return;
+				return { kind: "completed" };
 			default:
 				ctx.ui.notify(`Unknown /sync command: ${subcommand}\n\n${usage()}`, "warning");
+				return { kind: "failed" };
 		}
 	} catch (error) {
-		if (signal?.aborted) return;
+		if (signal?.aborted) return { kind: "failed" };
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		if (error instanceof SetupPullRequiresUiError) throw error;
+		if (isSyncDecisionRequiredError(error)) {
+			return { kind: "decision-required", decision: error.decision };
+		}
 		ctx.ui.notify(errorMessage(error), "error");
+		return { kind: "failed" };
 	}
 }
 
