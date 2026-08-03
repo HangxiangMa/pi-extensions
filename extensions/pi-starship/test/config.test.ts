@@ -183,20 +183,55 @@ test("catalog-owned module options normalize values and diagnose invalid input",
 	assert.match(invalidMessages, /cache\.future/iu);
 });
 
+test("Starship-aligned module options normalize their public defaults", () => {
+	assert.deepEqual(BUILT_IN_CONFIG.modules.directory.options, {
+		truncation_length: 3,
+		truncate_to_repo: true,
+		fish_style_pwd_dir_length: 0,
+		truncation_symbol: "",
+		home_symbol: "~",
+		use_os_path_sep: true,
+		substitutions: {},
+	});
+	assert.deepEqual(BUILT_IN_CONFIG.modules.git_branch.options, {
+		truncation_length: 0,
+		truncation_symbol: "…",
+	});
+	assert.deepEqual(BUILT_IN_CONFIG.modules.git_commit.options, { commit_hash_length: 7 });
+	assert.deepEqual(BUILT_IN_CONFIG.modules.conda.options, {
+		ignore_base: true,
+		truncation_length: 1,
+	});
+
+	const valid = loadFromText(
+		"[directory]\ntruncation_length = 2\ntruncate_to_repo = false\nfish_style_pwd_dir_length = 1\ntruncation_symbol = '…/'\nhome_symbol = '⌂'\nuse_os_path_sep = false\nsubstitutions = { workspace = 'w' }\n\n[git_branch]\ntruncation_length = 24\ntruncation_symbol = ''\n\n[git_commit]\ncommit_hash_length = 10\n\n[conda]\ntruncation_length = 0\n\n[hostname]\ntrim_at = ''\n",
+	);
+	assert.deepEqual(valid.diagnostics, []);
+	assert.equal(valid.config.modules.directory.options.truncation_length, 2);
+	assert.deepEqual(valid.config.modules.directory.options.substitutions, { workspace: "w" });
+	assert.equal(valid.config.modules.git_branch.options.truncation_length, 24);
+	assert.equal(valid.config.modules.git_commit.options.commit_hash_length, 10);
+	assert.deepEqual(loadFromText("[git_commit]\ncommit_hash_length = 0\n").diagnostics, []);
+	assert.equal(valid.config.modules.conda.options.truncation_length, 0);
+	assert.equal(valid.config.modules.hostname.options.trim_at, "");
+});
+
 test("model truncation options normalize values and reject invalid directions independently", () => {
 	assert.deepEqual(BUILT_IN_CONFIG.modules.model.options, {
 		truncation_length: 0,
 		truncation_symbol: "…",
 		truncation_direction: "end",
+		model_aliases: {},
 	});
 
 	const valid = loadFromText(
-		"[model]\ntruncation_length = 36\ntruncation_symbol = ''\ntruncation_direction = 'middle'\n",
+		"[model]\ntruncation_length = 36\ntruncation_symbol = ''\ntruncation_direction = 'middle'\nmodel_aliases = { raw = 'short' }\n",
 	);
 	assert.deepEqual(valid.config.modules.model.options, {
 		truncation_length: 36,
 		truncation_symbol: "",
 		truncation_direction: "middle",
+		model_aliases: { raw: "short" },
 	});
 	assert.deepEqual(valid.diagnostics, []);
 
@@ -207,6 +242,7 @@ test("model truncation options normalize values and reject invalid directions in
 		truncation_length: 0,
 		truncation_symbol: "…",
 		truncation_direction: "end",
+		model_aliases: {},
 	});
 	assert.deepEqual(
 		invalid.diagnostics.map((item) => item.path),

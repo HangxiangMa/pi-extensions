@@ -90,7 +90,10 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
 	const gitController = new AsyncRefreshController<GitRefreshInput, GitSnapshot | undefined>({
 		async read(input, signal) {
 			const requirements = reachableModuleRequirements(input.config);
-			const gitReachable = [...requirements.keys()].some((name) => name.startsWith("git_"));
+			const gitReachable =
+				[...requirements.keys()].some((name) => name.startsWith("git_")) ||
+				(requirements.has("directory") &&
+					input.config.modules.directory.options.truncate_to_repo === true);
 			if (!gitReachable) return undefined;
 			try {
 				return await readGitSnapshot(pi, input.cwd, {
@@ -521,6 +524,8 @@ function runtimeSnapshot(
 ): StarshipRuntimeSnapshot {
 	return {
 		cwd: ctx.cwd,
+		homeDir: homedir(),
+		gitRoot: runtime.git?.root,
 		model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
 		thinkingLevel: runtime.thinkingLevel,
 		turnCount: userTurnCount(ctx),

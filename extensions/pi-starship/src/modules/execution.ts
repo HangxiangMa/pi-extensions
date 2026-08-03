@@ -42,7 +42,7 @@ export const hostnameModule = defineModule({
 	},
 	options: {
 		ssh_only: { kind: "boolean", default: true },
-		trim_at: { kind: "string", default: ".", allowEmpty: false },
+		trim_at: { kind: "string", default: "." },
 		aliases: { kind: "string-map", default: {} },
 	},
 	values: (context) => workspaceModuleValues("hostname", context),

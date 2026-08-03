@@ -123,6 +123,7 @@ test("Git snapshot refresh collects optional commit tags and line metrics outsid
 			includeMetrics: true,
 			includeTag: true,
 		});
+		assert.equal(snapshot?.root, root);
 		assert.equal(snapshot?.commit?.tag, "v2.0.0");
 		assert.deepEqual(snapshot?.metrics, { added: 8, deleted: 2 });
 		assert.equal(commands.length, 4);

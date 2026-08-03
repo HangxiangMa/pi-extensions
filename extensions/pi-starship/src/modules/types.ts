@@ -63,6 +63,7 @@ export interface GithubPrSnapshot {
 }
 
 export interface GitSnapshot {
+	root?: string;
 	branch?: GitBranchSnapshot;
 	commit?: GitCommitSnapshot;
 	state?: GitStateSnapshot;
@@ -78,6 +79,8 @@ export interface WorkspaceSnapshot {
 
 export interface StarshipRuntimeSnapshot {
 	cwd: string;
+	homeDir?: string;
+	gitRoot?: string;
 	model?: { provider: string; id: string };
 	thinkingLevel: string;
 	turnCount: number;

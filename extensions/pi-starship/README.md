@@ -339,22 +339,74 @@ There is no hidden compatibility overlay or automatic migration.
 - Pi's public extension API does not expose the current auto-compaction toggle, so pi-starship cannot
   reliably provide the native `(auto)` marker.
 
-### Model truncation
+### Directory, Git, and environment contraction
 
-The model module accepts Starship-style `truncation_length` and `truncation_symbol` options plus the
-Pi-specific `truncation_direction` option:
+The analogous modules keep their display policy local and use Starship defaults:
+
+```toml
+[directory]
+truncation_length = 3
+truncate_to_repo = true
+fish_style_pwd_dir_length = 0
+truncation_symbol = ""
+home_symbol = "~"
+use_os_path_sep = true
+substitutions = { "/Volumes/network/path" = "/net" }
+
+[git_branch]
+truncation_length = 0 # pi-starship's bounded no-truncation sentinel
+truncation_symbol = "…"
+
+[git_commit]
+commit_hash_length = 7
+
+[conda]
+ignore_base = true
+truncation_length = 1
+
+[hostname]
+trim_at = "." # set to "" to keep the complete hostname
+```
+
+Directory `$path` contracts the home directory and, by default, the current Git repository root
+before retaining the last three path components. `$full_path` remains the unmodified absolute cwd.
+A positive `fish_style_pwd_dir_length` abbreviates otherwise omitted parent components when no
+substitution is configured. `substitutions` is an ordered TOML string table of literal replacements.
+Pi exposes one cwd rather than separate logical and physical paths, and pi-starship does not implement
+Starship's regex substitution array or repo-root-specific split style/format fields. Directory
+rendering reads only immutable home and repository-root snapshot data and performs no filesystem or
+Git work.
+
+Git branch truncation retains the first `N` grapheme clusters and appends the first grapheme of
+`truncation_symbol` only when truncation occurs. The same rule applies independently to `$branch`,
+`$remote_name`, and `$remote_branch`. Upstream Starship represents its unlimited default as
+`2^63 - 1`; pi-starship uses `0` for the same behavior because its settings integers are deliberately
+bounded. `commit_hash_length` accepts 0 through 64.
+
+Conda retains the last path component by default; `0` keeps the complete environment path. Hostname
+trimming runs before exact alias lookup, matching Starship. These are display transformations only:
+collectors retain bounded, control-sanitized source metadata.
+
+### Model aliases and truncation
+
+The model module accepts exact `model_aliases`, Starship-style `truncation_length` and
+`truncation_symbol` options, plus the Pi-specific `truncation_direction` option:
 
 ```toml
 [model]
+model_aliases = { "/models/Qwen3.6-35B-Q4.gguf" = "Qwen 35B Q4" }
 truncation_length = 36
 truncation_symbol = "…"
 truncation_direction = "middle"
 ```
 
-`truncation_length` counts model grapheme clusters retained before the symbol; `0` disables
+An exact alias is selected before the built-in Claude/GPT shortening rules, then the resulting label
+is subject to the configured truncation. `truncation_length` counts model grapheme clusters retained
+before the symbol; `0` disables
 truncation and is the default. The direction names the removed portion: `start` retains the suffix,
-`end` retains the prefix and is the default, and `middle` retains both ends. Truncation runs after the
-built-in Claude/GPT shortening rules and changes display only—the provider model ID is untouched.
+`end` retains the prefix and is the default, and `middle` retains both ends. When no alias matches,
+truncation runs after the built-in Claude/GPT shortening rules. It always changes display only—the
+provider model ID is untouched.
 Terminal control sequences in model IDs and truncation symbols are removed at render time. An empty
 symbol truncates without a marker. For example, `middle` can retain both a Hugging Face model
 family and its variant, while `start` is useful when a llama.cpp server reports an absolute model path.

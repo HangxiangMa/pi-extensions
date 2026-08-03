@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import {
 	type ExtensionAPI,
 	type ExtensionContext,
@@ -44,6 +45,7 @@ export default function statusline(pi: ExtensionAPI) {
 	let gitStatusRequestId = 0;
 	let activeGitStatusTarget: { cwd: string; generation: number } | undefined;
 	let gitStatusRefreshInFlight = false;
+	let gitStatusAbortController: AbortController | undefined;
 	let gitStatusDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 	let pendingGitStatusRefresh: { cwd: string; generation: number; requestId: number } | undefined;
 
@@ -62,6 +64,10 @@ export default function statusline(pi: ExtensionAPI) {
 		gitStatusDebounceTimer = undefined;
 	};
 
+	const abortGitStatusRefresh = (reason: string) => {
+		gitStatusAbortController?.abort(new DOMException(reason, "AbortError"));
+	};
+
 	const isActiveGitStatusTarget = (cwd: string, generation: number) =>
 		activeGitStatusTarget?.cwd === cwd &&
 		activeGitStatusTarget.generation === generation &&
@@ -78,14 +84,17 @@ export default function statusline(pi: ExtensionAPI) {
 		}
 
 		gitStatusRefreshInFlight = true;
+		const abortController = new AbortController();
+		gitStatusAbortController = abortController;
 		void (async () => {
 			try {
-				const summary = await readGitStatus(pi, cwd);
+				const summary = await readGitStatus(pi, cwd, abortController.signal);
 				if (isCurrentGitStatusRequest(cwd, generation, requestId)) setGitStatus(summary);
 			} catch {
 				if (isCurrentGitStatusRequest(cwd, generation, requestId)) setGitStatus(undefined);
 			} finally {
 				gitStatusRefreshInFlight = false;
+				if (gitStatusAbortController === abortController) gitStatusAbortController = undefined;
 				const pending = pendingGitStatusRefresh;
 				pendingGitStatusRefresh = undefined;
 				if (pending) runGitStatusRefresh(pending.cwd, pending.generation, pending.requestId);
@@ -119,7 +128,9 @@ export default function statusline(pi: ExtensionAPI) {
 		menuController = new AbortController();
 		const cwd = ctx.cwd;
 		activeSessionManager = ctx.sessionManager;
+		runtime.homeDir = homedir();
 		previewPalettePreset = undefined;
+		abortGitStatusRefresh("Statusline session context replaced");
 		clearGitStatusDebounce();
 		activeGitStatusTarget = ctx.mode === "tui" ? { cwd, generation } : undefined;
 		runtime.gitStatus = undefined;
@@ -136,6 +147,7 @@ export default function statusline(pi: ExtensionAPI) {
 			const refreshFooterGitStatus = () => refreshGitStatus(cwd, generation);
 			const branchUnsubscribe = footerData.onBranchChange(() => {
 				runtime.gitStatus = undefined;
+				abortGitStatusRefresh("Statusline Git branch changed");
 				clearGitStatusDebounce();
 				refreshFooterGitStatus();
 				tui.requestRender();
@@ -152,6 +164,7 @@ export default function statusline(pi: ExtensionAPI) {
 					clearInterval(clock);
 					if (isActiveGitStatusTarget(cwd, generation)) {
 						activeGitStatusTarget = undefined;
+						abortGitStatusRefresh("Statusline footer disposed");
 						clearGitStatusDebounce();
 						pendingGitStatusRefresh = undefined;
 						runtime.gitStatus = undefined;
@@ -229,6 +242,7 @@ export default function statusline(pi: ExtensionAPI) {
 		activeSessionManager = undefined;
 		previewPalettePreset = undefined;
 		activeGitStatusTarget = undefined;
+		abortGitStatusRefresh("Statusline session shut down");
 		clearGitStatusDebounce();
 		pendingGitStatusRefresh = undefined;
 		runtime.gitStatus = undefined;
@@ -324,7 +338,9 @@ export {
 	formatGitBranchValue,
 	formatGitStatusSummary,
 	type GitStatusSummary,
+	parseGitRoot,
 	parseGitStatusPorcelain,
+	readGitStatus,
 } from "./git-status.js";
 export {
 	contextColor,

@@ -27,9 +27,11 @@ import statusline, {
 	formatGitStatusSummary,
 	formatToolActivity,
 	npmPackageName,
+	parseGitRoot,
 	parseGitStatusPorcelain,
 	prContextFromStatuses,
 	prLinkFromStatuses,
+	readGitStatus,
 	readStatuslineSettings,
 	shortenModel,
 	simplifyExtensionStatusText,
@@ -258,7 +260,10 @@ test("statusline renders cached git status without executing git during render",
 	assert.equal(execCalls, callsBeforeRender);
 	assert.equal(callsBeforeRender, 1);
 
-	async function execGitStatus() {
+	async function execGitStatus(_command: string, args: string[]) {
+		if (args[0] === "rev-parse") {
+			return { stdout: "/workspace\n", stderr: "", code: 0, killed: false };
+		}
 		execCalls += 1;
 		return { stdout: "## main\n M changed.ts\n", stderr: "", code: 0, killed: false };
 	}
@@ -282,7 +287,10 @@ test("statusline ignores stale git refresh events from a previous cwd", async ()
 
 	assert.deepEqual(cwdCalls, [oldCwd, newCwd]);
 
-	async function execGitStatus(_command: string, _args: string[], options?: { cwd?: string }) {
+	async function execGitStatus(_command: string, args: string[], options?: { cwd?: string }) {
+		if (args[0] === "rev-parse") {
+			return { stdout: `${options?.cwd ?? "/workspace"}\n`, stderr: "", code: 0, killed: false };
+		}
 		cwdCalls.push(options?.cwd ?? "");
 		return { stdout: "## main\n", stderr: "", code: 0, killed: false };
 	}
@@ -320,10 +328,90 @@ test("statusline stops git refreshes after its footer is disposed", async () => 
 
 	assert.equal(execCalls, 1);
 
-	async function execGitStatus() {
+	async function execGitStatus(_command: string, args: string[]) {
+		if (args[0] === "rev-parse") {
+			return { stdout: "/workspace\n", stderr: "", code: 0, killed: false };
+		}
 		execCalls += 1;
 		return { stdout: "## main\n", stderr: "", code: 0, killed: false };
 	}
+});
+
+test("statusline aborts an in-flight Git refresh when its footer is disposed", async () => {
+	const mock = createMockPi();
+	const pending = deferred<ExecResult>();
+	let statusSignal: AbortSignal | undefined;
+	(
+		mock.rawPi as typeof mock.rawPi & {
+			exec: (
+				command: string,
+				args: string[],
+				options?: { signal?: AbortSignal },
+			) => Promise<ExecResult>;
+		}
+	).exec = async (_command, args, options) => {
+		if (args[0] === "rev-parse") {
+			return { stdout: "/workspace\n", stderr: "", code: 0, killed: false };
+		}
+		statusSignal = options?.signal;
+		return pending.promise;
+	};
+	statusline(mock.pi);
+	const context = createMockContext({ mode: "tui" });
+	await emit(mock.events, "session_start", {}, context.ctx);
+	const footerFactory = context.footer as (
+		tui: { requestRender(): void },
+		theme: { fg(_color: string, text: string): string; bold(text: string): string },
+		footerData: {
+			getGitBranch(): string | null;
+			getExtensionStatuses(): ReadonlyMap<string, string>;
+			onBranchChange(callback: () => void): () => void;
+		},
+	) => { dispose(): void };
+	const footer = footerFactory(
+		{ requestRender() {} },
+		{ fg: (_color, text) => text, bold: (text) => text },
+		{
+			getGitBranch: () => "main",
+			getExtensionStatuses: () => new Map(),
+			onBranchChange: () => () => undefined,
+		},
+	);
+	assert.equal(statusSignal?.aborted, false);
+	footer.dispose();
+	assert.equal(statusSignal?.aborted, true);
+	pending.resolve({ stdout: "## main\n", stderr: "", code: 0, killed: false });
+	await flushAsync();
+});
+
+test("statusline aborts an in-flight Git refresh during session shutdown", async () => {
+	const mock = createMockPi();
+	const pending = deferred<ExecResult>();
+	let statusSignal: AbortSignal | undefined;
+	(
+		mock.rawPi as typeof mock.rawPi & {
+			exec: (
+				command: string,
+				args: string[],
+				options?: { signal?: AbortSignal },
+			) => Promise<ExecResult>;
+		}
+	).exec = async (_command, args, options) => {
+		if (args[0] === "rev-parse") {
+			return { stdout: "/workspace\n", stderr: "", code: 0, killed: false };
+		}
+		statusSignal = options?.signal;
+		return pending.promise;
+	};
+	statusline(mock.pi);
+	const context = createMockContext({ mode: "tui" });
+	await emit(mock.events, "session_start", {}, context.ctx);
+
+	assert.equal(statusSignal?.aborted, false);
+	await emit(mock.events, "session_shutdown", {}, context.ctx);
+	assert.equal(statusSignal?.aborted, true);
+	pending.resolve({ stdout: "## main\n", stderr: "", code: 0, killed: false });
+	await flushAsync();
 });
 
 test("statusline does not render stale in-flight git status after a branch change", async () => {
@@ -331,6 +419,7 @@ test("statusline does not render stale in-flight git status after a branch chang
 	const firstStatus = deferred<ExecResult>();
 	const secondStatus = deferred<ExecResult>();
 	const execResults = [firstStatus.promise, secondStatus.promise];
+	const statusSignals: AbortSignal[] = [];
 	let execCalls = 0;
 	(mock.rawPi as typeof mock.rawPi & { exec: typeof execGitStatus }).exec = execGitStatus;
 	statusline(mock.pi);
@@ -365,6 +454,7 @@ test("statusline does not render stale in-flight git status after a branch chang
 	assert.equal(execCalls, 1);
 	assert.ok(branchChange);
 	branchChange();
+	assert.equal(statusSignals[0]?.aborted, true);
 	firstStatus.resolve({ stdout: "## main\n M stale.ts\n", stderr: "", code: 0, killed: false });
 	await flushAsync();
 
@@ -377,7 +467,15 @@ test("statusline does not render stale in-flight git status after a branch chang
 	assert.match(footer.render(120).join("\n"), /\?1/u);
 	footer.dispose();
 
-	async function execGitStatus() {
+	async function execGitStatus(
+		_command: string,
+		args: string[],
+		options?: { signal?: AbortSignal },
+	) {
+		if (args[0] === "rev-parse") {
+			return { stdout: "/workspace\n", stderr: "", code: 0, killed: false };
+		}
+		if (options?.signal) statusSignals.push(options.signal);
 		const result = execResults[execCalls];
 		execCalls += 1;
 		if (!result) throw new Error("unexpected git status refresh");
@@ -431,7 +529,10 @@ test("statusline invalidates in-flight git status while a debounced refresh is p
 	assert.match(footer.render(120).join("\n"), /\?1/u);
 	footer.dispose();
 
-	async function execGitStatus() {
+	async function execGitStatus(_command: string, args: string[]) {
+		if (args[0] === "rev-parse") {
+			return { stdout: "/workspace\n", stderr: "", code: 0, killed: false };
+		}
 		const result = execResults[execCalls];
 		execCalls += 1;
 		if (!result) throw new Error("unexpected git status refresh");
@@ -497,6 +598,32 @@ test("prContextFromStatuses chooses one actionable state by precedence", () => {
 	assert.equal(context("checks passing"), `${link} · checks passing`);
 	assert.equal(context("no checks"), `${link} · no checks`);
 	assert.equal(context("unknown"), undefined);
+});
+
+test("Git status remains available when repository-root discovery fails", async () => {
+	const mock = createMockPi();
+	(
+		mock.rawPi as typeof mock.rawPi & {
+			exec: (_command: string, args: string[]) => Promise<ExecResult>;
+		}
+	).exec = async (_command, args) => {
+		if (args[0] === "rev-parse") throw new Error("root unavailable");
+		return { stdout: "## main\n M changed.ts\n", stderr: "", code: 0, killed: false };
+	};
+	assert.deepEqual(await readGitStatus(mock.pi, "/workspace"), {
+		ahead: 0,
+		behind: 0,
+		staged: 0,
+		modified: 1,
+		untracked: 0,
+		conflicts: 0,
+	});
+});
+
+test("git root parser accepts only an absolute first line", () => {
+	assert.equal(parseGitRoot("/workspace/repo\n"), "/workspace/repo");
+	assert.equal(parseGitRoot("relative/repo\n"), undefined);
+	assert.equal(parseGitRoot(""), undefined);
 });
 
 test("git status parser and formatter produce compact dirty tokens", () => {

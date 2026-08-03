@@ -8,7 +8,6 @@ import {
 	optionBoolean,
 	optionString,
 	optionStrings,
-	pathName,
 	runBounded,
 	safeMetadata,
 	setString,
@@ -51,7 +50,7 @@ export async function collectDevelopment(
 		conda &&
 		!(optionBoolean(context, "conda", "ignore_base") && conda === "base")
 	) {
-		result.conda = { environment: pathName(conda) };
+		result.conda = { environment: conda };
 	}
 
 	if (context.needs("pixi") && detected(context, entries, "pixi", ["pixi.toml", "pixi.lock"])) {

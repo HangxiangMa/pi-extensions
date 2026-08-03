@@ -101,6 +101,27 @@ test("non-TUI sessions install no footer and execute no Git or GitHub subprocess
 	assert.equal(calls, 0);
 });
 
+test("reachable directory alone collects repository-root metadata", async (t) => {
+	useLifecycleConfig(t, "format = '$directory'\n");
+	const mock = createMockPi();
+	let statusCalls = 0;
+	(
+		mock.rawPi as typeof mock.rawPi & {
+			exec: (_command: string, args: string[]) => Promise<ExecResult>;
+		}
+	).exec = async (_command, args) => {
+		if (args.includes("status")) statusCalls += 1;
+		if (args[0] === "rev-parse") return gitResult("/workspace\n/workspace/.git\n/workspace/.git\n");
+		return gitResult("# branch.oid 0123456789abcdef\n# branch.head main\n");
+	};
+	piStarship(mock.pi);
+	const context = createMockContext({ mode: "tui", cwd: "/workspace/src" });
+	await emit(mock.events, "session_start", {}, context.ctx);
+	await flushAsync();
+	assert.equal(statusCalls, 1);
+	await emit(mock.events, "session_shutdown", {}, context.ctx);
+});
+
 test("unreachable and disabled native PR modules execute no gh command", async () => {
 	for (const source of ["format = '$model'\n", "[github_pr]\ndisabled = true\n"]) {
 		const root = mkdtempSync(join(tmpdir(), "pi-starship-pr-gate-"));

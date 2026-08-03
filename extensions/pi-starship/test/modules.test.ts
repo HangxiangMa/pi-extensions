@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { sep } from "node:path";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { BUILT_IN_CONFIG } from "../src/config.js";
@@ -462,6 +463,197 @@ test("$all expands enabled modules in default order without explicit duplicates"
 	assert.match(rendered.ansi, /#7/);
 });
 
+test("directory applies Starship home, repository, substitution, and component defaults", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$directory";
+	config.formatAst = parseFormat(config.format);
+	config.modules.directory.format = "$path|$full_path";
+	config.modules.directory.formatAst = parseFormat(config.modules.directory.format);
+
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({
+					cwd: "/home/alice/work/repository/src/lib/deep",
+					homeDir: "/home/alice",
+					gitRoot: "/home/alice/work/repository",
+				}),
+			).ansi,
+		),
+		"src/lib/deep|/home/alice/work/repository/src/lib/deep",
+	);
+
+	config.modules.directory.options.substitutions = { repository: "repo" };
+	config.modules.directory.options.truncation_length = 0;
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({
+					cwd: "/home/alice/work/repository/src",
+					homeDir: "/home/alice",
+					gitRoot: "/home/alice/work/repository",
+				}),
+			).ansi,
+		),
+		"repo/src|/home/alice/work/repository/src",
+	);
+
+	config.modules.directory.options.truncate_to_repo = false;
+	config.modules.directory.options.truncation_length = 2;
+	config.modules.directory.options.truncation_symbol = "…/";
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({ cwd: "/home/alice/work/repository/src", homeDir: "/home/alice" }),
+			).ansi,
+		),
+		"…/repo/src|/home/alice/work/repository/src",
+	);
+
+	config.modules.directory.options.substitutions = {};
+	config.modules.directory.options.fish_style_pwd_dir_length = 1;
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({ cwd: "/home/alice/built/this/city", homeDir: "/home/alice" }),
+			).ansi,
+		),
+		"~/b/this/city|/home/alice/built/this/city",
+	);
+});
+
+test("directory normalizes equivalent roots before contraction", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$directory";
+	config.formatAst = parseFormat(config.format);
+	config.modules.directory.format = "$path";
+	config.modules.directory.formatAst = parseFormat(config.modules.directory.format);
+	config.modules.directory.options.truncation_length = 0;
+
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({ cwd: "/repository", homeDir: "/home/alice", gitRoot: "/repository/" }),
+			).ansi,
+		),
+		"repository",
+	);
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({ cwd: "/home/alice", homeDir: "/home/alice", gitRoot: "/home/alice/" }),
+			).ansi,
+		),
+		"~",
+	);
+});
+
+test("directory preserves POSIX backslashes and strips terminal controls", {
+	skip: sep !== "/",
+}, () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$directory";
+	config.formatAst = parseFormat(config.format);
+	config.modules.directory.format = "$path|$full_path";
+	config.modules.directory.formatAst = parseFormat(config.modules.directory.format);
+
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({ cwd: "/home/alice/team\\name/project", homeDir: "/home/alice" }),
+			).ansi,
+		),
+		"~/team\\name/project|/home/alice/team\\name/project",
+	);
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({
+					cwd: "/home/alice/team\x1b]8;;https://evil.example\x07click\x1b]8;;\x07/repo\nline",
+					homeDir: "/home/alice",
+				}),
+			).ansi,
+		),
+		"~/teamclick/repo line|/home/alice/teamclick/repo line",
+	);
+});
+
+test("Git branch and commit honor Starship truncation options", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$git_branch|$git_commit";
+	config.formatAst = parseFormat(config.format);
+	config.modules.git_branch.format = "$branch:$remote_name/$remote_branch";
+	config.modules.git_branch.formatAst = parseFormat(config.modules.git_branch.format);
+	config.modules.git_branch.options.truncation_length = 4;
+	config.modules.git_branch.options.truncation_symbol = "…more";
+	config.modules.git_commit.format = "$hash";
+	config.modules.git_commit.formatAst = parseFormat(config.modules.git_commit.format);
+	config.modules.git_commit.options.commit_hash_length = 10;
+
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({
+					gitBranchDetails: {
+						name: "feature",
+						remoteName: "origin",
+						remoteBranch: "remote-main",
+						detached: false,
+					},
+				}),
+			).ansi,
+		),
+		"feat…:orig…/remo…|0123456789",
+	);
+
+	config.format = "$git_branch";
+	config.formatAst = parseFormat(config.format);
+	config.modules.git_branch.format = "$branch";
+	config.modules.git_branch.formatAst = parseFormat(config.modules.git_branch.format);
+	config.modules.git_branch.options.truncation_length = 2;
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({
+					gitBranchDetails: { name: "A👨‍👩‍👧‍👦BC", detached: false },
+				}),
+			).ansi,
+		),
+		"A👨‍👩‍👧‍👦…",
+	);
+});
+
+test("model exact aliases apply before Pi-specific shortening and truncation", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$model";
+	config.formatAst = parseFormat(config.format);
+	config.modules.model.format = "$model";
+	config.modules.model.formatAst = parseFormat(config.modules.model.format);
+	config.modules.model.options.model_aliases = {
+		"claude-sonnet-4-20250514": "Team Sonnet Model",
+	};
+	config.modules.model.options.truncation_length = 9;
+	config.modules.model.options.truncation_direction = "end";
+
+	assert.equal(stripAnsi(renderStatusline(config, fixture()).ansi), "Team Sonn…");
+	assert.equal(
+		stripAnsi(
+			renderStatusline(config, fixture({ model: { provider: "custom", id: "constructor" } })).ansi,
+		),
+		"construct…",
+	);
+});
+
 test("Starship Git modules expose branch, commit, state, metrics, and detailed status", () => {
 	const config = structuredClone(BUILT_IN_CONFIG);
 	config.format = "$git_branch|$git_commit|$git_state|$git_metrics|$git_status";
@@ -560,6 +752,36 @@ test("git worktree renders linked worktree values and stays empty for the primar
 		"pi-extensions-feature:/work/pi-extensions-feature",
 	);
 	assert.equal(renderStatusline(config, fixture({ gitWorktree: undefined })).ansi, "");
+});
+
+test("Conda applies Starship path-component truncation in its owning module", () => {
+	const config = structuredClone(BUILT_IN_CONFIG);
+	config.format = "$conda";
+	config.formatAst = parseFormat(config.format);
+	config.modules.conda.format = "$environment";
+	config.modules.conda.formatAst = parseFormat(config.modules.conda.format);
+	const runtime = fixture({
+		workspace: { modules: { conda: { environment: "/envs/team/work" } } },
+	});
+
+	assert.equal(stripAnsi(renderStatusline(config, runtime).ansi), "work");
+	config.modules.conda.options.truncation_length = 2;
+	assert.equal(stripAnsi(renderStatusline(config, runtime).ansi), "team/work");
+	config.modules.conda.options.truncation_length = 0;
+	assert.equal(stripAnsi(renderStatusline(config, runtime).ansi), "/envs/team/work");
+
+	if (sep === "/") {
+		config.modules.conda.options.truncation_length = 1;
+		assert.equal(
+			stripAnsi(
+				renderStatusline(
+					config,
+					fixture({ workspace: { modules: { conda: { environment: "/envs/team\\work" } } } }),
+				).ansi,
+			),
+			"team\\work",
+		);
+	}
 });
 
 test("first-wave workspace modules render documented snapshot variables", () => {
