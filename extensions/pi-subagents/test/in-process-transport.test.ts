@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { type AssistantMessage, createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { type ModelRegistry, SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+	ModelRegistry,
+	ModelRuntime,
+	resolveCliModel,
+	SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { AgentConfig } from "../src/agents.js";
 import {
@@ -62,12 +67,13 @@ interface TestCodingAgentModule {
 		inMemory?(auth: TestAuthStorage): ModelRegistry;
 	};
 	ModelRuntime?: {
-		create(options: { authPath: string; modelsPath: null }): Promise<unknown>;
+		create(options: { authPath: string; modelsPath: null }): Promise<ModelRuntime>;
 	};
 }
 
 async function createTestModelRegistry(): Promise<{
 	modelRegistry: ModelRegistry;
+	modelRuntime?: ModelRuntime;
 	dispose(): void;
 }> {
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-model-runtime-"));
@@ -82,6 +88,7 @@ async function createTestModelRegistry(): Promise<{
 			});
 			return {
 				modelRegistry: new codingAgentModule.ModelRegistry(runtime),
+				modelRuntime: runtime,
 				dispose: () => rmSync(agentDir, { recursive: true, force: true }),
 			};
 		}
@@ -532,6 +539,21 @@ test("untrusted in-process resource loading never reads project settings", async
 	}
 });
 
+test("in-process resource loading rejects a non-regular system prompt source", async () => {
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-special-system-cwd-"));
+	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-special-system-agent-"));
+	mkdirSync(path.join(cwd, ".pi", "SYSTEM.md"), { recursive: true });
+	try {
+		await assert.rejects(
+			() => createInProcessResourceLoader(cwd, agentDir, "Agent role prompt.", true),
+			/readable regular file/i,
+		);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+		rmSync(agentDir, { recursive: true, force: true });
+	}
+});
+
 test("registered detached spawn auto-resumes without exposing a wait tool", async () => {
 	const originalDir = process.env.PI_CODING_AGENT_DIR;
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-sdk-tools-"));
@@ -857,10 +879,81 @@ test("session shutdown closes completion delivery before delayed isolated-agent 
 	}
 });
 
+test("in-process model resolution matches Pi core patterns and errors", async (t) => {
+	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-core-model-resolver-"));
+	t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+	const modelRuntime = await ModelRuntime.create({
+		authPath: path.join(agentDir, "auth.json"),
+		modelsPath: null,
+	});
+	const modelRegistry = new ModelRegistry(modelRuntime);
+	const support = { modelRuntime, resolveCliModel };
+	for (const requested of [
+		"cloudflare-workers-ai/@cf/openai/gpt-oss-120b",
+		"amazon-bedrock/amazon.nova-lite-v1:0",
+		"amazon.nova-lite-v1:0",
+		"amazon-bedrock/amazon.nova-lite-v1:0:max",
+		"claude",
+		"openrouter/vendor/not-in-catalog",
+	]) {
+		const expected = resolveCliModel({ cliModel: requested, modelRuntime });
+		assert.ok(expected.model, expected.error ?? requested);
+		const actual = await resolveChildModel(
+			{
+				agent: managedAgent(),
+				agentConfig: agentConfig({ model: requested, thinkingLevel: undefined }),
+				history: [],
+				modelRegistry,
+				parentRuntime: { model: undefined, thinkingLevel: "off" },
+			},
+			support,
+		);
+		assert.equal(actual.model.provider, expected.model.provider);
+		assert.equal(actual.model.id, expected.model.id);
+		assert.equal(actual.thinkingLevel, expected.thinkingLevel ?? "off");
+	}
+
+	const missing = resolveCliModel({ cliModel: "no-such-model-zzzz", modelRuntime });
+	assert.ok(missing.error);
+	await assert.rejects(
+		() =>
+			resolveChildModel(
+				{
+					agent: managedAgent(),
+					agentConfig: agentConfig({
+						model: "no-such-model-zzzz",
+						thinkingLevel: undefined,
+					}),
+					history: [],
+					modelRegistry,
+					parentRuntime: { model: undefined, thinkingLevel: "off" },
+				},
+				support,
+			),
+		(error: unknown) => error instanceof Error && error.message === missing.error,
+	);
+});
+
+test("in-process model resolution fails actionably when the installed core is unsupported", async () => {
+	await assert.rejects(
+		() =>
+			resolveChildModel({
+				agent: managedAgent(),
+				agentConfig: agentConfig({ model: undefined }),
+				history: [],
+				modelRegistry: {} as never,
+				parentRuntime: { model: undefined, thinkingLevel: "off" },
+			}),
+		/require Pi core ModelRuntime and resolveCliModel.*subprocess/i,
+	);
+});
+
 test("public SDK child-session adapter completes a deterministic in-memory turn and disposes", async (t) => {
 	const fixture = await createTestModelRegistry();
 	t.after(fixture.dispose);
-	const { modelRegistry } = fixture;
+	const { modelRegistry, modelRuntime } = fixture;
+	assert.ok(modelRuntime);
+	const support = { modelRuntime, resolveCliModel };
 	modelRegistry.registerProvider("child-smoke", {
 		api: "openai-completions",
 		apiKey: "test-key",
@@ -901,54 +994,70 @@ test("public SDK child-session adapter completes a deterministic in-memory turn 
 	});
 	const model = modelRegistry.find("child-smoke", "child-model");
 	assert.ok(model);
-	const inherited = await resolveChildModel({
-		agent: managedAgent(),
-		agentConfig: agentConfig({ model: undefined }),
-		history: [],
-		modelRegistry,
-		parentRuntime: { model, thinkingLevel: "medium" },
-	});
-	assert.equal(inherited.model, model);
+	const inherited = await resolveChildModel(
+		{
+			agent: managedAgent(),
+			agentConfig: agentConfig({ model: undefined }),
+			history: [],
+			modelRegistry,
+			parentRuntime: { model, thinkingLevel: "medium" },
+		},
+		support,
+	);
+	assert.equal(inherited.model.provider, model.provider);
+	assert.equal(inherited.model.id, model.id);
 	assert.equal(inherited.thinkingLevel, "medium");
-	const explicit = await resolveChildModel({
-		agent: managedAgent(),
-		agentConfig: agentConfig({ model: "child-smoke/child-model:max", thinkingLevel: undefined }),
-		history: [],
-		modelRegistry,
-		parentRuntime: { model: undefined, thinkingLevel: "off" },
-	});
+	const explicit = await resolveChildModel(
+		{
+			agent: managedAgent(),
+			agentConfig: agentConfig({
+				model: "child-smoke/child-model:max",
+				thinkingLevel: undefined,
+			}),
+			history: [],
+			modelRegistry,
+			parentRuntime: { model: undefined, thinkingLevel: "off" },
+		},
+		support,
+	);
 	assert.equal(explicit.model.provider, model.provider);
 	assert.equal(explicit.model.id, model.id);
 	assert.equal(explicit.thinkingLevel, "max");
-	const agentDefault = await resolveChildModel({
-		agent: managedAgent(),
-		agentConfig: agentConfig({
-			model: "child-smoke/child-model:max",
-			thinkingLevel: "high",
-		}),
-		history: [],
-		modelRegistry,
-		parentRuntime: { model: undefined, thinkingLevel: "medium" },
-	});
+	const agentDefault = await resolveChildModel(
+		{
+			agent: managedAgent(),
+			agentConfig: agentConfig({
+				model: "child-smoke/child-model:max",
+				thinkingLevel: "high",
+			}),
+			history: [],
+			modelRegistry,
+			parentRuntime: { model: undefined, thinkingLevel: "medium" },
+		},
+		support,
+	);
 	assert.equal(agentDefault.thinkingLevel, "high");
-	const spawnOverride = await resolveChildModel({
-		agent: managedAgent({ thinkingLevel: "low" }),
-		agentConfig: agentConfig({
-			model: "child-smoke/child-model:max",
-			thinkingLevel: "high",
-		}),
-		history: [],
-		modelRegistry,
-		parentRuntime: { model: undefined, thinkingLevel: "medium" },
-	});
+	const spawnOverride = await resolveChildModel(
+		{
+			agent: managedAgent({ thinkingLevel: "low" }),
+			agentConfig: agentConfig({
+				model: "child-smoke/child-model:max",
+				thinkingLevel: "high",
+			}),
+			history: [],
+			modelRegistry,
+			parentRuntime: { model: undefined, thinkingLevel: "medium" },
+		},
+		support,
+	);
 	assert.equal(spawnOverride.thinkingLevel, "low");
 	const childCwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-sdk-turn-"));
 	const child = await createSdkChildSession({
 		agent: managedAgent({ cwd: childCwd }),
-		agentConfig: agentConfig({ tools: [] }),
+		agentConfig: agentConfig({ tools: [], model: "child-smoke/child-model:max" }),
 		history: [],
 		modelRegistry,
-		parentRuntime: { model, thinkingLevel: "off" },
+		parentRuntime: { model: undefined, thinkingLevel: "off" },
 		tools: [],
 	});
 	const sessionId = child.sessionId;
