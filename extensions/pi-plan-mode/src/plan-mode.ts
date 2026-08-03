@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { showActiveImplementationMenu } from "./active-implementation-menu.js";
 import { completePlanArguments } from "./command.js";
 import {
@@ -30,6 +29,8 @@ import {
 } from "./message-transform.js";
 import { showPlanModeMenu, showReadyPlanMenu } from "./plan-action-menus.js";
 import { exportStoredPlan } from "./plan-export.js";
+import { showPlanLaunchMenu } from "./plan-launch-menu.js";
+import { showPlanToolMenu } from "./plan-tool-menu.js";
 import {
 	clearPlanModeUi,
 	planModeStatusText as formatPlanModeStatusText,
@@ -60,24 +61,25 @@ import {
 	canSelectToolInPlanMode,
 	classifyPlanModeTool,
 	findBlockedCommandSegment,
-	isBuiltinTool,
 	readCommand,
-	SAFE_BUILTIN_PLAN_TOOLS,
 } from "./tool-policy.js";
-import { compareTools, toolNameFromLegacyKey, toolPolicyLabel, unique } from "./tool-selection.js";
+import {
+	compareTools,
+	filterAvailableSelectedToolNames,
+	snapshotPlanModeSelectedNames,
+	snapshotPlanModeToolNames,
+	toolPolicyLabel,
+} from "./tool-selection.js";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
 const PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
 const BLOCKED_BUILTIN_TOOLS = new Set(["edit", "write"]);
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
-const TOOL_SELECTOR_VIEWPORT_SIZE = 10;
-
 interface ReadyPresentationIntent {
 	nonce: number;
 	plan: string;
 	source: PlanCompletionSource;
 }
-
 export default function planMode(
 	pi: ExtensionAPI,
 	dependencies: { readSettings?(): ReturnType<typeof readPlanModeSettings> } = {},
@@ -168,6 +170,17 @@ export default function planMode(
 		handler: async (args, ctx) => {
 			const prompt = args.trim();
 			const command = prompt.toLowerCase();
+			if (command === "start") {
+				if (savedPlanBlocksNewWorkflow(ctx, state.savedPlan !== undefined && !state.enabled))
+					return;
+				if (state.enabled) {
+					ctx.ui.notify("Plan mode is already active.", "info");
+					return;
+				}
+				enterPlanMode(ctx);
+				ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
+				return;
+			}
 			if (command === "show") {
 				showStoredPlan(pi, ctx, state);
 				return;
@@ -224,6 +237,11 @@ export default function planMode(
 				enterPlanModeWithPrompt(prompt, ctx);
 				return;
 			}
+			if (!ctx.hasUI) {
+				throw new Error(
+					"The interactive /plan menu is unavailable in print and JSON modes. Use /plan start or /plan <prompt>.",
+				);
+			}
 			if (!state.enabled) {
 				if (state.activeImplementation && ctx.hasUI) {
 					await showActivePlanMenu(ctx);
@@ -233,8 +251,7 @@ export default function planMode(
 					await showSavedPlanActions(ctx);
 					return;
 				}
-				enterPlanMode(ctx);
-				ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
+				await showLaunchMenu(ctx);
 				return;
 			}
 			await showPlanMenu(ctx);
@@ -644,6 +661,47 @@ export default function planMode(
 		}
 	}
 
+	async function showLaunchMenu(ctx: ExtensionContext) {
+		const lifecycle = captureMenuLifecycle();
+		const tools = selectableTools();
+		const selection = toolSelectionSnapshot();
+		const selectedNames = snapshotPlanModeSelectedNames(tools, selection);
+		const launchToolNames = snapshotPlanModeToolNames(tools, selectedNames, selection);
+		await showPlanLaunchMenu(ctx, {
+			statusText: "Status: Off — normal tools are active.",
+			toolSummary: `When started: ${launchToolNames.join(", ")}`,
+			tools: tools.map((tool) => {
+				const selectable = canSelectToolInPlanMode(tool);
+				const policy = toolPolicyLabel(tool);
+				const description = tool.description ?? "No description available";
+				return {
+					name: tool.name,
+					description: `${policy} · ${description}`,
+					searchText: [policy, description].join(" "),
+					selected: selectedNames.has(tool.name),
+					disabled: !selectable,
+					disabledReason: selectable ? undefined : "Blocked by Plan-mode policy",
+				};
+			}),
+			...lifecycle,
+			start: (signal) => {
+				if (signal.aborted || !lifecycle.isCurrent()) return;
+				enterPlanMode(ctx);
+				ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
+			},
+			startWithTools: (names, signal) => {
+				if (signal.aborted || !lifecycle.isCurrent()) return;
+				state = {
+					...state,
+					selectedToolNames: filterAvailableSelectedToolNames(names, tools),
+					selectedToolKeys: undefined,
+				};
+				enterPlanMode(ctx);
+				ctx.ui.notify("Plan mode enabled with the selected tools.", "info");
+			},
+		});
+	}
+
 	async function showActivePlanMenu(ctx: ExtensionContext) {
 		if (!ctx.hasUI) {
 			ctx.ui.notify(planStatusText(), "info");
@@ -733,57 +791,24 @@ export default function planMode(
 		}
 		const lifecycle = captureMenuLifecycle();
 		const tools = selectableTools();
-		const toolById = new Map(tools.map((tool, index) => [`${index}:${tool.name}`, tool]));
-		const menu = defineMenu<undefined, "tools", "toggle", ExtensionContext>({
-			start: "tools",
-			screens: {
-				tools: () => {
-					const selectedNames = planModeSelectedNames(tools);
-					return {
-						kind: "multiSelect",
-						title: "Plan-mode tools",
-						lines: ["Non-built-in tools run at user risk."],
-						enableSearch: true,
-						viewportSize: TOOL_SELECTOR_VIEWPORT_SIZE,
-						items: tools.map((tool, index) => {
-							const selectable = canSelectToolInPlanMode(tool);
-							return {
-								id: `${index}:${tool.name}`,
-								label: tool.name,
-								description: `${toolPolicyLabel(tool)} · ${tool.description}`,
-								searchText: [toolPolicyLabel(tool), tool.description].filter(Boolean).join(" "),
-								selected: selectedNames.has(tool.name),
-								disabled: !selectable,
-								disabledReason: selectable ? undefined : "Blocked by Plan-mode policy",
-							};
-						}),
-						action: "toggle",
-						hint: "close",
-						doneLabel: "Done",
-					};
-				},
-			},
-			actions: {
-				toggle: async ({ itemId, selected }) => {
-					const tool = toolById.get(itemId);
-					if (!tool || !canSelectToolInPlanMode(tool)) return { kind: "rejected" };
-					const names = planModeSelectedNames(tools);
-					if (selected) names.add(tool.name);
-					else names.delete(tool.name);
-					state = {
-						...state,
-						selectedToolNames: filterAvailableSelectedNames(Array.from(names), tools),
-					};
-					applyPlanModeTools();
-					persistState();
-					updateUi(ctx);
-					return { kind: "stay" };
-				},
-			},
-		});
-		await runMenu(ctx, menu, {
-			getState: () => undefined,
+		await showPlanToolMenu(ctx, {
+			tools,
 			...lifecycle,
+			getSelectedNames: () => snapshotPlanModeSelectedNames(tools, toolSelectionSnapshot()),
+			toggle: (toolName, selected, signal) => {
+				if (signal.aborted || !lifecycle.isCurrent()) return;
+				const names = snapshotPlanModeSelectedNames(tools, toolSelectionSnapshot());
+				if (selected) names.add(toolName);
+				else names.delete(toolName);
+				state = {
+					...state,
+					selectedToolNames: filterAvailableSelectedToolNames(Array.from(names), tools),
+					selectedToolKeys: undefined,
+				};
+				applyPlanModeTools();
+				persistState();
+				updateUi(ctx);
+			},
 		});
 		if (!lifecycle.isCurrent()) return;
 		applyPlanModeTools();
@@ -828,7 +853,7 @@ export default function planMode(
 			return ["read", "bash", PLAN_MODE_QUESTION_TOOL_NAME, PLAN_MODE_COMPLETE_TOOL_NAME];
 		}
 
-		const selectedNames = planModeSelectedNames(tools);
+		const selectedNames = snapshotPlanModeSelectedNames(tools, toolSelectionSnapshot());
 		return withRequiredPlanModeTools(
 			tools
 				.filter((tool) => selectedNames.has(tool.name) && canSelectToolInPlanMode(tool))
@@ -836,37 +861,12 @@ export default function planMode(
 		);
 	}
 
-	function planModeSelectedNames(tools: ToolInfo[]) {
-		const selectedToolNames = state.selectedToolNames ?? migrateSelectedToolKeys(tools);
-		if (selectedToolNames === undefined) return new Set(defaultPlanModeToolNames(tools));
-
-		state = {
-			...state,
-			selectedToolNames: filterAvailableSelectedNames(selectedToolNames, tools),
-			selectedToolKeys: undefined,
+	function toolSelectionSnapshot() {
+		return {
+			selectedToolNames: state.selectedToolNames,
+			selectedToolKeys: state.selectedToolKeys,
+			defaultPlanTools: settings.defaultPlanTools,
 		};
-		return new Set(state.selectedToolNames);
-	}
-
-	function defaultPlanModeToolNames(tools: ToolInfo[]) {
-		if (settings.defaultPlanTools !== undefined) {
-			return filterAvailableSelectedNames(settings.defaultPlanTools, tools);
-		}
-		return tools
-			.filter((tool) => isBuiltinTool(tool) && SAFE_BUILTIN_PLAN_TOOLS.has(tool.name))
-			.map((tool) => tool.name);
-	}
-
-	function migrateSelectedToolKeys(tools: ToolInfo[]) {
-		if (state.selectedToolKeys === undefined) return undefined;
-		return state.selectedToolKeys
-			.map((key) => toolNameFromLegacyKey(key, tools))
-			.filter((name): name is string => name !== undefined);
-	}
-
-	function filterAvailableSelectedNames(names: string[], tools: ToolInfo[]) {
-		const availableNames = new Set(tools.filter(canSelectToolInPlanMode).map((tool) => tool.name));
-		return unique(names.filter((name) => availableNames.has(name)));
 	}
 
 	function selectableTools() {

@@ -37,7 +37,7 @@ test("fresh Plan mode uses configured default tools and restores previous tools"
 		const context = createMockContext();
 
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["bash", "custom", ...REQUIRED_PLAN_TOOLS]);
 		const hook = mock.events.get("tool_call")?.[0];
 		assert.equal(
@@ -63,7 +63,7 @@ test("missing and empty default tool settings remain distinct", async () => {
 		planMode(missing.pi);
 		const missingContext = createMockContext();
 		await missing.events.get("session_start")?.[0]?.({}, missingContext.ctx);
-		await missing.commands.get("plan")?.handler("", missingContext.ctx);
+		await missing.commands.get("plan")?.handler("start", missingContext.ctx);
 		assert.deepEqual(missing.rawPi.getActiveTools(), [
 			"bash",
 			"grep",
@@ -76,7 +76,7 @@ test("missing and empty default tool settings remain distinct", async () => {
 		planMode(empty.pi);
 		const emptyContext = createMockContext();
 		await empty.events.get("session_start")?.[0]?.({}, emptyContext.ctx);
-		await empty.commands.get("plan")?.handler("", emptyContext.ctx);
+		await empty.commands.get("plan")?.handler("start", emptyContext.ctx);
 		assert.deepEqual(empty.rawPi.getActiveTools(), REQUIRED_PLAN_TOOLS);
 	});
 });
@@ -89,7 +89,7 @@ test("explicit defaults stay fail closed when tool metadata is unavailable", asy
 		planMode(explicit.pi);
 		const explicitContext = createMockContext();
 		await explicit.events.get("session_start")?.[0]?.({}, explicitContext.ctx);
-		await explicit.commands.get("plan")?.handler("", explicitContext.ctx);
+		await explicit.commands.get("plan")?.handler("start", explicitContext.ctx);
 		assert.deepEqual(explicit.rawPi.getActiveTools(), REQUIRED_PLAN_TOOLS);
 
 		await rm(settingsPath);
@@ -97,7 +97,7 @@ test("explicit defaults stay fail closed when tool metadata is unavailable", asy
 		planMode(fallback.pi);
 		const fallbackContext = createMockContext();
 		await fallback.events.get("session_start")?.[0]?.({}, fallbackContext.ctx);
-		await fallback.commands.get("plan")?.handler("", fallbackContext.ctx);
+		await fallback.commands.get("plan")?.handler("start", fallbackContext.ctx);
 		assert.deepEqual(fallback.rawPi.getActiveTools(), ["read", "bash", ...REQUIRED_PLAN_TOOLS]);
 	});
 });
@@ -164,19 +164,19 @@ test("settings reload resets removed or invalid configured defaults", async () =
 		const context = createMockContext();
 
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["bash", ...REQUIRED_PLAN_TOOLS]);
 		await mock.commands.get("plan")?.handler("exit", context.ctx);
 
 		await rm(settingsPath);
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["bash", "grep", "read", ...REQUIRED_PLAN_TOOLS]);
 		await mock.commands.get("plan")?.handler("exit", context.ctx);
 
 		await writeFile(settingsPath, JSON.stringify({ defaultPlanTools: "read" }));
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["bash", "grep", "read", ...REQUIRED_PLAN_TOOLS]);
 		assert.match(context.notifications.at(-2)?.message ?? "", /settings ignored/i);
 	});
@@ -194,13 +194,13 @@ test("configured names follow effective sources without dynamic auto-activation"
 		const context = createMockContext();
 
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", ...REQUIRED_PLAN_TOOLS]);
 
 		allTools.push(extensionTool("late"));
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", ...REQUIRED_PLAN_TOOLS]);
 		await mock.commands.get("plan")?.handler("exit", context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["late", "read", ...REQUIRED_PLAN_TOOLS]);
 	});
 });
@@ -230,7 +230,7 @@ test("the tool selector persists a session override and shutdown restores prior 
 		});
 
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await mock.commands.get("plan")?.handler("tools", context.ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), [
 			"bash",
@@ -298,7 +298,7 @@ test("the Plan-mode tool selector keeps the cursor on the toggled row", async ()
 		});
 
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await mock.commands.get("plan")?.handler("tools", context.ctx);
 
 		assert.equal(customCalled, true);
@@ -345,7 +345,7 @@ test("the Plan-mode tool selector searches metadata and toggles the stable tool 
 		});
 
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await mock.commands.get("plan")?.handler("tools", context.ctx);
 
 		assert.equal(customCalled, true);
@@ -373,7 +373,7 @@ test("implementation handoff restores tools after using configured defaults", as
 		planMode(mock.pi);
 		const context = createMockContext();
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["bash", ...REQUIRED_PLAN_TOOLS]);
 
 		const execute = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute as

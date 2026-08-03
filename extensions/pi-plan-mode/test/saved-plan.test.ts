@@ -100,7 +100,7 @@ test("plan save exits Plan mode, restores runtime state, and keeps the plan out 
 	});
 	const context = createMockContext({ hasUI: true });
 	await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-	await mock.commands.get("plan")?.handler("", context.ctx);
+	await mock.commands.get("plan")?.handler("start", context.ctx);
 	assert.equal(mock.thinkingLevel, "medium");
 	await completePlan(mock, context.ctx);
 
@@ -188,7 +188,7 @@ test("automatic and manual ready menus expose Save for later", async () => {
 				return "Save for later";
 			},
 		});
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await completePlan(mock, context.ctx);
 		if (automatic) await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
 		else await mock.commands.get("plan")?.handler("", context.ctx);
@@ -266,7 +266,7 @@ test("failed ready implementation restores a manual Plan thinking level", async 
 	});
 	const context = createMockContext();
 	await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-	await mock.commands.get("plan")?.handler("", context.ctx);
+	await mock.commands.get("plan")?.handler("start", context.ctx);
 	mock.rawPi.setThinkingLevel("high");
 	await mock.events.get("thinking_level_select")?.[0]?.(
 		{ level: "high", previousLevel: "medium" },
@@ -411,6 +411,7 @@ test("saved Plan blocks replacement workflows and --plan restores it as ready", 
 		},
 	});
 	await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	await mock.commands.get("plan")?.handler("start", context.ctx);
 	await mock.commands.get("plan")?.handler("design something else", context.ctx);
 	await mock.commands.get("plan")?.handler("tools", context.ctx);
 	assert.equal(mock.sentUserMessages.length, 0);
@@ -462,7 +463,7 @@ test("saved Plan no-UI management is observable without changing state", async (
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		await assert.rejects(
 			mock.commands.get("plan")?.handler("", context.ctx) as Promise<unknown>,
-			/\/plan show.*\/plan implement.*\/plan exit/i,
+			/\/plan start.*\/plan <prompt>/i,
 		);
 		await assert.rejects(
 			mock.commands.get("plan")?.handler("design something else", context.ctx) as Promise<unknown>,
@@ -493,7 +494,7 @@ test("print and JSON modes can save and clear a ready plan", async () => {
 		planMode(mock.pi);
 		const context = createMockContext({ mode, hasUI: false });
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await completePlan(mock, context.ctx);
 
 		await mock.commands.get("plan")?.handler("save", context.ctx);
@@ -560,7 +561,7 @@ test("session shutdown disposes a saved Plan menu without a late transition", as
 test("plan save autocomplete is public and saving fails closed without a ready plan", async () => {
 	assert.deepEqual(
 		completePlanArguments("")?.map((item) => item.value),
-		["show", "finalize", "implement", "save", "export", "exit", "off", "tools"],
+		["start", "show", "finalize", "implement", "save", "export", "exit", "off", "tools"],
 	);
 	assert.deepEqual(
 		completePlanArguments("sa")?.map((item) => item.value),

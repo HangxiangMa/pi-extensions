@@ -328,7 +328,7 @@ test("active Plan mode blocks update_plan and blocked built-ins at the tool hook
 	});
 	planMode(mock.pi);
 	const context = createMockContext();
-	await mock.commands.get("plan")?.handler("", context.ctx);
+	await mock.commands.get("plan")?.handler("start", context.ctx);
 	const hook = mock.events.get("tool_call")?.[0];
 	const blocked = await hook?.({ toolName: "update_plan", input: {} }, context.ctx);
 	const blockedBuiltin = await hook?.({ toolName: "danger", input: {} }, context.ctx);

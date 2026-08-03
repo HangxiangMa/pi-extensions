@@ -8,7 +8,7 @@ Pi core intentionally does not ship a built-in plan mode; this package provides 
 
 ## ✨ Features
 
-- Adds `/plan` to enter or manage Plan mode.
+- Adds a state-aware `/plan` launch and management menu, plus `/plan start` for direct activation.
 - Adds `--plan` to start a session in Plan mode.
 - Enables built-in read-only tools by default while Plan mode is active.
 - Disables extension and custom tools by default, with a `/plan tools` selector for explicit user-risk opt-in.
@@ -45,6 +45,7 @@ pi -e ./extensions/pi-plan-mode
 
 ```text
 /plan
+/plan start
 /plan <prompt>
 /plan tools
 /plan show
@@ -55,14 +56,26 @@ pi -e ./extensions/pi-plan-mode
 /plan exit
 ```
 
-Use `/plan` to enter Plan mode before writing your planning prompt. Use `/plan <prompt>` to enter
-Plan mode and immediately submit `<prompt>` as the first Plan-mode user message. Use `/plan tools`
-to choose which tools are active while Plan mode is enabled; the standard bounded multi-select shows
-10 rows at a time, supports viewport paging, descriptions, and explicit unavailable rows for blocked
-tools. In TUI mode, type to fuzzy-search tool names, descriptions, policy, and source metadata; clear
-the query to restore the stable tool cursor. RPC keeps the complete unfiltered tool list. The
-`plan_mode_question` tool keeps its one-off question/choice dialog because it is a
-model-requested planning interaction, not command-menu navigation. `/plan show` displays the stored
+In TUI and RPC, use bare `/plan` to open the menu for the current Plan state. When Plan mode is off
+and no plan is stored, the launch menu shows the effective next-start tools and offers **Start Plan
+mode**, **Choose tools, then start…**, and **How Plan mode works**. Launch-menu tool changes remain a
+draft until **Done — start Plan mode** is selected; Back, Escape, Ctrl+C, disposal, session
+replacement, and shutdown discard the draft without changing Plan state, active tools, thinking, or
+the stored selection.
+
+Use `/plan start` when you want to enter Plan mode directly without sending a model message. Use
+`/plan <prompt>` to enter Plan mode and immediately submit `<prompt>` as the first Plan-mode user
+message. The exact argument `start` is reserved for direct activation; longer text such as `/plan
+start a migration` remains an inline planning prompt. `--plan` also remains a direct activation path.
+
+Use `/plan tools` to enter Plan mode when needed and choose which tools are active in the current
+Plan workflow; unlike the launch-menu draft, this active selector applies accepted toggles to the
+session immediately. The standard bounded multi-select shows 10 rows at a time, supports viewport
+paging, descriptions, and explicit unavailable rows for blocked tools. In TUI mode, type to
+fuzzy-search tool names, descriptions, policy, and source metadata; clear the query to restore the
+stable tool cursor. RPC keeps the complete unfiltered tool list. The `plan_mode_question` tool keeps
+its one-off question/choice dialog because it is a model-requested planning interaction, not
+command-menu navigation. `/plan show` displays the stored
 plan without starting a model turn, including the accepted plan while implementation is active.
 `/plan finalize` explicitly asks the agent to complete the plan or ask one remaining material
 question, `/plan save` stores a completed ready plan for later and leaves Plan mode, `/plan
@@ -109,9 +122,17 @@ Legacy sessions and models may still submit one non-empty `<proposed_plan>` bloc
 
 After completion, `/plan` opens the ready actions when interactive UI is available. Choosing implementation—or running `/plan implement`—disables Plan mode, restores full tool access, and starts an implementation turn with the stored plan. Choosing **Export plan…** asks for a destination, writes the plan, restores normal tools and thinking, and leaves Plan mode without starting a model turn. Choosing **Save for later**—or running `/plan save`—instead stores one plan in the current Pi session before leaving Plan mode.
 
-A saved plan appears as `plan saved` and remains available after reload, resume, branch-local fork, and compaction in that session. It does not expire automatically, cross into a new session, or participate in ordinary model context. Open `/plan` to Show, Implement, Export, or Clear it; `/plan show`, `/plan implement`, `/plan export [path]`, and `/plan exit`/`off` provide the same direct routes in TUI and RPC. Implementation checks the selected model and authentication before consuming the saved plan. Starting another workflow with `/plan <prompt>` or `/plan tools` is blocked until the saved plan is implemented or cleared, so the single saved slot is never silently overwritten. Resuming that session with `--plan` moves the saved plan back to ready Plan mode. Cancellation or failed implementation preflight leaves it unchanged.
+A saved plan appears as `plan saved` and remains available after reload, resume, branch-local fork, and compaction in that session. It does not expire automatically, cross into a new session, or participate in ordinary model context. Open `/plan` to Show, Implement, Export, or Clear it; `/plan show`, `/plan implement`, `/plan export [path]`, and `/plan exit`/`off` provide the same direct routes in TUI and RPC. Implementation checks the selected model and authentication before consuming the saved plan. Starting another workflow with `/plan start`, `/plan <prompt>`, or `/plan tools` is blocked until the saved plan is implemented or cleared, so the single saved slot is never silently overwritten. Resuming that session with `--plan` moves the saved plan back to ready Plan mode. Cancellation or failed implementation preflight leaves it unchanged.
 
-Text print and JSON modes can export any stored plan with `/plan export [path]`, save a ready plan with `/plan save`, and clear it with `/plan exit` or `/plan off`. Successful export is observable through the created file; exporting a ready plan also leaves Plan mode, while saved and active implementation state remains unchanged. An existing target or missing plan fails the command without changing state. These modes reject saved-plan display and implementation before changing state because Pi provides neither printable custom-message output nor acknowledged extension-triggered turns; resume the session in TUI or RPC to show or implement it.
+Text print and JSON modes cannot display the bare `/plan` menu and reject that route before changing
+state; use `/plan start` for direct no-prompt activation or `/plan <prompt>` to start planning with a
+prompt. These modes can export any stored plan with `/plan export [path]`, save a ready plan with
+`/plan save`, and clear it with `/plan exit` or `/plan off`. Successful export is observable through
+the created file; exporting a ready plan also leaves Plan mode, while saved and active implementation
+state remains unchanged. An existing target or missing plan fails the command without changing state.
+These modes reject saved-plan display and implementation before changing state because Pi provides
+neither printable custom-message output nor acknowledged extension-triggered turns; resume the
+session in TUI or RPC to show or implement it.
 
 Once implemented, the exact accepted plan remains active across later turns, session resume, and manual or automatic compaction without depending on the compaction summary. Plan mode avoids a duplicate context block while the original implementation handoff remains available and injects one hidden canonical copy after that handoff is compacted away. This can consume up to the existing 50,000-character plan limit in model context when reinjection is needed.
 

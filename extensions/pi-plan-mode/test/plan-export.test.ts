@@ -40,7 +40,7 @@ async function withTempDirectory(run: (directory: string) => Promise<void>) {
 test("plan export autocomplete exposes a path-taking public route", () => {
 	assert.deepEqual(
 		completePlanArguments("")?.map((item) => item.value),
-		["show", "finalize", "implement", "save", "export", "exit", "off", "tools"],
+		["start", "show", "finalize", "implement", "save", "export", "exit", "off", "tools"],
 	);
 	assert.deepEqual(
 		completePlanArguments("ex")?.map((item) => item.value),
@@ -63,7 +63,7 @@ test("ready plan export ends Plan mode without triggering a model turn", async (
 		});
 		const context = createMockContext({ cwd: directory, hasUI: true });
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		assert.equal(mock.thinkingLevel, "medium");
 		await completePlan(mock, context.ctx);
 		const entriesBeforeExport = mock.entries.length;
@@ -103,7 +103,7 @@ test("ready plan export supports custom relative and absolute paths", async () =
 			const mock = createMockPi({ activeTools: ["read"] });
 			planMode(mock.pi);
 			const context = createMockContext({ cwd: directory, hasUI: true });
-			await mock.commands.get("plan")?.handler("", context.ctx);
+			await mock.commands.get("plan")?.handler("start", context.ctx);
 			await completePlan(mock, context.ctx);
 
 			await mock.commands.get("plan")?.handler(`export ${requestedPath}`, context.ctx);
@@ -122,7 +122,7 @@ test("plan export refuses existing files and leaves their content and plan state
 		const mock = createMockPi({ activeTools: ["read"] });
 		planMode(mock.pi);
 		const context = createMockContext({ cwd: directory, hasUI: true });
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await completePlan(mock, context.ctx);
 		const entriesBeforeExport = mock.entries.length;
 
@@ -140,7 +140,7 @@ test("concurrent exports serialize and create the target only once", async () =>
 		const mock = createMockPi({ activeTools: ["read"] });
 		planMode(mock.pi);
 		const context = createMockContext({ cwd: directory, hasUI: true });
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await completePlan(mock, context.ctx);
 
 		await Promise.all([
@@ -184,7 +184,7 @@ test("queued export stops when the ready plan is superseded", async () => {
 		planMode(mock.pi);
 		const context = createMockContext({ cwd: directory, hasUI: true });
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await completePlan(mock, context.ctx);
 		const pendingExport = mock.commands.get("plan")?.handler("export", context.ctx);
 		await Promise.resolve();
@@ -213,7 +213,7 @@ test("plan export refuses an existing symbolic link", {
 		const mock = createMockPi({ activeTools: ["read"] });
 		planMode(mock.pi);
 		const context = createMockContext({ cwd: directory, hasUI: true });
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await completePlan(mock, context.ctx);
 
 		await mock.commands.get("plan")?.handler("export", context.ctx);
@@ -360,7 +360,7 @@ test("completion and management TUI menus accept an export path", async () => {
 				await mock.commands.get("plan")?.handler("", context.ctx);
 				assert.equal(context.statuses.get("plan-mode"), "plan saved");
 			} else {
-				await mock.commands.get("plan")?.handler("", context.ctx);
+				await mock.commands.get("plan")?.handler("start", context.ctx);
 				await completePlan(mock, context.ctx);
 				if (scenario === "automatic-ready") {
 					await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
@@ -436,7 +436,7 @@ test("RPC export menu accepts a custom path", async () => {
 			},
 		});
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await completePlan(mock, context.ctx);
 
 		await mock.commands.get("plan")?.handler("", context.ctx);
@@ -480,7 +480,7 @@ test("rejected TUI export retains the path draft for correction", async () => {
 			},
 		});
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await completePlan(mock, context.ctx);
 
 		await mock.commands.get("plan")?.handler("", context.ctx);
@@ -513,7 +513,7 @@ test("Back from the export input returns without writing or changing ready state
 			},
 		});
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await completePlan(mock, context.ctx);
 		const entriesBeforeMenu = mock.entries.length;
 
@@ -573,7 +573,7 @@ test("pending export is cancelled by disposal, session replacement, and shutdown
 				},
 			});
 			await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-			await mock.commands.get("plan")?.handler("", context.ctx);
+			await mock.commands.get("plan")?.handler("start", context.ctx);
 			await completePlan(mock, context.ctx);
 			const pendingMenu = mock.commands.get("plan")?.handler("", context.ctx);
 			await submitted;
@@ -610,7 +610,7 @@ test("plan export refuses an existing directory", async () => {
 		const mock = createMockPi({ activeTools: ["read"] });
 		planMode(mock.pi);
 		const context = createMockContext({ cwd: directory, hasUI: true });
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		await completePlan(mock, context.ctx);
 		await mock.commands.get("plan")?.handler("export", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /already exists/i);
