@@ -52,16 +52,14 @@ test("active Plan mode enforces session-loaded safe subcommands", async () => {
 			),
 			undefined,
 		);
-		assert.match(
-			(
-				(await hook(
-					{ toolName: "bash", input: { command: "gh pr list --json number" } },
-					context.ctx,
-				)) as {
-					reason?: string;
-				}
-			).reason ?? "",
-			/non-allowlisted bash commands/,
+		const compoundCommand = "git status --short && gh pr list --json number && git diff --cached";
+		assert.deepEqual(
+			await hook({ toolName: "bash", input: { command: compoundCommand } }, context.ctx),
+			{
+				block: true,
+				reason:
+					"Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: gh pr list --json number",
+			},
 		);
 	});
 });
@@ -99,8 +97,10 @@ test("active Plan mode enforces limited policy for effective bash overrides", as
 
 		const heredoc = `python - <<'PY'\nfrom pathlib import Path\nPath("plan-mode-write-probe.txt").write_text("unexpected write\\n", encoding="utf-8")\nPY`;
 		const blocked = await hook({ toolName: "bash", input: { command: heredoc } }, context.ctx);
-		assert.ok(blocked);
-		assert.match((blocked as { reason?: string }).reason ?? "", /non-allowlisted bash commands/);
+		assert.deepEqual(blocked, {
+			block: true,
+			reason: `Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: ${heredoc}`,
+		});
 		assert.equal(
 			await hook(
 				{ toolName: "bash", input: { command: "git rev-parse --show-toplevel" } },

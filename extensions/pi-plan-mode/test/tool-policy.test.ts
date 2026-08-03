@@ -13,6 +13,7 @@ import planMode, {
 	withoutPlanModeQuestionTool,
 	withRequiredPlanModeTools,
 } from "../src/plan-mode.js";
+import { findBlockedCommandSegment } from "../src/tool-policy.js";
 
 test("tool selection allows safe built-ins and non-built-ins only", () => {
 	type PlanTool = Parameters<typeof canSelectToolInPlanMode>[0];
@@ -100,6 +101,23 @@ test("isSafeCommand permits read-only command lists and rejects shell mutation",
 		"",
 	]) {
 		assert.equal(isSafeCommand(command), false, command);
+	}
+});
+
+test("blocked command diagnostics identify the first rejected segment", () => {
+	const accepted = "git status --short && git diff --cached | head -20";
+	const singleBlocked = "touch output";
+	const compoundBlocked =
+		"git status --short && git reset --hard && git diff --cached | touch output";
+	const unsupportedSyntax = "  git status --short && cat file > copy  ";
+
+	assert.equal(findBlockedCommandSegment(accepted), undefined);
+	assert.equal(findBlockedCommandSegment(singleBlocked), singleBlocked);
+	assert.equal(findBlockedCommandSegment(compoundBlocked), "git reset --hard");
+	assert.equal(findBlockedCommandSegment(unsupportedSyntax), unsupportedSyntax.trim());
+	assert.equal(findBlockedCommandSegment("   "), "(empty command)");
+	for (const command of [accepted, singleBlocked, compoundBlocked, unsupportedSyntax, "   "]) {
+		assert.equal(isSafeCommand(command), findBlockedCommandSegment(command) === undefined, command);
 	}
 });
 
@@ -240,43 +258,47 @@ test("maximal Git opt-in preserves execution and mutation guards", () => {
 	);
 });
 
-test("Git validators require guards for implicit external helpers", () => {
+test("Git validators allow ordinary inspection while rejecting explicit helpers", () => {
 	for (const command of [
 		"git diff",
+		"git diff --cached",
+		"git diff --stat",
 		"git diff --no-ext-diff",
 		"git diff --no-textconv",
+		"git diff --check",
+		"git diff --no-ext-diff --no-textconv HEAD~1",
 		"git show HEAD",
+		"git show --stat --oneline HEAD",
+		"git show --no-textconv HEAD",
 		"git log -p -1",
+		"git log -p -1 HEAD -- path/to/file",
 		"git log -U3 -1",
 		"git log --binary -1",
 		"git log --patch-with-stat -1",
 		"git log -Ssecret -1",
 		"git log -Gsecret -1",
 		"git log --find-object=0123456789abcdef -1",
+		"git log -p --no-textconv -1",
+		"git remote show -n origin",
+		"printf 'cached diff:\\n' && git diff --cached | head -20",
+	]) {
+		assert.equal(isSafeCommandWithPolicy(command), true, command);
+	}
+	for (const command of [
+		"git diff --ext-diff",
+		"git show --textconv HEAD",
 		"git log --show-signature -1",
 		"git log --format=%G? -1",
+		"git log --output=history.txt -1",
 		"git status --help",
 		"git remote show origin",
 	]) {
 		assert.equal(isSafeCommandWithPolicy(command), false, command);
 	}
-	assert.equal(isSafeCommandWithPolicy("git blame -- path/to/file", { git: ["blame"] }), false);
-
-	for (const command of [
-		"git diff --check",
-		"git diff --no-ext-diff --no-textconv HEAD~1",
-		"git show --no-textconv HEAD",
-		"git log -p --no-textconv -1",
-		"git log -Ssecret --no-textconv -1",
-		"git log -Gregex --no-textconv -1",
-		"git log --find-object=0123456789abcdef --no-textconv -1",
-		"git remote show -n origin",
-	]) {
-		assert.equal(isSafeCommandWithPolicy(command), true, command);
-	}
+	assert.equal(isSafeCommandWithPolicy("git blame -- path/to/file", { git: ["blame"] }), true);
 	assert.equal(
-		isSafeCommandWithPolicy("git blame --no-textconv -- path/to/file", { git: ["blame"] }),
-		true,
+		isSafeCommandWithPolicy("git blame --textconv -- path/to/file", { git: ["blame"] }),
+		false,
 	);
 });
 

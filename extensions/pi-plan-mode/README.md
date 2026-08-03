@@ -93,7 +93,7 @@ When Plan mode is active, ask the agent to design the change. The agent may insp
 
 By default, Plan mode manages only Pi's built-in tools: `read`, limited `bash`, available read-only built-ins such as `grep`, `find`, and `ls`, plus the required `plan_mode_question` and `plan_mode_complete` tools. Built-in `edit` and `write` are blocked. `update_plan` is also blocked because it tracks execution progress rather than conversational planning. Extension and custom tools are disabled by default because Pi tools do not expose standardized mutability metadata; enable them from `/plan tools` only when you accept the risk for that session. For example, you can opt into `firecrawl_scrape`, `firecrawl_search`, or `lsp_diagnostics` if those extensions are loaded and you want to use them during planning.
 
-Limited `bash` uses a fail-closed policy, including when an extension overrides the canonical `bash` tool name. It accepts common inspection commands, read-only Git and npm queries, pipelines and command lists composed entirely of accepted commands, plus selected checks such as `npm test`, `npm run typecheck`, and `cargo test`. It rejects output/input redirects, shell expansion, substitutions, subshells, background jobs, mutating flags, dependency changes, editors, and unknown commands. Tests and builds may still write ignored caches or build artifacts and may execute project-defined hooks; enable or invoke them only when the repository is trusted. This is extension-level risk reduction, not an OS sandbox.
+Limited `bash` uses a fail-closed policy, including when an extension overrides the canonical `bash` tool name. It accepts common inspection commands, read-only Git and npm queries, pipelines and command lists composed entirely of accepted commands, plus selected checks such as `npm test`, `npm run typecheck`, and `cargo test`. It rejects output/input redirects, shell expansion, substitutions, subshells, background jobs, mutating flags, dependency changes, editors, and unknown commands. A rejected parsed command list or pipeline identifies its first blocked command segment; malformed or unsupported shell syntax reports the complete submitted input instead. Tests and builds may still write ignored caches or build artifacts and may execute project-defined hooks; enable or invoke them only when the repository is trusted. This is extension-level risk reduction, not an OS sandbox.
 
 `plan_mode_question` follows Codex's `request_user_input` pattern: the agent can ask 1-3 concise questions, each with meaningful options and a free-form Other path. If you cancel or no interactive UI is available, the agent should ask a concise plain-text question or proceed only with a clearly stated low-risk assumption instead of prematurely producing a final plan.
 
@@ -166,7 +166,10 @@ With the example configuration above, commands such as these are accepted:
 
 ```bash
 git rev-parse --show-toplevel
-git blame --no-textconv -- src/plan-mode.ts
+git blame -- src/plan-mode.ts
+git diff --cached
+git show --stat --oneline HEAD
+git log -p -1 HEAD -- src/plan-mode.ts
 gh pr view 218 --json number,title,state
 gh issue list --state open --json number,title,state
 ```
@@ -174,12 +177,12 @@ gh issue list --state open --json number,title,state
 The command-specific validators still reject unsafe forms, including:
 
 ```bash
-git blame -- src/plan-mode.ts
+git blame --textconv -- src/plan-mode.ts
 git cat-file --filters HEAD
-git diff
-git log -Ssecret
+git diff --ext-diff
+git log --show-signature -1
 git remote show origin
-git show --ext-diff HEAD
+git show --textconv HEAD
 gh pr merge 218
 gh pr view 218
 gh pr view 218 --web
@@ -187,9 +190,9 @@ gh pr view 218 > pr.txt
 gh pr list --json number,title && gh pr merge 218
 ```
 
-Redirects, shell expansion and substitution, pagers or browsers, external diff/textconv/filter/signature helpers, output flags, malformed command layouts, and any chain containing an unsafe segment fail closed. Commands that can invoke configured Git helpers implicitly require explicit guards: use `--no-textconv` with `blame`, `show`, and patch-producing or pickaxe/searching `log`; use both `--no-ext-diff` and `--no-textconv` with content-producing `diff` (`git diff --check` remains accepted); and use `git remote show -n` to avoid invoking a transport helper. GitHub CLI read paths require `--json <fields>` output so Plan mode does not rely on `GH_PAGER`, `PAGER`, or gh pager configuration. Unknown `safeSubcommands` keys or values, non-array values, and non-string entries invalidate the entire settings file and trigger the normal warning/default fallback on session start.
+Redirects, shell expansion and substitution, explicit pager or browser requests, explicit external diff/textconv/filter/signature helpers, output flags, malformed command layouts, and any chain containing an unsafe segment fail closed. Read-dominant Git validators accept ordinary inspection flags without requiring `--no-textconv` or `--no-ext-diff`; Git may therefore invoke a helper configured by the user or trusted repository even when the command does not request one explicitly. Use the negative flags when you want to suppress those configured helpers. Mixed read/write surfaces remain narrower: use `git remote show -n` to avoid invoking a transport helper, while mutating `branch` and `remote` forms remain blocked. GitHub CLI read paths require `--json <fields>` output so Plan mode does not rely on `GH_PAGER`, `PAGER`, or gh pager configuration. Unknown `safeSubcommands` keys or values, non-array values, and non-string entries invalidate the entire settings file and trigger the normal warning/default fallback on session start.
 
-Read-only does not mean private: Git inspection can expose repository history and tracked secrets, while `gh` queries can expose remote repository, pull request, and issue data available to your authenticated account. The policy reduces accidental mutation and helper execution; it is not a sandbox or a confidentiality boundary.
+Read-only does not mean private: Git inspection can expose repository history and tracked secrets, while `gh` queries can expose remote repository, pull request, and issue data available to your authenticated account. The policy reduces accidental mutation and explicit helper execution; it is not a sandbox or a confidentiality boundary.
 
 ### Thinking level
 
