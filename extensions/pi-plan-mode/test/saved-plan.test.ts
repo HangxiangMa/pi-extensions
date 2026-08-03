@@ -168,10 +168,17 @@ test("automatic and manual ready menus expose Save for later", async () => {
 				assert.deepEqual(
 					options.filter((option) => option !== "Close"),
 					automatic
-						? ["Implement this plan", "Save for later", "Stay in Plan mode", "Exit Plan mode"]
+						? [
+								"Implement this plan",
+								"Export plan…",
+								"Save for later",
+								"Stay in Plan mode",
+								"Exit Plan mode",
+							]
 						: [
 								"Show latest proposed plan",
 								"Implement this plan",
+								"Export plan…",
 								"Save for later",
 								"Configure Plan-mode tools",
 								"Stay in Plan mode",
@@ -216,7 +223,7 @@ test("saved Plan management can show, implement, clear, or cancel", async () => 
 			select: async (_title: string, options: string[]) => {
 				assert.deepEqual(
 					options.filter((option) => option !== "Close"),
-					["Show saved plan", "Implement saved plan", "Clear saved plan"],
+					["Show saved plan", "Implement saved plan", "Export plan…", "Clear saved plan"],
 				);
 				return scenario.selection;
 			},
@@ -553,7 +560,7 @@ test("session shutdown disposes a saved Plan menu without a late transition", as
 test("plan save autocomplete is public and saving fails closed without a ready plan", async () => {
 	assert.deepEqual(
 		completePlanArguments("")?.map((item) => item.value),
-		["show", "finalize", "implement", "save", "exit", "off", "tools"],
+		["show", "finalize", "implement", "save", "export", "exit", "off", "tools"],
 	);
 	assert.deepEqual(
 		completePlanArguments("sa")?.map((item) => item.value),

@@ -41,6 +41,29 @@ export function clearPlanModeUi(ctx: ExtensionContext) {
 	ctx.ui.setWidget(PLAN_WIDGET_KEY, undefined);
 }
 
+export function showStoredPlan(pi: ExtensionAPI, ctx: ExtensionContext, state: PlanModeState) {
+	const readyPlan = state.enabled ? state.latestPlan?.trim() : undefined;
+	const savedPlan = state.savedPlan?.plan.trim();
+	if (savedPlan && (ctx.mode === "print" || ctx.mode === "json")) {
+		throw new Error("Saved plan display is unavailable in print/JSON mode. Use TUI or RPC.");
+	}
+	const activePlan = state.activeImplementation?.plan.trim();
+	const plan = readyPlan ?? savedPlan ?? activePlan;
+	if (!plan) {
+		ctx.ui.notify(
+			"No completed plan is available. Use /plan finalize when planning is complete.",
+			"info",
+		);
+		return;
+	}
+	const title = readyPlan
+		? "Proposed Plan"
+		: savedPlan
+			? "Saved Plan"
+			: "Active Implementation Plan";
+	showPlanModePlan(pi, ctx, title, plan);
+}
+
 export function showPlanModePlan(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,

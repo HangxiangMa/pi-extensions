@@ -12,6 +12,7 @@ interface PlanMenuOptions extends MenuLifecycle {
 	show(): void;
 	finalize(): void;
 	implement(): void | Promise<void>;
+	exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
 	save(): void;
 	tools(): Promise<void>;
 	stay(): void;
@@ -19,8 +20,9 @@ interface PlanMenuOptions extends MenuLifecycle {
 }
 
 export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuOptions) {
-	type Action = "show" | "finalize" | "implement" | "save" | "tools" | "stay" | "exit";
-	const menu = defineMenu<undefined, "main", Action, ExtensionContext>({
+	type Screen = "main" | "export";
+	type Action = "show" | "finalize" | "implement" | "export" | "save" | "tools" | "stay" | "exit";
+	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
 		start: "main",
 		screens: {
 			main: () => ({
@@ -31,6 +33,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 					? [
 							{ id: "show", label: "Show latest proposed plan", action: "show" },
 							{ id: "implement", label: "Implement this plan", action: "implement" },
+							{ id: "export", label: "Export plan…", to: "export" },
 							{ id: "save", label: "Save for later", action: "save" },
 							{ id: "tools", label: "Configure Plan-mode tools", action: "tools" },
 							{ id: "stay", label: "Stay in Plan mode", action: "stay" },
@@ -43,6 +46,14 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 							{ id: "exit", label: "Exit Plan mode", action: "exit" },
 						],
 				hint: "close",
+			}),
+			export: () => ({
+				kind: "input",
+				title: "Export plan",
+				lines: ["Existing paths are never overwritten."],
+				placeholder: "PLAN.md",
+				action: "export",
+				hint: "back",
 			}),
 		},
 		actions: {
@@ -58,6 +69,8 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 				await options.implement();
 				return { kind: "close" };
 			},
+			export: async ({ value, signal }) =>
+				(await options.exportPlan(value ?? "", signal)) ? { kind: "close" } : { kind: "rejected" },
 			save: async () => {
 				options.save();
 				return { kind: "close" };
@@ -85,14 +98,16 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 
 interface ReadyPlanMenuOptions extends MenuLifecycle {
 	implement(): void | Promise<void>;
+	exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
 	save(): void;
 	stay(): void;
 	exit(): void;
 }
 
 export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPlanMenuOptions) {
-	type Action = "implement" | "save" | "stay" | "exit";
-	const menu = defineMenu<undefined, "ready", Action, ExtensionContext>({
+	type Screen = "ready" | "export";
+	type Action = "implement" | "export" | "save" | "stay" | "exit";
+	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
 		start: "ready",
 		screens: {
 			ready: () => ({
@@ -100,11 +115,20 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
 				title: "Proposed plan ready. What next?",
 				items: [
 					{ id: "implement", label: "Implement this plan", action: "implement" },
+					{ id: "export", label: "Export plan…", to: "export" },
 					{ id: "save", label: "Save for later", action: "save" },
 					{ id: "stay", label: "Stay in Plan mode", action: "stay" },
 					{ id: "exit", label: "Exit Plan mode", action: "exit" },
 				],
 				hint: "close",
+			}),
+			export: () => ({
+				kind: "input",
+				title: "Export plan",
+				lines: ["Existing paths are never overwritten."],
+				placeholder: "PLAN.md",
+				action: "export",
+				hint: "back",
 			}),
 		},
 		actions: {
@@ -112,6 +136,8 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
 				await options.implement();
 				return { kind: "close" };
 			},
+			export: async ({ value, signal }) =>
+				(await options.exportPlan(value ?? "", signal)) ? { kind: "close" } : { kind: "rejected" },
 			save: async () => {
 				options.save();
 				return { kind: "close" };
