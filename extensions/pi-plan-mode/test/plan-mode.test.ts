@@ -456,7 +456,7 @@ test("Plan lifecycle enters with a prompt and hands a valid plan to implementati
 	planMode(mock.pi);
 	const context = createMockContext({
 		hasUI: true,
-		select: async () => "Implement this plan",
+		select: async () => "Implement here",
 	});
 	await mock.commands.get("plan")?.handler("design it", context.ctx);
 	assert.deepEqual(mock.sentUserMessages[0], { text: "design it", options: undefined });

@@ -7,6 +7,11 @@ interface MenuLifecycle {
 	isCurrent(): boolean;
 }
 
+const IMPLEMENTATION_CONTEXT_LINES = [
+	"Implement here keeps this planning conversation.",
+	"Start fresh transfers only the approved plan to a new session.",
+] as const;
+
 interface PlanMenuOptions extends MenuLifecycle {
 	statusText: string;
 	hasReadyPlan: boolean;
@@ -14,7 +19,8 @@ interface PlanMenuOptions extends MenuLifecycle {
 	getExportDestination: PlanExportDestinationProvider;
 	show(): void;
 	finalize(): void;
-	implement(): void | Promise<void>;
+	implementHere(): void | Promise<void>;
+	implementFresh(signal: AbortSignal): void | Promise<void>;
 	exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
 	save(): void;
 	stay(): void;
@@ -23,7 +29,15 @@ interface PlanMenuOptions extends MenuLifecycle {
 
 export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuOptions) {
 	type Screen = "main" | "export";
-	type Action = "show" | "finalize" | "implement" | "export" | "save" | "stay" | "exit";
+	type Action =
+		| "show"
+		| "finalize"
+		| "implement-here"
+		| "implement-fresh"
+		| "export"
+		| "save"
+		| "stay"
+		| "exit";
 	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
 		start: "main",
 		screens: {
@@ -32,16 +46,30 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 				title: "Plan mode",
 				lines: [
 					options.statusText,
-					...(options.hasReadyPlan ? [options.implementationOutcome()] : []),
+					...(options.hasReadyPlan
+						? [...IMPLEMENTATION_CONTEXT_LINES, options.implementationOutcome()]
+						: []),
 				],
 				items: options.hasReadyPlan
 					? [
 							{ id: "show", label: "Show latest proposed plan", action: "show" },
-							{ id: "implement", label: "Implement this plan", action: "implement" },
+							{
+								id: "implement-here",
+								label: "Implement here",
+								description: "Continue in this session with the planning conversation.",
+								action: "implement-here",
+							},
+							{
+								id: "implement-fresh",
+								label: "Start fresh and implement",
+								description: "Open a new linked session; transfer only the approved plan.",
+								action: "implement-fresh",
+								busyLabel: "Starting fresh implementation session…",
+							},
 							{ id: "export", label: "Export plan…", to: "export" },
 							{ id: "save", label: "Save for later", action: "save" },
 							{ id: "stay", label: "Stay in Plan mode", action: "stay" },
-							{ id: "exit", label: "Exit Plan mode", action: "exit" },
+							{ id: "exit", label: "Discard plan and exit", action: "exit" },
 						]
 					: [
 							{ id: "finalize", label: "Request final plan", action: "finalize" },
@@ -61,8 +89,12 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 				options.finalize();
 				return { kind: "close" };
 			},
-			implement: async () => {
-				await options.implement();
+			"implement-here": async () => {
+				await options.implementHere();
+				return { kind: "close" };
+			},
+			"implement-fresh": async ({ signal }) => {
+				await options.implementFresh(signal);
 				return { kind: "close" };
 			},
 			export: async ({ value, signal }) =>
@@ -91,7 +123,8 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 interface ReadyPlanMenuOptions extends MenuLifecycle {
 	implementationOutcome(): string;
 	getExportDestination: PlanExportDestinationProvider;
-	implement(): void | Promise<void>;
+	implementHere(): void | Promise<void>;
+	implementFresh(signal: AbortSignal): void | Promise<void>;
 	exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
 	save(): void;
 	stay(): void;
@@ -100,28 +133,44 @@ interface ReadyPlanMenuOptions extends MenuLifecycle {
 
 export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPlanMenuOptions) {
 	type Screen = "ready" | "export";
-	type Action = "implement" | "export" | "save" | "stay" | "exit";
+	type Action = "implement-here" | "implement-fresh" | "export" | "save" | "stay" | "exit";
 	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
 		start: "ready",
 		screens: {
 			ready: () => ({
 				kind: "actions",
 				title: "Proposed plan ready. What next?",
-				lines: [options.implementationOutcome()],
+				lines: [...IMPLEMENTATION_CONTEXT_LINES, options.implementationOutcome()],
 				items: [
-					{ id: "implement", label: "Implement this plan", action: "implement" },
+					{
+						id: "implement-here",
+						label: "Implement here",
+						description: "Continue in this session with the planning conversation.",
+						action: "implement-here",
+					},
+					{
+						id: "implement-fresh",
+						label: "Start fresh and implement",
+						description: "Open a new linked session; transfer only the approved plan.",
+						action: "implement-fresh",
+						busyLabel: "Starting fresh implementation session…",
+					},
 					{ id: "export", label: "Export plan…", to: "export" },
 					{ id: "save", label: "Save for later", action: "save" },
 					{ id: "stay", label: "Stay in Plan mode", action: "stay" },
-					{ id: "exit", label: "Exit Plan mode", action: "exit" },
+					{ id: "exit", label: "Discard plan and exit", action: "exit" },
 				],
 				hint: "close",
 			}),
 			export: () => planExportInputScreen(options.getExportDestination),
 		},
 		actions: {
-			implement: async () => {
-				await options.implement();
+			"implement-here": async () => {
+				await options.implementHere();
+				return { kind: "close" };
+			},
+			"implement-fresh": async ({ signal }) => {
+				await options.implementFresh(signal);
 				return { kind: "close" };
 			},
 			export: async ({ value, signal }) =>
