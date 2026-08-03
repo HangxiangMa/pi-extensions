@@ -775,6 +775,9 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 		runtime.markAgentToolAttempted();
 		if (runtime.queueFrozen) {
 			if (!isGoalToolName(event.toolName)) return;
+			// Blocking alone feeds an error tool result back to the model. Abort too so
+			// stale Goal calls cannot loop while the experimental queue remains frozen.
+			abortCurrentTurn(ctx);
 			return {
 				block: true,
 				reason:

@@ -545,6 +545,100 @@ async function pauseScenario() {
 	}
 }
 
+async function frozenQueueBlockedToolAbortScenario() {
+	const observedSignals = [];
+	const now = Date.now();
+	const goalId = crypto.randomUUID();
+	const harness = await createHarness(
+		[
+			fauxAssistantMessage(
+				fauxToolCall("goal_complete", {
+					goal_id: goalId,
+					summary: "This frozen queue must not complete.",
+				}),
+			),
+			(_context, options) => {
+				observedSignals.push(options?.signal?.aborted === true);
+				return fauxAssistantMessage("Synthetic frozen-queue cleanup.");
+			},
+		],
+		{},
+		(sessionManager) => {
+			sessionManager.appendCustomEntry("goal-state", {
+				goal: {
+					id: goalId,
+					text: "frozen queue head",
+					status: "active",
+					startedAt: now,
+					updatedAt: now,
+					iteration: 0,
+					tokensUsed: 0,
+					timeUsedSeconds: 0,
+					baselineTokens: 0,
+				},
+				queue: [
+					{
+						id: crypto.randomUUID(),
+						text: "frozen queue tail",
+						status: "queued",
+						startedAt: now,
+						updatedAt: now,
+						iteration: 0,
+						tokensUsed: 0,
+						timeUsedSeconds: 0,
+						baselineTokens: 0,
+					},
+				],
+			});
+		},
+	);
+	try {
+		await harness.session.prompt("Simulate a stale frozen-queue tool call.");
+		await harness.session.agent.waitForIdle();
+		assert.ok(
+			harness.faux.state.callCount <= 2,
+			"frozen guard must allow at most one cleanup call",
+		);
+		assert.equal(observedSignals.includes(false), false, "any cleanup call must inherit abort");
+		assert.equal(persistedGoalStatus(harness.session), "active");
+	} finally {
+		await harness.cleanup();
+	}
+}
+
+async function staleBlockedToolAbortScenario() {
+	const observedSignals = [];
+	const harness = await createHarness([
+		fauxAssistantMessage("", {
+			stopReason: "error",
+			errorMessage: "Unauthorized: invalid API key",
+		}),
+		fauxAssistantMessage(fauxToolCall("budget_probe", {})),
+		(_context, options) => {
+			observedSignals.push(options?.signal?.aborted === true);
+			return fauxAssistantMessage("Synthetic stale-turn cleanup.");
+		},
+	]);
+	try {
+		await harness.session.prompt("/goal stale blocked-tool runtime smoke");
+		await harness.session.agent.waitForIdle();
+		assert.equal(persistedGoalStatus(harness.session), "blocked");
+
+		// Bypass the normal input boundary to model provider-owned stale work that
+		// arrives after the interrupted goal has already installed its tool guard.
+		await harness.session.agent.prompt("Simulate a stale provider-owned turn.");
+		await harness.session.agent.waitForIdle();
+		assert.ok(harness.faux.state.callCount <= 3, "stale guard must allow at most one cleanup call");
+		assert.equal(observedSignals.includes(false), false, "any cleanup call must inherit abort");
+		assert.equal(
+			harness.lifecycleEvents.filter((event) => event === "budget_probe_execute").length,
+			0,
+		);
+	} finally {
+		await harness.cleanup();
+	}
+}
+
 async function budgetBoundaryScenario() {
 	const harness = await createHarness([
 		fauxAssistantMessage(fauxToolCall("budget_probe", {})),
@@ -740,6 +834,8 @@ await orderedQueueScenario();
 await queuedInputScenario();
 await busyEditOwnershipScenario();
 await pauseScenario();
+await frozenQueueBlockedToolAbortScenario();
+await staleBlockedToolAbortScenario();
 await budgetBoundaryScenario();
 await budgetViolationScenario();
 await budgetAgentEndFallbackScenario();
@@ -747,5 +843,5 @@ await managedRunRpcScenario();
 await managedRunDisabledScenario();
 await manualCompactionScenario();
 console.log(
-	"pi-goal runtime smoke: normal, runaway guards, retry and busy-edit ownership, ordered queue, queued input, pause, managed-run RPC, bounded budget behavior, and manual compaction passed",
+	"pi-goal runtime smoke: normal, runaway guards, retry and busy-edit ownership, ordered queue, queued input, pause, frozen-queue and stale blocked-tool aborts, managed-run RPC, bounded budget behavior, and manual compaction passed",
 );
