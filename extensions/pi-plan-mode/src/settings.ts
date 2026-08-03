@@ -24,17 +24,29 @@ export const PLAN_MODE_THINKING_LEVELS = [
 	"xhigh",
 	"max",
 ] as const;
+export const IMPLEMENTATION_PLAN_RETENTIONS = [
+	"keep",
+	"clear-on-start",
+	"clear-after-first-run",
+] as const;
+export const DEFAULT_PLAN_EXPORT_PATH = "PLAN.md";
+const MAX_PLAN_EXPORT_PATH_LENGTH = 4096;
 
 export type PlanModeThinkingLevel = (typeof PLAN_MODE_THINKING_LEVELS)[number];
+export type ImplementationPlanRetention = (typeof IMPLEMENTATION_PLAN_RETENTIONS)[number];
 export type PlanModeFixedThinkingLevel = Exclude<PlanModeThinkingLevel, "inherit">;
 export interface PlanModeSettings {
 	thinkingLevel: PlanModeThinkingLevel;
 	defaultPlanTools?: string[];
+	implementationPlanRetention?: ImplementationPlanRetention;
+	defaultPlanExportPath?: string;
 	safeSubcommands?: SafeSubcommands;
 }
 export interface PlanModeSettingsPatch {
 	thinkingLevel?: PlanModeThinkingLevel;
 	defaultPlanTools?: readonly string[] | null;
+	implementationPlanRetention?: ImplementationPlanRetention;
+	defaultPlanExportPath?: string | null;
 }
 export interface UpdatePlanModeSettingsOptions {
 	settingsPath?: string;
@@ -79,6 +91,25 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
 		if (!defaultPlanTools) return undefined;
 		settings.defaultPlanTools = defaultPlanTools;
 	}
+	if (Object.hasOwn(value, "implementationPlanRetention")) {
+		const implementationPlanRetention = Reflect.get(value, "implementationPlanRetention");
+		if (
+			!IMPLEMENTATION_PLAN_RETENTIONS.includes(
+				implementationPlanRetention as ImplementationPlanRetention,
+			)
+		) {
+			return undefined;
+		}
+		settings.implementationPlanRetention =
+			implementationPlanRetention as ImplementationPlanRetention;
+	}
+	if (Object.hasOwn(value, "defaultPlanExportPath")) {
+		const defaultPlanExportPath = normalizePlanExportPath(
+			Reflect.get(value, "defaultPlanExportPath"),
+		);
+		if (!defaultPlanExportPath) return undefined;
+		settings.defaultPlanExportPath = defaultPlanExportPath;
+	}
 	if (Object.hasOwn(value, "safeSubcommands")) {
 		const safeSubcommands = normalizeSafeSubcommands(Reflect.get(value, "safeSubcommands"));
 		if (!safeSubcommands) return undefined;
@@ -95,6 +126,23 @@ function normalizeToolNames(value: unknown) {
 		return undefined;
 	}
 	return Array.from(new Set(value));
+}
+
+function normalizePlanExportPath(value: unknown) {
+	if (typeof value !== "string") return undefined;
+	const normalized = value.trim();
+	if (
+		!normalized ||
+		normalized.length > MAX_PLAN_EXPORT_PATH_LENGTH ||
+		!/[^@\s]/u.test(normalized) ||
+		[...normalized].some((character) => {
+			const codePoint = character.codePointAt(0) ?? 0;
+			return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+		})
+	) {
+		return undefined;
+	}
+	return normalized;
 }
 
 function normalizeSafeSubcommands(value: unknown): SafeSubcommands | undefined {
@@ -171,6 +219,13 @@ export function updatePlanModeSettings(
 		if (patch.defaultPlanTools === null) delete updated.defaultPlanTools;
 		else if (patch.defaultPlanTools !== undefined) {
 			updated.defaultPlanTools = [...patch.defaultPlanTools];
+		}
+		if (patch.implementationPlanRetention !== undefined) {
+			updated.implementationPlanRetention = patch.implementationPlanRetention;
+		}
+		if (patch.defaultPlanExportPath === null) delete updated.defaultPlanExportPath;
+		else if (patch.defaultPlanExportPath !== undefined) {
+			updated.defaultPlanExportPath = patch.defaultPlanExportPath;
 		}
 		const settings = normalizePlanModeSettings(updated);
 		if (!settings) throw invalidSettingsError(settingsPath, "invalid settings shape");
@@ -338,4 +393,14 @@ export function configuredThinkingLevel(
 	settings: PlanModeSettings,
 ): PlanModeFixedThinkingLevel | undefined {
 	return settings.thinkingLevel === "inherit" ? undefined : settings.thinkingLevel;
+}
+
+export function configuredImplementationPlanRetention(
+	settings: PlanModeSettings,
+): ImplementationPlanRetention {
+	return settings.implementationPlanRetention ?? "keep";
+}
+
+export function configuredPlanExportPath(settings: PlanModeSettings) {
+	return settings.defaultPlanExportPath ?? DEFAULT_PLAN_EXPORT_PATH;
 }

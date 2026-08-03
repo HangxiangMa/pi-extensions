@@ -15,20 +15,12 @@ import {
 	setPlanThinkingLevel,
 } from "./extension-runtime.js";
 import {
-	injectActiveImplementationContext,
-	invalidPlanMessage,
-	isEmptyAssistantMessage,
-	latestAssistantText,
-	messageContainsInactivePlanModeArtifact,
-	messageContainsLegacyPlanModeContextArtifact,
-	messageContainsPlanModeImplementationContextArtifact,
-	messageContainsPlanModeImplementationHandoff,
-	parseProposedPlan,
-	stripPlanModeCompletionCallsFromMessage,
-	stripProposedPlanBlocksFromMessage,
-} from "./message-transform.js";
+	createImplementationRetentionCoordinator,
+	implementationRetentionPreview,
+} from "./implementation-retention.js";
+import { invalidPlanMessage, latestAssistantText, parseProposedPlan } from "./message-transform.js";
 import { showPlanModeMenu, showReadyPlanMenu } from "./plan-action-menus.js";
-import { exportStoredPlan } from "./plan-export.js";
+import { createPlanExportController } from "./plan-export-controller.js";
 import { showPlanLaunchMenu } from "./plan-launch-menu.js";
 import {
 	clearPlanModeUi,
@@ -52,6 +44,7 @@ import {
 } from "./saved-plan-preflight.js";
 import {
 	awaitPlanModeSettingsWrites,
+	configuredImplementationPlanRetention,
 	configuredThinkingLevel,
 	type PlanModeSettings,
 	readPlanModeSettings,
@@ -94,7 +87,13 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	let menuGeneration = 0;
 	let workflowGeneration = 0;
 	let menuController = new AbortController();
+	const implementationRetention = createImplementationRetentionCoordinator();
 	const persistState = () => pi.appendEntry<PlanModeState>(STATE_ENTRY_TYPE, state);
+	const planExports = createPlanExportController({
+		getState: () => state,
+		getSettings: () => settings,
+		finishReady: (ctx) => exitPlanMode(ctx),
+	});
 
 	pi.registerFlag("plan", {
 		description: "Start in Codex-like Plan mode",
@@ -207,12 +206,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			const exportMatch = /^export(?:\s+([\s\S]+))?$/iu.exec(prompt);
 			if (exportMatch) {
 				const lifecycle = captureMenuLifecycle();
-				await exportStoredPlan(
-					state,
-					exportMatch[1],
-					ctx,
-					exportOwner(ctx, lifecycle.signal, lifecycle.isCurrent),
-				);
+				await planExports.export(exportMatch[1], ctx, lifecycle.signal, lifecycle.isCurrent);
 				return;
 			}
 			if (command === "exit" || command === "off") {
@@ -275,8 +269,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		menuController.abort(new DOMException("Plan-mode session replaced", "AbortError"));
 		menuController = new AbortController();
 		readyPresentationIntent = undefined;
+		implementationRetention.reset();
 		settings = { thinkingLevel: "inherit" };
 		restoreState(ctx);
+		implementationRetention.restore(state.activeImplementation);
 		const loadedSettings = await (dependencies.readSettings?.() ?? readPlanModeSettings());
 		if (generation !== menuGeneration || menuController.signal.aborted) return;
 		if (loadedSettings.kind === "loaded") settings = loadedSettings.settings;
@@ -323,6 +319,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		menuGeneration += 1;
 		menuController.abort(new DOMException("Plan-mode session shut down", "AbortError"));
 		readyPresentationIntent = undefined;
+		implementationRetention.reset();
 		await awaitPlanModeSettingsWrites(dependencies.settingsPath);
 		captureManualThinkingLevel();
 		persistState();
@@ -367,33 +364,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		}
 	});
 
-	pi.on("context", async (event) => {
-		const messagesWithoutPlanContext = event.messages.filter(
-			(message: unknown) =>
-				!messageContainsLegacyPlanModeContextArtifact(message) &&
-				!messageContainsPlanModeImplementationContextArtifact(message),
-		);
-		if (state.enabled) {
-			return {
-				messages: messagesWithoutPlanContext.filter(
-					(message: unknown) => !messageContainsPlanModeImplementationHandoff(message),
-				),
-			};
+	pi.on("context", async (event, ctx) => {
+		const result = implementationRetention.transformContext(event.messages, state);
+		if (result.clearActiveImplementationId) {
+			clearActiveImplementation(result.clearActiveImplementationId, ctx);
 		}
-		const inactiveMessages = state.activeImplementation
-			? messagesWithoutPlanContext
-			: messagesWithoutPlanContext.filter(
-					(message: unknown) => !messageContainsPlanModeImplementationHandoff(message),
-				);
-		const messages = inactiveMessages
-			.filter((message: unknown) => !messageContainsInactivePlanModeArtifact(message))
-			.map(stripProposedPlanBlocksFromMessage)
-			.map(stripPlanModeCompletionCallsFromMessage)
-			.filter((message: unknown) => !isEmptyAssistantMessage(message));
-		const contextualMessages = state.activeImplementation
-			? injectActiveImplementationContext(messages, state.activeImplementation)
-			: messages;
-		return { messages: contextualMessages as typeof event.messages };
+		return { messages: result.messages as typeof event.messages };
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {
@@ -432,6 +408,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	});
 
 	onAgentSettled(pi, async (_event, ctx) => {
+		const settledImplementationId = implementationRetention.implementationSettled(
+			state.activeImplementation,
+		);
+		if (settledImplementationId) clearActiveImplementation(settledImplementationId, ctx);
+
 		const intent = readyPresentationIntent;
 		if (!intent || !readyPresentationIsCurrent(intent)) return;
 		if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
@@ -646,6 +627,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 				plan,
 				source,
 				startedAt: Date.now(),
+				retention: configuredImplementationPlanRetention(settings),
 			},
 			manualThinkingLevel: undefined,
 		};
@@ -672,6 +654,15 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			persistState();
 			updateUi(ctx);
 		}
+	}
+
+	function clearActiveImplementation(id: string, ctx: ExtensionContext) {
+		if (state.activeImplementation?.id !== id) return false;
+		workflowGeneration += 1;
+		state = { ...state, activeImplementation: undefined };
+		persistState();
+		updateUi(ctx);
+		return true;
 	}
 
 	async function showLaunchMenu(ctx: ExtensionContext, initialScreen: "main" | "tools" = "main") {
@@ -723,11 +714,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		const lifecycle = captureMenuLifecycle();
 		await showActiveImplementationMenu(ctx, {
 			statusText: planStatusText(),
+			getExportDestination: () => planExports.getDestination(ctx),
 			signal: lifecycle.signal,
 			isCurrent: lifecycle.isCurrent,
 			show: () => showStoredPlan(pi, ctx, state),
-			exportPlan: (path, signal) =>
-				exportStoredPlan(state, path, ctx, exportOwner(ctx, signal, lifecycle.isCurrent)),
+			exportPlan: (path, signal) => planExports.export(path, ctx, signal, lifecycle.isCurrent),
 			settings: (signal) => showSettings(ctx, signal, lifecycle.isCurrent),
 			startNew: () => {
 				enterPlanMode(ctx);
@@ -744,12 +735,13 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		const lifecycle = captureMenuLifecycle();
 		await showSavedPlanMenu(ctx, {
 			statusText: planStatusText(),
+			implementationOutcome,
+			getExportDestination: () => planExports.getDestination(ctx),
 			signal: lifecycle.signal,
 			isCurrent: lifecycle.isCurrent,
 			show: () => showStoredPlan(pi, ctx, state),
 			implement: () => startImplementation(ctx),
-			exportPlan: (path, signal) =>
-				exportStoredPlan(state, path, ctx, exportOwner(ctx, signal, lifecycle.isCurrent)),
+			exportPlan: (path, signal) => planExports.export(path, ctx, signal, lifecycle.isCurrent),
 			settings: (signal) => showSettings(ctx, signal, lifecycle.isCurrent),
 			clear: () => {
 				exitPlanMode(ctx);
@@ -767,12 +759,13 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		await showPlanModeMenu(ctx, {
 			statusText: planStatusText(),
 			hasReadyPlan: state.latestPlan !== undefined,
+			implementationOutcome,
+			getExportDestination: () => planExports.getDestination(ctx),
 			...lifecycle,
 			show: () => showStoredPlan(pi, ctx, state),
 			finalize: () => requestFinalPlan(ctx),
 			implement: () => startImplementation(ctx),
-			exportPlan: (path, signal) =>
-				exportStoredPlan(state, path, ctx, exportOwner(ctx, signal, lifecycle.isCurrent)),
+			exportPlan: (path, signal) => planExports.export(path, ctx, signal, lifecycle.isCurrent),
 			save: () => savePlanForLater(ctx),
 			stay: () => updateUi(ctx),
 			exit: () => {
@@ -786,9 +779,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		const lifecycle = captureMenuLifecycle();
 		await showReadyPlanMenu(ctx, {
 			...lifecycle,
+			implementationOutcome,
+			getExportDestination: () => planExports.getDestination(ctx),
 			implement: () => startImplementation(ctx),
-			exportPlan: (path, signal) =>
-				exportStoredPlan(state, path, ctx, exportOwner(ctx, signal, lifecycle.isCurrent)),
+			exportPlan: (path, signal) => planExports.export(path, ctx, signal, lifecycle.isCurrent),
 			save: () => savePlanForLater(ctx),
 			stay: () => undefined,
 			exit: () => {
@@ -816,10 +810,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 				: {}),
 		});
 		return result.kind === "closed" && "reason" in result && result.reason === "close";
-	}
-
-	function exportOwner(ctx: ExtensionContext, signal: AbortSignal, isCurrent: () => boolean) {
-		return { signal, isCurrent, getState: () => state, finishReady: () => exitPlanMode(ctx) };
 	}
 
 	function captureMenuLifecycle() {
@@ -971,6 +961,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
 	function planStatusText() {
 		return formatPlanModeStatusText(state, formatToolSummary);
+	}
+
+	function implementationOutcome() {
+		return implementationRetentionPreview(configuredImplementationPlanRetention(settings));
 	}
 
 	function formatToolSummary() {

@@ -86,7 +86,7 @@ test("saved Plan state restores from the active branch and rejects malformed val
 		],
 		STATE_ENTRY_TYPE,
 	) as ReturnType<typeof restorePlanModeState> & { savedPlan?: unknown };
-	assert.deepEqual(mixed.activeImplementation, activeImplementation);
+	assert.deepEqual(mixed.activeImplementation, { ...activeImplementation, retention: "keep" });
 	assert.equal(mixed.savedPlan, undefined);
 });
 
@@ -164,7 +164,8 @@ test("automatic and manual ready menus expose Save for later", async () => {
 		planMode(mock.pi);
 		const context = createMockContext({
 			hasUI: true,
-			select: async (_title: string, options: string[]) => {
+			select: async (title: string, options: string[]) => {
+				assert.match(title, /After Implement: Keep plan active until \/plan exit/i);
 				assert.deepEqual(
 					options.filter((option) => option !== "Close"),
 					automatic
@@ -219,7 +220,8 @@ test("saved Plan management can show, implement, clear, or cancel", async () => 
 				getBranch: () => [savedEntry],
 				getEntries: () => [savedEntry],
 			},
-			select: async (_title: string, options: string[]) => {
+			select: async (title: string, options: string[]) => {
+				assert.match(title, /After Implement: Keep plan active until \/plan exit/i);
 				assert.deepEqual(
 					options.filter((option) => option !== "Close"),
 					[

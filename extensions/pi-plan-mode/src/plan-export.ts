@@ -2,12 +2,18 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { type ExtensionContext, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_PLAN_EXPORT_PATH } from "./settings.js";
 import type { PlanModeState } from "./state.js";
 
-export const DEFAULT_PLAN_EXPORT_PATH = "PLAN.md";
+export { DEFAULT_PLAN_EXPORT_PATH };
 
 export interface PlanExportResult {
 	path: string;
+}
+
+export interface PlanExportDestination {
+	configuredPath: string;
+	resolvedPath: string;
 }
 
 export interface PlanExportLifecycle {
@@ -22,6 +28,7 @@ export async function exportStoredPlan(
 	requestedPath: string | undefined,
 	ctx: ExtensionContext,
 	lifecycle?: PlanExportLifecycle,
+	defaultPath = DEFAULT_PLAN_EXPORT_PATH,
 ) {
 	const plan =
 		(state.enabled ? state.latestPlan : undefined)?.trim() ??
@@ -41,7 +48,14 @@ export async function exportStoredPlan(
 		(lifecycle.isCurrent() && (!lifecycle.getState || lifecycle.getState() === state));
 	let result: PlanExportResult;
 	try {
-		result = await exportPlanToFile(plan, requestedPath, ctx.cwd, lifecycle?.signal, isCurrent);
+		result = await exportPlanToFile(
+			plan,
+			requestedPath,
+			ctx.cwd,
+			lifecycle?.signal,
+			isCurrent,
+			defaultPath,
+		);
 	} catch (error: unknown) {
 		if (lifecycle?.signal.aborted || !isCurrent()) return false;
 		if (!ctx.hasUI) throw error;
@@ -65,8 +79,9 @@ export async function exportPlanToFile(
 	cwd: string,
 	signal?: AbortSignal,
 	isCurrent: () => boolean = () => true,
+	defaultPath = DEFAULT_PLAN_EXPORT_PATH,
 ): Promise<PlanExportResult> {
-	const path = resolvePlanExportPath(requestedPath, cwd);
+	const path = resolvePlanExportPath(requestedPath, cwd, defaultPath);
 	await withFileMutationQueue(path, async () => {
 		throwIfCancelled(signal, isCurrent);
 		await mkdir(dirname(path), { recursive: true });
@@ -85,8 +100,19 @@ export async function exportPlanToFile(
 	return { path };
 }
 
-export function resolvePlanExportPath(requestedPath: string | undefined, cwd: string) {
-	const rawPath = requestedPath?.trim() || DEFAULT_PLAN_EXPORT_PATH;
+export function planExportDestination(defaultPath: string, cwd: string): PlanExportDestination {
+	return {
+		configuredPath: safeNotification(defaultPath),
+		resolvedPath: safeNotification(resolvePlanExportPath(undefined, cwd, defaultPath)),
+	};
+}
+
+export function resolvePlanExportPath(
+	requestedPath: string | undefined,
+	cwd: string,
+	defaultPath = DEFAULT_PLAN_EXPORT_PATH,
+) {
+	const rawPath = requestedPath?.trim() || defaultPath;
 	const normalizedPath = rawPath.startsWith("@") ? rawPath.slice(1) : rawPath;
 	if (!normalizedPath.trim()) throw new Error("Plan export path must not be empty.");
 	if (normalizedPath.includes("\0")) {

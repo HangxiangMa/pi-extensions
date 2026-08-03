@@ -1,8 +1,10 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.js";
 
 interface ActiveImplementationMenuOptions {
 	statusText: string;
+	getExportDestination: PlanExportDestinationProvider;
 	signal: AbortSignal;
 	isCurrent(): boolean;
 	show(): void;
@@ -34,14 +36,7 @@ export async function showActiveImplementationMenu(
 				],
 				hint: "close",
 			}),
-			export: () => ({
-				kind: "input",
-				title: "Export plan",
-				lines: ["Existing paths are never overwritten."],
-				placeholder: "PLAN.md",
-				action: "export",
-				hint: "back",
-			}),
+			export: () => planExportInputScreen(options.getExportDestination),
 		},
 		actions: {
 			show: async () => {

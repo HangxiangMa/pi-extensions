@@ -1,8 +1,13 @@
 import type { ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { defineMenu, type RunMenuResult, runMenu } from "@narumitw/pi-tui-kit";
 import { PLAN_MODE_COMPLETE_TOOL_NAME } from "./completion-tool.js";
+import { retentionLabel } from "./implementation-retention.js";
+import { planExportDestination } from "./plan-export.js";
 import { PLAN_MODE_QUESTION_TOOL_NAME } from "./question-tool.js";
 import {
+	configuredImplementationPlanRetention,
+	configuredPlanExportPath,
+	IMPLEMENTATION_PLAN_RETENTIONS,
 	PLAN_MODE_THINKING_LEVELS,
 	type PlanModeSettings,
 	type PlanModeSettingsLoadResult,
@@ -36,8 +41,15 @@ export interface PlanModeSettingsMenuOptions {
 	onSaved(settings: PlanModeSettings): void;
 }
 
-type Screen = "settings" | "tools";
-type Action = "set-thinking" | "open-tools" | "toggle-tool" | "reset-tools";
+type Screen = "settings" | "tools" | "export";
+type Action =
+	| "set-thinking"
+	| "open-tools"
+	| "toggle-tool"
+	| "reset-tools"
+	| "set-retention"
+	| "open-export"
+	| "set-export";
 
 export async function showPlanModeSettings(
 	ctx: ExtensionContext,
@@ -81,7 +93,7 @@ export async function showPlanModeSettings(
 							items: [
 								{
 									id: "thinkingLevel",
-									label: "Thinking level",
+									label: "Plan thinking",
 									description: "Set the thinking level when the next Plan workflow starts.",
 									currentValue: state.settings.thinkingLevel,
 									values: PLAN_MODE_THINKING_LEVELS,
@@ -89,11 +101,28 @@ export async function showPlanModeSettings(
 								},
 								{
 									id: "defaultPlanTools",
-									label: "Default tools",
+									label: "Plan tools",
 									description:
 										"Choose persistent defaults; a launch-time selection still overrides them for that session.",
 									currentValue: defaultToolsValue(state.settings.defaultPlanTools),
 									action: "open-tools",
+								},
+								{
+									id: "implementationPlanRetention",
+									label: "After Implement",
+									description: "Choose how long the accepted plan keeps guiding implementation.",
+									currentValue: retentionLabel(
+										configuredImplementationPlanRetention(state.settings),
+									),
+									values: IMPLEMENTATION_PLAN_RETENTIONS.map(retentionLabel),
+									action: "set-retention",
+								},
+								{
+									id: "defaultPlanExportPath",
+									label: "Export destination",
+									description: "Set the destination used when an export omits its path.",
+									currentValue: safeTerminalText(configuredPlanExportPath(state.settings)),
+									action: "open-export",
 								},
 							],
 						},
@@ -117,6 +146,22 @@ export async function showPlanModeSettings(
 				],
 				hint: "back",
 			}),
+			export: ({ state }) => {
+				const configured = configuredPlanExportPath(state.settings);
+				const destination = planExportDestination(configured, ctx.cwd);
+				return {
+					kind: "input",
+					title: "Export destination",
+					lines: [
+						`Configured: ${destination.configuredPath}`,
+						`Resolves here to: ${destination.resolvedPath}`,
+						"Submit an empty value to reset to PLAN.md. Changes affect the next export.",
+					],
+					placeholder: configured,
+					action: "set-export",
+					hint: "back",
+				};
+			},
 		},
 		actions: {
 			"set-thinking": async ({ ctx: actionCtx, value, signal }) => {
@@ -133,6 +178,29 @@ export async function showPlanModeSettings(
 				);
 			},
 			"open-tools": async () => ({ kind: "to", screen: "tools" }),
+			"set-retention": async ({ ctx: actionCtx, value, signal }) => {
+				const implementationPlanRetention = retentionFromLabel(value);
+				if (!implementationPlanRetention) return { kind: "rejected" };
+				return savePatch(
+					actionCtx,
+					{ implementationPlanRetention },
+					signal,
+					`After Implement: ${retentionLabel(implementationPlanRetention)}. Applies to the next Implement action.`,
+				);
+			},
+			"open-export": async () => ({ kind: "to", screen: "export" }),
+			"set-export": async ({ ctx: actionCtx, value, signal }) => {
+				const defaultPlanExportPath = value?.trim() || null;
+				const result = await savePatch(
+					actionCtx,
+					{ defaultPlanExportPath },
+					signal,
+					defaultPlanExportPath
+						? `Default Plan export destination: ${safeTerminalText(defaultPlanExportPath)}.`
+						: "Default Plan export destination reset to PLAN.md.",
+				);
+				return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
+			},
 			"toggle-tool": async ({ ctx: actionCtx, state, itemId, selected, signal }) => {
 				const tool = tools.find((candidate) => candidate.name === itemId);
 				if (!tool || !canSelectToolInPlanMode(tool)) return { kind: "rejected" };
@@ -197,7 +265,7 @@ export async function showPlanModeSettings(
 function settingsLines(settingsPath: string, notice: string | undefined) {
 	return [
 		`User settings · ${safeTerminalText(settingsPath)}`,
-		"Saved changes apply to the next Plan workflow.",
+		"Plan defaults apply to the next workflow; handoff and export choices apply to their next action.",
 		...(notice ? [safeTerminalText(notice)] : []),
 	];
 }
@@ -213,6 +281,10 @@ function invalidScreen(settingsPath: string, state: SettingsMenuState) {
 		],
 		hint: "back" as const,
 	};
+}
+
+function retentionFromLabel(value: string | undefined) {
+	return IMPLEMENTATION_PLAN_RETENTIONS.find((retention) => retentionLabel(retention) === value);
 }
 
 function defaultToolsValue(configured: string[] | undefined) {

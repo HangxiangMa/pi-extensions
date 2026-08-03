@@ -22,7 +22,12 @@ async function withSettingsMenu(
 	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-menu-"));
 	const settingsPath = join(directory, "pi-plan-mode.json");
 	const tui = createTuiHarness({ width: 72, rows: 24 });
-	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const context = createMockContext({
+		cwd: directory,
+		mode: "tui",
+		hasUI: true,
+		custom: tui.custom,
+	});
 	const saved: PlanModeSettings[] = [];
 	try {
 		await run({ settingsPath, tui, ctx: context.ctx, notifications: context.notifications, saved });
@@ -47,14 +52,16 @@ function menuOptions(
 	};
 }
 
-test("Plan settings show thinking and default tools without materializing a missing file", async () => {
+test("Plan settings show four flat workflow rows without materializing a missing file", async () => {
 	await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
 		const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
 		await tui.waitForOpen();
 		const frame = tui.render().join("\n");
 		assert.match(frame, /Plan Mode Settings/);
-		assert.match(frame, /Thinking level\s+inherit/);
-		assert.match(frame, /Default tools\s+Automatic safe built-ins/);
+		assert.match(frame, /Plan thinking\s+inherit/);
+		assert.match(frame, /Plan tools\s+Automatic safe built-ins/);
+		assert.match(frame, /After Implement\s+Keep plan active/);
+		assert.match(frame, /Export destination\s+PLAN\.md/);
 		assert.ok(tui.render(34).every((line) => visibleWidth(line) <= 34));
 		await assert.rejects(access(settingsPath));
 
@@ -78,7 +85,7 @@ test("Plan settings save thinking immediately for the next workflow", async () =
 			"off",
 		);
 		assert.equal(saved.at(-1)?.thinkingLevel, "off");
-		assert.match(tui.render().join("\n"), /Thinking level\s+off/);
+		assert.match(tui.render().join("\n"), /Plan thinking\s+off/);
 		tui.press("ctrl+c");
 		await running;
 	});
@@ -113,7 +120,7 @@ test("Default tools distinguish automatic, explicit empty, user risk, blocked ro
 		tui.press("tui.select.cancel");
 		await tui.waitForPending();
 		await tui.waitForOpen();
-		assert.match(tui.render().join("\n"), /Default tools\s+Required tools only/);
+		assert.match(tui.render().join("\n"), /Plan tools\s+Required tools only/);
 
 		// Reopen and choose the pinned reset action after the three tool rows.
 		tui.press("tui.select.confirm");
@@ -158,6 +165,82 @@ test("Default tools retain configured names that are unavailable in the current 
 	});
 });
 
+test("After Implement cycles outcomes and export destination saves, previews, resets, and cancels", async () => {
+	await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
+		const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.equal(saved.at(-1)?.implementationPlanRetention, "clear-on-start");
+		assert.match(tui.render().join("\n"), /After Implement\s+Use plan for handoff only/);
+
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		const frame = tui.render().join("\n");
+		assert.match(frame, /Export destination/i);
+		assert.match(frame, /PLAN\.md/);
+		assert.match(
+			frame,
+			new RegExp(
+				settingsPath
+					.replace("pi-plan-mode.json", "PLAN.md")
+					.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"),
+			),
+		);
+		tui.type("docs/PLAN.md");
+		tui.press("tui.input.submit");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.equal(saved.at(-1)?.defaultPlanExportPath, "docs/PLAN.md");
+		assert.match(tui.render().join("\n"), /Export destination\s+docs\/PLAN\.md/);
+
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		tui.press("tui.input.submit");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.equal(saved.at(-1)?.defaultPlanExportPath, undefined);
+		assert.match(tui.render().join("\n"), /Export destination\s+PLAN\.md/);
+
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		tui.type("cancelled.md");
+		tui.press("tui.select.cancel");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.equal(saved.at(-1)?.defaultPlanExportPath, undefined);
+		tui.press("ctrl+c");
+		await running;
+	});
+});
+
+test("long export previews stay within narrow terminal widths", async () => {
+	await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
+		const longPath = `plans/${"nested-".repeat(16)}PLAN.md`;
+		await writeFile(settingsPath, JSON.stringify({ defaultPlanExportPath: longPath }));
+		const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
+		await tui.waitForOpen();
+		for (let index = 0; index < 3; index += 1) tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /nested-/);
+		assert.ok(tui.render(26).every((line) => visibleWidth(line) <= 26));
+		tui.press("tui.select.cancel");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		tui.press("ctrl+c");
+		await running;
+	});
+});
+
 test("Invalid Plan settings are read-only and save failures roll back displayed values", async () => {
 	await withSettingsMenu(async ({ settingsPath, tui, ctx, notifications, saved }) => {
 		await writeFile(settingsPath, "{mock-sensitive-token");
@@ -169,6 +252,15 @@ test("Invalid Plan settings are read-only and save failures roll back displayed 
 		tui.press("ctrl+c");
 		await running;
 		assert.equal(await readFile(settingsPath, "utf8"), "{mock-sensitive-token");
+
+		await writeFile(settingsPath, '{"defaultPlanExportPath":"bad\\u001bpath"}');
+		running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
+		await tui.waitForOpen();
+		const controlInvalid = tui.render().join("\n");
+		assert.match(controlInvalid, /Read only/);
+		assert.doesNotMatch(controlInvalid, /bad.*path/is);
+		tui.press("ctrl+c");
+		await running;
 
 		await rm(settingsPath);
 		running = showPlanModeSettings(
@@ -183,7 +275,7 @@ test("Invalid Plan settings are read-only and save failures roll back displayed 
 		tui.press("tui.select.confirm");
 		await tui.waitForPending();
 		await tui.waitForOpen();
-		assert.match(tui.render().join("\n"), /Thinking level\s+inherit/);
+		assert.match(tui.render().join("\n"), /Plan thinking\s+inherit/);
 		const message = notifications.at(-1)?.message ?? "";
 		assert.match(message, /previous value remains/i);
 		assert.equal(
@@ -198,11 +290,72 @@ test("Invalid Plan settings are read-only and save failures roll back displayed 
 	});
 });
 
-test("Plan settings adapt to RPC and disposal aborts an in-flight save", async () => {
+test("RPC Settings changes retention and export destination with the same flat navigation", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-rpc-"));
+	const settingsPath = join(directory, "pi-plan-mode.json");
+	try {
+		const rpc = createRpcHarness([
+			{
+				kind: "select",
+				options: [
+					"Plan thinking (inherit)",
+					"Plan tools (Automatic safe built-ins)",
+					"After Implement (Keep plan active)",
+					"Export destination (PLAN.md)",
+					"Back",
+				],
+				response: "After Implement (Keep plan active)",
+			},
+			{
+				kind: "select",
+				options: [
+					"Plan thinking (inherit)",
+					"Plan tools (Automatic safe built-ins)",
+					"After Implement (Use plan for handoff only)",
+					"Export destination (PLAN.md)",
+					"Back",
+				],
+				response: "Export destination (PLAN.md)",
+			},
+			{
+				kind: "input",
+				placeholder: "PLAN.md",
+				response: "rpc/PLAN.md",
+			},
+			{
+				kind: "select",
+				options: [
+					"Plan thinking (inherit)",
+					"Plan tools (Automatic safe built-ins)",
+					"After Implement (Use plan for handoff only)",
+					"Export destination (rpc/PLAN.md)",
+					"Back",
+				],
+				response: undefined,
+			},
+		]);
+		const context = createMockContext({ cwd: directory, mode: "rpc", hasUI: true, ...rpc.ui });
+		const saved: PlanModeSettings[] = [];
+		await showPlanModeSettings(context.ctx, menuOptions(settingsPath, saved));
+		rpc.assertConsumed();
+		assert.equal(saved.at(-1)?.implementationPlanRetention, "clear-on-start");
+		assert.equal(saved.at(-1)?.defaultPlanExportPath, "rpc/PLAN.md");
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("Plan settings adapt to RPC cancellation and disposal aborts an in-flight save", async () => {
 	const rpc = createRpcHarness([
 		{
 			kind: "select",
-			options: ["Thinking level (inherit)", "Default tools (Automatic safe built-ins)", "Back"],
+			options: [
+				"Plan thinking (inherit)",
+				"Plan tools (Automatic safe built-ins)",
+				"After Implement (Keep plan active)",
+				"Export destination (PLAN.md)",
+				"Back",
+			],
 			response: undefined,
 		},
 	]);

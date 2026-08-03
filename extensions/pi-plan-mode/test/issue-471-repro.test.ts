@@ -58,7 +58,7 @@ test("active implementation state restores independently from Plan mode", () => 
 		STATE_ENTRY_TYPE,
 	);
 
-	assert.deepEqual(restored.activeImplementation, activeImplementation);
+	assert.deepEqual(restored.activeImplementation, { ...activeImplementation, retention: "keep" });
 	assert.deepEqual(restored.selectedToolNames, ["read"]);
 	assert.equal(restored.latestPlan, undefined);
 	assert.equal(restored.awaitingAction, false);
