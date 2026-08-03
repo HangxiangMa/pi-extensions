@@ -13,28 +13,30 @@ handoffs, continuation, completion, blocking, cancellation, stale-run protection
 terminal settlement. Extensions become thin product adapters that retain their commands, menus,
 settings, status language, and compatibility surfaces.
 
-The first composed workflow is:
+The first combined product is a standalone `pi-workflow` extension built from the engine's planning
+and managed-execution stages:
 
 ```text
 planning → plan ready → approved implementation → managed execution → verification → complete
 ```
 
-`pi-plan-mode` can run that workflow without requiring the `pi-goal` extension to be installed, while
-`pi-goal` uses the same managed-execution engine for direct `/goal` runs. Future debugging, review,
-migration, release, and other agent workflows should reuse the same stage engine only when concrete
-consumer evidence supports their semantics.
+`pi-plan-mode` remains the focused planning product, `pi-goal` remains the focused autonomous-goal
+product, and `pi-workflow` owns the end-to-end experience without importing or requiring either
+extension. Future debugging, review, migration, release, and other agent workflows should reuse the
+same stage engine only when concrete consumer evidence supports their semantics.
 
 ## Objectives
 
 - **Centralize workflow behavior** — Success: planning and managed-execution state transitions,
   persistence, lifecycle guards, continuation, and terminal settlement have one implementation in
   `@narumitw/pi-workflow-engine`, not extension-local copies.
-- **Keep extensions thin and independent** — Success: `pi-plan-mode` and `pi-goal` depend on the
-  library but never import or inspect one another; each remains installable and functional alone.
-- **Compose planning and execution atomically** — Success: approving a plan moves one persisted
-  workflow from planning to managed execution without an event-channel handoff, duplicate objective,
-  or two completion owners.
-- **Preserve public behavior during migration** — Success: existing `/plan`, `/goal`, tool names,
+- **Keep extensions thin and independent** — Success: `pi-plan-mode`, `pi-goal`, and `pi-workflow`
+  depend on the library but never import or inspect one another; each remains installable and
+  functional alone.
+- **Compose planning and execution atomically** — Success: `pi-workflow` moves one persisted workflow
+  from planning to managed execution without an event-channel handoff, duplicate objective, or two
+  completion owners.
+- **Preserve focused products during migration** — Success: existing `/plan`, `/goal`, tool names,
   settings, session restoration, statuses, and supported non-TUI behavior remain compatible unless a
   separately approved migration explicitly changes them.
 - **Generalize from proven stages** — Success: broader workflow primitives enter the public engine
@@ -42,7 +44,8 @@ consumer evidence supports their semantics.
 
 ## Current State
 
-- No `pi-workflow-engine` package or shared workflow engine exists.
+- No `pi-workflow-engine` package, shared workflow engine, or standalone `pi-workflow` extension
+  exists.
 - `pi-plan-mode` owns planning, approval, restrictive tools, exact plan persistence,
   compaction-safe active-plan context, and manual implementation clearing. Its accepted plan can be
   up to 50,000 characters.
@@ -55,7 +58,7 @@ consumer evidence supports their semantics.
 - Pi exposes one process-wide active-tool array. Restrictive Plan mode currently wins, and pi-goal
   pauses rather than re-adding its terminal tools over another extension's selection.
 - Repository policy prohibits extension-to-extension dependencies and extension-specific runtime
-  assumptions. Both extensions may depend on a publishable non-extension library.
+  assumptions. Focused and combined products may all depend on a publishable non-extension library.
 - The repository's existing publishable library pattern requires emitted JavaScript and declarations
   and forbids `pi.extensions` in library manifests.
 
@@ -77,13 +80,19 @@ pi-plan-mode
 ├─ /plan and --plan public interfaces
 ├─ Plan-mode menus, settings, wording, and status presentation
 ├─ compatibility tool names and result rendering
-└─ workflow configuration using planning and managed-execution stages
+└─ focused planning workflow plus its existing implementation-handoff compatibility
 
 pi-goal
 ├─ /goal public interface and queue manager
 ├─ Goal menus, settings, wording, and status presentation
 ├─ compatibility tool names and managed-run RPC adapter
-└─ workflow configuration using the managed-execution stage
+└─ focused workflow using the managed-execution stage
+
+experimental/pi-workflow
+├─ /workflow public interface and one unified status surface
+├─ workflow-specific menus, settings, wording, and tool namespace
+├─ planning and managed-execution stage composition
+└─ standalone end-to-end product with no extension dependencies
 ```
 
 The engine owns workflow policy and invariants. Extensions own product-specific interaction and
@@ -92,9 +101,11 @@ and cannot be represented as stage configuration or an engine-owned transition.
 
 ## Guiding Principles
 
-- **Engine, not broker:** Plan mode does not submit work to an installed Goal provider. Both products
-  instantiate the same engine-owned stages.
-- **One state machine:** an approved Plan implementation is one workflow transition, not two
+- **Engine, not broker:** Plan mode does not submit work to an installed Goal provider. Focused and
+  combined products instantiate engine-owned stages directly.
+- **Focused products, one combined product:** `pi-plan-mode` and `pi-goal` stay narrow;
+  `pi-workflow` alone owns the end-to-end Plan-to-Execution experience.
+- **One state machine:** an approved `pi-workflow` implementation is one workflow transition, not two
   extension states synchronized by events.
 - **One completion owner:** the active execution stage alone can complete the workflow; completion
   clears its accepted-plan artifact and presentation state atomically.
@@ -110,99 +121,104 @@ and cannot be represented as stage configuration or an engine-owned transition.
 
 ## Roadmap
 
-### Phase 1: Build the workflow engine foundation
+### Phase 1: Establish pi-workflow-engine
 
-- [ ] `@narumitw/pi-workflow-engine` exists as a publishable non-extension library with a bounded API
+- [ ] `@narumitw/pi-workflow-engine` exists as a publishable non-extension library with bounded APIs
   for workflow definitions, stage transitions, run/stage identities, persistence snapshots, context
   artifacts, cancellation, observation, and terminal settlement.
 - [ ] The engine defines a deterministic base state machine covering idle, active stage, paused,
   blocked, failed, complete, and cleared outcomes with exactly-once terminal publication and stale
   run/stage rejection.
-- [ ] Session replacement, fork restoration, shutdown, synchronous event re-entry, delayed
-  continuations, and repeated cleanup have explicit engine contracts and deterministic tests.
-- [ ] Runtime instances do not rely on accidental module singleton behavior; ownership and any
-  cross-adapter coordination remain correct when package versions are independently installed or
-  resolved.
+- [ ] Initial planning and managed-execution stages provide the behavior required by the combined
+  product, backed by characterization contracts derived from pi-plan-mode and pi-goal without yet
+  changing either focused extension's public implementation.
+- [ ] Session replacement, fork restoration, shutdown, compaction, synchronous re-entry, delayed
+  continuation, restrictive tool ownership, and repeated cleanup have explicit engine contracts and
+  deterministic tests.
+- [ ] Engine instances do not rely on accidental module-singleton behavior when independently
+  installed extensions resolve different compatible library copies.
 - [ ] The package emits JavaScript and declarations, exposes only supported root exports, declares no
   Pi extension entrypoint, passes focused checks, and produces an inspected dry-run tarball.
 
-**Outcome:** A small but real workflow engine can host one migrated stage without embedding Plan or
-Goal product UI and without reducing the package to shared types or event strings.
+**Outcome:** The engine can host both stages needed for a standalone combined workflow while the
+existing focused extensions remain unchanged and available as behavioral references.
 
-### Phase 2: Move managed execution from pi-goal into the engine
+### Phase 2: Build experimental/pi-workflow from both stages
 
-- [ ] The engine's managed-execution stage owns the run identity, continuation intent, completion and
-  blocked audits, stale-tool guards, pause/resume/cancel transitions, interruption recovery,
-  compaction behavior, no-progress protection, usage accounting, optional budgets, and terminal
-  settlement currently coordinated by pi-goal.
-- [ ] `pi-goal` constructs and presents engine workflows through a thin adapter while preserving
-  direct `/goal`, queue behavior, public `goal_complete` and `goal_blocked` contracts, settings,
-  statuses, session migration, and supported TUI/RPC/non-interactive behavior.
-- [ ] The existing package-specific managed-run RPC either remains as a compatibility adapter over the
-  engine or follows a separately approved migration; it is no longer the owner of Goal lifecycle
-  semantics.
+- [ ] `experimental/pi-workflow` exists as an independently installable extension with a visible
+  experimental warning, unique `/workflow` command and tool namespace, one state-aware manager, and
+  no dependency on another extension package.
+- [ ] Approving implementation transitions one engine-owned workflow from planning into managed
+  execution without pi-goal installation, provider discovery, package-specific events, copied Goal
+  objectives, or a second completion owner.
+- [ ] The accepted plan remains an engine-owned artifact across implementation turns and compaction;
+  successful completion clears context, persistence, widget, and footer atomically, while stopped or
+  failed states retain one resumable workflow.
+- [ ] TUI, RPC, print, and JSON behavior is explicit, and package contents, status ownership,
+  cancellation, replacement, reload, fork, and shutdown remain correct when neither focused extension
+  is installed.
+- [ ] End-to-end tests and an isolated Pi smoke prove planning, approval, long implementation,
+  compaction, verification, explicit completion, and automatic workflow cleanup.
+
+**Outcome:** Users can try one coherent Plan-to-Execution product while the engine is still evaluated
+independently of migrations in pi-goal and pi-plan-mode.
+
+### Phase 3: Make pi-goal use the managed-execution stage
+
+- [ ] `pi-goal` constructs managed-execution workflows through the engine while preserving direct
+  `/goal`, queue behavior, `goal_complete`, `goal_blocked`, settings, statuses, session migration, and
+  supported TUI/RPC/non-interactive behavior.
+- [ ] Run identity, continuation intent, completion and blocked audits, stale-tool guards,
+  pause/resume/cancel, interruption recovery, compaction, no-progress protection, usage accounting,
+  optional budgets, and terminal settlement have one engine implementation.
+- [ ] The existing package-specific managed-run RPC remains a compatibility adapter over the engine or
+  follows a separately approved migration; it no longer owns Goal lifecycle semantics.
 - [ ] Characterization, migration, restore, queue, tool-policy, retry, compaction, budget, no-progress,
-  and runtime smoke evidence show no Goal behavior regression and no duplicate implementation left
-  behind in the extension.
+  and runtime smoke evidence show no Goal regression, and the replaced extension-local engine logic
+  is removed rather than retained in parallel.
 
-**Outcome:** `pi-goal` becomes the first thin product adapter, and the production-proven autonomous
-execution engine is reusable without installing or calling the pi-goal extension.
+**Outcome:** pi-goal becomes a focused product adapter over the same managed-execution stage already
+proven by experimental pi-workflow.
 
-### Phase 3: Move planning from pi-plan-mode into the engine
+### Phase 4: Make pi-plan-mode use the planning stage
 
-- [ ] The engine's planning stage owns planning/ready transitions, accepted-plan normalization,
-  planning completion, question/approval lifecycle, restrictive tool-mode restoration, exact plan
-  artifact persistence, compaction-safe context, and stale workflow protection.
-- [ ] `pi-plan-mode` constructs and presents the engine planning workflow while preserving `/plan`,
+- [ ] `pi-plan-mode` constructs planning workflows through the engine while preserving `/plan`,
   `--plan`, `plan_mode_question`, `plan_mode_complete`, saved plans, export, settings, menus, statuses,
   and supported TUI/RPC/non-interactive behavior.
-- [ ] Ready, saved, active implementation, clear, replace, resume, reload, fork, compaction, and failed
-  delivery behavior are reconstructed through engine state rather than parallel extension-local
-  lifecycle logic.
-- [ ] Focused and runtime smoke evidence proves byte-exact accepted-plan preservation and confirms the
-  extension no longer owns a second planning state machine.
+- [ ] Planning/ready transitions, accepted-plan normalization, question and approval lifecycle,
+  restrictive tool restoration, exact plan artifact persistence, compaction-safe context, and stale
+  workflow protection have one engine implementation.
+- [ ] pi-plan-mode remains the focused planning product and retains its existing ordinary
+  implementation-handoff compatibility; it does not become another complete Plan-to-Execution
+  product.
+- [ ] Ready, saved, handoff, clear, replace, resume, reload, fork, compaction, and failed-delivery
+  behavior migrate without unapproved changes, and replaced extension-local planning logic is removed.
+- [ ] Focused tests and runtime smokes prove byte-exact plan preservation and compatibility across the
+  migration.
 
-**Outcome:** Both existing extensions use the same engine architecture while retaining their public
-product surfaces and independent installation.
+**Outcome:** Both focused extensions share the engine with pi-workflow while keeping distinct product
+roles: planning-only, goal-only, and combined end-to-end workflow.
 
-### Phase 4: Compose Plan-to-Execution as one workflow
+### Phase 5: Soak pi-workflow and decide whether it is the primary successor
 
-- [ ] Approving implementation transitions the same engine-owned workflow from planning into the
-  managed-execution stage; no pi-goal installation, provider discovery, package-specific event, or
-  copied Goal objective is required.
-- [ ] The accepted plan remains an engine-owned workflow artifact, avoiding pi-goal's 4,000-character
-  objective limit and preserving the exact plan across implementation turns and compaction.
-- [ ] Managed execution uses one completion and blocked lifecycle internally while pi-plan-mode
-  exposes phase-appropriate compatibility tools; models never receive two valid completion owners for
-  the same run.
-- [ ] Successful execution atomically clears the active plan context, persistence, widget, and footer;
-  paused, blocked, usage-limited, budget-limited, interrupted, and failed states retain a resumable
-  workflow according to one documented state table.
-- [ ] Installing both pi-plan-mode and pi-goal preserves independent commands while the engine safely
-  rejects or sequences overlapping autonomous workflows without widening restrictive tool policy.
-- [ ] End-to-end tests and an isolated Pi smoke prove planning, approval, long implementation,
-  compaction, verification, explicit completion, and automatic Plan footer cleanup.
+- [ ] Co-installation tests cover every supported combination of pi-workflow, pi-plan-mode, and
+  pi-goal; unique commands and tools remain distinguishable, restrictive policy is never widened, and
+  overlapping autonomous workflows follow one explicit reject-or-serialize decision.
+- [ ] Representative real tasks establish whether pi-workflow improves completion, recovery, and
+  cleanup without making focused planning or direct Goal usage harder; unsupported adoption targets
+  remain explicit unknowns.
+- [ ] Menu structure, defaults, pause/resume behavior, settings ownership, status language,
+  compatibility, and migration guidance receive an explicit stable-product decision based on soak
+  evidence.
+- [ ] Maintainers explicitly decide whether pi-workflow becomes the primary successor, remains a third
+  focused option, or stays experimental. pi-plan-mode and pi-goal remain active throughout the soak
+  and are deprecated only by a separate approved decision.
+- [ ] Engine, extension, and compatibility checks plus package dry runs and representative Pi smokes
+  establish release readiness without implying publication, tags, visibility changes, or version
+  changes.
 
-**Outcome:** The original user journey is complete: Plan mode gains pi-goal-grade execution behavior
-through shared code, not extension integration, and execution completion closes the plan exactly once.
-
-### Phase 5: Qualify broader workflow composition
-
-- [ ] A second composed workflow—such as review/fix/re-review, reproduce/fix/regression, migration with
-  rollback, or approval-gated release—proves which stage, approval, artifact, retry, and resume
-  semantics are reusable beyond Plan and Goal.
-- [ ] Only primitives demonstrated by at least two compatible consumers become public; domain prompts,
-  findings, migration checkpoints, release authorization, UI, and settings remain with their owning
-  adapters or stage modules.
-- [ ] Sequential stages and bounded loops receive a stable composition contract before any broader
-  graph model; arbitrary DAG scheduling, parallel jobs, and distributed execution remain excluded
-  unless later evidence justifies a separate product.
-- [ ] Engine health, compatibility, package boundaries, and consumer migrations are verified through
-  package tests, affected extension suites, root `npm run check`, package dry runs, and representative
-  Pi smokes before any separately approved stable publication.
-
-**Outcome:** `pi-workflow-engine` evolves from a shared Plan/Goal engine into a broader agent-workflow
-engine through demonstrated reuse rather than speculative orchestration features.
+**Outcome:** The repository has an evidence-backed decision on whether pi-workflow should become the
+primary product, with a deliberate coexistence or migration path for both focused predecessors.
 
 ## Success Metrics
 
@@ -216,6 +232,8 @@ engine through demonstrated reuse rather than speculative orchestration features
 | Plan fidelity after implementation compaction | Plan-mode-specific support | Byte-exact engine artifact | End-to-end smoke and context assertions |
 | Valid completion owners for one active phase | Potentially separate Plan/Goal concepts | Exactly 1 | Tool-schema and transition tests |
 | Existing `/plan` and `/goal` behavior lost during migration | Current baseline | 0 unapproved losses | Characterization and compatibility suites |
+| Focused extension dependencies imported by pi-workflow | No combined product | 0 | Boundary checks and package review |
+| End-to-end workflows with one completion owner | No combined product | Every pi-workflow run | Integration tests and Pi smokes |
 | Broader public primitives without two consumers | No engine | 0 | API review and roadmap evidence |
 
 Adoption and task-completion-rate targets remain TBD because the repository has no telemetry or
@@ -226,21 +244,24 @@ validated usage baseline.
 | Risk or dependency | Impact | Mitigation / decision |
 | --- | --- | --- |
 | “All logic” turns the engine into a monolith | A shared package could become harder to change than the extensions | Separate core lifecycle, planning stage, managed-execution stage, accounting, persistence, and composition by responsibility; keep product UI outside. |
-| pi-goal behavior is large and lifecycle-sensitive | A big-bang extraction could regress retries, budgets, queues, or stale guards | Establish characterization tests and migrate managed execution in bounded, reversible slices before Plan adoption. |
+| pi-goal behavior is large and lifecycle-sensitive | A big-bang extraction could regress retries, budgets, queues, or stale guards | Establish characterization tests, prove the stage in pi-workflow, and migrate pi-goal in bounded reversible slices. |
+| Initial engine stages temporarily coexist with extension-local logic | Behavior can drift before focused migrations complete | Freeze characterization contracts, keep Phase 3–4 migrations sequenced, and remove replaced logic rather than maintaining permanent forks. |
 | Public tools and commands belong to extensions | Moving logic could accidentally break names, schemas, or rendering | Keep adapter-owned registrations and map them onto engine operations with exact compatibility tests. |
 | Pi's global active-tool array has no composable ownership | Two workflows could widen or erase another policy | Keep restrictive-wins semantics, activate only at safe boundaries, and centralize exact snapshot/rollback behavior in the engine. |
 | Plan and Goal persisted schemas already exist | Runtime state could strand resumed sessions or forks | Define explicit import/migration adapters and test legacy, current, clear-marker, and malformed branch states. |
 | Plan and Goal have different size and context contracts | A naïve common objective could truncate plans or inflate every continuation | Model accepted plans as workflow artifacts distinct from bounded execution objectives. |
 | Multiple installed copies cannot safely share module globals | Cross-extension coordination could become version- or resolver-dependent | Make engine ownership explicit through Pi/session surfaces; never require one process-global JavaScript singleton for correctness. |
 | Existing managed-run RPC is documented behavior | Extraction could create an unapproved breaking change | Preserve it as a pi-goal adapter until a separately approved compatibility decision says otherwise. |
+| Three product adapters can overlap in commands, tools, settings, and user expectations | Co-installation could be confusing even without code coupling | Give pi-workflow a unique namespace, test every supported combination, and make Phase 5 own the coexistence or successor decision. |
 | Source modules already contain dense lifecycle logic | Extraction could create files over repository size limits or shallow wrappers | Design deep stage modules with bounded interfaces and audit every source file over 1,000 lines during migration. |
 
 ## Non-Goals
 
 - Make pi-plan-mode call an installed pi-goal extension through package-specific events, commands,
   tools, settings, or persisted state.
-- Create a third extension that duplicates or coordinates the two existing extensions.
-- Keep separate Plan and Goal engines behind a transport-only broker.
+- Make pi-workflow import, invoke, inspect, or require pi-plan-mode or pi-goal.
+- Duplicate Plan and Goal engines inside pi-workflow or keep separate engines behind a transport-only
+  broker.
 - Move product-specific commands, menus, settings UI, wording, icons, or compatibility aliases into the
   engine.
 - Build an arbitrary workflow DSL, CI/CD engine, cron service, distributed scheduler, or unrestricted
@@ -255,13 +276,16 @@ validated usage baseline.
   module boundaries remain proposed.
 - “All logic” means all reusable workflow lifecycle and stage behavior. Product interaction surfaces
   and compatibility names remain in thin extension adapters.
-- It is unknown whether pi-plan-mode should expose managed execution as its only implementation path
-  or retain the current simpler handoff as a compatibility option during rollout.
-- It is unknown whether overlapping `/goal` and `/plan` workflows should be rejected globally,
-  serialized, or allowed when they demonstrably own unrelated work. Phase 4 requires an explicit
-  decision and verification.
-- Candidate second workflows are illustrative, not commitments. Their inclusion depends on concrete
-  consumer demand and compatible lifecycle evidence.
+- `experimental/pi-workflow` is the approved initial combined product and must show a user-facing
+  warning while its command, settings, and persisted workflow contract remain experimental.
+- pi-plan-mode remains focused on planning and retains its existing ordinary implementation handoff;
+  it does not become a second complete Plan-to-Execution product.
+- It is unknown whether overlapping `/workflow`, `/goal`, and `/plan` runs should be rejected globally
+  or serialized. Phase 5 requires an explicit decision and verification.
+- It is unknown whether pi-workflow should become the primary successor, remain a third option, or
+  stay experimental. No predecessor deprecation is implied before Phase 5 evidence and approval.
+- Broader workflows are deferred beyond this roadmap until concrete consumer demand proves reusable
+  stage semantics.
 - No delivery dates, owners, staffing assumptions, publication schedule, or release commitment were
   provided.
 
@@ -271,6 +295,10 @@ validated usage baseline.
   the package owns workflow state machines and stage behavior rather than only hosting an execution
   environment.
 - **2026-08-03 — Choose a shared engine, not a provider broker:** Move reusable Plan and Goal workflow
-  logic into the engine. `pi-plan-mode` and `pi-goal` both consume it as thin product adapters;
-  Plan-to-Execution composition occurs inside one engine-owned workflow and does not require the
-  other extension to be installed.
+  logic into the engine. Focused and combined products consume it as thin adapters rather than
+  coordinating extension packages.
+- **2026-08-03 — Add a standalone combined product:** Build `experimental/pi-workflow` in Phase 2 from
+  planning and managed-execution stages, then migrate pi-goal and pi-plan-mode in Phases 3 and 4.
+  pi-plan-mode remains focused rather than becoming another complete Plan-to-Execution product.
+- **2026-08-03 — Defer successor selection:** Keep pi-plan-mode and pi-goal active while pi-workflow
+  soaks; decide its primary-successor, coexistence, or continued-experiment role only in Phase 5.
