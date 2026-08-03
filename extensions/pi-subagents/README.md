@@ -253,11 +253,11 @@ without launching or charging a child.
 
 | Value | Behavior |
 | --- | --- |
-| `"project-context"` (default) | Keep ordinary user context/system files and trusted project `AGENTS.md`, `CLAUDE.md`, and `SYSTEM.md`; disable skills and prompt templates |
+| `"project-context"` (default) | Keep ordinary user context/system files and trusted project `AGENTS.md`, `CLAUDE.md`, `SYSTEM.md`, and `APPEND_SYSTEM.md`; disable skills and prompt templates |
 | `"none"` | Use only the package consultation base, selected agent prompt, and enforced read-only instruction |
 | `"all"` | Keep ordinarily discoverable trusted context/system/append-system files, skills, and prompt templates |
 
-Extensions remain disabled for all three values. A current target uses the session's effective project trust, including session-only or CLI overrides. An external target uses the nearest saved trust decision. For an untrusted, explicitly denied, unsaved, or trust-error target, consultation remains available when `cwdPolicy.consultation` permits it but automatically downgrades to `resources: "none"`. This also disables context files because Pi does not protect `AGENTS.md` and `CLAUDE.md` with project trust alone. A saved-trusted external target uses the configured resource policy and discovers `SYSTEM.md`, `APPEND_SYSTEM.md`, and ordinary child context from that target rather than the parent workspace.
+Extensions remain disabled for all three values. Pi core owns system-prompt source precedence: a trusted project prompt wins over the global prompt, with the global prompt used as fallback. A current target uses the session's effective project trust, including session-only or CLI overrides. An external target uses the nearest saved trust decision. For an untrusted, explicitly denied, unsaved, or trust-error target, consultation remains available when `cwdPolicy.consultation` permits it but automatically downgrades to `resources: "none"`. This also disables context files because Pi does not protect `AGENTS.md` and `CLAUDE.md` with project trust alone. A saved-trusted external target uses the configured resource policy and discovers `SYSTEM.md`, `APPEND_SYSTEM.md`, and ordinary child context from that target rather than the parent workspace.
 
 Both settings are user-owned in `~/.pi/agent/pi-subagents.json`; projects cannot override them. `cwdPolicy.consultation: "current-workspace"` rejects every canonical external target before agent discovery or launch even when that target is saved-trusted. This is not a path sandbox: read-only tools can still read an explicitly requested accessible absolute path.
 
@@ -459,10 +459,10 @@ Stateful execution uses a transport boundary:
 - `subprocess` is the default compatibility and rollback path.
 - `in-process` uses only public Pi SDK APIs: `createAgentSession()`, `SessionManager.inMemory()`, `DefaultResourceLoader`, and normal session lifecycle methods. It isolates conversation/tool selection, not memory or crashes; child failures share the parent Node.js process.
 - Child resource loading sets `noExtensions: true`, preventing recursive `pi-subagents` loading and duplicate extension side effects while retaining trust-eligible context/skill resources and the selected agent prompt. Both transports receive the same resolved target-trust boolean: subprocess children get explicit `--approve`/`--no-approve`, and in-process children set the same `SettingsManager.projectTrusted` value.
-- Agent model, thinking level, and built-in tool allow-list overrides are applied when the child is created. Parent model/thinking changes are snapshotted for subsequently created children; an existing child keeps its own session configuration.
+- Agent model strings use Pi core's CLI resolver, including provider/model patterns, fuzzy matching, custom provider model IDs, and `:<thinking>` suffixes. Thinking level and built-in tool allow-list overrides are applied when the child is created. Parent model/thinking changes are snapshotted for subsequently created children; an existing child keeps its own session configuration.
 - Extension/custom tool names are rejected in-process with an actionable recommendation to use `subprocess`; permissions are never silently widened.
 - Timeout, parent abort, close, expiry, and session shutdown abort/dispose owned child sessions. A child that does not settle after abort grace is discarded rather than reused.
-- In-process startup failures do not silently retry through subprocesses, preventing duplicate side effects.
+- In-process startup failures do not silently retry through subprocesses, preventing duplicate side effects. If the loaded Pi core lacks public `ModelRuntime` or `resolveCliModel` support, startup fails with an actionable instruction to select `stateful.transport: "subprocess"`.
 
 No private Pi imports, runtime casts, or `ExtensionAPI` monkey-patching are used. Approval policy, sandbox profile, provider-header hooks, extension state, global scheduling, and parent/child transcript switching are not inherited or provided by the in-process transport.
 
@@ -610,7 +610,7 @@ For `subagent_spawn`, the root agent should choose the lowest sufficient level:
 
 Blocking thinking precedence is: task/chain step/aggregator `thinkingLevel` → top-level `thinkingLevel` → agent default from config or frontmatter → Pi subprocess default.
 
-Stateful spawn precedence is: `subagent_spawn.thinkingLevel` → agent default from config or frontmatter → transport fallback. The subprocess transport then uses spawned Pi model/default resolution. The in-process transport uses a configured model thinking suffix and then the parent thinking snapshot captured when the child is created. An explicit spawn value is retained for the agent lifecycle and wins over all of those fallbacks.
+Stateful spawn precedence is: `subagent_spawn.thinkingLevel` → agent default from config or frontmatter → transport fallback. The subprocess transport then uses spawned Pi model/default resolution. The in-process transport delegates configured model parsing to the loaded Pi core and uses its model thinking suffix before the parent thinking snapshot captured when the child is created. An explicit spawn value is retained for the agent lifecycle and wins over all of those fallbacks.
 
 Omit `thinkingLevel` to preserve existing behavior. Reported stateful details show the requested level, not a guarantee of the provider's effective value. Pi still owns model capability clamping; `pi-subagents` does not duplicate capability detection.
 

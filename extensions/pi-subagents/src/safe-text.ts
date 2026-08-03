@@ -1,10 +1,10 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_MAX_LINES, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { redactPrivateText } from "./context.js";
 import { DEFAULT_MAX_OUTPUT_BYTES, TRUNCATION_MARKER, truncateUtf8 } from "./limits.js";
 
-export const DEFAULT_MAX_OUTPUT_LINES = 2_000;
+export const DEFAULT_MAX_OUTPUT_LINES = DEFAULT_MAX_LINES;
 
 export function safeTerminalText(value: string): string {
 	return (

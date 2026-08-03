@@ -1,6 +1,10 @@
 import * as path from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	CONFIG_DIR_NAME,
+	type ExtensionAPI,
+	type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import {
 	type AgentConfig,
@@ -270,7 +274,9 @@ function projectAgent(
 		scope: agent.source === "project" ? "project" : "user",
 		path:
 			agent.source === "project"
-				? safeTerminalLine(path.posix.join(".pi", "agents", path.basename(agent.filePath)))
+				? safeTerminalLine(
+						path.posix.join(CONFIG_DIR_NAME, "agents", path.basename(agent.filePath)),
+					)
 				: safeDisplayPath(agent.filePath, ctx.cwd),
 		model: agent.model ? boundedPrivateText(agent.model, 256) : undefined,
 		thinkingLevel: agent.thinkingLevel,

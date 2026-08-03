@@ -12,7 +12,11 @@
  * Uses JSON mode to capture structured output from subagents.
  */
 
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import {
+	CONFIG_DIR_NAME,
+	type ExtensionAPI,
+	type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import {
 	type ConsultationCwdPolicy,
 	type ConsultResourcePolicy,
@@ -137,7 +141,7 @@ function registerBlockingSubagent(
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
 			"Parallel mode may include an aggregator fan-in step that receives all task outputs. Use subagent_consult instead for one synchronous child that must be executor-constrained to read-only tools.",
 			'Default agent scope is "user" (from ~/.pi/agent/agents).',
-			'To enable project-local agents in .pi/agents, pass agentScope: "both" (or "project") as a top-level argument for that call.',
+			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, pass agentScope: "both" (or "project") as a top-level argument for that call.`,
 			`Working-directory target policy: ${getSettings()?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY}. This controls launch targets and protected project resources, not filesystem access or sandboxing.`,
 		].join(" ");
 	const definition: ToolDefinition<typeof SubagentParams, SubagentDetails> = {

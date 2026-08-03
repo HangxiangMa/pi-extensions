@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { SubagentSettings } from "../src/agents.js";
-import { type ConsultChildRequest, registerSubagentConsult } from "../src/consult.js";
+import {
+	type ConsultChildRequest,
+	type RegisterSubagentConsultOptions,
+	registerSubagentConsult,
+} from "../src/consult.js";
 import type { SingleResult } from "../src/runner.js";
 
 function childResult(overrides: Partial<SingleResult> = {}): SingleResult {
@@ -37,6 +41,9 @@ function setup(
 		settings?: SubagentSettings;
 		runChild?: (request: ConsultChildRequest) => Promise<SingleResult>;
 		invocationOverride?: { command: string; argsPrefix?: string[] };
+		resolveResourceLaunchPolicy?: NonNullable<
+			RegisterSubagentConsultOptions["resolveResourceLaunchPolicy"]
+		>;
 	} = {},
 ) {
 	const mock = createMockPi();
@@ -54,6 +61,9 @@ function setup(
 		getSettings: () => options.settings,
 		invocationOverride: options.invocationOverride,
 		...(runChild ? { runChild } : {}),
+		...(options.resolveResourceLaunchPolicy
+			? { resolveResourceLaunchPolicy: options.resolveResourceLaunchPolicy }
+			: {}),
 	});
 	const tool = mock.tools.find((candidate) => candidate.name === "subagent_consult") as
 		| {
@@ -288,6 +298,92 @@ test("subagent_consult emits safe starting and running progress projections", as
 	assert.equal(final.details.progress, undefined);
 });
 
+test("subagent_consult revalidates cancellation after delayed resource setup", async () => {
+	let release!: () => void;
+	const delayed = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const controller = new AbortController();
+	const { tool, requests } = setup({
+		settings: { consult: { resources: "all" } },
+		resolveResourceLaunchPolicy: async () => {
+			await delayed;
+			return { disableExtensions: true, projectTrust: true };
+		},
+	});
+	const running = execute(
+		tool,
+		{ agent: "worker", task: "inspect" },
+		createMockContext({ isProjectTrusted: () => true }).ctx,
+		controller.signal,
+	);
+	controller.abort();
+	release();
+	await assert.rejects(running, (error) => error instanceof Error && error.name === "AbortError");
+	assert.equal(requests.length, 0);
+});
+
+test("subagent_consult revalidates session replacement after delayed resource setup", async () => {
+	let release!: () => void;
+	const delayed = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const { tool, mock, requests } = setup({
+		settings: { consult: { resources: "all" } },
+		resolveResourceLaunchPolicy: async () => {
+			await delayed;
+			return { disableExtensions: true, projectTrust: true };
+		},
+	});
+	const running = execute(
+		tool,
+		{ agent: "worker", task: "inspect" },
+		createMockContext({ isProjectTrusted: () => true }).ctx,
+	);
+	await Promise.resolve();
+	const replacement = Promise.all(
+		(mock.events.get("session_start") ?? []).map((handler) => handler({}, createMockContext().ctx)),
+	);
+	release();
+	await replacement;
+	await assert.rejects(running, (error) => error instanceof Error && error.name === "AbortError");
+	assert.equal(requests.length, 0);
+});
+
+test("subagent_consult shutdown awaits delayed resource setup cleanup", async () => {
+	let release!: () => void;
+	const delayed = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const { tool, mock, requests } = setup({
+		settings: { consult: { resources: "all" } },
+		resolveResourceLaunchPolicy: async () => {
+			await delayed;
+			return { disableExtensions: true, projectTrust: true };
+		},
+	});
+	const running = execute(
+		tool,
+		{ agent: "worker", task: "inspect" },
+		createMockContext({ isProjectTrusted: () => true }).ctx,
+	);
+	await Promise.resolve();
+	let shutdownSettled = false;
+	const shutdown = Promise.all(
+		(mock.events.get("session_shutdown") ?? []).map((handler) =>
+			handler({}, createMockContext().ctx),
+		),
+	).then(() => {
+		shutdownSettled = true;
+	});
+	await new Promise((resolve) => setTimeout(resolve, 5));
+	assert.equal(shutdownSettled, false);
+	release();
+	await shutdown;
+	await assert.rejects(running, (error) => error instanceof Error && error.name === "AbortError");
+	assert.equal(requests.length, 0);
+});
+
 test("subagent_consult revalidates cancellation after its starting update", async () => {
 	const controller = new AbortController();
 	let launches = 0;
@@ -359,6 +455,59 @@ test("subagent_consult bounds explicitly loaded base system prompts", async () =
 		assert.match(prompt, /truncated by pi-subagents/);
 		assert.doesNotMatch(prompt, /SHOULD_NOT_SURVIVE/);
 	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("subagent_consult follows Pi core prompt precedence without loading project extensions", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-consult-core-resources-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	const agentDir = path.join(root, "agent-home");
+	const workspace = path.join(root, "workspace");
+	const marker = path.join(root, "extension-loaded");
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	mkdirSync(path.join(agentDir), { recursive: true });
+	mkdirSync(path.join(workspace, ".pi", "extensions"), { recursive: true });
+	writeFileSync(path.join(agentDir, "SYSTEM.md"), "global system");
+	writeFileSync(path.join(agentDir, "APPEND_SYSTEM.md"), "global append");
+	writeFileSync(path.join(workspace, ".pi", "SYSTEM.md"), "project system");
+	writeFileSync(path.join(workspace, ".pi", "APPEND_SYSTEM.md"), "project append");
+	writeFileSync(
+		path.join(workspace, ".pi", "extensions", "marker.js"),
+		`require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded")`,
+	);
+	try {
+		const trusted = createMockContext({ cwd: workspace, isProjectTrusted: () => true }).ctx;
+		for (const resources of ["project-context", "all"] as const) {
+			const instance = setup({ settings: { consult: { resources } } });
+			await execute(instance.tool, { agent: "worker", task: "inspect" }, trusted);
+			assert.equal(instance.requests[0].launchPolicy.baseSystemPrompt, "project system");
+			assert.deepEqual(instance.requests[0].launchPolicy.appendSystemPromptPaths, [
+				path.join(workspace, ".pi", "APPEND_SYSTEM.md"),
+			]);
+			assert.match(instance.requests[0].agent.systemPrompt, /read-only consultation/i);
+		}
+		assert.equal(existsSync(marker), false);
+		assert.equal(existsSync(path.join(workspace, "node_modules")), false);
+
+		rmSync(path.join(workspace, ".pi", "SYSTEM.md"));
+		rmSync(path.join(workspace, ".pi", "APPEND_SYSTEM.md"));
+		const fallback = setup({ settings: { consult: { resources: "all" } } });
+		await execute(fallback.tool, { agent: "worker", task: "inspect" }, trusted);
+		assert.equal(fallback.requests[0].launchPolicy.baseSystemPrompt, "global system");
+		assert.deepEqual(fallback.requests[0].launchPolicy.appendSystemPromptPaths, [
+			path.join(agentDir, "APPEND_SYSTEM.md"),
+		]);
+
+		const untrusted = createMockContext({ cwd: workspace, isProjectTrusted: () => false }).ctx;
+		const downgraded = setup({ settings: { consult: { resources: "all" } } });
+		await execute(downgraded.tool, { agent: "worker", task: "inspect" }, untrusted);
+		assert.equal(downgraded.requests[0].resourcePolicy, "none");
+		assert.equal(downgraded.requests[0].launchPolicy.projectTrust, false);
+		assert.equal(downgraded.requests[0].launchPolicy.appendSystemPromptPaths, undefined);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
 		rmSync(root, { recursive: true, force: true });
 	}
 });

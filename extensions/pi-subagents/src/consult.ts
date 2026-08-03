@@ -1,11 +1,10 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { StringEnum, type Usage } from "@earendil-works/pi-ai";
 import {
+	CONFIG_DIR_NAME,
 	type ExtensionAPI,
 	type ExtensionContext,
-	getAgentDir,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
@@ -22,6 +21,7 @@ import {
 } from "./agents.js";
 import { resolveConsultTools } from "./consult-policy.js";
 import { renderConsultCall, renderConsultResult } from "./consult-render.js";
+import { resolveConsultResourceLaunchPolicy } from "./consult-resources.js";
 import {
 	assertConsultationTargetAllowed,
 	type ResolvedSubagentTarget,
@@ -32,7 +32,6 @@ import {
 	DEFAULT_MAX_CONTEXT_BYTES,
 	DEFAULT_MAX_STDERR_BYTES,
 	MAX_SUBAGENT_TIMEOUT_MS,
-	truncateUtf8,
 } from "./limits.js";
 import {
 	type ChildLaunchPolicy,
@@ -88,6 +87,7 @@ export interface RegisterSubagentConsultOptions {
 	getSettings(): SubagentSettings | undefined;
 	runChild?: (request: ConsultChildRequest) => Promise<SingleResult>;
 	invocationOverride?: { command: string; argsPrefix?: string[] };
+	resolveResourceLaunchPolicy?: typeof resolveConsultResourceLaunchPolicy;
 }
 
 export interface ConsultProgressActivity {
@@ -159,8 +159,6 @@ const READ_ONLY_INSTRUCTION = [
 	"If the task asks for implementation, return analysis or instructions instead of claiming changes.",
 ].join("\n");
 
-const MINIMAL_CONSULT_SYSTEM_PROMPT =
-	"You are a read-only consultation assistant. Analyze the delegated task using only executor-provided capabilities and return a grounded answer.";
 const MAX_UNKNOWN_AGENT_NAME_BYTES = 128;
 
 export function registerSubagentConsult(
@@ -169,7 +167,7 @@ export function registerSubagentConsult(
 ): (catalog: string) => void {
 	let generation = 0;
 	const active = new Set<AbortController>();
-	const activeChildren = new Set<Promise<SingleResult>>();
+	const activeWork = new Set<Promise<unknown>>();
 	const cancelActive = (reason: string) => {
 		generation++;
 		for (const controller of active) {
@@ -177,14 +175,12 @@ export function registerSubagentConsult(
 		}
 		active.clear();
 	};
-	const cancelAndWaitForChildren = async (reason: string) => {
+	const cancelAndWaitForWork = async (reason: string) => {
 		cancelActive(reason);
-		await Promise.allSettled([...activeChildren]);
+		await Promise.allSettled([...activeWork]);
 	};
-	pi.on("session_start", () => cancelAndWaitForChildren("Subagent consultation session replaced"));
-	pi.on("session_shutdown", () =>
-		cancelAndWaitForChildren("Subagent consultation session shut down"),
-	);
+	pi.on("session_start", () => cancelAndWaitForWork("Subagent consultation session replaced"));
+	pi.on("session_shutdown", () => cancelAndWaitForWork("Subagent consultation session shut down"));
 
 	const baseDescription = () =>
 		`Run one ephemeral subagent synchronously under enforced read-only tool and resource policies and return its answer. The child can use only the effective subset of Pi's built-in read, grep, find, and ls tools. Shell commands, file writes, extension tools, detached lifecycle operations, and persistent agent state are disabled. Working-directory target policy: ${options.getSettings()?.cwdPolicy?.consultation ?? DEFAULT_CONSULTATION_CWD_POLICY}; configured trusted-target resources: ${options.getSettings()?.consult?.resources ?? DEFAULT_CONSULT_RESOURCE_POLICY}; allowed targets without effective trust inherit no target/project resources. This is not a filesystem sandbox.`;
@@ -217,11 +213,11 @@ export function registerSubagentConsult(
 						onUpdate?.(partial);
 					},
 					() => ownerGeneration === generation,
-					(child) => {
-						activeChildren.add(child);
-						void child.then(
-							() => activeChildren.delete(child),
-							() => activeChildren.delete(child),
+					(work) => {
+						activeWork.add(work);
+						void work.then(
+							() => activeWork.delete(work),
+							() => activeWork.delete(work),
 						);
 					},
 				);
@@ -334,7 +330,7 @@ async function executeConsult(
 	options: RegisterSubagentConsultOptions,
 	emitUpdate: (partial: AgentToolResult<ConsultDetails>) => void,
 	isCurrent: () => boolean,
-	trackChild: (child: Promise<SingleResult>) => void,
+	trackWork: (work: Promise<unknown>) => void,
 ): Promise<AgentToolResult<ConsultDetails>> {
 	if (
 		(operation.agentScope === "project" || operation.agentScope === "both") &&
@@ -360,7 +356,10 @@ async function executeConsult(
 				`Available agents for agentScope "${operation.agentScope}": ${formatAvailableConsultAgents(discovery)}`,
 		);
 	}
-	const setup = resolveConsultSetup(operation, agent, settings, target);
+	const setupWork = resolveConsultSetup(operation, agent, settings, target, options);
+	trackWork(setupWork);
+	const setup = await setupWork;
+	assertCurrentRequest(signal, isCurrent);
 
 	if (agent.source === "project" && operation.confirmProjectAgents) {
 		if (!ctx.hasUI) {
@@ -370,7 +369,7 @@ async function executeConsult(
 		}
 		const approved = await ctx.ui.confirm(
 			"Run project-local read-only agent?",
-			`Agent: ${safeTerminalLine(agent.name, 256)}\nSource: ${safeTerminalLine(path.posix.join(".pi", "agents", path.basename(agent.filePath)))}`,
+			`Agent: ${safeTerminalLine(agent.name, 256)}\nSource: ${safeTerminalLine(path.posix.join(CONFIG_DIR_NAME, "agents", path.basename(agent.filePath)))}`,
 		);
 		assertCurrentRequest(signal, isCurrent);
 		if (!approved) {
@@ -400,7 +399,7 @@ async function executeConsult(
 			emitUpdate(consultUpdate(result, setup.details));
 		},
 	});
-	trackChild(child);
+	trackWork(child);
 	const result = await child;
 	if (!isCurrent()) throw abortError("Subagent consultation owner was replaced");
 	if (result.aborted && !result.processStarted) {
@@ -432,18 +431,17 @@ async function executeConsult(
 	};
 }
 
-function resolveConsultSetup(
+async function resolveConsultSetup(
 	operation: ReturnType<typeof validateConsultParams>,
 	agent: AgentConfig,
 	settings: SubagentSettings | undefined,
 	target: ResolvedSubagentTarget,
+	options: RegisterSubagentConsultOptions,
 ) {
 	const requestedResourcePolicy = settings?.consult?.resources ?? DEFAULT_CONSULT_RESOURCE_POLICY;
 	const resourcePolicy = target.trust.projectTrusted ? requestedResourcePolicy : "none";
 	const effectiveTools = resolveConsultTools(agent.tools);
 	const projectTrusted = target.trust.projectTrusted;
-	const launchPolicy = resourceLaunchPolicy(resourcePolicy, projectTrusted, target.cwd);
-	launchPolicy.tools = effectiveTools;
 	const thinkingLevel = resolveSubagentThinkingLevel([agent], agent.name, operation.thinkingLevel);
 	const timeoutMs = operation.timeoutMs ?? agent.timeoutMs ?? resolveDefaultSubagentTimeoutMs();
 	if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_SUBAGENT_TIMEOUT_MS) {
@@ -451,6 +449,10 @@ function resolveConsultSetup(
 			`Subagent consultation timeout must be between 1 and ${MAX_SUBAGENT_TIMEOUT_MS}ms`,
 		);
 	}
+	const resolveResources =
+		options.resolveResourceLaunchPolicy ?? resolveConsultResourceLaunchPolicy;
+	const launchPolicy = await resolveResources(resourcePolicy, projectTrusted, target.cwd);
+	launchPolicy.tools = effectiveTools;
 	const childAgent: AgentConfig = {
 		...agent,
 		tools: effectiveTools,
@@ -623,95 +625,6 @@ function emptyProgressUsage(): ConsultProgress["usage"] {
 		contextTokens: 0,
 		turns: 0,
 	};
-}
-
-function resourceLaunchPolicy(
-	policy: ConsultResourcePolicy,
-	projectTrusted: boolean,
-	workspace: string,
-): ChildLaunchPolicy {
-	if (policy === "none") {
-		return {
-			disableExtensions: true,
-			disableSkills: true,
-			disablePromptTemplates: true,
-			disableContextFiles: true,
-			projectTrust: false,
-			baseSystemPrompt: MINIMAL_CONSULT_SYSTEM_PROMPT,
-		};
-	}
-	const baseSystemPrompt = discoverSystemPrompt(workspace, projectTrusted);
-	if (policy === "project-context") {
-		return {
-			disableExtensions: true,
-			disableSkills: true,
-			disablePromptTemplates: true,
-			disableContextFiles: !projectTrusted,
-			projectTrust: projectTrusted,
-			baseSystemPrompt,
-		};
-	}
-	return {
-		disableExtensions: true,
-		disableContextFiles: !projectTrusted,
-		projectTrust: projectTrusted,
-		baseSystemPrompt,
-		appendSystemPromptPaths: discoverAppendSystemPrompts(workspace, projectTrusted),
-	};
-}
-
-function discoverSystemPrompt(workspace: string, projectTrusted: boolean): string | undefined {
-	const candidates = [
-		...(projectTrusted ? [path.join(workspace, ".pi", "SYSTEM.md")] : []),
-		path.join(getAgentDir(), "SYSTEM.md"),
-	];
-	for (const candidate of candidates) {
-		const prompt = readBoundedOptionalPrompt(candidate);
-		if (prompt !== undefined) return prompt;
-	}
-	return undefined;
-}
-
-function readBoundedOptionalPrompt(filePath: string): string | undefined {
-	let descriptor: number | undefined;
-	try {
-		descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
-		if (!fs.fstatSync(descriptor).isFile()) return undefined;
-		const buffer = Buffer.alloc(DEFAULT_MAX_CONTEXT_BYTES + 4);
-		let bytesRead = 0;
-		while (bytesRead < buffer.length) {
-			const next = fs.readSync(descriptor, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
-			if (next === 0) break;
-			bytesRead += next;
-		}
-		return truncateUtf8(buffer.subarray(0, bytesRead).toString("utf8"), DEFAULT_MAX_CONTEXT_BYTES)
-			.text;
-	} catch {
-		// Match Pi resource discovery: an unreadable optional prompt is skipped.
-		return undefined;
-	} finally {
-		if (descriptor !== undefined) {
-			try {
-				fs.closeSync(descriptor);
-			} catch {
-				// Optional prompt cleanup must not make consultation discovery fail.
-			}
-		}
-	}
-}
-
-function discoverAppendSystemPrompts(cwd: string, projectTrusted: boolean): string[] {
-	const candidates = [
-		path.join(getAgentDir(), "APPEND_SYSTEM.md"),
-		...(projectTrusted ? [path.join(cwd, ".pi", "APPEND_SYSTEM.md")] : []),
-	];
-	return candidates.filter((candidate) => {
-		try {
-			return fs.statSync(candidate).isFile();
-		} catch {
-			return false;
-		}
-	});
 }
 
 function projectChildResult(result: SingleResult): Record<string, unknown> {
