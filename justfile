@@ -100,6 +100,9 @@ pack-caffeinate:
 pack-chrome-devtools:
     just pack chrome-devtools
 
+pack-codex-compact:
+    just pack codex-compact
+
 pack-accounts:
     just pack accounts
 
@@ -166,6 +169,9 @@ try-caffeinate:
 
 try-chrome-devtools:
     just try chrome-devtools
+
+try-codex-compact:
+    just try codex-compact
 
 try-accounts:
     just try accounts
