@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-analytics",
-	"version": "0.46.0",
+	"version": "0.47.0",
 	"description": "Local-first usage analytics for Pi models, skills, tools, and reliability.",
 	"type": "module",
 	"license": "MIT",
