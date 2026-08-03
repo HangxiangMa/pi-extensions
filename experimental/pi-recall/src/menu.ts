@@ -52,6 +52,7 @@ export function createRecallMenu(
 	let selectedRecordId: string | undefined;
 	let selectedScope: RecallScope = "cwd";
 	let pickerSelectedId: string | undefined;
+	let pickerQuery = "";
 
 	const getState = async ({ signal }: { signal: AbortSignal }): Promise<RecallMenuState> => {
 		try {
@@ -175,9 +176,23 @@ export function createRecallMenu(
 			chooseSaved: async ({ ctx, state, signal }) => {
 				const result =
 					ctx.mode === "tui"
-						? await chooseSavedInTui(ctx, state, signal, ownership, selectedScope, pickerSelectedId)
+						? await chooseSavedInTui(
+								ctx,
+								state,
+								signal,
+								ownership,
+								selectedScope,
+								pickerSelectedId,
+								pickerQuery,
+							)
 						: await chooseSavedInRpc(ctx, state, signal, selectedScope);
-				if (!result || result.kind === "back") return { kind: "stay" };
+				if (!result) return { kind: "stay" };
+				if (ctx.mode === "tui") {
+					selectedScope = result.scope;
+					pickerQuery = result.query ?? pickerQuery;
+					if ("selectedId" in result) pickerSelectedId = result.selectedId;
+				}
+				if (result.kind === "back") return { kind: "stay" };
 				if (result.kind === "close") return { kind: "close" };
 				selectedScope = result.scope;
 				pickerSelectedId = result.recordId;
@@ -294,6 +309,7 @@ async function chooseSavedInTui(
 	ownership: { isCurrent?: () => boolean },
 	initialScope: RecallScope,
 	initialSelectedId: string | undefined,
+	initialQuery: string,
 ): Promise<ScopedRecallPickerResult | undefined> {
 	const interaction = await runCustomInteraction<ScopedRecallPickerResult>(ctx, {
 		signal,
@@ -307,6 +323,7 @@ async function chooseSavedInTui(
 				current: state.current,
 				initialScope,
 				initialSelectedId,
+				initialQuery,
 				complete,
 			}),
 	});

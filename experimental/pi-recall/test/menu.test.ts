@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { resolveMenuScreen, runMenu } from "@narumitw/pi-tui-kit";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
@@ -162,6 +163,59 @@ test("TUI saved picker is lifecycle-owned and returns the Tab-selected scope", a
 	tui.press("tui.select.confirm");
 	assert.deepEqual(await choosing, { kind: "to", screen: "selected" });
 	assert.equal(tui.isOpen, false);
+});
+
+test("TUI query survives picker re-entry in one Recall flow and resets in a fresh flow", async () => {
+	const data = source();
+	const base = createMockContext({ hasUI: true, mode: "tui" }).ctx as unknown as {
+		ui: Record<string, unknown>;
+		[key: string]: unknown;
+	};
+	const controller = createRecallMenu(data);
+
+	const firstTui = createTuiHarness({ width: 72, rows: 18 });
+	const first = controller.menu.actions.chooseSaved({
+		ctx: { ...base, ui: { ...base.ui, custom: firstTui.custom } } as never,
+		state: await state(controller),
+		signal: new AbortController().signal,
+		itemId: "recall",
+	});
+	await firstTui.waitForOpen();
+	firstTui.type("saved-a");
+	assert.match(stripVTControlCharacters(firstTui.render().join("\n")), /1 match/);
+	firstTui.press("tui.select.confirm");
+	assert.deepEqual(await first, { kind: "to", screen: "selected" });
+
+	const reopenedTui = createTuiHarness({ width: 72, rows: 18 });
+	const reopened = controller.menu.actions.chooseSaved({
+		ctx: { ...base, ui: { ...base.ui, custom: reopenedTui.custom } } as never,
+		state: await state(controller),
+		signal: new AbortController().signal,
+		itemId: "recall",
+	});
+	await reopenedTui.waitForOpen();
+	const reopenedSearch = stripVTControlCharacters(reopenedTui.render().join("\n"))
+		.split("\n")
+		.find((line) => line.startsWith("Search:"));
+	assert.match(reopenedSearch ?? "", /saved-a/);
+	reopenedTui.press("tui.select.cancel");
+	assert.deepEqual(await reopened, { kind: "stay" });
+
+	const fresh = createRecallMenu(data);
+	const freshTui = createTuiHarness({ width: 72, rows: 18 });
+	const freshChoosing = fresh.menu.actions.chooseSaved({
+		ctx: { ...base, ui: { ...base.ui, custom: freshTui.custom } } as never,
+		state: await state(fresh),
+		signal: new AbortController().signal,
+		itemId: "recall",
+	});
+	await freshTui.waitForOpen();
+	const freshSearch = stripVTControlCharacters(freshTui.render().join("\n"))
+		.split("\n")
+		.find((line) => line.startsWith("Search:"));
+	assert.doesNotMatch(freshSearch ?? "", /saved-a/);
+	freshTui.press("tui.select.cancel");
+	assert.deepEqual(await freshChoosing, { kind: "stay" });
 });
 
 test("preview is exact, quote appends to the draft without sending, and delete requires review action", async () => {

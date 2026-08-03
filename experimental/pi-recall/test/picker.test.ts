@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripVTControlCharacters } from "node:util";
+import { CURSOR_MARKER, type Focusable, visibleWidth } from "@earendil-works/pi-tui";
 import type { RecallMessageRecord } from "../src/messages.js";
 import { ScopedRecallPicker } from "../src/picker.js";
 
@@ -22,11 +23,19 @@ function saved(id: string, sessionId: string, cwd: string, text: string): Recall
 	};
 }
 
-function createPicker(records: RecallMessageRecord[]) {
+function createPicker(
+	records: RecallMessageRecord[],
+	options: {
+		initialScope?: "all" | "cwd" | "session";
+		initialSelectedId?: string;
+		initialQuery?: string;
+		rows?: number;
+	} = {},
+) {
 	let result: unknown;
 	let renders = 0;
 	const picker = new ScopedRecallPicker({
-		tui: { terminal: { rows: 12 }, requestRender: () => renders++ } as never,
+		tui: { terminal: { rows: options.rows ?? 12 }, requestRender: () => renders++ } as never,
 		theme: {
 			fg: (_color: string, text: string) => text,
 			bold: (text: string) => text,
@@ -44,7 +53,9 @@ function createPicker(records: RecallMessageRecord[]) {
 		} as never,
 		records,
 		current: { sessionId: "current", cwd: "/work/project" },
-		initialScope: "cwd",
+		initialScope: options.initialScope ?? "cwd",
+		initialSelectedId: options.initialSelectedId,
+		initialQuery: options.initialQuery,
 		complete: (value) => {
 			result = value;
 		},
@@ -81,6 +92,7 @@ test("preserves a selected saved id across scope changes when still visible", ()
 		kind: "selected",
 		recordId: "one",
 		scope: "all",
+		query: "",
 	});
 });
 
@@ -97,6 +109,7 @@ test("falls back to the first newest record when selection leaves the scope", ()
 		kind: "selected",
 		recordId: "one",
 		scope: "session",
+		query: "",
 	});
 });
 
@@ -104,10 +117,15 @@ test("escape returns to the menu while ctrl+c closes the whole Recall flow", () 
 	const records = [saved("one", "current", "/work/project", "one")];
 	const back = createPicker(records);
 	back.picker.handleInput("escape");
-	assert.deepEqual(back.result(), { kind: "back", scope: "cwd", selectedId: "one" });
+	assert.deepEqual(back.result(), { kind: "back", scope: "cwd", selectedId: "one", query: "" });
 	const close = createPicker(records);
 	close.picker.handleInput("\u0003");
-	assert.deepEqual(close.result(), { kind: "close", scope: "cwd", selectedId: "one" });
+	assert.deepEqual(close.result(), {
+		kind: "close",
+		scope: "cwd",
+		selectedId: "one",
+		query: "",
+	});
 });
 
 test("empty scopes remain switchable and rendered output is sanitized and width-safe", () => {
@@ -126,4 +144,111 @@ test("empty scopes remain switchable and rendered output is sanitized and width-
 	picker.dispose();
 	picker.handleInput("\t");
 	assert.match(picker.render(24).join("\n"), /Scope: All \(1\)/);
+});
+
+test("fuzzy-searches message text, role, and session name with relevance ordering", () => {
+	const direct = saved("one", "current", "/work/project", "alpha release");
+	direct.source.sessionName = "Planning Room";
+	const later = saved("two", "other", "/work/project", "prefix alpha notes");
+	later.source.sessionName = "Other Room";
+
+	const content = createPicker([direct, later]);
+	assert.ok(
+		content.picker.render(100).join("\n").indexOf("prefix alpha") <
+			content.picker.render(100).join("\n").indexOf("alpha release"),
+	);
+	content.picker.handleInput("alpha");
+	const ranked = content.picker.render(100).join("\n");
+	assert.ok(ranked.indexOf("alpha release") < ranked.indexOf("prefix alpha"));
+
+	const role = createPicker([direct, later]);
+	role.picker.handleInput("user");
+	assert.match(role.picker.render(100).join("\n"), /alpha release/);
+	assert.doesNotMatch(role.picker.render(100).join("\n"), /prefix alpha/);
+
+	const session = createPicker([direct, later]);
+	session.picker.handleInput("plnng room");
+	assert.match(session.picker.render(100).join("\n"), /Planning Room/);
+	assert.doesNotMatch(session.picker.render(100).join("\n"), /Other Room/);
+
+	const hiddenMetadata = createPicker([direct, later]);
+	hiddenMetadata.picker.handleInput("work project");
+	assert.match(hiddenMetadata.picker.render(100).join("\n"), /No matching saved messages/);
+});
+
+test("applies scope before search and distinguishes totals, matches, and empty states", () => {
+	const noMatch = createPicker([
+		saved("one", "current", "/work/project", "local note"),
+		saved("two", "other", "/other", "remote needle"),
+	]);
+	noMatch.picker.handleInput("needle");
+	let rendered = noMatch.picker.render(80).join("\n");
+	assert.match(rendered, /Scope: Current cwd \(1\).*0 matches/);
+	assert.match(rendered, /No matching saved messages/);
+	noMatch.picker.handleInput("enter");
+	assert.equal(noMatch.result(), undefined);
+	noMatch.picker.handleInput("\t");
+	rendered = noMatch.picker.render(80).join("\n");
+	assert.match(rendered, /Scope: All \(2\).*1 match/);
+	assert.match(rendered, /remote needle/);
+
+	const empty = createPicker([saved("three", "other", "/other", "elsewhere")]);
+	assert.match(empty.picker.render(80).join("\n"), /No saved messages in this scope/);
+});
+
+test("preserves query spaces, removes pasted controls, bounds queries, and forwards focus", () => {
+	const record = saved("one", "current", "/work/project", "bar foo 📖");
+	const { picker } = createPicker([record]);
+	const focusable = picker as ScopedRecallPicker & Focusable;
+	focusable.focused = true;
+	assert.equal(picker.render(80).join("\n").includes(CURSOR_MARKER), true);
+	focusable.focused = false;
+	picker.handleInput("\u001b[200~foo \u0007\u009dbar\u009c\u001b[201~");
+	const rendered = picker.render(80).join("\n");
+	assert.match(rendered, /bar foo/);
+	assert.equal(rendered.includes("\u0007"), false);
+	assert.equal(rendered.includes("\u009d"), false);
+	assert.equal(rendered.includes("\u009c"), false);
+	for (const width of [1, 2, 8, 20, 80]) {
+		assert.ok(picker.render(width).every((line) => visibleWidth(line) <= width));
+	}
+
+	const overlong = createPicker([record]);
+	overlong.picker.handleInput("a".repeat(257));
+	assert.match(overlong.picker.render(80).join("\n"), /Search query is too long.*256/);
+	assert.match(overlong.picker.render(80).join("\n"), /No matching saved messages/);
+
+	const beforeDispose = picker.render(80);
+	picker.dispose();
+	assert.equal(picker.render(80).join("\n").includes(CURSOR_MARKER), false);
+	picker.handleInput("ignored");
+	assert.deepEqual(picker.render(80), beforeDispose);
+});
+
+test("restores selection after broadening and carries query through scope and completion", () => {
+	const records = [
+		saved("one", "current", "/work/project", "alpha"),
+		saved("two", "other", "/work/project", "zulu"),
+	];
+	const restored = createPicker(records, { initialSelectedId: "one" });
+	restored.picker.handleInput("z");
+	restored.picker.handleInput("\u007f");
+	restored.picker.handleInput("enter");
+	assert.deepEqual(restored.result(), {
+		kind: "selected",
+		recordId: "one",
+		scope: "cwd",
+		query: "",
+	});
+
+	const carried = createPicker(records, { initialQuery: "alpha" });
+	assert.match(stripVTControlCharacters(carried.picker.render(80).join("\n")), /Search: .*alpha/);
+	carried.picker.handleInput("\t");
+	carried.picker.handleInput("enter");
+	assert.deepEqual(carried.result(), {
+		kind: "selected",
+		recordId: "one",
+		scope: "all",
+		query: "alpha",
+	});
 });

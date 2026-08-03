@@ -12,6 +12,7 @@
 - Saves any eligible user or assistant text message from the current active session branch—not only the latest message.
 - Recalls saved messages across sessions using **Current cwd**, **All**, or **Current session** scope.
 - Cycles TUI scope with `Tab` and `Shift+Tab`, with the active scope and result count always visible.
+- Fuzzy-searches saved message text, role, and session name inside the active TUI scope.
 - Previews the complete saved text before use.
 - Inserts an XML-marked quote at the TUI editor cursor without submitting it automatically.
 - Stores versioned JSONL locally with cross-process locking, private permissions, and atomic replacement.
@@ -42,7 +43,7 @@ pi -e ./experimental/pi-recall
 1. Run `/recall`.
 2. Choose **Save a message** and select a text user or assistant message from the active branch.
 3. In any later session, run `/recall` and choose **Recall a saved message**.
-4. In TUI mode, press `Tab` or `Shift+Tab` to change scope. RPC mode asks for scope explicitly.
+4. In TUI mode, type to fuzzy-search or press `Tab` / `Shift+Tab` to change scope. RPC mode asks for scope explicitly.
 5. Preview the message or choose **Quote into draft**.
 6. Add your question or instruction, then submit the draft normally.
 
@@ -68,11 +69,19 @@ Print and JSON modes reject `/recall` before opening an interactive flow. TUI an
 
 ## 🧭 Recall scopes
 
-- **Current cwd** — saved messages whose normalized absolute source cwd matches the current cwd. This is the default each time the picker opens.
+- **Current cwd** — saved messages whose normalized absolute source cwd matches the current cwd. This is the default for each new `/recall` interaction.
 - **All** — every valid record in the current Pi agent directory.
 - **Current session** — records whose source session ID exactly matches the current session.
 
-Scope applies only when recalling already saved messages. The save picker intentionally reads only `ctx.sessionManager.getBranch()` from the current session and never scans other session files. TUI scope switching keeps the selected saved record when it remains visible in the new scope; otherwise it selects the newest visible record.
+Scope applies only when recalling already saved messages. The save picker intentionally reads only `ctx.sessionManager.getBranch()` from the current session and never scans other session files. TUI scope switching keeps the selected saved record when it remains visible in the new scope; otherwise it selects the first fuzzy-ranked result or the newest result when the query is empty.
+
+## 🔍 TUI fuzzy search
+
+The TUI picker has a visible `Search:` input. It matches complete saved message text, the `user` or `assistant` role, and the optional session name after scope filtering. Matching is case-insensitive and requires every whitespace- or slash-separated token as an ordered subsequence. It ranks closer matches first but does not perform typo-edit-distance correction.
+
+The query and selection survive scope changes and selected-message navigation during one `/recall` interaction. A new `/recall` starts with an empty query and **Current cwd**. Queries are limited to 256 UTF-16 code units; an overlong query shows an error and runs no matching. Terminal controls are replaced before matching or display, while ordinary spaces remain available for multi-token queries.
+
+RPC continues to show the complete scoped list through explicit dialogs and does not simulate a hidden fuzzy query. Message timestamps, cwd, session IDs, entry IDs, and local paths are not searchable.
 
 ## 🔒 Storage, privacy, and recovery
 
@@ -108,11 +117,11 @@ Terminal controls are removed from labels, previews, metadata, and errors before
 
 ## 🚧 Experimental limitations
 
-- No tags, text search, editing, reordering, import/export, automatic expiry, or automatic context injection.
+- No tags, saved-query persistence, editing, reordering, import/export, automatic expiry, or automatic context injection.
 - No cross-session transcript browser: only previously saved records can be recalled across sessions.
 - Text only; images and tool payloads are deliberately omitted.
 - The custom TUI picker is keyboard-operated. RPC uses sequential dialogs.
-- Scope preference is not persisted; every new picker starts at **Current cwd**.
+- Scope and search preferences are not persisted; every new `/recall` interaction starts at **Current cwd** with an empty query.
 
 ## 🗂️ Package layout
 
