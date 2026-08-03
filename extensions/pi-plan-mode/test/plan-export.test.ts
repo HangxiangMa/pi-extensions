@@ -49,31 +49,69 @@ test("plan export autocomplete exposes a path-taking public route", () => {
 	assert.equal(completePlanArguments("export "), null);
 });
 
-test("plan export writes default and custom paths without changing ready state", async () => {
+test("ready plan export ends Plan mode without triggering a model turn", async () => {
 	await withTempDirectory(async (directory) => {
-		const mock = createMockPi({ activeTools: ["read"] });
-		planMode(mock.pi);
+		const mock = createMockPi({
+			activeTools: ["read", "edit"],
+			thinkingLevel: "low",
+		});
+		planMode(mock.pi, {
+			readSettings: async () => ({
+				kind: "loaded" as const,
+				settings: { thinkingLevel: "medium" as const },
+			}),
+		});
 		const context = createMockContext({ cwd: directory, hasUI: true });
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		await mock.commands.get("plan")?.handler("", context.ctx);
+		assert.equal(mock.thinkingLevel, "medium");
 		await completePlan(mock, context.ctx);
 		const entriesBeforeExport = mock.entries.length;
 
 		await mock.commands.get("plan")?.handler("export", context.ctx);
+
 		assert.equal(await readFile(join(directory, "PLAN.md"), "utf8"), `${PLAN}\n`);
-		assert.equal(context.statuses.get("plan-mode"), "plan ready");
-		assert.equal(mock.entries.length, entriesBeforeExport);
+		assert.equal(context.statuses.get("plan-mode"), undefined);
+		assert.equal(mock.entries.length, entriesBeforeExport + 1);
+		const persistedState = mock.entries.at(-1)?.data as Record<string, unknown>;
+		assert.equal(persistedState.enabled, false);
+		assert.equal(persistedState.latestPlan, undefined);
+		assert.equal(persistedState.awaitingAction, false);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "edit"]);
+		assert.equal(mock.thinkingLevel, "low");
 		assert.equal(mock.sentUserMessages.length, 0);
 		assert.equal(mock.sentMessages.length, 0);
-		assert.match(context.notifications.at(-1)?.message ?? "", /exported.*PLAN\.md/i);
+		assert.match(
+			context.notifications.at(-1)?.message ?? "",
+			/exported.*PLAN\.md.*Plan mode disabled/i,
+		);
+	});
+});
 
-		await mock.commands.get("plan")?.handler("export docs/custom plan.md", context.ctx);
-		assert.equal(await readFile(join(directory, "docs", "custom plan.md"), "utf8"), `${PLAN}\n`);
-		const absolutePath = join(directory, "absolute-plan.md");
-		await mock.commands.get("plan")?.handler(`export ${absolutePath}`, context.ctx);
-		assert.equal(await readFile(absolutePath, "utf8"), `${PLAN}\n`);
-		await mock.commands.get("plan")?.handler("export unsafe\u001b[31m.md", context.ctx);
-		assert.equal(containsTerminalControl(context.notifications.at(-1)?.message ?? ""), false);
-		assert.equal(context.statuses.get("plan-mode"), "plan ready");
+test("ready plan export supports custom relative and absolute paths", async () => {
+	await withTempDirectory(async (directory) => {
+		for (const { requestedPath, expectedPath } of [
+			{
+				requestedPath: "docs/custom plan.md",
+				expectedPath: join(directory, "docs", "custom plan.md"),
+			},
+			{
+				requestedPath: join(directory, "absolute-plan.md"),
+				expectedPath: join(directory, "absolute-plan.md"),
+			},
+		]) {
+			const mock = createMockPi({ activeTools: ["read"] });
+			planMode(mock.pi);
+			const context = createMockContext({ cwd: directory, hasUI: true });
+			await mock.commands.get("plan")?.handler("", context.ctx);
+			await completePlan(mock, context.ctx);
+
+			await mock.commands.get("plan")?.handler(`export ${requestedPath}`, context.ctx);
+
+			assert.equal(await readFile(expectedPath, "utf8"), `${PLAN}\n`);
+			assert.equal(context.statuses.get("plan-mode"), undefined);
+			assert.equal(containsTerminalControl(context.notifications.at(-1)?.message ?? ""), false);
+		}
 	});
 });
 
@@ -119,9 +157,9 @@ test("concurrent exports serialize and create the target only once", async () =>
 		assert.equal(
 			context.notifications.filter((notification) => /already exists/u.test(notification.message))
 				.length,
-			1,
+			0,
 		);
-		assert.equal(context.statuses.get("plan-mode"), "plan ready");
+		assert.equal(context.statuses.get("plan-mode"), undefined);
 	});
 });
 
@@ -336,6 +374,14 @@ test("completion and management TUI menus accept an export path", async () => {
 			}
 
 			assert.equal(await readFile(join(directory, expectedPath), "utf8"), `${PLAN}\n`);
+			assert.equal(
+				context.statuses.get("plan-mode"),
+				scenario === "active"
+					? "plan implementing"
+					: scenario === "saved"
+						? "plan saved"
+						: undefined,
+			);
 			assert.equal(mock.sentUserMessages.length, scenario === "active" ? 1 : 0);
 		});
 	}
@@ -397,7 +443,7 @@ test("RPC export menu accepts a custom path", async () => {
 
 		assert.equal(inputCalls, 1);
 		assert.equal(await readFile(join(directory, "rpc-export.md"), "utf8"), `${PLAN}\n`);
-		assert.equal(context.statuses.get("plan-mode"), "plan ready");
+		assert.equal(context.statuses.get("plan-mode"), undefined);
 	});
 });
 
@@ -441,7 +487,7 @@ test("rejected TUI export retains the path draft for correction", async () => {
 
 		assert.equal(await readFile(join(directory, "PLAN.md"), "utf8"), "keep\n");
 		assert.equal(await readFile(join(directory, "corrected.md"), "utf8"), `${PLAN}\n`);
-		assert.equal(context.statuses.get("plan-mode"), "plan ready");
+		assert.equal(context.statuses.get("plan-mode"), undefined);
 	});
 });
 

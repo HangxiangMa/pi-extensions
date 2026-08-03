@@ -195,7 +195,7 @@ export default function planMode(
 					state,
 					exportMatch[1],
 					ctx,
-					exportLifecycle(lifecycle.signal, lifecycle.isCurrent),
+					exportOwner(ctx, lifecycle.signal, lifecycle.isCurrent),
 				);
 				return;
 			}
@@ -656,7 +656,7 @@ export default function planMode(
 			isCurrent: lifecycle.isCurrent,
 			show: () => showStoredPlan(pi, ctx, state),
 			exportPlan: (path, signal) =>
-				exportStoredPlan(state, path, ctx, exportLifecycle(signal, lifecycle.isCurrent)),
+				exportStoredPlan(state, path, ctx, exportOwner(ctx, signal, lifecycle.isCurrent)),
 			startNew: () => {
 				enterPlanMode(ctx);
 				ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
@@ -677,7 +677,7 @@ export default function planMode(
 			show: () => showStoredPlan(pi, ctx, state),
 			implement: () => startImplementation(ctx),
 			exportPlan: (path, signal) =>
-				exportStoredPlan(state, path, ctx, exportLifecycle(signal, lifecycle.isCurrent)),
+				exportStoredPlan(state, path, ctx, exportOwner(ctx, signal, lifecycle.isCurrent)),
 			clear: () => {
 				exitPlanMode(ctx);
 				ctx.ui.notify("Saved plan cleared.", "info");
@@ -699,7 +699,7 @@ export default function planMode(
 			finalize: () => requestFinalPlan(ctx),
 			implement: () => startImplementation(ctx),
 			exportPlan: (path, signal) =>
-				exportStoredPlan(state, path, ctx, exportLifecycle(signal, lifecycle.isCurrent)),
+				exportStoredPlan(state, path, ctx, exportOwner(ctx, signal, lifecycle.isCurrent)),
 			save: () => savePlanForLater(ctx),
 			tools: () => showToolSelector(ctx),
 			stay: () => updateUi(ctx),
@@ -716,7 +716,7 @@ export default function planMode(
 			...lifecycle,
 			implement: () => startImplementation(ctx),
 			exportPlan: (path, signal) =>
-				exportStoredPlan(state, path, ctx, exportLifecycle(signal, lifecycle.isCurrent)),
+				exportStoredPlan(state, path, ctx, exportOwner(ctx, signal, lifecycle.isCurrent)),
 			save: () => savePlanForLater(ctx),
 			stay: () => undefined,
 			exit: () => {
@@ -791,8 +791,8 @@ export default function planMode(
 		updateUi(ctx);
 	}
 
-	function exportLifecycle(signal: AbortSignal, isCurrent: () => boolean) {
-		return { signal, isCurrent, getState: () => state };
+	function exportOwner(ctx: ExtensionContext, signal: AbortSignal, isCurrent: () => boolean) {
+		return { signal, isCurrent, getState: () => state, finishReady: () => exitPlanMode(ctx) };
 	}
 
 	function captureMenuLifecycle() {

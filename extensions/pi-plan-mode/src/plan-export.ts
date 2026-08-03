@@ -14,6 +14,7 @@ export interface PlanExportLifecycle {
 	signal: AbortSignal;
 	isCurrent(): boolean;
 	getState?(): PlanModeState;
+	finishReady?(): void;
 }
 
 export async function exportStoredPlan(
@@ -38,17 +39,9 @@ export async function exportStoredPlan(
 	const isCurrent = () =>
 		!lifecycle ||
 		(lifecycle.isCurrent() && (!lifecycle.getState || lifecycle.getState() === state));
+	let result: PlanExportResult;
 	try {
-		const result = await exportPlanToFile(
-			plan,
-			requestedPath,
-			ctx.cwd,
-			lifecycle?.signal,
-			isCurrent,
-		);
-		if (!isCurrent()) return false;
-		ctx.ui.notify(safeNotification(`Plan exported to ${result.path}.`), "info");
-		return true;
+		result = await exportPlanToFile(plan, requestedPath, ctx.cwd, lifecycle?.signal, isCurrent);
 	} catch (error: unknown) {
 		if (!isCurrent()) return false;
 		if (!ctx.hasUI) throw error;
@@ -56,6 +49,14 @@ export async function exportStoredPlan(
 		ctx.ui.notify(safeNotification(`Unable to export plan: ${detail}`), "error");
 		return false;
 	}
+
+	if (!isCurrent()) return false;
+	const finishedReady =
+		state.enabled && Boolean(state.latestPlan?.trim()) && lifecycle?.finishReady !== undefined;
+	if (finishedReady) lifecycle.finishReady?.();
+	const detail = finishedReady ? " Plan mode disabled." : "";
+	ctx.ui.notify(safeNotification(`Plan exported to ${result.path}.${detail}`), "info");
+	return true;
 }
 
 export async function exportPlanToFile(
