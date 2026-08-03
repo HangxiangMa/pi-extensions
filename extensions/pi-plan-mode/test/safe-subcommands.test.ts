@@ -61,7 +61,7 @@ test("active Plan mode enforces session-loaded safe subcommands", async () => {
 					reason?: string;
 				}
 			).reason ?? "",
-			/non-allowlisted bash commands/,
+			/outside its reviewed inspection policy or containing explicitly unsafe arguments/,
 		);
 	});
 });
@@ -100,7 +100,10 @@ test("active Plan mode enforces limited policy for effective bash overrides", as
 		const heredoc = `python - <<'PY'\nfrom pathlib import Path\nPath("plan-mode-write-probe.txt").write_text("unexpected write\\n", encoding="utf-8")\nPY`;
 		const blocked = await hook({ toolName: "bash", input: { command: heredoc } }, context.ctx);
 		assert.ok(blocked);
-		assert.match((blocked as { reason?: string }).reason ?? "", /non-allowlisted bash commands/);
+		assert.match(
+			(blocked as { reason?: string }).reason ?? "",
+			/outside its reviewed inspection policy or containing explicitly unsafe arguments/,
+		);
 		assert.equal(
 			await hook(
 				{ toolName: "bash", input: { command: "git rev-parse --show-toplevel" } },

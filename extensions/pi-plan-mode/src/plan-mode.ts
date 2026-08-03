@@ -332,7 +332,7 @@ export default function planMode(
 		if (!isSafeCommand(command, settings.safeSubcommands)) {
 			return {
 				block: true,
-				reason: `Plan mode blocks mutating or non-allowlisted bash commands.\nCommand: ${command}`,
+				reason: `Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nCommand: ${command}`,
 			};
 		}
 	});
