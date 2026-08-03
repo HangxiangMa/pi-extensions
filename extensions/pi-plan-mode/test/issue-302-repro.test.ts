@@ -8,7 +8,7 @@ test("issue 302: re-entered Plan Mode hides the previous implementation handoff"
 	planMode(mock.pi);
 	const context = createMockContext();
 
-	await mock.commands.get("plan")?.handler("", context.ctx);
+	await mock.commands.get("plan")?.handler("start", context.ctx);
 	const executeComplete = mock.tools.find((candidate) => candidate.name === "plan_mode_complete")
 		?.execute as ((...args: unknown[]) => Promise<unknown>) | undefined;
 	assert.ok(executeComplete);
@@ -39,7 +39,7 @@ test("issue 302: re-entered Plan Mode hides the previous implementation handoff"
 	)) as { messages: unknown[] };
 	assert.deepEqual(inactiveContext.messages, implementationMessages);
 
-	await mock.commands.get("plan")?.handler("", context.ctx);
+	await mock.commands.get("plan")?.handler("start", context.ctx);
 	assert.equal(context.statuses.get("plan-mode"), "plan active");
 	assert.deepEqual(mock.rawPi.getActiveTools(), [
 		"bash",

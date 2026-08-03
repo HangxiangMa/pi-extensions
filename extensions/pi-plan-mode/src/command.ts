@@ -5,6 +5,7 @@ export interface CommandArgumentCompletion {
 }
 
 const PLAN_COMMAND_COMPLETIONS: readonly CommandArgumentCompletion[] = [
+	{ value: "start", label: "start", description: "Start Plan mode without sending a prompt" },
 	{ value: "show", label: "show", description: "Show the ready, saved, or active plan" },
 	{ value: "finalize", label: "finalize", description: "Request a completed plan" },
 	{ value: "implement", label: "implement", description: "Implement the completed or saved plan" },

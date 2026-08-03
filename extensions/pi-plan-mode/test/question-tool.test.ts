@@ -11,7 +11,7 @@ test("plan_mode_question reports non-interactive cancellation", async () => {
 		| undefined;
 	assert.ok(execute);
 	const context = createMockContext({ hasUI: false });
-	await mock.commands.get("plan")?.handler("", context.ctx);
+	await mock.commands.get("plan")?.handler("start", context.ctx);
 	const result = await execute(
 		"call-1",
 		{

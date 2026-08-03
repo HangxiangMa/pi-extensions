@@ -37,7 +37,7 @@ test("active Plan mode enforces session-loaded safe subcommands", async () => {
 			"inactive Plan mode must not enforce its shell policy",
 		);
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		assert.equal(
 			await hook(
 				{ toolName: "bash", input: { command: "git rev-parse --show-toplevel" } },
@@ -92,7 +92,7 @@ test("active Plan mode enforces limited policy for effective bash overrides", as
 		assert.ok(hook);
 
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		assert.ok(mock.rawPi.getActiveTools().includes("bash"));
 
 		const heredoc = `python - <<'PY'\nfrom pathlib import Path\nPath("plan-mode-write-probe.txt").write_text("unexpected write\\n", encoding="utf-8")\nPY`;
@@ -128,7 +128,7 @@ test("session reload removes stale or invalid safe subcommand policy", async () 
 		assert.ok(hook);
 
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		assert.equal(
 			await hook(
 				{ toolName: "bash", input: { command: "gh pr view 218 --json number,title" } },
@@ -140,7 +140,7 @@ test("session reload removes stale or invalid safe subcommand policy", async () 
 
 		await rm(settingsPath);
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		assert.ok(
 			await hook(
 				{ toolName: "bash", input: { command: "gh pr view 218 --json number,title" } },
@@ -152,7 +152,7 @@ test("session reload removes stale or invalid safe subcommand policy", async () 
 		await writeFile(settingsPath, JSON.stringify({ safeSubcommands: { gh: ["pr merge"] } }));
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /settings ignored/i);
-		await mock.commands.get("plan")?.handler("", context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
 		assert.ok(
 			await hook(
 				{ toolName: "bash", input: { command: "gh pr view 218 --json number,title" } },
