@@ -3,7 +3,12 @@ import {
 	PLAN_MODE_COMPLETE_TOOL_NAME,
 	planFromCompletionDetails,
 } from "./completion-tool.js";
-import { PLAN_MODE_THINKING_LEVELS, type PlanModeFixedThinkingLevel } from "./settings.js";
+import {
+	IMPLEMENTATION_PLAN_RETENTIONS,
+	type ImplementationPlanRetention,
+	PLAN_MODE_THINKING_LEVELS,
+	type PlanModeFixedThinkingLevel,
+} from "./settings.js";
 
 export type PlanCompletionSource = typeof PLAN_MODE_COMPLETE_TOOL_NAME | "legacy_proposed_plan";
 
@@ -12,6 +17,7 @@ export interface ActiveImplementationPlan {
 	plan: string;
 	source: PlanCompletionSource;
 	startedAt: number;
+	retention?: ImplementationPlanRetention;
 }
 
 export interface SavedPlan {
@@ -111,7 +117,12 @@ function normalizeActiveImplementation(value: unknown): ActiveImplementationPlan
 			? value.startedAt
 			: undefined;
 	if (!id || !source || !normalized.ok || startedAt === undefined) return undefined;
-	return { id, plan: normalized.plan, source, startedAt };
+	const retention = IMPLEMENTATION_PLAN_RETENTIONS.includes(
+		value.retention as ImplementationPlanRetention,
+	)
+		? (value.retention as ImplementationPlanRetention)
+		: "keep";
+	return { id, plan: normalized.plan, source, startedAt, retention };
 }
 
 function normalizePersistedPlan(value: unknown) {

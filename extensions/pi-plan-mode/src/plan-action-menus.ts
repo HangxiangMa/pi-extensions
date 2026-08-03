@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.js";
 
 interface MenuLifecycle {
 	signal: AbortSignal;
@@ -9,6 +10,8 @@ interface MenuLifecycle {
 interface PlanMenuOptions extends MenuLifecycle {
 	statusText: string;
 	hasReadyPlan: boolean;
+	implementationOutcome(): string;
+	getExportDestination: PlanExportDestinationProvider;
 	show(): void;
 	finalize(): void;
 	implement(): void | Promise<void>;
@@ -27,7 +30,10 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 			main: () => ({
 				kind: "actions",
 				title: "Plan mode",
-				lines: [options.statusText],
+				lines: [
+					options.statusText,
+					...(options.hasReadyPlan ? [options.implementationOutcome()] : []),
+				],
 				items: options.hasReadyPlan
 					? [
 							{ id: "show", label: "Show latest proposed plan", action: "show" },
@@ -44,14 +50,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 						],
 				hint: "close",
 			}),
-			export: () => ({
-				kind: "input",
-				title: "Export plan",
-				lines: ["Existing paths are never overwritten."],
-				placeholder: "PLAN.md",
-				action: "export",
-				hint: "back",
-			}),
+			export: () => planExportInputScreen(options.getExportDestination),
 		},
 		actions: {
 			show: async () => {
@@ -90,6 +89,8 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 }
 
 interface ReadyPlanMenuOptions extends MenuLifecycle {
+	implementationOutcome(): string;
+	getExportDestination: PlanExportDestinationProvider;
 	implement(): void | Promise<void>;
 	exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
 	save(): void;
@@ -106,6 +107,7 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
 			ready: () => ({
 				kind: "actions",
 				title: "Proposed plan ready. What next?",
+				lines: [options.implementationOutcome()],
 				items: [
 					{ id: "implement", label: "Implement this plan", action: "implement" },
 					{ id: "export", label: "Export plan…", to: "export" },
@@ -115,14 +117,7 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
 				],
 				hint: "close",
 			}),
-			export: () => ({
-				kind: "input",
-				title: "Export plan",
-				lines: ["Existing paths are never overwritten."],
-				placeholder: "PLAN.md",
-				action: "export",
-				hint: "back",
-			}),
+			export: () => planExportInputScreen(options.getExportDestination),
 		},
 		actions: {
 			implement: async () => {

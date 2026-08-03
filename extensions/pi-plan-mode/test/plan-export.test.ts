@@ -88,6 +88,102 @@ test("ready plan export ends Plan mode without triggering a model turn", async (
 	});
 });
 
+test("configured export defaults resolve at action time and explicit paths still win", async () => {
+	await withTempDirectory(async (directory) => {
+		for (const { command, expectedPath } of [
+			{ command: "export", expectedPath: join(directory, "plans", "default.md") },
+			{ command: "export explicit.md", expectedPath: join(directory, "explicit.md") },
+		]) {
+			const mock = createMockPi({ activeTools: ["read"] });
+			planMode(mock.pi, {
+				readSettings: async () => ({
+					kind: "loaded" as const,
+					settings: {
+						thinkingLevel: "inherit" as const,
+						defaultPlanExportPath: "@plans/default.md",
+					},
+				}),
+			});
+			const context = createMockContext({ cwd: directory, hasUI: true });
+			await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+			await mock.commands.get("plan")?.handler("start", context.ctx);
+			await completePlan(mock, context.ctx);
+			await mock.commands.get("plan")?.handler(command, context.ctx);
+			assert.equal(await readFile(expectedPath, "utf8"), `${PLAN}\n`);
+		}
+	});
+});
+
+test("relative configured defaults resolve against the command context cwd", async () => {
+	await withTempDirectory(async (directory) => {
+		const planningDirectory = join(directory, "planning");
+		const exportDirectory = join(directory, "implementation");
+		await mkdir(planningDirectory);
+		await mkdir(exportDirectory);
+		const mock = createMockPi({ activeTools: ["read"] });
+		planMode(mock.pi, {
+			readSettings: async () => ({
+				kind: "loaded" as const,
+				settings: {
+					thinkingLevel: "inherit" as const,
+					defaultPlanExportPath: "plans/default.md",
+				},
+			}),
+		});
+		const planningContext = createMockContext({ cwd: planningDirectory, hasUI: true });
+		await mock.events.get("session_start")?.[0]?.({}, planningContext.ctx);
+		await mock.commands.get("plan")?.handler("start", planningContext.ctx);
+		await completePlan(mock, planningContext.ctx);
+
+		const exportContext = createMockContext({ cwd: exportDirectory, hasUI: true });
+		await mock.commands.get("plan")?.handler("export", exportContext.ctx);
+		assert.equal(await readFile(join(exportDirectory, "plans", "default.md"), "utf8"), `${PLAN}\n`);
+		await assert.rejects(readFile(join(planningDirectory, "plans", "default.md"), "utf8"));
+	});
+});
+
+test("an active Settings save changes the next export without changing active state", async () => {
+	await withTempDirectory(async (directory) => {
+		const settingsPath = join(directory, "pi-plan-mode.json");
+		const mock = createMockPi({ activeTools: ["read", "edit"] });
+		planMode(mock.pi, {
+			settingsPath,
+			readSettings: async () => ({
+				kind: "loaded" as const,
+				settings: { thinkingLevel: "inherit" as const },
+			}),
+		});
+		let openedSettings = false;
+		let changedExport = false;
+		const context = createMockContext({
+			cwd: directory,
+			mode: "tui",
+			hasUI: true,
+			select: async (_title: string, options: string[]) => {
+				if (options.includes("Settings")) {
+					if (openedSettings) return undefined;
+					openedSettings = true;
+					return "Settings";
+				}
+				if (changedExport) return undefined;
+				changedExport = true;
+				return options.find((option) => option.startsWith("Export destination"));
+			},
+			input: async () => "next/export.md",
+		});
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
+		await completePlan(mock, context.ctx);
+		await mock.commands.get("plan")?.handler("implement", context.ctx);
+		await mock.commands.get("plan")?.handler("", context.ctx);
+		assert.equal(context.statuses.get("plan-mode"), "plan implementing");
+
+		await mock.commands.get("plan")?.handler("export", context.ctx);
+		assert.equal(await readFile(join(directory, "next", "export.md"), "utf8"), `${PLAN}\n`);
+		assert.equal(context.statuses.get("plan-mode"), "plan implementing");
+	});
+});
+
 test("ready plan export supports custom relative and absolute paths", async () => {
 	await withTempDirectory(async (directory) => {
 		for (const { requestedPath, expectedPath } of [
@@ -224,7 +320,7 @@ test("plan export refuses an existing symbolic link", {
 	});
 });
 
-test("plan export supports saved and active plans in print and JSON modes", async () => {
+test("configured export defaults support saved and active plans in print and JSON modes", async () => {
 	for (const scenario of [
 		{
 			mode: "print",
@@ -253,7 +349,15 @@ test("plan export supports saved and active plans in print and JSON modes", asyn
 		await withTempDirectory(async (directory) => {
 			const entry = stateEntry(scenario.data);
 			const mock = createMockPi({ activeTools: ["read", "edit"] });
-			planMode(mock.pi);
+			planMode(mock.pi, {
+				readSettings: async () => ({
+					kind: "loaded" as const,
+					settings: {
+						thinkingLevel: "inherit" as const,
+						defaultPlanExportPath: `${scenario.mode}-default.md`,
+					},
+				}),
+			});
 			const context = createMockContext({
 				cwd: directory,
 				mode: scenario.mode,
@@ -265,9 +369,12 @@ test("plan export supports saved and active plans in print and JSON modes", asyn
 			});
 			await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 
-			await mock.commands.get("plan")?.handler("export exported.md", context.ctx);
+			await mock.commands.get("plan")?.handler("export", context.ctx);
 
-			assert.equal(await readFile(join(directory, "exported.md"), "utf8"), `${PLAN}\n`);
+			assert.equal(
+				await readFile(join(directory, `${scenario.mode}-default.md`), "utf8"),
+				`${PLAN}\n`,
+			);
 			assert.equal(context.statuses.get("plan-mode"), scenario.status);
 			assert.equal(mock.entries.length, 0);
 			assert.equal(mock.sentUserMessages.length, 0);
@@ -312,21 +419,31 @@ test("plan export fails observably without a plan or on an existing path in no-U
 	});
 });
 
-test("completion and management TUI menus accept an export path", async () => {
+test("completion and management TUI menus preview and use the configured export default", async () => {
 	for (const scenario of ["automatic-ready", "manual-ready", "saved", "active"] as const) {
 		await withTempDirectory(async (directory) => {
-			const expectedPath = scenario === "automatic-ready" ? "PLAN.md" : `${scenario}-export.md`;
+			const expectedPath = "configured/default-plan.md";
 			const mock = createMockPi({ activeTools: ["read", "edit"] });
-			planMode(mock.pi);
+			planMode(mock.pi, {
+				readSettings: async () => ({
+					kind: "loaded" as const,
+					settings: {
+						thinkingLevel: "inherit" as const,
+						defaultPlanExportPath: expectedPath,
+					},
+				}),
+			});
 			const custom = async (factory: unknown) => {
 				const harness = createCustomSelectorHarness(factory);
 				if (!harness.isFocusable) {
 					chooseExportMenu(harness);
 					return harness.resultPromise;
 				}
-				assert.match(harness.render().join("\n"), /Export plan.*PLAN\.md/is);
+				const exportFrame = harness.render().join("\n");
+				assert.match(exportFrame, /Export plan/is);
+				assert.match(exportFrame, /configured\/default-plan\.md/i);
+				assert.match(exportFrame, /Resolves to:/i);
 				harness.setFocused(true);
-				if (scenario !== "automatic-ready") harness.handleInput(expectedPath);
 				harness.handleInput("tui.input.submit");
 				await harness.waitForPending();
 				return harness.resultPromise;
@@ -415,10 +532,18 @@ function selectedMenuLabel(lines: readonly string[]) {
 		: "";
 }
 
-test("RPC export menu accepts a custom path", async () => {
+test("RPC export menu exposes and uses the configured default", async () => {
 	await withTempDirectory(async (directory) => {
 		const mock = createMockPi({ activeTools: ["read"] });
-		planMode(mock.pi);
+		planMode(mock.pi, {
+			readSettings: async () => ({
+				kind: "loaded" as const,
+				settings: {
+					thinkingLevel: "inherit" as const,
+					defaultPlanExportPath: "rpc-default.md",
+				},
+			}),
+		});
 		let inputCalls = 0;
 		const context = createMockContext({
 			cwd: directory,
@@ -431,8 +556,9 @@ test("RPC export menu accepts a custom path", async () => {
 			input: async (title: string, placeholder?: string) => {
 				inputCalls += 1;
 				assert.match(title, /Export plan/i);
-				assert.equal(placeholder, "PLAN.md");
-				return "rpc-export.md";
+				assert.match(title, /Resolves to:.*rpc-default\.md/is);
+				assert.equal(placeholder, "rpc-default.md");
+				return "";
 			},
 		});
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
@@ -442,7 +568,7 @@ test("RPC export menu accepts a custom path", async () => {
 		await mock.commands.get("plan")?.handler("", context.ctx);
 
 		assert.equal(inputCalls, 1);
-		assert.equal(await readFile(join(directory, "rpc-export.md"), "utf8"), `${PLAN}\n`);
+		assert.equal(await readFile(join(directory, "rpc-default.md"), "utf8"), `${PLAN}\n`);
 		assert.equal(context.statuses.get("plan-mode"), undefined);
 	});
 });

@@ -16,7 +16,8 @@ Pi core intentionally does not ship a built-in plan mode; this package provides 
 - Injects Codex-like Plan mode instructions: explore first, ask decision questions for high-impact ambiguity, do not mutate files, and finalize only when decision-complete.
 - Adds required `plan_mode_question` and `plan_mode_complete` tools for structured questions and completion.
 - Presents the complete plan and prompts you to implement, export it to a chosen Markdown file, save it for later, stay in Plan mode, or exit and discard it.
-- Exports ready, saved, or active implementation plans with `/plan export [path]` without overwriting existing paths; exporting a ready plan completes and exits Plan mode.
+- Exports ready, saved, or active implementation plans with `/plan export [path]` without overwriting existing paths; the omitted-path destination is configurable, and exporting a ready plan completes and exits Plan mode.
+- Lets each accepted plan remain active, serve only as the first implementation handoff, or clear after the first implementation run; the current retained-plan behavior remains the default.
 - Keeps legacy `<proposed_plan>` responses compatible without advertising XML as the primary workflow.
 - Shows Plan mode state in Pi's statusline as `plan active`, `plan ready`, `plan saved`, or `plan implementing`; `@narumitw/pi-statusline` adds the default `📝` icon unless configured otherwise.
 - Persists Plan mode, one session-local saved plan, and active implementation state so resume and compaction retain the exact accepted plan.
@@ -87,9 +88,11 @@ export also leaves Plan mode; saved and active implementation exports retain the
 `show`, `save`, `export`, and `implement` fail closed when no applicable plan is stored; `finalize`
 requires active Plan mode.
 
-`/plan export` creates `PLAN.md` in Pi's current working directory. Supply a path to choose another
-location; relative paths resolve from that directory, absolute paths remain absolute, and missing
-parent directories are created. Export never overwrites an existing file, directory, or symbolic
+`/plan export` uses the configured **Export destination**, which defaults to `PLAN.md`. Supply a path
+to override that default for one export. Relative paths resolve from the command's current `ctx.cwd`
+at export time, absolute paths remain absolute, a leading `@` is accepted for Pi path compatibility,
+and missing parent directories are created. Explicit `/plan export <path>` input always wins over the
+setting. Export never overwrites an existing file, directory, or symbolic
 link: choose another path or remove the existing target first. A successful export adds one trailing
 newline but otherwise preserves the accepted Markdown exactly. After a ready plan is written, Plan
 mode ends, its tools and thinking level are restored, and the ready state is cleared without starting
@@ -99,8 +102,9 @@ through its normal file-reading tools. Export is an explicit user-requested file
 model-initiated Plan-mode writes remain blocked.
 
 In TUI and RPC, **Export plan…** opens a single-line path input from every ready, saved, or active
-plan menu. Submit an empty value to use `PLAN.md`, or enter a relative or absolute custom path. A
-failed TUI export retains the draft for correction; RPC reopens its input dialog. Escape returns to
+plan menu. The input shows both the configured value and its currently resolved path. Submit an empty
+value to use the configured destination, or enter a relative or absolute one-off path. A failed TUI
+export retains the draft for correction; RPC reopens its input dialog. Escape returns to
 the owning menu without writing a file. A successful ready-plan export closes the menu and ends Plan
 mode; saved and active implementation menus close without changing their stored state.
 
@@ -122,7 +126,7 @@ A complete Plan mode answer should appear only after the agent has resolved disc
 
 Legacy sessions and models may still submit one non-empty `<proposed_plan>` block with tags on their own lines. That compatibility path remains accepted, but it is not the primary workflow. Empty, malformed, unclosed, or multiple legacy blocks keep Plan mode active and produce a warning.
 
-After completion, `/plan` opens the ready actions when interactive UI is available. Choosing implementation—or running `/plan implement`—disables Plan mode, restores full tool access, and starts an implementation turn with the stored plan. Choosing **Export plan…** asks for a destination, writes the plan, restores normal tools and thinking, and leaves Plan mode without starting a model turn. Choosing **Save for later**—or running `/plan save`—instead stores one plan in the current Pi session before leaving Plan mode.
+After completion, `/plan` opens the ready actions when interactive UI is available. Before confirmation, every Implement menu previews how long the plan will remain active. Choosing implementation—or running `/plan implement`—disables Plan mode, restores full tool access, captures the current **After Implement** policy on that implementation, and starts an implementation turn with the stored plan. Choosing **Export plan…** asks for a destination, writes the plan, restores normal tools and thinking, and leaves Plan mode without starting a model turn. Choosing **Save for later**—or running `/plan save`—instead stores one plan in the current Pi session before leaving Plan mode.
 
 A saved plan appears as `plan saved` and remains available after reload, resume, branch-local fork, and compaction in that session. It does not expire automatically, cross into a new session, or participate in ordinary model context. Open `/plan` to Show, Implement, Export, open Settings, or Clear it; `/plan show`, `/plan implement`, `/plan export [path]`, and `/plan exit`/`off` provide the same direct routes in TUI and RPC. Implementation checks the selected model and authentication before consuming the saved plan. Starting another workflow with `/plan start`, `/plan <prompt>`, or `/plan tools` is blocked until the saved plan is implemented or cleared, so the single saved slot is never silently overwritten. Resuming that session with `--plan` moves the saved plan back to ready Plan mode. Cancellation or failed implementation preflight leaves it unchanged.
 
@@ -137,16 +141,16 @@ These modes reject saved-plan display and implementation before changing state b
 neither printable custom-message output nor acknowledged extension-triggered turns; resume the
 session in TUI or RPC to show or implement it.
 
-Once implemented, the exact accepted plan remains active across later turns, session resume, and manual or automatic compaction without depending on the compaction summary. Plan mode avoids a duplicate context block while the original implementation handoff remains available and injects one hidden canonical copy after that handoff is compacted away. This can consume up to the existing 50,000-character plan limit in model context when reinjection is needed.
+With the default **Keep plan active** policy, the exact accepted plan remains active across later turns, session resume, and manual or automatic compaction without depending on the compaction summary. Plan mode avoids a duplicate context block while the original implementation handoff remains available and injects one hidden canonical copy after that handoff is compacted away. This can consume up to the existing 50,000-character plan limit in model context when reinjection is needed. **Use plan for handoff only** clears retained state immediately after the first implementation request receives the complete plan. **Clear after first implementation run** keeps the plan through that run, including retries, compaction retries, and queued continuation, then clears it at `agent_settled`. Cleanup is bound to the matching implementation, so an older run settling cannot clear a newer handoff.
 
-While implementation is active, `/plan show` displays the accepted plan. Interactive `/plan` offers Show, Export plan…, Settings, Start a new plan, and Clear; `/plan exit` and `/plan off` are the direct clear routes. Starting a new Plan-mode workflow or implementing a replacement plan supersedes the previous active plan. The extension deliberately does not infer completion from assistant prose or agent settlement, so clear the active plan when the implementation no longer applies. Choosing Stay before implementation keeps the plan ready. Revision feedback starts another Plan-mode turn and clears the previous implementable plan until an updated completion arrives. For clarification-only follow-ups, the agent answers and resubmits the complete unchanged plan so it remains implementable. Before saving or implementation, exit/off discards the ready plan and removes its completion result from later non-Plan model context.
+While implementation is active, `/plan show` displays the accepted plan. Interactive `/plan` offers Show, Export plan…, Settings, Start a new plan, and Clear; `/plan exit` and `/plan off` are the direct clear routes. Settings changes never alter the policy already captured by the active implementation. Automatic cleanup has the same observable result as clearing: its active status and future injected plan context disappear, while the implementation request that triggered cleanup still receives the complete plan. Starting a new Plan-mode workflow or implementing a replacement plan supersedes the previous active plan. The extension deliberately does not infer completion from assistant prose or agent settlement, so clear the active plan when the implementation no longer applies. Choosing Stay before implementation keeps the plan ready. Revision feedback starts another Plan-mode turn and clears the previous implementable plan until an updated completion arrives. For clarification-only follow-ups, the agent answers and resubmits the complete unchanged plan so it remains implementable. Before saving or implementation, exit/off discards the ready plan and removes its completion result from later non-Plan model context.
 
 While Plan mode is enabled, the extension also publishes a compact status for Pi statuslines. With `@narumitw/pi-statusline`, this appears in the extension status area:
 
 - `plan active`: Plan mode is enabled and still gathering context or drafting a plan.
 - `plan ready`: A completed plan is stored until you implement it, export it, save it, continue planning, or exit Plan mode.
 - `plan saved`: One completed plan is stored outside model context in the current session until you implement or clear it.
-- `plan implementing`: The exact accepted plan remains active until you clear or supersede it.
+- `plan implementing`: The exact accepted plan is currently retained under its captured **After Implement** policy.
 
 You can also exit directly. Before implementation, direct exit discards the latest proposed plan; while a plan is saved, it clears that saved plan. During implementation, it removes both the original implementation handoff and the extension's canonical active-plan block from later model calls; an earlier Pi-generated compaction summary may still describe prior work:
 
@@ -156,12 +160,14 @@ You can also exit directly. Before implementation, direct exit discards the late
 
 ## ⚙️ Settings
 
-Open **Settings** from an inactive `/plan` menu to edit the global default tools and Plan thinking level. You can also edit `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`) manually; `safeSubcommands` remains JSON-only. The file is optional, is read at session start, and is created only after an explicit Settings save or manual edit.
+Open **Settings** from an inactive `/plan` menu to edit one flat group of four workflow choices: **Plan thinking**, **Plan tools**, **After Implement**, and **Export destination**. You can also edit `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`) manually; `safeSubcommands` remains JSON-only. The file is optional, is read at session start, and is created only after an explicit Settings save or manual edit.
 
 ```json
 {
   "thinkingLevel": "inherit",
   "defaultPlanTools": ["read", "bash", "grep", "find", "ls"],
+  "implementationPlanRetention": "keep",
+  "defaultPlanExportPath": "PLAN.md",
   "safeSubcommands": {
     "git": ["status", "log", "rev-parse", "blame"],
     "gh": ["pr view", "pr list", "issue view", "issue list"]
@@ -176,6 +182,18 @@ Open **Settings** from an inactive `/plan` menu to edit the global default tools
 Tool names must be non-empty strings; duplicates are removed in first-seen order. Unknown, unavailable, and Plan-mode-blocked names are ignored when tools are activated. Settings retains configured unavailable names and shows them as unavailable; resetting to automatic removes the entire override. A tool registered after Plan mode is already active is not added automatically; exit and start a new Plan workflow to apply another set. Non-built-in tools named in this global setting are an explicit user-risk opt-in, just like selecting them in the pre-start workflow selector. Plan mode does not interpret their arguments or actions: enabling one trusts the whole effective tool. Pi resolves tools by name, so if an extension overrides a built-in name, the effective extension tool is selected instead. An effective tool named `bash` remains subject to the limited-shell policy regardless of its source metadata.
 
 A selection accepted through **Choose tools, then start…** or `/plan tools` is stored in that Pi session and takes precedence over `defaultPlanTools` when the session resumes. The global setting remains the baseline for fresh sessions and sessions without an explicit selection. Settings saves immediately, but the saved tools and thinking level apply only when a later Plan workflow starts; they never mutate a workflow already in progress.
+
+### After Implement
+
+`implementationPlanRetention` controls the result of the next Implement action. Omit it or use `keep` for **Keep plan active**, the backward-compatible behavior that retains and reinjects the exact plan until `/plan exit` or supersession. Use `clear-on-start` for **Use plan for handoff only**: the first matching implementation request receives the complete plan, then retained state clears before later requests. Use `clear-after-first-run` to retain the plan until that implementation's first fully settled run ends. A resumed cleanup policy re-arms against the first context in the replacement session. Failed handoff delivery restores the ready or saved plan and does not run automatic cleanup.
+
+Changing this setting applies to the next Implement action only. Each active implementation stores its effective policy, so a later Settings save cannot shorten or extend an implementation already in progress. `/plan exit` remains available under every policy.
+
+### Export destination
+
+`defaultPlanExportPath` controls only exports that omit a path. Omit it—or submit an empty value in Settings—to use `PLAN.md`. The value must be a non-empty string of at most 4,096 characters without terminal control characters or NUL. Relative values are resolved against the current working directory at export time; the Settings detail and every export input preview the concrete resolved destination. An explicit `/plan export <path>` is a one-off override and does not edit Settings. Saving a new destination affects the next export immediately, including export of a currently active implementation.
+
+The existing no-overwrite, cancellation, and atomic Plan-state behavior is unchanged. A failed save rolls the row back to its previous value; a failed or cancelled export preserves the plan and target. Long previews wrap or truncate to the available terminal width without changing the raw path used by the action.
 
 ### Safe shell subcommands
 
@@ -224,7 +242,7 @@ Plan mode inherits Pi's current thinking level by default. Set `thinkingLevel` t
 
 Settings saves are serialized in invocation order inside one Pi process. Each save re-reads the latest valid document, preserves unknown top-level fields and unedited `safeSubcommands`, then publishes through a same-directory temporary file and rename. A missing file stays absent until an explicit save. Invalid JSON, invalid values, oversized content, non-regular files, and read failures make Settings read-only; the existing bytes and previous effective settings remain. This in-process queue is not a cross-process lock, so concurrent separate Pi processes can still race.
 
-Invalid settings produce a warning and fall back to inherited thinking plus the available safe-built-in tool defaults. Compatibility: a valid legacy `plan-mode.json` remains readable with a warning and is never modified automatically. If Settings is explicitly saved while only that legacy file exists, the extension creates canonical `pi-plan-mode.json` from the complete legacy document, applies the selected change, preserves unknown fields, and leaves the legacy file untouched. If both files exist, the canonical filename takes precedence.
+Invalid settings produce a warning and fall back to inherited thinking, available safe-built-in tool defaults, `keep`, and `PLAN.md`. Compatibility: a valid legacy `plan-mode.json` remains readable with a warning and is never modified automatically. If Settings is explicitly saved while only that legacy file exists, the extension creates canonical `pi-plan-mode.json` from the complete legacy document, applies the selected change, preserves unknown fields, and leaves the legacy file untouched. If both files exist, the canonical filename takes precedence.
 
 ## 🧠 Codex-like behavior
 
@@ -235,7 +253,7 @@ This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
 - The agent should use `plan_mode_question` for important non-discoverable preferences or tradeoffs before finalizing.
 - The agent completes with a standalone `plan_mode_complete` tool call instead of relying on semantic prose detection.
 - `update_plan` checklist use is blocked while Plan mode is active.
-- The implementation boundary is explicit: Plan mode restores tools before saving or starting implementation, saving keeps the plan outside ordinary model context, choosing implementation immediately triggers a normal agent turn with full tool access, and the accepted plan remains active across compaction until exit/off or a replacement workflow clears it.
+- The implementation boundary is explicit: Plan mode restores tools before saving or starting implementation, saving keeps the plan outside ordinary model context, choosing implementation immediately triggers a normal agent turn with full tool access, and the accepted plan follows the captured `keep`, `clear-on-start`, or `clear-after-first-run` lifecycle.
 - Pi extension safety is approximated with tool classification and fail-closed filtering for every effective tool named `bash`; other non-built-in tools remain user-selected at user risk because Pi does not expose standardized tool mutability metadata.
 - Unlike native Codex, this extension uses a terminating Pi tool plus an `agent_settled` ready flow; Pi cannot provide sandbox-level enforcement.
 

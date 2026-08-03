@@ -14,6 +14,8 @@ import { join } from "node:path";
 import test from "node:test";
 import {
 	awaitPlanModeSettingsWrites,
+	configuredImplementationPlanRetention,
+	configuredPlanExportPath,
 	normalizePlanModeSettings,
 	readPlanModeSettings,
 	updatePlanModeSettings,
@@ -74,6 +76,47 @@ test("Plan-mode settings normalize default tool names strictly", async () => {
 		});
 	} finally {
 		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("Plan-mode settings validate implementation retention and export defaults", () => {
+	for (const implementationPlanRetention of [
+		"keep",
+		"clear-on-start",
+		"clear-after-first-run",
+	] as const) {
+		const normalized = normalizePlanModeSettings({ implementationPlanRetention });
+		assert.ok(normalized);
+		assert.equal(normalized.implementationPlanRetention, implementationPlanRetention);
+		assert.equal(configuredImplementationPlanRetention(normalized), implementationPlanRetention);
+	}
+	assert.equal(
+		normalizePlanModeSettings({ implementationPlanRetention: "clear-eventually" }),
+		undefined,
+	);
+
+	assert.deepEqual(normalizePlanModeSettings({ defaultPlanExportPath: "docs/PLAN.md" }), {
+		thinkingLevel: "inherit",
+		defaultPlanExportPath: "docs/PLAN.md",
+	});
+	const normalizedPath = normalizePlanModeSettings({
+		defaultPlanExportPath: " docs/PLAN.md ",
+	});
+	assert.ok(normalizedPath);
+	assert.equal(configuredPlanExportPath(normalizedPath), "docs/PLAN.md");
+	const defaults = normalizePlanModeSettings({});
+	assert.ok(defaults);
+	assert.equal(configuredImplementationPlanRetention(defaults), "keep");
+	assert.equal(configuredPlanExportPath(defaults), "PLAN.md");
+	for (const defaultPlanExportPath of [
+		"",
+		"   ",
+		"bad\0path",
+		"bad\u001bpath",
+		"x".repeat(4097),
+		42,
+	]) {
+		assert.equal(normalizePlanModeSettings({ defaultPlanExportPath }), undefined);
 	}
 });
 
@@ -166,11 +209,46 @@ test("Plan-mode settings updates create only on explicit save and preserve unkno
 	}
 });
 
+test("Plan-mode settings patch retention and export fields from the latest document", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-new-fields-"));
+	const settingsPath = join(directory, "pi-plan-mode.json");
+	try {
+		await writeFile(
+			settingsPath,
+			'{"thinkingLevel":"low","future":{"kept":true},"defaultPlanExportPath":"old.md"}\n',
+		);
+		await updatePlanModeSettings(
+			{
+				implementationPlanRetention: "clear-after-first-run",
+				defaultPlanExportPath: "docs/PLAN.md",
+			},
+			{ settingsPath },
+		);
+		await updatePlanModeSettings({ defaultPlanExportPath: null }, { settingsPath });
+
+		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+			thinkingLevel: "low",
+			future: { kept: true },
+			implementationPlanRetention: "clear-after-first-run",
+		});
+		assert.deepEqual(await readPlanModeSettings(settingsPath), {
+			kind: "loaded",
+			settings: {
+				thinkingLevel: "low",
+				implementationPlanRetention: "clear-after-first-run",
+			},
+		});
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("Plan-mode settings explicit save promotes valid legacy content without modifying it", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-promote-"));
 	const settingsPath = join(directory, "pi-plan-mode.json");
 	const legacySettingsPath = join(directory, "plan-mode.json");
-	const legacy = '{"thinkingLevel":"low","defaultPlanTools":["read"],"future":{"kept":true}}\n';
+	const legacy =
+		'{"thinkingLevel":"low","defaultPlanTools":["read"],"implementationPlanRetention":"clear-on-start","defaultPlanExportPath":"plans/PLAN.md","future":{"kept":true}}\n';
 	try {
 		await writeFile(legacySettingsPath, legacy);
 		await updatePlanModeSettings({ thinkingLevel: "high" }, { settingsPath, legacySettingsPath });
@@ -179,6 +257,8 @@ test("Plan-mode settings explicit save promotes valid legacy content without mod
 		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
 			thinkingLevel: "high",
 			defaultPlanTools: ["read"],
+			implementationPlanRetention: "clear-on-start",
+			defaultPlanExportPath: "plans/PLAN.md",
 			future: { kept: true },
 		});
 	} finally {
@@ -269,14 +349,28 @@ test("Plan-mode settings serialize updates, coordinate reads, and recover after 
 				},
 			},
 		);
-		const second = updatePlanModeSettings({ thinkingLevel: "medium" }, { settingsPath });
+		const second = updatePlanModeSettings(
+			{
+				thinkingLevel: "medium",
+				implementationPlanRetention: "clear-after-first-run",
+			},
+			{ settingsPath },
+		);
+		const third = updatePlanModeSettings(
+			{ defaultPlanExportPath: "ordered/PLAN.md" },
+			{ settingsPath },
+		);
 		const coordinatedRead = readPlanModeSettings(settingsPath);
 		await firstReached;
 		releaseFirst();
-		await Promise.all([first, second]);
+		await Promise.all([first, second, third]);
 		assert.deepEqual(await coordinatedRead, {
 			kind: "loaded",
-			settings: { thinkingLevel: "medium" },
+			settings: {
+				thinkingLevel: "medium",
+				implementationPlanRetention: "clear-after-first-run",
+				defaultPlanExportPath: "ordered/PLAN.md",
+			},
 		});
 
 		await assert.rejects(
@@ -291,10 +385,11 @@ test("Plan-mode settings serialize updates, coordinate reads, and recover after 
 		);
 		await updatePlanModeSettings({ thinkingLevel: "max" }, { settingsPath });
 		await awaitPlanModeSettingsWrites(settingsPath);
-		assert.equal(
-			(JSON.parse(await readFile(settingsPath, "utf8")) as { thinkingLevel: string }).thinkingLevel,
-			"max",
-		);
+		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+			thinkingLevel: "max",
+			implementationPlanRetention: "clear-after-first-run",
+			defaultPlanExportPath: "ordered/PLAN.md",
+		});
 	} finally {
 		releaseFirst();
 		await rm(directory, { recursive: true, force: true });

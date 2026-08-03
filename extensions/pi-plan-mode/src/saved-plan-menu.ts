@@ -1,8 +1,11 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.js";
 
 interface SavedPlanMenuOptions {
 	statusText: string;
+	implementationOutcome(): string;
+	getExportDestination: PlanExportDestinationProvider;
 	signal: AbortSignal;
 	isCurrent(): boolean;
 	show(): void;
@@ -26,7 +29,7 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
 			saved: () => ({
 				kind: "actions",
 				title: "Saved plan",
-				lines: [options.statusText],
+				lines: [options.statusText, options.implementationOutcome()],
 				items: [
 					{ id: "show", label: "Show saved plan", action: "show" },
 					{ id: "implement", label: "Implement saved plan", action: "implement" },
@@ -36,14 +39,7 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
 				],
 				hint: "close",
 			}),
-			export: () => ({
-				kind: "input",
-				title: "Export plan",
-				lines: ["Existing paths are never overwritten."],
-				placeholder: "PLAN.md",
-				action: "export",
-				hint: "back",
-			}),
+			export: () => planExportInputScreen(options.getExportDestination),
 		},
 		actions: {
 			show: async () => {

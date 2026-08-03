@@ -177,21 +177,27 @@ test("btw settings atomic publication failure preserves the previous document", 
 
 test("btw settings serialize rapid updates in invocation order and recover after failure", async () => {
 	await withTempSettings(async (settingsPath) => {
-		let releaseFirst: (() => void) | undefined;
+		let releaseFirst!: () => void;
+		let markFirstReached!: () => void;
+		const firstReached = new Promise<void>((resolve) => {
+			markFirstReached = resolve;
+		});
+		const firstGate = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
 		const first = updateBtwSettings(
 			{ thinkingLevel: "low" },
 			{
 				settingsPath,
-				beforeRename: () =>
-					new Promise<void>((resolve) => {
-						releaseFirst = resolve;
-					}),
+				beforeRename: async () => {
+					markFirstReached();
+					await firstGate;
+				},
 			},
 		);
 		const second = updateBtwSettings({ thinkingLevel: "medium" }, { settingsPath });
 		const coordinatedRead = readBtwSettings(settingsPath);
-		await new Promise((resolve) => setTimeout(resolve, 5));
-		assert.ok(releaseFirst);
+		await firstReached;
 		releaseFirst();
 		await Promise.all([first, second]);
 		assert.deepEqual(await coordinatedRead, {
