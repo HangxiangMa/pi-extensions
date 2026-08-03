@@ -14,6 +14,7 @@
 - Root Biome checks reject nested worktrees with another `biome.json`, ignore nested `.gitignore` rules for generated JSON, and honor the root `.gitignore`. Keep worktrees outside the repository, ignore generated paths at the root, and never blanket-ignore `src/`.
 - Tests compiled under root `node_modules/.cache` resolve Pi packages from the root, not a source workspace. Keep imported Pi packages as root devDependencies so the alternate-Pi matrix installs matching copies.
 - Treat `package.json#packageManager` plus CI/release workflows as the npm-version authority. A different npm can rewrite unrelated lock metadata or mishandle the alternate-Pi install matrix.
+- The pinned npm 12.0.2 rejects Node 25; run lockfile work under an installed supported runtime such as Node 22.22.2 instead of tolerating npm's compatibility warning.
 - Official Pi can misresolve static `@earendil-works/pi-ai/api/*` imports beneath its compatibility alias. Prefer root exports; otherwise use a variable-specifier dynamic import.
 
 ### Processes, lifecycle, and state
