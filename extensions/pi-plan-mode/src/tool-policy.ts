@@ -121,13 +121,17 @@ export function readCommand(input: unknown) {
 	return typeof command?.command === "string" ? command.command : "";
 }
 
-export function isSafeCommand(command: string, safeSubcommands: SafeSubcommands = {}) {
+export function findBlockedCommandSegment(
+	command: string,
+	safeSubcommands: SafeSubcommands = {},
+): string | undefined {
 	const segments = splitShellSegments(command);
-	return (
-		segments !== undefined &&
-		segments.length > 0 &&
-		segments.every((segment) => isSafeSegment(segment, safeSubcommands))
-	);
+	if (!segments || segments.length === 0) return command.trim() || "(empty command)";
+	return segments.find((segment) => !isSafeSegment(segment, safeSubcommands));
+}
+
+export function isSafeCommand(command: string, safeSubcommands: SafeSubcommands = {}) {
+	return findBlockedCommandSegment(command, safeSubcommands) === undefined;
 }
 
 function splitShellSegments(command: string): string[] | undefined {

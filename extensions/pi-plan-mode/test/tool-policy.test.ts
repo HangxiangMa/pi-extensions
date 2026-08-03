@@ -13,6 +13,7 @@ import planMode, {
 	withoutPlanModeQuestionTool,
 	withRequiredPlanModeTools,
 } from "../src/plan-mode.js";
+import { findBlockedCommandSegment } from "../src/tool-policy.js";
 
 test("tool selection allows safe built-ins and non-built-ins only", () => {
 	type PlanTool = Parameters<typeof canSelectToolInPlanMode>[0];
@@ -100,6 +101,23 @@ test("isSafeCommand permits read-only command lists and rejects shell mutation",
 		"",
 	]) {
 		assert.equal(isSafeCommand(command), false, command);
+	}
+});
+
+test("blocked command diagnostics identify the first rejected segment", () => {
+	const accepted = "git status --short && git diff --cached | head -20";
+	const singleBlocked = "touch output";
+	const compoundBlocked =
+		"git status --short && git reset --hard && git diff --cached | touch output";
+	const unsupportedSyntax = "  git status --short && cat file > copy  ";
+
+	assert.equal(findBlockedCommandSegment(accepted), undefined);
+	assert.equal(findBlockedCommandSegment(singleBlocked), singleBlocked);
+	assert.equal(findBlockedCommandSegment(compoundBlocked), "git reset --hard");
+	assert.equal(findBlockedCommandSegment(unsupportedSyntax), unsupportedSyntax.trim());
+	assert.equal(findBlockedCommandSegment("   "), "(empty command)");
+	for (const command of [accepted, singleBlocked, compoundBlocked, unsupportedSyntax, "   "]) {
+		assert.equal(isSafeCommand(command), findBlockedCommandSegment(command) === undefined, command);
 	}
 });
 
