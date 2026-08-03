@@ -7,15 +7,19 @@ interface SavedPlanMenuOptions {
 	isCurrent(): boolean;
 	show(): void;
 	implement(): void | Promise<void>;
+	exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
 	clear(): void;
 }
 
 export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPlanMenuOptions) {
 	if (!ctx.hasUI) {
-		throw new Error(`${options.statusText} Use /plan show, /plan implement, or /plan exit.`);
+		throw new Error(
+			`${options.statusText} Use /plan show, /plan implement, /plan export, or /plan exit.`,
+		);
 	}
-	type Action = "show" | "implement" | "clear";
-	const menu = defineMenu<undefined, "saved", Action, ExtensionContext>({
+	type Screen = "saved" | "export";
+	type Action = "show" | "implement" | "export" | "clear";
+	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
 		start: "saved",
 		screens: {
 			saved: () => ({
@@ -25,9 +29,18 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
 				items: [
 					{ id: "show", label: "Show saved plan", action: "show" },
 					{ id: "implement", label: "Implement saved plan", action: "implement" },
+					{ id: "export", label: "Export plan…", to: "export" },
 					{ id: "clear", label: "Clear saved plan", action: "clear" },
 				],
 				hint: "close",
+			}),
+			export: () => ({
+				kind: "input",
+				title: "Export plan",
+				lines: ["Existing paths are never overwritten."],
+				placeholder: "PLAN.md",
+				action: "export",
+				hint: "back",
 			}),
 		},
 		actions: {
@@ -39,6 +52,8 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
 				await options.implement();
 				return { kind: "close" };
 			},
+			export: async ({ value, signal }) =>
+				(await options.exportPlan(value ?? "", signal)) ? { kind: "close" } : { kind: "rejected" },
 			clear: async () => {
 				options.clear();
 				return { kind: "close" };

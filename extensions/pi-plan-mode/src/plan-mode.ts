@@ -29,10 +29,11 @@ import {
 	stripProposedPlanBlocksFromMessage,
 } from "./message-transform.js";
 import { showPlanModeMenu, showReadyPlanMenu } from "./plan-action-menus.js";
+import { exportStoredPlan } from "./plan-export.js";
 import {
 	clearPlanModeUi,
 	planModeStatusText as formatPlanModeStatusText,
-	showPlanModePlan,
+	showStoredPlan,
 	updatePlanModeUi,
 } from "./presentation.js";
 import { buildPlanModePrompt } from "./prompt.js";
@@ -168,7 +169,7 @@ export default function planMode(
 			const prompt = args.trim();
 			const command = prompt.toLowerCase();
 			if (command === "show") {
-				showStoredPlan(ctx);
+				showStoredPlan(pi, ctx, state);
 				return;
 			}
 			if (command === "finalize") {
@@ -185,6 +186,17 @@ export default function planMode(
 			}
 			if (command === "save") {
 				savePlanForLater(ctx);
+				return;
+			}
+			const exportMatch = /^export(?:\s+([\s\S]+))?$/iu.exec(prompt);
+			if (exportMatch) {
+				const lifecycle = captureMenuLifecycle();
+				await exportStoredPlan(
+					state,
+					exportMatch[1],
+					ctx,
+					exportLifecycle(lifecycle.signal, lifecycle.isCurrent),
+				);
 				return;
 			}
 			if (command === "exit" || command === "off") {
@@ -526,29 +538,6 @@ export default function planMode(
 		return completedPlanIsCurrent(intent) && readyPresentationIntent?.nonce === intent.nonce;
 	}
 
-	function showStoredPlan(ctx: ExtensionContext) {
-		const readyPlan = state.enabled ? state.latestPlan?.trim() : undefined;
-		const savedPlan = state.savedPlan?.plan.trim();
-		if (savedPlan && (ctx.mode === "print" || ctx.mode === "json")) {
-			throw new Error("Saved plan display is unavailable in print/JSON mode. Use TUI or RPC.");
-		}
-		const activePlan = state.activeImplementation?.plan.trim();
-		const plan = readyPlan ?? savedPlan ?? activePlan;
-		if (!plan) {
-			ctx.ui.notify(
-				"No completed plan is available. Use /plan finalize when planning is complete.",
-				"info",
-			);
-			return;
-		}
-		const title = readyPlan
-			? "Proposed Plan"
-			: savedPlan
-				? "Saved Plan"
-				: "Active Implementation Plan";
-		showPlanModePlan(pi, ctx, title, plan);
-	}
-
 	function requestFinalPlan(ctx: ExtensionContext) {
 		if (!state.enabled) {
 			ctx.ui.notify("Plan mode is not active. Use /plan first.", "warning");
@@ -665,7 +654,9 @@ export default function planMode(
 			statusText: planStatusText(),
 			signal: lifecycle.signal,
 			isCurrent: lifecycle.isCurrent,
-			show: () => showStoredPlan(ctx),
+			show: () => showStoredPlan(pi, ctx, state),
+			exportPlan: (path, signal) =>
+				exportStoredPlan(state, path, ctx, exportLifecycle(signal, lifecycle.isCurrent)),
 			startNew: () => {
 				enterPlanMode(ctx);
 				ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
@@ -683,8 +674,10 @@ export default function planMode(
 			statusText: planStatusText(),
 			signal: lifecycle.signal,
 			isCurrent: lifecycle.isCurrent,
-			show: () => showStoredPlan(ctx),
+			show: () => showStoredPlan(pi, ctx, state),
 			implement: () => startImplementation(ctx),
+			exportPlan: (path, signal) =>
+				exportStoredPlan(state, path, ctx, exportLifecycle(signal, lifecycle.isCurrent)),
 			clear: () => {
 				exitPlanMode(ctx);
 				ctx.ui.notify("Saved plan cleared.", "info");
@@ -702,9 +695,11 @@ export default function planMode(
 			statusText: planStatusText(),
 			hasReadyPlan: state.latestPlan !== undefined,
 			...lifecycle,
-			show: () => showStoredPlan(ctx),
+			show: () => showStoredPlan(pi, ctx, state),
 			finalize: () => requestFinalPlan(ctx),
 			implement: () => startImplementation(ctx),
+			exportPlan: (path, signal) =>
+				exportStoredPlan(state, path, ctx, exportLifecycle(signal, lifecycle.isCurrent)),
 			save: () => savePlanForLater(ctx),
 			tools: () => showToolSelector(ctx),
 			stay: () => updateUi(ctx),
@@ -720,6 +715,8 @@ export default function planMode(
 		await showReadyPlanMenu(ctx, {
 			...lifecycle,
 			implement: () => startImplementation(ctx),
+			exportPlan: (path, signal) =>
+				exportStoredPlan(state, path, ctx, exportLifecycle(signal, lifecycle.isCurrent)),
 			save: () => savePlanForLater(ctx),
 			stay: () => undefined,
 			exit: () => {
@@ -792,6 +789,10 @@ export default function planMode(
 		applyPlanModeTools();
 		persistState();
 		updateUi(ctx);
+	}
+
+	function exportLifecycle(signal: AbortSignal, isCurrent: () => boolean) {
+		return { signal, isCurrent, getState: () => state };
 	}
 
 	function captureMenuLifecycle() {
