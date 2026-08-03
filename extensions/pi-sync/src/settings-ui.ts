@@ -1,22 +1,17 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import type { RunRoute } from "./cancellable-operation.js";
 import { loadConfig, localConfigPath } from "./config.js";
 import { updateSyncSetup } from "./settings-management.js";
 import {
 	SETUP_SWITCH_ACTION_OPTIONS,
-	type SetupPullOutcome,
 	saveOnSwitch,
 	setupSwitchActionFromLabel,
 	setupSwitchActionLabel,
 } from "./setup-switch.js";
 import { safeTerminalText } from "./sync-format.js";
 
-export type SyncSettingsRoute = (
-	route: string,
-	signal?: AbortSignal,
-	onCommit?: () => void,
-	setup?: string,
-) => Promise<SetupPullOutcome | undefined>;
+export type SyncSettingsRoute = RunRoute;
 
 export async function showSyncSettings(
 	ctx: ExtensionCommandContext,

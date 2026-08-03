@@ -58,6 +58,29 @@ recovery. Secondary screens provide **Back**; Escape goes back and Ctrl+C closes
 Destructive, credential-bearing, and externally visible operations retain exact specialized previews
 and confirmations.
 
+### Resolve conflicts in the manager
+
+When **Sync now**, **Pull from remote…**, or **Push to remote…** finds changes that require a human
+direction choice, the manager opens **Resolve sync conflict** instead of ending at a command-only
+error. The flow names the current sync setup and explains whether local content, remote content, or
+the included-content policy changed.
+
+Choose **Review differences (recommended)** to inspect the exact affected paths without changing
+local files, remote data, or sync state. Then choose one reviewed direction:
+
+- **Keep local content and replace remote…** uses the existing forced-push path. It scans managed
+  local files for secrets, shows the exact remote publication effect, re-reads a changed remote head,
+  and asks again if the reviewed plan changed.
+- **Use remote content and replace local…** uses the existing forced-pull path. It shows exact local
+  writes and deletions, protects the live session, and creates a local backup before applying.
+- First sync uses **Use local as initial source…** and **Use remote as initial source…** labels. An
+  empty remote offers **Push local content…** only.
+
+Cancelling a preparation or confirmation returns to conflict resolution with no side effects. Back
+returns to the sync manager; Ctrl+C closes the complete flow. Automatic startup/shutdown sync never
+opens this interactive flow and continues to report an actionable warning. Deterministic direct
+routes remain available and keep their command-oriented error guidance.
+
 ## ⚙️ Settings
 
 The canonical private user file is:

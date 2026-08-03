@@ -29,6 +29,7 @@ import {
 	type RemoteHead,
 	type SyncBackend,
 } from "./sync-backend.js";
+import { createSyncDecision } from "./sync-decision.js";
 import {
 	countPreservedRemoteFiles,
 	errorMessage,
@@ -308,9 +309,17 @@ export async function push(
 			? filterSnapshotForConfigPolicy(remoteForUpload, config)
 			: undefined;
 		if (!remoteForConflict || !snapshotHashesMatchState(remoteForConflict, state, config)) {
-			throw new Error(
-				"Remote or sync policy changed since last sync. Run /sync pull first or /sync push --force.",
-			);
+			throw createSyncDecision({
+				kind: head ? "remote-or-policy-changed" : "remote-empty",
+				config,
+				state,
+				local,
+				remote: remoteForConflict,
+				localChanged: hasLocalChanges(local, state, config),
+				remoteChanged: true,
+				directMessage:
+					"Remote or sync policy changed since last sync. Run /sync pull first or /sync push --force.",
+			});
 		}
 	}
 
@@ -330,7 +339,7 @@ export async function push(
 	}
 
 	if (!(await confirmPush(ctx, options, config, backend, local, upload, head, remoteForUpload))) {
-		return;
+		return "cancelled" as const;
 	}
 
 	if (options.force) {
@@ -361,7 +370,7 @@ export async function push(
 					"Remote changed during review. Push the refreshed plan?",
 				))
 			) {
-				return;
+				return "cancelled" as const;
 			}
 		}
 	}
@@ -395,6 +404,7 @@ export async function push(
 			result.warnings.length > 0 ? "warning" : "info",
 		);
 	}
+	return "applied" as const;
 }
 
 export async function pull(
@@ -415,14 +425,32 @@ export async function pull(
 	throwIfAborted(options.signal);
 	const { head, snapshot: remote } = await readRemoteSnapshot(backend, config, options.signal);
 	throwIfAborted(options.signal);
-	if (!remote) throw new Error("Remote is empty. Run /sync push from a configured machine first.");
-
 	const localChanged = hasLocalChanges(local, state, config);
+	if (!remote) {
+		throw createSyncDecision({
+			kind: "remote-empty",
+			config,
+			state,
+			local,
+			localChanged,
+			remoteChanged: false,
+			directMessage: "Remote is empty. Run /sync push from a configured machine first.",
+		});
+	}
+
 	const remoteChanged = hasRemoteChanges(remote, state, config, protectedSessionPaths(ctx));
 	if (localChanged && remoteChanged && state.lastAppliedSnapshot && !options.force) {
-		throw new Error(
-			"Both local and remote changed since last sync. Run /sync diff, then choose /sync pull --force or /sync push --force.",
-		);
+		throw createSyncDecision({
+			kind: "both-changed",
+			config,
+			state,
+			local,
+			remote,
+			localChanged,
+			remoteChanged,
+			directMessage:
+				"Both local and remote changed since last sync. Run /sync diff, then choose /sync pull --force or /sync push --force.",
+		});
 	}
 
 	if (
@@ -519,15 +547,31 @@ export async function syncBoth(
 
 	if (firstSync && remote && remote.files.length > 0 && local.files.length > 0) {
 		if (!canPullRemoteSettingsOnFirstSync(local, remote)) {
-			throw new Error(
-				"Remote settings exist and this machine has different local Pi settings. Run /sync diff, then manually choose /sync pull or /sync push.",
-			);
+			throw createSyncDecision({
+				kind: "first-sync-settings-diverged",
+				config,
+				state,
+				local,
+				remote,
+				localChanged: true,
+				remoteChanged: true,
+				directMessage:
+					"Remote settings exist and this machine has different local Pi settings. Run /sync diff, then manually choose /sync pull or /sync push.",
+			});
 		}
 		if (!sameHashes(fileHashMap(local), fileHashMap(remote))) {
 			if (!canPullRemoteSessionsOnFirstSync(local, remote)) {
-				throw new Error(
-					"Remote settings match, but local and remote Pi sessions differ. Run /sync diff, then manually choose /sync pull or /sync push.",
-				);
+				throw createSyncDecision({
+					kind: "first-sync-sessions-diverged",
+					config,
+					state,
+					local,
+					remote,
+					localChanged: true,
+					remoteChanged: true,
+					directMessage:
+						"Remote settings match, but local and remote Pi sessions differ. Run /sync diff, then manually choose /sync pull or /sync push.",
+				});
 			}
 			await pull(ctx, options, factory);
 			return;
@@ -557,9 +601,17 @@ export async function syncBoth(
 		return;
 	}
 	if (localChanged && remoteChanged && state.lastAppliedSnapshot) {
-		throw new Error(
-			"Both local and remote changed. Run /sync diff and resolve with push --force or pull --force.",
-		);
+		throw createSyncDecision({
+			kind: "both-changed",
+			config,
+			state,
+			local,
+			remote,
+			localChanged,
+			remoteChanged,
+			directMessage:
+				"Both local and remote changed. Run /sync diff and resolve with push --force or pull --force.",
+		});
 	}
 	if (remoteChanged) {
 		await pull(ctx, options, factory);

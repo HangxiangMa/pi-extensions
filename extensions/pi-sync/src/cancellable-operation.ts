@@ -7,15 +7,24 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { runCustomInteraction } from "@narumitw/pi-tui-kit";
 import { safeTerminalText } from "./manager-helpers.js";
 import type { SetupPullOutcome } from "./setup-switch.js";
+import type { SyncDecision } from "./sync-decision.js";
+
+export type RunRouteResult =
+	| { kind: "completed"; outcome?: SetupPullOutcome }
+	| { kind: "decision-required"; decision: SyncDecision }
+	| { kind: "failed" };
 
 export type RunRoute = (
 	route: string,
 	signal?: AbortSignal,
 	onCommit?: () => void,
 	target?: string,
-) => Promise<SetupPullOutcome | undefined>;
+) => Promise<RunRouteResult | undefined>;
 
-export type CancellableOperationResult = SetupPullOutcome | "closed" | undefined;
+export type CancellableOperationResult =
+	| RunRouteResult
+	| { kind: "closed" }
+	| { kind: "cancelled" };
 
 interface CancellableOperationOptions {
 	commitAware?: boolean;
@@ -38,10 +47,10 @@ export async function runCancellableOperation(
 		signal,
 	} = options;
 	if (ctx.mode !== "tui") {
-		return await runRoute(route, undefined, undefined, target);
+		return (await runRoute(route, signal, undefined, target)) ?? { kind: "failed" };
 	}
 	let commitStarted = false;
-	let routeResult: SetupPullOutcome | undefined;
+	let routeResult: RunRouteResult | undefined;
 	const interaction = await runCustomInteraction<{ cancelled?: boolean; error?: unknown }>(ctx, {
 		signal,
 		isCurrent: () => !signal?.aborted,
@@ -89,13 +98,13 @@ export async function runCancellableOperation(
 		},
 	});
 	if (interaction.kind === "error") throw interaction.error;
-	if (interaction.kind !== "completed") return "closed";
+	if (interaction.kind !== "completed") return { kind: "closed" };
 	if (interaction.value.cancelled) {
 		if (cancelledMessage) ctx.ui.notify(cancelledMessage, "info");
-		return "cancelled";
+		return { kind: "cancelled" };
 	}
 	if (interaction.value.error) throw interaction.value.error;
-	return routeResult;
+	return routeResult ?? { kind: "failed" };
 }
 
 function keybindingText(
