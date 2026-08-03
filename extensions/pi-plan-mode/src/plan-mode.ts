@@ -59,8 +59,8 @@ import { type PlanCompletionSource, type PlanModeState, restorePlanModeState } f
 import {
 	canSelectToolInPlanMode,
 	classifyPlanModeTool,
+	findBlockedCommandSegment,
 	isBuiltinTool,
-	isSafeCommand,
 	readCommand,
 	SAFE_BUILTIN_PLAN_TOOLS,
 } from "./tool-policy.js";
@@ -328,11 +328,11 @@ export default function planMode(
 		// Built-in-compatible overrides retain the canonical name but replace its source metadata.
 		if (event.toolName !== "bash") return;
 
-		const command = readCommand(event.input);
-		if (!isSafeCommand(command, settings.safeSubcommands)) {
+		const blocked = findBlockedCommandSegment(readCommand(event.input), settings.safeSubcommands);
+		if (blocked !== undefined) {
 			return {
 				block: true,
-				reason: `Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nCommand: ${command}`,
+				reason: `Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: ${blocked}`,
 			};
 		}
 	});
