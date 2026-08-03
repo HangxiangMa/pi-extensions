@@ -457,12 +457,12 @@ Reasoning, tool results, custom transport messages, and non-text parts are exclu
 Stateful execution uses a transport boundary:
 
 - `subprocess` is the default compatibility and rollback path.
-- `in-process` uses only public Pi SDK APIs: `createAgentSession()`, `SessionManager.inMemory()`, `DefaultResourceLoader`, and normal session lifecycle methods. It isolates conversation/tool selection, not memory or crashes; child failures share the parent Node.js process.
+- `in-process` uses only public Pi SDK APIs: `createAgentSessionServices()`, `createAgentSessionFromServices()`, `SessionManager.inMemory()`, and normal session lifecycle methods. It isolates conversation/tool selection, not memory or crashes; child failures share the parent Node.js process.
 - Child resource loading sets `noExtensions: true`, preventing recursive `pi-subagents` loading and duplicate extension side effects while retaining trust-eligible context/skill resources and the selected agent prompt. Both transports receive the same resolved target-trust boolean: subprocess children get explicit `--approve`/`--no-approve`, and in-process children set the same `SettingsManager.projectTrusted` value.
 - Agent model strings use Pi core's CLI resolver, including provider/model patterns, fuzzy matching, custom provider model IDs, and `:<thinking>` suffixes. Thinking level and built-in tool allow-list overrides are applied when the child is created. Parent model/thinking changes are snapshotted for subsequently created children; an existing child keeps its own session configuration.
 - Extension/custom tool names are rejected in-process with an actionable recommendation to use `subprocess`; permissions are never silently widened.
 - Timeout, parent abort, close, expiry, and session shutdown abort/dispose owned child sessions. A child that does not settle after abort grace is discarded rather than reused.
-- In-process startup failures do not silently retry through subprocesses, preventing duplicate side effects. If the loaded Pi core lacks public `ModelRuntime` or `resolveCliModel` support, startup fails with an actionable instruction to select `stateful.transport: "subprocess"`.
+- In-process startup failures do not silently retry through subprocesses, preventing duplicate side effects. If the loaded Pi core lacks public `createAgentSessionServices()`, `createAgentSessionFromServices()`, or `resolveCliModel()` support, startup fails with an actionable instruction to select `stateful.transport: "subprocess"`.
 
 No private Pi imports, runtime casts, or `ExtensionAPI` monkey-patching are used. Approval policy, sandbox profile, provider-header hooks, extension state, global scheduling, and parent/child transcript switching are not inherited or provided by the in-process transport.
 

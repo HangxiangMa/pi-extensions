@@ -16,7 +16,7 @@ import {
 	type ChildSession,
 	type ChildSessionCreateOptions,
 	copyRegisteredProviders,
-	createInProcessResourceLoader,
+	createInProcessServices,
 	createSdkChildSession,
 	InProcessTransport,
 	resolveChildModel,
@@ -503,16 +503,15 @@ test("child resource loader excludes extensions while retaining the agent prompt
 	const cwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-sdk-cwd-"));
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-sdk-agent-"));
 	writeFileSync(path.join(cwd, "AGENTS.md"), "Trusted child context.");
-	const { loader, settingsManager } = await createInProcessResourceLoader(
-		cwd,
-		agentDir,
-		"Agent role prompt.",
-		true,
+	const services = await createInProcessServices(cwd, agentDir, "Agent role prompt.", true);
+	assert.equal(services.settingsManager.isProjectTrusted(), true);
+	assert.deepEqual(services.resourceLoader.getExtensions().extensions, []);
+	assert.deepEqual(services.resourceLoader.getAppendSystemPrompt(), ["Agent role prompt."]);
+	assert.equal(
+		services.resourceLoader.getAgentsFiles().agentsFiles.at(-1)?.content,
+		"Trusted child context.",
 	);
-	assert.equal(settingsManager.isProjectTrusted(), true);
-	assert.deepEqual(loader.getExtensions().extensions, []);
-	assert.deepEqual(loader.getAppendSystemPrompt(), ["Agent role prompt."]);
-	assert.equal(loader.getAgentsFiles().agentsFiles.at(-1)?.content, "Trusted child context.");
+	assert.deepEqual(services.diagnostics, []);
 });
 
 test("untrusted in-process resource loading never reads project settings", async () => {
@@ -524,15 +523,10 @@ test("untrusted in-process resource loading never reads project settings", async
 		'{"SECRET_UNTRUSTED_PROJECT_SETTINGS":"unterminated',
 	);
 	try {
-		const { settingsManager } = await createInProcessResourceLoader(
-			cwd,
-			agentDir,
-			"Agent role prompt.",
-			false,
-		);
-		assert.equal(settingsManager.isProjectTrusted(), false);
-		assert.deepEqual(settingsManager.getProjectSettings(), {});
-		assert.deepEqual(settingsManager.drainErrors(), []);
+		const services = await createInProcessServices(cwd, agentDir, "Agent role prompt.", false);
+		assert.equal(services.settingsManager.isProjectTrusted(), false);
+		assert.deepEqual(services.settingsManager.getProjectSettings(), {});
+		assert.deepEqual(services.settingsManager.drainErrors(), []);
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 		rmSync(agentDir, { recursive: true, force: true });
@@ -545,7 +539,7 @@ test("in-process resource loading rejects a non-regular system prompt source", a
 	mkdirSync(path.join(cwd, ".pi", "SYSTEM.md"), { recursive: true });
 	try {
 		await assert.rejects(
-			() => createInProcessResourceLoader(cwd, agentDir, "Agent role prompt.", true),
+			() => createInProcessServices(cwd, agentDir, "Agent role prompt.", true),
 			/readable regular file/i,
 		);
 	} finally {
@@ -944,7 +938,7 @@ test("in-process model resolution fails actionably when the installed core is un
 				modelRegistry: {} as never,
 				parentRuntime: { model: undefined, thinkingLevel: "off" },
 			}),
-		/require Pi core ModelRuntime and resolveCliModel.*subprocess/i,
+		/require Pi core createAgentSessionServices, createAgentSessionFromServices, and resolveCliModel.*subprocess/i,
 	);
 });
 
