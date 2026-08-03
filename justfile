@@ -139,6 +139,9 @@ pack-lsp:
 pack-plan-mode:
     just pack plan-mode
 
+pack-recall:
+    just pack recall
+
 pack-stamp:
     just pack stamp
 
@@ -208,6 +211,9 @@ try-lsp:
 
 try-plan-mode:
     just try plan-mode
+
+try-recall:
+    just try recall
 
 try-stamp:
     just try stamp
