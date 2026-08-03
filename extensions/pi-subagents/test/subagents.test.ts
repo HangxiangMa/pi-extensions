@@ -73,6 +73,21 @@ type SchemaObject = {
 	description?: string;
 };
 
+const CORE_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
+
+function useFakePiPackage(packageDir: string, cliPath: string): () => void {
+	writeFileSync(
+		path.join(packageDir, "package.json"),
+		JSON.stringify({ name: CORE_PACKAGE_NAME, bin: { pi: path.relative(packageDir, cliPath) } }),
+	);
+	const previous = process.env.PI_PACKAGE_DIR;
+	process.env.PI_PACKAGE_DIR = packageDir;
+	return () => {
+		if (previous === undefined) delete process.env.PI_PACKAGE_DIR;
+		else process.env.PI_PACKAGE_DIR = previous;
+	};
+}
+
 type SubagentTool = {
 	execute: (...args: unknown[]) => Promise<{
 		content?: Array<{ type: string; text: string }>;
@@ -1996,9 +2011,8 @@ test("blocking delegation preflights every target and passes explicit saved trus
 		].join(""),
 	);
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-	const previousScript = process.argv[1];
+	const restorePiPackage = useFakePiPackage(root, fakePi);
 	process.env.PI_CODING_AGENT_DIR = agentDir;
-	process.argv[1] = fakePi;
 	try {
 		const mock = createMockPi();
 		subagents(mock.pi);
@@ -2063,7 +2077,7 @@ test("blocking delegation preflights every target and passes explicit saved trus
 		assert.match(anywhere.content?.[0]?.text ?? "", /--no-approve/);
 		assert.equal(anywhere.details?.results[0]?.target?.trust.kind, "saved-denied");
 	} finally {
-		process.argv[1] = previousScript;
+		restorePiPackage();
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		rmSync(root, { recursive: true, force: true });
@@ -2087,8 +2101,7 @@ test("parallel execution ignores an empty optional aggregator and preserves work
 			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
 		].join(""),
 	);
-	const originalScript = process.argv[1];
-	process.argv[1] = fakePi;
+	const restorePiPackage = useFakePiPackage(dir, fakePi);
 	try {
 		const result = await tool.execute(
 			"empty-aggregator",
@@ -2109,7 +2122,7 @@ test("parallel execution ignores an empty optional aggregator and preserves work
 		assert.match(result.content?.[0]?.text ?? "", /PROOF_OK/);
 		assert.match(result.content?.[0]?.text ?? "", /CALC_OK/);
 	} finally {
-		process.argv[1] = originalScript;
+		restorePiPackage();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
@@ -2186,8 +2199,7 @@ test("parallel updates keep failed fan-out pending while fan-in starts", async (
 			aggregator?: { exitCode: number };
 		};
 	}> = [];
-	const originalScript = process.argv[1];
-	process.argv[1] = fakePi;
+	const restorePiPackage = useFakePiPackage(dir, fakePi);
 	try {
 		const result = await tool.execute(
 			"pending-fan-in",
@@ -2209,7 +2221,7 @@ test("parallel updates keep failed fan-out pending while fan-in starts", async (
 			"expected a failed fan-out update with a pending fan-in result",
 		);
 	} finally {
-		process.argv[1] = originalScript;
+		restorePiPackage();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
@@ -2233,8 +2245,7 @@ test("parallel summaries classify provider errors and retain partial output", as
 			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
 		].join(""),
 	);
-	const originalScript = process.argv[1];
-	process.argv[1] = fakePi;
+	const restorePiPackage = useFakePiPackage(dir, fakePi);
 	try {
 		const result = await tool.execute(
 			"parallel-errors",
@@ -2254,7 +2265,7 @@ test("parallel summaries classify provider errors and retain partial output", as
 		assert.match(text, /Partial output:\nPARTIAL/);
 		assert.match(text, /\[scout\] completed: DONE/);
 	} finally {
-		process.argv[1] = originalScript;
+		restorePiPackage();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });

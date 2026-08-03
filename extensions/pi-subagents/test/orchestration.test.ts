@@ -926,8 +926,15 @@ test("stateful subprocess uses the retained resolved trust decision", async () =
 			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
 		].join(""),
 	);
-	const previousScript = process.argv[1];
-	process.argv[1] = fakePi;
+	writeFileSync(
+		path.join(root, "package.json"),
+		JSON.stringify({
+			name: "@earendil-works/pi-coding-agent",
+			bin: { pi: path.basename(fakePi) },
+		}),
+	);
+	const previousPackageDir = process.env.PI_PACKAGE_DIR;
+	process.env.PI_PACKAGE_DIR = root;
 	try {
 		const transport = new SubprocessTransport({
 			getSettings: () => ({ agents: { scout: { tools: [] } } }),
@@ -956,7 +963,8 @@ test("stateful subprocess uses the retained resolved trust decision", async () =
 			assert.match(outcome.output, /--no-tools/);
 		}
 	} finally {
-		process.argv[1] = previousScript;
+		if (previousPackageDir === undefined) delete process.env.PI_PACKAGE_DIR;
+		else process.env.PI_PACKAGE_DIR = previousPackageDir;
 		rmSync(root, { recursive: true, force: true });
 	}
 });

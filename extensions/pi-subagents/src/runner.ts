@@ -16,6 +16,7 @@ import {
 	MAX_SUBAGENT_TIMEOUT_MS,
 	truncateUtf8,
 } from "./limits.js";
+import { resolvePiInvocation } from "./pi-invocation.js";
 import { JsonLineDecoder } from "./protocol.js";
 
 export const KILL_GRACE_MS = 5000;
@@ -353,22 +354,6 @@ export function buildPiArgs(options: PiArgsOptions): string[] {
 	return args;
 }
 
-function getPiInvocation(args: string[]): { command: string; args: string[] } {
-	const currentScript = process.argv[1];
-	const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
-	if (currentScript && !isBunVirtualScript && fs.existsSync(currentScript)) {
-		return { command: process.execPath, args: [currentScript, ...args] };
-	}
-
-	const execName = path.basename(process.execPath).toLowerCase();
-	const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName);
-	if (!isGenericRuntime) {
-		return { command: process.execPath, args };
-	}
-
-	return { command: "pi", args };
-}
-
 function signalProcess(proc: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
 	if (process.platform !== "win32" && proc.pid) {
 		try {
@@ -576,16 +561,26 @@ export async function runSingleAgent(
 			systemPromptPath: tmpPromptPath ?? undefined,
 			task,
 		});
-		let wasAborted = false;
-		let timedOut = false;
-
-		const exitCode = await new Promise<number>((resolve) => {
-			const invocation = invocationOverride
+		let invocation: { command: string; args: string[] };
+		try {
+			invocation = invocationOverride
 				? {
 						command: invocationOverride.command,
 						args: [...(invocationOverride.argsPrefix ?? []), ...args],
 					}
-				: getPiInvocation(args);
+				: resolvePiInvocation(args);
+		} catch (error) {
+			currentResult.launchFailed = true;
+			currentResult.exitCode = 1;
+			currentResult.stderr = setErrorMessage(
+				error instanceof Error ? error.message : String(error),
+			);
+			return currentResult;
+		}
+		let wasAborted = false;
+		let timedOut = false;
+
+		const exitCode = await new Promise<number>((resolve) => {
 			let settled = false;
 			let cleanupTermination: (() => void) | undefined;
 			let timeout: NodeJS.Timeout | undefined;
