@@ -7,6 +7,7 @@ interface ActiveImplementationMenuOptions {
 	isCurrent(): boolean;
 	show(): void;
 	exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
+	settings(signal: AbortSignal): Promise<boolean>;
 	startNew(): void;
 	clear(): void;
 }
@@ -16,7 +17,7 @@ export async function showActiveImplementationMenu(
 	options: ActiveImplementationMenuOptions,
 ) {
 	type Screen = "active" | "export";
-	type Action = "show" | "export" | "start-new" | "clear";
+	type Action = "show" | "export" | "settings" | "start-new" | "clear";
 	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
 		start: "active",
 		screens: {
@@ -27,6 +28,7 @@ export async function showActiveImplementationMenu(
 				items: [
 					{ id: "show", label: "Show active implementation plan", action: "show" },
 					{ id: "export", label: "Export plan…", to: "export" },
+					{ id: "settings", label: "Settings", action: "settings" },
 					{ id: "start-new", label: "Start a new plan", action: "start-new" },
 					{ id: "clear", label: "Clear active implementation plan", action: "clear" },
 				],
@@ -48,6 +50,11 @@ export async function showActiveImplementationMenu(
 			},
 			export: async ({ value, signal }) =>
 				(await options.exportPlan(value ?? "", signal)) ? { kind: "close" } : { kind: "rejected" },
+			settings: async ({ signal }) => {
+				const close = await options.settings(signal);
+				if (signal.aborted || !options.isCurrent()) return { kind: "rejected" };
+				return close ? { kind: "close" } : { kind: "stay" };
+			},
 			"start-new": async () => {
 				options.startNew();
 				return { kind: "close" };

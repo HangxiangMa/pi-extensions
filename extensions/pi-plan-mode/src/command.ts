@@ -13,7 +13,11 @@ const PLAN_COMMAND_COMPLETIONS: readonly CommandArgumentCompletion[] = [
 	{ value: "export", label: "export", description: "Export the stored plan to a Markdown file" },
 	{ value: "exit", label: "exit", description: "Leave Plan mode or clear a saved/active plan" },
 	{ value: "off", label: "off", description: "Leave Plan mode or clear a saved/active plan" },
-	{ value: "tools", label: "tools", description: "Select tools allowed in Plan mode" },
+	{
+		value: "tools",
+		label: "tools",
+		description: "Choose tools before starting this Plan workflow",
+	},
 ];
 
 export function completePlanArguments(argumentPrefix: string): CommandArgumentCompletion[] | null {

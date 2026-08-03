@@ -14,14 +14,13 @@ interface PlanMenuOptions extends MenuLifecycle {
 	implement(): void | Promise<void>;
 	exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
 	save(): void;
-	tools(): Promise<void>;
 	stay(): void;
 	exit(): void;
 }
 
 export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuOptions) {
 	type Screen = "main" | "export";
-	type Action = "show" | "finalize" | "implement" | "export" | "save" | "tools" | "stay" | "exit";
+	type Action = "show" | "finalize" | "implement" | "export" | "save" | "stay" | "exit";
 	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
 		start: "main",
 		screens: {
@@ -35,13 +34,11 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 							{ id: "implement", label: "Implement this plan", action: "implement" },
 							{ id: "export", label: "Export plan…", to: "export" },
 							{ id: "save", label: "Save for later", action: "save" },
-							{ id: "tools", label: "Configure Plan-mode tools", action: "tools" },
 							{ id: "stay", label: "Stay in Plan mode", action: "stay" },
 							{ id: "exit", label: "Exit Plan mode", action: "exit" },
 						]
 					: [
 							{ id: "finalize", label: "Request final plan", action: "finalize" },
-							{ id: "tools", label: "Configure Plan-mode tools", action: "tools" },
 							{ id: "stay", label: "Stay in Plan mode", action: "stay" },
 							{ id: "exit", label: "Exit Plan mode", action: "exit" },
 						],
@@ -74,10 +71,6 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 			save: async () => {
 				options.save();
 				return { kind: "close" };
-			},
-			tools: async () => {
-				await options.tools();
-				return { kind: "stay" };
 			},
 			stay: async () => {
 				options.stay();

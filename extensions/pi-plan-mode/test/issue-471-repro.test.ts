@@ -472,7 +472,7 @@ test("a Plan-mode question cannot commit or open its next prompt after Plan mode
 	assert.equal(selectCalls, 1);
 });
 
-test("shutdown cancellation cannot let a stale tool menu reactivate Plan-mode tools", async () => {
+test("shutdown cancellation cannot let a stale pre-start tool menu activate Plan mode", async () => {
 	const selectStarted = deferred<void>();
 	const mock = createMockPi({
 		activeTools: ["read", "edit"],
@@ -490,7 +490,6 @@ test("shutdown cancellation cannot let a stale tool menu reactivate Plan-mode to
 			return harness.resultPromise;
 		},
 	});
-	await mock.commands.get("plan")?.handler("start", context.ctx);
 	const pendingMenu = mock.commands.get("plan")?.handler("tools", context.ctx);
 	await selectStarted.promise;
 	await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
@@ -500,7 +499,7 @@ test("shutdown cancellation cannot let a stale tool menu reactivate Plan-mode to
 	assert.equal(context.statuses.get("plan-mode"), undefined);
 });
 
-test("exiting Plan mode while a tool menu is open cannot reactivate Plan-mode tools", async () => {
+test("a state change while a pre-start tool menu is open cannot activate Plan mode", async () => {
 	const selectStarted = deferred<void>();
 	let menuHarness: ReturnType<typeof createCustomSelectorHarness> | undefined;
 	const mock = createMockPi({
@@ -519,7 +518,6 @@ test("exiting Plan mode while a tool menu is open cannot reactivate Plan-mode to
 			return menuHarness.resultPromise;
 		},
 	});
-	await mock.commands.get("plan")?.handler("start", context.ctx);
 	const pendingMenu = mock.commands.get("plan")?.handler("tools", context.ctx);
 	await selectStarted.promise;
 	await mock.commands.get("plan")?.handler("exit", context.ctx);
@@ -571,8 +569,10 @@ test("active-plan menu actions work in TUI and RPC without hidden route changes"
 		planMode(mock.pi);
 		const context = createMockContext({
 			mode: scenario.mode,
-			select: async (_title: string, options: string[]) =>
-				options.find((option) => option.startsWith(scenario.selection)),
+			select: async (_title: string, options: string[]) => {
+				assert.ok(options.includes("Settings"));
+				return options.find((option) => option.startsWith(scenario.selection));
+			},
 		});
 		await mock.commands.get("plan")?.handler("start", context.ctx);
 		const complete = mock.tools.find((candidate) => candidate.name === "plan_mode_complete")
