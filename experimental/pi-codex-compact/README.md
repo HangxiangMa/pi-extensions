@@ -1,97 +1,225 @@
-# @narumitw/pi-codex-compact
+# 🗜️ pi-codex-compact — Remote Compaction V2 for Pi
+
+[![npm](https://img.shields.io/npm/v/@narumitw/pi-codex-compact)](https://www.npmjs.com/package/@narumitw/pi-codex-compact) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
 > [!WARNING]
 > This extension is experimental. It depends on an undocumented OpenAI Codex Responses wire
 > contract and stores provider-specific opaque checkpoints. Keep backups of important sessions.
 
-Codex Remote Compaction V2 for Pi's built-in `openai-codex` OAuth provider. It replaces Pi's
-plaintext summary-generation call with a server-generated opaque compaction item, then replays
+`@narumitw/pi-codex-compact` adds Codex Remote Compaction V2 to the
+[Pi Coding Agent](https://pi.dev) for the built-in `openai-codex` OAuth provider. It replaces Pi's
+plaintext summary-generation call with a server-generated opaque compaction item and safely replays
 that item in later OpenAI Codex Responses requests.
 
-Pi still owns compaction thresholds, `/compact`, overflow retries, retained-message selection, and
-the append-only session tree. This package does not reproduce Codex core's context-window lineage
-or exact pre-turn and mid-turn lifecycle.
+Pi remains responsible for deciding when compaction runs, including automatic thresholds, the
+built-in `/compact` command, overflow retries, retained-message selection, and append-only session
+publication. This package owns only the Remote V2 request, checkpoint persistence, and later payload
+replay.
 
-## Install
+## ✨ Features
+
+- Uses the active `openai-codex` OAuth credentials without persisting tokens or request headers.
+- Handles Pi's manual, threshold, and overflow compaction reasons through the same lifecycle hook.
+- Validates one bounded opaque `compaction` item from a completed Responses SSE stream.
+- Persists a versioned checkpoint in `CompactionEntry.details` and restores it after reload, resume,
+  or a fork that retains the checkpoint.
+- Replays the newest compatible checkpoint while preserving later conversation and extension-added
+  context.
+- Supports repeated compaction by carrying the previous opaque item into the next Remote V2 request.
+- Falls back to Pi's native plaintext compaction after authentication, transport, protocol, or
+  validation failure; user cancellation does not launch the fallback.
+- Provides `/codex-compact` for manual compaction, effective-route visibility, and bounded settings.
+
+## 📦 Install
+
+Install persistently from npm:
 
 ```bash
 pi install npm:@narumitw/pi-codex-compact
 ```
 
-From this repository:
+Try the published package without installing:
 
 ```bash
+pi -e npm:@narumitw/pi-codex-compact
+```
+
+Try a local checkout from the repository root:
+
+```bash
+pi -e ./experimental/pi-codex-compact
+# or
 just try codex-compact
 ```
 
-Loading the package enables it. Use Pi normally, including its built-in `/compact` command. Open
-the extension's TUI control menu with:
+Loading the package enables Remote V2 with safe defaults. Avoid loading a global npm installation
+and the local workspace at the same time.
+
+## 🚀 Quick start
+
+1. Sign in through Pi's built-in OpenAI Codex OAuth provider.
+2. Select a model whose provider is `openai-codex` and API is `openai-codex-responses`.
+3. Work normally. Pi's automatic compaction and built-in `/compact` continue to operate.
+4. Run `/codex-compact` to inspect the effective route or choose **Compact now**.
+5. After compaction, continue the session normally; compatible requests replay the opaque checkpoint.
+
+The extension shows an experimental warning at session start in UI-capable modes. When the active
+model is unsupported, compaction remains entirely Pi-native.
+
+## 💬 Command
 
 ```text
 /codex-compact
 ```
 
-The menu shows the active model and whether compaction will use Codex Remote V2 or Pi's native
-fallback. Choose **Compact now** to close the menu and compact immediately, or **Settings** to edit
-user settings in `~/.pi/agent/pi-codex-compact.json` (or the active Pi agent directory). Invalid
-files are never overwritten; manual compaction remains available, while Settings opens read-only
-repair guidance until the file is fixed and `/reload` is run.
+In TUI mode, the root menu shows whether Remote V2 is enabled, the active model, and whether a
+manual compact will use **Codex Remote V2** or **Pi native**. It contains:
 
-| Setting | Default | Accepted values |
-| --- | ---: | --- |
-| `enabled` | `true` | Boolean |
-| `requestTimeoutMs` | `300000` | Integer from 30,000 to 600,000 ms |
-| `maxRetries` | `2` | Integer from 0 to 2 |
-| `replacementTokenBudget` | `64000` | Integer from 8,000 to 128,000 tokens |
-| `notifyOnFallback` | `true` | Boolean |
+```text
+Compact now
+Settings
+Close
+```
 
-Missing fields use built-in defaults; the file has no environment-variable or project-level
-override. Settings reload on every `session_start`, including `/reload`, resume, and fork. Menu
-writes apply immediately, preserve unknown JSON fields, serialize within the current Pi process, and
-use a conflict check plus atomic rename. Separate Pi processes are not coordinated by a shared lock;
-a detected concurrent edit is rejected for the user to reopen and retry.
+**Compact now** closes the menu before asking Pi to compact the active session. Escape or Ctrl+C
+closes without compacting, and an obsolete menu cannot trigger work after session replacement or
+shutdown. **Settings** opens the bounded settings editor. In non-TUI modes, the command reports the
+manual settings path instead of opening custom UI or compacting.
 
-## Requirements
+Pi's built-in `/compact` remains available and follows the same extension hook when the active model
+is compatible.
 
-- Pi `0.83.0`-compatible extension APIs.
-- A model using provider `openai-codex` and API `openai-codex-responses`.
-- A working OpenAI Codex OAuth login in Pi.
+## ⚙️ Settings
 
-OpenAI API-key, Azure, Copilot, proxies, and generic Responses-compatible providers are not
-supported. Unsupported models continue to use Pi's native compaction.
+The extension has one optional, global-only JSON settings file:
 
-## How it works
+```text
+<getAgentDir()>/pi-codex-compact.json
+```
 
-1. Pi decides when compaction is needed.
-2. The extension sends the current Codex Responses input with a final `compaction_trigger`.
-3. It validates and persists the server's encrypted `compaction` item in the Pi
-   `CompactionEntry.details` field.
-4. Later Codex requests replace Pi's fallback summary and kept suffix with the opaque replacement
-   history before dispatch.
+The normal path is `~/.pi/agent/pi-codex-compact.json`. There is no environment-variable or
+project-level override.
 
-The SSE response is limited to 8 MiB, the opaque item to 2 MiB, and the persisted replacement
-history to the configured text budget (64,000 tokens by default) and 8 MiB. Oversized media
-retention is dropped rather than creating an unbounded session entry.
+```json
+{
+  "enabled": true,
+  "requestTimeoutMs": 300000,
+  "maxRetries": 2,
+  "replacementTokenBudget": 64000,
+  "notifyOnFallback": true
+}
+```
 
-## Failure and portability
+| Setting | Default | Accepted values | Behavior | Recommendation |
+| --- | ---: | --- | --- | --- |
+| `enabled` | `true` | Boolean | Attempt Remote V2 for a compatible model. | Keep enabled unless diagnosing provider behavior. |
+| `requestTimeoutMs` | `300000` | Integer from 30,000 to 600,000 ms | Bound one extension-owned remote request. | Keep five minutes; increase only for a consistently slow connection. |
+| `maxRetries` | `2` | Integer from 0 to 2 | Retry transient provider transport failures before Pi fallback. | Keep two; use zero when diagnosing the first failure. |
+| `replacementTokenBudget` | `64000` | Integer from 8,000 to 128,000 tokens | Bound approximate retained user-message text beside the opaque item. | Keep 64K; lower it to reduce session size or raise it only when recent user context is being lost. |
+| `notifyOnFallback` | `true` | Boolean | Warn when Remote V2 fails and Pi-native compaction takes over. | Keep enabled so silent fallback does not hide protocol or entitlement problems. |
 
-Remote auth, transport, protocol, or validation failures fall back to Pi's native plaintext
-compaction. User cancellation does not start that fallback.
+Missing fields use defaults. Settings reload on every `session_start`, including `/reload`, resume,
+and fork. Menu writes apply immediately, preserve unknown JSON fields, serialize within the current
+Pi process, and use a final conflict check plus same-directory atomic rename. On Unix, temporary
+files use mode `0600`.
 
-After a successful remote compaction, full older history can be replayed only when this extension
-is loaded with the same `openai-codex` model. If the extension is removed or the model/provider is
-changed, Pi exposes a warning summary plus its retained recent messages. Switching back restores
-opaque replay. Repeated compaction after an opaque checkpoint also requires the checkpoint to be
-projected safely; otherwise Pi falls back rather than guessing.
+Malformed, invalid, oversized, or symlinked settings files are never overwritten. Safe defaults stay
+active, and the menu provides read-only repair guidance until the file is fixed and Pi is reloaded.
+Separate Pi processes do not share a mutation lock; a detected concurrent edit is rejected so the
+user can reopen Settings and retry.
 
-## Privacy and storage
+### Relationship to Codex configuration
+
+This extension does **not** read `~/.codex/config.toml`.
+
+| Codex setting | Extension behavior |
+| --- | --- |
+| `features.remote_compaction_v2` | Conceptually corresponds to this extension's `enabled`; it is not imported. |
+| `model_auto_compact_token_limit` | Not duplicated. Pi's own compaction threshold remains authoritative. |
+| `model_auto_compact_token_limit_scope` | Not supported; Pi extensions do not own Codex's compact-window lineage. |
+| `compact_prompt` / `experimental_compact_prompt_file` | Not used by Remote V2, whose opaque checkpoint is generated by the server. |
+| `features.token_budget` | Not supported; token-budget context reset is a different experimental strategy. |
+
+## ✅ Requirements and compatibility
+
+- Pi APIs compatible with the package's declared peer dependencies.
+- The built-in provider `openai-codex`.
+- API `openai-codex-responses` on the active model.
+- A working OpenAI Codex OAuth login and Remote V2 entitlement.
+
+OpenAI API-key, Azure, GitHub Copilot, proxies, and arbitrary Responses-compatible providers are not
+supported. Switching to another provider or model leaves Pi's visible fallback marker plus retained
+recent messages in context. Switching back to the checkpoint's original compatible model restores
+opaque replay.
+
+## 🔄 How it works
+
+1. Pi prepares compaction and selects the recent message suffix it will retain.
+2. The extension projects an earlier compatible checkpoint, if present, into the current Responses
+   input.
+3. It appends exactly one final `compaction_trigger` and sends a normal authenticated Codex Responses
+   SSE request with cache retention disabled.
+4. It requires a completed response containing exactly one non-empty opaque `compaction` item.
+5. It constructs bounded replacement history from recent raw user-role Responses items followed by
+   the opaque item.
+6. It stores that history and fingerprints of Pi's retained suffix in versioned
+   `CompactionEntry.details`.
+7. On later compatible requests, it replaces an exactly validated marker with the persisted
+   replacement history immediately before provider dispatch.
+
+If fingerprints, model identity, payload shape, or marker count do not match exactly, the extension
+leaves Pi's visible fallback context unchanged instead of guessing.
+
+## 🔐 Privacy, storage, and limits
 
 Remote compaction sends the active conversation context, system prompt, and active tool schemas to
-the same OpenAI Codex backend used by the selected model. The extension stores the encrypted
-compaction item and bounded recent user-role Responses items in the Pi session. It never persists
-the OAuth token or request headers.
+the same OpenAI Codex backend used by the selected model. The Pi session stores the encrypted
+compaction item and bounded recent user-role Responses items. It does not store OAuth tokens,
+authorization headers, or request headers in checkpoint details.
 
-## Development
+| Boundary | Limit |
+| --- | ---: |
+| Observed SSE stream | 8 MiB |
+| Serialized opaque compaction item | 2 MiB |
+| Persisted replacement history | 8 MiB |
+| Retained user text | 64K approximate tokens by default; configurable from 8K to 128K |
+| Settings file | 64 KiB |
+| Transport retries | At most 2 |
+| Request timeout | At most 10 minutes |
+
+An individually oversized media item is dropped rather than making the session entry unbounded. The
+oldest fitting text item may be partially truncated to preserve newer context. These hard byte
+ceilings are intentionally not configurable.
+
+## 🚧 Experimental limitations
+
+- The wire contract is undocumented and can change independently of Pi or this package.
+- Full older history depends on this extension and the same compatible model. Removing the extension
+  exposes only the portability fallback marker and Pi-retained recent messages.
+- The package does not reproduce Codex core's context-window UUID/number lineage, previous-model
+  compatibility fallback, exact pre-turn ordering, or exact mid-turn model-session ownership.
+- Remote failure falls back to Pi's plaintext summary, so a session can contain both remote opaque
+  and native compaction entries over time.
+- Settings concurrency is coordinated only within one Pi process; separate processes rely on the
+  final conflict check.
+
+## 🗂️ Package layout
+
+```text
+src/index.ts          Thin Pi entrypoint
+src/codex-compact.ts  Pi lifecycle, command, provider projection, and fallback
+src/remote.ts         Provider stream invocation, auth payload, timeout, and retry controls
+src/protocol.ts       Bounded SSE parsing and Remote V2 payload/output validation
+src/checkpoint.ts     Replacement history, fingerprints, persistence, and replay projection
+src/settings.ts       Global settings validation and atomic persistence
+src/settings-menu.ts  Manual compaction and settings TUI
+
+test/                 Protocol, checkpoint, lifecycle, remote, settings, and menu coverage
+```
+
+## 🧪 Development
+
+From the repository root:
 
 ```bash
 npm --workspace @narumitw/pi-codex-compact run check
@@ -103,6 +231,11 @@ See
 [`docs/implementation-notes/codex-compaction-mechanism.md`](../../docs/implementation-notes/codex-compaction-mechanism.md)
 for the underlying Codex mechanism research and the extension boundary.
 
-## License
+## 🔎 Keywords
 
-MIT
+Pi extension, Pi coding agent, OpenAI Codex, OAuth, Remote Compaction V2, opaque checkpoint,
+Responses API, context compaction.
+
+## 📄 License
+
+[MIT](LICENSE)
