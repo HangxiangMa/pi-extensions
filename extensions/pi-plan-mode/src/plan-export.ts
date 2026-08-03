@@ -43,7 +43,7 @@ export async function exportStoredPlan(
 	try {
 		result = await exportPlanToFile(plan, requestedPath, ctx.cwd, lifecycle?.signal, isCurrent);
 	} catch (error: unknown) {
-		if (!isCurrent()) return false;
+		if (lifecycle?.signal.aborted || !isCurrent()) return false;
 		if (!ctx.hasUI) throw error;
 		const detail = error instanceof Error ? error.message : String(error);
 		ctx.ui.notify(safeNotification(`Unable to export plan: ${detail}`), "error");

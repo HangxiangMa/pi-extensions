@@ -594,6 +594,12 @@ test("pending export is cancelled by disposal, session replacement, and shutdown
 
 			await assert.rejects(readFile(exportPath, "utf8"), /ENOENT/u);
 			assert.equal(mock.sentUserMessages.length, 0);
+			assert.equal(
+				context.notifications.some((notification) =>
+					/Unable to export plan/u.test(notification.message),
+				),
+				false,
+			);
 		});
 	}
 });
