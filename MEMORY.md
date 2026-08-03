@@ -75,6 +75,7 @@
 - OAuth/account cleanup must invalidate in-flight work instead of waiting behind a serialized conversion. Guard both credential mutation and outer status/connection publication with latest-task ownership.
 - For detached subagents, snapshot terminal state before resolving waiters, inject completion with `deliverAs: "steer", triggerTurn: false`, and serialize persistence callbacks in invocation order.
 - Blocking a Pi `tool_call` returns a non-terminating error, so agent-core may continue. Abort the turn too when a bounded flow must stop after the blocked call.
+- Pi-subagents subprocess tests must provide fake Pi through a test-owned `PI_PACKAGE_DIR` and `package.json#bin.pi`; `process.argv[1]` belongs to the host and is intentionally ignored.
 
 - Symptom: concurrent `@tursodatabase/database` file transactions fail with `statement was interrupted`, and `BEGIN CONCURRENT` fails unless MVCC is separately enabled. Cause: connection timeout does not serialize cross-connection exclusive/immediate transactions, and default file databases do not enable MVCC. Fix: use short immediate/exclusive transactions with bounded whole-transaction retry and in-transaction rechecks; pre-create/chmod the database and WAL because both defaulted to `0644`, and include both files in stopped-process backups because committed data can remain in the WAL.
 

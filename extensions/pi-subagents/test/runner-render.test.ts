@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -180,6 +181,56 @@ test("runSingleAgent distinguishes child launch failures", async () => {
 	);
 	assert.equal(result.launchFailed, true);
 	assert.equal(result.exitCode, 1);
+});
+
+test("runSingleAgent reports Pi CLI resolution failures and removes temporary prompts", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-resolution-failure-"));
+	const tempDir = path.join(root, "tmp");
+	const packageDir = path.join(root, "missing-core");
+	mkdirSync(tempDir);
+	mkdirSync(packageDir);
+	const previousTmpDir = process.env.TMPDIR;
+	const previousPackageDir = process.env.PI_PACKAGE_DIR;
+	process.env.TMPDIR = tempDir;
+	process.env.PI_PACKAGE_DIR = packageDir;
+	try {
+		const result = await runSingleAgent(
+			process.cwd(),
+			[
+				{
+					name: "test",
+					description: "test",
+					systemPrompt: "temporary private prompt",
+					source: "built-in",
+					filePath: "built-in:test",
+				},
+			],
+			"test",
+			"task",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			1_000,
+			undefined,
+			(results) => ({ mode: "single", agentScope: "user", projectAgentsDir: null, results }),
+		);
+		assert.equal(result.launchFailed, true);
+		assert.equal(result.processStarted, undefined);
+		assert.equal(result.exitCode, 1);
+		assert.match(
+			result.errorMessage ?? "",
+			/Unable to resolve the Pi CLI.*manifest is unavailable/i,
+		);
+		assert.ok(Buffer.byteLength(result.errorMessage ?? "", "utf8") <= DEFAULT_MAX_STDERR_BYTES);
+		assert.deepEqual(readdirSync(tempDir), []);
+	} finally {
+		if (previousTmpDir === undefined) delete process.env.TMPDIR;
+		else process.env.TMPDIR = previousTmpDir;
+		if (previousPackageDir === undefined) delete process.env.PI_PACKAGE_DIR;
+		else process.env.PI_PACKAGE_DIR = previousPackageDir;
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("runSingleAgent normalizes invalid cwd without spawning or throwing", async () => {
