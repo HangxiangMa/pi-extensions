@@ -13,6 +13,7 @@
 - Recalls saved messages across sessions using **Current cwd**, **All**, or **Current session** scope.
 - Cycles TUI scope with `Tab` and `Shift+Tab`, with the active scope and result count always visible.
 - Fuzzy-searches saved message text, role, and session name inside the active TUI scope.
+- Deletes the selected TUI result with `Ctrl+D` after confirmation, then restores the same scope and query.
 - Previews the complete saved text before use.
 - Inserts an XML-marked quote at the TUI editor cursor without submitting it automatically.
 - Stores versioned JSONL locally with cross-process locking, private permissions, and atomic replacement.
@@ -44,8 +45,9 @@ pi -e ./experimental/pi-recall
 2. Choose **Save a message** and select a text user or assistant message from the active branch.
 3. In any later session, run `/recall` and choose **Recall a saved message**.
 4. In TUI mode, type to fuzzy-search or press `Tab` / `Shift+Tab` to change scope. RPC mode asks for scope explicitly.
-5. Preview the message or choose **Quote into draft**.
-6. Add your question or instruction, then submit the draft normally.
+5. Press `Enter` to open the selected message, or press `Ctrl+D` to review and confirm its deletion directly from the TUI picker.
+6. Preview the message or choose **Quote into draft**.
+7. Add your question or instruction, then submit the draft normally.
 
 A quoted draft uses this form:
 
@@ -81,7 +83,9 @@ The TUI picker has a visible `Search:` input. It matches complete saved message 
 
 The query and selection survive scope changes and selected-message navigation during one `/recall` interaction. A new `/recall` starts with an empty query and **Current cwd**. Queries are limited to 256 UTF-16 code units; an overlong query shows an error and runs no matching. Terminal controls are replaced before matching or display, while ordinary spaces remain available for multi-token queries.
 
-RPC continues to show the complete scoped list through explicit dialogs and does not simulate a hidden fuzzy query. Message timestamps, cwd, session IDs, entry IDs, and local paths are not searchable.
+`Ctrl+D`—or the configured `app.session.delete` binding—opens a confirmation identifying the selected record and showing a bounded preview. Cancellation returns to the unchanged picker. After confirmation, Pi Recall shows non-cancellable deletion progress, applies the existing locked atomic JSONL mutation, and returns to the same scope and query with a neighboring result selected. A failure keeps the previous list visible and reports how to retry; a record concurrently removed elsewhere is reconciled as already absent. Plain `Delete` remains available for forward editing in the search input. The existing `Enter` → **Delete…** route remains available when a complete saved-text review is preferred.
+
+RPC continues to show the complete scoped list through explicit dialogs and does not simulate a hidden fuzzy query or terminal shortcut. Message timestamps, cwd, session IDs, entry IDs, and local paths are not searchable.
 
 ## 🔒 Storage, privacy, and recovery
 
@@ -117,7 +121,7 @@ Terminal controls are removed from labels, previews, metadata, and errors before
 
 ## 🚧 Experimental limitations
 
-- No tags, saved-query persistence, editing, reordering, import/export, automatic expiry, or automatic context injection.
+- No tags, saved-query persistence, message editing, reordering, batch deletion, import/export, automatic expiry, or automatic context injection.
 - No cross-session transcript browser: only previously saved records can be recalled across sessions.
 - Text only; images and tool payloads are deliberately omitted.
 - The custom TUI picker is keyboard-operated. RPC uses sequential dialogs.

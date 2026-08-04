@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runCustomInteraction, runMenu } from "@narumitw/pi-tui-kit";
+import { defineMenu, runCustomInteraction, runMenu, runTask } from "@narumitw/pi-tui-kit";
 import {
 	candidateIdentity,
 	filterRecallMessages,
@@ -174,25 +174,78 @@ export function createRecallMenu(
 					: { kind: "to", screen: "main" };
 			},
 			chooseSaved: async ({ ctx, state, signal }) => {
-				const result =
-					ctx.mode === "tui"
-						? await chooseSavedInTui(
-								ctx,
-								state,
-								signal,
-								ownership,
-								selectedScope,
-								pickerSelectedId,
-								pickerQuery,
-							)
-						: await chooseSavedInRpc(ctx, state, signal, selectedScope);
-				if (!result) return { kind: "stay" };
 				if (ctx.mode === "tui") {
-					selectedScope = result.scope;
-					pickerQuery = result.query ?? pickerQuery;
-					if ("selectedId" in result) pickerSelectedId = result.selectedId;
+					let availableRecords = [...state.records];
+					while (!signal.aborted && isCurrent(ownership)) {
+						const result = await chooseSavedInTui(
+							ctx,
+							{ ...state, records: availableRecords },
+							signal,
+							ownership,
+							selectedScope,
+							pickerSelectedId,
+							pickerQuery,
+						);
+						if (signal.aborted || !isCurrent(ownership)) return { kind: "close" };
+						if (!result) return { kind: "stay" };
+						selectedScope = result.scope;
+						pickerQuery = result.query ?? pickerQuery;
+						if ("selectedId" in result) pickerSelectedId = result.selectedId;
+						if (result.kind === "back") return { kind: "stay" };
+						if (result.kind === "close") return { kind: "close" };
+						if (result.kind === "delete") {
+							pickerSelectedId = result.recordId;
+							const record = availableRecords.find(({ id }) => id === result.recordId);
+							if (!record) {
+								pickerSelectedId = result.nextSelectedId;
+								continue;
+							}
+							const confirmed = await ctx.ui.confirm(
+								"Delete saved message?",
+								deleteConfirmationMessage(record),
+								{ signal },
+							);
+							if (signal.aborted || !isCurrent(ownership)) return { kind: "close" };
+							if (!confirmed) continue;
+							const deletion = await runTask(ctx, {
+								label: "Deleting saved message…",
+								signal,
+								isCurrent: () => isCurrent(ownership),
+								cancellable: false,
+								task: ({ signal: taskSignal }) => source.delete(record.id, taskSignal),
+								onError: (currentCtx, error) => {
+									safeNotify(
+										currentCtx,
+										`Couldn't delete saved message: ${safeErrorMessage(error)}. Retry or check Status.`,
+										"error",
+									);
+								},
+							});
+							if (signal.aborted || !isCurrent(ownership) || deletion.kind === "stale") {
+								return { kind: "close" };
+							}
+							if (deletion.kind === "cancelled" || deletion.kind === "error") continue;
+							availableRecords = availableRecords.filter(({ id }) => id !== record.id);
+							pickerSelectedId = result.nextSelectedId;
+							safeNotify(
+								ctx,
+								deletion.value
+									? "Deleted saved message from Pi Recall."
+									: "Saved message was already removed; refreshed Pi Recall.",
+								deletion.value ? "info" : "warning",
+							);
+							continue;
+						}
+						pickerSelectedId = result.recordId;
+						selectedRecordId = result.recordId;
+						return { kind: "to", screen: "selected" };
+					}
+					return { kind: "close" };
 				}
-				if (result.kind === "back") return { kind: "stay" };
+
+				const result = await chooseSavedInRpc(ctx, state, signal, selectedScope);
+				if (signal.aborted || !isCurrent(ownership)) return { kind: "close" };
+				if (!result || result.kind === "back") return { kind: "stay" };
 				if (result.kind === "close") return { kind: "close" };
 				selectedScope = result.scope;
 				pickerSelectedId = result.recordId;
@@ -368,6 +421,16 @@ async function chooseSavedInRpc(
 	return record
 		? { kind: "selected" as const, recordId: record.id, scope }
 		: { kind: "back", scope };
+}
+
+function deleteConfirmationMessage(record: RecallMessageRecord): string {
+	return [
+		...sourceLines(record),
+		"",
+		`Message preview: ${sanitizeTerminalText(messagePreview(record.text, 400))}`,
+		"",
+		"Delete this entire saved message? This cannot be undone from Pi Recall.",
+	].join("\n");
 }
 
 function sourceLines(record: RecallMessageRecord): string[] {

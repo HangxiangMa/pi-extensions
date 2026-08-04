@@ -46,10 +46,11 @@ function createPicker(
 					(data === "up" && key === "tui.select.up") ||
 					(data === "down" && key === "tui.select.down") ||
 					(data === "enter" && key === "tui.select.confirm") ||
-					(data === "escape" && key === "tui.select.cancel")
+					(data === "escape" && key === "tui.select.cancel") ||
+					(data === "\u0004" && key === "app.session.delete")
 				);
 			},
-			getKeys: () => [],
+			getKeys: (key: string) => (key === "app.session.delete" ? ["ctrl+d"] : []),
 		} as never,
 		records,
 		current: { sessionId: "current", cwd: "/work/project" },
@@ -223,6 +224,35 @@ test("preserves query spaces, removes pasted controls, bounds queries, and forwa
 	assert.equal(picker.render(80).join("\n").includes(CURSOR_MARKER), false);
 	picker.handleInput("ignored");
 	assert.deepEqual(picker.render(80), beforeDispose);
+});
+
+test("requests direct deletion with the selected record and nearest surviving result", () => {
+	const content = createPicker([
+		saved("one", "current", "/work/project", "first saved message"),
+		saved("two", "current", "/work/project", "second saved message"),
+	]);
+	content.picker.handleInput("down");
+	assert.match(content.picker.render(20).join("\n"), /ctrl\+d delete/i);
+	content.picker.handleInput("\u0004");
+	assert.deepEqual(content.result(), {
+		kind: "delete",
+		recordId: "one",
+		nextSelectedId: "two",
+		scope: "cwd",
+		query: "",
+	});
+});
+
+test("does not request deletion without a match and leaves plain Delete to search input", () => {
+	const noMatch = createPicker([saved("one", "current", "/work/project", "alpha")], {
+		initialQuery: "zulu",
+	});
+	noMatch.picker.handleInput("\u0004");
+	assert.equal(noMatch.result(), undefined);
+
+	const editing = createPicker([saved("one", "current", "/work/project", "alpha")]);
+	editing.picker.handleInput("\u001b[3~");
+	assert.equal(editing.result(), undefined);
 });
 
 test("restores selection after broadening and carries query through scope and completion", () => {
