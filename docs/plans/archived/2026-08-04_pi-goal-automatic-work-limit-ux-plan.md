@@ -102,8 +102,9 @@ reports an actionable error.
   `npm run check` passes in `/tmp/pi-goal-automatic-work-limit-check`, a normal local clone with the
   exact extension patch. The linked worktree itself exposes Git's internal `GIT_DIR` to one unrelated
   pi-sync alias test, so the normal-clone run provides the CI-equivalent repository evidence.
-- [ ] Commit the bounded change, push `feat/pi-goal-automatic-work-limit-ux`, open a GitHub pull
-  request, verify its head/base/state, then record the PR URL and archive this completed plan.
+- [x] Commit the bounded change, push `feat/pi-goal-automatic-work-limit-ux`, and open GitHub pull
+  request [#552](https://github.com/narumiruna/pi-extensions/pull/552). Evidence: PR is OPEN,
+  non-draft, MERGEABLE, and targets `main` from the requested branch; CI is queued.
 
 ## Completion Checklist
 
@@ -125,5 +126,5 @@ reports an actionable error.
   critical text, ambiguous truncation, color-only meaning, or overflow.
 - [x] README behavior and cost terminology match the implementation.
 - [x] Focused/package/runtime/pack checks and the normal-clone full repository gate pass.
-- [ ] The pull request is open, points from `feat/pi-goal-automatic-work-limit-ux` to the repository's
-  default branch, includes verification evidence, and contains the archived completed plan.
+- [x] Pull request #552 is open from `feat/pi-goal-automatic-work-limit-ux` to `main`, includes the
+  verification evidence, and will contain this archived completed plan after the final push.
