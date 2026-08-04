@@ -1602,9 +1602,15 @@ test("legacy active-time state migrates without counting offline or reload time"
 
 test("parseTokenBudget and format helpers use compact units", () => {
 	assert.equal(parseTokenBudget("250"), 250);
+	assert.equal(parseTokenBudget("300000"), 300_000);
+	assert.equal(parseTokenBudget("300k"), 300_000);
 	assert.equal(parseTokenBudget("2.5k"), 2500);
+	assert.equal(parseTokenBudget("1.5m"), 1_500_000);
 	assert.equal(parseTokenBudget("0"), undefined);
 	assert.equal(parseTokenBudget("0.1"), undefined);
+	assert.equal(parseTokenBudget("-1"), undefined);
+	assert.equal(parseTokenBudget("Infinity"), undefined);
+	assert.equal(parseTokenBudget("many"), undefined);
 	assert.equal(parseTokenBudget("9007199254740992"), undefined);
 	assert.equal(parseTokenBudget(String(Number.MAX_SAFE_INTEGER)), Number.MAX_SAFE_INTEGER);
 	assert.equal(formatTokenCount(1500), "1.5k");
@@ -1663,6 +1669,17 @@ test("goal start feedback exposes the default cap and explicit Unlimited mode", 
 		/automatic work pauses after 25 responses/i,
 	);
 	assert.match(capped.notifications.at(-1)?.message ?? "", /open \/goal to monitor/i);
+	assert.doesNotMatch(capped.notifications.at(-1)?.message ?? "", /Token budget:/i);
+
+	const budgeted = await startGoalForTest({}, "--tokens 100k budgeted objective");
+	assert.match(
+		budgeted.notifications.at(-1)?.message ?? "",
+		/Token budget: 100k cumulative.*final model call may exceed/is,
+	);
+	assert.match(
+		budgeted.notifications.at(-1)?.message ?? "",
+		/automatic work pauses after 25 responses/i,
+	);
 
 	const unlimited = await startGoalForTest({}, "unbounded objective", UNLIMITED_SETTINGS_PATH);
 	assert.match(unlimited.notifications.at(-1)?.message ?? "", /automatic work is Unlimited/i);

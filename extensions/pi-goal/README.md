@@ -136,9 +136,12 @@ Tool visibility is a baseline, not ownership of Pi's global active-tool list. Pl
   A hard-cap pause opens **Review and continue…**, which states that objective, cumulative usage,
   active time, and queue are preserved and previews that Continue resets the counter to zero and
   allows up to one more configured epoch. **Change automatic-work limit…** opens that setting while
-  leaving the goal paused; Back and Escape make no change. Status, Settings, Help, queue management,
-  invalid-settings guidance, Clear, and Close remain shallow, labeled routes. Arrow keys navigate,
-  Enter selects, Escape goes Back, and Ctrl+C closes the full flow.
+  leaving the goal paused; Back and Escape make no change. **Start with token budget…** first offers
+  `25k`, a suggested `100k`, `300k`, and **Set a custom budget…**, then collects the objective with
+  the selected budget still visible. Custom input accepts examples such as `300000`, `300k`, `2.5k`,
+  and `1.5m`; invalid input retains its draft for correction. Status, Settings, Help, queue
+  management, invalid-settings guidance, Clear, and Close remain shallow, labeled routes. Arrow keys
+  navigate, Enter selects or submits, Escape goes Back, and Ctrl+C closes the full flow.
 - In RPC mode, bare `/goal` and `/goal status` report the current summary through an observable notification without opening terminal UI. Pi exposes no extension-command output channel in print or JSON mode, so those routes reject with an explicit unsupported-mode error instead of misreporting stderr as status output.
 - Menu-driven Replace, Clear, Prioritize, Skip, and Drop last actions preview the exact affected goals and require confirmation. Existing direct routes remain immediate for compatibility and automation.
 - `/goal <goal_to_complete>` starts goal mode. If another unfinished goal exists, Pi asks for confirmation before replacing it with a new active goal and resetting its usage counters. Failed kickoff delivery clears a new goal or restores the prior goal; a previously active goal is restored as paused.
@@ -187,6 +190,14 @@ Older versions wrote unfinished goals to `~/.pi/agent/pi-goal-state.json` keyed 
 - `queue off` — retained ordered goals are frozen because `experimental.goals` is disabled.
 
 ## 💰 Token budgets and elapsed time
+
+The TUI budget chooser describes token budgets as cumulative Goal usage, warns that the final model
+call may exceed the chosen value, and keeps the independent automatic-work response limit visible.
+It is not a dollar-cost cap. Choosing a preset or entering a custom value remains provisional until
+the objective is submitted; cancelling the chooser, custom input, or objective editor creates no
+Goal. **Increase budget and resume…** shows the exact current budget and usage, requires a new total
+above current usage, previews the new total plus automatic-work epoch, and resumes only after
+confirmation. If the goal or its usage changes while that dialog is open, no change is applied.
 
 For each persisted assistant message, `pi-goal` uses finite, non-negative `usage.totalTokens` when available. For compatibility with older or partial records, it otherwise sums finite, non-negative `input + output + cacheRead + cacheWrite`. It does not add `reasoning` because reasoning is already part of output, or `cacheWrite1h` because that is a subset of cache writes. Goal usage is the current branch's cumulative assistant total minus the baseline captured when the goal started, clamped at zero after branch rewinds.
 

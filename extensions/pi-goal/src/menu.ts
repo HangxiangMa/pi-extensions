@@ -1,6 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { type ActionMenuItem, defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import { formatDuration } from "./accounting.js";
+import { formatTokenCount as formatCompactTokenCount, formatDuration } from "./accounting.js";
 import { parseTokenBudget } from "./command.js";
 import type { GoalCommandController } from "./commands.js";
 import type { ActiveGoal, PendingQueueAction } from "./persistence.js";
@@ -49,15 +49,24 @@ export interface GoalMenuState {
 }
 
 type ShowSettings = (ctx: ExtensionCommandContext, target?: "automatic") => Promise<void>;
-type GoalMenuScreen = "main" | "safety" | "queue" | "status" | "help";
+type GoalMenuScreen =
+	| "main"
+	| "start-budget"
+	| "start-custom-budget"
+	| "increase-budget"
+	| "safety"
+	| "queue"
+	| "status"
+	| "help";
 type GoalMenuAction =
 	| "start"
-	| "start-budget"
+	| "start-with-budget"
+	| "start-with-custom-budget"
+	| "submit-increase-budget"
 	| "pause"
 	| "resume"
 	| "safety-resume"
 	| "safety-settings"
-	| "increase-budget"
 	| "edit"
 	| "replace"
 	| "settings"
@@ -166,6 +175,11 @@ export async function showGoalManager(
 		owner.menuController === undefined ||
 		(generation === owner.menuGeneration && !owner.menuController.signal.aborted);
 	let displayedGoal: ActiveGoal | undefined;
+	let startBudgetQueueIdentity = currentGoalQueueIdentity(runtime);
+	let displayedBudgetGoal: ActiveGoal | undefined;
+	let displayedBudgetValue: number | undefined;
+	let displayedBudgetUsage: number | undefined;
+	let displayedBudgetStatus: ActiveGoal["status"] | undefined;
 	let displayedQueueHead: ActiveGoal | undefined;
 	let displayedQueueFirst: ActiveGoal | undefined;
 	let displayedQueueLast: ActiveGoal | undefined;
@@ -176,12 +190,84 @@ export async function showGoalManager(
 				refreshGoalMenuState(runtime, ctx);
 				const state = buildGoalMenuState(runtime);
 				displayedGoal = runtime.activeGoal;
+				startBudgetQueueIdentity = currentGoalQueueIdentity(runtime);
 				return {
 					kind: "actions",
 					title: "Goal",
 					lines: state.title.split("\n").slice(1),
 					items: state.actions.map(goalMainMenuItem),
 					hint: "close",
+				};
+			},
+			"start-budget": () => {
+				return {
+					kind: "actions",
+					title: "Choose token budget",
+					lines: tokenBudgetGuidance(runtime.settings.continuationLimits.automaticTurns),
+					items: [
+						{
+							id: "25k",
+							label: "25k — Lower token ceiling",
+							description: "Set the cumulative token limit to 25k.",
+							action: "start-with-budget",
+						},
+						{
+							id: "100k",
+							label: "100k — Suggested",
+							description: "Set the cumulative token limit to 100k.",
+							action: "start-with-budget",
+						},
+						{
+							id: "300k",
+							label: "300k — Higher token ceiling",
+							description: "Set the cumulative token limit to 300k.",
+							action: "start-with-budget",
+						},
+						{
+							id: "custom",
+							label: "Set a custom budget…",
+							description: "Enter an exact cumulative token limit.",
+							to: "start-custom-budget",
+						},
+						{ id: "back", label: "Back", action: "back" },
+					],
+					hint: "back",
+				};
+			},
+			"start-custom-budget": () => ({
+				kind: "input",
+				title: "Custom token budget",
+				lines: customTokenBudgetGuidance(runtime.settings.continuationLimits.automaticTurns),
+				placeholder: "100k",
+				action: "start-with-custom-budget",
+				hint: "back",
+			}),
+			"increase-budget": () => {
+				const goal = runtime.activeGoal;
+				displayedBudgetGoal = goal;
+				displayedBudgetValue = goal?.tokenBudget;
+				displayedBudgetUsage = goal?.tokensUsed;
+				displayedBudgetStatus = goal?.status;
+				if (goal && goal.tokensUsed >= Number.MAX_SAFE_INTEGER) {
+					return {
+						kind: "detail",
+						title: "Increase token budget unavailable",
+						lines: [
+							`Current usage: ${formatBudgetDecisionValue(goal.tokensUsed)}`,
+							"No larger safe whole-number token budget is available. Progress remains saved; choose Back and clear or replace the goal when ready.",
+						],
+						hint: "back",
+					};
+				}
+				return {
+					kind: "input",
+					title: "Increase token budget",
+					lines: goal
+						? increaseTokenBudgetGuidance(goal, runtime.settings.continuationLimits.automaticTurns)
+						: ["The budget-limited goal is no longer available. Return to the Goal menu."],
+					placeholder: goal ? suggestedIncreasedBudget(goal) : "300k",
+					action: "submit-increase-budget",
+					hint: "back",
 				};
 			},
 			safety: () => {
@@ -283,8 +369,91 @@ export async function showGoalManager(
 				await startFromMenu(commands, ctx);
 				return { kind: "close" };
 			},
-			"start-budget": async () => {
-				await startFromMenu(commands, ctx, true);
+			"start-with-budget": async ({ itemId, signal }) => {
+				const budget = parseTokenBudget(itemId);
+				if (budget === undefined) return { kind: "rejected" };
+				return startBudgetedGoal(
+					runtime,
+					commands,
+					ctx,
+					budget,
+					runtime.settings.continuationLimits.automaticTurns,
+					startBudgetQueueIdentity,
+					signal,
+					isMenuCurrent,
+					"stay",
+				);
+			},
+			"start-with-custom-budget": async ({ value, signal }) => {
+				const budget = parseTokenBudget(value ?? "");
+				if (budget === undefined) {
+					ctx.ui.notify(
+						"Enter a positive token amount, for example 25k, 300k, or 1.5m.",
+						"warning",
+					);
+					return { kind: "rejected" };
+				}
+				return startBudgetedGoal(
+					runtime,
+					commands,
+					ctx,
+					budget,
+					runtime.settings.continuationLimits.automaticTurns,
+					startBudgetQueueIdentity,
+					signal,
+					isMenuCurrent,
+					"back",
+				);
+			},
+			"submit-increase-budget": async ({ value, signal }) => {
+				const goal = displayedBudgetGoal;
+				const budget = parseTokenBudget(value ?? "");
+				if (budget === undefined) {
+					ctx.ui.notify(
+						"Enter a positive token amount, for example 300k, 1.5m, or 300000.",
+						"warning",
+					);
+					return { kind: "rejected" };
+				}
+				if (
+					!goal ||
+					!requireCurrentBudgetPreview(
+						runtime,
+						goal,
+						displayedBudgetValue,
+						displayedBudgetUsage,
+						displayedBudgetStatus,
+						ctx,
+					)
+				) {
+					return { kind: "close" };
+				}
+				if (budget <= goal.tokensUsed) {
+					ctx.ui.notify(
+						`Enter a new cumulative total greater than current usage (${formatCompactTokenCount(goal.tokensUsed)}).`,
+						"warning",
+					);
+					return { kind: "rejected" };
+				}
+				const confirmed = await ctx.ui.confirm(
+					"Increase goal budget?",
+					increaseBudgetPreview(goal, budget, runtime.settings.continuationLimits.automaticTurns),
+				);
+				if (signal.aborted || !isMenuCurrent()) return { kind: "close" };
+				if (!confirmed) return { kind: "rejected" };
+				if (
+					!requireCurrentBudgetPreview(
+						runtime,
+						goal,
+						displayedBudgetValue,
+						displayedBudgetUsage,
+						displayedBudgetStatus,
+						ctx,
+					)
+				) {
+					return { kind: "close" };
+				}
+				await commands.editGoal(goal.text, budget, ctx);
 				return { kind: "close" };
 			},
 			pause: async () => {
@@ -317,13 +486,6 @@ export async function showGoalManager(
 				if (!isMenuCurrent()) return { kind: "close" };
 				if (!requireCurrentMenuGoal(runtime, expectedGoal, ctx)) return { kind: "stay" };
 				return { kind: "stay" };
-			},
-			"increase-budget": async () => {
-				if (!displayedGoal || !requireCurrentMenuGoal(runtime, displayedGoal, ctx)) {
-					return { kind: "stay" };
-				}
-				await increaseBudget(runtime, commands, ctx);
-				return { kind: "close" };
 			},
 			edit: async () => {
 				if (!displayedGoal || !requireCurrentMenuGoal(runtime, displayedGoal, ctx)) {
@@ -422,6 +584,12 @@ export async function showGoalManager(
 
 function goalMainMenuItem(label: string): ActionMenuItem<GoalMenuScreen, GoalMenuAction> {
 	if (label === GOAL_MENU_ACTIONS.status) return { id: "status", label, to: "status" as const };
+	if (label === GOAL_MENU_ACTIONS.startBudget) {
+		return { id: "start-budget", label, to: "start-budget" as const };
+	}
+	if (label === GOAL_MENU_ACTIONS.increaseBudget) {
+		return { id: "increase-budget", label, to: "increase-budget" as const };
+	}
 	if (label === GOAL_MENU_ACTIONS.reviewSafety) {
 		return { id: "review-safety", label, to: "safety" as const };
 	}
@@ -430,10 +598,8 @@ function goalMainMenuItem(label: string): ActionMenuItem<GoalMenuScreen, GoalMen
 	if (label === GOAL_MENU_ACTIONS.close) return { id: "close", label, close: true as const };
 	const actions = new Map<string, GoalMenuAction>([
 		[GOAL_MENU_ACTIONS.start, "start"],
-		[GOAL_MENU_ACTIONS.startBudget, "start-budget"],
 		[GOAL_MENU_ACTIONS.pause, "pause"],
 		[GOAL_MENU_ACTIONS.resume, "resume"],
-		[GOAL_MENU_ACTIONS.increaseBudget, "increase-budget"],
 		[GOAL_MENU_ACTIONS.edit, "edit"],
 		[GOAL_MENU_ACTIONS.replace, "replace"],
 		[GOAL_MENU_ACTIONS.settings, "settings"],
@@ -462,16 +628,108 @@ export function safeGoalMenuText(value: string, maxCharacters = 120) {
 		: `${characters.slice(0, maxCharacters).join("")}…`;
 }
 
-async function startFromMenu(
-	commands: GoalCommandController,
-	ctx: ExtensionCommandContext,
-	withBudget = false,
-) {
+async function startFromMenu(commands: GoalCommandController, ctx: ExtensionCommandContext) {
 	const objective = (await ctx.ui.editor("Goal objective", ""))?.trim();
 	if (!objective) return;
-	const tokenBudget = withBudget ? await askTokenBudget(ctx) : undefined;
-	if (withBudget && tokenBudget === undefined) return;
-	await commands.startGoal(objective, tokenBudget, ctx);
+	await commands.startGoal(objective, undefined, ctx);
+}
+
+async function startBudgetedGoal(
+	runtime: GoalMenuRuntimeView,
+	commands: GoalCommandController,
+	ctx: ExtensionCommandContext,
+	budget: number,
+	automaticLimit: number | null,
+	expectedQueueIdentity: string,
+	signal: AbortSignal,
+	isMenuCurrent: () => boolean,
+	cancelTransition: "stay" | "back",
+) {
+	if (!requireCurrentStartBudgetQueue(runtime, expectedQueueIdentity, ctx)) {
+		return { kind: "rejected" as const };
+	}
+	const objective = (
+		await ctx.ui.editor(
+			`Goal objective · Token budget ${formatCompactTokenCount(budget)} · ${automaticLimit === null ? "Automatic Unlimited" : `Automatic limit ${automaticLimit}`}`,
+			"",
+		)
+	)?.trim();
+	if (signal.aborted || !isMenuCurrent()) return { kind: "close" as const };
+	if (!objective) return { kind: cancelTransition } as const;
+	if (!requireCurrentStartBudgetQueue(runtime, expectedQueueIdentity, ctx)) {
+		return { kind: "rejected" as const };
+	}
+	await commands.startGoal(
+		objective,
+		budget,
+		ctx,
+		undefined,
+		() => !signal.aborted && isMenuCurrent(),
+		() => !signal.aborted && isMenuCurrent(),
+	);
+	return { kind: "close" as const };
+}
+
+function tokenBudgetGuidance(automaticLimit: number | null) {
+	return [
+		"Set the maximum cumulative token usage for this goal.",
+		"The final model call may exceed the limit; this is not a dollar-cost cap.",
+		automaticBudgetGuidance(automaticLimit),
+	];
+}
+
+function customTokenBudgetGuidance(automaticLimit: number | null) {
+	return [
+		"Enter the maximum cumulative token usage for this goal.",
+		"Examples: 25k, 300k, 1.5m, or 300000.",
+		"The final model call may exceed this value; this is not a dollar-cost cap.",
+		automaticBudgetGuidance(automaticLimit),
+	];
+}
+
+function automaticBudgetGuidance(automaticLimit: number | null) {
+	return automaticLimit === null
+		? "Automatic work has no response-count cap."
+		: `Automatic work will also pause after ${automaticLimit} responses.`;
+}
+
+function increaseTokenBudgetGuidance(goal: ActiveGoal, automaticLimit: number | null) {
+	return [
+		`Current budget: ${formatBudgetDecisionValue(goal.tokenBudget ?? 0)}`,
+		`Current usage: ${formatBudgetDecisionValue(goal.tokensUsed)}`,
+		`Enter a new cumulative total greater than ${formatBudgetDecisionValue(goal.tokensUsed)}.`,
+		"Examples: 300k, 1.5m, or 300000.",
+		"The final model call may exceed the limit; this is not a dollar-cost cap.",
+		automaticBudgetGuidance(automaticLimit),
+	];
+}
+
+function suggestedIncreasedBudget(goal: ActiveGoal) {
+	const floor = Math.max(goal.tokensUsed, goal.tokenBudget ?? 0);
+	for (const suggestion of [25_000, 100_000, 300_000, 500_000, 1_000_000]) {
+		if (suggestion > floor) return formatCompactTokenCount(suggestion);
+	}
+	return formatCompactTokenCount(
+		Math.min(Number.MAX_SAFE_INTEGER, Math.max(Math.floor(floor) + 1, Math.ceil(floor * 2))),
+	);
+}
+
+function formatBudgetDecisionValue(value: number) {
+	const compact = formatCompactTokenCount(value);
+	if (value < 1_000 || value % 1_000 === 0) return compact;
+	return `${compact} (${formatInteger(value)} tokens)`;
+}
+
+function increaseBudgetPreview(goal: ActiveGoal, budget: number, automaticLimit: number | null) {
+	return [
+		`Goal: ${safeGoalMenuText(goal.text, 4_000)}`,
+		`Budget: ${formatCompactTokenCount(goal.tokenBudget ?? 0)} → ${formatCompactTokenCount(budget)}`,
+		`Current usage: ${formatCompactTokenCount(goal.tokensUsed)}`,
+		automaticLimit === null
+			? "Automatic work: Unlimited after resume"
+			: `Automatic work: up to ${automaticLimit} more responses after resume`,
+		"The goal will resume immediately.",
+	].join("\n");
 }
 
 async function editFromMenu(
@@ -494,42 +752,6 @@ async function editFromMenu(
 	await commands.editGoal(objective, undefined, ctx);
 }
 
-async function increaseBudget(
-	runtime: GoalMenuRuntimeView,
-	commands: GoalCommandController,
-	ctx: ExtensionCommandContext,
-) {
-	const goal = runtime.activeGoal;
-	if (!goal) return;
-	const budget = await askTokenBudget(ctx, goal.tokenBudget);
-	if (budget === undefined || !requireCurrentMenuGoal(runtime, goal, ctx)) return;
-	if (budget <= goal.tokensUsed) {
-		ctx.ui.notify(
-			`Token budget must be greater than current usage (${formatTokenCount(goal.tokensUsed)}).`,
-			"warning",
-		);
-		return;
-	}
-	const confirmed = await ctx.ui.confirm(
-		"Increase goal budget?",
-		`Goal: ${safeGoalMenuText(goal.text, 4_000)}\n\nBudget: ${formatTokenCount(goal.tokenBudget ?? 0)} → ${formatTokenCount(budget)}\nCurrent usage: ${formatTokenCount(goal.tokensUsed)}\n\nThe goal will resume immediately.`,
-	);
-	if (!confirmed || !requireCurrentMenuGoal(runtime, goal, ctx)) return;
-	await commands.editGoal(goal.text, budget, ctx);
-}
-
-async function askTokenBudget(ctx: ExtensionCommandContext, current?: number) {
-	const raw = await ctx.ui.input(
-		"Token budget",
-		current === undefined ? "100k" : formatTokenCount(current),
-	);
-	if (raw === undefined) return undefined;
-	const budget = parseTokenBudget(raw);
-	if (budget === undefined)
-		ctx.ui.notify(`Invalid token budget: ${safeGoalMenuText(raw)}`, "warning");
-	return budget;
-}
-
 async function confirmClear(runtime: GoalMenuRuntimeView, ctx: ExtensionCommandContext) {
 	const goals = [runtime.activeGoal, ...runtime.queuedGoals].filter(
 		(goal): goal is ActiveGoal => goal !== undefined,
@@ -549,6 +771,49 @@ async function confirmClear(runtime: GoalMenuRuntimeView, ctx: ExtensionCommandC
 			.map((summary, index) => `${index + 1}. ${summary}`)
 			.join("\n")}\n\nThis cannot be undone.`,
 	);
+}
+
+function currentGoalQueueIdentity(runtime: GoalMenuRuntimeView) {
+	return goalQueueIdentity(runtime.activeGoal, runtime.queuedGoals, runtime.pendingQueueAction);
+}
+
+function requireCurrentStartBudgetQueue(
+	runtime: GoalMenuRuntimeView,
+	expectedIdentity: string,
+	ctx: ExtensionCommandContext,
+) {
+	if (currentGoalQueueIdentity(runtime) === expectedIdentity) {
+		return true;
+	}
+	ctx.ui.notify(
+		"The goal queue changed while the token budget flow was open. Reopen /goal and try again.",
+		"warning",
+	);
+	return false;
+}
+
+function requireCurrentBudgetPreview(
+	runtime: GoalMenuRuntimeView,
+	expectedGoal: ActiveGoal,
+	expectedBudget: number | undefined,
+	expectedUsage: number | undefined,
+	expectedStatus: ActiveGoal["status"] | undefined,
+	ctx: ExtensionCommandContext,
+) {
+	const current = runtime.activeGoal;
+	if (
+		current?.id === expectedGoal.id &&
+		current.tokenBudget === expectedBudget &&
+		current.tokensUsed === expectedUsage &&
+		current.status === expectedStatus
+	) {
+		return true;
+	}
+	ctx.ui.notify(
+		"The goal changed or its usage changed while the budget dialog was open. Reopen /goal and try again.",
+		"warning",
+	);
+	return false;
 }
 
 function requireCurrentQueueHead(
