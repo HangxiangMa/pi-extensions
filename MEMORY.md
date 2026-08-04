@@ -82,6 +82,7 @@
 - Preflight core-selected `SYSTEM.md` and `APPEND_SYSTEM.md` paths as readable regular files before `DefaultResourceLoader.reload()`; its synchronous reads can block on FIFOs or misinterpret non-files as prompt text.
 
 - Symptom: concurrent `@tursodatabase/database` file transactions fail with `statement was interrupted`, and `BEGIN CONCURRENT` fails unless MVCC is separately enabled. Cause: connection timeout does not serialize cross-connection exclusive/immediate transactions, and default file databases do not enable MVCC. Fix: use short immediate/exclusive transactions with bounded whole-transaction retry and in-transaction rechecks; pre-create/chmod the database and WAL because both defaulted to `0644`, and include both files in stopped-process backups because committed data can remain in the WAL.
+- Lock-free file-generation rotation must publish a fresh marker before creating its directory, revalidate the active marker after writes and reads, and re-read it before deleting each obsolete generation; otherwise concurrent initialization or Clear can orphan data or delete another process's newly active generation.
 
 ## TASTE
 

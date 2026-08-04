@@ -1,5 +1,7 @@
+import { stripVTControlCharacters } from "node:util";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu, runTask } from "@narumitw/pi-tui-kit";
+import type { ClearAnalyticsResult } from "./storage/files.js";
 import type {
 	AnalyticsSnapshot,
 	SkillStats,
@@ -16,7 +18,7 @@ export type AnalyticsLoadResult =
 export interface AnalyticsMenuDataSource {
 	path: string;
 	load(range: TimeRange, signal: AbortSignal): Promise<AnalyticsLoadResult>;
-	clearAll(signal: AbortSignal): Promise<number>;
+	clearAll(signal: AbortSignal): Promise<ClearAnalyticsResult>;
 }
 
 export interface AnalyticsMenuState {
@@ -120,16 +122,22 @@ export function createAnalyticsMenu(source: AnalyticsMenuDataSource, now: () => 
 				const count = state.result.snapshot.overview.responseCycles;
 				const confirmed = await ctx.ui.confirm(
 					"Delete analytics data?",
-					`This will delete ${count} response cycles and their tool, skill, and reliability records from:\n\n${state.path}\n\nOther running Pi processes may add new records afterward.`,
+					`This will clear all local analytics history from:\n\n${safeDisplayText(state.path)}\n\nThe selected range currently shows ${count} response cycles. Other running Pi processes may add new records afterward.`,
 					{ signal },
 				);
 				if (!confirmed || signal.aborted) return { kind: "stay" };
-				const deleted = await source.clearAll(signal);
+				const result = await source.clearAll(signal);
 				cachedState = undefined;
 				try {
-					ctx.ui.notify(`Deleted ${deleted} response cycles from local analytics.`, "info");
+					ctx.ui.notify("Cleared local analytics data.", "info");
+					if (result.cleanupIncomplete) {
+						ctx.ui.notify(
+							"Some obsolete analytics files are still in use. Stop other Pi processes and clear again to remove them.",
+							"warning",
+						);
+					}
 				} catch {
-					// Session replacement can invalidate the UI after the database commit.
+					// Session replacement can invalidate the UI after the generation switch.
 				}
 				return signal.aborted ? { kind: "close" } : { kind: "to", screen: "main" };
 			},
@@ -233,7 +241,7 @@ function skillsScreen(result: AnalyticsLoadResult) {
 function skillItem(skill: SkillStats) {
 	return {
 		id: skill.name,
-		label: skill.name,
+		label: safeDisplayText(skill.name),
 		statusText: `${skill.count} · ${skill.modelInitiated} model / ${skill.userInitiated} user`,
 		searchText: skill.models.map(modelLabel).join(" "),
 		details: [
@@ -275,7 +283,7 @@ function toolsScreen(result: AnalyticsLoadResult) {
 function toolItem(tool: ToolStats) {
 	return {
 		id: tool.name,
-		label: tool.name,
+		label: safeDisplayText(tool.name),
 		statusText: `${tool.count} · ${tool.errors} errors`,
 		searchText: tool.models.map(modelLabel).join(" "),
 		details: [
@@ -333,14 +341,14 @@ function responseLines(result: AnalyticsLoadResult): string[] {
 
 function privacyLines(state: AnalyticsMenuState): string[] {
 	return [
-		"Local database:",
-		state.path,
+		"Local analytics files:",
+		safeDisplayText(state.path),
 		"",
-		"Stored: timestamps, model/provider IDs, thinking level, tool and skill names, durations, counts, HTTP statuses, and classified errors.",
+		"Stored: timestamps, extension-generated record IDs, model/provider IDs, thinking level, tool and skill names, durations, counts, HTTP statuses, and classified errors.",
 		"Not stored: prompts, responses, thinking, tool arguments/results, raw errors, headers, cwd/file paths, session identity, or credentials.",
 		"",
-		"No Turso Cloud connection or other remote telemetry is used.",
-		"Turso Database is pre-1.0; analytics are non-critical derived metadata.",
+		"No database server, cloud connection, or other remote telemetry is used.",
+		"Analytics are non-critical derived metadata; a failed local write may be dropped.",
 	];
 }
 
@@ -360,7 +368,14 @@ function formatTimestamp(value: number): string {
 
 function modelLabel(model: { provider?: string; model?: string }): string {
 	if (!model.provider && !model.model) return "unknown";
-	return `${model.provider ?? "unknown"}/${model.model ?? "unknown"}`;
+	return safeDisplayText(`${model.provider ?? "unknown"}/${model.model ?? "unknown"}`);
+}
+
+function safeDisplayText(value: unknown): string {
+	return Array.from(stripVTControlCharacters(String(value)), (character) => {
+		const codePoint = character.codePointAt(0) ?? 0;
+		return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
+	}).join("");
 }
 
 function isRangeId(value: string): value is TimeRangeId {

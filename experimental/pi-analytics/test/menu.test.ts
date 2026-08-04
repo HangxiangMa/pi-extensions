@@ -75,12 +75,12 @@ const snapshot: AnalyticsSnapshot = {
 
 function source(overrides: Partial<AnalyticsMenuDataSource> = {}): AnalyticsMenuDataSource {
 	return {
-		path: "/home/test/.pi/agent/pi-analytics.db",
+		path: "/home/test/.pi/agent/pi-analytics",
 		async load() {
 			return { kind: "ready", snapshot };
 		},
 		async clearAll() {
-			return 83;
+			return { cleanupIncomplete: false };
 		},
 		...overrides,
 	};
@@ -129,6 +129,47 @@ test("skill and tool browse details preserve attribution and model breakdowns", 
 	assert.match(tools.items[0]?.details?.join("\n") ?? "", /Average duration: 12.5 ms/);
 });
 
+test("dashboard strips terminal controls from stored labels, models, and paths", async () => {
+	const baseSkill = snapshot.skills[0];
+	assert.ok(baseSkill);
+	const unsafe = {
+		...snapshot,
+		skills: [
+			{
+				...baseSkill,
+				name: "skill\u001b]8;;https://evil.example\u0007name",
+				models: [{ provider: "provider\u001b[31m", model: "model\u009b31m", count: 1 }],
+			},
+		],
+	};
+	const controller = createAnalyticsMenu(
+		source({
+			path: "/tmp/path\u001b]0;owned\u0007",
+			async load() {
+				return { kind: "ready", snapshot: unsafe };
+			},
+		}),
+	);
+	const current = await state(controller);
+	const skills = resolveMenuScreen(controller.menu, "skills", current);
+	const privacy = resolveMenuScreen(controller.menu, "privacy", current);
+	assert.equal(skills.kind, "browse");
+	assert.equal(privacy.kind, "actions");
+	if (skills.kind !== "browse" || privacy.kind !== "actions") return;
+	assert.equal((skills.items[0]?.id ?? "").includes("\u001b"), true);
+	assert.doesNotMatch(
+		JSON.stringify({
+			item: {
+				label: skills.items[0]?.label,
+				searchText: skills.items[0]?.searchText,
+				details: skills.items[0]?.details,
+			},
+			lines: privacy.lines,
+		}),
+		/\\u00(?:1b|07|9b)/iu,
+	);
+});
+
 test("range selection updates the next state load without creating settings", async () => {
 	const loaded: string[] = [];
 	const controller = createAnalyticsMenu(
@@ -157,12 +198,20 @@ test("clear cancellation is side-effect free and confirmation clears committed r
 		source({
 			async clearAll() {
 				clears += 1;
-				return 83;
+				return { cleanupIncomplete: false };
 			},
 		}),
 	);
 	const current = await state(controller);
-	const cancelled = createMockContext({ hasUI: true, mode: "rpc", confirm: async () => false });
+	let confirmation = "";
+	const cancelled = createMockContext({
+		hasUI: true,
+		mode: "rpc",
+		confirm: async (_title: string, message: string) => {
+			confirmation = message;
+			return false;
+		},
+	});
 	await controller.menu.actions.clearData({
 		ctx: cancelled.ctx,
 		state: current,
@@ -170,6 +219,8 @@ test("clear cancellation is side-effect free and confirmation clears committed r
 		itemId: "clear",
 	});
 	assert.equal(clears, 0);
+	assert.match(confirmation, /clear all local analytics history/i);
+	assert.match(confirmation, /selected range currently shows 83 response cycles/i);
 	const confirmed = createMockContext({ hasUI: true, mode: "rpc", confirm: async () => true });
 	await controller.menu.actions.clearData({
 		ctx: confirmed.ctx,
@@ -178,7 +229,27 @@ test("clear cancellation is side-effect free and confirmation clears committed r
 		itemId: "clear",
 	});
 	assert.equal(clears, 1);
-	assert.match(confirmed.notifications[0]?.message ?? "", /Deleted 83 response cycles/);
+	assert.match(confirmed.notifications[0]?.message ?? "", /Cleared local analytics data/);
+});
+
+test("clear reports obsolete files that could not be removed", async () => {
+	const controller = createAnalyticsMenu(
+		source({
+			async clearAll() {
+				return { cleanupIncomplete: true };
+			},
+		}),
+	);
+	const current = await state(controller);
+	const confirmed = createMockContext({ hasUI: true, mode: "rpc", confirm: async () => true });
+	await controller.menu.actions.clearData({
+		ctx: confirmed.ctx,
+		state: current,
+		signal: new AbortController().signal,
+		itemId: "clear",
+	});
+	assert.match(confirmed.notifications[0]?.message ?? "", /Cleared local analytics data/);
+	assert.match(confirmed.notifications[1]?.message ?? "", /still in use/);
 });
 
 test("clear completion remains visible when cancellation races after confirmation", async () => {
@@ -190,7 +261,7 @@ test("clear completion remains visible when cancellation races after confirmatio
 		source({
 			async clearAll() {
 				await blocked;
-				return 83;
+				return { cleanupIncomplete: false };
 			},
 		}),
 	);
@@ -207,7 +278,7 @@ test("clear completion remains visible when cancellation races after confirmatio
 	owner.abort();
 	release();
 	assert.deepEqual(await clearing, { kind: "close" });
-	assert.match(confirmed.notifications[0]?.message ?? "", /Deleted 83 response cycles/);
+	assert.match(confirmed.notifications[0]?.message ?? "", /Cleared local analytics data/);
 });
 
 test("empty and unavailable states remain actionable", async () => {

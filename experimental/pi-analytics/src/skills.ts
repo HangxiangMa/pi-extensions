@@ -22,7 +22,10 @@ export class SkillTracker {
 	private readonly skillByPath = new Map<string, string>();
 	private readonly availableNames = new Set<string>();
 
-	constructor(private readonly cwd: string) {}
+	constructor(
+		private readonly cwd: string,
+		private readonly canonicalize: (filePath: string) => Promise<string> = realpath,
+	) {}
 
 	observeInput(text: string, source: InputSource, now: number): void {
 		if (source === "extension") return;
@@ -52,7 +55,7 @@ export class SkillTracker {
 			if (seenNames.has(skill.name)) continue;
 			seenNames.add(skill.name);
 			this.availableNames.add(skill.name);
-			const canonical = await canonicalPath(skill.filePath).catch(() =>
+			const canonical = await this.canonicalize(skill.filePath).catch(() =>
 				path.resolve(this.cwd, skill.filePath),
 			);
 			this.skillByPath.set(canonical, skill.name);
@@ -69,13 +72,9 @@ export class SkillTracker {
 		if (typeof rawPath !== "string" || rawPath.length === 0) return undefined;
 		const normalized = rawPath.startsWith("@") ? rawPath.slice(1) : rawPath;
 		const absolute = path.resolve(this.cwd, normalized);
-		const canonical = await canonicalPath(absolute).catch(() => absolute);
+		const canonical = await this.canonicalize(absolute).catch(() => absolute);
 		return this.skillByPath.get(canonical);
 	}
-}
-
-function canonicalPath(filePath: string): Promise<string> {
-	return realpath(filePath);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
