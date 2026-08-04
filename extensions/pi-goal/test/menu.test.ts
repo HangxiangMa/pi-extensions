@@ -206,6 +206,35 @@ test("budgeted start cancellation and stale menu ownership have no side effects"
 	}
 });
 
+test("budgeted start rejects a queue that changes before the budget chooser opens", async () => {
+	const state = runtime();
+	const tracked = commands();
+	let editorOpened = false;
+	let selectionCount = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		select: async () => {
+			selectionCount++;
+			if (selectionCount === 1) {
+				state.activeGoal = createGoal("new current goal", undefined, 0);
+				return GOAL_MENU_ACTIONS.startBudget;
+			}
+			return selectionCount === 2 ? "25k — Lower token ceiling" : undefined;
+		},
+		editor: async () => {
+			editorOpened = true;
+			return "must not start";
+		},
+	});
+
+	await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+
+	assert.equal(editorOpened, false);
+	assert.equal(tracked.calls.length, 0);
+	assert.match(context.notifications.at(-1)?.message ?? "", /goal queue changed.*reopen/i);
+});
+
 test("custom budget input retains invalid drafts and stays responsive", async () => {
 	const state = runtime();
 	const tracked = commands();

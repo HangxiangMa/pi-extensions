@@ -175,7 +175,7 @@ export async function showGoalManager(
 		owner.menuController === undefined ||
 		(generation === owner.menuGeneration && !owner.menuController.signal.aborted);
 	let displayedGoal: ActiveGoal | undefined;
-	let startBudgetQueueIdentity: string | undefined;
+	let startBudgetQueueIdentity = currentGoalQueueIdentity(runtime);
 	let displayedBudgetGoal: ActiveGoal | undefined;
 	let displayedBudgetValue: number | undefined;
 	let displayedBudgetUsage: number | undefined;
@@ -190,7 +190,7 @@ export async function showGoalManager(
 				refreshGoalMenuState(runtime, ctx);
 				const state = buildGoalMenuState(runtime);
 				displayedGoal = runtime.activeGoal;
-				startBudgetQueueIdentity = undefined;
+				startBudgetQueueIdentity = currentGoalQueueIdentity(runtime);
 				return {
 					kind: "actions",
 					title: "Goal",
@@ -200,7 +200,6 @@ export async function showGoalManager(
 				};
 			},
 			"start-budget": () => {
-				startBudgetQueueIdentity ??= currentGoalQueueIdentity(runtime);
 				return {
 					kind: "actions",
 					title: "Choose token budget",
@@ -641,7 +640,7 @@ async function startBudgetedGoal(
 	ctx: ExtensionCommandContext,
 	budget: number,
 	automaticLimit: number | null,
-	expectedQueueIdentity: string | undefined,
+	expectedQueueIdentity: string,
 	signal: AbortSignal,
 	isMenuCurrent: () => boolean,
 	cancelTransition: "stay" | "back",
@@ -780,10 +779,10 @@ function currentGoalQueueIdentity(runtime: GoalMenuRuntimeView) {
 
 function requireCurrentStartBudgetQueue(
 	runtime: GoalMenuRuntimeView,
-	expectedIdentity: string | undefined,
+	expectedIdentity: string,
 	ctx: ExtensionCommandContext,
 ) {
-	if (expectedIdentity !== undefined && currentGoalQueueIdentity(runtime) === expectedIdentity) {
+	if (currentGoalQueueIdentity(runtime) === expectedIdentity) {
 		return true;
 	}
 	ctx.ui.notify(
