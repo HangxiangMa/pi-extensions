@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { stripVTControlCharacters } from "node:util";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { Key, type KeyId, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import { resolveMenuScreen, runMenu } from "@narumitw/pi-tui-kit";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { createMockContext } from "../../../test/support.js";
@@ -69,6 +69,45 @@ function source(
 
 async function state(controller: ReturnType<typeof createRecallMenu>) {
 	return controller.getState({ signal: new AbortController().signal });
+}
+
+function recallPickerKeybindings() {
+	return {
+		matches(data: string, binding: string) {
+			const keys: Record<string, KeyId> = {
+				"app.session.delete": Key.ctrl("d"),
+				"tui.select.up": Key.up,
+				"tui.select.down": Key.down,
+				"tui.select.pageUp": Key.pageUp,
+				"tui.select.pageDown": Key.pageDown,
+				"tui.select.confirm": Key.enter,
+				"tui.select.cancel": Key.escape,
+			};
+			const expected = keys[binding];
+			return (
+				(expected !== undefined && matchesKey(data, expected)) ||
+				(binding === "tui.select.cancel" && matchesKey(data, Key.ctrl("c")))
+			);
+		},
+		getKeys(binding: string) {
+			return binding === "app.session.delete" ? ["ctrl+d"] : [];
+		},
+	};
+}
+
+async function waitForOpenCount(
+	tui: ReturnType<typeof createTuiHarness>,
+	count: number,
+	running: Promise<unknown> | unknown,
+) {
+	for (let turn = 0; tui.openCount < count && turn < 100; turn += 1) {
+		const settled = await Promise.race([
+			Promise.resolve(running).then(() => true),
+			new Promise<false>((resolve) => setImmediate(() => resolve(false))),
+		]);
+		if (settled) break;
+	}
+	assert.equal(tui.openCount, count);
 }
 
 test("main menu keeps five primary rows and save choice marks duplicate source unavailable", async () => {
@@ -216,6 +255,217 @@ test("TUI query survives picker re-entry in one Recall flow and resets in a fres
 	assert.doesNotMatch(freshSearch ?? "", /saved-a/);
 	freshTui.press("tui.select.cancel");
 	assert.deepEqual(await freshChoosing, { kind: "stay" });
+});
+
+test("TUI direct delete confirms the selected message, shows progress, and restores picker context", async () => {
+	const current = record("saved-current");
+	const other = record("saved-other", "other-entry");
+	other.source = { ...other.source, sessionId: "other-session", cwd: "/other" };
+	const data = source([current, other]);
+	const originalDelete = data.delete.bind(data);
+	let deleteStarted!: () => void;
+	let releaseDelete!: () => void;
+	const started = new Promise<void>((resolve) => {
+		deleteStarted = resolve;
+	});
+	const release = new Promise<void>((resolve) => {
+		releaseDelete = resolve;
+	});
+	data.delete = async (id) => {
+		deleteStarted();
+		await release;
+		return originalDelete(id);
+	};
+	let confirmation: { title: string; message: string } | undefined;
+	const tui = createTuiHarness({
+		width: 72,
+		rows: 18,
+		keybindings: recallPickerKeybindings() as never,
+	});
+	const base = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		confirm: async (title: string, message: string) => {
+			confirmation = { title, message };
+			return true;
+		},
+	}).ctx as unknown as { ui: Record<string, unknown>; [key: string]: unknown };
+	const controller = createRecallMenu(data);
+	const choosing = controller.menu.actions.chooseSaved({
+		ctx: { ...base, ui: { ...base.ui, custom: tui.custom } } as never,
+		state: await state(controller),
+		signal: new AbortController().signal,
+		itemId: "recall",
+	});
+	await tui.waitForOpen();
+	tui.send("\t");
+	tui.press("tui.select.up");
+	tui.type("saved");
+	tui.send("\u0004");
+	await waitForOpenCount(tui, 2, choosing);
+	await started;
+	try {
+		assert.match(confirmation?.title ?? "", /Delete saved message/);
+		assert.match(confirmation?.message ?? "", /saved text saved-other/);
+		assert.match(tui.render().join("\n"), /Deleting saved message/);
+	} finally {
+		releaseDelete();
+	}
+	await waitForOpenCount(tui, 3, choosing);
+	const restored = stripVTControlCharacters(tui.render().join("\n"));
+	assert.match(restored, /Scope: All \(1\).*1 match/);
+	assert.match(restored, /Search: .*saved/);
+	assert.match(restored, /saved text saved-cur…/);
+	assert.equal(
+		data.records.some(({ id }) => id === "saved-other"),
+		false,
+	);
+	tui.press("tui.select.cancel");
+	assert.deepEqual(await choosing, { kind: "stay" });
+});
+
+test("cancelling direct delete is side-effect free and restores query and selection", async () => {
+	const data = source();
+	let deleteCalls = 0;
+	data.delete = async () => {
+		deleteCalls += 1;
+		return true;
+	};
+	const tui = createTuiHarness({
+		width: 72,
+		rows: 18,
+		keybindings: recallPickerKeybindings() as never,
+	});
+	const base = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		confirm: async () => false,
+	}).ctx as unknown as { ui: Record<string, unknown>; [key: string]: unknown };
+	const controller = createRecallMenu(data);
+	const choosing = controller.menu.actions.chooseSaved({
+		ctx: { ...base, ui: { ...base.ui, custom: tui.custom } } as never,
+		state: await state(controller),
+		signal: new AbortController().signal,
+		itemId: "recall",
+	});
+	await tui.waitForOpen();
+	tui.type("saved-a");
+	tui.send("\u0004");
+	await waitForOpenCount(tui, 2, choosing);
+	const restored = stripVTControlCharacters(tui.render().join("\n"));
+	assert.match(restored, /Search: .*saved-a/);
+	assert.match(restored, /> assistant .*saved text saved-a/);
+	assert.equal(deleteCalls, 0);
+	assert.equal(data.records.length, 1);
+	tui.press("tui.select.cancel");
+	assert.deepEqual(await choosing, { kind: "stay" });
+});
+
+test("direct delete failure preserves the record and reports an actionable error", async () => {
+	const data = source();
+	let releaseDelete!: () => void;
+	const release = new Promise<void>((resolve) => {
+		releaseDelete = resolve;
+	});
+	data.delete = async () => {
+		await release;
+		throw new Error("lock unavailable");
+	};
+	const tui = createTuiHarness({
+		width: 72,
+		rows: 18,
+		keybindings: recallPickerKeybindings() as never,
+	});
+	const mock = createMockContext({ hasUI: true, mode: "tui", confirm: async () => true });
+	const base = mock.ctx as unknown as { ui: Record<string, unknown>; [key: string]: unknown };
+	const controller = createRecallMenu(data);
+	const choosing = controller.menu.actions.chooseSaved({
+		ctx: { ...base, ui: { ...base.ui, custom: tui.custom } } as never,
+		state: await state(controller),
+		signal: new AbortController().signal,
+		itemId: "recall",
+	});
+	await tui.waitForOpen();
+	tui.send("\u0004");
+	await waitForOpenCount(tui, 2, choosing);
+	releaseDelete();
+	await waitForOpenCount(tui, 3, choosing);
+	assert.equal(data.records.length, 1);
+	assert.match(tui.render().join("\n"), /saved text saved-a/);
+	assert.match(mock.notifications.at(-1)?.message ?? "", /Couldn.t delete.*lock unavailable/i);
+	tui.press("tui.select.cancel");
+	await choosing;
+});
+
+test("session cancellation aborts in-flight direct delete without stale success UI", async () => {
+	const data = source();
+	let deleteStarted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		deleteStarted = resolve;
+	});
+	data.delete = async (_id, signal) => {
+		deleteStarted();
+		await new Promise<void>((_resolve, reject) => {
+			if (signal?.aborted) return reject(signal.reason);
+			signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+		});
+		return true;
+	};
+	const owner = new AbortController();
+	const tui = createTuiHarness({
+		width: 72,
+		rows: 18,
+		keybindings: recallPickerKeybindings() as never,
+	});
+	const mock = createMockContext({ hasUI: true, mode: "tui", confirm: async () => true });
+	const base = mock.ctx as unknown as { ui: Record<string, unknown>; [key: string]: unknown };
+	const controller = createRecallMenu(data, { isCurrent: () => !owner.signal.aborted });
+	const choosing = controller.menu.actions.chooseSaved({
+		ctx: { ...base, ui: { ...base.ui, custom: tui.custom } } as never,
+		state: await state(controller),
+		signal: owner.signal,
+		itemId: "recall",
+	});
+	await tui.waitForOpen();
+	tui.send("\u0004");
+	await waitForOpenCount(tui, 2, choosing);
+	await started;
+	owner.abort(new DOMException("Session replaced", "AbortError"));
+	assert.deepEqual(await choosing, { kind: "close" });
+	assert.equal(data.records.length, 1);
+	assert.equal(
+		mock.notifications.some(({ message }) => /Deleted saved message/.test(message)),
+		false,
+	);
+});
+
+test("direct delete reconciles a record already removed by another process", async () => {
+	const data = source();
+	data.delete = async () => {
+		data.records = [];
+		return false;
+	};
+	const tui = createTuiHarness({
+		width: 72,
+		rows: 18,
+		keybindings: recallPickerKeybindings() as never,
+	});
+	const mock = createMockContext({ hasUI: true, mode: "tui", confirm: async () => true });
+	const base = mock.ctx as unknown as { ui: Record<string, unknown>; [key: string]: unknown };
+	const controller = createRecallMenu(data);
+	const choosing = controller.menu.actions.chooseSaved({
+		ctx: { ...base, ui: { ...base.ui, custom: tui.custom } } as never,
+		state: await state(controller),
+		signal: new AbortController().signal,
+		itemId: "recall",
+	});
+	await tui.waitForOpen();
+	tui.send("\u0004");
+	await waitForOpenCount(tui, 3, choosing);
+	assert.match(tui.render().join("\n"), /No saved messages in this scope/);
+	assert.match(mock.notifications.at(-1)?.message ?? "", /already removed/i);
+	tui.press("tui.select.cancel");
+	await choosing;
 });
 
 test("preview is exact, quote appends to the draft without sending, and delete requires review action", async () => {

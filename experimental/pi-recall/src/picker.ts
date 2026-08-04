@@ -28,6 +28,13 @@ const MAX_SEARCH_QUERY_LENGTH = 256;
 
 export type ScopedRecallPickerResult =
 	| { kind: "selected"; recordId: string; scope: RecallScope; query?: string }
+	| {
+			kind: "delete";
+			recordId: string;
+			nextSelectedId?: string;
+			scope: RecallScope;
+			query?: string;
+	  }
 	| { kind: "back"; scope: RecallScope; selectedId?: string; query?: string }
 	| { kind: "close"; scope: RecallScope; selectedId?: string; query?: string };
 
@@ -125,14 +132,7 @@ export class ScopedRecallPicker implements Component, Focusable {
 			truncateToWidth(searchLine, safeWidth, ""),
 			"",
 			...(rows.length > 0 ? rows : emptyRows),
-			truncateToWidth(
-				this.options.theme.fg(
-					"dim",
-					"Type to search · ↑↓ navigate · Enter select · Tab/Shift+Tab scope · Esc back · Ctrl+C close",
-				),
-				safeWidth,
-				"",
-			),
+			...this.footerLines(safeWidth),
 		].map((line) => truncateToWidth(line, safeWidth, ""));
 	}
 
@@ -145,6 +145,10 @@ export class ScopedRecallPicker implements Component, Focusable {
 				selectedId: this.selectedId,
 				query: this.query(),
 			});
+			return;
+		}
+		if (this.options.keybindings.matches(data, "app.session.delete")) {
+			this.requestDelete();
 			return;
 		}
 		if (matchesKey(data, Key.shift("tab"))) {
@@ -237,6 +241,35 @@ export class ScopedRecallPicker implements Component, Focusable {
 			this.selectedId = this.records[0]?.id;
 		}
 		this.scrollOffset = 0;
+	}
+
+	private requestDelete(): void {
+		if (!this.selectedId) return;
+		const selectedIndex = this.records.findIndex(({ id }) => id === this.selectedId);
+		if (selectedIndex < 0) return;
+		const nextSelectedId =
+			this.records[selectedIndex + 1]?.id ?? this.records[selectedIndex - 1]?.id;
+		this.finish({
+			kind: "delete",
+			recordId: this.selectedId,
+			...(nextSelectedId ? { nextSelectedId } : {}),
+			scope: this.scope,
+			query: this.query(),
+		});
+	}
+
+	private footerLines(width: number): string[] {
+		const deleteKey = this.options.keybindings.getKeys("app.session.delete")[0];
+		const deleteHint = deleteKey ? `${deleteKey} delete` : "";
+		const primary = [deleteHint, "Enter open", "↑↓ navigate"].filter(Boolean).join(" · ");
+		const navigation = "Tab/Shift+Tab scope · Esc back · Ctrl+C close";
+		if (width < 32) {
+			return [this.options.theme.fg("dim", primary), this.options.theme.fg("dim", navigation)];
+		}
+		return [
+			this.options.theme.fg("dim", `Type to search · ${primary}`),
+			this.options.theme.fg("dim", navigation),
+		];
 	}
 
 	private move(delta: number): void {
