@@ -108,7 +108,7 @@ export function buildGoalMenuState(runtime: GoalMenuRuntimeView): GoalMenuState 
 				"No goal is currently set",
 				automaticTurnLimit === null
 					? "Automatic work is configured as Unlimited."
-					: `Automatic work pauses after ${automaticTurnLimit} responses by default.`,
+					: `Automatic work is configured to pause after ${automaticTurnLimit} responses.`,
 			].join("\n");
 
 	if (runtime.queueFrozen || runtime.pendingQueueAction) {
@@ -621,7 +621,7 @@ function automaticPauseSummary(used: number, limit: number | null) {
 		return `Goal paused after ${used} responses at its previous safety limit. Current limit: Unlimited.`;
 	}
 	if (used < limit) {
-		return `Goal paused after ${used} responses. Current automatic-work limit: ${limit}.`;
+		return `Goal paused after ${used} responses at its previous safety limit. Current automatic-work limit: ${limit}.`;
 	}
 	return `Goal reached its ${used}-of-${limit} safety limit.`;
 }

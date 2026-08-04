@@ -49,12 +49,17 @@ function commands() {
 test("buildGoalMenuState prioritizes actions for empty, active, stopped, budget, and frozen states", () => {
 	const empty = runtime();
 	empty.settings.experimental.goals = true;
-	assert.match(buildGoalMenuState(empty).title, /automatic work pauses after 25 responses/i);
+	assert.match(buildGoalMenuState(empty).title, /configured to pause after 25 responses/i);
 	assert.deepEqual(buildGoalMenuState(empty).actions.slice(0, 2), [
 		GOAL_MENU_ACTIONS.start,
 		GOAL_MENU_ACTIONS.startBudget,
 	]);
 	assert.equal(buildGoalMenuState(empty).actions.includes(GOAL_MENU_ACTIONS.queue), false);
+
+	const customEmpty = runtime();
+	customEmpty.settings.continuationLimits.automaticTurns = 40;
+	assert.match(buildGoalMenuState(customEmpty).title, /configured to pause after 40 responses/i);
+	assert.doesNotMatch(buildGoalMenuState(customEmpty).title, /by default/i);
 
 	const active = createGoal("ship the release", 100, 0);
 	active.tokensUsed = 20;
@@ -173,43 +178,50 @@ test("hard-cap recovery applies Continue only to the previewed goal", async () =
 });
 
 test("hard-cap recovery can open the automatic-work setting and remain paused", async () => {
-	const goal = transitionGoal(createGoal("paused objective", undefined, 0), "paused");
-	goal.automaticModelTurns = 25;
-	goal.safetyPauseCause = "continuation_limit";
-	const state = runtime(goal);
-	const tracked = commands();
-	const selections = [
-		"Review and continue…",
-		"Change automatic-work limit…",
-		"Back",
-		GOAL_MENU_ACTIONS.close,
-	];
-	const targets: Array<string | undefined> = [];
-	const recoveryFrames: string[] = [];
-	const context = createMockContext({
-		mode: "tui",
-		hasUI: true,
-		select: async (title: string) => {
-			if (/Automatic work paused/i.test(title)) recoveryFrames.push(title);
-			return selections.shift();
-		},
-	});
+	for (const updatedLimit of [40, null] as const) {
+		const goal = transitionGoal(createGoal("paused objective", undefined, 0), "paused");
+		goal.automaticModelTurns = 25;
+		goal.safetyPauseCause = "continuation_limit";
+		const state = runtime(goal);
+		const tracked = commands();
+		const selections = [
+			"Review and continue…",
+			"Change automatic-work limit…",
+			"Back",
+			GOAL_MENU_ACTIONS.close,
+		];
+		const targets: Array<string | undefined> = [];
+		const recoveryFrames: string[] = [];
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			select: async (title: string) => {
+				if (/Automatic work paused/i.test(title)) recoveryFrames.push(title);
+				return selections.shift();
+			},
+		});
 
-	await showGoalManager(
-		state,
-		tracked.controller as never,
-		context.ctx,
-		async (_ctx, target?: string) => {
-			targets.push(target);
-			state.settings.continuationLimits.automaticTurns = null;
-		},
-	);
+		await showGoalManager(
+			state,
+			tracked.controller as never,
+			context.ctx,
+			async (_ctx, target?: string) => {
+				targets.push(target);
+				state.settings.continuationLimits.automaticTurns = updatedLimit;
+			},
+		);
 
-	assert.deepEqual(targets, ["automatic"]);
-	assert.match(recoveryFrames.at(-1) ?? "", /Current limit: Unlimited/i);
-	assert.doesNotMatch(recoveryFrames.at(-1) ?? "", /of-Unlimited safety limit/i);
-	assert.equal(state.activeGoal?.status, "paused");
-	assert.equal(tracked.calls.length, 0);
+		assert.deepEqual(targets, ["automatic"]);
+		const updatedFrame = recoveryFrames.at(-1) ?? "";
+		assert.match(updatedFrame, /paused after 25 responses at its previous safety limit/i);
+		assert.match(
+			updatedFrame,
+			updatedLimit === null ? /Current limit: Unlimited/i : /Current automatic-work limit: 40/i,
+		);
+		assert.doesNotMatch(updatedFrame, /of-(?:40|Unlimited) safety limit/i);
+		assert.equal(state.activeGoal?.status, "paused");
+		assert.equal(tracked.calls.length, 0);
+	}
 });
 
 test("hard-cap recovery remains readable and keyboard-operable at supported widths", async () => {
