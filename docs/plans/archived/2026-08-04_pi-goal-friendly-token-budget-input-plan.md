@@ -128,13 +128,16 @@ state after asynchronous dialogs.
       lifecycle guards, cancellation, runtime rollback, compatibility, and documentation; the menu
       uses published kit 0.46 input screens, revalidates menu/queue/goal/usage/status ownership after
       awaits, retains existing command rollback, and has no accepted convention deviation.
-- [ ] Run `npm run check --workspace @narumitw/pi-goal`, all compiled pi-goal tests,
-      `npm run test:runtime --workspace @narumitw/pi-goal`, and root `npm run check`; if the known
-      linked-worktree-only pi-sync Git-environment fixture recurs, rerun the exact commit in a normal
-      clone and retain both results as evidence.
-- [ ] Commit the bounded implementation on `feat/pi-goal-friendly-token-budget-input`, push the new
-      branch, and open a PR against `main`; verify the PR points to the pushed commit, has no unresolved
-      review threads introduced by the change, and all required GitHub checks pass.
+- [x] Run `npm run check --workspace @narumitw/pi-goal`, all compiled pi-goal tests,
+      `npm run test:runtime --workspace @narumitw/pi-goal`, and root `npm run check`; package checks,
+      295 pi-goal tests, and the runtime smoke passed. The linked-worktree root run reproduced the
+      known pi-sync Git-environment fixture failure (2,407/2,408), while exact commit
+      `a9f090149d0ea88a035a96fb3fb374fc61a7f6e9` passed all 2,408 tests in a clean normal clone under
+      Node 22 and pinned npm 12.0.2.
+- [x] Commit the bounded implementation on `feat/pi-goal-friendly-token-budget-input`, push the new
+      branch, and open a PR against `main`; PR #553 is open and mergeable at exact pushed commit
+      `a9f090149d0ea88a035a96fb3fb374fc61a7f6e9`, has zero review threads, and CI plus all CodeQL checks
+      pass.
 
 ## Completion Checklist
 
@@ -154,7 +157,8 @@ state after asynchronous dialogs.
 - [x] Direct `/goal --tokens`, unbudgeted starts, parser syntax, persisted data, settings unknown
       fields, and existing token-accounting semantics remain backward compatible; all 295 compiled
       pi-goal tests pass.
-- [ ] README behavior, focused tests, package/runtime checks, root CI-equivalent verification, pushed
-      PR state, and GitHub checks all match the final implementation.
-- [ ] After every item above has evidence, archive this plan under `docs/plans/archived/` without
-      overwriting an existing file and report the archived path.
+- [x] README behavior, focused tests, package/runtime checks, root CI-equivalent verification, pushed
+      PR state, and GitHub checks all match the final implementation and PR #553.
+- [x] After every item above has evidence, archive this plan under `docs/plans/archived/` without
+      overwriting an existing file; archived as
+      `docs/plans/archived/2026-08-04_pi-goal-friendly-token-budget-input-plan.md`.
