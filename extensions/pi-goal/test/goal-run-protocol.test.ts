@@ -400,7 +400,7 @@ test("cancel during the first active event prevents kickoff delivery", async () 
 	);
 	assert.equal(mock.sentUserMessages.length, 0);
 	assert.equal(lastPersistedGoal(mock)?.status, "paused");
-	assert.equal(context.statuses.get("goal"), "paused");
+	assert.equal(context.statuses.get("goal"), "paused · automatic 0/25");
 });
 
 test("unknown, stale, and manual runs cannot be cancelled", async () => {

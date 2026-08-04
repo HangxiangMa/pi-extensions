@@ -160,9 +160,14 @@ export class GoalCommandController {
 		) {
 			return;
 		}
+		const automaticLimit = this.runtime.settings.continuationLimits.automaticTurns;
 		ctx.ui.notify(
-			existingGoal ? `Goal replaced: ${objective}` : `Goal started: ${objective}`,
-			"info",
+			`${existingGoal ? "Goal replaced" : "Goal started"}: ${objective}. ${
+				automaticLimit === null
+					? "Automatic work is Unlimited; tool loops may consume substantial tokens and provider cost. Open /goal to monitor."
+					: `Automatic work pauses after ${automaticLimit} responses; open /goal to monitor progress.`
+			}`,
+			automaticLimit === null ? "warning" : "info",
 		);
 	}
 
@@ -474,9 +479,14 @@ export class GoalCommandController {
 			}
 			return;
 		}
+		const automaticLimit = this.runtime.settings.continuationLimits.automaticTurns;
 		ctx.ui.notify(
-			`Goal resumed from ${stoppedStatusLabel(stoppedStatus)}: ${resumedGoal.text}`,
-			"info",
+			`Goal resumed from ${stoppedStatusLabel(stoppedStatus)}: ${resumedGoal.text}. ${
+				automaticLimit === null
+					? "Automatic work remains Unlimited; goal progress and cumulative usage are preserved."
+					: `The automatic-work counter will reset to 0 of ${automaticLimit} when the resumed prompt starts; goal progress and cumulative usage are preserved.`
+			}`,
+			automaticLimit === null ? "warning" : "info",
 		);
 	}
 
@@ -602,6 +612,7 @@ export class GoalCommandController {
 				this.runtime.settings.experimental.goals,
 				this.runtime.queueFrozen,
 				this.runtime.pendingQueueAction,
+				this.runtime.settings.continuationLimits.automaticTurns,
 			),
 		);
 	}

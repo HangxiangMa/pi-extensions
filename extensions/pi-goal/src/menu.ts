@@ -12,6 +12,7 @@ export const GOAL_MENU_ACTIONS = {
 	startBudget: "Start with token budget…",
 	pause: "Pause goal",
 	resume: "Resume goal",
+	reviewSafety: "Review and continue…",
 	increaseBudget: "Increase budget and resume…",
 	edit: "Edit goal…",
 	replace: "Replace goal…",
@@ -47,13 +48,15 @@ export interface GoalMenuState {
 	actions: string[];
 }
 
-type ShowSettings = (ctx: ExtensionCommandContext) => Promise<void>;
-type GoalMenuScreen = "main" | "queue" | "status" | "help";
+type ShowSettings = (ctx: ExtensionCommandContext, target?: "automatic") => Promise<void>;
+type GoalMenuScreen = "main" | "safety" | "queue" | "status" | "help";
 type GoalMenuAction =
 	| "start"
 	| "start-budget"
 	| "pause"
 	| "resume"
+	| "safety-resume"
+	| "safety-settings"
 	| "increase-budget"
 	| "edit"
 	| "replace"
@@ -68,28 +71,45 @@ type GoalMenuAction =
 export function buildGoalMenuState(runtime: GoalMenuRuntimeView): GoalMenuState {
 	const goal = runtime.activeGoal;
 	const queueCount = runtime.queuedGoals.length;
+	const pausedByAutomaticLimit =
+		goal?.status === "paused" && goal.safetyPauseCause === "continuation_limit";
 	const state = runtime.queueFrozen
 		? "Queue frozen"
 		: runtime.pendingQueueAction
 			? "Waiting for Pi to settle"
-			: displayStatus(goal?.status);
+			: pausedByAutomaticLimit
+				? "Paused — automatic-work limit reached"
+				: displayStatus(goal?.status);
 	const automaticTurnLimit = runtime.settings.continuationLimits.automaticTurns;
+	const used = goal?.automaticModelTurns ?? 0;
 	const automaticResponses =
 		automaticTurnLimit === null
-			? `${goal?.automaticModelTurns ?? 0} automatic responses · Unlimited`
-			: `${goal?.automaticModelTurns ?? 0}/${automaticTurnLimit} automatic responses`;
-	const details = goal
-		? [
-				goal.tokenBudget === undefined
-					? formatDuration(goal.timeUsedSeconds)
-					: `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`,
-				automaticResponses,
-				...(queueCount > 0 ? [`${queueCount} queued`] : []),
-			].join(" · ")
-		: "No goal is currently set";
+			? `Automatic work: ${used} responses · Unlimited`
+			: `Automatic work: ${used} of ${automaticTurnLimit} responses${
+					used < automaticTurnLimit ? ` · ${automaticTurnLimit - used} remaining` : ""
+				}`;
 	const title = goal
-		? `Goal · ${state}\n${safeGoalMenuText(goal.text)}\n${details}`
-		: `Goal · ${state}\n${details}`;
+		? [
+				`Goal · ${state}`,
+				safeGoalMenuText(goal.text),
+				`Usage: ${
+					goal.tokenBudget === undefined
+						? formatDuration(goal.timeUsedSeconds)
+						: `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`
+				}`,
+				automaticResponses,
+				...(pausedByAutomaticLimit
+					? ["Progress is saved. Review the safety limit before continuing."]
+					: []),
+				...(queueCount > 0 ? [`Queue: ${queueCount} queued`] : []),
+			].join("\n")
+		: [
+				`Goal · ${state}`,
+				"No goal is currently set",
+				automaticTurnLimit === null
+					? "Automatic work is configured as Unlimited."
+					: `Automatic work is configured to pause after ${automaticTurnLimit} responses.`,
+			].join("\n");
 
 	if (runtime.queueFrozen || runtime.pendingQueueAction) {
 		return {
@@ -111,6 +131,8 @@ export function buildGoalMenuState(runtime: GoalMenuRuntimeView): GoalMenuState 
 		actions.push(GOAL_MENU_ACTIONS.pause);
 	} else if (goal.status === "budget_limited") {
 		actions.push(GOAL_MENU_ACTIONS.increaseBudget);
+	} else if (pausedByAutomaticLimit) {
+		actions.push(GOAL_MENU_ACTIONS.reviewSafety);
 	} else {
 		actions.push(GOAL_MENU_ACTIONS.resume);
 	}
@@ -140,6 +162,9 @@ export async function showGoalManager(
 	const owner = runtime as GoalRuntime;
 	const generation = owner.menuGeneration;
 	const ownerSignal = owner.menuController?.signal;
+	const isMenuCurrent = () =>
+		owner.menuController === undefined ||
+		(generation === owner.menuGeneration && !owner.menuController.signal.aborted);
 	let displayedGoal: ActiveGoal | undefined;
 	let displayedQueueHead: ActiveGoal | undefined;
 	let displayedQueueFirst: ActiveGoal | undefined;
@@ -157,6 +182,47 @@ export async function showGoalManager(
 					lines: state.title.split("\n").slice(1),
 					items: state.actions.map(goalMainMenuItem),
 					hint: "close",
+				};
+			},
+			safety: () => {
+				const goal = runtime.activeGoal;
+				displayedGoal = goal;
+				const limit = runtime.settings.continuationLimits.automaticTurns;
+				const used = goal?.automaticModelTurns ?? 0;
+				const queueCount = runtime.queuedGoals.length;
+				return {
+					kind: "actions",
+					title: "Automatic work paused",
+					lines: goal
+						? [
+								automaticPauseSummary(used, limit),
+								`${safeGoalMenuText(goal.text)} is preserved.`,
+								`${formatInteger(goal.tokensUsed)} cumulative tokens and ${formatDuration(goal.timeUsedSeconds)} active time are preserved.`,
+								`The objective, usage, and ${queueCount} queued ${queueCount === 1 ? "goal is" : "goals are"} preserved.`,
+								limit === null
+									? "Continuing resets the counter to 0 and resumes with Unlimited automatic work."
+									: `Continuing resets the counter to 0 and allows up to ${limit} more automatic model responses.`,
+							]
+						: ["The paused goal is no longer available. Return to the Goal menu."],
+					items: goal
+						? [
+								{
+									id: "continue",
+									label:
+										limit === null
+											? "Continue — Unlimited"
+											: `Continue — up to ${limit} more responses`,
+									action: "safety-resume" as const,
+								},
+								{
+									id: "settings",
+									label: "Change automatic-work limit…",
+									action: "safety-settings" as const,
+								},
+								{ id: "back", label: "Back", action: "back" as const },
+							]
+						: [{ id: "back", label: "Back", action: "back" as const }],
+					hint: "back",
 				};
 			},
 			queue: () => {
@@ -200,6 +266,7 @@ export async function showGoalManager(
 							runtime.settings.experimental.goals,
 							runtime.queueFrozen,
 							runtime.pendingQueueAction,
+							runtime.settings.continuationLimits.automaticTurns,
 						).split("\n")
 					: ["No goal is currently set."],
 				hint: "back",
@@ -233,6 +300,23 @@ export async function showGoalManager(
 				}
 				await commands.resumeGoal(ctx);
 				return { kind: "close" };
+			},
+			"safety-resume": async () => {
+				if (!displayedGoal || !requireCurrentMenuGoal(runtime, displayedGoal, ctx)) {
+					return { kind: "stay" };
+				}
+				await commands.resumeGoal(ctx);
+				return { kind: "close" };
+			},
+			"safety-settings": async () => {
+				if (!displayedGoal || !requireCurrentMenuGoal(runtime, displayedGoal, ctx)) {
+					return { kind: "stay" };
+				}
+				const expectedGoal = displayedGoal;
+				await showSettings(ctx, "automatic");
+				if (!isMenuCurrent()) return { kind: "close" };
+				if (!requireCurrentMenuGoal(runtime, expectedGoal, ctx)) return { kind: "stay" };
+				return { kind: "stay" };
 			},
 			"increase-budget": async () => {
 				if (!displayedGoal || !requireCurrentMenuGoal(runtime, displayedGoal, ctx)) {
@@ -332,14 +416,15 @@ export async function showGoalManager(
 	await runMenu(ctx, menu, {
 		getState: () => undefined,
 		signal: ownerSignal,
-		isCurrent: () =>
-			owner.menuController === undefined ||
-			(generation === owner.menuGeneration && !owner.menuController.signal.aborted),
+		isCurrent: isMenuCurrent,
 	});
 }
 
 function goalMainMenuItem(label: string): ActionMenuItem<GoalMenuScreen, GoalMenuAction> {
 	if (label === GOAL_MENU_ACTIONS.status) return { id: "status", label, to: "status" as const };
+	if (label === GOAL_MENU_ACTIONS.reviewSafety) {
+		return { id: "review-safety", label, to: "safety" as const };
+	}
 	if (label === GOAL_MENU_ACTIONS.queue) return { id: "queue", label, to: "queue" as const };
 	if (label === GOAL_MENU_ACTIONS.help) return { id: "help", label, to: "help" as const };
 	if (label === GOAL_MENU_ACTIONS.close) return { id: "close", label, close: true as const };
@@ -525,6 +610,20 @@ function displayStatus(status?: ActiveGoal["status"]) {
 
 function formatTokenCount(tokens: number) {
 	return String(tokens);
+}
+
+function formatInteger(value: number) {
+	return value.toLocaleString("en-US", { maximumFractionDigits: 0 });
+}
+
+function automaticPauseSummary(used: number, limit: number | null) {
+	if (limit === null) {
+		return `Goal paused after ${used} responses at its previous safety limit. Current limit: Unlimited.`;
+	}
+	if (used < limit) {
+		return `Goal paused after ${used} responses at its previous safety limit. Current automatic-work limit: ${limit}.`;
+	}
+	return `Goal reached its ${used}-of-${limit} safety limit.`;
 }
 
 function isTerminalControl(character: string) {

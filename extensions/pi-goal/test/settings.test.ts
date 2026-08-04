@@ -14,7 +14,7 @@ import {
 const DEFAULT_GOAL_SETTINGS_DOCUMENT = `${JSON.stringify(DEFAULT_GOAL_SETTINGS, null, 2)}\n`;
 
 test("normalizeGoalSettings applies defaults and accepts bounded continuation limits", () => {
-	assert.equal(DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns, null);
+	assert.equal(DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns, 25);
 	assert.deepEqual(DEFAULT_GOAL_SETTINGS.rpc, { enabled: false });
 	assert.deepEqual(normalizeGoalSettings({}), DEFAULT_GOAL_SETTINGS);
 	assert.deepEqual(normalizeGoalSettings({ futureOption: true }), DEFAULT_GOAL_SETTINGS);
@@ -49,7 +49,7 @@ test("normalizeGoalSettings applies defaults and accepts bounded continuation li
 	});
 	assert.deepEqual(normalizeGoalSettings({ continuationLimits: { noProgressTurns: 2 } }), {
 		...DEFAULT_GOAL_SETTINGS,
-		continuationLimits: { automaticTurns: null, noProgressTurns: 2 },
+		continuationLimits: { automaticTurns: 25, noProgressTurns: 2 },
 	});
 	assert.deepEqual(
 		normalizeGoalSettings({
@@ -176,7 +176,7 @@ test("readGoalSettings distinguishes missing, loaded, malformed, and unreadable 
 			toolVisibility: "after-first-goal",
 			experimental: { goals: true },
 			rpc: { enabled: false },
-			continuationLimits: { automaticTurns: null, noProgressTurns: 3 },
+			continuationLimits: { automaticTurns: 25, noProgressTurns: 3 },
 		},
 	});
 
