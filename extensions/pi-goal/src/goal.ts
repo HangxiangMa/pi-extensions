@@ -413,9 +413,10 @@ function registerGoalRuntime(pi: ExtensionAPI, options: GoalOptions = {}) {
 				return;
 			}
 			if (result.kind === "show" && args.trim() === "") {
-				await showGoalManager(runtime, commands, ctx, (menuCtx) =>
+				await showGoalManager(runtime, commands, ctx, (menuCtx, target) =>
 					showGoalSettings(runtime, menuCtx, {
 						settingsPath: options.settingsPath,
+						initialScreen: target,
 						onQueueUnfrozen: async (settingsCtx) => {
 							await commands.resumeQueueAfterUnfreeze(settingsCtx);
 						},

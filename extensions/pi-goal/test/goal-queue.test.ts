@@ -722,7 +722,7 @@ test("restored exhausted queued heads remain budget-limited without a kickoff pr
 
 	assert.equal(restored.mock.sentUserMessages.length, 0);
 	assert.equal(stateGoals(restored.mock)[0]?.status, "budget_limited");
-	assert.equal(restored.statuses.get("goal"), "budget 10/10");
+	assert.equal(restored.statuses.get("goal"), "budget 10/10 · automatic 0/25");
 });
 
 test("pending priority survives reload after the displaced head completes", async () => {
@@ -1400,7 +1400,7 @@ test("disabled settings freeze retained queues without losing state", async () =
 	const restored = await createHarness({
 		sessionManager: { getBranch: () => restoredBranch, getEntries: () => restoredBranch },
 	});
-	assert.equal(restored.statuses.get("goal"), "active 0s");
+	assert.equal(restored.statuses.get("goal"), "active 0s · automatic 0/25");
 	assert.deepEqual(
 		stateGoals(restored.mock).map(({ text }) => text),
 		["head", "later"],

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { GoalCommandController } from "../src/commands.js";
 import { createGoal, GoalRuntime } from "../src/runtime.js";
@@ -434,12 +436,246 @@ test("standard settings keep all five controls on one level", async () => {
 	await showGoalSettings(state, context.ctx, { settingsPath: "/tmp/pi-goal.json" });
 	assert.match(title, /Pi Goal Settings/);
 	assert.deepEqual(options, [
-		"Automatic work",
+		"Automatic-work limit",
 		"No-progress guard",
 		"Goal tools",
 		"Ordered goal queue",
 		"Managed run RPC",
 	]);
+});
+
+test("automatic-work settings can open directly from the safety recovery flow", async () => {
+	const state = runtime();
+	let title = "";
+	let options: string[] = [];
+	const context = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		select: async (receivedTitle: string, receivedOptions: string[]) => {
+			title = receivedTitle;
+			options = receivedOptions;
+			return undefined;
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		initialScreen: "automatic",
+	});
+
+	assert.match(title, /Automatic-work limit/i);
+	assert.deepEqual(options, ["25 responses (default)", "Set a custom limit…", "Unlimited…"]);
+});
+
+test("automatic-work choices restore the default, support custom limits, and preview Unlimited", async () => {
+	for (const scenario of [
+		{
+			initial: null,
+			choice: "25 responses (default)",
+			expected: 25,
+		},
+		{
+			initial: 25,
+			choice: "Set a custom limit…",
+			input: "40",
+			expected: 40,
+		},
+	] as const) {
+		const state = runtime();
+		state.settings.continuationLimits.automaticTurns = scenario.initial;
+		let saved: GoalSettings | undefined;
+		const selections = ["Automatic-work limit", scenario.choice, undefined];
+		const context = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async () => selections.shift(),
+			input: async () => ("input" in scenario ? scenario.input : undefined),
+		});
+
+		await showGoalSettings(state, context.ctx, {
+			settingsPath: "/tmp/pi-goal.json",
+			save(settings) {
+				saved = structuredClone(settings);
+			},
+		});
+
+		assert.equal(saved?.continuationLimits.automaticTurns, scenario.expected);
+		assert.equal(state.settings.continuationLimits.automaticTurns, scenario.expected);
+	}
+});
+
+test("Unlimited automatic work requires a concrete confirmation and cancellation changes nothing", async () => {
+	for (const confirmed of [false, true]) {
+		const state = runtime();
+		let confirmation = "";
+		let saves = 0;
+		const selections = ["Automatic-work limit", "Unlimited…", undefined];
+		const context = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async () => selections.shift(),
+			confirm: async (_title: string, message: string) => {
+				confirmation = message;
+				return confirmed;
+			},
+		});
+
+		await showGoalSettings(state, context.ctx, {
+			settingsPath: "/tmp/pi-goal.json",
+			save() {
+				saves++;
+			},
+		});
+
+		assert.match(confirmation, /tool loops can continue.*without a response-count limit/i);
+		assert.equal(saves, confirmed ? 1 : 0);
+		assert.equal(state.settings.continuationLimits.automaticTurns, confirmed ? null : 25);
+	}
+});
+
+test("lowering a reached automatic-work limit previews the immediate pause", async () => {
+	for (const confirmed of [false, true]) {
+		const state = runtime();
+		state.settings.continuationLimits.automaticTurns = 40;
+		state.activeGoal = createGoal("active objective", undefined, 0);
+		state.activeGoal.automaticModelTurns = 25;
+		let preview = "";
+		let saves = 0;
+		const selections = ["Automatic-work limit", "Set a custom limit…", undefined];
+		const context = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async () => selections.shift(),
+			input: async () => "20",
+			confirm: async (_title: string, message: string) => {
+				preview = message;
+				return confirmed;
+			},
+		});
+
+		await showGoalSettings(state, context.ctx, {
+			settingsPath: "/tmp/pi-goal.json",
+			save() {
+				saves++;
+			},
+		});
+
+		assert.match(preview, /already used 25.*limit to 20.*pause.*without deleting progress/is);
+		assert.equal(saves, confirmed ? 1 : 0);
+		assert.equal(state.settings.continuationLimits.automaticTurns, confirmed ? 20 : 40);
+		assert.equal(state.activeGoal?.status, confirmed ? "paused" : "active");
+	}
+});
+
+test("automatic-work save failure preserves the previous valid setting", async () => {
+	const state = runtime();
+	const selections = ["Automatic-work limit", "Set a custom limit…", undefined];
+	const context = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		select: async () => selections.shift(),
+		input: async () => "40",
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save() {
+			throw new Error("disk full");
+		},
+	});
+
+	assert.equal(state.settings.continuationLimits.automaticTurns, 25);
+	assert.match(context.notifications.at(-1)?.message ?? "", /previous value remains/i);
+});
+
+test("automatic-work settings stay readable and keyboard-operable at supported widths", async () => {
+	const state = runtime();
+	const tui = createTuiHarness({ width: 80, rows: 30 });
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+
+	try {
+		const running = showGoalSettings(state, context.ctx, {
+			settingsPath: "/tmp/pi-goal.json",
+			save() {},
+		});
+		await tui.waitForOpen();
+		for (const width of [40, 80, 120]) {
+			const lines = tui.render(width);
+			assert.ok(lines.every((line) => visibleWidth(line) <= width));
+			assert.match(lines.join(" "), /Automatic-work limit/i);
+		}
+
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		for (const width of [40, 80, 120]) {
+			const lines = tui.render(width);
+			const frame = lines.join(" ").replace(/\s+/gu, " ");
+			assert.ok(lines.every((line) => visibleWidth(line) <= width));
+			assert.match(frame, /25 responses \(default\)/i);
+			assert.match(frame, /Set a custom limit…/i);
+			assert.match(frame, /Unlimited…/i);
+		}
+		tui.press("tui.select.cancel");
+		await tui.waitForOpen();
+		assert.match(tui.render().join(" "), /Automatic-work limit/i);
+		tui.press("ctrl+c");
+		await running;
+	} finally {
+		tui.dispose();
+	}
+});
+
+test("automatic-work editing stops without side effects when its menu is disposed", async () => {
+	const state = runtime();
+	let saves = 0;
+	const selections = ["Automatic-work limit", "Set a custom limit…", undefined];
+	const context = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		select: async () => selections.shift(),
+		input: async () => {
+			state.closeMenuSession();
+			return "10";
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save() {
+			saves++;
+		},
+	});
+
+	assert.equal(saves, 0);
+	assert.equal(state.settings.continuationLimits.automaticTurns, 25);
+});
+
+test("automatic-work editing rejects a replacement active goal without saving", async () => {
+	const state = runtime();
+	state.activeGoal = createGoal("original", undefined, 0);
+	let saves = 0;
+	const selections = ["Automatic-work limit", "Set a custom limit…", undefined];
+	const context = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		select: async () => selections.shift(),
+		input: async () => {
+			state.activeGoal = createGoal("replacement", undefined, 0);
+			return "10";
+		},
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save() {
+			saves++;
+		},
+	});
+
+	assert.equal(saves, 0);
+	assert.equal(state.settings.continuationLimits.automaticTurns, 25);
+	assert.match(context.notifications.at(-1)?.message ?? "", /active goal changed/i);
 });
 
 test("Managed run RPC setting defaults off and saves immediately", async () => {
@@ -545,7 +781,7 @@ test("invalid settings use a standard read-only detail screen", async () => {
 	await showGoalSettings(state, context.ctx, { settingsPath: "/tmp/pi-goal.json" });
 	assert.match(title, /Read only/i);
 	assert.match(title, /Invalid settings file/i);
-	assert.match(title, /Automatic work: Unlimited/i);
+	assert.match(title, /Automatic-work limit: Up to 25 responses/i);
 	assert.match(title, /Managed run RPC: Off/i);
 });
 

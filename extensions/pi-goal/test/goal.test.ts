@@ -43,6 +43,7 @@ const INVALID_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "invalid.json");
 const MISSING_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "missing.json");
 const LOW_LIMITS_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "low-limits.json");
 const ONE_TURN_LIMIT_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "one-turn-limit.json");
+const UNLIMITED_SETTINGS_PATH = join(GOAL_SETTINGS_DIRECTORY, "unlimited.json");
 writeFileSync(ALWAYS_SETTINGS_PATH, '{"toolVisibility":"always"}\n');
 writeFileSync(LAZY_SETTINGS_PATH, '{"toolVisibility":"after-first-goal"}\n');
 writeFileSync(INVALID_SETTINGS_PATH, '{"toolVisibility":"sometimes"}\n');
@@ -53,6 +54,10 @@ writeFileSync(
 writeFileSync(
 	ONE_TURN_LIMIT_SETTINGS_PATH,
 	'{"continuationLimits":{"automaticTurns":1,"noProgressTurns":null}}\n',
+);
+writeFileSync(
+	UNLIMITED_SETTINGS_PATH,
+	'{"continuationLimits":{"automaticTurns":null,"noProgressTurns":3}}\n',
 );
 after(() => rmSync(GOAL_SETTINGS_DIRECTORY, { recursive: true, force: true }));
 
@@ -1513,19 +1518,18 @@ test("session reload pauses an active goal already at the automatic response lim
 		tokensUsed: 5,
 		timeUsedSeconds: 4,
 		baselineTokens: 0,
-		automaticModelTurns: 3,
+		automaticModelTurns: 25,
 		toolFreeRepeatCount: 0,
 	};
-	const restored = restoreStoredGoalForTest(
-		sessionGoal,
-		[],
-		"always",
-		{},
-		LOW_LIMITS_SETTINGS_PATH,
-	);
+	const restored = restoreStoredGoalForTest(sessionGoal);
 	assert.equal(lastGoalStatus(restored.mock), "paused");
 	assert.equal(requireLastGoal(restored.mock).safetyPauseCause, "continuation_limit");
 	assert.equal(restored.mock.sentUserMessages.length, 0);
+	assert.match(
+		restored.notifications.at(-1)?.message ?? "",
+		/automatic-work limit reached.*25 of 25/i,
+	);
+	assert.match(restored.notifications.at(-1)?.message ?? "", /progress is saved/i);
 });
 
 test("session reload pauses an active goal already at the no-progress limit", () => {
@@ -1625,13 +1629,45 @@ test("formatStatus reports active, stopped, budget-limited, complete, and empty 
 		toolFreeRepeatCount: 0,
 	} as const;
 
-	assert.equal(formatStatus(undefined), undefined);
-	assert.equal(formatStatus(activeGoal), "active 500/2k");
-	assert.equal(formatStatus({ ...activeGoal, status: "paused" }), "paused");
-	assert.equal(formatStatus({ ...activeGoal, status: "blocked" }), "blocked");
-	assert.equal(formatStatus({ ...activeGoal, status: "usage_limited" }), "usage");
-	assert.equal(formatStatus({ ...activeGoal, status: "budget_limited" }), "budget 500/2k");
-	assert.equal(formatStatus({ ...activeGoal, status: "complete" }), "complete");
+	assert.equal(formatStatus(undefined, 25), undefined);
+	assert.equal(formatStatus(activeGoal, 25), "active 500/2k · automatic 0/25");
+	assert.equal(
+		formatStatus(
+			{
+				...activeGoal,
+				status: "paused",
+				automaticModelTurns: 25,
+				safetyPauseCause: "continuation_limit",
+			},
+			25,
+		),
+		"paused · automatic limit 25/25",
+	);
+	assert.equal(formatStatus({ ...activeGoal, status: "blocked" }, 25), "blocked · automatic 0/25");
+	assert.equal(
+		formatStatus({ ...activeGoal, status: "usage_limited" }, 25),
+		"usage · automatic 0/25",
+	);
+	assert.equal(
+		formatStatus({ ...activeGoal, status: "budget_limited" }, 25),
+		"budget 500/2k · automatic 0/25",
+	);
+	assert.equal(formatStatus(activeGoal, null), "active 500/2k · automatic Unlimited");
+	assert.equal(formatStatus({ ...activeGoal, status: "complete" }, 25), "complete");
+});
+
+test("goal start feedback exposes the default cap and explicit Unlimited mode", async () => {
+	const capped = await startGoalForTest();
+	assert.match(
+		capped.notifications.at(-1)?.message ?? "",
+		/automatic work pauses after 25 responses/i,
+	);
+	assert.match(capped.notifications.at(-1)?.message ?? "", /open \/goal to monitor/i);
+
+	const unlimited = await startGoalForTest({}, "unbounded objective", UNLIMITED_SETTINGS_PATH);
+	assert.match(unlimited.notifications.at(-1)?.message ?? "", /automatic work is Unlimited/i);
+	assert.match(unlimited.notifications.at(-1)?.message ?? "", /provider cost/i);
+	assert.equal(unlimited.notifications.at(-1)?.level, "warning");
 });
 
 test("buildGoalSystemPrompt escapes objective XML and includes goal_id guard rules", () => {
@@ -2048,7 +2084,7 @@ test("goal_blocked requires a current active goal and strict blocker evidence", 
 	assert.equal(accepted.terminate, true);
 	assert.match(accepted.content?.[0]?.text ?? "", /goal blocked/i);
 	assert.equal(lastGoalStatus(blocked.mock), "blocked");
-	assert.equal(blocked.statuses.get("goal"), "blocked");
+	assert.equal(blocked.statuses.get("goal"), "blocked · automatic 0/25");
 	assert.match(blocked.notifications.at(-1)?.message ?? "", /goal blocked/i);
 	assert.deepEqual(
 		blocked.mock.events.get("tool_call")?.[0]?.(
@@ -2093,7 +2129,7 @@ test("session persistence restores stopped states with resumable command hints",
 		["budget_limited", "budget 5/10"],
 	] as const) {
 		const restored = restoreGoalForTest(status);
-		assert.equal(restored.statuses.get("goal"), statusline);
+		assert.equal(restored.statuses.get("goal"), `${statusline} · automatic 0/25`);
 
 		await restored.mock.commands.get("goal")?.handler("", restored.ctx);
 		assert.match(restored.notifications.at(-1)?.message ?? "", new RegExp(`Status: ${status}`));
@@ -2111,7 +2147,12 @@ test("resume safely reactivates every resumable stopped status and rotates goal_
 		const resumed = requireLastGoal(restored.mock);
 		assert.equal(resumed.status, "active", `${status} should resume`);
 		assert.notEqual(resumed.id, beforeResume.id);
-		assert.equal(restored.statuses.get("goal"), "active 5/10");
+		assert.equal(restored.statuses.get("goal"), "active 5/10 · automatic 0/25");
+		assert.match(restored.notifications.at(-1)?.message ?? "", /counter.*0 of 25/i);
+		assert.match(
+			restored.notifications.at(-1)?.message ?? "",
+			/progress and cumulative usage are preserved/i,
+		);
 		assert.equal(restored.mock.sentUserMessages.length, 1);
 		assert.match(restored.mock.sentUserMessages[0]?.text ?? "", /explicitly resumed/i);
 		assert.equal(
@@ -2365,7 +2406,7 @@ test("failed resume delivery restores the stopped state and original goal_id", a
 
 	assert.equal(lastGoalStatus(restored.mock), "blocked");
 	assert.equal(requireLastGoal(restored.mock).id, restored.sessionGoal.id);
-	assert.equal(restored.statuses.get("goal"), "blocked");
+	assert.equal(restored.statuses.get("goal"), "blocked · automatic 0/25");
 	assert.equal(restored.mock.sentUserMessages.length, 0);
 	assert.match(restored.notifications.at(-1)?.message ?? "", /runtime became busy/i);
 	assert.deepEqual(
@@ -2528,10 +2569,9 @@ test("pause remains active-only for new stopped statuses", async () => {
 		const restored = restoreGoalForTest(status);
 		await restored.mock.commands.get("goal")?.handler("pause", restored.ctx);
 		assert.match(restored.notifications.at(-1)?.message ?? "", /only active goals can be paused/i);
-		assert.equal(
-			restored.statuses.get("goal"),
-			status === "usage_limited" ? "usage" : status === "budget_limited" ? "budget 5/10" : status,
-		);
+		const label =
+			status === "usage_limited" ? "usage" : status === "budget_limited" ? "budget 5/10" : status;
+		assert.equal(restored.statuses.get("goal"), `${label} · automatic 0/25`);
 	}
 });
 
@@ -2679,15 +2719,15 @@ test("automatic turn_end hard cap pauses a tool loop before another normal respo
 	assert.equal(aborts, 1);
 	assert.equal(
 		capped.notifications.filter((notice) =>
-			/Goal paused: 3 automatic model responses/i.test(notice.message),
+			/Automatic-work limit reached: 3 of 3 responses/i.test(notice.message),
 		).length,
 		1,
 	);
 	await capped.mock.commands.get("goal")?.handler("", capped.ctx);
-	assert.match(capped.notifications.at(-1)?.message ?? "", /Automatic model responses: 3/i);
+	assert.match(capped.notifications.at(-1)?.message ?? "", /Automatic work: 3 of 3 responses/i);
 	assert.match(
 		capped.notifications.at(-1)?.message ?? "",
-		/Safety pause: automatic response limit/i,
+		/Safety pause: automatic-work limit reached/i,
 	);
 	capped.mock.events.get("turn_end")?.[0]?.(
 		{ message: { role: "assistant", stopReason: "aborted", content: [] }, toolResults: [] },
@@ -3432,7 +3472,7 @@ test("pause aborts the current turn, blocks stale tools, and persists paused sta
 
 	assert.equal(pauseAborts, 1);
 	assert.equal(lastGoalStatus(paused.mock), "paused");
-	assert.equal(paused.statuses.get("goal"), "paused");
+	assert.equal(paused.statuses.get("goal"), "paused · automatic 0/25");
 	assert.deepEqual(
 		paused.mock.events.get("input")?.[0]?.(
 			{ source: "extension", text: staleContinuation },
@@ -3612,7 +3652,7 @@ test("tool_execution_end enforces budget once and injects one bounded wrap-up", 
 
 	assert.equal(lastGoalStatus(budgeted.mock), "budget_limited");
 	assert.equal(requireLastGoal(budgeted.mock).tokensUsed, 12);
-	assert.equal(budgeted.statuses.get("goal"), "budget 12/10");
+	assert.equal(budgeted.statuses.get("goal"), "budget 12/10 · automatic 0/25");
 	assert.equal(budgeted.mock.sentMessages.length, 1);
 	const wrapUp = budgeted.mock.sentMessages[0];
 	assert.ok(wrapUp);

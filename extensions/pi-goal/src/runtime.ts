@@ -360,7 +360,10 @@ export class GoalRuntime {
 
 	updateStatus(ctx: StatusContext, goal: ActiveGoal) {
 		this.clearCompletionStatusTimer();
-		ctx.ui.setStatus(STATUS_KEY, formatStatus(goal));
+		ctx.ui.setStatus(
+			STATUS_KEY,
+			formatStatus(goal, this.settings.continuationLimits.automaticTurns),
+		);
 	}
 
 	blockStaleGoalToolCalls() {
@@ -528,9 +531,10 @@ export class GoalRuntime {
 			abortCurrentTurn(ctx);
 		}
 		this.activeGoal = transitionGoal({ ...goal, safetyPauseCause: cause }, "paused");
+		const automaticLimit = this.settings.continuationLimits.automaticTurns;
 		const count =
 			cause === "continuation_limit"
-				? `${this.activeGoal.automaticModelTurns} automatic model responses`
+				? `${this.activeGoal.automaticModelTurns} of ${automaticLimit ?? "Unlimited"} automatic model responses`
 				: `no progress across ${this.activeGoal.toolFreeRepeatCount} automatic runs`;
 		this.setTerminalReason(
 			this.activeGoal.id,
@@ -539,7 +543,9 @@ export class GoalRuntime {
 		this.persistGoal(this.activeGoal);
 		this.updateStatus(ctx, this.activeGoal);
 		ctx.ui.notify(
-			`Goal paused: ${count}; ${formatTokenCount(this.activeGoal.tokensUsed)} cumulative tokens. Run /goal resume to continue.`,
+			cause === "continuation_limit"
+				? `Automatic-work limit reached: ${this.activeGoal.automaticModelTurns} of ${automaticLimit} responses. Goal progress is saved with ${formatTokenCount(this.activeGoal.tokensUsed)} cumulative tokens. Open /goal to review and continue.`
+				: `Goal paused: ${count}; ${formatTokenCount(this.activeGoal.tokensUsed)} cumulative tokens. Open /goal to review and continue.`,
 			"warning",
 		);
 		return true;
@@ -1071,16 +1077,32 @@ export function incrementGoal(goal: ActiveGoal): ActiveGoal {
 	return { ...goal, iteration: goal.iteration + 1, updatedAt: Date.now() };
 }
 
-export function formatStatus(goal: ActiveGoal | undefined) {
+export function formatStatus(
+	goal: ActiveGoal | undefined,
+	automaticTurnLimit: number | null = DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns,
+) {
 	if (!goal) return undefined;
 	if (goal.status === "complete") return "complete";
-	if (goal.status === "queued") return "queued";
-	if (goal.status === "paused") return "paused";
-	if (goal.status === "blocked") return "blocked";
-	if (goal.status === "usage_limited") return "usage";
-	if (goal.status === "budget_limited") return `budget ${formatBudget(goal)}`;
-	if (goal.tokenBudget !== undefined) return `active ${formatBudget(goal)}`;
-	return `active ${formatDuration(goal.timeUsedSeconds)}`;
+	const automatic =
+		automaticTurnLimit === null
+			? "automatic Unlimited"
+			: `automatic ${goal.automaticModelTurns}/${automaticTurnLimit}`;
+	if (goal.status === "queued") return `queued · ${automatic}`;
+	if (goal.status === "paused" && goal.safetyPauseCause === "continuation_limit") {
+		if (automaticTurnLimit === null) {
+			return `paused · previous automatic limit at ${goal.automaticModelTurns}`;
+		}
+		if (goal.automaticModelTurns < automaticTurnLimit) {
+			return `paused · automatic ${goal.automaticModelTurns}/${automaticTurnLimit}`;
+		}
+		return `paused · automatic limit ${goal.automaticModelTurns}/${automaticTurnLimit}`;
+	}
+	if (goal.status === "paused") return `paused · ${automatic}`;
+	if (goal.status === "blocked") return `blocked · ${automatic}`;
+	if (goal.status === "usage_limited") return `usage · ${automatic}`;
+	if (goal.status === "budget_limited") return `budget ${formatBudget(goal)} · ${automatic}`;
+	if (goal.tokenBudget !== undefined) return `active ${formatBudget(goal)} · ${automatic}`;
+	return `active ${formatDuration(goal.timeUsedSeconds)} · ${automatic}`;
 }
 
 export function formatBudget(goal: ActiveGoal) {
@@ -1093,18 +1115,23 @@ export function goalSummary(
 	experimentalGoals = false,
 	queueFrozen = false,
 	pendingAction?: PendingQueueAction,
+	automaticTurnLimit: number | null = DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns,
 ) {
 	const summary = [
 		`Goal: ${goal.text}`,
 		`Status: ${queueFrozen ? "queue off" : goal.status}`,
 		`Iteration: ${goal.iteration}`,
-		`Automatic model responses: ${goal.automaticModelTurns}`,
+		automaticTurnLimit === null
+			? `Automatic work: ${goal.automaticModelTurns} responses · Unlimited`
+			: `Automatic work: ${goal.automaticModelTurns} of ${automaticTurnLimit} responses`,
 		`Active elapsed: ${formatDuration(goal.timeUsedSeconds)}`,
 		`Tokens: ${goal.tokenBudget === undefined ? formatTokenCount(goal.tokensUsed) : formatBudget(goal)}`,
 	];
 	if (goal.safetyPauseCause) {
 		summary.push(
-			`Safety pause: ${goal.safetyPauseCause === "continuation_limit" ? "automatic response limit" : "no progress"}`,
+			goal.safetyPauseCause === "continuation_limit"
+				? `Safety pause: automatic-work limit reached (${goal.automaticModelTurns} of ${automaticTurnLimit ?? "Unlimited"} responses). Progress is saved; open /goal to review and continue.`
+				: "Safety pause: no progress. Progress is saved; open /goal to review and continue.",
 		);
 	}
 	if (experimentalGoals || queuedGoals.length > 0 || queueFrozen || pendingAction) {
