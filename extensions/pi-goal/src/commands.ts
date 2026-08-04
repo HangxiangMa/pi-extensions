@@ -1,4 +1,4 @@
-import { checkpointGoalActiveTime, currentTokenTotal } from "./accounting.js";
+import { checkpointGoalActiveTime, currentTokenTotal, formatTokenCount } from "./accounting.js";
 import { validateObjective } from "./command.js";
 import { safeGoalMenuText } from "./menu.js";
 import type { ActiveGoal } from "./persistence.js";
@@ -46,7 +46,9 @@ export class GoalCommandController {
 		ctx: StatusContext,
 		onActivated?: (goal: ActiveGoal) => void,
 		isActivationCurrent?: (goal: ActiveGoal) => boolean,
+		isRequestCurrent?: () => boolean,
 	) {
+		if (isRequestCurrent && !isRequestCurrent()) return;
 		const validationError = validateObjective(objective);
 		if (validationError) {
 			ctx.ui.notify(validationError, "warning");
@@ -76,6 +78,7 @@ export class GoalCommandController {
 				ctx.ui.notify(`Goal kept: ${existingGoal.text}`, "info");
 				return;
 			}
+			if (isRequestCurrent && !isRequestCurrent()) return;
 			if (
 				goalQueueIdentity(
 					this.runtime.activeGoal,
@@ -90,6 +93,7 @@ export class GoalCommandController {
 
 		// Unlock lazy visibility only for a real activation. In always mode, a
 		// missing tool means another policy or allowlist intentionally removed it.
+		if (isRequestCurrent && !isRequestCurrent()) return;
 		const goalToolVisibilityBeforeActivation = this.runtime.snapshotGoalToolVisibility();
 		try {
 			this.runtime.prepareGoalToolsForActivation(ctx);
@@ -121,7 +125,7 @@ export class GoalCommandController {
 			startedGoal.id,
 			buildGoalPrompt(startedGoal),
 			true,
-			() => isActivationCurrent?.(startedGoal) ?? true,
+			() => (isRequestCurrent?.() ?? true) && (isActivationCurrent?.(startedGoal) ?? true),
 		);
 		if (isActivationCurrent && !isActivationCurrent(startedGoal)) return;
 		if (!sent) {
@@ -163,6 +167,10 @@ export class GoalCommandController {
 		const automaticLimit = this.runtime.settings.continuationLimits.automaticTurns;
 		ctx.ui.notify(
 			`${existingGoal ? "Goal replaced" : "Goal started"}: ${objective}. ${
+				startedGoal.tokenBudget === undefined
+					? ""
+					: `Token budget: ${formatTokenCount(startedGoal.tokenBudget)} cumulative; the final model call may exceed it. `
+			}${
 				automaticLimit === null
 					? "Automatic work is Unlimited; tool loops may consume substantial tokens and provider cost. Open /goal to monitor."
 					: `Automatic work pauses after ${automaticLimit} responses; open /goal to monitor progress.`

@@ -96,6 +96,182 @@ test("buildGoalMenuState prioritizes actions for empty, active, stopped, budget,
 	]);
 });
 
+test("start with token budget offers presets before collecting the objective", async () => {
+	for (const automaticLimit of [25, null] as const) {
+		const state = runtime();
+		state.settings.continuationLimits.automaticTurns = automaticLimit;
+		const tracked = commands();
+		const selections = [GOAL_MENU_ACTIONS.startBudget, "100k — Suggested"];
+		let chooserTitle = "";
+		let chooserOptions: string[] = [];
+		let editorTitle = "";
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			select: async (title: string, options: string[]) => {
+				if (/Choose token budget/i.test(title)) {
+					chooserTitle = title;
+					chooserOptions = options;
+				}
+				return selections.shift();
+			},
+			editor: async (title: string) => {
+				editorTitle = title;
+				return "ship the release";
+			},
+		});
+
+		await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+
+		assert.deepEqual(chooserOptions, [
+			"25k — Lower token ceiling",
+			"100k — Suggested",
+			"300k — Higher token ceiling",
+			"Set a custom budget…",
+			"Back",
+		]);
+		assert.match(chooserTitle, /maximum cumulative token usage/i);
+		assert.match(chooserTitle, /final model call may exceed/i);
+		assert.match(chooserTitle, /not a dollar-cost cap/i);
+		assert.match(
+			chooserTitle,
+			automaticLimit === null
+				? /automatic work has no response-count cap/i
+				: /automatic work will also pause after 25 responses/i,
+		);
+		assert.match(editorTitle, /Goal objective.*Token budget 100k/i);
+		assert.match(
+			editorTitle,
+			automaticLimit === null ? /Automatic Unlimited/i : /Automatic limit 25/i,
+		);
+		assert.equal(tracked.calls[0]?.name, "startGoal");
+		assert.deepEqual(tracked.calls[0]?.args.slice(0, 2), ["ship the release", 100_000]);
+	}
+});
+
+test("custom start budget explains formats and uses the canonical parser", async () => {
+	const state = runtime();
+	const tracked = commands();
+	const selections = [GOAL_MENU_ACTIONS.startBudget, "Set a custom budget…"];
+	const entered = ["not-a-budget", "1.5m"];
+	let inputTitle = "";
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		select: async () => selections.shift(),
+		input: async (title: string) => {
+			inputTitle = title;
+			return entered.shift();
+		},
+		editor: async () => "custom-budget objective",
+	});
+
+	await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+
+	assert.match(inputTitle, /maximum cumulative token usage/i);
+	assert.match(inputTitle, /Examples: 25k, 300k, 1\.5m, or 300000/i);
+	assert.match(context.notifications[0]?.message ?? "", /positive token amount.*25k.*300k.*1\.5m/i);
+	assert.equal(tracked.calls[0]?.name, "startGoal");
+	assert.deepEqual(tracked.calls[0]?.args.slice(0, 2), ["custom-budget objective", 1_500_000]);
+});
+
+test("budgeted start cancellation and stale menu ownership have no side effects", async () => {
+	for (const scenario of ["objective-cancel", "goal-replaced", "menu-disposed"] as const) {
+		const state = runtime();
+		const tracked = commands();
+		const selections = [GOAL_MENU_ACTIONS.startBudget, "25k — Lower token ceiling"];
+		const menuController = new AbortController();
+		if (scenario === "menu-disposed") {
+			Object.assign(state, { menuGeneration: 1, menuController });
+		}
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			select: async () => selections.shift(),
+			editor: async () => {
+				if (scenario === "goal-replaced") {
+					state.activeGoal = createGoal("replacement objective", undefined, 0);
+				}
+				if (scenario === "menu-disposed") menuController.abort();
+				return scenario === "objective-cancel" ? undefined : "new objective";
+			},
+		});
+
+		await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+
+		assert.equal(tracked.calls.length, 0);
+		if (scenario === "goal-replaced") {
+			assert.match(context.notifications.at(-1)?.message ?? "", /goal queue changed.*reopen/i);
+		}
+	}
+});
+
+test("custom budget input retains invalid drafts and stays responsive", async () => {
+	const state = runtime();
+	const tracked = commands();
+	const tui = createTuiHarness({ width: 80, rows: 30 });
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+
+	try {
+		const running = showGoalManager(
+			state,
+			tracked.controller as never,
+			context.ctx,
+			async () => undefined,
+		);
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		for (const width of [40, 80, 120]) {
+			const lines = tui.render(width);
+			const frame = lines.join(" ").replace(/\s+/gu, " ");
+			assert.ok(lines.every((line) => visibleWidth(line) <= width));
+			assert.match(frame, /Choose token budget/i);
+			assert.match(frame, /25k — Lower token ceiling/i);
+			assert.match(frame, /100k — Suggested/i);
+			assert.match(frame, /300k — Higher token ceiling/i);
+			assert.match(frame, /Set a custom budget…/i);
+			assert.match(frame, /Back/i);
+		}
+
+		for (let index = 0; index < 3; index++) tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.equal(tui.isFocusable, true);
+		for (const width of [40, 80, 120]) {
+			const lines = tui.render(width);
+			const frame = lines.join(" ").replace(/\s+/gu, " ");
+			assert.ok(lines.every((line) => visibleWidth(line) <= width));
+			assert.match(frame, /Custom token budget/i);
+			assert.match(frame, /Examples: 25k, 300k, 1\.5m, or 300000/i);
+		}
+		tui.type("invalid");
+		tui.press("tui.input.submit");
+		await tui.waitForPending();
+		assert.match(tui.render().join(" "), /invalid/i);
+		assert.match(context.notifications.at(-1)?.message ?? "", /positive token amount/i);
+		tui.press("tui.select.cancel");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.match(tui.render().join(" "), /Choose token budget/i);
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.match(tui.render().join(" "), /Custom token budget/i);
+		tui.press("tui.select.cancel");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		tui.press("ctrl+c");
+		await running;
+		assert.equal(tracked.calls.length, 0);
+	} finally {
+		tui.dispose();
+	}
+});
+
 test("hard-cap pause names the cause and prioritizes review over immediate resume", () => {
 	const goal = transitionGoal(createGoal("preserve this objective", undefined, 0), "paused");
 	goal.automaticModelTurns = 25;
@@ -371,24 +547,140 @@ test("clear preview includes a pending priority objective", async () => {
 	assert.equal(tracked.calls.length, 0);
 });
 
+test("increase budget input shows current usage and confirms the exact resume effect", async () => {
+	const goal = transitionGoal(createGoal("increase safely", 100_000, 0), "budget_limited");
+	goal.tokensUsed = 108_000;
+	const state = runtime(goal);
+	const tracked = commands();
+	const selections = [GOAL_MENU_ACTIONS.increaseBudget];
+	let inputTitle = "";
+	let confirmation = "";
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		select: async () => selections.shift(),
+		input: async (title: string) => {
+			inputTitle = title;
+			return "300k";
+		},
+		confirm: async (_title: string, message: string) => {
+			confirmation = message;
+			return true;
+		},
+	});
+
+	await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+
+	assert.match(inputTitle, /Current budget: 100k/i);
+	assert.match(inputTitle, /Current usage: 108k/i);
+	assert.match(inputTitle, /new cumulative total greater than 108k/i);
+	assert.match(inputTitle, /Examples: 300k, 1\.5m, or 300000/i);
+	assert.match(confirmation, /Budget: 100k → 300k/i);
+	assert.match(confirmation, /Current usage: 108k/i);
+	assert.match(confirmation, /Automatic work: up to 25 more responses after resume/i);
+	assert.match(confirmation, /resume immediately/i);
+	assert.equal(tracked.calls[0]?.name, "editGoal");
+	assert.deepEqual(tracked.calls[0]?.args.slice(0, 2), ["increase safely", 300_000]);
+});
+
+test("increase budget validation and confirmation cancellation preserve the stopped goal", async () => {
+	for (const scenario of ["invalid-total", "confirmation-cancel"] as const) {
+		const goal = transitionGoal(createGoal("keep stopped", 100_000, 0), "budget_limited");
+		goal.tokensUsed = 108_000;
+		const state = runtime(goal);
+		const tracked = commands();
+		const entered = scenario === "invalid-total" ? ["100k", undefined] : ["300k", undefined];
+		const selections = [GOAL_MENU_ACTIONS.increaseBudget, GOAL_MENU_ACTIONS.close];
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			select: async () => selections.shift(),
+			input: async () => entered.shift(),
+			confirm: async () => false,
+		});
+
+		await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+
+		assert.equal(tracked.calls.length, 0);
+		assert.equal(state.activeGoal, goal);
+		assert.equal(state.activeGoal?.status, "budget_limited");
+		if (scenario === "invalid-total") {
+			assert.match(context.notifications[0]?.message ?? "", /greater than current usage.*108k/i);
+		}
+	}
+});
+
+test("increase budget becomes read-only when no larger safe integer exists", async () => {
+	const goal = transitionGoal(
+		createGoal("maximum safe budget", Number.MAX_SAFE_INTEGER, 0),
+		"budget_limited",
+	);
+	goal.tokensUsed = Number.MAX_SAFE_INTEGER;
+	const state = runtime(goal);
+	const tracked = commands();
+	let title = "";
+	const selections = [GOAL_MENU_ACTIONS.increaseBudget, undefined, GOAL_MENU_ACTIONS.close];
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		select: async (receivedTitle: string) => {
+			if (/Increase token budget unavailable/i.test(receivedTitle)) title = receivedTitle;
+			return selections.shift();
+		},
+	});
+
+	await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+
+	assert.match(title, /Increase token budget unavailable/i);
+	assert.match(title, /No larger safe whole-number token budget/i);
+	assert.equal(tracked.calls.length, 0);
+});
+
+test("increase budget rejects goal state that changes while confirmation is open", async () => {
+	for (const changed of ["usage", "status"] as const) {
+		const goal = transitionGoal(createGoal("changing state", 100_000, 0), "budget_limited");
+		goal.tokensUsed = 108_000;
+		const state = runtime(goal);
+		const tracked = commands();
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			select: async () => GOAL_MENU_ACTIONS.increaseBudget,
+			input: async () => "300k",
+			confirm: async () => {
+				if (changed === "usage") goal.tokensUsed = 109_000;
+				else goal.status = "paused";
+				return true;
+			},
+		});
+
+		await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
+
+		assert.equal(tracked.calls.length, 0);
+		assert.match(context.notifications.at(-1)?.message ?? "", /goal changed|usage changed/i);
+		assert.match(context.notifications.at(-1)?.message ?? "", /reopen/i);
+	}
+});
+
 test("menu preserves exact token values in status and budget input", async () => {
 	const goal = transitionGoal(createGoal("precise budget", 10_500, 0), "budget_limited");
 	goal.tokensUsed = 10_499;
 	const state = runtime(goal);
 	assert.match(buildGoalMenuState(state).title, /10499\/10500/);
-	let placeholder = "";
+	let inputTitle = "";
 	const tracked = commands();
 	const context = createMockContext({
 		mode: "tui",
 		hasUI: true,
 		select: async () => GOAL_MENU_ACTIONS.increaseBudget,
-		input: async (_title: string, value: string) => {
-			placeholder = value;
+		input: async (title: string) => {
+			inputTitle = title;
 			return undefined;
 		},
 	});
 	await showGoalManager(state, tracked.controller as never, context.ctx, async () => undefined);
-	assert.equal(placeholder, "10500");
+	assert.match(inputTitle, /Current budget: 10\.5k \(10,500 tokens\)/i);
+	assert.match(inputTitle, /Current usage: 10\.5k \(10,499 tokens\)/i);
 	assert.equal(tracked.calls.length, 0);
 });
 
