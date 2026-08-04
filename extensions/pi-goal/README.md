@@ -80,7 +80,7 @@ Use `/goal` → **Settings…** in the TUI to create or update the file interact
 and edit it directly. The standard Settings screen keeps all five controls on one level in task
 order; the two safety limits open standard choice screens:
 
-- **Automatic-work limit** shows the exact response limit or **Unlimited**. Choose **25 responses (default)**, **Set a custom limit…**, or **Unlimited…**. Unlimited requires confirmation that tool loops may continue consuming tokens and provider cost without a response-count cap.
+- **Automatic-work limit** shows the exact response limit or **Unlimited**. Choose **Set response limit…** to edit the current finite value (or the built-in default of 25 when switching from Unlimited), or choose **Unlimited…**. Unlimited requires confirmation that tool loops may continue consuming tokens and provider cost without a response-count cap.
 - **No-progress guard** shows **_N_ runs** or **Off**. Choose the default threshold, **Off**, or **Set threshold…** and enter a safe whole number greater than zero.
 - **Goal tools** controls whether terminal Goal tools are always visible or appear after the first goal.
 - **Ordered goal queue** controls the experimental ordered-goal workflows.

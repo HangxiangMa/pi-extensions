@@ -464,32 +464,39 @@ test("automatic-work settings can open directly from the safety recovery flow", 
 	});
 
 	assert.match(title, /Automatic-work limit/i);
-	assert.deepEqual(options, ["25 responses (default)", "Set a custom limit…", "Unlimited…"]);
+	assert.deepEqual(options, ["Set response limit…", "Unlimited…"]);
 });
 
-test("automatic-work choices restore the default, support custom limits, and preview Unlimited", async () => {
+test("automatic-work finite limit editor starts from the current value or built-in default", async () => {
 	for (const scenario of [
 		{
 			initial: null,
-			choice: "25 responses (default)",
+			prefill: "25",
+			entered: "25",
 			expected: 25,
 		},
 		{
-			initial: 25,
-			choice: "Set a custom limit…",
-			input: "40",
+			initial: 50,
+			prefill: "50",
+			entered: "40",
 			expected: 40,
 		},
 	] as const) {
 		const state = runtime();
 		state.settings.continuationLimits.automaticTurns = scenario.initial;
 		let saved: GoalSettings | undefined;
-		const selections = ["Automatic-work limit", scenario.choice, undefined];
+		let editorTitle = "";
+		let editorPrefill = "";
+		const selections = ["Automatic-work limit", "Set response limit…", undefined];
 		const context = createMockContext({
 			hasUI: true,
 			mode: "tui",
 			select: async () => selections.shift(),
-			input: async () => ("input" in scenario ? scenario.input : undefined),
+			editor: async (title: string, prefill: string) => {
+				editorTitle = title;
+				editorPrefill = prefill;
+				return scenario.entered;
+			},
 		});
 
 		await showGoalSettings(state, context.ctx, {
@@ -499,9 +506,34 @@ test("automatic-work choices restore the default, support custom limits, and pre
 			},
 		});
 
+		assert.match(editorTitle, /default: 25/i);
+		assert.equal(editorPrefill, scenario.prefill);
 		assert.equal(saved?.continuationLimits.automaticTurns, scenario.expected);
 		assert.equal(state.settings.continuationLimits.automaticTurns, scenario.expected);
 	}
+});
+
+test("cancelling the automatic-work finite limit editor changes nothing", async () => {
+	const state = runtime();
+	state.settings.continuationLimits.automaticTurns = 50;
+	let saves = 0;
+	const selections = ["Automatic-work limit", "Set response limit…", undefined];
+	const context = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		select: async () => selections.shift(),
+		editor: async () => undefined,
+	});
+
+	await showGoalSettings(state, context.ctx, {
+		settingsPath: "/tmp/pi-goal.json",
+		save() {
+			saves++;
+		},
+	});
+
+	assert.equal(saves, 0);
+	assert.equal(state.settings.continuationLimits.automaticTurns, 50);
 });
 
 test("Unlimited automatic work requires a concrete confirmation and cancellation changes nothing", async () => {
@@ -541,12 +573,12 @@ test("lowering a reached automatic-work limit previews the immediate pause", asy
 		state.activeGoal.automaticModelTurns = 25;
 		let preview = "";
 		let saves = 0;
-		const selections = ["Automatic-work limit", "Set a custom limit…", undefined];
+		const selections = ["Automatic-work limit", "Set response limit…", undefined];
 		const context = createMockContext({
 			hasUI: true,
 			mode: "tui",
 			select: async () => selections.shift(),
-			input: async () => "20",
+			editor: async () => "20",
 			confirm: async (_title: string, message: string) => {
 				preview = message;
 				return confirmed;
@@ -569,12 +601,12 @@ test("lowering a reached automatic-work limit previews the immediate pause", asy
 
 test("automatic-work save failure preserves the previous valid setting", async () => {
 	const state = runtime();
-	const selections = ["Automatic-work limit", "Set a custom limit…", undefined];
+	const selections = ["Automatic-work limit", "Set response limit…", undefined];
 	const context = createMockContext({
 		hasUI: true,
 		mode: "tui",
 		select: async () => selections.shift(),
-		input: async () => "40",
+		editor: async () => "40",
 	});
 
 	await showGoalSettings(state, context.ctx, {
@@ -612,9 +644,10 @@ test("automatic-work settings stay readable and keyboard-operable at supported w
 			const lines = tui.render(width);
 			const frame = lines.join(" ").replace(/\s+/gu, " ");
 			assert.ok(lines.every((line) => visibleWidth(line) <= width));
-			assert.match(frame, /25 responses \(default\)/i);
-			assert.match(frame, /Set a custom limit…/i);
+			assert.match(frame, /Set response limit…/i);
+			assert.match(frame, /Default: 25/i);
 			assert.match(frame, /Unlimited…/i);
+			assert.doesNotMatch(frame, /25 responses \(default\)/i);
 		}
 		tui.press("tui.select.cancel");
 		await tui.waitForOpen();
@@ -629,12 +662,12 @@ test("automatic-work settings stay readable and keyboard-operable at supported w
 test("automatic-work editing stops without side effects when its menu is disposed", async () => {
 	const state = runtime();
 	let saves = 0;
-	const selections = ["Automatic-work limit", "Set a custom limit…", undefined];
+	const selections = ["Automatic-work limit", "Set response limit…", undefined];
 	const context = createMockContext({
 		hasUI: true,
 		mode: "tui",
 		select: async () => selections.shift(),
-		input: async () => {
+		editor: async () => {
 			state.closeMenuSession();
 			return "10";
 		},
@@ -655,12 +688,12 @@ test("automatic-work editing rejects a replacement active goal without saving", 
 	const state = runtime();
 	state.activeGoal = createGoal("original", undefined, 0);
 	let saves = 0;
-	const selections = ["Automatic-work limit", "Set a custom limit…", undefined];
+	const selections = ["Automatic-work limit", "Set response limit…", undefined];
 	const context = createMockContext({
 		hasUI: true,
 		mode: "tui",
 		select: async () => selections.shift(),
-		input: async () => {
+		editor: async () => {
 			state.activeGoal = createGoal("replacement", undefined, 0);
 			return "10";
 		},

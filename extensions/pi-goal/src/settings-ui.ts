@@ -233,6 +233,11 @@ function limitChoiceScreen(
 			field === "automaticTurns"
 				? `Current: ${formatAutomaticWork(value)}`
 				: `Current: ${formatNoProgressProtection(value)}`,
+			...(field === "automaticTurns"
+				? [
+						`Set a whole-number response limit for each automatic-work epoch. Default: ${DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns}.`,
+					]
+				: []),
 			...(goal
 				? [
 						field === "automaticTurns"
@@ -263,17 +268,11 @@ function limitChoices(
 				: automaticTurnsUsed === undefined
 					? `Remove the current ${value}-response cap. Goal work will have no response-count cap; other configured stop conditions remain.`
 					: `Remove the current ${value}-response cap. The active goal has used ${automaticTurnsUsed} responses; other configured stop conditions remain.`;
-		const defaultLimit = DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns;
 		return [
 			{
-				value: "default",
-				label: `${defaultLimit} responses (default)`,
-				description: `Pause after ${defaultLimit} Goal-owned automatic model responses.`,
-			},
-			{
 				value: "custom",
-				label: "Set a custom limit…",
-				description: "Choose a whole-number response limit for each automatic-work epoch.",
+				label: "Set response limit…",
+				description: `Choose a whole-number response limit for each automatic-work epoch. Default: ${DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns}.`,
 			},
 			{ value: "unlimited", label: "Unlimited…", description: unlimitedDescription },
 		];
@@ -429,12 +428,16 @@ async function resolveLimitSelection(
 		return DEFAULT_GOAL_SETTINGS.continuationLimits[field];
 	}
 	while (true) {
-		const raw = await ctx.ui.input(
+		const raw =
 			field === "automaticTurns"
-				? "Maximum automatic responses (whole number greater than 0)"
-				: "Repeated-run threshold (whole number greater than 0)",
-			previous === null ? "Positive whole number" : String(previous),
-		);
+				? await ctx.ui.editor(
+						`Automatic-work response limit (whole number greater than 0) · Default: ${DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns}`,
+						String(previous ?? DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns),
+					)
+				: await ctx.ui.input(
+						"Repeated-run threshold (whole number greater than 0)",
+						previous === null ? "Positive whole number" : String(previous),
+					);
 		if (!isCurrent() || raw === undefined) return undefined;
 		const parsed = parseGoalLimit(raw);
 		if (parsed !== undefined) return parsed;
