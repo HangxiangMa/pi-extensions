@@ -11,7 +11,7 @@
 		"pi",
 		"analytics",
 		"metrics",
-		"turso"
+		"jsonl"
 	],
 	"files": [
 		"src",
@@ -29,8 +29,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@narumitw/pi-tui-kit": "^0.45.0",
-		"@tursodatabase/database": "^0.7.2"
+		"@narumitw/pi-tui-kit": "^0.45.0"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*"

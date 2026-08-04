@@ -8,46 +8,39 @@ import {
 import { ResponseCollector } from "./collector.js";
 import { type AnalyticsMenuDataSource, showAnalyticsMenu } from "./menu.js";
 import { SkillTracker } from "./skills.js";
-import { AnalyticsDatabaseOpenError, openAnalyticsDatabase } from "./storage/database.js";
-import {
-	ChecksumMismatchError,
-	MigrationFailedError,
-	NewerSchemaError,
-} from "./storage/migrations.js";
+import type { ClearAnalyticsResult } from "./storage/files.js";
 import type { AnalyticsSnapshot, TimeRange } from "./storage/queries.js";
 import { AnalyticsStore } from "./storage/store.js";
 import type { ModelIdentity, SettledRun, TriggerSource } from "./types.js";
 
 const EXPERIMENTAL_WARNING = "pi-analytics is experimental; its metrics and dashboard may change.";
+const STORAGE_DIRECTORY = "pi-analytics";
 
 export interface AnalyticsStorePort {
 	readonly path: string;
-	recordRun(run: SettledRun): Promise<void>;
-	getSnapshot(range: TimeRange): Promise<AnalyticsSnapshot>;
-	clearAll(): Promise<number>;
+	recordRun(run: SettledRun, signal?: AbortSignal): Promise<void>;
+	getSnapshot(range: TimeRange, signal?: AbortSignal): Promise<AnalyticsSnapshot>;
+	clearAll(signal?: AbortSignal): Promise<ClearAnalyticsResult>;
 	close(): Promise<void>;
 }
 
 interface AnalyticsDependencies {
-	openStore(path: string): Promise<AnalyticsStorePort>;
+	createStore(path: string): AnalyticsStorePort;
+	createSkillTracker(cwd: string): SkillTracker;
 	getAgentDir(): string;
 	now(): number;
 	createId(): string;
-	platform(): string;
 }
 
 export function createAnalyticsExtension(
 	dependencies: Partial<AnalyticsDependencies> = {},
 ): (pi: ExtensionAPI) => void {
 	const deps: AnalyticsDependencies = {
-		openStore:
-			dependencies.openStore ??
-			(async (databasePath) =>
-				new AnalyticsStore(await openAnalyticsDatabase({ path: databasePath }))),
+		createStore: dependencies.createStore ?? ((rootPath) => new AnalyticsStore(rootPath)),
+		createSkillTracker: dependencies.createSkillTracker ?? ((cwd) => new SkillTracker(cwd)),
 		getAgentDir: dependencies.getAgentDir ?? getAgentDir,
 		now: dependencies.now ?? Date.now,
 		createId: dependencies.createId ?? randomUUID,
-		platform: dependencies.platform ?? runtimePlatform,
 	};
 
 	return function analyticsExtension(pi: ExtensionAPI): void {
@@ -57,7 +50,7 @@ export function createAnalyticsExtension(
 		let skillTracker: SkillTracker | undefined;
 		let store: AnalyticsStorePort | undefined;
 		let storageFailure: string | undefined;
-		let startupTask: Promise<void> | undefined;
+		const retiredCloseTasks = new Set<Promise<boolean>>();
 		let writeFailureActive = false;
 		let pendingTriggerSource: TriggerSource = "unknown";
 		let pendingAttemptWithoutRun = false;
@@ -85,36 +78,27 @@ export function createAnalyticsExtension(
 			},
 		});
 
-		pi.on("session_start", async (_event, ctx) => {
-			const generation = ++sessionGeneration;
+		pi.on("session_start", (_event, ctx) => {
+			++sessionGeneration;
 			if (ctx.hasUI) ctx.ui.notify(EXPERIMENTAL_WARNING, "warning");
+			const previousStore = store;
 			sessionController.abort(new DOMException("Analytics session replaced", "AbortError"));
+			if (previousStore) retire(previousStore);
 			sessionController = new AbortController();
 			collector = new ResponseCollector();
-			skillTracker = new SkillTracker(ctx.cwd);
+			skillTracker = deps.createSkillTracker(ctx.cwd);
 			store = undefined;
 			storageFailure = undefined;
 			writeFailureActive = false;
 			pendingTriggerSource = "unknown";
 			pendingAttemptWithoutRun = false;
-			const databasePath = path.join(deps.getAgentDir(), "pi-analytics.db");
-			const task = (async () => {
-				try {
-					const opened = await deps.openStore(databasePath);
-					if (generation !== sessionGeneration) {
-						await opened.close();
-						return;
-					}
-					store = opened;
-				} catch (error) {
-					if (generation !== sessionGeneration) return;
-					storageFailure = storageFailureMessage(error, deps.platform());
-					safeNotify(ctx, storageFailure, "warning");
-				}
-			})();
-			startupTask = task;
-			await task;
-			if (startupTask === task) startupTask = undefined;
+			const storageRoot = path.join(deps.getAgentDir(), STORAGE_DIRECTORY);
+			try {
+				store = deps.createStore(storageRoot);
+			} catch {
+				storageFailure = unavailableMessage();
+				safeNotify(ctx, storageFailure, "warning");
+			}
 		});
 
 		pi.on("input", (event, ctx) => {
@@ -136,21 +120,37 @@ export function createAnalyticsExtension(
 		pi.on("before_agent_start", async (event, ctx) => {
 			const generation = sessionGeneration;
 			const tracker = skillTracker;
+			const activeCollector = collector;
 			if (!tracker) return;
 			const skills = availableSkills(pi, event.systemPromptOptions.skills ?? []);
 			await tracker.setAvailableSkills(skills);
-			if (generation !== sessionGeneration || tracker !== skillTracker) return;
+			if (
+				generation !== sessionGeneration ||
+				tracker !== skillTracker ||
+				activeCollector !== collector
+			) {
+				return;
+			}
 			const explicit = tracker.consumeExplicitSkill();
-			const interrupted = collector.begin({
+			const interrupted = activeCollector.begin({
 				id: deps.createId(),
 				now: deps.now(),
 				triggerSource: explicit?.source ?? pendingTriggerSource,
 				model: modelIdentity(ctx, pi),
 			});
 			pendingTriggerSource = "unknown";
-			if (interrupted) await persistRun(interrupted, ctx, generation);
+			if (interrupted) {
+				await persistRun(interrupted, ctx, generation, sessionController.signal);
+				if (
+					generation !== sessionGeneration ||
+					tracker !== skillTracker ||
+					activeCollector !== collector
+				) {
+					return;
+				}
+			}
 			if (explicit && skills.some(({ name }) => name === explicit.name)) {
-				collector.activateSkill({
+				activeCollector.activateSkill({
 					name: explicit.name,
 					initiatedBy: "user",
 					now: explicit.observedAtMs,
@@ -164,9 +164,7 @@ export function createAnalyticsExtension(
 			else pendingAttemptWithoutRun = true;
 		});
 
-		pi.on("turn_start", (_event, ctx) => {
-			ensureRun(ctx, "extension");
-		});
+		pi.on("turn_start", (_event, ctx) => ensureRun(ctx, "extension"));
 
 		pi.on("before_provider_request", (_event, ctx) => {
 			ensureRun(ctx, "extension");
@@ -204,14 +202,24 @@ export function createAnalyticsExtension(
 			if (event.toolName === "read" && !isBuiltinReadTool(pi)) return;
 			const generation = sessionGeneration;
 			const tracker = skillTracker;
-			if (!tracker) return;
+			const activeCollector = collector;
+			const runId = activeCollector.getActiveRunId();
+			if (!tracker || !runId) return;
 			const name = await tracker.matchSuccessfulRead({
 				toolName: event.toolName,
 				input: event.input,
 				isError: event.isError,
 			});
-			if (!name || generation !== sessionGeneration || tracker !== skillTracker) return;
-			collector.activateSkill({
+			if (
+				!name ||
+				generation !== sessionGeneration ||
+				tracker !== skillTracker ||
+				activeCollector !== collector ||
+				activeCollector.getActiveRunId() !== runId
+			) {
+				return;
+			}
+			activeCollector.activateSkill({
 				name,
 				initiatedBy: "model",
 				now: deps.now(),
@@ -225,36 +233,44 @@ export function createAnalyticsExtension(
 
 		pi.on("agent_settled", async (_event, ctx) => {
 			const generation = sessionGeneration;
+			const owner = sessionController;
 			const run = collector.settle(deps.now());
 			pendingAttemptWithoutRun = false;
 			pendingTriggerSource = "unknown";
 			skillTracker?.clearPending();
-			if (run) await persistRun(run, ctx, generation);
+			if (run) await persistRun(run, ctx, generation, owner.signal);
 		});
 
 		pi.on("session_shutdown", async (_event, ctx) => {
 			const activeStore = store;
-			const activeStartup = startupTask;
 			++sessionGeneration;
 			sessionController.abort(new DOMException("Analytics session shut down", "AbortError"));
 			skillTracker?.clearPending();
 			skillTracker = undefined;
 			store = undefined;
-			const run = collector.interrupt(deps.now());
-			if (run && activeStore) {
-				await activeStore.recordRun(run).catch(() => {
-					safeNotify(ctx, "Analytics could not save the interrupted response cycle.", "warning");
-				});
+			collector.interrupt(deps.now());
+			const closing = activeStore
+				? [closeResult(activeStore), ...retiredCloseTasks]
+				: [...retiredCloseTasks];
+			const results = await Promise.all(closing);
+			if (results.some((closed) => !closed)) {
+				safeNotify(ctx, "Analytics storage shutdown was incomplete.", "warning");
 			}
-			await activeStartup?.catch(() => undefined);
-			await activeStore?.close().catch(() => {
-				safeNotify(
-					ctx,
-					"Analytics storage shutdown was incomplete; some pending metrics may not have been saved.",
-					"warning",
-				);
-			});
 		});
+
+		function retire(retiredStore: AnalyticsStorePort): void {
+			const task = closeResult(retiredStore).finally(() => retiredCloseTasks.delete(task));
+			retiredCloseTasks.add(task);
+		}
+
+		async function closeResult(activeStore: AnalyticsStorePort): Promise<boolean> {
+			try {
+				await activeStore.close();
+				return true;
+			} catch {
+				return false;
+			}
+		}
 
 		function ensureRun(ctx: ExtensionContext, triggerSource: TriggerSource): void {
 			if (collector.hasActiveRun()) return;
@@ -274,22 +290,30 @@ export function createAnalyticsExtension(
 			run: SettledRun,
 			ctx: ExtensionContext,
 			generation: number,
+			signal: AbortSignal,
 		): Promise<void> {
 			const activeStore = store;
-			if (!activeStore) return;
+			if (!activeStore || signal.aborted) return;
 			try {
-				await activeStore.recordRun(run);
-				if (generation !== sessionGeneration || activeStore !== store) return;
+				await activeStore.recordRun(run, signal);
+				if (generation !== sessionGeneration || activeStore !== store || signal.aborted) return;
 				if (writeFailureActive) {
 					writeFailureActive = false;
 					safeNotify(ctx, "Local analytics storage recovered.", "info");
 				}
 			} catch {
-				if (generation !== sessionGeneration || activeStore !== store || writeFailureActive) return;
+				if (
+					generation !== sessionGeneration ||
+					activeStore !== store ||
+					signal.aborted ||
+					writeFailureActive
+				) {
+					return;
+				}
 				writeFailureActive = true;
 				safeNotify(
 					ctx,
-					"Analytics could not save a response cycle; it will retry while this Pi session remains open.",
+					"Analytics could not save this response cycle; its metrics were dropped.",
 					"warning",
 				);
 			}
@@ -297,27 +321,22 @@ export function createAnalyticsExtension(
 
 		function menuSource(generation: number, signal: AbortSignal): AnalyticsMenuDataSource {
 			return {
-				path: store?.path ?? path.join(deps.getAgentDir(), "pi-analytics.db"),
-				async load(range) {
+				path: store?.path ?? path.join(deps.getAgentDir(), STORAGE_DIRECTORY),
+				async load(range, actionSignal) {
 					assertCurrent(generation, signal);
 					const activeStore = store;
 					if (!activeStore) {
-						return {
-							kind: "unavailable",
-							message: storageFailure ?? unavailableMessage(deps.platform()),
-						};
+						return { kind: "unavailable", message: storageFailure ?? unavailableMessage() };
 					}
-					const snapshot = await activeStore.getSnapshot(range);
+					const snapshot = await activeStore.getSnapshot(range, actionSignal);
 					assertCurrent(generation, signal);
 					return { kind: "ready", snapshot };
 				},
-				async clearAll() {
+				async clearAll(actionSignal) {
 					assertCurrent(generation, signal);
 					const activeStore = store;
-					if (!activeStore) return 0;
-					const count = await activeStore.clearAll();
-					assertCurrent(generation, signal);
-					return count;
+					if (!activeStore) return { cleanupIncomplete: false };
+					return activeStore.clearAll(actionSignal);
 				},
 			};
 		}
@@ -361,36 +380,10 @@ function availableSkills(
 	return result;
 }
 
-function runtimePlatform(): string {
-	if (process.platform !== "linux") return `${process.platform}-${process.arch}`;
-	const report = process.report?.getReport() as
-		| { header?: { glibcVersionRuntime?: unknown } }
-		| undefined;
-	const glibc = report?.header?.glibcVersionRuntime;
-	return `linux-${process.arch}-${glibc ? "glibc" : "non-glibc"}`;
-}
-
-function storageFailureMessage(error: unknown, platform: string): string {
-	if (error instanceof AnalyticsDatabaseOpenError) {
-		return `${error.message}\nExisting files were not replaced. Repair or restore them before retrying.\nNo analytics are being collected.`;
-	}
-	if (error instanceof NewerSchemaError) {
-		return `${error.message}\nUpdate pi-analytics before using this database.\nNo analytics are being collected.`;
-	}
-	if (error instanceof ChecksumMismatchError) {
-		return `${error.message}\nRestore a known database backup or update pi-analytics.\nNo analytics are being collected.`;
-	}
-	if (error instanceof MigrationFailedError) {
-		return `${error.message}\nThe previous valid schema was preserved.\nNo analytics are being collected.`;
-	}
-	return unavailableMessage(platform);
-}
-
-function unavailableMessage(platform: string): string {
+function unavailableMessage(): string {
 	return [
-		"Analytics storage is unavailable.",
-		`Platform: ${platform}`,
-		"Supported: Linux glibc x64/arm64, macOS arm64, Windows x64.",
+		"Local analytics storage could not be initialized safely.",
+		"Existing files were not replaced.",
 		"No analytics are being collected.",
 	].join("\n");
 }

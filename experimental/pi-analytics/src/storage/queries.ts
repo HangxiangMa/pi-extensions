@@ -1,5 +1,4 @@
-import type { Database } from "@tursodatabase/database";
-import type { ProviderErrorCategory } from "../types.js";
+import type { ProviderErrorCategory, SettledRun } from "../types.js";
 
 export type TimeRangeId = "today" | "7d" | "30d" | "all";
 export interface TimeRange {
@@ -92,166 +91,118 @@ export function resolveTimeRange(id: TimeRangeId, now = Date.now()): TimeRange {
 }
 
 export async function querySnapshot(
-	database: Database,
+	runs: AsyncIterable<SettledRun> | Iterable<SettledRun>,
 	range: TimeRange,
+	signal?: AbortSignal,
 ): Promise<AnalyticsSnapshot> {
-	const [runs, skillRows, toolRows, categoryRows, statusRows] = await Promise.all([
-		database.all(
-			`SELECT generation_count, tool_call_count, tool_error_count,
-			        skill_activation_count, provider_error_count, recovered_error_count
-			 FROM response_runs
-			 WHERE started_at_ms >= ? AND started_at_ms < ?
-			 ORDER BY generation_count`,
-			range.fromMs,
-			range.toMs,
-		),
-		database.all(
-			`SELECT s.skill_name, s.initiated_by, s.provider, s.model,
-			        COUNT(*) AS count, MAX(s.occurred_at_ms) AS last_at
-			 FROM skill_activations s
-			 JOIN response_runs r ON r.id = s.run_id
-			 WHERE r.started_at_ms >= ? AND r.started_at_ms < ?
-			 GROUP BY s.skill_name, s.initiated_by, s.provider, s.model`,
-			range.fromMs,
-			range.toMs,
-		),
-		database.all(
-			`SELECT t.tool_name, t.provider, t.model, COUNT(*) AS count,
-			        SUM(t.is_error) AS errors, AVG(COALESCE(t.duration_ms, 0)) AS average_duration,
-			        MAX(t.started_at_ms) AS last_at
-			 FROM tool_calls t
-			 JOIN response_runs r ON r.id = t.run_id
-			 WHERE r.started_at_ms >= ? AND r.started_at_ms < ?
-			 GROUP BY t.tool_name, t.provider, t.model`,
-			range.fromMs,
-			range.toMs,
-		),
-		database.all(
-			`SELECT e.category, COUNT(*) AS count, SUM(e.terminal) AS terminal
-			 FROM provider_errors e
-			 JOIN response_runs r ON r.id = e.run_id
-			 WHERE r.started_at_ms >= ? AND r.started_at_ms < ?
-			 GROUP BY e.category`,
-			range.fromMs,
-			range.toMs,
-		),
-		database.all(
-			`SELECT p.status, COUNT(*) AS count
-			 FROM provider_responses p
-			 JOIN model_generations g ON g.id = p.generation_id
-			 JOIN response_runs r ON r.id = g.run_id
-			 WHERE r.started_at_ms >= ? AND r.started_at_ms < ?
-			 GROUP BY p.status`,
-			range.fromMs,
-			range.toMs,
-		),
-	]);
-
-	const generationCounts = runs.map((row) => numberValue(row.generation_count));
-	const responseStats = responseStatistics(generationCounts);
-	const overview: OverviewStats = {
-		responseCycles: runs.length,
-		llmCalls: sum(generationCounts),
-		callsPerResponse: responseStats.average,
-		p95CallsPerResponse: responseStats.p95,
-		toolCalls: sum(runs.map((row) => numberValue(row.tool_call_count))),
-		toolErrors: sum(runs.map((row) => numberValue(row.tool_error_count))),
-		skillActivations: sum(runs.map((row) => numberValue(row.skill_activation_count))),
-		providerErrors: sum(runs.map((row) => numberValue(row.provider_error_count))),
-		recoveredErrors: sum(runs.map((row) => numberValue(row.recovered_error_count))),
-	};
-
+	const generationCounts: number[] = [];
+	const seenRunIds = new Set<string>();
+	const skills = new Map<string, SkillStats>();
+	const tools = new Map<string, ToolStats & { totalDurationMs: number }>();
 	const categories = Object.fromEntries(
 		ERROR_CATEGORIES.map((category) => [category, 0]),
 	) as Record<ProviderErrorCategory, number>;
-	let terminal = 0;
-	for (const row of categoryRows) {
-		const category = String(row.category) as ProviderErrorCategory;
-		if (category in categories) categories[category] = numberValue(row.count);
-		terminal += numberValue(row.terminal);
-	}
+	let toolErrors = 0;
+	let providerErrors = 0;
+	let recoveredErrors = 0;
 	let http429 = 0;
 	let http5xx = 0;
-	for (const row of statusRows) {
-		const status = numberValue(row.status);
-		if (status === 429) http429 += numberValue(row.count);
-		if (status >= 500 && status < 600) http5xx += numberValue(row.count);
+	let terminal = 0;
+
+	for await (const run of runs) {
+		throwIfAborted(signal);
+		if (seenRunIds.has(run.id)) continue;
+		seenRunIds.add(run.id);
+		if (run.startedAtMs < range.fromMs || run.startedAtMs >= range.toMs) continue;
+		generationCounts.push(run.generations.length);
+		toolErrors += run.toolErrorCount;
+		providerErrors += run.providerErrorCount;
+		recoveredErrors += run.recoveredErrorCount;
+
+		for (const skill of run.skills) {
+			const item = skills.get(skill.name) ?? {
+				name: skill.name,
+				count: 0,
+				modelInitiated: 0,
+				userInitiated: 0,
+				lastOccurredAtMs: 0,
+				models: [],
+			};
+			item.count += 1;
+			if (skill.initiatedBy === "user") item.userInitiated += 1;
+			else item.modelInitiated += 1;
+			item.lastOccurredAtMs = Math.max(item.lastOccurredAtMs, skill.occurredAtMs);
+			mergeModelCount(item.models, {
+				provider: skill.provider,
+				model: skill.model,
+				count: 1,
+			});
+			skills.set(skill.name, item);
+		}
+
+		for (const tool of run.tools) {
+			const item = tools.get(tool.name) ?? {
+				name: tool.name,
+				count: 0,
+				errors: 0,
+				averageDurationMs: 0,
+				totalDurationMs: 0,
+				lastOccurredAtMs: 0,
+				models: [],
+			};
+			item.count += 1;
+			item.errors += tool.isError ? 1 : 0;
+			item.totalDurationMs += tool.durationMs ?? 0;
+			item.averageDurationMs = item.totalDurationMs / item.count;
+			item.lastOccurredAtMs = Math.max(item.lastOccurredAtMs, tool.startedAtMs);
+			mergeModelCount(item.models, {
+				provider: tool.provider,
+				model: tool.model,
+				count: 1,
+			});
+			tools.set(tool.name, item);
+		}
+
+		for (const error of run.providerErrors) {
+			categories[error.category] += 1;
+			terminal += error.terminal ? 1 : 0;
+		}
+		for (const generation of run.generations) {
+			for (const response of generation.responses) {
+				if (response.status === 429) http429 += 1;
+				if (response.status >= 500 && response.status < 600) http5xx += 1;
+			}
+		}
 	}
 
+	const responses = responseStatistics(generationCounts);
 	return {
-		overview,
-		skills: foldSkills(skillRows),
-		tools: foldTools(toolRows),
+		overview: {
+			responseCycles: responses.count,
+			llmCalls: responses.llmCalls,
+			callsPerResponse: responses.average,
+			p95CallsPerResponse: responses.p95,
+			toolCalls: sum([...tools.values()].map(({ count }) => count)),
+			toolErrors,
+			skillActivations: sum([...skills.values()].map(({ count }) => count)),
+			providerErrors,
+			recoveredErrors,
+		},
+		skills: [...skills.values()]
+			.map((item) => ({ ...item, models: sortModels(item.models) }))
+			.sort((left, right) => right.count - left.count || left.name.localeCompare(right.name)),
+		tools: [...tools.values()]
+			.map(({ totalDurationMs: _, ...item }) => ({ ...item, models: sortModels(item.models) }))
+			.sort((left, right) => right.count - left.count || left.name.localeCompare(right.name)),
 		reliability: {
 			http429,
 			http5xx,
-			recovered: overview.recoveredErrors,
+			recovered: recoveredErrors,
 			terminal,
 			categories,
 		},
-		responses: responseStats,
+		responses,
 	};
-}
-
-function foldSkills(rows: Array<Record<string, unknown>>): SkillStats[] {
-	const result = new Map<string, SkillStats>();
-	for (const row of rows) {
-		const name = String(row.skill_name);
-		const count = numberValue(row.count);
-		const item = result.get(name) ?? {
-			name,
-			count: 0,
-			modelInitiated: 0,
-			userInitiated: 0,
-			lastOccurredAtMs: 0,
-			models: [],
-		};
-		item.count += count;
-		if (row.initiated_by === "user") item.userInitiated += count;
-		else item.modelInitiated += count;
-		item.lastOccurredAtMs = Math.max(item.lastOccurredAtMs, numberValue(row.last_at));
-		mergeModelCount(item.models, {
-			provider: optionalString(row.provider),
-			model: optionalString(row.model),
-			count,
-		});
-		result.set(name, item);
-	}
-	return [...result.values()]
-		.map((item) => ({ ...item, models: sortModels(item.models) }))
-		.sort((left, right) => right.count - left.count || left.name.localeCompare(right.name));
-}
-
-function foldTools(rows: Array<Record<string, unknown>>): ToolStats[] {
-	const result = new Map<string, ToolStats & { weightedDuration: number }>();
-	for (const row of rows) {
-		const name = String(row.tool_name);
-		const count = numberValue(row.count);
-		const average = numberValue(row.average_duration);
-		const item = result.get(name) ?? {
-			name,
-			count: 0,
-			errors: 0,
-			averageDurationMs: 0,
-			weightedDuration: 0,
-			lastOccurredAtMs: 0,
-			models: [],
-		};
-		item.count += count;
-		item.errors += numberValue(row.errors);
-		item.weightedDuration += average * count;
-		item.averageDurationMs = item.count > 0 ? item.weightedDuration / item.count : 0;
-		item.lastOccurredAtMs = Math.max(item.lastOccurredAtMs, numberValue(row.last_at));
-		mergeModelCount(item.models, {
-			provider: optionalString(row.provider),
-			model: optionalString(row.model),
-			count,
-		});
-		result.set(name, item);
-	}
-	return [...result.values()]
-		.map(({ weightedDuration: _, ...item }) => ({ ...item, models: sortModels(item.models) }))
-		.sort((left, right) => right.count - left.count || left.name.localeCompare(right.name));
 }
 
 function responseStatistics(generationCounts: number[]): ResponseStats {
@@ -300,12 +251,9 @@ function sortModels(models: ModelCount[]): ModelCount[] {
 	);
 }
 
-function optionalString(value: unknown): string | undefined {
-	return typeof value === "string" ? value : undefined;
-}
-
-function numberValue(value: unknown): number {
-	return typeof value === "number" && Number.isFinite(value) ? value : Number(value) || 0;
+function throwIfAborted(signal?: AbortSignal): void {
+	if (signal?.aborted)
+		throw signal.reason ?? new DOMException("Analytics query aborted", "AbortError");
 }
 
 function sum(values: readonly number[]): number {

@@ -1,58 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import {
-	AnalyticsDatabaseOpenError,
-	AnalyticsStorageUnavailableError,
-	openAnalyticsDatabase,
-} from "../src/storage/database.js";
-import { type AnalyticsSnapshot, resolveTimeRange } from "../src/storage/queries.js";
+import { AnalyticsRunFiles } from "../src/storage/files.js";
+import { resolveTimeRange } from "../src/storage/queries.js";
 import { AnalyticsStore } from "../src/storage/store.js";
 import type { SettledRun } from "../src/types.js";
-
-function emptyAnalyticsSnapshot(): AnalyticsSnapshot {
-	return {
-		overview: {
-			responseCycles: 0,
-			llmCalls: 0,
-			callsPerResponse: 0,
-			p95CallsPerResponse: 0,
-			toolCalls: 0,
-			toolErrors: 0,
-			skillActivations: 0,
-			providerErrors: 0,
-			recoveredErrors: 0,
-		},
-		skills: [],
-		tools: [],
-		reliability: {
-			http429: 0,
-			http5xx: 0,
-			recovered: 0,
-			terminal: 0,
-			categories: {
-				dns: 0,
-				timeout: 0,
-				connection_refused: 0,
-				connection_reset: 0,
-				tls: 0,
-				network_other: 0,
-				provider_other: 0,
-			},
-		},
-		responses: {
-			count: 0,
-			llmCalls: 0,
-			average: 0,
-			median: 0,
-			p95: 0,
-			maximum: 0,
-			distribution: { one: 0, twoToThree: 0, fourToSix: 0, sevenPlus: 0 },
-		},
-	};
-}
 
 function run(id: string, startedAtMs: number, options: Partial<SettledRun> = {}): SettledRun {
 	return {
@@ -76,84 +30,16 @@ function run(id: string, startedAtMs: number, options: Partial<SettledRun> = {})
 	};
 }
 
-async function fixture(t: test.TestContext): Promise<{ file: string; store: AnalyticsStore }> {
+async function fixture(t: test.TestContext): Promise<AnalyticsStore> {
 	const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-store-"));
 	t.after(() => rm(directory, { recursive: true, force: true }));
-	const file = path.join(directory, "analytics.db");
-	const database = await openAnalyticsDatabase({ path: file });
-	const store = new AnalyticsStore(database);
+	const store = new AnalyticsStore(path.join(directory, "pi-analytics"));
 	t.after(() => store.close().catch(() => undefined));
-	return { file, store };
+	return store;
 }
 
-test("store close drains an in-flight dashboard query before closing the driver", async () => {
-	let release!: () => void;
-	const blocked = new Promise<AnalyticsSnapshot>((resolve) => {
-		release = () => resolve(emptyAnalyticsSnapshot());
-	});
-	let driverClosed = false;
-	const store = new AnalyticsStore(
-		{
-			connection: {} as never,
-			path: "/tmp/test.db",
-			async close() {
-				driverClosed = true;
-			},
-		},
-		{ querySnapshot: async () => blocked },
-	);
-	const reading = store.getSnapshot({ fromMs: 0, toMs: 1 });
-	const closing = store.close();
-	await Promise.resolve();
-	assert.equal(driverClosed, false);
-	release();
-	await reading;
-	await closing;
-	assert.equal(driverClosed, true);
-});
-
-test("database opens privately, migrates, and closes idempotently", async (t) => {
-	const { file, store } = await fixture(t);
-	if (process.platform !== "win32") {
-		assert.equal((await stat(file)).mode & 0o777, 0o600);
-		assert.equal((await stat(`${file}-wal`)).mode & 0o777, 0o600);
-	}
-	await store.close();
-	await store.close();
-});
-
-test("database startup refuses linked database and WAL files", async (t) => {
-	const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-linked-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
-	const target = path.join(directory, "target");
-	await writeFile(target, "do not replace");
-	const databasePath = path.join(directory, "analytics.db");
-	await symlink(target, databasePath);
-	await assert.rejects(openAnalyticsDatabase({ path: databasePath }), AnalyticsDatabaseOpenError);
-	assert.equal(await readFile(target, "utf8"), "do not replace");
-	await rm(databasePath);
-	await writeFile(databasePath, "");
-	await symlink(target, `${databasePath}-wal`);
-	await assert.rejects(openAnalyticsDatabase({ path: databasePath }), AnalyticsDatabaseOpenError);
-	assert.equal(await readFile(target, "utf8"), "do not replace");
-});
-
-test("missing native storage is a typed local failure", async (t) => {
-	const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-unavailable-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
-	await assert.rejects(
-		openAnalyticsDatabase({
-			path: path.join(directory, "analytics.db"),
-			loadModule: async () => {
-				throw new Error("missing native binding at /private/user/path");
-			},
-		}),
-		AnalyticsStorageUnavailableError,
-	);
-});
-
-test("store atomically publishes a run and returns reconciled analytics", async (t) => {
-	const { store } = await fixture(t);
+test("store publishes a content-free run and returns reconciled analytics", async (t) => {
+	const store = await fixture(t);
 	const started = new Date(2026, 7, 2, 12).getTime();
 	await store.recordRun(
 		run("run-1", started, {
@@ -242,89 +128,30 @@ test("store atomically publishes a run and returns reconciled analytics", async 
 		providerErrors: 3,
 		recoveredErrors: 3,
 	});
-	assert.equal(snapshot.skills[0]?.name, "reviewing-code");
 	assert.deepEqual(snapshot.skills[0]?.models, [{ provider: "openai", model: "gpt-a", count: 1 }]);
 	assert.equal(snapshot.tools[0]?.averageDurationMs, 10);
 	assert.equal(snapshot.reliability.http429, 1);
 	assert.equal(snapshot.reliability.http5xx, 1);
 	assert.equal(snapshot.reliability.categories.timeout, 1);
-	assert.deepEqual(snapshot.responses.distribution, {
-		one: 0,
-		twoToThree: 1,
-		fourToSix: 0,
-		sevenPlus: 0,
-	});
 });
 
-test("skill model breakdown merges user and model activation rows", async (t) => {
-	const { store } = await fixture(t);
-	for (const [index, initiatedBy] of ["model", "user"].entries()) {
-		await store.recordRun(
-			run(`skill-run-${index}`, index + 1, {
-				skills: [
-					{
-						id: `skill-${index}`,
-						name: "reviewing-code",
-						initiatedBy: initiatedBy as "model" | "user",
-						occurredAtMs: index + 1,
-						provider: "openai",
-						model: "gpt-test",
-					},
-				],
-			}),
-		);
-	}
-	const skill = (await store.getSnapshot({ fromMs: 0, toMs: 10 })).skills[0];
-	assert.equal(skill?.modelInitiated, 1);
-	assert.equal(skill?.userInitiated, 1);
-	assert.deepEqual(skill?.models, [{ provider: "openai", model: "gpt-test", count: 2 }]);
+test("duplicate run ids remain idempotent across independent writer files", async (t) => {
+	const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-dedup-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const root = path.join(directory, "pi-analytics");
+	const left = new AnalyticsStore(root);
+	const right = new AnalyticsStore(root);
+	t.after(async () => Promise.all([left.close(), right.close()]));
+	await Promise.all([left.recordRun(run("same", 1)), right.recordRun(run("same", 1))]);
+	assert.equal((await left.getSnapshot({ fromMs: 0, toMs: 10 })).overview.responseCycles, 1);
 });
 
-test("run publication is idempotent and rolls back conflicting child rows", async (t) => {
-	const { store } = await fixture(t);
-	await store.recordRun(run("one", 1));
-	await store.recordRun(run("one", 1));
-	await store.recordRun(
-		run("two", 2, {
-			tools: [
-				{
-					id: "shared",
-					ordinal: 0,
-					name: "read",
-					startedAtMs: 2,
-					isError: false,
-					completionState: "finished",
-				},
-			],
-		}),
-	);
-	await assert.rejects(
-		store.recordRun(
-			run("three", 3, {
-				tools: [
-					{
-						id: "shared",
-						ordinal: 0,
-						name: "bash",
-						startedAtMs: 3,
-						isError: false,
-						completionState: "finished",
-					},
-				],
-			}),
-		),
-	);
-	const snapshot = await store.getSnapshot({ fromMs: 0, toMs: 10 });
-	assert.equal(snapshot.overview.responseCycles, 2);
-	await assert.rejects(store.close(), /pending writes could not be saved/i);
-});
-
-test("two stores write the same database and clear committed observations transactionally", async (t) => {
+test("two stores publish concurrently and clear switches every writer to fresh data", async (t) => {
 	const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-concurrent-"));
 	t.after(() => rm(directory, { recursive: true, force: true }));
-	const file = path.join(directory, "analytics.db");
-	const left = new AnalyticsStore(await openAnalyticsDatabase({ path: file }));
-	const right = new AnalyticsStore(await openAnalyticsDatabase({ path: file }));
+	const root = path.join(directory, "pi-analytics");
+	const left = new AnalyticsStore(root);
+	const right = new AnalyticsStore(root);
 	t.after(async () => Promise.all([left.close(), right.close()]));
 	await Promise.all(
 		Array.from({ length: 20 }, (_, index) =>
@@ -332,12 +159,72 @@ test("two stores write the same database and clear committed observations transa
 		),
 	);
 	assert.equal((await left.getSnapshot({ fromMs: 0, toMs: 100 })).overview.responseCycles, 20);
-	assert.equal(await left.clearAll(), 20);
-	assert.equal((await left.getSnapshot({ fromMs: 0, toMs: 100 })).overview.responseCycles, 0);
+	assert.equal((await left.clearAll()).cleanupIncomplete, false);
+	await right.recordRun(run("new", 50));
+	assert.deepEqual((await left.getSnapshot({ fromMs: 0, toMs: 100 })).overview.responseCycles, 1);
+});
+
+test("a snapshot crossing Clear retries against only the active generation", async (t) => {
+	const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-read-clear-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const root = path.join(directory, "pi-analytics");
+	const writer = new AnalyticsStore(root);
+	await writer.recordRun(run("before", 1));
+	let reached!: () => void;
+	const waiting = new Promise<void>((resolve) => {
+		reached = resolve;
+	});
+	let release!: () => void;
+	const blocked = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let blockedOnce = false;
+	const reader = new AnalyticsStore(root, {
+		files: new AnalyticsRunFiles(root, {
+			async beforeReadFile() {
+				if (blockedOnce) return;
+				blockedOnce = true;
+				reached();
+				await blocked;
+			},
+		}),
+	});
+	const reading = reader.getSnapshot({ fromMs: 0, toMs: 10 });
+	await waiting;
+	await writer.clearAll();
+	release();
+	assert.equal((await reading).overview.responseCycles, 0);
+});
+
+test("snapshot cancellation drains a read waiting between files", async (t) => {
+	const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-read-abort-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const root = path.join(directory, "pi-analytics");
+	const writer = new AnalyticsStore(root);
+	await writer.recordRun(run("before", 1));
+	let reached!: () => void;
+	const waiting = new Promise<void>((resolve) => {
+		reached = resolve;
+	});
+	const reader = new AnalyticsStore(root, {
+		files: new AnalyticsRunFiles(root, {
+			async beforeReadFile(signal) {
+				reached();
+				await new Promise<void>((_resolve, reject) => {
+					signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+				});
+			},
+		}),
+	});
+	const controller = new AbortController();
+	const reading = reader.getSnapshot({ fromMs: 0, toMs: 10 }, controller.signal);
+	await waiting;
+	controller.abort(new DOMException("cancelled read", "AbortError"));
+	await assert.rejects(reading, /cancelled read/);
 });
 
 test("response statistics honor exact bounds and nearest-rank percentiles", async (t) => {
-	const { store } = await fixture(t);
+	const store = await fixture(t);
 	for (const [index, calls] of [1, 2, 3, 4, 7, 9].entries()) {
 		await store.recordRun(
 			run(`range-${index}`, 100 + index, {

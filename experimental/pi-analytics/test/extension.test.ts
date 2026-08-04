@@ -6,7 +6,7 @@ import {
 	createAnalyticsExtension,
 	isBuiltinReadTool,
 } from "../src/analytics.js";
-import { NewerSchemaError } from "../src/storage/migrations.js";
+import { SkillTracker } from "../src/skills.js";
 import type { AnalyticsSnapshot, TimeRange } from "../src/storage/queries.js";
 import type { SettledRun } from "../src/types.js";
 
@@ -51,22 +51,24 @@ const emptySnapshot: AnalyticsSnapshot = {
 };
 
 class FakeStore implements AnalyticsStorePort {
-	readonly path = "/tmp/pi-analytics.db";
+	readonly path = "/tmp/pi-analytics";
 	readonly runs: SettledRun[] = [];
+	readonly signals: Array<AbortSignal | undefined> = [];
 	closed = 0;
 	clears = 0;
 	failWrites = false;
 
-	async recordRun(run: SettledRun): Promise<void> {
+	async recordRun(run: SettledRun, signal?: AbortSignal): Promise<void> {
+		this.signals.push(signal);
 		if (this.failWrites) throw new Error("write failed with /private/path");
 		this.runs.push(run);
 	}
 	async getSnapshot(_range: TimeRange): Promise<AnalyticsSnapshot> {
 		return emptySnapshot;
 	}
-	async clearAll(): Promise<number> {
+	async clearAll(): Promise<{ cleanupIncomplete: boolean }> {
 		this.clears += 1;
-		return this.runs.length;
+		return { cleanupIncomplete: false };
 	}
 	async close(): Promise<void> {
 		this.closed += 1;
@@ -92,12 +94,22 @@ async function emit(
 	for (const handler of mock.events.get(name) ?? []) await handler(event, ctx);
 }
 
+async function settleOneRun(
+	mock: ReturnType<typeof createMockPi>,
+	ctx: unknown,
+	prompt = "run",
+): Promise<void> {
+	await emit(mock, "before_agent_start", { prompt, systemPromptOptions: { skills: [] } }, ctx);
+	await emit(mock, "agent_start", {}, ctx);
+	await emit(mock, "before_provider_request", { payload: {} }, ctx);
+	await emit(mock, "message_end", { message: { role: "assistant", stopReason: "stop" } }, ctx);
+	await emit(mock, "agent_settled", {}, ctx);
+}
+
 test("skill read attribution requires Pi's built-in read tool", () => {
 	assert.equal(
 		isBuiltinReadTool(
-			createMockPi({
-				allTools: [{ name: "read", sourceInfo: { source: "builtin" } }],
-			}).pi,
+			createMockPi({ allTools: [{ name: "read", sourceInfo: { source: "builtin" } }] }).pi,
 		),
 		true,
 	);
@@ -111,27 +123,16 @@ test("skill read attribution requires Pi's built-in read tool", () => {
 	);
 });
 
-test("session start visibly warns that analytics is experimental", async () => {
-	const mock = createMockPi();
-	createAnalyticsExtension({ openStore: async () => new FakeStore() })(mock.pi);
-	const started = lifecycleContext();
-	await emit(mock, "session_start", { reason: "startup" }, started.ctx);
-	assert.deepEqual(started.notifications[0], {
-		message: "pi-analytics is experimental; its metrics and dashboard may change.",
-		level: "warning",
-	});
-});
-
-test("factory registers one command and lifecycle collectors without opening storage", () => {
-	let opens = 0;
+test("factory registers lifecycle hooks without constructing or opening storage", () => {
+	let creates = 0;
 	const mock = createMockPi();
 	createAnalyticsExtension({
-		openStore: async () => {
-			opens += 1;
+		createStore: () => {
+			creates += 1;
 			return new FakeStore();
 		},
 	})(mock.pi);
-	assert.equal(opens, 0);
+	assert.equal(creates, 0);
 	assert.ok(mock.commands.has("analytics"));
 	assert.deepEqual([...mock.events.keys()].sort(), [
 		"after_provider_response",
@@ -150,57 +151,134 @@ test("factory registers one command and lifecycle collectors without opening sto
 	]);
 });
 
-test("a settled tool loop is collected once and shutdown closes its store", async () => {
+test("session start synchronously installs a lazy store and shows the experimental warning", async () => {
 	const store = new FakeStore();
-	let now = 100;
-	let id = 0;
-	const mock = createMockPi({ thinkingLevel: "high" });
+	let path = "";
+	const mock = createMockPi();
 	createAnalyticsExtension({
-		openStore: async () => store,
-		now: () => now++,
-		createId: () => `id-${++id}`,
+		createStore: (value) => {
+			path = value;
+			return store;
+		},
+		getAgentDir: () => "/agent",
 	})(mock.pi);
-	const { ctx } = lifecycleContext();
-	await emit(mock, "session_start", { reason: "startup" }, ctx);
-	await emit(mock, "input", { text: "Fix it", source: "interactive", images: undefined }, ctx);
+	const started = lifecycleContext();
+	await emit(mock, "session_start", { reason: "startup" }, started.ctx);
+	assert.equal(path, "/agent/pi-analytics");
+	assert.deepEqual(started.notifications[0], {
+		message: "pi-analytics is experimental; its metrics and dashboard may change.",
+		level: "warning",
+	});
+});
+
+test("a repeated session start aborts and closes the previous lazy store", async () => {
+	const first = new FakeStore();
+	const second = new FakeStore();
+	let creates = 0;
+	const mock = createMockPi();
+	createAnalyticsExtension({ createStore: () => (++creates === 1 ? first : second) })(mock.pi);
+	const started = lifecycleContext();
+	await emit(mock, "session_start", { reason: "startup" }, started.ctx);
+	await emit(mock, "session_start", { reason: "reload" }, started.ctx);
+	await Promise.resolve();
+	assert.equal(first.closed, 1);
+	assert.equal(second.closed, 0);
+	await emit(mock, "session_shutdown", { reason: "quit" }, started.ctx);
+	assert.equal(second.closed, 1);
+});
+
+test("a settled response is written once with the current session signal", async () => {
+	const store = new FakeStore();
+	const mock = createMockPi();
+	createAnalyticsExtension({ createStore: () => store })(mock.pi);
+	const started = lifecycleContext();
+	await emit(mock, "session_start", { reason: "startup" }, started.ctx);
+	await settleOneRun(mock, started.ctx);
+	assert.equal(store.runs.length, 1);
+	assert.equal(store.runs[0]?.outcome, "success");
+	assert.equal(store.signals[0]?.aborted, false);
+});
+
+test("a delayed skill read cannot attach to a later response cycle", async () => {
+	const store = new FakeStore();
+	let canonicalCalls = 0;
+	let reached!: () => void;
+	const matching = new Promise<void>((resolve) => {
+		reached = resolve;
+	});
+	let release!: () => void;
+	const blocked = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const mock = createMockPi({
+		allTools: [{ name: "read", sourceInfo: { source: "builtin" } }],
+	});
+	createAnalyticsExtension({
+		createStore: () => store,
+		createSkillTracker: (cwd) =>
+			new SkillTracker(cwd, async (filePath) => {
+				canonicalCalls += 1;
+				if (canonicalCalls === 2) {
+					reached();
+					await blocked;
+				}
+				return filePath;
+			}),
+	})(mock.pi);
+	const started = lifecycleContext();
+	await emit(mock, "session_start", { reason: "startup" }, started.ctx);
+	const skills = [{ name: "reviewing-code", filePath: "/workspace/SKILL.md" }];
 	await emit(
 		mock,
 		"before_agent_start",
-		{ prompt: "Fix it", systemPromptOptions: { skills: [] } },
-		ctx,
+		{ prompt: "first", systemPromptOptions: { skills } },
+		started.ctx,
 	);
-	await emit(mock, "agent_start", {}, ctx);
-	await emit(mock, "turn_start", { turnIndex: 0, timestamp: now }, ctx);
-	await emit(mock, "before_provider_request", { payload: {} }, ctx);
-	await emit(mock, "after_provider_response", { status: 200, headers: {} }, ctx);
-	await emit(mock, "message_end", { message: { role: "assistant", stopReason: "toolUse" } }, ctx);
+	await emit(mock, "before_provider_request", { payload: {} }, started.ctx);
+	const reading = emit(
+		mock,
+		"tool_result",
+		{
+			toolName: "read",
+			input: { path: "/workspace/SKILL.md" },
+			isError: false,
+		},
+		started.ctx,
+	);
+	await matching;
 	await emit(
 		mock,
-		"tool_execution_start",
-		{ toolCallId: "call-1", toolName: "read", args: { path: "README.md" } },
-		ctx,
+		"message_end",
+		{ message: { role: "assistant", stopReason: "stop" } },
+		started.ctx,
 	);
+	await emit(mock, "agent_settled", {}, started.ctx);
 	await emit(
 		mock,
-		"tool_execution_end",
-		{ toolCallId: "call-1", toolName: "read", result: {}, isError: false },
-		ctx,
+		"before_agent_start",
+		{ prompt: "second", systemPromptOptions: { skills } },
+		started.ctx,
 	);
-	await emit(mock, "turn_start", { turnIndex: 1, timestamp: now }, ctx);
-	await emit(mock, "before_provider_request", { payload: {} }, ctx);
-	await emit(mock, "message_end", { message: { role: "assistant", stopReason: "stop" } }, ctx);
-	await emit(mock, "agent_settled", {}, ctx);
-	assert.equal(store.runs.length, 1);
-	assert.equal(store.runs[0]?.generations.length, 2);
-	assert.equal(store.runs[0]?.tools.length, 1);
-	await emit(mock, "session_shutdown", { reason: "quit" }, ctx);
-	assert.equal(store.closed, 1);
+	release();
+	await reading;
+	await emit(mock, "before_provider_request", { payload: {} }, started.ctx);
+	await emit(
+		mock,
+		"message_end",
+		{ message: { role: "assistant", stopReason: "stop" } },
+		started.ctx,
+	);
+	await emit(mock, "agent_settled", {}, started.ctx);
+	assert.deepEqual(
+		store.runs.map(({ skills: runSkills }) => runSkills),
+		[[], []],
+	);
 });
 
-test("automatic retry remains in one response and becomes recovered success", async () => {
+test("shutdown drops an active interrupted response and only closes storage", async () => {
 	const store = new FakeStore();
 	const mock = createMockPi();
-	createAnalyticsExtension({ openStore: async () => store })(mock.pi);
+	createAnalyticsExtension({ createStore: () => store })(mock.pi);
 	const started = lifecycleContext();
 	await emit(mock, "session_start", { reason: "startup" }, started.ctx);
 	await emit(
@@ -209,125 +287,28 @@ test("automatic retry remains in one response and becomes recovered success", as
 		{ prompt: "run", systemPromptOptions: { skills: [] } },
 		started.ctx,
 	);
-	for (const stopReason of ["error", "stop"]) {
-		await emit(mock, "agent_start", {}, started.ctx);
-		await emit(mock, "turn_start", { turnIndex: 0, timestamp: 1 }, started.ctx);
-		await emit(mock, "before_provider_request", { payload: {} }, started.ctx);
-		await emit(
-			mock,
-			"message_end",
-			{
-				message: {
-					role: "assistant",
-					stopReason,
-					...(stopReason === "error" ? { errorMessage: "fetch failed" } : {}),
-				},
-			},
-			started.ctx,
-		);
-	}
-	await emit(mock, "agent_settled", {}, started.ctx);
-	assert.equal(store.runs.length, 1);
-	assert.equal(store.runs[0]?.attemptCount, 2);
-	assert.equal(store.runs[0]?.outcome, "recovered_success");
-});
-
-test("an automatic continuation that starts without a prompt retains its attempt", async () => {
-	const store = new FakeStore();
-	const mock = createMockPi();
-	createAnalyticsExtension({ openStore: async () => store })(mock.pi);
-	const started = lifecycleContext();
-	await emit(mock, "session_start", { reason: "startup" }, started.ctx);
-	await emit(mock, "agent_start", {}, started.ctx);
-	await emit(mock, "turn_start", { turnIndex: 0, timestamp: 1 }, started.ctx);
 	await emit(mock, "before_provider_request", { payload: {} }, started.ctx);
-	await emit(
-		mock,
-		"message_end",
-		{ message: { role: "assistant", stopReason: "stop" } },
-		started.ctx,
-	);
-	await emit(mock, "agent_settled", {}, started.ctx);
-	assert.equal(store.runs[0]?.attemptCount, 1);
-	assert.equal(store.runs[0]?.triggerSource, "extension");
+	await emit(mock, "session_shutdown", { reason: "quit" }, started.ctx);
+	assert.equal(store.runs.length, 0);
+	assert.equal(store.closed, 1);
 });
 
-test("explicit and successful read skill activations are attributed and deduplicated", async (t) => {
-	const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
-	const { tmpdir } = await import("node:os");
-	const path = await import("node:path");
-	const cwd = await mkdtemp(path.join(tmpdir(), "pi-analytics-extension-skill-"));
-	t.after(() => rm(cwd, { recursive: true, force: true }));
-	const skillDir = path.join(cwd, "skill");
-	await mkdir(skillDir);
-	const skillFile = path.join(skillDir, "SKILL.md");
-	await writeFile(skillFile, "skill");
+test("session shutdown aborts a delayed write and suppresses stale failure feedback", async () => {
 	const store = new FakeStore();
-	const mock = createMockPi({
-		allTools: [{ name: "read", sourceInfo: { source: "builtin" } }],
-	});
-	createAnalyticsExtension({ openStore: async () => store })(mock.pi);
-	const { ctx } = lifecycleContext({ cwd });
-	await emit(mock, "session_start", { reason: "startup" }, ctx);
-	await emit(mock, "input", { text: "/skill:reviewing-code inspect", source: "interactive" }, ctx);
-	await emit(
-		mock,
-		"before_agent_start",
-		{
-			prompt: "expanded",
-			systemPromptOptions: {
-				skills: [{ name: "reviewing-code", filePath: skillFile }],
-			},
-		},
-		ctx,
-	);
-	await emit(mock, "agent_start", {}, ctx);
-	await emit(mock, "before_provider_request", { payload: {} }, ctx);
-	await emit(
-		mock,
-		"tool_result",
-		{
-			toolCallId: "read-1",
-			toolName: "read",
-			input: { path: skillFile },
-			content: [],
-			isError: false,
-		},
-		ctx,
-	);
-	await emit(mock, "message_end", { message: { role: "assistant", stopReason: "stop" } }, ctx);
-	await emit(mock, "agent_settled", {}, ctx);
-	assert.deepEqual(
-		store.runs[0]?.skills.map(({ name, initiatedBy }) => ({ name, initiatedBy })),
-		[{ name: "reviewing-code", initiatedBy: "user" }],
-	);
-});
-
-test("a skill command queued during streaming belongs to the active response", async () => {
-	const store = new FakeStore();
+	store.recordRun = async (_run, signal) => {
+		store.signals.push(signal);
+		await new Promise<void>((_resolve, reject) => {
+			signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+		});
+	};
 	const mock = createMockPi();
-	createAnalyticsExtension({ openStore: async () => store })(mock.pi);
+	createAnalyticsExtension({ createStore: () => store })(mock.pi);
 	const started = lifecycleContext();
 	await emit(mock, "session_start", { reason: "startup" }, started.ctx);
 	await emit(
 		mock,
 		"before_agent_start",
-		{
-			prompt: "initial",
-			systemPromptOptions: {
-				skills: [{ name: "reviewing-code", filePath: "/missing/reviewing-code/SKILL.md" }],
-			},
-		},
-		started.ctx,
-	);
-	await emit(
-		mock,
-		"input",
-		{
-			text: "/skill:reviewing-code continue",
-			source: "interactive",
-			streamingBehavior: "followUp",
-		},
+		{ prompt: "run", systemPromptOptions: { skills: [] } },
 		started.ctx,
 	);
 	await emit(mock, "before_provider_request", { payload: {} }, started.ctx);
@@ -337,33 +318,38 @@ test("a skill command queued during streaming belongs to the active response", a
 		{ message: { role: "assistant", stopReason: "stop" } },
 		started.ctx,
 	);
-	await emit(mock, "agent_settled", {}, started.ctx);
-	assert.deepEqual(
-		store.runs[0]?.skills.map(({ name, initiatedBy }) => ({ name, initiatedBy })),
-		[{ name: "reviewing-code", initiatedBy: "user" }],
+	const settling = emit(mock, "agent_settled", {}, started.ctx);
+	await Promise.resolve();
+	const shutdown = emit(mock, "session_shutdown", { reason: "quit" }, started.ctx);
+	await Promise.all([settling, shutdown]);
+	assert.equal(store.signals[0]?.aborted, true);
+	assert.equal(store.closed, 1);
+	assert.equal(
+		started.notifications.filter(({ message }) => message.includes("could not save")).length,
+		0,
 	);
 });
 
-test("replacement invalidates a delayed startup and closes the stale store", async () => {
-	let resolveFirst!: (store: FakeStore) => void;
-	const firstOpening = new Promise<FakeStore>((resolve) => {
-		resolveFirst = resolve;
-	});
-	const first = new FakeStore();
-	const second = new FakeStore();
-	let calls = 0;
+test("write failure notifies once and a later success reports recovery without leaking paths", async () => {
+	const store = new FakeStore();
+	store.failWrites = true;
 	const mock = createMockPi();
-	createAnalyticsExtension({
-		openStore: async () => (++calls === 1 ? firstOpening : second),
-	})(mock.pi);
-	const { ctx } = lifecycleContext();
-	const starting = emit(mock, "session_start", { reason: "startup" }, ctx);
-	const shuttingDown = emit(mock, "session_shutdown", { reason: "new" }, ctx);
-	resolveFirst(first);
-	await Promise.all([starting, shuttingDown]);
-	await emit(mock, "session_start", { reason: "new" }, ctx);
-	assert.equal(first.closed, 1);
-	assert.equal(second.closed, 0);
+	createAnalyticsExtension({ createStore: () => store })(mock.pi);
+	const started = lifecycleContext();
+	await emit(mock, "session_start", { reason: "startup" }, started.ctx);
+	await settleOneRun(mock, started.ctx, "first");
+	await settleOneRun(mock, started.ctx, "second");
+	assert.equal(
+		started.notifications.filter(({ message }) => message.includes("could not save")).length,
+		1,
+	);
+	store.failWrites = false;
+	await settleOneRun(mock, started.ctx, "third");
+	assert.ok(started.notifications.some(({ message }) => message.includes("storage recovered")));
+	assert.doesNotMatch(
+		started.notifications.map(({ message }) => message).join("\n"),
+		/private\/path/,
+	);
 });
 
 test("arguments and noninteractive command modes reject before querying", async () => {
@@ -374,7 +360,7 @@ test("arguments and noninteractive command modes reject before querying", async 
 		return emptySnapshot;
 	};
 	const mock = createMockPi();
-	createAnalyticsExtension({ openStore: async () => store })(mock.pi);
+	createAnalyticsExtension({ createStore: () => store })(mock.pi);
 	const command = mock.commands.get("analytics");
 	assert.ok(command);
 	const interactive = lifecycleContext();
@@ -394,101 +380,19 @@ test("arguments and noninteractive command modes reject before querying", async 
 	assert.equal(loads, 0);
 });
 
-test("write failure notifies once and a later success reports recovery", async () => {
-	const store = new FakeStore();
-	store.failWrites = true;
-	const mock = createMockPi();
-	createAnalyticsExtension({ openStore: async () => store })(mock.pi);
-	const started = lifecycleContext();
-	await emit(mock, "session_start", { reason: "startup" }, started.ctx);
-	for (let index = 0; index < 2; index += 1) {
-		await emit(
-			mock,
-			"before_agent_start",
-			{ prompt: "run", systemPromptOptions: { skills: [] } },
-			started.ctx,
-		);
-		await emit(mock, "before_provider_request", { payload: {} }, started.ctx);
-		await emit(
-			mock,
-			"message_end",
-			{ message: { role: "assistant", stopReason: "stop" } },
-			started.ctx,
-		);
-		await emit(mock, "agent_settled", {}, started.ctx);
-	}
-	assert.equal(
-		started.notifications.filter(({ message }) => message.includes("could not save")).length,
-		1,
-	);
-	store.failWrites = false;
-	await emit(
-		mock,
-		"before_agent_start",
-		{ prompt: "run", systemPromptOptions: { skills: [] } },
-		started.ctx,
-	);
-	await emit(mock, "before_provider_request", { payload: {} }, started.ctx);
-	await emit(
-		mock,
-		"message_end",
-		{ message: { role: "assistant", stopReason: "stop" } },
-		started.ctx,
-	);
-	await emit(mock, "agent_settled", {}, started.ctx);
-	assert.ok(started.notifications.some(({ message }) => message.includes("storage recovered")));
-	assert.doesNotMatch(
-		started.notifications.map(({ message }) => message).join("\n"),
-		/private\/path/,
-	);
-});
-
-test("graceful shutdown persists an active response as interrupted", async () => {
-	const store = new FakeStore();
-	const mock = createMockPi();
-	createAnalyticsExtension({ openStore: async () => store })(mock.pi);
-	const started = lifecycleContext();
-	await emit(mock, "session_start", { reason: "startup" }, started.ctx);
-	await emit(
-		mock,
-		"before_agent_start",
-		{ prompt: "run", systemPromptOptions: { skills: [] } },
-		started.ctx,
-	);
-	await emit(mock, "before_provider_request", { payload: {} }, started.ctx);
-	await emit(mock, "session_shutdown", { reason: "quit" }, started.ctx);
-	assert.equal(store.runs[0]?.outcome, "interrupted");
-	assert.equal(store.closed, 1);
-});
-
-test("newer schemas produce actionable fail-closed guidance", async () => {
+test("store construction failures are content-free and keep the command available", async () => {
 	const mock = createMockPi();
 	createAnalyticsExtension({
-		openStore: async () => {
-			throw new NewerSchemaError(3, 1);
+		createStore: () => {
+			throw new Error("failed at /home/private/user");
 		},
-	})(mock.pi);
-	const started = lifecycleContext();
-	await emit(mock, "session_start", { reason: "startup" }, started.ctx);
-	const message = started.notifications.find(({ message }) => message.includes("schema"))?.message;
-	assert.match(message ?? "", /schema v3 is newer than supported v1/);
-	assert.match(message ?? "", /Update pi-analytics/);
-});
-
-test("storage failure is content-free and keeps the command available", async () => {
-	const mock = createMockPi();
-	createAnalyticsExtension({
-		openStore: async () => {
-			throw new Error("native binding /home/private/user failed");
-		},
-		platform: () => "linux-arm64-musl",
 	})(mock.pi);
 	const started = lifecycleContext();
 	await emit(mock, "session_start", { reason: "startup" }, started.ctx);
 	const message = started.notifications.find(({ message }) =>
-		message.includes("linux-arm64-musl"),
+		message.includes("could not be initialized"),
 	)?.message;
-	assert.match(message ?? "", /linux-arm64-musl/);
+	assert.match(message ?? "", /No analytics are being collected/);
 	assert.doesNotMatch(message ?? "", /private\/user/);
 	assert.ok(mock.commands.has("analytics"));
 });

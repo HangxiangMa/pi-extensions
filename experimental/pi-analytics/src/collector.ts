@@ -34,6 +34,10 @@ export class ResponseCollector {
 		return this.active !== undefined;
 	}
 
+	getActiveRunId(): string | undefined {
+		return this.active?.id;
+	}
+
 	begin(input: {
 		id: string;
 		now: number;

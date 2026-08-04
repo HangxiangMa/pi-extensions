@@ -9,15 +9,15 @@
 
 ## ✨ Features
 
-- Starts collecting settled Pi response cycles after installation with no configuration.
+- Starts collecting settled Pi response cycles after installation with no configuration or startup I/O.
 - Breaks skill activations down by explicit user invocation, model loading, provider, and model.
 - Counts tool calls, failures, average duration, and model attribution.
 - Reports logical LLM calls per response with average, median, P95, maximum, and distribution buckets.
 - Separates HTTP 429/5xx responses, conservative connection-error categories, recovered errors, and terminal provider failures.
 - Offers Today, rolling 7-day, rolling 30-day, and all-time views through one `/analytics` TUI/RPC dashboard.
-- Stores only content-free metadata in one private local Turso Database.
-- Uses forward-only, checksummed, transactional schema migrations and fails closed on unknown newer schemas.
-- Never starts a server, contacts Turso Cloud, or sends analytics anywhere.
+- Stores only content-free metadata in private, versioned JSON Lines files.
+- Uses one writer file per Pi runtime, so concurrent Pi processes never share a routine writer lock.
+- Never starts a server or sends analytics anywhere.
 
 ## 📦 Install
 
@@ -39,15 +39,7 @@ Try a local checkout from the repository root:
 pi -e ./experimental/pi-analytics
 ```
 
-### Supported platforms
-
-The embedded `@tursodatabase/database` dependency currently publishes native binaries for:
-
-- Linux x64 and arm64 with glibc;
-- macOS arm64; and
-- Windows x64.
-
-On another platform, Pi still loads the extension and `/analytics` remains available, but collection is disabled and the dashboard explains the supported platform boundary. The database engine is pre-1.0. Analytics are treated as non-critical derived metadata. If the history itself matters, stop every Pi process using the extension and back up both `pi-analytics.db` and `pi-analytics.db-wal`; copying only the main file is not a complete backup.
+The storage implementation uses Node's built-in filesystem APIs and has no native database dependency.
 
 ## 🚀 Quick start
 
@@ -72,7 +64,7 @@ Provider errors                     4
 Recovered errors                    3
 ```
 
-Use the menu to change the time range or browse Skills, Tools, Provider reliability, Response cycles, and Data & privacy. Only fully settled cycles are included; active work is omitted until Pi settles.
+Use the menu to change the time range or browse Skills, Tools, Provider reliability, Response cycles, and Data & privacy. Only fully settled cycles are included; active work is omitted.
 
 ## 📐 Metric definitions
 
@@ -86,22 +78,15 @@ An **LLM call** is one logical provider generation. A provider may make several 
 
 An activation is **User initiated** when an observed interactive or RPC `/skill:<name>` input is associated with an active or subsequently started response cycle. This includes skill commands queued while Pi is streaming. It is **Model initiated** when the built-in `read` tool successfully loads the exact canonical `SKILL.md` path Pi discovered. A skill is counted at most once per response cycle, and explicit user use takes precedence.
 
-Pi does not expose a first-class skill-invocation event or a post-chain acceptance event for input observers. Non-standard loading such as `bash` plus `cat SKILL.md`, unsuccessful reads, and provider behavior invisible to Pi are not counted; an explicit skill input intercepted later by another extension while a response is active may still be observed.
+Pi does not expose a first-class skill-invocation event or a post-chain acceptance event for input observers. Non-standard loading such as `bash` plus `cat SKILL.md`, unsuccessful reads, and provider behavior invisible to Pi are not counted.
 
 ### Tools
 
-A tool call starts at Pi's `tool_execution_start` event and finishes at `tool_execution_end`. The extension stores the tool name, model attribution, timing, completion state, and final error flag. It cannot reliably distinguish another extension blocking a call from every other tool error, so the MVP reports both as errors rather than claiming a separate blocked count.
+A tool call starts at Pi's `tool_execution_start` event and finishes at `tool_execution_end`. The extension stores the tool name, model attribution, timing, completion state, and final error flag. It cannot reliably distinguish another extension blocking a call from every other tool error, so both appear as errors.
 
 ### Provider reliability
 
-Pi exposes HTTP responses and final assistant failures, not every provider-SDK transport retry. The dashboard therefore labels these values as **observed provider errors**. It reports:
-
-- HTTP 429 and 5xx counts;
-- DNS, timeout, connection-refused, connection-reset, TLS, other-network, and other-provider categories;
-- recovered errors; and
-- terminal failures.
-
-Error messages are classified in memory and discarded. Raw error text is never stored.
+Pi exposes HTTP responses and final assistant failures, not every provider-SDK transport retry. The dashboard therefore labels these values as **observed provider errors**. It reports HTTP 429 and 5xx counts; conservative DNS, timeout, connection, TLS, network, and provider categories; recovered errors; and terminal failures. Error messages are classified in memory and discarded.
 
 ## 💬 Command
 
@@ -111,66 +96,56 @@ Error messages are classified in memory and discarded. Raw error text is never s
 
 The command accepts no arguments. TUI mode uses the full dashboard; RPC mode adapts the same standard screens to dialogs. Print and JSON modes reject the interactive command observably instead of writing ad hoc protocol output.
 
-The root menu contains seven actions:
-
-```text
-Change time range
-Skills
-Tools
-Provider reliability
-Response cycles
-Data & privacy
-Close
-```
-
-Skills and Tools are searchable browse views with details and model breakdowns. Escape goes Back from nested screens and closes the root. Ctrl+C closes the menu. Cancelling data deletion has no side effects.
+The root menu contains Change time range, Skills, Tools, Provider reliability, Response cycles, Data & privacy, and Close. Skills and Tools are searchable browse views with details and model breakdowns. Escape goes Back from nested screens and closes the root. Ctrl+C closes the menu. Cancelling data deletion has no side effects.
 
 ## 🔐 Local data and privacy
 
-The database is stored at:
+Current analytics live under:
+
+```text
+<pi-agent-directory>/pi-analytics/
+├── current
+└── generations/
+    └── <opaque-generation-id>/
+        └── <opaque-writer-id>.jsonl
+```
+
+The opaque IDs are storage coordination identifiers generated by the extension; they are not Pi session IDs. On Unix, directories are restricted to mode `0700` and files to `0600`. Linked storage roots, markers, and writer files are rejected.
+
+Stored fields are limited to timestamps and durations; extension-generated record IDs; provider/model IDs and thinking level; tool and skill names; user/model skill source; counts, outcomes, and completion states; HTTP status codes; and classified provider-error categories. Provider-supplied tool-call IDs are replaced with local ordinals before publication.
+
+The extension does **not** store prompts, responses, thinking content, tool arguments or results, raw error messages, HTTP headers, cwd/project/file paths, session names or IDs, or credentials.
+
+Each settled response is one versioned, newline-terminated frame. Frames larger than 1 MiB are dropped. Local writes receive a 500 ms cancellation deadline; Node filesystem cancellation is best-effort, so an operating-system request that has already begun may still finish. The extension reports the first failed or timed-out write and a later recovery without exposing filesystem errors.
+
+`/analytics` streams and validates the active generation, checks cancellation between files and records, and periodically yields to the event loop. A crash-truncated final frame is ignored; completed malformed frames and unsupported format versions fail closed without replacing existing files.
+
+### Clear analytics data
+
+Choose **Data & privacy → Clear analytics data…** to atomically publish a fresh active generation. Other Pi processes observe that generation before their next write. Records racing with Clear may land immediately before or after the generation switch.
+
+The extension then removes the previous generation. If another process still has an obsolete file in use, Clear remains logically complete and reports that physical cleanup is incomplete; stop other Pi processes and clear again. Clearing files is not a secure-erasure guarantee for underlying storage media.
+
+## 🧭 Legacy SQLite data
+
+Versions that used Turso/SQLite stored data in:
 
 ```text
 <pi-agent-directory>/pi-analytics.db
+<pi-agent-directory>/pi-analytics.db-wal
 ```
 
-On Unix, the extension pre-creates and restricts the database and WAL files to mode `0600`, repairs their permissions after migration, and refuses linked database files.
+The JSONL version deliberately does not open, import, migrate, delete, or rewrite those files, so startup cannot re-enter the old native database path. New analytics start empty.
 
-Stored fields are limited to:
+If legacy history matters, stop every old Pi process first and preserve both files together. If it does not matter, stop every old Pi process before deleting both files manually. Never copy or remove only the main DB while an old process may still own its WAL.
 
-- timestamps and durations;
-- provider/model IDs and thinking level;
-- tool and skill names;
-- user/model skill source;
-- counts, outcomes, and completion states;
-- HTTP status codes; and
-- classified provider-error categories.
-
-The extension does **not** store:
-
-- prompts, responses, or thinking content;
-- tool arguments or results;
-- raw error messages or HTTP headers;
-- cwd, project names, file paths, session names, or Pi session IDs; or
-- credentials.
-
-It imports only the local embedded database package. It does not install `@tursodatabase/sync`, request Turso credentials, contact Turso Cloud, or perform any other remote telemetry.
-
-Choose **Data & privacy → Clear analytics data…** to transactionally remove all currently committed response, model, skill, tool, and reliability observations. Migration history remains so the valid schema can continue to be used. Another running Pi process may commit a newly settled response after the clear operation.
-
-## 🧱 Database migrations and recovery
-
-Schema migrations are numbered, immutable, contiguous, and checksummed. Pending migrations recheck and apply inside an exclusive transaction with bounded conflict retry, so two Pi processes cannot publish half of a migration. Runtime schema changes follow additive-first compatibility: add nullable columns or tables before considering any later contraction.
-
-The extension never downgrades, repairs, deletes, or recreates a database automatically. If a migration fails, an applied checksum differs, or the database was created by a newer extension version, collection fails closed and existing bytes remain in place. Update the extension or restore a user-managed backup before retrying.
-
-Settled response publication is one atomic transaction. A failed write leaves prior data valid and is retained for bounded retry while that Pi session remains open. Graceful shutdown drains pending writes and closes the session-owned connection.
-
-## 🚧 MVP limitations
+## 🚧 Limitations
 
 - There are no retention settings; records remain until explicitly cleared.
-- Prometheus, JSON/CSV export, Turso Cloud sync, browser dashboards, token/cost reporting, and project attribution are not included.
+- Analytics are best-effort derived metadata. A failed or interrupted local write may be omitted.
+- Large all-time histories require scanning the active JSONL generation when the dashboard opens.
+- Prometheus, JSON/CSV export, cloud sync, browser dashboards, token/cost reporting, and project attribution are not included.
 - Statistics cover only events visible through Pi's public extension API.
-- Clearing rows is logical deletion, not a secure-erasure guarantee for underlying storage media.
 
 ## 🗂️ Package layout
 
@@ -185,10 +160,10 @@ experimental/pi-analytics/
 │   ├── menu.ts               # TUI/RPC analytics dashboard
 │   ├── types.ts              # Observation records
 │   └── storage/
-│       ├── database.ts       # Dynamic driver startup and private file lifecycle
-│       ├── migrations.ts     # Transactional checksummed schema history
-│       ├── queries.ts        # Indexed aggregate projections
-│       └── store.ts          # Atomic writes, retries, queries, and clear
+│       ├── files.ts          # Private generations, writes, reads, and Clear
+│       ├── format.ts         # Versioned JSONL codec and validation
+│       ├── queries.ts        # Incremental aggregate projections
+│       └── store.ts          # Lifecycle-safe storage facade
 ├── test/
 ├── README.md
 ├── LICENSE
@@ -198,7 +173,7 @@ experimental/pi-analytics/
 
 ## 🔎 Keywords
 
-Pi extension, Pi coding agent, local analytics, agent skills, tool usage, model calls, provider reliability, Turso Database, SQLite-compatible metrics.
+Pi extension, Pi coding agent, local analytics, agent skills, tool usage, model calls, provider reliability, JSON Lines, content-free metrics.
 
 ## 📄 License
 
