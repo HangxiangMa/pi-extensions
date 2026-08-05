@@ -1,6 +1,6 @@
-import { createSyncBackend } from "../src/backend-factory.js";
 import type { LatestPointer, SyncConfig } from "../src/types.js";
 import { registerSyncBackendContractSuite } from "./backend-contract-suite.js";
+import { createSyncBackend } from "./backend-factory-eager.js";
 
 registerSyncBackendContractSuite("s3", () => {
 	const harness = new ContractS3Harness();

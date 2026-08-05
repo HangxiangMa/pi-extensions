@@ -28,28 +28,29 @@ import {
 	sessionTokenWarnings,
 	syncSessionsWarnings,
 } from "./config.js";
-import { showFileSelection } from "./file-selection.js";
 import { unlock, withLock } from "./lock.js";
-import { showSetupWizard, showSyncManager } from "./manager-ui.js";
 import { SetupPullRequiresUiError, useSyncSetup } from "./setup-switch.js";
 import { createSnapshot } from "./snapshot.js";
 import { recoverSnapshotTransactionsOnStartup } from "./snapshot-transaction.js";
 import { isSyncDecisionRequiredError } from "./sync-decision.js";
 import { errorMessage } from "./sync-format.js";
-import {
-	diff,
-	doctor,
-	history,
-	pull,
-	push,
-	rollback,
-	status,
-	syncBoth,
-} from "./sync-operations.js";
 import { hasLocalChanges } from "./sync-state.js";
 import type { AnySyncConfig, CommandOptions, SnapshotOptions } from "./types.js";
 
 const STATUS_KEY = "sync";
+
+type SyncOperations = typeof import("./sync-operations.js");
+let syncOperationsPromise: Promise<SyncOperations> | undefined;
+
+function loadSyncOperations(): Promise<SyncOperations> {
+	if (!syncOperationsPromise) {
+		syncOperationsPromise = import("./sync-operations.js").catch((error) => {
+			syncOperationsPromise = undefined;
+			throw error;
+		});
+	}
+	return syncOperationsPromise;
+}
 
 const AUTO_SYNC_OPTIONS: CommandOptions = {
 	yes: true,
@@ -130,6 +131,8 @@ async function handleCommand(
 ) {
 	if (!rawArgs.trim()) {
 		try {
+			const { showSyncManager } = await import("./manager-ui.js");
+			if (sessionSignal.aborted) return;
 			await showSyncManager(
 				ctx,
 				(route, signal, onCommit, target) =>
@@ -174,8 +177,13 @@ async function executeCommand(
 				await useSyncSetup(
 					ctx,
 					options.args[0] ?? "",
-					(selectedSetup) =>
-						withLock("pull", () => pull(ctx, { ...options, setup: selectedSetup })),
+					async (selectedSetup) => {
+						const operations = await loadSyncOperations();
+						throwIfAborted(options.signal);
+						return withLock("pull", () =>
+							operations.pull(ctx, { ...options, setup: selectedSetup }),
+						);
+					},
 					undefined,
 					options.signal,
 				);
@@ -187,34 +195,48 @@ async function executeCommand(
 				await showConfig(ctx, options);
 				return { kind: "completed" };
 			case "files":
-				await showFileSelection(ctx, options.setup, options.signal);
+				await (await import("./file-selection.js")).showFileSelection(
+					ctx,
+					options.setup,
+					options.signal,
+				);
 				return { kind: "completed" };
 			case "status":
-				await status(ctx, options);
+				await (await loadSyncOperations()).status(ctx, options);
 				return { kind: "completed" };
 			case "diff":
-				await diff(ctx, options);
+				await (await loadSyncOperations()).diff(ctx, options);
 				return { kind: "completed" };
 			case "doctor":
-				await doctor(ctx, options);
+				await (await loadSyncOperations()).doctor(ctx, options);
 				return { kind: "completed" };
 			case "push": {
-				const outcome = await withLock("push", () => push(ctx, options));
+				const operations = await loadSyncOperations();
+				throwIfAborted(options.signal);
+				const outcome = await withLock("push", () => operations.push(ctx, options));
 				return { kind: "completed", ...(outcome ? { outcome } : {}) };
 			}
 			case "pull": {
-				const outcome = await withLock("pull", () => pull(ctx, options));
+				const operations = await loadSyncOperations();
+				throwIfAborted(options.signal);
+				const outcome = await withLock("pull", () => operations.pull(ctx, options));
 				return { kind: "completed", ...(outcome ? { outcome } : {}) };
 			}
-			case "sync":
-				await withLock("sync", () => syncBoth(ctx, options));
+			case "sync": {
+				const operations = await loadSyncOperations();
+				throwIfAborted(options.signal);
+				await withLock("sync", () => operations.syncBoth(ctx, options));
 				return { kind: "completed" };
+			}
 			case "history":
-				await history(ctx, options);
+				await (await loadSyncOperations()).history(ctx, options);
 				return { kind: "completed" };
-			case "rollback":
-				await withLock("rollback", () => rollback(ctx, options));
+			case "rollback": {
+				const operations = await loadSyncOperations();
+				throwIfAborted(options.signal);
+				await withLock("rollback", () => operations.rollback(ctx, options));
 				return { kind: "completed" };
+			}
 			case "unlock":
 				await unlock(ctx, options);
 				return { kind: "completed" };
@@ -243,9 +265,11 @@ async function autoSync(ctx: ExtensionContext, signal: AbortSignal) {
 		throwIfAborted(signal);
 		await loadConfig();
 		throwIfAborted(signal);
+		const operations = await loadSyncOperations();
+		throwIfAborted(signal);
 		await withLock("auto-sync", () => {
 			throwIfAborted(signal);
-			return syncBoth(ctx, { ...AUTO_SYNC_OPTIONS, signal });
+			return operations.syncBoth(ctx, { ...AUTO_SYNC_OPTIONS, signal });
 		});
 	} catch (error) {
 		if (signal.aborted || isMissingConfigError(error)) return;
@@ -265,6 +289,8 @@ async function autoPushSessions(ctx: ExtensionContext, signal: AbortSignal) {
 		const config = await loadConfig();
 		throwIfAborted(signal);
 		if (!config.include.includes("sessions")) return;
+		const operations = await loadSyncOperations();
+		throwIfAborted(signal);
 		await withLock("auto-session-push", async () => {
 			throwIfAborted(signal);
 			const state = await readStateForConfig(config);
@@ -275,7 +301,7 @@ async function autoPushSessions(ctx: ExtensionContext, signal: AbortSignal) {
 			);
 			throwIfAborted(signal);
 			if (!hasLocalChanges(local, state, config)) return;
-			await push(ctx, { ...AUTO_SYNC_OPTIONS, signal }, { config, state, local });
+			await operations.push(ctx, { ...AUTO_SYNC_OPTIONS, signal }, { config, state, local });
 		});
 	} catch (error) {
 		if (signal.aborted || isMissingConfigError(error)) return;
@@ -292,6 +318,8 @@ async function initConfig(ctx: ExtensionCommandContext, signal?: AbortSignal) {
 	}
 
 	if (ctx.mode === "tui") {
+		const { showSetupWizard } = await import("./manager-ui.js");
+		throwIfAborted(signal);
 		await showSetupWizard(ctx, signal);
 		return;
 	}
@@ -383,8 +411,8 @@ function displayWebDavUrl(value: string | undefined, username: string | undefine
 	}
 }
 
-function throwIfAborted(signal: AbortSignal) {
-	if (!signal.aborted) return;
+function throwIfAborted(signal?: AbortSignal) {
+	if (!signal?.aborted) return;
 	throw signal.reason instanceof Error
 		? signal.reason
 		: new DOMException("The operation was aborted", "AbortError");
@@ -446,7 +474,6 @@ export {
 	preflightSnapshotApply,
 	protectSnapshotApplyPlan,
 } from "./snapshot-apply.js";
-export { backupLocal } from "./sync-operations.js";
 export {
 	canPullRemoteSessionsOnFirstSync,
 	canPullRemoteSettingsOnFirstSync,

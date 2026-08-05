@@ -19,7 +19,6 @@ import { lockFileExists, readLock, withLock } from "../src/lock.js";
 import { S3Client } from "../src/s3-client.js";
 import sync, {
 	appliedFileHashMap,
-	backupLocal,
 	canPullRemoteSessionsOnFirstSync,
 	canPullRemoteSettingsOnFirstSync,
 	filterSnapshotForConfigPolicy,
@@ -36,6 +35,7 @@ import sync, {
 	settingsHashMap,
 	snapshotWithoutSessions,
 } from "../src/sync.js";
+import { backupLocal } from "../src/sync-operations.js";
 
 import {
 	requiredConfig,
