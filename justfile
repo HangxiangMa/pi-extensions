@@ -63,6 +63,25 @@ pack name: (_validate-extension-name name)
 try name: (_validate-extension-name name)
     name={{quote(name)}}; extension_dir="./extensions/pi-$name"; if [[ ! -d "$extension_dir" ]]; then extension_dir="./experimental/pi-$name"; fi; [[ -d "$extension_dir" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; pi -e "$extension_dir"
 
+# Start Pi with the commonly used extensions loaded from this working tree
+# PI_TIMING reports startup timing for local extension development
+dev:
+    PI_TIMING=1 pi -ns -ne \
+        -e ./extensions/pi-accounts \
+        -e ./extensions/pi-btw \
+        -e ./extensions/pi-caffeinate \
+        -e ./extensions/pi-chrome-devtools \
+        -e ./extensions/pi-github-pr \
+        -e ./extensions/pi-goal \
+        -e ./extensions/pi-plan-mode \
+        -e ./extensions/pi-firecrawl \
+        -e ./extensions/pi-sync \
+        -e ./extensions/pi-usage \
+        -e ./extensions/pi-worktree \
+        -e ./extensions/pi-stamp \
+        -e ./extensions/pi-starship \
+        -e ./experimental/pi-codex-compact
+
 # Start a fresh Pi session with every local extension package loaded
 try-all:
     shopt -s nullglob; args=(); for package_json in ./extensions/pi-*/package.json ./experimental/pi-*/package.json; do args+=(-e "$(dirname "$package_json")"); done; pi -ne "${args[@]}"
