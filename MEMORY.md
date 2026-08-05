@@ -16,6 +16,7 @@
 - Treat `package.json#packageManager` plus CI/release workflows as the npm-version authority. A different npm can rewrite unrelated lock metadata or mishandle the alternate-Pi install matrix.
 - The pinned npm 12.0.2 rejects Node 25; run lockfile work under an installed supported runtime such as Node 22.22.2 instead of tolerating npm's compatibility warning.
 - A consumer cannot safely adopt an unpublished `pi-tui-kit` API in the same PR: clean `npm ci` resolves its semver dependency from the registry. Publish the Kit API before raising the consumer's reviewed compatibility floor; do not use local paths that break independent packaging.
+- Pi maintains separate managed npm roots for user and project packages; dependency deduplication is guaranteed only within one install root, not across scopes.
 - Official Pi can misresolve static `@earendil-works/pi-ai/api/*` imports beneath its compatibility alias. Prefer root exports; otherwise use a variable-specifier dynamic import.
 
 ### Processes, lifecycle, and state

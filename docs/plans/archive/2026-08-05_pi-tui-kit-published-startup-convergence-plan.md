@@ -2,8 +2,8 @@
 
 ## Goal
 
-Make active extensions resolve one registry-published `@narumitw/pi-tui-kit` version in a clean Pi
-installation, eliminate duplicate runtime copies from startup, and establish a repeatable benchmark
+Make active extensions resolve one registry-published `@narumitw/pi-tui-kit` version in each Pi
+managed npm install root, eliminate duplicate same-scope runtime copies from startup, and establish a repeatable benchmark
 that distinguishes module-import savings from work merely shifted into session startup.
 
 ## Context
@@ -72,7 +72,7 @@ that distinguishes module-import savings from work merely shifted into session s
       only intended `package-lock.json` metadata with Node 22 and npm 12.0.2, then inspect the diff.
 - [x] Pack all changed consumers and install their tarballs with the matching Pi peers into a clean
       temporary npm project; verify `npm ls @narumitw/pi-tui-kit --all` reports one physical published
-      version, no workspace/file link, no invalid range, and no duplicate Pi TUI Kit copy.
+      version in that managed npm scope, no workspace/file link, no invalid range, and no duplicate copy.
 - [x] Run focused command/menu tests for every adapted consumer, then run `npm run check`; verify TUI,
       RPC, unsupported-mode behavior, cancellation, disposal, session replacement, and shutdown remain
       unchanged wherever the dependency adaptation touched those paths.
@@ -87,7 +87,7 @@ that distinguishes module-import savings from work merely shifted into session s
 ## Completion Checklist
 
 - [x] Every active Pi TUI Kit consumer is reviewed individually and resolves the same published minor
-      from npm in the clean packed-consumer installation.
+      from npm in the clean same-scope packed-consumer installation.
 - [x] No consumer compiles or runs only because the repository exposes an unpublished workspace API.
 - [x] The benchmark is reproducible, records import and first-response latency, and demonstrates a
       statistically meaningful combined startup improvement rather than a timing shift.
@@ -99,7 +99,8 @@ that distinguishes module-import savings from work merely shifted into session s
 ## Execution Evidence
 
 - Completed 2026-08-05. Registry selection: `@narumitw/pi-tui-kit@0.46.0`; Node 22.23.1 and npm 12.0.2 regenerated the lockfile.
-- Packed and clean-installed all 22 active consumers. `npm ls --all` showed every consumer deduped to `0.46.0`; one physical package manifest was present. Every packed entry loaded through offline Pi RPC.
+- Packed and clean-installed all 22 active consumers in one managed npm root. `npm ls --all` showed every consumer deduped to `0.46.0`; one physical package manifest was present in that scope. Pi maintains separate user and project npm roots, so this evidence does not claim cross-scope physical deduplication. Every packed entry loaded through offline Pi RPC.
 - Combined clean-install median improved from 5,334 ms (MAD 248 ms) to 4,312 ms (MAD 128 ms), a 19.2% import reduction; first response improved from 6,859.38 ms to 5,468.48 ms.
 - Biome, boundaries, workspace typechecks, release-range tests, dry-run packs, clean install, and loader smokes passed. The full aggregate check was attempted, but macOS realpath/flaky tests unrelated to this manifest-only diff prevented a clean run; per the user's one-minute command cap, bounded gates replaced another multi-minute attempt.
+- Follow-up package audit moved every imported Pi-bundled core package to `peerDependencies: "*"`, retained exact development versions, and clean-installed the nine corrected packed consumers with their Pi peers.
 - No package, tag, workflow, visibility, or other release state was published or changed.
