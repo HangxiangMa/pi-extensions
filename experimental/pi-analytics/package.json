@@ -29,7 +29,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@narumitw/pi-tui-kit": "^0.45.0"
+		"@narumitw/pi-tui-kit": "^0.46.0"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*"
