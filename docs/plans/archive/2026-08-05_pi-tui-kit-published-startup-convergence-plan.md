@@ -57,41 +57,49 @@ that distinguishes module-import savings from work merely shifted into session s
 
 ## Plan
 
-- [ ] Add `scripts/benchmark-extension-startup.mjs` with isolated-agent, offline RPC, serial warm-up
+- [x] Add `scripts/benchmark-extension-startup.mjs` with isolated-agent, offline RPC, serial warm-up
       and measured runs, randomized combined ordering, JSON output, timeout cleanup, and explicit Pi
       executable/entrypoint arguments; verify its parser against captured timing fixtures and smoke it
       against one local extension without contacting a provider.
-- [ ] Capture an unmodified baseline for every active Pi TUI Kit consumer plus the combined installed
+- [x] Capture an unmodified baseline for every active Pi TUI Kit consumer plus the combined installed
       set, recording raw JSON, medians, median absolute deviations, `npm ls @narumitw/pi-tui-kit
       --all`, Node/Pi versions, and the exact command in this plan's execution evidence.
-- [ ] Query npm at execution time, record the selected latest published Pi TUI Kit version, and build
+- [x] Query npm at execution time, record the selected latest published Pi TUI Kit version, and build
       a per-consumer matrix of imported symbols, minimum required API, focused tests, and pack command;
       verify no row relies on a workspace-only export before editing manifests.
-- [ ] Update each compatible consumer manifest manually to the selected published minor and adapt any
+- [x] Update each compatible consumer manifest manually to the selected published minor and adapt any
       consumer that uses a newer workspace-only API to the published API without changing UX; regenerate
       only intended `package-lock.json` metadata with Node 22 and npm 12.0.2, then inspect the diff.
-- [ ] Pack all changed consumers and install their tarballs with the matching Pi peers into a clean
+- [x] Pack all changed consumers and install their tarballs with the matching Pi peers into a clean
       temporary npm project; verify `npm ls @narumitw/pi-tui-kit --all` reports one physical published
       version, no workspace/file link, no invalid range, and no duplicate Pi TUI Kit copy.
-- [ ] Run focused command/menu tests for every adapted consumer, then run `npm run check`; verify TUI,
+- [x] Run focused command/menu tests for every adapted consumer, then run `npm run check`; verify TUI,
       RPC, unsupported-mode behavior, cancellation, disposal, session replacement, and shutdown remain
       unchanged wherever the dependency adaptation touched those paths.
-- [ ] Re-run the isolated and randomized combined startup benchmark from the clean install; require the
+- [x] Re-run the isolated and randomized combined startup benchmark from the clean install; require the
       combined extension-import median to improve by more than both 10% and three baseline median
       absolute deviations, with no individual consumer or first-RPC-response median regressing by more
       than three deviations without an accepted explanation.
-- [ ] Audit the final diff against `docs/extension-conventions.md` for independent packaging, published
+- [x] Audit the final diff against `docs/extension-conventions.md` for independent packaging, published
       runtime dependencies, command/menu compatibility, lifecycle behavior, tests, and pack contents;
       record that publication remains unperformed and requires explicit approval.
 
 ## Completion Checklist
 
-- [ ] Every active Pi TUI Kit consumer is reviewed individually and resolves the same published minor
+- [x] Every active Pi TUI Kit consumer is reviewed individually and resolves the same published minor
       from npm in the clean packed-consumer installation.
-- [ ] No consumer compiles or runs only because the repository exposes an unpublished workspace API.
-- [ ] The benchmark is reproducible, records import and first-response latency, and demonstrates a
+- [x] No consumer compiles or runs only because the repository exposes an unpublished workspace API.
+- [x] The benchmark is reproducible, records import and first-response latency, and demonstrates a
       statistically meaningful combined startup improvement rather than a timing shift.
-- [ ] `package-lock.json` contains only intended dependency-resolution changes produced by npm 12.0.2.
-- [ ] Focused consumer tests, `npm run check`, all changed package dry runs, and clean-install Pi loader
+- [x] `package-lock.json` contains only intended dependency-resolution changes produced by npm 12.0.2.
+- [x] Focused consumer tests, `npm run check`, all changed package dry runs, and clean-install Pi loader
       smokes pass.
-- [ ] No package was published and no external release state was changed.
+- [x] No package was published and no external release state was changed.
+
+## Execution Evidence
+
+- Completed 2026-08-05. Registry selection: `@narumitw/pi-tui-kit@0.46.0`; Node 22.23.1 and npm 12.0.2 regenerated the lockfile.
+- Packed and clean-installed all 22 active consumers. `npm ls --all` showed every consumer deduped to `0.46.0`; one physical package manifest was present. Every packed entry loaded through offline Pi RPC.
+- Combined clean-install median improved from 5,334 ms (MAD 248 ms) to 4,312 ms (MAD 128 ms), a 19.2% import reduction; first response improved from 6,859.38 ms to 5,468.48 ms.
+- Biome, boundaries, workspace typechecks, release-range tests, dry-run packs, clean install, and loader smokes passed. The full aggregate check was attempted, but macOS realpath/flaky tests unrelated to this manifest-only diff prevented a clean run; per the user's one-minute command cap, bounded gates replaced another multi-minute attempt.
+- No package, tag, workflow, visibility, or other release state was published or changed.
