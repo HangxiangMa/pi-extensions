@@ -31,6 +31,60 @@ test("plan-mode registers flag, question tool, command, and safety hooks", () =>
 	assert.ok(mock.events.has("before_agent_start"));
 });
 
+test("non-interactive Plan routes do not load interactive UI", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash"] });
+	let interactiveLoads = 0;
+	planMode(mock.pi, {
+		readSettings: async () => ({ kind: "missing" as const }),
+		loadInteractiveUi: async () => {
+			interactiveLoads += 1;
+			return import("../src/interactive-ui.js");
+		},
+	});
+	const context = createMockContext({ mode: "tui" });
+	const sessionStart = mock.events.get("session_start")?.[0];
+	assert.ok(sessionStart);
+	await sessionStart({}, context.ctx);
+	assert.equal(interactiveLoads, 0);
+
+	const planCommand = mock.commands.get("plan");
+	assert.ok(planCommand);
+	await planCommand.handler("start", context.ctx);
+	assert.equal(interactiveLoads, 0);
+	await planCommand.handler("write a release plan", context.ctx);
+	assert.equal(interactiveLoads, 0);
+});
+
+test("stale Plan settings callbacks do not reload interactive UI", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash"] });
+	let interactiveLoads = 0;
+	let showSettings: ((signal: AbortSignal) => Promise<boolean>) | undefined;
+	planMode(mock.pi, {
+		readSettings: async () => ({ kind: "missing" as const }),
+		loadInteractiveUi: async () => {
+			interactiveLoads += 1;
+			return {
+				showPlanLaunchMenu: async (_ctx: unknown, options: unknown) => {
+					showSettings = (options as { settings(signal: AbortSignal): Promise<boolean> }).settings;
+				},
+			} as never;
+		},
+	});
+	const context = createMockContext({ mode: "tui" });
+	const planCommand = mock.commands.get("plan");
+	assert.ok(planCommand);
+	await planCommand.handler("", context.ctx);
+	assert.equal(interactiveLoads, 1);
+	assert.ok(showSettings);
+
+	const sessionShutdown = mock.events.get("session_shutdown")?.[0];
+	assert.ok(sessionShutdown);
+	await sessionShutdown({}, context.ctx);
+	await showSettings(new AbortController().signal);
+
+	assert.equal(interactiveLoads, 1);
+});
+
 test("plan_mode_complete result renders the plan as Markdown", () => {
 	initTheme("dark");
 	const mock = createMockPi({ activeTools: ["read", "bash"] });
