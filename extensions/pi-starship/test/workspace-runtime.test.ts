@@ -5,12 +5,9 @@ import { join } from "node:path";
 import test from "node:test";
 import { normalizeConfig } from "../src/config.js";
 import { execWorkspaceCommand } from "../src/runtime/command.js";
+import { parseRuntimeVersion } from "../src/runtime/languages.js";
 import { AsyncRefreshController } from "../src/runtime/refresh-controller.js";
-import {
-	collectWorkspaceSnapshot,
-	parseRuntimeVersion,
-	type WorkspaceExec,
-} from "../src/runtime/workspace.js";
+import { collectWorkspaceSnapshot, type WorkspaceExec } from "../src/runtime/workspace.js";
 
 function config(format: string, document: Record<string, unknown> = {}) {
 	return normalizeConfig({ format, ...document }).config;

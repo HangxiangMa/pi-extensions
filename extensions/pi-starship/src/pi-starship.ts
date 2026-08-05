@@ -6,7 +6,8 @@ import {
 	type ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { registerStarshipCommand } from "./commands.js";
+import { completeStarshipArguments } from "./command-contract.js";
+import type { StarshipCommandOptions } from "./commands.js";
 import {
 	type LoadedStarshipConfig,
 	loadStarshipConfig,
@@ -39,6 +40,19 @@ const REFRESH_INTERVAL_MS = 30_000;
 const GITHUB_PR_REFRESH_INTERVAL_MS = 60_000;
 const EVENT_DEBOUNCE_MS = 250;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+type StarshipCommands = typeof import("./commands.js");
+let starshipCommandsPromise: Promise<StarshipCommands> | undefined;
+
+function loadStarshipCommands(): Promise<StarshipCommands> {
+	if (!starshipCommandsPromise) {
+		starshipCommandsPromise = import("./commands.js").catch((error) => {
+			starshipCommandsPromise = undefined;
+			throw error;
+		});
+	}
+	return starshipCommandsPromise;
+}
 
 interface RuntimeState {
 	activeTools: Map<string, number>;
@@ -328,7 +342,7 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
 	};
 
 	const configPath = settingsFilePath(getAgentDir());
-	registerStarshipCommand(pi, {
+	const commandOptions: StarshipCommandOptions = {
 		settingsPath: configPath,
 		getLoaded: () => loaded ?? loadStarshipConfig(configPath),
 		getInspection: () => {
@@ -362,6 +376,15 @@ export default function piStarship(pi: ExtensionAPI, options: PiStarshipOptions 
 					"Live preview is unavailable until the footer is ready.",
 				]
 			);
+		},
+	};
+	pi.registerCommand("starship", {
+		description: "Customize or inspect the native Starship-style footer",
+		getArgumentCompletions: completeStarshipArguments,
+		handler: async (args, ctx) => {
+			const commands = await loadStarshipCommands();
+			if (sessionOwner !== ctx.sessionManager) return;
+			await commands.handleStarshipCommand(args, ctx, commandOptions);
 		},
 	});
 

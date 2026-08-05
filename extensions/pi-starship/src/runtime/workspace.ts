@@ -1,13 +1,7 @@
 import type { ModuleName } from "../modules/catalog.js";
 import { reachableModuleRequirements } from "../modules/render.js";
 import type { WorkspaceSnapshot } from "../modules/types.js";
-import { collectCloud } from "./cloud.js";
-import { collectDeployment } from "./deployment.js";
-import { collectDevelopment } from "./development.js";
-import { collectExecution } from "./execution.js";
 import { createFileSystem } from "./helpers.js";
-import { collectLanguages } from "./languages.js";
-import { collectPackage } from "./package.js";
 import {
 	type CollectorContext,
 	type MutableModuleSnapshot,
@@ -16,9 +10,6 @@ import {
 	type WorkspaceRefreshInput,
 } from "./types.js";
 
-export { parseTerraformVersion } from "./deployment.js";
-export { parseDirenvStatus, parseMiseHealth } from "./development.js";
-export { parseRuntimeVersion } from "./languages.js";
 export type { WorkspaceExec, WorkspaceExecResult, WorkspaceRefreshInput } from "./types.js";
 
 export async function collectWorkspaceSnapshot(
@@ -45,16 +36,17 @@ export async function collectWorkspaceSnapshot(
 		},
 	};
 	const modules: MutableModuleSnapshot = {};
-	const packageValues = await collectPackage(context);
-	if (input.signal?.aborted) return freezeSnapshot({});
-	if (packageValues) modules.package = packageValues;
-	for (const collector of [
-		collectLanguages,
-		collectDevelopment,
-		collectDeployment,
-		collectCloud,
-		collectExecution,
-	]) {
+	if (requirements.has("package")) {
+		const { collectPackage } = await import("./package.js");
+		if (input.signal?.aborted) return freezeSnapshot({});
+		const packageValues = await collectPackage(context);
+		if (input.signal?.aborted) return freezeSnapshot({});
+		if (packageValues) modules.package = packageValues;
+	}
+	for (const descriptor of COLLECTOR_GROUPS) {
+		if (!descriptor.modules.some((name) => requirements.has(name))) continue;
+		if (input.signal?.aborted) return freezeSnapshot({});
+		const collector = await descriptor.load();
 		if (input.signal?.aborted) return freezeSnapshot({});
 		mergeModules(modules, await collector(context));
 	}
@@ -73,6 +65,34 @@ function hasWorkspaceRequirement(
 ): boolean {
 	return [...requirements.keys()].some((name) => !BUILT_IN_ONLY_MODULES.has(name));
 }
+
+type WorkspaceCollector = (context: CollectorContext) => Promise<MutableModuleSnapshot>;
+
+const COLLECTOR_GROUPS: readonly {
+	modules: readonly ModuleName[];
+	load(): Promise<WorkspaceCollector>;
+}[] = [
+	{
+		modules: ["nodejs", "python", "rust", "golang", "bun", "deno"],
+		load: async () => (await import("./languages.js")).collectLanguages,
+	},
+	{
+		modules: ["mise", "direnv", "pixi", "conda", "nix_shell", "guix_shell"],
+		load: async () => (await import("./development.js")).collectDevelopment,
+	},
+	{
+		modules: ["docker_context", "kubernetes", "terraform"],
+		load: async () => (await import("./deployment.js")).collectDeployment,
+	},
+	{
+		modules: ["aws", "gcloud", "azure", "openstack"],
+		load: async () => (await import("./cloud.js")).collectCloud,
+	},
+	{
+		modules: ["container", "hostname", "os", "username"],
+		load: async () => (await import("./execution.js")).collectExecution,
+	},
+];
 
 const BUILT_IN_ONLY_MODULES = new Set<ModuleName>([
 	"brand",

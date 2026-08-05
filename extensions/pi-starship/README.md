@@ -633,7 +633,8 @@ Keep `extension_status` last in the catalog so arbitrary third-party statuses fo
 - `src/index.ts` — Pi package entrypoint.
 - `src/pi-starship.ts` — extension lifecycle, cached refresh binding, live preview, and footer.
 - `src/usage.ts` — native-aligned session usage and cache aggregation.
-- `src/commands.ts` — goal-oriented menu, preview/confirmation flow, diagnostics, and compatibility routes.
+- `src/command-contract.ts` — lightweight command routes and completions loaded at startup.
+- `src/commands.ts` — lazily loaded menu, preview/confirmation flow, diagnostics, and compatibility routes.
 - `src/command-inspector.ts` — adaptive Explain and searchable read-only module inspection surfaces.
 - `src/command-preview.ts` — adaptive, scrollable, keybinding-aware preview action surface.
 - `src/config.ts` — TOML loading, draft validation, defaults, atomic persistence, and rollback.
@@ -642,7 +643,7 @@ Keep `extension_status` last in the catalog so arbitrary third-party statuses fo
 - `src/modules/git/` — bounded local Git reader plus branch, status, and worktree modules.
 - `src/modules/github-pr.ts` — pure native GitHub PR snapshot presentation.
 - `src/runtime/github-pr.ts` — bounded `gh` query, validation, terminal-safe links, and expiry data.
-- `src/runtime/` — shared refresh controller and bounded package/language/context collectors.
+- `src/runtime/` — shared refresh controller and requirement-gated, lazily loaded package/language/context collectors.
 
 ## 🔎 Keywords
 
