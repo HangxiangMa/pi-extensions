@@ -1,5 +1,4 @@
 import { stripVTControlCharacters } from "node:util";
-import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
 import {
 	Key,
 	matchesKey,
@@ -14,6 +13,7 @@ import type {
 	MenuScreenComponentOptions,
 } from "./contracts.js";
 import { menuHint, renderFrame, safeMenuText } from "./rendering.js";
+import { getLanguageFromPath, highlightCode } from "./syntax-highlighting.js";
 
 const DEFAULT_REVIEW_VIEWPORT_SIZE = 14;
 const RPC_REVIEW_VIEWPORT_SIZE = 8;
@@ -304,9 +304,7 @@ function formatReviewLines<ActionId extends string>(
 	if (format.kind === "code") {
 		const language =
 			format.language ?? (format.filePath ? getLanguageFromPath(format.filePath) : undefined);
-		return segments.map(({ text }) =>
-			theme.fg("mdCodeBlock", highlightCode(text, language)[0] ?? text),
-		);
+		return segments.map(({ text }) => highlightCode(text, language, theme));
 	}
 	if (format.kind === "diff") {
 		return segments.map(({ source, text }) => {

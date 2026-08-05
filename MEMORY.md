@@ -17,7 +17,7 @@
 - The pinned npm 12.0.2 rejects Node 25; run lockfile work under an installed supported runtime such as Node 22.22.2 instead of tolerating npm's compatibility warning.
 - A consumer cannot safely adopt an unpublished `pi-tui-kit` API in the same PR: clean `npm ci` resolves its semver dependency from the registry. Publish the Kit API before raising the consumer's reviewed compatibility floor; do not use local paths that break independent packaging.
 - Pi maintains separate managed npm roots for user and project packages; dependency deduplication is guaranteed only within one install root, not across scopes.
-- A static `pi-tui-kit` import in a source-loaded extension can evaluate a second repository-resolved Pi/TUI runtime and add over a second to startup. Lazy-load command-only menus and revalidate session ownership after the import.
+- A `pi-tui-kit` runtime import of the `pi-coding-agent` root can evaluate a second repository-resolved agent runtime and add over a second. Keep Kit production JavaScript on public `pi-tui` primitives with coding-agent type-only, and lazy-load command menus until consumers require that published Kit boundary.
 - Official Pi can misresolve static `@earendil-works/pi-ai/api/*` imports beneath its compatibility alias. Prefer root exports; otherwise use a variable-specifier dynamic import.
 
 ### Processes, lifecycle, and state

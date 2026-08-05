@@ -236,6 +236,48 @@ test("review formats code and diffs through theme-aware display paths", () => {
 	assert.match(rendered, /accent:@@ header/);
 });
 
+test("code review uses the injected theme for inferred syntax tokens and safe fallback", () => {
+	const inferred = reviewComponentHarness(
+		{
+			...reviewScreen,
+			content: "const answer: number = 42;",
+			format: { kind: "code", filePath: "answer.ts" },
+			confirm: undefined,
+		},
+		true,
+	);
+	const highlighted = inferred.component.render(80).join("\n");
+	assert.match(highlighted, /syntaxKeyword:const/u);
+	assert.match(highlighted, /syntaxType:number/u);
+	assert.match(highlighted, /syntaxNumber:42/u);
+
+	const explicit = reviewComponentHarness(
+		{
+			...reviewScreen,
+			content: "++>---",
+			format: { kind: "code", language: "brainfuck" },
+			confirm: undefined,
+		},
+		true,
+	);
+	const explicitlyHighlighted = explicit.component.render(80).join("\n");
+	assert.match(explicitlyHighlighted, /\+\+>/u);
+	assert.match(explicitlyHighlighted, /syntaxNumber:-/u);
+
+	const unknown = reviewComponentHarness(
+		{
+			...reviewScreen,
+			content: "plain value",
+			format: { kind: "code", language: "not-a-language" },
+			confirm: undefined,
+		},
+		true,
+	);
+	const fallback = unknown.component.render(80).join("\n");
+	assert.match(fallback, /mdCodeBlock:mdCodeBlock:plain value/u);
+	assert.doesNotMatch(fallback, /syntax(?:Keyword|Type|Number):/u);
+});
+
 test("TUI adaptive review reads live host rows and invokes its raw confirmation action", async () => {
 	const invoked: string[] = [];
 	const frameHeights: number[] = [];
