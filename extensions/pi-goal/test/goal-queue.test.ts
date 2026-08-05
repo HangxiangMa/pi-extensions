@@ -1,3 +1,5 @@
+// Cohesion justification: this integration matrix owns ordered-queue activation, settlement,
+// persistence, and rollback invariants that share one queue-aware extension harness.
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

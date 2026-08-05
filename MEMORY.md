@@ -60,6 +60,7 @@
 - Lease snapshots and non-replayed events need a monotonic generation so an older HTTP snapshot cannot clear state established by newer SSE data.
 - Pi's `sendUserMessage()` is fire-and-forget. Browser APIs must preflight idle model/auth state before acknowledging, and final message projection must run after later `message_end` handlers can replace the message.
 - Goal-owned markers must be bounded to the originating goal id and include a unique nonce where iterations can repeat. On failed delivery, restore prior state only if that prompt still owns the current goal.
+- A failed pi-goal always-mode tool restore must leave visibility unlocked while retaining the exact hidden-tool ownership set, so a later session can retry without claiming externally hidden tools.
 - Activate completed-goal successors and busy priority changes only from the settled idle boundary; persist pending priority intent so reload cannot lose it or charge the old run to the new goal.
 - Reject exhausted stopped goals before rotating their id. If `/goal resume` delivery fails, restore the original stopped state, id, and stale-tool guard.
 - Do not classify transient rate limits, HTTP 429, or server failures as goal `usage_limited`; reserve it for explicit quota, subscription, credit, or billing exhaustion.

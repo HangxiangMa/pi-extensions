@@ -483,25 +483,12 @@ function applyToolVisibility(
 	next: GoalSettings,
 	ctx: ExtensionCommandContext,
 ) {
-	if (previous.toolVisibility === next.toolVisibility) return;
-	if (next.toolVisibility === "always") {
-		if (runtime.goalToolsHiddenByPolicy.size > 0 && ctx.isIdle() !== true) {
-			throw new Error("Wait for Pi to become idle before revealing Goal tools.");
-		}
-		runtime.restoreGoalToolsHiddenByPolicy();
-		runtime.goalToolsUnlocked = true;
-		return;
-	}
-	if (runtime.activeGoal) {
-		runtime.goalToolsUnlocked = true;
-		runtime.goalToolsHiddenByPolicy.clear();
-		return;
-	}
-	if (ctx.isIdle() !== true) {
-		throw new Error("Wait for Pi to become idle before hiding Goal tools.");
-	}
-	runtime.goalToolsUnlocked = false;
-	runtime.hideGoalToolsIfLocked();
+	runtime.toolPolicy.applyVisibilityChange(
+		previous.toolVisibility,
+		next.toolVisibility,
+		runtime.activeGoal !== undefined,
+		ctx,
+	);
 }
 
 function applyQueueSetting(runtime: GoalRuntime, ctx: ExtensionCommandContext) {

@@ -313,9 +313,13 @@ This breaking contract replaces and removes `pi-goal:rpc:start`, `pi-goal:rpc:pa
 extensions/pi-goal/
 ├── src/
 │   ├── index.ts      # Pi package entrypoint
-│   ├── goal.ts       # Tool contracts and lifecycle orchestration
+│   ├── goal.ts       # Order-explicit extension composition root
+│   ├── command-registration.ts # Pi slash-command adapter
 │   ├── commands.ts   # Per-factory user-command and queue mutation controller
-│   ├── runtime.ts    # Per-factory state, prompt ownership, budgets, and tool policy
+│   ├── tools.ts      # Goal completion and blocker tool adapters
+│   ├── lifecycle.ts  # Pi session, agent, tool, and compaction event adapter
+│   ├── runtime.ts    # Per-factory Goal state, transitions, prompts, and budgets
+│   ├── tool-policy.ts # Goal tool visibility ownership and rollback
 │   ├── safety.ts     # Output normalization and no-progress fingerprint state
 │   ├── errors.ts     # Pi-aligned provider error and retry classification
 │   ├── markers.ts    # Bounded Goal prompt marker parsing and formatting

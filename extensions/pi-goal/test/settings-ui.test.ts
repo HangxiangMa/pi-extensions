@@ -19,13 +19,16 @@ initTheme("dark", false);
 function runtime() {
 	const mock = createMockPi({ activeTools: ["read"] });
 	const state = new GoalRuntime(mock.pi) as GoalRuntime & {
-		readonly visibility: ReturnType<GoalRuntime["snapshotGoalToolVisibility"]>;
+		readonly visibility: ReturnType<GoalRuntime["toolPolicy"]["snapshot"]>;
 	};
 	state.settings = structuredClone(DEFAULT_GOAL_SETTINGS);
-	state.goalToolsHiddenByPolicy.add("goal_complete");
-	state.goalToolsHiddenByPolicy.add("goal_blocked");
+	state.toolPolicy.restore({
+		activeTools: ["read"],
+		goalToolsUnlocked: false,
+		goalToolsHiddenByPolicy: ["goal_complete", "goal_blocked"],
+	});
 	Object.defineProperty(state, "visibility", {
-		get: () => state.snapshotGoalToolVisibility(),
+		get: () => state.toolPolicy.snapshot(),
 	});
 	return state;
 }
@@ -217,7 +220,7 @@ test("hiding always-visible Goal tools rejects a busy unrelated run", () => {
 	const mock = createMockPi({ activeTools: ["read", "goal_complete", "goal_blocked"] });
 	const state = new GoalRuntime(mock.pi);
 	state.settings = structuredClone(DEFAULT_GOAL_SETTINGS);
-	const before = state.snapshotGoalToolVisibility();
+	const before = state.toolPolicy.snapshot();
 	const next = {
 		...structuredClone(state.settings),
 		toolVisibility: "after-first-goal" as const,
@@ -236,7 +239,7 @@ test("hiding always-visible Goal tools rejects a busy unrelated run", () => {
 	);
 	assert.equal(saves, 0);
 	assert.equal(state.settings.toolVisibility, "always");
-	assert.deepEqual(state.snapshotGoalToolVisibility(), before);
+	assert.deepEqual(state.toolPolicy.snapshot(), before);
 });
 
 test("lowering the no-progress limit pauses and aborts in-flight Goal work", () => {
