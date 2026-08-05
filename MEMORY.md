@@ -93,7 +93,7 @@
 - Live provider smokes are acceptable when relevant, but stop after one clear external or entitlement failure and fall back to deterministic tests unless the user asks to retry.
 - Keep a predecessor extension active while its successor soaks; deprecate it only after an explicit follow-up decision.
 - Prefer an executable repository plan before non-trivial implementation, verify it, and archive it when complete.
-- Prefer manually reviewed `pi-tui-kit` dependency-floor changes per consumer; do not automatically synchronize compatibility ranges with the workspace version.
+- Prefer a registry-published `pi-tui-kit` version and manually review dependency-floor changes per consumer; never target an unpublished workspace version or automatically synchronize compatibility ranges.
 - Keep package versions out of long-lived guidance; derive current values from manifests, lockfiles, or workflows unless a version is itself historical compatibility evidence.
 - Keep `just` install recipes resilient: verify registry visibility first and fall back to the local workspace only when it solves the current install path.
 

@@ -40,7 +40,7 @@
 		"directory": "extensions/pi-btw"
 	},
 	"dependencies": {
-		"@narumitw/pi-tui-kit": "^0.42.0"
+		"@narumitw/pi-tui-kit": "^0.46.0"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-ai": "*",
