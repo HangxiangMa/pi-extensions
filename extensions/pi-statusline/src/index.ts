@@ -1,1 +1,1 @@
-export { default } from "../dist/statusline.js";
+export { default } from "./statusline.js";

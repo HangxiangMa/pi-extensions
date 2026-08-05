@@ -13,8 +13,7 @@
 		"footer"
 	],
 	"files": [
-		"src/index.ts",
-		"dist",
+		"src",
 		"README.md",
 		"LICENSE"
 	],
@@ -24,10 +23,8 @@
 		]
 	},
 	"scripts": {
-		"build": "node --test scripts/build-runtime.test.mjs && node scripts/build-runtime.mjs",
-		"check": "npm run build && biome check --vcs-use-ignore-file=false src test scripts package.json tsconfig.json README.md && npm run typecheck",
-		"format": "biome check --write --vcs-use-ignore-file=false src test scripts package.json tsconfig.json README.md",
-		"prepack": "npm run build",
+		"check": "biome check --vcs-use-ignore-file=false src test package.json tsconfig.json README.md && npm run typecheck",
+		"format": "biome check --write --vcs-use-ignore-file=false src test package.json tsconfig.json README.md",
 		"typecheck": "tsc --noEmit"
 	},
 	"peerDependencies": {
@@ -39,7 +36,6 @@
 		"@earendil-works/pi-coding-agent": "0.83.0",
 		"@earendil-works/pi-tui": "0.83.0",
 		"@types/node": "26.1.2",
-		"esbuild": "0.28.1",
 		"typescript": "7.0.2"
 	},
 	"repository": {
