@@ -185,7 +185,7 @@ test("After Implement cycles outcomes and export destination saves, previews, re
 		assert.match(frame, /Export destination/i);
 		assert.match(frame, /PLAN\.md/);
 		assert.match(
-			frame,
+			tui.render(240).join("\n"),
 			new RegExp(
 				settingsPath
 					.replace("pi-plan-mode.json", "PLAN.md")

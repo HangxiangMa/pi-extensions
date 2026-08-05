@@ -243,7 +243,7 @@ test("btw menu exposes malformed settings as read-only", async () => {
 		});
 		await openSettings(tui);
 		assert.match(tui.render().join("\n"), /Read only/);
-		assert.match(tui.render().join("\n"), /Fix .*pi-btw\.json before\s+saving/);
+		assert.match(tui.render(240).join("\n"), /Fix .*pi-btw\.json before saving/);
 		tui.press("ctrl+c");
 		assert.equal(await running, "closed");
 		assert.equal(await readFile(settingsPath, "utf8"), "{broken");
