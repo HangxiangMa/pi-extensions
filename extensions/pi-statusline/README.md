@@ -35,11 +35,11 @@ A representative uncolored layout:
 pi install npm:@narumitw/pi-statusline
 ```
 
-Try it without installing, or load it from this repository:
+Try the published package without installing, or use the build-aware recipe from this repository:
 
 ```bash
 pi -e npm:@narumitw/pi-statusline
-pi -e ./extensions/pi-statusline
+just try statusline
 ```
 
 For the best result, use a terminal font that includes Powerline glyphs and emoji.
@@ -335,9 +335,13 @@ Put transient activity in the value and always clear the same complete key.
 
 ```text
 extensions/pi-statusline/
+├── dist/                 # generated split runtime and source maps
+├── scripts/
+│   └── build-runtime.mjs # deterministic bundler and eager-import validator
 ├── src/
-│   ├── index.ts
-│   ├── statusline.ts
+│   ├── index.ts          # thin entrypoint forwarding to dist
+│   ├── statusline.ts     # authoritative lifecycle implementation
+│   ├── command-contract.ts
 │   ├── render.ts
 │   ├── directory.ts
 │   ├── usage.ts
@@ -357,7 +361,8 @@ extensions/pi-statusline/
 └── package.json
 ```
 
-`src/index.ts` is the thin Pi entrypoint; all other modules are package-internal.
+`src/` remains the authoritative implementation. The package build emits `dist/` before local
+loading or packing, while `src/index.ts` remains the sole declared Pi entrypoint.
 
 ## 🔎 Keywords
 

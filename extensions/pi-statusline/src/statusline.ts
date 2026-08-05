@@ -4,7 +4,8 @@ import {
 	type ExtensionContext,
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { registerStatuslineCommand } from "./commands.js";
+import { completeStatuslineArguments } from "./command-contract.js";
+import type { StatuslineCommandOptions } from "./commands.js";
 import {
 	buildExtensionStatusIconAliases,
 	type ExtensionStatusIconAliasMap,
@@ -26,6 +27,19 @@ const STATUSLINE_KEY = "statusline";
 const GIT_STATUS_REFRESH_INTERVAL_MS = 30_000;
 const GIT_STATUS_EVENT_DEBOUNCE_MS = 250;
 const EMPTY_EXTENSION_STATUS_ICON_ALIASES: ExtensionStatusIconAliasMap = new Map();
+
+type StatuslineCommands = typeof import("./commands.js");
+let statuslineCommandsPromise: Promise<StatuslineCommands> | undefined;
+
+function loadStatuslineCommands(): Promise<StatuslineCommands> {
+	if (!statuslineCommandsPromise) {
+		statuslineCommandsPromise = import("./commands.js").catch((error) => {
+			statuslineCommandsPromise = undefined;
+			throw error;
+		});
+	}
+	return statuslineCommandsPromise;
+}
 
 export default function statusline(pi: ExtensionAPI) {
 	let loaded: LoadedStatuslineSettings | undefined;
@@ -193,7 +207,7 @@ export default function statusline(pi: ExtensionAPI) {
 
 	const agentDir = getAgentDir();
 	const configPath = settingsFilePath(agentDir);
-	registerStatuslineCommand(pi, {
+	const commandOptions: StatuslineCommandOptions = {
 		settingsPath: configPath,
 		getLoaded: () => loaded ?? loadStatuslineSettings(configPath),
 		getMenuOwner: () => {
@@ -213,6 +227,15 @@ export default function statusline(pi: ExtensionAPI) {
 			if (ctx.sessionManager !== activeSessionManager) return;
 			previewPalettePreset = palettePreset;
 			refresh();
+		},
+	};
+	pi.registerCommand("statusline", {
+		description: "Open or inspect the statusline settings",
+		getArgumentCompletions: completeStatuslineArguments,
+		handler: async (args, ctx) => {
+			const commands = await loadStatuslineCommands();
+			if (ctx.sessionManager !== activeSessionManager) return;
+			await commands.handleStatuslineCommand(args, ctx, commandOptions);
 		},
 	});
 
