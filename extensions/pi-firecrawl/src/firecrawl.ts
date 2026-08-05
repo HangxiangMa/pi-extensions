@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { hasApiKey } from "./client.js";
 import { cleanupResponseArtifacts, openResponseArtifacts } from "./response-format.js";
 import { loadSettings } from "./settings.js";
@@ -138,6 +137,10 @@ async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: numbe
 		ctx.ui.notify(`${buildCommandGuide()}\n\n${status}`, hasApiKey() ? "info" : "warning");
 		return;
 	}
+	const menuSignal = currentFirecrawlSessionSignal();
+	const isCurrent = () => isCurrentFirecrawlSession(generation) && !menuSignal.aborted;
+	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+	if (!isCurrent()) return;
 
 	type Screen = "main";
 	type Action = keyof typeof MENU_OPTIONS;
@@ -187,8 +190,8 @@ async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: numbe
 	});
 	await runMenu(ctx, menu, {
 		getState: () => undefined,
-		signal: currentFirecrawlSessionSignal(),
-		isCurrent: () => isCurrentFirecrawlSession(generation),
+		signal: menuSignal,
+		isCurrent,
 	});
 }
 

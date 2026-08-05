@@ -1,6 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu, runTask } from "@narumitw/pi-tui-kit";
+import type { MenuDefinition } from "@narumitw/pi-tui-kit";
 import type { ClearAnalyticsResult } from "./storage/files.js";
 import type {
 	AnalyticsSnapshot,
@@ -50,7 +50,7 @@ export function createAnalyticsMenu(source: AnalyticsMenuDataSource, now: () => 
 	};
 	const getState = ({ signal }: { signal: AbortSignal }): Promise<AnalyticsMenuState> =>
 		loadState(signal);
-	const menu = defineMenu<AnalyticsMenuState, Screen, Action>({
+	const menu: MenuDefinition<AnalyticsMenuState, Screen, Action> = {
 		start: "main",
 		screens: {
 			main: ({ state }) => ({
@@ -142,7 +142,7 @@ export function createAnalyticsMenu(source: AnalyticsMenuDataSource, now: () => 
 				return signal.aborted ? { kind: "close" } : { kind: "to", screen: "main" };
 			},
 		},
-	});
+	};
 	return {
 		menu,
 		getState,
@@ -158,6 +158,8 @@ export async function showAnalyticsMenu(
 	source: AnalyticsMenuDataSource,
 	options: { signal: AbortSignal; isCurrent: () => boolean },
 ): Promise<void> {
+	const { runMenu, runTask } = await import("@narumitw/pi-tui-kit");
+	if (options.signal.aborted || !options.isCurrent()) return;
 	const controller = createAnalyticsMenu(source);
 	const loading = await runTask(ctx, {
 		label: "Loading local analytics…",

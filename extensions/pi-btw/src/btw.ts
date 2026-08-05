@@ -12,7 +12,7 @@ import {
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { defineMenu, type MenuContext, type RunMenuResult, runMenu } from "@narumitw/pi-tui-kit";
+import type { MenuContext, RunMenuResult } from "@narumitw/pi-tui-kit";
 import {
 	type BtwBringToMainSegment,
 	type BtwBringToMainSummary,
@@ -600,6 +600,8 @@ async function showBringToMainPreview(
 	draft: string,
 	summary: BtwBringToMainSummary,
 ): Promise<BtwBringToMainPreviewAction> {
+	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+	if (ctx.signal?.aborted) return { kind: "close" };
 	let confirmed = false;
 	const count = summary.messages === 1 ? "1 message" : `${summary.messages} messages`;
 	const lineCount = summary.lines === 1 ? "1 line" : `${summary.lines} lines`;
@@ -637,6 +639,8 @@ async function showBtwMenu(
 	options: readonly string[],
 	initialValue?: string,
 ): Promise<BtwMenuSelectorAction> {
+	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+	if (ctx.signal?.aborted) return { kind: "close" };
 	const items = options.map((label, index) => ({ id: `option-${index}`, label }));
 	const initialIndex = initialValue === undefined ? -1 : options.indexOf(initialValue);
 	let selectedValue: string | undefined;

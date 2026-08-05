@@ -8,7 +8,6 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, OverlayOptions } from "@earendil-works/pi-tui";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { type JupyterScrollDirection, registerJupyterCommand } from "./jupyter-command.js";
 import {
 	jupyterHelpLines,
@@ -363,8 +362,14 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 	async function showJupyterMenu(ctx: ExtensionCommandContext): Promise<void> {
 		requireTui(ctx);
 		const generation = sessionGeneration;
+		const menuSignal = menuController.signal;
 		let notebookPaths: string[] = [];
-		const current = () => generation === sessionGeneration && !menuController.signal.aborted;
+		const current = () =>
+			generation === sessionGeneration &&
+			menuController.signal === menuSignal &&
+			!menuSignal.aborted;
+		const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+		if (!current()) return;
 		type Screen = "main" | "picker" | "help";
 		type Action = "open" | "choose" | "focus" | "refresh" | "close" | "pick";
 		const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
@@ -475,7 +480,7 @@ function registerJupyterPreview(pi: ExtensionAPI, dependencies: JupyterPreviewDe
 		});
 		await runMenu(ctx, menu, {
 			getState: () => undefined,
-			signal: menuController.signal,
+			signal: menuSignal,
 			isCurrent: current,
 		});
 	}

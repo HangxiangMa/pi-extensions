@@ -6,7 +6,6 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import type { PreparedAttachment } from "./attachments.js";
 import { ConversationProjection, projectBranchMessages } from "./conversation.js";
 import { DEFAULT_IMAGE_LIMITS, type ImageLimits, imageLimits } from "./image-limits.js";
@@ -437,6 +436,10 @@ export class WebUIRuntime {
 		start: "main" | "settings" | "repair",
 	): Promise<void> {
 		const generation = this.generation;
+		const menuSignal = this.sessionAbort.signal;
+		const isCurrent = () => generation === this.generation && !this.closed && !menuSignal.aborted;
+		const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+		if (!isCurrent()) return;
 		type Screen = "main" | "settings" | "repair" | "status" | "help";
 		type Action = "open" | "settings" | "save-startup";
 		const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
@@ -542,8 +545,8 @@ export class WebUIRuntime {
 		});
 		await runMenu(ctx, menu, {
 			getState: () => undefined,
-			signal: this.sessionAbort.signal,
-			isCurrent: () => generation === this.generation && !this.closed,
+			signal: menuSignal,
+			isCurrent,
 		});
 	}
 

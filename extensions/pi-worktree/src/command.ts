@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import {
 	addWorktree,
 	administrativeHistoryOids,
@@ -84,6 +83,8 @@ export function registerWorktreeCommand(
 				const root = settings.get();
 				const warning = root.warning ? " — settings warning" : "";
 				const owner = getMenuOwner();
+				const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+				if (owner.signal.aborted || !owner.isCurrent()) return;
 				const runFlow = async (flow: () => Promise<void>) => {
 					try {
 						await flow();
@@ -646,6 +647,8 @@ async function selectWorktree(
 		ctx.ui.notify("No eligible worktrees are available for this action.", "info");
 		return undefined;
 	}
+	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+	if (signal?.aborted || ctx.signal?.aborted) return undefined;
 	let selected: WorktreeRecord | undefined;
 	const menu = defineMenu<undefined, "worktrees", "choose", ExtensionCommandContext>({
 		start: "worktrees",

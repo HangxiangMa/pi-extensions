@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { shutdownManagedBrowser } from "./browser-manager.js";
 import { state } from "./runtime.js";
 import { loadSettings } from "./settings.js";
@@ -136,6 +135,10 @@ async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: numbe
 		ctx.ui.notify(`${buildCommandGuide()}\n\n${status}`, "info");
 		return;
 	}
+	const menuSignal = state.sessionController.signal;
+	const isCurrent = () => generation === state.sessionGeneration && !menuSignal.aborted;
+	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+	if (!isCurrent()) return;
 
 	type Screen = "main";
 	type Action = keyof typeof MENU_OPTIONS;
@@ -183,8 +186,8 @@ async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: numbe
 	});
 	await runMenu(ctx, menu, {
 		getState: () => undefined,
-		signal: state.sessionController.signal,
-		isCurrent: () => generation === state.sessionGeneration,
+		signal: menuSignal,
+		isCurrent,
 	});
 }
 

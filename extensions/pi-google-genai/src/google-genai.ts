@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import {
 	DEFAULT_MODEL,
 	GOOGLE_GENAI_TOOL_NAMES,
@@ -239,6 +238,8 @@ async function selectTools(
 	menuSignal: AbortSignal,
 ) {
 	if (!ctx.hasUI) throw new Error("/google-genai tools requires TUI or RPC mode.");
+	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+	if (menuSignal.aborted || !isCurrent()) return;
 	type Screen = "tools";
 	type Action = "toggle" | "enableAll" | "disableAll";
 	const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({

@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import type { MenuDefinition } from "@narumitw/pi-tui-kit";
 import type {
 	CodexCompactSettings,
 	CodexCompactSettingsRuntime,
@@ -63,8 +63,8 @@ async function update(
 export function createCodexCompactMenu(
 	runtime: CodexCompactSettingsRuntime,
 	options: { onCompactRequested?: () => void; status?: CompactMenuStatus } = {},
-) {
-	return defineMenu<CodexCompactSettingsState, Screen, Action, ExtensionCommandContext>({
+): MenuDefinition<CodexCompactSettingsState, Screen, Action, ExtensionCommandContext> {
+	return {
 		start: "main",
 		screens: {
 			main: ({ state }) => ({
@@ -178,7 +178,7 @@ export function createCodexCompactMenu(
 			"set-notify": ({ ctx, value, signal }) =>
 				update(runtime, ctx, { notifyOnFallback: value === "On" }, signal),
 		},
-	});
+	};
 }
 
 export async function showCodexCompactMenu(
@@ -190,6 +190,8 @@ export async function showCodexCompactMenu(
 		ctx.ui.notify(`Edit Codex compaction settings at ${safeText(runtime.get().path)}.`, "info");
 		return;
 	}
+	const { runMenu } = await import("@narumitw/pi-tui-kit");
+	if (owner.signal.aborted || !owner.isCurrent()) return;
 	let compactRequested = false;
 	await runMenu(
 		ctx,

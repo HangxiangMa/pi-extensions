@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import type { MenuDefinition } from "@narumitw/pi-tui-kit";
 import {
 	canonicalizeLocale,
 	canonicalizeTimeZone,
@@ -33,10 +33,12 @@ export interface StampMenuOwner {
 	isCurrent(): boolean;
 }
 
-export function createStampMenu(runtime: StampSettingsRuntime) {
+export function createStampMenu(
+	runtime: StampSettingsRuntime,
+): MenuDefinition<StampSettingsState, StampScreen, StampAction, ExtensionCommandContext> {
 	let localeEntry = false;
 	let timeZoneEntry = false;
-	return defineMenu<StampSettingsState, StampScreen, StampAction, ExtensionCommandContext>({
+	return {
 		start: "main",
 		screens: {
 			main: ({ state }) => ({
@@ -362,14 +364,16 @@ export function createStampMenu(runtime: StampSettingsRuntime) {
 				return result;
 			},
 		},
-	});
+	};
 }
 
-export function showStampMenu(
+export async function showStampMenu(
 	ctx: ExtensionCommandContext,
 	runtime: StampSettingsRuntime,
 	owner: StampMenuOwner,
 ) {
+	const { runMenu } = await import("@narumitw/pi-tui-kit");
+	if (owner.signal.aborted || !owner.isCurrent()) return { kind: "stale" } as const;
 	return runMenu(ctx, createStampMenu(runtime), {
 		getState: () => runtime.get(),
 		signal: owner.signal,
