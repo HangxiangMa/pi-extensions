@@ -6,13 +6,14 @@
 
 - Node's strip-only TypeScript loader rejects parameter properties and does not remap NodeNext `./module.js` imports to local `.ts` files. For direct-source tests, avoid parameter properties or compile to a temporary JS outDir first.
 - A focused `node --test` run can reject a compiled test beneath `node_modules/.cache`; pass the test file's realpath.
+- Subprocess timing tests must start behavior deadlines after a child readiness handshake; full-suite load can consume short deadlines during module startup and falsely report blocked I/O.
 - Do not run root checks and the `pi-tui-kit` build/check concurrently: both clear `packages/pi-tui-kit/dist`. Rebuild the kit before consumer tests because consumers resolve its built output.
 - On macOS, temporary paths may appear as `/var/...` while Git canonicalizes them to `/private/var/...`; compare realpaths or run tests with a canonical `TMPDIR`.
 - Lifecycle tests can read real extension settings because handlers call `getAgentDir()` and some paths are cached at module load. Isolate `PI_CODING_AGENT_DIR` before importing the extension and use fresh imports for cached paths.
 - Root tests create temporary commits and inherit Git signing. If the signing agent is unavailable, disable `commit.gpgsign` with command-scoped Git configuration rather than changing user config.
 - The pi-sync Git-environment test can fail only in a linked worktree because Git injects that worktree's `GIT_DIR` into shell aliases; verify the exact patch in a normal clone rather than weakening environment stripping.
 - Root Biome checks reject nested worktrees with another `biome.json`, ignore nested `.gitignore` rules for generated JSON, and honor the root `.gitignore`. Keep worktrees outside the repository, ignore generated paths at the root, and never blanket-ignore `src/`.
-- Tests compiled under root `node_modules/.cache` resolve Pi packages from the root, not a source workspace. Keep imported Pi packages as root devDependencies so the alternate-Pi matrix installs matching copies.
+- Tests compiled under root `node_modules/.cache` resolve packages from the root, not a source workspace. A clean or deduped install can therefore expose dependency-major behavior hidden by a stale root copy; keep imported Pi packages as root devDependencies so the alternate-Pi matrix installs matching copies.
 - Treat `package.json#packageManager` plus CI/release workflows as the npm-version authority. A different npm can rewrite unrelated lock metadata or mishandle the alternate-Pi install matrix.
 - The pinned npm 12.0.2 rejects Node 25; run lockfile work under an installed supported runtime such as Node 22.22.2 instead of tolerating npm's compatibility warning.
 - A consumer cannot safely adopt an unpublished `pi-tui-kit` API in the same PR: clean `npm ci` resolves its semver dependency from the registry. Publish the Kit API before raising the consumer's reviewed compatibility floor; do not use local paths that break independent packaging.

@@ -124,13 +124,13 @@ test("empty pull diagnostics fall back after the configured grace period", async
 	writeFileSync(file, "package main\n");
 	const adapter = fixtureAdapter("pull-empty-only", 30);
 	const client = new LspClient(adapter, adapter.defaultCommand, root, 1_000);
-	const startedAt = Date.now();
 
 	try {
 		await client.start();
 		await client.initialize(root);
 		const uri = pathToFileURL(file).href;
 		client.didOpen(uri, "package main\n", "go");
+		const startedAt = Date.now();
 		assert.deepEqual(await client.diagnostics(uri), []);
 		assert.ok(Date.now() - startedAt < 500, "empty pull should not wait for the global timeout");
 		client.didClose(uri);
@@ -146,13 +146,13 @@ test("push-only diagnostics may treat no publication as clean after a configured
 	writeFileSync(file, "package main\n");
 	const adapter = fixtureAdapter("push-silent", 30, undefined, 100);
 	const client = new LspClient(adapter, adapter.defaultCommand, root, 1_000);
-	const startedAt = Date.now();
 
 	try {
 		await client.start();
 		await client.initialize(root);
 		const uri = pathToFileURL(file).href;
 		client.didOpen(uri, "package main\n", "go");
+		const startedAt = Date.now();
 		assert.deepEqual(await client.diagnostics(uri), []);
 		assert.ok(Date.now() - startedAt < 500, "silent push server should not wait for timeout");
 		client.didClose(uri);

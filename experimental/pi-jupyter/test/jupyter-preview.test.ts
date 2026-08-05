@@ -34,6 +34,20 @@ async function invoke(handler: ((...args: unknown[]) => unknown) | undefined, ..
 	return Promise.resolve(handler?.(...args));
 }
 
+async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<T | "timeout"> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<"timeout">((resolve) => {
+				timer = setTimeout(() => resolve("timeout"), timeoutMs);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
 function createJupyterMock() {
 	const mock = createMockPi();
 	Object.assign(mock.rawPi, { registerShortcut() {} });
@@ -123,21 +137,34 @@ test("loadNotebook rejects a FIFO without waiting for a writer", async (context)
 		const moduleUrl = new URL("../src/notebook.js", import.meta.url).href;
 		const script = `
 			import { loadNotebook } from ${JSON.stringify(moduleUrl)};
+			console.log("ready");
+			await new Promise((resolve) => process.stdin.once("data", resolve));
+			process.stdin.destroy();
 			try { await loadNotebook(${JSON.stringify(path)}); }
 			catch (error) { console.log(error instanceof Error ? error.message : String(error)); }
 		`;
 		child = spawn(process.execPath, ["--input-type=module", "--eval", script], {
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: ["pipe", "pipe", "pipe"],
 		});
 		let stdout = "";
 		child.stdout?.setEncoding("utf8");
 		child.stdout?.on("data", (chunk: string) => {
 			stdout += chunk;
 		});
-		const outcome = await Promise.race([
+		const readiness = await settleWithin(
+			Promise.race([
+				once(child.stdout!, "data").then(() => "ready" as const),
+				once(child, "close").then(() => "closed" as const),
+			]),
+			5_000,
+		);
+		assert.equal(readiness, "ready", "FIFO child did not become ready");
+		assert.match(stdout, /^ready\n/);
+		child.stdin?.end("load\n");
+		const outcome = await settleWithin(
 			once(child, "close").then(() => "closed" as const),
-			new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 500)),
-		]);
+			500,
+		);
 		if (outcome === "timeout") {
 			child.kill("SIGKILL");
 			await once(child, "close");
