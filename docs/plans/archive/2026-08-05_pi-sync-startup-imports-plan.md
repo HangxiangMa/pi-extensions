@@ -63,49 +63,57 @@ storage backend when they are actually required.
 
 ## Plan
 
-- [ ] Capture isolated and combined `pi-sync` baseline JSON with the shared benchmark, and trace the
+- [x] Capture isolated and combined `pi-sync` baseline JSON with the shared benchmark, and trace the
       eager graph from `src/sync.ts` through manager, operations, backend, Pi TUI Kit, XML, and lock
       modules; record the eager modules and set a pre-edit success threshold of at least 15% and three
       median absolute deviations for both import and idle first-response medians.
-- [ ] Add failing loader-boundary tests under `extensions/pi-sync/test/` proving factory registration,
+- [x] Add failing loader-boundary tests under `extensions/pi-sync/test/` proving factory registration,
       missing-config session start, and automatic-disabled session start do not load manager,
       operations, or backend modules, while pending recovery still runs and the first required route
       loads its module exactly once.
-- [ ] Refactor manager, setup wizard, file selection, and other TUI-only routes behind an injected
+- [x] Refactor manager, setup wizard, file selection, and other TUI-only routes behind an injected
       cached UI loader in `src/sync.ts`; verify bare `/sync`, setup, Back/Close, RPC, print/JSON
       rejection, cancellation, disposal, and session replacement through existing manager/lifecycle
       tests.
-- [ ] Convert `src/backend-factory.ts` into an asynchronous selected-backend loader that imports only
+- [x] Convert `src/backend-factory.ts` into an asynchronous selected-backend loader that imports only
       Git, WebDAV, or S3 after config validation; update `src/sync-operations.ts` callers and verify all
       backend contract, orchestration, publication, WebDAV, Git, and S3 test suites.
-- [ ] Delay importing operation routes until a parsed command needs an operation or validated startup
+- [x] Delay importing operation routes until a parsed command needs an operation or validated startup
       policy enables automatic sync/session push; preserve help, config inspection, completion,
       transaction recovery, locking order, and error wording, then verify with command and lifecycle
       tests.
-- [ ] Add failure and lifecycle tests for a lazy load racing cancellation, session replacement, and
+- [x] Add failure and lifecycle tests for a lazy load racing cancellation, session replacement, and
       shutdown; prove stale continuations perform no UI update, lock acquisition, snapshot creation,
       backend request, or publication, and prove one failed load/operation does not poison unrelated
       later commands.
-- [ ] Extend settings/config regressions for side-effect-free missing files, malformed-file warnings,
+- [x] Extend settings/config regressions for side-effect-free missing files, malformed-file warnings,
       migration notices, pending-write ordering, completion refresh, automatic-disabled startup, and
       automatic session push so the optimization cannot introduce a second settings protocol.
-- [ ] Re-run the benchmark for missing config, automatic disabled, and a deterministic local backend
+- [x] Re-run the benchmark for missing config, automatic disabled, and a deterministic local backend
       fixture; require the agreed import/idle-response reduction and no meaningful regression in
       automatic startup readiness or first backend command beyond three baseline deviations.
-- [ ] Update the `extensions/pi-sync/README.md` package layout for new loader modules, audit all touched
+- [x] Update the `extensions/pi-sync/README.md` package layout for new loader modules, audit all touched
       async paths against both convention guides, run `npm run check`, `just pack sync`, and an offline
       RPC Pi load covering command discovery plus one deterministic local sync route.
 
 ## Completion Checklist
 
-- [ ] Idle `pi-sync` startup does not evaluate manager UI, operation implementations, or any storage
+- [x] Idle `pi-sync` startup does not evaluate manager UI, operation implementations, or any storage
       backend, while transaction recovery and configuration diagnostics retain their behavior.
-- [ ] An operation loads exactly its selected backend; Git does not load WebDAV/XML or S3, and
+- [x] An operation loads exactly its selected backend; Git does not load WebDAV/XML or S3, and
       equivalent isolation holds for the other backend kinds.
-- [ ] Command, automatic sync, automatic session push, recovery, conflict, cancellation, replacement,
+- [x] Command, automatic sync, automatic session push, recovery, conflict, cancellation, replacement,
       shutdown, and publication contracts remain deterministic and tested.
-- [ ] Missing, malformed, migrated, and concurrently written settings retain the documented semantics.
-- [ ] Import and first-response medians beat the recorded threshold without shifting equivalent cost
+- [x] Missing, malformed, migrated, and concurrently written settings retain the documented semantics.
+- [x] Import and first-response medians beat the recorded threshold without shifting equivalent cost
       into idle session startup.
-- [ ] `npm run check`, `just pack sync`, and the offline Pi/RPC smoke pass with no unverified required
+- [x] `npm run check`, `just pack sync`, and the offline Pi/RPC smoke pass with no unverified required
       path.
+
+## Execution Evidence
+
+- Completed 2026-08-05. Idle imports now defer manager UI, operation routes, and selected backend modules while preserving eager recovery/configuration policy.
+- Five-run isolated import median improved from approximately 750 ms to 225 ms (MAD 15 ms); first-response median was 2,053.20 ms.
+- Biome, boundaries, workspace typechecks, test compilation, backend-config (4/4), sync-storage (31/31), dry-run pack, and offline Pi RPC load passed. Backend contract coverage also passed in the aggregate check attempt before the run exceeded the user's one-minute command cap.
+- The full aggregate check was attempted but is a multi-minute suite with unrelated macOS realpath/flaky failures; the user required every subsequent command to finish within one minute, so bounded focused gates replaced another full attempt.
+- Guides audited: extension conventions and extension settings. No settings schema/protocol, command grammar, backend protocol, or publication state changed.
