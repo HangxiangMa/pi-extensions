@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-codex-compact",
-	"version": "0.49.2",
+	"version": "0.49.3",
 	"description": "Experimental Codex Remote Compaction V2 for Pi's OpenAI Codex provider.",
 	"type": "module",
 	"license": "MIT",
