@@ -12,13 +12,29 @@ check:
 format:
     npm run format
 
-# Update, install, rebuild, and verify dependencies across all npm workspaces
-update:
-    npx npm-check-updates --workspaces --root -u
-    npm install
+_require-pinned-npm:
+    @package_manager="$(node -p 'require("./package.json").packageManager')"; [[ "$package_manager" == npm@* ]] || { printf 'unsupported packageManager: %s\n' "$package_manager" >&2; exit 2; }; expected="${package_manager#npm@}"; actual="$(npm --version)"; [[ "$actual" == "$expected" ]] || { printf 'npm %s is required, but npm %s is active; switch to a supported Node runtime and install %s\n' "$expected" "$actual" "$package_manager" >&2; exit 2; }
+
+_require-clean-worktree:
+    @[[ -z "$(git status --porcelain)" ]] || { printf 'dependency updates require a clean worktree; commit or stash changes first\n' >&2; exit 2; }
+
+# Update dependency manifests and regenerate the lockfile without trusting the current install
+update-lock: _require-pinned-npm _require-clean-worktree
+    npm exec -- npm-check-updates --workspaces --root -u
+    npm install --package-lock-only
+
+# Verify dependency updates from the exact clean lockfile installation
+verify-update: _require-pinned-npm
+    npm ci
     # Rebuild generated web assets only in workspaces that provide build:web
     npm --workspaces --if-present run build:web
     npm run check
+    npm pack --workspaces --dry-run
+
+# Update, clean-install, rebuild, test, and pack all npm workspaces
+update:
+    just update-lock
+    just verify-update
 
 # Install pre-commit hooks
 hooks:
