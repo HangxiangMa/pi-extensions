@@ -14,7 +14,6 @@ import {
 	truncateToWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import {
 	INFORMATION_PROFILE_NAMES,
 	INFORMATION_PROFILES,
@@ -125,6 +124,8 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCom
 		signal: fallbackController.signal,
 		isCurrent: () => !fallbackController.signal.aborted,
 	};
+	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+	if (owner.signal.aborted || !owner.isCurrent()) return;
 	type Screen = "main" | "advanced" | "information";
 	type Action = "appearance" | "setInformation" | "layout" | "edit" | "status" | "help" | "back";
 	const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({

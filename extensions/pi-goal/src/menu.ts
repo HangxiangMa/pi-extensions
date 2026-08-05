@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { type ActionMenuItem, defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import type { ActionMenuItem } from "@narumitw/pi-tui-kit";
 import { formatTokenCount as formatCompactTokenCount, formatDuration } from "./accounting.js";
 import { parseTokenBudget } from "./command.js";
 import type { GoalCommandController } from "./commands.js";
@@ -174,6 +174,8 @@ export async function showGoalManager(
 	const isMenuCurrent = () =>
 		owner.menuController === undefined ||
 		(generation === owner.menuGeneration && !owner.menuController.signal.aborted);
+	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+	if (!isMenuCurrent()) return;
 	let displayedGoal: ActiveGoal | undefined;
 	let startBudgetQueueIdentity = currentGoalQueueIdentity(runtime);
 	let displayedBudgetGoal: ActiveGoal | undefined;

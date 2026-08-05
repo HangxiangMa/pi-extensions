@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import {
 	browserCandidateHint,
 	devToolsEndpoint,
@@ -38,6 +37,10 @@ interface ToolStatusSummary {
 export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
 	const generation = state.sessionGeneration;
 	if (!ctx.hasUI) return;
+	const menuSignal = state.sessionController.signal;
+	const isCurrent = () => generation === state.sessionGeneration && !menuSignal.aborted;
+	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+	if (!isCurrent()) return;
 	const menu = defineMenu<undefined, ToolSelectorScreen, ToolSelectorAction>({
 		start: "tools",
 		screens: {
@@ -96,8 +99,8 @@ export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
 	});
 	const result = await runMenu(ctx, menu, {
 		getState: () => undefined,
-		signal: state.sessionController.signal,
-		isCurrent: () => generation === state.sessionGeneration,
+		signal: menuSignal,
+		isCurrent,
 	});
 	if (result.kind !== "closed" || generation !== state.sessionGeneration) return;
 	const status = await buildToolStatusMessage(pi);

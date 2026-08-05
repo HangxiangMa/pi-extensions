@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runCustomInteraction, runMenu, runTask } from "@narumitw/pi-tui-kit";
+import type { MenuDefinition } from "@narumitw/pi-tui-kit";
 import {
 	candidateIdentity,
 	filterRecallMessages,
@@ -77,7 +77,7 @@ export function createRecallMenu(
 		}
 	};
 
-	const menu = defineMenu<RecallMenuState, Screen, Action>({
+	const menu: MenuDefinition<RecallMenuState, Screen, Action> = {
 		start: "main",
 		screens: {
 			main: ({ state }) => ({
@@ -207,6 +207,8 @@ export function createRecallMenu(
 							);
 							if (signal.aborted || !isCurrent(ownership)) return { kind: "close" };
 							if (!confirmed) continue;
+							const { runTask } = await import("@narumitw/pi-tui-kit");
+							if (signal.aborted || !isCurrent(ownership)) return { kind: "close" };
 							const deletion = await runTask(ctx, {
 								label: "Deleting saved message…",
 								signal,
@@ -271,7 +273,7 @@ export function createRecallMenu(
 					: { kind: "to", screen: "main" };
 			},
 		},
-	});
+	};
 
 	return {
 		menu,
@@ -287,6 +289,8 @@ export async function showRecallMenu(
 	source: RecallMenuSource,
 	ownership: { signal: AbortSignal; isCurrent: () => boolean },
 ): Promise<void> {
+	const { runMenu } = await import("@narumitw/pi-tui-kit");
+	if (ownership.signal.aborted || !ownership.isCurrent()) return;
 	const controller = createRecallMenu(source, ownership);
 	await runMenu(ctx, controller.menu, {
 		getState: controller.getState,
@@ -364,6 +368,8 @@ async function chooseSavedInTui(
 	initialSelectedId: string | undefined,
 	initialQuery: string,
 ): Promise<ScopedRecallPickerResult | undefined> {
+	const { runCustomInteraction } = await import("@narumitw/pi-tui-kit");
+	if (signal.aborted || !isCurrent(ownership)) return undefined;
 	const interaction = await runCustomInteraction<ScopedRecallPickerResult>(ctx, {
 		signal,
 		isCurrent: () => isCurrent(ownership),

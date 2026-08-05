@@ -3,7 +3,6 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import {
 	DEFAULT_BASE_URL,
 	type LangfuseConfig,
@@ -69,6 +68,10 @@ export function createLangfuseExtension(
 				return;
 			}
 			const menuGeneration = sessionGeneration;
+			const menuSignal = menuController.signal;
+			const isCurrent = () => menuGeneration === sessionGeneration && !menuSignal.aborted;
+			const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+			if (!isCurrent()) return;
 			type Screen = "main";
 			type Action = "flush" | "configure" | "help";
 			const menu = defineMenu<undefined, Screen, Action>({
@@ -154,8 +157,8 @@ export function createLangfuseExtension(
 			});
 			await runMenu(ctx, menu, {
 				getState: () => undefined,
-				signal: menuController.signal,
-				isCurrent: () => menuGeneration === sessionGeneration,
+				signal: menuSignal,
+				isCurrent,
 			});
 		}
 

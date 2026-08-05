@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { configuredApiUrl, hasApiKey } from "./client.js";
 import {
 	loadSettings,
@@ -52,6 +51,10 @@ export function recordSettingsNotice(settings: SettingsLoadResult) {
 export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
 	const generation = sessionGeneration;
 	if (!ctx.hasUI) return;
+	const menuSignal = sessionController.signal;
+	const isCurrent = () => isCurrentFirecrawlSession(generation) && !menuSignal.aborted;
+	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+	if (!isCurrent()) return;
 	const menu = defineMenu<undefined, ToolSelectorScreen, ToolSelectorAction>({
 		start: "tools",
 		screens: {
@@ -110,8 +113,8 @@ export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
 	});
 	const result = await runMenu(ctx, menu, {
 		getState: () => undefined,
-		signal: sessionController.signal,
-		isCurrent: () => isCurrentFirecrawlSession(generation),
+		signal: menuSignal,
+		isCurrent,
 	});
 	if (result.kind !== "closed" || !isCurrentFirecrawlSession(generation)) return;
 	const status = await buildStatusMessage(pi);

@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import { type ExtensionCommandContext, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { checkpointGoalActiveTime } from "./accounting.js";
 import { abortCurrentTurn, type GoalRuntime, STATUS_KEY } from "./runtime.js";
 import {
@@ -36,6 +35,8 @@ export async function showGoalSettings(
 	const generation = runtime.menuGeneration;
 	const isMenuCurrent = () =>
 		generation === runtime.menuGeneration && !runtime.menuController.signal.aborted;
+	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+	if (!isMenuCurrent()) return;
 	const invalid = runtime.settingsLoadIssue?.kind === "invalid";
 	const previewGoalIds = new Map<LimitField, string | null>();
 	type Screen = "settings" | "automatic" | "no-progress" | "invalid";

@@ -3,7 +3,6 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu, runTask } from "@narumitw/pi-tui-kit";
 import {
 	awaitWithDeadline,
 	errorMessage,
@@ -348,6 +347,8 @@ export default function usageExtension(pi: ExtensionAPI) {
 		parentSignal: AbortSignal,
 		operation: (signal: AbortSignal) => Promise<T>,
 	): Promise<T | undefined> => {
+		const { runTask } = await import("@narumitw/pi-tui-kit");
+		if (parentSignal.aborted) return undefined;
 		const result = await runTask(ctx, {
 			label,
 			signal: parentSignal,
@@ -464,6 +465,8 @@ export default function usageExtension(pi: ExtensionAPI) {
 			publishStableCurrent(ctx, stableCurrent);
 			let current = stableCurrent.outcome;
 			let visibleStates: ProviderUsageState[] = [current.state];
+			const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+			if (controller.signal.aborted || statusGeneration !== menuGeneration) return;
 			type Screen = "main" | "providers";
 			type Action = "refresh" | "another" | "all" | "provider";
 			const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
