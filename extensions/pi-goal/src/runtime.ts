@@ -403,6 +403,7 @@ export class GoalRuntime {
 			case "explicit_pause":
 				this.recordGoalUsage(goal, ctx);
 				this.cancelContinuationWork();
+				this.clearGoalRecoveryForGoal(goal.id);
 				this.clearBudgetWrapUp();
 				this.blockStaleGoalToolCalls();
 				abortCurrentTurn(ctx);

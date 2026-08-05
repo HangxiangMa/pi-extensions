@@ -14,6 +14,11 @@ test("stopped transition owner applies explicit-pause invariants once", () => {
 	state.activeGoal = goal;
 	state.requestContinuation(goal);
 	state.budgetWrapUp = { goalId: goal.id, delivered: true };
+	state.goalRecovery = {
+		goalId: goal.id,
+		kind: "provider_retry",
+		automaticOwner: true,
+	};
 	state.beginAgentRun(goal.id, "manual");
 	let aborts = 0;
 	const context = createMockContext({ abort: () => aborts++ });
@@ -27,6 +32,7 @@ test("stopped transition owner applies explicit-pause invariants once", () => {
 	assert.equal(state.activeGoal?.id, goal.id);
 	assert.equal(state.continuationIntent, undefined);
 	assert.equal(state.budgetWrapUp, undefined);
+	assert.equal(state.goalRecovery, undefined);
 	assert.equal(state.staleGoalToolCallsBlocked, true);
 	assert.equal(aborts, 1);
 	assert.equal(mock.entries.at(-1)?.customType, "goal-state");
