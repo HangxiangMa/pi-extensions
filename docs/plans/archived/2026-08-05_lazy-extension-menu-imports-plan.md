@@ -71,9 +71,9 @@ then publish the change as a separate pull request.
       loading, and `npm run check`; Biome, boundaries, 17 packs, all typechecks, and 600 focused tests
       passed. Three focused and 14 aggregate tests reproduced pre-existing terminal-width, macOS
       `/var` realpath, FIFO timing, and unrelated lifecycle failures; no changed assertion failed.
-- [ ] Complete and archive this plan, stage only intended files, create focused Conventional Commit(s),
-      push the branch, and open a non-draft pull request against `main` with verification and benchmark
-      evidence.
+- [x] Complete and archive this plan, stage only intended files, create focused Conventional Commit(s),
+      push the branch, and open non-draft pull request #562 against `main` with verification and
+      benchmark evidence.
 
 ## Completion Checklist
 
@@ -86,4 +86,5 @@ then publish the change as a separate pull request.
       extension and improves by more than benchmark variance.
 - [x] Package checks, focused tests, pack smokes, local Pi smoke, and the repository gate have recorded
       evidence; the 14 unrelated aggregate failures are explicitly reported above.
-- [ ] The pull request contains no `justfile` changes and performs no publication or release mutation.
+- [x] Pull request #562 contains no `justfile` changes and performed no publication or release
+      mutation.
