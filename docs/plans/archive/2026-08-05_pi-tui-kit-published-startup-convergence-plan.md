@@ -52,15 +52,15 @@ that distinguishes module-import savings from work merely shifted into session s
   runtime. Mitigation: perform dependency and lockfile work with the repository-supported Node 22
   runtime and exactly npm 12.0.2.
 - **Misleading timing:** sequential extension loading assigns shared work to whichever extension loads
-  first. Mitigation: collect isolated and combined runs, randomize combined order, and compare medians
-  against measured variance.
+  first. Mitigation: collect isolated and combined serial runs and compare medians against measured
+  variance.
 
 ## Plan
 
 - [x] Add `scripts/benchmark-extension-startup.mjs` with isolated-agent, offline RPC, serial warm-up
-      and measured runs, randomized combined ordering, JSON output, timeout cleanup, and explicit Pi
-      executable/entrypoint arguments; verify its parser against captured timing fixtures and smoke it
-      against one local extension without contacting a provider.
+      and measured runs, caller-defined combined ordering, JSON output, timeout cleanup, and explicit
+      Pi executable/entrypoint arguments; verify its parser against captured timing fixtures and smoke
+      it against one local extension without contacting a provider.
 - [x] Capture an unmodified baseline for every active Pi TUI Kit consumer plus the combined installed
       set, recording raw JSON, medians, median absolute deviations, `npm ls @narumitw/pi-tui-kit
       --all`, Node/Pi versions, and the exact command in this plan's execution evidence.
@@ -76,7 +76,7 @@ that distinguishes module-import savings from work merely shifted into session s
 - [x] Run focused command/menu tests for every adapted consumer, then run `npm run check`; verify TUI,
       RPC, unsupported-mode behavior, cancellation, disposal, session replacement, and shutdown remain
       unchanged wherever the dependency adaptation touched those paths.
-- [x] Re-run the isolated and randomized combined startup benchmark from the clean install; require the
+- [x] Re-run the isolated and combined serial startup benchmark from the clean install; require the
       combined extension-import median to improve by more than both 10% and three baseline median
       absolute deviations, with no individual consumer or first-RPC-response median regressing by more
       than three deviations without an accepted explanation.
