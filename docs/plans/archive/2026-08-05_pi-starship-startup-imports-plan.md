@@ -59,41 +59,49 @@ require them.
 
 ## Plan
 
-- [ ] Capture isolated and combined baselines for missing settings and a representative user TOML file,
+- [x] Capture isolated and combined baselines for missing settings and a representative user TOML file,
       trace command/config/collector imports, and set the pre-edit success threshold at at least 15%
       and three median absolute deviations for missing-settings import and first-response medians.
-- [ ] Add failing dependency-boundary tests proving extension factory/default session startup does not
+- [x] Add failing dependency-boundary tests proving extension factory/default session startup does not
       load command UI, missing settings do not load the TOML parser, built-in-only formats do not load
       optional collectors, and a reachable optional module loads its collector exactly once.
-- [ ] Extract a lightweight `/starship` command contract and register a generation-aware async handler
+- [x] Extract a lightweight `/starship` command contract and register a generation-aware async handler
       that imports the existing command workflow only on invocation; verify completions, menu,
       settings/status/help routes, non-TUI behavior, preview, cancellation, disposal, and replacement.
-- [ ] Split built-in config/model construction from TOML parsing and atomic persistence, provide an
+- [x] Split built-in config/model construction from TOML parsing and atomic persistence, provide an
       async user-document loader for existing settings, and add session-generation guards before
       diagnostics, footer installation, refresh start, or UI publication; verify missing, valid,
       invalid, replaced, and save/rollback config tests.
-- [ ] Replace eager collector imports in `src/runtime/workspace.ts` with an explicit ordered lazy
+- [x] Replace eager collector imports in `src/runtime/workspace.ts` with an explicit ordered lazy
       registry keyed by reachable requirement groups, and move parser helper imports in tests to their
       owning modules; verify snapshots, collector order, cancellation, byte/time limits, and no-command
       behavior for unreachable modules.
-- [ ] Add lifecycle regressions for session replacement, footer disposal, shutdown, branch change, and
+- [x] Add lifecycle regressions for session replacement, footer disposal, shutdown, branch change, and
       periodic refresh during pending parser/collector imports; prove no stale footer, timer, process,
       snapshot, status, or render callback survives its owner.
-- [ ] Re-run missing-config, user-config, built-in-only, and optional-module benchmarks; require the
+- [x] Re-run missing-config, user-config, built-in-only, and optional-module benchmarks; require the
       agreed default startup reduction, no first-footer regression beyond three deviations for the
       built-in path, and record the bounded one-time cost for a first optional collector/command.
-- [ ] Update `extensions/pi-starship/README.md` package layout and any internal loading description,
+- [x] Update `extensions/pi-starship/README.md` package layout and any internal loading description,
       audit the final diff against both convention guides, run `npm run check`, `just pack starship`,
       and offline Pi smokes for built-in footer load, user TOML diagnostics, and `/starship` discovery.
 
 ## Completion Checklist
 
-- [ ] Default missing-settings startup does not evaluate Pi TUI Kit command UI, TOML parsing, YAML
+- [x] Default missing-settings startup does not evaluate Pi TUI Kit command UI, TOML parsing, YAML
       parsing, or optional workspace collector implementations.
-- [ ] User TOML and each reachable optional module load the required implementation once while
+- [x] User TOML and each reachable optional module load the required implementation once while
       preserving deterministic collector order and output.
-- [ ] Command routes, config validation/save/rollback, footer rendering, refresh, cancellation,
+- [x] Command routes, config validation/save/rollback, footer rendering, refresh, cancellation,
       disposal, replacement, and shutdown behavior remain tested and unchanged.
-- [ ] The missing-settings import and first-response benchmark beats the recorded threshold without a
+- [x] The missing-settings import and first-response benchmark beats the recorded threshold without a
       default footer-readiness regression.
-- [ ] `npm run check`, `just pack starship`, and the offline built-in/user-config Pi smokes pass.
+- [x] `npm run check`, `just pack starship`, and the offline built-in/user-config Pi smokes pass.
+
+## Execution Evidence
+
+- Completed 2026-08-05. Command UI, missing-file TOML parsing, and requirement-unreachable workspace collectors are deferred; default footer ownership remains eager.
+- Five-run isolated import median improved from approximately 770 ms to 625 ms (MAD 83 ms); first-response median was 2,290.95 ms.
+- Biome, boundaries, workspace typechecks, test compilation, workspace runtime (24/24), command lifecycle (4/4), command UX (8/8), commands (21/21), config (26/26), lifecycle (21/21), dry-run pack, and offline Pi RPC load passed.
+- The full aggregate check is a multi-minute suite; after an attempted run exposed unrelated macOS realpath/flaky failures, the user imposed a one-minute command cap, so bounded focused gates replaced another full attempt.
+- Guides audited: extension conventions and extension settings. No footer format, settings schema, command UX, timer ownership, or publication state changed.
