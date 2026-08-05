@@ -3,7 +3,6 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import {
 	AccountStore,
 	consumeMigrationNotice,
@@ -254,6 +253,8 @@ async function showAccountsMenu(
 		ctx.ui.notify("/accounts requires interactive UI (TUI or RPC mode).", "error");
 		return;
 	}
+	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
+	if (!owner.isCurrent()) return;
 	let selectedProviderId: AccountProviderId | undefined;
 	type State = {
 		states: Map<AccountProviderId, ProviderMenuState>;
