@@ -11,6 +11,7 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { PublicBatchState, PublicHistoryState } from "./batch.js";
+import { formatBytes } from "./format.js";
 import { DEFAULT_SETTINGS, HARD_LIMITS, type ImageDropSettings } from "./settings.js";
 
 export type LimitSettingAction =
@@ -226,12 +227,6 @@ function formatLimit(key: LimitSettingAction, value: number): string {
 
 function byteLimit(key: LimitSettingAction): boolean {
 	return key === "maxImageBytes" || key === "maxBatchBytes" || key === "maxRetainedBytes";
-}
-
-export function formatBytes(value: number): string {
-	if (value < 1024) return `${value} B`;
-	if (value < MIB) return `${Math.round(value / 1024)} KiB`;
-	return `${Number((value / MIB).toFixed(1))} MiB`;
 }
 
 function formatCount(value: number): string {

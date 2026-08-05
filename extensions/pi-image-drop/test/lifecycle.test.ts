@@ -81,6 +81,8 @@ function createHarness(
 	let serverOptions: ImageDropServerOptions | undefined;
 	let serverStarts = 0;
 	let serverCloses = 0;
+	let processorCreates = 0;
+	let interactiveLoads = 0;
 	let links = 0;
 	let unusedLink = false;
 	const server = {
@@ -109,6 +111,14 @@ function createHarness(
 			serverOptions = received;
 			if (options.startError) throw options.startError;
 			return server;
+		},
+		createProcessor: () => {
+			processorCreates += 1;
+			return { process: async () => PROCESSED };
+		},
+		loadInteractiveUi: async () => {
+			interactiveLoads += 1;
+			return import("../src/interactive-ui.js");
 		},
 		observeLimits: options.onLimits,
 		loadStatus: async (_ctx, _label, task) => {
@@ -212,6 +222,12 @@ function createHarness(
 		get serverCloses() {
 			return serverCloses;
 		},
+		get processorCreates() {
+			return processorCreates;
+		},
+		get interactiveLoads() {
+			return interactiveLoads;
+		},
 	};
 }
 
@@ -225,6 +241,14 @@ async function emit(
 	assert.ok(handler, `missing ${name} handler`);
 	return handler(event, ctx);
 }
+
+test("default session start defers processor and server creation", async () => {
+	const harness = createHarness();
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	assert.equal(harness.processorCreates, 0);
+	assert.equal(harness.interactiveLoads, 0);
+	assert.equal(harness.serverStarts, 0);
+});
 
 test("interactive input appends one ready ordered batch and commits on matching user message", async () => {
 	const { mock, runtime, context } = createHarness();
