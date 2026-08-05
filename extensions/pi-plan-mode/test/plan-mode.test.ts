@@ -31,6 +31,26 @@ test("plan-mode registers flag, question tool, command, and safety hooks", () =>
 	assert.ok(mock.events.has("before_agent_start"));
 });
 
+test("non-interactive Plan routes do not load interactive UI", async () => {
+	const mock = createMockPi({ activeTools: ["read", "bash"] });
+	let interactiveLoads = 0;
+	planMode(mock.pi, {
+		readSettings: async () => ({ kind: "missing" as const }),
+		loadInteractiveUi: async () => {
+			interactiveLoads += 1;
+			return import("../src/interactive-ui.js");
+		},
+	});
+	const context = createMockContext({ mode: "tui" });
+	await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	assert.equal(interactiveLoads, 0);
+
+	await mock.commands.get("plan")?.handler("start", context.ctx);
+	assert.equal(interactiveLoads, 0);
+	await mock.commands.get("plan")?.handler("write a release plan", context.ctx);
+	assert.equal(interactiveLoads, 0);
+});
+
 test("plan_mode_complete result renders the plan as Markdown", () => {
 	initTheme("dark");
 	const mock = createMockPi({ activeTools: ["read", "bash"] });
