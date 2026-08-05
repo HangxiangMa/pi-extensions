@@ -733,6 +733,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
 	async function showLaunchMenu(ctx: ExtensionContext, initialScreen: "main" | "tools" = "main") {
 		const lifecycle = captureMenuLifecycle();
+		if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
 		const ui = await loadInteractiveUi();
 		if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
 		const tools = selectableTools();
@@ -780,6 +781,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			return;
 		}
 		const lifecycle = captureMenuLifecycle();
+		if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
 		const ui = await loadInteractiveUi();
 		if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
 		await ui.showActiveImplementationMenu(ctx, {
@@ -806,6 +808,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		signal: AbortSignal,
 		isCurrent: () => boolean,
 	) {
+		if (!isCurrent() || signal.aborted) return false;
 		const ui = await loadInteractiveUi();
 		if (!isCurrent() || signal.aborted) return false;
 		const result = await ui.showPlanModeSettings(ctx, {

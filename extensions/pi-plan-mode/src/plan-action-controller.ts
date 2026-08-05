@@ -40,6 +40,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 	return {
 		async showSaved(ctx: ExtensionContext) {
 			const lifecycle = options.captureLifecycle();
+			if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
 			const ui = await options.loadInteractiveUi();
 			if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
 			await ui.showSavedPlanMenu(ctx, {
@@ -62,6 +63,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 				return;
 			}
 			const lifecycle = options.captureLifecycle();
+			if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
 			const ui = await options.loadInteractiveUi();
 			if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
 			await ui.showPlanModeMenu(ctx, {
@@ -82,6 +84,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
 		},
 		async showReady(ctx: ExtensionContext) {
 			const lifecycle = options.captureLifecycle();
+			if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
 			const ui = await options.loadInteractiveUi();
 			if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
 			await ui.showReadyPlanMenu(ctx, {
