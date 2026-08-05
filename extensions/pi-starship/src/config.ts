@@ -8,8 +8,9 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { parse, type TomlTable } from "smol-toml";
+import type { TomlTable } from "smol-toml";
 import {
 	type FormatNode,
 	formatVariables,
@@ -83,7 +84,8 @@ $activity\
 $context\
 $time"""`;
 
-const BUILT_IN_FORMAT = parseBuiltInFormat(BUILT_IN_FORMAT_DOCUMENT);
+const BUILT_IN_FORMAT =
+	"$brand$model$thinking$directory$git_branch$git_status$activity$context$time";
 
 const BUILT_IN_MODULES = Object.fromEntries(
 	MODULE_DEFINITIONS.map(({ name, defaults, styleDefaults, displayDefaults, options }) => [
@@ -114,10 +116,12 @@ export const BUILT_IN_CONFIG: StarshipConfig = {
 
 export const BUILT_IN_EXAMPLE = `# Native Pi modules with Starship-compatible format and style syntax.\n${BUILT_IN_FORMAT_DOCUMENT}\n`;
 
-function parseBuiltInFormat(document: string): string {
-	const format = parse(document).format;
-	if (typeof format !== "string") throw new Error("Built-in format document must define a string");
-	return format;
+const require = createRequire(import.meta.url);
+let parseTomlImplementation: typeof import("smol-toml")["parse"] | undefined;
+
+function parseToml(document: string): TomlTable {
+	parseTomlImplementation ??= (require("smol-toml") as typeof import("smol-toml")).parse;
+	return parseTomlImplementation(document);
 }
 
 export function settingsFilePath(agentDir: string): string {
@@ -147,7 +151,7 @@ export function loadStarshipConfig(settingsPath: string): LoadedStarshipConfig {
 
 	let parsed: TomlTable;
 	try {
-		parsed = parse(rawDocument);
+		parsed = parseToml(rawDocument);
 	} catch (error) {
 		return {
 			config: cloneBuiltInConfig(),
@@ -413,7 +417,7 @@ export function validateConfigDocument(
 ): LoadedStarshipConfig {
 	let parsed: TomlTable;
 	try {
-		parsed = parse(rawDocument);
+		parsed = parseToml(rawDocument);
 	} catch (error) {
 		throw new Error(`Unable to parse TOML: ${formatError(error)}`);
 	}

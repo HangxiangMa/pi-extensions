@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import { completeStarshipArguments, STARSHIP_SUBCOMMANDS } from "./command-contract.js";
 import { showFooterExplanation } from "./command-inspector.js";
 import { type PreviewMenuResult, showPreviewActionMenu } from "./command-preview.js";
 import {
@@ -12,12 +12,6 @@ import {
 	validateConfigDocument,
 } from "./config.js";
 import { inspectUnavailableModules, type StatuslineInspection } from "./modules/inspection.js";
-
-const SUBCOMMANDS: AutocompleteItem[] = [
-	{ value: "settings", label: "settings", description: "Customize the footer TOML" },
-	{ value: "status", label: "status", description: "Show configuration health and source" },
-	{ value: "help", label: "help", description: "Show configuration help" },
-];
 
 const MAIN_ACTIONS = {
 	customize: "customize",
@@ -58,44 +52,46 @@ interface WorkflowOwner {
 export function registerStarshipCommand(pi: ExtensionAPI, options: StarshipCommandOptions) {
 	pi.registerCommand("starship", {
 		description: "Customize or inspect the native Starship-style footer",
-		getArgumentCompletions(prefix: string): AutocompleteItem[] | null {
-			const normalized = prefix.trim().toLowerCase();
-			const matches = SUBCOMMANDS.filter((item) => item.value.startsWith(normalized));
-			return matches.length > 0 ? matches : null;
-		},
-		handler: async (args, ctx) => {
-			const normalized = args.trim();
-			if (!normalized) {
-				if (ctx.mode === "tui") await showMainMenu(ctx, options);
-				else showHelp(ctx, options.settingsPath);
-				return;
-			}
-
-			const [subcommand = "", ...trailing] = normalized.split(/\s+/u);
-			const route = subcommand.toLowerCase();
-			if (trailing.length > 0 || !SUBCOMMANDS.some((item) => item.value === route)) {
-				if (canNotify(ctx)) {
-					const reason =
-						trailing.length > 0
-							? `Unexpected arguments for /starship ${safeText(route)}.`
-							: `Unknown /starship subcommand: ${safeText(route)}.`;
-					ctx.ui.notify(`${reason} Usage: /starship [settings|status|help]`, "warning");
-				}
-				return;
-			}
-			switch (route) {
-				case "settings":
-					await editSettings(ctx, options);
-					return;
-				case "status":
-					showStatus(ctx, options);
-					return;
-				case "help":
-					showHelp(ctx, options.settingsPath);
-					return;
-			}
-		},
+		getArgumentCompletions: completeStarshipArguments,
+		handler: (args, ctx) => handleStarshipCommand(args, ctx, options),
 	});
+}
+
+export async function handleStarshipCommand(
+	args: string,
+	ctx: ExtensionCommandContext,
+	options: StarshipCommandOptions,
+) {
+	const normalized = args.trim();
+	if (!normalized) {
+		if (ctx.mode === "tui") await showMainMenu(ctx, options);
+		else showHelp(ctx, options.settingsPath);
+		return;
+	}
+
+	const [subcommand = "", ...trailing] = normalized.split(/\s+/u);
+	const route = subcommand.toLowerCase();
+	if (trailing.length > 0 || !STARSHIP_SUBCOMMANDS.some((item) => item.value === route)) {
+		if (canNotify(ctx)) {
+			const reason =
+				trailing.length > 0
+					? `Unexpected arguments for /starship ${safeText(route)}.`
+					: `Unknown /starship subcommand: ${safeText(route)}.`;
+			ctx.ui.notify(`${reason} Usage: /starship [settings|status|help]`, "warning");
+		}
+		return;
+	}
+	switch (route) {
+		case "settings":
+			await editSettings(ctx, options);
+			return;
+		case "status":
+			showStatus(ctx, options);
+			return;
+		case "help":
+			showHelp(ctx, options.settingsPath);
+			return;
+	}
 }
 
 async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipCommandOptions) {
