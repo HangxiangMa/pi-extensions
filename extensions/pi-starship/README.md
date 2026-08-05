@@ -26,7 +26,7 @@ A native Pi footer configured with Starship-style TOML. It parses and renders fo
 pi install npm:@narumitw/pi-starship
 ```
 
-Try it from a checkout; the recipe prepares the generated runtime before loading it:
+Try it directly from a checkout:
 
 ```bash
 just try starship
@@ -630,9 +630,7 @@ Keep `extension_status` last in the catalog so arbitrary third-party statuses fo
 
 ## 🗂️ Package layout
 
-- `src/index.ts` — thin Pi package entrypoint forwarding to the generated runtime.
-- `dist/` — generated split TypeScript runtime and source maps loaded through Pi's Jiti aliases.
-- `scripts/build-runtime.mjs` — deterministic runtime bundler and eager-import boundary validator.
+- `src/index.ts` — thin Pi package entrypoint forwarding to the source runtime.
 - `src/pi-starship.ts` — authoritative extension lifecycle, cached refresh binding, live preview, and footer.
 - `src/usage.ts` — native-aligned session usage and cache aggregation.
 - `src/command-contract.ts` — lightweight command routes and completions loaded at startup.

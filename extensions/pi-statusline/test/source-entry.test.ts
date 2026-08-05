@@ -14,7 +14,7 @@ async function emit(
 	for (const handler of events.get(name) ?? []) await handler(...args);
 }
 
-test("declared generated entry preserves registration and lifecycle behavior", async () => {
+test("declared source entry preserves registration and lifecycle behavior", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-generated-entry-"));
 	const agentDir = join(root, "agent");
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;

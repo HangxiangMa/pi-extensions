@@ -1,1 +1,1 @@
-export { default } from "../dist/pi-starship.js";
+export { default } from "./pi-starship.js";
