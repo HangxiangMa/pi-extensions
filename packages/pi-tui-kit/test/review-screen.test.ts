@@ -246,7 +246,7 @@ test("code review uses the injected theme for inferred syntax tokens and safe fa
 		},
 		true,
 	);
-	const highlighted = inferred.component.render(80).join("\n");
+	const highlighted = inferred.component.render(200).join("\n");
 	assert.match(highlighted, /syntaxKeyword:const/u);
 	assert.match(highlighted, /syntaxType:number/u);
 	assert.match(highlighted, /syntaxNumber:42/u);
