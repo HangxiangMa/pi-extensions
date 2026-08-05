@@ -61,7 +61,7 @@ pack name: (_validate-extension-name name)
 # Try a package from this working tree as a temporary pi package
 # Usage: just try subagents
 try name: (_validate-extension-name name)
-    name={{quote(name)}}; extension_dir="./extensions/pi-$name"; if [[ ! -d "$extension_dir" ]]; then extension_dir="./experimental/pi-$name"; fi; [[ -d "$extension_dir" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package="$(node -p "require('./$extension_dir/package.json').name")"; npm --workspace "$package" run build --if-present; pi -e "$extension_dir"
+    name={{quote(name)}}; extension_dir="./extensions/pi-$name"; if [[ ! -d "$extension_dir" ]]; then extension_dir="./experimental/pi-$name"; fi; [[ -d "$extension_dir" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package_json="$extension_dir/package.json"; package="$(node -p "require(process.argv[1]).name" "$package_json")"; npm --workspace "$package" run build --if-present; pi -e "$extension_dir"
 
 # Start Pi with the commonly used extensions loaded from this working tree
 # PI_TIMING reports startup timing for local extension development

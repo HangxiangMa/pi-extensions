@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { SourceMap } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { buildRuntime, validateEagerGraph, validateGeneratedFiles } from "./build-runtime.mjs";
+
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function validMetafile() {
 	return {
@@ -61,8 +64,21 @@ test("eager graph validation rejects bundled packages", () => {
 	assert.throws(() => validateEagerGraph(metafile), /Runtime package was bundled/u);
 });
 
+test("runtime builds reject output directories outside or equal to the package root", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pi-starship-build-outside-test-"));
+	t.after(() => rm(root, { force: true, recursive: true }));
+	await assert.rejects(
+		buildRuntime({ outputDirectory: join(root, "dist") }),
+		/Runtime output directory must be inside the package root/u,
+	);
+	await assert.rejects(
+		buildRuntime({ outputDirectory: packageRoot }),
+		/Runtime output directory must be inside the package root/u,
+	);
+});
+
 test("runtime builds are byte-for-byte deterministic", async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "pi-starship-build-test-"));
+	const root = await mkdtemp(join(packageRoot, ".pi-starship-build-test-"));
 	t.after(() => rm(root, { force: true, recursive: true }));
 	const first = join(root, "first");
 	const second = join(root, "second");

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
@@ -26,7 +26,18 @@ const FORBIDDEN_EAGER_INPUTS = [
 const FORBIDDEN_EAGER_EXTERNALS = new Set(["@narumitw/pi-tui-kit", "yaml"]);
 
 export async function buildRuntime({ outputDirectory = distDirectory } = {}) {
-	const parentDirectory = dirname(outputDirectory);
+	const resolvedOutputDirectory = resolve(outputDirectory);
+	const relativeOutputDirectory = relative(packageRoot, resolvedOutputDirectory);
+	if (
+		relativeOutputDirectory === "" ||
+		relativeOutputDirectory === ".." ||
+		relativeOutputDirectory.startsWith(`..${sep}`) ||
+		isAbsolute(relativeOutputDirectory)
+	) {
+		throw new Error("Runtime output directory must be inside the package root");
+	}
+
+	const parentDirectory = dirname(resolvedOutputDirectory);
 	const stagingDirectory = await mkdtemp(join(parentDirectory, ".pi-starship-dist-"));
 	try {
 		const result = await build({
@@ -51,8 +62,8 @@ export async function buildRuntime({ outputDirectory = distDirectory } = {}) {
 		validateEagerGraph(result.metafile);
 		await rewriteGeneratedSpecifiers(stagingDirectory);
 		await validateGeneratedFiles(stagingDirectory);
-		await rm(outputDirectory, { force: true, recursive: true });
-		await rename(stagingDirectory, outputDirectory);
+		await rm(resolvedOutputDirectory, { force: true, recursive: true });
+		await rename(stagingDirectory, resolvedOutputDirectory);
 		return result.metafile;
 	} catch (error) {
 		await rm(stagingDirectory, { force: true, recursive: true });
