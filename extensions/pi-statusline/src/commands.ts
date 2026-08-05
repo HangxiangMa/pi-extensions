@@ -4,7 +4,6 @@ import {
 	type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import {
-	type AutocompleteItem,
 	Container,
 	Key,
 	matchesKey,
@@ -14,6 +13,7 @@ import {
 	truncateToWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { completeStatuslineArguments } from "./command-contract.js";
 import {
 	INFORMATION_PROFILE_NAMES,
 	INFORMATION_PROFILES,
@@ -56,12 +56,6 @@ const SEGMENT_DESCRIPTIONS: Record<SegmentName, string> = {
 	time: "Current local time",
 	turn: "Current session turn count",
 };
-const SUBCOMMANDS: AutocompleteItem[] = [
-	{ value: "settings", label: "settings", description: "Edit pi-statusline.json" },
-	{ value: "status", label: "status", description: "Show effective statusline settings" },
-	{ value: "help", label: "help", description: "Show configuration help" },
-];
-
 export interface StatuslineCommandOptions {
 	settingsPath: string;
 	getLoaded(): LoadedStatuslineSettings;
@@ -74,44 +68,46 @@ export interface StatuslineCommandOptions {
 export function registerStatuslineCommand(pi: ExtensionAPI, options: StatuslineCommandOptions) {
 	pi.registerCommand("statusline", {
 		description: "Open or inspect the statusline settings",
-		getArgumentCompletions(prefix: string): AutocompleteItem[] | null {
-			const normalized = prefix.trim().toLowerCase();
-			const matches = SUBCOMMANDS.filter((item) => item.value.startsWith(normalized));
-			return matches.length > 0 ? matches : null;
-		},
-		handler: async (args, ctx) => {
-			const normalized = args.trim();
-			if (!normalized) {
-				await showMainMenu(ctx, options);
-				return;
-			}
-
-			const tokens = normalized.split(/\s+/u);
-			const subcommand = tokens[0]?.toLowerCase() ?? "";
-			if (tokens.length > 1) {
-				if (canNotify(ctx)) {
-					ctx.ui.notify(`/statusline ${subcommand} does not accept trailing arguments.`, "warning");
-				}
-				return;
-			}
-
-			switch (subcommand) {
-				case "settings":
-					await editSettings(ctx, options);
-					return;
-				case "status":
-					showStatus(ctx, options);
-					return;
-				case "help":
-					showHelp(ctx, options.settingsPath);
-					return;
-				default:
-					if (canNotify(ctx)) {
-						ctx.ui.notify(`Unknown /statusline subcommand: ${subcommand}`, "warning");
-					}
-			}
-		},
+		getArgumentCompletions: completeStatuslineArguments,
+		handler: (args, ctx) => handleStatuslineCommand(args, ctx, options),
 	});
+}
+
+export async function handleStatuslineCommand(
+	args: string,
+	ctx: ExtensionCommandContext,
+	options: StatuslineCommandOptions,
+) {
+	const normalized = args.trim();
+	if (!normalized) {
+		await showMainMenu(ctx, options);
+		return;
+	}
+
+	const tokens = normalized.split(/\s+/u);
+	const subcommand = tokens[0]?.toLowerCase() ?? "";
+	if (tokens.length > 1) {
+		if (canNotify(ctx)) {
+			ctx.ui.notify(`/statusline ${subcommand} does not accept trailing arguments.`, "warning");
+		}
+		return;
+	}
+
+	switch (subcommand) {
+		case "settings":
+			await editSettings(ctx, options);
+			return;
+		case "status":
+			showStatus(ctx, options);
+			return;
+		case "help":
+			showHelp(ctx, options.settingsPath);
+			return;
+		default:
+			if (canNotify(ctx)) {
+				ctx.ui.notify(`Unknown /statusline subcommand: ${subcommand}`, "warning");
+			}
+	}
 }
 
 async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCommandOptions) {

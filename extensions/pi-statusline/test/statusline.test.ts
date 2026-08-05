@@ -90,6 +90,22 @@ test("statusline registers lifecycle handlers without reading thinking level at 
 	assert.ok(mock.events.has("tool_execution_start"));
 });
 
+test("a delayed command import cannot enter a replaced session", async () => {
+	const mock = createMockPi();
+	statusline(mock.pi);
+	const previous = createMockContext({ mode: "rpc", hasUI: true });
+	const current = createMockContext({ mode: "rpc", hasUI: true });
+	await emit(mock.events, "session_start", {}, previous.ctx);
+
+	const pending = mock.commands.get("statusline")?.handler("help", previous.ctx);
+	await emit(mock.events, "session_start", {}, current.ctx);
+	await pending;
+	assert.deepEqual(previous.notifications, []);
+
+	await mock.commands.get("statusline")?.handler("help", current.ctx);
+	assert.match(current.notifications.at(-1)?.message ?? "", /\/statusline/u);
+});
+
 test("statusline renders PR context inline only when a branch is available", async () => {
 	const mock = createMockPi();
 	statusline(mock.pi);
