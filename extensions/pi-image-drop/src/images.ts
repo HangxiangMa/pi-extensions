@@ -1,7 +1,5 @@
 import { createHash } from "node:crypto";
-import { decode as decodeBmp } from "bmp-js";
-import decodeHeic from "heic-decode";
-import sharp, { type OutputInfo, type Sharp, type SharpOptions } from "sharp";
+import type { OutputInfo, Sharp, SharpOptions } from "sharp";
 import type { ProcessedImage } from "./batch.js";
 
 export type SupportedImageFormat =
@@ -39,6 +37,18 @@ interface Dimensions {
 	height: number;
 	pages: number;
 }
+
+type SharpFactory = typeof import("sharp")["default"];
+type DecodeBmp = typeof import("bmp-js")["decode"];
+type DecodeHeic = typeof import("heic-decode")["default"];
+
+interface ImageCodecs {
+	sharp: SharpFactory;
+	decodeBmp: DecodeBmp;
+	decodeHeic: DecodeHeic;
+}
+
+let codecsPromise: Promise<ImageCodecs> | undefined;
 
 type ImageProcessFunction = (
 	source: Uint8Array,
@@ -140,8 +150,16 @@ export async function processImage(
 	const bytes = Buffer.from(source);
 	const format = detectImageFormat(bytes);
 	if (!format) throw new UnsupportedImageError("Unsupported image format");
-	const descriptor = await describeInput(bytes, format, options.maxImagePixels, options.signal);
-	const original = await dimensions(descriptor, options.maxImagePixels);
+	const codecs = await loadCodecs();
+	throwIfAborted(options.signal);
+	const descriptor = await describeInput(
+		bytes,
+		format,
+		options.maxImagePixels,
+		codecs,
+		options.signal,
+	);
+	const original = await dimensions(descriptor, options.maxImagePixels, codecs.sharp);
 	throwIfAborted(options.signal);
 
 	if (!options.autoResize && (original.width > MAX_DIMENSION || original.height > MAX_DIMENSION)) {
@@ -152,7 +170,7 @@ export async function processImage(
 	let quality = 95;
 	while (true) {
 		throwIfAborted(options.signal);
-		const encoded = await encode(descriptor, target, quality);
+		const encoded = await encode(descriptor, target, quality, codecs.sharp);
 		throwIfAborted(options.signal);
 		const base64Bytes = Buffer.byteLength(encoded.data.toString("base64"));
 		if (base64Bytes < MAX_BASE64_BYTES) {
@@ -197,10 +215,11 @@ async function describeInput(
 	bytes: Buffer,
 	format: SupportedImageFormat,
 	maxImagePixels: number,
+	codecs: ImageCodecs,
 	signal?: AbortSignal,
 ): Promise<InputDescriptor> {
 	if (format === "bmp") {
-		return describeBmp(bytes, maxImagePixels);
+		return describeBmp(bytes, maxImagePixels, codecs.decodeBmp);
 	}
 	if (format !== "heic") {
 		return {
@@ -217,9 +236,9 @@ async function describeInput(
 	}
 
 	throwIfAborted(signal);
-	let deferred: Awaited<ReturnType<typeof decodeHeic.all>> | undefined;
+	let deferred: Awaited<ReturnType<DecodeHeic["all"]>> | undefined;
 	try {
-		deferred = await decodeHeic.all({ buffer: bytes });
+		deferred = await codecs.decodeHeic.all({ buffer: bytes });
 		const first = deferred[0];
 		if (!first) throw new UnsupportedImageError("HEIC image has no frames");
 		assertPixelLimit(first.width, first.height, maxImagePixels);
@@ -243,7 +262,7 @@ async function describeInput(
 	}
 }
 
-function describeBmp(bytes: Buffer, maxImagePixels: number): InputDescriptor {
+function describeBmp(bytes: Buffer, maxImagePixels: number, decodeBmp: DecodeBmp): InputDescriptor {
 	if (bytes.byteLength < 54 || bytes.readUInt32LE(14) < 40) {
 		throw new UnsupportedImageError("BMP header is unsupported");
 	}
@@ -279,6 +298,7 @@ function describeBmp(bytes: Buffer, maxImagePixels: number): InputDescriptor {
 async function dimensions(
 	descriptor: InputDescriptor,
 	maxImagePixels: number,
+	sharp: SharpFactory,
 ): Promise<Dimensions> {
 	try {
 		const metadata = await sharp(descriptor.input, descriptor.options).metadata();
@@ -299,6 +319,7 @@ async function encode(
 	descriptor: InputDescriptor,
 	target: Dimensions,
 	quality: number,
+	sharp: SharpFactory,
 ): Promise<{ data: Buffer; info: OutputInfo }> {
 	let pipeline: Sharp = sharp(descriptor.input, descriptor.options).autoOrient().keepIccProfile();
 	if (target.width > 0 && target.height > 0) {
@@ -327,6 +348,22 @@ async function encode(
 			pipeline = pipeline.png({ compressionLevel: 9, adaptiveFiltering: true });
 	}
 	return pipeline.toBuffer({ resolveWithObject: true });
+}
+
+async function loadCodecs(): Promise<ImageCodecs> {
+	if (!codecsPromise) {
+		codecsPromise = Promise.all([import("sharp"), import("bmp-js"), import("heic-decode")])
+			.then(([sharpModule, bmpModule, heicModule]) => ({
+				sharp: sharpModule.default,
+				decodeBmp: bmpModule.decode,
+				decodeHeic: heicModule.default,
+			}))
+			.catch((error) => {
+				codecsPromise = undefined;
+				throw error;
+			});
+	}
+	return codecsPromise;
 }
 
 function fitWithin(dimensions: Dimensions, max: number): Dimensions {

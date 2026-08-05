@@ -7,30 +7,18 @@ import type {
 	InputEvent,
 	InputEventResult,
 } from "@earendil-works/pi-coding-agent";
-import { defineMenu, type MenuActionResult, runMenu } from "@narumitw/pi-tui-kit";
+import type { MenuActionResult } from "@narumitw/pi-tui-kit";
 import { BatchError, BatchStore, digestImages, type ProcessedImage } from "./batch.js";
-import { ImageProcessor } from "./images.js";
-import {
-	type ConfirmDialogResult,
-	createLimitInputScreen,
-	createLimitReviewScreen,
-	formatBytes,
-	type ImageDropLimitsMenuState,
-	isLimitSettingAction,
-	type LimitSettingAction,
-	limitChanges,
-	limitMenuDescription,
-	limitMenuState,
-	limitSettingsPatch,
-	type MenuLoadResult,
-	menuSummary,
-	runImageDropMenuLoad,
-	showImageDropConfirmDialog,
-	usesSafeLimits,
-	validateLimitInput,
+import { formatBytes } from "./format.js";
+import type { ImageProcessor } from "./images.js";
+import type {
+	ConfirmDialogResult,
+	ImageDropLimitsMenuState,
+	LimitSettingAction,
+	MenuLoadResult,
 } from "./menu.js";
 import { readEffectivePiImageSettings } from "./pi-settings.js";
-import { ImageDropServer, type ImageDropServerOptions } from "./server.js";
+import type { ImageDropServer, ImageDropServerOptions } from "./server.js";
 import {
 	DEFAULT_SETTINGS,
 	type ImageDropSettings,
@@ -40,6 +28,19 @@ import {
 } from "./settings.js";
 
 const WIDGET_KEY = "image-drop";
+
+type InteractiveUi = typeof import("./interactive-ui.js");
+let defaultInteractiveUiPromise: Promise<InteractiveUi> | undefined;
+
+function loadDefaultInteractiveUi(): Promise<InteractiveUi> {
+	if (!defaultInteractiveUiPromise) {
+		defaultInteractiveUiPromise = import("./interactive-ui.js").catch((error) => {
+			defaultInteractiveUiPromise = undefined;
+			throw error;
+		});
+	}
+	return defaultInteractiveUiPromise;
+}
 
 type LatestEventHandler = (event: unknown, ctx: ExtensionContext) => void | Promise<void>;
 type LatestExtensionAPI = ExtensionAPI & {
@@ -55,7 +56,8 @@ export interface RuntimeDependencies {
 	loadSettings: typeof loadSettings;
 	readPiSettings: typeof readEffectivePiImageSettings;
 	startServer(options: ImageDropServerOptions): Promise<ServerControl>;
-	createProcessor(): ProcessorControl;
+	createProcessor(): ProcessorControl | Promise<ProcessorControl>;
+	loadInteractiveUi(): Promise<InteractiveUi>;
 	/** Focused-test observer for the pure limits projection. */
 	observeLimits?: (state: ImageDropLimitsMenuState) => void;
 	loadStatus<T>(
@@ -71,10 +73,13 @@ export interface RuntimeDependencies {
 const DEFAULT_DEPENDENCIES: RuntimeDependencies = {
 	loadSettings,
 	readPiSettings: readEffectivePiImageSettings,
-	startServer: (options) => ImageDropServer.start(options),
-	createProcessor: () => new ImageProcessor(2),
-	loadStatus: runImageDropMenuLoad,
-	showConfirm: showImageDropConfirmDialog,
+	startServer: async (options) => (await import("./server.js")).ImageDropServer.start(options),
+	createProcessor: async () => new (await import("./images.js")).ImageProcessor(2),
+	loadInteractiveUi: loadDefaultInteractiveUi,
+	loadStatus: async (ctx, label, task) =>
+		(await loadDefaultInteractiveUi()).runImageDropMenuLoad(ctx, label, task),
+	showConfirm: async (ctx, title, message) =>
+		(await loadDefaultInteractiveUi()).showImageDropConfirmDialog(ctx, title, message),
 	updateSettings,
 	settingsFilePath,
 };
@@ -90,6 +95,7 @@ export class ImageDropRuntime {
 	private server?: ServerControl;
 	private serverStarting?: Promise<ServerControl>;
 	private processor?: ProcessorControl;
+	private processorStarting?: Promise<ProcessorControl>;
 	private sessionAbort = new AbortController();
 	private generation = 0;
 	private closed = true;
@@ -126,7 +132,12 @@ export class ImageDropRuntime {
 				this.context = ctx;
 				await this.recoverOrphanedReservation(ctx);
 				if (!this.isCurrentMenu(generation)) return;
-				await this.showMenu(ctx, generation);
+				try {
+					await this.showMenu(ctx, generation);
+				} catch (error) {
+					if (!this.isCurrentMenu(generation)) return;
+					ctx.ui.notify(`Image Drop menu could not open: ${formatError(error)}`, "error");
+				}
 			},
 		});
 
@@ -160,7 +171,8 @@ export class ImageDropRuntime {
 		if (generation !== this.generation) return;
 		this.settings = result.settings;
 		this.batch = new BatchStore(result.settings);
-		this.processor = this.dependencies.createProcessor();
+		this.processor = undefined;
+		this.processorStarting = undefined;
 		this.context = ctx;
 		this.closed = false;
 		this.lastPiSettingsWarning = "";
@@ -189,6 +201,7 @@ export class ImageDropRuntime {
 		this.batch = undefined;
 		this.settings = undefined;
 		this.processor = undefined;
+		this.processorStarting = undefined;
 		this.context = undefined;
 		ctx.ui.setWidget(WIDGET_KEY, undefined);
 	}
@@ -274,9 +287,8 @@ export class ImageDropRuntime {
 		text: string,
 	): Promise<boolean> {
 		const batch = this.batch;
-		const processor = this.processor;
 		const settings = this.settings;
-		if (!batch || !processor || !settings) return false;
+		if (!batch || !settings) return false;
 		let jobs: Array<{ id: string; source: Buffer }>;
 		try {
 			jobs = batch.beginAutoResizeReprocessing(autoResize);
@@ -288,6 +300,17 @@ export class ImageDropRuntime {
 		if (jobs.length === 0) return true;
 		const generation = this.generation;
 		const signal = this.sessionAbort.signal;
+		let processor: ProcessorControl;
+		try {
+			processor = await this.ensureProcessor();
+		} catch (error) {
+			if (generation === this.generation && !signal.aborted) {
+				this.restoreEditor(ctx, text);
+				ctx.ui.notify(formatError(error), "warning");
+			}
+			return false;
+		}
+		if (generation !== this.generation || signal.aborted || batch !== this.batch) return false;
 		this.server?.broadcastState();
 		this.updateWidget(ctx);
 		await Promise.all(
@@ -327,6 +350,22 @@ export class ImageDropRuntime {
 	}
 
 	private async showMenu(ctx: ExtensionCommandContext, generation: number): Promise<void> {
+		const ui = await this.dependencies.loadInteractiveUi();
+		if (!this.isCurrentMenu(generation)) return;
+		const {
+			createLimitInputScreen,
+			createLimitReviewScreen,
+			defineMenu,
+			isLimitSettingAction,
+			limitChanges,
+			limitMenuDescription,
+			limitMenuState,
+			limitSettingsPatch,
+			menuSummary,
+			runMenu,
+			usesSafeLimits,
+			validateLimitInput,
+		} = ui;
 		let statusLines: string[] = [];
 		let previousPiSettings: Awaited<ReturnType<typeof readEffectivePiImageSettings>> | undefined;
 		let loadedSettings: ImageDropSettings | undefined;
@@ -800,13 +839,16 @@ export class ImageDropRuntime {
 	}
 
 	private async ensureServer(ctx: ExtensionContext): Promise<ServerControl> {
-		if (this.closed || !this.batch || !this.settings || !this.processor) {
+		if (this.closed || !this.batch || !this.settings) {
 			throw new Error("the Pi session is not ready");
 		}
 		if (this.server) return this.server;
+		const processor = await this.ensureProcessor();
+		if (this.closed || !this.batch || !this.settings) {
+			throw new Error("the Pi session changed while image processing was loading");
+		}
 		if (!this.serverStarting) {
 			const generation = this.generation;
-			const processor = this.processor;
 			const starting = this.dependencies.startServer({
 				batch: this.batch,
 				settings: this.settings,
@@ -833,6 +875,27 @@ export class ImageDropRuntime {
 			return await starting;
 		} finally {
 			if (this.serverStarting === starting) this.serverStarting = undefined;
+		}
+	}
+
+	private async ensureProcessor(): Promise<ProcessorControl> {
+		if (this.processor) return this.processor;
+		if (!this.processorStarting) {
+			const generation = this.generation;
+			const starting = Promise.resolve(this.dependencies.createProcessor()).then((processor) => {
+				if (generation !== this.generation || this.closed) {
+					throw new Error("the Pi session changed while image processing was loading");
+				}
+				this.processor = processor;
+				return processor;
+			});
+			this.processorStarting = starting;
+		}
+		const starting = this.processorStarting;
+		try {
+			return await starting;
+		} finally {
+			if (this.processorStarting === starting) this.processorStarting = undefined;
 		}
 	}
 

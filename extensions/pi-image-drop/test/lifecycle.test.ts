@@ -39,6 +39,7 @@ function createHarness(
 			| { kind: "invalid"; settings: ImageDropSettings; warning: string }
 		>;
 		startError?: Error;
+		interactiveError?: Error;
 		menuActions?: Array<"open" | "status" | "settings" | "help" | "close">;
 		showMainMenu?: () => Promise<"open" | "status" | "settings" | "help" | "close">;
 		statusActions?: Array<"open" | "refresh" | "back" | "close">;
@@ -81,6 +82,8 @@ function createHarness(
 	let serverOptions: ImageDropServerOptions | undefined;
 	let serverStarts = 0;
 	let serverCloses = 0;
+	let processorCreates = 0;
+	let interactiveLoads = 0;
 	let links = 0;
 	let unusedLink = false;
 	const server = {
@@ -109,6 +112,15 @@ function createHarness(
 			serverOptions = received;
 			if (options.startError) throw options.startError;
 			return server;
+		},
+		createProcessor: () => {
+			processorCreates += 1;
+			return { process: async () => PROCESSED };
+		},
+		loadInteractiveUi: async () => {
+			interactiveLoads += 1;
+			if (options.interactiveError) throw options.interactiveError;
+			return import("../src/interactive-ui.js");
 		},
 		observeLimits: options.onLimits,
 		loadStatus: async (_ctx, _label, task) => {
@@ -212,6 +224,12 @@ function createHarness(
 		get serverCloses() {
 			return serverCloses;
 		},
+		get processorCreates() {
+			return processorCreates;
+		},
+		get interactiveLoads() {
+			return interactiveLoads;
+		},
 	};
 }
 
@@ -225,6 +243,14 @@ async function emit(
 	assert.ok(handler, `missing ${name} handler`);
 	return handler(event, ctx);
 }
+
+test("default session start defers processor and server creation", async () => {
+	const harness = createHarness();
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+	assert.equal(harness.processorCreates, 0);
+	assert.equal(harness.interactiveLoads, 0);
+	assert.equal(harness.serverStarts, 0);
+});
 
 test("interactive input appends one ready ordered batch and commits on matching user message", async () => {
 	const { mock, runtime, context } = createHarness();
@@ -319,6 +345,18 @@ test("agent_settled restores a queued reservation that never became a user messa
 	assert.equal(context.editorText, "queued prompt");
 	assert.equal(runtime.getBatchForTesting()?.publicState().phase, "ready");
 	assert.match(context.notifications.at(-1)?.message ?? "", /restored/i);
+});
+
+test("/image-drop reports a lazy interactive UI load failure", async () => {
+	const harness = createHarness({ interactiveError: new Error("UI module unavailable") });
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+
+	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
+
+	assert.deepEqual(harness.context.notifications.at(-1), {
+		message: "Image Drop menu could not open: UI module unavailable",
+		level: "error",
+	});
 });
 
 test("/image-drop is a side-effect-free menu until Open is selected", async () => {

@@ -164,11 +164,13 @@ Then open the unchanged `http://127.0.0.1:45678/...` link locally. Image Drop do
 ```text
 src/index.ts            Pi package entrypoint
 src/image-drop.ts       extension registration and command orchestration
-src/runtime.ts          Pi lifecycle, command menu, and message orchestration
+src/runtime.ts          Pi lifecycle, lazy capabilities, and message orchestration
+src/interactive-ui.ts   lazily loaded menu adapter and Pi TUI Kit boundary
 src/menu.ts             limit input/review projections, menu-state helpers, loader, and confirmation
+src/format.ts           lightweight byte formatting shared by runtime and menus
 src/batch.ts            in-memory draft and sent-history state machine
-src/images.ts           bounded image processing
-src/server.ts           authenticated loopback HTTP/SSE server
+src/images.ts           bounded queue with codecs loaded on first image processing
+src/server.ts           lazily loaded authenticated loopback HTTP/SSE server
 src/settings.ts         extension settings
 src/pi-settings.ts      effective Pi image settings adapter
 src/web/ui/             authored React and TypeScript browser source
