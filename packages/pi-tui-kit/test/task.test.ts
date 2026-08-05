@@ -77,6 +77,81 @@ test("runTask user cancellation aborts and drains the task before returning", as
 	assert.equal(settled, true);
 });
 
+test("runTask uses callback-injected cancellation keys and renders their hint", async () => {
+	let abortedAfterInjectedKey = false;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 40, {
+				matches: (data, binding) => binding === "tui.select.cancel" && data === "x",
+				getKeys: (binding) => (binding === "tui.select.cancel" ? ["x"] : []),
+			});
+			const frame = harness.render();
+			assert.equal(frame[0], "─".repeat(40));
+			assert.equal(frame.at(-1), "─".repeat(40));
+			assert.match(frame.join("\n"), /x cancel/u);
+			harness.handleInput("x");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			abortedAfterInjectedKey = taskSignal?.aborted ?? false;
+			if (!abortedAfterInjectedKey) {
+				harness.dispose();
+				return undefined;
+			}
+			return harness.resultPromise;
+		},
+	});
+	let taskSignal: AbortSignal | undefined;
+
+	const result = await runTask(context.ctx, {
+		label: "Loading",
+		task: async ({ signal }) => {
+			taskSignal = signal;
+			await new Promise<void>((resolve) => {
+				if (signal.aborted) resolve();
+				else signal.addEventListener("abort", () => resolve(), { once: true });
+			});
+			return "late";
+		},
+	});
+
+	assert.equal(abortedAfterInjectedKey, true);
+	assert.deepEqual(result, { kind: "cancelled" });
+});
+
+test("runTask non-cancellable mode ignores cancel input and hides the hint", async () => {
+	let releaseTask: (() => void) | undefined;
+	const taskGate = new Promise<void>((resolve) => {
+		releaseTask = resolve;
+	});
+	let taskSignal: AbortSignal | undefined;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 40);
+			assert.doesNotMatch(harness.render().join("\n"), /cancel/iu);
+			harness.handleInput("tui.select.cancel");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			assert.equal(taskSignal?.aborted, false);
+			releaseTask?.();
+			return harness.resultPromise;
+		},
+	});
+
+	const result = await runTask(context.ctx, {
+		label: "Loading",
+		cancellable: false,
+		task: async ({ signal }) => {
+			taskSignal = signal;
+			await taskGate;
+			return "done";
+		},
+	});
+
+	assert.deepEqual(result, { kind: "completed", value: "done" });
+});
+
 test("runTask owner abort is stale and drains before closing TUI", async () => {
 	const owner = new AbortController();
 	let reportStarted: (() => void) | undefined;

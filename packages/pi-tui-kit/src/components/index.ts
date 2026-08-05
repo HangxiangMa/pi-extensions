@@ -1,4 +1,4 @@
-import { DynamicBorder, type Theme } from "@earendil-works/pi-coding-agent";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
 	type Focusable,
 	fuzzyFilter,
@@ -21,6 +21,7 @@ import type {
 	MenuScreenComponentOptions,
 	MultiSelectOptions,
 } from "./contracts.js";
+import { DynamicBorder } from "./dynamic-border.js";
 import { createInputComponent, type InputOptions } from "./input.js";
 import { createMultiSelectComponent } from "./multi-select.js";
 import { handleSearchInput, menuHint, renderFrame, safeMenuText } from "./rendering.js";

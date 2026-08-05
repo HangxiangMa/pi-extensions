@@ -1,5 +1,6 @@
-import { BorderedLoader, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { safeMenuText } from "./components/rendering.js";
+import { TaskLoader } from "./components/task-loader.js";
 import type { MenuContext } from "./types.js";
 
 export type RunTaskResult<Value> =
@@ -61,8 +62,8 @@ async function runTuiTask<Value, Context extends MenuContext>(
 
 	try {
 		customResult = await uiFor(ctx).custom<RunTaskResult<Value> | undefined>(
-			(tui, theme, _keybindings, done) => {
-				const loader = new BorderedLoader(tui, theme, safeMenuText(options.label), {
+			(tui, theme, keybindings, done) => {
+				const loader = new TaskLoader(tui, theme, keybindings, safeMenuText(options.label), {
 					cancellable: options.cancellable ?? true,
 				});
 				let loaderDisposed = false;

@@ -261,6 +261,9 @@ abstractions when Pi provides a better stable owner.
 
 - Keep TypeScript strict, NodeNext-compatible, and built as published JavaScript plus declarations.
 - Keep Pi private `dist/*` imports at zero and package-root consumer imports as the supported boundary.
+- Keep production JavaScript imports from `@earendil-works/pi-coding-agent` at zero; use it only for
+  erased public types, compose runtime UI from public `pi-tui` primitives and callback-owned theme and
+  keybindings, and verify cold import plus first interaction with the serial runtime benchmark.
 - Keep the demonstrated runtime/interaction ownership boundary: adapters own presentation cadence
   and the interaction driver owns semantic action coordination. Recombine or split only when a new
   behavior matrix proves better locality and deletes coordination.

@@ -8,7 +8,8 @@ Reusable navigation helpers and typed, declarative interaction flows for indepen
 [`@earendil-works/pi-tui`](https://www.npmjs.com/package/@earendil-works/pi-tui). The initial
 high-level API lets extensions describe menu screens and domain actions while this package owns
 standard rendering, navigation, mode adaptation, cancellation, and lifecycle behavior. It also
-provides a standalone task runner for abort-aware work that needs Pi's cancellable TUI loader.
+provides a standalone task runner for abort-aware work with a cancellable bordered loader composed
+from public Pi TUI primitives.
 
 ## 📦 Install
 
@@ -33,6 +34,25 @@ Compatibility ranges are consumer-owned. Review each extension against the APIs 
 its tested minimum; do not automatically synchronize every consumer range with the current workspace
 package version during a shared release bump. In this monorepo, declare the dependency in the
 consuming package so local hoisting cannot hide an incompatible or missing published dependency.
+
+## ⚡ Runtime performance
+
+The Kit's production JavaScript imports Pi TUI at runtime but keeps Pi Coding Agent imports type-only.
+This prevents a source-loaded extension from evaluating a second heavyweight coding-agent runtime
+when its menu first opens. Borders and task loaders compose public Pi TUI primitives with the theme
+and keybindings supplied by the active UI callback; review syntax coloring uses the Kit's declared
+highlighter dependency and the same callback theme.
+
+Repository maintainers can measure cold package import, first actions/review frame, and first task
+frame in fresh serial processes:
+
+```bash
+npm run build --workspace @narumitw/pi-tui-kit
+node scripts/benchmark-tui-kit-runtime.mjs --runs 5
+```
+
+The benchmark reports medians, median absolute deviations, and resolved package URLs so a fast import
+cannot hide the same dependency cost in the first interaction.
 
 ## 🚀 Example
 
@@ -118,9 +138,10 @@ menu. RPC preserves each adapter's existing transition: a generic cancelled sele
 while input and review cancellation follow their declared hint. Owner replacement remains `stale`
 and takes precedence over any racing Close event.
 
-For abort-aware work outside a menu, use `runTask()`. TUI mode shows Pi's cancellable bordered
-loader; RPC, print, and JSON execute the same task directly. User cancellation, owner replacement,
-external component disposal, errors, and successful completion remain distinct typed results.
+For abort-aware work outside a menu, use `runTask()`. TUI mode shows the Kit's Pi-styled cancellable
+bordered loader; RPC, print, and JSON execute the same task directly. User cancellation, owner
+replacement, external component disposal, errors, and successful completion remain distinct typed
+results.
 
 ```ts
 import { runTask } from "@narumitw/pi-tui-kit";
