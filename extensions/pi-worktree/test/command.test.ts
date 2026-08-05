@@ -946,10 +946,11 @@ test("switch choices use unique ordinals when sanitized worktree labels collide"
 				harness.handleInput("tui.select.down");
 				harness.handleInput("tui.select.confirm");
 			} else {
-				assert.match(harness.render().join("\n"), /1\..*wt-.*same/);
-				assert.match(harness.render().join("\n"), /2\..*wt-same/);
+				assert.match(harness.render(240).join("\n"), /1\..*wt-.*same/);
+				assert.match(harness.render(240).join("\n"), /2\..*wt-same/);
 				harness.handleInput("tui.select.down");
 				harness.handleInput("tui.select.confirm");
+				await harness.waitForPending();
 			}
 			return harness.result;
 		},
@@ -966,7 +967,7 @@ test("switch choices use unique ordinals when sanitized worktree labels collide"
 	try {
 		await mock.commands.get("worktree")?.handler("", context.ctx);
 		assert.equal(customCalls, 2);
-		assert.equal(switchedCwd, second);
+		assert.equal(switchedCwd, second, JSON.stringify(context.notifications));
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
