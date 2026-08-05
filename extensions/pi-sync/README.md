@@ -292,6 +292,7 @@ extensions/pi-sync/
 │   ├── file-selection.ts
 │   ├── sync-operations.ts
 │   ├── sync-backend.ts
+│   ├── backend-factory.ts      # lazy selected-backend loader
 │   ├── s3-backend.ts
 │   ├── webdav-backend.ts
 │   ├── git-backend.ts

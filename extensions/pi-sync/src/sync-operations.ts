@@ -114,7 +114,7 @@ export async function status(
 	const config = await loadConfig(options.setup);
 	throwIfAborted(options.signal);
 	ctx.ui.setStatus(STATUS_KEY, `checking ${config.setupName}`);
-	const backend = backendFor(config, factory);
+	const backend = await backendFor(config, factory);
 	const local = await createSnapshot(
 		config.snapshotIdentity,
 		snapshotOptionsForContext(ctx, config),
@@ -160,7 +160,7 @@ export async function diff(
 	const config = await loadConfig(options.setup);
 	throwIfAborted(options.signal);
 	ctx.ui.setStatus(STATUS_KEY, `checking ${config.setupName}`);
-	const backend = backendFor(config, factory);
+	const backend = await backendFor(config, factory);
 	const local = await createSnapshot(
 		config.snapshotIdentity,
 		snapshotOptionsForContext(ctx, config),
@@ -206,7 +206,7 @@ export async function doctor(
 	try {
 		const config = await loadConfig(options.setup);
 		throwIfAborted(options.signal);
-		backend = backendFor(config, factory);
+		backend = await backendFor(config, factory);
 		profile = config.snapshotIdentity;
 		snapshotOptions = snapshotOptionsForContext(ctx, config);
 		messages.push(
@@ -283,7 +283,7 @@ export async function push(
 	const config = input?.config ?? (await loadConfig(options.setup));
 	throwIfAborted(options.signal);
 	ctx.ui.setStatus(STATUS_KEY, `pushing ${config.setupName}`);
-	const backend = input?.backend ?? backendFor(config, factory);
+	const backend = input?.backend ?? (await backendFor(config, factory));
 	const state = input?.state ?? (await readStateForConfig(config));
 	throwIfAborted(options.signal);
 	const local =
@@ -415,7 +415,7 @@ export async function pull(
 	const config = await loadConfig(options.setup);
 	throwIfAborted(options.signal);
 	ctx.ui.setStatus(STATUS_KEY, `pulling ${config.setupName}`);
-	const backend = backendFor(config, factory);
+	const backend = await backendFor(config, factory);
 	const state = await readStateForConfig(config);
 	throwIfAborted(options.signal);
 	const local = await createSnapshot(
@@ -520,7 +520,7 @@ export async function syncBoth(
 ) {
 	const config = await loadConfig(options.setup);
 	throwIfAborted(options.signal);
-	const backend = backendFor(config, factory);
+	const backend = await backendFor(config, factory);
 	const state = await readStateForConfig(config);
 	throwIfAborted(options.signal);
 	const local = await createSnapshot(
@@ -645,7 +645,7 @@ export async function history(
 ) {
 	const config = await loadConfig(options.setup);
 	throwIfAborted(options.signal);
-	const backend = backendFor(config, factory);
+	const backend = await backendFor(config, factory);
 	const snapshots = (await backend.listHistory(options.signal)).slice(-20).reverse();
 	throwIfAborted(options.signal);
 	if (snapshots.length === 0) {
@@ -695,7 +695,7 @@ export async function rollback(
 
 	const config = await loadConfig(options.setup);
 	throwIfAborted(options.signal);
-	const backend = backendFor(config, factory);
+	const backend = await backendFor(config, factory);
 	if (
 		expectedSelection &&
 		(backend.identity !== expectedSelection.backendIdentity ||

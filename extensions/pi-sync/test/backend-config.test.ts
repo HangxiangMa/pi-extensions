@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import test from "node:test";
-import { createSyncBackend } from "../src/backend-factory.js";
+import { createSyncBackend as createLazySyncBackend } from "../src/backend-factory.js";
 import {
 	loadConfig,
 	localConfigPath,
@@ -9,6 +9,7 @@ import {
 	statePathForConfig,
 	writeStateForConfig,
 } from "../src/config.js";
+import { createSyncBackend } from "./backend-factory-eager.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 
 function writeSettings(value: unknown) {
@@ -25,6 +26,16 @@ test("version 3 S3 config resolves the reviewed path and secret-free backend ide
 		assert.equal(config.backend.type, "s3");
 		assert.match(backend.destination, /pi-sync-test\/pi-sync\/home/u);
 		assert.doesNotMatch(backend.identity, /access-key|secret-key/u);
+	});
+});
+
+test("production backend factory loads the selected backend asynchronously", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeSettings(v3S3Settings({ path: "pi-sync/lazy" }));
+		const config = await loadConfig();
+		const backend = await createLazySyncBackend(config);
+		assert.match(backend.destination, /pi-sync-test\/pi-sync\/lazy/u);
 	});
 });
 

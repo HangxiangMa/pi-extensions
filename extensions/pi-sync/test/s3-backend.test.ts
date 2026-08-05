@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { gzipSync } from "node:zlib";
-import { createSyncBackend } from "../src/backend-factory.js";
 import { S3SyncBackend, snapshotKey } from "../src/s3-backend.js";
 import {
 	expectedRemoteHead,
@@ -10,6 +9,7 @@ import {
 	SyncBackendPublicationOutcomeUnknownError,
 } from "../src/sync-backend.js";
 import type { LatestPointer, Snapshot, SyncConfig } from "../src/types.js";
+import { createSyncBackend } from "./backend-factory-eager.js";
 import { snapshot } from "./helpers.js";
 
 test("S3 factory exposes a stable secret-free identity, weak capability, and diagnostics", async () => {
