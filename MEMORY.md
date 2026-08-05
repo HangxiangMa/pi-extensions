@@ -6,6 +6,7 @@
 
 - Node's strip-only TypeScript loader rejects parameter properties and does not remap NodeNext `./module.js` imports to local `.ts` files. For direct-source tests, avoid parameter properties or compile to a temporary JS outDir first.
 - A focused `node --test` run can reject a compiled test beneath `node_modules/.cache`; pass the test file's realpath.
+- Subprocess timing tests must start behavior deadlines after a child readiness handshake; full-suite load can consume short deadlines during module startup and falsely report blocked I/O.
 - Do not run root checks and the `pi-tui-kit` build/check concurrently: both clear `packages/pi-tui-kit/dist`. Rebuild the kit before consumer tests because consumers resolve its built output.
 - On macOS, temporary paths may appear as `/var/...` while Git canonicalizes them to `/private/var/...`; compare realpaths or run tests with a canonical `TMPDIR`.
 - Lifecycle tests can read real extension settings because handlers call `getAgentDir()` and some paths are cached at module load. Isolate `PI_CODING_AGENT_DIR` before importing the extension and use fresh imports for cached paths.
