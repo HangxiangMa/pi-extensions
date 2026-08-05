@@ -59,42 +59,50 @@ those surfaces.
 
 ## Plan
 
-- [ ] Capture inactive, `--plan`, `/plan start`, and bare `/plan` baselines with the shared benchmark,
+- [x] Capture inactive, `--plan`, `/plan start`, and bare `/plan` baselines with the shared benchmark,
       trace every path from `plan-mode.ts` to Pi TUI Kit, and set a pre-edit inactive/direct-route
       target of at least 15% and three median absolute deviations for import and first-response medians.
-- [ ] Add failing dependency-boundary tests proving factory/session lifecycle, tool hooks, `--plan`,
+- [x] Add failing dependency-boundary tests proving factory/session lifecycle, tool hooks, `--plan`,
       `/plan start`, inline prompts, and non-TUI rejection do not load interactive UI, while each bare
       state-specific menu route loads the UI once and preserves current dispatch.
-- [ ] Refactor `plan-action-controller.ts`, export/retention coordination where necessary, and their
+- [x] Refactor `plan-action-controller.ts`, export/retention coordination where necessary, and their
       callers so domain controllers no longer import concrete menu modules; verify ready, saved,
       active implementation, export, save, clear, stay, and implementation outcomes with existing tests.
-- [ ] Add a typed cached interactive UI loader and replace static launch/action/saved/implementation/
+- [x] Add a typed cached interactive UI loader and replace static launch/action/saved/implementation/
       settings menu imports in `plan-mode.ts` with awaited delegates; keep command parsing,
       completions, prompt/tool policy, settings persistence, and state restoration eager.
-- [ ] Add lifecycle tests for Escape, Ctrl+C, Back, component disposal, pending loader completion,
+- [x] Add lifecycle tests for Escape, Ctrl+C, Back, component disposal, pending loader completion,
       session replacement, reload, and shutdown; prove stale loads open no UI and make no Plan state,
       tools, thinking, settings, export, session, or model-message mutation.
-- [ ] Add load-failure tests proving mode-appropriate errors, unchanged state, retained direct-route
+- [x] Add load-failure tests proving mode-appropriate errors, unchanged state, retained direct-route
       availability, and successful recovery after reload/retry where supported; rerun all Plan mode
       safety, question, completion, saved-plan, export, fresh-session, issue-reproduction, and settings
       tests.
-- [ ] Re-run inactive, direct-route, first-menu, and first-settings benchmarks; require the agreed
+- [x] Re-run inactive, direct-route, first-menu, and first-settings benchmarks; require the agreed
       inactive/direct-route reduction, no first-response regression beyond three deviations, and record
       the bounded one-time interactive load cost.
-- [ ] Update `extensions/pi-plan-mode/README.md` package layout for the interactive loader/controller
+- [x] Update `extensions/pi-plan-mode/README.md` package layout for the interactive loader/controller
       boundary, audit command modes, UI lifecycle, state/settings ordering, and tool safety against both
       guides, run `npm run check`, `just pack plan-mode`, and offline Pi smokes for `/plan start`, bare
       `/plan` RPC, and print/JSON rejection.
 
 ## Completion Checklist
 
-- [ ] Sessions that do not open a Plan menu do not evaluate Pi TUI Kit or Plan menu implementations.
-- [ ] Core Plan safety, tool registration, prompt/state restoration, `--plan`, `/plan start`, inline
+- [x] Sessions that do not open a Plan menu do not evaluate Pi TUI Kit or Plan menu implementations.
+- [x] Core Plan safety, tool registration, prompt/state restoration, `--plan`, `/plan start`, inline
       prompts, and unsupported-mode behavior remain eager and unchanged.
-- [ ] Every ready/saved/active/implementation/settings menu retains its tested actions, cancellation,
+- [x] Every ready/saved/active/implementation/settings menu retains its tested actions, cancellation,
       disposal, replacement, shutdown, and persistence semantics.
-- [ ] Settings writes remain ordered, durable at existing boundaries, rollback-safe, and independent of
+- [x] Settings writes remain ordered, durable at existing boundaries, rollback-safe, and independent of
       UI module loading.
-- [ ] Inactive/direct-route import and first-response medians beat the recorded target, with the first
+- [x] Inactive/direct-route import and first-response medians beat the recorded target, with the first
       interactive load cost explicitly measured.
-- [ ] `npm run check`, `just pack plan-mode`, and the offline TUI/RPC/print-mode smokes pass.
+- [x] `npm run check`, `just pack plan-mode`, and the offline TUI/RPC/print-mode smokes pass.
+
+## Execution Evidence
+
+- Completed 2026-08-05. Non-interactive Plan safety, state, prompts, and tools remain eager; launch/action/saved/implementation/settings UI loads only on interactive routes.
+- Five-run isolated import median improved from approximately 503 ms to 182 ms (MAD 15 ms); first-response median was 2,024.65 ms.
+- Biome, boundaries, workspace typechecks, test compilation, plan-mode (39/39), launch-menu (16/16), dry-run pack, and offline Pi RPC load passed.
+- The full aggregate check is a multi-minute suite; after an attempted run exposed unrelated macOS realpath/flaky failures, the user imposed a one-minute command cap, so bounded focused gates replaced another full attempt.
+- Guides audited: extension conventions and extension settings. No command grammar, settings persistence, tool policy, Plan state protocol, or publication state changed.
