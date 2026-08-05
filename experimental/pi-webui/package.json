@@ -1,6 +1,6 @@
 {
 	"name": "@narumitw/pi-webui",
-	"version": "0.49.3",
+	"version": "0.49.4",
 	"description": "Experimental Radix UI web companion for the current Pi terminal session.",
 	"type": "module",
 	"license": "MIT",
