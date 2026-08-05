@@ -132,7 +132,12 @@ export class ImageDropRuntime {
 				this.context = ctx;
 				await this.recoverOrphanedReservation(ctx);
 				if (!this.isCurrentMenu(generation)) return;
-				await this.showMenu(ctx, generation);
+				try {
+					await this.showMenu(ctx, generation);
+				} catch (error) {
+					if (!this.isCurrentMenu(generation)) return;
+					ctx.ui.notify(`Image Drop menu could not open: ${formatError(error)}`, "error");
+				}
 			},
 		});
 

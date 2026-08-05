@@ -352,13 +352,16 @@ async function encode(
 
 async function loadCodecs(): Promise<ImageCodecs> {
 	if (!codecsPromise) {
-		codecsPromise = Promise.all([import("sharp"), import("bmp-js"), import("heic-decode")]).then(
-			([sharpModule, bmpModule, heicModule]) => ({
+		codecsPromise = Promise.all([import("sharp"), import("bmp-js"), import("heic-decode")])
+			.then(([sharpModule, bmpModule, heicModule]) => ({
 				sharp: sharpModule.default,
 				decodeBmp: bmpModule.decode,
 				decodeHeic: heicModule.default,
-			}),
-		);
+			}))
+			.catch((error) => {
+				codecsPromise = undefined;
+				throw error;
+			});
 	}
 	return codecsPromise;
 }

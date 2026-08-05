@@ -39,6 +39,7 @@ function createHarness(
 			| { kind: "invalid"; settings: ImageDropSettings; warning: string }
 		>;
 		startError?: Error;
+		interactiveError?: Error;
 		menuActions?: Array<"open" | "status" | "settings" | "help" | "close">;
 		showMainMenu?: () => Promise<"open" | "status" | "settings" | "help" | "close">;
 		statusActions?: Array<"open" | "refresh" | "back" | "close">;
@@ -118,6 +119,7 @@ function createHarness(
 		},
 		loadInteractiveUi: async () => {
 			interactiveLoads += 1;
+			if (options.interactiveError) throw options.interactiveError;
 			return import("../src/interactive-ui.js");
 		},
 		observeLimits: options.onLimits,
@@ -343,6 +345,18 @@ test("agent_settled restores a queued reservation that never became a user messa
 	assert.equal(context.editorText, "queued prompt");
 	assert.equal(runtime.getBatchForTesting()?.publicState().phase, "ready");
 	assert.match(context.notifications.at(-1)?.message ?? "", /restored/i);
+});
+
+test("/image-drop reports a lazy interactive UI load failure", async () => {
+	const harness = createHarness({ interactiveError: new Error("UI module unavailable") });
+	await emit(harness.mock, "session_start", {}, harness.context.ctx);
+
+	await harness.mock.commands.get("image-drop")?.handler("", harness.context.ctx);
+
+	assert.deepEqual(harness.context.notifications.at(-1), {
+		message: "Image Drop menu could not open: UI module unavailable",
+		level: "error",
+	});
 });
 
 test("/image-drop is a side-effect-free menu until Open is selected", async () => {
