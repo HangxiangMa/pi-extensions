@@ -31,6 +31,7 @@
 - Do not call Pi action methods such as `getThinkingLevel()` during extension factory load; defer them until `session_start` or later.
 - `agent_end` is only a low-level run boundary. Use `agent_settled` for idle work, retries, final activity clearing, and next-item activation; ignore events belonging to a replaced session manager.
 - Extension follow-ups are most reliable when `agent_end` records intent and queues `deliverAs: "followUp"`, while `agent_settled` retries retained intent. Manual compaction needs a narrowly idle-gated fallback because it does not emit `agent_settled`.
+- Pi emits `session_compact` before clearing its manual-compaction controller, so a follow-up sent inside that hook is rejected even when `ctx.isIdle()` is true. Retain intent, defer dispatch by one owned/cancellable task, and revalidate session and goal ownership.
 - `pi.events.emit()` can synchronously re-enter an extension through sibling listeners. Revalidate session/goal ownership after emission before updating UI or sending prompts.
 - Delayed callbacks must not depend on a captured stale `ExtensionContext`; pass plain data, catch stale-context failures, and scope cleanup to the owning request/session.
 - Concurrent tools sharing one extension status key need per-session ownership tracking; one call must not clear or relabel a still-running sibling.
