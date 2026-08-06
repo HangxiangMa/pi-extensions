@@ -37,9 +37,11 @@ UI, package metadata, or lifecycle behavior changes are planned.
   boundary and add coverage proving nullable deletion markers reach `Provider.stream()` unchanged.
   Evidence: the exact mixed header map reached the provider, and all 40 compiled experimental tests
   passed under pinned Pi.
-- [ ] Reproduce CI's latest-Pi install in an external temporary worktree, run the affected workspace
-  typechecks/tests, then run the pinned `npm run check`; audit sibling resolved-auth consumers for the
-  same narrowing pattern.
+- [x] Reproduce CI's latest-Pi install in an external temporary clone, run the full latest-Pi gate,
+  then run the pinned `npm run check`; audit sibling resolved-auth consumers for the same narrowing
+  pattern. Evidence: Pi 0.84 and pinned Pi each passed all 2,431 tests; `pi-accounts`' compatibility
+  adapter now also reflects `ProviderHeaders`, while other consumers infer Pi's type, ignore headers,
+  or already handle nullable values.
 - [ ] Commit and push the focused compatibility fix, update PR #574's notes, verify GitHub CI passes,
   and archive this completed plan.
 
@@ -50,12 +52,14 @@ UI, package metadata, or lifecycle behavior changes are planned.
 - Treating a null-only map as credentials could select a model with no usable authentication. Count
   only string header values for availability while still forwarding mixed maps unchanged.
 - Updating the current checkout to latest Pi would rewrite manifests and dependencies. Use an
-  external temporary worktree for the alternate-version matrix and leave the pinned checkout intact.
+  external temporary clone for the alternate-version matrix and leave the pinned checkout intact. A
+  linked worktree is unsuitable because Git injects its administrative `GIT_DIR` into subprocess
+  tests.
 
 ## Completion Checklist
 
-- [ ] `pi-btw` derives its registry contract from Pi and forwards `ProviderHeaders` unchanged.
-- [ ] Experimental `pi-codex-compact` accepts and forwards `ProviderHeaders` unchanged.
-- [ ] Null-only headers do not satisfy `pi-btw` credential availability.
-- [ ] Pinned and latest-Pi affected checks pass, followed by the pinned repository gate.
+- [x] `pi-btw` derives its registry contract from Pi and forwards `ProviderHeaders` unchanged.
+- [x] Experimental `pi-codex-compact` accepts and forwards `ProviderHeaders` unchanged.
+- [x] Null-only headers do not satisfy `pi-btw` credential availability.
+- [x] Pinned and latest-Pi full repository gates pass with 2,431 tests each.
 - [ ] PR #574 is updated and GitHub CI is green.
