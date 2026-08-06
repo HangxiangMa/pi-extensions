@@ -63,7 +63,8 @@ No extension-owned settings or asynchronous runtime lifecycle flow changes, so
 
 - [x] Commit this executable plan on `feat/consolidate-packages-changesets`; verify the branch and
       clean index with `git status --short --branch` and inspect the commit. Evidence: commit
-      `840795a` contains only this plan, and the post-commit status was clean.
+      `13da320` contains only this plan after rebasing onto current `origin/main`, and the post-commit
+      status was clean.
 - [x] Move all 25 active extension directories to flat `packages/<package>/` paths; update workspace,
       TypeScript, Biome, Just, CI, package repository metadata, maintained documentation, plans, ADRs,
       and source/test path references; add explicit lifecycle metadata and a root stable-extension Pi
@@ -73,12 +74,16 @@ No extension-owned settings or asynchronous runtime lifecycle flow changes, so
       workspace versions match npm latest; no tracked legacy package root or old package path remains;
       the boundary validator reports 1 library, 25 extensions, and 6 experiments; Biome passes; all
       2,431 tests pass; workspace typechecking passes; `git diff --check` passes.
-- [ ] Add pinned Changesets tooling and independent configuration; replace shared-version/tag release
+- [x] Add pinned Changesets tooling and independent configuration; replace shared-version/tag release
       scripts and workflows with Changesets version-PR and trusted-publish automation; update release
       recipes, repository guidance, and deterministic fixture tests for independent bumps, dependency
       ordering, baseline safety, package-specific tags, and experimental classification; verify the
       focused release/repository tests and Changesets status/version smokes; commit the release-system
-      migration.
+      migration. Evidence: Changesets CLI `2.31.1` and action `v1.9.0` are pinned; config keeps `fixed`
+      and `linked` empty and ordinary internal ranges consumer-owned; the fixture version smoke bumps
+      only selected packages and generates their changelogs; status reports the migration's empty
+      changeset and no releases; Biome, boundary checks, workspace typechecking, and all 2,420 tests
+      pass.
 - [ ] Audit the complete diff against `docs/extension-conventions.md`, verify no active references to
       removed workspace roots or shared release tooling remain, run `npm run check`, dry-run pack every
       workspace, and run representative stable and experimental Pi package load smokes; record all
