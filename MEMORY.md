@@ -92,6 +92,7 @@
 
 ## TASTE
 
+- When a Pi core package provides the required function, use that function.
 - Prefer canonical JSON and explicit argv arrays for pi-lsp configuration; avoid extension-specific environment-variable settings while retaining `servers[].env` for child-process needs.
 - Prefer pi-sync setup that collects credentials in a masked TUI and reviews one exact backend path; storage connections and sync setups are the only managed user concepts.
 - Prefer direct, user-owned context selection; avoid dedicated shortcuts or manual copy steps for routine quoting workflows.
