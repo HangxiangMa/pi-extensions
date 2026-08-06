@@ -1,13 +1,18 @@
-# 📓 pi-jupyter
+# 📓 pi-jupyter — Deprecated Jupyter notebook preview for Pi
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-jupyter)](https://www.npmjs.com/package/@narumitw/pi-jupyter)
 [![Pi Extension](https://img.shields.io/badge/Pi-extension-blue)](https://github.com/earendil-works/pi)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > [!WARNING]
-> This extension is experimental. Its preview behavior, interaction model, and shortcuts may change between releases.
+> `@narumitw/pi-jupyter` is deprecated with no replacement, kept under `deprecated/` for
+> reference, and no longer part of the active workspace package set. To remove it from Pi:
+>
+> ```bash
+> pi uninstall npm:@narumitw/pi-jupyter
+> ```
 
-Preview a Jupyter notebook (`.ipynb`) in a terminal-native panel beside Pi's editor. The panel renders the notebook saved on disk; it does not run a Jupyter kernel or open a browser webview.
+`@narumitw/pi-jupyter` previewed a Jupyter notebook (`.ipynb`) in a terminal-native panel beside Pi's editor. The panel rendered the notebook saved on disk; it did not run a Jupyter kernel or open a browser webview.
 
 ## ✨ Features
 
@@ -21,29 +26,13 @@ Preview a Jupyter notebook (`.ipynb`) in a terminal-native panel beside Pi's edi
 - Supports keyboard scrolling, focused scrolling, and mouse resizing from the panel's left border.
 - Auto-hides the overlay when the terminal is narrower than 90 columns.
 
-## 📦 Install
+## 📦 Archived reference
 
-Install persistently from npm:
-
-```bash
-pi install npm:@narumitw/pi-jupyter
-```
-
-Try from npm without installing permanently:
+To inspect the deprecated package from this repository without installing it:
 
 ```bash
-pi -e npm:@narumitw/pi-jupyter
+pi -e ./deprecated/pi-jupyter
 ```
-
-Try the local working tree from this repository checkout:
-
-```bash
-pi -e ./packages/pi-jupyter
-# or
-just try jupyter
-```
-
-Avoid loading both a global npm installation and the local workspace at the same time; duplicate instances register the same shortcuts.
 
 ## 🚀 Quick start
 
@@ -123,7 +112,7 @@ While focused, use `Up`, `Down`, `PgUp`, `PgDn`, `Home`, or `j`, `k`, `u`, `d`, 
 - Notebook text, paths, errors, and output are escaped before terminal rendering to prevent embedded terminal controls.
 - The extension does not execute notebook code, contact a Jupyter server, or send notebook contents to a separate service.
 
-## 🧪 Experimental limitations
+## 🧪 Limitations
 
 - Preview rendering is intentionally static and does not provide notebook editing or kernel execution.
 - Notebook discovery scans only files directly inside Pi's current working directory.
