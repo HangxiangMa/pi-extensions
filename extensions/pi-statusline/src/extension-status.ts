@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import process from "node:process";
-import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type Theme, type ThemeColor } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { powerlineExtensionSeparator } from "./powerline.js";
 import { DEFAULT_EXTENSION_STATUS_ICONS } from "./settings.js";
@@ -194,10 +193,9 @@ export function readInstalledExtensionPackages(cwd: string): InstalledExtensionP
 }
 
 function extensionSettingsFiles(cwd: string): string[] {
-	return [
-		join(process.env.HOME ?? "", ".pi", "agent", "settings.json"),
-		join(cwd, ".pi", "settings.json"),
-	].filter((file) => existsSync(file));
+	return [join(getAgentDir(), "settings.json"), join(cwd, ".pi", "settings.json")].filter((file) =>
+		existsSync(file),
+	);
 }
 
 export function findDuplicateExtensions(

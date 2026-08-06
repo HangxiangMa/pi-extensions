@@ -30,13 +30,14 @@ persistence, command surface, UI flow, or lifecycle ownership changes are planne
 
 ## Plan
 
-- [ ] Add a focused test under `extensions/pi-statusline/test/` that gives
+- [x] Add a focused test under `extensions/pi-statusline/test/` that gives
   `PI_CODING_AGENT_DIR`, `HOME`, and the project different temporary roots; verify the configured
   agent and project packages participate in duplicate and alias discovery while the unrelated HOME
-  package is excluded, and first confirm the test fails for the reported path-selection reason.
-- [ ] Update `extensions/pi-statusline/src/extension-status.ts` to derive the global Pi
-  `settings.json` candidate from `getAgentDir()` while leaving `<cwd>/.pi/settings.json` unchanged;
-  verify the new regression test and all `pi-statusline` tests pass.
+  package is excluded. Evidence: the focused compiled test failed because it loaded
+  `@test/pi-home-only` instead of the configured `@test/pi-foo`.
+- [x] Update `extensions/pi-statusline/src/extension-status.ts` to derive the global Pi
+  `settings.json` candidate from `getAgentDir()` while leaving `<cwd>/.pi/settings.json` unchanged.
+  Evidence: the regression test passed, followed by all 128 compiled `pi-statusline` tests.
 - [ ] Audit the final diff against the touched-area rules, run `npm run check`, and record any skipped
   or inapplicable smoke; package and loader smokes are not expected because metadata and runtime
   loading are unchanged.
