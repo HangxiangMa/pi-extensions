@@ -786,7 +786,7 @@ The transferable design is the checkpoint protocol rather than any one summary p
 ## Experimental Pi extension boundary
 
 This repository now contains
-[`experimental/pi-codex-compact`](../../experimental/pi-codex-compact/README.md), an experimental
+[`packages/pi-codex-compact`](../../packages/pi-codex-compact/README.md), an experimental
 Pi extension for the built-in `openai-codex` OAuth provider. It implements the Remote V2 wire path
 inside Pi's public extension boundary:
 

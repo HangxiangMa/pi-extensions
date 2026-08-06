@@ -52,7 +52,7 @@ lifecycle ownership, and exact streaming limits.
 ## Assumptions
 
 - Public API behavior is evaluated against the workspace's locked Pi core version, currently declared
-  by `extensions/pi-subagents/package.json` dev dependencies; durable guidance must not hard-code that
+  by `packages/pi-subagents/package.json` dev dependencies; durable guidance must not hard-code that
   version.
 - Repository convention keeps Pi runtime packages at peer version `"*"`, so compatibility must be
   handled in code or by disabling only the unsupported optional in-process path with an actionable
@@ -119,7 +119,7 @@ lifecycle ownership, and exact streaming limits.
   `DEFAULT_MAX_LINES`, retaining exact `truncateUtf8()`, redaction, terminal sanitation, and extension
   markers; focused context, consultation, and rendering coverage passes for multibyte, oversized,
   line-count, tail, and marker-inclusive caps.
-- [x] Update `extensions/pi-subagents/README.md` for core prompt precedence, `APPEND_SYSTEM.md` in
+- [x] Update `packages/pi-subagents/README.md` for core prompt precedence, `APPEND_SYSTEM.md` in
   project-context mode, core CLI model parsing, and the actionable unsupported-core fallback; examples
   and settings names remain unchanged.
 - [x] Run `npm test`; final run passed all 2,205 tests. Two earlier full-suite runs exposed the same

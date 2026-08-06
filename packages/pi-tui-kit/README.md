@@ -31,8 +31,9 @@ using a broad `<1` range. Otherwise an existing npm lock can retain an older Kit
 screen or contract the extension expects.
 
 Compatibility ranges are consumer-owned. Review each extension against the APIs it imports and keep
-its tested minimum; do not automatically synchronize every consumer range with the current workspace
-package version during a shared release bump. In this monorepo, declare the dependency in the
+its tested minimum; do not automatically synchronize every consumer range with the current Kit
+version. Pi TUI Kit and its consumers version independently through Changesets. Publish a new Kit API
+before raising a consumer's compatibility floor to use it, and declare the dependency in the
 consuming package so local hoisting cannot hide an incompatible or missing published dependency.
 
 ## ⚡ Runtime performance

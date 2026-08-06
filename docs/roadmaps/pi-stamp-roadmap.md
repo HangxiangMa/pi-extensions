@@ -27,7 +27,7 @@ boundary.
 
 ## Current State
 
-- `extensions/pi-stamp/src/stamp.ts` observes message and tool lifecycle events only in TUI sessions,
+- `packages/pi-stamp/src/stamp.ts` observes message and tool lifecycle events only in TUI sessions,
   appends `pi-stamp` custom entries, and registers one callback-theme-aware, width-safe renderer.
 - Message entry versions 1–4 preserve timestamps, date context, response timing, and opt-in sanitized
   assistant metadata. A disjoint version-1 tool schema stores only bounded ID association, local
@@ -89,7 +89,7 @@ provides an explicit stable seam.
 ### Phase 1: Establish message timestamps
 
 **Status:** Implemented; maintained evidence is the version-1 payload/renderer coverage and current
-`extensions/pi-stamp` source.
+`packages/pi-stamp` source.
 
 **Milestones:**
 

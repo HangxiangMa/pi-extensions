@@ -33,7 +33,7 @@ state after asynchronous dialogs.
 
 ## Architecture
 
-- Keep workflow ownership in `extensions/pi-goal/src/menu.ts`; use declarative
+- Keep workflow ownership in `packages/pi-goal/src/menu.ts`; use declarative
   `@narumitw/pi-tui-kit` action/input screens rather than adding a bespoke component. The published
   input-screen API begins at `@narumitw/pi-tui-kit` 0.46.0, so pi-goal must raise its reviewed
   compatibility floor from 0.40.0 to 0.46.0 and update the root lockfile.
@@ -91,36 +91,36 @@ state after asynchronous dialogs.
 - [x] Obtain explicit approval for the `25k` / `100k` / `300k` presets, budget-before-objective flow,
       and objective-submit-as-Apply behavior; the active implementation goal approved the plan and
       the resolved decision is recorded under Unknowns.
-- [x] Add red-first interaction tests in `extensions/pi-goal/test/menu.test.ts` for the start-budget
+- [x] Add red-first interaction tests in `packages/pi-goal/test/menu.test.ts` for the start-budget
       chooser, exact preset labels/context, custom-input examples, accepted compact/full formats,
       invalid-draft retention, Back/Escape/Ctrl+C, objective cancellation, and successful start;
       the initial focused run failed on the missing chooser/custom guidance, and the updated focused
       menu suite passes 28/28 tests.
-- [x] Refactor the start-budget route in `extensions/pi-goal/src/menu.ts` into shallow declarative
+- [x] Refactor the start-budget route in `packages/pi-goal/src/menu.ts` into shallow declarative
       chooser and custom-input screens with menu-owned draft state; preset and custom integration
       tests prove exact normalized budgets apply only after objective submission and cancellation
       leaves Goal state unchanged.
-- [x] Extend `extensions/pi-goal/test/menu.test.ts` with finite/Unlimited automatic-work context,
+- [x] Extend `packages/pi-goal/test/menu.test.ts` with finite/Unlimited automatic-work context,
       manager/session disposal, replacement during an awaited dialog, and 40/80/120-column
       keyboard/focus rendering cases; the focused TUI harness passes without overflow, lost draft, or
       stale mutation.
-- [x] Update the increase-and-resume input path in `extensions/pi-goal/src/menu.ts` to show current
+- [x] Update the increase-and-resume input path in `packages/pi-goal/src/menu.ts` to show current
       budget, current usage, accepted-format examples, and the exact required lower bound while
       retaining its existing preview confirmation; focused tests pass for confirmation,
       cancellation, invalid/lower values, exact non-round usage, replacement, changed usage,
       immediate resume, and the maximum-safe-integer disabled state.
-- [x] Update start feedback in `extensions/pi-goal/src/commands.ts` only as needed to report the exact
+- [x] Update start feedback in `packages/pi-goal/src/commands.ts` only as needed to report the exact
       selected cumulative token budget alongside the finite or Unlimited automatic-work state;
       focused command tests pass for budgeted and no-budget starts, while existing rollback coverage
       remains in the package suite.
-- [x] Preserve parser and direct-route compatibility in `extensions/pi-goal/src/command.ts` and its
+- [x] Preserve parser and direct-route compatibility in `packages/pi-goal/src/command.ts` and its
       tests, adding representative assertions for `300000`, `300k`, `2.5k`, and `1.5m`; focused tests
       pass for those forms plus malformed, zero, negative, non-finite, and unsafe values.
-- [x] Raise `extensions/pi-goal/package.json`'s `@narumitw/pi-tui-kit` floor to published version
+- [x] Raise `packages/pi-goal/package.json`'s `@narumitw/pi-tui-kit` floor to published version
       `^0.46.0` and update `package-lock.json`; pinned npm 12.0.2 under Node 22 changed only the intended
       nested dependency, package checks pass, and `just pack goal` contains the declared source,
       README, manifest, and notices.
-- [x] Update `extensions/pi-goal/README.md` with presets, custom syntax examples, cumulative-token and
+- [x] Update `packages/pi-goal/README.md` with presets, custom syntax examples, cumulative-token and
       one-call-overshoot semantics, independent automatic-work limits, cancellation/navigation, and
       the cost-cap distinction; reviewed labels and direct routes match production.
 - [x] Audit the completed diff against `docs/extension-conventions.md` and

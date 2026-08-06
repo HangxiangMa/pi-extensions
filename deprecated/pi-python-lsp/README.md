@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-python-lsp)](https://www.npmjs.com/package/@narumitw/pi-python-lsp) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-> Deprecated: use [`@narumitw/pi-lsp`](../../extensions/pi-lsp) instead. This package is kept for reference under `deprecated/` and is no longer part of the active workspace package set.
+> Deprecated: use [`@narumitw/pi-lsp`](../../packages/pi-lsp) instead. This package is kept for reference under `deprecated/` and is no longer part of the active workspace package set.
 
 `@narumitw/pi-python-lsp` is a native [Pi coding agent](https://pi.dev) extension that exposes Python language-server tools from [ty](https://github.com/astral-sh/ty) and [Ruff](https://docs.astral.sh/ruff/).
 

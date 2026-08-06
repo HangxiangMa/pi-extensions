@@ -67,7 +67,7 @@ storage backend when they are actually required.
       eager graph from `src/sync.ts` through manager, operations, backend, Pi TUI Kit, XML, and lock
       modules; record the eager modules and set a pre-edit success threshold of at least 15% and three
       median absolute deviations for both import and idle first-response medians.
-- [x] Add failing loader-boundary tests under `extensions/pi-sync/test/` proving factory registration,
+- [x] Add failing loader-boundary tests under `packages/pi-sync/test/` proving factory registration,
       missing-config session start, and automatic-disabled session start do not load manager,
       operations, or backend modules, while pending recovery still runs and the first required route
       loads its module exactly once.
@@ -92,7 +92,7 @@ storage backend when they are actually required.
 - [x] Re-run the benchmark for missing config, automatic disabled, and a deterministic local backend
       fixture; require the agreed import/idle-response reduction and no meaningful regression in
       automatic startup readiness or first backend command beyond three baseline deviations.
-- [x] Update the `extensions/pi-sync/README.md` package layout for new loader modules, audit all touched
+- [x] Update the `packages/pi-sync/README.md` package layout for new loader modules, audit all touched
       async paths against both convention guides, run `npm run check`, `just pack sync`, and an offline
       RPC Pi load covering command discovery plus one deterministic local sync route.
 

@@ -120,7 +120,7 @@ The Phase 4 admission record must resolve these before implementation:
       stale-tool blocking, usage accounting, queue skip, parallel tool batches, settings downgrade,
       reload, and no-listener behavioral equivalence; verify no path creates an unbounded same-run or
       cross-run blocker loop.
-- [ ] Update `extensions/pi-goal/README.md` with opt-in settings, JSON channels, bounds, first-claim
+- [ ] Update `packages/pi-goal/README.md` with opt-in settings, JSON channels, bounds, first-claim
       rule, no-listener behavior, timeout/failure fallback, and security limitations; verify examples
       match the admitted consumer and deterministic tests.
 - [ ] Audit cancellation, proposal disposal, replacement, shutdown, every post-`await` state use,

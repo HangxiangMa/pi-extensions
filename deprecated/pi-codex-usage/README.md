@@ -5,7 +5,7 @@
 > [!WARNING]
 > `@narumitw/pi-codex-usage` is deprecated, kept under `deprecated/` for reference,
 > and no longer part of the active workspace package set. Use
-> [`@narumitw/pi-usage`](../../extensions/pi-usage) instead. Do not load both extensions at the
+> [`@narumitw/pi-usage`](../../packages/pi-usage) instead. Do not load both extensions at the
 > same time. To migrate one Pi installation, run:
 >
 > ```bash
@@ -13,7 +13,7 @@
 > pi install npm:@narumitw/pi-usage
 > ```
 >
-> See the [`pi-usage` migration guide](../../extensions/pi-usage#-migrating-from-pi-codex-usage)
+> See the [`pi-usage` migration guide](../../packages/pi-usage#-migrating-from-pi-codex-usage)
 > for behavior changes.
 
 `@narumitw/pi-codex-usage` is a native [Pi coding agent](https://pi.dev) extension that adds `/codex-status`, a command for showing ChatGPT Codex subscription usage from inside Pi.

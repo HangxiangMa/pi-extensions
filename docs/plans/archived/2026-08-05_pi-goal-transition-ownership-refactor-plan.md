@@ -9,14 +9,14 @@ run events.
 
 ## Context
 
-- `extensions/pi-goal/src/commands.ts`, `runtime.ts`, and `goal.ts` currently assemble stopped
+- `packages/pi-goal/src/commands.ts`, `runtime.ts`, and `goal.ts` currently assemble stopped
   transitions independently. Callers repeat subsets of continuation cancellation, recovery and budget
   cleanup, usage accounting, stale-tool policy, abort, status mutation, terminal details, persistence,
   and status publication.
 - `GoalRuntime` already owns the mutable per-factory state and the canonical persistence/publication
   boundary, so a narrow runtime operation can enforce this protocol without adding another manager or
   store.
-- `extensions/pi-goal/src/settings-ui.ts` can freeze a queue while retaining an `active` Goal. That is
+- `packages/pi-goal/src/settings-ui.ts` can freeze a queue while retaining an `active` Goal. That is
   a suspension protocol, not a stopped Goal transition, and should remain outside this refactor.
 - Existing focused tests and the runtime smoke cover explicit pause, safety limits, budgets, tool
   loss, blocker reports, provider errors, queue transitions, rollback, reload, stale prompts, and
@@ -99,7 +99,7 @@ open rather than maintaining two partially authoritative paths.
 ## Plan
 
 - [x] Record the complete stopped-transition matrix in this plan from
-      `extensions/pi-goal/src/{commands,runtime,goal}.ts`, including explicit pause, continuation and
+      `packages/pi-goal/src/{commands,runtime,goal}.ts`, including explicit pause, continuation and
       no-progress safety pauses, token-budget exhaustion, unavailable tools, accepted blocker report,
       terminal agent error, exhausted retry recovery, and failed activation/edit/resume/queue prompt
       rollback; verify repository search finds every direct transition to `paused`, `blocked`,
@@ -113,7 +113,7 @@ open rather than maintaining two partially authoritative paths.
       matching Goal ID, target state, cleanup ownership, abort/stale-tool behavior, canonical session
       entry, status text, and managed-run terminal publication where applicable; verify the new cases
       pass against the pre-refactor implementation and do not duplicate equivalent coverage.
-- [x] Add the narrow stopped-transition operation to `extensions/pi-goal/src/runtime.ts`, with a
+- [x] Add the narrow stopped-transition operation to `packages/pi-goal/src/runtime.ts`, with a
       discriminated request or equally deep interface derived from the matrix, stale expected-ID
       rejection, and one ordered implementation of shared cleanup, state mutation, terminal details,
       persistence, and status publication; verify focused unit tests prove each supported transition
@@ -124,11 +124,11 @@ open rather than maintaining two partially authoritative paths.
       tests and runtime smoke preserve budget wrap-up, abort, retry, tool-policy, and stale-call
       behavior.
 - [x] Migrate command-owned explicit pause and prompt-delivery rollback transitions in
-      `extensions/pi-goal/src/commands.ts` to the same operation, leaving confirmation, prompt
+      `packages/pi-goal/src/commands.ts` to the same operation, leaving confirmation, prompt
       delivery, notifications, and command results in the adapter; verify command, queue, menu, and
       settings rollback tests preserve exact state and user-visible behavior after every `await`.
 - [x] Migrate accepted `goal_blocked`, terminal agent interruption, and other stopped lifecycle paths
-      in `extensions/pi-goal/src/goal.ts` to the same operation, then remove obsolete bound aliases and
+      in `packages/pi-goal/src/goal.ts` to the same operation, then remove obsolete bound aliases and
       duplicated transition statements made unnecessary by this refactor; verify tool and lifecycle
       tests preserve termination, usage classification, retry exhaustion, managed-run events, and
       stale-goal rejection.
@@ -144,7 +144,7 @@ open rather than maintaining two partially authoritative paths.
 - [x] Run the mapped focused tests, `npm run test:runtime --workspace @narumitw/pi-goal`, root
       `npm test`, root `npm run check`, `just pack goal`, and `git diff --check`; verify all checks pass
       and inspect the dry-run tarball to confirm published contents remain aligned with
-      `extensions/pi-goal/package.json`.
+      `packages/pi-goal/package.json`.
 
 ## Execution Evidence
 

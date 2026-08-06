@@ -8,13 +8,13 @@ which races cannot be eliminated by an extension.
 
 The maintained implementation and tests are authoritative:
 
-- `extensions/pi-goal/src/goal.ts`
-- `extensions/pi-goal/src/runtime.ts`
-- `extensions/pi-goal/src/accounting.ts`
-- `extensions/pi-goal/src/safety.ts`
-- `extensions/pi-goal/src/prompts.ts`
-- `extensions/pi-goal/test/goal.test.ts`
-- `extensions/pi-goal/test/goal-runtime-smoke.mjs`
+- `packages/pi-goal/src/goal.ts`
+- `packages/pi-goal/src/runtime.ts`
+- `packages/pi-goal/src/accounting.ts`
+- `packages/pi-goal/src/safety.ts`
+- `packages/pi-goal/src/prompts.ts`
+- `packages/pi-goal/test/goal.test.ts`
+- `packages/pi-goal/test/goal-runtime-smoke.mjs`
 
 The package README owns the public command, settings, status, and interruption contract. This note
 keeps only the internal lifecycle rationale and remaining Pi-core boundary.
@@ -126,10 +126,10 @@ settled, retry, compaction, accounting, and stale-delivery guarantees.
 ## Verification map
 
 - Settled exactly-once dispatch, pending-message priority, replacement, pause, clear, and lost-start
-  races: `extensions/pi-goal/test/goal.test.ts` settled-continuation cases.
+  races: `packages/pi-goal/test/goal.test.ts` settled-continuation cases.
 - Retry, overflow, compaction, stopped-state, and exhausted-recovery classification: the retry and
   compaction lifecycle cases in `goal.test.ts`.
 - Usage totals, active time, tool-boundary budgets, wrap-up ownership, and safety epochs: accounting,
   budget, and automatic-turn cases in `goal.test.ts`, plus persistence/settings tests.
 - Real Pi event ordering, retries, manual compaction, no-progress stopping, automatic tool loops, and
-  bounded pre-aborted cleanup: `extensions/pi-goal/test/goal-runtime-smoke.mjs`.
+  bounded pre-aborted cleanup: `packages/pi-goal/test/goal-runtime-smoke.mjs`.

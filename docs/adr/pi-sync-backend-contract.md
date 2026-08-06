@@ -191,7 +191,7 @@ in `docs/adr/pi-sync-git-backend.md`.
 
 ## Verification
 
-- Shared contract: `extensions/pi-sync/test/backend-contract-suite.ts` and each
+- Shared contract: `packages/pi-sync/test/backend-contract-suite.ts` and each
   `*-backend-contract.test.ts`.
 - Orchestration and lifecycle: `backend-orchestration.test.ts`, `backend-lifecycle.test.ts`, and
   `publication.test.ts`.

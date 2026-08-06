@@ -8,15 +8,15 @@ observing Goal state without control, or retaining the current RPC-owned start/p
 
 ## Context
 
-- `extensions/pi-goal/src/rpc.ts` always registers `pi-goal:rpc:start` and
+- `packages/pi-goal/src/rpc.ts` always registers `pi-goal:rpc:start` and
   `pi-goal:rpc:pause`; session binding currently determines whether a request can act.
-- `extensions/pi-goal/src/runtime.ts` emits `pi-goal:state` whenever canonical Goal state is
+- `packages/pi-goal/src/runtime.ts` emits `pi-goal:state` whenever canonical Goal state is
   persisted or cleared.
-- `extensions/pi-goal/src/settings.ts` owns the user-scoped `pi-goal.json` schema, defaults,
+- `packages/pi-goal/src/settings.ts` owns the user-scoped `pi-goal.json` schema, defaults,
   validation, unknown-field-preserving save, and atomic publication.
-- `extensions/pi-goal/src/settings-ui.ts` presents four current settings through
+- `packages/pi-goal/src/settings-ui.ts` presents four current settings through
   `@narumitw/pi-tui-kit` and applies successful changes immediately with rollback on failure.
-- Existing RPC behavior is public and tested in `extensions/pi-goal/test/goal-rpc.test.ts`; an
+- Existing RPC behavior is public and tested in `packages/pi-goal/test/goal-rpc.test.ts`; an
   omitted new setting must preserve it.
 
 ## Architecture
@@ -88,27 +88,27 @@ continues to report the manual settings path.
 
 ## Plan
 
-- [ ] Add failing cases to `extensions/pi-goal/test/settings.test.ts` for the omitted
+- [ ] Add failing cases to `packages/pi-goal/test/settings.test.ts` for the omitted
       `rpc-owned` default, all three access values, invalid values and container shapes, and
       preservation of unknown top-level and nested fields; verify the intended failures with the
       focused compiled settings test before changing `settings.ts`.
-- [ ] Extend `extensions/pi-goal/src/settings.ts` with the access enum, normalized default, nested
+- [ ] Extend `packages/pi-goal/src/settings.ts` with the access enum, normalized default, nested
       read/write behavior, and unknown-field-preserving publication; verify the new settings cases
       and existing malformed-file, missing-file, and atomic-save tests pass.
 - [ ] Add failing policy-matrix and concurrency cases to
-      `extensions/pi-goal/test/goal-rpc.test.ts` for state emission, start replies, correlated pause,
+      `packages/pi-goal/test/goal-rpc.test.ts` for state emission, start replies, correlated pause,
       unbound sessions, live downgrades, and an accepted start completing after downgrade; verify
       failures show the current always-enabled behavior before adding policy checks.
 - [ ] Add one cross-extension policy helper and apply it in
-      `extensions/pi-goal/src/rpc.ts` plus `GoalRuntime.persistGoal()` and clear-event publication so
+      `packages/pi-goal/src/rpc.ts` plus `GoalRuntime.persistGoal()` and clear-event publication so
       each access level matches the documented matrix without changing request ownership; verify the
       focused RPC suite passes, including listener-error isolation and session bind/unbind cases.
-- [ ] Add failing settings-menu cases to `extensions/pi-goal/test/settings-ui.test.ts` for the fifth
+- [ ] Add failing settings-menu cases to `packages/pi-goal/test/settings-ui.test.ts` for the fifth
       row, effective value labels, immediate application, save rollback, invalid-file read-only
-      output, and non-TUI fallback; then update `extensions/pi-goal/src/settings-ui.ts` to use the
+      output, and non-TUI fallback; then update `packages/pi-goal/src/settings-ui.ts` to use the
       existing declarative settings flow and verify those cases pass at supported widths and keyboard
       paths.
-- [ ] Update `extensions/pi-goal/README.md` with the JSON schema, compatibility default, access
+- [ ] Update `packages/pi-goal/README.md` with the JSON schema, compatibility default, access
       matrix, trusted-extension warning, live-change semantics, and non-TUI editing path; verify every
       documented value and channel is covered by settings or RPC tests.
 - [ ] Audit request acceptance, state suppression, settings ordering, failure rollback, session

@@ -8,7 +8,7 @@ icon aliases.
 
 ## Context
 
-Issue #573 reports that `extensions/pi-statusline/src/extension-status.ts` reconstructs the global
+Issue #573 reports that `packages/pi-statusline/src/extension-status.ts` reconstructs the global
 `settings.json` path from `HOME` instead of using Pi's agent-directory contract. When
 `PI_CODING_AGENT_DIR` points elsewhere, the configured global packages are omitted and an unrelated
 `$HOME/.pi/agent/settings.json` may be included. On Windows without `HOME`, the current expression is
@@ -30,12 +30,12 @@ persistence, command surface, UI flow, or lifecycle ownership changes are planne
 
 ## Plan
 
-- [x] Add a focused test under `extensions/pi-statusline/test/` that gives
+- [x] Add a focused test under `packages/pi-statusline/test/` that gives
   `PI_CODING_AGENT_DIR`, `HOME`, and the project different temporary roots; verify the configured
   agent and project packages participate in duplicate and alias discovery while the unrelated HOME
   package is excluded. Evidence: the focused compiled test failed because it loaded
   `@test/pi-home-only` instead of the configured `@test/pi-foo`.
-- [x] Update `extensions/pi-statusline/src/extension-status.ts` to derive the global Pi
+- [x] Update `packages/pi-statusline/src/extension-status.ts` to derive the global Pi
   `settings.json` candidate from `getAgentDir()` while leaving `<cwd>/.pi/settings.json` unchanged.
   Evidence: the regression test passed, followed by all 128 compiled `pi-statusline` tests.
 - [x] Audit the final diff against the touched-area rules and run `npm run check`. Evidence: all

@@ -29,7 +29,7 @@ and unsafe shell composition.
 
 ## Architecture
 
-- Retain one deterministic policy path in `extensions/pi-plan-mode/src/tool-policy.ts`; the model
+- Retain one deterministic policy path in `packages/pi-plan-mode/src/tool-policy.ts`; the model
   proposes commands but never decides whether they run.
 - Continue parsing simple shell chains and require every segment to match a reviewed command
   validator. Redirects, expansions, substitutions, subshells, background work, unsafe generic
@@ -74,24 +74,24 @@ instructions; existing `safeSubcommands` files remain valid in either direction.
 
 ## Plan
 
-- [x] Add red-first policy regressions to `extensions/pi-plan-mode/test/tool-policy.test.ts` for the
+- [x] Add red-first policy regressions to `packages/pi-plan-mode/test/tool-policy.test.ts` for the
       three ordinary #533 forms, configured `git blame` without `--no-textconv`, and a compound
       inspection chain; retain assertions that explicit `--ext-diff`, `--textconv`, `--output`,
       signature/helper, mixed-subcommand mutation, and unsafe chain segments are rejected. Evidence:
       after a clean test compile, the focused test ran all 8 cases and failed only the changed Git
       inspection case because `git diff` still returned false.
-- [x] Simplify the read-dominant validators in `extensions/pi-plan-mode/src/tool-policy.ts` so the
+- [x] Simplify the read-dominant validators in `packages/pi-plan-mode/src/tool-policy.ts` so the
       shared Git argument guard remains authoritative while negative helper flags become optional;
       remove obsolete mandatory-guard helpers and make the focused policy test pass without widening
       `branch`, `remote`, `cat-file`, `grep`, GitHub CLI, shell-chain, or unknown-command behavior.
       Evidence: the cleanly compiled focused policy suite passed all 8 cases.
 - [x] Add a red-first active-hook assertion in
-      `extensions/pi-plan-mode/test/safe-subcommands.test.ts` that an unsupported or explicitly unsafe
+      `packages/pi-plan-mode/test/safe-subcommands.test.ts` that an unsupported or explicitly unsafe
       command is described as outside the reviewed inspection policy rather than necessarily
-      mutating; update the rejection text in `extensions/pi-plan-mode/src/plan-mode.ts`. Evidence: the
+      mutating; update the rejection text in `packages/pi-plan-mode/src/plan-mode.ts`. Evidence: the
       message test initially failed both active-hook cases against the old wording; after the update,
       the compiled hook and policy suites passed all 11 cases.
-- [x] Update `extensions/pi-plan-mode/README.md` to show ordinary accepted Git inspection forms,
+- [x] Update `packages/pi-plan-mode/README.md` to show ordinary accepted Git inspection forms,
       remove mandatory `--no-textconv`/`--no-ext-diff` guidance, preserve the explicit-danger and
       mixed-subcommand rejection examples, and state that configured helpers may run because Plan
       Mode is risk reduction rather than a sandbox. Evidence: the documented examples map to focused

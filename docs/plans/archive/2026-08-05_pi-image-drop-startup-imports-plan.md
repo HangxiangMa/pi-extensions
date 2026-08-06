@@ -78,7 +78,7 @@ requires the service.
 - [x] Re-run default-disabled, start-on-session, first-menu, and first-image benchmarks; require the
       default import/idle-response target, no start-on-session readiness regression beyond three
       deviations, and record the bounded one-time first-use cost.
-- [x] Update `extensions/pi-image-drop/README.md` package layout for the light queue/heavy codec and
+- [x] Update `packages/pi-image-drop/README.md` package layout for the light queue/heavy codec and
       lazy capability modules, audit settings/lifecycle semantics against both guides, run
       `npm run check`, the package web build/check, `just pack image-drop`, and offline Pi smokes for
       default-disabled startup plus explicit server start.

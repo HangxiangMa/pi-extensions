@@ -132,7 +132,7 @@ pi-goal
 ├─ compatibility tools and current managed-run protocol adapter
 └─ focused workflow using the managed-execution stage
 
-experimental/pi-workflow
+packages/pi-workflow
 ├─ /workflow public interface and one unified status surface
 ├─ workflow-specific menus, settings, wording, and tool namespace
 ├─ full workflow protocol adapter and user-owned access policy
@@ -200,9 +200,9 @@ stage configuration or an engine-owned transition.
 **Outcome:** The engine can host both stages and expose complete headless workflow semantics while Pi
 remains the sole agent, session, compaction, retry, generic RPC, and UI runtime.
 
-### Phase 2: Build experimental/pi-workflow from both stages
+### Phase 2: Build packages/pi-workflow from both stages
 
-- [ ] `experimental/pi-workflow` exists as an independently installable extension with a visible
+- [ ] `packages/pi-workflow` exists as an independently installable extension with a visible
   experimental warning, unique `/workflow` command and tool namespace, one state-aware manager, and
   no dependency on another extension package.
 - [ ] The extension binds its command, tools, TUI, and a default-off full workflow protocol adapter to
@@ -366,7 +366,7 @@ validated usage baseline.
 - “Full RPC” means complete JSON-safe workflow control semantics with direct-service and transport
   adapters. Native custom workflow commands in `pi --mode rpc` remain unavailable unless Pi adds a
   public extension point or a separately justified host exposes the engine service.
-- `experimental/pi-workflow` is the approved initial combined product and must show a user-facing
+- `packages/pi-workflow` is the approved initial combined product and must show a user-facing
   warning while its command, settings, protocol, and persisted workflow contract remain experimental.
 - pi-plan-mode remains focused on planning and retains its existing ordinary implementation handoff;
   it does not become a second complete Plan-to-Execution product.
@@ -387,7 +387,7 @@ validated usage baseline.
 - **2026-08-03 — Choose a shared engine, not a provider broker:** Move reusable Plan and Goal workflow
   logic into the engine. Focused and combined products consume it as thin adapters rather than
   coordinating extension packages.
-- **2026-08-03 — Add a standalone combined product:** Build `experimental/pi-workflow` in Phase 2 from
+- **2026-08-03 — Add a standalone combined product:** Build `packages/pi-workflow` in Phase 2 from
   planning and managed-execution stages, then migrate pi-goal and pi-plan-mode in Phases 3 and 4.
   pi-plan-mode remains focused rather than becoming another complete Plan-to-Execution product.
 - **2026-08-03 — Defer successor selection:** Keep pi-plan-mode and pi-goal active while pi-workflow

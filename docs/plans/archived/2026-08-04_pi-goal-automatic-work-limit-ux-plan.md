@@ -64,18 +64,18 @@ reports an actionable error.
 ## Plan
 
 - [x] Add red tests for the omitted default and explicit finite/`null` compatibility, then update
-  `extensions/pi-goal/src/settings.ts` to restore 25. Evidence: focused tests initially failed with
+  `packages/pi-goal/src/settings.ts` to restore 25. Evidence: focused tests initially failed with
   `null !== 25` and now pass 5/5; malformed values remain invalid and unknown-field save coverage
   passes.
-- [x] Add interaction tests and update `extensions/pi-goal/src/settings-ui.ts` for the flat
+- [x] Add interaction tests and update `packages/pi-goal/src/settings-ui.ts` for the flat
   **Automatic-work limit** control, default/custom/Unlimited choices, explicit Unlimited warning,
   lower-live-limit preview, atomic rollback, direct recovery entry, cancellation, goal replacement,
   and menu disposal. Evidence: settings UI tests pass 30/30.
-- [x] Add manager tests and update `extensions/pi-goal/src/menu.ts` for empty, active, Unlimited,
+- [x] Add manager tests and update `packages/pi-goal/src/menu.ts` for empty, active, Unlimited,
   hard-cap-paused, queue/partial, budget, and ordinary stopped states. Evidence: hard-cap recovery
   previews preserved objective/usage/time/queue, Back has no side effects, Continue is bound to the
   previewed goal, and Change limit returns to the still-paused recovery state; menu tests pass 20/20.
-- [x] Update `extensions/pi-goal/src/commands.ts`, `goal.ts`, and `runtime.ts` so start, resume,
+- [x] Update `packages/pi-goal/src/commands.ts`, `goal.ts`, and `runtime.ts` so start, resume,
   restored-session, summary, pause notification, and statusline surfaces use consistent automatic
   work terminology and finite/Unlimited state. Evidence: direct resume reports the pending reset to
   0/25 and preserved usage; default and Unlimited starts are covered; restored 25/25 work pauses
@@ -87,7 +87,7 @@ reports an actionable error.
   harness tests prove every rendered line stays within width, critical cause/effect/action text stays
   visible, keyboard Enter/Escape navigation returns focus to the prior route, and states/actions are
   text-labeled rather than color-only.
-- [x] Update `extensions/pi-goal/README.md` with default 25, explicit-null compatibility, manager and
+- [x] Update `packages/pi-goal/README.md` with default 25, explicit-null compatibility, manager and
   recovery behavior, statusline examples, restoration behavior, and the distinction between a
   response cap, token budget, estimated Pi cost, and a provider billing cap.
 - [x] Audit the diff against `docs/extension-conventions.md` and `docs/extension-settings.md` for

@@ -81,7 +81,7 @@ those surfaces.
 - [x] Re-run inactive, direct-route, first-menu, and first-settings benchmarks; require the agreed
       inactive/direct-route reduction, no first-response regression beyond three deviations, and record
       the bounded one-time interactive load cost.
-- [x] Update `extensions/pi-plan-mode/README.md` package layout for the interactive loader/controller
+- [x] Update `packages/pi-plan-mode/README.md` package layout for the interactive loader/controller
       boundary, audit command modes, UI lifecycle, state/settings ordering, and tool safety against both
       guides, run `npm run check`, `just pack plan-mode`, and offline Pi smokes for `/plan start`, bare
       `/plan` RPC, and print/JSON rejection.

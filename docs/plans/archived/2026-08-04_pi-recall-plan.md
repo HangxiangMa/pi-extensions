@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add `experimental/pi-recall` (`@narumitw/pi-recall`, `/recall`) so users can save a text user or assistant message from the active session branch, then preview, quote, or delete it across sessions through All, Current cwd, and Current session scopes.
+Add `packages/pi-recall` (`@narumitw/pi-recall`, `/recall`) so users can save a text user or assistant message from the active session branch, then preview, quote, or delete it across sessions through All, Current cwd, and Current session scopes.
 
 ## Architecture
 

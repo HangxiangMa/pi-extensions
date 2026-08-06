@@ -56,7 +56,7 @@ doctor package="@narumitw/pi-chrome-devtools":
 
 # Show npm visibility/version information for all publishable packages
 doctor-all:
-    shopt -s nullglob; for package_json in packages/*/package.json extensions/*/package.json experimental/*/package.json; do package="$(node -p "require('./$package_json').name")"; just doctor "$package"; done
+    shopt -s nullglob; for package_json in packages/*/package.json; do package="$(node -p "require('./$package_json').name")"; just doctor "$package"; done
 
 # Make an already-published scoped npm package public if npm view returns 404
 # This does not create a package. For a brand-new package, first run:
@@ -72,59 +72,62 @@ _validate-extension-name name:
 # Preview the package that npm would publish
 # Usage: just pack subagents
 pack name: (_validate-extension-name name)
-    name={{quote(name)}}; package_json="./extensions/pi-$name/package.json"; if [[ ! -f "$package_json" ]]; then package_json="./experimental/pi-$name/package.json"; fi; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; npm --workspace "$package" pack --dry-run
+    name={{quote(name)}}; package_json="./packages/pi-$name/package.json"; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; npm --workspace "$package" pack --dry-run
 
 # Try a package from this working tree as a temporary pi package
 # Usage: just try subagents
 try name: (_validate-extension-name name)
-    name={{quote(name)}}; extension_dir="./extensions/pi-$name"; if [[ ! -d "$extension_dir" ]]; then extension_dir="./experimental/pi-$name"; fi; [[ -d "$extension_dir" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package_json="$extension_dir/package.json"; package="$(node -p "require(process.argv[1]).name" "$package_json")"; npm --workspace "$package" run build --if-present; pi -e "$extension_dir"
+    name={{quote(name)}}; extension_dir="./packages/pi-$name"; [[ -d "$extension_dir" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package_json="$extension_dir/package.json"; package="$(node -p "require(process.argv[1]).name" "$package_json")"; npm --workspace "$package" run build --if-present; pi -e "$extension_dir"
 
 # Start Pi with the commonly used extensions loaded from this working tree
 # PI_TIMING reports startup timing for local extension development
 dev:
     PI_TIMING=1 pi -ns -ne \
-        -e ./extensions/pi-accounts \
-        -e ./extensions/pi-btw \
-        -e ./extensions/pi-caffeinate \
-        -e ./extensions/pi-chrome-devtools \
-        -e ./extensions/pi-github-pr \
-        -e ./extensions/pi-goal \
-        -e ./extensions/pi-plan-mode \
-        -e ./extensions/pi-firecrawl \
-        -e ./extensions/pi-sync \
-        -e ./extensions/pi-usage \
-        -e ./extensions/pi-worktree \
-        -e ./extensions/pi-stamp \
-        -e ./extensions/pi-starship \
-        -e ./experimental/pi-codex-compact
+        -e ./packages/pi-accounts \
+        -e ./packages/pi-btw \
+        -e ./packages/pi-caffeinate \
+        -e ./packages/pi-chrome-devtools \
+        -e ./packages/pi-github-pr \
+        -e ./packages/pi-goal \
+        -e ./packages/pi-plan-mode \
+        -e ./packages/pi-firecrawl \
+        -e ./packages/pi-sync \
+        -e ./packages/pi-usage \
+        -e ./packages/pi-worktree \
+        -e ./packages/pi-stamp \
+        -e ./packages/pi-starship \
+        -e ./packages/pi-codex-compact
 
 # Start a fresh Pi session with every local extension package loaded
 try-all:
-    shopt -s nullglob; args=(); for package_json in ./extensions/pi-*/package.json ./experimental/pi-*/package.json; do args+=(-e "$(dirname "$package_json")"); done; pi -ne "${args[@]}"
+    shopt -s nullglob; args=(); for package_json in ./packages/pi-*/package.json; do if node -e 'const p = require(process.argv[1]); process.exit(p.pi?.extensions ? 0 : 1)' "$package_json"; then args+=(-e "$(dirname "$package_json")"); fi; done; pi -ne "${args[@]}"
 
 # Install a package through pi, falling back to the local workspace if unpublished
 # Usage: just install subagents
 install name: (_validate-extension-name name)
-    name={{quote(name)}}; extension_dir="./extensions/pi-$name"; if [[ ! -d "$extension_dir" ]]; then extension_dir="./experimental/pi-$name"; fi; package_json="$extension_dir/package.json"; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; if npm view "$package" version >/dev/null 2>&1; then pi install "npm:$package"; else echo "$package is not published; installing local workspace package instead."; pi install "$extension_dir"; fi
+    name={{quote(name)}}; extension_dir="./packages/pi-$name"; package_json="$extension_dir/package.json"; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; if npm view "$package" version >/dev/null 2>&1; then pi install "npm:$package"; else echo "$package is not published; installing local workspace package instead."; pi install "$extension_dir"; fi
 
-_publish-package-json package_json:
-    package_json={{quote(package_json)}}; if [[ "$package_json" == ./experimental/* ]]; then echo "WARNING: publishing experimental Pi extension $(basename "$(dirname "$package_json")")." >&2; fi; package="$(node -p "require(process.argv[1]).name" "$package_json")"; version="$(node -p "require(process.argv[1]).version" "$package_json")"; if npm view "$package@$version" version >/dev/null 2>&1; then echo "$package@$version already exists; skipping publish."; else npm --workspace "$package" pack --dry-run; npm --workspace "$package" publish --access public; fi
+# Add release intent for independently versioned packages
+changeset:
+    npm run changeset
 
-# Manually publish one production or experimental extension, skipping an existing version
-# Usage: just publish subagents
-publish name: (_validate-extension-name name)
-    name={{quote(name)}}; package_json="./extensions/pi-$name/package.json"; if [[ ! -f "$package_json" ]]; then package_json="./experimental/pi-$name/package.json"; fi; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; just _publish-package-json "$package_json"
+# Show the pending independent release plan
+changeset-status:
+    npm run changeset:status
 
-# Publish all libraries, production extensions, and experimental extensions to npm
+# Apply pending changesets to package versions, changelogs, and the lockfile
+version-packages:
+    npm run version-packages
+
+# Recovery publication for every local package version not already on npm
+# Requires explicit approval before use.
 publish-all:
-    for package_json in packages/*/package.json extensions/*/package.json experimental/*/package.json; do just _publish-package-json "$package_json"; done
+    npm run check
+    npm run publish-packages
 
 # Preview individual packages that npm would publish
 pack-tui-kit:
     npm --workspace @narumitw/pi-tui-kit pack --dry-run
-
-publish-tui-kit:
-    just _publish-package-json ./packages/pi-tui-kit/package.json
 
 pack-btw:
     just pack btw
@@ -334,75 +337,3 @@ install-webui:
 
 install-worktree:
     just install worktree
-
-# Publish individual packages to npm
-publish-btw:
-    just publish btw
-
-publish-caffeinate:
-    just publish caffeinate
-
-publish-chrome-devtools:
-    just publish chrome-devtools
-
-publish-accounts:
-    just publish accounts
-
-publish-analytics:
-    just publish analytics
-
-publish-usage:
-    just publish usage
-
-publish-firecrawl:
-    just publish firecrawl
-
-publish-github-pr:
-    just publish github-pr
-
-publish-google-genai:
-    just publish google-genai
-
-publish-goal:
-    just publish goal
-
-publish-image-drop:
-    just publish image-drop
-
-publish-jupyter:
-    just publish jupyter
-
-publish-langfuse:
-    just publish langfuse
-
-publish-lsp:
-    just publish lsp
-
-publish-plan-mode:
-    just publish plan-mode
-
-publish-stamp:
-    just publish stamp
-
-publish-starship:
-    just publish starship
-
-publish-statusline:
-    just publish statusline
-
-publish-sync:
-    just publish sync
-
-publish-subagents:
-    just publish subagents
-
-publish-webui:
-    just publish webui
-
-publish-worktree:
-    just publish worktree
-
-# Bump one workspace package without creating a git tag
-# Usage: just bump @narumitw/pi-goal patch
-bump package part="patch":
-    npm --workspace {{quote(package)}} version {{quote(part)}} --no-git-tag-version

@@ -11,7 +11,7 @@ behavior.
 
 - This is plan 2 of the KISS refactor sequence and starts only after
   `2026-08-05_pi-goal-transition-ownership-refactor-plan.md` is complete and archived.
-- `extensions/pi-goal/src/runtime.ts` currently owns `goalToolsUnlocked`,
+- `packages/pi-goal/src/runtime.ts` currently owns `goalToolsUnlocked`,
   `goalToolsHiddenByPolicy`, availability checks, hide/reveal/restore operations, activation
   preparation, and visibility snapshots alongside unrelated continuation, queue, budget, menu, and
   persistence state.
@@ -72,7 +72,7 @@ parallel state owners.
 
 - [x] Inventory every read and write of Goal tool names, `goalToolsUnlocked`,
       `goalToolsHiddenByPolicy`, visibility snapshots, and activation preparation across
-      `extensions/pi-goal/src` and map each operation to the existing tool-policy tests; verify the
+      `packages/pi-goal/src` and map each operation to the existing tool-policy tests; verify the
       inventory identifies any uncovered settings rollback, session replacement, or failed-delivery
       path before edits.
 - [x] Establish the post-plan-1 baseline with the mapped tool-policy tests,
