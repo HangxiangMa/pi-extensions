@@ -36,13 +36,13 @@ update:
     just update-lock
     just verify-update
 
-# Install pre-commit hooks
+# Install Husky Git hooks
 hooks:
-    pre-commit install
+    npm run prepare
 
-# Run pre-commit hooks against all files
+# Run the pre-commit checks
 pre-commit:
-    pre-commit run --all-files
+    npm run precommit
 
 # Show npm account/registry/package visibility information for one package
 # Usage: just doctor @narumitw/pi-chrome-devtools
