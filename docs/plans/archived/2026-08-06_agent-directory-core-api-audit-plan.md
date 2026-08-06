@@ -46,8 +46,9 @@ environment cleanup; no asynchronous or UI lifecycle path is touched.
   experimental packages, now contain no direct `PI_CODING_AGENT_DIR` read or HOME-based agent-root
   reconstruction. The two remaining `~/.pi/agent` matches are explanatory default-path text; global
   settings readers use `getAgentDir()`, and project readers preserve their existing paths.
-- [ ] Run package checks and `npm run check`, audit the final diff against the guides, update PR #574's
-  scope and verification notes, push the focused commits, and record any unrelated external CI
+- [x] Run package checks and `npm run check`, audit the final diff against the guides, update PR #574's
+  scope and verification notes, and push the focused commits. Evidence: PR #574 now reports both
+  fixes, the 25-package audit, all local checks, and the unrelated latest-Pi `ProviderHeaders` CI
   failure separately rather than expanding this fix into a different compatibility change.
 
 ## Risks
@@ -69,4 +70,5 @@ environment cleanup; no asynchronous or UI lifecycle path is touched.
   deterministic regression coverage.
 - [x] Focused tests, the `pi-goal` package check and runtime smoke, and the pinned repository gate
   pass; the final gate ran 2,430 tests.
-- [ ] PR #574 contains the audit fix and accurately reports local checks plus any unrelated CI state.
+- [x] PR #574 contains the audit fix and accurately reports local checks plus the unrelated
+  latest-Pi CI state.
