@@ -42,8 +42,9 @@ UI, package metadata, or lifecycle behavior changes are planned.
   pattern. Evidence: Pi 0.84 and pinned Pi each passed all 2,431 tests; `pi-accounts`' compatibility
   adapter now also reflects `ProviderHeaders`, while other consumers infer Pi's type, ignore headers,
   or already handle nullable values.
-- [ ] Commit and push the focused compatibility fix, update PR #574's notes, verify GitHub CI passes,
-  and archive this completed plan.
+- [x] Commit and push the focused compatibility fix, update PR #574's notes, and verify GitHub CI.
+  Evidence: PR #574's CI and all CodeQL checks passed on compatibility commit `927df7b`; this completed
+  plan is ready to archive.
 
 ## Risks
 
@@ -62,4 +63,4 @@ UI, package metadata, or lifecycle behavior changes are planned.
 - [x] Experimental `pi-codex-compact` accepts and forwards `ProviderHeaders` unchanged.
 - [x] Null-only headers do not satisfy `pi-btw` credential availability.
 - [x] Pinned and latest-Pi full repository gates pass with 2,431 tests each.
-- [ ] PR #574 is updated and GitHub CI is green.
+- [x] PR #574 is updated and GitHub CI plus all CodeQL checks are green.
