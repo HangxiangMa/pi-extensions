@@ -692,6 +692,74 @@ test("bring-to-main scope menu propagates Ctrl+C as a side-thread close", async 
 	assert.deepEqual(result, { kind: "closed" });
 });
 
+test("side-thread sends custom APIs through Pi core's effective provider", async () => {
+	initTheme("dark");
+	const model = {
+		provider: "synthetic-provider",
+		id: "synthetic-model",
+		api: "synthetic-custom-api",
+		reasoning: false,
+	} as Model<Api>;
+	const selected: ResolvedBtwModel = {
+		model,
+		auth: { apiKey: "synthetic-key", headers: { "x-test": "yes" } },
+	};
+	const providerReads: string[] = [];
+	const streamCalls: Array<{
+		model: Model<Api>;
+		context: Context;
+		options?: SimpleStreamOptions;
+	}> = [];
+	let customCalls = 0;
+	const ctx = {
+		ui: {
+			notify() {},
+			custom: async (factory: (...args: never[]) => unknown) => {
+				customCalls += 1;
+				if (customCalls > 1) return { kind: "close" };
+				return new Promise((resolve) => {
+					factory(
+						{ terminal: { rows: 24 }, requestRender() {} } as never,
+						{
+							fg: (_color: string, text: string) => text,
+							bold: (text: string) => text,
+						} as never,
+						{} as never,
+						resolve as never,
+					);
+				});
+			},
+		},
+		modelRegistry: {
+			getProvider(provider: string) {
+				providerReads.push(provider);
+				return {
+					streamSimple(capturedModel: Model<Api>, context: Context, options?: SimpleStreamOptions) {
+						streamCalls.push({ model: capturedModel, context, options });
+						return { result: async () => response("scoped answer") } as never;
+					},
+				};
+			},
+		},
+		sessionManager: { getBranch: () => [] },
+	} as never;
+
+	assert.deepEqual(
+		await runBtwThread({
+			initialQuestion: "Can the scoped provider answer?",
+			selected,
+			thinkingLevel: "off",
+			ctx,
+		}),
+		{ kind: "closed" },
+	);
+	assert.deepEqual(providerReads, ["synthetic-provider"]);
+	assert.equal(streamCalls.length, 1);
+	assert.equal(streamCalls[0]?.model, model);
+	assert.equal(streamCalls[0]?.options?.apiKey, "synthetic-key");
+	assert.deepEqual(streamCalls[0]?.options?.headers, { "x-test": "yes" });
+});
+
 test("side-thread command loop opens the composer before the first question", async () => {
 	const ctx = {
 		ui: { notify() {} },

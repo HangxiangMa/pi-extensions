@@ -40,6 +40,7 @@ import {
 import {
 	BTW_THINKING_LEVELS,
 	type BtwThinkingLevel,
+	type CompleteSimpleFunction,
 	completeSideThreadTurn,
 	createSideThread,
 	type SideQuestionAuth,
@@ -66,7 +67,6 @@ export {
 	type BtwThinkingLevel,
 	buildUserPrompt,
 	completeSideQuestion,
-	loadCompleteSimple,
 } from "./side-thread.js";
 export { sanitizeSingleLine } from "./text.js";
 
@@ -81,6 +81,18 @@ type BtwModelRegistry = Pick<
 	ExtensionCommandContext["modelRegistry"],
 	"find" | "getApiKeyAndHeaders"
 >;
+
+type BtwProviderRegistry = Pick<ExtensionCommandContext["modelRegistry"], "getProvider">;
+
+export function createModelRegistryCompleteSimple(
+	modelRegistry: BtwProviderRegistry,
+): CompleteSimpleFunction {
+	return async (model, context, options) => {
+		const provider = modelRegistry.getProvider(model.provider);
+		if (!provider) throw new Error(`No provider registered for model provider: ${model.provider}`);
+		return provider.streamSimple(model, context, options).result();
+	};
+}
 
 interface ResolveBtwModelOptions {
 	settings: BtwSettings;
@@ -777,6 +789,7 @@ async function askThreadQuestion(
 				thinkingLevel,
 				auth: selected.auth,
 				signal: view.signal,
+				completeSimple: createModelRegistryCompleteSimple(ctx.modelRegistry),
 			}).then((result) => {
 				if (settled) return;
 				settled = true;
