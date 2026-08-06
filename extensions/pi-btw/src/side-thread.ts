@@ -33,36 +33,6 @@ export type CompleteSimpleFunction = <TApi extends Api>(
 	options?: SimpleStreamOptions,
 ) => Promise<AssistantMessage>;
 
-type ModuleImporter = (moduleId: string) => Promise<unknown>;
-
-function hasCompleteSimple(value: unknown): value is { completeSimple: CompleteSimpleFunction } {
-	return (
-		typeof value === "object" &&
-		value !== null &&
-		typeof Reflect.get(value, "completeSimple") === "function"
-	);
-}
-
-export async function loadCompleteSimple(
-	importModule: ModuleImporter = (moduleId) => import(moduleId),
-): Promise<CompleteSimpleFunction> {
-	let importError: unknown;
-	for (const moduleId of ["@earendil-works/pi-ai/compat", "@earendil-works/pi-ai"]) {
-		try {
-			const module = await importModule(moduleId);
-			if (hasCompleteSimple(module)) return module.completeSimple;
-		} catch (error: unknown) {
-			importError = error;
-		}
-	}
-
-	throw new Error("@earendil-works/pi-ai does not export completeSimple", {
-		cause: importError,
-	});
-}
-
-const defaultCompleteSimple = await loadCompleteSimple();
-
 export type SideThreadTurn =
 	| {
 			kind: "answered";
@@ -115,7 +85,7 @@ export interface CompleteSideThreadTurnOptions {
 	thinkingLevel: BtwThinkingLevel;
 	auth: SideQuestionAuth;
 	signal?: AbortSignal;
-	completeSimple?: CompleteSimpleFunction;
+	completeSimple: CompleteSimpleFunction;
 }
 
 export type CompleteSideThreadTurnResult =
@@ -130,7 +100,7 @@ export async function completeSideThreadTurn({
 	thinkingLevel,
 	auth,
 	signal,
-	completeSimple = defaultCompleteSimple,
+	completeSimple,
 }: CompleteSideThreadTurnOptions): Promise<CompleteSideThreadTurnResult> {
 	if (signal?.aborted) return { kind: "aborted" };
 	let response: AssistantMessage;
@@ -162,7 +132,7 @@ export interface CompleteSideQuestionOptions {
 	thinkingLevel: BtwThinkingLevel;
 	auth: SideQuestionAuth;
 	signal?: AbortSignal;
-	completeSimple?: CompleteSimpleFunction;
+	completeSimple: CompleteSimpleFunction;
 }
 
 export async function completeSideQuestion({
@@ -172,7 +142,7 @@ export async function completeSideQuestion({
 	thinkingLevel,
 	auth,
 	signal,
-	completeSimple = defaultCompleteSimple,
+	completeSimple,
 }: CompleteSideQuestionOptions): Promise<AssistantMessage> {
 	return completeSimple(
 		model,

@@ -11,7 +11,6 @@ import btw, {
 	buildUserPrompt,
 	completeSideQuestion,
 	loadBtwThinkingLevel,
-	loadCompleteSimple,
 	normalizeBtwSettings,
 	parseBtwModelReference,
 	readBtwSettings,
@@ -29,41 +28,6 @@ async function withTempSettings(run: (settingsPath: string) => Promise<void>): P
 		await rm(directory, { recursive: true, force: true });
 	}
 }
-
-test("loadCompleteSimple prefers compat and falls back to the root module", async () => {
-	const compatCompleteSimple = async () => ({ source: "compat" });
-	const rootCompleteSimple = async () => ({ source: "root" });
-	const preferredImports: string[] = [];
-	const preferred = await loadCompleteSimple(async (moduleId) => {
-		preferredImports.push(moduleId);
-		return moduleId.endsWith("/compat")
-			? { completeSimple: compatCompleteSimple }
-			: { completeSimple: rootCompleteSimple };
-	});
-
-	assert.equal(preferred, compatCompleteSimple);
-	assert.deepEqual(preferredImports, ["@earendil-works/pi-ai/compat"]);
-
-	const fallbackImports: string[] = [];
-	const fallback = await loadCompleteSimple(async (moduleId) => {
-		fallbackImports.push(moduleId);
-		if (moduleId.endsWith("/compat")) throw new Error("missing compat export");
-		return { completeSimple: rootCompleteSimple };
-	});
-
-	assert.equal(fallback, rootCompleteSimple);
-	assert.deepEqual(fallbackImports, ["@earendil-works/pi-ai/compat", "@earendil-works/pi-ai"]);
-});
-
-test("loadCompleteSimple reports when neither module exports completeSimple", async () => {
-	await assert.rejects(
-		loadCompleteSimple(async (moduleId) => {
-			if (moduleId.endsWith("/compat")) throw new Error("missing compat export");
-			return {};
-		}),
-		/@earendil-works\/pi-ai does not export completeSimple/,
-	);
-});
 
 test("normalizeBtwSettings accepts optional model and thinking level", () => {
 	assert.deepEqual(normalizeBtwSettings({}), {});
