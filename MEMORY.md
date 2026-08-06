@@ -16,6 +16,7 @@
 - Tests compiled under root `node_modules/.cache` resolve packages from the root, not a source workspace. A clean or deduped install can therefore expose dependency-major behavior hidden by a stale root copy; keep imported Pi packages as root devDependencies so the alternate-Pi matrix installs matching copies.
 - Treat `package.json#packageManager` plus CI/release workflows as the npm-version authority. A different npm can rewrite unrelated lock metadata or mishandle the alternate-Pi install matrix.
 - The pinned npm 12.0.2 rejects Node 25; run lockfile work under an installed supported runtime such as Node 22.22.2 instead of tolerating npm's compatibility warning.
+- npm 12 returns `npm pack --workspaces --dry-run --json` as an object keyed by workspace name rather than the single-package array shape; normalize with `Object.values()` before auditing all tarballs.
 - `npm audit fix --force` can replace every workspace's exact Pi devDependency with a vulnerable older caret range; restore all workspace manifests and the lockfile, then use targeted patched upgrades or overrides instead.
 - A consumer cannot safely adopt an unpublished `pi-tui-kit` API in the same PR: clean `npm ci` resolves its semver dependency from the registry. Publish the Kit API before raising the consumer's reviewed compatibility floor; do not use local paths that break independent packaging.
 - Pi maintains separate managed npm roots for user and project packages; dependency deduplication is guaranteed only within one install root, not across scopes.

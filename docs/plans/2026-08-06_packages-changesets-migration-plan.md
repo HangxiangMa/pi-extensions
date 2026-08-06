@@ -84,10 +84,18 @@ No extension-owned settings or asynchronous runtime lifecycle flow changes, so
       only selected packages and generates their changelogs; status reports the migration's empty
       changeset and no releases; Biome, boundary checks, workspace typechecking, and all 2,420 tests
       pass.
-- [ ] Audit the complete diff against `docs/extension-conventions.md`, verify no active references to
+- [x] Audit the complete diff against `docs/extension-conventions.md`, verify no active references to
       removed workspace roots or shared release tooling remain, run `npm run check`, dry-run pack every
       workspace, and run representative stable and experimental Pi package load smokes; record all
-      evidence in this plan.
+      evidence in this plan. Evidence: the final path/release scan is empty; `npm run check` passes
+      Biome, the 1-library/25-extension boundary validator, every workspace typecheck, and 2,420 tests;
+      npm 12 dry-runs all 26 tarballs with core package files and no tests or `node_modules`; isolated
+      RPC smokes load `goal` from its stable package, `recall` from its experimental package, and all
+      root-manifest stable extensions while excluding `recall`. The package, extension, and RPC Pi
+      docs plus the repository convention guide were read. Settings and asynchronous runtime flows
+      were not changed. The three pre-existing source files above 1,000 lines are move-only in this
+      migration, apart from one package-path fallback in `pi-image-drop`, so no responsibility was
+      added that would justify unrelated decomposition.
 - [ ] Archive the fully checked plan under `docs/plans/archived/`, commit the final evidence, push the
       branch to `origin`, and create a pull request against `main` whose summary names the migration,
       independent release model, checks, smokes, and absence of npm publication.
@@ -115,14 +123,14 @@ publish, change visibility, or dispatch workflows as part of rollback without ex
 
 ## Completion Checklist
 
-- [ ] All active production and experimental extensions and the reusable library are discovered below
+- [x] All active production and experimental extensions and the reusable library are discovered below
       `packages/*`; `extensions/` and tracked `experimental/` sources no longer exist.
-- [ ] Every extension keeps its thin `src/index.ts`, canonical `pi.extensions`, lifecycle metadata,
+- [x] Every extension keeps its thin `src/index.ts`, canonical `pi.extensions`, lifecycle metadata,
       independent manifest version, README warning where experimental, license, tests, and pack files.
-- [ ] Root Git-package installation loads all and only stable extensions from `packages/`.
-- [ ] Changesets independently versions, changelogs, tags, and publishes selected packages without a
+- [x] Root Git-package installation loads all and only stable extensions from `packages/`.
+- [x] Changesets independently versions, changelogs, tags, and publishes selected packages without a
       shared root release version or `v*.*.*` workflow.
-- [ ] Every local package baseline version is confirmed as already published on npm; no package is
+- [x] Every local package baseline version is confirmed as already published on npm; no package is
       published by this work.
 - [ ] `npm run check`, all-workspace pack dry run, representative stable/experimental Pi loads, final
       semantic audit, clean worktree, pushed branch, and pull request all have recorded evidence.
