@@ -62,10 +62,11 @@ environment cleanup; no asynchronous or UI lifecycle path is touched.
 
 ## Completion Checklist
 
-- [ ] Every active extension source tree, including all 6 experimental packages, is covered by the
+- [x] Every active extension source tree, including all 6 experimental packages, is covered by the
   same-pattern scan.
-- [ ] No active runtime code directly reads `PI_CODING_AGENT_DIR` or reconstructs `~/.pi/agent`.
-- [ ] `pi-statusline` and legacy `pi-goal` paths both use Pi core's `getAgentDir()` contract with
+- [x] No active runtime code directly reads `PI_CODING_AGENT_DIR` or reconstructs `~/.pi/agent`.
+- [x] `pi-statusline` and legacy `pi-goal` paths both use Pi core's `getAgentDir()` contract with
   deterministic regression coverage.
-- [ ] Focused tests, applicable package checks, and the pinned repository gate pass.
+- [x] Focused tests, the `pi-goal` package check and runtime smoke, and the pinned repository gate
+  pass; the final gate ran 2,430 tests.
 - [ ] PR #574 contains the audit fix and accurately reports local checks plus any unrelated CI state.
