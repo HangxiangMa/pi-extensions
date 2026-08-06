@@ -82,7 +82,7 @@ require them.
 - [x] Re-run missing-config, user-config, built-in-only, and optional-module benchmarks; require the
       agreed default startup reduction, no first-footer regression beyond three deviations for the
       built-in path, and record the bounded one-time cost for a first optional collector/command.
-- [x] Update `extensions/pi-starship/README.md` package layout and any internal loading description,
+- [x] Update `packages/pi-starship/README.md` package layout and any internal loading description,
       audit the final diff against both convention guides, run `npm run check`, `just pack starship`,
       and offline Pi smokes for built-in footer load, user TOML diagnostics, and `/starship` discovery.
 

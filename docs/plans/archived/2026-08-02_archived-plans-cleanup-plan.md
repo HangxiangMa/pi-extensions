@@ -24,7 +24,7 @@ in authoritative documentation.
   - one pi-lsp diagnostics-matrix plan.
 - At plan creation, four maintained documents linked to 14 distinct archived plans:
   `docs/roadmaps/pi-tui-kit-roadmap.md`, `docs/roadmaps/pi-stamp-roadmap.md`,
-  `docs/adr/pi-sync-git-backend.md`, and `extensions/pi-lsp/test/docker/README.md`.
+  `docs/adr/pi-sync-git-backend.md`, and `packages/pi-lsp/test/docker/README.md`.
 - Git and GitHub remain the historical authority for completed checklists, PR follow-ups, migration
   sequencing, old verification counts, and superseded designs.
 
@@ -152,7 +152,7 @@ rollback mechanism.
   menu-wording, v3-schema, and destination-TUI plans dated 2026-07-24 through 2026-07-27; capture
   storage connections, sync setups, active setup, breaking v3 validation, switching policy,
   side-effect-free reads, unknown-field preservation, and atomic locked writes, accepting against
-  `extensions/pi-sync/README.md`, config source, and settings tests. Evidence: the ADR records strict
+  `packages/pi-sync/README.md`, config source, and settings tests. Evidence: the ADR records strict
   connection/setup ownership and backend shapes, exact path/name independence, backend-specific
   normalized location identities, ordered include/session policy, all three switch modes, unsupported
   old documents, one-lock latest-read/validate/publish behavior, first-save races, private atomic
@@ -160,7 +160,7 @@ rollback mechanism.
   unknown fields, and byte-preserving legacy-filename recovery, matching v3/config/settings tests.
 - [x] Merge the durable methodology and result interpretation from
   `2026-07-24_pi-lsp-server-profiles-plan.md` into
-  `extensions/pi-lsp/test/docker/README.md`; retain the reproducible fresh-project matrix method,
+  `packages/pi-lsp/test/docker/README.md`; retain the reproducible fresh-project matrix method,
   profile-policy categories, unresolved Kotlin finding, and diagnostic-versus-lifecycle timing
   distinction, accepting when the checked-in runner/matrix assets are sufficient evidence and the
   archive link is removed. Evidence: the README now records the dated 28-profile/three-error/three-

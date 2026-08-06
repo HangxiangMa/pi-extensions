@@ -26,8 +26,8 @@ entry path without requiring generated `dist/` artifacts.
 
 ## Architecture
 
-- Keep `extensions/pi-starship/src/pi-starship.ts` and
-  `extensions/pi-statusline/src/statusline.ts` as the authoritative runtime implementations.
+- Keep `packages/pi-starship/src/pi-starship.ts` and
+  `packages/pi-statusline/src/statusline.ts` as the authoritative runtime implementations.
 - Keep both canonical `src/index.ts` files as thin default-export forwarders, but constrain their
   targets to implementation modules inside the same `src/` directory.
 - Preserve `command-contract.ts`, generation-aware lazy command loading, and all source module

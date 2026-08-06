@@ -19,7 +19,7 @@ contains only the diagnostic follow-up.
 - When shell splitting itself fails because the input is empty, malformed, multiline, redirected,
   contains a subshell, or uses another unsupported construct, no reliable subcommand boundary is
   available. In that case, report the trimmed complete input, or `(empty command)` for blank input.
-- `extensions/pi-plan-mode/src/plan-mode.ts` is exactly 1,000 lines. Keep it at or below that limit by
+- `packages/pi-plan-mode/src/plan-mode.ts` is exactly 1,000 lines. Keep it at or below that limit by
   replacing the current boolean import/check and message in place; put the diagnostic helper in
   `tool-policy.ts`.
 - Touched convention areas are limited-Bash command enforcement, user-visible tool failure text,
@@ -29,7 +29,7 @@ contains only the diagnostic follow-up.
 ## Architecture
 
 - Add `findBlockedCommandSegment(command, safeSubcommands): string | undefined` to
-  `extensions/pi-plan-mode/src/tool-policy.ts` as the authoritative assessment entrypoint:
+  `packages/pi-plan-mode/src/tool-policy.ts` as the authoritative assessment entrypoint:
   - return `undefined` when all parsed segments are accepted;
   - return the first rejected parsed segment in source order;
   - return the trimmed complete input when parsing fails;
@@ -69,27 +69,27 @@ prior `Command:` message, removing the helper and its focused tests; command pol
 
 ## Plan
 
-- [x] Add red-first tests in `extensions/pi-plan-mode/test/tool-policy.test.ts` for the diagnostic
+- [x] Add red-first tests in `packages/pi-plan-mode/test/tool-policy.test.ts` for the diagnostic
       helper: accepted chains return `undefined`, a single rejected command returns itself, a compound
       chain returns its first rejected segment, unsupported syntax returns the trimmed complete input,
       blank input returns `(empty command)`, and `isSafeCommand()` remains behaviorally consistent.
       Evidence: the focused suite ran all 9 cases and failed only the new diagnostic case because the
       helper export was still undefined.
-- [x] Implement `findBlockedCommandSegment()` in `extensions/pi-plan-mode/src/tool-policy.ts` by
+- [x] Implement `findBlockedCommandSegment()` in `packages/pi-plan-mode/src/tool-policy.ts` by
       reusing `splitShellSegments()` and `isSafeSegment()`, then delegate `isSafeCommand()` to it.
       Evidence: the cleanly compiled focused policy suite passed all 9 cases, including every existing
       allow/block assertion and the new helper/wrapper consistency controls.
 - [x] Add a red-first active-hook test in
-      `extensions/pi-plan-mode/test/safe-subcommands.test.ts` using a compound command whose middle
+      `packages/pi-plan-mode/test/safe-subcommands.test.ts` using a compound command whose middle
       segment is rejected; assert the reason contains exactly `Blocked command: <first rejected
       segment>` and does not present a safe alternative or misidentify accepted neighboring segments.
       Evidence: the focused hook suite ran all 3 cases and failed only this new assertion because the
       old message displayed the complete three-segment chain as `Command:`.
 - [x] Replace the Plan Mode Bash hook's boolean check with one call to the diagnostic helper and emit
-      the first blocked segment in `extensions/pi-plan-mode/src/plan-mode.ts`. Evidence: the compiled
+      the first blocked segment in `packages/pi-plan-mode/src/plan-mode.ts`. Evidence: the compiled
       policy and hook suites passed all 12 cases, including compound and malformed-input presentation,
       and `plan-mode.ts` remains exactly 1,000 lines.
-- [x] Update `extensions/pi-plan-mode/README.md` to state that a limited-Bash rejection identifies the
+- [x] Update `packages/pi-plan-mode/README.md` to state that a limited-Bash rejection identifies the
       first blocked command segment, while malformed or unsupported shell syntax reports the complete
       input; do not document reason codes or replacement-command guidance. Evidence: the package
       Biome/typecheck gate passed all 31 checked files.

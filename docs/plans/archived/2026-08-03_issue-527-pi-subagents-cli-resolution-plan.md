@@ -9,7 +9,7 @@ unverified host entrypoint or an unrelated `pi` found on `PATH`.
 
 ## Context
 
-- `extensions/pi-subagents/src/runner.ts` currently treats every existing `process.argv[1]` as the Pi
+- `packages/pi-subagents/src/runner.ts` currently treats every existing `process.argv[1]` as the Pi
   CLI. Under `@agegr/pi-web`, that value is the pi-web entrypoint, so Pi CLI arguments are sent back
   to pi-web and `-p` is misparsed as `--port`.
 - `@narumitw/pi-subagents` already declares `@earendil-works/pi-coding-agent` as a peer dependency and
@@ -24,7 +24,7 @@ unverified host entrypoint or an unrelated `pi` found on `PATH`.
 
 ## Architecture
 
-- Add `extensions/pi-subagents/src/pi-invocation.ts` as the single owner of child Pi executable
+- Add `packages/pi-subagents/src/pi-invocation.ts` as the single owner of child Pi executable
   resolution. `runner.ts` will supply built Pi arguments and consume only its resolved
   `{ command, args }` result.
 - Support two validated launch forms:
@@ -71,12 +71,12 @@ unverified host entrypoint or an unrelated `pi` found on `PATH`.
 ## Plan
 
 - [x] Extract the existing invocation policy without behavior changes from
-  `extensions/pi-subagents/src/runner.ts` into an exported resolver in
-  `extensions/pi-subagents/src/pi-invocation.ts`, with a narrow runtime/package-directory input that
+  `packages/pi-subagents/src/runner.ts` into an exported resolver in
+  `packages/pi-subagents/src/pi-invocation.ts`, with a narrow runtime/package-directory input that
   production fills from process facts and `getPackageDir()` and tests can fill from temporary
   fixtures; package typechecking and 68 focused runner, blocking, and orchestration tests remained
   green on 2026-08-03.
-- [x] Add `extensions/pi-subagents/test/pi-invocation.test.ts` with a test-owned fake Pi package and a
+- [x] Add `packages/pi-subagents/test/pi-invocation.test.ts` with a test-owned fake Pi package and a
   fake existing non-Pi host entrypoint; the focused compiled Node test failed on 2026-08-03 because
   the extracted current policy selected `host.js` instead of the fixture package's `dist/cli.js`.
 - [x] Extend the focused resolver tests for an explicit string-valued `bin.pi`, symlink/normalized

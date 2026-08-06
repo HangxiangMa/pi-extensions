@@ -61,14 +61,18 @@ No extension-owned settings or asynchronous runtime lifecycle flow changes, so
 
 ## Plan
 
-- [ ] Commit this executable plan on `feat/consolidate-packages-changesets`; verify the branch and
-      clean index with `git status --short --branch` and inspect the commit.
-- [ ] Move all 25 active extension directories to flat `packages/<package>/` paths; update workspace,
+- [x] Commit this executable plan on `feat/consolidate-packages-changesets`; verify the branch and
+      clean index with `git status --short --branch` and inspect the commit. Evidence: commit
+      `840795a` contains only this plan, and the post-commit status was clean.
+- [x] Move all 25 active extension directories to flat `packages/<package>/` paths; update workspace,
       TypeScript, Biome, Just, CI, package repository metadata, maintained documentation, plans, ADRs,
       and source/test path references; add explicit lifecycle metadata and a root stable-extension Pi
       manifest; reconcile package versions to npm and regenerate the lockfile with npm 12.0.2; verify
       path/lifecycle discovery, direct Git-install resource selection, focused repository tests,
-      boundary checks, and a diff audit; commit the coherent layout migration.
+      boundary checks, and a diff audit; commit the coherent layout migration. Evidence: all 26 local
+      workspace versions match npm latest; no tracked legacy package root or old package path remains;
+      the boundary validator reports 1 library, 25 extensions, and 6 experiments; Biome passes; all
+      2,431 tests pass; workspace typechecking passes; `git diff --check` passes.
 - [ ] Add pinned Changesets tooling and independent configuration; replace shared-version/tag release
       scripts and workflows with Changesets version-PR and trusted-publish automation; update release
       recipes, repository guidance, and deterministic fixture tests for independent bumps, dependency

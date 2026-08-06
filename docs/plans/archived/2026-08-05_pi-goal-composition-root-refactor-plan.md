@@ -2,7 +2,7 @@
 
 ## Goal
 
-Turn `extensions/pi-goal/src/goal.ts` into a small, order-explicit composition root by moving slash
+Turn `packages/pi-goal/src/goal.ts` into a small, order-explicit composition root by moving slash
 command, terminal tool, and Pi lifecycle adapter ownership into cohesive internal modules, without
 changing registration order, factory isolation, exports, or runtime behavior.
 

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Replace the 4,800-line `extensions/pi-goal/test/goal.test.ts` integration monolith with a small shared
+Replace the 4,800-line `packages/pi-goal/test/goal.test.ts` integration monolith with a small shared
 fixture and behavior-owned test files so failures, ownership, and change impact are easier to locate,
 without reducing coverage or changing production code.
 

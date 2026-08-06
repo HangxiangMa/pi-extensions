@@ -38,7 +38,7 @@ Result: PASS for the documented default-on lifecycle and opt-in in-process trans
 
 Executed from the repository root with the local package:
 
-- Single: `pi -e ./extensions/pi-subagents -p ...` returned `SMOKE_OK`.
+- Single: `pi -e ./packages/pi-subagents -p ...` returned `SMOKE_OK`.
 - Parallel plus chain: local Pi run returned `PARALLEL_CHAIN_OK`.
 - Hard timeout (`timeoutMs: 1`): local Pi run returned `TIMEOUT_OK` after observing the timeout result.
 - Default subprocess stateful spawn plus overlapping main-agent read returned `SUBPROCESS_STATEFUL_OK` from a temporary agent directory.

@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-wait-what)](https://www.npmjs.com/package/@narumitw/pi-wait-what) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-> Deprecated: this package is kept for reference under `deprecated/` and is no longer part of the active workspace package set. Manually pausing the agent and using [`/btw`](../../extensions/pi-btw) provides the same core workflow through a side question.
+> Deprecated: this package is kept for reference under `deprecated/` and is no longer part of the active workspace package set. Manually pausing the agent and using [`/btw`](../../packages/pi-btw) provides the same core workflow through a side question.
 
 `@narumitw/pi-wait-what` is a native [Pi coding agent](https://pi.dev) extension that adds `/wait-what`, a quick command for pausing the main conversation and asking the agent to explain surprising behavior.
 

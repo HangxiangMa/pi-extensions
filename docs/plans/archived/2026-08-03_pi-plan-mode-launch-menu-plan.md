@@ -30,12 +30,12 @@ saved, active-implementation, inline-prompt, flag, and management-command behavi
 
 ## Architecture
 
-- Add `extensions/pi-plan-mode/src/plan-launch-menu.ts` as the declarative Pi TUI Kit surface for the
+- Add `packages/pi-plan-mode/src/plan-launch-menu.ts` as the declarative Pi TUI Kit surface for the
   inactive main, staged tool-selection, and help screens. It owns only interaction-local draft state
   and delegates activation, tool validation/commit, status text, and lifecycle ownership through
   callbacks. Keep the existing immediate active selector in `src/plan-tool-menu.ts` so standard menu
   presentation is separate from the extension orchestrator without merging the two commit models.
-- Keep `extensions/pi-plan-mode/src/plan-mode.ts` as the domain orchestrator. It decides which Plan
+- Keep `packages/pi-plan-mode/src/plan-mode.ts` as the domain orchestrator. It decides which Plan
   state owns bare `/plan`, captures the current menu lifecycle, provides a read-only effective tool
   snapshot, commits a validated staged selection only at activation, and performs the existing
   `enterPlanMode()` transition.
@@ -70,7 +70,7 @@ saved, active-implementation, inline-prompt, flag, and management-command behavi
 
 ## Plan
 
-- [x] Add focused red tests in `extensions/pi-plan-mode/test/launch-menu.test.ts` for inactive bare
+- [x] Add focused red tests in `packages/pi-plan-mode/test/launch-menu.test.ts` for inactive bare
       `/plan` opening (without activation) in TUI and RPC, **Start Plan mode**, staged tool selection
       plus **Done — start Plan mode**, the help/back path, and root cancellation; evidence: the first
       focused run executed 7 tests and all failed because bare `/plan` activated immediately, no RPC
@@ -92,12 +92,12 @@ saved, active-implementation, inline-prompt, flag, and management-command behavi
       Ctrl+C, external component disposal, session replacement, and shutdown, asserting no launch
       selection is persisted and no tool activation, stale notification, or model turn occurs;
       evidence: all 10 focused tests settle and pass across those owner endings.
-- [x] Replace bare `/plan` setup calls throughout `extensions/pi-plan-mode/test/*.test.ts` with
+- [x] Replace bare `/plan` setup calls throughout `packages/pi-plan-mode/test/*.test.ts` with
       `/plan start` where direct activation is the test precondition, retain bare calls only for
       state-menu assertions, and run all pi-plan-mode tests to prove existing planning, safety,
       completion, export, save, implementation, resume, and compaction behavior remains compatible;
       evidence: all 126 compiled pi-plan-mode tests pass.
-- [x] Update `extensions/pi-plan-mode/README.md` with the new inactive menu, `/plan start`, the exact
+- [x] Update `packages/pi-plan-mode/README.md` with the new inactive menu, `/plan start`, the exact
       `start` reservation, staged tool commit/cancellation semantics, unchanged state-specific menus,
       and print/JSON migration guidance; package formatting/typecheck evidence is collected in the
       final verification task, with no new Pi TUI Kit API or dependency-floor change required.

@@ -122,7 +122,7 @@ wording, and tests without widening the objective. Deferral does not block the c
       stale-tool block, rotates blocker audit ownership, emits active state for the new Goal ID, and
       preserves denied operator state byte-for-byte; verify these invariants through canonical session
       entries rather than notifications alone.
-- [ ] Update `extensions/pi-goal/README.md` with supervisor opt-in, exact payloads and channels,
+- [ ] Update `packages/pi-goal/README.md` with supervisor opt-in, exact payloads and channels,
       provenance eligibility, operator-pause denial, duplicate/lost-reply semantics, new Goal-ID
       tracking, settings behavior, and any explicit guidance deferral; verify examples match tests.
 - [ ] Audit user cancellation, prompt disposal, session replacement, shutdown, post-`await` state,

@@ -13,15 +13,15 @@ repos:
       - id: trailing-whitespace
         exclude: |
           (?x)^(
-            extensions/pi-image-drop/src/web/app\.js|
-            extensions/pi-image-drop/src/web/state\.js|
-            extensions/pi-image-drop/src/web/styles\.css|
-            extensions/pi-webui/src/web/app\.css|
-            extensions/pi-webui/src/web/app\.js|
-            extensions/pi-webui/src/web/image-drag\.js|
-            extensions/pi-webui/src/web/markdown\.js|
-            extensions/pi-webui/src/web/state\.js|
-            extensions/pi-webui/src/web/transcript\.js
+            packages/pi-image-drop/src/web/app\.js|
+            packages/pi-image-drop/src/web/state\.js|
+            packages/pi-image-drop/src/web/styles\.css|
+            packages/pi-webui/src/web/app\.css|
+            packages/pi-webui/src/web/app\.js|
+            packages/pi-webui/src/web/image-drag\.js|
+            packages/pi-webui/src/web/markdown\.js|
+            packages/pi-webui/src/web/state\.js|
+            packages/pi-webui/src/web/transcript\.js
           )$
   - repo: local
     hooks:

@@ -46,7 +46,7 @@ implementation exports retain their state.
 - [x] Raise the package's Pi TUI Kit floor from `^0.40.0` to `^0.41.0`, the first release with input
       screens, and regenerate the lockfile with npm 12.0.2; evidence: the nested workspace dependency
       resolves to 0.41.0 and package typechecking accepts the input-screen contract.
-- [x] Finalize `extensions/pi-plan-mode/README.md` with command syntax, input-menu behavior, path
+- [x] Finalize `packages/pi-plan-mode/README.md` with command syntax, input-menu behavior, path
       resolution, no-overwrite semantics, and non-TUI behavior; evidence: package Biome and typecheck
       passed through `npm run check --workspace @narumitw/pi-plan-mode`.
 - [x] Audit cancellation, menu disposal, session replacement, shutdown, command-mode behavior, and

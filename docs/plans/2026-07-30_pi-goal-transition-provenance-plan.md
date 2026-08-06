@@ -9,7 +9,7 @@ integrations can distinguish operator intent from recoverable or system-originat
 ## Context
 
 - `GoalStateEventPayload` currently contains `goalId`, `status`, `summary?`, and `reason?` in
-  `extensions/pi-goal/src/runtime.ts`.
+  `packages/pi-goal/src/runtime.ts`.
 - Human-readable terminal details are held outside `ActiveGoal` and deliberately cleared across
   session bindings; `goal-rpc.test.ts` verifies an old reason does not leak into a restored Goal.
 - `ActiveGoal.safetyPauseCause` persists only `continuation_limit` or `no_progress` and cannot explain
@@ -96,17 +96,17 @@ code changes.
 ## Plan
 
 - [ ] Build a stopped-transition matrix in this plan and corresponding table-driven fixtures in
-      `extensions/pi-goal/test/goal-rpc.test.ts`, naming every current source path, resulting status,
+      `packages/pi-goal/test/goal-rpc.test.ts`, naming every current source path, resulting status,
       source/cause code, persistence expectation, edit/rotation behavior, and legacy fallback; resolve
       the three listed unknowns and verify repository search finds no unclassified stopped transition.
-- [ ] Add failing persistence cases to `extensions/pi-goal/test/persistence.test.ts` for valid
+- [ ] Add failing persistence cases to `packages/pi-goal/test/persistence.test.ts` for valid
       provenance, malformed recognized values, legacy absence, `safetyPauseCause` derivation,
       `legacy_unknown`, queues, and unknown-field compatibility; verify the failures precede changes
       to `persistence.ts`.
-- [ ] Extend `extensions/pi-goal/src/persistence.ts` with the finalized JSON-safe provenance type,
+- [ ] Extend `packages/pi-goal/src/persistence.ts` with the finalized JSON-safe provenance type,
       validation, normalization, and legacy derivation while preserving current session shapes; verify
       persistence and existing queue/session restore tests pass.
-- [ ] Add a provenance-aware stopped-transition helper in `extensions/pi-goal/src/runtime.ts` and
+- [ ] Add a provenance-aware stopped-transition helper in `packages/pi-goal/src/runtime.ts` and
       migrate command pause, RPC pause, safety pause, unavailable tools, budget limit, blocker tool,
       interruption, retry exhaustion, clear, and activation rollback callers in `commands.ts`,
       `runtime.ts`, and `goal.ts`; verify a typecheck or exhaustive test fails if a new stopped call
@@ -119,7 +119,7 @@ code changes.
       regressions to `goal-rpc.test.ts`, `goal.test.ts`, and `goal-queue.test.ts` as applicable; verify
       canonical provenance follows the active branch and exact Goal instance while free-form terminal
       details retain their existing non-leak behavior.
-- [ ] Update `extensions/pi-goal/README.md` with the public event shape, complete source/cause table,
+- [ ] Update `packages/pi-goal/README.md` with the public event shape, complete source/cause table,
       legacy `legacy_unknown` semantics, and the rule that consumers never parse `reason`; verify the
       documentation examples match exported TypeScript types and deterministic tests.
 - [ ] Audit every stopped-state writer, post-`await` rollback, session reload, queue transition, and

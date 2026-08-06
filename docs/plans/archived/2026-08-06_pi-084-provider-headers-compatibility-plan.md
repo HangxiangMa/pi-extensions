@@ -14,9 +14,9 @@ resolved headers to pi-ai streams must pass them through unchanged.
 
 The confirmed CI failures are:
 
-- `extensions/pi-btw/src/btw.ts`: a custom model-registry interface narrows resolved headers to
+- `packages/pi-btw/src/btw.ts`: a custom model-registry interface narrows resolved headers to
   `Record<string, string>` and is no longer compatible with Pi's registry.
-- `experimental/pi-codex-compact/src/codex-compact.ts`: resolved nullable headers are passed to a
+- `packages/pi-codex-compact/src/codex-compact.ts`: resolved nullable headers are passed to a
   locally narrowed remote-compaction request type.
 
 Applicable guidance: `docs/extension-conventions.md`, the latest Pi 0.84 changelog and public

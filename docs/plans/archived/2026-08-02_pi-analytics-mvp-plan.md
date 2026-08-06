@@ -1,6 +1,6 @@
 # Pi Analytics MVP Plan
 
-> Follow-up: the completed package was moved to `experimental/pi-analytics` and now shows the
+> Follow-up: the completed package was moved to `packages/pi-analytics` and now shows the
 > repository-required experimental warning in both its README and Pi UI.
 
 ## Goal
@@ -33,7 +33,7 @@ Today/7-day/30-day/all-time summaries through a lifecycle-safe `/analytics` TUI/
 
 ## Architecture
 
-- `experimental/pi-analytics/src/index.ts` remains a thin default-export forwarder to the extension
+- `packages/pi-analytics/src/index.ts` remains a thin default-export forwarder to the extension
   factory in `analytics.ts`.
 - `analytics.ts` owns Pi event registration, per-session generations, database startup/shutdown,
   ordered persistence, and command registration; it starts no resource during factory evaluation.
@@ -66,7 +66,7 @@ Today/7-day/30-day/all-time summaries through a lifecycle-safe `/analytics` TUI/
 Expected package layout:
 
 ```text
-experimental/pi-analytics/
+packages/pi-analytics/
 ├── src/
 │   ├── index.ts
 │   ├── analytics.ts
@@ -188,7 +188,7 @@ experimental/pi-analytics/
   contending on one exclusive DDL migration; accept with focused Node tests plus a non-interactive Pi
   load on the supported development host, and resolve every Turso unknown above before production
   storage code depends on it.
-- [x] Scaffold `experimental/pi-analytics/` with the thin `src/index.ts`, package metadata, strict
+- [x] Scaffold `packages/pi-analytics/` with the thin `src/index.ts`, package metadata, strict
   `tsconfig.json`, MIT `LICENSE`, at least one loader test, and the canonical
   `pi.extensions: ["./src/index.ts"]`; add only the verified Turso and Pi TUI Kit runtime dependencies,
   Pi peer dependencies, lockfile changes, root `pack:analytics`, and `just` pack/try/install/publish
@@ -239,9 +239,9 @@ experimental/pi-analytics/
 - [x] Register `/analytics` as a no-argument manager command in `src/analytics.ts`, rejecting all
   arguments and trailing input, running only standard TUI/RPC flows, and throwing an observable
   unsupported-mode error in print/JSON without ad hoc protocol output; accept with exact command-mode
-  tests and a non-interactive `pi -p -e ./experimental/pi-analytics "/analytics"` load/rejection smoke
+  tests and a non-interactive `pi -p -e ./packages/pi-analytics "/analytics"` load/rejection smoke
   that does not invoke a model.
-- [x] Write `experimental/pi-analytics/README.md` with the approved emoji/badges and standard sections,
+- [x] Write `packages/pi-analytics/README.md` with the approved emoji/badges and standard sections,
   installation/local-try commands, metric definitions, dashboard flow, local database path,
   supported native platforms, no-cloud guarantee, privacy inventory, skill/error detection limits,
   migration/upgrade/newer-schema behavior, data clearing semantics, pre-1.0 database caveat, package
@@ -263,7 +263,7 @@ experimental/pi-analytics/
   linked-file rejection, idempotent close, bounded cross-connection migration/write retries, atomic
   rollback, and two live writers. The spike also established that default file databases require
   immediate/exclusive retry rather than `BEGIN CONCURRENT`.
-- `experimental/pi-analytics/test/` contains 48 deterministic tests covering collection, retries,
+- `packages/pi-analytics/test/` contains 48 deterministic tests covering collection, retries,
   automatic continuation, streaming and model skill attribution, migrations, permissions,
   concurrency, aggregation boundaries, loading/cancellation, TUI/RPC rendering, clear commit
   semantics, unsupported storage, replacement, shutdown, and command modes.

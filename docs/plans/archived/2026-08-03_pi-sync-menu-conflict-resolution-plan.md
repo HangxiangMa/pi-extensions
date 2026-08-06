@@ -11,9 +11,9 @@ cancellation behavior.
 
 - The approved scope is the full flow: push conflicts, pull conflicts, `Sync now` conflicts,
   first-sync divergence, and pull-from-empty-remote recovery.
-- `extensions/pi-sync/src/sync-operations.ts` currently throws ordinary English-message errors for
-  these conditions. `extensions/pi-sync/src/sync.ts` catches and converts them to notifications, so
-  `extensions/pi-sync/src/manager-ui.ts` cannot present contextual recovery actions.
+- `packages/pi-sync/src/sync-operations.ts` currently throws ordinary English-message errors for
+  these conditions. `packages/pi-sync/src/sync.ts` catches and converts them to notifications, so
+  `packages/pi-sync/src/manager-ui.ts` cannot present contextual recovery actions.
 - Existing forced push and pull production paths already provide the required safeguards: exact
   summaries, confirmation, pull backups, protected live sessions, secret scanning, refreshed-head
   confirmation for forced push, backend publication preconditions, and state persistence.
@@ -113,11 +113,11 @@ ordinary failure is reported and leaves recovery available for retry or Back.
 
 ## Plan
 
-- [x] Add focused failing operation tests under `extensions/pi-sync/test/` for all five structured
+- [x] Add focused failing operation tests under `packages/pi-sync/test/` for all five structured
       decision kinds, asserting setup/cause/direction/review data and proving detection makes no local,
       remote, or state mutation; run `npm test` and record that the new assertions fail because only
       ordinary errors exist.
-- [x] Add a small domain module under `extensions/pi-sync/src/` for the typed decision error,
+- [x] Add a small domain module under `packages/pi-sync/src/` for the typed decision error,
       decision metadata, direct-message formatting, and safe path/policy review construction; replace
       only the five manual-direction error sites in `sync-operations.ts`, then run `npm test` and
       verify the new operation tests pass while generic error tests remain unchanged.
@@ -143,7 +143,7 @@ ordinary failure is reported and leaves recovery available for retry or Back.
       refresh/reconfirmation, forced pull backup/apply, protected live sessions, secret-scan refusal,
       backend precondition failure, and config identity changes during resolution; reuse existing
       fixtures and confirm unsafe or partial failures never become decision screens with `npm test`.
-- [x] Update `extensions/pi-sync/README.md` to document the in-menu recovery workflow, exact meanings
+- [x] Update `packages/pi-sync/README.md` to document the in-menu recovery workflow, exact meanings
       of local-wins/remote-wins, confirmation and backup guarantees, direct-route compatibility,
       automatic-sync behavior, and terminal accessibility; verify command documentation remains
       complete through `npm test`.
@@ -173,10 +173,10 @@ ordinary failure is reported and leaves recovery available for retry or Back.
   `settings-management` tests all pass.
 - Source-size audit: `manager-ui.ts` is 942 lines, `sync-operations.ts` is 964 lines, and the new
   `sync-decision.ts` / `sync-resolution-ui.ts` modules are 113 / 166 lines.
-- Documentation: `extensions/pi-sync/README.md` describes conflict review, local/remote winner
+- Documentation: `packages/pi-sync/README.md` describes conflict review, local/remote winner
   semantics, safety gates, cancellation, direct routes, automatic sync, and accessibility behavior.
 - Runtime smoke: an empty temporary agent directory plus
-  `pi -e ./extensions/pi-sync --mode rpc --no-session` answered `get_commands` with `success: true`
+  `pi -e ./packages/pi-sync --mode rpc --no-session` answered `get_commands` with `success: true`
   and the registered `sync` command; no credentials or remote network were used.
 - Worktree CI-equivalent run: all build, Biome, boundary, and typecheck gates passed; the test gate's
   sole failure was the documented linked-worktree `GIT_DIR` injection in `git-runner.test.ts`. The

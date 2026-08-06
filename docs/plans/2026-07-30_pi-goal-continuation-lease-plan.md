@@ -134,7 +134,7 @@ The Phase 4 admission record must resolve these before implementation:
 - [ ] Add the admitted consumer's planned lifecycle or compaction workflow tests and a disposable
       two-extension runtime smoke; verify held work prevents only its exact continuation, newer user
       work still wins, and release/expiry leaves no timer, listener, status, or stale ticket.
-- [ ] Update `extensions/pi-goal/README.md` with opt-in settings, JSON protocol, unique ticket and
+- [ ] Update `packages/pi-goal/README.md` with opt-in settings, JSON protocol, unique ticket and
       first-holder rules, lease/expiry behavior, invalidation matrix, acknowledgements, no-listener
       behavior, and security limitations; verify examples match consumer and provider tests.
 - [ ] Review `runtime.ts` and `goal.ts` responsibility and line growth, splitting only where the

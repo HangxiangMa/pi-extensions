@@ -40,9 +40,9 @@ Summary: 10 PASS, 0 FAIL.
 
 ## Automated evidence
 
-- `extensions/pi-subagents/test/subagents.test.ts` asserts consistent blocking guidance, disabled-state behavior, and immediate delivery-policy metadata refresh.
-- `extensions/pi-subagents/test/orchestration.test.ts` asserts default next-turn and opt-in auto-resume spawn guidance.
-- `extensions/pi-subagents/test/evolution.test.ts` asserts stateful tools are default-on, can be disabled, and expose the no-immediate-wait guidance.
+- `packages/pi-subagents/test/subagents.test.ts` asserts consistent blocking guidance, disabled-state behavior, and immediate delivery-policy metadata refresh.
+- `packages/pi-subagents/test/orchestration.test.ts` asserts default next-turn and opt-in auto-resume spawn guidance.
+- `packages/pi-subagents/test/evolution.test.ts` asserts stateful tools are default-on, can be disabled, and expose the no-immediate-wait guidance.
 - `npm run check` is the release gate.
 
 ## Runtime boundary

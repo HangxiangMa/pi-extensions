@@ -10,7 +10,7 @@ target at least a 60% warm-cache import reduction and a 20% forced-rebuild impor
 
 - The current seven-run RPC benchmark reports a warm-cache import median of **334 ms**
   (MAD **2 ms**) and first-response median of **852.41 ms** (MAD **6.54 ms**):
-  `node scripts/benchmark-extension-startup.mjs --entry extensions/pi-starship/src/index.ts --runs 7`.
+  `node scripts/benchmark-extension-startup.mjs --entry packages/pi-starship/src/index.ts --runs 7`.
 - With `JITI_REBUILD_FS_CACHE=1`, three measured runs report an import median of **740 ms**
   (MAD **8 ms**) and first-response median of **1239.41 ms** (MAD **1.87 ms**).
 - `JITI_DEBUG=1` shows 51 `pi-starship` source modules on the eager path. The factory itself takes
@@ -27,10 +27,10 @@ target at least a 60% warm-cache import reduction and a 20% forced-rebuild impor
 
 ## Architecture
 
-- Keep the descriptive files under `extensions/pi-starship/src/` as the authoritative implementation
+- Keep the descriptive files under `packages/pi-starship/src/` as the authoritative implementation
   and test surface.
 - Add a package-owned build step that bundles `src/pi-starship.ts` into deterministic, split ESM
-  artifacts under ignored `extensions/pi-starship/dist/`. Emit JavaScript syntax with `.ts`
+  artifacts under ignored `packages/pi-starship/dist/`. Emit JavaScript syntax with `.ts`
   extensions so Pi loads the artifact and its chunks through Jiti, preserving Pi's package aliases
   and avoiding a second agent runtime.
 - Keep Pi, Pi TUI, Pi TUI Kit, `smol-toml`, and `yaml` external to the bundle. Preserve the existing
@@ -97,23 +97,23 @@ artifacts, and retain the existing source implementation unchanged.
 
 ## Plan
 
-- [x] Prototype the exact production artifact in `extensions/pi-starship` without switching the
+- [x] Prototype the exact production artifact in `packages/pi-starship` without switching the
       declared entrypoint: externalize all runtime packages, preserve dynamic chunks, and verify with
       Jiti debug traces that checkout and extracted-pack loads evaluate one Pi runtime and exclude
       command UI, `yaml`, and optional collector chunks from the eager path; record the artifact file
       count and source-map result as acceptance evidence.
-- [x] Add `extensions/pi-starship/scripts/build-runtime.mjs` and package scripts that generate the
+- [x] Add `packages/pi-starship/scripts/build-runtime.mjs` and package scripts that generate the
       split `.ts` artifact through a temporary output directory, replace `dist/` only after success,
       remove stale chunks, emit generated/source-map markers, and expose esbuild metadata for eager-
       boundary validation; verify two consecutive builds produce byte-identical file names and bytes.
 - [x] Add pinned `esbuild` package tooling and update `package-lock.json` using npm 12.0.2 on supported
       Node; verify `npm --version`, a package build from a clean `dist/`, and that `esbuild` remains a
       dev-only dependency while all existing runtime libraries retain their current dependency class.
-- [x] Update `extensions/pi-starship/src/index.ts`, `package.json#files`, package lifecycle scripts, and
+- [x] Update `packages/pi-starship/src/index.ts`, `package.json#files`, package lifecycle scripts, and
       the generic `just try` preparation path so the canonical source entry forwards the built
       artifact and checkout, root-build, pack, and installed-package routes all prepare/load it;
       verify `npm run check:boundaries`, `just try starship` startup, and an extracted tarball load.
-- [x] Add a declared-entrypoint integration test under `extensions/pi-starship/test/` that exercises
+- [x] Add a declared-entrypoint integration test under `packages/pi-starship/test/` that exercises
       command registration, missing-settings side-effect freedom, built-in footer installation, and
       shutdown cleanup through `src/index.ts`; run it against a freshly built artifact and retain the
       existing source-level lifecycle/config suites as the detailed behavioral contract.
@@ -130,7 +130,7 @@ artifacts, and retain the existing source implementation unchanged.
       improve warm import median by at least 60%, warm first response by at least 20%, forced-rebuild
       import median by at least 20%, and forced-rebuild first response by at least 15%, with each
       improvement larger than five baseline MADs.
-- [x] Update `extensions/pi-starship/README.md` package layout and local-checkout instructions to name
+- [x] Update `packages/pi-starship/README.md` package layout and local-checkout instructions to name
       the generated runtime and canonical build-aware try command without changing user-facing
       settings or command claims; verify all standard README sections and badges remain present.
 - [x] Audit the final diff against `docs/extension-conventions.md` and
@@ -150,7 +150,7 @@ artifacts, and retain the existing source implementation unchanged.
 - Lockfile work used Node 22.22.2 with Corepack npm 12.0.2; `esbuild` 0.28.1 is package-owned and
   dev-only.
 - A clean-`dist` `just try starship` smoke used a noninteractive fake `pi` and rebuilt before invoking
-  `pi -e ./extensions/pi-starship`; an actual packed extension loaded through Pi RPC.
+  `pi -e ./packages/pi-starship`; an actual packed extension loaded through Pi RPC.
 - `npm test` and the final `npm run check` each passed all 2,425 repository tests. The generated-entry
   test verifies registration, side-effect-free missing settings, footer installation, and shutdown.
 - Re-measured source versus generated medians were: warm import 324 -> 27 ms, warm first response

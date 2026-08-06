@@ -210,11 +210,11 @@ Pi Sync in the user's Git/SSH mechanisms.
 
 ## Verification
 
-- Schema and remote identity: `extensions/pi-sync/test/v3-schema.test.ts`, backend config/state tests,
+- Schema and remote identity: `packages/pi-sync/test/v3-schema.test.ts`, backend config/state tests,
   and Git/WebDAV config tests.
 - Persistence, locking, migration, permissions, and unknown fields:
-  `extensions/pi-sync/test/config-filename.test.ts` and settings-management tests.
+  `packages/pi-sync/test/config-filename.test.ts` and settings-management tests.
 - CRUD, switching, dependency review, and failed-save rollback: settings-management,
   menu-wording, review-feedback, setup, and backend UI tests.
 - Included content, sessions, and path safety: sync policy/storage/snapshot tests.
-- User-facing field reference and recovery: `extensions/pi-sync/README.md`.
+- User-facing field reference and recovery: `packages/pi-sync/README.md`.

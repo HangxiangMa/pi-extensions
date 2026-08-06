@@ -14,8 +14,8 @@ without turning every task into expensive, noisy delegation.
 
 Evidence was gathered from:
 
-- Current package code: `extensions/pi-subagents/src/subagents.ts`,
-  `extensions/pi-subagents/src/agents.ts`, and `extensions/pi-subagents/README.md`.
+- Current package code: `packages/pi-subagents/src/subagents.ts`,
+  `packages/pi-subagents/src/agents.ts`, and `packages/pi-subagents/README.md`.
 - Pi extension API docs:
   `/home/narumi/.bun/install/global/node_modules/@earendil-works/pi-coding-agent/docs/extensions.md`.
 - Third-party checked-in code under `third_party/claude-code`.
@@ -37,19 +37,19 @@ UX risks.
 
 | Area | Evidence | Proactivity implication |
 | --- | --- | --- |
-| Tool registration | `extensions/pi-subagents/src/subagents.ts:590-600` registers `name: "subagent"`, label, description, and schema. The definition does **not** define `promptSnippet` or `promptGuidelines`. | The model can call the tool, but Pi's default prompt lacks a compact always-visible usage hint for when to decompose work. |
-| Execution modes | `extensions/pi-subagents/src/subagents.ts:609-612` enforces exactly one mode; `:667-722` handles chain mode; `:728-856` handles parallel mode and optional `aggregator`; `:866-894` handles single mode. | The runtime already supports the workflows that proactive prompting would recommend: single, parallel, chain, and fan-in. |
-| Parallel limits | `extensions/pi-subagents/src/subagents.ts:31-32` sets `MAX_PARALLEL_TASKS = 8` and `MAX_CONCURRENCY = 4`; `:729-735` rejects over-large parallel batches; `:778` uses `mapWithConcurrencyLimit`. | There is already a guardrail for over-delegation; prompt guidance can safely mention parallel fan-out within these limits. |
-| Status UI | `extensions/pi-subagents/src/subagents.ts:49-79` publishes status through `ctx.ui.setStatus`; chain/parallel/single calls update it at `:670`, `:740`, and `:866`. | Users can see active subagent work, but status is reactive, not a trigger for delegation. |
-| Agent scope and trust | `extensions/pi-subagents/src/subagents.ts:603-606` defaults to `agentScope: "user"`; `:641-663` asks before using project-local agents when UI is available. | Proactive guidance must not suggest project-local agents unless `agentScope` is explicitly enabled and confirmation is respected. |
-| Built-in agents | `extensions/pi-subagents/src/agents.ts:23-69` defines `scout`, `planner`, `reviewer`, `worker`, `general`, and `general-purpose`. | There are enough built-ins for a decomposition rubric: read-only research, planning, independent review, and implementation. |
-| Agent discovery | `extensions/pi-subagents/src/agents.ts:155-189` discovers nearest `.pi/agents`, merges built-ins, user agents, and project agents by requested scope. | A dynamic roster is possible, but injecting it every turn risks prompt growth/cache churn. |
-| Documentation | `extensions/pi-subagents/README.md` documents delegation modes, built-ins, project-agent confirmation, runtime limits, and status. | User docs cover explicit usage, but not a proactive rubric for the main agent. |
+| Tool registration | `packages/pi-subagents/src/subagents.ts:590-600` registers `name: "subagent"`, label, description, and schema. The definition does **not** define `promptSnippet` or `promptGuidelines`. | The model can call the tool, but Pi's default prompt lacks a compact always-visible usage hint for when to decompose work. |
+| Execution modes | `packages/pi-subagents/src/subagents.ts:609-612` enforces exactly one mode; `:667-722` handles chain mode; `:728-856` handles parallel mode and optional `aggregator`; `:866-894` handles single mode. | The runtime already supports the workflows that proactive prompting would recommend: single, parallel, chain, and fan-in. |
+| Parallel limits | `packages/pi-subagents/src/subagents.ts:31-32` sets `MAX_PARALLEL_TASKS = 8` and `MAX_CONCURRENCY = 4`; `:729-735` rejects over-large parallel batches; `:778` uses `mapWithConcurrencyLimit`. | There is already a guardrail for over-delegation; prompt guidance can safely mention parallel fan-out within these limits. |
+| Status UI | `packages/pi-subagents/src/subagents.ts:49-79` publishes status through `ctx.ui.setStatus`; chain/parallel/single calls update it at `:670`, `:740`, and `:866`. | Users can see active subagent work, but status is reactive, not a trigger for delegation. |
+| Agent scope and trust | `packages/pi-subagents/src/subagents.ts:603-606` defaults to `agentScope: "user"`; `:641-663` asks before using project-local agents when UI is available. | Proactive guidance must not suggest project-local agents unless `agentScope` is explicitly enabled and confirmation is respected. |
+| Built-in agents | `packages/pi-subagents/src/agents.ts:23-69` defines `scout`, `planner`, `reviewer`, `worker`, `general`, and `general-purpose`. | There are enough built-ins for a decomposition rubric: read-only research, planning, independent review, and implementation. |
+| Agent discovery | `packages/pi-subagents/src/agents.ts:155-189` discovers nearest `.pi/agents`, merges built-ins, user agents, and project agents by requested scope. | A dynamic roster is possible, but injecting it every turn risks prompt growth/cache churn. |
+| Documentation | `packages/pi-subagents/README.md` documents delegation modes, built-ins, project-agent confirmation, runtime limits, and status. | User docs cover explicit usage, but not a proactive rubric for the main agent. |
 
 Verification grep target: `registerTool`, `promptSnippet`, `promptGuidelines`, and
 `before_agent_start` are intentionally named here because the current package has
 `registerTool` but no `promptSnippet` / `promptGuidelines` / `before_agent_start`
-usage in `extensions/pi-subagents/src`.
+usage in `packages/pi-subagents/src`.
 
 ## Pi extension intervention points
 
@@ -180,8 +180,8 @@ parallelize, and when not to delegate.
 Recommended route:
 
 1. Implement L1 in the next PR: add `promptSnippet` and concise
-   `promptGuidelines` to `extensions/pi-subagents/src/subagents.ts`.
-2. Document the rubric in `extensions/pi-subagents/README.md` so users can tune
+   `promptGuidelines` to `packages/pi-subagents/src/subagents.ts`.
+2. Document the rubric in `packages/pi-subagents/README.md` so users can tune
    their prompts and custom agents.
 3. Run the six-prompt spike above before and after L1.
 4. Only if L1 under-delegates, test L2 `before_agent_start` dynamic hints behind

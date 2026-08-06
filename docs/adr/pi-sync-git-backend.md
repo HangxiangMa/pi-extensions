@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted on 2026-07-27 and maintained by the current `extensions/pi-sync` implementation.
+Accepted on 2026-07-27 and maintained by the current `packages/pi-sync` implementation.
 
 ## Context
 
@@ -226,10 +226,10 @@ rewrite remote history or run remote garbage collection.
 
 The executable evidence is in:
 
-- `extensions/pi-sync/test/git-backend-contract.test.ts`
-- `extensions/pi-sync/test/git-backend.test.ts`
-- `extensions/pi-sync/test/git-config.test.ts`
-- `extensions/pi-sync/test/git-runner.test.ts`
-- `extensions/pi-sync/test/git-routes.test.ts`
-- `extensions/pi-sync/test/git-ui.test.ts`
+- `packages/pi-sync/test/git-backend-contract.test.ts`
+- `packages/pi-sync/test/git-backend.test.ts`
+- `packages/pi-sync/test/git-config.test.ts`
+- `packages/pi-sync/test/git-runner.test.ts`
+- `packages/pi-sync/test/git-routes.test.ts`
+- `packages/pi-sync/test/git-ui.test.ts`
 - the shared backend/orchestration/lifecycle suites

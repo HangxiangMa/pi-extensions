@@ -131,7 +131,7 @@ stored user data.
       ready/saved/active states restore unchanged, Settings and unknown fields are untouched,
       print/JSON reject implementation before state changes, and TUI/RPC current-session flows retain
       their previous rollback semantics.
-- [x] Update `extensions/pi-plan-mode/README.md` with the two per-plan choices, exact meaning of
+- [x] Update `packages/pi-plan-mode/README.md` with the two per-plan choices, exact meaning of
       “fresh,” source-session preservation, parent linkage, interaction with all retention policies,
       cancellation/partial-failure recovery, `/plan implement` compatibility, and supported modes;
       verify labels and commands against the tests and final implementation.
