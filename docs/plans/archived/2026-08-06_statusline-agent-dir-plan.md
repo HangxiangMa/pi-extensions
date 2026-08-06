@@ -41,8 +41,10 @@ persistence, command surface, UI flow, or lifecycle ownership changes are planne
 - [x] Audit the final diff against the touched-area rules and run `npm run check`. Evidence: all
   format, boundary, workspace typecheck, and 2,429 test checks passed. Package and loader smokes were
   inapplicable because metadata and runtime loading are unchanged.
-- [ ] Create focused Conventional Commits, push `fix/statusline-agent-dir` to `origin`, and open a PR
-  against `main` referencing issue #573; verify the remote branch and PR URL.
+- [x] Create focused Conventional Commits, push `fix/statusline-agent-dir` to `origin`, and open a PR
+  against `main` referencing issue #573. Evidence: the remote branch tracks
+  `origin/fix/statusline-agent-dir`, and PR #574 is open at
+  `https://github.com/narumiruna/pi-extensions/pull/574`.
 
 ## Risks
 
@@ -60,4 +62,4 @@ persistence, command surface, UI flow, or lifecycle ownership changes are planne
   global source affects both duplicate detection and npm-source aliases.
 - [x] Focused tests and `npm run check` pass, with the final semantic audit finding no unaddressed
   applicable MUST rule.
-- [ ] The branch is pushed and an open PR against `main` references issue #573.
+- [x] The branch is pushed and PR #574 against `main` references and closes issue #573.
