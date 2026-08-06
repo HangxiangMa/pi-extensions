@@ -38,9 +38,9 @@ persistence, command surface, UI flow, or lifecycle ownership changes are planne
 - [x] Update `extensions/pi-statusline/src/extension-status.ts` to derive the global Pi
   `settings.json` candidate from `getAgentDir()` while leaving `<cwd>/.pi/settings.json` unchanged.
   Evidence: the regression test passed, followed by all 128 compiled `pi-statusline` tests.
-- [ ] Audit the final diff against the touched-area rules, run `npm run check`, and record any skipped
-  or inapplicable smoke; package and loader smokes are not expected because metadata and runtime
-  loading are unchanged.
+- [x] Audit the final diff against the touched-area rules and run `npm run check`. Evidence: all
+  format, boundary, workspace typecheck, and 2,429 test checks passed. Package and loader smokes were
+  inapplicable because metadata and runtime loading are unchanged.
 - [ ] Create focused Conventional Commits, push `fix/statusline-agent-dir` to `origin`, and open a PR
   against `main` referencing issue #573; verify the remote branch and PR URL.
 
@@ -53,11 +53,11 @@ persistence, command surface, UI flow, or lifecycle ownership changes are planne
 
 ## Completion Checklist
 
-- [ ] The global package settings candidate follows `getAgentDir()` and therefore honors
+- [x] The global package settings candidate follows `getAgentDir()` and therefore honors
   `PI_CODING_AGENT_DIR` with Pi's platform-safe fallback.
-- [ ] The project-local `<cwd>/.pi/settings.json` candidate behaves as before.
-- [ ] Regression evidence proves an unrelated HOME settings file is excluded and the configured
+- [x] The project-local `<cwd>/.pi/settings.json` candidate behaves as before.
+- [x] Regression evidence proves an unrelated HOME settings file is excluded and the configured
   global source affects both duplicate detection and npm-source aliases.
-- [ ] Focused tests and `npm run check` pass, with the final semantic audit reporting no unaddressed
+- [x] Focused tests and `npm run check` pass, with the final semantic audit finding no unaddressed
   applicable MUST rule.
 - [ ] The branch is pushed and an open PR against `main` references issue #573.
