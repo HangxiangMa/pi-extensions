@@ -24,7 +24,7 @@ import {
 
 const GENERATION_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-const DEFAULT_WRITE_TIMEOUT_MS = 500;
+const DEFAULT_WRITE_TIMEOUT_MS = 5_000;
 const YIELD_EVERY_RECORDS = 100;
 
 export interface ClearAnalyticsResult {

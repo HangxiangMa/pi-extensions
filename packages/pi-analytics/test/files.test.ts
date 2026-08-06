@@ -87,6 +87,20 @@ test("independent writers lazily append private frames without cross-process loc
 	}
 });
 
+test("the default write deadline tolerates a transient local filesystem stall", async (t) => {
+	const root = await fixture(t);
+	const files = new AnalyticsRunFiles(root, {
+		async beforeAppend() {
+			await new Promise((resolve) => setTimeout(resolve, 750));
+		},
+	});
+	await files.append(run("delayed"));
+	assert.deepEqual(
+		(await collect(files)).map(({ id }) => id),
+		["delayed"],
+	);
+});
+
 test("reader ignores only a crash-truncated final frame and rejects completed corruption", async (t) => {
 	const root = await fixture(t);
 	const files = new AnalyticsRunFiles(root);
