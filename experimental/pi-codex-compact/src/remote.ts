@@ -1,4 +1,4 @@
-import type { Context, Model, Provider, Usage } from "@earendil-works/pi-ai";
+import type { Context, Model, Provider, ProviderHeaders, Usage } from "@earendil-works/pi-ai";
 import {
 	CodexCompactionProtocolError,
 	type CollectedCompaction,
@@ -17,7 +17,7 @@ export interface RemoteCompactionRequest {
 	model: Model<"openai-codex-responses">;
 	context: Context;
 	apiKey?: string;
-	headers?: Record<string, string>;
+	headers?: ProviderHeaders;
 	env?: Record<string, string>;
 	signal: AbortSignal;
 	priorCheckpoint?: PriorCheckpointPayload;

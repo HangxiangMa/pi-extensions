@@ -4,6 +4,7 @@ import type {
 	Context,
 	Message,
 	Model,
+	ProviderHeaders,
 	SimpleStreamOptions,
 	UserMessage,
 } from "@earendil-works/pi-ai";
@@ -22,7 +23,7 @@ export type BtwThinkingLevel = (typeof BTW_THINKING_LEVELS)[number];
 
 export interface SideQuestionAuth {
 	apiKey?: string;
-	headers?: Record<string, string>;
+	headers?: ProviderHeaders;
 	env?: Record<string, string>;
 }
 

@@ -153,6 +153,36 @@ test("resolveBtwModel accepts header-only and environment-only configured auth",
 	}
 });
 
+test("resolveBtwModel preserves deletion markers without treating null-only headers as auth", async () => {
+	const configuredModel = { provider: "custom", id: "side" } as Model<Api>;
+	const mixedHeaders = { Authorization: null, "X-Provider-Token": "test" };
+	const mixed = await resolveBtwModel({
+		settings: { model: "custom/side" },
+		currentModel: undefined,
+		modelRegistry: {
+			find: () => configuredModel,
+			getApiKeyAndHeaders: async () => ({ ok: true as const, headers: mixedHeaders }),
+		} as never,
+	});
+	assert.deepEqual(mixed?.auth.headers, mixedHeaders);
+
+	const warnings: string[] = [];
+	const nullOnly = await resolveBtwModel({
+		settings: { model: "custom/side" },
+		currentModel: undefined,
+		modelRegistry: {
+			find: () => configuredModel,
+			getApiKeyAndHeaders: async () => ({
+				ok: true as const,
+				headers: { Authorization: null },
+			}),
+		} as never,
+		warn: (message) => warnings.push(message),
+	});
+	assert.equal(nullOnly, undefined);
+	assert.match(warnings[0] ?? "", /no request credentials/u);
+});
+
 test("resolveBtwModel inherits current model when no model is configured", async () => {
 	const currentModel = { provider: "current", id: "main" } as Model<Api>;
 	const result = await resolveBtwModel({

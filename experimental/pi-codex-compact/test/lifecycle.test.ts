@@ -58,13 +58,15 @@ function settingsRuntime(overrides = {}): CodexCompactSettingsRuntime {
 	};
 }
 
-function fakeProvider(): Provider {
+function fakeProvider(onOptions?: (options: OpenAICodexResponsesOptions) => void): Provider {
 	return {
 		id: "openai-codex",
 		name: "OpenAI Codex",
 		auth: {} as Provider["auth"],
 		getModels: () => [model],
 		stream(_model, context, options) {
+			const codexOptions = options as OpenAICodexResponsesOptions;
+			onOptions?.(codexOptions);
 			const stream = createAssistantMessageEventStream();
 			void (async () => {
 				try {
@@ -109,7 +111,7 @@ function fakeProvider(): Provider {
 					stream.end(message);
 				}
 			})();
-			assert.equal((options as OpenAICodexResponsesOptions).maxRetries, 2);
+			assert.equal(codexOptions.maxRetries, 2);
 			return stream;
 		},
 		streamSimple() {
@@ -174,6 +176,7 @@ function sseResponse() {
 
 test("registers the settings command and returns a versioned Remote V2 compaction with usage", async () => {
 	const mock = createMockPi();
+	let forwardedHeaders: OpenAICodexResponsesOptions["headers"];
 	const runtime = settingsRuntime();
 	createCodexCompactExtension({ settingsRuntime: runtime, fetch: async () => sseResponse() })(
 		mock.pi,
@@ -190,14 +193,22 @@ test("registers the settings command and returns a versioned Remote V2 compactio
 			getBranch: () => entries,
 		},
 		modelRegistry: {
-			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "secret-oauth" }),
-			getProvider: () => fakeProvider(),
+			getApiKeyAndHeaders: async () => ({
+				ok: true,
+				apiKey: "secret-oauth",
+				headers: { Authorization: null, "X-Provider-Token": "test" },
+			}),
+			getProvider: () =>
+				fakeProvider((options) => {
+					forwardedHeaders = options.headers;
+				}),
 		},
 	});
 	const result = (await handler?.(event(), ctx)) as {
 		compaction: { usage: unknown; details: unknown; summary: string };
 	};
 	assert.deepEqual(result.compaction.usage, usage);
+	assert.deepEqual(forwardedHeaders, { Authorization: null, "X-Provider-Token": "test" });
 	const details = parseCheckpointDetails(result.compaction.details);
 	assert.ok(details);
 	assert.doesNotMatch(JSON.stringify(details), /secret-oauth/);

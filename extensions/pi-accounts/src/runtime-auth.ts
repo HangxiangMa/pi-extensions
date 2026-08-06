@@ -1,4 +1,4 @@
-import type { ModelAuth, OAuthCredential } from "@earendil-works/pi-ai";
+import type { ModelAuth, OAuthCredential, ProviderHeaders } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AccountProviderAdapter, AccountProviderId } from "./oauth.js";
 
@@ -632,7 +632,7 @@ async function getApiKeyAndHeaders(
 	ctx: ExtensionContext,
 	model: { provider: string; id: string; baseUrl?: string },
 ): Promise<
-	| { ok: true; apiKey?: string; headers?: Record<string, string> }
+	| { ok: true; apiKey?: string; headers?: ProviderHeaders }
 	| { ok: false; error: string }
 	| undefined
 > {
@@ -640,7 +640,7 @@ async function getApiKeyAndHeaders(
 		getApiKeyAndHeaders?: (
 			candidate: unknown,
 		) => Promise<
-			{ ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; error: string }
+			{ ok: true; apiKey?: string; headers?: ProviderHeaders } | { ok: false; error: string }
 		>;
 	};
 	return typeof registry.getApiKeyAndHeaders === "function"
