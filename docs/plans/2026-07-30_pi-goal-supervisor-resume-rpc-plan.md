@@ -127,7 +127,7 @@ wording, and tests without widening the objective. Deferral does not block the c
       tracking, settings behavior, and any explicit guidance deferral; verify examples match tests.
 - [ ] Audit user cancellation, prompt disposal, session replacement, shutdown, post-`await` state,
       settings downgrade, and tool-visibility rollback against both extension guides; run the
-      workspace check and runtime smoke, root `npm test`, root `npm run check`, `just pack-goal`, and
+      workspace check and runtime smoke, root `npm test`, root `npm run check`, `just pack goal`, and
       `git diff --check`, recording any live supervisor path that remains unverified for Phase 4.
 
 ## Completion Checklist

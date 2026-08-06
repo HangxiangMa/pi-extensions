@@ -115,7 +115,7 @@ continues to report the manual settings path.
       replacement, and shutdown against `docs/extension-conventions.md` and
       `docs/extension-settings.md`; run `npm run check --workspace @narumitw/pi-goal`,
       `npm run test:runtime --workspace @narumitw/pi-goal`, root `npm test`, root `npm run check`,
-      `just pack-goal`, and `git diff --check`, recording any unverified runtime path before handoff.
+      `just pack goal`, and `git diff --check`, recording any unverified runtime path before handoff.
 
 ## Completion Checklist
 

@@ -66,17 +66,17 @@ npm-public package="@narumitw/pi-goal":
     npm access set status=public {{quote(package)}}
     npm view {{quote(package)}} version
 
-_validate-extension-name name:
-    @[[ {{quote(name)}} =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { printf 'invalid extension name: %s\n' {{quote(name)}} >&2; exit 2; }
+_validate-package-name name:
+    @[[ {{quote(name)}} =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { printf 'invalid package name: %s\n' {{quote(name)}} >&2; exit 2; }
 
 # Preview the package that npm would publish
 # Usage: just pack subagents
-pack name: (_validate-extension-name name)
-    name={{quote(name)}}; package_json="./packages/pi-$name/package.json"; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; npm --workspace "$package" pack --dry-run
+pack name: (_validate-package-name name)
+    name={{quote(name)}}; package_json="./packages/pi-$name/package.json"; [[ -f "$package_json" ]] || { echo "package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; npm --workspace "$package" pack --dry-run
 
-# Try a package from this working tree as a temporary pi package
+# Try an extension package from this working tree as a temporary pi package
 # Usage: just try subagents
-try name: (_validate-extension-name name)
+try name: (_validate-package-name name)
     name={{quote(name)}}; extension_dir="./packages/pi-$name"; [[ -d "$extension_dir" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package_json="$extension_dir/package.json"; package="$(node -p "require(process.argv[1]).name" "$package_json")"; npm --workspace "$package" run build --if-present; pi -e "$extension_dir"
 
 # Start Pi with the commonly used extensions loaded from this working tree
@@ -104,7 +104,7 @@ try-all:
 
 # Install a package through pi, falling back to the local workspace if unpublished
 # Usage: just install subagents
-install name: (_validate-extension-name name)
+install name: (_validate-package-name name)
     name={{quote(name)}}; extension_dir="./packages/pi-$name"; package_json="$extension_dir/package.json"; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; if npm view "$package" version >/dev/null 2>&1; then pi install "npm:$package"; else echo "$package is not published; installing local workspace package instead."; pi install "$extension_dir"; fi
 
 # Add release intent for independently versioned packages
@@ -114,226 +114,3 @@ changeset:
 # Show the pending independent release plan
 changeset-status:
     npm run changeset:status
-
-# Apply pending changesets to package versions, changelogs, and the lockfile
-version-packages:
-    npm run version-packages
-
-# Recovery publication for every local package version not already on npm
-# Requires explicit approval before use.
-publish-all:
-    npm run check
-    npm run publish-packages
-
-# Preview individual packages that npm would publish
-pack-tui-kit:
-    npm --workspace @narumitw/pi-tui-kit pack --dry-run
-
-pack-btw:
-    just pack btw
-
-pack-caffeinate:
-    just pack caffeinate
-
-pack-chrome-devtools:
-    just pack chrome-devtools
-
-pack-codex-compact:
-    just pack codex-compact
-
-pack-accounts:
-    just pack accounts
-
-pack-analytics:
-    just pack analytics
-
-pack-usage:
-    just pack usage
-
-pack-firecrawl:
-    just pack firecrawl
-
-pack-github-pr:
-    just pack github-pr
-
-pack-google-genai:
-    just pack google-genai
-
-pack-goal:
-    just pack goal
-
-pack-image-drop:
-    just pack image-drop
-
-pack-jupyter:
-    just pack jupyter
-
-pack-langfuse:
-    just pack langfuse
-
-pack-lsp:
-    just pack lsp
-
-pack-plan-mode:
-    just pack plan-mode
-
-pack-recall:
-    just pack recall
-
-pack-stamp:
-    just pack stamp
-
-pack-starship:
-    just pack starship
-
-pack-statusline:
-    just pack statusline
-
-pack-sync:
-    just pack sync
-
-pack-subagents:
-    just pack subagents
-
-pack-webui:
-    just pack webui
-
-pack-worktree:
-    just pack worktree
-
-# Try individual packages from this working tree as temporary pi packages
-try-btw:
-    just try btw
-
-try-caffeinate:
-    just try caffeinate
-
-try-chrome-devtools:
-    just try chrome-devtools
-
-try-codex-compact:
-    just try codex-compact
-
-try-accounts:
-    just try accounts
-
-try-analytics:
-    just try analytics
-
-try-usage:
-    just try usage
-
-try-firecrawl:
-    just try firecrawl
-
-try-github-pr:
-    just try github-pr
-
-try-google-genai:
-    just try google-genai
-
-try-goal:
-    just try goal
-
-try-image-drop:
-    just try image-drop
-
-try-jupyter:
-    just try jupyter
-
-try-langfuse:
-    just try langfuse
-
-try-lsp:
-    just try lsp
-
-try-plan-mode:
-    just try plan-mode
-
-try-recall:
-    just try recall
-
-try-stamp:
-    just try stamp
-
-try-starship:
-    just try starship
-
-try-statusline:
-    just try statusline
-
-try-sync:
-    just try sync
-
-try-subagents:
-    just try subagents
-
-try-webui:
-    just try webui
-
-try-worktree:
-    just try worktree
-
-# Install individual packages through pi
-install-btw:
-    just install btw
-
-install-caffeinate:
-    just install caffeinate
-
-install-chrome-devtools:
-    just install chrome-devtools
-
-install-accounts:
-    just install accounts
-
-install-analytics:
-    just install analytics
-
-install-usage:
-    just install usage
-
-install-firecrawl:
-    just install firecrawl
-
-install-github-pr:
-    just install github-pr
-
-install-google-genai:
-    just install google-genai
-
-install-goal:
-    just install goal
-
-install-image-drop:
-    just install image-drop
-
-install-jupyter:
-    just install jupyter
-
-install-langfuse:
-    just install langfuse
-
-install-lsp:
-    just install lsp
-
-install-plan-mode:
-    just install plan-mode
-
-install-stamp:
-    just install stamp
-
-install-statusline:
-    just install statusline
-
-install-sync:
-    just install sync
-
-install-subagents:
-    just install subagents
-
-install-webui:
-    just install webui
-
-install-worktree:
-    just install worktree

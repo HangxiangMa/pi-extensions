@@ -36,7 +36,7 @@ pi -e npm:@narumitw/pi-worktree
 Try this package locally from the repository root:
 
 ```bash
-just try-worktree
+just try worktree
 # or: pi -e ./packages/pi-worktree
 ```
 

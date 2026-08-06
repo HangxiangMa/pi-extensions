@@ -125,7 +125,7 @@ The Phase 4 admission record must resolve these before implementation:
       match the admitted consumer and deterministic tests.
 - [ ] Audit cancellation, proposal disposal, replacement, shutdown, every post-`await` state use,
       settings mutation ordering, and public contract compatibility; run focused tests, the pi-goal
-      workspace check and runtime smoke, root `npm test`, root `npm run check`, `just pack-goal`, the
+      workspace check and runtime smoke, root `npm test`, root `npm run check`, `just pack goal`, the
       admitted consumer smoke/dry run, and `git diff --check` before handoff.
 
 ## Completion Checklist
