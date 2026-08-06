@@ -34,15 +34,18 @@ environment cleanup; no asynchronous or UI lifecycle path is touched.
 
 ## Plan
 
-- [ ] Add a focused `pi-goal` regression test that imports the production persistence path in an
+- [x] Add a focused `pi-goal` regression test that imports the production persistence path in an
   isolated subprocess with `PI_CODING_AGENT_DIR=~/custom-agent`; verify legacy cleanup updates the
-  expanded home-owned file and preserves unrelated entries, and first confirm failure on the manual
-  path implementation.
-- [ ] Replace `pi-goal`'s direct environment and HOME reconstruction with `getAgentDir()` at the shared
-  legacy cleanup boundary; verify the focused test and all compiled `pi-goal` tests pass.
-- [ ] Repeat the bounded sibling scan across all production and experimental runtime sources, classify
-  every remaining direct environment, hard-coded agent path, and core settings reader, and confirm no
-  same-pattern implementation remains.
+  expanded home-owned file and preserves unrelated entries. Evidence: the test failed before the fix
+  because the stale workspace entry remained in the expanded state file.
+- [x] Replace `pi-goal`'s direct environment and HOME reconstruction with `getAgentDir()` at the shared
+  legacy cleanup boundary. Evidence: the focused test passed, followed by all 303 compiled `pi-goal`
+  tests.
+- [x] Repeat the bounded sibling scan across all production and experimental runtime sources and
+  classify every remaining match. Evidence: all 25 active extension source trees, including 6
+  experimental packages, now contain no direct `PI_CODING_AGENT_DIR` read or HOME-based agent-root
+  reconstruction. The two remaining `~/.pi/agent` matches are explanatory default-path text; global
+  settings readers use `getAgentDir()`, and project readers preserve their existing paths.
 - [ ] Run package checks and `npm run check`, audit the final diff against the guides, update PR #574's
   scope and verification notes, push the focused commits, and record any unrelated external CI
   failure separately rather than expanding this fix into a different compatibility change.
