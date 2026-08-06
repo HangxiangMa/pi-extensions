@@ -142,7 +142,7 @@ The Phase 4 admission record must resolve these before implementation:
       replacement, shutdown, settings rollback, and every timer/event continuation against both
       extension guides.
 - [ ] Run focused deterministic tests, the pi-goal workspace check and runtime smoke, root `npm test`,
-      root `npm run check`, `just pack-goal`, the admitted consumer check/dry run and runtime smoke,
+      root `npm run check`, `just pack goal`, the admitted consumer check/dry run and runtime smoke,
       plus `git diff --check`; record lease cleanup and no-listener equivalence evidence before
       handoff.
 

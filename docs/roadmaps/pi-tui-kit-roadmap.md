@@ -276,7 +276,7 @@ abstractions when Pi provides a better stable owner.
   raw IDs and values separately.
 - Revalidate mutable state after every await before publishing UI or in-memory state.
 - For each public package change, run the package check, root `npm run check`, deterministic runtime
-  smokes, and `just pack-tui-kit`; inspect all exported production and testing entry points.
+  smokes, and `just pack tui-kit`; inspect all exported production and testing entry points.
 
 ## Risks and Dependencies
 

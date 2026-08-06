@@ -124,7 +124,7 @@ code changes.
       documentation examples match exported TypeScript types and deterministic tests.
 - [ ] Audit every stopped-state writer, post-`await` rollback, session reload, queue transition, and
       settings snapshot against the roadmap and extension conventions; run the pi-goal workspace
-      check and runtime smoke, root `npm test`, root `npm run check`, `just pack-goal`, and
+      check and runtime smoke, root `npm test`, root `npm run check`, `just pack goal`, and
       `git diff --check`, recording the transition-matrix evidence in the completed plan.
 
 ## Completion Checklist
