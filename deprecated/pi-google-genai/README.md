@@ -1,8 +1,19 @@
-# 🔎 pi-google-genai — Google GenAI grounding tools for Pi
+# 🔎 pi-google-genai — Deprecated Google GenAI grounding tools for Pi
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-google-genai)](https://www.npmjs.com/package/@narumitw/pi-google-genai) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-google-genai` exposes Google GenAI Interactions grounding tools to Pi.
+> [!WARNING]
+> `@narumitw/pi-google-genai` is deprecated, kept under `deprecated/` for reference,
+> and no longer part of the active workspace package set. Use the
+> `grounding-with-google-genai` agent skill instead. The skill requires `GEMINI_API_KEY` in
+> the environment or a discoverable `.env` file; it does not read `pi-google-genai.json` or Pi
+> provider auth. Configure the skill before uninstalling this extension, and never commit the key.
+>
+> ```bash
+> pi uninstall npm:@narumitw/pi-google-genai
+> ```
+
+`@narumitw/pi-google-genai` exposed Google GenAI Interactions grounding tools to Pi.
 
 ## ✨ Features
 
@@ -13,22 +24,12 @@
 - Lets `/google-genai tools` persist which of the three tools are active.
 - Truncates large outputs and writes the full raw interaction response to a private temp file only when truncation happens.
 
-## 📦 Install
+## 📦 Archived reference
+
+To inspect the deprecated package from this repository without installing it:
 
 ```bash
-pi install npm:@narumitw/pi-google-genai
-```
-
-Try without installing permanently:
-
-```bash
-pi -e npm:@narumitw/pi-google-genai
-```
-
-Try from this repository:
-
-```bash
-pi -e ./packages/pi-google-genai
+pi -e ./deprecated/pi-google-genai
 ```
 
 ## ⚙️ Configuration
@@ -156,7 +157,7 @@ Automated tests mock Google. Before publishing, you can manually try:
 
 ```bash
 export GEMINI_API_KEY=your-key
-pi -e ./packages/pi-google-genai
+pi -e ./deprecated/pi-google-genai
 ```
 
 Then ask Pi to use:
@@ -171,10 +172,10 @@ Use google_url_context to summarize https://ai.google.dev/gemini-api/docs/intera
 
 The first version only needs one POST to the Interactions API, so native `fetch` is enough. Add `@google/genai` later when the extension needs SDK-heavy features such as file upload, live sessions, Vertex/Enterprise auth, batch/video operations, or file-search store management.
 
-## 📁 Package layout
+## 🗂️ Package layout
 
 ```txt
-packages/pi-google-genai/
+deprecated/pi-google-genai/
 ├── src/
 │   ├── index.ts         # Pi package entrypoint
 │   ├── google-genai.ts  # Extension registration and command orchestration
@@ -188,7 +189,7 @@ packages/pi-google-genai/
 
 `index.ts` is the Pi entrypoint and forwards to `google-genai.ts`; the other source modules are internal.
 
-## 🏷️ Keywords
+## 🔎 Keywords
 
 `pi-package`, `pi-extension`, `google`, `gemini`, `genai`, `search`, `maps`
 
