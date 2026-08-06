@@ -3,6 +3,7 @@ import {
 	clampThinkingLevel,
 	getSupportedThinkingLevels,
 	type Model,
+	type ProviderHeaders,
 } from "@earendil-works/pi-ai";
 import {
 	BorderedLoader,
@@ -76,15 +77,10 @@ interface LoadBtwThinkingLevelOptions {
 	warn?: (message: string) => void;
 }
 
-interface BtwModelRegistry {
-	find(provider: string, modelId: string): Model<Api> | undefined;
-	getApiKeyAndHeaders(
-		model: Model<Api>,
-	): Promise<
-		| { ok: true; apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> }
-		| { ok: false; error: string }
-	>;
-}
+type BtwModelRegistry = Pick<
+	ExtensionCommandContext["modelRegistry"],
+	"find" | "getApiKeyAndHeaders"
+>;
 
 interface ResolveBtwModelOptions {
 	settings: BtwSettings;
@@ -154,9 +150,13 @@ export async function resolveBtwModel({
 function hasRequestAuth(auth: SideQuestionAuth): boolean {
 	return Boolean(
 		auth.apiKey ||
-			(auth.headers && Object.keys(auth.headers).length > 0) ||
+			providerHeadersHaveValue(auth.headers) ||
 			(auth.env && Object.keys(auth.env).length > 0),
 	);
+}
+
+function providerHeadersHaveValue(headers: ProviderHeaders | undefined): boolean {
+	return headers !== undefined && Object.values(headers).some((value) => value !== null);
 }
 
 export async function loadBtwThinkingLevel(

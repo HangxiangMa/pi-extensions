@@ -26,15 +26,17 @@ UI, package metadata, or lifecycle behavior changes are planned.
 
 ## Plan
 
-- [ ] Add a focused `pi-btw` regression test proving mixed string/null headers remain available and
-  unchanged while null-only deletion markers do not become credentials; confirm the null-only case
-  fails before implementation.
-- [ ] Replace `pi-btw`'s duplicated registry contract with a `Pick` of Pi's context registry and adopt
-  Pi's public `ProviderHeaders` type through the side-thread boundary; verify headers pass unchanged to
-  pi-ai and focused `pi-btw` tests pass under pinned Pi.
-- [ ] Adopt Pi's public `ProviderHeaders` type at experimental `pi-codex-compact`'s remote request
-  boundary and add coverage proving nullable deletion markers reach `Provider.stream()` unchanged;
-  verify focused experimental tests pass under pinned Pi.
+- [x] Add a focused `pi-btw` regression test proving mixed string/null headers remain available and
+  unchanged while null-only deletion markers do not become credentials. Evidence: before the fix,
+  the null-only case incorrectly selected the configured model.
+- [x] Replace `pi-btw`'s duplicated registry contract with a `Pick` of Pi's context registry and adopt
+  Pi's public `ProviderHeaders` type through the side-thread boundary. Evidence: nullable markers pass
+  unchanged, null-only maps are rejected as credentials, and all 120 compiled `pi-btw` tests passed
+  under pinned Pi.
+- [x] Adopt Pi's public `ProviderHeaders` type at experimental `pi-codex-compact`'s remote request
+  boundary and add coverage proving nullable deletion markers reach `Provider.stream()` unchanged.
+  Evidence: the exact mixed header map reached the provider, and all 40 compiled experimental tests
+  passed under pinned Pi.
 - [ ] Reproduce CI's latest-Pi install in an external temporary worktree, run the affected workspace
   typechecks/tests, then run the pinned `npm run check`; audit sibling resolved-auth consumers for the
   same narrowing pattern.
