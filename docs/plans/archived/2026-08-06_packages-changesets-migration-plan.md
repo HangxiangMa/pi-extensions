@@ -96,9 +96,12 @@ No extension-owned settings or asynchronous runtime lifecycle flow changes, so
       were not changed. The three pre-existing source files above 1,000 lines are move-only in this
       migration, apart from one package-path fallback in `pi-image-drop`, so no responsibility was
       added that would justify unrelated decomposition.
-- [ ] Archive the fully checked plan under `docs/plans/archived/`, commit the final evidence, push the
+- [x] Archive the fully checked plan under `docs/plans/archived/`, commit the final evidence, push the
       branch to `origin`, and create a pull request against `main` whose summary names the migration,
-      independent release model, checks, smokes, and absence of npm publication.
+      independent release model, checks, smokes, and absence of npm publication. Evidence: branch
+      `feat/consolidate-packages-changesets` was pushed to `origin`; pull request
+      [#580](https://github.com/narumiruna/pi-extensions/pull/580) is open against `main` with the
+      required summary and verification record; this final evidence update archives the plan.
 
 ## Risks
 
@@ -132,5 +135,7 @@ publish, change visibility, or dispatch workflows as part of rollback without ex
       shared root release version or `v*.*.*` workflow.
 - [x] Every local package baseline version is confirmed as already published on npm; no package is
       published by this work.
-- [ ] `npm run check`, all-workspace pack dry run, representative stable/experimental Pi loads, final
+- [x] `npm run check`, all-workspace pack dry run, representative stable/experimental Pi loads, final
       semantic audit, clean worktree, pushed branch, and pull request all have recorded evidence.
+      Evidence: local verification and semantic evidence are recorded above; the final archive commit
+      leaves the branch clean and is pushed to pull request #580.
