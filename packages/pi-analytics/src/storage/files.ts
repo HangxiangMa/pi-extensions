@@ -406,6 +406,16 @@ async function withDeadline<T>(
 	);
 	try {
 		return await operation(controller.signal);
+	} catch (error) {
+		if (
+			controller.signal.aborted &&
+			error instanceof Error &&
+			error.name === "AbortError" &&
+			error.cause === controller.signal.reason
+		) {
+			throw controller.signal.reason;
+		}
+		throw error;
 	} finally {
 		clearTimeout(timer);
 		callerSignal?.removeEventListener("abort", callerAbort);

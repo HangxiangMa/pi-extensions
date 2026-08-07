@@ -171,7 +171,16 @@ test("a stalled append receives the bounded write cancellation signal", async (t
 		writeTimeoutMs: 10,
 		async beforeAppend(_generation, signal) {
 			await new Promise<void>((_resolve, reject) => {
-				signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+				signal.addEventListener(
+					"abort",
+					() =>
+						reject(
+							Object.assign(new Error("The operation was aborted", { cause: signal.reason }), {
+								name: "AbortError",
+							}),
+						),
+					{ once: true },
+				);
 			});
 		},
 	});
