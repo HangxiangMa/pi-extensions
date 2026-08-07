@@ -6,7 +6,7 @@ import createTestnet from "hyperdht/testnet.js";
 import { ChatSession } from "../src/chat-session.js";
 import { createIdentity } from "../src/identity.js";
 import { directNeighborLimit, HyperswarmTransport, MAX_DIRECT_NEIGHBORS } from "../src/network.js";
-import { createPrivateRoom, createPublicRoom } from "../src/protocol.js";
+import { createPrivateRoom, createPublicRoom, MAX_GOSSIP_HOPS } from "../src/protocol.js";
 
 test("room overlays clamp every requested direct-neighbor limit to eight", () => {
 	assert.equal(MAX_DIRECT_NEIGHBORS, 8);
@@ -99,22 +99,41 @@ test("ten-peer sparse overlay relays once through a non-origin intermediate", {
 		await Promise.all(sessions.map(({ session }) => session.start()));
 		const sender = sessions[0];
 		assert.ok(sender);
-		const findTwoHopTarget = () => {
-			const senderNeighbors = sender.transport.connectedPeerKeys;
-			if (sender.session.snapshot().directNeighbors !== senderNeighbors.length) return undefined;
-			return sessions.slice(1).find(({ identity, session, transport }) => {
-				if (senderNeighbors.includes(identity.publicKey.toString("hex"))) return false;
-				const candidateNeighbors = transport.connectedPeerKeys;
-				return (
-					session.snapshot().directNeighbors === candidateNeighbors.length &&
-					candidateNeighbors.some((key) => senderNeighbors.includes(key))
-				);
+		const senderKey = sender.identity.publicKey.toString("hex");
+		const sessionsByKey = new Map(
+			sessions.map((entry) => [entry.identity.publicKey.toString("hex"), entry]),
+		);
+		const findAuthenticatedRelayTarget = () => {
+			if (
+				!sessions.every(
+					({ session, transport }) =>
+						session.snapshot().directNeighbors === transport.connectedPeerKeys.length,
+				)
+			) {
+				return undefined;
+			}
+			const distances = new Map([[senderKey, 0]]);
+			const pending = [senderKey];
+			for (const key of pending) {
+				const distance = distances.get(key);
+				const current = sessionsByKey.get(key);
+				if (distance === undefined || distance >= MAX_GOSSIP_HOPS || !current) continue;
+				for (const neighbor of current.transport.connectedPeerKeys) {
+					if (!sessionsByKey.has(neighbor) || distances.has(neighbor)) continue;
+					distances.set(neighbor, distance + 1);
+					pending.push(neighbor);
+				}
+			}
+			if (distances.size !== sessions.length) return undefined;
+			return sessions.slice(1).find(({ identity }) => {
+				const distance = distances.get(identity.publicKey.toString("hex"));
+				return distance !== undefined && distance >= 2;
 			});
 		};
-		const relayPath = { target: undefined as ReturnType<typeof findTwoHopTarget> };
+		const relayPath = { target: undefined as ReturnType<typeof findAuthenticatedRelayTarget> };
 		await waitFor(
 			() => {
-				relayPath.target = findTwoHopTarget();
+				relayPath.target = findAuthenticatedRelayTarget();
 				return relayPath.target !== undefined;
 			},
 			() =>
@@ -135,21 +154,20 @@ test("ten-peer sparse overlay relays once through a non-origin intermediate", {
 		sender.session.send("through sparse overlay");
 		await waitFor(
 			() =>
-				indirect.session
-					.snapshot()
-					.transcript.filter(({ text }) => text === "through sparse overlay").length === 1,
+				sessions.every(
+					({ session }) =>
+						session.snapshot().transcript.filter(({ text }) => text === "through sparse overlay")
+							.length === 1,
+				),
 			() =>
-				`${sender.transport.connectionCount}:${indirect.transport.connectionCount}:${indirect.session.snapshot().transcript.length}`,
+				sessions
+					.map(
+						({ session }) =>
+							session.snapshot().transcript.filter(({ text }) => text === "through sparse overlay")
+								.length,
+					)
+					.join(","),
 			8_000,
-		);
-		await new Promise((resolve) => setTimeout(resolve, 100));
-		assert.equal(
-			sessions.every(
-				({ session }) =>
-					session.snapshot().transcript.filter(({ text }) => text === "through sparse overlay")
-						.length === 1,
-			),
-			true,
 		);
 	} finally {
 		await Promise.allSettled(sessions.map(({ session }) => session.leave()));
