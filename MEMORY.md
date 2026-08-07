@@ -101,6 +101,7 @@
 - Prefer an executable repository plan before non-trivial implementation, verify it, and archive it when complete.
 - Prefer a registry-published `pi-tui-kit` version and manually review dependency-floor changes per consumer; never target an unpublished workspace version or automatically synchronize compatibility ranges.
 - Keep package versions out of long-lived guidance; derive current values from manifests, lockfiles, or workflows unless a version is itself historical compatibility evidence.
+- Keep `just` recipes straightforward; require a clean worktree, then prefer Git-based recovery over embedded backup and rollback shell logic for dependency maintenance.
 - Keep `just` install recipes resilient: verify registry visibility first and fall back to the local workspace only when it solves the current install path.
 
 ## CONVENTIONS
