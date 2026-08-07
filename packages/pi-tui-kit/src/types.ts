@@ -44,10 +44,19 @@ interface MenuItemBase {
 	disabled?: boolean;
 }
 
+type ActionMenuItemBase = MenuItemBase & {
+	disabledReason?: string;
+};
+
 export type ActionMenuItem<ScreenId extends string, ActionId extends string> =
-	| (MenuItemBase & { to: ScreenId; action?: never; close?: never })
-	| (MenuItemBase & { action: ActionId; to?: never; close?: never; busyLabel?: string })
-	| (MenuItemBase & { close: true; to?: never; action?: never });
+	| (ActionMenuItemBase & { to: ScreenId; action?: never; close?: never })
+	| (ActionMenuItemBase & {
+			action: ActionId;
+			to?: never;
+			close?: never;
+			busyLabel?: string;
+	  })
+	| (ActionMenuItemBase & { close: true; to?: never; action?: never });
 
 export interface ActionsScreen<ScreenId extends string, ActionId extends string> {
 	kind: "actions";

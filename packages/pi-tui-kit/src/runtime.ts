@@ -1,5 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
+	actionMenuDialogLabel,
 	browseDialogLabel,
 	browseDialogPages,
 	createMenuScreenComponent,
@@ -461,7 +462,7 @@ function dialogRows<ScreenId extends string, ActionId extends string>(
 		rows = screen.items.map((item) => ({
 			kind: "interaction",
 			interaction: { kind: "activate", itemId: item.id },
-			label: safeMenuText(item.label),
+			label: actionMenuDialogLabel(item),
 		}));
 	} else if (screen.kind === "settings") {
 		rows = [
@@ -516,7 +517,7 @@ function dialogRows<ScreenId extends string, ActionId extends string>(
 			...(screen.actions ?? []).map((item) => ({
 				kind: "interaction" as const,
 				interaction: { kind: "activate" as const, itemId: item.id },
-				label: safeMenuText(item.label),
+				label: actionMenuDialogLabel(item),
 			})),
 			{ kind: "exit", label: dialogExitChoice(screen) },
 		];

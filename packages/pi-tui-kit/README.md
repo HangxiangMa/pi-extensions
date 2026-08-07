@@ -217,8 +217,8 @@ const result = await runCustomInteraction<{ kind: "back" | "close" }>(ctx, {
 
 `defineMenu()` supports eight standard screen kinds:
 
-- **`actions`** — navigation targets, domain actions, close rows, and optional cancellable busy
-  labels.
+- **`actions`** — navigation targets, domain actions, close rows, optional cancellable busy labels,
+  adaptive long-label columns, and disabled explanations.
 - **`detail`** — read-only wrapped text with Back or Close behavior.
 - **`browse`** — a read-only searchable catalog with textual status, adaptive list/detail views,
   stable selection restoration, and paginated RPC details.
@@ -236,6 +236,25 @@ const result = await runCustomInteraction<{ kind: "back" | "close" }>(ctx, {
 All standard TUI screens use Pi's injected keybindings, sanitize display text, rebuild themed
 content after invalidation, and bound rendered output to the supplied terminal width. Escape follows
 the screen's Back/Close hint; `Ctrl+C` closes the menu.
+
+Disabled action rows stay visible and focusable for context but never navigate, close, or invoke a
+domain action. Set `disabledReason` to explain why. TUI prefixes the semantic label with `[-]`, keeps
+a supplied unavailable reason visible below the selected row at every width, and adapts the primary
+column to available width; unavoidable action-label truncation uses an ellipsis. When a reason is
+supplied, RPC adds the unavailable state and reason to its selector label; legacy disabled rows
+without a reason keep
+their existing RPC label. This contract also applies to action rows under `multiSelect.actions`.
+
+```ts
+const resetAction = {
+  id: "redeem-reset",
+  label: "Redeem usage limit reset…",
+  description: "Current Codex account",
+  disabled: availableResetCount === 0,
+  disabledReason: availableResetCount === 0 ? "No resets available" : undefined,
+  action: "redeemReset" as const,
+};
+```
 
 Choice screens are for bounded static alternatives rather than actions that run while the cursor
 moves. `currentItemId` adds the textual current marker; `initialItemId` controls the first cursor when
@@ -567,10 +586,10 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - exported screen, item, action, transition, runtime option, `MenuCloseReason`, and result types.
 - `@narumitw/pi-tui-kit/testing` — separate subpath for `createTuiHarness()`, `createRpcHarness()`,
   strict scripts, and their public testing types; it is not re-exported from the production root.
-- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`7`). Version 7 adds
-  `runConfirmation()`; version-6 definitions remain valid on the version-7 runtime, including
-  read-only browse, custom-interaction lifecycle ownership, adaptive review, and mandatory Back/Close
-  reasons.
+- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`8`). Version 8 adds disabled
+  action reasons and adaptive action-label columns; version-7 definitions remain valid on the
+  version-8 runtime. Version 7 added `runConfirmation()`, and version 6 added the read-only `browse`
+  screen and `runCustomInteraction()`.
 
 ## 🗂️ Package layout
 

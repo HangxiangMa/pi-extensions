@@ -853,6 +853,57 @@ test("choice RPC preserves duplicate-label identity and keeps disabled rows iner
 	assert.equal(selectCalls, 2);
 });
 
+test("RPC explains disabled action rows and never invokes their targets", async () => {
+	let selectCalls = 0;
+	let invoked = 0;
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		select: async (_title: string, choices: string[]) => {
+			selectCalls += 1;
+			if (selectCalls === 1) {
+				assert.match(choices[0] ?? "", /^\[-\].*unavailable: Policy blocks it/i);
+				return choices[0];
+			}
+			return choices.at(-1);
+		},
+	});
+	const definition = defineMenu<undefined, "main", "run">({
+		start: "main",
+		screens: {
+			main: () => ({
+				kind: "actions",
+				title: "Actions",
+				items: [
+					{
+						id: "blocked-raw",
+						label: "Blocked action",
+						disabled: true,
+						disabledReason: "Policy\u0007 blocks it",
+						action: "run",
+					},
+					{ id: "close", label: "Close", close: true },
+				],
+				hint: "close",
+			}),
+		},
+		actions: {
+			run: async ({ itemId }) => {
+				assert.equal(itemId, "blocked-raw");
+				invoked += 1;
+				return { kind: "stay" };
+			},
+		},
+	});
+
+	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
+		kind: "closed",
+		reason: "close",
+	});
+	assert.equal(invoked, 0);
+	assert.equal(selectCalls, 2);
+});
+
 test("searchable multi-select TUI dispatches the filtered raw item id", async () => {
 	const invoked: string[] = [];
 	const context = createMockContext({
@@ -1037,6 +1088,58 @@ test("RPC exposes disabled multi-select reasons and never invokes toggle actions
 		reason: "back",
 	});
 	assert.equal(toggles, 0);
+	assert.equal(selectCalls, 2);
+});
+
+test("RPC explains disabled multi-select action rows and keeps them inert", async () => {
+	let selectCalls = 0;
+	let invoked = 0;
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		select: async (_title: string, choices: string[]) => {
+			selectCalls += 1;
+			if (selectCalls === 1) {
+				assert.match(choices[0] ?? "", /^\[-\].*unavailable: Policy blocks bulk changes/i);
+				return choices[0];
+			}
+			return choices.at(-1);
+		},
+	});
+	const definition = defineMenu<undefined, "tools", "toggle" | "bulk">({
+		start: "tools",
+		screens: {
+			tools: () => ({
+				kind: "multiSelect",
+				title: "Tools",
+				items: [],
+				action: "toggle",
+				actions: [
+					{
+						id: "blocked-bulk-raw",
+						label: "Enable all",
+						disabled: true,
+						disabledReason: "Policy blocks bulk changes",
+						action: "bulk",
+					},
+				],
+			}),
+		},
+		actions: {
+			toggle: async () => ({ kind: "stay" }),
+			bulk: async ({ itemId }) => {
+				assert.equal(itemId, "blocked-bulk-raw");
+				invoked += 1;
+				return { kind: "stay" };
+			},
+		},
+	});
+
+	assert.deepEqual(await runMenu(context.ctx, definition, { getState: () => undefined }), {
+		kind: "closed",
+		reason: "back",
+	});
+	assert.equal(invoked, 0);
 	assert.equal(selectCalls, 2);
 });
 

@@ -11,7 +11,7 @@ test("built package roots resolve separate production and testing exports", asyn
 	const testingSpecifier = "@narumitw/pi-tui-kit/testing";
 	const production = await import(productionSpecifier);
 	const testing = await import(testingSpecifier);
-	assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 7);
+	assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 8);
 	assert.equal(typeof production.runConfirmation, "function");
 	assert.equal(typeof production.runCustomInteraction, "function");
 	assert.equal("createTuiHarness" in production, false);
@@ -26,7 +26,7 @@ test("built package roots resolve separate production and testing exports", asyn
 		path.join(fixture, "usage.ts"),
 		`import { PI_EXTENSION_MENU_API_VERSION } from "@narumitw/pi-tui-kit";\n` +
 			`import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";\n` +
-			`const version: 7 = PI_EXTENSION_MENU_API_VERSION;\n` +
+			`const version: 8 = PI_EXTENSION_MENU_API_VERSION;\n` +
 			`void version;\nvoid createTuiHarness();\nvoid createRpcHarness([]);\n`,
 	);
 	writeFileSync(

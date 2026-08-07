@@ -24,7 +24,14 @@ import type {
 import { DynamicBorder } from "./dynamic-border.js";
 import { createInputComponent, type InputOptions } from "./input.js";
 import { createMultiSelectComponent } from "./multi-select.js";
-import { handleSearchInput, menuHint, renderFrame, safeMenuText } from "./rendering.js";
+import {
+	actionMenuItemPresentation,
+	actionMenuUnavailableDescription,
+	handleSearchInput,
+	menuHint,
+	renderFrame,
+	safeMenuText,
+} from "./rendering.js";
 import { createReviewComponent, type ReviewOptions } from "./review.js";
 
 export { browseDialogLabel, browseDialogPages } from "./browse.js";
@@ -36,7 +43,7 @@ export type {
 	MenuScreenEvent,
 	MenuSettingChange,
 } from "./contracts.js";
-export { safeMenuText } from "./rendering.js";
+export { actionMenuDialogLabel, safeMenuText } from "./rendering.js";
 export { reviewDialogPages } from "./review.js";
 
 export function createMenuScreenComponent<ScreenId extends string, ActionId extends string>(
@@ -102,10 +109,15 @@ function createActionsComponent<ScreenId extends string, ActionId extends string
 ): MenuScreenComponent {
 	const items: SelectItem[] = options.screen.items.map((item) => ({
 		value: item.id,
-		label: safeMenuText(item.label),
-		description: item.description ? safeMenuText(item.description) : undefined,
+		...actionMenuItemPresentation(item),
 	}));
-	const list = new SelectList(items, Math.min(items.length, 10), selectTheme(options.theme));
+	const widestPrimary = Math.max(1, ...items.map((item) => visibleWidth(item.label))) + 2;
+	const list = new SelectList(items, Math.min(items.length, 10), selectTheme(options.theme), {
+		minPrimaryColumnWidth: Math.min(32, widestPrimary),
+		maxPrimaryColumnWidth: widestPrimary,
+		truncatePrimary: ({ text, maxWidth }) =>
+			truncateToWidth(text, maxWidth, maxWidth > 1 ? "…" : ""),
+	});
 	setInitialSelection(list, items, options.selectedItemId);
 	return commonListComponent(
 		options,
@@ -116,6 +128,12 @@ function createActionsComponent<ScreenId extends string, ActionId extends string
 		(itemId) => {
 			const source = options.screen.items.find((candidate) => candidate.id === itemId);
 			if (!source?.disabled) options.onEvent({ kind: "activate", itemId });
+		},
+		(itemId) => {
+			const source = options.screen.items.find((candidate) => candidate.id === itemId);
+			if (!source) return [];
+			const unavailable = actionMenuUnavailableDescription(source);
+			return unavailable ? [unavailable] : [];
 		},
 	);
 }
@@ -522,6 +540,7 @@ function commonListComponent<ScreenId extends string, ActionId extends string>(
 	lines: readonly string[],
 	destination: "back" | "close",
 	onActivate: (itemId: string) => void,
+	selectedDetails?: (itemId: string) => readonly string[],
 ): MenuScreenComponent {
 	const initialIndex = Math.max(
 		0,
@@ -540,14 +559,21 @@ function commonListComponent<ScreenId extends string, ActionId extends string>(
 	};
 	return {
 		render(width) {
-			return renderFrame(
-				options.screen.title,
-				lines,
-				list.render(Math.max(1, width)),
-				destination,
-				width,
-				options,
-			);
+			const safeWidth = Math.max(1, width);
+			const selectedId = items[selectedIndex]?.value;
+			const details = selectedId ? (selectedDetails?.(selectedId) ?? []) : [];
+			const content = [
+				...list.render(safeWidth),
+				...(details.length > 0
+					? [
+							"",
+							...details.flatMap((detail) =>
+								wrapTextWithAnsi(options.theme.fg("muted", safeMenuText(detail)), safeWidth),
+							),
+						]
+					: []),
+			];
+			return renderFrame(options.screen.title, lines, content, destination, width, options);
 		},
 		invalidate() {
 			list.invalidate();

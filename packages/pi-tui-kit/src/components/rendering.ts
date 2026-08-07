@@ -1,5 +1,30 @@
 import { type Input, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import type { ActionMenuItem } from "../types.js";
 import type { MenuBinding, MenuKeybindings, MenuScreenComponentOptions } from "./contracts.js";
+
+export function actionMenuItemPresentation(item: ActionMenuItem<string, string>): {
+	label: string;
+	description?: string;
+} {
+	const label = safeMenuText(item.label);
+	const description = item.description ? safeMenuText(item.description) : undefined;
+	return { label: item.disabled ? `[-] ${label}` : label, description };
+}
+
+export function actionMenuUnavailableDescription(
+	item: ActionMenuItem<string, string>,
+): string | undefined {
+	if (!item.disabled) return undefined;
+	const reason = safeMenuText(item.disabledReason ?? "");
+	return reason ? `Unavailable: ${reason}` : undefined;
+}
+
+export function actionMenuDialogLabel(item: ActionMenuItem<string, string>): string {
+	const label = safeMenuText(item.label);
+	const reason = safeMenuText(item.disabledReason ?? "");
+	if (!item.disabled || !reason) return label;
+	return `[-] ${label} (unavailable: ${reason})`;
+}
 
 export function renderFrame<ScreenId extends string, ActionId extends string>(
 	title: string,
