@@ -8,7 +8,12 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ActionMenuItem, MenuMultiSelectItem } from "../types.js";
 import type { MenuChangeResponse, MenuScreenComponent, MultiSelectOptions } from "./contracts.js";
-import { handleSearchInput, renderFrame, safeMenuText } from "./rendering.js";
+import {
+	actionMenuItemPresentation,
+	handleSearchInput,
+	renderFrame,
+	safeMenuText,
+} from "./rendering.js";
 
 type ToggleRow = { kind: "toggle"; item: MenuMultiSelectItem };
 type ActionRow<ScreenId extends string, ActionId extends string> = {
@@ -151,12 +156,12 @@ export function createMultiSelectComponent<ScreenId extends string, ActionId ext
 				const index = viewportStart + offset;
 				const isSelected = index === selectedIndex;
 				const prefix = isSelected ? "› " : "  ";
-				const marker =
-					row.kind === "toggle"
-						? `${row.item.disabled ? "[-]" : selected.get(row.item.id) ? "[x]" : "[ ]"} `
-						: "";
-				const unavailable = row.item.disabled ? " (unavailable)" : "";
-				const label = `${prefix}${marker}${safeMenuText(row.item.label)}${unavailable}`;
+				const label =
+					row.kind === "action"
+						? `${prefix}${actionMenuItemPresentation(row.item).label}`
+						: `${prefix}${
+								row.item.disabled ? "[-]" : selected.get(row.item.id) ? "[x]" : "[ ]"
+							} ${safeMenuText(row.item.label)}${row.item.disabled ? " (unavailable)" : ""}`;
 				if (isSelected) return options.theme.fg("accent", label);
 				return row.item.disabled ? options.theme.fg("dim", label) : label;
 			});
@@ -165,14 +170,18 @@ export function createMultiSelectComponent<ScreenId extends string, ActionId ext
 			}
 			const row = selectedRow();
 			const descriptions = row
-				? [
-						row.item.description,
-						row.kind === "toggle" && row.item.disabled
-							? row.item.disabledReason
-								? `Unavailable: ${row.item.disabledReason}`
-								: "Unavailable"
-							: undefined,
-					].filter((value): value is string => Boolean(value))
+				? row.kind === "action"
+					? [actionMenuItemPresentation(row.item).description].filter((value): value is string =>
+							Boolean(value),
+						)
+					: [
+							row.item.description,
+							row.item.disabled
+								? row.item.disabledReason
+									? `Unavailable: ${row.item.disabledReason}`
+									: "Unavailable"
+								: undefined,
+						].filter((value): value is string => Boolean(value))
 				: [];
 			if (descriptions.length > 0) {
 				rowContent.push(

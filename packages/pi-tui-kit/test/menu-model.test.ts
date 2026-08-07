@@ -38,8 +38,8 @@ function testMenu(): MenuDefinition<State, ScreenId, ActionId> {
 	});
 }
 
-test("package exposes declarative API version 7", () => {
-	assert.equal(PI_EXTENSION_MENU_API_VERSION, 7);
+test("package exposes declarative API version 8", () => {
+	assert.equal(PI_EXTENSION_MENU_API_VERSION, 8);
 	assert.equal(resolveMenuScreen(testMenu(), "main", { count: 0 }).kind, "actions");
 });
 

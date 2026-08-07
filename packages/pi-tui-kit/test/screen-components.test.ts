@@ -180,6 +180,37 @@ test("action screens honor injected navigation and distinguish Back from Ctrl+C 
 	assert.deepEqual(close.events, [{ kind: "close" }]);
 });
 
+test("disabled action rows keep long labels readable and explain why they are unavailable", () => {
+	const label = "Redeem usage limit reset for the current account…";
+	const screen: MenuScreen<ScreenId, ActionId> = {
+		kind: "actions",
+		title: "Usage",
+		items: [
+			{
+				id: "run",
+				label,
+				description: "Current OAuth account",
+				disabled: true,
+				disabledReason: "No resets\u0007 available",
+				action: "run",
+			},
+		],
+	};
+	const harness = componentHarness(screen, { plainTheme: true });
+	for (const width of [1, 24, 40, 41, 80, 120]) {
+		assert.ok(plainRender(harness.component, width).every((line) => visibleWidth(line) <= width));
+	}
+	const wide = plainRender(harness.component, 120).join("\n");
+	assert.match(wide, new RegExp(`→ \\[-\\] ${label}`));
+	assert.match(wide, /Unavailable: No resets available · Current OAuth account/);
+	assert.equal(wide.includes("\u0007"), false);
+
+	const narrow = plainRender(harness.component, 24);
+	assert.match(narrow.join("\n"), /→ \[-\].*…/);
+	harness.component.handleInput("l");
+	assert.deepEqual(harness.events, []);
+});
+
 test("static lists use callback keybindings when they differ from the global manager", () => {
 	const actions = componentHarness(actionScreen, {
 		selectedItemId: "run",
@@ -644,6 +675,37 @@ test("multi-select supports explicit bulk action rows", async () => {
 	harness.component.handleInput("l");
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	assert.deepEqual(harness.events, [{ kind: "activate", itemId: "all" }]);
+});
+
+test("disabled multi-select action rows show their reason and remain inert", async () => {
+	const harness = componentHarness(
+		{
+			...multiSelectScreen,
+			items: [],
+			actions: [
+				{
+					id: "all",
+					label: "Enable all available tools",
+					description: "Bulk action",
+					disabled: true,
+					disabledReason: "Policy\u0007 blocks this action",
+					action: "run",
+				},
+			],
+		},
+		{ plainTheme: true },
+	);
+	for (const width of [1, 20, 80]) {
+		assert.ok(plainRender(harness.component, width).every((line) => visibleWidth(line) <= width));
+	}
+	const rendered = plainRender(harness.component, 80).join("\n");
+	assert.match(rendered, /› \[-\] Enable all available tools/);
+	assert.match(rendered, /Unavailable: Policy blocks this action/);
+	assert.match(rendered, /Bulk action/);
+	assert.equal(rendered.includes("\u0007"), false);
+	harness.component.handleInput("l");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.deepEqual(harness.events, []);
 });
 
 test("bounded multi-select keeps first, middle, last, and paged selections visible", () => {
