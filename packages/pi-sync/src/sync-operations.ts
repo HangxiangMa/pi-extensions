@@ -317,6 +317,15 @@ export async function push(
 		state,
 		options.signal,
 	);
+	if (
+		!options.force &&
+		!remoteForUpload &&
+		head?.selection &&
+		inspectRemoteSelection(config.include, { selection: head.selection, files: [] }).kind ===
+			"different"
+	) {
+		remoteForUpload = await readSnapshotForHead(backend, head, options.signal);
+	}
 	if (remoteForUpload && !options.force) {
 		requireCompatibleRemoteSelection(config, remoteForUpload);
 	}

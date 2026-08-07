@@ -17,6 +17,14 @@ export const BUILT_IN_SYNC_ROOTS = [
 export const DEFAULT_SYNC_INCLUDE = [...BUILT_IN_SYNC_ROOTS] as const;
 export type BuiltInSyncFile = (typeof BUILT_IN_SYNC_ROOTS)[number];
 const SNAPSHOT_SELECTION_VERSION = 1;
+const MAX_SYNC_INCLUDE_ITEMS = 1_024;
+const MAX_SYNC_INCLUDE_PATH_BYTES = 4_096;
+const MAX_SYNC_INCLUDE_TOTAL_BYTES = 256 * 1_024;
+
+interface IncludePathNode {
+	selected?: string;
+	children: Map<string, IncludePathNode>;
+}
 
 const BUILT_IN_BY_LOWER = new Map<string, BuiltInSyncFile>(
 	BUILT_IN_SYNC_ROOTS.map((fileName) => [fileName.toLowerCase(), fileName]),
@@ -36,11 +44,30 @@ export function normalizeSyncInclude(value: unknown): string[] {
 	if (!Array.isArray(value)) {
 		throw new Error("Invalid pi-sync settings: sync.include must be an array.");
 	}
+	if (value.length > MAX_SYNC_INCLUDE_ITEMS) {
+		throw new Error(
+			`Invalid pi-sync settings: sync.include has too many items; limit: ${MAX_SYNC_INCLUDE_ITEMS}.`,
+		);
+	}
 	const result: string[] = [];
 	const seen = new Set<string>();
+	const pathRoot: IncludePathNode = { children: new Map() };
+	let totalBytes = 0;
 	for (const item of value) {
 		if (typeof item !== "string") {
 			throw new Error("Invalid pi-sync settings: sync.include items must be strings.");
+		}
+		const itemBytes = Buffer.byteLength(item, "utf8");
+		if (itemBytes > MAX_SYNC_INCLUDE_PATH_BYTES) {
+			throw new Error(
+				`Invalid pi-sync settings: sync.include item is too long; limit: ${MAX_SYNC_INCLUDE_PATH_BYTES} bytes.`,
+			);
+		}
+		totalBytes += itemBytes;
+		if (totalBytes > MAX_SYNC_INCLUDE_TOTAL_BYTES) {
+			throw new Error(
+				`Invalid pi-sync settings: sync.include is too large; limit: ${MAX_SYNC_INCLUDE_TOTAL_BYTES} bytes.`,
+			);
 		}
 		const trimmed = item.trim();
 		const builtIn = BUILT_IN_BY_LOWER.get(trimmed.toLowerCase());
@@ -50,17 +77,32 @@ export function normalizeSyncInclude(value: unknown): string[] {
 		if (seen.has(identity)) {
 			throw new Error(`Invalid pi-sync settings: duplicate sync.include item: ${item}`);
 		}
-		for (const previous of seen) {
-			if (identity.startsWith(`${previous}/`) || previous.startsWith(`${identity}/`)) {
-				throw new Error(
-					`Invalid pi-sync settings: overlapping sync.include items are ambiguous: ${item}`,
-				);
-			}
-		}
+		addIncludePath(pathRoot, identity, item);
 		seen.add(identity);
 		result.push(normalized);
 	}
 	return result;
+}
+
+function addIncludePath(root: IncludePathNode, identity: string, source: string) {
+	let node = root;
+	for (const segment of identity.split("/")) {
+		if (node.selected !== undefined) throwOverlappingInclude(source);
+		let child = node.children.get(segment);
+		if (!child) {
+			child = { children: new Map() };
+			node.children.set(segment, child);
+		}
+		node = child;
+	}
+	if (node.children.size > 0) throwOverlappingInclude(source);
+	node.selected = identity;
+}
+
+function throwOverlappingInclude(item: string): never {
+	throw new Error(
+		`Invalid pi-sync settings: overlapping sync.include items are ambiguous: ${item}`,
+	);
 }
 
 function validateAgentRelativeInclude(value: string) {

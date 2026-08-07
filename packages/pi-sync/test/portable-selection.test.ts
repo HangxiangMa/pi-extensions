@@ -29,6 +29,36 @@ test("portable selection comparison preserves exact selected-but-missing intent"
 	});
 });
 
+test("portable selection rejects policies that exceed bounded collection and path sizes", () => {
+	assert.throws(
+		() =>
+			snapshotSelectionInclude({
+				selection: {
+					version: 1,
+					include: Array.from({ length: 1_025 }, (_, index) => `path-${index}`),
+				},
+			}),
+		/too many|limit/i,
+	);
+	assert.throws(
+		() =>
+			snapshotSelectionInclude({
+				selection: { version: 1, include: ["x".repeat(4_097)] },
+			}),
+		/too long|limit/i,
+	);
+	assert.throws(
+		() =>
+			snapshotSelectionInclude({
+				selection: {
+					version: 1,
+					include: Array.from({ length: 1_024 }, (_, index) => `path-${index}-${"x".repeat(250)}`),
+				},
+			}),
+		/too large|limit/i,
+	);
+});
+
 test("remote head selection is revalidated against the immutable snapshot", async () => {
 	const backend = new MemorySyncBackend();
 	const selected = {

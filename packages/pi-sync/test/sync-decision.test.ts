@@ -5,7 +5,12 @@ import path from "node:path";
 import test from "node:test";
 import { gzipSync } from "node:zlib";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import { loadConfig, localConfigPath, statePathForConfig } from "../src/config.js";
+import {
+	loadConfig,
+	localConfigPath,
+	statePathForConfig,
+	writeStateForConfig,
+} from "../src/config.js";
 import sync from "../src/sync.js";
 import { expectedRemoteHead } from "../src/sync-backend.js";
 import { SyncDecisionRequiredError } from "../src/sync-decision.js";
@@ -56,6 +61,47 @@ test("sync and pull pause without mutation when remote included content differs"
 		assert.equal(readFileSync(path.join(agentDir, "settings.json"), "utf8"), '{"local":true}\n');
 		assert.equal(existsSync(path.join(agentDir, "pi-starship.toml")), false);
 		assert.equal(existsSync(statePathForConfig(await loadConfig())), false);
+	});
+});
+
+test("ordinary push checks a differing head policy even when legacy state matches its snapshot", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+		const base = Buffer.from('{"base":true}\n');
+		writeFileSync(path.join(agentDir, "settings.json"), base);
+		const backend = new MemorySyncBackend();
+		const remote = {
+			...snapshot([
+				{ path: "settings.json", content: base },
+				{ path: "pi-starship.toml", content: Buffer.from("remote-only\n") },
+			]),
+			id: "remote-selection",
+			selection: {
+				version: 1 as const,
+				include: ["settings.json", "pi-starship.toml"],
+			},
+		};
+		const published = await backend.publishSnapshot(remote, { kind: "missing" });
+		const config = await loadConfig();
+		await writeStateForConfig(config, {
+			version: 1,
+			profile: config.snapshotIdentity,
+			lastAppliedSnapshot: remote.id,
+			lastRemoteRevision: published.head.revision,
+			lastFileHashes: { "settings.json": remote.files[0]?.sha256 ?? "" },
+			include: ["settings.json"],
+		});
+		writeFileSync(path.join(agentDir, "settings.json"), '{"changed":true}\n');
+		const headBefore = await backend.readHead();
+		const { ctx } = createMockContext({ hasUI: true, mode: "tui" });
+
+		await assert.rejects(
+			push(ctx, options, undefined, () => backend),
+			RemoteSelectionMismatchError,
+		);
+		assert.equal((await backend.readHead())?.revision, headBefore?.revision);
+		assert.deepEqual((await backend.readSnapshot(remote.id)).selection, remote.selection);
 	});
 });
 

@@ -13,7 +13,7 @@
 - One ordered `sync.include` list for Pi roots, safe agent-relative paths, and the privacy-sensitive `sessions` root.
 - Portable, credential-free snapshot selection with explicit cross-environment review and adoption.
 - Atomic private settings writes that preserve unknown fields and reject stale concurrent edits.
-- Fail-closed validation for missing references, mixed backend fields, duplicate remote locations, unsafe paths, malformed credentials, and credential-bearing Git URLs.
+- Fail-closed validation for missing references, mixed backend fields, duplicate remote locations, unsafe or oversized selection policies, malformed credentials, and credential-bearing Git URLs.
 
 ## 📦 Install
 

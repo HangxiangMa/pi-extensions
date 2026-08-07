@@ -36,8 +36,8 @@ S3 and WebDAV include the field in their integrity-checked gzip snapshot. Their 
 carries a validated projection so Status stays lightweight. Git includes it in the strict publication
 manifest, which binds it to the commit and supplies its head projection. Adoption always re-reads the
 immutable snapshot and rejects a projection mismatch. New readers accept old snapshots and Git
-manifests without `selection`. Invalid versions, extra fields, unsafe paths, duplicates, and overlaps
-fail before settings or synced files change.
+manifests without `selection`. Invalid versions, extra fields, unsafe paths, oversized collections,
+duplicates, and overlaps fail before settings or synced files change.
 
 ### Divergence behavior
 
