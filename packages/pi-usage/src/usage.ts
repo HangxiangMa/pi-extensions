@@ -537,10 +537,7 @@ export default function usageExtension(
 								? [
 										{
 											id: "open-resets",
-											label:
-												codexResetCount(current.state.report) === 0
-													? `${REDEEM_CODEX_RESET} (unavailable)`
-													: REDEEM_CODEX_RESET,
+											label: REDEEM_CODEX_RESET,
 											description: codexResetActionDescription(current.state.report),
 											disabled: codexResetCount(current.state.report) === 0,
 											action: "open-resets" as const,

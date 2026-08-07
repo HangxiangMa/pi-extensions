@@ -72,7 +72,8 @@ test("zero Codex reset availability is visible and cannot mutate", async (t) => 
 
 	await command.handler("", ctx);
 
-	assert.ok(rootOptions.includes("Redeem usage limit reset… (unavailable)"));
+	assert.ok(rootOptions.includes("Redeem usage limit reset…"));
+	assert.ok(!rootOptions.some((option) => option.includes("(unavailable)")));
 	assert.equal(posts, 0);
 });
 
