@@ -14,8 +14,6 @@ import { loadSettings, saveSettings, settingsFilePath } from "./settings.js";
 import { CHROME_DEVTOOLS_TOOL_NAMES, type ChromeDevToolsToolName } from "./tool-names.js";
 
 type CommandContext = ExtensionCommandContext;
-type ToolSelectorScreen = "tools";
-type ToolSelectorAction = "toggle" | "enableAll" | "disableAll";
 
 function unique<T>(values: T[]) {
 	return Array.from(new Set(values));
@@ -29,80 +27,6 @@ interface ToolStatusSummary {
 	runtimeStatus: "enabled" | "disabled" | "partial";
 	activeChromeToolCount: number;
 	activeNonChromeToolCount: number;
-}
-
-export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
-	const generation = state.sessionGeneration;
-	if (!ctx.hasUI) return;
-	const menuSignal = state.sessionController.signal;
-	const isCurrent = () => generation === state.sessionGeneration && !menuSignal.aborted;
-	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
-	if (!isCurrent()) return;
-	const menu = defineMenu<undefined, ToolSelectorScreen, ToolSelectorAction>({
-		start: "tools",
-		screens: {
-			tools: () => {
-				const selectedTools = new Set(getActiveChromeDevtoolsTools(pi));
-				return {
-					kind: "multiSelect",
-					title: toolSelectorTitle(selectedTools),
-					items: CHROME_DEVTOOLS_TOOL_NAMES.map((toolName) => ({
-						id: toolName,
-						label: toolName,
-						selected: selectedTools.has(toolName),
-					})),
-					action: "toggle",
-					actions: [
-						{
-							id: "enable-all",
-							label: "Enable all Chrome DevTools tools",
-							action: "enableAll",
-						},
-						{
-							id: "disable-all",
-							label: "Disable all Chrome DevTools tools",
-							action: "disableAll",
-						},
-						{ id: "done", label: "Done", close: true },
-					],
-					hint: "close",
-					doneLabel: "Done",
-				};
-			},
-		},
-		actions: {
-			toggle: async ({ itemId, selected }) => {
-				if (!isChromeDevtoolsToolName(itemId)) return { kind: "rejected" };
-				const selectedTools = new Set(getActiveChromeDevtoolsTools(pi));
-				if (selected) selectedTools.add(itemId);
-				else selectedTools.delete(itemId);
-				const saved = await transactSelectedTools(
-					pi,
-					ctx,
-					orderedChromeDevtoolsTools(selectedTools),
-					generation,
-				);
-				return saved ? { kind: "stay" } : { kind: "rejected" };
-			},
-			enableAll: async () => {
-				const saved = await transactSelectedTools(pi, ctx, allChromeDevtoolsTools(), generation);
-				return saved ? { kind: "stay" } : { kind: "rejected" };
-			},
-			disableAll: async () => {
-				const saved = await transactSelectedTools(pi, ctx, [], generation);
-				return saved ? { kind: "stay" } : { kind: "rejected" };
-			},
-		},
-	});
-	const result = await runMenu(ctx, menu, {
-		getState: () => undefined,
-		signal: menuSignal,
-		isCurrent,
-	});
-	if (result.kind !== "closed" || generation !== state.sessionGeneration) return;
-	const status = await buildToolStatusMessage(pi);
-	if (generation !== state.sessionGeneration) return;
-	ctx.ui.notify(status, "info");
 }
 
 export async function updateChromeDevtoolsTools(
@@ -232,6 +156,35 @@ export async function buildToolStatusMessage(pi: ExtensionAPI) {
 }
 
 export function buildQuickstartMessage() {
+	return buildSettingsSetupMessage();
+}
+
+export function buildBrowserStatusMessage() {
+	const browserState = state.launchPromise
+		? "starting managed browser"
+		: state.managedBrowser && !state.managedBrowser.exited && state.managedBrowser.ready
+			? "managed browser running"
+			: state.lastLaunchAttempt?.lastError
+				? "last launch failed"
+				: "not started; connection has not been checked";
+	return sanitizeChromeDevtoolsDisplay(
+		[
+			`Browser: ${browserState}`,
+			"Viewing this status does not probe the endpoint or launch Chrome.",
+			`Endpoint: ${devToolsEndpoint()}`,
+			`Endpoint source: ${endpointSourceLabel()}`,
+			`Launch mode: ${launchModeLabel()}`,
+			`Unpacked extensions: ${state.extensionPaths.length} (${state.extensionPathsSource})`,
+			...(state.extensionPaths.length > 0
+				? ["Unpacked extensions execute trusted browser code in an isolated managed browser."]
+				: []),
+			...launchAttemptLines(),
+			...(state.lastLaunchAttempt?.lastError ? [launchHint(), endpointConfigHint()] : []),
+		].join("\n"),
+	);
+}
+
+export function buildSettingsSetupMessage() {
 	return sanitizeChromeDevtoolsDisplay(
 		[
 			`Chrome DevTools endpoint: ${devToolsEndpoint()}`,
@@ -291,23 +244,10 @@ export function buildCommandGuide() {
 		"/chrome-devtools quickstart — show endpoint and launch help",
 		"/chrome-devtools status — show tool and settings status",
 		"/chrome-devtools tools — select individual Chrome DevTools tools",
-		"/chrome-devtools toggle — alias for /chrome-devtools tools",
-		"/chrome-devtools enable — enable all Chrome DevTools tools",
-		"/chrome-devtools disable — disable all Chrome DevTools tools",
+		"/chrome-devtools toggle|select — compatibility aliases for tools",
+		"/chrome-devtools enable|on — enable all Chrome DevTools tools immediately",
+		"/chrome-devtools disable|off — disable all Chrome DevTools tools immediately",
 	].join("\n");
-}
-
-function toolSelectorTitle(selectedTools: ReadonlySet<ChromeDevToolsToolName>) {
-	return `Chrome DevTools tools (${selectedTools.size}/${CHROME_DEVTOOLS_TOOL_NAMES.length}). Non-built-in tools run at user risk.`;
-}
-
-function isChromeDevtoolsToolName(value: string): value is ChromeDevToolsToolName {
-	return CHROME_DEVTOOLS_TOOL_NAMES.includes(value as ChromeDevToolsToolName);
-}
-
-function getActiveChromeDevtoolsTools(pi: ExtensionAPI) {
-	const activeToolNames = new Set(pi.getActiveTools());
-	return CHROME_DEVTOOLS_TOOL_NAMES.filter((toolName) => activeToolNames.has(toolName));
 }
 
 export function allChromeDevtoolsTools() {
