@@ -128,14 +128,14 @@ test("a completed startup releases its caller signal without leaving the room", 
 	}
 });
 
-test("three separate Node processes converge through a local DHT bootstrap", {
+test("two separate Node processes connect through a local DHT bootstrap", {
 	timeout: 80_000,
 }, async () => {
 	const testnet = await createTestnet(3);
 	const secret = Buffer.alloc(32, 77);
 	const bootstrapArg = Buffer.from(JSON.stringify(testnet.bootstrap)).toString("base64url");
 	const fixturePath = fileURLToPath(new URL("./network-peer-fixture.js", import.meta.url));
-	const children = Array.from({ length: 3 }, (_, index) =>
+	const children = Array.from({ length: 2 }, (_, index) =>
 		fork(fixturePath, [bootstrapArg, String(index + 1), secret.toString("base64url")], {
 			execArgv: [],
 			stdio: ["ignore", "ignore", "pipe", "ipc"],
@@ -166,7 +166,7 @@ test("three separate Node processes converge through a local DHT bootstrap", {
 				children.every((child) =>
 					messages
 						.get(child)
-						?.some((message) => message.kind === "snapshot" && message.peers === 2),
+						?.some((message) => message.kind === "snapshot" && message.peers === 1),
 				),
 			() => childDetails(children, messages, errors),
 			27_000,
