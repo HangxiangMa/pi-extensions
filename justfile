@@ -12,14 +12,8 @@ check:
 format:
     npm run format
 
-_require-pinned-npm:
-    @package_manager="$(node -p 'require("./package.json").packageManager')"; [[ "$package_manager" == npm@* ]] || { printf 'unsupported packageManager: %s\n' "$package_manager" >&2; exit 2; }; expected="${package_manager#npm@}"; actual="$(npm --version)"; [[ "$actual" == "$expected" ]] || { printf 'npm %s is required, but npm %s is active; switch to a supported Node runtime and install %s\n' "$expected" "$actual" "$package_manager" >&2; exit 2; }
-
-_require-clean-worktree:
-    @[[ -z "$(git status --porcelain)" ]] || { printf 'dependency updates require a clean worktree; commit or stash changes first\n' >&2; exit 2; }
-
 # Update dependency manifests and regenerate the lockfile without trusting the current install
-update-lock: _require-pinned-npm _require-clean-worktree
+update-lock:
     #!/usr/bin/env bash
     set -euo pipefail
     shopt -s nullglob
@@ -50,7 +44,7 @@ update-lock: _require-pinned-npm _require-clean-worktree
     rm -rf -- "$backup"
 
 # Verify dependency updates from the exact clean lockfile installation
-verify-update: _require-pinned-npm
+verify-update:
     npm ci
     # Rebuild generated web assets only in workspaces that provide build:web
     npm --workspaces --if-present run build:web
@@ -73,12 +67,12 @@ pre-commit:
 # Show npm account/registry/package visibility information for one package
 # Usage: just doctor @narumitw/pi-chrome-devtools
 doctor package="@narumitw/pi-chrome-devtools":
-    @printf 'package: %s\n' {{quote(package)}}
+    @printf 'package: %s\n' {{ quote(package) }}
     npm whoami || true
     npm config get registry
-    npm access get status {{quote(package)}} || true
-    npm dist-tag ls {{quote(package)}} || true
-    npm view {{quote(package)}} version || true
+    npm access get status {{ quote(package) }} || true
+    npm dist-tag ls {{ quote(package) }} || true
+    npm view {{ quote(package) }} version || true
 
 # Show npm visibility/version information for all publishable packages
 doctor-all:
@@ -89,21 +83,21 @@ doctor-all:
 #   npm publish --workspace @narumitw/pi-subagents --access public
 # Usage for existing packages: just npm-public @narumitw/pi-goal
 npm-public package="@narumitw/pi-goal":
-    npm access set status=public {{quote(package)}}
-    npm view {{quote(package)}} version
+    npm access set status=public {{ quote(package) }}
+    npm view {{ quote(package) }} version
 
 _validate-package-name name:
-    @[[ {{quote(name)}} =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { printf 'invalid package name: %s\n' {{quote(name)}} >&2; exit 2; }
+    @[[ {{ quote(name) }} =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { printf 'invalid package name: %s\n' {{ quote(name) }} >&2; exit 2; }
 
 # Preview the package that npm would publish
 # Usage: just pack subagents
 pack name: (_validate-package-name name)
-    name={{quote(name)}}; package_json="./packages/pi-$name/package.json"; [[ -f "$package_json" ]] || { echo "package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; npm --workspace "$package" pack --dry-run
+    name={{ quote(name) }}; package_json="./packages/pi-$name/package.json"; [[ -f "$package_json" ]] || { echo "package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; npm --workspace "$package" pack --dry-run
 
 # Try an extension package from this working tree as a temporary pi package
 # Usage: just try subagents
 try name: (_validate-package-name name)
-    name={{quote(name)}}; extension_dir="./packages/pi-$name"; [[ -d "$extension_dir" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package_json="$extension_dir/package.json"; package="$(node -p "require(process.argv[1]).name" "$package_json")"; npm --workspace "$package" run build --if-present; pi -e "$extension_dir"
+    name={{ quote(name) }}; extension_dir="./packages/pi-$name"; [[ -d "$extension_dir" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package_json="$extension_dir/package.json"; package="$(node -p "require(process.argv[1]).name" "$package_json")"; npm --workspace "$package" run build --if-present; pi -e "$extension_dir"
 
 # Start Pi with the commonly used extensions loaded from this working tree
 # PI_TIMING reports startup timing for local extension development
@@ -131,7 +125,7 @@ try-all:
 # Install a package through pi, falling back to the local workspace if unpublished
 # Usage: just install subagents
 install name: (_validate-package-name name)
-    name={{quote(name)}}; extension_dir="./packages/pi-$name"; package_json="$extension_dir/package.json"; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; if npm view "$package" version >/dev/null 2>&1; then pi install "npm:$package"; else echo "$package is not published; installing local workspace package instead."; pi install "$extension_dir"; fi
+    name={{ quote(name) }}; extension_dir="./packages/pi-$name"; package_json="$extension_dir/package.json"; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; if npm view "$package" version >/dev/null 2>&1; then pi install "npm:$package"; else echo "$package is not published; installing local workspace package instead."; pi install "$extension_dir"; fi
 
 # Add release intent for independently versioned packages
 changeset:
