@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
+import { createHash, hkdfSync } from "node:crypto";
 import HyperDHT from "hyperdht";
+import sodium from "sodium-universal";
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const MAX_NICKNAME_GRAPHEMES = 24;
@@ -31,6 +32,45 @@ export function createIdentity(seed: Uint8Array): ChatIdentity {
 		secretKey: Buffer.from(keyPair.secretKey),
 		tag: identityTag(keyPair.publicKey),
 	};
+}
+
+export function deriveScopedIdentity(identity: ChatIdentity, scope: string): ChatIdentity {
+	if (!scope || Buffer.byteLength(scope, "utf8") > 256) {
+		throw new Error("Pi Chat identity scope is invalid.");
+	}
+	const seed = Buffer.from(identity.seed, "base64url");
+	return createIdentity(
+		Buffer.from(
+			hkdfSync(
+				"sha256",
+				seed,
+				Buffer.from("pi-chat/scoped-identity/v2", "utf8"),
+				Buffer.from(scope, "utf8"),
+				32,
+			),
+		),
+	);
+}
+
+export function signIdentityPayload(identity: ChatIdentity, payload: Uint8Array): string {
+	const signature = Buffer.alloc(sodium.crypto_sign_BYTES);
+	sodium.crypto_sign_detached(signature, payload, identity.secretKey);
+	return signature.toString("base64url");
+}
+
+export function verifyIdentityPayload(
+	publicKey: Uint8Array,
+	payload: Uint8Array,
+	signatureValue: string,
+): boolean {
+	if (publicKey.byteLength !== 32 || !/^[A-Za-z0-9_-]{86}$/u.test(signatureValue)) return false;
+	const signature = Buffer.from(signatureValue, "base64url");
+	if (signature.byteLength !== sodium.crypto_sign_BYTES) return false;
+	try {
+		return sodium.crypto_sign_verify_detached(signature, payload, publicKey);
+	} catch {
+		return false;
+	}
 }
 
 export function identityTag(publicKey: Uint8Array, characters = 12): string {

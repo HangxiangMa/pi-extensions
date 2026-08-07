@@ -5,8 +5,16 @@ import { fileURLToPath } from "node:url";
 import createTestnet from "hyperdht/testnet.js";
 import { ChatSession } from "../src/chat-session.js";
 import { createIdentity } from "../src/identity.js";
-import { HyperswarmTransport } from "../src/network.js";
+import { directNeighborLimit, HyperswarmTransport, MAX_DIRECT_NEIGHBORS } from "../src/network.js";
 import { createPrivateRoom, createPublicRoom } from "../src/protocol.js";
+
+test("room overlays clamp every requested direct-neighbor limit to eight", () => {
+	assert.equal(MAX_DIRECT_NEIGHBORS, 8);
+	assert.equal(directNeighborLimit(), 8);
+	assert.equal(directNeighborLimit(4), 4);
+	assert.equal(directNeighborLimit(64), 8);
+	assert.equal(directNeighborLimit(-1), 8);
+});
 
 test("three local DHT peers discover, authenticate, exchange, and fully stop", {
 	timeout: 20_000,
@@ -34,23 +42,23 @@ test("three local DHT peers discover, authenticate, exchange, and fully stop", {
 	try {
 		await Promise.all(sessions.map(({ session }) => session.start()));
 		await waitFor(
-			() => sessions.every(({ session }) => session.snapshot().peers.length === 2),
+			() => sessions.every(({ session }) => session.snapshot().participants.length === 2),
 			() =>
 				sessions
 					.map(({ session, transport }) => {
 						const snapshot = session.snapshot();
-						return `${snapshot.state}:${snapshot.peers.length}:${transport.connectionCount}:${snapshot.lastError ?? "ok"}`;
+						return `${snapshot.state}:${snapshot.participants.length}:${transport.connectionCount}:${snapshot.lastError ?? "ok"}`;
 					})
 					.join(","),
 		);
 		const sender = sessions[0];
 		assert.ok(sender);
-		assert.equal(sender.session.send("hello mesh").deliveredTo, 2);
+		assert.equal(sender.session.send("hello gossip").relayedTo, 2);
 		await waitFor(() =>
 			sessions
 				.slice(1)
 				.every(({ session }) =>
-					session.snapshot().transcript.some((entry) => entry.text === "hello mesh"),
+					session.snapshot().transcript.some((entry) => entry.text === "hello gossip"),
 				),
 		);
 	} finally {
@@ -61,6 +69,81 @@ test("three local DHT peers discover, authenticate, exchange, and fully stop", {
 		sessions.every(({ transport }) => transport.connectionCount === 0),
 		true,
 	);
+});
+
+test("ten-peer sparse overlay relays once through a non-origin intermediate", {
+	timeout: 35_000,
+}, async () => {
+	const testnet = await createTestnet(4);
+	const room = createPublicRoom("sparse-gossip");
+	const sessions = Array.from({ length: 10 }, (_, index) => {
+		const identity = createIdentity(Buffer.alloc(32, index + 31));
+		const transport = new HyperswarmTransport({
+			room,
+			identity,
+			dht: testnet.createNode({ firewalled: false }),
+			maxPeers: 64,
+		});
+		return {
+			identity,
+			transport,
+			session: new ChatSession({
+				room,
+				identity,
+				nickname: `Sparse${index + 1}`,
+				transport,
+			}),
+		};
+	});
+	try {
+		await Promise.all(sessions.map(({ session }) => session.start()));
+		await waitFor(
+			() => sessions.every(({ session }) => session.snapshot().participants.length === 9),
+			() =>
+				sessions
+					.map(
+						({ session, transport }) =>
+							`${session.snapshot().participants.length}/${transport.connectionCount}`,
+					)
+					.join(","),
+			20_000,
+		);
+		assert.equal(
+			sessions.every(({ transport }) => transport.connectionCount <= 8),
+			true,
+		);
+		const sender = sessions[0];
+		assert.ok(sender);
+		const indirect = sessions
+			.slice(1)
+			.find(
+				({ identity }) =>
+					!sender.transport.connectedPeerKeys.includes(identity.publicKey.toString("hex")),
+			);
+		assert.ok(indirect, "the sender must have at least one non-neighbor in a ten-peer room");
+		sender.session.send("through sparse overlay");
+		await waitFor(
+			() =>
+				indirect.session
+					.snapshot()
+					.transcript.filter(({ text }) => text === "through sparse overlay").length === 1,
+			() =>
+				`${sender.transport.connectionCount}:${indirect.transport.connectionCount}:${indirect.session.snapshot().transcript.length}`,
+			8_000,
+		);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		assert.equal(
+			sessions.every(
+				({ session }) =>
+					session.snapshot().transcript.filter(({ text }) => text === "through sparse overlay")
+						.length === 1,
+			),
+			true,
+		);
+	} finally {
+		await Promise.allSettled(sessions.map(({ session }) => session.leave()));
+		await testnet.destroy();
+	}
 });
 
 test("early discovery retries recover after initial DHT lookups miss peers", {
@@ -82,8 +165,8 @@ test("early discovery retries recover after initial DHT lookups miss peers", {
 	try {
 		await Promise.all(sessions.map((session) => session.start()));
 		await waitFor(
-			() => sessions.every((session) => session.snapshot().peers.length === 1),
-			() => sessions.map((session) => session.snapshot().peers.length).join(","),
+			() => sessions.every((session) => session.snapshot().participants.length === 1),
+			() => sessions.map((session) => session.snapshot().participants.length).join(","),
 			8_000,
 		);
 	} finally {
@@ -118,8 +201,8 @@ test("a completed startup releases its caller signal without leaving the room", 
 		controller.abort(new DOMException("Menu closed", "AbortError"));
 		await sessions[1]?.start();
 		await waitFor(
-			() => sessions.every((session) => session.snapshot().peers.length === 1),
-			() => sessions.map((session) => session.snapshot().peers.length).join(","),
+			() => sessions.every((session) => session.snapshot().participants.length === 1),
+			() => sessions.map((session) => session.snapshot().participants.length).join(","),
 			5_000,
 		);
 	} finally {

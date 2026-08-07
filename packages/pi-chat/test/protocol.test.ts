@@ -1,32 +1,38 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import test from "node:test";
+import { createIdentity } from "../src/identity.js";
 import {
-	createChatMessage,
+	createChatEvent,
+	createGossipMessage,
 	createHello,
+	createPresenceEvent,
 	createPrivateRoom,
 	createPublicRoom,
 	encodeFrame,
 	FrameDecoder,
 	MAX_FRAME_BYTES,
+	MAX_GOSSIP_HOPS,
 	MAX_MESSAGE_BYTES,
 	PeerRateLimiter,
 	parseInvite,
 	parseProtocolMessage,
 	verifyHello,
+	verifyRoomEvent,
 } from "../src/protocol.js";
 
 const alice = Buffer.alloc(32, 1);
 const bob = Buffer.alloc(32, 2);
 
-test("private invites round-trip while public slugs are normalized and bounded", () => {
+test("v2 private invites round-trip while v1 inputs migrate to the v2 room", () => {
 	const secret = Buffer.alloc(32, 9);
 	const room = createPrivateRoom(secret);
-	assert.equal(room.invite, `pichat:v1:${secret.toString("base64url")}`);
+	assert.equal(room.invite, `pichat:v2:${secret.toString("base64url")}`);
 	assert.deepEqual(parseInvite(room.invite), room);
+	assert.deepEqual(parseInvite(`pichat:v1:${secret.toString("base64url")}`), room);
 	assert.equal(createPublicRoom("pi-dev").label, "#pi-dev");
 	assert.throws(() => createPublicRoom("Pi Dev"), /public room slug/u);
-	assert.throws(() => parseInvite("pichat:v2:nope"), /valid Pi Chat invite/u);
+	assert.throws(() => parseInvite("pichat:v3:nope"), /valid Pi Chat invite/u);
 });
 
 test("private hello proves room possession and binds both authenticated peer keys", () => {
@@ -38,7 +44,9 @@ test("private hello proves room possession and binds both authenticated peer key
 });
 
 test("length-prefixed decoder handles chunks and rejects oversized frames before buffering them", () => {
-	const message = createChatMessage("hello", 10, "id-1");
+	const room = createPublicRoom("pi-dev");
+	const identity = createIdentity(Buffer.alloc(32, 7));
+	const message = createGossipMessage(createChatEvent(room, identity, "Mika", "hello", 10, "id-1"));
 	const encoded = encodeFrame(message);
 	const decoder = new FrameDecoder();
 	assert.deepEqual(decoder.push(encoded.subarray(0, 2)), []);
@@ -51,8 +59,19 @@ test("length-prefixed decoder handles chunks and rejects oversized frames before
 });
 
 test("decoder accepts multiple valid frames coalesced beyond one frame's size limit", () => {
+	const room = createPublicRoom("coalesced");
+	const identity = createIdentity(Buffer.alloc(32, 8));
 	const messages = Array.from({ length: 5 }, (_, index) =>
-		createChatMessage("x".repeat(MAX_MESSAGE_BYTES), 10 + index, `coalesced-${index}`),
+		createGossipMessage(
+			createChatEvent(
+				room,
+				identity,
+				"Mika",
+				"x".repeat(MAX_MESSAGE_BYTES),
+				10 + index,
+				`coalesced-${index}`,
+			),
+		),
 	);
 	const coalesced = Buffer.concat(messages.map((message) => encodeFrame(message)));
 	assert.ok(coalesced.length > MAX_FRAME_BYTES + 4);
@@ -64,17 +83,35 @@ test("decoder rejects invalid UTF-8 before JSON parsing", () => {
 	assert.throws(() => new FrameDecoder().push(frame), /UTF-8/u);
 });
 
-test("chat parsing bounds text and rejects unknown or malformed payloads", () => {
-	assert.deepEqual(parseProtocolMessage(createChatMessage("hello", 10, "id-1")), {
-		v: 1,
-		type: "chat",
-		text: "hello",
-		sentAt: 10,
-		id: "id-1",
-	});
-	assert.throws(() => createChatMessage("x".repeat(MAX_MESSAGE_BYTES + 1), 1, "id"), /too large/u);
-	assert.equal(parseProtocolMessage({ v: 1, type: "admin", text: "oops" }), undefined);
-	assert.equal(parseProtocolMessage({ v: 2, type: "chat", text: "oops" }), undefined);
+test("signed room events reject mutation, wrong rooms, stale clocks, and invalid hop budgets", () => {
+	const room = createPublicRoom("pi-dev");
+	const otherRoom = createPublicRoom("other");
+	const identity = createIdentity(Buffer.alloc(32, 7));
+	const event = createChatEvent(room, identity, "Mika", "hello", 10_000, "id-1");
+	assert.equal(verifyRoomEvent(event, room, 10_000), true);
+	assert.equal(verifyRoomEvent(event, otherRoom, 10_000), false);
+	assert.equal(verifyRoomEvent({ ...event, text: "mutated" }, room, 10_000), false);
+	assert.equal(verifyRoomEvent(event, room, 1_000_000), false);
+	assert.throws(
+		() => createChatEvent(room, identity, "Mika", "x".repeat(MAX_MESSAGE_BYTES + 1), 1, "id"),
+		/too large/u,
+	);
+	assert.equal(createGossipMessage(event).hops, MAX_GOSSIP_HOPS);
+	assert.equal(parseProtocolMessage({ ...createGossipMessage(event), hops: 0 }), undefined);
+	assert.equal(
+		parseProtocolMessage({ ...createGossipMessage(event), hops: MAX_GOSSIP_HOPS + 1 }),
+		undefined,
+	);
+	assert.equal(parseProtocolMessage({ v: 1, type: "gossip", event, hops: 1 }), undefined);
+});
+
+test("presence events authenticate nickname and state", () => {
+	const room = createPublicRoom("presence");
+	const identity = createIdentity(Buffer.alloc(32, 6));
+	const event = createPresenceEvent(room, identity, "Mika", "online", 100, "presence-1");
+	assert.equal(verifyRoomEvent(event, room, 100), true);
+	assert.equal(parseProtocolMessage(createGossipMessage(event))?.type, "gossip");
+	assert.equal(verifyRoomEvent({ ...event, nickname: "Mallory" }, room, 100), false);
 });
 
 test("per-peer limiter permits a burst and refills without unbounded state", () => {

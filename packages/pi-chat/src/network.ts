@@ -22,13 +22,19 @@ interface ActiveConnection {
 	peer: TransportPeer;
 }
 
+export const MAX_DIRECT_NEIGHBORS = 8;
+
+export function directNeighborLimit(requested?: number): number {
+	if (!Number.isSafeInteger(requested) || (requested ?? 0) <= 0) return MAX_DIRECT_NEIGHBORS;
+	return Math.min(requested ?? MAX_DIRECT_NEIGHBORS, MAX_DIRECT_NEIGHBORS);
+}
+
 export class HyperswarmTransport implements ChatTransport {
 	private readonly options: HyperswarmTransportOptions;
 	private swarm: Hyperswarm | undefined;
 	private discovery: PeerDiscovery | undefined;
 	private listener: ChatTransportListener | undefined;
 	private readonly connections = new Map<Duplex, ActiveConnection>();
-	private readonly directPeers = new Map<string, Buffer>();
 	private readonly refreshTimers = new Set<NodeJS.Timeout>();
 	private stopPromise: Promise<void> | undefined;
 
@@ -40,6 +46,10 @@ export class HyperswarmTransport implements ChatTransport {
 		return this.connections.size;
 	}
 
+	get connectedPeerKeys(): string[] {
+		return [...this.connections.values()].map(({ peer }) => peer.publicKey.toString("hex")).sort();
+	}
+
 	async start(listener: ChatTransportListener, signal?: AbortSignal): Promise<void> {
 		if (this.swarm) throw new Error("Hyperswarm transport has already started.");
 		const startupSignal = signal
@@ -47,12 +57,13 @@ export class HyperswarmTransport implements ChatTransport {
 			: AbortSignal.timeout(15_000);
 		startupSignal.throwIfAborted();
 		this.listener = listener;
+		const maxPeers = directNeighborLimit(this.options.maxPeers);
 		const swarm = new Hyperswarm({
 			keyPair: {
 				publicKey: this.options.identity.publicKey,
 				secretKey: this.options.identity.secretKey,
 			},
-			maxPeers: this.options.maxPeers ?? 16,
+			maxPeers,
 			...(this.options.dht ? { dht: this.options.dht } : {}),
 			...(this.options.bootstrap ? { bootstrap: this.options.bootstrap } : {}),
 		});
@@ -63,7 +74,7 @@ export class HyperswarmTransport implements ChatTransport {
 			const discovery = swarm.join(this.options.room.topic, {
 				server: true,
 				client: true,
-				limit: this.options.maxPeers ?? 16,
+				limit: maxPeers,
 			});
 			this.discovery = discovery;
 			await raceAbort(discovery.flushed(), startupSignal);
@@ -73,14 +84,6 @@ export class HyperswarmTransport implements ChatTransport {
 			await this.stop();
 			throw error;
 		}
-	}
-
-	connectPeer(publicKey: Buffer): void {
-		if (!this.swarm || publicKey.length !== 32 || this.directPeers.size >= 16) return;
-		const id = publicKey.toString("hex");
-		if (id === this.options.identity.publicKey.toString("hex") || this.directPeers.has(id)) return;
-		this.directPeers.set(id, Buffer.from(publicKey));
-		this.swarm.joinPeer(publicKey);
 	}
 
 	stop(): Promise<void> {
@@ -110,7 +113,7 @@ export class HyperswarmTransport implements ChatTransport {
 	}
 
 	private accept(socket: Duplex, info: PeerInfo): void {
-		if (!this.swarm || !this.listener) {
+		if (!this.swarm || !this.listener || this.connections.size >= MAX_DIRECT_NEIGHBORS) {
 			socket.destroy();
 			return;
 		}
@@ -168,10 +171,6 @@ export class HyperswarmTransport implements ChatTransport {
 		for (const { socket } of this.connections.values()) socket.destroy();
 		this.connections.clear();
 		const swarm = this.swarm;
-		if (swarm) {
-			for (const publicKey of this.directPeers.values()) swarm.leavePeer(publicKey);
-		}
-		this.directPeers.clear();
 		this.swarm = undefined;
 		this.listener = undefined;
 		if (swarm) await swarm.destroy().catch(() => undefined);

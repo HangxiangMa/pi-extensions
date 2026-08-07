@@ -3,6 +3,7 @@ import type { MenuDefinition } from "@narumitw/pi-tui-kit";
 import type { ChatSnapshot } from "./chat-session.js";
 import { normalizeNickname } from "./identity.js";
 import { createPublicRoom, parseInvite, type RoomDescriptor } from "./protocol.js";
+import { type PublicRoomBrowseResult, sortDirectoryRooms } from "./public-room-directory.js";
 import { type ChatSettings, descriptorFromRememberedRoom, type WidgetMode } from "./settings.js";
 import { sanitizeSingleLine } from "./text.js";
 
@@ -16,6 +17,7 @@ export interface ChatMenuSource {
 	getSnapshot(): ChatSnapshot | undefined;
 	getRestoreError(): string | undefined;
 	createPrivateRoom(): RoomDescriptor;
+	browsePublicRooms(signal: AbortSignal): Promise<PublicRoomBrowseResult>;
 	joinRoom(
 		room: RoomDescriptor,
 		ctx: ExtensionCommandContext,
@@ -38,6 +40,8 @@ interface ChatMenuState {
 	snapshot?: ChatSnapshot;
 	pendingRoom?: RoomDescriptor;
 	restoreError?: string;
+	directoryResult?: PublicRoomBrowseResult;
+	directoryError?: string;
 }
 
 type Screen =
@@ -45,6 +49,7 @@ type Screen =
 	| "invite"
 	| "joinInvite"
 	| "joinPublic"
+	| "publicRooms"
 	| "joinAnother"
 	| "participants"
 	| "settings"
@@ -60,6 +65,8 @@ type Action =
 	| "joinPending"
 	| "joinInvite"
 	| "joinPublic"
+	| "browse"
+	| "selectPublicRoom"
 	| "retry"
 	| "forget"
 	| "open"
@@ -71,12 +78,48 @@ type Action =
 
 export function createChatMenu(source: ChatMenuSource) {
 	let pendingRoom: RoomDescriptor | undefined;
+	let directoryResult: PublicRoomBrowseResult | undefined;
+	let directoryError: string | undefined;
 	const getState = async (): Promise<ChatMenuState> => ({
 		settings: source.getSettings(),
 		snapshot: source.getSnapshot(),
 		pendingRoom,
 		...(source.getRestoreError() ? { restoreError: source.getRestoreError() } : {}),
+		...(directoryResult ? { directoryResult } : {}),
+		...(directoryError ? { directoryError } : {}),
 	});
+	const browseRooms = async (signal: AbortSignal) => {
+		try {
+			const result = await source.browsePublicRooms(signal);
+			if (signal.aborted) return { kind: "stay" as const };
+			directoryResult = { ...result, rooms: sortDirectoryRooms(result.rooms) };
+			directoryError = undefined;
+		} catch (error) {
+			if (signal.aborted) return { kind: "stay" as const };
+			directoryResult = undefined;
+			directoryError = sanitizeSingleLine(error instanceof Error ? error.message : String(error));
+		}
+		return { kind: "to" as const, screen: "publicRooms" as const };
+	};
+	const joinPublic = async (slug: string, ctx: ExtensionCommandContext, signal: AbortSignal) => {
+		let room: RoomDescriptor;
+		try {
+			room = createPublicRoom(slug.replace(/^#/u, ""));
+		} catch (error) {
+			return { kind: "rejected" as const, error };
+		}
+		const confirmed = await ctx.ui.confirm(
+			"Join public room?",
+			"Anyone can join or record it. DHT and direct peers may observe network metadata.",
+			{ signal },
+		);
+		if (!confirmed || signal.aborted) return { kind: "stay" as const };
+		if (!(await source.joinRoom(room, ctx, signal, { remember: true })) || signal.aborted) {
+			return { kind: "stay" as const };
+		}
+		await source.openChat(ctx);
+		return { kind: "close" as const };
+	};
 	const menu: MenuDefinition<ChatMenuState, Screen, Action> = {
 		start: "main",
 		screens: {
@@ -109,10 +152,10 @@ export function createChatMenu(source: ChatMenuSource) {
 				kind: "input",
 				title: "Join with invite",
 				lines: [
-					"Paste a pichat:v1 invite. It grants access to the private room.",
+					"Paste a pichat:v1 or pichat:v2 invite. It grants access to the private room.",
 					"You will choose Join and remember, Join once, or Cancel before networking starts.",
 				],
-				placeholder: "pichat:v1:…",
+				placeholder: "pichat:v2:…",
 				action: "joinInvite",
 				hint: "back",
 			}),
@@ -124,11 +167,59 @@ export function createChatMenu(source: ChatMenuSource) {
 				action: "joinPublic",
 				hint: "back",
 			}),
+			publicRooms: ({ state }) => {
+				const rooms = state.directoryResult?.rooms ?? [];
+				const lines = state.directoryError
+					? [
+							`Discovery failed: ${sanitizeSingleLine(state.directoryError)}`,
+							"Retry or enter a known public room slug.",
+						]
+					: rooms.length === 0
+						? ["No active public rooms were discovered. Counts are best-effort estimates."]
+						: [
+								state.directoryResult?.partial
+									? "Estimated active participants · partial discovered results."
+									: "Estimated active participants · currently discovered results.",
+								"Select a room to review the public-room warning before joining.",
+							];
+				return {
+					kind: "choice",
+					title: "Public rooms",
+					lines,
+					items: [
+						...rooms.map((room) => ({
+							id: `room:${room.slug}`,
+							label: `#${room.slug}`,
+							description: `~${room.estimatedParticipants} active`,
+							details: ["Estimated from recent signed P2P directory presence."],
+						})),
+						{
+							id: "route:refresh",
+							label: state.directoryError ? "Retry discovery" : "Refresh discovery",
+							description: "Query the P2P directory again",
+						},
+						{
+							id: "route:manual",
+							label: "Enter room slug",
+							description: "Join a known public room manually",
+						},
+					],
+					action: "selectPublicRoom",
+					viewportSize: 10,
+					hint: "back",
+				};
+			},
 			joinAnother: () => ({
 				kind: "actions",
 				title: "Join another room",
 				lines: ["A successfully remembered join replaces the room restored at startup."],
 				items: [
+					{
+						id: "browse",
+						label: "Browse public rooms",
+						action: "browse",
+						busyLabel: "Discovering rooms",
+					},
 					{ id: "public", label: "Join public room", to: "joinPublic" },
 					{ id: "invite", label: "Join with invite", to: "joinInvite" },
 					{ id: "create", label: "Create private room", action: "createPrivate" },
@@ -137,12 +228,12 @@ export function createChatMenu(source: ChatMenuSource) {
 			}),
 			participants: ({ state }) => ({
 				kind: "choice",
-				title: "Direct participants",
-				lines: state.snapshot?.peers.length
-					? ["Select a peer to toggle local mute. Full public keys are shown in details."]
-					: ["No authenticated direct peers are connected."],
+				title: "Active participants",
+				lines: state.snapshot?.participants.length
+					? ["Select an origin to toggle local mute. Full public keys are shown in details."]
+					: ["No other active participants are currently discovered."],
 				items:
-					state.snapshot?.peers.map((peer) => ({
+					state.snapshot?.participants.map((peer) => ({
 						id: peer.publicKey,
 						label: sanitizeSingleLine(peer.label),
 						description: peer.muted ? "Muted locally" : "Receiving messages",
@@ -255,7 +346,8 @@ export function createChatMenu(source: ChatMenuSource) {
 							`State: ${state.snapshot.state}`,
 							`Room: ${sanitizeSingleLine(state.snapshot.room.label)}`,
 							`Identity: ${sanitizeSingleLine(state.snapshot.localLabel)}`,
-							`Direct peers: ${state.snapshot.peers.length}`,
+							`Active participants: ${state.snapshot.participants.length}`,
+							`Direct neighbors: ${state.snapshot.directNeighbors}`,
 							`Unread: ${state.snapshot.unread}`,
 							`Restart: ${restartDescription(state.settings)}`,
 							...(state.snapshot.lastError
@@ -280,7 +372,8 @@ export function createChatMenu(source: ChatMenuSource) {
 					"Chat stays outside Pi sessions, prompts, model context, and repository files.",
 					"Private invites are bearer secrets. Public rooms are guessable.",
 					"Noise encrypts direct streams, but peers and DHT infrastructure may observe network metadata.",
-					"There is no offline delivery, authoritative room count, or message withdrawal.",
+					"Public-room discovery and participant counts are approximate P2P observations.",
+					"There is no offline delivery, global ordering, delivery receipt, or message withdrawal.",
 				],
 				hint: "back",
 			}),
@@ -309,24 +402,15 @@ export function createChatMenu(source: ChatMenuSource) {
 				await source.openChat(ctx);
 				return { kind: "close" };
 			},
-			joinPublic: async ({ ctx, signal, value }) => {
-				let room: RoomDescriptor;
-				try {
-					room = createPublicRoom((value ?? "").replace(/^#/u, ""));
-				} catch (error) {
-					return { kind: "rejected", error };
+			joinPublic: ({ ctx, signal, value }) => joinPublic(value ?? "", ctx, signal),
+			browse: ({ signal }) => browseRooms(signal),
+			selectPublicRoom: async ({ ctx, signal, itemId }) => {
+				if (itemId === "route:refresh") return browseRooms(signal);
+				if (itemId === "route:manual") return { kind: "to", screen: "joinPublic" };
+				if (!itemId.startsWith("room:")) {
+					return { kind: "rejected", error: new Error("Public room selection is invalid") };
 				}
-				const confirmed = await ctx.ui.confirm(
-					"Join public room?",
-					"Anyone can join or record it. DHT and direct peers may observe network metadata.",
-					{ signal },
-				);
-				if (!confirmed || signal.aborted) return { kind: "stay" };
-				if (!(await source.joinRoom(room, ctx, signal, { remember: true })) || signal.aborted) {
-					return { kind: "stay" };
-				}
-				await source.openChat(ctx);
-				return { kind: "close" };
+				return joinPublic(itemId.slice("room:".length), ctx, signal);
 			},
 			retry: async ({ ctx, signal }) => {
 				await source.retryRememberedRoom(ctx, signal);
@@ -423,6 +507,12 @@ function mainScreen(state: ChatMenuState) {
 			title: "Pi Chat · disconnected",
 			lines: ["Experimental peer-to-peer chat. Messages never enter model context."],
 			items: [
+				{
+					id: "browse",
+					label: "Browse public rooms",
+					action: "browse" as const,
+					busyLabel: "Discovering rooms",
+				},
 				{ id: "public", label: "Join public room", to: "joinPublic" as const },
 				{ id: "invite", label: "Join with invite", to: "joinInvite" as const },
 				{ id: "create", label: "Create private room", action: "createPrivate" as const },
@@ -438,7 +528,7 @@ function mainScreen(state: ChatMenuState) {
 		kind: "actions" as const,
 		title: `Pi Chat · ${sanitizeSingleLine(state.snapshot.room.label)}`,
 		lines: [
-			`${state.snapshot.state} · ${state.snapshot.peers.length} direct peers · ${state.snapshot.unread} unread`,
+			`${state.snapshot.state} · ${state.snapshot.participants.length} active · ${state.snapshot.directNeighbors} direct neighbors · ${state.snapshot.unread} unread`,
 			`Current input: ${state.snapshot.composerOpen ? state.snapshot.room.label : "Pi/LLM"}`,
 			restoresCurrent
 				? `Restart: restore this room and ${state.settings.resume?.surface === "chat" ? "open chat" : "stay in Pi/LLM"}`
@@ -451,7 +541,7 @@ function mainScreen(state: ChatMenuState) {
 				label: `Open chat in ${sanitizeSingleLine(state.snapshot.room.label)}`,
 				action: "open" as const,
 			},
-			{ id: "participants", label: "Show participants", to: "participants" as const },
+			{ id: "participants", label: "Show active participants", to: "participants" as const },
 			...(state.snapshot.room.invite
 				? [{ id: "invite", label: "Show room invite", to: "invite" as const }]
 				: []),

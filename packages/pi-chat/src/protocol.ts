@@ -1,10 +1,16 @@
 import { createHash, createHmac, hkdfSync, timingSafeEqual } from "node:crypto";
-import { normalizeNickname } from "./identity.js";
+import type { ChatIdentity } from "./identity.js";
+import { normalizeNickname, signIdentityPayload, verifyIdentityPayload } from "./identity.js";
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 export const MAX_FRAME_BYTES = 16 * 1024;
 export const MAX_MESSAGE_BYTES = 4 * 1024;
+export const MAX_GOSSIP_HOPS = 8;
+export const MAX_EVENT_AGE_MS = 5 * 60_000;
+const MAX_EVENT_FUTURE_MS = 60_000;
 const PUBLIC_SLUG = /^[a-z0-9][a-z0-9-]{0,47}$/u;
+const PUBLIC_KEY = /^[0-9a-f]{64}$/u;
+const SIGNATURE = /^[A-Za-z0-9_-]{86}$/u;
 
 export interface RoomDescriptor {
 	kind: "private" | "public";
@@ -13,10 +19,11 @@ export interface RoomDescriptor {
 	topic: Buffer;
 	key: Buffer;
 	invite?: string;
+	slug?: string;
 }
 
 export interface HelloMessage {
-	v: 1;
+	v: 2;
 	type: "hello";
 	roomId: string;
 	nonce: string;
@@ -24,44 +31,63 @@ export interface HelloMessage {
 	proof: string;
 }
 
-export interface ChatMessage {
-	v: 1;
-	type: "chat";
-	text: string;
-	sentAt: number;
+export interface ChatEvent {
+	v: 2;
+	kind: "chat";
+	roomId: string;
+	origin: string;
 	id: string;
+	issuedAt: number;
+	nickname: string;
+	text: string;
+	signature: string;
 }
 
-export interface PresenceMessage {
-	v: 1;
-	type: "nickname-update" | "goodbye" | "ping" | "pong";
-	nickname?: string;
+export interface PresenceEvent {
+	v: 2;
+	kind: "presence";
+	roomId: string;
+	origin: string;
+	id: string;
+	issuedAt: number;
+	nickname: string;
+	status: "online" | "leaving";
+	signature: string;
 }
 
-export interface PeerListMessage {
-	v: 1;
-	type: "peer-list";
-	publicKeys: string[];
+export type RoomEvent = ChatEvent | PresenceEvent;
+type UnsignedRoomEvent = Omit<ChatEvent, "signature"> | Omit<PresenceEvent, "signature">;
+
+export interface GossipMessage {
+	v: 2;
+	type: "gossip";
+	event: RoomEvent;
+	hops: number;
 }
 
-export type ProtocolMessage = HelloMessage | ChatMessage | PresenceMessage | PeerListMessage;
+export interface GoodbyeMessage {
+	v: 2;
+	type: "goodbye";
+}
+
+export type ProtocolMessage = HelloMessage | GossipMessage | GoodbyeMessage;
 
 export function createPrivateRoom(secret: Uint8Array): RoomDescriptor {
 	if (secret.byteLength !== 32) throw new Error("Private room secrets must be 32 bytes.");
 	const bytes = Buffer.from(secret);
-	const topic = domainHash("pi-chat/discovery/private/v1", bytes);
+	const topic = domainHash("pi-chat/discovery/private/v2", bytes);
 	return {
 		kind: "private",
 		label: `private ${shortRoomId(topic)}`,
 		id: topic.toString("base64url"),
 		topic,
 		key: deriveRoomKey(bytes),
-		invite: `pichat:v1:${bytes.toString("base64url")}`,
+		invite: `pichat:v2:${bytes.toString("base64url")}`,
 	};
 }
 
 export function parseInvite(value: string): RoomDescriptor {
-	const match = /^pichat:v1:([A-Za-z0-9_-]{43})$/u.exec(value.trim());
+	const match = /^pichat:v[12]:([A-Za-z0-9_-]{43})$/u.exec(value.trim());
 	const encodedSecret = match?.[1];
 	if (!encodedSecret) throw new Error("This is not a valid Pi Chat invite.");
 	const secret = Buffer.from(encodedSecret, "base64url");
@@ -73,7 +99,7 @@ export function createPublicRoom(slug: string): RoomDescriptor {
 	if (!PUBLIC_SLUG.test(slug)) {
 		throw new Error("A public room slug must use lowercase letters, numbers, or hyphens.");
 	}
-	const material = Buffer.from(`pi-chat/public/v1:${slug}`, "utf8");
+	const material = Buffer.from(`pi-chat/public/v2:${slug}`, "utf8");
 	const topic = createHash("sha256").update(material).digest();
 	return {
 		kind: "public",
@@ -81,7 +107,26 @@ export function createPublicRoom(slug: string): RoomDescriptor {
 		id: topic.toString("base64url"),
 		topic,
 		key: deriveRoomKey(material),
+		slug,
 	};
+}
+
+export function legacyRoomId(room: RoomDescriptor): string | undefined {
+	if (room.kind === "public" && room.slug) {
+		return createHash("sha256")
+			.update(Buffer.from(`pi-chat/public/v1:${room.slug}`, "utf8"))
+			.digest("base64url");
+	}
+	const encodedSecret = /^pichat:v[12]:([A-Za-z0-9_-]{43})$/u.exec(room.invite ?? "")?.[1];
+	if (!encodedSecret) return undefined;
+	const secret = Buffer.from(encodedSecret, "base64url");
+	return secret.length === 32
+		? domainHash("pi-chat/discovery/private/v1", secret).toString("base64url")
+		: undefined;
+}
+
+export function isCompatibleRoomId(room: RoomDescriptor, id: string): boolean {
+	return room.id === id || legacyRoomId(room) === id;
 }
 
 export function createHello(
@@ -99,7 +144,7 @@ export function createHello(
 	if (nonceBytes.byteLength !== 16) throw new Error("Handshake nonces must be 16 bytes.");
 	const nonce = Buffer.from(nonceBytes).toString("base64url");
 	return {
-		v: 1,
+		v: 2,
 		type: "hello",
 		roomId: room.id,
 		nonce,
@@ -114,7 +159,7 @@ export function verifyHello(
 	senderPublicKey: Uint8Array,
 	receiverPublicKey: Uint8Array,
 ): HelloMessage | undefined {
-	if (!isRecord(value) || value.v !== 1 || value.type !== "hello") return undefined;
+	if (!isRecord(value) || value.v !== 2 || value.type !== "hello") return undefined;
 	if (
 		value.roomId !== room.id ||
 		typeof value.nonce !== "string" ||
@@ -131,7 +176,7 @@ export function verifyHello(
 		return undefined;
 	}
 	return {
-		v: 1,
+		v: 2,
 		type: "hello",
 		roomId: room.id,
 		nonce: value.nonce,
@@ -140,37 +185,95 @@ export function verifyHello(
 	};
 }
 
-export function createChatMessage(text: string, sentAt: number, id: string): ChatMessage {
+export function createChatEvent(
+	room: RoomDescriptor,
+	identity: ChatIdentity,
+	nicknameValue: string,
+	text: string,
+	issuedAt: number,
+	id: string,
+): ChatEvent {
+	const nickname = normalizeNickname(nicknameValue);
+	if (!nickname) throw new Error("Nickname is invalid.");
 	if (!text || Buffer.byteLength(text, "utf8") > MAX_MESSAGE_BYTES) {
 		throw new Error("Chat message is empty or too large.");
 	}
-	if (!Number.isSafeInteger(sentAt) || sentAt < 0) throw new Error("Message timestamp is invalid.");
-	if (!validId(id)) throw new Error("Message id is invalid.");
-	return { v: 1, type: "chat", text, sentAt, id };
+	validateEventFields(issuedAt, id);
+	const unsigned: Omit<ChatEvent, "signature"> = {
+		v: 2,
+		kind: "chat",
+		roomId: room.id,
+		origin: identity.publicKey.toString("hex"),
+		id,
+		issuedAt,
+		nickname,
+		text,
+	};
+	return { ...unsigned, signature: signIdentityPayload(identity, canonicalEvent(unsigned)) };
+}
+
+export function createPresenceEvent(
+	room: RoomDescriptor,
+	identity: ChatIdentity,
+	nicknameValue: string,
+	status: PresenceEvent["status"],
+	issuedAt: number,
+	id: string,
+): PresenceEvent {
+	const nickname = normalizeNickname(nicknameValue);
+	if (!nickname) throw new Error("Nickname is invalid.");
+	if (status !== "online" && status !== "leaving") throw new Error("Presence state is invalid.");
+	validateEventFields(issuedAt, id);
+	const unsigned: Omit<PresenceEvent, "signature"> = {
+		v: 2,
+		kind: "presence",
+		roomId: room.id,
+		origin: identity.publicKey.toString("hex"),
+		id,
+		issuedAt,
+		nickname,
+		status,
+	};
+	return { ...unsigned, signature: signIdentityPayload(identity, canonicalEvent(unsigned)) };
+}
+
+export function createGossipMessage(
+	event: RoomEvent,
+	hops: number = MAX_GOSSIP_HOPS,
+): GossipMessage {
+	if (!Number.isSafeInteger(hops) || hops < 1 || hops > MAX_GOSSIP_HOPS) {
+		throw new Error("Gossip hop budget is invalid.");
+	}
+	return { v: 2, type: "gossip", event, hops };
+}
+
+export function verifyRoomEvent(event: RoomEvent, room: RoomDescriptor, now = Date.now()): boolean {
+	const parsed = parseRoomEvent(event);
+	if (!parsed || parsed.roomId !== room.id) return false;
+	if (parsed.issuedAt < now - MAX_EVENT_AGE_MS || parsed.issuedAt > now + MAX_EVENT_FUTURE_MS) {
+		return false;
+	}
+	return verifyIdentityPayload(
+		Buffer.from(parsed.origin, "hex"),
+		canonicalEvent(withoutSignature(parsed)),
+		parsed.signature,
+	);
 }
 
 export function parseProtocolMessage(value: unknown): ProtocolMessage | undefined {
-	if (!isRecord(value) || value.v !== 1 || typeof value.type !== "string") return undefined;
-	if (value.type === "chat") {
+	if (!isRecord(value) || typeof value.type !== "string") return undefined;
+	if (value.v === 2 && value.type === "gossip") {
 		if (
-			typeof value.text !== "string" ||
-			!value.text ||
-			Buffer.byteLength(value.text, "utf8") > MAX_MESSAGE_BYTES ||
-			!Number.isSafeInteger(value.sentAt) ||
-			(value.sentAt as number) < 0 ||
-			!validId(value.id)
+			!Number.isSafeInteger(value.hops) ||
+			(value.hops as number) < 1 ||
+			(value.hops as number) > MAX_GOSSIP_HOPS
 		) {
 			return undefined;
 		}
-		return {
-			v: 1,
-			type: "chat",
-			text: value.text,
-			sentAt: value.sentAt as number,
-			id: value.id as string,
-		};
+		const event = parseRoomEvent(value.event);
+		return event ? { v: 2, type: "gossip", event, hops: value.hops as number } : undefined;
 	}
-	if (value.type === "hello") {
+	if (value.v === 2 && value.type === "hello") {
 		if (
 			typeof value.roomId !== "string" ||
 			typeof value.nonce !== "string" ||
@@ -181,23 +284,7 @@ export function parseProtocolMessage(value: unknown): ProtocolMessage | undefine
 		}
 		return value as unknown as HelloMessage;
 	}
-	if (value.type === "nickname-update") {
-		const nickname = normalizeNickname(value.nickname);
-		return nickname ? { v: 1, type: "nickname-update", nickname } : undefined;
-	}
-	if (value.type === "peer-list") {
-		if (
-			!Array.isArray(value.publicKeys) ||
-			value.publicKeys.length > 16 ||
-			!value.publicKeys.every((key) => typeof key === "string" && /^[0-9a-f]{64}$/u.test(key))
-		) {
-			return undefined;
-		}
-		return { v: 1, type: "peer-list", publicKeys: [...new Set(value.publicKeys)] };
-	}
-	if (value.type === "goodbye" || value.type === "ping" || value.type === "pong") {
-		return { v: 1, type: value.type };
-	}
+	if (value.v === 2 && value.type === "goodbye") return { v: 2, type: "goodbye" };
 	return undefined;
 }
 
@@ -290,9 +377,90 @@ export class PeerRateLimiter {
 	}
 }
 
+function parseRoomEvent(value: unknown): RoomEvent | undefined {
+	if (!isRecord(value) || value.v !== 2 || (value.kind !== "chat" && value.kind !== "presence")) {
+		return undefined;
+	}
+	const nickname = normalizeNickname(value.nickname);
+	if (
+		typeof value.roomId !== "string" ||
+		!PUBLIC_KEY.test(String(value.origin)) ||
+		!validId(value.id) ||
+		!Number.isSafeInteger(value.issuedAt) ||
+		(value.issuedAt as number) < 0 ||
+		!nickname ||
+		typeof value.signature !== "string" ||
+		!SIGNATURE.test(value.signature)
+	) {
+		return undefined;
+	}
+	const common = {
+		v: 2 as const,
+		roomId: value.roomId,
+		origin: value.origin as string,
+		id: value.id,
+		issuedAt: value.issuedAt as number,
+		nickname,
+		signature: value.signature,
+	};
+	if (value.kind === "chat") {
+		if (
+			typeof value.text !== "string" ||
+			!value.text ||
+			Buffer.byteLength(value.text, "utf8") > MAX_MESSAGE_BYTES
+		) {
+			return undefined;
+		}
+		return { ...common, kind: "chat", text: value.text };
+	}
+	if (value.status !== "online" && value.status !== "leaving") return undefined;
+	return { ...common, kind: "presence", status: value.status };
+}
+
+function canonicalEvent(event: UnsignedRoomEvent): Buffer {
+	const payload =
+		event.kind === "chat"
+			? [
+					2,
+					"chat",
+					event.roomId,
+					event.origin,
+					event.id,
+					event.issuedAt,
+					event.nickname,
+					event.text,
+				]
+			: [
+					2,
+					"presence",
+					event.roomId,
+					event.origin,
+					event.id,
+					event.issuedAt,
+					event.nickname,
+					event.status,
+				];
+	return Buffer.from(JSON.stringify(payload), "utf8");
+}
+
+function withoutSignature(event: RoomEvent): UnsignedRoomEvent {
+	if (event.kind === "chat") {
+		const { signature: _signature, ...unsigned } = event;
+		return unsigned;
+	}
+	const { signature: _signature, ...unsigned } = event;
+	return unsigned;
+}
+
+function validateEventFields(issuedAt: number, id: string): void {
+	if (!Number.isSafeInteger(issuedAt) || issuedAt < 0)
+		throw new Error("Message timestamp is invalid.");
+	if (!validId(id)) throw new Error("Message id is invalid.");
+}
+
 function deriveRoomKey(material: Uint8Array): Buffer {
 	return Buffer.from(
-		hkdfSync("sha256", material, Buffer.from("pi-chat/v1"), Buffer.from("room-handshake"), 32),
+		hkdfSync("sha256", material, Buffer.from("pi-chat/v2"), Buffer.from("room-handshake"), 32),
 	);
 }
 

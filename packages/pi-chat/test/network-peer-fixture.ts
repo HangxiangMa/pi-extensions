@@ -20,7 +20,7 @@ const session = new ChatSession({
 	onChange: (snapshot) => {
 		process.send?.({
 			kind: "snapshot",
-			peers: snapshot.peers.length,
+			peers: snapshot.participants.length,
 			texts: snapshot.transcript.map(({ text }) => text),
 		});
 	},
