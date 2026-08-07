@@ -1,9 +1,9 @@
 # Pi TUI Kit Roadmap
 
-- **Status:** Proposed strategic direction; not an implementation or release commitment
+- **Status:** Current evidence-qualified sequence complete through Pi 0.84.1; future capabilities
+  require new evidence and an approved plan
 - **Audience:** Pi TUI Kit maintainers and extension authors
-- **Planning horizon:** The next evidence-qualified capability sequence; no delivery dates are
-  committed
+- **Planning horizon:** The reviewed Pi 0.84.1 capability baseline; no delivery dates are committed
 - **Repository source:** Menu API version 8 with standalone confirmation, explanatory disabled
   action rows, read-only browse, lifecycle-safe custom interactions, adaptive review, distinct root
   Back/Close results, and a supported `/testing` subpath
@@ -42,75 +42,41 @@ handling.
 
 ## Current State
 
-The maintained package exposes eight declarative screen kinds:
+The maintained package exposes eight declarative screen kinds: `actions`, `detail`, `browse`,
+`choice`, `settings`, `input`, `review`, and `multiSelect`. It also exposes:
 
-- `actions`;
-- `detail`;
-- `browse`;
-- `choice`;
-- `settings`;
-- `input`;
-- `review`; and
-- `multiSelect`.
+- `runTask()` for abort-aware work with a TUI loader;
+- `runConfirmation()` for distinct Confirmed, Back, Close, Stale, Unsupported, and Error outcomes;
+- `runCustomInteraction()` for lifecycle ownership around one extension-owned specialized
+  component; and
+- a supported `/testing` subpath for semantic TUI driving and strict RPC scripts.
 
-The package also exposes `runTask()` for abort-aware work with a TUI loader and
-`runCustomInteraction()` for lifecycle ownership around one extension-owned specialized component.
-Published menu API version 8 adds the version-7 standalone confirmation contract with deterministic
-RPC Back behavior, then adds explanatory disabled action rows with sanitized, width-safe TUI/RPC
-presentation. It retains version-6 read-only searchable browse and custom-interaction lifecycle
-handling plus version-5 adaptive review and distinct root Back/Close behavior. Image Drop and
-Analytics have adopted the published confirmation contract through independent proof migrations. A
-subsequent deferred multi-select qualification admitted no new Kit transaction API: Pi Sync retains
-its reviewed, conflict-checked TUI draft and read-only RPC summary, while Subagents retains its
-in-screen tool draft and RPC status boundary. Immediate-save selectors remain unchanged. The first
-Phase 5 inventory then classified every remaining direct dialog by lifecycle contract and found no
-missing shared Kit API: one-off primitives, domain setup/auth sequences, boolean confirmations, and
-multi-line editors retain their existing owners. The package's separate supported `/testing` subpath
-provides semantic TUI driving and strict RPC scripts
-without exporting raw components; Stamp and Image Drop completed representative adoption before
-publication.
+Published menu API version 8 includes distinct root Back/Close results, adaptive review, read-only
+browse, custom-interaction lifecycle handling, standalone confirmation, and explanatory disabled
+action rows. The internal interaction driver owns shared semantic action coordination once for both
+modes while adapters retain TUI component and RPC dialog cadence.
 
-Production and experimental consumers use the Kit alongside direct Pi dialogs. Raw consumer and
-dialog counts are intentionally not pinned here because they change independently of roadmap
-outcomes. A direct dialog justifies Kit ownership only when multiple consumers repeat compatible
-interaction and lifecycle policy.
+Representative migrations prove the shipped boundaries: Usage uses `runTask()`; Stamp uses
+validated input; Image Drop composes input, review, and confirmation; Starship uses read-only browse;
+Pi Sync uses custom-interaction lifecycle ownership; and Analytics uses confirmation. These consumers
+retain domain state, validation, persistence, rollback, and session ownership. The supported testing
+subpath is proven through Stamp and Image Drop.
 
-The latest proof migrations established the following baseline:
+Deferred multi-select qualification admitted no Kit transaction API because Pi Sync and Subagents do
+not share Save/Discard cadence, review, persistence, conflict recovery, or RPC behavior. The direct
+dialog inventory likewise admitted no new API: one-off values use Pi primitives, setup and
+authentication sequences remain domain transactions, boolean confirmation stays direct unless richer
+outcomes are required, and multi-line editing remains extension-owned.
 
-- `pi-usage` replaced local loader orchestration with `runTask()` while preserving query, user
-  cancellation, stale-session, and error behavior;
-- `pi-stamp` adopted declarative locale and time-zone input while retaining canonical validation,
-  settings safety, rejected TUI drafts, RPC behavior, and publication ownership;
-- `pi-image-drop` composed declarative input and review into a draft/review/publish flow while keeping
-  selected-field state, cross-field validation, exact patches, and post-publication state advancement
-  extension-owned; and
-- all three migrations passed focused checks, package dry runs, and the repository CI-equivalent
-  gate.
+The Pi 0.84.1 review found no additional Kit capability to admit or shipped screen to retire.
+Action-bearing and live async catalogs, live previews, reorderable lists, forms, and editors still
+lack two compatible consumer contracts or the required public Pi lifecycle surface. Public `Input`,
+`SelectList`, `SettingsList`, and `ScrollView` remain useful low-level building blocks but do not own
+the Kit's cross-mode, cancellation, navigation, rollback, or stale-owner policy.
 
-API version 6 then added a read-only browse screen, callback-injected keys for static lists, and
-`runCustomInteraction()`. Pi Starship adopted browse while retaining module-data ownership; Pi Sync
-adopted custom interaction lifecycle ownership while retaining secret masking, commit-aware
-cancellation, settings, and notification policy. Both consumers raised only their own compatibility
-floors.
-
-The earlier migrations exposed two concrete review gaps: root Back and Ctrl+C Close originally collapsed to
-one result, and `ReviewScreen` used fixed rather than terminal-derived viewport sizing. Published API
-versions 4 and 5 resolved those Kit seams in sequence. The `pi-btw` post-release gate then passed:
-standard choices and adaptive review migrated without weakening editor-preservation,
-restored-selection, Back/Close, resize, or exact-text contracts.
-
-Consumer tests had to extend `test/support.ts` to drive real input focus, rejected retries, Ctrl+C,
-disposal, pending action draining, and RPC dialog cadence. The published
-`@narumitw/pi-tui-kit/testing` subpath now owns the reusable lifecycle knowledge used by Stamp and
-Image Drop representative flows. Repository support remains for its explicitly inventoried Kit,
-specialized-component, experimental, and deprecated owners rather than being deleted prematurely.
-
-The Phase 4 interaction-driver gate passed after the original seven-screen TUI/RPC behavior matrix.
-Runtime retains adapter cadence, state loading, navigation, and component/dialog lifecycle; internal
-`interaction.ts` owns screen-intent validation, raw action resolution, composed action signals,
-accepted/rejected/stale outcomes, error routing, and returned transitions once for both modes. Browse
-subsequently extended the maintained cross-mode matrix to eight screens without turning the internal
-driver into public API.
+Production and experimental consumers continue to use the Kit alongside direct Pi dialogs. Raw
+consumer and dialog counts are intentionally not pinned because they change independently of roadmap
+outcomes; the stable admission rule is compatible lifecycle evidence, not call volume.
 
 ## Guiding Principles
 
@@ -168,14 +134,14 @@ pass-through driver that merely renames the same TUI and RPC branches.
 
 **Milestones:**
 
-- Static choice and searchable multi-select shipped through focused proof migrations after an
+- [x] Static choice and searchable multi-select shipped through focused proof migrations after an
   evidence-based capability qualification.
-- Input, bounded review, and `runTask()` shipped in menu API version 3 through representative
+- [x] Input, bounded review, and `runTask()` shipped in menu API version 3 through representative
   consumer flows.
-- Usage, Stamp, and Image Drop completed behavior-preserving consumer migrations.
-- The BTW review gate recorded exact missing seams instead of weakening its specialized behavior.
-- Package checks, deterministic TUI/RPC smokes, dry-run packages, and repository gates passed for the
-  shipped capabilities and migrations.
+- [x] Usage, Stamp, and Image Drop completed behavior-preserving consumer migrations.
+- [x] The BTW review gate recorded exact missing seams instead of weakening its specialized behavior.
+- [x] Package checks, deterministic TUI/RPC smokes, dry-run packages, and repository gates passed for
+  the shipped capabilities and migrations.
 
 **Outcome:** The kit has a verified cross-mode foundation and concrete adoption evidence from which
 the next lifecycle contracts can be prioritized.
@@ -186,12 +152,12 @@ the next lifecycle contracts can be prioritized.
 
 **Milestones:**
 
-- `RunMenuResult` exposes a runtime-owned reason that distinguishes root Back from explicit Close
+- [x] `RunMenuResult` exposes a runtime-owned reason that distinguishes root Back from explicit Close
   without carrying domain-specific completion payloads.
-- Root Back, nested Back, Ctrl+C, close items, action Close, custom-UI disposal, RPC cancellation,
+- [x] Root Back, nested Back, Ctrl+C, close items, action Close, custom-UI disposal, RPC cancellation,
   owner abort, unsupported mode, and failure have characterized terminal outcomes.
-- Nested Back remains an in-menu transition and never reports a terminal result.
-- An explicit menu API-version and compatibility decision covers exact result-object changes and
+- [x] Nested Back remains an in-menu transition and never reports a terminal result.
+- [x] An explicit menu API-version and compatibility decision covers exact result-object changes and
   consumer migration requirements.
 
 **Outcome:** Menu and standalone flows can share a precise cancellation vocabulary, unlocking safe
@@ -264,21 +230,28 @@ internal seams without absorbing consumer transactions or creating a universal U
 
 ### Phase 5: Evidence-Based Evolution
 
-**Status:** In progress. The post-migration direct-dialog inventory is classified; remaining pattern
-and public-Pi replacement reviews are independently gated.
+**Status:** Complete against the Pi 0.84.1 public surface and current maintained consumer evidence.
+Reassess after a Pi dependency upgrade or when two consumers demonstrate a compatible missing
+contract.
 
 **Milestones:**
 
-- [x] Remaining direct dialogs were recounted after completed migrations and reclassified into
-  one-off bounded choices/values, domain setup/auth sequences, boolean domain confirmations, and
-  multi-line editors. Call volume admitted no new API: direct primitives remain preferred for
-  one-offs, setup transactions remain extension-owned, richer confirmation needs use the published
-  helper through consumer-specific migrations, and editors remain deferred.
-- [ ] Action-bearing or live async catalogs, trees, live previews, reorderable lists, and forms have
-  explicit admission or deferral decisions based on compatible workflows.
-- [ ] Multi-line editor remains deferred until Pi exposes an abort-aware cross-mode editor contract.
-- [ ] Shipped screens are reviewed against newer public Pi exports and retired when an equivalent
-  stable public primitive or composite becomes available.
+- [x] Remaining direct dialogs were reclassified into one-off bounded choices/values, domain
+  setup/auth sequences, boolean domain confirmations, and multi-line editors. Call volume admitted no
+  new API; each class retains its existing owner or uses the published confirmation helper when richer
+  outcomes are required.
+- [x] Action-bearing and live async catalogs remain specialized: Recall's scoped searchable actions
+  and File Context's asynchronous file/revision/diff workflow do not share an interaction or
+  transaction contract. No compatible tree workflow was found.
+- [x] Live previews and reorderable lists remain specialized: Statusline's cursor-driven palette
+  preview and immediate-save segment ordering do not match Starship's edit/validate/preview/confirm
+  transaction. Setup and authentication forms remain domain-owned under the direct-dialog decision.
+- [x] Multi-line editor remains deferred after the latest Pi 0.84.1 review confirmed that
+  `ctx.ui.editor()` still has no `AbortSignal`; reconsider only when Pi exposes an abort-aware
+  cross-mode editor contract.
+- [x] Shipped screens were reviewed against Pi 0.84.1 public exports. `Input`, `SelectList`,
+  `SettingsList`, and `ScrollView` remain lower-level building blocks rather than equivalent
+  cross-mode composites, so no screen was retired.
 
 **Outcome:** The kit continues to grow only where evidence supports durable leverage and removes local
 abstractions when Pi provides a better stable owner.
@@ -344,6 +317,8 @@ abstractions when Pi provides a better stable owner.
 | Standalone confirmation | Image Drop locally distinguished confirm, Back, and Close; boolean dialogs collapsed cancellation intent | Published API 8 includes the API-7 confirmation contract preserving Confirmed, Back, Close, Stale, Unsupported, and Error without owning side effects | Phase 4 published and proven through Image Drop and Analytics |
 | Deferred multi-select transaction ownership | Pi Sync and Subagents both used Kit multi-select with extension-local drafts | Keep transactions extension-owned unless consumers converge on Save/Discard cadence, review, persistence, conflict recovery, and interactive RPC semantics | Phase 4 qualification complete; maintained Kit and consumer tests plus source/README contract review |
 | Direct-dialog admission pressure | Remaining calls mixed one-off prompts, domain transactions, boolean confirmations, and editors | Admit APIs from compatible lifecycle evidence, never raw call volume; reuse published confirmation only where richer outcomes are required | Phase 5 inventory complete; active-source recount, owner classification, and repository gate |
+| Specialized interaction pressure | Action-bearing and async catalogs, previews, reorderable lists, forms, and editors have incompatible or single-consumer contracts | Keep each specialized until two consumers prove compatible reusable policy | Phase 5 complete against maintained consumers; re-open on new evidence |
+| Public Pi replacement pressure | Pi 0.84.1 exposes useful low-level TUI primitives but no equivalent Kit cross-mode composite | Retire a Kit screen when a stable public Pi owner provides the complete contract | Phase 5 review complete; re-run after Pi dependency upgrades |
 | Disabled action presentation | Disabled action rows could hide their state or truncate labels ambiguously | Published API 8 presents sanitized reasons and ellipsis-safe labels across TUI/RPC while keeping actions inert and raw identities stable | Phase 4 published; registry package, maintained component/runtime tests, and archived implementation plan |
 | Regression gate | Repository CI-equivalent gate at each capability change | No regression in the repository CI-equivalent gate | Every phase; `npm run check` |
 
@@ -401,3 +376,4 @@ and adoption rather than calendar output.
 | 2026-08-08 | Complete standalone-confirmation proof through Analytics. | Analytics raised only its Kit floor, retained deletion and committed-clear policy, made TUI Ctrl+C close the dashboard, and proved TUI/RPC Back, Close, stale, error, replacement, and cleanup-warning behavior; focused tests, package checks, dry-run packaging, isolated Pi load, and the repository gate passed. |
 | 2026-08-08 | Close deferred multi-select qualification without a new Kit transaction API. | Pi Sync requires a separate exact review, optional privacy acknowledgement, conflict-checked atomic publication, and read-only RPC; Subagents uses pinned in-screen Save/Discard, unavailable-tool preservation, synchronous settings publication, and RPC status. Existing Kit mechanics are reusable, but the transaction contracts do not converge. Immediate-save Chrome DevTools, Firecrawl, Google GenAI, and Plan-mode selectors remained unchanged and passed focused verification. |
 | 2026-08-08 | Classify remaining direct dialogs without admitting a new API. | One-off choices and values fit Pi's direct primitives; setup/auth sequences retain extension-owned drafts, secrets, validation, and publication; boolean confirmations use direct dialogs when all dismissals mean no and can adopt published `runConfirmation()` when richer outcomes are proven; multi-line editors remain deferred pending abort-aware RPC support. Raw call volume is not an admission criterion. |
+| 2026-08-08 | Complete Phase 5 capability and public-export review against Pi 0.84.1 without admitting or retiring an API. | Recall, File Context, Statusline, and Starship demonstrate incompatible specialized catalog, preview, reorder, and transaction contracts; no maintained tree pair exists; Pi's editor remains non-abort-aware; and its public TUI controls remain lower-level than the Kit's cross-mode lifecycle contracts. Reassess after a Pi dependency upgrade or two compatible consumers provide new evidence. |
