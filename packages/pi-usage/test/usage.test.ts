@@ -115,6 +115,168 @@ test("/usage automatically queries the current runtime account and shows state p
 	assert.equal(statuses.get("usage"), "openrouter $75.00 left");
 });
 
+test("current Codex usage can redeem a selected reset and refresh account state", async (t) => {
+	const originalFetch = globalThis.fetch;
+	t.after(() => {
+		globalThis.fetch = originalFetch;
+	});
+	let usageRequests = 0;
+	const requests: Array<{ url: string; init?: RequestInit }> = [];
+	globalThis.fetch = async (input, init) => {
+		const url = String(input);
+		requests.push({ url, init });
+		if (url.endsWith("/wham/rate-limit-reset-credits/consume")) {
+			return new Response(JSON.stringify({ code: "reset", windows_reset: 2 }), { status: 200 });
+		}
+		if (url.endsWith("/wham/rate-limit-reset-credits")) {
+			return new Response(
+				JSON.stringify({
+					credits: [
+						{
+							id: "credit-123",
+							reset_type: "codex_rate_limits",
+							status: "available",
+							granted_at: "2026-06-17T00:00:00Z",
+							expires_at: "2026-09-17T00:00:00Z",
+							title: "Weekly + 5h reset",
+							description: "Reset both current windows.",
+						},
+					],
+					available_count: 1,
+				}),
+				{ status: 200 },
+			);
+		}
+		usageRequests += 1;
+		return new Response(
+			JSON.stringify({
+				plan_type: "pro",
+				rate_limit: {
+					primary_window: {
+						used_percent: usageRequests === 1 ? 80 : 0,
+						limit_window_seconds: 18_000,
+					},
+				},
+				rate_limit_reset_credits: { available_count: usageRequests === 1 ? 1 : 0 },
+			}),
+			{ status: 200 },
+		);
+	};
+
+	const choices = ["Redeem usage limit reset…", "Weekly + 5h reset", "Yes, use reset", "Close"];
+	const titles: string[] = [];
+	const mock = createMockPi();
+	usageExtension(mock.pi, {
+		credentialReader: () => ({
+			type: "oauth",
+			access: "codex-token",
+			refresh: "refresh-token",
+			expires: Date.now() + 60_000,
+			accountId: "account-123",
+		}),
+		createRedemptionId: () => "redeem-123",
+	});
+	const command = mock.commands.get("usage");
+	assert.ok(command);
+	const { ctx, statuses } = createMockContext({
+		hasUI: true,
+		mode: "rpc",
+		model: codexModel,
+		select: async (title: string, options: string[]) => {
+			titles.push(title);
+			const choice = choices.shift();
+			assert.ok(choice === undefined || options.includes(choice), `${choice} not in ${options}`);
+			return choice;
+		},
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "codex-token" }),
+			getProviderAuth: async () => ({ auth: { apiKey: "codex-token" } }),
+			getAvailable: () => [codexModel],
+			getAll: () => [codexModel],
+			getProviderAuthStatus: () => ({ configured: true }),
+			getProviderDisplayName: (provider: string) => provider,
+		},
+	});
+
+	await command.handler("", ctx);
+
+	const consume = requests.find((request) => request.url.endsWith("/consume"));
+	assert.ok(consume);
+	assert.deepEqual(JSON.parse(String(consume.init?.body)), {
+		redeem_request_id: "redeem-123",
+		credit_id: "credit-123",
+	});
+	assert.equal(new Headers(consume.init?.headers).get("chatgpt-account-id"), "account-123");
+	assert.ok(usageRequests >= 2);
+	assert.equal(statuses.get("usage"), "codex 100% 5h");
+	assert.match(titles.at(-1) ?? "", /Usage reset.*0 usage limit resets left/isu);
+});
+
+test("Codex reset confirmation defaults to cancellation and sends no mutation", async (t) => {
+	const originalFetch = globalThis.fetch;
+	t.after(() => {
+		globalThis.fetch = originalFetch;
+	});
+	let postRequests = 0;
+	globalThis.fetch = async (input, init) => {
+		const url = String(input);
+		if (init?.method === "POST") postRequests += 1;
+		if (url.endsWith("/wham/rate-limit-reset-credits")) {
+			return new Response(JSON.stringify({ available_count: 1 }), { status: 200 });
+		}
+		return new Response(
+			JSON.stringify({
+				rate_limit: { primary_window: { used_percent: 80, limit_window_seconds: 18_000 } },
+				rate_limit_reset_credits: { available_count: 1 },
+			}),
+			{ status: 200 },
+		);
+	};
+	const choices: Array<string | undefined> = [
+		"Redeem usage limit reset…",
+		"Full reset",
+		"No, go back",
+		undefined,
+		"Close",
+	];
+	const confirmationOptions: string[][] = [];
+	const mock = createMockPi();
+	usageExtension(mock.pi, {
+		credentialReader: () => ({
+			type: "oauth",
+			access: "codex-token",
+			refresh: "refresh-token",
+			expires: Date.now() + 60_000,
+			accountId: "account-123",
+		}),
+		createRedemptionId: () => "must-not-be-used",
+	});
+	const command = mock.commands.get("usage");
+	assert.ok(command);
+	const { ctx } = createMockContext({
+		hasUI: true,
+		mode: "rpc",
+		model: codexModel,
+		select: async (title: string, options: string[]) => {
+			if (title.includes("Use this reset?")) confirmationOptions.push(options);
+			return choices.shift();
+		},
+		modelRegistry: {
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "codex-token" }),
+			getProviderAuth: async () => ({ auth: { apiKey: "codex-token" } }),
+			getAvailable: () => [codexModel],
+			getAll: () => [codexModel],
+			getProviderAuthStatus: () => ({ configured: true }),
+			getProviderDisplayName: (provider: string) => provider,
+		},
+	});
+
+	await command.handler("", ctx);
+
+	assert.deepEqual(confirmationOptions[0], ["No, go back", "Yes, use reset"]);
+	assert.equal(postRequests, 0);
+});
+
 test("command arguments are rejected instead of becoming a hidden interface", async () => {
 	const mock = createMockPi();
 	usageExtension(mock.pi);

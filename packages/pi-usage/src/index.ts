@@ -1,3 +1,15 @@
+export type {
+	CodexResetAvailability,
+	CodexResetOption,
+	CodexResetOutcome,
+	CodexResetOutcomeCode,
+} from "./codex-resets.js";
+export {
+	consumeCodexResetCredit,
+	listCodexResetCredits,
+	normalizeCodexResetCreditsPayload,
+	resolveCodexResetAuth,
+} from "./codex-resets.js";
 export {
 	abortError,
 	awaitWithDeadline,
