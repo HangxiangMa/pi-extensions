@@ -4,8 +4,9 @@
 - **Audience:** Pi TUI Kit maintainers and extension authors
 - **Planning horizon:** The next evidence-qualified capability sequence; no delivery dates are
   committed
-- **Repository source:** Menu API version 6 with read-only browse, lifecycle-safe custom
-  interactions, adaptive review, distinct root Back/Close results, and a supported `/testing` subpath
+- **Repository source:** Menu API version 7 with standalone confirmation, read-only browse,
+  lifecycle-safe custom interactions, adaptive review, distinct root Back/Close results, and a
+  supported `/testing` subpath
 - **Published status:** Derive the current release from the npm badge, registry, and package manifest;
   this roadmap does not pin a transient package version
 - **Migration evidence:** Maintained package/consumer tests and the stable PR references in the
@@ -54,9 +55,10 @@ The package also exposes `runTask()` for abort-aware work with a TUI loader and
 `runCustomInteraction()` for lifecycle ownership around one extension-owned specialized component.
 Published menu API version 6 identifies runtimes that add read-only searchable browse and custom
 interaction lifecycle handling while retaining version-5 adaptive review and distinct root
-Back/Close behavior. The package's separate supported `/testing` subpath provides semantic TUI
-driving and strict RPC scripts without exporting raw components; Stamp and Image Drop completed
-representative adoption before publication.
+Back/Close behavior. Repository source version 7 adds standalone confirmation with deterministic RPC
+Back behavior; publication and Image Drop/Analytics proof migrations remain gated. The package's
+separate supported `/testing` subpath provides semantic TUI driving and strict RPC scripts without
+exporting raw components; Stamp and Image Drop completed representative adoption before publication.
 
 Production and experimental consumers use the Kit alongside direct Pi dialogs. Raw consumer and
 dialog counts are intentionally not pinned here because they change independently of roadmap
@@ -213,8 +215,8 @@ contracts without private component knowledge.
 ### Phase 4: Qualified Shared Flows and Runtime Locality
 
 **Status:** In progress. The internal interaction driver, read-only browse, and custom-interaction
-lifecycle helper are complete; standalone confirmation and deferred multi-select remain independently
-gated follow-ups.
+lifecycle helper are complete. Standalone confirmation is source-complete pending publication and
+Image Drop/Analytics proof migrations; deferred multi-select remains independently gated.
 
 **Milestones:**
 
@@ -315,6 +317,7 @@ abstractions when Pi provides a better stable owner.
 | Runtime action/lifecycle ownership | TUI and RPC formerly coordinated screen actions in separate branches | One internal driver now owns shared semantic action policy; adapters retain presentation lifecycle | Phase 4 source-complete; maintained all-screen matrix plus source diff |
 | Read-only catalog disclosure | Searchable catalogs were specialized | Menu API 6 browse owns bounded cross-mode list/detail presentation without domain actions | Phase 4 published; package matrix and Pi Starship adoption |
 | Specialized custom lifecycle | Consumers repeated cancellation, disposal, stale-owner, and draining logic | `runCustomInteraction()` owns the shared lifecycle shell while components and domain results remain local | Phase 4 published; package tests and Pi Sync adoption |
+| Standalone confirmation | Image Drop locally distinguished confirm, Back, and Close; boolean dialogs collapsed cancellation intent | Source API 7 preserves Confirmed, Back, Close, Stale, Unsupported, and Error without owning side effects | Phase 4 source-complete; publication and Image Drop/Analytics proof migrations pending |
 | Regression gate | Repository CI-equivalent gate at each capability change | No regression in the repository CI-equivalent gate | Every phase; `npm run check` |
 
 Delivery dates and capacity targets are unknown; this roadmap intentionally measures verified behavior
@@ -364,3 +367,4 @@ and adoption rather than calendar output.
 | 2026-08-01 | Admit the internal semantic interaction driver after the Phase 4 deletion gate. | A seven-screen TUI/RPC matrix proves compatible raw payloads, transitions, errors, cancellation, disposal, and stale ownership; one internal owner replaces mode-specific action resolution without changing exports or API version 5. |
 | 2026-08-02 | Publish menu API 6 with read-only browse, injected static-list keybindings, and `runCustomInteraction()` through PR #520. | Bounded list/detail disclosure and specialized-component lifecycle policy became reusable while catalog data, domain actions, Back/Close values, and side effects stayed consumer-owned. |
 | 2026-08-02 | Adopt API-v6 capabilities in Pi Starship and Pi Sync through PR #522. | Starship Modules now uses browse and Sync custom UI uses the lifecycle helper; both consumers raised only their own compatibility floors and retained domain, settings, cancellation, and non-TUI policy. |
+| 2026-08-08 | Implement source menu API 7 with standalone confirmation; keep publication and proof migrations gated. | Image Drop and Analytics demonstrate compatible Confirm/Back/Close needs. TUI reuses the standard actions renderer and custom-interaction lifecycle shell; RPC cancellation maps deterministically to Back because Pi exposes no separate RPC Ctrl+C dialog result. |
