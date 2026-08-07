@@ -129,7 +129,7 @@ test("a completed startup releases its caller signal without leaving the room", 
 });
 
 test("three separate Node processes converge through a local DHT bootstrap", {
-	timeout: 45_000,
+	timeout: 80_000,
 }, async () => {
 	const testnet = await createTestnet(3);
 	const secret = Buffer.alloc(32, 77);
@@ -155,6 +155,12 @@ test("three separate Node processes converge through a local DHT bootstrap", {
 		});
 	}
 	try {
+		await waitFor(
+			() =>
+				children.every((child) => messages.get(child)?.some((message) => message.kind === "ready")),
+			() => childDetails(children, messages, errors),
+			35_000,
+		);
 		await waitFor(
 			() =>
 				children.every((child) =>
