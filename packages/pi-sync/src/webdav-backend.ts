@@ -11,6 +11,7 @@ import {
 	SyncBackendConflictError,
 	SyncBackendPublicationOutcomeUnknownError,
 } from "./sync-backend.js";
+import { portableSnapshotSelection } from "./sync-policy.js";
 import type { LatestPointer, RemoteObject, ResolvedWebDavBackend, Snapshot } from "./types.js";
 import { WebDavClient, WebDavHttpError, WebDavPreconditionError } from "./webdav-client.js";
 
@@ -427,6 +428,7 @@ function pointerFor(
 		syncSessions:
 			snapshot.syncSessions === true ||
 			snapshot.files.some((file) => file.path.startsWith("sessions/")),
+		...(snapshot.selection === undefined ? {} : { selection: snapshot.selection }),
 	};
 }
 
@@ -438,6 +440,7 @@ function remoteHead(pointer: LatestPointer, identity: string, etag?: string): Re
 		createdAt: pointer.createdAt,
 		machine: pointer.machine,
 		syncSessions: pointer.syncSessions === true,
+		...(pointer.selection === undefined ? {} : { selection: pointer.selection }),
 	};
 }
 
@@ -503,6 +506,7 @@ function requirePointer(value: LatestPointer | undefined, expectedProfile: strin
 	) {
 		throw new Error("Remote latest pointer is malformed.");
 	}
+	if (value.selection !== undefined) portableSnapshotSelection(value.selection);
 	return value;
 }
 

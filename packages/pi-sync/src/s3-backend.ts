@@ -14,6 +14,7 @@ import {
 	SyncBackendConflictError,
 	SyncBackendPublicationOutcomeUnknownError,
 } from "./sync-backend.js";
+import { portableSnapshotSelection } from "./sync-policy.js";
 import type { LatestPointer, RemoteObject, ResolvedS3Backend, Snapshot } from "./types.js";
 
 const VERSION = 1;
@@ -274,6 +275,7 @@ export function pointerFor(
 		syncSessions:
 			snapshot.syncSessions === true ||
 			snapshot.files.some((file) => file.path.startsWith("sessions/")),
+		...(snapshot.selection === undefined ? {} : { selection: snapshot.selection }),
 	};
 }
 
@@ -330,6 +332,7 @@ function remoteHead(pointer: LatestPointer, identity: string, etag?: string): Re
 		createdAt: pointer.createdAt,
 		machine: pointer.machine,
 		syncSessions: pointer.syncSessions === true,
+		...(pointer.selection === undefined ? {} : { selection: pointer.selection }),
 	};
 }
 
@@ -377,6 +380,7 @@ function requirePointer(
 	) {
 		throw new Error(message);
 	}
+	if (value.selection !== undefined) portableSnapshotSelection(value.selection);
 	return value;
 }
 

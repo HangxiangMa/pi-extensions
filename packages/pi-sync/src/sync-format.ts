@@ -1,5 +1,6 @@
 import { agentDir } from "./config.js";
 import type { PublicationCapability, RemoteHead } from "./sync-backend.js";
+import { inspectRemoteSelection } from "./sync-policy.js";
 import { fileHashMap } from "./sync-state.js";
 import type { CommonSyncConfig, Snapshot } from "./types.js";
 
@@ -50,6 +51,11 @@ export function formatPushSummary(
 		`Sessions: ${upload.syncSessions ? "included — may contain private conversations" : "not included"}`,
 		head ? `Remote latest: ${head.snapshotId}` : "Remote latest: empty",
 		"Publication effect: the backend's active head will reference the new immutable snapshot.",
+		...(remote && inspectRemoteSelection(config.include, remote).kind === "different"
+			? [
+					"Included-content policy effect: replace the differing remote selection with this setup's local selection.",
+				]
+			: []),
 		formatPublicationPreview(remote, upload),
 		preservedRemoteFileCount > 0
 			? `Possible secrets in locally managed files were scanned before this prompt; ${preservedRemoteFileCount} preserved remote file(s) were not rescanned.`

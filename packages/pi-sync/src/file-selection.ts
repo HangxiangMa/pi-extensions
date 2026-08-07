@@ -6,12 +6,14 @@ import { updateSyncSetup } from "./settings-management.js";
 import {
 	BUILT_IN_SYNC_ROOTS,
 	isSafeCustomIncludePath,
+	normalizeSyncInclude,
 	syncIncludeSelection,
 } from "./sync-policy.js";
 
 const BUILT_IN_PREFIX = "builtin:";
 const CUSTOM_PREFIX = "custom:";
 const SESSIONS_ID = "sessions";
+const ADD_CUSTOM_ID = "add-custom";
 
 interface SelectionDraft {
 	builtIns: Set<string>;
@@ -107,7 +109,7 @@ async function showDraftEditor(
 	customCandidates: string[],
 	signal?: AbortSignal,
 ) {
-	const menu = defineMenu<undefined, "editor", "toggle", ExtensionCommandContext>({
+	const menu = defineMenu<undefined, "editor", "toggle" | "addCustom", ExtensionCommandContext>({
 		start: "editor",
 		screens: {
 			editor: () => ({
@@ -139,6 +141,15 @@ async function showDraftEditor(
 					},
 				],
 				action: "toggle",
+				actions: [
+					{
+						id: ADD_CUSTOM_ID,
+						label: "Add custom path…",
+						description:
+							"Include an agent-relative file or directory even when it exists only remotely.",
+						action: "addCustom",
+					},
+				],
 				hint: "close",
 				doneLabel: "Review changes",
 			}),
@@ -146,6 +157,45 @@ async function showDraftEditor(
 		actions: {
 			toggle: async ({ itemId, selected }) => {
 				updateDraft(draft, itemId, selected === true);
+				return { kind: "stay" };
+			},
+			addCustom: async ({ ctx: actionCtx, signal: actionSignal }) => {
+				const entered = await actionCtx.ui.input(
+					"Add included content",
+					"Agent-relative path, for example custom.toml or snippets",
+					{ signal: actionSignal },
+				);
+				if (actionSignal.aborted) return { kind: "stay" };
+				const requested = entered?.trim();
+				if (!requested) return { kind: "stay" };
+				const existing = customCandidates.find(
+					(candidate) => candidate.toLowerCase() === requested.toLowerCase(),
+				);
+				const relativePath = existing ?? requested;
+				if (draft.custom.has(relativePath)) return { kind: "stay" };
+				try {
+					if (!isSafeCustomIncludePath(relativePath)) {
+						throw new Error("Enter a safe agent-relative file or directory path.");
+					}
+					normalizeSyncInclude([
+						...draft.builtIns,
+						...draft.custom,
+						...(draft.sessions ? ["sessions"] : []),
+						relativePath,
+					]);
+				} catch (error) {
+					if (actionSignal.aborted) return { kind: "stay" };
+					actionCtx.ui.notify(
+						`Could not add included content: ${safeTerminalText(error instanceof Error ? error.message : String(error))}`,
+						"error",
+					);
+					return { kind: "stay" };
+				}
+				if (!existing) {
+					customCandidates.push(relativePath);
+					customCandidates.sort((left, right) => left.localeCompare(right));
+				}
+				draft.custom.add(relativePath);
 				return { kind: "stay" };
 			},
 		},

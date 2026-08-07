@@ -193,6 +193,11 @@ export interface SnapshotFile {
 	sha256: string;
 }
 
+export interface SnapshotSelection {
+	version: 1;
+	include: string[];
+}
+
 export interface Snapshot {
 	version: number;
 	id: string;
@@ -201,6 +206,8 @@ export interface Snapshot {
 	/** Backend-scoped remote identity retained in the snapshot wire format. */
 	profile: string;
 	syncSessions?: boolean;
+	/** Portable, credential-free included-content intent. Absent on legacy snapshots. */
+	selection?: SnapshotSelection;
 	files: SnapshotFile[];
 }
 
@@ -212,6 +219,8 @@ export interface LatestPointer {
 	createdAt: string;
 	machine: string;
 	syncSessions?: boolean;
+	/** Lightweight projection; the immutable snapshot remains authoritative. */
+	selection?: SnapshotSelection;
 }
 
 export interface RemoteObject<T> {

@@ -18,6 +18,8 @@ import {
 	normalizeExtraFiles,
 	normalizeSyncFiles,
 	type SyncSelectionConfig,
+	selectionForSnapshot,
+	snapshotSelectionInclude,
 	syncIncludeSelection,
 } from "./sync-policy.js";
 import type { Snapshot, SnapshotFile, SnapshotOptions } from "./types.js";
@@ -74,6 +76,8 @@ function snapshotsMatch(left: Snapshot, right: Snapshot) {
 	const leftHashes = new Map(left.files.map((file) => [file.path, file.sha256]));
 	const rightHashes = new Map(right.files.map((file) => [file.path, file.sha256]));
 	return (
+		left.syncSessions === right.syncSessions &&
+		sameOptionalInclude(snapshotSelectionInclude(left), snapshotSelectionInclude(right)) &&
 		leftHashes.size === rightHashes.size &&
 		[...leftHashes].every(([filePath, hash]) => rightHashes.get(filePath) === hash)
 	);
@@ -109,6 +113,7 @@ export async function createSnapshot(
 		machine: os.hostname(),
 		profile,
 		syncSessions,
+		selection: selectionForSnapshot(include),
 		files,
 	};
 }
@@ -249,7 +254,11 @@ export function snapshotTarget(root: string, relativePath: string, configuredSes
 }
 
 export function snapshotIncludesSessions(snapshot: Snapshot) {
-	return snapshot.syncSessions === true || snapshot.files.some((file) => isSessionPath(file.path));
+	return (
+		snapshot.syncSessions === true ||
+		snapshotSelectionInclude(snapshot)?.includes("sessions") === true ||
+		snapshot.files.some((file) => isSessionPath(file.path))
+	);
 }
 
 export function filterSnapshotForConfigPolicy(
@@ -262,6 +271,7 @@ export function filterSnapshotForConfigPolicy(
 	const filtered = {
 		...snapshot,
 		syncSessions: include.includes("sessions") ? snapshot.syncSessions : false,
+		selection: selectionForSnapshot(include),
 		files: canonicalizeSnapshotFilesForConfig(snapshot.files, config, includePaths),
 	};
 	if (!options.regenerateId || snapshotsMatch(snapshot, filtered)) return filtered;
@@ -319,13 +329,21 @@ function isPreferredExtraCandidate(
 
 export function snapshotWithoutSessions(snapshot: Snapshot) {
 	const files = snapshot.files.filter((file) => !isSessionPath(file.path));
-	if (files.length === snapshot.files.length && snapshot.syncSessions !== true) return snapshot;
+	const include = snapshotSelectionInclude(snapshot)?.filter((item) => item !== "sessions");
+	if (
+		files.length === snapshot.files.length &&
+		snapshot.syncSessions !== true &&
+		include?.length === snapshot.selection?.include.length
+	) {
+		return snapshot;
+	}
 	return {
 		...snapshot,
 		id: snapshotId(),
 		createdAt: new Date().toISOString(),
 		machine: os.hostname(),
 		syncSessions: false,
+		...(include ? { selection: selectionForSnapshot(include) } : {}),
 		files,
 	};
 }
@@ -387,14 +405,27 @@ export function mergeRemoteSessionFiles(local: Snapshot, remote: Snapshot) {
 		return isSessionFilePath(normalized) && isSafeSnapshotPath(file.path);
 	});
 	if (remoteSessions.length === 0 && !snapshotIncludesSessions(remote)) return local;
+	const localInclude = snapshotSelectionInclude(local);
 	return {
 		...local,
 		id: snapshotId(),
 		createdAt: new Date().toISOString(),
 		machine: os.hostname(),
 		syncSessions: true,
+		...(localInclude
+			? {
+					selection: selectionForSnapshot(
+						localInclude.includes("sessions") ? localInclude : [...localInclude, "sessions"],
+					),
+				}
+			: {}),
 		files: [...local.files.filter((file) => !isSessionPath(file.path)), ...remoteSessions].sort(
 			(left, right) => left.path.localeCompare(right.path),
 		),
 	};
+}
+
+function sameOptionalInclude(left: string[] | undefined, right: string[] | undefined) {
+	if (!left || !right) return left === right;
+	return left.length === right.length && left.every((item, index) => item === right[index]);
 }

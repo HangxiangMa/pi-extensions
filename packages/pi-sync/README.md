@@ -11,8 +11,9 @@
 - Immutable snapshots, secret scanning, local locks, conflict checks, pull backups, transactional apply, and recovery journals.
 - Exact reviewed storage paths that do not change when a local sync setup is renamed.
 - One ordered `sync.include` list for Pi roots, safe agent-relative paths, and the privacy-sensitive `sessions` root.
+- Portable, credential-free snapshot selection with explicit cross-environment review and adoption.
 - Atomic private settings writes that preserve unknown fields and reject stale concurrent edits.
-- Fail-closed validation for missing references, mixed backend fields, duplicate remote locations, unsafe paths, malformed credentials, and credential-bearing Git URLs.
+- Fail-closed validation for missing references, mixed backend fields, duplicate remote locations, unsafe or oversized selection policies, malformed credentials, and credential-bearing Git URLs.
 
 ## 📦 Install
 
@@ -63,7 +64,9 @@ and confirmations.
 When **Sync now**, **Pull from remote…**, or **Push to remote…** finds changes that require a human
 direction choice, the manager opens **Resolve sync conflict** instead of ending at a command-only
 error. The flow names the current sync setup and explains whether local content, remote content, or
-the included-content policy changed.
+the included-content policy changed. If the active remote snapshot explicitly selects different
+content, automatic sync and pulls pause until you adopt the remote policy in Settings or publish the
+local policy with a reviewed force push.
 
 Choose **Review differences (recommended)** to inspect the exact affected paths without changing
 local files, remote data, or sync state. Then choose one reviewed direction:
@@ -193,10 +196,27 @@ Safe agent-relative custom files or directories may also be included. Absolute p
 An empty array is valid. It means no useful transfer is selected: **Sync now** reports the condition and does not claim that the setup is up to date. Unselected content remains unmanaged locally and is preserved when republishing existing remote snapshots.
 
 The Included Content editor is a standard bounded multi-select backed by one in-memory draft. Toggles
-never write settings. Leaving the editor opens an exact Include/Exclude review with **Save changes**,
+never write settings. **Add custom path…** accepts a safe agent-relative file or directory even when
+it does not exist locally yet, allowing a new environment to select content that exists only in the
+remote snapshot. Leaving the editor opens an exact Include/Exclude review with **Save changes**,
 **Discard changes**, and **Continue editing**; only reviewed Save publishes, while Continue preserves
 the draft and Discard/cancellation preserves the settings bytes. RPC remains a read-only summary with
 the manual `sync.include` path.
+
+Every new snapshot stores the normalized included-content selection separately from the files that
+happened to exist. This preserves selected-but-missing paths without syncing `pi-sync.json`, storage
+credentials, automatic-sync preferences, or setup names. **Settings → Remote included content** reads
+the active snapshot and offers **Adopt remote included content**, **Keep local included content**,
+**Review paths**, and **Cancel** when local and remote selections differ. Adoption revalidates the
+remote head, saves local settings atomically, and does not pull files or write sync state; review
+**Sync now** separately. A reviewed force push keeps local selection and explicitly replaces the
+remote policy while preserving eligible unmanaged remote files.
+
+Automatic sync and pull, including forced pull, pause on an explicit remote-policy difference rather
+than silently expanding local scope. Status reports matches and exact local-only/remote-only paths.
+Old snapshots remain readable. Because they have no authoritative selection, pi-sync offers only a
+clearly labeled read-only partial discovery from safe remote file roots; selected-but-missing and
+preserved-unmanaged intent cannot be reconstructed. Use **Add custom path…** for any needed path.
 
 Adding `sessions` requires a privacy acknowledgement in interactive flows. Session JSONL can contain prompts, tool output, file paths, images, and secrets. Automatic apply protects the currently open session file; restart Pi or resume a pulled session to use newly synchronized conversations.
 
@@ -290,6 +310,8 @@ packages/pi-sync/
 │   ├── storage-connections-ui.ts
 │   ├── sync-setups-ui.ts
 │   ├── file-selection.ts
+│   ├── remote-selection-ui.ts
+│   ├── remote-snapshot.ts
 │   ├── sync-operations.ts
 │   ├── sync-backend.ts
 │   ├── backend-factory.ts      # lazy selected-backend loader

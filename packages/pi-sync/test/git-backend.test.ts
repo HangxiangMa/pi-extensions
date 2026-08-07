@@ -29,11 +29,17 @@ test("Git backend publishes lease-protected commits and preserves repeated-conte
 			cacheRoot: path.join(fixture.root, "cache"),
 			allowLocalRemotes: true,
 		});
-		const content = snapshot([
-			{ path: "settings.json", content: Buffer.from("one") },
-			{ path: "keybindings.json", content: Buffer.from("shared") },
-			{ path: "copies/keybindings.json", content: Buffer.from("shared") },
-		]);
+		const content = {
+			...snapshot([
+				{ path: "settings.json", content: Buffer.from("one") },
+				{ path: "keybindings.json", content: Buffer.from("shared") },
+				{ path: "copies/keybindings.json", content: Buffer.from("shared") },
+			]),
+			selection: {
+				version: 1 as const,
+				include: ["settings.json", "keybindings.json", "copies", "missing.toml"],
+			},
+		};
 		const first = await backend.publishSnapshot(content, { kind: "missing" });
 		assert.match(
 			first.head.revision,

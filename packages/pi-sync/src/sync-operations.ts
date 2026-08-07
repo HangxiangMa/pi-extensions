@@ -12,6 +12,11 @@ import {
 } from "./config.js";
 import { inspectLock, isLockGuardHeld, isStaleLock, withLock } from "./lock.js";
 import {
+	formatRemoteSelectionStatus,
+	readSnapshotForHead,
+	requireCompatibleRemoteSelection,
+} from "./remote-snapshot.js";
+import {
 	createSnapshot,
 	filterSnapshotForConfigPolicy,
 	mergeRemotePreservedFiles,
@@ -41,6 +46,7 @@ import {
 	publicationCapabilityDescription,
 	safeTerminalText,
 } from "./sync-format.js";
+import { inspectRemoteSelection, RemoteSelectionMismatchError } from "./sync-policy.js";
 import {
 	canPullRemoteSessionsOnFirstSync,
 	canPullRemoteSettingsOnFirstSync,
@@ -124,6 +130,9 @@ export async function status(
 	throwIfAborted(options.signal);
 	const head = await backend.readHead(options.signal);
 	throwIfAborted(options.signal);
+	const selectionState = head
+		? inspectRemoteSelection(config.include, { selection: head.selection, files: [] })
+		: undefined;
 	const localChanged = hasLocalChanges(local, state, config);
 
 	const remoteText = head
@@ -143,12 +152,15 @@ export async function status(
 			`included content: ${config.include.join(", ") || "none"}`,
 			`sessions: ${config.include.includes("sessions") ? "included" : "excluded"}`,
 			remoteText,
+			formatRemoteSelectionStatus(selectionState),
 			`local files: ${local.files.length}`,
 			`local changed since last sync: ${localChanged ? "yes" : "no"}`,
 			`remote changed since last sync: ${remoteChanged ? "yes" : "no"}`,
 			...warnings,
 		].join("\n"),
-		localChanged || remoteChanged || warnings.length > 0 ? "warning" : "info",
+		localChanged || remoteChanged || selectionState?.kind === "different" || warnings.length > 0
+			? "warning"
+			: "info",
 	);
 }
 
@@ -166,7 +178,12 @@ export async function diff(
 		snapshotOptionsForContext(ctx, config),
 	);
 	throwIfAborted(options.signal);
-	const { snapshot: remote } = await readRemoteSnapshot(backend, config, options.signal);
+	const { snapshot: remote, selectionState } = await readRemoteSnapshot(
+		backend,
+		config,
+		options.signal,
+		{ allowSelectionDifference: true },
+	);
 	throwIfAborted(options.signal);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 
@@ -177,9 +194,10 @@ export async function diff(
 		`storage location: ${safeTerminalText(backend.destination)}`,
 		`included content: ${config.include.join(", ") || "none"}`,
 		`sessions: ${config.include.includes("sessions") ? "included" : "excluded"}`,
+		formatRemoteSelectionStatus(selectionState),
 		...warnings,
 	].join("\n");
-	const level = warnings.length > 0 ? "warning" : "info";
+	const level = warnings.length > 0 || selectionState?.kind === "different" ? "warning" : "info";
 	if (!remote) {
 		ctx.ui.notify(
 			`${header}\n\n${formatSnapshotOnlyDiff("Remote is empty. Local push would upload", local)}`,
@@ -299,6 +317,18 @@ export async function push(
 		state,
 		options.signal,
 	);
+	if (
+		!options.force &&
+		!remoteForUpload &&
+		head?.selection &&
+		inspectRemoteSelection(config.include, { selection: head.selection, files: [] }).kind ===
+			"different"
+	) {
+		remoteForUpload = await readSnapshotForHead(backend, head, options.signal);
+	}
+	if (remoteForUpload && !options.force) {
+		requireCompatibleRemoteSelection(config, remoteForUpload);
+	}
 	if (
 		remoteChangedSinceState(head, state, config, (left, right) =>
 			backend.sameRevision(left, right),
@@ -886,16 +916,20 @@ async function readRemoteSnapshot(
 	backend: SyncBackend,
 	config: AnySyncConfig,
 	signal?: AbortSignal,
+	options: { allowSelectionDifference?: boolean } = {},
 ) {
 	const head = await backend.readHead(signal);
-	if (!head) return { head: undefined, snapshot: undefined };
-	const snapshot = await backend.readSnapshot(head.snapshotRef, signal);
-	if (snapshot.id !== head.snapshotId) {
-		throw new Error(
-			`Remote head ${head.snapshotId} resolved to unexpected snapshot ${snapshot.id}.`,
-		);
+	if (!head) return { head: undefined, snapshot: undefined, selectionState: undefined };
+	const snapshot = await readSnapshotForHead(backend, head, signal);
+	const selectionState = inspectRemoteSelection(config.include, snapshot);
+	if (!options.allowSelectionDifference && selectionState.kind === "different") {
+		throw new RemoteSelectionMismatchError(config.include, selectionState.include);
 	}
-	return { head, snapshot: filterSnapshotForConfigPolicy(snapshot, config) };
+	return {
+		head,
+		snapshot: filterSnapshotForConfigPolicy(snapshot, config),
+		selectionState,
+	};
 }
 
 async function confirmPush(
