@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
 	browserCandidateHint,
@@ -18,10 +19,6 @@ type ToolSelectorAction = "toggle" | "enableAll" | "disableAll";
 
 function unique<T>(values: T[]) {
 	return Array.from(new Set(values));
-}
-
-function recordSettingsNotice(settings: { notice?: string }) {
-	if (settings.notice) state.settingsNotice = settings.notice;
 }
 
 function formatError(error: unknown) {
@@ -176,9 +173,11 @@ async function transactSelectedToolsNow(
 		}
 		if (expectedGeneration !== state.sessionGeneration) return false;
 		ctx.ui.notify(
-			rollbackError
-				? `Chrome DevTools settings save failed: ${formatError(error)}; active-tool rollback failed: ${formatError(rollbackError)}`
-				: `Chrome DevTools settings save failed; active tools restored: ${formatError(error)}`,
+			sanitizeChromeDevtoolsDisplay(
+				rollbackError
+					? `Chrome DevTools settings save failed: ${formatError(error)}; active-tool rollback failed: ${formatError(rollbackError)}`
+					: `Chrome DevTools settings save failed; active tools restored: ${formatError(error)}`,
+			),
 			"warning",
 		);
 		return false;
@@ -217,29 +216,71 @@ function getToolStatusSummary(pi: ExtensionAPI): ToolStatusSummary {
 export async function buildToolStatusMessage(pi: ExtensionAPI) {
 	const summary = getToolStatusSummary(pi);
 	const persistedSetting = await persistedSettingLabel();
-	return [
-		`Chrome DevTools tools: ${formatRuntimeStatus(summary)}`,
-		`Persisted selection: ${persistedSetting}`,
-		`Settings file: ${settingsFilePath()}`,
-		...(state.settingsNotice ? [`Settings note: ${state.settingsNotice}`] : []),
-		`Other active tools preserved: ${summary.activeNonChromeToolCount}`,
-		`Endpoint: ${devToolsEndpoint()}`,
-		`Endpoint source: ${endpointSourceLabel()}`,
-		`Launch mode: ${launchModeLabel()}`,
-		...launchAttemptLines(),
-	].join("\n");
+	return sanitizeChromeDevtoolsDisplay(
+		[
+			`Chrome DevTools tools: ${formatRuntimeStatus(summary)}`,
+			`Persisted selection: ${persistedSetting}`,
+			...browserSettingsStatusLines(),
+			...(state.settingsNotice ? [`Settings note: ${state.settingsNotice}`] : []),
+			`Other active tools preserved: ${summary.activeNonChromeToolCount}`,
+			`Endpoint: ${devToolsEndpoint()}`,
+			`Endpoint source: ${endpointSourceLabel()}`,
+			`Launch mode: ${launchModeLabel()}`,
+			...launchAttemptLines(),
+		].join("\n"),
+	);
 }
 
 export function buildQuickstartMessage() {
+	return sanitizeChromeDevtoolsDisplay(
+		[
+			`Chrome DevTools endpoint: ${devToolsEndpoint()}`,
+			`Endpoint source: ${endpointSourceLabel()}`,
+			`Launch mode: ${launchModeLabel()}`,
+			...browserSettingsStatusLines(),
+			launchHint(),
+			browserCandidateHint(),
+			...launchAttemptLines(),
+			endpointConfigHint(),
+		].join("\n"),
+	);
+}
+
+export function sanitizeChromeDevtoolsDisplay(value: string, maxCharacters = 50_000) {
+	const sanitized = Array.from(stripVTControlCharacters(value), (character) => {
+		const codePoint = character.codePointAt(0) ?? 0;
+		const unsafeControl =
+			(codePoint >= 0 && codePoint <= 8) ||
+			(codePoint >= 11 && codePoint <= 31) ||
+			(codePoint >= 127 && codePoint <= 159);
+		return unsafeControl ? "�" : character;
+	}).join("");
+	if (sanitized.length <= maxCharacters) return sanitized;
+	return `${sanitized.slice(0, Math.max(0, maxCharacters - 1))}…`;
+}
+
+function browserSettingsStatusLines() {
+	const extensionLines =
+		state.extensionPaths.length > 0
+			? state.extensionPaths.map((extensionPath) => `  - ${extensionPath}`)
+			: ["  - none"];
 	return [
-		`Chrome DevTools endpoint: ${devToolsEndpoint()}`,
-		`Endpoint source: ${endpointSourceLabel()}`,
-		`Launch mode: ${launchModeLabel()}`,
-		launchHint(),
-		browserCandidateHint(),
-		...launchAttemptLines(),
-		endpointConfigHint(),
-	].join("\n");
+		`Settings file: ${state.settingsFilePath ?? settingsFilePath()} (user)`,
+		...(state.projectSettingsFilePath
+			? [
+					`Project settings: ${state.projectSettingsFilePath} (${state.projectSettingsTrusted ? "trusted" : "untrusted; ignored"})`,
+				]
+			: []),
+		`Browser executable: ${state.browserExecutable ?? "automatic discovery"} (${state.browserExecutableSource})`,
+		`Unpacked extensions (${state.extensionPathsSource}):`,
+		...extensionLines,
+		"Settings changes apply to a new managed browser after /reload or session replacement.",
+		...(state.extensionPaths.length > 0
+			? [
+					"Unpacked extensions require Chrome for Testing or Chromium and execute trusted browser code.",
+				]
+			: []),
+	];
 }
 
 export function buildCommandGuide() {
@@ -283,8 +324,9 @@ function formatRuntimeStatus(summary: ToolStatusSummary) {
 
 async function persistedSettingLabel() {
 	const settings = await loadSettings();
-	recordSettingsNotice(settings);
-	if (settings.kind === "loaded") return formatPersistedSelection(settings.settings.tools);
+	if (settings.kind === "loaded" && settings.settings.tools) {
+		return formatPersistedSelection(settings.settings.tools);
+	}
 	if (settings.kind === "invalid") {
 		return `none; current active-tool policy preserved (invalid settings ignored: ${settings.reason})`;
 	}
