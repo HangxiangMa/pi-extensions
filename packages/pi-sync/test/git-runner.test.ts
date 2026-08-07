@@ -8,9 +8,22 @@ import { parseGitBlobBatch, readGitBlobs, runGit } from "../src/git-runner.js";
 
 test("Git runner strips inherited Git control variables and closes stdin", async () => {
 	const previous = process.env.GIT_DIR;
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-sync-git-env-"));
 	process.env.GIT_DIR = "/credential-bearing/untrusted/repository";
 	try {
-		const result = await runGit(["-c", "alias.dump=!env", "dump"], {
+		const variableNames = [
+			"GIT_DIR",
+			"GIT_TERMINAL_PROMPT",
+			"GIT_CONFIG_NOSYSTEM",
+			"GIT_ASKPASS",
+			"SSH_ASKPASS",
+		];
+		const format = variableNames.map((name) => `${name}=%s`).join("\\n");
+		const expansionStart = "$" + "{";
+		const shellArguments = variableNames.map((name) => `"${expansionStart}${name}-}"`).join(" ");
+		const dumpEnvironment = `!printf '${format}\\n' ${shellArguments}`;
+		const result = await runGit(["-c", `alias.dump=${dumpEnvironment}`, "dump"], {
+			cwd: root,
 			env: {
 				GIT_DIR: "/another/untrusted/repository",
 				GIT_TERMINAL_PROMPT: "1",
@@ -18,13 +31,19 @@ test("Git runner strips inherited Git control variables and closes stdin", async
 				GIT_ASKPASS: "evil",
 			},
 		});
-		const output = result.stdout.toString("utf8");
-		assert.doesNotMatch(output, /^GIT_DIR=/mu);
-		assert.match(output, /^GIT_TERMINAL_PROMPT=0$/mu);
-		assert.match(output, /^GIT_CONFIG_NOSYSTEM=1$/mu);
-		assert.match(output, /^GIT_ASKPASS=$/mu);
-		assert.match(output, /^SSH_ASKPASS=$/mu);
+		assert.equal(
+			result.stdout.toString("utf8"),
+			[
+				"GIT_DIR=",
+				"GIT_TERMINAL_PROMPT=0",
+				"GIT_CONFIG_NOSYSTEM=1",
+				"GIT_ASKPASS=",
+				"SSH_ASKPASS=",
+				"",
+			].join("\n"),
+		);
 	} finally {
+		rmSync(root, { recursive: true, force: true });
 		if (previous === undefined) delete process.env.GIT_DIR;
 		else process.env.GIT_DIR = previous;
 	}
