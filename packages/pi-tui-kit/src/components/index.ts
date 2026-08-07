@@ -26,6 +26,7 @@ import { createInputComponent, type InputOptions } from "./input.js";
 import { createMultiSelectComponent } from "./multi-select.js";
 import {
 	actionMenuItemPresentation,
+	actionMenuUnavailableDescription,
 	handleSearchInput,
 	menuHint,
 	renderFrame,
@@ -127,6 +128,12 @@ function createActionsComponent<ScreenId extends string, ActionId extends string
 		(itemId) => {
 			const source = options.screen.items.find((candidate) => candidate.id === itemId);
 			if (!source?.disabled) options.onEvent({ kind: "activate", itemId });
+		},
+		(itemId) => {
+			const source = options.screen.items.find((candidate) => candidate.id === itemId);
+			if (!source) return [];
+			const unavailable = actionMenuUnavailableDescription(source);
+			return unavailable ? [unavailable] : [];
 		},
 	);
 }
@@ -533,6 +540,7 @@ function commonListComponent<ScreenId extends string, ActionId extends string>(
 	lines: readonly string[],
 	destination: "back" | "close",
 	onActivate: (itemId: string) => void,
+	selectedDetails?: (itemId: string) => readonly string[],
 ): MenuScreenComponent {
 	const initialIndex = Math.max(
 		0,
@@ -551,14 +559,21 @@ function commonListComponent<ScreenId extends string, ActionId extends string>(
 	};
 	return {
 		render(width) {
-			return renderFrame(
-				options.screen.title,
-				lines,
-				list.render(Math.max(1, width)),
-				destination,
-				width,
-				options,
-			);
+			const safeWidth = Math.max(1, width);
+			const selectedId = items[selectedIndex]?.value;
+			const details = selectedId ? (selectedDetails?.(selectedId) ?? []) : [];
+			const content = [
+				...list.render(safeWidth),
+				...(details.length > 0
+					? [
+							"",
+							...details.flatMap((detail) =>
+								wrapTextWithAnsi(options.theme.fg("muted", safeMenuText(detail)), safeWidth),
+							),
+						]
+					: []),
+			];
+			return renderFrame(options.screen.title, lines, content, destination, width, options);
 		},
 		invalidate() {
 			list.invalidate();

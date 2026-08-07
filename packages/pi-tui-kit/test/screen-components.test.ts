@@ -202,11 +202,13 @@ test("disabled action rows keep long labels readable and explain why they are un
 	}
 	const wide = plainRender(harness.component, 120).join("\n");
 	assert.match(wide, new RegExp(`→ \\[-\\] ${label}`));
-	assert.match(wide, /Unavailable: No resets available · Current OAuth account/);
+	assert.match(wide, /Current OAuth account/);
+	assert.match(wide, /Unavailable: No resets available/);
 	assert.equal(wide.includes("\u0007"), false);
 
-	const narrow = plainRender(harness.component, 24);
-	assert.match(narrow.join("\n"), /→ \[-\].*…/);
+	const narrow = plainRender(harness.component, 24).join("\n");
+	assert.match(narrow, /→ \[-\].*…/);
+	assert.match(narrow, /Unavailable: No resets\s+available/);
 	harness.component.handleInput("l");
 	assert.deepEqual(harness.events, []);
 });
@@ -698,6 +700,8 @@ test("disabled multi-select action rows show their reason and remain inert", asy
 	for (const width of [1, 20, 80]) {
 		assert.ok(plainRender(harness.component, width).every((line) => visibleWidth(line) <= width));
 	}
+	const narrowAction = plainRender(harness.component, 20).find((line) => line.includes("[-]"));
+	assert.ok(narrowAction?.endsWith("…"));
 	const rendered = plainRender(harness.component, 80).join("\n");
 	assert.match(rendered, /› \[-\] Enable all available tools/);
 	assert.match(rendered, /Unavailable: Policy blocks this action/);

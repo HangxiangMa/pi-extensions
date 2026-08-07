@@ -67,8 +67,8 @@ existing navigation, and the guarantee that disabled actions never execute.
       public `disabledReason` contract, sanitized cross-mode formatting, adaptive public `SelectList`
       layout, and ellipsis-based truncation; focused component and runtime tests pass.
 - [x] Run the complete `@narumitw/pi-tui-kit` test and typecheck surface after the focused tests;
-      package check passed and all 139 Kit tests passed, including action, choice, multi-select,
-      navigation, sanitization, width, and built-export contracts.
+      package check passed and all 147 Kit tests passed after rebasing, including action, choice,
+      confirmation, multi-select, navigation, sanitization, width, and built-export contracts.
 - [x] Update `packages/pi-tui-kit/README.md` with disabled action behavior and an example, then bump
       `PI_EXTENSION_MENU_API_VERSION` in `packages/pi-tui-kit/src/index.ts` to 8 and document version
       compatibility; source and built-export type fixtures pass with literal version 8 after rebasing
@@ -76,9 +76,15 @@ existing navigation, and the guarantee that disabled actions never execute.
 - [x] Add `.changeset/gentle-actions-explain.md` as a minor Changeset for
       `@narumitw/pi-tui-kit`; `npm run changeset:status` reports the planned `0.50.0` release.
 - [x] Run `npm run check:boundaries`, `npm run check`, and `just pack tui-kit`; boundaries passed,
-      the CI-equivalent gate passed all 2,458 tests on the latest `origin/main`, and the 47-file dry-run
-      tarball contains built JavaScript/declarations, README, license, and package metadata without
-      tests or authored source.
+      the CI-equivalent gate passed all 2,491 tests on the rebased `origin/main`, and the 49-file
+      dry-run tarball contains built JavaScript/declarations, README, license, and package metadata
+      without tests or authored source.
+- [x] Resolve both PR review findings with red-green regression evidence: selected disabled reasons
+      now remain visible when action descriptions collapse at narrow widths, and multi-select action
+      rows now use cell-aware ellipsis truncation instead of ambiguous fragments.
+- [x] Rebase over the independently merged standalone-confirmation API, retain its exports/docs/tests,
+      and advance this feature to declarative API version 8; all conflicts are resolved and the
+      combined package checks pass.
 - [x] Audit the final diff against `docs/extension-conventions.md` for the touched reusable-library,
       TUI, documentation, testing, and publishing rules; public Pi TUI primitives, width/sanitization
       contracts, minor release intent, package contents, and consumer independence conform with no

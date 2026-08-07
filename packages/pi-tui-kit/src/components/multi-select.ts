@@ -4,12 +4,14 @@ import {
 	Input,
 	Key,
 	matchesKey,
+	truncateToWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { ActionMenuItem, MenuMultiSelectItem } from "../types.js";
 import type { MenuChangeResponse, MenuScreenComponent, MultiSelectOptions } from "./contracts.js";
 import {
 	actionMenuItemPresentation,
+	actionMenuUnavailableDescription,
 	handleSearchInput,
 	renderFrame,
 	safeMenuText,
@@ -162,8 +164,12 @@ export function createMultiSelectComponent<ScreenId extends string, ActionId ext
 						: `${prefix}${
 								row.item.disabled ? "[-]" : selected.get(row.item.id) ? "[x]" : "[ ]"
 							} ${safeMenuText(row.item.label)}${row.item.disabled ? " (unavailable)" : ""}`;
-				if (isSelected) return options.theme.fg("accent", label);
-				return row.item.disabled ? options.theme.fg("dim", label) : label;
+				const boundedLabel =
+					row.kind === "action"
+						? truncateToWidth(label, safeWidth, safeWidth > 1 ? "…" : "")
+						: label;
+				if (isSelected) return options.theme.fg("accent", boundedLabel);
+				return row.item.disabled ? options.theme.fg("dim", boundedLabel) : boundedLabel;
 			});
 			if (viewportSize < rows.length) {
 				rowContent.push(options.theme.fg("dim", `  (${selectedIndex + 1}/${rows.length})`));
@@ -171,9 +177,10 @@ export function createMultiSelectComponent<ScreenId extends string, ActionId ext
 			const row = selectedRow();
 			const descriptions = row
 				? row.kind === "action"
-					? [actionMenuItemPresentation(row.item).description].filter((value): value is string =>
-							Boolean(value),
-						)
+					? [
+							actionMenuUnavailableDescription(row.item),
+							actionMenuItemPresentation(row.item).description,
+						].filter((value): value is string => Boolean(value))
 					: [
 							row.item.description,
 							row.item.disabled

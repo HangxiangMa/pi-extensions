@@ -238,10 +238,11 @@ content after invalidation, and bound rendered output to the supplied terminal w
 the screen's Back/Close hint; `Ctrl+C` closes the menu.
 
 Disabled action rows stay visible and focusable for context but never navigate, close, or invoke a
-domain action. Set `disabledReason` to explain why. TUI prefixes the semantic label with `[-]`, shows
-a supplied unavailable reason beside any existing description, and adapts the primary column to
-available width; unavoidable label truncation uses an ellipsis. When a reason is supplied, RPC adds
-the unavailable state and reason to its selector label; legacy disabled rows without a reason keep
+domain action. Set `disabledReason` to explain why. TUI prefixes the semantic label with `[-]`, keeps
+a supplied unavailable reason visible below the selected row at every width, and adapts the primary
+column to available width; unavoidable action-label truncation uses an ellipsis. When a reason is
+supplied, RPC adds the unavailable state and reason to its selector label; legacy disabled rows
+without a reason keep
 their existing RPC label. This contract also applies to action rows under `multiSelect.actions`.
 
 ```ts

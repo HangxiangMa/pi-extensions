@@ -8,14 +8,15 @@ export function actionMenuItemPresentation(item: ActionMenuItem<string, string>)
 } {
 	const label = safeMenuText(item.label);
 	const description = item.description ? safeMenuText(item.description) : undefined;
-	if (!item.disabled) return { label, description };
+	return { label: item.disabled ? `[-] ${label}` : label, description };
+}
+
+export function actionMenuUnavailableDescription(
+	item: ActionMenuItem<string, string>,
+): string | undefined {
+	if (!item.disabled) return undefined;
 	const reason = safeMenuText(item.disabledReason ?? "");
-	return {
-		label: `[-] ${label}`,
-		description:
-			[reason ? `Unavailable: ${reason}` : undefined, description].filter(Boolean).join(" · ") ||
-			undefined,
-	};
+	return reason ? `Unavailable: ${reason}` : undefined;
 }
 
 export function actionMenuDialogLabel(item: ActionMenuItem<string, string>): string {
