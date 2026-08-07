@@ -7,6 +7,7 @@ import {
 	createHello,
 	createPresenceEvent,
 	type GossipMessage,
+	MAX_EVENT_AGE_MS,
 	PeerRateLimiter,
 	type PresenceEvent,
 	type ProtocolMessage,
@@ -103,6 +104,11 @@ interface OriginLimiterState {
 	lastSeen: number;
 }
 
+interface ParticipantVersionState {
+	issuedAt: number;
+	id: string;
+}
+
 export class ChatSession {
 	private readonly room: RoomDescriptor;
 	private readonly identity: ChatIdentity;
@@ -117,6 +123,7 @@ export class ChatSession {
 	private readonly seen = new Map<string, number>();
 	private readonly seenOrder: Array<{ key: string; expiresAt: number }> = [];
 	private readonly originLimiters = new Map<string, OriginLimiterState>();
+	private readonly participantVersions = new Map<string, ParticipantVersionState>();
 	private readonly listeners = new Set<(snapshot: ChatSnapshot) => void>();
 	private state: ChatSnapshot["state"] = "disconnected";
 	private unread = 0;
@@ -360,15 +367,17 @@ export class ChatSession {
 		}
 		if (!this.acceptOrigin(event.origin)) return;
 		this.remember(key);
-		this.applyEvent(event);
+		if (!this.applyEvent(event)) return;
 		if (message.hops > 1) {
 			this.broadcast(createGossipMessage(event, message.hops - 1), state.peer);
 		}
 	}
 
-	private applyEvent(event: RoomEvent): void {
+	private applyEvent(event: RoomEvent): boolean {
 		const publicKey = Buffer.from(event.origin, "hex");
+		const participantStateIsNew = this.acceptParticipantVersion(event);
 		if (event.kind === "presence") {
+			if (!participantStateIsNew) return false;
 			if (event.status === "leaving") {
 				this.participants.delete(event.origin);
 				this.originLimiters.delete(event.origin);
@@ -376,9 +385,11 @@ export class ChatSession {
 				this.upsertParticipant(event.origin, publicKey, event.nickname, this.now());
 			}
 			this.emit();
-			return;
+			return true;
 		}
-		this.upsertParticipant(event.origin, publicKey, event.nickname, this.now());
+		if (participantStateIsNew) {
+			this.upsertParticipant(event.origin, publicKey, event.nickname, this.now());
+		}
 		if (!this.mutedOrigins.has(event.origin)) {
 			this.pushTranscript({
 				id: event.id,
@@ -391,6 +402,36 @@ export class ChatSession {
 			if (!this.viewOpen) this.unread += 1;
 		}
 		this.emit();
+		return true;
+	}
+
+	private acceptParticipantVersion(event: RoomEvent): boolean {
+		this.pruneParticipantVersions();
+		const existing = this.participantVersions.get(event.origin);
+		if (existing && compareEventVersion(existing, event) >= 0) return false;
+		if (!existing && this.participantVersions.size >= MAX_SEEN_MESSAGES) {
+			let oldestOrigin: string | undefined;
+			let oldestVersion: ParticipantVersionState | undefined;
+			for (const [origin, candidate] of this.participantVersions) {
+				if (!oldestVersion || compareEventVersion(candidate, oldestVersion) < 0) {
+					oldestOrigin = origin;
+					oldestVersion = candidate;
+				}
+			}
+			if (oldestOrigin) this.participantVersions.delete(oldestOrigin);
+		}
+		this.participantVersions.set(event.origin, {
+			issuedAt: event.issuedAt,
+			id: event.id,
+		});
+		return true;
+	}
+
+	private pruneParticipantVersions(): void {
+		const oldest = this.now() - MAX_EVENT_AGE_MS;
+		for (const [origin, version] of this.participantVersions) {
+			if (version.issuedAt < oldest) this.participantVersions.delete(origin);
+		}
 	}
 
 	private onDisconnect(owner: number, peer: TransportPeer): void {
@@ -481,6 +522,7 @@ export class ChatSession {
 	}
 
 	private pruneParticipants(): void {
+		this.pruneParticipantVersions();
 		const oldest = this.now() - PARTICIPANT_TTL_MS;
 		for (const [id, participant] of this.participants) {
 			if (participant.lastSeen < oldest) {
@@ -576,6 +618,7 @@ export class ChatSession {
 		this.peers.clear();
 		this.participants.clear();
 		this.originLimiters.clear();
+		this.participantVersions.clear();
 		this.seen.clear();
 		this.seenOrder.length = 0;
 		await this.transport.stop().catch((error) => {
@@ -596,6 +639,13 @@ export class ChatSession {
 
 function eventKey(event: RoomEvent): string {
 	return `${event.origin}:${event.id}`;
+}
+
+function compareEventVersion(
+	left: Pick<RoomEvent, "issuedAt" | "id">,
+	right: Pick<RoomEvent, "issuedAt" | "id">,
+): number {
+	return left.issuedAt - right.issuedAt || left.id.localeCompare(right.id);
 }
 
 function keyId(publicKey: Uint8Array): string {

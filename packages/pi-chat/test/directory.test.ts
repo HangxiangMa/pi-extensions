@@ -114,6 +114,28 @@ test("catalog applies signed leaving records, expires heartbeats, and marks boun
 	assert.deepEqual(catalog.snapshot().rooms, []);
 });
 
+test("catalog retains departure ordering against delayed online records", () => {
+	const catalog = new DirectoryCatalog({ now: () => 10_002 });
+	const identity = scoped(1, "pi-dev");
+	const initial = createDirectoryPresence(identity, "pi-dev", "online", 10_000, "initial");
+	const leaving = createDirectoryPresence(identity, "pi-dev", "leaving", 10_002, "z");
+	const delayedByTime = createDirectoryPresence(
+		identity,
+		"pi-dev",
+		"online",
+		10_001,
+		"delayed-time",
+	);
+	const delayedById = createDirectoryPresence(identity, "pi-dev", "online", 10_002, "a");
+
+	assert.equal(catalog.accept(initial), true);
+	assert.equal(catalog.accept(leaving), true);
+	assert.equal(catalog.accept(delayedByTime), false);
+	assert.equal(catalog.accept(delayedById), false);
+	assert.deepEqual(catalog.snapshot().rooms, []);
+	assert.deepEqual(catalog.currentEvents(), [leaving]);
+});
+
 test("sort helper is deterministic and does not mutate caller state", () => {
 	const rooms = [
 		{ slug: "zeta", estimatedParticipants: 1 },

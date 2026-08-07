@@ -209,6 +209,85 @@ test("bounds accepted events per signed origin before transcript and forwarding"
 	assert.equal(sentChat(second.peer, "origin-6"), undefined);
 });
 
+test("ignores stale presence updates after a newer departure", async () => {
+	const { room, identity, transport, session } = fixture();
+	await session.start();
+	const remote = authenticate(room, identity, transport, 2, "Current");
+	const leaving = createPresenceEvent(room, remote.identity, "Current", "leaving", 100_000, "z");
+	const delayedByTime = createPresenceEvent(
+		room,
+		remote.identity,
+		"Old Name",
+		"online",
+		99_999,
+		"delayed-time",
+	);
+	const delayedById = createPresenceEvent(
+		room,
+		remote.identity,
+		"Other Old Name",
+		"online",
+		100_000,
+		"a",
+	);
+
+	transport.receive(remote.peer, createGossipMessage(leaving));
+	transport.receive(remote.peer, createGossipMessage(delayedByTime));
+	transport.receive(remote.peer, createGossipMessage(delayedById));
+
+	assert.equal(session.snapshot().participants.length, 0);
+});
+
+test("keeps the newest nickname when presence heartbeats arrive out of order", async () => {
+	const { room, identity, transport, session } = fixture();
+	await session.start();
+	const remote = authenticate(room, identity, transport, 2, "Initial");
+	const current = createPresenceEvent(room, remote.identity, "Current", "online", 100_000, "z");
+	const delayedByTime = createPresenceEvent(
+		room,
+		remote.identity,
+		"Old By Time",
+		"online",
+		99_999,
+		"delayed-time",
+	);
+	const delayedById = createPresenceEvent(
+		room,
+		remote.identity,
+		"Old By Id",
+		"online",
+		100_000,
+		"a",
+	);
+
+	transport.receive(remote.peer, createGossipMessage(current));
+	transport.receive(remote.peer, createGossipMessage(delayedByTime));
+	transport.receive(remote.peer, createGossipMessage(delayedById));
+
+	assert.equal(session.snapshot().participants[0]?.nickname, "Current");
+});
+
+test("does not restore presence when delayed chat predates a departure", async () => {
+	const { room, identity, transport, session } = fixture();
+	await session.start();
+	const remote = authenticate(room, identity, transport, 2, "Current");
+	const leaving = createPresenceEvent(room, remote.identity, "Current", "leaving", 100_000, "left");
+	const delayedChat = createChatEvent(
+		room,
+		remote.identity,
+		"Old Name",
+		"sent before leaving",
+		99_999,
+		"delayed-chat",
+	);
+
+	transport.receive(remote.peer, createGossipMessage(leaving));
+	transport.receive(remote.peer, createGossipMessage(delayedChat));
+
+	assert.equal(session.snapshot().participants.length, 0);
+	assert.equal(session.snapshot().transcript.at(-1)?.text, "sent before leaving");
+});
+
 test("mutes display by signed origin while continuing to forward its events", async () => {
 	const { room, identity, transport, session } = fixture();
 	await session.start();

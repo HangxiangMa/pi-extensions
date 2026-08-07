@@ -90,16 +90,20 @@ export class DirectoryCatalog {
 		) {
 			return false;
 		}
-		if (event.status === "leaving") {
-			this.records.delete(event.origin);
-			return true;
-		}
 		if (!existing && this.records.size >= this.maxRecords) {
 			this.truncated = true;
 			return false;
 		}
-		const knownSlugs = new Set([...this.records.values()].map(({ slug }) => slug));
-		if (!knownSlugs.has(event.slug) && knownSlugs.size >= this.maxRooms) {
+		const knownSlugs = new Set(
+			[...this.records.values()]
+				.filter(({ status }) => status === "online")
+				.map(({ slug }) => slug),
+		);
+		if (
+			event.status === "online" &&
+			!knownSlugs.has(event.slug) &&
+			knownSlugs.size >= this.maxRooms
+		) {
 			this.truncated = true;
 			return false;
 		}
@@ -111,7 +115,9 @@ export class DirectoryCatalog {
 		this.prune();
 		const counts = new Map<string, number>();
 		for (const event of this.records.values()) {
-			counts.set(event.slug, (counts.get(event.slug) ?? 0) + 1);
+			if (event.status === "online") {
+				counts.set(event.slug, (counts.get(event.slug) ?? 0) + 1);
+			}
 		}
 		return {
 			rooms: sortDirectoryRooms(
@@ -133,9 +139,10 @@ export class DirectoryCatalog {
 	}
 
 	private prune(): void {
-		const oldest = this.now() - DIRECTORY_RECORD_TTL_MS;
+		const now = this.now();
 		for (const [origin, event] of this.records) {
-			if (event.issuedAt < oldest) this.records.delete(origin);
+			const ttl = event.status === "leaving" ? MAX_EVENT_AGE_MS : DIRECTORY_RECORD_TTL_MS;
+			if (event.issuedAt < now - ttl) this.records.delete(origin);
 		}
 		this.pruneSeen();
 	}
