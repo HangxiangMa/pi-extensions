@@ -182,12 +182,16 @@ function candidateModels(ctx: ExtensionContext, providerId: string): PiModel[] {
 	return candidates;
 }
 
-async function fetchProviderJson(
+export async function fetchProviderJson(
 	url: string,
 	auth: ResolvedUsageAuth,
 	signal: AbortSignal,
 	timeoutMs: number,
 	description: string,
+	request: {
+		method?: "GET" | "POST";
+		body?: Record<string, unknown>;
+	} = {},
 ): Promise<Record<string, unknown>> {
 	const controller = new AbortController();
 	let timedOut = false;
@@ -201,7 +205,15 @@ async function fetchProviderJson(
 	try {
 		const headers = { ...auth.headers };
 		if (!hasHeader(headers, "User-Agent")) headers["User-Agent"] = "pi-usage";
-		const response = await fetch(url, { headers, signal: controller.signal });
+		if (request.body && !hasHeader(headers, "Content-Type")) {
+			headers["Content-Type"] = "application/json";
+		}
+		const response = await fetch(url, {
+			method: request.method ?? "GET",
+			headers,
+			...(request.body ? { body: JSON.stringify(request.body) } : {}),
+			signal: controller.signal,
+		});
 		if (controller.signal.aborted)
 			throw Object.assign(new Error("Usage query aborted."), { name: "AbortError" });
 		const text = await readBoundedResponse(

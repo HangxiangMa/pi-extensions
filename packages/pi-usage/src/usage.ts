@@ -1,8 +1,24 @@
+import { randomUUID } from "node:crypto";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import {
+	type CodexResetAvailability,
+	type CodexResetOption,
+	type CodexResetOutcome,
+	codexResetActionDescription,
+	codexResetCount,
+	consumeCodexResetCredit,
+	formatCodexResetOutcome,
+	genericCodexResetOption,
+	listCodexResetCredits,
+	resetConfirmationLines,
+	resetLabel,
+	resetOptionExpiration,
+	resolveCodexResetAuth,
+} from "./codex-resets.js";
 import {
 	awaitWithDeadline,
 	errorMessage,
@@ -38,6 +54,12 @@ const REFRESH_CURRENT = "Refresh current usage";
 const VIEW_ANOTHER = "View another configured provider…";
 const VIEW_ALL = "View all configured providers…";
 const CLOSE = "Close";
+const REDEEM_CODEX_RESET = "Redeem usage limit reset…";
+
+type UsageExtensionDependencies = {
+	credentialReader?: (providerId: string) => unknown;
+	createRedemptionId?: () => string;
+};
 
 type QueryOutcome = {
 	state: ProviderUsageState;
@@ -50,7 +72,12 @@ type StableCurrent = {
 	model: PiModel | undefined;
 };
 
-export default function usageExtension(pi: ExtensionAPI) {
+export default function usageExtension(
+	pi: ExtensionAPI,
+	dependencies: UsageExtensionDependencies = {},
+) {
+	const credentialReader = dependencies.credentialReader;
+	const createRedemptionId = dependencies.createRedemptionId ?? randomUUID;
 	const cache = new UsageCache(CACHE_TTL_MS);
 	const failureBackoff = new Map<string, { until: number; message: string }>();
 	const latestQueries = new Map<string, number>();
@@ -123,6 +150,16 @@ export default function usageExtension(pi: ExtensionAPI) {
 		if (shouldSchedule && sessionActive) scheduleStatusRefresh(ctx, model);
 	};
 
+	const invalidateProviderState = (providerId: string) => {
+		cache.clearProvider(providerId);
+		for (const key of failureBackoff.keys()) {
+			if (key.startsWith(`${providerId}:`)) failureBackoff.delete(key);
+		}
+		for (const key of latestQueries.keys()) {
+			if (key.startsWith(`${providerId}:`)) latestQueries.delete(key);
+		}
+	};
+
 	const transitionCurrentIdentity = (nextIdentity: string, providerId: string) => {
 		if (!activeCurrentIdentity || activeCurrentIdentity === nextIdentity) {
 			activeCurrentIdentity = nextIdentity;
@@ -130,14 +167,7 @@ export default function usageExtension(pi: ExtensionAPI) {
 		}
 		const previousProviderId = activeCurrentIdentity.split(":", 1)[0] ?? "";
 		for (const id of new Set([previousProviderId, providerId])) {
-			if (!id) continue;
-			cache.clearProvider(id);
-			for (const key of failureBackoff.keys()) {
-				if (key.startsWith(`${id}:`)) failureBackoff.delete(key);
-			}
-			for (const key of latestQueries.keys()) {
-				if (key.startsWith(`${id}:`)) latestQueries.delete(key);
-			}
+			if (id) invalidateProviderState(id);
 		}
 		activeCurrentIdentity = nextIdentity;
 	};
@@ -346,12 +376,14 @@ export default function usageExtension(pi: ExtensionAPI) {
 		label: string,
 		parentSignal: AbortSignal,
 		operation: (signal: AbortSignal) => Promise<T>,
+		cancellable = true,
 	): Promise<T | undefined> => {
 		const { runTask } = await import("@narumitw/pi-tui-kit");
 		if (parentSignal.aborted) return undefined;
 		const result = await runTask(ctx, {
 			label,
 			signal: parentSignal,
+			cancellable,
 			onError: () => undefined,
 			task: ({ signal }) => operation(signal),
 		});
@@ -465,10 +497,33 @@ export default function usageExtension(pi: ExtensionAPI) {
 			publishStableCurrent(ctx, stableCurrent);
 			let current = stableCurrent.outcome;
 			let visibleStates: ProviderUsageState[] = [current.state];
+			let resetAvailability: CodexResetAvailability | undefined;
+			let selectedReset: CodexResetOption | undefined;
+			let resetAuthFingerprint: string | undefined;
+			let resetModelIdentity: string | undefined;
+			let redemptionId: string | undefined;
+			let resetOutcome: CodexResetOutcome | undefined;
+			let resetFailure: string | undefined;
 			const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
 			if (controller.signal.aborted || statusGeneration !== menuGeneration) return;
-			type Screen = "main" | "providers";
-			type Action = "refresh" | "another" | "all" | "provider";
+			type Screen =
+				| "main"
+				| "providers"
+				| "reset-picker"
+				| "reset-confirm"
+				| "reset-result"
+				| "reset-error";
+			type Action =
+				| "refresh"
+				| "another"
+				| "all"
+				| "provider"
+				| "open-resets"
+				| "select-reset"
+				| "cancel-reset"
+				| "consume-reset"
+				| "back-to-usage"
+				| "back-to-resets";
 			const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
 				start: "main",
 				screens: {
@@ -478,6 +533,20 @@ export default function usageExtension(pi: ExtensionAPI) {
 						lines: formatProviderStates(visibleStates).split("\n"),
 						items: [
 							{ id: "refresh", label: REFRESH_CURRENT, action: "refresh" },
+							...(current.state.status === "ready" && current.state.providerId === "openai-codex"
+								? [
+										{
+											id: "open-resets",
+											label:
+												codexResetCount(current.state.report) === 0
+													? `${REDEEM_CODEX_RESET} (unavailable)`
+													: REDEEM_CODEX_RESET,
+											description: codexResetActionDescription(current.state.report),
+											disabled: codexResetCount(current.state.report) === 0,
+											action: "open-resets" as const,
+										},
+									]
+								: []),
 							{ id: "another", label: VIEW_ANOTHER, action: "another" },
 							{ id: "all", label: VIEW_ALL, action: "all" },
 							{ id: "close", label: CLOSE, close: true },
@@ -496,8 +565,219 @@ export default function usageExtension(pi: ExtensionAPI) {
 							})),
 						hint: "back",
 					}),
+					"reset-picker": () => ({
+						kind: "choice",
+						title: "Usage limit resets",
+						lines: [
+							`${resetAvailability?.availableCount ?? 0} ${resetLabel(resetAvailability?.availableCount ?? 0)} available.`,
+						],
+						items: (resetAvailability?.options ?? []).map((option, index) => ({
+							id: `reset-${index}`,
+							label: option.title,
+							description: resetOptionExpiration(option),
+							details: [option.description],
+						})),
+						action: "select-reset",
+						initialItemId: "reset-0",
+						hint: "back",
+					}),
+					"reset-confirm": () => ({
+						kind: "actions",
+						title: "Use this reset?",
+						lines: resetConfirmationLines(selectedReset),
+						items: [
+							{ id: "cancel-reset", label: "No, go back", action: "cancel-reset" },
+							{ id: "consume-reset", label: "Yes, use reset", action: "consume-reset" },
+						],
+						hint: "back",
+					}),
+					"reset-result": () => ({
+						kind: "actions",
+						title: "Usage limit resets",
+						lines: [
+							formatCodexResetOutcome(
+								resetOutcome,
+								current.state.status === "ready"
+									? codexResetCount(current.state.report)
+									: undefined,
+							),
+						],
+						items: [
+							{
+								id: "back-to-usage",
+								label: "Back to usage",
+								action: "back-to-usage",
+							},
+							{ id: "close", label: CLOSE, close: true },
+						],
+						hint: "back",
+					}),
+					"reset-error": () => ({
+						kind: "actions",
+						title: "Usage limit resets",
+						lines: [resetFailure ?? "Couldn't reset usage. Please try again."],
+						items: [
+							{ id: "consume-reset", label: "Try again", action: "consume-reset" },
+							{ id: "back-to-resets", label: "Back", action: "back-to-resets" },
+						],
+						hint: "back",
+					}),
 				},
 				actions: {
+					"open-resets": async () => {
+						const summaryCount =
+							current.state.status === "ready" && current.state.providerId === "openai-codex"
+								? codexResetCount(current.state.report)
+								: undefined;
+						try {
+							const loaded = await runMenuOperation(
+								ctx,
+								"Checking usage limit resets…",
+								controller.signal,
+								async (signal) => {
+									const expectedModel = modelIdentity(ctx.model);
+									const auth = await awaitWithDeadline(
+										resolveCodexResetAuth(ctx, undefined, credentialReader),
+										signal,
+										DEFAULT_TIMEOUT_MS,
+										"resolving current Codex reset authentication",
+									);
+									let availability: CodexResetAvailability;
+									try {
+										availability = await listCodexResetCredits(auth, signal, DEFAULT_TIMEOUT_MS);
+									} catch (error) {
+										if (isAbortError(error) || summaryCount === undefined || summaryCount <= 0) {
+											throw error;
+										}
+										availability = {
+											availableCount: summaryCount,
+											options: [genericCodexResetOption()],
+										};
+									}
+									const revalidated = await awaitWithDeadline(
+										resolveCodexResetAuth(ctx, undefined, credentialReader),
+										signal,
+										DEFAULT_TIMEOUT_MS,
+										"revalidating current Codex reset authentication",
+									);
+									if (
+										modelIdentity(ctx.model) !== expectedModel ||
+										revalidated.fingerprint !== auth.fingerprint
+									) {
+										throw new Error(
+											"The active Codex model or account changed while loading usage limit resets.",
+										);
+									}
+									return { availability, auth, expectedModel };
+								},
+							);
+							if (!loaded) return { kind: "stay" };
+							resetAvailability = loaded.availability;
+							resetAuthFingerprint = loaded.auth.fingerprint;
+							resetModelIdentity = loaded.expectedModel;
+							selectedReset = undefined;
+							redemptionId = undefined;
+							resetOutcome = undefined;
+							resetFailure = undefined;
+							return {
+								kind: "to",
+								screen: loaded.availability.availableCount > 0 ? "reset-picker" : "reset-result",
+							};
+						} catch (error) {
+							if (isAbortError(error) || isStaleExtensionContextError(error)) {
+								return { kind: "stay" };
+							}
+							ctx.ui.notify(`Couldn't load usage limit resets: ${errorMessage(error)}`, "error");
+							return { kind: "stay" };
+						}
+					},
+					"select-reset": ({ itemId }) => {
+						const index = Number(itemId.replace(/^reset-/u, ""));
+						const option = Number.isSafeInteger(index)
+							? resetAvailability?.options[index]
+							: undefined;
+						if (!option) return { kind: "rejected" };
+						selectedReset = option;
+						redemptionId = undefined;
+						resetFailure = undefined;
+						return { kind: "to", screen: "reset-confirm" };
+					},
+					"cancel-reset": () => ({ kind: "back" }),
+					"consume-reset": async () => {
+						if (!selectedReset || !resetAuthFingerprint || !resetModelIdentity) {
+							return { kind: "rejected" };
+						}
+						try {
+							redemptionId ??= createRedemptionId();
+							const attemptId = redemptionId;
+							const option = selectedReset;
+							const expectedFingerprint = resetAuthFingerprint;
+							const expectedModel = resetModelIdentity;
+							const result = await runMenuOperation(
+								ctx,
+								"Resetting your usage…",
+								controller.signal,
+								async (signal) => {
+									const auth = await awaitWithDeadline(
+										resolveCodexResetAuth(ctx, undefined, credentialReader),
+										signal,
+										DEFAULT_TIMEOUT_MS,
+										"revalidating current Codex reset authentication",
+									);
+									if (
+										modelIdentity(ctx.model) !== expectedModel ||
+										auth.fingerprint !== expectedFingerprint
+									) {
+										throw new Error(
+											"The active Codex model or account changed; the reset was not used.",
+										);
+									}
+									const outcome = await consumeCodexResetCredit(
+										auth,
+										option,
+										attemptId,
+										signal,
+										DEFAULT_TIMEOUT_MS,
+									);
+									invalidateProviderState("openai-codex");
+									const model = ctx.model;
+									if (modelIdentity(model) !== expectedModel) return { outcome };
+									const refreshed = await queryCurrentState(ctx, model, true, signal);
+									const stable = await outcomeStillCurrent(
+										ctx,
+										model,
+										menuGeneration,
+										refreshed,
+										signal,
+									);
+									return stable ? { outcome, refreshed, model } : { outcome };
+								},
+								false,
+							);
+							if (!result) return { kind: "close" };
+							resetOutcome = result.outcome;
+							resetFailure = undefined;
+							if (result.refreshed && result.model) {
+								stableCurrent = { outcome: result.refreshed, model: result.model };
+								current = result.refreshed;
+								visibleStates = [current.state];
+								publishStableCurrent(ctx, stableCurrent);
+							}
+							return { kind: "to", screen: "reset-result" };
+						} catch (error) {
+							if (isAbortError(error) || isStaleExtensionContextError(error)) {
+								return { kind: "close" };
+							}
+							resetFailure = `Couldn't reset usage: ${errorMessage(error)}. Try again with the same request.`;
+							return { kind: "to", screen: "reset-error" };
+						}
+					},
+					"back-to-usage": () => ({ kind: "to", screen: "main" }),
+					"back-to-resets": () => {
+						redemptionId = undefined;
+						resetFailure = undefined;
+						return { kind: "to", screen: "reset-picker" };
+					},
 					refresh: async () => {
 						const refreshed = await queryStableCurrent(
 							ctx,
@@ -633,6 +913,11 @@ export default function usageExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
+		statusGeneration += 1;
+		clearStatusTimer();
+		for (const controller of activeControllers) controller.abort();
+		activeControllers.clear();
+		statusController = undefined;
 		sessionActive = true;
 		startStatusRefresh(ctx, ctx.model, false);
 	});

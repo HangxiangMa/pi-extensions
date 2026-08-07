@@ -9,6 +9,7 @@
 - Opens one interactive `/usage` menu with current state and next actions.
 - Automatically queries the selected model provider and active runtime account.
 - Supports OpenAI Codex subscription windows, resets, credits, and model-specific buckets.
+- Redeems earned Codex usage-limit resets for the active, matching Pi OAuth account with fresh availability, explicit confirmation, and idempotent retry.
 - Supports GitHub Copilot AI Credits, legacy premium requests, Free chat quota, additional usage, percentage, and reset time.
 - Supports OpenRouter per-key credit limits plus daily, weekly, monthly, and all-time spend.
 - Provides explicit refresh, another-provider, and all-configured-provider actions.
@@ -51,6 +52,7 @@ with these actions:
 
 ```text
 Refresh current usage
+Redeem usage limit reset…   # Current Codex OAuth accounts only
 View another configured provider…
 View all configured providers…
 Close
@@ -62,17 +64,34 @@ and closes the root menu. Print and JSON modes reject `/usage` observably becaus
 interactive flow. The cancellable live-query progress view remains extension-owned because it streams
 provider work and supports in-flight abort rather than presenting a standard menu screen.
 
+For the current OpenAI Codex provider, **Redeem usage limit reset…** checks fresh earned-reset
+details, lets you select a reset when details are available, and shows the exact reset before asking
+for confirmation. **No, go back** is the safe default and cancellation before confirmation sends no
+mutation. After confirmation, the reset operation cannot be cancelled from its progress view; session
+replacement or shutdown still aborts owned work. A transport failure offers **Try again** with the
+same redemption request ID so the backend can treat an uncertain retry idempotently. Successful,
+already-completed, not-needed, and no-credit outcomes are reported separately, then usage and the
+statusline are refreshed for the still-current account.
+
 ## 📋 Provider semantics
 
 ### OpenAI Codex
 
 - Provider ID: `openai-codex`
 - Semantics: ChatGPT consumer subscription limits
-- Source: the Codex usage endpoint using Pi's resolved runtime authorization
+- Source: the Codex usage and earned-reset endpoints using Pi's resolved runtime authorization
 - Displayed data: returned duration-based windows, resets, credits, earned usage-limit resets, and additional model buckets
+- Reset mutation: `POST /wham/rate-limit-reset-credits/consume` with a unique redemption request ID and, when available, the selected opaque credit ID
 - Statusline examples: `codex 59% 5h 61% wk` or `codex spark 100% 5h`
 
 The statusline selects a returned bucket that matches the current Codex model when one is available. Unlike `pi-codex-usage`, this successor intentionally has no Codex CLI fallback because the CLI may be logged into a different account than Pi's active runtime account.
+
+Reset redemption is available only when Codex is the current provider and Pi's freshly resolved access
+token exactly matches its stored OpenAI Codex OAuth credential. `pi-usage` forwards only the bearer
+authorization and matching `chatgpt-account-id` to the official ChatGPT origin. API-key credentials,
+configured-but-not-current Codex accounts, account changes during the flow, and custom/proxy origins
+fail before mutation. Backend-provided titles and descriptions are sanitized for terminal display;
+opaque credit and account IDs are never shown or persisted by the extension.
 
 ### GitHub Copilot
 
@@ -127,7 +146,8 @@ Behavior changes:
 ## 🚧 Limitations
 
 - Only providers with a meaningful usage source and verifiable Pi runtime auth are supported.
-- GitHub Copilot quota uses an undocumented GitHub endpoint that may change without notice.
+- GitHub Copilot quota and OpenAI Codex reset redemption use undocumented provider endpoints that may change without notice.
+- Codex reset redemption requires a current ChatGPT OAuth login created through Pi; Codex API keys cannot redeem earned subscription resets.
 - Credentials resolved for custom provider base URLs are never forwarded to the providers' official usage endpoints; effective auth origin validation requires Pi 0.81.0 or newer.
 - Provider reports are snapshots and may themselves be delayed by the provider.
 - OpenRouter successful inference responses do not expose proactive request-rate counters; `/usage` reports the documented per-key credit/spend fields instead.
@@ -141,7 +161,8 @@ packages/pi-usage/
 ├── src/
 │   ├── index.ts       # Pi package entrypoint and helper export barrel
 │   ├── usage.ts       # Menu, cache, and lifecycle orchestration
-│   ├── query.ts       # Runtime auth resolution and provider queries
+│   ├── query.ts       # Runtime auth resolution and bounded provider queries
+│   ├── codex-resets.ts # Codex reset auth, API contracts, and normalization
 │   ├── format.ts      # Provider-aware notifications and statusline text
 │   ├── core.ts        # Cache, concurrency, fingerprint, and redaction helpers
 │   ├── providers/     # Codex, GitHub Copilot, and OpenRouter normalization adapters
