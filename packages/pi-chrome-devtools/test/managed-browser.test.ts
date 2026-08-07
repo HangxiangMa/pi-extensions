@@ -48,7 +48,12 @@ function resetRuntime(overrides: Partial<typeof state> = {}) {
 	});
 }
 
-function successfulOperations(options: { portAvailable?: boolean } = {}) {
+function successfulOperations(
+	options: {
+		portAvailable?: boolean | (() => boolean);
+		fetch?: (input: string) => Promise<Response>;
+	} = {},
+) {
 	const child = new FakeChildProcess();
 	const calls = {
 		spawn: [] as Array<{ executable: string; args: string[]; shell: boolean | undefined }>,
@@ -64,7 +69,9 @@ function successfulOperations(options: { portAvailable?: boolean } = {}) {
 			calls.rm.push(target);
 		},
 		fetch: async (input) => {
-			calls.fetch.push(String(input));
+			const url = String(input);
+			calls.fetch.push(url);
+			if (options.fetch) return options.fetch(url);
 			return new Response(JSON.stringify({ Browser: "Chrome/149" }), {
 				status: 200,
 				headers: { "content-type": "application/json" },
@@ -74,7 +81,10 @@ function successfulOperations(options: { portAvailable?: boolean } = {}) {
 			calls.version.push(executable);
 			return "Google Chrome for Testing 149.0.0.0";
 		},
-		isPortAvailable: async () => options.portAvailable ?? true,
+		isPortAvailable: async () =>
+			typeof options.portAvailable === "function"
+				? options.portAvailable()
+				: (options.portAvailable ?? true),
 		sleep: async () => undefined,
 		spawn: (executable, args, spawnOptions) => {
 			calls.spawn.push({ executable, args, shell: spawnOptions.shell });
@@ -176,6 +186,63 @@ test("extension launch rejects remote, disabled, missing, unsupported, and occup
 		assert.equal(occupied.calls.spawn.length, 0);
 	} finally {
 		occupied.restore();
+	}
+});
+
+test("a ready extension browser on an explicit port is reused without rechecking its port", async () => {
+	resetRuntime({ portConfigured: true });
+	let portChecks = 0;
+	const { calls, restore } = successfulOperations({
+		portAvailable: () => {
+			portChecks += 1;
+			return portChecks === 1;
+		},
+	});
+	try {
+		await ensureDevToolsEndpoint();
+		await ensureDevToolsEndpoint();
+		assert.equal(portChecks, 1);
+		assert.equal(calls.spawn.length, 1);
+	} finally {
+		await shutdownManagedBrowser();
+		restore();
+	}
+});
+
+test("an in-flight extension launch owns its explicit port for concurrent callers", async () => {
+	resetRuntime({ portConfigured: true });
+	let portChecks = 0;
+	let signalReadinessStarted: (() => void) | undefined;
+	const readinessStarted = new Promise<void>((resolve) => {
+		signalReadinessStarted = resolve;
+	});
+	let releaseReadiness: (() => void) | undefined;
+	const readinessBlocked = new Promise<void>((resolve) => {
+		releaseReadiness = resolve;
+	});
+	const { calls, restore } = successfulOperations({
+		portAvailable: () => {
+			portChecks += 1;
+			return portChecks === 1;
+		},
+		fetch: async () => {
+			signalReadinessStarted?.();
+			await readinessBlocked;
+			return new Response(JSON.stringify({ Browser: "Chrome/149" }), { status: 200 });
+		},
+	});
+	try {
+		const first = ensureDevToolsEndpoint();
+		await readinessStarted;
+		const launches = Promise.all([first, ensureDevToolsEndpoint()]);
+		releaseReadiness?.();
+		await launches;
+		assert.equal(portChecks, 1);
+		assert.equal(calls.spawn.length, 1);
+	} finally {
+		releaseReadiness?.();
+		await shutdownManagedBrowser();
+		restore();
 	}
 });
 

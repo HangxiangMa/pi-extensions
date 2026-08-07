@@ -71,10 +71,7 @@ function normalizePathForComparison(value: string) {
 
 export async function ensureDevToolsEndpoint(waitMs = DEFAULT_ENDPOINT_WAIT_MS) {
 	if (extensionsConfigured()) {
-		const generation = state.sessionGeneration;
-		const signal = state.sessionController.signal;
-		await validateExtensionLaunchMode(generation, signal);
-		throwIfBrowserLaunchCancelled(generation, signal);
+		validateExtensionLaunchMode();
 		await ensureManagedBrowserLaunched(waitMs);
 		return;
 	}
@@ -99,7 +96,7 @@ export async function ensureDevToolsEndpoint(waitMs = DEFAULT_ENDPOINT_WAIT_MS) 
 	}
 }
 
-async function validateExtensionLaunchMode(generation: number, signal: AbortSignal) {
+function validateExtensionLaunchMode() {
 	if (!isLocalDevToolsHost(state.host)) {
 		throw new DevToolsEndpointError(
 			"Unpacked extensions require a local extension-owned managed browser; remote CDP endpoints cannot be modified.",
@@ -115,6 +112,32 @@ async function validateExtensionLaunchMode(generation: number, signal: AbortSign
 			"Unpacked extensions require browser.executablePath for Chrome for Testing or Chromium in pi-chrome-devtools.json.",
 		);
 	}
+}
+
+async function ensureManagedBrowserLaunched(waitMs: number) {
+	if (state.launchPromise) return state.launchPromise;
+	if (state.managedBrowser && !state.managedBrowser.exited && state.managedBrowser.ready) return;
+	const generation = state.sessionGeneration;
+	const signal = state.sessionController.signal;
+	throwIfBrowserLaunchCancelled(generation, signal);
+
+	const launchPromise = prepareManagedBrowserLaunch(waitMs, generation, signal);
+	const wrappedPromise = launchPromise.finally(() => {
+		if (state.launchPromise === wrappedPromise) state.launchPromise = undefined;
+	});
+	state.launchPromise = wrappedPromise;
+	return wrappedPromise;
+}
+
+async function prepareManagedBrowserLaunch(
+	waitMs: number,
+	generation: number,
+	signal: AbortSignal,
+) {
+	if (state.managedBrowser) {
+		await shutdownManagedBrowser(state.managedBrowser, { awaitLaunch: false });
+		throwIfBrowserLaunchCancelled(generation, signal);
+	}
 	if (state.portConfigured) {
 		const available = await browserManagerOperations.isPortAvailable(state.host, state.port);
 		throwIfBrowserLaunchCancelled(generation, signal);
@@ -124,24 +147,7 @@ async function validateExtensionLaunchMode(generation: number, signal: AbortSign
 			);
 		}
 	}
-}
-
-async function ensureManagedBrowserLaunched(waitMs: number) {
-	if (state.launchPromise) return state.launchPromise;
-	if (state.managedBrowser && !state.managedBrowser.exited && state.managedBrowser.ready) return;
-	if (state.managedBrowser) {
-		await shutdownManagedBrowser(state.managedBrowser, { awaitLaunch: false });
-	}
-	const generation = state.sessionGeneration;
-	const signal = state.sessionController.signal;
-	throwIfBrowserLaunchCancelled(generation, signal);
-
-	const launchPromise = launchManagedBrowser(waitMs, generation, signal);
-	const wrappedPromise = launchPromise.finally(() => {
-		if (state.launchPromise === wrappedPromise) state.launchPromise = undefined;
-	});
-	state.launchPromise = wrappedPromise;
-	return wrappedPromise;
+	return launchManagedBrowser(waitMs, generation, signal);
 }
 
 async function launchManagedBrowser(waitMs: number, generation: number, signal: AbortSignal) {
