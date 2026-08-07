@@ -1,3 +1,17 @@
+declare module "sodium-universal" {
+	interface SodiumUniversal {
+		crypto_sign_BYTES: number;
+		crypto_sign_detached(signature: Uint8Array, message: Uint8Array, secretKey: Uint8Array): void;
+		crypto_sign_verify_detached(
+			signature: Uint8Array,
+			message: Uint8Array,
+			publicKey: Uint8Array,
+		): boolean;
+	}
+	const sodium: SodiumUniversal;
+	export default sodium;
+}
+
 declare module "hyperdht" {
 	export interface HyperDhtKeyPair {
 		publicKey: Buffer;

@@ -14,7 +14,9 @@ function snapshot(overrides: Partial<ChatSnapshot> = {}): ChatSnapshot {
 		state: "connected",
 		room,
 		localLabel: "Me~AAAA-BBBB-CCCC",
-		peers: [],
+		participants: [],
+		directNeighbors: 0,
+		participantCatalogFull: false,
 		transcript: [],
 		unread: 0,
 		composerOpen: false,
@@ -40,7 +42,10 @@ test("sanitizes terminal and bidi controls before line handling", () => {
 test("privacy-safe widget hides message text by default and bounds every line", () => {
 	const state = snapshot({
 		unread: 2,
-		peers: [{ publicKey: "1", label: "Other~AAAA-BBBB-CCCC", nickname: "Other", muted: false }],
+		participants: [
+			{ publicKey: "1", label: "Other~AAAA-BBBB-CCCC", nickname: "Other", muted: false },
+		],
+		directNeighbors: 1,
 		transcript: [
 			{
 				id: "1",
@@ -84,7 +89,10 @@ test("room dock keeps status, bounded recent messages, and the real input target
 			) => string[]
 		)(state, "dock", width, theme, rows);
 	const state = snapshot({
-		peers: [{ publicKey: "1", label: "Other~AAAA-BBBB-CCCC", nickname: "Other", muted: false }],
+		participants: [
+			{ publicKey: "1", label: "Other~AAAA-BBBB-CCCC", nickname: "Other", muted: false },
+		],
+		directNeighbors: 1,
 		transcript,
 	});
 	const wide = renderDock(state, 64, 30);
@@ -128,22 +136,23 @@ test("room dock distinguishes joining, waiting, and degraded partial connectivit
 	);
 	assert.match(joining.join("\n"), /joining/u);
 	const waiting = renderChatWidget(snapshot(), "dock" as never, 48, theme as never);
-	assert.match(waiting.join("\n"), /waiting for peers/u);
+	assert.match(waiting.join("\n"), /waiting for neighbors/u);
 	const degraded = renderChatWidget(
 		snapshot({
 			state: "degraded",
-			peers: [{ publicKey: "1", label: "Other~AAAA", nickname: "Other", muted: false }],
+			participants: [{ publicKey: "1", label: "Other~AAAA", nickname: "Other", muted: false }],
+			directNeighbors: 1,
 		}),
 		"dock" as never,
 		48,
 		theme as never,
 	);
-	assert.match(degraded.join("\n"), /reconnecting[\s\S]*1 direct peer/u);
+	assert.match(degraded.join("\n"), /reconnecting[\s\S]*1 direct neighbor/u);
 });
 
 test("chat composer makes its target explicit, preserves failed drafts, and clears successful sends", () => {
 	let current = snapshot();
-	let deliveredTo = 0;
+	let relayedTo = 0;
 	let sendError: Error | undefined;
 	const sent: string[] = [];
 	const drafts: string[] = [];
@@ -160,7 +169,7 @@ test("chat composer makes its target explicit, preserves failed drafts, and clea
 		send: (text) => {
 			if (sendError) throw sendError;
 			sent.push(text);
-			return { id: "sent", deliveredTo };
+			return { id: "sent", relayedTo };
 		},
 		initialDraft: "",
 		onDraftChange: (text) => drafts.push(text),
@@ -180,10 +189,13 @@ test("chat composer makes its target explicit, preserves failed drafts, and clea
 	view.handleInput("\r");
 	assert.deepEqual(sent, []);
 	assert.equal(drafts.at(-1), "hello");
-	assert.match(view.render(48).join("\n"), /message kept/i);
+	assert.match(view.render(48).join("\n"), /message kep/i);
 
 	current = snapshot({
-		peers: [{ publicKey: "1", label: "開發者~AAAA-BBBB-CCCC", nickname: "開發者", muted: false }],
+		participants: [
+			{ publicKey: "1", label: "開發者~AAAA-BBBB-CCCC", nickname: "開發者", muted: false },
+		],
+		directNeighbors: 1,
 		transcript: [
 			{
 				id: "1",
@@ -198,14 +210,14 @@ test("chat composer makes its target explicit, preserves failed drafts, and clea
 	view.handleInput("\r");
 	assert.deepEqual(sent, ["hello"]);
 	assert.equal(drafts.at(-1), "hello");
-	assert.match(view.render(48).join("\n"), /message kept/i);
+	assert.match(view.render(48).join("\n"), /message kep/i);
 	sendError = new Error("Message is too large");
 	view.handleInput("\r");
 	assert.deepEqual(sent, ["hello"]);
 	assert.equal(drafts.at(-1), "hello");
 	assert.match(view.render(48).join("\n"), /too large/i);
 	sendError = undefined;
-	deliveredTo = 1;
+	relayedTo = 1;
 	view.handleInput("\r");
 	assert.deepEqual(sent, ["hello", "hello"]);
 	assert.equal(drafts.at(-1), "");
@@ -238,7 +250,7 @@ test("owner abort closes the composer without recording a user return", () => {
 		tui: { terminal: { rows: 20 }, requestRender() {} } as never,
 		theme: theme as never,
 		getSnapshot: () => snapshot(),
-		send: () => ({ id: "sent", deliveredTo: 0 }),
+		send: () => ({ id: "sent", relayedTo: 0 }),
 		setViewOpen: (open) => viewStates.push(open),
 		signal: controller.signal,
 		onReturnToPi: () => returnedToPi++,
@@ -258,7 +270,7 @@ test("chat composer restores retained drafts and host disposal does not record a
 		tui: { terminal: { rows: 8 }, requestRender() {} } as never,
 		theme: theme as never,
 		getSnapshot: () => snapshot(),
-		send: () => ({ id: "sent", deliveredTo: 0 }),
+		send: () => ({ id: "sent", relayedTo: 0 }),
 		initialDraft: draft,
 		onDraftChange: (text) => {
 			draft = text;

@@ -15,8 +15,8 @@ export function renderChatWidget(
 	const safeWidth = Math.max(1, width);
 	if (mode === "dock") return renderRoomDock(snapshot, safeWidth, terminalRows, theme);
 
-	const peers = snapshot.peers.length;
-	const presence = peers === 0 ? "alone" : `${peers} direct peer${peers === 1 ? "" : "s"}`;
+	const participants = snapshot.participants.length;
+	const presence = `${participants} active · ${snapshot.directNeighbors} direct neighbor${snapshot.directNeighbors === 1 ? "" : "s"}`;
 	const unread = snapshot.unread > 0 ? `${snapshot.unread} unread · ` : "";
 	const attention = snapshot.state === "degraded" ? " · reconnecting" : "";
 	const header = truncateToWidth(
@@ -42,16 +42,15 @@ function renderRoomDock(
 	terminalRows: number,
 	theme: Theme,
 ): string[] {
-	const peers = snapshot.peers.length;
-	const peerText = `${peers} direct peer${peers === 1 ? "" : "s"}`;
+	const participantText = `${snapshot.participants.length} active · ${snapshot.directNeighbors} direct neighbor${snapshot.directNeighbors === 1 ? "" : "s"}`;
 	const stateText =
 		snapshot.state === "connecting"
 			? "joining…"
 			: snapshot.state === "degraded"
-				? `reconnecting · ${peerText}`
-				: peers === 0
-					? "waiting for peers"
-					: peerText;
+				? `reconnecting · ${participantText}`
+				: snapshot.directNeighbors === 0
+					? "waiting for neighbors"
+					: participantText;
 	const unread = snapshot.unread > 0 ? ` · ${snapshot.unread} unread` : "";
 	const roomTitle = `ROOM ${sanitizeSingleLine(snapshot.room.label)}`;
 	const status = `${stateText}${unread}`;

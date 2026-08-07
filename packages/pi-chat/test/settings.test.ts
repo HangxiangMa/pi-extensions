@@ -3,7 +3,7 @@ import { chmod, lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createPrivateRoom, createPublicRoom } from "../src/protocol.js";
+import { createPrivateRoom, createPublicRoom, legacyRoomId } from "../src/protocol.js";
 import {
 	CHAT_SETTINGS_FILE,
 	type ChatResumeSettings,
@@ -110,6 +110,66 @@ test("resume updates preserve nested unknown fields and explicit clearing remove
 		const cleared = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
 		assert.equal(Object.hasOwn(cleared, "resume"), false);
 		assert.deepEqual(cleared.future, { keep: true });
+	});
+});
+
+test("v1 room ids and invites migrate in memory without side effects and preserve unknown fields", async () => {
+	await withSettings(async (path) => {
+		const publicRoom = createPublicRoom("legacy-public");
+		const privateRoom = createPrivateRoom(Buffer.alloc(32, 24));
+		const publicLegacyId = legacyRoomId(publicRoom);
+		const privateLegacyId = legacyRoomId(privateRoom);
+		assert.ok(publicLegacyId);
+		assert.ok(privateLegacyId);
+		const v1Invite = (privateRoom.invite ?? "").replace("pichat:v2:", "pichat:v1:");
+		const document = {
+			nickname: "Legacy",
+			identitySeed: Buffer.alloc(32, 25).toString("base64url"),
+			resume: {
+				rooms: [
+					{
+						id: publicLegacyId,
+						kind: "public",
+						slug: "legacy-public",
+						roomFuture: "keep-public",
+					},
+					{
+						id: privateLegacyId,
+						kind: "private",
+						invite: v1Invite,
+						roomFuture: "keep-private",
+					},
+				],
+				activeRoomId: privateLegacyId,
+				surface: "pi",
+				resumeFuture: true,
+			},
+		};
+		await updateChatSettings({ nickname: "Legacy" }, { settingsPath: path });
+		await writeFile(path, JSON.stringify(document), { mode: 0o600 });
+		const before = await readFile(path, "utf8");
+		const loaded = await readChatSettings(path);
+		assert.equal(loaded.kind, "loaded");
+		if (loaded.kind !== "loaded" || !loaded.settings.resume) return;
+		assert.deepEqual(
+			loaded.settings.resume.rooms.map(({ id }) => id),
+			[publicRoom.id, privateRoom.id],
+		);
+		assert.equal(loaded.settings.resume.activeRoomId, privateRoom.id);
+		assert.equal(await readFile(path, "utf8"), before);
+
+		await updateChatSettings({ resume: loaded.settings.resume }, { settingsPath: path });
+		const migrated = JSON.parse(await readFile(path, "utf8")) as {
+			resume: { rooms: Array<Record<string, unknown>>; resumeFuture: boolean };
+		};
+		assert.deepEqual(
+			migrated.resume.rooms.map(({ id, roomFuture }) => ({ id, roomFuture })),
+			[
+				{ id: publicRoom.id, roomFuture: "keep-public" },
+				{ id: privateRoom.id, roomFuture: "keep-private" },
+			],
+		);
+		assert.equal(migrated.resume.resumeFuture, true);
 	});
 });
 

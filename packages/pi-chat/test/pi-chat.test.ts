@@ -9,9 +9,46 @@ import {
 	createMockPi,
 } from "../../../test/support.js";
 import type { ChatTransport } from "../src/chat-session.js";
-import { createPiChatExtension } from "../src/pi-chat.js";
+import type { PublicRoomDirectory } from "../src/directory-network.js";
+import {
+	createPiChatExtension as createProductionPiChatExtension,
+	type PiChatDependencies,
+} from "../src/pi-chat.js";
 import { createPrivateRoom, createPublicRoom } from "../src/protocol.js";
+import type { PublicRoomBrowseResult } from "../src/public-room-directory.js";
 import { updateChatSettings } from "../src/settings.js";
+
+class IdleDirectory implements PublicRoomDirectory {
+	started = 0;
+	browsed = 0;
+	stopped = 0;
+	result: PublicRoomBrowseResult = { rooms: [], partial: false };
+	async start(): Promise<void> {
+		this.started += 1;
+	}
+	async browse(signal: AbortSignal): Promise<PublicRoomBrowseResult> {
+		this.browsed += 1;
+		signal.throwIfAborted();
+		return this.result;
+	}
+	async stop(): Promise<void> {
+		if (this.stopped === 0) this.stopped = 1;
+	}
+}
+
+function createPiChatExtension(dependencies: Partial<PiChatDependencies> = {}) {
+	return createProductionPiChatExtension({
+		...dependencies,
+		createDirectory: dependencies.createDirectory ?? (() => new IdleDirectory()),
+	});
+}
+
+class FailingDirectory extends IdleDirectory {
+	override async start(): Promise<void> {
+		this.started += 1;
+		throw new Error("directory bootstrap unavailable");
+	}
+}
 
 class IdleTransport implements ChatTransport {
 	started = 0;
@@ -225,6 +262,146 @@ test("direct public join creates identity only after confirmation and shutdown c
 		assert.equal(transport.stopped, 1);
 		assert.equal(ctx.widgets.get("chat"), undefined);
 		assert.equal(ctx.statuses.get("chat"), undefined);
+	});
+});
+
+test("public joins own a scoped directory advertiser while private joins do not", async () => {
+	await fixture(async (settingsPath) => {
+		await updateChatSettings(
+			{
+				nickname: "Mika",
+				identitySeed: Buffer.alloc(32, 18).toString("base64url"),
+				widgetMode: "count",
+			},
+			{ settingsPath },
+		);
+		const directory = new IdleDirectory();
+		const advertised: Array<string | undefined> = [];
+		const mock = createMockPi();
+		createPiChatExtension({
+			settingsPath,
+			createTransport: () => new IdleTransport(),
+			createDirectory: (options) => {
+				advertised.push(options.advertisedSlug);
+				return directory;
+			},
+		})(mock.pi);
+		const ctx = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			confirm: async () => true,
+			custom: async () => undefined,
+		});
+		await emit(mock, "session_start", { reason: "startup" }, ctx.ctx);
+		await mock.commands.get("chat")?.handler("#pi-dev", ctx.ctx);
+		await waitFor(() => directory.started === 1);
+		assert.deepEqual(advertised, ["pi-dev"]);
+		await emit(mock, "session_shutdown", { reason: "quit" }, ctx.ctx);
+		assert.equal(directory.stopped, 1);
+	});
+
+	await fixture(async (settingsPath) => {
+		await updateChatSettings(
+			{
+				nickname: "Mika",
+				identitySeed: Buffer.alloc(32, 19).toString("base64url"),
+				widgetMode: "count",
+			},
+			{ settingsPath },
+		);
+		let directories = 0;
+		const mock = createMockPi();
+		createPiChatExtension({
+			settingsPath,
+			createTransport: () => new IdleTransport(),
+			createDirectory: () => {
+				directories += 1;
+				return new IdleDirectory();
+			},
+		})(mock.pi);
+		const room = createPrivateRoom(Buffer.alloc(32, 20));
+		const ctx = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			select: async (_title: string, options: string[]) =>
+				options.find((option) => option.startsWith("Join once")),
+			custom: async () => undefined,
+		});
+		await emit(mock, "session_start", { reason: "startup" }, ctx.ctx);
+		await mock.commands.get("chat")?.handler(room.invite ?? "", ctx.ctx);
+		assert.equal(directories, 0);
+		await emit(mock, "session_shutdown", { reason: "quit" }, ctx.ctx);
+	});
+});
+
+test("directory startup failure cleans its resource without disconnecting public chat", async () => {
+	await fixture(async (settingsPath) => {
+		await updateChatSettings(
+			{
+				nickname: "Mika",
+				identitySeed: Buffer.alloc(32, 27).toString("base64url"),
+				widgetMode: "count",
+			},
+			{ settingsPath },
+		);
+		const transport = new IdleTransport();
+		const directory = new FailingDirectory();
+		const mock = createMockPi();
+		createPiChatExtension({
+			settingsPath,
+			createTransport: () => transport,
+			createDirectory: () => directory,
+		})(mock.pi);
+		const ctx = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			confirm: async () => true,
+			custom: async () => undefined,
+		});
+		await emit(mock, "session_start", { reason: "startup" }, ctx.ctx);
+		await mock.commands.get("chat")?.handler("#pi-dev", ctx.ctx);
+		await waitFor(() =>
+			ctx.notifications.some(({ message }) => /directory bootstrap unavailable/u.test(message)),
+		);
+		assert.equal(directory.stopped, 1);
+		assert.equal(transport.stopped, 0);
+		await emit(mock, "session_shutdown", { reason: "quit" }, ctx.ctx);
+		assert.equal(transport.stopped, 1);
+	});
+});
+
+test("disconnected room browsing stops its temporary directory after the menu closes", async () => {
+	await fixture(async (settingsPath) => {
+		const directory = new IdleDirectory();
+		directory.result = {
+			rooms: [{ slug: "pi-dev", estimatedParticipants: 2 }],
+			partial: false,
+		};
+		const mock = createMockPi();
+		createPiChatExtension({ settingsPath, createDirectory: () => directory })(mock.pi);
+		let mainOpened = false;
+		const ctx = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory);
+				if (!harness.isPiTuiKitScreen) return harness.result;
+				const rendered = harness.render().join("\n");
+				if (!mainOpened && /Browse public rooms/u.test(rendered)) {
+					mainOpened = true;
+					harness.handleInput("tui.select.confirm");
+					await harness.waitForPending();
+					return harness.result;
+				}
+				harness.handleInput("\u0003");
+				return harness.result;
+			},
+		});
+		await emit(mock, "session_start", { reason: "startup" }, ctx.ctx);
+		await mock.commands.get("chat")?.handler("", ctx.ctx);
+		assert.equal(directory.browsed, 1);
+		assert.equal(directory.stopped, 1);
+		await emit(mock, "session_shutdown", { reason: "quit" }, ctx.ctx);
 	});
 });
 

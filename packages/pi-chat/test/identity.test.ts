@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
 	createIdentity,
+	deriveScopedIdentity,
 	formatIdentityLabel,
 	identityTag,
 	normalizeNickname,
+	signIdentityPayload,
+	verifyIdentityPayload,
 } from "../src/identity.js";
 
 const SEED = Buffer.from("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "hex");
@@ -35,4 +38,20 @@ test("creates deterministic DHT identity material from a 32-byte seed", () => {
 	assert.deepEqual(first.publicKey, second.publicKey);
 	assert.equal(first.tag, second.tag);
 	assert.throws(() => createIdentity(Buffer.alloc(31)), /32-byte/u);
+});
+
+test("signs immutable payloads and derives unlinkable stable scoped identities", () => {
+	const identity = createIdentity(SEED);
+	const payload = Buffer.from("pi-chat signed payload", "utf8");
+	const signature = signIdentityPayload(identity, payload);
+	assert.equal(verifyIdentityPayload(identity.publicKey, payload, signature), true);
+	assert.equal(verifyIdentityPayload(identity.publicKey, Buffer.from("mutated"), signature), false);
+	assert.equal(verifyIdentityPayload(Buffer.alloc(32, 9), payload, signature), false);
+
+	const first = deriveScopedIdentity(identity, "directory:#pi-dev");
+	const repeated = deriveScopedIdentity(identity, "directory:#pi-dev");
+	const other = deriveScopedIdentity(identity, "directory:#typescript");
+	assert.deepEqual(first.publicKey, repeated.publicKey);
+	assert.notDeepEqual(first.publicKey, identity.publicKey);
+	assert.notDeepEqual(first.publicKey, other.publicKey);
 });

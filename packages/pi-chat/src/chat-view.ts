@@ -19,7 +19,7 @@ export interface ChatViewOptions {
 	tui: TUI;
 	theme: Theme;
 	getSnapshot(): ChatSnapshot;
-	send(text: string): { id: string; deliveredTo: number };
+	send(text: string): { id: string; relayedTo: number };
 	initialDraft?: string;
 	onDraftChange?(text: string): void;
 	setViewOpen(open: boolean): void;
@@ -72,29 +72,29 @@ export class ChatView implements Component, Focusable {
 				this.tui.requestRender();
 				return;
 			}
-			if (this.options.getSnapshot().peers.length === 0) {
+			if (this.options.getSnapshot().directNeighbors === 0) {
 				this.editor.setText(text);
 				this.messageStatus = {
 					kind: "warning",
-					text: "No direct peers — message kept. Wait for connection or Esc to return.",
+					text: "No direct neighbors — message kept. Wait for connection or Esc to return.",
 				};
 				this.tui.requestRender();
 				return;
 			}
 			try {
 				const result = this.options.send(message);
-				if (result.deliveredTo === 0) {
+				if (result.relayedTo === 0) {
 					this.editor.setText(text);
 					this.messageStatus = {
 						kind: "warning",
-						text: "No direct peers accepted it — message kept for retry.",
+						text: "No direct neighbors accepted it — message kept for retry.",
 					};
 				} else {
 					this.editor.setText("");
 					this.followBottom = true;
 					this.messageStatus = {
 						kind: "success",
-						text: `Sent to ${result.deliveredTo} direct peer${result.deliveredTo === 1 ? "" : "s"}`,
+						text: `Relayed to ${result.relayedTo} direct neighbor${result.relayedTo === 1 ? "" : "s"}`,
 					};
 				}
 			} catch (error) {
@@ -132,12 +132,12 @@ export class ChatView implements Component, Focusable {
 		this.lastViewportRows = viewportRows;
 		if (this.followBottom) this.scrollOffset = this.maxScroll();
 		this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, this.maxScroll()));
-		const peerCount = snapshot.peers.length;
+		const participantCount = snapshot.participants.length;
 		const header = truncateToWidth(
 			this.theme.fg(
 				"accent",
 				this.theme.bold(
-					`CHAT INPUT → ${sanitizeSingleLine(snapshot.room.label)} · ${peerCount === 0 ? "waiting for peers" : `${peerCount} direct peer${peerCount === 1 ? "" : "s"}`}`,
+					`CHAT INPUT → ${sanitizeSingleLine(snapshot.room.label)} · ${participantCount} active · ${snapshot.directNeighbors} direct neighbor${snapshot.directNeighbors === 1 ? "" : "s"}`,
 				),
 			),
 			safeWidth,
@@ -216,8 +216,8 @@ export class ChatView implements Component, Focusable {
 function renderTranscript(snapshot: ChatSnapshot, width: number, theme: Theme): string[] {
 	if (snapshot.transcript.length === 0) {
 		const empty =
-			snapshot.peers.length === 0
-				? "You are alone; waiting for peers."
+			snapshot.participants.length === 0
+				? "No other active participants discovered yet."
 				: "No messages yet. Start the conversation below.";
 		return wrapTextWithAnsi(theme.fg("muted", empty), width);
 	}
@@ -225,10 +225,10 @@ function renderTranscript(snapshot: ChatSnapshot, width: number, theme: Theme): 
 	for (const entry of snapshot.transcript) {
 		const label = sanitizeSingleLine(entry.label);
 		const delivery =
-			entry.author === "local" && entry.delivery === "not-delivered"
-				? " · not delivered"
-				: entry.author === "local" && entry.deliveredTo !== undefined
-					? ` · broadcast to ${entry.deliveredTo}`
+			entry.author === "local" && entry.delivery === "not-relayed"
+				? " · not relayed"
+				: entry.author === "local" && entry.relayedTo !== undefined
+					? ` · relayed to ${entry.relayedTo}`
 					: "";
 		lines.push(...wrapTextWithAnsi(theme.fg("accent", `${label}${delivery}`), width));
 		for (const rawLine of sanitizeChatText(entry.text).split("\n")) {

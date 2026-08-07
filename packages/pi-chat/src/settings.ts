@@ -4,7 +4,12 @@ import { chmod, lstat, mkdir, open, rename, rm, writeFile } from "node:fs/promis
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { normalizeNickname } from "./identity.js";
-import { createPublicRoom, parseInvite, type RoomDescriptor } from "./protocol.js";
+import {
+	createPublicRoom,
+	isCompatibleRoomId,
+	parseInvite,
+	type RoomDescriptor,
+} from "./protocol.js";
 
 export const CHAT_SETTINGS_FILE = "pi-chat.json";
 const MAX_SETTINGS_BYTES = 64 * 1024;
@@ -258,14 +263,21 @@ function normalizeResumeSettings(value: unknown): ChatResumeSettings | undefined
 	if (value.surface !== "chat" && value.surface !== "pi") return undefined;
 	const rooms: RememberedRoom[] = [];
 	const ids = new Set<string>();
+	let activeRoomId: string | undefined;
 	for (const candidate of value.rooms) {
 		const room = normalizeRememberedRoom(candidate);
 		if (!room || ids.has(room.id)) return undefined;
 		ids.add(room.id);
 		rooms.push(room);
+		if (
+			isRecord(candidate) &&
+			(candidate.id === value.activeRoomId || room.id === value.activeRoomId)
+		) {
+			activeRoomId = room.id;
+		}
 	}
-	if (!ids.has(value.activeRoomId)) return undefined;
-	return { rooms, activeRoomId: value.activeRoomId, surface: value.surface };
+	if (!activeRoomId || !ids.has(activeRoomId)) return undefined;
+	return { rooms, activeRoomId, surface: value.surface };
 }
 
 function normalizeRememberedRoom(value: unknown): RememberedRoom | undefined {
@@ -277,7 +289,9 @@ function normalizeRememberedRoom(value: unknown): RememberedRoom | undefined {
 			!Object.hasOwn(value, "invite")
 		) {
 			const room = createPublicRoom(value.slug);
-			return room.id === value.id ? { id: room.id, kind: "public", slug: value.slug } : undefined;
+			return isCompatibleRoomId(room, value.id)
+				? { id: room.id, kind: "public", slug: value.slug }
+				: undefined;
 		}
 		if (
 			value.kind === "private" &&
@@ -285,7 +299,7 @@ function normalizeRememberedRoom(value: unknown): RememberedRoom | undefined {
 			!Object.hasOwn(value, "slug")
 		) {
 			const room = parseInvite(value.invite);
-			return room.id === value.id
+			return isCompatibleRoomId(room, value.id)
 				? { id: room.id, kind: "private", invite: value.invite }
 				: undefined;
 		}
@@ -300,9 +314,8 @@ function mergeResumeDocument(current: unknown, next: ChatResumeSettings): Settin
 	const existingRooms = new Map<string, SettingsDocument>();
 	if (Array.isArray(currentResume.rooms)) {
 		for (const candidate of currentResume.rooms) {
-			if (isRecord(candidate) && typeof candidate.id === "string") {
-				existingRooms.set(candidate.id, candidate);
-			}
+			const normalized = normalizeRememberedRoom(candidate);
+			if (normalized && isRecord(candidate)) existingRooms.set(normalized.id, candidate);
 		}
 	}
 	return {
