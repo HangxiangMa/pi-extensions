@@ -12,36 +12,10 @@ check:
 format:
     npm run format
 
-# Update dependency manifests and regenerate the lockfile without trusting the current install
+# Update dependency manifests and lockfile
 update-lock:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    shopt -s nullglob
-    paths=(package.json package-lock.json packages/*/package.json)
-    backup="$(mktemp -d "${TMPDIR:-/tmp}/pi-extensions-update-lock.XXXXXX")"
-    trap 'status=$?; trap - EXIT HUP INT TERM; rm -rf -- "$backup"; exit "$status"' EXIT HUP INT TERM
-    for path in "${paths[@]}"; do
-        mkdir -p -- "$backup/$(dirname "$path")"
-        cp -p -- "$path" "$backup/$path"
-    done
-    rollback() {
-        status=$?
-        trap - EXIT HUP INT TERM
-        for path in "${paths[@]}"; do
-            cp -p -- "$backup/$path" "$path"
-        done
-        rm -rf -- "$backup"
-        printf 'dependency update failed; restored package manifests and lockfile\n' >&2
-        exit "$status"
-    }
-    trap rollback EXIT
-    trap 'exit 129' HUP
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
     npm exec -- npm-check-updates --workspaces --root -u
     npm install --package-lock-only --ignore-scripts
-    trap - EXIT HUP INT TERM
-    rm -rf -- "$backup"
 
 # Verify dependency updates from the exact clean lockfile installation
 verify-update:
