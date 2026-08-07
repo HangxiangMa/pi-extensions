@@ -121,6 +121,10 @@ async function launchBrowserCandidate(candidate: BrowserCandidate, waitMs: numbe
 		const args = [
 			`--remote-debugging-port=${portArgument}`,
 			`--user-data-dir=${userDataDir}`,
+			// Chrome 120+ de-elevates when launched from an elevated process on Windows: the
+			// spawned process relaunches a de-elevated child and exits immediately, which the
+			// exit watchdog misreads as a failed launch. No-op in non-elevated contexts.
+			"--do-not-de-elevate",
 			"--no-first-run",
 			"--no-default-browser-check",
 			"about:blank",
