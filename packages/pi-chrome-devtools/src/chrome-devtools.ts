@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { shutdownManagedBrowser } from "./browser-manager.js";
-import { state } from "./runtime.js";
+import { applyRuntimeBrowserSettings, state } from "./runtime.js";
 import { loadSettings } from "./settings.js";
 import {
 	allChromeDevtoolsTools,
@@ -8,6 +8,7 @@ import {
 	buildCommandGuide,
 	buildQuickstartMessage,
 	buildToolStatusMessage,
+	sanitizeChromeDevtoolsDisplay,
 	showToolSelector,
 	updateChromeDevtoolsTools,
 	waitForChromeDevtoolsSettings,
@@ -63,16 +64,20 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 		state.shuttingDown = false;
 		state.settingsNotice = undefined;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
-		const settings = await loadSettings();
+		await shutdownManagedBrowser();
 		if (generation !== state.sessionGeneration) return;
+		state.activePageId = undefined;
+		state.lastLaunchAttempt = undefined;
+		const projectTrusted = ctx.isProjectTrusted();
+		const settings = await loadSettings({ cwd: ctx.cwd, projectTrusted });
+		if (generation !== state.sessionGeneration) return;
+		applyRuntimeBrowserSettings(settings.effectiveBrowser, settings.paths, projectTrusted);
 		state.settingsNotice = settings.notice;
-		if (settings.notice) ctx.ui.notify(settings.notice, "warning");
-		if (settings.kind === "loaded") {
-			applyChromeDevtoolsTools(pi, settings.settings.tools);
-			return;
+		for (const warning of settings.warnings) {
+			ctx.ui.notify(sanitizeChromeDevtoolsDisplay(warning), "warning");
 		}
-		if (settings.kind === "invalid") {
-			ctx.ui.notify(`Chrome DevTools settings ignored: ${settings.reason}`, "warning");
+		if (settings.kind === "loaded" && settings.settings.tools) {
+			applyChromeDevtoolsTools(pi, settings.settings.tools);
 		}
 	});
 
@@ -231,4 +236,7 @@ export {
 	selectAllowedRoot,
 } from "./screenshot.js";
 export { normalizeChromeDevtoolsSettings } from "./settings.js";
-export { orderedChromeDevtoolsTools } from "./tool-selector.js";
+export {
+	orderedChromeDevtoolsTools,
+	sanitizeChromeDevtoolsDisplay,
+} from "./tool-selector.js";

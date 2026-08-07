@@ -30,6 +30,7 @@ import chromeDevtools, {
 	parseConfiguredPort,
 	quoteCommandPart,
 	resolveScreenshotPath,
+	sanitizeChromeDevtoolsDisplay,
 	selectAllowedRoot,
 } from "../src/chrome-devtools.js";
 import { saveSettings } from "../src/settings.js";
@@ -339,6 +340,14 @@ test("chrome-devtools serializes rapid tool saves in invocation order", async ()
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool"]);
 		assert.deepEqual(readSettings(agentDir, NEW_SETTINGS_FILE).tools, []);
 	});
+});
+
+test("status display strips terminal controls and remains bounded", () => {
+	assert.equal(
+		sanitizeChromeDevtoolsDisplay("safe\u001b]8;;https://evil\u0007link\u001b]8;;\u0007"),
+		"safelink",
+	);
+	assert.equal(sanitizeChromeDevtoolsDisplay("12345", 4), "123…");
 });
 
 test("endpoint helpers normalize ports, hosts, and launch quoting", () => {
