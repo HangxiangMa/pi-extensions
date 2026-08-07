@@ -12,8 +12,11 @@ check:
 format:
     npm run format
 
+_require-clean-worktree:
+    @[[ -z "$(git status --porcelain)" ]] || { printf 'dependency updates require a clean worktree\n' >&2; exit 2; }
+
 # Update dependency manifests and lockfile
-update-lock:
+update-lock: _require-clean-worktree
     npm exec -- npm-check-updates --workspaces --root -u
     npm install --package-lock-only --ignore-scripts
 
