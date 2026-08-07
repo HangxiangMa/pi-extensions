@@ -5,9 +5,11 @@ import {
 	type InputScreen,
 	type MenuCloseReason,
 	type ReviewScreen,
+	type RunConfirmationResult,
 	type RunCustomInteractionResult,
 	type RunMenuResult,
 	type RunTaskResult,
+	runConfirmation,
 	runCustomInteraction,
 	runMenu,
 	runTask,
@@ -147,6 +149,23 @@ const commandTask: Promise<RunTaskResult<number>> = runTask(commandContext, {
 	},
 });
 void commandTask;
+
+const commandConfirmation: Promise<RunConfirmationResult> = runConfirmation(commandContext, {
+	title: "Confirm command",
+	message: "Continue?",
+	onUnsupportedMode: async (ctx) => ctx.waitForIdle(),
+});
+void commandConfirmation;
+
+void runConfirmation(lifecycleContext, {
+	title: "Confirm lifecycle",
+	message: "Continue?",
+	onUnsupportedMode: async (ctx) => {
+		ctx.isIdle();
+		// @ts-expect-error Lifecycle confirmations must not gain command-only session methods.
+		await ctx.waitForIdle();
+	},
+});
 
 const commandInteraction: Promise<RunCustomInteractionResult<string>> = runCustomInteraction(
 	commandContext,

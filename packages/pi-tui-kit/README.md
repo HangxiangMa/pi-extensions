@@ -161,6 +161,35 @@ if (result.kind === "completed") ctx.ui.notify("Refreshed", "info");
 A task must honor its supplied signal. The runner aborts and drains owned work before returning; it
 does not hide an uncooperative task behind an arbitrary timeout.
 
+For a confirmation nested inside a larger flow, use `runConfirmation()` when Escape must return to
+the caller while Ctrl+C closes the whole TUI interaction:
+
+```ts
+import { runConfirmation } from "@narumitw/pi-tui-kit";
+
+const confirmation = await runConfirmation(ctx, {
+  title: "Delete local data?",
+  message: "This cannot be undone.",
+  confirmLabel: "Delete",
+  cancelLabel: "Keep data",
+  signal: currentSessionSignal(),
+  isCurrent: () => generation === currentGeneration(),
+  onError: (_ctx, error) => ctx.ui.notify(formatError(error), "error"),
+});
+
+if (confirmation.kind === "confirmed") await deleteDomainData();
+else if (confirmation.kind === "closed" && confirmation.reason === "close") return;
+```
+
+TUI confirmation uses the standard bounded actions presentation: selecting the cancel row or pressing
+Escape returns `{ kind: "closed", reason: "back" }`, while Ctrl+C returns the same result with reason
+`"close"`. RPC uses one signal-aware `select()` request with explicit confirm and cancel rows;
+explicit cancel and protocol cancellation deterministically map to Back because Pi RPC does not expose
+a separate Ctrl+C dialog outcome. Print and JSON return `unsupported`. Owner abort, session
+replacement, external TUI disposal, and failures remain distinct `stale` or `error` results. The Kit
+owns only this interaction lifecycle—the caller performs every confirmed side effect and must abort
+its owner signal on replacement or shutdown.
+
 For a specialized custom component that does not belong in the declarative screen union, use
 `runCustomInteraction()`. It supplies an interaction-owned signal, classifies owner replacement and
 external component disposal as stale, disposes exactly once, and drains optional `waitForPending()`
@@ -529,6 +558,8 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `defineMenu()` — validates and returns a typed menu definition.
 - `runMenu()` — runs the definition in the current Pi mode and preserves root Back versus Close.
 - `runTask()` — runs typed abort-aware work with a cancellable TUI loader and direct non-TUI fallback.
+- `runConfirmation()` — preserves Confirmed, Back, Close, Stale, Unsupported, and Error for one
+  standalone confirmation without owning the confirmed side effect.
 - `runCustomInteraction()` — owns cancellation, stale checks, exactly-once disposal, optional pending
   work draining, and typed results around one extension-owned custom TUI component.
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.
@@ -536,9 +567,10 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - exported screen, item, action, transition, runtime option, `MenuCloseReason`, and result types.
 - `@narumitw/pi-tui-kit/testing` — separate subpath for `createTuiHarness()`, `createRpcHarness()`,
   strict scripts, and their public testing types; it is not re-exported from the production root.
-- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`6`). Version 6 adds the
-  read-only `browse` screen and `runCustomInteraction()`; version-5 definitions remain valid on the
-  version-6 runtime, including adaptive review and mandatory Back/Close reasons.
+- `PI_EXTENSION_MENU_API_VERSION` — current declarative API version (`7`). Version 7 adds
+  `runConfirmation()`; version-6 definitions remain valid on the version-7 runtime, including
+  read-only browse, custom-interaction lifecycle ownership, adaptive review, and mandatory Back/Close
+  reasons.
 
 ## 🗂️ Package layout
 
@@ -546,6 +578,7 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `src/components/` — internal TUI input, review, list, settings, and rendering adapters
 - `src/testing/` — supported TUI/RPC test drivers exported only through the `/testing` subpath
 - `src/task.ts` — standalone and menu-shared task lifecycle orchestration
+- `src/confirmation.ts` — standalone confirmation mode adaptation and lifecycle results
 - `src/custom-interaction.ts` — lifecycle ownership for specialized public custom components
 - `dist/` — generated ESM and declarations included in the npm package
 - `test/` — contract, renderer, navigation, lifecycle, and public testing-entrypoint coverage
