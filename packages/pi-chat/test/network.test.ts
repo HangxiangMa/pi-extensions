@@ -152,22 +152,22 @@ test("ten-peer sparse overlay relays once through a non-origin intermediate", {
 		const indirect = relayPath.target;
 		assert.ok(indirect, "the sender must have an authenticated target across a two-hop path");
 		sender.session.send("through sparse overlay");
+		const deliveryCounts = () =>
+			sessions.map(
+				({ session }) =>
+					session.snapshot().transcript.filter(({ text }) => text === "through sparse overlay")
+						.length,
+			);
 		await waitFor(
-			() =>
-				sessions.every(
-					({ session }) =>
-						session.snapshot().transcript.filter(({ text }) => text === "through sparse overlay")
-							.length === 1,
-				),
-			() =>
-				sessions
-					.map(
-						({ session }) =>
-							session.snapshot().transcript.filter(({ text }) => text === "through sparse overlay")
-								.length,
-					)
-					.join(","),
+			() => deliveryCounts().every((count) => count === 1),
+			() => deliveryCounts().join(","),
 			8_000,
+		);
+		// Keep the fully ready overlay alive for slower alternate-path copies to arrive.
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		assert.deepEqual(
+			deliveryCounts(),
+			Array.from({ length: sessions.length }, () => 1),
 		);
 	} finally {
 		await Promise.allSettled(sessions.map(({ session }) => session.leave()));
