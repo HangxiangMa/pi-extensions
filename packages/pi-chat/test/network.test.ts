@@ -97,14 +97,32 @@ test("ten-peer sparse overlay relays once through a non-origin intermediate", {
 	});
 	try {
 		await Promise.all(sessions.map(({ session }) => session.start()));
+		const sender = sessions[0];
+		assert.ok(sender);
+		const findTwoHopTarget = () => {
+			const senderNeighbors = sender.transport.connectedPeerKeys;
+			if (sender.session.snapshot().directNeighbors !== senderNeighbors.length) return undefined;
+			return sessions.slice(1).find(({ identity, session, transport }) => {
+				if (senderNeighbors.includes(identity.publicKey.toString("hex"))) return false;
+				const candidateNeighbors = transport.connectedPeerKeys;
+				return (
+					session.snapshot().directNeighbors === candidateNeighbors.length &&
+					candidateNeighbors.some((key) => senderNeighbors.includes(key))
+				);
+			});
+		};
+		const relayPath = { target: undefined as ReturnType<typeof findTwoHopTarget> };
 		await waitFor(
-			() => sessions.every(({ session }) => session.snapshot().participants.length === 9),
+			() => {
+				relayPath.target = findTwoHopTarget();
+				return relayPath.target !== undefined;
+			},
 			() =>
 				sessions
-					.map(
-						({ session, transport }) =>
-							`${session.snapshot().participants.length}/${transport.connectionCount}`,
-					)
+					.map(({ session, transport }) => {
+						const snapshot = session.snapshot();
+						return `${snapshot.participants.length}/${snapshot.directNeighbors}/${transport.connectionCount}`;
+					})
 					.join(","),
 			20_000,
 		);
@@ -112,15 +130,8 @@ test("ten-peer sparse overlay relays once through a non-origin intermediate", {
 			sessions.every(({ transport }) => transport.connectionCount <= 8),
 			true,
 		);
-		const sender = sessions[0];
-		assert.ok(sender);
-		const indirect = sessions
-			.slice(1)
-			.find(
-				({ identity }) =>
-					!sender.transport.connectedPeerKeys.includes(identity.publicKey.toString("hex")),
-			);
-		assert.ok(indirect, "the sender must have at least one non-neighbor in a ten-peer room");
+		const indirect = relayPath.target;
+		assert.ok(indirect, "the sender must have an authenticated target across a two-hop path");
 		sender.session.send("through sparse overlay");
 		await waitFor(
 			() =>
