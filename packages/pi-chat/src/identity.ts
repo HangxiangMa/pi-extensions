@@ -1,0 +1,80 @@
+import { createHash } from "node:crypto";
+import HyperDHT from "hyperdht";
+
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const MAX_NICKNAME_GRAPHEMES = 24;
+const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
+
+export interface ChatIdentity {
+	seed: string;
+	publicKey: Buffer;
+	secretKey: Buffer;
+	tag: string;
+}
+
+export function normalizeNickname(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const normalized = value.normalize("NFKC").trim();
+	if (!normalized || /\p{Cc}/u.test(normalized) || BIDI_CONTROLS.test(normalized)) return undefined;
+	const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+	if (Array.from(segmenter.segment(normalized)).length > MAX_NICKNAME_GRAPHEMES) return undefined;
+	return normalized;
+}
+
+export function createIdentity(seed: Uint8Array): ChatIdentity {
+	if (seed.byteLength !== 32) throw new Error("Pi Chat identity seed must be exactly 32-byte.");
+	const stableSeed = Buffer.from(seed);
+	const keyPair = HyperDHT.keyPair(stableSeed);
+	return {
+		seed: stableSeed.toString("base64url"),
+		publicKey: Buffer.from(keyPair.publicKey),
+		secretKey: Buffer.from(keyPair.secretKey),
+		tag: identityTag(keyPair.publicKey),
+	};
+}
+
+export function identityTag(publicKey: Uint8Array, characters = 12): string {
+	if (characters < 12 || characters > 52) throw new Error("Identity tags use 12 to 52 characters.");
+	const digest = createHash("sha256").update(publicKey).digest();
+	let bits = 0;
+	let bitCount = 0;
+	let raw = "";
+	for (const byte of digest) {
+		bits = (bits << 8) | byte;
+		bitCount += 8;
+		while (bitCount >= 5 && raw.length < characters) {
+			bitCount -= 5;
+			raw += CROCKFORD[(bits >>> bitCount) & 31];
+			bits &= (1 << bitCount) - 1;
+		}
+		if (raw.length === characters) break;
+	}
+	return raw.match(/.{1,4}/gu)?.join("-") ?? raw;
+}
+
+export function formatIdentityLabel(
+	nickname: string,
+	publicKey: Uint8Array,
+	characters = 12,
+): string {
+	return `${nickname}~${identityTag(publicKey, characters)}`;
+}
+
+export function uniqueIdentityTags(publicKeys: readonly Uint8Array[]): Map<string, string> {
+	const fullKeys = publicKeys.map((key) => Buffer.from(key).toString("hex"));
+	const result = new Map<string, string>();
+	for (let length = 12; length <= 52; length += 4) {
+		const grouped = new Map<string, string[]>();
+		for (const [index, publicKey] of publicKeys.entries()) {
+			const tag = identityTag(publicKey, length);
+			const fullKey = fullKeys[index] ?? Buffer.from(publicKey).toString("hex");
+			grouped.set(tag, [...(grouped.get(tag) ?? []), fullKey]);
+		}
+		for (const [tag, keys] of grouped) {
+			const onlyKey = keys.length === 1 ? keys[0] : undefined;
+			if (onlyKey && !result.has(onlyKey)) result.set(onlyKey, tag);
+		}
+		if (result.size === publicKeys.length) break;
+	}
+	return result;
+}
