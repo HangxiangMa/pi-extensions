@@ -303,10 +303,12 @@ test("snapshotWithoutSessions clears session opt-in even when no session files e
 	const source = {
 		...snapshot([{ path: "settings.json", content: Buffer.from("{}") }]),
 		syncSessions: true,
+		selection: { version: 1 as const, include: ["settings.json", "sessions"] },
 	};
 	const filtered = snapshotWithoutSessions(source);
 
 	assert.equal(filtered.syncSessions, false);
+	assert.deepEqual(filtered.selection, { version: 1, include: ["settings.json"] });
 	assert.notEqual(filtered.id, source.id);
 	assert.deepEqual(
 		filtered.files.map((file) => file.path),

@@ -21,9 +21,16 @@ export function registerSyncBackendContractSuite(name: string, create: BackendFa
 			assert.ok(backend.destination);
 			assert.equal(await backend.readHead(), undefined);
 
-			const first = snapshot([{ path: "settings.json", content: Buffer.from("first") }]);
+			const first = {
+				...snapshot([{ path: "settings.json", content: Buffer.from("first") }]),
+				selection: {
+					version: 1 as const,
+					include: ["settings.json", "remote-only.toml"],
+				},
+			};
 			const firstResult = await backend.publishSnapshot(first, expectedRemoteHead(undefined));
 			assert.equal(firstResult.head.snapshotId, first.id);
+			assert.deepEqual(firstResult.head.selection, first.selection);
 			assert.match(firstResult.head.revision, /\S/);
 			assert.equal(
 				backend.sameRevision(firstResult.head.revision, firstResult.head.revision),

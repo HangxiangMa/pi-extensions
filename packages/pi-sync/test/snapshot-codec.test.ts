@@ -1,8 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { gzipSync } from "node:zlib";
-import { decodeSnapshot } from "../src/snapshot-codec.js";
+import { decodeSnapshot, encodeSnapshot } from "../src/snapshot-codec.js";
 import { snapshot } from "./helpers.js";
+
+test("snapshot codec preserves portable selection intent and rejects malformed policy", async () => {
+	const selected = {
+		...snapshot([]),
+		selection: { version: 1 as const, include: ["settings.json", "pi-starship.toml"] },
+	};
+	assert.deepEqual(await decodeSnapshot(await encodeSnapshot(selected)), selected);
+
+	const malformed = {
+		...snapshot([]),
+		selection: { version: 1, include: ["../auth.json"] },
+	};
+	await assert.rejects(
+		decodeSnapshot(gzipSync(Buffer.from(JSON.stringify(malformed)))),
+		/selection|sync\.include|safe agent-relative/i,
+	);
+});
 
 test("snapshot decoding bounds decompressed output and honors cancellation", async () => {
 	const encoded = gzipSync(

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isDeniedPath, toPosix } from "./paths.js";
+import type { Snapshot, SnapshotSelection } from "./types.js";
 
 export const BUILT_IN_SYNC_ROOTS = [
 	"settings.json",
@@ -15,6 +16,7 @@ export const BUILT_IN_SYNC_ROOTS = [
 
 export const DEFAULT_SYNC_INCLUDE = [...BUILT_IN_SYNC_ROOTS] as const;
 export type BuiltInSyncFile = (typeof BUILT_IN_SYNC_ROOTS)[number];
+const SNAPSHOT_SELECTION_VERSION = 1;
 
 const BUILT_IN_BY_LOWER = new Map<string, BuiltInSyncFile>(
 	BUILT_IN_SYNC_ROOTS.map((fileName) => [fileName.toLowerCase(), fileName]),
@@ -87,6 +89,138 @@ function validateAgentRelativeInclude(value: string) {
 			`Invalid pi-sync settings: use the canonical ${topLevel} root instead of a nested sync.include path.`,
 		);
 	}
+}
+
+export function portableSnapshotSelection(value: unknown): SnapshotSelection {
+	const selection = value as Partial<SnapshotSelection> | null;
+	if (
+		!selection ||
+		typeof selection !== "object" ||
+		Array.isArray(selection) ||
+		selection.version !== SNAPSHOT_SELECTION_VERSION ||
+		!Object.hasOwn(selection, "include") ||
+		Object.keys(selection).some((key) => key !== "version" && key !== "include")
+	) {
+		throw new Error("Invalid snapshot selection policy.");
+	}
+	return {
+		version: SNAPSHOT_SELECTION_VERSION,
+		include: normalizeSyncInclude(selection.include),
+	};
+}
+
+export function snapshotSelectionInclude(snapshot: Pick<Snapshot, "selection">) {
+	return snapshot.selection === undefined
+		? undefined
+		: portableSnapshotSelection(snapshot.selection).include;
+}
+
+export function selectionForSnapshot(include: unknown): SnapshotSelection {
+	return { version: SNAPSHOT_SELECTION_VERSION, include: normalizeSyncInclude(include) };
+}
+
+export function sameSyncInclude(left: unknown, right: unknown) {
+	const normalizedLeft = normalizeSyncInclude(left);
+	const normalizedRight = normalizeSyncInclude(right);
+	return (
+		normalizedLeft.length === normalizedRight.length &&
+		normalizedLeft.every((item, index) => item === normalizedRight[index])
+	);
+}
+
+export function compareSyncInclude(local: unknown, remote: unknown) {
+	const localInclude = normalizeSyncInclude(local);
+	const remoteInclude = normalizeSyncInclude(remote);
+	const localSet = new Set(localInclude);
+	const remoteSet = new Set(remoteInclude);
+	return {
+		same: sameSyncInclude(localInclude, remoteInclude),
+		remoteOnly: remoteInclude.filter((item) => !localSet.has(item)),
+		localOnly: localInclude.filter((item) => !remoteSet.has(item)),
+	};
+}
+
+export type RemoteSelectionState =
+	| { kind: "legacy"; discovered: string[] }
+	| { kind: "same"; include: string[] }
+	| {
+			kind: "different";
+			include: string[];
+			remoteOnly: string[];
+			localOnly: string[];
+	  };
+
+export function inspectRemoteSelection(
+	localInclude: unknown,
+	snapshot: Pick<Snapshot, "selection" | "files">,
+): RemoteSelectionState {
+	const remoteInclude = snapshotSelectionInclude(snapshot);
+	if (!remoteInclude) {
+		return { kind: "legacy", discovered: discoverLegacySnapshotInclude(snapshot) };
+	}
+	const comparison = compareSyncInclude(localInclude, remoteInclude);
+	return comparison.same
+		? { kind: "same", include: remoteInclude }
+		: { kind: "different", include: remoteInclude, ...comparison };
+}
+
+export class RemoteSelectionMismatchError extends Error {
+	readonly localInclude: string[];
+	readonly remoteInclude: string[];
+
+	constructor(localInclude: unknown, remoteInclude: unknown) {
+		const local = normalizeSyncInclude(localInclude);
+		const remote = normalizeSyncInclude(remoteInclude);
+		super(
+			"Remote included content differs from this sync setup. Review Remote included content in /sync Settings, or use a reviewed force push to keep local selection.",
+		);
+		this.name = "RemoteSelectionMismatchError";
+		this.localInclude = local;
+		this.remoteInclude = remote;
+	}
+}
+
+export function discoverLegacySnapshotInclude(snapshot: Pick<Snapshot, "files">) {
+	const builtIns = new Set<BuiltInSyncFile>();
+	const custom = new Set<string>();
+	let sessions = false;
+	for (const file of snapshot.files) {
+		const normalized = toPosix(file.path);
+		if (
+			!normalized ||
+			file.path.includes("\\") ||
+			normalized.length > 4096 ||
+			normalized.startsWith("../") ||
+			path.posix.isAbsolute(normalized) ||
+			path.posix.normalize(normalized) !== normalized ||
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: Ignore unsafe legacy paths.
+			/[\u0000-\u001f\u007f-\u009f]/u.test(normalized) ||
+			isDeniedPath(normalized)
+		) {
+			continue;
+		}
+		const [topLevel, ...rest] = normalized.split("/");
+		if (!topLevel) continue;
+		if (topLevel === "sessions" && rest.length > 0) {
+			sessions = true;
+			continue;
+		}
+		const builtIn = BUILT_IN_BY_LOWER.get(topLevel.toLowerCase());
+		if (
+			builtIn &&
+			((TOP_LEVEL_DIRS.has(builtIn) && rest.length > 0) ||
+				(!TOP_LEVEL_DIRS.has(builtIn) && rest.length === 0))
+		) {
+			builtIns.add(builtIn);
+			continue;
+		}
+		if (isSafeCustomIncludePath(topLevel)) custom.add(topLevel);
+	}
+	return [
+		...BUILT_IN_SYNC_ROOTS.filter((item) => builtIns.has(item)),
+		...[...custom].sort((left, right) => left.localeCompare(right)),
+		...(sessions ? ["sessions"] : []),
+	];
 }
 
 export function syncIncludeSelection(value: unknown) {

@@ -1,4 +1,4 @@
-import type { Snapshot } from "./types.js";
+import type { Snapshot, SnapshotSelection } from "./types.js";
 
 export type PublicationCapability =
 	| "read-check-write-verify"
@@ -15,6 +15,8 @@ export interface RemoteHead {
 	createdAt: string;
 	machine: string;
 	syncSessions: boolean;
+	/** Validated lightweight projection; revalidate it against the immutable snapshot before adoption. */
+	selection?: SnapshotSelection;
 }
 
 export interface RemoteHistoryEntry {

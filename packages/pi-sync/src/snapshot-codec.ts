@@ -2,6 +2,7 @@ import { Readable, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import { createGunzip, gzip } from "node:zlib";
+import { snapshotSelectionInclude } from "./sync-policy.js";
 import type { Snapshot } from "./types.js";
 
 const VERSION = 1;
@@ -9,6 +10,7 @@ const MAX_DECOMPRESSED_SNAPSHOT_BYTES = 512 * 1024 * 1024;
 const gzipAsync = promisify(gzip);
 
 export async function encodeSnapshot(snapshot: Snapshot) {
+	snapshotSelectionInclude(snapshot);
 	return gzipAsync(Buffer.from(JSON.stringify(snapshot), "utf8"));
 }
 
@@ -37,6 +39,7 @@ export async function decodeSnapshot(
 	if (parsed.version !== VERSION || !Array.isArray(parsed.files)) {
 		throw new Error("Unsupported snapshot format.");
 	}
+	snapshotSelectionInclude(parsed);
 	return parsed;
 }
 

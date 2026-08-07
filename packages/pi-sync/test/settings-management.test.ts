@@ -539,6 +539,31 @@ test("an aborted settings mutation waiting on the cross-process lock never publi
 	});
 });
 
+test("settings UI exposes separate local and remote included-content reviews", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const before = Buffer.from(`${JSON.stringify(v3S3Settings())}\n`);
+		writeFileSync(localConfigPath(), before, { mode: 0o600 });
+		let rendered = "";
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 100);
+				rendered = harness.render().join("\n");
+				harness.handleInput("tui.select.cancel");
+				return harness.result;
+			},
+		});
+
+		await showSyncSettings(ctx, async () => undefined);
+
+		assert.match(rendered, /Included content/u);
+		assert.match(rendered, /Remote included content/u);
+		assert.deepEqual(readFileSync(localConfigPath()), before);
+	});
+});
+
 test("settings UI disposes on session replacement without mutating settings", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });

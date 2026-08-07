@@ -25,7 +25,7 @@ export async function showSyncSettings(
 	const initial = await loadConfig();
 	if (signal?.aborted) return;
 	const setupName = initial.setupName;
-	type Action = "automatic" | "on-switch" | "include";
+	type Action = "automatic" | "on-switch" | "include" | "remote-include";
 	const menu = defineMenu<
 		Awaited<ReturnType<typeof loadConfig>>,
 		"settings",
@@ -64,6 +64,14 @@ export async function showSyncSettings(
 						description: `${state.include.length} selected path${state.include.length === 1 ? "" : "s"}. Opens the reviewed content-selection draft.`,
 						currentValue: "Open editor",
 						action: "include",
+					},
+					{
+						id: "remoteInclude",
+						label: "Remote included content",
+						description:
+							"Compare portable remote selection, then adopt it or keep local settings without pulling files.",
+						currentValue: "Review",
+						action: "remote-include",
 					},
 				],
 			}),
@@ -113,6 +121,13 @@ export async function showSyncSettings(
 				const editorSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
 				await runRoute("files", editorSignal, undefined, setupName);
 				return editorSignal.aborted ? { kind: "rejected" } : { kind: "stay" };
+			},
+			"remote-include": async ({ signal: actionSignal }) => {
+				const reviewSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
+				const { showRemoteSelectionReview } = await import("./remote-selection-ui.js");
+				if (reviewSignal.aborted) return { kind: "rejected" };
+				await showRemoteSelectionReview(ctx, setupName, reviewSignal);
+				return reviewSignal.aborted ? { kind: "rejected" } : { kind: "stay" };
 			},
 		},
 	});

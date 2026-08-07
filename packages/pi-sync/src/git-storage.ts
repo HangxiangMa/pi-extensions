@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import type { Snapshot } from "./types.js";
+import { portableSnapshotSelection, snapshotSelectionInclude } from "./sync-policy.js";
+import type { Snapshot, SnapshotSelection } from "./types.js";
 
 export const GIT_MANIFEST_VERSION = 2;
 export const MAX_GIT_MANIFEST_BYTES = 1024 * 1024;
@@ -23,6 +24,7 @@ export interface GitManifest {
 	profile: string;
 	syncSessions: boolean;
 	snapshotSyncSessions?: boolean;
+	selection?: SnapshotSelection;
 	files: GitManifestFile[];
 }
 
@@ -81,11 +83,13 @@ export function requireGitManifest(value: unknown): GitManifest {
 			"profile",
 			"syncSessions",
 			...(manifest.snapshotSyncSessions === undefined ? [] : ["snapshotSyncSessions"]),
+			...(manifest.selection === undefined ? [] : ["selection"]),
 			"files",
 		])
 	) {
 		throw new Error("Git publication manifest is malformed.");
 	}
+	if (manifest.selection !== undefined) portableSnapshotSelection(manifest.selection);
 	let total = 0;
 	const paths = new Set<string>();
 	for (const rawFile of manifest.files) {
@@ -126,6 +130,12 @@ export function validateGitSnapshot(snapshot: Snapshot, manifest: GitManifest, n
 		snapshot.profile !== manifest.profile ||
 		snapshot.syncSessions !== manifest.snapshotSyncSessions ||
 		syncSessions !== manifest.syncSessions ||
+		!sameOptionalInclude(
+			snapshotSelectionInclude(snapshot),
+			manifest.selection === undefined
+				? undefined
+				: portableSnapshotSelection(manifest.selection).include,
+		) ||
 		prepared.length !== manifest.files.length ||
 		prepared.some((file, index) => {
 			const expected = manifest.files[index];
@@ -142,6 +152,7 @@ export function validateGitSnapshot(snapshot: Snapshot, manifest: GitManifest, n
 }
 
 export function prepareGitSnapshot(snapshot: Snapshot, namespace: string) {
+	snapshotSelectionInclude(snapshot);
 	if (
 		snapshot.version !== SNAPSHOT_VERSION ||
 		typeof snapshot.id !== "string" ||
@@ -240,6 +251,11 @@ export function validateGitPublicationTree(
 		}
 	}
 	return manifest.files.map((file) => byPath.get(filePath(file.path)) as GitTreeEntry);
+}
+
+function sameOptionalInclude(left: string[] | undefined, right: string[] | undefined) {
+	if (!left || !right) return left === right;
+	return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
 function isSafeSnapshotPath(value: unknown): value is string {

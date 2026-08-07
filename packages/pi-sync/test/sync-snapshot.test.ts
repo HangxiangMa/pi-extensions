@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { createSnapshot } from "../src/snapshot.js";
 import { applySnapshot } from "../src/snapshot-apply.js";
 import {
 	addTopLevelCaseVariantDeletes,
@@ -15,6 +16,24 @@ import {
 import { snapshot, withTempHome } from "./helpers.js";
 
 initTheme("dark", false);
+
+test("snapshot preserves selected paths that are currently missing", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(path.join(agentDir, "settings.json"), "{}\n");
+		const created = await createSnapshot("home", {
+			include: ["settings.json", "pi-starship.toml"],
+		});
+		assert.deepEqual(created.selection, {
+			version: 1,
+			include: ["settings.json", "pi-starship.toml"],
+		});
+		assert.deepEqual(
+			created.files.map((file) => file.path),
+			["settings.json"],
+		);
+	});
+});
 
 test("snapshot collection includes session jsonl files only when enabled", async () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-sync-collect-"));

@@ -32,7 +32,7 @@ export class MemorySyncBackend implements SyncBackend {
 
 	async readHead(signal?: AbortSignal) {
 		throwIfAborted(signal);
-		return this.head ? { ...this.head } : undefined;
+		return this.head ? structuredClone(this.head) : undefined;
 	}
 
 	async readSnapshot(reference: string, signal?: AbortSignal) {
@@ -62,6 +62,9 @@ export class MemorySyncBackend implements SyncBackend {
 			createdAt: snapshot.createdAt,
 			machine: snapshot.machine,
 			syncSessions: snapshot.syncSessions === true,
+			...(snapshot.selection === undefined
+				? {}
+				: { selection: structuredClone(snapshot.selection) }),
 		};
 		this.history = [
 			...this.history.filter((entry) => entry.snapshotRef !== snapshot.id),
@@ -79,7 +82,7 @@ export class MemorySyncBackend implements SyncBackend {
 				"Memory publication committed, but verification failed.",
 			);
 		}
-		return { head: { ...this.head }, warnings: [] };
+		return { head: structuredClone(this.head), warnings: [] };
 	}
 
 	async listHistory(signal?: AbortSignal) {

@@ -140,6 +140,7 @@ export class GitSyncBackend implements SyncBackend {
 			...(manifest.snapshotSyncSessions === undefined
 				? {}
 				: { syncSessions: manifest.snapshotSyncSessions }),
+			...(manifest.selection === undefined ? {} : { selection: manifest.selection }),
 			files,
 		};
 		validateGitSnapshot(snapshot, manifest, this.config.destination.namespace);
@@ -174,6 +175,7 @@ export class GitSyncBackend implements SyncBackend {
 			...(snapshot.syncSessions === undefined
 				? {}
 				: { snapshotSyncSessions: snapshot.syncSessions }),
+			...(snapshot.selection === undefined ? {} : { selection: snapshot.selection }),
 			files: files.map(({ path: filePath, sha256: fileSha, size }) => ({
 				path: filePath,
 				sha256: fileSha,
@@ -688,6 +690,7 @@ function remoteHead(sha: string, manifest: GitManifest, identity: string): Remot
 		createdAt: manifest.createdAt,
 		machine: manifest.machine,
 		syncSessions: manifest.syncSessions,
+		...(manifest.selection === undefined ? {} : { selection: manifest.selection }),
 	};
 }
 

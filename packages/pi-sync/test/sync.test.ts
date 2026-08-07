@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
@@ -185,8 +185,126 @@ test("included-content TUI lists built-in and custom paths exactly once", async 
 		});
 		await showFileSelection(ctx, "home");
 		assert.equal(customCalls, 1);
-		assert.deepEqual(labels, [...BUILT_IN_SYNC_ROOTS, "custom.json", "sessions"]);
+		assert.deepEqual(labels, [
+			...BUILT_IN_SYNC_ROOTS,
+			"custom.json",
+			"sessions",
+			"Add custom path…",
+		]);
 		assert.deepEqual(readFileSync(localConfigPath()), before);
+	});
+});
+
+test("included-content TUI adds and saves a custom path that is absent locally", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+		const remoteOnlyPath = "remote-only.toml";
+		let screen = 0;
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => remoteOnlyPath,
+			custom: async (factory: unknown) => {
+				screen += 1;
+				const harness = createCustomSelectorHarness(factory, 100);
+				if (screen === 1) {
+					for (let index = 0; index < 32; index += 1) {
+						if (selectedMultiSelectLabel(harness.render()) === "Add custom path…") break;
+						harness.handleInput("tui.select.down");
+					}
+					assert.equal(selectedMultiSelectLabel(harness.render()), "Add custom path…");
+					harness.handleInput("tui.select.confirm");
+					await Promise.resolve();
+				} else if (screen === 2) {
+					assert.match(harness.render().join("\n"), /\[x\] remote-only\.toml/u);
+					harness.handleInput("tui.select.cancel");
+				} else {
+					harness.handleInput("tui.select.confirm");
+				}
+				return harness.result;
+			},
+		});
+
+		await showFileSelection(ctx, "home");
+
+		assert.equal(screen, 3);
+		assert.equal(existsSync(path.join(agentDir, remoteOnlyPath)), false);
+		assert.deepEqual((await readLocalConfigObject())?.syncSetups.home.sync.include, [
+			"settings.json",
+			remoteOnlyPath,
+		]);
+		assert.match(notifications.at(-1)?.message ?? "", /Saved included content/u);
+	});
+});
+
+test("included-content TUI rejects an unsafe absent custom path without changing settings", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const before = Buffer.from(`${JSON.stringify(v3S3Settings())}\n`);
+		writeFileSync(localConfigPath(), before, { mode: 0o600 });
+		let screen = 0;
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => "../outside.toml",
+			custom: async (factory: unknown) => {
+				screen += 1;
+				const harness = createCustomSelectorHarness(factory, 100);
+				if (screen === 1) {
+					for (let index = 0; index < BUILT_IN_SYNC_ROOTS.length + 1; index += 1) {
+						harness.handleInput("tui.select.down");
+					}
+					assert.equal(selectedMultiSelectLabel(harness.render()), "Add custom path…");
+					harness.handleInput("tui.select.confirm");
+					await Promise.resolve();
+				} else {
+					harness.handleInput("tui.select.cancel");
+				}
+				return harness.result;
+			},
+		});
+
+		await showFileSelection(ctx, "home");
+
+		assert.equal(screen, 2);
+		assert.deepEqual(readFileSync(localConfigPath()), before);
+		assert.match(notifications.at(-1)?.message ?? "", /safe agent-relative/u);
+	});
+});
+
+test("included-content custom-path input stops on session replacement", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const before = Buffer.from(`${JSON.stringify(v3S3Settings())}\n`);
+		writeFileSync(localConfigPath(), before, { mode: 0o600 });
+		const controller = new AbortController();
+		let screen = 0;
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			input: async () => {
+				controller.abort(new DOMException("Session replaced", "AbortError"));
+				return "remote-only.toml";
+			},
+			custom: async (factory: unknown) => {
+				screen += 1;
+				const harness = createCustomSelectorHarness(factory, 100);
+				for (let index = 0; index < BUILT_IN_SYNC_ROOTS.length + 1; index += 1) {
+					harness.handleInput("tui.select.down");
+				}
+				assert.equal(selectedMultiSelectLabel(harness.render()), "Add custom path…");
+				harness.handleInput("tui.select.confirm");
+				await Promise.resolve();
+				return harness.result;
+			},
+		});
+
+		await showFileSelection(ctx, "home", controller.signal);
+
+		assert.equal(screen, 1);
+		assert.deepEqual(readFileSync(localConfigPath()), before);
+		assert.deepEqual(notifications, []);
 	});
 });
 
