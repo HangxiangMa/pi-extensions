@@ -257,8 +257,9 @@ test("in-flight request ids remain deduplicated when the completed-result cache 
 	let attempts = 0;
 	const server = await WebUIServer.start({
 		conversation,
-		send: async () => {
+		send: async (request) => {
 			attempts += 1;
+			if (request.delivery === "steer") return { delivery: "steer" };
 			return gate.promise;
 		},
 	});
@@ -279,17 +280,26 @@ test("in-flight request ids remain deduplicated when the completed-result cache 
 			});
 		const originals = Array.from({ length: 129 }, (_, index) => send(`pending-${index}`));
 		await waitFor(() => attempts === 129);
-		const replay = send("pending-0");
-		await new Promise((resolve) => setTimeout(resolve, 20));
-		const attemptsAfterReplay = attempts;
+		const conflict = await api(server, "/api/messages", {
+			method: "POST",
+			cookie,
+			client,
+			body: JSON.stringify({
+				requestId: "pending-0",
+				draftRevision: draft.revision,
+				delivery: "steer",
+			}),
+		});
+		assert.equal(conflict.status, 409);
+		assert.equal(attempts, 129);
 		gate.resolve({ delivery: "immediate" });
-		const responses = await Promise.all([...originals, replay]);
-		assert.equal(attemptsAfterReplay, 129);
-		assert.equal(
-			responses.every((response) => response.status === 202),
-			true,
+		const responses = await Promise.all(originals);
+		assert.deepEqual(
+			responses.map((response) => response.status),
+			Array.from({ length: 129 }, () => 202),
 		);
 	} finally {
+		gate.resolve({ delivery: "immediate" });
 		await server.close();
 	}
 });
