@@ -4,7 +4,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list
 
-# Run formatter, linter, and typechecks for all packages
+# Run the CI-equivalent verification gate
 check:
     npm run check
 
@@ -26,9 +26,7 @@ verify-update:
     npm pack --workspaces --dry-run
 
 # Update, clean-install, rebuild, test, and pack all npm workspaces
-update:
-    just update-lock
-    just verify-update
+update: update-lock verify-update
 
 # Install Husky Git hooks
 hooks:
@@ -66,12 +64,13 @@ _validate-package-name name:
 # Preview the package that npm would publish
 # Usage: just pack subagents
 pack name: (_validate-package-name name)
-    name={{ quote(name) }}; package_json="./packages/pi-$name/package.json"; [[ -f "$package_json" ]] || { echo "package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; npm --workspace "$package" pack --dry-run
+    npm --workspace {{ quote("@narumitw/pi-" + name) }} pack --dry-run
 
 # Try an extension package from this working tree as a temporary pi package
 # Usage: just try subagents
 try name: (_validate-package-name name)
-    name={{ quote(name) }}; extension_dir="./packages/pi-$name"; [[ -d "$extension_dir" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package_json="$extension_dir/package.json"; package="$(node -p "require(process.argv[1]).name" "$package_json")"; npm --workspace "$package" run build --if-present; pi -e "$extension_dir"
+    npm --workspace {{ quote("@narumitw/pi-" + name) }} run build --if-present
+    pi -e {{ quote("./packages/pi-" + name) }}
 
 # Start Pi with the commonly used extensions loaded from this working tree
 # PI_TIMING reports startup timing for local extension development
@@ -99,7 +98,7 @@ try-all:
 # Install a package through pi, falling back to the local workspace if unpublished
 # Usage: just install subagents
 install name: (_validate-package-name name)
-    name={{ quote(name) }}; extension_dir="./packages/pi-$name"; package_json="$extension_dir/package.json"; [[ -f "$package_json" ]] || { echo "extension package not found for: $name" >&2; exit 2; }; package="$(node -p "require(process.argv[1]).name" "$package_json")"; if npm view "$package" version >/dev/null 2>&1; then pi install "npm:$package"; else echo "$package is not published; installing local workspace package instead."; pi install "$extension_dir"; fi
+    name={{ quote(name) }}; package="@narumitw/pi-$name"; if npm view "$package" version >/dev/null 2>&1; then pi install "npm:$package"; else pi install "./packages/pi-$name"; fi
 
 # Add release intent for independently versioned packages
 changeset:
