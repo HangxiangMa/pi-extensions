@@ -8,7 +8,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { registerStarshipCommand } from "../src/commands.js";
-import { BUILT_IN_EXAMPLE, loadStarshipConfig } from "../src/config.js";
+import { BUILT_IN_EXAMPLE, type LoadedStarshipConfig, loadStarshipConfig } from "../src/config.js";
 import { STARSHIP_PRESETS } from "../src/presets/catalog.js";
 
 test("/starship distinguishes built-in defaults, saved built-in, custom, and fallback states", async () => {
@@ -73,11 +73,16 @@ test("Presets stays shallow, identifies the exact active document, and restores 
 	writeFileSync(path, minimal.rawDocument);
 	try {
 		const mock = createMockPi();
-		registerStarshipCommand(mock.pi, {
+		const previewed: Array<string | undefined> = [];
+		const commandOptions = {
 			getLoaded: () => loadStarshipConfig(path),
 			apply() {},
+			preview(next: LoadedStarshipConfig | undefined) {
+				previewed.push(next && presetForRawDocument(next.rawDocument));
+			},
 			settingsPath: path,
-		});
+		};
+		registerStarshipCommand(mock.pi, commandOptions);
 		const tui = createTuiHarness({ width: 40, rows: 18 });
 		const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
 		const running = mock.commands.get("starship")?.handler("", context.ctx);
@@ -102,9 +107,10 @@ test("Presets stays shallow, identifies the exact active document, and restores 
 		assert.match(full, /Nerd Font Symbols/u);
 		assert.match(full, /Currently applied/u);
 		assert.match(full, /\(1\/13\)/u);
+		assert.deepEqual(previewed, ["minimal"]);
 		tui.press("tui.select.confirm");
 		await flushAsyncWork();
-		assert.match(tui.render().join("\n"), /^Presets/mu);
+		assert.match(tui.render().join("\n"), /Presets · current:/u);
 		for (let index = 0; index < STARSHIP_PRESETS.length - 1; index += 1) {
 			tui.press("tui.select.down");
 		}
@@ -112,12 +118,51 @@ test("Presets stays shallow, identifies the exact active document, and restores 
 		assert.match(lastPreset, /Tokyo Night/u);
 		assert.match(lastPreset, /requires Nerd Font/u);
 		assert.match(lastPreset, /\(13\/13\)/u);
+		assert.equal(previewed.at(-1), "tokyo-night");
 		tui.press("tui.select.cancel");
 		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /→ Presets/u);
 		tui.press("ctrl+c");
 		await running;
 		assert.equal(readFileSync(path, "utf8"), minimal.rawDocument);
+		assert.equal(previewed.at(-1), undefined);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("live preset preview restores on Ctrl+C and external disposal", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-command-preset-preview-exit-"));
+	const path = join(root, "pi-starship.toml");
+	try {
+		for (const exit of ["close", "dispose"] as const) {
+			const mock = createMockPi();
+			const previewed: Array<string | undefined> = [];
+			const commandOptions = {
+				getLoaded: () => loadStarshipConfig(path),
+				apply() {
+					assert.fail("Browsing presets must not apply settings");
+				},
+				preview(next: LoadedStarshipConfig | undefined) {
+					previewed.push(next && presetForRawDocument(next.rawDocument));
+				},
+				settingsPath: path,
+			};
+			registerStarshipCommand(mock.pi, commandOptions);
+			const tui = createTuiHarness({ width: 50, rows: 16 });
+			const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+			const running = mock.commands.get("starship")?.handler("", context.ctx);
+			await tui.waitForOpen();
+			tui.press("tui.select.down");
+			tui.press("tui.select.confirm");
+			await tui.waitForOpen();
+			assert.equal(previewed.at(-1), "minimal");
+			if (exit === "close") tui.press("ctrl+c");
+			else tui.dispose();
+			await running;
+			assert.equal(previewed.at(-1), undefined, exit);
+			assert.equal(existsSync(path), false, exit);
+		}
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -132,40 +177,44 @@ test("preset preview cancellation is inert and confirmed apply replaces atomical
 		const mock = createMockPi();
 		let applied = 0;
 		let confirmation = "";
-		registerStarshipCommand(mock.pi, {
+		const previewed: Array<string | undefined> = [];
+		const commandOptions = {
 			getLoaded: () => loadStarshipConfig(path),
 			apply() {
 				applied += 1;
 			},
+			preview(next: LoadedStarshipConfig | undefined) {
+				previewed.push(next && presetForRawDocument(next.rawDocument));
+			},
 			settingsPath: path,
-			renderPreview: (loaded) => [loaded.config.format],
-		});
+			renderPreview: (loaded: LoadedStarshipConfig) => [loaded.config.format],
+		};
+		registerStarshipCommand(mock.pi, commandOptions);
 
 		const cancelledTui = createTuiHarness({ width: 50, rows: 16 });
 		const cancelledContext = createMockContext({
 			mode: "tui",
 			hasUI: true,
 			custom: cancelledTui.custom,
-			confirm: async () => true,
+			confirm: async () => false,
 		});
 		const cancelled = mock.commands.get("starship")?.handler("", cancelledContext.ctx);
 		await cancelledTui.waitForOpen();
 		cancelledTui.press("tui.select.down");
 		cancelledTui.press("tui.select.confirm");
 		await cancelledTui.waitForOpen();
+		assert.equal(previewed.at(-1), "minimal");
 		cancelledTui.press("tui.select.confirm");
 		await cancelledTui.waitForOpen();
-		assert.match(cancelledTui.render().join("\n"), /Minimal preset preview/u);
-		assert.match(cancelledTui.render().join("\n"), /Apply Minimal preset…/u);
-		assert.match(cancelledTui.render().join("\n"), /Customize before applying/u);
-		assert.match(cancelledTui.render().join("\n"), /Choose another preset/u);
-		cancelledTui.press("tui.select.cancel");
-		await cancelledTui.waitForOpen();
-		assert.match(cancelledTui.render().join("\n"), /Presets/u);
+		assert.equal(readFileSync(path, "utf8"), original);
+		assert.equal(applied, 0);
+		assert.equal(previewed.at(-1), undefined);
+		assert.match(cancelledTui.render().join("\n"), /→ Presets/u);
 		cancelledTui.press("ctrl+c");
 		await cancelled;
 		assert.equal(readFileSync(path, "utf8"), original);
 		assert.equal(applied, 0);
+		assert.equal(previewed.at(-1), undefined);
 
 		const appliedTui = createTuiHarness({ width: 50, rows: 16 });
 		const appliedContext = createMockContext({
@@ -183,14 +232,60 @@ test("preset preview cancellation is inert and confirmed apply replaces atomical
 		appliedTui.press("tui.select.confirm");
 		await appliedTui.waitForOpen();
 		appliedTui.press("tui.select.confirm");
-		await appliedTui.waitForOpen();
-		appliedTui.press("tui.select.confirm");
 		await running;
 		assert.equal(readFileSync(path, "utf8"), STARSHIP_PRESETS[0]?.rawDocument);
 		assert.equal(applied, 1);
 		assert.match(confirmation, /Minimal/u);
 		assert.match(confirmation, /custom settings, unknown fields, and comments will be removed/iu);
 		assert.match(confirmation, /No backup is kept after success/u);
+		assert.equal(previewed.at(-1), undefined);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("failed direct preset apply clears the preview and preserves the previous footer", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-command-preset-failed-apply-"));
+	const path = join(root, "pi-starship.toml");
+	const original = "format = 'custom'\n";
+	writeFileSync(path, original);
+	try {
+		const previewed: Array<string | undefined> = [];
+		const mock = createMockPi();
+		registerStarshipCommand(mock.pi, {
+			getLoaded: () => loadStarshipConfig(path),
+			apply() {
+				assert.fail("Failed save must not apply settings");
+			},
+			preview(next: LoadedStarshipConfig | undefined) {
+				previewed.push(next && presetForRawDocument(next.rawDocument));
+			},
+			save() {
+				throw new Error("publish failed");
+			},
+			settingsPath: path,
+		});
+		const tui = createTuiHarness({ width: 50, rows: 16 });
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: tui.custom,
+			confirm: async () => true,
+		});
+		const running = mock.commands.get("starship")?.handler("", context.ctx);
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		assert.equal(previewed.at(-1), "minimal");
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		assert.equal(previewed.at(-1), undefined);
+		assert.equal(readFileSync(path, "utf8"), original);
+		assert.match(context.notifications.at(-1)?.message ?? "", /publish failed/u);
+		assert.match(tui.render().join("\n"), /→ Presets/u);
+		tui.press("ctrl+c");
+		await running;
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -230,10 +325,7 @@ test("Customize before applying starts from the preset and saves the edited docu
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
 		tui.press("tui.select.down");
-		tui.press("tui.select.confirm");
-		await tui.waitForOpen();
-		tui.press("tui.select.down");
-		tui.press("tui.select.confirm");
+		tui.send("e");
 		await tui.waitForOpen();
 		assert.equal(editorDraft, bracketed.rawDocument);
 		assert.match(tui.render().join("\n"), /Bracketed Segments preset preview/u);
@@ -275,10 +367,7 @@ test("an invalid customized preset returns to preset recovery without changing t
 		tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
-		tui.press("tui.select.confirm");
-		await tui.waitForOpen();
-		tui.press("tui.select.down");
-		tui.press("tui.select.confirm");
+		tui.send("e");
 		await tui.waitForOpen();
 		const errorFrame = tui.render().join("\n");
 		assert.match(errorFrame, /Preset needs attention/u);
@@ -404,6 +493,57 @@ test("preview remains operable across terminal sizes and dynamic resize", async 
 		assert.match(tui.render().join("\n"), /Continue editing/u);
 		tui.press("tui.select.down");
 		assert.match(tui.render().join("\n"), /Discard draft/u);
+		tui.press("ctrl+c");
+		await running;
+		assert.equal(existsSync(path), false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("preset picker uses injected navigation bindings and exposes their hints", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-preset-picker-keys-"));
+	const path = join(root, "pi-starship.toml");
+	try {
+		const mapping: Record<string, string> = {
+			"tui.select.up": "k",
+			"tui.select.down": "j",
+			"tui.select.pageUp": "u",
+			"tui.select.pageDown": "d",
+			"tui.select.confirm": "y",
+			"tui.select.cancel": "q",
+		};
+		const keybindings: Pick<KeybindingsManager, "matches" | "getKeys"> = {
+			matches: (data, binding) => data === mapping[binding],
+			getKeys: (binding) => (mapping[binding] ? [mapping[binding] as never] : []),
+		};
+		const previewed: Array<string | undefined> = [];
+		const mock = createMockPi();
+		const commandOptions = {
+			getLoaded: () => loadStarshipConfig(path),
+			apply() {},
+			preview(next: LoadedStarshipConfig | undefined) {
+				previewed.push(next && presetForRawDocument(next.rawDocument));
+			},
+			settingsPath: path,
+		};
+		registerStarshipCommand(mock.pi, commandOptions);
+		const tui = createTuiHarness({ width: 50, rows: 16, keybindings });
+		const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+		const running = mock.commands.get("starship")?.handler("", context.ctx);
+		await tui.waitForOpen();
+		tui.send("j");
+		tui.send("y");
+		await tui.waitForOpen();
+		const frame = tui.render().join("\n");
+		assert.match(frame, /k\/j live preview/u);
+		assert.match(frame, /y apply/u);
+		assert.match(frame, /q\s+back/u);
+		tui.send("j");
+		assert.equal(previewed.at(-1), "bracketed-segments");
+		tui.send("q");
+		await tui.waitForOpen();
+		assert.equal(previewed.at(-1), undefined);
 		tui.press("ctrl+c");
 		await running;
 		assert.equal(existsSync(path), false);
@@ -584,6 +724,10 @@ test("external preview disposal cancels without saving", async () => {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+function presetForRawDocument(rawDocument: string | undefined): string | undefined {
+	return STARSHIP_PRESETS.find((preset) => preset.rawDocument === rawDocument)?.id;
+}
 
 async function flushAsyncWork() {
 	await new Promise<void>((resolve) => setImmediate(resolve));

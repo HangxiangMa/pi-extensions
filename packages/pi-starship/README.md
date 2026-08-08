@@ -106,17 +106,19 @@ selected for Pi's model, thinking, workspace, Git, activity, context, and time s
 | **Pure Preset** | Clean two-line workspace and session context | Standard Unicode |
 | **Tokyo Night** | Connected cool blue Tokyo Night blocks | Nerd Font |
 
-Selecting a preset opens the same adaptive live preview used by manual settings. From there, choose
-**Apply _name_ preset…**, **Customize before applying**, or **Choose another preset**. Customization
-starts the TOML editor with the complete preset document and previews the edited result before any
-save. Escape returns to the preset list, while Ctrl+C closes the complete workflow.
+The preset cursor is a live footer preview. Opening the picker and moving with Up/Down, Page Up/Down,
+Home, or End temporarily renders the selected preset in the actual footer without writing settings or
+starting new collectors. Press Enter to start the named preset's replacement confirmation, or press
+`e` to customize the selected complete TOML document before its normal editor preview and
+confirmation. Escape returns to the main menu, while Ctrl+C closes the complete workflow; both restore
+the previously effective footer.
 
 Presets are complete documents, not overlays. Applying one replaces `pi-starship.toml`, including
 custom settings, unknown fields, and comments, only after a separate confirmation; no post-success
-backup is kept. Cancellation, disposal, validation failure, write failure, and runtime-apply failure
-retain the previous valid document and effective footer. Exact unedited matches are shown as
-**Currently applied** and cannot be redundantly selected; editing any byte makes the document custom
-again. **Restore built-in…** remains the deterministic recovery path.
+backup is kept. Cursor movement, confirmation cancellation, disposal, validation failure, write
+failure, and runtime-apply failure retain the previous valid document and effective footer. Exact
+unedited matches are shown as **Currently applied** and cannot be redundantly selected; editing any
+byte makes the document custom again. **Restore built-in…** remains the deterministic recovery path.
 
 The bundled presets use only pi-starship's local Pi and Git snapshot modules. They do not enable the
 GitHub PR query, cloud/deployment readers, or optional command-backed workspace collectors. They are
@@ -679,6 +681,7 @@ Keep `extension_status` last in the catalog so arbitrary third-party statuses fo
 - `src/usage.ts` — native-aligned session usage and cache aggregation.
 - `src/command-contract.ts` — lightweight command routes and completions loaded at startup.
 - `src/commands.ts` — lazily loaded menu, preview/confirmation flow, diagnostics, and compatibility routes.
+- `src/command-preset-picker.ts` — lifecycle-owned preset cursor and temporary footer-preview UI.
 - `src/presets/` — bundled complete TOML documents and stable preset metadata.
 - `src/command-inspector.ts` — adaptive Explain and searchable read-only module inspection surfaces.
 - `src/command-preview.ts` — adaptive, scrollable, keybinding-aware preview action surface.

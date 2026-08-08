@@ -37,14 +37,14 @@ lifecycle, or non-TUI behavior.
   presets must not alter startup defaults or config normalization.
 - Import the preset catalog only through the already lazy `commands.ts` path. Opening ordinary Pi
   sessions must not eagerly load preset documents or Pi TUI Kit UI beyond current behavior.
-- Add a seventh **Presets** row to the main menu and one shallow preset action screen. Stable IDs drive
-  selection; labels are presentation only. Exact raw-document equality identifies a currently applied
-  preset, which is shown textually and disabled from redundant application. Any manual byte change is
-  treated as custom configuration.
-- Generalize the current restore/edit review helper around explicit replacement metadata rather than
-  a restore boolean. A preset selection produces a validated draft and adaptive live preview with
-  **Apply preset…**, **Customize before applying**, and **Choose another preset** outcomes. Customizing
-  opens the existing editor with the preset document and then returns to the standard preview flow.
+- Add a seventh **Presets** row to the main menu and one shallow, extension-owned live picker using
+  Kit's published custom-interaction lifecycle. Stable IDs drive selection; labels are presentation
+  only. Exact raw-document equality identifies a currently applied preset, which is shown textually
+  and disabled from redundant application. Any manual byte change is treated as custom configuration.
+- Keep an independent in-memory preview slot in the runtime footer. Cursor changes synchronously
+  replace only that render input and never alter the authoritative loaded settings or collector
+  requirements. Enter reuses the named destructive confirmation and atomic apply path; `e` opens the
+  existing editor with the selected document and returns to its standard review flow.
 - Applying a preset is a complete-document replacement, not a TOML overlay. The confirmation must name
   the selected preset and state that custom settings, unknown fields, and comments will be removed and
   that no post-success backup is kept. Save, apply, concurrent-file protection, and rollback continue
@@ -172,14 +172,40 @@ lifecycle, or non-TUI behavior.
 - [x] Re-run package and repository checks, packaging, RPC smoke, and semantic convention audit; final
       evidence is recorded below.
 
+## Live cursor preview follow-up
+
+The approved follow-up replaces the static preset action screen with a specialized, lifecycle-owned
+picker. Its cursor is the temporary footer state: opening the picker and every Up/Down/Page/Home/End
+move previews the selected complete preset in memory against the current immutable runtime snapshot.
+Enter starts the existing destructive confirmation and atomic save/apply protocol; `e` preserves
+**Customize before applying**. Escape/Back, Ctrl+C, external disposal, session replacement, shutdown,
+confirmation cancellation, validation failure, and apply failure clear the temporary preview and leave
+the previous document/effective footer intact. Preview updates are synchronous latest-selection-wins
+assignments, so no debounce or asynchronous generation race is introduced.
+
+- [x] Add focused red TUI tests for initial and cursor live preview, zero writes during browsing,
+      Enter-to-confirm/apply, `e` customization, active-row disabling, and preview restoration across
+      Back, Ctrl+C, disposal, replacement, and shutdown; the initial run failed on absent preview calls
+      and the old multi-step preview interaction, then the focused set passed with 2,544 root tests.
+- [x] Add an extension-owned picker through the already-published Kit custom-interaction API and a
+      separate runtime preview slot; focused runtime coverage proves selection changes only the footer
+      render input, creates no settings file, and Back restores the built-in footer.
+- [x] Reuse the existing confirmation/save/apply/rollback protocol for direct Enter and preserve the
+      editor/recovery path on `e`; focused confirmation cancellation, apply, customization, invalid
+      draft, width, disposal, and shutdown tests pass.
+- [x] Update README/help/plan evidence, run package/root checks, pack and RPC smoke, repeat the semantic
+      convention audit, archive this plan, commit, and push the PR update; final root verification passed
+      2,547 tests, packaging included 79 files, and RPC help advertised live preset preview without
+      creating settings.
+
 ## Completion Checklist
 
 - [x] `/starship` presents seven shallow, goal-oriented actions and a 13-item preset screen with
       visible current state, font requirements, Back, Escape, and Ctrl+C behavior.
 - [x] Font-safe and Nerd Font-dependent choices are clearly marked; all 13 documents validate cleanly
       and render within supported widths without enabling undocumented collectors or network work.
-- [x] Selecting a preset never mutates disk or runtime before preview and confirmation; users can apply,
-      customize first, choose another, or cancel without ambiguous side effects.
+- [x] Browsing presets never mutates disk or authoritative runtime state; users can live-preview,
+      confirm apply, customize first, choose another, or cancel without ambiguous side effects.
 - [x] Complete-document replacement is disclosed, confirmed, serialized, atomic, generation-safe, and
       rollback-capable; malformed/current/concurrent documents follow the documented recovery rules.
 - [x] Built-in defaults, Restore, custom TOML, menu/direct command routes, non-TUI protocol behavior,
@@ -224,3 +250,12 @@ lifecycle, or non-TUI behavior.
   exited successfully on stdin close, and did not create `pi-starship.toml`. The Kit TUI harness covered
   the paged 13-item list at 20, 40, and 80 columns; a real Nerd Font visual smoke remains unverified
   because repository execution policy forbids opening a TUI.
+- Live-picker follow-up evidence: cursor changes synchronously publish an independent preview slot;
+  Back, Ctrl+C, confirmation cancellation, disposal, session replacement, shutdown, invalid drafts,
+  and failed apply paths clear it without persistence. Direct Enter reuses destructive confirmation and
+  atomic apply, while `e` reuses the editor/review path. Callback-injected navigation and hints are
+  covered. Final package check and root `npm run check` passed with 2,547 tests; Changesets still reports
+  only `@narumitw/pi-starship` 0.50.0. `just pack starship` passed with 79 files at 82.4 kB packed /
+  309.2 kB unpacked, including `src/command-preset-picker.ts`. The final RPC smoke advertised
+  `live-preview presets` and created no settings file. Re-audit found no convention deviation; the
+  prohibited real-terminal/Nerd Font visual path remains the only unverified presentation path.

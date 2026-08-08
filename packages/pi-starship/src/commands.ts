@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { completeStarshipArguments, STARSHIP_SUBCOMMANDS } from "./command-contract.js";
 import { showFooterExplanation } from "./command-inspector.js";
+import { showPresetPicker } from "./command-preset-picker.js";
 import { type PreviewMenuResult, showPreviewActionMenu } from "./command-preview.js";
 import {
 	atomicRestoreConfigDocument,
@@ -39,6 +40,7 @@ export interface StarshipCommandOptions {
 	getLoaded(): LoadedStarshipConfig;
 	getInspection?(): StatuslineInspection | undefined;
 	apply(loaded: LoadedStarshipConfig, ctx: ExtensionCommandContext): void;
+	preview?(loaded: LoadedStarshipConfig | undefined, ctx: ExtensionCommandContext): void;
 	settingsPath: string;
 	renderPreview?(
 		loaded: LoadedStarshipConfig,
@@ -112,14 +114,8 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 		signal: fallbackController.signal,
 		isCurrent: () => !fallbackController.signal.aborted,
 	};
-	type Screen = "main" | "presets" | "modules" | "configuration" | "help";
-	type Action = "customize" | "explain" | "restore" | StarshipPreset["id"];
-	const runPresetAction = async (preset: StarshipPreset) => {
-		const result = await applyPreset(ctx, options, preset);
-		return result === "applied" || result === "close"
-			? { kind: "close" as const }
-			: { kind: "stay" as const };
-	};
+	type Screen = "main" | "modules" | "configuration" | "help";
+	type Action = "customize" | "presets" | "explain" | "restore";
 	const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
 		start: "main",
 		screens: {
@@ -140,8 +136,8 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 						{
 							id: MAIN_ACTIONS.presets,
 							label: "Presets",
-							description: "Browse bundled footer starting points",
-							to: "presets",
+							description: "Browse and live-preview bundled footer starting points",
+							action: "presets",
 						},
 						{
 							id: MAIN_ACTIONS.explain,
@@ -176,25 +172,6 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 						},
 					],
 					hint: "close",
-				};
-			},
-			presets: () => {
-				const active = presetForDocument(options.getLoaded().rawDocument);
-				return {
-					kind: "actions",
-					title: "Presets",
-					lines: ["Choose a complete footer starting point to preview."],
-					items: STARSHIP_PRESETS.map((preset) => ({
-						id: preset.id,
-						label: preset.label,
-						description:
-							active?.id === preset.id
-								? `Currently applied · ${preset.description}`
-								: preset.description,
-						disabled: active?.id === preset.id,
-						action: preset.id,
-					})),
-					hint: "back",
 				};
 			},
 			modules: () => {
@@ -245,7 +222,7 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 				title: "pi-starship help",
 				lines: [
 					"Customize footer opens the TOML editor, then previews and confirms before saving.",
-					"Presets previews complete bundled starting points before replacing the settings document.",
+					"Presets live-previews the cursor in the footer; Enter confirms apply and e customizes first.",
 					"Explain footer breaks down the modules currently showing from the existing snapshot.",
 					"Modules searches every supported module and explains its current read-only state.",
 					"Configuration explains state, source, path, and warnings without changing the footer.",
@@ -265,20 +242,10 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 				if (!isCurrentOwner(owner)) return { kind: "stay" };
 				return result?.kind === "back" ? { kind: "stay" } : { kind: "close" };
 			},
-			minimal: async () => runPresetAction(getStarshipPreset("minimal")),
-			"bracketed-segments": async () => runPresetAction(getStarshipPreset("bracketed-segments")),
-			"catppuccin-powerline": async () =>
-				runPresetAction(getStarshipPreset("catppuccin-powerline")),
-			"gruvbox-rainbow": async () => runPresetAction(getStarshipPreset("gruvbox-rainbow")),
-			jetpack: async () => runPresetAction(getStarshipPreset("jetpack")),
-			"nerd-font-symbols": async () => runPresetAction(getStarshipPreset("nerd-font-symbols")),
-			"no-empty-icons": async () => runPresetAction(getStarshipPreset("no-empty-icons")),
-			"no-nerd-font": async () => runPresetAction(getStarshipPreset("no-nerd-font")),
-			"no-runtime-versions": async () => runPresetAction(getStarshipPreset("no-runtime-versions")),
-			"pastel-powerline": async () => runPresetAction(getStarshipPreset("pastel-powerline")),
-			"plain-text-symbols": async () => runPresetAction(getStarshipPreset("plain-text-symbols")),
-			"pure-preset": async () => runPresetAction(getStarshipPreset("pure-preset")),
-			"tokyo-night": async () => runPresetAction(getStarshipPreset("tokyo-night")),
+			presets: async () => {
+				const result = await choosePreset(ctx, options, owner);
+				return result === "applied" || result === "close" ? { kind: "close" } : { kind: "stay" };
+			},
 			restore: async () => {
 				const presentation = configurationPresentation(options.getLoaded());
 				if (presentation.restoreDisabled) {
@@ -343,14 +310,62 @@ async function editSettings(
 	}
 }
 
+async function choosePreset(
+	ctx: ExtensionCommandContext,
+	options: StarshipCommandOptions,
+	owner: WorkflowOwner,
+): Promise<"applied" | "cancel" | "close"> {
+	const activePreset = presetForDocument(options.getLoaded().rawDocument);
+	const selection = await showPresetPicker(ctx, {
+		presets: STARSHIP_PRESETS,
+		activePresetId: activePreset?.id,
+		initialPresetId: activePreset?.id ?? STARSHIP_PRESETS[0]?.id,
+		signal: owner.signal,
+		isCurrent: owner.isCurrent,
+		preview(preset) {
+			const loaded = (options.validate ?? validateConfigDocument)(
+				options.settingsPath,
+				preset.rawDocument,
+			);
+			options.preview?.(loaded, ctx);
+		},
+	});
+	if (!isCurrentOwner(owner)) {
+		options.preview?.(undefined, ctx);
+		return "cancel";
+	}
+	if (selection.kind === "back" || selection.kind === "close") {
+		options.preview?.(undefined, ctx);
+		return selection.kind === "close" ? "close" : "cancel";
+	}
+
+	const preset = getStarshipPreset(selection.presetId);
+	try {
+		return await applyPreset(
+			ctx,
+			options,
+			preset,
+			selection.kind === "customize" ? "customize" : "confirm",
+		);
+	} finally {
+		options.preview?.(undefined, ctx);
+	}
+}
+
 async function applyPreset(
 	ctx: ExtensionCommandContext,
 	options: StarshipCommandOptions,
 	preset: StarshipPreset,
+	start: "review" | "confirm" | "customize" = "review",
 ): Promise<"applied" | "cancel" | "close"> {
 	const owner = workflowOwner(options);
 	if (!isCurrentOwner(owner)) return "cancel";
 	let draft = preset.rawDocument;
+	if (start === "customize") {
+		const edited = await ctx.ui.editor(`Customize ${preset.label} preset`, draft);
+		if (!isCurrentOwner(owner) || edited === undefined) return "cancel";
+		draft = edited;
+	}
 	while (true) {
 		let validated: LoadedStarshipConfig;
 		try {
@@ -376,7 +391,14 @@ async function applyPreset(
 			continue;
 		}
 
-		const result = await reviewAndApply(ctx, options, validated, { kind: "preset", preset }, owner);
+		const result = await reviewAndApply(
+			ctx,
+			options,
+			validated,
+			{ kind: "preset", preset },
+			owner,
+			start === "confirm",
+		);
 		if (result !== "edit") return result;
 		const edited = await ctx.ui.editor(`Customize ${preset.label} preset`, draft);
 		if (!isCurrentOwner(owner) || edited === undefined) return "cancel";
@@ -404,46 +426,56 @@ async function reviewAndApply(
 	validated: LoadedStarshipConfig,
 	intent: ReviewIntent,
 	owner: WorkflowOwner,
+	skipReview = false,
 ): Promise<"applied" | "edit" | "cancel" | "close"> {
+	let reviewRequired = !skipReview;
 	while (true) {
-		const selection = await showPreviewActionMenu(
-			ctx,
-			reviewTitle(intent),
-			(width) => reviewPreviewBody(ctx, options, validated, width, intent),
-			[
-				{ value: PREVIEW_ACTIONS.continue, label: continueLabel(intent) },
-				...(intent.kind === "restore"
-					? []
-					: [
-							{
-								value: PREVIEW_ACTIONS.edit,
-								label: intent.kind === "preset" ? "Customize before applying" : "Continue editing",
-							},
-						]),
-				{
-					value: PREVIEW_ACTIONS.cancel,
-					label:
-						intent.kind === "restore"
-							? "Cancel"
-							: intent.kind === "preset"
-								? "Choose another preset"
-								: "Discard draft",
-				},
-			],
-			owner.signal,
-		);
-		if (!isCurrentOwner(owner)) return "cancel";
-		if (selection?.kind === "closed") return "close";
-		const selected = selectedPreviewAction(selection);
-		if (selected === PREVIEW_ACTIONS.edit) return "edit";
-		if (selected !== PREVIEW_ACTIONS.continue) return "cancel";
+		const directAttempt = !reviewRequired;
+		if (reviewRequired) {
+			const selection = await showPreviewActionMenu(
+				ctx,
+				reviewTitle(intent),
+				(width) => reviewPreviewBody(ctx, options, validated, width, intent),
+				[
+					{ value: PREVIEW_ACTIONS.continue, label: continueLabel(intent) },
+					...(intent.kind === "restore"
+						? []
+						: [
+								{
+									value: PREVIEW_ACTIONS.edit,
+									label:
+										intent.kind === "preset" ? "Customize before applying" : "Continue editing",
+								},
+							]),
+					{
+						value: PREVIEW_ACTIONS.cancel,
+						label:
+							intent.kind === "restore"
+								? "Cancel"
+								: intent.kind === "preset"
+									? "Choose another preset"
+									: "Discard draft",
+					},
+				],
+				owner.signal,
+			);
+			if (!isCurrentOwner(owner)) return "cancel";
+			if (selection?.kind === "closed") return "close";
+			const selected = selectedPreviewAction(selection);
+			if (selected === PREVIEW_ACTIONS.edit) return "edit";
+			if (selected !== PREVIEW_ACTIONS.continue) return "cancel";
+		}
+		reviewRequired = true;
 
 		const confirmed = await ctx.ui.confirm(
 			confirmationTitle(intent),
 			confirmationMessage(options.settingsPath, intent),
 		);
 		if (!isCurrentOwner(owner)) return "cancel";
-		if (!confirmed) continue;
+		if (!confirmed) {
+			if (directAttempt) return "cancel";
+			continue;
+		}
 
 		const save = options.save ?? atomicSaveConfigDocument;
 		const previous = options.getLoaded();
@@ -455,6 +487,7 @@ async function reviewAndApply(
 				`Footer settings were not saved: ${safeText(formatError(error))}. The previous footer remains active.`,
 				"error",
 			);
+			if (directAttempt) return "cancel";
 			continue;
 		}
 
@@ -468,6 +501,7 @@ async function reviewAndApply(
 					: `Footer settings could not be applied: ${safeText(formatError(error))}. The previous configuration was restored.`,
 				"error",
 			);
+			if (directAttempt) return "cancel";
 			continue;
 		}
 
@@ -719,7 +753,7 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
 	if (!canNotify(ctx)) return;
 	ctx.ui.notify(
 		[
-			"/starship — customize, choose presets, explain, or inspect the footer in TUI mode",
+			"/starship — customize, live-preview presets, explain, or inspect the footer in TUI mode",
 			"/starship settings — customize, preview, and apply TOML",
 			"/starship status — show source, path, and warnings",
 			"/starship help — show this help",

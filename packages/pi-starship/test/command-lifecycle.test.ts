@@ -184,6 +184,93 @@ test("session shutdown disposes an open settings preview before returning", asyn
 	}
 });
 
+test("preset cursor preview swaps only the in-memory footer and Back restores it", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-live-preset-footer-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = root;
+	try {
+		const mock = createMockPi();
+		(mock.rawPi as typeof mock.rawPi & { exec: () => Promise<ExecResult> }).exec = async () =>
+			gitResult();
+		piStarship(mock.pi);
+		const tui = createTuiHarness({ width: 50, rows: 16 });
+		const context = createMockContext({ mode: "tui", custom: tui.custom });
+		await emit(mock.events, "session_start", {}, context.ctx);
+		const footer = (context.footer as FooterFactory)(
+			{ requestRender() {} },
+			{},
+			{
+				getGitBranch: () => null,
+				getExtensionStatuses: () => new Map(),
+				onBranchChange: () => () => undefined,
+			},
+		);
+		assert.match(footer.render(80).join("\n"), /π/u);
+
+		const command = mock.commands.get("starship")?.handler("", context.ctx);
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		assert.doesNotMatch(footer.render(80).join("\n"), /π/u);
+		assert.equal(existsSync(join(root, "pi-starship.toml")), false);
+
+		tui.press("tui.select.cancel");
+		await tui.waitForOpen();
+		assert.match(footer.render(80).join("\n"), /π/u);
+		tui.press("ctrl+c");
+		await command;
+		footer.dispose();
+		await emit(mock.events, "session_shutdown", {}, context.ctx);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("session replacement clears an open preset footer preview before returning", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-replace-preset-preview-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = root;
+	try {
+		const mock = createMockPi();
+		(mock.rawPi as typeof mock.rawPi & { exec: () => Promise<ExecResult> }).exec = async () =>
+			gitResult();
+		piStarship(mock.pi);
+		const tui = createTuiHarness({ width: 50, rows: 16 });
+		const oldContext = createMockContext({ mode: "tui", custom: tui.custom });
+		await emit(mock.events, "session_start", {}, oldContext.ctx);
+		const oldFooter = (oldContext.footer as FooterFactory)(
+			{ requestRender() {} },
+			{},
+			{
+				getGitBranch: () => null,
+				getExtensionStatuses: () => new Map(),
+				onBranchChange: () => () => undefined,
+			},
+		);
+		const command = mock.commands.get("starship")?.handler("", oldContext.ctx);
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		assert.doesNotMatch(oldFooter.render(80).join("\n"), /π/u);
+
+		const newContext = createMockContext({ mode: "tui", cwd: "/work/replacement" });
+		await emit(mock.events, "session_start", {}, newContext.ctx);
+		await command;
+		assert.match(oldFooter.render(80).join("\n"), /π/u);
+		assert.equal(existsSync(join(root, "pi-starship.toml")), false);
+		oldFooter.dispose();
+		await emit(mock.events, "session_shutdown", {}, newContext.ctx);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("session shutdown disposes an open preset preview without saving", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-starship-shutdown-preset-preview-"));
 	const previous = process.env.PI_CODING_AGENT_DIR;
@@ -205,9 +292,7 @@ test("session shutdown disposes an open preset preview without saving", async ()
 		tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
-		tui.press("tui.select.confirm");
-		await tui.waitForOpen();
-		assert.match(tui.render().join("\n"), /Minimal preset preview/u);
+		assert.match(tui.render().join("\n"), /Presets · current:/u);
 		await emit(mock.events, "session_shutdown", {}, context.ctx);
 		await flushAsync();
 		try {
@@ -232,6 +317,16 @@ async function emit(
 ) {
 	for (const handler of events.get(name) ?? []) await handler(...args);
 }
+
+type FooterFactory = (
+	tui: { requestRender(): void },
+	theme: unknown,
+	data: {
+		getGitBranch(): string | null;
+		getExtensionStatuses(): ReadonlyMap<string, string>;
+		onBranchChange(callback: () => void): () => void;
+	},
+) => { render(width: number): string[]; dispose(): void };
 
 type ExecResult = { stdout: string; stderr: string; code: number; killed: boolean };
 
