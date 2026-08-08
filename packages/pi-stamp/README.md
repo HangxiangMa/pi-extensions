@@ -245,10 +245,6 @@ insert a new custom entry into an older position in the session tree.
 - There are no arbitrary format strings, relative labels, provider-server latency, token/cost
   estimation beyond Pi's message fields, aggregates, raw diagnostics, or analytics dashboard.
 
-See the
-[pi-stamp roadmap](https://github.com/narumiruna/pi-extensions/blob/main/docs/roadmaps/pi-stamp-roadmap.md)
-for the implemented phases and remaining upstream platform dependency.
-
 ## 🗂️ Package layout
 
 ```text
