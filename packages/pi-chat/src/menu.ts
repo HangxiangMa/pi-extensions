@@ -1,9 +1,9 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { MenuDefinition } from "@narumitw/pi-tui-kit";
 import type { ChatSnapshot } from "./chat-session.js";
-import { normalizeNickname } from "./identity.js";
-import { createPublicRoom, parseInvite, type RoomDescriptor } from "./protocol.js";
+import { normalizeNickname } from "./nickname.js";
 import { type PublicRoomBrowseResult, sortDirectoryRooms } from "./public-room-directory.js";
+import { createPublicRoom, parseInvite, type RoomDescriptor } from "./room.js";
 import { type ChatSettings, descriptorFromRememberedRoom, type WidgetMode } from "./settings.js";
 import { sanitizeSingleLine } from "./text.js";
 

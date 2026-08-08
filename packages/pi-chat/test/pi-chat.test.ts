@@ -101,6 +101,35 @@ class DelayedTransport extends IdleTransport {
 	}
 }
 
+class ControlledStartTransport extends IdleTransport {
+	private resolveStart: (() => void) | undefined;
+	private rejectStart: ((error: Error) => void) | undefined;
+	override async start(): Promise<void> {
+		this.started += 1;
+		await new Promise<void>((resolve, reject) => {
+			this.resolveStart = resolve;
+			this.rejectStart = reject;
+		});
+	}
+	finishStart(): void {
+		this.resolveStart?.();
+	}
+	failStart(error: Error): void {
+		this.rejectStart?.(error);
+	}
+}
+
+class ObservableTransport extends IdleTransport {
+	private listener: Parameters<ChatTransport["start"]>[0] | undefined;
+	override async start(listener: Parameters<ChatTransport["start"]>[0]): Promise<void> {
+		this.started += 1;
+		this.listener = listener;
+	}
+	reportError(error: Error): void {
+		this.listener?.onError(error);
+	}
+}
+
 async function emit(
 	mock: ReturnType<typeof createMockPi>,
 	name: string,
@@ -265,6 +294,51 @@ test("direct public join creates identity only after confirmation and shutdown c
 	});
 });
 
+test("a delayed transport load rejects a concurrent join in the same session", async () => {
+	await fixture(async (settingsPath) => {
+		await updateChatSettings(
+			{
+				nickname: "Mika",
+				identitySeed: Buffer.alloc(32, 27).toString("base64url"),
+				widgetMode: "count",
+			},
+			{ settingsPath },
+		);
+		const transport = new IdleTransport();
+		let releaseTransport: (() => void) | undefined;
+		const mock = createMockPi();
+		createPiChatExtension({
+			settingsPath,
+			createTransport: async () => {
+				await new Promise<void>((resolve) => {
+					releaseTransport = resolve;
+				});
+				return transport;
+			},
+			createDirectory: () => new IdleDirectory(),
+		})(mock.pi);
+		const ctx = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			confirm: async () => true,
+			custom: async () => undefined,
+		});
+		await emit(mock, "session_start", { reason: "startup" }, ctx.ctx);
+		const command = mock.commands.get("chat");
+		assert.ok(command);
+		const firstJoin = command.handler("#first-room", ctx.ctx);
+		await waitFor(() => releaseTransport !== undefined);
+		await assert.rejects(
+			async () => command.handler("#second-room", ctx.ctx),
+			/join is already in progress/u,
+		);
+		releaseTransport?.();
+		await firstJoin;
+		await emit(mock, "session_shutdown", { reason: "quit" }, ctx.ctx);
+		assert.equal(transport.stopped, 1);
+	});
+});
+
 test("public joins own a scoped directory advertiser while private joins do not", async () => {
 	await fixture(async (settingsPath) => {
 		await updateChatSettings(
@@ -364,6 +438,42 @@ test("directory startup failure cleans its resource without disconnecting public
 			ctx.notifications.some(({ message }) => /directory bootstrap unavailable/u.test(message)),
 		);
 		assert.equal(directory.stopped, 1);
+		assert.equal(transport.stopped, 0);
+		await emit(mock, "session_shutdown", { reason: "quit" }, ctx.ctx);
+		assert.equal(transport.stopped, 1);
+	});
+});
+
+test("directory loader failure leaves public chat connected and reports the failure", async () => {
+	await fixture(async (settingsPath) => {
+		await updateChatSettings(
+			{
+				nickname: "Mika",
+				identitySeed: Buffer.alloc(32, 27).toString("base64url"),
+				widgetMode: "count",
+			},
+			{ settingsPath },
+		);
+		const transport = new IdleTransport();
+		const mock = createMockPi();
+		createPiChatExtension({
+			settingsPath,
+			createTransport: () => transport,
+			createDirectory: async () => {
+				throw new Error("directory module unavailable");
+			},
+		})(mock.pi);
+		const ctx = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			confirm: async () => true,
+			custom: async () => undefined,
+		});
+		await emit(mock, "session_start", { reason: "startup" }, ctx.ctx);
+		await mock.commands.get("chat")?.handler("#pi-dev", ctx.ctx);
+		await waitFor(() =>
+			ctx.notifications.some(({ message }) => /directory module unavailable/u.test(message)),
+		);
 		assert.equal(transport.stopped, 0);
 		await emit(mock, "session_shutdown", { reason: "quit" }, ctx.ctx);
 		assert.equal(transport.stopped, 1);
@@ -734,6 +844,70 @@ test("session replacement aborts and drains a pending room restore without stale
 	});
 });
 
+test("a stale failed join cannot clear the replacement session widget renderer", async () => {
+	await fixture(async (settingsPath) => {
+		await updateChatSettings(
+			{
+				nickname: "Mika",
+				identitySeed: Buffer.alloc(32, 28).toString("base64url"),
+				widgetMode: "dock",
+			},
+			{ settingsPath },
+		);
+		const staleTransport = new ControlledStartTransport();
+		const replacementTransport = new ControlledStartTransport();
+		let transportIndex = 0;
+		const mock = createMockPi();
+		createPiChatExtension({
+			settingsPath,
+			createTransport: () => (transportIndex++ === 0 ? staleTransport : replacementTransport),
+		})(mock.pi);
+		const first = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			confirm: async () => true,
+			custom: async () => undefined,
+		});
+		await emit(mock, "session_start", { reason: "startup" }, first.ctx);
+		const command = mock.commands.get("chat");
+		assert.ok(command);
+		const staleJoin = command.handler("#stale-room", first.ctx);
+		await waitFor(() => staleTransport.started === 1);
+
+		const replacement = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			confirm: async () => true,
+			custom: async () => undefined,
+		});
+		await emit(mock, "session_start", { reason: "switch" }, replacement.ctx);
+		const replacementJoin = command.handler("#replacement-room", replacement.ctx);
+		await waitFor(() => replacementTransport.started === 1);
+		const widgetFactory = replacement.widgets.get("chat") as
+			| ((tui: unknown, theme: unknown) => unknown)
+			| undefined;
+		assert.ok(widgetFactory);
+		let renderRequests = 0;
+		widgetFactory(
+			{
+				terminal: { rows: 24 },
+				requestRender() {
+					renderRequests += 1;
+				},
+			},
+			{ fg: (_color: string, text: string) => text },
+		);
+
+		staleTransport.failStart(new Error("stale bootstrap failed"));
+		await staleJoin;
+		replacementTransport.finishStart();
+		await replacementJoin;
+
+		assert.ok(renderRequests > 0);
+		await emit(mock, "session_shutdown", { reason: "quit" }, replacement.ctx);
+	});
+});
+
 test("shutdown aborts an automatically reopened composer and drains restore ownership", async () => {
 	await fixture(async (settingsPath) => {
 		const room = createPublicRoom("shutdown-restore");
@@ -782,9 +956,14 @@ test("a slow stale shutdown cannot clear replacement-session ownership", async (
 			{ settingsPath },
 		);
 		const transport = new DelayedStopTransport();
+		const replacementTransport = new ObservableTransport();
+		let transportIndex = 0;
 		const room = createPrivateRoom(Buffer.alloc(32, 23));
 		const mock = createMockPi();
-		createPiChatExtension({ settingsPath, createTransport: () => transport })(mock.pi);
+		createPiChatExtension({
+			settingsPath,
+			createTransport: () => (transportIndex++ === 0 ? transport : replacementTransport),
+		})(mock.pi);
 		const first = createMockContext({
 			hasUI: true,
 			mode: "tui",
@@ -796,10 +975,32 @@ test("a slow stale shutdown cannot clear replacement-session ownership", async (
 		await mock.commands.get("chat")?.handler(room.invite ?? "", first.ctx);
 		const shutdown = emit(mock, "session_shutdown", { reason: "quit" }, first.ctx);
 		await waitFor(() => transport.stopStarted);
-		const second = createMockContext({ hasUI: true, mode: "tui" });
+		const second = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			confirm: async () => true,
+			custom: async () => undefined,
+		});
 		await emit(mock, "session_start", { reason: "switch" }, second.ctx);
+		await mock.commands.get("chat")?.handler("#replacement-room", second.ctx);
+		const widgetFactory = second.widgets.get("chat") as
+			| ((tui: unknown, theme: unknown) => unknown)
+			| undefined;
+		assert.ok(widgetFactory);
+		let renderRequests = 0;
+		widgetFactory(
+			{
+				terminal: { rows: 24 },
+				requestRender() {
+					renderRequests += 1;
+				},
+			},
+			{ fg: (_color: string, text: string) => text },
+		);
 		transport.finishStop();
 		await shutdown;
+		replacementTransport.reportError(new Error("replacement retry"));
+		assert.ok(renderRequests > 0);
 		await mock.commands.get("chat")?.handler("bad", second.ctx);
 		assert.match(second.notifications.at(-1)?.message ?? "", /Usage: \/chat/u);
 		await emit(mock, "session_shutdown", { reason: "quit" }, second.ctx);

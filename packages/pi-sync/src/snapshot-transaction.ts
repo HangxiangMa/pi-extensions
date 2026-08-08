@@ -4,7 +4,7 @@ import path from "node:path";
 import { agentDir, stateDir } from "./config.js";
 import { withLock } from "./lock.js";
 import { assertWithinRoot, isPathInside } from "./paths.js";
-import { sessionStorageRoot } from "./snapshot.js";
+import { sessionStorageRoot } from "./snapshot-paths.js";
 import type { SnapshotApplyPlan } from "./types.js";
 
 const JOURNAL_VERSION = 1;

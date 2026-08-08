@@ -1,4 +1,7 @@
 import { agentDir } from "./config.js";
+
+export { errorMessage } from "./sync-errors.js";
+
 import type { PublicationCapability, RemoteHead } from "./sync-backend.js";
 import { inspectRemoteSelection } from "./sync-policy.js";
 import { fileHashMap } from "./sync-state.js";
@@ -165,8 +168,4 @@ export function safeTerminalText(value: string) {
 
 export function redact(value: string) {
 	return value.length <= 8 ? "configured" : `${value.slice(0, 4)}…${value.slice(-4)}`;
-}
-
-export function errorMessage(error: unknown) {
-	return safeTerminalText(error instanceof Error ? error.message : String(error));
 }

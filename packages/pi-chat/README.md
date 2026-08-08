@@ -295,15 +295,18 @@ packages/pi-chat/
 │   ├── index.ts
 │   ├── pi-chat.ts
 │   ├── chat-session.ts
-│   ├── network.ts
+│   ├── network-contract.ts
+│   ├── network.ts             # Loaded only when a room needs a transport
 │   ├── public-room-directory.ts
-│   ├── directory-network.ts
-│   ├── protocol.ts
-│   ├── identity.ts
+│   ├── directory-network.ts   # Loaded only for public-room discovery
+│   ├── room.ts                # Lightweight invite and room descriptor compatibility
+│   ├── protocol.ts            # Signed wire messages and framing
+│   ├── nickname.ts            # Lightweight nickname normalization
+│   ├── identity.ts            # Loads DHT and sodium implementations on first cryptographic use
 │   ├── settings.ts
-│   ├── menu.ts
-│   ├── chat-view.ts
-│   ├── widget.ts
+│   ├── menu.ts                # Loaded on the first menu request
+│   ├── chat-view.ts           # Loaded on the first composer request
+│   ├── widget.ts              # Loaded before the first room joins
 │   └── text.ts
 ├── test/
 ├── README.md

@@ -1,4 +1,5 @@
 import { syncConfigReviewIdentity } from "./config.js";
+import { SyncDecisionRequiredError } from "./sync-errors.js";
 import { formatDiff, formatSnapshotOnlyDiff, safeTerminalText } from "./sync-format.js";
 import { includeFromSelectionConfig } from "./sync-policy.js";
 import { syncPolicyChanged } from "./sync-state.js";
@@ -29,15 +30,10 @@ export interface SyncDecision {
 	directMessage: string;
 }
 
-export class SyncDecisionRequiredError extends Error {
-	readonly decision: SyncDecision;
-
-	constructor(decision: SyncDecision) {
-		super(decision.directMessage);
-		this.name = "SyncDecisionRequiredError";
-		this.decision = decision;
-	}
-}
+export {
+	isSyncDecisionRequiredError,
+	SyncDecisionRequiredError,
+} from "./sync-errors.js";
 
 interface CreateSyncDecisionOptions {
 	kind: SyncDecisionKind;
@@ -102,10 +98,6 @@ export function createSyncDecision(options: CreateSyncDecisionOptions) {
 		directions: kind === "remote-empty" ? ["push"] : ["push", "pull"],
 		directMessage: options.directMessage,
 	});
-}
-
-export function isSyncDecisionRequiredError(error: unknown): error is SyncDecisionRequiredError {
-	return error instanceof SyncDecisionRequiredError;
 }
 
 function safeList(values: readonly string[]) {

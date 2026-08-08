@@ -305,7 +305,9 @@ Pi exposes terminal components rather than a semantic/ARIA tree. Release validat
 packages/pi-sync/
 ├── src/
 │   ├── index.ts
-│   ├── sync.ts
+│   ├── sync-extension.ts      # Lightweight Pi entry runtime and cached lazy loaders
+│   ├── sync.ts                # Compatibility barrel for package-local helpers
+│   ├── sync-errors.ts         # Lightweight setup/decision error contracts
 │   ├── config.ts
 │   ├── config-file.ts
 │   ├── state-directory.ts
@@ -322,7 +324,8 @@ packages/pi-sync/
 │   ├── s3-backend.ts
 │   ├── webdav-backend.ts
 │   ├── git-backend.ts
-│   ├── snapshot.ts
+│   ├── snapshot-paths.ts      # Eager recovery-safe session path helpers
+│   ├── snapshot.ts            # Loaded only for snapshot operations/session push
 │   └── *.ts
 ├── test/
 ├── README.md

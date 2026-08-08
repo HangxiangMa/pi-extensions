@@ -3,13 +3,8 @@ import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { normalizeNickname } from "./identity.js";
-import {
-	createPublicRoom,
-	isCompatibleRoomId,
-	parseInvite,
-	type RoomDescriptor,
-} from "./protocol.js";
+import { normalizeNickname } from "./nickname.js";
+import { createPublicRoom, isCompatibleRoomId, parseInvite, type RoomDescriptor } from "./room.js";
 
 export const CHAT_SETTINGS_FILE = "pi-chat.json";
 const MAX_SETTINGS_BYTES = 64 * 1024;

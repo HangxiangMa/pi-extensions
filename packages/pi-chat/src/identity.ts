@@ -1,10 +1,25 @@
 import { createHash, hkdfSync } from "node:crypto";
-import HyperDHT from "hyperdht";
-import sodium from "sodium-universal";
+import { createRequire } from "node:module";
+
+export { normalizeNickname } from "./nickname.js";
+
+const require = createRequire(import.meta.url);
+type HyperDht = typeof import("hyperdht")["default"];
+type Sodium = typeof import("sodium-universal")["default"];
+let hyperDhtImplementation: HyperDht | undefined;
+let sodiumImplementation: Sodium | undefined;
+
+function hyperDht(): HyperDht {
+	hyperDhtImplementation ??= require("hyperdht") as HyperDht;
+	return hyperDhtImplementation;
+}
+
+function sodium(): Sodium {
+	sodiumImplementation ??= require("sodium-universal") as Sodium;
+	return sodiumImplementation;
+}
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-const MAX_NICKNAME_GRAPHEMES = 24;
-const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 
 export interface ChatIdentity {
 	seed: string;
@@ -13,19 +28,10 @@ export interface ChatIdentity {
 	tag: string;
 }
 
-export function normalizeNickname(value: unknown): string | undefined {
-	if (typeof value !== "string") return undefined;
-	const normalized = value.normalize("NFKC").trim();
-	if (!normalized || /\p{Cc}/u.test(normalized) || BIDI_CONTROLS.test(normalized)) return undefined;
-	const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-	if (Array.from(segmenter.segment(normalized)).length > MAX_NICKNAME_GRAPHEMES) return undefined;
-	return normalized;
-}
-
 export function createIdentity(seed: Uint8Array): ChatIdentity {
 	if (seed.byteLength !== 32) throw new Error("Pi Chat identity seed must be exactly 32-byte.");
 	const stableSeed = Buffer.from(seed);
-	const keyPair = HyperDHT.keyPair(stableSeed);
+	const keyPair = hyperDht().keyPair(stableSeed);
 	return {
 		seed: stableSeed.toString("base64url"),
 		publicKey: Buffer.from(keyPair.publicKey),
@@ -53,8 +59,9 @@ export function deriveScopedIdentity(identity: ChatIdentity, scope: string): Cha
 }
 
 export function signIdentityPayload(identity: ChatIdentity, payload: Uint8Array): string {
-	const signature = Buffer.alloc(sodium.crypto_sign_BYTES);
-	sodium.crypto_sign_detached(signature, payload, identity.secretKey);
+	const implementation = sodium();
+	const signature = Buffer.alloc(implementation.crypto_sign_BYTES);
+	implementation.crypto_sign_detached(signature, payload, identity.secretKey);
 	return signature.toString("base64url");
 }
 
@@ -65,9 +72,10 @@ export function verifyIdentityPayload(
 ): boolean {
 	if (publicKey.byteLength !== 32 || !/^[A-Za-z0-9_-]{86}$/u.test(signatureValue)) return false;
 	const signature = Buffer.from(signatureValue, "base64url");
-	if (signature.byteLength !== sodium.crypto_sign_BYTES) return false;
+	const implementation = sodium();
+	if (signature.byteLength !== implementation.crypto_sign_BYTES) return false;
 	try {
-		return sodium.crypto_sign_verify_detached(signature, payload, publicKey);
+		return implementation.crypto_sign_verify_detached(signature, payload, publicKey);
 	} catch {
 		return false;
 	}
