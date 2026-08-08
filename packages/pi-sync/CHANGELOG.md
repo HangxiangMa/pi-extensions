@@ -1,5 +1,13 @@
 # @narumitw/pi-sync
 
+## 0.49.5
+
+### Patch Changes
+
+- 8289ba9: Move operational state from `.pisync` to `pi-sync` with an explicit guarded migration and fail-closed path handling.
+- Updated dependencies [736ca9e]
+  - @narumitw/pi-tui-kit@0.52.0
+
 ## 0.49.4
 
 ### Patch Changes

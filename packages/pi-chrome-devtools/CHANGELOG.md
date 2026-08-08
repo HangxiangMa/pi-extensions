@@ -1,5 +1,13 @@
 # @narumitw/pi-chrome-devtools
 
+## 0.50.1
+
+### Patch Changes
+
+- f9a33ed: Require pi-tui-kit 0.51 so disabled menu actions and their explanations render consistently.
+- Updated dependencies [736ca9e]
+  - @narumitw/pi-tui-kit@0.52.0
+
 ## 0.50.0
 
 ### Minor Changes

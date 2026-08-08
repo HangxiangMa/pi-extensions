@@ -1,5 +1,11 @@
 # @narumitw/pi-tui-kit
 
+## 0.52.0
+
+### Minor Changes
+
+- 736ca9e: Add a standalone live-choice interaction, shared choice-selection behavior, and generic interaction-hint formatting.
+
 ## 0.51.0
 
 ### Minor Changes
