@@ -1,12 +1,11 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey } from "@earendil-works/pi-tui";
+import { Key, type KeyId, matchesKey } from "@earendil-works/pi-tui";
 import { createMenuScreenComponent, safeMenuText } from "./components/index.js";
 import { runCustomInteraction } from "./custom-interaction.js";
 import { formatInteractionHints } from "./interaction-hints.js";
 import type { MenuCloseReason, MenuContext } from "./types.js";
 
 type ExtensionMode = MenuContext["mode"];
-type MatchableKey = Parameters<typeof matchesKey>[1];
 
 export interface LiveChoiceItem<ItemId extends string = string> {
 	id: ItemId;
@@ -19,7 +18,7 @@ export interface LiveChoiceItem<ItemId extends string = string> {
 
 export interface LiveChoiceShortcut<ShortcutId extends string = string> {
 	id: ShortcutId;
-	keys: readonly string[];
+	keys: readonly KeyId[];
 	label: string;
 }
 
@@ -110,6 +109,7 @@ async function runTuiLiveChoice<
 		onError: (currentCtx, error) => reportLiveChoiceError(currentCtx, options, error),
 		create: ({ tui, theme, keybindings, signal, complete }) => {
 			let focusedItemId = selectedItemId;
+			const shortcuts = availableShortcuts(options.shortcuts, keybindings);
 			const previews = createPreviewQueue(ctx, options, signal, () =>
 				complete({ kind: "previewFailed" }),
 			);
@@ -128,7 +128,7 @@ async function runTuiLiveChoice<
 				tui,
 				theme,
 				keybindings,
-				interactionHint: liveChoiceHint(keybindings, options),
+				interactionHint: liveChoiceHint(keybindings, options, shortcuts),
 				onSelectionChange: (itemId) => {
 					focusedItemId = itemId as Item["id"];
 					const item = findItem(options.items, focusedItemId);
@@ -156,7 +156,7 @@ async function runTuiLiveChoice<
 					const item = findItem(options.items, focusedItemId);
 					const shortcut =
 						item && !item.disabled && !isStandardChoiceInput(data, keybindings)
-							? findShortcut(options.shortcuts, data)
+							? findShortcut(shortcuts, data)
 							: undefined;
 					if (item && shortcut) {
 						complete({ kind: "shortcut", shortcutId: shortcut.id, itemId: item.id });
@@ -304,6 +304,7 @@ function liveChoiceHint<Item extends LiveChoiceItem, ShortcutId extends string>(
 		getKeys(binding: string): readonly string[];
 	},
 	options: RunLiveChoiceOptions<Item, ShortcutId, MenuContext>,
+	shortcuts: readonly LiveChoiceShortcut<ShortcutId>[],
 ): string {
 	return formatInteractionHints(keybindings, [
 		{
@@ -311,7 +312,7 @@ function liveChoiceHint<Item extends LiveChoiceItem, ShortcutId extends string>(
 			label: options.navigationLabel ?? "preview",
 		},
 		{ bindings: ["tui.select.confirm"], label: options.confirmLabel ?? "select" },
-		...(options.shortcuts ?? []).map((shortcut) => ({
+		...shortcuts.map((shortcut) => ({
 			keys: shortcut.keys,
 			label: shortcut.label,
 		})),
@@ -345,13 +346,56 @@ function isStandardChoiceInput(
 	);
 }
 
-function findShortcut<ShortcutId extends string>(
+const STANDARD_CHOICE_BINDINGS = [
+	"tui.select.cancel",
+	"tui.select.up",
+	"tui.select.down",
+	"tui.select.pageUp",
+	"tui.select.pageDown",
+	"tui.select.confirm",
+] as const;
+
+function availableShortcuts<ShortcutId extends string>(
 	shortcuts: readonly LiveChoiceShortcut<ShortcutId>[] | undefined,
+	keybindings: { getKeys(binding: string): readonly string[] },
+): readonly LiveChoiceShortcut<ShortcutId>[] {
+	const unavailableKeys = new Set(
+		[
+			"ctrl+c",
+			"home",
+			"end",
+			"space",
+			...STANDARD_CHOICE_BINDINGS.flatMap((binding) => keybindings.getKeys(binding)),
+		].map(canonicalKeyId),
+	);
+	const available: LiveChoiceShortcut<ShortcutId>[] = [];
+	for (const shortcut of shortcuts ?? []) {
+		const keys = shortcut.keys.filter((key) => {
+			const canonical = canonicalKeyId(key);
+			if (unavailableKeys.has(canonical)) return false;
+			unavailableKeys.add(canonical);
+			return true;
+		});
+		if (keys.length > 0) available.push({ ...shortcut, keys });
+	}
+	return available;
+}
+
+function canonicalKeyId(key: string): string {
+	const parts = key.toLowerCase().split("+");
+	const base = parts.at(-1) ?? "";
+	const canonicalBase = base === "esc" ? "escape" : base === "return" ? "enter" : base;
+	const modifiers = ["ctrl", "shift", "alt", "super"].filter((modifier) =>
+		parts.includes(modifier),
+	);
+	return [...modifiers, canonicalBase].join("+");
+}
+
+function findShortcut<ShortcutId extends string>(
+	shortcuts: readonly LiveChoiceShortcut<ShortcutId>[],
 	data: string,
 ): LiveChoiceShortcut<ShortcutId> | undefined {
-	return shortcuts?.find((shortcut) =>
-		shortcut.keys.some((key) => matchesKey(data, key as MatchableKey)),
-	);
+	return shortcuts.find((shortcut) => shortcut.keys.some((key) => matchesKey(data, key)));
 }
 
 function initialItemId<

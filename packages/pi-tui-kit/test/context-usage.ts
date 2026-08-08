@@ -200,6 +200,19 @@ const commandLiveChoice: Promise<RunLiveChoiceResult<"one", never>> = runLiveCho
 );
 void commandLiveChoice;
 
+void runLiveChoice(commandContext, {
+	title: "Invalid shortcut",
+	items: [{ id: "one", label: "One" }],
+	shortcuts: [
+		{
+			id: "invalid",
+			// @ts-expect-error Live-choice shortcuts accept Pi KeyId values, not uppercase aliases.
+			keys: ["E"],
+			label: "invalid",
+		},
+	],
+});
+
 void runLiveChoice(lifecycleContext, {
 	title: "Lifecycle choice",
 	items: [{ id: "one", label: "One" }],

@@ -212,7 +212,7 @@ try {
     initialItemId: activePresetId,
     navigationLabel: "live preview",
     confirmLabel: "apply",
-    shortcuts: [{ id: "customize", keys: ["e", "E"], label: "customize" }],
+    shortcuts: [{ id: "customize", keys: ["e", "shift+e"], label: "customize" }],
     signal: currentSessionSignal(),
     isCurrent: () => generation === currentGeneration(),
     onSelectionChange: ({ item, signal }) => {
@@ -228,7 +228,9 @@ else if (choice?.kind === "shortcut") await customizePreset(choice.itemId);
 ```
 
 TUI calls `onSelectionChange` for the initial cursor and later focused rows, including disabled rows;
-only confirmation and shortcuts are blocked for a disabled row. Synchronous previews run immediately.
+only confirmation and shortcuts are blocked for a disabled row. Shortcut keys use Pi `KeyId` values;
+keys that conflict with current standard choice controls are omitted from shortcut hints and dispatch.
+Synchronous previews run immediately.
 While an asynchronous preview is pending, newer cursor changes coalesce to the latest row. Completion,
 Back, Close, owner cancellation, external disposal, and errors abort the callback signal and drain
 owned preview work before returning. The callback must honor that signal. The caller still owns its

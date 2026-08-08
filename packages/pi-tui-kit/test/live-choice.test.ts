@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { stripVTControlCharacters } from "node:util";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { type KeyId, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import { createMockContext } from "../../../test/support.js";
 import { runLiveChoice } from "../src/index.js";
 import { createRpcHarness, createTuiHarness } from "../src/testing/index.js";
@@ -38,7 +38,7 @@ test("runLiveChoice previews initial and cursor choices and dispatches enabled s
 		items: choices,
 		currentItemId: "minimal",
 		initialItemId: "blocked",
-		shortcuts: [{ id: "customize", keys: ["e", "E"], label: "customize" }],
+		shortcuts: [{ id: "customize", keys: ["e", "shift+e"], label: "customize" }],
 		onSelectionChange: ({ item }) => {
 			previews.push(item.id);
 		},
@@ -60,13 +60,52 @@ test("runLiveChoice previews initial and cursor choices and dispatches enabled s
 	assert.equal(tui.isOpen, true);
 	tui.press("tui.select.down");
 	await Promise.resolve();
-	tui.type("e");
+	tui.type("E");
 	assert.deepEqual(await running, {
 		kind: "shortcut",
 		shortcutId: "customize",
 		itemId: "full",
 	});
 	assert.deepEqual(previews, ["blocked", "full"]);
+});
+
+test("runLiveChoice omits shortcuts that conflict with remapped standard controls", async () => {
+	const bindingKeys = (binding: string): KeyId[] => {
+		switch (binding) {
+			case "tui.select.up":
+				return ["up"];
+			case "tui.select.down":
+				return ["e"];
+			case "tui.select.pageUp":
+				return ["pageUp"];
+			case "tui.select.pageDown":
+				return ["pageDown"];
+			case "tui.select.confirm":
+				return ["enter"];
+			case "tui.select.cancel":
+				return ["escape", "ctrl+c"];
+			default:
+				return [];
+		}
+	};
+	const tui = createTuiHarness({
+		keybindings: {
+			getKeys: (binding) => bindingKeys(binding),
+			matches: (data, binding) => bindingKeys(binding).some((key) => matchesKey(data, key)),
+		},
+	});
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const running = runLiveChoice(context.ctx, {
+		title: "Preset",
+		items: [choices[0], choices[2]],
+		shortcuts: [{ id: "customize", keys: ["e", "return"], label: "customize" }],
+	});
+	await tui.waitForOpen();
+	assert.doesNotMatch(tui.render().join("\n"), /customize/u);
+
+	tui.type("e");
+	tui.press("tui.select.confirm");
+	assert.deepEqual(await running, { kind: "selected", itemId: "full" });
 });
 
 test("runLiveChoice shares wrapping, clamped paging, Home, and End selection semantics", async () => {
