@@ -3,7 +3,12 @@ import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 
 import path from "node:path";
 import test from "node:test";
 import { isDeniedPath } from "../src/paths.js";
-import { legacyStateDir, migrateLegacyStateDirectory, stateDir } from "../src/state-directory.js";
+import {
+	legacyStateDir,
+	migrateLegacyStateDirectory,
+	stateDir,
+	withStateDirectoryAccess,
+} from "../src/state-directory.js";
 import { withTempHome } from "./helpers.js";
 
 test("new installations select the visible pi-sync state directory", async () => {
@@ -77,6 +82,36 @@ test("a legacy operation guard without metadata defers migration", async () => {
 		assert.equal(result.status, "deferred");
 		assert.equal(stateDir(), legacy);
 		assert.equal(existsSync(path.join(agentDir, "pi-sync")), false);
+	});
+});
+
+test("active state access defers migration without moving or recreating the legacy root", async () => {
+	await withTempHome(async (agentDir) => {
+		const legacy = path.join(agentDir, ".pisync");
+		mkdirSync(path.join(legacy, "git"), { recursive: true });
+		let accessStarted: () => void = () => undefined;
+		const started = new Promise<void>((resolve) => {
+			accessStarted = resolve;
+		});
+		let releaseAccess: () => void = () => undefined;
+		const accessReleased = new Promise<void>((resolve) => {
+			releaseAccess = resolve;
+		});
+		const access = withStateDirectoryAccess(async () => {
+			accessStarted();
+			await accessReleased;
+		});
+		await started;
+
+		try {
+			const result = await migrateLegacyStateDirectory();
+			assert.equal(result.status, "deferred");
+			assert.equal(stateDir(), legacy);
+			assert.equal(existsSync(path.join(agentDir, "pi-sync")), false);
+		} finally {
+			releaseAccess();
+			await access;
+		}
 	});
 });
 

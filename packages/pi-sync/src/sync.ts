@@ -9,6 +9,7 @@ import {
 	parseOptions,
 	resolveSyncCommand,
 	setSyncSetupCompletions,
+	splitArgs,
 	usage,
 	validateCommandOptions,
 } from "./command.js";
@@ -32,7 +33,11 @@ import { unlock, withLock } from "./lock.js";
 import { SetupPullRequiresUiError, useSyncSetup } from "./setup-switch.js";
 import { createSnapshot } from "./snapshot.js";
 import { recoverSnapshotTransactionsOnStartup } from "./snapshot-transaction.js";
-import { migrateLegacyStateDirectory, stateDirectoryMigrationNotice } from "./state-directory.js";
+import {
+	migrateLegacyStateDirectory,
+	stateDirectoryMigrationNotice,
+	withStateDirectoryAccess,
+} from "./state-directory.js";
 import { isSyncDecisionRequiredError } from "./sync-decision.js";
 import { errorMessage } from "./sync-format.js";
 import { hasLocalChanges } from "./sync-state.js";
@@ -75,7 +80,9 @@ export default function sync(pi: ExtensionAPI) {
 					"/sync requires TUI or RPC mode so results and safety prompts are observable.",
 				);
 			}
-			await handleCommand(args, ctx, sessionAbort.signal);
+			const run = () => handleCommand(args, ctx, sessionAbort.signal);
+			if (splitArgs(args)[0] === "migrate-state") await run();
+			else await withStateDirectoryAccess(run);
 		},
 	});
 
@@ -87,31 +94,11 @@ export default function sync(pi: ExtensionAPI) {
 		const signal = sessionAbort.signal;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		try {
-			const migrationNotice = stateDirectoryMigrationNotice();
-			if (migrationNotice) ctx.ui.notify(migrationNotice, "warning");
-		} catch (error) {
-			ctx.ui.notify(`pi-sync state directory requires attention: ${errorMessage(error)}`, "error");
-			return;
-		}
-		try {
-			await recoverSnapshotTransactionsOnStartup();
-			if (signal.aborted) return;
+			await withStateDirectoryAccess(() => startSession(ctx, signal));
 		} catch (error) {
 			if (signal.aborted) return;
-			ctx.ui.notify(`pi-sync recovery required: ${errorMessage(error)}`, "error");
-			return;
+			ctx.ui.notify(`pi-sync state access failed: ${errorMessage(error)}`, "error");
 		}
-		try {
-			setSyncSetupCompletions(await configuredSyncSetupNames());
-			if (signal.aborted) return;
-		} catch {
-			if (signal.aborted) return;
-			setSyncSetupCompletions([]);
-		}
-		const migrationNotice = consumeLocalConfigMigrationNotice();
-		if (migrationNotice) ctx.ui.notify(migrationNotice, "warning");
-		if (signal.aborted) return;
-		await autoSync(ctx, signal);
 	});
 
 	pi.on("session_shutdown", async (event, ctx) => {
@@ -123,13 +110,52 @@ export default function sync(pi: ExtensionAPI) {
 		const reason =
 			typeof event === "object" && event ? (event as { reason?: string }).reason : undefined;
 		try {
-			if (reason !== "reload") await autoPushSessions(ctx, signal);
+			if (reason !== "reload") {
+				await withStateDirectoryAccess(async () => {
+					if (signal.aborted) return;
+					await autoPushSessions(ctx, signal);
+				});
+			}
+		} catch (error) {
+			if (!signal.aborted) {
+				ctx.ui.notify(`pi-sync session push skipped: ${errorMessage(error)}`, "warning");
+			}
 		} finally {
 			if (shutdownAbort === controller) shutdownAbort = undefined;
 		}
 		if (signal.aborted) return;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
+}
+
+async function startSession(ctx: ExtensionContext, signal: AbortSignal) {
+	if (signal.aborted) return;
+	try {
+		const migrationNotice = stateDirectoryMigrationNotice();
+		if (migrationNotice) ctx.ui.notify(migrationNotice, "warning");
+	} catch (error) {
+		ctx.ui.notify(`pi-sync state directory requires attention: ${errorMessage(error)}`, "error");
+		return;
+	}
+	try {
+		await recoverSnapshotTransactionsOnStartup();
+		if (signal.aborted) return;
+	} catch (error) {
+		if (signal.aborted) return;
+		ctx.ui.notify(`pi-sync recovery required: ${errorMessage(error)}`, "error");
+		return;
+	}
+	try {
+		setSyncSetupCompletions(await configuredSyncSetupNames());
+		if (signal.aborted) return;
+	} catch {
+		if (signal.aborted) return;
+		setSyncSetupCompletions([]);
+	}
+	const migrationNotice = consumeLocalConfigMigrationNotice();
+	if (migrationNotice) ctx.ui.notify(migrationNotice, "warning");
+	if (signal.aborted) return;
+	await autoSync(ctx, signal);
 }
 
 async function handleCommand(

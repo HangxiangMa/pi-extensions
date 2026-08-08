@@ -17,6 +17,11 @@ export type StateDirectoryPreparation =
 	| { status: "migrated"; message: string }
 	| { status: "deferred"; message: string };
 
+interface StateDirectoryGuard {
+	release: () => Promise<void>;
+	throwIfCompromised: () => void;
+}
+
 export function stateDir() {
 	const roots = inspectStateRoots();
 	if (roots.canonical) return canonicalStateDir();
@@ -34,23 +39,26 @@ export function stateDirectoryMigrationNotice() {
 	return "Legacy pi-sync state is still stored in .pisync. Close other Pi sessions, then run /sync migrate-state to move it to pi-sync/.";
 }
 
+export async function withStateDirectoryAccess<T>(fn: () => Promise<T>): Promise<T> {
+	return runWithStateDirectoryGuard(await acquireStateDirectoryGuard(), fn);
+}
+
 export async function migrateLegacyStateDirectory(): Promise<StateDirectoryPreparation> {
 	const initial = inspectStateRoots();
 	if (initial.canonical || !initial.legacy) return { status: "ready" };
 
-	let compromisedError: Error | undefined;
-	const release = await lockfile.lock(getAgentDir(), {
-		fs: LOCKFILE_FS_ADAPTER,
-		lockfilePath: migrationLockPath(),
-		realpath: false,
-		stale: MIGRATION_LOCK_STALE_MS,
-		update: MIGRATION_LOCK_UPDATE_MS,
-		retries: { retries: 20, minTimeout: 10, maxTimeout: 50 },
-		onCompromised: (error) => {
-			compromisedError = error;
-		},
-	});
+	let guard: StateDirectoryGuard;
 	try {
+		guard = await acquireStateDirectoryGuard();
+	} catch (error) {
+		if (!isLockHeldError(error)) throw error;
+		return {
+			status: "deferred",
+			message:
+				"pi-sync state migration was deferred because another state user is active. Close other Pi sessions and retry.",
+		};
+	}
+	return runWithStateDirectoryGuard(guard, async () => {
 		const roots = inspectStateRoots();
 		if (roots.canonical || !roots.legacy) return { status: "ready" };
 
@@ -65,20 +73,67 @@ export async function migrateLegacyStateDirectory(): Promise<StateDirectoryPrepa
 			return {
 				status: "deferred",
 				message:
-					"pi-sync state migration was deferred because the legacy directory is busy. Close other Pi sessions, clear any confirmed stale sync lock, and restart Pi.",
+					"pi-sync state migration was deferred because the legacy directory is busy. Close other Pi sessions, clear any confirmed stale sync lock, and retry.",
 			};
 		}
-		if (compromisedError) throw compromisedError;
+		guard.throwIfCompromised();
 		await fs.rename(legacyStateDir(), canonicalStateDir());
-		if (compromisedError) throw compromisedError;
+		guard.throwIfCompromised();
 		inspectStateRoots();
 		return {
 			status: "migrated",
 			message: `Migrated pi-sync state from ${legacyStateDir()} to ${canonicalStateDir()}.`,
 		};
-	} finally {
-		await release();
+	});
+}
+
+async function acquireStateDirectoryGuard(): Promise<StateDirectoryGuard> {
+	let compromisedError: Error | undefined;
+	const release = await lockfile.lock(getAgentDir(), {
+		fs: LOCKFILE_FS_ADAPTER,
+		lockfilePath: migrationLockPath(),
+		realpath: false,
+		stale: MIGRATION_LOCK_STALE_MS,
+		update: MIGRATION_LOCK_UPDATE_MS,
+		retries: { retries: 20, minTimeout: 10, maxTimeout: 50 },
+		onCompromised: (error) => {
+			compromisedError = error;
+		},
+	});
+	return {
+		release,
+		throwIfCompromised: () => {
+			if (compromisedError) throw compromisedError;
+		},
+	};
+}
+
+async function runWithStateDirectoryGuard<T>(guard: StateDirectoryGuard, fn: () => Promise<T>) {
+	let result: T | undefined;
+	let failed = false;
+	let failure: unknown;
+	try {
+		guard.throwIfCompromised();
+		result = await fn();
+		guard.throwIfCompromised();
+	} catch (error) {
+		failed = true;
+		failure = error;
 	}
+	try {
+		await guard.release();
+	} catch (error) {
+		if (!failed) {
+			failed = true;
+			failure = error;
+		}
+	}
+	if (failed) throw failure;
+	return result as T;
+}
+
+function isLockHeldError(error: unknown) {
+	return (error as NodeJS.ErrnoException).code === "ELOCKED";
 }
 
 function canonicalStateDir() {
