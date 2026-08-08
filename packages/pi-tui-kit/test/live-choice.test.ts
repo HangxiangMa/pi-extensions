@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { type KeyId, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
+import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { runLiveChoice } from "../src/index.js";
 import { createRpcHarness, createTuiHarness } from "../src/testing/index.js";

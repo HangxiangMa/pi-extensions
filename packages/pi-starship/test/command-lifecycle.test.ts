@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import piStarshipRuntime from "../src/pi-starship.js";
 

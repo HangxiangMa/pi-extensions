@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { type TestContext, test } from "vitest";
 import { AnalyticsRunFiles } from "../src/storage/files.js";
 import { resolveTimeRange } from "../src/storage/queries.js";
 import { AnalyticsStore } from "../src/storage/store.js";
@@ -30,11 +30,11 @@ function run(id: string, startedAtMs: number, options: Partial<SettledRun> = {})
 	};
 }
 
-async function fixture(t: test.TestContext): Promise<AnalyticsStore> {
+async function fixture(t: TestContext): Promise<AnalyticsStore> {
 	const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-store-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
+	t.onTestFinished(() => rm(directory, { recursive: true, force: true }));
 	const store = new AnalyticsStore(path.join(directory, "pi-analytics"));
-	t.after(() => store.close().catch(() => undefined));
+	t.onTestFinished(() => store.close().catch(() => undefined));
 	return store;
 }
 
@@ -137,22 +137,26 @@ test("store publishes a content-free run and returns reconciled analytics", asyn
 
 test("duplicate run ids remain idempotent across independent writer files", async (t) => {
 	const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-dedup-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
+	t.onTestFinished(() => rm(directory, { recursive: true, force: true }));
 	const root = path.join(directory, "pi-analytics");
 	const left = new AnalyticsStore(root);
 	const right = new AnalyticsStore(root);
-	t.after(async () => Promise.all([left.close(), right.close()]));
+	t.onTestFinished(async () => {
+		await Promise.all([left.close(), right.close()]);
+	});
 	await Promise.all([left.recordRun(run("same", 1)), right.recordRun(run("same", 1))]);
 	assert.equal((await left.getSnapshot({ fromMs: 0, toMs: 10 })).overview.responseCycles, 1);
 });
 
 test("two stores publish concurrently and clear switches every writer to fresh data", async (t) => {
 	const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-concurrent-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
+	t.onTestFinished(() => rm(directory, { recursive: true, force: true }));
 	const root = path.join(directory, "pi-analytics");
 	const left = new AnalyticsStore(root);
 	const right = new AnalyticsStore(root);
-	t.after(async () => Promise.all([left.close(), right.close()]));
+	t.onTestFinished(async () => {
+		await Promise.all([left.close(), right.close()]);
+	});
 	await Promise.all(
 		Array.from({ length: 20 }, (_, index) =>
 			(index % 2 ? left : right).recordRun(run(`run-${index}`, index + 1)),
@@ -166,7 +170,7 @@ test("two stores publish concurrently and clear switches every writer to fresh d
 
 test("a snapshot crossing Clear retries against only the active generation", async (t) => {
 	const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-read-clear-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
+	t.onTestFinished(() => rm(directory, { recursive: true, force: true }));
 	const root = path.join(directory, "pi-analytics");
 	const writer = new AnalyticsStore(root);
 	await writer.recordRun(run("before", 1));
@@ -198,7 +202,7 @@ test("a snapshot crossing Clear retries against only the active generation", asy
 
 test("snapshot cancellation drains a read waiting between files", async (t) => {
 	const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-read-abort-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
+	t.onTestFinished(() => rm(directory, { recursive: true, force: true }));
 	const root = path.join(directory, "pi-analytics");
 	const writer = new AnalyticsStore(root);
 	await writer.recordRun(run("before", 1));

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { defineMenu, runMenu } from "../src/index.js";
 import { createRpcHarness } from "../src/testing/index.js";

@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { SubagentSettings } from "../src/agents.js";
 import {

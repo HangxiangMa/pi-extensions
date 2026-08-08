@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { sep } from "node:path";
-import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { test } from "vitest";
 import { BUILT_IN_CONFIG, validateConfigDocument } from "../src/config.js";
 import { parseFormat } from "../src/format/formatter.js";
 import {

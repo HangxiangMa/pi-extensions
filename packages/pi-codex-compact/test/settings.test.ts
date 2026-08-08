@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, test } from "node:test";
+import { afterEach, test } from "vitest";
 import {
 	createCodexCompactSettingsRuntime,
 	DEFAULT_CODEX_COMPACT_SETTINGS,

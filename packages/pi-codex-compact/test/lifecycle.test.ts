@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import {
 	createAssistantMessageEventStream,
 	type Model,
@@ -7,6 +6,7 @@ import {
 	type Provider,
 } from "@earendil-works/pi-ai";
 import type { SessionBeforeCompactEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { parseCheckpointDetails } from "../src/checkpoint.js";
 import { createCodexCompactExtension } from "../src/codex-compact.js";

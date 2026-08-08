@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import caffeinate, {
 	commandCompletions,
@@ -88,7 +88,7 @@ test("normalizeCaffeinateSettings accepts quiet booleans and defaults quiet to f
 
 test("session start warns for deprecated PI_CAFFEINATE_ICON", async (t) => {
 	const original = process.env.PI_CAFFEINATE_ICON;
-	t.after(() => {
+	t.onTestFinished(() => {
 		if (original === undefined) delete process.env.PI_CAFFEINATE_ICON;
 		else process.env.PI_CAFFEINATE_ICON = original;
 	});
@@ -515,12 +515,9 @@ test("default settings keep routine lifecycle notifications", async () => {
 	});
 });
 
-let importCounter = 0;
-
 async function importFreshCaffeinate() {
-	return (await import(
-		`../src/caffeinate.js?settings-test=${Date.now()}-${importCounter++}`
-	)) as typeof import("../src/caffeinate.js");
+	vi.resetModules();
+	return import("../src/caffeinate.js");
 }
 
 async function withTempAgentDir<T>(fn: (agentDir: string) => Promise<T>) {

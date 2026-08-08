@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { test } from "vitest";
 import { summarizeFooterUsage } from "../src/usage.js";
 
 function entry(value: unknown): SessionEntry {

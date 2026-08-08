@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { Key, type KeyId, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import { resolveMenuScreen, runMenu } from "@narumitw/pi-tui-kit";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { createRecallMenu, type RecallMenuSource, showRecallMenu } from "../src/menu.js";
 import type { MessageCandidate, RecallMessageRecord } from "../src/messages.js";

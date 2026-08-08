@@ -12,7 +12,7 @@ import {
 import { rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test, { type TestContext } from "node:test";
+import { type TestContext, test } from "vitest";
 import { DEFAULT_STAMP_SETTINGS } from "../src/format.js";
 import {
 	createStampSettingsRuntime,
@@ -22,7 +22,7 @@ import {
 
 function temporarySettings(t: TestContext) {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-stamp-settings-"));
-	t.after(() => rmSync(directory, { recursive: true, force: true }));
+	t.onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
 	return { directory, settingsPath: path.join(directory, "agent", "pi-stamp.json") };
 }
 

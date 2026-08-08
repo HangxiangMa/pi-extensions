@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { describe, test } from "vitest";
 import {
 	appendCompactionTrigger,
 	CodexCompactionProtocolError,
@@ -49,8 +49,8 @@ test("joins multiline data fields and ignores unrelated events", async () => {
 	assert.equal(result.item.encrypted_content, "opaque");
 });
 
-test("rejects incomplete, missing, duplicate, malformed, empty, oversized, and aborted streams", async (t) => {
-	await t.test("missing completion", async () => {
+describe("rejects incomplete, missing, duplicate, malformed, empty, oversized, and aborted streams", () => {
+	test("missing completion", async () => {
 		await assert.rejects(
 			collectCompactionSse(
 				fragmentedStream(
@@ -60,7 +60,7 @@ test("rejects incomplete, missing, duplicate, malformed, empty, oversized, and a
 			/without response.completed/,
 		);
 	});
-	await t.test("missing item", async () => {
+	test("missing item", async () => {
 		await assert.rejects(
 			collectCompactionSse(
 				fragmentedStream('data: {"type":"response.completed","response":{"output":[]}}\n\n'),
@@ -68,20 +68,20 @@ test("rejects incomplete, missing, duplicate, malformed, empty, oversized, and a
 			/returned 0 distinct/,
 		);
 	});
-	await t.test("duplicate items", async () => {
+	test("duplicate items", async () => {
 		const text = [
 			'data: {"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"a"}}\n\n',
 			'data: {"type":"response.completed","response":{"output":[{"type":"compaction","encrypted_content":"b"}]}}\n\n',
 		].join("");
 		await assert.rejects(collectCompactionSse(fragmentedStream(text)), /returned 2 distinct/);
 	});
-	await t.test("malformed JSON", async () => {
+	test("malformed JSON", async () => {
 		await assert.rejects(
 			collectCompactionSse(fragmentedStream("data: {nope}\n\n")),
 			/malformed SSE/,
 		);
 	});
-	await t.test("empty content", async () => {
+	test("empty content", async () => {
 		await assert.rejects(
 			collectCompactionSse(
 				fragmentedStream(validSse({ type: "compaction", encrypted_content: "" })),
@@ -89,19 +89,19 @@ test("rejects incomplete, missing, duplicate, malformed, empty, oversized, and a
 			/valid compaction/,
 		);
 	});
-	await t.test("oversized item", async () => {
+	test("oversized item", async () => {
 		await assert.rejects(
 			collectCompactionSse(fragmentedStream(validSse()), { maxItemBytes: 10 }),
 			/size limit/,
 		);
 	});
-	await t.test("oversized stream", async () => {
+	test("oversized stream", async () => {
 		await assert.rejects(
 			collectCompactionSse(fragmentedStream(validSse()), { maxBytes: 10 }),
 			/stream exceeded/,
 		);
 	});
-	await t.test("abort", async () => {
+	test("abort", async () => {
 		const controller = new AbortController();
 		controller.abort();
 		await assert.rejects(
@@ -109,7 +109,7 @@ test("rejects incomplete, missing, duplicate, malformed, empty, oversized, and a
 			/aborted/i,
 		);
 	});
-	await t.test("abort while waiting for the next chunk", async () => {
+	test("abort while waiting for the next chunk", async () => {
 		const controller = new AbortController();
 		const pending = collectCompactionSse(new ReadableStream<Uint8Array>({}), {
 			signal: controller.signal,

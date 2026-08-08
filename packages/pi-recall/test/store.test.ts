@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { chmod, lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import type { MessageCandidate } from "../src/messages.js";
 import { MAX_RECALL_RECORDS, RecallStore, RecallStoreFormatError } from "../src/store.js";
 

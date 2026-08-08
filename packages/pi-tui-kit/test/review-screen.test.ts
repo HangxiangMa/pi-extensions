@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { test } from "vitest";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
 import { createMenuScreenComponent } from "../src/components/index.js";
 import { defineMenu, type ReviewScreen, runMenu } from "../src/index.js";

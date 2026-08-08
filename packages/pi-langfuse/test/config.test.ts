@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import {
 	DEFAULT_BASE_URL,
 	loadLangfuseConfig,
@@ -12,7 +12,7 @@ import {
 
 test("loadLangfuseConfig reads pi-langfuse.json and enforces private permissions", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-langfuse-config-"));
-	t.after(() => rm(dir, { recursive: true, force: true }));
+	t.onTestFinished(() => rm(dir, { recursive: true, force: true }));
 	const path = join(dir, "pi-langfuse.json");
 	await writeFile(
 		path,
@@ -47,7 +47,7 @@ test("loadLangfuseConfig reads pi-langfuse.json and enforces private permissions
 
 test("loadLangfuseConfig reports missing and unsafe settings without environment fallbacks", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-langfuse-missing-"));
-	t.after(() => rm(dir, { recursive: true, force: true }));
+	t.onTestFinished(() => rm(dir, { recursive: true, force: true }));
 	const path = join(dir, "pi-langfuse.json");
 
 	assert.deepEqual(await loadLangfuseConfig(path), {
@@ -65,7 +65,7 @@ test("loadLangfuseConfig reports missing and unsafe settings without environment
 
 test("Langfuse updates preserve unknown fields and refuse malformed files", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-langfuse-update-"));
-	t.after(() => rm(dir, { recursive: true, force: true }));
+	t.onTestFinished(() => rm(dir, { recursive: true, force: true }));
 	const path = join(dir, "pi-langfuse.json");
 	await writeFile(
 		path,
@@ -151,7 +151,7 @@ test("Langfuse updates preserve unknown fields and refuse malformed files", asyn
 
 test("configuration covers malformed JSON, normalization, and captureContent false", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-langfuse-invalid-"));
-	t.after(() => rm(dir, { recursive: true, force: true }));
+	t.onTestFinished(() => rm(dir, { recursive: true, force: true }));
 	const path = join(dir, "pi-langfuse.json");
 	await writeFile(path, "{broken", { mode: 0o600 });
 	const malformed = await loadLangfuseConfig(path);

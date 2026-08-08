@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
+import { test } from "vitest";
 import {
 	assertConsultationTargetAllowed,
 	assertDelegationTargetAllowed,

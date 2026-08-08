@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { type ChatMenuSource, createChatMenu } from "../src/menu.js";
 import { createPrivateRoom } from "../src/protocol.js";

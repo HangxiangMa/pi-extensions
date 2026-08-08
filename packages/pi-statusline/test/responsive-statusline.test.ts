@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test, { after } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { afterAll, test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import statusline from "../src/statusline.js";
 
 const suiteAgentDir = mkdtempSync(join(tmpdir(), "pi-statusline-responsive-"));
 const previousSuiteAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = suiteAgentDir;
-after(() => {
+afterAll(() => {
 	if (previousSuiteAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = previousSuiteAgentDir;
 	rmSync(suiteAgentDir, { recursive: true, force: true });

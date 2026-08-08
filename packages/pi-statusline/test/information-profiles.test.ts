@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { INFORMATION_PROFILES, inferInformationProfile } from "../src/information-profiles.js";
 
 test("information profiles expose curated segment sets in deterministic order", () => {

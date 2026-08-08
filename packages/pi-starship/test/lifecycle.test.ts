@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test, { after } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { afterAll, test, vi } from "vitest";
 import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
 import piStarshipRuntime, {
 	parseGitStatusPorcelain,
@@ -14,7 +14,7 @@ import piStarshipRuntime, {
 const lifecycleAgentDir = mkdtempSync(join(tmpdir(), "pi-starship-lifecycle-suite-"));
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = lifecycleAgentDir;
-after(() => {
+afterAll(() => {
 	if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 	rmSync(lifecycleAgentDir, { recursive: true, force: true });
@@ -39,10 +39,13 @@ function piStarship(pi: Parameters<typeof piStarshipRuntime>[0]) {
 	});
 }
 
-function useLifecycleConfig(t: { after(callback: () => void): void }, rawDocument: string) {
+function useLifecycleConfig(
+	t: { onTestFinished(callback: () => void): void },
+	rawDocument: string,
+) {
 	const path = join(lifecycleAgentDir, "pi-starship.toml");
 	writeFileSync(path, rawDocument);
-	t.after(() => rmSync(path, { force: true }));
+	t.onTestFinished(() => rmSync(path, { force: true }));
 }
 
 type FooterFactory = (
@@ -404,7 +407,7 @@ test("same-cwd session replacement aborts and rejects stale native PR publicatio
 
 test("reachable native PR refresh uses its own 60-second fallback", async (t) => {
 	useLifecycleConfig(t, "format = '$github_pr'\n");
-	t.mock.timers.enable({ apis: ["setInterval"] });
+	vi.useFakeTimers({ toFake: ["setInterval"] });
 	const mock = createMockPi();
 	let prCalls = 0;
 	(
@@ -421,10 +424,10 @@ test("reachable native PR refresh uses its own 60-second fallback", async (t) =>
 	await emit(mock.events, "session_start", {}, context.ctx);
 	await flushAsync();
 	assert.equal(prCalls, 1);
-	t.mock.timers.tick(59_999);
+	vi.advanceTimersByTime(59_999);
 	await flushAsync();
 	assert.equal(prCalls, 1);
-	t.mock.timers.tick(1);
+	vi.advanceTimersByTime(1);
 	await flushAsync();
 	assert.equal(prCalls, 2);
 	const footer = (context.footer as FooterFactory)(
@@ -442,9 +445,9 @@ test("reachable native PR refresh uses its own 60-second fallback", async (t) =>
 
 test("terminal native PR snapshots clear at their lifecycle expiry", async (t) => {
 	useLifecycleConfig(t, "format = '$github_pr'\n");
-	t.mock.timers.enable({ apis: ["setTimeout"] });
+	vi.useFakeTimers({ toFake: ["setTimeout"] });
 	let now = Date.parse("2026-08-01T12:00:00.000Z");
-	t.mock.method(Date, "now", () => now);
+	vi.spyOn(Date, "now").mockImplementation(() => now);
 	const mock = createMockPi();
 	(
 		mock.rawPi as typeof mock.rawPi & {
@@ -470,21 +473,21 @@ test("terminal native PR snapshots clear at their lifecycle expiry", async (t) =
 			onBranchChange: () => () => undefined,
 		},
 	);
-	t.after(async () => {
+	t.onTestFinished(async () => {
 		footer.dispose();
 		await emit(mock.events, "session_shutdown", {}, context.ctx);
 	});
 	assert.match(stripAnsi(footer.render(300).join("\n")), /#123 · merged/u);
 	now += 1_000;
-	t.mock.timers.tick(1_000);
+	vi.advanceTimersByTime(1_000);
 	assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#123/u);
 });
 
 test("terminal native PR expiry revalidates the wall clock before clearing", async (t) => {
 	useLifecycleConfig(t, "format = '$github_pr'\n");
-	t.mock.timers.enable({ apis: ["setTimeout"] });
+	vi.useFakeTimers({ toFake: ["setTimeout"] });
 	let now = Date.parse("2026-08-01T12:00:00.000Z");
-	t.mock.method(Date, "now", () => now);
+	vi.spyOn(Date, "now").mockImplementation(() => now);
 	const expiresAt = now + 500;
 	const mock = createMockPi();
 	(
@@ -511,18 +514,18 @@ test("terminal native PR expiry revalidates the wall clock before clearing", asy
 			onBranchChange: () => () => undefined,
 		},
 	);
-	t.after(async () => {
+	t.onTestFinished(async () => {
 		footer.dispose();
 		await emit(mock.events, "session_shutdown", {}, context.ctx);
 	});
 	assert.match(stripAnsi(footer.render(300).join("\n")), /#123 · merged/u);
 
 	now -= 10_000;
-	t.mock.timers.tick(500);
+	vi.advanceTimersByTime(500);
 	assert.match(stripAnsi(footer.render(300).join("\n")), /#123 · merged/u);
 
 	now = expiresAt;
-	t.mock.timers.tick(10_500);
+	vi.advanceTimersByTime(10_500);
 	assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#123/u);
 });
 

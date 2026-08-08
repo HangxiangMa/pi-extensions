@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { gzipSync } from "node:zlib";
+import { test } from "vitest";
 import { decodeSnapshot, encodeSnapshot } from "../src/snapshot-codec.js";
 import { snapshot } from "./helpers.js";
 

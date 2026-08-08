@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
 import { type AssistantMessage, createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
 	ModelRegistry,
@@ -10,6 +9,7 @@ import {
 	resolveCliModel,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { AgentConfig } from "../src/agents.js";
 import {
@@ -875,7 +875,7 @@ test("session shutdown closes completion delivery before delayed isolated-agent 
 
 test("in-process model resolution matches Pi core patterns and errors", async (t) => {
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-core-model-resolver-"));
-	t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+	t.onTestFinished(() => rmSync(agentDir, { recursive: true, force: true }));
 	const modelRuntime = await ModelRuntime.create({
 		authPath: path.join(agentDir, "auth.json"),
 		modelsPath: null,
@@ -944,7 +944,7 @@ test("in-process model resolution fails actionably when the installed core is un
 
 test("public SDK child-session adapter completes a deterministic in-memory turn and disposes", async (t) => {
 	const fixture = await createTestModelRegistry();
-	t.after(fixture.dispose);
+	t.onTestFinished(fixture.dispose);
 	const { modelRegistry, modelRuntime } = fixture;
 	assert.ok(modelRuntime);
 	const support = { modelRuntime, resolveCliModel };

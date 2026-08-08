@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { test } from "vitest";
 import { createSnapshot } from "../src/snapshot.js";
 import { applySnapshot } from "../src/snapshot-apply.js";
 import {

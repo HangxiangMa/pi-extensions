@@ -3,9 +3,9 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { test } from "vitest";
 import {
 	DEFAULT_MAX_CONTEXT_BYTES,
 	DEFAULT_MAX_OUTPUT_BYTES,

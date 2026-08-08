@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { BatchError, BatchStore, type ProcessedImage } from "../src/batch.js";
 import { DEFAULT_SETTINGS } from "../src/settings.js";
 

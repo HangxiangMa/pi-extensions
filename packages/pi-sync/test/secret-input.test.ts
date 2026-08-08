@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { chooseS3Credentials } from "../src/s3-credentials-ui.js";
 import { promptSecret } from "../src/secret-input.js";

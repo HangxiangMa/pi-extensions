@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { type RuntimeDependencies, WebUIRuntime } from "../src/runtime.js";
 import type { WebSendRequest, WebUIServerOptions } from "../src/server.js";
 import { DEFAULT_SETTINGS } from "../src/settings.js";

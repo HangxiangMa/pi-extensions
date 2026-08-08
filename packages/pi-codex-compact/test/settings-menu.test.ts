@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import { resolveMenuScreen } from "@narumitw/pi-tui-kit";
+import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import {
 	type CodexCompactSettingsRuntime,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 const packageRoot = path.resolve("packages/pi-tui-kit");
 
@@ -23,7 +23,7 @@ test("built package roots resolve separate production and testing exports", asyn
 	const cacheRoot = path.resolve("node_modules/.cache");
 	mkdirSync(cacheRoot, { recursive: true });
 	const fixture = mkdtempSync(path.join(cacheRoot, "pi-tui-kit-testing-export-"));
-	t.after(() => rmSync(fixture, { recursive: true, force: true }));
+	t.onTestFinished(() => rmSync(fixture, { recursive: true, force: true }));
 	writeFileSync(
 		path.join(fixture, "usage.ts"),
 		`import { PI_EXTENSION_MENU_API_VERSION } from "@narumitw/pi-tui-kit";\n` +

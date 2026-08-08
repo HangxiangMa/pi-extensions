@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { ResponseCollector } from "../src/collector.js";
 import { classifyProviderError } from "../src/errors.js";
 

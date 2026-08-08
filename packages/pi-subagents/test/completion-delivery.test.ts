@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import type { AgentTurnCompletion, ManagedAgent } from "../src/registry.js";
 import { CompletionDeliveryBroker } from "../src/stateful.js";
 

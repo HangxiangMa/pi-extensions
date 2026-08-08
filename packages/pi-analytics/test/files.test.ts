@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { type TestContext, test } from "vitest";
 import { AnalyticsRunFiles } from "../src/storage/files.js";
 import type { SettledRun } from "../src/types.js";
 
@@ -35,9 +35,9 @@ function run(id: string, startedAtMs = 1): SettledRun {
 	};
 }
 
-async function fixture(t: test.TestContext): Promise<string> {
+async function fixture(t: TestContext): Promise<string> {
 	const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-jsonl-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
+	t.onTestFinished(() => rm(directory, { recursive: true, force: true }));
 	return path.join(directory, "pi-analytics");
 }
 

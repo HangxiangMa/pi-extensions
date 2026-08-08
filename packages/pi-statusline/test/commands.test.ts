@@ -4,9 +4,9 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
+import { describe, test } from "vitest";
 import {
 	createCustomSelectorHarness,
 	createMockContext,
@@ -151,7 +151,7 @@ test("information profiles use the standard choice screen with current state and
 	assert.equal(informationWasStandard, true);
 });
 
-test("fresh explicit statusline controls seed their first save without passive creation", async (t) => {
+describe("fresh explicit statusline controls seed their first save without passive creation", () => {
 	const scenarios = [
 		{
 			name: "appearance",
@@ -172,7 +172,7 @@ test("fresh explicit statusline controls seed their first save without passive c
 	] as const;
 
 	for (const scenario of scenarios) {
-		await t.test(scenario.name, async () => {
+		test(scenario.name, async () => {
 			const root = mkdtempSync(join(tmpdir(), "pi-statusline-first-control-"));
 			const path = settingsFilePath(root);
 			try {
@@ -205,12 +205,12 @@ test("fresh explicit statusline controls seed their first save without passive c
 	}
 });
 
-test("failed first-run statusline application restores the missing file", async (t) => {
+describe("failed first-run statusline application restores the missing file", () => {
 	for (const scenario of [
 		{ name: "appearance", menuIndex: 0 },
 		{ name: "information", menuIndex: 1 },
 	] as const) {
-		await t.test(scenario.name, async () => {
+		test(scenario.name, async () => {
 			const root = mkdtempSync(join(tmpdir(), "pi-statusline-first-rollback-"));
 			const path = settingsFilePath(root);
 			try {
@@ -289,7 +289,7 @@ test("failed statusline application preserves a canonical file replaced before r
 	}
 });
 
-test("failed updates from legacy statusline settings remove the new canonical file", async (t) => {
+describe("failed updates from legacy statusline settings remove the new canonical file", () => {
 	const scenarios = [
 		{
 			name: "appearance",
@@ -321,7 +321,7 @@ test("failed updates from legacy statusline settings remove the new canonical fi
 	] as const;
 
 	for (const scenario of scenarios) {
-		await t.test(scenario.name, async () => {
+		test(scenario.name, async () => {
 			const root = mkdtempSync(join(tmpdir(), "pi-statusline-legacy-rollback-"));
 			const canonicalPath = settingsFilePath(root);
 			const legacyPath = join(root, "pi-statusline-settings.json");

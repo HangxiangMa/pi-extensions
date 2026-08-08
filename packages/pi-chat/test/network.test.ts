@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { type ChildProcess, fork } from "node:child_process";
-import test from "node:test";
-import { fileURLToPath } from "node:url";
+import path from "node:path";
 import createTestnet from "hyperdht/testnet.js";
+import { test } from "vitest";
 import { ChatSession } from "../src/chat-session.js";
 import { createIdentity } from "../src/identity.js";
 import { directNeighborLimit, HyperswarmTransport, MAX_DIRECT_NEIGHBORS } from "../src/network.js";
@@ -246,7 +246,10 @@ test("two separate Node processes connect through a local DHT bootstrap", {
 	const testnet = await createTestnet(3);
 	const secret = Buffer.alloc(32, 77);
 	const bootstrapArg = Buffer.from(JSON.stringify(testnet.bootstrap)).toString("base64url");
-	const fixturePath = fileURLToPath(new URL("./network-peer-fixture.js", import.meta.url));
+	const fixturePath = path.join(
+		process.cwd(),
+		"node_modules/.cache/pi-extensions-test/packages/pi-chat/test/network-peer-fixture.js",
+	);
 	const children = Array.from({ length: 2 }, (_, index) =>
 		fork(fixturePath, [bootstrapArg, String(index + 1), secret.toString("base64url")], {
 			execArgv: [],

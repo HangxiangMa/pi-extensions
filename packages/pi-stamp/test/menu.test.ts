@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { resolveMenuScreen } from "@narumitw/pi-tui-kit";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { DEFAULT_STAMP_SETTINGS } from "../src/format.js";
 import { createStampMenu, showStampMenu } from "../src/menu.js";

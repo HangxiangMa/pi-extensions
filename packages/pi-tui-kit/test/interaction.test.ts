@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { invokeMenuInteraction, type MenuInteraction } from "../src/interaction.js";
 import { defineMenu } from "../src/model.js";

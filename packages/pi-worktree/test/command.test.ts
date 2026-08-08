@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
+import { test } from "vitest";
 import {
 	createCustomSelectorHarness,
 	createMockContext,

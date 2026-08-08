@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
-import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { DEFAULT_STAMP_SETTINGS, type StampSettings } from "../src/format.js";
 import { captureAssistantMetadata } from "../src/metadata.js";
@@ -337,7 +337,7 @@ test("entry renderer composes opt-in assistant metadata, explicit debug details,
 
 test("Pi persists stamp entries across reopen without adding them to model context", (t) => {
 	const sessionDir = mkdtempSync(`${os.tmpdir()}/pi-stamp-session-`);
-	t.after(() => rmSync(sessionDir, { recursive: true, force: true }));
+	t.onTestFinished(() => rmSync(sessionDir, { recursive: true, force: true }));
 	const session = SessionManager.create(process.cwd(), sessionDir);
 	const metadata = captureAssistantMetadata(assistantMessage(ASSISTANT_TIMESTAMP));
 	assert.ok(metadata);

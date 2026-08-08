@@ -10,8 +10,8 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { test, vi } from "vitest";
 import {
 	createCustomSelectorHarness,
 	createMockContext,
@@ -510,12 +510,9 @@ test("resolveScreenshotPath confines explicit paths to cwd or temp", () => {
 	assert.equal(isPathInsideRoot(path.join(cwd, "screens", "out.png"), cwd), true);
 });
 
-let importCounter = 0;
-
 async function importFreshChromeDevtools() {
-	return (await import(
-		`../src/chrome-devtools.js?settings-test=${Date.now()}-${importCounter++}`
-	)) as typeof import("../src/chrome-devtools.js");
+	vi.resetModules();
+	return import("../src/chrome-devtools.js");
 }
 
 async function withTempAgentDir<T>(fn: (agentDir: string) => Promise<T>) {

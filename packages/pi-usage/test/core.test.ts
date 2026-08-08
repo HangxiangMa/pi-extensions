@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import type { UsageReport } from "../src/index.js";
 import {
@@ -313,7 +313,7 @@ test("display sanitization strips terminal escapes, controls, and excessive text
 
 test("provider response reads are byte-bounded", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	const adapter = SUPPORTED_ADAPTERS.find((candidate) => candidate.id === "openrouter");

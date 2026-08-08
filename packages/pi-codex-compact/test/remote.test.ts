@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import {
 	type Context,
 	createAssistantMessageEventStream,
@@ -7,6 +6,7 @@ import {
 	type OpenAICodexResponsesOptions,
 	type Provider,
 } from "@earendil-works/pi-ai";
+import { test } from "vitest";
 import { requestRemoteCompaction } from "../src/remote.js";
 
 const model = {

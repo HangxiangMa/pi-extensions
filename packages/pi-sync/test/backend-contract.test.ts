@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { SyncBackendPublicationOutcomeUnknownError } from "../src/sync-backend.js";
 import { registerSyncBackendContractSuite } from "./backend-contract-suite.js";
 import { snapshot } from "./helpers.js";

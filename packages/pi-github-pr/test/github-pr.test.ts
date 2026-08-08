@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test, { after } from "node:test";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
+import { afterAll, test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import githubPr, {
 	formatCompactStatus,
@@ -20,7 +20,7 @@ type ExecFunction = (command: string, args: string[], options?: ExecOptions) => 
 
 const ambientGhHost = process.env.GH_HOST;
 delete process.env.GH_HOST;
-after(() => {
+afterAll(() => {
 	if (ambientGhHost !== undefined) process.env.GH_HOST = ambientGhHost;
 });
 
@@ -506,8 +506,8 @@ test("periodically refreshes PR state while the session remains open", async () 
 	assert.equal(prViews, viewsAtShutdown);
 });
 
-test("a replaced session's late lifecycle events cannot disrupt its replacement", async (t) => {
-	t.mock.timers.enable({ apis: ["setTimeout"] });
+test("a replaced session's late lifecycle events cannot disrupt its replacement", async () => {
+	vi.useFakeTimers({ toFake: ["setTimeout"] });
 	const mock = createMockPi();
 	const prCwds: string[] = [];
 	installExec(mock, async (command, args, options) => {
@@ -534,7 +534,7 @@ test("a replaced session's late lifecycle events cannot disrupt its replacement"
 		await agentEnd({}, oldContext.ctx);
 		assert.deepEqual(prCwds, ["/repo-a", "/repo-b"]);
 
-		t.mock.timers.tick(100);
+		vi.advanceTimersByTime(100);
 		await Promise.resolve();
 		await Promise.resolve();
 		assert.deepEqual(prCwds, ["/repo-a", "/repo-b", "/repo-b"]);
@@ -543,8 +543,8 @@ test("a replaced session's late lifecycle events cannot disrupt its replacement"
 	}
 });
 
-test("agent-end after session shutdown cannot restart polling", async (t) => {
-	t.mock.timers.enable({ apis: ["setTimeout"] });
+test("agent-end after session shutdown cannot restart polling", async () => {
+	vi.useFakeTimers({ toFake: ["setTimeout"] });
 	const mock = createMockPi();
 	let prViews = 0;
 	installExec(mock, async (command, args) => {
@@ -564,7 +564,7 @@ test("agent-end after session shutdown cannot restart polling", async (t) => {
 	await sessionStart({}, context.ctx);
 	await sessionShutdown({}, context.ctx);
 	await agentEnd({}, context.ctx);
-	t.mock.timers.tick(100);
+	vi.advanceTimersByTime(100);
 	await Promise.resolve();
 	await Promise.resolve();
 
@@ -615,8 +615,8 @@ test("an older periodic refresh cannot overwrite a newer agent-end refresh", asy
 	}
 });
 
-test("an older refresh cannot postpone a newer refresh timer", async (t) => {
-	t.mock.timers.enable({ apis: ["setTimeout"] });
+test("an older refresh cannot postpone a newer refresh timer", async () => {
+	vi.useFakeTimers({ toFake: ["setTimeout"] });
 	const mock = createMockPi();
 	const oldPeriodicPrView = deferred<ExecResult>();
 	const nextPeriodicPrView = deferred<ExecResult>();
@@ -649,17 +649,17 @@ test("an older refresh cannot postpone a newer refresh timer", async (t) => {
 
 	try {
 		await sessionStart({}, context.ctx);
-		t.mock.timers.tick(100);
+		vi.advanceTimersByTime(100);
 		assert.equal(prViews, 2);
 
 		await agentEnd({}, context.ctx);
 		assert.equal(prViews, 3);
-		t.mock.timers.tick(50);
+		vi.advanceTimersByTime(50);
 		oldPeriodicPrView.resolve(okResult(samplePr));
 		await Promise.resolve();
 		await Promise.resolve();
 
-		t.mock.timers.tick(50);
+		vi.advanceTimersByTime(50);
 		assert.equal(prViews, 4);
 	} finally {
 		oldPeriodicPrView.resolve(okResult(samplePr));

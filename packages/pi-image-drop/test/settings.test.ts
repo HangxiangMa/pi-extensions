@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import {
 	DEFAULT_SETTINGS,
 	HARD_LIMITS,
@@ -293,7 +293,7 @@ test("unreadable and symlink settings do not escape whole-file fallback", async 
 		await rm(settingsPath);
 		await writeFile(settingsPath, '{"maxImages":3}\n');
 		if (process.platform === "win32" || process.getuid?.() === 0) {
-			t.diagnostic("permission-denied read is not meaningful on this platform/user");
+			await t.annotate("permission-denied read is not meaningful on this platform/user");
 			return;
 		}
 		await chmod(settingsPath, 0);

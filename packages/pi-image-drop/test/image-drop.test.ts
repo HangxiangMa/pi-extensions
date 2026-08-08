@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { BatchStore } from "../src/batch.js";
 import imageDrop from "../src/image-drop.js";
 import { DEFAULT_SETTINGS, normalizeSettings } from "../src/settings.js";

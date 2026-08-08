@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 const packageRoot = path.join(process.cwd(), "packages/pi-webui");
 const [manifestSource, html, appSource, overlaysSource, stylesSource] = await Promise.all([

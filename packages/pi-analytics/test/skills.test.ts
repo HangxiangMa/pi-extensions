@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import { explicitSkillName, SkillTracker } from "../src/skills.js";
 
 test("explicit skill parsing accepts exact commands with arguments", () => {
@@ -26,7 +26,7 @@ test("pending explicit skill is replaced by later ordinary user input and ignore
 
 test("successful canonical built-in reads match discovered skill paths", async (t) => {
 	const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-skills-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
+	t.onTestFinished(() => rm(directory, { recursive: true, force: true }));
 	const skillDirectory = path.join(directory, "skills", "review");
 	await mkdir(skillDirectory, { recursive: true });
 	const file = path.join(skillDirectory, "SKILL.md");
@@ -60,7 +60,7 @@ test("successful canonical built-in reads match discovered skill paths", async (
 
 test("colliding names retain Pi's first discovered canonical path", async (t) => {
 	const directory = await mkdtemp(path.join(tmpdir(), "pi-analytics-collision-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
+	t.onTestFinished(() => rm(directory, { recursive: true, force: true }));
 	const first = path.join(directory, "first.md");
 	const second = path.join(directory, "second.md");
 	await writeFile(first, "first");

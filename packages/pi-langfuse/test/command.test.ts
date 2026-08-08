@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { loadLangfuseConfig } from "../src/config.js";
 import { createLangfuseExtension } from "../src/langfuse.js";
@@ -202,7 +202,7 @@ test("/langfuse disabled state prioritizes agent-directory setup and routes priv
 
 test("/langfuse interactively creates and updates a private agent-directory config", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-langfuse-init-"));
-	t.after(() => rm(dir, { recursive: true, force: true }));
+	t.onTestFinished(() => rm(dir, { recursive: true, force: true }));
 	const path = join(dir, "nested", "pi-langfuse.json");
 	const mock = createMockPi();
 	createLangfuseExtension({

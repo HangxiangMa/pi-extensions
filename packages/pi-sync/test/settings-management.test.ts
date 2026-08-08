@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import test from "node:test";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+import { test } from "vitest";
 import {
 	createCustomSelectorHarness,
 	createMockContext,
@@ -441,7 +442,12 @@ test("cross-process settings mutations serialize under one read-modify-write loc
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeSettings();
-		const configModule = new URL("../src/config.js", import.meta.url).href;
+		const configModule = pathToFileURL(
+			path.join(
+				process.cwd(),
+				"node_modules/.cache/pi-extensions-test/packages/pi-sync/src/config.js",
+			),
+		).href;
 		const mutate = (field: string) =>
 			execFileAsync(
 				process.execPath,

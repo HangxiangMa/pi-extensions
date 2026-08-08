@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { CURSOR_MARKER, type Focusable, visibleWidth } from "@earendil-works/pi-tui";
+import { test } from "vitest";
 import type { RecallMessageRecord } from "../src/messages.js";
 import { ScopedRecallPicker } from "../src/picker.js";
 
