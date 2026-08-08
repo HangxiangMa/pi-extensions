@@ -1,0 +1,5 @@
+# Pi File Context Guidelines
+
+## Interaction model
+
+- Prefer direct, user-owned context selection over dedicated shortcuts or manual copy steps for routine quoting workflows.
