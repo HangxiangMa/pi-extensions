@@ -48,6 +48,7 @@
 - `Editor.getText()` retains large pastes as markers; use `getExpandedText()` when moving a draft outside that editor.
 - Tests constructing `BorderedLoader` must initialize a theme and dispose the loader harness so its animation timer cannot keep Node alive.
 - Kit settings and multi-select actions settle asynchronously. UI harnesses must drain pending callbacks and observe an accepted transition; use the async-capable harness with `runCustomInteraction()`.
+- Assertions thrown inside mocked `ctx.ui.custom()` callbacks can be caught as menu runtime errors; capture render evidence and assert after the command completes.
 - Searchable TUI wrappers should reserve only a standalone Space key for activation; stripping spaces from an entire input chunk corrupts pasted multi-token queries.
 
 ### Integrations and package-specific traps

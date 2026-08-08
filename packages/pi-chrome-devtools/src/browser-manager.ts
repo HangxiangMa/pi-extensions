@@ -614,6 +614,16 @@ export function endpointSourceLabel() {
 	return `${hostSource}; ${portSource}`;
 }
 
+export type BrowserLifecycleState = "starting" | "running" | "exited" | "failed" | "unobserved";
+
+export function browserLifecycleState(): BrowserLifecycleState {
+	if (state.launchPromise) return "starting";
+	if (state.managedBrowser?.exited) return "exited";
+	if (state.managedBrowser?.ready) return "running";
+	if (state.lastLaunchAttempt?.lastError) return "failed";
+	return "unobserved";
+}
+
 export function launchModeLabel() {
 	if (extensionsConfigured()) {
 		if (!isLocalDevToolsHost(state.host)) return "invalid; extensions require a local endpoint";

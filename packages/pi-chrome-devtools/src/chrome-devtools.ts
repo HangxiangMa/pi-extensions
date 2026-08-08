@@ -9,7 +9,6 @@ import {
 	buildQuickstartMessage,
 	buildToolStatusMessage,
 	sanitizeChromeDevtoolsDisplay,
-	showToolSelector,
 	updateChromeDevtoolsTools,
 	waitForChromeDevtoolsSettings,
 } from "./tool-selector.js";
@@ -29,19 +28,13 @@ const COMMAND_COMPLETIONS = [
 	{ value: "quickstart", label: "quickstart", description: "Show endpoint and launch help" },
 	{ value: "status", label: "status", description: "Show tool and settings status" },
 	{ value: "tools", label: "tools", description: "Select Chrome DevTools tools" },
-	{ value: "toggle", label: "toggle", description: "Select Chrome DevTools tools" },
+	{ value: "toggle", label: "toggle", description: "Alias for tools" },
+	{ value: "select", label: "select", description: "Compatibility alias for tools" },
 	{ value: "enable", label: "enable", description: "Enable all Chrome DevTools tools" },
+	{ value: "on", label: "on", description: "Compatibility alias for enable" },
 	{ value: "disable", label: "disable", description: "Disable all Chrome DevTools tools" },
+	{ value: "off", label: "off", description: "Compatibility alias for disable" },
 ];
-const MENU_OPTIONS = {
-	quickstart: "Quick start / endpoint help",
-	help: "Command usage guide",
-	status: "Show tool status",
-	tools: "Select Chrome DevTools tools",
-	enable: "Enable all Chrome DevTools tools",
-	disable: "Disable all Chrome DevTools tools",
-} as const;
-
 export default function chromeDevtools(pi: ExtensionAPI) {
 	pi.registerTool(listPagesTool);
 	pi.registerTool(selectPageTool);
@@ -103,20 +96,29 @@ async function handleChromeDevtoolsCommand(
 			await showMenu(pi, ctx, generation);
 			return;
 		case "help":
+			requireObservableUi(ctx, "help");
 			ctx.ui.notify(buildCommandGuide(), "info");
 			return;
 		case "quickstart":
+			requireObservableUi(ctx, "quickstart");
 			ctx.ui.notify(buildQuickstartMessage(), "info");
 			return;
 		case "status": {
+			requireObservableUi(ctx, "status");
 			const status = await buildToolStatusMessage(pi);
 			if (generation !== state.sessionGeneration) return;
 			ctx.ui.notify(status, "info");
 			return;
 		}
-		case "tools":
-			await showToolSelector(pi, ctx);
+		case "tools": {
+			if (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc")) {
+				throw new Error("/chrome-devtools tools requires TUI or RPC mode");
+			}
+			const { showChromeDevtoolsToolWorkflow } = await import("./menu.js");
+			if (generation !== state.sessionGeneration) return;
+			await showChromeDevtoolsToolWorkflow(pi, ctx, generation);
 			return;
+		}
 		case "enable":
 			await updateChromeDevtoolsTools(pi, ctx, allChromeDevtoolsTools(), "enabled all");
 			return;
@@ -125,6 +127,9 @@ async function handleChromeDevtoolsCommand(
 			return;
 	}
 
+	if (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc")) {
+		throw new Error(`Unknown /chrome-devtools command: ${args.trim()}`);
+	}
 	ctx.ui.notify(
 		`Unknown /chrome-devtools command: ${args.trim()}
 
@@ -133,67 +138,19 @@ ${buildCommandGuide()}`,
 	);
 }
 
-async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: number) {
-	if (!ctx.hasUI) {
-		const status = await buildToolStatusMessage(pi);
-		if (generation !== state.sessionGeneration) return;
-		ctx.ui.notify(`${buildCommandGuide()}\n\n${status}`, "info");
-		return;
+function requireObservableUi(ctx: CommandContext, route: string) {
+	if (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc")) {
+		throw new Error(`/chrome-devtools ${route} requires TUI or RPC mode`);
 	}
-	const menuSignal = state.sessionController.signal;
-	const isCurrent = () => generation === state.sessionGeneration && !menuSignal.aborted;
-	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
-	if (!isCurrent()) return;
+}
 
-	type Screen = "main";
-	type Action = keyof typeof MENU_OPTIONS;
-	const menu = defineMenu<undefined, Screen, Action>({
-		start: "main",
-		screens: {
-			main: () => ({
-				kind: "actions",
-				title: "Chrome DevTools",
-				items: Object.entries(MENU_OPTIONS).map(([id, label]) => ({
-					id,
-					label,
-					action: id as Action,
-				})),
-				hint: "close",
-			}),
-		},
-		actions: {
-			quickstart: async () => {
-				ctx.ui.notify(buildQuickstartMessage(), "info");
-				return { kind: "close" };
-			},
-			help: async () => {
-				ctx.ui.notify(buildCommandGuide(), "info");
-				return { kind: "close" };
-			},
-			status: async () => {
-				const status = await buildToolStatusMessage(pi);
-				if (generation === state.sessionGeneration) ctx.ui.notify(status, "info");
-				return { kind: "close" };
-			},
-			tools: async () => {
-				await showToolSelector(pi, ctx);
-				return { kind: "close" };
-			},
-			enable: async () => {
-				await updateChromeDevtoolsTools(pi, ctx, allChromeDevtoolsTools(), "enabled all");
-				return { kind: "close" };
-			},
-			disable: async () => {
-				await updateChromeDevtoolsTools(pi, ctx, [], "disabled all");
-				return { kind: "close" };
-			},
-		},
-	});
-	await runMenu(ctx, menu, {
-		getState: () => undefined,
-		signal: menuSignal,
-		isCurrent,
-	});
+async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: number) {
+	if (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc")) {
+		throw new Error("/chrome-devtools menu requires TUI or RPC mode; use a direct subcommand");
+	}
+	const { showChromeDevtoolsMenu } = await import("./menu.js");
+	if (generation !== state.sessionGeneration) return;
+	await showChromeDevtoolsMenu(pi, ctx, generation);
 }
 
 function replaceSessionController(reason: string) {
