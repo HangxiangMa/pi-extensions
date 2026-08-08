@@ -59,11 +59,13 @@ export interface LoadedProjectTextFile {
 
 interface DiscoveryOptions {
 	maxFiles?: number;
+	signal?: AbortSignal;
 }
 
 interface LoadOptions {
 	maxBytes?: number;
 	beforeOpen?: () => Promise<void>;
+	signal?: AbortSignal;
 }
 
 export async function discoverProjectFiles(
@@ -72,13 +74,17 @@ export async function discoverProjectFiles(
 ): Promise<string[]> {
 	const maxFiles = Math.max(1, options.maxFiles ?? DEFAULT_MAX_FILES);
 	const files: string[] = [];
+	options.signal?.throwIfAborted();
 
 	async function walk(directory: string, prefix: string): Promise<void> {
+		options.signal?.throwIfAborted();
 		if (files.length >= maxFiles) return;
 		const entries = (await readdir(directory, { withFileTypes: true })).sort((left, right) =>
 			compareStrings(left.name, right.name),
 		);
+		options.signal?.throwIfAborted();
 		for (const entry of entries) {
+			options.signal?.throwIfAborted();
 			if (files.length >= maxFiles) return;
 			if (IGNORED_DIRECTORIES.has(entry.name) || entry.isSymbolicLink()) continue;
 			const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
@@ -91,7 +97,10 @@ export async function discoverProjectFiles(
 		}
 	}
 
-	await walk(await realpath(root), "");
+	const canonicalRoot = await realpath(root);
+	options.signal?.throwIfAborted();
+	await walk(canonicalRoot, "");
+	options.signal?.throwIfAborted();
 	return files.sort(compareStrings);
 }
 
@@ -100,8 +109,10 @@ export async function loadProjectTextFile(
 	projectPath: string,
 	options: LoadOptions = {},
 ): Promise<LoadedProjectTextFile> {
+	options.signal?.throwIfAborted();
 	if (!projectPath || isAbsolute(projectPath)) throw new Error("File path is outside the project");
 	const canonicalRoot = await realpath(root);
+	options.signal?.throwIfAborted();
 	const candidate = resolve(canonicalRoot, projectPath);
 	if (!isInside(canonicalRoot, candidate)) throw new Error("File path is outside the project");
 
@@ -111,13 +122,16 @@ export async function loadProjectTextFile(
 	} catch (error: unknown) {
 		throw new Error(`Cannot open ${projectPath}: ${formatError(error)}`);
 	}
+	options.signal?.throwIfAborted();
 	if (!isInside(canonicalRoot, canonicalFile)) throw new Error("File path is outside the project");
 	const info = await lstat(canonicalFile);
+	options.signal?.throwIfAborted();
 	if (!info.isFile()) throw new Error(`${projectPath} is not a regular file`);
 
 	const maxBytes = Math.max(1, options.maxBytes ?? DEFAULT_MAX_BYTES);
 	if (info.size > maxBytes) throw new Error(`${projectPath} exceeds ${maxBytes} bytes`);
 	await options.beforeOpen?.();
+	options.signal?.throwIfAborted();
 	let file: Awaited<ReturnType<typeof open>>;
 	try {
 		file = await open(
@@ -128,7 +142,9 @@ export async function loadProjectTextFile(
 		throw new Error(`Cannot safely open ${projectPath}: ${formatError(error)}`);
 	}
 	try {
+		options.signal?.throwIfAborted();
 		const openedInfo = await file.stat();
+		options.signal?.throwIfAborted();
 		if (!openedInfo.isFile()) throw new Error(`${projectPath} is not a regular file`);
 		if (openedInfo.dev !== info.dev || openedInfo.ino !== info.ino) {
 			throw new Error(`${projectPath} changed while it was being opened safely`);
@@ -137,7 +153,9 @@ export async function loadProjectTextFile(
 		const buffer = Buffer.alloc(maxBytes + 1);
 		let offset = 0;
 		while (offset < buffer.length) {
+			options.signal?.throwIfAborted();
 			const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, offset);
+			options.signal?.throwIfAborted();
 			if (bytesRead === 0) break;
 			offset += bytesRead;
 		}
@@ -283,6 +301,7 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 	let installedEditorFactory: unknown;
 	let activeSessionManager: unknown;
 	let sessionGeneration = 0;
+	const explorerControllers = new Set<AbortController>();
 
 	const clearPending = (ctx: ExtensionContext) => {
 		pendingQuotes = [];
@@ -314,6 +333,11 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 	const isCurrentSession = (owner: unknown, generation: number) =>
 		owner === activeSessionManager && generation === sessionGeneration;
 
+	const cancelExplorers = () => {
+		for (const controller of explorerControllers) controller.abort();
+		explorerControllers.clear();
+	};
+
 	const openExplorer = async (ctx: ExtensionContext): Promise<void> => {
 		if (ctx.mode !== "tui") {
 			rejectCommand(ctx, "File Context requires Pi's interactive TUI.");
@@ -321,11 +345,14 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 		}
 		const owner = ctx.sessionManager;
 		const generation = sessionGeneration;
+		const controller = new AbortController();
+		explorerControllers.add(controller);
 		try {
 			const [files, gitContext] = await Promise.all([
-				discoverProjectFiles(ctx.cwd),
-				createGitContext(ctx.cwd),
+				discoverProjectFiles(ctx.cwd, { signal: controller.signal }),
+				createGitContext(ctx.cwd, controller.signal),
 			]);
+			if (!isCurrentSession(owner, generation) || controller.signal.aborted) return;
 			if (files.length === 0) {
 				ctx.ui.notify("File Context found no project files.", "warning");
 				return;
@@ -337,23 +364,32 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 						theme,
 						keybindings,
 						files,
-						loadFile: (path) => loadProjectTextFile(ctx.cwd, path),
+						cwd: ctx.cwd,
+						loadFile: (path, signal) => loadProjectTextFile(ctx.cwd, path, { signal }),
 						gitContext,
 						done,
 					}),
 			);
-			if (!isCurrentSession(owner, generation)) return;
+			if (!isCurrentSession(owner, generation) || controller.signal.aborted) return;
 			if (result?.kind === "quote") appendPending(result.quote, ctx);
 			else if (result?.kind === "reference") {
 				ctx.ui.pasteToEditor(formatFileReference(result.path));
 			}
 		} catch (error: unknown) {
-			if (!isCurrentSession(owner, generation)) return;
+			if (
+				!isCurrentSession(owner, generation) ||
+				controller.signal.aborted ||
+				isAbortError(error)
+			) {
+				return;
+			}
 			try {
 				ctx.ui.notify(`File Context failed: ${formatError(error)}`, "error");
 			} catch {
 				// The session may have been replaced while the picker was open.
 			}
+		} finally {
+			explorerControllers.delete(controller);
 		}
 	};
 
@@ -370,6 +406,7 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
+		cancelExplorers();
 		activeSessionManager = ctx.sessionManager;
 		sessionGeneration += 1;
 		clearPending(ctx);
@@ -407,6 +444,7 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (ctx.sessionManager !== activeSessionManager) return;
+		cancelExplorers();
 		clearPending(ctx);
 		if (installedEditorFactory && ctx.mode === "tui") {
 			if (ctx.ui.getEditorComponent() === installedEditorFactory)
@@ -483,6 +521,10 @@ function rejectCommand(ctx: ExtensionContext, message: string): void {
 		return;
 	}
 	throw new Error(message);
+}
+
+function isAbortError(error: unknown): boolean {
+	return error instanceof Error && error.name === "AbortError";
 }
 
 function formatError(error: unknown): string {

@@ -38,6 +38,12 @@ test("discovers bounded project text candidates without traversing ignored direc
 
 		assert.deepEqual(await discoverProjectFiles(root), ["README.md", "src/main.ts"]);
 		assert.deepEqual(await discoverProjectFiles(root, { maxFiles: 1 }), ["README.md"]);
+		const controller = new AbortController();
+		controller.abort();
+		await assert.rejects(
+			discoverProjectFiles(root, { signal: controller.signal }),
+			(error: unknown) => error instanceof Error && error.name === "AbortError",
+		);
 	});
 });
 
@@ -61,6 +67,19 @@ test("loads only bounded regular text files inside the project", async () => {
 		await assert.rejects(
 			loadProjectTextFile(root, "large.txt", { maxBytes: 16 }),
 			/exceeds 16 bytes/,
+		);
+	});
+});
+
+test("cancels bounded project text reads before opening a file", async () => {
+	await withTempProject(async (root) => {
+		await writeFile(join(root, "safe.ts"), "inside\n");
+		const controller = new AbortController();
+		controller.abort();
+
+		await assert.rejects(
+			loadProjectTextFile(root, "safe.ts", { signal: controller.signal }),
+			(error: unknown) => error instanceof Error && error.name === "AbortError",
 		);
 	});
 });
