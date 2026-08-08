@@ -2,6 +2,7 @@ import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
 	browserCandidateHint,
+	browserLifecycleState,
 	devToolsEndpoint,
 	endpointConfigHint,
 	endpointSourceLabel,
@@ -29,6 +30,8 @@ interface ToolStatusSummary {
 	activeNonChromeToolCount: number;
 }
 
+type ToolSelectionSaveResult = "saved" | "active-tools-changed" | "failed";
+
 export async function updateChromeDevtoolsTools(
 	pi: ExtensionAPI,
 	ctx: CommandContext,
@@ -36,8 +39,8 @@ export async function updateChromeDevtoolsTools(
 	action: string,
 ) {
 	const generation = state.sessionGeneration;
-	const saved = await transactSelectedTools(pi, ctx, selectedTools, generation);
-	if (!saved || generation !== state.sessionGeneration) return;
+	const result = await transactSelectedTools(pi, ctx, selectedTools, generation);
+	if (result !== "saved" || generation !== state.sessionGeneration) return;
 	const status = await buildToolStatusMessage(pi);
 	if (generation !== state.sessionGeneration) return;
 	ctx.ui.notify(`Chrome DevTools tools ${action}.\n\n${status}`, "info");
@@ -47,8 +50,15 @@ export async function setSelectedChromeDevtoolsTools(
 	pi: ExtensionAPI,
 	ctx: CommandContext,
 	selectedTools: readonly ChromeDevToolsToolName[],
-): Promise<boolean> {
-	return transactSelectedTools(pi, ctx, selectedTools, state.sessionGeneration);
+	expectedActiveTools: readonly ChromeDevToolsToolName[],
+): Promise<ToolSelectionSaveResult> {
+	return transactSelectedTools(
+		pi,
+		ctx,
+		selectedTools,
+		state.sessionGeneration,
+		expectedActiveTools,
+	);
 }
 
 let toolTransactionQueue = Promise.resolve();
@@ -62,9 +72,10 @@ function transactSelectedTools(
 	ctx: CommandContext,
 	selectedTools: readonly ChromeDevToolsToolName[],
 	expectedGeneration: number,
-): Promise<boolean> {
+	expectedActiveTools?: readonly ChromeDevToolsToolName[],
+): Promise<ToolSelectionSaveResult> {
 	const operation = toolTransactionQueue.then(() =>
-		transactSelectedToolsNow(pi, ctx, selectedTools, expectedGeneration),
+		transactSelectedToolsNow(pi, ctx, selectedTools, expectedGeneration, expectedActiveTools),
 	);
 	toolTransactionQueue = operation.then(
 		() => undefined,
@@ -78,13 +89,21 @@ async function transactSelectedToolsNow(
 	ctx: CommandContext,
 	selectedTools: readonly ChromeDevToolsToolName[],
 	expectedGeneration: number,
-): Promise<boolean> {
-	if (expectedGeneration !== state.sessionGeneration) return false;
+	expectedActiveTools?: readonly ChromeDevToolsToolName[],
+): Promise<ToolSelectionSaveResult> {
+	if (expectedGeneration !== state.sessionGeneration) return "failed";
+	if (expectedActiveTools && !arraysEqual(activeChromeDevtoolsTools(pi), expectedActiveTools)) {
+		ctx.ui.notify(
+			"Browser tool selection changed while review was open. Review the current state, then apply again.",
+			"warning",
+		);
+		return "active-tools-changed";
+	}
 	const previousActiveTools = pi.getActiveTools();
 	try {
 		applyChromeDevtoolsTools(pi, selectedTools);
 		await persistSettings(selectedTools);
-		return expectedGeneration === state.sessionGeneration;
+		return expectedGeneration === state.sessionGeneration ? "saved" : "failed";
 	} catch (error) {
 		let rollbackError: unknown;
 		try {
@@ -95,7 +114,7 @@ async function transactSelectedToolsNow(
 		} catch (caught) {
 			rollbackError = caught;
 		}
-		if (expectedGeneration !== state.sessionGeneration) return false;
+		if (expectedGeneration !== state.sessionGeneration) return "failed";
 		ctx.ui.notify(
 			sanitizeChromeDevtoolsDisplay(
 				rollbackError
@@ -104,8 +123,17 @@ async function transactSelectedToolsNow(
 			),
 			"warning",
 		);
-		return false;
+		return "failed";
 	}
+}
+
+function activeChromeDevtoolsTools(pi: ExtensionAPI) {
+	const active = new Set(pi.getActiveTools());
+	return CHROME_DEVTOOLS_TOOL_NAMES.filter((toolName) => active.has(toolName));
+}
+
+function arraysEqual<T>(left: readonly T[], right: readonly T[]) {
+	return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 export function applyChromeDevtoolsTools(
@@ -160,13 +188,18 @@ export function buildQuickstartMessage() {
 }
 
 export function buildBrowserStatusMessage() {
-	const browserState = state.launchPromise
-		? "starting managed browser"
-		: state.managedBrowser && !state.managedBrowser.exited && state.managedBrowser.ready
-			? "managed browser running"
-			: state.lastLaunchAttempt?.lastError
-				? "last launch failed"
-				: "not started; connection has not been checked";
+	const lifecycle = browserLifecycleState();
+	const browserState =
+		lifecycle === "starting"
+			? "starting managed browser"
+			: lifecycle === "running"
+				? "managed browser running"
+				: lifecycle === "exited"
+					? "managed browser exited"
+					: lifecycle === "failed"
+						? "last launch failed"
+						: "not started; connection has not been checked";
+	const needsRecovery = lifecycle === "exited" || lifecycle === "failed";
 	return sanitizeChromeDevtoolsDisplay(
 		[
 			`Browser: ${browserState}`,
@@ -179,7 +212,7 @@ export function buildBrowserStatusMessage() {
 				? ["Unpacked extensions execute trusted browser code in an isolated managed browser."]
 				: []),
 			...launchAttemptLines(),
-			...(state.lastLaunchAttempt?.lastError ? [launchHint(), endpointConfigHint()] : []),
+			...(needsRecovery ? [launchHint(), endpointConfigHint()] : []),
 		].join("\n"),
 	);
 }

@@ -119,7 +119,7 @@ and provide width-safe, keyboard-accessible TUI and RPC behavior with actionable
       Evidence: TUI and RPC stage/cancel/review/apply tests pass.
 - [x] Add focused transaction coverage for idle-boundary application, non-Chrome-tool preservation,
       invalid settings, write/rename failure, runtime rollback, retryable drafts, rapid direct updates,
-      stale generation, session replacement, and shutdown. Evidence: the 61-test package suite plus the
+      stale generation, session replacement, and shutdown. Evidence: the 63-test package suite plus the
       new failed-confirmation and replacement tests pass.
 - [x] Refactor `tool-selector.ts` and the narrow settings integration so one serialized confirmed
       transaction preserves existing settings/unknown fields and other active tools, rolls runtime back
@@ -144,11 +144,11 @@ and provide width-safe, keyboard-accessible TUI and RPC behavior with actionable
       `.changeset/calm-browsers-review.md` appears under the package's `0.50.0` minor release intent in
       `npm run changeset:status`.
 - [x] Run focused package typecheck and compiled Chrome DevTools tests, then a non-interactive declared
-      entrypoint/RPC smoke. Evidence: package typecheck and 61 tests pass; Pi 0.84.1 RPC opened every
+      entrypoint/RPC smoke. Evidence: package typecheck and 63 tests pass; Pi 0.84.1 RPC opened every
       detail, cancelled the main menu, staged/reviewed/applied 4/5 tools in a temporary agent directory,
       and emitted status without invoking a browser tool or creating a managed browser.
 - [x] Audit the final diff against `docs/extension-conventions.md` and `docs/extension-settings.md`, then
-      run required checks. Evidence: `git diff --check`, `npm run check` (2,533 tests),
+      run required checks. Evidence: `git diff --check`, `npm run check` (2,535 tests),
       `just pack chrome-devtools` (15 expected files), Changeset status, lazy menu-import review, and the
       source-size audit pass; Windows and macOS runtime rendering were not exercised.
 

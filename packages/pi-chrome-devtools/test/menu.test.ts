@@ -56,7 +56,7 @@ test("main menu presents consequential state and five goal-oriented actions with
 	});
 });
 
-test("browser status distinguishes unobserved, running, and failed states without probing", () => {
+test("browser status distinguishes unobserved, running, exited, and failed states without probing", () => {
 	state.managedBrowser = undefined;
 	state.launchPromise = undefined;
 	state.lastLaunchAttempt = undefined;
@@ -70,6 +70,17 @@ test("browser status distinguishes unobserved, running, and failed states withou
 		ownerGeneration: state.sessionGeneration,
 	};
 	assert.match(buildBrowserStatusMessage(), /managed browser running/);
+
+	state.managedBrowser.exited = true;
+	state.lastLaunchAttempt = {
+		candidateLabels: ["Chromium"],
+		mode: "dynamic-port",
+		selectedCandidate: "Chromium",
+		userDataDir: "/tmp/test-profile",
+	};
+	const exited = buildBrowserStatusMessage();
+	assert.match(exited, /managed browser exited/);
+	assert.match(exited, /If no endpoint is available/);
 
 	state.managedBrowser = undefined;
 	state.lastLaunchAttempt = {
@@ -331,6 +342,58 @@ test("interactive routes reject unsupported modes while direct mutations remain 
 	});
 });
 
+test("apply refreshes review instead of overwriting browser tools changed while waiting", async () => {
+	await withTempAgentDir(async () => {
+		const initialTools = ["other_tool", ...CHROME_TOOLS];
+		const concurrentTools = ["other_tool", ...CHROME_TOOLS.slice(0, 3)];
+		const mock = createMockPi({ activeTools: initialTools });
+		chromeDevtools(mock.pi);
+		let changedWhileWaiting = false;
+		let toolScreen = 0;
+		let reviewScreen = 0;
+		let refreshedReview = "";
+		const { ctx, notifications } = createMockContext({
+			waitForIdle: async () => {
+				if (changedWhileWaiting) return;
+				changedWhileWaiting = true;
+				mock.rawPi.setActiveTools(concurrentTools);
+			},
+			hasUI: true,
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 80);
+				if (!harness.isPiTuiKitScreen) return harness.resultPromise;
+				const rendered = harness.render().join("\n");
+				if (rendered.includes("Review tool changes")) {
+					reviewScreen += 1;
+					if (reviewScreen === 1) harness.handleInput("tui.select.confirm");
+					else {
+						refreshedReview = rendered;
+						harness.handleInput("\u0003");
+					}
+					return harness.resultPromise;
+				}
+				toolScreen += 1;
+				if (toolScreen === 1) harness.handleInput("tui.select.confirm");
+				else {
+					for (let index = 0; index < 7; index += 1) harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.confirm");
+				}
+				return harness.resultPromise;
+			},
+		});
+
+		await mock.commands.get("chrome-devtools")?.handler("tools", ctx);
+
+		assert.equal(reviewScreen, 2);
+		assert.match(refreshedReview, /Current: 3\/5/);
+		assert.match(refreshedReview, /Proposed: 4\/5/);
+		assert.deepEqual(mock.rawPi.getActiveTools(), concurrentTools);
+		assert.equal(existsSync(settingsFilePath()), false);
+		assert.match(notifications.at(-1)?.message ?? "", /changed while review was open/i);
+	});
+});
+
 test("a failed confirmed save restores runtime and retains the draft for retry", async () => {
 	await withTempAgentDir(async () => {
 		const initialTools = ["other_tool", ...CHROME_TOOLS];
@@ -376,6 +439,51 @@ test("a failed confirmed save restores runtime and retains the draft for retry",
 			notifications.at(-1)?.message ?? "",
 			/settings save failed; active tools restored/i,
 		);
+	});
+});
+
+test("successful apply keeps unresolved settings warnings visible in the parent menu", async () => {
+	await withTempAgentDir(async () => {
+		state.settingsNotice = "Project browser executablePath was ignored.";
+		const mock = createMockPi({ activeTools: ["other_tool", ...CHROME_TOOLS] });
+		chromeDevtools(mock.pi);
+		let mainScreen = 0;
+		let toolScreen = 0;
+		let refreshedMain = "";
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 80);
+				if (!harness.isPiTuiKitScreen) return harness.resultPromise;
+				const rendered = harness.render().join("\n");
+				if (rendered.startsWith("Chrome DevTools\n")) {
+					mainScreen += 1;
+					if (mainScreen === 1) harness.handleInput("tui.select.confirm");
+					else {
+						refreshedMain = rendered;
+						harness.handleInput("\u0003");
+					}
+					return harness.resultPromise;
+				}
+				if (rendered.includes("Review tool changes")) {
+					harness.handleInput("tui.select.confirm");
+					return harness.resultPromise;
+				}
+				toolScreen += 1;
+				if (toolScreen === 1) harness.handleInput("tui.select.confirm");
+				else {
+					for (let index = 0; index < 7; index += 1) harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.confirm");
+				}
+				return harness.resultPromise;
+			},
+		});
+
+		await mock.commands.get("chrome-devtools")?.handler("", ctx);
+
+		assert.equal(mainScreen, 2);
+		assert.match(refreshedMain, /Settings warning: Project browser executablePath was ignored/);
 	});
 });
 
@@ -485,6 +593,7 @@ async function withTempAgentDir(run: () => Promise<void>) {
 		state.managedBrowser = undefined;
 		state.launchPromise = undefined;
 		state.lastLaunchAttempt = undefined;
+		state.settingsNotice = undefined;
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		rmSync(directory, { recursive: true, force: true });

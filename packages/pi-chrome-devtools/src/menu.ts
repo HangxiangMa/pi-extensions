@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu, runTask } from "@narumitw/pi-tui-kit";
-import { devToolsEndpoint, launchModeLabel } from "./browser-manager.js";
+import { browserLifecycleState, devToolsEndpoint, launchModeLabel } from "./browser-manager.js";
 import { state } from "./runtime.js";
 import { loadSettings, type SettingsLoadResult } from "./settings.js";
 import { CHROME_DEVTOOLS_TOOL_NAMES, type ChromeDevToolsToolName } from "./tool-names.js";
@@ -292,8 +292,17 @@ export async function showChromeDevtoolsToolWorkflow(
 					return { kind: "rejected" };
 				}
 				const selectedTools = orderedTools(current.draft);
-				const saved = await setSelectedChromeDevtoolsTools(pi, ctx, selectedTools);
-				if (!saved || !isCurrent()) return { kind: "rejected" };
+				const saveResult = await setSelectedChromeDevtoolsTools(
+					pi,
+					ctx,
+					selectedTools,
+					orderedTools(current.accepted),
+				);
+				if (!isCurrent()) return { kind: "rejected" };
+				if (saveResult === "active-tools-changed") {
+					current.accepted = new Set(activeChromeTools(pi));
+				}
+				if (saveResult !== "saved") return { kind: "rejected" };
 				current.accepted = new Set(selectedTools);
 				current.draft = new Set(selectedTools);
 				current.applied = true;
@@ -381,12 +390,11 @@ function mainStateLines(snapshot: MenuSnapshot) {
 }
 
 function browserLifecycleSummary() {
-	if (state.launchPromise) return "starting managed browser";
-	if (state.managedBrowser && !state.managedBrowser.exited && state.managedBrowser.ready) {
-		return "managed browser running";
-	}
-	if (state.lastLaunchAttempt?.lastError)
-		return "last launch failed · open Browser status to recover";
+	const lifecycle = browserLifecycleState();
+	if (lifecycle === "starting") return "starting managed browser";
+	if (lifecycle === "running") return "managed browser running";
+	if (lifecycle === "exited") return "managed browser exited · open Browser status to recover";
+	if (lifecycle === "failed") return "last launch failed · open Browser status to recover";
 	const launchMode = launchModeLabel();
 	return launchMode.startsWith("attach first")
 		? "not started · attaches or launches on first use"
@@ -436,7 +444,6 @@ function updateSnapshotAfterApply(
 ) {
 	snapshot.activeTools = [...selectedTools];
 	snapshot.persistenceLabel = "saved";
-	snapshot.settingsWarning = undefined;
 }
 
 function activeChromeTools(pi: ExtensionAPI) {
