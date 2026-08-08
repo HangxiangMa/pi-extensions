@@ -1,11 +1,10 @@
 # Pi Sync Guidelines
 
-## Settings and state
+## Settings and migration
 
 - Hold one cross-process lock across each settings read-modify-write, full validation, and atomic same-directory replacement.
 - Queue the complete mutation before prerequisite awaits so rapid commands retain invocation order.
-- Keep missing-file loads side-effect free, and make every writer share the lock protocol and recheck absence immediately before rename.
-- Do not use hard links for publication because Android or Termux may reject them and Node lacks atomic no-replace rename.
+- Make every writer share the lock protocol and recheck file absence immediately before rename.
 - Do not treat an absent operation lock as proof that no idle older process exists during state-directory migration.
 - Require explicit migration confirmation, serialize upgraded state and cache users against the guard, keep legacy state active until migration, and fail closed when old and new roots coexist.
 
