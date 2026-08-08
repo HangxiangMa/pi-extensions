@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { sep } from "node:path";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { BUILT_IN_CONFIG } from "../src/config.js";
+import { BUILT_IN_CONFIG, validateConfigDocument } from "../src/config.js";
 import { parseFormat } from "../src/format/formatter.js";
 import {
 	formatCount,
@@ -11,6 +11,7 @@ import {
 	type StarshipRuntimeSnapshot,
 	shortenModel,
 } from "../src/modules/index.js";
+import { STARSHIP_PRESETS } from "../src/presets/catalog.js";
 
 const ESC = String.fromCharCode(27);
 const LINK = "\x1b]8;;https://github.com/o/r/pull/123\x07#123\x1b]8;;\x07";
@@ -83,6 +84,24 @@ function fixture(overrides: Partial<StarshipRuntimeSnapshot> = {}): StarshipRunt
 		...overrides,
 	};
 }
+
+test("bundled presets render their promised Pi-native information", () => {
+	const plainById = new Map(
+		STARSHIP_PRESETS.map((preset) => {
+			const loaded = validateConfigDocument(`/presets/${preset.id}.toml`, preset.rawDocument);
+			return [preset.id, stripAnsi(renderStatusline(loaded.config, fixture(), 80).ansi)];
+		}),
+	);
+	assert.match(plainById.get("minimal") ?? "", /sonnet-4.*pi-extensions.*feature.*read/u);
+	assert.doesNotMatch(plainById.get("minimal") ?? "", /π|75\.0%|09:05/u);
+	assert.match(plainById.get("bracketed") ?? "", /\[π\].*\[AI sonnet-4\].*\[09:05\]/u);
+	assert.match(plainById.get("nerd-font-symbols") ?? "", /.*󰚩.*󰉋.*.*/u);
+	assert.match(plainById.get("tokyo-night") ?? "", /.*.*󰚩.*󰉋.*.*󰑮.*󰍛.*/u);
+	for (const [id, rendered] of plainById) {
+		assert.ok(rendered.length > 0, id);
+		assert.doesNotMatch(rendered, /undefined|\$[a-z_]+/u, id);
+	}
+});
 
 test("built-in root renders exactly the reachable nine module categories without backgrounds", () => {
 	const rendered = renderStatusline(BUILT_IN_CONFIG, fixture());

@@ -1,7 +1,8 @@
 # Notices
 
-pi-starship's format and style behavior is based in part on Starship. It uses the `yaml`
-package to parse kubeconfig and OpenStack metadata as inert local data.
+pi-starship's format, style behavior, bundled preset ideas, and Tokyo Night preset palette are based
+in part on Starship. It uses the `yaml` package to parse kubeconfig and OpenStack metadata as inert
+local data.
 
 ## yaml
 

@@ -17,8 +17,8 @@ A native Pi footer configured with Starship-style TOML. It parses and renders fo
 - Width-aware `$fill` alignment for native multiline left/right layouts.
 - Footer rendering is pure: no subprocess, network, filesystem, timer, or environment work runs from `render()`.
 - Multiline output wraps to the terminal width instead of truncating.
-- Goal-oriented `/starship` menu with footer explanation, searchable module inspection,
-  configuration health, transactional preview, and recovery.
+- Goal-oriented `/starship` menu with four bundled presets, footer explanation, searchable module
+  inspection, configuration health, transactional preview, and recovery.
 
 ## 📦 Install
 
@@ -64,9 +64,9 @@ on the next `session_start`, including `/reload` and session replacement. Editor
 cancellation, component disposal, invalid drafts, write failures, and runtime application failures
 preserve the previous file and effective footer.
 
-The shallow main menu also exposes **Explain footer**, **Modules**, **Configuration**, **Help**, and
-**Restore built-in…**. Explain footer uses the current immutable runtime snapshot to list each
-currently showing non-empty module once with its rendered value and description; it starts no new
+The shallow main menu also exposes **Presets**, **Explain footer**, **Modules**, **Configuration**,
+**Help**, and **Restore built-in…**. Explain footer uses the current immutable runtime snapshot to list
+each currently showing non-empty module once with its rendered value and description; it starts no new
 collection work. Modules opens a bounded searchable inspector for every registered module. Its
 textual states distinguish **Showing**, **Empty**, **Disabled**, **Not in format**, and
 **Unavailable** only when the current footer cannot provide an inspection snapshot. Module detail
@@ -75,11 +75,40 @@ variables, style fields, display rules, and the known reason for absent output. 
 read-only and never create or update the settings document.
 
 Configuration combines state, source, path, health, and diagnostics. A healthy missing file is shown
-as **Built-in defaults**, while **Built-in fallback** is reserved for read or parse errors. Restore is
-disabled when no settings document exists or the exact built-in document is already saved. For a
-custom or invalid document, Restore previews the result and warns that the complete document,
+as **Built-in defaults**, an exact bundled document is shown as its named preset, and **Built-in
+fallback** is reserved for read or parse errors. Restore is disabled when no settings document exists
+or the exact built-in document is already saved. For a custom or invalid document, Restore previews
+the result and warns that the complete document,
 including custom settings, unknown fields, and comments, will be replaced without a post-success
 backup before asking for confirmation.
+
+### 🎛️ Presets
+
+Choose **Presets** from `/starship` to browse four complete Pi-native starting points:
+
+| Preset | Layout | Font requirement |
+| --- | --- | --- |
+| **Minimal** | Model, directory, Git branch, and activity | Standard Unicode |
+| **Bracketed** | Balanced Pi and Git information in font-safe bracketed segments | Standard Unicode |
+| **Nerd Font Symbols** | The balanced default layout with icon-rich module symbols | Nerd Font |
+| **Tokyo Night** | One-line Tokyo Night palette with independent Powerline segments | Nerd Font |
+
+Selecting a preset opens the same adaptive live preview used by manual settings. From there, choose
+**Apply _name_ preset…**, **Customize before applying**, or **Choose another preset**. Customization
+starts the TOML editor with the complete preset document and previews the edited result before any
+save. Escape returns to the preset list, while Ctrl+C closes the complete workflow.
+
+Presets are complete documents, not overlays. Applying one replaces `pi-starship.toml`, including
+custom settings, unknown fields, and comments, only after a separate confirmation; no post-success
+backup is kept. Cancellation, disposal, validation failure, write failure, and runtime-apply failure
+retain the previous valid document and effective footer. Exact unedited matches are shown as
+**Currently applied** and cannot be redundantly selected; editing any byte makes the document custom
+again. **Restore built-in…** remains the deterministic recovery path.
+
+The bundled presets use only pi-starship's local Pi and Git snapshot modules. They do not enable the
+GitHub PR query, cloud/deployment readers, or optional command-backed workspace collectors. Their
+visual ideas are inspired by Starship presets but their TOML and module choices are specific to Pi.
+There is no `/starship preset` textual route and no remote preset download.
 
 ### 📝 Example
 
@@ -593,10 +622,11 @@ Package's explicitly documented Cargo lookup is the only ancestor walk and is ca
 | `/starship status` | Show config source/path and diagnostics |
 | `/starship help` | Show command and configuration help |
 
-The standard main menu keeps six goals on one level: **Customize footer**, **Explain footer**,
-**Modules**, **Configuration**, **Help**, and **Restore built-in…**. It shows whether the footer uses
-built-in defaults, a saved built-in document, a custom document, or an error-driven fallback,
-together with the current health. Explain and Modules are menu-only read paths; they do not add
+The standard main menu keeps seven goals on one level: **Customize footer**, **Presets**,
+**Explain footer**, **Modules**, **Configuration**, **Help**, and **Restore built-in…**. It shows whether
+the footer uses built-in defaults, a saved built-in document, a named preset, a custom document, or an
+error-driven fallback,
+together with the current health. Presets, Explain, and Modules are menu-only paths; they do not add
 textual subcommands or change RPC, print, or JSON protocols. Restore remains last and unavailable
 when there is no document to replace.
 
@@ -635,6 +665,7 @@ Keep `extension_status` last in the catalog so arbitrary third-party statuses fo
 - `src/usage.ts` — native-aligned session usage and cache aggregation.
 - `src/command-contract.ts` — lightweight command routes and completions loaded at startup.
 - `src/commands.ts` — lazily loaded menu, preview/confirmation flow, diagnostics, and compatibility routes.
+- `src/presets/` — bundled complete TOML documents and stable preset metadata.
 - `src/command-inspector.ts` — adaptive Explain and searchable read-only module inspection surfaces.
 - `src/command-preview.ts` — adaptive, scrollable, keybinding-aware preview action surface.
 - `src/config.ts` — TOML loading, draft validation, defaults, atomic persistence, and rollback.

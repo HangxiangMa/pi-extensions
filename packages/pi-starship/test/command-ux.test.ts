@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,6 +9,7 @@ import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { registerStarshipCommand } from "../src/commands.js";
 import { BUILT_IN_EXAMPLE, loadStarshipConfig } from "../src/config.js";
+import { STARSHIP_PRESETS } from "../src/presets/catalog.js";
 
 test("/starship distinguishes built-in defaults, saved built-in, custom, and fallback states", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-starship-command-state-"));
@@ -64,6 +65,233 @@ test("/starship distinguishes built-in defaults, saved built-in, custom, and fal
 	}
 });
 
+test("Presets stays shallow, identifies the exact active document, and restores focus", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-command-presets-"));
+	const path = join(root, "pi-starship.toml");
+	const minimal = STARSHIP_PRESETS[0];
+	assert.ok(minimal);
+	writeFileSync(path, minimal.rawDocument);
+	try {
+		const mock = createMockPi();
+		registerStarshipCommand(mock.pi, {
+			getLoaded: () => loadStarshipConfig(path),
+			apply() {},
+			settingsPath: path,
+		});
+		const tui = createTuiHarness({ width: 40, rows: 18 });
+		const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+		const running = mock.commands.get("starship")?.handler("", context.ctx);
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /Minimal preset · Healthy/u);
+		tui.press("tui.select.down");
+		assert.match(tui.render().join("\n"), /→ Presets/u);
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		for (const dimensions of [
+			{ width: 20, rows: 8 },
+			{ width: 40, rows: 18 },
+			{ width: 80, rows: 24 },
+		]) {
+			const frame = tui.resize(dimensions);
+			assert.ok(frame.every((line) => visibleWidth(line) <= dimensions.width));
+		}
+		const full = tui.render().join("\n");
+		assert.match(full, /Minimal/u);
+		assert.match(full, /Bracketed/u);
+		assert.match(full, /Nerd Font Symbols/u);
+		assert.match(full, /Tokyo Night/u);
+		assert.match(full, /Currently applied/u);
+		tui.press("tui.select.confirm");
+		await flushAsyncWork();
+		assert.match(tui.render().join("\n"), /^Presets/mu);
+		tui.press("tui.select.down");
+		tui.press("tui.select.down");
+		assert.match(tui.render().join("\n"), /requires Nerd Font/u);
+		tui.press("tui.select.cancel");
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /→ Presets/u);
+		tui.press("ctrl+c");
+		await running;
+		assert.equal(readFileSync(path, "utf8"), minimal.rawDocument);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("preset preview cancellation is inert and confirmed apply replaces atomically", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-command-preset-apply-"));
+	const path = join(root, "pi-starship.toml");
+	const original = "format = 'custom'\nfuture = true\n";
+	writeFileSync(path, original);
+	try {
+		const mock = createMockPi();
+		let applied = 0;
+		let confirmation = "";
+		registerStarshipCommand(mock.pi, {
+			getLoaded: () => loadStarshipConfig(path),
+			apply() {
+				applied += 1;
+			},
+			settingsPath: path,
+			renderPreview: (loaded) => [loaded.config.format],
+		});
+
+		const cancelledTui = createTuiHarness({ width: 50, rows: 16 });
+		const cancelledContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: cancelledTui.custom,
+			confirm: async () => true,
+		});
+		const cancelled = mock.commands.get("starship")?.handler("", cancelledContext.ctx);
+		await cancelledTui.waitForOpen();
+		cancelledTui.press("tui.select.down");
+		cancelledTui.press("tui.select.confirm");
+		await cancelledTui.waitForOpen();
+		cancelledTui.press("tui.select.confirm");
+		await cancelledTui.waitForOpen();
+		assert.match(cancelledTui.render().join("\n"), /Minimal preset preview/u);
+		assert.match(cancelledTui.render().join("\n"), /Apply Minimal preset…/u);
+		assert.match(cancelledTui.render().join("\n"), /Customize before applying/u);
+		assert.match(cancelledTui.render().join("\n"), /Choose another preset/u);
+		cancelledTui.press("tui.select.cancel");
+		await cancelledTui.waitForOpen();
+		assert.match(cancelledTui.render().join("\n"), /Presets/u);
+		cancelledTui.press("ctrl+c");
+		await cancelled;
+		assert.equal(readFileSync(path, "utf8"), original);
+		assert.equal(applied, 0);
+
+		const appliedTui = createTuiHarness({ width: 50, rows: 16 });
+		const appliedContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: appliedTui.custom,
+			confirm: async (_title: string, message: string) => {
+				confirmation = message;
+				return true;
+			},
+		});
+		const running = mock.commands.get("starship")?.handler("", appliedContext.ctx);
+		await appliedTui.waitForOpen();
+		appliedTui.press("tui.select.down");
+		appliedTui.press("tui.select.confirm");
+		await appliedTui.waitForOpen();
+		appliedTui.press("tui.select.confirm");
+		await appliedTui.waitForOpen();
+		appliedTui.press("tui.select.confirm");
+		await running;
+		assert.equal(readFileSync(path, "utf8"), STARSHIP_PRESETS[0]?.rawDocument);
+		assert.equal(applied, 1);
+		assert.match(confirmation, /Minimal/u);
+		assert.match(confirmation, /custom settings, unknown fields, and comments will be removed/iu);
+		assert.match(confirmation, /No backup is kept after success/u);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("Customize before applying starts from the preset and saves the edited document", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-command-preset-customize-"));
+	const path = join(root, "pi-starship.toml");
+	const bracketed = STARSHIP_PRESETS[1];
+	assert.ok(bracketed);
+	try {
+		const mock = createMockPi();
+		let editorDraft = "";
+		let applied = 0;
+		registerStarshipCommand(mock.pi, {
+			getLoaded: () => loadStarshipConfig(path),
+			apply() {
+				applied += 1;
+			},
+			settingsPath: path,
+			renderPreview: (loaded) => [loaded.config.format],
+		});
+		const tui = createTuiHarness({ width: 60, rows: 18 });
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: tui.custom,
+			editor: async (_title: string, draft: string) => {
+				editorDraft = draft;
+				return `${draft}# personalized\n`;
+			},
+			confirm: async () => true,
+		});
+		const running = mock.commands.get("starship")?.handler("", context.ctx);
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		assert.equal(editorDraft, bracketed.rawDocument);
+		assert.match(tui.render().join("\n"), /Bracketed preset preview/u);
+		tui.press("tui.select.confirm");
+		await running;
+		assert.equal(readFileSync(path, "utf8"), `${bracketed.rawDocument}# personalized\n`);
+		assert.equal(applied, 1);
+		assert.match(
+			context.notifications.at(-1)?.message ?? "",
+			/Bracketed preset saved and applied/u,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("an invalid customized preset returns to preset recovery without changing the footer", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-command-preset-invalid-"));
+	const path = join(root, "pi-starship.toml");
+	try {
+		const mock = createMockPi();
+		let applied = 0;
+		registerStarshipCommand(mock.pi, {
+			getLoaded: () => loadStarshipConfig(path),
+			apply() {
+				applied += 1;
+			},
+			settingsPath: path,
+		});
+		const tui = createTuiHarness({ width: 50, rows: 16 });
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: tui.custom,
+			editor: async () => "format = [",
+		});
+		const running = mock.commands.get("starship")?.handler("", context.ctx);
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		const errorFrame = tui.render().join("\n");
+		assert.match(errorFrame, /Preset needs attention/u);
+		assert.match(errorFrame, /Continue editing/u);
+		assert.match(errorFrame, /Choose another preset/u);
+		assert.match(context.notifications.at(-1)?.message ?? "", /Preset draft is invalid/u);
+		tui.press("tui.select.cancel");
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /Presets/u);
+		tui.press("ctrl+c");
+		await running;
+		assert.equal(existsSync(path), false);
+		assert.equal(applied, 0);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("Configuration combines state, source, path, health, and diagnostics", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-starship-command-configuration-"));
 	const path = join(root, "pi-starship.toml");
@@ -79,7 +307,7 @@ test("Configuration combines state, source, path, health, and diagnostics", asyn
 		const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
 		const running = mock.commands.get("starship")?.handler("", context.ctx);
 		await tui.waitForOpen();
-		for (let index = 0; index < 3; index += 1) tui.press("tui.select.down");
+		for (let index = 0; index < 4; index += 1) tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
 		const frame = tui.render().join("\n");
@@ -119,7 +347,7 @@ test("healthy missing settings disable restore without creating a document", asy
 		});
 		const running = mock.commands.get("starship")?.handler("", context.ctx);
 		await tui.waitForOpen();
-		for (let index = 0; index < 5; index += 1) tui.press("tui.select.down");
+		for (let index = 0; index < 6; index += 1) tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /Already using defaults · no file to replace/u);

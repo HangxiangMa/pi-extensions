@@ -12,9 +12,16 @@ import {
 	validateConfigDocument,
 } from "./config.js";
 import { inspectUnavailableModules, type StatuslineInspection } from "./modules/inspection.js";
+import {
+	getStarshipPreset,
+	presetForDocument,
+	STARSHIP_PRESETS,
+	type StarshipPreset,
+} from "./presets/catalog.js";
 
 const MAIN_ACTIONS = {
 	customize: "customize",
+	presets: "presets",
 	explain: "explain",
 	modules: "modules",
 	configuration: "configuration",
@@ -48,6 +55,11 @@ interface WorkflowOwner {
 	signal: AbortSignal;
 	isCurrent(): boolean;
 }
+
+type ReviewIntent =
+	| { kind: "customize" }
+	| { kind: "restore" }
+	| { kind: "preset"; preset: StarshipPreset };
 
 export function registerStarshipCommand(pi: ExtensionAPI, options: StarshipCommandOptions) {
 	pi.registerCommand("starship", {
@@ -100,8 +112,14 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 		signal: fallbackController.signal,
 		isCurrent: () => !fallbackController.signal.aborted,
 	};
-	type Screen = "main" | "modules" | "configuration" | "help";
-	type Action = "customize" | "explain" | "restore";
+	type Screen = "main" | "presets" | "modules" | "configuration" | "help";
+	type Action = "customize" | "explain" | "restore" | StarshipPreset["id"];
+	const runPresetAction = async (preset: StarshipPreset) => {
+		const result = await applyPreset(ctx, options, preset);
+		return result === "applied" || result === "close"
+			? { kind: "close" as const }
+			: { kind: "stay" as const };
+	};
 	const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
 		start: "main",
 		screens: {
@@ -118,6 +136,12 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 							label: "Customize footer",
 							description: `${presentation.state} · preview before applying`,
 							action: "customize",
+						},
+						{
+							id: MAIN_ACTIONS.presets,
+							label: "Presets",
+							description: "Browse bundled footer starting points",
+							to: "presets",
 						},
 						{
 							id: MAIN_ACTIONS.explain,
@@ -152,6 +176,25 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 						},
 					],
 					hint: "close",
+				};
+			},
+			presets: () => {
+				const active = presetForDocument(options.getLoaded().rawDocument);
+				return {
+					kind: "actions",
+					title: "Presets",
+					lines: ["Choose a complete footer starting point to preview."],
+					items: STARSHIP_PRESETS.map((preset) => ({
+						id: preset.id,
+						label: preset.label,
+						description:
+							active?.id === preset.id
+								? `Currently applied · ${preset.description}`
+								: preset.description,
+						disabled: active?.id === preset.id,
+						action: preset.id,
+					})),
+					hint: "back",
 				};
 			},
 			modules: () => {
@@ -202,6 +245,7 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 				title: "pi-starship help",
 				lines: [
 					"Customize footer opens the TOML editor, then previews and confirms before saving.",
+					"Presets previews complete bundled starting points before replacing the settings document.",
 					"Explain footer breaks down the modules currently showing from the existing snapshot.",
 					"Modules searches every supported module and explains its current read-only state.",
 					"Configuration explains state, source, path, and warnings without changing the footer.",
@@ -221,6 +265,10 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 				if (!isCurrentOwner(owner)) return { kind: "stay" };
 				return result?.kind === "back" ? { kind: "stay" } : { kind: "close" };
 			},
+			minimal: async () => runPresetAction(getStarshipPreset("minimal")),
+			bracketed: async () => runPresetAction(getStarshipPreset("bracketed")),
+			"nerd-font-symbols": async () => runPresetAction(getStarshipPreset("nerd-font-symbols")),
+			"tokyo-night": async () => runPresetAction(getStarshipPreset("tokyo-night")),
 			restore: async () => {
 				const presentation = configurationPresentation(options.getLoaded());
 				if (presentation.restoreDisabled) {
@@ -279,9 +327,50 @@ async function editSettings(
 			return "cancel";
 		}
 
-		const result = await reviewAndApply(ctx, options, validated, "Footer preview", false, owner);
+		const result = await reviewAndApply(ctx, options, validated, { kind: "customize" }, owner);
 		if (result === "edit") continue;
 		return result;
+	}
+}
+
+async function applyPreset(
+	ctx: ExtensionCommandContext,
+	options: StarshipCommandOptions,
+	preset: StarshipPreset,
+): Promise<"applied" | "cancel" | "close"> {
+	const owner = workflowOwner(options);
+	if (!isCurrentOwner(owner)) return "cancel";
+	let draft = preset.rawDocument;
+	while (true) {
+		let validated: LoadedStarshipConfig;
+		try {
+			validated = (options.validate ?? validateConfigDocument)(options.settingsPath, draft);
+		} catch (error) {
+			ctx.ui.notify(`Preset draft is invalid: ${safeText(formatError(error))}`, "error");
+			const action = await showPreviewActionMenu(
+				ctx,
+				"Preset needs attention",
+				() => [safeText(formatError(error)), "The current footer has not changed."],
+				[
+					{ value: PREVIEW_ACTIONS.edit, label: "Continue editing" },
+					{ value: PREVIEW_ACTIONS.cancel, label: "Choose another preset" },
+				],
+				owner.signal,
+			);
+			if (!isCurrentOwner(owner)) return "cancel";
+			if (action?.kind === "closed") return "close";
+			if (selectedPreviewAction(action) !== PREVIEW_ACTIONS.edit) return "cancel";
+			const edited = await ctx.ui.editor(`Customize ${preset.label} preset`, draft);
+			if (!isCurrentOwner(owner) || edited === undefined) return "cancel";
+			draft = edited;
+			continue;
+		}
+
+		const result = await reviewAndApply(ctx, options, validated, { kind: "preset", preset }, owner);
+		if (result !== "edit") return result;
+		const edited = await ctx.ui.editor(`Customize ${preset.label} preset`, draft);
+		if (!isCurrentOwner(owner) || edited === undefined) return "cancel";
+		draft = edited;
 	}
 }
 
@@ -295,7 +384,7 @@ async function restoreBuiltIn(
 		options.settingsPath,
 		BUILT_IN_EXAMPLE,
 	);
-	const result = await reviewAndApply(ctx, options, validated, "Restore preview", true, owner);
+	const result = await reviewAndApply(ctx, options, validated, { kind: "restore" }, owner);
 	return result === "edit" ? "cancel" : result;
 }
 
@@ -303,27 +392,32 @@ async function reviewAndApply(
 	ctx: ExtensionCommandContext,
 	options: StarshipCommandOptions,
 	validated: LoadedStarshipConfig,
-	title: string,
-	restore: boolean,
+	intent: ReviewIntent,
 	owner: WorkflowOwner,
 ): Promise<"applied" | "edit" | "cancel" | "close"> {
 	while (true) {
 		const selection = await showPreviewActionMenu(
 			ctx,
-			title,
-			(width) =>
-				restore
-					? restorePreviewBody(ctx, options, validated, width)
-					: previewBody(ctx, options, validated, width),
+			reviewTitle(intent),
+			(width) => reviewPreviewBody(ctx, options, validated, width, intent),
 			[
-				{
-					value: PREVIEW_ACTIONS.continue,
-					label: restore ? "Replace with built-in…" : "Apply changes…",
-				},
-				...(restore ? [] : [{ value: PREVIEW_ACTIONS.edit, label: "Continue editing" }]),
+				{ value: PREVIEW_ACTIONS.continue, label: continueLabel(intent) },
+				...(intent.kind === "restore"
+					? []
+					: [
+							{
+								value: PREVIEW_ACTIONS.edit,
+								label: intent.kind === "preset" ? "Customize before applying" : "Continue editing",
+							},
+						]),
 				{
 					value: PREVIEW_ACTIONS.cancel,
-					label: restore ? "Cancel" : "Discard draft",
+					label:
+						intent.kind === "restore"
+							? "Cancel"
+							: intent.kind === "preset"
+								? "Choose another preset"
+								: "Discard draft",
 				},
 			],
 			owner.signal,
@@ -335,10 +429,8 @@ async function reviewAndApply(
 		if (selected !== PREVIEW_ACTIONS.continue) return "cancel";
 
 		const confirmed = await ctx.ui.confirm(
-			restore ? "Restore built-in footer?" : "Apply footer changes?",
-			restore
-				? `Replace ${safeText(options.settingsPath)} entirely with the built-in configuration? All custom settings, unknown fields, and comments will be removed. No backup is kept after success.`
-				: "Save this configuration and apply it immediately?",
+			confirmationTitle(intent),
+			confirmationMessage(options.settingsPath, intent),
 		);
 		if (!isCurrentOwner(owner)) return "cancel";
 		if (!confirmed) continue;
@@ -373,13 +465,59 @@ async function reviewAndApply(
 			saved.diagnostics.length > 0
 				? ` (${saved.diagnostics.length} warning${saved.diagnostics.length === 1 ? "" : "s"})`
 				: "";
-		ctx.ui.notify(
-			restore
-				? `Built-in footer restored and applied${warningSuffix}.`
-				: `Footer settings saved and applied${warningSuffix}.`,
-			"info",
-		);
+		ctx.ui.notify(`${successMessage(intent)}${warningSuffix}.`, "info");
 		return "applied";
+	}
+}
+
+function reviewTitle(intent: ReviewIntent): string {
+	switch (intent.kind) {
+		case "customize":
+			return "Footer preview";
+		case "restore":
+			return "Restore preview";
+		case "preset":
+			return `${intent.preset.label} preset preview`;
+	}
+}
+
+function continueLabel(intent: ReviewIntent): string {
+	switch (intent.kind) {
+		case "customize":
+			return "Apply changes…";
+		case "restore":
+			return "Replace with built-in…";
+		case "preset":
+			return `Apply ${intent.preset.label} preset…`;
+	}
+}
+
+function confirmationTitle(intent: ReviewIntent): string {
+	switch (intent.kind) {
+		case "customize":
+			return "Apply footer changes?";
+		case "restore":
+			return "Restore built-in footer?";
+		case "preset":
+			return `Apply ${intent.preset.label} preset?`;
+	}
+}
+
+function confirmationMessage(settingsPath: string, intent: ReviewIntent): string {
+	if (intent.kind === "customize") return "Save this configuration and apply it immediately?";
+	const replacement =
+		intent.kind === "restore" ? "the built-in configuration" : `the ${intent.preset.label} preset`;
+	return `Replace ${safeText(settingsPath)} entirely with ${replacement}? All custom settings, unknown fields, and comments will be removed. No backup is kept after success.`;
+}
+
+function successMessage(intent: ReviewIntent): string {
+	switch (intent.kind) {
+		case "customize":
+			return "Footer settings saved and applied";
+		case "restore":
+			return "Built-in footer restored and applied";
+		case "preset":
+			return `${intent.preset.label} preset saved and applied`;
 	}
 }
 
@@ -417,6 +555,28 @@ function restorePreviousConfiguration(
 	} catch (error) {
 		return error;
 	}
+}
+
+function reviewPreviewBody(
+	ctx: ExtensionCommandContext,
+	options: StarshipCommandOptions,
+	loaded: LoadedStarshipConfig,
+	width: number,
+	intent: ReviewIntent,
+): string[] {
+	if (intent.kind === "restore") return restorePreviewBody(ctx, options, loaded, width);
+	if (intent.kind === "customize") return previewBody(ctx, options, loaded, width);
+	const current = configurationPresentation(options.getLoaded());
+	return [
+		`Preset: ${intent.preset.label}`,
+		`Requirement: ${intent.preset.requiresNerdFont ? "Nerd Font" : "No special font"}`,
+		`Current: ${current.state}`,
+		`Path: ${safeText(options.settingsPath)}`,
+		"Applying replaces the entire settings document, including custom settings, unknown fields, and comments.",
+		"No backup is kept after a successful apply.",
+		"",
+		...previewBody(ctx, options, loaded, width),
+	];
 }
 
 function restorePreviewBody(
@@ -490,20 +650,25 @@ function configurationPresentation(loaded: LoadedStarshipConfig): ConfigurationP
 		loaded.rawDocument === undefined &&
 		loaded.diagnostics.length === 0;
 	const savedBuiltIn = loaded.source === "user" && loaded.rawDocument === BUILT_IN_EXAMPLE;
+	const activePreset = presetForDocument(loaded.rawDocument);
 	const fallback = loaded.source === "built-in" && loaded.diagnostics.length > 0;
 	return {
 		state: healthyMissing
 			? "Built-in defaults"
 			: savedBuiltIn
 				? "Saved built-in configuration"
-				: fallback
-					? "Built-in fallback"
-					: "Custom configuration",
+				: activePreset
+					? `${activePreset.label} preset`
+					: fallback
+						? "Built-in fallback"
+						: "Custom configuration",
 		source: healthyMissing
 			? "No settings file"
-			: loaded.source === "user"
-				? "User file"
-				: "Built-in fallback",
+			: activePreset
+				? "Bundled preset"
+				: loaded.source === "user"
+					? "User file"
+					: "Built-in fallback",
 		health: configurationHealth(loaded),
 		restoreDisabled: healthyMissing || savedBuiltIn,
 		restoreDescription: healthyMissing
@@ -544,7 +709,7 @@ function showHelp(ctx: ExtensionCommandContext, settingsPath: string) {
 	if (!canNotify(ctx)) return;
 	ctx.ui.notify(
 		[
-			"/starship — customize, explain, or inspect the footer in TUI mode",
+			"/starship — customize, choose presets, explain, or inspect the footer in TUI mode",
 			"/starship settings — customize, preview, and apply TOML",
 			"/starship status — show source, path, and warnings",
 			"/starship help — show this help",
