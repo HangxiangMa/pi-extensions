@@ -265,6 +265,51 @@ test("direct public join creates identity only after confirmation and shutdown c
 	});
 });
 
+test("a delayed transport load rejects a concurrent join in the same session", async () => {
+	await fixture(async (settingsPath) => {
+		await updateChatSettings(
+			{
+				nickname: "Mika",
+				identitySeed: Buffer.alloc(32, 27).toString("base64url"),
+				widgetMode: "count",
+			},
+			{ settingsPath },
+		);
+		const transport = new IdleTransport();
+		let releaseTransport: (() => void) | undefined;
+		const mock = createMockPi();
+		createPiChatExtension({
+			settingsPath,
+			createTransport: async () => {
+				await new Promise<void>((resolve) => {
+					releaseTransport = resolve;
+				});
+				return transport;
+			},
+			createDirectory: () => new IdleDirectory(),
+		})(mock.pi);
+		const ctx = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			confirm: async () => true,
+			custom: async () => undefined,
+		});
+		await emit(mock, "session_start", { reason: "startup" }, ctx.ctx);
+		const command = mock.commands.get("chat");
+		assert.ok(command);
+		const firstJoin = command.handler("#first-room", ctx.ctx);
+		await waitFor(() => releaseTransport !== undefined);
+		await assert.rejects(
+			async () => command.handler("#second-room", ctx.ctx),
+			/join is already in progress/u,
+		);
+		releaseTransport?.();
+		await firstJoin;
+		await emit(mock, "session_shutdown", { reason: "quit" }, ctx.ctx);
+		assert.equal(transport.stopped, 1);
+	});
+});
+
 test("public joins own a scoped directory advertiser while private joins do not", async () => {
 	await fixture(async (settingsPath) => {
 		await updateChatSettings(
@@ -364,6 +409,42 @@ test("directory startup failure cleans its resource without disconnecting public
 			ctx.notifications.some(({ message }) => /directory bootstrap unavailable/u.test(message)),
 		);
 		assert.equal(directory.stopped, 1);
+		assert.equal(transport.stopped, 0);
+		await emit(mock, "session_shutdown", { reason: "quit" }, ctx.ctx);
+		assert.equal(transport.stopped, 1);
+	});
+});
+
+test("directory loader failure leaves public chat connected and reports the failure", async () => {
+	await fixture(async (settingsPath) => {
+		await updateChatSettings(
+			{
+				nickname: "Mika",
+				identitySeed: Buffer.alloc(32, 27).toString("base64url"),
+				widgetMode: "count",
+			},
+			{ settingsPath },
+		);
+		const transport = new IdleTransport();
+		const mock = createMockPi();
+		createPiChatExtension({
+			settingsPath,
+			createTransport: () => transport,
+			createDirectory: async () => {
+				throw new Error("directory module unavailable");
+			},
+		})(mock.pi);
+		const ctx = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			confirm: async () => true,
+			custom: async () => undefined,
+		});
+		await emit(mock, "session_start", { reason: "startup" }, ctx.ctx);
+		await mock.commands.get("chat")?.handler("#pi-dev", ctx.ctx);
+		await waitFor(() =>
+			ctx.notifications.some(({ message }) => /directory module unavailable/u.test(message)),
+		);
 		assert.equal(transport.stopped, 0);
 		await emit(mock, "session_shutdown", { reason: "quit" }, ctx.ctx);
 		assert.equal(transport.stopped, 1);

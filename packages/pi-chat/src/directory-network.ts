@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
 import Hyperswarm, { type PeerDiscovery, type PeerInfo } from "hyperswarm";
 import type { ChatIdentity } from "./identity.js";
-import { MAX_DIRECT_NEIGHBORS } from "./network.js";
+import { MAX_DIRECT_NEIGHBORS } from "./network-contract.js";
 import { PeerRateLimiter } from "./protocol.js";
 import {
 	createDirectoryPresence,

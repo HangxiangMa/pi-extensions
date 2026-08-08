@@ -6,30 +6,16 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { ChatSnapshot, ChatTransport } from "./chat-session.js";
 import { ChatSession } from "./chat-session.js";
-import { ChatView } from "./chat-view.js";
-import {
-	HyperswarmDirectoryTransport,
-	type PublicRoomDirectory,
-	PublicRoomDirectorySession,
-} from "./directory-network.js";
+import type { PublicRoomDirectory } from "./directory-network.js";
 import {
 	type ChatIdentity,
 	createIdentity,
 	deriveScopedIdentity,
 	formatIdentityLabel,
 } from "./identity.js";
-import { type ChatMenuSource, type JoinRoomOptions, showChatMenu } from "./menu.js";
-import {
-	HyperswarmTransport,
-	type HyperswarmTransportOptions,
-	MAX_DIRECT_NEIGHBORS,
-} from "./network.js";
-import {
-	createPrivateRoom,
-	createPublicRoom,
-	parseInvite,
-	type RoomDescriptor,
-} from "./protocol.js";
+import type { ChatMenuSource, JoinRoomOptions } from "./menu.js";
+import { type HyperswarmTransportOptions, MAX_DIRECT_NEIGHBORS } from "./network-contract.js";
+import { createPrivateRoom, createPublicRoom, parseInvite, type RoomDescriptor } from "./room.js";
 import {
 	awaitChatSettingsWrites,
 	type ChatSettings,
@@ -41,7 +27,6 @@ import {
 	type WidgetMode,
 } from "./settings.js";
 import { sanitizeSingleLine } from "./text.js";
-import { renderChatWidget } from "./widget.js";
 
 const CHAT_UI_KEY = "chat";
 const EXPERIMENTAL_WARNING =
@@ -67,30 +52,52 @@ export interface PiChatDirectoryOptions {
 	advertisedSlug?: string;
 }
 
+type Awaitable<Value> = Value | Promise<Value>;
+type ChatMenuModule = Pick<typeof import("./menu.js"), "showChatMenu">;
+type ChatViewModule = Pick<typeof import("./chat-view.js"), "ChatView">;
+type ChatWidgetModule = Pick<typeof import("./widget.js"), "renderChatWidget">;
+
 export interface PiChatDependencies {
 	settingsPath: string;
 	randomBytes(size: number): Buffer;
-	createTransport(options: HyperswarmTransportOptions): ChatTransport;
-	createDirectory(options: PiChatDirectoryOptions): PublicRoomDirectory;
+	createTransport(options: HyperswarmTransportOptions): Awaitable<ChatTransport>;
+	createDirectory(options: PiChatDirectoryOptions): Awaitable<PublicRoomDirectory>;
 	updateSettings: typeof updateChatSettingsFile;
+	loadChatMenu(): Promise<ChatMenuModule>;
+	loadChatView(): Promise<ChatViewModule>;
+	loadChatWidget(): Promise<ChatWidgetModule>;
 }
 
 export function createPiChatExtension(
 	dependencies: Partial<PiChatDependencies> = {},
 ): (pi: ExtensionAPI) => void {
+	const loadNetwork = cachedModuleLoader(() => import("./network.js"));
+	const loadDirectoryNetwork = cachedModuleLoader(() => import("./directory-network.js"));
 	const deps: PiChatDependencies = {
 		settingsPath: dependencies.settingsPath ?? chatSettingsPath(),
 		randomBytes: dependencies.randomBytes ?? nodeRandomBytes,
 		createTransport:
-			dependencies.createTransport ?? ((options) => new HyperswarmTransport(options)),
+			dependencies.createTransport ??
+			(async (options) => {
+				const { HyperswarmTransport } = await loadNetwork();
+				return new HyperswarmTransport(options);
+			}),
 		createDirectory:
 			dependencies.createDirectory ??
-			((options) =>
-				new PublicRoomDirectorySession({
+			(async (options) => {
+				const { HyperswarmDirectoryTransport, PublicRoomDirectorySession } =
+					await loadDirectoryNetwork();
+				return new PublicRoomDirectorySession({
 					...options,
 					transport: new HyperswarmDirectoryTransport({ identity: options.identity }),
-				})),
+				});
+			}),
 		updateSettings: dependencies.updateSettings ?? updateChatSettingsFile,
+		loadChatMenu: cachedModuleLoader(dependencies.loadChatMenu ?? (() => import("./menu.js"))),
+		loadChatView: cachedModuleLoader(dependencies.loadChatView ?? (() => import("./chat-view.js"))),
+		loadChatWidget: cachedModuleLoader(
+			dependencies.loadChatWidget ?? (() => import("./widget.js")),
+		),
 	};
 	const updateChatSettings = deps.updateSettings;
 
@@ -106,7 +113,9 @@ export function createPiChatExtension(
 		let chatDraft = "";
 		let restoreError: string | undefined;
 		let restoringRoomId: string | undefined;
+		let joinOwner: { sessionManager: unknown; generation: number; token: symbol } | undefined;
 		const ownedTasks = new Set<Promise<unknown>>();
+		let renderChatWidget: ChatWidgetModule["renderChatWidget"] | undefined;
 		let widgetRender: (() => void) | undefined;
 		let widgetInstalled = false;
 
@@ -135,6 +144,7 @@ export function createPiChatExtension(
 			} catch {
 				// Session replacement may invalidate an old UI immediately.
 			}
+			renderChatWidget = undefined;
 			widgetRender = undefined;
 			widgetInstalled = false;
 		};
@@ -165,6 +175,8 @@ export function createPiChatExtension(
 					widgetRender = undefined;
 					return;
 				}
+				const renderWidget = renderChatWidget;
+				if (!renderWidget) return;
 				if (!widgetInstalled) {
 					ctx.ui.setWidget(CHAT_UI_KEY, (tui, theme) => {
 						const requestRender = () => tui.requestRender();
@@ -172,7 +184,7 @@ export function createPiChatExtension(
 						return {
 							render: (width: number) =>
 								latestSnapshot
-									? renderChatWidget(
+									? renderWidget(
 											latestSnapshot,
 											settings.widgetMode ?? "count",
 											width,
@@ -267,39 +279,54 @@ export function createPiChatExtension(
 		const startPublicRoomDirectory = (
 			room: RoomDescriptor,
 			identity: ChatIdentity,
+			session: ChatSession,
 			ctx: ExtensionContext,
 			owner: unknown,
 			ownerGeneration: number,
 		): void => {
 			if (room.kind !== "public" || !room.slug) return;
-			const directory = deps.createDirectory({
-				identity: deriveScopedIdentity(identity, `directory:#${room.slug}`),
-				advertisedSlug: room.slug,
-			});
-			roomDirectory = directory;
 			void trackTask(
-				directory.start(controller.signal).catch(async (error) => {
-					const ownsDirectory = roomDirectory === directory;
-					if (ownsDirectory) roomDirectory = undefined;
-					await directory.stop();
-					if (
-						ownsDirectory &&
-						isCurrent(owner, ownerGeneration) &&
-						chatSession?.snapshot().room.id === room.id
-					) {
-						notifySafely(
-							ctx,
-							`Pi Chat public-room discovery is unavailable: ${sanitizeSingleLine(
-								error instanceof Error ? error.message : String(error),
-							)}. Chat remains connected.`,
-							"warning",
-						);
+				(async () => {
+					let directory: PublicRoomDirectory | undefined;
+					try {
+						directory = await deps.createDirectory({
+							identity: deriveScopedIdentity(identity, `directory:#${room.slug}`),
+							advertisedSlug: room.slug,
+						});
+						if (
+							!isCurrent(owner, ownerGeneration) ||
+							controller.signal.aborted ||
+							chatSession !== session
+						) {
+							await directory.stop();
+							return;
+						}
+						roomDirectory = directory;
+						await directory.start(controller.signal);
+					} catch (error) {
+						const ownsDirectory = !directory || roomDirectory === directory;
+						if (directory && roomDirectory === directory) roomDirectory = undefined;
+						if (directory) await Promise.allSettled([directory.stop()]);
+						if (
+							ownsDirectory &&
+							isCurrent(owner, ownerGeneration) &&
+							chatSession === session &&
+							session.snapshot().room.id === room.id
+						) {
+							notifySafely(
+								ctx,
+								`Pi Chat public-room discovery is unavailable: ${sanitizeSingleLine(
+									error instanceof Error ? error.message : String(error),
+								)}. Chat remains connected.`,
+								"warning",
+							);
+						}
 					}
-				}),
+				})(),
 			);
 		};
 
-		const joinRoom = async (
+		const joinRoomOwned = async (
 			room: RoomDescriptor,
 			ctx: ExtensionContext,
 			signal: AbortSignal,
@@ -332,11 +359,27 @@ export function createPiChatExtension(
 			if (!identity || !isCurrent(owner, ownerGeneration) || signal.aborted) return false;
 			const nickname = settings.nickname;
 			if (!nickname) throw new Error("Pi Chat nickname is unavailable.");
-			const transport = deps.createTransport({
-				room,
-				identity,
-				maxPeers: MAX_DIRECT_NEIGHBORS,
-			});
+			const widgetModule = await loadOwnedModule(
+				deps.loadChatWidget,
+				() => isCurrent(owner, ownerGeneration) && !signal.aborted,
+			);
+			if (!widgetModule) return false;
+			let transport: ChatTransport;
+			try {
+				transport = await deps.createTransport({
+					room,
+					identity,
+					maxPeers: MAX_DIRECT_NEIGHBORS,
+				});
+			} catch (error) {
+				if (!isCurrent(owner, ownerGeneration) || signal.aborted) return false;
+				throw error;
+			}
+			if (!isCurrent(owner, ownerGeneration) || signal.aborted) {
+				await transport.stop();
+				return false;
+			}
+			renderChatWidget = widgetModule.renderChatWidget;
 			const session = new ChatSession({
 				room,
 				identity,
@@ -376,7 +419,7 @@ export function createPiChatExtension(
 				restoreError = undefined;
 				latestSnapshot = session.snapshot();
 				updateUi(ctx, latestSnapshot);
-				startPublicRoomDirectory(room, identity, ctx, owner, ownerGeneration);
+				startPublicRoomDirectory(room, identity, session, ctx, owner, ownerGeneration);
 				return true;
 			} catch (error) {
 				if (chatSession === session) chatSession = undefined;
@@ -384,6 +427,20 @@ export function createPiChatExtension(
 				clearUi(ctx);
 				if (!signal.aborted && isCurrent(owner, ownerGeneration)) throw error;
 				return false;
+			}
+		};
+
+		const joinRoom: typeof joinRoomOwned = async (room, ctx, signal, options) => {
+			const existing = joinOwner;
+			if (existing?.sessionManager === ctx.sessionManager && existing.generation === generation) {
+				throw new Error("A Pi Chat room join is already in progress.");
+			}
+			const token = Symbol("chat-join");
+			joinOwner = { sessionManager: ctx.sessionManager, generation, token };
+			try {
+				return await joinRoomOwned(room, ctx, signal, options);
+			} finally {
+				if (joinOwner?.token === token) joinOwner = undefined;
 			}
 		};
 
@@ -429,6 +486,12 @@ export function createPiChatExtension(
 			const ownerSignal = controller.signal;
 			await updateRememberedSurface("chat", ctx, owner, ownerGeneration, session);
 			if (!isCurrent(owner, ownerGeneration) || chatSession !== session) return;
+			const viewModule = await loadOwnedModule(
+				deps.loadChatView,
+				() => isCurrent(owner, ownerGeneration) && chatSession === session,
+			);
+			if (!viewModule) return;
+			const { ChatView } = viewModule;
 			await ctx.ui.custom<void>(
 				(tui, theme, _keybindings, done) =>
 					new ChatView({
@@ -507,9 +570,13 @@ export function createPiChatExtension(
 					const activeDirectory = roomDirectory;
 					const directory =
 						activeDirectory ??
-						deps.createDirectory({ identity: createIdentity(deps.randomBytes(32)) });
+						(await deps.createDirectory({ identity: createIdentity(deps.randomBytes(32)) }));
 					const temporary = activeDirectory ? undefined : directory;
 					const browseSignal = AbortSignal.any([signal, controller.signal]);
+					if (!ownsMenu() || browseSignal.aborted) {
+						if (temporary) await temporary.stop();
+						throw browseSignal.reason ?? new DOMException("Aborted", "AbortError");
+					}
 					try {
 						const result = await directory.browse(browseSignal);
 						if (!ownsMenu() || browseSignal.aborted) {
@@ -624,6 +691,11 @@ export function createPiChatExtension(
 				if (!isCurrent(owner, ownerGeneration)) throw new Error("Pi Chat session is stale.");
 				const input = args.trim();
 				if (!input) {
+					const menuModule = await loadOwnedModule(deps.loadChatMenu, () =>
+						isCurrent(owner, ownerGeneration),
+					);
+					if (!menuModule) return;
+					const { showChatMenu } = menuModule;
 					await showChatMenu(ctx, menuSource(ctx), {
 						signal: controller.signal,
 						isCurrent: () => isCurrent(owner, ownerGeneration),
@@ -730,6 +802,32 @@ function notifySafely(
 	} catch {
 		// Stale UI errors must not escape lifecycle cleanup.
 	}
+}
+
+async function loadOwnedModule<Module>(
+	load: () => Promise<Module>,
+	isCurrent: () => boolean,
+): Promise<Module | undefined> {
+	try {
+		const module = await load();
+		return isCurrent() ? module : undefined;
+	} catch (error) {
+		if (!isCurrent()) return undefined;
+		throw error;
+	}
+}
+
+function cachedModuleLoader<Module>(load: () => Promise<Module>): () => Promise<Module> {
+	let pending: Promise<Module> | undefined;
+	return () => {
+		if (!pending) {
+			pending = load().catch((error) => {
+				pending = undefined;
+				throw error;
+			});
+		}
+		return pending;
+	};
 }
 
 export default createPiChatExtension();

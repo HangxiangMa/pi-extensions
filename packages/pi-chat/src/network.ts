@@ -1,28 +1,17 @@
 import type { Duplex } from "node:stream";
 import Hyperswarm, { type PeerDiscovery, type PeerInfo } from "hyperswarm";
 import type { ChatTransport, ChatTransportListener, TransportPeer } from "./chat-session.js";
-import type { ChatIdentity } from "./identity.js";
-import {
-	encodeFrame,
-	FrameDecoder,
-	type ProtocolMessage,
-	type RoomDescriptor,
-} from "./protocol.js";
+import { type HyperswarmTransportOptions, MAX_DIRECT_NEIGHBORS } from "./network-contract.js";
+import { encodeFrame, FrameDecoder, type ProtocolMessage } from "./protocol.js";
 
-export interface HyperswarmTransportOptions {
-	room: RoomDescriptor;
-	identity: ChatIdentity;
-	maxPeers?: number;
-	dht?: unknown;
-	bootstrap?: unknown[];
-}
+export type { HyperswarmTransportOptions } from "./network-contract.js";
 
 interface ActiveConnection {
 	socket: Duplex;
 	peer: TransportPeer;
 }
 
-export const MAX_DIRECT_NEIGHBORS = 8;
+export { MAX_DIRECT_NEIGHBORS } from "./network-contract.js";
 
 export function directNeighborLimit(requested?: number): number {
 	if (!Number.isSafeInteger(requested) || (requested ?? 0) <= 0) return MAX_DIRECT_NEIGHBORS;

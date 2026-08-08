@@ -1,1 +1,1 @@
-export { default } from "./sync.js";
+export { default } from "./sync-extension.js";

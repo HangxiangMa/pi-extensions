@@ -5,8 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { agentDir, configuredSessionDir } from "./config.js";
 import { isDeniedPath, posixJoin, safeJoin, toPosix } from "./paths.js";
+import { sessionStorageRoot } from "./snapshot-paths.js";
 
 export { isDeniedPath } from "./paths.js";
+export { sessionStorageRoot } from "./snapshot-paths.js";
 
 import {
 	canonicalSnapshotPathForConfig,
@@ -38,12 +40,6 @@ const SECRET_PATTERNS = [
 	/sk-[A-Za-z0-9]{20,}/,
 	/gh[pousr]_[A-Za-z0-9_]{20,}/,
 ];
-
-function expandHome(value: string) {
-	if (value === "~") return process.env.HOME ?? value;
-	if (value.startsWith("~/")) return path.join(process.env.HOME ?? "~", value.slice(2));
-	return value;
-}
 
 function selectTopLevelFileEntry(entries: Dirent[], fileName: string) {
 	const exact = entries.find((entry) => entry.isFile() && entry.name === fileName);
@@ -221,12 +217,6 @@ export function isSessionPath(relativePath: string) {
 export function isSessionFilePath(relativePath: string) {
 	const normalized = toPosix(relativePath);
 	return isSessionPath(normalized) && normalized.endsWith(".jsonl");
-}
-
-export function sessionStorageRoot(root: string, configuredSessionDir?: string) {
-	return configuredSessionDir
-		? path.resolve(expandHome(configuredSessionDir))
-		: path.resolve(root, "sessions");
 }
 
 export function sessionSnapshotPathFromAbsolute(

@@ -8,8 +8,11 @@ import {
 	syncSetupReviewIdentity,
 	updateLocalConfig,
 } from "./config.js";
+import { SetupPullRequiresUiError } from "./sync-errors.js";
 import { safeTerminalText } from "./sync-format.js";
 import type { OnSwitchAction } from "./types.js";
+
+export { SetupPullRequiresUiError } from "./sync-errors.js";
 
 export const SETUP_SWITCH_ACTION_OPTIONS: ReadonlyArray<{
 	label: string;
@@ -33,8 +36,6 @@ export async function saveOnSwitch(action: OnSwitchAction, signal?: AbortSignal)
 }
 
 export type SetupPullOutcome = "applied" | "cancelled";
-
-export class SetupPullRequiresUiError extends Error {}
 
 export interface SetupSwitchResult {
 	pullApplied: boolean;
