@@ -137,13 +137,14 @@ export function createPiChatExtension(
 			while (ownedTasks.size > 0) await Promise.allSettled([...ownedTasks]);
 		};
 
-		const clearUi = (ctx: ExtensionContext): void => {
+		const clearUi = (ctx: ExtensionContext, ownerGeneration = generation): void => {
 			try {
 				ctx.ui.setWidget(CHAT_UI_KEY, undefined);
 				ctx.ui.setStatus(CHAT_UI_KEY, undefined);
 			} catch {
 				// Session replacement may invalidate an old UI immediately.
 			}
+			if (ctx.sessionManager !== activeSessionManager || generation !== ownerGeneration) return;
 			renderChatWidget = undefined;
 			widgetRender = undefined;
 			widgetInstalled = false;
@@ -209,12 +210,14 @@ export function createPiChatExtension(
 		const disconnectRoom = async (): Promise<void> => {
 			const owned = chatSession;
 			const ownedDirectory = roomDirectory;
+			const uiContext = activeContext;
+			const uiGeneration = generation;
 			chatSession = undefined;
 			roomDirectory = undefined;
 			latestSnapshot = undefined;
 			chatDraft = "";
 			await Promise.allSettled([owned?.leave(), ownedDirectory?.stop()]);
-			if (activeContext) clearUi(activeContext);
+			if (uiContext) clearUi(uiContext, uiGeneration);
 		};
 
 		const ensureIdentity = async (
@@ -424,7 +427,7 @@ export function createPiChatExtension(
 			} catch (error) {
 				if (chatSession === session) chatSession = undefined;
 				await session.leave();
-				clearUi(ctx);
+				clearUi(ctx, ownerGeneration);
 				if (!signal.aborted && isCurrent(owner, ownerGeneration)) throw error;
 				return false;
 			}
