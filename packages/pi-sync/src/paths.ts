@@ -9,6 +9,8 @@ export function isDeniedPath(relativePath: string) {
 		segments.includes("node_modules") ||
 		segments.includes(".git") ||
 		segments.includes(".pisync") ||
+		segments.includes("pi-sync") ||
+		segments.includes(".pi-sync-state-migration.lock") ||
 		base === ".env" ||
 		base.startsWith(".env.") ||
 		base.endsWith(".env") ||

@@ -252,6 +252,7 @@ The menu is preferred, while deterministic routes remain available:
 /sync sync [--setup <name>]
 /sync history [--setup <name>]
 /sync rollback <snapshot-id> [--setup <name>]
+/sync migrate-state [--yes]
 /sync unlock --stale
 ```
 
@@ -274,17 +275,19 @@ dialog/notification protocol and does not gain settings mutation. Print and JSON
 | WebDAV | Verified strong conditional requests | Private settings username/app password | `<url>/<storage.path>` |
 | R2/S3 | Read-check-write-verify | Private settings credentials | `<bucket>/<storage.path>` |
 
-Git requires Git 2.30 or newer and a SHA-1-format remote repository. HTTPS userinfo, URL passwords, local paths, `file`, `git`, `ext`, and remote-helper transports are rejected. When editing a Git setup, changing its storage path also requires a new owned branch so the existing branch remains readable at its reviewed path. The private bare cache under `.pisync/git/` is rebuildable.
+Git requires Git 2.30 or newer and a SHA-1-format remote repository. HTTPS userinfo, URL passwords, local paths, `file`, `git`, `ext`, and remote-helper transports are rejected. When editing a Git setup, changing its storage path also requires a new owned branch so the existing branch remains readable at its reviewed path. The private bare cache under `<agent-dir>/pi-sync/git/` is rebuildable.
 
 WebDAV requires HTTPS except loopback tests. URL credentials, query strings, fragments, unsafe redirects, weak/missing ETags, and ignored conditional headers fail closed. `/sync doctor` verifies collection and conditional-write behavior with an isolated probe.
 
 S3/R2 stages immutable bundles, rechecks the visible head before publication, and verifies afterward. Unlike Git/WebDAV, generic S3 does not provide an atomic compare-and-swap for `latest.json`; status review remains important for simultaneous writers.
 
-Before pull or rollback, pi-sync writes a backup under `.pisync/backups/`. Apply preflights paths and checksums, journals all mutations, restores the prior state after failures, and recovers interrupted journals on startup. Removing a local setup or connection never deletes remote data.
+Before pull or rollback, pi-sync writes a backup under `<agent-dir>/pi-sync/backups/`. Apply preflights paths and checksums, journals all mutations, restores the prior state after failures, and recovers interrupted journals on startup. Removing a local setup or connection never deletes remote data.
+
+The operational state root is `<agent-dir>/pi-sync/`. An existing installation continues using `<agent-dir>/.pisync/` and shows migration guidance on startup; it is never moved merely because no sync is active. Close every other Pi process, then run `/sync migrate-state` and confirm the review (or pass `--yes` for an already reviewed RPC workflow). The command serializes against every upgraded state/cache user and atomically renames `.pisync/` only when no legacy sync lock or guard is active. Close Pi instances running older pi-sync versions during the migration because they do not understand the migration guard. If both roots exist, or either root is a symlink or non-directory, pi-sync refuses stateful work instead of merging, following, or deleting data. Preserve both roots before manual recovery; with every Pi process closed and no destination conflict, rollback is an atomic rename from `pi-sync/` back to `.pisync/`.
 
 ## 🛡️ Safety notes
 
-- Canonical, legacy, temporary, and recovery settings paths are denied from snapshots.
+- Canonical, legacy, temporary, and recovery settings paths are denied from snapshots; both `pi-sync/` and `.pisync/` state roots are permanently denied.
 - Push scans managed local content for common secret patterns.
 - Remote snapshot references, checksums, paths, manifests, response sizes, and publication revisions are validated.
 - Symlink parents, path escapes, duplicate paths, and unsafe file/directory replacement fail before local mutation.
@@ -305,6 +308,7 @@ packages/pi-sync/
 │   ├── sync.ts
 │   ├── config.ts
 │   ├── config-file.ts
+│   ├── state-directory.ts
 │   ├── settings-management.ts
 │   ├── manager-ui.ts
 │   ├── storage-connections-ui.ts

@@ -908,7 +908,7 @@ test("malformed non-lock JSON remains an explicit error", async () => {
 		writeFileSync(localConfigPath(), "{broken");
 		await assert.rejects(loadPartialConfig(), SyntaxError);
 
-		writeFileSync(path.join(agentDir, ".pisync", "default.state.json"), "{broken");
+		writeFileSync(path.join(agentDir, "pi-sync", "default.state.json"), "{broken");
 		await assert.rejects(readState("default"), SyntaxError);
 
 		writeFileSync(path.join(agentDir, "settings.json"), "{broken");

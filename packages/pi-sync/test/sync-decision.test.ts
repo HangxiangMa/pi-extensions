@@ -222,7 +222,7 @@ test("forced pull reuses backup and apply safeguards after a decision", async ()
 			readFileSync(path.join(agentDir, "settings.json"), "utf8"),
 			'{"remote":"changed"}\n',
 		);
-		assert.ok(readdirSync(path.join(agentDir, ".pisync", "backups")).length > 0);
+		assert.ok(readdirSync(path.join(agentDir, "pi-sync", "backups")).length > 0);
 	});
 });
 
