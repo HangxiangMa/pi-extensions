@@ -1,5 +1,11 @@
 # @narumitw/pi-chat
 
+## 0.1.1
+
+### Patch Changes
+
+- fa9c938: Reduce idle startup imports by loading Goal presentation, Chat networking and UI, and Sync operation-specific modules only when their routes require them.
+
 ## 0.1.0
 
 ### Minor Changes
