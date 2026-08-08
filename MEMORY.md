@@ -72,6 +72,7 @@
 - Reject exhausted stopped goals before rotating their id. If `/goal resume` delivery fails, restore the original stopped state, id, and stale-tool guard.
 - Do not classify transient rate limits, HTTP 429, or server failures as goal `usage_limited`; reserve it for explicit quota, subscription, credit, or billing exhaustion.
 - Pi-sync settings read-modify-write must hold one cross-process lock through full validation and atomic same-directory replacement. Queue the whole mutation before prerequisite awaits so rapid commands retain invocation order.
+- An absent pi-sync operation lock cannot prove that no idle older process exists during a state-directory migration. Require explicit user confirmation before the atomic rename, keep legacy state active until then, and fail closed if old and new roots coexist.
 - Missing-file settings loads must remain side-effect free. Android/Termux may forbid hard links, and Node lacks an atomic no-replace rename, so supported writers must share the lock protocol and recheck absence immediately before rename.
 - Non-interactive Git subprocesses must close stdin, strip inherited Git control variables, disable prompts/hooks/pagers/editors, serialize shared-cache mutations, and reconcile remote refs after ambiguous transport failures.
 - A pi-sync pull that replaces a file ancestor with a directory must defer descendant preflight until the ancestor deletion and journal `ENOTDIR` descendants as missing so rollback restores the file.

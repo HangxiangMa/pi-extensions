@@ -19,6 +19,7 @@ export const SYNC_COMMANDS = [
 	{ name: "sync", description: "Push or pull as needed" },
 	{ name: "history", description: "Show recent remote snapshots" },
 	{ name: "rollback", description: "Apply a previous snapshot", usageSuffix: " <snapshot>" },
+	{ name: "migrate-state", description: "Move legacy state into pi-sync/" },
 	{ name: "unlock", description: "Remove a stale local lock", usageSuffix: " --stale" },
 ] as const;
 
@@ -60,6 +61,7 @@ const SYNC_FLAG_COMPLETIONS: Record<string, readonly CommandArgumentCompletion[]
 	],
 	history: [SETUP_FLAG_COMPLETION],
 	rollback: [...YES_FLAG_COMPLETIONS, SETUP_FLAG_COMPLETION],
+	"migrate-state": YES_FLAG_COMPLETIONS,
 	unlock: [{ value: "--stale", label: "--stale", description: "Remove only a stale lock" }],
 };
 
@@ -119,7 +121,10 @@ export function validateCommandOptions(command: string, options: CommandOptions)
 	if (options.setup && !setupAllowed.has(command)) {
 		throw new Error(`--setup is not supported by /sync ${command}.`);
 	}
-	if ((options.yes || options.force) && !["push", "pull", "sync", "rollback"].includes(command)) {
+	if (options.yes && !["push", "pull", "sync", "rollback", "migrate-state"].includes(command)) {
+		throw new Error(`Confirmation/force options are not supported by /sync ${command}.`);
+	}
+	if (options.force && !["push", "pull", "sync", "rollback"].includes(command)) {
 		throw new Error(`Confirmation/force options are not supported by /sync ${command}.`);
 	}
 	if (options.stale && command !== "unlock") {

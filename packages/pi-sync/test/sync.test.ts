@@ -66,6 +66,11 @@ test("--setup is canonical and --target is rejected by the breaking version 3 ro
 		() => validateCommandOptions("help", parseOptions(["--setup", "work"])),
 		/not supported/u,
 	);
+	assert.doesNotThrow(() => validateCommandOptions("migrate-state", parseOptions(["--yes"])));
+	assert.throws(
+		() => validateCommandOptions("migrate-state", parseOptions(["--force"])),
+		/not supported/u,
+	);
 });
 
 test("argument completion retains prior tokens and completes known setup names", () => {
@@ -85,6 +90,71 @@ test("extension registers command and separate startup/shutdown cancellation bou
 	assert.equal(mock.commands.get("sync")?.description?.includes("storage"), true);
 	assert.equal(mock.events.get("session_start")?.length, 1);
 	assert.equal(mock.events.get("session_shutdown")?.length, 1);
+});
+
+test("session start leaves idle legacy state in place until migration is explicit", async () => {
+	await withTempHome(async (agentDir) => {
+		const legacy = path.join(agentDir, ".pisync");
+		mkdirSync(legacy, { recursive: true });
+		writeFileSync(path.join(legacy, "default.state.json"), "state");
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext();
+
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+
+		assert.equal(readFileSync(path.join(legacy, "default.state.json"), "utf8"), "state");
+		assert.equal(existsSync(path.join(agentDir, "pi-sync")), false);
+		assert.ok(
+			notifications.some((notification) =>
+				/close other Pi sessions.*migrate-state/iu.test(notification.message),
+			),
+		);
+	});
+});
+
+test("explicit migrate-state route moves legacy state after user acknowledgement", async () => {
+	await withTempHome(async (agentDir) => {
+		const legacy = path.join(agentDir, ".pisync");
+		mkdirSync(legacy, { recursive: true });
+		writeFileSync(path.join(legacy, "default.state.json"), "state");
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext({ hasUI: true, mode: "rpc" });
+
+		await mock.commands.get("sync")?.handler("migrate-state --yes", ctx);
+
+		assert.equal(existsSync(legacy), false);
+		assert.equal(
+			readFileSync(path.join(agentDir, "pi-sync", "default.state.json"), "utf8"),
+			"state",
+		);
+		assert.ok(
+			notifications.some((notification) => /Migrated pi-sync state/u.test(notification.message)),
+		);
+	});
+});
+
+test("migrate-state TUI cancellation leaves legacy state unchanged", async () => {
+	await withTempHome(async (agentDir) => {
+		const legacy = path.join(agentDir, ".pisync");
+		mkdirSync(legacy, { recursive: true });
+		writeFileSync(path.join(legacy, "default.state.json"), "state");
+		const mock = createMockPi();
+		sync(mock.pi);
+		const { ctx, notifications } = createMockContext({
+			mode: "tui",
+			confirm: async () => false,
+		});
+
+		await mock.commands.get("sync")?.handler("migrate-state", ctx);
+
+		assert.equal(readFileSync(path.join(legacy, "default.state.json"), "utf8"), "state");
+		assert.equal(existsSync(path.join(agentDir, "pi-sync")), false);
+		assert.ok(
+			notifications.some((notification) => /migration cancelled/u.test(notification.message)),
+		);
+	});
 });
 
 test("print and JSON modes reject before relying on no-op UI output", async () => {

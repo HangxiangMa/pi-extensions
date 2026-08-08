@@ -32,6 +32,7 @@ import { unlock, withLock } from "./lock.js";
 import { SetupPullRequiresUiError, useSyncSetup } from "./setup-switch.js";
 import { createSnapshot } from "./snapshot.js";
 import { recoverSnapshotTransactionsOnStartup } from "./snapshot-transaction.js";
+import { migrateLegacyStateDirectory, stateDirectoryMigrationNotice } from "./state-directory.js";
 import { isSyncDecisionRequiredError } from "./sync-decision.js";
 import { errorMessage } from "./sync-format.js";
 import { hasLocalChanges } from "./sync-state.js";
@@ -85,6 +86,13 @@ export default function sync(pi: ExtensionAPI) {
 		sessionAbort = new AbortController();
 		const signal = sessionAbort.signal;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		try {
+			const migrationNotice = stateDirectoryMigrationNotice();
+			if (migrationNotice) ctx.ui.notify(migrationNotice, "warning");
+		} catch (error) {
+			ctx.ui.notify(`pi-sync state directory requires attention: ${errorMessage(error)}`, "error");
+			return;
+		}
 		try {
 			await recoverSnapshotTransactionsOnStartup();
 			if (signal.aborted) return;
@@ -237,6 +245,9 @@ async function executeCommand(
 				await withLock("rollback", () => operations.rollback(ctx, options));
 				return { kind: "completed" };
 			}
+			case "migrate-state":
+				await migrateStateDirectory(ctx, options);
+				return { kind: "completed" };
 			case "unlock":
 				await unlock(ctx, options);
 				return { kind: "completed" };
@@ -254,6 +265,33 @@ async function executeCommand(
 		ctx.ui.notify(errorMessage(error), "error");
 		return { kind: "failed" };
 	}
+}
+
+async function migrateStateDirectory(ctx: ExtensionCommandContext, options: CommandOptions) {
+	const notice = stateDirectoryMigrationNotice();
+	if (!notice) {
+		ctx.ui.notify("pi-sync already uses the canonical pi-sync/ state directory.", "info");
+		return;
+	}
+	if (
+		!options.yes &&
+		!(await ctx.ui.confirm(
+			"Migrate pi-sync state directory",
+			"Confirm that every other Pi process is closed. pi-sync will atomically rename .pisync/ to pi-sync/ without merging or deleting either root.",
+			{ signal: options.signal },
+		))
+	) {
+		ctx.ui.notify("pi-sync state migration cancelled.", "info");
+		return;
+	}
+	throwIfAborted(options.signal);
+	const result = await migrateLegacyStateDirectory();
+	throwIfAborted(options.signal);
+	if (result.status === "ready") {
+		ctx.ui.notify("pi-sync already uses the canonical pi-sync/ state directory.", "info");
+		return;
+	}
+	ctx.ui.notify(result.message, result.status === "migrated" ? "info" : "warning");
 }
 
 async function autoSync(ctx: ExtensionContext, signal: AbortSignal) {

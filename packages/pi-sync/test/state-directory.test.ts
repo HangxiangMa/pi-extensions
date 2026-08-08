@@ -1,0 +1,121 @@
+import assert from "node:assert/strict";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import { isDeniedPath } from "../src/paths.js";
+import { legacyStateDir, migrateLegacyStateDirectory, stateDir } from "../src/state-directory.js";
+import { withTempHome } from "./helpers.js";
+
+test("new installations select the visible pi-sync state directory", async () => {
+	await withTempHome(async (agentDir) => {
+		assert.equal(stateDir(), path.join(agentDir, "pi-sync"));
+	});
+});
+
+test("snapshot policy denies canonical and legacy state directories", () => {
+	assert.equal(isDeniedPath("pi-sync/default.state.json"), true);
+	assert.equal(isDeniedPath(".pisync/default.state.json"), true);
+	assert.equal(isDeniedPath("nested/PI-SYNC/backups/snapshot.json.gz"), true);
+	assert.equal(isDeniedPath(".pi-sync-state-migration.lock/owner"), true);
+});
+
+test("legacy installations keep using .pisync until migration succeeds", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(path.join(agentDir, ".pisync"), { recursive: true });
+		assert.equal(stateDir(), path.join(agentDir, ".pisync"));
+	});
+});
+
+test("legacy state is atomically migrated with nested contents preserved", async () => {
+	await withTempHome(async (agentDir) => {
+		const legacy = path.join(agentDir, ".pisync");
+		mkdirSync(path.join(legacy, "backups"), { recursive: true });
+		writeFileSync(path.join(legacy, "backups", "snapshot.json.gz"), "backup");
+
+		const result = await migrateLegacyStateDirectory();
+
+		assert.equal(result.status, "migrated");
+		assert.equal(existsSync(legacy), false);
+		assert.equal(stateDir(), path.join(agentDir, "pi-sync"));
+		assert.equal(
+			readFileSync(path.join(stateDir(), "backups", "snapshot.json.gz"), "utf8"),
+			"backup",
+		);
+	});
+});
+
+test("a legacy operation lock defers migration and retains the legacy root", async () => {
+	await withTempHome(async (agentDir) => {
+		const legacy = path.join(agentDir, ".pisync");
+		mkdirSync(legacy, { recursive: true });
+		writeFileSync(
+			path.join(legacy, "lock"),
+			JSON.stringify({
+				id: "active-sync",
+				pid: process.pid,
+				command: "push",
+				startedAt: new Date().toISOString(),
+			}),
+		);
+
+		const result = await migrateLegacyStateDirectory();
+
+		assert.equal(result.status, "deferred");
+		assert.match(result.message, /close other Pi sessions/i);
+		assert.equal(stateDir(), legacy);
+		assert.equal(existsSync(path.join(agentDir, "pi-sync")), false);
+	});
+});
+
+test("a legacy operation guard without metadata defers migration", async () => {
+	await withTempHome(async (agentDir) => {
+		const legacy = path.join(agentDir, ".pisync");
+		mkdirSync(path.join(legacy, "lock.guard"), { recursive: true });
+
+		const result = await migrateLegacyStateDirectory();
+
+		assert.equal(result.status, "deferred");
+		assert.equal(stateDir(), legacy);
+		assert.equal(existsSync(path.join(agentDir, "pi-sync")), false);
+	});
+});
+
+test("concurrent upgraded processes serialize one migration", async () => {
+	await withTempHome(async (agentDir) => {
+		const legacy = path.join(agentDir, ".pisync");
+		mkdirSync(legacy, { recursive: true });
+		writeFileSync(path.join(legacy, "default.state.json"), "state");
+
+		const results = await Promise.all([
+			migrateLegacyStateDirectory(),
+			migrateLegacyStateDirectory(),
+		]);
+
+		assert.deepEqual(results.map((result) => result.status).sort(), ["migrated", "ready"]);
+		assert.equal(readFileSync(path.join(stateDir(), "default.state.json"), "utf8"), "state");
+	});
+});
+
+test("conflicting canonical and legacy roots fail closed", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(path.join(agentDir, ".pisync"), { recursive: true });
+		mkdirSync(path.join(agentDir, "pi-sync"), { recursive: true });
+
+		assert.throws(() => stateDir(), /both .*\.pisync.*pi-sync|both .*pi-sync.*\.pisync/i);
+		await assert.rejects(
+			migrateLegacyStateDirectory(),
+			/both .*\.pisync.*pi-sync|both .*pi-sync.*\.pisync/i,
+		);
+	});
+});
+
+test("symlinked state roots fail closed", async () => {
+	await withTempHome(async (agentDir) => {
+		const outside = path.join(agentDir, "outside");
+		mkdirSync(outside, { recursive: true });
+		symlinkSync(outside, legacyStateDir(), "dir");
+
+		assert.throws(() => stateDir(), /symbolic link/i);
+		await assert.rejects(migrateLegacyStateDirectory(), /symbolic link/i);
+	});
+});

@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
 	normalizeGitBranch,
 	normalizeGitDirectory,
@@ -23,6 +22,7 @@ import {
 	validateGitSnapshot,
 } from "./git-storage.js";
 import { posixJoin } from "./paths.js";
+import { stateDir } from "./state-directory.js";
 import {
 	type BackendDiagnostic,
 	type ExpectedRemoteHead,
@@ -74,7 +74,7 @@ export class GitSyncBackend implements SyncBackend {
 		if (!this.allowLocalRemotes) assertProductionRemote(config.profile.remote);
 		this.identity = gitBackendIdentity(config);
 		this.destination = gitDestination(config);
-		this.cacheRoot = options.cacheRoot ?? path.join(getAgentDir(), ".pisync", "git");
+		this.cacheRoot = options.cacheRoot ?? path.join(stateDir(), "git");
 		this.cacheDir = path.join(this.cacheRoot, this.identity.slice("git:".length), "repository.git");
 		this.commandTimeoutMs = options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS;
 		this.postCommitTimeoutMs = options.postCommitTimeoutMs ?? POST_COMMIT_TIMEOUT_MS;

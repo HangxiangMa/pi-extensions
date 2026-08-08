@@ -183,6 +183,7 @@ test("cancelling first setup creates neither settings nor sync state", async () 
 		});
 		await mock.commands.get("sync")?.handler("", ctx);
 		assert.equal(await readLocalConfigObject(), undefined);
+		assert.equal(existsSync(path.join(agentDir, "pi-sync")), false);
 		assert.equal(existsSync(path.join(agentDir, ".pisync")), false);
 	});
 });

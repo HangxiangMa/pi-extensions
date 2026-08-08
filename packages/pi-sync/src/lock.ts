@@ -1,52 +1,14 @@
 import { randomUUID } from "node:crypto";
-import {
-	mkdir,
-	mkdirSync,
-	realpath,
-	realpathSync,
-	rmdir,
-	rmdirSync,
-	stat,
-	statSync,
-	utimes,
-	utimesSync,
-} from "node:fs";
 import fs from "node:fs/promises";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import lockfile from "proper-lockfile";
 import { ensureStateDir, lockPath } from "./config.js";
+import { LOCK_GUARD_STALE_MS, LOCK_GUARD_UPDATE_MS } from "./lock-policy.js";
+import { LOCKFILE_FS_ADAPTER } from "./lockfile-fs.js";
 import type { CommandOptions, LockFile } from "./types.js";
 
 const LOCK_STALE_MS = 30 * 60 * 1000;
-const GUARD_STALE_MS = 30_000;
-const GUARD_UPDATE_MS = 10_000;
 const MAX_PROCESS_ID = 2_147_483_647;
-
-type LockfileFsAdapter = {
-	mkdir: typeof mkdir;
-	mkdirSync: typeof mkdirSync;
-	realpath: typeof realpath;
-	realpathSync: typeof realpathSync;
-	rmdir: typeof rmdir;
-	rmdirSync: typeof rmdirSync;
-	stat: typeof stat;
-	statSync: typeof statSync;
-	utimes: typeof utimes;
-	utimesSync: typeof utimesSync;
-};
-
-const LOCKFILE_FS_ADAPTER: LockfileFsAdapter = {
-	mkdir,
-	mkdirSync,
-	realpath,
-	realpathSync,
-	rmdir,
-	rmdirSync,
-	stat,
-	statSync,
-	utimes,
-	utimesSync,
-};
 
 interface Guard {
 	release: () => Promise<void>;
@@ -175,7 +137,7 @@ export function isLockGuardHeld() {
 		fs: LOCKFILE_FS_ADAPTER,
 		lockfilePath: `${lockPath()}.guard`,
 		realpath: false,
-		stale: GUARD_STALE_MS,
+		stale: LOCK_GUARD_STALE_MS,
 	});
 }
 
@@ -267,8 +229,8 @@ async function acquireGuard(): Promise<Guard> {
 		fs: LOCKFILE_FS_ADAPTER,
 		lockfilePath: `${lockPath()}.guard`,
 		realpath: false,
-		stale: GUARD_STALE_MS,
-		update: GUARD_UPDATE_MS,
+		stale: LOCK_GUARD_STALE_MS,
+		update: LOCK_GUARD_UPDATE_MS,
 		onCompromised: (error) => {
 			compromisedError = error;
 		},

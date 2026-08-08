@@ -26,6 +26,7 @@ import {
 	normalizeGitRemoteIdentity,
 } from "./git-config.js";
 import { safeName } from "./paths.js";
+import { stateDir } from "./state-directory.js";
 import { normalizeSyncInclude } from "./sync-policy.js";
 import type {
 	AnySyncConfig,
@@ -751,9 +752,7 @@ function expandHome(value: string) {
 	return value === "~" || value.startsWith("~/") ? path.join(os.homedir(), value.slice(2)) : value;
 }
 
-export function stateDir() {
-	return path.join(agentDir(), ".pisync");
-}
+export { stateDir } from "./state-directory.js";
 
 export function localConfigTemplate(): PiSyncSettingsV3 {
 	return {
