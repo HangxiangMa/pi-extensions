@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { test } from "vitest";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
 import {
 	loadConfig,

@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import fileQuoteExtension, {
 	appendPendingQuote,

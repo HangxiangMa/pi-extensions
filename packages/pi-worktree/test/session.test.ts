@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { switchToWorktree } from "../src/session.js";
 

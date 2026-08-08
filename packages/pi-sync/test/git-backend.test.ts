@@ -11,7 +11,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import test from "node:test";
+import { describe, test } from "vitest";
 import { GitSyncBackend, gitBackendIdentity, isSupportedGitVersion } from "../src/git-backend.js";
 import { isGitPayloadSizeAllowed } from "../src/git-storage.js";
 import {
@@ -569,7 +569,7 @@ test("Git backend disables local pre-push hooks in its private cache", async () 
 	}
 });
 
-test("Git backend fails closed on malformed native publication trees", async (t) => {
+describe("Git backend fails closed on malformed native publication trees", () => {
 	const cases: Array<{
 		name: string;
 		expected: RegExp;
@@ -678,7 +678,7 @@ test("Git backend fails closed on malformed native publication trees", async (t)
 		},
 	];
 	for (const entry of cases) {
-		await t.test(entry.name, { skip: entry.skip }, async () => {
+		test(entry.name, { skip: entry.skip }, async () => {
 			const error = await malformedPublicationError(entry.mutate, entry.verify);
 			assert.match(error, entry.expected);
 		});

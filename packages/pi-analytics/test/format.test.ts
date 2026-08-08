@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { decodeStoredRun, encodeStoredRun, MAX_STORED_RUN_BYTES } from "../src/storage/format.js";
 import type { SettledRun } from "../src/types.js";
 

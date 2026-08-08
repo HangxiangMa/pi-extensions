@@ -10,7 +10,7 @@ import fs, {
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import {
 	DEFAULT_STATUSLINE_CONFIG,
 	DEFAULT_STATUSLINE_DOCUMENT,

@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { test } from "vitest";
 import {
 	createCustomSelectorHarness,
 	createMockContext,

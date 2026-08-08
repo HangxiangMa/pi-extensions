@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import http from "node:http";
-import test from "node:test";
+import { test } from "vitest";
 import type { PreparedAttachment } from "../src/attachments.js";
 import { ConversationProjection } from "../src/conversation.js";
 import { type WebSendRequest, type WebSendResult, WebUIServer } from "../src/server.js";

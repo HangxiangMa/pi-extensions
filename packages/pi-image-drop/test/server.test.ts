@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import http from "node:http";
-import test from "node:test";
+import { test } from "vitest";
 import { BatchStore, type ProcessedImage } from "../src/batch.js";
 import { ImageDropServer } from "../src/server.js";
 import { DEFAULT_SETTINGS } from "../src/settings.js";

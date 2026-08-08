@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import { readEffectivePiImageSettings } from "../src/pi-settings.js";
 
 test("Pi image settings merge trusted project values over global values", async () => {

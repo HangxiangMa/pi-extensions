@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import * as helpers from "../src/web/ui/state.js";
 
 test("web state helpers summarize every visible batch state without color-only meaning", () => {

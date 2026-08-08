@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
-import test from "node:test";
+import { test } from "vitest";
 import { loadConfig, localConfigPath, statePathForConfig } from "../src/config.js";
 import {
 	normalizeWebDavIdentityUrl,

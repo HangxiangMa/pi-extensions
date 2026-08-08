@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { test } from "vitest";
 import {
 	createCustomSelectorHarness,
 	createMockContext,

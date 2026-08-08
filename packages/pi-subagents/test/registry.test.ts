@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import { AgentPersistence } from "../src/persistence.js";
 import { AgentRegistry, type ManagedAgent } from "../src/registry.js";
 import { buildDetachedCompletionMessage } from "../src/stateful.js";

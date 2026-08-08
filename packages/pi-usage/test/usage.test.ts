@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import usageExtension from "../src/usage.js";
 
@@ -74,7 +74,7 @@ test("pi-usage registers only its primary command and lifecycle hooks", () => {
 
 test("/usage automatically queries the current runtime account and shows state plus next actions", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	globalThis.fetch = usageFetch;
@@ -117,7 +117,7 @@ test("/usage automatically queries the current runtime account and shows state p
 
 test("current Codex usage can redeem a selected reset and refresh account state", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	let usageRequests = 0;
@@ -214,7 +214,7 @@ test("current Codex usage can redeem a selected reset and refresh account state"
 
 test("Codex reset confirmation defaults to cancellation and sends no mutation", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	let postRequests = 0;
@@ -301,7 +301,7 @@ test("command arguments are rejected instead of becoming a hidden interface", as
 
 test("explicit all-provider query labels current/configured and retains provider failures", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	globalThis.fetch = async (input) => {
@@ -343,7 +343,7 @@ test("explicit all-provider query labels current/configured and retains provider
 
 test("another-provider queries show only the selected provider and preserve current status", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	globalThis.fetch = usageFetch;
@@ -412,7 +412,7 @@ test("unsupported providers remain visible without publishing an error status", 
 
 test("current auth appearance during a command is revalidated before display", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	globalThis.fetch = usageFetch;
@@ -469,7 +469,7 @@ test("automatic lifecycle refresh starts asynchronously", () => {
 
 test("TUI usage queries complete through the loader before opening the menu", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	globalThis.fetch = usageFetch;
@@ -579,7 +579,7 @@ test("TUI usage queries can be cancelled with Escape", async () => {
 
 test("session shutdown aborts usage action and provider selectors", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	globalThis.fetch = usageFetch;
@@ -634,7 +634,7 @@ test("session shutdown aborts usage action and provider selectors", async (t) =>
 
 test("automatic provider failures back off instead of retrying every turn", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	let fetches = 0;
@@ -664,7 +664,7 @@ test("automatic provider failures back off instead of retrying every turn", asyn
 
 test("a current command supersedes an older automatic query for the same provider", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	let activeKey = "account-a";
@@ -720,7 +720,7 @@ test("a current command supersedes an older automatic query for the same provide
 
 test("cross-provider results revalidate which account is Current before display", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	let codexFetches = 0;
@@ -768,7 +768,7 @@ test("cross-provider results revalidate which account is Current before display"
 
 test("session shutdown clears status through the shutdown context", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	globalThis.fetch = usageFetch;
@@ -806,7 +806,7 @@ test("session shutdown clears status through the shutdown context", async (t) =>
 
 test("a slow command cannot overwrite status after the selected model changes", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	let openRouterFetches = 0;
@@ -858,7 +858,7 @@ test("a slow command cannot overwrite status after the selected model changes", 
 
 test("statusline follows runtime auth changes and clears for unsupported selected providers", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	let activeKey = "account-a";

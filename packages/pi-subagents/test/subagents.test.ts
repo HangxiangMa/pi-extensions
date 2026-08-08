@@ -15,10 +15,10 @@ import fs, {
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme, ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { test } from "vitest";
 import {
 	builtinTool,
 	createCustomSelectorHarness,

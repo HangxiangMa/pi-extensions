@@ -12,9 +12,9 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path, { dirname } from "node:path";
-import test from "node:test";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { test, vi } from "vitest";
 import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
 import firecrawl, {
 	cleanObject,
@@ -699,12 +699,9 @@ test("Firecrawl tool selection uses dialogs instead of custom TUI in RPC mode", 
 	});
 });
 
-let importCounter = 0;
-
 async function importFreshFirecrawl() {
-	return (await import(
-		`../src/firecrawl.js?settings-test=${Date.now()}-${importCounter++}`
-	)) as typeof import("../src/firecrawl.js");
+	vi.resetModules();
+	return import("../src/firecrawl.js");
 }
 
 async function withTempAgentDir<T>(fn: (agentDir: string) => Promise<T>) {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
 import { runCustomInteraction } from "../src/index.js";
 import { createTuiHarness } from "../src/testing/index.js";

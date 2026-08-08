@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { test } from "vitest";
 import type { ChatSnapshot } from "../src/chat-session.js";
 import { ChatView } from "../src/chat-view.js";
 import { createPrivateRoom } from "../src/protocol.js";

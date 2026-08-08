@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { setBrowserManagerOperationsForTests } from "../src/browser-manager.js";
 import chromeDevtools from "../src/chrome-devtools.js";

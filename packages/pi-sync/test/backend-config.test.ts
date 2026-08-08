@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
-import test from "node:test";
+import { test } from "vitest";
 import { createSyncBackend as createLazySyncBackend } from "../src/backend-factory.js";
 import {
 	loadConfig,

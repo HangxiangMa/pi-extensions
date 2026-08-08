@@ -1,7 +1,7 @@
 // Cohesion justification: this account-manager integration matrix shares credential/provider
 // fixtures and cross-covers menus, OAuth, replacement, switching, persistence, and lifecycle safety.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import accountsExtension, {
 	ACCOUNTS_STATUS_KEY,

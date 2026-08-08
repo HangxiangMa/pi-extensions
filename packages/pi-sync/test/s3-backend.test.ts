@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import test from "node:test";
 import { gzipSync } from "node:zlib";
+import { test } from "vitest";
 import { S3SyncBackend, snapshotKey } from "../src/s3-backend.js";
 import {
 	expectedRemoteHead,

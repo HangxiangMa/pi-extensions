@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { WebDavClient } from "../src/webdav-client.js";
 import { MockWebDavServer, webDavConfig } from "./mock-webdav-server.js";
 

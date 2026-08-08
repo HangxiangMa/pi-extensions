@@ -3,9 +3,9 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
 import { gunzipSync } from "node:zlib";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import {
 	configuredSessionDir,

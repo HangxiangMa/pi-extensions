@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import { type PiInvocationRuntime, resolvePiInvocation } from "../src/pi-invocation.js";
 import { runSingleAgent } from "../src/runner.js";
 
@@ -126,7 +126,7 @@ test("subagent launch does not re-execute a pi-web-like host entrypoint", async 
 });
 
 test("Pi invocation normalizes the package directory and declared bin target", {
-	skip: process.platform === "win32" ? "directory symlinks require additional privileges" : false,
+	skip: process.platform === "win32",
 }, () => {
 	withRoot((root) => {
 		const packageRoot = path.join(root, "package");

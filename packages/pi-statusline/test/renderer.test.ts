@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { sep } from "node:path";
-import test from "node:test";
 import type { ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { powerlineExtensionSeparator, renderPowerlineStatusline } from "../src/powerline.js";
 import {

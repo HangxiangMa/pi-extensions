@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
+import { test } from "vitest";
 import { FileQuoteExplorer } from "../src/file-context-explorer.js";
 
 const CTRL_F = "\u0006";

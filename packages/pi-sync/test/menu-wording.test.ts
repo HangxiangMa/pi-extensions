@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
-import test from "node:test";
+import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { localConfigPath } from "../src/config.js";
 import { showSyncManager } from "../src/manager-ui.js";

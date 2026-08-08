@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import usageExtension from "../src/usage.js";
 
@@ -46,7 +46,7 @@ function codexRegistry(activeToken: () => string) {
 
 test("zero Codex reset availability is visible and cannot mutate", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	let posts = 0;
@@ -79,7 +79,7 @@ test("zero Codex reset availability is visible and cannot mutate", async (t) => 
 
 test("missing reset summary keeps the current Codex availability check reachable", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	let detailRequests = 0;
@@ -120,7 +120,7 @@ test("missing reset summary keeps the current Codex availability check reachable
 
 test("Codex reset transport retries reuse the same redemption request ID", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	const bodies: unknown[] = [];
@@ -180,7 +180,7 @@ test("Codex reset transport retries reuse the same redemption request ID", async
 
 test("Codex reset revalidates the active account immediately before POST", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	let activeToken = "codex-token";
@@ -230,7 +230,7 @@ test("Codex reset revalidates the active account immediately before POST", async
 
 test("TUI reset confirmation is width-safe and external disposal aborts confirmed work", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	let resolveUsage: (response: Response) => void = () => undefined;
@@ -325,7 +325,7 @@ test("TUI reset confirmation is width-safe and external disposal aborts confirme
 
 test("session replacement aborts a confirmed Codex reset request", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	let postStarted: () => void = () => undefined;
@@ -384,7 +384,7 @@ test("session replacement aborts a confirmed Codex reset request", async (t) => 
 
 test("session shutdown aborts a confirmed Codex reset request", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	let postStarted: () => void = () => undefined;

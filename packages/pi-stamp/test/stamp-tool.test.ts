@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { DEFAULT_STAMP_SETTINGS } from "../src/format.js";
 import type { StampSettingsRuntime, StampSettingsState } from "../src/settings.js";

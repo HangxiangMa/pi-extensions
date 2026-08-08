@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import createTestnet from "hyperdht/testnet.js";
+import { test } from "vitest";
 import {
 	type DirectoryTransport,
 	type DirectoryTransportListener,

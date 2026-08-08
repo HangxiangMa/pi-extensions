@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { MAX_CAPTURE_BYTES, sanitizeTraceValue } from "../src/tracing.js";
 import { serializedBytes } from "./support.js";
 

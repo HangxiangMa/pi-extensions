@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { formatCodexResetOutcome } from "../src/codex-resets.js";
 import {
@@ -161,7 +161,7 @@ test("Codex reset outcomes distinguish success, idempotency, and unavailable sta
 
 test("Codex reset requests use exact ChatGPT paths, account headers, and payloads", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	const requests: Array<{ url: string; init?: RequestInit }> = [];
@@ -204,7 +204,7 @@ test("Codex reset requests use exact ChatGPT paths, account headers, and payload
 
 test("Codex reset consume recognizes every backend outcome and rejects unknown values", async (t) => {
 	const originalFetch = globalThis.fetch;
-	t.after(() => {
+	t.onTestFinished(() => {
 		globalThis.fetch = originalFetch;
 	});
 	for (const code of ["reset", "nothing_to_reset", "no_credit", "already_redeemed"] as const) {

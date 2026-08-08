@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import { isDeniedPath } from "../src/paths.js";
 import {
 	legacyStateDir,

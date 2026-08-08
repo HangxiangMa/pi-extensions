@@ -1,10 +1,10 @@
 // Cohesion justification: these lifecycle regressions share one server/batch/session harness and
 // verify ordering across menu, browser processing, message attachment, replacement, and shutdown.
 import assert from "node:assert/strict";
-import test from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RunConfirmationOptions, RunConfirmationResult } from "@narumitw/pi-tui-kit";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { digestImages, type ProcessedImage } from "../src/batch.js";
 import type { ImageDropLimitsMenuState } from "../src/menu.js";

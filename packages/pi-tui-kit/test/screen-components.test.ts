@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
@@ -10,6 +9,7 @@ import {
 	TUI_KEYBINDINGS,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import { test } from "vitest";
 import {
 	createMenuScreenComponent,
 	type MenuScreenComponent,

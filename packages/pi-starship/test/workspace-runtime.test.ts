@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import { normalizeConfig } from "../src/config.js";
 import { execWorkspaceCommand } from "../src/runtime/command.js";
 import { parseRuntimeVersion } from "../src/runtime/languages.js";

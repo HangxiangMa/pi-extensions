@@ -12,8 +12,8 @@ import fs, {
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test, { after } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { afterAll, test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { consumeStatuslineSettingsNotice } from "../src/settings.js";
 import type { ExtensionStatusIconAliasMap } from "../src/statusline.js";
@@ -46,7 +46,7 @@ void EMPTY_STATUS_ALIASES;
 const suiteAgentDir = mkdtempSync(join(tmpdir(), "pi-statusline-suite-"));
 const previousSuiteAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = suiteAgentDir;
-after(() => {
+afterAll(() => {
 	if (previousSuiteAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = previousSuiteAgentDir;
 	rmSync(suiteAgentDir, { recursive: true, force: true });

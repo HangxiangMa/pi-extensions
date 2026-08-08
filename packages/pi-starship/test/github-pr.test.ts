@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { BUILT_IN_CONFIG } from "../src/config.js";
 import { parseFormat } from "../src/format/formatter.js";
 import { renderStatusline, type StarshipRuntimeSnapshot } from "../src/modules/index.js";

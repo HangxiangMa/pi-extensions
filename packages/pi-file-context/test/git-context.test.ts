@@ -3,8 +3,8 @@ import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
 import { promisify } from "node:util";
+import { test } from "vitest";
 import { createGitContext } from "../src/git-context.js";
 
 const execFileAsync = promisify(execFile);

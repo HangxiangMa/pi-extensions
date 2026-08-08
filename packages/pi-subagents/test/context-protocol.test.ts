@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { buildContextSnapshot, redactPrivateText } from "../src/context.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8, truncateUtf8Tail } from "../src/limits.js";
 import { JsonLineDecoder } from "../src/protocol.js";

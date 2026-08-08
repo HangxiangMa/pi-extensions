@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { context as otelContext, trace } from "@opentelemetry/api";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { test } from "vitest";
 import { createProductionBackend, maskSecrets } from "../src/runtime.js";
 import { TraceRecorder } from "../src/tracing.js";
 

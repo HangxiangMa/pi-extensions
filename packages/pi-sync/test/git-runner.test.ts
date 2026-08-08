@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import { parseGitBlobBatch, readGitBlobs, runGit } from "../src/git-runner.js";
 
 test("Git runner strips inherited Git control variables and closes stdin", async () => {

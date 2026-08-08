@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { resolveMenuScreen, runConfirmation, runMenu } from "@narumitw/pi-tui-kit";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
+import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import {
 	type AnalyticsMenuDataSource,

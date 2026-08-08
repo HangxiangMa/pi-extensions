@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { registerSubagentInspect } from "../src/inspect.js";
 import type { AgentRunInspectionDetail, AgentRunInspectionSummary } from "../src/registry.js";
