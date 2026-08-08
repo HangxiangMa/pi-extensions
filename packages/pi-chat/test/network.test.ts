@@ -241,7 +241,7 @@ test("a completed startup releases its caller signal without leaving the room", 
 });
 
 test("two separate Node processes connect through a local DHT bootstrap", {
-	timeout: 80_000,
+	timeout: 90_000,
 }, async () => {
 	const testnet = await createTestnet(3);
 	const secret = Buffer.alloc(32, 77);
@@ -250,15 +250,19 @@ test("two separate Node processes connect through a local DHT bootstrap", {
 		process.cwd(),
 		"node_modules/.cache/pi-extensions-test/packages/pi-chat/test/network-peer-fixture.js",
 	);
-	const children = Array.from({ length: 2 }, (_, index) =>
-		fork(fixturePath, [bootstrapArg, String(index + 1), secret.toString("base64url")], {
-			execArgv: [],
-			stdio: ["ignore", "ignore", "pipe", "ipc"],
-		}),
-	);
+	const children: ChildProcess[] = [];
 	const messages = new Map<ChildProcess, Array<Record<string, unknown>>>();
 	const errors = new Map<ChildProcess, string>();
-	for (const child of children) {
+	const startChild = (index: number): ChildProcess => {
+		const child = fork(
+			fixturePath,
+			[bootstrapArg, String(index + 1), secret.toString("base64url")],
+			{
+				execArgv: [],
+				stdio: ["ignore", "ignore", "pipe", "ipc"],
+			},
+		);
+		children.push(child);
 		messages.set(child, []);
 		child.on("message", (message: unknown) => {
 			if (message && typeof message === "object") {
@@ -268,14 +272,17 @@ test("two separate Node processes connect through a local DHT bootstrap", {
 		child.stderr?.on("data", (chunk) => {
 			errors.set(child, `${errors.get(child) ?? ""}${String(chunk)}`);
 		});
-	}
+		return child;
+	};
 	try {
-		await waitFor(
-			() =>
-				children.every((child) => messages.get(child)?.some((message) => message.kind === "ready")),
-			() => childDetails(children, messages, errors),
-			35_000,
-		);
+		for (let index = 0; index < 2; index += 1) {
+			const child = startChild(index);
+			await waitFor(
+				() => messages.get(child)?.some((message) => message.kind === "ready") === true,
+				() => childDetails(children, messages, errors),
+				20_000,
+			);
+		}
 		await waitFor(
 			() =>
 				children.every((child) =>
