@@ -16,7 +16,6 @@
 - Tests compiled under root `node_modules/.cache` resolve packages from the root, not a source workspace. A clean or deduped install can therefore expose dependency-major behavior hidden by a stale root copy; keep imported Pi packages as root devDependencies so the alternate-Pi matrix installs matching copies.
 - npm 12 returns `npm pack --workspaces --dry-run --json` as an object keyed by workspace name rather than the single-package array shape; normalize with `Object.values()` before auditing all tarballs.
 - `npm audit fix --force` can replace every workspace's exact Pi devDependency with a vulnerable older caret range; restore all workspace manifests and the lockfile, then use targeted patched upgrades or overrides instead.
-- A consumer cannot safely adopt an unpublished `pi-tui-kit` API in the same PR: clean `npm ci` resolves its semver dependency from the registry. Publish the Kit API before raising the consumer's reviewed compatibility floor; do not use local paths that break independent packaging.
 - After raising one consumer's Kit floor, npm 12 can update the lock while leaving the old nested package on disk; run a root `npm install` and verify the resolved consumer package version before typechecking.
 - Pi maintains separate managed npm roots for user and project packages; dependency deduplication is guaranteed only within one install root, not across scopes.
 - A `pi-tui-kit` runtime import of the `pi-coding-agent` root can evaluate a second repository-resolved agent runtime and add over a second. Keep Kit production JavaScript on public `pi-tui` primitives with coding-agent type-only, and lazy-load command menus until consumers require that published Kit boundary.
@@ -95,7 +94,6 @@
 
 ## TASTE
 
-- When a Pi core package provides the required function, use that function.
 - Prefer canonical JSON and explicit argv arrays for pi-lsp configuration; avoid extension-specific environment-variable settings while retaining `servers[].env` for child-process needs.
 - Prefer pi-sync setup that collects credentials in a masked TUI and reviews one exact backend path; storage connections and sync setups are the only managed user concepts.
 - Prefer direct, user-owned context selection; avoid dedicated shortcuts or manual copy steps for routine quoting workflows.
@@ -103,7 +101,6 @@
 - Live provider smokes are acceptable when relevant, but stop after one clear external or entitlement failure and fall back to deterministic tests unless the user asks to retry.
 - Keep a predecessor extension active while its successor soaks; deprecate it only after an explicit follow-up decision.
 - Prefer an executable repository plan before non-trivial implementation, verify it, and archive it when complete.
-- Prefer a registry-published `pi-tui-kit` version and manually review dependency-floor changes per consumer; never target an unpublished workspace version or automatically synchronize compatibility ranges.
 - Keep package versions out of long-lived guidance; derive current values from manifests, lockfiles, or workflows unless a version is itself historical compatibility evidence.
 - Keep `just` recipes straightforward; require a clean worktree, then prefer Git-based recovery over embedded backup and rollback shell logic for dependency maintenance.
 - Keep `just` install recipes resilient: verify registry visibility first and fall back to the local workspace only when it solves the current install path.
