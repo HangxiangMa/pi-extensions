@@ -23,6 +23,7 @@ The initial baseline could not start because this worktree's dependencies were n
 - [x] Replace every active `node:test` import with Vitest APIs and migrate Node-only test-context cleanup, diagnostics, nested tests, mocks, and timers; the compatibility-heavy focused suite passed and active-path search found no `node:test` references.
 - [x] Retain test TypeScript compilation for subprocess fixtures and update repository documentation and durable tooling references for Vitest; `tsc -p tsconfig.test.json`, the active-path literal audit, and Vitest's 227-file listing passed.
 - [x] Run formatting and the CI-equivalent `npm run check`, then audit the touched-area extension conventions for deterministic tests and unchanged package/runtime behavior; all checks passed and the diff contains no extension `src/` changes.
+- [x] Remove the temporary root Kit alias and raise `pi-chrome-devtools` to the published `pi-tui-kit` 0.51 compatibility floor; focused menu tests, registry verification, Changesets status, and `just pack chrome-devtools` passed.
 
 ## Completion Checklist
 
@@ -30,4 +31,4 @@ The initial baseline could not start because this worktree's dependencies were n
 - [x] A repository search finds no active `node:test` imports or `node --test` runner invocation.
 - [x] Affected-test selection still supports full, package-scoped, root-only, and skip outcomes.
 - [x] `npm run check` passes with 227 files and 2,581 tests.
-- [x] No publishable package metadata, runtime entrypoint, lifecycle, command, UI, setting, or published behavior changed, so pack and Pi runtime smokes are not required.
+- [x] `pi-chrome-devtools` records its Kit compatibility-floor change in a patch Changeset and passes its pack smoke; no runtime source behavior changed, so a Pi runtime smoke is not required.
