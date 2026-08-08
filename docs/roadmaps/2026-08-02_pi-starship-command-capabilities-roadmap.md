@@ -7,6 +7,9 @@ the footer. Follow the useful intent of upstream Starship commands—especially 
 `print-config`, `toggle`, and `bug-report`—without cloning shell-only commands or weakening Pi's
 render, lifecycle, privacy, and settings boundaries.
 
+**Current roadmap status:** Phases 1–4 are delivered on `main` and available from the published
+package. Phases 5–7 remain planned and have no complete implementation.
+
 ## Objectives
 
 - **Explain the current footer** — Success after Phase 2: every non-empty module in the rendered
@@ -15,13 +18,13 @@ render, lifecycle, privacy, and settings boundaries.
 - **Make all supported modules discoverable** — Success after Phase 3: every catalog module appears
   once with a non-color state, current preview when available, and an accurate reason when it is not
   showing.
-- **Make configuration state transparent** — Success after Phase 4: users can distinguish overview,
+- **Make configuration state transparent** — Success after Phase 5: users can distinguish overview,
   raw document, and computed public configuration; every read-only path creates zero files, and a
   failed reload preserves the last valid effective footer.
-- **Keep mutations truthful and recoverable** — Success after Phase 5: no action conflates module
+- **Keep mutations truthful and recoverable** — Success after Phase 6: no action conflates module
   `disabled` state with root-format reachability, and every approved mutation retains preview,
   confirmation, atomic publication, rollback, and unknown-field protection.
-- **Improve support without collecting telemetry** — Success after Phase 6: users can review a
+- **Improve support without collecting telemetry** — Success after Phase 7: users can review a
   bounded, sanitized diagnostic report locally; performance data appears only if collector timing
   can be measured and labelled accurately. Adoption targets remain TBD because the repository has no
   telemetry or grounded usage baseline.
@@ -32,20 +35,23 @@ render, lifecycle, privacy, and settings boundaries.
   or load `~/.config/starship.toml`.
 - The built-in footer uses an explicit nine-module root. Module reachability controls whether cached
   filesystem, Git, command, timer, or network work starts; footer rendering itself is pure.
-- PR #516, PR #517, and PR #518 are merged on `main`. Together they provide palette-free
-  Starship-compatible built-in style semantics plus a shallow six-action `/starship` menu, accurate
-  built-in/fallback states, adaptive transactional preview, strict direct routes, and
-  lifecycle/settings regression coverage. Their required CI and CodeQL checks passed.
+- PR #516, PR #517, and PR #518 provide the trustworthy management baseline, footer explanation,
+  and searchable module browser with lifecycle and settings regression coverage.
+- PR #629 adds complete Pi-native preset documents for every Starship 1.26 preset style plus Minimal,
+  followed by an in-memory live-preview picker and the existing transactional apply workflow.
+- `/starship` now has seven top-level actions: Customize footer, Presets, Explain footer, Modules,
+  Configuration, Help, and Restore built-in.
 - The renderer's grouped output feeds a catalog that owns module names, descriptions, variables,
   defaults, options, and ordering. One pure inspection model combines those entries with effective
   config, root reachability, and the current immutable runtime snapshot for Explain and Modules.
-- Configuration loading retains both a normalized effective config and the original document. No
-  public computed-config projection currently excludes parser ASTs and private runtime metadata.
-- `/starship settings`, `/starship status`, and `/starship help` are the only direct routes. Print and
-  JSON modes intentionally emit no ad hoc command output; RPC uses notifications rather than custom
-  terminal UI.
-- There is no structured module mutation UI, diagnostic-report exporter, Pi-native preset catalog,
-  or collector duration instrumentation.
+- Configuration currently presents state, source, path, health, and bounded diagnostics.
+  Loading retains both normalized effective config and the original document, but there is no public
+  computed-config projection, raw-document viewer, or safe reload-from-disk workflow.
+- `/starship settings`, `/starship status`, and `/starship help` remain the only direct routes.
+  Print and JSON modes intentionally emit no ad hoc command output; RPC uses notifications rather
+  than custom terminal UI.
+- There is no structured module mutation UI, diagnostic-report exporter, or collector duration
+  instrumentation.
 - Checked-in upstream Starship at the repository-pinned revision defines `explain` as a breakdown of
   currently visible modules, `module` as one-module rendering/listing, `print-config` as defaults
   merged into computed config, `toggle` as a config mutation, and `timings` as module execution cost.
@@ -82,7 +88,7 @@ render, lifecycle, privacy, and settings boundaries.
 
 **Outcome:** The source baseline on `main` makes customization and recovery dependable enough to host
 additional read-only capabilities without reopening foundational menu, preview, or persistence
-problems. npm publication is intentionally deferred and is not part of this phase.
+problems. npm publication was outside this phase and occurred later.
 
 ### Phase 2: Explain what is showing
 
@@ -111,10 +117,24 @@ the footer. This establishes the shared explanation model needed by module brows
 **Outcome:** Users can inspect supported and hidden capabilities without reading source or assuming
 that absence means disabled. The state model provides the prerequisite for honest module actions.
 
-### Phase 4: Make configuration transparent
+### Phase 4: Add safe Pi-native presets
+
+- [x] A bundled catalog provides complete Pi-native documents for every Starship 1.26 preset style
+  plus Minimal without invoking Starship, downloading files, or copying upstream module selections.
+  Evidence: PR #629 commits `46f59ba` and `37ef7dc`; catalog and configuration tests cover every
+  preset.
+- [x] **Presets** supports bounded browsing, in-memory live footer preview, customization before
+  apply, explicit replacement confirmation, atomic publication, rollback, and cleanup on Back,
+  cancellation, disposal, session replacement, and shutdown.
+  Evidence: PR #629 commit `fe4da29`; command UX and lifecycle tests cover preview and failure paths.
+
+**Outcome:** Users can safely start from recognizable visual styles without shell integration,
+remote data, hidden writes during browsing, or weaker recovery behavior.
+
+### Phase 5: Make configuration transparent
 
 - [ ] **Configuration** becomes one coherent section containing Overview, Computed configuration,
-  Settings document, and Reload from disk while the top-level menu remains at six or fewer goals.
+  Settings document, and Reload from disk while the top-level menu remains at seven or fewer goals.
 - [ ] Computed configuration deterministically projects only public TOML fields from normalized
   effective state and clearly excludes comments and unknown fields; Settings document presents the
   byte-preserving raw source through a terminal-safe read-only view and explains a healthy
@@ -126,7 +146,7 @@ that absence means disabled. The state model provides the prerequisite for hones
 **Outcome:** Users can distinguish what they wrote from what pi-starship is using and can safely apply
 external edits without reloading the whole Pi session.
 
-### Phase 5: Make module changes unambiguous
+### Phase 6: Make module changes unambiguous
 
 - [ ] A documented module-action contract decides separately how `disabled` and root-format
   reachability change, including what happens to `$all`, duplicate references, comments, custom root
@@ -138,7 +158,7 @@ external edits without reloading the whole Pi session.
 **Outcome:** Structured module actions can be trusted to produce the visible result they promise
 rather than copying upstream `toggle` into a different format/reachability model.
 
-### Phase 6: Make support evidence safe and actionable
+### Phase 7: Make support evidence safe and actionable
 
 - [ ] **Help & support** can produce a local preview of a bounded diagnostic report containing only
   allowlisted version, configuration-state, sanitized diagnostic, module-state, and collector-health
@@ -155,6 +175,7 @@ telemetry, accidental disclosure, or misleading timing semantics.
 ```text
 /starship
 ├─ Customize footer
+├─ Presets
 ├─ Explain footer
 ├─ Modules
 ├─ Configuration
@@ -176,15 +197,15 @@ Prompt preview is not planned because Pi already displays the footer continuousl
 
 | Upstream Starship command | pi-starship direction | Roadmap position |
 | --- | --- | --- |
-| `config` | Keep transactional Customize; add safe external reload | Existing / Phase 4 |
+| `config` | Keep transactional Customize; add safe external reload | Existing / Phase 5 |
 | `explain` | Explain currently rendered Pi modules | Phase 2 |
 | `module` | Search, inspect, and preview one Pi module | Phase 3 |
-| `print-config` | Show a read-only public computed-config projection | Phase 4 |
-| `toggle` | Separate disabled state from root-format reachability | Phase 5 |
-| `bug-report` | Preview a sanitized local support report | Phase 6 |
-| `timings` | Measure Pi collectors only if instrumentation is actionable | Phase 6 gate |
+| `print-config` | Show a read-only public computed-config projection | Phase 5 |
+| `toggle` | Separate disabled state from root-format reachability | Phase 6 |
+| `bug-report` | Preview a sanitized local support report | Phase 7 |
+| `timings` | Measure Pi collectors only if instrumentation is actionable | Phase 7 gate |
 | `prompt` | Integrate current preview into Explain footer | Phase 2 |
-| `preset` | Defer pending a separate Pi-native preset decision | Deferred |
+| `preset` | Browse and transactionally apply bundled Pi-native adaptations | Phase 4 |
 | `completions`, `init`, `session`, `statusline` | Exclude shell/provider lifecycle commands | Non-goal |
 
 ## Success Metrics
@@ -195,6 +216,7 @@ Prompt preview is not planned because Pi already displays the footer continuousl
 | Catalog modules represented in Modules | No module browser | Every registered module exactly once with a textual state | Catalog-driven UI tests |
 | I/O started by footer/explanation rendering | 0 | 0 | Source audit and collector-spy tests |
 | Files created by read-only command paths | 0 | 0 | Missing-directory/filesystem tests |
+| Files changed by preset browsing or cancellation | 0 | 0 | Preset UX and lifecycle tests |
 | Public computed-config fields | No projection | Public TOML fields only; no AST/private runtime data | Serialization contract tests |
 | Invalid/cancelled reload changes | Not available | 0 file bytes and 0 effective-state changes | Settings/lifecycle tests |
 | Sensitive or raw content in diagnostic report | No report | 0 excluded fields; 0 automatic network requests | Allowlist/redaction tests |
@@ -207,18 +229,17 @@ Prompt preview is not planned because Pi already displays the footer continuousl
 | Catalog descriptions or state semantics drift from rendering | Explain and Modules could become inconsistent with the footer | Keep metadata catalog-owned and retain render/inspection parity plus exhaustive catalog tests. |
 | Per-module chunks do not alone explain root reachability or empty values | A browser could mislabel modules | Keep the shared inspection model derived from effective config, root variables, and the same rendered result. |
 | Computed config contains ASTs or private selectors internally | Output could expose invalid/non-public schema | Serialize through an explicit public projection; keep raw document as a separate byte-preserving view. |
-| `disabled` and explicit root format are independent | A copied `toggle` action could promise visibility without producing it | Gate Phase 5 on a documented two-axis action contract and preview the resulting footer. |
+| `disabled` and explicit root format are independent | A copied `toggle` action could promise visibility without producing it | Gate Phase 6 on a documented two-axis action contract and preview the resulting footer. |
 | Collectors have asynchronous cost while rendering is pure | Upstream `timings` semantics would be misleading | Instrument collector age/duration separately or reject the feature. |
 | Diagnostic context can contain paths, remotes, config, or terminal controls | Support output could leak data or inject terminal content | Use bounded allowlisted fields, sanitize at the display boundary, and preview before sharing. |
-| `main` is ahead of npm `0.44.0` while release is deferred | Users installing from npm do not yet receive the merged baseline or later roadmap capabilities | Distinguish merged source status from published availability and require separate release authorization. |
+| Applying a complete preset replaces custom settings, unknown fields, and comments | Users could lose document-specific customization | Preview the resulting footer, disclose complete replacement, require separate confirmation, and retain rollback on failure. |
 | Zero-major pi-tui-kit ranges intentionally do not follow workspace minors | Consumers can miss newer shared lifecycle and keybinding behavior | Raise each consumer's compatibility floor only through a manually reviewed dependency change and verify its resolved package. |
-| No usage telemetry or validated preset demand | Prioritization and preset value are uncertain | Keep targets explicit unknowns and presets outside this roadmap until evidence supports a separate decision. |
+| No usage telemetry for command adoption | Prioritization and task-completion value remain uncertain | Keep adoption targets explicit unknowns and use privacy-compatible user feedback for future prioritization. |
 
 ## Decisions and Changes
 
-- **2026-08-02 — Defer release:** Phase 1 now completes when the verified command baseline is merged
-  on `main`. No version bump, npm publication, tag, or GitHub release is implied; published
-  availability remains a separately authorized decision.
+- **2026-08-02 — Defer release (superseded):** Phase 1 originally completed when the verified command
+  baseline merged on `main`, without implying package publication.
 - **2026-08-02 — Keep inspector compatibility local:** pi-starship initially retained its declared
   pi-tui-kit compatibility floor, so Explain and Modules shipped through one extension-owned
   adaptive inspector rather than relying on newer monorepo-only APIs.
@@ -226,18 +247,20 @@ Prompt preview is not planned because Pi already displays the footer continuousl
   reviewed change raises pi-starship's pi-tui-kit floor to the shared API-v5 release. The inspector
   remains extension-owned because the kit still has no searchable read-only browse/detail screen;
   consumer ranges must not be synchronized automatically.
+- **2026-08-08 — Deliver presets and release:** PR #629 adds the full bundled preset catalog and live
+  preview workflow. The subsequent release publishes the current command surface, removing the prior
+  source-versus-registry availability gap.
 
 ## Non-Goals
 
-- Trigger a package version bump, npm publication, Git tag, or GitHub release while publication is
-  deferred.
+- Authorize a future package version bump, npm publication, Git tag, or GitHub release.
 - Clone the complete Starship CLI or promise full Starship module/config compatibility.
 - Add shell completions, shell initialization, random session keys, provider statusline generation, or
   ad hoc print/JSON output.
 - Invoke the Starship executable, read `~/.config/starship.toml`, run arbitrary custom commands, or
   expose unrestricted environment variables.
-- Import upstream Starship presets directly or add a preset selector before a separately approved
-  Pi-native preset catalog and replacement contract exist.
+- Download presets remotely, invoke Starship's preset command, or promise identical upstream module
+  selections rather than Pi-native visual adaptations.
 - Add module timing labels without collector instrumentation, or add telemetry to establish adoption.
 - Change formatter/style semantics, the built-in nine-module root, module defaults, palette behavior,
   settings location, or backup/migration policy as part of these command capabilities.
@@ -247,11 +270,11 @@ Prompt preview is not planned because Pi already displays the footer continuousl
 
 - This roadmap is for maintainers and contributors; no delivery dates, owners, capacity commitments,
   or release horizon were supplied.
-- Milestone completion currently tracks verified capabilities merged on `main`, not npm availability;
-  the roadmap must state that distinction while release remains deferred.
+- Milestone completion tracks verified capabilities merged on `main`; published availability is
+  reported only when independently verified.
 - Explainability and discovery are assumed to be more valuable and lower risk than immediate module
   mutation because they build on existing renderer/catalog data and do not write settings.
-- Demand for structured toggles, collector performance diagnostics, issue creation, and Pi-native
-  presets is unknown. Their scope must remain gated rather than inferred from upstream Starship's CLI.
+- Demand for structured toggles, collector performance diagnostics, and issue creation is unknown.
+  Their scope must remain gated rather than inferred from upstream Starship's CLI.
 - New direct routes such as `/starship explain` or `/starship module` are not assumed. Menu-first TUI
   delivery should precede any RPC/non-TUI protocol decision with a concrete automation use case.
