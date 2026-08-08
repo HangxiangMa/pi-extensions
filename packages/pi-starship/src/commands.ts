@@ -266,8 +266,18 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 				return result?.kind === "back" ? { kind: "stay" } : { kind: "close" };
 			},
 			minimal: async () => runPresetAction(getStarshipPreset("minimal")),
-			bracketed: async () => runPresetAction(getStarshipPreset("bracketed")),
+			"bracketed-segments": async () => runPresetAction(getStarshipPreset("bracketed-segments")),
+			"catppuccin-powerline": async () =>
+				runPresetAction(getStarshipPreset("catppuccin-powerline")),
+			"gruvbox-rainbow": async () => runPresetAction(getStarshipPreset("gruvbox-rainbow")),
+			jetpack: async () => runPresetAction(getStarshipPreset("jetpack")),
 			"nerd-font-symbols": async () => runPresetAction(getStarshipPreset("nerd-font-symbols")),
+			"no-empty-icons": async () => runPresetAction(getStarshipPreset("no-empty-icons")),
+			"no-nerd-font": async () => runPresetAction(getStarshipPreset("no-nerd-font")),
+			"no-runtime-versions": async () => runPresetAction(getStarshipPreset("no-runtime-versions")),
+			"pastel-powerline": async () => runPresetAction(getStarshipPreset("pastel-powerline")),
+			"plain-text-symbols": async () => runPresetAction(getStarshipPreset("plain-text-symbols")),
+			"pure-preset": async () => runPresetAction(getStarshipPreset("pure-preset")),
 			"tokyo-night": async () => runPresetAction(getStarshipPreset("tokyo-night")),
 			restore: async () => {
 				const presentation = configurationPresentation(options.getLoaded());

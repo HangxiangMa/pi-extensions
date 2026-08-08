@@ -28,12 +28,32 @@ import { presetForDocument, STARSHIP_PRESETS } from "../src/presets/catalog.js";
 test("bundled presets are distinct, valid, and limited to local core modules", () => {
 	assert.deepEqual(
 		STARSHIP_PRESETS.map((preset) => preset.id),
-		["minimal", "bracketed", "nerd-font-symbols", "tokyo-night"],
+		[
+			"minimal",
+			"bracketed-segments",
+			"catppuccin-powerline",
+			"gruvbox-rainbow",
+			"jetpack",
+			"nerd-font-symbols",
+			"no-empty-icons",
+			"no-nerd-font",
+			"no-runtime-versions",
+			"pastel-powerline",
+			"plain-text-symbols",
+			"pure-preset",
+			"tokyo-night",
+		],
 	);
 	assert.equal(new Set(STARSHIP_PRESETS.map((preset) => preset.id)).size, STARSHIP_PRESETS.length);
 	assert.deepEqual(
-		STARSHIP_PRESETS.map((preset) => preset.requiresNerdFont),
-		[false, false, true, true],
+		STARSHIP_PRESETS.filter((preset) => preset.requiresNerdFont).map((preset) => preset.id),
+		[
+			"catppuccin-powerline",
+			"gruvbox-rainbow",
+			"nerd-font-symbols",
+			"pastel-powerline",
+			"tokyo-night",
+		],
 	);
 
 	const allowedModules = new Set([
@@ -42,6 +62,7 @@ test("bundled presets are distinct, valid, and limited to local core modules", (
 		"thinking",
 		"directory",
 		"git_branch",
+		"git_state",
 		"git_status",
 		"activity",
 		"context",

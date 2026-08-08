@@ -1,4 +1,4 @@
-export const BRACKETED_PRESET = String.raw`# Font-safe bracketed segments inspired by Starship.
+export const BRACKETED_SEGMENTS_PRESET = String.raw`# Font-safe bracketed segments inspired by Starship.
 format = "$brand$model$thinking$directory$git_branch$git_status$activity$context$time"
 
 [brand]

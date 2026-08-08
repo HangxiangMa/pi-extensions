@@ -94,9 +94,25 @@ test("bundled presets render their promised Pi-native information", () => {
 	);
 	assert.match(plainById.get("minimal") ?? "", /sonnet-4.*pi-extensions.*feature.*read/u);
 	assert.doesNotMatch(plainById.get("minimal") ?? "", /π|75\.0%|09:05/u);
-	assert.match(plainById.get("bracketed") ?? "", /\[π\].*\[AI sonnet-4\].*\[09:05\]/u);
+	assert.match(plainById.get("bracketed-segments") ?? "", /\[π\].*\[AI sonnet-4\].*\[09:05\]/u);
+	assert.match(plainById.get("catppuccin-powerline") ?? "", /.*.*sonnet-4.*.*/u);
+	assert.match(plainById.get("gruvbox-rainbow") ?? "", /.*.*sonnet-4.*.*/u);
+	assert.match(plainById.get("jetpack") ?? "", /◄.*read.*◯ 75\.0%.*pi-extensions.*△ feature/u);
 	assert.match(plainById.get("nerd-font-symbols") ?? "", /.*󰚩.*󰉋.*.*/u);
-	assert.match(plainById.get("tokyo-night") ?? "", /.*.*󰚩.*󰉋.*.*󰑮.*󰍛.*/u);
+	assert.match(plainById.get("no-empty-icons") ?? "", /model sonnet-4.*in \/work\/pi-extensions/u);
+	assert.match(
+		plainById.get("no-nerd-font") ?? "",
+		/✦.*◆ sonnet-4.*⌂ \/work\/pi-extensions.*◴ 09:05/u,
+	);
+	assert.doesNotMatch(plainById.get("no-runtime-versions") ?? "", /sonnet-4|high/u);
+	assert.match(plainById.get("no-runtime-versions") ?? "", /π.*AI.*think.*pi-extensions/u);
+	assert.match(plainById.get("pastel-powerline") ?? "", /.*.*sonnet-4.*.*/u);
+	assert.match(
+		plainById.get("plain-text-symbols") ?? "",
+		/pi.*model sonnet-4.*dir \/work\/pi-extensions.*git feature/u,
+	);
+	assert.match(plainById.get("pure-preset") ?? "", /pi-extensions feature.*\nsonnet-4 high/u);
+	assert.match(plainById.get("tokyo-night") ?? "", /░▒▓.*.*sonnet-4.*.*.*󰑮.*󰍛.*/u);
 	for (const [id, rendered] of plainById) {
 		assert.ok(rendered.length > 0, id);
 		assert.doesNotMatch(rendered, /undefined|\$[a-z_]+/u, id);

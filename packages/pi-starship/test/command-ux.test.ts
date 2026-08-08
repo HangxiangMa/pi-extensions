@@ -97,16 +97,21 @@ test("Presets stays shallow, identifies the exact active document, and restores 
 		}
 		const full = tui.render().join("\n");
 		assert.match(full, /Minimal/u);
-		assert.match(full, /Bracketed/u);
+		assert.match(full, /Bracketed Segments/u);
+		assert.match(full, /Catppuccin Powerline/u);
 		assert.match(full, /Nerd Font Symbols/u);
-		assert.match(full, /Tokyo Night/u);
 		assert.match(full, /Currently applied/u);
+		assert.match(full, /\(1\/13\)/u);
 		tui.press("tui.select.confirm");
 		await flushAsyncWork();
 		assert.match(tui.render().join("\n"), /^Presets/mu);
-		tui.press("tui.select.down");
-		tui.press("tui.select.down");
-		assert.match(tui.render().join("\n"), /requires Nerd Font/u);
+		for (let index = 0; index < STARSHIP_PRESETS.length - 1; index += 1) {
+			tui.press("tui.select.down");
+		}
+		const lastPreset = tui.render().join("\n");
+		assert.match(lastPreset, /Tokyo Night/u);
+		assert.match(lastPreset, /requires Nerd Font/u);
+		assert.match(lastPreset, /\(13\/13\)/u);
 		tui.press("tui.select.cancel");
 		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /→ Presets/u);
@@ -231,14 +236,14 @@ test("Customize before applying starts from the preset and saves the edited docu
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
 		assert.equal(editorDraft, bracketed.rawDocument);
-		assert.match(tui.render().join("\n"), /Bracketed preset preview/u);
+		assert.match(tui.render().join("\n"), /Bracketed Segments preset preview/u);
 		tui.press("tui.select.confirm");
 		await running;
 		assert.equal(readFileSync(path, "utf8"), `${bracketed.rawDocument}# personalized\n`);
 		assert.equal(applied, 1);
 		assert.match(
 			context.notifications.at(-1)?.message ?? "",
-			/Bracketed preset saved and applied/u,
+			/Bracketed Segments preset saved and applied/u,
 		);
 	} finally {
 		rmSync(root, { recursive: true, force: true });

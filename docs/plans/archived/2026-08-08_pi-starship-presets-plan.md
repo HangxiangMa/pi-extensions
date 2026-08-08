@@ -2,9 +2,10 @@
 
 ## Goal
 
-Add four bundled, Pi-native footer presets to `@narumitw/pi-starship` and let TUI users browse,
-preview, optionally customize, confirm, and atomically apply one from the existing `/starship` menu
-without weakening custom TOML, recovery, lifecycle, or non-TUI behavior.
+Add Pi-native adaptations of every style listed by Starship 1.26.0's `preset --list`, plus a Minimal
+preset, to `@narumitw/pi-starship`. Let TUI users browse, preview, optionally customize, confirm, and
+atomically apply one from the existing `/starship` menu without weakening custom TOML, recovery,
+lifecycle, or non-TUI behavior.
 
 ## Context
 
@@ -15,9 +16,11 @@ without weakening custom TOML, recovery, lifecycle, or non-TUI behavior.
   draft validation, atomic publication, concurrent-file protection, and runtime-apply rollback.
 - The existing **Restore built-in…** action is documented recovery behavior and remains visible. The
   preset list therefore contains only non-default alternatives.
-- Starship currently publishes presets such as Bracketed Segments, Nerd Font Symbols, Pastel
-  Powerline, and Tokyo Night. pi-starship supports only its own modules and format semantics, so the
-  bundled documents will be Pi-specific adaptations rather than compatibility copies.
+- Starship 1.26.0 publishes 12 presets: Bracketed Segments, Catppuccin Powerline, Gruvbox Rainbow,
+  Jetpack, Nerd Font Symbols, No Empty Icons, No Nerd Font, No Runtime Versions, Pastel Powerline,
+  Plain Text Symbols, Pure, and Tokyo Night. pi-starship supports its own modules and format semantics,
+  so the bundled documents are Pi-specific adaptations of their colors and layouts rather than module
+  compatibility copies.
 - Applicable guidance already reviewed: `docs/extension-conventions.md`,
   `docs/extension-settings.md`, Pi TUI/menu lifecycle requirements, and the repository TDD boundary.
   Touched MUST areas are command/menu behavior, custom TUI width and cancellation, settings
@@ -46,19 +49,18 @@ without weakening custom TOML, recovery, lifecycle, or non-TUI behavior.
   the selected preset and state that custom settings, unknown fields, and comments will be removed and
   that no post-success backup is kept. Save, apply, concurrent-file protection, and rollback continue
   through the existing config APIs.
-- Initial catalog:
-  - `minimal`: font-safe `$model`, `$directory`, `$git_branch`, and `$activity` layout.
-  - `bracketed`: font-safe bracketed presentation of the balanced Pi/Git default information.
-  - `nerd-font-symbols`: balanced default information with Nerd Font module symbols.
-  - `tokyo-night`: a one-line, palette-backed Powerline treatment of Pi model/thinking, directory,
-    Git, activity, context, and time, explicitly requiring a Nerd Font.
+- Catalog: the Pi-specific `minimal` option plus stable IDs matching all 12 names emitted by
+  `starship preset --list`. Bracketed, semantic modifier, Jetpack, and Pure adaptations are font-safe;
+  Catppuccin, Gruvbox, Pastel, Tokyo Night, and Nerd Font Symbols explicitly require a Nerd Font.
+  Every document chooses only local Pi and Git snapshot modules while preserving the source preset's
+  color, separator, typography, and layout treatment.
 - None of the initial presets enables GitHub PR queries, cloud/deployment readers, or optional
   command-backed workspace collectors. Preset previews remain synchronous consumers of the current
   immutable runtime snapshot.
 
 ## Non-Goals
 
-- Read or execute Starship's own preset command, binary, schema, or `starship.toml`.
+- Read or execute Starship's preset command, binary, schema, or `starship.toml` at extension runtime.
 - Claim complete compatibility with upstream preset TOML or copy unsupported Starship modules.
 - Add a `/starship preset` textual route, project scope, environment override, automatic migration,
   remote/community preset download, preset composition, or TOML merge engine.
@@ -70,8 +72,8 @@ without weakening custom TOML, recovery, lifecycle, or non-TUI behavior.
 
 ## Assumptions
 
-- Unless revised before execution, the approved v1 catalog is Minimal, Bracketed, Nerd Font Symbols,
-  and Tokyo Night as specified above.
+- The development reference is the local Starship 1.26.0 output from `starship preset --list` and
+  `starship preset <name>`; runtime behavior remains independent of the Starship binary.
 - Presets are complete starting points. Expert preservation is provided by **Customize before
   applying**, not by silently merging a preset into an existing document.
 
@@ -112,11 +114,11 @@ without weakening custom TOML, recovery, lifecycle, or non-TUI behavior.
       requirements are explicit, exact raw matching recognizes only unchanged preset documents, and
       no preset reaches network or optional command-backed modules; verify the focused tests execute
       and fail for missing preset behavior before implementation.
-- [x] Add `packages/pi-starship/src/presets/` catalog and four bounded document modules implementing the
+- [x] Add `packages/pi-starship/src/presets/` catalog and bounded document modules implementing the
       approved module/layout contracts; verify the focused catalog/config tests pass and source files
       remain below 1,000 lines.
 - [x] Add focused red menu tests in `packages/pi-starship/test/command-ux.test.ts` and
-      `packages/pi-starship/test/commands.test.ts` for the seventh **Presets** row, one-level four-item
+      `packages/pi-starship/test/commands.test.ts` for the seventh **Presets** row, one-level preset
       list, descriptions and Nerd Font warnings, exact `Currently applied` disabled state, active
       preset configuration presentation, Back/focus restoration, and no startup/file/runtime side
       effects; verify they fail on the existing six-row menu for the intended reason.
@@ -153,13 +155,29 @@ without weakening custom TOML, recovery, lifecycle, or non-TUI behavior.
       documentation, and release gates; verify every applicable MUST has test/review/smoke evidence and
       record any accepted deviation.
 
+## Starship 1.26 catalog expansion
+
+- [x] Capture `starship preset --list` and each `starship preset <name>` development output; verified
+      the 12 upstream names and reviewed every emitted palette, format, separator, symbol policy, and
+      typography treatment.
+- [x] Extend the public catalog test to require all 12 upstream IDs plus Minimal; verified the red
+      state reported the nine missing IDs and the former `bracketed` ID.
+- [x] Add bounded Pi-native preset documents and action handlers for the complete catalog; verified
+      every document parses without diagnostics, renders Pi-native information, uses only local Pi/Git
+      modules, and declares its Nerd Font requirement.
+- [x] Exercise the 13-item menu viewport and final-item navigation at 20, 40, and 80 columns; verified
+      stable selection, active-item disabling, scrolling, and font-warning presentation.
+- [x] Update README catalog and Starship attribution to explain the 1.26.0 color/layout reference and
+      Pi-owned module selection.
+- [x] Re-run package and repository checks, packaging, RPC smoke, and semantic convention audit; final
+      evidence is recorded below.
+
 ## Completion Checklist
 
-- [x] `/starship` presents seven shallow, goal-oriented actions and a four-item preset screen with
+- [x] `/starship` presents seven shallow, goal-oriented actions and a 13-item preset screen with
       visible current state, font requirements, Back, Escape, and Ctrl+C behavior.
-- [x] Minimal and Bracketed are font-safe; Nerd Font Symbols and Tokyo Night are clearly marked; all
-      four documents validate cleanly and render within supported widths without enabling undocumented
-      collectors or network work.
+- [x] Font-safe and Nerd Font-dependent choices are clearly marked; all 13 documents validate cleanly
+      and render within supported widths without enabling undocumented collectors or network work.
 - [x] Selecting a preset never mutates disk or runtime before preview and confirmation; users can apply,
       customize first, choose another, or cancel without ambiguous side effects.
 - [x] Complete-document replacement is disclosed, confirmed, serialized, atomic, generation-safe, and
@@ -171,17 +189,18 @@ without weakening custom TOML, recovery, lifecycle, or non-TUI behavior.
 
 ## Execution Evidence
 
-- Completed 2026-08-08 on `feat/pi-starship-presets` after rebasing onto `origin/main` at
-  `1156ee7`. The four preset documents validate without diagnostics and remain under the lazy command
-  import boundary.
+- Initial four-preset implementation completed 2026-08-08 on `feat/pi-starship-presets` after
+  rebasing onto `origin/main` at `1156ee7`; the later Starship 1.26 catalog expansion retains the same
+  lazy command import boundary.
 - TDD evidence: the catalog test first failed with an empty preset list, and the menu test first failed
   on the existing six-row menu and `Custom configuration` state. Focused config, menu, interaction,
   rendering, failure-recovery, and lifecycle tests then passed.
 - `npm run check --workspace @narumitw/pi-starship` passed. The compiled package test set passed before
   the final root gate; `npm run check` passed with 2,542 tests after the final rebase and help-text
   update.
-- `just pack starship` passed with 69 files, including all five `src/presets/` modules. Changeset status
-  reports the intended independent minor bump to `@narumitw/pi-starship` 0.50.0.
+- Initial `just pack starship` passed with 69 files and Changeset status reported the intended
+  independent minor bump to `@narumitw/pi-starship` 0.50.0. Final expansion packaging evidence is
+  recorded below.
 - A real Pi 0.84.1 RPC smoke loaded only `packages/pi-starship/src/index.ts`, discovered `/starship`,
   returned the updated `/starship help` notification, exited successfully, and left the temporary
   agent directory without `pi-starship.toml`. TUI behavior was exercised through the local async Kit
@@ -193,3 +212,15 @@ without weakening custom TOML, recovery, lifecycle, or non-TUI behavior.
   complete-document replacement is previewed and confirmed; existing invalid-file, atomic publication,
   concurrent-file preservation, runtime rollback, lazy loading, and missing-file semantics remain in
   force. No accepted convention deviation remains; only real Nerd Font appearance is unverified.
+- Follow-up expansion evidence: Starship 1.26.0 reported all 12 expected IDs, and all emitted documents
+  were reviewed as development references. The 13 Pi documents validate without diagnostics, render
+  expected Pi/Git information, and limit reachability to local core modules. The TDD catalog red state
+  named the nine missing upstream styles and obsolete `bracketed` ID before implementation.
+- Final `npm run check --workspace @narumitw/pi-starship` and root `npm run check` passed; the root gate
+  completed 2,542 tests. `npm run changeset:status` still reports only the intended minor bump to
+  `@narumitw/pi-starship` 0.50.0. Final `just pack starship` passed with 78 files, including all 14
+  `src/presets/` modules, at 81.1 kB packed / 301.5 kB unpacked.
+- Final Pi RPC smoke loaded only `src/index.ts`, discovered `/starship`, observed preset-aware help,
+  exited successfully on stdin close, and did not create `pi-starship.toml`. The Kit TUI harness covered
+  the paged 13-item list at 20, 40, and 80 columns; a real Nerd Font visual smoke remains unverified
+  because repository execution policy forbids opening a TUI.

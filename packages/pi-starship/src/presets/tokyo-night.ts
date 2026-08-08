@@ -1,65 +1,53 @@
-export const TOKYO_NIGHT_PRESET = `# A Pi-native Tokyo Night treatment using Nerd Font Powerline glyphs.
-format = "$brand$model$thinking$directory$git_branch$git_status$activity$context$fill$time"
-palette = "tokyo_night"
-
-[palettes.tokyo_night]
-base = "#1a1b26"
-blue = "#7aa2f7"
-cyan = "#7dcfff"
-green = "#9ece6a"
-orange = "#ff9e64"
-purple = "#bb9af7"
-red = "#f7768e"
+export const TOKYO_NIGHT_PRESET = `# Pi-native adaptation of Starship's Tokyo Night preset.
+format = "[░▒▓](#a3aed2)$brand$model[](bg:#769ff0 fg:#a3aed2)$directory[](fg:#769ff0 bg:#394260)$git_branch$git_status[](fg:#394260 bg:#212736)$thinking$activity[](fg:#212736 bg:#1d2230)$context$time[](fg:#1d2230)"
 
 [brand]
-format = "[](blue)[ $symbol ]($style)[](blue) "
+format = "[ $symbol ]($style)"
 symbol = ""
-style = "fg:base bg:blue bold"
+style = "fg:#090c0c bg:#a3aed2 bold"
 
 [model]
-format = "[](purple)[ $symbol $model ]($style)[](purple) "
-symbol = "󰚩"
-style = "fg:base bg:purple bold"
-
-[thinking]
-format = "[](cyan)[ $symbol $level ]($style)[](cyan) "
-symbol = "󰔟"
-style = "fg:base bg:cyan bold"
+format = "[$model ]($style)"
+symbol = ""
+style = "fg:#090c0c bg:#a3aed2 bold"
 
 [directory]
-format = "[](blue)[ $symbol $path ]($style)[](blue) "
-symbol = "󰉋"
-style = "fg:base bg:blue bold"
+format = "[ $path ]($style)"
+symbol = ""
+style = "fg:#e3e5e5 bg:#769ff0 bold"
+truncation_length = 3
+truncation_symbol = "…/"
 
 [git_branch]
-format = "[](orange)[ $symbol $branch ]($style)"
+format = "[ $symbol $branch ]($style)"
 symbol = ""
-style = "fg:base bg:orange bold"
+style = "fg:#769ff0 bg:#394260 bold"
 
 [git_status]
-format = "[$all_status( $ahead_behind) ]($style)[](orange) "
-style = "fg:base bg:orange bold"
+format = "[$all_status$ahead_behind ]($style)"
+style = "fg:#769ff0 bg:#394260 bold"
+
+[thinking]
+format = "[ $symbol $level ]($style)"
+symbol = "󰔟"
+style = "fg:#769ff0 bg:#212736 bold"
 
 [activity]
-format = "[](green)[ $text ]($style)[](green) "
+format = "[ $text ]($style)"
 symbol = "󰑮"
-style = "fg:base bg:green bold"
+style = "fg:#769ff0 bg:#212736 bold"
 
 [context]
-format = "[]($style)[ $symbol $percentage ](fg:base bg:green bold)[](green) "
+format = "[ $symbol $percentage ](fg:#a0a9cb bg:#1d2230 bold)"
 symbol = "󰍛"
 
 [[context.display]]
 threshold = 0
-style = "green"
+style = "#1d2230"
 hidden = false
 
-[fill]
-symbol = " "
-style = "none"
-
 [time]
-format = "[](blue)[ $symbol $time ]($style)[](blue)"
-symbol = ""
-style = "fg:base bg:blue bold"
+format = "[ $time ]($style)"
+symbol = ""
+style = "fg:#a0a9cb bg:#1d2230 bold"
 `;

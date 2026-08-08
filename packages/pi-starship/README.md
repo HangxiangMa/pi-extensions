@@ -17,8 +17,9 @@ A native Pi footer configured with Starship-style TOML. It parses and renders fo
 - Width-aware `$fill` alignment for native multiline left/right layouts.
 - Footer rendering is pure: no subprocess, network, filesystem, timer, or environment work runs from `render()`.
 - Multiline output wraps to the terminal width instead of truncating.
-- Goal-oriented `/starship` menu with four bundled presets, footer explanation, searchable module
-  inspection, configuration health, transactional preview, and recovery.
+- Goal-oriented `/starship` menu with every Starship 1.26 preset style plus a Pi-native Minimal
+  preset, footer explanation, searchable module inspection, configuration health, transactional
+  preview, and recovery.
 
 ## 📦 Install
 
@@ -84,14 +85,26 @@ backup before asking for confirmation.
 
 ### 🎛️ Presets
 
-Choose **Presets** from `/starship` to browse four complete Pi-native starting points:
+Choose **Presets** from `/starship` to browse complete Pi-native starting points. The catalog adapts
+all styles listed by `starship preset --list` in Starship 1.26.0, plus a Pi-specific Minimal option.
+Colors, separators, typography, and layout follow the named Starship preset; modules are deliberately
+selected for Pi's model, thinking, workspace, Git, activity, context, and time snapshots.
 
-| Preset | Layout | Font requirement |
+| Preset | Adapted visual treatment | Font requirement |
 | --- | --- | --- |
-| **Minimal** | Model, directory, Git branch, and activity | Standard Unicode |
-| **Bracketed** | Balanced Pi and Git information in font-safe bracketed segments | Standard Unicode |
-| **Nerd Font Symbols** | The balanced default layout with icon-rich module symbols | Nerd Font |
-| **Tokyo Night** | One-line Tokyo Night palette with independent Powerline segments | Nerd Font |
+| **Minimal** | Compact Pi essentials | Standard Unicode |
+| **Bracketed Segments** | Balanced Pi and Git information in brackets | Standard Unicode |
+| **Catppuccin Powerline** | Connected Catppuccin Mocha blocks; other Catppuccin palettes remain in the document for customization | Nerd Font |
+| **Gruvbox Rainbow** | Warm Gruvbox connected segments | Nerd Font |
+| **Jetpack** | Airy geometric activity/context and workspace columns joined by fill | Standard Unicode |
+| **Nerd Font Symbols** | Balanced default layout with icon-rich symbols | Nerd Font |
+| **No Empty Icons** | Conditional text labels that cannot appear without their values | Standard Unicode |
+| **No Nerd Font** | Portable Unicode symbols without private-use glyphs | Standard Unicode |
+| **No Runtime Versions** | Presence indicators without model or thinking details | Standard Unicode |
+| **Pastel Powerline** | Connected magenta, coral, orange, blue, teal, and navy blocks | Nerd Font |
+| **Plain Text Symbols** | Plain words replace pictograms | Standard Unicode |
+| **Pure Preset** | Clean two-line workspace and session context | Standard Unicode |
+| **Tokyo Night** | Connected cool blue Tokyo Night blocks | Nerd Font |
 
 Selecting a preset opens the same adaptive live preview used by manual settings. From there, choose
 **Apply _name_ preset…**, **Customize before applying**, or **Choose another preset**. Customization
@@ -106,9 +119,10 @@ retain the previous valid document and effective footer. Exact unedited matches 
 again. **Restore built-in…** remains the deterministic recovery path.
 
 The bundled presets use only pi-starship's local Pi and Git snapshot modules. They do not enable the
-GitHub PR query, cloud/deployment readers, or optional command-backed workspace collectors. Their
-visual ideas are inspired by Starship presets but their TOML and module choices are specific to Pi.
-There is no `/starship preset` textual route and no remote preset download.
+GitHub PR query, cloud/deployment readers, or optional command-backed workspace collectors. They are
+Pi-native adaptations of the color and format treatments emitted by Starship 1.26.0; they do not copy
+Starship's module selections because Pi exposes different runtime information. There is no
+`/starship preset` textual route and no remote preset download.
 
 ### 📝 Example
 
