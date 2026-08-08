@@ -73,15 +73,17 @@ export class GitContext {
 		readonly statuses: ReadonlyMap<string, GitFileStatus>,
 	) {}
 
-	async getFileContext(projectPath: string): Promise<GitFileContext> {
+	async getFileContext(projectPath: string, signal?: AbortSignal): Promise<GitFileContext> {
 		this.assertProjectPath(projectPath);
 		const [blobResult, diffResult] = await Promise.all([
-			this.run(["rev-parse", "--verify", `HEAD:${this.repositoryPath(projectPath)}`], true),
+			this.run(["rev-parse", "--verify", `HEAD:${this.repositoryPath(projectPath)}`], true, signal),
 			this.run(
 				["diff", "--no-ext-diff", "--no-textconv", "--unified=3", "HEAD", "--", projectPath],
 				true,
+				signal,
 			),
 		]);
+		signal?.throwIfAborted();
 		return {
 			status: this.statuses.get(projectPath),
 			blob: blobResult.ok ? blobResult.stdout.trim() || undefined : undefined,
@@ -93,6 +95,7 @@ export class GitContext {
 		projectPath: string,
 		line: number,
 		revision?: string,
+		signal?: AbortSignal,
 	): Promise<GitBlameInfo | undefined> {
 		this.assertProjectPath(projectPath);
 		if (!Number.isSafeInteger(line) || line < 1) throw new Error("Blame line must be positive");
@@ -109,12 +112,14 @@ export class GitContext {
 				projectPath,
 			],
 			true,
+			signal,
 		);
+		signal?.throwIfAborted();
 		if (!result.ok) return undefined;
 		return parseBlame(result.stdout);
 	}
 
-	async getHistory(projectPath: string): Promise<GitHistoryEntry[]> {
+	async getHistory(projectPath: string, signal?: AbortSignal): Promise<GitHistoryEntry[]> {
 		this.assertProjectPath(projectPath);
 		const result = await this.run(
 			[
@@ -128,7 +133,9 @@ export class GitContext {
 				projectPath,
 			],
 			true,
+			signal,
 		);
+		signal?.throwIfAborted();
 		return result.ok ? parseHistory(result.stdout) : [];
 	}
 
@@ -136,6 +143,7 @@ export class GitContext {
 		projectPath: string,
 		revision: string,
 		historicalPath?: string,
+		signal?: AbortSignal,
 	): Promise<GitRevisionFile> {
 		this.assertProjectPath(projectPath);
 		const normalizedRevision = revision.trim();
@@ -145,18 +153,21 @@ export class GitContext {
 		const resolved = await this.run(
 			["rev-parse", "--verify", "--end-of-options", `${normalizedRevision}^{commit}`],
 			true,
+			signal,
 		);
 		if (!resolved.ok || !/^[0-9a-f]{40}$/i.test(resolved.stdout.trim())) {
 			throw new Error(`Unknown Git revision: ${normalizedRevision}`);
 		}
+		signal?.throwIfAborted();
 		const commit = resolved.stdout.trim().toLowerCase();
 		const repositoryPath = historicalPath
 			? this.assertRepositoryPath(historicalPath)
 			: this.repositoryPath(projectPath);
 		const [contentsResult, blobResult] = await Promise.all([
-			this.run(["show", `${commit}:${repositoryPath}`], true),
-			this.run(["rev-parse", "--verify", `${commit}:${repositoryPath}`], true),
+			this.run(["show", `${commit}:${repositoryPath}`], true, signal),
+			this.run(["rev-parse", "--verify", `${commit}:${repositoryPath}`], true, signal),
 		]);
+		signal?.throwIfAborted();
 		if (!contentsResult.ok) {
 			throw new Error(`${projectPath} does not exist at ${normalizedRevision}`);
 		}
@@ -175,8 +186,12 @@ export class GitContext {
 		};
 	}
 
-	private async run(args: string[], allowFailure = false): Promise<GitResult> {
-		return runGit(this.projectRoot, args, allowFailure);
+	private async run(
+		args: string[],
+		allowFailure = false,
+		signal?: AbortSignal,
+	): Promise<GitResult> {
+		return runGit(this.projectRoot, args, allowFailure, signal);
 	}
 
 	private repositoryPath(projectPath: string): string {
@@ -208,16 +223,26 @@ export class GitContext {
 	}
 }
 
-export async function createGitContext(root: string): Promise<GitContext | undefined> {
+export async function createGitContext(
+	root: string,
+	signal?: AbortSignal,
+): Promise<GitContext | undefined> {
+	signal?.throwIfAborted();
 	const projectRoot = await realpath(root);
-	const repositoryResult = await runGit(projectRoot, ["rev-parse", "--show-toplevel"], true);
+	signal?.throwIfAborted();
+	const repositoryResult = await runGit(
+		projectRoot,
+		["rev-parse", "--show-toplevel"],
+		true,
+		signal,
+	);
 	if (!repositoryResult.ok) return undefined;
 	const repositoryRoot = stripLineEnding(repositoryResult.stdout);
 	if (!repositoryRoot) return undefined;
 	const [prefixResult, headResult, branchResult, statusResult] = await Promise.all([
-		runGit(projectRoot, ["rev-parse", "--show-prefix"], true),
-		runGit(projectRoot, ["rev-parse", "--verify", "HEAD"], true),
-		runGit(projectRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"], true),
+		runGit(projectRoot, ["rev-parse", "--show-prefix"], true, signal),
+		runGit(projectRoot, ["rev-parse", "--verify", "HEAD"], true, signal),
+		runGit(projectRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"], true, signal),
 		runGit(
 			projectRoot,
 			[
@@ -232,8 +257,10 @@ export async function createGitContext(root: string): Promise<GitContext | undef
 				".",
 			],
 			true,
+			signal,
 		),
 	]);
+	signal?.throwIfAborted();
 	const head = headResult.ok ? headResult.stdout.trim().toLowerCase() : "unborn";
 	const branch = branchResult.ok
 		? branchResult.stdout.trim()
@@ -260,7 +287,12 @@ interface GitResult {
 	stdout: string;
 }
 
-async function runGit(cwd: string, args: string[], allowFailure: boolean): Promise<GitResult> {
+async function runGit(
+	cwd: string,
+	args: string[],
+	allowFailure: boolean,
+	signal?: AbortSignal,
+): Promise<GitResult> {
 	try {
 		const { stdout } = await execFileAsync(
 			"git",
@@ -270,6 +302,7 @@ async function runGit(cwd: string, args: string[], allowFailure: boolean): Promi
 				encoding: "utf8",
 				timeout: GIT_TIMEOUT_MS,
 				maxBuffer: GIT_MAX_BUFFER,
+				signal,
 				env: {
 					...process.env,
 					GIT_OPTIONAL_LOCKS: "0",
@@ -280,6 +313,7 @@ async function runGit(cwd: string, args: string[], allowFailure: boolean): Promi
 		);
 		return { ok: true, stdout };
 	} catch (error: unknown) {
+		if (signal?.aborted) throw error;
 		if (allowFailure) return { ok: false, stdout: "" };
 		throw error;
 	}

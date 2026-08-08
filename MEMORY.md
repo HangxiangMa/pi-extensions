@@ -44,6 +44,7 @@
 - Sanitize terminal escapes before path splitting or truncation; OSC payloads can contain `/` and otherwise change path-component semantics before final-sink sanitization.
 - `wrapTextWithAnsi` trims whitespace at word-wrap boundaries; use cell-aware hard wrapping or horizontal scrolling for exact code/text previews.
 - A custom component embedding `Input` or `Editor` must implement `Focusable` and forward `focused`. Sanitize pasted input after handling but before rendering/filtering so the child retains its own cursor escapes.
+- Pi can remove `ctx.ui.custom()` components during session reset without invoking their `done()` callback or `dispose()`. Retain active components and explicitly dispose and settle them from session replacement and shutdown hooks.
 - Pi's public `SelectList.handleInput()` reads global keybindings, while `ctx.ui.select()` maps both Escape and Ctrl+C to `undefined`. Wrappers needing injected keys or distinct Back/Close outcomes must dispatch those keys themselves.
 - `Editor.getText()` retains large pastes as markers; use `getExpandedText()` when moving a draft outside that editor.
 - Tests constructing `BorderedLoader` must initialize a theme and dispose the loader harness so its animation timer cannot keep Node alive.

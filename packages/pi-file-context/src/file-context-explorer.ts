@@ -9,6 +9,9 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import type { ContentSearchMatch } from "./content-search.js";
+import { ContentSearchSession } from "./content-search-session.js";
+import { highlightContentRanges } from "./content-search-ui.js";
 import {
 	createFileQuote,
 	createFileQuoteSnapshot,
@@ -39,19 +42,23 @@ interface FileQuoteExplorerOptions {
 	theme: Theme;
 	keybindings: KeybindingsManager;
 	files: readonly string[];
-	loadFile: (path: string) => Promise<LoadedProjectTextFile>;
+	cwd?: string;
+	loadFile: (path: string, signal?: AbortSignal) => Promise<LoadedProjectTextFile>;
 	gitContext?: GitContext;
 	done: (result: FileQuoteExplorerResult | undefined) => void;
 }
 
 export class FileQuoteExplorer implements Component, Focusable {
 	private readonly search = new Input();
+	private readonly contentSearch: ContentSearchSession;
 	private readonly revisionInput = new Input();
 	private readonly fileSearch: ProjectFileSearch;
 	private filteredFiles: string[];
 	private selectedFileIndex = 0;
 	private fileScrollOffset = 0;
-	private mode: "files" | "preview" | "history" | "revision" | "diff" = "files";
+	private mode: "files" | "contents" | "preview" | "history" | "revision" | "diff" = "files";
+	private previewReturnMode: "files" | "contents" = "files";
+	private activeContentMatch: ContentSearchMatch | undefined;
 	private loadedFile: LoadedProjectTextFile | undefined;
 	private loadedGit: GitFileContext | undefined;
 	private previewCursor = 0;
@@ -65,14 +72,36 @@ export class FileQuoteExplorer implements Component, Focusable {
 	private diffHunkIndex = 0;
 	private diffScrollOffset = 0;
 	private detailRequest = 0;
+	private detailController: AbortController | undefined;
+	private openRequest = 0;
+	private openController: AbortController | undefined;
 	private loading = false;
 	private error: string | undefined;
 	private finished = false;
+	private disposed = false;
 	private isFocused = false;
 
 	constructor(private readonly options: FileQuoteExplorerOptions) {
 		this.fileSearch = new ProjectFileSearch(options.files);
 		this.filteredFiles = [...options.files];
+		this.contentSearch = new ContentSearchSession({
+			tui: options.tui,
+			theme: options.theme,
+			keybindings: options.keybindings,
+			files: options.files,
+			cwd: options.cwd,
+			loadFile: options.loadFile,
+			onPreview: (match) => {
+				void this.openFile(match.path, {
+					returnMode: "contents",
+					cursorIndex: match.lineNumber - 1,
+					match,
+				});
+			},
+			onReference: (path) => this.finish({ kind: "reference", path }),
+			onSwitchFiles: () => this.showFileSearch(),
+			onCancel: () => this.finish(undefined),
+		});
 	}
 
 	get focused(): boolean {
@@ -82,12 +111,14 @@ export class FileQuoteExplorer implements Component, Focusable {
 	set focused(value: boolean) {
 		this.isFocused = value;
 		this.search.focused = value && this.mode === "files";
+		this.contentSearch.focused = value && this.mode === "contents";
 		this.revisionInput.focused = value && this.mode === "revision";
 	}
 
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
 		if (this.mode === "files") return this.renderFileList(safeWidth);
+		if (this.mode === "contents") return this.renderContentSearch(safeWidth);
 		if (this.mode === "history") return this.renderHistory(safeWidth);
 		if (this.mode === "revision") return this.renderRevisionInput(safeWidth);
 		if (this.mode === "diff") return this.renderDiff(safeWidth);
@@ -95,12 +126,13 @@ export class FileQuoteExplorer implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
-		if (this.finished) return;
+		if (this.finished || this.disposed) return;
 		if (matchesKey(data, Key.ctrl("c"))) {
 			this.finish(undefined);
 			return;
 		}
 		if (this.mode === "files") this.handleFileInput(data);
+		else if (this.mode === "contents") this.handleContentInput(data);
 		else if (this.mode === "history") this.handleHistoryInput(data);
 		else if (this.mode === "revision") this.handleRevisionInput(data);
 		else if (this.mode === "diff") this.handleDiffInput(data);
@@ -110,7 +142,20 @@ export class FileQuoteExplorer implements Component, Focusable {
 
 	invalidate(): void {
 		this.search.invalidate();
+		this.contentSearch.invalidate();
 		this.revisionInput.invalidate();
+	}
+
+	dispose(): void {
+		if (this.disposed) return;
+		this.disposed = true;
+		this.contentSearch.dispose();
+		this.cancelOpenRequest();
+		this.cancelDetailRequest();
+		if (!this.finished) {
+			this.finished = true;
+			this.options.done(undefined);
+		}
 	}
 
 	private renderFileList(width: number): string[] {
@@ -159,7 +204,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 					)
 				: this.options.theme.fg(
 						"muted",
-						`${this.filteredFiles.length} files · ↑↓ navigate · Enter preview · Tab reference · Esc cancel`,
+						`${this.filteredFiles.length} files · ↑↓ navigate · Enter preview · Tab reference · Ctrl+F contents · Esc cancel`,
 					);
 		return fitRows(
 			[
@@ -170,6 +215,11 @@ export class FileQuoteExplorer implements Component, Focusable {
 			],
 			availableRows,
 		);
+	}
+
+	private renderContentSearch(width: number): string[] {
+		const availableRows = Math.max(1, this.options.tui.terminal.rows - RESERVED_APP_ROWS);
+		return this.contentSearch.render(width, availableRows, this.loading, this.error);
 	}
 
 	private renderPreview(width: number): string[] {
@@ -196,7 +246,16 @@ export class FileQuoteExplorer implements Component, Focusable {
 			const cursor = index === this.previewCursor ? ">" : " ";
 			const marker = changedLines.has(index + 1) ? "+" : deletedAtLines.has(index + 1) ? "-" : " ";
 			const number = String(index + 1).padStart(digits, " ");
-			const line = `${cursor}${marker}${number} │ ${escapeTerminalControls(rawLine)}`;
+			const contentMatch =
+				this.activeContentMatch?.path === loadedFile.path &&
+				this.activeContentMatch.lineNumber === index + 1 &&
+				this.activeContentMatch.line === rawLine
+					? this.activeContentMatch
+					: undefined;
+			const content = contentMatch
+				? highlightContentRanges(rawLine, contentMatch.ranges, this.options.theme)
+				: escapeTerminalControls(rawLine);
+			const line = `${cursor}${marker}${number} │ ${content}`;
 			const styled = selected
 				? this.options.theme.bg("selectedBg", this.options.theme.fg("text", line))
 				: index === this.previewCursor
@@ -215,7 +274,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 		const estimatedTokens = Math.max(1, Math.ceil(Buffer.byteLength(selectedText, "utf8") / 4));
 		const footer = this.error
 			? this.options.theme.fg("error", escapeTerminalControls(this.error))
-			: `~${estimatedTokens} tokens · Enter attach ${selecting} · Space anchor · ↑↓ extend · [] hunks · b blame · h history · r revision · d diff · Esc files`;
+			: `~${estimatedTokens} tokens · Enter attach ${selecting} · Space anchor · ↑↓ extend · [] hunks · b blame · h history · r revision · d diff · Esc ${this.previewReturnMode === "contents" ? "content results" : "files"}`;
 		const project = this.options.gitContext?.project;
 		const gitLabel = this.loadedRevision
 			? `${escapeTerminalControls(this.loadedRevision.revision)}@${this.loadedRevision.commit.slice(0, 12)} · historical`
@@ -350,6 +409,10 @@ export class FileQuoteExplorer implements Component, Focusable {
 	}
 
 	private handleFileInput(data: string): void {
+		if (matchesKey(data, Key.ctrl("f"))) {
+			this.showContentSearch();
+			return;
+		}
 		if (matchesKey(data, Key.escape)) {
 			this.finish(undefined);
 			return;
@@ -399,19 +462,27 @@ export class FileQuoteExplorer implements Component, Focusable {
 		}
 	}
 
+	private handleContentInput(data: string): void {
+		this.cancelOpenRequest();
+		this.error = undefined;
+		this.contentSearch.handleInput(data);
+	}
+
 	private handlePreviewInput(data: string): void {
 		const loadedFile = this.loadedFile;
 		if (!loadedFile) return;
 		const lines = loadedFile.lines;
 		if (matchesKey(data, Key.escape)) {
 			this.cancelDetailRequest();
-			this.mode = "files";
+			this.cancelOpenRequest();
+			this.mode = this.previewReturnMode;
 			this.loadedFile = undefined;
 			this.loadedGit = undefined;
 			this.loadedRevision = undefined;
 			this.previewAnchor = undefined;
 			this.blame = undefined;
-			this.search.focused = this.isFocused;
+			this.search.focused = this.isFocused && this.mode === "files";
+			this.contentSearch.focused = this.isFocused && this.mode === "contents";
 			return;
 		}
 		if (data === " ") {
@@ -612,14 +683,15 @@ export class FileQuoteExplorer implements Component, Focusable {
 			this.error = "Git revision browsing is unavailable";
 			return;
 		}
-		const request = this.beginDetailRequest();
+		const { request, signal } = this.beginDetailRequest();
 		this.error = undefined;
 		this.options.tui.requestRender();
 		try {
-			const loadedRevision = await gitContext.loadRevision(path, revision, historicalPath);
+			const loadedRevision = await gitContext.loadRevision(path, revision, historicalPath, signal);
 			if (this.finished || request !== this.detailRequest) return;
 			this.loadedRevision = loadedRevision;
 			this.loadedFile = { path: loadedRevision.path, lines: loadedRevision.lines };
+			this.activeContentMatch = undefined;
 			this.previewCursor = 0;
 			this.previewAnchor = undefined;
 			this.previewScrollOffset = 0;
@@ -627,10 +699,9 @@ export class FileQuoteExplorer implements Component, Focusable {
 			this.mode = "preview";
 			this.revisionInput.focused = false;
 		} catch (error: unknown) {
-			if (request === this.detailRequest) this.error = formatError(error);
+			if (request === this.detailRequest && !isAbortError(error)) this.error = formatError(error);
 		} finally {
-			if (request === this.detailRequest) this.loading = false;
-			this.options.tui.requestRender();
+			this.finishDetailRequest(request);
 		}
 	}
 
@@ -641,12 +712,17 @@ export class FileQuoteExplorer implements Component, Focusable {
 			this.error = "Git blame is unavailable";
 			return;
 		}
-		const request = this.beginDetailRequest();
+		const { request, signal } = this.beginDetailRequest();
 		const requestedLine = this.previewCursor + 1;
 		this.error = undefined;
 		this.options.tui.requestRender();
 		try {
-			const blame = await gitContext.getBlame(path, requestedLine, this.loadedRevision?.commit);
+			const blame = await gitContext.getBlame(
+				path,
+				requestedLine,
+				this.loadedRevision?.commit,
+				signal,
+			);
 			if (
 				this.finished ||
 				request !== this.detailRequest ||
@@ -658,10 +734,9 @@ export class FileQuoteExplorer implements Component, Focusable {
 			this.blame = blame;
 			if (!blame) this.error = "No blame information for this line";
 		} catch (error: unknown) {
-			if (request === this.detailRequest) this.error = formatError(error);
+			if (request === this.detailRequest && !isAbortError(error)) this.error = formatError(error);
 		} finally {
-			if (request === this.detailRequest) this.loading = false;
-			this.options.tui.requestRender();
+			this.finishDetailRequest(request);
 		}
 	}
 
@@ -672,51 +747,72 @@ export class FileQuoteExplorer implements Component, Focusable {
 			this.error = "Git history is unavailable";
 			return;
 		}
-		const request = this.beginDetailRequest();
+		const { request, signal } = this.beginDetailRequest();
 		this.error = undefined;
 		this.options.tui.requestRender();
 		try {
-			const history = await gitContext.getHistory(path);
+			const history = await gitContext.getHistory(path, signal);
 			if (this.finished || request !== this.detailRequest || this.mode !== "preview") return;
 			this.history = history;
 			this.historyIndex = 0;
 			this.mode = "history";
 		} catch (error: unknown) {
-			if (request === this.detailRequest) this.error = formatError(error);
+			if (request === this.detailRequest && !isAbortError(error)) this.error = formatError(error);
 		} finally {
-			if (request === this.detailRequest) this.loading = false;
-			this.options.tui.requestRender();
+			this.finishDetailRequest(request);
 		}
 	}
 
-	private async openFile(path: string): Promise<void> {
+	private async openFile(
+		path: string,
+		options: {
+			returnMode?: "files" | "contents";
+			cursorIndex?: number;
+			match?: ContentSearchMatch;
+		} = {},
+	): Promise<void> {
+		this.cancelOpenRequest();
+		const request = this.openRequest;
+		const controller = new AbortController();
+		this.openController = controller;
 		this.loading = true;
 		this.error = undefined;
 		this.options.tui.requestRender();
 		try {
 			const [loadedFile, loadedGit] = await Promise.all([
-				this.options.loadFile(path),
-				this.options.gitContext?.getFileContext(path),
+				this.options.loadFile(path, controller.signal),
+				this.options.gitContext?.getFileContext(path, controller.signal),
 			]);
-			if (this.finished) return;
+			if (!this.isCurrentOpenRequest(request, controller)) return;
 			this.loadedFile = loadedFile;
 			this.loadedGit = loadedGit;
 			this.loadedRevision = undefined;
 			this.mode = "preview";
-			this.previewCursor = 0;
+			this.previewReturnMode = options.returnMode ?? "files";
+			this.activeContentMatch = options.match;
+			this.previewCursor = Math.max(
+				0,
+				Math.min(Math.max(0, loadedFile.lines.length - 1), options.cursorIndex ?? 0),
+			);
 			this.previewAnchor = undefined;
-			this.previewScrollOffset = 0;
+			this.previewScrollOffset = Math.max(0, this.previewCursor - 1);
 			this.hunkIndex = -1;
 			this.blame = undefined;
 			this.history = [];
 			this.detailRequest += 1;
 			this.error = undefined;
 			this.search.focused = false;
+			this.contentSearch.focused = false;
 		} catch (error: unknown) {
-			this.error = formatError(error);
+			if (this.isCurrentOpenRequest(request, controller) && !isAbortError(error)) {
+				this.error = formatError(error);
+			}
 		} finally {
-			this.loading = false;
-			this.options.tui.requestRender();
+			if (request === this.openRequest) {
+				this.loading = false;
+				this.openController = undefined;
+			}
+			if (!this.finished && !this.disposed) this.options.tui.requestRender();
 		}
 	}
 
@@ -742,14 +838,61 @@ export class FileQuoteExplorer implements Component, Focusable {
 		this.error = undefined;
 	}
 
-	private beginDetailRequest(): number {
-		const request = ++this.detailRequest;
+	private showContentSearch(): void {
+		this.cancelOpenRequest();
+		this.mode = "contents";
+		this.search.focused = false;
+		this.contentSearch.activate();
+		this.contentSearch.focused = this.isFocused;
+		this.error = undefined;
+	}
+
+	private showFileSearch(): void {
+		this.contentSearch.deactivate();
+		this.cancelOpenRequest();
+		this.mode = "files";
+		this.search.focused = this.isFocused;
+		this.error = undefined;
+	}
+
+	private cancelOpenRequest(): void {
+		this.openRequest += 1;
+		this.openController?.abort();
+		this.openController = undefined;
+		this.loading = false;
+	}
+
+	private isCurrentOpenRequest(request: number, controller: AbortController): boolean {
+		return (
+			!this.finished &&
+			!this.disposed &&
+			request === this.openRequest &&
+			this.openController === controller &&
+			!controller.signal.aborted
+		);
+	}
+
+	private beginDetailRequest(): { request: number; signal: AbortSignal } {
+		this.cancelDetailRequest();
+		const request = this.detailRequest;
+		const controller = new AbortController();
+		this.detailController = controller;
 		this.loading = true;
-		return request;
+		return { request, signal: controller.signal };
+	}
+
+	private finishDetailRequest(request: number): void {
+		if (request === this.detailRequest) {
+			this.loading = false;
+			this.detailController = undefined;
+		}
+		if (!this.finished && !this.disposed) this.options.tui.requestRender();
 	}
 
 	private cancelDetailRequest(): void {
 		this.detailRequest += 1;
+		this.detailController?.abort();
+		this.detailController = undefined;
 		this.loading = false;
 	}
 
@@ -762,6 +905,9 @@ export class FileQuoteExplorer implements Component, Focusable {
 
 	private finish(result: FileQuoteExplorerResult | undefined): void {
 		this.finished = true;
+		this.contentSearch.dispose();
+		this.cancelOpenRequest();
+		this.cancelDetailRequest();
 		this.options.done(result);
 	}
 
@@ -812,6 +958,10 @@ function escapeTerminalControls(text: string): string {
 function formatHistoryDate(authorTime: number): string {
 	const date = new Date(authorTime * 1_000);
 	return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : "unknown-date";
+}
+
+function isAbortError(error: unknown): boolean {
+	return error instanceof Error && error.name === "AbortError";
 }
 
 function formatError(error: unknown): string {
