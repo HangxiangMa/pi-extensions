@@ -72,18 +72,16 @@ export async function searchProjectContents(
 			const line = file.lines[lineIndex] ?? "";
 			const literalRanges = findLiteralRanges(line, literalExpression);
 			if (literalRanges.length > 0) {
-				for (const range of literalRanges) {
-					if (matches.length < maxResults) {
-						matches.push({
-							path: file.path,
-							lineNumber: lineIndex + 1,
-							line,
-							ranges: [range],
-							fuzzy: false,
-						});
-					} else {
-						truncated = true;
-					}
+				if (matches.length < maxResults) {
+					matches.push({
+						path: file.path,
+						lineNumber: lineIndex + 1,
+						line,
+						ranges: literalRanges,
+						fuzzy: false,
+					});
+				} else {
+					truncated = true;
 				}
 				continue;
 			}

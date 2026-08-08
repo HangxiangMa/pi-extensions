@@ -28,6 +28,30 @@ test("content search defaults to literal case-insensitive matching with exact ra
 	);
 });
 
+test("content search combines same-line literal ranges into one bounded result", async () => {
+	const result = await searchProjectContents(
+		["repeated.txt"],
+		async (path) => ({ path, lines: ["needle then needle", "later needle"] }),
+		"needle",
+		{ maxResults: 2 },
+	);
+
+	assert.deepEqual(
+		result.matches.map(({ lineNumber, ranges }) => ({ lineNumber, ranges })),
+		[
+			{
+				lineNumber: 1,
+				ranges: [
+					{ start: 0, end: 6 },
+					{ start: 12, end: 18 },
+				],
+			},
+			{ lineNumber: 2, ranges: [{ start: 6, end: 12 }] },
+		],
+	);
+	assert.equal(result.truncated, false);
+});
+
 test("content search independently toggles case-sensitive and fuzzy matching", async () => {
 	const caseSensitive = await searchProjectContents([...files.keys()], loadFile, "this is", {
 		caseSensitive: true,

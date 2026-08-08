@@ -152,6 +152,10 @@ export class FileQuoteExplorer implements Component, Focusable {
 		this.contentSearch.dispose();
 		this.cancelOpenRequest();
 		this.cancelDetailRequest();
+		if (!this.finished) {
+			this.finished = true;
+			this.options.done(undefined);
+		}
 	}
 
 	private renderFileList(width: number): string[] {

@@ -68,6 +68,11 @@ interface LoadOptions {
 	signal?: AbortSignal;
 }
 
+interface ActiveExplorer {
+	controller: AbortController;
+	component?: FileQuoteExplorer;
+}
+
 export async function discoverProjectFiles(
 	root: string,
 	options: DiscoveryOptions = {},
@@ -301,7 +306,7 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 	let installedEditorFactory: unknown;
 	let activeSessionManager: unknown;
 	let sessionGeneration = 0;
-	const explorerControllers = new Set<AbortController>();
+	const activeExplorers = new Set<ActiveExplorer>();
 
 	const clearPending = (ctx: ExtensionContext) => {
 		pendingQuotes = [];
@@ -334,8 +339,11 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 		owner === activeSessionManager && generation === sessionGeneration;
 
 	const cancelExplorers = () => {
-		for (const controller of explorerControllers) controller.abort();
-		explorerControllers.clear();
+		for (const explorer of activeExplorers) {
+			explorer.controller.abort();
+			explorer.component?.dispose();
+		}
+		activeExplorers.clear();
 	};
 
 	const openExplorer = async (ctx: ExtensionContext): Promise<void> => {
@@ -345,8 +353,9 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 		}
 		const owner = ctx.sessionManager;
 		const generation = sessionGeneration;
-		const controller = new AbortController();
-		explorerControllers.add(controller);
+		const activeExplorer: ActiveExplorer = { controller: new AbortController() };
+		const { controller } = activeExplorer;
+		activeExplorers.add(activeExplorer);
 		try {
 			const [files, gitContext] = await Promise.all([
 				discoverProjectFiles(ctx.cwd, { signal: controller.signal }),
@@ -358,8 +367,8 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 				return;
 			}
 			const result = await ctx.ui.custom<FileQuoteExplorerResult | undefined>(
-				(tui, theme, keybindings, done) =>
-					new FileQuoteExplorer({
+				(tui, theme, keybindings, done) => {
+					const component = new FileQuoteExplorer({
 						tui,
 						theme,
 						keybindings,
@@ -368,7 +377,11 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 						loadFile: (path, signal) => loadProjectTextFile(ctx.cwd, path, { signal }),
 						gitContext,
 						done,
-					}),
+					});
+					activeExplorer.component = component;
+					if (controller.signal.aborted) component.dispose();
+					return component;
+				},
 			);
 			if (!isCurrentSession(owner, generation) || controller.signal.aborted) return;
 			if (result?.kind === "quote") appendPending(result.quote, ctx);
@@ -389,7 +402,7 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 				// The session may have been replaced while the picker was open.
 			}
 		} finally {
-			explorerControllers.delete(controller);
+			activeExplorers.delete(activeExplorer);
 		}
 	};
 
