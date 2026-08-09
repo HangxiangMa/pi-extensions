@@ -1,4 +1,4 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import {
 	type RunRoute,
@@ -21,7 +21,7 @@ export type SyncResolutionResult =
 	| { kind: "stale" };
 
 export async function showSyncResolution(
-	ctx: ExtensionCommandContext,
+	ctx: ExtensionContext,
 	initialDecision: SyncDecision,
 	runRoute: RunRoute,
 	sessionSignal?: AbortSignal,
@@ -31,7 +31,7 @@ export async function showSyncResolution(
 	let currentDecision = initialDecision;
 	let resolvedDirection: SyncResolutionDirection | undefined;
 	let chainedResult: { result: RunRouteResult; route: SyncResolutionDirection } | undefined;
-	const menu = defineMenu<SyncDecision, Screen, Action, ExtensionCommandContext>({
+	const menu = defineMenu<SyncDecision, Screen, Action, ExtensionContext>({
 		start: "resolve",
 		screens: {
 			resolve: ({ state }) => ({

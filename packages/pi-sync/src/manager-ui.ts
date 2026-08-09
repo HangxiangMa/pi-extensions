@@ -15,6 +15,12 @@ import {
 import { showAddGitTarget, showEditGitTarget, showGitSetup } from "./git-ui.js";
 import { inspectLock, isStaleLock } from "./lock.js";
 import {
+	attentionMainMenuItems,
+	blockedSyncMenuItem,
+	type SyncManagerAttentionOptions,
+	showManagerAttention,
+} from "./manager-attention.js";
+import {
 	errorMessage,
 	ownRecord,
 	requiredExistingBucket,
@@ -42,6 +48,7 @@ export async function showSyncManager(
 	ctx: ExtensionCommandContext,
 	runRoute: RunRoute,
 	sessionSignal?: AbortSignal,
+	options: SyncManagerAttentionOptions = {},
 ): Promise<void> {
 	if (!ctx.hasUI) {
 		await runRoute("help");
@@ -49,6 +56,7 @@ export async function showSyncManager(
 	}
 	type Screen = "main" | "more" | "recovery";
 	type Action =
+		| "review-attention"
 		| "sync"
 		| "switch"
 		| "diff"
@@ -74,7 +82,12 @@ export async function showSyncManager(
 				kind: "actions",
 				title: "Manage sync",
 				lines: state.manager.title.split("\n").slice(1),
-				items: state.manager.actions.map(syncMainMenuItem),
+				items: [
+					...attentionMainMenuItems(state.manager),
+					...state.manager.actions.map(
+						(label) => blockedSyncMenuItem(label, state.manager) ?? syncMainMenuItem(label),
+					),
+				],
 				hint: "close",
 			}),
 			more: () => ({
@@ -110,7 +123,28 @@ export async function showSyncManager(
 			}),
 		},
 		actions: {
+			"review-attention": async () => {
+				const attention = options.getAttention?.();
+				if (!attention) return { kind: "stay" };
+				const disposition = await showManagerAttention(
+					ctx,
+					attention,
+					runRoute,
+					sessionSignal,
+					() => options.onSelectionResolved?.(attention),
+				);
+				return { kind: disposition };
+			},
 			sync: async () => {
+				const pendingAttention = options.getAttention?.();
+				if (pendingAttention) {
+					const activeConfig = await loadConfig();
+					if (sessionSignal?.aborted) return { kind: "close" };
+					if (pendingAttention.decision.setupName === activeConfig.setupName) {
+						ctx.ui.notify("Review synced content before starting Sync now.", "warning");
+						return { kind: "stay" };
+					}
+				}
 				const result = await runCancellableOperation(
 					ctx,
 					"Checking current sync setup…",
@@ -225,10 +259,14 @@ export async function showSyncManager(
 	});
 	await runMenu(ctx, menu, {
 		getState: async () => {
+			const pendingAttention = options.getAttention?.();
 			const [manager, lock] = await Promise.all([
-				describeManagerState(sessionSignal),
+				describeManagerState(sessionSignal, pendingAttention),
 				inspectLock(),
 			]);
+			if (pendingAttention && options.getAttention?.() === pendingAttention && !manager.attention) {
+				options.onSelectionResolved?.(pendingAttention);
+			}
 			return {
 				manager,
 				canRecover:

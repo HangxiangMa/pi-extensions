@@ -1,4 +1,4 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
 	CancellableOperationResult,
 	RunRoute,
@@ -14,12 +14,19 @@ export interface ManagerResultDisposition {
 	appliedRoute?: "sync" | "pull" | "push";
 }
 
+export interface ManagerResultOptions {
+	cancelLabel?: string;
+	onSelectionResolved?: () => void;
+	withStateAccess?: <T>(task: () => Promise<T>) => Promise<T>;
+}
+
 export async function dispatchManagerResult(
-	ctx: ExtensionCommandContext,
+	ctx: ExtensionContext,
 	initialResult: CancellableOperationResult,
 	origin: Exclude<RemoteSelectionOrigin, "settings">,
 	runRoute: RunRoute,
 	signal?: AbortSignal,
+	options: ManagerResultOptions = {},
 ): Promise<ManagerResultDisposition> {
 	let result: CancellableOperationResult | RunRouteResult = initialResult;
 	let currentRoute: "sync" | "pull" | "push" = origin;
@@ -38,6 +45,9 @@ export async function dispatchManagerResult(
 					decision: result.decision,
 					origin: currentRoute,
 					runRoute,
+					cancelLabel: options.cancelLabel,
+					onSelectionResolved: options.onSelectionResolved,
+					withStateAccess: options.withStateAccess,
 				},
 			);
 			if (resolution.kind === "route-result") {
