@@ -15,15 +15,17 @@ Use it to split independent research, planning, implementation, and review work 
 - Lets users set a blocking parallel call's maximum worker count from 1 through 64 while keeping four-at-a-time execution.
 - Registers detached stateful lifecycle tools by default; completion can stay queued for the next turn or opt into an idle root synthesis turn.
 - Supports an opt-in public-SDK `in-process` stateful transport with one reusable child `AgentSession` per `agentId`.
+- Supports an opt-in persistent `rpc` transport with one isolated Pi RPC process per active retained agent and `pi-subagents:v1` lifecycle metadata.
+- Supports deterministic opt-in `auto` routing: read-only built-ins use in-process, write-capable built-ins use RPC, and custom tools use the compatibility subprocess path.
 - Supports built-in `scout`, `planner`, `reviewer`, and `worker` agents.
 - Loads custom user agents from `~/.pi/agent/agents/*.md`.
 - Optionally loads project agents from `.pi/agents/*.md` with confirmation.
 - Provides a current-session-first `/subagents` manager, direct `settings|status|help` routes, and compatibility aliases for agent tools and retained agents.
-- Supports trust-aware per-task `cwd` policies, hard subprocess `timeoutMs`, task-selected `thinkingLevel`, abort propagation, and streaming progress.
+- Supports trust-aware per-task `cwd` policies, hard `timeoutMs`, task-selected `thinkingLevel`, abort propagation, bounded progress and timing telemetry, and explicit Fast, Balanced, or Deep thinking profiles.
 - Renders all seven tools with Pi-native compact/expanded transcript rows; long-running blocking and consultation calls show bounded live activity.
 - Bounds JSON lines, captured messages, stderr, final output, chain substitution, and fan-in context.
 - Enforces a recursion-depth guard and deterministic process-group termination.
-- Provides addressable stateful agents with follow-up, consolidated mailbox/management actions, context selection, and persistence.
+- Provides addressable stateful agents with follow-up, consolidated mailbox/management actions, idempotent spawn retries, context selection and preview, opt-in structured completion metadata, and persistence.
 - Publishes transient runtime status through Pi's generic extension status API while subagents are running.
 - Returns complete bounded worker output in tool details and a concise result for the main agent.
 
@@ -108,7 +110,9 @@ Common controls:
 
 - `cwd` — choose a launch directory subject to the user-owned trust-aware target policy described below.
 - `timeoutMs` — set a hard subprocess timeout.
-- `thinkingLevel` — request `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` thinking for the spawned Pi process or in-process child.
+- `thinkingLevel` — request `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` thinking for the spawned Pi process or retained child.
+- `idempotencyKey` — make an exact `subagent_spawn` retry return the existing retained `agentId`; reuse with different parameters fails before confirmation, worktree creation, or child launch.
+- `resultFormat` — keep bounded text by default or request the opt-in `structured-v1` summary/evidence/changes/verification/risks contract with text fallback.
 
 For `subagent_spawn`, the root agent selects the lowest thinking level sufficient for the delegated task. This is a tool-argument decision made from the task already in context; `pi-subagents` does not run a string heuristic or an extra classifier model call.
 
@@ -218,8 +222,9 @@ A blocking fan-out is reserved for output that must be synthesized before the ro
 | `list_agents` | Optional `agentScope` (default `user`) and `limit` (default 32, maximum 100) | Bounded agent metadata and omission counts |
 | `get_agent` | Required `agent`; optional `agentScope` | One resolved definition, safe source path, configured tools, and consultation-effective tools; never the system prompt |
 | `list_runs` | Optional `includeClosed` and `limit` (default 50, maximum 100) | Metadata-only retained-run summaries and unread counts |
-| `get_run` | Required `agentId` | Safe `cwd`, current-task/error summaries, thinking level, policy, history count, and unread count |
+| `get_run` | Required `agentId` | Safe `cwd`, current-task/error summaries, thinking level, context footprint, protocol, effective transport, bounded timing/usage telemetry, structured result when valid, policy, history count, and unread count |
 | `list_models` | Optional `limit` (default 50, maximum 100) | Session-scoped models, or the already-loaded available snapshot |
+| `preview_context` | Optional `context` and `contextEntryIds` | Selected mode, user turns, source count, UTF-8 bytes, and truncation without returning context text |
 | `status` | No additional fields | Effective workflow, runtime counts/transport, detached limit values, completion delivery, consultation resources, and configured/runtime settings with per-field sources |
 | `diagnose` | No additional fields | Structured `pass`, `warning`, and `fail` checks; failed checks are report data rather than a tool error |
 
@@ -349,12 +354,18 @@ A detached agent additionally needs a concrete isolation or specialization benef
 
 Auto-resume is best-effort because Pi's custom-message API is fire-and-forget. Session-generation checks, shutdown cleanup, batching, and the in-flight wake guard prevent stale or duplicate scheduling pressure, but they do not make completion delivery durable across process exit.
 
-The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history. Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
+The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history.
+Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
+Set it to `rpc` to retain one `pi --mode rpc --no-session --no-extensions` process per active retained agent, preserving native child history with a separate process boundary.
+Set it to `auto` for deterministic preflight selection: read-only built-in tools use in-process, write-capable built-in tools use RPC, and extension/custom tools use subprocess.
+Automatic selection never falls back after child creation or prompt acceptance.
 
 Run `/subagents` in TUI mode to open the standard primary manager.
 It leads with the current delegation workflow, human-readable async completion behavior, consultation/delegation target policies, consultation-resource policy, parallel-worker limit, and active/retained counts.
 **Change delegation**, **Current agents**, and **Settings** cover the common workflows.
-Agent permissions, **Maximum parallel workers**, **Detached agent limits**, transport/runtime details, source, and settings path remain under **Advanced settings**.
+Agent permissions, **Maximum parallel workers**, **Detached agent limits**, **Performance and execution**, transport/runtime details, source, and settings path remain under **Advanced settings**.
+**Performance and execution** provides responsiveness guidance, transport previews, Fast/Balanced/Deep thinking profiles, and per-agent model/thinking/timeout defaults.
+Profiles are explicit atomic thinking patches, preserve model/tool/timeout/context settings, never select `max`, and can be customized afterward.
 The parallel-worker input rejects invalid values without discarding the draft and applies a successful save immediately.
 The detached-limit screen edits retained capacity, active-turn concurrency, direct children, tree depth, and stored-record capacity.
 Detached-limit saves are durable immediately but apply to the runtime after `/reload` or the next Pi session.
@@ -371,7 +382,7 @@ The direct routes remain predictable: `/subagents settings` changes both target 
   },
   "stateful": {
     "enabled": true,
-    "transport": "in-process",
+    "transport": "auto",
     "completionDelivery": "auto-resume",
     "maxAgents": 16,
     "maxActiveTurns": 4,
@@ -416,7 +427,7 @@ This avoids lifecycle-driven tool-schema churn and preserves a stable provider p
 
 | Tool | Purpose |
 | --- | --- |
-| `subagent_spawn` | Start detached work with an optional task-selected thinking level, return an opaque `agentId` immediately, and deliver completion asynchronously. |
+| `subagent_spawn` | Start detached work with optional task-selected thinking, exact-retry `idempotencyKey`, and `text` or `structured-v1` result format; return an opaque `agentId` immediately and deliver completion asynchronously. |
 | `subagent_send` | Send follow-up work and trigger a new turn on a reusable agent; shared-workspace write conflicts are guarded unless explicitly overridden. |
 | `subagent_manage` | Use `action: "list"` to inspect agents, `"interrupt"` to retain an agent after aborting active work, or `"close"` to release it; interrupt/close accept optional `subtree`. |
 | `subagent_mailbox` | Use `action: "send"` for queue-only messages that do not start a turn, or `"read"` to read and optionally acknowledge unread messages. |
@@ -472,6 +483,23 @@ A spawn can request a thinking level explicitly:
 
 The requested level is stored with the stateful agent and remains in effect for all follow-ups and after persisted restore. `subagent_send` does not provide a per-turn thinking override; create a new agent when a later task needs a different level.
 
+An exact retry can use a bounded session-owned idempotency key:
+
+```json
+{
+  "agent": "worker",
+  "task": "Implement the approved change",
+  "idempotencyKey": "approved-change-1"
+}
+```
+
+The same key and canonical request returns the existing retained `agentId` without another confirmation, worktree, or child.
+Reusing the key with different behavior-affecting parameters fails.
+Closing the retained record releases the key.
+
+Set `resultFormat: "structured-v1"` to ask for versioned `summary`, `evidence`, `changes`, `verification`, and `risks` fields.
+Valid structured data appears in completion and inspection details, while the bounded final text remains authoritative fallback when the model returns malformed or ordinary text.
+
 `subagent_spawn.context` accepts:
 
 - `"none"` (default) — no parent conversation.
@@ -479,21 +507,31 @@ The requested level is stored with the stateful agent and remains in effect for 
 - `"summary"` — a bounded earlier-context checkpoint plus recent messages verbatim.
 - A positive number — the most recent N user turns and related assistant text.
 
-Use `contextEntryIds` to select exact session entries. Supplying IDs without `context` implies `context: "all"`; an explicit `context: "none"` still disables parent context. Stable source IDs are retained so repeated follow-ups do not need to duplicate parent context.
+Use `contextEntryIds` to select exact session entries.
+Supplying IDs without `context` implies `context: "all"`; an explicit `context: "none"` still disables parent context.
+Stable source IDs are retained so repeated follow-ups do not need to duplicate parent context.
+Use `subagent_inspect` with `action: "preview_context"` to inspect selected turns, source count, UTF-8 bytes, and truncation before spawning without returning the context text.
+The byte count is not a provider token estimate.
 
 Reasoning, tool results, custom transport messages, and non-text parts are excluded. Text inside `<private>...</private>` and lines containing `[subagent-private]` are omitted before context, mailbox content, or history is persisted.
 
 Stateful execution uses a transport boundary:
 
-- `subprocess` is the default compatibility and rollback path.
+- `subprocess` is the default compatibility and rollback path and starts a fresh child for every turn.
 - `in-process` uses only public Pi SDK APIs: `createAgentSessionServices()`, `createAgentSessionFromServices()`, `SessionManager.inMemory()`, and normal session lifecycle methods. It isolates conversation/tool selection, not memory or crashes; child failures share the parent Node.js process.
-- Child resource loading sets `noExtensions: true`, preventing recursive `pi-subagents` loading and duplicate extension side effects while retaining trust-eligible context/skill resources and the selected agent prompt. Both transports receive the same resolved target-trust boolean: subprocess children get explicit `--approve`/`--no-approve`, and in-process children set the same `SettingsManager.projectTrusted` value.
+- `rpc` uses strict bounded JSONL over one lazy child process per active retained agent. A `get_state` response proves readiness, prompt response means accepted only, and `agent_settled` is the completion boundary after retry or compaction.
+- `auto` selects one transport before launch and retains the choice for that agent's runtime lifetime. It never retries through another transport after startup or accepted work.
+- In-process and RPC child resource loading disables extensions to prevent recursive `pi-subagents` loading and duplicate extension side effects while retaining trust-eligible context/skill resources and the selected agent prompt. The compatibility subprocess path retains its recursion-depth guard and configured tool behavior. Transports receive the same resolved target-trust boolean through their public SDK or explicit CLI trust controls.
 - Agent model strings use Pi core's CLI resolver, including provider/model patterns, fuzzy matching, custom provider model IDs, and `:<thinking>` suffixes. Thinking level and built-in tool allow-list overrides are applied when the child is created. Parent model/thinking changes are snapshotted for subsequently created children; an existing child keeps its own session configuration.
-- Extension/custom tool names are rejected in-process with an actionable recommendation to use `subprocess`; permissions are never silently widened.
-- Timeout, parent abort, close, expiry, and session shutdown abort/dispose owned child sessions. A child that does not settle after abort grace is discarded rather than reused.
+- Extension/custom tool names are rejected by in-process and RPC v1 before child creation; automatic mode selects `subprocess` for them, and permissions are never silently widened.
+- Timeout, parent abort, close, expiry, and session shutdown abort/dispose owned child sessions or process groups. A child that does not settle after abort grace is discarded rather than reused.
+- RPC progress uses `pi-subagents:v1` metadata and reports only bounded phase, queue, timing, effective model/thinking, and validated usage fields; it never exposes raw prompts, reasoning, credentials, environment values, or full RPC events.
+- A successful RPC prompt response is never treated as completion, and accepted or ambiguously accepted work is never replayed automatically.
 - In-process startup failures do not silently retry through subprocesses, preventing duplicate side effects. If the loaded Pi core lacks public `createAgentSessionServices()`, `createAgentSessionFromServices()`, or `resolveCliModel()` support, startup fails with an actionable instruction to select `stateful.transport: "subprocess"`.
 
-No private Pi imports, runtime casts, or `ExtensionAPI` monkey-patching are used. Approval policy, sandbox profile, provider-header hooks, extension state, global scheduling, and parent/child transcript switching are not inherited or provided by the in-process transport.
+No private Pi imports, runtime casts, or `ExtensionAPI` monkey-patching are used.
+The package uses public Pi root RPC types but owns exact CLI resolution, bounded framing, readiness, stderr, cancellation, and process-group cleanup because the stock client does not provide those package-specific guarantees.
+Approval policy, sandbox profile, provider-header hooks, extension state, global scheduling, and parent/child transcript switching are not inherited or provided by in-process or RPC transport.
 
 Write-capable agents share the workspace by default. Concurrent write-capable starts in the same cwd are rejected unless `allowConcurrentWrites` is explicitly set. Classification is intentionally conservative: an agent with `bash`, `write`, or `edit` is write-capable even when its task prompt says “read only,” because prompt wording is not a filesystem sandbox. Prefer one detached agent when asynchronous work can be combined. If concurrent work is genuinely required, use the blocking batch only when synchronous outputs justify making the root unavailable, explicitly accept safe detached overlap with `allowConcurrentWrites`, or use isolated worktrees when repository isolation is needed.
 
@@ -502,6 +540,9 @@ Set `workspaceMode: "worktree"` to opt into a disposable detached Git worktree; 
 ## 📜 Compatibility and failure contract
 
 Existing accepted `subagent` payload shapes remain unchanged.
+`subagent_spawn` adds optional `idempotencyKey` and `resultFormat` fields without changing omitted behavior.
+Older releases do not recognize `stateful.transport: "rpc"` or `"auto"`; change the value to `"subprocess"` and reload before downgrading.
+Retained records remain transport-neutral, and older readers ignore the additive idempotency and context-footprint fields while the state version remains compatible.
 The `tasks` schema now advertises the absolute 64-item safety bound, while the effective `blocking.maxParallelTasks` value may be lower.
 The intentional compatibility change is that an external target without saved trust is rejected by the new default `cwdPolicy.delegation: "trusted-targets"`; set the user-owned policy to `"anywhere"` to restore the preceding target flexibility.
 
@@ -531,12 +572,24 @@ Built-in agents are available without setup and can be overridden by user or pro
 
 The built-in `reviewer` does not run tests, builds, benchmarks, or formatters. It recommends additional verification commands for the main agent to run instead. Custom agents can override this behavior.
 
-Built-in agents inherit the active/default Pi model instead of forcing a provider-specific model alias, which keeps subprocesses usable across different Pi setups.
+Built-in agents inherit the active/default Pi model instead of forcing a provider-specific model alias, which keeps every transport usable across different Pi setups.
+Built-ins also have no fixed thinking override until a caller, frontmatter, per-agent setting, or execution profile selects one.
+
+The optional profiles apply these provider-neutral thinking defaults:
+
+| Profile | `scout` | `planner` | `reviewer` | `worker` and aliases |
+| --- | --- | --- | --- | --- |
+| Fast | `low` | `low` | `medium` | `low` |
+| Balanced | `low` | `medium` | `medium` | `medium` |
+| Deep | `medium` | `high` | `high` | `high` |
+
+Profiles preserve model, timeout, tools, transport, completion delivery, and parent-context behavior.
 
 ## ⚙️ Configure agent tools
 
 Open `/subagents`, choose **Advanced settings**, then **Agent tool permissions** in an interactive
-Pi session to edit the tools each subagent may use. The standard bounded multi-select keeps a
+Pi session to edit the tools each subagent may use.
+Choose **Performance and execution** → **Agent execution defaults** to edit provider-neutral inherited model patterns, thinking levels, and timeouts without changing tools. The standard bounded multi-select keeps a
 one-save draft: toggles do not write until **Save changes**, Escape leaves the draft without writing,
 and unavailable configured tool names remain visible and preserved. In TUI mode, type to fuzzy-search
 tool names and availability metadata; Save and Discard remain pinned below the matches. These are user
@@ -643,7 +696,11 @@ For `subagent_spawn`, the root agent should choose the lowest sufficient level:
 
 Blocking thinking precedence is: task/chain step/aggregator `thinkingLevel` → top-level `thinkingLevel` → agent default from config or frontmatter → Pi subprocess default.
 
-Stateful spawn precedence is: `subagent_spawn.thinkingLevel` → agent default from config or frontmatter → transport fallback. The subprocess transport then uses spawned Pi model/default resolution. The in-process transport delegates configured model parsing to the loaded Pi core and uses its model thinking suffix before the parent thinking snapshot captured when the child is created. An explicit spawn value is retained for the agent lifecycle and wins over all of those fallbacks.
+Stateful spawn precedence is: `subagent_spawn.thinkingLevel` → agent default from settings or frontmatter → model suffix → transport fallback.
+Subprocess uses spawned Pi model/default resolution.
+In-process delegates configured model parsing to loaded Pi core and then uses the parent thinking snapshot captured at child creation.
+RPC passes the selected CLI model and thinking controls before its readiness handshake and reports the effective state returned by Pi.
+An explicit spawn value is retained for the agent lifecycle and wins over every fallback.
 
 Omit `thinkingLevel` to preserve existing behavior. Reported stateful details show the requested level, not a guarantee of the provider's effective value. Pi still owns model capability clamping; `pi-subagents` does not duplicate capability detection.
 
@@ -658,6 +715,18 @@ The child event protocol limits each JSON line to 256 KiB. Captured output uses 
 Truncated text includes a `truncated by pi-subagents` marker and details expose `truncated: true`. Inspection and consultation model-facing content also stops at 2,000 lines, whichever limit is reached first. `PI_SUBAGENT_MAX_DEPTH` controls nested delegation depth and defaults to 1; child processes receive `PI_SUBAGENT_DEPTH` automatically.
 
 ## 📡 Runtime status
+
+Run the offline transport benchmark from the repository root when comparing startup overhead:
+
+```bash
+just benchmark-subagents
+```
+
+It reports serial median and median absolute deviation for deterministic fake fresh-subprocess and retained-RPC turns plus isolated real Pi RPC readiness, retained commands, in-process session creation, and retained in-process state access without making a provider request.
+Queue time starts when the registry accepts work, transport startup starts when execution begins, RPC readiness comes from `get_state`, RPC acceptance comes from the correlated `prompt` response, first activity comes from a bounded lifecycle event, settlement comes from `agent_settled`, and delivery is recorded after the parent accepts the completion message.
+Subprocess and in-process timing fields use the nearest public lifecycle boundary and may be coarser than RPC.
+Timing and progress are current-session diagnostics and are not persisted.
+The benchmark measures transport overhead rather than model latency or output quality.
 
 While the `subagent` tool is running, `pi-subagents` publishes compact activity status with `ctx.ui.setStatus("subagents", "...")`. Any statusline extension that reads Pi's generic extension status API can display it; no package-to-package dependency is required.
 
@@ -693,6 +762,12 @@ packages/pi-subagents/
 │   ├── cwd-policy.ts             # Canonical target and saved-trust resolution
 │   ├── safe-text.ts              # Shared byte/line/path sanitization
 │   ├── stateful.ts               # Detached lifecycle registration and dispatch
+│   ├── rpc-transport.ts          # Persistent strict-JSONL Pi RPC child transport
+│   ├── auto-transport.ts         # Deterministic preflight transport routing
+│   ├── transport-types.ts        # Bounded pi-subagents:v1 progress and telemetry contract
+│   ├── completion-delivery.ts    # Completion batching and optional idle-root wake
+│   ├── execution-profiles.ts     # Provider-neutral thinking profile patches
+│   ├── execution-ui.ts           # Profile and per-agent execution settings screens
 │   ├── stateful-guidance.ts      # Detached model-facing workflow guidance
 │   ├── stateful-lifecycle.ts     # Runtime disposal and spawn ownership guards
 │   ├── stateful-limit-ui.ts      # Detached capacity settings and recovery previews

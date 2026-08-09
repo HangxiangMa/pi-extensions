@@ -9,6 +9,7 @@ import { getResultFinalOutput, runSingleAgent, type SubagentDetails } from "./ru
 import { readSubagentSettings, resolveSubagentThinkingLevel } from "./settings.js";
 import { buildStatefulTurnPrompt, resolveStatefulTurnTimeout } from "./stateful-prompt.js";
 import type { SubagentTransport } from "./transport.js";
+import type { TransportProgressCallback, TransportTelemetry } from "./transport-types.js";
 
 export function resolveStatefulSubprocessThinkingLevel(
 	agents: readonly Pick<AgentConfig, "name" | "thinkingLevel">[],
@@ -26,7 +27,20 @@ export class SubprocessTransport implements SubagentTransport {
 
 	constructor(private readonly options: SubprocessTransportOptions = {}) {}
 
-	async runTurn(record: ManagedAgent, task: string, signal: AbortSignal): Promise<TurnOutcome> {
+	async runTurn(
+		record: ManagedAgent,
+		task: string,
+		signal: AbortSignal,
+		onProgress?: TransportProgressCallback,
+	): Promise<TurnOutcome> {
+		const startedAt = Date.now();
+		const starting: TransportTelemetry = {
+			transport: "subprocess",
+			phase: "starting",
+			updatedAt: startedAt,
+			timing: { startedAt, transportStartedAt: startedAt },
+		};
+		onProgress?.(starting);
 		const settings = this.options.getSettings ? this.options.getSettings() : readSubagentSettings();
 		const discovery = discoverAgents(record.cwd, record.agentScope ?? "user", settings);
 		const agent = discovery.agents.find((candidate) => candidate.name === record.agent);
@@ -56,6 +70,32 @@ export class SubprocessTransport implements SubagentTransport {
 					(record.agentScope === "project" || record.agentScope === "both"),
 			},
 		);
+		const settledAt = Date.now();
+		const telemetry: TransportTelemetry = {
+			...starting,
+			phase: single.aborted ? "interrupted" : single.exitCode === 0 ? "settled" : "failed",
+			failurePhase: single.exitCode === 0 ? undefined : "running",
+			updatedAt: settledAt,
+			timing: {
+				...starting.timing,
+				promptAcceptedAt: single.processStarted ? startedAt : undefined,
+				firstActivityAt: single.messages.length > 0 ? settledAt : undefined,
+				settledAt,
+			},
+			provider: single.actualProvider,
+			model: single.actualModel ?? single.model,
+			thinkingLevel: single.thinkingLevel,
+			usage: {
+				input: single.usage.input,
+				output: single.usage.output,
+				cacheRead: single.usage.cacheRead,
+				cacheWrite: single.usage.cacheWrite,
+				totalTokens: single.usage.totalTokens ?? 0,
+				cost: single.usage.cost,
+				turns: single.usage.turns,
+			},
+		};
+		onProgress?.(telemetry);
 		return {
 			output: getResultFinalOutput(single),
 			exitCode: single.exitCode,
@@ -63,6 +103,7 @@ export class SubprocessTransport implements SubagentTransport {
 			truncated: single.truncated || boundedTask.truncated,
 			error: single.errorMessage || single.stderr || undefined,
 			policy: single.policy,
+			telemetry,
 		};
 	}
 }

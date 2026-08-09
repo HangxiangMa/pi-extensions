@@ -34,6 +34,21 @@ function deliveryHarness(options: { idle?: boolean; pending?: boolean } = {}) {
 	return { pi, ctx, sent };
 }
 
+test("completion delivery reports one deterministic delivery timestamp after success", () => {
+	const harness = deliveryHarness();
+	const delivered: Array<{ ids: string[]; at: number }> = [];
+	const broker = new CompletionDeliveryBroker(harness.pi as never, harness.ctx, "next-turn", {
+		now: () => 1234,
+		onDelivered: (completions, at) => {
+			delivered.push({ ids: completions.map((value) => value.agent.id), at });
+		},
+	});
+	broker.enqueue(completion("sa_timed"));
+	broker.flush();
+	assert.deepEqual(delivered, [{ ids: ["sa_timed"], at: 1234 }]);
+	broker.close();
+});
+
 test("next-turn completion delivery never wakes an idle root", () => {
 	const harness = deliveryHarness();
 	const broker = new CompletionDeliveryBroker(harness.pi as never, harness.ctx, "next-turn");
@@ -45,6 +60,7 @@ test("next-turn completion delivery never wakes an idle root", () => {
 	assert.equal(harness.sent[0]?.message.customType, "pi-subagent-completion");
 	assert.match(String(harness.sent[0]?.message.content), /Agent ID: sa_one/);
 	assert.deepEqual(harness.sent[0]?.message.details, {
+		protocol: "pi-subagents:v1",
 		agentId: "sa_one",
 		agent: "scout",
 		state: "completed",
@@ -67,8 +83,18 @@ test("auto-resume batches simultaneous completions into one root synthesis turn"
 	assert.deepEqual(harness.sent[0]?.message.details, {
 		completionCount: 2,
 		completions: [
-			{ agentId: "sa_one", agent: "scout", state: "completed" },
-			{ agentId: "sa_two", agent: "scout", state: "completed" },
+			{
+				protocol: "pi-subagents:v1",
+				agentId: "sa_one",
+				agent: "scout",
+				state: "completed",
+			},
+			{
+				protocol: "pi-subagents:v1",
+				agentId: "sa_two",
+				agent: "scout",
+				state: "completed",
+			},
 		],
 	});
 	broker.close();

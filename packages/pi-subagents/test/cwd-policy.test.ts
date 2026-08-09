@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
@@ -31,7 +31,7 @@ test("resolves relative descendants with current-session trust", () => {
 			currentProjectTrusted: true,
 			agentDir: value.agentDir,
 		});
-		assert.equal(resolved.cwd, value.child);
+		assert.equal(resolved.cwd, realpathSync(value.child));
 		assert.equal(resolved.boundary, "current-workspace");
 		assert.equal(resolved.trust.kind, "session-trusted");
 		assert.equal(resolved.trust.projectTrusted, true);
@@ -56,7 +56,7 @@ test("uses nearest saved external trust decision", () => {
 		});
 		assert.equal(denied.boundary, "external");
 		assert.equal(denied.trust.kind, "saved-denied");
-		assert.equal(denied.trust.sourcePath, value.external);
+		assert.equal(denied.trust.sourcePath, realpathSync(value.external));
 		assert.equal(denied.trust.projectTrusted, false);
 
 		store.set(value.external, true);
@@ -113,7 +113,7 @@ test("canonicalizes symlinks before workspace and trust classification", () => {
 			currentProjectTrusted: false,
 			agentDir: value.agentDir,
 		});
-		assert.equal(resolved.cwd, value.external);
+		assert.equal(resolved.cwd, realpathSync(value.external));
 		assert.equal(resolved.boundary, "external");
 		assert.equal(resolved.trust.kind, "saved-trusted");
 	} finally {

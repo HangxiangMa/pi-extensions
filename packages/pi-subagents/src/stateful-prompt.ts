@@ -3,9 +3,13 @@ import { redactPrivateText } from "./context.js";
 import { resolveDefaultSubagentTimeoutMs } from "./execution.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
 import type { ManagedAgent } from "./registry.js";
+import { appendResultInstruction } from "./result-contract.js";
 
 export function buildStatefulTurnPrompt(
-	record: Pick<ManagedAgent, "context" | "history" | "mailbox" | "currentMailboxMessageIds">,
+	record: Pick<
+		ManagedAgent,
+		"context" | "history" | "mailbox" | "currentMailboxMessageIds" | "resultFormat"
+	>,
 	task: string,
 	maxBytes = DEFAULT_MAX_CONTEXT_BYTES,
 ): { text: string; truncated: boolean } {
@@ -30,7 +34,7 @@ export function buildStatefulTurnPrompt(
 	]
 		.filter(Boolean)
 		.join("\n\n---\n\n");
-	return truncateUtf8(context, maxBytes);
+	return truncateUtf8(appendResultInstruction(context, record.resultFormat, maxBytes), maxBytes);
 }
 
 export function resolveStatefulTurnTimeout(

@@ -75,6 +75,10 @@ try name: (_validate-package-name name)
     npm --workspace {{ quote("@narumitw/pi-" + name) }} run build --if-present
     pi -e {{ quote("./packages/pi-" + name) }}
 
+# Measure offline pi-subagents transport startup and retained-command overhead
+benchmark-subagents samples="7":
+    node scripts/benchmark-pi-subagents-transports.mjs --samples {{ quote(samples) }}
+
 # Start Pi with the commonly used extensions loaded from this working tree
 # PI_TIMING reports startup timing for local extension development
 dev:

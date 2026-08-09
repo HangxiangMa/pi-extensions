@@ -14,7 +14,10 @@ import {
 	discoverAgents,
 } from "./agents.js";
 import { resolveConsultTools } from "./consult-policy.js";
+import { buildContextSnapshot, type ContextMode } from "./context.js";
 import { renderInspectCall, renderInspectResult } from "./inspect-render.js";
+import { DEFAULT_MAX_CONTEXT_BYTES } from "./limits.js";
+import { resolvePiInvocation } from "./pi-invocation.js";
 import type { AgentRunInspectionDetail, AgentRunInspectionSummary } from "./registry.js";
 import { boundedPrivateText, boundText, safeDisplayPath, safeTerminalLine } from "./safe-text.js";
 import {
@@ -24,6 +27,7 @@ import {
 	inspectCwdPolicySettings,
 	inspectDelegationWorkflowSettings,
 	inspectStatefulLimitSettings,
+	inspectStatefulTransportSettings,
 	inspectSubagentSettings,
 	resolveDelegationWorkflow,
 } from "./settings.js";
@@ -35,6 +39,7 @@ const INSPECT_ACTIONS = [
 	"list_runs",
 	"get_run",
 	"list_models",
+	"preview_context",
 	"status",
 	"diagnose",
 ] as const;
@@ -45,6 +50,10 @@ const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 });
 
 const LimitSchema = Type.Number({ minimum: 1, maximum: 100, multipleOf: 1 });
+const ContextModeSchema = Type.Union([
+	StringEnum(["none", "all", "summary"] as const),
+	Type.Number({ minimum: 1, multipleOf: 1 }),
+]);
 const MAX_DETAILS_LIST_BYTES = 40 * 1024;
 
 export const SubagentInspectParams = Type.Object(
@@ -55,6 +64,8 @@ export const SubagentInspectParams = Type.Object(
 		agentScope: Type.Optional(AgentScopeSchema),
 		limit: Type.Optional(LimitSchema),
 		includeClosed: Type.Optional(Type.Boolean({ default: false })),
+		context: Type.Optional(ContextModeSchema),
+		contextEntryIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
 	},
 	{ additionalProperties: false },
 );
@@ -83,6 +94,7 @@ type ValidatedInspectOperation =
 	| { action: "list_runs"; includeClosed: boolean; limit: number }
 	| { action: "get_run"; agentId: string }
 	| { action: "list_models"; limit: number }
+	| { action: "preview_context"; context: ContextMode; contextEntryIds?: string[] }
 	| { action: "status" }
 	| { action: "diagnose" };
 
@@ -122,6 +134,7 @@ export function validateInspectParams(params: unknown): ValidatedInspectOperatio
 		list_runs: ["action", "includeClosed", "limit"],
 		get_run: ["action", "agentId"],
 		list_models: ["action", "limit"],
+		preview_context: ["action", "context", "contextEntryIds"],
 		status: ["action"],
 		diagnose: ["action"],
 	};
@@ -153,6 +166,15 @@ export function validateInspectParams(params: unknown): ValidatedInspectOperatio
 	}
 	if (action === "list_models") {
 		return { action, limit: optionalLimit(values.limit, 50) };
+	}
+	if (action === "preview_context") {
+		const context = optionalContextMode(values.context);
+		const contextEntryIds = optionalStringArray(values.contextEntryIds, "contextEntryIds");
+		return {
+			action,
+			context: values.context === undefined && contextEntryIds ? "all" : context,
+			...(contextEntryIds ? { contextEntryIds } : {}),
+		};
 	}
 	return { action };
 }
@@ -210,6 +232,24 @@ async function executeSubagentInspect(
 	if (operation.action === "list_models") {
 		return inspectResult({ action: operation.action, ...projectModels(ctx, operation.limit) });
 	}
+	if (operation.action === "preview_context") {
+		const snapshot = buildContextSnapshot(
+			ctx.sessionManager.getBranch(),
+			operation.context,
+			DEFAULT_MAX_CONTEXT_BYTES,
+			operation.contextEntryIds,
+		);
+		return inspectResult({
+			action: operation.action,
+			preview: {
+				mode: operation.context,
+				turns: snapshot.turns,
+				sourceCount: snapshot.sourceIds.length,
+				bytes: Buffer.byteLength(snapshot.text, "utf8"),
+				truncated: snapshot.truncated,
+			},
+		});
+	}
 	if (operation.action === "status") {
 		return inspectResult({ action: operation.action, status: projectStatus(runtime) });
 	}
@@ -218,6 +258,8 @@ async function executeSubagentInspect(
 	const userDiscovery = discoverAgents(ctx.cwd, "user", settings.settings);
 	const modelCount = availableModelCount(ctx);
 	const runtimeStatus = runtime.getRuntimeStatus();
+	const rpcCapability = inspectRpcCapability();
+	const inProcessCapability = await inspectInProcessCapability();
 	const checks = [
 		{
 			name: "settings",
@@ -246,6 +288,20 @@ async function executeSubagentInspect(
 			message: runtimeStatus.initialized
 				? "Stateful runtime initialized."
 				: "Stateful runtime not initialized.",
+		},
+		{
+			name: "in-process-sdk",
+			status: inProcessCapability.error ? "fail" : "pass",
+			message: inProcessCapability.error
+				? boundedPrivateText(inProcessCapability.error, 2 * 1024)
+				: "Required public Pi in-process session APIs are available.",
+		},
+		{
+			name: "rpc-cli",
+			status: rpcCapability.error ? "fail" : "pass",
+			message: rpcCapability.error
+				? boundedPrivateText(rpcCapability.error, 2 * 1024)
+				: "The exact loaded Pi CLI is available for persistent RPC transport.",
 		},
 		{
 			name: "consultation",
@@ -308,6 +364,15 @@ function projectRun(run: AgentRunInspectionDetail, ctx: ExtensionContext): Recor
 		cwd: safeDisplayPath(run.cwd, ctx.cwd),
 		workspaceMode: run.workspaceMode ?? "shared",
 		thinkingLevel: run.thinkingLevel,
+		context: {
+			turns: run.contextTurns ?? 0,
+			sources: run.contextSources ?? 0,
+			bytes: run.contextBytes ?? 0,
+			truncated: run.contextTruncated === true,
+		},
+		resultFormat: run.resultFormat ?? "text",
+		structuredResult: run.structuredResult,
+		telemetry: run.telemetry,
 		currentTask: run.currentTask ? boundedPrivateText(run.currentTask, 2 * 1024) : undefined,
 		error: run.error ? boundedPrivateText(run.error, 2 * 1024) : undefined,
 		target: run.target
@@ -370,6 +435,7 @@ function projectStatus(runtime: SubagentInspectRuntime): Record<string, unknown>
 	const completion = inspectCompletionDeliverySettings();
 	const parallelLimit = inspectBlockingParallelLimitSettings();
 	const detachedLimits = inspectStatefulLimitSettings();
+	const transport = inspectStatefulTransportSettings();
 	const configuredDetachedLimits = detachedLimits.values
 		? Object.fromEntries(
 				Object.entries(detachedLimits.values).map(([field, snapshot]) => [field, snapshot.value]),
@@ -386,6 +452,8 @@ function projectStatus(runtime: SubagentInspectRuntime): Record<string, unknown>
 		configuredWorkflowSource: configured.source,
 		stateful,
 		statefulLimits: stateful.limits,
+		configuredTransport: transport.value,
+		configuredTransportSource: transport.source,
 		configuredStatefulLimits: configuredDetachedLimits,
 		configuredStatefulLimitSources: configuredDetachedLimitSources,
 		configuredCompletionDelivery: completion.value,
@@ -409,7 +477,8 @@ function projectStatus(runtime: SubagentInspectRuntime): Record<string, unknown>
 			cwdPolicy.error ||
 			completion.error ||
 			parallelLimit.error ||
-			detachedLimits.error
+			detachedLimits.error ||
+			transport.error
 				? boundedPrivateText(
 						configured.error ??
 							resources.error ??
@@ -417,11 +486,38 @@ function projectStatus(runtime: SubagentInspectRuntime): Record<string, unknown>
 							completion.error ??
 							parallelLimit.error ??
 							detachedLimits.error ??
+							transport.error ??
 							"",
 						2 * 1024,
 					)
 				: undefined,
 	};
+}
+
+async function inspectInProcessCapability(): Promise<{ error?: string }> {
+	try {
+		const moduleSpecifier = "@earendil-works/pi-coding-agent";
+		const core = await import(moduleSpecifier);
+		for (const name of [
+			"createAgentSessionServices",
+			"createAgentSessionFromServices",
+			"resolveCliModel",
+		] as const) {
+			if (typeof core[name] !== "function") return { error: `Pi core does not export ${name}()` };
+		}
+		return {};
+	} catch (error) {
+		return { error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+function inspectRpcCapability(): { error?: string } {
+	try {
+		resolvePiInvocation(["--mode", "rpc", "--no-session"]);
+		return {};
+	} catch (error) {
+		return { error: error instanceof Error ? error.message : String(error) };
+	}
 }
 
 function availableModelCount(ctx: ExtensionContext): number {
@@ -480,6 +576,24 @@ function requiredString(value: unknown, action: string, field: string): string {
 		throw new Error(`subagent_inspect action "${action}" requires ${field}`);
 	}
 	return value;
+}
+
+function optionalContextMode(value: unknown): ContextMode {
+	if (value === undefined) return "none";
+	if (value === "none" || value === "all" || value === "summary") return value;
+	if (typeof value === "number" && Number.isSafeInteger(value) && value >= 1) return value;
+	throw new Error("subagent_inspect context must be none, all, summary, or a positive integer");
+}
+
+function optionalStringArray(value: unknown, field: string): string[] | undefined {
+	if (value === undefined) return undefined;
+	if (
+		!Array.isArray(value) ||
+		!value.every((item) => typeof item === "string" && item.length > 0)
+	) {
+		throw new Error(`subagent_inspect ${field} must be an array of non-empty strings`);
+	}
+	return [...value];
 }
 
 function optionalLimit(value: unknown, defaultValue: number): number {

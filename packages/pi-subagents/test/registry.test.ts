@@ -25,6 +25,65 @@ function record(overrides: Partial<ManagedAgent> = {}): ManagedAgent {
 	};
 }
 
+test("AgentRegistry retains spawn idempotency only until close", async () => {
+	const registry = new AgentRegistry(async () => ({ output: "done", exitCode: 0 }));
+	const first = await registry.spawn({
+		agent: "scout",
+		task: "first",
+		cwd: process.cwd(),
+		spawnIdempotencyKey: "key",
+		spawnRequestHash: "hash",
+	});
+	assert.equal(registry.findBySpawnIdempotencyKey("key", "hash")?.id, first.id);
+	assert.throws(() => registry.findBySpawnIdempotencyKey("key", "different"), /different/);
+	await registry.close(first.id);
+	assert.equal(registry.findBySpawnIdempotencyKey("key", "hash"), undefined);
+	const replacement = await registry.spawn({
+		agent: "scout",
+		task: "different after close",
+		cwd: process.cwd(),
+		spawnIdempotencyKey: "key",
+		spawnRequestHash: "different",
+	});
+	assert.notEqual(replacement.id, first.id);
+});
+
+test("AgentRegistry preserves queue and transport timing without persisting progress callbacks", async () => {
+	let now = 10;
+	const registry = new AgentRegistry(
+		async (_agent, _task, _signal, onProgress) => {
+			onProgress?.({
+				transport: "rpc",
+				protocol: "pi-subagents:v1",
+				phase: "ready",
+				updatedAt: 20,
+				timing: { startedAt: 15, readyAt: 20 },
+			});
+			return {
+				output: "done",
+				exitCode: 0,
+				telemetry: {
+					transport: "rpc",
+					protocol: "pi-subagents:v1",
+					phase: "settled",
+					updatedAt: 30,
+					timing: { startedAt: 15, readyAt: 20, settledAt: 30 },
+				},
+			};
+		},
+		{ now: () => now++ },
+	);
+	const spawned = await registry.spawn({ agent: "scout", task: "timed", cwd: process.cwd() });
+	await registry.wait(spawned.id, 100);
+	const telemetry = registry.getInspection(spawned.id)?.telemetry;
+	assert.equal(telemetry?.transport, "rpc");
+	assert.equal(telemetry?.timing.queuedAt, 12);
+	assert.equal(telemetry?.timing.readyAt, 20);
+	assert.equal(telemetry?.timing.settledAt, 30);
+	registry.markCompletionDelivered(spawned.id, 40);
+	assert.equal(registry.getInspection(spawned.id)?.telemetry?.timing.completionDeliveredAt, 40);
+});
+
 test("AgentRegistry exposes metadata-only inspection snapshots", async () => {
 	let finish!: (value: { output: string; exitCode: number; error?: string }) => void;
 	const registry = new AgentRegistry(
@@ -69,6 +128,45 @@ test("AgentRegistry exposes metadata-only inspection snapshots", async () => {
 	assert.equal(completed?.historyCount, 1);
 	assert.equal(completed?.error, "private error");
 	assert.doesNotMatch(JSON.stringify(completed), /history output|mailbox content|parent context/);
+});
+
+test("AgentRegistry deduplicates exact spawn retries before another transport turn", async () => {
+	let turns = 0;
+	const registry = new AgentRegistry(async () => {
+		turns++;
+		return {
+			output: JSON.stringify({
+				version: "pi-subagents:result:v1",
+				summary: "done",
+				evidence: ["src/a.ts"],
+				changes: [],
+				verification: ["test"],
+				risks: [],
+			}),
+			exitCode: 0,
+		};
+	});
+	const input = {
+		agent: "scout",
+		task: "inspect",
+		cwd: process.cwd(),
+		spawnIdempotencyKey: "request-1",
+		spawnRequestHash: "a".repeat(64),
+		resultFormat: "structured-v1" as const,
+	};
+	const first = await registry.spawn(input);
+	const repeated = await registry.spawn(input);
+	assert.equal(repeated.id, first.id);
+	await registry.wait(first.id, 100);
+	assert.equal(turns, 1);
+	assert.equal(registry.getInspection(first.id)?.structuredResult?.summary, "done");
+	await assert.rejects(
+		() => registry.spawn({ ...input, spawnRequestHash: "b".repeat(64) }),
+		/different parameters/,
+	);
+	await registry.close(first.id);
+	const afterClose = await registry.spawn(input);
+	assert.notEqual(afterClose.id, first.id);
 });
 
 test("AgentRegistry rejects invalid capacity and wait bounds", async () => {
@@ -700,6 +798,26 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	await persistence.save([
 		record({
 			thinkingLevel: "high",
+			spawnIdempotencyKey: "persisted-request",
+			spawnRequestHash: "a".repeat(64),
+			resultFormat: "structured-v1",
+			contextTurns: 2,
+			contextBytes: 128,
+			telemetry: {
+				protocol: "pi-subagents:v1",
+				transport: "rpc",
+				phase: "settled",
+				updatedAt: 2,
+				timing: { settledAt: 2 },
+			},
+			structuredResult: {
+				version: "pi-subagents:result:v1",
+				summary: "ephemeral",
+				evidence: [],
+				changes: [],
+				verification: [],
+				risks: [],
+			},
 			target: {
 				cwd: process.cwd(),
 				boundary: "external",
@@ -729,9 +847,17 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	const raw = readFileSync(persistence.filePath, "utf8");
 	assert.doesNotMatch(raw, /secret|hidden/);
 	assert.match(raw, /visible/);
+	assert.doesNotMatch(raw, /telemetry|ephemeral|structuredResult/);
 	const restoredState = persistence.load()[0];
 	assert.equal(restoredState?.state, "idle");
 	assert.equal(restoredState?.thinkingLevel, "high");
+	assert.equal(restoredState?.spawnIdempotencyKey, "persisted-request");
+	assert.equal(restoredState?.spawnRequestHash, "a".repeat(64));
+	assert.equal(restoredState?.resultFormat, "structured-v1");
+	assert.equal(restoredState?.contextTurns, 2);
+	assert.equal(restoredState?.contextBytes, 128);
+	assert.equal(restoredState?.telemetry, undefined);
+	assert.equal(restoredState?.structuredResult, undefined);
 	assert.equal(restoredState?.target?.trust.kind, "saved-trusted");
 	assert.equal(restoredState?.target?.trust.projectTrusted, true);
 	assert.equal(restoredState?.mailbox[0]?.content, "[private content omitted]visible");

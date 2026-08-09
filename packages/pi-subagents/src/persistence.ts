@@ -6,6 +6,7 @@ import { projectAgentRecords } from "./agent-projection.js";
 import { isThinkingLevel } from "./agents.js";
 import { redactPrivateText } from "./context.js";
 import type { ManagedAgent } from "./registry.js";
+import { SUBAGENT_RESULT_FORMATS } from "./result-contract.js";
 import { resolveStatefulLimits } from "./stateful-limits.js";
 
 const STATE_VERSION = 2;
@@ -119,6 +120,8 @@ function sanitizeAgent(agent: ManagedAgent): ManagedAgent {
 		state: "idle",
 		currentTask: undefined,
 		currentMailboxMessageIds: undefined,
+		telemetry: undefined,
+		structuredResult: undefined,
 		context: agent.context ? redactPrivateText(agent.context) : undefined,
 		error: agent.error ? redactPrivateText(agent.error) : undefined,
 		history: agent.history.map((turn) => ({
@@ -148,6 +151,15 @@ function isStoredState(value: unknown): value is StoredState {
 			Number.isFinite(record.updatedAt) &&
 			(record.parentId === undefined || typeof record.parentId === "string") &&
 			(record.thinkingLevel === undefined || isThinkingLevel(record.thinkingLevel)) &&
+			(record.contextTurns === undefined || isNonNegativeInteger(record.contextTurns)) &&
+			(record.contextBytes === undefined || isNonNegativeInteger(record.contextBytes)) &&
+			(record.spawnIdempotencyKey === undefined ||
+				(typeof record.spawnIdempotencyKey === "string" &&
+					record.spawnIdempotencyKey.length > 0 &&
+					record.spawnIdempotencyKey.length <= 256)) &&
+			(record.spawnRequestHash === undefined || isSha256(record.spawnRequestHash)) &&
+			(record.resultFormat === undefined ||
+				SUBAGENT_RESULT_FORMATS.includes(record.resultFormat)) &&
 			(record.workspaceMode === undefined || record.workspaceMode === "worktree") &&
 			(record.target === undefined || isTargetPolicyAudit(record.target)) &&
 			(record.children === undefined ||
@@ -159,6 +171,14 @@ function isStoredState(value: unknown): value is StoredState {
 				(Array.isArray(record.mailbox) && record.mailbox.every(isMailboxMessage)))
 		);
 	});
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isSha256(value: unknown): value is string {
+	return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
 
 function isTargetPolicyAudit(value: unknown): boolean {

@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
@@ -18,6 +26,7 @@ import {
 	resolveSpawnContextMode,
 	resolveStatefulTransportKind,
 } from "../src/stateful.js";
+import { waitForOwnedSpawn } from "../src/stateful-lifecycle.js";
 import { resolveStatefulLimits } from "../src/stateful-limits.js";
 import {
 	resolveStatefulSubprocessThinkingLevel,
@@ -114,6 +123,14 @@ test("stateful agent lines escape terminal controls from retained agent data", (
 	assert.doesNotMatch(line, /[\u0000-\u001f\u007f-\u009f]/u);
 	assert.match(line, /scout.*linked/);
 	assert.match(line, /first line second line/);
+});
+
+test("pending idempotent spawn waits honor caller cancellation", async () => {
+	const controller = new AbortController();
+	const pending = new Promise<never>(() => undefined);
+	const waiting = waitForOwnedSpawn(pending, controller.signal);
+	controller.abort();
+	await assert.rejects(waiting, (error) => error instanceof Error && error.name === "AbortError");
 });
 
 test("selected context entries imply all mode only when context mode is omitted", () => {
@@ -436,12 +453,17 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			description: string;
 			execute: (...args: unknown[]) => Promise<unknown>;
 			parameters: {
-				properties?: Record<string, { description?: string; enum?: string[] }>;
+				properties?: Record<string, { description?: string; enum?: string[]; maxLength?: number }>;
 			};
 			promptGuidelines: string[];
 		};
 		const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 		assert.deepEqual(spawnTool.parameters.properties?.thinkingLevel?.enum, thinkingLevels);
+		assert.equal(spawnTool.parameters.properties?.idempotencyKey?.maxLength, 256);
+		assert.deepEqual(spawnTool.parameters.properties?.resultFormat?.enum, [
+			"text",
+			"structured-v1",
+		]);
 		assert.match(
 			spawnTool.parameters.properties?.thinkingLevel?.description ?? "",
 			/task difficulty/i,
@@ -595,6 +617,8 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 	let delegation: "trusted-targets" | "anywhere" = "trusted-targets";
 	const created: ManagedAgent[] = [];
 	const createdTools: Array<string[] | undefined> = [];
+	let workspaceCreates = 0;
+	let projectConfirmations = 0;
 	try {
 		const mock = createMockPi();
 		const controller = registerStatefulSubagents(mock.pi, {
@@ -605,6 +629,7 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 			}),
 			workspaceManager: {
 				async create() {
+					workspaceCreates++;
 					return {
 						mode: "worktree" as const,
 						path: generated,
@@ -636,7 +661,15 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 				};
 			},
 		});
-		const context = createMockContext({ cwd: workspace, isProjectTrusted: () => true });
+		const context = createMockContext({
+			cwd: workspace,
+			hasUI: true,
+			isProjectTrusted: () => true,
+			confirm: async () => {
+				projectConfirmations++;
+				return true;
+			},
+		});
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 		const spawn = mock.tools.find((tool) => tool.name === "subagent_spawn") as
 			| { execute: (...args: unknown[]) => Promise<unknown> }
@@ -667,7 +700,54 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 		assert.deepEqual(createdTools[0], []);
 		assert.equal(created[0]?.target?.trust.kind, "saved-trusted");
 		assert.equal(created[0]?.target?.trust.projectTrusted, true);
-		assert.equal(controller.listAgents()[0]?.target?.cwd, external);
+		assert.equal(controller.listAgents()[0]?.target?.cwd, realpathSync(external));
+
+		const idempotentFirst = (await spawn.execute(
+			"idempotent-1",
+			{
+				agent: "scout",
+				task: "idempotent inspect",
+				cwd: external,
+				idempotencyKey: "inspect-external",
+				resultFormat: "structured-v1",
+			},
+			undefined,
+			undefined,
+			context.ctx,
+		)) as { details: { agent: { id: string; context: { bytes: number } } } };
+		const idempotentSecond = (await spawn.execute(
+			"idempotent-2",
+			{
+				agent: "scout",
+				task: "idempotent inspect",
+				cwd: external,
+				idempotencyKey: "inspect-external",
+				resultFormat: "structured-v1",
+			},
+			undefined,
+			undefined,
+			context.ctx,
+		)) as { details: { agent: { id: string } } };
+		assert.equal(idempotentSecond.details.agent.id, idempotentFirst.details.agent.id);
+		assert.equal(idempotentFirst.details.agent.context.bytes, 0);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(created.length, 2);
+		await assert.rejects(
+			() =>
+				spawn.execute(
+					"idempotent-mismatch",
+					{
+						agent: "scout",
+						task: "different task",
+						cwd: external,
+						idempotencyKey: "inspect-external",
+					},
+					undefined,
+					undefined,
+					context.ctx,
+				),
+			/different parameters/,
+		);
 
 		new ProjectTrustStore(agentDir).set(external, false);
 		delegation = "anywhere";
@@ -679,8 +759,8 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 			context.ctx,
 		);
 		await new Promise<void>((resolve) => setImmediate(resolve));
-		assert.equal(created[1]?.target?.trust.kind, "saved-denied");
-		assert.equal(created[1]?.target?.trust.projectTrusted, false);
+		assert.equal(created[2]?.target?.trust.kind, "saved-denied");
+		assert.equal(created[2]?.target?.trust.projectTrusted, false);
 
 		await spawn.execute(
 			"worktree",
@@ -690,12 +770,86 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 			context.ctx,
 		);
 		await new Promise<void>((resolve) => setImmediate(resolve));
-		assert.equal(created[2]?.cwd, generated);
-		assert.equal(created[2]?.workspaceMode, "worktree");
-		assert.equal(created[2]?.target?.cwd, workspace);
-		assert.equal(created[2]?.target?.boundary, "current-workspace");
-		assert.equal(created[2]?.target?.trust.kind, "session-trusted");
-		assert.equal(created[2]?.target?.trust.projectTrusted, true);
+		assert.equal(created[3]?.cwd, generated);
+		assert.equal(created[3]?.workspaceMode, "worktree");
+		assert.equal(created[3]?.target?.cwd, realpathSync(workspace));
+		assert.equal(created[3]?.target?.boundary, "current-workspace");
+		assert.equal(created[3]?.target?.trust.kind, "session-trusted");
+		assert.equal(created[3]?.target?.trust.projectTrusted, true);
+		assert.equal(workspaceCreates, 1);
+		mkdirSync(path.join(workspace, ".pi", "agents"), { recursive: true });
+		writeFileSync(
+			path.join(workspace, ".pi", "agents", "project-reviewer.md"),
+			"---\nname: project-reviewer\ndescription: Project reviewer\ntools: []\n---\nReview.",
+		);
+		const projectFirst = (await spawn.execute(
+			"project-idempotent-1",
+			{
+				agent: "project-reviewer",
+				task: "review once",
+				agentScope: "project",
+				idempotencyKey: "project-review",
+			},
+			undefined,
+			undefined,
+			context.ctx,
+		)) as { details: { agent: { id: string } } };
+		const projectSecond = (await spawn.execute(
+			"project-idempotent-2",
+			{
+				agent: "project-reviewer",
+				task: "review once",
+				agentScope: "project",
+				idempotencyKey: "project-review",
+			},
+			undefined,
+			undefined,
+			context.ctx,
+		)) as { details: { agent: { id: string } } };
+		assert.equal(projectSecond.details.agent.id, projectFirst.details.agent.id);
+		assert.equal(projectConfirmations, 1, "exact retry must not confirm project agents twice");
+		await assert.rejects(
+			spawn.execute(
+				"project-idempotent-mismatch",
+				{
+					agent: "project-reviewer",
+					task: "different review",
+					agentScope: "project",
+					idempotencyKey: "project-review",
+				},
+				undefined,
+				undefined,
+				context.ctx,
+			),
+			/different parameters/,
+		);
+		assert.equal(projectConfirmations, 1, "mismatch must fail before project confirmation");
+		const isolatedFirst = (await spawn.execute(
+			"worktree-idempotent-1",
+			{
+				agent: "scout",
+				task: "isolated exact retry",
+				workspaceMode: "worktree",
+				idempotencyKey: "isolated-retry",
+			},
+			undefined,
+			undefined,
+			context.ctx,
+		)) as { details: { agent: { id: string } } };
+		const isolatedSecond = (await spawn.execute(
+			"worktree-idempotent-2",
+			{
+				agent: "scout",
+				task: "isolated exact retry",
+				workspaceMode: "worktree",
+				idempotencyKey: "isolated-retry",
+			},
+			undefined,
+			undefined,
+			context.ctx,
+		)) as { details: { agent: { id: string } } };
+		assert.equal(isolatedSecond.details.agent.id, isolatedFirst.details.agent.id);
+		assert.equal(workspaceCreates, 2, "exact retry must not create another worktree");
 		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -990,6 +1144,8 @@ test("stateful subprocess thinking uses spawn override before the agent default"
 test("stateful settings validate transport, completion delivery, and bounded runtime options", () => {
 	assert.equal(resolveStatefulTransportKind(undefined), "subprocess");
 	assert.equal(resolveStatefulTransportKind("in-process"), "in-process");
+	assert.equal(resolveStatefulTransportKind("rpc"), "rpc");
+	assert.equal(resolveStatefulTransportKind("auto"), "auto");
 	assert.equal(resolveCompletionDelivery(undefined), "next-turn");
 	assert.equal(resolveCompletionDelivery("auto-resume"), "auto-resume");
 	assert.deepEqual(
@@ -1021,6 +1177,12 @@ test("stateful settings validate transport, completion delivery, and bounded run
 	);
 	assert.deepEqual(normalizeSubagentSettings({ stateful: { transport: "subprocess" } }), {
 		stateful: { transport: "subprocess" },
+	});
+	assert.deepEqual(normalizeSubagentSettings({ stateful: { transport: "rpc" } }), {
+		stateful: { transport: "rpc" },
+	});
+	assert.deepEqual(normalizeSubagentSettings({ stateful: { transport: "auto" } }), {
+		stateful: { transport: "auto" },
 	});
 	assert.equal(normalizeSubagentSettings({ stateful: { transport: "native" } }), undefined);
 	assert.equal(

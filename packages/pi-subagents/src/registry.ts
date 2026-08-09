@@ -3,121 +3,27 @@ import { projectAgentRecords } from "./agent-projection.js";
 import type { SubagentThinkingLevel } from "./agents.js";
 import type { TargetPolicyAudit } from "./cwd-policy.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_OUTPUT_BYTES, truncateUtf8 } from "./limits.js";
+import type {
+	AgentInspectionCounts,
+	AgentMailboxMessage,
+	AgentRegistryOptions,
+	AgentRunInspectionDetail,
+	AgentRunInspectionSummary,
+	AgentTurnCompletion,
+	ManagedAgent,
+} from "./registry-types.js";
+import {
+	parseStructuredSubagentResult,
+	type StructuredSubagentResult,
+	type SubagentResultFormat,
+} from "./result-contract.js";
 import { resolveStatefulLimits } from "./stateful-limits.js";
 import { type AgentTurnRunner, normalizeTransport, type SubagentTransport } from "./transport.js";
+import type { TransportTelemetry } from "./transport-types.js";
 
 const DEFAULT_STATEFUL_LIMITS = resolveStatefulLimits();
 
-export type AgentLifecycleState =
-	| "starting"
-	| "running"
-	| "idle"
-	| "completed"
-	| "interrupted"
-	| "failed"
-	| "closed";
-
-export interface AgentTurn {
-	task: string;
-	output: string;
-	startedAt: number;
-	completedAt: number;
-	exitCode: number;
-	truncated?: boolean;
-}
-
-export interface AgentMailboxMessage {
-	id: string;
-	senderId: string;
-	recipientId: string;
-	content: string;
-	createdAt: number;
-	readAt?: number;
-	deduplicationKey?: string;
-}
-
-export interface ManagedAgent {
-	id: string;
-	agent: string;
-	parentId?: string;
-	rootId: string;
-	depth: number;
-	children: string[];
-	state: AgentLifecycleState;
-	createdAt: number;
-	updatedAt: number;
-	cwd: string;
-	agentScope?: "user" | "project" | "both";
-	thinkingLevel?: SubagentThinkingLevel;
-	currentTask?: string;
-	history: AgentTurn[];
-	error?: string;
-	context?: string;
-	contextSourceIds?: string[];
-	contextTruncated?: boolean;
-	workspaceMode?: "worktree";
-	target?: TargetPolicyAudit;
-	policy?: { inherited: string[]; overridden: string[]; unsupported: string[] };
-	mailbox: AgentMailboxMessage[];
-	currentMailboxMessageIds?: string[];
-}
-
-export interface AgentRunInspectionSummary {
-	id: string;
-	agent: string;
-	state: AgentLifecycleState;
-	createdAt: number;
-	updatedAt: number;
-	historyCount: number;
-	unreadMessages: number;
-}
-
-export interface AgentRunInspectionDetail extends AgentRunInspectionSummary {
-	cwd: string;
-	thinkingLevel?: SubagentThinkingLevel;
-	currentTask?: string;
-	error?: string;
-	workspaceMode?: "worktree";
-	target?: TargetPolicyAudit;
-	policy?: { inherited: string[]; overridden: string[]; unsupported: string[] };
-}
-
-export interface AgentInspectionCounts {
-	activeAgents: number;
-	retainedAgents: number;
-}
-
-export interface TurnOutcome {
-	output: string;
-	exitCode: number;
-	aborted?: boolean;
-	truncated?: boolean;
-	error?: string;
-	policy?: ManagedAgent["policy"];
-}
-
-export interface AgentTurnCompletion {
-	agent: ManagedAgent;
-	task: string;
-	output: string;
-	error?: string;
-}
-
-export interface AgentRegistryOptions {
-	maxAgents?: number;
-	maxActiveTurns?: number;
-	maxHistoryTurns?: number;
-	maxDepth?: number;
-	maxChildrenPerAgent?: number;
-	maxMailboxMessages?: number;
-	maxMailboxMessageBytes?: number;
-	maxTaskBytes?: number;
-	maxTurnOutputBytes?: number;
-	idleTtlMs?: number;
-	now?: () => number;
-	onChange?: (agents: ManagedAgent[]) => void | Promise<void>;
-	onTurnComplete?: (completion: AgentTurnCompletion) => void | Promise<void>;
-}
+export type * from "./registry-types.js";
 
 function positiveInteger(value: number, label: string): number {
 	if (!Number.isSafeInteger(value) || value < 1) {
@@ -261,10 +167,20 @@ export class AgentRegistry {
 		context?: string;
 		contextSourceIds?: string[];
 		contextTruncated?: boolean;
+		contextTurns?: number;
+		contextBytes?: number;
 		workspaceMode?: "worktree";
+		spawnIdempotencyKey?: string;
+		spawnRequestHash?: string;
+		resultFormat?: SubagentResultFormat;
 		target?: TargetPolicyAudit;
 	}): Promise<ManagedAgent> {
 		if (!input.task.trim()) throw new Error("Subagent tasks cannot be empty");
+		const existing = this.findBySpawnIdempotencyKey(
+			input.spawnIdempotencyKey,
+			input.spawnRequestHash,
+		);
+		if (existing) return existing;
 		const task = truncateUtf8(input.task, this.maxTaskBytes).text;
 		const expired = this.evictExpired();
 		let expiryReleaseError: unknown;
@@ -306,7 +222,12 @@ export class AgentRegistry {
 			context: input.context,
 			contextSourceIds: input.contextSourceIds,
 			contextTruncated: input.contextTruncated,
+			contextTurns: input.contextTurns,
+			contextBytes: input.contextBytes,
 			workspaceMode: input.workspaceMode,
+			spawnIdempotencyKey: input.spawnIdempotencyKey,
+			spawnRequestHash: input.spawnRequestHash,
+			resultFormat: input.resultFormat,
 			target: input.target,
 		};
 		this.agents.set(record.id, record);
@@ -317,6 +238,23 @@ export class AgentRegistry {
 		await this.changed();
 		this.startTurn(record, task);
 		return this.copy(record);
+	}
+
+	findBySpawnIdempotencyKey(
+		key: string | undefined,
+		requestHash: string | undefined,
+	): ManagedAgent | undefined {
+		if (!key) return undefined;
+		const existing = [...this.agents.values()].find(
+			(agent) => agent.state !== "closed" && agent.spawnIdempotencyKey === key,
+		);
+		if (!existing) return undefined;
+		if (!requestHash || existing.spawnRequestHash !== requestHash) {
+			throw new Error(
+				"The subagent_spawn idempotencyKey was already used with different parameters",
+			);
+		}
+		return this.copy(existing);
 	}
 
 	async followUp(id: string, task: string): Promise<ManagedAgent> {
@@ -572,6 +510,11 @@ export class AgentRegistry {
 			currentTask: agent.currentTask,
 			error: agent.error,
 			workspaceMode: agent.workspaceMode,
+			contextTurns: agent.contextTurns,
+			contextBytes: agent.contextBytes,
+			contextSources: agent.contextSourceIds?.length,
+			contextTruncated: agent.contextTruncated,
+			resultFormat: agent.resultFormat,
 			target: agent.target ? { ...agent.target, trust: { ...agent.target.trust } } : undefined,
 			policy: agent.policy
 				? {
@@ -580,6 +523,10 @@ export class AgentRegistry {
 						unsupported: [...agent.policy.unsupported],
 					}
 				: undefined,
+			structuredResult: agent.structuredResult
+				? copyStructuredResult(agent.structuredResult)
+				: undefined,
+			telemetry: agent.telemetry ? copyTelemetry(agent.telemetry) : undefined,
 		};
 	}
 
@@ -594,6 +541,16 @@ export class AgentRegistry {
 	get(id: string): ManagedAgent | undefined {
 		const agent = this.agents.get(id);
 		return agent ? this.copy(agent) : undefined;
+	}
+
+	markCompletionDelivered(id: string, deliveredAt: number): void {
+		const agent = this.agents.get(id);
+		if (!agent?.telemetry) return;
+		agent.telemetry = {
+			...agent.telemetry,
+			updatedAt: deliveredAt,
+			timing: { ...agent.telemetry.timing, completionDeliveredAt: deliveredAt },
+		};
 	}
 
 	async sweepExpired(): Promise<number> {
@@ -613,13 +570,21 @@ export class AgentRegistry {
 		agent.state = "starting";
 		agent.error = undefined;
 		agent.currentTask = task;
+		agent.structuredResult = undefined;
 		agent.updatedAt = this.now();
+		agent.telemetry = {
+			phase: "queued",
+			queuePosition: this.queue.length + 1,
+			updatedAt: agent.updatedAt,
+			timing: { queuedAt: agent.updatedAt },
+		};
 		let resolveQueued!: (agent: ManagedAgent) => void;
 		const completion = new Promise<ManagedAgent>((resolve) => {
 			resolveQueued = resolve;
 		});
 		this.running.set(agent.id, completion);
 		this.queue.push({ agent, task, resolve: resolveQueued });
+		this.updateQueuePositions();
 		void this.changed();
 		this.pumpQueue();
 	}
@@ -629,6 +594,7 @@ export class AgentRegistry {
 			const next = this.queue.shift();
 			if (!next) return;
 			this.runQueuedTurn(next.agent, next.task, next.resolve);
+			this.updateQueuePositions();
 		}
 	}
 
@@ -647,7 +613,16 @@ export class AgentRegistry {
 		let completionOutput = "";
 		let completionError: string | undefined;
 		void this.transport
-			.runTurn(this.copy(agent), task, controller.signal)
+			.runTurn(this.copy(agent), task, controller.signal, (progress) => {
+				agent.telemetry = {
+					...progress,
+					queuePosition: undefined,
+					timing: {
+						queuedAt: agent.telemetry?.timing.queuedAt,
+						...progress.timing,
+					},
+				};
+			})
 			.then(async (outcome) => {
 				const output = truncateUtf8(outcome.output, this.maxTurnOutputBytes).text;
 				const error = outcome.error
@@ -669,6 +644,20 @@ export class AgentRegistry {
 						: "failed";
 				agent.error = error;
 				agent.policy = outcome.policy;
+				agent.telemetry = outcome.telemetry
+					? {
+							...outcome.telemetry,
+							timing: {
+								queuedAt: agent.telemetry?.timing.queuedAt,
+								...outcome.telemetry.timing,
+							},
+						}
+					: agent.telemetry;
+				agent.structuredResult =
+					outcome.structuredResult ??
+					(agent.resultFormat === "structured-v1"
+						? parseStructuredSubagentResult(output)
+						: undefined);
 				completionOutput = output;
 				completionError = error;
 				completionContent = output || error || `${agent.id} ${agent.state}`;
@@ -688,6 +677,16 @@ export class AgentRegistry {
 					exitCode: controller.signal.aborted ? 130 : 1,
 				});
 				agent.history = agent.history.slice(-this.maxHistoryTurns);
+				agent.telemetry = {
+					...(agent.telemetry ?? {
+						phase: "failed",
+						updatedAt: this.now(),
+						timing: { queuedAt: startedAt },
+					}),
+					phase: controller.signal.aborted ? "interrupted" : "failed",
+					failurePhase: agent.telemetry?.phase ?? "running",
+					updatedAt: this.now(),
+				};
 				completionError = agent.error;
 				completionContent = agent.error;
 				return agent;
@@ -715,6 +714,17 @@ export class AgentRegistry {
 				await this.notifyTurnComplete(turnCompletion);
 				await this.changed();
 			});
+	}
+
+	private updateQueuePositions(): void {
+		for (const [index, entry] of this.queue.entries()) {
+			if (!entry.agent.telemetry) continue;
+			entry.agent.telemetry = {
+				...entry.agent.telemetry,
+				queuePosition: index + 1,
+				updatedAt: this.now(),
+			};
+		}
 	}
 
 	private enqueueMessage(
@@ -872,6 +882,28 @@ export class AgentRegistry {
 						unsupported: [...agent.policy.unsupported],
 					}
 				: undefined,
+			structuredResult: agent.structuredResult
+				? copyStructuredResult(agent.structuredResult)
+				: undefined,
+			telemetry: agent.telemetry ? copyTelemetry(agent.telemetry) : undefined,
 		};
 	}
+}
+
+function copyStructuredResult(value: StructuredSubagentResult): StructuredSubagentResult {
+	return {
+		...value,
+		evidence: [...value.evidence],
+		changes: [...value.changes],
+		verification: [...value.verification],
+		risks: [...value.risks],
+	};
+}
+
+function copyTelemetry(value: TransportTelemetry): TransportTelemetry {
+	return {
+		...value,
+		timing: { ...value.timing },
+		usage: value.usage ? { ...value.usage } : undefined,
+	};
 }
