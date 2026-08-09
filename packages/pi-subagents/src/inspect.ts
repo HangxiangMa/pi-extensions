@@ -18,6 +18,7 @@ import { renderInspectCall, renderInspectResult } from "./inspect-render.js";
 import type { AgentRunInspectionDetail, AgentRunInspectionSummary } from "./registry.js";
 import { boundedPrivateText, boundText, safeDisplayPath, safeTerminalLine } from "./safe-text.js";
 import {
+	inspectBlockingParallelLimitSettings,
 	inspectCompletionDeliverySettings,
 	inspectConsultResourceSettings,
 	inspectCwdPolicySettings,
@@ -61,6 +62,7 @@ export type SubagentInspectParams = Static<typeof SubagentInspectParams>;
 
 export interface SubagentInspectRuntime {
 	getBlockingEnabled(): boolean;
+	getMaxParallelTasks(): number;
 	getConsultResourcePolicy(): "project-context" | "none" | "all";
 	getConsultationCwdPolicy(): ConsultationCwdPolicy;
 	getDelegationCwdPolicy(): DelegationCwdPolicy;
@@ -365,6 +367,7 @@ function projectStatus(runtime: SubagentInspectRuntime): Record<string, unknown>
 	const resources = inspectConsultResourceSettings();
 	const cwdPolicy = inspectCwdPolicySettings();
 	const completion = inspectCompletionDeliverySettings();
+	const parallelLimit = inspectBlockingParallelLimitSettings();
 	return {
 		workflow,
 		configuredWorkflow: configured.value,
@@ -372,6 +375,9 @@ function projectStatus(runtime: SubagentInspectRuntime): Record<string, unknown>
 		stateful,
 		configuredCompletionDelivery: completion.value,
 		configuredCompletionDeliverySource: completion.source,
+		maxParallelTasks: runtime.getMaxParallelTasks(),
+		configuredMaxParallelTasks: parallelLimit.value,
+		configuredMaxParallelTasksSource: parallelLimit.source,
 		consultResources: runtime.getConsultResourcePolicy(),
 		consultationCwdPolicy: runtime.getConsultationCwdPolicy(),
 		configuredConsultationCwdPolicy: cwdPolicy.consultation.value,
@@ -383,9 +389,18 @@ function projectStatus(runtime: SubagentInspectRuntime): Record<string, unknown>
 		consultResourcesSource: resources.source,
 		settingsPath: safeDisplayPath(resources.path, process.cwd()),
 		settingsError:
-			configured.error || resources.error || cwdPolicy.error || completion.error
+			configured.error ||
+			resources.error ||
+			cwdPolicy.error ||
+			completion.error ||
+			parallelLimit.error
 				? boundedPrivateText(
-						configured.error ?? resources.error ?? cwdPolicy.error ?? completion.error ?? "",
+						configured.error ??
+							resources.error ??
+							cwdPolicy.error ??
+							completion.error ??
+							parallelLimit.error ??
+							"",
 						2 * 1024,
 					)
 				: undefined,

@@ -6,10 +6,15 @@ import {
 	type DelegationCwdPolicy,
 	discoverAgents,
 } from "./agents.js";
+import {
+	applyBlockingParallelLimitSetting,
+	blockingParallelLimitScreen,
+} from "./parallel-limit-ui.js";
 import type { ManagedAgent } from "./registry.js";
 import {
 	type DelegationWorkflow,
 	hasOwn,
+	inspectBlockingParallelLimitSettings,
 	inspectCompletionDeliverySettings,
 	inspectConsultResourceSettings,
 	inspectCwdPolicySettings,
@@ -34,10 +39,12 @@ const TOOL_VIEWPORT_SIZE = 10;
 
 export interface SubagentSettingsRuntime {
 	getBlockingEnabled(): boolean;
+	getMaxParallelTasks(): number;
 	getCompletionDelivery(): CompletionDelivery;
 	getConsultResourcePolicy(): ConsultResourcePolicy;
 	getConsultationCwdPolicy(): ConsultationCwdPolicy;
 	getDelegationCwdPolicy(): DelegationCwdPolicy;
+	setMaxParallelTasks(value: number): void;
 	setCompletionDelivery(value: CompletionDelivery): void;
 	setConsultResourcePolicy(value: ConsultResourcePolicy): void;
 	setConsultationCwdPolicy(value: ConsultationCwdPolicy): void;
@@ -134,6 +141,7 @@ async function showSubagentManager(
 		| "agents"
 		| "settings"
 		| "advanced"
+		| "parallel-limit"
 		| "status"
 		| "help"
 		| "agent-picker"
@@ -141,6 +149,7 @@ async function showSubagentManager(
 	type Action =
 		| "set-workflow"
 		| "clear-agents"
+		| "set-parallel-limit"
 		| "set-completion"
 		| "set-consult-resources"
 		| "set-consultation-cwd"
@@ -183,7 +192,7 @@ async function showSubagentManager(
 						{
 							id: "advanced",
 							label: "Advanced settings",
-							description: "Agent permissions, runtime details, and settings path",
+							description: "Agent permissions, parallel limit, runtime details, and settings path",
 							to: "advanced",
 						},
 						{ id: "help", label: "Help", to: "help" },
@@ -258,26 +267,40 @@ async function showSubagentManager(
 				};
 			},
 			settings: () => subagentSettingsScreen(runtime),
-			advanced: () => ({
-				kind: "actions",
-				title: "Advanced Subagent Settings",
-				items: [
-					{
-						id: "agent-tools",
-						label: "Agent tool permissions",
-						description: "Customize persistent per-agent tool allow-lists",
-						action: "load-agent-picker",
-					},
-					{
-						id: "status",
-						label: "Runtime details",
-						description: "Show transport, configured source, and settings path",
-						to: "status",
-					},
-					{ id: "back", label: "Back", action: "back" },
-				],
-				hint: "back",
-			}),
+			advanced: () => {
+				const limit = inspectBlockingParallelLimitSettings();
+				return {
+					kind: "actions",
+					title: "Advanced Subagent Settings",
+					items: [
+						{
+							id: "agent-tools",
+							label: "Agent tool permissions",
+							description: "Customize persistent per-agent tool allow-lists",
+							action: "load-agent-picker",
+						},
+						{
+							id: "status",
+							label: "Runtime details",
+							description: "Show transport, configured source, and settings path",
+							to: "status",
+						},
+						{
+							id: "parallel-limit",
+							label: "Maximum parallel workers",
+							description: `Current: ${runtime.getMaxParallelTasks()} per blocking call`,
+							to: "parallel-limit",
+							disabled: limit.error !== undefined,
+							disabledReason: limit.error
+								? `Repair ${safeTerminalText(limit.path)} before editing this setting`
+								: undefined,
+						},
+						{ id: "back", label: "Back", action: "back" },
+					],
+					hint: "back",
+				};
+			},
+			"parallel-limit": () => blockingParallelLimitScreen(runtime),
 			status: () => ({
 				kind: "detail",
 				title: "Subagent runtime details",
@@ -408,6 +431,8 @@ async function showSubagentManager(
 				);
 				return { kind: "stay" };
 			},
+			"set-parallel-limit": async ({ value }) =>
+				applyBlockingParallelLimitSetting(value, ctx, runtime),
 			"set-completion": async ({ value }) => applyCompletionSetting(value, ctx, runtime),
 			"set-consult-resources": async ({ value }) =>
 				applyConsultResourceSetting(value, ctx, runtime),
@@ -737,6 +762,7 @@ function statusLines(runtime: SubagentSettingsRuntime): string[] {
 function helpLines(runtime: SubagentSettingsRuntime): string[] {
 	const snapshot = inspectCompletionDeliverySettings();
 	const cwdPolicy = inspectCwdPolicySettings();
+	const parallelLimit = inspectBlockingParallelLimitSettings();
 	return [
 		"/subagents — choose delegation workflow, manage current agents, and configure agent tools",
 		"/subagents settings — configure target locations, trusted resources, and async completion",
@@ -748,6 +774,8 @@ function helpLines(runtime: SubagentSettingsRuntime): string[] {
 		`Configured consultation target: ${consultationCwdLabel(cwdPolicy.consultation.value)} (${cwdPolicy.consultation.source})`,
 		`Runtime delegation target: ${delegationCwdLabel(runtime.getDelegationCwdPolicy())}`,
 		`Configured delegation target: ${delegationCwdLabel(cwdPolicy.delegation.value)} (${cwdPolicy.delegation.source})`,
+		`Maximum parallel workers: ${runtime.getMaxParallelTasks()} per blocking call`,
+		`Configured parallel limit: ${parallelLimit.value} (${parallelLimit.source})`,
 		`User settings: ${safeTerminalText(snapshot.path)}`,
 	];
 }
@@ -766,6 +794,7 @@ function formatManagerSummary(
 		`Consult target: ${consultationCwdLabel(runtime.getConsultationCwdPolicy())}`,
 		`Delegation target: ${delegationCwdLabel(runtime.getDelegationCwdPolicy())}`,
 		`Consult resources: ${consultResourceLabel(runtime.getConsultResourcePolicy())}`,
+		`Parallel workers: max ${runtime.getMaxParallelTasks()} per blocking call`,
 		`Configured consult target: ${consultationCwdLabel(cwdPolicy.consultation.value)} · ${cwdPolicy.consultation.source}`,
 		`Configured delegation target: ${delegationCwdLabel(cwdPolicy.delegation.value)} · ${cwdPolicy.delegation.source}`,
 		`Configured consult resources: ${consultResourceLabel(consult.value)} · ${consult.source}`,
@@ -786,6 +815,7 @@ function formatStatus(
 	const configuredWorkflow = inspectDelegationWorkflowSettings();
 	const consult = inspectConsultResourceSettings();
 	const cwdPolicy = inspectCwdPolicySettings();
+	const parallelLimit = inspectBlockingParallelLimitSettings();
 	const current = runtime ? currentWorkflow(runtime, status) : configuredWorkflow.value;
 	return [
 		"Current session",
@@ -796,12 +826,15 @@ function formatStatus(
 		`  Consultation target: ${consultationCwdLabel(runtime?.getConsultationCwdPolicy() ?? cwdPolicy.consultation.value)}`,
 		`  Delegation target: ${delegationCwdLabel(runtime?.getDelegationCwdPolicy() ?? cwdPolicy.delegation.value)}`,
 		`  Consultation resources: ${consultResourceLabel(runtime?.getConsultResourcePolicy() ?? consult.value)}`,
+		`  Maximum parallel workers: ${runtime?.getMaxParallelTasks() ?? parallelLimit.value} per blocking call`,
 		`  Agents: ${status.activeAgents} active, ${status.retainedAgents} retained`,
 		"User settings",
 		`  Delegation source: ${configuredWorkflow.source}`,
 		`  Configured delegation: ${workflowLabel(configuredWorkflow.value)}`,
 		`  Completion source: ${snapshot.source}`,
 		`  Configured completion: ${completionLabel(snapshot.value)}`,
+		`  Configured parallel limit: ${parallelLimit.value}`,
+		`  Parallel limit source: ${parallelLimit.source}`,
 		`  Configured consultation target: ${consultationCwdLabel(cwdPolicy.consultation.value)}`,
 		`  Consultation target source: ${cwdPolicy.consultation.source}`,
 		`  Configured delegation target: ${delegationCwdLabel(cwdPolicy.delegation.value)}`,
@@ -809,8 +842,8 @@ function formatStatus(
 		`  Configured consultation resources: ${consultResourceLabel(consult.value)}`,
 		`  Consultation resource source: ${consult.source}`,
 		`  Path: ${safeTerminalText(snapshot.path)}`,
-		configuredWorkflow.error || snapshot.error || cwdPolicy.error
-			? `  Warning: ${safeTerminalText(configuredWorkflow.error ?? snapshot.error ?? cwdPolicy.error ?? "invalid settings")}`
+		configuredWorkflow.error || snapshot.error || cwdPolicy.error || parallelLimit.error
+			? `  Warning: ${safeTerminalText(configuredWorkflow.error ?? snapshot.error ?? cwdPolicy.error ?? parallelLimit.error ?? "invalid settings")}`
 			: "  Warning: none",
 		configuredWorkflow.value !== current
 			? "Configured delegation differs from this session. Run /reload to apply it."

@@ -1,7 +1,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 import { THINKING_LEVELS } from "./agents.js";
-import { MAX_SUBAGENT_TIMEOUT_MS } from "./limits.js";
+import { MAX_CONFIGURABLE_PARALLEL_TASKS, MAX_SUBAGENT_TIMEOUT_MS } from "./limits.js";
 
 const TimeoutMs = Type.Number({
 	description:
@@ -63,7 +63,10 @@ export const SubagentParams = Type.Object({
 	),
 	task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
 	tasks: Type.Optional(
-		Type.Array(TaskItem, { description: "Array of {agent, task} for parallel execution" }),
+		Type.Array(TaskItem, {
+			description: "Array of {agent, task} for parallel execution",
+			maxItems: MAX_CONFIGURABLE_PARALLEL_TASKS,
+		}),
 	),
 	chain: Type.Optional(
 		Type.Array(ChainItem, { description: "Array of {agent, task} for sequential execution" }),

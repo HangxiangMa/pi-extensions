@@ -287,7 +287,7 @@ test("invalid settings keep tool mutation unavailable and preserve the file", as
 
 		assert.match(rendered, /settings need repair/);
 		assert.match(rendered, /\[-\] Choose browser tools…/);
-		assert.match(rendered, /Repair .*invalid JSON before saving/s);
+		assert.match(rendered, /Repair\s+.*invalid JSON\s+before saving/s);
 		assert.equal(readFileSync(settingsFilePath(), "utf8"), invalid);
 	});
 });

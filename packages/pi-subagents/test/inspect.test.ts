@@ -12,10 +12,12 @@ function runtime(
 		runs?: AgentRunInspectionSummary[];
 		detail?: AgentRunInspectionDetail;
 		blocking?: boolean;
+		maxParallelTasks?: number;
 	} = {},
 ) {
 	return {
 		getBlockingEnabled: () => options.blocking ?? true,
+		getMaxParallelTasks: () => options.maxParallelTasks ?? 8,
 		getConsultResourcePolicy: () => "project-context" as const,
 		getConsultationCwdPolicy: () => "anywhere" as const,
 		getDelegationCwdPolicy: () => "trusted-targets" as const,
@@ -257,6 +259,9 @@ test("subagent_inspect uses scoped model snapshots and structured diagnostics wi
 	assert.equal(statusDetails.configuredWorkflowSource, "default");
 	assert.equal(statusDetails.configuredCompletionDelivery, "next-turn");
 	assert.equal(statusDetails.configuredCompletionDeliverySource, "default");
+	assert.equal(statusDetails.maxParallelTasks, 8);
+	assert.equal(statusDetails.configuredMaxParallelTasks, 8);
+	assert.equal(statusDetails.configuredMaxParallelTasksSource, "default");
 	assert.doesNotMatch(JSON.stringify(status), /trust\.json/);
 
 	const diagnosed = await execute(tool, { action: "diagnose" }, ctx);

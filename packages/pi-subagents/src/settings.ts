@@ -17,7 +17,11 @@ import {
 	type SubagentSettings,
 	type SubagentThinkingLevel,
 } from "./agents.js";
-import { MAX_SUBAGENT_TIMEOUT_MS } from "./limits.js";
+import {
+	DEFAULT_MAX_PARALLEL_TASKS,
+	MAX_CONFIGURABLE_PARALLEL_TASKS,
+	MAX_SUBAGENT_TIMEOUT_MS,
+} from "./limits.js";
 
 export function hasOwn(obj: object, key: PropertyKey): boolean {
 	return Object.hasOwn(obj, key);
@@ -99,6 +103,15 @@ export function normalizeSubagentSettings(value: unknown): SubagentSettings | un
 		if (hasOwn(value.blocking, "enabled")) {
 			if (typeof value.blocking.enabled !== "boolean") return undefined;
 			blocking.enabled = value.blocking.enabled;
+		}
+		if (hasOwn(value.blocking, "maxParallelTasks")) {
+			if (
+				!isPositiveInteger(value.blocking.maxParallelTasks) ||
+				value.blocking.maxParallelTasks > MAX_CONFIGURABLE_PARALLEL_TASKS
+			) {
+				return undefined;
+			}
+			blocking.maxParallelTasks = value.blocking.maxParallelTasks;
 		}
 		settings.blocking = blocking;
 	}
@@ -283,6 +296,13 @@ export interface CompletionDeliverySettingsSnapshot {
 	error?: string;
 }
 
+export interface BlockingParallelLimitSettingsSnapshot {
+	path: string;
+	value: number;
+	source: "default" | "user settings";
+	error?: string;
+}
+
 export interface ConsultResourceSettingsSnapshot {
 	path: string;
 	value: ConsultResourcePolicy;
@@ -462,6 +482,29 @@ export function inspectCompletionDeliverySettings(): CompletionDeliverySettingsS
 	};
 }
 
+export function resolveBlockingMaxParallelTasks(settings?: SubagentSettings): number {
+	return settings?.blocking?.maxParallelTasks ?? DEFAULT_MAX_PARALLEL_TASKS;
+}
+
+export function inspectBlockingParallelLimitSettings(): BlockingParallelLimitSettingsSnapshot {
+	const inspected = inspectSubagentSettingsDocument();
+	if (!inspected.raw || !inspected.settings) {
+		return {
+			path: inspected.path,
+			value: DEFAULT_MAX_PARALLEL_TASKS,
+			source: "default",
+			...(inspected.error ? { error: inspected.error } : {}),
+		};
+	}
+	const explicit =
+		isPlainObject(inspected.raw.blocking) && hasOwn(inspected.raw.blocking, "maxParallelTasks");
+	return {
+		path: inspected.path,
+		value: resolveBlockingMaxParallelTasks(inspected.settings),
+		source: explicit ? "user settings" : "default",
+	};
+}
+
 export function updateDelegationWorkflowSetting(
 	value: Exclude<DelegationWorkflow, "disabled">,
 ): void {
@@ -507,6 +550,32 @@ export function updateCompletionDeliverySetting(value: CompletionDelivery): void
 				stateful: {
 					...(stateful ?? {}),
 					completionDelivery: value,
+				},
+			},
+			update.replaceCanonical,
+		);
+	});
+}
+
+export function updateBlockingMaxParallelTasksSetting(value: number): void {
+	if (!isPositiveInteger(value) || value > MAX_CONFIGURABLE_PARALLEL_TASKS) {
+		throw new Error(
+			`Maximum parallel tasks must be an integer between 1 and ${MAX_CONFIGURABLE_PARALLEL_TASKS}`,
+		);
+	}
+	withSettingsMutationLock(() => {
+		const update = readSettingsObjectForUpdate();
+		const raw = update.document;
+		const blocking = raw.blocking;
+		if (blocking !== undefined && !isPlainObject(blocking)) {
+			throw new Error(`Cannot update invalid ${SETTINGS_FILE} blocking settings`);
+		}
+		writeSettingsObjectUnlocked(
+			{
+				...raw,
+				blocking: {
+					...(blocking ?? {}),
+					maxParallelTasks: value,
 				},
 			},
 			update.replaceCanonical,
