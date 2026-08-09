@@ -9,6 +9,13 @@ import {
 } from "./config.js";
 import type { PiSyncSettingsV3, StorageConnectionSettings, SyncSetupSettings } from "./types.js";
 
+export class SyncSetupReviewChangedError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "SyncSetupReviewChangedError";
+	}
+}
+
 export async function saveNewV3Settings(
 	input: {
 		setupName: string;
@@ -119,7 +126,7 @@ export async function updateSyncSetup(
 			options.expectedInclude &&
 			!sameNames(normalizeSyncInclude(setup.sync.include), options.expectedInclude)
 		) {
-			throw new Error(
+			throw new SyncSetupReviewChangedError(
 				`Sync setup “${name}” included content changed while it was open; reopen it and review the current selection.`,
 			);
 		}
@@ -133,7 +140,7 @@ export async function updateSyncSetup(
 					options.expectedStorage,
 				)
 			) {
-				throw new Error(
+				throw new SyncSetupReviewChangedError(
 					`Sync setup “${name}” storage changed while it was open; reopen it and review the current storage location.`,
 				);
 			}

@@ -1,12 +1,21 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import { type RunRoute, runCancellableOperation } from "./cancellable-operation.js";
+import {
+	type RunRoute,
+	type RunRouteResult,
+	runCancellableOperation,
+} from "./cancellable-operation.js";
 import { loadConfig, syncConfigReviewIdentity } from "./config.js";
 import type { SyncDecision, SyncResolutionDirection } from "./sync-decision.js";
 import { errorMessage, safeTerminalText } from "./sync-format.js";
 
 export type SyncResolutionResult =
 	| { kind: "resolved"; direction: SyncResolutionDirection }
+	| {
+			kind: "route-result";
+			result: RunRouteResult;
+			route: SyncResolutionDirection;
+	  }
 	| { kind: "back" }
 	| { kind: "closed" }
 	| { kind: "stale" };
@@ -21,6 +30,7 @@ export async function showSyncResolution(
 	type Action = "push" | "pull" | "back";
 	let currentDecision = initialDecision;
 	let resolvedDirection: SyncResolutionDirection | undefined;
+	let chainedResult: { result: RunRouteResult; route: SyncResolutionDirection } | undefined;
 	const menu = defineMenu<SyncDecision, Screen, Action, ExtensionCommandContext>({
 		start: "resolve",
 		screens: {
@@ -104,6 +114,10 @@ export async function showSyncResolution(
 			currentDecision = result.decision;
 			return { kind: "stay" as const };
 		}
+		if (result.kind === "remote-selection-required") {
+			chainedResult = { result, route: direction };
+			return { kind: "close" as const };
+		}
 		if (result.kind === "completed") {
 			if (result.outcome === "cancelled") return { kind: "stay" as const };
 			resolvedDirection = direction;
@@ -119,6 +133,7 @@ export async function showSyncResolution(
 		onError: (_menuCtx, error) => ctx.ui.notify(errorMessage(error), "error"),
 	});
 	if (sessionSignal?.aborted || result.kind === "stale") return { kind: "stale" };
+	if (chainedResult) return { kind: "route-result", ...chainedResult };
 	if (resolvedDirection) return { kind: "resolved", direction: resolvedDirection };
 	if (result.kind === "closed") {
 		return result.reason === "back" ? { kind: "back" } : { kind: "closed" };

@@ -546,7 +546,7 @@ test("an aborted settings mutation waiting on the cross-process lock never publi
 	});
 });
 
-test("settings UI exposes separate local and remote included-content reviews", async () => {
+test("settings UI exposes local editing and synced-content comparison", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		const before = Buffer.from(`${JSON.stringify(v3S3Settings())}\n`);
@@ -566,7 +566,7 @@ test("settings UI exposes separate local and remote included-content reviews", a
 		await showSyncSettings(ctx, async () => undefined);
 
 		assert.match(rendered, /Included content/u);
-		assert.match(rendered, /Remote included content/u);
+		assert.match(rendered, /Compare synced content/u);
 		assert.deepEqual(readFileSync(localConfigPath()), before);
 	});
 });

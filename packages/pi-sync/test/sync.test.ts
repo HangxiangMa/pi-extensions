@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import {
 	createCustomSelectorHarness,
@@ -21,7 +22,7 @@ import { localConfigPath, readLocalConfigObject, updateLocalConfig } from "../sr
 import { showFileSelection } from "../src/file-selection.js";
 import sync from "../src/sync.js";
 import { syncBoth } from "../src/sync-operations.js";
-import { BUILT_IN_SYNC_ROOTS } from "../src/sync-policy.js";
+import { BUILT_IN_SYNC_ROOTS, RemoteSelectionMismatchError } from "../src/sync-policy.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 
 initTheme("dark", false);
@@ -182,6 +183,166 @@ test("RPC init creates a valid empty version 3 document", async () => {
 			syncSetups: {},
 		});
 		assert.match(notifications.at(-1)?.message ?? "", /Created/u);
+	});
+});
+
+test("direct selection mismatch reports exact differences and inline recovery guidance", async () => {
+	const mock = createMockPi();
+	sync(mock.pi, {
+		loadSyncOperations: async () =>
+			({
+				pull: async () => {
+					throw new RemoteSelectionMismatchError(
+						"home",
+						["settings.json", "AGENTS.md"],
+						["AGENTS.md", "models.json"],
+					);
+				},
+			}) as never,
+	});
+	const { ctx, notifications } = createMockContext({ hasUI: true, mode: "rpc" });
+
+	await mock.commands.get("sync")?.handler("pull --setup home", ctx);
+
+	const message = notifications.at(-1)?.message ?? "";
+	assert.match(message, /Remote-only: models\.json/u);
+	assert.match(message, /This-device-only: settings\.json/u);
+	assert.match(message, /Run \/sync in TUI to review/u);
+});
+
+test("direct order-only mismatch explains both ordered lists", async () => {
+	const mock = createMockPi();
+	sync(mock.pi, {
+		loadSyncOperations: async () =>
+			({
+				push: async () => {
+					throw new RemoteSelectionMismatchError(
+						"home",
+						["settings.json", "AGENTS.md"],
+						["AGENTS.md", "settings.json"],
+					);
+				},
+			}) as never,
+	});
+	const { ctx, notifications } = createMockContext({ hasUI: true, mode: "rpc" });
+
+	await mock.commands.get("sync")?.handler("push --setup home", ctx);
+
+	const message = notifications.at(-1)?.message ?? "";
+	assert.match(message, /Only ordering differs/u);
+	assert.match(message, /Remote order: AGENTS\.md, settings\.json/u);
+	assert.match(message, /This device order: settings\.json, AGENTS\.md/u);
+});
+
+test("generic operation failures never expose selection resolution actions", async () => {
+	const mock = createMockPi();
+	sync(mock.pi, {
+		loadSyncOperations: async () =>
+			({
+				pull: async () => {
+					throw new Error("transport authentication failed");
+				},
+			}) as never,
+	});
+	const { ctx, notifications } = createMockContext({ hasUI: true, mode: "rpc" });
+
+	await mock.commands.get("sync")?.handler("pull --setup home", ctx);
+
+	assert.match(notifications.at(-1)?.message ?? "", /transport authentication failed/u);
+	assert.doesNotMatch(notifications.at(-1)?.message ?? "", /content list|update remote/iu);
+});
+
+test("the command boundary sends only typed selection mismatches to the manager resolver", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+		let releaseOperation: () => void = () => undefined;
+		const operationGate = new Promise<void>((resolve) => {
+			releaseOperation = resolve;
+		});
+		const mock = createMockPi();
+		sync(mock.pi, {
+			loadSyncOperations: async () =>
+				({
+					syncBoth: async () => {
+						await operationGate;
+						throw new RemoteSelectionMismatchError(
+							"home",
+							["settings.json"],
+							["settings.json", "pi-starship.toml"],
+						);
+					},
+				}) as never,
+		});
+		const tui = createTuiHarness({ width: 80, rows: 20 });
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: tui.custom,
+		});
+		const running = mock.commands.get("sync")?.handler("", ctx);
+
+		await tui.waitForOpen();
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		releaseOperation();
+		await waitFor(() => tui.isOpen && /Synced content differs/u.test(tui.render().join("\n")));
+		assert.match(tui.render().join("\n"), /Remote-only paths: 1/u);
+		assert.deepEqual(notifications, []);
+		tui.press("tui.select.cancel");
+		await tui.waitForOpen();
+		tui.press("ctrl+c");
+		await running;
+	});
+});
+
+test("automatic selection mismatch remains warning-only and never opens resolution UI", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const before = Buffer.from(
+			`${JSON.stringify(v3S3Settings({ automatic: true, include: ["settings.json", "sessions"] }))}\n`,
+		);
+		writeFileSync(localConfigPath(), before, { mode: 0o600 });
+		mkdirSync(path.join(agentDir, "sessions"), { recursive: true });
+		writeFileSync(path.join(agentDir, "sessions", "one.jsonl"), "{}\n");
+		const mock = createMockPi();
+		sync(mock.pi, {
+			loadSyncOperations: async () =>
+				({
+					syncBoth: async () => {
+						throw selectionMismatch();
+					},
+					push: async () => {
+						throw selectionMismatch();
+					},
+				}) as never,
+		});
+		let customCalls = 0;
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async () => {
+				customCalls += 1;
+				return undefined;
+			},
+		});
+
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		assert.match(notifications.at(-1)?.message ?? "", /pi-sync auto sync skipped/u);
+		await mock.events.get("session_shutdown")?.[0]?.({ reason: "exit" }, ctx);
+
+		assert.equal(customCalls, 0);
+		assert.match(notifications.at(-1)?.message ?? "", /pi-sync session push skipped/u);
+		assert.match(notifications.at(-1)?.message ?? "", /Remote-only: pi-starship\.toml/u);
+		assert.deepEqual(readFileSync(localConfigPath()), before);
+
+		function selectionMismatch() {
+			return new RemoteSelectionMismatchError(
+				"home",
+				["settings.json", "sessions"],
+				["settings.json", "pi-starship.toml", "sessions"],
+			);
+		}
 	});
 });
 
@@ -532,3 +693,11 @@ test("unsupported settings pause startup automatic sync and remain unchanged", a
 		assert.deepEqual(readFileSync(localConfigPath()), bytes);
 	});
 });
+
+async function waitFor(condition: () => boolean) {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		if (condition()) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 1));
+	}
+	assert.fail("Timed out waiting for condition");
+}

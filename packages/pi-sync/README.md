@@ -61,15 +61,24 @@ and confirmations.
 
 ### Resolve conflicts in the manager
 
-When **Sync now**, **Pull from remote…**, or **Push to remote…** finds changes that require a human
-direction choice, the manager opens **Resolve sync conflict** instead of ending at a command-only
-error. The flow names the current sync setup and explains whether local content, remote content, or
-the included-content policy changed. If the active remote snapshot explicitly selects different
-content, automatic sync and pulls pause until you adopt the remote policy in Settings or publish the
-local policy with a reviewed force push.
+When **Sync now**, **Pull from remote…**, or **Push to remote…** finds changes that require a human direction choice, the manager opens **Resolve sync conflict** instead of ending at a command-only error.
+The flow names the current sync setup and explains whether local content, remote content, or the included-content policy changed.
 
-Choose **Review differences (recommended)** to inspect the exact affected paths without changing
-local files, remote data, or sync state. Then choose one reviewed direction:
+An explicit remote content-list mismatch now opens **Synced content differs** inside the same manager flow.
+Nothing changes until you choose an action.
+Choose **Review all paths (recommended)** first to compare exact remote-only paths, device-only paths, and both ordered lists.
+If membership matches but order differs, the review says that only ordering differs.
+Then choose one action:
+
+- **Use remote content list** revalidates the remote snapshot and reviewed local setup before saving only `sync.include`.
+  **Remote content list saved** confirms that no files were pulled and offers a separate **Continue Sync/Pull/Push now…** action plus **Done**.
+  Continue starts a fresh operation and exact preview for the captured setup rather than resuming stale work.
+- **Keep this device's content list and update remote…** opens the existing `push --force` preparation and exact confirmation without `--yes`.
+  Cancelling preparation or confirmation returns to the content-list choice without changing remote data.
+- **Cancel** returns to the manager without changing settings, files, remote data, or sync state.
+
+Choose **Review differences (recommended)** in an ordinary file-direction conflict to inspect the exact affected paths without changing local files, remote data, or sync state.
+Then choose one reviewed direction:
 
 - **Keep local content and replace remote…** uses the existing forced-push path. It scans managed
   local files for secrets, shows the exact remote publication effect, re-reads a changed remote head,
@@ -79,10 +88,11 @@ local files, remote data, or sync state. Then choose one reviewed direction:
 - First sync uses **Use local as initial source…** and **Use remote as initial source…** labels. An
   empty remote offers **Push local content…** only.
 
-Cancelling a preparation or confirmation returns to conflict resolution with no side effects. Back
-returns to the sync manager; Ctrl+C closes the complete flow. Automatic startup/shutdown sync never
-opens this interactive flow and continues to report an actionable warning. Deterministic direct
-routes remain available and keep their command-oriented error guidance.
+Cancelling a preparation or confirmation returns to conflict resolution with no side effects.
+Back returns to the sync manager, and Ctrl+C closes the complete flow.
+Automatic startup/shutdown sync never opens either interactive resolution and continues to report an actionable warning.
+Deterministic direct routes remain non-interactive and report remote-only, device-only, or order-only differences with `/sync` recovery guidance.
+RPC remote content-list review remains read-only, while print and JSON modes remain unsupported for `/sync` because their UI output is not observable.
 
 ## ⚙️ Settings
 
@@ -203,17 +213,16 @@ remote snapshot. Leaving the editor opens an exact Include/Exclude review with *
 the draft and Discard/cancellation preserves the settings bytes. RPC remains a read-only summary with
 the manual `sync.include` path.
 
-Every new snapshot stores the normalized included-content selection separately from the files that
-happened to exist. This preserves selected-but-missing paths without syncing `pi-sync.json`, storage
-credentials, automatic-sync preferences, or setup names. **Settings → Remote included content** reads
-the active snapshot and offers **Adopt remote included content**, **Keep local included content**,
-**Review paths**, and **Cancel** when local and remote selections differ. Adoption revalidates the
-remote head, saves local settings atomically, and does not pull files or write sync state; review
-**Sync now** separately. A reviewed force push keeps local selection and explicitly replaces the
-remote policy while preserving eligible unmanaged remote files.
+Every new snapshot stores the normalized included-content selection separately from the files that happened to exist.
+This preserves selected-but-missing paths without syncing `pi-sync.json`, storage credentials, automatic-sync preferences, or setup names.
+**Settings → Compare synced content** opens the same review-first flow as a manager operation when local and remote lists differ.
+Adoption revalidates the remote head, immutable snapshot, reviewed storage coordinates, and local include list before one atomic settings update.
+The saved state changes only `sync.include`, preserves unknown settings fields, and never pulls files or writes sync state.
+Its explicit Continue action starts a fresh **Sync now** route, while **Done** leaves the reviewed settings change saved without implying a file operation.
+Keeping this device's list opens the reviewed force-push path and explicitly replaces the remote policy while preserving eligible unmanaged remote files.
 
-Automatic sync and pull, including forced pull, pause on an explicit remote-policy difference rather
-than silently expanding local scope. Status reports matches and exact local-only/remote-only paths.
+Automatic sync and pull, including forced pull, pause on an explicit remote-policy difference rather than silently expanding local scope.
+Status reports matches and exact local-only/remote-only paths.
 Old snapshots remain readable. Because they have no authoritative selection, pi-sync offers only a
 clearly labeled read-only partial discovery from safe remote file roots; selected-but-missing and
 preserved-unmanaged intent cannot be reconstructed. Use **Add custom path…** for any needed path.

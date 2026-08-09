@@ -1,9 +1,10 @@
+import { syncConfigReviewFingerprint } from "./config.js";
 import type { RemoteHead, SyncBackend } from "./sync-backend.js";
 import { safeTerminalText } from "./sync-format.js";
 import {
 	inspectRemoteSelection,
-	RemoteSelectionMismatchError,
 	type RemoteSelectionState,
+	remoteSelectionMismatch,
 	sameSyncInclude,
 	snapshotSelectionInclude,
 } from "./sync-policy.js";
@@ -37,7 +38,7 @@ export async function readSnapshotForHead(
 export function requireCompatibleRemoteSelection(config: AnySyncConfig, snapshot: Snapshot) {
 	const state = inspectRemoteSelection(config.include, snapshot);
 	if (state.kind === "different") {
-		throw new RemoteSelectionMismatchError(config.include, state.include);
+		throw remoteSelectionMismatch(config, state.include, syncConfigReviewFingerprint(config));
 	}
 }
 

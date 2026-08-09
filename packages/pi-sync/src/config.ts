@@ -142,6 +142,10 @@ export function syncConfigReviewIdentity(config: AnySyncConfig) {
 	]);
 }
 
+export function syncConfigReviewFingerprint(config: AnySyncConfig) {
+	return createHash("sha256").update(syncConfigReviewIdentity(config)).digest("hex");
+}
+
 function storageReviewFromConfig(config: AnySyncConfig): SyncSetupStorageReview {
 	return {
 		connectionName: config.connectionName,

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
 import {
@@ -9,6 +11,7 @@ import {
 	localConfigPath,
 	readLocalConfigObject,
 	statePathForConfig,
+	syncConfigReviewFingerprint,
 	updateLocalConfig,
 } from "../src/config.js";
 import { showRemoteSelectionReview } from "../src/remote-selection-ui.js";
@@ -18,32 +21,145 @@ import { MemorySyncBackend } from "./memory-sync-backend.js";
 
 initTheme("dark", false);
 
-test("remote selection review adopts policy only after session acknowledgement", async () => {
+test("remote selection difference is review-first, sanitized, and bounded", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
-		writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+		writeFileSync(
+			localConfigPath(),
+			JSON.stringify(v3S3Settings({ include: ["settings.json", "AGENTS.md"] })),
+			{ mode: 0o600 },
+		);
 		const backend = new MemorySyncBackend();
-		await publishSelection(backend, ["settings.json", "pi-starship.toml", "sessions"]);
-		let confirmations = 0;
-		const { ctx, notifications } = createMockContext({
+		await publishSelection(backend, ["pi-starship.toml", "settings.json"]);
+		const rendered = new Map<number, string[]>();
+		const { ctx } = createMockContext({
 			hasUI: true,
 			mode: "tui",
-			confirm: async () => {
-				confirmations += 1;
-				return true;
-			},
 			custom: async (factory: unknown) => {
-				const harness = createCustomSelectorHarness(factory, 100);
-				assert.match(harness.render().join("\n"), /Adopt remote included content/u);
+				const harness = createCustomSelectorHarness(factory, 60);
+				for (const width of [32, 60, 100]) rendered.set(width, harness.render(width));
+				assert.match(harness.render().join("\n"), /Review all paths \(recommended\)/u);
 				harness.handleInput("tui.select.confirm");
 				await harness.waitForPending();
+				const review = harness.render().join("\n");
+				assert.match(review, /Remote-only.*pi-starship\.toml/is);
+				assert.match(review, /Device-only.*AGENTS\.md/is);
+				assert.equal(review.includes("\u001b]8"), false);
+				harness.handleInput("tui.select.cancel");
+				harness.handleInput("tui.select.cancel");
 				return harness.result;
 			},
 		});
 
 		await showRemoteSelectionReview(ctx, "home", undefined, () => backend);
 
+		for (const [width, lines] of rendered) {
+			assert.ok(lines.every((line) => visibleWidth(line) <= width));
+			assert.match(lines.join("\n"), /Synced content differs/u);
+		}
+	});
+});
+
+test("captured setup text is sanitized at the review display boundary", async () => {
+	const rendered = new Map<number, string[]>();
+	const { ctx } = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		custom: async (factory: unknown) => {
+			const harness = createCustomSelectorHarness(factory, 60);
+			for (const width of [32, 60, 100]) rendered.set(width, harness.render(width));
+			harness.handleInput("tui.select.cancel");
+			return harness.result;
+		},
+	});
+
+	await showRemoteSelectionReview(ctx, undefined, undefined, undefined, {
+		decision: {
+			setupName: "home\u001b]8;;spoof",
+			configIdentity: "captured",
+			localInclude: ["settings.json"],
+			remoteInclude: ["models.json"],
+		},
+		origin: "sync",
+	});
+
+	for (const [width, lines] of rendered) {
+		assert.ok(lines.every((line) => visibleWidth(line) <= width));
+		assert.equal(lines.join("\n").includes("\u001b]8"), false);
+	}
+});
+
+test("order-only selection difference is explicit in summary and exact review", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			localConfigPath(),
+			JSON.stringify(v3S3Settings({ include: ["settings.json", "AGENTS.md"] })),
+			{ mode: 0o600 },
+		);
+		const backend = new MemorySyncBackend();
+		await publishSelection(backend, ["AGENTS.md", "settings.json"]);
+		const tui = createTuiHarness({ width: 80, rows: 20 });
+		const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+		const running = showRemoteSelectionReview(ctx, "home", undefined, () => backend);
+
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /Only the ordering differs/u);
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		const reviewTop = tui.render().join("\n");
+		tui.press("end");
+		const reviewBottom = tui.render().join("\n");
+		tui.press("tui.select.cancel");
+		await tui.waitForOpen();
+		tui.press("tui.select.cancel");
+		await running;
+
+		assert.match(reviewTop, /Only ordering differs/u);
+		assert.match(reviewTop, /Remote ordered list:.*1\. AGENTS\.md/is);
+		assert.match(reviewBottom, /This device's ordered list:.*1\. settings\.json/is);
+	});
+});
+
+test("remote selection adoption saves settings only after session acknowledgement", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+		const backend = new MemorySyncBackend();
+		await publishSelection(backend, ["settings.json", "pi-starship.toml", "sessions"]);
+		let confirmations = 0;
+		const tui = createTuiHarness({ width: 80, rows: 20 });
+		const { ctx } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: tui.custom,
+			confirm: async () => {
+				confirmations += 1;
+				return true;
+			},
+		});
+		let routeCalls = 0;
+		const running = showRemoteSelectionReview(ctx, "home", undefined, () => backend, {
+			origin: "settings",
+			runRoute: async () => {
+				routeCalls += 1;
+				return { kind: "completed" };
+			},
+		});
+
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /Remote content list saved/u);
+		assert.match(tui.render().join("\n"), /No files were pulled/u);
+		assert.match(tui.render().join("\n"), /Continue Sync now/u);
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		assert.deepEqual(await running, { kind: "done" });
+
 		assert.equal(confirmations, 1);
+		assert.equal(routeCalls, 0);
 		assert.deepEqual((await readLocalConfigObject())?.syncSetups.home.sync.include, [
 			"settings.json",
 			"pi-starship.toml",
@@ -51,33 +167,179 @@ test("remote selection review adopts policy only after session acknowledgement",
 		]);
 		assert.equal(existsSync(path.join(agentDir, "pi-starship.toml")), false);
 		assert.equal(existsSync(statePathForConfig(await loadConfig())), false);
-		assert.match(notifications.at(-1)?.message ?? "", /No files were pulled/u);
 	});
 });
 
-test("remote selection review keeps local policy without changing settings", async () => {
+test("refusing session acknowledgement keeps the comparison open and settings unchanged", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		const before = Buffer.from(`${JSON.stringify(v3S3Settings())}\n`);
 		writeFileSync(localConfigPath(), before, { mode: 0o600 });
 		const backend = new MemorySyncBackend();
-		await publishSelection(backend, ["settings.json", "pi-starship.toml"]);
-		const { ctx, notifications } = createMockContext({
+		await publishSelection(backend, ["settings.json", "sessions"]);
+		const tui = createTuiHarness({ width: 80, rows: 20 });
+		const { ctx } = createMockContext({
 			hasUI: true,
 			mode: "tui",
-			custom: async (factory: unknown) => {
-				const harness = createCustomSelectorHarness(factory, 100);
-				harness.handleInput("tui.select.down");
-				harness.handleInput("tui.select.confirm");
-				await harness.waitForPending();
-				return harness.result;
+			custom: tui.custom,
+			confirm: async () => false,
+		});
+		const running = showRemoteSelectionReview(ctx, "home", undefined, () => backend);
+
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /Synced content differs/u);
+		tui.press("tui.select.cancel");
+		assert.deepEqual(await running, { kind: "back" });
+		assert.deepEqual(readFileSync(localConfigPath()), before);
+	});
+});
+
+test("saved remote list can continue the captured route or stop without file mutation", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+		const backend = new MemorySyncBackend();
+		await publishSelection(backend, ["settings.json", "pi-starship.toml"]);
+		const tui = createTuiHarness({ width: 80, rows: 20 });
+		const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+		const routes: Array<{ route: string; target?: string }> = [];
+		let releaseRoute: () => void = () => undefined;
+		const routeGate = new Promise<void>((resolve) => {
+			releaseRoute = resolve;
+		});
+		const running = showRemoteSelectionReview(ctx, "home", undefined, () => backend, {
+			origin: "pull",
+			runRoute: async (route, _signal, _onCommit, target) => {
+				routes.push({ route, target });
+				await routeGate;
+				return { kind: "completed", outcome: "applied" };
 			},
 		});
 
-		await showRemoteSelectionReview(ctx, "home", undefined, () => backend);
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /Continue Pull now/u);
+		tui.press("tui.select.confirm");
+		await waitFor(() => routes.length === 1);
+		assert.deepEqual(routes, [{ route: "pull", target: "home" }]);
+		assert.equal(existsSync(path.join(agentDir, "pi-starship.toml")), false);
+		releaseRoute();
+		assert.deepEqual(await running, {
+			kind: "route-result",
+			result: { kind: "completed", outcome: "applied" },
+			route: "pull",
+		});
+	});
+});
 
+test("keeping this device list invokes reviewed push force and cancellation returns", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const before = Buffer.from(`${JSON.stringify(v3S3Settings())}\n`);
+		writeFileSync(localConfigPath(), before, { mode: 0o600 });
+		const tui = createTuiHarness({ width: 80, rows: 20 });
+		const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+		const routes: Array<{ route: string; target?: string }> = [];
+		const config = await loadConfig("home");
+		const running = showRemoteSelectionReview(ctx, "home", undefined, undefined, {
+			decision: {
+				setupName: "home",
+				configIdentity: syncConfigReviewFingerprint(config),
+				localInclude: ["settings.json"],
+				remoteInclude: ["settings.json", "pi-starship.toml"],
+			},
+			origin: "sync",
+			runRoute: async (route, _signal, _onCommit, target) => {
+				routes.push({ route, target });
+				return { kind: "completed", outcome: "cancelled" };
+			},
+		});
+
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await waitFor(() => routes.length === 1);
+		await tui.waitForOpen();
+		assert.deepEqual(routes, [{ route: "push --force", target: "home" }]);
+		assert.match(tui.render().join("\n"), /Synced content differs/u);
+		tui.press("tui.select.cancel");
+		assert.deepEqual(await running, { kind: "back" });
 		assert.deepEqual(readFileSync(localConfigPath()), before);
-		assert.match(notifications.at(-1)?.message ?? "", /Kept local.*force push/i);
+	});
+});
+
+test("local-wins action refreshes when the reviewed setup identity changes", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+		const backend = new MemorySyncBackend();
+		await publishSelection(backend, ["settings.json", "pi-starship.toml"]);
+		const tui = createTuiHarness({ width: 80, rows: 20 });
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: tui.custom,
+		});
+		let routeCalls = 0;
+		const running = showRemoteSelectionReview(ctx, "home", undefined, () => backend, {
+			origin: "push",
+			runRoute: async () => {
+				routeCalls += 1;
+				return { kind: "completed", outcome: "applied" };
+			},
+		});
+
+		await tui.waitForOpen();
+		await updateLocalConfig((settings) => ({
+			...settings,
+			syncSetups: {
+				...settings.syncSetups,
+				home: {
+					...settings.syncSetups.home,
+					sync: { ...settings.syncSetups.home.sync, automatic: true },
+				},
+			},
+		}));
+		tui.press("tui.select.down");
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await waitFor(() => tui.openCount >= 2);
+		assert.equal(routeCalls, 0);
+		assert.match(notifications.at(-1)?.message ?? "", /Refreshing the comparison/u);
+		tui.press("tui.select.cancel");
+		await running;
+	});
+});
+
+test("same and empty remote selections close with clear notices", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+		const emptyBackend = new MemorySyncBackend();
+		let customCalls = 0;
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: async () => {
+				customCalls += 1;
+				return undefined;
+			},
+		});
+
+		await showRemoteSelectionReview(ctx, "home", undefined, () => emptyBackend);
+		assert.match(notifications.at(-1)?.message ?? "", /no snapshot/u);
+
+		const sameBackend = new MemorySyncBackend();
+		await publishSelection(sameBackend, ["settings.json"]);
+		await showRemoteSelectionReview(ctx, "home", undefined, () => sameBackend);
+		assert.match(notifications.at(-1)?.message ?? "", /already matches/u);
+		assert.equal(customCalls, 0);
 	});
 });
 
@@ -118,37 +380,38 @@ test("legacy remote selection offers read-only partial discovery", async () => {
 	});
 });
 
-test("remote selection adoption rejects a changed remote head and preserves settings", async () => {
+test("remote selection adoption refreshes a changed remote head and preserves settings", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		const before = Buffer.from(`${JSON.stringify(v3S3Settings())}\n`);
 		writeFileSync(localConfigPath(), before, { mode: 0o600 });
 		const backend = new MemorySyncBackend();
 		await publishSelection(backend, ["settings.json", "pi-starship.toml", "sessions"]);
-		const controller = new AbortController();
+		const tui = createTuiHarness({ width: 80, rows: 20 });
 		const { ctx, notifications } = createMockContext({
 			hasUI: true,
 			mode: "tui",
+			custom: tui.custom,
 			confirm: async () => {
 				await publishSelection(backend, ["settings.json", "models.json"]);
 				return true;
 			},
-			custom: async (factory: unknown) => {
-				const harness = createCustomSelectorHarness(factory, 100);
-				harness.handleInput("tui.select.confirm");
-				await harness.waitForPending();
-				return harness.result;
-			},
 		});
+		const running = showRemoteSelectionReview(ctx, "home", undefined, () => backend);
 
-		await showRemoteSelectionReview(ctx, "home", controller.signal, () => backend);
-
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await waitFor(() => tui.openCount >= 2);
+		assert.match(tui.render().join("\n"), /Synced content differs/u);
+		assert.match(notifications.at(-1)?.message ?? "", /Refreshing the comparison/u);
+		tui.press("tui.select.cancel");
+		await running;
 		assert.deepEqual(readFileSync(localConfigPath()), before);
-		assert.match(notifications.at(-1)?.message ?? "", /Remote changed while.*open/i);
 	});
 });
 
-test("remote selection adoption rejects a concurrent local include change", async () => {
+test("remote selection adoption refreshes a concurrent local include change", async () => {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
@@ -165,23 +428,40 @@ test("remote selection adoption rejects a concurrent local include change", asyn
 			}));
 		});
 		await publishSelection(backend, ["settings.json", "pi-starship.toml"]);
+		const tui = createTuiHarness({ width: 80, rows: 20 });
 		const { ctx, notifications } = createMockContext({
 			hasUI: true,
 			mode: "tui",
-			custom: async (factory: unknown) => {
-				const harness = createCustomSelectorHarness(factory, 100);
-				harness.handleInput("tui.select.confirm");
-				await harness.waitForPending();
-				return harness.result;
-			},
+			custom: tui.custom,
 		});
+		const running = showRemoteSelectionReview(ctx, "home", undefined, () => backend);
 
-		await showRemoteSelectionReview(ctx, "home", undefined, () => backend);
-
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await waitFor(() => tui.openCount >= 2);
 		assert.deepEqual((await readLocalConfigObject())?.syncSetups.home.sync.include, [
 			"models.json",
 		]);
-		assert.match(notifications.at(-1)?.message ?? "", /included content changed.*reopen/i);
+		assert.match(notifications.at(-1)?.message ?? "", /Refreshing the comparison/u);
+		tui.press("tui.select.cancel");
+		await running;
+	});
+});
+
+test("RPC remote selection review stays read-only", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(agentDir, { recursive: true });
+		const before = Buffer.from(`${JSON.stringify(v3S3Settings())}\n`);
+		writeFileSync(localConfigPath(), before, { mode: 0o600 });
+		const backend = new MemorySyncBackend();
+		await publishSelection(backend, ["pi-starship.toml", "settings.json"]);
+		const { ctx, notifications } = createMockContext({ hasUI: true, mode: "rpc" });
+
+		await showRemoteSelectionReview(ctx, "home", undefined, () => backend);
+
+		assert.match(notifications.at(-1)?.message ?? "", /RPC review is read-only/u);
+		assert.deepEqual(readFileSync(localConfigPath()), before);
 	});
 });
 
@@ -229,9 +509,17 @@ async function publishSelection(backend: MemorySyncBackend, include: string[]) {
 	return backend.publishSnapshot(
 		{
 			...snapshot([]),
-			id: `selection-${include.length}`,
+			id: `selection-${include.join("-")}`,
 			selection: { version: 1, include },
 		},
 		expectedRemoteHead(await backend.readHead()),
 	);
+}
+
+async function waitFor(condition: () => boolean) {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		if (condition()) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 1));
+	}
+	assert.fail("Timed out waiting for condition");
 }

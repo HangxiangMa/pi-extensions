@@ -2,6 +2,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import type { RunRoute } from "./cancellable-operation.js";
 import { loadConfig, localConfigPath } from "./config.js";
+import { dispatchManagerResult } from "./manager-result-dispatcher.js";
 import { updateSyncSetup } from "./settings-management.js";
 import {
 	SETUP_SWITCH_ACTION_OPTIONS,
@@ -67,9 +68,8 @@ export async function showSyncSettings(
 					},
 					{
 						id: "remoteInclude",
-						label: "Remote included content",
-						description:
-							"Compare portable remote selection, then adopt it or keep local settings without pulling files.",
+						label: "Compare synced content",
+						description: "Review this device and remote content lists before choosing either one.",
 						currentValue: "Review",
 						action: "remote-include",
 					},
@@ -126,8 +126,24 @@ export async function showSyncSettings(
 				const reviewSignal = signal ? AbortSignal.any([signal, actionSignal]) : actionSignal;
 				const { showRemoteSelectionReview } = await import("./remote-selection-ui.js");
 				if (reviewSignal.aborted) return { kind: "rejected" };
-				await showRemoteSelectionReview(ctx, setupName, reviewSignal);
-				return reviewSignal.aborted ? { kind: "rejected" } : { kind: "stay" };
+				const review = await showRemoteSelectionReview(ctx, setupName, reviewSignal, undefined, {
+					origin: "settings",
+					runRoute,
+				});
+				if (reviewSignal.aborted) return { kind: "rejected" };
+				if (review.kind === "route-result") {
+					const disposition = await dispatchManagerResult(
+						ctx,
+						review.result,
+						review.route,
+						runRoute,
+						reviewSignal,
+					);
+					return disposition.kind === "close" ? { kind: "close" } : { kind: "stay" };
+				}
+				return review.kind === "closed" || review.kind === "stale"
+					? { kind: "close" }
+					: { kind: "stay" };
 			},
 		},
 	});

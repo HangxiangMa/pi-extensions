@@ -1,196 +1,466 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { createSyncBackend, type SyncBackendFactory } from "./backend-factory.js";
-import { loadConfig, loadPartialConfig } from "./config.js";
+import {
+	type RunRoute,
+	type RunRouteResult,
+	runCancellableOperation,
+} from "./cancellable-operation.js";
+import {
+	loadConfig,
+	loadPartialConfig,
+	type SyncSetupStorageReview,
+	syncConfigReviewFingerprint,
+} from "./config.js";
 import { readSnapshotForHead } from "./remote-snapshot.js";
-import { updateSyncSetup } from "./settings-management.js";
+import { SyncSetupReviewChangedError, updateSyncSetup } from "./settings-management.js";
 import type { RemoteHead, SyncBackend } from "./sync-backend.js";
 import { errorMessage, safeTerminalText } from "./sync-format.js";
 import {
+	compareSyncInclude,
 	inspectRemoteSelection,
+	type RemoteSelectionDecision,
 	type RemoteSelectionState,
 	sameSyncInclude,
 } from "./sync-policy.js";
-import type { AnySyncConfig } from "./types.js";
+import type { AnySyncConfig, PartialConfig } from "./types.js";
 
 const STATUS_KEY = "sync";
+
+export type RemoteSelectionOrigin = "settings" | "sync" | "pull" | "push";
+
+export interface RemoteSelectionReviewOptions {
+	decision?: RemoteSelectionDecision;
+	origin?: RemoteSelectionOrigin;
+	runRoute?: RunRoute;
+}
+
+export type RemoteSelectionReviewResult =
+	| { kind: "back" }
+	| { kind: "closed" }
+	| { kind: "done" }
+	| { kind: "stale" }
+	| { kind: "route-result"; result: RunRouteResult; route: "sync" | "pull" | "push" };
 
 export async function showRemoteSelectionReview(
 	ctx: ExtensionCommandContext,
 	setupName?: string,
 	signal?: AbortSignal,
 	factory: SyncBackendFactory = createSyncBackend,
-) {
+	options: RemoteSelectionReviewOptions = {},
+): Promise<RemoteSelectionReviewResult> {
 	try {
-		const config = await loadConfig(setupName);
-		if (signal?.aborted) return;
-		const storageReview = await loadPartialConfig(config.setupName);
-		if (signal?.aborted) return;
-		ctx.ui.setStatus(STATUS_KEY, `checking remote selection for ${config.setupName}`);
-		const backend = await factory(config);
-		if (signal?.aborted) return;
-		const head = await backend.readHead(signal);
-		if (signal?.aborted) return;
-		if (!head) {
-			ctx.ui.setStatus(STATUS_KEY, undefined);
-			ctx.ui.notify("Remote storage has no snapshot or included-content policy yet.", "info");
-			return;
+		let decision = options.decision;
+		if (!decision) {
+			const inspected = await inspectConfiguredRemoteSelection(ctx, setupName, signal, factory);
+			if (!inspected || signal?.aborted) return { kind: "stale" };
+			if (inspected.kind === "empty") {
+				ctx.ui.notify("Remote storage has no snapshot or synced-content list yet.", "info");
+				return { kind: "back" };
+			}
+			if (inspected.state.kind === "same") {
+				ctx.ui.notify("Remote synced content already matches this sync setup.", "info");
+				return { kind: "back" };
+			}
+			if (inspected.state.kind === "legacy") {
+				if (ctx.mode !== "tui") {
+					ctx.ui.notify(formatLegacySummary(inspected.config, inspected.state.discovered), "info");
+					return { kind: "back" };
+				}
+				await showLegacyDiscovery(ctx, inspected.config, inspected.state.discovered, signal);
+				return signal?.aborted ? { kind: "stale" } : { kind: "back" };
+			}
+			decision = decisionFromState(inspected.config, inspected.state);
 		}
-		const snapshot = await readSnapshotForHead(backend, head, signal);
-		if (signal?.aborted) return;
-		const state = inspectRemoteSelection(config.include, snapshot);
-		ctx.ui.setStatus(STATUS_KEY, undefined);
 
 		if (ctx.mode !== "tui") {
-			ctx.ui.notify(
-				formatRemoteSelectionSummary(config, state),
-				state.kind === "different" ? "warning" : "info",
+			ctx.ui.notify(formatRemoteSelectionSummary(decision), "warning");
+			return { kind: "back" };
+		}
+
+		let currentDecision = decision;
+		for (;;) {
+			if (signal?.aborted) return { kind: "stale" };
+			const result = await showSelectionDifference(
+				ctx,
+				currentDecision,
+				options.origin ?? "settings",
+				options.runRoute,
+				signal,
+				factory,
 			);
-			return;
+			if (result.kind !== "refresh") return result;
+			const refreshed = await inspectConfiguredRemoteSelection(
+				ctx,
+				currentDecision.setupName,
+				signal,
+				factory,
+			);
+			if (!refreshed || signal?.aborted) return { kind: "stale" };
+			if (refreshed.kind === "empty") {
+				ctx.ui.notify("Remote storage no longer has a snapshot or synced-content list.", "warning");
+				return { kind: "back" };
+			}
+			if (refreshed.state.kind !== "different") {
+				ctx.ui.notify(
+					refreshed.state.kind === "same"
+						? "Remote synced content now matches this sync setup."
+						: "The refreshed legacy snapshot has no authoritative synced-content list.",
+					"info",
+				);
+				return { kind: "back" };
+			}
+			currentDecision = decisionFromState(refreshed.config, refreshed.state);
 		}
-		if (state.kind === "same") {
-			ctx.ui.notify("Remote included content already matches this sync setup.", "info");
-			return;
-		}
-		if (state.kind === "legacy") {
-			await showLegacyDiscovery(ctx, config, state.discovered, signal);
-			return;
-		}
-		await showSelectionDifference(ctx, config, storageReview, backend, head, state, signal);
 	} catch (error) {
-		if (signal?.aborted) return;
-		ctx.ui.notify(`Could not review remote included content: ${errorMessage(error)}`, "error");
+		if (signal?.aborted) return { kind: "stale" };
+		ctx.ui.notify(`Could not review synced content: ${errorMessage(error)}`, "error");
+		return { kind: "back" };
 	} finally {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	}
 }
 
+type DifferenceFlowResult = RemoteSelectionReviewResult | { kind: "refresh" };
+
 async function showSelectionDifference(
 	ctx: ExtensionCommandContext,
-	config: AnySyncConfig,
-	storageReview: Awaited<ReturnType<typeof loadPartialConfig>>,
-	backend: SyncBackend,
-	reviewedHead: RemoteHead,
-	state: Extract<RemoteSelectionState, { kind: "different" }>,
-	sessionSignal?: AbortSignal,
-) {
-	type Screen = "choice" | "review";
-	type Action = "adopt" | "keep" | "cancel";
-	const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
+	initialDecision: RemoteSelectionDecision,
+	origin: RemoteSelectionOrigin,
+	runRoute: RunRoute | undefined,
+	sessionSignal: AbortSignal | undefined,
+	factory: SyncBackendFactory,
+): Promise<DifferenceFlowResult> {
+	type Screen = "choice" | "review" | "saved";
+	type Action = "adopt" | "keep" | "cancel" | "continue" | "done";
+	interface FlowState {
+		decision: RemoteSelectionDecision;
+		saved: boolean;
+	}
+	let flowState: FlowState = { decision: initialDecision, saved: false };
+	let continuationReview: PartialConfig | undefined;
+	let nextResult: RemoteSelectionReviewResult | undefined;
+	let refreshRequested = false;
+	const route = origin === "settings" ? "sync" : origin;
+	const menu = defineMenu<FlowState, Screen, Action, ExtensionCommandContext>({
 		start: "choice",
 		screens: {
-			choice: () => ({
+			choice: ({ state }) => ({
 				kind: "actions",
-				title: `Remote included content · ${safeTerminalText(config.setupName)}`,
-				lines: [
-					"The remote selection differs from this local sync setup.",
-					"No settings or files have been changed.",
-				],
+				title: "Synced content differs",
+				lines: selectionSummaryLines(state.decision),
 				items: [
 					{
+						id: "review",
+						label: "Review all paths (recommended)",
+						description: "Compare exact remote-only, device-only, and ordered lists.",
+						to: "review",
+					},
+					{
 						id: "adopt",
-						label: "Adopt remote included content",
-						description: "Save the reviewed remote paths locally without pulling files.",
+						label: "Use remote content list",
+						description: "Save the reviewed list on this device without pulling files.",
 						action: "adopt",
 					},
 					{
 						id: "keep",
-						label: "Keep local included content",
-						description: "Make no settings change; a reviewed force push can publish it later.",
+						label: "Keep this device's content list and update remote…",
+						description:
+							"Open the existing exact force-push preview without skipping confirmation.",
 						action: "keep",
-					},
-					{
-						id: "review",
-						label: "Review paths",
-						description: "Compare exact local-only and remote-only selection paths.",
-						to: "review",
 					},
 					{ id: "cancel", label: "Cancel", action: "cancel" },
 				],
-				hint: "close",
+				hint: "back",
 			}),
-			review: () => ({
+			review: ({ state }) => ({
 				kind: "review",
-				title: `Review remote included content · ${safeTerminalText(config.setupName)}`,
-				content: formatSelectionDifference(config.include, state),
+				title: `Review synced content · ${safeTerminalText(state.decision.setupName)}`,
+				content: formatSelectionDifference(state.decision),
 				format: { kind: "text" },
 				viewportSize: "adaptive",
 				hint: "back",
 			}),
+			saved: ({ state }) => ({
+				kind: "actions",
+				title: "Remote content list saved",
+				lines: [
+					`Sync setup: ${safeTerminalText(state.decision.setupName)}`,
+					"Only the included-content setting was saved.",
+					"No files were pulled and sync state was not changed.",
+				],
+				items: [
+					...(runRoute
+						? [
+								{
+									id: "continue",
+									label: continueLabel(origin),
+									description: "Start a fresh check and exact preview for this sync setup.",
+									action: "continue" as const,
+								},
+							]
+						: []),
+					{ id: "done", label: "Done", action: "done" },
+				],
+				hint: "close",
+			}),
 		},
 		actions: {
-			adopt: async ({ signal: actionSignal }) => {
-				const signal = sessionSignal
-					? AbortSignal.any([sessionSignal, actionSignal])
-					: actionSignal;
+			adopt: async ({ state, signal: actionSignal }) => {
+				const signal = combineSignals(sessionSignal, actionSignal);
 				try {
-					if (!config.include.includes("sessions") && state.include.includes("sessions")) {
+					const currentConfig = await loadConfig(state.decision.setupName);
+					if (signal.aborted) return { kind: "close" as const };
+					assertLocalSelectionCurrent(currentConfig, state.decision);
+					if (
+						!currentConfig.include.includes("sessions") &&
+						state.decision.remoteInclude.includes("sessions")
+					) {
 						const acknowledged = await ctx.ui.confirm(
-							"Adopt session conversations?",
-							"Session JSONL may contain prompts, tool output, file paths, images, and secrets. This saves the selection only; it does not pull files.",
+							"Use a content list that includes session conversations?",
+							"Session JSONL may contain prompts, tool output, file paths, images, and secrets. This saves the list only; it does not pull files.",
 							{ signal },
 						);
 						if (signal.aborted) return { kind: "close" as const };
 						if (!acknowledged) return { kind: "stay" as const };
 					}
+					const review = await loadAdoptionReview(state.decision, signal, factory);
 					if (signal.aborted) return { kind: "close" as const };
-					const currentHead = await backend.readHead(signal);
+					await revalidateAndAdopt(review, state.decision, signal);
 					if (signal.aborted) return { kind: "close" as const };
-					if (!currentHead || !backend.sameRevision(reviewedHead.revision, currentHead.revision)) {
-						throw new Error(
-							"Remote changed while the included-content review was open; reopen it.",
-						);
+					continuationReview = {
+						...review.storageReview,
+						setupName: state.decision.setupName,
+						include: [...state.decision.remoteInclude],
+						automatic: review.config.automatic,
+						onSwitch: review.config.onSwitch,
+					};
+					flowState = { decision: state.decision, saved: true };
+					return { kind: "to" as const, screen: "saved" as const };
+				} catch (error) {
+					if (signal.aborted) return { kind: "close" as const };
+					if (isStaleReviewError(error)) {
+						ctx.ui.notify(`${errorMessage(error)} Refreshing the comparison.`, "warning");
+						refreshRequested = true;
+						return { kind: "close" as const };
 					}
-					const currentSnapshot = await readSnapshotForHead(backend, currentHead, signal);
+					ctx.ui.notify(`Could not save the remote content list: ${errorMessage(error)}`, "error");
+					return { kind: "stay" as const };
+				}
+			},
+			keep: async ({ state, signal: actionSignal }) => {
+				if (!runRoute) {
+					ctx.ui.notify("The reviewed update-remote route is unavailable.", "error");
+					return { kind: "stay" as const };
+				}
+				const signal = combineSignals(sessionSignal, actionSignal);
+				try {
+					const latest = await loadConfig(state.decision.setupName);
 					if (signal.aborted) return { kind: "close" as const };
-					const currentState = inspectRemoteSelection(config.include, currentSnapshot);
-					if (
-						currentState.kind === "legacy" ||
-						!sameSyncInclude(currentState.include, state.include)
-					) {
-						throw new Error(
-							"Remote included content changed while the review was open; reopen it.",
-						);
-					}
-					await updateSyncSetup(
-						config.setupName,
-						(setup) => ({
-							...setup,
-							sync: { ...setup.sync, include: [...state.include] },
-						}),
+					assertLocalSelectionCurrent(latest, state.decision);
+					const result = await runCancellableOperation(
+						ctx,
+						"Preparing this device's push preview…",
+						"push --force",
+						runRoute,
 						{
-							expectedStorage: storageReview,
-							expectedInclude: config.include,
+							commitAware: true,
+							cancelledMessage: "Push preparation cancelled; no remote files were changed.",
+							target: state.decision.setupName,
 							signal,
 						},
 					);
-					if (signal.aborted) return { kind: "close" as const };
-					ctx.ui.notify(
-						`Saved remote included content for sync setup “${safeTerminalText(config.setupName)}”. No files were pulled; review Sync now separately.`,
-						"info",
-					);
-					return { kind: "close" as const };
+					return handleNestedRouteResult(result, "push");
 				} catch (error) {
 					if (signal.aborted) return { kind: "close" as const };
-					ctx.ui.notify(`Could not adopt remote included content: ${errorMessage(error)}`, "error");
-					return { kind: "close" as const };
+					if (isStaleReviewError(error)) {
+						ctx.ui.notify(`${errorMessage(error)} Refreshing the comparison.`, "warning");
+						refreshRequested = true;
+						return { kind: "close" as const };
+					}
+					ctx.ui.notify(`Could not prepare the remote update: ${errorMessage(error)}`, "error");
+					return { kind: "stay" as const };
 				}
 			},
-			keep: async () => {
-				ctx.ui.notify(
-					"Kept local included content. No settings or files changed; use a reviewed force push to publish the local selection.",
-					"info",
-				);
+			continue: async ({ state, signal: actionSignal }) => {
+				if (!runRoute || !continuationReview) return { kind: "stay" as const };
+				const signal = combineSignals(sessionSignal, actionSignal);
+				try {
+					const latest = await loadPartialConfig(state.decision.setupName);
+					if (signal.aborted) return { kind: "close" as const };
+					if (!sameContinuationReview(latest, continuationReview)) {
+						throw new StaleRemoteSelectionReviewError(
+							`Sync setup “${safeTerminalText(state.decision.setupName)}” changed after the remote content list was saved.`,
+						);
+					}
+					const result = await runCancellableOperation(
+						ctx,
+						continueBusyLabel(origin),
+						route,
+						runRoute,
+						{
+							commitAware: true,
+							cancelledMessage: continuationCancelledMessage(route),
+							target: state.decision.setupName,
+							signal,
+						},
+					);
+					return handleNestedRouteResult(result, route);
+				} catch (error) {
+					if (signal.aborted) return { kind: "close" as const };
+					ctx.ui.notify(`Could not continue: ${errorMessage(error)}`, "error");
+					return { kind: "stay" as const };
+				}
+			},
+			cancel: async () => ({ kind: "back" }),
+			done: async () => {
+				nextResult = { kind: "done" };
 				return { kind: "close" };
 			},
-			cancel: async () => ({ kind: "close" }),
 		},
 	});
-	await runMenu(ctx, menu, {
-		getState: () => undefined,
+
+	function handleNestedRouteResult(
+		result: Awaited<ReturnType<typeof runCancellableOperation>>,
+		nestedRoute: "sync" | "pull" | "push",
+	) {
+		if (result.kind === "closed") {
+			nextResult = { kind: "closed" };
+			return { kind: "close" as const };
+		}
+		if (
+			result.kind === "cancelled" ||
+			(result.kind === "completed" && result.outcome === "cancelled") ||
+			result.kind === "failed"
+		) {
+			return { kind: "stay" as const };
+		}
+		nextResult = { kind: "route-result", result, route: nestedRoute };
+		return { kind: "close" as const };
+	}
+
+	const menuResult = await runMenu(ctx, menu, {
+		getState: () => flowState,
 		signal: sessionSignal,
 		isCurrent: () => !sessionSignal?.aborted,
+		onError: (_menuCtx, error) => ctx.ui.notify(errorMessage(error), "error"),
 	});
+	if (sessionSignal?.aborted || menuResult.kind === "stale") return { kind: "stale" };
+	if (refreshRequested) return { kind: "refresh" };
+	if (nextResult) return nextResult;
+	if (menuResult.kind === "closed") {
+		return menuResult.reason === "back" ? { kind: "back" } : { kind: "closed" };
+	}
+	return { kind: "closed" };
+}
+
+interface AdoptionReview {
+	config: AnySyncConfig;
+	storageReview: SyncSetupStorageReview;
+	backend: SyncBackend;
+	reviewedHead: RemoteHead;
+}
+
+async function loadAdoptionReview(
+	decision: RemoteSelectionDecision,
+	signal: AbortSignal,
+	factory: SyncBackendFactory,
+): Promise<AdoptionReview> {
+	const config = await loadConfig(decision.setupName);
+	throwIfAborted(signal);
+	assertLocalSelectionCurrent(config, decision);
+	const partial = await loadPartialConfig(decision.setupName);
+	throwIfAborted(signal);
+	if (!sameSyncInclude(partial.include, decision.localInclude)) {
+		throw new StaleRemoteSelectionReviewError(
+			`Sync setup “${safeTerminalText(decision.setupName)}” changed while the comparison was open.`,
+		);
+	}
+	const backend = await factory(config);
+	throwIfAborted(signal);
+	const reviewedHead = await backend.readHead(signal);
+	throwIfAborted(signal);
+	if (!reviewedHead) {
+		throw new StaleRemoteSelectionReviewError(
+			"Remote storage changed while the comparison was open.",
+		);
+	}
+	const snapshot = await readSnapshotForHead(backend, reviewedHead, signal);
+	throwIfAborted(signal);
+	const state = inspectRemoteSelection(config.include, snapshot);
+	if (state.kind !== "different" || !sameSyncInclude(state.include, decision.remoteInclude)) {
+		throw new StaleRemoteSelectionReviewError(
+			"Remote synced content changed while the comparison was open.",
+		);
+	}
+	return { config, storageReview: partial, backend, reviewedHead };
+}
+
+async function revalidateAndAdopt(
+	review: AdoptionReview,
+	decision: RemoteSelectionDecision,
+	signal: AbortSignal,
+) {
+	const currentHead = await review.backend.readHead(signal);
+	throwIfAborted(signal);
+	if (
+		!currentHead ||
+		!review.backend.sameRevision(review.reviewedHead.revision, currentHead.revision)
+	) {
+		throw new StaleRemoteSelectionReviewError(
+			"Remote storage changed while the comparison was open.",
+		);
+	}
+	const currentSnapshot = await readSnapshotForHead(review.backend, currentHead, signal);
+	throwIfAborted(signal);
+	const currentState = inspectRemoteSelection(review.config.include, currentSnapshot);
+	if (
+		currentState.kind !== "different" ||
+		!sameSyncInclude(currentState.include, decision.remoteInclude)
+	) {
+		throw new StaleRemoteSelectionReviewError(
+			"Remote synced content changed while the comparison was open.",
+		);
+	}
+	await updateSyncSetup(
+		decision.setupName,
+		(setup) => ({
+			...setup,
+			sync: { ...setup.sync, include: [...decision.remoteInclude] },
+		}),
+		{
+			expectedStorage: review.storageReview,
+			expectedInclude: decision.localInclude,
+			signal,
+		},
+	);
+}
+
+async function inspectConfiguredRemoteSelection(
+	ctx: ExtensionCommandContext,
+	setupName: string | undefined,
+	signal: AbortSignal | undefined,
+	factory: SyncBackendFactory,
+): Promise<
+	| { kind: "empty"; config: AnySyncConfig }
+	| { kind: "selection"; config: AnySyncConfig; state: RemoteSelectionState }
+	| undefined
+> {
+	const config = await loadConfig(setupName);
+	if (signal?.aborted) return undefined;
+	ctx.ui.setStatus(STATUS_KEY, `checking synced content for ${safeTerminalText(config.setupName)}`);
+	const backend = await factory(config);
+	if (signal?.aborted) return undefined;
+	const head = await backend.readHead(signal);
+	if (signal?.aborted) return undefined;
+	if (!head) return { kind: "empty", config };
+	const snapshot = await readSnapshotForHead(backend, head, signal);
+	if (signal?.aborted) return undefined;
+	return {
+		kind: "selection",
+		config,
+		state: inspectRemoteSelection(config.include, snapshot),
+	};
 }
 
 async function showLegacyDiscovery(
@@ -204,9 +474,9 @@ async function showLegacyDiscovery(
 		screens: {
 			choice: () => ({
 				kind: "actions",
-				title: `Remote included content · ${safeTerminalText(config.setupName)}`,
+				title: `Compare synced content · ${safeTerminalText(config.setupName)}`,
 				lines: [
-					"This legacy snapshot has no portable included-content policy.",
+					"This legacy snapshot has no portable synced-content list.",
 					"Discovered paths are partial and read-only; preserved files may not have been selected.",
 				],
 				items: [
@@ -241,39 +511,148 @@ async function showLegacyDiscovery(
 	});
 }
 
-function formatSelectionDifference(
-	localInclude: readonly string[],
-	state: Extract<RemoteSelectionState, { kind: "different" }>,
-) {
+function selectionSummaryLines(decision: RemoteSelectionDecision) {
+	const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
 	return [
-		"Remote-only selection:",
-		...(state.remoteOnly.length > 0
-			? state.remoteOnly.map((item) => `+ ${safeTerminalText(item)}`)
+		`Sync setup: ${safeTerminalText(decision.setupName)}`,
+		"Nothing changed. Review both lists before choosing what happens next.",
+		...(comparison.remoteOnly.length === 0 && comparison.localOnly.length === 0
+			? ["Only the ordering differs; membership is the same."]
+			: [
+					`Remote-only paths: ${comparison.remoteOnly.length} · Device-only paths: ${comparison.localOnly.length}`,
+				]),
+	];
+}
+
+function formatSelectionDifference(decision: RemoteSelectionDecision) {
+	const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
+	return [
+		...(comparison.remoteOnly.length === 0 && comparison.localOnly.length === 0
+			? ["Only ordering differs; both lists contain the same paths.", ""]
+			: []),
+		"Remote-only paths:",
+		...(comparison.remoteOnly.length > 0
+			? comparison.remoteOnly.map((item) => `+ ${safeTerminalText(item)}`)
 			: ["(none)"]),
 		"",
-		"Local-only selection:",
-		...(state.localOnly.length > 0
-			? state.localOnly.map((item) => `- ${safeTerminalText(item)}`)
+		"Device-only paths:",
+		...(comparison.localOnly.length > 0
+			? comparison.localOnly.map((item) => `- ${safeTerminalText(item)}`)
 			: ["(none)"]),
 		"",
-		`Remote order: ${state.include.map(safeTerminalText).join(", ") || "none"}`,
-		`Local order: ${localInclude.map(safeTerminalText).join(", ") || "none"}`,
+		"Remote ordered list:",
+		...(decision.remoteInclude.length > 0
+			? decision.remoteInclude.map((item, index) => `${index + 1}. ${safeTerminalText(item)}`)
+			: ["(none)"]),
 		"",
-		"Adopting saves settings only and does not pull files.",
+		"This device's ordered list:",
+		...(decision.localInclude.length > 0
+			? decision.localInclude.map((item, index) => `${index + 1}. ${safeTerminalText(item)}`)
+			: ["(none)"]),
+		"",
+		"Using the remote list saves settings only and does not pull files.",
 	].join("\n");
 }
 
-function formatRemoteSelectionSummary(config: AnySyncConfig, state: RemoteSelectionState) {
-	if (state.kind === "same") {
-		return `Remote included content for “${safeTerminalText(config.setupName)}” matches local settings.`;
-	}
-	if (state.kind === "legacy") {
-		return `Remote snapshot for “${safeTerminalText(config.setupName)}” has no portable included-content policy; ${state.discovered.length} safe path${state.discovered.length === 1 ? " was" : "s were"} discovered, but the result is partial and read-only.`;
-	}
+function formatRemoteSelectionSummary(decision: RemoteSelectionDecision) {
+	const comparison = compareSyncInclude(decision.localInclude, decision.remoteInclude);
 	return [
-		`Remote included content for “${safeTerminalText(config.setupName)}” differs from local settings.`,
-		`Remote-only: ${state.remoteOnly.map(safeTerminalText).join(", ") || "none"}`,
-		`Local-only: ${state.localOnly.map(safeTerminalText).join(", ") || "none"}`,
-		"Use TUI Settings to review or adopt it; RPC is read-only.",
+		`Synced content for “${safeTerminalText(decision.setupName)}” differs from this device.`,
+		`Remote-only: ${safeList(comparison.remoteOnly)}`,
+		`Device-only: ${safeList(comparison.localOnly)}`,
+		...(comparison.remoteOnly.length === 0 && comparison.localOnly.length === 0
+			? [
+					"Only ordering differs.",
+					`Remote order: ${safeList(decision.remoteInclude)}`,
+					`Device order: ${safeList(decision.localInclude)}`,
+				]
+			: []),
+		"Run /sync in TUI to choose a content list; RPC review is read-only.",
 	].join("\n");
+}
+
+function formatLegacySummary(config: AnySyncConfig, discovered: readonly string[]) {
+	return `Remote snapshot for “${safeTerminalText(config.setupName)}” has no portable synced-content list; ${discovered.length} safe path${discovered.length === 1 ? " was" : "s were"} discovered, but the result is partial and read-only.`;
+}
+
+function decisionFromState(
+	config: AnySyncConfig,
+	state: Extract<RemoteSelectionState, { kind: "different" }>,
+): RemoteSelectionDecision {
+	return {
+		setupName: config.setupName,
+		configIdentity: syncConfigReviewFingerprint(config),
+		localInclude: [...config.include],
+		remoteInclude: [...state.include],
+	};
+}
+
+function assertLocalSelectionCurrent(config: AnySyncConfig, decision: RemoteSelectionDecision) {
+	if (
+		syncConfigReviewFingerprint(config) === decision.configIdentity &&
+		sameSyncInclude(config.include, decision.localInclude)
+	) {
+		return;
+	}
+	throw new StaleRemoteSelectionReviewError(
+		`Sync setup “${safeTerminalText(config.setupName)}” changed while the comparison was open.`,
+	);
+}
+
+function sameContinuationReview(left: PartialConfig, right: PartialConfig) {
+	return (
+		left.setupName === right.setupName &&
+		left.connectionName === right.connectionName &&
+		left.storageKind === right.storageKind &&
+		left.storagePath === right.storagePath &&
+		left.bucket === right.bucket &&
+		left.branch === right.branch &&
+		sameSyncInclude(left.include, right.include)
+	);
+}
+
+function continueLabel(origin: RemoteSelectionOrigin) {
+	if (origin === "pull") return "Continue Pull now…";
+	if (origin === "push") return "Continue Push now…";
+	return "Continue Sync now…";
+}
+
+function continueBusyLabel(origin: RemoteSelectionOrigin) {
+	if (origin === "pull") return "Checking remote changes…";
+	if (origin === "push") return "Preparing push preview…";
+	return "Checking current sync setup…";
+}
+
+function continuationCancelledMessage(route: "sync" | "pull" | "push") {
+	if (route === "pull") return "Pull check cancelled; no local files were changed.";
+	if (route === "push") return "Push preparation cancelled; no remote files were changed.";
+	return "Sync check cancelled; no settings or files were changed.";
+}
+
+function safeList(values: readonly string[]) {
+	return values.length > 0 ? values.map(safeTerminalText).join(", ") : "none";
+}
+
+class StaleRemoteSelectionReviewError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "StaleRemoteSelectionReviewError";
+	}
+}
+
+function isStaleReviewError(error: unknown) {
+	return (
+		error instanceof StaleRemoteSelectionReviewError || error instanceof SyncSetupReviewChangedError
+	);
+}
+
+function combineSignals(sessionSignal: AbortSignal | undefined, actionSignal: AbortSignal) {
+	return sessionSignal ? AbortSignal.any([sessionSignal, actionSignal]) : actionSignal;
+}
+
+function throwIfAborted(signal: AbortSignal) {
+	if (!signal.aborted) return;
+	throw signal.reason instanceof Error
+		? signal.reason
+		: new DOMException("The operation was aborted", "AbortError");
 }
