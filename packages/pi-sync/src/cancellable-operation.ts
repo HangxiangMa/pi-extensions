@@ -1,6 +1,6 @@
 import {
 	BorderedLoader,
-	type ExtensionCommandContext,
+	type ExtensionContext,
 	type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
@@ -36,7 +36,7 @@ interface CancellableOperationOptions {
 }
 
 export async function runCancellableOperation(
-	ctx: ExtensionCommandContext,
+	ctx: ExtensionContext,
 	message: string,
 	route: string,
 	runRoute: RunRoute,
@@ -53,7 +53,10 @@ export async function runCancellableOperation(
 	}
 	let commitStarted = false;
 	let routeResult: RunRouteResult | undefined;
-	const interaction = await runCustomInteraction<{ cancelled?: boolean; error?: unknown }>(ctx, {
+	const interaction = await runCustomInteraction<
+		{ cancelled?: boolean; error?: unknown },
+		ExtensionContext
+	>(ctx, {
 		signal,
 		isCurrent: () => !signal?.aborted,
 		create: ({ tui, theme, keybindings, signal: interactionSignal, complete }) => {

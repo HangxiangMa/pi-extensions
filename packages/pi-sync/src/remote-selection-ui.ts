@@ -1,4 +1,4 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { createSyncBackend, type SyncBackendFactory } from "./backend-factory.js";
 import {
@@ -33,6 +33,9 @@ export interface RemoteSelectionReviewOptions {
 	decision?: RemoteSelectionDecision;
 	origin?: RemoteSelectionOrigin;
 	runRoute?: RunRoute;
+	cancelLabel?: string;
+	onSelectionResolved?: () => void;
+	withStateAccess?: <T>(task: () => Promise<T>) => Promise<T>;
 }
 
 export type RemoteSelectionReviewResult =
@@ -43,7 +46,7 @@ export type RemoteSelectionReviewResult =
 	| { kind: "route-result"; result: RunRouteResult; route: "sync" | "pull" | "push" };
 
 export async function showRemoteSelectionReview(
-	ctx: ExtensionCommandContext,
+	ctx: ExtensionContext,
 	setupName?: string,
 	signal?: AbortSignal,
 	factory: SyncBackendFactory = createSyncBackend,
@@ -88,13 +91,11 @@ export async function showRemoteSelectionReview(
 				options.runRoute,
 				signal,
 				factory,
+				options,
 			);
 			if (result.kind !== "refresh") return result;
-			const refreshed = await inspectConfiguredRemoteSelection(
-				ctx,
-				currentDecision.setupName,
-				signal,
-				factory,
+			const refreshed = await runWithOptionalStateAccess(options, () =>
+				inspectConfiguredRemoteSelection(ctx, currentDecision.setupName, signal, factory),
 			);
 			if (!refreshed || signal?.aborted) return { kind: "stale" };
 			if (refreshed.kind === "empty") {
@@ -108,7 +109,8 @@ export async function showRemoteSelectionReview(
 						: "The refreshed legacy snapshot has no authoritative synced-content list.",
 					"info",
 				);
-				return { kind: "back" };
+				options.onSelectionResolved?.();
+				return { kind: "done" };
 			}
 			currentDecision = decisionFromState(refreshed.config, refreshed.state);
 		}
@@ -124,12 +126,16 @@ export async function showRemoteSelectionReview(
 type DifferenceFlowResult = RemoteSelectionReviewResult | { kind: "refresh" };
 
 async function showSelectionDifference(
-	ctx: ExtensionCommandContext,
+	ctx: ExtensionContext,
 	initialDecision: RemoteSelectionDecision,
 	origin: RemoteSelectionOrigin,
 	runRoute: RunRoute | undefined,
 	sessionSignal: AbortSignal | undefined,
 	factory: SyncBackendFactory,
+	options: Pick<
+		RemoteSelectionReviewOptions,
+		"cancelLabel" | "onSelectionResolved" | "withStateAccess"
+	>,
 ): Promise<DifferenceFlowResult> {
 	type Screen = "choice" | "review" | "saved";
 	type Action = "adopt" | "keep" | "cancel" | "continue" | "done";
@@ -142,7 +148,7 @@ async function showSelectionDifference(
 	let nextResult: RemoteSelectionReviewResult | undefined;
 	let refreshRequested = false;
 	const route = origin === "settings" ? "sync" : origin;
-	const menu = defineMenu<FlowState, Screen, Action, ExtensionCommandContext>({
+	const menu = defineMenu<FlowState, Screen, Action, ExtensionContext>({
 		start: "choice",
 		screens: {
 			choice: ({ state }) => ({
@@ -169,7 +175,7 @@ async function showSelectionDifference(
 							"Open the existing exact force-push preview without skipping confirmation.",
 						action: "keep",
 					},
-					{ id: "cancel", label: "Cancel", action: "cancel" },
+					{ id: "cancel", label: options.cancelLabel ?? "Cancel", action: "cancel" },
 				],
 				hint: "back",
 			}),
@@ -224,10 +230,14 @@ async function showSelectionDifference(
 						if (signal.aborted) return { kind: "close" as const };
 						if (!acknowledged) return { kind: "stay" as const };
 					}
-					const review = await loadAdoptionReview(state.decision, signal, factory);
+					const review = await runWithOptionalStateAccess(options, async () => {
+						const loaded = await loadAdoptionReview(state.decision, signal, factory);
+						if (signal.aborted) throw signal.reason;
+						await revalidateAndAdopt(loaded, state.decision, signal);
+						return loaded;
+					});
 					if (signal.aborted) return { kind: "close" as const };
-					await revalidateAndAdopt(review, state.decision, signal);
-					if (signal.aborted) return { kind: "close" as const };
+					options.onSelectionResolved?.();
 					continuationReview = {
 						...review.storageReview,
 						setupName: state.decision.setupName,
@@ -324,6 +334,9 @@ async function showSelectionDifference(
 		result: Awaited<ReturnType<typeof runCancellableOperation>>,
 		nestedRoute: "sync" | "pull" | "push",
 	) {
+		if (result.kind === "completed" && result.outcome === "applied") {
+			options.onSelectionResolved?.();
+		}
 		if (result.kind === "closed") {
 			nextResult = { kind: "closed" };
 			return { kind: "close" as const };
@@ -437,7 +450,7 @@ async function revalidateAndAdopt(
 }
 
 async function inspectConfiguredRemoteSelection(
-	ctx: ExtensionCommandContext,
+	ctx: ExtensionContext,
 	setupName: string | undefined,
 	signal: AbortSignal | undefined,
 	factory: SyncBackendFactory,
@@ -464,12 +477,12 @@ async function inspectConfiguredRemoteSelection(
 }
 
 async function showLegacyDiscovery(
-	ctx: ExtensionCommandContext,
+	ctx: ExtensionContext,
 	config: AnySyncConfig,
 	discovered: string[],
 	signal?: AbortSignal,
 ) {
-	const menu = defineMenu<undefined, "choice" | "review", "back", ExtensionCommandContext>({
+	const menu = defineMenu<undefined, "choice" | "review", "back", ExtensionContext>({
 		start: "choice",
 		screens: {
 			choice: () => ({
@@ -644,6 +657,13 @@ function isStaleReviewError(error: unknown) {
 	return (
 		error instanceof StaleRemoteSelectionReviewError || error instanceof SyncSetupReviewChangedError
 	);
+}
+
+function runWithOptionalStateAccess<T>(
+	options: Pick<RemoteSelectionReviewOptions, "withStateAccess">,
+	task: () => Promise<T>,
+) {
+	return options.withStateAccess ? options.withStateAccess(task) : task();
 }
 
 function combineSignals(sessionSignal: AbortSignal | undefined, actionSignal: AbortSignal) {

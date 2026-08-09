@@ -54,8 +54,11 @@ Remote status: Not checked
 ```
 
 Primary actions include **Sync now**, **Switch sync setup**, **Status & changes**, **Settings**, and
-**More…**. The standard manager also owns setup and connection lists/details plus history and
-recovery. Secondary screens provide **Back**; Escape goes back and Ctrl+C closes the flow.
+**More…**. When pi-sync has already detected a synced-content-list mismatch, the manager instead
+shows **Sync status: Review needed**, puts **Review synced content (recommended)** first, and keeps
+**Sync now** visibly unavailable until the choice is reviewed. Opening the manager still performs no
+new remote request. The standard manager also owns setup and connection lists/details plus history
+and recovery. Secondary screens provide **Back**; Escape goes back and Ctrl+C closes the flow.
 Destructive, credential-bearing, and externally visible operations retain exact specialized previews
 and confirmations.
 
@@ -76,6 +79,8 @@ Then choose one action:
 - **Keep this device's content list and update remote…** opens the existing `push --force` preparation and exact confirmation without `--yes`.
   Cancelling preparation or confirmation returns to the content-list choice without changing remote data.
 - **Cancel** returns to the manager without changing settings, files, remote data, or sync state.
+- **Later** appears when automatic startup sync detected the mismatch and returns immediately to the
+  Pi editor without changing anything.
 
 Choose **Review differences (recommended)** in an ordinary file-direction conflict to inspect the exact affected paths without changing local files, remote data, or sync state.
 Then choose one reviewed direction:
@@ -90,9 +95,20 @@ Then choose one reviewed direction:
 
 Cancelling a preparation or confirmation returns to conflict resolution with no side effects.
 Back returns to the sync manager, and Ctrl+C closes the complete flow.
-Automatic startup/shutdown sync never opens either interactive resolution and continues to report an actionable warning.
-Deterministic direct routes remain non-interactive and report remote-only, device-only, or order-only differences with `/sync` recovery guidance.
-RPC remote content-list review remains read-only, while print and JSON modes remain unsupported for `/sync` because their UI output is not observable.
+
+When automatic startup sync detects an explicit content-list mismatch in TUI mode, it opens
+**Synced content differs** once for that session instead of ending at a warning. Choosing **Later** or
+closing the flow leaves a compact **Pi Sync needs review** widget above the editor and a
+**review needed** footer status. The attention state is in memory only, contains no credentials or
+file contents, and is revalidated before any settings or remote mutation. It clears after verified
+resolution, invalidation, session replacement, or shutdown.
+
+Interactive TUI `/sync sync`, `/sync pull`, and `/sync push` routes without `--yes` open the same
+review flow when they detect the mismatch. Explicit `--yes` routes remain non-interactive and report
+exact remote-only, device-only, or order-only guidance while leaving visible attention for later
+review. Shutdown automatic sync never opens a dialog because Pi is exiting.
+RPC startup and direct routes remain read-only and notification-based, while print and JSON modes
+remain unsupported for `/sync` because their UI output is not observable.
 
 ## ⚙️ Settings
 
@@ -306,7 +322,7 @@ The operational state root is `<agent-dir>/pi-sync/`. An existing installation c
 
 ## ♿ Conditional terminal accessibility smoke
 
-Pi exposes terminal components rather than a semantic/ARIA tree. Release validation checks textual state, keyboard operation, Escape/Back, control escaping, and narrow rendering. Critical meaning appears in text such as `(current)`, `Warning`, `Invalid`, `Saved`, `Cancelled`, and `Applied`; color is supplementary.
+Pi exposes terminal components rather than a semantic/ARIA tree. Release validation checks textual state, keyboard operation, Escape/Back, control escaping, and narrow rendering. Critical meaning appears in text such as `(current)`, `Review needed`, `Later`, `Warning`, `Invalid`, `Saved`, `Cancelled`, and `Applied`; color is supplementary. The attention widget is informational and does not pretend to be a clickable control.
 
 ## 🗂️ Package layout
 
@@ -322,6 +338,8 @@ packages/pi-sync/
 │   ├── state-directory.ts
 │   ├── settings-management.ts
 │   ├── manager-ui.ts
+│   ├── manager-attention.ts
+│   ├── sync-attention.ts
 │   ├── storage-connections-ui.ts
 │   ├── sync-setups-ui.ts
 │   ├── file-selection.ts

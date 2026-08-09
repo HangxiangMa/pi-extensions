@@ -37,11 +37,21 @@ import {
 	withStateDirectoryAccess,
 } from "./state-directory.js";
 import {
+	createSyncAttentionController,
+	type SyncAttentionController,
+	type SyncAttentionOrigin,
+	syncAttentionMatchesConfig,
+} from "./sync-attention.js";
+import {
 	errorMessage,
 	isSyncDecisionRequiredError,
 	SetupPullRequiresUiError,
 } from "./sync-errors.js";
-import { formatRemoteSelectionMismatch, RemoteSelectionMismatchError } from "./sync-policy.js";
+import {
+	formatRemoteSelectionMismatch,
+	type RemoteSelectionDecision,
+	RemoteSelectionMismatchError,
+} from "./sync-policy.js";
 import type { AnySyncConfig, CommandOptions, SnapshotOptions } from "./types.js";
 
 const STATUS_KEY = "sync";
@@ -85,6 +95,7 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
 			dependencies.loadSyncOperations ?? (() => import("./sync-operations.js")),
 		),
 	};
+	const attention = createSyncAttentionController();
 	let sessionAbort = new AbortController();
 	let shutdownAbort: AbortController | undefined;
 
@@ -97,7 +108,7 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
 					"/sync requires TUI or RPC mode so results and safety prompts are observable.",
 				);
 			}
-			const run = () => handleCommand(args, ctx, sessionAbort.signal, loaders);
+			const run = () => handleCommand(args, ctx, sessionAbort.signal, loaders, attention);
 			if (splitArgs(args)[0] === "migrate-state") await run();
 			else await withStateDirectoryAccess(run);
 		},
@@ -109,17 +120,38 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
 		sessionAbort.abort(new DOMException("Session replaced", "AbortError"));
 		sessionAbort = new AbortController();
 		const signal = sessionAbort.signal;
-		ctx.ui.setStatus(STATUS_KEY, undefined);
+		attention.reset(ctx);
+		let decision: RemoteSelectionDecision | undefined;
 		try {
-			await withStateDirectoryAccess(() => startSession(ctx, signal, loaders));
+			decision = await withStateDirectoryAccess(() => startSession(ctx, signal, loaders));
 		} catch (error) {
 			if (signal.aborted) return;
 			ctx.ui.notify(`pi-sync state access failed: ${errorMessage(error)}`, "error");
+			return;
 		}
+		if (!decision || signal.aborted) return;
+		attention.set(decision, "sync");
+		if (ctx.mode !== "tui") {
+			ctx.ui.notify(
+				`pi-sync auto sync skipped: ${formatRemoteSelectionMismatch(
+					decision.setupName,
+					decision.localInclude,
+					decision.remoteInclude,
+				)}\nRPC review is read-only.`,
+				"warning",
+			);
+		} else if (attention.markOffered()) {
+			await resolveSelectionAttention(ctx, attention, signal, loaders, {
+				cancelLabel: "Later",
+				withStateAccess: withStateDirectoryAccess,
+			});
+		}
+		if (!signal.aborted) attention.publish(ctx);
 	});
 
 	pi.on("session_shutdown", async (event, ctx) => {
 		sessionAbort.abort(new DOMException("Session shut down", "AbortError"));
+		attention.reset(ctx);
 		shutdownAbort?.abort(new DOMException("Session shut down again", "AbortError"));
 		const controller = new AbortController();
 		shutdownAbort = controller;
@@ -172,7 +204,7 @@ async function startSession(ctx: ExtensionContext, signal: AbortSignal, loaders:
 	const migrationNotice = consumeLocalConfigMigrationNotice();
 	if (migrationNotice) ctx.ui.notify(migrationNotice, "warning");
 	if (signal.aborted) return;
-	await autoSync(ctx, signal, loaders);
+	return autoSync(ctx, signal, loaders);
 }
 
 async function handleCommand(
@@ -180,6 +212,7 @@ async function handleCommand(
 	ctx: ExtensionCommandContext,
 	sessionSignal: AbortSignal,
 	loaders: SyncLoaders,
+	attention: SyncAttentionController,
 ) {
 	if (!rawArgs.trim()) {
 		try {
@@ -197,26 +230,173 @@ async function handleCommand(
 						target,
 					),
 				sessionSignal,
+				{
+					getAttention: () => attention.current(),
+					onSelectionResolved: (expected) => {
+						if (attention.current() === expected) attention.clear(ctx);
+					},
+				},
 			);
 		} catch (error) {
 			if (sessionSignal.aborted) return;
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			ctx.ui.notify(errorMessage(error), "error");
 		}
+		if (!sessionSignal.aborted) attention.publish(ctx);
 		return;
 	}
 	const result = await executeCommand(rawArgs, ctx, sessionSignal, loaders);
 	if (result.kind === "decision-required") {
 		ctx.ui.notify(result.decision.directMessage, "error");
 	} else if (result.kind === "remote-selection-required") {
-		ctx.ui.notify(
-			formatRemoteSelectionMismatch(
-				result.decision.setupName,
-				result.decision.localInclude,
-				result.decision.remoteInclude,
-			),
-			"error",
-		);
+		const origin = directSelectionOrigin(rawArgs);
+		if (origin) attention.set(result.decision, origin);
+		const deterministic = splitArgs(rawArgs).some((arg) => arg === "--yes" || arg === "-y");
+		if (origin && ctx.mode === "tui" && !deterministic) {
+			await resolveSelectionAttention(ctx, attention, sessionSignal, loaders);
+		} else {
+			ctx.ui.notify(
+				formatRemoteSelectionMismatch(
+					result.decision.setupName,
+					result.decision.localInclude,
+					result.decision.remoteInclude,
+				),
+				"error",
+			);
+		}
+	}
+	await clearAttentionAfterCompletedOperation(rawArgs, result, ctx, attention, sessionSignal);
+	await reconcileSelectionAttention(ctx, attention, sessionSignal);
+	if (!sessionSignal.aborted) attention.publish(ctx);
+}
+
+async function clearAttentionAfterCompletedOperation(
+	rawArgs: string,
+	result: RunRouteResult,
+	ctx: ExtensionContext,
+	attention: SyncAttentionController,
+	signal: AbortSignal,
+) {
+	if (result.kind !== "completed" || result.outcome === "cancelled" || signal.aborted) return;
+	const [command, ...rest] = splitArgs(rawArgs);
+	if (command !== "sync" && command !== "pull" && command !== "push") return;
+	const current = attention.current();
+	if (!current) return;
+	try {
+		const options = parseOptions(rest);
+		const setupName = options.setup ?? (await loadConfig()).setupName;
+		if (signal.aborted || attention.current() !== current) return;
+		if (current.decision.setupName === setupName) attention.clear(ctx);
+	} catch {
+		// Attention reconciliation below owns malformed or concurrently changed settings.
+	}
+}
+
+async function reconcileSelectionAttention(
+	ctx: ExtensionContext,
+	attention: SyncAttentionController,
+	signal: AbortSignal,
+) {
+	const current = attention.current();
+	if (!current || signal.aborted) return;
+	try {
+		const config = await loadConfig(current.decision.setupName);
+		if (signal.aborted || attention.current() !== current) return;
+		if (!syncAttentionMatchesConfig(current, config)) attention.clear(ctx);
+	} catch {
+		if (!signal.aborted && attention.current() === current) attention.clear(ctx);
+	}
+}
+
+function directSelectionOrigin(rawArgs: string): SyncAttentionOrigin | undefined {
+	const command = splitArgs(rawArgs)[0];
+	return command === "sync" || command === "pull" || command === "push" ? command : undefined;
+}
+
+async function resolveSelectionAttention(
+	ctx: ExtensionContext,
+	attention: SyncAttentionController,
+	signal: AbortSignal,
+	loaders: SyncLoaders,
+	options: {
+		cancelLabel?: string;
+		withStateAccess?: <T>(task: () => Promise<T>) => Promise<T>;
+	} = {},
+) {
+	const current = attention.current();
+	if (!current || signal.aborted) return;
+	const { dispatchManagerResult } = await import("./manager-result-dispatcher.js");
+	if (signal.aborted || attention.current() !== current) return;
+	await dispatchManagerResult(
+		ctx,
+		{ kind: "remote-selection-required", decision: current.decision },
+		current.origin,
+		(route, actionSignal, onCommit, target) => {
+			const execute = () =>
+				executeRecoveryCommand(
+					route,
+					ctx,
+					combineSignals(signal, actionSignal),
+					loaders,
+					onCommit,
+					target,
+				);
+			return options.withStateAccess ? options.withStateAccess(execute) : execute();
+		},
+		signal,
+		{
+			cancelLabel: options.cancelLabel,
+			withStateAccess: options.withStateAccess,
+			onSelectionResolved: () => {
+				if (attention.current() === current) attention.clear(ctx);
+			},
+		},
+	);
+}
+
+async function executeRecoveryCommand(
+	rawArgs: string,
+	ctx: ExtensionContext,
+	signal: AbortSignal | undefined,
+	loaders: SyncLoaders,
+	onCommit?: () => void,
+	setup?: string,
+): Promise<RunRouteResult> {
+	try {
+		const [subcommand, ...rest] = splitArgs(rawArgs);
+		if (subcommand !== "sync" && subcommand !== "pull" && subcommand !== "push") {
+			throw new Error(`Unsupported sync recovery route: ${subcommand ?? "missing"}`);
+		}
+		const options = parseOptions(rest);
+		if (setup !== undefined) options.setup = setup;
+		if (signal) options.signal = signal;
+		if (onCommit) options.onCommit = onCommit;
+		options.reload = false;
+		options.auto = false;
+		validateCommandOptions(subcommand, options);
+		const operations = await loaders.operations();
+		throwIfAborted(options.signal);
+		if (subcommand === "push") {
+			const outcome = await withLock("push", () => operations.push(ctx, options));
+			return { kind: "completed", ...(outcome ? { outcome } : {}) };
+		}
+		if (subcommand === "pull") {
+			const outcome = await withLock("pull", () => operations.pull(ctx, options));
+			return { kind: "completed", ...(outcome ? { outcome } : {}) };
+		}
+		await withLock("sync", () => operations.syncBoth(ctx, options));
+		return { kind: "completed" };
+	} catch (error) {
+		if (signal?.aborted) return { kind: "failed" };
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+		if (error instanceof RemoteSelectionMismatchError) {
+			return { kind: "remote-selection-required", decision: error.decision };
+		}
+		if (isSyncDecisionRequiredError(error)) {
+			return { kind: "decision-required", decision: error.decision };
+		}
+		ctx.ui.notify(errorMessage(error), "error");
+		return { kind: "failed" };
 	}
 }
 
@@ -372,7 +552,11 @@ async function migrateStateDirectory(ctx: ExtensionCommandContext, options: Comm
 	ctx.ui.notify(result.message, result.status === "migrated" ? "info" : "warning");
 }
 
-async function autoSync(ctx: ExtensionContext, signal: AbortSignal, loaders: SyncLoaders) {
+async function autoSync(
+	ctx: ExtensionContext,
+	signal: AbortSignal,
+	loaders: SyncLoaders,
+): Promise<RemoteSelectionDecision | undefined> {
 	try {
 		const partial = await loadPartialConfig();
 		throwIfAborted(signal);
@@ -390,6 +574,7 @@ async function autoSync(ctx: ExtensionContext, signal: AbortSignal, loaders: Syn
 	} catch (error) {
 		if (signal.aborted || isMissingConfigError(error)) return;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		if (error instanceof RemoteSelectionMismatchError) return error.decision;
 		ctx.ui.notify(`pi-sync auto sync skipped: ${errorMessage(error)}`, "warning");
 	}
 }

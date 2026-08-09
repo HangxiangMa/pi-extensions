@@ -7,7 +7,8 @@ import {
 } from "./config.js";
 import { inspectLock, isStaleLock } from "./lock.js";
 import { errorMessage, ownRecord, safeTerminalText } from "./manager-helpers.js";
-import { syncIncludeSelection } from "./sync-policy.js";
+import { type SyncAttentionState, syncAttentionMatchesConfig } from "./sync-attention.js";
+import { compareSyncInclude, syncIncludeSelection } from "./sync-policy.js";
 import { countValidSyncSetups } from "./sync-setups-ui.js";
 import type { AnySyncConfig } from "./types.js";
 
@@ -19,9 +20,18 @@ export const MAIN_MENU_ACTIONS = [
 	"More…",
 ] as const;
 
+export interface ManagerDescription {
+	title: string;
+	actions: string[];
+	attention?: SyncAttentionState;
+	attentionBlocksSync?: boolean;
+	attentionReviewDisabled?: boolean;
+}
+
 export async function describeManagerState(
 	signal?: AbortSignal,
-): Promise<{ title: string; actions: string[] }> {
+	attention?: SyncAttentionState,
+): Promise<ManagerDescription> {
 	let raw: Record<string, unknown> | undefined;
 	try {
 		raw = await readLocalConfigObject();
@@ -66,6 +76,25 @@ export async function describeManagerState(
 		const recoverableLock =
 			lock.status === "unreadable" || (lock.status === "valid" && isStaleLock(lock.lock));
 		const selection = syncIncludeSelection(config.include);
+		let currentAttention: SyncAttentionState | undefined;
+		if (attention) {
+			try {
+				const attentionConfig =
+					attention.decision.setupName === config.setupName
+						? config
+						: await loadConfig(attention.decision.setupName);
+				if (syncAttentionMatchesConfig(attention, attentionConfig)) currentAttention = attention;
+			} catch {
+				currentAttention = undefined;
+			}
+			if (signal?.aborted) throw signal.reason;
+		}
+		const attentionComparison = currentAttention
+			? compareSyncInclude(
+					currentAttention.decision.localInclude,
+					currentAttention.decision.remoteInclude,
+				)
+			: undefined;
 		const noSyncedContent = config.include.length === 0;
 		const syncState =
 			liveLock || recoverableLock
@@ -92,7 +121,18 @@ export async function describeManagerState(
 				`Included: ${selection.builtIns.length} built-in group${selection.builtIns.length === 1 ? "" : "s"} · ${selection.custom.length} extra path${selection.custom.length === 1 ? "" : "s"} · Sessions ${selection.sessions ? "on" : "off"}`,
 				`Automatic sync: ${config.automatic ? "On" : "Off"}`,
 				`Last applied: ${lastAppliedSnapshot}`,
-				"Remote status: Not checked",
+				...(currentAttention
+					? [
+							currentAttention.decision.setupName === config.setupName
+								? "Sync status: Review needed"
+								: `Sync status: Review needed for setup ${safeTerminalText(currentAttention.decision.setupName)}`,
+							attentionComparison?.remoteOnly.length === 0 &&
+							attentionComparison.localOnly.length === 0
+								? "Only the synced-content order differs."
+								: `Remote-only paths: ${attentionComparison?.remoteOnly.length ?? 0} · Device-only paths: ${attentionComparison?.localOnly.length ?? 0}`,
+							"Nothing has been changed.",
+						]
+					: ["Remote status: Not checked"]),
 				...(noSyncedContent
 					? [
 							"",
@@ -117,6 +157,13 @@ export async function describeManagerState(
 					: noSyncedContent
 						? ["Settings", ...(canSwitch ? ["Switch sync setup"] : []), "Status & changes", "More…"]
 						: mainActions,
+			...(currentAttention
+				? {
+						attention: currentAttention,
+						attentionBlocksSync: currentAttention.decision.setupName === config.setupName,
+						attentionReviewDisabled: liveLock || recoverableLock,
+					}
+				: {}),
 		};
 	} catch (error) {
 		if (signal?.aborted) throw error;

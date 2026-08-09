@@ -426,6 +426,108 @@ test("the main manager opens inline remote-selection recovery", async () => {
 	});
 });
 
+test("pending selection attention is the manager's first action and blocks Sync now", async () => {
+	await withConfiguredDecision(async (_decision, selectionConfigIdentity) => {
+		const attention = {
+			decision: {
+				setupName: "home",
+				configIdentity: selectionConfigIdentity,
+				localInclude: ["settings.json"],
+				remoteInclude: ["settings.json", "pi-starship.toml"],
+			},
+			origin: "sync" as const,
+			offered: true,
+		};
+		const tui = createTuiHarness({ width: 60, rows: 24 });
+		const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+		const running = showSyncManager(ctx, async () => ({ kind: "failed" }), undefined, {
+			getAttention: () => attention,
+		});
+
+		await tui.waitForOpen();
+		for (const width of [32, 60, 100]) {
+			assert.ok(tui.render(width).every((line) => visibleWidth(line) <= width));
+		}
+		const frame = tui.render().join("\n");
+		assert.match(frame, /Sync status: Review needed/u);
+		assert.match(frame, /Review synced content \(recommended\)/u);
+		tui.press("tui.select.down");
+		assert.match(tui.render().join("\n"), /\[-\] Sync now/u);
+		assert.match(tui.render().join("\n"), /Review first/u);
+		tui.press("tui.select.up");
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /Synced content differs/u);
+		tui.press("tui.select.cancel");
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /Manage sync/u);
+		tui.press("ctrl+c");
+		await running;
+	});
+});
+
+test("attention for a non-current setup stays reviewable without blocking current Sync now", async () => {
+	await withConfiguredDecision(async () => {
+		await updateLocalConfig((settings) => ({
+			...settings,
+			syncSetups: {
+				...settings.syncSetups,
+				work: {
+					storage: { connection: "r2", bucket: "pi-sync-test", path: "pi-sync/work" },
+					sync: { include: ["settings.json"], automatic: false },
+				},
+			},
+		}));
+		const work = await loadConfig("work");
+		const attention = {
+			decision: {
+				setupName: "work",
+				configIdentity: syncConfigReviewFingerprint(work),
+				localInclude: ["settings.json"],
+				remoteInclude: ["settings.json", "models.json"],
+			},
+			origin: "pull" as const,
+			offered: true,
+		};
+		const tui = createTuiHarness({ width: 80, rows: 24 });
+		const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+		let routeCalls = 0;
+		let releaseRoute: () => void = () => undefined;
+		const routeGate = new Promise<void>((resolve) => {
+			releaseRoute = resolve;
+		});
+		const running = showSyncManager(
+			ctx,
+			async () => {
+				routeCalls += 1;
+				await routeGate;
+				return { kind: "failed" };
+			},
+			undefined,
+			{
+				getAttention: () => attention,
+			},
+		);
+
+		await tui.waitForOpen();
+		const frame = tui.render().join("\n");
+		assert.match(frame, /Current sync setup: home/u);
+		assert.match(frame, /Review needed for setup work/u);
+		assert.match(frame, /Review synced content \(recommended\)/u);
+		assert.match(frame, /Sync now \(recommended\)/u);
+		assert.doesNotMatch(frame, /\[-\] Sync now/u);
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await waitFor(() => routeCalls === 1);
+		await tui.waitForOpen();
+		const loaderOpenCount = tui.openCount;
+		releaseRoute();
+		await waitFor(() => tui.isOpen && tui.openCount > loaderOpenCount);
+		tui.press("ctrl+c");
+		await running;
+	});
+});
+
 test("the main manager opens conflict recovery instead of ending at an error", async () => {
 	await withConfiguredDecision(async (decision) => {
 		const tui = createTuiHarness({ width: 60, rows: 18 });

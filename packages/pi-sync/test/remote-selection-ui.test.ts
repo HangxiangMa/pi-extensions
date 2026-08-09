@@ -139,11 +139,20 @@ test("remote selection adoption saves settings only after session acknowledgemen
 			},
 		});
 		let routeCalls = 0;
+		let resolutions = 0;
+		let protectedActions = 0;
 		const running = showRemoteSelectionReview(ctx, "home", undefined, () => backend, {
 			origin: "settings",
 			runRoute: async () => {
 				routeCalls += 1;
 				return { kind: "completed" };
+			},
+			onSelectionResolved: () => {
+				resolutions += 1;
+			},
+			withStateAccess: async (task) => {
+				protectedActions += 1;
+				return task();
 			},
 		});
 
@@ -160,6 +169,8 @@ test("remote selection adoption saves settings only after session acknowledgemen
 
 		assert.equal(confirmations, 1);
 		assert.equal(routeCalls, 0);
+		assert.equal(resolutions, 1);
+		assert.equal(protectedActions, 1);
 		assert.deepEqual((await readLocalConfigObject())?.syncSetups.home.sync.include, [
 			"settings.json",
 			"pi-starship.toml",
