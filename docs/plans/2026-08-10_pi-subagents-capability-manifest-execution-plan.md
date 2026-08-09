@@ -6,6 +6,14 @@ Add versioned agent capability manifests and one deterministic transport-neutral
 
 Establish package-specific capability and permission-precision baselines before enforcement is considered.
 
+## Post-hoc Amendment
+
+This section and every checklist item labelled **Post-hoc addition** were added after the initial plan in commit `07df6d8b`.
+
+**Reason:** The later evidence audit and roadmap review found that capability fit alone does not answer whether delegation is worthwhile, and that every plan and future grant must be tied to the task generation that produced it.
+
+Admission remains audit-only in this phase because the reviewed literature does not justify automatic routing or rejection from an unvalidated predictor.
+
 ## Context
 
 `AgentConfig` currently describes agent name, description, tools, model, thinking level, timeout, prompt, source, and file path.
@@ -32,6 +40,10 @@ It will not infer intent from keywords, call another LLM, or override the caller
 
 The plan will distinguish requested, declared, available, effective, overgranted, missing, and unsupported capabilities.
 
+**Post-hoc addition:** The plan will also record the immutable task generation, a bounded benefit hypothesis, and an audit-only admission recommendation of parent-owned direct work, one child, one child plus independent verification, bounded multi-child work, or insufficient evidence.
+
+**Reason:** The roadmap promised to decide when delegation is justified, while the original `ExecutionPlan` only audited which selected agent and transport could perform an already delegated task.
+
 Each transport will consume the same plan projection or prove parity with it rather than independently re-deriving policy.
 
 Audit findings will appear in bounded tool details, retained inspection, diagnostics, and optional local benchmark output without exposing prompts or private context.
@@ -40,6 +52,7 @@ Audit findings will appear in bounded tool details, retained inspection, diagnos
 
 - Do not reject a launch because of capability mismatch in this phase.
 - Do not auto-select another agent, model, transport, workspace, or tool set.
+- **Post-hoc addition:** Do not let the admission recommendation launch, reject, or reroute work before Gate 4A produces paired evidence and a separate approval.
 - Do not add task-string keyword heuristics or a classifier model request.
 - Do not claim path, network, secret, credential, or process sandboxing.
 - Do not add a WorkItem graph, adaptive scheduler, automatic retry, or independent verifier workflow.
@@ -78,12 +91,16 @@ Audit findings will appear in bounded tool details, retained inspection, diagnos
 - [ ] Implement manifest parsing and safe projection in `agents.ts` or a focused capability module while preserving existing agent precedence, prompt loading, settings overrides, and catalog bounds.
 - [ ] Add explicit capability manifests for built-in scout, planner, reviewer, worker, and aliases; verify aliases remain behaviorally compatible and do not claim unimplemented verification or sandbox guarantees.
 - [ ] Define an immutable `ExecutionPlan` with version, task requirements, selected agent and source, manifest fit, requested and effective tools, cwd and trust, resources, workspace, transport, model, thinking, budgets, result contract, overgrant, mismatch, unknowns, and unsupported guarantees.
+- [ ] **Post-hoc addition:** Add immutable task-generation, admission-recommendation, benefit-hypothesis, evidence-sufficiency, and bounded-reason fields without changing the selected agent or launch behavior.
+- [ ] **Post-hoc addition:** Define deterministic admission inputs from explicit context pressure, declared dependencies and cohesion, specialist capability, verification need, budgets, and enforceability while prohibiting task-keyword matching and extra provider calls.
 - [ ] Add failing plan tests for exact match, subset match, unknown manifest, missing capability, excess tools, unsupported network denial, untrusted resources, custom-tool subprocess routing, write-capable RPC routing, read-only in-process routing, and explicit transport overrides.
+- [ ] **Post-hoc addition:** Add audit-only admission tests for explicit decomposability, dense coupling, missing verification, insufficient budget, unknown task requirements, stale generation, and no-benefit evidence; verify recommendations are inspectable and have zero launch side effects.
 - [ ] Implement a deterministic planner that consumes explicit contract requirements and existing policy resolvers without task-keyword matching, additional provider work, side effects, or launch changes.
 - [ ] Introduce one preflight seam before confirmation, worktree creation, child allocation, and provider work, then pass the immutable plan or its exact policy projection to subprocess, in-process, RPC, and automatic transports.
 - [ ] Add parity tests proving every transport applies the plan's effective tools, cwd, trust, resources, workspace, model, thinking, and budgets without post-plan widening or hidden fallback.
 - [ ] Add bounded plan summaries to blocking details, retained records, `subagent_inspect get_run`, status diagnostics, and renderers while omitting prompts, credentials, raw protected paths, private context, and unnecessary capability descriptions.
 - [ ] Add an offline audit benchmark that compares requested versus effective capabilities and tools for representative lookup, review, implementation, multimodal, and unsupported-isolation contracts; record capability coverage, unknown rate, mismatch rate, and permission precision.
+- [ ] **Post-hoc addition:** Extend offline evidence with admission recommendation coverage, insufficient-evidence rate, and unnecessary-delegation labels, but defer quality claims and production routing to Gate 4A's paired target-framework evaluation.
 - [ ] Update README agent-frontmatter documentation, inspection documentation, compatibility guidance, package layout, and a minor Changeset with audit-only semantics and the enforceability matrix.
 - [ ] Audit project trust, source precedence, metadata bounds, terminal sanitization, private text, settings preservation, transport parity, cancellation before launch, and session replacement against the extension guides.
 - [ ] Run focused tests, `npm test`, `npm run check`, `git diff --check`, and `just pack subagents`; inspect the tarball and record baseline audit evidence.
@@ -97,4 +114,5 @@ Audit findings will appear in bounded tool details, retained inspection, diagnos
 - [ ] All transports prove policy parity against the same plan and perform no silent widening or fallback.
 - [ ] Project-authored capability metadata remains behind existing trust and scope controls.
 - [ ] Permission precision and capability coverage have a reproducible package baseline without unsupported targets.
+- [ ] **Post-hoc addition:** Every ExecutionPlan is tied to one task generation and exposes an audit-only admission recommendation whose reasons can be evaluated later without having changed the launch.
 - [ ] Required checks and semantic audits pass, and the package has an appropriate Changeset without publication.

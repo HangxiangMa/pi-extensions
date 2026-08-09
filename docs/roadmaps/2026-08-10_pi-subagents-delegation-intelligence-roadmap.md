@@ -4,6 +4,10 @@
 - **Audience:** `@narumitw/pi-subagents` maintainers and contributors.
 - **Planning horizon:** Evidence-qualified phases without delivery dates.
 - **Research basis:** [`2026-08-10-coding-agent-subagents-arxiv-survey.md`](../research/2026-08-10-coding-agent-subagents-arxiv-survey.md) and [`2026-08-10-coding-agent-subagents-engineering-notes.md`](../research/2026-08-10-coding-agent-subagents-engineering-notes.md).
+- **Post-hoc research addition (2026-08-10):** Also use [`2026-08-10-coding-agent-subagents-evidence-audit.md`](../research/2026-08-10-coding-agent-subagents-evidence-audit.md) and [`2026-08-10-coding-agent-subagents-architecture-deep-dive.md`](../research/2026-08-10-coding-agent-subagents-architecture-deep-dive.md).
+  **Reason:** The deeper audit added strong single-agent counterevidence, stricter matched-baseline requirements, cancellation-generation requirements, and a smaller falsifiable architecture that the initial roadmap did not cover.
+- **Post-hoc status clarification (2026-08-10):** This direction remains proposed until an explicit approval records otherwise.
+  **Reason:** The original assumptions called the direction approved for planning even though the document header and repository evidence only established a proposal.
 
 ## Vision
 
@@ -22,6 +26,10 @@ Keep `pi-subagents` as the owner of delegation contracts, execution planning, su
 - **Use parallelism selectively** — Success: the scheduler treats configured concurrency as a ceiling, starts only ready and safely independent work, and records why delegation or parallel execution was selected.
 - **Reject stale evidence** — Success: changed semantic resources, repository generations, dependencies, or artifact versions cannot be silently combined with retained state or accepted as current verification.
 - **Measure orchestration quality** — Success: deterministic and representative evaluations report transfer coverage, delegation fidelity, permission precision, cascade radius, verification quality, cost, tokens, latency, and quality against credible non-orchestrated baselines.
+- **Post-hoc objective — Decide whether to delegate** — Success: an audit-first admission policy distinguishes parent-owned direct work, one child, one child plus independent verification, and bounded multi-child work, records its benefit hypothesis, and never treats subagent count as success.
+  **Reason:** The deeper evidence found that strong single-agent and equal-budget sampling baselines often match or beat automatic multi-agent systems.
+- **Post-hoc objective — Quarantine cancelled and replaced generations** — Success: task-version-bound authority is revoked on cancellation or replacement, and no result from an old generation can enter integration or satisfy current acceptance.
+  **Reason:** The initial roadmap audited cancellation but did not make late-result rejection an orchestration invariant.
 
 ## Current State
 
@@ -47,12 +55,18 @@ Keep `pi-subagents` as the owner of delegation contracts, execution planning, su
 - **No automatic side-effect replay:** uncertain or accepted write-capable work is never replayed solely because orchestration did not observe completion.
 - **Compatibility by omission:** existing payloads retain current behavior when new contract, capability, ledger, scheduler, and semantic-isolation fields are absent.
 - **Evidence before defaults:** new enforcement and scheduling behavior remains opt-in or audit-only until deterministic and representative measurements justify a default change.
+- **Post-hoc principle — Single-agent first:** keep parent-owned or one-child execution as the default recommendation unless explicit context, decomposition, specialist, or verification value exceeds coordination cost.
+  **Reason:** The deeper audit did not find a general matched-budget coding advantage for dynamic subagents.
+- **Post-hoc principle — Generation before side effects:** bind requests, plans, grants, artifacts, results, cancellation, and integration decisions to one immutable task generation before enforceable work begins.
+  **Reason:** Capability enforcement without generation identity cannot safely revoke authority or reject late results after replacement.
 
 ## Roadmap
 
 ### Phase 1: Establish delegation contracts and structured handoffs
 
 - [ ] A versioned delegation-request contract covers task identity, objective, non-goals, dependencies, required inputs, requested authority, acceptance criteria, required evidence, and bounded budgets without claiming those requests are already enforced.
+- [ ] **Post-hoc addition:** The executor attaches an immutable task generation and cancellation lineage to the request and stamps the normalized structured result with that generation without trusting model output or claiming enforcement.
+  **Reason:** Generation provenance must exist before later phases can revoke grants or quarantine results from cancelled and replaced work.
 - [ ] A versioned result contract preserves status, evidence-backed claims, artifact references, changed paths, verification results, limitations, unresolved dependencies, provenance, usage, and truncation metadata across every supported execution and delivery path.
 - [ ] Blocking single, parallel, chain, fan-in, and detached execution can opt into the same contract while existing text and `structured-v1` behavior remain compatible.
 - [ ] Chain and fan-in transfer validated structured envelopes when available and retain bounded raw text only as an explicit compatibility fallback.
@@ -66,6 +80,8 @@ Keep `pi-subagents` as the owner of delegation contracts, execution planning, su
 - [ ] Built-in and custom agent definitions can declare versioned capabilities, modalities, supported result contracts, authority needs, and verification roles while old definitions remain valid.
 - [ ] One transport-neutral `ExecutionPlan` records task requirements, selected agent, declared capability fit, requested and effective tools, cwd and trust decision, workspace mode, transport, model and thinking selection, budgets, and unsupported guarantees.
 - [ ] The first planner is deterministic and uses explicit contract requirements rather than task-keyword heuristics or an additional classifier model call.
+- [ ] **Post-hoc addition:** Audit-only `ExecutionPlan` records a delegation-admission recommendation, benefit hypothesis, task generation, and one of parent-owned direct work, one child, one child plus verification, or bounded multi-child work without changing launch behavior.
+  **Reason:** The original planner audited capability fit but did not answer the roadmap's core question of whether delegation was justified.
 - [ ] Audit-only planning does not change the caller-selected agent, tools, transport, workspace, or launch result, but it reports mismatch, overgrant, omission, and unsupported-policy findings through bounded details and inspection.
 - [ ] Agent catalogs and inspection expose only safe manifest metadata and never expose system prompts, credentials, raw protected paths, or private context.
 - [ ] Baseline evaluation measures capability coverage and permission precision before any enforcement default is considered.
@@ -76,10 +92,14 @@ Keep `pi-subagents` as the owner of delegation contracts, execution planning, su
 
 - [ ] Contracted calls can explicitly request capability enforcement, while legacy and uncontracted calls retain audit-only behavior unless a separately approved compatibility change says otherwise.
 - [ ] Preflight acknowledgement returns a typed accepted or rejected decision before project-agent confirmation, worktree creation, child allocation, provider work, or other side effects.
+- [ ] **Post-hoc addition:** Every enforceable capability grant is bound to the accepted task generation and `ExecutionPlan` identity, has an explicit lifetime, and is revocable before cancellation signals are delivered.
+  **Reason:** Phase 3 otherwise enforces authority before Phase 4 introduces enough version identity to prevent stale grants and late-result races.
 - [ ] Runtime results distinguish completed, partial, blocked, needs-input, abstained, failed, interrupted, stale, and contract-invalid outcomes with bounded reason codes and actionable recovery metadata.
 - [ ] Enforceable controls cover actual agent capability, tool allow-lists, cwd and trust policy, resource policy, workspace mode, result-contract support, concurrency, and budgets consistently across subprocess, in-process, RPC, and automatic transport.
 - [ ] Requested filesystem, network, secret, or credential guarantees fail closed when no real sandbox or policy provider can enforce them, rather than being represented as prompt-only protection.
 - [ ] Recovery policy retries only classified transient failures, requests exact missing inputs for dependency failures, reroutes capability mismatch, and never blindly replays work whose side effects may already have occurred.
+- [ ] **Post-hoc addition:** For contracted generation-aware work, cancellation or session replacement rotates the generation, revokes matching grants, classifies later completions as stale, and prevents them from triggering recovery or acceptance while legacy omitted-field behavior remains unchanged.
+  **Reason:** Logging cancellation is insufficient when detached or slow workers can settle after their owner has moved on.
 
 **Outcome:** The system can safely refuse, clarify, reroute, or stop unsuitable work without turning every inability into an opaque failure or repeated prompt.
 
@@ -90,13 +110,36 @@ Keep `pi-subagents` as the owner of delegation contracts, execution planning, su
 - [ ] Explicit workflow graphs validate identifiers, dependencies, limits, ownership conflicts, and cycles before any child starts or project-authored agent confirmation appears.
 - [ ] Artifact versions and dependency generations make missing transfers, superseded inputs, conflicting ownership, and downstream invalidation observable.
 - [ ] One integration owner can assemble compatible artifacts, and one independently contextualized verifier can attach machine-executed acceptance evidence without becoming another completion owner.
+- [ ] **Post-hoc addition:** In an opted-in managed-integration WorkItem, the integration owner is the only component allowed to update canonical integration state and must fail closed on stale task generation, base commit, dependency or read-set version, accepted-plan identity, scope, patch digest, or required evidence.
+  **Reason:** Worktree isolation prevents direct file interference but does not prevent logically incompatible or stale patches from being accepted.
+- [ ] **Post-hoc addition:** Cancellation forms a WorkItem subtree operation that rotates affected generations, quarantines late artifacts, preserves their diagnostic provenance, and never treats quarantine as successful completion.
+  **Reason:** The deeper research identified cancellation propagation and accepted late results as important unmeasured correctness risks.
 - [ ] Ledger state is bounded, redacted, branch-aware where applicable, versioned for persistence, recoverable after partial writes, and inspectable without exposing artifact contents by default.
 
 **Outcome:** Delegation becomes a reproducible state machine over tasks and artifacts rather than a collection of loosely related agent transcripts.
 
+### Post-hoc Gate 4A: Qualify minimal delegation admission before Phase 5
+
+**Post-hoc addition (2026-08-10):** This gate and its corresponding [`2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md`](../plans/2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) were added after the initial five-phase roadmap.
+
+**Reason:** The deeper evidence showed that building adaptive orchestration before comparing it with strong simpler baselines could turn extra models, tokens, or harness differences into a false delegation advantage.
+
+- [ ] An audit-only deterministic admission policy is evaluated on paired repeated repository tasks against parent-owned or equivalent strong single-agent execution, one-child execution, equal-budget best-of-N, naive parallelism, and a fixed two-child architecture with the same model, information, harness, evaluator, token or dollar ceiling, and wall-clock ceiling.
+- [ ] The first multi-child experiment permits at most two concurrent mutating children and no recursive grandchildren, and it uses one integration owner plus one fresh-context verifier.
+- [ ] Outcomes report verified task success, cost, tokens, wall-clock time, unnecessary delegation, handoff coverage, conflicts, stale-result rejection, cancellation latency, leaked work, and accepted late results with paired confidence intervals.
+- [ ] A recorded **Admit**, **Revise**, or **Defer** decision determines whether Phase 5 may implement adaptive admission and scheduling, while contracts, capability audit, typed outcomes, and fail-closed integration remain useful independently.
+
+**Outcome:** Adaptive orchestration proceeds only if a small falsifiable architecture demonstrates value or a precisely bounded research gap justifies continued experimental work.
+
 ### Phase 5: Add adaptive scheduling and semantic isolation
 
+- [ ] **Post-hoc admission dependency:** Phase 5 implementation begins only after Gate 4A records **Admit** or a separately approved **Revise** scope.
+  **Reason:** The original roadmap postponed matched comparison until the end of adaptive-scheduler implementation.
 - [ ] A dependency-aware ready queue starts only work whose required artifacts are current and whose effective scopes do not create known write, ownership, or integration conflicts.
+- [ ] **Post-hoc addition:** The scheduler consumes the admitted audit policy and can recommend parent-owned direct work, one child, one child plus verification, or bounded multi-child work before allocating children.
+  **Reason:** Dependency-aware scheduling alone decides when work is ready, not whether spawning subagents is worthwhile.
+- [ ] **Post-hoc addition:** Multi-child mutation remains capped at the Gate 4A bound and recursive delegation remains disabled until a separate matched evaluation and approval justify expansion.
+  **Reason:** Wider teams and recursion would confound the first admission-policy evidence and can reduce success as coordination width grows.
 - [ ] Configured parallel limits remain hard ceilings, while effective concurrency adapts deterministically to ready work, cohesion, critical path, remaining budget, transport capacity, and workspace safety.
 - [ ] Semantic resource snapshots bind retained work to bounded identities or hashes for agent definition, role prompt, tool policy, model resolution, protected resources, repository generation, dependency artifacts, and scheduler policy without persisting secrets or full prompts.
 - [ ] Restore and continuation detect semantic skew and apply an explicit compatible, warn, needs-revalidation, or reject decision before new model work begins.
@@ -108,12 +151,13 @@ Keep `pi-subagents` as the owner of delegation contracts, execution planning, su
 
 ## Cross-Cutting Verification Strategy
 
-- Every phase begins with deterministic characterization or failing behavior tests at the public contract and ends with focused tests, package checks, root `npm run check`, `git diff --check`, and `just pack subagents`.
-- Every changed asynchronous flow is audited for user cancellation, component disposal, session replacement, shutdown, stale generation after each `await`, partial creation, and repeated cleanup.
-- Every changed setting follows `docs/extension-settings.md` for side-effect-free loads, validation, latest-document reads, ordered writes, unknown-field preservation, atomic rename, rollback, reload behavior, and non-TUI handling.
-- Every model-facing and terminal-facing field is bounded, redacted, and sanitized before transfer, persistence, rendering, inspection, or completion delivery.
-- Representative live-provider smokes stop after one clear external failure and fall back to deterministic transport and fake-provider evidence unless a retry is explicitly requested.
-- Every published behavior change receives an independent package Changeset, while publication, tags, visibility changes, and release workflow dispatch remain separately approved actions.
+**Post-hoc simplification (2026-08-10):** Keep strategic evidence invariants here and leave exact commands, test matrices, lifecycle audits, settings procedures, smokes, packaging, and Changeset tasks in each corresponding implementation plan.
+
+**Reason:** The original roadmap duplicated implementation checklists and blurred the boundary between strategic milestones and executable plans.
+
+- Every phase must preserve omitted-field compatibility, bound and sanitize model-facing data, and prove cancellation, replacement, stale-generation, partial-creation, restore, and repeated-cleanup behavior for its changed asynchronous flows.
+- Every phase must provide deterministic public-contract evidence and the smallest representative runtime evidence that its owning plan requires, while unavailable live-provider paths remain explicitly unverified rather than replaced with unsupported claims.
+- Every default, release, publication, tag, visibility, or workflow-dispatch change remains a separate evidence-backed and explicitly approved decision.
 
 ## Success Metrics
 
@@ -131,6 +175,10 @@ Keep `pi-subagents` as the owner of delegation contracts, execution planning, su
 | Agent count used as a scheduling objective | Fixed ceiling only | 0 policies that maximize count | Scheduler policy review |
 | Existing omitted-field behavior regressions | Current package behavior | 0 unapproved regressions | Compatibility suites and Pi smoke |
 | Orchestrated quality advantage over matched alternatives | Unknown | TBD from repeated target-framework evaluation | Benchmark matrix |
+| **Post-hoc:** Unnecessary delegation rate | Not measured | Baseline at Gate 4A, then no admitted policy without a task-stratified decision rule | Paired admission benchmark |
+| **Post-hoc:** Old-generation results accepted | Not represented | 0 | Cancellation, replacement, restore, and integration race tests |
+| **Post-hoc:** Stale integration inputs accepted | Not represented | 0 across generation, base, dependency, plan, scope, digest, and evidence checks | Integration-controller tests |
+| **Post-hoc:** Cancellation containment | Not measured | Baseline propagation latency and 0 accepted late results or leaked owned work in deterministic tests | Lifecycle failure-injection matrix |
 
 Unsupported numeric improvement targets remain TBD until the package establishes repeatable baselines.
 
@@ -150,6 +198,8 @@ Unsupported numeric improvement targets remain TBD until the package establishes
 | Adaptive scheduling obscures predictable ordering | Debugging and compatibility could become harder | Keep deterministic policy, preserve a legacy scheduler rollback, and expose every decision reason. |
 | Independent verification doubles work | Cost can rise without improving simple tasks | Require it only for selected risk classes and measure marginal value against executable acceptance evidence. |
 | New settings can be invalid to older releases | Downgrade can strand user configuration | Keep defaults compatible, document downgrade edits, and preserve unknown fields and old state readers. |
+| **Post-hoc:** Admission policy cannot predict delegation value | A router can add cost or reject work without improving verified success | Keep admission audit-only through Gate 4A, compare it with simpler baselines, and defer adaptive execution when paired evidence is absent. |
+| **Post-hoc:** Capability grants outlive their task generation | Cancelled or replaced work can retain authority or race a late result into integration | Bind grants to generation and accepted-plan identity, revoke before signalling cancellation, and fail closed at integration. |
 
 ## Non-Goals
 
@@ -165,7 +215,8 @@ Unsupported numeric improvement targets remain TBD until the package establishes
 
 ## Assumptions and Unknowns
 
-- The five-phase direction is approved for planning, while each implementation phase still requires its saved plan to be executed explicitly.
+- **Post-hoc correction (2026-08-10):** The direction remains proposed, and neither a phase nor Gate 4A is admitted for implementation until the user explicitly approves its saved plan.
+  **Reason:** The original statement claimed planning approval without an approval record and conflicted with the roadmap's proposed status.
 - Existing text payloads, tool names, workflow modes, settings defaults, retained records, and transport choices remain compatible by omission.
 - `structured-v2` is expected to be additive, but its exact public field names remain subject to provider-schema and compatibility tests in Phase 1.
 - Capability requirements are expected to be explicit before learned or heuristic intent inference is considered.
@@ -180,3 +231,7 @@ Unsupported numeric improvement targets remain TBD until the package establishes
 - **2026-08-10 — Keep enforcement truthful:** Enforce only controls available through the selected runtime and report unsupported guarantees instead of treating prompt instructions as security boundaries.
 - **2026-08-10 — Treat verification and observability as cross-cutting:** Every phase carries independent-evidence and bounded-diagnostic requirements rather than deferring correctness measurement to the final scheduler.
 - **2026-08-10 — Keep defaults compatible:** New public behavior remains explicit, audit-only, or opt-in until package-specific evidence supports a separately approved default change.
+- **Post-hoc addition, 2026-08-10 — Add a delegation-admission evidence gate:** Add Gate 4A, keep its router audit-only, constrain the first experiment to two mutating children without grandchildren, and require a recorded admission decision before adaptive scheduling.
+  **Reason:** The later AlphaXiv evidence audit found no general matched-budget coding advantage for dynamic subagents and identified strong single-agent, self-consistency, harness-confound, cancellation, and stale-integration counterevidence.
+- **Post-hoc addition, 2026-08-10 — Move generation and fail-closed integration earlier:** Carry task generation from the handoff contract through plans and grants, revoke it on cancellation, and reject stale integration inputs in Phase 4.
+  **Reason:** The original sequence treated cancellation mainly as an audit concern and deferred semantic rejection until Phase 5, leaving late-result and stale-patch races under-specified.

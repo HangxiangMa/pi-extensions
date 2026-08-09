@@ -6,6 +6,14 @@ Add one opt-in versioned delegation request and result contract that preserves o
 
 Keep existing free-form text and `structured-v1` behavior compatible when callers omit the new contract.
 
+## Post-hoc Amendment
+
+This section and every checklist item labelled **Post-hoc addition** were added after the initial plan in commit `07df6d8b`.
+
+**Reason:** The later evidence audit and roadmap review found that cancellation and replacement safety require immutable task-generation provenance to begin at the request and result boundary rather than being introduced only by a later ledger.
+
+The added generation fields remain descriptive in this phase and do not claim capability revocation or late-result enforcement before their owning phases exist.
+
 ## Context
 
 The current blocking schema accepts free-form task strings, chain execution substitutes raw previous output into `{previous}`, and fan-in constructs bounded Markdown from worker results.
@@ -23,6 +31,10 @@ This phase therefore needs a bounded contract with selectable detail rather than
 The request contract will cover version, task identity, objective, non-goals, dependencies, required inputs, requested authority, acceptance criteria, required evidence, and budget references.
 
 The result contract will cover version, status, summary, evidence-backed claims, artifacts, changed paths, verification, limitations, unresolved dependencies, provenance, usage, and truncation.
+
+**Post-hoc addition:** The executor will attach an immutable task generation and cancellation lineage to the request and stamp the normalized structured result envelope with the generation that produced it rather than trusting a model-supplied value.
+
+**Reason:** Later grant revocation, stale-result quarantine, and integration rejection need one end-to-end identity that cannot be reconstructed safely from timestamps or agent IDs.
 
 Contract levels will provide a minimal lookup shape and a full software-change shape without changing the meaning of individual fields.
 
@@ -62,7 +74,10 @@ Chain and fan-in will consume structured results when valid and preserve source 
 
 - [ ] Record characterization tests for current text, `structured-v1`, chain `{previous}`, fan-in Markdown, completion metadata, persistence, inspection, and rendering behavior; verify the focused package tests pass before contract changes.
 - [ ] Decide the exact `pi-subagents:delegation:v2` and `pi-subagents:result:v2` field names, contract levels, status vocabulary, size limits, unknown-field policy, and observed/inferred/unverified provenance semantics; verify the decision against the two research notes and existing provider-compatible schema conventions.
+- [ ] **Post-hoc addition:** Add bounded executor-owned task-generation and cancellation-lineage fields to the request and normalized result, persistence, inspection, chain, and fan-in projections; verify model output cannot override them, omission preserves legacy behavior, and this phase labels them as provenance rather than enforcement.
+- [ ] **Post-hoc addition:** Reconcile the exact contract decision with the evidence audit and architecture deep dive, recording why generation provenance was added after the initial plan and which late-result guarantees remain deferred.
 - [ ] Add failing parser and serializer tests for valid minimal and full contracts, malformed JSON, unsupported versions, missing required fields, unknown fields, duplicate identifiers, oversized arrays, oversized strings, terminal controls, private text, and UTF-8 truncation; verify failures precede implementation.
+- [ ] **Post-hoc addition:** Add generation tests for echoed identity, mixed-generation chain and fan-in input, cancellation or replacement metadata, persisted round-trip, stale-version parsing, and attempts by model output to forge executor-owned generation fields.
 - [ ] Implement bounded immutable request and result types plus parse, normalize, copy, redact, and compatibility helpers in responsibility-focused modules under `packages/pi-subagents/src/`; verify no source file crosses 1,000 lines.
 - [ ] Add optional contract and `structured-v2` request fields to blocking single, task, chain, aggregator, detached spawn, and follow-up shapes without changing calls that provide only `task`; verify TypeBox schemas remain bounded and provider-compatible.
 - [ ] Append contract instructions through one shared prompt builder across subprocess, in-process, and RPC turns; verify each transport receives semantically identical bounded instructions and no duplicate suffix.
@@ -85,5 +100,6 @@ Chain and fan-in will consume structured results when valid and preserve source 
 - [ ] Chain and fan-in preserve source, status, evidence, artifact, and truncation provenance when v2 data is available.
 - [ ] Contract levels expose measured cost and latency tradeoffs without making unsupported performance promises.
 - [ ] Authority fields are documented as requested rather than enforced until the capability-enforcement phase.
+- [ ] **Post-hoc addition:** Every valid structured result can be attributed to one immutable task generation, and documentation states that Phase 1 records lineage but does not yet revoke authority or reject late work.
 - [ ] Persistence, inspection, completion delivery, rendering, cancellation, timeout, replacement, and shutdown retain their existing safety guarantees.
 - [ ] Every changed behavior has deterministic coverage, required checks pass, and the package contains an appropriate Changeset without publishing.

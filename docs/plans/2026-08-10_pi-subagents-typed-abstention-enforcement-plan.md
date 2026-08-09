@@ -6,6 +6,14 @@ Turn audited capability and authority findings into an explicit opt-in enforceme
 
 Preserve audit-only behavior for legacy and uncontracted calls unless a separate compatibility decision changes the default.
 
+## Post-hoc Amendment
+
+This section and every checklist item labelled **Post-hoc addition** were added after the initial plan in commit `07df6d8b`.
+
+**Reason:** The later evidence audit and roadmap review found that enforcement without task-version-bound grants and cancellation-generation revocation can leave stale authority active and race late completions into acceptance.
+
+The audit-only delegation-admission recommendation remains non-enforcing until Gate 4A records evidence and a separate approval admits adaptive behavior.
+
 ## Context
 
 The capability-manifest phase provides explicit requirements, declared agent capabilities, an enforceability matrix, and one immutable `ExecutionPlan`.
@@ -28,6 +36,14 @@ A bounded reason-code registry will distinguish capability, authority, dependenc
 
 Enforcement will apply only to controls proven enforceable through the active transport and runtime.
 
+**Post-hoc addition:** Every accepted enforceable plan will issue a bounded grant tied to the task generation and exact `ExecutionPlan` identity with an explicit lifetime and revocation state.
+
+**Reason:** Agent identity or prompt scope alone cannot prove that authority still belongs to the current user request after cancellation, replacement, or re-planning.
+
+**Post-hoc addition:** For contracted generation-aware work, cancellation and session replacement will rotate the generation and revoke grants before signalling workers, and later results from the old generation will be typed stale and barred from recovery or acceptance while legacy omitted-field behavior remains unchanged.
+
+**Reason:** Ignoring a late continuation does not release its authority or prevent detached completion from being mistaken for current evidence.
+
 An explicit request for an unsupported filesystem, network, secret, credential, or process guarantee will fail closed instead of degrading to prompt guidance.
 
 A deterministic recovery policy will map classified outcomes to retry, clarify, supply-input, reroute, replan, revalidate, fallback, or stop.
@@ -41,11 +57,13 @@ No policy action will replay accepted or uncertain write-capable work automatica
 - Do not let an agent self-grant missing capabilities, tools, trust, secrets, or workspace access.
 - Do not add a WorkItem dependency graph or adaptive scheduler in this phase.
 - Do not automatically choose a new worker through a hidden model call.
+- **Post-hoc addition:** Do not enforce the audit-only delegation-admission recommendation or reject work merely because the unvalidated policy prefers parent-owned execution.
 - Do not treat self-reported completed status as independent verification.
 
 ## Assumptions
 
 - Handoff contract v2 and audit-only ExecutionPlan are implemented and stable.
+- **Post-hoc addition:** Their request, result, and plan projections carry one immutable executor-owned task generation that model output cannot override.
 - The caller can explicitly request enforcement through a provider-compatible field or contracted mode.
 - The package can reject unsupported guarantees before launch even when it cannot enforce the guarantee itself.
 - Recovery actions can be represented as recommendations before later WorkItem automation consumes them.
@@ -71,9 +89,12 @@ No policy action will replay accepted or uncertain write-capable work automatica
 
 - [ ] Characterize current preflight, confirmation, worktree creation, registry spawn, transport startup, prompt acceptance, settlement, timeout, abort, completion, and retry boundaries; verify focused tests pass before enforcement changes.
 - [ ] Define the versioned acknowledgement, typed outcome, reason-code, and recovery-action schemas with one owner and bounded forward-compatible parsing; verify every code has a distinct caller action or diagnostic purpose.
+- [ ] **Post-hoc addition:** Define a task-generation-bound capability-grant schema with accepted-plan digest, issued and expiry bounds, revocation reason, and executor-owned state; verify no model-facing field can widen or revive it.
 - [ ] Decide the provider-compatible enforcement request and precedence rules for blocking tasks, chain steps, aggregators, detached spawn, and follow-up turns; preserve audit-only omitted behavior and document any setting interaction.
 - [ ] Add failing preflight tests for accepted work, unknown manifest, missing capability, unsupported guarantee, unavailable result contract, trust denial, resource denial, transport mismatch, insufficient workspace isolation, and malformed enforcement request.
 - [ ] Implement acknowledgement before project-agent confirmation, worktree creation, registry insertion, child process or session allocation, and provider work; verify rejected plans produce zero side effects and stable bounded details.
+- [ ] **Post-hoc addition:** Issue the grant only after acknowledgement, propagate its generation and accepted-plan identity through every transport, and revoke it before delivering cancellation or replacement signals.
+- [ ] **Post-hoc addition:** Add cancellation-race tests covering pre-launch rejection, in-flight tool work, accepted prompt, detached completion, timeout finalization, session replacement, repeated cancellation, and late provider settlement; verify old-generation results are stale and cannot trigger retry, fallback, or acceptance.
 - [ ] Add failing cross-transport tests for enforceable tool, cwd, trust, resource, workspace, model, result-contract, concurrency, and budget policy; verify subprocess, in-process, RPC, and automatic transport cannot widen the accepted plan.
 - [ ] Implement enforcement for proven controls and fail closed for requested unsupported filesystem, network, secret, credential, approval, sandbox, or provider-header guarantees.
 - [ ] Extend result parsing, registry state, completion metadata, inspection, rendering, and persistence with typed outcomes and reason codes while preserving legacy lifecycle projections.
@@ -82,6 +103,7 @@ No policy action will replay accepted or uncertain write-capable work automatica
 - [ ] Define and implement a deterministic recovery classifier that retries only bounded transient pre-acceptance transport or tool failures, recommends clarification for ambiguity, supplies exact missing dependencies, reroutes capability mismatch, revalidates stale state, and stops unsupported guarantees.
 - [ ] Add tests proving ambiguous acceptance, successful prompt acceptance, write-capable partial side effects, available timeout checkpoint or finalization evidence, and stale evidence never trigger automatic replay.
 - [ ] Add parent-facing recovery metadata and guidance to completion delivery and inspection without automatically launching a replacement agent in this phase.
+- [ ] **Post-hoc addition:** Expose bounded grant generation, expiry, and revocation metadata in safe details and inspection while omitting credentials, unrestricted paths, and private policy material.
 - [ ] Add an offline failure-injection suite for transient transport, tool, ambiguous delegation, missing context, capability mismatch, conflicting result, invalid contract, premature action, timeout, and stale input; record recovery accuracy and false-retry count.
 - [ ] Update README, tool descriptions, status/help, compatibility and downgrade notes, enforceability matrix, package layout, and a minor Changeset with exact audit-versus-enforce behavior.
 - [ ] Audit settings ordering if any setting is added, project trust, cancellation, stale session generation, partial initialization, settlement, timeout finalization, completion batching, redaction, and repeated cleanup against both extension guides.
@@ -96,4 +118,5 @@ No policy action will replay accepted or uncertain write-capable work automatica
 - [ ] No accepted, ambiguously accepted, or potentially side-effecting turn is automatically replayed.
 - [ ] Failure-injection evidence distinguishes transient recovery from semantic and stale-state containment.
 - [ ] All transports enforce the same accepted ExecutionPlan without silent widening or fallback.
+- [ ] **Post-hoc addition:** All transports bind enforceable authority to the same task generation and accepted-plan identity, and cancellation or replacement produces zero accepted old-generation completions.
 - [ ] Required checks, lifecycle and settings audits, compatibility evidence, and Changeset pass without publication.
