@@ -206,20 +206,79 @@ export function inspectRemoteSelection(
 		: { kind: "different", include: remoteInclude, ...comparison };
 }
 
+export interface RemoteSelectionDecision {
+	setupName: string;
+	configIdentity: string;
+	localInclude: readonly string[];
+	remoteInclude: readonly string[];
+}
+
 export class RemoteSelectionMismatchError extends Error {
+	readonly decision: RemoteSelectionDecision;
+	readonly setupName: string;
 	readonly localInclude: string[];
 	readonly remoteInclude: string[];
 
-	constructor(localInclude: unknown, remoteInclude: unknown) {
+	constructor(
+		setupName: string,
+		localInclude: unknown,
+		remoteInclude: unknown,
+		configIdentity = JSON.stringify([setupName, normalizeSyncInclude(localInclude)]),
+	) {
 		const local = normalizeSyncInclude(localInclude);
 		const remote = normalizeSyncInclude(remoteInclude);
-		super(
-			"Remote included content differs from this sync setup. Review Remote included content in /sync Settings, or use a reviewed force push to keep local selection.",
-		);
+		super(formatRemoteSelectionMismatch(setupName, local, remote));
 		this.name = "RemoteSelectionMismatchError";
+		this.setupName = setupName;
 		this.localInclude = local;
 		this.remoteInclude = remote;
+		this.decision = {
+			setupName,
+			configIdentity,
+			localInclude: [...local],
+			remoteInclude: [...remote],
+		};
 	}
+}
+
+export function remoteSelectionMismatch(
+	config: { setupName: string; include: unknown },
+	remoteInclude: unknown,
+	configIdentity?: string,
+) {
+	return new RemoteSelectionMismatchError(
+		config.setupName,
+		config.include,
+		remoteInclude,
+		configIdentity,
+	);
+}
+
+export function formatRemoteSelectionMismatch(
+	setupName: string,
+	localInclude: readonly string[],
+	remoteInclude: readonly string[],
+) {
+	const comparison = compareSyncInclude(localInclude, remoteInclude);
+	const lines = [
+		`Synced content differs for sync setup “${stripTerminalControls(setupName)}”.`,
+		`Remote-only: ${comparison.remoteOnly.join(", ") || "none"}`,
+		`This-device-only: ${comparison.localOnly.join(", ") || "none"}`,
+	];
+	if (comparison.remoteOnly.length === 0 && comparison.localOnly.length === 0) {
+		lines.push(
+			"Only ordering differs.",
+			`Remote order: ${remoteInclude.join(", ") || "none"}`,
+			`This device order: ${localInclude.join(", ") || "none"}`,
+		);
+	}
+	lines.push("Run /sync in TUI to review both content lists and choose what happens next.");
+	return lines.join("\n");
+}
+
+function stripTerminalControls(value: string) {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: Escape untrusted terminal controls.
+	return value.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?");
 }
 
 export function discoverLegacySnapshotInclude(snapshot: Pick<Snapshot, "files">) {

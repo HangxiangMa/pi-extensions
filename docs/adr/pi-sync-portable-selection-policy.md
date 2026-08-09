@@ -42,36 +42,40 @@ duplicates, and overlaps fail before settings or synced files change.
 ### Divergence behavior
 
 Orchestration compares an explicit remote policy with the current local setup before applying remote
-content. Ordinary sync, automatic startup/shutdown sync, and pull—including forced pull—pause on a
-difference. Status names the difference and lists local-only and remote-only selections.
+content. Ordinary sync, automatic startup/shutdown sync, and pull—including forced pull—pause on a difference.
+Status names the difference and lists local-only and remote-only selections.
+The no-argument TUI manager converts only the typed selection mismatch into inline resolution.
+Direct routes remain deterministic and report exact remote-only, device-only, or order-only differences plus `/sync` recovery guidance.
+Automatic startup/shutdown work remains warning-only, RPC review remains read-only, and print/JSON command behavior remains rejected.
 
-A force push is the explicit keep-local publication path. Its confirmation says that the local
-selection will replace the differing remote policy; preserved unmanaged remote files remain subject
-to the existing preservation rules.
+A force push is the explicit keep-local publication path.
+Its confirmation says that the local selection will replace the differing remote policy, while preserved unmanaged remote files remain subject to the existing preservation rules.
 
 Read-only diff remains available and labels policy state. A legacy snapshot without policy preserves
 prior sync behavior because no authoritative remote intent exists.
 
 ### Review and adoption
 
-Settings exposes **Remote included content**. For a differing explicit policy it offers:
+The no-argument TUI manager and **Settings → Compare synced content** share one review-first flow for a differing explicit policy.
+The first screen is **Synced content differs**, says that nothing changed, and offers:
 
-- **Adopt remote included content** — revalidate the reviewed remote head, then save only local
-  `sync.include` through the existing cross-process lock, expected-storage/include checks, unknown
-  field preservation, and atomic publication;
-- **Keep local included content** — make no change and explain that a reviewed force push publishes
-  that choice;
-- **Review paths** — show exact remote-only, local-only, and ordered selections; and
+- **Review all paths (recommended)** — show exact remote-only paths, device-only paths, and both ordered lists;
+- **Use remote content list** — revalidate the reviewed remote head and immutable snapshot, then save only local `sync.include` through the existing cross-process lock, expected-storage/include checks, unknown-field preservation, and atomic publication;
+- **Keep this device's content list and update remote…** — open the existing `push --force` route for the captured setup without `--yes`; and
 - **Cancel** — make no change.
 
-Adopting `sessions` requires the existing privacy acknowledgement. Adoption never pulls files,
-writes sync state, or starts another network operation. The user reviews Sync now separately.
-Cancellation, component disposal, session replacement, shutdown, a changed remote head, and a
-concurrent settings edit all preserve the last valid local selection.
+An order-only mismatch is explicitly labeled instead of being treated as a membership difference.
+Adopting `sessions` requires the existing privacy acknowledgement.
+Adoption never pulls files, writes sync state, or automatically starts another network operation.
+After adoption, **Remote content list saved** offers an explicit fresh continuation for the originating Sync, Pull, or Push operation, or **Continue Sync now…** from Settings, plus **Done**.
+Cancelling after adoption leaves the reviewed settings change saved without implying that files were pulled.
+Cancelling local-wins preparation or exact push confirmation returns to the selection choice without remote mutation.
+Cancellation, component disposal, session replacement, shutdown, a changed remote head, and a concurrent settings edit preserve the last valid local selection.
+A stale comparison refreshes before another user decision.
 
 For old snapshots, Settings offers a clearly labeled read-only partial discovery from safe file roots.
-It cannot be adopted as authoritative policy because preserved files and selected-but-missing paths
-cannot be distinguished. Users can copy needed paths through **Add custom path…**.
+It cannot be adopted as authoritative policy because preserved files and selected-but-missing paths cannot be distinguished.
+Users can copy needed paths through **Add custom path…**.
 
 ## Consequences
 
@@ -87,7 +91,8 @@ cannot be distinguished. Users can copy needed paths through **Add custom path�
 
 - Remote-policy review reads the active immutable snapshot; Status relies on the validated head
   projection and cannot partially discover legacy paths.
-- Keep-local remains unresolved until the user publishes with a reviewed force push.
+- Keeping the device list still requires a separately confirmed reviewed force push.
+- Adoption and file continuation are separate steps, so a user may intentionally stop after saving the list.
 - Legacy discovery is necessarily incomplete and cannot reconstruct exact intent.
 - Git publications containing `selection` require a reader that understands the additive manifest
   field; newer pi-sync remains backward-compatible with older Git publications, but an older strict
@@ -100,5 +105,7 @@ cannot be distinguished. Users can copy needed paths through **Add custom path�
 - Backend round trips: shared backend contract tests and Git backend tests.
 - Divergence, automatic no-mutation, pull pause, and reviewed keep-local push:
   `sync-decision.test.ts`.
-- Adoption, session acknowledgement, legacy review, stale remote/local rejection, and disposal:
-  `remote-selection-ui.test.ts`.
+- Inline classification, direct guidance, automatic warning-only behavior, and mode boundaries:
+  `sync.test.ts` and `sync-decision.test.ts`.
+- Review-first presentation, order-only wording, adoption, explicit continuation, local-wins routing, legacy review, stale refresh, RPC read-only behavior, and disposal:
+  `remote-selection-ui.test.ts` and `sync-resolution-ui.test.ts`.

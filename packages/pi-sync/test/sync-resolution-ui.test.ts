@@ -8,9 +8,11 @@ import { createMockContext } from "../../../test/support.js";
 import {
 	loadConfig,
 	localConfigPath,
+	syncConfigReviewFingerprint,
 	syncConfigReviewIdentity,
 	updateLocalConfig,
 } from "../src/config.js";
+import { dispatchManagerResult } from "../src/manager-result-dispatcher.js";
 import { showSyncManager } from "../src/manager-ui.js";
 import type { SyncDecision } from "../src/sync-decision.js";
 import { showSyncResolution } from "../src/sync-resolution-ui.js";
@@ -262,6 +264,168 @@ test("session replacement aborts and drains a resolution operation", async () =>
 	});
 });
 
+test("repeated remote-selection decisions refresh through bounded manager dispatch", async () => {
+	await withConfiguredDecision(async (_decision, selectionConfigIdentity) => {
+		const tui = createTuiHarness({ width: 60, rows: 18 });
+		const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+		let routeCalls = 0;
+		const running = dispatchManagerResult(
+			ctx,
+			{
+				kind: "remote-selection-required",
+				decision: {
+					setupName: "home",
+					configIdentity: selectionConfigIdentity,
+					localInclude: ["settings.json"],
+					remoteInclude: ["settings.json", "pi-starship.toml"],
+				},
+			},
+			"sync",
+			async (route, _signal, _onCommit, target) => {
+				routeCalls += 1;
+				assert.equal(route, "push --force");
+				assert.equal(target, "home");
+				return {
+					kind: "remote-selection-required",
+					decision: {
+						setupName: "home",
+						configIdentity: selectionConfigIdentity,
+						localInclude: ["settings.json"],
+						remoteInclude: ["settings.json", "models.json"],
+					},
+				};
+			},
+		);
+
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await waitFor(() => routeCalls === 1);
+		await waitFor(() => tui.isOpen && /Synced content differs/u.test(tui.render().join("\n")));
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /models\.json/u);
+		tui.press("tui.select.cancel");
+		await tui.waitForOpen();
+		tui.press("tui.select.cancel");
+		assert.deepEqual(await running, { kind: "stay" });
+	});
+});
+
+test("selection continuation hands a file-direction decision to existing resolution", async () => {
+	await withConfiguredDecision(async (decision, selectionConfigIdentity) => {
+		const tui = createTuiHarness({ width: 60, rows: 18 });
+		const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+		let routeCalls = 0;
+		const running = dispatchManagerResult(
+			ctx,
+			{
+				kind: "remote-selection-required",
+				decision: {
+					setupName: "home",
+					configIdentity: selectionConfigIdentity,
+					localInclude: ["settings.json"],
+					remoteInclude: ["settings.json", "pi-starship.toml"],
+				},
+			},
+			"pull",
+			async () => {
+				routeCalls += 1;
+				return { kind: "decision-required", decision };
+			},
+		);
+
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await waitFor(() => routeCalls === 1);
+		await waitFor(() => tui.isOpen && /Resolve sync conflict/u.test(tui.render().join("\n")));
+		tui.press("tui.select.cancel");
+		assert.deepEqual(await running, { kind: "stay" });
+	});
+});
+
+test("ordinary selection continuation failure is reported only by its route", async () => {
+	await withConfiguredDecision(async (_decision, selectionConfigIdentity) => {
+		const tui = createTuiHarness({ width: 60, rows: 18 });
+		const { ctx, notifications } = createMockContext({
+			hasUI: true,
+			mode: "tui",
+			custom: tui.custom,
+		});
+		const running = dispatchManagerResult(
+			ctx,
+			{
+				kind: "remote-selection-required",
+				decision: {
+					setupName: "home",
+					configIdentity: selectionConfigIdentity,
+					localInclude: ["settings.json"],
+					remoteInclude: ["settings.json", "pi-starship.toml"],
+				},
+			},
+			"push",
+			async () => {
+				notifications.push({ message: "transport failed", level: "error" });
+				return { kind: "failed" };
+			},
+		);
+
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await waitFor(() => notifications.length === 1);
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /Synced content differs/u);
+		assert.deepEqual(
+			notifications.map((item) => item.message),
+			["transport failed"],
+		);
+		tui.press("tui.select.cancel");
+		assert.deepEqual(await running, { kind: "stay" });
+	});
+});
+
+test("the main manager opens inline remote-selection recovery", async () => {
+	await withConfiguredDecision(async (_decision, selectionConfigIdentity) => {
+		const tui = createTuiHarness({ width: 60, rows: 18 });
+		const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
+		let releaseRoute: () => void = () => undefined;
+		const routeGate = new Promise<void>((resolve) => {
+			releaseRoute = resolve;
+		});
+		const running = showSyncManager(ctx, async (route) => {
+			assert.equal(route, "sync");
+			await routeGate;
+			return {
+				kind: "remote-selection-required",
+				decision: {
+					setupName: "home",
+					configIdentity: selectionConfigIdentity,
+					localInclude: ["settings.json"],
+					remoteInclude: ["settings.json", "pi-starship.toml"],
+				},
+			} as never;
+		});
+
+		await tui.waitForOpen();
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		const loaderOpenCount = tui.openCount;
+		releaseRoute();
+		await waitFor(() => tui.isOpen && tui.openCount > loaderOpenCount);
+		assert.match(tui.render().join("\n"), /Synced content differs/u);
+		tui.press("tui.select.cancel");
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /Manage sync/u);
+		tui.press("ctrl+c");
+		await running;
+	});
+});
+
 test("the main manager opens conflict recovery instead of ending at an error", async () => {
 	await withConfiguredDecision(async (decision) => {
 		const tui = createTuiHarness({ width: 60, rows: 18 });
@@ -291,21 +455,26 @@ test("the main manager opens conflict recovery instead of ending at an error", a
 	});
 });
 
-async function withConfiguredDecision(run: (decision: SyncDecision) => Promise<void>) {
+async function withConfiguredDecision(
+	run: (decision: SyncDecision, selectionConfigIdentity: string) => Promise<void>,
+) {
 	await withTempHome(async (agentDir) => {
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
 		const config = await loadConfig();
-		await run({
-			kind: "both-changed",
-			setupName: "home",
-			configIdentity: syncConfigReviewIdentity(config),
-			causes: { localChanged: true, remoteChanged: true, policyChanged: false },
-			currentInclude: ["settings.json"],
-			review: "Sync setup: home\n\nObserved differences:\nDifferent: settings.json\u001b]8;;bad",
-			directions: ["push", "pull"],
-			directMessage: "Both local and remote changed.",
-		});
+		await run(
+			{
+				kind: "both-changed",
+				setupName: "home",
+				configIdentity: syncConfigReviewIdentity(config),
+				causes: { localChanged: true, remoteChanged: true, policyChanged: false },
+				currentInclude: ["settings.json"],
+				review: "Sync setup: home\n\nObserved differences:\nDifferent: settings.json\u001b]8;;bad",
+				directions: ["push", "pull"],
+				directMessage: "Both local and remote changed.",
+			},
+			syncConfigReviewFingerprint(config),
+		);
 	});
 }
 

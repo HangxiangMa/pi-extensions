@@ -1,10 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { type ActionMenuItem, defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import {
-	type CancellableOperationResult,
-	type RunRoute,
-	runCancellableOperation,
-} from "./cancellable-operation.js";
+import { type RunRoute, runCancellableOperation } from "./cancellable-operation.js";
 import { setSyncSetupCompletions } from "./command.js";
 import {
 	configuredSyncSetupNames,
@@ -25,6 +21,7 @@ import {
 	requiredInput,
 	safeTerminalText,
 } from "./manager-helpers.js";
+import { dispatchManagerResult } from "./manager-result-dispatcher.js";
 import { backendStorageDescription, describeManagerState } from "./manager-state.js";
 import { chooseS3Credentials } from "./s3-credentials-ui.js";
 import {
@@ -37,7 +34,6 @@ import { showSyncSettings } from "./settings-ui.js";
 import { useSyncSetup } from "./setup-switch.js";
 import { showAddStorageConnection, showStorageConnections } from "./storage-connections-ui.js";
 import { DEFAULT_SYNC_INCLUDE, syncIncludeSelection } from "./sync-policy.js";
-import { showSyncResolution } from "./sync-resolution-ui.js";
 import { showSyncSetups } from "./sync-setups-ui.js";
 import type { AnySyncConfig } from "./types.js";
 import { showAddWebDavTarget, showEditWebDavTarget, showWebDavSetup } from "./webdav-ui.js";
@@ -125,10 +121,14 @@ export async function showSyncManager(
 						signal: sessionSignal,
 					},
 				);
-				const resolution = await resolveManagerDecision(ctx, result, runRoute, sessionSignal);
-				return result.kind === "closed" || resolution === "close"
-					? { kind: "close" }
-					: { kind: "stay" };
+				const disposition = await dispatchManagerResult(
+					ctx,
+					result,
+					"sync",
+					runRoute,
+					sessionSignal,
+				);
+				return disposition.kind === "close" ? { kind: "close" } : { kind: "stay" };
 			},
 			switch: async () => {
 				const result = await showSetupSwitcher(ctx, runRoute, undefined, sessionSignal);
@@ -162,12 +162,14 @@ export async function showSyncManager(
 						signal: sessionSignal,
 					},
 				);
-				const resolution = await resolveManagerDecision(ctx, result, runRoute, sessionSignal);
-				return result.kind === "closed" ||
-					(result.kind === "completed" && result.outcome === "applied") ||
-					resolution === "close"
-					? { kind: "close" }
-					: { kind: "stay" };
+				const disposition = await dispatchManagerResult(
+					ctx,
+					result,
+					"pull",
+					runRoute,
+					sessionSignal,
+				);
+				return disposition.kind === "close" ? { kind: "close" } : { kind: "stay" };
 			},
 			push: async () => {
 				const result = await runCancellableOperation(
@@ -181,10 +183,14 @@ export async function showSyncManager(
 						signal: sessionSignal,
 					},
 				);
-				const resolution = await resolveManagerDecision(ctx, result, runRoute, sessionSignal);
-				return result.kind === "closed" || resolution === "close"
-					? { kind: "close" }
-					: { kind: "stay" };
+				const disposition = await dispatchManagerResult(
+					ctx,
+					result,
+					"push",
+					runRoute,
+					sessionSignal,
+				);
+				return disposition.kind === "close" ? { kind: "close" } : { kind: "stay" };
 			},
 			setups: async () => {
 				const result = await showSyncSetupManager(ctx, runRoute, sessionSignal);
@@ -232,21 +238,6 @@ export async function showSyncManager(
 		signal: sessionSignal,
 		isCurrent: () => !sessionSignal?.aborted,
 	});
-}
-
-async function resolveManagerDecision(
-	ctx: ExtensionCommandContext,
-	result: CancellableOperationResult,
-	runRoute: RunRoute,
-	signal?: AbortSignal,
-) {
-	if (result.kind !== "decision-required") return undefined;
-	const resolution = await showSyncResolution(ctx, result.decision, runRoute, signal);
-	return resolution.kind === "resolved" ||
-		resolution.kind === "closed" ||
-		resolution.kind === "stale"
-		? "close"
-		: "stay";
 }
 
 function syncMainMenuItem(
@@ -553,23 +544,11 @@ async function showSetupSwitcher(
 						signal,
 					},
 				);
-				if (pullResult.kind === "closed") {
-					pullClosed = true;
-					return undefined;
+				const disposition = await dispatchManagerResult(ctx, pullResult, "pull", runRoute, signal);
+				if (pullResult.kind === "closed" || pullResult.kind.endsWith("required")) {
+					pullClosed = disposition.kind === "close";
 				}
-				if (pullResult.kind === "decision-required") {
-					const resolution = await showSyncResolution(ctx, pullResult.decision, runRoute, signal);
-					if (
-						resolution.kind === "resolved" ||
-						resolution.kind === "closed" ||
-						resolution.kind === "stale"
-					) {
-						pullClosed = true;
-					}
-					return resolution.kind === "resolved" && resolution.direction === "pull"
-						? "applied"
-						: undefined;
-				}
+				if (disposition.appliedRoute === "pull") return "applied";
 				if (pullResult.kind === "completed") return pullResult.outcome;
 				return pullResult.kind === "cancelled" ? "cancelled" : undefined;
 			},

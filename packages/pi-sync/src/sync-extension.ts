@@ -41,6 +41,7 @@ import {
 	isSyncDecisionRequiredError,
 	SetupPullRequiresUiError,
 } from "./sync-errors.js";
+import { formatRemoteSelectionMismatch, RemoteSelectionMismatchError } from "./sync-policy.js";
 import type { AnySyncConfig, CommandOptions, SnapshotOptions } from "./types.js";
 
 const STATUS_KEY = "sync";
@@ -207,6 +208,15 @@ async function handleCommand(
 	const result = await executeCommand(rawArgs, ctx, sessionSignal, loaders);
 	if (result.kind === "decision-required") {
 		ctx.ui.notify(result.decision.directMessage, "error");
+	} else if (result.kind === "remote-selection-required") {
+		ctx.ui.notify(
+			formatRemoteSelectionMismatch(
+				result.decision.setupName,
+				result.decision.localInclude,
+				result.decision.remoteInclude,
+			),
+			"error",
+		);
 	}
 }
 
@@ -324,6 +334,9 @@ async function executeCommand(
 		if (signal?.aborted) return { kind: "failed" };
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		if (error instanceof SetupPullRequiresUiError) throw error;
+		if (error instanceof RemoteSelectionMismatchError) {
+			return { kind: "remote-selection-required", decision: error.decision };
+		}
 		if (isSyncDecisionRequiredError(error)) {
 			return { kind: "decision-required", decision: error.decision };
 		}

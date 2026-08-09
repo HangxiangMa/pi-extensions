@@ -7,6 +7,7 @@ import {
 	readStateForConfig,
 	sessionDirForApply,
 	stateDir,
+	syncConfigReviewFingerprint,
 	syncSessionsWarnings,
 	writeStateForConfig,
 } from "./config.js";
@@ -46,7 +47,7 @@ import {
 	publicationCapabilityDescription,
 	safeTerminalText,
 } from "./sync-format.js";
-import { inspectRemoteSelection, RemoteSelectionMismatchError } from "./sync-policy.js";
+import { inspectRemoteSelection, remoteSelectionMismatch } from "./sync-policy.js";
 import {
 	canPullRemoteSessionsOnFirstSync,
 	canPullRemoteSettingsOnFirstSync,
@@ -923,7 +924,8 @@ async function readRemoteSnapshot(
 	const snapshot = await readSnapshotForHead(backend, head, signal);
 	const selectionState = inspectRemoteSelection(config.include, snapshot);
 	if (!options.allowSelectionDifference && selectionState.kind === "different") {
-		throw new RemoteSelectionMismatchError(config.include, selectionState.include);
+		const configIdentity = syncConfigReviewFingerprint(config);
+		throw remoteSelectionMismatch(config, selectionState.include, configIdentity);
 	}
 	return {
 		head,
