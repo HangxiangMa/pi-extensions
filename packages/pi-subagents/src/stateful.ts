@@ -22,7 +22,7 @@ import {
 } from "./cwd-policy.js";
 import { assertSubagentDepthAllowed } from "./execution.js";
 import type { ChildSessionFactory, ParentRuntimeSnapshot } from "./in-process-transport.js";
-import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
+import { DEFAULT_MAX_CONTEXT_BYTES, MAX_SUBAGENT_TIMEOUT_MS, truncateUtf8 } from "./limits.js";
 import { AgentPersistence } from "./persistence.js";
 import {
 	AgentRegistry,
@@ -77,6 +77,12 @@ const ScopeSchema = StringEnum(["user", "project", "both"] as const, {
 const StatefulThinkingLevelSchema = StringEnum(THINKING_LEVELS, {
 	description:
 		"Optional requested Pi thinking level selected for this task difficulty; retained for every turn of the spawned agent.",
+});
+const StatefulTimeoutSchema = Type.Integer({
+	minimum: 1,
+	maximum: MAX_SUBAGENT_TIMEOUT_MS,
+	description:
+		"Work deadline in milliseconds selected for the task difficulty. On expiry, Pi aborts the work and makes one separately bounded summary attempt. Retained as the agent default.",
 });
 const MAX_TOOL_MESSAGE_BYTES = 2 * 1024;
 
@@ -386,7 +392,7 @@ export function registerStatefulSubagents(
 	});
 
 	const baseSpawnDescription = () =>
-		`Start an addressable background subagent with an optional thinking level chosen for the task difficulty, return immediately with an agentId, and receive its completion asynchronously. Detached capacity: ${runtimeLimits.maxAgents} retained agents, ${runtimeLimits.maxActiveTurns} active turns, ${runtimeLimits.maxChildrenPerAgent} direct children per agent, and depth ${runtimeLimits.maxDepth}. Working-directory target policy: ${dependencies.getSettings?.()?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY}. This controls launch targets and protected project resources, not filesystem access or sandboxing.`;
+		`Start an addressable background subagent with an optional thinking level and timeout chosen for the task difficulty, return immediately with an agentId, and receive its completion asynchronously. Detached capacity: ${runtimeLimits.maxAgents} retained agents, ${runtimeLimits.maxActiveTurns} active turns, ${runtimeLimits.maxChildrenPerAgent} direct children per agent, and depth ${runtimeLimits.maxDepth}. Working-directory target policy: ${dependencies.getSettings?.()?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY}. This controls launch targets and protected project resources, not filesystem access or sandboxing.`;
 	const spawnTool = defineTool({
 		name: "subagent_spawn",
 		label: "Spawn Subagent",
@@ -397,6 +403,7 @@ export function registerStatefulSubagents(
 			agent: Type.String({ minLength: 1 }),
 			task: Type.String({ minLength: 1, maxLength: DEFAULT_MAX_CONTEXT_BYTES }),
 			thinkingLevel: Type.Optional(StatefulThinkingLevelSchema),
+			timeoutMs: Type.Optional(StatefulTimeoutSchema),
 			cwd: Type.Optional(Type.String()),
 			agentScope: Type.Optional(ScopeSchema),
 			confirmProjectAgents: Type.Optional(Type.Boolean({ default: true })),
@@ -460,6 +467,7 @@ export function registerStatefulSubagents(
 				cwd,
 				agentScope: scope,
 				thinkingLevel: params.thinkingLevel,
+				timeoutMs: params.timeoutMs,
 				parentId: params.parentId,
 				context: snapshot.text || undefined,
 				contextSourceIds: snapshot.sourceIds,
@@ -548,6 +556,7 @@ export function registerStatefulSubagents(
 						cwd: workspace?.path ?? requestedCwd,
 						agentScope: scope,
 						thinkingLevel: params.thinkingLevel,
+						timeoutMs: params.timeoutMs,
 						parentId: params.parentId,
 						context: snapshot.text || undefined,
 						contextSourceIds: snapshot.sourceIds,
@@ -609,6 +618,14 @@ export function registerStatefulSubagents(
 		parameters: Type.Object({
 			agentId: Type.String(),
 			task: Type.String({ minLength: 1, maxLength: DEFAULT_MAX_CONTEXT_BYTES }),
+			timeoutMs: Type.Optional(
+				Type.Integer({
+					minimum: 1,
+					maximum: MAX_SUBAGENT_TIMEOUT_MS,
+					description:
+						"Optional work deadline for this follow-up turn. On expiry, Pi aborts the work and makes one separately bounded summary attempt.",
+				}),
+			),
 			allowConcurrentWrites: Type.Optional(
 				Type.Boolean({ description: "Override the shared-workspace write conflict guard." }),
 			),
@@ -636,7 +653,9 @@ export function registerStatefulSubagents(
 				isolatedAgents.has(existing.id),
 				currentSettings,
 			);
-			const agent = await ownedRegistry.followUp(params.agentId, params.task);
+			const agent = await ownedRegistry.followUp(params.agentId, params.task, {
+				timeoutMs: params.timeoutMs,
+			});
 			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			return result(agent, `Started follow-up for ${agent.id}.`);
 		},
@@ -799,10 +818,12 @@ export function formatStatefulAgentLine(agent: ManagedAgent): string {
 	const unread = agent.mailbox.filter((message) => !message.readAt).length;
 	const indent = "  ".repeat(agent.depth);
 	const thinking = agent.thinkingLevel ? ` thinking:${agent.thinkingLevel}` : "";
+	const timeout = agent.currentTimeoutMs ?? agent.timeoutMs;
+	const timeoutText = timeout ? ` timeout:${timeout}ms` : "";
 	const transport = agent.telemetry?.transport ? ` transport:${agent.telemetry.transport}` : "";
 	const phase = agent.telemetry?.phase ? ` phase:${agent.telemetry.phase}` : "";
 	const queued = agent.telemetry?.queuePosition ? ` queue:${agent.telemetry.queuePosition}` : "";
-	return `${indent}${sanitizeStatusLine(agent.id, 128)} ${sanitizeStatusLine(agent.agent, 128)} ${agent.state} ${elapsedSeconds}s${thinking}${transport}${phase}${queued} unread:${unread} [${actions}]${task}`;
+	return `${indent}${sanitizeStatusLine(agent.id, 128)} ${sanitizeStatusLine(agent.agent, 128)} ${agent.state} ${elapsedSeconds}s${thinking}${timeoutText}${transport}${phase}${queued} unread:${unread} [${actions}]${task}`;
 }
 
 function sanitizeStatusLine(value: string, maxLength: number): string {
@@ -834,6 +855,8 @@ function summarizeAgent(agent: ManagedAgent) {
 		cwd: agent.cwd,
 		workspaceMode: agent.workspaceMode ?? "shared",
 		thinkingLevel: agent.thinkingLevel,
+		timeoutMs: agent.timeoutMs,
+		currentTimeoutMs: agent.currentTimeoutMs,
 		currentTask: agent.currentTask
 			? truncateUtf8(agent.currentTask, MAX_TOOL_MESSAGE_BYTES).text
 			: undefined,

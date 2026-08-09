@@ -4,8 +4,68 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
 import type { ManagedAgent } from "../src/registry.js";
+import { finalizeTimedOutRpcTurn } from "../src/rpc-timeout-finalization.js";
 import { buildRpcArgs, RpcProtocolClient, RpcTransport } from "../src/rpc-transport.js";
 import { PI_SUBAGENTS_RPC_PROTOCOL } from "../src/transport-types.js";
+
+test("RPC timeout finalization never prompts after an explicit parent abort", async () => {
+	const controller = new AbortController();
+	controller.abort();
+	let prompts = 0;
+	let releases = 0;
+	const result = await finalizeTimedOutRpcTurn({
+		client: {
+			async prompt() {
+				prompts++;
+			},
+			async abort() {},
+			onEvent: () => () => undefined,
+			onClose: () => () => undefined,
+		},
+		task: "review",
+		partialOutput: "partial",
+		signal: controller.signal,
+		workTimeoutMs: 100,
+		abortGraceMs: 10,
+		resetCapture() {},
+		getCapture: () => ({ output: "", partial: "" }),
+		async release() {
+			releases++;
+		},
+	});
+	assert.equal(prompts, 0);
+	assert.equal(releases, 1);
+	assert.match(result.error ?? "", /aborted/i);
+});
+
+test("RPC timeout finalization bounds a prompt client that ignores its deadline", async () => {
+	let releases = 0;
+	const started = Date.now();
+	const result = await finalizeTimedOutRpcTurn({
+		client: {
+			async prompt() {
+				await new Promise<void>(() => undefined);
+			},
+			async abort() {},
+			onEvent: () => () => undefined,
+			onClose: () => () => undefined,
+		},
+		task: "review",
+		partialOutput: "partial",
+		signal: new AbortController().signal,
+		workTimeoutMs: 100,
+		finalizationTimeoutMs: 10,
+		abortGraceMs: 10,
+		resetCapture() {},
+		getCapture: () => ({ output: "", partial: "" }),
+		async release() {
+			releases++;
+		},
+	});
+	assert.equal(releases, 1);
+	assert.match(result.error ?? "", /prompt timed out/i);
+	assert.ok(Date.now() - started < 500, "prompt finalization must remain hard-bounded");
+});
 
 function fixtureScript(root: string): string {
 	const filePath = path.join(root, "fake-rpc.mjs");
@@ -169,7 +229,7 @@ test("RpcProtocolClient uses strict JSONL and the get_state readiness handshake"
 	}
 });
 
-test("RpcProtocolClient waits for inherited descendant streams to close", async () => {
+test("RpcProtocolClient gives inherited descendant streams bounded cleanup grace", async () => {
 	if (process.platform === "win32") return;
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-rpc-descendant-"));
 	let descendantPid: number | undefined;
@@ -199,12 +259,16 @@ test("RpcProtocolClient waits for inherited descendant streams to close", async 
 		assert.equal(Number.isSafeInteger(descendantPid), true);
 		const stopping = client.stop();
 		assert.equal(
-			await settlesWithin(stopping, 1_100),
+			await settlesWithin(stopping, 100),
 			false,
-			"stop must not resolve while a descendant retains captured streams",
+			"stop must allow captured streams a cleanup grace period",
+		);
+		assert.equal(
+			await settlesWithin(stopping, 1_500),
+			true,
+			"stop must hard-bound cleanup when a detached descendant retains captured streams",
 		);
 		process.kill(-descendantPid, "SIGKILL");
-		await stopping;
 	} finally {
 		if (descendantPid) {
 			try {
@@ -387,6 +451,48 @@ test("RpcTransport waits for agent_settled after agent_end and times out without
 		assert.match(timedOut.error ?? "", /timed out/);
 		assert.equal(timedOut.telemetry?.failurePhase, "running");
 		await timeoutTransport.shutdown();
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("RPC timeout aborts the work turn and requests a bounded summary after settlement", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-rpc-timeout-summary-"));
+	try {
+		const script = path.join(root, "timeout-summary.mjs");
+		writeFileSync(
+			script,
+			[
+				"let buffer='';const send=v=>process.stdout.write(JSON.stringify(v)+'\\n');let prompts=0;",
+				"process.stdin.on('data',chunk=>{buffer+=chunk;let i;while((i=buffer.indexOf('\\n'))>=0){const line=buffer.slice(0,i);buffer=buffer.slice(i+1);if(!line)continue;const c=JSON.parse(line);",
+				"if(c.type==='get_state')send({id:c.id,type:'response',command:'get_state',success:true,data:{model:{provider:'fake',id:'model'},thinkingLevel:'low',sessionId:'s'}});",
+				"if(c.type==='prompt'){prompts++;send({id:c.id,type:'response',command:'prompt',success:true});if(prompts===1){send({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'PARTIAL_RPC'}],provider:'fake',model:'model',usage:{},stopReason:'toolUse'}});}else{send({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'SUMMARY_RPC'}],provider:'fake',model:'model',usage:{},stopReason:'stop'}});send({type:'agent_settled'});}}",
+				"if(c.type==='abort'){send({id:c.id,type:'response',command:'abort',success:true});send({type:'agent_settled'});}",
+				"}});",
+			].join(""),
+		);
+		const transport = new RpcTransport({
+			getParentRuntime: () => ({ model: undefined, thinkingLevel: "low" }),
+			defaultTimeoutMs: 1_000,
+			abortGraceMs: 20,
+			timeoutFinalizationMs: 100,
+			createClient: (options) =>
+				new RpcProtocolClient({
+					...options,
+					terminationGraceMs: 10,
+					invocation: { command: process.execPath, args: [script] },
+				}),
+		});
+		const result = await transport.runTurn(
+			{ ...managedAgent(), cwd: root, currentTimeoutMs: 30 },
+			"review",
+			new AbortController().signal,
+		);
+		assert.equal(result.exitCode, 124);
+		assert.match(result.error ?? "", /timed out/);
+		assert.equal(result.output, "SUMMARY_RPC");
+		assert.equal(result.telemetry?.phase, "failed");
+		await transport.shutdown();
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

@@ -10,6 +10,7 @@ export interface CanonicalSpawnRequest {
 	cwd: string;
 	agentScope: AgentScope;
 	thinkingLevel?: SubagentThinkingLevel;
+	timeoutMs?: number;
 	parentId?: string;
 	context?: string;
 	contextSourceIds: readonly string[];
@@ -27,6 +28,7 @@ export function hashSpawnRequest(request: CanonicalSpawnRequest): string {
 				cwd: request.cwd,
 				agentScope: request.agentScope,
 				thinkingLevel: request.thinkingLevel ?? null,
+				...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
 				parentId: request.parentId ?? null,
 				contextHash: request.context
 					? createHash("sha256").update(request.context).digest("hex")

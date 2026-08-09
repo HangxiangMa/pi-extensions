@@ -67,13 +67,14 @@ export class SubprocessTransport implements SubagentTransport {
 			undefined,
 			signal,
 			resolveStatefulSubprocessThinkingLevel(discovery.agents, record),
-			resolveStatefulTurnTimeout(agent),
+			record.currentTimeoutMs ?? record.timeoutMs ?? resolveStatefulTurnTimeout(agent),
 			undefined,
 			makeDetails,
 			undefined,
 			{
 				projectTrust,
 				appendSystemPromptPaths: promptResources?.appendSystemPromptPaths,
+				timeoutResultFormat: record.resultFormat,
 			},
 		);
 		const settledAt = Date.now();

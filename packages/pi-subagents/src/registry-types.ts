@@ -44,6 +44,8 @@ export interface ManagedAgent {
 	cwd: string;
 	agentScope?: "user" | "project" | "both";
 	thinkingLevel?: SubagentThinkingLevel;
+	timeoutMs?: number;
+	currentTimeoutMs?: number;
 	currentTask?: string;
 	history: AgentTurn[];
 	error?: string;
@@ -77,6 +79,8 @@ export interface AgentRunInspectionSummary {
 export interface AgentRunInspectionDetail extends AgentRunInspectionSummary {
 	cwd: string;
 	thinkingLevel?: SubagentThinkingLevel;
+	timeoutMs?: number;
+	currentTimeoutMs?: number;
 	currentTask?: string;
 	error?: string;
 	workspaceMode?: "worktree";

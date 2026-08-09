@@ -43,6 +43,7 @@ function renderStatefulCall(tool: StatefulRenderTool, args: Record<string, unkno
 			safeLine(args.workspaceMode, "shared", 64),
 		];
 		if (typeof args.thinkingLevel === "string") metadata.push(`thinking:${args.thinkingLevel}`);
+		if (typeof args.timeoutMs === "number") metadata.push(`timeout:${args.timeoutMs}ms`);
 		return new Text(
 			[
 				toolHeader(theme, "subagent_spawn", args.agent, metadata),
@@ -53,9 +54,11 @@ function renderStatefulCall(tool: StatefulRenderTool, args: Record<string, unkno
 		);
 	}
 	if (tool === "send") {
+		const metadata = ["follow-up"];
+		if (typeof args.timeoutMs === "number") metadata.push(`timeout:${args.timeoutMs}ms`);
 		return new Text(
 			[
-				toolHeader(theme, "subagent_send", args.agentId, ["follow-up"]),
+				toolHeader(theme, "subagent_send", args.agentId, metadata),
 				`  ${theme.fg("dim", safeLine(args.task, "...", 2 * 1024))}`,
 			].join("\n"),
 			0,
@@ -112,12 +115,22 @@ function renderAgentResult(
 		`${statusBadge(theme, lifecycleStatus(state))} · ${theme.fg("accent", safeLine(agent.id, "agent", 256))} · ${theme.fg("toolOutput", safeLine(agent.agent, "subagent", 256))} · ${theme.fg("muted", state)}`,
 	];
 	const thinking = stringValue(agent.thinkingLevel);
+	const timeout =
+		typeof agent.currentTimeoutMs === "number"
+			? agent.currentTimeoutMs
+			: typeof agent.timeoutMs === "number"
+				? agent.timeoutMs
+				: 0;
 	const unread = typeof agent.unreadMessages === "number" ? agent.unreadMessages : 0;
-	if (thinking || unread > 0) {
+	if (thinking || timeout || unread > 0) {
 		lines.push(
 			theme.fg(
 				"dim",
-				[thinking && `thinking:${safeLine(thinking, "", 128)}`, unread > 0 && `unread:${unread}`]
+				[
+					thinking && `thinking:${safeLine(thinking, "", 128)}`,
+					timeout && `timeout:${timeout}ms`,
+					unread > 0 && `unread:${unread}`,
+				]
 					.filter(Boolean)
 					.join(" · "),
 			),

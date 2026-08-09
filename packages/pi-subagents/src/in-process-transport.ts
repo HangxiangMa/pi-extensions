@@ -16,6 +16,10 @@ import type { AgentTurn, ManagedAgent, TurnOutcome } from "./registry.js";
 import { appendResultInstruction } from "./result-contract.js";
 import { safeTerminalLine } from "./safe-text.js";
 import { readSubagentSettings } from "./settings.js";
+import {
+	buildTimeoutFinalizationPrompt,
+	resolveTimeoutFinalizationMs,
+} from "./timeout-finalization.js";
 import type { SubagentTransport } from "./transport.js";
 import type { TransportProgressCallback, TransportTelemetry } from "./transport-types.js";
 
@@ -89,6 +93,7 @@ export interface InProcessTransportOptions {
 	discoverAgent?: (agent: ManagedAgent) => AgentConfig | undefined;
 	defaultTimeoutMs?: number;
 	abortGraceMs?: number;
+	timeoutFinalizationMs?: number;
 }
 
 interface ChildSessionRecord {
@@ -188,7 +193,8 @@ export class InProcessTransport implements SubagentTransport {
 			return { ...interruptedOutcome(""), telemetry };
 		}
 		const prompt = buildCurrentTurnPrompt(agent, task);
-		const timeoutMs = agentConfig.timeoutMs ?? this.defaultTimeoutMs;
+		const timeoutMs =
+			agent.currentTimeoutMs ?? agent.timeoutMs ?? agentConfig.timeoutMs ?? this.defaultTimeoutMs;
 		const startingMessageCount = record.session.messages.length;
 		record.lastOutput = "";
 		publish({ phase: "running", timing: { promptAcceptedAt: Date.now() } });
@@ -241,16 +247,53 @@ export class InProcessTransport implements SubagentTransport {
 					policy,
 					telemetry,
 				};
-			case "timeout":
-				publish({ phase: "failed", failurePhase: "running", timing: { settledAt } });
+			case "timeout": {
+				let finalizedOutput = output.text;
+				let finalizationError: string | undefined;
+				if (!signal.aborted && this.sessions.get(agent.id) === record) {
+					publish({ phase: "finalizing", failurePhase: "running" });
+					const summaryStart = record.session.messages.length;
+					record.lastOutput = "";
+					const summarySettlement = await this.runPrompt(
+						record,
+						buildTimeoutFinalizationPrompt({
+							task,
+							partialOutput: output.text,
+							resultFormat: agent.resultFormat,
+						}),
+						signal,
+						resolveTimeoutFinalizationMs(timeoutMs, this.options.timeoutFinalizationMs),
+					);
+					const summary = latestAssistant(record.session.messages.slice(summaryStart));
+					const boundedSummary = truncateUtf8(
+						summary.output || record.lastOutput,
+						DEFAULT_MAX_OUTPUT_BYTES,
+					);
+					if (
+						summarySettlement.kind === "completed" &&
+						summary.stopReason !== "error" &&
+						boundedSummary.text.trim()
+					) {
+						finalizedOutput = boundedSummary.text;
+					} else {
+						finalizationError =
+							summarySettlement.kind === "failed"
+								? errorMessage(summarySettlement.error)
+								: `timeout summary ${summarySettlement.kind}`;
+					}
+				}
+				publish({ phase: "failed", failurePhase: "running", timing: { settledAt: Date.now() } });
 				return {
-					output: output.text,
+					output: finalizedOutput,
 					exitCode: 124,
 					truncated,
-					error: `In-process subagent timed out after ${timeoutMs}ms`,
+					error: [`In-process subagent timed out after ${timeoutMs}ms`, finalizationError]
+						.filter(Boolean)
+						.join("; "),
 					policy,
 					telemetry,
 				};
+			}
 			case "aborted":
 				publish({ phase: "interrupted", failurePhase: "running", timing: { settledAt } });
 				return {
@@ -360,7 +403,10 @@ export class InProcessTransport implements SubagentTransport {
 		let timeout: NodeJS.Timeout | undefined;
 		let abortHandler: (() => void) | undefined;
 		const promptSettlement: Promise<PromptSettlement> = Promise.resolve()
-			.then(() => record.session.prompt(prompt))
+			.then(() => {
+				if (signal.aborted) throw new Error("In-process subagent prompt aborted before start");
+				return record.session.prompt(prompt);
+			})
 			.then(() => ({ kind: "completed" as const }))
 			.catch((error: unknown) => ({ kind: "failed" as const, error }));
 		const timeoutSettlement = new Promise<PromptSettlement>((resolve) => {
@@ -375,8 +421,10 @@ export class InProcessTransport implements SubagentTransport {
 		if (timeout) clearTimeout(timeout);
 		if (abortHandler) signal.removeEventListener("abort", abortHandler);
 		if (settlement.kind === "timeout" || settlement.kind === "aborted") {
-			await settleWithin(record.session.abort(), this.abortGraceMs);
-			const settledAfterAbort = await completesWithin(promptSettlement, this.abortGraceMs);
+			const [, settledAfterAbort] = await Promise.all([
+				settleWithin(record.session.abort(), this.abortGraceMs),
+				completesWithin(promptSettlement, this.abortGraceMs),
+			]);
 			if (!settledAfterAbort) this.discardRecord(record);
 		}
 		return settlement;

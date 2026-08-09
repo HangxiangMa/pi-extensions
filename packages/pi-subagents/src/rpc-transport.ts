@@ -3,12 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RpcSessionState } from "@earendil-works/pi-coding-agent";
-import {
-	type AgentConfig,
-	discoverAgents,
-	type SubagentSettings,
-	type SubagentThinkingLevel,
-} from "./agents.js";
+import { type AgentConfig, discoverAgents, type SubagentSettings } from "./agents.js";
 import {
 	buildCurrentTurnPrompt,
 	type ParentRuntimeSnapshot,
@@ -24,6 +19,14 @@ import { type PiInvocation, resolvePiInvocation } from "./pi-invocation.js";
 import { resolvePiPromptResources } from "./prompt-resources.js";
 import { JsonLineDecoder } from "./protocol.js";
 import type { ManagedAgent, TurnOutcome } from "./registry.js";
+import { finalizeTimedOutRpcTurn } from "./rpc-timeout-finalization.js";
+import {
+	boundedError,
+	interruptedRpcOutcome,
+	modelIdentity,
+	normalizeThinking,
+	rpcPolicy,
+} from "./rpc-transport-metadata.js";
 import { terminateProcess } from "./runner.js";
 import { boundedPrivateText, safeTerminalText } from "./safe-text.js";
 import { readSubagentSettings } from "./settings.js";
@@ -213,9 +216,12 @@ export class RpcProtocolClient {
 		}
 		this.closePromise = new Promise<void>((resolve) => {
 			let settled = false;
+			let terminationDeadline: NodeJS.Timeout | undefined;
 			const finish = () => {
 				if (settled) return;
 				settled = true;
+				if (terminationDeadline) clearTimeout(terminationDeadline);
+				proc.off("close", finish);
 				this.cleanupTermination?.();
 				this.cleanupTermination = undefined;
 				resolve();
@@ -229,6 +235,12 @@ export class RpcProtocolClient {
 			const graceMs = this.options.terminationGraceMs ?? ABORT_GRACE_MS;
 			this.cleanupTermination?.();
 			this.cleanupTermination = terminateProcess(proc, graceMs);
+			terminationDeadline = setTimeout(() => {
+				proc.stdin?.destroy();
+				proc.stdout?.destroy();
+				proc.stderr?.destroy();
+				finish();
+			}, graceMs + 1_000);
 		});
 		await this.closePromise;
 		this.process = undefined;
@@ -341,6 +353,7 @@ export interface RpcTransportOptions {
 	resolvePromptResources?: typeof resolvePiPromptResources;
 	defaultTimeoutMs?: number;
 	abortGraceMs?: number;
+	timeoutFinalizationMs?: number;
 }
 
 interface RpcChildRecord {
@@ -466,6 +479,8 @@ export class RpcTransport implements SubagentTransport {
 			? buildCurrentTurnPrompt(agent, task)
 			: buildStatefulTurnPrompt(agent, task).text;
 		const timeoutMs =
+			agent.currentTimeoutMs ??
+			agent.timeoutMs ??
 			agentConfig.timeoutMs ??
 			this.options.defaultTimeoutMs ??
 			resolveStatefulTurnTimeout(agentConfig);
@@ -482,25 +497,65 @@ export class RpcTransport implements SubagentTransport {
 			publish({ phase: "accepted", timing: { promptAcceptedAt: Date.now() } });
 			const settlement = await waitForTurnSettlement(settled, signal, remainingMs(deadline));
 			if (settlement !== "settled") {
-				await child.client.abort().catch(() => undefined);
-				const stopped = await settlesWithin(settled, this.options.abortGraceMs ?? ABORT_GRACE_MS);
-				if (!stopped) await this.releaseById(agent.id);
-				const output = truncateUtf8(capture.output || capture.partial, DEFAULT_MAX_OUTPUT_BYTES);
+				const [, stopped] = await Promise.all([
+					child.client.abort().catch(() => undefined),
+					settlesWithin(settled, this.options.abortGraceMs ?? ABORT_GRACE_MS),
+				]);
+				const partial = truncateUtf8(capture.output || capture.partial, DEFAULT_MAX_OUTPUT_BYTES);
+				if (settlement === "aborted" || !stopped || signal.aborted) {
+					if (!stopped) await this.releaseById(agent.id);
+					publish({
+						phase: settlement === "aborted" ? "interrupted" : "failed",
+						failurePhase: "running",
+						timing: { settledAt: Date.now() },
+						usage: capture.usage,
+					});
+					return {
+						output: partial.text,
+						exitCode: settlement === "aborted" ? 130 : 124,
+						aborted: settlement === "aborted",
+						truncated: partial.truncated || agent.contextTruncated,
+						error:
+							settlement === "aborted"
+								? "RPC subagent was aborted"
+								: `RPC subagent timed out after ${timeoutMs}ms; abort did not settle`,
+						policy: rpcPolicy(agentConfig, agent),
+						telemetry,
+					};
+				}
+
+				publish({ phase: "finalizing", failurePhase: "running" });
+				const summary = await finalizeTimedOutRpcTurn({
+					client: child.client,
+					task,
+					partialOutput: partial.text,
+					resultFormat: agent.resultFormat,
+					signal,
+					workTimeoutMs: timeoutMs,
+					finalizationTimeoutMs: this.options.timeoutFinalizationMs,
+					abortGraceMs: this.options.abortGraceMs ?? ABORT_GRACE_MS,
+					resetCapture() {
+						capture.output = "";
+						capture.partial = "";
+						capture.stopReason = undefined;
+						capture.error = undefined;
+					},
+					getCapture: () => capture,
+					release: () => this.releaseById(agent.id),
+				});
 				publish({
-					phase: settlement === "aborted" ? "interrupted" : "failed",
+					phase: "failed",
 					failurePhase: "running",
 					timing: { settledAt: Date.now() },
 					usage: capture.usage,
 				});
 				return {
-					output: output.text,
-					exitCode: settlement === "aborted" ? 130 : 124,
-					aborted: settlement === "aborted",
-					truncated: output.truncated || agent.contextTruncated,
-					error:
-						settlement === "aborted"
-							? "RPC subagent was aborted"
-							: `RPC subagent timed out after ${timeoutMs}ms`,
+					output: summary.error ? partial.text : summary.output,
+					exitCode: 124,
+					truncated: partial.truncated || summary.truncated || agent.contextTruncated,
+					error: [`RPC subagent timed out after ${timeoutMs}ms`, summary.error]
+						.filter(Boolean)
+						.join("; "),
 					policy: rpcPolicy(agentConfig, agent),
 					telemetry,
 				};
@@ -781,39 +836,6 @@ function isActivityEvent(value: unknown): boolean {
 	].includes(eventType(value) ?? "");
 }
 
-function modelIdentity(value: unknown): { provider?: string; model?: string } {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-	const model = value as Record<string, unknown>;
-	return {
-		provider:
-			typeof model.provider === "string" ? boundedPrivateText(model.provider, 256) : undefined,
-		model: typeof model.id === "string" ? boundedPrivateText(model.id, 256) : undefined,
-	};
-}
-
-function normalizeThinking(value: unknown): SubagentThinkingLevel | undefined {
-	return ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(value))
-		? (value as SubagentThinkingLevel)
-		: undefined;
-}
-
-function rpcPolicy(
-	agentConfig: AgentConfig,
-	agent: ManagedAgent,
-): NonNullable<TurnOutcome["policy"]> {
-	return {
-		inherited: ["environment", "cwdResources"],
-		overridden: [
-			"cwd",
-			"extensions",
-			...(agentConfig.model ? ["model"] : []),
-			...(agent.thinkingLevel || agentConfig.thinkingLevel ? ["thinkingLevel"] : []),
-			...(agentConfig.tools ? ["tools"] : []),
-		],
-		unsupported: ["approvalPolicy", "sandboxProfile", "providerHeaders", "extensionState"],
-	};
-}
-
 async function writeRolePrompt(
 	agentName: string,
 	prompt: string,
@@ -950,36 +972,10 @@ function isTimeoutError(error: unknown): boolean {
 	return error instanceof Error && error.name === "RpcTimeoutError";
 }
 
-function interruptedRpcOutcome(
-	output: string,
-	telemetry: TransportTelemetry,
-	failurePhase: TransportTelemetry["phase"],
-): TurnOutcome {
-	return {
-		output,
-		exitCode: 130,
-		aborted: true,
-		error: "RPC subagent was aborted",
-		telemetry: {
-			...telemetry,
-			phase: "interrupted",
-			failurePhase,
-			updatedAt: Date.now(),
-		},
-	};
-}
-
 function abortError(message: string): Error {
 	const error = new Error(message);
 	error.name = "AbortError";
 	return error;
-}
-
-function boundedError(error: unknown): string {
-	return boundedPrivateText(
-		error instanceof Error ? error.message : String(error),
-		DEFAULT_MAX_OUTPUT_BYTES,
-	);
 }
 
 function errorMessage(prefix: string, error: Error): Error {

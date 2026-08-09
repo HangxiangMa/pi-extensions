@@ -284,16 +284,19 @@ test("InProcessTransport disposes a child when event subscription fails during c
 	assert.deepEqual(child.prompts, []);
 });
 
-test("InProcessTransport times out by aborting, remains releasable, and disposes exactly once", async () => {
-	const child = new FakeChildSession(true);
-	const transport = transportWithFactory(async () => child, { timeoutMs: 5 });
-	const agent = managedAgent();
+test("InProcessTransport aborts timed-out work, summarizes it, and remains releasable", async () => {
+	const child = new FakeChildSession(1);
+	const transport = transportWithFactory(async () => child, { timeoutMs: 1_000 });
+	const agent = managedAgent({ timeoutMs: 500, currentTimeoutMs: 20 });
 
 	const result = await transport.runTurn(agent, "slow", new AbortController().signal);
 	assert.equal(result.exitCode, 124);
 	assert.equal(result.aborted, undefined);
 	assert.match(result.error ?? "", /timed out/);
 	assert.equal(child.aborts, 1);
+	assert.equal(child.prompts.length, 2);
+	assert.match(child.prompts[1], /Work deadline expired/);
+	assert.match(result.output, /done:.*Work deadline expired/s);
 
 	await transport.release?.(agent);
 	await transport.release?.(agent);

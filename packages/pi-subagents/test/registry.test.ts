@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import { test } from "vitest";
 import { projectAgentRecords } from "../src/agent-projection.js";
 import { AgentPersistence } from "../src/persistence.js";
 import { AgentRegistry, type ManagedAgent } from "../src/registry.js";
+import { hashSpawnRequest } from "../src/spawn-idempotency.js";
 import { buildDetachedCompletionMessage } from "../src/stateful.js";
 
 function record(overrides: Partial<ManagedAgent> = {}): ManagedAgent {
@@ -24,6 +26,41 @@ function record(overrides: Partial<ManagedAgent> = {}): ManagedAgent {
 		...overrides,
 	};
 }
+
+test("spawn idempotency includes the retained timeout budget", () => {
+	const request = {
+		agent: "scout",
+		task: "inspect",
+		cwd: process.cwd(),
+		agentScope: "user" as const,
+		thinkingLevel: "low" as const,
+		timeoutMs: 1_000,
+		contextSourceIds: [],
+		workspaceMode: "shared" as const,
+		allowConcurrentWrites: false,
+		resultFormat: "text" as const,
+	};
+	assert.notEqual(hashSpawnRequest(request), hashSpawnRequest({ ...request, timeoutMs: 2_000 }));
+	const { timeoutMs: _omitted, ...withoutTimeout } = request;
+	const legacyHash = createHash("sha256")
+		.update(
+			JSON.stringify({
+				agent: withoutTimeout.agent,
+				task: withoutTimeout.task,
+				cwd: withoutTimeout.cwd,
+				agentScope: withoutTimeout.agentScope,
+				thinkingLevel: withoutTimeout.thinkingLevel,
+				parentId: null,
+				contextHash: null,
+				contextSourceIds: [],
+				workspaceMode: "shared",
+				allowConcurrentWrites: false,
+				resultFormat: "text",
+			}),
+		)
+		.digest("hex");
+	assert.equal(hashSpawnRequest(withoutTimeout), legacyHash);
+});
 
 test("AgentRegistry retains spawn idempotency only until close", async () => {
 	const registry = new AgentRegistry(async () => ({ output: "done", exitCode: 0 }));
@@ -259,10 +296,18 @@ test("AgentRegistry supports follow-up, wait timeout, interrupt/reuse, limits, a
 	await assert.rejects(() => registry.close(first.id), /already closed/);
 });
 
-test("AgentRegistry retains an explicit spawn thinking level across follow-ups and copies", async () => {
-	const observed: Array<string | undefined> = [];
+test("AgentRegistry retains explicit execution defaults and applies one-turn timeout overrides", async () => {
+	const observed: Array<{
+		thinkingLevel?: string;
+		timeoutMs?: number;
+		currentTimeoutMs?: number;
+	}> = [];
 	const registry = new AgentRegistry(async (agent) => {
-		observed.push(agent.thinkingLevel);
+		observed.push({
+			thinkingLevel: agent.thinkingLevel,
+			timeoutMs: agent.timeoutMs,
+			currentTimeoutMs: agent.currentTimeoutMs,
+		});
 		return { output: "done", exitCode: 0 };
 	});
 	const spawned = await registry.spawn({
@@ -270,14 +315,24 @@ test("AgentRegistry retains an explicit spawn thinking level across follow-ups a
 		task: "first",
 		cwd: process.cwd(),
 		thinkingLevel: "high",
+		timeoutMs: 111,
 	});
 	assert.equal(spawned.thinkingLevel, "high");
+	assert.equal(spawned.timeoutMs, 111);
 	await registry.wait(spawned.id, 100);
-	const followUp = await registry.followUp(spawned.id, "second");
-	assert.equal(followUp.thinkingLevel, "high");
+	const overridden = await registry.followUp(spawned.id, "second", { timeoutMs: 222 });
+	assert.equal(overridden.thinkingLevel, "high");
+	assert.equal(overridden.timeoutMs, 111);
+	assert.equal(overridden.currentTimeoutMs, 222);
 	await registry.wait(spawned.id, 100);
-	assert.deepEqual(observed, ["high", "high"]);
-	assert.equal(registry.get(spawned.id)?.thinkingLevel, "high");
+	await registry.followUp(spawned.id, "third");
+	await registry.wait(spawned.id, 100);
+	assert.deepEqual(observed, [
+		{ thinkingLevel: "high", timeoutMs: 111, currentTimeoutMs: 111 },
+		{ thinkingLevel: "high", timeoutMs: 111, currentTimeoutMs: 222 },
+		{ thinkingLevel: "high", timeoutMs: 111, currentTimeoutMs: 111 },
+	]);
+	assert.equal(registry.get(spawned.id)?.currentTimeoutMs, undefined);
 });
 
 test("AgentRegistry runs lifecycle operations through a transport contract", async () => {
@@ -798,6 +853,8 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	await persistence.save([
 		record({
 			thinkingLevel: "high",
+			timeoutMs: 1234,
+			currentTimeoutMs: 4321,
 			spawnIdempotencyKey: "persisted-request",
 			spawnRequestHash: "a".repeat(64),
 			resultFormat: "structured-v1",
@@ -851,6 +908,8 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	const restoredState = persistence.load()[0];
 	assert.equal(restoredState?.state, "idle");
 	assert.equal(restoredState?.thinkingLevel, "high");
+	assert.equal(restoredState?.timeoutMs, 1234);
+	assert.equal(restoredState?.currentTimeoutMs, undefined);
 	assert.equal(restoredState?.spawnIdempotencyKey, "persisted-request");
 	assert.equal(restoredState?.spawnRequestHash, "a".repeat(64));
 	assert.equal(restoredState?.resultFormat, "structured-v1");

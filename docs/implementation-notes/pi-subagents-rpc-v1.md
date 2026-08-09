@@ -13,7 +13,7 @@ Extension-owned progress, run inspection, and completion metadata may include th
   "protocol": "pi-subagents:v1",
   "agentId": "sa_…",
   "transport": "rpc",
-  "phase": "starting | ready | accepted | running | retrying | compacting | settled | failed | interrupted",
+  "phase": "starting | ready | accepted | running | finalizing | retrying | compacting | settled | failed | interrupted",
   "timing": {},
   "provider": "…",
   "model": "…",
@@ -48,7 +48,15 @@ A successful prompt response means accepted, not completed.
 
 Abort and timeout send the Pi RPC `abort` command and wait for settlement within a bounded grace period.
 
-A child that does not settle is terminated and cannot be reused.
+After a work timeout settles, the transport sends one bounded finalization prompt that requests only a summary of already gathered evidence and explicitly forbids further tool use.
+
+Pi RPC does not currently replace an existing child session's active tool set for one turn, so the finalization deadline and abort path remain authoritative if the model disregards that instruction.
+
+The finalization turn has a separate model-work deadline of at most 45 seconds, followed only by bounded abort and process-cleanup grace, and never replays the timed-out task.
+
+Explicit parent interruption does not start finalization.
+
+A child that does not settle after work or finalization abort is terminated and cannot be reused.
 
 An accepted or ambiguously accepted task is never replayed automatically.
 
@@ -66,7 +74,9 @@ Child extensions stay disabled to prevent recursive `pi-subagents` loading and d
 
 Custom or extension tools fail before RPC child creation with a subprocess recommendation.
 
-The selected cwd, project-trust decision, role prompt, model, thinking level, context, mailbox input, timeout, recursion depth, and output bounds retain their existing owners.
+The selected cwd, project-trust decision, role prompt, model, thinking level, context, mailbox input, work timeout, recursion depth, and output bounds retain their existing owners.
+
+`subagent_spawn.timeoutMs` is retained as the agent default, while `subagent_send.timeoutMs` overrides only one follow-up turn.
 
 RPC session-file persistence stays disabled because `AgentPersistence` owns sanitized logical recovery records.
 

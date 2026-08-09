@@ -364,6 +364,8 @@ function projectRun(run: AgentRunInspectionDetail, ctx: ExtensionContext): Recor
 		cwd: safeDisplayPath(run.cwd, ctx.cwd),
 		workspaceMode: run.workspaceMode ?? "shared",
 		thinkingLevel: run.thinkingLevel,
+		timeoutMs: run.timeoutMs,
+		currentTimeoutMs: run.currentTimeoutMs,
 		context: {
 			turns: run.contextTurns ?? 0,
 			sources: run.contextSources ?? 0,

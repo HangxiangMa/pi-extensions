@@ -191,6 +191,7 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			name: string;
 			description: string;
 			promptGuidelines: string[];
+			parameters: { properties?: Record<string, { description?: string; maximum?: number }> };
 		};
 		controller.setAgentCatalog(
 			'Available agent definitions\n- api-reviewer [source: user; agentScope: "user"] — Reviews APIs',
@@ -214,11 +215,18 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		assert.match(refreshedRegistration?.promptGuidelines?.join("\n") ?? "", /auto-resume/);
 		controller.setCompletionDelivery("next-turn");
 		assert.equal(spawn.name, "subagent_spawn");
+		assert.match(spawn.parameters.properties?.timeoutMs?.description ?? "", /work deadline/i);
+		assert.match(spawn.promptGuidelines.join("\n"), /timeoutMs.*task difficulty/i);
 
 		const send = mock.tools.find((tool) => tool.name === "subagent_send") as {
 			description: string;
 			promptSnippet?: string;
+			parameters: { properties?: Record<string, { description?: string; maximum?: number }> };
 		};
+		assert.match(
+			send.parameters.properties?.timeoutMs?.description ?? "",
+			/work deadline.*follow-up/i,
+		);
 		const manage = mock.tools.find((tool) => tool.name === "subagent_manage") as {
 			description: string;
 			parameters: { properties?: Record<string, { description?: string; enum?: string[] }> };

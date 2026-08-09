@@ -355,6 +355,89 @@ test("runSingleAgent preserves partial output on mid-stream abort and handles pr
 	);
 	assert.equal(beforeStart.aborted, true);
 	assert.equal(beforeStart.exitCode, 130);
+	assert.equal(beforeStart.timeoutSummary, undefined);
+});
+
+test("runSingleAgent aborts timed-out work and returns a hard-bounded tool-less summary", async () => {
+	const script = [
+		"const args=process.argv.slice(1);",
+		"const task=args.at(-1)??'';",
+		"if(task.includes('Work deadline expired')){",
+		"const isolated=['--no-tools','--no-extensions','--no-skills','--no-prompt-templates','--no-context-files'].every(flag=>args.includes(flag));",
+		"const summary={role:'assistant',content:[{type:'text',text:isolated?'SUMMARY_FROM_PARTIAL':'UNSAFE_SUMMARY'}],stopReason:'stop',timestamp:Date.now()};",
+		"process.stdout.write(JSON.stringify({type:'message_end',message:summary})+'\\n');",
+		"}else{",
+		"const partial={role:'assistant',content:[{type:'text',text:'PARTIAL_EVIDENCE'}],timestamp:Date.now()};",
+		"process.stdout.write(JSON.stringify({type:'message_end',message:partial})+'\\n');",
+		"setInterval(()=>{},1000);",
+		"}",
+	].join("");
+	const result = await runSingleAgent(
+		process.cwd(),
+		[
+			{
+				name: "test",
+				description: "test",
+				tools: ["read", "bash"],
+				systemPrompt: "",
+				source: "built-in",
+				filePath: "built-in:test",
+			},
+		],
+		"test",
+		"inspect",
+		undefined,
+		undefined,
+		undefined,
+		"low",
+		30,
+		undefined,
+		(results) => ({ mode: "single", agentScope: "user", projectAgentsDir: null, results }),
+		{ command: process.execPath, argsPrefix: ["-e", script, "--"] },
+		{ timeoutFinalizationMs: 200 },
+	);
+	assert.equal(result.exitCode, 124);
+	assert.equal(result.timedOut, true);
+	assert.equal(result.partialOutput, "PARTIAL_EVIDENCE");
+	assert.equal(result.timeoutSummary, "SUMMARY_FROM_PARTIAL");
+	assert.equal(result.finalOutput, "SUMMARY_FROM_PARTIAL");
+	assert.equal(result.timeoutSummaryError, undefined);
+});
+
+test("runSingleAgent hard-bounds timeout summary finalization", async () => {
+	const script = [
+		"const args=process.argv.slice(1);const task=args.at(-1)??'';",
+		"if(!task.includes('Work deadline expired')){const partial={role:'assistant',content:[{type:'text',text:'PARTIAL_ONLY'}],timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message:partial})+'\\n');}",
+		"setInterval(()=>{},1000);",
+	].join("");
+	const started = Date.now();
+	const result = await runSingleAgent(
+		process.cwd(),
+		[
+			{
+				name: "test",
+				description: "test",
+				systemPrompt: "",
+				source: "built-in",
+				filePath: "built-in:test",
+			},
+		],
+		"test",
+		"inspect",
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		100,
+		undefined,
+		(results) => ({ mode: "single", agentScope: "user", projectAgentsDir: null, results }),
+		{ command: process.execPath, argsPrefix: ["-e", script, "--"] },
+		{ timeoutFinalizationMs: 30 },
+	);
+	assert.equal(result.exitCode, 124);
+	assert.equal(result.finalOutput, "PARTIAL_ONLY");
+	assert.match(result.timeoutSummaryError ?? "", /timed out/i);
+	assert.ok(Date.now() - started < 1_000, "summary finalization must remain hard-bounded");
 });
 
 test("runSingleAgent preserves final text beyond its history budget and rejects empty final output", async () => {

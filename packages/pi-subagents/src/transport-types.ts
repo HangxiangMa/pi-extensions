@@ -10,6 +10,7 @@ export type TransportProgressPhase =
 	| "ready"
 	| "accepted"
 	| "running"
+	| "finalizing"
 	| "retrying"
 	| "compacting"
 	| "settled"

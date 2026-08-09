@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import { projectAgentRecords } from "./agent-projection.js";
 import type { SubagentThinkingLevel } from "./agents.js";
 import type { TargetPolicyAudit } from "./cwd-policy.js";
-import { DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_OUTPUT_BYTES, truncateUtf8 } from "./limits.js";
+import {
+	DEFAULT_MAX_CONTEXT_BYTES,
+	DEFAULT_MAX_OUTPUT_BYTES,
+	MAX_SUBAGENT_TIMEOUT_MS,
+	truncateUtf8,
+} from "./limits.js";
 import type {
 	AgentInspectionCounts,
 	AgentMailboxMessage,
@@ -35,6 +40,13 @@ function positiveInteger(value: number, label: string): number {
 function nonNegativeInteger(value: number, label: string): number {
 	if (!Number.isSafeInteger(value) || value < 0) {
 		throw new Error(`${label} must be a non-negative safe integer`);
+	}
+	return value;
+}
+
+function validateTurnTimeout(value: number): number {
+	if (!Number.isSafeInteger(value) || value < 1 || value > MAX_SUBAGENT_TIMEOUT_MS) {
+		throw new Error(`Subagent timeoutMs must be between 1 and ${MAX_SUBAGENT_TIMEOUT_MS}`);
 	}
 	return value;
 }
@@ -141,6 +153,7 @@ export class AgentRegistry {
 				rootId,
 				depth,
 				currentTask: undefined,
+				currentTimeoutMs: undefined,
 				currentMailboxMessageIds: undefined,
 				children: [],
 				contextSourceIds: [...(record.contextSourceIds ?? [])],
@@ -163,6 +176,7 @@ export class AgentRegistry {
 		cwd: string;
 		agentScope?: "user" | "project" | "both";
 		thinkingLevel?: SubagentThinkingLevel;
+		timeoutMs?: number;
 		parentId?: string;
 		context?: string;
 		contextSourceIds?: string[];
@@ -176,6 +190,7 @@ export class AgentRegistry {
 		target?: TargetPolicyAudit;
 	}): Promise<ManagedAgent> {
 		if (!input.task.trim()) throw new Error("Subagent tasks cannot be empty");
+		if (input.timeoutMs !== undefined) validateTurnTimeout(input.timeoutMs);
 		const existing = this.findBySpawnIdempotencyKey(
 			input.spawnIdempotencyKey,
 			input.spawnRequestHash,
@@ -216,6 +231,8 @@ export class AgentRegistry {
 			cwd: input.cwd,
 			agentScope: input.agentScope,
 			thinkingLevel: input.thinkingLevel,
+			timeoutMs: input.timeoutMs,
+			currentTimeoutMs: input.timeoutMs,
 			currentTask: task,
 			history: [],
 			mailbox: [],
@@ -257,8 +274,13 @@ export class AgentRegistry {
 		return this.copy(existing);
 	}
 
-	async followUp(id: string, task: string): Promise<ManagedAgent> {
+	async followUp(
+		id: string,
+		task: string,
+		options: { timeoutMs?: number } = {},
+	): Promise<ManagedAgent> {
 		if (!task.trim()) throw new Error("Subagent tasks cannot be empty");
+		if (options.timeoutMs !== undefined) validateTurnTimeout(options.timeoutMs);
 		const boundedTask = truncateUtf8(task, this.maxTaskBytes).text;
 		const agent = this.require(id);
 		if (!["idle", "completed", "interrupted", "failed"].includes(agent.state)) {
@@ -268,7 +290,7 @@ export class AgentRegistry {
 		const readAt = this.now();
 		for (const message of unread) message.readAt = readAt;
 		agent.currentMailboxMessageIds = unread.map((message) => message.id);
-		this.startTurn(agent, boundedTask);
+		this.startTurn(agent, boundedTask, options.timeoutMs);
 		return this.copy(agent);
 	}
 
@@ -367,6 +389,7 @@ export class AgentRegistry {
 				const [entry] = this.queue.splice(index, 1);
 				agent.state = "interrupted";
 				agent.currentTask = undefined;
+				agent.currentTimeoutMs = undefined;
 				agent.currentMailboxMessageIds = undefined;
 				agent.updatedAt = this.now();
 				const completion: AgentTurnCompletion = {
@@ -430,6 +453,7 @@ export class AgentRegistry {
 			if (parent) parent.children = parent.children.filter((childId) => childId !== id);
 		}
 		agent.currentTask = undefined;
+		agent.currentTimeoutMs = undefined;
 		agent.currentMailboxMessageIds = undefined;
 		let releaseError: unknown;
 		try {
@@ -460,6 +484,7 @@ export class AgentRegistry {
 		for (const entry of this.queue.splice(0)) {
 			entry.agent.state = "idle";
 			entry.agent.currentTask = undefined;
+			entry.agent.currentTimeoutMs = undefined;
 			entry.agent.currentMailboxMessageIds = undefined;
 			entry.resolve(entry.agent);
 			this.running.delete(entry.agent.id);
@@ -470,6 +495,7 @@ export class AgentRegistry {
 			if (agent.state !== "closed") {
 				agent.state = "idle";
 				agent.currentTask = undefined;
+				agent.currentTimeoutMs = undefined;
 				agent.currentMailboxMessageIds = undefined;
 			}
 		}
@@ -507,6 +533,8 @@ export class AgentRegistry {
 			...this.inspectSummary(agent),
 			cwd: agent.cwd,
 			thinkingLevel: agent.thinkingLevel,
+			timeoutMs: agent.timeoutMs,
+			currentTimeoutMs: agent.currentTimeoutMs,
 			currentTask: agent.currentTask,
 			error: agent.error,
 			workspaceMode: agent.workspaceMode,
@@ -566,10 +594,11 @@ export class AgentRegistry {
 		return removed.length;
 	}
 
-	private startTurn(agent: ManagedAgent, task: string): void {
+	private startTurn(agent: ManagedAgent, task: string, timeoutMs?: number): void {
 		agent.state = "starting";
 		agent.error = undefined;
 		agent.currentTask = task;
+		agent.currentTimeoutMs = timeoutMs ?? agent.timeoutMs;
 		agent.structuredResult = undefined;
 		agent.updatedAt = this.now();
 		agent.telemetry = {
@@ -705,6 +734,7 @@ export class AgentRegistry {
 					}
 				}
 				agent.currentTask = undefined;
+				agent.currentTimeoutMs = undefined;
 				agent.currentMailboxMessageIds = undefined;
 				agent.updatedAt = this.now();
 				this.controllers.delete(agent.id);
