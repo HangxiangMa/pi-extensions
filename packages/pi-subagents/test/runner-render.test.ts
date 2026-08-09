@@ -440,6 +440,105 @@ test("runSingleAgent hard-bounds timeout summary finalization", async () => {
 	assert.ok(Date.now() - started < 1_000, "summary finalization must remain hard-bounded");
 });
 
+test("runSingleAgent preserves completed tool evidence when timeout finalization fails", async () => {
+	const script = [
+		"const args=process.argv.slice(1);const task=args.at(-1)??'';",
+		"if(task.includes('Work deadline expired')){setInterval(()=>{},1000);}else{",
+		"const call={role:'assistant',content:[{type:'toolCall',id:'read-1',name:'read',arguments:{path:'src/config.ts'}},{type:'toolCall',id:'edit-1',name:'edit',arguments:{path:'src/config.ts'}}],stopReason:'toolUse',timestamp:Date.now()};",
+		"const read={role:'toolResult',toolCallId:'read-1',toolName:'read',content:[{type:'text',text:'verified timeout evidence'}],isError:false,timestamp:Date.now()};",
+		"const edit={role:'toolResult',toolCallId:'edit-1',toolName:'edit',content:[{type:'text',text:'updated src/config.ts'}],isError:false,timestamp:Date.now()};",
+		"process.stdout.write(JSON.stringify({type:'message_end',message:call})+'\\n');",
+		"process.stdout.write(JSON.stringify({type:'tool_result_end',message:read})+'\\n');",
+		"process.stdout.write(JSON.stringify({type:'tool_result_end',message:edit})+'\\n');",
+		"setInterval(()=>{},1000);}",
+	].join("");
+	const result = await runSingleAgent(
+		process.cwd(),
+		[
+			{
+				name: "test",
+				description: "test",
+				systemPrompt: "",
+				source: "built-in",
+				filePath: "built-in:test",
+			},
+		],
+		"test",
+		"inspect",
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		120,
+		undefined,
+		(results) => ({ mode: "single", agentScope: "user", projectAgentsDir: null, results }),
+		{ command: process.execPath, argsPrefix: ["-e", script, "--"] },
+		{ timeoutFinalizationMs: 30 },
+	);
+
+	assert.equal(result.termination?.reason, "work_timeout");
+	assert.deepEqual(result.termination?.checkpoint.changedFiles, ["src/config.ts"]);
+	assert.equal(result.termination?.checkpoint.sideEffectsMayHaveOccurred, true);
+	assert.match(formatResultFailure(result), /verified timeout evidence/);
+	assert.equal(result.termination?.finalization.status, "timed_out");
+});
+
+test("runSingleAgent enforces idle, turn, and tool-call budgets", async () => {
+	const agents = [
+		{
+			name: "test",
+			description: "test",
+			systemPrompt: "",
+			source: "built-in" as const,
+			filePath: "built-in:test",
+		},
+	];
+	const makeDetails = (results: Parameters<Parameters<typeof runSingleAgent>[10]>[0]) => ({
+		mode: "single" as const,
+		agentScope: "user" as const,
+		projectAgentsDir: null,
+		results,
+	});
+	const run = (
+		script: string,
+		turnLimits: NonNullable<Parameters<typeof runSingleAgent>[12]>["turnLimits"],
+	) =>
+		runSingleAgent(
+			process.cwd(),
+			agents,
+			"test",
+			"task",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			2_000,
+			undefined,
+			makeDetails,
+			{ command: process.execPath, argsPrefix: ["-e", script, "--"] },
+			{ finalizeOnTimeout: false, turnLimits },
+		);
+
+	const idleStarted = Date.now();
+	const idle = await run("setInterval(()=>{},1000)", { idleTimeoutMs: 100 });
+	assert.equal(idle.termination?.reason, "idle_timeout");
+	assert.ok(Date.now() - idleStarted < 1_000);
+
+	const turnScript = [
+		"for(let i=0;i<2;i++){const message={role:'assistant',content:[{type:'toolCall',id:String(i),name:'read',arguments:{path:'x'}}],stopReason:'toolUse',timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');}",
+		"setInterval(()=>{},1000);",
+	].join("");
+	const turns = await run(turnScript, { maxTurns: 2 });
+	assert.equal(turns.termination?.reason, "turn_limit");
+
+	const toolsScript = [
+		"const message={role:'assistant',content:[{type:'toolCall',id:'1',name:'read',arguments:{}},{type:'toolCall',id:'2',name:'read',arguments:{}}],stopReason:'toolUse',timestamp:Date.now()};",
+		"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');setInterval(()=>{},1000);",
+	].join("");
+	const tools = await run(toolsScript, { maxToolCalls: 1 });
+	assert.equal(tools.termination?.reason, "tool_call_limit");
+});
+
 test("runSingleAgent preserves final text beyond its history budget and rejects empty final output", async () => {
 	const agents = [
 		{

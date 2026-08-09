@@ -50,6 +50,7 @@ import {
 	assertNoSharedWriteConflict,
 	confirmProjectAgent,
 } from "./stateful-safety.js";
+import { MAX_SUBAGENT_TOOL_CALLS, MAX_SUBAGENT_TURNS } from "./turn-budget.js";
 
 export {
 	assertFollowUpWriteAllowed,
@@ -84,6 +85,30 @@ const StatefulTimeoutSchema = Type.Integer({
 	description:
 		"Work deadline in milliseconds selected for the task difficulty. On expiry, Pi aborts the work and makes one separately bounded summary attempt. Retained as the agent default.",
 });
+const StatefulTurnLimitFields = {
+	idleTimeoutMs: Type.Optional(
+		Type.Integer({
+			minimum: 1,
+			maximum: MAX_SUBAGENT_TIMEOUT_MS,
+			description:
+				"Maximum milliseconds without a completed assistant turn or tool result; retained as the agent default.",
+		}),
+	),
+	maxTurns: Type.Optional(
+		Type.Integer({
+			minimum: 1,
+			maximum: MAX_SUBAGENT_TURNS,
+			description: "Maximum unfinished assistant turns; retained as the agent default.",
+		}),
+	),
+	maxToolCalls: Type.Optional(
+		Type.Integer({
+			minimum: 1,
+			maximum: MAX_SUBAGENT_TOOL_CALLS,
+			description: "Maximum tool calls; retained as the agent default.",
+		}),
+	),
+};
 const MAX_TOOL_MESSAGE_BYTES = 2 * 1024;
 
 export interface StatefulSubagentDependencies {
@@ -392,7 +417,7 @@ export function registerStatefulSubagents(
 	});
 
 	const baseSpawnDescription = () =>
-		`Start an addressable background subagent with an optional thinking level and timeout chosen for the task difficulty, return immediately with an agentId, and receive its completion asynchronously. Detached capacity: ${runtimeLimits.maxAgents} retained agents, ${runtimeLimits.maxActiveTurns} active turns, ${runtimeLimits.maxChildrenPerAgent} direct children per agent, and depth ${runtimeLimits.maxDepth}. Working-directory target policy: ${dependencies.getSettings?.()?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY}. This controls launch targets and protected project resources, not filesystem access or sandboxing.`;
+		`Start an addressable background subagent with an optional thinking level and execution budgets chosen for the task difficulty, return immediately with an agentId, and receive its completion asynchronously. Detached capacity: ${runtimeLimits.maxAgents} retained agents, ${runtimeLimits.maxActiveTurns} active turns, ${runtimeLimits.maxChildrenPerAgent} direct children per agent, and depth ${runtimeLimits.maxDepth}. Working-directory target policy: ${dependencies.getSettings?.()?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY}. This controls launch targets and protected project resources, not filesystem access or sandboxing.`;
 	const spawnTool = defineTool({
 		name: "subagent_spawn",
 		label: "Spawn Subagent",
@@ -404,6 +429,7 @@ export function registerStatefulSubagents(
 			task: Type.String({ minLength: 1, maxLength: DEFAULT_MAX_CONTEXT_BYTES }),
 			thinkingLevel: Type.Optional(StatefulThinkingLevelSchema),
 			timeoutMs: Type.Optional(StatefulTimeoutSchema),
+			...StatefulTurnLimitFields,
 			cwd: Type.Optional(Type.String()),
 			agentScope: Type.Optional(ScopeSchema),
 			confirmProjectAgents: Type.Optional(Type.Boolean({ default: true })),
@@ -468,6 +494,9 @@ export function registerStatefulSubagents(
 				agentScope: scope,
 				thinkingLevel: params.thinkingLevel,
 				timeoutMs: params.timeoutMs,
+				idleTimeoutMs: params.idleTimeoutMs,
+				maxTurns: params.maxTurns,
+				maxToolCalls: params.maxToolCalls,
 				parentId: params.parentId,
 				context: snapshot.text || undefined,
 				contextSourceIds: snapshot.sourceIds,
@@ -557,6 +586,9 @@ export function registerStatefulSubagents(
 						agentScope: scope,
 						thinkingLevel: params.thinkingLevel,
 						timeoutMs: params.timeoutMs,
+						idleTimeoutMs: params.idleTimeoutMs,
+						maxTurns: params.maxTurns,
+						maxToolCalls: params.maxToolCalls,
 						parentId: params.parentId,
 						context: snapshot.text || undefined,
 						contextSourceIds: snapshot.sourceIds,
@@ -626,6 +658,7 @@ export function registerStatefulSubagents(
 						"Optional work deadline for this follow-up turn. On expiry, Pi aborts the work and makes one separately bounded summary attempt.",
 				}),
 			),
+			...StatefulTurnLimitFields,
 			allowConcurrentWrites: Type.Optional(
 				Type.Boolean({ description: "Override the shared-workspace write conflict guard." }),
 			),
@@ -655,6 +688,9 @@ export function registerStatefulSubagents(
 			);
 			const agent = await ownedRegistry.followUp(params.agentId, params.task, {
 				timeoutMs: params.timeoutMs,
+				idleTimeoutMs: params.idleTimeoutMs,
+				maxTurns: params.maxTurns,
+				maxToolCalls: params.maxToolCalls,
 			});
 			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			return result(agent, `Started follow-up for ${agent.id}.`);
@@ -820,10 +856,16 @@ export function formatStatefulAgentLine(agent: ManagedAgent): string {
 	const thinking = agent.thinkingLevel ? ` thinking:${agent.thinkingLevel}` : "";
 	const timeout = agent.currentTimeoutMs ?? agent.timeoutMs;
 	const timeoutText = timeout ? ` timeout:${timeout}ms` : "";
+	const idleTimeout = agent.currentIdleTimeoutMs ?? agent.idleTimeoutMs;
+	const idleText = idleTimeout ? ` idle:${idleTimeout}ms` : "";
+	const maxTurns = agent.currentMaxTurns ?? agent.maxTurns;
+	const turnsText = maxTurns ? ` turns:${maxTurns}` : "";
+	const maxToolCalls = agent.currentMaxToolCalls ?? agent.maxToolCalls;
+	const toolsText = maxToolCalls ? ` tools:${maxToolCalls}` : "";
 	const transport = agent.telemetry?.transport ? ` transport:${agent.telemetry.transport}` : "";
 	const phase = agent.telemetry?.phase ? ` phase:${agent.telemetry.phase}` : "";
 	const queued = agent.telemetry?.queuePosition ? ` queue:${agent.telemetry.queuePosition}` : "";
-	return `${indent}${sanitizeStatusLine(agent.id, 128)} ${sanitizeStatusLine(agent.agent, 128)} ${agent.state} ${elapsedSeconds}s${thinking}${timeoutText}${transport}${phase}${queued} unread:${unread} [${actions}]${task}`;
+	return `${indent}${sanitizeStatusLine(agent.id, 128)} ${sanitizeStatusLine(agent.agent, 128)} ${agent.state} ${elapsedSeconds}s${thinking}${timeoutText}${idleText}${turnsText}${toolsText}${transport}${phase}${queued} unread:${unread} [${actions}]${task}`;
 }
 
 function sanitizeStatusLine(value: string, maxLength: number): string {
@@ -857,6 +899,12 @@ function summarizeAgent(agent: ManagedAgent) {
 		thinkingLevel: agent.thinkingLevel,
 		timeoutMs: agent.timeoutMs,
 		currentTimeoutMs: agent.currentTimeoutMs,
+		idleTimeoutMs: agent.idleTimeoutMs,
+		currentIdleTimeoutMs: agent.currentIdleTimeoutMs,
+		maxTurns: agent.maxTurns,
+		currentMaxTurns: agent.currentMaxTurns,
+		maxToolCalls: agent.maxToolCalls,
+		currentMaxToolCalls: agent.currentMaxToolCalls,
 		currentTask: agent.currentTask
 			? truncateUtf8(agent.currentTask, MAX_TOOL_MESSAGE_BYTES).text
 			: undefined,
@@ -870,6 +918,7 @@ function summarizeAgent(agent: ManagedAgent) {
 		},
 		resultFormat: agent.resultFormat ?? "text",
 		structuredResult: agent.structuredResult,
+		termination: agent.termination,
 		telemetry: agent.telemetry,
 		error: agent.error ? truncateUtf8(agent.error, MAX_TOOL_MESSAGE_BYTES).text : undefined,
 		target: agent.target,

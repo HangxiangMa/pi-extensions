@@ -11,6 +11,9 @@ export interface CanonicalSpawnRequest {
 	agentScope: AgentScope;
 	thinkingLevel?: SubagentThinkingLevel;
 	timeoutMs?: number;
+	idleTimeoutMs?: number;
+	maxTurns?: number;
+	maxToolCalls?: number;
 	parentId?: string;
 	context?: string;
 	contextSourceIds: readonly string[];
@@ -29,6 +32,9 @@ export function hashSpawnRequest(request: CanonicalSpawnRequest): string {
 				agentScope: request.agentScope,
 				thinkingLevel: request.thinkingLevel ?? null,
 				...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+				...(request.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: request.idleTimeoutMs }),
+				...(request.maxTurns === undefined ? {} : { maxTurns: request.maxTurns }),
+				...(request.maxToolCalls === undefined ? {} : { maxToolCalls: request.maxToolCalls }),
 				parentId: request.parentId ?? null,
 				contextHash: request.context
 					? createHash("sha256").update(request.context).digest("hex")

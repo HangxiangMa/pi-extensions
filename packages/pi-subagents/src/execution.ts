@@ -37,6 +37,8 @@ import {
 	resolveBlockingMaxParallelTasks,
 	resolveSubagentThinkingLevel,
 } from "./settings.js";
+import { TimeoutProgressJournal, TURN_TERMINATION_VERSION } from "./timeout-checkpoint.js";
+import type { TurnLimits } from "./turn-budget.js";
 
 export const FALLBACK_TIMEOUT_MS = 10 * 60 * 1000;
 const STATUS_KEY = "subagents";
@@ -139,6 +141,41 @@ export async function executeSubagent(
 		resolveDefaultSubagentTimeoutMs();
 	const resolveThinkingLevel = (agentName: string, localThinkingLevel?: SubagentThinkingLevel) =>
 		resolveSubagentThinkingLevel(agents, agentName, params.thinkingLevel, localThinkingLevel);
+	let orchestrationDeadline: number | undefined;
+	const resolveTurnLimits = (local?: TurnLimits): TurnLimits => ({
+		idleTimeoutMs: local?.idleTimeoutMs ?? params.idleTimeoutMs,
+		maxTurns: local?.maxTurns ?? params.maxTurns,
+		maxToolCalls: local?.maxToolCalls ?? params.maxToolCalls,
+	});
+	const resolveExecutionBudget = (
+		agentName: string,
+		localTimeoutMs?: number,
+	):
+		| {
+				timeoutMs: number;
+				workTimeoutReason: "work_timeout" | "orchestration_timeout";
+				workTimeoutReportLimit: number;
+		  }
+		| undefined => {
+		const requested = resolveTimeoutMs(agentName, localTimeoutMs);
+		if (orchestrationDeadline === undefined) {
+			return {
+				timeoutMs: requested,
+				workTimeoutReason: "work_timeout",
+				workTimeoutReportLimit: requested,
+			};
+		}
+		const remaining = Math.floor(orchestrationDeadline - Date.now());
+		if (remaining < 1) return undefined;
+		const orchestrationLimited = remaining < requested;
+		return {
+			timeoutMs: Math.min(requested, remaining),
+			workTimeoutReason: orchestrationLimited ? "orchestration_timeout" : "work_timeout",
+			workTimeoutReportLimit: orchestrationLimited
+				? Math.floor(params.totalTimeoutMs as number)
+				: requested,
+		};
+	};
 
 	const hasChain = (params.chain?.length ?? 0) > 0;
 	const hasTasks = (params.tasks?.length ?? 0) > 0;
@@ -154,6 +191,45 @@ export async function executeSubagent(
 			results,
 			aggregator,
 		});
+	const exhaustedResult = (
+		agentName: string,
+		task: string,
+		thinkingLevel: SubagentThinkingLevel | undefined,
+		step?: number,
+	): SingleResult => {
+		const limit = Math.floor(params.totalTimeoutMs as number);
+		const message = `Subagent orchestration deadline expired after ${limit}ms`;
+		return {
+			agent: agentName,
+			agentSource: agents.find((agent) => agent.name === agentName)?.source ?? "unknown",
+			task,
+			exitCode: 124,
+			messages: [],
+			stderr: message,
+			errorMessage: message,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				cost: 0,
+				contextTokens: 0,
+				turns: 0,
+			},
+			thinkingLevel,
+			step,
+			finalOutput: "",
+			timedOut: true,
+			stopReason: "timeout",
+			termination: {
+				version: TURN_TERMINATION_VERSION,
+				reason: "orchestration_timeout",
+				limit,
+				checkpoint: new TimeoutProgressJournal().checkpoint(task),
+				finalization: { attempted: false, status: "skipped", durationMs: 0 },
+			},
+		};
+	};
 
 	if (modeCount !== 1 || (aggregator && !hasTasks)) {
 		const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
@@ -195,8 +271,17 @@ export async function executeSubagent(
 		result.target = targetPolicyAudit(target);
 		return result;
 	};
-	const launchPolicy = (target: ResolvedSubagentTarget) => ({
+	const launchPolicy = (
+		target: ResolvedSubagentTarget,
+		budget: NonNullable<ReturnType<typeof resolveExecutionBudget>>,
+		turnLimits: TurnLimits,
+	) => ({
 		projectTrust: target.trust.projectTrusted,
+		turnLimits,
+		finalizeOnTimeout: budget.workTimeoutReason !== "orchestration_timeout",
+		workTimeoutReason: budget.workTimeoutReason,
+		workTimeoutReportLimit: budget.workTimeoutReportLimit,
+		orchestrationDeadlineAt: orchestrationDeadline,
 	});
 
 	if (agentScope === "project" || agentScope === "both") {
@@ -238,6 +323,11 @@ export async function executeSubagent(
 		}
 	}
 
+	orchestrationDeadline =
+		params.totalTimeoutMs === undefined
+			? undefined
+			: Date.now() + Math.floor(params.totalTimeoutMs);
+
 	if (params.chain && params.chain.length > 0) {
 		const results: SingleResult[] = [];
 		let previousOutput = "";
@@ -268,22 +358,26 @@ export async function executeSubagent(
 					: undefined;
 
 				const target = chainTargets[i];
+				const thinkingLevel = resolveThinkingLevel(step.agent, step.thinkingLevel);
+				const budget = resolveExecutionBudget(step.agent, step.timeoutMs);
 				const result = attachTarget(
-					await runSingleAgent(
-						ctx.cwd,
-						agents,
-						step.agent,
-						taskWithContext,
-						target.cwd,
-						i + 1,
-						signal,
-						resolveThinkingLevel(step.agent, step.thinkingLevel),
-						resolveTimeoutMs(step.agent, step.timeoutMs),
-						chainUpdate,
-						makeDetails("chain"),
-						undefined,
-						launchPolicy(target),
-					),
+					budget
+						? await runSingleAgent(
+								ctx.cwd,
+								agents,
+								step.agent,
+								taskWithContext,
+								target.cwd,
+								i + 1,
+								signal,
+								thinkingLevel,
+								budget.timeoutMs,
+								chainUpdate,
+								makeDetails("chain"),
+								undefined,
+								launchPolicy(target, budget, resolveTurnLimits(step)),
+							)
+						: exhaustedResult(step.agent, taskWithContext, thinkingLevel, i + 1),
 					target,
 				);
 				results.push(result);
@@ -396,28 +490,31 @@ export async function executeSubagent(
 				MAX_BLOCKING_PARALLEL_CONCURRENCY,
 				async (t, index) => {
 					const target = parallelTargets[index];
+					const thinkingLevel = resolveThinkingLevel(t.agent, t.thinkingLevel);
+					const budget = resolveExecutionBudget(t.agent, t.timeoutMs);
 					const result = attachTarget(
-						await runSingleAgent(
-							ctx.cwd,
-							agents,
-							t.agent,
-							t.task,
-							target.cwd,
-							undefined,
-							signal,
-							resolveThinkingLevel(t.agent, t.thinkingLevel),
-							resolveTimeoutMs(t.agent, t.timeoutMs),
-							// Per-task update callback
-							(partial) => {
-								if (partial.details?.results[0]) {
-									allResults[index] = { ...partial.details.results[0], exitCode: -1 };
-									emitParallelUpdate();
-								}
-							},
-							makeDetails("parallel"),
-							undefined,
-							launchPolicy(target),
-						),
+						budget
+							? await runSingleAgent(
+									ctx.cwd,
+									agents,
+									t.agent,
+									t.task,
+									target.cwd,
+									undefined,
+									signal,
+									thinkingLevel,
+									budget.timeoutMs,
+									(partial) => {
+										if (partial.details?.results[0]) {
+											allResults[index] = { ...partial.details.results[0], exitCode: -1 };
+											emitParallelUpdate();
+										}
+									},
+									makeDetails("parallel"),
+									undefined,
+									launchPolicy(target, budget, resolveTurnLimits(t)),
+								)
+							: exhaustedResult(t.agent, t.task, thinkingLevel),
 						target,
 					);
 					allResults[index] = result;
@@ -455,30 +552,34 @@ export async function executeSubagent(
 					DEFAULT_MAX_CONTEXT_BYTES,
 				).text;
 				const target = aggregatorTarget as ResolvedSubagentTarget;
+				const thinkingLevel = resolveThinkingLevel(aggregator.agent, aggregator.thinkingLevel);
+				const budget = resolveExecutionBudget(aggregator.agent, aggregator.timeoutMs);
 				aggregatorResult = attachTarget(
-					await runSingleAgent(
-						ctx.cwd,
-						agents,
-						aggregator.agent,
-						aggregatorTask,
-						target.cwd,
-						undefined,
-						signal,
-						resolveThinkingLevel(aggregator.agent, aggregator.thinkingLevel),
-						resolveTimeoutMs(aggregator.agent, aggregator.timeoutMs),
-						(partial) => {
-							status.update(fanInStatus(aggregator.agent));
-							if (onUpdate && partial.details?.results[0]) {
-								onUpdate({
-									content: partial.content,
-									details: makeDetails("parallel")(results, partial.details.results[0]),
-								});
-							}
-						},
-						makeDetails("parallel"),
-						undefined,
-						launchPolicy(target),
-					),
+					budget
+						? await runSingleAgent(
+								ctx.cwd,
+								agents,
+								aggregator.agent,
+								aggregatorTask,
+								target.cwd,
+								undefined,
+								signal,
+								thinkingLevel,
+								budget.timeoutMs,
+								(partial) => {
+									status.update(fanInStatus(aggregator.agent));
+									if (onUpdate && partial.details?.results[0]) {
+										onUpdate({
+											content: partial.content,
+											details: makeDetails("parallel")(results, partial.details.results[0]),
+										});
+									}
+								},
+								makeDetails("parallel"),
+								undefined,
+								launchPolicy(target, budget, resolveTurnLimits(aggregator)),
+							)
+						: exhaustedResult(aggregator.agent, aggregatorTask, thinkingLevel),
 					target,
 				);
 			}
@@ -525,22 +626,26 @@ export async function executeSubagent(
 
 		try {
 			const target = singleTarget as ResolvedSubagentTarget;
+			const thinkingLevel = resolveThinkingLevel(params.agent, params.thinkingLevel);
+			const budget = resolveExecutionBudget(params.agent, params.timeoutMs);
 			const result = attachTarget(
-				await runSingleAgent(
-					ctx.cwd,
-					agents,
-					params.agent,
-					params.task,
-					target.cwd,
-					undefined,
-					signal,
-					resolveThinkingLevel(params.agent, params.thinkingLevel),
-					resolveTimeoutMs(params.agent, params.timeoutMs),
-					onUpdate,
-					makeDetails("single"),
-					undefined,
-					launchPolicy(target),
-				),
+				budget
+					? await runSingleAgent(
+							ctx.cwd,
+							agents,
+							params.agent,
+							params.task,
+							target.cwd,
+							undefined,
+							signal,
+							thinkingLevel,
+							budget.timeoutMs,
+							onUpdate,
+							makeDetails("single"),
+							undefined,
+							launchPolicy(target, budget, resolveTurnLimits(params)),
+						)
+					: exhaustedResult(params.agent, params.task, thinkingLevel),
 				target,
 			);
 			const isError = isResultError(result);

@@ -20,26 +20,35 @@ import { resolvePiInvocation } from "./pi-invocation.js";
 import { JsonLineDecoder } from "./protocol.js";
 import type { SubagentResultFormat } from "./result-contract.js";
 import {
+	formatResultFailure,
+	getFinalOutput,
+	getResultFinalOutput,
+	isResultError,
+} from "./runner-result.js";
+import {
+	addUsageValue,
+	mergeUsageStats,
+	protocolUsageCost,
+	protocolUsageCount,
+	type UsageStats,
+} from "./runner-usage.js";
+import {
+	formatTimeoutCheckpoint,
+	formatTurnTerminationMessage,
+	journalMessages,
+	TimeoutProgressJournal,
+	TURN_TERMINATION_VERSION,
+	type TurnTerminationReport,
+} from "./timeout-checkpoint.js";
+import {
 	buildTimeoutFinalizationPrompt,
 	resolveTimeoutFinalizationMs,
 } from "./timeout-finalization.js";
+import { TurnBudgetMonitor, type TurnBudgetStop, type TurnLimits } from "./turn-budget.js";
 
 export const KILL_GRACE_MS = 5000;
 
-export interface UsageStats {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	cost: number;
-	costInput?: number;
-	costOutput?: number;
-	costCacheRead?: number;
-	costCacheWrite?: number;
-	totalTokens?: number;
-	contextTokens: number;
-	turns: number;
-}
+export type { UsageStats } from "./runner-usage.js";
 export type RecentActivityItem =
 	| { type: "text"; text: string }
 	| { type: "toolCall"; name: string; args: Record<string, unknown> };
@@ -47,39 +56,6 @@ export type RecentActivityItem =
 const MAX_RECENT_ACTIVITY_ITEMS = 10;
 const MAX_RECENT_ACTIVITY_BYTES = 8 * 1024;
 const MAX_RECENT_ACTIVITY_ARGUMENT_BYTES = 1024;
-const MAX_USAGE_VALUE = Number.MAX_SAFE_INTEGER;
-
-function protocolUsageCount(value: unknown): number {
-	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
-}
-
-function protocolUsageCost(value: unknown): number {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0
-		? Math.min(value, MAX_USAGE_VALUE)
-		: 0;
-}
-
-function addUsageValue(current: number, addition: number): number {
-	return Math.min(MAX_USAGE_VALUE, current + addition);
-}
-
-function mergeUsageStats(target: UsageStats, addition: UsageStats): void {
-	for (const key of ["input", "output", "cacheRead", "cacheWrite", "cost", "turns"] as const) {
-		target[key] = addUsageValue(target[key], addition[key]);
-	}
-	for (const key of [
-		"costInput",
-		"costOutput",
-		"costCacheRead",
-		"costCacheWrite",
-		"totalTokens",
-	] as const) {
-		if (addition[key] !== undefined) {
-			target[key] = addUsageValue(target[key] ?? 0, addition[key]);
-		}
-	}
-	target.contextTokens = addition.contextTokens || target.contextTokens;
-}
 
 export interface SingleResult {
 	agent: string;
@@ -102,6 +78,7 @@ export interface SingleResult {
 	partialOutput?: string;
 	timeoutSummary?: string;
 	timeoutSummaryError?: string;
+	termination?: TurnTerminationReport;
 	timedOut?: boolean;
 	timeoutMs?: number;
 	aborted?: boolean;
@@ -124,52 +101,6 @@ export interface SubagentDetails {
 	results: SingleResult[];
 	aggregator?: SingleResult;
 	isError?: boolean;
-}
-
-function getFinalOutput(messages: Message[]): string {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const msg = messages[i];
-		if (msg.role === "assistant") {
-			const text = msg.content
-				.filter((part) => part.type === "text")
-				.map((part) => part.text)
-				.join("\n");
-			if (text) return text;
-		}
-	}
-	return "";
-}
-
-export function getResultFinalOutput(result: SingleResult): string {
-	return result.finalOutput ?? getFinalOutput(result.messages);
-}
-
-export function isResultError(result: SingleResult): boolean {
-	return (
-		(result.exitCode !== 0 && result.exitCode !== -1) ||
-		result.timedOut === true ||
-		result.stopReason === "timeout" ||
-		result.stopReason === "error" ||
-		result.stopReason === "aborted"
-	);
-}
-
-export function formatResultFailure(result: SingleResult): string {
-	const error = result.errorMessage || result.stderr.trim();
-	const output = getResultFinalOutput(result);
-	const sections = [error];
-	if (result.timeoutSummary) sections.push(`Timed-out work summary:\n${result.timeoutSummary}`);
-	else if (output) sections.push(`Partial output:\n${output}`);
-	if (result.partialOutput && result.partialOutput !== output) {
-		sections.push(`Partial output before finalization:\n${result.partialOutput}`);
-	}
-	if (result.timeoutSummaryError) {
-		sections.push(`Summary finalization failed: ${result.timeoutSummaryError}`);
-	}
-	return truncateUtf8(
-		sections.filter(Boolean).join("\n\n") || "(no output)",
-		DEFAULT_MAX_CONTEXT_BYTES,
-	).text;
 }
 
 function boundMessageText(
@@ -406,6 +337,8 @@ function signalProcess(proc: ReturnType<typeof spawn>, signal: NodeJS.Signals): 
 	}
 }
 
+export { formatResultFailure, getResultFinalOutput, isResultError } from "./runner-result.js";
+
 export function terminateProcess(
 	proc: ReturnType<typeof spawn>,
 	graceMs = KILL_GRACE_MS,
@@ -447,6 +380,14 @@ export interface ChildLaunchPolicy {
 	timeoutFinalizationMs?: number;
 	/** Optional stateful result contract retained during timeout finalization. */
 	timeoutResultFormat?: SubagentResultFormat;
+	/** Optional non-wall-clock limits for this turn. */
+	turnLimits?: TurnLimits;
+	/** Override the timeout reason when an orchestration deadline caps this child. */
+	workTimeoutReason?: "work_timeout" | "orchestration_timeout";
+	/** Public limit value reported when the effective child timeout is only the remaining budget. */
+	workTimeoutReportLimit?: number;
+	/** Absolute blocking-workflow deadline that also caps model finalization. */
+	orchestrationDeadlineAt?: number;
 }
 
 export async function runSingleAgent(
@@ -497,6 +438,7 @@ export async function runSingleAgent(
 	let latestAssistantOutput = "";
 	let terminalAssistantOutput: string | undefined;
 
+	const progressJournal = new TimeoutProgressJournal();
 	const currentResult: SingleResult = {
 		agent: agentName,
 		agentSource: agent.source,
@@ -621,6 +563,10 @@ export async function runSingleAgent(
 		}
 		let wasAborted = false;
 		let timedOut = false;
+		let budgetStop:
+			| TurnBudgetStop
+			| { reason: "work_timeout" | "orchestration_timeout"; limit: number }
+			| undefined;
 
 		const exitCode = await new Promise<number>((resolve) => {
 			let settled = false;
@@ -628,12 +574,14 @@ export async function runSingleAgent(
 			let timeout: NodeJS.Timeout | undefined;
 			let terminationDeadline: NodeJS.Timeout | undefined;
 			let abortHandler: (() => void) | undefined;
+			let budgetMonitor: TurnBudgetMonitor | undefined;
 			const finish = (code: number) => {
 				if (settled) return;
 				settled = true;
 				if (timeout) clearTimeout(timeout);
 				if (terminationDeadline) clearTimeout(terminationDeadline);
 				cleanupTermination?.();
+				budgetMonitor?.dispose();
 				if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
 				resolve(code);
 			};
@@ -691,6 +639,7 @@ export async function runSingleAgent(
 				const event = raw as { type?: string; message?: Message };
 				if (event.type === "message_end" && event.message) {
 					const msg = event.message;
+					journalMessages(progressJournal, [msg]);
 					if (msg.role === "assistant") {
 						const output = truncateUtf8(getFinalOutput([msg]), DEFAULT_MAX_OUTPUT_BYTES);
 						currentResult.truncated ||= output.truncated;
@@ -703,6 +652,10 @@ export async function runSingleAgent(
 					addMessage(msg);
 					if (msg.role === "assistant") {
 						currentResult.usage.turns++;
+						budgetMonitor?.recordToolCalls(
+							msg.content.filter((part) => part.type === "toolCall").length,
+						);
+						budgetMonitor?.recordAssistantTurn(msg.stopReason);
 						const usage = msg.usage;
 						if (usage && typeof usage === "object") {
 							const input = protocolUsageCount(usage.input);
@@ -763,6 +716,8 @@ export async function runSingleAgent(
 					}
 					emitUpdate();
 				} else if (event.type === "tool_result_end" && event.message) {
+					journalMessages(progressJournal, [event.message]);
+					budgetMonitor?.recordActivity();
 					addMessage(event.message);
 					emitUpdate();
 				}
@@ -787,21 +742,36 @@ export async function runSingleAgent(
 					finish(exitCode);
 				}, KILL_GRACE_MS + 1_000);
 			};
-
-			timeout = setTimeout(() => {
-				timedOut = true;
-				currentResult.timedOut = true;
-				currentResult.stopReason = "timeout";
-				setErrorMessage(`Subagent timed out after ${timeoutMs}ms`);
+			const stopForBudget = (
+				stop: TurnBudgetStop | { reason: "work_timeout" | "orchestration_timeout"; limit: number },
+			) => {
+				if (budgetStop || settled || wasAborted) return;
+				budgetStop = stop;
+				timedOut = stop.reason.endsWith("timeout");
+				currentResult.timedOut = timedOut || undefined;
+				currentResult.stopReason = timedOut ? "timeout" : "limit";
+				const message = formatTurnTerminationMessage(stop.reason, stop.limit);
+				setErrorMessage(message);
 				const bounded = appendBounded(
 					currentResult.stderr,
-					`\nSubagent timed out after ${timeoutMs}ms.`,
+					`\n${message}.`,
 					DEFAULT_MAX_STDERR_BYTES,
 				);
 				currentResult.stderr = bounded.text;
 				currentResult.truncated ||= bounded.truncated;
 				emitUpdate();
 				beginTermination(124);
+			};
+			budgetMonitor = new TurnBudgetMonitor({
+				...launchPolicy?.turnLimits,
+				onExceeded: stopForBudget,
+			});
+
+			timeout = setTimeout(() => {
+				stopForBudget({
+					reason: launchPolicy?.workTimeoutReason ?? "work_timeout",
+					limit: launchPolicy?.workTimeoutReportLimit ?? timeoutMs,
+				});
 			}, timeoutMs);
 			timeout.unref();
 
@@ -820,7 +790,7 @@ export async function runSingleAgent(
 			});
 			proc.on("close", (code) => {
 				decoder.finish();
-				finish(timedOut ? 124 : wasAborted ? 130 : (code ?? 0));
+				finish(budgetStop ? 124 : wasAborted ? 130 : (code ?? 0));
 			});
 			proc.on("error", (error) => {
 				currentResult.launchFailed = currentResult.processStarted ? undefined : true;
@@ -838,7 +808,7 @@ export async function runSingleAgent(
 
 			if (signal) {
 				abortHandler = () => {
-					if (timedOut || settled) return;
+					if (budgetStop || settled) return;
 					wasAborted = true;
 					currentResult.aborted = true;
 					currentResult.stopReason = "aborted";
@@ -850,15 +820,45 @@ export async function runSingleAgent(
 			}
 		});
 
-		currentResult.exitCode = exitCode;
+		if (signal?.aborted && budgetStop) {
+			budgetStop = undefined;
+			timedOut = false;
+			currentResult.timedOut = undefined;
+			currentResult.aborted = true;
+			currentResult.stopReason = "aborted";
+			setErrorMessage("Subagent was aborted");
+		}
+		currentResult.exitCode = currentResult.aborted ? 130 : exitCode;
 		const final = truncateUtf8(selectedAssistantOutput(), DEFAULT_MAX_OUTPUT_BYTES);
 		currentResult.finalOutput = final.text;
 		currentResult.truncated ||= final.truncated;
-		if (timedOut && launchPolicy?.finalizeOnTimeout !== false && !signal?.aborted) {
+		if (budgetStop) {
 			currentResult.partialOutput = currentResult.finalOutput || undefined;
-			const finalizationMs = resolveTimeoutFinalizationMs(
+			currentResult.termination = {
+				version: TURN_TERMINATION_VERSION,
+				reason: budgetStop.reason,
+				limit: budgetStop.limit,
+				checkpoint: progressJournal.checkpoint(task, currentResult.partialOutput),
+				finalization: { attempted: false, status: "skipped", durationMs: 0 },
+			};
+		}
+		const remainingFinalizationMs = launchPolicy?.orchestrationDeadlineAt
+			? Math.floor(launchPolicy.orchestrationDeadlineAt - Date.now())
+			: undefined;
+		if (
+			budgetStop &&
+			launchPolicy?.finalizeOnTimeout !== false &&
+			!signal?.aborted &&
+			(remainingFinalizationMs === undefined || remainingFinalizationMs > 0)
+		) {
+			const finalizationStartedAt = Date.now();
+			const requestedFinalizationMs = resolveTimeoutFinalizationMs(
 				timeoutMs,
 				launchPolicy?.timeoutFinalizationMs,
+			);
+			const finalizationMs = Math.min(
+				requestedFinalizationMs,
+				remainingFinalizationMs ?? requestedFinalizationMs,
 			);
 			const summary = await runSingleAgent(
 				defaultCwd,
@@ -868,6 +868,8 @@ export async function runSingleAgent(
 					task,
 					partialOutput: currentResult.partialOutput,
 					recentActivity: currentResult.recentActivity,
+					checkpoint: currentResult.termination?.checkpoint,
+					terminationReason: budgetStop.reason,
 					resultFormat: launchPolicy?.timeoutResultFormat,
 				}),
 				cwd,
@@ -887,6 +889,10 @@ export async function runSingleAgent(
 					disableContextFiles: true,
 					appendSystemPromptPaths: undefined,
 					finalizeOnTimeout: false,
+					turnLimits: undefined,
+					workTimeoutReason: "work_timeout",
+					workTimeoutReportLimit: finalizationMs,
+					orchestrationDeadlineAt: undefined,
 				},
 			);
 			mergeUsageStats(currentResult.usage, summary.usage);
@@ -894,11 +900,29 @@ export async function runSingleAgent(
 			if (summary.exitCode === 0 && summaryOutput) {
 				currentResult.timeoutSummary = summaryOutput;
 				currentResult.finalOutput = summaryOutput;
+				if (currentResult.termination) {
+					currentResult.termination.finalization = {
+						attempted: true,
+						status: "completed",
+						durationMs: Date.now() - finalizationStartedAt,
+					};
+				}
 			} else {
 				currentResult.timeoutSummaryError =
 					summary.errorMessage || summary.stderr.trim() || "Summary produced no final text";
+				if (currentResult.termination) {
+					currentResult.termination.finalization = {
+						attempted: true,
+						status: summary.timedOut ? "timed_out" : "failed",
+						durationMs: Date.now() - finalizationStartedAt,
+						error: currentResult.timeoutSummaryError,
+					};
+				}
 			}
 			currentResult.truncated ||= summary.truncated;
+		}
+		if (currentResult.termination && !currentResult.finalOutput.trim()) {
+			currentResult.finalOutput = formatTimeoutCheckpoint(currentResult.termination.checkpoint);
 		}
 		if (
 			currentResult.exitCode === 0 &&

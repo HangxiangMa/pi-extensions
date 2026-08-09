@@ -2,6 +2,11 @@ import { redactPrivateText } from "./context.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
 import { appendResultInstruction, type SubagentResultFormat } from "./result-contract.js";
 import type { RecentActivityItem } from "./runner.js";
+import {
+	formatTimeoutCheckpoint,
+	type TimeoutCheckpoint,
+	type TurnTerminationReason,
+} from "./timeout-checkpoint.js";
 
 export const DEFAULT_TIMEOUT_FINALIZATION_MS = 45_000;
 
@@ -9,6 +14,8 @@ export interface TimeoutFinalizationEvidence {
 	task: string;
 	partialOutput?: string;
 	recentActivity?: readonly RecentActivityItem[];
+	checkpoint?: TimeoutCheckpoint;
+	terminationReason?: TurnTerminationReason;
 	resultFormat?: SubagentResultFormat;
 }
 
@@ -33,7 +40,7 @@ export function buildTimeoutFinalizationPrompt(
 		)
 		.join("\n");
 	const prompt = [
-		"Work deadline expired and the active work was aborted.",
+		terminationHeading(evidence.terminationReason),
 		"Do not continue investigating, call tools, modify files, or retry the original task.",
 		"Return a concise summary of only verified findings and completed evidence already available.",
 		"Explicitly label unfinished or unverified areas.",
@@ -41,8 +48,28 @@ export function buildTimeoutFinalizationPrompt(
 		evidence.partialOutput
 			? `Partial assistant output:\n${redactPrivateText(evidence.partialOutput)}`
 			: "Partial assistant output: (none)",
+		evidence.checkpoint
+			? `Deterministic progress checkpoint:\n${formatTimeoutCheckpoint(evidence.checkpoint)}`
+			: undefined,
 		activity ? `Recent bounded activity:\n${activity}` : "Recent bounded activity: (none)",
-	].join("\n\n");
+	]
+		.filter((value): value is string => Boolean(value))
+		.join("\n\n");
 	return truncateUtf8(appendResultInstruction(prompt, evidence.resultFormat, maxBytes), maxBytes)
 		.text;
+}
+
+function terminationHeading(reason: TurnTerminationReason | undefined): string {
+	switch (reason) {
+		case "idle_timeout":
+			return "The idle deadline expired and the active work was aborted.";
+		case "turn_limit":
+			return "The assistant-turn budget was exhausted and the active work was aborted.";
+		case "tool_call_limit":
+			return "The tool-call budget was exhausted and the active work was aborted.";
+		case "orchestration_timeout":
+			return "The orchestration deadline expired and the active work was aborted.";
+		default:
+			return "Work deadline expired and the active work was aborted.";
+	}
 }

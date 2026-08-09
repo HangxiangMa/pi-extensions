@@ -1,6 +1,7 @@
 import type { SubagentThinkingLevel } from "./agents.js";
 import type { TargetPolicyAudit } from "./cwd-policy.js";
 import type { StructuredSubagentResult, SubagentResultFormat } from "./result-contract.js";
+import type { TurnTerminationReport } from "./timeout-checkpoint.js";
 import type { TransportTelemetry } from "./transport-types.js";
 
 export type AgentLifecycleState =
@@ -19,6 +20,7 @@ export interface AgentTurn {
 	completedAt: number;
 	exitCode: number;
 	truncated?: boolean;
+	termination?: TurnTerminationReport;
 }
 
 export interface AgentMailboxMessage {
@@ -46,6 +48,12 @@ export interface ManagedAgent {
 	thinkingLevel?: SubagentThinkingLevel;
 	timeoutMs?: number;
 	currentTimeoutMs?: number;
+	idleTimeoutMs?: number;
+	currentIdleTimeoutMs?: number;
+	maxTurns?: number;
+	currentMaxTurns?: number;
+	maxToolCalls?: number;
+	currentMaxToolCalls?: number;
 	currentTask?: string;
 	history: AgentTurn[];
 	error?: string;
@@ -59,6 +67,7 @@ export interface ManagedAgent {
 	spawnRequestHash?: string;
 	resultFormat?: SubagentResultFormat;
 	structuredResult?: StructuredSubagentResult;
+	termination?: TurnTerminationReport;
 	telemetry?: TransportTelemetry;
 	target?: TargetPolicyAudit;
 	policy?: { inherited: string[]; overridden: string[]; unsupported: string[] };
@@ -81,6 +90,12 @@ export interface AgentRunInspectionDetail extends AgentRunInspectionSummary {
 	thinkingLevel?: SubagentThinkingLevel;
 	timeoutMs?: number;
 	currentTimeoutMs?: number;
+	idleTimeoutMs?: number;
+	currentIdleTimeoutMs?: number;
+	maxTurns?: number;
+	currentMaxTurns?: number;
+	maxToolCalls?: number;
+	currentMaxToolCalls?: number;
 	currentTask?: string;
 	error?: string;
 	workspaceMode?: "worktree";
@@ -92,6 +107,7 @@ export interface AgentRunInspectionDetail extends AgentRunInspectionSummary {
 	target?: TargetPolicyAudit;
 	policy?: { inherited: string[]; overridden: string[]; unsupported: string[] };
 	structuredResult?: StructuredSubagentResult;
+	termination?: TurnTerminationReport;
 	telemetry?: TransportTelemetry;
 }
 
@@ -108,6 +124,7 @@ export interface TurnOutcome {
 	error?: string;
 	policy?: ManagedAgent["policy"];
 	structuredResult?: StructuredSubagentResult;
+	termination?: TurnTerminationReport;
 	telemetry?: TransportTelemetry;
 }
 

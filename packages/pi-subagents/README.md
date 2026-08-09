@@ -21,7 +21,7 @@ Use it to split independent research, planning, implementation, and review work 
 - Loads custom user agents from `~/.pi/agent/agents/*.md`.
 - Optionally loads project agents from `.pi/agents/*.md` with confirmation.
 - Provides a current-session-first `/subagents` manager, direct `settings|status|help` routes, and compatibility aliases for agent tools and retained agents.
-- Supports trust-aware per-task `cwd` policies, task-selected `timeoutMs` work deadlines and `thinkingLevel`, abort-then-summary timeout recovery, bounded progress and timing telemetry, and explicit Fast, Balanced, or Deep thinking profiles.
+- Supports trust-aware per-task `cwd` policies, task-selected work, workflow, idle, turn, and tool-call budgets, deterministic timeout checkpoints, bounded abort-then-summary recovery, progress telemetry, and explicit Fast, Balanced, or Deep thinking profiles.
 - Renders all seven tools with Pi-native compact/expanded transcript rows; long-running blocking and consultation calls show bounded live activity.
 - Bounds JSON lines, captured messages, stderr, final output, chain substitution, and fan-in context.
 - Enforces a recursion-depth guard and deterministic process-group termination.
@@ -109,7 +109,10 @@ Execution modes:
 Common controls:
 
 - `cwd` — choose a launch directory subject to the user-owned trust-aware target policy described below.
-- `timeoutMs` — choose the work deadline for the task difficulty; expiry aborts active work and starts one separately hard-bounded summary attempt.
+- `timeoutMs` — choose the per-turn work deadline for the task difficulty.
+- `totalTimeoutMs` — cap an entire blocking single, parallel, chain, or fan-in workflow, including queued work.
+- `idleTimeoutMs` — stop work that produces no completed assistant turn or tool result within the selected interval.
+- `maxTurns` / `maxToolCalls` — stop unfinished repeated work after bounded assistant turns or tool calls.
 - `thinkingLevel` — request `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` thinking for the spawned Pi process or retained child.
 - `idempotencyKey` — make an exact `subagent_spawn` retry return the existing retained `agentId`; reuse with different parameters fails before confirmation, worktree creation, or child launch.
 - `resultFormat` — keep bounded text by default or request the opt-in `structured-v1` summary/evidence/changes/verification/risks contract with text fallback.
@@ -481,7 +484,7 @@ A spawn can request a thinking level explicitly:
 }
 ```
 
-The requested level and spawn `timeoutMs` are stored with the stateful agent and remain in effect for all follow-ups and after persisted restore. `subagent_send.timeoutMs` can override only that follow-up's work deadline. `subagent_send` does not provide a per-turn thinking override; create a new agent when a later task needs a different level.
+The requested level and spawn `timeoutMs`, `idleTimeoutMs`, `maxTurns`, and `maxToolCalls` are stored with the stateful agent and remain in effect for all follow-ups and after persisted restore. The same fields on `subagent_send` override only that follow-up turn. `subagent_send` does not provide a per-turn thinking override; create a new agent when a later task needs a different level.
 
 An exact retry can use a bounded session-owned idempotency key:
 
@@ -551,12 +554,12 @@ The intentional compatibility change is that an external target without saved tr
 | Single | One result. | A failed/aborted/timed-out worker is marked as a tool error while preserving bounded details. |
 | Chain | Input order. | Stops at the first failed step; completed steps remain in details. |
 | Parallel | Input order, up to `blocking.maxParallelTasks` total workers and at most four active children. | Rejects calls above the configured limit; otherwise collects all task results, and partial worker failure does not discard successful results. |
-| Parallel + aggregator | Source input order, then aggregator. | The aggregator runs with both successful outputs and failure descriptions; aggregator failure marks the tool result as an error. |
+| Parallel + aggregator | Source input order, then aggregator. | The aggregator runs with successful outputs and failure descriptions only when total budget remains; aggregator failure or orchestration expiry marks the tool result as an error. |
 
 An aggregator whose `agent` or `task` is empty or whitespace-only is treated as absent, so successful
 parallel outputs remain available instead of being replaced by a malformed fan-in failure.
 
-Blocking timeout precedence remains: task/step/aggregator → call → agent setting → `PI_SUBAGENT_TIMEOUT_MS` → 600000 ms. Stateful timeout precedence is: `subagent_send.timeoutMs` for one follow-up → retained `subagent_spawn.timeoutMs` → agent setting → `PI_SUBAGENT_TIMEOUT_MS` → 600000 ms. Blocking thinking precedence remains: task/step/aggregator → call → agent setting → child default. Stateful spawn thinking precedence is: `subagent_spawn.thinkingLevel` → agent setting → transport fallback. Project-agent resolution and confirmation behavior is unchanged after target preflight. Blocking and retained result/inspection details add bounded target boundary and effective trust metadata.
+Blocking work-timeout precedence remains: task/step/aggregator → call → agent setting → `PI_SUBAGENT_TIMEOUT_MS` → 600000 ms, then `totalTimeoutMs` caps the effective remaining time. Blocking idle, turn, and tool-call precedence is task/step/aggregator → call → omitted. Stateful budget precedence is the explicit `subagent_send` field for one follow-up → retained `subagent_spawn` field → timeout-only agent/environment fallback where applicable. Blocking thinking precedence remains: task/step/aggregator → call → agent setting → child default. Stateful spawn thinking precedence is: `subagent_spawn.thinkingLevel` → agent setting → transport fallback. Project-agent resolution and confirmation behavior is unchanged after target preflight. Blocking and retained result/inspection details add bounded target, budget, termination, and effective trust metadata.
 
 ## 🤖 Built-in agents
 
@@ -672,16 +675,21 @@ argument skips that confirmation dialog, but it does not bypass the project trus
 
 ## ⏱️ Runtime limits and thinking levels
 
-Every turn has a main-agent-selectable work deadline plus an extension-owned hard-bounded finalization deadline.
+Every turn can combine main-agent-selected wall-clock, idle, assistant-turn, and tool-call budgets with an extension-owned hard-bounded finalization deadline.
 
 - Set `blocking.maxParallelTasks` in `~/.pi/agent/pi-subagents.json`, or use `/subagents` → **Advanced settings** → **Maximum parallel workers**, to allow 1 through 64 worker tasks in one blocking parallel call.
 - The worker-count limit defaults to 8 and does not change the fixed four-at-a-time execution concurrency.
 - Set `timeoutMs` on the top-level blocking call to apply a work deadline to all jobs.
 - Set `timeoutMs` on a task, chain step, or aggregator to override it locally.
-- Set `subagent_spawn.timeoutMs` as the retained work deadline, or `subagent_send.timeoutMs` to override one follow-up turn.
-- Choose the shortest realistic deadline for the task difficulty; split an oversized task instead of extending its deadline merely to compensate for broad scope.
-- Valid timeout values range from 1 to 2,147,483,647 milliseconds, matching the runtime timer limit.
-- If omitted, the default is the retained or agent setting, then `PI_SUBAGENT_TIMEOUT_MS`, or `600000` milliseconds (10 minutes) when unset.
+- Set top-level blocking `totalTimeoutMs` to cap model work across the whole call; each child receives at most the remaining budget, queued work is not started after expiry, fan-in receives only remaining time, and an orchestration-expired child skips model finalization. Bounded process-cleanup grace may follow the deadline.
+- Set `idleTimeoutMs` to stop a turn that has produced no completed assistant turn or tool result within that interval.
+- Set `maxTurns` or `maxToolCalls` to stop unfinished repeated work; a terminal answer at the exact turn limit remains successful.
+- Set spawn budgets as retained defaults, or the same fields on `subagent_send` to override one follow-up turn.
+- Top-level blocking turn budgets apply to every job, while a task, chain step, or aggregator can override them locally.
+- Choose the shortest realistic budgets for the task difficulty; split an oversized task instead of extending limits merely to compensate for broad scope.
+- Valid time values range from 1 to 2,147,483,647 milliseconds, matching the runtime timer limit.
+- `maxTurns` and `maxToolCalls` accept integers from 1 through 1,000,000.
+- If `timeoutMs` is omitted, the default is the retained or agent setting, then `PI_SUBAGENT_TIMEOUT_MS`, or `600000` milliseconds (10 minutes) when unset; the other new budgets remain opt-in.
 
 Set `thinkingLevel` to request one of Pi's supported levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Blocking subprocess calls pass the resolved value through `--thinking <level>`.
 
@@ -706,7 +714,9 @@ An explicit spawn value is retained for the agent lifecycle and wins over every 
 
 Omit `thinkingLevel` to preserve existing behavior. Reported stateful details show the requested level, not a guarantee of the provider's effective value. Pi still owns model capability clamping; `pi-subagents` does not duplicate capability detection.
 
-When the work deadline expires, the extension aborts the active run first. After authoritative settlement it makes one concise summary attempt over already gathered evidence, without replaying the timed-out task. The summary attempt has its own extension-owned model-work deadline of at most 45 seconds, followed only by bounded abort and process-cleanup grace. Fresh subprocess summaries run with no tools or project resources. Retained RPC and in-process summaries reuse their child context and are explicitly instructed not to call tools; the current child APIs do not support replacing an existing session's tool set for one turn, so their separate deadline and abort path remain the enforcement boundary. If abort does not settle or finalization fails, the extension terminates or discards the child and returns bounded partial evidence. Explicit parent or user abort stops immediately and never starts timeout finalization.
+When any execution budget expires, the extension aborts the active run first and creates a versioned, bounded, redacted checkpoint containing partial assistant notes, completed tool evidence, changed-file hints, and whether side effects may already have occurred. After authoritative settlement it may make one concise summary attempt over that checkpoint without replaying the stopped task. The summary attempt has its own extension-owned model-work deadline of at most 45 seconds, followed only by bounded abort and process-cleanup grace. Fresh subprocess summaries run with no tools or project resources. Retained RPC and in-process summaries reuse their child context and are explicitly instructed not to call tools; the current child APIs do not support replacing an existing session's tool set for one turn, so their separate deadline and abort path remain the enforcement boundary. The deterministic checkpoint remains available when finalization or the provider fails, and results retain exit `124` plus a structured termination reason and finalization status. Explicit parent or user abort stops immediately, never starts finalization, and is not mislabeled as a budget stop.
+
+This release does not claim a cooperative soft-wrap-up phase because print-mode subprocess children cannot receive steering while they are running. It also does not retry budget-stopped work automatically because file or external side effects may already have occurred.
 
 The child event protocol limits each JSON line to 256 KiB. Captured output uses these defaults:
 
@@ -768,6 +778,7 @@ packages/pi-subagents/
 │   ├── rpc-transport.ts          # Persistent strict-JSONL Pi RPC child transport
 │   ├── rpc-timeout-finalization.ts # RPC abort-settle-summary recovery
 │   ├── rpc-transport-metadata.ts # RPC result policy and bounded metadata helpers
+│   ├── rpc-turn-capture.ts       # RPC evidence capture, usage, and budget events
 │   ├── auto-transport.ts         # Deterministic preflight transport routing
 │   ├── transport-types.ts        # Bounded pi-subagents:v1 progress and telemetry contract
 │   ├── completion-delivery.ts    # Completion batching and optional idle-root wake
@@ -776,6 +787,10 @@ packages/pi-subagents/
 │   ├── stateful-guidance.ts      # Detached model-facing workflow guidance
 │   ├── stateful-lifecycle.ts     # Runtime disposal and spawn ownership guards
 │   ├── timeout-finalization.ts   # Abort-time bounded summary prompts and deadlines
+│   ├── timeout-checkpoint.ts     # Redacted deterministic termination evidence
+│   ├── turn-budget.ts            # Idle, assistant-turn, and tool-call enforcement
+│   ├── runner-usage.ts           # Bounded subprocess usage accumulation
+│   ├── runner-result.ts          # Shared subprocess result interpretation
 │   ├── stateful-limit-ui.ts      # Detached capacity settings and recovery previews
 │   ├── stateful-limits.ts        # Shared detached defaults, labels, and validation
 │   ├── stateful-safety.ts        # Project-agent and shared-write safety checks

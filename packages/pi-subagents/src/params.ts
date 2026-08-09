@@ -2,6 +2,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 import { THINKING_LEVELS } from "./agents.js";
 import { MAX_CONFIGURABLE_PARALLEL_TASKS, MAX_SUBAGENT_TIMEOUT_MS } from "./limits.js";
+import { MAX_SUBAGENT_TOOL_CALLS, MAX_SUBAGENT_TURNS } from "./turn-budget.js";
 
 const TimeoutMs = Type.Number({
 	description:
@@ -9,6 +10,31 @@ const TimeoutMs = Type.Number({
 	minimum: 1,
 	maximum: MAX_SUBAGENT_TIMEOUT_MS,
 });
+
+const TurnLimitFields = {
+	idleTimeoutMs: Type.Optional(
+		Type.Integer({
+			description:
+				"Maximum milliseconds without a completed assistant turn or tool result before Pi aborts work and preserves a checkpoint.",
+			minimum: 1,
+			maximum: MAX_SUBAGENT_TIMEOUT_MS,
+		}),
+	),
+	maxTurns: Type.Optional(
+		Type.Integer({
+			description: "Maximum assistant turns before unfinished work is stopped and checkpointed.",
+			minimum: 1,
+			maximum: MAX_SUBAGENT_TURNS,
+		}),
+	),
+	maxToolCalls: Type.Optional(
+		Type.Integer({
+			description: "Maximum tool calls before additional tool work is stopped and checkpointed.",
+			minimum: 1,
+			maximum: MAX_SUBAGENT_TOOL_CALLS,
+		}),
+	),
+};
 
 const ThinkingLevelSchema = StringEnum(THINKING_LEVELS, {
 	description:
@@ -20,6 +46,7 @@ const TaskItem = Type.Object({
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 	timeoutMs: Type.Optional(TimeoutMs),
+	...TurnLimitFields,
 	thinkingLevel: Type.Optional(ThinkingLevelSchema),
 });
 
@@ -28,6 +55,7 @@ const ChainItem = Type.Object({
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 	timeoutMs: Type.Optional(TimeoutMs),
+	...TurnLimitFields,
 	thinkingLevel: Type.Optional(ThinkingLevelSchema),
 });
 
@@ -43,6 +71,7 @@ const AggregatorItem = Type.Object(
 			Type.String({ description: "Working directory for the aggregator process" }),
 		),
 		timeoutMs: Type.Optional(TimeoutMs),
+		...TurnLimitFields,
 		thinkingLevel: Type.Optional(ThinkingLevelSchema),
 	},
 	{
@@ -83,6 +112,15 @@ export const SubagentParams = Type.Object({
 		Type.String({ description: "Working directory for the agent process (single mode)" }),
 	),
 	timeoutMs: Type.Optional(TimeoutMs),
+	totalTimeoutMs: Type.Optional(
+		Type.Number({
+			description:
+				"Overall blocking-workflow deadline in milliseconds, including queued parallel work, chain steps, and fan-in.",
+			minimum: 1,
+			maximum: MAX_SUBAGENT_TIMEOUT_MS,
+		}),
+	),
+	...TurnLimitFields,
 	thinkingLevel: Type.Optional(ThinkingLevelSchema),
 });
 

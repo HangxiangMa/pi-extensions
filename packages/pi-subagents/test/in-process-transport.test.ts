@@ -293,6 +293,8 @@ test("InProcessTransport aborts timed-out work, summarizes it, and remains relea
 	assert.equal(result.exitCode, 124);
 	assert.equal(result.aborted, undefined);
 	assert.match(result.error ?? "", /timed out/);
+	assert.equal(result.termination?.reason, "work_timeout");
+	assert.equal(result.termination?.finalization.status, "completed");
 	assert.equal(child.aborts, 1);
 	assert.equal(child.prompts.length, 2);
 	assert.match(child.prompts[1], /Work deadline expired/);
@@ -302,6 +304,95 @@ test("InProcessTransport aborts timed-out work, summarizes it, and remains relea
 	await transport.release?.(agent);
 	await transport.shutdown();
 	assert.equal(child.disposals, 1);
+});
+
+test("InProcessTransport enforces idle, turn, and tool-call budgets with termination reports", async () => {
+	const idleChild = new FakeChildSession(1);
+	const idleTransport = transportWithFactory(async () => idleChild);
+	const idle = await idleTransport.runTurn(
+		managedAgent({ timeoutMs: 1_000, currentIdleTimeoutMs: 20 }),
+		"idle",
+		new AbortController().signal,
+	);
+	assert.equal(idle.termination?.reason, "idle_timeout");
+	await idleTransport.shutdown();
+
+	// Use a small explicit event-emitting session because the public ChildSession contract is event based.
+	class ObservableBudgetSession implements ChildSession {
+		readonly sessionId = "budget";
+		readonly messages: Array<Record<string, unknown>> = [];
+		readonly prompts: string[] = [];
+		private readonly listeners = new Set<(event: unknown) => void>();
+		constructor(private readonly mode: "turns" | "tools") {}
+		async prompt(text: string): Promise<void> {
+			this.prompts.push(text);
+			if (text.includes("active work was aborted")) {
+				const assistant = {
+					role: "assistant",
+					content: [{ type: "text", text: "budget summary" }],
+					stopReason: "stop",
+				};
+				this.messages.push(assistant);
+				return;
+			}
+			const messages =
+				this.mode === "turns"
+					? [0, 1].map((index) => ({
+							role: "assistant",
+							content: [{ type: "toolCall", id: String(index), name: "read", arguments: {} }],
+							stopReason: "toolUse",
+						}))
+					: [
+							{
+								role: "assistant",
+								content: [
+									{ type: "toolCall", id: "1", name: "read", arguments: {} },
+									{ type: "toolCall", id: "2", name: "read", arguments: {} },
+								],
+								stopReason: "toolUse",
+							},
+						];
+			for (const message of messages) {
+				this.messages.push(message);
+				for (const listener of this.listeners) listener({ type: "message_end", message });
+			}
+			await new Promise<void>((resolve) => {
+				const listener = (event: unknown) => {
+					if ((event as { type?: string }).type === "aborted") resolve();
+				};
+				this.listeners.add(listener);
+			});
+		}
+		subscribe(listener: (event: unknown) => void): () => void {
+			this.listeners.add(listener);
+			return () => this.listeners.delete(listener);
+		}
+		async abort(): Promise<void> {
+			for (const listener of this.listeners) listener({ type: "aborted" });
+		}
+		dispose(): void {
+			this.listeners.clear();
+		}
+		getActiveToolNames(): string[] {
+			return ["read"];
+		}
+	}
+
+	for (const [mode, overrides, expected] of [
+		["turns", { currentMaxTurns: 2 }, "turn_limit"],
+		["tools", { currentMaxToolCalls: 1 }, "tool_call_limit"],
+	] as const) {
+		const child = new ObservableBudgetSession(mode);
+		const transport = transportWithFactory(async () => child);
+		const result = await transport.runTurn(
+			managedAgent({ timeoutMs: 1_000, ...overrides }),
+			mode,
+			new AbortController().signal,
+		);
+		assert.equal(result.termination?.reason, expected);
+		assert.equal(result.output, "budget summary");
+		await transport.shutdown();
+	}
 });
 
 test("InProcessTransport discards a child that does not settle after timeout abort", async () => {

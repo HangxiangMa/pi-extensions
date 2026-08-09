@@ -23,8 +23,10 @@ import {
 	type SubagentResultFormat,
 } from "./result-contract.js";
 import { resolveStatefulLimits } from "./stateful-limits.js";
+import { copyTurnTerminationReport } from "./timeout-checkpoint.js";
 import { type AgentTurnRunner, normalizeTransport, type SubagentTransport } from "./transport.js";
 import type { TransportTelemetry } from "./transport-types.js";
+import { type TurnLimits, validateTurnLimits } from "./turn-budget.js";
 
 const DEFAULT_STATEFUL_LIMITS = resolveStatefulLimits();
 
@@ -49,6 +51,15 @@ function validateTurnTimeout(value: number): number {
 		throw new Error(`Subagent timeoutMs must be between 1 and ${MAX_SUBAGENT_TIMEOUT_MS}`);
 	}
 	return value;
+}
+
+function clearCurrentTurn(agent: ManagedAgent): void {
+	agent.currentTask = undefined;
+	agent.currentTimeoutMs = undefined;
+	agent.currentIdleTimeoutMs = undefined;
+	agent.currentMaxTurns = undefined;
+	agent.currentMaxToolCalls = undefined;
+	agent.currentMailboxMessageIds = undefined;
 }
 
 function waitAbortError(): Error {
@@ -154,6 +165,9 @@ export class AgentRegistry {
 				depth,
 				currentTask: undefined,
 				currentTimeoutMs: undefined,
+				currentIdleTimeoutMs: undefined,
+				currentMaxTurns: undefined,
+				currentMaxToolCalls: undefined,
 				currentMailboxMessageIds: undefined,
 				children: [],
 				contextSourceIds: [...(record.contextSourceIds ?? [])],
@@ -177,6 +191,9 @@ export class AgentRegistry {
 		agentScope?: "user" | "project" | "both";
 		thinkingLevel?: SubagentThinkingLevel;
 		timeoutMs?: number;
+		idleTimeoutMs?: number;
+		maxTurns?: number;
+		maxToolCalls?: number;
 		parentId?: string;
 		context?: string;
 		contextSourceIds?: string[];
@@ -191,6 +208,7 @@ export class AgentRegistry {
 	}): Promise<ManagedAgent> {
 		if (!input.task.trim()) throw new Error("Subagent tasks cannot be empty");
 		if (input.timeoutMs !== undefined) validateTurnTimeout(input.timeoutMs);
+		validateTurnLimits(input);
 		const existing = this.findBySpawnIdempotencyKey(
 			input.spawnIdempotencyKey,
 			input.spawnRequestHash,
@@ -233,6 +251,12 @@ export class AgentRegistry {
 			thinkingLevel: input.thinkingLevel,
 			timeoutMs: input.timeoutMs,
 			currentTimeoutMs: input.timeoutMs,
+			idleTimeoutMs: input.idleTimeoutMs,
+			currentIdleTimeoutMs: input.idleTimeoutMs,
+			maxTurns: input.maxTurns,
+			currentMaxTurns: input.maxTurns,
+			maxToolCalls: input.maxToolCalls,
+			currentMaxToolCalls: input.maxToolCalls,
 			currentTask: task,
 			history: [],
 			mailbox: [],
@@ -253,7 +277,7 @@ export class AgentRegistry {
 			parent.updatedAt = now;
 		}
 		await this.changed();
-		this.startTurn(record, task);
+		this.startTurn(record, task, input);
 		return this.copy(record);
 	}
 
@@ -277,10 +301,11 @@ export class AgentRegistry {
 	async followUp(
 		id: string,
 		task: string,
-		options: { timeoutMs?: number } = {},
+		options: TurnLimits & { timeoutMs?: number } = {},
 	): Promise<ManagedAgent> {
 		if (!task.trim()) throw new Error("Subagent tasks cannot be empty");
 		if (options.timeoutMs !== undefined) validateTurnTimeout(options.timeoutMs);
+		validateTurnLimits(options);
 		const boundedTask = truncateUtf8(task, this.maxTaskBytes).text;
 		const agent = this.require(id);
 		if (!["idle", "completed", "interrupted", "failed"].includes(agent.state)) {
@@ -290,7 +315,7 @@ export class AgentRegistry {
 		const readAt = this.now();
 		for (const message of unread) message.readAt = readAt;
 		agent.currentMailboxMessageIds = unread.map((message) => message.id);
-		this.startTurn(agent, boundedTask, options.timeoutMs);
+		this.startTurn(agent, boundedTask, options);
 		return this.copy(agent);
 	}
 
@@ -388,9 +413,7 @@ export class AgentRegistry {
 			if (index >= 0) {
 				const [entry] = this.queue.splice(index, 1);
 				agent.state = "interrupted";
-				agent.currentTask = undefined;
-				agent.currentTimeoutMs = undefined;
-				agent.currentMailboxMessageIds = undefined;
+				clearCurrentTurn(agent);
 				agent.updatedAt = this.now();
 				const completion: AgentTurnCompletion = {
 					agent: this.copy(agent),
@@ -452,9 +475,7 @@ export class AgentRegistry {
 			const parent = this.agents.get(agent.parentId);
 			if (parent) parent.children = parent.children.filter((childId) => childId !== id);
 		}
-		agent.currentTask = undefined;
-		agent.currentTimeoutMs = undefined;
-		agent.currentMailboxMessageIds = undefined;
+		clearCurrentTurn(agent);
 		let releaseError: unknown;
 		try {
 			await this.transport.release?.(this.copy(agent));
@@ -483,9 +504,7 @@ export class AgentRegistry {
 	async shutdown(): Promise<void> {
 		for (const entry of this.queue.splice(0)) {
 			entry.agent.state = "idle";
-			entry.agent.currentTask = undefined;
-			entry.agent.currentTimeoutMs = undefined;
-			entry.agent.currentMailboxMessageIds = undefined;
+			clearCurrentTurn(entry.agent);
 			entry.resolve(entry.agent);
 			this.running.delete(entry.agent.id);
 		}
@@ -494,9 +513,7 @@ export class AgentRegistry {
 		for (const agent of this.agents.values()) {
 			if (agent.state !== "closed") {
 				agent.state = "idle";
-				agent.currentTask = undefined;
-				agent.currentTimeoutMs = undefined;
-				agent.currentMailboxMessageIds = undefined;
+				clearCurrentTurn(agent);
 			}
 		}
 		let shutdownError: unknown;
@@ -535,6 +552,12 @@ export class AgentRegistry {
 			thinkingLevel: agent.thinkingLevel,
 			timeoutMs: agent.timeoutMs,
 			currentTimeoutMs: agent.currentTimeoutMs,
+			idleTimeoutMs: agent.idleTimeoutMs,
+			currentIdleTimeoutMs: agent.currentIdleTimeoutMs,
+			maxTurns: agent.maxTurns,
+			currentMaxTurns: agent.currentMaxTurns,
+			maxToolCalls: agent.maxToolCalls,
+			currentMaxToolCalls: agent.currentMaxToolCalls,
 			currentTask: agent.currentTask,
 			error: agent.error,
 			workspaceMode: agent.workspaceMode,
@@ -554,6 +577,7 @@ export class AgentRegistry {
 			structuredResult: agent.structuredResult
 				? copyStructuredResult(agent.structuredResult)
 				: undefined,
+			termination: agent.termination ? copyTurnTerminationReport(agent.termination) : undefined,
 			telemetry: agent.telemetry ? copyTelemetry(agent.telemetry) : undefined,
 		};
 	}
@@ -594,12 +618,20 @@ export class AgentRegistry {
 		return removed.length;
 	}
 
-	private startTurn(agent: ManagedAgent, task: string, timeoutMs?: number): void {
+	private startTurn(
+		agent: ManagedAgent,
+		task: string,
+		limits: TurnLimits & { timeoutMs?: number } = {},
+	): void {
 		agent.state = "starting";
 		agent.error = undefined;
 		agent.currentTask = task;
-		agent.currentTimeoutMs = timeoutMs ?? agent.timeoutMs;
+		agent.currentTimeoutMs = limits.timeoutMs ?? agent.timeoutMs;
+		agent.currentIdleTimeoutMs = limits.idleTimeoutMs ?? agent.idleTimeoutMs;
+		agent.currentMaxTurns = limits.maxTurns ?? agent.maxTurns;
+		agent.currentMaxToolCalls = limits.maxToolCalls ?? agent.maxToolCalls;
 		agent.structuredResult = undefined;
+		agent.termination = undefined;
 		agent.updatedAt = this.now();
 		agent.telemetry = {
 			phase: "queued",
@@ -664,6 +696,9 @@ export class AgentRegistry {
 					completedAt: this.now(),
 					exitCode: outcome.exitCode,
 					truncated: outcome.truncated,
+					termination: outcome.termination
+						? copyTurnTerminationReport(outcome.termination)
+						: undefined,
 				});
 				agent.history = agent.history.slice(-this.maxHistoryTurns);
 				agent.state = outcome.aborted
@@ -687,6 +722,9 @@ export class AgentRegistry {
 					(agent.resultFormat === "structured-v1"
 						? parseStructuredSubagentResult(output)
 						: undefined);
+				agent.termination = outcome.termination
+					? copyTurnTerminationReport(outcome.termination)
+					: undefined;
 				completionOutput = output;
 				completionError = error;
 				completionContent = output || error || `${agent.id} ${agent.state}`;
@@ -733,9 +771,7 @@ export class AgentRegistry {
 						this.enqueueMessage(parent, completionContent, agent.id, completionKey);
 					}
 				}
-				agent.currentTask = undefined;
-				agent.currentTimeoutMs = undefined;
-				agent.currentMailboxMessageIds = undefined;
+				clearCurrentTurn(agent);
 				agent.updatedAt = this.now();
 				this.controllers.delete(agent.id);
 				this.running.delete(agent.id);
@@ -915,6 +951,7 @@ export class AgentRegistry {
 			structuredResult: agent.structuredResult
 				? copyStructuredResult(agent.structuredResult)
 				: undefined,
+			termination: agent.termination ? copyTurnTerminationReport(agent.termination) : undefined,
 			telemetry: agent.telemetry ? copyTelemetry(agent.telemetry) : undefined,
 		};
 	}

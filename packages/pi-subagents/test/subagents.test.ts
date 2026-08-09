@@ -100,9 +100,10 @@ type SubagentTool = {
 		details?: {
 			results: Array<{
 				thinkingLevel?: string;
+				termination?: { reason: string };
 				target?: { cwd: string; trust: { kind: string; projectTrusted: boolean } };
 			}>;
-			aggregator?: { thinkingLevel?: string };
+			aggregator?: { thinkingLevel?: string; termination?: { reason: string } };
 		};
 		isError?: boolean;
 	}>;
@@ -174,6 +175,12 @@ test("subagents registers consistent blocking guidance and one management comman
 	assert.equal(parameters?.properties?.aggregator?.properties?.agent?.enum, undefined);
 	assert.match(parameters?.properties?.aggregator?.description ?? "", /omit this key entirely/i);
 	assert.match(parameters?.properties?.aggregator?.description ?? "", /treated as absent/i);
+	assert.match(parameters?.properties?.totalTimeoutMs?.description ?? "", /overall.*workflow/i);
+	assert.match(parameters?.properties?.idleTimeoutMs?.description ?? "", /completed/i);
+	assert.match(parameters?.properties?.maxTurns?.description ?? "", /assistant turns/i);
+	assert.match(parameters?.properties?.maxToolCalls?.description ?? "", /tool calls/i);
+	assert.match(guidanceText, /totalTimeoutMs.*blocking workflow/i);
+	assert.match(guidanceText, /idleTimeoutMs.*stalled/i);
 	assert.deepEqual(
 		[...mock.commands.keys()].filter((name) => name.startsWith("subagents")),
 		["subagents"],
@@ -2939,6 +2946,84 @@ test("parallel execution ignores an empty optional aggregator and preserves work
 	} finally {
 		restorePiPackage();
 		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("blocking totalTimeoutMs caps chains, queued parallel work, and fan-in", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-total-deadline-"));
+	const marker = path.join(root, "launches.txt");
+	const fakePi = path.join(root, "fake-pi.mjs");
+	writeFileSync(
+		fakePi,
+		[
+			"import{appendFileSync}from'node:fs';",
+			"const task=process.argv.at(-1)??'';",
+			"if(task.includes('active work was aborted')){const message={role:'assistant',content:[{type:'text',text:'CHECKPOINT'}],stopReason:'stop',timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');process.exit(0);}",
+			`appendFileSync(${JSON.stringify(marker)},task+'\\n');`,
+			"if(task.includes('FAST')){const message={role:'assistant',content:[{type:'text',text:'DONE'}],stopReason:'stop',timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');process.exit(0);}",
+			"setInterval(()=>{},1000);",
+		].join(""),
+	);
+	const restorePiPackage = useFakePiPackage(root, fakePi);
+	try {
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const tool = mock.tools.find((candidate) => candidate.name === "subagent") as SubagentTool;
+		const { ctx } = createMockContext();
+
+		const chain = await tool.execute(
+			"total-chain",
+			{
+				totalTimeoutMs: 120,
+				chain: [
+					{ agent: "scout", task: "SLOW_FIRST", timeoutMs: 5_000 },
+					{ agent: "scout", task: "SECOND_MUST_NOT_START", timeoutMs: 5_000 },
+				],
+			},
+			new AbortController().signal,
+			undefined,
+			ctx,
+		);
+		assert.equal(chain.details?.results[0]?.termination?.reason, "orchestration_timeout");
+		assert.equal(chain.details?.results.length, 1);
+		assert.doesNotMatch(readFileSync(marker, "utf8"), /SECOND_MUST_NOT_START/);
+
+		writeFileSync(marker, "");
+		const parallel = await tool.execute(
+			"total-parallel",
+			{
+				totalTimeoutMs: 250,
+				tasks: Array.from({ length: 5 }, (_, index) => ({
+					agent: "scout",
+					task: `SLOW_${index}`,
+					timeoutMs: 5_000,
+				})),
+			},
+			new AbortController().signal,
+			undefined,
+			ctx,
+		);
+		const launches = readFileSync(marker, "utf8").trim().split("\n").filter(Boolean);
+		assert.equal(launches.length, 4);
+		assert.equal(parallel.details?.results[4]?.termination?.reason, "orchestration_timeout");
+
+		writeFileSync(marker, "");
+		const fanIn = await tool.execute(
+			"total-fan-in",
+			{
+				totalTimeoutMs: 120,
+				tasks: [{ agent: "scout", task: "SLOW_FANOUT", timeoutMs: 5_000 }],
+				aggregator: { agent: "scout", task: "AGGREGATOR_MUST_NOT_START", timeoutMs: 5_000 },
+			},
+			new AbortController().signal,
+			undefined,
+			ctx,
+		);
+		assert.equal(fanIn.details?.aggregator?.termination?.reason, "orchestration_timeout");
+		assert.doesNotMatch(readFileSync(marker, "utf8"), /AGGREGATOR_MUST_NOT_START/);
+	} finally {
+		restorePiPackage();
+		rmSync(root, { recursive: true, force: true });
 	}
 });
 

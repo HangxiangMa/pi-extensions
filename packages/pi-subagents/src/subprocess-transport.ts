@@ -75,6 +75,11 @@ export class SubprocessTransport implements SubagentTransport {
 				projectTrust,
 				appendSystemPromptPaths: promptResources?.appendSystemPromptPaths,
 				timeoutResultFormat: record.resultFormat,
+				turnLimits: {
+					idleTimeoutMs: record.currentIdleTimeoutMs ?? record.idleTimeoutMs,
+					maxTurns: record.currentMaxTurns ?? record.maxTurns,
+					maxToolCalls: record.currentMaxToolCalls ?? record.maxToolCalls,
+				},
 			},
 		);
 		const settledAt = Date.now();
@@ -110,6 +115,7 @@ export class SubprocessTransport implements SubagentTransport {
 			truncated: single.truncated || boundedTask.truncated,
 			error: single.errorMessage || single.stderr || undefined,
 			policy: single.policy,
+			termination: single.termination,
 			telemetry,
 		};
 	}

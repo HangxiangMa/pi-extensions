@@ -17,11 +17,20 @@ import { appendResultInstruction } from "./result-contract.js";
 import { safeTerminalLine } from "./safe-text.js";
 import { readSubagentSettings } from "./settings.js";
 import {
+	formatTimeoutCheckpoint,
+	formatTurnTerminationMessage,
+	journalMessages,
+	TimeoutProgressJournal,
+	TURN_TERMINATION_VERSION,
+	type TurnTerminationReport,
+} from "./timeout-checkpoint.js";
+import {
 	buildTimeoutFinalizationPrompt,
 	resolveTimeoutFinalizationMs,
 } from "./timeout-finalization.js";
 import type { SubagentTransport } from "./transport.js";
 import type { TransportProgressCallback, TransportTelemetry } from "./transport-types.js";
+import { TurnBudgetMonitor, type TurnBudgetStop, type TurnLimits } from "./turn-budget.js";
 
 const BUILT_IN_TOOL_NAMES = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
 const DEFAULT_ABORT_GRACE_MS = 5_000;
@@ -107,6 +116,7 @@ type PromptSettlement =
 	| { kind: "completed" }
 	| { kind: "failed"; error: unknown }
 	| { kind: "timeout" }
+	| { kind: "limit"; stop: TurnBudgetStop }
 	| { kind: "aborted" };
 
 export class InProcessTransport implements SubagentTransport {
@@ -198,12 +208,25 @@ export class InProcessTransport implements SubagentTransport {
 		const startingMessageCount = record.session.messages.length;
 		record.lastOutput = "";
 		publish({ phase: "running", timing: { promptAcceptedAt: Date.now() } });
-		const settlement = await this.runPrompt(record, prompt, signal, timeoutMs);
+		const settlement = await this.runPrompt(record, prompt, signal, timeoutMs, {
+			idleTimeoutMs: agent.currentIdleTimeoutMs ?? agent.idleTimeoutMs,
+			maxTurns: agent.currentMaxTurns ?? agent.maxTurns,
+			maxToolCalls: agent.currentMaxToolCalls ?? agent.maxToolCalls,
+		});
 		const final = latestAssistant(record.session.messages.slice(startingMessageCount));
 		const output = truncateUtf8(final.output || record.lastOutput, DEFAULT_MAX_OUTPUT_BYTES);
 		const truncated = output.truncated || agent.contextTruncated;
 		const policy = inProcessPolicy(agentConfig, agent);
 		const settledAt = Date.now();
+		if (signal.aborted && (settlement.kind === "timeout" || settlement.kind === "limit")) {
+			publish({ phase: "interrupted", failurePhase: "running", timing: { settledAt } });
+			return {
+				...interruptedOutcome(output.text),
+				truncated,
+				policy,
+				telemetry,
+			};
+		}
 
 		switch (settlement.kind) {
 			case "completed":
@@ -247,18 +270,35 @@ export class InProcessTransport implements SubagentTransport {
 					policy,
 					telemetry,
 				};
-			case "timeout": {
-				let finalizedOutput = output.text;
+			case "timeout":
+			case "limit": {
+				const stop =
+					settlement.kind === "limit"
+						? settlement.stop
+						: ({ reason: "work_timeout", limit: timeoutMs } as const);
+				const journal = new TimeoutProgressJournal();
+				journalMessages(journal, record.session.messages.slice(startingMessageCount));
+				const termination: TurnTerminationReport = {
+					version: TURN_TERMINATION_VERSION,
+					reason: stop.reason,
+					limit: stop.limit,
+					checkpoint: journal.checkpoint(task, output.text),
+					finalization: { attempted: false, status: "skipped", durationMs: 0 },
+				};
+				let finalizedOutput = output.text || formatTimeoutCheckpoint(termination.checkpoint);
 				let finalizationError: string | undefined;
 				if (!signal.aborted && this.sessions.get(agent.id) === record) {
 					publish({ phase: "finalizing", failurePhase: "running" });
 					const summaryStart = record.session.messages.length;
+					const finalizationStartedAt = Date.now();
 					record.lastOutput = "";
 					const summarySettlement = await this.runPrompt(
 						record,
 						buildTimeoutFinalizationPrompt({
 							task,
 							partialOutput: output.text,
+							checkpoint: termination.checkpoint,
+							terminationReason: stop.reason,
 							resultFormat: agent.resultFormat,
 						}),
 						signal,
@@ -275,11 +315,22 @@ export class InProcessTransport implements SubagentTransport {
 						boundedSummary.text.trim()
 					) {
 						finalizedOutput = boundedSummary.text;
+						termination.finalization = {
+							attempted: true,
+							status: "completed",
+							durationMs: Date.now() - finalizationStartedAt,
+						};
 					} else {
 						finalizationError =
 							summarySettlement.kind === "failed"
 								? errorMessage(summarySettlement.error)
 								: `timeout summary ${summarySettlement.kind}`;
+						termination.finalization = {
+							attempted: true,
+							status: summarySettlement.kind === "timeout" ? "timed_out" : "failed",
+							durationMs: Date.now() - finalizationStartedAt,
+							error: finalizationError,
+						};
 					}
 				}
 				publish({ phase: "failed", failurePhase: "running", timing: { settledAt: Date.now() } });
@@ -287,10 +338,14 @@ export class InProcessTransport implements SubagentTransport {
 					output: finalizedOutput,
 					exitCode: 124,
 					truncated,
-					error: [`In-process subagent timed out after ${timeoutMs}ms`, finalizationError]
+					error: [
+						formatTurnTerminationMessage(stop.reason, stop.limit, "In-process subagent"),
+						finalizationError,
+					]
 						.filter(Boolean)
 						.join("; "),
 					policy,
+					termination,
 					telemetry,
 				};
 			}
@@ -398,10 +453,36 @@ export class InProcessTransport implements SubagentTransport {
 		prompt: string,
 		signal: AbortSignal,
 		timeoutMs: number,
+		limits: TurnLimits = {},
 	): Promise<PromptSettlement> {
 		if (signal.aborted) return { kind: "aborted" };
 		let timeout: NodeJS.Timeout | undefined;
 		let abortHandler: (() => void) | undefined;
+		let resolveLimit!: (settlement: PromptSettlement) => void;
+		const limitSettlement = new Promise<PromptSettlement>((resolve) => {
+			resolveLimit = resolve;
+		});
+		const monitor = new TurnBudgetMonitor({
+			...limits,
+			onExceeded: (stop) => resolveLimit({ kind: "limit", stop }),
+		});
+		const unsubscribeBudget = record.session.subscribe((event) => {
+			const type = childEventType(event);
+			if (type === "tool_execution_end") monitor.recordActivity();
+			if (type !== "message_end") return;
+			const message = eventMessage(event);
+			if (!message || typeof message !== "object" || Array.isArray(message)) return;
+			const value = message as Record<string, unknown>;
+			if (value.role === "toolResult") {
+				monitor.recordActivity();
+				return;
+			}
+			if (value.role !== "assistant") return;
+			monitor.recordToolCalls(assistantToolCallCount(value.content));
+			monitor.recordAssistantTurn(
+				typeof value.stopReason === "string" ? value.stopReason : undefined,
+			);
+		});
 		const promptSettlement: Promise<PromptSettlement> = Promise.resolve()
 			.then(() => {
 				if (signal.aborted) throw new Error("In-process subagent prompt aborted before start");
@@ -417,10 +498,25 @@ export class InProcessTransport implements SubagentTransport {
 			signal.addEventListener("abort", abortHandler, { once: true });
 			if (signal.aborted) abortHandler();
 		});
-		const settlement = await Promise.race([promptSettlement, timeoutSettlement, abortSettlement]);
+		const settlement = await Promise.race([
+			promptSettlement,
+			timeoutSettlement,
+			abortSettlement,
+			limitSettlement,
+		]);
 		if (timeout) clearTimeout(timeout);
 		if (abortHandler) signal.removeEventListener("abort", abortHandler);
-		if (settlement.kind === "timeout" || settlement.kind === "aborted") {
+		try {
+			unsubscribeBudget();
+		} catch {
+			// The owning record's unsubscribe/dispose path remains authoritative.
+		}
+		monitor.dispose();
+		if (
+			settlement.kind === "timeout" ||
+			settlement.kind === "limit" ||
+			settlement.kind === "aborted"
+		) {
 			const [, settledAfterAbort] = await Promise.all([
 				settleWithin(record.session.abort(), this.abortGraceMs),
 				completesWithin(promptSettlement, this.abortGraceMs),
@@ -719,6 +815,23 @@ function latestAssistant(messages: readonly unknown[]): {
 		};
 	}
 	return { output: "" };
+}
+
+function childEventType(event: unknown): string | undefined {
+	if (!event || typeof event !== "object" || Array.isArray(event)) return undefined;
+	const type = (event as { type?: unknown }).type;
+	return typeof type === "string" ? type : undefined;
+}
+
+function assistantToolCallCount(content: unknown): number {
+	if (!Array.isArray(content)) return 0;
+	return content.filter(
+		(part) =>
+			part &&
+			typeof part === "object" &&
+			!Array.isArray(part) &&
+			(part as { type?: unknown }).type === "toolCall",
+	).length;
 }
 
 function eventMessage(event: unknown): unknown {

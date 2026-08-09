@@ -158,10 +158,13 @@ function formatRun(run: Record<string, unknown>, theme: Theme, expanded: boolean
 	if (expanded) {
 		const thinking = stringValue(run.thinkingLevel);
 		const timeout = numberValue(run.currentTimeoutMs) || numberValue(run.timeoutMs);
+		const idleTimeout = numberValue(run.currentIdleTimeoutMs) || numberValue(run.idleTimeoutMs);
+		const maxTurns = numberValue(run.currentMaxTurns) || numberValue(run.maxTurns);
+		const maxToolCalls = numberValue(run.currentMaxToolCalls) || numberValue(run.maxToolCalls);
 		const task = safeBlock(run.currentTask, "", 2 * 1024).trim();
 		const error = safeBlock(run.error, "", 2 * 1024).trim();
 		lines.push(
-			`  ${theme.fg("dim", `${numberValue(run.historyCount)} history · ${thinking ? `thinking:${safeLine(thinking, "", 128)} · ` : ""}${timeout ? `timeout:${timeout}ms · ` : ""}${numberValue(run.children)} children`)}`,
+			`  ${theme.fg("dim", `${numberValue(run.historyCount)} history · ${thinking ? `thinking:${safeLine(thinking, "", 128)} · ` : ""}${timeout ? `timeout:${timeout}ms · ` : ""}${idleTimeout ? `idle:${idleTimeout}ms · ` : ""}${maxTurns ? `turns:${maxTurns} · ` : ""}${maxToolCalls ? `tools:${maxToolCalls} · ` : ""}${numberValue(run.children)} children`)}`,
 		);
 		const context = recordValue(run.context);
 		const telemetry = recordValue(run.telemetry);

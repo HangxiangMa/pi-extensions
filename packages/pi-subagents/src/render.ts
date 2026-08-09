@@ -164,11 +164,19 @@ function formatResultPolicy(result: SingleResult): string {
 
 export function renderSubagentCall(args: SubagentParams, theme: Theme) {
 	const scope: AgentScope = args.agentScope ?? "user";
+	const limits = [
+		typeof args.timeoutMs === "number" ? `timeout:${args.timeoutMs}ms` : undefined,
+		typeof args.totalTimeoutMs === "number" ? `total:${args.totalTimeoutMs}ms` : undefined,
+		typeof args.idleTimeoutMs === "number" ? `idle:${args.idleTimeoutMs}ms` : undefined,
+		typeof args.maxTurns === "number" ? `turns:${args.maxTurns}` : undefined,
+		typeof args.maxToolCalls === "number" ? `tools:${args.maxToolCalls}` : undefined,
+	].filter((value): value is string => Boolean(value));
+	const limitText = limits.length > 0 ? ` · ${limits.join(" · ")}` : "";
 	if (args.chain && args.chain.length > 0) {
 		let text =
 			theme.fg("toolTitle", theme.bold("subagent ")) +
 			theme.fg("accent", `chain (${args.chain.length} steps)`) +
-			theme.fg("muted", ` [${scope}]`);
+			theme.fg("muted", ` [${scope}]${limitText}`);
 		for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
 			const step = args.chain[i] as { agent?: unknown; task?: unknown } | undefined;
 			// Clean up {previous} placeholder for display
@@ -189,7 +197,7 @@ export function renderSubagentCall(args: SubagentParams, theme: Theme) {
 		let text =
 			theme.fg("toolTitle", theme.bold("subagent ")) +
 			theme.fg("accent", `parallel (${args.tasks.length} tasks)`) +
-			theme.fg("muted", ` [${scope}]`);
+			theme.fg("muted", ` [${scope}]${limitText}`);
 		for (const task of args.tasks.slice(0, 3)) {
 			const item = task as { agent?: unknown; task?: unknown } | undefined;
 			text += `\n  ${theme.fg("accent", previewAgent(item?.agent))}${theme.fg("dim", ` ${previewTask(item?.task)}`)}`;
@@ -210,7 +218,7 @@ export function renderSubagentCall(args: SubagentParams, theme: Theme) {
 	let text =
 		theme.fg("toolTitle", theme.bold("subagent ")) +
 		theme.fg("accent", agentName) +
-		theme.fg("muted", ` [${scope}]`);
+		theme.fg("muted", ` [${scope}]${limitText}`);
 	text += `\n  ${theme.fg("dim", preview)}`;
 	return new Text(text, 0, 0);
 }

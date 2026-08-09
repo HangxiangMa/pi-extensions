@@ -1,5 +1,6 @@
 import { DEFAULT_MAX_OUTPUT_BYTES, truncateUtf8 } from "./limits.js";
 import type { SubagentResultFormat } from "./result-contract.js";
+import type { TimeoutCheckpoint, TurnTerminationReason } from "./timeout-checkpoint.js";
 import {
 	buildTimeoutFinalizationPrompt,
 	resolveTimeoutFinalizationMs,
@@ -23,6 +24,8 @@ export interface RpcTimeoutFinalizationOptions {
 	client: RpcTimeoutFinalizationClient;
 	task: string;
 	partialOutput: string;
+	checkpoint?: TimeoutCheckpoint;
+	terminationReason?: TurnTerminationReason;
 	resultFormat?: SubagentResultFormat;
 	signal: AbortSignal;
 	workTimeoutMs: number;
@@ -36,6 +39,7 @@ export interface RpcTimeoutFinalizationOptions {
 export interface RpcTimeoutFinalizationResult {
 	output: string;
 	truncated: boolean;
+	status: "completed" | "failed" | "timed_out";
 	error?: string;
 }
 
@@ -67,6 +71,8 @@ export async function finalizeTimedOutRpcTurn(
 					buildTimeoutFinalizationPrompt({
 						task: options.task,
 						partialOutput: options.partialOutput,
+						checkpoint: options.checkpoint,
+						terminationReason: options.terminationReason,
 						resultFormat: options.resultFormat,
 					}),
 					remainingMs(deadline),
@@ -100,7 +106,12 @@ export async function finalizeTimedOutRpcTurn(
 	if (!error && (capture.stopReason === "error" || !output.text.trim())) {
 		error = capture.error || "Timeout summary produced no final text";
 	}
-	return { output: output.text, truncated: output.truncated, error };
+	return {
+		output: output.text,
+		truncated: output.truncated,
+		status: error ? (/timed out|timeout/iu.test(error) ? "timed_out" : "failed") : "completed",
+		error,
+	};
 }
 
 function eventType(value: unknown): string | undefined {
