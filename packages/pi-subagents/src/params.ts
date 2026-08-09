@@ -5,7 +5,7 @@ import { MAX_CONFIGURABLE_PARALLEL_TASKS, MAX_SUBAGENT_TIMEOUT_MS } from "./limi
 
 const TimeoutMs = Type.Number({
 	description:
-		"Hard timeout in milliseconds for each subagent subprocess. Defaults to PI_SUBAGENT_TIMEOUT_MS or 600000.",
+		"Work deadline in milliseconds selected for the task difficulty. On expiry, Pi aborts the work and makes one separately bounded summary attempt. Defaults to PI_SUBAGENT_TIMEOUT_MS or 600000.",
 	minimum: 1,
 	maximum: MAX_SUBAGENT_TIMEOUT_MS,
 });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
@@ -483,7 +483,7 @@ test("subagent_consult follows Pi core prompt precedence without loading project
 			await execute(instance.tool, { agent: "worker", task: "inspect" }, trusted);
 			assert.equal(instance.requests[0].launchPolicy.baseSystemPrompt, "project system");
 			assert.deepEqual(instance.requests[0].launchPolicy.appendSystemPromptPaths, [
-				path.join(workspace, ".pi", "APPEND_SYSTEM.md"),
+				realpathSync(path.join(workspace, ".pi", "APPEND_SYSTEM.md")),
 			]);
 			assert.match(instance.requests[0].agent.systemPrompt, /read-only consultation/i);
 		}

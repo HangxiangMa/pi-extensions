@@ -284,16 +284,19 @@ test("InProcessTransport disposes a child when event subscription fails during c
 	assert.deepEqual(child.prompts, []);
 });
 
-test("InProcessTransport times out by aborting, remains releasable, and disposes exactly once", async () => {
-	const child = new FakeChildSession(true);
-	const transport = transportWithFactory(async () => child, { timeoutMs: 5 });
-	const agent = managedAgent();
+test("InProcessTransport aborts timed-out work, summarizes it, and remains releasable", async () => {
+	const child = new FakeChildSession(1);
+	const transport = transportWithFactory(async () => child, { timeoutMs: 1_000 });
+	const agent = managedAgent({ timeoutMs: 500, currentTimeoutMs: 20 });
 
 	const result = await transport.runTurn(agent, "slow", new AbortController().signal);
 	assert.equal(result.exitCode, 124);
 	assert.equal(result.aborted, undefined);
 	assert.match(result.error ?? "", /timed out/);
 	assert.equal(child.aborts, 1);
+	assert.equal(child.prompts.length, 2);
+	assert.match(child.prompts[1], /Work deadline expired/);
+	assert.match(result.output, /done:.*Work deadline expired/s);
 
 	await transport.release?.(agent);
 	await transport.release?.(agent);
@@ -504,10 +507,14 @@ test("child resource loader excludes extensions while retaining the agent prompt
 	const cwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-sdk-cwd-"));
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-sdk-agent-"));
 	writeFileSync(path.join(cwd, "AGENTS.md"), "Trusted child context.");
+	writeFileSync(path.join(agentDir, "APPEND_SYSTEM.md"), "Global append prompt.");
 	const services = await createInProcessServices(cwd, agentDir, "Agent role prompt.", true);
 	assert.equal(services.settingsManager.isProjectTrusted(), true);
 	assert.deepEqual(services.resourceLoader.getExtensions().extensions, []);
-	assert.deepEqual(services.resourceLoader.getAppendSystemPrompt(), ["Agent role prompt."]);
+	assert.deepEqual(services.resourceLoader.getAppendSystemPrompt(), [
+		"Global append prompt.",
+		"Agent role prompt.",
+	]);
 	assert.equal(
 		services.resourceLoader.getAgentsFiles().agentsFiles.at(-1)?.content,
 		"Trusted child context.",
@@ -519,6 +526,8 @@ test("untrusted in-process resource loading never reads project settings", async
 	const cwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-untrusted-cwd-"));
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-untrusted-agent-"));
 	mkdirSync(path.join(cwd, ".pi"));
+	writeFileSync(path.join(agentDir, "APPEND_SYSTEM.md"), "Global append prompt.");
+	writeFileSync(path.join(cwd, ".pi", "APPEND_SYSTEM.md"), "SECRET_PROJECT_APPEND");
 	writeFileSync(
 		path.join(cwd, ".pi", "settings.json"),
 		'{"SECRET_UNTRUSTED_PROJECT_SETTINGS":"unterminated',
@@ -528,6 +537,11 @@ test("untrusted in-process resource loading never reads project settings", async
 		assert.equal(services.settingsManager.isProjectTrusted(), false);
 		assert.deepEqual(services.settingsManager.getProjectSettings(), {});
 		assert.deepEqual(services.settingsManager.drainErrors(), []);
+		assert.deepEqual(services.resourceLoader.getAppendSystemPrompt(), [
+			"Global append prompt.",
+			"Agent role prompt.",
+		]);
+		assert.doesNotMatch(services.resourceLoader.getAppendSystemPrompt().join("\n"), /SECRET/);
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 		rmSync(agentDir, { recursive: true, force: true });

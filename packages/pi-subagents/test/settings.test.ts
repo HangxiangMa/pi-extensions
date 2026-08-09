@@ -4,18 +4,26 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
 import {
+	applyExecutionProfile,
+	executionProfilePreview,
+	inspectExecutionProfile,
+} from "../src/execution-profiles.js";
+import {
 	consumeSubagentSettingsNotice,
 	inspectBlockingParallelLimitSettings,
 	inspectConsultResourceSettings,
 	inspectCwdPolicySettings,
 	inspectStatefulLimitSettings,
+	inspectStatefulTransportSettings,
 	inspectSubagentSettings,
 	normalizeSubagentSettings,
 	readSubagentSettings,
+	updateAgentSettingsPatch,
 	updateBlockingMaxParallelTasksSetting,
 	updateConsultResourceSetting,
 	updateCwdPolicySetting,
 	updateStatefulLimitSetting,
+	updateStatefulTransportSetting,
 } from "../src/settings.js";
 import { resolveStatefulLimits } from "../src/stateful-limits.js";
 
@@ -32,6 +40,57 @@ function withAgentDir(run: (directory: string) => void): void {
 		rmSync(directory, { recursive: true, force: true });
 	}
 }
+
+test("stateful RPC and automatic transports are opt-in and preserve unknown settings", () => {
+	withAgentDir((directory) => {
+		assert.deepEqual(normalizeSubagentSettings({ stateful: { transport: "rpc" } }), {
+			stateful: { transport: "rpc" },
+		});
+		assert.deepEqual(normalizeSubagentSettings({ stateful: { transport: "auto" } }), {
+			stateful: { transport: "auto" },
+		});
+		assert.equal(inspectStatefulTransportSettings().value, "subprocess");
+		writeFileSync(
+			path.join(directory, "pi-subagents.json"),
+			'{"future":{"kept":true},"stateful":{"completionDelivery":"auto-resume"}}\n',
+		);
+		updateStatefulTransportSetting("rpc");
+		assert.deepEqual(JSON.parse(readFileSync(path.join(directory, "pi-subagents.json"), "utf8")), {
+			future: { kept: true },
+			stateful: { completionDelivery: "auto-resume", transport: "rpc" },
+		});
+		assert.deepEqual(inspectStatefulTransportSettings(), {
+			path: path.join(directory, "pi-subagents.json"),
+			value: "rpc",
+			source: "user settings",
+		});
+	});
+});
+
+test("execution profiles patch only thinking defaults and keep other agent fields", () => {
+	withAgentDir((directory) => {
+		writeFileSync(
+			path.join(directory, "pi-subagents.json"),
+			'{"agents":{"scout":{"model":"provider/model","tools":["read"]}},"future":true}\n',
+		);
+		applyExecutionProfile("balanced");
+		assert.equal(inspectExecutionProfile(), "balanced");
+		assert.match(executionProfilePreview("deep").join("\n"), /reviewer: high/);
+		const saved = JSON.parse(readFileSync(path.join(directory, "pi-subagents.json"), "utf8"));
+		assert.equal(saved.future, true);
+		assert.equal(saved.agents.scout.model, "provider/model");
+		assert.deepEqual(saved.agents.scout.tools, ["read"]);
+		assert.equal(saved.agents.scout.thinkingLevel, "low");
+		updateAgentSettingsPatch({
+			scout: { model: undefined, thinkingLevel: "high", timeoutMs: 1234 },
+		});
+		const updated = readSubagentSettings();
+		assert.equal(updated?.agents?.scout?.model, undefined);
+		assert.equal(updated?.agents?.scout?.thinkingLevel, "high");
+		assert.equal(updated?.agents?.scout?.timeoutMs, 1234);
+		assert.equal(inspectExecutionProfile(), "custom");
+	});
+});
 
 test("consult resources normalize strictly and default without creating settings", () => {
 	withAgentDir((directory) => {

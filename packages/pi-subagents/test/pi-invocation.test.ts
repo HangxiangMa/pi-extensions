@@ -64,7 +64,7 @@ test("Pi invocation ignores an existing non-Pi host and selects the loaded core 
 
 		assert.deepEqual(resolvePiInvocation(["--mode", "json"], runtime), {
 			command: process.execPath,
-			args: [cliPath, "--mode", "json"],
+			args: [realpathSync(cliPath), "--mode", "json"],
 		});
 	});
 });
@@ -177,7 +177,7 @@ test("Pi invocation treats a Node executable named pi as a script runtime", () =
 				packageDir: root,
 				runtimeKind: "node",
 			}),
-			{ command: executable, args: [cliPath, "--mode", "json"] },
+			{ command: executable, args: [realpathSync(cliPath), "--mode", "json"] },
 		);
 	});
 });

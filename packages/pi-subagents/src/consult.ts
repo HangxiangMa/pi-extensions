@@ -61,7 +61,14 @@ export const SubagentConsultParams = Type.Object(
 		agentScope: Type.Optional(ConsultScopeSchema),
 		confirmProjectAgents: Type.Optional(Type.Boolean({ default: true })),
 		cwd: Type.Optional(Type.String({ minLength: 1 })),
-		timeoutMs: Type.Optional(Type.Number({ minimum: 1, maximum: MAX_SUBAGENT_TIMEOUT_MS })),
+		timeoutMs: Type.Optional(
+			Type.Number({
+				minimum: 1,
+				maximum: MAX_SUBAGENT_TIMEOUT_MS,
+				description:
+					"Work deadline selected for the consultation difficulty. On expiry, Pi aborts the work and makes one separately bounded summary attempt.",
+			}),
+		),
 		thinkingLevel: Type.Optional(ConsultThinkingSchema),
 	},
 	{ additionalProperties: false },
@@ -191,6 +198,7 @@ export function registerSubagentConsult(
 		promptSnippet: "Consult one constrained read-only subagent and wait for its answer",
 		promptGuidelines: [
 			"Use subagent_consult for bounded reconnaissance, planning, or review whose result is required in the current turn.",
+			"Set subagent_consult timeoutMs to the shortest realistic work deadline for the task difficulty; split oversized consultations instead of extending the deadline merely to compensate for broad scope.",
 			"Implementation-shaped tasks remain read-only and can return only analysis or instructions.",
 		],
 		parameters: SubagentConsultParams,

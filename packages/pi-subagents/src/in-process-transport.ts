@@ -11,10 +11,17 @@ import { type AgentConfig, discoverAgents, type SubagentThinkingLevel } from "./
 import { redactPrivateText } from "./context.js";
 import { resolveDefaultSubagentTimeoutMs } from "./execution.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_OUTPUT_BYTES, truncateUtf8 } from "./limits.js";
-import { assertPiPromptSourcesAreReadableFiles } from "./prompt-source-safety.js";
+import { resolvePiPromptResources } from "./prompt-resources.js";
 import type { AgentTurn, ManagedAgent, TurnOutcome } from "./registry.js";
+import { appendResultInstruction } from "./result-contract.js";
+import { safeTerminalLine } from "./safe-text.js";
 import { readSubagentSettings } from "./settings.js";
+import {
+	buildTimeoutFinalizationPrompt,
+	resolveTimeoutFinalizationMs,
+} from "./timeout-finalization.js";
 import type { SubagentTransport } from "./transport.js";
+import type { TransportProgressCallback, TransportTelemetry } from "./transport-types.js";
 
 const BUILT_IN_TOOL_NAMES = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
 const DEFAULT_ABORT_GRACE_MS = 5_000;
@@ -57,6 +64,9 @@ export interface ParentRuntimeSnapshot {
 export interface ChildSession {
 	readonly sessionId: string;
 	readonly messages: readonly unknown[];
+	readonly provider?: string;
+	readonly model?: string;
+	readonly thinkingLevel?: SubagentThinkingLevel;
 	prompt(text: string): Promise<void>;
 	subscribe(listener: (event: unknown) => void): () => void;
 	abort(): Promise<void>;
@@ -83,6 +93,7 @@ export interface InProcessTransportOptions {
 	discoverAgent?: (agent: ManagedAgent) => AgentConfig | undefined;
 	defaultTimeoutMs?: number;
 	abortGraceMs?: number;
+	timeoutFinalizationMs?: number;
 }
 
 interface ChildSessionRecord {
@@ -118,37 +129,88 @@ export class InProcessTransport implements SubagentTransport {
 		this.abortGraceMs = options.abortGraceMs ?? DEFAULT_ABORT_GRACE_MS;
 	}
 
-	async runTurn(agent: ManagedAgent, task: string, signal: AbortSignal): Promise<TurnOutcome> {
-		if (signal.aborted) return interruptedOutcome("");
+	async runTurn(
+		agent: ManagedAgent,
+		task: string,
+		signal: AbortSignal,
+		onProgress?: TransportProgressCallback,
+	): Promise<TurnOutcome> {
+		const startedAt = Date.now();
+		let telemetry: TransportTelemetry = {
+			transport: "in-process",
+			phase: "starting",
+			updatedAt: startedAt,
+			timing: { startedAt, transportStartedAt: startedAt },
+		};
+		const publish = (patch: Partial<TransportTelemetry>) => {
+			telemetry = {
+				...telemetry,
+				...patch,
+				timing: { ...telemetry.timing, ...patch.timing },
+				updatedAt: Date.now(),
+			};
+			onProgress?.({ ...telemetry, timing: { ...telemetry.timing } });
+		};
+		publish({});
+		if (signal.aborted) {
+			publish({ phase: "interrupted", failurePhase: "starting" });
+			return { ...interruptedOutcome(""), telemetry };
+		}
 		const agentConfig = this.discoverAgent(agent);
 		if (!agentConfig) {
-			return { output: "", exitCode: 1, error: `Unknown subagent: ${agent.agent}` };
+			publish({ phase: "failed", failurePhase: "starting" });
+			return {
+				output: "",
+				exitCode: 1,
+				error: `Unknown subagent: ${agent.agent}`,
+				telemetry,
+			};
 		}
 		let tools: string[] | undefined;
 		try {
 			tools = validateInProcessTools(agentConfig.tools);
 		} catch (error) {
-			return { output: "", exitCode: 1, error: errorMessage(error) };
+			publish({ phase: "failed", failurePhase: "starting" });
+			return { output: "", exitCode: 1, error: errorMessage(error), telemetry };
 		}
 		let record: ChildSessionRecord;
 		try {
 			record = await this.getOrCreate(agent, agentConfig, tools);
 		} catch (error) {
-			return { output: "", exitCode: 1, error: errorMessage(error) };
+			publish({ phase: "failed", failurePhase: "starting" });
+			return { output: "", exitCode: 1, error: errorMessage(error), telemetry };
 		}
-		if (signal.aborted) return interruptedOutcome("");
+		publish({
+			phase: "ready",
+			provider: record.session.provider,
+			model: record.session.model,
+			thinkingLevel: record.session.thinkingLevel,
+			timing: { readyAt: Date.now() },
+		});
+		if (signal.aborted) {
+			await this.releaseById(agent.id).catch(() => undefined);
+			publish({ phase: "interrupted", failurePhase: "ready" });
+			return { ...interruptedOutcome(""), telemetry };
+		}
 		const prompt = buildCurrentTurnPrompt(agent, task);
-		const timeoutMs = agentConfig.timeoutMs ?? this.defaultTimeoutMs;
+		const timeoutMs =
+			agent.currentTimeoutMs ?? agent.timeoutMs ?? agentConfig.timeoutMs ?? this.defaultTimeoutMs;
 		const startingMessageCount = record.session.messages.length;
 		record.lastOutput = "";
+		publish({ phase: "running", timing: { promptAcceptedAt: Date.now() } });
 		const settlement = await this.runPrompt(record, prompt, signal, timeoutMs);
 		const final = latestAssistant(record.session.messages.slice(startingMessageCount));
 		const output = truncateUtf8(final.output || record.lastOutput, DEFAULT_MAX_OUTPUT_BYTES);
 		const truncated = output.truncated || agent.contextTruncated;
 		const policy = inProcessPolicy(agentConfig, agent);
+		const settledAt = Date.now();
 
 		switch (settlement.kind) {
 			case "completed":
+				publish({
+					phase: final.stopReason === "error" ? "failed" : "settled",
+					timing: { settledAt },
+				});
 				if (final.stopReason === "error") {
 					return {
 						output: output.text,
@@ -156,13 +218,16 @@ export class InProcessTransport implements SubagentTransport {
 						truncated,
 						error: final.error || "In-process subagent returned an error",
 						policy,
+						telemetry,
 					};
 				}
 				if (final.stopReason === "aborted") {
+					publish({ phase: "interrupted", failurePhase: "running" });
 					return {
 						...interruptedOutcome(output.text),
 						truncated,
 						policy,
+						telemetry,
 					};
 				}
 				return {
@@ -170,28 +235,72 @@ export class InProcessTransport implements SubagentTransport {
 					exitCode: 0,
 					truncated,
 					policy,
+					telemetry,
 				};
 			case "failed":
+				publish({ phase: "failed", failurePhase: "running", timing: { settledAt } });
 				return {
 					output: output.text,
 					exitCode: 1,
 					truncated,
 					error: errorMessage(settlement.error),
 					policy,
+					telemetry,
 				};
-			case "timeout":
+			case "timeout": {
+				let finalizedOutput = output.text;
+				let finalizationError: string | undefined;
+				if (!signal.aborted && this.sessions.get(agent.id) === record) {
+					publish({ phase: "finalizing", failurePhase: "running" });
+					const summaryStart = record.session.messages.length;
+					record.lastOutput = "";
+					const summarySettlement = await this.runPrompt(
+						record,
+						buildTimeoutFinalizationPrompt({
+							task,
+							partialOutput: output.text,
+							resultFormat: agent.resultFormat,
+						}),
+						signal,
+						resolveTimeoutFinalizationMs(timeoutMs, this.options.timeoutFinalizationMs),
+					);
+					const summary = latestAssistant(record.session.messages.slice(summaryStart));
+					const boundedSummary = truncateUtf8(
+						summary.output || record.lastOutput,
+						DEFAULT_MAX_OUTPUT_BYTES,
+					);
+					if (
+						summarySettlement.kind === "completed" &&
+						summary.stopReason !== "error" &&
+						boundedSummary.text.trim()
+					) {
+						finalizedOutput = boundedSummary.text;
+					} else {
+						finalizationError =
+							summarySettlement.kind === "failed"
+								? errorMessage(summarySettlement.error)
+								: `timeout summary ${summarySettlement.kind}`;
+					}
+				}
+				publish({ phase: "failed", failurePhase: "running", timing: { settledAt: Date.now() } });
 				return {
-					output: output.text,
+					output: finalizedOutput,
 					exitCode: 124,
 					truncated,
-					error: `In-process subagent timed out after ${timeoutMs}ms`,
+					error: [`In-process subagent timed out after ${timeoutMs}ms`, finalizationError]
+						.filter(Boolean)
+						.join("; "),
 					policy,
+					telemetry,
 				};
+			}
 			case "aborted":
+				publish({ phase: "interrupted", failurePhase: "running", timing: { settledAt } });
 				return {
 					...interruptedOutcome(output.text),
 					truncated,
 					policy,
+					telemetry,
 				};
 		}
 	}
@@ -290,10 +399,14 @@ export class InProcessTransport implements SubagentTransport {
 		signal: AbortSignal,
 		timeoutMs: number,
 	): Promise<PromptSettlement> {
+		if (signal.aborted) return { kind: "aborted" };
 		let timeout: NodeJS.Timeout | undefined;
 		let abortHandler: (() => void) | undefined;
-		const promptSettlement: Promise<PromptSettlement> = record.session
-			.prompt(prompt)
+		const promptSettlement: Promise<PromptSettlement> = Promise.resolve()
+			.then(() => {
+				if (signal.aborted) throw new Error("In-process subagent prompt aborted before start");
+				return record.session.prompt(prompt);
+			})
 			.then(() => ({ kind: "completed" as const }))
 			.catch((error: unknown) => ({ kind: "failed" as const, error }));
 		const timeoutSettlement = new Promise<PromptSettlement>((resolve) => {
@@ -302,13 +415,16 @@ export class InProcessTransport implements SubagentTransport {
 		const abortSettlement = new Promise<PromptSettlement>((resolve) => {
 			abortHandler = () => resolve({ kind: "aborted" });
 			signal.addEventListener("abort", abortHandler, { once: true });
+			if (signal.aborted) abortHandler();
 		});
 		const settlement = await Promise.race([promptSettlement, timeoutSettlement, abortSettlement]);
 		if (timeout) clearTimeout(timeout);
 		if (abortHandler) signal.removeEventListener("abort", abortHandler);
 		if (settlement.kind === "timeout" || settlement.kind === "aborted") {
-			await settleWithin(record.session.abort(), this.abortGraceMs);
-			const settledAfterAbort = await completesWithin(promptSettlement, this.abortGraceMs);
+			const [, settledAfterAbort] = await Promise.all([
+				settleWithin(record.session.abort(), this.abortGraceMs),
+				completesWithin(promptSettlement, this.abortGraceMs),
+			]);
 			if (!settledAfterAbort) this.discardRecord(record);
 		}
 		return settlement;
@@ -331,7 +447,7 @@ export function validateInProcessTools(tools: string[] | undefined): string[] | 
 	const unsupported = unique.filter((tool) => !BUILT_IN_TOOL_NAMES.has(tool));
 	if (unsupported.length > 0) {
 		throw new Error(
-			`In-process subagents cannot load extension/custom tools: ${unsupported.join(", ")}. Use stateful.transport "subprocess" for this agent.`,
+			`In-process subagents cannot load extension/custom tools: ${unsupported.map((tool) => safeTerminalLine(tool, 256)).join(", ")}. Use stateful.transport "subprocess" for this agent.`,
 		);
 	}
 	return unique;
@@ -391,6 +507,15 @@ export async function createSdkChildSession(
 		},
 		get messages() {
 			return session.messages;
+		},
+		get provider() {
+			return session.model?.provider;
+		},
+		get model() {
+			return session.model?.id;
+		},
+		get thinkingLevel() {
+			return session.thinkingLevel;
 		},
 		prompt: (text) => session.prompt(text),
 		subscribe: (listener) => session.subscribe((event) => listener(event)),
@@ -491,7 +616,7 @@ async function prepareInProcessServices(
 	agentSystemPrompt: string,
 	projectTrusted: boolean,
 ): Promise<{ services: AgentSessionServices; support: CoreSessionSupport }> {
-	assertPiPromptSourcesAreReadableFiles(cwd, agentDir, projectTrusted, ["SYSTEM.md"]);
+	const promptResources = await resolvePiPromptResources(cwd, projectTrusted, agentDir);
 	const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
 	const support = await loadCoreSessionSupport();
 	if (!support) throw unsupportedInProcessCoreError();
@@ -501,7 +626,10 @@ async function prepareInProcessServices(
 		settingsManager,
 		resourceLoaderOptions: {
 			noExtensions: true,
-			appendSystemPrompt: agentSystemPrompt.trim() ? [agentSystemPrompt] : [],
+			appendSystemPrompt: [
+				...promptResources.appendSystemPromptPaths,
+				...(agentSystemPrompt.trim() ? [agentSystemPrompt] : []),
+			],
 		},
 	});
 	return { services, support };
@@ -556,7 +684,7 @@ export function seedChildSessionManager(
 	}
 }
 
-function buildCurrentTurnPrompt(agent: ManagedAgent, task: string): string {
+export function buildCurrentTurnPrompt(agent: ManagedAgent, task: string): string {
 	const ids = new Set(agent.currentMailboxMessageIds ?? []);
 	const messages = agent.mailbox
 		.filter((message) => ids.has(message.id))
@@ -564,9 +692,12 @@ function buildCurrentTurnPrompt(agent: ManagedAgent, task: string): string {
 		.map((message) => `From ${message.senderId}: ${redactPrivateText(message.content)}`)
 		.join("\n");
 	return truncateUtf8(
-		messages
-			? `${redactPrivateText(task)}\n\nMailbox messages:\n${messages}`
-			: redactPrivateText(task),
+		appendResultInstruction(
+			messages
+				? `${redactPrivateText(task)}\n\nMailbox messages:\n${messages}`
+				: redactPrivateText(task),
+			agent.resultFormat,
+		),
 		DEFAULT_MAX_CONTEXT_BYTES,
 	).text;
 }

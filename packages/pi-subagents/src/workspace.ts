@@ -19,10 +19,11 @@ export class WorkspaceManager {
 
 	async create(ownerId: string, cwd: string): Promise<IsolatedWorkspace> {
 		if (this.owned.has(ownerId)) throw new Error(`Workspace owner already exists: ${ownerId}`);
-		const resolvedCwd = path.resolve(cwd);
-		const repositoryRoot = (
+		const resolvedCwd = await fs.promises.realpath(path.resolve(cwd));
+		const reportedRepositoryRoot = (
 			await execFileAsync("git", ["-C", resolvedCwd, "rev-parse", "--show-toplevel"])
 		).stdout.trim();
+		const repositoryRoot = await fs.promises.realpath(reportedRepositoryRoot);
 		const relativeCwd = path.relative(repositoryRoot, resolvedCwd);
 		if (relativeCwd.startsWith("..") || path.isAbsolute(relativeCwd)) {
 			throw new Error("Subagent cwd is outside the Git repository");

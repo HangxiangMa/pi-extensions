@@ -19,13 +19,38 @@ export async function disposeStatefulRuntime(
 	return errors;
 }
 
+export async function waitForOwnedSpawn<T>(
+	promise: Promise<T>,
+	signal: AbortSignal | undefined,
+): Promise<T> {
+	if (!signal) return promise;
+	if (signal.aborted) throw ownedSpawnAbortError();
+	let abortHandler: (() => void) | undefined;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<T>((_resolve, reject) => {
+				abortHandler = () => reject(ownedSpawnAbortError());
+				signal.addEventListener("abort", abortHandler, { once: true });
+				if (signal.aborted) abortHandler();
+			}),
+		]);
+	} finally {
+		if (abortHandler) signal.removeEventListener("abort", abortHandler);
+	}
+}
+
 export function assertCurrentSpawn(
 	signal: AbortSignal | undefined,
 	generation: number,
 	currentGeneration: number,
 ): void {
 	if (!signal?.aborted && generation === currentGeneration) return;
+	throw ownedSpawnAbortError();
+}
+
+function ownedSpawnAbortError(): Error {
 	const error = new Error("Subagent spawn owner was replaced or aborted");
 	error.name = "AbortError";
-	throw error;
+	return error;
 }

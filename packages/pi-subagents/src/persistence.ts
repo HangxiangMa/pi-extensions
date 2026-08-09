@@ -5,7 +5,9 @@ import { getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-ag
 import { projectAgentRecords } from "./agent-projection.js";
 import { isThinkingLevel } from "./agents.js";
 import { redactPrivateText } from "./context.js";
+import { MAX_SUBAGENT_TIMEOUT_MS } from "./limits.js";
 import type { ManagedAgent } from "./registry.js";
+import { SUBAGENT_RESULT_FORMATS } from "./result-contract.js";
 import { resolveStatefulLimits } from "./stateful-limits.js";
 
 const STATE_VERSION = 2;
@@ -118,7 +120,10 @@ function sanitizeAgent(agent: ManagedAgent): ManagedAgent {
 		})),
 		state: "idle",
 		currentTask: undefined,
+		currentTimeoutMs: undefined,
 		currentMailboxMessageIds: undefined,
+		telemetry: undefined,
+		structuredResult: undefined,
 		context: agent.context ? redactPrivateText(agent.context) : undefined,
 		error: agent.error ? redactPrivateText(agent.error) : undefined,
 		history: agent.history.map((turn) => ({
@@ -148,6 +153,16 @@ function isStoredState(value: unknown): value is StoredState {
 			Number.isFinite(record.updatedAt) &&
 			(record.parentId === undefined || typeof record.parentId === "string") &&
 			(record.thinkingLevel === undefined || isThinkingLevel(record.thinkingLevel)) &&
+			(record.timeoutMs === undefined || isTurnTimeout(record.timeoutMs)) &&
+			(record.contextTurns === undefined || isNonNegativeInteger(record.contextTurns)) &&
+			(record.contextBytes === undefined || isNonNegativeInteger(record.contextBytes)) &&
+			(record.spawnIdempotencyKey === undefined ||
+				(typeof record.spawnIdempotencyKey === "string" &&
+					record.spawnIdempotencyKey.length > 0 &&
+					record.spawnIdempotencyKey.length <= 256)) &&
+			(record.spawnRequestHash === undefined || isSha256(record.spawnRequestHash)) &&
+			(record.resultFormat === undefined ||
+				SUBAGENT_RESULT_FORMATS.includes(record.resultFormat)) &&
 			(record.workspaceMode === undefined || record.workspaceMode === "worktree") &&
 			(record.target === undefined || isTargetPolicyAudit(record.target)) &&
 			(record.children === undefined ||
@@ -159,6 +174,23 @@ function isStoredState(value: unknown): value is StoredState {
 				(Array.isArray(record.mailbox) && record.mailbox.every(isMailboxMessage)))
 		);
 	});
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isTurnTimeout(value: unknown): value is number {
+	return (
+		typeof value === "number" &&
+		Number.isSafeInteger(value) &&
+		value >= 1 &&
+		value <= MAX_SUBAGENT_TIMEOUT_MS
+	);
+}
+
+function isSha256(value: unknown): value is string {
+	return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
 
 function isTargetPolicyAudit(value: unknown): boolean {

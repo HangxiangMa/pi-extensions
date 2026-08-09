@@ -18,6 +18,11 @@ import {
 } from "./limits.js";
 import { resolvePiInvocation } from "./pi-invocation.js";
 import { JsonLineDecoder } from "./protocol.js";
+import type { SubagentResultFormat } from "./result-contract.js";
+import {
+	buildTimeoutFinalizationPrompt,
+	resolveTimeoutFinalizationMs,
+} from "./timeout-finalization.js";
 
 export const KILL_GRACE_MS = 5000;
 
@@ -58,6 +63,24 @@ function addUsageValue(current: number, addition: number): number {
 	return Math.min(MAX_USAGE_VALUE, current + addition);
 }
 
+function mergeUsageStats(target: UsageStats, addition: UsageStats): void {
+	for (const key of ["input", "output", "cacheRead", "cacheWrite", "cost", "turns"] as const) {
+		target[key] = addUsageValue(target[key], addition[key]);
+	}
+	for (const key of [
+		"costInput",
+		"costOutput",
+		"costCacheRead",
+		"costCacheWrite",
+		"totalTokens",
+	] as const) {
+		if (addition[key] !== undefined) {
+			target[key] = addUsageValue(target[key] ?? 0, addition[key]);
+		}
+	}
+	target.contextTokens = addition.contextTokens || target.contextTokens;
+}
+
 export interface SingleResult {
 	agent: string;
 	agentSource: AgentSource | "unknown";
@@ -76,6 +99,9 @@ export interface SingleResult {
 	errorMessage?: string;
 	step?: number;
 	finalOutput?: string;
+	partialOutput?: string;
+	timeoutSummary?: string;
+	timeoutSummaryError?: string;
 	timedOut?: boolean;
 	timeoutMs?: number;
 	aborted?: boolean;
@@ -131,9 +157,19 @@ export function isResultError(result: SingleResult): boolean {
 export function formatResultFailure(result: SingleResult): string {
 	const error = result.errorMessage || result.stderr.trim();
 	const output = getResultFinalOutput(result);
-	const combined =
-		error && output ? `${error}\n\nPartial output:\n${output}` : error || output || "(no output)";
-	return truncateUtf8(combined, DEFAULT_MAX_CONTEXT_BYTES).text;
+	const sections = [error];
+	if (result.timeoutSummary) sections.push(`Timed-out work summary:\n${result.timeoutSummary}`);
+	else if (output) sections.push(`Partial output:\n${output}`);
+	if (result.partialOutput && result.partialOutput !== output) {
+		sections.push(`Partial output before finalization:\n${result.partialOutput}`);
+	}
+	if (result.timeoutSummaryError) {
+		sections.push(`Summary finalization failed: ${result.timeoutSummaryError}`);
+	}
+	return truncateUtf8(
+		sections.filter(Boolean).join("\n\n") || "(no output)",
+		DEFAULT_MAX_CONTEXT_BYTES,
+	).text;
 }
 
 function boundMessageText(
@@ -405,6 +441,12 @@ export interface ChildLaunchPolicy {
 	projectTrust?: boolean;
 	baseSystemPrompt?: string;
 	appendSystemPromptPaths?: string[];
+	/** Internal timeout recovery control; omitted means enabled. */
+	finalizeOnTimeout?: boolean;
+	/** Internal hard deadline for the summary attempt. */
+	timeoutFinalizationMs?: number;
+	/** Optional stateful result contract retained during timeout finalization. */
+	timeoutResultFormat?: SubagentResultFormat;
 }
 
 export async function runSingleAgent(
@@ -584,11 +626,13 @@ export async function runSingleAgent(
 			let settled = false;
 			let cleanupTermination: (() => void) | undefined;
 			let timeout: NodeJS.Timeout | undefined;
+			let terminationDeadline: NodeJS.Timeout | undefined;
 			let abortHandler: (() => void) | undefined;
 			const finish = (code: number) => {
 				if (settled) return;
 				settled = true;
 				if (timeout) clearTimeout(timeout);
+				if (terminationDeadline) clearTimeout(terminationDeadline);
 				cleanupTermination?.();
 				if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
 				resolve(code);
@@ -732,6 +776,17 @@ export async function runSingleAgent(
 					currentResult.truncated = true;
 				},
 			});
+			const beginTermination = (exitCode: number) => {
+				if (cleanupTermination || settled) return;
+				cleanupTermination = terminateProcess(proc);
+				terminationDeadline = setTimeout(() => {
+					decoder.finish();
+					proc.stdin?.destroy();
+					proc.stdout?.destroy();
+					proc.stderr?.destroy();
+					finish(exitCode);
+				}, KILL_GRACE_MS + 1_000);
+			};
 
 			timeout = setTimeout(() => {
 				timedOut = true;
@@ -746,7 +801,7 @@ export async function runSingleAgent(
 				currentResult.stderr = bounded.text;
 				currentResult.truncated ||= bounded.truncated;
 				emitUpdate();
-				cleanupTermination = terminateProcess(proc);
+				beginTermination(124);
 			}, timeoutMs);
 			timeout.unref();
 
@@ -768,7 +823,7 @@ export async function runSingleAgent(
 				finish(timedOut ? 124 : wasAborted ? 130 : (code ?? 0));
 			});
 			proc.on("error", (error) => {
-				currentResult.launchFailed = true;
+				currentResult.launchFailed = currentResult.processStarted ? undefined : true;
 				const message = setErrorMessage(error.message);
 				const bounded = appendBounded(
 					currentResult.stderr,
@@ -777,7 +832,8 @@ export async function runSingleAgent(
 				);
 				currentResult.stderr = bounded.text;
 				currentResult.truncated ||= bounded.truncated;
-				finish(1);
+				if (currentResult.processStarted) beginTermination(1);
+				else finish(1);
 			});
 
 			if (signal) {
@@ -787,7 +843,7 @@ export async function runSingleAgent(
 					currentResult.aborted = true;
 					currentResult.stopReason = "aborted";
 					setErrorMessage("Subagent was aborted");
-					cleanupTermination = terminateProcess(proc);
+					beginTermination(130);
 				};
 				if (signal.aborted) abortHandler();
 				else signal.addEventListener("abort", abortHandler, { once: true });
@@ -798,6 +854,52 @@ export async function runSingleAgent(
 		const final = truncateUtf8(selectedAssistantOutput(), DEFAULT_MAX_OUTPUT_BYTES);
 		currentResult.finalOutput = final.text;
 		currentResult.truncated ||= final.truncated;
+		if (timedOut && launchPolicy?.finalizeOnTimeout !== false && !signal?.aborted) {
+			currentResult.partialOutput = currentResult.finalOutput || undefined;
+			const finalizationMs = resolveTimeoutFinalizationMs(
+				timeoutMs,
+				launchPolicy?.timeoutFinalizationMs,
+			);
+			const summary = await runSingleAgent(
+				defaultCwd,
+				agents,
+				agentName,
+				buildTimeoutFinalizationPrompt({
+					task,
+					partialOutput: currentResult.partialOutput,
+					recentActivity: currentResult.recentActivity,
+					resultFormat: launchPolicy?.timeoutResultFormat,
+				}),
+				cwd,
+				step,
+				signal,
+				thinkingLevel,
+				finalizationMs,
+				undefined,
+				makeDetails,
+				invocationOverride,
+				{
+					...launchPolicy,
+					tools: [],
+					disableExtensions: true,
+					disableSkills: true,
+					disablePromptTemplates: true,
+					disableContextFiles: true,
+					appendSystemPromptPaths: undefined,
+					finalizeOnTimeout: false,
+				},
+			);
+			mergeUsageStats(currentResult.usage, summary.usage);
+			const summaryOutput = getResultFinalOutput(summary).trim();
+			if (summary.exitCode === 0 && summaryOutput) {
+				currentResult.timeoutSummary = summaryOutput;
+				currentResult.finalOutput = summaryOutput;
+			} else {
+				currentResult.timeoutSummaryError =
+					summary.errorMessage || summary.stderr.trim() || "Summary produced no final text";
+			}
+			currentResult.truncated ||= summary.truncated;
+		}
 		if (
 			currentResult.exitCode === 0 &&
 			currentResult.stopReason !== "error" &&

@@ -7,6 +7,7 @@ import fs, {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	symlinkSync,
 	unlinkSync,
@@ -2868,7 +2869,7 @@ test("blocking delegation preflights every target and passes explicit saved trus
 		);
 		assert.match(accepted.content?.[0]?.text ?? "", /--approve/);
 		assert.equal(accepted.details?.results[0]?.target?.trust.kind, "saved-trusted");
-		assert.equal(accepted.details?.results[0]?.target?.cwd, external);
+		assert.equal(accepted.details?.results[0]?.target?.cwd, realpathSync(external));
 
 		rmSync(marker, { force: true });
 		writeFileSync(

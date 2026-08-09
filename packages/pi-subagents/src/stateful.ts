@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
-import {
-	defineTool,
-	type ExtensionAPI,
-	type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
 	type AgentScope,
@@ -13,32 +9,40 @@ import {
 	isThinkingLevel,
 	type SubagentRuntimeSettings,
 	type SubagentSettings,
+	type SubagentTransportKind,
 	THINKING_LEVELS,
 } from "./agents.js";
+import { CompletionDeliveryBroker } from "./completion-delivery.js";
 import { buildContextSnapshot, type ContextMode, redactPrivateText } from "./context.js";
+import { createStatefulTransport } from "./create-stateful-transport.js";
 import {
 	assertDelegationTargetAllowed,
 	resolveSubagentTarget,
 	targetPolicyAudit,
 } from "./cwd-policy.js";
 import { assertSubagentDepthAllowed } from "./execution.js";
-import {
-	type ChildSessionFactory,
-	InProcessTransport,
-	type ParentRuntimeSnapshot,
-} from "./in-process-transport.js";
-import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
+import type { ChildSessionFactory, ParentRuntimeSnapshot } from "./in-process-transport.js";
+import { DEFAULT_MAX_CONTEXT_BYTES, MAX_SUBAGENT_TIMEOUT_MS, truncateUtf8 } from "./limits.js";
 import { AgentPersistence } from "./persistence.js";
 import {
 	AgentRegistry,
 	type AgentRunInspectionDetail,
 	type AgentRunInspectionSummary,
-	type AgentTurnCompletion,
 	type ManagedAgent,
 } from "./registry.js";
+import { SUBAGENT_RESULT_FORMATS, type SubagentResultFormat } from "./result-contract.js";
 import { DEFAULT_DELEGATION_CWD_POLICY, readSubagentSettings } from "./settings.js";
+import {
+	assertSpawnIdempotencyKey,
+	hashSpawnRequest,
+	MAX_SPAWN_IDEMPOTENCY_KEY_LENGTH,
+} from "./spawn-idempotency.js";
 import { createSpawnPromptGuidelines } from "./stateful-guidance.js";
-import { assertCurrentSpawn, disposeStatefulRuntime } from "./stateful-lifecycle.js";
+import {
+	assertCurrentSpawn,
+	disposeStatefulRuntime,
+	waitForOwnedSpawn,
+} from "./stateful-lifecycle.js";
 import { resolveStatefulLimits, type StatefulLimits } from "./stateful-limits.js";
 import { createStatefulToolRenderer } from "./stateful-render.js";
 import {
@@ -59,7 +63,6 @@ import {
 	validateMailboxParams,
 	validateManageParams,
 } from "./stateful-tool-params.js";
-import { SubprocessTransport } from "./subprocess-transport.js";
 import { WorkspaceManager } from "./workspace.js";
 
 const ContextModeSchema = Type.Union([
@@ -75,10 +78,13 @@ const StatefulThinkingLevelSchema = StringEnum(THINKING_LEVELS, {
 	description:
 		"Optional requested Pi thinking level selected for this task difficulty; retained for every turn of the spawned agent.",
 });
+const StatefulTimeoutSchema = Type.Integer({
+	minimum: 1,
+	maximum: MAX_SUBAGENT_TIMEOUT_MS,
+	description:
+		"Work deadline in milliseconds selected for the task difficulty. On expiry, Pi aborts the work and makes one separately bounded summary attempt. Retained as the agent default.",
+});
 const MAX_TOOL_MESSAGE_BYTES = 2 * 1024;
-const MAX_COMPLETION_ERROR_BYTES = 512;
-const MAX_COMPLETIONS_PER_MESSAGE = 16;
-const COMPLETION_BATCH_DELAY_MS = 10;
 
 export interface StatefulSubagentDependencies {
 	blockingEnabled?: boolean;
@@ -91,7 +97,7 @@ export interface StatefulSubagentDependencies {
 export interface StatefulSubagentRuntimeStatus {
 	enabled: boolean;
 	initialized: boolean;
-	transport: "subprocess" | "in-process";
+	transport: SubagentTransportKind;
 	completionDelivery: CompletionDelivery;
 	limits: StatefulLimits;
 	activeAgents: number;
@@ -138,6 +144,12 @@ export function registerStatefulSubagents(
 	const workspaceManager = dependencies.workspaceManager ?? new WorkspaceManager();
 	const isolatedAgents = new Map<string, string>();
 	const seenMessageIds = new Set<string>();
+	type PendingIdempotentSpawn = {
+		generation: number;
+		requestHash: string;
+		promise: Promise<ManagedAgent>;
+	};
+	const pendingIdempotentSpawns = new Map<string, PendingIdempotentSpawn>();
 	const parentRuntime: ParentRuntimeSnapshot = { model: undefined, thinkingLevel: "off" };
 	const getCurrentSettings = () =>
 		dependencies.getSettings ? dependencies.getSettings() : readSubagentSettings();
@@ -207,12 +219,6 @@ export function registerStatefulSubagents(
 		if (!registry) throw new Error("Stateful subagents are not initialized for this session");
 		return registry;
 	};
-	const requireAgent = (agentId: string) => {
-		const agent = requireRegistry().get(agentId);
-		if (!agent) throw new Error(`Unknown subagent: ${agentId}`);
-		return agent;
-	};
-
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++runtimeGeneration;
 		completionBroker?.close();
@@ -224,6 +230,7 @@ export function registerStatefulSubagents(
 		persistence = undefined;
 		isolatedAgents.clear();
 		seenMessageIds.clear();
+		pendingIdempotentSpawns.clear();
 		const initialize = async () => {
 			const cleanupErrors = await disposeStatefulRuntime(previousRegistry, workspaceManager);
 			if (generation !== runtimeGeneration) return;
@@ -245,28 +252,28 @@ export function registerStatefulSubagents(
 				retentionDays: sessionSettings.retentionDays,
 				maxStoredAgents: nextLimits.maxStoredAgents,
 			});
+			let nextRegistry: AgentRegistry;
 			const sessionBroker = new CompletionDeliveryBroker(pi, ctx, completionDelivery, {
 				onDeliveryError: (error) => {
 					if (!ctx.hasUI) return;
 					const reason = error instanceof Error ? error.message : String(error);
 					ctx.ui.notify(`Subagent completion delivery failed: ${reason}`, "warning");
 				},
+				onDelivered: (completions, deliveredAt) => {
+					if (generation !== runtimeGeneration) return;
+					for (const completion of completions) {
+						nextRegistry.markCompletionDelivered(completion.agent.id, deliveredAt);
+					}
+				},
 			});
-			const transport =
-				transportKind === "in-process"
-					? new InProcessTransport({
-							modelRegistry: ctx.modelRegistry,
-							getParentRuntime: () => ({ ...parentRuntime }),
-							createSession: dependencies.createInProcessSession,
-							discoverAgent: (agent) =>
-								discoverAgents(
-									agent.cwd,
-									agent.agentScope ?? "user",
-									getCurrentSettings(),
-								).agents.find((candidate) => candidate.name === agent.agent),
-						})
-					: new SubprocessTransport({ getSettings: getCurrentSettings });
-			const nextRegistry = new AgentRegistry(transport, {
+			const transport = createStatefulTransport({
+				kind: transportKind,
+				modelRegistry: ctx.modelRegistry,
+				getParentRuntime: () => ({ ...parentRuntime }),
+				getSettings: getCurrentSettings,
+				createInProcessSession: dependencies.createInProcessSession,
+			});
+			nextRegistry = new AgentRegistry(transport, {
 				maxAgents: nextLimits.maxAgents,
 				maxActiveTurns: nextLimits.maxActiveTurns,
 				maxDepth: nextLimits.maxDepth,
@@ -372,6 +379,7 @@ export function registerStatefulSubagents(
 		persistence = undefined;
 		isolatedAgents.clear();
 		seenMessageIds.clear();
+		pendingIdempotentSpawns.clear();
 		const shutdown = async () => {
 			const errors = await disposeStatefulRuntime(previousRegistry, workspaceManager);
 			if (errors.length > 0 && ctx.hasUI) {
@@ -384,7 +392,7 @@ export function registerStatefulSubagents(
 	});
 
 	const baseSpawnDescription = () =>
-		`Start an addressable background subagent with an optional thinking level chosen for the task difficulty, return immediately with an agentId, and receive its completion asynchronously. Detached capacity: ${runtimeLimits.maxAgents} retained agents, ${runtimeLimits.maxActiveTurns} active turns, ${runtimeLimits.maxChildrenPerAgent} direct children per agent, and depth ${runtimeLimits.maxDepth}. Working-directory target policy: ${dependencies.getSettings?.()?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY}. This controls launch targets and protected project resources, not filesystem access or sandboxing.`;
+		`Start an addressable background subagent with an optional thinking level and timeout chosen for the task difficulty, return immediately with an agentId, and receive its completion asynchronously. Detached capacity: ${runtimeLimits.maxAgents} retained agents, ${runtimeLimits.maxActiveTurns} active turns, ${runtimeLimits.maxChildrenPerAgent} direct children per agent, and depth ${runtimeLimits.maxDepth}. Working-directory target policy: ${dependencies.getSettings?.()?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY}. This controls launch targets and protected project resources, not filesystem access or sandboxing.`;
 	const spawnTool = defineTool({
 		name: "subagent_spawn",
 		label: "Spawn Subagent",
@@ -395,6 +403,7 @@ export function registerStatefulSubagents(
 			agent: Type.String({ minLength: 1 }),
 			task: Type.String({ minLength: 1, maxLength: DEFAULT_MAX_CONTEXT_BYTES }),
 			thinkingLevel: Type.Optional(StatefulThinkingLevelSchema),
+			timeoutMs: Type.Optional(StatefulTimeoutSchema),
 			cwd: Type.Optional(Type.String()),
 			agentScope: Type.Optional(ScopeSchema),
 			confirmProjectAgents: Type.Optional(Type.Boolean({ default: true })),
@@ -411,11 +420,25 @@ export function registerStatefulSubagents(
 					description: "Use the shared workspace or an opt-in disposable Git worktree.",
 				}),
 			),
+			idempotencyKey: Type.Optional(
+				Type.String({
+					minLength: 1,
+					maxLength: MAX_SPAWN_IDEMPOTENCY_KEY_LENGTH,
+					description: "Reuse the same retained agent for an exact accepted spawn retry.",
+				}),
+			),
+			resultFormat: Type.Optional(
+				StringEnum(SUBAGENT_RESULT_FORMATS, {
+					description: "Use text (default) or the opt-in structured-v1 completion contract.",
+				}),
+			),
 		}),
 		...createStatefulToolRenderer("spawn"),
 		async execute(_id, params, signal, _update, ctx) {
 			const scope = (params.agentScope ?? "user") as AgentScope;
+			const resultFormat = (params.resultFormat ?? "text") as SubagentResultFormat;
 			assertSubagentDepthAllowed();
+			assertSpawnIdempotencyKey(params.idempotencyKey);
 			const generation = runtimeGeneration;
 			const currentSettings = getCurrentSettings();
 			const target = resolveSubagentTarget({
@@ -428,22 +451,6 @@ export function registerStatefulSubagents(
 				currentSettings?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY,
 			);
 			const cwd = target.cwd;
-			await confirmProjectAgent(
-				params.agent,
-				scope,
-				params.confirmProjectAgents ?? true,
-				ctx,
-				cwd,
-				currentSettings,
-			);
-			assertCurrentSpawn(signal, generation, runtimeGeneration);
-			const ownedRegistry = requireRegistry();
-			const resolvedAgent = discoverAgents(cwd, scope, currentSettings).agents.find(
-				(agent) => agent.name === params.agent,
-			);
-			if (params.workspaceMode === "worktree" && resolvedAgent?.source === "project") {
-				throw new Error("Project-local subagent definitions cannot run in a detached worktree");
-			}
 			const mode = resolveSpawnContextMode(params.context, params.contextEntryIds);
 			const snapshot = buildContextSnapshot(
 				ctx.sessionManager.getBranch(),
@@ -451,59 +458,148 @@ export function registerStatefulSubagents(
 				DEFAULT_MAX_CONTEXT_BYTES,
 				params.contextEntryIds,
 			);
-			const requestedCwd = cwd;
-			if ((params.workspaceMode ?? "shared") === "shared" && !params.allowConcurrentWrites) {
-				assertNoSharedWriteConflict(
-					ownedRegistry,
+			if ((scope === "project" || scope === "both") && !ctx.isProjectTrusted()) {
+				throw new Error("Project-local subagent definitions require a trusted project");
+			}
+			const requestHash = hashSpawnRequest({
+				agent: params.agent,
+				task: params.task,
+				cwd,
+				agentScope: scope,
+				thinkingLevel: params.thinkingLevel,
+				timeoutMs: params.timeoutMs,
+				parentId: params.parentId,
+				context: snapshot.text || undefined,
+				contextSourceIds: snapshot.sourceIds,
+				workspaceMode: params.workspaceMode ?? "shared",
+				allowConcurrentWrites: params.allowConcurrentWrites ?? false,
+				resultFormat,
+			});
+			const ownedRegistry = requireRegistry();
+			const retained = ownedRegistry.findBySpawnIdempotencyKey(params.idempotencyKey, requestHash);
+			if (retained) return result(retained, `Reused ${retained.agent} as ${retained.id}.`);
+			const foundPending = params.idempotencyKey
+				? pendingIdempotentSpawns.get(params.idempotencyKey)
+				: undefined;
+			if (
+				params.idempotencyKey &&
+				foundPending &&
+				foundPending.generation !== generation &&
+				pendingIdempotentSpawns.get(params.idempotencyKey) === foundPending
+			) {
+				pendingIdempotentSpawns.delete(params.idempotencyKey);
+			}
+			const pending = foundPending?.generation === generation ? foundPending : undefined;
+			if (pending) {
+				if (pending.requestHash !== requestHash) {
+					throw new Error("The subagent_spawn idempotencyKey is pending with different parameters");
+				}
+				const agent = await waitForOwnedSpawn(pending.promise, signal);
+				assertCurrentSpawn(signal, generation, runtimeGeneration);
+				return result(agent, `Reused ${agent.agent} as ${agent.id}.`);
+			}
+			let resolvePending: ((agent: ManagedAgent) => void) | undefined;
+			let rejectPending: ((error: unknown) => void) | undefined;
+			let ownedPending: PendingIdempotentSpawn | undefined;
+			if (params.idempotencyKey) {
+				const promise = new Promise<ManagedAgent>((resolve, reject) => {
+					resolvePending = resolve;
+					rejectPending = reject;
+				});
+				void promise.catch(() => undefined);
+				ownedPending = { generation, requestHash, promise };
+				pendingIdempotentSpawns.set(params.idempotencyKey, ownedPending);
+			}
+			try {
+				await confirmProjectAgent(
 					params.agent,
-					requestedCwd,
 					scope,
+					params.confirmProjectAgents ?? true,
+					ctx,
+					cwd,
 					currentSettings,
 				);
-			}
-			const workspaceOwner = `pending-${randomUUID()}`;
-			const workspace =
-				params.workspaceMode === "worktree"
-					? await workspaceManager.create(workspaceOwner, requestedCwd)
-					: undefined;
-			try {
 				assertCurrentSpawn(signal, generation, runtimeGeneration);
-			} catch (error) {
-				if (workspace) await workspaceManager.cleanup(workspaceOwner);
-				throw error;
-			}
-			const targetSnapshot = targetPolicyAudit(target);
-			let agent: ManagedAgent | undefined;
-			try {
-				agent = await ownedRegistry.spawn({
-					agent: params.agent,
-					task: params.task,
-					cwd: workspace?.path ?? requestedCwd,
-					agentScope: scope,
-					thinkingLevel: params.thinkingLevel,
-					parentId: params.parentId,
-					context: snapshot.text || undefined,
-					contextSourceIds: snapshot.sourceIds,
-					contextTruncated: snapshot.truncated,
-					workspaceMode: workspace ? "worktree" : undefined,
-					target: targetSnapshot,
-				});
+				const resolvedAgent = discoverAgents(cwd, scope, currentSettings).agents.find(
+					(agent) => agent.name === params.agent,
+				);
+				if (params.workspaceMode === "worktree" && resolvedAgent?.source === "project") {
+					throw new Error("Project-local subagent definitions cannot run in a detached worktree");
+				}
+				const requestedCwd = cwd;
+				if ((params.workspaceMode ?? "shared") === "shared" && !params.allowConcurrentWrites) {
+					assertNoSharedWriteConflict(
+						ownedRegistry,
+						params.agent,
+						requestedCwd,
+						scope,
+						currentSettings,
+					);
+				}
+				const workspaceOwner = `pending-${randomUUID()}`;
+				const workspace =
+					params.workspaceMode === "worktree"
+						? await workspaceManager.create(workspaceOwner, requestedCwd)
+						: undefined;
+				try {
+					assertCurrentSpawn(signal, generation, runtimeGeneration);
+				} catch (error) {
+					if (workspace) await workspaceManager.cleanup(workspaceOwner);
+					throw error;
+				}
+				const targetSnapshot = targetPolicyAudit(target);
+				let agent: ManagedAgent | undefined;
+				try {
+					agent = await ownedRegistry.spawn({
+						agent: params.agent,
+						task: params.task,
+						cwd: workspace?.path ?? requestedCwd,
+						agentScope: scope,
+						thinkingLevel: params.thinkingLevel,
+						timeoutMs: params.timeoutMs,
+						parentId: params.parentId,
+						context: snapshot.text || undefined,
+						contextSourceIds: snapshot.sourceIds,
+						contextTruncated: snapshot.truncated,
+						contextTurns: snapshot.turns,
+						contextBytes: Buffer.byteLength(snapshot.text, "utf8"),
+						workspaceMode: workspace ? "worktree" : undefined,
+						spawnIdempotencyKey: params.idempotencyKey,
+						spawnRequestHash: params.idempotencyKey ? requestHash : undefined,
+						resultFormat: resultFormat === "text" ? undefined : resultFormat,
+						target: targetSnapshot,
+					});
+					assertCurrentSpawn(signal, generation, runtimeGeneration);
+				} catch (error) {
+					if (agent) await ownedRegistry.closeTree(agent.id).catch(() => undefined);
+					if (workspace) await workspaceManager.cleanup(workspaceOwner);
+					throw error;
+				}
+				if (!agent) throw new Error("Subagent spawn completed without a retained agent");
+				if (workspace && agent.cwd === workspace.path) isolatedAgents.set(agent.id, workspaceOwner);
+				else if (workspace) await workspaceManager.cleanup(workspaceOwner);
 				assertCurrentSpawn(signal, generation, runtimeGeneration);
+				resolvePending?.(agent);
+				const deliveryNote =
+					completionDelivery === "auto-resume"
+						? "If no useful local work remains, briefly tell the user what was launched and end the response; auto-resume will request synthesis after completion."
+						: "End the response without the result only when the current response does not depend on it; next-turn delivery will not wake an idle root.";
+				return result(
+					agent,
+					`Spawned ${agent.agent} as ${agent.id}. Do useful non-overlapping work immediately. ${deliveryNote} Do not poll for progress.`,
+				);
 			} catch (error) {
-				if (agent) await ownedRegistry.closeTree(agent.id).catch(() => undefined);
-				if (workspace) await workspaceManager.cleanup(workspaceOwner);
+				rejectPending?.(error);
 				throw error;
+			} finally {
+				if (
+					params.idempotencyKey &&
+					ownedPending &&
+					pendingIdempotentSpawns.get(params.idempotencyKey) === ownedPending
+				) {
+					pendingIdempotentSpawns.delete(params.idempotencyKey);
+				}
 			}
-			if (!agent) throw new Error("Subagent spawn completed without a retained agent");
-			if (workspace) isolatedAgents.set(agent.id, workspaceOwner);
-			const deliveryNote =
-				completionDelivery === "auto-resume"
-					? "If no useful local work remains, briefly tell the user what was launched and end the response; auto-resume will request synthesis after completion."
-					: "End the response without the result only when the current response does not depend on it; next-turn delivery will not wake an idle root.";
-			return result(
-				agent,
-				`Spawned ${agent.agent} as ${agent.id}. Do useful non-overlapping work immediately. ${deliveryNote} Do not poll for progress.`,
-			);
 		},
 	});
 	refreshSpawnToolRegistration = () => {
@@ -522,6 +618,14 @@ export function registerStatefulSubagents(
 		parameters: Type.Object({
 			agentId: Type.String(),
 			task: Type.String({ minLength: 1, maxLength: DEFAULT_MAX_CONTEXT_BYTES }),
+			timeoutMs: Type.Optional(
+				Type.Integer({
+					minimum: 1,
+					maximum: MAX_SUBAGENT_TIMEOUT_MS,
+					description:
+						"Optional work deadline for this follow-up turn. On expiry, Pi aborts the work and makes one separately bounded summary attempt.",
+				}),
+			),
 			allowConcurrentWrites: Type.Optional(
 				Type.Boolean({ description: "Override the shared-workspace write conflict guard." }),
 			),
@@ -549,7 +653,9 @@ export function registerStatefulSubagents(
 				isolatedAgents.has(existing.id),
 				currentSettings,
 			);
-			const agent = await ownedRegistry.followUp(params.agentId, params.task);
+			const agent = await ownedRegistry.followUp(params.agentId, params.task, {
+				timeoutMs: params.timeoutMs,
+			});
 			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			return result(agent, `Started follow-up for ${agent.id}.`);
 		},
@@ -563,10 +669,17 @@ export function registerStatefulSubagents(
 		promptSnippet: "List or control retained detached subagents",
 		parameters: ManageParamsSchema,
 		...createStatefulToolRenderer("manage"),
-		async execute(_id, params): Promise<StatefulActionToolResult> {
+		async execute(_id, params, signal): Promise<StatefulActionToolResult> {
+			const generation = runtimeGeneration;
+			const ownedRegistry = requireRegistry();
+			const ownedAgent = (agentId: string): ManagedAgent => {
+				const value = ownedRegistry.get(agentId);
+				if (!value) throw new Error(`Unknown subagent: ${agentId}`);
+				return value;
+			};
 			const operation = validateManageParams(params);
 			if (operation.action === "list") {
-				const agents = requireRegistry().list(operation.includeClosed);
+				const agents = ownedRegistry.list(operation.includeClosed);
 				return {
 					content: [
 						{
@@ -580,46 +693,51 @@ export function registerStatefulSubagents(
 			const agentId = operation.agentId;
 			if (operation.action === "interrupt") {
 				if (operation.subtree) {
-					const agents = await requireRegistry().interruptTree(agentId);
+					const agents = await ownedRegistry.interruptTree(agentId);
+					assertCurrentSpawn(signal, generation, runtimeGeneration);
 					return {
 						content: [{ type: "text", text: `Interrupted ${agents.length} active agent(s).` }],
 						details: {
-							agent: summarizeAgent(requireAgent(agentId)),
+							agent: summarizeAgent(ownedAgent(agentId)),
 							agents: agents.map(summarizeAgent),
 						},
 					};
 				}
-				const agent = await requireRegistry().interrupt(agentId);
+				const agent = await ownedRegistry.interrupt(agentId);
+				assertCurrentSpawn(signal, generation, runtimeGeneration);
 				return result(agent, `Interrupted ${agent.id}; it remains reusable.`);
 			}
-			const existing = requireRegistry().get(agentId);
+			const existing = ownedRegistry.get(agentId);
 			if (existing?.state === "closed" && !operation.subtree) {
 				const pendingOwner = isolatedAgents.get(existing.id);
 				if (pendingOwner) await workspaceManager.cleanup(pendingOwner);
+				assertCurrentSpawn(signal, generation, runtimeGeneration);
 				isolatedAgents.delete(existing.id);
 				return result(existing, `Closed ${existing.id}.`);
 			}
 			if (operation.subtree) {
 				let agents: ManagedAgent[];
 				try {
-					agents = await requireRegistry().closeTree(agentId);
+					agents = await ownedRegistry.closeTree(agentId);
 				} finally {
-					await cleanupClosedWorkspaces(requireRegistry(), isolatedAgents, workspaceManager);
+					await cleanupClosedWorkspaces(ownedRegistry, isolatedAgents, workspaceManager);
 				}
+				assertCurrentSpawn(signal, generation, runtimeGeneration);
 				return {
 					content: [{ type: "text", text: `Closed ${agents.length} agent(s).` }],
 					details: {
-						agent: summarizeAgent(requireAgent(agentId)),
+						agent: summarizeAgent(ownedAgent(agentId)),
 						agents: agents.map(summarizeAgent),
 					},
 				};
 			}
 			let agent: ManagedAgent;
 			try {
-				agent = await requireRegistry().close(agentId);
+				agent = await ownedRegistry.close(agentId);
 			} finally {
-				await cleanupClosedWorkspaces(requireRegistry(), isolatedAgents, workspaceManager);
+				await cleanupClosedWorkspaces(ownedRegistry, isolatedAgents, workspaceManager);
 			}
+			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			return result(agent, `Closed ${agent.id}.`);
 		},
 	});
@@ -632,25 +750,29 @@ export function registerStatefulSubagents(
 		promptSnippet: "Send or read queue-only detached-subagent mailbox messages",
 		parameters: MailboxParamsSchema,
 		...createStatefulToolRenderer("mailbox"),
-		async execute(_id, params): Promise<StatefulActionToolResult> {
+		async execute(_id, params, signal): Promise<StatefulActionToolResult> {
+			const generation = runtimeGeneration;
+			const ownedRegistry = requireRegistry();
 			const operation = validateMailboxParams(params);
 			if (operation.action === "send") {
-				const message = await requireRegistry().sendMessage(
+				const message = await ownedRegistry.sendMessage(
 					operation.agentId,
 					operation.message,
 					operation.senderId,
 					operation.deduplicationKey,
 				);
+				assertCurrentSpawn(signal, generation, runtimeGeneration);
 				return {
 					content: [{ type: "text", text: `Queued ${message.id} for ${message.recipientId}.` }],
 					details: { message },
 				};
 			}
-			const messages = await requireRegistry().readMessages(
+			const messages = await ownedRegistry.readMessages(
 				operation.agentId,
 				operation.acknowledge,
 				operation.limit,
 			);
+			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			const summaries = messages.map((message) => ({
 				...message,
 				content: truncateUtf8(message.content, MAX_TOOL_MESSAGE_BYTES).text,
@@ -696,7 +818,12 @@ export function formatStatefulAgentLine(agent: ManagedAgent): string {
 	const unread = agent.mailbox.filter((message) => !message.readAt).length;
 	const indent = "  ".repeat(agent.depth);
 	const thinking = agent.thinkingLevel ? ` thinking:${agent.thinkingLevel}` : "";
-	return `${indent}${sanitizeStatusLine(agent.id, 128)} ${sanitizeStatusLine(agent.agent, 128)} ${agent.state} ${elapsedSeconds}s${thinking} unread:${unread} [${actions}]${task}`;
+	const timeout = agent.currentTimeoutMs ?? agent.timeoutMs;
+	const timeoutText = timeout ? ` timeout:${timeout}ms` : "";
+	const transport = agent.telemetry?.transport ? ` transport:${agent.telemetry.transport}` : "";
+	const phase = agent.telemetry?.phase ? ` phase:${agent.telemetry.phase}` : "";
+	const queued = agent.telemetry?.queuePosition ? ` queue:${agent.telemetry.queuePosition}` : "";
+	return `${indent}${sanitizeStatusLine(agent.id, 128)} ${sanitizeStatusLine(agent.agent, 128)} ${agent.state} ${elapsedSeconds}s${thinking}${timeoutText}${transport}${phase}${queued} unread:${unread} [${actions}]${task}`;
 }
 
 function sanitizeStatusLine(value: string, maxLength: number): string {
@@ -728,231 +855,26 @@ function summarizeAgent(agent: ManagedAgent) {
 		cwd: agent.cwd,
 		workspaceMode: agent.workspaceMode ?? "shared",
 		thinkingLevel: agent.thinkingLevel,
+		timeoutMs: agent.timeoutMs,
+		currentTimeoutMs: agent.currentTimeoutMs,
 		currentTask: agent.currentTask
 			? truncateUtf8(agent.currentTask, MAX_TOOL_MESSAGE_BYTES).text
 			: undefined,
 		historyCount: agent.history.length,
 		unreadMessages: agent.mailbox.filter((message) => !message.readAt).length,
+		context: {
+			turns: agent.contextTurns ?? 0,
+			sources: agent.contextSourceIds?.length ?? 0,
+			bytes: agent.contextBytes ?? 0,
+			truncated: agent.contextTruncated === true,
+		},
+		resultFormat: agent.resultFormat ?? "text",
+		structuredResult: agent.structuredResult,
+		telemetry: agent.telemetry,
 		error: agent.error ? truncateUtf8(agent.error, MAX_TOOL_MESSAGE_BYTES).text : undefined,
 		target: agent.target,
 		policy: agent.policy,
 	};
-}
-
-interface CompletionMetadata {
-	agentId: string;
-	agent: string;
-	state: string;
-}
-
-interface CompletionMessage {
-	customType: "pi-subagent-completion";
-	content: string;
-	display: true;
-	details:
-		| CompletionMetadata
-		| {
-				completionCount: number;
-				completions: CompletionMetadata[];
-		  };
-}
-
-type CompletionContext = Pick<ExtensionContext, "hasPendingMessages" | "isIdle">;
-type CompletionPi = Pick<ExtensionAPI, "sendMessage">;
-
-export interface CompletionDeliveryBrokerOptions {
-	onDeliveryError?: (error: unknown) => void;
-}
-
-/**
- * Coalesces detached completions so one bounded notification batch starts at
- * most one root synthesis turn. The broker belongs to one parent session and
- * must be closed when that session is replaced or shut down.
- */
-export class CompletionDeliveryBroker {
-	private pending: AgentTurnCompletion[] = [];
-	private flushTimer?: NodeJS.Timeout;
-	private wakeInFlight = false;
-	private closed = false;
-
-	constructor(
-		private readonly pi: CompletionPi,
-		private readonly ctx: CompletionContext,
-		private delivery: CompletionDelivery,
-		private readonly options: CompletionDeliveryBrokerOptions = {},
-	) {}
-
-	enqueue(completion: AgentTurnCompletion): void {
-		if (this.closed) return;
-		this.pending.push(completion);
-		this.scheduleFlush();
-	}
-
-	setDelivery(value: CompletionDelivery): void {
-		this.delivery = value;
-		this.scheduleFlush();
-	}
-
-	onParentTurnStart(): void {
-		this.wakeInFlight = false;
-		this.scheduleFlush();
-	}
-
-	onParentSettled(): void {
-		this.wakeInFlight = false;
-		this.scheduleFlush();
-	}
-
-	flush(): void {
-		if (this.closed || this.pending.length === 0) return;
-		if (this.flushTimer) clearTimeout(this.flushTimer);
-		this.flushTimer = undefined;
-		if (this.delivery === "auto-resume" && !this.isRootIdle()) return;
-
-		const completions = this.pending.splice(0);
-		const batches = chunkCompletions(completions);
-		let canWake = this.shouldWakeRoot();
-		for (let index = 0; index < batches.length; index++) {
-			const triggerTurn = canWake && index === batches.length - 1;
-			const message = buildCompletionMessage(batches[index]);
-			if (triggerTurn) this.wakeInFlight = true;
-			try {
-				this.pi.sendMessage(message, { deliverAs: "steer", triggerTurn });
-			} catch (primaryError) {
-				if (triggerTurn) this.wakeInFlight = false;
-				canWake = false;
-				try {
-					this.pi.sendMessage(message, { deliverAs: "nextTurn", triggerTurn: false });
-				} catch (fallbackError) {
-					this.pending = [...batches.slice(index).flat(), ...this.pending];
-					try {
-						this.options.onDeliveryError?.(
-							new AggregateError(
-								[primaryError, fallbackError],
-								"Detached subagent completion delivery failed",
-							),
-						);
-					} catch {
-						// Delivery retention must survive a failing observer.
-					}
-					return;
-				}
-			}
-		}
-	}
-
-	close(): void {
-		this.closed = true;
-		if (this.flushTimer) clearTimeout(this.flushTimer);
-		this.flushTimer = undefined;
-		this.pending = [];
-	}
-
-	private scheduleFlush(): void {
-		if (this.closed || this.pending.length === 0 || this.flushTimer) return;
-		this.flushTimer = setTimeout(() => {
-			this.flushTimer = undefined;
-			this.flush();
-		}, COMPLETION_BATCH_DELAY_MS);
-	}
-
-	private isRootIdle(): boolean {
-		try {
-			return this.ctx.isIdle();
-		} catch {
-			return false;
-		}
-	}
-
-	private shouldWakeRoot(): boolean {
-		if (this.delivery !== "auto-resume" || this.wakeInFlight) return false;
-		try {
-			return !this.ctx.hasPendingMessages();
-		} catch {
-			return false;
-		}
-	}
-}
-
-function chunkCompletions(completions: AgentTurnCompletion[]): AgentTurnCompletion[][] {
-	const batches: AgentTurnCompletion[][] = [];
-	for (let index = 0; index < completions.length; index += MAX_COMPLETIONS_PER_MESSAGE) {
-		batches.push(completions.slice(index, index + MAX_COMPLETIONS_PER_MESSAGE));
-	}
-	return batches;
-}
-
-function buildCompletionMessage(completions: AgentTurnCompletion[]): CompletionMessage {
-	if (completions.length === 1) {
-		const completion = completions[0];
-		return {
-			customType: "pi-subagent-completion",
-			content: buildDetachedCompletionMessage(completion),
-			display: true,
-			details: completionMetadata(completion),
-		};
-	}
-	const content = truncateUtf8(
-		[
-			"Message Type: SUBAGENT_COMPLETION_BATCH",
-			`Completion Count: ${completions.length}`,
-			...completions.flatMap((completion, index) => [
-				"",
-				`--- Completion ${index + 1} of ${completions.length} ---`,
-				buildDetachedCompletionMessage(completion),
-			]),
-		].join("\n"),
-		DEFAULT_MAX_CONTEXT_BYTES,
-	).text;
-	return {
-		customType: "pi-subagent-completion",
-		content,
-		display: true,
-		details: {
-			completionCount: completions.length,
-			completions: completions.map(completionMetadata),
-		},
-	};
-}
-
-function completionMetadata(completion: AgentTurnCompletion): CompletionMetadata {
-	return {
-		agentId: completion.agent.id,
-		agent: completion.agent.agent,
-		state: completion.agent.state,
-	};
-}
-
-export function buildDetachedCompletionMessage(completion: AgentTurnCompletion): string {
-	const task = sanitizeCompletionLine(completion.task, 256) || "(unknown task)";
-	const agentName = sanitizeCompletionLine(completion.agent.agent, 128) || "(unknown agent)";
-	const output = redactPrivateText(completion.output);
-	const error = completion.error
-		? truncateUtf8(redactPrivateText(completion.error), MAX_COMPLETION_ERROR_BYTES).text
-		: "";
-	return truncateUtf8(
-		[
-			"Message Type: SUBAGENT_COMPLETION",
-			`Agent ID: ${completion.agent.id}`,
-			`Agent: ${agentName}`,
-			`Task: ${task}`,
-			`State: ${completion.agent.state}`,
-			...(error.trim() ? ["Error:", error] : []),
-			"Payload:",
-			output.trim() ? output : "(no output)",
-		].join("\n"),
-		MAX_TOOL_MESSAGE_BYTES,
-	).text;
-}
-
-function sanitizeCompletionLine(value: string, maxBytes: number): string {
-	return (
-		truncateUtf8(redactPrivateText(value), maxBytes)
-			// biome-ignore lint/suspicious/noControlCharactersInRegex: Strip untrusted terminal controls.
-			.text.replace(/[\u0000-\u001f\u007f]+/g, " ")
-			.replace(/\s+/g, " ")
-			.trim()
-	);
 }
 
 async function cleanupClosedWorkspaces(
@@ -979,8 +901,8 @@ function result(agent: ManagedAgent, text: string) {
 }
 
 export function resolveStatefulTransportKind(
-	value: "subprocess" | "in-process" | undefined,
-): "subprocess" | "in-process" {
+	value: SubagentTransportKind | undefined,
+): SubagentTransportKind {
 	return value ?? "subprocess";
 }
 
@@ -994,6 +916,10 @@ function normalizeRuntimeThinkingLevel(value: string): ParentRuntimeSnapshot["th
 	return isThinkingLevel(value) ? value : "off";
 }
 
+export {
+	buildDetachedCompletionMessage,
+	CompletionDeliveryBroker,
+} from "./completion-delivery.js";
 export {
 	buildStatefulTurnPrompt,
 	resolveStatefulTurnTimeout,

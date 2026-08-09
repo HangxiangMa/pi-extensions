@@ -74,6 +74,7 @@ test("subagent_inspect registers one strict Google-compatible action schema", as
 		"list_runs",
 		"get_run",
 		"list_models",
+		"preview_context",
 		"status",
 		"diagnose",
 	]);
@@ -88,6 +89,18 @@ test("subagent_inspect registers one strict Google-compatible action schema", as
 	await assert.rejects(
 		() => execute(tool, { action: "list_models", limit: 101 }),
 		/between 1 and 100/,
+	);
+	const preview = await execute(tool, { action: "preview_context", context: "none" });
+	assert.deepEqual(preview.details.preview, {
+		mode: "none",
+		turns: 0,
+		sourceCount: 0,
+		bytes: 0,
+		truncated: false,
+	});
+	await assert.rejects(
+		() => execute(tool, { action: "preview_context", context: 0 }),
+		/positive integer/,
 	);
 });
 
@@ -169,6 +182,28 @@ test("subagent_inspect returns metadata-only run summaries", async () => {
 			},
 		},
 		policy: { inherited: ["environment"], overridden: [], unsupported: [] },
+		contextTurns: 2,
+		contextBytes: 128,
+		contextSources: 3,
+		contextTruncated: false,
+		resultFormat: "structured-v1",
+		structuredResult: {
+			version: "pi-subagents:result:v1",
+			summary: "done",
+			evidence: [],
+			changes: [],
+			verification: [],
+			risks: [],
+		},
+		telemetry: {
+			protocol: "pi-subagents:v1",
+			transport: "rpc",
+			phase: "settled",
+			updatedAt: 3,
+			timing: { queuedAt: 1, readyAt: 2, settledAt: 3 },
+			model: "model-one",
+			thinkingLevel: "high",
+		},
 	};
 	const mock = createMockPi();
 	registerSubagentInspect(mock.pi, runtime({ runs: [summary], detail }));
@@ -183,6 +218,15 @@ test("subagent_inspect returns metadata-only run summaries", async () => {
 		(got.details.run as { target: { trust: { kind: string } } }).target.trust.kind,
 		"saved-trusted",
 	);
+	const projected = got.details.run as {
+		context: { turns: number; bytes: number; sources: number };
+		telemetry: { protocol: string; transport: string };
+		structuredResult: { summary: string };
+	};
+	assert.deepEqual(projected.context, { turns: 2, sources: 3, bytes: 128, truncated: false });
+	assert.equal(projected.telemetry.protocol, "pi-subagents:v1");
+	assert.equal(projected.telemetry.transport, "rpc");
+	assert.equal(projected.structuredResult.summary, "done");
 	await assert.rejects(
 		() => execute(tool, { action: "get_run", agentId: "missing" }),
 		/Unknown retained run/,

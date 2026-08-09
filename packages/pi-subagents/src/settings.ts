@@ -16,6 +16,7 @@ import {
 	type SubagentAgentConfig,
 	type SubagentSettings,
 	type SubagentThinkingLevel,
+	type SubagentTransportKind,
 } from "./agents.js";
 import {
 	DEFAULT_MAX_PARALLEL_TASKS,
@@ -123,7 +124,12 @@ export function normalizeSubagentSettings(value: unknown): SubagentSettings | un
 		if (!isPlainObject(value.stateful)) return undefined;
 		const runtime: NonNullable<SubagentSettings["stateful"]> = {};
 		if (hasOwn(value.stateful, "transport")) {
-			if (value.stateful.transport !== "subprocess" && value.stateful.transport !== "in-process") {
+			if (
+				value.stateful.transport !== "subprocess" &&
+				value.stateful.transport !== "in-process" &&
+				value.stateful.transport !== "rpc" &&
+				value.stateful.transport !== "auto"
+			) {
 				return undefined;
 			}
 			runtime.transport = value.stateful.transport;
@@ -290,6 +296,13 @@ export interface DelegationWorkflowSettingsSnapshot {
 export interface CompletionDeliverySettingsSnapshot {
 	path: string;
 	value: CompletionDelivery;
+	source: "default" | "user settings";
+	error?: string;
+}
+
+export interface StatefulTransportSettingsSnapshot {
+	path: string;
+	value: SubagentTransportKind;
 	source: "default" | "user settings";
 	error?: string;
 }
@@ -492,6 +505,25 @@ export function inspectCompletionDeliverySettings(): CompletionDeliverySettingsS
 	};
 }
 
+export function inspectStatefulTransportSettings(): StatefulTransportSettingsSnapshot {
+	const inspected = inspectSubagentSettingsDocument();
+	if (!inspected.raw || !inspected.settings) {
+		return {
+			path: inspected.path,
+			value: "subprocess",
+			source: "default",
+			...(inspected.error ? { error: inspected.error } : {}),
+		};
+	}
+	const explicit =
+		isPlainObject(inspected.raw.stateful) && hasOwn(inspected.raw.stateful, "transport");
+	return {
+		path: inspected.path,
+		value: inspected.settings.stateful?.transport ?? "subprocess",
+		source: explicit ? "user settings" : "default",
+	};
+}
+
 export function resolveBlockingMaxParallelTasks(settings?: SubagentSettings): number {
 	return settings?.blocking?.maxParallelTasks ?? DEFAULT_MAX_PARALLEL_TASKS;
 }
@@ -563,6 +595,27 @@ export function updateDelegationWorkflowSetting(
 					...(stateful ?? {}),
 					enabled: value !== "blocking-only",
 				},
+			},
+			update.replaceCanonical,
+		);
+	});
+}
+
+export function updateStatefulTransportSetting(value: SubagentTransportKind): void {
+	if (!["subprocess", "in-process", "rpc", "auto"].includes(value)) {
+		throw new Error(`Unsupported stateful transport: ${value}`);
+	}
+	withSettingsMutationLock(() => {
+		const update = readSettingsObjectForUpdate();
+		const raw = update.document;
+		const stateful = raw.stateful;
+		if (stateful !== undefined && !isPlainObject(stateful)) {
+			throw new Error(`Cannot update invalid ${SETTINGS_FILE} stateful settings`);
+		}
+		writeSettingsObjectUnlocked(
+			{
+				...raw,
+				stateful: { ...(stateful ?? {}), transport: value },
 			},
 			update.replaceCanonical,
 		);
@@ -692,7 +745,18 @@ export function updateCwdPolicySetting(
 	});
 }
 
+export type AgentSettingsPatch = {
+	tools?: string[] | undefined;
+	model?: string | null | undefined;
+	thinkingLevel?: SubagentThinkingLevel | null | undefined;
+	timeoutMs?: number | null | undefined;
+};
+
 export function updateAgentToolsSetting(name: string, tools: string[] | undefined): void {
+	updateAgentSettingsPatch({ [name]: { tools } });
+}
+
+export function updateAgentSettingsPatch(patches: Record<string, AgentSettingsPatch>): void {
 	withSettingsMutationLock(() => {
 		const update = readSettingsObjectForUpdate();
 		const raw = update.document;
@@ -701,24 +765,41 @@ export function updateAgentToolsSetting(name: string, tools: string[] | undefine
 			throw new Error(`Cannot update invalid ${SETTINGS_FILE} agent settings`);
 		}
 		const agents = { ...(rawAgents ?? {}) };
-		const rawAgent = hasOwn(agents, name) ? agents[name] : undefined;
-		if (rawAgent !== undefined && !isPlainObject(rawAgent)) {
-			throw new Error(`Cannot update invalid ${SETTINGS_FILE} settings for ${name}`);
-		}
-		const agent = { ...(rawAgent ?? {}) };
-		if (tools === undefined) delete agent.tools;
-		else agent.tools = tools;
-		if (Object.keys(agent).length > 0) {
-			Object.defineProperty(agents, name, {
-				value: agent,
-				enumerable: true,
-				configurable: true,
-				writable: true,
-			});
-		} else {
-			delete agents[name];
+		for (const [name, patch] of Object.entries(patches)) {
+			const rawAgent = hasOwn(agents, name) ? agents[name] : undefined;
+			if (rawAgent !== undefined && !isPlainObject(rawAgent)) {
+				throw new Error(`Cannot update invalid ${SETTINGS_FILE} settings for ${name}`);
+			}
+			const agent = { ...(rawAgent ?? {}) };
+			for (const field of ["tools", "model", "thinkingLevel", "timeoutMs"] as const) {
+				if (!hasOwn(patch, field)) continue;
+				const value = patch[field];
+				if (value === undefined) delete agent[field];
+				else
+					Object.defineProperty(agent, field, {
+						value,
+						enumerable: true,
+						configurable: true,
+						writable: true,
+					});
+			}
+			if (Object.keys(agent).length > 0) {
+				Object.defineProperty(agents, name, {
+					value: agent,
+					enumerable: true,
+					configurable: true,
+					writable: true,
+				});
+			} else {
+				delete agents[name];
+			}
 		}
 
+		const normalized = normalizeSubagentSettings({
+			...raw,
+			...(Object.keys(agents).length > 0 ? { agents } : {}),
+		});
+		if (!normalized) throw new Error(`Cannot update invalid ${SETTINGS_FILE} agent settings`);
 		const updated = { ...raw };
 		if (Object.keys(agents).length > 0) updated.agents = agents;
 		else delete updated.agents;

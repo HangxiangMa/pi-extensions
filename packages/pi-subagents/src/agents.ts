@@ -37,7 +37,7 @@ export interface SubagentAgentConfig {
 	timeoutMs?: number | null;
 }
 
-export type SubagentTransportKind = "subprocess" | "in-process";
+export type SubagentTransportKind = "subprocess" | "in-process" | "rpc" | "auto";
 
 export type CompletionDelivery = "next-turn" | "auto-resume";
 

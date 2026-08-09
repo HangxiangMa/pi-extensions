@@ -19,6 +19,7 @@ export function createSpawnPromptGuidelines(
 	return [
 		"Do not use subagent_spawn for simple or critical-path work that the main agent can perform directly.",
 		"Set subagent_spawn thinkingLevel to the lowest sufficient thinking level for the delegated task: use off or minimal for extraction, formatting, or mechanical work; low for straightforward bounded work; medium for ordinary multi-step research or implementation; high for complex debugging, design, review, or cross-file analysis; xhigh for highly ambiguous, cross-system, or high-risk analysis; and max only for the hardest tasks when quality clearly outweighs latency and cost. Omit subagent_spawn thinkingLevel only to preserve the agent or child default.",
+		"Set subagent_spawn timeoutMs to the shortest realistic work deadline for the task difficulty; split oversized tasks instead of extending the deadline merely to compensate for broad scope. Omit timeoutMs only to preserve the retained agent or configured default.",
 		deliveryGuidance,
 		"Use a single subagent_spawn only for a concrete bounded subtask that can run independently and has an isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation.",
 		...(blockingEnabled

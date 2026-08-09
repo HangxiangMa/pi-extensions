@@ -84,6 +84,17 @@ function renderAction(
 				formatModel,
 				stringValue(details.source),
 			);
+		case "preview_context": {
+			const preview = recordValue(details.preview);
+			if (!preview) return undefined;
+			return [
+				`${statusBadge(theme, "completed")} · context ${theme.fg("accent", safeLine(preview.mode, "none", 128))}`,
+				theme.fg(
+					"dim",
+					`${numberValue(preview.turns)} turns · ${numberValue(preview.sourceCount)} sources · ${numberValue(preview.bytes)} bytes${preview.truncated === true ? " · truncated" : ""}`,
+				),
+			].join("\n");
+		}
 		case "status":
 			return renderStatus(details, expanded, theme);
 		case "diagnose":
@@ -146,11 +157,24 @@ function formatRun(run: Record<string, unknown>, theme: Theme, expanded: boolean
 	];
 	if (expanded) {
 		const thinking = stringValue(run.thinkingLevel);
+		const timeout = numberValue(run.currentTimeoutMs) || numberValue(run.timeoutMs);
 		const task = safeBlock(run.currentTask, "", 2 * 1024).trim();
 		const error = safeBlock(run.error, "", 2 * 1024).trim();
 		lines.push(
-			`  ${theme.fg("dim", `${numberValue(run.historyCount)} history · ${thinking ? `thinking:${safeLine(thinking, "", 128)} · ` : ""}${numberValue(run.children)} children`)}`,
+			`  ${theme.fg("dim", `${numberValue(run.historyCount)} history · ${thinking ? `thinking:${safeLine(thinking, "", 128)} · ` : ""}${timeout ? `timeout:${timeout}ms · ` : ""}${numberValue(run.children)} children`)}`,
 		);
+		const context = recordValue(run.context);
+		const telemetry = recordValue(run.telemetry);
+		if (context) {
+			lines.push(
+				`  ${theme.fg("dim", `context: ${numberValue(context.turns)} turns · ${numberValue(context.sources)} sources · ${numberValue(context.bytes)} bytes${context.truncated === true ? " · truncated" : ""}`)}`,
+			);
+		}
+		if (telemetry) {
+			lines.push(
+				`  ${theme.fg("dim", `transport: ${safeLine(telemetry.transport, "unknown", 128)} · phase:${safeLine(telemetry.phase, "unknown", 128)}${stringValue(telemetry.protocol) ? ` · ${safeLine(telemetry.protocol, "", 128)}` : ""}`)}`,
+			);
+		}
 		if (task) lines.push(`  ${theme.fg("dim", `task: ${task}`)}`);
 		if (error) lines.push(`  ${theme.fg("error", `error: ${error}`)}`);
 	}
