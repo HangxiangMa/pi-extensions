@@ -514,7 +514,7 @@ test("RpcTransport enforces idle and tool-call budgets with bounded summaries", 
 				"let buffer='';const send=v=>process.stdout.write(JSON.stringify(v)+'\\n');let prompts=0;",
 				"process.stdin.on('data',chunk=>{buffer+=chunk;let i;while((i=buffer.indexOf('\\n'))>=0){const line=buffer.slice(0,i);buffer=buffer.slice(i+1);if(!line)continue;const c=JSON.parse(line);",
 				"if(c.type==='get_state')send({id:c.id,type:'response',command:'get_state',success:true,data:{model:{provider:'fake',id:'model'},thinkingLevel:'low',sessionId:'s'}});",
-				"if(c.type==='prompt'){prompts++;send({id:c.id,type:'response',command:'prompt',success:true});if(prompts===1&&!c.message.includes('IDLE'))send({type:'message_end',message:{role:'assistant',content:[{type:'toolCall',id:'1',name:'read',arguments:{}},{type:'toolCall',id:'2',name:'read',arguments:{}}],provider:'fake',model:'model',usage:{},stopReason:'toolUse'}});if(prompts>1){send({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'BUDGET_SUMMARY'}],provider:'fake',model:'model',usage:{},stopReason:'stop'}});send({type:'agent_settled'});}}",
+				"if(c.type==='prompt'){prompts++;const response={id:c.id,type:'response',command:'prompt',success:true};if(prompts===1&&!c.message.includes('IDLE')){const budget={type:'message_end',message:{role:'assistant',content:[{type:'toolCall',id:'1',name:'read',arguments:{}},{type:'toolCall',id:'2',name:'read',arguments:{}}],provider:'fake',model:'model',usage:{},stopReason:'toolUse'}};process.stdout.write(JSON.stringify(response)+'\\n'+JSON.stringify(budget)+'\\n');}else{send(response);}if(prompts>1){send({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'BUDGET_SUMMARY'}],provider:'fake',model:'model',usage:{},stopReason:'stop'}});send({type:'agent_settled'});}}",
 				"if(c.type==='abort'){send({id:c.id,type:'response',command:'abort',success:true});send({type:'agent_settled'});}",
 				"}});",
 			].join(""),
@@ -540,6 +540,7 @@ test("RpcTransport enforces idle and tool-call budgets with bounded summaries", 
 			new AbortController().signal,
 		);
 		assert.equal(toolLimited.termination?.reason, "tool_call_limit");
+		assert.equal(toolLimited.termination?.finalization.status, "completed");
 		assert.equal(toolLimited.output, "BUDGET_SUMMARY");
 		await toolTransport.shutdown();
 
@@ -550,6 +551,7 @@ test("RpcTransport enforces idle and tool-call budgets with bounded summaries", 
 			new AbortController().signal,
 		);
 		assert.equal(idle.termination?.reason, "idle_timeout");
+		assert.equal(idle.termination?.finalization.status, "completed");
 		assert.equal(idle.output, "BUDGET_SUMMARY");
 		await idleTransport.shutdown();
 	} finally {

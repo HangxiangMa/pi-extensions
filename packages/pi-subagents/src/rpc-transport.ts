@@ -460,14 +460,21 @@ export class RpcTransport implements SubagentTransport {
 			resolveStatefulTurnTimeout(agentConfig);
 		const capture = createRpcTurnCapture();
 		let resolveBudget!: (stop: TurnBudgetStop) => void;
+		let resolvePreAcceptanceIdle!: (stop: TurnBudgetStop) => void;
 		const budgetExceeded = new Promise<TurnBudgetStop>((resolve) => {
 			resolveBudget = resolve;
+		});
+		const preAcceptanceIdleExceeded = new Promise<TurnBudgetStop>((resolve) => {
+			resolvePreAcceptanceIdle = resolve;
 		});
 		const budgetMonitor = new TurnBudgetMonitor({
 			idleTimeoutMs: agent.currentIdleTimeoutMs ?? agent.idleTimeoutMs,
 			maxTurns: agent.currentMaxTurns ?? agent.maxTurns,
 			maxToolCalls: agent.currentMaxToolCalls ?? agent.maxToolCalls,
-			onExceeded: resolveBudget,
+			onExceeded(stop) {
+				resolveBudget(stop);
+				if (stop.reason === "idle_timeout") resolvePreAcceptanceIdle(stop);
+			},
 		});
 		let settledResolve!: () => void;
 		let settledReject!: (error: Error) => void;
@@ -504,7 +511,7 @@ export class RpcTransport implements SubagentTransport {
 					signal,
 					"RPC subagent prompt acceptance aborted",
 				),
-				budgetExceeded.then((stop) => {
+				preAcceptanceIdleExceeded.then((stop) => {
 					preAcceptanceStop = stop;
 					throw new Error(formatTurnTerminationMessage(stop.reason, stop.limit, "RPC subagent"));
 				}),
