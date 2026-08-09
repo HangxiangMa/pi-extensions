@@ -11,7 +11,7 @@ import { type AgentConfig, discoverAgents, type SubagentThinkingLevel } from "./
 import { redactPrivateText } from "./context.js";
 import { resolveDefaultSubagentTimeoutMs } from "./execution.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_OUTPUT_BYTES, truncateUtf8 } from "./limits.js";
-import { assertPiPromptSourcesAreReadableFiles } from "./prompt-source-safety.js";
+import { resolvePiPromptResources } from "./prompt-resources.js";
 import type { AgentTurn, ManagedAgent, TurnOutcome } from "./registry.js";
 import { appendResultInstruction } from "./result-contract.js";
 import { safeTerminalLine } from "./safe-text.js";
@@ -568,7 +568,7 @@ async function prepareInProcessServices(
 	agentSystemPrompt: string,
 	projectTrusted: boolean,
 ): Promise<{ services: AgentSessionServices; support: CoreSessionSupport }> {
-	assertPiPromptSourcesAreReadableFiles(cwd, agentDir, projectTrusted, ["SYSTEM.md"]);
+	const promptResources = await resolvePiPromptResources(cwd, projectTrusted, agentDir);
 	const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
 	const support = await loadCoreSessionSupport();
 	if (!support) throw unsupportedInProcessCoreError();
@@ -578,7 +578,10 @@ async function prepareInProcessServices(
 		settingsManager,
 		resourceLoaderOptions: {
 			noExtensions: true,
-			appendSystemPrompt: agentSystemPrompt.trim() ? [agentSystemPrompt] : [],
+			appendSystemPrompt: [
+				...promptResources.appendSystemPromptPaths,
+				...(agentSystemPrompt.trim() ? [agentSystemPrompt] : []),
+			],
 		},
 	});
 	return { services, support };

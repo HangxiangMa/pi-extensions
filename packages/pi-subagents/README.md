@@ -760,6 +760,7 @@ packages/pi-subagents/
 │   ├── consult.ts                # Synchronous read-only consultation tool
 │   ├── consult-policy.ts         # Enforced read-only tool intersection
 │   ├── cwd-policy.ts             # Canonical target and saved-trust resolution
+│   ├── prompt-resources.ts       # Core-selected SYSTEM and APPEND_SYSTEM resources
 │   ├── safe-text.ts              # Shared byte/line/path sanitization
 │   ├── stateful.ts               # Detached lifecycle registration and dispatch
 │   ├── rpc-transport.ts          # Persistent strict-JSONL Pi RPC child transport

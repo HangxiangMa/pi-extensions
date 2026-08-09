@@ -138,10 +138,12 @@ export function registerStatefulSubagents(
 	const workspaceManager = dependencies.workspaceManager ?? new WorkspaceManager();
 	const isolatedAgents = new Map<string, string>();
 	const seenMessageIds = new Set<string>();
-	const pendingIdempotentSpawns = new Map<
-		string,
-		{ requestHash: string; promise: Promise<ManagedAgent> }
-	>();
+	type PendingIdempotentSpawn = {
+		generation: number;
+		requestHash: string;
+		promise: Promise<ManagedAgent>;
+	};
+	const pendingIdempotentSpawns = new Map<string, PendingIdempotentSpawn>();
 	const parentRuntime: ParentRuntimeSnapshot = { model: undefined, thinkingLevel: "off" };
 	const getCurrentSettings = () =>
 		dependencies.getSettings ? dependencies.getSettings() : readSubagentSettings();
@@ -468,9 +470,18 @@ export function registerStatefulSubagents(
 			const ownedRegistry = requireRegistry();
 			const retained = ownedRegistry.findBySpawnIdempotencyKey(params.idempotencyKey, requestHash);
 			if (retained) return result(retained, `Reused ${retained.agent} as ${retained.id}.`);
-			const pending = params.idempotencyKey
+			const foundPending = params.idempotencyKey
 				? pendingIdempotentSpawns.get(params.idempotencyKey)
 				: undefined;
+			if (
+				params.idempotencyKey &&
+				foundPending &&
+				foundPending.generation !== generation &&
+				pendingIdempotentSpawns.get(params.idempotencyKey) === foundPending
+			) {
+				pendingIdempotentSpawns.delete(params.idempotencyKey);
+			}
+			const pending = foundPending?.generation === generation ? foundPending : undefined;
 			if (pending) {
 				if (pending.requestHash !== requestHash) {
 					throw new Error("The subagent_spawn idempotencyKey is pending with different parameters");
@@ -481,13 +492,15 @@ export function registerStatefulSubagents(
 			}
 			let resolvePending: ((agent: ManagedAgent) => void) | undefined;
 			let rejectPending: ((error: unknown) => void) | undefined;
+			let ownedPending: PendingIdempotentSpawn | undefined;
 			if (params.idempotencyKey) {
 				const promise = new Promise<ManagedAgent>((resolve, reject) => {
 					resolvePending = resolve;
 					rejectPending = reject;
 				});
 				void promise.catch(() => undefined);
-				pendingIdempotentSpawns.set(params.idempotencyKey, { requestHash, promise });
+				ownedPending = { generation, requestHash, promise };
+				pendingIdempotentSpawns.set(params.idempotencyKey, ownedPending);
 			}
 			try {
 				await confirmProjectAgent(
@@ -570,7 +583,13 @@ export function registerStatefulSubagents(
 				rejectPending?.(error);
 				throw error;
 			} finally {
-				if (params.idempotencyKey) pendingIdempotentSpawns.delete(params.idempotencyKey);
+				if (
+					params.idempotencyKey &&
+					ownedPending &&
+					pendingIdempotentSpawns.get(params.idempotencyKey) === ownedPending
+				) {
+					pendingIdempotentSpawns.delete(params.idempotencyKey);
+				}
 			}
 		},
 	});

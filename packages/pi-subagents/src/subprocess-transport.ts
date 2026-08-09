@@ -4,6 +4,7 @@ import {
 	type SubagentSettings,
 	type SubagentThinkingLevel,
 } from "./agents.js";
+import { resolvePiPromptResources } from "./prompt-resources.js";
 import type { ManagedAgent, TurnOutcome } from "./registry.js";
 import { getResultFinalOutput, runSingleAgent, type SubagentDetails } from "./runner.js";
 import { readSubagentSettings, resolveSubagentThinkingLevel } from "./settings.js";
@@ -45,6 +46,12 @@ export class SubprocessTransport implements SubagentTransport {
 		const discovery = discoverAgents(record.cwd, record.agentScope ?? "user", settings);
 		const agent = discovery.agents.find((candidate) => candidate.name === record.agent);
 		const boundedTask = buildStatefulTurnPrompt(record, task);
+		const projectTrust =
+			record.target?.trust.projectTrusted ??
+			(record.agentScope === "project" || record.agentScope === "both");
+		const promptResources = agent?.systemPrompt.trim()
+			? await resolvePiPromptResources(record.cwd, projectTrust)
+			: undefined;
 		const makeDetails = (results: SubagentDetails["results"]): SubagentDetails => ({
 			mode: "single",
 			agentScope: record.agentScope ?? "user",
@@ -65,9 +72,8 @@ export class SubprocessTransport implements SubagentTransport {
 			makeDetails,
 			undefined,
 			{
-				projectTrust:
-					record.target?.trust.projectTrusted ??
-					(record.agentScope === "project" || record.agentScope === "both"),
+				projectTrust,
+				appendSystemPromptPaths: promptResources?.appendSystemPromptPaths,
 			},
 		);
 		const settledAt = Date.now();

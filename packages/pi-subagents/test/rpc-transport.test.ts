@@ -27,6 +27,31 @@ function fixtureScript(root: string): string {
 	return filePath;
 }
 
+async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+	let timer: NodeJS.Timeout | undefined;
+	try {
+		return await Promise.race([
+			promise.then(
+				() => true,
+				() => true,
+			),
+			new Promise<boolean>((resolve) => {
+				timer = setTimeout(() => resolve(false), timeoutMs);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
+async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!existsSync(filePath)) {
+		if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${filePath}`);
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+}
+
 function managedAgent(): ManagedAgent {
 	const now = Date.now();
 	return {
@@ -63,6 +88,7 @@ test("RPC launch arguments preserve model, thinking, tools, trust, and role poli
 		},
 		{ model: undefined, thinkingLevel: "medium" },
 		"/tmp/role.md",
+		["/tmp/global-append.md", "/tmp/project-append.md"],
 	);
 	assert.deepEqual(args, [
 		"--mode",
@@ -76,6 +102,10 @@ test("RPC launch arguments preserve model, thinking, tools, trust, and role poli
 		"--approve",
 		"--tools",
 		"read,find",
+		"--append-system-prompt",
+		"/tmp/global-append.md",
+		"--append-system-prompt",
+		"/tmp/project-append.md",
 		"--append-system-prompt",
 		"/tmp/role.md",
 	]);
@@ -139,17 +169,72 @@ test("RpcProtocolClient uses strict JSONL and the get_state readiness handshake"
 	}
 });
 
+test("RpcProtocolClient waits for inherited descendant streams to close", async () => {
+	if (process.platform === "win32") return;
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-rpc-descendant-"));
+	let descendantPid: number | undefined;
+	try {
+		const marker = path.join(root, "descendant.pid");
+		const script = path.join(root, "descendant-rpc.mjs");
+		writeFileSync(
+			script,
+			[
+				'import { spawn } from "node:child_process";',
+				'import { writeFileSync } from "node:fs";',
+				"let buffer='';const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');",
+				"process.stdin.on('data',chunk=>{buffer+=chunk;let index;while((index=buffer.indexOf('\\n'))>=0){const line=buffer.slice(0,index);buffer=buffer.slice(index+1);if(!line)continue;const command=JSON.parse(line);if(command.type!=='get_state')continue;",
+				`const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:['ignore','inherit','inherit']});child.unref();writeFileSync(${JSON.stringify(marker)},String(child.pid));`,
+				"send({id:command.id,type:'response',command:'get_state',success:true,data:{thinkingLevel:'low',sessionId:'descendant'}});setTimeout(()=>process.exit(0),20);}});",
+			].join(""),
+		);
+		const client = new RpcProtocolClient({
+			cwd: root,
+			args: [],
+			terminationGraceMs: 10,
+			invocation: { command: process.execPath, args: [script] },
+		});
+		await client.start();
+		await waitForFile(marker);
+		descendantPid = Number(readFileSync(marker, "utf8"));
+		assert.equal(Number.isSafeInteger(descendantPid), true);
+		const stopping = client.stop();
+		assert.equal(
+			await settlesWithin(stopping, 1_100),
+			false,
+			"stop must not resolve while a descendant retains captured streams",
+		);
+		process.kill(-descendantPid, "SIGKILL");
+		await stopping;
+	} finally {
+		if (descendantPid) {
+			try {
+				process.kill(-descendantPid, "SIGKILL");
+			} catch {
+				// The descendant was already reaped.
+			}
+		}
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("RpcTransport retains one child across turns and reports pi-subagents:v1 telemetry", async () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-rpc-transport-"));
 	try {
 		const script = fixtureScript(root);
 		let creations = 0;
 		let rolePromptPath: string | undefined;
+		const resourceRequests: Array<{ cwd: string; trusted: boolean }> = [];
 		const transport = new RpcTransport({
 			getParentRuntime: () => ({ model: undefined, thinkingLevel: "medium" }),
+			resolvePromptResources: async (cwd, trusted) => {
+				resourceRequests.push({ cwd, trusted });
+				return {
+					appendSystemPromptPaths: ["/tmp/global-append.md", "/tmp/project-append.md"],
+				};
+			},
 			createClient: (options) => {
 				creations++;
-				const roleIndex = options.args.indexOf("--append-system-prompt");
+				const roleIndex = options.args.lastIndexOf("--append-system-prompt");
 				if (roleIndex >= 0) rolePromptPath = options.args[roleIndex + 1];
 				return new RpcProtocolClient({
 					...options,
@@ -164,6 +249,7 @@ test("RpcTransport retains one child across turns and reports pi-subagents:v1 te
 		assert.equal(first.telemetry?.protocol, PI_SUBAGENTS_RPC_PROTOCOL);
 		assert.equal(first.telemetry?.model, "rpc-model");
 		assert.equal(first.telemetry?.usage?.input, 1);
+		assert.deepEqual(resourceRequests, [{ cwd: root, trusted: true }]);
 		assert.ok(rolePromptPath && existsSync(rolePromptPath));
 		const second = await transport.runTurn(
 			{

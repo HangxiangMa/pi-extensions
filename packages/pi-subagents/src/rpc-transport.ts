@@ -21,6 +21,7 @@ import {
 	truncateUtf8,
 } from "./limits.js";
 import { type PiInvocation, resolvePiInvocation } from "./pi-invocation.js";
+import { resolvePiPromptResources } from "./prompt-resources.js";
 import { JsonLineDecoder } from "./protocol.js";
 import type { ManagedAgent, TurnOutcome } from "./registry.js";
 import { terminateProcess } from "./runner.js";
@@ -135,7 +136,6 @@ export class RpcProtocolClient {
 				DEFAULT_MAX_STDERR_BYTES,
 			).text;
 		});
-		proc.stdin?.on("error", (error) => this.fail(errorMessage("RPC stdin failed", error)));
 		proc.once("error", (error) => this.fail(errorMessage("RPC process failed", error)));
 		proc.once("close", (code, childSignal) => {
 			this.processClosed = true;
@@ -213,11 +213,9 @@ export class RpcProtocolClient {
 		}
 		this.closePromise = new Promise<void>((resolve) => {
 			let settled = false;
-			let timer: NodeJS.Timeout | undefined;
 			const finish = () => {
 				if (settled) return;
 				settled = true;
-				if (timer) clearTimeout(timer);
 				this.cleanupTermination?.();
 				this.cleanupTermination = undefined;
 				resolve();
@@ -231,8 +229,6 @@ export class RpcProtocolClient {
 			const graceMs = this.options.terminationGraceMs ?? ABORT_GRACE_MS;
 			this.cleanupTermination?.();
 			this.cleanupTermination = terminateProcess(proc, graceMs);
-			timer = setTimeout(finish, graceMs + 1_000);
-			timer.unref();
 		});
 		await this.closePromise;
 		this.process = undefined;
@@ -342,6 +338,7 @@ export interface RpcTransportOptions {
 	getSettings?: () => SubagentSettings | undefined;
 	getParentRuntime: () => ParentRuntimeSnapshot;
 	createClient?: (options: RpcProtocolClientOptions) => RpcProtocolClient;
+	resolvePromptResources?: typeof resolvePiPromptResources;
 	defaultTimeoutMs?: number;
 	abortGraceMs?: number;
 }
@@ -571,7 +568,15 @@ export class RpcTransport implements SubagentTransport {
 	): Promise<RpcChildRecord> {
 		const existing = this.children.get(agent.id);
 		if (existing) return existing;
-		const temporaryPrompt = agentConfig.systemPrompt.trim()
+		const hasRolePrompt = agentConfig.systemPrompt.trim().length > 0;
+		const resources = hasRolePrompt
+			? await (this.options.resolvePromptResources ?? resolvePiPromptResources)(
+					agent.cwd,
+					agent.target?.trust.projectTrusted ?? false,
+				)
+			: { appendSystemPromptPaths: [] };
+		if (signal.aborted) throw abortError("RPC subagent start aborted");
+		const temporaryPrompt = hasRolePrompt
 			? await writeRolePrompt(agentConfig.name, agentConfig.systemPrompt)
 			: undefined;
 		if (signal.aborted) {
@@ -587,6 +592,7 @@ export class RpcTransport implements SubagentTransport {
 				agentConfig,
 				this.options.getParentRuntime(),
 				temporaryPrompt?.filePath,
+				resources.appendSystemPromptPaths,
 			),
 			env: {
 				PI_SUBAGENT_DEPTH: String(
@@ -643,6 +649,7 @@ export function buildRpcArgs(
 	agentConfig: AgentConfig,
 	parentRuntime: ParentRuntimeSnapshot,
 	rolePromptPath?: string,
+	appendSystemPromptPaths: readonly string[] = [],
 ): string[] {
 	const args = ["--mode", "rpc", "--no-session", "--no-extensions"];
 	const model =
@@ -662,6 +669,9 @@ export function buildRpcArgs(
 	if (Array.isArray(agentConfig.tools)) {
 		if (agentConfig.tools.length > 0) args.push("--tools", agentConfig.tools.join(","));
 		else args.push("--no-tools");
+	}
+	for (const promptPath of appendSystemPromptPaths) {
+		args.push("--append-system-prompt", promptPath);
 	}
 	if (rolePromptPath) args.push("--append-system-prompt", rolePromptPath);
 	return args;
