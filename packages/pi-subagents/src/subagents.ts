@@ -29,6 +29,7 @@ import { registerSubagentConfigCommand } from "./config-ui.js";
 import { registerSubagentConsult } from "./consult.js";
 import { executeSubagent } from "./execution.js";
 import { registerSubagentInspect } from "./inspect.js";
+import { MAX_BLOCKING_PARALLEL_CONCURRENCY } from "./limits.js";
 import { SubagentParams } from "./params.js";
 import { renderSubagentCall, renderSubagentResult } from "./render.js";
 import type { SubagentDetails } from "./runner.js";
@@ -39,6 +40,7 @@ import {
 	DEFAULT_DELEGATION_CWD_POLICY,
 	inspectSubagentSettings,
 	readSubagentSettings,
+	resolveBlockingMaxParallelTasks,
 } from "./settings.js";
 import { registerStatefulSubagents } from "./stateful.js";
 
@@ -80,6 +82,7 @@ export default function (pi: ExtensionAPI) {
 	});
 	refreshStatefulCatalog = statefulRuntime.setAgentCatalog;
 	const getBlockingEnabled = () => blockingEnabled;
+	const getMaxParallelTasks = () => resolveBlockingMaxParallelTasks(currentSettings);
 	const getConsultResourcePolicy = () =>
 		currentSettings?.consult?.resources ?? DEFAULT_CONSULT_RESOURCE_POLICY;
 	const getConsultationCwdPolicy = () =>
@@ -89,6 +92,7 @@ export default function (pi: ExtensionAPI) {
 	registerSubagentInspect(pi, {
 		...statefulRuntime,
 		getBlockingEnabled,
+		getMaxParallelTasks,
 		getConsultResourcePolicy,
 		getConsultationCwdPolicy,
 		getDelegationCwdPolicy,
@@ -101,9 +105,31 @@ export default function (pi: ExtensionAPI) {
 	registerSubagentConfigCommand(pi, {
 		...statefulRuntime,
 		getBlockingEnabled,
+		getMaxParallelTasks,
 		getConsultResourcePolicy,
 		getConsultationCwdPolicy,
 		getDelegationCwdPolicy,
+		setMaxParallelTasks(value: number) {
+			const previousSettings = currentSettings;
+			currentSettings = {
+				...(currentSettings ?? {}),
+				blocking: { ...(currentSettings?.blocking ?? {}), maxParallelTasks: value },
+			};
+			try {
+				refreshBlockingCatalog(currentCatalog);
+			} catch (applyError) {
+				currentSettings = previousSettings;
+				try {
+					refreshBlockingCatalog(currentCatalog);
+				} catch (rollbackError) {
+					throw new AggregateError(
+						[applyError, rollbackError],
+						"Failed to apply and roll back the parallel-worker limit",
+					);
+				}
+				throw applyError;
+			}
+		},
 		setConsultResourcePolicy(value: ConsultResourcePolicy) {
 			currentSettings = {
 				...(currentSettings ?? {}),
@@ -142,24 +168,26 @@ function registerBlockingSubagent(
 			"Parallel mode may include an aggregator fan-in step that receives all task outputs. Use subagent_consult instead for one synchronous child that must be executor-constrained to read-only tools.",
 			'Default agent scope is "user" (from ~/.pi/agent/agents).',
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, pass agentScope: "both" (or "project") as a top-level argument for that call.`,
+			`Maximum parallel worker tasks per call: ${resolveBlockingMaxParallelTasks(getSettings())}. Parallel execution starts at most ${MAX_BLOCKING_PARALLEL_CONCURRENCY} workers at once.`,
 			`Working-directory target policy: ${getSettings()?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY}. This controls launch targets and protected project resources, not filesystem access or sandboxing.`,
 		].join(" ");
+	const promptGuidelines = () => [
+		"Use subagent only when delegation fits; the main agent should decide how many subagents to spawn from task shape instead of waiting for the user to specify a count.",
+		"Use no subagent for simple answers, quick targeted edits, latency-sensitive one-step work, tasks requiring frequent user back-and-forth, or critical-path work the main agent can perform directly.",
+		"Use the blocking subagent tool only when delegated outputs are required before the main agent's next action and waiting is intentional; the main agent cannot process queued steering until the call returns.",
+		"Use a blocking subagent single, parallel, chain, or fan-in call only when synchronous context or output isolation is worth making the main agent unavailable while it runs.",
+		`If a blocking parallel subagent call is genuinely required, keep tasks independent, stay within the configured max ${resolveBlockingMaxParallelTasks(getSettings())}, and avoid write-heavy implementation touching the same files or shared state.`,
+		"For parallel subagent calls, omit the aggregator key entirely unless a fan-in step is required; do not send null, empty strings, or an empty object for unused optional fields.",
+		'Do not use subagent with project-local agents unless the user explicitly wants project agents or sets agentScope to "project" or "both"; keep confirmation enabled for untrusted repositories.',
+		"When using subagent, write self-contained tasks with file paths, context, expected output, and whether the subagent may edit files.",
+	];
 	const definition: ToolDefinition<typeof SubagentParams, SubagentDetails> = {
 		name: "subagent",
 		label: "Blocking Subagent",
 		description: appendAgentCatalog(baseDescription(), catalog),
 		promptSnippet:
 			"Run blocking isolated subagents only when their outputs are required before the main agent can continue.",
-		promptGuidelines: [
-			"Use subagent only when delegation fits; the main agent should decide how many subagents to spawn from task shape instead of waiting for the user to specify a count.",
-			"Use no subagent for simple answers, quick targeted edits, latency-sensitive one-step work, tasks requiring frequent user back-and-forth, or critical-path work the main agent can perform directly.",
-			"Use the blocking subagent tool only when delegated outputs are required before the main agent's next action and waiting is intentional; the main agent cannot process queued steering until the call returns.",
-			"Use a blocking subagent single, parallel, chain, or fan-in call only when synchronous context or output isolation is worth making the main agent unavailable while it runs.",
-			"If a blocking parallel subagent call is genuinely required, keep tasks independent, stay within the hard max 8, and avoid write-heavy implementation touching the same files or shared state.",
-			"For parallel subagent calls, omit the aggregator key entirely unless a fan-in step is required; do not send null, empty strings, or an empty object for unused optional fields.",
-			'Do not use subagent with project-local agents unless the user explicitly wants project agents or sets agentScope to "project" or "both"; keep confirmation enabled for untrusted repositories.',
-			"When using subagent, write self-contained tasks with file paths, context, expected output, and whether the subagent may edit files.",
-		],
+		promptGuidelines: promptGuidelines(),
 		parameters: SubagentParams,
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -183,6 +211,7 @@ function registerBlockingSubagent(
 	return (nextCatalog: string) => {
 		catalog = nextCatalog;
 		definition.description = appendAgentCatalog(baseDescription(), catalog);
+		definition.promptGuidelines = promptGuidelines();
 		pi.registerTool<typeof SubagentParams, SubagentDetails>(definition);
 	};
 }
@@ -198,6 +227,7 @@ export {
 	DEFAULT_CONSULT_RESOURCE_POLICY,
 	DEFAULT_CONSULTATION_CWD_POLICY,
 	DEFAULT_DELEGATION_CWD_POLICY,
+	inspectBlockingParallelLimitSettings,
 	inspectCompletionDeliverySettings,
 	inspectConsultResourceSettings,
 	inspectCwdPolicySettings,
@@ -206,12 +236,14 @@ export {
 	normalizeAgentSettings,
 	normalizeSubagentSettings,
 	readSubagentSettings,
+	resolveBlockingMaxParallelTasks,
 	resolveSubagentThinkingLevel,
 	sameToolSet,
 	saveSubagentConfig,
 	subagentSettingsFilePath,
 	uniqueToolNames,
 	updateAgentToolsSetting,
+	updateBlockingMaxParallelTasksSetting,
 	updateCompletionDeliverySetting,
 	updateConsultResourceSetting,
 	updateCwdPolicySetting,

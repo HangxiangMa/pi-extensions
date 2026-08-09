@@ -13,7 +13,11 @@ import {
 	resolveSubagentTarget,
 	targetPolicyAudit,
 } from "./cwd-policy.js";
-import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
+import {
+	DEFAULT_MAX_CONTEXT_BYTES,
+	MAX_BLOCKING_PARALLEL_CONCURRENCY,
+	truncateUtf8,
+} from "./limits.js";
 import { hasUsableAggregator, type SubagentParams } from "./params.js";
 import {
 	buildFanInContext,
@@ -30,11 +34,10 @@ import { safeTerminalLine } from "./safe-text.js";
 import {
 	DEFAULT_DELEGATION_CWD_POLICY,
 	readSubagentSettings,
+	resolveBlockingMaxParallelTasks,
 	resolveSubagentThinkingLevel,
 } from "./settings.js";
 
-const MAX_PARALLEL_TASKS = 8;
-const MAX_CONCURRENCY = 4;
 export const FALLBACK_TIMEOUT_MS = 10 * 60 * 1000;
 const STATUS_KEY = "subagents";
 const activeStatuses = new Map<string, string>();
@@ -125,6 +128,7 @@ export async function executeSubagent(
 	}
 	const aggregator = hasUsableAggregator(params.aggregator) ? params.aggregator : undefined;
 	const config = settingsOverride ?? readSubagentSettings();
+	const maxParallelTasks = resolveBlockingMaxParallelTasks(config);
 	const discovery = discoverAgents(ctx.cwd, agentScope, config);
 	const agents = discovery.agents;
 	const confirmProjectAgents = params.confirmProjectAgents ?? true;
@@ -166,6 +170,11 @@ export async function executeSubagent(
 			],
 			details: makeDetails("single")([]),
 		};
+	}
+	if (hasTasks && (params.tasks?.length ?? 0) > maxParallelTasks) {
+		throw new Error(
+			`Too many parallel tasks (${params.tasks?.length ?? 0}). Configured max is ${maxParallelTasks}.`,
+		);
 	}
 
 	const delegationPolicy = config?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY;
@@ -307,17 +316,6 @@ export async function executeSubagent(
 	}
 
 	if (params.tasks && params.tasks.length > 0) {
-		if (params.tasks.length > MAX_PARALLEL_TASKS)
-			return {
-				content: [
-					{
-						type: "text",
-						text: `Too many parallel tasks (${params.tasks.length}). Max is ${MAX_PARALLEL_TASKS}.`,
-					},
-				],
-				details: makeDetails("parallel")([]),
-			};
-
 		const status = startSubagentStatus(
 			ctx,
 			toolCallId,
@@ -395,7 +393,7 @@ export async function executeSubagent(
 
 			const results = await mapWithConcurrencyLimit(
 				params.tasks,
-				MAX_CONCURRENCY,
+				MAX_BLOCKING_PARALLEL_CONCURRENCY,
 				async (t, index) => {
 					const target = parallelTargets[index];
 					const result = attachTarget(

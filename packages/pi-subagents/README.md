@@ -12,6 +12,7 @@ Use it to split independent research, planning, implementation, and review work 
 - Adds `subagent_inspect` for bounded metadata without child launch, mailbox-content access, acknowledgement, or mutation.
 - Adds `subagent_consult` for one synchronous ephemeral child constrained to built-in `read`, `grep`, `find`, and `ls` tools (or a narrower agent allow-list).
 - Keeps batch workers isolated in `pi --mode json -p --no-session` subprocesses.
+- Lets users set a blocking parallel call's maximum worker count from 1 through 64 while keeping four-at-a-time execution.
 - Registers detached stateful lifecycle tools by default; completion can stay queued for the next turn or opt into an idle root synthesis turn.
 - Supports an opt-in public-SDK `in-process` stateful transport with one reusable child `AgentSession` per `agentId`.
 - Supports built-in `scout`, `planner`, `reviewer`, and `worker` agents.
@@ -163,10 +164,9 @@ Count-selection guidance:
 - Use detached `subagent_spawn` only when lifecycle tools are enabled and a bounded independent task
   has a concrete isolation or specialization benefit. After spawning, do useful non-overlapping work
   immediately. Do not poll lifecycle tools for progress or duplicate the delegated work.
-- Add another detached agent only for truly independent work with safe workspace concurrency. If
-  synchronous parallel or fan-in output is genuinely required, keep blocking `subagent` tasks
-  independent, stay within the hard max of 8, and do not parallelize implementation that may edit
-  the same files or shared state.
+- Add another detached agent only for truly independent work with safe workspace concurrency.
+  If synchronous parallel or fan-in output is genuinely required, keep blocking `subagent` tasks independent, stay within the configured `blocking.maxParallelTasks` limit, and do not parallelize implementation that may edit the same files or shared state.
+  The limit defaults to 8, accepts 1 through 64, and bounds total worker tasks in one call rather than the four-at-a-time execution concurrency.
 - Do not use project-local agents unless the user explicitly opts into them with
   `agentScope: "project"` or `"both"`; keep confirmation enabled for untrusted repositories.
 
@@ -351,18 +351,21 @@ Auto-resume is best-effort because Pi's custom-message API is fire-and-forget. S
 
 The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history. Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
 
-Run `/subagents` in TUI mode to open the standard primary manager. It leads with the current
-delegation workflow, human-readable async completion behavior, consultation/delegation target policies, consultation-resource policy, and active/retained counts. **Change delegation**, **Current agents**, and **Settings** cover the common workflows; agent permissions, transport/runtime details, source, and settings path remain under **Advanced settings**.
-Escape returns from a nested screen to a newly refreshed manager; Ctrl+C closes the full flow.
-Exact workflow/reload and project-agent safety confirmations remain extension-owned because they
-guard live agent and trust-boundary policy rather than ordinary navigation.
+Run `/subagents` in TUI mode to open the standard primary manager.
+It leads with the current delegation workflow, human-readable async completion behavior, consultation/delegation target policies, consultation-resource policy, parallel-worker limit, and active/retained counts.
+**Change delegation**, **Current agents**, and **Settings** cover the common workflows.
+Agent permissions, the **Maximum parallel workers** input, transport/runtime details, source, and settings path remain under **Advanced settings**.
+The maximum-worker input rejects invalid values without discarding the draft and applies a successful save immediately.
+Escape returns from a nested screen to a newly refreshed manager, while Ctrl+C closes the full flow.
+Exact workflow/reload and project-agent safety confirmations remain extension-owned because they guard live agent and trust-boundary policy rather than ordinary navigation.
 
 The direct routes remain predictable: `/subagents settings` changes both target policies, consultation resources, and completion delivery and applies them immediately, including refreshing model-facing tool guidance; `/subagents status` reports current-session runtime values separately from configured values, per-field sources, and path; `/subagents help` summarizes the single-command interface and the non-sandbox limitation. In RPC mode, bare `/subagents` emits the same bounded status through Pi's notification protocol instead of opening a custom TUI. JSON and print modes do not emit ad hoc command output. Manual edits use `~/.pi/agent/pi-subagents.json` and take effect after reloading Pi:
 
 ```json
 {
   "blocking": {
-    "enabled": false
+    "enabled": false,
+    "maxParallelTasks": 8
   },
   "stateful": {
     "enabled": true,
@@ -388,7 +391,19 @@ The direct routes remain predictable: `/subagents settings` changes both target 
 }
 ```
 
-The settings UI patches the raw JSON atomically and preserves unknown fields; it refuses to overwrite malformed or invalid settings. Supported Pi writers serialize the latest-document read and same-directory temporary-file rename through `pi-subagents.json.mutation-lock`. Editors and older extension versions do not participate in that lock, so avoid manual edits while a settings save is in progress. `blocking.enabled` defaults to `true`; set it to `false` for async-only delegation. `stateful.enabled` also defaults to `true`; its existing `false` value remains the blocking-only workflow. `cwdPolicy.consultation` defaults to `"anywhere"`, `cwdPolicy.delegation` defaults to `"trusted-targets"`, and `consult.resources` defaults to `"project-context"`. The Settings UI applies a saved change immediately to subsequent launches and refreshes the affected tool descriptions; manual edits take effect on session start or `/reload`. The UI explicitly states that target/trust settings are not filesystem sandboxing and directs trust changes to Pi `/trust`. When stateful tools are enabled, their membership stays fixed across spawn, completion, interrupt, close, and mailbox transitions. This avoids lifecycle-driven tool-schema churn and preserves a stable provider prompt prefix for KV caching.
+The settings UI patches the raw JSON atomically and preserves unknown fields.
+It refuses to overwrite malformed or invalid settings.
+Supported Pi writers serialize the latest-document read and same-directory temporary-file rename through `pi-subagents.json.mutation-lock`.
+Editors and older extension versions do not participate in that lock, so avoid manual edits while a settings save is in progress.
+`blocking.enabled` defaults to `true`; set it to `false` for async-only delegation.
+`blocking.maxParallelTasks` defaults to `8` and accepts positive integers from `1` through `64`.
+It limits worker tasks in one blocking parallel call, while execution still starts at most four workers at once and treats an optional aggregator separately.
+`stateful.enabled` also defaults to `true`; its existing `false` value remains the blocking-only workflow.
+`cwdPolicy.consultation` defaults to `"anywhere"`, `cwdPolicy.delegation` defaults to `"trusted-targets"`, and `consult.resources` defaults to `"project-context"`.
+The Settings UI applies a saved change immediately to subsequent launches and refreshes the affected tool descriptions; manual edits take effect on session start or `/reload`.
+The UI explicitly states that target/trust settings are not filesystem sandboxing and directs trust changes to Pi `/trust`.
+When stateful tools are enabled, their membership stays fixed across spawn, completion, interrupt, close, and mailbox transitions.
+This avoids lifecycle-driven tool-schema churn and preserves a stable provider prompt prefix for KV caching.
 
 | Tool | Purpose |
 | --- | --- |
@@ -472,13 +487,15 @@ Set `workspaceMode: "worktree"` to opt into a disposable detached Git worktree; 
 
 ## 📜 Compatibility and failure contract
 
-Existing `subagent` input schemas remain unchanged. The intentional compatibility change is that an external target without saved trust is rejected by the new default `cwdPolicy.delegation: "trusted-targets"`; set the user-owned policy to `"anywhere"` to restore the preceding target flexibility.
+Existing accepted `subagent` payload shapes remain unchanged.
+The `tasks` schema now advertises the absolute 64-item safety bound, while the effective `blocking.maxParallelTasks` value may be lower.
+The intentional compatibility change is that an external target without saved trust is rejected by the new default `cwdPolicy.delegation: "trusted-targets"`; set the user-owned policy to `"anywhere"` to restore the preceding target flexibility.
 
 | Mode | Ordering | Failure behavior |
 | --- | --- | --- |
 | Single | One result. | A failed/aborted/timed-out worker is marked as a tool error while preserving bounded details. |
 | Chain | Input order. | Stops at the first failed step; completed steps remain in details. |
-| Parallel | Input order, with at most four active children. | Collects all task results; partial worker failure is reported in summaries but does not discard successful results. |
+| Parallel | Input order, up to `blocking.maxParallelTasks` total workers and at most four active children. | Rejects calls above the configured limit; otherwise collects all task results, and partial worker failure does not discard successful results. |
 | Parallel + aggregator | Source input order, then aggregator. | The aggregator runs with both successful outputs and failure descriptions; aggregator failure marks the tool result as an error. |
 
 An aggregator whose `agent` or `task` is empty or whitespace-only is treated as absent, so successful
@@ -590,6 +607,8 @@ argument skips that confirmation dialog, but it does not bypass the project trus
 
 Each subprocess has a hard timeout to avoid runaway workers.
 
+- Set `blocking.maxParallelTasks` in `~/.pi/agent/pi-subagents.json`, or use `/subagents` → **Advanced settings** → **Maximum parallel workers**, to allow 1 through 64 worker tasks in one blocking parallel call.
+- The worker-count limit defaults to 8 and does not change the fixed four-at-a-time execution concurrency.
 - Set `timeoutMs` on the top-level call to apply a default for all jobs.
 - Set `timeoutMs` on a task, chain step, or aggregator to override it locally.
 - Valid timeout values range from 1 to 2,147,483,647 milliseconds, matching the runtime timer limit.
@@ -666,7 +685,11 @@ packages/pi-subagents/
 └── package.json
 ```
 
-`index.ts` is the Pi entrypoint and forwards to `subagents.ts`; the other source modules are internal. Workflow settings remain backward compatible: older files without `blocking.enabled` receive the seven-tool default, existing `stateful.enabled: false` files expose blocking delegation plus inspection/consultation, and older package releases ignore and preserve the optional `consult` and `cwdPolicy` objects. The package exposes its Pi extension through `package.json`:
+`index.ts` is the Pi entrypoint and forwards to `subagents.ts`; the other source modules are internal.
+Workflow settings remain backward compatible: older files without `blocking.enabled` receive the seven-tool default, and an absent `blocking.maxParallelTasks` keeps the previous eight-worker limit.
+Existing `stateful.enabled: false` files expose blocking delegation plus inspection/consultation.
+Older package releases ignore and preserve the optional `blocking.maxParallelTasks`, `consult`, and `cwdPolicy` fields.
+The package exposes its Pi extension through `package.json`:
 
 ```json
 {

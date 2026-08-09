@@ -5,11 +5,13 @@ import path from "node:path";
 import { test } from "vitest";
 import {
 	consumeSubagentSettingsNotice,
+	inspectBlockingParallelLimitSettings,
 	inspectConsultResourceSettings,
 	inspectCwdPolicySettings,
 	inspectSubagentSettings,
 	normalizeSubagentSettings,
 	readSubagentSettings,
+	updateBlockingMaxParallelTasksSetting,
 	updateConsultResourceSetting,
 	updateCwdPolicySetting,
 } from "../src/settings.js";
@@ -45,6 +47,61 @@ test("consult resources normalize strictly and default without creating settings
 		assert.equal(inspected.path, path.join(directory, "pi-subagents.json"));
 		assert.equal(readSubagentSettings(), undefined);
 		assert.throws(() => readFileSync(inspected.path, "utf8"), /ENOENT/);
+	});
+});
+
+test("blocking parallel limit normalizes, inspects, and updates safely", () => {
+	withAgentDir((directory) => {
+		assert.deepEqual(normalizeSubagentSettings({ blocking: { maxParallelTasks: 3 } }), {
+			blocking: { maxParallelTasks: 3 },
+		});
+		assert.equal(normalizeSubagentSettings({ blocking: { maxParallelTasks: 0 } }), undefined);
+		assert.equal(normalizeSubagentSettings({ blocking: { maxParallelTasks: 1.5 } }), undefined);
+		assert.equal(normalizeSubagentSettings({ blocking: { maxParallelTasks: 65 } }), undefined);
+
+		const defaultSnapshot = inspectBlockingParallelLimitSettings();
+		assert.equal(defaultSnapshot.value, 8);
+		assert.equal(defaultSnapshot.source, "default");
+		assert.equal(defaultSnapshot.path, path.join(directory, "pi-subagents.json"));
+		assert.throws(() => readFileSync(defaultSnapshot.path, "utf8"), /ENOENT/);
+
+		writeFileSync(
+			defaultSnapshot.path,
+			JSON.stringify({ future: true, blocking: { futureBlocking: "keep" } }),
+		);
+		updateBlockingMaxParallelTasksSetting(5);
+		assert.deepEqual(JSON.parse(readFileSync(defaultSnapshot.path, "utf8")), {
+			future: true,
+			blocking: { futureBlocking: "keep", maxParallelTasks: 5 },
+		});
+		const configured = inspectBlockingParallelLimitSettings();
+		assert.equal(configured.value, 5);
+		assert.equal(configured.source, "user settings");
+
+		assert.throws(() => updateBlockingMaxParallelTasksSetting(65), /between 1 and 64/i);
+		writeFileSync(defaultSnapshot.path, "{ malformed");
+		assert.throws(() => updateBlockingMaxParallelTasksSetting(4), /malformed/i);
+		assert.equal(readFileSync(defaultSnapshot.path, "utf8"), "{ malformed");
+	});
+});
+
+test("blocking parallel updates seed the canonical file from legacy settings", () => {
+	withAgentDir((directory) => {
+		const legacyPath = path.join(directory, "pi-subagents-config.json");
+		const canonicalPath = path.join(directory, "pi-subagents.json");
+		const legacy = {
+			future: true,
+			blocking: { enabled: false, futureBlocking: "keep" },
+		};
+		writeFileSync(legacyPath, JSON.stringify(legacy));
+
+		updateBlockingMaxParallelTasksSetting(6);
+
+		assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), {
+			...legacy,
+			blocking: { ...legacy.blocking, maxParallelTasks: 6 },
+		});
+		assert.deepEqual(JSON.parse(readFileSync(legacyPath, "utf8")), legacy);
 	});
 });
 

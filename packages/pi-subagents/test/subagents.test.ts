@@ -51,6 +51,7 @@ import subagents, {
 	saveSubagentConfig,
 	uniqueToolNames,
 	updateAgentToolsSetting,
+	updateBlockingMaxParallelTasksSetting,
 	updateCompletionDeliverySetting,
 	updateDelegationWorkflowSetting,
 } from "../src/subagents.js";
@@ -71,6 +72,7 @@ type SchemaObject = {
 	items?: SchemaObject;
 	enum?: string[];
 	description?: string;
+	maxItems?: number;
 };
 
 const CORE_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
@@ -136,7 +138,8 @@ test("subagents registers consistent blocking guidance and one management comman
 	assert.doesNotMatch(guidanceText, /critical-path work needed for.*next action/i);
 	assert.doesNotMatch(guidanceText, /subagent_spawn/i);
 	assert.doesNotMatch(guidanceText, /use subagent parallel mode with 2-4/i);
-	assert.match(guidanceText, /hard max 8/i);
+	assert.match(guidanceText, /configured max 8/i);
+	assert.match(String(tool?.description), /maximum parallel worker tasks per call: 8/i);
 	assert.match(guidanceText, /omit the aggregator key entirely/i);
 	assert.match(guidanceText, /null, empty strings, or an empty object/i);
 
@@ -152,6 +155,7 @@ test("subagents registers consistent blocking guidance and one management comman
 		parameters?.properties?.tasks?.items?.properties?.thinkingLevel?.enum,
 		thinkingLevels,
 	);
+	assert.equal(parameters?.properties?.tasks?.maxItems, 64);
 	assert.deepEqual(
 		parameters?.properties?.chain?.items?.properties?.thinkingLevel?.enum,
 		thinkingLevels,
@@ -182,6 +186,75 @@ test("subagents registers consistent blocking guidance and one management comman
 		),
 		{ isError: true },
 	);
+});
+
+test("blocking parallel calls honor the configured worker limit", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-parallel-limit-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		writeFileSync(
+			path.join(directory, "pi-subagents.json"),
+			JSON.stringify({ blocking: { maxParallelTasks: 1 }, stateful: { enabled: false } }),
+		);
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const tool = mock.tools.find((candidate) => candidate.name === "subagent") as SubagentTool;
+		assert.ok(tool);
+		assert.match(String(mock.tools[0]?.description), /maximum parallel worker tasks per call: 1/i);
+		const guidance = mock.tools[0]?.promptGuidelines;
+		assert.ok(Array.isArray(guidance));
+		assert.match(guidance.join("\n"), /configured max 1/i);
+
+		await assert.rejects(
+			() =>
+				tool.execute(
+					"parallel-limit",
+					{
+						tasks: [
+							{ agent: "scout", task: "first" },
+							{
+								agent: "reviewer",
+								task: "second",
+								cwd: path.join(directory, "missing"),
+							},
+						],
+					},
+					undefined,
+					undefined,
+					createMockContext().ctx,
+				),
+			/configured max is 1/i,
+		);
+
+		writeFileSync(
+			path.join(directory, "pi-subagents.json"),
+			JSON.stringify({ blocking: { maxParallelTasks: 9 }, stateful: { enabled: false } }),
+		);
+		const raisedMock = createMockPi();
+		subagents(raisedMock.pi);
+		const raisedTool = raisedMock.tools.find(
+			(candidate) => candidate.name === "subagent",
+		) as SubagentTool;
+		const raisedResult = await raisedTool.execute(
+			"raised-parallel-limit",
+			{
+				tasks: Array.from({ length: 9 }, (_, index) => ({
+					agent: "missing",
+					task: `task ${index + 1}`,
+				})),
+			},
+			undefined,
+			undefined,
+			createMockContext().ctx,
+		);
+		assert.equal(raisedResult.details?.results.length, 9);
+		assert.doesNotMatch(raisedResult.content?.[0]?.text ?? "", /too many parallel tasks/i);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
 });
 
 test("bare subagents opens a current-session manager and keeps direct routes predictable", async () => {
@@ -340,10 +413,12 @@ test("agent tool drafts preserve settings across searchable save, discard, and E
 		});
 		const runtime: SubagentSettingsRuntime = {
 			getBlockingEnabled: () => true,
+			getMaxParallelTasks: () => 8,
 			getCompletionDelivery: () => "next-turn",
 			getConsultResourcePolicy: () => "project-context",
 			getConsultationCwdPolicy: () => "anywhere",
 			getDelegationCwdPolicy: () => "trusted-targets",
+			setMaxParallelTasks: () => undefined,
 			setCompletionDelivery: () => undefined,
 			setConsultResourcePolicy: () => undefined,
 			setConsultationCwdPolicy: () => undefined,
@@ -642,10 +717,12 @@ test("delegation workflow blocks reload while detached agents are retained", asy
 		let reloads = 0;
 		const runtime: SubagentSettingsRuntime = {
 			getBlockingEnabled: () => true,
+			getMaxParallelTasks: () => 8,
 			getCompletionDelivery: () => "next-turn",
 			getConsultResourcePolicy: () => "project-context",
 			getConsultationCwdPolicy: () => "anywhere",
 			getDelegationCwdPolicy: () => "trusted-targets",
+			setMaxParallelTasks: () => undefined,
 			setCompletionDelivery: () => undefined,
 			setConsultResourcePolicy: () => undefined,
 			setConsultationCwdPolicy: () => undefined,
@@ -756,10 +833,12 @@ test("current-session manager excludes already closed agent records", async () =
 		const includeClosedArguments: boolean[] = [];
 		const runtime: SubagentSettingsRuntime = {
 			getBlockingEnabled: () => true,
+			getMaxParallelTasks: () => 8,
 			getCompletionDelivery: () => "next-turn",
 			getConsultResourcePolicy: () => "project-context",
 			getConsultationCwdPolicy: () => "anywhere",
 			getDelegationCwdPolicy: () => "trusted-targets",
+			setMaxParallelTasks: () => undefined,
 			setCompletionDelivery: () => undefined,
 			setConsultResourcePolicy: () => undefined,
 			setConsultationCwdPolicy: () => undefined,
@@ -911,6 +990,285 @@ test("disabled stateful settings do not advertise unavailable lifecycle tools", 
 		await command.handler("help", context.ctx);
 		assert.match(context.notifications.at(-1)?.message ?? "", /configure agent tools/);
 		assert.doesNotMatch(context.notifications.at(-1)?.message ?? "", /subagents:/);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("advanced settings validates, saves, and immediately applies the blocking parallel limit", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-parallel-limit-ui-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({ future: true, blocking: { futureBlocking: "keep" } }),
+		);
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+
+		let applyCall = 0;
+		const applyFrames: string[] = [];
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 60);
+				const frame = stripVTControlCharacters(harness.render().join("\n"));
+				applyFrames.push(frame);
+				if (applyCall === 0) {
+					for (let index = 0; index < 3; index++) harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.confirm");
+				} else if (applyCall === 1) {
+					harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.confirm");
+				} else if (applyCall === 2) {
+					assert.match(frame, /Maximum Parallel Workers/);
+					assert.match(frame, /Current: 8/);
+					harness.setFocused(true);
+					harness.handleInput("3");
+					harness.handleInput("tui.input.submit");
+					await harness.waitForPending();
+				} else {
+					assert.match(frame, /Maximum parallel workers.*Current: 3/s);
+					harness.handleInput("\u0003");
+				}
+				applyCall++;
+				return harness.result;
+			},
+		});
+		await command.handler("", context.ctx);
+		assert.equal(applyCall, 4, applyFrames.join("\n---\n"));
+		assert.ok(
+			applyFrames.flatMap((frame) => frame.split("\n")).every((line) => visibleWidth(line) <= 60),
+		);
+		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
+			future: true,
+			blocking: { futureBlocking: "keep", maxParallelTasks: 3 },
+		});
+		assert.match(context.notifications.at(-1)?.message ?? "", /saved and applied.*3/i);
+		const refreshedBlocking = mock.tools.filter((tool) => tool.name === "subagent").at(-1);
+		assert.match(
+			String(refreshedBlocking?.description),
+			/maximum parallel worker tasks per call: 3/i,
+		);
+		assert.match(
+			Array.isArray(refreshedBlocking?.promptGuidelines)
+				? refreshedBlocking.promptGuidelines.join("\n")
+				: "",
+			/configured max 3/i,
+		);
+		await command.handler("status", context.ctx);
+		assert.match(context.notifications.at(-1)?.message ?? "", /maximum parallel workers: 3/i);
+
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({ future: true, blocking: { futureBlocking: "keep", maxParallelTasks: 2 } }),
+		);
+		let staleCall = 0;
+		const staleContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 60);
+				if (staleCall === 0) {
+					for (let index = 0; index < 3; index++) harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.confirm");
+				} else if (staleCall === 1) {
+					harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.confirm");
+				} else if (staleCall === 2) {
+					harness.setFocused(true);
+					harness.handleInput("3");
+					harness.handleInput("tui.input.submit");
+					await harness.waitForPending();
+				} else {
+					harness.handleInput("\u0003");
+				}
+				staleCall++;
+				return harness.result;
+			},
+		});
+		await command.handler("", staleContext.ctx);
+		assert.equal(staleCall, 4);
+		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
+			future: true,
+			blocking: { futureBlocking: "keep", maxParallelTasks: 3 },
+		});
+
+		const savedDocument = readFileSync(settingsPath, "utf8");
+		let invalidCall = 0;
+		const invalidContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 60);
+				if (invalidCall === 0) {
+					for (let index = 0; index < 3; index++) harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.confirm");
+				} else if (invalidCall === 1) {
+					harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.confirm");
+				} else if (invalidCall === 2) {
+					harness.setFocused(true);
+					harness.handleInput("0");
+					harness.handleInput("tui.input.submit");
+					await harness.waitForPending();
+					assert.match(stripVTControlCharacters(harness.render().join("\n")), /0/);
+					harness.handleInput("tui.select.cancel");
+					await harness.resultPromise;
+				} else {
+					harness.handleInput("\u0003");
+				}
+				invalidCall++;
+				return harness.result;
+			},
+		});
+		await command.handler("", invalidContext.ctx);
+		assert.equal(invalidCall, 4);
+		assert.match(invalidContext.notifications.at(-1)?.message ?? "", /whole number from 1 to 64/i);
+		assert.equal(readFileSync(settingsPath, "utf8"), savedDocument);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("parallel-limit UI keeps the runtime unchanged after a settings save failure", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-parallel-limit-failure-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(settingsPath, "{}\n");
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const registerTool = mock.rawPi.registerTool.bind(mock.rawPi);
+		let failNextSave = true;
+		mock.rawPi.registerTool = (candidate: unknown) => {
+			registerTool(candidate);
+			if (failNextSave && (candidate as { name?: string }).name === "subagent") {
+				failNextSave = false;
+				rmSync(settingsPath);
+				mkdirSync(settingsPath);
+			}
+		};
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		let call = 0;
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 60);
+				if (call === 0) {
+					for (let index = 0; index < 3; index++) harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.confirm");
+				} else if (call === 1) {
+					harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.confirm");
+				} else if (call === 2) {
+					harness.setFocused(true);
+					harness.handleInput("4");
+					harness.handleInput("tui.input.submit");
+					await harness.waitForPending();
+					assert.match(stripVTControlCharacters(harness.render().join("\n")), /4/);
+					harness.handleInput("\u0003");
+					await harness.resultPromise;
+				} else {
+					harness.handleInput("\u0003");
+				}
+				call++;
+				return harness.result;
+			},
+		});
+		await command.handler("", context.ctx);
+		assert.equal(call, 3);
+		assert.match(context.notifications.at(-1)?.message ?? "", /were not saved/i);
+		const blocking = mock.tools.filter((tool) => tool.name === "subagent").at(-1);
+		assert.match(String(blocking?.description), /maximum parallel worker tasks per call: 8/i);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("parallel-limit UI leaves settings and runtime unchanged after registration failure", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-parallel-limit-runtime-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(settingsPath, "{}\n");
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const blocking = mock.tools.find((tool) => tool.name === "subagent") as SubagentTool;
+		assert.ok(blocking);
+		const registerTool = mock.rawPi.registerTool.bind(mock.rawPi);
+		mock.rawPi.registerTool = (candidate: unknown) => {
+			if ((candidate as { name?: string }).name === "subagent") {
+				throw new Error("registration failed");
+			}
+			registerTool(candidate);
+		};
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		let call = 0;
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 60);
+				if (call === 0) {
+					for (let index = 0; index < 3; index++) harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.confirm");
+				} else if (call === 1) {
+					harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.confirm");
+				} else {
+					harness.setFocused(true);
+					harness.handleInput("4");
+					harness.handleInput("tui.input.submit");
+					await harness.waitForPending();
+					harness.handleInput("\u0003");
+					await harness.resultPromise;
+				}
+				call++;
+				return harness.result;
+			},
+		});
+		await command.handler("", context.ctx);
+		assert.equal(call, 3);
+		assert.equal(readFileSync(settingsPath, "utf8"), "{}\n");
+		assert.match(context.notifications.at(-1)?.message ?? "", /not applied.*unchanged/i);
+		await assert.rejects(
+			() =>
+				blocking.execute(
+					"runtime-rollback",
+					{
+						tasks: Array.from({ length: 9 }, (_, index) => ({
+							agent: "missing",
+							task: `task ${index + 1}`,
+						})),
+					},
+					undefined,
+					undefined,
+					createMockContext().ctx,
+				),
+			/configured max is 8/i,
+		);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -1756,6 +2114,7 @@ test("legacy-seeded updates preserve canonical settings created before publicati
 	const updates = [
 		["completion delivery", () => updateCompletionDeliverySetting("next-turn")],
 		["delegation workflow", () => updateDelegationWorkflowSetting("async-only")],
+		["blocking parallel limit", () => updateBlockingMaxParallelTasksSetting(4)],
 		["agent tools", () => updateAgentToolsSetting("scout", ["read"])],
 	] as const;
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;

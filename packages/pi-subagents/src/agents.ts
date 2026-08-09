@@ -66,6 +66,7 @@ export interface SubagentCwdPolicySettings {
 
 export interface SubagentBlockingSettings {
 	enabled?: boolean;
+	maxParallelTasks?: number;
 }
 
 export interface SubagentRuntimeSettings {
