@@ -8,13 +8,16 @@ import {
 	inspectBlockingParallelLimitSettings,
 	inspectConsultResourceSettings,
 	inspectCwdPolicySettings,
+	inspectStatefulLimitSettings,
 	inspectSubagentSettings,
 	normalizeSubagentSettings,
 	readSubagentSettings,
 	updateBlockingMaxParallelTasksSetting,
 	updateConsultResourceSetting,
 	updateCwdPolicySetting,
+	updateStatefulLimitSetting,
 } from "../src/settings.js";
+import { resolveStatefulLimits } from "../src/stateful-limits.js";
 
 function withAgentDir(run: (directory: string) => void): void {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-settings-"));
@@ -82,6 +85,102 @@ test("blocking parallel limit normalizes, inspects, and updates safely", () => {
 		writeFileSync(defaultSnapshot.path, "{ malformed");
 		assert.throws(() => updateBlockingMaxParallelTasksSetting(4), /malformed/i);
 		assert.equal(readFileSync(defaultSnapshot.path, "utf8"), "{ malformed");
+	});
+});
+
+test("detached limits normalize, inspect, and update with per-field sources", () => {
+	withAgentDir((directory) => {
+		const defaults = resolveStatefulLimits();
+		assert.deepEqual(
+			normalizeSubagentSettings({
+				stateful: {
+					maxAgents: 3,
+					maxActiveTurns: 2,
+					maxChildrenPerAgent: 4,
+					maxDepth: 0,
+					maxStoredAgents: 7,
+				},
+			}),
+			{
+				stateful: {
+					maxAgents: 3,
+					maxActiveTurns: 2,
+					maxChildrenPerAgent: 4,
+					maxDepth: 0,
+					maxStoredAgents: 7,
+				},
+			},
+		);
+		for (const invalid of [
+			{ maxAgents: 0 },
+			{ maxActiveTurns: 1.5 },
+			{ maxChildrenPerAgent: -1 },
+			{ maxDepth: -1 },
+			{ maxStoredAgents: Number.MAX_SAFE_INTEGER + 1 },
+		]) {
+			assert.equal(normalizeSubagentSettings({ stateful: invalid }), undefined);
+		}
+
+		const missing = inspectStatefulLimitSettings();
+		assert.equal(missing.path, path.join(directory, "pi-subagents.json"));
+		assert.equal(missing.writePath, missing.path);
+		assert.deepEqual(
+			Object.fromEntries(
+				Object.entries(missing.values ?? {}).map(([field, snapshot]) => [field, snapshot.value]),
+			),
+			defaults,
+		);
+		assert.ok(Object.values(missing.values ?? {}).every((value) => value.source === "default"));
+		assert.throws(() => readFileSync(missing.path, "utf8"), /ENOENT/);
+
+		writeFileSync(
+			missing.path,
+			JSON.stringify({ future: true, stateful: { futureStateful: "keep", maxAgents: 6 } }),
+		);
+		const before = inspectStatefulLimitSettings();
+		assert.equal(before.values?.maxAgents.value, 6);
+		assert.equal(before.values?.maxAgents.source, "user settings");
+		assert.equal(before.values?.maxDepth.source, "default");
+		updateStatefulLimitSetting("maxDepth", 2, {
+			...defaults,
+			maxAgents: 6,
+		});
+		assert.deepEqual(JSON.parse(readFileSync(missing.path, "utf8")), {
+			future: true,
+			stateful: { futureStateful: "keep", maxAgents: 6, maxDepth: 2 },
+		});
+		assert.throws(
+			() => updateStatefulLimitSetting("maxActiveTurns", 3, defaults),
+			/changed.*reopen/i,
+		);
+		assert.throws(() => updateStatefulLimitSetting("maxDepth", -1), /greater than or equal to 0/i);
+
+		writeFileSync(missing.path, "{ malformed");
+		const invalid = inspectStatefulLimitSettings();
+		assert.equal(invalid.values, undefined);
+		assert.match(invalid.error ?? "", /malformed/i);
+		assert.throws(() => updateStatefulLimitSetting("maxAgents", 4), /malformed/i);
+		assert.equal(readFileSync(missing.path, "utf8"), "{ malformed");
+	});
+});
+
+test("detached limit updates seed the canonical file from legacy settings", () => {
+	withAgentDir((directory) => {
+		const legacyPath = path.join(directory, "pi-subagents-config.json");
+		const canonicalPath = path.join(directory, "pi-subagents.json");
+		const legacy = { future: true, stateful: { maxAgents: 5, futureStateful: "keep" } };
+		writeFileSync(legacyPath, JSON.stringify(legacy));
+
+		const inspected = inspectStatefulLimitSettings();
+		assert.equal(inspected.path, legacyPath);
+		assert.equal(inspected.writePath, canonicalPath);
+		updateStatefulLimitSetting("maxActiveTurns", 2);
+
+		assert.deepEqual(JSON.parse(readFileSync(canonicalPath, "utf8")), {
+			...legacy,
+			stateful: { ...legacy.stateful, maxActiveTurns: 2 },
+		});
+		assert.deepEqual(JSON.parse(readFileSync(legacyPath, "utf8")), legacy);
 	});
 });
 

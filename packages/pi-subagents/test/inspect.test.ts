@@ -6,6 +6,7 @@ import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { registerSubagentInspect } from "../src/inspect.js";
 import type { AgentRunInspectionDetail, AgentRunInspectionSummary } from "../src/registry.js";
+import { resolveStatefulLimits } from "../src/stateful-limits.js";
 
 function runtime(
 	options: {
@@ -26,6 +27,7 @@ function runtime(
 			initialized: true,
 			transport: "subprocess" as const,
 			completionDelivery: "next-turn" as const,
+			limits: resolveStatefulLimits(),
 			activeAgents: 1,
 			retainedAgents: 2,
 		}),
@@ -262,6 +264,15 @@ test("subagent_inspect uses scoped model snapshots and structured diagnostics wi
 	assert.equal(statusDetails.maxParallelTasks, 8);
 	assert.equal(statusDetails.configuredMaxParallelTasks, 8);
 	assert.equal(statusDetails.configuredMaxParallelTasksSource, "default");
+	assert.deepEqual(statusDetails.statefulLimits, resolveStatefulLimits());
+	assert.deepEqual(statusDetails.configuredStatefulLimits, resolveStatefulLimits());
+	assert.deepEqual(statusDetails.configuredStatefulLimitSources, {
+		maxAgents: "default",
+		maxActiveTurns: "default",
+		maxChildrenPerAgent: "default",
+		maxDepth: "default",
+		maxStoredAgents: "default",
+	});
 	assert.doesNotMatch(JSON.stringify(status), /trust\.json/);
 
 	const diagnosed = await execute(tool, { action: "diagnose" }, ctx);

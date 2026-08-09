@@ -2,11 +2,14 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { projectAgentRecords } from "./agent-projection.js";
 import { isThinkingLevel } from "./agents.js";
 import { redactPrivateText } from "./context.js";
 import type { ManagedAgent } from "./registry.js";
+import { resolveStatefulLimits } from "./stateful-limits.js";
 
 const STATE_VERSION = 2;
+const DEFAULT_STATEFUL_LIMITS = resolveStatefulLimits();
 const MAX_STATE_BYTES = 1024 * 1024;
 
 interface StoredState {
@@ -35,7 +38,7 @@ export class AgentPersistence {
 		if (!Number.isFinite(retentionMs)) {
 			throw new Error("Subagent retentionDays is too large");
 		}
-		const maxStoredAgents = options.maxStoredAgents ?? 50;
+		const maxStoredAgents = options.maxStoredAgents ?? DEFAULT_STATEFUL_LIMITS.maxStoredAgents;
 		if (!Number.isSafeInteger(maxStoredAgents) || maxStoredAgents < 1) {
 			throw new Error("Subagent maxStoredAgents must be a positive safe integer");
 		}
@@ -54,10 +57,10 @@ export class AgentPersistence {
 			const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as unknown;
 			if (!isStoredState(parsed)) throw new Error("unsupported or malformed state");
 			const cutoff = Date.now() - this.retentionMs;
-			return parsed.agents
-				.filter((agent) => agent.updatedAt >= cutoff && agent.state !== "closed")
-				.slice(-this.maxStoredAgents)
-				.map(sanitizeAgent);
+			return projectAgentRecords(
+				parsed.agents.filter((agent) => agent.updatedAt >= cutoff && agent.state !== "closed"),
+				{ maxAgents: this.maxStoredAgents },
+			).map(sanitizeAgent);
 		} catch {
 			this.quarantine();
 			return [];
@@ -69,7 +72,9 @@ export class AgentPersistence {
 		const eligible = agents.filter(
 			(agent) => agent.state !== "closed" && agent.updatedAt >= cutoff,
 		);
-		const records = selectAgentsForPersistence(eligible, this.maxStoredAgents).map(sanitizeAgent);
+		const records = projectAgentRecords(eligible, {
+			maxAgents: this.maxStoredAgents,
+		}).map(sanitizeAgent);
 		const state: StoredState = { version: STATE_VERSION, updatedAt: Date.now(), agents: records };
 		let content = `${JSON.stringify(state, null, "\t")}\n`;
 		while (Buffer.byteLength(content, "utf8") > MAX_STATE_BYTES && state.agents.length > 0) {
@@ -98,30 +103,6 @@ export class AgentPersistence {
 			// A concurrent process may already have moved or removed it.
 		}
 	}
-}
-
-function selectAgentsForPersistence(
-	agents: readonly ManagedAgent[],
-	maxAgents: number,
-): ManagedAgent[] {
-	const byId = new Map(agents.map((agent) => [agent.id, agent]));
-	const selected = new Map<string, ManagedAgent>();
-	const newestFirst = [...agents].sort((left, right) => right.updatedAt - left.updatedAt);
-	for (const agent of newestFirst) {
-		const chain: ManagedAgent[] = [];
-		let current: ManagedAgent | undefined = agent;
-		const seen = new Set<string>();
-		while (current && !seen.has(current.id)) {
-			seen.add(current.id);
-			chain.unshift(current);
-			current = current.parentId ? byId.get(current.parentId) : undefined;
-		}
-		if (current || (agent.parentId && chain[0].parentId)) continue;
-		const missing = chain.filter((candidate) => !selected.has(candidate.id));
-		if (selected.size + missing.length > maxAgents) continue;
-		for (const candidate of missing) selected.set(candidate.id, candidate);
-	}
-	return agents.filter((agent) => selected.has(agent.id));
 }
 
 function sanitizeAgent(agent: ManagedAgent): ManagedAgent {

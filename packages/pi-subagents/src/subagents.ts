@@ -25,7 +25,7 @@ import {
 	formatAgentCatalog,
 	type SubagentSettings,
 } from "./agents.js";
-import { registerSubagentConfigCommand } from "./config-ui.js";
+import { registerSubagentConfigCommand, registerSubagentConfigLifecycle } from "./config-ui.js";
 import { registerSubagentConsult } from "./consult.js";
 import { executeSubagent } from "./execution.js";
 import { registerSubagentInspect } from "./inspect.js";
@@ -45,6 +45,7 @@ import {
 import { registerStatefulSubagents } from "./stateful.js";
 
 export default function (pi: ExtensionAPI) {
+	const configOwner = registerSubagentConfigLifecycle(pi);
 	const settings = readSubagentSettings();
 	let currentSettings: SubagentSettings | undefined = settings;
 	let currentCatalog = "";
@@ -102,57 +103,61 @@ export default function (pi: ExtensionAPI) {
 			getSettings: () => currentSettings,
 		});
 	}
-	registerSubagentConfigCommand(pi, {
-		...statefulRuntime,
-		getBlockingEnabled,
-		getMaxParallelTasks,
-		getConsultResourcePolicy,
-		getConsultationCwdPolicy,
-		getDelegationCwdPolicy,
-		setMaxParallelTasks(value: number) {
-			const previousSettings = currentSettings;
-			currentSettings = {
-				...(currentSettings ?? {}),
-				blocking: { ...(currentSettings?.blocking ?? {}), maxParallelTasks: value },
-			};
-			try {
-				refreshBlockingCatalog(currentCatalog);
-			} catch (applyError) {
-				currentSettings = previousSettings;
+	registerSubagentConfigCommand(
+		pi,
+		{
+			...statefulRuntime,
+			getBlockingEnabled,
+			getMaxParallelTasks,
+			getConsultResourcePolicy,
+			getConsultationCwdPolicy,
+			getDelegationCwdPolicy,
+			setMaxParallelTasks(value: number) {
+				const previousSettings = currentSettings;
+				currentSettings = {
+					...(currentSettings ?? {}),
+					blocking: { ...(currentSettings?.blocking ?? {}), maxParallelTasks: value },
+				};
 				try {
 					refreshBlockingCatalog(currentCatalog);
-				} catch (rollbackError) {
-					throw new AggregateError(
-						[applyError, rollbackError],
-						"Failed to apply and roll back the parallel-worker limit",
-					);
+				} catch (applyError) {
+					currentSettings = previousSettings;
+					try {
+						refreshBlockingCatalog(currentCatalog);
+					} catch (rollbackError) {
+						throw new AggregateError(
+							[applyError, rollbackError],
+							"Failed to apply and roll back the parallel-worker limit",
+						);
+					}
+					throw applyError;
 				}
-				throw applyError;
-			}
+			},
+			setConsultResourcePolicy(value: ConsultResourcePolicy) {
+				currentSettings = {
+					...(currentSettings ?? {}),
+					consult: { ...(currentSettings?.consult ?? {}), resources: value },
+				};
+				refreshConsultCatalog(currentCatalog);
+			},
+			setConsultationCwdPolicy(value: ConsultationCwdPolicy) {
+				currentSettings = {
+					...(currentSettings ?? {}),
+					cwdPolicy: { ...(currentSettings?.cwdPolicy ?? {}), consultation: value },
+				};
+				refreshConsultCatalog(currentCatalog);
+			},
+			setDelegationCwdPolicy(value: DelegationCwdPolicy) {
+				currentSettings = {
+					...(currentSettings ?? {}),
+					cwdPolicy: { ...(currentSettings?.cwdPolicy ?? {}), delegation: value },
+				};
+				refreshBlockingCatalog(currentCatalog);
+				statefulRuntime.refreshSettingsGuidance();
+			},
 		},
-		setConsultResourcePolicy(value: ConsultResourcePolicy) {
-			currentSettings = {
-				...(currentSettings ?? {}),
-				consult: { ...(currentSettings?.consult ?? {}), resources: value },
-			};
-			refreshConsultCatalog(currentCatalog);
-		},
-		setConsultationCwdPolicy(value: ConsultationCwdPolicy) {
-			currentSettings = {
-				...(currentSettings ?? {}),
-				cwdPolicy: { ...(currentSettings?.cwdPolicy ?? {}), consultation: value },
-			};
-			refreshConsultCatalog(currentCatalog);
-		},
-		setDelegationCwdPolicy(value: DelegationCwdPolicy) {
-			currentSettings = {
-				...(currentSettings ?? {}),
-				cwdPolicy: { ...(currentSettings?.cwdPolicy ?? {}), delegation: value },
-			};
-			refreshBlockingCatalog(currentCatalog);
-			statefulRuntime.refreshSettingsGuidance();
-		},
-	});
+		configOwner,
+	);
 }
 
 function registerBlockingSubagent(
@@ -232,6 +237,7 @@ export {
 	inspectConsultResourceSettings,
 	inspectCwdPolicySettings,
 	inspectDelegationWorkflowSettings,
+	inspectStatefulLimitSettings,
 	inspectSubagentSettings,
 	normalizeAgentSettings,
 	normalizeSubagentSettings,
@@ -248,4 +254,5 @@ export {
 	updateConsultResourceSetting,
 	updateCwdPolicySetting,
 	updateDelegationWorkflowSetting,
+	updateStatefulLimitSetting,
 } from "./settings.js";

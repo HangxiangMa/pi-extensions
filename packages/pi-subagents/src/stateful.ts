@@ -39,6 +39,7 @@ import {
 import { DEFAULT_DELEGATION_CWD_POLICY, readSubagentSettings } from "./settings.js";
 import { createSpawnPromptGuidelines } from "./stateful-guidance.js";
 import { assertCurrentSpawn, disposeStatefulRuntime } from "./stateful-lifecycle.js";
+import { resolveStatefulLimits, type StatefulLimits } from "./stateful-limits.js";
 import { createStatefulToolRenderer } from "./stateful-render.js";
 import {
 	assertFollowUpWriteAllowed,
@@ -92,6 +93,7 @@ export interface StatefulSubagentRuntimeStatus {
 	initialized: boolean;
 	transport: "subprocess" | "in-process";
 	completionDelivery: CompletionDelivery;
+	limits: StatefulLimits;
 	activeAgents: number;
 	retainedAgents: number;
 }
@@ -124,6 +126,7 @@ export function registerStatefulSubagents(
 	const enabled = settings.enabled !== false;
 	const transportKind = resolveStatefulTransportKind(settings.transport);
 	let completionDelivery = resolveCompletionDelivery(settings.completionDelivery);
+	let runtimeLimits = resolveStatefulLimits(settings);
 	let agentCatalog = "";
 	let completionBroker: CompletionDeliveryBroker | undefined;
 	let refreshSpawnToolRegistration: (() => void) | undefined;
@@ -138,6 +141,8 @@ export function registerStatefulSubagents(
 	const parentRuntime: ParentRuntimeSnapshot = { model: undefined, thinkingLevel: "off" };
 	const getCurrentSettings = () =>
 		dependencies.getSettings ? dependencies.getSettings() : readSubagentSettings();
+	const getCurrentStatefulSettings = () =>
+		dependencies.getSettings ? (dependencies.getSettings()?.stateful ?? {}) : settings;
 
 	const clearAgents = async (): Promise<number> => {
 		const generation = runtimeGeneration;
@@ -181,6 +186,7 @@ export function registerStatefulSubagents(
 				initialized: registry !== undefined,
 				transport: transportKind,
 				completionDelivery,
+				limits: { ...runtimeLimits },
 				...counts,
 			};
 		},
@@ -229,13 +235,15 @@ export function registerStatefulSubagents(
 			}
 			parentRuntime.model = ctx.model;
 			parentRuntime.thinkingLevel = normalizeRuntimeThinkingLevel(pi.getThinkingLevel());
+			const sessionSettings = getCurrentStatefulSettings();
+			const nextLimits = resolveStatefulLimits(sessionSettings);
 			const owner =
 				ctx.sessionManager.getSessionId?.() ??
 				ctx.sessionManager.getSessionFile?.() ??
 				`ephemeral:${ctx.cwd}`;
 			const sessionPersistence = new AgentPersistence(owner, {
-				retentionDays: settings.retentionDays,
-				maxStoredAgents: settings.maxStoredAgents,
+				retentionDays: sessionSettings.retentionDays,
+				maxStoredAgents: nextLimits.maxStoredAgents,
 			});
 			const sessionBroker = new CompletionDeliveryBroker(pi, ctx, completionDelivery, {
 				onDeliveryError: (error) => {
@@ -259,13 +267,13 @@ export function registerStatefulSubagents(
 						})
 					: new SubprocessTransport({ getSettings: getCurrentSettings });
 			const nextRegistry = new AgentRegistry(transport, {
-				maxAgents: settings.maxAgents,
-				maxActiveTurns: settings.maxActiveTurns,
-				maxDepth: settings.maxDepth,
-				maxChildrenPerAgent: settings.maxChildrenPerAgent,
-				maxMailboxMessages: settings.maxMailboxMessages,
-				maxMailboxMessageBytes: settings.maxMailboxMessageBytes,
-				idleTtlMs: settings.idleTtlMs,
+				maxAgents: nextLimits.maxAgents,
+				maxActiveTurns: nextLimits.maxActiveTurns,
+				maxDepth: nextLimits.maxDepth,
+				maxChildrenPerAgent: nextLimits.maxChildrenPerAgent,
+				maxMailboxMessages: sessionSettings.maxMailboxMessages,
+				maxMailboxMessageBytes: sessionSettings.maxMailboxMessageBytes,
+				idleTtlMs: sessionSettings.idleTtlMs,
 				onChange: async (agents) => {
 					await sessionPersistence.save(agents);
 					if (generation !== runtimeGeneration) return;
@@ -317,7 +325,12 @@ export function registerStatefulSubagents(
 			registry = nextRegistry;
 			persistence = sessionPersistence;
 			completionBroker = sessionBroker;
-			const sweepEveryMs = Math.max(1_000, Math.min(settings.idleTtlMs ?? 60 * 60 * 1000, 60_000));
+			runtimeLimits = nextLimits;
+			refreshSpawnToolRegistration?.();
+			const sweepEveryMs = Math.max(
+				1_000,
+				Math.min(sessionSettings.idleTtlMs ?? 60 * 60 * 1000, 60_000),
+			);
 			sweepTimer = setInterval(() => {
 				void nextRegistry.sweepExpired().catch((error: unknown) => {
 					if (!ctx.hasUI || generation !== runtimeGeneration) return;
@@ -371,7 +384,7 @@ export function registerStatefulSubagents(
 	});
 
 	const baseSpawnDescription = () =>
-		`Start an addressable background subagent with an optional thinking level chosen for the task difficulty, return immediately with an agentId, and receive its completion asynchronously. Working-directory target policy: ${dependencies.getSettings?.()?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY}. This controls launch targets and protected project resources, not filesystem access or sandboxing.`;
+		`Start an addressable background subagent with an optional thinking level chosen for the task difficulty, return immediately with an agentId, and receive its completion asynchronously. Detached capacity: ${runtimeLimits.maxAgents} retained agents, ${runtimeLimits.maxActiveTurns} active turns, ${runtimeLimits.maxChildrenPerAgent} direct children per agent, and depth ${runtimeLimits.maxDepth}. Working-directory target policy: ${dependencies.getSettings?.()?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY}. This controls launch targets and protected project resources, not filesystem access or sandboxing.`;
 	const spawnTool = defineTool({
 		name: "subagent_spawn",
 		label: "Spawn Subagent",

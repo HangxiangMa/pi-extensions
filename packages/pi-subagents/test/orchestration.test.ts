@@ -18,6 +18,7 @@ import {
 	resolveSpawnContextMode,
 	resolveStatefulTransportKind,
 } from "../src/stateful.js";
+import { resolveStatefulLimits } from "../src/stateful-limits.js";
 import {
 	resolveStatefulSubprocessThinkingLevel,
 	SubprocessTransport,
@@ -135,6 +136,7 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			initialized: false,
 			transport: "subprocess",
 			completionDelivery: "next-turn",
+			limits: resolveStatefulLimits(),
 			activeAgents: 0,
 			retainedAgents: 0,
 		});
@@ -164,6 +166,7 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			initialized: true,
 			transport: "subprocess",
 			completionDelivery: "next-turn",
+			limits: resolveStatefulLimits(),
 			activeAgents: 0,
 			retainedAgents: 0,
 		});
@@ -534,6 +537,7 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			initialized: false,
 			transport: "subprocess",
 			completionDelivery: "next-turn",
+			limits: resolveStatefulLimits(),
 			activeAgents: 0,
 			retainedAgents: 0,
 		});
@@ -564,6 +568,7 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			initialized: false,
 			transport: "subprocess",
 			completionDelivery: "next-turn",
+			limits: resolveStatefulLimits(),
 			activeAgents: 0,
 			retainedAgents: 0,
 		});

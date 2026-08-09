@@ -22,6 +22,14 @@ import {
 	MAX_CONFIGURABLE_PARALLEL_TASKS,
 	MAX_SUBAGENT_TIMEOUT_MS,
 } from "./limits.js";
+import {
+	isValidStatefulLimit,
+	resolveStatefulLimits,
+	STATEFUL_LIMIT_FIELDS,
+	type StatefulLimitField,
+	type StatefulLimits,
+	statefulLimitDefinition,
+} from "./stateful-limits.js";
 
 export function hasOwn(obj: object, key: PropertyKey): boolean {
 	return Object.hasOwn(obj, key);
@@ -41,10 +49,6 @@ function isPositiveNumber(value: unknown): value is number {
 
 function isPositiveInteger(value: unknown): value is number {
 	return isPositiveNumber(value) && Number.isSafeInteger(value);
-}
-
-function isNonNegativeInteger(value: unknown): value is number {
-	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 export function normalizeAgentSettings(value: unknown): SubagentAgentConfig | undefined {
@@ -133,23 +137,17 @@ export function normalizeSubagentSettings(value: unknown): SubagentSettings | un
 			}
 			runtime.completionDelivery = value.stateful.completionDelivery;
 		}
-		for (const key of [
-			"maxAgents",
-			"maxActiveTurns",
-			"maxChildrenPerAgent",
-			"maxMailboxMessages",
-			"maxMailboxMessageBytes",
-			"idleTtlMs",
-			"maxStoredAgents",
-		] as const) {
+		for (const key of STATEFUL_LIMIT_FIELDS) {
+			if (hasOwn(value.stateful, key)) {
+				if (!isValidStatefulLimit(key, value.stateful[key])) return undefined;
+				runtime[key] = value.stateful[key];
+			}
+		}
+		for (const key of ["maxMailboxMessages", "maxMailboxMessageBytes", "idleTtlMs"] as const) {
 			if (hasOwn(value.stateful, key)) {
 				if (!isPositiveInteger(value.stateful[key])) return undefined;
 				runtime[key] = value.stateful[key];
 			}
-		}
-		if (hasOwn(value.stateful, "maxDepth")) {
-			if (!isNonNegativeInteger(value.stateful.maxDepth)) return undefined;
-			runtime.maxDepth = value.stateful.maxDepth;
 		}
 		if (hasOwn(value.stateful, "retentionDays")) {
 			if (!isPositiveNumber(value.stateful.retentionDays)) return undefined;
@@ -300,6 +298,18 @@ export interface BlockingParallelLimitSettingsSnapshot {
 	path: string;
 	value: number;
 	source: "default" | "user settings";
+	error?: string;
+}
+
+export interface StatefulLimitFieldSnapshot {
+	value: number;
+	source: "default" | "user settings";
+}
+
+export interface StatefulLimitSettingsSnapshot {
+	path: string;
+	writePath: string;
+	values?: Record<StatefulLimitField, StatefulLimitFieldSnapshot>;
 	error?: string;
 }
 
@@ -505,6 +515,29 @@ export function inspectBlockingParallelLimitSettings(): BlockingParallelLimitSet
 	};
 }
 
+export function inspectStatefulLimitSettings(): StatefulLimitSettingsSnapshot {
+	const inspected = inspectSubagentSettingsDocument();
+	const writePath = subagentSettingsFilePath();
+	if (inspected.error) {
+		return { path: inspected.path, writePath, error: inspected.error };
+	}
+	const resolved = resolveStatefulLimits(inspected.settings?.stateful);
+	const rawStateful = isPlainObject(inspected.raw?.stateful) ? inspected.raw.stateful : undefined;
+	return {
+		path: inspected.path,
+		writePath,
+		values: Object.fromEntries(
+			STATEFUL_LIMIT_FIELDS.map((field) => [
+				field,
+				{
+					value: resolved[field],
+					source: rawStateful && hasOwn(rawStateful, field) ? "user settings" : "default",
+				},
+			]),
+		) as unknown as Record<StatefulLimitField, StatefulLimitFieldSnapshot>,
+	};
+}
+
 export function updateDelegationWorkflowSetting(
 	value: Exclude<DelegationWorkflow, "disabled">,
 ): void {
@@ -577,6 +610,38 @@ export function updateBlockingMaxParallelTasksSetting(value: number): void {
 					...(blocking ?? {}),
 					maxParallelTasks: value,
 				},
+			},
+			update.replaceCanonical,
+		);
+	});
+}
+
+export function updateStatefulLimitSetting(
+	field: StatefulLimitField,
+	value: number,
+	expected?: StatefulLimits,
+): void {
+	if (!isValidStatefulLimit(field, value)) {
+		throw new Error(
+			`${field} must be a safe integer greater than or equal to ${statefulLimitDefinition(field).minimum}`,
+		);
+	}
+	withSettingsMutationLock(() => {
+		const update = readSettingsObjectForUpdate();
+		const raw = update.document;
+		const stateful = raw.stateful;
+		if (stateful !== undefined && !isPlainObject(stateful)) {
+			throw new Error(`Cannot update invalid ${SETTINGS_FILE} stateful settings`);
+		}
+		const normalized = normalizeSubagentSettings(raw);
+		if (!normalized) throw new Error(`Cannot update invalid ${SETTINGS_FILE}`);
+		if (expected && !sameStatefulLimits(resolveStatefulLimits(normalized.stateful), expected)) {
+			throw new Error("Detached limit settings changed; reopen settings and retry");
+		}
+		writeSettingsObjectUnlocked(
+			{
+				...raw,
+				stateful: { ...(stateful ?? {}), [field]: value },
 			},
 			update.replaceCanonical,
 		);
@@ -726,6 +791,10 @@ function withSettingsMutationLock<T>(mutate: () => T): T {
 	} finally {
 		release();
 	}
+}
+
+function sameStatefulLimits(left: StatefulLimits, right: StatefulLimits): boolean {
+	return STATEFUL_LIMIT_FIELDS.every((field) => left[field] === right[field]);
 }
 
 function pathEntryExists(filePath: string): boolean {

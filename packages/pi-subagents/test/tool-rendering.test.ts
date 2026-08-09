@@ -337,10 +337,42 @@ test("inspect renderer summarizes every action instead of dumping collapsed JSON
 				status: {
 					workflow: "all",
 					consultResources: "project-context",
-					stateful: { initialized: true, activeAgents: 1, retainedAgents: 2 },
+					stateful: {
+						initialized: true,
+						activeAgents: 1,
+						retainedAgents: 2,
+						limits: {
+							maxAgents: 16,
+							maxActiveTurns: 4,
+							maxChildrenPerAgent: 8,
+							maxDepth: 3,
+							maxStoredAgents: 50,
+						},
+					},
+					statefulLimits: {
+						maxAgents: 16,
+						maxActiveTurns: 4,
+						maxChildrenPerAgent: 8,
+						maxDepth: 3,
+						maxStoredAgents: 50,
+					},
+					configuredStatefulLimits: {
+						maxAgents: 20,
+						maxActiveTurns: 4,
+						maxChildrenPerAgent: 8,
+						maxDepth: 3,
+						maxStoredAgents: 50,
+					},
+					configuredStatefulLimitSources: {
+						maxAgents: "user settings",
+						maxActiveTurns: "default",
+						maxChildrenPerAgent: "default",
+						maxDepth: "default",
+						maxStoredAgents: "default",
+					},
 				},
 			},
-			expected: /workflow: all.*1 active.*2 retained/is,
+			expected: /workflow: all.*1 active.*2 retained.*limits:.*agents:16.*stored:50/is,
 		},
 		{
 			args: { action: "diagnose" },
@@ -367,6 +399,21 @@ test("inspect renderer summarizes every action instead of dumping collapsed JSON
 		assert.match(text, fixture.expected);
 		assert.doesNotMatch(text, /^\s*\{/u);
 	}
+
+	const statusFixture = cases.find((fixture) => fixture.args.action === "status");
+	assert.ok(statusFixture);
+	const expandedStatus = withoutSgr(
+		renderResult(
+			tool,
+			statusFixture.args,
+			{
+				content: [{ type: "text", text: JSON.stringify(statusFixture.details) }],
+				details: statusFixture.details,
+			},
+			{ expanded: true, isPartial: false },
+		).join("\n"),
+	);
+	assert.match(expandedStatus, /configured:.*agents:20 \(user settings\).*active:4 \(default\)/is);
 });
 
 test("detached lifecycle renderers summarize calls and action-specific results", () => {

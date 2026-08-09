@@ -23,6 +23,7 @@ import {
 	inspectConsultResourceSettings,
 	inspectCwdPolicySettings,
 	inspectDelegationWorkflowSettings,
+	inspectStatefulLimitSettings,
 	inspectSubagentSettings,
 	resolveDelegationWorkflow,
 } from "./settings.js";
@@ -368,11 +369,25 @@ function projectStatus(runtime: SubagentInspectRuntime): Record<string, unknown>
 	const cwdPolicy = inspectCwdPolicySettings();
 	const completion = inspectCompletionDeliverySettings();
 	const parallelLimit = inspectBlockingParallelLimitSettings();
+	const detachedLimits = inspectStatefulLimitSettings();
+	const configuredDetachedLimits = detachedLimits.values
+		? Object.fromEntries(
+				Object.entries(detachedLimits.values).map(([field, snapshot]) => [field, snapshot.value]),
+			)
+		: undefined;
+	const configuredDetachedLimitSources = detachedLimits.values
+		? Object.fromEntries(
+				Object.entries(detachedLimits.values).map(([field, snapshot]) => [field, snapshot.source]),
+			)
+		: undefined;
 	return {
 		workflow,
 		configuredWorkflow: configured.value,
 		configuredWorkflowSource: configured.source,
 		stateful,
+		statefulLimits: stateful.limits,
+		configuredStatefulLimits: configuredDetachedLimits,
+		configuredStatefulLimitSources: configuredDetachedLimitSources,
 		configuredCompletionDelivery: completion.value,
 		configuredCompletionDeliverySource: completion.source,
 		maxParallelTasks: runtime.getMaxParallelTasks(),
@@ -393,13 +408,15 @@ function projectStatus(runtime: SubagentInspectRuntime): Record<string, unknown>
 			resources.error ||
 			cwdPolicy.error ||
 			completion.error ||
-			parallelLimit.error
+			parallelLimit.error ||
+			detachedLimits.error
 				? boundedPrivateText(
 						configured.error ??
 							resources.error ??
 							cwdPolicy.error ??
 							completion.error ??
 							parallelLimit.error ??
+							detachedLimits.error ??
 							"",
 						2 * 1024,
 					)
