@@ -216,6 +216,9 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		controller.setCompletionDelivery("next-turn");
 		assert.equal(spawn.name, "subagent_spawn");
 		assert.match(spawn.parameters.properties?.timeoutMs?.description ?? "", /work deadline/i);
+		assert.match(spawn.parameters.properties?.idleTimeoutMs?.description ?? "", /completed/i);
+		assert.match(spawn.parameters.properties?.maxTurns?.description ?? "", /assistant turns/i);
+		assert.match(spawn.parameters.properties?.maxToolCalls?.description ?? "", /tool calls/i);
 		assert.match(spawn.promptGuidelines.join("\n"), /timeoutMs.*task difficulty/i);
 
 		const send = mock.tools.find((tool) => tool.name === "subagent_send") as {
@@ -227,6 +230,9 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			send.parameters.properties?.timeoutMs?.description ?? "",
 			/work deadline.*follow-up/i,
 		);
+		assert.match(send.parameters.properties?.idleTimeoutMs?.description ?? "", /completed/i);
+		assert.match(send.parameters.properties?.maxTurns?.description ?? "", /assistant turns/i);
+		assert.match(send.parameters.properties?.maxToolCalls?.description ?? "", /tool calls/i);
 		const manage = mock.tools.find((tool) => tool.name === "subagent_manage") as {
 			description: string;
 			parameters: { properties?: Record<string, { description?: string; enum?: string[] }> };

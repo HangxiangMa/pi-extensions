@@ -27,18 +27,28 @@ import {
 	normalizeThinking,
 	rpcPolicy,
 } from "./rpc-transport-metadata.js";
+import {
+	captureRpcEvent,
+	createRpcTurnCapture,
+	observeRpcBudgetEvent,
+} from "./rpc-turn-capture.js";
 import { terminateProcess } from "./runner.js";
-import { boundedPrivateText, safeTerminalText } from "./safe-text.js";
+import { safeTerminalText } from "./safe-text.js";
 import { readSubagentSettings } from "./settings.js";
 import { buildStatefulTurnPrompt, resolveStatefulTurnTimeout } from "./stateful-prompt.js";
+import {
+	formatTimeoutCheckpoint,
+	formatTurnTerminationMessage,
+	TURN_TERMINATION_VERSION,
+	type TurnTerminationReport,
+} from "./timeout-checkpoint.js";
 import type { SubagentTransport } from "./transport.js";
 import {
-	emptyTransportUsage,
 	PI_SUBAGENTS_RPC_PROTOCOL,
 	type TransportProgressCallback,
 	type TransportTelemetry,
-	type TransportUsage,
 } from "./transport-types.js";
+import { TurnBudgetMonitor, type TurnBudgetStop } from "./turn-budget.js";
 
 const COMMAND_TIMEOUT_MS = 30_000;
 const STARTUP_TIMEOUT_MS = 30_000;
@@ -363,17 +373,6 @@ interface RpcChildRecord {
 	temporaryPrompt?: { dir: string; filePath: string };
 }
 
-interface TurnCapture {
-	output: string;
-	partial: string;
-	stopReason?: string;
-	error?: string;
-	provider?: string;
-	model?: string;
-	usage: TransportUsage;
-	firstActivityAt?: number;
-}
-
 export class RpcTransport implements SubagentTransport {
 	readonly kind = "rpc" as const;
 	private readonly children = new Map<string, RpcChildRecord>();
@@ -453,7 +452,30 @@ export class RpcTransport implements SubagentTransport {
 			await this.releaseById(agent.id).catch(() => undefined);
 			return interruptedRpcOutcome("", telemetry, "ready");
 		}
-		const capture: TurnCapture = { output: "", partial: "", usage: emptyTransportUsage() };
+		const timeoutMs =
+			agent.currentTimeoutMs ??
+			agent.timeoutMs ??
+			agentConfig.timeoutMs ??
+			this.options.defaultTimeoutMs ??
+			resolveStatefulTurnTimeout(agentConfig);
+		const capture = createRpcTurnCapture();
+		let resolveBudget!: (stop: TurnBudgetStop) => void;
+		let resolvePreAcceptanceIdle!: (stop: TurnBudgetStop) => void;
+		const budgetExceeded = new Promise<TurnBudgetStop>((resolve) => {
+			resolveBudget = resolve;
+		});
+		const preAcceptanceIdleExceeded = new Promise<TurnBudgetStop>((resolve) => {
+			resolvePreAcceptanceIdle = resolve;
+		});
+		const budgetMonitor = new TurnBudgetMonitor({
+			idleTimeoutMs: agent.currentIdleTimeoutMs ?? agent.idleTimeoutMs,
+			maxTurns: agent.currentMaxTurns ?? agent.maxTurns,
+			maxToolCalls: agent.currentMaxToolCalls ?? agent.maxToolCalls,
+			onExceeded(stop) {
+				resolveBudget(stop);
+				if (stop.reason === "idle_timeout") resolvePreAcceptanceIdle(stop);
+			},
+		});
 		let settledResolve!: () => void;
 		let settledReject!: (error: Error) => void;
 		const settled = new Promise<void>((resolve, reject) => {
@@ -463,6 +485,7 @@ export class RpcTransport implements SubagentTransport {
 		void settled.catch(() => undefined);
 		const unsubscribeEvent = child.client.onEvent((event) => {
 			captureRpcEvent(event, capture);
+			observeRpcBudgetEvent(event, budgetMonitor);
 			if (!capture.firstActivityAt && isActivityEvent(event)) {
 				capture.firstActivityAt = Date.now();
 				publish({ phase: "running", timing: { firstActivityAt: capture.firstActivityAt } });
@@ -478,57 +501,87 @@ export class RpcTransport implements SubagentTransport {
 		const prompt = child.started
 			? buildCurrentTurnPrompt(agent, task)
 			: buildStatefulTurnPrompt(agent, task).text;
-		const timeoutMs =
-			agent.currentTimeoutMs ??
-			agent.timeoutMs ??
-			agentConfig.timeoutMs ??
-			this.options.defaultTimeoutMs ??
-			resolveStatefulTurnTimeout(agentConfig);
 		let accepted = false;
+		let preAcceptanceStop: TurnBudgetStop | undefined;
 		const deadline = Date.now() + timeoutMs;
 		try {
-			await raceWithAbort(
-				child.client.prompt(prompt, remainingMs(deadline)),
-				signal,
-				"RPC subagent prompt acceptance aborted",
-			);
+			await Promise.race([
+				raceWithAbort(
+					child.client.prompt(prompt, remainingMs(deadline)),
+					signal,
+					"RPC subagent prompt acceptance aborted",
+				),
+				preAcceptanceIdleExceeded.then((stop) => {
+					preAcceptanceStop = stop;
+					throw new Error(formatTurnTerminationMessage(stop.reason, stop.limit, "RPC subagent"));
+				}),
+			]);
 			accepted = true;
 			child.started = true;
 			publish({ phase: "accepted", timing: { promptAcceptedAt: Date.now() } });
-			const settlement = await waitForTurnSettlement(settled, signal, remainingMs(deadline));
-			if (settlement !== "settled") {
+			const settlement = await Promise.race([
+				waitForTurnSettlement(settled, signal, remainingMs(deadline)).then((kind) => ({
+					kind,
+				})),
+				budgetExceeded.then((stop) => ({ kind: "limit" as const, stop })),
+			]);
+			if (settlement.kind !== "settled") {
 				const [, stopped] = await Promise.all([
 					child.client.abort().catch(() => undefined),
 					settlesWithin(settled, this.options.abortGraceMs ?? ABORT_GRACE_MS),
 				]);
 				const partial = truncateUtf8(capture.output || capture.partial, DEFAULT_MAX_OUTPUT_BYTES);
-				if (settlement === "aborted" || !stopped || signal.aborted) {
+				const stop =
+					settlement.kind === "limit"
+						? settlement.stop
+						: ({ reason: "work_timeout", limit: timeoutMs } as const);
+				const explicitAbort = settlement.kind === "aborted" || signal.aborted;
+				const termination: TurnTerminationReport | undefined = explicitAbort
+					? undefined
+					: {
+							version: TURN_TERMINATION_VERSION,
+							reason: stop.reason,
+							limit: stop.limit,
+							checkpoint: capture.journal.checkpoint(task, partial.text),
+							finalization: {
+								attempted: false,
+								status: "skipped",
+								durationMs: 0,
+							},
+						};
+				if (explicitAbort || !stopped) {
 					if (!stopped) await this.releaseById(agent.id);
 					publish({
-						phase: settlement === "aborted" ? "interrupted" : "failed",
+						phase: explicitAbort ? "interrupted" : "failed",
 						failurePhase: "running",
 						timing: { settledAt: Date.now() },
 						usage: capture.usage,
 					});
+					const checkpointOutput = termination
+						? formatTimeoutCheckpoint(termination.checkpoint)
+						: partial.text;
 					return {
-						output: partial.text,
-						exitCode: settlement === "aborted" ? 130 : 124,
-						aborted: settlement === "aborted",
+						output: partial.text || checkpointOutput,
+						exitCode: explicitAbort ? 130 : 124,
+						aborted: explicitAbort,
 						truncated: partial.truncated || agent.contextTruncated,
-						error:
-							settlement === "aborted"
-								? "RPC subagent was aborted"
-								: `RPC subagent timed out after ${timeoutMs}ms; abort did not settle`,
+						error: explicitAbort
+							? "RPC subagent was aborted"
+							: `${formatTurnTerminationMessage(stop.reason, stop.limit, "RPC subagent")}; abort did not settle`,
 						policy: rpcPolicy(agentConfig, agent),
+						termination,
 						telemetry,
 					};
 				}
 
 				publish({ phase: "finalizing", failurePhase: "running" });
+				const finalizationStartedAt = Date.now();
 				const summary = await finalizeTimedOutRpcTurn({
 					client: child.client,
 					task,
 					partialOutput: partial.text,
+					checkpoint: termination?.checkpoint,
+					terminationReason: stop.reason,
 					resultFormat: agent.resultFormat,
 					signal,
 					workTimeoutMs: timeoutMs,
@@ -543,20 +596,33 @@ export class RpcTransport implements SubagentTransport {
 					getCapture: () => capture,
 					release: () => this.releaseById(agent.id),
 				});
+				if (termination) {
+					termination.finalization = {
+						attempted: true,
+						status: summary.status,
+						durationMs: Date.now() - finalizationStartedAt,
+						error: summary.error,
+					};
+				}
 				publish({
 					phase: "failed",
 					failurePhase: "running",
 					timing: { settledAt: Date.now() },
 					usage: capture.usage,
 				});
+				const checkpointOutput = termination ? formatTimeoutCheckpoint(termination.checkpoint) : "";
 				return {
-					output: summary.error ? partial.text : summary.output,
+					output: summary.error ? partial.text || checkpointOutput : summary.output,
 					exitCode: 124,
 					truncated: partial.truncated || summary.truncated || agent.contextTruncated,
-					error: [`RPC subagent timed out after ${timeoutMs}ms`, summary.error]
+					error: [
+						formatTurnTerminationMessage(stop.reason, stop.limit, "RPC subagent"),
+						summary.error,
+					]
 						.filter(Boolean)
 						.join("; "),
 					policy: rpcPolicy(agentConfig, agent),
+					termination,
 					telemetry,
 				};
 			}
@@ -581,20 +647,43 @@ export class RpcTransport implements SubagentTransport {
 		} catch (error) {
 			await this.releaseById(agent.id).catch(() => undefined);
 			const timedOut = isTimeoutError(error);
+			const stop =
+				preAcceptanceStop ??
+				(timedOut ? ({ reason: "work_timeout", limit: timeoutMs } as const) : undefined);
+			const partial = truncateUtf8(capture.output || capture.partial, DEFAULT_MAX_OUTPUT_BYTES);
+			const termination: TurnTerminationReport | undefined =
+				stop && !signal.aborted
+					? {
+							version: TURN_TERMINATION_VERSION,
+							reason: stop.reason,
+							limit: stop.limit,
+							checkpoint: capture.journal.checkpoint(task, partial.text),
+							finalization: {
+								attempted: false,
+								status: "skipped",
+								durationMs: 0,
+							},
+						}
+					: undefined;
 			publish({
 				phase: signal.aborted ? "interrupted" : "failed",
 				failurePhase: accepted ? "running" : "ready",
 				timing: { settledAt: Date.now() },
 			});
 			return {
-				output: truncateUtf8(capture.output || capture.partial, DEFAULT_MAX_OUTPUT_BYTES).text,
-				exitCode: signal.aborted ? 130 : timedOut ? 124 : 1,
+				output:
+					partial.text || (termination ? formatTimeoutCheckpoint(termination.checkpoint) : ""),
+				exitCode: signal.aborted ? 130 : stop ? 124 : 1,
 				aborted: signal.aborted,
-				error: timedOut ? `RPC subagent timed out after ${timeoutMs}ms` : boundedError(error),
+				error: stop
+					? formatTurnTerminationMessage(stop.reason, stop.limit, "RPC subagent")
+					: boundedError(error),
 				policy: rpcPolicy(agentConfig, agent),
+				termination,
 				telemetry,
 			};
 		} finally {
+			budgetMonitor.dispose();
 			unsubscribeEvent();
 			unsubscribeClose();
 		}
@@ -730,92 +819,6 @@ export function buildRpcArgs(
 	}
 	if (rolePromptPath) args.push("--append-system-prompt", rolePromptPath);
 	return args;
-}
-
-function captureRpcEvent(event: unknown, capture: TurnCapture): void {
-	if (!event || typeof event !== "object" || Array.isArray(event)) return;
-	const value = event as Record<string, unknown>;
-	if (value.type === "message_update") {
-		const delta = value.assistantMessageEvent;
-		if (delta && typeof delta === "object") {
-			const update = delta as Record<string, unknown>;
-			if (update.type === "text_delta" && typeof update.delta === "string") {
-				capture.partial = truncateUtf8(
-					`${capture.partial}${update.delta}`,
-					DEFAULT_MAX_OUTPUT_BYTES,
-				).text;
-			}
-		}
-	}
-	if (value.type !== "message_end") return;
-	const message = value.message;
-	if (!message || typeof message !== "object" || Array.isArray(message)) return;
-	const candidate = message as Record<string, unknown>;
-	if (candidate.role !== "assistant") return;
-	capture.output = truncateUtf8(
-		assistantText(candidate.content) || capture.partial,
-		DEFAULT_MAX_OUTPUT_BYTES,
-	).text;
-	capture.partial = capture.output;
-	capture.stopReason = typeof candidate.stopReason === "string" ? candidate.stopReason : undefined;
-	capture.error =
-		typeof candidate.errorMessage === "string"
-			? boundedPrivateText(candidate.errorMessage, 4 * 1024)
-			: undefined;
-	capture.provider =
-		typeof candidate.provider === "string"
-			? boundedPrivateText(candidate.provider, 256)
-			: undefined;
-	const responseModel =
-		typeof candidate.responseModel === "string"
-			? candidate.responseModel
-			: typeof candidate.model === "string"
-				? candidate.model
-				: undefined;
-	capture.model = responseModel ? boundedPrivateText(responseModel, 256) : undefined;
-	capture.usage.turns++;
-	addUsage(capture.usage, candidate.usage);
-}
-
-function addUsage(target: TransportUsage, value: unknown): void {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return;
-	const usage = value as Record<string, unknown>;
-	target.input += safeNonNegative(usage.input);
-	target.output += safeNonNegative(usage.output);
-	target.cacheRead += safeNonNegative(usage.cacheRead);
-	target.cacheWrite += safeNonNegative(usage.cacheWrite);
-	const reportedTotal = safeNonNegative(usage.totalTokens);
-	target.totalTokens +=
-		reportedTotal ||
-		safeNonNegative(usage.input) +
-			safeNonNegative(usage.output) +
-			safeNonNegative(usage.cacheRead) +
-			safeNonNegative(usage.cacheWrite);
-	const cost = usage.cost;
-	if (cost && typeof cost === "object" && !Array.isArray(cost)) {
-		target.cost += safeNonNegative((cost as Record<string, unknown>).total);
-	}
-}
-
-function safeNonNegative(value: unknown): number {
-	return typeof value === "number" &&
-		Number.isFinite(value) &&
-		value >= 0 &&
-		value <= Number.MAX_SAFE_INTEGER
-		? value
-		: 0;
-}
-
-function assistantText(value: unknown): string {
-	if (typeof value === "string") return value;
-	if (!Array.isArray(value)) return "";
-	return value
-		.flatMap((part) => {
-			if (!part || typeof part !== "object" || Array.isArray(part)) return [];
-			const item = part as Record<string, unknown>;
-			return item.type === "text" && typeof item.text === "string" ? [item.text] : [];
-		})
-		.join("\n");
 }
 
 function eventType(value: unknown): string | undefined {

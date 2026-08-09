@@ -466,7 +466,7 @@ test("RPC timeout aborts the work turn and requests a bounded summary after sett
 				"let buffer='';const send=v=>process.stdout.write(JSON.stringify(v)+'\\n');let prompts=0;",
 				"process.stdin.on('data',chunk=>{buffer+=chunk;let i;while((i=buffer.indexOf('\\n'))>=0){const line=buffer.slice(0,i);buffer=buffer.slice(i+1);if(!line)continue;const c=JSON.parse(line);",
 				"if(c.type==='get_state')send({id:c.id,type:'response',command:'get_state',success:true,data:{model:{provider:'fake',id:'model'},thinkingLevel:'low',sessionId:'s'}});",
-				"if(c.type==='prompt'){prompts++;send({id:c.id,type:'response',command:'prompt',success:true});if(prompts===1){send({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'PARTIAL_RPC'}],provider:'fake',model:'model',usage:{},stopReason:'toolUse'}});}else{send({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'SUMMARY_RPC'}],provider:'fake',model:'model',usage:{},stopReason:'stop'}});send({type:'agent_settled'});}}",
+				"if(c.type==='prompt'){prompts++;send({id:c.id,type:'response',command:'prompt',success:true});if(prompts===1){send({type:'tool_execution_start',toolCallId:'read-1',toolName:'read',args:{path:'src/rpc.ts'}});send({type:'tool_execution_end',toolCallId:'read-1',toolName:'read',result:{content:[{type:'text',text:'RPC_TOOL_EVIDENCE'}]},isError:false});send({type:'message_end',message:{role:'toolResult',toolCallId:'read-1',toolName:'read',content:[{type:'text',text:'RPC_TOOL_EVIDENCE'}],isError:false}});send({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'PARTIAL_RPC'}],provider:'fake',model:'model',usage:{},stopReason:'toolUse'}});}else{send({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'SUMMARY_RPC'}],provider:'fake',model:'model',usage:{},stopReason:'stop'}});send({type:'agent_settled'});}}",
 				"if(c.type==='abort'){send({id:c.id,type:'response',command:'abort',success:true});send({type:'agent_settled'});}",
 				"}});",
 			].join(""),
@@ -491,8 +491,70 @@ test("RPC timeout aborts the work turn and requests a bounded summary after sett
 		assert.equal(result.exitCode, 124);
 		assert.match(result.error ?? "", /timed out/);
 		assert.equal(result.output, "SUMMARY_RPC");
+		assert.equal(result.termination?.reason, "work_timeout");
+		assert.equal(result.termination?.finalization.status, "completed");
+		assert.match(
+			result.termination?.checkpoint.completedTools[0]?.output ?? "",
+			/RPC_TOOL_EVIDENCE/,
+		);
+		assert.equal(result.termination?.checkpoint.completedTools.length, 1);
 		assert.equal(result.telemetry?.phase, "failed");
 		await transport.shutdown();
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("RpcTransport enforces idle and tool-call budgets with bounded summaries", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-rpc-budgets-"));
+	try {
+		const script = path.join(root, "budgets.mjs");
+		writeFileSync(
+			script,
+			[
+				"let buffer='';const send=v=>process.stdout.write(JSON.stringify(v)+'\\n');let prompts=0;",
+				"process.stdin.on('data',chunk=>{buffer+=chunk;let i;while((i=buffer.indexOf('\\n'))>=0){const line=buffer.slice(0,i);buffer=buffer.slice(i+1);if(!line)continue;const c=JSON.parse(line);",
+				"if(c.type==='get_state')send({id:c.id,type:'response',command:'get_state',success:true,data:{model:{provider:'fake',id:'model'},thinkingLevel:'low',sessionId:'s'}});",
+				"if(c.type==='prompt'){prompts++;const response={id:c.id,type:'response',command:'prompt',success:true};if(prompts===1&&!c.message.includes('IDLE')){const budget={type:'message_end',message:{role:'assistant',content:[{type:'toolCall',id:'1',name:'read',arguments:{}},{type:'toolCall',id:'2',name:'read',arguments:{}}],provider:'fake',model:'model',usage:{},stopReason:'toolUse'}};process.stdout.write(JSON.stringify(response)+'\\n'+JSON.stringify(budget)+'\\n');}else{send(response);}if(prompts>1){send({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'BUDGET_SUMMARY'}],provider:'fake',model:'model',usage:{},stopReason:'stop'}});send({type:'agent_settled'});}}",
+				"if(c.type==='abort'){send({id:c.id,type:'response',command:'abort',success:true});send({type:'agent_settled'});}",
+				"}});",
+			].join(""),
+		);
+		const makeTransport = () =>
+			new RpcTransport({
+				getParentRuntime: () => ({ model: undefined, thinkingLevel: "low" }),
+				defaultTimeoutMs: 1_000,
+				abortGraceMs: 20,
+				timeoutFinalizationMs: 100,
+				createClient: (options) =>
+					new RpcProtocolClient({
+						...options,
+						terminationGraceMs: 10,
+						invocation: { command: process.execPath, args: [script] },
+					}),
+			});
+
+		const toolTransport = makeTransport();
+		const toolLimited = await toolTransport.runTurn(
+			{ ...managedAgent(), cwd: root, currentMaxToolCalls: 1 },
+			"TOOLS",
+			new AbortController().signal,
+		);
+		assert.equal(toolLimited.termination?.reason, "tool_call_limit");
+		assert.equal(toolLimited.termination?.finalization.status, "completed");
+		assert.equal(toolLimited.output, "BUDGET_SUMMARY");
+		await toolTransport.shutdown();
+
+		const idleTransport = makeTransport();
+		const idle = await idleTransport.runTurn(
+			{ ...managedAgent(), id: "sa_idle", cwd: root, currentIdleTimeoutMs: 25 },
+			"IDLE",
+			new AbortController().signal,
+		);
+		assert.equal(idle.termination?.reason, "idle_timeout");
+		assert.equal(idle.termination?.finalization.status, "completed");
+		assert.equal(idle.output, "BUDGET_SUMMARY");
+		await idleTransport.shutdown();
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -533,8 +595,29 @@ test("RPC prompt acceptance timeout discards the child without replay", async ()
 		);
 		assert.equal(result.exitCode, 124);
 		assert.match(result.error ?? "", /timed out/);
+		assert.equal(result.termination?.reason, "work_timeout");
 		assert.equal(readFileSync(marker, "utf8"), "prompt\n");
 		await transport.shutdown();
+
+		const idleTransport = new RpcTransport({
+			getParentRuntime: () => ({ model: undefined, thinkingLevel: "low" }),
+			defaultTimeoutMs: 100,
+			abortGraceMs: 10,
+			createClient: (options) =>
+				new RpcProtocolClient({
+					...options,
+					terminationGraceMs: 10,
+					invocation: { command: process.execPath, args: [script] },
+				}),
+		});
+		const idleBeforeAcceptance = await idleTransport.runTurn(
+			{ ...managedAgent(), id: "sa_idle_accept", cwd: root, currentIdleTimeoutMs: 5 },
+			"idle before acceptance",
+			new AbortController().signal,
+		);
+		assert.equal(idleBeforeAcceptance.exitCode, 124);
+		assert.equal(idleBeforeAcceptance.termination?.reason, "idle_timeout");
+		await idleTransport.shutdown();
 
 		const crashScript = path.join(root, "crash-after-accept.mjs");
 		const crashMarker = path.join(root, "crash-prompts.log");

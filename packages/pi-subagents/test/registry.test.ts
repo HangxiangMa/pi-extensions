@@ -27,7 +27,7 @@ function record(overrides: Partial<ManagedAgent> = {}): ManagedAgent {
 	};
 }
 
-test("spawn idempotency includes the retained timeout budget", () => {
+test("spawn idempotency includes retained execution budgets", () => {
 	const request = {
 		agent: "scout",
 		task: "inspect",
@@ -41,6 +41,9 @@ test("spawn idempotency includes the retained timeout budget", () => {
 		resultFormat: "text" as const,
 	};
 	assert.notEqual(hashSpawnRequest(request), hashSpawnRequest({ ...request, timeoutMs: 2_000 }));
+	assert.notEqual(hashSpawnRequest(request), hashSpawnRequest({ ...request, idleTimeoutMs: 500 }));
+	assert.notEqual(hashSpawnRequest(request), hashSpawnRequest({ ...request, maxTurns: 3 }));
+	assert.notEqual(hashSpawnRequest(request), hashSpawnRequest({ ...request, maxToolCalls: 4 }));
 	const { timeoutMs: _omitted, ...withoutTimeout } = request;
 	const legacyHash = createHash("sha256")
 		.update(
@@ -296,17 +299,29 @@ test("AgentRegistry supports follow-up, wait timeout, interrupt/reuse, limits, a
 	await assert.rejects(() => registry.close(first.id), /already closed/);
 });
 
-test("AgentRegistry retains explicit execution defaults and applies one-turn timeout overrides", async () => {
+test("AgentRegistry retains explicit execution defaults and applies one-turn budget overrides", async () => {
 	const observed: Array<{
 		thinkingLevel?: string;
 		timeoutMs?: number;
 		currentTimeoutMs?: number;
+		idleTimeoutMs?: number;
+		currentIdleTimeoutMs?: number;
+		maxTurns?: number;
+		currentMaxTurns?: number;
+		maxToolCalls?: number;
+		currentMaxToolCalls?: number;
 	}> = [];
 	const registry = new AgentRegistry(async (agent) => {
 		observed.push({
 			thinkingLevel: agent.thinkingLevel,
 			timeoutMs: agent.timeoutMs,
 			currentTimeoutMs: agent.currentTimeoutMs,
+			idleTimeoutMs: agent.idleTimeoutMs,
+			currentIdleTimeoutMs: agent.currentIdleTimeoutMs,
+			maxTurns: agent.maxTurns,
+			currentMaxTurns: agent.currentMaxTurns,
+			maxToolCalls: agent.maxToolCalls,
+			currentMaxToolCalls: agent.currentMaxToolCalls,
 		});
 		return { output: "done", exitCode: 0 };
 	});
@@ -316,11 +331,19 @@ test("AgentRegistry retains explicit execution defaults and applies one-turn tim
 		cwd: process.cwd(),
 		thinkingLevel: "high",
 		timeoutMs: 111,
+		idleTimeoutMs: 112,
+		maxTurns: 3,
+		maxToolCalls: 4,
 	});
 	assert.equal(spawned.thinkingLevel, "high");
 	assert.equal(spawned.timeoutMs, 111);
 	await registry.wait(spawned.id, 100);
-	const overridden = await registry.followUp(spawned.id, "second", { timeoutMs: 222 });
+	const overridden = await registry.followUp(spawned.id, "second", {
+		timeoutMs: 222,
+		idleTimeoutMs: 223,
+		maxTurns: 5,
+		maxToolCalls: 6,
+	});
 	assert.equal(overridden.thinkingLevel, "high");
 	assert.equal(overridden.timeoutMs, 111);
 	assert.equal(overridden.currentTimeoutMs, 222);
@@ -328,11 +351,45 @@ test("AgentRegistry retains explicit execution defaults and applies one-turn tim
 	await registry.followUp(spawned.id, "third");
 	await registry.wait(spawned.id, 100);
 	assert.deepEqual(observed, [
-		{ thinkingLevel: "high", timeoutMs: 111, currentTimeoutMs: 111 },
-		{ thinkingLevel: "high", timeoutMs: 111, currentTimeoutMs: 222 },
-		{ thinkingLevel: "high", timeoutMs: 111, currentTimeoutMs: 111 },
+		{
+			thinkingLevel: "high",
+			timeoutMs: 111,
+			currentTimeoutMs: 111,
+			idleTimeoutMs: 112,
+			currentIdleTimeoutMs: 112,
+			maxTurns: 3,
+			currentMaxTurns: 3,
+			maxToolCalls: 4,
+			currentMaxToolCalls: 4,
+		},
+		{
+			thinkingLevel: "high",
+			timeoutMs: 111,
+			currentTimeoutMs: 222,
+			idleTimeoutMs: 112,
+			currentIdleTimeoutMs: 223,
+			maxTurns: 3,
+			currentMaxTurns: 5,
+			maxToolCalls: 4,
+			currentMaxToolCalls: 6,
+		},
+		{
+			thinkingLevel: "high",
+			timeoutMs: 111,
+			currentTimeoutMs: 111,
+			idleTimeoutMs: 112,
+			currentIdleTimeoutMs: 112,
+			maxTurns: 3,
+			currentMaxTurns: 3,
+			maxToolCalls: 4,
+			currentMaxToolCalls: 4,
+		},
 	]);
-	assert.equal(registry.get(spawned.id)?.currentTimeoutMs, undefined);
+	const retained = registry.get(spawned.id);
+	assert.equal(retained?.currentTimeoutMs, undefined);
+	assert.equal(retained?.currentIdleTimeoutMs, undefined);
+	assert.equal(retained?.currentMaxTurns, undefined);
+	assert.equal(retained?.currentMaxToolCalls, undefined);
 });
 
 test("AgentRegistry runs lifecycle operations through a transport contract", async () => {
@@ -855,6 +912,12 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 			thinkingLevel: "high",
 			timeoutMs: 1234,
 			currentTimeoutMs: 4321,
+			idleTimeoutMs: 2345,
+			currentIdleTimeoutMs: 5432,
+			maxTurns: 7,
+			currentMaxTurns: 8,
+			maxToolCalls: 9,
+			currentMaxToolCalls: 10,
 			spawnIdempotencyKey: "persisted-request",
 			spawnRequestHash: "a".repeat(64),
 			resultFormat: "structured-v1",
@@ -874,6 +937,21 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 				changes: [],
 				verification: [],
 				risks: [],
+			},
+			termination: {
+				version: "pi-subagents:termination:v1",
+				reason: "work_timeout",
+				limit: 1234,
+				checkpoint: {
+					version: "pi-subagents:checkpoint:v1",
+					task: "inspect",
+					assistantNotes: ["<private>checkpoint-secret</private>visible checkpoint"],
+					completedTools: [],
+					changedFiles: [],
+					sideEffectsMayHaveOccurred: false,
+					truncated: false,
+				},
+				finalization: { attempted: false, status: "skipped", durationMs: 0 },
 			},
 			target: {
 				cwd: process.cwd(),
@@ -910,6 +988,12 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	assert.equal(restoredState?.thinkingLevel, "high");
 	assert.equal(restoredState?.timeoutMs, 1234);
 	assert.equal(restoredState?.currentTimeoutMs, undefined);
+	assert.equal(restoredState?.idleTimeoutMs, 2345);
+	assert.equal(restoredState?.currentIdleTimeoutMs, undefined);
+	assert.equal(restoredState?.maxTurns, 7);
+	assert.equal(restoredState?.currentMaxTurns, undefined);
+	assert.equal(restoredState?.maxToolCalls, 9);
+	assert.equal(restoredState?.currentMaxToolCalls, undefined);
 	assert.equal(restoredState?.spawnIdempotencyKey, "persisted-request");
 	assert.equal(restoredState?.spawnRequestHash, "a".repeat(64));
 	assert.equal(restoredState?.resultFormat, "structured-v1");
@@ -917,6 +1001,10 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	assert.equal(restoredState?.contextBytes, 128);
 	assert.equal(restoredState?.telemetry, undefined);
 	assert.equal(restoredState?.structuredResult, undefined);
+	assert.equal(
+		restoredState?.termination?.checkpoint.assistantNotes[0],
+		"[private content omitted]visible checkpoint",
+	);
 	assert.equal(restoredState?.target?.trust.kind, "saved-trusted");
 	assert.equal(restoredState?.target?.trust.projectTrusted, true);
 	assert.equal(restoredState?.mailbox[0]?.content, "[private content omitted]visible");

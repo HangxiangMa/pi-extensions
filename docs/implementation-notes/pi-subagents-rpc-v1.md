@@ -38,6 +38,8 @@ A correlated `get_state` response is the readiness handshake.
 
 The task timeout begins only after readiness.
 
+Optional idle, assistant-turn, and tool-call budgets begin with prompt execution and observe only completed assistant messages or tool results as meaningful progress.
+
 The transport subscribes before sending `prompt`.
 
 A successful prompt response means accepted, not completed.
@@ -48,7 +50,7 @@ A successful prompt response means accepted, not completed.
 
 Abort and timeout send the Pi RPC `abort` command and wait for settlement within a bounded grace period.
 
-After a work timeout settles, the transport sends one bounded finalization prompt that requests only a summary of already gathered evidence and explicitly forbids further tool use.
+After a work, idle, assistant-turn, or tool-call budget stop settles, the transport creates a bounded redacted checkpoint and sends one bounded finalization prompt that requests only a summary of already gathered evidence and explicitly forbids further tool use.
 
 Pi RPC does not currently replace an existing child session's active tool set for one turn, so the finalization deadline and abort path remain authoritative if the model disregards that instruction.
 
@@ -62,6 +64,8 @@ An accepted or ambiguously accepted task is never replayed automatically.
 
 Process exit marks the turn failed or interrupted with bounded partial evidence.
 
+Budget-stopped outcomes keep exit `124` and add a `pi-subagents:termination:v1` report with the stop reason, selected limit, deterministic `pi-subagents:checkpoint:v1`, side-effect warning, and finalization status.
+
 Release, expiry, close, session replacement, reload, and shutdown abort owned work and terminate the process group until captured streams close.
 
 Extension UI requests fail closed in v1.
@@ -74,9 +78,9 @@ Child extensions stay disabled to prevent recursive `pi-subagents` loading and d
 
 Custom or extension tools fail before RPC child creation with a subprocess recommendation.
 
-The selected cwd, project-trust decision, role prompt, model, thinking level, context, mailbox input, work timeout, recursion depth, and output bounds retain their existing owners.
+The selected cwd, project-trust decision, role prompt, model, thinking level, context, mailbox input, execution budgets, recursion depth, and output bounds retain their existing owners.
 
-`subagent_spawn.timeoutMs` is retained as the agent default, while `subagent_send.timeoutMs` overrides only one follow-up turn.
+`subagent_spawn.timeoutMs`, `idleTimeoutMs`, `maxTurns`, and `maxToolCalls` are retained as agent defaults, while the same fields on `subagent_send` override only one follow-up turn.
 
 RPC session-file persistence stays disabled because `AgentPersistence` owns sanitized logical recovery records.
 

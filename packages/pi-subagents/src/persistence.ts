@@ -9,6 +9,8 @@ import { MAX_SUBAGENT_TIMEOUT_MS } from "./limits.js";
 import type { ManagedAgent } from "./registry.js";
 import { SUBAGENT_RESULT_FORMATS } from "./result-contract.js";
 import { resolveStatefulLimits } from "./stateful-limits.js";
+import { copyTurnTerminationReport, type TurnTerminationReport } from "./timeout-checkpoint.js";
+import { MAX_SUBAGENT_TOOL_CALLS, MAX_SUBAGENT_TURNS } from "./turn-budget.js";
 
 const STATE_VERSION = 2;
 const DEFAULT_STATEFUL_LIMITS = resolveStatefulLimits();
@@ -121,17 +123,41 @@ function sanitizeAgent(agent: ManagedAgent): ManagedAgent {
 		state: "idle",
 		currentTask: undefined,
 		currentTimeoutMs: undefined,
+		currentIdleTimeoutMs: undefined,
+		currentMaxTurns: undefined,
+		currentMaxToolCalls: undefined,
 		currentMailboxMessageIds: undefined,
 		telemetry: undefined,
 		structuredResult: undefined,
+		termination: agent.termination ? sanitizeTermination(agent.termination) : undefined,
 		context: agent.context ? redactPrivateText(agent.context) : undefined,
 		error: agent.error ? redactPrivateText(agent.error) : undefined,
 		history: agent.history.map((turn) => ({
 			...turn,
 			task: redactPrivateText(turn.task),
 			output: redactPrivateText(turn.output),
+			termination: turn.termination ? sanitizeTermination(turn.termination) : undefined,
 		})),
 	};
+}
+
+function sanitizeTermination(report: TurnTerminationReport): TurnTerminationReport {
+	const copy = copyTurnTerminationReport(report);
+	copy.checkpoint.task = redactPrivateText(copy.checkpoint.task);
+	copy.checkpoint.partialOutput = copy.checkpoint.partialOutput
+		? redactPrivateText(copy.checkpoint.partialOutput)
+		: undefined;
+	copy.checkpoint.assistantNotes = copy.checkpoint.assistantNotes.map(redactPrivateText);
+	copy.checkpoint.completedTools = copy.checkpoint.completedTools.map((item) => ({
+		...item,
+		toolName: redactPrivateText(item.toolName),
+		output: redactPrivateText(item.output),
+	}));
+	copy.checkpoint.changedFiles = copy.checkpoint.changedFiles.map(redactPrivateText);
+	copy.finalization.error = copy.finalization.error
+		? redactPrivateText(copy.finalization.error)
+		: undefined;
+	return copy;
 }
 
 function isStoredState(value: unknown): value is StoredState {
@@ -154,6 +180,11 @@ function isStoredState(value: unknown): value is StoredState {
 			(record.parentId === undefined || typeof record.parentId === "string") &&
 			(record.thinkingLevel === undefined || isThinkingLevel(record.thinkingLevel)) &&
 			(record.timeoutMs === undefined || isTurnTimeout(record.timeoutMs)) &&
+			(record.idleTimeoutMs === undefined || isTurnTimeout(record.idleTimeoutMs)) &&
+			(record.maxTurns === undefined || isPositiveBounded(record.maxTurns, MAX_SUBAGENT_TURNS)) &&
+			(record.maxToolCalls === undefined ||
+				isPositiveBounded(record.maxToolCalls, MAX_SUBAGENT_TOOL_CALLS)) &&
+			(record.termination === undefined || isTerminationReport(record.termination)) &&
 			(record.contextTurns === undefined || isNonNegativeInteger(record.contextTurns)) &&
 			(record.contextBytes === undefined || isNonNegativeInteger(record.contextBytes)) &&
 			(record.spawnIdempotencyKey === undefined ||
@@ -186,6 +217,65 @@ function isTurnTimeout(value: unknown): value is number {
 		Number.isSafeInteger(value) &&
 		value >= 1 &&
 		value <= MAX_SUBAGENT_TIMEOUT_MS
+	);
+}
+
+function isPositiveBounded(value: unknown, maximum: number): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 && value <= maximum;
+}
+
+function isTerminationReport(value: unknown): value is TurnTerminationReport {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const report = value as Record<string, unknown>;
+	if (
+		report.version !== "pi-subagents:termination:v1" ||
+		![
+			"work_timeout",
+			"idle_timeout",
+			"turn_limit",
+			"tool_call_limit",
+			"orchestration_timeout",
+		].includes(String(report.reason)) ||
+		!isPositiveBounded(report.limit, MAX_SUBAGENT_TIMEOUT_MS)
+	) {
+		return false;
+	}
+	const checkpoint = report.checkpoint;
+	const finalization = report.finalization;
+	if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) return false;
+	if (!finalization || typeof finalization !== "object" || Array.isArray(finalization))
+		return false;
+	const checkpointValue = checkpoint as Record<string, unknown>;
+	const finalizationValue = finalization as Record<string, unknown>;
+	return (
+		checkpointValue.version === "pi-subagents:checkpoint:v1" &&
+		typeof checkpointValue.task === "string" &&
+		(checkpointValue.partialOutput === undefined ||
+			typeof checkpointValue.partialOutput === "string") &&
+		Array.isArray(checkpointValue.assistantNotes) &&
+		checkpointValue.assistantNotes.every((item) => typeof item === "string") &&
+		Array.isArray(checkpointValue.completedTools) &&
+		checkpointValue.completedTools.every(isCompletedToolEvidence) &&
+		Array.isArray(checkpointValue.changedFiles) &&
+		checkpointValue.changedFiles.every((item) => typeof item === "string") &&
+		typeof checkpointValue.sideEffectsMayHaveOccurred === "boolean" &&
+		typeof checkpointValue.truncated === "boolean" &&
+		typeof finalizationValue.attempted === "boolean" &&
+		["completed", "failed", "timed_out", "skipped"].includes(String(finalizationValue.status)) &&
+		typeof finalizationValue.durationMs === "number" &&
+		Number.isFinite(finalizationValue.durationMs) &&
+		finalizationValue.durationMs >= 0 &&
+		(finalizationValue.error === undefined || typeof finalizationValue.error === "string")
+	);
+}
+
+function isCompletedToolEvidence(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const item = value as Record<string, unknown>;
+	return (
+		typeof item.toolName === "string" &&
+		typeof item.output === "string" &&
+		typeof item.isError === "boolean"
 	);
 }
 
@@ -231,7 +321,8 @@ function isAgentTurn(value: unknown): boolean {
 		typeof turn.completedAt === "number" &&
 		Number.isFinite(turn.completedAt) &&
 		typeof turn.exitCode === "number" &&
-		Number.isFinite(turn.exitCode)
+		Number.isFinite(turn.exitCode) &&
+		(turn.termination === undefined || isTerminationReport(turn.termination))
 	);
 }
 

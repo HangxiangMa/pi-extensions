@@ -185,7 +185,7 @@ function registerBlockingSubagent(
 		"For parallel subagent calls, omit the aggregator key entirely unless a fan-in step is required; do not send null, empty strings, or an empty object for unused optional fields.",
 		'Do not use subagent with project-local agents unless the user explicitly wants project agents or sets agentScope to "project" or "both"; keep confirmation enabled for untrusted repositories.',
 		"When using subagent, write self-contained tasks with file paths, context, expected output, and whether the subagent may edit files.",
-		"Set subagent timeoutMs to the shortest realistic work deadline for the task difficulty, just as thinkingLevel should match reasoning difficulty; split oversized tasks instead of extending the deadline merely to compensate for broad scope. On expiry, Pi aborts the work and makes one separately bounded summary attempt.",
+		"Set subagent timeoutMs to the shortest realistic work deadline for the task difficulty, just as thinkingLevel should match reasoning difficulty; split oversized tasks instead of extending the deadline merely to compensate for broad scope. Use totalTimeoutMs to cap an entire blocking workflow, idleTimeoutMs for stalled work, and maxTurns or maxToolCalls to stop repeated work without progress. Every budget stop preserves a bounded checkpoint and may make one separately bounded summary attempt.",
 	];
 	const definition: ToolDefinition<typeof SubagentParams, SubagentDetails> = {
 		name: "subagent",
