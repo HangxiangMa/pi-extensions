@@ -37,6 +37,8 @@ import { registerSubagentConfigCommand, type SubagentSettingsRuntime } from "../
 import { hasUsableAggregator } from "../src/params.js";
 import type { ManagedAgent } from "../src/registry.js";
 import { consumeSubagentSettingsNotice } from "../src/settings.js";
+import { applyStatefulLimitSetting } from "../src/stateful-limit-ui.js";
+import { resolveStatefulLimits } from "../src/stateful-limits.js";
 import subagents, {
 	buildPiArgs,
 	formatTokens,
@@ -54,6 +56,7 @@ import subagents, {
 	updateBlockingMaxParallelTasksSetting,
 	updateCompletionDeliverySetting,
 	updateDelegationWorkflowSetting,
+	updateStatefulLimitSetting,
 } from "../src/subagents.js";
 
 initTheme("dark", false);
@@ -428,6 +431,7 @@ test("agent tool drafts preserve settings across searchable save, discard, and E
 				initialized: true,
 				transport: "subprocess",
 				completionDelivery: "next-turn",
+				limits: resolveStatefulLimits(),
 				activeAgents: 0,
 				retainedAgents: 0,
 			}),
@@ -706,6 +710,66 @@ test("configured workflow differences reload from the active tool surface", asyn
 	}
 });
 
+test("config lifecycle aborts pending confirmations before stateful session handlers", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-config-lifecycle-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		const exercise = async (event: "session_start" | "session_shutdown") => {
+			let call = 0;
+			let observedSignal: AbortSignal | undefined;
+			let markStarted: (() => void) | undefined;
+			const started = new Promise<void>((resolve) => {
+				markStarted = resolve;
+			});
+			const context = createMockContext({
+				mode: "tui",
+				hasUI: true,
+				confirm: async (_title: string, _message: string, options?: { signal?: AbortSignal }) => {
+					observedSignal = options?.signal;
+					markStarted?.();
+					return new Promise<boolean>((resolve) => {
+						if (observedSignal?.aborted) resolve(false);
+						else observedSignal?.addEventListener("abort", () => resolve(false), { once: true });
+					});
+				},
+				custom: async (factory: unknown) => {
+					const harness = createCustomSelectorHarness(factory, 60);
+					if (call === 0) {
+						harness.handleInput("tui.select.confirm");
+					} else {
+						harness.handleInput("tui.select.down");
+						harness.handleInput("tui.select.confirm");
+						await harness.waitForPending();
+					}
+					call++;
+					return harness.result;
+				},
+			});
+			const commandRun = command.handler("", context.ctx);
+			await started;
+			assert.equal(observedSignal?.aborted, false);
+			const handlers = mock.events.get(event) ?? [];
+			assert.ok(handlers.length > 1);
+			await handlers[0]?.({}, context.ctx);
+			assert.equal(observedSignal?.aborted, true);
+			await commandRun;
+			assert.equal(existsSync(path.join(directory, "pi-subagents.json")), false);
+		};
+
+		await exercise("session_start");
+		await exercise("session_shutdown");
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
 test("delegation workflow blocks reload while detached agents are retained", async () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-workflow-retained-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -732,6 +796,7 @@ test("delegation workflow blocks reload while detached agents are retained", asy
 				initialized: true,
 				transport: "subprocess",
 				completionDelivery: "next-turn",
+				limits: resolveStatefulLimits(),
 				activeAgents: 1,
 				retainedAgents: 2,
 			}),
@@ -848,6 +913,7 @@ test("current-session manager excludes already closed agent records", async () =
 				initialized: true,
 				transport: "subprocess",
 				completionDelivery: "next-turn",
+				limits: resolveStatefulLimits(),
 				activeAgents: 0,
 				retainedAgents: 0,
 			}),
@@ -1137,6 +1203,335 @@ test("advanced settings validates, saves, and immediately applies the blocking p
 		assert.match(invalidContext.notifications.at(-1)?.message ?? "", /whole number from 1 to 64/i);
 		assert.equal(readFileSync(settingsPath, "utf8"), savedDocument);
 	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("detached-limit UI saves several startup limits without mutating the current runtime", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-detached-limit-ui-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({ future: true, stateful: { futureStateful: "keep" } }),
+		);
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const command = mock.commands.get("subagents");
+		assert.ok(command);
+		let call = 0;
+		const frames: string[] = [];
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				const harness = createCustomSelectorHarness(factory, 64);
+				const frame = stripVTControlCharacters(harness.render().join("\n"));
+				frames.push(frame);
+				if (call === 0 || call === 1) {
+					for (let index = 0; index < 3; index++) harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.confirm");
+				} else if (call === 2) {
+					assert.match(frame, /Detached Agent Limits/);
+					assert.match(frame, /Retained agents.*Current 16.*configured 16/s);
+					for (const label of [
+						"Active turns",
+						"Children per agent",
+						"Agent tree depth",
+						"Stored agents",
+					]) {
+						assert.match(frame, new RegExp(label));
+					}
+					harness.handleInput("tui.select.confirm");
+				} else if (call === 3) {
+					assert.match(frame, /Current session: 16/);
+					harness.setFocused(true);
+					harness.handleInput("20");
+					harness.handleInput("tui.input.submit");
+					await harness.waitForPending();
+				} else if (call === 4) {
+					assert.match(frame, /Retained agents.*Current 16.*configured 20/s);
+					harness.handleInput("tui.select.down");
+					harness.handleInput("tui.select.confirm");
+				} else if (call === 5) {
+					assert.match(frame, /Current session: 4/);
+					harness.setFocused(true);
+					harness.handleInput("6");
+					harness.handleInput("tui.input.submit");
+					await harness.waitForPending();
+				} else if (call === 6) {
+					assert.match(frame, /Retained agents.*Current 16.*configured 20/s);
+					assert.match(frame, /Active turns.*Current 4.*configured 6/s);
+					harness.handleInput("tui.select.cancel");
+				} else if (call === 7) {
+					assert.match(frame, /Advanced Subagent Settings/);
+					harness.handleInput("tui.select.cancel");
+				} else {
+					assert.match(frame, /Configured after reload: retained agents 20.*active turns 6/s);
+					harness.handleInput("\u0003");
+				}
+				call++;
+				return harness.result;
+			},
+		});
+		await command.handler("", context.ctx);
+		assert.equal(call, 9, frames.join("\n---\n"));
+		assert.ok(
+			frames.flatMap((frame) => frame.split("\n")).every((line) => visibleWidth(line) <= 64),
+		);
+		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
+			future: true,
+			stateful: { futureStateful: "keep", maxAgents: 20, maxActiveTurns: 6 },
+		});
+		assert.match(context.notifications.at(-1)?.message ?? "", /applies after \/reload/i);
+
+		await command.handler("status", context.ctx);
+		assert.match(context.notifications.at(-1)?.message ?? "", /detached limits: 16 retained/i);
+		assert.match(context.notifications.at(-1)?.message ?? "", /configured retained agents: 20/i);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("detached-limit lowering cancellation and stale previews leave settings unchanged", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-detached-preview-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const controller = new AbortController();
+		const agents: ManagedAgent[] = [
+			{
+				id: "older",
+				agent: "scout",
+				rootId: "older",
+				depth: 0,
+				children: [],
+				state: "idle",
+				createdAt: 1,
+				updatedAt: 1,
+				cwd: process.cwd(),
+				history: [],
+				mailbox: [],
+			},
+			{
+				id: "newer",
+				agent: "reviewer",
+				rootId: "newer",
+				depth: 0,
+				children: [],
+				state: "idle",
+				createdAt: 2,
+				updatedAt: 2,
+				cwd: process.cwd(),
+				history: [],
+				mailbox: [],
+			},
+		];
+		const runtime = {
+			getRuntimeStatus: () => ({
+				enabled: true,
+				initialized: true,
+				transport: "subprocess" as const,
+				completionDelivery: "next-turn" as const,
+				limits: resolveStatefulLimits(),
+				activeAgents: 0,
+				retainedAgents: agents.length,
+			}),
+			listAgents: () => [...agents],
+		};
+		const invalid = createMockContext({ mode: "tui", hasUI: true });
+		assert.deepEqual(
+			await applyStatefulLimitSetting("maxDepth", "-1", invalid.ctx, runtime, {
+				signal: controller.signal,
+				isCurrent: () => true,
+			}),
+			{ kind: "rejected" },
+		);
+		assert.match(invalid.notifications.at(-1)?.message ?? "", /whole number.*0 or greater/i);
+		assert.equal(existsSync(path.join(directory, "pi-subagents.json")), false);
+
+		let preview = "";
+		const cancelled = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			confirm: async (_title: string, message: string) => {
+				preview = message;
+				return false;
+			},
+		});
+		assert.deepEqual(
+			await applyStatefulLimitSetting("maxAgents", "1", cancelled.ctx, runtime, {
+				signal: controller.signal,
+				isCurrent: () => true,
+			}),
+			{ kind: "rejected" },
+		);
+		assert.match(preview, /omit 1 currently retained agent record/i);
+		assert.equal(existsSync(path.join(directory, "pi-subagents.json")), false);
+
+		const stale = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			confirm: async () => {
+				agents.push({ ...agents[0], id: "changed", rootId: "changed", updatedAt: 3 });
+				return true;
+			},
+		});
+		assert.deepEqual(
+			await applyStatefulLimitSetting("maxAgents", "1", stale.ctx, runtime, {
+				signal: controller.signal,
+				isCurrent: () => true,
+			}),
+			{ kind: "rejected" },
+		);
+		assert.match(stale.notifications.at(-1)?.message ?? "", /agents changed.*review/i);
+		assert.equal(existsSync(path.join(directory, "pi-subagents.json")), false);
+
+		const replacedController = new AbortController();
+		let current = true;
+		const replaced = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			confirm: async () => {
+				current = false;
+				replacedController.abort();
+				return true;
+			},
+		});
+		assert.deepEqual(
+			await applyStatefulLimitSetting("maxAgents", "1", replaced.ctx, runtime, {
+				signal: replacedController.signal,
+				isCurrent: () => current,
+			}),
+			{ kind: "close" },
+		);
+		assert.equal(existsSync(path.join(directory, "pi-subagents.json")), false);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("detached-limit previews depth and stored-record reductions", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-detached-preview-fields-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const root: ManagedAgent = {
+			id: "root",
+			agent: "scout",
+			rootId: "root",
+			depth: 0,
+			children: ["child"],
+			state: "idle",
+			createdAt: 1,
+			updatedAt: 1,
+			cwd: process.cwd(),
+			history: [],
+			mailbox: [],
+		};
+		const child: ManagedAgent = {
+			...root,
+			id: "child",
+			rootId: "root",
+			parentId: "root",
+			depth: 1,
+			children: [],
+			updatedAt: 3,
+		};
+		const other: ManagedAgent = {
+			...root,
+			id: "other",
+			rootId: "other",
+			children: [],
+			updatedAt: 2,
+		};
+		for (const [field, value, agents] of [
+			["maxDepth", "0", [root, child]],
+			["maxStoredAgents", "1", [root, other]],
+		] as const) {
+			let preview = "";
+			const context = createMockContext({
+				mode: "tui",
+				hasUI: true,
+				confirm: async (_title: string, message: string) => {
+					preview = message;
+					return false;
+				},
+			});
+			const runtime = {
+				getRuntimeStatus: () => ({
+					enabled: true,
+					initialized: true,
+					transport: "subprocess" as const,
+					completionDelivery: "next-turn" as const,
+					limits: resolveStatefulLimits(),
+					activeAgents: 0,
+					retainedAgents: agents.length,
+				}),
+				listAgents: () => [...agents],
+			};
+			assert.deepEqual(
+				await applyStatefulLimitSetting(field, value, context.ctx, runtime, {
+					signal: new AbortController().signal,
+					isCurrent: () => true,
+				}),
+				{ kind: "rejected" },
+			);
+			assert.match(preview, /omit 1 currently retained agent record/i);
+			assert.equal(existsSync(path.join(directory, "pi-subagents.json")), false);
+		}
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("detached-limit save failure preserves the previous configured value", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-detached-save-failure-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	const settingsPath = path.join(directory, "pi-subagents.json");
+	writeFileSync(settingsPath, "{}\n");
+	const originalRenameSync = fs.renameSync;
+	try {
+		fs.renameSync = (() => {
+			throw new Error("rename unavailable");
+		}) as typeof fs.renameSync;
+		syncBuiltinESMExports();
+		const context = createMockContext({ mode: "tui", hasUI: true });
+		const runtime = {
+			getRuntimeStatus: () => ({
+				enabled: true,
+				initialized: true,
+				transport: "subprocess" as const,
+				completionDelivery: "next-turn" as const,
+				limits: resolveStatefulLimits(),
+				activeAgents: 0,
+				retainedAgents: 0,
+			}),
+			listAgents: () => [],
+		};
+		assert.deepEqual(
+			await applyStatefulLimitSetting("maxAgents", "20", context.ctx, runtime, {
+				signal: new AbortController().signal,
+				isCurrent: () => true,
+			}),
+			{ kind: "rejected" },
+		);
+		assert.equal(readFileSync(settingsPath, "utf8"), "{}\n");
+		assert.match(context.notifications.at(-1)?.message ?? "", /not saved.*unchanged/i);
+	} finally {
+		fs.renameSync = originalRenameSync;
+		syncBuiltinESMExports();
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		rmSync(directory, { recursive: true, force: true });
@@ -1719,6 +2114,61 @@ test("formatAgentCatalog advertises scope variants deterministically and within 
 	}
 });
 
+test("session start refreshes detached limits and retains the last valid snapshot after read errors", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-session-limits-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({
+				stateful: {
+					maxAgents: 3,
+					maxActiveTurns: 2,
+					maxChildrenPerAgent: 4,
+					maxDepth: 1,
+					maxStoredAgents: 6,
+				},
+			}),
+		);
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const context = createMockContext();
+		const start = async () => {
+			for (const handler of mock.events.get("session_start") ?? []) {
+				await handler({}, context.ctx);
+			}
+			return String(
+				mock.tools.filter((tool) => tool.name === "subagent_spawn").at(-1)?.description ?? "",
+			);
+		};
+
+		assert.match(await start(), /3 retained agents, 2 active turns, 4 direct children.*depth 1/i);
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({
+				stateful: {
+					maxAgents: 7,
+					maxActiveTurns: 5,
+					maxChildrenPerAgent: 6,
+					maxDepth: 2,
+					maxStoredAgents: 9,
+				},
+			}),
+		);
+		assert.match(await start(), /7 retained agents, 5 active turns, 6 direct children.*depth 2/i);
+
+		writeFileSync(settingsPath, "{ malformed");
+		assert.match(await start(), /7 retained agents, 5 active turns, 6 direct children.*depth 2/i);
+		assert.match(context.notifications.at(-1)?.message ?? "", /malformed|invalid/i);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
 test("session start refreshes every agent catalog and gates project metadata on trust", async () => {
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-catalog-user-"));
 	const trustedCwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-catalog-trusted-"));
@@ -1910,7 +2360,7 @@ test("subagent status separates runtime cwd policy from manual configured edits"
 	}
 });
 
-test("subagent settings read legacy files and save to the canonical package filename", () => {
+test("subagent settings read legacy files and save to the canonical package filename", async () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-migration-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
@@ -1946,7 +2396,9 @@ test("subagent settings read legacy files and save to the canonical package file
 			futureOption: true,
 		});
 		const migrationContext = createMockContext();
-		migrationMock.events.get("session_start")?.[0]?.({}, migrationContext.ctx);
+		for (const handler of migrationMock.events.get("session_start") ?? []) {
+			await handler({}, migrationContext.ctx);
+		}
 		assert.match(migrationContext.notifications[0]?.message ?? "", /using legacy/i);
 
 		writeFileSync(legacyPath, JSON.stringify({ agents: { scout: { tools: ["bash"] } } }));
@@ -1988,7 +2440,9 @@ test("subagent settings read legacy files and save to the canonical package file
 		const ignoredMock = createMockPi();
 		subagents(ignoredMock.pi);
 		const ignoredContext = createMockContext();
-		ignoredMock.events.get("session_start")?.[0]?.({}, ignoredContext.ctx);
+		for (const handler of ignoredMock.events.get("session_start") ?? []) {
+			await handler({}, ignoredContext.ctx);
+		}
 		assert.match(ignoredContext.notifications[0]?.message ?? "", /ignored/i);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -2115,6 +2569,7 @@ test("legacy-seeded updates preserve canonical settings created before publicati
 		["completion delivery", () => updateCompletionDeliverySetting("next-turn")],
 		["delegation workflow", () => updateDelegationWorkflowSetting("async-only")],
 		["blocking parallel limit", () => updateBlockingMaxParallelTasksSetting(4)],
+		["detached limit", () => updateStatefulLimitSetting("maxAgents", 4)],
 		["agent tools", () => updateAgentToolsSetting("scout", ["read"])],
 	] as const;
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;

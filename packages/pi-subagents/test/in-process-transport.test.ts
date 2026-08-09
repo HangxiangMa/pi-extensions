@@ -25,6 +25,7 @@ import {
 } from "../src/in-process-transport.js";
 import type { ManagedAgent } from "../src/registry.js";
 import { registerStatefulSubagents } from "../src/stateful.js";
+import { resolveStatefulLimits } from "../src/stateful-limits.js";
 import { type IsolatedWorkspace, WorkspaceManager } from "../src/workspace.js";
 
 function managedAgent(overrides: Partial<ManagedAgent> = {}): ManagedAgent {
@@ -624,6 +625,7 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 			initialized: true,
 			transport: "in-process",
 			completionDelivery: "auto-resume",
+			limits: resolveStatefulLimits(),
 			activeAgents: 1,
 			retainedAgents: 1,
 		});
@@ -643,6 +645,7 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 			initialized: true,
 			transport: "in-process",
 			completionDelivery: "auto-resume",
+			limits: resolveStatefulLimits(),
 			activeAgents: 0,
 			retainedAgents: 1,
 		});

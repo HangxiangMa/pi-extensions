@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { projectAgentRecords } from "./agent-projection.js";
 import type { SubagentThinkingLevel } from "./agents.js";
 import type { TargetPolicyAudit } from "./cwd-policy.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_OUTPUT_BYTES, truncateUtf8 } from "./limits.js";
+import { resolveStatefulLimits } from "./stateful-limits.js";
 import { type AgentTurnRunner, normalizeTransport, type SubagentTransport } from "./transport.js";
+
+const DEFAULT_STATEFUL_LIMITS = resolveStatefulLimits();
 
 export type AgentLifecycleState =
 	| "starting"
@@ -163,12 +167,21 @@ export class AgentRegistry {
 		private readonly options: AgentRegistryOptions = {},
 	) {
 		this.transport = normalizeTransport(transport);
-		this.maxAgents = positiveInteger(options.maxAgents ?? 16, "maxAgents");
-		this.maxActiveTurns = positiveInteger(options.maxActiveTurns ?? 4, "maxActiveTurns");
+		this.maxAgents = positiveInteger(
+			options.maxAgents ?? DEFAULT_STATEFUL_LIMITS.maxAgents,
+			"maxAgents",
+		);
+		this.maxActiveTurns = positiveInteger(
+			options.maxActiveTurns ?? DEFAULT_STATEFUL_LIMITS.maxActiveTurns,
+			"maxActiveTurns",
+		);
 		this.maxHistoryTurns = positiveInteger(options.maxHistoryTurns ?? 20, "maxHistoryTurns");
-		this.maxDepth = nonNegativeInteger(options.maxDepth ?? 3, "maxDepth");
+		this.maxDepth = nonNegativeInteger(
+			options.maxDepth ?? DEFAULT_STATEFUL_LIMITS.maxDepth,
+			"maxDepth",
+		);
 		this.maxChildrenPerAgent = positiveInteger(
-			options.maxChildrenPerAgent ?? 8,
+			options.maxChildrenPerAgent ?? DEFAULT_STATEFUL_LIMITS.maxChildrenPerAgent,
 			"maxChildrenPerAgent",
 		);
 		this.maxMailboxMessages = positiveInteger(
@@ -193,10 +206,10 @@ export class AgentRegistry {
 
 	restore(records: readonly ManagedAgent[]): void {
 		const candidates = new Map(
-			records
-				.slice(-this.maxAgents)
-				.filter((record) => record.id && record.state !== "closed")
-				.map((record) => [record.id, record]),
+			projectAgentRecords(
+				records.filter((record) => record.id && record.state !== "closed"),
+				{ maxAgents: this.maxAgents, maxDepth: this.maxDepth },
+			).map((record) => [record.id, record]),
 		);
 		for (const record of candidates.values()) {
 			if (record.parentId && !candidates.has(record.parentId)) continue;

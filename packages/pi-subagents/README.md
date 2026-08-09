@@ -220,7 +220,7 @@ A blocking fan-out is reserved for output that must be synthesized before the ro
 | `list_runs` | Optional `includeClosed` and `limit` (default 50, maximum 100) | Metadata-only retained-run summaries and unread counts |
 | `get_run` | Required `agentId` | Safe `cwd`, current-task/error summaries, thinking level, policy, history count, and unread count |
 | `list_models` | Optional `limit` (default 50, maximum 100) | Session-scoped models, or the already-loaded available snapshot |
-| `status` | No additional fields | Effective workflow, runtime counts/transport, completion delivery, consultation resources, and configured/runtime cwd policies with per-field sources |
+| `status` | No additional fields | Effective workflow, runtime counts/transport, detached limit values, completion delivery, consultation resources, and configured/runtime settings with per-field sources |
 | `diagnose` | No additional fields | Structured `pass`, `warning`, and `fail` checks; failed checks are report data rather than a tool error |
 
 The schema rejects fields that do not belong to the selected action. Explicit `project` or `both` scope fails before project-agent discovery unless Pi already trusts the project. Run inspection never returns history output, stored context, or mailbox content; unread counts come from a metadata-only snapshot and do not acknowledge messages. Paths beneath the Pi agent directory use `~`, project paths are workspace-relative, model objects are projected through an allow-list, and model-facing text is bounded to 50 KiB or 2,000 lines.
@@ -354,8 +354,10 @@ The default `subprocess` transport preserves compatibility: each turn starts a f
 Run `/subagents` in TUI mode to open the standard primary manager.
 It leads with the current delegation workflow, human-readable async completion behavior, consultation/delegation target policies, consultation-resource policy, parallel-worker limit, and active/retained counts.
 **Change delegation**, **Current agents**, and **Settings** cover the common workflows.
-Agent permissions, the **Maximum parallel workers** input, transport/runtime details, source, and settings path remain under **Advanced settings**.
-The maximum-worker input rejects invalid values without discarding the draft and applies a successful save immediately.
+Agent permissions, **Maximum parallel workers**, **Detached agent limits**, transport/runtime details, source, and settings path remain under **Advanced settings**.
+The parallel-worker input rejects invalid values without discarding the draft and applies a successful save immediately.
+The detached-limit screen edits retained capacity, active-turn concurrency, direct children, tree depth, and stored-record capacity.
+Detached-limit saves are durable immediately but apply to the runtime after `/reload` or the next Pi session.
 Escape returns from a nested screen to a newly refreshed manager, while Ctrl+C closes the full flow.
 Exact workflow/reload and project-agent safety confirmations remain extension-owned because they guard live agent and trust-boundary policy rather than ordinary navigation.
 
@@ -399,6 +401,13 @@ Editors and older extension versions do not participate in that lock, so avoid m
 `blocking.maxParallelTasks` defaults to `8` and accepts positive integers from `1` through `64`.
 It limits worker tasks in one blocking parallel call, while execution still starts at most four workers at once and treats an optional aggregator separately.
 `stateful.enabled` also defaults to `true`; its existing `false` value remains the blocking-only workflow.
+The detached defaults are `maxAgents: 16`, `maxActiveTurns: 4`, `maxChildrenPerAgent: 8`, `maxDepth: 3`, and `maxStoredAgents: 50`.
+`maxDepth` accepts zero or a positive safe integer, while the other four detached limits accept positive safe integers.
+Use `/subagents` → **Advanced settings** → **Detached agent limits** to edit them without replacing unknown JSON fields.
+The screen shows current-session and configured values separately because changes apply after `/reload`.
+It never reloads automatically, because reload can interrupt retained detached work.
+Lowering retained, depth, or stored capacity shows a projected recovery warning when current records would be omitted.
+Restored parents that already exceed a lowered `maxChildrenPerAgent` remain available, but they cannot gain another child until they fall below the configured limit.
 `cwdPolicy.consultation` defaults to `"anywhere"`, `cwdPolicy.delegation` defaults to `"trusted-targets"`, and `consult.resources` defaults to `"project-context"`.
 The Settings UI applies a saved change immediately to subsequent launches and refreshes the affected tool descriptions; manual edits take effect on session start or `/reload`.
 The UI explicitly states that target/trust settings are not filesystem sandboxing and directs trust changes to Pi `/trust`.
@@ -430,7 +439,12 @@ The action schemas are flat for provider compatibility and reject parameters tha
 }
 ```
 
-Use the **Current agents** action in `/subagents` to inspect the indented agent tree, lifecycle state, unread count, and available actions, or to confirm clearing retained agents. Active turns are FIFO-limited by `maxActiveTurns`; excess retained work remains in `starting` state until a slot is available. `maxAgents` separately bounds running, queued, and idle records. `parentId` creates a bounded child relationship; subtree interrupt and close operate child-first.
+Use the **Current agents** action in `/subagents` to inspect the indented agent tree, lifecycle state, unread count, and available actions, or to confirm clearing retained agents.
+Active turns are FIFO-limited by `maxActiveTurns`; excess retained work remains in `starting` state until a slot is available.
+`maxAgents` separately bounds running, queued, and idle records.
+`maxChildrenPerAgent` bounds direct children, while `maxDepth` counts nested levels below a depth-zero root.
+`maxStoredAgents` bounds sanitized records persisted per session and does not increase live runtime capacity.
+`parentId` creates a bounded child relationship; subtree interrupt and close operate child-first.
 
 ### Migrating from the previous seven-tool lifecycle surface
 
@@ -659,7 +673,12 @@ The runner explicitly reports policy continuity in result details:
 
 Treat project-local agent prompts like executable project configuration: only enable them in trusted repositories. Stateful project agents require Pi's project trust; interactive use also keeps confirmation enabled by default.
 
-Stateful records are stored as versioned mode-0600 JSON under `~/.pi/agent/pi-subagents-state/` (or the configured Pi agent directory). Records contain sanitized logical history, never process IDs or credentials. Corrupt or unsupported state is quarantined, restored agents are always inert `idle` records, and no prior side effect is automatically resumed. Retention and count limits are configurable. Downgrading is safe: older extension versions ignore this separate state directory; clear **Current agents** from `/subagents` before downgrade if the histories should be removed.
+Stateful records are stored as versioned mode-0600 JSON under `~/.pi/agent/pi-subagents-state/` (or the configured Pi agent directory).
+Records contain sanitized logical history, never process IDs or credentials.
+Corrupt or unsupported state is quarantined, restored agents are always inert `idle` records, and no prior side effect is automatically resumed.
+Count projection keeps complete ancestor chains together when stored or restored limits omit older trees.
+Retention and count limits are configurable.
+Downgrading is safe: older extension versions ignore this separate state directory; clear **Current agents** from `/subagents` before downgrade if the histories should be removed.
 
 ## 🗂️ Package layout
 
@@ -676,6 +695,8 @@ packages/pi-subagents/
 │   ├── stateful.ts               # Detached lifecycle registration and dispatch
 │   ├── stateful-guidance.ts      # Detached model-facing workflow guidance
 │   ├── stateful-lifecycle.ts     # Runtime disposal and spawn ownership guards
+│   ├── stateful-limit-ui.ts      # Detached capacity settings and recovery previews
+│   ├── stateful-limits.ts        # Shared detached defaults, labels, and validation
 │   ├── stateful-safety.ts        # Project-agent and shared-write safety checks
 │   ├── stateful-tool-params.ts   # Consolidated action schemas and validation
 │   └── *.ts                      # Package-local discovery, execution, rendering, and settings modules

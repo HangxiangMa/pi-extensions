@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
+import { projectAgentRecords } from "../src/agent-projection.js";
 import { AgentPersistence } from "../src/persistence.js";
 import { AgentRegistry, type ManagedAgent } from "../src/registry.js";
 import { buildDetachedCompletionMessage } from "../src/stateful.js";
@@ -645,6 +646,34 @@ test("AgentRegistry keeps lifecycle usable when persistence callbacks fail", asy
 	});
 	const agent = await registry.spawn({ agent: "scout", task: "done", cwd: process.cwd() });
 	assert.equal((await registry.wait(agent.id, 100)).agent.state, "completed");
+});
+
+test("agent record projection preserves ancestry with deterministic count and depth limits", () => {
+	const root = record({ id: "root", rootId: "root", updatedAt: 1 });
+	const child = record({
+		id: "child",
+		rootId: "root",
+		parentId: "root",
+		depth: 1,
+		updatedAt: 5,
+	});
+	const other = record({ id: "other", rootId: "other", updatedAt: 4 });
+	const cycleA = record({ id: "cycle-a", parentId: "cycle-b", updatedAt: 8 });
+	const cycleB = record({ id: "cycle-b", parentId: "cycle-a", updatedAt: 7 });
+	const records = [child, root, other, cycleA, cycleB];
+
+	assert.deepEqual(
+		projectAgentRecords(records, { maxAgents: 2 }).map((agent) => agent.id),
+		["child", "root"],
+	);
+	assert.deepEqual(
+		projectAgentRecords(records, { maxAgents: 1 }).map((agent) => agent.id),
+		["other"],
+	);
+	assert.deepEqual(
+		projectAgentRecords(records, { maxAgents: 2, maxDepth: 0 }).map((agent) => agent.id),
+		["root", "other"],
+	);
 });
 
 test("AgentRegistry restores valid records inertly and rejects cyclic hierarchy", () => {

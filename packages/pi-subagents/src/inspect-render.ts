@@ -181,11 +181,15 @@ function renderStatus(
 	const status = recordValue(details.status);
 	const stateful = recordValue(status?.stateful);
 	if (!status || !stateful) return undefined;
+	const currentLimits = recordValue(status.statefulLimits) ?? recordValue(stateful.limits);
 	const lines = [
 		`${statusBadge(theme, "completed")} · runtime status`,
 		`${theme.fg("muted", "workflow: ")}${theme.fg("accent", safeLine(status.workflow, "unknown", 128))} · ${numberValue(stateful.activeAgents)} active · ${numberValue(stateful.retainedAgents)} retained`,
 		`${theme.fg("muted", "stateful: ")}${stateful.initialized === true ? "initialized" : "not initialized"} · resources: ${safeLine(status.consultResources, "unknown", 128)}`,
 	];
+	if (currentLimits) {
+		lines.push(`${theme.fg("muted", "limits: ")}${formatDetachedLimits(currentLimits)}`);
+	}
 	if (expanded) {
 		const delivery = stringValue(stateful.completionDelivery);
 		const transport = stringValue(stateful.transport);
@@ -202,8 +206,31 @@ function renderStatus(
 				),
 			);
 		}
+		const configured = recordValue(status.configuredStatefulLimits);
+		const sources = recordValue(status.configuredStatefulLimitSources);
+		if (configured) {
+			lines.push(theme.fg("dim", `configured: ${formatDetachedLimits(configured, sources)}`));
+		}
 	} else lines.push(expansionHint());
 	return lines.join("\n");
+}
+
+function formatDetachedLimits(
+	limits: Record<string, unknown>,
+	sources?: Record<string, unknown>,
+): string {
+	return [
+		["agents", "maxAgents"],
+		["active", "maxActiveTurns"],
+		["children", "maxChildrenPerAgent"],
+		["depth", "maxDepth"],
+		["stored", "maxStoredAgents"],
+	]
+		.map(([label, field]) => {
+			const source = stringValue(sources?.[field]);
+			return `${label}:${numberValue(limits[field])}${source ? ` (${safeLine(source, "", 64)})` : ""}`;
+		})
+		.join(" · ");
 }
 
 function renderDiagnose(details: Record<string, unknown>, expanded: boolean, theme: Theme): string {
