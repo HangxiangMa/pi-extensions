@@ -847,6 +847,7 @@ export async function runSingleAgent(
 			: undefined;
 		if (
 			budgetStop &&
+			budgetStop.reason !== "orchestration_timeout" &&
 			launchPolicy?.finalizeOnTimeout !== false &&
 			!signal?.aborted &&
 			(remainingFinalizationMs === undefined || remainingFinalizationMs > 0)

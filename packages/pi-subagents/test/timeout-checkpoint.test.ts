@@ -65,6 +65,16 @@ describe("timeout progress checkpoints", () => {
 		expect(checkpoint.truncated).toBe(true);
 	});
 
+	it("strictly shrinks long task and partial text to small checkpoint limits", () => {
+		for (const maxBytes of [512, 2_048]) {
+			const journal = new TimeoutProgressJournal({ maxBytes });
+			const checkpoint = journal.checkpoint("界".repeat(4_000), "partial".repeat(1_000));
+
+			expect(Buffer.byteLength(JSON.stringify(checkpoint), "utf8")).toBeLessThanOrEqual(maxBytes);
+			expect(checkpoint.truncated).toBe(true);
+		}
+	});
+
 	it("formats a deterministic fallback when model finalization fails", () => {
 		const journal = new TimeoutProgressJournal();
 		journal.recordToolResult("read-1", "read", {

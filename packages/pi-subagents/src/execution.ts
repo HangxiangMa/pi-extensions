@@ -278,7 +278,6 @@ export async function executeSubagent(
 	) => ({
 		projectTrust: target.trust.projectTrusted,
 		turnLimits,
-		finalizeOnTimeout: budget.workTimeoutReason !== "orchestration_timeout",
 		workTimeoutReason: budget.workTimeoutReason,
 		workTimeoutReportLimit: budget.workTimeoutReportLimit,
 		orchestrationDeadlineAt: orchestrationDeadline,

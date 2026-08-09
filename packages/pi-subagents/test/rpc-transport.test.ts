@@ -466,7 +466,7 @@ test("RPC timeout aborts the work turn and requests a bounded summary after sett
 				"let buffer='';const send=v=>process.stdout.write(JSON.stringify(v)+'\\n');let prompts=0;",
 				"process.stdin.on('data',chunk=>{buffer+=chunk;let i;while((i=buffer.indexOf('\\n'))>=0){const line=buffer.slice(0,i);buffer=buffer.slice(i+1);if(!line)continue;const c=JSON.parse(line);",
 				"if(c.type==='get_state')send({id:c.id,type:'response',command:'get_state',success:true,data:{model:{provider:'fake',id:'model'},thinkingLevel:'low',sessionId:'s'}});",
-				"if(c.type==='prompt'){prompts++;send({id:c.id,type:'response',command:'prompt',success:true});if(prompts===1){send({type:'tool_execution_start',toolCallId:'read-1',toolName:'read',args:{path:'src/rpc.ts'}});send({type:'tool_execution_end',toolCallId:'read-1',toolName:'read',result:{content:[{type:'text',text:'RPC_TOOL_EVIDENCE'}]},isError:false});send({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'PARTIAL_RPC'}],provider:'fake',model:'model',usage:{},stopReason:'toolUse'}});}else{send({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'SUMMARY_RPC'}],provider:'fake',model:'model',usage:{},stopReason:'stop'}});send({type:'agent_settled'});}}",
+				"if(c.type==='prompt'){prompts++;send({id:c.id,type:'response',command:'prompt',success:true});if(prompts===1){send({type:'tool_execution_start',toolCallId:'read-1',toolName:'read',args:{path:'src/rpc.ts'}});send({type:'tool_execution_end',toolCallId:'read-1',toolName:'read',result:{content:[{type:'text',text:'RPC_TOOL_EVIDENCE'}]},isError:false});send({type:'message_end',message:{role:'toolResult',toolCallId:'read-1',toolName:'read',content:[{type:'text',text:'RPC_TOOL_EVIDENCE'}],isError:false}});send({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'PARTIAL_RPC'}],provider:'fake',model:'model',usage:{},stopReason:'toolUse'}});}else{send({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'SUMMARY_RPC'}],provider:'fake',model:'model',usage:{},stopReason:'stop'}});send({type:'agent_settled'});}}",
 				"if(c.type==='abort'){send({id:c.id,type:'response',command:'abort',success:true});send({type:'agent_settled'});}",
 				"}});",
 			].join(""),
@@ -497,6 +497,7 @@ test("RPC timeout aborts the work turn and requests a bounded summary after sett
 			result.termination?.checkpoint.completedTools[0]?.output ?? "",
 			/RPC_TOOL_EVIDENCE/,
 		);
+		assert.equal(result.termination?.checkpoint.completedTools.length, 1);
 		assert.equal(result.telemetry?.phase, "failed");
 		await transport.shutdown();
 	} finally {

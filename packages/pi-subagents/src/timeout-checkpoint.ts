@@ -249,17 +249,27 @@ function fitCheckpoint(checkpoint: TimeoutCheckpoint, maxBytes: number): Timeout
 		else if (copy.changedFiles.length > 0) copy.changedFiles.shift();
 		else if (copy.partialOutput) {
 			copy.partialOutput =
-				Buffer.byteLength(copy.partialOutput, "utf8") > 128
-					? truncateUtf8(copy.partialOutput, Math.max(128, Math.floor(maxBytes / 4))).text
-					: undefined;
+				shrinkCheckpointText(copy.partialOutput, Math.floor(maxBytes / 4), 128) || undefined;
 		} else if (copy.task) {
-			copy.task =
-				Buffer.byteLength(copy.task, "utf8") > 64
-					? truncateUtf8(copy.task, Math.max(64, Math.floor(maxBytes / 8))).text
-					: "";
+			copy.task = shrinkCheckpointText(copy.task, Math.floor(maxBytes / 8), 64);
 		} else break;
 	}
 	return copy;
+}
+
+function shrinkCheckpointText(
+	value: string,
+	preferredMaxBytes: number,
+	minimumBytes: number,
+): string {
+	const currentBytes = Buffer.byteLength(value, "utf8");
+	if (currentBytes <= minimumBytes) return "";
+	const nextMaxBytes = Math.min(
+		currentBytes - 1,
+		preferredMaxBytes,
+		Math.max(minimumBytes, Math.floor(currentBytes / 2)),
+	);
+	return truncateUtf8(value, nextMaxBytes).text;
 }
 
 function serializedBytes(value: unknown): number {

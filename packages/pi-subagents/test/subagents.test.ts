@@ -100,10 +100,13 @@ type SubagentTool = {
 		details?: {
 			results: Array<{
 				thinkingLevel?: string;
-				termination?: { reason: string };
+				termination?: { reason: string; finalization: { status: string } };
 				target?: { cwd: string; trust: { kind: string; projectTrusted: boolean } };
 			}>;
-			aggregator?: { thinkingLevel?: string; termination?: { reason: string } };
+			aggregator?: {
+				thinkingLevel?: string;
+				termination?: { reason: string; finalization: { status: string } };
+			};
 		};
 		isError?: boolean;
 	}>;
@@ -2961,6 +2964,7 @@ test("blocking totalTimeoutMs caps chains, queued parallel work, and fan-in", as
 			"if(task.includes('active work was aborted')){const message={role:'assistant',content:[{type:'text',text:'CHECKPOINT'}],stopReason:'stop',timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');process.exit(0);}",
 			`appendFileSync(${JSON.stringify(marker)},task+'\\n');`,
 			"if(task.includes('FAST')){const message={role:'assistant',content:[{type:'text',text:'DONE'}],stopReason:'stop',timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');process.exit(0);}",
+			"if(task.includes('LIMIT_EARLY')){const message={role:'assistant',content:[{type:'toolCall',id:'1',name:'read',arguments:{}},{type:'toolCall',id:'2',name:'read',arguments:{}}],stopReason:'toolUse',timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');}",
 			"setInterval(()=>{},1000);",
 		].join(""),
 	);
@@ -2971,6 +2975,23 @@ test("blocking totalTimeoutMs caps chains, queued parallel work, and fan-in", as
 		const tool = mock.tools.find((candidate) => candidate.name === "subagent") as SubagentTool;
 		const { ctx } = createMockContext();
 
+		const earlyLimit = await tool.execute(
+			"early-limit",
+			{
+				agent: "scout",
+				task: "LIMIT_EARLY",
+				timeoutMs: 5_000,
+				totalTimeoutMs: 1_000,
+				maxToolCalls: 1,
+			},
+			new AbortController().signal,
+			undefined,
+			ctx,
+		);
+		assert.equal(earlyLimit.details?.results[0]?.termination?.reason, "tool_call_limit");
+		assert.equal(earlyLimit.details?.results[0]?.termination?.finalization.status, "completed");
+
+		writeFileSync(marker, "");
 		const chain = await tool.execute(
 			"total-chain",
 			{

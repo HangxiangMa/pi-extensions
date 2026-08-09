@@ -53,7 +53,7 @@ export function captureRpcEvent(event: unknown, capture: RpcTurnCapture): void {
 	}
 	if (event.type !== "message_end" || !isRecord(event.message)) return;
 	const candidate = event.message;
-	journalMessages(capture.journal, [candidate]);
+	if (candidate.role !== "toolResult") journalMessages(capture.journal, [candidate]);
 	if (candidate.role !== "assistant") return;
 	capture.output = truncateUtf8(
 		assistantText(candidate.content) || capture.partial,
