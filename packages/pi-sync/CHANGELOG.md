@@ -1,5 +1,11 @@
 # @narumitw/pi-sync
 
+## 0.49.7
+
+### Patch Changes
+
+- 549e626: Resolve differing local and remote synced-content lists inline with reviewed adoption, explicit continuation, and the existing safe force-push path.
+
 ## 0.49.6
 
 ### Patch Changes
