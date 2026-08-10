@@ -1,5 +1,14 @@
 # @narumitw/pi-starship
 
+## 0.50.1
+
+### Patch Changes
+
+- 306a4e5: Use Pi TUI Kit's standard adaptive review screen for the read-only footer explanation while keeping inspection snapshots and formatting in Starship.
+- Updated dependencies [4a0358b]
+- Updated dependencies [93b507b]
+  - @narumitw/pi-tui-kit@0.53.0
+
 ## 0.50.0
 
 ### Minor Changes
