@@ -132,9 +132,9 @@ Each implementation pull request starts from then-current `origin/main`, changes
 
 ### Phase 6: Completion
 
-- [ ] Refresh each pull request after its push and record commit IDs, CI checks, review outcomes, package evidence, deviations, and remaining risks in this plan.
-- [ ] Confirm every implementation pull request is merged, both required Kit APIs are registry-visible, no consumer depends on an unpublished API, and no unnecessary direct Pi TUI dependency remains.
-- [ ] Archive this plan and the completed browse-detail plan only after every checkbox has evidence and no release or consumer migration remains open.
+- [x] Refresh each pull request after its push and record commit IDs, CI checks, review outcomes, package evidence, deviations, and remaining risks in this plan.
+- [x] Confirm every implementation pull request is merged, both required Kit APIs are registry-visible, no consumer depends on an unpublished API, and no unnecessary direct Pi TUI dependency remains.
+- [x] Archive this plan and the completed browse-detail plan after every checkbox has evidence and no release or consumer migration remains open.
 
 ## Execution evidence
 
@@ -190,7 +190,7 @@ Each implementation pull request starts from then-current `origin/main`, changes
 - Tool baseline from a detached clean `origin/main` worktree passed its package check and all 8 focused tests. Final evidence passed the package check, 12 focused tests, boundaries, Changesets status, `git diff --check`, and the CI-equivalent `npm run check` with 279 files and 2,979 tests.
 - `npm ls --workspace @narumitw/pi-tool` resolves Kit `0.53.0`. A clean temporary install of the Tool tarball independently resolved registry Kit `0.53.0`, confirmed the `^0.53.0` floor, and confirmed the obsolete Pi TUI peer is absent.
 - `just pack tool` exposed only 6 manifest-listed files (4.4 kB packed, 10.3 kB unpacked): source entrypoint, catalog and lifecycle modules, README, license, and manifest. The deleted browser, tests, and generated files were absent.
-- Tool pull request [#701](https://github.com/narumiruna/pi-extensions/pull/701) carries signed implementation commit `17426ab5` and evidence commit `e098d19d`; CI run `31423702361` passed in 3m19s, and no review was submitted before the evidence refresh.
+- Tool pull request [#701](https://github.com/narumiruna/pi-extensions/pull/701) merged as `42c545e0e62217e9843a4379442185b5acb47d62`, carrying signed implementation commit `17426ab5` and evidence commits `e098d19d` and `e681bdde`; final CI run `31424047112` passed in 3m18s, and no review was submitted.
 - The semantic audit confirmed document content stays out of implicit browse search while explicitly projected public metadata remains searchable. Exact schemas preserve indentation, tabs, 20-column wrapping, Unicode cells, and controls; duplicate sanitized labels retain raw identity; Back restores query and selection; Close, replacement, and shutdown dispose the one Kit interaction.
 - Pi Tool still owns command-time data acquisition, ordering, active-state projection, detail contents, lifecycle generation, and mode policy. Kit now owns search UI, detail rendering, navigation, terminal safety, and disposal, and no Tool production import requires Pi TUI.
 
@@ -223,7 +223,7 @@ Each implementation pull request starts from then-current `origin/main`, changes
 - [x] Pi TUI Kit exposes and documents confirmation-only Live Choice gating with unchanged legacy disabled behavior and complete TUI/RPC lifecycle tests.
 - [x] Kit `0.53.0` is published, registry-verified, and independently installable; its release completed before this execution resumed and no release action was taken here.
 - [x] `pi-starship` uses the published Live Choice contract for presets while active Apply remains inert and Customize remains available.
-- [ ] `pi-tool` uses published exact browse details and no longer owns a duplicate browser or unnecessary direct Pi TUI dependency.
-- [ ] Every package has focused tests, an appropriate Changeset, inspected package contents, passing CI-equivalent checks, and an evidence-backed semantic audit.
-- [ ] Specialized domain interfaces remain extension-owned and no speculative general-purpose Kit API was added.
-- [ ] Both plans are archived only after all pull requests, release gates, registry checks, and consumer migrations are complete.
+- [x] `pi-tool` uses published exact browse details and no longer owns a duplicate browser or unnecessary direct Pi TUI dependency.
+- [x] Every package has focused tests, an appropriate Changeset, inspected package contents, passing CI-equivalent checks, and an evidence-backed semantic audit.
+- [x] Specialized domain interfaces remain extension-owned and no speculative general-purpose Kit API was added.
+- [x] Both plans are archived after all pull requests, release gates, registry checks, and consumer migrations are complete.
