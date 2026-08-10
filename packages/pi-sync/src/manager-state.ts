@@ -1,3 +1,4 @@
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import {
 	activeLocalConfigPath,
 	isCloudflareR2Endpoint,
@@ -5,8 +6,13 @@ import {
 	readLocalConfigObject,
 	readStateForConfig,
 } from "./config.js";
-import { inspectLock, isStaleLock } from "./lock.js";
 import { errorMessage, ownRecord, safeTerminalText } from "./manager-helpers.js";
+import {
+	inspectOperationAvailability,
+	type OperationAvailability,
+	operationBlocksChanges,
+	operationCanRecover,
+} from "./operation-availability.js";
 import { type SyncAttentionState, syncAttentionMatchesConfig } from "./sync-attention.js";
 import { compareSyncInclude, syncIncludeSelection } from "./sync-policy.js";
 import { countValidSyncSetups } from "./sync-setups-ui.js";
@@ -23,6 +29,7 @@ export const MAIN_MENU_ACTIONS = [
 export interface ManagerDescription {
 	title: string;
 	actions: string[];
+	operation?: OperationAvailability;
 	attention?: SyncAttentionState;
 	attentionBlocksSync?: boolean;
 	attentionReviewDisabled?: boolean;
@@ -31,6 +38,7 @@ export interface ManagerDescription {
 export async function describeManagerState(
 	signal?: AbortSignal,
 	attention?: SyncAttentionState,
+	inspectOperation: () => Promise<OperationAvailability> = inspectOperationAvailability,
 ): Promise<ManagerDescription> {
 	let raw: Record<string, unknown> | undefined;
 	try {
@@ -71,10 +79,8 @@ export async function describeManagerState(
 	}
 	try {
 		const config = await loadConfig();
-		const lock = await inspectLock();
-		const liveLock = lock.status === "valid" && !isStaleLock(lock.lock);
-		const recoverableLock =
-			lock.status === "unreadable" || (lock.status === "valid" && isStaleLock(lock.lock));
+		const operation = await inspectOperation();
+		const changesBlocked = operationBlocksChanges(operation);
 		const selection = syncIncludeSelection(config.include);
 		let currentAttention: SyncAttentionState | undefined;
 		if (attention) {
@@ -96,72 +102,61 @@ export async function describeManagerState(
 				)
 			: undefined;
 		const noSyncedContent = config.include.length === 0;
-		const syncState =
-			liveLock || recoverableLock
-				? undefined
-				: await readStateForConfig(config).catch(() => undefined);
-		const lastAppliedSnapshot =
-			liveLock || recoverableLock
-				? "Unavailable while operations are locked"
-				: syncState?.lastAppliedSnapshot
-					? safeTerminalText(syncState.lastAppliedSnapshot)
-					: syncState
-						? "Never synced"
-						: "Unavailable";
+		const syncState = changesBlocked
+			? undefined
+			: await readStateForConfig(config).catch(() => undefined);
+		const lastAppliedSnapshot = changesBlocked
+			? "Unavailable while operations are locked"
+			: syncState?.lastAppliedSnapshot
+				? safeTerminalText(syncState.lastAppliedSnapshot)
+				: syncState
+					? "Never synced"
+					: "Unavailable";
 		const canSwitch = (await countValidSyncSetups(configuredTargets, signal)) > 1;
 		const mainActions = MAIN_MENU_ACTIONS.filter(
 			(action) => action !== "Switch sync setup" || canSwitch,
 		);
+		const ordinaryTitle = [
+			"Manage sync",
+			"",
+			`Current sync setup: ${safeTerminalText(config.setupName)}`,
+			`Storage: ${backendStorageDescription(config)}`,
+			`Included: ${selection.builtIns.length} built-in group${selection.builtIns.length === 1 ? "" : "s"} · ${selection.custom.length} extra path${selection.custom.length === 1 ? "" : "s"} · Sessions ${selection.sessions ? "on" : "off"}`,
+			`Automatic sync: ${config.automatic ? "On" : "Off"}`,
+			`Last applied: ${lastAppliedSnapshot}`,
+			...(currentAttention
+				? [
+						currentAttention.decision.setupName === config.setupName
+							? "Sync status: Review needed"
+							: `Sync status: Review needed for setup ${safeTerminalText(currentAttention.decision.setupName)}`,
+						attentionComparison?.remoteOnly.length === 0 &&
+						attentionComparison.localOnly.length === 0
+							? "Only the synced-content order differs."
+							: `Remote-only paths: ${attentionComparison?.remoteOnly.length ?? 0} · Device-only paths: ${attentionComparison?.localOnly.length ?? 0}`,
+						"Nothing has been changed.",
+					]
+				: ["Remote status: Not checked"]),
+			...(noSyncedContent
+				? [
+						"",
+						"No included content is selected. Choose included content in Settings before syncing.",
+					]
+				: []),
+			"",
+			"What do you want to do?",
+		];
 		return {
-			title: [
-				"Manage sync",
-				"",
-				`Current sync setup: ${safeTerminalText(config.setupName)}`,
-				`Storage: ${backendStorageDescription(config)}`,
-				`Included: ${selection.builtIns.length} built-in group${selection.builtIns.length === 1 ? "" : "s"} · ${selection.custom.length} extra path${selection.custom.length === 1 ? "" : "s"} · Sessions ${selection.sessions ? "on" : "off"}`,
-				`Automatic sync: ${config.automatic ? "On" : "Off"}`,
-				`Last applied: ${lastAppliedSnapshot}`,
-				...(currentAttention
-					? [
-							currentAttention.decision.setupName === config.setupName
-								? "Sync status: Review needed"
-								: `Sync status: Review needed for setup ${safeTerminalText(currentAttention.decision.setupName)}`,
-							attentionComparison?.remoteOnly.length === 0 &&
-							attentionComparison.localOnly.length === 0
-								? "Only the synced-content order differs."
-								: `Remote-only paths: ${attentionComparison?.remoteOnly.length ?? 0} · Device-only paths: ${attentionComparison?.localOnly.length ?? 0}`,
-							"Nothing has been changed.",
-						]
-					: ["Remote status: Not checked"]),
-				...(noSyncedContent
-					? [
-							"",
-							"No included content is selected. Choose included content in Settings before syncing.",
-						]
-					: []),
-				...(liveLock
-					? [
-							"",
-							`Operation in progress: ${safeTerminalText(lock.lock.command)} (pid ${lock.lock.pid}). Sync and settings changes are disabled.`,
-						]
-					: []),
-				...(recoverableLock
-					? ["", "Recovery required: lock metadata is stale or unreadable."]
-					: []),
-				"",
-				"What do you want to do?",
-			].join("\n"),
-			actions:
-				liveLock || recoverableLock
-					? ["Status & changes", "History & recovery…", "Help"]
-					: noSyncedContent
-						? ["Settings", ...(canSwitch ? ["Switch sync setup"] : []), "Status & changes", "More…"]
-						: mainActions,
+			title: (changesBlocked
+				? ["Manage sync", ...operationStatusLines(operation)]
+				: ordinaryTitle
+			).join("\n"),
+			actions: operationActions(operation, noSyncedContent, canSwitch, mainActions),
+			operation,
 			...(currentAttention
 				? {
 						attention: currentAttention,
 						attentionBlocksSync: currentAttention.decision.setupName === config.setupName,
-						attentionReviewDisabled: liveLock || recoverableLock,
+						attentionReviewDisabled: changesBlocked,
 					}
 				: {}),
 		};
@@ -180,6 +175,57 @@ export async function describeManagerState(
 			].join("\n"),
 			actions: ["Sync setups…", "Storage connections…", "History & recovery…", "Help"],
 		};
+	}
+}
+
+function operationActions(
+	operation: OperationAvailability,
+	noSyncedContent: boolean,
+	canSwitch: boolean,
+	mainActions: string[],
+) {
+	if (operationCanRecover(operation)) {
+		return [
+			"Restore sync access… (recommended)",
+			"Status & changes",
+			"History & recovery…",
+			"Help",
+		];
+	}
+	if (operation.kind !== "free") {
+		return ["Refresh operation status", "Status & changes", "History & recovery…", "Help"];
+	}
+	return noSyncedContent
+		? ["Settings", ...(canSwitch ? ["Switch sync setup"] : []), "Status & changes", "More…"]
+		: mainActions;
+}
+
+function operationStatusLines(operation: OperationAvailability): string[] {
+	switch (operation.kind) {
+		case "free":
+			return [];
+		case "live": {
+			const command = truncateToWidth(safeTerminalText(operation.lock.command), 16, "…");
+			return [
+				`Running: ${command} (pid ${operation.lock.pid}). Wait, then refresh; Settings and More return.`,
+			];
+		}
+		case "busy":
+			return [
+				"Pi-sync may be starting or finishing. Wait, then refresh; Settings and More remain unavailable.",
+			];
+		case "recoverable-stale":
+			return [
+				"Sync paused: old lock remains. Close other Pi sessions then restore; Settings and More return.",
+			];
+		case "recoverable-unreadable":
+			return [
+				"Sync paused: owner unknown. Close other Pi sessions then restore; Settings and More return.",
+			];
+		case "inspection-error":
+			return [
+				"Lock check failed. Fix path access, then refresh; Settings and More remain unavailable.",
+			];
 	}
 }
 

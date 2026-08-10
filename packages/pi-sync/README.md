@@ -62,6 +62,27 @@ and recovery. Secondary screens provide **Back**; Escape goes back and Ctrl+C cl
 Destructive, credential-bearing, and externally visible operations retain exact specialized previews
 and confirmations.
 
+### Restore sync access
+
+When an operation is currently running, the manager shows its command and process ID, keeps sync and
+settings changes unavailable, and puts **Refresh operation status** first.
+When lock metadata is still protected by an active guard, the manager explains that another pi-sync
+process may be starting or finishing and asks the user to wait before refreshing.
+It never offers lock removal while an owner or guard may still be active.
+
+When a previous operation appears to have stopped without releasing its local lock, the manager shows
+**Sync paused** and puts **Restore sync access… (recommended)** first instead of hiding recovery
+inside **History & recovery…**.
+Unreadable metadata receives a stronger warning because pi-sync cannot verify who owns it.
+Close every other Pi session that may still be syncing, review the local-lock-only confirmation, then
+choose **Remove local lock and continue**.
+The guarded recovery path rechecks metadata and ownership before removal, changes no settings, local
+files, sync state, or remote data, and returns directly to the normal manager when access is restored.
+Cancellation leaves the lock unchanged.
+If ownership changes or a guard is still expiring, pi-sync refuses removal and keeps actionable status
+available for refresh or retry.
+The deterministic fallback remains `/sync unlock --stale` after the same no-other-sync verification.
+
 ### Resolve conflicts in the manager
 
 When **Sync now**, **Pull from remote…**, or **Push to remote…** finds changes that require a human direction choice, the manager opens **Resolve sync conflict** instead of ending at a command-only error.
@@ -338,6 +359,9 @@ packages/pi-sync/
 │   ├── state-directory.ts
 │   ├── settings-management.ts
 │   ├── manager-ui.ts
+│   ├── manager-state.ts
+│   ├── manager-recovery.ts
+│   ├── operation-availability.ts
 │   ├── manager-attention.ts
 │   ├── sync-attention.ts
 │   ├── storage-connections-ui.ts

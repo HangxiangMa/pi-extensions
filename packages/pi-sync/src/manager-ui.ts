@@ -13,7 +13,6 @@ import {
 	syncConfigReviewIdentity,
 } from "./config.js";
 import { showAddGitTarget, showEditGitTarget, showGitSetup } from "./git-ui.js";
-import { inspectLock, isStaleLock } from "./lock.js";
 import {
 	attentionMainMenuItems,
 	blockedSyncMenuItem,
@@ -27,8 +26,10 @@ import {
 	requiredInput,
 	safeTerminalText,
 } from "./manager-helpers.js";
+import { recoverSyncAccess } from "./manager-recovery.js";
 import { dispatchManagerResult } from "./manager-result-dispatcher.js";
 import { backendStorageDescription, describeManagerState } from "./manager-state.js";
+import { operationCanRecover } from "./operation-availability.js";
 import { chooseS3Credentials } from "./s3-credentials-ui.js";
 import {
 	addSyncSetup,
@@ -68,28 +69,34 @@ export async function showSyncManager(
 		| "history"
 		| "doctor"
 		| "unlock"
+		| "recover"
+		| "refresh"
 		| "help"
 		| "init"
 		| "back";
 	interface State {
 		manager: Awaited<ReturnType<typeof describeManagerState>>;
-		canRecover: boolean;
 	}
 	const menu = defineMenu<State, Screen, Action, ExtensionCommandContext>({
 		start: "main",
 		screens: {
-			main: ({ state }) => ({
-				kind: "actions",
-				title: "Manage sync",
-				lines: state.manager.title.split("\n").slice(1),
-				items: [
-					...attentionMainMenuItems(state.manager),
-					...state.manager.actions.map(
-						(label) => blockedSyncMenuItem(label, state.manager) ?? syncMainMenuItem(label),
-					),
-				],
-				hint: "close",
-			}),
+			main: ({ state }) => {
+				const attentionItems = attentionMainMenuItems(state.manager);
+				const managerItems = state.manager.actions.map(
+					(label) => blockedSyncMenuItem(label, state.manager) ?? syncMainMenuItem(label),
+				);
+				const operationFirst =
+					state.manager.operation !== undefined && state.manager.operation.kind !== "free";
+				return {
+					kind: "actions",
+					title: "Manage sync",
+					lines: state.manager.title.split("\n").slice(1),
+					items: operationFirst
+						? [...managerItems, ...attentionItems]
+						: [...attentionItems, ...managerItems],
+					hint: "close",
+				};
+			},
 			more: () => ({
 				kind: "actions",
 				title: "More options",
@@ -114,7 +121,7 @@ export async function showSyncManager(
 				items: [
 					{ id: "history", label: "Browse history", action: "history" },
 					{ id: "doctor", label: "Check setup", action: "doctor" },
-					...(state.canRecover
+					...(state.manager.operation && operationCanRecover(state.manager.operation)
 						? [{ id: "unlock", label: "Recover stale operation", action: "unlock" as const }]
 						: []),
 					{ id: "back", label: "Back", action: "back" },
@@ -242,10 +249,28 @@ export async function showSyncManager(
 				await runRoute("doctor");
 				return { kind: "stay" };
 			},
-			unlock: async () => {
-				await runRoute("unlock --stale");
-				return { kind: "stay" };
+			unlock: async ({ state, signal: actionSignal }) => {
+				const result = await recoverSyncAccess(
+					ctx,
+					state.manager,
+					runRoute,
+					sessionSignal,
+					actionSignal,
+				);
+				if (result === "close") return { kind: "close" };
+				return result === "restored" ? { kind: "to", screen: "main" } : { kind: "stay" };
 			},
+			recover: async ({ state, signal: actionSignal }) => {
+				const result = await recoverSyncAccess(
+					ctx,
+					state.manager,
+					runRoute,
+					sessionSignal,
+					actionSignal,
+				);
+				return { kind: result === "close" ? "close" : "stay" };
+			},
+			refresh: async () => ({ kind: "stay" }),
 			help: async () => {
 				await runRoute("help");
 				return { kind: "close" };
@@ -260,18 +285,11 @@ export async function showSyncManager(
 	await runMenu(ctx, menu, {
 		getState: async () => {
 			const pendingAttention = options.getAttention?.();
-			const [manager, lock] = await Promise.all([
-				describeManagerState(sessionSignal, pendingAttention),
-				inspectLock(),
-			]);
+			const manager = await describeManagerState(sessionSignal, pendingAttention);
 			if (pendingAttention && options.getAttention?.() === pendingAttention && !manager.attention) {
 				options.onSelectionResolved?.(pendingAttention);
 			}
-			return {
-				manager,
-				canRecover:
-					lock.status === "unreadable" || (lock.status === "valid" && isStaleLock(lock.lock)),
-			};
+			return { manager };
 		},
 		signal: sessionSignal,
 		isCurrent: () => !sessionSignal?.aborted,
@@ -282,18 +300,38 @@ function syncMainMenuItem(
 	label: string,
 ): ActionMenuItem<
 	"main" | "more" | "recovery",
-	"sync" | "switch" | "diff" | "settings" | "setups" | "connections" | "help" | "init"
+	| "sync"
+	| "switch"
+	| "diff"
+	| "settings"
+	| "setups"
+	| "connections"
+	| "recover"
+	| "refresh"
+	| "help"
+	| "init"
 > {
 	if (label === "More…") return { id: "more", label, to: "more" };
 	if (label === "History & recovery…") return { id: "recovery", label, to: "recovery" };
 	const actions = new Map<
 		string,
-		"sync" | "switch" | "diff" | "settings" | "setups" | "connections" | "help" | "init"
+		| "sync"
+		| "switch"
+		| "diff"
+		| "settings"
+		| "setups"
+		| "connections"
+		| "recover"
+		| "refresh"
+		| "help"
+		| "init"
 	>([
 		["Sync now (recommended)", "sync"],
 		["Switch sync setup", "switch"],
 		["Status & changes", "diff"],
 		["Settings", "settings"],
+		["Restore sync access… (recommended)", "recover"],
+		["Refresh operation status", "refresh"],
 		["Sync setups…", "setups"],
 		["Storage connections…", "connections"],
 		["Help", "help"],
