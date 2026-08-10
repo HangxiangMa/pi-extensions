@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import { test } from "vitest";
-import { BatchStore, type ProcessedImage } from "../src/batch.js";
+import { BatchStore, type ProcessedImage, type PublicBatchState } from "../src/batch.js";
 import { ImageDropServer } from "../src/server.js";
 import { DEFAULT_SETTINGS } from "../src/settings.js";
 
@@ -30,7 +30,7 @@ function result(source: Uint8Array): ProcessedImage {
 	};
 }
 
-async function harness() {
+async function harness(onStateChange?: (state: PublicBatchState) => void) {
 	const batch = new BatchStore(SETTINGS);
 	const server = await ImageDropServer.start({
 		batch,
@@ -40,6 +40,7 @@ async function harness() {
 		cwd: "/workspace/demo",
 		process: async (source) => result(source),
 		getAutoResize: async () => true,
+		onStateChange,
 	});
 	return { batch, server };
 }
@@ -475,7 +476,13 @@ test("raw uploads enforce the configured limit even without Content-Length", asy
 });
 
 test("an interrupted browser upload becomes a visible deletable error after refresh", async () => {
-	const { batch, server } = await harness();
+	let observeUploadFailure!: () => void;
+	const uploadFailed = new Promise<void>((resolve) => {
+		observeUploadFailure = resolve;
+	});
+	const { batch, server } = await harness((state) => {
+		if (state.items[0]?.status === "error") observeUploadFailure();
+	});
 	try {
 		const cookie = await authenticate(server);
 		const client = await lease(server, cookie, "before-refresh");
@@ -491,13 +498,7 @@ test("an interrupted browser upload becomes a visible deletable error after refr
 			"X-Image-Drop-Client": client,
 			"Content-Length": "3",
 		});
-		for (
-			let attempt = 0;
-			attempt < 20 && batch.publicState().items[0]?.status !== "error";
-			attempt += 1
-		) {
-			await new Promise((resolve) => setTimeout(resolve, 5));
-		}
+		await uploadFailed;
 		assert.equal(batch.publicState().items[0]?.status, "error");
 		assert.match(batch.publicState().items[0]?.error ?? "", /aborted/i);
 		const refreshed = await lease(server, cookie, "after-refresh");
@@ -897,11 +898,13 @@ function abortRawUpload(
 			port: url.port,
 			path,
 			method: "PUT",
-			headers,
+			headers: { ...headers, Expect: "100-continue" },
 		});
 		request.once("error", () => resolve());
-		request.write("o");
-		setTimeout(() => request.destroy(), 5);
+		request.once("continue", () => {
+			request.write("o", () => request.destroy());
+		});
+		request.flushHeaders();
 	});
 }
 
