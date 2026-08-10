@@ -1,5 +1,11 @@
 # @narumitw/pi-file-context
 
+## 0.51.1
+
+### Patch Changes
+
+- 9a086ce: Change the default File Context shortcut from terminal-dependent `Ctrl+Alt+F` to `F8` while preserving explicit custom shortcut settings and `/file-context`.
+
 ## 0.51.0
 
 ### Minor Changes
