@@ -20,9 +20,12 @@ type WorkRequest = {
 	writePaths?: string[];
 	ownershipKeys?: string[];
 	acceptanceCriteria?: string[];
+	requiredEvidence?: string[];
 	integrationOwner?: boolean;
 	verifierFor?: string;
 	dependencyPolicy?: "completed" | "settled";
+	acceptanceRequired?: boolean;
+	maxReworkCycles?: 0 | 1;
 };
 
 export function resolveWorkflowTasks(
@@ -54,6 +57,7 @@ export function createBlockingWorkLedger(
 	params: SubagentParams,
 	resolvedWorkflowTasks: ResolvedWorkflowTask[],
 	aggregator: Aggregator | undefined,
+	verifiedTarget?: { id: string; maxReworkCycles: 0 | 1 },
 ): WorkItemLedger | undefined {
 	if (params.agent && params.task) {
 		return WorkItemLedger.create({
@@ -109,6 +113,9 @@ export function createBlockingWorkLedger(
 					integrationOwner:
 						task.integrationOwner ??
 						(!hasExplicitIntegrationOwner && index === defaultIntegrationOwnerIndex),
+					...(verifiedTarget?.id === task.id
+						? { acceptanceRequired: true, maxReworkCycles: verifiedTarget.maxReworkCycles }
+						: {}),
 				}),
 			),
 		});
@@ -155,8 +162,11 @@ function definition(
 		writePaths: request.writePaths ?? contract?.requestedAuthority?.writePaths ?? [],
 		ownershipKeys: request.ownershipKeys ?? [],
 		acceptanceCriteria: request.acceptanceCriteria ?? contract?.acceptanceCriteria ?? [],
+		requiredEvidence: request.requiredEvidence ?? contract?.requiredEvidence ?? [],
 		integrationOwner: request.integrationOwner,
 		verifierFor: request.verifierFor,
 		dependencyPolicy: request.dependencyPolicy,
+		acceptanceRequired: request.acceptanceRequired,
+		maxReworkCycles: request.maxReworkCycles,
 	};
 }

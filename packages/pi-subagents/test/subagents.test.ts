@@ -118,6 +118,8 @@ type SubagentTool = {
 				items: Array<{
 					id: string;
 					state: string;
+					acceptanceState?: string;
+					reworkCount?: number;
 					verificationAccepted?: boolean;
 					artifacts?: Array<{ verified?: boolean }>;
 					verificationReceipt?: { decision?: string };
@@ -3833,5 +3835,176 @@ test("parallel summaries classify provider errors and retain partial output", as
 	} finally {
 		restorePiPackage();
 		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("opt-in verified execution owns accept, bounded rework, drift, checks, evidence, and scope", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-verified-execution-"));
+	const workspace = path.join(root, "workspace");
+	const launches = path.join(root, "launches");
+	const verifierArgs = path.join(root, "verifier-args");
+	mkdirSync(workspace);
+	execFileSync("git", ["init", "-q", workspace]);
+	execFileSync("git", ["-C", workspace, "config", "user.email", "test@example.com"]);
+	execFileSync("git", ["-C", workspace, "config", "user.name", "Test"]);
+	writeFileSync(path.join(workspace, "feature.txt"), "base\n");
+	execFileSync("git", ["-C", workspace, "add", "feature.txt"]);
+	execFileSync("git", ["-C", workspace, "commit", "-qm", "initial"]);
+	const fakePi = path.join(root, "fake-pi.mjs");
+	writeFileSync(
+		fakePi,
+		[
+			"import{appendFileSync,readFileSync,writeFileSync}from'node:fs';",
+			`const launches=${JSON.stringify(launches)};appendFileSync(launches,'launch\\n');`,
+			"const task=process.argv.at(-1)??'';const verifier=task.includes('fresh independent verifier');",
+			`if(verifier)writeFileSync(${JSON.stringify(verifierArgs)},JSON.stringify(process.argv));`,
+			"const feature=()=>readFileSync('feature.txt','utf8').trim();",
+			"const rework=task.includes('scenario-rework');const reject=task.includes('scenario-rework-reject');",
+			"if(!verifier){const repaired=task.includes('Repair the current submitted state');writeFileSync('feature.txt',repaired?'reworked\\n':task.includes('scenario-accept')?'accepted\\n':'initial\\n');}",
+			"if(verifier&&task.includes('scenario-mutation'))writeFileSync('feature.txt','verifier-mutated\\n');",
+			"let decision='accept';if(verifier&&rework&&feature()!=='reworked')decision='rework';else if(verifier&&reject)decision='reject';",
+			"let result;if(!verifier)result={version:'pi-subagents:result:v2',status:'completed',summary:'worker self-report',claims:[],artifacts:[],changes:[],verification:[{status:'passed',summary:'worker self-check'}],limitations:[],unresolvedDependencies:[]};",
+			"else if(decision==='rework')result={version:'pi-subagents:result:v2',status:'partial',reasonCode:'verification-rework',summary:'repair required',claims:[],artifacts:[],changes:[],verification:[{status:'failed',summary:'focused-test'}],limitations:['repair the feature'],unresolvedDependencies:[]};",
+			"else if(decision==='reject')result={version:'pi-subagents:result:v2',status:'failed',reasonCode:'verification-rejected',summary:'reject state',claims:[{claim:'broken',classification:'observed',evidence:['focused-test']}],artifacts:[],changes:[],verification:[{status:'failed',summary:'focused-test'}],limitations:[],unresolvedDependencies:[]};",
+			"else result={version:'pi-subagents:result:v2',status:'completed',reasonCode:'verification-accepted',summary:'accept state',claims:[],artifacts:[],changes:[],verification:[{status:'passed',summary:'focused-test'}],limitations:[],unresolvedDependencies:[]};",
+			"const message={role:'assistant',content:[{type:'text',text:JSON.stringify(result)}],stopReason:'stop',timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	const restorePiPackage = useFakePiPackage(root, fakePi);
+	try {
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const tool = mock.tools.find((candidate) => candidate.name === "subagent") as SubagentTool;
+		const { ctx } = createMockContext({ cwd: workspace, isProjectTrusted: () => true });
+		const run = async (
+			scenario: string,
+			options: {
+				checkCode?: string;
+				requiredEvidence?: string;
+				writePaths?: readonly string[];
+				command?: "node" | "sh";
+				verifierAgent?: string;
+			} = {},
+		) => {
+			execFileSync("git", ["-C", workspace, "reset", "--hard", "-q", "HEAD"]);
+			return tool.execute(
+				`verified-${scenario}`,
+				{
+					workflow: {
+						id: `verified-${scenario}`,
+						verifiedExecution: {
+							verifierAgent: options.verifierAgent ?? "reviewer",
+							maxReworkCycles: 1,
+							checks: [
+								{
+									id: "focused-test",
+									command: options.command ?? "node",
+									args: ["-e", options.checkCode ?? "process.exit(0)"],
+								},
+							],
+						},
+						tasks: [
+							{
+								id: "implementation",
+								agent: "worker",
+								task: scenario,
+								writePaths: options.writePaths ?? ["feature.txt"],
+								acceptanceCriteria: ["feature is correct"],
+								resultFormat: "structured-v2",
+								contract: {
+									version: "pi-subagents:delegation:v2",
+									level: "full",
+									taskId: "implementation",
+									objective: scenario,
+									requiredEvidence: [options.requiredEvidence ?? "focused-test"],
+									sideEffectPolicy: "mutating",
+								},
+							},
+						],
+					},
+				},
+				undefined,
+				undefined,
+				ctx,
+			);
+		};
+
+		const accepted = await run("scenario-accept");
+		assert.equal(accepted.isError, undefined);
+		assert.equal(accepted.details?.workflow?.items[0]?.acceptanceState, "accepted");
+		assert.equal(accepted.details?.workflow?.items[0]?.reworkCount, 0);
+		for (const flag of [
+			"--no-extensions",
+			"--no-skills",
+			"--no-prompt-templates",
+			"--no-context-files",
+		]) {
+			assert.match(readFileSync(verifierArgs, "utf8"), new RegExp(flag));
+		}
+		assert.equal(
+			inspectSessionWorkflows("test-session")
+				.workflows.find((workflow) => workflow.workflowId === "verified-scenario-accept")
+				?.items.find((item) => item.id === "implementation")?.acceptanceState,
+			"accepted",
+		);
+
+		const repaired = await run("scenario-rework-accept", {
+			checkCode:
+				"process.exit(require('fs').readFileSync('feature.txt','utf8').trim()==='reworked'?0:1)",
+		});
+		assert.equal(repaired.isError, undefined);
+		assert.equal(
+			repaired.details?.workflow?.items.find((item) => item.id === "implementation")?.reworkCount,
+			1,
+		);
+		assert.equal(
+			repaired.details?.workflow?.items.find((item) => item.id === "implementation")
+				?.acceptanceState,
+			"accepted",
+		);
+
+		const rejected = await run("scenario-rework-reject", {
+			checkCode:
+				"process.exit(require('fs').readFileSync('feature.txt','utf8').trim()==='reworked'?0:1)",
+		});
+		assert.equal(rejected.isError, true);
+		assert.equal(
+			rejected.details?.workflow?.items.find((item) => item.id === "implementation")
+				?.acceptanceState,
+			"rejected",
+		);
+
+		for (const [scenario, options] of [
+			["scenario-mutation", {}],
+			["scenario-check-failure", { checkCode: "process.exit(2)" }],
+			["scenario-missing-evidence", { requiredEvidence: "missing-current-evidence" }],
+			["scenario-scope-mismatch", { writePaths: ["other"] }],
+		] as const) {
+			const failed = await run(scenario, options);
+			assert.equal(failed.isError, true, scenario);
+			assert.notEqual(
+				failed.details?.workflow?.items.find((item) => item.id === "implementation")
+					?.acceptanceState,
+				"accepted",
+				scenario,
+			);
+		}
+
+		const launchesBeforeUnsafe = existsSync(launches)
+			? readFileSync(launches, "utf8").trim().split("\n").length
+			: 0;
+		await assert.rejects(
+			() => run("scenario-unsafe", { command: "sh" }),
+			/unsafe verification command/i,
+		);
+		await assert.rejects(
+			() => run("scenario-incapable-verifier", { verifierAgent: "scout" }),
+			/independent structured-v2 review capability/i,
+		);
+		const launchesAfterUnsafe = readFileSync(launches, "utf8").trim().split("\n").length;
+		assert.equal(launchesAfterUnsafe, launchesBeforeUnsafe);
+	} finally {
+		restorePiPackage();
+		rmSync(root, { recursive: true, force: true });
 	}
 });

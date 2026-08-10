@@ -201,12 +201,37 @@ function sanitizeWorkflowSnapshot(snapshot: WorkItemLedgerSnapshot): WorkItemLed
 		item.writePaths = item.writePaths.map(redact);
 		item.ownershipKeys = item.ownershipKeys.map(redact);
 		item.acceptanceCriteria = item.acceptanceCriteria.map(redact);
+		item.requiredEvidence = item.requiredEvidence.map(redact);
 		item.invalidationReasons = item.invalidationReasons.map(redact);
 		item.outcomeReason = item.outcomeReason ? redact(item.outcomeReason) : undefined;
 		if (item.verificationReceipt) {
 			item.verificationReceipt.summary = redact(item.verificationReceipt.summary);
 			item.verificationReceipt.evidence = item.verificationReceipt.evidence.map(redact);
 			item.verificationReceipt.limitations = item.verificationReceipt.limitations.map(redact);
+		}
+		for (const receipt of [
+			...item.acceptanceReceiptHistory,
+			...(item.acceptanceReceipt ? [item.acceptanceReceipt] : []),
+		]) {
+			receipt.summary = redact(receipt.summary);
+			receipt.findings = receipt.findings.map(redact);
+			receipt.changedPaths = receipt.changedPaths.map(redact);
+			receipt.allowedScopes = receipt.allowedScopes.map(redact);
+			receipt.acceptanceCriteria = receipt.acceptanceCriteria.map(redact);
+			receipt.requiredEvidenceIds = receipt.requiredEvidenceIds.map(redact);
+			receipt.dependencyVersions = redactRecord(receipt.dependencyVersions);
+			receipt.readSetVersions = redactRecord(receipt.readSetVersions);
+			receipt.evidence = redactRecord(receipt.evidence);
+			for (const check of receipt.checks) {
+				check.stdout = redact(check.stdout);
+				check.stderr = redact(check.stderr);
+			}
+		}
+		if (item.submission) {
+			item.submission.changedPaths = item.submission.changedPaths.map(redact);
+			item.submission.fileVersions = Object.fromEntries(
+				Object.entries(item.submission.fileVersions).map(([key, value]) => [redact(key), value]),
+			);
 		}
 		for (const artifact of [...item.artifacts, ...item.artifactHistory]) {
 			artifact.kind = redact(artifact.kind);
@@ -216,6 +241,12 @@ function sanitizeWorkflowSnapshot(snapshot: WorkItemLedgerSnapshot): WorkItemLed
 	}
 	WorkItemLedger.restore(sanitized);
 	return sanitized;
+}
+
+function redactRecord(value: Record<string, string>): Record<string, string> {
+	return Object.fromEntries(
+		Object.entries(value).map(([key, item]) => [redact(key), redact(item)]),
+	);
 }
 
 function redact(value: string): string {

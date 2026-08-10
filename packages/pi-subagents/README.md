@@ -480,7 +480,55 @@ Run an explicit dependency workflow:
 }
 ```
 
-A verification-gated implementation declares one distinct verifier:
+Managed verified execution is an explicit per-workflow contract.
+The executor infers the final mutating integration owner when none is declared, synthesizes one distinct read-only verifier, runs declared deterministic checks in a disposable Git worktree overlaid with the submitted state, and accepts only the exact unchanged submitted state.
+Every deterministic check has a stable evidence ID, a direct executable with argument-array invocation, and an optional relative `cwd` and timeout.
+Only `git`, `node`, `npm`, and `npx` are accepted; shell command strings fail before child allocation.
+The integration owner must request `structured-v2`, declare a non-empty `writePaths` scope, and name current required evidence through its delegation contract.
+Every required evidence ID must match a currently passed executor-owned check; worker-authored artifact metadata never satisfies that binding.
+
+```json
+{
+  "workflow": {
+    "verifiedExecution": {
+      "verifierAgent": "reviewer",
+      "maxReworkCycles": 1,
+      "checks": [
+        {
+          "id": "focused-test",
+          "command": "npm",
+          "args": ["test", "--", "feature"],
+          "timeoutMs": 120000
+        }
+      ]
+    },
+    "tasks": [
+      {
+        "id": "implementation",
+        "agent": "worker",
+        "task": "Implement the contracted change.",
+        "writePaths": ["src", "test"],
+        "acceptanceCriteria": ["The focused regression test passes"],
+        "resultFormat": "structured-v2",
+        "contract": {
+          "version": "pi-subagents:delegation:v2",
+          "level": "full",
+          "taskId": "implementation",
+          "objective": "Implement the contracted change",
+          "requiredEvidence": ["focused-test"],
+          "sideEffectPolicy": "mutating"
+        }
+      }
+    ]
+  }
+}
+```
+
+An advanced caller may provide the verifier task instead of letting the executor synthesize it.
+That task must directly and only depend on the integration owner, use `structured-v2`, select the configured distinct verifier agent, and declare an enforced read-only contract without shell or custom tools.
+The executor narrows accepted verifier authority to `read` even when the selected agent normally has broader tools, and disables verifier extensions, skills, prompt templates, and inherited context files.
+
+The older explicit verifier contract remains available as a compatibility gate without managed integration:
 
 ```json
 {
@@ -528,10 +576,26 @@ A task that explicitly requires independent verification must have exactly one d
 The producer stops in `awaiting-verification`, its own passing verification claims remain untrusted, and ordinary downstream tasks stay blocked until the executor records an accepted verifier receipt.
 The verifier runs alone in a fresh subprocess context against one bounded Git-visible tree identity and must encode `verification-accepted`, `verification-rework`, or `verification-rejected` through the documented `structured-v2` status and reason fields.
 Dirty-tree identity covers at most 1 MiB across separately framed staged and unstaged binary diffs plus bounded non-ignored untracked paths and bytes; submodules, unsupported states, and changing trees fail closed.
-A rework or rejection preserves bounded evidence but does not replay the producer automatically.
-This acceptance gate does not isolate operating-system effects and does not make shared-workspace mutation into manager-controlled patch integration.
-Explicit workflow transitions are also atomically persisted as mode-0600, private-text-redacted snapshots for current-session `list_workflows` and `get_workflow` inspection; running and awaiting-verification tasks inspect as `interrupted`, and no prior side effect is automatically resumed.
-When a v1 ledger is restored, legacy self-reported verification flags and artifact trust are cleared because they have no executor receipt.
+The compatibility gate preserves bounded rework or rejection evidence but does not replay the producer automatically.
+
+With `verifiedExecution`, execution completion and acceptance are separate `pi-subagents:work-acceptance:v1` states.
+A worker's own verification, confidence, prose, consensus, or exit status cannot move `pending` acceptance to `accepted`.
+The executor-owned `pi-subagents:verification-receipt:v1` binds both tree captures, patch digest, changed paths, accepted scope, target and verifier generations and `ExecutionPlan` IDs, verifier identity, acceptance criteria, required current evidence, and bounded deterministic check receipts.
+Each receipt is capped at 12 KiB, each stored check stream at 2 KiB, and oversized acceptance evidence fails closed rather than expanding tool details.
+The verifier receives the original objective, current artifact metadata, immutable tree identity, and executor-owned check output rather than the worker narrative.
+Verifier mutation, a stale or replaced generation, a failed or unsafe check, missing evidence, wrong scope, patch, plan, tree, or identity, cancellation, timeout, and unsupported Git state all produce non-success.
+One verifier `rework` decision may rotate the worker and verifier generations when `maxReworkCycles` is `1`; prior grants are revoked, prior evidence remains history, only current requirements and findings are added, and a second rejection is terminal.
+Crashes, timeouts, cancellation, ambiguous settlement, and drift are never replayed.
+The disposable check worktree includes bounded tracked and non-ignored untracked files and is removed after checks.
+When the repository has a local `node_modules` directory, the worktree is nested beneath it so normal Node and npm resolution can read the installed dependency tree without copying it.
+The worktree isolates repository build output, but it does not make the installed dependency tree read-only and is not an operating-system sandbox for processes, network, secrets, absolute paths, or host credentials.
+The accepted state remains the selected shared workspace; no general patch merge or conflict resolver is added.
+
+Omitting `verifiedExecution` preserves prior workflow behavior, including the older explicit verifier gate above.
+To downgrade, finish active workflows, remove `verifiedExecution`, and either use the explicit `verifierFor` compatibility form or perform verification in the parent.
+Older package versions reject the unknown managed contract rather than silently providing its guarantees.
+Explicit workflow transitions are atomically persisted as mode-0600, private-text-redacted snapshots for current-session `list_workflows` and `get_workflow` inspection; in-flight execution or acceptance restores as interrupted non-success, and no prior side effect is automatically resumed.
+Legacy v1 and v2 records without acceptance fields retain their prior completed terminal meaning, while v1 self-reported verification flags and artifact trust remain untrusted.
 
 ## 🔁 Stateful agents
 
@@ -1010,7 +1074,12 @@ packages/pi-subagents/
 │   ├── execution-plan.ts         # Executor-owned authority and resource resolution
 │   ├── work-item-ledger.ts       # Persistent dependency and artifact state machine
 │   ├── work-item-persistence.ts  # Atomic redacted workflow state and inspection
-│   ├── workflow-verification.ts  # Executor-owned independent-verifier receipts
+│   ├── workflow-verification.ts  # Compatibility independent-verifier receipts
+│   ├── verified-execution-contract.ts # Explicit managed-verification request boundary
+│   ├── workflow-completion-controller.ts # Sole opted-in terminal acceptance owner
+│   ├── verification-harness.ts   # Disposable deterministic check execution
+│   ├── verification-receipt.ts   # Strict executor-owned managed receipts
+│   ├── verified-execution-benchmark.ts # Matched offline acceptance/cost fixture
 │   ├── workflow-tree-identity.ts # Bounded exact Git-visible tree identities
 │   ├── integration-controller.ts # Fail-closed canonical integration admission
 │   ├── adaptive-scheduler.ts     # Dependency, capacity, budget, and conflict scheduling

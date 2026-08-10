@@ -537,6 +537,33 @@ function projectWorkflow(workflow: WorkItemLedgerSnapshot): Record<string, unkno
 			verified: artifact.verified,
 		})),
 		verificationAccepted: item.verificationAccepted,
+		acceptanceStateVersion: item.acceptanceStateVersion,
+		acceptanceRequired: item.acceptanceRequired,
+		acceptanceState: item.acceptanceState,
+		reworkCount: item.reworkCount,
+		maxReworkCycles: item.maxReworkCycles,
+		acceptanceReceipt: item.acceptanceReceipt
+			? {
+					version: item.acceptanceReceipt.version,
+					decision: item.acceptanceReceipt.decision,
+					targetTaskId: boundedPrivateText(item.acceptanceReceipt.targetTaskId, 256),
+					targetTaskGeneration: item.acceptanceReceipt.targetTaskGeneration,
+					targetExecutionPlanId: item.acceptanceReceipt.targetExecutionPlanId,
+					verifierTaskId: boundedPrivateText(item.acceptanceReceipt.verifierTaskId, 256),
+					verifierTaskGeneration: item.acceptanceReceipt.verifierTaskGeneration,
+					verifierExecutionPlanId: item.acceptanceReceipt.verifierExecutionPlanId,
+					verifierAgent: boundedPrivateText(item.acceptanceReceipt.verifierAgent, 256),
+					beforeTreeIdentity: item.acceptanceReceipt.beforeTreeIdentity,
+					afterTreeIdentity: item.acceptanceReceipt.afterTreeIdentity,
+					patchDigest: item.acceptanceReceipt.patchDigest,
+					changedPathCount: item.acceptanceReceipt.changedPaths.length,
+					checkCount: item.acceptanceReceipt.checks.length,
+					requiredEvidenceCount: item.acceptanceReceipt.requiredEvidenceIds.length,
+					createdAt: item.acceptanceReceipt.createdAt,
+					sourceTruncated: item.acceptanceReceipt.sourceTruncated,
+				}
+			: undefined,
+		acceptanceReceiptHistoryCount: item.acceptanceReceiptHistory.length,
 		stagedTreeIdentity: item.stagedTreeIdentity
 			? {
 					version: item.stagedTreeIdentity.version,
