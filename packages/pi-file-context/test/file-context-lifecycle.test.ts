@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import fileQuoteExtension from "../src/file-context.js";
+import { registerFileQuoteExtension } from "../src/file-context.js";
 
 test("disposes and settles an active explorer on session replacement", async () => {
 	await assertExplorerLifecycleCancellation("session_start");
@@ -21,7 +21,9 @@ async function assertExplorerLifecycleCancellation(
 	try {
 		await writeFile(join(root, "example.txt"), "needle\n");
 		const mock = createMockPi();
-		fileQuoteExtension(mock.pi);
+		await registerFileQuoteExtension(mock.pi, {
+			loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
+		});
 		let markReady!: () => void;
 		const ready = new Promise<void>((resolve) => {
 			markReady = resolve;
