@@ -2,7 +2,7 @@
 
 > **Superseded as an executable plan on 2026-08-10.**
 > The implemented capability-manifest, routing, and `ExecutionPlan` baseline is documented in the [delegation-intelligence roadmap](../../roadmaps/2026-08-10_pi-subagents-delegation-intelligence-roadmap.md).
-> Automatic plan compilation and capability routing are owned by the [autonomous workflow planning plan](../2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md).
+> Automatic plan compilation and capability routing are owned by the [autonomous workflow planning plan](../archived/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md).
 > Representative admission and permission evidence remains owned by the [minimal delegation admission evaluation plan](../2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md).
 > Unchecked boxes below preserve the original design sequence and are not current executable work.
 
