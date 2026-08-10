@@ -4,8 +4,10 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { describe, test } from "vitest";
 import {
 	createCustomSelectorHarness,
@@ -53,7 +55,7 @@ function customPalettePicker(
 ) {
 	return async (factory: (...args: unknown[]) => unknown) => {
 		let result: unknown;
-		const component = factory(
+		const component = (await factory(
 			{ requestRender() {} },
 			{
 				fg: (_color: string, text: string) => text,
@@ -63,7 +65,7 @@ function customPalettePicker(
 			(value: unknown) => {
 				result = value;
 			},
-		) as PickerComponent;
+		)) as PickerComponent;
 		if (inspect && component.render) inspect(component.render(100));
 		if (inspectNarrow && component.render) inspectNarrow(component.render(20));
 		for (const input of inputs) component.handleInput?.(input);
@@ -156,7 +158,9 @@ describe("fresh explicit statusline controls seed their first save without passi
 		{
 			name: "appearance",
 			select: (title: string, choices: string[]) =>
-				screenTitle(title) === "pi-statusline" ? choices[0] : undefined,
+				screenTitle(title) === "pi-statusline" || title.includes("Palette preset")
+					? choices[0]
+					: undefined,
 			inputs: ["\r"],
 		},
 		{
@@ -228,6 +232,9 @@ describe("failed first-run statusline application restores the missing file", ()
 					mode: "tui",
 					select: (title: string, choices: string[]) => {
 						if (screenTitle(title) === "pi-statusline") return choices[scenario.menuIndex];
+						if (scenario.name === "appearance" && title.includes("Palette preset")) {
+							return choices[0];
+						}
 						if (scenario.name === "information" && title.includes("Information level")) {
 							return choices[0];
 						}
@@ -273,7 +280,9 @@ test("failed statusline application preserves a canonical file replaced before r
 		const context = createMockContext({
 			mode: "tui",
 			select: (title: string, choices: string[]) =>
-				screenTitle(title) === "pi-statusline" ? choices[0] : undefined,
+				screenTitle(title) === "pi-statusline" || title.includes("Palette preset")
+					? choices[0]
+					: undefined,
 			custom: customPalettePicker(["\r"]),
 		});
 
@@ -294,7 +303,9 @@ describe("failed updates from legacy statusline settings remove the new canonica
 		{
 			name: "appearance",
 			select: (title: string, choices: string[]) =>
-				screenTitle(title) === "pi-statusline" ? choices[0] : undefined,
+				screenTitle(title) === "pi-statusline" || title.includes("Palette preset")
+					? choices[0]
+					: undefined,
 			inputs: ["\r"],
 		},
 		{
@@ -836,7 +847,7 @@ test("segment menu restores persisted and runtime settings when application fail
 	}
 });
 
-test("palette picker previews cursor movement and restores the saved preset on cancel", async () => {
+test("palette picker uses the standard live choice interaction and restores preview on cancel", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-statusline-command-"));
 	const path = settingsFilePath(root);
 	writeFileSync(path, JSON.stringify({ palettePreset: "sunset" }));
@@ -855,24 +866,159 @@ test("palette picker previews cursor movement and restores the saved preset on c
 				previews.push(palettePreset);
 			},
 		});
-		let customCalls = 0;
-		const context = createMockContext({
-			mode: "tui",
-			select: async (_title: string, choices: string[]) => choices[0],
-			custom: customPalettePicker(["\u001b[B", "\u001b"], () => {
-				customCalls += 1;
-			}),
-		});
+		const tui = createTuiHarness({ width: 20, rows: 20 });
+		const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+		const running = mock.commands.get("statusline")?.handler("", context.ctx);
 
-		await mock.commands.get("statusline")?.handler("", context.ctx);
+		await tui.waitForOpen();
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		await tui.waitForPending();
+		const frame = tui.render();
+		const plain = stripVTControlCharacters(frame.join("\n"));
+		assert.match(plain, /Palette preset/iu);
+		assert.match(plain, /sunset.*current/iu);
+		assert.equal(frame.join("\n").includes("\u001b"), false);
+		for (const line of frame) assert.ok(visibleWidth(line) <= 20);
+		assert.deepEqual(previews, ["sunset"]);
 
-		assert.equal(customCalls, 1);
-		assert.deepEqual(previews, ["forest", undefined]);
+		tui.press("tui.select.down");
+		await tui.waitForPending();
+		tui.press("tui.select.cancel");
+		await running;
+
+		assert.deepEqual(previews, ["sunset", "forest", undefined]);
 		assert.equal(applied, 0);
 		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { palettePreset: "sunset" });
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("palette picker stops on stale ownership without using the replaced context", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-statusline-stale-picker-"));
+	const path = settingsFilePath(root);
+	writeFileSync(path, JSON.stringify({ palettePreset: "sunset" }));
+	try {
+		const owner = new AbortController();
+		const mock = createMockPi();
+		const loaded = loadStatuslineSettings(path);
+		const previews: Array<string | undefined> = [];
+		let applied = 0;
+		registerStatuslineCommand(mock.pi, {
+			settingsPath: path,
+			getLoaded: () => loaded,
+			apply() {
+				applied += 1;
+			},
+			preview(palettePreset) {
+				previews.push(palettePreset);
+			},
+			getMenuOwner: () => ({
+				signal: owner.signal,
+				isCurrent: () => !owner.signal.aborted,
+			}),
+		});
+		const tui = createTuiHarness();
+		const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+		const running = mock.commands.get("statusline")?.handler("", context.ctx);
+
+		await tui.waitForOpen();
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		await tui.waitForPending();
+		assert.deepEqual(previews, ["sunset"]);
+		owner.abort(new DOMException("Session replaced", "AbortError"));
+		await running;
+
+		assert.deepEqual(previews, ["sunset"]);
+		assert.equal(applied, 0);
+		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { palettePreset: "sunset" });
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("palette picker restores preview when Ctrl+C closes the interaction", async () => {
+	const mock = createMockPi();
+	const loaded = loadStatuslineSettings("/tmp/missing-pi-statusline-closed-picker.json");
+	const previews: Array<string | undefined> = [];
+	registerStatuslineCommand(mock.pi, {
+		settingsPath: "/tmp/missing-pi-statusline-closed-picker.json",
+		getLoaded: () => loaded,
+		apply() {},
+		preview(palettePreset) {
+			previews.push(palettePreset);
+		},
+	});
+	const tui = createTuiHarness();
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const running = mock.commands.get("statusline")?.handler("", context.ctx);
+
+	await tui.waitForOpen();
+	tui.press("tui.select.confirm");
+	await tui.waitForPending();
+	await tui.waitForOpen();
+	await tui.waitForPending();
+	tui.press("ctrl+c");
+	await running;
+
+	assert.deepEqual(previews, ["tokyo-night", undefined]);
+});
+
+test("palette picker resets preview when its component is externally disposed", async () => {
+	const mock = createMockPi();
+	const loaded = loadStatuslineSettings("/tmp/missing-pi-statusline-disposed-picker.json");
+	const previews: Array<string | undefined> = [];
+	registerStatuslineCommand(mock.pi, {
+		settingsPath: "/tmp/missing-pi-statusline-disposed-picker.json",
+		getLoaded: () => loaded,
+		apply() {},
+		preview(palettePreset) {
+			previews.push(palettePreset);
+		},
+	});
+	const tui = createTuiHarness();
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const running = mock.commands.get("statusline")?.handler("", context.ctx);
+
+	await tui.waitForOpen();
+	tui.press("tui.select.confirm");
+	await tui.waitForPending();
+	await tui.waitForOpen();
+	await tui.waitForPending();
+	tui.dispose();
+	await running;
+
+	assert.deepEqual(previews, ["tokyo-night", undefined]);
+});
+
+test("palette picker reports a final preview-reset failure without rejecting the command", async () => {
+	const mock = createMockPi();
+	const loaded = loadStatuslineSettings("/tmp/missing-pi-statusline-reset-picker.json");
+	registerStatuslineCommand(mock.pi, {
+		settingsPath: "/tmp/missing-pi-statusline-reset-picker.json",
+		getLoaded: () => loaded,
+		apply() {},
+		preview(palettePreset) {
+			if (palettePreset === undefined) throw new Error("reset failed");
+		},
+	});
+	const tui = createTuiHarness();
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const running = mock.commands.get("statusline")?.handler("", context.ctx);
+
+	await tui.waitForOpen();
+	tui.press("tui.select.confirm");
+	await tui.waitForPending();
+	await tui.waitForOpen();
+	await tui.waitForPending();
+	tui.press("tui.select.cancel");
+	await running;
+
+	assert.match(context.notifications.at(-1)?.message ?? "", /preview.*reset.*reset failed/iu);
 });
 
 test("settings edits raw JSON transactionally and applies it immediately", async () => {
@@ -945,6 +1091,10 @@ test("palette picker preserves custom colors and unknown fields while applying a
 			hasUI: true,
 			select: async (title: string, choices: string[]) => {
 				selections.push({ title, choices });
+				if (title.includes("Palette preset")) {
+					pickerText = `${title}\n${choices.join("\n")}`;
+					return choices.find((choice) => choice.startsWith("ocean"));
+				}
 				return choices[0];
 			},
 			custom: customPalettePicker(["\u001b[B", "\u001b[B", "\r"], (lines) => {
@@ -1038,7 +1188,10 @@ test("custom selection materializes the active legacy preset without losing unkn
 		});
 		const context = createMockContext({
 			mode: "tui",
-			select: async (_title: string, choices: string[]) => choices[0],
+			select: async (title: string, choices: string[]) =>
+				title.includes("Palette preset")
+					? choices.find((choice) => choice.startsWith("custom"))
+					: choices[0],
 			custom: customPalettePicker(["\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\r"]),
 		});
 
@@ -1079,7 +1232,11 @@ test("palette picker cancellation and malformed settings leave the file unchange
 		let selection: string | undefined;
 		const context = createMockContext({
 			mode: "tui",
-			select: async (_title: string, choices: string[]) => choices[0],
+			select: async (title: string, choices: string[]) => {
+				if (!title.includes("Palette preset")) return choices[0];
+				const target = selection;
+				return target ? choices.find((choice) => choice.startsWith(target)) : undefined;
+			},
 			custom: (factory: (...args: unknown[]) => unknown) =>
 				customPalettePicker(selection ? ["\u001b[B", "\r"] : ["\u001b"])(factory),
 		});
