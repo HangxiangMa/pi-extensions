@@ -169,9 +169,16 @@ Each implementation pull request starts from then-current `origin/main`, changes
 - Kit baseline passed its package check and 170 focused tests. New TUI and RPC tests failed before implementation because gated confirmation still selected the item and no explanation was rendered.
 - The public contract adds only `confirmationDisabled` and `confirmationDisabledReason` to `LiveChoiceItem`; API compatibility advances from 10 to 11 and declarative `choice` remains unchanged.
 - Final evidence: Kit package check and build passed; 176 focused tests passed; root declarations and runtime export compatibility fixtures passed; boundaries passed; CI-equivalent `npm run check` passed with 274 files and 2,947 tests; `git diff --check` passed.
-- Kit pull request: [#691](https://github.com/narumiruna/pi-extensions/pull/691), with implementation commit `93b507b5` and plan commit `cc659b7e`. CI run `31411243052` passed in 2m57s; no review was submitted at this refresh.
+- Kit pull request [#691](https://github.com/narumiruna/pi-extensions/pull/691) merged as `eb8e05554b2966fda7576ca60401272436fc13c0`, carrying implementation commit `93b507b5`, plan commit `cc659b7e`, and PR record commit `470d010b`. Final CI run `31411554011` passed in 3m9s; no review was submitted.
 - `just pack tui-kit` exposed 59 expected built files (51.2 kB packed, 230.9 kB unpacked). Root declarations contain both gating fields and compatibility literal 11. Repository search proved no Statusline, Starship, Tool, or other consumer uses the unpublished fields.
 - Audit confirmed full `disabled` presentation and shortcut blocking take precedence; gating blocks only Enter/Space activation, leaves non-conflicting shortcuts and previews active in TUI, stays inert without previews or shortcuts in RPC, sanitizes labels and reasons, preserves raw IDs, and reuses existing preview draining, stale checks, disposal, and error reporting.
+
+### Release gate status
+
+- The automatically refreshed Changesets pull request [#684](https://github.com/narumiruna/pi-extensions/pull/684) proposes Kit `0.53.0` and includes both exact browse documents (`4a0358b`) and Live Choice gating (`93b507b`).
+- Release pull request head `13d2794f7d90ab3ed396d73c12112a15a1a853e3` passed CI run `31412087914` in 2m59s, but has no approval or review.
+- Registry `latest` remains Kit `0.52.0`, so neither required new API is registry-visible and independently installable yet.
+- Execution is paused at this mandatory gate because the request explicitly forbids publishing, release tags, and release workflow dispatch, while Phases 4 and 5 prohibit adopting unpublished APIs.
 
 ### Applicable MUST mapping for Phase 1
 
