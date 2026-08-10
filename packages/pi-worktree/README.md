@@ -9,7 +9,9 @@ Pi cannot change its parent process working directory with `cd`. This extension 
 ## ✨ Features
 
 - Shows compact main, linked, current, detached, locked, and prunable state in worktree selectors.
+- Provides an on-demand, searchable status snapshot with staged, unstaged, untracked, conflict, upstream, and last-commit details.
 - Creates a new branch worktree or attaches an existing unoccupied local branch.
+- Previews the exact local base source and full commit OID before creation.
 - Rejects occupied targets and unresolvable symbolic-link ancestors before Git can create a branch.
 - Suggests `~/.worktrees/<main-worktree-name>/<branch>` by default and lets the user configure the root interactively.
 - Optionally switches Pi into a newly created worktree while continuing the current conversation.
@@ -50,7 +52,8 @@ Run the command without arguments:
 
 Choose one action:
 
-- **Add worktree** — enter a branch, optional start point, and optional path; confirm creation and optionally switch.
+- **Worktree status** — browse a local snapshot for every registered worktree without fetching remotes.
+- **Add worktree** — enter a branch, optional start point, and optional path; review exact base provenance, confirm creation, and optionally switch.
 - **Switch worktree** — select another existing worktree and continue this Pi conversation there.
 - **Remove worktree** — remove a linked worktree without deleting its branch; ignored-only data is listed for explicit confirmation.
 - **Prune stale metadata** — inspect Git's dry-run output, then optionally run the matching prune.
@@ -63,9 +66,19 @@ RPC dialogs; print and JSON modes reject the command observably. Operation-speci
 inputs, worktree identity selectors, preflight previews, and destructive confirmations remain
 extension-owned because they carry Git safety and commit-aware revalidation.
 
+The status browser runs only when selected and has no watcher, timer, persistent cache, or network
+fetch. Each card shows textual current/main/detached state, full snapshot HEAD, aggregate working-tree
+counts, configured upstream ahead/behind, and the last commit timestamp and subject. A missing
+upstream is reported as **not configured**; it is not treated as proof that no commits are unpushed.
+Bare, missing, prunable, or individually failing worktrees remain visible with an unavailable reason.
+The snapshot is informational and can become stale immediately, so Remove still performs its stricter
+inventory and identity checks.
+
 ## 🌿 Add defaults
 
 For a new branch, the current symbolic branch is the default start point. If Pi is running from detached HEAD, the command requires an explicit commit-ish. Git must resolve the start point to exactly one commit.
+
+Before mutation, Add identifies whether the branch is new or existing and displays the provenance as the current branch, an explicit commit-ish, or an existing local branch together with its full resolved OID and target path. New branches are created from that approved OID even if the source ref later moves. Existing branches are checked again immediately before mutation and the created worktree HEAD is verified afterward. Git has no atomic compare-and-add operation for attaching an existing branch, so a post-add mismatch is retained for inspection rather than rolled back.
 
 The default root is `~/.worktrees`, where `~` is Node's platform home directory. Suggestions use the registered main worktree's directory name, not the current linked-worktree cwd:
 
@@ -129,9 +142,10 @@ A successfully created Git worktree is never rolled back merely because Pi sessi
 - Removal never deletes a branch and never uses `--force`.
 - Remove invokes only argv-based `git worktree remove <path>`; production runtime never invokes a shell, `rm`, `rm -rf`, or a Node filesystem directory-deletion API for worktrees.
 - Prune always runs `git worktree prune --dry-run --verbose` before confirmation, inspects candidates omitted from porcelain, rechecks the exact preview and recovery-risk set after confirmation, and uses Git's default expiry. Remove likewise rechecks worktree identity, inventory, administrative path, and the approved recovery-risk set before mutation.
-- The extension does not commit, push, rebase, repair, move, lock, or unlock worktrees.
+- The status browser uses only local Git state and never fetches a remote; its cards never authorize Remove or Prune.
+- The extension does not commit, push, fetch, rebase, repair, move, lock, or unlock worktrees.
 
-Use Git directly when you intentionally need force removal, branch deletion, custom prune expiry, detach/orphan creation, move, repair, lock, or unlock behavior.
+Use Git directly when you intentionally need force removal, branch deletion, custom prune expiry, detach/orphan creation, move, repair, lock, unlock, or remote refresh behavior.
 
 ## Requirements and limits
 
@@ -140,7 +154,7 @@ Use Git directly when you intentionally need force removal, branch deletion, cus
 - Project trust and cwd-bound extension/resource loading during a switch remain owned by Pi.
 - The extension registers no LLM tool, background watcher, project settings, or statusline item.
 
-## 📁 Package layout
+## 🗂️ Package layout
 
 ```text
 packages/pi-worktree/
@@ -150,21 +164,27 @@ packages/pi-worktree/
 │   ├── git.ts
 │   ├── session.ts
 │   ├── settings.ts
+│   ├── status.ts
 │   └── worktree.ts
 ├── test/
+│   ├── add-command.test.ts
+│   ├── command-test-support.ts
 │   ├── command.test.ts
 │   ├── git.integration.test.ts
 │   ├── git.test.ts
 │   ├── remove-ignored-command.test.ts
 │   ├── session.test.ts
-│   └── settings.test.ts
+│   ├── settings-command.test.ts
+│   ├── settings.test.ts
+│   ├── status-command.test.ts
+│   └── status.test.ts
 ├── package.json
 ├── README.md
 ├── LICENSE
 └── tsconfig.json
 ```
 
-## 🏷️ Keywords
+## 🔎 Keywords
 
 `pi-package`, `pi-extension`, `git`, `worktree`, `workspace`, `session`
 
