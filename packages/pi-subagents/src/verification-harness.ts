@@ -1,11 +1,12 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { redactPrivateText } from "./context.js";
-import { truncateUtf8 } from "./limits.js";
+import { appendBounded, truncateUtf8 } from "./limits.js";
+import { terminateProcess } from "./runner.js";
 import type { VerificationCheckReceipt } from "./verification-receipt.js";
 import {
 	captureWorkflowTreeIdentity,
@@ -20,6 +21,8 @@ const MAX_COPY_BYTES = 64 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
 const MAX_RECORDED_CHECK_OUTPUT_BYTES = 2 * 1024;
 const DEFAULT_CHECK_TIMEOUT_MS = 2 * 60 * 1000;
+const VERIFICATION_KILL_GRACE_MS = 250;
+const VERIFICATION_TERMINATION_DEADLINE_MS = VERIFICATION_KILL_GRACE_MS + 1_000;
 
 export interface VerificationCheckRequest {
 	id: string;
@@ -111,10 +114,16 @@ export async function runVerificationChecks(
 	validateVerificationChecks(requests);
 	throwIfAborted(signal);
 	const repositoryRoot = await resolveRepositoryRoot(cwd, signal);
-	const disposableDirectory = await fs.promises.mkdtemp(
-		path.join(os.tmpdir(), "pi-subagents-verification-"),
-	);
+	const disposableDirectory = await createDisposableDirectory(repositoryRoot);
+	let registeredWorktree = false;
 	try {
+		// Treat setup as registered before awaiting so partial Git initialization is also pruned.
+		registeredWorktree = true;
+		await git(
+			repositoryRoot,
+			["worktree", "add", "--detach", "--no-checkout", disposableDirectory, "HEAD"],
+			signal,
+		);
 		await copyVisibleSubmission(repositoryRoot, disposableDirectory, signal);
 		const checks: VerificationCheckReceipt[] = [];
 		for (const request of requests) {
@@ -123,7 +132,76 @@ export async function runVerificationChecks(
 		}
 		return { disposableDirectory, checks };
 	} finally {
-		await fs.promises.rm(disposableDirectory, { recursive: true, force: true });
+		await cleanupDisposableWorktree(repositoryRoot, disposableDirectory, registeredWorktree);
+	}
+}
+
+async function createDisposableDirectory(repositoryRoot: string): Promise<string> {
+	const dependencyRoot = path.join(repositoryRoot, "node_modules");
+	let parent = os.tmpdir();
+	try {
+		const stat = await fs.promises.lstat(dependencyRoot);
+		if (
+			stat.isDirectory() &&
+			!stat.isSymbolicLink() &&
+			(await isIgnoredDependencyDirectory(repositoryRoot))
+		) {
+			parent = dependencyRoot;
+		}
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+	return fs.promises.mkdtemp(path.join(parent, ".pi-subagents-verification-"));
+}
+
+async function isIgnoredDependencyDirectory(repositoryRoot: string): Promise<boolean> {
+	try {
+		await execFileAsync(
+			"git",
+			[
+				"-C",
+				repositoryRoot,
+				"check-ignore",
+				"--quiet",
+				"node_modules/.pi-subagents-verification-probe",
+			],
+			{ encoding: "utf8", maxBuffer: 2 * 1024 * 1024 },
+		);
+		return true;
+	} catch (error) {
+		if ((error as { code?: string | number }).code === 1) return false;
+		throw error;
+	}
+}
+
+async function cleanupDisposableWorktree(
+	repositoryRoot: string,
+	disposableDirectory: string,
+	registered: boolean,
+): Promise<void> {
+	let removedRegistration = !registered;
+	if (registered) {
+		try {
+			await execFileAsync(
+				"git",
+				["-C", repositoryRoot, "worktree", "remove", "--force", "--force", disposableDirectory],
+				{ encoding: "utf8", maxBuffer: 2 * 1024 * 1024 },
+			);
+			removedRegistration = true;
+		} catch {
+			// Remove the directory first, then let Git prune its now-stale registration below.
+		}
+	}
+	await fs.promises.rm(disposableDirectory, { recursive: true, force: true });
+	if (!removedRegistration) {
+		try {
+			await execFileAsync("git", ["-C", repositoryRoot, "worktree", "prune"], {
+				encoding: "utf8",
+				maxBuffer: 2 * 1024 * 1024,
+			});
+		} catch {
+			throw new Error("Verification harness could not clean its disposable Git worktree");
+		}
 	}
 }
 
@@ -214,49 +292,131 @@ async function runCheck(
 	if (checkCwd !== root && !checkCwd.startsWith(`${root}${path.sep}`)) {
 		throw new Error(`Unsafe verification cwd for ${request.id}`);
 	}
-	const timeout = request.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
-	let stdout = "";
-	let stderr = "";
-	let exitCode = 0;
-	try {
-		const result = await execFileAsync(request.command, request.args ?? [], {
-			cwd: checkCwd,
-			signal,
-			timeout,
-			maxBuffer: MAX_COMMAND_OUTPUT_BYTES,
-			encoding: "utf8",
-			env: verificationEnvironment(),
-		});
-		stdout = result.stdout;
-		stderr = result.stderr;
-	} catch (error) {
-		if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
-			throw abortError();
-		}
-		const failure = error as NodeJS.ErrnoException & {
-			stdout?: string | Buffer;
-			stderr?: string | Buffer;
-			code?: string | number;
-			killed?: boolean;
-		};
-		stdout = String(failure.stdout ?? "");
-		stderr = String(failure.stderr ?? failure.message ?? "");
-		exitCode = typeof failure.code === "number" ? failure.code : failure.killed ? 124 : -1;
-	}
-	const boundedStdout = truncateUtf8(redactPrivateText(stdout), MAX_RECORDED_CHECK_OUTPUT_BYTES);
-	const boundedStderr = truncateUtf8(redactPrivateText(stderr), MAX_RECORDED_CHECK_OUTPUT_BYTES);
+	throwIfAborted(signal);
+	const result = await executeCheckProcess(
+		request.command,
+		request.args ?? [],
+		checkCwd,
+		request.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS,
+		signal,
+	);
+	if (result.aborted) throw abortError();
+	const boundedStdout = truncateUtf8(
+		redactPrivateText(result.stdout),
+		MAX_RECORDED_CHECK_OUTPUT_BYTES,
+	);
+	const boundedStderr = truncateUtf8(
+		redactPrivateText(result.stderr),
+		MAX_RECORDED_CHECK_OUTPUT_BYTES,
+	);
 	return {
 		id: request.id,
 		command: request.command,
 		args: (request.args ?? []).map(redactPrivateText),
 		cwd: redactPrivateText(request.cwd ?? "."),
-		status: exitCode === 0 ? "passed" : "failed",
-		exitCode,
+		status: result.exitCode === 0 ? "passed" : "failed",
+		exitCode: result.exitCode,
 		stdout: boundedStdout.text,
 		stderr: boundedStderr.text,
 		durationMs: Math.max(0, Date.now() - startedAt),
-		truncated: boundedStdout.truncated || boundedStderr.truncated,
+		truncated: result.truncated || boundedStdout.truncated || boundedStderr.truncated,
 	};
+}
+
+interface CheckProcessResult {
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+	truncated: boolean;
+	aborted: boolean;
+}
+
+function executeCheckProcess(
+	command: string,
+	args: readonly string[],
+	cwd: string,
+	timeoutMs: number,
+	signal?: AbortSignal,
+): Promise<CheckProcessResult> {
+	return new Promise((resolve) => {
+		let stdout = "";
+		let stderr = "";
+		let truncated = false;
+		let aborted = false;
+		let timedOut = false;
+		let outputExceeded = false;
+		let settled = false;
+		let timeout: NodeJS.Timeout | undefined;
+		let terminationDeadline: NodeJS.Timeout | undefined;
+		let cleanupTermination: (() => void) | undefined;
+		let abortHandler: (() => void) | undefined;
+		const proc = spawn(command, args, {
+			cwd,
+			detached: process.platform !== "win32",
+			shell: false,
+			stdio: ["ignore", "pipe", "pipe"],
+			env: verificationEnvironment(),
+		});
+		const finish = (exitCode: number) => {
+			if (settled) return;
+			settled = true;
+			if (timeout) clearTimeout(timeout);
+			if (terminationDeadline) clearTimeout(terminationDeadline);
+			cleanupTermination?.();
+			if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
+			resolve({ exitCode, stdout, stderr, truncated, aborted });
+		};
+		const beginTermination = () => {
+			if (cleanupTermination || settled) return;
+			cleanupTermination = terminateProcess(proc, VERIFICATION_KILL_GRACE_MS);
+			terminationDeadline = setTimeout(() => {
+				proc.stdout?.destroy();
+				proc.stderr?.destroy();
+				finish(aborted ? 130 : timedOut ? 124 : -1);
+			}, VERIFICATION_TERMINATION_DEADLINE_MS);
+			terminationDeadline.unref();
+		};
+		const appendOutput = (current: string, chunk: Buffer): string => {
+			const appended = appendBounded(current, chunk.toString(), MAX_COMMAND_OUTPUT_BYTES);
+			truncated ||= appended.truncated;
+			if (appended.truncated && !outputExceeded) {
+				outputExceeded = true;
+				beginTermination();
+			}
+			return appended.text;
+		};
+
+		proc.stdout?.on("data", (chunk: Buffer) => {
+			stdout = appendOutput(stdout, chunk);
+		});
+		proc.stderr?.on("data", (chunk: Buffer) => {
+			stderr = appendOutput(stderr, chunk);
+		});
+		proc.once("close", (code) => {
+			finish(aborted ? 130 : timedOut ? 124 : outputExceeded ? -1 : (code ?? -1));
+		});
+		proc.once("error", (error) => {
+			const appended = appendBounded(stderr, error.message, MAX_COMMAND_OUTPUT_BYTES);
+			stderr = appended.text;
+			truncated ||= appended.truncated;
+			if (proc.pid) beginTermination();
+			else finish(-1);
+		});
+
+		timeout = setTimeout(() => {
+			timedOut = true;
+			beginTermination();
+		}, timeoutMs);
+		timeout.unref();
+		if (signal) {
+			abortHandler = () => {
+				aborted = true;
+				beginTermination();
+			};
+			if (signal.aborted) abortHandler();
+			else signal.addEventListener("abort", abortHandler, { once: true });
+		}
+	});
 }
 
 export function validateVerificationChecks(requests: readonly VerificationCheckRequest[]): void {

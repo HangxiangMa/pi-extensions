@@ -490,6 +490,8 @@ test("WorkItemLedger atomically accepts managed integration and permits only one
 					dependencies: ["implementation"],
 					verifierFor: "implementation",
 				},
+				{ id: "consumer", objective: "consume", dependencies: ["implementation"] },
+				{ id: "publisher", objective: "publish", dependencies: ["consumer"] },
 			],
 		});
 	const stage = (ledger: WorkItemLedger) => {
@@ -523,6 +525,7 @@ test("WorkItemLedger atomically accepts managed integration and permits only one
 	assert.equal(accepted.get("implementation")?.acceptanceState, "accepted");
 	assert.equal(accepted.get("implementation")?.verificationAccepted, true);
 	assert.equal(accepted.get("verify-implementation")?.state, "completed");
+	assert.equal(accepted.get("consumer")?.state, "ready");
 	const restoredAccepted = WorkItemLedger.restore(accepted.snapshot());
 	assert.equal(restoredAccepted.get("implementation")?.acceptanceState, "accepted");
 	assert.equal(restoredAccepted.get("implementation")?.verificationAccepted, true);
@@ -541,15 +544,50 @@ test("WorkItemLedger atomically accepts managed integration and permits only one
 	assert.equal(rework.get("implementation")?.taskGeneration, firstGeneration + 1);
 	assert.equal(rework.get("implementation")?.acceptanceState, "pending");
 	assert.equal(rework.get("verify-implementation")?.state, "pending");
+	assert.equal(rework.get("consumer")?.state, "pending");
+	assert.equal(rework.get("publisher")?.state, "pending");
 	const secondGeneration = stage(rework);
 	const secondVerifier = rework.start("verify-implementation", "agent:reviewer");
-	rework.recordVerificationDecision("verify-implementation", {
-		taskGeneration: secondVerifier.taskGeneration,
+	rework.acceptIntegration(
+		"implementation",
+		managedExpectation(secondGeneration),
+		managedCandidate(secondGeneration),
+		{
+			verifierId: "verify-implementation",
+			verifierTaskGeneration: secondVerifier.taskGeneration,
+			verifierExecutionPlanId: PLAN_B,
+			receipt: verifiedReceipt("accept", secondGeneration, secondVerifier.taskGeneration),
+		},
+	);
+	assert.equal(rework.get("implementation")?.acceptanceState, "accepted");
+	assert.equal(rework.get("consumer")?.state, "ready");
+
+	const exhausted = create();
+	const exhaustedFirstGeneration = stage(exhausted);
+	const exhaustedFirstVerifier = exhausted.start("verify-implementation", "agent:reviewer");
+	exhausted.recordVerificationDecision("verify-implementation", {
+		taskGeneration: exhaustedFirstVerifier.taskGeneration,
 		executionPlanId: PLAN_B,
-		receipt: verifiedReceipt("rework", secondGeneration, secondVerifier.taskGeneration),
+		receipt: verifiedReceipt(
+			"rework",
+			exhaustedFirstGeneration,
+			exhaustedFirstVerifier.taskGeneration,
+		),
 	});
-	assert.equal(rework.get("implementation")?.acceptanceState, "rejected");
-	assert.equal(rework.get("implementation")?.state, "failed");
+	exhausted.beginVerificationRework("implementation");
+	const exhaustedSecondGeneration = stage(exhausted);
+	const exhaustedSecondVerifier = exhausted.start("verify-implementation", "agent:reviewer");
+	exhausted.recordVerificationDecision("verify-implementation", {
+		taskGeneration: exhaustedSecondVerifier.taskGeneration,
+		executionPlanId: PLAN_B,
+		receipt: verifiedReceipt(
+			"rework",
+			exhaustedSecondGeneration,
+			exhaustedSecondVerifier.taskGeneration,
+		),
+	});
+	assert.equal(exhausted.get("implementation")?.acceptanceState, "rejected");
+	assert.equal(exhausted.get("implementation")?.state, "failed");
 });
 
 test("WorkItemLedger rejects every stale or mismatched managed acceptance field without partial mutation", () => {

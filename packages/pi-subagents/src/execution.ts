@@ -758,6 +758,7 @@ export async function executeSubagent(
 						verifierTaskId: verifiedWorkflow.verifierTaskId,
 						checks: verifiedWorkflow.checks,
 						signal,
+						deadlineAt: deadline,
 					})
 				: undefined;
 			signal?.addEventListener("abort", cancelWorkflowGeneration, { once: true });

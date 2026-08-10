@@ -195,6 +195,36 @@ test("completion controller cancels session replacement and rejects post-await s
 	}
 });
 
+test("completion controller aborts deterministic checks at the workflow deadline", async () => {
+	const root = repository();
+	try {
+		writeFileSync(path.join(root, "feature.txt"), "implemented\n");
+		const work = ledger();
+		const controller = new WorkflowCompletionController({
+			ledger: work,
+			cwd: root,
+			targetTaskId: "implementation",
+			verifierTaskId: "verify-implementation",
+			checks: [{ id: "focused-test", command: "node", args: ["-e", "setTimeout(()=>{},300)"] }],
+			deadlineAt: Date.now() + 50,
+		});
+		const target = work.start("implementation", "agent:worker");
+		await assert.rejects(
+			() =>
+				controller.stageTarget({
+					taskGeneration: target.taskGeneration,
+					executionPlanId: PLAN_A,
+				}),
+			/workflow deadline|cancel/iu,
+		);
+		assert.equal(work.get("implementation")?.state, "blocked");
+		assert.equal(work.get("implementation")?.outcomeReason, "budget-exhausted");
+		controller.dispose();
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("completion controller rotates one rework generation and rejects verifier-caused drift", async () => {
 	const root = repository();
 	try {

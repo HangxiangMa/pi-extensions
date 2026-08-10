@@ -23,6 +23,7 @@ export interface WorkflowCompletionControllerOptions {
 	verifierTaskId: string;
 	checks: readonly VerificationCheckRequest[];
 	signal?: AbortSignal;
+	deadlineAt?: number;
 }
 
 export interface StageCompletionTargetInput {
@@ -55,6 +56,8 @@ interface CurrentEvidence {
 export class WorkflowCompletionController {
 	private readonly controller = new AbortController();
 	private readonly parentAbort: (() => void) | undefined;
+	private deadlineTimer: NodeJS.Timeout | undefined;
+	private deadlineExpired = false;
 	private current: CurrentEvidence | undefined;
 	private disposed = false;
 
@@ -68,10 +71,26 @@ export class WorkflowCompletionController {
 		) {
 			throw new Error("Workflow completion controller received an invalid acceptance graph");
 		}
+		if (options.deadlineAt !== undefined && !Number.isFinite(options.deadlineAt)) {
+			throw new Error("Workflow completion controller received an invalid deadline");
+		}
 		if (options.signal) {
 			this.parentAbort = () => this.controller.abort(options.signal?.reason);
 			if (options.signal.aborted) this.parentAbort();
 			else options.signal.addEventListener("abort", this.parentAbort, { once: true });
+		}
+		if (options.deadlineAt !== undefined) {
+			const expire = () => {
+				if (this.controller.signal.aborted) return;
+				this.deadlineExpired = true;
+				this.controller.abort(new DOMException("Workflow deadline expired", "TimeoutError"));
+			};
+			const remainingMs = Math.floor(options.deadlineAt - Date.now());
+			if (remainingMs < 1) expire();
+			else {
+				this.deadlineTimer = setTimeout(expire, remainingMs);
+				this.deadlineTimer.unref();
+			}
 		}
 	}
 
@@ -86,11 +105,22 @@ export class WorkflowCompletionController {
 			) {
 				this.options.ledger.settle(
 					this.options.targetTaskId,
-					this.controller.signal.aborted ? "interrupted" : "failed",
-					this.controller.signal.aborted
-						? "verification-checks-cancelled"
-						: "verification-checks-unsafe-or-unavailable",
+					this.deadlineExpired
+						? "blocked"
+						: this.controller.signal.aborted
+							? "interrupted"
+							: "failed",
+					this.deadlineExpired
+						? "budget-exhausted"
+						: this.controller.signal.aborted
+							? "verification-checks-cancelled"
+							: "verification-checks-unsafe-or-unavailable",
 				);
+			}
+			if (this.deadlineExpired) {
+				const deadlineError = new Error("Workflow deadline expired during verification checks");
+				deadlineError.name = "TimeoutError";
+				throw deadlineError;
 			}
 			throw error;
 		}
@@ -253,8 +283,9 @@ export class WorkflowCompletionController {
 
 	beginRework() {
 		this.assertActive();
+		const target = this.options.ledger.beginVerificationRework(this.options.targetTaskId);
 		this.current = undefined;
-		return this.options.ledger.beginVerificationRework(this.options.targetTaskId);
+		return target;
 	}
 
 	reworkPrompt(): string {
@@ -284,6 +315,8 @@ export class WorkflowCompletionController {
 		if (this.options.signal && this.parentAbort) {
 			this.options.signal.removeEventListener("abort", this.parentAbort);
 		}
+		if (this.deadlineTimer) clearTimeout(this.deadlineTimer);
+		this.deadlineTimer = undefined;
 		this.current = undefined;
 	}
 
@@ -315,8 +348,12 @@ export class WorkflowCompletionController {
 
 	private assertActive(): void {
 		if (this.disposed || this.controller.signal.aborted) {
-			const error = new Error("Workflow completion controller is cancelled");
-			error.name = "AbortError";
+			const error = new Error(
+				this.deadlineExpired
+					? "Workflow deadline expired during verification"
+					: "Workflow completion controller is cancelled",
+			);
+			error.name = this.deadlineExpired ? "TimeoutError" : "AbortError";
 			throw error;
 		}
 	}

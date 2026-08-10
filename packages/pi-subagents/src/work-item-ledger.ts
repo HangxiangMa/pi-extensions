@@ -422,6 +422,7 @@ export class WorkItemLedger {
 		verifier.acceptedExecutionPlanId = undefined;
 		verifier.outcomeReason = undefined;
 		verifier.generation = ++this.generation;
+		this.resetReworkDependents(target.id, verifier.id);
 		this.refreshReadyState();
 		return structuredClone(target);
 	}
@@ -870,6 +871,39 @@ export class WorkItemLedger {
 			);
 			item.state = "ready";
 			item.generation = this.generation;
+		}
+	}
+
+	private resetReworkDependents(targetId: string, excludedId: string): void {
+		const target = this.require(targetId);
+		const reworkReason = `${targetId}:verification-rework`;
+		const queue = target.dependents.filter((id) => id !== excludedId);
+		const seen = new Set<string>();
+		while (queue.length > 0) {
+			const currentId = queue.shift();
+			if (!currentId || seen.has(currentId)) continue;
+			seen.add(currentId);
+			const current = this.require(currentId);
+			queue.push(...current.dependents.filter((id) => id !== excludedId));
+			if (current.state !== "invalidated" || current.invalidationReasons.at(-1) !== reworkReason) {
+				continue;
+			}
+			current.artifactHistory.push(
+				...current.artifacts.map((artifact) => structuredClone(artifact)),
+			);
+			current.artifacts = [];
+			current.inputArtifactVersions = {};
+			current.state = "pending";
+			current.assignedAgentId = undefined;
+			current.acceptedExecutionPlanId = undefined;
+			current.outcomeReason = undefined;
+			current.verificationAccepted = false;
+			current.acceptanceState = current.acceptanceRequired ? "pending" : "not-required";
+			current.stagedTreeIdentity = undefined;
+			current.submission = undefined;
+			current.verificationReceipt = undefined;
+			current.acceptanceReceipt = undefined;
+			current.generation = ++this.generation;
 		}
 	}
 

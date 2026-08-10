@@ -481,7 +481,7 @@ Run an explicit dependency workflow:
 ```
 
 Managed verified execution is an explicit per-workflow contract.
-The executor infers the final mutating integration owner when none is declared, synthesizes one distinct read-only verifier, runs declared deterministic checks in a disposable Git-visible copy, and accepts only the exact unchanged submitted state.
+The executor infers the final mutating integration owner when none is declared, synthesizes one distinct read-only verifier, runs declared deterministic checks in a disposable Git worktree overlaid with the submitted state, and accepts only the exact unchanged submitted state.
 Every deterministic check has a stable evidence ID, a direct executable with argument-array invocation, and an optional relative `cwd` and timeout.
 Only `git`, `node`, `npm`, and `npx` are accepted; shell command strings fail before child allocation.
 The integration owner must request `structured-v2`, declare a non-empty `writePaths` scope, and name current required evidence through its delegation contract.
@@ -586,7 +586,9 @@ The verifier receives the original objective, current artifact metadata, immutab
 Verifier mutation, a stale or replaced generation, a failed or unsafe check, missing evidence, wrong scope, patch, plan, tree, or identity, cancellation, timeout, and unsupported Git state all produce non-success.
 One verifier `rework` decision may rotate the worker and verifier generations when `maxReworkCycles` is `1`; prior grants are revoked, prior evidence remains history, only current requirements and findings are added, and a second rejection is terminal.
 Crashes, timeouts, cancellation, ambiguous settlement, and drift are never replayed.
-The disposable check copy includes bounded tracked and non-ignored untracked files and is removed after checks; it isolates repository build output but is not an operating-system sandbox for processes, network, secrets, absolute paths, or host credentials.
+The disposable check worktree includes bounded tracked and non-ignored untracked files and is removed after checks.
+When the repository has a local `node_modules` directory, the worktree is nested beneath it so normal Node and npm resolution can read the installed dependency tree without copying it.
+The worktree isolates repository build output, but it does not make the installed dependency tree read-only and is not an operating-system sandbox for processes, network, secrets, absolute paths, or host credentials.
 The accepted state remains the selected shared workspace; no general patch merge or conflict resolver is added.
 
 Omitting `verifiedExecution` preserves prior workflow behavior, including the older explicit verifier gate above.

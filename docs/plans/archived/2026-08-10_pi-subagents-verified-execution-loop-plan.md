@@ -92,7 +92,7 @@ It will use the selected workspace policy and require the integration owner to p
 
 - [x] Use `workflow.verifiedExecution` with a required `verifierAgent`, optional zero-or-one rework bound, and strict deterministic check declarations; `packages/pi-subagents/test/verified-execution-contract.test.ts` verifies TypeBox compatibility and unknown-field rejection.
 - [x] Support exact-tree acceptance only for bounded Git targets; non-Git, submodule, oversized, changing, or otherwise unsupported states fail closed.
-- [x] Keep the accepted integration state in the selected shared workspace and run commands in an executor-owned disposable Git-visible copy; no patch merging or worktree integration mode is added.
+- [x] Keep the accepted integration state in the selected shared workspace and run commands in an executor-owned disposable Git worktree overlaid with the submitted state; no patch merging or worktree integration mode is added.
 - [x] Keep model-family choice out of the runtime guarantee and benchmark only deterministic matched acceptance and cost evidence without a provider-quality claim.
 
 ## Execution Record
@@ -117,6 +117,16 @@ The touched extension areas map to the conventions as follows:
 - `PI_OFFLINE=1 pi --offline --no-approve --no-session -e ./packages/pi-subagents --list-models reviewer` loaded the local extension and exited normally without provider work.
 - The final semantic audit covered strict schemas, worker self-report rejection, fresh least-authority verifier synthesis, deterministic-copy cleanup, exact-state drift, managed-integration bindings, bounded rework, grant revocation, stale generations after every controller await, cancellation, inert persistence restore, terminal sanitization, output bounds, and omission compatibility.
 - No package publication, visibility change, tag, release, or workflow dispatch occurred.
+- Pull-request feedback verification passed all 414 package tests after recording red states for dependency resolution, deadline enforcement, descendant cleanup, and downstream rework reset.
+- The post-review `npm run check` passed Biome, boundaries, every workspace typecheck, and all 2,975 repository tests.
+- The post-review `git diff --check`, Changesets status, and 107-file `just pack subagents` dry run passed with no leaked verification worktree registration or directory.
+
+## Pull Request Feedback Ledger
+
+- [Discussion 3752314073](https://github.com/narumiruna/pi-extensions/pull/695#discussion_r3752314073) — **Already addressed by the current code**; the actionable finding is fixed by passing the absolute orchestration deadline into the completion controller, aborting its owned work at expiry, and covering the blocked `budget-exhausted` transition.
+- [Discussion 3752314078](https://github.com/narumiruna/pi-extensions/pull/695#discussion_r3752314078) — **Already addressed by the current code**; the actionable finding is fixed by using a disposable Git worktree beneath a local installed dependency tree when available, with an npm module-resolution regression test and explicit non-sandbox documentation.
+- [Discussion 3752314089](https://github.com/narumiruna/pi-extensions/pull/695#discussion_r3752314089) — **Already addressed by the current code**; the actionable finding is fixed by launching checks in detached POSIX process groups and reusing the package process-group termination path until inherited output streams close, with descendant side-effect regression coverage.
+- [Discussion 3752314092](https://github.com/narumiruna/pi-extensions/pull/695#discussion_r3752314092) — **Already addressed by the current code**; the actionable finding is fixed by resetting transitively invalidated downstream work during generation rotation and proving it becomes ready after reworked acceptance.
 
 ## Risks
 
