@@ -4,7 +4,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { projectAgentRecords } from "./agent-projection.js";
-import type { SubagentThinkingLevel } from "./agents.js";
+import type { SubagentThinkingLevel } from "./agents/types.js";
 import {
 	type CapabilityGrant,
 	isCapabilityGrantActive,

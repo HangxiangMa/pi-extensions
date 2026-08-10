@@ -1,4 +1,4 @@
-import type { ConsultResourcePolicy } from "./agents.js";
+import type { ConsultResourcePolicy } from "./agents/types.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
 import { resolvePiPromptResources } from "./prompt-resources.js";
 import type { ChildLaunchPolicy } from "./runner.js";

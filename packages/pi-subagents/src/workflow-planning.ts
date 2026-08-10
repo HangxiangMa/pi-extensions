@@ -1,4 +1,4 @@
-import type { AgentConfig } from "./agents.js";
+import type { AgentConfig } from "./agents/types.js";
 import { routeByCapability } from "./capability-router.js";
 import { normalizeDelegationContract } from "./delegation-contract.js";
 import type { SubagentParams } from "./params.js";

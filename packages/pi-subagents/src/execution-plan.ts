@@ -8,7 +8,7 @@ import {
 	type AgentSource,
 	resolveAgentToolNames,
 	type SubagentThinkingLevel,
-} from "./agents.js";
+} from "./agents/types.js";
 import type { TargetPolicyAudit } from "./cwd-policy.js";
 import type { DelegationContract } from "./delegation-contract.js";
 import type { SubagentResultFormat } from "./result-contract.js";

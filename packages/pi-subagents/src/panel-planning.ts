@@ -1,4 +1,4 @@
-import type { AgentConfig } from "./agents.js";
+import type { AgentConfig } from "./agents/types.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
 import { type WorkItemDefinition, WorkItemLedger } from "./work-item-ledger.js";
 

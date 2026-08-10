@@ -1,4 +1,4 @@
-import type { SubagentThinkingLevel } from "./agents.js";
+import type { SubagentThinkingLevel } from "./agents/types.js";
 import { readSubagentSettings, updateAgentSettingsPatch } from "./settings.js";
 
 export const EXECUTION_PROFILES = ["fast", "balanced", "deep"] as const;

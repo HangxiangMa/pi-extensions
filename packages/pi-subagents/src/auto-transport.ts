@@ -1,4 +1,5 @@
-import { discoverAgents, type SubagentSettings } from "./agents.js";
+import { discoverAgents } from "./agents/discovery.js";
+import type { SubagentSettings } from "./agents/types.js";
 import type { ManagedAgent, TurnOutcome } from "./registry.js";
 import { isWriteCapable } from "./stateful-safety.js";
 import type { SubagentTransport } from "./transport.js";

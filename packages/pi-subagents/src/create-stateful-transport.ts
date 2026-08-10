@@ -1,5 +1,6 @@
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { discoverAgents, type SubagentSettings, type SubagentTransportKind } from "./agents.js";
+import { discoverAgents } from "./agents/discovery.js";
+import type { SubagentSettings, SubagentTransportKind } from "./agents/types.js";
 import { AutoTransport } from "./auto-transport.js";
 import {
 	type ChildSessionFactory,

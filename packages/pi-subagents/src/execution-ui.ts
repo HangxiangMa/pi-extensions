@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { AgentConfig, SubagentThinkingLevel } from "./agents.js";
+import type { AgentConfig, SubagentThinkingLevel } from "./agents/types.js";
 import {
 	applyExecutionProfile,
 	EXECUTION_PROFILES,

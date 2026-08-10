@@ -1,6 +1,6 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
-import { THINKING_LEVELS } from "./agents.js";
+import { THINKING_LEVELS } from "./agents/types.js";
 import { DelegationContractSchema } from "./delegation-contract.js";
 import { MAX_CONFIGURABLE_PARALLEL_TASKS, MAX_SUBAGENT_TIMEOUT_MS } from "./limits.js";
 import { PANEL_PRESETS } from "./panel-planning.js";

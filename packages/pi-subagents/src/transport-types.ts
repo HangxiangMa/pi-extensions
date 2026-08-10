@@ -1,4 +1,4 @@
-import type { SubagentThinkingLevel } from "./agents.js";
+import type { SubagentThinkingLevel } from "./agents/types.js";
 
 export const PI_SUBAGENTS_RPC_PROTOCOL = "pi-subagents:v1" as const;
 

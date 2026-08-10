@@ -8,17 +8,16 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { DEFAULT_AGENT_CATALOG_MAX_ITEMS } from "./agents/catalog.js";
+import { type AgentDiscoveryResult, discoverAgents } from "./agents/discovery.js";
 import {
 	type AgentConfig,
-	type AgentDiscoveryResult,
 	type AgentScope,
 	type ConsultResourcePolicy,
-	DEFAULT_AGENT_CATALOG_MAX_ITEMS,
-	discoverAgents,
 	isThinkingLevel,
 	type SubagentSettings,
 	THINKING_LEVELS,
-} from "./agents.js";
+} from "./agents/types.js";
 import { resolveConsultTools } from "./consult-policy.js";
 import { renderConsultCall, renderConsultResult } from "./consult-render.js";
 import { resolveConsultResourceLaunchPolicy } from "./consult-resources.js";
@@ -27,7 +26,10 @@ import {
 	type ResolvedSubagentTarget,
 	resolveSubagentTarget,
 } from "./cwd-policy.js";
-import { assertSubagentDepthAllowed, resolveDefaultSubagentTimeoutMs } from "./execution.js";
+import {
+	assertSubagentDepthAllowed,
+	resolveDefaultSubagentTimeoutMs,
+} from "./execution/runtime-policy.js";
 import {
 	DEFAULT_MAX_CONTEXT_BYTES,
 	DEFAULT_MAX_STDERR_BYTES,
@@ -45,8 +47,8 @@ import { boundedPrivateText, boundText, safeDisplayPath, safeTerminalLine } from
 import {
 	DEFAULT_CONSULT_RESOURCE_POLICY,
 	DEFAULT_CONSULTATION_CWD_POLICY,
-	resolveSubagentThinkingLevel,
-} from "./settings.js";
+} from "./settings/inspection.js";
+import { resolveSubagentThinkingLevel } from "./settings.js";
 
 const ConsultScopeSchema = StringEnum(["user", "project", "both"] as const, {
 	default: "user",

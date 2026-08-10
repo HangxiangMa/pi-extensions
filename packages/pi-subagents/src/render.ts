@@ -7,7 +7,7 @@ import {
 	type ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import type { AgentScope, SubagentThinkingLevel } from "./agents.js";
+import type { AgentScope, SubagentThinkingLevel } from "./agents/types.js";
 import { renderPanelCall, renderPanelResult } from "./panel-render.js";
 import { hasUsableAggregator, type SubagentParams } from "./params.js";
 import { expansionHint, formatToolActivity, safeBlock, safeLine } from "./render-common.js";

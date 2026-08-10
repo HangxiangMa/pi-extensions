@@ -1,4 +1,4 @@
-import type { SubagentRuntimeSettings } from "./agents.js";
+import type { SubagentRuntimeSettings } from "./agents/types.js";
 
 export const STATEFUL_LIMIT_FIELDS = [
 	"maxAgents",

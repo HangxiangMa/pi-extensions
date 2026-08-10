@@ -1,11 +1,11 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import {
-	type CompletionDelivery,
-	type ConsultationCwdPolicy,
-	type ConsultResourcePolicy,
-	type DelegationCwdPolicy,
-	discoverAgents,
-} from "./agents.js";
+import { discoverAgents } from "./agents/discovery.js";
+import type {
+	CompletionDelivery,
+	ConsultationCwdPolicy,
+	ConsultResourcePolicy,
+	DelegationCwdPolicy,
+} from "./agents/types.js";
 import {
 	completionLabel,
 	consultationCwdLabel,
@@ -38,8 +38,8 @@ import {
 } from "./parallel-limit-ui.js";
 import type { ManagedAgent } from "./registry.js";
 import { safeTerminalLine as safeTerminalText } from "./safe-text.js";
+import type { DelegationWorkflow } from "./settings/inspection.js";
 import {
-	type DelegationWorkflow,
 	hasOwn,
 	inspectBlockingParallelLimitSettings,
 	inspectCompletionDeliverySettings,

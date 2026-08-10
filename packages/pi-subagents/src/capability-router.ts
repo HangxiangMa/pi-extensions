@@ -1,4 +1,4 @@
-import { type AgentConfig, resolveAgentToolNames } from "./agents.js";
+import { type AgentConfig, resolveAgentToolNames } from "./agents/types.js";
 import type { CapabilityHint } from "./capabilities.js";
 
 export interface CapabilityRouteRequest {

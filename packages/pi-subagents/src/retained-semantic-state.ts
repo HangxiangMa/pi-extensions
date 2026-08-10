@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { AgentConfig, SubagentThinkingLevel, SubagentTransportKind } from "./agents.js";
+import type { AgentConfig, SubagentThinkingLevel, SubagentTransportKind } from "./agents/types.js";
 import type { TargetPolicyAudit } from "./cwd-policy.js";
 import type { DelegationContract } from "./delegation-contract.js";
 import {

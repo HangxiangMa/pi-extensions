@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AgentScope, SubagentThinkingLevel } from "./agents.js";
+import type { AgentScope, SubagentThinkingLevel } from "./agents/types.js";
 import type { DelegationContract } from "./delegation-contract.js";
 import type { SubagentResultFormat } from "./result-contract.js";
 

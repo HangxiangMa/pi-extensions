@@ -2,17 +2,18 @@
  * Blocking execution stays in one module so preflight, confirmation, cancellation generation,
  * launch, and settlement retain one ordered lifecycle owner across every mode.
  */
+
 import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AdaptiveScheduler } from "./adaptive-scheduler.js";
 import { evaluateDelegationAdmission } from "./admission-policy.js";
-import {
-	type AgentConfig,
-	type AgentScope,
-	discoverAgents,
-	type SubagentSettings,
-	type SubagentThinkingLevel,
-} from "./agents.js";
+import { discoverAgents } from "./agents/discovery.js";
+import type {
+	AgentConfig,
+	AgentScope,
+	SubagentSettings,
+	SubagentThinkingLevel,
+} from "./agents/types.js";
 import {
 	chainStatus,
 	fanInStatus,
@@ -33,6 +34,15 @@ import {
 	type DelegationContract,
 	normalizeDelegationContract,
 } from "./delegation-contract.js";
+import {
+	calculateExecutionBudget,
+	mergeTurnLimits,
+	resolveConfiguredTimeout,
+} from "./execution/budget.js";
+import {
+	assertSubagentDepthAllowed,
+	resolveDefaultSubagentTimeoutMs,
+} from "./execution/runtime-policy.js";
 import {
 	acknowledgeExecutionPlan,
 	createExecutionPlan,
@@ -63,10 +73,9 @@ import {
 import { safeTerminalLine } from "./safe-text.js";
 import {
 	DEFAULT_DELEGATION_CWD_POLICY,
-	readSubagentSettings,
 	resolveBlockingMaxParallelTasks,
-	resolveSubagentThinkingLevel,
-} from "./settings.js";
+} from "./settings/inspection.js";
+import { readSubagentSettings, resolveSubagentThinkingLevel } from "./settings.js";
 import { isRetryableResult, runHedgedAttempt, supervisionDelay } from "./supervision.js";
 import { TimeoutProgressJournal, TURN_TERMINATION_VERSION } from "./timeout-checkpoint.js";
 import type { TurnLimits } from "./turn-budget.js";
@@ -91,25 +100,12 @@ import {
 	workflowVerificationInstruction,
 } from "./workflow-verification.js";
 
-export const FALLBACK_TIMEOUT_MS = 10 * 60 * 1000;
-
-export function parsePositiveInteger(value: string | undefined): number | undefined {
-	if (!value) return undefined;
-	const parsed = Number.parseInt(value, 10);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-export function resolveDefaultSubagentTimeoutMs(): number {
-	return parsePositiveInteger(process.env.PI_SUBAGENT_TIMEOUT_MS) ?? FALLBACK_TIMEOUT_MS;
-}
-
-export function assertSubagentDepthAllowed(): void {
-	const depth = Number.parseInt(process.env.PI_SUBAGENT_DEPTH ?? "0", 10) || 0;
-	const maxDepth = parsePositiveInteger(process.env.PI_SUBAGENT_MAX_DEPTH) ?? 1;
-	if (depth >= maxDepth) {
-		throw new Error(`Subagent recursion depth limit reached (${maxDepth})`);
-	}
-}
+export {
+	assertSubagentDepthAllowed,
+	FALLBACK_TIMEOUT_MS,
+	parsePositiveInteger,
+	resolveDefaultSubagentTimeoutMs,
+} from "./execution/runtime-policy.js";
 
 export async function executeSubagent(
 	toolCallId: string,
@@ -154,47 +150,29 @@ export async function executeSubagent(
 	}
 	const confirmProjectAgents = params.confirmProjectAgents ?? true;
 	const resolveTimeoutMs = (agentName: string, localTimeoutMs?: number) =>
-		localTimeoutMs ??
-		params.timeoutMs ??
-		agents.find((agent) => agent.name === agentName)?.timeoutMs ??
-		resolveDefaultSubagentTimeoutMs();
+		resolveConfiguredTimeout(
+			agents,
+			agentName,
+			localTimeoutMs,
+			params.timeoutMs,
+			resolveDefaultSubagentTimeoutMs(),
+		);
 	const resolveThinkingLevel = (agentName: string, localThinkingLevel?: SubagentThinkingLevel) =>
 		resolveSubagentThinkingLevel(agents, agentName, params.thinkingLevel, localThinkingLevel);
 	let orchestrationDeadline: number | undefined;
-	const resolveTurnLimits = (local?: TurnLimits): TurnLimits => ({
-		idleTimeoutMs: local?.idleTimeoutMs ?? params.idleTimeoutMs,
-		maxTurns: local?.maxTurns ?? params.maxTurns,
-		maxToolCalls: local?.maxToolCalls ?? params.maxToolCalls,
-	});
-	const resolveExecutionBudget = (
-		agentName: string,
-		localTimeoutMs?: number,
-	):
-		| {
-				timeoutMs: number;
-				workTimeoutReason: "work_timeout" | "orchestration_timeout";
-				workTimeoutReportLimit: number;
-		  }
-		| undefined => {
-		const requested = resolveTimeoutMs(agentName, localTimeoutMs);
-		if (orchestrationDeadline === undefined) {
-			return {
-				timeoutMs: requested,
-				workTimeoutReason: "work_timeout",
-				workTimeoutReportLimit: requested,
-			};
-		}
-		const remaining = Math.floor(orchestrationDeadline - Date.now());
-		if (remaining < 1) return undefined;
-		const orchestrationLimited = remaining < requested;
-		return {
-			timeoutMs: Math.min(requested, remaining),
-			workTimeoutReason: orchestrationLimited ? "orchestration_timeout" : "work_timeout",
-			workTimeoutReportLimit: orchestrationLimited
-				? Math.floor(params.totalTimeoutMs as number)
-				: requested,
-		};
-	};
+	const resolveTurnLimits = (local?: TurnLimits): TurnLimits =>
+		mergeTurnLimits(local, {
+			idleTimeoutMs: params.idleTimeoutMs,
+			maxTurns: params.maxTurns,
+			maxToolCalls: params.maxToolCalls,
+		});
+	const resolveExecutionBudget = (agentName: string, localTimeoutMs?: number) =>
+		calculateExecutionBudget({
+			requestedTimeoutMs: resolveTimeoutMs(agentName, localTimeoutMs),
+			orchestrationDeadline,
+			totalTimeoutMs: params.totalTimeoutMs,
+			now: Date.now(),
+		});
 
 	const hasChain = (params.chain?.length ?? 0) > 0;
 	const hasTasks = (params.tasks?.length ?? 0) > 0;

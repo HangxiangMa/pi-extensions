@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { CompletionDelivery } from "./agents.js";
+import type { CompletionDelivery } from "./agents/types.js";
 import { redactPrivateText } from "./context.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
 import type { AgentTurnCompletion, ManagedAgent } from "./registry.js";

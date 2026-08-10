@@ -1,7 +1,7 @@
-import type { AgentConfig } from "./agents.js";
+import type { AgentConfig } from "./agents/types.js";
 import { redactPrivateText } from "./context.js";
 import { appendDelegationContract } from "./delegation-contract.js";
-import { resolveDefaultSubagentTimeoutMs } from "./execution.js";
+import { resolveDefaultSubagentTimeoutMs } from "./execution/runtime-policy.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
 import type { ManagedAgent } from "./registry.js";
 import { appendResultInstruction } from "./result-contract.js";

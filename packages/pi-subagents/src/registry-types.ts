@@ -1,4 +1,4 @@
-import type { SubagentThinkingLevel } from "./agents.js";
+import type { SubagentThinkingLevel } from "./agents/types.js";
 import type { CapabilityGrant } from "./capability-grant.js";
 import type { TargetPolicyAudit } from "./cwd-policy.js";
 import type { DelegationContract } from "./delegation-contract.js";
