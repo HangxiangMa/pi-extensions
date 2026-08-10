@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { completeStarshipArguments, STARSHIP_SUBCOMMANDS } from "./command-contract.js";
-import { showFooterExplanation } from "./command-inspector.js";
+import { formatFooterExplanation } from "./command-inspector.js";
 import { showPresetPicker } from "./command-preset-picker.js";
 import { type PreviewMenuResult, showPreviewActionMenu } from "./command-preview.js";
 import {
@@ -114,8 +114,8 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 		signal: fallbackController.signal,
 		isCurrent: () => !fallbackController.signal.aborted,
 	};
-	type Screen = "main" | "modules" | "configuration" | "help";
-	type Action = "customize" | "presets" | "explain" | "restore";
+	type Screen = "main" | "explain" | "modules" | "configuration" | "help";
+	type Action = "customize" | "presets" | "restore";
 	const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
 		start: "main",
 		screens: {
@@ -143,7 +143,7 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 							id: MAIN_ACTIONS.explain,
 							label: "Explain footer",
 							description: "Why each visible module appears",
-							action: "explain",
+							to: "explain",
 						},
 						{
 							id: MAIN_ACTIONS.modules,
@@ -174,6 +174,14 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 					hint: "close",
 				};
 			},
+			explain: () => ({
+				kind: "review",
+				title: "Explain footer",
+				content: formatFooterExplanation(options.getInspection?.()),
+				format: { kind: "text" },
+				viewportSize: "adaptive",
+				hint: "back",
+			}),
 			modules: () => {
 				const inspection =
 					options.getInspection?.() ?? inspectUnavailableModules(options.getLoaded().config);
@@ -236,11 +244,6 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StarshipComma
 			customize: async () => {
 				const result = await editSettings(ctx, options);
 				return result === "applied" || result === "close" ? { kind: "close" } : { kind: "stay" };
-			},
-			explain: async () => {
-				const result = await showFooterExplanation(ctx, options.getInspection?.(), owner.signal);
-				if (!isCurrentOwner(owner)) return { kind: "stay" };
-				return result?.kind === "back" ? { kind: "stay" } : { kind: "close" };
 			},
 			presets: async () => {
 				const result = await choosePreset(ctx, options, owner);

@@ -7,6 +7,7 @@ import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { formatFooterExplanation } from "../src/command-inspector.js";
 import { registerStarshipCommand } from "../src/commands.js";
 import { loadStarshipConfig } from "../src/config.js";
 import type { ModuleInspection, StatuslineInspection } from "../src/modules/inspection.js";
@@ -54,6 +55,37 @@ const INSPECTION: StatuslineInspection = {
 	modules: [MODEL, GIT_BRANCH, COST],
 	showing: [MODEL],
 };
+
+test("footer explanation formatter covers available, empty, unavailable, and unsafe snapshots", () => {
+	assert.equal(
+		formatFooterExplanation(INSPECTION),
+		["model", "Value: ◆ claude-sonnet-4", "Current Pi model."].join("\n"),
+	);
+	assert.equal(
+		formatFooterExplanation({ modules: INSPECTION.modules, showing: [] }),
+		[
+			"No modules are currently showing.",
+			"Open Modules to inspect empty, disabled, or unreachable modules.",
+		].join("\n"),
+	);
+	assert.equal(
+		formatFooterExplanation(undefined),
+		[
+			"Footer inspection is unavailable until the TUI footer is ready.",
+			"No collection work was started.",
+		].join("\n"),
+	);
+	const unsafe: ModuleInspection = {
+		...MODEL,
+		preview: "value\u0007\nnext\tvalue",
+		description: "description\u001b]8;;https://unsafe.example\u0007",
+	};
+	const formatted = formatFooterExplanation({ modules: [unsafe], showing: [unsafe] });
+	assert.equal(formatted.includes("\u001b"), false);
+	assert.equal(formatted.includes("\u0007"), false);
+	assert.equal(formatted.includes("\t"), false);
+	assert.match(formatted, /model[\s\S]*Value: value[\s\S]*nextvalue[\s\S]*description/u);
+});
 
 test("/starship adds Explain footer and Modules without adding direct routes", async () => {
 	const mock = createMockPi();
@@ -131,6 +163,91 @@ test("Explain footer is adaptive and lists only currently showing modules", asyn
 		assert.equal(existsSync(path), false);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("Explain footer scrolls long content and clamps it across resize", async () => {
+	const moduleNames = [
+		"brand",
+		"provider",
+		"model",
+		"thinking",
+		"directory",
+		"git_branch",
+		"activity",
+		"context",
+		"tokens",
+		"cache",
+		"cost",
+		"time",
+	] as const;
+	const showing: ModuleInspection[] = moduleNames.map((name, index) => ({
+		...MODEL,
+		name,
+		preview: `value ${index + 1}`,
+		description: `Description ${index + 1}.`,
+	}));
+	const inspection = { modules: showing, showing };
+	const mock = createMockPi();
+	const path = "/tmp/missing-pi-starship-long-explain.toml";
+	registerStarshipCommand(mock.pi, {
+		getLoaded: () => loadStarshipConfig(path),
+		getInspection: () => inspection,
+		apply() {},
+		settingsPath: path,
+	});
+	const tui = createTuiHarness({ width: 30, rows: 12 });
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const running = mock.commands.get("starship")?.handler("", context.ctx);
+	await tui.waitForOpen();
+	tui.press("tui.select.down");
+	tui.press("tui.select.down");
+	tui.press("tui.select.confirm");
+	await tui.waitForOpen();
+	assert.match(tui.render().join("\n"), /brand/u);
+	tui.press("end");
+	assert.match(tui.render().join("\n"), /time/u);
+	const constrained = tui.resize({ width: 20, rows: 7 });
+	assert.ok(constrained.length <= 4);
+	assert.ok(constrained.every((line) => visibleWidth(line) <= 20));
+	assert.match(constrained.join("\n"), /\d+-\d+\/\d+/u);
+	tui.press("tui.select.pageUp");
+	assert.ok(tui.render().every((line) => visibleWidth(line) <= 20));
+	tui.press("tui.select.cancel");
+	await tui.waitForOpen();
+	assert.match(tui.render().join("\n"), /→ Explain footer/u);
+	tui.press("ctrl+c");
+	await running;
+});
+
+test("Explain footer owner abort and external disposal close without writing", async () => {
+	for (const exit of ["abort", "dispose"] as const) {
+		const owner = new AbortController();
+		const mock = createMockPi();
+		const path = `/tmp/missing-pi-starship-explain-${exit}.toml`;
+		registerStarshipCommand(mock.pi, {
+			getLoaded: () => loadStarshipConfig(path),
+			getInspection: () => INSPECTION,
+			apply() {},
+			settingsPath: path,
+			getMenuOwner: () => ({
+				signal: owner.signal,
+				isCurrent: () => !owner.signal.aborted,
+			}),
+		});
+		const tui = createTuiHarness({ width: 40, rows: 12 });
+		const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+		const running = mock.commands.get("starship")?.handler("", context.ctx);
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		if (exit === "abort") owner.abort(new DOMException("Session replaced", "AbortError"));
+		else tui.dispose();
+		await running;
+		assert.equal(tui.isOpen, false);
+		assert.equal(existsSync(path), false);
 	}
 });
 

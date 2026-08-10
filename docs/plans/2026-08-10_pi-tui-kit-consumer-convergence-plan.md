@@ -85,13 +85,13 @@ Each implementation pull request starts from then-current `origin/main`, changes
 
 ### Phase 2: pi-starship footer explanation migration
 
-- [ ] Create a separate branch from then-current `origin/main` and add characterization coverage for available, unavailable, and empty inspections; adaptive height, narrow widths, scrolling, resize clamping, terminal controls, Back, Close, owner abort, and restored parent selection.
-- [ ] Replace the custom component in `packages/pi-starship/src/command-inspector.ts` with a pure terminal-safe content formatter consumed by a declarative adaptive `review` screen in the Starship menu.
-- [ ] Keep inspection acquisition, module ordering, preview formatting, TUI-only command behavior, and session ownership in Starship; do not expose a Kit render callback or change RPC support.
-- [ ] Delete superseded local layout, scroll, keybinding, abort-listener, and disposal ownership, then remove only imports that no longer have another production caller.
-- [ ] Update Starship package documentation if the interaction contract changed and add an appropriate Starship Changeset.
-- [ ] Run focused Starship command and lifecycle tests, its package check, `npm run check:boundaries`, `npm run check`, `git diff --check`, and `just pack starship`; inspect the tarball and record any unavailable live TUI smoke.
-- [ ] Audit terminal safety, resize behavior, parent cursor restoration, cancellation, disposal, stale session ownership, final diff scope, and independent installation before opening the Starship inspector pull request.
+- [x] Create a separate branch from then-current `origin/main` and add characterization coverage for available, unavailable, and empty inspections; adaptive height, narrow widths, scrolling, resize clamping, terminal controls, Back, Close, owner abort, and restored parent selection.
+- [x] Replace the custom component in `packages/pi-starship/src/command-inspector.ts` with a pure terminal-safe content formatter consumed by a declarative adaptive `review` screen in the Starship menu.
+- [x] Keep inspection acquisition, module ordering, preview formatting, TUI-only command behavior, and session ownership in Starship; do not expose a Kit render callback or change RPC support.
+- [x] Delete superseded local layout, scroll, keybinding, abort-listener, and disposal ownership, then remove only imports that no longer have another production caller.
+- [x] No package documentation change was needed because the read-only interaction contract is unchanged; add an appropriate Starship Changeset.
+- [x] Run focused Starship command and lifecycle tests, its package check, `npm run check:boundaries`, `npm run check`, `git diff --check`, and `just pack starship`; inspect the tarball and record any unavailable live TUI smoke.
+- [x] Audit terminal safety, resize behavior, parent cursor restoration, cancellation, disposal, stale session ownership, final diff scope, and independent installation before opening the Starship inspector pull request.
 
 ### Phase 3: Pi TUI Kit confirmation-gating API
 
@@ -147,11 +147,21 @@ Each implementation pull request starts from then-current `origin/main`, changes
 - Baseline floors were Statusline `^0.49.1`, Starship `^0.49.1`, Tool `^0.51.0`, and Kit package version `0.52.0`; the initial lockfile resolved Statusline and Starship to Kit `0.49.3` and Tool to `0.51.0`.
 - Statusline baseline passed `npm run check --workspace @narumitw/pi-statusline` and 125 focused tests before implementation.
 - Final Statusline evidence after rebasing: package check passed; 129 focused tests passed; `npm ls` resolved Kit `0.52.0`; boundaries passed; CI-equivalent `npm run check` passed with 268 files and 2,906 tests; `git diff --check` passed.
-- Statusline pull request: [#687](https://github.com/narumiruna/pi-extensions/pull/687), with implementation commit `247083fe` and plan commit `763f33dc`.
-- CI run `31408552397` initially failed only in the unrelated `pi-subagents` timeout-evidence test after all Statusline tests passed; one failed-job rerun completed successfully in 2m21s. No review was submitted at this refresh.
+- Statusline pull request [#687](https://github.com/narumiruna/pi-extensions/pull/687) merged as `8da1ca13f6e5e4f7e63e579726fb243e8748855b`, carrying implementation commit `247083fe`, plan commit `763f33dc`, and evidence commit `16ce4aad`.
+- CI run `31408552397` initially failed only in the unrelated `pi-subagents` timeout-evidence test after all Statusline tests passed; one failed-job rerun succeeded. Final CI run `31409152669` passed in 2m51s before merge. No review was submitted.
 - `just pack statusline` exposed only the 29 expected manifest-listed files (36.4 kB packed, 129.8 kB unpacked), including the source entrypoint, README, and license; no generated or test files leaked.
 - A clean temporary registry install proved Kit `0.52.0` exports `runLiveChoice` at runtime and in root declarations. A live TUI smoke was unavailable in the non-interactive agent terminal, so deterministic Kit-harness lifecycle tests and the package source-entry smoke remain the runtime evidence.
 - Semantic audit found settings writes unchanged and still covered for malformed files, unknown-field preservation, atomic publication, failed apply, and rollback. The picker now reuses the menu's exact owner, revalidates it after the awaited interaction, drains Kit preview work, resets previews on Back, Close, and external disposal, skips stale contexts, and reports reset failures without reopening the menu.
+
+### Phase 2 Starship inspector
+
+- Branch `feat/pi-starship-review-inspector` started from `origin/main` merge `8da1ca13f6e5e4f7e63e579726fb243e8748855b`, then rebased onto `0d254565a30e7ecd911228ea32b35077ac176e1d`; the Starship package check and 190 focused tests passed at baseline.
+- The formatter test failed before implementation because `formatFooterExplanation` did not exist, then passed after the custom component was reduced to terminal-safe content formatting and the menu adopted an adaptive `review` screen.
+- Final evidence after rebasing: Starship package check passed; 193 focused tests passed; boundaries passed; CI-equivalent `npm run check` passed with 274 files and 2,941 tests; `git diff --check` passed.
+- Starship inspector pull request: [#690](https://github.com/narumiruna/pi-extensions/pull/690), with implementation commit `306a4e58`, plan commit `6e919e79`, and evidence commit `ad35979a`. CI run `31410070343` passed in 57s; no review was submitted at this refresh.
+- `just pack starship` exposed the expected 79 manifest-listed source, notice, README, and license files (81.7 kB packed, 303.2 kB unpacked); tests and generated artifacts were absent.
+- A live TUI smoke remained unavailable in the non-interactive terminal. Kit-harness tests covered unavailable, empty, populated, long, and unsafe documents; adaptive heights and widths; Home/End and paging; resize clamping; Back, Close, owner abort, external disposal, and parent cursor restoration.
+- Audit confirmed inspection acquisition, module ordering, preview text, TUI-only routing, and session ownership remain in Starship. The removed code owned only generic layout, scroll, keybinding, abort-listener, and disposal behavior now supplied by the Kit.
 
 ### Applicable MUST mapping for Phase 1
 
@@ -178,7 +188,7 @@ Each implementation pull request starts from then-current `origin/main`, changes
 ## Completion Checklist
 
 - [x] `pi-statusline` uses published `runLiveChoice()` for palette previews and preserves settings, preview, cancellation, and rollback behavior.
-- [ ] Starship footer explanation uses the standard adaptive `review` screen with no extension-owned generic scroll component.
+- [x] Starship footer explanation uses the standard adaptive `review` screen with no extension-owned generic scroll component.
 - [ ] Pi TUI Kit exposes and documents confirmation-only Live Choice gating with unchanged legacy disabled behavior and complete TUI/RPC lifecycle tests.
 - [ ] The enhanced Kit release is explicitly approved, published, registry-verified, and independently installable before consumer adoption.
 - [ ] `pi-starship` uses the published Live Choice contract for presets while active Apply remains inert and Customize remains available.
