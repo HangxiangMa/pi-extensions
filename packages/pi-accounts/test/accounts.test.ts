@@ -169,12 +169,21 @@ test("built-in provider adapters preserve each provider's complete OAuth auth sh
 });
 
 test("OAuth interaction preserves provider prompts, cancellation, and notifications", async () => {
+	const dialogSignals: Array<AbortSignal | undefined> = [];
 	const { ctx, notifications } = createMockContext({
 		hasUI: true,
-		input: async () => undefined,
-		select: async () => "Device login",
+		input: async (_title: string, _placeholder: string, options?: { signal?: AbortSignal }) => {
+			dialogSignals.push(options?.signal);
+			return undefined;
+		},
+		select: async (_title: string, _options: string[], options?: { signal?: AbortSignal }) => {
+			dialogSignals.push(options?.signal);
+			return "Device login";
+		},
 	});
-	const interaction = createOAuthInteraction(ctx, "Example");
+	const owner = new AbortController();
+	const interaction = createOAuthInteraction(ctx, "Example", owner.signal);
+	assert.equal(interaction.signal, owner.signal);
 	assert.equal(
 		await interaction.prompt({
 			type: "select",
@@ -190,6 +199,7 @@ test("OAuth interaction preserves provider prompts, cancellation, and notificati
 		interaction.prompt({ type: "manual_code", message: "Code" }),
 		/Login cancelled/,
 	);
+	assert.deepEqual(dialogSignals, [owner.signal, owner.signal]);
 	interaction.notify({
 		type: "device_code",
 		userCode: "ABCD",
@@ -654,6 +664,50 @@ test("generic login stores the full provider-owned credential and activates it",
 	assert.equal(stored?.active, "personal");
 	assert.deepEqual(stored?.accounts.personal?.availableModelIds, ["allowed"]);
 	assert.equal(keys.get("github-copilot"), "access-login-github-copilot");
+});
+
+test("session shutdown aborts idle OAuth login before stale credentials can publish", async () => {
+	const store = new AccountStore(new InMemoryAccountStorageBackend());
+	let loginStarted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		loginStarted = resolve;
+	});
+	let loginSignal: AbortSignal | undefined;
+	const copilot = fakeProvider("github-copilot");
+	copilot.oauth.login = async (interaction) => {
+		loginSignal = interaction.signal;
+		loginStarted();
+		if (!loginSignal) throw new Error("Missing OAuth login signal");
+		await new Promise<void>((resolve) => {
+			if (loginSignal?.aborted) resolve();
+			else loginSignal?.addEventListener("abort", () => resolve(), { once: true });
+		});
+		return credential("stale");
+	};
+	const mock = createMockPi();
+	accountsExtension(mock.pi, {
+		store,
+		providers: [fakeProvider("openai-codex"), fakeProvider("anthropic"), copilot],
+	});
+	const { registry } = runtimeHarness(mock);
+	const { ctx } = createInteractiveAccountContext(
+		{
+			model: { provider: "github-copilot", id: "allowed" },
+			modelRegistry: registry,
+		},
+		{ selections: ["Login new account", "GitHub Copilot"], inputs: ["personal"] },
+	);
+
+	const login = mock.commands.get("accounts")?.handler("ignored", ctx);
+	await started;
+	await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+	await login;
+
+	assert.ok(loginSignal);
+	assert.equal(loginSignal.aborted, true);
+	const state = await store.readProviderAsync("github-copilot");
+	assert.equal(state.active, undefined);
+	assert.deepEqual(Object.keys(state.accounts), []);
 });
 
 test("login rejects default as a reserved account name", async () => {

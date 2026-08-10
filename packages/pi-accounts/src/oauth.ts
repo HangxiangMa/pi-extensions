@@ -1,10 +1,10 @@
 import {
 	type AuthEvent,
-	type AuthInteraction,
 	type AuthPrompt,
 	cleanupSessionResources,
 	type ModelAuth,
 	type OAuthCredential,
+	type ProviderAuthInteraction,
 } from "@earendil-works/pi-ai";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
@@ -13,7 +13,7 @@ export const SUPPORTED_PROVIDER_IDS = ["anthropic", "github-copilot", "openai-co
 export type AccountProviderId = (typeof SUPPORTED_PROVIDER_IDS)[number];
 
 export interface ProviderOwnedOAuth {
-	login(interaction: AuthInteraction): Promise<OAuthCredential>;
+	login(interaction: ProviderAuthInteraction): Promise<OAuthCredential>;
 	refresh(credential: OAuthCredential, signal?: AbortSignal): Promise<OAuthCredential>;
 	toAuth(credential: OAuthCredential): Promise<ModelAuth>;
 }
@@ -73,10 +73,11 @@ export function createBuiltinProviderAdapters(
 export function createOAuthInteraction(
 	ctx: ExtensionCommandContext,
 	providerName: string,
-): AuthInteraction {
+	signal: AbortSignal,
+): ProviderAuthInteraction {
 	return {
-		signal: ctx.signal,
-		prompt: async (prompt) => promptForOAuth(ctx, prompt),
+		signal,
+		prompt: async (prompt) => promptForOAuth(ctx, prompt, signal),
 		notify: (event) => notifyOAuthEvent(ctx, providerName, event),
 	};
 }
@@ -114,20 +115,23 @@ async function defaultProviderModuleLoader(): Promise<BuiltinProviderModule> {
 	return (await import(PROVIDERS_MODULE_ID)) as BuiltinProviderModule;
 }
 
-async function promptForOAuth(ctx: ExtensionCommandContext, prompt: AuthPrompt): Promise<string> {
+async function promptForOAuth(
+	ctx: ExtensionCommandContext,
+	prompt: AuthPrompt,
+	loginSignal: AbortSignal,
+): Promise<string> {
+	const signal = prompt.signal ? AbortSignal.any([loginSignal, prompt.signal]) : loginSignal;
 	if (prompt.type === "select") {
 		const selected = await ctx.ui.select(
 			prompt.message,
 			prompt.options.map((option) => option.label),
-			{ signal: prompt.signal },
+			{ signal },
 		);
 		const id = prompt.options.find((option) => option.label === selected)?.id;
 		if (id === undefined) throw new Error("Login cancelled");
 		return id;
 	}
-	const value = await ctx.ui.input(prompt.message, prompt.placeholder ?? "", {
-		signal: prompt.signal,
-	});
+	const value = await ctx.ui.input(prompt.message, prompt.placeholder ?? "", { signal });
 	if (value === undefined) throw new Error("Login cancelled");
 	return value;
 }

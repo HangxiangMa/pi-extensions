@@ -343,12 +343,14 @@ async function showAccountsMenu(
 		},
 		actions: {
 			"login-route": async () => ({ kind: "to", screen: "login-providers" }),
-			"login-provider": async ({ itemId }) => {
+			"login-provider": async ({ itemId, signal }) => {
 				if (!isAccountProviderId(itemId)) return { kind: "rejected" };
 				const adapter = requireAdapter(adapters, itemId);
-				const name = await ctx.ui.input(`Name this ${adapter.displayName} account:`, "work");
+				const name = await ctx.ui.input(`Name this ${adapter.displayName} account:`, "work", {
+					signal,
+				});
 				if (name === undefined || !owner.isCurrent()) return { kind: "close" };
-				await loginAccount(pi, ctx, store, adapter, name, syncProvider, owner.isCurrent);
+				await loginAccount(pi, ctx, store, adapter, name, signal, syncProvider, owner.isCurrent);
 				return { kind: "close" };
 			},
 			"switch-current": async ({ itemId }) => {
@@ -598,6 +600,7 @@ async function loginAccount(
 	store: AccountStore,
 	adapter: AccountProviderAdapter,
 	nameArg: string,
+	signal: AbortSignal,
 	syncProvider: (
 		providerId: AccountProviderId,
 		ctx: ExtensionContext,
@@ -626,7 +629,7 @@ async function loginAccount(
 	ctx.ui.notify(`Starting ${adapter.displayName} login for "${parsed.name}".`, "info");
 	try {
 		const credential = normalizeStoredCredential(
-			await adapter.oauth.login(createOAuthInteraction(ctx, adapter.displayName)),
+			await adapter.oauth.login(createOAuthInteraction(ctx, adapter.displayName, signal)),
 			parsed.name,
 		);
 		if (!isCurrent()) return;
