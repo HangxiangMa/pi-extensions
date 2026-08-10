@@ -4,7 +4,7 @@ import {
 } from "./admission-policy.js";
 import type { AgentConfig } from "./agents.js";
 import type { AutomationRequest, WorkflowPlan, WorkflowPlanTask } from "./automation-contract.js";
-import { workflowPlanIdentity } from "./automation-contract.js";
+import { MAX_AUTOMATION_ITEMS, workflowPlanIdentity } from "./automation-contract.js";
 import { routeByCapability } from "./capability-router.js";
 import type { TargetPolicyAudit } from "./cwd-policy.js";
 import {
@@ -36,8 +36,8 @@ export interface CompiledWorkflowPlan {
 	status: "compiled";
 	childCount: number;
 	planId: string;
-	workflowGeneration: 0;
-	revision: 0;
+	workflowGeneration: number;
+	revision: number;
 	request: AutomationRequest;
 	plan: WorkflowPlan;
 	workflow: NonNullable<SubagentParams["workflow"]>;
@@ -162,6 +162,11 @@ export function compileWorkflowPlan(input: WorkflowPlanCompilerInput): WorkflowP
 			normalizedTasks.push(synthesized);
 		}
 	}
+	const requirementsApplied = applyRequestRequirements(normalizedTasks, input.request);
+	if (!requirementsApplied) {
+		return rejected("request-requirements-exceed-task-limit", admission);
+	}
+	normalizedTasks = requirementsApplied;
 	if (normalizedTasks.length > input.request.aggregateBudget.maxTasks) {
 		return rejected("task-budget-exceeded-after-verification", admission);
 	}
@@ -340,6 +345,32 @@ function compileTasks(
 		});
 	}
 	return { workflowTasks, executionPlans };
+}
+
+function applyRequestRequirements(
+	tasks: readonly WorkflowPlanTask[],
+	request: AutomationRequest,
+): WorkflowPlanTask[] | undefined {
+	const dependencyIds = new Set(tasks.flatMap((task) => task.dependsOn));
+	const result: WorkflowPlanTask[] = [];
+	for (const task of tasks) {
+		const authoritative =
+			task.integrationOwner || Boolean(task.verifierFor) || !dependencyIds.has(task.id);
+		if (!authoritative) {
+			result.push(task);
+			continue;
+		}
+		const acceptanceCriteria = unique([...task.acceptanceCriteria, ...request.acceptanceCriteria]);
+		const requiredEvidence = unique([...task.requiredEvidence, ...request.requiredEvidence]);
+		if (
+			acceptanceCriteria.length > MAX_AUTOMATION_ITEMS ||
+			requiredEvidence.length > MAX_AUTOMATION_ITEMS
+		) {
+			return undefined;
+		}
+		result.push({ ...task, acceptanceCriteria, requiredEvidence });
+	}
+	return result;
 }
 
 function validateVerifierTasks(tasks: readonly WorkflowPlanTask[]): void {
@@ -547,6 +578,10 @@ function calculateMaxConcurrentMutating(tasks: readonly WorkflowPlanTask[]): num
 		counts.set(taskLevel, (counts.get(taskLevel) ?? 0) + 1);
 	}
 	return Math.max(0, ...counts.values());
+}
+
+function unique(values: readonly string[]): string[] {
+	return [...new Set(values)];
 }
 
 function withinAnyScope(candidate: string, scopes: readonly string[]): boolean {

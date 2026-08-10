@@ -9,7 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
-import { discoverAgents, type SubagentSettings } from "./agents.js";
+import { discoverAgents, getBuiltInAgent, type SubagentSettings } from "./agents.js";
 import {
 	AutomationRequestSchema,
 	parseAutomationRequest,
@@ -39,7 +39,7 @@ import {
 	type SubagentDetails,
 } from "./runner.js";
 import { boundedPrivateText } from "./safe-text.js";
-import { DEFAULT_DELEGATION_CWD_POLICY } from "./settings.js";
+import { DEFAULT_DELEGATION_CWD_POLICY, resolveBlockingMaxParallelTasks } from "./settings.js";
 import {
 	type CompiledWorkflowPlan,
 	compileWorkflowPlan,
@@ -202,6 +202,7 @@ export async function executeAutomationRequest(
 	validateAutomationToolParams(params);
 	const request = parseAutomationRequest(params.request);
 	assertCurrent(signal, isCurrent);
+	const settings = options.getSettings();
 	const plannerBudget = reservePlannerBudget(request.aggregateBudget);
 	const plannerDetails: NonNullable<AutomationDetails["planner"]> = {
 		agent: "planner",
@@ -229,6 +230,20 @@ export async function executeAutomationRequest(
 			isError: true,
 		};
 	}
+	const executionRequest = reserveExecutionBudget(
+		request,
+		plannerBudget,
+		resolveBlockingMaxParallelTasks(settings),
+	);
+	if (!executionRequest) {
+		return nonLaunchResult(
+			"compiler-rejected",
+			request.version,
+			["execution-budget-exhausted"],
+			plannerDetails,
+			new Error("Aggregate budget cannot fund both planning and execution"),
+		);
+	}
 	onUpdate?.({
 		content: [{ type: "text", text: "Planning a bounded autonomous workflow." }],
 		details: {
@@ -247,7 +262,7 @@ export async function executeAutomationRequest(
 			prompt,
 			ctx,
 			signal,
-			settings: options.getSettings(),
+			settings,
 			...plannerBudget,
 		});
 		assertCurrent(signal, isCurrent);
@@ -262,8 +277,6 @@ export async function executeAutomationRequest(
 			error,
 		);
 	}
-	const executionRequest = reserveExecutionBudget(request, plannerBudget);
-	const settings = options.getSettings();
 	const target = resolveSubagentTarget({
 		workspace: ctx.cwd,
 		requestedCwd: ctx.cwd,
@@ -342,8 +355,7 @@ export async function executeAutomationRequest(
 }
 
 async function runDefaultPlanner(request: AutomationPlannerRequest): Promise<string> {
-	const discovery = discoverAgents(request.ctx.cwd, "user", request.settings);
-	const planner = discovery.agents.find((agent) => agent.name === "planner");
+	const planner = getBuiltInAgent("planner");
 	if (!planner) throw new Error("The built-in automation planner is unavailable");
 	const policy = await resolveAutomationPlannerPolicy(
 		request.ctx.isProjectTrusted(),
@@ -506,14 +518,22 @@ function reservePlannerBudget(budget: {
 function reserveExecutionBudget(
 	request: ReturnType<typeof parseAutomationRequest>,
 	planner: ReturnType<typeof reservePlannerBudget>,
-): ReturnType<typeof parseAutomationRequest> {
+	maxWorkflowTasks: number,
+): ReturnType<typeof parseAutomationRequest> | undefined {
+	const remaining = {
+		timeoutMs: request.aggregateBudget.timeoutMs - planner.timeoutMs,
+		maxTurns: request.aggregateBudget.maxTurns - planner.maxTurns,
+		maxToolCalls: request.aggregateBudget.maxToolCalls - planner.maxToolCalls,
+	};
+	if (remaining.timeoutMs < 1 || remaining.maxTurns < 1 || remaining.maxToolCalls < 1) {
+		return undefined;
+	}
 	return {
 		...request,
 		aggregateBudget: {
 			...request.aggregateBudget,
-			timeoutMs: Math.max(1, request.aggregateBudget.timeoutMs - planner.timeoutMs),
-			maxTurns: Math.max(1, request.aggregateBudget.maxTurns - planner.maxTurns),
-			maxToolCalls: Math.max(1, request.aggregateBudget.maxToolCalls - planner.maxToolCalls),
+			...remaining,
+			maxTasks: Math.min(request.aggregateBudget.maxTasks, maxWorkflowTasks),
 		},
 	};
 }

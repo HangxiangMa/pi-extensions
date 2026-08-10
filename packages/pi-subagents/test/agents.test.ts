@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
-import { discoverAgents } from "../src/agents.js";
+import { discoverAgents, getBuiltInAgent } from "../src/agents.js";
 
 function agentMarkdown(name: string, toolsLine?: string): string {
 	return [
@@ -52,6 +52,35 @@ test("agent frontmatter loads optional capability manifests without weakening le
 			limitations: [],
 		});
 		assert.equal(agents.find((agent) => agent.name === "legacy")?.capabilityManifest, undefined);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("built-in lookup is immutable when a user agent and settings override the same name", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-built-in-agent-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const agentsDir = path.join(directory, "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(path.join(agentsDir, "planner.md"), agentMarkdown("planner", "tools: bash"));
+		const discovered = discoverAgents(directory, "user", {
+			agents: { planner: { model: "custom-model", thinkingLevel: "max" } },
+		}).agents.find((agent) => agent.name === "planner");
+		assert.equal(discovered?.source, "user");
+		assert.deepEqual(discovered?.tools, ["bash"]);
+		assert.equal(discovered?.model, "custom-model");
+
+		const builtIn = getBuiltInAgent("planner");
+		assert.equal(builtIn?.source, "built-in");
+		assert.deepEqual(builtIn?.tools, ["read", "grep", "find", "ls"]);
+		assert.equal(builtIn?.model, undefined);
+		assert.equal(builtIn?.thinkingLevel, undefined);
+		builtIn?.tools?.push("write");
+		assert.deepEqual(getBuiltInAgent("planner")?.tools, ["read", "grep", "find", "ls"]);
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;

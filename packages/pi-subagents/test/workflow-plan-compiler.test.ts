@@ -155,6 +155,44 @@ test("compiler admits one child and a sequential dependency without widening aut
 	assert.deepEqual(sequential.workflow.tasks[1]?.dependsOn, ["inspect"]);
 });
 
+test("compiler carries caller requirements into authoritative task contracts", () => {
+	const result = compile(
+		[
+			task("implement", {
+				sideEffectPolicy: "mutating",
+				writePaths: ["packages/pi-subagents"],
+				requiredCapabilities: ["implementation"],
+				requiredTools: ["read", "edit", "write"],
+				integrationOwner: true,
+			}),
+		],
+		{
+			acceptanceCriteria: ["Caller acceptance"],
+			requiredEvidence: ["caller evidence"],
+		},
+	);
+	assert.equal(result.status, "compiled");
+	if (result.status !== "compiled") return;
+	for (const compiledTask of result.workflow.tasks) {
+		assert.ok(compiledTask.contract?.acceptanceCriteria?.includes("Caller acceptance"));
+		assert.ok(compiledTask.contract?.requiredEvidence?.includes("caller evidence"));
+		assert.match(compiledTask.task, /Caller acceptance/u);
+		assert.match(compiledTask.task, /caller evidence/u);
+	}
+	for (const normalizedTask of result.plan.tasks) {
+		assert.ok(normalizedTask.acceptanceCriteria.includes("Caller acceptance"));
+		assert.ok(normalizedTask.requiredEvidence.includes("caller evidence"));
+	}
+});
+
+test("compiler rejects caller requirement merges that exceed contract item limits", () => {
+	const result = compile([task("inspect")], {
+		acceptanceCriteria: Array.from({ length: 20 }, (_, index) => `Caller criterion ${index}`),
+	});
+	assert.equal(result.status, "rejected");
+	assert.deepEqual(result.reasonCodes, ["request-requirements-exceed-task-limit"]);
+});
+
 test("compiler synthesizes a distinct verifier for one mutating child", () => {
 	const result = compile([
 		task("implement", {

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "./agents.js";
 import {
@@ -13,6 +14,7 @@ import {
 } from "./automation-contract.js";
 import { redactPrivateText } from "./context.js";
 import type { TargetPolicyAudit } from "./cwd-policy.js";
+import { rotateExecutionPlanGeneration } from "./execution-plan.js";
 import {
 	WorkItemLedger,
 	type WorkItemLedgerSnapshot,
@@ -203,7 +205,7 @@ export function applyWorkflowPlanPatch(
 
 	const candidatePlan = parseWorkflowPlan({ ...input.record.plan, tasks });
 	const activeTasks = candidatePlan.tasks.filter((task) => !cancelled.has(task.id));
-	let compiled: CompiledWorkflowPlan | undefined;
+	let baseCompiled: CompiledWorkflowPlan | undefined;
 	if (activeTasks.length > 0) {
 		const activePlan = parseWorkflowPlan({ ...candidatePlan, tasks: activeTasks });
 		const result = compileWorkflowPlan({
@@ -218,41 +220,48 @@ export function applyWorkflowPlanPatch(
 				`Workflow patch rejected by compiler: ${result.reasonCodes.join(", ") || result.status}`,
 			);
 		}
-		compiled = result;
+		baseCompiled = result;
 	}
+	const normalizedPlan = mergeCompiledActivePlan(
+		candidatePlan,
+		baseCompiled,
+		cancelled,
+		modified,
+		byState,
+	);
 	const nextGeneration = input.record.workflowGeneration + 1;
 	const nextRevision = input.record.revision + 1;
 	const historyEntry = captureHistory(input.record, ledger);
 	const nextPlanId = revisionIdentity(
 		input.record.planId,
-		candidatePlan,
+		normalizedPlan,
 		nextGeneration,
 		nextRevision,
 		cancelled,
 		invalidated,
 	);
-	const taskGenerations = Object.fromEntries(
-		tasks.map((task) => [
-			task.id,
-			(byState.get(task.id)?.taskGeneration ?? 0) + (modified.has(task.id) ? 1 : 0),
-		]),
-	);
 	const nextLedger = buildPatchedLedger(
-		candidatePlan,
+		normalizedPlan,
 		ledger,
-		compiled,
+		baseCompiled,
 		modified,
 		cancelled,
 		invalidated,
 		input.patch.reason,
 	);
+	const taskGenerations = Object.fromEntries(
+		nextLedger.items.map((item) => [item.id, item.taskGeneration]),
+	);
+	const compiled = baseCompiled
+		? rotateCompiledPlan(baseCompiled, nextPlanId, nextGeneration, nextRevision, taskGenerations)
+		: undefined;
 	return {
 		record: {
 			...input.record,
 			planId: nextPlanId,
 			workflowGeneration: nextGeneration,
 			revision: nextRevision,
-			plan: candidatePlan,
+			plan: normalizedPlan,
 			cancelledTaskIds: [...cancelled].sort(),
 			invalidatedTaskIds: [...invalidated].sort(),
 			history: [...input.record.history, historyEntry],
@@ -261,6 +270,69 @@ export function applyWorkflowPlanPatch(
 		...(compiled ? { compiled } : {}),
 		taskGenerations,
 		replayedTaskIds: [],
+	};
+}
+
+function mergeCompiledActivePlan(
+	candidate: WorkflowPlan,
+	compiled: CompiledWorkflowPlan | undefined,
+	cancelled: ReadonlySet<string>,
+	modified: Set<string>,
+	byState: ReadonlyMap<string, WorkItemRecord>,
+): WorkflowPlan {
+	if (!compiled) return candidate;
+	const compiledById = new Map(compiled.plan.tasks.map((task) => [task.id, task]));
+	const candidateIds = new Set(candidate.tasks.map((task) => task.id));
+	const tasks = candidate.tasks.map((task) => {
+		if (cancelled.has(task.id)) return task;
+		const normalized = compiledById.get(task.id);
+		if (!normalized) {
+			throw new Error(`Compiled patch omitted active workflow task ${task.id}`);
+		}
+		if (!isDeepStrictEqual(normalized, task)) {
+			const state = byState.get(task.id);
+			if (state && !isPatchEligible(state)) {
+				throw new Error(`Workflow normalization would rewrite immutable task ${task.id}`);
+			}
+			modified.add(task.id);
+		}
+		return normalized;
+	});
+	for (const task of compiled.plan.tasks) {
+		if (!candidateIds.has(task.id)) tasks.push(task);
+	}
+	return parseWorkflowPlan({ ...candidate, tasks });
+}
+
+function rotateCompiledPlan(
+	compiled: CompiledWorkflowPlan,
+	planId: string,
+	workflowGeneration: number,
+	revision: number,
+	taskGenerations: Readonly<Record<string, number>>,
+): CompiledWorkflowPlan {
+	const executionPlans = compiled.executionPlans.map((plan) => {
+		const taskId = plan.taskId;
+		const targetGeneration = taskId ? taskGenerations[taskId] : undefined;
+		if (!taskId || !targetGeneration || targetGeneration < plan.taskGeneration) {
+			throw new Error(`Patched workflow has an invalid task generation for ${taskId ?? "unknown"}`);
+		}
+		let rotated = plan;
+		while (rotated.taskGeneration < targetGeneration) {
+			rotated = rotateExecutionPlanGeneration(rotated);
+		}
+		return rotated;
+	});
+	return {
+		...compiled,
+		planId,
+		workflowGeneration,
+		revision,
+		workflow: {
+			...compiled.workflow,
+			id: `auto-${planId.slice(0, 24)}`,
+		},
+		executionPlans,
 	};
 }
 
