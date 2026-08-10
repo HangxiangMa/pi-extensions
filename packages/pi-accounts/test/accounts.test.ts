@@ -1,8 +1,13 @@
 // Cohesion justification: this account-manager integration matrix shares credential/provider
 // fixtures and cross-covers menus, OAuth, replacement, switching, persistence, and lifecycle safety.
 import assert from "node:assert/strict";
-import { test } from "vitest";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import { beforeAll, test } from "vitest";
+import {
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+} from "../../../test/support.js";
 import accountsExtension, {
 	ACCOUNTS_STATUS_KEY,
 	AccountStore,
@@ -14,9 +19,12 @@ import {
 	type AccountProviderAdapter,
 	createBuiltinProviderAdapters,
 	createOAuthInteraction,
+	loginWithOAuthUI,
 } from "../src/oauth.js";
 import { RuntimeAuthCoordinator } from "../src/runtime-auth.js";
 import { InMemoryAccountStorageBackend } from "../src/storage.js";
+
+beforeAll(() => initTheme("dark", false));
 
 const credential = (
 	suffix: string,
@@ -124,6 +132,7 @@ function createInteractiveAccountContext(
 	const inputCalls: Array<{ title: string; placeholder?: string }> = [];
 	const confirmCalls: Array<{ title: string; message: string }> = [];
 	const context = createMockContext({
+		mode: "rpc",
 		hasUI: true,
 		...overrides,
 		select: async (title: string, values: string[]) => {
@@ -207,6 +216,146 @@ test("OAuth interaction preserves provider prompts, cancellation, and notificati
 	});
 	assert.match(notifications.at(-1)?.message ?? "", /ABCD/);
 });
+
+test("TUI OAuth login uses Pi's native dialog across provider-owned steps", async () => {
+	let harness: ReturnType<typeof createCustomSelectorHarness> | undefined;
+	let continueToPrompt!: () => void;
+	const authShown = new Promise<void>((resolve) => {
+		continueToPrompt = resolve;
+	});
+	let selectedMethod: string | undefined;
+	let manualCode: string | undefined;
+	const provider = fakeProvider("github-copilot");
+	provider.oauth.login = async (interaction) => {
+		interaction.notify({
+			type: "info",
+			message: "Sign in with GitHub",
+			links: [{ label: "Help", url: "https://example.test/help" }],
+		});
+		await authShown;
+		selectedMethod = await interaction.prompt({
+			type: "select",
+			message: "Choose login method",
+			options: [
+				{ id: "browser", label: "Browser" },
+				{ id: "device", label: "Device login" },
+			],
+		});
+		interaction.notify({
+			type: "device_code",
+			userCode: "ABCD-EFGH",
+			verificationUri: "https://example.test/device",
+		});
+		interaction.notify({ type: "progress", message: "Checking authorization..." });
+		manualCode = await interaction.prompt({ type: "manual_code", message: "Paste callback:" });
+		return credential("native-dialog", { availableModelIds: ["allowed"] });
+	};
+	const { ctx } = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			harness = createCustomSelectorHarness(factory, 100);
+			return harness.resultPromise;
+		},
+	});
+
+	const login = loginWithOAuthUI(ctx, provider, new AbortController().signal);
+	await waitForTest(() => harness !== undefined);
+	assert.ok(harness);
+	assert.equal(harness.isFocusable, true);
+	assert.match(harness.render().join("\n"), /Login to GitHub Copilot/);
+	assert.match(harness.render().join("\n"), /Sign in with GitHub/);
+	assert.match(harness.render().join("\n"), /Help: https:\/\/example\.test\/help/);
+
+	continueToPrompt();
+	await waitForTest(() => harness?.render().join("\n").includes("Device login") ?? false);
+	assert.match(harness.render().join("\n"), /Choose login method/);
+	harness.handleInput("tui.select.down");
+	harness.handleInput("tui.select.confirm");
+	await waitForTest(() => harness?.render().join("\n").includes("ABCD-EFGH") ?? false);
+	const loginScreen = harness.render().join("\n");
+	assert.match(loginScreen, /https:\/\/example\.test\/device/);
+	assert.match(loginScreen, /Enter code: ABCD-EFGH/);
+	assert.match(loginScreen, /Waiting for authentication/);
+	assert.match(loginScreen, /Checking authorization/);
+	assert.match(loginScreen, /Paste callback/);
+
+	harness.setFocused(true);
+	harness.handleInput("callback-value");
+	harness.handleInput("tui.input.submit");
+	assert.equal((await login).access, "access-native-dialog");
+	assert.equal(selectedMethod, "device");
+	assert.equal(manualCode, "callback-value");
+});
+
+test("TUI OAuth login aborts provider work on Escape and component disposal", async () => {
+	for (const cancellation of ["escape", "dispose"] as const) {
+		let harness: ReturnType<typeof createCustomSelectorHarness> | undefined;
+		let providerSignal: AbortSignal | undefined;
+		const provider = fakeProvider("anthropic");
+		provider.oauth.login = async (interaction) => {
+			providerSignal = interaction.signal;
+			await new Promise<void>((resolve) => {
+				if (interaction.signal.aborted) resolve();
+				else interaction.signal.addEventListener("abort", () => resolve(), { once: true });
+			});
+			throw new Error("Login cancelled");
+		};
+		const { ctx } = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: async (factory: unknown) => {
+				harness = createCustomSelectorHarness(factory, 100);
+				return harness.resultPromise;
+			},
+		});
+
+		const login = loginWithOAuthUI(ctx, provider, new AbortController().signal);
+		await waitForTest(() => harness !== undefined && providerSignal !== undefined);
+		assert.ok(harness);
+		if (cancellation === "escape") harness.handleInput("tui.select.cancel");
+		else harness.dispose();
+		await assert.rejects(login, /Login cancelled/);
+		assert.equal(providerSignal?.aborted, true);
+	}
+});
+
+test("TUI OAuth login closes when its menu owner is cancelled", async () => {
+	let harness: ReturnType<typeof createCustomSelectorHarness> | undefined;
+	let providerSignal: AbortSignal | undefined;
+	const provider = fakeProvider("openai-codex");
+	provider.oauth.login = async (interaction) => {
+		providerSignal = interaction.signal;
+		await new Promise<void>((resolve) => {
+			if (interaction.signal.aborted) resolve();
+			else interaction.signal.addEventListener("abort", () => resolve(), { once: true });
+		});
+		throw new Error("Login cancelled");
+	};
+	const owner = new AbortController();
+	const { ctx } = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: async (factory: unknown) => {
+			harness = createCustomSelectorHarness(factory, 100);
+			return harness.resultPromise;
+		},
+	});
+
+	const login = loginWithOAuthUI(ctx, provider, owner.signal);
+	await waitForTest(() => harness !== undefined && providerSignal !== undefined);
+	owner.abort();
+	await assert.rejects(login, /Login cancelled/);
+	assert.equal(providerSignal?.aborted, true);
+});
+
+async function waitForTest(predicate: () => boolean): Promise<void> {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		if (predicate()) return;
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	}
+	throw new Error("Timed out waiting for test state");
+}
 
 test("accounts registers only the interactive /accounts command and lifecycle hooks", () => {
 	const mock = createMockPi();
