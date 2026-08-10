@@ -1,5 +1,17 @@
 # @narumitw/pi-subagents
 
+## 0.53.0
+
+### Minor Changes
+
+- ae0677d: Add explicit bounded autonomous workflow planning with deterministic compilation, verified mutating execution, and generation-safe graph revisions.
+
+### Patch Changes
+
+- Updated dependencies [4a0358b]
+- Updated dependencies [93b507b]
+  - @narumitw/pi-tui-kit@0.53.0
+
 ## 0.52.0
 
 ### Minor Changes

@@ -1,5 +1,14 @@
 # @narumitw/pi-tool
 
+## 0.2.1
+
+### Patch Changes
+
+- c3ce1c5: Preserve nested parameter-schema indentation in TUI and RPC tool details.
+- Updated dependencies [4a0358b]
+- Updated dependencies [93b507b]
+  - @narumitw/pi-tui-kit@0.53.0
+
 ## 0.2.0
 
 ### Minor Changes
