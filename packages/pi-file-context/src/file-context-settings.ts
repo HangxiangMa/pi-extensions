@@ -11,7 +11,7 @@ export interface LoadedFileContextSettings {
 }
 
 export const DEFAULT_FILE_CONTEXT_SETTINGS: FileContextSettings = {
-	openShortcut: "ctrl+alt+f",
+	openShortcut: "f8",
 };
 
 const MODIFIERS = new Set(["ctrl", "shift", "alt", "super"]);
