@@ -1,15 +1,32 @@
+/**
+ * AgentRegistry intentionally owns its full state machine in one module so queue, tree,
+ * mailbox, generation, grant, transport, persistence, and completion transitions are atomic.
+ */
 import { randomUUID } from "node:crypto";
 import { projectAgentRecords } from "./agent-projection.js";
 import type { SubagentThinkingLevel } from "./agents.js";
+import {
+	type CapabilityGrant,
+	isCapabilityGrantActive,
+	revokeCapabilityGrant,
+} from "./capability-grant.js";
 import type { TargetPolicyAudit } from "./cwd-policy.js";
+import type { DelegationContract } from "./delegation-contract.js";
+import {
+	copyExecutionPlan,
+	type ExecutionPlan,
+	rotateExecutionPlanGeneration,
+} from "./execution-plan.js";
 import {
 	DEFAULT_MAX_CONTEXT_BYTES,
 	DEFAULT_MAX_OUTPUT_BYTES,
 	MAX_SUBAGENT_TIMEOUT_MS,
 	truncateUtf8,
 } from "./limits.js";
+import { classifyStructuredOutcome } from "./outcome.js";
 import type {
 	AgentInspectionCounts,
+	AgentLifecycleState,
 	AgentMailboxMessage,
 	AgentRegistryOptions,
 	AgentRunInspectionDetail,
@@ -18,10 +35,11 @@ import type {
 	ManagedAgent,
 } from "./registry-types.js";
 import {
-	parseStructuredSubagentResult,
-	type StructuredSubagentResult,
+	type AnyStructuredSubagentResult,
+	parseAnyStructuredSubagentResult,
 	type SubagentResultFormat,
 } from "./result-contract.js";
+import type { SemanticCompatibility, SemanticSnapshot } from "./semantic-snapshot.js";
 import { resolveStatefulLimits } from "./stateful-limits.js";
 import { copyTurnTerminationReport } from "./timeout-checkpoint.js";
 import { type AgentTurnRunner, normalizeTransport, type SubagentTransport } from "./transport.js";
@@ -160,7 +178,8 @@ export class AgentRegistry {
 			if (cyclic || depth > this.maxDepth) continue;
 			this.agents.set(record.id, {
 				...record,
-				state: "idle",
+				state:
+					record.state === "running" || record.state === "starting" ? "interrupted" : record.state,
 				rootId,
 				depth,
 				currentTask: undefined,
@@ -171,6 +190,10 @@ export class AgentRegistry {
 				currentMailboxMessageIds: undefined,
 				children: [],
 				contextSourceIds: [...(record.contextSourceIds ?? [])],
+				capabilityGrant:
+					record.capabilityGrant?.state === "active"
+						? revokeCapabilityGrant(record.capabilityGrant, "restore-boundary", this.now())
+						: record.capabilityGrant,
 				mailbox: (record.mailbox ?? [])
 					.slice(-this.maxMailboxMessages)
 					.map((message) => ({ ...message, recipientId: record.id })),
@@ -203,7 +226,12 @@ export class AgentRegistry {
 		workspaceMode?: "worktree";
 		spawnIdempotencyKey?: string;
 		spawnRequestHash?: string;
+		contract?: DelegationContract;
 		resultFormat?: SubagentResultFormat;
+		executionPlan?: ExecutionPlan;
+		capabilityGrant?: CapabilityGrant;
+		semanticSnapshot?: SemanticSnapshot;
+		semanticCompatibility?: SemanticCompatibility;
 		target?: TargetPolicyAudit;
 	}): Promise<ManagedAgent> {
 		if (!input.task.trim()) throw new Error("Subagent tasks cannot be empty");
@@ -268,7 +296,12 @@ export class AgentRegistry {
 			workspaceMode: input.workspaceMode,
 			spawnIdempotencyKey: input.spawnIdempotencyKey,
 			spawnRequestHash: input.spawnRequestHash,
+			contract: input.contract,
 			resultFormat: input.resultFormat,
+			executionPlan: input.executionPlan,
+			capabilityGrant: input.capabilityGrant,
+			semanticSnapshot: input.semanticSnapshot,
+			semanticCompatibility: input.semanticCompatibility,
 			target: input.target,
 		};
 		this.agents.set(record.id, record);
@@ -308,7 +341,18 @@ export class AgentRegistry {
 		validateTurnLimits(options);
 		const boundedTask = truncateUtf8(task, this.maxTaskBytes).text;
 		const agent = this.require(id);
-		if (!["idle", "completed", "interrupted", "failed"].includes(agent.state)) {
+		if (
+			![
+				"idle",
+				"completed",
+				"blocked",
+				"needs-input",
+				"abstained",
+				"stale",
+				"interrupted",
+				"failed",
+			].includes(agent.state)
+		) {
 			throw new Error(`Agent ${id} cannot accept follow-up while ${agent.state}`);
 		}
 		const unread = agent.mailbox.filter((message) => !message.readAt);
@@ -316,6 +360,26 @@ export class AgentRegistry {
 		for (const message of unread) message.readAt = readAt;
 		agent.currentMailboxMessageIds = unread.map((message) => message.id);
 		this.startTurn(agent, boundedTask, options);
+		return this.copy(agent);
+	}
+
+	async updateSemanticState(
+		id: string,
+		executionPlan: ExecutionPlan,
+		capabilityGrant: CapabilityGrant,
+		snapshot: SemanticSnapshot,
+		compatibility: SemanticCompatibility,
+	): Promise<ManagedAgent> {
+		const agent = this.require(id);
+		if (agent.state === "running" || agent.state === "starting" || agent.state === "closed") {
+			throw new Error(`Agent ${id} cannot update semantic state while ${agent.state}`);
+		}
+		agent.executionPlan = copyExecutionPlan(executionPlan);
+		agent.capabilityGrant = structuredClone(capabilityGrant);
+		agent.semanticSnapshot = structuredClone(snapshot);
+		agent.semanticCompatibility = structuredClone(compatibility);
+		agent.updatedAt = this.now();
+		await this.changed();
 		return this.copy(agent);
 	}
 
@@ -408,6 +472,16 @@ export class AgentRegistry {
 		const agent = this.require(id);
 		if (agent.state !== "running" && agent.state !== "starting")
 			throw new Error(`Agent ${id} is not running`);
+		if (agent.capabilityGrant?.state === "active") {
+			agent.capabilityGrant = revokeCapabilityGrant(
+				agent.capabilityGrant,
+				"interrupted",
+				this.now(),
+			);
+		}
+		if (agent.executionPlan) {
+			agent.executionPlan = rotateExecutionPlanGeneration(agent.executionPlan);
+		}
 		if (agent.state === "starting") {
 			const index = this.queue.findIndex((entry) => entry.agent.id === id);
 			if (index >= 0) {
@@ -459,6 +533,14 @@ export class AgentRegistry {
 		if (agent.children.some((childId) => this.agents.get(childId)?.state !== "closed")) {
 			throw new Error(`Agent ${id} has active descendants; close the subtree instead`);
 		}
+		if (agent.state === "starting" || agent.state === "running") {
+			if (agent.capabilityGrant?.state === "active") {
+				agent.capabilityGrant = revokeCapabilityGrant(agent.capabilityGrant, "closed", this.now());
+			}
+			if (agent.executionPlan) {
+				agent.executionPlan = rotateExecutionPlanGeneration(agent.executionPlan);
+			}
+		}
 		if (agent.state === "starting") {
 			const index = this.queue.findIndex((entry) => entry.agent.id === id);
 			if (index >= 0) {
@@ -503,16 +585,41 @@ export class AgentRegistry {
 
 	async shutdown(): Promise<void> {
 		for (const entry of this.queue.splice(0)) {
-			entry.agent.state = "idle";
+			if (entry.agent.capabilityGrant?.state === "active") {
+				entry.agent.capabilityGrant = revokeCapabilityGrant(
+					entry.agent.capabilityGrant,
+					"shutdown",
+					this.now(),
+				);
+			}
+			if (entry.agent.executionPlan) {
+				entry.agent.executionPlan = rotateExecutionPlanGeneration(entry.agent.executionPlan);
+			}
+			entry.agent.state = "interrupted";
 			clearCurrentTurn(entry.agent);
 			entry.resolve(entry.agent);
 			this.running.delete(entry.agent.id);
+		}
+		for (const id of this.controllers.keys()) {
+			const agent = this.agents.get(id);
+			if (agent?.capabilityGrant?.state === "active") {
+				agent.capabilityGrant = revokeCapabilityGrant(
+					agent.capabilityGrant,
+					"shutdown",
+					this.now(),
+				);
+			}
+			if (agent?.executionPlan) {
+				agent.executionPlan = rotateExecutionPlanGeneration(agent.executionPlan);
+			}
 		}
 		for (const controller of this.controllers.values()) controller.abort();
 		await Promise.all([...this.running.values()].map((turn) => turn.catch(() => undefined)));
 		for (const agent of this.agents.values()) {
 			if (agent.state !== "closed") {
-				agent.state = "idle";
+				if (agent.state === "running" || agent.state === "starting") {
+					agent.state = "interrupted";
+				}
 				clearCurrentTurn(agent);
 			}
 		}
@@ -565,6 +672,7 @@ export class AgentRegistry {
 			contextBytes: agent.contextBytes,
 			contextSources: agent.contextSourceIds?.length,
 			contextTruncated: agent.contextTruncated,
+			contract: agent.contract ? structuredClone(agent.contract) : undefined,
 			resultFormat: agent.resultFormat,
 			target: agent.target ? { ...agent.target, trust: { ...agent.target.trust } } : undefined,
 			policy: agent.policy
@@ -578,6 +686,15 @@ export class AgentRegistry {
 				? copyStructuredResult(agent.structuredResult)
 				: undefined,
 			termination: agent.termination ? copyTurnTerminationReport(agent.termination) : undefined,
+			outcome: agent.outcome ? structuredClone(agent.outcome) : undefined,
+			executionPlan: agent.executionPlan ? copyExecutionPlan(agent.executionPlan) : undefined,
+			capabilityGrant: agent.capabilityGrant ? structuredClone(agent.capabilityGrant) : undefined,
+			semanticSnapshot: agent.semanticSnapshot
+				? structuredClone(agent.semanticSnapshot)
+				: undefined,
+			semanticCompatibility: agent.semanticCompatibility
+				? structuredClone(agent.semanticCompatibility)
+				: undefined,
 			telemetry: agent.telemetry ? copyTelemetry(agent.telemetry) : undefined,
 		};
 	}
@@ -632,6 +749,7 @@ export class AgentRegistry {
 		agent.currentMaxToolCalls = limits.maxToolCalls ?? agent.maxToolCalls;
 		agent.structuredResult = undefined;
 		agent.termination = undefined;
+		agent.outcome = undefined;
 		agent.updatedAt = this.now();
 		agent.telemetry = {
 			phase: "queued",
@@ -664,12 +782,34 @@ export class AgentRegistry {
 		task: string,
 		resolveQueued: (agent: ManagedAgent) => void,
 	): void {
+		if (
+			agent.capabilityGrant &&
+			agent.executionPlan &&
+			!isCapabilityGrantActive(agent.capabilityGrant, agent.executionPlan, this.now())
+		) {
+			agent.state = "failed";
+			agent.error = "Capability grant expired or no longer matches the accepted plan";
+			agent.outcome = classifyStructuredOutcome("failed", "capability-grant-invalid");
+			agent.currentTask = undefined;
+			agent.currentTimeoutMs = undefined;
+			agent.updatedAt = this.now();
+			resolveQueued(agent);
+			this.running.delete(agent.id);
+			void this.notifyTurnComplete({
+				agent: this.copy(agent),
+				task,
+				output: "",
+				error: agent.error,
+			}).then(() => this.changed());
+			return;
+		}
 		const controller = new AbortController();
 		this.controllers.set(agent.id, controller);
 		agent.state = "running";
 		agent.updatedAt = this.now();
 		const startedAt = this.now();
 		const completionKey = `completion:${agent.id}:${randomUUID()}`;
+		const acceptedPlanId = agent.executionPlan?.id;
 		let completionContent = "";
 		let completionOutput = "";
 		let completionError: string | undefined;
@@ -701,12 +841,43 @@ export class AgentRegistry {
 						: undefined,
 				});
 				agent.history = agent.history.slice(-this.maxHistoryTurns);
-				agent.state = outcome.aborted
-					? "interrupted"
-					: outcome.exitCode === 0
-						? "completed"
-						: "failed";
+				agent.structuredResult =
+					outcome.structuredResult ?? parseAnyStructuredSubagentResult(output, agent.resultFormat);
+				agent.outcome =
+					outcome.outcome ??
+					(outcome.aborted
+						? classifyStructuredOutcome("interrupted", "transport-aborted")
+						: agent.structuredResult?.version === "pi-subagents:result:v2"
+							? classifyStructuredOutcome(
+									agent.structuredResult.status,
+									agent.structuredResult.reasonCode,
+								)
+							: agent.resultFormat !== undefined &&
+									agent.resultFormat !== "text" &&
+									agent.structuredResult === undefined
+								? classifyStructuredOutcome("contract-invalid", "malformed-structured-result")
+								: undefined);
+				const staleGeneration = Boolean(
+					acceptedPlanId && agent.executionPlan?.id !== acceptedPlanId,
+				);
+				if (staleGeneration) {
+					agent.outcome = classifyStructuredOutcome("stale", "cancelled-generation");
+				}
+				agent.state = staleGeneration
+					? "stale"
+					: outcome.aborted
+						? "interrupted"
+						: outcome.exitCode !== 0
+							? "failed"
+							: lifecycleStateForOutcome(agent.outcome?.status);
 				agent.error = error;
+				if (agent.capabilityGrant?.state === "active") {
+					agent.capabilityGrant = revokeCapabilityGrant(
+						agent.capabilityGrant,
+						"turn-settled",
+						this.now(),
+					);
+				}
 				agent.policy = outcome.policy;
 				agent.telemetry = outcome.telemetry
 					? {
@@ -717,11 +888,6 @@ export class AgentRegistry {
 							},
 						}
 					: agent.telemetry;
-				agent.structuredResult =
-					outcome.structuredResult ??
-					(agent.resultFormat === "structured-v1"
-						? parseStructuredSubagentResult(output)
-						: undefined);
 				agent.termination = outcome.termination
 					? copyTurnTerminationReport(outcome.termination)
 					: undefined;
@@ -731,7 +897,29 @@ export class AgentRegistry {
 				return agent;
 			})
 			.catch((error) => {
-				agent.state = controller.signal.aborted ? "interrupted" : "failed";
+				const staleGeneration = Boolean(
+					acceptedPlanId && agent.executionPlan?.id !== acceptedPlanId,
+				);
+				agent.state = staleGeneration
+					? "stale"
+					: controller.signal.aborted
+						? "interrupted"
+						: "failed";
+				agent.outcome = classifyStructuredOutcome(
+					staleGeneration ? "stale" : controller.signal.aborted ? "interrupted" : "failed",
+					staleGeneration
+						? "cancelled-generation"
+						: controller.signal.aborted
+							? "transport-aborted"
+							: "transport-error",
+				);
+				if (agent.capabilityGrant?.state === "active") {
+					agent.capabilityGrant = revokeCapabilityGrant(
+						agent.capabilityGrant,
+						"turn-failed",
+						this.now(),
+					);
+				}
 				agent.error = truncateUtf8(
 					error instanceof Error ? error.message : String(error),
 					this.maxTurnOutputBytes,
@@ -940,6 +1128,7 @@ export class AgentRegistry {
 				: undefined,
 			history: agent.history.map((turn) => ({ ...turn })),
 			mailbox: agent.mailbox.map((message) => ({ ...message })),
+			contract: agent.contract ? structuredClone(agent.contract) : undefined,
 			target: agent.target ? { ...agent.target, trust: { ...agent.target.trust } } : undefined,
 			policy: agent.policy
 				? {
@@ -952,19 +1141,41 @@ export class AgentRegistry {
 				? copyStructuredResult(agent.structuredResult)
 				: undefined,
 			termination: agent.termination ? copyTurnTerminationReport(agent.termination) : undefined,
+			outcome: agent.outcome ? structuredClone(agent.outcome) : undefined,
+			executionPlan: agent.executionPlan ? copyExecutionPlan(agent.executionPlan) : undefined,
+			capabilityGrant: agent.capabilityGrant ? structuredClone(agent.capabilityGrant) : undefined,
+			semanticSnapshot: agent.semanticSnapshot
+				? structuredClone(agent.semanticSnapshot)
+				: undefined,
+			semanticCompatibility: agent.semanticCompatibility
+				? structuredClone(agent.semanticCompatibility)
+				: undefined,
 			telemetry: agent.telemetry ? copyTelemetry(agent.telemetry) : undefined,
 		};
 	}
 }
 
-function copyStructuredResult(value: StructuredSubagentResult): StructuredSubagentResult {
-	return {
-		...value,
-		evidence: [...value.evidence],
-		changes: [...value.changes],
-		verification: [...value.verification],
-		risks: [...value.risks],
-	};
+function lifecycleStateForOutcome(
+	status: import("./result-contract.js").SubagentOutcomeStatus | undefined,
+): AgentLifecycleState {
+	switch (status) {
+		case "blocked":
+		case "needs-input":
+		case "abstained":
+		case "stale":
+			return status;
+		case "failed":
+		case "contract-invalid":
+			return "failed";
+		case "interrupted":
+			return "interrupted";
+		default:
+			return "completed";
+	}
+}
+
+function copyStructuredResult(value: AnyStructuredSubagentResult): AnyStructuredSubagentResult {
+	return structuredClone(value);
 }
 
 function copyTelemetry(value: TransportTelemetry): TransportTelemetry {

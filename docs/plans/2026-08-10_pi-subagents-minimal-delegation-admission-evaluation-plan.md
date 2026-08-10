@@ -1,5 +1,8 @@
 # Pi Subagents Minimal Delegation Admission Evaluation Plan
 
+- **Status:** Revise recorded for an explicit opt-in implementation; paired live-provider evaluation remains deferred.
+- **Decision:** [`2026-08-10_pi-subagents-admission-gate-decision.md`](../benchmarks/2026-08-10_pi-subagents-admission-gate-decision.md).
+
 ## Post-hoc Origin
 
 This plan was added after commit `07df6d8b` created the initial delegation-intelligence roadmap and its five implementation plans.
@@ -79,17 +82,17 @@ Every result will remain tied to its task generation, base state, accepted plan,
 ## Plan
 
 - [ ] **Post-hoc addition:** Freeze the admission question, task strata, compared arms, primary outcomes, aggregate budgets, stopping rules, minimum sample size, and paired confidence method before observing results; verify the protocol against both deeper research reports.
-- [ ] **Post-hoc addition:** Define the bounded audit-only recommendation and reason schema for parent-owned direct work, one child, one child plus verification, bounded two-child work, and insufficient evidence; verify no recommendation can launch work.
-- [ ] **Post-hoc addition:** Add deterministic policy tests for context pressure, declared independent work, dense coupling, missing verification, unsupported capability, insufficient budget, stale generation, and ambiguous requirements without task-keyword matching or provider calls.
-- [ ] **Post-hoc addition:** Build benchmark adapters for a strong single-agent arm, one-child arm, equal-budget best-of-N arm, naive-parallel arm, fixed two-child arm, and admission-policy-selected arm with one shared model, tool, context, evaluator, retry, token or dollar, and wall-clock protocol.
-- [ ] **Post-hoc addition:** Enforce at most two concurrent mutating children and no recursive grandchildren in every experimental multi-child arm; verify attempted width or depth expansion is rejected before child allocation.
-- [ ] **Post-hoc addition:** Require one integration owner to check task generation, base commit, dependency or read-set versions, accepted-plan identity, scope, patch digest, and evidence before applying experimental artifacts.
+- [x] **Post-hoc addition:** Define the bounded audit-only recommendation and reason schema for parent-owned direct work, one child, one child plus verification, bounded two-child work, and insufficient evidence; verify no recommendation can launch work.
+- [x] **Post-hoc addition:** Add deterministic policy tests for context pressure, declared independent work, dense coupling, missing verification, unsupported capability, insufficient budget, stale generation, and ambiguous requirements without task-keyword matching or provider calls.
+- [x] **Post-hoc addition:** Build benchmark adapter contracts and dry-run validation for a strong single-agent arm, one-child arm, equal-budget best-of-N arm, naive-parallel arm, fixed two-child arm, and admission-policy-selected arm with one shared model, tool, context, evaluator, retry, token or dollar, and wall-clock protocol.
+- [x] **Post-hoc addition:** Enforce at most two concurrent mutating children and no recursive grandchildren in every experimental multi-child arm; verify attempted width or depth expansion is rejected before child allocation.
+- [x] **Post-hoc addition:** Require one integration owner to check task generation, base commit, dependency or read-set versions, accepted-plan identity, scope, patch digest, and evidence before applying experimental artifacts.
 - [ ] **Post-hoc addition:** Run verification in a fresh context against the exact integrated tree and preserve accept, bounded rework, and reject outcomes separately from worker self-reports.
 - [ ] **Post-hoc addition:** Inject cancellation, session replacement, stale dependency, merge conflict, verifier disagreement, transient tool failure, worker crash, timeout, and late completion; measure propagation latency, leaked owned work, stale-result rejection, and accepted late results.
 - [ ] **Post-hoc addition:** Run paired repeated repository tasks and preserve per-instance quality, token, dollar, wall-clock, retry, handoff, conflict, integration, verification, cancellation, and failure outcomes for every arm.
 - [ ] **Post-hoc addition:** Report verified success, verified success per dollar, wall-clock critical path, unnecessary delegation, transfer coverage, conflict and rework rates, permission precision, false completion, stale acceptance, and confidence intervals without selecting only favorable task strata.
-- [ ] **Post-hoc addition:** Record **Admit**, **Revise**, or **Defer** with the admitted task strata, policy bounds, failed criteria, limitations, and exact Phase 5 consequence; require explicit user approval before executing an admitted Phase 5 plan.
-- [ ] **Post-hoc addition:** Update the roadmap, implementation notes, and benchmark guidance with the decision and evidence while keeping provider data bounded, redacted, and free of credentials or private repository content.
+- [x] **Post-hoc addition:** Record **Admit**, **Revise**, or **Defer** with the admitted task strata, policy bounds, failed criteria, limitations, and exact Phase 5 consequence; require explicit user approval before executing an admitted Phase 5 plan.
+- [x] **Post-hoc addition:** Update the roadmap, implementation notes, and benchmark guidance with the decision and evidence while keeping provider data bounded, redacted, and free of credentials or private repository content.
 - [ ] **Post-hoc addition:** Run focused deterministic tests, the benchmark's dry-run validation, `npm test`, `npm run check`, `git diff --check`, and `just pack subagents`; record unavailable live-provider evidence without substituting simulation claims.
 
 ## Completion Checklist

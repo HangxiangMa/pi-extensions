@@ -421,15 +421,19 @@ export class RpcTransport implements SubagentTransport {
 			publish({ phase: "failed", failurePhase: "starting" });
 			return { output: "", exitCode: 1, error: `Unknown subagent: ${agent.agent}`, telemetry };
 		}
+		const effectiveAgentConfig = {
+			...agentConfig,
+			tools: agent.executionPlan?.effectiveTools ?? agentConfig.tools,
+		};
 		try {
-			validateRpcTools(agentConfig.tools);
+			validateRpcTools(effectiveAgentConfig.tools);
 		} catch (error) {
 			publish({ phase: "failed", failurePhase: "starting" });
 			return { output: "", exitCode: 1, error: boundedError(error), telemetry };
 		}
 		let child: RpcChildRecord;
 		try {
-			child = await this.getOrCreate(agent, agentConfig, signal);
+			child = await this.getOrCreate(agent, effectiveAgentConfig, signal);
 		} catch (error) {
 			publish({ phase: signal.aborted ? "interrupted" : "failed", failurePhase: "starting" });
 			return {

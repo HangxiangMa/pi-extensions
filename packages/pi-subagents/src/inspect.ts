@@ -13,6 +13,7 @@ import {
 	type DelegationCwdPolicy,
 	discoverAgents,
 } from "./agents.js";
+import { projectCapabilityManifest } from "./capabilities.js";
 import { resolveConsultTools } from "./consult-policy.js";
 import { buildContextSnapshot, type ContextMode } from "./context.js";
 import { renderInspectCall, renderInspectResult } from "./inspect-render.js";
@@ -339,6 +340,7 @@ function projectAgent(
 				: safeDisplayPath(agent.filePath, ctx.cwd),
 		model: agent.model ? boundedPrivateText(agent.model, 256) : undefined,
 		thinkingLevel: agent.thinkingLevel,
+		capabilityManifest: projectCapabilityManifest(agent.capabilityManifest),
 		...(includeTools
 			? { tools, toolCount: agent.tools?.length }
 			: { toolCount: agent.tools?.length }),
@@ -378,9 +380,52 @@ function projectRun(run: AgentRunInspectionDetail, ctx: ExtensionContext): Recor
 			bytes: run.contextBytes ?? 0,
 			truncated: run.contextTruncated === true,
 		},
+		contract: run.contract
+			? {
+					version: run.contract.version,
+					level: run.contract.level,
+					taskId: boundedPrivateText(run.contract.taskId, 256),
+					enforcement: run.contract.enforcement,
+					dependencies: run.contract.dependencies.length,
+					acceptanceCriteria: run.contract.acceptanceCriteria.length,
+					requiredEvidence: run.contract.requiredEvidence.length,
+				}
+			: undefined,
 		resultFormat: run.resultFormat ?? "text",
 		structuredResult: run.structuredResult,
 		termination: run.termination,
+		outcome: run.outcome,
+		capabilityGrant: run.capabilityGrant
+			? {
+					version: run.capabilityGrant.version,
+					id: run.capabilityGrant.id,
+					executionPlanId: run.capabilityGrant.executionPlanId,
+					taskGeneration: run.capabilityGrant.taskGeneration,
+					issuedAt: run.capabilityGrant.issuedAt,
+					expiresAt: run.capabilityGrant.expiresAt,
+					state: run.capabilityGrant.state,
+					revokedAt: run.capabilityGrant.revokedAt,
+					revocationReason: run.capabilityGrant.revocationReason,
+				}
+			: undefined,
+		executionPlan: run.executionPlan
+			? {
+					...run.executionPlan,
+					target: {
+						...run.executionPlan.target,
+						cwd: safeDisplayPath(run.executionPlan.target.cwd, ctx.cwd),
+						trust: { ...run.executionPlan.target.trust, sourcePath: undefined },
+					},
+				}
+			: undefined,
+		semanticSnapshot: run.semanticSnapshot
+			? {
+					version: run.semanticSnapshot.version,
+					digest: run.semanticSnapshot.digest,
+					components: { ...run.semanticSnapshot.components },
+				}
+			: undefined,
+		semanticCompatibility: run.semanticCompatibility,
 		telemetry: run.telemetry,
 		currentTask: run.currentTask ? boundedPrivateText(run.currentTask, 2 * 1024) : undefined,
 		error: run.error ? boundedPrivateText(run.error, 2 * 1024) : undefined,

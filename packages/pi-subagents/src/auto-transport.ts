@@ -81,14 +81,15 @@ export class AutoTransport implements SubagentTransport {
 		if (!config) {
 			throw new Error(`Automatic transport cannot resolve subagent ${agent.agent}`);
 		}
-		const unsupported = (config.tools ?? []).filter((tool) => !BUILT_IN_TOOL_NAMES.has(tool));
+		const effectiveTools = agent.executionPlan?.effectiveTools ?? config.tools;
+		const unsupported = (effectiveTools ?? []).filter((tool) => !BUILT_IN_TOOL_NAMES.has(tool));
 		if (unsupported.length > 0) {
 			return {
 				kind: "subprocess",
 				reason: `extension/custom tools require subprocess: ${unsupported.join(", ")}`,
 			};
 		}
-		if (isWriteCapable(config.tools)) {
+		if (isWriteCapable(effectiveTools)) {
 			return {
 				kind: "rpc",
 				reason: "write-capable built-in tools use a persistent isolated process",

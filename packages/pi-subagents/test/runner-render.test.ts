@@ -6,6 +6,8 @@ import path from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
+import { normalizeDelegationContract } from "../src/delegation-contract.js";
+import { createExecutionPlan } from "../src/execution-plan.js";
 import {
 	DEFAULT_MAX_CONTEXT_BYTES,
 	DEFAULT_MAX_OUTPUT_BYTES,
@@ -154,6 +156,88 @@ test("runSingleAgent launch policies preserve agent tools unless explicitly over
 	);
 	assert.match(result.finalOutput ?? "", /--tools/);
 	assert.match(result.finalOutput ?? "", /read/);
+});
+
+test("runSingleAgent captures structured v2 results and keeps the display task", async () => {
+	const output = JSON.stringify({
+		version: "pi-subagents:result:v2",
+		status: "completed",
+		summary: "done",
+		claims: [],
+		artifacts: [],
+		changes: [],
+		verification: [],
+		limitations: [],
+		unresolvedDependencies: [],
+	});
+	const script = [
+		`const text=${JSON.stringify(output)};`,
+		"const message={role:'assistant',content:[{type:'text',text}],stopReason:'stop',timestamp:Date.now()};",
+		"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+	].join("");
+	const contract = normalizeDelegationContract({
+		version: "pi-subagents:delegation:v2",
+		level: "minimal",
+		taskId: "task-1",
+		objective: "test",
+	});
+	assert.ok(contract);
+	const agent = {
+		name: "test",
+		description: "test",
+		systemPrompt: "",
+		source: "built-in" as const,
+		filePath: "built-in:test",
+	};
+	const executionPlan = createExecutionPlan({
+		contract,
+		agent,
+		target: {
+			cwd: process.cwd(),
+			boundary: "current-workspace",
+			trust: { kind: "session-trusted", projectTrusted: true },
+		},
+		workspaceMode: "shared",
+		transport: "subprocess",
+		resultFormat: "structured-v2",
+		taskGeneration: 7,
+	});
+	const result = await runSingleAgent(
+		process.cwd(),
+		[agent],
+		"test",
+		"executed prompt with metadata",
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		1_000,
+		undefined,
+		(results) => ({ mode: "single", agentScope: "user", projectAgentsDir: null, results }),
+		{ command: process.execPath, argsPrefix: ["-e", script, "--"] },
+		{
+			resultFormat: "structured-v2",
+			contract,
+			displayTask: "original task",
+			executionPlan,
+		},
+	);
+	assert.equal(result.task, "original task");
+	assert.equal(result.structuredResult?.version, "pi-subagents:result:v2");
+	assert.equal(result.resultContractInvalid, false);
+	assert.equal(result.contract?.taskId, "task-1");
+	assert.equal(
+		result.structuredResult?.version === "pi-subagents:result:v2"
+			? result.structuredResult.provenance?.taskGeneration
+			: undefined,
+		7,
+	);
+	assert.equal(
+		result.structuredResult?.version === "pi-subagents:result:v2"
+			? result.structuredResult.provenance?.executionPlanId
+			: undefined,
+		executionPlan.id,
+	);
 });
 
 test("runSingleAgent distinguishes child launch failures", async () => {
