@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "./agents.js";
 import {
@@ -221,19 +222,26 @@ export function applyWorkflowPlanPatch(
 		}
 		baseCompiled = result;
 	}
+	const normalizedPlan = mergeCompiledActivePlan(
+		candidatePlan,
+		baseCompiled,
+		cancelled,
+		modified,
+		byState,
+	);
 	const nextGeneration = input.record.workflowGeneration + 1;
 	const nextRevision = input.record.revision + 1;
 	const historyEntry = captureHistory(input.record, ledger);
 	const nextPlanId = revisionIdentity(
 		input.record.planId,
-		candidatePlan,
+		normalizedPlan,
 		nextGeneration,
 		nextRevision,
 		cancelled,
 		invalidated,
 	);
 	const nextLedger = buildPatchedLedger(
-		candidatePlan,
+		normalizedPlan,
 		ledger,
 		baseCompiled,
 		modified,
@@ -253,7 +261,7 @@ export function applyWorkflowPlanPatch(
 			planId: nextPlanId,
 			workflowGeneration: nextGeneration,
 			revision: nextRevision,
-			plan: candidatePlan,
+			plan: normalizedPlan,
 			cancelledTaskIds: [...cancelled].sort(),
 			invalidatedTaskIds: [...invalidated].sort(),
 			history: [...input.record.history, historyEntry],
@@ -263,6 +271,37 @@ export function applyWorkflowPlanPatch(
 		taskGenerations,
 		replayedTaskIds: [],
 	};
+}
+
+function mergeCompiledActivePlan(
+	candidate: WorkflowPlan,
+	compiled: CompiledWorkflowPlan | undefined,
+	cancelled: ReadonlySet<string>,
+	modified: Set<string>,
+	byState: ReadonlyMap<string, WorkItemRecord>,
+): WorkflowPlan {
+	if (!compiled) return candidate;
+	const compiledById = new Map(compiled.plan.tasks.map((task) => [task.id, task]));
+	const candidateIds = new Set(candidate.tasks.map((task) => task.id));
+	const tasks = candidate.tasks.map((task) => {
+		if (cancelled.has(task.id)) return task;
+		const normalized = compiledById.get(task.id);
+		if (!normalized) {
+			throw new Error(`Compiled patch omitted active workflow task ${task.id}`);
+		}
+		if (!isDeepStrictEqual(normalized, task)) {
+			const state = byState.get(task.id);
+			if (state && !isPatchEligible(state)) {
+				throw new Error(`Workflow normalization would rewrite immutable task ${task.id}`);
+			}
+			modified.add(task.id);
+		}
+		return normalized;
+	});
+	for (const task of compiled.plan.tasks) {
+		if (!candidateIds.has(task.id)) tasks.push(task);
+	}
+	return parseWorkflowPlan({ ...candidate, tasks });
 }
 
 function rotateCompiledPlan(

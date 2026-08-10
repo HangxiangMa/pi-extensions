@@ -11,6 +11,7 @@ import {
 	parseWorkflowPlanPatch,
 	WORKFLOW_PLAN_PATCH_VERSION,
 	WORKFLOW_PLAN_VERSION,
+	workflowPlanIdentity,
 } from "../src/automation-contract.js";
 import { CAPABILITY_MANIFEST_VERSION } from "../src/capabilities.js";
 import type { TargetPolicyAudit } from "../src/cwd-policy.js";
@@ -210,6 +211,10 @@ test("patches cannot remove required verification or revive a cancelled generati
 		agents,
 		target,
 	});
+	assert.deepEqual(
+		cancelled.record.plan.tasks.map((candidate) => candidate.id).sort(),
+		record.plan.tasks.map((candidate) => candidate.id).sort(),
+	);
 	assert.throws(
 		() =>
 			applyWorkflowPlanPatch({
@@ -258,6 +263,176 @@ test("patches reject authority widening, excess budget, and cycles", () => {
 				target,
 			}),
 		/cycle/i,
+	);
+});
+
+test("replacement tasks persist compiler-normalized caller requirements", () => {
+	const { record, ledger } = compiledRecord();
+	ledger.settle("implement", "blocked", "verification-rework");
+	const result = applyWorkflowPlanPatch({
+		record,
+		ledger: ledger.snapshot(),
+		patch: patch(record.planId, 0, [
+			{
+				type: "replace-task",
+				taskId: "implement",
+				task: task("implement", {
+					acceptanceCriteria: ["Replacement-specific check"],
+					requiredEvidence: ["replacement evidence"],
+				}),
+			},
+		]),
+		agents,
+		target,
+	});
+	for (const plan of [result.record.plan, result.compiled?.plan]) {
+		const normalized = plan?.tasks.find((candidate) => candidate.id === "implement");
+		assert.ok(normalized?.acceptanceCriteria.includes("Tests pass"));
+		assert.ok(normalized?.acceptanceCriteria.includes("Replacement-specific check"));
+		assert.ok(normalized?.requiredEvidence.includes("test output"));
+		assert.ok(normalized?.requiredEvidence.includes("replacement evidence"));
+	}
+	const recorded = result.ledger.items.find((item) => item.id === "implement");
+	assert.ok(recorded?.acceptanceCriteria.includes("Tests pass"));
+	assert.ok(recorded?.acceptanceCriteria.includes("Replacement-specific check"));
+});
+
+test("added authoritative tasks persist compiler-normalized caller requirements", () => {
+	const { record, ledger } = compiledRecord();
+	const result = applyWorkflowPlanPatch({
+		record,
+		ledger: ledger.snapshot(),
+		patch: patch(record.planId, 0, [
+			{
+				type: "add-task",
+				task: task("report", {
+					sideEffectPolicy: "read-only",
+					writePaths: [],
+					ownershipKeys: ["report"],
+					requiredCapabilities: ["code-review"],
+					requiredTools: ["read"],
+					acceptanceCriteria: ["Report-specific check"],
+					requiredEvidence: ["report evidence"],
+					integrationOwner: false,
+				}),
+			},
+		]),
+		agents,
+		target,
+	});
+	for (const plan of [result.record.plan, result.compiled?.plan]) {
+		const normalized = plan?.tasks.find((candidate) => candidate.id === "report");
+		assert.ok(normalized?.acceptanceCriteria.includes("Tests pass"));
+		assert.ok(normalized?.acceptanceCriteria.includes("Report-specific check"));
+		assert.ok(normalized?.requiredEvidence.includes("test output"));
+		assert.ok(normalized?.requiredEvidence.includes("report evidence"));
+	}
+	const recorded = result.ledger.items.find((item) => item.id === "report");
+	assert.ok(recorded?.acceptanceCriteria.includes("Tests pass"));
+	assert.ok(recorded?.acceptanceCriteria.includes("Report-specific check"));
+});
+
+test("normalization updates stale active ledger tasks during an unrelated patch", () => {
+	const { record, ledger } = compiledRecord();
+	const stalePlan = parseWorkflowPlan({
+		...record.plan,
+		tasks: record.plan.tasks.map((candidate) =>
+			candidate.id === "implement"
+				? {
+						...candidate,
+						acceptanceCriteria: ["Legacy-only check"],
+						requiredEvidence: ["legacy evidence"],
+					}
+				: candidate,
+		),
+	});
+	const staleRecord = {
+		...record,
+		plan: stalePlan,
+		planId: workflowPlanIdentity(stalePlan, 0, 0),
+	};
+	const staleLedger = ledger.snapshot();
+	const staleItem = staleLedger.items.find((item) => item.id === "implement");
+	assert.ok(staleItem);
+	staleItem.acceptanceCriteria = ["Legacy-only check"];
+	const result = applyWorkflowPlanPatch({
+		record: staleRecord,
+		ledger: staleLedger,
+		patch: patch(staleRecord.planId, 0, [
+			{
+				type: "add-task",
+				task: task("report", {
+					sideEffectPolicy: "read-only",
+					writePaths: [],
+					ownershipKeys: ["report"],
+					requiredCapabilities: ["code-review"],
+					requiredTools: ["read"],
+					integrationOwner: false,
+				}),
+			},
+		]),
+		agents,
+		target,
+	});
+	const normalized = result.ledger.items.find((item) => item.id === "implement");
+	assert.ok(normalized?.acceptanceCriteria.includes("Tests pass"));
+	assert.equal(normalized?.taskGeneration, 2);
+	assert.equal(
+		result.compiled?.executionPlans.find((plan) => plan.taskId === "implement")?.taskGeneration,
+		2,
+	);
+});
+
+test("normalization refuses to rewrite an immutable completed task", () => {
+	const { record, ledger } = compiledRecord();
+	const stalePlan = parseWorkflowPlan({
+		...record.plan,
+		tasks: record.plan.tasks.map((candidate) =>
+			candidate.id === "implement"
+				? {
+						...candidate,
+						acceptanceCriteria: ["Legacy-only check"],
+						requiredEvidence: ["legacy evidence"],
+					}
+				: candidate,
+		),
+	});
+	const staleRecord = {
+		...record,
+		plan: stalePlan,
+		planId: workflowPlanIdentity(stalePlan, 0, 0),
+	};
+	const started = ledger.start("implement", "agent:worker");
+	ledger.complete("implement", {
+		taskGeneration: started.taskGeneration,
+		executionPlanId: "a".repeat(64),
+	});
+	const staleLedger = ledger.snapshot();
+	const staleItem = staleLedger.items.find((item) => item.id === "implement");
+	assert.ok(staleItem);
+	staleItem.acceptanceCriteria = ["Legacy-only check"];
+	assert.throws(
+		() =>
+			applyWorkflowPlanPatch({
+				record: staleRecord,
+				ledger: staleLedger,
+				patch: patch(staleRecord.planId, 0, [
+					{
+						type: "add-task",
+						task: task("report", {
+							sideEffectPolicy: "read-only",
+							writePaths: [],
+							ownershipKeys: ["report"],
+							requiredCapabilities: ["code-review"],
+							requiredTools: ["read"],
+							integrationOwner: false,
+						}),
+					},
+				]),
+				agents,
+				target,
+			}),
+		/normalization.*immutable/i,
 	);
 });
 
