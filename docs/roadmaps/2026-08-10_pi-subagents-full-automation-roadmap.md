@@ -1,6 +1,6 @@
 # Pi Subagents Full Automation Roadmap
 
-- **Status:** Proposed continuation of the implemented opt-in delegation-intelligence foundation.
+- **Status:** Phases 1 and 2 implemented; rolling runtime and production qualification remain planned or deferred.
 - **Audience:** `@narumitw/pi-subagents` maintainers and contributors.
 - **Planning horizon:** Evidence-qualified phases without delivery dates.
 - **Baseline:** [`Pi Subagents Delegation Intelligence Roadmap`](2026-08-10_pi-subagents-delegation-intelligence-roadmap.md).
@@ -26,19 +26,19 @@ Keep `pi-subagents` as the owner of delegation planning, workflow state, authori
 ## Current State
 
 - Structured delegation contracts, typed outcomes, capability manifests, `ExecutionPlan`, capability grants, WorkItem state, artifacts, semantic snapshots, cancellation generations, explicit workflows, panels, retries, hedging, and persistence already exist.
-- The caller still selects exactly one execution mode and supplies the task graph, scopes, verifier relationship, retry policy, and topology.
-- `workflow.honorAdmission` can decline caller-authored work but cannot construct or widen a workflow.
-- Independent verification policy validates an explicitly declared verifier, while ordinary completion can still accept a worker's own structured `passed` verification entry.
-- `verifyManagedIntegration()` and `WorkItemLedger.acceptIntegration()` define a stronger acceptance boundary but are not wired into the blocking workflow execution path.
-- The workflow scheduler selects a batch with `activeCount: 0`, waits for that batch to settle, and then schedules again.
-- Workflow persistence saves ledger snapshots, but the blocking execution path does not load and reconcile an interrupted workflow for continuation.
+- Caller-authored `subagent.workflow` remains available for exact graph, scope, verifier, retry, and topology control.
+- The explicit `subagent_auto` surface accepts one bounded objective, uses one read-only planning turn, and deterministically compiles the smallest admitted existing workflow.
+- Explicit `workflow.verifiedExecution` separates execution from acceptance, synthesizes or validates one distinct least-authority verifier, runs executor-owned checks against the exact submitted tree, and permits at most one bounded rework cycle.
+- The blocking verified-workflow path uses `verifyManagedIntegration()` and `WorkItemLedger.acceptIntegration()` before terminal success; worker self-verification cannot satisfy acceptance.
+- The workflow scheduler still selects a batch with `activeCount: 0`, waits for that batch to settle, and then schedules again.
+- Workflow persistence saves and inertly restores ledger snapshots, but the blocking execution path does not reconcile and resume an interrupted workflow.
 - The admission decision remains opt-in because no paired live-provider repository benchmark has established a general quality, cost, or latency advantage over strong simpler baselines.
 
 ## Plan Ownership
 
 | Concern | Current owner | Relationship to earlier plans |
 | --- | --- | --- |
-| Independent acceptance, immutable verification, and bounded rework | [`Verified Execution Loop Plan`](../plans/2026-08-10_pi-subagents-verified-execution-loop-plan.md) | Continues the implemented WorkItem baseline and owns the acceptance-state migration. |
+| Independent acceptance, immutable verification, and bounded rework | [`Verified Execution Loop Plan`](../plans/archived/2026-08-10_pi-subagents-verified-execution-loop-plan.md) | Implemented as the explicit `workflow.verifiedExecution` surface and archived with its verification record. |
 | Objective-to-DAG compilation and graph revision | [`Autonomous Workflow Planning Plan`](../plans/archived/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md) | Implemented as the explicit `subagent_auto` surface without reopening earlier baselines. |
 | Rolling scheduling, recovery, persistence reconciliation, and resume | [`Event-Driven Workflow Runtime Plan`](../plans/2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md) | Continues the dependency scheduler and semantic snapshot baseline without duplicating it. |
 | Matched evidence before a default change | [`Minimal Delegation Admission Evaluation Plan`](../plans/2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) | Remains the sole active admission evidence gate. |
@@ -60,17 +60,17 @@ The original implementation plans now live under [`docs/plans/superseded/`](../p
 
 ### Phase 1: Make verified completion authoritative
 
-- [ ] Every opted-in mutating or integration workflow automatically receives a distinct verifier when risk policy requires one.
-- [ ] The verifier cannot mutate the submitted state, and executor-owned before-and-after identities reject any verification-time drift.
-- [ ] Verification runs in a fresh context against the exact integrated state and returns an executor-validated receipt bound to task generation, `ExecutionPlan`, repository identity, patch digest, and required evidence.
-- [ ] WorkItem execution completion and acceptance are distinct versioned states, so verification and rework do not depend on the legacy terminal `completed` state.
-- [ ] The blocking workflow path uses managed integration admission before terminal success and rejects worker self-verification as sufficient acceptance.
-- [ ] Verifier rejection can trigger at most the configured bounded rework cycle, after which the workflow returns rework, rejected, or failed without claiming success.
-- [ ] Stale, cancelled, replaced, or mismatched verification evidence cannot complete current work.
+- [x] Every explicitly verified mutating or integration workflow receives a distinct verifier when the verified-execution policy requires one.
+- [x] The verifier cannot mutate the submitted state, and executor-owned before-and-after identities reject any verification-time drift.
+- [x] Verification runs in a fresh context against the exact integrated state and returns an executor-validated receipt bound to task generation, `ExecutionPlan`, repository identity, patch digest, and required evidence.
+- [x] WorkItem execution completion and acceptance are distinct versioned states, so verification and rework do not depend on the legacy terminal `completed` state.
+- [x] The blocking verified-workflow path uses managed integration admission before terminal success and rejects worker self-verification as sufficient acceptance.
+- [x] Verifier rejection can trigger at most the configured bounded rework cycle, after which the workflow returns rework, rejected, or failed without claiming success.
+- [x] Stale, cancelled, replaced, or mismatched verification evidence cannot complete current work.
 
 **Outcome:** Autonomous execution has a trustworthy stopping condition and a bounded correction loop.
 
-**Execution plan:** [`2026-08-10_pi-subagents-verified-execution-loop-plan.md`](../plans/2026-08-10_pi-subagents-verified-execution-loop-plan.md).
+**Completed plan:** [`2026-08-10_pi-subagents-verified-execution-loop-plan.md`](../plans/archived/2026-08-10_pi-subagents-verified-execution-loop-plan.md).
 
 ### Phase 2: Accept one objective and construct the workflow
 
@@ -109,14 +109,14 @@ The original implementation plans now live under [`docs/plans/superseded/`](../p
 
 | Indicator | Current baseline | Required invariant or decision |
 | --- | --- | --- |
-| Mutating workflow accepted from worker self-report alone | Possible | 0 in full-automation mode |
-| Verifier-caused state drift accepted | Not represented | 0 |
-| Executed but unaccepted work treated as terminal success | Possible through legacy `completed` semantics | 0 in full-automation mode |
-| Accepted stale or old-generation verification receipts | Rejected in isolated helpers | 0 end to end |
-| Managed integration checks exercised by workflow execution | Not wired | Every automated mutating acceptance |
+| Mutating workflow accepted from worker self-report alone | Rejected in explicit verified-execution mode | 0 in full-automation mode |
+| Verifier-caused state drift accepted | Rejected by exact-tree before-and-after checks | 0 |
+| Executed but unaccepted work treated as terminal success | Rejected by versioned acceptance state in verified-execution mode | 0 in full-automation mode |
+| Accepted stale or old-generation verification receipts | Rejected end to end in verified-execution tests | 0 end to end |
+| Managed integration checks exercised by workflow execution | Wired for explicit verified execution | Every automated mutating acceptance |
 | Unrelated ready work blocked by a slow selected sibling | Possible under batch scheduling | 0 when safe capacity is available |
 | Uncertain mutating work replayed after restore | Not resumed automatically today | 0 |
-| Automated rework cycles | Not implemented | Hard bounded with no unbounded loop |
+| Automated rework cycles | Zero or one in explicit verified-execution mode | Hard bounded with no unbounded loop |
 | Automatic topology quality against matched simpler baselines | Unknown | Decision by task class before any default change |
 | Concurrent mutating children | Hard cap available | At most two until separately approved |
 | Recursive workflow grandchildren | Rejected | Remain rejected until separately evaluated |
@@ -158,3 +158,4 @@ The original implementation plans now live under [`docs/plans/superseded/`](../p
 - **2026-08-10 — Keep full automation explicit:** no default routing change is proposed before matched representative evaluation.
 - **2026-08-10 — Preserve narrow concurrency:** the first automated architecture keeps at most two mutating children and no workflow grandchildren.
 - **2026-08-10 — Complete explicit workflow planning:** `subagent_auto`, deterministic compilation, verified mutating topology, bounded graph patches, and the frozen offline protocol complete Phase 2 without changing defaults or making a live-quality claim.
+- **2026-08-10 — Complete authoritative verified execution:** explicit verified workflows now require executor-owned exact-tree checks, managed integration acceptance, current independent receipts, and at most one bounded rework cycle without changing omitted workflow behavior.

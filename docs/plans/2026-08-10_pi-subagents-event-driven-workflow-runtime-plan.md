@@ -10,9 +10,9 @@ Keep uncertain mutating work from being replayed or accepted while allowing curr
 
 This plan owns only rolling dispatch, active-task state, bounded recovery execution, persistence reconciliation, and explicit resume behavior.
 
-It depends on the [verified execution loop plan](2026-08-10_pi-subagents-verified-execution-loop-plan.md) for acceptance-state and rework transitions.
+It depends on the [verified execution loop plan](archived/2026-08-10_pi-subagents-verified-execution-loop-plan.md) for acceptance-state and rework transitions.
 
-It depends on the [autonomous workflow planning plan](2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md) for bounded graph patches.
+It depends on the [autonomous workflow planning plan](archived/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md) for bounded graph patches.
 
 It continues the implemented dependency scheduler and semantic snapshot baseline preserved in the [superseded adaptive scheduling plan](superseded/2026-08-10_pi-subagents-adaptive-scheduling-semantic-snapshot-plan.md) without re-owning that baseline.
 

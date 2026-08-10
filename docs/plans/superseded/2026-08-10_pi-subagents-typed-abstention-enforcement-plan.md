@@ -2,7 +2,7 @@
 
 > **Superseded as an executable plan on 2026-08-10.**
 > The implemented typed-outcome, capability-enforcement, generation, and recovery baseline is documented in the [delegation-intelligence roadmap](../../roadmaps/2026-08-10_pi-subagents-delegation-intelligence-roadmap.md).
-> Automatic planning decisions are owned by the [autonomous workflow planning plan](../2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md).
+> Automatic planning decisions are owned by the [autonomous workflow planning plan](../archived/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md).
 > Closed-loop recovery is owned by the [event-driven workflow runtime plan](../2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md).
 > Unchecked boxes below preserve the original design sequence and are not current executable work.
 
