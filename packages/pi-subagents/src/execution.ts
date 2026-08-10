@@ -379,6 +379,7 @@ export async function executeSubagent(
 		await preflightPanelExecution({
 			panel: params.panel,
 			agents,
+			signal,
 			target: panelTarget,
 			resolveThinkingLevel,
 			resolveTimeoutMs,

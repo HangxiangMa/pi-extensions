@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
+import { DEFAULT_MAX_CONTEXT_BYTES } from "../src/limits.js";
 import {
 	type PanelReview,
 	panelReviewInstruction,
@@ -9,7 +10,7 @@ import {
 import { PanelEvidenceLedger } from "../src/panel-evidence.js";
 import { classifyPanelFailure } from "../src/panel-failure.js";
 import { planPanelBudgets, validatePanelRequest } from "../src/panel-planning.js";
-import { buildPanelReviewerPrompt } from "../src/panel-prompts.js";
+import { buildPanelReviewerPrompt, buildPanelSynthesisPrompt } from "../src/panel-prompts.js";
 import { reconcilePanel } from "../src/panel-reconciliation.js";
 
 function review(overrides: Partial<PanelReview> = {}): PanelReview {
@@ -81,6 +82,44 @@ test("panel reviewer prompts keep a byte-identical shared block and hide sibling
 	assert.equal(first.split("\n\nReviewer id:")[0], second.split("\n\nReviewer id:")[0]);
 	assert.doesNotMatch(first, /Reviewer id: b|Reviewer focus:\ntests/u);
 	assert.doesNotMatch(second, /Reviewer id: a|Reviewer focus:\ncorrectness/u);
+});
+
+test("panel prompts preserve required contracts at maximum input bounds", () => {
+	const common = {
+		panelId: "bounded-panel",
+		preset: "research" as const,
+		task: "t".repeat(DEFAULT_MAX_CONTEXT_BYTES),
+		context: "c".repeat(DEFAULT_MAX_CONTEXT_BYTES),
+	};
+	const first = buildPanelReviewerPrompt({
+		...common,
+		reviewerId: "a",
+		focus: "f".repeat(8 * 1024),
+	});
+	const second = buildPanelReviewerPrompt({ ...common, reviewerId: "b" });
+	assert.ok(Buffer.byteLength(first, "utf8") <= DEFAULT_MAX_CONTEXT_BYTES);
+	assert.ok(Buffer.byteLength(second, "utf8") <= DEFAULT_MAX_CONTEXT_BYTES);
+	assert.equal(first.split("\n\nReviewer id:")[0], second.split("\n\nReviewer id:")[0]);
+	assert.match(first, /Reviewer id: a/u);
+	assert.match(first, /Panel review contract:/u);
+	assert.match(first, /pi-subagents:panel-review:v1/u);
+	assert.match(first, /Shared task:/u);
+	assert.match(first, /Shared context:/u);
+
+	const reviews = [
+		review({ reviewerId: "a", blocking: false, findings: [] }),
+		review({ reviewerId: "b", blocking: false, findings: [] }),
+	];
+	const synthesis = buildPanelSynthesisPrompt({
+		panelId: "bounded-panel",
+		task: common.task,
+		reviews,
+		failures: [],
+	});
+	assert.ok(Buffer.byteLength(synthesis, "utf8") <= DEFAULT_MAX_CONTEXT_BYTES);
+	assert.match(synthesis, /Panel evidence artifacts:/u);
+	assert.match(synthesis, /Panel synthesis contract:/u);
+	assert.match(synthesis, /pi-subagents:panel-synthesis:v1/u);
 });
 
 test("panel synthesis rejects fabricated reviewers and omitted blocking objections", () => {

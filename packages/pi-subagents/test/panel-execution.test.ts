@@ -361,6 +361,53 @@ test("panel preserves valid reviews when synthesis returns an invalid contract",
 	}
 });
 
+test("panel marks valid synthesis output from an errored process as failed", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-panel-synthesis-exit-"));
+	const fakePi = path.join(root, "fake-pi.mjs");
+	writeFileSync(
+		fakePi,
+		[
+			"const task=process.argv.at(-1)??'';const match=task.match(/reviewerId \\\"([^\\\"]+)/);let result;",
+			"if(match){result={version:'pi-subagents:panel-review:v1',reviewerId:match[1],disposition:'pass',blocking:false,findings:[],missingChecks:[],limitations:[]};}",
+			"else{result={version:'pi-subagents:panel-synthesis:v1',disposition:'pass',summary:'valid but errored',validReviewerIds:['a','b'],failedReviewerIds:[],agreements:[],disagreements:[],objections:[],limitations:[]};}",
+			"const message={role:'assistant',content:[{type:'text',text:JSON.stringify(result)}],stopReason:'stop',timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+			"if(!match)process.exitCode=1;",
+		].join(""),
+	);
+	const restore = useFakePiPackage(root, fakePi);
+	try {
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const tool = mock.tools.find((candidate) => candidate.name === "subagent") as PanelTestTool;
+		const result = await tool.execute(
+			"panel-synthesis-exit",
+			{
+				panel: {
+					task: "Review",
+					reviewers: [
+						{ id: "a", agent: "reviewer" },
+						{ id: "b", agent: "reviewer" },
+					],
+					synthesizer: { agent: "reviewer" },
+				},
+			},
+			undefined,
+			undefined,
+			createMockContext().ctx,
+		);
+		assert.equal(result.isError, true);
+		assert.equal(result.details.panel.state, "failed");
+		assert.equal(result.details.panel.synthesis?.summary, "valid but errored");
+		assert.equal(
+			result.details.workflow.items.find((item) => item.id === "synthesis")?.state,
+			"failed",
+		);
+	} finally {
+		restore();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("panel retries transient transport failures once within the review phase", async () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-panel-retry-"));
 	const fakePi = path.join(root, "fake-pi.mjs");
@@ -542,7 +589,50 @@ test("an insufficient panel returns partial evidence and never launches synthesi
 	}
 });
 
-test("panel semantic progress stops repeated activity without blind retries", async () => {
+test("ordinary reviewer progress updates do not trigger a semantic stall", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-panel-progress-"));
+	const fakePi = path.join(root, "fake-pi.mjs");
+	writeFileSync(
+		fakePi,
+		[
+			"const task=process.argv.at(-1)??'';const match=task.match(/reviewerId \\\"([^\\\"]+)/);let result;",
+			"if(match){for(let i=0;i<10;i++){const progress={role:'assistant',content:[{type:'text',text:'ordinary tool progress '+i}],stopReason:'toolUse',timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message:progress})+'\\n');await new Promise(resolve=>setTimeout(resolve,20));}result={version:'pi-subagents:panel-review:v1',reviewerId:match[1],disposition:'pass',blocking:false,findings:[],missingChecks:[],limitations:[]};}",
+			"else{result={version:'pi-subagents:panel-synthesis:v1',disposition:'pass',summary:'progress completed',validReviewerIds:['a','b'],failedReviewerIds:[],agreements:[],disagreements:[],objections:[],limitations:[]};}",
+			"const message={role:'assistant',content:[{type:'text',text:JSON.stringify(result)}],stopReason:'stop',timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	const restore = useFakePiPackage(root, fakePi);
+	try {
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const tool = mock.tools.find((candidate) => candidate.name === "subagent") as PanelTestTool;
+		const result = await tool.execute(
+			"panel-progress",
+			{
+				totalTimeoutMs: 5_000,
+				panel: {
+					task: "Review after ordinary progress",
+					reviewers: [
+						{ id: "a", agent: "reviewer" },
+						{ id: "b", agent: "reviewer" },
+					],
+					synthesizer: { agent: "reviewer" },
+				},
+			},
+			undefined,
+			undefined,
+			createMockContext().ctx,
+		);
+		assert.equal(result.details.panel.state, "completed");
+		assert.equal(result.details.panel.validReviewCount, 2);
+		assert.equal(result.details.panel.failures.length, 0);
+	} finally {
+		restore();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("panel semantic progress stops repeated evidence states without blind retries", async () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-panel-stall-"));
 	const fakePi = path.join(root, "fake-pi.mjs");
 	const log = path.join(root, "launches.txt");
@@ -551,8 +641,9 @@ test("panel semantic progress stops repeated activity without blind retries", as
 		[
 			"import{appendFileSync}from'node:fs';",
 			`appendFileSync(${JSON.stringify(log)},'launch\\n');`,
-			"for(let i=0;i<8;i++){const message={role:'assistant',content:[{type:'text',text:'activity '+i}],stopReason:'toolUse',timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');}",
-			"setInterval(()=>{},1000);",
+			"const task=process.argv.at(-1)??'';const match=task.match(/reviewerId \\\"([^\\\"]+)/);",
+			"if(match){const result={version:'pi-subagents:panel-review:v1',reviewerId:match[1],disposition:'partial',blocking:false,findings:[],missingChecks:['unfinished'],limitations:[]};for(let i=0;i<9;i++){const message={role:'assistant',content:[{type:'text',text:JSON.stringify(result)}],stopReason:'toolUse',timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');await new Promise(resolve=>setTimeout(resolve,20));}setInterval(()=>{},1000);}",
+			"else{const result={version:'pi-subagents:panel-synthesis:v1',disposition:'partial',summary:'partial evidence preserved',validReviewerIds:['a','b'],failedReviewerIds:['a','b'],agreements:[],disagreements:[],objections:[],limitations:['reviewers stalled']};const message={role:'assistant',content:[{type:'text',text:JSON.stringify(result)}],stopReason:'stop',timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');}",
 		].join(""),
 	);
 	const restore = useFakePiPackage(root, fakePi);
@@ -577,14 +668,150 @@ test("panel semantic progress stops repeated activity without blind retries", as
 			undefined,
 			createMockContext().ctx,
 		);
-		assert.equal(result.details.panel.state, "insufficient-panel");
+		assert.equal(result.details.panel.state, "degraded");
+		assert.equal(result.details.panel.validReviewCount, 2);
 		assert.deepEqual(
 			result.details.panel.failures.map((failure) => failure.kind),
 			["semantic-stall", "semantic-stall"],
 		);
-		assert.equal(readFileSync(log, "utf8").trim().split("\n").length, 2);
+		assert.equal(readFileSync(log, "utf8").trim().split("\n").length, 3);
 	} finally {
 		restore();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("pre-cancelled panel setup creates no disposable worktrees", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-panel-setup-cancel-"));
+	const repository = path.join(root, "repository");
+	const worktreeLog = path.join(root, "worktrees.txt");
+	mkdirSync(repository);
+	writeFileSync(path.join(repository, "README.md"), "panel\n");
+	execFileSync("git", ["init", "-q", repository]);
+	execFileSync("git", ["-C", repository, "add", "README.md"]);
+	execFileSync("git", [
+		"-c",
+		"user.name=Panel Test",
+		"-c",
+		"user.email=panel@example.invalid",
+		"-c",
+		"commit.gpgsign=false",
+		"-C",
+		repository,
+		"commit",
+		"-qm",
+		"test fixture",
+	]);
+	const hook = path.join(repository, ".git", "hooks", "post-checkout");
+	writeFileSync(hook, `#!/bin/sh\nprintf '%s\\n' "$PWD" >> ${JSON.stringify(worktreeLog)}\n`);
+	chmodSync(hook, 0o755);
+	try {
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const tool = mock.tools.find((candidate) => candidate.name === "subagent") as PanelTestTool;
+		const controller = new AbortController();
+		controller.abort(new DOMException("test setup cancellation", "AbortError"));
+		await assert.rejects(
+			() =>
+				tool.execute(
+					"panel-setup-cancel",
+					{
+						panel: {
+							task: "Do not create worktrees",
+							reviewers: [
+								{ id: "a", agent: "worker" },
+								{ id: "b", agent: "worker" },
+							],
+							synthesizer: { agent: "worker" },
+						},
+					},
+					controller.signal,
+					undefined,
+					createMockContext({ cwd: repository, isProjectTrusted: () => true }).ctx,
+				),
+			/abort|cancel/i,
+		);
+		assert.equal(existsSync(worktreeLog), false);
+		assert.equal(
+			execFileSync("git", ["-C", repository, "worktree", "list", "--porcelain"], {
+				encoding: "utf8",
+			})
+				.trim()
+				.split("\n\n").length,
+			1,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("cancellation during worktree creation stops later setup and cleans partial state", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-panel-setup-race-"));
+	const repository = path.join(root, "repository");
+	const worktreeLog = path.join(root, "worktrees.txt");
+	const releaseHook = path.join(root, "release-hook");
+	mkdirSync(repository);
+	writeFileSync(path.join(repository, "README.md"), "panel\n");
+	execFileSync("git", ["init", "-q", repository]);
+	execFileSync("git", ["-C", repository, "add", "README.md"]);
+	execFileSync("git", [
+		"-c",
+		"user.name=Panel Test",
+		"-c",
+		"user.email=panel@example.invalid",
+		"-c",
+		"commit.gpgsign=false",
+		"-C",
+		repository,
+		"commit",
+		"-qm",
+		"test fixture",
+	]);
+	const hook = path.join(repository, ".git", "hooks", "post-checkout");
+	writeFileSync(
+		hook,
+		`#!/bin/sh\nprintf '%s\\n' "$PWD" >> ${JSON.stringify(worktreeLog)}\nwhile [ ! -f ${JSON.stringify(releaseHook)} ]; do sleep 0.01; done\n`,
+	);
+	chmodSync(hook, 0o755);
+	const mock = createMockPi();
+	subagents(mock.pi);
+	const tool = mock.tools.find((candidate) => candidate.name === "subagent") as PanelTestTool;
+	const controller = new AbortController();
+	const execution = tool.execute(
+		"panel-setup-race",
+		{
+			panel: {
+				task: "Stop setup after cancellation",
+				reviewers: [
+					{ id: "a", agent: "worker" },
+					{ id: "b", agent: "worker" },
+				],
+				synthesizer: { agent: "worker" },
+			},
+		},
+		controller.signal,
+		undefined,
+		createMockContext({ cwd: repository, isProjectTrusted: () => true }).ctx,
+	);
+	try {
+		await waitFor(() => existsSync(worktreeLog));
+		controller.abort(new DOMException("cancelled during workspace setup", "AbortError"));
+		writeFileSync(releaseHook, "release\n");
+		await assert.rejects(() => execution, /abort|cancel/i);
+		const createdWorktrees = readFileSync(worktreeLog, "utf8").trim().split("\n");
+		assert.equal(createdWorktrees.length, 1);
+		assert.equal(existsSync(createdWorktrees[0]), false);
+		assert.equal(
+			execFileSync("git", ["-C", repository, "worktree", "list", "--porcelain"], {
+				encoding: "utf8",
+			})
+				.trim()
+				.split("\n\n").length,
+			1,
+		);
+	} finally {
+		writeFileSync(releaseHook, "release\n");
+		await execution.catch(() => undefined);
 		rmSync(root, { recursive: true, force: true });
 	}
 });

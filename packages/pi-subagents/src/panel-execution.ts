@@ -69,11 +69,13 @@ const PANEL_READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 export async function preflightPanelExecution(
 	input: Pick<
 		PanelExecutionInput,
-		"panel" | "agents" | "target" | "resolveThinkingLevel" | "resolveTimeoutMs"
+		"panel" | "agents" | "target" | "resolveThinkingLevel" | "resolveTimeoutMs" | "signal"
 	>,
 ): Promise<void> {
+	assertPanelActive(input.signal);
 	let requiresWorktree = false;
 	for (const [index, reviewer] of input.panel.reviewers.entries()) {
+		assertPanelActive(input.signal);
 		const agent = input.agents.find((candidate) => candidate.name === reviewer.agent);
 		if (!agent) throw new Error(`Unknown panel agent: ${reviewer.agent}`);
 		requiresWorktree ||= !isReadOnlyAgent(agent);
@@ -91,7 +93,10 @@ export async function preflightPanelExecution(
 			revokeCapabilityGrant(policy.capabilityGrant, "preflight-complete", Date.now());
 		}
 	}
-	if (requiresWorktree) await assertWorkspaceIsolationReady(input.target.cwd);
+	if (requiresWorktree) {
+		await assertWorkspaceIsolationReady(input.target.cwd);
+		assertPanelActive(input.signal);
+	}
 	const synthesizer = input.panel.synthesizer;
 	const policy = launchPolicy(
 		input as PanelExecutionInput,
@@ -174,12 +179,15 @@ export async function executePanel(input: PanelExecutionInput): Promise<PanelToo
 
 	try {
 		await persistWork();
+		assertPanelActive(group.signal);
 		for (const reviewer of input.panel.reviewers) {
+			assertPanelActive(group.signal);
 			const agent = input.agents.find(
 				(candidate) => candidate.name === reviewer.agent,
 			) as AgentConfig;
 			if (isReadOnlyAgent(agent)) continue;
 			const workspace = await group.createWorkspace(`${panelId}:${reviewer.id}`, input.target.cwd);
+			assertPanelActive(group.signal);
 			workspaceByReviewer.set(reviewer.id, workspace.path);
 		}
 
@@ -209,7 +217,7 @@ export async function executePanel(input: PanelExecutionInput): Promise<PanelToo
 				const thinkingLevel = input.resolveThinkingLevel(reviewer.agent, reviewer.thinkingLevel);
 				let artifactRevision = 0;
 				let latestFingerprint = "";
-				let noProgressUpdates = 0;
+				let repeatedEvidenceUpdates = 0;
 				const reviewerController = new AbortController();
 				const reviewerSignal = AbortSignal.any([group.signal, reviewerController.signal]);
 				const publishOutput = (candidate: SingleResult): PanelReview | undefined => {
@@ -218,23 +226,22 @@ export async function executePanel(input: PanelExecutionInput): Promise<PanelToo
 						model: candidate.actualModel ?? candidate.model,
 						taskGeneration,
 					});
-					if (!parsed) {
-						noProgressUpdates += 1;
-						if (noProgressUpdates >= 8 && !reviewerController.signal.aborted) {
+					if (!parsed) return undefined;
+					const fingerprint = JSON.stringify(parsed);
+					if (fingerprint === latestFingerprint) {
+						repeatedEvidenceUpdates += 1;
+						if (repeatedEvidenceUpdates >= 8 && !reviewerController.signal.aborted) {
 							reviewerController.abort("semantic-stall");
 						}
-						return undefined;
+						return parsed;
 					}
-					const fingerprint = JSON.stringify(parsed);
-					if (fingerprint === latestFingerprint) return parsed;
 					artifactRevision += 1;
 					if (!ledger.publish(parsed, artifactRevision)) {
 						artifactRevision -= 1;
-						noProgressUpdates += 1;
 						return undefined;
 					}
 					latestFingerprint = fingerprint;
-					noProgressUpdates = 0;
+					repeatedEvidenceUpdates = 0;
 					return parsed;
 				};
 				const runAttempt = async (attempt: number): Promise<SingleResult> => {
@@ -515,20 +522,25 @@ export async function executePanel(input: PanelExecutionInput): Promise<PanelToo
 					.filter((id): id is string => Boolean(id)),
 			);
 			compactPanelResult(synthesisResult);
+			const synthesisErrored = isResultError(synthesisResult);
 			panelDetails = {
 				...panelDetails,
 				synthesizerResult: synthesisResult,
 				synthesis,
 				dissentCount: synthesis?.disagreements.length ?? 0,
-				state: synthesis
-					? failures.length > 0
-						? "degraded"
-						: "completed"
-					: group.signal.aborted
+				state: synthesisErrored
+					? group.signal.aborted
 						? "cancelled"
-						: "failed",
+						: "failed"
+					: synthesis
+						? failures.length > 0
+							? "degraded"
+							: "completed"
+						: group.signal.aborted
+							? "cancelled"
+							: "failed",
 			};
-			const synthesisInvalid = !synthesis || isResultError(synthesisResult);
+			const synthesisInvalid = !synthesis || synthesisErrored;
 			if (!synthesis && !isResultError(synthesisResult)) {
 				synthesisResult.resultContractInvalid = true;
 			}
@@ -566,6 +578,12 @@ export async function executePanel(input: PanelExecutionInput): Promise<PanelToo
 		if (output?.details.panel) output.details.panel.cleanupComplete = true;
 	}
 	return output as PanelToolResult;
+}
+
+function assertPanelActive(signal?: AbortSignal): void {
+	if (!signal?.aborted) return;
+	if (signal.reason instanceof Error) throw signal.reason;
+	throw new DOMException("Panel execution was cancelled during setup", "AbortError");
 }
 
 function isReadOnlyAgent(agent: AgentConfig): boolean {
