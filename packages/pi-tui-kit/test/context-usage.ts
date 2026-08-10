@@ -3,6 +3,7 @@ import {
 	type BrowseScreen,
 	defineMenu,
 	type InputScreen,
+	type LiveChoiceItem,
 	type MenuCloseReason,
 	type ReviewScreen,
 	type RunConfirmationResult,
@@ -190,11 +191,17 @@ void runCustomInteraction(lifecycleContext, {
 	}),
 });
 
+const confirmationGatedItem: LiveChoiceItem<"one"> = {
+	id: "one",
+	label: "One",
+	confirmationDisabled: true,
+	confirmationDisabledReason: "Already active",
+};
 const commandLiveChoice: Promise<RunLiveChoiceResult<"one", never>> = runLiveChoice(
 	commandContext,
 	{
 		title: "Command choice",
-		items: [{ id: "one", label: "One" }],
+		items: [confirmationGatedItem],
 		onSelectionChange: async ({ ctx }) => ctx.waitForIdle(),
 	},
 );
