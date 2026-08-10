@@ -163,6 +163,116 @@ test("all seven subagent tools register native call and result renderers", () =>
 	}
 });
 
+test("panel renderer is width-safe, sanitized, and preserves objections and dissent", () => {
+	const tool = registeredTools().get("subagent");
+	assert.ok(tool);
+	const args = {
+		panel: {
+			preset: "code-review",
+			task: "Review <private>SECRET</private> unsafe\u001b]8;;link\u0007 change",
+			reviewers: [
+				{ id: "a", agent: "reviewer", focus: "correctness" },
+				{ id: "b", agent: "reviewer", focus: "tests" },
+			],
+			synthesizer: { agent: "reviewer" },
+		},
+	};
+	const callLines = renderCall(tool, args, 32);
+	const call = withoutSgr(callLines.join("\n"));
+	assert.match(call, /panel code-review.*2\s+reviewers/is);
+	assert.doesNotMatch(call, /SECRET/u);
+	assert.equal(call.includes(ESCAPE), false);
+	assert.ok(callLines.every((line) => visibleWidth(line) <= 32));
+
+	const review = {
+		version: "pi-subagents:panel-review:v1",
+		reviewerId: "a",
+		disposition: "fail",
+		blocking: true,
+		findings: [
+			{
+				id: "F1",
+				severity: "high",
+				title: "Unsafe terminal\u001b[31m output",
+				claim: "unsafe",
+				evidence: ["src/a.ts:1"],
+			},
+		],
+		missingChecks: [],
+		limitations: [],
+	};
+	const details = {
+		mode: "panel",
+		agentScope: "user",
+		projectAgentsDir: null,
+		results: [
+			{
+				agent: "reviewer",
+				agentSource: "built-in",
+				task: "Review",
+				exitCode: 0,
+				messages: [],
+				stderr: "",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+				step: 1,
+			},
+		],
+		panel: {
+			id: "panel-1",
+			preset: "code-review",
+			state: "completed",
+			reviewerIds: ["a", "b"],
+			validReviewCount: 2,
+			failedReviewCount: 0,
+			blockingObjectionCount: 1,
+			dissentCount: 1,
+			budgets: {
+				totalMs: 10_000,
+				reviewMs: 6_500,
+				finalizationMs: 1_000,
+				synthesisMs: 2_000,
+				cleanupMs: 500,
+				reviewerTimeoutMs: 6_500,
+			},
+			evidence: [
+				{ panelId: "panel-1", reviewerId: "a", revision: 1, review },
+				{
+					panelId: "panel-1",
+					reviewerId: "b",
+					revision: 1,
+					review: { ...review, reviewerId: "b", blocking: false, findings: [] },
+				},
+			],
+			failures: [],
+			synthesis: {
+				version: "pi-subagents:panel-synthesis:v1",
+				disposition: "fail",
+				summary: "The blocker remains.",
+				validReviewerIds: ["a", "b"],
+				failedReviewerIds: [],
+				agreements: [],
+				disagreements: [{ summary: "Reviewers disagree", reviewerIds: ["a", "b"] }],
+				objections: [{ reviewerId: "a", findingId: "F1", resolution: "unresolved", evidence: [] }],
+				limitations: ["No runtime smoke"],
+			},
+			cleanupComplete: true,
+		},
+	};
+	const expandedLines = renderResult(
+		tool,
+		args,
+		{ content: [{ type: "text", text: "The blocker remains." }], details },
+		{ expanded: true, isPartial: false },
+		32,
+	);
+	const expanded = withoutSgr(expandedLines.join("\n"));
+	assert.match(expanded, /blockers 1.*dissent 1/is);
+	assert.match(expanded, /Reviewers disagree/);
+	assert.match(expanded, /a\/F1: unresolved/);
+	assert.equal(expanded.includes(ESCAPE), false);
+	assert.ok(expandedLines.every((line) => visibleWidth(line) <= 32));
+});
+
 test("consult renderer shows bounded live activity and progressive disclosure", () => {
 	const tool = registeredTools().get("subagent_consult");
 	assert.ok(tool);

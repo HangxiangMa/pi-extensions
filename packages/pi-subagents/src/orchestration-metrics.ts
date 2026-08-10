@@ -14,11 +14,23 @@ export interface OrchestrationMetrics {
 	requestedTools: number;
 	effectiveRequestedTools: number;
 	permissionPrecision: number;
+	panelValidReviews?: number;
+	panelFailedReviews?: number;
+	panelBlockingObjections?: number;
+	panelDissent?: number;
+	panelSynthesisState?: string;
 }
 
 export function calculateOrchestrationMetrics(
 	workflow: WorkItemLedgerSnapshot | undefined,
 	results: SingleResult[],
+	panel?: {
+		validReviewCount: number;
+		failedReviewCount: number;
+		blockingObjectionCount: number;
+		dissentCount: number;
+		state: string;
+	},
 ): OrchestrationMetrics {
 	const items = workflow?.items ?? [];
 	const requiredTransfers = items.reduce((sum, item) => sum + item.inputArtifacts.length, 0);
@@ -53,5 +65,14 @@ export function calculateOrchestrationMetrics(
 		requestedTools,
 		effectiveRequestedTools,
 		permissionPrecision: requestedTools === 0 ? 1 : effectiveRequestedTools / requestedTools,
+		...(panel
+			? {
+					panelValidReviews: panel.validReviewCount,
+					panelFailedReviews: panel.failedReviewCount,
+					panelBlockingObjections: panel.blockingObjectionCount,
+					panelDissent: panel.dissentCount,
+					panelSynthesisState: panel.state,
+				}
+			: {}),
 	};
 }

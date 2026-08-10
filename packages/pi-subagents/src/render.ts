@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { AgentScope, SubagentThinkingLevel } from "./agents.js";
+import { renderPanelCall, renderPanelResult } from "./panel-render.js";
 import { hasUsableAggregator, type SubagentParams } from "./params.js";
 import { expansionHint, formatToolActivity, safeBlock, safeLine } from "./render-common.js";
 import {
@@ -203,6 +204,8 @@ export function renderSubagentCall(args: SubagentParams, theme: Theme) {
 		typeof args.maxToolCalls === "number" ? `tools:${args.maxToolCalls}` : undefined,
 	].filter((value): value is string => Boolean(value));
 	const limitText = limits.length > 0 ? ` · ${limits.join(" · ")}` : "";
+	const panelCall = renderPanelCall(args, theme);
+	if (panelCall) return panelCall;
 	if (args.workflow && args.workflow.tasks.length > 0) {
 		let text =
 			theme.fg("toolTitle", theme.bold("subagent ")) +
@@ -273,6 +276,10 @@ export function renderSubagentResult(
 	theme: Theme,
 ) {
 	const rawDetails = result.details as SubagentDetails | undefined;
+	if (rawDetails?.mode === "panel") {
+		const panelResult = renderPanelResult(rawDetails, expanded, isPartial, theme);
+		if (panelResult) return panelResult;
+	}
 	if (!rawDetails || rawDetails.results.length === 0) {
 		const text = result.content[0];
 		return new Text(

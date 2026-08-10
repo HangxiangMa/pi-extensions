@@ -28,6 +28,7 @@ Use it to split independent research, planning, implementation, and review work 
 - Provides addressable stateful agents with follow-up, consolidated mailbox/management actions, idempotent spawn retries, context selection and preview, versioned structured outcomes, and persistence.
 - Publishes built-in and custom agent capability manifests, then records the executor-owned `ExecutionPlan` that resolves requested authority to effective tools, model, thinking, timeout, transport, trust, and workspace controls.
 - Runs explicit dependency workflows through a persistent `WorkItem` ledger, dependency-aware scheduler, declared scope-conflict checks, artifact provenance, stale-result invalidation, and bounded overall deadlines.
+- Runs first-class blocking panels with two or more independent reviewers, incremental bounded evidence artifacts, preserved blockers and dissent, a minimum-valid-review barrier, reserved synthesis and cleanup budgets, and one evidence-preserving synthesis.
 - Supports bounded retries only for explicitly idempotent work and hedged execution only for explicitly read-only work.
 - Detects retained-agent semantic skew across agent definitions, role prompts, tools, model resolution, transport, trust, repository generation, artifacts, and scheduler policy before follow-up work starts.
 - Publishes transient runtime status through Pi's generic extension status API while subagents are running.
@@ -66,7 +67,7 @@ The preview compares the selection with the tools registered in the current sess
 
 The available tools are:
 
-- `subagent` — delegate blocking single, parallel, fan-in, chained, or explicit dependency-workflow tasks. The main agent cannot process queued steering until the call returns.
+- `subagent` — delegate blocking single, parallel, fan-in, chained, panel-review, or explicit dependency-workflow tasks. The main agent cannot process queued steering until the call returns.
 - `subagent_spawn` and related lifecycle tools — when enabled, start reusable detached work, return immediately, and receive bounded completion messages automatically.
 - `subagent_inspect` — inspect agent/model/run/runtime metadata without launching work or changing state.
 - `subagent_consult` — run one ephemeral read-only consultation and wait for its answer.
@@ -110,12 +111,13 @@ Execution modes:
 - **parallel + aggregator** — run parallel jobs, then pass all outputs into one fan-in agent.
 - **chain** — run sequential steps, passing prior output with `{previous}`.
 - **workflow** — run named tasks only after declared `dependsOn` tasks and required `inputArtifacts` are ready; independent conflict-free tasks may run concurrently.
+- **panel** — run at least two independent reviewers over one shared task and snapshot, then run one synthesizer only when `minValidReviews` valid evidence artifacts remain.
 
 Common controls:
 
 - `cwd` — choose a launch directory subject to the user-owned trust-aware target policy described below.
 - `timeoutMs` — choose the per-turn work deadline for the task difficulty.
-- `totalTimeoutMs` — cap an entire blocking single, parallel, chain, or fan-in workflow, including queued work.
+- `totalTimeoutMs` — cap an entire blocking single, parallel, chain, panel, or fan-in workflow, including queued work and reserved panel phases.
 - `idleTimeoutMs` — stop work that produces no completed assistant turn or tool result within the selected interval.
 - `maxTurns` / `maxToolCalls` — stop unfinished repeated work after bounded assistant turns or tool calls.
 - `thinkingLevel` — request `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` thinking for the spawned Pi process or retained child.
@@ -136,7 +138,7 @@ The default target policies are:
 | `cwdPolicy.consultation` | `"anywhere"`, `"current-workspace"` | `"anywhere"`: consultation may start in any existing directory, but a target without effective trust is forced to `resources: "none"` |
 | `cwdPolicy.delegation` | `"trusted-targets"`, `"current-workspace"`, `"anywhere"` | `"trusted-targets"`: blocking and detached delegation may target the current workspace or an external folder covered by a saved `true` decision |
 
-All paths are resolved relative to the current session workspace and canonicalized before containment and trust checks. Missing paths, non-directories, sibling paths, and symlink escapes cannot bypass the policy. Blocking parallel, chain, and fan-in calls preflight every target before any child starts. A generated `workspaceMode: "worktree"` inherits the resolved trust of its approved base cwd.
+All paths are resolved relative to the current session workspace and canonicalized before containment and trust checks. Missing paths, non-directories, sibling paths, and symlink escapes cannot bypass the policy. Blocking parallel, chain, panel, and fan-in calls preflight every target before any child starts. A generated `workspaceMode: "worktree"` inherits the resolved trust of its approved base cwd.
 
 `"anywhere"` for general delegation restores the previous external-target flexibility. An external target without effective trust starts with `projectTrusted: false`, so Pi-protected project settings, packages, extensions, skills, prompts, and system resources stay disabled. General agents still have their configured tools and ordinary Pi/OS permissions, and Pi may still load `AGENTS.md` or `CLAUDE.md` because those context files are not protected by project trust. Resource-free consultation is stricter: it also passes `--no-context-files`, `--no-skills`, `--no-prompt-templates`, `--no-approve`, and `--no-extensions`.
 
@@ -349,6 +351,39 @@ Run a chain where each step receives the previous output:
   ]
 }
 ```
+
+Run an evidence-preserving panel:
+
+```json
+{
+  "panel": {
+    "id": "auth-panel",
+    "preset": "code-review",
+    "task": "Review the authentication change for correctness and regressions.",
+    "context": "Inspect the current repository snapshot and existing test evidence.",
+    "reviewers": [
+      { "id": "correctness", "agent": "reviewer", "focus": "Control flow and edge cases" },
+      { "id": "tests", "agent": "reviewer", "focus": "Coverage and regression risk" }
+    ],
+    "synthesizer": { "agent": "reviewer" },
+    "minValidReviews": 2
+  },
+  "totalTimeoutMs": 120000
+}
+```
+
+Every reviewer receives the same shared task, context, target snapshot, and scope, but never receives sibling output.
+Reviewer-specific `focus` text is appended after the shared block.
+The executor accepts only strict `pi-subagents:panel-review:v1` artifacts, stamps reviewer provenance, and starts synthesis only after the valid-review barrier.
+Agreement is corroboration rather than proof, and a vote cannot clear a correctness, safety, security, or explicit-requirement blocker.
+If too few valid reviews remain, the tool returns `insufficient-panel` with bounded partial evidence and failure classes without running synthesis or claiming consensus.
+Review, evidence-finalization, synthesis, and cleanup receive explicit phase allocations, and reviewer work cannot consume the synthesis or cleanup reserve.
+Only transient launch or transport failures receive one bounded retry; invalid contracts, semantic stalls, permission failures, exhausted budgets, cancellation, and deterministic task failures do not.
+Read-only reviewers share the approved target, while conservatively write-capable reviewers receive separate disposable Git worktrees from one clean base.
+Worktrees isolate repository writes but do not isolate processes, the network, secrets, credentials, or the rest of the filesystem.
+The blocking panel owns every reviewer, synthesizer, timer, generation, transport, and worktree and closes them when the call settles or Pi emits graceful session replacement or shutdown.
+An uncatchable host kill or forced process termination cannot guarantee cleanup; inspect `git worktree list`, remove any confirmed generated `pi-subagent-worktree-*` entry, and run `git worktree prune` if the host terminated before Pi dispatched lifecycle cleanup.
+Panel WorkItem snapshots persist metadata and artifact references for current-session inspection without storing raw review bodies.
 
 Run an explicit dependency workflow:
 
@@ -600,6 +635,7 @@ The intentional compatibility change is that an external target without saved tr
 | Parallel | Input order, up to `blocking.maxParallelTasks` total workers and at most four active children. | Rejects calls above the configured limit; otherwise collects all task results, and partial worker failure does not discard successful results. |
 | Parallel + aggregator | Source input order, then aggregator. | The aggregator runs with successful outputs and failure descriptions only when total budget remains; aggregator failure or orchestration expiry marks the tool result as an error. |
 | Workflow | Deterministic dependency-ready and critical-path order, with results returned in declared task order. | Invalid graphs fail before launch; blocked or failed dependencies prevent downstream start; bounded retry and hedging require explicit side-effect contracts. |
+| Panel | Reviewer declaration order, then at most one synthesizer. | Invalid or failed reviews remain visible; synthesis requires `minValidReviews`; insufficient panels preserve partial evidence without a consensus claim; synthesis contract failure marks the tool result as an error. |
 
 An aggregator whose `agent` or `task` is empty or whitespace-only is treated as absent, so successful
 parallel outputs remain available instead of being replaced by a malformed fan-in failure.
@@ -804,7 +840,7 @@ While the `subagent` tool is running, `pi-subagents` publishes compact activity 
 
 ## 🔒 Safety notes
 
-Subagents have separate processes and context windows, but they are **not security sandboxes**. They run as the same OS user, share the host filesystem and network access, and may conflict if they edit the same files. Tool allow-lists reduce available Pi tools but do not reduce operating-system permissions. `subagent_consult` prevents writes through its Pi tool surface and disables extensions, but it can read accessible paths, call the configured model over the network, and incur cost; its instruction-resource policy is not a filesystem or confidentiality boundary.
+Subagents have separate processes and context windows, but they are **not security sandboxes**. They run as the same OS user, share the host filesystem and network access, and may conflict if they edit the same files. Tool allow-lists reduce available Pi tools but do not reduce operating-system permissions. `subagent_consult` prevents writes through its Pi tool surface and disables extensions, but it can read accessible paths, call the configured model over the network, and incur cost; its instruction-resource policy is not a filesystem or confidentiality boundary. Panel write-capable reviewers use separate disposable Git worktrees, but those worktrees provide repository-write isolation only.
 
 Every contracted execution records a hashed immutable `ExecutionPlan` and an executor-owned capability grant bound to its task generation, effective tools, issuance time, and expiry.
 Interrupt, close, shutdown, replacement, persistence, and restore revoke active grants before signalling work or accepting another generation, and late old-plan results become `stale` diagnostic evidence.
@@ -858,6 +894,14 @@ packages/pi-subagents/
 │   ├── adaptive-scheduler.ts     # Dependency, capacity, budget, and conflict scheduling
 │   ├── semantic-snapshot.ts      # Privacy-safe continuation compatibility checks
 │   ├── supervision.ts            # Bounded idempotent retries and read-only hedging
+│   ├── panel-execution.ts        # Blocking review barrier, synthesis, and lifecycle owner
+│   ├── panel-contract.ts         # Strict review and synthesis evidence contracts
+│   ├── panel-evidence.ts         # Bounded monotonic reviewer evidence ledger
+│   ├── panel-planning.ts         # Panel validation, phase budgets, and WorkItems
+│   ├── panel-prompts.ts          # Shared-task reviewer and synthesis prompts
+│   ├── panel-reconciliation.ts   # Objection-preserving valid-review barrier
+│   ├── panel-child-group.ts      # Child signals and disposable-worktree cleanup
+│   ├── panel-render.ts           # Compact and expanded sanitized panel rows
 │   ├── execution-profiles.ts     # Provider-neutral thinking profile patches
 │   ├── execution-ui.ts           # Profile and per-agent execution settings screens
 │   ├── stateful-guidance.ts      # Detached model-facing workflow guidance
@@ -894,7 +938,7 @@ The package exposes its Pi extension through `package.json`:
 
 ## 🔎 Keywords
 
-Pi extension, Pi coding agent, subagents, agent delegation, parallel agents, fan-in aggregation, chained agents, isolated subprocesses, AI coding workflow, TypeScript Pi package.
+Pi extension, Pi coding agent, subagents, agent delegation, parallel agents, review panels, evidence synthesis, fan-in aggregation, chained agents, isolated subprocesses, AI coding workflow, TypeScript Pi package.
 
 ## 📄 License
 
