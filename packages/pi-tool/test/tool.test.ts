@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
+import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { resolveMenuScreen } from "@narumitw/pi-tui-kit";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import toolExtension from "../src/index.js";
-import { createToolCatalog, createToolMenu } from "../src/tool-catalog.js";
+import { createToolCatalog } from "../src/tool-catalog.js";
 
 initTheme("dark", false);
 
@@ -57,44 +58,63 @@ test("catalog lists every tool alphabetically with active state and complete exp
 	const deploy = catalog.items[0];
 	assert.ok(deploy);
 	assert.equal(deploy.description, "Deploy the current project.");
-	assert.deepEqual(deploy.details?.slice(0, 5), [
-		"Source: deploy.ts",
-		"Scope: user",
-		"Origin: package",
-		"Path: /home/test/.pi/extensions/deploy.ts",
-		"Base directory: /home/test/.pi/extensions",
-	]);
-	assert.match(deploy.details?.join("\n") ?? "", /Parameter schema\n\{\n {2}"type": "object"/u);
 	assert.match(
-		deploy.details?.join("\n") ?? "",
+		deploy.detailContent,
+		/Source: deploy\.ts\nScope: user\nOrigin: package\nPath: \/home\/test/u,
+	);
+	assert.match(deploy.detailContent, /Parameter schema\n\{\n {2}"type": "object"/u);
+	assert.match(
+		deploy.detailContent,
 		/Effective prompt snippet\nNone in the current system prompt\./u,
 	);
-	assert.match(deploy.details?.join("\n") ?? "", /Prompt guidelines\nNone/u);
+	assert.match(deploy.detailContent, /Prompt guidelines\nNone/u);
 
 	const read = catalog.items[1];
-	assert.match(read?.details?.join("\n") ?? "", /"required": \[\n {4}"path"\n {2}\]/u);
+	assert.match(read?.detailContent ?? "", /"required": \[\n {4}"path"\n {2}\]/u);
 	assert.match(
-		read?.details?.join("\n") ?? "",
+		read?.detailContent ?? "",
 		/Effective prompt snippet\nRead file contents from the current workspace/u,
 	);
-	assert.match(read?.details?.join("\n") ?? "", /Prompt guidelines\n• Use read before editing/u);
+	assert.match(read?.detailContent ?? "", /Prompt guidelines\n• Use read before editing/u);
 });
 
-test("browse menu exposes searchable list-to-detail progressive disclosure", () => {
-	const menu = createToolMenu();
-	const screen = resolveMenuScreen(menu, "tools", {
-		tools: configuredTools as never,
-		activeToolNames: ["read"],
-		toolSnippets: { read: "Read file contents from the current workspace" },
-	});
-	assert.equal(screen.kind, "browse");
-	if (screen.kind !== "browse") return;
-	assert.equal(screen.viewportSize, "adaptive");
-	assert.equal(screen.hint, "close");
-	assert.match(
-		screen.items.find(({ id }) => id === "read")?.searchText ?? "",
-		/builtin temporary/u,
-	);
+test("TUI browser searches across exposed tool metadata", async () => {
+	const mock = createMockPi({ allTools: [...configuredTools], activeTools: ["read"] });
+	toolExtension(mock.pi);
+	await mock.events.get("session_start")?.[0]?.({}, createMockContext({ hasUI: true }).ctx);
+	const command = mock.commands.get("tool");
+	assert.ok(command);
+	const tui = createTuiHarness({ width: 100, rows: 24 });
+	const base = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		getSystemPromptOptions: () => ({ cwd: "/home/test/project", toolSnippets: {} }),
+	}).ctx as unknown as {
+		ui: Record<string, unknown>;
+		[key: string]: unknown;
+	};
+	const running = command.handler("", { ...base, ui: { ...base.ui, custom: tui.custom } });
+	await tui.waitForOpen();
+	for (const size of [
+		{ width: 60, rows: 16 },
+		{ width: 24, rows: 8 },
+		{ width: 8, rows: 4 },
+		{ width: 1, rows: 1 },
+	]) {
+		const lines = tui.resize(size);
+		assert.ok(lines.length <= Math.max(1, size.rows - 3), `${size.width}x${size.rows}`);
+		assert.ok(
+			lines.every((line) => visibleWidth(line) <= size.width),
+			`${size.width}x${size.rows}`,
+		);
+	}
+	tui.resize({ width: 100, rows: 24 });
+	tui.type("builtin temporary");
+	const frame = stripVTControlCharacters(tui.render().join("\n"));
+	assert.match(frame, /read.*\[active\]/u);
+	assert.doesNotMatch(frame, /deploy/u);
+	tui.press("ctrl+c");
+	await running;
 });
 
 test("/tool supports RPC list and detail navigation", async () => {
@@ -134,6 +154,8 @@ test("/tool supports RPC list and detail navigation", async () => {
 		.map(({ title }) => title)
 		.join("\n");
 	assert.match(detailPages, /Parameter schema/u);
+	assert.match(detailPages, /^ {2}"type": "object",$/mu);
+	assert.match(detailPages, /^ {4}"path": \{$/mu);
 	assert.match(detailPages, /Read file contents from the current workspace/u);
 	assert.match(detailPages, /Use read before editing/u);
 	assert.equal(promptOptionReads, 1);
@@ -154,6 +176,45 @@ test("/tool rejects arguments and noninteractive modes before opening the catalo
 	}
 });
 
+test("nested parameter schema indentation survives the TUI detail boundary", async () => {
+	const mock = createMockPi({ allTools: [...configuredTools], activeTools: ["read"] });
+	toolExtension(mock.pi);
+	await mock.events.get("session_start")?.[0]?.({}, createMockContext({ hasUI: true }).ctx);
+	const command = mock.commands.get("tool");
+	assert.ok(command);
+	const tui = createTuiHarness({ width: 100, rows: 24 });
+	const base = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		getSystemPromptOptions: () => ({ cwd: "/home/test/project", toolSnippets: {} }),
+	}).ctx as unknown as {
+		ui: Record<string, unknown>;
+		[key: string]: unknown;
+	};
+	const running = command.handler("", { ...base, ui: { ...base.ui, custom: tui.custom } });
+	await tui.waitForOpen();
+	tui.type("builtin temporary");
+	tui.press("tui.select.confirm");
+	await tui.waitForOpen();
+	const frame = stripVTControlCharacters(tui.render().join("\n"));
+	assert.match(frame, /^ {2}"type": "object",$/mu);
+	assert.match(frame, /^ {4}"path": \{$/mu);
+	const narrowFrame = tui.resize({ width: 20, rows: 24 });
+	assert.ok(narrowFrame.every((line) => visibleWidth(line) <= 20));
+	const narrowText = stripVTControlCharacters(narrowFrame.join("\n"));
+	assert.match(narrowText, /^ {2}"type": "object",$/mu);
+	tui.press("tui.select.pageDown");
+	const scrolledNarrowFrame = tui.render();
+	assert.ok(scrolledNarrowFrame.every((line) => visibleWidth(line) <= 20));
+	assert.match(stripVTControlCharacters(scrolledNarrowFrame.join("\n")), /^ {4}"path": \{$/mu);
+	tui.resize({ width: 100, rows: 24 });
+	tui.press("tui.select.cancel");
+	await tui.waitForOpen();
+	assert.match(stripVTControlCharacters(tui.render().join("\n")), /Search: > builtin temporary/u);
+	tui.press("ctrl+c");
+	await running;
+});
+
 test("terminal controls are stripped by the browse display boundary", async () => {
 	const unsafeTools = [
 		{
@@ -162,23 +223,51 @@ test("terminal controls are stripped by the browse display boundary", async () =
 			description: "Read\u001b[31m file",
 		},
 	];
-	const menu = createToolMenu();
+	const mock = createMockPi({ allTools: unsafeTools as never, activeTools: [] });
+	toolExtension(mock.pi);
+	await mock.events.get("session_start")?.[0]?.({}, createMockContext({ hasUI: true }).ctx);
+	const command = mock.commands.get("tool");
+	assert.ok(command);
 	const tui = createTuiHarness({ width: 100, rows: 24 });
-	const base = createMockContext({ hasUI: true, mode: "tui" }).ctx as unknown as {
+	const base = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		getSystemPromptOptions: () => ({ cwd: "/home/test/project", toolSnippets: {} }),
+	}).ctx as unknown as {
 		ui: Record<string, unknown>;
 		[key: string]: unknown;
 	};
-	const { runMenu } = await import("@narumitw/pi-tui-kit");
-	const running = runMenu({ ...base, ui: { ...base.ui, custom: tui.custom } } as never, menu, {
-		getState: () => ({ tools: unsafeTools as never, activeToolNames: [], toolSnippets: {} }),
-		isCurrent: () => true,
-	});
+	const running = command.handler("", { ...base, ui: { ...base.ui, custom: tui.custom } });
 	await tui.waitForOpen();
 	const frame = tui.render().join("\n");
 	assert.equal(frame.includes("\u001b]0;owned"), false);
 	assert.equal(frame.includes("\u0007"), false);
 	tui.press("ctrl+c");
 	await running;
+});
+
+test("session replacement aborts and disposes an open menu", async () => {
+	const mock = createMockPi({ allTools: [...configuredTools], activeTools: ["read"] });
+	toolExtension(mock.pi);
+	const lifecycle = createMockContext({ hasUI: true, mode: "tui" }).ctx;
+	await mock.events.get("session_start")?.[0]?.({}, lifecycle);
+	const command = mock.commands.get("tool");
+	assert.ok(command);
+	const tui = createTuiHarness({ width: 100, rows: 24 });
+	const base = createMockContext({
+		hasUI: true,
+		mode: "tui",
+		getSystemPromptOptions: () => ({ cwd: "/home/test/project", toolSnippets: {} }),
+	}).ctx as unknown as {
+		ui: Record<string, unknown>;
+		[key: string]: unknown;
+	};
+	const running = command.handler("", { ...base, ui: { ...base.ui, custom: tui.custom } });
+	await tui.waitForOpen();
+	await mock.events.get("session_start")?.[0]?.({}, lifecycle);
+	await running;
+	assert.equal(tui.isOpen, false);
+	assert.equal((tui.result as { kind?: unknown } | undefined)?.kind, "stale");
 });
 
 test("session shutdown aborts and disposes an open menu", async () => {
@@ -201,5 +290,6 @@ test("session shutdown aborts and disposes an open menu", async () => {
 	await tui.waitForOpen();
 	await mock.events.get("session_shutdown")?.[0]?.({}, lifecycle);
 	await running;
-	assert.equal((tui.result as { kind?: unknown } | undefined)?.kind, "close");
+	assert.equal(tui.isOpen, false);
+	assert.equal((tui.result as { kind?: unknown } | undefined)?.kind, "stale");
 });
