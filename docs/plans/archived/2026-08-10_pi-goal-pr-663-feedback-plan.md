@@ -27,14 +27,23 @@ Pi's installed input-transform pipeline confirms that transforms registered befo
 - [x] Run focused pi-goal tests, package typecheck and runtime smoke, the root `npm run check` gate, and `git diff --check`; 337 package tests, the runtime smoke, all validators, and 2,787 root tests pass. The first root check exposed only test formatting, which was fixed before the complete passing rerun.
 - [x] Audit the final diff against `docs/extension-conventions.md`, `docs/extension-settings.md`, prompt trust boundaries, input ordering, lifecycle cleanup, and safety accounting; no settings or new resources changed, retained prompt state is bounded by existing limits, terminal-boundary checks are shared, and final fingerprints preserve event-order ownership.
 - [x] Re-read every pull-request feedback item and update the ledger with evidence-backed final outcomes; one actionable inline finding and one informational review wrapper are fully classified.
-- [ ] Stage only intended files, create and push a signed conventional fix commit, then reply to and resolve the addressed thread.
-- [ ] Archive this completed plan in a signed documentation commit, push it, and refresh the pull request once after the final push.
+- [x] Stage only intended files, create and push a signed conventional fix commit, then reply to and resolve the addressed thread; signed commit `3c6f9fb74afda411af4e35142c01dd8087ac652f` is on the pull-request branch, reply `discussion_r3746742974` records the evidence, and GraphQL confirms the thread is resolved.
+
+## Verification Evidence
+
+- The pre-fix focused run failed two intended assertions: transformed continuation ownership bypassed the one-turn pause, and transformed Goal prompt ownership failed to reset its safety epoch.
+- `npm exec vitest -- run packages/pi-goal/test` passed 337 tests across 20 files.
+- `npm run typecheck --workspace @narumitw/pi-goal` passed.
+- `npm run test:runtime --workspace @narumitw/pi-goal` passed.
+- The final `npm run check` passed Biome, package boundaries, every workspace typecheck, and 2,787 tests across 256 files.
+- `git diff --check` passed.
+- Independent re-review found no confirmed defect after final-boundary hardening; a full generated prompt used as a suffix is intentionally treated as a prefix transform because Pi exposes no stronger input-handler provenance.
 
 ## Completion Checklist
 
-- [ ] Every feedback item has an evidence-backed final outcome.
-- [ ] Every actionable item is fixed at the shared ownership boundary and covered by deterministic regression tests.
-- [ ] Prefix transforms preserve automatic ownership and safety accounting, while quoted or externally extended markers remain non-owned.
-- [ ] Required checks pass with no concealed failures.
-- [ ] The review thread is answered and resolved only after the fix is verified and pushed.
-- [ ] Signed commits are pushed without rewriting history, and the final pull-request refresh reports no remaining blocker.
+- [x] Every feedback item has an evidence-backed final outcome.
+- [x] Every actionable item is fixed at the shared ownership boundary and covered by deterministic regression tests.
+- [x] Prefix transforms preserve automatic ownership and safety accounting, while quoted or externally extended markers remain non-owned.
+- [x] Required checks pass with no concealed failures.
+- [x] The review thread is answered and resolved only after the fix is verified and pushed.
+- [x] The signed fix commit is pushed without rewriting history; repository plan archival and the one final pull-request refresh remain handoff operations after this plan is complete.
