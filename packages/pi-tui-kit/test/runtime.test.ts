@@ -393,6 +393,144 @@ test("browse stays read-only across TUI detail navigation and RPC pagination", a
 	assert.equal(rpcCall, 4);
 });
 
+test("RPC browse exact details preserve documents, bounds, identity, and Back behavior", async () => {
+	const longLine = `${"x".repeat(120)}y`;
+	const items = [
+		{
+			id: "first-raw",
+			label: "Same",
+			statusText: "Ready",
+			searchText: "first metadata",
+			detailDocument: { content: "private-document-token" },
+		},
+		{
+			id: "second-raw",
+			label: "Same",
+			statusText: "Ready",
+			description: "Legacy description",
+			searchText: "second metadata",
+			details: ["legacy detail must not render"],
+			detailDocument: {
+				content: [
+					"  two spaces",
+					"    four spaces",
+					"\ttabbed",
+					"unsafe\u001b]8;;https://unsafe.example\u0007text",
+					longLine,
+					...Array.from({ length: 6 }, (_, index) => `tail ${index + 1}`),
+				].join("\n"),
+				format: { kind: "code" as const, language: "json" },
+			},
+		},
+	];
+	const menu = defineMenu<undefined, "browse", "unused">({
+		start: "browse",
+		screens: {
+			browse: () => ({ kind: "browse", title: "Documents", items, hint: "back" }),
+		},
+		actions: { unused: async () => ({ kind: "close" }) },
+	});
+	let call = 0;
+	const titles: string[] = [];
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		select: async (title: string, choices: string[]) => {
+			call += 1;
+			titles.push(title);
+			assert.equal(new Set(choices).size, choices.length);
+			if (call === 1) {
+				assert.deepEqual(choices, ["Same [Ready]", "Same [Ready] [2]", "Back"]);
+				assert.doesNotMatch(
+					choices.join("\n"),
+					/private-document-token|first metadata|second metadata|two spaces/u,
+				);
+				return "Same [Ready] [2]";
+			}
+			if (call === 2) {
+				assert.match(title, /\n {2}two spaces\n {4}four spaces\n {4}tabbed\n/u);
+				assert.equal(title.includes("\u001b"), false);
+				assert.equal(title.includes("https://unsafe.example"), false);
+				assert.match(title, new RegExp(`\\n${"x".repeat(120)}\\ny\\n`, "u"));
+				assert.doesNotMatch(
+					title,
+					/Status: Ready|Legacy description|legacy detail must not render/u,
+				);
+				return choices.find((choice) => choice.startsWith("Next"));
+			}
+			if (call === 3) {
+				assert.match(title, /tail 6/u);
+				return choices.find((choice) => choice.startsWith("Back"));
+			}
+			return choices.find((choice) => choice.startsWith("Back"));
+		},
+	});
+
+	assert.deepEqual(await runMenu(context.ctx, menu, { getState: () => undefined }), {
+		kind: "closed",
+		reason: "back",
+	});
+	assert.equal(call, 4);
+	assert.equal(
+		titles.every((title) => title.length < 2000),
+		true,
+	);
+});
+
+test("RPC browse legacy details retain exact labels, normalized ordering, and fallback", async () => {
+	const menu = defineMenu<undefined, "browse", "unused">({
+		start: "browse",
+		screens: {
+			browse: () => ({
+				kind: "browse",
+				title: "Legacy",
+				items: [
+					{
+						id: "legacy",
+						label: " Item ",
+						statusText: " Ready   state ",
+						description: " Legacy\tdescription ",
+						details: ["  nested   prose  "],
+					},
+					{ id: "empty", label: "Empty" },
+				],
+				hint: "back",
+			}),
+		},
+		actions: { unused: async () => ({ kind: "close" }) },
+	});
+	let call = 0;
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		select: async (title: string, choices: string[]) => {
+			call += 1;
+			if (call === 1) {
+				assert.deepEqual(choices, ["Item [Ready state]", "Empty", "Back"]);
+				return choices[0];
+			}
+			if (call === 2) {
+				assert.equal(
+					title,
+					"Item [Ready state]\nStatus: Ready state\nLegacy description\nnested prose",
+				);
+				return "Back";
+			}
+			if (call === 3) return choices[1];
+			if (call === 4) {
+				assert.equal(title, "Empty\nNo details available.");
+				return "Back";
+			}
+			return "Back";
+		},
+	});
+	assert.deepEqual(await runMenu(context.ctx, menu, { getState: () => undefined }), {
+		kind: "closed",
+		reason: "back",
+	});
+	assert.equal(call, 5);
+});
+
 test("TUI and RPC preserve the eight-screen semantic action matrix", async () => {
 	type MatrixScreen = MenuScreen<"main", "act">;
 	type MatrixPayload = { itemId: string; value?: string; selected?: boolean };

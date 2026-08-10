@@ -287,7 +287,7 @@ const result = await runCustomInteraction<{ kind: "back" | "close" }>(ctx, {
   adaptive long-label columns, and disabled explanations.
 - **`detail`** — read-only wrapped text with Back or Close behavior.
 - **`browse`** — a read-only searchable catalog with textual status, adaptive list/detail views,
-  stable selection restoration, and paginated RPC details.
+  stable selection restoration, legacy prose or exact document details, and paginated RPC details.
 - **`choice`** — one confirmed value from a static list, with separate current and initial items,
   selected details, disabled explanations, and a bounded viewport.
 - **`settings`** — Pi-style searchable, aligned settings rows with immediate value changes,
@@ -368,6 +368,20 @@ row budget; a positive number caps item rows without disabling terminal bounds. 
 keeps one deterministic unfiltered list, then presents bounded detail pages; `searchText` is never
 rendered.
 
+Use `details` for legacy prose lines. The Kit normalizes their whitespace and prepends available
+status and description text. Use `detailDocument` for a complete whitespace-sensitive body such as
+JSON, source code, or a diff. Its `content` preserves indentation, expands tabs to four-column stops,
+hard-wraps by terminal cells, strips terminal controls, and uses the same optional text, code, or diff
+`format` as a review screen. When both fields are present, `detailDocument` is the complete body and
+takes precedence over `details`, status, and description inside the detail body. The item label still
+names the detail, while status and description remain available in list presentation. RPC retains the
+existing status-bearing selector label as the dialog title for compatibility, but does not prepend a
+second status line to the exact body.
+
+Exact document content is never added to fuzzy-search metadata or RPC selector labels. Copy only safe,
+intentional aliases or metadata into `searchText`; do not copy a large or sensitive document merely
+to make it searchable.
+
 ```ts
 const modulesScreen = {
   kind: "browse" as const,
@@ -384,6 +398,20 @@ const modulesScreen = {
     ],
   })),
   viewportSize: "adaptive" as const,
+};
+
+const schemasScreen = {
+  kind: "browse" as const,
+  title: "Schemas",
+  items: schemas.map((schema) => ({
+    id: schema.name,
+    label: schema.name,
+    searchText: schema.description,
+    detailDocument: {
+      content: JSON.stringify(schema.value, null, 2),
+      format: { kind: "code" as const, language: "json" },
+    },
+  })),
 };
 ```
 
@@ -558,8 +586,8 @@ The library owns:
 - serial settings and multi-select updates, optimistic rollback, and pending-update draining;
 - menu, screen, and busy-action cancellation;
 - stale-continuation checks around asynchronous work;
-- input draft/pending behavior and exact review formatting, scrolling, and RPC pagination;
-- read-only browse search, list/detail disclosure, cursor restoration, and RPC pagination;
+- input draft/pending behavior and shared exact-document formatting, scrolling, and RPC pagination;
+- read-only browse search, legacy or exact detail disclosure, cursor restoration, and RPC pagination;
 - TUI/RPC adaptation and unsupported-mode routing.
 
 The consuming extension still owns:
@@ -655,18 +683,20 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
   work draining, and typed results around one extension-owned custom TUI component.
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.
 - `createMenuNavigator()` — lower-level stack and selection state helper.
-- exported screen, item, action, transition, runtime option, `MenuCloseReason`, and result types.
+- exported screen, item, action, transition, runtime option, `BrowseDetailDocument`,
+  `MenuCloseReason`, and result types.
 - `@narumitw/pi-tui-kit/testing` — separate subpath for `createTuiHarness()`, `createRpcHarness()`,
   strict scripts, and their public testing types; it is not re-exported from the production root.
-- `PI_EXTENSION_MENU_API_VERSION` — current API version (`9`). Version 9 adds `runLiveChoice()` and
-  `formatInteractionHints()` while version-8 menu definitions remain valid. Version 8 added disabled
-  action reasons and adaptive action-label columns, version 7 added `runConfirmation()`, and version
-  6 added the read-only `browse` screen and `runCustomInteraction()`.
+- `PI_EXTENSION_MENU_API_VERSION` — current API version (`10`). Version 10 adds exact browse detail
+  documents while version-9 menu definitions remain valid. Version 9 added `runLiveChoice()` and
+  `formatInteractionHints()`, version 8 added disabled action reasons and adaptive action-label
+  columns, version 7 added `runConfirmation()`, and version 6 added the read-only `browse` screen and
+  `runCustomInteraction()`.
 
 ## 🗂️ Package layout
 
 - `src/` — authored TypeScript and the public package entrypoint
-- `src/components/` — internal TUI input, review, list, settings, and rendering adapters
+- `src/components/` — internal TUI input, browse, review, exact-document, settings, and rendering adapters
 - `src/testing/` — supported TUI/RPC test drivers exported only through the `/testing` subpath
 - `src/task.ts` — standalone and menu-shared task lifecycle orchestration
 - `src/confirmation.ts` — standalone confirmation mode adaptation and lifecycle results

@@ -11,7 +11,7 @@ test("built package roots resolve separate production and testing exports", asyn
 	const testingSpecifier = "@narumitw/pi-tui-kit/testing";
 	const production = await import(productionSpecifier);
 	const testing = await import(testingSpecifier);
-	assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 9);
+	assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 10);
 	assert.equal(typeof production.formatInteractionHints, "function");
 	assert.equal(typeof production.runConfirmation, "function");
 	assert.equal(typeof production.runCustomInteraction, "function");
@@ -26,10 +26,12 @@ test("built package roots resolve separate production and testing exports", asyn
 	t.onTestFinished(() => rmSync(fixture, { recursive: true, force: true }));
 	writeFileSync(
 		path.join(fixture, "usage.ts"),
-		`import { PI_EXTENSION_MENU_API_VERSION } from "@narumitw/pi-tui-kit";\n` +
+		`import { PI_EXTENSION_MENU_API_VERSION, type BrowseDetailDocument, type MenuBrowseItem } from "@narumitw/pi-tui-kit";\n` +
 			`import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";\n` +
-			`const version: 9 = PI_EXTENSION_MENU_API_VERSION;\n` +
-			`void version;\nvoid createTuiHarness();\nvoid createRpcHarness([]);\n`,
+			`const version: 10 = PI_EXTENSION_MENU_API_VERSION;\n` +
+			`const document: BrowseDetailDocument = { content: "  exact", format: { kind: "text" } };\n` +
+			`const item: MenuBrowseItem = { id: "one", label: "One", detailDocument: document };\n` +
+			`void version;\nvoid item;\nvoid createTuiHarness();\nvoid createRpcHarness([]);\n`,
 	);
 	writeFileSync(
 		path.join(fixture, "tsconfig.json"),

@@ -90,15 +90,29 @@ export interface ChoiceScreen<ActionId extends string> {
 	hint?: "back" | "close";
 }
 
+export type ReviewFormat =
+	| { kind: "text" }
+	| { kind: "code"; language?: string; filePath?: string }
+	| { kind: "diff"; filePath?: string };
+
+/** Exact full-body content for a browse detail view. */
+export interface BrowseDetailDocument {
+	content: string;
+	format?: ReviewFormat;
+}
+
 export interface MenuBrowseItem {
 	id: string;
 	label: string;
 	description?: string;
-	/** Textual state shown with the row and in detail. */
+	/** Textual state shown with the row and in legacy detail. */
 	statusText?: string;
 	/** Additional non-rendered text used by TUI fuzzy search. */
 	searchText?: string;
+	/** Legacy prose lines normalized for display. Ignored when detailDocument is present. */
 	details?: readonly string[];
+	/** Exact full detail body. Content is not included in fuzzy search. */
+	detailDocument?: BrowseDetailDocument;
 }
 
 export interface BrowseScreen {
@@ -134,11 +148,6 @@ export interface InputScreen<ActionId extends string> {
 }
 
 export const MAX_REVIEW_VIEWPORT_SIZE = 50;
-
-export type ReviewFormat =
-	| { kind: "text" }
-	| { kind: "code"; language?: string; filePath?: string }
-	| { kind: "diff"; filePath?: string };
 
 export interface ReviewConfirmation<ActionId extends string> {
 	id: string;

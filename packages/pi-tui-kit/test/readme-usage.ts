@@ -1,5 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
+	type BrowseDetailDocument,
 	type BrowseScreen,
 	defineMenu,
 	formatInteractionHints,
@@ -29,6 +30,11 @@ declare function currentGeneration(): number;
 declare function currentSessionSignal(): AbortSignal;
 declare function formatError(error: unknown): string;
 
+const schemaDocument: BrowseDetailDocument = {
+	content: '{\n  "type": "object"\n}',
+	format: { kind: "code", language: "json" },
+};
+
 const modulesScreen: BrowseScreen = {
 	kind: "browse",
 	title: "Modules",
@@ -40,6 +46,12 @@ const modulesScreen: BrowseScreen = {
 			description: "Current model",
 			searchText: "provider llm",
 			details: ["Preview: claude"],
+		},
+		{
+			id: "schema",
+			label: "schema",
+			searchText: "configuration object",
+			detailDocument: schemaDocument,
 		},
 	],
 	viewportSize: "adaptive",

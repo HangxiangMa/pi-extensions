@@ -31,6 +31,7 @@ export { type RunTaskOptions, type RunTaskResult, runTask } from "./task.js";
 export type {
 	ActionMenuItem,
 	ActionsScreen,
+	BrowseDetailDocument,
 	BrowseScreen,
 	ChoiceScreen,
 	DetailScreen,
@@ -56,4 +57,4 @@ export type {
 	SettingsScreen,
 } from "./types.js";
 
-export const PI_EXTENSION_MENU_API_VERSION = 9;
+export const PI_EXTENSION_MENU_API_VERSION = 10;

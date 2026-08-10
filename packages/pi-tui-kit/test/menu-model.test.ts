@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
+	type BrowseDetailDocument,
 	type ChoiceScreen,
 	createMenuNavigator,
 	defineMenu,
+	type MenuBrowseItem,
 	type MenuDefinition,
 	PI_EXTENSION_MENU_API_VERSION,
 	resolveMenuScreen,
@@ -38,8 +40,18 @@ function testMenu(): MenuDefinition<State, ScreenId, ActionId> {
 	});
 }
 
-test("package exposes API version 9", () => {
-	assert.equal(PI_EXTENSION_MENU_API_VERSION, 9);
+test("package exposes API version 10 and exact browse detail types", () => {
+	const document: BrowseDetailDocument = {
+		content: "  exact\nbody",
+		format: { kind: "code", language: "json" },
+	};
+	const item: MenuBrowseItem = {
+		id: "schema",
+		label: "Schema",
+		detailDocument: document,
+	};
+	assert.equal(item.detailDocument, document);
+	assert.equal(PI_EXTENSION_MENU_API_VERSION, 10);
 	assert.equal(resolveMenuScreen(testMenu(), "main", { count: 0 }).kind, "actions");
 });
 

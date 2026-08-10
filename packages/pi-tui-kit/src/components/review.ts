@@ -1,26 +1,20 @@
-import { stripVTControlCharacters } from "node:util";
-import {
-	Key,
-	matchesKey,
-	truncateToWidth,
-	visibleWidth,
-	wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { MenuScreen, ReviewScreen } from "../types.js";
 import type {
 	MenuKeybindings,
 	MenuScreenComponent,
 	MenuScreenComponentOptions,
 } from "./contracts.js";
+import {
+	documentDialogPages,
+	formatDocumentLines,
+	RPC_DOCUMENT_LINE_WIDTH,
+	RPC_DOCUMENT_PAGE_SIZE,
+} from "./document-formatting.js";
 import { menuHint, renderFrame, safeMenuText } from "./rendering.js";
-import { getLanguageFromPath, highlightCode } from "./syntax-highlighting.js";
 
 const DEFAULT_REVIEW_VIEWPORT_SIZE = 14;
-const RPC_REVIEW_VIEWPORT_SIZE = 8;
-const RPC_REVIEW_LINE_WIDTH = 120;
 const RESERVED_HOST_ROWS = 3;
-const TAB_SIZE = 4;
-const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export type ReviewOptions<
 	ScreenId extends string,
@@ -285,13 +279,7 @@ function reviewBindingText(
 export function reviewDialogPages<ActionId extends string>(
 	screen: ReviewScreen<ActionId>,
 ): string[][] {
-	const lines = plainReviewLines(screen.content, RPC_REVIEW_LINE_WIDTH);
-	const pageSize = reviewDialogPageSize(screen);
-	const pages: string[][] = [];
-	for (let index = 0; index < lines.length; index += pageSize) {
-		pages.push(lines.slice(index, index + pageSize));
-	}
-	return pages.length > 0 ? pages : [[""]];
+	return documentDialogPages(screen.content, RPC_DOCUMENT_LINE_WIDTH, reviewDialogPageSize(screen));
 }
 
 function formatReviewLines<ActionId extends string>(
@@ -299,89 +287,7 @@ function formatReviewLines<ActionId extends string>(
 	width: number,
 	theme: MenuScreenComponentOptions<string, ActionId>["theme"],
 ): string[] {
-	const segments = reviewSegments(screen.content, width);
-	const format = screen.format ?? { kind: "text" as const };
-	if (format.kind === "code") {
-		const language =
-			format.language ?? (format.filePath ? getLanguageFromPath(format.filePath) : undefined);
-		return segments.map(({ text }) => highlightCode(text, language, theme));
-	}
-	if (format.kind === "diff") {
-		return segments.map(({ source, text }) => {
-			if (source.startsWith("@@")) return theme.fg("accent", text);
-			if (source.startsWith("+") && !source.startsWith("+++")) {
-				return theme.fg("toolDiffAdded", text);
-			}
-			if (source.startsWith("-") && !source.startsWith("---")) {
-				return theme.fg("toolDiffRemoved", text);
-			}
-			return theme.fg("toolDiffContext", text);
-		});
-	}
-	return segments.map(({ text }) => theme.fg("text", text));
-}
-
-function plainReviewLines(content: string, width: number): string[] {
-	return reviewSegments(content, width).map(({ text }) => text);
-}
-
-function reviewSegments(content: string, width: number) {
-	const safe = sanitizeDocumentText(content);
-	return safe.split("\n").flatMap((line) => {
-		const source = expandTabs(line);
-		return hardWrapLine(source, width).map((text) => ({ source, text }));
-	});
-}
-
-export function sanitizeDocumentText(value: unknown): string {
-	const stripped = stripVTControlCharacters(String(value)).replace(/\r\n?/gu, "\n");
-	return Array.from(stripped, (character) => {
-		if (character === "\n" || character === "\t") return character;
-		const codePoint = character.codePointAt(0) ?? 0;
-		return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
-	}).join("");
-}
-
-function expandTabs(line: string): string {
-	let column = 0;
-	let result = "";
-	for (const { segment } of graphemeSegmenter.segment(line)) {
-		if (segment === "\t") {
-			const count = TAB_SIZE - (column % TAB_SIZE);
-			result += " ".repeat(count);
-			column += count;
-			continue;
-		}
-		result += segment;
-		column += visibleWidth(segment);
-	}
-	return result;
-}
-
-function hardWrapLine(line: string, width: number): string[] {
-	const safeWidth = Math.max(1, width);
-	if (line.length === 0) return [""];
-	const lines: string[] = [];
-	let current = "";
-	let currentWidth = 0;
-	const flush = () => {
-		lines.push(current);
-		current = "";
-		currentWidth = 0;
-	};
-	for (const { segment } of graphemeSegmenter.segment(line)) {
-		const segmentWidth = visibleWidth(segment);
-		if (segmentWidth > safeWidth) {
-			if (current.length > 0) flush();
-			lines.push("?".repeat(safeWidth));
-			continue;
-		}
-		if (currentWidth + segmentWidth > safeWidth && current.length > 0) flush();
-		current += segment;
-		currentWidth += segmentWidth;
-	}
-	if (current.length > 0 || lines.length === 0) lines.push(current);
-	return lines;
+	return formatDocumentLines(screen.content, screen.format, width, theme);
 }
 
 function reviewViewportSize<ActionId extends string>(screen: ReviewScreen<ActionId>) {
@@ -392,6 +298,6 @@ function reviewViewportSize<ActionId extends string>(screen: ReviewScreen<Action
 
 function reviewDialogPageSize<ActionId extends string>(screen: ReviewScreen<ActionId>) {
 	return typeof screen.viewportSize === "number"
-		? Math.min(screen.viewportSize, RPC_REVIEW_VIEWPORT_SIZE)
-		: RPC_REVIEW_VIEWPORT_SIZE;
+		? Math.min(screen.viewportSize, RPC_DOCUMENT_PAGE_SIZE)
+		: RPC_DOCUMENT_PAGE_SIZE;
 }
