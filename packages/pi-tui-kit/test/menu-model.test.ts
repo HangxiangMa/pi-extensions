@@ -40,7 +40,7 @@ function testMenu(): MenuDefinition<State, ScreenId, ActionId> {
 	});
 }
 
-test("package exposes API version 10 and exact browse detail types", () => {
+test("package exposes API version 11 and exact browse detail types", () => {
 	const document: BrowseDetailDocument = {
 		content: "  exact\nbody",
 		format: { kind: "code", language: "json" },
@@ -51,7 +51,7 @@ test("package exposes API version 10 and exact browse detail types", () => {
 		detailDocument: document,
 	};
 	assert.equal(item.detailDocument, document);
-	assert.equal(PI_EXTENSION_MENU_API_VERSION, 10);
+	assert.equal(PI_EXTENSION_MENU_API_VERSION, 11);
 	assert.equal(resolveMenuScreen(testMenu(), "main", { count: 0 }).kind, "actions");
 });
 

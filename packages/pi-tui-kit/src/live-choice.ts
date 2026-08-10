@@ -14,6 +14,8 @@ export interface LiveChoiceItem<ItemId extends string = string> {
 	details?: readonly string[];
 	disabled?: boolean;
 	disabledReason?: string;
+	confirmationDisabled?: boolean;
+	confirmationDisabledReason?: string;
 }
 
 export interface LiveChoiceShortcut<ShortcutId extends string = string> {
@@ -118,7 +120,7 @@ async function runTuiLiveChoice<
 					kind: "choice",
 					title: options.title,
 					lines: options.lines,
-					items: options.items,
+					items: tuiItems(options),
 					action: "select",
 					currentItemId: options.currentItemId,
 					viewportSize: options.viewportSize,
@@ -136,6 +138,8 @@ async function runTuiLiveChoice<
 				},
 				onEvent: (event) => {
 					if (event.kind === "activate") {
+						const item = findItem(options.items, event.itemId);
+						if (itemConfirmationDisabled(item)) return;
 						complete({ kind: "selected", itemId: event.itemId as Item["id"] });
 						return;
 					}
@@ -213,7 +217,9 @@ async function runRpcLiveChoice<
 			);
 		}
 		if (row.kind === "exit") return { kind: "closed", reason: options.hint ?? "back" };
-		if (!row.item.disabled) return { kind: "selected", itemId: row.item.id };
+		if (!row.item.disabled && !itemConfirmationDisabled(row.item)) {
+			return { kind: "selected", itemId: row.item.id };
+		}
 	}
 }
 
@@ -416,6 +422,35 @@ function findItem<Item extends LiveChoiceItem>(
 	return items.find((item) => item.id === itemId);
 }
 
+function tuiItems<
+	Item extends LiveChoiceItem,
+	ShortcutId extends string,
+	Context extends MenuContext,
+>(options: RunLiveChoiceOptions<Item, ShortcutId, Context>) {
+	return options.items.map((item) => {
+		const explanation = confirmationDisabledText(item, options.confirmLabel);
+		return explanation ? { ...item, details: [explanation, ...(item.details ?? [])] } : item;
+	});
+}
+
+function itemConfirmationDisabled(item: LiveChoiceItem | undefined): boolean {
+	return item?.disabled !== true && item?.confirmationDisabled === true;
+}
+
+function confirmationDisabledText(
+	item: LiveChoiceItem,
+	confirmLabel: string | undefined,
+): string | undefined {
+	if (!itemConfirmationDisabled(item)) return undefined;
+	const action = safeMenuText(confirmLabel ?? "select").trim() || "select";
+	const reason = safeMenuText(item.confirmationDisabledReason ?? "").trim();
+	return `Cannot ${action}${reason ? `: ${reason}` : ""}`;
+}
+
+function lowercaseInitial(value: string | undefined): string | undefined {
+	return value ? `${value[0]?.toLowerCase() ?? ""}${value.slice(1)}` : undefined;
+}
+
 type RpcRow<Item extends LiveChoiceItem> =
 	| { kind: "item"; label: string; item: Item }
 	| { kind: "exit"; label: string };
@@ -432,6 +467,7 @@ function rpcRows<
 			item.disabled
 				? `unavailable${item.disabledReason ? `: ${safeMenuText(item.disabledReason)}` : ""}`
 				: undefined,
+			lowercaseInitial(confirmationDisabledText(item, options.confirmLabel)),
 			item.description ? safeMenuText(item.description) : undefined,
 		].filter((value): value is string => Boolean(value));
 		const label = `${item.disabled ? "[-] " : ""}${safeMenuText(item.label)}${

@@ -19,6 +19,8 @@ const choices = [
 		description: "Unavailable profile",
 		disabled: true,
 		disabledReason: "Missing\u0007 font",
+		confirmationDisabled: true,
+		confirmationDisabledReason: "This must not replace the disabled reason",
 	},
 	{
 		id: "full",
@@ -27,6 +29,132 @@ const choices = [
 		details: ["Model, tokens, tools, and time"],
 	},
 ] as const;
+
+const confirmationGatedChoices = [
+	{
+		id: "active",
+		label: "Active preset",
+		description: "Currently applied",
+		confirmationDisabled: true,
+		confirmationDisabledReason: "Already\u0007 active",
+	},
+	{ id: "other", label: "Other preset" },
+] as const;
+
+test("runLiveChoice blocks gated confirmation while preserving preview and shortcuts", async () => {
+	const previews: string[] = [];
+	const tui = createTuiHarness({ width: 24, rows: 12 });
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const running = runLiveChoice(context.ctx, {
+		title: "Preset\u001b[2J picker",
+		items: confirmationGatedChoices,
+		currentItemId: "active",
+		initialItemId: "active",
+		confirmLabel: "apply",
+		shortcuts: [{ id: "customize", keys: ["e"], label: "customize" }],
+		onSelectionChange: ({ item }) => {
+			previews.push(item.id);
+		},
+	});
+	await tui.waitForOpen();
+	await tui.waitForPending();
+	const frame = tui.render();
+	const plain = stripVTControlCharacters(frame.join("\n"));
+	assert.match(plain, /Active preset.*curr/u);
+	assert.match(plain, /Cannot apply: Already\s+active/u);
+	assert.equal(frame.join("\n").includes("\u001b[2J"), false);
+	for (const line of frame) assert.ok(visibleWidth(line) <= 24);
+	assert.deepEqual(previews, ["active"]);
+
+	tui.press("tui.select.confirm");
+	assert.equal(tui.isOpen, true);
+	tui.type("e");
+	assert.deepEqual(await running, {
+		kind: "shortcut",
+		shortcutId: "customize",
+		itemId: "active",
+	});
+});
+
+test("runLiveChoice preserves gated Back, Close, owner abort, and disposal", async () => {
+	async function drive(exit: "tui.select.cancel" | "ctrl+c") {
+		const tui = createTuiHarness();
+		const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+		const running = runLiveChoice(context.ctx, {
+			title: "Preset",
+			items: confirmationGatedChoices,
+			initialItemId: "active",
+		});
+		await tui.waitForOpen();
+		await tui.waitForPending();
+		tui.press(exit);
+		return running;
+	}
+	assert.deepEqual(await drive("tui.select.cancel"), { kind: "closed", reason: "back" });
+	assert.deepEqual(await drive("ctrl+c"), { kind: "closed", reason: "close" });
+
+	const owner = new AbortController();
+	const staleTui = createTuiHarness();
+	const staleContext = createMockContext({ mode: "tui", hasUI: true, custom: staleTui.custom });
+	const stale = runLiveChoice(staleContext.ctx, {
+		title: "Preset",
+		items: confirmationGatedChoices,
+		signal: owner.signal,
+	});
+	await staleTui.waitForOpen();
+	owner.abort(new DOMException("Session replaced", "AbortError"));
+	assert.deepEqual(await stale, { kind: "stale" });
+
+	const disposedTui = createTuiHarness();
+	const disposedContext = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: disposedTui.custom,
+	});
+	const disposed = runLiveChoice(disposedContext.ctx, {
+		title: "Preset",
+		items: confirmationGatedChoices,
+	});
+	await disposedTui.waitForOpen();
+	disposedTui.dispose();
+	assert.deepEqual(await disposed, { kind: "stale" });
+});
+
+test("runLiveChoice gives full disabled state precedence over confirmation gating", async () => {
+	const previews: string[] = [];
+	const tui = createTuiHarness({ width: 40, rows: 12 });
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const running = runLiveChoice(context.ctx, {
+		title: "Preset",
+		items: [
+			{
+				...confirmationGatedChoices[0],
+				disabled: true,
+				disabledReason: "Missing font",
+			},
+			confirmationGatedChoices[1],
+		],
+		initialItemId: "active",
+		confirmLabel: "apply",
+		shortcuts: [{ id: "customize", keys: ["e"], label: "customize" }],
+		onSelectionChange: ({ item }) => {
+			previews.push(item.id);
+		},
+	});
+	await tui.waitForOpen();
+	await tui.waitForPending();
+	const plain = stripVTControlCharacters(tui.render().join("\n"));
+	assert.match(plain, /Unavailable: Missing font/u);
+	assert.doesNotMatch(plain, /Cannot apply|Already active/u);
+	tui.press("tui.select.confirm");
+	tui.type("e");
+	assert.equal(tui.isOpen, true);
+	tui.press("tui.select.down");
+	await tui.waitForPending();
+	tui.press("tui.select.confirm");
+	assert.deepEqual(await running, { kind: "selected", itemId: "other" });
+	assert.deepEqual(previews, ["active", "other"]);
+});
 
 test("runLiveChoice previews initial and cursor choices and dispatches enabled shortcuts", async () => {
 	const previews: string[] = [];
@@ -300,6 +428,86 @@ test("runLiveChoice degrades RPC to ordinary selection without preview or shortc
 	});
 	assert.deepEqual(result, { kind: "selected", itemId: "full" });
 	assert.equal(previews, 0);
+	rpc.assertConsumed();
+});
+
+test("runLiveChoice keeps confirmation-gated RPC rows explanatory and inert", async () => {
+	let previews = 0;
+	const options = [
+		"Same — current · cannot apply: Already active · Currently applied",
+		"Same",
+		"Close",
+	];
+	const rpc = createRpcHarness([
+		{ kind: "select", options, response: options[0] },
+		{ kind: "select", options, response: options[1] },
+	]);
+	const base = createMockContext({ mode: "rpc", hasUI: true }).ctx as unknown as {
+		ui: Record<string, unknown>;
+		[key: string]: unknown;
+	};
+	const context = { ...base, ui: { ...base.ui, ...rpc.ui } } as never;
+	assert.deepEqual(
+		await runLiveChoice(context, {
+			title: "Preset",
+			items: [
+				{ ...confirmationGatedChoices[0], label: "Same" },
+				{ ...confirmationGatedChoices[1], label: "Same" },
+			],
+			currentItemId: "active",
+			confirmLabel: "apply",
+			hint: "close",
+			shortcuts: [{ id: "customize", keys: ["e"], label: "customize" }],
+			onSelectionChange: () => {
+				previews += 1;
+			},
+		}),
+		{ kind: "selected", itemId: "other" },
+	);
+	assert.equal(previews, 0);
+	rpc.assertConsumed();
+});
+
+test("runLiveChoice preserves raw identity for duplicate RPC labels", async () => {
+	const options = ["Same", "Same [2]", "← Back"];
+	const rpc = createRpcHarness([{ kind: "select", options, response: options[1] }]);
+	const base = createMockContext({ mode: "rpc", hasUI: true }).ctx as unknown as {
+		ui: Record<string, unknown>;
+		[key: string]: unknown;
+	};
+	const context = { ...base, ui: { ...base.ui, ...rpc.ui } } as never;
+	assert.deepEqual(
+		await runLiveChoice(context, {
+			title: "Preset",
+			items: [
+				{ id: "first", label: "Same" },
+				{ id: "second", label: "Same" },
+			],
+		}),
+		{ kind: "selected", itemId: "second" },
+	);
+	rpc.assertConsumed();
+});
+
+test("runLiveChoice follows the requested RPC cancellation hint for gated rows", async () => {
+	const options = ["Active preset — cannot select: Already active · Currently applied", "Close"];
+	const rpc = createRpcHarness([
+		{ kind: "select", options, response: options[0] },
+		{ kind: "select", options, response: "Close" },
+	]);
+	const base = createMockContext({ mode: "rpc", hasUI: true }).ctx as unknown as {
+		ui: Record<string, unknown>;
+		[key: string]: unknown;
+	};
+	const context = { ...base, ui: { ...base.ui, ...rpc.ui } } as never;
+	assert.deepEqual(
+		await runLiveChoice(context, {
+			title: "Preset",
+			items: [confirmationGatedChoices[0]],
+			hint: "close",
+		}),
+		{ kind: "closed", reason: "close" },
+	);
 	rpc.assertConsumed();
 });
 

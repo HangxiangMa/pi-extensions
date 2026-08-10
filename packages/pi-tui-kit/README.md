@@ -207,6 +207,9 @@ try {
       description: preset.description,
       disabled: !preset.available,
       disabledReason: preset.available ? undefined : "Required font is unavailable",
+      confirmationDisabled: preset.id === activePresetId,
+      confirmationDisabledReason:
+        preset.id === activePresetId ? "Already applied" : undefined,
     })),
     currentItemId: activePresetId,
     initialItemId: activePresetId,
@@ -227,9 +230,14 @@ if (choice?.kind === "selected") await saveAndApplyPreset(choice.itemId);
 else if (choice?.kind === "shortcut") await customizePreset(choice.itemId);
 ```
 
-TUI calls `onSelectionChange` for the initial cursor and later focused rows, including disabled rows;
-only confirmation and shortcuts are blocked for a disabled row. Shortcut keys use Pi `KeyId` values;
-keys that conflict with current standard choice controls are omitted from shortcut hints and dispatch.
+TUI calls `onSelectionChange` for the initial cursor and later focused rows, including disabled rows.
+A fully `disabled` row blocks both primary confirmation and shortcuts.
+Set `confirmationDisabled` with an optional `confirmationDisabledReason` when only the primary action
+must be inert while shortcuts remain available, such as allowing Customize for an already-active
+preset that cannot be applied again.
+If both states are present, full `disabled` behavior and its reason take precedence.
+Shortcut keys use Pi `KeyId` values; keys that conflict with current standard choice controls are
+omitted from shortcut hints and dispatch.
 Synchronous previews run immediately.
 While an asynchronous preview is pending, newer cursor changes coalesce to the latest row. Completion,
 Back, Close, owner cancellation, external disposal, and errors abort the callback signal and drain
@@ -237,9 +245,9 @@ owned preview work before returning. The callback must honor that signal. The ca
 preview snapshot, rollback, persistence, confirmation, and final apply policy.
 
 RPC deliberately degrades to a signal-aware ordinary selector: it never runs live previews or custom
-shortcuts, disabled rows remain inert, and cancellation follows the requested Back/Close hint. Print
-and JSON return `unsupported`. Results distinguish `selected`, `shortcut`, `closed`, `stale`,
-`unsupported`, and `error`.
+shortcuts, disabled and confirmation-disabled rows remain explanatory and inert, and cancellation
+follows the requested Back/Close hint. Print and JSON return `unsupported`. Results distinguish
+`selected`, `shortcut`, `closed`, `stale`, `unsupported`, and `error`.
 
 `formatInteractionHints()` is available for other specialized components. Pass the callback-injected
 keybindings plus binding-backed or literal-key hint groups; the formatter normalizes arrows,
@@ -676,7 +684,7 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `runConfirmation()` — preserves Confirmed, Back, Close, Stale, Unsupported, and Error for one
   standalone confirmation without owning the confirmed side effect.
 - `runLiveChoice()` — adapts a live-preview choice to TUI and ordinary RPC selection while preserving
-  typed selection, shortcut, Back, Close, Stale, Unsupported, and Error outcomes.
+  typed selection, confirmation-only gating, shortcuts, Back, Close, Stale, Unsupported, and Error.
 - `formatInteractionHints()` — formats sanitized, normalized, de-duplicated injected bindings and
   literal shortcut keys for specialized interaction hints.
 - `runCustomInteraction()` — owns cancellation, stale checks, exactly-once disposal, optional pending
@@ -687,10 +695,11 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
   `MenuCloseReason`, and result types.
 - `@narumitw/pi-tui-kit/testing` — separate subpath for `createTuiHarness()`, `createRpcHarness()`,
   strict scripts, and their public testing types; it is not re-exported from the production root.
-- `PI_EXTENSION_MENU_API_VERSION` — current API version (`10`). Version 10 adds exact browse detail
-  documents while version-9 menu definitions remain valid. Version 9 added `runLiveChoice()` and
-  `formatInteractionHints()`, version 8 added disabled action reasons and adaptive action-label
-  columns, version 7 added `runConfirmation()`, and version 6 added the read-only `browse` screen and
+- `PI_EXTENSION_MENU_API_VERSION` — current API version (`11`). Version 11 adds Live Choice
+  confirmation-only gating while version-10 menu definitions remain valid. Version 10 added exact
+  browse detail documents, version 9 added `runLiveChoice()` and `formatInteractionHints()`, version 8
+  added disabled action reasons and adaptive action-label columns, version 7 added
+  `runConfirmation()`, and version 6 added the read-only `browse` screen and
   `runCustomInteraction()`.
 
 ## 🗂️ Package layout
