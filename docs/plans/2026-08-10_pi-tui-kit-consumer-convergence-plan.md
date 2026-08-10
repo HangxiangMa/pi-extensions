@@ -95,14 +95,14 @@ Each implementation pull request starts from then-current `origin/main`, changes
 
 ### Phase 3: Pi TUI Kit confirmation-gating API
 
-- [ ] Wait until pull request #685 is merged, then create a Kit-only branch from the resulting `origin/main` so API compatibility metadata and Changeset intent advance from one authoritative base.
-- [ ] Add failing public type and declaration tests for a Live Choice item whose primary confirmation is disabled while shortcuts remain enabled, including full-disabled precedence and the incremented compatibility literal.
-- [ ] Add failing TUI tests for textual presentation, injected confirm rejection, shortcut dispatch, current and initial selection, preview callbacks, terminal controls, narrow widths, Back/Close, owner abort, disposal, stale preview completion, and preview failure.
-- [ ] Add failing RPC tests proving the confirmation-disabled row is explanatory and inert, no shortcut or preview executes, duplicate labels preserve raw identity, cancellation follows the requested hint, and full-disabled precedence remains unchanged.
-- [ ] Implement the smallest Live Choice-only public contract and internal adaptation needed to separate primary confirmation from shortcut availability without changing existing `disabled`, declarative `choice`, or default behavior.
-- [ ] Update Kit README examples, public exports or declarations as required, API compatibility metadata, type fixtures, and a Kit-only minor Changeset.
-- [ ] Run the complete Kit check and tests, `npm run check:boundaries`, `npm run check`, `git diff --check`, and `just pack tui-kit`; inspect root declarations and prove no consumer adopts the unpublished API.
-- [ ] Audit display-cell bounds, sanitization, disabled-state precedence, shortcut conflicts, preview queue cancellation and draining, stale ownership after awaits, error reporting, TUI/RPC compatibility, and final diff scope before opening the Kit pull request.
+- [x] Wait until pull request #685 is merged, then create a Kit-only branch from the resulting `origin/main` so API compatibility metadata and Changeset intent advance from one authoritative base.
+- [x] Add failing public type and declaration tests for a Live Choice item whose primary confirmation is disabled while shortcuts remain enabled, including full-disabled precedence and the incremented compatibility literal.
+- [x] Add failing TUI tests for textual presentation, injected confirm rejection, shortcut dispatch, current and initial selection, preview callbacks, terminal controls, narrow widths, Back/Close, owner abort, disposal, stale preview completion, and preview failure.
+- [x] Add failing RPC tests proving the confirmation-disabled row is explanatory and inert, no shortcut or preview executes, duplicate labels preserve raw identity, cancellation follows the requested hint, and full-disabled precedence remains unchanged.
+- [x] Implement the smallest Live Choice-only public contract and internal adaptation needed to separate primary confirmation from shortcut availability without changing existing `disabled`, declarative `choice`, or default behavior.
+- [x] Update Kit README examples, public exports or declarations as required, API compatibility metadata, type fixtures, and a Kit-only minor Changeset.
+- [x] Run the complete Kit check and tests, `npm run check:boundaries`, `npm run check`, `git diff --check`, and `just pack tui-kit`; inspect root declarations and prove no consumer adopts the unpublished API.
+- [x] Audit display-cell bounds, sanitization, disabled-state precedence, shortcut conflicts, preview queue cancellation and draining, stale ownership after awaits, error reporting, TUI/RPC compatibility, and final diff scope before opening the Kit pull request.
 
 ### Release gate
 
@@ -158,10 +158,20 @@ Each implementation pull request starts from then-current `origin/main`, changes
 - Branch `feat/pi-starship-review-inspector` started from `origin/main` merge `8da1ca13f6e5e4f7e63e579726fb243e8748855b`, then rebased onto `0d254565a30e7ecd911228ea32b35077ac176e1d`; the Starship package check and 190 focused tests passed at baseline.
 - The formatter test failed before implementation because `formatFooterExplanation` did not exist, then passed after the custom component was reduced to terminal-safe content formatting and the menu adopted an adaptive `review` screen.
 - Final evidence after rebasing: Starship package check passed; 193 focused tests passed; boundaries passed; CI-equivalent `npm run check` passed with 274 files and 2,941 tests; `git diff --check` passed.
-- Starship inspector pull request: [#690](https://github.com/narumiruna/pi-extensions/pull/690), with implementation commit `306a4e58`, plan commit `6e919e79`, and evidence commit `ad35979a`. CI run `31410070343` passed in 57s; no review was submitted at this refresh.
+- Starship inspector pull request [#690](https://github.com/narumiruna/pi-extensions/pull/690) merged as `81c279717e9a04799d918a2f4f1e707a1a4d00d8`, carrying implementation commit `306a4e58`, plan commit `6e919e79`, evidence commit `ad35979a`, and PR record commit `fd6d36cd`. Final CI run `31410197960` passed in 1m; no review was submitted.
 - `just pack starship` exposed the expected 79 manifest-listed source, notice, README, and license files (81.7 kB packed, 303.2 kB unpacked); tests and generated artifacts were absent.
 - A live TUI smoke remained unavailable in the non-interactive terminal. Kit-harness tests covered unavailable, empty, populated, long, and unsafe documents; adaptive heights and widths; Home/End and paging; resize clamping; Back, Close, owner abort, external disposal, and parent cursor restoration.
 - Audit confirmed inspection acquisition, module ordering, preview text, TUI-only routing, and session ownership remain in Starship. The removed code owned only generic layout, scroll, keybinding, abort-listener, and disposal behavior now supplied by the Kit.
+
+### Phase 3 Live Choice confirmation gating
+
+- Branch `feat/pi-tui-kit-live-choice-confirmation-gating` started from `origin/main` merge `81c279717e9a04799d918a2f4f1e707a1a4d00d8`, after browse pull request #685 and the two preceding consumer phases merged.
+- Kit baseline passed its package check and 170 focused tests. New TUI and RPC tests failed before implementation because gated confirmation still selected the item and no explanation was rendered.
+- The public contract adds only `confirmationDisabled` and `confirmationDisabledReason` to `LiveChoiceItem`; API compatibility advances from 10 to 11 and declarative `choice` remains unchanged.
+- Final evidence: Kit package check and build passed; 176 focused tests passed; root declarations and runtime export compatibility fixtures passed; boundaries passed; CI-equivalent `npm run check` passed with 274 files and 2,947 tests; `git diff --check` passed.
+- Kit implementation commit: `93b507b5` (`feat(tui-kit): gate live choice confirmation`).
+- `just pack tui-kit` exposed 59 expected built files (51.2 kB packed, 230.9 kB unpacked). Root declarations contain both gating fields and compatibility literal 11. Repository search proved no Statusline, Starship, Tool, or other consumer uses the unpublished fields.
+- Audit confirmed full `disabled` presentation and shortcut blocking take precedence; gating blocks only Enter/Space activation, leaves non-conflicting shortcuts and previews active in TUI, stays inert without previews or shortcuts in RPC, sanitizes labels and reasons, preserves raw IDs, and reuses existing preview draining, stale checks, disposal, and error reporting.
 
 ### Applicable MUST mapping for Phase 1
 
@@ -189,7 +199,7 @@ Each implementation pull request starts from then-current `origin/main`, changes
 
 - [x] `pi-statusline` uses published `runLiveChoice()` for palette previews and preserves settings, preview, cancellation, and rollback behavior.
 - [x] Starship footer explanation uses the standard adaptive `review` screen with no extension-owned generic scroll component.
-- [ ] Pi TUI Kit exposes and documents confirmation-only Live Choice gating with unchanged legacy disabled behavior and complete TUI/RPC lifecycle tests.
+- [x] Pi TUI Kit exposes and documents confirmation-only Live Choice gating with unchanged legacy disabled behavior and complete TUI/RPC lifecycle tests.
 - [ ] The enhanced Kit release is explicitly approved, published, registry-verified, and independently installable before consumer adoption.
 - [ ] `pi-starship` uses the published Live Choice contract for presets while active Apply remains inert and Customize remains available.
 - [ ] `pi-tool` uses published exact browse details and no longer owns a duplicate browser or unnecessary direct Pi TUI dependency.
