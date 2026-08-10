@@ -155,10 +155,10 @@ Each implementation pull request starts from then-current `origin/main`, changes
 
 ### Phase 2 Starship inspector
 
-- Branch `feat/pi-starship-review-inspector` started from `origin/main` merge `8da1ca13f6e5e4f7e63e579726fb243e8748855b`; the Starship package check and 190 focused tests passed at baseline.
+- Branch `feat/pi-starship-review-inspector` started from `origin/main` merge `8da1ca13f6e5e4f7e63e579726fb243e8748855b`, then rebased onto `0d254565a30e7ecd911228ea32b35077ac176e1d`; the Starship package check and 190 focused tests passed at baseline.
 - The formatter test failed before implementation because `formatFooterExplanation` did not exist, then passed after the custom component was reduced to terminal-safe content formatting and the menu adopted an adaptive `review` screen.
-- Final evidence: Starship package check passed; 193 focused tests passed; boundaries passed; CI-equivalent `npm run check` passed with 268 files and 2,909 tests; `git diff --check` passed.
-- Starship inspector implementation commit: `d81c670a` (`refactor(starship): standardize footer explanation`).
+- Final evidence after rebasing: Starship package check passed; 193 focused tests passed; boundaries passed; CI-equivalent `npm run check` passed with 274 files and 2,941 tests; `git diff --check` passed.
+- Starship inspector implementation commit: `306a4e58` (`refactor(starship): standardize footer explanation`).
 - `just pack starship` exposed the expected 79 manifest-listed source, notice, README, and license files (81.7 kB packed, 303.2 kB unpacked); tests and generated artifacts were absent.
 - A live TUI smoke remained unavailable in the non-interactive terminal. Kit-harness tests covered unavailable, empty, populated, long, and unsafe documents; adaptive heights and widths; Home/End and paging; resize clamping; Back, Close, owner abort, external disposal, and parent cursor restoration.
 - Audit confirmed inspection acquisition, module ordering, preview text, TUI-only routing, and session ownership remain in Starship. The removed code owned only generic layout, scroll, keybinding, abort-listener, and disposal behavior now supplied by the Kit.
