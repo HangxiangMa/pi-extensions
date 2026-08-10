@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getKeybindings } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import statusline from "../src/statusline.js";
@@ -76,20 +77,23 @@ test("palette picker previews the highlighted preset and restores on cancel", as
 			select: async (_title: string, choices: string[]) => choices[0],
 			custom: async (factory: (...args: unknown[]) => unknown) => {
 				let result: unknown;
-				const component = factory(
+				const component = (await factory(
 					{ requestRender() {} },
 					{
 						fg: (_color: string, text: string) => text,
 						bold: (text: string) => text,
 					},
-					{},
+					getKeybindings(),
 					(value: unknown) => {
 						result = value;
 					},
-				) as { handleInput?(data: string): void };
+				)) as { handleInput?(data: string): void; waitForPending?(): Promise<void> };
+				await component.waitForPending?.();
 				component.handleInput?.("\u001b[B");
+				await component.waitForPending?.();
 				preview = footer?.render(200)[0] ?? "";
 				component.handleInput?.("\u001b");
+				await component.waitForPending?.();
 				return result;
 			},
 		});

@@ -7,8 +7,6 @@ import {
 	Container,
 	Key,
 	matchesKey,
-	type SelectItem,
-	SelectList,
 	Text,
 	truncateToWidth,
 	wrapTextWithAnsi,
@@ -56,13 +54,18 @@ const SEGMENT_DESCRIPTIONS: Record<SegmentName, string> = {
 	time: "Current local time",
 	turn: "Current session turn count",
 };
+interface StatuslineMenuOwner {
+	signal: AbortSignal;
+	isCurrent(): boolean;
+}
+
 export interface StatuslineCommandOptions {
 	settingsPath: string;
 	getLoaded(): LoadedStatuslineSettings;
 	apply(loaded: LoadedStatuslineSettings, ctx: ExtensionCommandContext): void;
 	preview?(palettePreset: PalettePreset | undefined, ctx: ExtensionCommandContext): void;
 	save?: (settingsPath: string, rawDocument: string) => LoadedStatuslineSettings;
-	getMenuOwner?(): { signal: AbortSignal; isCurrent(): boolean };
+	getMenuOwner?(): StatuslineMenuOwner;
 }
 
 export function registerStatuslineCommand(pi: ExtensionAPI, options: StatuslineCommandOptions) {
@@ -191,7 +194,7 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCom
 		},
 		actions: {
 			appearance: async () => {
-				await choosePalettePreset(ctx, options);
+				await choosePalettePreset(ctx, options, owner);
 				return { kind: "close" };
 			},
 			setInformation: async ({ itemId }) => {
@@ -233,6 +236,7 @@ async function showMainMenu(ctx: ExtensionCommandContext, options: StatuslineCom
 async function choosePalettePreset(
 	ctx: ExtensionCommandContext,
 	options: StatuslineCommandOptions,
+	owner: StatuslineMenuOwner,
 ) {
 	if (ctx.mode !== "tui") {
 		if (ctx.hasUI) ctx.ui.notify(`Edit palettePreset manually: ${options.settingsPath}`, "info");
@@ -241,10 +245,19 @@ async function choosePalettePreset(
 	const current = options.getLoaded();
 	let selection: PalettePreset | undefined;
 	try {
-		selection = await showPalettePresetPicker(ctx, current.config.palettePreset, options);
+		selection = await showPalettePresetPicker(ctx, current.config.palettePreset, options, owner);
 	} finally {
-		options.preview?.(undefined, ctx);
+		if (!owner.signal.aborted && owner.isCurrent()) {
+			try {
+				options.preview?.(undefined, ctx);
+			} catch (error) {
+				if (canNotify(ctx)) {
+					ctx.ui.notify(`Palette preview could not be reset: ${formatError(error)}`, "error");
+				}
+			}
+		}
 	}
+	if (owner.signal.aborted || !owner.isCurrent()) return;
 	if (selection === undefined) return;
 
 	let loaded: LoadedStatuslineSettings;
@@ -278,60 +291,27 @@ async function showPalettePresetPicker(
 	ctx: ExtensionCommandContext,
 	current: PalettePreset,
 	options: StatuslineCommandOptions,
+	owner: StatuslineMenuOwner,
 ): Promise<PalettePreset | undefined> {
-	const items: SelectItem[] = PALETTE_PRESET_NAMES.map((palettePreset) => ({
-		value: palettePreset,
-		label: palettePreset,
-		description:
-			[
-				palettePreset === current ? "current" : undefined,
-				palettePreset === "custom" ? "per-segment colors from settings JSON" : undefined,
-			]
-				.filter((part): part is string => part !== undefined)
-				.join(" • ") || undefined,
-	}));
-	const selectedIndex = PALETTE_PRESET_NAMES.indexOf(current);
-	const result = await ctx.ui.custom<PalettePreset | null>((tui, theme, _keybindings, done) => {
-		const container = new Container();
-		container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
-		const title = new Text("", 1, 0);
-		container.addChild(title);
-		const list = new SelectList(items, Math.min(items.length, 10), {
-			selectedPrefix: (text) => theme.fg("accent", text),
-			selectedText: (text) => theme.fg("accent", text),
-			description: (text) => theme.fg("muted", text),
-			scrollInfo: (text) => theme.fg("dim", text),
-			noMatch: (text) => theme.fg("warning", text),
-		});
-		list.setSelectedIndex(selectedIndex);
-		list.onSelectionChange = (item) => {
-			options.preview?.(item.value as PalettePreset, ctx);
-		};
-		list.onSelect = (item) => done(item.value as PalettePreset);
-		list.onCancel = () => done(null);
-		container.addChild(list);
-		const hint = new Text("", 1, 0);
-		container.addChild(hint);
-		container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
-		const updateThemedText = () => {
-			title.setText(theme.fg("accent", theme.bold(`Palette preset (current: ${current})`)));
-			hint.setText(theme.fg("dim", "↑↓ preview • enter apply • esc cancel"));
-		};
-		updateThemedText();
-
-		return {
-			render: (width: number) => container.render(width),
-			invalidate() {
-				container.invalidate();
-				updateThemedText();
-			},
-			handleInput(data: string) {
-				list.handleInput(data);
-				tui.requestRender();
-			},
-		};
+	const { runLiveChoice } = await import("@narumitw/pi-tui-kit");
+	const result = await runLiveChoice(ctx, {
+		title: `Palette preset (current: ${current})`,
+		items: PALETTE_PRESET_NAMES.map((palettePreset) => ({
+			id: palettePreset,
+			label: palettePreset,
+			description: palettePreset === "custom" ? "per-segment colors from settings JSON" : undefined,
+		})),
+		currentItemId: current,
+		initialItemId: current,
+		viewportSize: Math.min(PALETTE_PRESET_NAMES.length, 10),
+		hint: "close",
+		navigationLabel: "preview",
+		confirmLabel: "apply",
+		onSelectionChange: ({ item }) => options.preview?.(item.id, ctx),
+		signal: owner.signal,
+		isCurrent: owner.isCurrent,
 	});
-	return result ?? undefined;
+	return result.kind === "selected" ? result.itemId : undefined;
 }
 
 function applyInformationProfile(
