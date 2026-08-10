@@ -53,3 +53,11 @@ export function parallelStatus(done: number, total: number, running: number): st
 export function fanInStatus(agent: string): string {
 	return `fan-in ${agent}`;
 }
+
+export function panelReviewStatus(done: number, total: number, running: number): string {
+	return `panel review ${done}/${total}${running > 0 ? ` ${running} running` : ""}`;
+}
+
+export function panelSynthesisStatus(agent: string): string {
+	return `panel synthesis ${agent}`;
+}

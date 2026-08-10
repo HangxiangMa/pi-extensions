@@ -3,6 +3,7 @@ import { type Static, Type } from "typebox";
 import { THINKING_LEVELS } from "./agents.js";
 import { DelegationContractSchema } from "./delegation-contract.js";
 import { MAX_CONFIGURABLE_PARALLEL_TASKS, MAX_SUBAGENT_TIMEOUT_MS } from "./limits.js";
+import { PANEL_PRESETS } from "./panel-planning.js";
 import { SUBAGENT_RESULT_FORMATS } from "./result-contract.js";
 import { MAX_SUBAGENT_TOOL_CALLS, MAX_SUBAGENT_TURNS } from "./turn-budget.js";
 
@@ -145,6 +146,48 @@ const AggregatorItem = Type.Object(
 	},
 );
 
+const PanelReviewerItem = Type.Object(
+	{
+		id: Type.String({ minLength: 1, maxLength: 256 }),
+		agent: Type.String({ minLength: 1 }),
+		focus: Type.Optional(Type.String({ maxLength: 8 * 1024 })),
+		timeoutMs: Type.Optional(TimeoutMs),
+		...TurnLimitFields,
+		thinkingLevel: Type.Optional(ThinkingLevelSchema),
+	},
+	{ additionalProperties: false },
+);
+
+const PanelSynthesizerItem = Type.Object(
+	{
+		agent: Type.String({ minLength: 1 }),
+		timeoutMs: Type.Optional(TimeoutMs),
+		...TurnLimitFields,
+		thinkingLevel: Type.Optional(ThinkingLevelSchema),
+	},
+	{ additionalProperties: false },
+);
+
+const PanelItem = Type.Object(
+	{
+		id: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+		preset: Type.Optional(StringEnum(PANEL_PRESETS, { default: "custom" })),
+		task: Type.String({ minLength: 1, maxLength: 50 * 1024 }),
+		context: Type.Optional(Type.String({ maxLength: 50 * 1024 })),
+		reviewers: Type.Array(PanelReviewerItem, {
+			minItems: 2,
+			maxItems: MAX_CONFIGURABLE_PARALLEL_TASKS,
+		}),
+		synthesizer: PanelSynthesizerItem,
+		minValidReviews: Type.Optional(Type.Integer({ minimum: 2 })),
+	},
+	{
+		additionalProperties: false,
+		description:
+			"One bounded independent review round followed by one evidence-preserving synthesis when enough valid reviews remain.",
+	},
+);
+
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 	description:
 		'Per-invocation custom agent scope. Default: "user". Use "project" for project-local agents or "both" for user and project agents; this is a tool argument, not a pi-subagents.json setting.',
@@ -166,6 +209,7 @@ export const SubagentParams = Type.Object({
 		Type.Array(ChainItem, { description: "Array of {agent, task} for sequential execution" }),
 	),
 	aggregator: Type.Optional(AggregatorItem),
+	panel: Type.Optional(PanelItem),
 	workflow: Type.Optional(
 		Type.Object(
 			{
@@ -198,7 +242,7 @@ export const SubagentParams = Type.Object({
 	totalTimeoutMs: Type.Optional(
 		Type.Number({
 			description:
-				"Overall blocking-workflow deadline in milliseconds, including queued work, workflow tasks, chain steps, and fan-in.",
+				"Overall blocking-workflow deadline in milliseconds, including queued work, workflow tasks, panel phases, chain steps, and fan-in.",
 			minimum: 1,
 			maximum: MAX_SUBAGENT_TIMEOUT_MS,
 		}),

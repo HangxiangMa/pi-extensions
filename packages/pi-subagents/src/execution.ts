@@ -44,6 +44,8 @@ import {
 	truncateUtf8,
 } from "./limits.js";
 import { calculateOrchestrationMetrics } from "./orchestration-metrics.js";
+import { executePanel, preflightPanelExecution } from "./panel-execution.js";
+import { validatePanelRequest } from "./panel-planning.js";
 import { hasUsableAggregator, type SubagentParams } from "./params.js";
 import { appendResultInstruction, type SubagentResultFormat } from "./result-contract.js";
 import {
@@ -161,13 +163,19 @@ export async function executeSubagent(
 	const hasChain = (params.chain?.length ?? 0) > 0;
 	const hasTasks = (params.tasks?.length ?? 0) > 0;
 	const hasWorkflow = (params.workflow?.tasks.length ?? 0) > 0;
+	const hasPanel = params.panel !== undefined;
 	const hasSingle = Boolean(params.agent && params.task);
-	const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasWorkflow) + Number(hasSingle);
+	const modeCount =
+		Number(hasChain) +
+		Number(hasTasks) +
+		Number(hasWorkflow) +
+		Number(hasPanel) +
+		Number(hasSingle);
 	let workLedger: WorkItemLedger | undefined;
 	const workflowScheduling: ReturnType<AdaptiveScheduler["decide"]>[] = [];
 
 	const makeDetails =
-		(mode: "single" | "parallel" | "chain" | "workflow") =>
+		(mode: "single" | "parallel" | "chain" | "workflow" | "panel") =>
 		(results: SingleResult[], aggregator?: SingleResult): SubagentDetails => {
 			const workflow = workLedger?.snapshot();
 			const metricResults = aggregator ? [...results, aggregator] : results;
@@ -239,14 +247,33 @@ export async function executeSubagent(
 			details: makeDetails("single")([]),
 		};
 	}
-	if (hasWorkflow && (Number.parseInt(process.env.PI_SUBAGENT_DEPTH ?? "0", 10) || 0) > 0) {
-		throw new Error("Explicit workflow recursion is disabled until separately evaluated");
+	if (
+		(hasWorkflow || hasPanel) &&
+		(Number.parseInt(process.env.PI_SUBAGENT_DEPTH ?? "0", 10) || 0) > 0
+	) {
+		throw new Error("Explicit workflow and panel recursion is disabled until separately evaluated");
+	}
+	if (params.panel) {
+		validatePanelRequest(params.panel, maxParallelTasks);
+		for (const agentName of [
+			...params.panel.reviewers.map((reviewer) => reviewer.agent),
+			params.panel.synthesizer.agent,
+		]) {
+			if (!agents.some((agent) => agent.name === agentName)) {
+				throw new Error(`Unknown panel agent: ${agentName}`);
+			}
+		}
 	}
 	if (
 		(hasTasks && (params.tasks?.length ?? 0) > maxParallelTasks) ||
-		(hasWorkflow && (params.workflow?.tasks.length ?? 0) > maxParallelTasks)
+		(hasWorkflow && (params.workflow?.tasks.length ?? 0) > maxParallelTasks) ||
+		(hasPanel && (params.panel?.reviewers.length ?? 0) > maxParallelTasks)
 	) {
-		const count = hasWorkflow ? (params.workflow?.tasks.length ?? 0) : (params.tasks?.length ?? 0);
+		const count = hasWorkflow
+			? (params.workflow?.tasks.length ?? 0)
+			: hasPanel
+				? (params.panel?.reviewers.length ?? 0)
+				: (params.tasks?.length ?? 0);
 		throw new Error(`Too many delegated tasks (${count}). Configured max is ${maxParallelTasks}.`);
 	}
 
@@ -343,10 +370,21 @@ export async function executeSubagent(
 		return target;
 	};
 	const singleTarget = hasSingle ? resolveTarget(params.cwd) : undefined;
+	const panelTarget = hasPanel ? resolveTarget(undefined) : undefined;
 	const chainTargets = params.chain?.map((step) => resolveTarget(step.cwd)) ?? [];
 	const parallelTargets = params.tasks?.map((task) => resolveTarget(task.cwd)) ?? [];
 	const workflowTargets = resolvedWorkflowTasks.map((task) => resolveTarget(task.cwd));
 	const aggregatorTarget = aggregator ? resolveTarget(aggregator.cwd) : undefined;
+	if (params.panel && panelTarget) {
+		await preflightPanelExecution({
+			panel: params.panel,
+			agents,
+			signal,
+			target: panelTarget,
+			resolveThinkingLevel,
+			resolveTimeoutMs,
+		});
+	}
 	const attachTarget = (result: SingleResult, target: ResolvedSubagentTarget): SingleResult => {
 		result.target = targetPolicyAudit(target);
 		return result;
@@ -537,6 +575,10 @@ export async function executeSubagent(
 		if (params.tasks) for (const t of params.tasks) requestedAgentNames.add(t.agent);
 		for (const task of resolvedWorkflowTasks) requestedAgentNames.add(task.agent);
 		if (aggregator) requestedAgentNames.add(aggregator.agent);
+		if (params.panel) {
+			for (const reviewer of params.panel.reviewers) requestedAgentNames.add(reviewer.agent);
+			requestedAgentNames.add(params.panel.synthesizer.agent);
+		}
 		if (params.agent) requestedAgentNames.add(params.agent);
 
 		const projectAgentsRequested = Array.from(requestedAgentNames)
@@ -565,7 +607,15 @@ export async function executeSubagent(
 					return {
 						content: [{ type: "text", text: "Canceled: project-local agents not approved." }],
 						details: makeDetails(
-							hasChain ? "chain" : hasTasks ? "parallel" : hasWorkflow ? "workflow" : "single",
+							hasChain
+								? "chain"
+								: hasTasks
+									? "parallel"
+									: hasWorkflow
+										? "workflow"
+										: hasPanel
+											? "panel"
+											: "single",
 						)([]),
 					};
 				}
@@ -577,6 +627,23 @@ export async function executeSubagent(
 		params.totalTimeoutMs === undefined
 			? undefined
 			: Date.now() + Math.floor(params.totalTimeoutMs);
+	if (params.panel && panelTarget) {
+		return executePanel({
+			toolCallId,
+			params,
+			panel: params.panel,
+			signal,
+			onUpdate,
+			ctx,
+			agents,
+			agentScope,
+			projectAgentsDir: discovery.projectAgentsDir,
+			maxParallelTasks,
+			target: panelTarget,
+			resolveThinkingLevel,
+			resolveTimeoutMs,
+		});
+	}
 	if (params.workflow && resolvedWorkflowTasks.length > 0 && workLedger) {
 		await persistWorkLedger();
 		const status = startSubagentStatus(
