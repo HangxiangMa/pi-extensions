@@ -397,6 +397,7 @@ export class WorkItemLedger {
 		) {
 			throw new Error("Unsupported or malformed WorkItem ledger snapshot");
 		}
+		const isLegacySnapshot = (snapshot.version as string) === LEGACY_WORK_ITEM_LEDGER_VERSION;
 		if (
 			!Array.isArray(snapshot.items) ||
 			snapshot.items.length < 1 ||
@@ -438,19 +439,27 @@ export class WorkItemLedger {
 			item.assignedAgentId = stored.assignedAgentId;
 			item.acceptedExecutionPlanId = stored.acceptedExecutionPlanId;
 			item.inputArtifactVersions = { ...stored.inputArtifactVersions };
-			item.artifacts = normalizeStoredArtifacts(stored.artifacts, stored.id, stored.generation);
+			item.artifacts = normalizeStoredArtifacts(
+				stored.artifacts,
+				stored.id,
+				stored.generation,
+				!isLegacySnapshot,
+			);
 			item.artifactHistory = normalizeStoredArtifacts(
 				stored.artifactHistory ?? [],
 				stored.id,
 				stored.generation,
+				!isLegacySnapshot,
 			);
-			item.verificationAccepted = stored.verificationAccepted;
-			item.stagedTreeIdentity = stored.stagedTreeIdentity
-				? structuredClone(stored.stagedTreeIdentity)
-				: undefined;
-			item.verificationReceipt = stored.verificationReceipt
-				? structuredClone(stored.verificationReceipt)
-				: undefined;
+			item.verificationAccepted = !isLegacySnapshot && stored.verificationAccepted;
+			item.stagedTreeIdentity =
+				!isLegacySnapshot && stored.stagedTreeIdentity
+					? structuredClone(stored.stagedTreeIdentity)
+					: undefined;
+			item.verificationReceipt =
+				!isLegacySnapshot && stored.verificationReceipt
+					? structuredClone(stored.verificationReceipt)
+					: undefined;
 			item.invalidationReasons = [...stored.invalidationReasons];
 			item.outcomeReason = stored.outcomeReason;
 		}
@@ -835,11 +844,15 @@ function normalizeStoredArtifacts(
 	values: WorkArtifactReference[],
 	defaultProducerTaskId: string,
 	defaultGeneration: number,
+	preserveVerification: boolean,
 ): WorkArtifactReference[] {
 	if (!validStoredArtifacts(values, defaultProducerTaskId, defaultGeneration)) {
 		throw new Error(`Malformed stored artifacts for WorkItem ${defaultProducerTaskId}`);
 	}
-	return values.map((value) => structuredClone(value));
+	return values.map((value) => ({
+		...structuredClone(value),
+		verified: preserveVerification && value.verified,
+	}));
 }
 
 function normalizeArtifacts(

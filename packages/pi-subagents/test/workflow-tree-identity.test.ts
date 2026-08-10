@@ -33,13 +33,38 @@ test("workflow tree identity distinguishes clean, staged, unstaged, and untracke
 		execFileSync("git", ["-C", root, "add", "tracked.txt"]);
 		const staged = await captureWorkflowTreeIdentity(root);
 		assert.equal(staged.kind, "git-dirty");
-		assert.equal(staged.digest, second.digest);
+		assert.notEqual(staged.digest, second.digest);
 
+		writeFileSync(path.join(root, "tracked.txt"), "base\n");
+		const indexOnlyFirst = await captureWorkflowTreeIdentity(root);
+		assert.equal(indexOnlyFirst.kind, "git-dirty");
+		assert.notEqual(indexOnlyFirst.digest, clean.digest);
+		writeFileSync(path.join(root, "tracked.txt"), "third\n");
+		execFileSync("git", ["-C", root, "add", "tracked.txt"]);
+		writeFileSync(path.join(root, "tracked.txt"), "base\n");
+		const indexOnlySecond = await captureWorkflowTreeIdentity(root);
+		assert.notEqual(indexOnlyFirst.digest, indexOnlySecond.digest);
+
+		execFileSync("git", ["-C", root, "reset", "--hard", "-q", "HEAD"]);
 		writeFileSync(path.join(root, "untracked.txt"), "one\n");
 		const untrackedOne = await captureWorkflowTreeIdentity(root);
 		writeFileSync(path.join(root, "untracked.txt"), "two\n");
 		const untrackedTwo = await captureWorkflowTreeIdentity(root);
 		assert.notEqual(untrackedOne.digest, untrackedTwo.digest);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("workflow tree identity frames untracked entries without chosen-content collisions", async () => {
+	const root = repository();
+	try {
+		writeFileSync(path.join(root, "a"), Buffer.from("X\0untracked\0file\0b\0Y"));
+		const embeddedMarker = await captureWorkflowTreeIdentity(root);
+		writeFileSync(path.join(root, "a"), "X");
+		writeFileSync(path.join(root, "b"), "Y");
+		const separateEntry = await captureWorkflowTreeIdentity(root);
+		assert.notEqual(embeddedMarker.digest, separateEntry.digest);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, type Hash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -73,15 +73,25 @@ export async function captureWorkflowTreeIdentity(
 		throw new Error("Workflow verification requires a stable Git HEAD");
 	}
 	const commandLimit = maxBytes + 1;
-	const diff = await git(
+	const indexDiff = await git(
 		repositoryRoot,
-		["diff", "--binary", "--no-ext-diff", "HEAD", "--"],
+		["diff", "--binary", "--no-ext-diff", "--cached", "HEAD", "--"],
 		commandLimit,
 		options.signal,
 	).catch((error) => {
 		throw normalizedGitError(error, "Workflow tree identity exceeded its size limit");
 	});
-	if (diff.length > maxBytes) throw new Error("Workflow tree identity exceeded its size limit");
+	const worktreeDiff = await git(
+		repositoryRoot,
+		["diff", "--binary", "--no-ext-diff", "--"],
+		commandLimit,
+		options.signal,
+	).catch((error) => {
+		throw normalizedGitError(error, "Workflow tree identity exceeded its size limit");
+	});
+	if (indexDiff.length > maxBytes || worktreeDiff.length > maxBytes) {
+		throw new Error("Workflow tree identity exceeded its size limit");
+	}
 	const untrackedOutput = await git(
 		repositoryRoot,
 		["ls-files", "--others", "--exclude-standard", "-z"],
@@ -94,16 +104,16 @@ export async function captureWorkflowTreeIdentity(
 	if (untrackedEntries.length > MAX_UNTRACKED_FILES) {
 		throw new Error("Workflow tree identity exceeded its untracked-file limit");
 	}
-	if (diff.length === 0 && untrackedEntries.length === 0) {
+	if (indexDiff.length === 0 && worktreeDiff.length === 0 && untrackedEntries.length === 0) {
 		return identity("git-commit", hashParts([Buffer.from("commit\0"), Buffer.from(head)]));
 	}
-	let consumed = diff.length + untrackedOutput.length;
+	let consumed = indexDiff.length + worktreeDiff.length + untrackedOutput.length;
 	if (consumed > maxBytes) throw new Error("Workflow tree identity exceeded its size limit");
 	const hasher = createHash("sha256");
-	hasher.update("dirty\0");
-	hasher.update(head);
-	hasher.update("\0diff\0");
-	hasher.update(diff);
+	hasher.update("pi-subagents:workflow-tree:v1\0");
+	updateHashFrame(hasher, "head", head);
+	updateHashFrame(hasher, "index-diff", indexDiff);
+	updateHashFrame(hasher, "worktree-diff", worktreeDiff);
 	for (const rawRelativePath of untrackedEntries) {
 		throwIfAborted(options.signal);
 		const relativePath = decodeGitPath(rawRelativePath);
@@ -137,12 +147,9 @@ export async function captureWorkflowTreeIdentity(
 		}
 		consumed += rawRelativePath.length + bytes.length;
 		if (consumed > maxBytes) throw new Error("Workflow tree identity exceeded its size limit");
-		hasher.update("\0untracked\0");
-		hasher.update(kind);
-		hasher.update("\0");
-		hasher.update(rawRelativePath);
-		hasher.update("\0");
-		hasher.update(bytes);
+		updateHashFrame(hasher, "untracked-kind", kind);
+		updateHashFrame(hasher, "untracked-path", rawRelativePath);
+		updateHashFrame(hasher, "untracked-content", bytes);
 	}
 	return identity("git-dirty", hasher.digest("hex"));
 }
@@ -185,6 +192,17 @@ function hashParts(parts: Buffer[]): string {
 	const hash = createHash("sha256");
 	for (const part of parts) hash.update(part);
 	return hash.digest("hex");
+}
+
+function updateHashFrame(hash: Hash, label: string, value: string | Buffer): void {
+	const labelBytes = Buffer.from(label, "utf8");
+	const valueBytes = typeof value === "string" ? Buffer.from(value, "utf8") : value;
+	const header = Buffer.allocUnsafe(8);
+	header.writeUInt32BE(labelBytes.length, 0);
+	header.writeUInt32BE(valueBytes.length, 4);
+	hash.update(header);
+	hash.update(labelBytes);
+	hash.update(valueBytes);
 }
 
 function splitNul(value: Buffer): Buffer[] {

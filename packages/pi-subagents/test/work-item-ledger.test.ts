@@ -171,15 +171,26 @@ test("WorkItemLedger rejects a late completion from a replaced task generation",
 	);
 });
 
-test("WorkItemLedger restores legacy v1 snapshots into the current version", () => {
+test("WorkItemLedger restores legacy v1 snapshots without trusting self-reported verification", () => {
 	const ledger = WorkItemLedger.create({
 		workflowId: "wf",
 		items: [{ id: "task", objective: "task", dependencies: [] }],
 	});
+	const started = ledger.start("task", "agent-worker");
+	ledger.complete("task", {
+		taskGeneration: started.taskGeneration,
+		artifacts: [{ id: "patch", kind: "patch", version: "v1" }],
+	});
 	const legacy = ledger.snapshot();
 	legacy.version = "pi-subagents:work-ledger:v1" as never;
+	legacy.items[0].verificationAccepted = true;
+	legacy.items[0].artifacts[0].verified = true;
+	legacy.items[0].artifactHistory = [structuredClone(legacy.items[0].artifacts[0])];
 	const restored = WorkItemLedger.restore(legacy);
 	assert.equal(restored.snapshot().version, "pi-subagents:work-ledger:v2");
+	assert.equal(restored.get("task")?.verificationAccepted, false);
+	assert.equal(restored.get("task")?.artifacts[0]?.verified, false);
+	assert.equal(restored.get("task")?.artifactHistory[0]?.verified, false);
 });
 
 test("WorkItemLedger rejects malformed persisted identity and artifact metadata", () => {

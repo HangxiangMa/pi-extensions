@@ -58,7 +58,7 @@ Add a workflow-specific tree-identity helper rather than silently strengthening 
 
 For a clean Git tree, the identity is the exact commit.
 
-For a dirty Git tree, the identity hashes bounded `git diff --binary HEAD` content plus bounded untracked-file paths and bytes.
+For a dirty Git tree, the identity hashes separately framed bounded staged and unstaged binary diffs plus length-framed untracked-file paths and bytes.
 
 An oversized, non-Git, unreadable, or otherwise unsupported tree identity fails closed for exact-tree acceptance.
 
@@ -170,7 +170,7 @@ Documentation and result details must not describe a verifier acceptance as proo
 - Runtime evidence: `pi --no-extensions -e ./packages/pi-subagents/src/index.ts --list-models` loaded the extension and exited successfully; live-provider verdict compliance remains unmeasured and is not claimed by the deterministic fake-provider tests.
 - Convention audit: `docs/extension-conventions.md` and `docs/extension-settings.md` were read completely before editing; no command, menu, custom TUI, setting, status, or manifest behavior changed, and settings ordering is therefore not touched.
 - Lifecycle audit: the blocking tool signal remains the single cancellation owner; generation rotation precedes late-result handling, the verifier subprocess receives the same abort signal, final persistence runs in `finally`, status clears in `finally`, and deterministic cancellation verifies that the late child marker is never written.
-- Persistence and privacy audit: receipts contain only bounded redacted summaries and opaque digests, Git bytes never enter persistence or model-facing details, v1 ledgers restore into v2, `awaiting-verification` restores as inert `interrupted`, malformed cross-item receipt links fail closed, and atomic mode-0600 publication remains unchanged.
+- Persistence and privacy audit: receipts contain only bounded redacted summaries and opaque digests, Git bytes never enter persistence or model-facing details, v1 ledgers restore into v2 with legacy self-reported verification trust cleared, `awaiting-verification` restores as inert `interrupted`, malformed cross-item receipt links fail closed, and atomic mode-0600 publication remains unchanged.
 - Terminal and prompt audit: private tags are redacted before verifier transfer and receipt storage, receipt evidence has aggregate byte bounds, exact identity diagnostics do not echo paths or bytes, and workflow result content remains a bounded summary.
 - Scope deviations and residuals: Git identity intentionally covers Git-visible tracked and non-ignored untracked state, rejects submodules, and does not cover ignored files, external side effects, or a transient repository mutation that is reverted before the post-verifier capture; manager-controlled patch application, live-provider quality, and model-diversity measurement remain deferred non-goals.
 - File-size deviation: `execution.ts` remains over 1,000 lines under its existing explicit cohesion justification because all blocking-mode preflight, confirmation, cancellation generation, launch, and settlement retain one ordered lifecycle owner; the new receipt and tree-identity responsibilities were split into focused modules.

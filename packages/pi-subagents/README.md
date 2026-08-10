@@ -460,10 +460,11 @@ Workflow result details include the final ledger, scheduling decisions, artifact
 A task that explicitly requires independent verification must have exactly one direct-dependent `verifierFor` task using a different agent, and both tasks must request `structured-v2`.
 The producer stops in `awaiting-verification`, its own passing verification claims remain untrusted, and ordinary downstream tasks stay blocked until the executor records an accepted verifier receipt.
 The verifier runs alone in a fresh subprocess context against one bounded Git-visible tree identity and must encode `verification-accepted`, `verification-rework`, or `verification-rejected` through the documented `structured-v2` status and reason fields.
-Dirty-tree identity covers at most 1 MiB of binary tracked diff plus bounded non-ignored untracked paths and bytes; submodules, unsupported states, and changing trees fail closed.
+Dirty-tree identity covers at most 1 MiB across separately framed staged and unstaged binary diffs plus bounded non-ignored untracked paths and bytes; submodules, unsupported states, and changing trees fail closed.
 A rework or rejection preserves bounded evidence but does not replay the producer automatically.
 This acceptance gate does not isolate operating-system effects and does not make shared-workspace mutation into manager-controlled patch integration.
 Explicit workflow transitions are also atomically persisted as mode-0600, private-text-redacted snapshots for current-session `list_workflows` and `get_workflow` inspection; running and awaiting-verification tasks inspect as `interrupted`, and no prior side effect is automatically resumed.
+When a v1 ledger is restored, legacy self-reported verification flags and artifact trust are cleared because they have no executor receipt.
 
 ## 🔁 Stateful agents
 
