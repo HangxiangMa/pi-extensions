@@ -57,8 +57,10 @@ Advance the declarative menu API compatibility marker, export the new public typ
 - Packaging evidence: `just pack tui-kit` built the package and listed 59 manifest-approved files containing the manifest, README, license, built JavaScript, and declarations.
 - Semantic audit: the formatter is stateless and shared; browse still reads live width and rows on every render, clamps scroll after reflow, forwards list focus to the existing `Input`, and retains its existing synchronous Back, Close, cancellation, and disposal ownership.
 - Scope audit: no consumer source, dependency range, lockfile, setting, command, action, or lifecycle implementation changed.
-- Release status: publication and the dependent `pi-tool` migration remain deliberately open because this execution explicitly forbids publishing and repository policy forbids consumer adoption before registry verification.
-- Execution deviation: formatter extraction and browse wiring landed in one working-tree batch rather than two intermediate commits; the unchanged review contract was still verified independently by the focused review suite.
+- Release status: Kit `0.53.0` was published through merged Changesets pull request #684 before consumer execution resumed. Registry, tarball, root export, declarations, and a clean temporary install were verified without performing a release action here.
+- Consumer status: branch `feat/pi-tool-browse-detail-convergence` starts from `99b96dc4`, resolves Kit `0.53.0`, removes the duplicate browser and Pi TUI dependency, and passes 12 focused tests plus the 2,979-test repository gate. Its 6-file tarball independently installs with registry Kit `0.53.0`. Pull request [#701](https://github.com/narumiruna/pi-extensions/pull/701) carries signed commits `17426ab5` and `e098d19d`; CI run `31423702361` passed in 3m19s.
+- Consumer audit: document content is excluded from implicit search, explicitly projected metadata remains searchable, exact details preserve schema indentation and tabs, stable raw identity survives duplicate sanitized labels, and the single Kit interaction owns query restoration, Back/Close, replacement, shutdown, and disposal.
+- Execution deviation: formatter extraction and browse wiring landed in one working-tree batch rather than two intermediate commits; the unchanged review contract was still verified independently by the focused review suite. The Tool implementation commit was prepared in a separate worktree and cherry-picked onto the post-Starship authoritative base while that worktree's staged archive remained untouched.
 
 ## Plan
 
@@ -78,17 +80,17 @@ Advance the declarative menu API compatibility marker, export the new public typ
 
 ### Release gate
 
-- [ ] Obtain explicit user approval before merging the Changesets release pull request or otherwise publishing the new Kit release.
-- [ ] Verify the released Kit version, root export, declaration shape, tarball integrity, and registry visibility with `npm view` and a clean temporary install before any consumer migration begins.
+- [x] Not applicable to this execution: release pull request #684 had already merged and published before consumer work resumed; no release, tag, or workflow action was performed here.
+- [x] Verify Kit `0.53.0`, its root export and declaration shape, 59-file tarball, `latest` registry visibility, and clean temporary installation before the consumer migration.
 
 ### Phase 2: pi-tool consumer migration
 
-- [ ] Create a separate consumer branch from then-current `origin/main`, raise only `pi-tool`'s Kit compatibility floor to the verified published release, run root `npm install`, and prove the lockfile resolves that compatible version within the consumer install scope.
-- [ ] Replace `pi-tool`'s custom TUI browser and separate detail menu loop with the standard Kit `browse` screen using `detailDocument`, while preserving tool ordering, active status, metadata search, fresh command-time state, TUI and RPC navigation, and exact schema content.
-- [ ] Delete `packages/pi-tool/src/tool-browser.ts`, remove direct Pi TUI peer and development dependencies if no production import remains, and update package layout documentation and lockfile metadata.
-- [ ] Keep consumer regressions for TUI and RPC indentation, 20-column wrapping, terminal controls, query restoration, session replacement, shutdown, arguments, and unsupported modes, and add a comparison proving no supported `/tool` behavior regresses.
-- [ ] Add the appropriate `pi-tool` Changeset for its raised compatibility floor and packaged implementation change, then run focused tests, package check, the CI-equivalent root check, `git diff --check`, `just pack tool`, and the local Pi load smoke.
-- [ ] Inspect the final consumer diff for removal of duplicated UI ownership, verify independent installation against the published Kit package, and archive this completed plan only when every phase and release gate has evidence.
+- [x] Create branch `feat/pi-tool-browse-detail-convergence` from `origin/main` at `99b96dc4`, raise only Tool's Kit floor to `^0.53.0`, run root `npm install`, and prove the consumer scope resolves Kit `0.53.0`.
+- [x] Replace Tool's custom TUI browser and separate detail menu loop with the standard Kit `browse` screen using `detailDocument`, while preserving tool ordering, active status, explicit metadata search, fresh command-time state, TUI and RPC navigation, and exact schema content.
+- [x] Delete `packages/pi-tool/src/tool-browser.ts`, remove the unused direct Pi TUI peer and development dependencies, and update package layout documentation and lockfile metadata.
+- [x] Keep and extend consumer regressions for TUI and RPC indentation, tabs, 20-column wrapping, Unicode cells, terminal controls, duplicate labels and raw identity, query restoration, session replacement, shutdown, arguments, unsupported modes, fresh state, and no implicit document search leakage.
+- [x] Add `.changeset/calm-tools-browse.md`, then pass 12 focused tests, package check, the CI-equivalent root check, `git diff --check`, `just pack tool`, and the extension-factory test load used in place of an unavailable interactive TUI smoke.
+- [x] Inspect the final consumer diff for removal of duplicated UI ownership and verify a clean temporary Tool tarball install independently resolves published Kit `0.53.0`; archive this plan after the consumer pull request merges and final evidence is recorded.
 
 ## Risks
 
@@ -107,6 +109,6 @@ Advance the declarative menu API compatibility marker, export the new public typ
 - [x] Legacy `details` behavior and existing browse consumers remain compatible without source or dependency changes in the Kit API pull request.
 - [x] Review and browse share one internal document-formatting implementation with no new public rendering helper.
 - [x] Public exports, API compatibility metadata, README, declarations, Changeset intent, package contents, and repository checks agree.
-- [ ] The Kit API is published and registry-verified before `pi-tool` raises its compatibility floor.
-- [ ] `pi-tool` uses the standard browse screen, retains all supported behavior, and no longer owns duplicated browser UI or unnecessary direct Pi TUI dependencies.
-- [ ] The completed plan is archived with all checks, release evidence, consumer migration evidence, deviations, and unverified paths recorded.
+- [x] Kit `0.53.0` is published and registry-verified before Tool raises its compatibility floor.
+- [x] Tool uses the standard browse screen, retains all supported behavior, and no longer owns duplicated browser UI or unnecessary direct Pi TUI dependencies.
+- [ ] The completed plan is archived after the consumer pull request merges with all checks, release evidence, migration evidence, deviations, and unverified paths recorded.

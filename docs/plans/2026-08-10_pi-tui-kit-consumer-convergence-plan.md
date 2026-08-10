@@ -70,7 +70,7 @@ Each implementation pull request starts from then-current `origin/main`, changes
 
 - [x] Record the clean starting branch, base commit, open Kit pull requests, registry Kit release, and relevant package dependency floors; verify with `git status`, `gh pr view`, package manifests, `npm view`, and the lockfile.
 - [x] Map the touched TUI, settings, lifecycle, package, Changeset, and release MUST rules from `docs/extension-conventions.md` and `docs/extension-settings.md` to focused tests and repository gates.
-- [ ] Record focused baselines for `pi-statusline`, `pi-starship`, `pi-tui-kit`, and `pi-tool` before each owning phase; run package checks and the relevant package tests without running Kit builds concurrently with root checks.
+- [x] Record focused baselines for `pi-statusline`, `pi-starship`, `pi-tui-kit`, and `pi-tool` before each owning phase; Tool's final baseline passed its package check and 8 focused tests from a detached `origin/main` worktree before the consumer diff was audited.
 
 ### Phase 1: pi-statusline Live Choice migration
 
@@ -122,13 +122,13 @@ Each implementation pull request starts from then-current `origin/main`, changes
 
 ### Phase 5: pi-tool exact browse migration
 
-- [ ] Confirm the release gate evidence satisfies the open release and consumer tasks in `docs/plans/2026-08-10_pi-tui-kit-browse-detail-document-plan.md`, then create a separate Tool branch from then-current `origin/main`.
-- [ ] Raise only Tool's Kit floor to the verified exact-browse release, run root `npm install`, and prove the lockfile resolves that release in the consumer scope.
-- [ ] Replace the custom browser and separate detail loop with the standard `browse` screen using `detailDocument`, preserving tool ordering, active status, metadata search, fresh command-time state, TUI/RPC navigation, exact schemas, query restoration, and stable raw identity.
-- [ ] Delete `packages/pi-tool/src/tool-browser.ts`, remove direct Pi TUI peer and development dependencies when no production import remains, and update package layout documentation and lockfile metadata.
-- [ ] Retain or add regressions for indentation, tabs, 20-column wrapping, Unicode cells, terminal controls, duplicate labels, query restoration, Back/Close, session replacement, shutdown, arguments, unsupported modes, and no document-content search leakage.
-- [ ] Add an appropriate Tool Changeset, run focused tests, package check, resolved-version verification, `npm run check:boundaries`, `npm run check`, `git diff --check`, `just pack tool`, and a practical local Pi load smoke.
-- [ ] Audit lifecycle ownership, document privacy, independent installation, removal of duplicated UI ownership, final diff scope, and the original browse-detail plan evidence before opening the Tool pull request.
+- [x] Confirm the release gate evidence satisfies the open release and consumer tasks in `docs/plans/2026-08-10_pi-tui-kit-browse-detail-document-plan.md`, then create branch `feat/pi-tool-browse-detail-convergence` from `origin/main` at `99b96dc4`.
+- [x] Raise only Tool's Kit floor to `^0.53.0`, run root `npm install`, and prove the consumer scope resolves Kit `0.53.0`.
+- [x] Replace the custom browser and separate detail loop with the standard `browse` screen using `detailDocument`, preserving tool ordering, active status, explicit metadata search, fresh command-time state, TUI/RPC navigation, exact schemas, query restoration, and stable raw identity.
+- [x] Delete `packages/pi-tool/src/tool-browser.ts`, remove the unused direct Pi TUI peer and development dependencies, and update package layout documentation and lockfile metadata.
+- [x] Retain or add regressions for indentation, tabs, 20-column wrapping, Unicode cells, terminal controls, duplicate labels, query restoration, Back/Close, session replacement, shutdown, arguments, unsupported modes, and no implicit document-content search leakage.
+- [x] Add `.changeset/calm-tools-browse.md`, run 12 focused tests, package check, resolved-version verification, `npm run check:boundaries`, `npm run check`, `git diff --check`, and `just pack tool`; use the extension-factory test load because a live TUI smoke is unavailable in the non-interactive terminal.
+- [x] Audit lifecycle ownership, document privacy, independent installation, removal of duplicated UI ownership, final diff scope, and the original browse-detail plan evidence before opening the Tool pull request.
 
 ### Phase 6: Completion
 
@@ -181,8 +181,18 @@ Each implementation pull request starts from then-current `origin/main`, changes
 - Branch `feat/pi-starship-live-choice` started from `origin/main` at `012115dc`. The Starship floor is now `^0.53.0`, and `npm ls --workspace @narumitw/pi-starship` resolves the workspace Kit `0.53.0` without the former nested `0.49.3` install.
 - Final focused evidence: package check passed; 195 Starship tests passed; boundaries and Changesets status passed; `git diff --check` passed; and the post-rebase CI-equivalent `npm run check` passed with 279 files and 2,975 tests. The first root run failed only in an unrelated `pi-sync` timing test, which passed in isolation before the full successful reruns.
 - `just pack starship` exposed the 79 expected manifest-listed source, notice, README, and license files (81.1 kB packed, 298.6 kB unpacked); tests and generated files were absent.
-- Starship preset pull request [#698](https://github.com/narumiruna/pi-extensions/pull/698) carries signed implementation commit `d403f3c1`; CI run `31422205502` passed in 3m23s, and no review was submitted before the evidence refresh.
+- Starship preset pull request [#698](https://github.com/narumiruna/pi-extensions/pull/698) merged as `99b96dc4f5a819c7b8981a2477d81c305253ec15`, carrying signed implementation commit `d403f3c1` and evidence commit `f6c07b2a`; final CI run `31422551454` passed in 3m16s, and no review was submitted.
 - The semantic audit confirmed Kit owns selection, cell-bounded terminal-safe rendering, injected navigation, preview draining, cancellation, and disposal. Starship still owns preset identity, TOML validation, editor flow, persistence, apply/rollback, stale workflow ownership, notifications, and final preview reset. The command remains TUI-only, and direct Pi TUI dependencies remain necessary for specialized preview and footer paths.
+
+### Phase 5 Tool exact browse migration
+
+- Branch `feat/pi-tool-browse-detail-convergence` started from the Starship merge `99b96dc4`. A focused implementation commit prepared in a separate worktree was cherry-picked onto this authoritative base; that worktree's staged plan archive was left untouched.
+- Tool baseline from a detached clean `origin/main` worktree passed its package check and all 8 focused tests. Final evidence passed the package check, 12 focused tests, boundaries, Changesets status, `git diff --check`, and the CI-equivalent `npm run check` with 279 files and 2,979 tests.
+- `npm ls --workspace @narumitw/pi-tool` resolves Kit `0.53.0`. A clean temporary install of the Tool tarball independently resolved registry Kit `0.53.0`, confirmed the `^0.53.0` floor, and confirmed the obsolete Pi TUI peer is absent.
+- `just pack tool` exposed only 6 manifest-listed files (4.4 kB packed, 10.3 kB unpacked): source entrypoint, catalog and lifecycle modules, README, license, and manifest. The deleted browser, tests, and generated files were absent.
+- Tool pull request [#701](https://github.com/narumiruna/pi-extensions/pull/701) carries signed implementation commit `17426ab5` and evidence commit `e098d19d`; CI run `31423702361` passed in 3m19s, and no review was submitted before the evidence refresh.
+- The semantic audit confirmed document content stays out of implicit browse search while explicitly projected public metadata remains searchable. Exact schemas preserve indentation, tabs, 20-column wrapping, Unicode cells, and controls; duplicate sanitized labels retain raw identity; Back restores query and selection; Close, replacement, and shutdown dispose the one Kit interaction.
+- Pi Tool still owns command-time data acquisition, ordering, active-state projection, detail contents, lifecycle generation, and mode policy. Kit now owns search UI, detail rendering, navigation, terminal safety, and disposal, and no Tool production import requires Pi TUI.
 
 ### Applicable MUST mapping for Phase 1
 

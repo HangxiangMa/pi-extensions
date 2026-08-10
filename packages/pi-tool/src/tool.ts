@@ -1,6 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createToolBrowserComponent, type ToolBrowserResult } from "./tool-browser.js";
-import { createToolCatalog, createToolDetailMenu, createToolMenu } from "./tool-catalog.js";
+import { createToolCatalog, createToolMenu } from "./tool-catalog.js";
 
 const COMMAND_NAME = "tool";
 
@@ -33,7 +32,7 @@ export default function toolExtension(pi: ExtensionAPI) {
 			const commandGeneration = generation;
 			const signal = sessionController.signal;
 			const isCurrent = () => commandGeneration === generation && !signal.aborted;
-			const { runCustomInteraction, runMenu } = await import("@narumitw/pi-tui-kit");
+			const { runMenu } = await import("@narumitw/pi-tui-kit");
 			if (!isCurrent()) return;
 			const catalog = createToolCatalog(
 				pi.getAllTools(),
@@ -47,53 +46,13 @@ export default function toolExtension(pi: ExtensionAPI) {
 				throw new Error(`/tool is unavailable in ${mode} mode; use TUI or RPC mode.`);
 			};
 
-			if (ctx.mode === "rpc") {
-				const menuState = { catalog };
-				await runMenu(ctx, createToolMenu(), {
-					getState: () => menuState,
-					signal,
-					isCurrent,
-					onError,
-					onUnsupportedMode,
-				});
-				return;
-			}
-
-			let initialItemId: string | undefined;
-			let initialQuery = "";
-			while (isCurrent()) {
-				const browser = await runCustomInteraction<ToolBrowserResult>(ctx, {
-					signal,
-					isCurrent,
-					onError,
-					onUnsupportedMode,
-					create: ({ tui, theme, keybindings, complete }) =>
-						createToolBrowserComponent({
-							catalog,
-							initialItemId,
-							initialQuery,
-							tui,
-							theme,
-							keybindings,
-							onClose: () => complete({ kind: "close" }),
-							onSelect: complete,
-						}),
-				});
-				if (browser.kind !== "completed" || browser.value.kind === "close") return;
-				const selection = browser.value;
-				initialItemId = selection.itemId;
-				initialQuery = selection.query;
-				const item = catalog.items.find(({ id }) => id === selection.itemId);
-				if (!item) continue;
-				const detail = await runMenu(ctx, createToolDetailMenu(item), {
-					getState: () => undefined,
-					signal,
-					isCurrent,
-					onError,
-					onUnsupportedMode,
-				});
-				if (detail.kind !== "closed" || detail.reason === "close") return;
-			}
+			await runMenu(ctx, createToolMenu(catalog), {
+				getState: () => undefined,
+				signal,
+				isCurrent,
+				onError,
+				onUnsupportedMode,
+			});
 		},
 	});
 }
