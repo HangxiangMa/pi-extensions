@@ -6,7 +6,11 @@ import {
 	type OAuthCredential,
 	type ProviderAuthInteraction,
 } from "@earendil-works/pi-ai";
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import {
+	type ExtensionCommandContext,
+	ExtensionSelectorComponent,
+	LoginDialogComponent,
+} from "@earendil-works/pi-coding-agent";
 
 export const SUPPORTED_PROVIDER_IDS = ["anthropic", "github-copilot", "openai-codex"] as const;
 
@@ -80,6 +84,199 @@ export function createOAuthInteraction(
 		prompt: async (prompt) => promptForOAuth(ctx, prompt, signal),
 		notify: (event) => notifyOAuthEvent(ctx, providerName, event),
 	};
+}
+
+export async function loginWithOAuthUI(
+	ctx: ExtensionCommandContext,
+	adapter: AccountProviderAdapter,
+	signal: AbortSignal,
+): Promise<OAuthCredential> {
+	if (ctx.mode !== "tui") {
+		return adapter.oauth.login(createOAuthInteraction(ctx, adapter.displayName, signal));
+	}
+	const result = await ctx.ui.custom<NativeOAuthLoginResult>((tui, _theme, _keybindings, done) => {
+		const flow = new NativeOAuthLoginFlow(tui, adapter, signal, done);
+		flow.start();
+		return flow;
+	});
+	if (result.ok) return result.credential;
+	throw result.error;
+}
+
+type NativeOAuthLoginResult =
+	| { ok: true; credential: OAuthCredential }
+	| { ok: false; error: unknown };
+
+type NativeOAuthComponent = {
+	render(width: number): string[];
+	handleInput?(data: string): void;
+	invalidate(): void;
+	dispose?(): void;
+	focused?: boolean;
+};
+
+class NativeOAuthLoginFlow {
+	private readonly dialog: LoginDialogComponent;
+	private readonly controller = new AbortController();
+	private readonly signal: AbortSignal;
+	private current: NativeOAuthComponent;
+	private focusedState = false;
+	private completed = false;
+
+	constructor(
+		private readonly tui: ConstructorParameters<typeof LoginDialogComponent>[0],
+		private readonly adapter: AccountProviderAdapter,
+		ownerSignal: AbortSignal,
+		private readonly done: (result: NativeOAuthLoginResult) => void,
+	) {
+		this.dialog = new LoginDialogComponent(
+			tui,
+			adapter.id,
+			() => this.controller.abort(),
+			adapter.displayName,
+		);
+		this.current = this.dialog;
+		this.signal = AbortSignal.any([ownerSignal, this.dialog.signal, this.controller.signal]);
+	}
+
+	get focused(): boolean {
+		return this.focusedState;
+	}
+
+	set focused(value: boolean) {
+		this.focusedState = value;
+		setComponentFocus(this.current, value);
+	}
+
+	start(): void {
+		if (this.signal.aborted) {
+			this.finish({ ok: false, error: new Error("Login cancelled") });
+			return;
+		}
+		const login = this.adapter.oauth.login({
+			signal: this.signal,
+			prompt: (prompt) => this.prompt(prompt),
+			notify: (event) => this.notify(event),
+		});
+		void abortable(login, this.signal).then(
+			(credential) => this.finish({ ok: true, credential }),
+			(error) => this.finish({ ok: false, error }),
+		);
+	}
+
+	render(width: number): string[] {
+		return this.current.render(width);
+	}
+
+	handleInput(data: string): void {
+		this.current.handleInput?.(data);
+	}
+
+	invalidate(): void {
+		this.current.invalidate();
+	}
+
+	dispose(): void {
+		this.controller.abort();
+		if (this.current !== this.dialog) this.current.dispose?.();
+	}
+
+	private async prompt(prompt: AuthPrompt): Promise<string> {
+		if (prompt.type === "select") return this.select(prompt);
+		const response =
+			prompt.type === "manual_code"
+				? this.dialog.showManualInput(prompt.message)
+				: this.dialog.showPrompt(prompt.message, prompt.placeholder);
+		const signal = prompt.signal ? AbortSignal.any([this.signal, prompt.signal]) : this.signal;
+		return abortable(response, signal);
+	}
+
+	private select(prompt: Extract<AuthPrompt, { type: "select" }>): Promise<string> {
+		return new Promise((resolve, reject) => {
+			let settled = false;
+			const signal = prompt.signal ? AbortSignal.any([this.signal, prompt.signal]) : this.signal;
+			const restore = () => {
+				if (settled) return false;
+				settled = true;
+				signal.removeEventListener("abort", cancel);
+				selector.dispose();
+				this.show(this.dialog);
+				return true;
+			};
+			const cancel = () => {
+				if (!restore()) return;
+				reject(new Error("Login cancelled"));
+			};
+			const selector = new ExtensionSelectorComponent(
+				prompt.message,
+				prompt.options.map((option) => option.label),
+				(label) => {
+					if (!restore()) return;
+					const id = prompt.options.find((option) => option.label === label)?.id;
+					if (id === undefined) reject(new Error("Login cancelled"));
+					else resolve(id);
+				},
+				cancel,
+				{ tui: this.tui },
+			);
+			if (signal.aborted) {
+				cancel();
+				return;
+			}
+			signal.addEventListener("abort", cancel, { once: true });
+			this.show(selector);
+		});
+	}
+
+	private notify(event: AuthEvent): void {
+		if (this.completed) return;
+		switch (event.type) {
+			case "auth_url":
+				this.dialog.showAuth(event.url, event.instructions);
+				break;
+			case "device_code":
+				this.dialog.showDeviceCode(event);
+				this.dialog.showWaiting("Waiting for authentication...");
+				break;
+			case "info":
+				this.dialog.showInfo(event.message, event.links);
+				break;
+			case "progress":
+				this.dialog.showProgress(event.message);
+				break;
+		}
+	}
+
+	private show(component: NativeOAuthComponent): void {
+		setComponentFocus(this.current, false);
+		this.current = component;
+		setComponentFocus(this.current, this.focusedState);
+		this.tui.requestRender();
+	}
+
+	private finish(result: NativeOAuthLoginResult): void {
+		if (this.completed) return;
+		this.completed = true;
+		this.done(result);
+	}
+}
+
+function setComponentFocus(component: NativeOAuthComponent, focused: boolean): void {
+	if ("focused" in component) component.focused = focused;
+}
+
+async function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+	if (signal.aborted) throw new Error("Login cancelled");
+	let onAbort: (() => void) | undefined;
+	const aborted = new Promise<never>((_resolve, reject) => {
+		onAbort = () => reject(new Error("Login cancelled"));
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+	try {
+		return await Promise.race([operation, aborted]);
+	} finally {
+		if (onAbort) signal.removeEventListener("abort", onAbort);
+	}
 }
 
 function createLazyProviderOwnedOAuth(

@@ -97,7 +97,11 @@ What do you want to do?
   Switch another provider’s account
 ```
 
-Login follows Pi's built-in `/login` style: choose a provider, enter a named account, then complete that provider's OAuth flow. `default` is reserved for Pi's built-in login. Reusing an existing provider/account name asks before replacing the stored credential.
+Login reuses Pi's native `/login` dialog in TUI mode: choose a provider, enter a named account, then complete the provider's OAuth flow in the same bordered screen with native links, device codes, progress, prompts, and Escape cancellation.
+Provider-owned choices temporarily use Pi's native selector before returning to the login dialog.
+RPC mode uses Pi's standard extension UI requests for the same OAuth contract.
+`default` is reserved for Pi's built-in login.
+Reusing an existing provider/account name asks before replacing the stored credential.
 
 Switching the current model provider is the primary flow. Switching a different provider is explicit: choose **Switch another provider’s account**, choose the provider, then choose the account. Choosing `default` restores Pi's built-in login for that provider. `/accounts` manages account identity only; it does not switch models except when login succeeds while the current model is still `unknown`, where it selects that provider's default model as onboarding help.
 

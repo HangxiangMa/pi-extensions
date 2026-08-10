@@ -17,7 +17,7 @@ import {
 	type AccountProviderAdapter,
 	type AccountProviderId,
 	createBuiltinProviderAdapters,
-	createOAuthInteraction,
+	loginWithOAuthUI,
 	SUPPORTED_PROVIDER_IDS,
 } from "./oauth.js";
 import {
@@ -629,7 +629,7 @@ async function loginAccount(
 	ctx.ui.notify(`Starting ${adapter.displayName} login for "${parsed.name}".`, "info");
 	try {
 		const credential = normalizeStoredCredential(
-			await adapter.oauth.login(createOAuthInteraction(ctx, adapter.displayName, signal)),
+			await loginWithOAuthUI(ctx, adapter, signal),
 			parsed.name,
 		);
 		if (!isCurrent()) return;
