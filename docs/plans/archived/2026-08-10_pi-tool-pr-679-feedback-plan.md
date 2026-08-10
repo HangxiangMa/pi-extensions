@@ -29,8 +29,8 @@ Applicable convention MUST rules are width-bounded and terminal-safe custom rend
 - [x] Audit width bounds, terminal sanitization, cancellation, disposal, session replacement, shutdown, and RPC navigation against `docs/extension-conventions.md`; focused tests cover narrow widths, controls, back-state preservation, replacement, shutdown, and scripted RPC pages.
 - [x] Run focused package tests, `git diff --check`, the CI-equivalent `npm run check`, and `just pack tool`; 8 focused tests, all validators, 2,888 root tests, and the 7-file dry-run pack pass, and the local print-mode smoke reports the expected observable rejection. The first root run exposed one unrelated `pi-sync` timing failure that passed alone and in the clean full rerun.
 - [x] Re-read all pull-request feedback and inspect the final diff; both ledger items have final evidence-backed outcomes, and an independent scoped reviewer reported no findings.
-- [ ] Reply to and resolve the addressed review thread only after verification.
-- [ ] Create signed conventional commits, push them to the recreated `feat/pi-tool-browser` branch without rewriting history, then refresh the pull request once.
+- [x] Reply to and resolve the addressed review thread only after verification; reply `discussion_r3750638306` cites the fix and checks, and GraphQL confirms the thread is resolved.
+- [x] Create signed conventional fix commit `c3ce1c5d715fc70dad878ae6bcdb35fe318852b2` and push it to the recreated `feat/pi-tool-browser` branch without rewriting history; defer the one pull-request refresh until after archiving this ledger.
 
 ## Completion Checklist
 
@@ -38,5 +38,5 @@ Applicable convention MUST rules are width-bounded and terminal-safe custom rend
 - [x] Nested schema indentation remains visible in both TUI and RPC detail views at narrow and ordinary widths.
 - [x] Terminal controls remain stripped and every rendered TUI line remains width-bounded.
 - [x] Required checks and smokes pass with the initial unrelated timing failure recorded above.
-- [ ] The review thread is answered and resolved only after verification.
-- [ ] The signed fix commit is pushed without rewriting history.
+- [x] The review thread is answered and resolved only after verification.
+- [x] The signed fix commit is pushed without rewriting history.
