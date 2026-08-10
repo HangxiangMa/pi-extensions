@@ -45,5 +45,11 @@ test("orchestration metrics expose bounded transfer, cascade, retry, and hedge e
 		requestedTools: 0,
 		effectiveRequestedTools: 0,
 		permissionPrecision: 1,
+		workerReportedVerification: 0,
+		executorAcceptedVerification: 0,
+		verificationRework: 0,
+		verificationRejected: 0,
+		verificationInvalid: 0,
+		verificationTreeMismatch: 0,
 	});
 });

@@ -139,6 +139,79 @@ test("subagent_inspect reads persisted workflow evidence without exposing privat
 			"interrupted",
 		);
 		assert.doesNotMatch(JSON.stringify(detail), /secret/);
+
+		const verified = WorkItemLedger.create({
+			workflowId: "wf-verified",
+			items: [
+				{ id: "implementation", objective: "implement", dependencies: [] },
+				{
+					id: "verification",
+					objective: "verify",
+					dependencies: ["implementation"],
+					verifierFor: "implementation",
+				},
+			],
+		});
+		const implementation = verified.start("implementation", "agent-worker");
+		const tree = {
+			version: "pi-subagents:workflow-tree:v1" as const,
+			kind: "git-dirty" as const,
+			digest: "c".repeat(64),
+		};
+		verified.stageForVerification("implementation", {
+			taskGeneration: implementation.taskGeneration,
+			executionPlanId: "a".repeat(64),
+			treeIdentity: tree,
+		});
+		const verification = verified.start("verification", "agent-reviewer");
+		verified.completeVerification("verification", {
+			taskGeneration: verification.taskGeneration,
+			executionPlanId: "b".repeat(64),
+			receipt: {
+				version: "pi-subagents:workflow-verification:v1",
+				decision: "accept",
+				targetTaskId: "implementation",
+				targetTaskGeneration: implementation.taskGeneration,
+				targetExecutionPlanId: "a".repeat(64),
+				verifierTaskId: "verification",
+				verifierTaskGeneration: verification.taskGeneration,
+				verifierExecutionPlanId: "b".repeat(64),
+				treeIdentity: tree,
+				summary: "accepted receipt",
+				evidence: ["bounded evidence"],
+				limitations: [],
+				createdAt: 123,
+				truncated: false,
+			},
+		});
+		await createSessionWorkItemPersistence("test-session", "wf-verified").save(verified.snapshot());
+		const receiptDetail = await execute(tool, {
+			action: "get_workflow",
+			workflowId: "wf-verified",
+		});
+		const receiptItem = (
+			receiptDetail.details.workflow as {
+				items: Array<{
+					verificationReceipt?: { decision: string; evidenceCount: number; summary: string };
+				}>;
+			}
+		).items[0];
+		assert.deepEqual(receiptItem?.verificationReceipt, {
+			version: "pi-subagents:workflow-verification:v1",
+			decision: "accept",
+			targetTaskId: "implementation",
+			targetTaskGeneration: 1,
+			targetExecutionPlanId: "a".repeat(64),
+			verifierTaskId: "verification",
+			verifierTaskGeneration: 1,
+			verifierExecutionPlanId: "b".repeat(64),
+			treeIdentity: tree,
+			summary: "accepted receipt",
+			evidenceCount: 1,
+			limitationCount: 0,
+			createdAt: 123,
+			truncated: false,
+		});
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;

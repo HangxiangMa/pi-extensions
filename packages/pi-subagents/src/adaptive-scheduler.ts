@@ -9,7 +9,8 @@ export type SchedulingReason =
 	| "state-not-ready"
 	| "budget-exhausted"
 	| "capacity-exhausted"
-	| "scope-conflict";
+	| "scope-conflict"
+	| "verification-barrier";
 
 export interface SchedulingDecisionItem {
 	id: string;
@@ -57,6 +58,33 @@ export class AdaptiveScheduler {
 			),
 		);
 		const effectiveConcurrency = options.remainingBudgetMs > 0 ? availableSlots : 0;
+		const readyVerifier = ready.find((item) => item.verifierFor !== undefined);
+		if (readyVerifier) {
+			const verifierMayStart = effectiveConcurrency > 0 && options.activeCount === 0;
+			return {
+				policy: ADAPTIVE_SCHEDULER_POLICY,
+				workflowId: snapshot.workflowId,
+				workflowGeneration: snapshot.generation,
+				effectiveConcurrency: verifierMayStart ? 1 : 0,
+				selected: verifierMayStart ? [readyVerifier.id] : [],
+				decisions: snapshot.items
+					.map((item) => ({
+						id: item.id,
+						reason:
+							item.id === readyVerifier.id
+								? verifierMayStart
+									? ("selected" as const)
+									: ("capacity-exhausted" as const)
+								: item.state === "ready"
+									? ("verification-barrier" as const)
+									: item.state === "pending"
+										? ("dependency-not-ready" as const)
+										: ("state-not-ready" as const),
+						criticalPathDepth: depth.get(item.id) ?? 0,
+					}))
+					.sort((left, right) => left.id.localeCompare(right.id)),
+			};
+		}
 		const selected: string[] = [];
 		let mutatingCount = options.activeMutatingCount ?? 0;
 		const maxMutatingConcurrency = options.maxMutatingConcurrency ?? 2;

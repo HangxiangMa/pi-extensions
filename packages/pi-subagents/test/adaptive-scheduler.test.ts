@@ -148,6 +148,45 @@ test("adaptive scheduler caps concurrent mutating work at the admitted width", (
 	assert.equal(decision.decisions.find((item) => item.id === "c")?.reason, "capacity-exhausted");
 });
 
+test("adaptive scheduler runs one ready verifier behind an exclusive barrier", () => {
+	const ledger = WorkItemLedger.create({
+		workflowId: "wf",
+		items: [
+			{ id: "implementation", objective: "implement", dependencies: [] },
+			{
+				id: "verification",
+				objective: "verify",
+				dependencies: ["implementation"],
+				verifierFor: "implementation",
+				sideEffectPolicy: "read-only",
+			},
+			{ id: "other", objective: "other", dependencies: [], sideEffectPolicy: "read-only" },
+		],
+	});
+	const implementation = ledger.start("implementation", "agent-worker");
+	ledger.stageForVerification("implementation", {
+		taskGeneration: implementation.taskGeneration,
+		executionPlanId: "a".repeat(64),
+		treeIdentity: {
+			version: "pi-subagents:workflow-tree:v1",
+			kind: "git-dirty",
+			digest: "b".repeat(64),
+		},
+	});
+	const decision = new AdaptiveScheduler().decide(ledger.snapshot(), {
+		maxConcurrency: 4,
+		activeCount: 0,
+		transportCapacity: 4,
+		remainingBudgetMs: 10_000,
+	});
+	assert.deepEqual(decision.selected, ["verification"]);
+	assert.equal(decision.effectiveConcurrency, 1);
+	assert.equal(
+		decision.decisions.find((item) => item.id === "other")?.reason,
+		"verification-barrier",
+	);
+});
+
 test("adaptive scheduler starts no work after budget exhaustion", () => {
 	const ledger = WorkItemLedger.create({
 		workflowId: "wf",

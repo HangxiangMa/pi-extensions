@@ -389,7 +389,6 @@ export async function executePanel(input: PanelExecutionInput): Promise<PanelToo
 									},
 								]
 							: [],
-						verificationAccepted: false,
 					});
 				}
 				completed += 1;
@@ -554,7 +553,6 @@ export async function executePanel(input: PanelExecutionInput): Promise<PanelToo
 				workLedger.complete("synthesis", {
 					taskGeneration: synthesisWork.taskGeneration,
 					executionPlanId: synthesisResult.executionPlan?.id,
-					verificationAccepted: false,
 				});
 			}
 			await persistWork();

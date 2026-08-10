@@ -89,6 +89,18 @@ export function createBlockingWorkLedger(
 		const hasExplicitIntegrationOwner = resolvedWorkflowTasks.some(
 			(task) => task.integrationOwner === true,
 		);
+		let defaultIntegrationOwnerIndex = -1;
+		if (!hasExplicitIntegrationOwner) {
+			for (let index = resolvedWorkflowTasks.length - 1; index >= 0; index--) {
+				if (resolvedWorkflowTasks[index]?.verifierFor === undefined) {
+					defaultIntegrationOwnerIndex = index;
+					break;
+				}
+			}
+		}
+		if (!hasExplicitIntegrationOwner && defaultIntegrationOwnerIndex < 0) {
+			throw new Error("Workflow has no non-verifier integration owner candidate");
+		}
 		return WorkItemLedger.create({
 			workflowId: params.workflow.id ?? "blocking-workflow",
 			items: resolvedWorkflowTasks.map((task, index) =>
@@ -96,7 +108,7 @@ export function createBlockingWorkLedger(
 					...task,
 					integrationOwner:
 						task.integrationOwner ??
-						(!hasExplicitIntegrationOwner && index === resolvedWorkflowTasks.length - 1),
+						(!hasExplicitIntegrationOwner && index === defaultIntegrationOwnerIndex),
 				}),
 			),
 		});

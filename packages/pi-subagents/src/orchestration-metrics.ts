@@ -14,6 +14,12 @@ export interface OrchestrationMetrics {
 	requestedTools: number;
 	effectiveRequestedTools: number;
 	permissionPrecision: number;
+	workerReportedVerification: number;
+	executorAcceptedVerification: number;
+	verificationRework: number;
+	verificationRejected: number;
+	verificationInvalid: number;
+	verificationTreeMismatch: number;
 	panelValidReviews?: number;
 	panelFailedReviews?: number;
 	panelBlockingObjections?: number;
@@ -65,6 +71,31 @@ export function calculateOrchestrationMetrics(
 		requestedTools,
 		effectiveRequestedTools,
 		permissionPrecision: requestedTools === 0 ? 1 : effectiveRequestedTools / requestedTools,
+		workerReportedVerification: results.filter(
+			(result, index) =>
+				!items[index]?.verifierFor &&
+				result.structuredResult?.version === "pi-subagents:result:v2" &&
+				result.structuredResult.verification.some(
+					(verification) => verification.status === "passed",
+				),
+		).length,
+		executorAcceptedVerification: items.filter((item) => item.verificationAccepted).length,
+		verificationRework: items.filter(
+			(item) => !item.verifierFor && item.verificationReceipt?.decision === "rework",
+		).length,
+		verificationRejected: items.filter(
+			(item) => !item.verifierFor && item.verificationReceipt?.decision === "reject",
+		).length,
+		verificationInvalid: items.filter(
+			(item) => !item.verifierFor && item.outcomeReason === "verification-receipt-invalid",
+		).length,
+		verificationTreeMismatch: items.filter(
+			(item) =>
+				!item.verifierFor &&
+				["verification-tree-mismatch", "verification-tree-unavailable"].includes(
+					item.outcomeReason ?? "",
+				),
+		).length,
 		...(panel
 			? {
 					panelValidReviews: panel.validReviewCount,

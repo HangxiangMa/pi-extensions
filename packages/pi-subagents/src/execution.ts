@@ -21,6 +21,7 @@ import {
 	startSubagentStatus,
 } from "./blocking-status.js";
 import { issueCapabilityGrant } from "./capability-grant.js";
+import { redactPrivateText } from "./context.js";
 import {
 	assertDelegationTargetAllowed,
 	type ResolvedSubagentTarget,
@@ -69,13 +70,21 @@ import {
 import { isRetryableResult, runHedgedAttempt, supervisionDelay } from "./supervision.js";
 import { TimeoutProgressJournal, TURN_TERMINATION_VERSION } from "./timeout-checkpoint.js";
 import type { TurnLimits } from "./turn-budget.js";
-import { requiresIndependentVerification } from "./verification-policy.js";
+import {
+	requiresIndependentVerification,
+	validateWorkflowVerificationGraph,
+} from "./verification-policy.js";
 import type { WorkItemLedger } from "./work-item-ledger.js";
 import {
 	createSessionWorkItemPersistence,
 	type WorkItemPersistence,
 } from "./work-item-persistence.js";
 import { createBlockingWorkLedger, resolveWorkflowTasks } from "./workflow-planning.js";
+import { captureWorkflowTreeIdentity, sameWorkflowTreeIdentity } from "./workflow-tree-identity.js";
+import {
+	createWorkflowVerificationReceipt,
+	workflowVerificationInstruction,
+} from "./workflow-verification.js";
 
 export const FALLBACK_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -173,6 +182,7 @@ export async function executeSubagent(
 		Number(hasSingle);
 	let workLedger: WorkItemLedger | undefined;
 	const workflowScheduling: ReturnType<AdaptiveScheduler["decide"]>[] = [];
+	const verificationTargetIds = new Set<string>();
 
 	const makeDetails =
 		(mode: "single" | "parallel" | "chain" | "workflow" | "panel") =>
@@ -191,6 +201,38 @@ export async function executeSubagent(
 				metrics: calculateOrchestrationMetrics(workflow, metricResults),
 			};
 		};
+	const workflowFailureResult = (
+		agentName: string,
+		task: string,
+		reasonCode: string,
+		message: string,
+		thinkingLevel?: SubagentThinkingLevel,
+	): SingleResult => ({
+		agent: agentName,
+		agentSource: agents.find((agent) => agent.name === agentName)?.source ?? "unknown",
+		task,
+		exitCode: 1,
+		messages: [],
+		stderr: message,
+		errorMessage: message,
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			cost: 0,
+			contextTokens: 0,
+			turns: 0,
+		},
+		thinkingLevel,
+		finalOutput: "",
+		outcome: {
+			status: "failed",
+			reasonCode,
+			recoveryActions: ["revalidate"],
+			retryable: false,
+		},
+	});
 	const exhaustedResult = (
 		agentName: string,
 		task: string,
@@ -292,6 +334,7 @@ export async function executeSubagent(
 	}
 	if (hasWorkflow && params.workflow) {
 		for (const task of resolvedWorkflowTasks) {
+			if (task.verifierFor) verificationTargetIds.add(task.verifierFor);
 			const contract = normalizeDelegationContract(task.contract);
 			if (params.workflow.honorAdmission) {
 				const admission = contract?.admission;
@@ -322,17 +365,7 @@ export async function executeSubagent(
 					requiredCapabilities: task.requiredCapabilities ?? [],
 				})
 			) {
-				const verifier = resolvedWorkflowTasks.find(
-					(candidate) =>
-						candidate.verifierFor === task.id &&
-						candidate.dependsOn?.includes(task.id) &&
-						candidate.agent !== task.agent,
-				);
-				if (!verifier) {
-					throw new Error(
-						`Workflow task ${task.id} requires a distinct dependent verifier before launch`,
-					);
-				}
+				verificationTargetIds.add(task.id);
 			}
 			if (!task.retryPolicy && !task.hedgeAfterMs) continue;
 			const policy = contract?.sideEffectPolicy;
@@ -345,6 +378,13 @@ export async function executeSubagent(
 				);
 			}
 		}
+		validateWorkflowVerificationGraph(
+			resolvedWorkflowTasks.map((task) => ({
+				...task,
+				resultFormat: task.resultFormat ?? params.resultFormat,
+			})),
+			verificationTargetIds,
+		);
 	}
 	workLedger = createBlockingWorkLedger(params, resolvedWorkflowTasks, aggregator);
 	let workflowPersistence: WorkItemPersistence | undefined;
@@ -512,6 +552,19 @@ export async function executeSubagent(
 		);
 	}
 
+	const artifactsFromResult = (result: SingleResult) => {
+		const structured =
+			result.structuredResult?.version === "pi-subagents:result:v2"
+				? result.structuredResult
+				: undefined;
+		return (structured?.artifacts ?? []).map((artifact) => ({
+			id: artifact.id,
+			kind: artifact.kind,
+			version: artifact.version ?? artifact.digest ?? "unversioned",
+			digest: artifact.digest,
+			verified: false,
+		}));
+	};
 	const startWorkItem = (id: string, agentName: string) => {
 		if (workLedger?.get(id)?.state === "ready") {
 			return workLedger.start(id, `agent:${agentName}`);
@@ -548,24 +601,10 @@ export async function executeSubagent(
 			);
 			return;
 		}
-		const structured =
-			result.structuredResult?.version === "pi-subagents:result:v2"
-				? result.structuredResult
-				: undefined;
 		workLedger.complete(id, {
 			taskGeneration,
 			executionPlanId: result.executionPlan?.id,
-			artifacts: (structured?.artifacts ?? []).map((artifact) => ({
-				id: artifact.id,
-				kind: artifact.kind,
-				version: artifact.version ?? artifact.digest ?? "unversioned",
-				digest: artifact.digest,
-				verified:
-					structured?.verification.some((verification) => verification.status === "passed") ??
-					false,
-			})),
-			verificationAccepted:
-				structured?.verification.some((verification) => verification.status === "passed") ?? false,
+			artifacts: artifactsFromResult(result),
 		});
 	};
 
@@ -659,7 +698,9 @@ export async function executeSubagent(
 		const deadline = orchestrationDeadline;
 		const cancelWorkflowGeneration = () => {
 			for (const item of workLedger.snapshot().items) {
-				if (item.state === "running") workLedger.invalidate(item.id, "parent-aborted");
+				if (item.state === "running" || item.state === "awaiting-verification") {
+					workLedger.invalidate(item.id, "parent-aborted");
+				}
 			}
 		};
 		signal?.addEventListener("abort", cancelWorkflowGeneration, { once: true });
@@ -691,17 +732,73 @@ export async function executeSubagent(
 						const dependencies = (task.dependsOn ?? [])
 							.map((dependency) => resultsById.get(dependency))
 							.filter((result): result is SingleResult => result !== undefined);
-						const dependencyContext = dependencies.length
-							? `\n\nDependency results:\n${buildFanInContext(dependencies)}`
-							: "";
+						const verifierDependency = task.verifierFor
+							? resultsById.get(task.verifierFor)
+							: undefined;
+						const verifierStructuredResult =
+							verifierDependency?.structuredResult?.version === "pi-subagents:result:v2"
+								? verifierDependency.structuredResult
+								: undefined;
+						const dependencyContext = task.verifierFor
+							? verifierStructuredResult
+								? `\n\nStaged target result:\n${redactPrivateText(
+										JSON.stringify(verifierStructuredResult),
+									)}`
+								: ""
+							: dependencies.length
+								? `\n\nDependency results:\n${buildFanInContext(dependencies)}`
+								: "";
 						const displayTask = task.task;
-						const taskWithContext = truncateUtf8(
-							`${task.task}${dependencyContext}`,
-							DEFAULT_MAX_CONTEXT_BYTES,
-						).text;
-						const prepared = prepareTask(taskWithContext, task);
 						const target = workflowTargets[index];
 						const thinkingLevel = resolveThinkingLevel(task.agent, task.thinkingLevel);
+						let verifierTreeIdentity:
+							| Awaited<ReturnType<typeof captureWorkflowTreeIdentity>>
+							| undefined;
+						let verifierPreflightError: string | undefined;
+						let verifierPreflightCode: string | undefined;
+						if (task.verifierFor) {
+							const staged = workLedger.get(task.verifierFor);
+							if (!staged?.stagedTreeIdentity) {
+								verifierPreflightCode = "verification-tree-unavailable";
+								verifierPreflightError = `Verification target ${task.verifierFor} has no staged tree identity`;
+							} else {
+								try {
+									verifierTreeIdentity = await captureWorkflowTreeIdentity(target.cwd, { signal });
+									if (!sameWorkflowTreeIdentity(staged.stagedTreeIdentity, verifierTreeIdentity)) {
+										verifierPreflightCode = "verification-tree-mismatch";
+										verifierPreflightError =
+											"Workflow verification tree changed before verifier launch";
+									}
+								} catch (error) {
+									if (signal?.aborted) throw error;
+									verifierPreflightCode = "verification-tree-unavailable";
+									verifierPreflightError = error instanceof Error ? error.message : String(error);
+								}
+							}
+						}
+						const verificationTargetTask = task.verifierFor
+							? taskById.get(task.verifierFor)?.task
+							: undefined;
+						const verificationTargetContract = normalizeDelegationContract(
+							verificationTargetTask?.contract,
+						);
+						const verificationSuffix =
+							task.verifierFor && verifierTreeIdentity
+								? `\n\n${workflowVerificationInstruction(task.verifierFor, verifierTreeIdentity, {
+										acceptanceCriteria: [
+											...(verificationTargetTask?.acceptanceCriteria ?? []),
+											...(verificationTargetContract?.acceptanceCriteria ?? []),
+										],
+										requiredEvidence: verificationTargetContract?.requiredEvidence ?? [],
+									})}`
+								: "";
+						const baseTask = `${task.task}${dependencyContext}`;
+						const baseBudget = Math.max(
+							0,
+							DEFAULT_MAX_CONTEXT_BYTES - Buffer.byteLength(verificationSuffix, "utf8"),
+						);
+						const taskWithContext = `${truncateUtf8(baseTask, baseBudget).text}${verificationSuffix}`;
+						const prepared = prepareTask(taskWithContext, task);
 						const startedItem = startWorkItem(workItemId, task.agent);
 						const acceptedTaskGeneration = startedItem?.taskGeneration ?? 0;
 						await persistWorkLedger();
@@ -737,9 +834,20 @@ export async function executeSubagent(
 							);
 						};
 						const maxAttempts = task.retryPolicy?.maxAttempts ?? 1;
-						let result: SingleResult | undefined;
+						let result: SingleResult | undefined = verifierPreflightError
+							? attachTarget(
+									workflowFailureResult(
+										task.agent,
+										displayTask,
+										verifierPreflightCode ?? "verification-tree-unavailable",
+										verifierPreflightError,
+										thinkingLevel,
+									),
+									target,
+								)
+							: undefined;
 						let hedged = false;
-						for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+						for (let attempt = 1; !verifierPreflightError && attempt <= maxAttempts; attempt++) {
 							if (attempt > 1 && deadline !== undefined && Date.now() >= deadline) break;
 							const attempted = await runHedgedAttempt(runAttempt, signal, task.hedgeAfterMs);
 							hedged ||= attempted.hedged;
@@ -765,7 +873,123 @@ export async function executeSubagent(
 							};
 						}
 						resultsById.set(workItemId, result);
-						settleWorkItem(workItemId, result, acceptedTaskGeneration);
+						if (result.outcome?.status === "stale") {
+							// Cancellation or replacement already rotated and invalidated this generation.
+						} else if (task.verifierFor) {
+							const staged = workLedger.get(task.verifierFor);
+							const structured =
+								result.structuredResult?.version === "pi-subagents:result:v2"
+									? result.structuredResult
+									: undefined;
+							let failureReason: string | undefined = verifierPreflightError;
+							let failureCode: string | undefined = verifierPreflightCode;
+							let postVerifierIdentity = verifierTreeIdentity;
+							if (!failureReason) {
+								try {
+									postVerifierIdentity = await captureWorkflowTreeIdentity(target.cwd, { signal });
+									if (
+										!verifierTreeIdentity ||
+										!staged?.stagedTreeIdentity ||
+										!sameWorkflowTreeIdentity(verifierTreeIdentity, postVerifierIdentity) ||
+										!sameWorkflowTreeIdentity(staged.stagedTreeIdentity, postVerifierIdentity)
+									) {
+										failureCode = "verification-tree-mismatch";
+										failureReason = "Workflow verification tree changed during verifier execution";
+									}
+								} catch (error) {
+									if (signal?.aborted) throw error;
+									failureCode = "verification-tree-unavailable";
+									failureReason = error instanceof Error ? error.message : String(error);
+								}
+							}
+							if (
+								!failureReason &&
+								structured &&
+								staged?.acceptedExecutionPlanId &&
+								result.executionPlan?.id &&
+								postVerifierIdentity
+							) {
+								try {
+									const receipt = createWorkflowVerificationReceipt(structured, {
+										targetTaskId: staged.id,
+										targetTaskGeneration: staged.taskGeneration,
+										targetExecutionPlanId: staged.acceptedExecutionPlanId,
+										verifierTaskId: workItemId,
+										verifierTaskGeneration: acceptedTaskGeneration,
+										verifierExecutionPlanId: result.executionPlan.id,
+										treeIdentity: postVerifierIdentity,
+										sourceTruncated: result.truncated === true,
+									});
+									workLedger.completeVerification(workItemId, {
+										taskGeneration: acceptedTaskGeneration,
+										executionPlanId: result.executionPlan.id,
+										receipt,
+									});
+									if (receipt.decision !== "accept") {
+										const targetResult = resultsById.get(staged.id);
+										if (targetResult) {
+											targetResult.outcome = {
+												status: receipt.decision === "rework" ? "blocked" : "failed",
+												reasonCode:
+													receipt.decision === "rework"
+														? "verification-rework"
+														: "verification-rejected",
+												recoveryActions:
+													receipt.decision === "rework" ? ["replan", "verify"] : ["stop"],
+												retryable: false,
+											};
+										}
+									}
+								} catch (error) {
+									failureCode = "verification-receipt-invalid";
+									failureReason = error instanceof Error ? error.message : String(error);
+								}
+							} else if (!failureReason) {
+								failureCode = "verification-receipt-invalid";
+								failureReason = "Workflow verifier did not return a current structured-v2 result";
+							}
+							if (failureReason) {
+								const reasonCode = failureCode ?? "verification-receipt-invalid";
+								result.outcome = {
+									status:
+										reasonCode === "verification-receipt-invalid" ? "contract-invalid" : "failed",
+									reasonCode,
+									recoveryActions:
+										reasonCode === "verification-receipt-invalid"
+											? ["repair-contract"]
+											: ["revalidate"],
+									retryable: false,
+								};
+								result.errorMessage = failureReason;
+								workLedger.failVerification(workItemId, reasonCode);
+							}
+						} else if (verificationTargetIds.has(workItemId) && !isResultError(result)) {
+							try {
+								const treeIdentity = await captureWorkflowTreeIdentity(target.cwd, { signal });
+								if (!result.executionPlan?.id) {
+									throw new Error("Verification-required producer has no accepted ExecutionPlan");
+								}
+								workLedger.stageForVerification(workItemId, {
+									taskGeneration: acceptedTaskGeneration,
+									executionPlanId: result.executionPlan.id,
+									artifacts: artifactsFromResult(result),
+									treeIdentity,
+								});
+							} catch (error) {
+								if (signal?.aborted) throw error;
+								const message = error instanceof Error ? error.message : String(error);
+								result.outcome = {
+									status: "failed",
+									reasonCode: "verification-tree-unavailable",
+									recoveryActions: ["revalidate"],
+									retryable: false,
+								};
+								result.errorMessage = message;
+								settleWorkItem(workItemId, result, acceptedTaskGeneration);
+							}
+						} else {
+							settleWorkItem(workItemId, result, acceptedTaskGeneration);
+						}
 						await persistWorkLedger();
 						return result;
 					},
@@ -774,11 +998,19 @@ export async function executeSubagent(
 				if (batch.length === 0 || signal?.aborted) break;
 			}
 			for (const item of workLedger.snapshot().items) {
-				if (item.state !== "pending" && item.state !== "ready") continue;
+				if (
+					item.state !== "pending" &&
+					item.state !== "ready" &&
+					item.state !== "awaiting-verification"
+				) {
+					continue;
+				}
 				if (signal?.aborted) {
 					workLedger.settle(item.id, "interrupted", "parent-aborted");
 				} else if (deadline !== undefined && Date.now() >= deadline) {
 					workLedger.settle(item.id, "blocked", "budget-exhausted");
+				} else if (item.state === "awaiting-verification") {
+					workLedger.settle(item.id, "blocked", "verification-not-completed");
 				} else {
 					const dependencyBlocked = item.dependencies.some(
 						(dependency) => workLedger.get(dependency)?.state !== "completed",
@@ -793,8 +1025,26 @@ export async function executeSubagent(
 			await persistWorkLedger();
 			const results = resolvedWorkflowTasks.map((task) => {
 				const completed = resultsById.get(task.id);
-				if (completed) return completed;
 				const item = workLedger.get(task.id);
+				if (completed) {
+					if (item && item.state !== "completed" && !isResultError(completed)) {
+						completed.outcome = {
+							status:
+								item.state === "needs-input"
+									? "needs-input"
+									: item.state === "interrupted"
+										? "interrupted"
+										: item.state === "failed"
+											? "failed"
+											: "blocked",
+							reasonCode: item.outcomeReason ?? "verification-not-accepted",
+							recoveryActions:
+								item.outcomeReason === "verification-rework" ? ["replan", "verify"] : ["stop"],
+							retryable: false,
+						};
+					}
+					return completed;
+				}
 				const outcomeStatus =
 					item?.state === "interrupted"
 						? "interrupted"

@@ -203,6 +203,11 @@ function sanitizeWorkflowSnapshot(snapshot: WorkItemLedgerSnapshot): WorkItemLed
 		item.acceptanceCriteria = item.acceptanceCriteria.map(redact);
 		item.invalidationReasons = item.invalidationReasons.map(redact);
 		item.outcomeReason = item.outcomeReason ? redact(item.outcomeReason) : undefined;
+		if (item.verificationReceipt) {
+			item.verificationReceipt.summary = redact(item.verificationReceipt.summary);
+			item.verificationReceipt.evidence = item.verificationReceipt.evidence.map(redact);
+			item.verificationReceipt.limitations = item.verificationReceipt.limitations.map(redact);
+		}
 		for (const artifact of [...item.artifacts, ...item.artifactHistory]) {
 			artifact.kind = redact(artifact.kind);
 			artifact.version = redact(artifact.version);
