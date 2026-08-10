@@ -29,13 +29,13 @@ Applicable extension convention MUST rules are deterministic behavior tests, gen
 - [x] Scan patch, persistence, and revision paths for the same mismatch; stale eligible ledger tasks now rotate, while normalization refuses to replay immutable completed work.
 - [x] Run 17 focused patch/compiler tests, 395 Pi Subagents tests, package checks, root `npm run check` with 2,943 tests, and `git diff --check`; package inspection is not applicable because metadata and published contents did not change.
 - [x] Audit generation state, persisted identity, cancellation retention, settings/lifecycle non-impact, and the final diff against both extension guides; no deviation remains.
-- [ ] Re-read the review after delivery, update this ledger with commit and thread evidence, deliver signed commits, resolve the thread, refresh PR #692 once, and archive this completed plan.
+- [x] Re-read the review after delivery, verify signed commit `535715d1`, push without rewriting history, reply to and resolve the thread, refresh mergeable PR #692 at the delivered head, and confirm CI run `31413473491` passed.
 
 ## Completion Checklist
 
 - [x] Every feedback item has one evidence-backed final outcome.
 - [x] Every actionable item is fixed at its owning boundary and has deterministic regression coverage.
 - [x] Focused tests and the CI-equivalent gate pass.
-- [ ] Only intended files are staged and signed commits are verified.
-- [ ] The branch is pushed without rewriting history and the review thread is resolved with evidence.
-- [ ] Any skipped smoke or remaining blocker is reported plainly.
+- [x] Only intended files were staged, and signed commit `535715d1` verified with its configured ED25519 key.
+- [x] The branch was pushed without rewriting history, and the review thread has an evidence-backed reply and resolution.
+- [x] No runtime or package smoke was required because loading, metadata, and published contents did not change; deterministic tests, local gates, and CI passed with no remaining blocker.
