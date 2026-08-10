@@ -81,10 +81,15 @@ export function calculateOrchestrationMetrics(
 		).length,
 		executorAcceptedVerification: items.filter((item) => item.verificationAccepted).length,
 		verificationRework: items.filter(
-			(item) => !item.verifierFor && item.verificationReceipt?.decision === "rework",
+			(item) =>
+				!item.verifierFor &&
+				(item.verificationReceipt?.decision === "rework" ||
+					item.acceptanceReceiptHistory.some((receipt) => receipt.decision === "rework")),
 		).length,
 		verificationRejected: items.filter(
-			(item) => !item.verifierFor && item.verificationReceipt?.decision === "reject",
+			(item) =>
+				!item.verifierFor &&
+				(item.verificationReceipt?.decision === "reject" || item.acceptanceState === "rejected"),
 		).length,
 		verificationInvalid: items.filter(
 			(item) => !item.verifierFor && item.outcomeReason === "verification-receipt-invalid",
@@ -92,9 +97,11 @@ export function calculateOrchestrationMetrics(
 		verificationTreeMismatch: items.filter(
 			(item) =>
 				!item.verifierFor &&
-				["verification-tree-mismatch", "verification-tree-unavailable"].includes(
-					item.outcomeReason ?? "",
-				),
+				[
+					"verification-tree-mismatch",
+					"verification-tree-unavailable",
+					"verification-tree-drift",
+				].includes(item.outcomeReason ?? ""),
 		).length,
 		...(panel
 			? {

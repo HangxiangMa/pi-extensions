@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
+import type { VerificationReceipt } from "../src/verification-receipt.js";
 import { type CompleteWorkItemInput, WorkItemLedger } from "../src/work-item-ledger.js";
 import type { WorkflowTreeIdentity } from "../src/workflow-tree-identity.js";
 import type { WorkflowVerificationReceipt } from "../src/workflow-verification.js";
@@ -187,7 +188,7 @@ test("WorkItemLedger restores legacy v1 snapshots without trusting self-reported
 	legacy.items[0].artifacts[0].verified = true;
 	legacy.items[0].artifactHistory = [structuredClone(legacy.items[0].artifacts[0])];
 	const restored = WorkItemLedger.restore(legacy);
-	assert.equal(restored.snapshot().version, "pi-subagents:work-ledger:v2");
+	assert.equal(restored.snapshot().version, "pi-subagents:work-ledger:v3");
 	assert.equal(restored.get("task")?.verificationAccepted, false);
 	assert.equal(restored.get("task")?.artifacts[0]?.verified, false);
 	assert.equal(restored.get("task")?.artifactHistory[0]?.verified, false);
@@ -359,6 +360,330 @@ test("WorkItemLedger rejects late verifier acceptance after target cancellation"
 	);
 	assert.equal(ledger.get("implementation")?.state, "stale");
 	assert.equal(ledger.get("implementation")?.verificationAccepted, false);
+});
+
+test("WorkItemLedger persists execution separately from verified acceptance and ignores worker self-report", () => {
+	const ledger = WorkItemLedger.create({
+		workflowId: "verified",
+		items: [
+			{
+				id: "implementation",
+				objective: "implement",
+				dependencies: [],
+				integrationOwner: true,
+				acceptanceRequired: true,
+				requiredEvidence: ["focused-test"],
+				maxReworkCycles: 1,
+			},
+			{
+				id: "verify-implementation",
+				objective: "verify",
+				dependencies: ["implementation"],
+				verifierFor: "implementation",
+			},
+			{ id: "consumer", objective: "consume", dependencies: ["implementation"] },
+		],
+	});
+	const implementation = ledger.start("implementation", "agent-worker");
+	ledger.stageForVerifiedAcceptance("implementation", {
+		taskGeneration: implementation.taskGeneration,
+		executionPlanId: PLAN_A,
+		artifacts: [{ id: "focused-test", kind: "test", version: "v1", verified: true }],
+		treeIdentity: TREE,
+		baseRepositoryGeneration: "d".repeat(40),
+		patchDigest: "e".repeat(64),
+		changedPaths: ["src/feature.ts"],
+		fileVersions: { "src/feature.ts": "f".repeat(64) },
+	});
+	const staged = ledger.get("implementation");
+	assert.equal(staged?.state, "completed");
+	assert.equal(staged?.acceptanceState, "pending");
+	assert.equal(staged?.verificationAccepted, false);
+	assert.equal(staged?.artifacts[0]?.verified, false);
+	assert.deepEqual(
+		ledger.readyItems().map((item) => item.id),
+		["verify-implementation"],
+	);
+	assert.equal(ledger.get("consumer")?.state, "pending");
+
+	const restored = WorkItemLedger.restore(ledger.snapshot());
+	assert.equal(restored.get("implementation")?.state, "interrupted");
+	assert.equal(restored.get("implementation")?.acceptanceState, "rejected");
+});
+
+function verifiedReceipt(
+	decision: VerificationReceipt["decision"],
+	targetGeneration: number,
+	verifierGeneration: number,
+): VerificationReceipt {
+	return {
+		version: "pi-subagents:verification-receipt:v1",
+		decision,
+		targetTaskId: "implementation",
+		targetTaskGeneration: targetGeneration,
+		targetExecutionPlanId: PLAN_A,
+		verifierTaskId: "verify-implementation",
+		verifierTaskGeneration: verifierGeneration,
+		verifierExecutionPlanId: PLAN_B,
+		verifierAgent: "reviewer",
+		beforeTreeIdentity: TREE,
+		afterTreeIdentity: TREE,
+		baseRepositoryGeneration: "d".repeat(40),
+		patchDigest: "e".repeat(64),
+		changedPaths: ["src/feature.ts"],
+		allowedScopes: ["src"],
+		dependencyVersions: {},
+		readSetVersions: { "src/feature.ts": "f".repeat(64) },
+		acceptanceCriteria: ["works"],
+		requiredEvidenceIds: ["focused-test"],
+		evidence: { "focused-test": "deterministic-check:passed" },
+		checks: [],
+		summary: `${decision} summary`,
+		findings: decision === "accept" ? [] : ["fix the regression"],
+		createdAt: 123,
+		sourceTruncated: false,
+	};
+}
+
+function managedExpectation(targetGeneration: number) {
+	return {
+		taskId: "implementation",
+		taskGeneration: targetGeneration,
+		baseRepositoryGeneration: "d".repeat(40),
+		dependencyVersions: {},
+		readSetVersions: { "src/feature.ts": "f".repeat(64) },
+		executionPlanId: PLAN_A,
+		allowedScopes: ["src"],
+		patchDigest: "e".repeat(64),
+		requiredEvidence: ["focused-test"],
+	};
+}
+
+function managedCandidate(targetGeneration: number) {
+	return {
+		...managedExpectation(targetGeneration),
+		changedPaths: ["src/feature.ts"],
+		evidence: { "focused-test": "deterministic-check:passed" },
+		verifier: { freshContext: true, exactIntegratedTree: true, status: "accepted" as const },
+	};
+}
+
+test("WorkItemLedger atomically accepts managed integration and permits only one rework generation", () => {
+	const create = () =>
+		WorkItemLedger.create({
+			workflowId: "verified",
+			items: [
+				{
+					id: "implementation",
+					objective: "implement",
+					dependencies: [],
+					writePaths: ["src"],
+					acceptanceCriteria: ["works"],
+					integrationOwner: true,
+					acceptanceRequired: true,
+					requiredEvidence: ["focused-test"],
+					maxReworkCycles: 1,
+				},
+				{
+					id: "verify-implementation",
+					objective: "verify",
+					dependencies: ["implementation"],
+					verifierFor: "implementation",
+				},
+			],
+		});
+	const stage = (ledger: WorkItemLedger) => {
+		const target = ledger.start("implementation", "agent-worker");
+		ledger.stageForVerifiedAcceptance("implementation", {
+			taskGeneration: target.taskGeneration,
+			executionPlanId: PLAN_A,
+			treeIdentity: TREE,
+			baseRepositoryGeneration: "d".repeat(40),
+			patchDigest: "e".repeat(64),
+			changedPaths: ["src/feature.ts"],
+			fileVersions: { "src/feature.ts": "f".repeat(64) },
+		});
+		return target.taskGeneration;
+	};
+
+	const accepted = create();
+	const acceptedGeneration = stage(accepted);
+	const acceptedVerifier = accepted.start("verify-implementation", "agent:reviewer");
+	accepted.acceptIntegration(
+		"implementation",
+		managedExpectation(acceptedGeneration),
+		managedCandidate(acceptedGeneration),
+		{
+			verifierId: "verify-implementation",
+			verifierTaskGeneration: acceptedVerifier.taskGeneration,
+			verifierExecutionPlanId: PLAN_B,
+			receipt: verifiedReceipt("accept", acceptedGeneration, acceptedVerifier.taskGeneration),
+		},
+	);
+	assert.equal(accepted.get("implementation")?.acceptanceState, "accepted");
+	assert.equal(accepted.get("implementation")?.verificationAccepted, true);
+	assert.equal(accepted.get("verify-implementation")?.state, "completed");
+	const restoredAccepted = WorkItemLedger.restore(accepted.snapshot());
+	assert.equal(restoredAccepted.get("implementation")?.acceptanceState, "accepted");
+	assert.equal(restoredAccepted.get("implementation")?.verificationAccepted, true);
+	assert.throws(() => accepted.rerun("implementation"), /terminal|accepted/i);
+
+	const rework = create();
+	const firstGeneration = stage(rework);
+	const firstVerifier = rework.start("verify-implementation", "agent:reviewer");
+	rework.recordVerificationDecision("verify-implementation", {
+		taskGeneration: firstVerifier.taskGeneration,
+		executionPlanId: PLAN_B,
+		receipt: verifiedReceipt("rework", firstGeneration, firstVerifier.taskGeneration),
+	});
+	assert.equal(rework.get("implementation")?.acceptanceState, "rework-requested");
+	rework.beginVerificationRework("implementation");
+	assert.equal(rework.get("implementation")?.taskGeneration, firstGeneration + 1);
+	assert.equal(rework.get("implementation")?.acceptanceState, "pending");
+	assert.equal(rework.get("verify-implementation")?.state, "pending");
+	const secondGeneration = stage(rework);
+	const secondVerifier = rework.start("verify-implementation", "agent:reviewer");
+	rework.recordVerificationDecision("verify-implementation", {
+		taskGeneration: secondVerifier.taskGeneration,
+		executionPlanId: PLAN_B,
+		receipt: verifiedReceipt("rework", secondGeneration, secondVerifier.taskGeneration),
+	});
+	assert.equal(rework.get("implementation")?.acceptanceState, "rejected");
+	assert.equal(rework.get("implementation")?.state, "failed");
+});
+
+test("WorkItemLedger rejects every stale or mismatched managed acceptance field without partial mutation", () => {
+	const mutations: Array<{
+		name: string;
+		mutate(receipt: VerificationReceipt, candidate: ReturnType<typeof managedCandidate>): void;
+	}> = [
+		{
+			name: "wrong plan",
+			mutate: (receipt) => {
+				receipt.targetExecutionPlanId = "9".repeat(64);
+			},
+		},
+		{
+			name: "wrong tree",
+			mutate: (receipt) => {
+				receipt.beforeTreeIdentity.digest = "9".repeat(64);
+				receipt.afterTreeIdentity.digest = "9".repeat(64);
+			},
+		},
+		{
+			name: "patch mismatch",
+			mutate: (_receipt, candidate) => {
+				candidate.patchDigest = "9".repeat(64);
+			},
+		},
+		{
+			name: "scope mismatch",
+			mutate: (_receipt, candidate) => {
+				candidate.changedPaths = ["outside/feature.ts"];
+			},
+		},
+		{
+			name: "missing evidence",
+			mutate: (_receipt, candidate) => {
+				candidate.evidence["focused-test"] = "";
+			},
+		},
+		{
+			name: "self-issued verifier",
+			mutate: (receipt) => {
+				receipt.verifierAgent = "worker";
+			},
+		},
+	];
+	for (const entry of mutations) {
+		const ledger = WorkItemLedger.create({
+			workflowId: `verified-${entry.name.replaceAll(" ", "-")}`,
+			items: [
+				{
+					id: "implementation",
+					objective: "implement",
+					dependencies: [],
+					writePaths: ["src"],
+					acceptanceCriteria: ["works"],
+					integrationOwner: true,
+					acceptanceRequired: true,
+					requiredEvidence: ["focused-test"],
+				},
+				{
+					id: "verify-implementation",
+					objective: "verify",
+					dependencies: ["implementation"],
+					verifierFor: "implementation",
+				},
+			],
+		});
+		const target = ledger.start("implementation", "agent:worker");
+		ledger.stageForVerifiedAcceptance("implementation", {
+			taskGeneration: target.taskGeneration,
+			executionPlanId: PLAN_A,
+			treeIdentity: TREE,
+			baseRepositoryGeneration: "d".repeat(40),
+			patchDigest: "e".repeat(64),
+			changedPaths: ["src/feature.ts"],
+			fileVersions: { "src/feature.ts": "f".repeat(64) },
+		});
+		const verifier = ledger.start("verify-implementation", "agent:reviewer");
+		const receipt = verifiedReceipt("accept", target.taskGeneration, verifier.taskGeneration);
+		const candidate = managedCandidate(target.taskGeneration);
+		entry.mutate(receipt, candidate);
+		assert.throws(
+			() =>
+				ledger.acceptIntegration(
+					"implementation",
+					managedExpectation(target.taskGeneration),
+					candidate,
+					{
+						verifierId: "verify-implementation",
+						verifierTaskGeneration: verifier.taskGeneration,
+						verifierExecutionPlanId: PLAN_B,
+						receipt,
+					},
+				),
+			/stale|mismatch|scope|evidence|identity|verifier/i,
+			entry.name,
+		);
+		assert.equal(ledger.get("implementation")?.acceptanceState, "pending", entry.name);
+		assert.equal(ledger.get("verify-implementation")?.state, "running", entry.name);
+	}
+});
+
+test("WorkItemLedger maps omitted legacy acceptance fields to their existing terminal meaning", () => {
+	const ledger = WorkItemLedger.create({
+		workflowId: "legacy",
+		items: [{ id: "task", objective: "task", dependencies: [] }],
+	});
+	const started = ledger.start("task", "worker");
+	ledger.complete("task", { taskGeneration: started.taskGeneration, executionPlanId: PLAN_A });
+	for (const version of ["pi-subagents:work-ledger:v1", "pi-subagents:work-ledger:v2"] as const) {
+		const snapshot = ledger.snapshot() as unknown as Record<string, unknown>;
+		snapshot.version = version;
+		for (const item of snapshot.items as Array<Record<string, unknown>>) {
+			if (version === "pi-subagents:work-ledger:v2") {
+				item.verificationAccepted = true;
+			}
+			delete item.acceptanceStateVersion;
+			delete item.acceptanceState;
+			delete item.acceptanceRequired;
+			delete item.requiredEvidence;
+			delete item.reworkCount;
+			delete item.maxReworkCycles;
+			delete item.acceptanceReceipt;
+			delete item.acceptanceReceiptHistory;
+			delete item.submission;
+		}
+		const restored = WorkItemLedger.restore(snapshot as never);
+		assert.equal(restored.get("task")?.state, "completed");
+		assert.equal(restored.get("task")?.acceptanceState, "not-required");
+		assert.equal(
+			restored.get("task")?.verificationAccepted,
+			version === "pi-subagents:work-ledger:v2",
+		);
+	}
 });
 
 test("WorkItemLedger enforces one terminal owner and monotonic generations", () => {

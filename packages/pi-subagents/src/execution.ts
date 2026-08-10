@@ -20,7 +20,7 @@ import {
 	singleStatus,
 	startSubagentStatus,
 } from "./blocking-status.js";
-import { issueCapabilityGrant } from "./capability-grant.js";
+import { issueCapabilityGrant, revokeCapabilityGrant } from "./capability-grant.js";
 import { redactPrivateText } from "./context.js";
 import {
 	assertDelegationTargetAllowed,
@@ -74,11 +74,16 @@ import {
 	requiresIndependentVerification,
 	validateWorkflowVerificationGraph,
 } from "./verification-policy.js";
+import { prepareVerifiedWorkflow } from "./verified-execution-contract.js";
 import type { WorkItemLedger } from "./work-item-ledger.js";
 import {
 	createSessionWorkItemPersistence,
 	type WorkItemPersistence,
 } from "./work-item-persistence.js";
+import {
+	WorkflowCompletionController,
+	workflowCompletionFailureReason,
+} from "./workflow-completion-controller.js";
 import { createBlockingWorkLedger, resolveWorkflowTasks } from "./workflow-planning.js";
 import { captureWorkflowTreeIdentity, sameWorkflowTreeIdentity } from "./workflow-tree-identity.js";
 import {
@@ -124,7 +129,29 @@ export async function executeSubagent(
 	const maxParallelTasks = resolveBlockingMaxParallelTasks(config);
 	const discovery = discoverAgents(ctx.cwd, agentScope, config);
 	const agents = discovery.agents;
-	const resolvedWorkflowTasks = resolveWorkflowTasks(params, agents);
+	let resolvedWorkflowTasks = resolveWorkflowTasks(params, agents);
+	const verifiedWorkflow = params.workflow?.verifiedExecution
+		? prepareVerifiedWorkflow(resolvedWorkflowTasks, params.workflow.verifiedExecution)
+		: undefined;
+	if (verifiedWorkflow) {
+		const verifierAgent = agents.find(
+			(agent) => agent.name === params.workflow?.verifiedExecution?.verifierAgent,
+		);
+		if (!verifierAgent) {
+			throw new Error(
+				`Unknown verified execution agent: ${params.workflow?.verifiedExecution?.verifierAgent}`,
+			);
+		}
+		if (
+			!verifierAgent.capabilityManifest?.verificationRoles.includes("independent-review") ||
+			!verifierAgent.capabilityManifest.resultFormats.includes("structured-v2")
+		) {
+			throw new Error(
+				`Verified execution agent ${verifierAgent.name} lacks independent structured-v2 review capability`,
+			);
+		}
+		resolvedWorkflowTasks = verifiedWorkflow.tasks;
+	}
 	const confirmProjectAgents = params.confirmProjectAgents ?? true;
 	const resolveTimeoutMs = (agentName: string, localTimeoutMs?: number) =>
 		localTimeoutMs ??
@@ -386,7 +413,17 @@ export async function executeSubagent(
 			verificationTargetIds,
 		);
 	}
-	workLedger = createBlockingWorkLedger(params, resolvedWorkflowTasks, aggregator);
+	workLedger = createBlockingWorkLedger(
+		params,
+		resolvedWorkflowTasks,
+		aggregator,
+		verifiedWorkflow
+			? {
+					id: verifiedWorkflow.targetTaskId,
+					maxReworkCycles: verifiedWorkflow.maxReworkCycles,
+				}
+			: undefined,
+	);
 	let workflowPersistence: WorkItemPersistence | undefined;
 	if (hasWorkflow && workLedger) {
 		const owner =
@@ -698,13 +735,33 @@ export async function executeSubagent(
 		const deadline = orchestrationDeadline;
 		const cancelWorkflowGeneration = () => {
 			for (const item of workLedger.snapshot().items) {
-				if (item.state === "running" || item.state === "awaiting-verification") {
+				if (
+					item.state === "running" ||
+					item.state === "awaiting-verification" ||
+					(item.state === "completed" && item.acceptanceState === "pending")
+				) {
 					workLedger.invalidate(item.id, "parent-aborted");
 				}
 			}
 		};
-		signal?.addEventListener("abort", cancelWorkflowGeneration, { once: true });
+		let completionController: WorkflowCompletionController | undefined;
+		let abortListenerAttached = false;
 		try {
+			completionController = verifiedWorkflow
+				? new WorkflowCompletionController({
+						ledger: workLedger,
+						cwd:
+							workflowTargets[
+								resolvedWorkflowTasks.findIndex((task) => task.id === verifiedWorkflow.targetTaskId)
+							]?.cwd ?? ctx.cwd,
+						targetTaskId: verifiedWorkflow.targetTaskId,
+						verifierTaskId: verifiedWorkflow.verifierTaskId,
+						checks: verifiedWorkflow.checks,
+						signal,
+					})
+				: undefined;
+			signal?.addEventListener("abort", cancelWorkflowGeneration, { once: true });
+			abortListenerAttached = signal !== undefined;
 			while (true) {
 				const snapshot = workLedger.snapshot();
 				const remainingBudgetMs =
@@ -732,6 +789,8 @@ export async function executeSubagent(
 						const dependencies = (task.dependsOn ?? [])
 							.map((dependency) => resultsById.get(dependency))
 							.filter((result): result is SingleResult => result !== undefined);
+						const managedVerifier =
+							completionController !== undefined && workItemId === verifiedWorkflow?.verifierTaskId;
 						const verifierDependency = task.verifierFor
 							? resultsById.get(task.verifierFor)
 							: undefined;
@@ -739,15 +798,17 @@ export async function executeSubagent(
 							verifierDependency?.structuredResult?.version === "pi-subagents:result:v2"
 								? verifierDependency.structuredResult
 								: undefined;
-						const dependencyContext = task.verifierFor
-							? verifierStructuredResult
-								? `\n\nStaged target result:\n${redactPrivateText(
-										JSON.stringify(verifierStructuredResult),
-									)}`
-								: ""
-							: dependencies.length
-								? `\n\nDependency results:\n${buildFanInContext(dependencies)}`
-								: "";
+						const dependencyContext = managedVerifier
+							? ""
+							: task.verifierFor
+								? verifierStructuredResult
+									? `\n\nStaged target result:\n${redactPrivateText(
+											JSON.stringify(verifierStructuredResult),
+										)}`
+									: ""
+								: dependencies.length
+									? `\n\nDependency results:\n${buildFanInContext(dependencies)}`
+									: "";
 						const displayTask = task.task;
 						const target = workflowTargets[index];
 						const thinkingLevel = resolveThinkingLevel(task.agent, task.thinkingLevel);
@@ -782,8 +843,15 @@ export async function executeSubagent(
 						const verificationTargetContract = normalizeDelegationContract(
 							verificationTargetTask?.contract,
 						);
-						const verificationSuffix =
-							task.verifierFor && verifierTreeIdentity
+						const managedVerificationInstruction = managedVerifier
+							? completionController?.verifierPrompt()
+							: undefined;
+						if (managedVerifier && !managedVerificationInstruction) {
+							throw new Error("Verified execution verifier instruction is unavailable");
+						}
+						const verificationSuffix = managedVerifier
+							? `\n\n${managedVerificationInstruction}`
+							: task.verifierFor && verifierTreeIdentity
 								? `\n\n${workflowVerificationInstruction(task.verifierFor, verifierTreeIdentity, {
 										acceptanceCriteria: [
 											...(verificationTargetTask?.acceptanceCriteria ?? []),
@@ -792,12 +860,19 @@ export async function executeSubagent(
 										requiredEvidence: verificationTargetContract?.requiredEvidence ?? [],
 									})}`
 								: "";
+						const reworkSuffix =
+							completionController &&
+							workItemId === verifiedWorkflow?.targetTaskId &&
+							(workLedger.get(workItemId)?.taskGeneration ?? 1) > 1
+								? `\n\n${completionController.reworkPrompt()}`
+								: "";
 						const baseTask = `${task.task}${dependencyContext}`;
+						const requiredSuffix = `${reworkSuffix}${verificationSuffix}`;
 						const baseBudget = Math.max(
 							0,
-							DEFAULT_MAX_CONTEXT_BYTES - Buffer.byteLength(verificationSuffix, "utf8"),
+							DEFAULT_MAX_CONTEXT_BYTES - Buffer.byteLength(requiredSuffix, "utf8"),
 						);
-						const taskWithContext = `${truncateUtf8(baseTask, baseBudget).text}${verificationSuffix}`;
+						const taskWithContext = `${truncateUtf8(baseTask, baseBudget).text}${requiredSuffix}`;
 						const prepared = prepareTask(taskWithContext, task);
 						const startedItem = startWorkItem(workItemId, task.agent);
 						const acceptedTaskGeneration = startedItem?.taskGeneration ?? 0;
@@ -807,6 +882,17 @@ export async function executeSubagent(
 							if (!budget) {
 								return Promise.resolve(exhaustedResult(task.agent, displayTask, thinkingLevel));
 							}
+							const childPolicy = launchPolicy(
+								target,
+								prepared,
+								displayTask,
+								task.agent,
+								thinkingLevel,
+								budget.timeoutMs,
+								acceptedTaskGeneration,
+								budget,
+								resolveTurnLimits(task),
+							);
 							return runSingleAgent(
 								ctx.cwd,
 								agents,
@@ -820,17 +906,15 @@ export async function executeSubagent(
 								undefined,
 								makeDetails("workflow"),
 								undefined,
-								launchPolicy(
-									target,
-									prepared,
-									displayTask,
-									task.agent,
-									thinkingLevel,
-									budget.timeoutMs,
-									acceptedTaskGeneration,
-									budget,
-									resolveTurnLimits(task),
-								),
+								managedVerifier
+									? {
+											...childPolicy,
+											disableExtensions: true,
+											disableSkills: true,
+											disablePromptTemplates: true,
+											disableContextFiles: true,
+										}
+									: childPolicy,
 							);
 						};
 						const maxAttempts = task.retryPolicy?.maxAttempts ?? 1;
@@ -875,6 +959,72 @@ export async function executeSubagent(
 						resultsById.set(workItemId, result);
 						if (result.outcome?.status === "stale") {
 							// Cancellation or replacement already rotated and invalidated this generation.
+						} else if (managedVerifier && completionController) {
+							const structured =
+								result.structuredResult?.version === "pi-subagents:result:v2"
+									? result.structuredResult
+									: undefined;
+							try {
+								if (!structured || !result.executionPlan?.id) {
+									throw new Error(
+										"Verified execution verifier did not return a current structured-v2 result",
+									);
+								}
+								const completion = await completionController.completeVerifier({
+									taskGeneration: acceptedTaskGeneration,
+									executionPlanId: result.executionPlan.id,
+									verifierAgent: task.agent,
+									result: structured,
+									sourceTruncated: result.truncated,
+								});
+								const targetItem = workLedger.get(verifiedWorkflow?.targetTaskId ?? "");
+								if (
+									completion.decision === "rework" &&
+									targetItem?.acceptanceState === "rework-requested"
+								) {
+									const targetResult = resultsById.get(targetItem.id);
+									if (targetResult?.capabilityGrant?.state === "active") {
+										targetResult.capabilityGrant = revokeCapabilityGrant(
+											targetResult.capabilityGrant,
+											"verification-rework",
+											Date.now(),
+										);
+									}
+									if (result.capabilityGrant?.state === "active") {
+										result.capabilityGrant = revokeCapabilityGrant(
+											result.capabilityGrant,
+											"verification-rework",
+											Date.now(),
+										);
+									}
+									completionController.beginRework();
+								} else if (completion.decision !== "accept" && targetItem) {
+									const targetResult = resultsById.get(targetItem.id);
+									if (targetResult) {
+										targetResult.outcome = {
+											status: "failed",
+											reasonCode: targetItem.outcomeReason ?? "verification-rejected",
+											recoveryActions: ["stop"],
+											retryable: false,
+										};
+									}
+								}
+							} catch (error) {
+								if (signal?.aborted) throw error;
+								const message = error instanceof Error ? error.message : String(error);
+								const reasonCode = workflowCompletionFailureReason(error);
+								result.outcome = {
+									status: "failed",
+									reasonCode,
+									recoveryActions: ["revalidate"],
+									retryable: false,
+								};
+								result.errorMessage = message;
+								const verifierItem = workLedger.get(workItemId);
+								if (verifierItem?.state === "running") {
+									workLedger.failVerification(workItemId, reasonCode);
+								}
+							}
 						} else if (task.verifierFor) {
 							const staged = workLedger.get(task.verifierFor);
 							const structured =
@@ -963,6 +1113,34 @@ export async function executeSubagent(
 								result.errorMessage = failureReason;
 								workLedger.failVerification(workItemId, reasonCode);
 							}
+						} else if (
+							completionController &&
+							workItemId === verifiedWorkflow?.targetTaskId &&
+							!isResultError(result)
+						) {
+							try {
+								if (!result.executionPlan?.id) {
+									throw new Error("Verified execution producer has no accepted ExecutionPlan");
+								}
+								await completionController.stageTarget({
+									taskGeneration: acceptedTaskGeneration,
+									executionPlanId: result.executionPlan.id,
+									artifacts: artifactsFromResult(result),
+								});
+							} catch (error) {
+								if (signal?.aborted) throw error;
+								const message = error instanceof Error ? error.message : String(error);
+								result.outcome = {
+									status: "failed",
+									reasonCode: "verification-checks-unavailable",
+									recoveryActions: ["revalidate"],
+									retryable: false,
+								};
+								result.errorMessage = message;
+								if (workLedger.get(workItemId)?.state === "running") {
+									settleWorkItem(workItemId, result, acceptedTaskGeneration);
+								}
+							}
 						} else if (verificationTargetIds.has(workItemId) && !isResultError(result)) {
 							try {
 								const treeIdentity = await captureWorkflowTreeIdentity(target.cwd, { signal });
@@ -1001,7 +1179,8 @@ export async function executeSubagent(
 				if (
 					item.state !== "pending" &&
 					item.state !== "ready" &&
-					item.state !== "awaiting-verification"
+					item.state !== "awaiting-verification" &&
+					!(item.state === "completed" && item.acceptanceState === "pending")
 				) {
 					continue;
 				}
@@ -1009,7 +1188,10 @@ export async function executeSubagent(
 					workLedger.settle(item.id, "interrupted", "parent-aborted");
 				} else if (deadline !== undefined && Date.now() >= deadline) {
 					workLedger.settle(item.id, "blocked", "budget-exhausted");
-				} else if (item.state === "awaiting-verification") {
+				} else if (
+					item.state === "awaiting-verification" ||
+					(item.state === "completed" && item.acceptanceState === "pending")
+				) {
 					workLedger.settle(item.id, "blocked", "verification-not-completed");
 				} else {
 					const dependencyBlocked = item.dependencies.some(
@@ -1027,7 +1209,12 @@ export async function executeSubagent(
 				const completed = resultsById.get(task.id);
 				const item = workLedger.get(task.id);
 				if (completed) {
-					if (item && item.state !== "completed" && !isResultError(completed)) {
+					if (
+						item &&
+						(item.state !== "completed" ||
+							(item.acceptanceRequired && item.acceptanceState !== "accepted")) &&
+						!isResultError(completed)
+					) {
 						completed.outcome = {
 							status:
 								item.state === "needs-input"
@@ -1099,7 +1286,10 @@ export async function executeSubagent(
 				isError: isError || undefined,
 			};
 		} finally {
-			signal?.removeEventListener("abort", cancelWorkflowGeneration);
+			if (abortListenerAttached) {
+				signal?.removeEventListener("abort", cancelWorkflowGeneration);
+			}
+			completionController?.dispose();
 			try {
 				await persistWorkLedger();
 			} finally {
