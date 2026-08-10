@@ -271,8 +271,10 @@ The caller supplies one versioned objective, non-goals, required inputs, accepta
 The planner always uses the built-in `planner` with only `read`, `grep`, `find`, and `ls`, disabled extensions and session persistence, trust-aware prompt resources, a maximum 60-second planning deadline, and bounded turn/tool-call counts.
 The planner returns only `pi-subagents:workflow-plan:v1` JSON and cannot choose agents, grant authority, create descendants, or forge executor identities.
 The executor reserves at most one quarter of the aggregate timeout, turns, and tool calls for planning before compiling execution work.
+It rejects before planning when that reservation leaves no positive execution budget, and it narrows the request task ceiling to the configured blocking-task limit before compilation or persistence.
 
 The compiler validates strict unknown-field and UTF-8 bounds, relative scopes, cycles, artifacts, ownership, capability routes, aggregate budgets, task generations, integration ownership, and the two-mutating-worker limit before execution.
+Caller-level acceptance criteria and required evidence are merged into the authoritative terminal, integration-owner, and verifier contracts without exceeding contract item limits.
 Path ceilings are compiler and conflict-scheduling constraints, not operating-system filesystem isolation; use a container or sandbox when host-level containment is required.
 Network and secrets guarantees other than `"unspecified"` fail closed because the current executor cannot enforce them.
 It can narrow or reject a proposal and can add one verifier only within the caller's remaining authority and budget.

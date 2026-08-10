@@ -261,8 +261,8 @@ test("patches reject authority widening, excess budget, and cycles", () => {
 	);
 });
 
-test("eligible rework rotates plan identity and task generation without replaying a settled side effect", () => {
-	const { record, ledger } = compiledRecord();
+test("eligible rework rotates compiled identity and task generations without replaying side effects", () => {
+	const { compiled, record, ledger } = compiledRecord();
 	ledger.settle("implement", "blocked", "verification-rework");
 	const result = applyWorkflowPlanPatch({
 		record,
@@ -285,6 +285,25 @@ test("eligible rework rotates plan identity and task generation without replayin
 	assert.equal(result.ledger.items.find((item) => item.id === "implement")?.state, "pending");
 	assert.deepEqual(result.replayedTaskIds, []);
 	assert.equal(result.record.history[0]?.planId, record.planId);
+	assert.equal(result.compiled?.planId, result.record.planId);
+	assert.equal(result.compiled?.workflowGeneration, result.record.workflowGeneration);
+	assert.equal(result.compiled?.revision, result.record.revision);
+	assert.equal(result.compiled?.workflow.id, `auto-${result.record.planId.slice(0, 24)}`);
+	assert.notEqual(result.compiled?.workflow.id, compiled.workflow.id);
+	for (const executionPlan of result.compiled?.executionPlans ?? []) {
+		const expectedGeneration = result.ledger.items.find(
+			(item) => item.id === executionPlan.taskId,
+		)?.taskGeneration;
+		assert.equal(executionPlan.taskGeneration, expectedGeneration);
+		const previousPlan = compiled.executionPlans.find(
+			(candidate) => candidate.taskId === executionPlan.taskId,
+		);
+		if (executionPlan.taskId === "implement") {
+			assert.notEqual(executionPlan.id, previousPlan?.id);
+		} else {
+			assert.equal(executionPlan.id, previousPlan?.id);
+		}
+	}
 });
 
 test("revision exhaustion is a terminal stop before another graph mutation", () => {

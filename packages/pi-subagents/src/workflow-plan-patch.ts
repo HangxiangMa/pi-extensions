@@ -13,6 +13,7 @@ import {
 } from "./automation-contract.js";
 import { redactPrivateText } from "./context.js";
 import type { TargetPolicyAudit } from "./cwd-policy.js";
+import { rotateExecutionPlanGeneration } from "./execution-plan.js";
 import {
 	WorkItemLedger,
 	type WorkItemLedgerSnapshot,
@@ -203,7 +204,7 @@ export function applyWorkflowPlanPatch(
 
 	const candidatePlan = parseWorkflowPlan({ ...input.record.plan, tasks });
 	const activeTasks = candidatePlan.tasks.filter((task) => !cancelled.has(task.id));
-	let compiled: CompiledWorkflowPlan | undefined;
+	let baseCompiled: CompiledWorkflowPlan | undefined;
 	if (activeTasks.length > 0) {
 		const activePlan = parseWorkflowPlan({ ...candidatePlan, tasks: activeTasks });
 		const result = compileWorkflowPlan({
@@ -218,7 +219,7 @@ export function applyWorkflowPlanPatch(
 				`Workflow patch rejected by compiler: ${result.reasonCodes.join(", ") || result.status}`,
 			);
 		}
-		compiled = result;
+		baseCompiled = result;
 	}
 	const nextGeneration = input.record.workflowGeneration + 1;
 	const nextRevision = input.record.revision + 1;
@@ -231,21 +232,21 @@ export function applyWorkflowPlanPatch(
 		cancelled,
 		invalidated,
 	);
-	const taskGenerations = Object.fromEntries(
-		tasks.map((task) => [
-			task.id,
-			(byState.get(task.id)?.taskGeneration ?? 0) + (modified.has(task.id) ? 1 : 0),
-		]),
-	);
 	const nextLedger = buildPatchedLedger(
 		candidatePlan,
 		ledger,
-		compiled,
+		baseCompiled,
 		modified,
 		cancelled,
 		invalidated,
 		input.patch.reason,
 	);
+	const taskGenerations = Object.fromEntries(
+		nextLedger.items.map((item) => [item.id, item.taskGeneration]),
+	);
+	const compiled = baseCompiled
+		? rotateCompiledPlan(baseCompiled, nextPlanId, nextGeneration, nextRevision, taskGenerations)
+		: undefined;
 	return {
 		record: {
 			...input.record,
@@ -261,6 +262,38 @@ export function applyWorkflowPlanPatch(
 		...(compiled ? { compiled } : {}),
 		taskGenerations,
 		replayedTaskIds: [],
+	};
+}
+
+function rotateCompiledPlan(
+	compiled: CompiledWorkflowPlan,
+	planId: string,
+	workflowGeneration: number,
+	revision: number,
+	taskGenerations: Readonly<Record<string, number>>,
+): CompiledWorkflowPlan {
+	const executionPlans = compiled.executionPlans.map((plan) => {
+		const taskId = plan.taskId;
+		const targetGeneration = taskId ? taskGenerations[taskId] : undefined;
+		if (!taskId || !targetGeneration || targetGeneration < plan.taskGeneration) {
+			throw new Error(`Patched workflow has an invalid task generation for ${taskId ?? "unknown"}`);
+		}
+		let rotated = plan;
+		while (rotated.taskGeneration < targetGeneration) {
+			rotated = rotateExecutionPlanGeneration(rotated);
+		}
+		return rotated;
+	});
+	return {
+		...compiled,
+		planId,
+		workflowGeneration,
+		revision,
+		workflow: {
+			...compiled.workflow,
+			id: `auto-${planId.slice(0, 24)}`,
+		},
+		executionPlans,
 	};
 }
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import type { SubagentSettings } from "../src/agents.js";
 import {
 	executeAutomationRequest,
 	registerSubagentAutomation,
@@ -78,8 +79,11 @@ async function run(
 	plannerOutput: string | Error,
 	requestValue = request(),
 	isCurrent: () => boolean = () => true,
+	settings?: SubagentSettings,
 ) {
+	let plannerCalls = 0;
 	let workflowCalls = 0;
+	let persistenceCalls = 0;
 	const context = createMockContext({ cwd: process.cwd(), isProjectTrusted: () => true });
 	const result = await executeAutomationRequest(
 		"auto-1",
@@ -88,8 +92,9 @@ async function run(
 		undefined,
 		context.ctx,
 		{
-			getSettings: () => undefined,
+			getSettings: () => settings,
 			runPlanner: async () => {
+				plannerCalls++;
 				if (plannerOutput instanceof Error) throw plannerOutput;
 				return plannerOutput;
 			},
@@ -105,11 +110,13 @@ async function run(
 					},
 				};
 			},
-			persistCompiled: async () => undefined,
+			persistCompiled: async () => {
+				persistenceCalls++;
+			},
 		},
 		isCurrent,
 	);
-	return { result, workflowCalls };
+	return { result, plannerCalls, workflowCalls, persistenceCalls };
 }
 
 test("objective compiles to a typed parent-owned result with zero execution workers", async () => {
@@ -184,6 +191,52 @@ test("objective compiles to a bounded two-child mutating width and integration p
 	assert.equal(result.details.status, "executed");
 	assert.equal(result.details.compiled?.maxConcurrentMutating, 2);
 	assert.equal(result.details.childCount, 4);
+});
+
+test("aggregate budgets that cannot fund both phases launch neither planner nor workflow", async () => {
+	for (const aggregateBudget of [
+		{ timeoutMs: 1, maxTurns: 30, maxToolCalls: 60, maxTasks: 4, maxRevisions: 1 },
+		{ timeoutMs: 180_000, maxTurns: 1, maxToolCalls: 60, maxTasks: 4, maxRevisions: 1 },
+		{ timeoutMs: 180_000, maxTurns: 30, maxToolCalls: 1, maxTasks: 4, maxRevisions: 1 },
+	]) {
+		const { result, plannerCalls, workflowCalls, persistenceCalls } = await run(
+			plan([task("inspect")]),
+			request({ aggregateBudget }),
+		);
+		assert.equal(result.details.status, "compiler-rejected");
+		assert.deepEqual(result.details.reasonCodes, ["execution-budget-exhausted"]);
+		assert.equal(plannerCalls, 0);
+		assert.equal(workflowCalls, 0);
+		assert.equal(persistenceCalls, 0);
+	}
+});
+
+test("configured blocking task limits reject synthesized overflow before persistence", async () => {
+	const mutatingPlan = plan([
+		task("implement", {
+			sideEffectPolicy: "mutating",
+			writePaths: ["packages/pi-subagents"],
+			requiredCapabilities: ["implementation"],
+			requiredTools: ["read", "edit", "write"],
+			integrationOwner: true,
+		}),
+	]);
+	const rejected = await run(mutatingPlan, request(), () => true, {
+		blocking: { maxParallelTasks: 1 },
+	});
+	assert.equal(rejected.result.details.status, "compiler-rejected");
+	assert.deepEqual(rejected.result.details.reasonCodes, [
+		"task-budget-exceeded-after-verification",
+	]);
+	assert.equal(rejected.persistenceCalls, 0);
+	assert.equal(rejected.workflowCalls, 0);
+
+	const admitted = await run(mutatingPlan, request(), () => true, {
+		blocking: { maxParallelTasks: 2 },
+	});
+	assert.equal(admitted.result.details.status, "executed");
+	assert.equal(admitted.persistenceCalls, 1);
+	assert.equal(admitted.workflowCalls, 1);
 });
 
 test("missing input, planner failure, and compiler rejection never launch execution workers", async () => {

@@ -190,6 +190,11 @@ const BUILT_IN_AGENTS: AgentConfig[] = [
 	},
 ];
 
+export function getBuiltInAgent(name: string): AgentConfig | undefined {
+	const agent = BUILT_IN_AGENTS.find((candidate) => candidate.name === name);
+	return agent ? structuredClone(agent) : undefined;
+}
+
 function builtInManifest(
 	capabilities: string[],
 	filesystem: "read" | "write",
