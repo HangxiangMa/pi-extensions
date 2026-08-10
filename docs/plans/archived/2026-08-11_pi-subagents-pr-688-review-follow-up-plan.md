@@ -37,13 +37,13 @@ Applicable extension convention MUST rules are deterministic behavior tests, pre
 - [x] Scan the full PR diff and sibling paths for the same requirement-loss, lower-bound replenishment, deferred-limit, override, and stale-generation patterns; no additional actionable instance survived review.
 - [x] Run 391 focused Pi Subagents tests, package check, root `npm run check` with 2,939 tests, `git diff --check`, and `just pack subagents`; all passed.
 - [x] Audit cancellation, session replacement, one-snapshot settings consistency, generation state, persistence ordering, terminal safety, and the final diff against both extension guides; no deviation remains.
-- [ ] Re-read the review after delivery, archive this completed plan, reply to and resolve all five threads, verify signed commits, push the recreated PR branch, and refresh PR #688 once.
+- [x] Re-read the review after delivery, reply to and resolve all five threads, verify signed commit `b927c6ef`, push the recreated PR branch, and refresh PR #688 once; GitHub keeps the merged PR snapshot at `ae0677dd` even though the recreated branch contains the follow-up.
 
 ## Completion Checklist
 
 - [x] Every ledger item has one evidence-backed final outcome.
 - [x] Every actionable item is fixed at its owning boundary and has deterministic regression coverage.
 - [x] Focused tests, the CI-equivalent gate, diff check, and package dry run pass.
-- [ ] Only intended files are staged and the signed commit is verified.
-- [ ] The PR head branch is pushed without rewriting history and each addressed thread has a verified response.
-- [ ] Any GitHub limitation caused by the already-merged PR is reported plainly.
+- [x] Only intended files were staged, and signed commit `b927c6ef` verified with its configured ED25519 key.
+- [x] The PR head branch was recreated and pushed without rewriting history, and all five addressed threads have verified responses and resolutions.
+- [x] The refresh confirms the PR remains merged at `843b093e`, its immutable head snapshot remains `ae0677dd`, and its original CI remains successful; local follow-up evidence is recorded above.
