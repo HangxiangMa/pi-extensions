@@ -128,6 +128,12 @@ test("enforced execution plans narrow tools and reject unknown or unsupported gu
 	assert.ok(contract);
 	assert.deepEqual(resolveContractTools(["read", "grep", "bash"], contract), ["read"]);
 	assert.deepEqual(resolveContractTools(undefined, contract), ["read"]);
+	const noTools = normalizeDelegationContract({
+		...contract,
+		requestedAuthority: { ...contract.requestedAuthority, tools: [] },
+	});
+	assert.ok(noTools);
+	assert.deepEqual(resolveContractTools(["read", "grep", "bash"], noTools), []);
 	const unavailableDefaultTool = normalizeDelegationContract({
 		...contract,
 		requestedAuthority: { ...contract.requestedAuthority, tools: ["grep"] },

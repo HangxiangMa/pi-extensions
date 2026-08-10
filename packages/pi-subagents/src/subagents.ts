@@ -22,6 +22,7 @@ import {
 	formatAgentCatalog,
 	type SubagentSettings,
 } from "./agents.js";
+import { registerSubagentAutomation } from "./automation.js";
 import { registerSubagentConfigCommand, registerSubagentConfigLifecycle } from "./config-ui.js";
 import { registerSubagentConsult } from "./consult.js";
 import { executeSubagent } from "./execution.js";
@@ -50,6 +51,7 @@ export default function (pi: ExtensionAPI) {
 	const refreshBlockingCatalog = blockingEnabled
 		? registerBlockingSubagent(pi, () => currentSettings)
 		: () => undefined;
+	if (blockingEnabled) registerSubagentAutomation(pi, { getSettings: () => currentSettings });
 	let refreshStatefulCatalog: (catalog: string) => void = () => undefined;
 	let refreshConsultCatalog: (catalog: string) => void = () => undefined;
 
