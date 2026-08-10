@@ -106,19 +106,19 @@ Each implementation pull request starts from then-current `origin/main`, changes
 
 ### Release gate
 
-- [ ] Obtain explicit user approval before merging or otherwise executing the Changesets release pull request.
-- [ ] Verify the released Kit version and dist-tag with `npm view`, inspect its tarball, and use a clean temporary install to prove root declarations and runtime exports contain both exact browse details and Live Choice confirmation gating.
-- [ ] Record the exact verified release in this plan before raising either Starship or Tool compatibility floors.
+- [x] Not applicable to this execution: release pull request #684 had already merged and published before the consumer work resumed; no release, tag, or workflow action was performed here.
+- [x] Verify Kit `0.53.0` and the `latest` dist-tag with `npm view`, inspect its 59-file tarball, and use a clean temporary install to prove the root runtime and declaration exports contain exact browse details and Live Choice confirmation gating.
+- [x] Record Kit `0.53.0` as the registry-verified release before raising either Starship or Tool compatibility floors.
 
 ### Phase 4: pi-starship preset picker migration
 
-- [ ] Create a separate consumer branch from then-current `origin/main`, raise only Starship's Kit floor to the verified release, run root `npm install`, and prove the lockfile resolves the compatible release in the consumer scope.
-- [ ] Add or retain regressions for initial/current preset identity, live preview, paging, Home/End, narrow widths, terminal controls, active-preset Apply rejection, active-preset Customize availability, ordinary Apply, Customize, Back, Close, preview reset, stale owner replacement, and preview failure.
-- [ ] Replace `showPresetPicker()`'s local component with `runLiveChoice()`, using confirmation gating for the active preset and the existing Customize shortcut while keeping validation, editor flow, apply, rollback, and preview reset in Starship.
-- [ ] Delete superseded picker rendering, navigation, hint, and sanitization code; remove direct Pi TUI imports or dependencies only if no other Starship production path requires them.
-- [ ] Update Starship README and package layout as needed and add an appropriate Starship Changeset for the compatibility floor and packaged implementation.
-- [ ] Run focused Starship tests, package check, resolved-version verification, `npm run check:boundaries`, `npm run check`, `git diff --check`, `just pack starship`, and a practical local Pi load smoke.
-- [ ] Audit preview cleanup in every exit path, stale contexts after awaits, full versus confirmation-only disabled semantics, RPC/non-TUI behavior, independent installation, and final diff scope before opening the preset-picker pull request.
+- [x] Create branch `feat/pi-starship-live-choice` from `origin/main` at `012115dc`, raise only Starship's Kit floor to `^0.53.0`, run root `npm install`, and prove the consumer scope resolves Kit `0.53.0`.
+- [x] Add or retain regressions for initial/current preset identity, live preview, paging, Home/End, narrow widths, terminal controls, active-preset Apply rejection, active-preset Customize availability, ordinary Apply, Customize, Back, Close, preview reset, stale owner replacement, and preview failure.
+- [x] Replace `showPresetPicker()`'s local component with `runLiveChoice()`, using confirmation gating for the active preset and the existing Customize shortcut while keeping validation, editor flow, apply, rollback, and preview reset in Starship.
+- [x] Delete superseded picker rendering, navigation, hint, and sanitization code; retain direct Pi TUI dependencies because Starship's preview renderer, footer renderer, and command contracts still import them.
+- [x] Keep the already-accurate Starship README unchanged and add `.changeset/calm-starship-choice.md` for the compatibility floor and packaged implementation.
+- [x] Run 195 focused Starship tests, package check, resolved-version verification, `npm run check:boundaries`, `npm run check`, `git diff --check`, and `just pack starship`; use the source-entry test and deterministic Kit harness because a live TUI smoke is unavailable in the non-interactive terminal.
+- [x] Audit preview cleanup in every exit path, stale contexts after awaits, full versus confirmation-only disabled semantics, RPC/non-TUI behavior, independent installation, and final diff scope before opening the preset-picker pull request.
 
 ### Phase 5: pi-tool exact browse migration
 
@@ -173,12 +173,16 @@ Each implementation pull request starts from then-current `origin/main`, changes
 - `just pack tui-kit` exposed 59 expected built files (51.2 kB packed, 230.9 kB unpacked). Root declarations contain both gating fields and compatibility literal 11. Repository search proved no Statusline, Starship, Tool, or other consumer uses the unpublished fields.
 - Audit confirmed full `disabled` presentation and shortcut blocking take precedence; gating blocks only Enter/Space activation, leaves non-conflicting shortcuts and previews active in TUI, stays inert without previews or shortcuts in RPC, sanitizes labels and reasons, preserves raw IDs, and reuses existing preview draining, stale checks, disposal, and error reporting.
 
-### Release gate status
+### Release gate and Phase 4 Starship preset picker
 
-- The automatically refreshed Changesets pull request [#684](https://github.com/narumiruna/pi-extensions/pull/684) proposes Kit `0.53.0` and includes both exact browse documents (`4a0358b`) and Live Choice gating (`93b507b`).
-- Release pull request head `13d2794f7d90ab3ed396d73c12112a15a1a853e3` passed CI run `31412087914` in 2m59s, but has no approval or review.
-- Registry `latest` remains Kit `0.52.0`, so neither required new API is registry-visible and independently installable yet.
-- Execution is paused at this mandatory gate because the request explicitly forbids publishing, release tags, and release workflow dispatch, while Phases 4 and 5 prohibit adopting unpublished APIs.
+- Changesets pull request [#684](https://github.com/narumiruna/pi-extensions/pull/684) merged as `012115dca62871a18b2cbe0e13b6692d90cae53a` before this execution resumed, and its CI run `31416913691` passed.
+- Registry `latest` is Kit `0.53.0`; `npm view` and registry tarball inspection confirmed the release, and a clean temporary install proved `runLiveChoice` is a root runtime export while root declarations re-export `BrowseDetailDocument` and expose both confirmation-gating fields.
+- Starship baseline passed its package check and 193 focused tests before production edits. The confirmation-explanation regression then failed against the local picker before implementation because no `Cannot apply` reason was rendered.
+- Branch `feat/pi-starship-live-choice` started from `origin/main` at `012115dc`. The Starship floor is now `^0.53.0`, and `npm ls --workspace @narumitw/pi-starship` resolves the workspace Kit `0.53.0` without the former nested `0.49.3` install.
+- Final focused evidence: package check passed; 195 Starship tests passed; boundaries and Changesets status passed; `git diff --check` passed; and the post-rebase CI-equivalent `npm run check` passed with 279 files and 2,975 tests. The first root run failed only in an unrelated `pi-sync` timing test, which passed in isolation before the full successful reruns.
+- `just pack starship` exposed the 79 expected manifest-listed source, notice, README, and license files (81.1 kB packed, 298.6 kB unpacked); tests and generated files were absent.
+- Starship preset pull request [#698](https://github.com/narumiruna/pi-extensions/pull/698) carries signed implementation commit `d403f3c1`; CI run `31422205502` passed in 3m23s, and no review was submitted before the evidence refresh.
+- The semantic audit confirmed Kit owns selection, cell-bounded terminal-safe rendering, injected navigation, preview draining, cancellation, and disposal. Starship still owns preset identity, TOML validation, editor flow, persistence, apply/rollback, stale workflow ownership, notifications, and final preview reset. The command remains TUI-only, and direct Pi TUI dependencies remain necessary for specialized preview and footer paths.
 
 ### Applicable MUST mapping for Phase 1
 
@@ -207,8 +211,8 @@ Each implementation pull request starts from then-current `origin/main`, changes
 - [x] `pi-statusline` uses published `runLiveChoice()` for palette previews and preserves settings, preview, cancellation, and rollback behavior.
 - [x] Starship footer explanation uses the standard adaptive `review` screen with no extension-owned generic scroll component.
 - [x] Pi TUI Kit exposes and documents confirmation-only Live Choice gating with unchanged legacy disabled behavior and complete TUI/RPC lifecycle tests.
-- [ ] The enhanced Kit release is explicitly approved, published, registry-verified, and independently installable before consumer adoption.
-- [ ] `pi-starship` uses the published Live Choice contract for presets while active Apply remains inert and Customize remains available.
+- [x] Kit `0.53.0` is published, registry-verified, and independently installable; its release completed before this execution resumed and no release action was taken here.
+- [x] `pi-starship` uses the published Live Choice contract for presets while active Apply remains inert and Customize remains available.
 - [ ] `pi-tool` uses published exact browse details and no longer owns a duplicate browser or unnecessary direct Pi TUI dependency.
 - [ ] Every package has focused tests, an appropriate Changeset, inspected package contents, passing CI-equivalent checks, and an evidence-backed semantic audit.
 - [ ] Specialized domain interfaces remain extension-owned and no speculative general-purpose Kit API was added.

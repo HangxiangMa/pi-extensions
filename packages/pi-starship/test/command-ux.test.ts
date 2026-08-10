@@ -106,19 +106,22 @@ test("Presets stays shallow, identifies the exact active document, and restores 
 		assert.match(full, /Catppuccin Powerline/u);
 		assert.match(full, /Nerd Font Symbols/u);
 		assert.match(full, /Currently applied/u);
+		assert.match(full, /Cannot apply: Already applied; press e to customize/u);
 		assert.match(full, /\(1\/13\)/u);
 		assert.deepEqual(previewed, ["minimal"]);
 		tui.press("tui.select.confirm");
 		await flushAsyncWork();
 		assert.match(tui.render().join("\n"), /Presets · current:/u);
-		for (let index = 0; index < STARSHIP_PRESETS.length - 1; index += 1) {
-			tui.press("tui.select.down");
-		}
+		tui.press("end");
 		const lastPreset = tui.render().join("\n");
 		assert.match(lastPreset, /Tokyo Night/u);
 		assert.match(lastPreset, /requires Nerd Font/u);
 		assert.match(lastPreset, /\(13\/13\)/u);
 		assert.equal(previewed.at(-1), "tokyo-night");
+		tui.press("home");
+		assert.equal(previewed.at(-1), "minimal");
+		tui.press("tui.select.pageDown");
+		assert.equal(previewed.at(-1), "plain-text-symbols");
 		tui.press("tui.select.cancel");
 		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /→ Presets/u);
@@ -126,6 +129,52 @@ test("Presets stays shallow, identifies the exact active document, and restores 
 		await running;
 		assert.equal(readFileSync(path, "utf8"), minimal.rawDocument);
 		assert.equal(previewed.at(-1), undefined);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("the active preset keeps Customize available while Apply is gated", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-active-preset-customize-"));
+	const path = join(root, "pi-starship.toml");
+	const minimal = STARSHIP_PRESETS[0];
+	assert.ok(minimal);
+	writeFileSync(path, minimal.rawDocument);
+	try {
+		let editorDraft = "";
+		const mock = createMockPi();
+		registerStarshipCommand(mock.pi, {
+			getLoaded: () => loadStarshipConfig(path),
+			apply() {
+				assert.fail("Cancelling customization must not apply settings");
+			},
+			settingsPath: path,
+		});
+		const tui = createTuiHarness({ width: 60, rows: 18 });
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: tui.custom,
+			editor: async (_title: string, draft: string) => {
+				editorDraft = draft;
+				return undefined;
+			},
+		});
+		const running = mock.commands.get("starship")?.handler("", context.ctx);
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForOpen();
+		tui.press("tui.select.confirm");
+		await flushAsyncWork();
+		assert.equal(editorDraft, "");
+		tui.send("e");
+		await tui.waitForOpen();
+		assert.equal(editorDraft, minimal.rawDocument);
+		assert.match(tui.render().join("\n"), /→ Presets/u);
+		tui.press("ctrl+c");
+		await running;
+		assert.equal(readFileSync(path, "utf8"), minimal.rawDocument);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -163,6 +212,35 @@ test("live preset preview restores on Ctrl+C and external disposal", async () =>
 			assert.equal(previewed.at(-1), undefined, exit);
 			assert.equal(existsSync(path), false, exit);
 		}
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("preset preview failure closes safely and restores the effective footer", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-starship-preset-preview-failure-"));
+	const path = join(root, "pi-starship.toml");
+	try {
+		const mock = createMockPi();
+		registerStarshipCommand(mock.pi, {
+			getLoaded: () => loadStarshipConfig(path),
+			apply() {
+				assert.fail("A failed preview must not apply settings");
+			},
+			preview(next) {
+				if (next) throw new Error("preview exploded");
+			},
+			settingsPath: path,
+		});
+		const tui = createTuiHarness({ width: 50, rows: 16 });
+		const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+		const running = mock.commands.get("starship")?.handler("", context.ctx);
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await running;
+		assert.equal(existsSync(path), false);
+		assert.match(context.notifications.at(-1)?.message ?? "", /Live choice failed/u);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

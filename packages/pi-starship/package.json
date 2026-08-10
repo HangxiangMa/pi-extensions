@@ -34,7 +34,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@narumitw/pi-tui-kit": "^0.49.1",
+		"@narumitw/pi-tui-kit": "^0.53.0",
 		"smol-toml": "^1.7.1",
 		"yaml": "^2.9.0"
 	},
