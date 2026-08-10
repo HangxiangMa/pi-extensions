@@ -12,6 +12,46 @@ const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme
 
 type DocumentTheme = Pick<Theme, "fg" | "bold">;
 
+export function createDocumentLineCache(theme: DocumentTheme) {
+	let cached:
+		| {
+				content: string;
+				formatKind: ReviewFormat["kind"];
+				language: string | undefined;
+				filePath: string | undefined;
+				width: number;
+				lines: string[];
+		  }
+		| undefined;
+	return {
+		lines(content: string, format: ReviewFormat | undefined, width: number) {
+			const identity = documentFormatIdentity(format);
+			if (
+				cached?.content === content &&
+				cached.formatKind === identity.kind &&
+				cached.language === identity.language &&
+				cached.filePath === identity.filePath &&
+				cached.width === width
+			) {
+				return cached.lines;
+			}
+			const lines = formatDocumentLines(content, format, width, theme);
+			cached = {
+				content,
+				formatKind: identity.kind,
+				language: identity.language,
+				filePath: identity.filePath,
+				width,
+				lines,
+			};
+			return lines;
+		},
+		invalidate() {
+			cached = undefined;
+		},
+	};
+}
+
 export function formatDocumentLines(
 	content: string,
 	format: ReviewFormat | undefined,
@@ -53,6 +93,16 @@ export function documentDialogPages(content: string, width: number, pageSize: nu
 		pages.push(lines.slice(index, index + safePageSize));
 	}
 	return pages.length > 0 ? pages : [[""]];
+}
+
+function documentFormatIdentity(format: ReviewFormat | undefined) {
+	if (format?.kind === "code") {
+		return { kind: format.kind, language: format.language, filePath: format.filePath };
+	}
+	if (format?.kind === "diff") {
+		return { kind: format.kind, language: undefined, filePath: format.filePath };
+	}
+	return { kind: "text" as const, language: undefined, filePath: undefined };
 }
 
 export function sanitizeDocumentText(value: unknown): string {

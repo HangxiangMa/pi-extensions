@@ -6,8 +6,8 @@ import type {
 	MenuScreenComponentOptions,
 } from "./contracts.js";
 import {
+	createDocumentLineCache,
 	documentDialogPages,
-	formatDocumentLines,
 	RPC_DOCUMENT_LINE_WIDTH,
 	RPC_DOCUMENT_PAGE_SIZE,
 } from "./document-formatting.js";
@@ -30,6 +30,7 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
 	let lastMaximumScroll = 0;
 	let lastViewportSize = reviewViewportSize(options.screen);
 	let disposed = false;
+	const documentLineCache = createDocumentLineCache(options.theme);
 
 	const moveTo = (offset: number) => {
 		scrollOffset = Math.max(0, Math.min(offset, lastMaximumScroll));
@@ -39,7 +40,11 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
 	return {
 		render(width) {
 			const safeWidth = Math.max(1, width);
-			const allLines = formatReviewLines(options.screen, safeWidth, options.theme);
+			const allLines = documentLineCache.lines(
+				options.screen.content,
+				options.screen.format,
+				safeWidth,
+			);
 			const terminalRows =
 				options.screen.viewportSize === "adaptive" ? options.tui.terminal.rows : undefined;
 			if (terminalRows !== undefined && Number.isFinite(terminalRows)) {
@@ -79,7 +84,9 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
 				options.screen.confirm ? safeMenuText(options.screen.confirm.label) : "",
 			);
 		},
-		invalidate() {},
+		invalidate() {
+			documentLineCache.invalidate();
+		},
 		handleInput(data) {
 			if (disposed) return;
 			if (matchesKey(data, Key.ctrl("c"))) options.onEvent({ kind: "close" });
@@ -280,14 +287,6 @@ export function reviewDialogPages<ActionId extends string>(
 	screen: ReviewScreen<ActionId>,
 ): string[][] {
 	return documentDialogPages(screen.content, RPC_DOCUMENT_LINE_WIDTH, reviewDialogPageSize(screen));
-}
-
-function formatReviewLines<ActionId extends string>(
-	screen: ReviewScreen<ActionId>,
-	width: number,
-	theme: MenuScreenComponentOptions<string, ActionId>["theme"],
-): string[] {
-	return formatDocumentLines(screen.content, screen.format, width, theme);
 }
 
 function reviewViewportSize<ActionId extends string>(screen: ReviewScreen<ActionId>) {

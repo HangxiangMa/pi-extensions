@@ -13,8 +13,8 @@ import { formatInteractionHints } from "../interaction-hints.js";
 import type { MenuBrowseItem } from "../types.js";
 import type { BrowseOptions, MenuKeybindings, MenuScreenComponent } from "./contracts.js";
 import {
+	createDocumentLineCache,
 	documentDialogPages,
-	formatDocumentLines,
 	RPC_DOCUMENT_LINE_WIDTH,
 	RPC_DOCUMENT_PAGE_SIZE,
 } from "./document-formatting.js";
@@ -59,6 +59,7 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
 	let view: BrowseView = "list";
 	let focused = false;
 	let disposed = false;
+	const detailLineCache = createDocumentLineCache(options.theme);
 	const selected = () => filteredItems[selectedIndex];
 	const syncFocus = () => {
 		searchInput.focused = focused && view === "list" && searchInputVisible;
@@ -113,7 +114,14 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
 			const safeWidth = Math.max(1, width);
 			const availableRows = componentRows(options.tui.terminal.rows);
 			if (view === "detail") {
-				const content = detailLines(selected()?.item, safeWidth, options.theme);
+				const selectedItem = selected()?.item;
+				const content = selectedItem?.detailDocument
+					? detailLineCache.lines(
+							selectedItem.detailDocument.content,
+							selectedItem.detailDocument.format,
+							safeWidth,
+						)
+					: legacyDetailLines(selectedItem, safeWidth);
 				const layout = detailLayout(availableRows, content.length);
 				detailViewportRows = layout.contentRows;
 				detailMaximumScroll = Math.max(0, content.length - layout.contentRows);
@@ -186,6 +194,7 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
 			return boundedLines(lines, safeWidth, availableRows);
 		},
 		invalidate() {
+			detailLineCache.invalidate();
 			searchInput.invalidate();
 		},
 		handleInput(data) {
@@ -270,20 +279,8 @@ function listRows<ScreenId extends string, ActionId extends string>(
 	});
 }
 
-function detailLines<ScreenId extends string, ActionId extends string>(
-	item: MenuBrowseItem | undefined,
-	width: number,
-	theme: BrowseOptions<ScreenId, ActionId>["theme"],
-): string[] {
+function legacyDetailLines(item: MenuBrowseItem | undefined, width: number): string[] {
 	if (!item) return ["No matching item."];
-	if (item.detailDocument) {
-		return formatDocumentLines(
-			item.detailDocument.content,
-			item.detailDocument.format,
-			width,
-			theme,
-		);
-	}
 	return browseDetailSource(item).flatMap((line) => (line ? wrapTextWithAnsi(line, width) : [""]));
 }
 

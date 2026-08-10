@@ -196,6 +196,30 @@ test("review scrolls by injected keys, pages, and clamps after resize", () => {
 	assert.ok(harness.component.render(8).every((line) => visibleWidth(line) <= 8));
 });
 
+test("review reuses exact formatting across scroll renders and clears it on invalidation", () => {
+	const colorCalls: string[] = [];
+	const harness = reviewComponentHarness(
+		{
+			...reviewScreen,
+			content: Array.from({ length: 10 }, (_, index) => `row ${index + 1}`).join("\n"),
+		},
+		false,
+		24,
+		(color) => colorCalls.push(color),
+	);
+	harness.component.render(40);
+	const initialTextCalls = colorCalls.filter((color) => color === "text").length;
+	assert.equal(initialTextCalls, 10);
+
+	harness.component.handleInput("j");
+	harness.component.render(40);
+	assert.equal(colorCalls.filter((color) => color === "text").length, initialTextCalls);
+
+	harness.component.invalidate();
+	harness.component.render(40);
+	assert.equal(colorCalls.filter((color) => color === "text").length, initialTextCalls * 2);
+});
+
 test("review confirmation dispatches raw identity and exits remain Back versus Close", () => {
 	const confirm = reviewComponentHarness(reviewScreen);
 	confirm.component.handleInput("l");
@@ -448,14 +472,22 @@ test("owner abort dismisses an unanswered adaptive RPC review without invoking c
 	assert.equal(invoked, false);
 });
 
-function reviewComponentHarness(screen: ReviewScreen<ActionId>, themed = false, terminalRows = 24) {
+function reviewComponentHarness(
+	screen: ReviewScreen<ActionId>,
+	themed = false,
+	terminalRows = 24,
+	onColor?: (color: string) => void,
+) {
 	const events: Array<{ kind: "back" | "close" } | { kind: "activate"; itemId: string }> = [];
 	const terminal = { rows: terminalRows };
 	const component = createMenuScreenComponent<ScreenId, ActionId>({
 		screen,
 		tui: { terminal, requestRender() {} },
 		theme: {
-			fg: (color: string, text: string) => (themed ? `${color}:${text}` : text),
+			fg: (color: string, text: string) => {
+				onColor?.(color);
+				return themed ? `${color}:${text}` : text;
+			},
 			bold: (text: string) => text,
 		},
 		keybindings: {

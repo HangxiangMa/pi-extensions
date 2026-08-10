@@ -8,7 +8,7 @@ import {
 	type MenuScreenComponent,
 	type MenuScreenEvent,
 } from "../src/components/index.js";
-import type { MenuScreen } from "../src/types.js";
+import type { BrowseDetailDocument, MenuBrowseItem, MenuScreen } from "../src/types.js";
 
 initTheme("dark", false);
 
@@ -269,6 +269,52 @@ test("browse exact details apply shared code and diff formatting", () => {
 	assert.match(rendered, /accent:@@ header/u);
 });
 
+test("browse caches exact detail formatting until its inputs or theme change", () => {
+	const colorCalls: string[] = [];
+	const detailDocument: BrowseDetailDocument = {
+		content: Array.from({ length: 12 }, (_, index) => `document line ${index + 1}`).join("\n"),
+		format: { kind: "text" },
+	};
+	const item: MenuBrowseItem = { id: "document", label: "Document", detailDocument };
+	const harness = componentHarness(
+		{ kind: "browse", title: "Documents", items: [item] },
+		{ rows: 10, onColor: (color) => colorCalls.push(color) },
+	);
+	harness.component.handleInput("y");
+
+	harness.component.render(40);
+	const initialTextCalls = colorCalls.filter((color) => color === "text").length;
+	assert.equal(initialTextCalls, 12);
+	harness.component.handleInput("j");
+	harness.component.render(40);
+	assert.equal(colorCalls.filter((color) => color === "text").length, initialTextCalls);
+
+	harness.component.render(12);
+	const resizedTextCalls = colorCalls.filter((color) => color === "text").length;
+	assert.ok(resizedTextCalls > initialTextCalls);
+	harness.component.render(12);
+	assert.equal(colorCalls.filter((color) => color === "text").length, resizedTextCalls);
+
+	detailDocument.content += "\nchanged content";
+	harness.component.render(12);
+	const changedContentCalls = colorCalls.filter((color) => color === "text").length;
+	assert.ok(changedContentCalls > resizedTextCalls);
+
+	detailDocument.format = { kind: "diff" };
+	harness.component.render(12);
+	const changedFormatCalls = colorCalls.filter((color) => color === "toolDiffContext").length;
+	assert.ok(changedFormatCalls > 0);
+	harness.component.render(12);
+	assert.equal(
+		colorCalls.filter((color) => color === "toolDiffContext").length,
+		changedFormatCalls,
+	);
+
+	harness.component.invalidate();
+	harness.component.render(12);
+	assert.ok(colorCalls.filter((color) => color === "toolDiffContext").length > changedFormatCalls);
+});
+
 test("browse is adaptively bounded, handles empty searches, and distinguishes Back from Close", () => {
 	const harness = componentHarness(browseScreen(), { rows: 10 });
 	for (const { width, rows } of [
@@ -316,7 +362,12 @@ function plainRender(component: MenuScreenComponent, width: number) {
 
 function componentHarness(
 	screen: MenuScreen<ScreenId, ActionId>,
-	options: { rows?: number; selectedItemId?: string; themed?: boolean } = {},
+	options: {
+		rows?: number;
+		selectedItemId?: string;
+		themed?: boolean;
+		onColor?: (color: string) => void;
+	} = {},
 ) {
 	const events: MenuScreenEvent[] = [];
 	const selectionChanges: string[] = [];
@@ -326,7 +377,10 @@ function componentHarness(
 		selectedItemId: options.selectedItemId,
 		tui: host,
 		theme: {
-			fg: (color: string, text: string) => (options.themed ? `${color}:${text}` : text),
+			fg: (color: string, text: string) => {
+				options.onColor?.(color);
+				return options.themed ? `${color}:${text}` : text;
+			},
 			bold: (text: string) => text,
 		},
 		keybindings,
