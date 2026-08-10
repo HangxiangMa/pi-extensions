@@ -5,14 +5,14 @@ import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
-import fileQuoteExtension, {
+import {
 	appendPendingQuote,
 	createFileQuote,
 	discoverProjectFiles,
-	FileQuoteTriggerEditor,
 	formatPromptWithQuote,
 	formatPromptWithQuotes,
 	loadProjectTextFile,
+	registerFileQuoteExtension,
 } from "../src/file-context.js";
 import { FileQuoteExplorer } from "../src/file-context-explorer.js";
 import { ProjectFileSearch } from "../src/file-search.js";
@@ -624,34 +624,89 @@ test("explorer loads validated revisions and attaches explicit Git diff context"
 	assert.equal(diffResult.quote.git?.base, "HEAD");
 });
 
-test("custom editor opens the explorer on a boundary @ without changing the draft", async () => {
-	let opened = 0;
-	const editor = new FileQuoteTriggerEditor(
-		{ requestRender() {} } as never,
-		{
-			borderColor: (text: string) => text,
-			selectList: {
-				selectedPrefix: (text: string) => text,
-				selectedText: (text: string) => text,
-				description: (text: string) => text,
-				scrollInfo: (text: string) => text,
-				noMatch: (text: string) => text,
-			},
-		},
-		{ matches: () => false } as never,
-		async () => {
-			opened += 1;
-		},
-	);
-	editor.setText("draft ");
-	editor.handleInput("@");
-	await Promise.resolve();
-	assert.equal(opened, 1);
-	assert.equal(editor.getText(), "draft ");
+test("registers the configured shortcut without replacing Pi's editor", async () => {
+	const mock = createMockPi();
+	await registerFileQuoteExtension(mock.pi, {
+		loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+r" } }),
+	});
+	assert.deepEqual([...mock.shortcuts.keys()], ["ctrl+alt+r"]);
 
-	editor.setText("email");
-	editor.handleInput("@");
-	assert.equal(editor.getText(), "email@");
+	let editorFactoryChanges = 0;
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		ui: {
+			notify() {},
+			setWidget() {},
+			setEditorComponent() {
+				editorFactoryChanges += 1;
+			},
+			getEditorComponent: () => undefined,
+		},
+	});
+	await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	assert.equal(editorFactoryChanges, 0);
+});
+
+test("coalesces repeated shortcut presses while the explorer is active", async () => {
+	await withTempProject(async (root) => {
+		await writeFile(join(root, "example.ts"), "export {};\n");
+		const mock = createMockPi();
+		await registerFileQuoteExtension(mock.pi, {
+			loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
+		});
+		let customCalls = 0;
+		let markExplorerReady!: () => void;
+		const explorerReady = new Promise<void>((resolve) => {
+			markExplorerReady = resolve;
+		});
+		let closeExplorer!: () => void;
+		const explorerClosed = new Promise<void>((resolve) => {
+			closeExplorer = resolve;
+		});
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			cwd: root,
+			ui: {
+				notify() {},
+				setWidget() {},
+				async custom() {
+					customCalls += 1;
+					markExplorerReady();
+					await explorerClosed;
+					return undefined;
+				},
+			},
+		});
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		const shortcut = mock.shortcuts.get("ctrl+alt+f");
+		const first = shortcut?.handler(context.ctx);
+		const second = shortcut?.handler(context.ctx);
+		await explorerReady;
+		assert.equal(customCalls, 1);
+		closeExplorer();
+		await Promise.all([first, second]);
+	});
+});
+
+test("allows disabling the shortcut and reports settings warnings after session start", async () => {
+	const mock = createMockPi();
+	await registerFileQuoteExtension(mock.pi, {
+		loadSettings: async () => ({
+			settings: { openShortcut: null },
+			warning: "Invalid File Context settings; using the default.",
+		}),
+	});
+	assert.equal(mock.shortcuts.size, 0);
+
+	const context = createMockContext({ mode: "tui", hasUI: true });
+	await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	assert.ok(context.notifications.some(({ message }) => message.includes("Invalid File Context")));
+
+	const rpc = createMockContext({ mode: "rpc", hasUI: true });
+	await mock.events.get("session_start")?.[0]?.({}, rpc.ctx);
+	assert.ok(rpc.notifications.some(({ message }) => message.includes("Invalid File Context")));
 });
 
 test("captures an exact normalized line snapshot and formats one focused prompt", () => {
@@ -724,14 +779,14 @@ test("accumulates ordered pending quotes within aggregate limits", () => {
 
 test("registers a TUI fallback command and injects all pending quotes only once", async () => {
 	const mock = createMockPi();
-	fileQuoteExtension(mock.pi);
+	await registerFileQuoteExtension(mock.pi, {
+		loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
+	});
 	assert.ok(mock.commands.has("file-context"));
 	assert.equal(mock.commands.has("file-quote"), false);
 
 	let customFactory: unknown;
 	const widgets = new Map<string, unknown>();
-	const editorFactories: unknown[] = [];
-	let currentEditorFactory: unknown;
 	let quoteIndex = 0;
 	const quoteResults = [
 		{
@@ -767,13 +822,6 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 			setWidget(key: string, value: unknown) {
 				widgets.set(key, value);
 			},
-			setEditorComponent(factory: unknown) {
-				currentEditorFactory = factory;
-				editorFactories.push(factory);
-			},
-			getEditorComponent() {
-				return currentEditorFactory;
-			},
 			async custom(factory: unknown) {
 				customFactory = factory;
 				const result = quoteResults[quoteIndex];
@@ -784,8 +832,7 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 	});
 
 	await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-	assert.equal(editorFactories.length, 1);
-	await mock.commands.get("file-context")?.handler("", context.ctx);
+	await mock.shortcuts.get("ctrl+alt+f")?.handler(context.ctx);
 	await mock.commands.get("file-context")?.handler("", context.ctx);
 	assert.equal(typeof customFactory, "function");
 	assert.deepEqual(widgets.get("file-context"), [
@@ -815,13 +862,14 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 		undefined,
 	);
 	await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
-	assert.equal(currentEditorFactory, undefined);
 	assert.equal(widgets.get("file-context"), undefined);
 });
 
 test("quotes whole-file references and rejects picker results from replaced sessions", async () => {
 	const referenceMock = createMockPi();
-	fileQuoteExtension(referenceMock.pi);
+	await registerFileQuoteExtension(referenceMock.pi, {
+		loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
+	});
 	const pasted: string[] = [];
 	const referenceContext = createMockContext({
 		mode: "tui",
@@ -848,7 +896,9 @@ test("quotes whole-file references and rejects picker results from replaced sess
 	assert.deepEqual(pasted, ['@"docs/my \\"note\\".md" ']);
 
 	const staleMock = createMockPi();
-	fileQuoteExtension(staleMock.pi);
+	await registerFileQuoteExtension(staleMock.pi, {
+		loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
+	});
 	let resolvePicker: ((value: unknown) => void) | undefined;
 	const picker = new Promise((resolve) => {
 		resolvePicker = resolve;
@@ -895,7 +945,9 @@ test("quotes whole-file references and rejects picker results from replaced sess
 
 test("rejects the fallback command observably outside TUI mode", async () => {
 	const mock = createMockPi();
-	fileQuoteExtension(mock.pi);
+	await registerFileQuoteExtension(mock.pi, {
+		loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
+	});
 	const rpc = createMockContext({ mode: "rpc", hasUI: true });
 	await mock.commands.get("file-context")?.handler("", rpc.ctx);
 	assert.match(rpc.notifications[0]?.message ?? "", /interactive TUI/);

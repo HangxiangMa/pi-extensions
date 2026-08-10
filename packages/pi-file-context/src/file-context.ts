@@ -1,15 +1,17 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
-import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
-	CustomEditor,
 	type ExtensionAPI,
 	type ExtensionContext,
+	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { FileQuoteExplorer, type FileQuoteExplorerResult } from "./file-context-explorer.js";
+import {
+	type LoadedFileContextSettings,
+	loadFileContextSettings,
+} from "./file-context-settings.js";
 import { createGitContext } from "./git-context.js";
 
 const WIDGET_KEY = "file-context";
@@ -270,43 +272,23 @@ export function formatQuoteContext(quotes: readonly FileQuote[]): string {
 	return `${blocks.join("\n\n")}\n\n${description}`;
 }
 
-export class FileQuoteTriggerEditor extends CustomEditor {
-	private opening = false;
-
-	constructor(
-		tui: TUI,
-		theme: EditorTheme,
-		keybindings: KeybindingsManager,
-		private readonly openExplorer: () => Promise<void>,
-	) {
-		super(tui, theme, keybindings);
-	}
-
-	override handleInput(data: string): void {
-		if (data === "@" && !this.opening && this.isQuoteTriggerPosition()) {
-			this.opening = true;
-			void this.openExplorer().finally(() => {
-				this.opening = false;
-				this.tui.requestRender();
-			});
-			return;
-		}
-		super.handleInput(data);
-	}
-
-	private isQuoteTriggerPosition(): boolean {
-		const { line, col } = this.getCursor();
-		const currentLine = this.getLines()[line] ?? "";
-		return col === 0 || /\s/.test(currentLine[col - 1] ?? "");
-	}
+interface FileQuoteExtensionDependencies {
+	loadSettings?: () => Promise<LoadedFileContextSettings>;
 }
 
-export default function fileQuoteExtension(pi: ExtensionAPI): void {
+export async function registerFileQuoteExtension(
+	pi: ExtensionAPI,
+	dependencies: FileQuoteExtensionDependencies = {},
+): Promise<void> {
+	const loadedSettings = await (
+		dependencies.loadSettings ??
+		(() => loadFileContextSettings(join(getAgentDir(), "pi-file-context.json")))
+	)();
 	let pendingQuotes: FileQuote[] = [];
-	let installedEditorFactory: unknown;
 	let activeSessionManager: unknown;
 	let sessionGeneration = 0;
 	const activeExplorers = new Set<ActiveExplorer>();
+	let activeExplorerLaunch: { promise: Promise<void> } | undefined;
 
 	const clearPending = (ctx: ExtensionContext) => {
 		pendingQuotes = [];
@@ -339,6 +321,7 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 		owner === activeSessionManager && generation === sessionGeneration;
 
 	const cancelExplorers = () => {
+		activeExplorerLaunch = undefined;
 		for (const explorer of activeExplorers) {
 			explorer.controller.abort();
 			explorer.component?.dispose();
@@ -346,7 +329,7 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 		activeExplorers.clear();
 	};
 
-	const openExplorer = async (ctx: ExtensionContext): Promise<void> => {
+	const runExplorer = async (ctx: ExtensionContext): Promise<void> => {
 		if (ctx.mode !== "tui") {
 			rejectCommand(ctx, "File Context requires Pi's interactive TUI.");
 			return;
@@ -406,6 +389,17 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 		}
 	};
 
+	const openExplorer = (ctx: ExtensionContext): Promise<void> => {
+		if (activeExplorerLaunch) return activeExplorerLaunch.promise;
+		const launch = { promise: runExplorer(ctx) };
+		activeExplorerLaunch = launch;
+		const clearLaunch = () => {
+			if (activeExplorerLaunch === launch) activeExplorerLaunch = undefined;
+		};
+		void launch.promise.then(clearLaunch, clearLaunch);
+		return launch.promise;
+	};
+
 	const handleFileContextCommand = async (args: string, ctx: ExtensionContext) => {
 		if (args.trim()) {
 			rejectCommand(ctx, "Usage: /file-context");
@@ -417,29 +411,27 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 		description: "Browse project files and attach a selected line range",
 		handler: handleFileContextCommand,
 	});
+	if (loadedSettings.settings.openShortcut) {
+		pi.registerShortcut(loadedSettings.settings.openShortcut, {
+			description: "Open File Context",
+			handler: openExplorer,
+		});
+	}
 
 	pi.on("session_start", (_event, ctx) => {
 		cancelExplorers();
 		activeSessionManager = ctx.sessionManager;
 		sessionGeneration += 1;
 		clearPending(ctx);
+		if (loadedSettings.warning && ctx.hasUI) ctx.ui.notify(loadedSettings.warning, "warning");
 		if (ctx.mode !== "tui") return;
+		const shortcut = loadedSettings.settings.openShortcut;
 		ctx.ui.notify(
-			"Experimental File Context loaded. Type @ at a word boundary to browse files.",
+			shortcut
+				? `Experimental File Context loaded. Press ${shortcut} or run /file-context.`
+				: "Experimental File Context loaded. Run /file-context to browse files.",
 			"warning",
 		);
-		const previous = ctx.ui.getEditorComponent();
-		if (previous) {
-			ctx.ui.notify(
-				"File Context left the existing custom editor unchanged; use /file-context.",
-				"warning",
-			);
-			return;
-		}
-		const factory = (tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) =>
-			new FileQuoteTriggerEditor(tui, theme, keybindings, () => openExplorer(ctx));
-		installedEditorFactory = factory;
-		ctx.ui.setEditorComponent(factory);
 	});
 
 	pi.on("before_agent_start", (_event, ctx) => {
@@ -459,12 +451,11 @@ export default function fileQuoteExtension(pi: ExtensionAPI): void {
 		if (ctx.sessionManager !== activeSessionManager) return;
 		cancelExplorers();
 		clearPending(ctx);
-		if (installedEditorFactory && ctx.mode === "tui") {
-			if (ctx.ui.getEditorComponent() === installedEditorFactory)
-				ctx.ui.setEditorComponent(undefined);
-			installedEditorFactory = undefined;
-		}
 	});
+}
+
+export default async function fileQuoteExtension(pi: ExtensionAPI): Promise<void> {
+	await registerFileQuoteExtension(pi);
 }
 
 function normalizeTextLines(contents: string): string[] {

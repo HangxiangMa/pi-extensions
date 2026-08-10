@@ -11,8 +11,8 @@ Browse project files inside Pi, preview text, select a line range, and attach th
 
 ## ✨ Features
 
-- Opens the file explorer when `@` is typed at a word boundary in Pi's normal editor.
-- Provides `/file-context` as a discoverable fallback when another extension owns the editor.
+- Opens the file explorer with a configurable shortcut that defaults to `Ctrl+Alt+F` (`Control+Option+F` on macOS).
+- Provides `/file-context` as a discoverable fallback without replacing Pi's normal editor.
 - Fuzzy-searches project file names with typo tolerance and relevance ranking, preserves normal whole-file `@path` references, and previews bounded text files with line numbers.
 - Switches with `Ctrl+F` to cancellable cwd content search with highlighted result cards, literal case-insensitive matching by default, and visible case-sensitive and fuzzy toggles.
 - Shows textual staged, unstaged, untracked, ignored, and conflict status plus branch, HEAD, and dirty state when Git is available.
@@ -43,13 +43,13 @@ pi -e ./packages/pi-file-context
 
 ## 🚀 Quick start
 
-1. Type `@` at the start of a word in Pi's editor. If another custom editor is active, run `/file-context` instead.
+1. Press `Ctrl+Alt+F` (`Control+Option+F` on macOS) or run `/file-context`.
 2. Type to fuzzy-search file names in relevance order and use `Up`/`Down` to navigate. Press `Tab` to insert a normal whole-file `@path` reference, or `Enter` to preview a file for quoting.
 3. Press `Ctrl+F` to switch between file-name and content search. Content search is literal and case-insensitive by default; `Alt+C` toggles case sensitivity and `Alt+F` toggles ordered fuzzy matching. The current states remain visible above the results.
 4. In content results, use `Up`/`Down` to choose a highlighted path-and-line card. Press `Tab` for a whole-file reference or `Enter` to preview the file at that line. `Escape` from the preview restores the query, result selection, and scroll position.
 5. In the preview, press `Space` to anchor the selection. Extend the range with `Up`/`Down`, then press `Enter` to attach it. Without an anchor, `Enter` attaches the cursor line.
 6. In a Git worktree, use `[`/`]` to select changed hunks, `b` for current-line blame, `h` for file history, `r` to open a commit/branch/tag, or `d` to inspect and attach explicit diff context.
-7. Repeat from `@` to attach more ranges from the same or different files, then write the question and submit normally. All pending quotes are attached in selection order and then cleared together.
+7. Repeat from the shortcut to attach more ranges from the same or different files, then write the question and submit normally. All pending quotes are attached in selection order and then cleared together.
 
 `Escape` returns from a preview to its originating file-name or content results; from either search screen it cancels without changing the draft. `Ctrl+C` cancels from every view.
 
@@ -64,6 +64,28 @@ selected content
 Non-Git quotes retain the original `path` and `lines` attributes exactly. Git-backed quotes add ordered optional provenance: the repository HEAD at selection time, branch, file status, selected revision or baseline, tracked blob when available, source kind (`worktree`, `revision`, or `git_diff`), and SHA-256 of the exact attached text. HEAD alone does not identify uncommitted content; `content_sha256` identifies the actual snapshot.
 
 Token counts are deterministic byte-based estimates (`ceil(UTF-8 bytes / 4)`), not provider billing guarantees. Diff context is never attached automatically.
+
+## ⚙️ Settings
+
+File Context reads optional user settings from `~/.pi/agent/pi-file-context.json`, or the equivalent file under Pi's configured agent directory.
+
+The file is not created when defaults are used.
+
+```json
+{
+  "openShortcut": "ctrl+alt+f"
+}
+```
+
+Set `openShortcut` to any valid Pi key identifier, or set it to `null` to disable the shortcut and use `/file-context` only.
+
+Run `/reload` after editing the file because Pi registers extension shortcuts during extension loading.
+
+Invalid JSON or values leave the source file unchanged, use the default shortcut, and produce a warning.
+
+Choose a shortcut that does not conflict with Pi or another extension; `Ctrl+F` is already Pi's cursor-right binding and File Context's internal search-mode toggle.
+
+On macOS, terminals may require **Use Option as Meta key** for `Control+Option` combinations.
 
 ## 💬 Commands
 
@@ -93,7 +115,7 @@ RPC receives an observable warning. JSON and print modes do not enter custom UI.
 - Keyboard line selection only; mouse drag selection is not implemented.
 - Up to eight pending quotes; there is not yet an interactive remove/reorder action.
 - Pending quotes do not survive `/reload`, session replacement, or shutdown.
-- The `@` trigger is not installed when another extension already owns the custom editor; `/file-context` remains available.
+- The configurable shortcut is registered without replacing another extension's custom editor; `/file-context` remains available if the shortcut is disabled or conflicts.
 - File discovery uses a small built-in ignore list rather than `.gitignore` semantics.
 - Content search scans discovered files natively and sequentially; large projects or queries with no matches may take longer than indexed or external search tools.
 - Fuzzy content search matches query characters in order on one line; it is not semantic search and does not cross line boundaries.
@@ -104,7 +126,8 @@ RPC receives an observable warning. JSON and print modes do not enter custom UI.
 
 ```text
 src/index.ts                   Thin Pi entrypoint
-src/file-context.ts            Lifecycle, filesystem boundaries, quote injection
+src/file-context.ts            Lifecycle, shortcut registration, filesystem boundaries, quote injection
+src/file-context-settings.ts   User shortcut loading and validation
 src/file-context-explorer.ts   File list, Git detail views, and line-range TUI
 src/content-search.ts          Bounded literal and fuzzy content matching
 src/content-search-session.ts  Search input, toggles, navigation, and cancellation
@@ -114,7 +137,8 @@ src/git-context.ts             Bounded read-only Git status, diff, blame, histor
 
 test/content-search.test.ts     Content matcher behavior and limits
 test/content-search-ui.test.ts  Content interaction, rendering, and lifecycle tests
-test/file-context.test.ts       Filesystem, prompt, lifecycle, and explorer tests
+test/file-context.test.ts       Filesystem, prompt, lifecycle, shortcut, and explorer tests
+test/file-context-settings.test.ts  Shortcut settings defaults and validation tests
 test/git-context.test.ts        Git repository behavior and parser tests
 ```
 
