@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
-import createTestnet from "hyperdht/testnet.js";
 import { test } from "vitest";
 import {
 	type DirectoryTransport,
 	type DirectoryTransportListener,
-	HyperswarmDirectoryTransport,
 	PublicRoomDirectorySession,
 } from "../src/directory-network.js";
 import { createIdentity, deriveScopedIdentity } from "../src/identity.js";
@@ -38,6 +36,26 @@ class IdleDirectoryTransport implements DirectoryTransport {
 	}
 	async stop(): Promise<void> {
 		this.stopped += 1;
+	}
+}
+
+class CatalogDirectoryTransport extends IdleDirectoryTransport {
+	override async refresh(): Promise<void> {
+		await super.refresh();
+		const peer = {
+			publicKey: Buffer.alloc(32, 99),
+			send: () => undefined,
+			close: () => undefined,
+		};
+		this.listener?.onPeer(peer);
+		for (const [index, identity] of [scoped(10, "pi-dev"), scoped(11, "pi-dev")].entries()) {
+			this.listener?.onMessage(
+				peer,
+				createDirectoryWireMessage(
+					createDirectoryPresence(identity, "pi-dev", "online", 10_000, `mock-${index}`),
+				),
+			);
+		}
 	}
 }
 
@@ -146,6 +164,21 @@ test("sort helper is deterministic and does not mutate caller state", () => {
 	assert.equal(rooms[0]?.slug, "zeta");
 });
 
+test("mocked directory discovery returns two scoped advertisers and fully stops", async () => {
+	const transport = new CatalogDirectoryTransport();
+	const directory = new PublicRoomDirectorySession({
+		identity: createIdentity(Buffer.alloc(32, 12)),
+		transport,
+		now: () => 10_000,
+	});
+
+	const result = await directory.browse(new AbortController().signal, 0);
+	assert.deepEqual(result.rooms, [{ slug: "pi-dev", estimatedParticipants: 2 }]);
+	assert.equal(transport.started, 1);
+	assert.equal(transport.refreshed, 1);
+	assert.equal(transport.stopped, 1);
+});
+
 test("temporary browsing aborts and stops every owned directory resource", async () => {
 	const transport = new IdleDirectoryTransport();
 	const directory = new PublicRoomDirectorySession({
@@ -158,32 +191,4 @@ test("temporary browsing aborts and stops every owned directory resource", async
 	await assert.rejects(browsing, /Menu disposed/u);
 	assert.equal(transport.started, 1);
 	assert.equal(transport.stopped, 1);
-});
-
-test("local DHT directory discovers two scoped advertisers and fully stops", {
-	timeout: 20_000,
-}, async () => {
-	const testnet = await createTestnet(4);
-	const makeDirectory = (seed: number, slug?: string) => {
-		const identity = slug ? scoped(seed, slug) : createIdentity(Buffer.alloc(32, seed));
-		return new PublicRoomDirectorySession({
-			identity,
-			...(slug ? { advertisedSlug: slug } : {}),
-			transport: new HyperswarmDirectoryTransport({
-				identity,
-				dht: testnet.createNode({ firewalled: false }),
-			}),
-		});
-	};
-	const first = makeDirectory(10, "pi-dev");
-	const second = makeDirectory(11, "pi-dev");
-	const browser = makeDirectory(12);
-	try {
-		await Promise.all([first.start(), second.start()]);
-		const result = await browser.browse(new AbortController().signal, 1_500);
-		assert.deepEqual(result.rooms, [{ slug: "pi-dev", estimatedParticipants: 2 }]);
-	} finally {
-		await Promise.allSettled([first.stop(), second.stop(), browser.stop()]);
-		await testnet.destroy();
-	}
 });

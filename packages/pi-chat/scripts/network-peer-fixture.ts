@@ -4,8 +4,9 @@ import { HyperswarmTransport } from "../src/network.js";
 import { createPrivateRoom } from "../src/protocol.js";
 
 const [bootstrapJson, seedText, secretText] = process.argv.slice(2);
-if (!bootstrapJson || !seedText || !secretText)
+if (!bootstrapJson || !seedText || !secretText) {
 	throw new Error("Missing network peer fixture args");
+}
 const bootstrap = JSON.parse(Buffer.from(bootstrapJson, "base64url").toString("utf8")) as unknown[];
 const seed = Number.parseInt(seedText, 10);
 const secret = Buffer.from(secretText, "base64url");
