@@ -11,7 +11,7 @@ Browse project files inside Pi, preview text, select a line range, and attach th
 
 ## ✨ Features
 
-- Opens the file explorer with a configurable shortcut that defaults to `Ctrl+Alt+F` (`Control+Option+F` on macOS).
+- Opens the file explorer with a configurable shortcut that defaults to `F8`.
 - Provides `/file-context` as a discoverable fallback without replacing Pi's normal editor.
 - Fuzzy-searches project file names with typo tolerance and relevance ranking, preserves normal whole-file `@path` references, and previews bounded text files with line numbers.
 - Switches with `Ctrl+F` to cancellable cwd content search with highlighted result cards, literal case-insensitive matching by default, and visible case-sensitive and fuzzy toggles.
@@ -43,7 +43,7 @@ pi -e ./packages/pi-file-context
 
 ## 🚀 Quick start
 
-1. Press `Ctrl+Alt+F` (`Control+Option+F` on macOS) or run `/file-context`.
+1. Press `F8` or run `/file-context`.
 2. Type to fuzzy-search file names in relevance order and use `Up`/`Down` to navigate. Press `Tab` to insert a normal whole-file `@path` reference, or `Enter` to preview a file for quoting.
 3. Press `Ctrl+F` to switch between file-name and content search. Content search is literal and case-insensitive by default; `Alt+C` toggles case sensitivity and `Alt+F` toggles ordered fuzzy matching. The current states remain visible above the results.
 4. In content results, use `Up`/`Down` to choose a highlighted path-and-line card. Press `Tab` for a whole-file reference or `Enter` to preview the file at that line. `Escape` from the preview restores the query, result selection, and scroll position.
@@ -73,7 +73,7 @@ The file is not created when defaults are used.
 
 ```json
 {
-  "openShortcut": "ctrl+alt+f"
+  "openShortcut": "f8"
 }
 ```
 
@@ -85,7 +85,7 @@ Invalid JSON or values leave the source file unchanged, use the default shortcut
 
 Choose a shortcut that does not conflict with Pi or another extension; `Ctrl+F` is already Pi's cursor-right binding and File Context's internal search-mode toggle.
 
-On macOS, terminals may require **Use Option as Meta key** for `Control+Option` combinations.
+The previous `Ctrl+Alt+F` default depended on terminal modifier support and may not reach Pi. An explicit `"openShortcut": "ctrl+alt+f"` value remains supported but is not migrated automatically; replace it with `"f8"` and run `/reload` to adopt the reliable default.
 
 ## 💬 Commands
 

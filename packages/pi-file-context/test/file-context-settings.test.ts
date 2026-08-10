@@ -17,10 +17,10 @@ async function withTempSettings(run: (settingsPath: string) => Promise<void>): P
 	}
 }
 
-test("missing settings use Ctrl+Alt+F without creating a file", async () => {
+test("missing settings use F8 without creating a file", async () => {
 	await withTempSettings(async (settingsPath) => {
 		const result = await loadFileContextSettings(settingsPath);
-		assert.deepEqual(result, { settings: DEFAULT_FILE_CONTEXT_SETTINGS });
+		assert.deepEqual(result, { settings: { openShortcut: "f8" } });
 		await assert.rejects(readFile(settingsPath, "utf8"), { code: "ENOENT" });
 	});
 });
