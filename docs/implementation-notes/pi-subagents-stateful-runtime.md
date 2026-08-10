@@ -77,13 +77,13 @@ Subprocess cleanup retains process-group SIGTERM/SIGKILL escalation. In-process 
 
 ## Public surface
 
-The default `all` workflow exposes seven tools: blocking `subagent`; detached `subagent_spawn`,
+The default `all` workflow exposes eight tools: blocking `subagent`; explicit autonomous `subagent_auto`; detached `subagent_spawn`,
 `subagent_send`, `subagent_manage`, and `subagent_mailbox`; metadata-only `subagent_inspect`; and
 synchronous read-only `subagent_consult`. Registration follows workflow capability:
 
-- `all`: all seven tools;
+- `all`: all eight tools;
 - `async-only`: the four detached tools plus inspection;
-- `blocking-only`: blocking delegation, consultation, and inspection; and
+- `blocking-only`: blocking delegation, autonomous planning, consultation, and inspection; and
 - `disabled`: inspection only.
 
 Within an enabled stateful workflow, lifecycle tool membership does not change after spawn,

@@ -39,7 +39,7 @@ Keep `pi-subagents` as the owner of delegation planning, workflow state, authori
 | Concern | Current owner | Relationship to earlier plans |
 | --- | --- | --- |
 | Independent acceptance, immutable verification, and bounded rework | [`Verified Execution Loop Plan`](../plans/2026-08-10_pi-subagents-verified-execution-loop-plan.md) | Continues the implemented WorkItem baseline and owns the acceptance-state migration. |
-| Objective-to-DAG compilation and graph revision | [`Autonomous Workflow Planning Plan`](../plans/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md) | Continues capability routing and explicit workflow compilation without reopening their implemented baselines. |
+| Objective-to-DAG compilation and graph revision | [`Autonomous Workflow Planning Plan`](../plans/archived/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md) | Implemented as the explicit `subagent_auto` surface without reopening earlier baselines. |
 | Rolling scheduling, recovery, persistence reconciliation, and resume | [`Event-Driven Workflow Runtime Plan`](../plans/2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md) | Continues the dependency scheduler and semantic snapshot baseline without duplicating it. |
 | Matched evidence before a default change | [`Minimal Delegation Admission Evaluation Plan`](../plans/2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) | Remains the sole active admission evidence gate. |
 
@@ -74,15 +74,15 @@ The original implementation plans now live under [`docs/plans/superseded/`](../p
 
 ### Phase 2: Accept one objective and construct the workflow
 
-- [ ] An explicit automation mode accepts one objective, constraints, acceptance criteria, and aggregate budget without requiring a caller-authored task graph.
-- [ ] A read-only planning turn proposes a bounded typed DAG, while deterministic compilation validates dependencies, scopes, authority, capabilities, artifacts, verification, and hard limits before any mutating child starts.
-- [ ] Admission selects the smallest justified topology and can return parent-owned direct work or abstention without allocating a child.
-- [ ] Capability routing assigns agents and tools from enforceable manifests without silently widening authority.
-- [ ] Versioned graph patches can revise pending, rework-requested, or invalidated work after new evidence without replacing accepted history.
+- [x] An explicit automation mode accepts one objective, constraints, acceptance criteria, and aggregate budget without requiring a caller-authored task graph.
+- [x] A read-only planning turn proposes a bounded typed DAG, while deterministic compilation validates dependencies, scopes, authority, capabilities, artifacts, verification, and hard limits before any mutating child starts.
+- [x] Admission selects the smallest justified topology and can return parent-owned direct work or abstention without allocating an execution child.
+- [x] Capability routing assigns agents and tools from enforceable manifests without silently widening authority.
+- [x] Versioned graph patches can revise pending, rework-requested, or invalidated work after new evidence without replacing accepted history.
 
 **Outcome:** One high-level request can become a safe executable workflow with no manual topology authoring.
 
-**Execution plan:** [`2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md`](../plans/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md).
+**Completed plan:** [`2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md`](../plans/archived/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md).
 
 ### Phase 3: Run a rolling recoverable workflow runtime
 
@@ -157,3 +157,4 @@ The original implementation plans now live under [`docs/plans/superseded/`](../p
 - **2026-08-10 — Exclude observability expansion:** this roadmap changes execution behavior and correctness gates only, except for bounded evidence required by those gates.
 - **2026-08-10 — Keep full automation explicit:** no default routing change is proposed before matched representative evaluation.
 - **2026-08-10 — Preserve narrow concurrency:** the first automated architecture keeps at most two mutating children and no workflow grandchildren.
+- **2026-08-10 — Complete explicit workflow planning:** `subagent_auto`, deterministic compilation, verified mutating topology, bounded graph patches, and the frozen offline protocol complete Phase 2 without changing defaults or making a live-quality claim.

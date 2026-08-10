@@ -10,9 +10,9 @@ Support versioned revisions to pending, rework-requested, or invalidated work wh
 
 This plan owns only the explicit automation request, read-only planning turn, deterministic plan compiler, topology minimization, and graph-patch contract.
 
-It depends on the [verified execution loop plan](2026-08-10_pi-subagents-verified-execution-loop-plan.md) for acceptance and rework semantics.
+It depends on the verified execution loop merged in [PR #678](https://github.com/narumiruna/pi-extensions/pull/678) for acceptance and rework semantics.
 
-It consumes the implemented capability, contract, `ExecutionPlan`, WorkItem, and workflow baselines preserved under [`docs/plans/superseded/`](superseded/) without reopening their original checklists.
+It consumes the implemented capability, contract, `ExecutionPlan`, WorkItem, and workflow baselines tracked by the existing Pi Subagents plans in `docs/plans/` without reopening their original checklists.
 
 The [minimal delegation admission evaluation plan](2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) remains the sole owner of matched evidence required before a default change.
 
@@ -76,13 +76,13 @@ The first implementation will not learn from historical runs or use a learned ro
 - The parent agent can handle a typed parent-owned or needs-input result after the automation tool returns.
 - Existing provider schemas can carry a bounded automation request and plan result after compatibility tests.
 
-## Unknowns
+## Resolved Decisions and Accepted Unknowns
 
-- Whether automation should be a new `subagent` mode or a separately named tool requires a schema-size, discoverability, and provider-compatibility decision.
-- The exact planner context policy and maximum graph size require measured token and latency baselines.
-- The best deterministic mapping from proposal metadata to admission inputs remains unverified by representative repository tasks.
-- The initial task classes eligible for automatic planning must be selected before live evaluation rather than after observing favorable results.
-- The benefit of different model families for planner, implementer, and verifier remains unknown.
+- Automation uses a separate `subagent_auto` tool because its 2,635-byte one-field schema avoids expanding the existing 27,782-byte, 20-field compatibility schema.
+- The planner uses trust-aware project context, only `read`, `grep`, `find`, and `ls`, at most 60 seconds, 8 turns, 16 tool calls, and an eight-task graph.
+- Deterministic fixtures verify the proposal-to-admission mapping for parent-owned, one-child, sequential, verified-child, and bounded-parallel shapes.
+- Only bounded reconnaissance, verified single-package changes, and sparse two-boundary changes are eligible for a separately authorized live evaluation.
+- Model-family benefit remains intentionally unmeasured because no live-provider evaluation was authorized, and this release makes no quality or default claim.
 
 ## Risks
 
@@ -106,35 +106,35 @@ The first implementation will not learn from historical runs or use a learned ro
 
 ## Plan
 
-- [ ] Characterize existing tool schema size, provider compatibility, mode validation, capability routing, admission decisions, workflow preflight, `ExecutionPlan` construction, WorkItem creation, verified completion, and prompt-resource boundaries; record focused baseline tests.
-- [ ] Decide whether automation is a new `subagent` mode or a separate tool by comparing schema size, provider compatibility, prompt burden, lifecycle ownership, backwards compatibility, and discoverability; record the rejected alternative and migration consequences.
-- [ ] Define bounded `pi-subagents:automation-request:v1`, `workflow-plan:v1`, and `workflow-plan-patch:v1` schemas with exact limits, unknown-field policy, executor-owned fields, provenance, generation, authority ceiling, aggregate budget, acceptance criteria, and result outcomes.
-- [ ] Add failing parser tests for malformed JSON, unsupported version, duplicate or missing IDs, cycles, excessive graph size, oversized text, invalid paths, conflicting ownership, unsupported guarantees, forged generation, forged authority, terminal controls, and private data.
-- [ ] Define planner resource and tool policy as read-only, bounded, trust-aware, cancellation-aware, and incapable of delegating grandchildren or mutating the repository.
-- [ ] Implement a planner prompt that requests tasks, dependencies, artifacts, scopes, side effects, capabilities, acceptance criteria, risks, integration ownership, verifier needs, and budgets without asking for hidden reasoning.
-- [ ] Implement `WorkflowPlanCompiler` as the single deterministic owner of normalization, graph validation, admission, topology minimization, capability routing, authority enforcement, workspace selection, task generations, hard limits, and compilation to the existing workflow shape.
-- [ ] Add compiler tests for parent-owned direct work, one child, one child plus verifier, sequential dependency, two safe mutating children, dense coupling, missing verification, unsupported capability, insufficient budget, scope conflict, no integration owner, and attempted grandchildren.
-- [ ] Ensure the compiler may narrow or reject a model proposal but cannot silently add authority, exceed aggregate budget, raise mutating width, or relax verification and trust requirements.
-- [ ] Integrate verified-execution synthesis so every compiled risk-selected mutating plan contains one distinct verifier and one authoritative integration path before any mutating child starts.
-- [ ] Implement graph patch validation and application for pending, rework-requested, or invalidated nodes only, with current workflow generation, dependency closure, artifact invalidation, plan identity rotation, bounded revision count, and atomic persistence.
-- [ ] Add tests proving plan patches cannot rewrite completed work, forge artifacts, remove required verification, revive cancelled generations, widen authority, exceed budget, create cycles, or trigger side-effect replay.
-- [ ] Add end-to-end deterministic fixtures for objective to direct result, objective to one child, objective to verified child, objective to bounded parallel workflow, missing-input abstention, planner failure, compiler rejection, one revision after failed assumption, and terminal stop after revision exhaustion.
-- [ ] Define a frozen matched evaluation protocol against strong single-agent, one-child, caller-authored workflow, fixed two-child, and equal-budget best-of-N arms with identical model information, tools, evaluator, aggregate token or dollar ceiling, wall-clock ceiling, and repeated paired tasks.
-- [ ] Run the offline protocol and deterministic fixtures, then record which task classes remain eligible for a separately authorized live-provider evaluation without making a production-quality claim.
-- [ ] Update `packages/pi-subagents/README.md`, tool documentation, compatibility and downgrade guidance, package layout, and an appropriate Changeset for the new explicit automation surface.
-- [ ] Audit cancellation, every post-`await` generation check, session replacement, shutdown, planner disposal, persistence ordering, project trust, prompt resources, output bounds, terminal sanitization, invalid-file protection if configuration changes, and repeated cleanup against `docs/extension-conventions.md` and `docs/extension-settings.md` when applicable.
-- [ ] Run focused parser, planner, compiler, routing, admission, workflow, verification, persistence, and lifecycle tests; then run `npm test`, `npm run check`, `git diff --check`, `just pack subagents`, and representative local explicit-automation smokes when practical.
+- [x] Characterize existing schema, compatibility, routing, admission, workflow, execution-plan, WorkItem, verification, and prompt-resource boundaries; evidence is recorded in `docs/implementation-notes/pi-subagents-autonomous-workflow-planning.md` and focused baseline tests.
+- [x] Select a separate `subagent_auto` tool after measuring 27,782 bytes for `subagent` versus 2,635 bytes for the dedicated schema; the rejected in-schema mode and downgrade consequences are documented.
+- [x] Define strict bounded `pi-subagents:automation-request:v1`, `workflow-plan:v1`, and `workflow-plan-patch:v1` contracts in `src/automation-contract.ts`.
+- [x] Add red-first parser coverage for malformed JSON, versions, identities, cycles, graph/text/path limits, ownership, guarantees, forgery, terminal controls, and private markers in `test/automation-contract.test.ts`.
+- [x] Enforce a read-only, bounded, trust-aware, cancellable, non-recursive planner policy in `src/automation-planner.ts` and `src/automation.ts`.
+- [x] Implement the exact-JSON planner prompt without hidden-reasoning requests and cover every required task field in planner tests.
+- [x] Implement `WorkflowPlanCompiler` as the deterministic owner of graph validation, admission, routing, authority/budget limits, workspace support, generations, verification, and existing-workflow compilation.
+- [x] Cover parent-owned, one-child, verified, sequential, bounded parallel, dense, missing verification, unsupported capability, insufficient budget, scope/integration conflicts, and recursion in compiler tests.
+- [x] Prove compiler narrowing and rejection cannot widen tools, capabilities, path scope, side effects, aggregate budget, trust, mutating width, or recursion.
+- [x] Synthesize one distinct verifier inside the remaining ceiling and require one authoritative integration path for every admitted mutating plan.
+- [x] Implement current-generation graph patches, dependency closure, artifact invalidation, identity/generation rotation, revision limits, patched ledgers, and atomic combined plan/ledger persistence.
+- [x] Cover completed-work, artifact, verifier, cancellation, authority, budget, cycle, replay, stale identity, and revision-exhaustion patch failures.
+- [x] Add deterministic end-to-end fixtures for parent-owned, one child, verified child, bounded parallel, missing input, planner failure, compiler rejection, rework revision, and terminal exhaustion.
+- [x] Freeze `pi-subagents:workflow-planning-benchmark:v1` with strong-single, one-child, caller-workflow, fixed-two-child, equal-budget best-of-N, and automation arms under matched information and resources.
+- [x] Run the offline dry run and fixtures; only bounded reconnaissance, verified single-package changes, and sparse two-boundary changes remain eligible for separately authorized live evaluation.
+- [x] Update the package README, capability/runtime notes, compatibility and downgrade guidance, package layout, and `.changeset/calm-autonomous-subagents.md`.
+- [x] Audit cancellation, post-await ownership, replacement, shutdown, planner disposal, persistence ordering, trust, prompt resources, output bounds, terminal safety, invalid-state quarantine, and repeated cleanup against both extension guides; no settings schema changed.
+- [x] Run 386 package tests, `npm test` with 2,934 tests, `npm run check`, `git diff --check`, and `just pack subagents`; deterministic explicit-automation smokes passed, while a live-provider smoke was intentionally not run because no live evaluation was authorized and model tool choice is not deterministic.
 
 ## Completion Checklist
 
-- [ ] One high-level automation request can compile to the smallest justified existing workflow topology without caller-authored tasks.
-- [ ] Planner execution is read-only, bounded, trust-aware, cancellable, and unable to grant itself authority or descendants.
-- [ ] Deterministic compilation rejects unsafe or malformed plans before side effects and never silently widens authority, budget, width, or recursion.
-- [ ] Parent-owned and insufficient-evidence decisions start zero children.
-- [ ] Every admitted mutating plan uses the verified-execution acceptance boundary.
-- [ ] Plan patches modify only eligible current-generation work and preserve accepted history, accepted artifacts, and verification receipts.
-- [ ] Mutating width remains at most two and workflow grandchildren remain rejected.
-- [ ] Existing omitted-field modes remain compatible with a documented fallback and downgrade path.
-- [ ] Matched evaluation protocol is frozen before live results, and no unsupported default-quality claim is made.
-- [ ] Focused tests, semantic audits, root CI-equivalent gate, package dry run, and representative runtime smokes pass or unavailable paths are explicitly recorded.
-- [ ] Published behavior has an appropriate Changeset, and no publication or release action has occurred.
+- [x] One high-level request compiles to the smallest justified existing topology without caller-authored tasks.
+- [x] Planner execution is read-only, bounded, trust-aware, cancellable, and unable to grant authority or descendants.
+- [x] Compilation rejects malformed or unsafe plans before execution side effects and never silently widens authority, budget, width, or recursion.
+- [x] Parent-owned and insufficient-evidence decisions start zero execution workers.
+- [x] Every admitted mutating plan uses the verified-execution acceptance boundary.
+- [x] Patches modify only eligible current-generation work and preserve accepted history, artifacts, and verification receipts.
+- [x] Mutating width remains at most two and workflow grandchildren are rejected before planning.
+- [x] Existing modes remain compatible with documented explicit-workflow fallback and downgrade guidance.
+- [x] The matched protocol was frozen before live results, and no unsupported default-quality claim is made.
+- [x] Focused tests, semantic audits, root CI gate, package dry run, and deterministic runtime fixtures pass; the intentionally unrun live-provider path is recorded.
+- [x] Published behavior has a minor Changeset, and no publication, tag, release, or workflow dispatch occurred.

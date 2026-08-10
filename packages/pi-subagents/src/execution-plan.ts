@@ -161,7 +161,7 @@ export function resolveContractTools(
 	contract: DelegationContract | undefined,
 ): string[] | undefined {
 	const requested = contract?.requestedAuthority?.tools;
-	if (contract?.enforcement !== "enforce" || !requested || requested.length === 0) {
+	if (contract?.enforcement !== "enforce" || requested === undefined) {
 		return configuredTools ? unique(configuredTools) : undefined;
 	}
 	const availableTools = resolveAgentToolNames(configuredTools);
