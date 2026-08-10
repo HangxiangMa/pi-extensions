@@ -12,6 +12,12 @@ import {
 import { formatInteractionHints } from "../interaction-hints.js";
 import type { MenuBrowseItem } from "../types.js";
 import type { BrowseOptions, MenuKeybindings, MenuScreenComponent } from "./contracts.js";
+import {
+	createDocumentLineCache,
+	documentDialogPages,
+	RPC_DOCUMENT_LINE_WIDTH,
+	RPC_DOCUMENT_PAGE_SIZE,
+} from "./document-formatting.js";
 import { handleSearchInput, safeMenuText } from "./rendering.js";
 import { reviewDialogPages } from "./review.js";
 
@@ -53,6 +59,7 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
 	let view: BrowseView = "list";
 	let focused = false;
 	let disposed = false;
+	const detailLineCache = createDocumentLineCache(options.theme);
 	const selected = () => filteredItems[selectedIndex];
 	const syncFocus = () => {
 		searchInput.focused = focused && view === "list" && searchInputVisible;
@@ -107,7 +114,14 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
 			const safeWidth = Math.max(1, width);
 			const availableRows = componentRows(options.tui.terminal.rows);
 			if (view === "detail") {
-				const content = detailLines(selected()?.item, safeWidth);
+				const selectedItem = selected()?.item;
+				const content = selectedItem?.detailDocument
+					? detailLineCache.lines(
+							selectedItem.detailDocument.content,
+							selectedItem.detailDocument.format,
+							safeWidth,
+						)
+					: legacyDetailLines(selectedItem, safeWidth);
 				const layout = detailLayout(availableRows, content.length);
 				detailViewportRows = layout.contentRows;
 				detailMaximumScroll = Math.max(0, content.length - layout.contentRows);
@@ -180,6 +194,7 @@ export function createBrowseComponent<ScreenId extends string, ActionId extends 
 			return boundedLines(lines, safeWidth, availableRows);
 		},
 		invalidate() {
+			detailLineCache.invalidate();
 			searchInput.invalidate();
 		},
 		handleInput(data) {
@@ -264,7 +279,7 @@ function listRows<ScreenId extends string, ActionId extends string>(
 	});
 }
 
-function detailLines(item: MenuBrowseItem | undefined, width: number): string[] {
+function legacyDetailLines(item: MenuBrowseItem | undefined, width: number): string[] {
 	if (!item) return ["No matching item."];
 	return browseDetailSource(item).flatMap((line) => (line ? wrapTextWithAnsi(line, width) : [""]));
 }
@@ -276,6 +291,13 @@ export function browseDialogLabel(item: MenuBrowseItem) {
 }
 
 export function browseDialogPages(item: MenuBrowseItem) {
+	if (item.detailDocument) {
+		return documentDialogPages(
+			item.detailDocument.content,
+			RPC_DOCUMENT_LINE_WIDTH,
+			RPC_DOCUMENT_PAGE_SIZE,
+		);
+	}
 	return reviewDialogPages({
 		kind: "review",
 		title: safeBrowseText(item.label),

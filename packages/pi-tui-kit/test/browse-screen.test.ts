@@ -8,7 +8,7 @@ import {
 	type MenuScreenComponent,
 	type MenuScreenEvent,
 } from "../src/components/index.js";
-import type { MenuScreen } from "../src/types.js";
+import type { BrowseDetailDocument, MenuBrowseItem, MenuScreen } from "../src/types.js";
 
 initTheme("dark", false);
 
@@ -114,6 +114,207 @@ test("browse searches catalog metadata and preserves query and selection across 
 	assert.equal(harness.component.render(48).join("\n").includes(CURSOR_MARKER), true);
 });
 
+test("browse legacy details retain normalized ordering and empty fallback", () => {
+	const screen: MenuScreen<ScreenId, ActionId> = {
+		kind: "browse",
+		title: "Legacy browse",
+		items: [
+			{
+				id: "legacy",
+				label: "Legacy",
+				statusText: "  Ready   state  ",
+				description: " Legacy\tdescription ",
+				details: ["  nested   prose  ", ""],
+			},
+			{ id: "empty", label: "Empty" },
+		],
+		hint: "back",
+	};
+	const harness = componentHarness(screen, { rows: 24, selectedItemId: "legacy" });
+	harness.component.handleInput("y");
+	assert.deepEqual(plainRender(harness.component, 80), [
+		"Legacy",
+		"Status: Ready state",
+		"Legacy description",
+		"nested prose",
+		"",
+		"k/j scroll · u/d page · q back · ctrl+c close",
+	]);
+	harness.component.handleInput("q");
+	harness.component.handleInput("j");
+	harness.component.handleInput("y");
+	assert.match(plainRender(harness.component, 80).join("\n"), /No details available\./u);
+});
+
+test("browse exact details preserve documents, precedence, search identity, and scrolling", () => {
+	const screen: MenuScreen<ScreenId, ActionId> = {
+		kind: "browse",
+		title: "Schemas",
+		items: [
+			{
+				id: "schema-alpha",
+				label: "Schema",
+				searchText: "alpha",
+				detailDocument: { content: "private-document-token" },
+			},
+			{
+				id: "schema-beta",
+				label: "Schema",
+				statusText: "Ready",
+				description: "Legacy description",
+				searchText: "beta alias",
+				details: ["legacy detail must not render"],
+				detailDocument: {
+					content: [
+						"  two spaces",
+						"    four spaces",
+						"\ttabbed",
+						"你🙂wide",
+						"unsafe\u001b]8;;https://unsafe.example\u0007text",
+						...Array.from({ length: 10 }, (_, index) => `tail ${index + 1}`),
+					].join("\n"),
+					format: { kind: "text" },
+				},
+			},
+		],
+		viewportSize: "adaptive",
+		hint: "back",
+	};
+	const harness = componentHarness(screen, { rows: 14, selectedItemId: "schema-alpha" });
+	const focusable = harness.component as MenuScreenComponent & Focusable;
+	focusable.focused = true;
+	for (const input of "beta") harness.component.handleInput(input);
+	assert.equal(harness.selectionChanges.at(-1), "schema-beta");
+
+	harness.component.handleInput("y");
+	let rendered = plainRender(harness.component, 40).join("\n");
+	assert.match(rendered, /^Schemas?$/mu);
+	assert.match(rendered, /^ {2}two spaces$/mu);
+	assert.match(rendered, /^ {4}four spaces$/mu);
+	assert.match(rendered, /^ {4}tabbed$/mu);
+	assert.match(rendered, /^你🙂wide$/mu);
+	assert.doesNotMatch(rendered, /Status:|Legacy description|legacy detail must not render/u);
+	assert.equal(harness.component.render(40).join("\n").includes("https://unsafe.example"), false);
+	assert.equal(
+		harness.component.render(8).every((line) => visibleWidth(line) <= 8),
+		true,
+	);
+
+	const graphemes = componentHarness(
+		{
+			kind: "browse",
+			title: "Wide",
+			items: [{ id: "wide", label: "Wide", detailDocument: { content: "你🙂x" } }],
+		} as MenuScreen<ScreenId, ActionId>,
+		{ rows: 24 },
+	);
+	graphemes.component.handleInput("y");
+	const narrow = plainRender(graphemes.component, 2);
+	assert.equal(narrow.includes("你"), true);
+	assert.equal(narrow.includes("🙂"), true);
+	assert.equal(narrow.includes("x"), true);
+	assert.equal(
+		narrow.every((line) => visibleWidth(line) <= 2),
+		true,
+	);
+
+	harness.component.handleInput("d");
+	assert.match(plainRender(harness.component, 40).join("\n"), /tail 10/u);
+	harness.component.handleInput("q");
+	rendered = plainRender(harness.component, 40).join("\n");
+	assert.match(rendered, /beta/u);
+	assert.equal(harness.component.render(40).join("\n").includes(CURSOR_MARKER), true);
+	assert.equal(harness.selectionChanges.at(-1), "schema-beta");
+
+	const privateSearch = componentHarness(screen, { rows: 14 });
+	for (const input of "private-document-token") privateSearch.component.handleInput(input);
+	assert.match(plainRender(privateSearch.component, 40).join("\n"), /No matching items/u);
+});
+
+test("browse exact details apply shared code and diff formatting", () => {
+	const screen: MenuScreen<ScreenId, ActionId> = {
+		kind: "browse",
+		title: "Documents",
+		items: [
+			{
+				id: "code",
+				label: "Code",
+				detailDocument: {
+					content: "const answer: number = 42;",
+					format: { kind: "code", filePath: "answer.ts" },
+				},
+			},
+			{
+				id: "diff",
+				label: "Diff",
+				detailDocument: {
+					content: "@@ header\n-old\n+new\n same",
+					format: { kind: "diff", filePath: "settings.json" },
+				},
+			},
+		],
+	};
+	const harness = componentHarness(screen, { rows: 24, themed: true });
+	harness.component.handleInput("y");
+	let rendered = harness.component.render(200).join("\n");
+	assert.match(rendered, /syntaxKeyword:const/u);
+	assert.match(rendered, /syntaxType:number/u);
+	assert.match(rendered, /syntaxNumber:42/u);
+	harness.component.handleInput("q");
+	harness.component.handleInput("j");
+	harness.component.handleInput("y");
+	rendered = harness.component.render(200).join("\n");
+	assert.match(rendered, /toolDiffRemoved:-old/u);
+	assert.match(rendered, /toolDiffAdded:\+new/u);
+	assert.match(rendered, /accent:@@ header/u);
+});
+
+test("browse caches exact detail formatting until its inputs or theme change", () => {
+	const colorCalls: string[] = [];
+	const detailDocument: BrowseDetailDocument = {
+		content: Array.from({ length: 12 }, (_, index) => `document line ${index + 1}`).join("\n"),
+		format: { kind: "text" },
+	};
+	const item: MenuBrowseItem = { id: "document", label: "Document", detailDocument };
+	const harness = componentHarness(
+		{ kind: "browse", title: "Documents", items: [item] },
+		{ rows: 10, onColor: (color) => colorCalls.push(color) },
+	);
+	harness.component.handleInput("y");
+
+	harness.component.render(40);
+	const initialTextCalls = colorCalls.filter((color) => color === "text").length;
+	assert.equal(initialTextCalls, 12);
+	harness.component.handleInput("j");
+	harness.component.render(40);
+	assert.equal(colorCalls.filter((color) => color === "text").length, initialTextCalls);
+
+	harness.component.render(12);
+	const resizedTextCalls = colorCalls.filter((color) => color === "text").length;
+	assert.ok(resizedTextCalls > initialTextCalls);
+	harness.component.render(12);
+	assert.equal(colorCalls.filter((color) => color === "text").length, resizedTextCalls);
+
+	detailDocument.content += "\nchanged content";
+	harness.component.render(12);
+	const changedContentCalls = colorCalls.filter((color) => color === "text").length;
+	assert.ok(changedContentCalls > resizedTextCalls);
+
+	detailDocument.format = { kind: "diff" };
+	harness.component.render(12);
+	const changedFormatCalls = colorCalls.filter((color) => color === "toolDiffContext").length;
+	assert.ok(changedFormatCalls > 0);
+	harness.component.render(12);
+	assert.equal(
+		colorCalls.filter((color) => color === "toolDiffContext").length,
+		changedFormatCalls,
+	);
+
+	harness.component.invalidate();
+	harness.component.render(12);
+	assert.ok(colorCalls.filter((color) => color === "toolDiffContext").length > changedFormatCalls);
+});
+
 test("browse is adaptively bounded, handles empty searches, and distinguishes Back from Close", () => {
 	const harness = componentHarness(browseScreen(), { rows: 10 });
 	for (const { width, rows } of [
@@ -161,7 +362,12 @@ function plainRender(component: MenuScreenComponent, width: number) {
 
 function componentHarness(
 	screen: MenuScreen<ScreenId, ActionId>,
-	options: { rows?: number; selectedItemId?: string } = {},
+	options: {
+		rows?: number;
+		selectedItemId?: string;
+		themed?: boolean;
+		onColor?: (color: string) => void;
+	} = {},
 ) {
 	const events: MenuScreenEvent[] = [];
 	const selectionChanges: string[] = [];
@@ -170,7 +376,13 @@ function componentHarness(
 		screen,
 		selectedItemId: options.selectedItemId,
 		tui: host,
-		theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+		theme: {
+			fg: (color: string, text: string) => {
+				options.onColor?.(color);
+				return options.themed ? `${color}:${text}` : text;
+			},
+			bold: (text: string) => text,
+		},
 		keybindings,
 		onEvent: (event) => events.push(event),
 		onSelectionChange: (itemId) => selectionChanges.push(itemId),
