@@ -1,5 +1,11 @@
 # @narumitw/pi-accounts
 
+## 0.49.7
+
+### Patch Changes
+
+- 25aa27e: Use Pi's native login dialog and selector for provider OAuth steps in TUI mode while preserving standard extension UI requests in RPC mode.
+
 ## 0.49.6
 
 ### Patch Changes
