@@ -75,6 +75,10 @@ try name: (_validate-package-name name)
     npm --workspace {{ quote("@narumitw/pi-" + name) }} run build --if-present
     pi -e {{ quote("./packages/pi-" + name) }}
 
+# Run Pi Chat's opt-in real local DHT and process-boundary smoke
+smoke-chat-network:
+    npm run smoke:chat-network
+
 # Measure offline pi-subagents transport startup and retained-command overhead
 benchmark-subagents samples="7":
     node scripts/benchmark-pi-subagents-transports.mjs --samples {{ quote(samples) }}

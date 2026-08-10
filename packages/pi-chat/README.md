@@ -287,6 +287,19 @@ rows before hiding room, connectivity, or input-target status.
 Pi's public extension widget API does not provide generic mouse hit-testing, so the dock is not
 clickable and Pi Chat registers no global shortcut. `/chat` remains the menu-first entrypoint.
 
+## 🧪 Local network smoke
+
+The normal repository test suite mocks Pi Chat's network transports and does not open DHT sockets.
+Run the opt-in smoke from a local checkout to exercise real local DHT nodes, sparse relay, retries,
+process-boundary discovery and delivery, public-room discovery, and resource cleanup:
+
+```bash
+npm run smoke:chat-network
+```
+
+The equivalent Just command is `just smoke-chat-network`.
+This smoke is intentionally excluded from `npm test` and CI because local UDP scheduling can be nondeterministic under parallel load.
+
 ## 🗂️ Package layout
 
 ```text
@@ -308,11 +321,13 @@ packages/pi-chat/
 │   ├── chat-view.ts           # Loaded on the first composer request
 │   ├── widget.ts              # Loaded before the first room joins
 │   └── text.ts
-├── test/
+├── scripts/                  # Opt-in real local network smoke and child fixture
+├── test/                     # Deterministic tests with mocked network boundaries
 ├── README.md
 ├── LICENSE
 ├── package.json
-└── tsconfig.json
+├── tsconfig.json
+└── tsconfig.network-smoke.json
 ```
 
 ## 🔎 Keywords
