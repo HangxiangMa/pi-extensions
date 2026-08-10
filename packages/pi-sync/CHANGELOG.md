@@ -1,5 +1,11 @@
 # @narumitw/pi-sync
 
+## 0.49.9
+
+### Patch Changes
+
+- 38a36bb: Make interrupted-operation recovery immediately actionable in the sync manager, distinguish live and guarded operations from recoverable locks, confirm local-lock removal, and return directly to normal sync actions after recovery.
+
 ## 0.49.8
 
 ### Patch Changes
