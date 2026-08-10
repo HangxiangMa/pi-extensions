@@ -169,7 +169,7 @@ Each implementation pull request starts from then-current `origin/main`, changes
 - Kit baseline passed its package check and 170 focused tests. New TUI and RPC tests failed before implementation because gated confirmation still selected the item and no explanation was rendered.
 - The public contract adds only `confirmationDisabled` and `confirmationDisabledReason` to `LiveChoiceItem`; API compatibility advances from 10 to 11 and declarative `choice` remains unchanged.
 - Final evidence: Kit package check and build passed; 176 focused tests passed; root declarations and runtime export compatibility fixtures passed; boundaries passed; CI-equivalent `npm run check` passed with 274 files and 2,947 tests; `git diff --check` passed.
-- Kit implementation commit: `93b507b5` (`feat(tui-kit): gate live choice confirmation`).
+- Kit pull request: [#691](https://github.com/narumiruna/pi-extensions/pull/691), with implementation commit `93b507b5` and plan commit `cc659b7e`. CI run `31411243052` passed in 2m57s; no review was submitted at this refresh.
 - `just pack tui-kit` exposed 59 expected built files (51.2 kB packed, 230.9 kB unpacked). Root declarations contain both gating fields and compatibility literal 11. Repository search proved no Statusline, Starship, Tool, or other consumer uses the unpublished fields.
 - Audit confirmed full `disabled` presentation and shortcut blocking take precedence; gating blocks only Enter/Space activation, leaves non-conflicting shortcuts and previews active in TUI, stays inert without previews or shortcuts in RPC, sanitizes labels and reasons, preserves raw IDs, and reuses existing preview draining, stale checks, disposal, and error reporting.
 
