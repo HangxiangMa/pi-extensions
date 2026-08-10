@@ -31,19 +31,26 @@ import {
 } from "./git.js";
 import { switchToWorktree } from "./session.js";
 import type { WorktreeSettingsRuntime } from "./settings.js";
+import { loadWorktreeStatusCards, type WorktreeStatusCard } from "./status.js";
 
+const ACTION_STATUS = "Worktree status";
 const ACTION_ADD = "Add worktree";
 const ACTION_SWITCH = "Switch worktree";
 const ACTION_REMOVE = "Remove worktree";
 const ACTION_PRUNE = "Prune stale metadata";
 const ACTION_CONFIGURE_ROOT = "Configure worktree root";
 const ACTIONS = {
+	status: ACTION_STATUS,
 	add: ACTION_ADD,
 	switch: ACTION_SWITCH,
 	remove: ACTION_REMOVE,
 	prune: ACTION_PRUNE,
 	configure: ACTION_CONFIGURE_ROOT,
 } as const;
+
+interface WorktreeMenuState {
+	statusCards: WorktreeStatusCard[];
+}
 
 interface WorktreeMenuOwner {
 	signal: AbortSignal;
@@ -53,6 +60,12 @@ interface WorktreeMenuOwner {
 interface AdministrativeHistoryRisk {
 	label: string;
 	oids: string[];
+}
+
+interface AddBaseProvenance {
+	kind: "existing-local-branch" | "current-branch" | "explicit-commit-ish";
+	label: string;
+	oid: string;
 }
 
 export function registerWorktreeCommand(
@@ -93,9 +106,10 @@ export function registerWorktreeCommand(
 					}
 					return { kind: "close" } as const;
 				};
-				type Screen = "main";
+				const state: WorktreeMenuState = { statusCards: [] };
+				type Screen = "main" | "status";
 				type Action = keyof typeof ACTIONS;
-				const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
+				const menu = defineMenu<WorktreeMenuState, Screen, Action, ExtensionCommandContext>({
 					start: "main",
 					screens: {
 						main: () => ({
@@ -110,11 +124,37 @@ export function registerWorktreeCommand(
 								id,
 								label,
 								action: id as Action,
+								busyLabel: id === "status" ? "Inspecting worktrees…" : undefined,
 							})),
 							hint: "close",
 						}),
+						status: ({ state: currentState }) => ({
+							kind: "browse",
+							title: "Worktree status",
+							lines: ["Local Git snapshot; no fetch performed."],
+							items: currentState.statusCards,
+							viewportSize: "adaptive",
+							hint: "back",
+						}),
 					},
 					actions: {
+						status: async ({ signal }) => {
+							try {
+								const statusRecords = await listWorktrees(pi, ctx.cwd, signal);
+								state.statusCards = await loadWorktreeStatusCards(
+									pi,
+									statusRecords,
+									currentPath,
+									signal,
+								);
+								if (signal.aborted || !owner.isCurrent()) return { kind: "close" };
+								return { kind: "to", screen: "status" };
+							} catch (error) {
+								if (signal.aborted || !owner.isCurrent()) return { kind: "close" };
+								safeNotify(ctx, formatError(error), "error");
+								return { kind: "stay" };
+							}
+						},
 						add: async () => runFlow(() => addFlow(pi, ctx, records, root.effectiveRoot)),
 						switch: async ({ signal }) =>
 							runFlow(() => switchFlow(pi, ctx, records, currentPath, signal)),
@@ -125,7 +165,7 @@ export function registerWorktreeCommand(
 					},
 				});
 				await runMenu(ctx, menu, {
-					getState: () => undefined,
+					getState: () => state,
 					signal: owner.signal,
 					isCurrent: owner.isCurrent,
 				});
@@ -191,8 +231,14 @@ async function addFlow(
 	}
 
 	let startOid: string | undefined;
-	let startLabel: string | undefined;
-	if (!branchExists) {
+	let provenance: AddBaseProvenance;
+	if (branchExists) {
+		provenance = {
+			kind: "existing-local-branch",
+			label: branch,
+			oid: await resolveCommit(pi, ctx.cwd, `refs/heads/${branch}`, ctx.signal),
+		};
+	} else {
 		const defaultStart = await symbolicBranch(pi, ctx.cwd, ctx.signal);
 		const requestedStart = await ctx.ui.input(
 			stripTerminalControls(
@@ -203,9 +249,15 @@ async function addFlow(
 			stripTerminalControls(defaultStart ?? "commit-ish"),
 		);
 		if (requestedStart === undefined) return;
-		startLabel = requestedStart.trim() || defaultStart;
+		const explicitStart = requestedStart.trim();
+		const startLabel = explicitStart || defaultStart;
 		if (!startLabel) throw new Error("An explicit start point is required from detached HEAD.");
 		startOid = await resolveCommit(pi, ctx.cwd, startLabel, ctx.signal);
+		provenance = {
+			kind: explicitStart ? "explicit-commit-ish" : "current-branch",
+			label: startLabel,
+			oid: startOid,
+		};
 	}
 
 	const suggestedPath = defaultWorktreePath(main.path, branch, worktreeRoot);
@@ -223,10 +275,33 @@ async function addFlow(
 		throw new Error(`The target path is already registered as a worktree: ${pathCollision.path}.`);
 	}
 
-	const summary = branchExists
-		? `Attach existing branch ${branch} at ${targetPath}?`
-		: `Create branch ${branch} from ${startLabel} at ${targetPath}?`;
-	if (!(await ctx.ui.confirm("Create Git worktree", stripTerminalControls(summary)))) return;
+	const summary = formatAddPreview(branch, branchExists, provenance, targetPath);
+	if (!(await ctx.ui.confirm("Create Git worktree", summary))) return;
+
+	assertTargetFilesystemAvailable(targetPath);
+	const latestRecords = await listWorktrees(pi, ctx.cwd, ctx.signal);
+	const latestOccupied = worktreeForBranch(latestRecords, branch);
+	if (latestOccupied) {
+		throw new Error(
+			`Branch ${branch} is now checked out at ${latestOccupied.path}; select it again.`,
+		);
+	}
+	const latestPathCollision = latestRecords.find((record) => pathsEqual(record.path, targetPath));
+	if (latestPathCollision) {
+		throw new Error(
+			`The target path is now registered as a worktree: ${latestPathCollision.path}. Select it again.`,
+		);
+	}
+	const branchStillExists = await localBranchExists(pi, ctx.cwd, branch, ctx.signal);
+	if (branchStillExists !== branchExists) {
+		throw new Error(`Branch ${branch} changed after confirmation; select it again.`);
+	}
+	if (branchExists) {
+		const latestOid = await resolveCommit(pi, ctx.cwd, `refs/heads/${branch}`, ctx.signal);
+		if (latestOid !== provenance.oid) {
+			throw new Error(`Branch ${branch} moved after confirmation; select it again.`);
+		}
+	}
 
 	assertTargetFilesystemAvailable(targetPath);
 	await addWorktree(pi, ctx.cwd, { path: targetPath, branch, startOid }, ctx.signal);
@@ -234,8 +309,10 @@ async function addFlow(
 	try {
 		const updated = await listWorktrees(pi, ctx.cwd, ctx.signal);
 		const verified = updated.find((record) => pathsEqual(record.path, targetPath));
-		if (!verified || verified.branch !== branch) {
-			throw new Error("the expected path and branch were not present in Git porcelain output");
+		if (!verified || verified.branch !== branch || verified.head !== provenance.oid) {
+			throw new Error(
+				"the expected path, branch, and approved HEAD were not present in Git porcelain output",
+			);
 		}
 		created = verified;
 	} catch (error) {
@@ -257,6 +334,41 @@ async function addFlow(
 		}
 		await switchToWorktree(ctx, latest.path);
 	}
+}
+
+function formatAddPreview(
+	branch: string,
+	branchExists: boolean,
+	provenance: AddBaseProvenance,
+	targetPath: string,
+): string {
+	const base =
+		provenance.kind === "existing-local-branch"
+			? `existing local branch ${quoteTerminalValue(provenance.label)}`
+			: provenance.kind === "current-branch"
+				? `current branch ${quoteTerminalValue(provenance.label)}`
+				: `explicit commit-ish ${quoteTerminalValue(provenance.label)}`;
+	return [
+		`Branch: ${quoteTerminalValue(branch)} (${branchExists ? "existing" : "new"} local branch)`,
+		`Base: ${base}`,
+		`Base commit: ${provenance.oid}`,
+		`Path: ${quoteTerminalValue(targetPath)}`,
+	].join("; ");
+}
+
+function quoteTerminalValue(value: string): string {
+	let quoted = "";
+	for (const character of value) {
+		const code = character.codePointAt(0) ?? 0;
+		if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+			quoted += `\\u${code.toString(16).padStart(4, "0")}`;
+		} else if (character === "\\" || character === '"') {
+			quoted += `\\${character}`;
+		} else {
+			quoted += character;
+		}
+	}
+	return `"${quoted}"`;
 }
 
 function assertTargetFilesystemAvailable(targetPath: string): void {
