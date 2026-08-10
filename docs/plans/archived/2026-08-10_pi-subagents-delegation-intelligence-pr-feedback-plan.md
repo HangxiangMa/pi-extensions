@@ -29,13 +29,13 @@ The graph index `pi-extensions-quiet-valley-ee3d` matched the worktree, branch, 
 - [x] Audit the final changes against `docs/extension-conventions.md` and `docs/extension-settings.md`; no settings changed, tool actions are documented and tested, writes are serialized and atomic, inspection is read-only and bounded, and workflow finalization persists after abort or replacement before status cleanup.
 - [x] Run focused tests, `npm run check`, `git diff --check`, `just pack subagents`, and an RPC extension-load smoke; 312 package tests, 2,758 root tests, all validators, the 85-file pack, and `get_state` passed.
 - [x] Re-read every pull-request feedback item and inspect the final diff; every item has the evidence-backed outcome recorded above.
-- [ ] Reply to and resolve each addressed review thread only after the verified fix commit is pushed.
-- [ ] Archive this completed plan, create any final signed documentation commit, push without rewriting history, and refresh pull request #662 once.
+- [x] Reply to and resolve each addressed review thread only after the verified fix commit was pushed; all four replies cite `e90327cd`, and all four GraphQL thread states are resolved.
+- [x] Archive this completed plan for a final signed documentation commit; fix commit `e90327cd3e623d3b1ebdbe8e631cca7edaa63249` was pushed without rewriting history, and the one final pull-request refresh remains deferred until after the archive push.
 
 ## Completion Checklist
 
 - [x] Every feedback item has an evidence-backed final outcome.
 - [x] Every actionable item is fixed and covered by deterministic regression tests.
 - [x] Required checks and package/runtime smokes pass with no concealed failures.
-- [ ] Review threads are answered and resolved only after verification.
-- [ ] Signed commits are pushed without rewriting history.
+- [x] Review threads are answered and resolved only after verification.
+- [x] The signed fix commit is pushed without rewriting history; the archive commit will preserve the same rule.
