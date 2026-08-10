@@ -73,8 +73,7 @@ packages/pi-tool/
 ├── src/
 │   ├── index.ts         # Thin Pi package entrypoint
 │   ├── tool.ts          # Command and session lifecycle ownership
-│   ├── tool-browser.ts  # Searchable TUI catalog component
-│   └── tool-catalog.ts  # Read-only catalog and exact detail projection
+│   └── tool-catalog.ts  # Standard browse menu and exact detail projection
 ├── test/
 ├── README.md
 ├── LICENSE

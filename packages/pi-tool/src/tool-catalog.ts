@@ -21,14 +21,6 @@ export interface ToolCatalog {
 	items: ToolCatalogItem[];
 }
 
-interface ToolMenuState {
-	catalog: ToolCatalog;
-	selectedItemId?: string;
-}
-
-type ToolMenuScreen = "tools" | "detail";
-type ToolMenuAction = "view";
-
 export function createToolCatalog(
 	tools: ToolCatalogState["tools"],
 	activeToolNames: readonly string[],
@@ -84,57 +76,26 @@ export function createToolCatalog(
 	return { title: `Tools · ${activeCount}/${tools.length} active`, items };
 }
 
-export function createToolMenu(): MenuDefinition<ToolMenuState, ToolMenuScreen, ToolMenuAction> {
+export function createToolMenu(catalog: ToolCatalog): MenuDefinition<undefined, "tools", never> {
 	return {
 		start: "tools",
 		screens: {
-			tools: ({ state }) => ({
-				kind: "choice",
-				title: state.catalog.title,
-				items: state.catalog.items.map((item) => ({
+			tools: () => ({
+				kind: "browse",
+				title: catalog.title,
+				items: catalog.items.map((item) => ({
 					id: item.id,
-					label: `${item.label} [${item.statusText}]`,
+					label: item.label,
+					statusText: item.statusText,
 					description: item.description,
+					searchText: item.searchText,
+					detailDocument: {
+						content: item.detailContent,
+						format: { kind: "text" },
+					},
 				})),
-				action: "view",
-				initialItemId: state.selectedItemId,
-				viewportSize: 12,
-				hint: "close",
-			}),
-			detail: ({ state }) => {
-				const item = state.catalog.items.find(({ id }) => id === state.selectedItemId);
-				return {
-					kind: "review",
-					title: item?.label ?? "Tool details",
-					content: item?.detailContent ?? "The selected tool is no longer available.",
-					format: { kind: "text" },
-					viewportSize: "adaptive",
-					hint: "back",
-				};
-			},
-		},
-		actions: {
-			view: ({ state, itemId }) => {
-				state.selectedItemId = itemId;
-				return { kind: "to", screen: "detail" };
-			},
-		},
-	};
-}
-
-export function createToolDetailMenu(
-	item: ToolCatalogItem,
-): MenuDefinition<undefined, "detail", never> {
-	return {
-		start: "detail",
-		screens: {
-			detail: () => ({
-				kind: "review",
-				title: item.label,
-				content: item.detailContent,
-				format: { kind: "text" },
 				viewportSize: "adaptive",
-				hint: "back",
+				hint: "close",
 			}),
 		},
 		actions: {},
