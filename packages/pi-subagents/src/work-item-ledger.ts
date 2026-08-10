@@ -3,13 +3,24 @@ import {
 	type ManagedIntegrationExpectation,
 	verifyManagedIntegration,
 } from "./integration-controller.js";
+import {
+	isWorkflowTreeIdentity,
+	sameWorkflowTreeIdentity,
+	type WorkflowTreeIdentity,
+} from "./workflow-tree-identity.js";
+import {
+	isWorkflowVerificationReceipt,
+	type WorkflowVerificationReceipt,
+} from "./workflow-verification.js";
 
-export const WORK_ITEM_LEDGER_VERSION = "pi-subagents:work-ledger:v1" as const;
+export const WORK_ITEM_LEDGER_VERSION = "pi-subagents:work-ledger:v2" as const;
+const LEGACY_WORK_ITEM_LEDGER_VERSION = "pi-subagents:work-ledger:v1" as const;
 
 export type WorkItemState =
 	| "pending"
 	| "ready"
 	| "running"
+	| "awaiting-verification"
 	| "blocked"
 	| "needs-input"
 	| "completed"
@@ -74,6 +85,8 @@ export interface WorkItemRecord {
 	verifierFor?: string;
 	dependencyPolicy: "completed" | "settled";
 	verificationAccepted: boolean;
+	stagedTreeIdentity?: WorkflowTreeIdentity;
+	verificationReceipt?: WorkflowVerificationReceipt;
 	invalidationReasons: string[];
 	outcomeReason?: string;
 }
@@ -94,7 +107,17 @@ export interface CompleteWorkItemInput {
 	taskGeneration: number;
 	executionPlanId?: string;
 	artifacts?: Array<Omit<WorkArtifactReference, "producerTaskId" | "generation">>;
-	verificationAccepted?: boolean;
+}
+
+export interface StageWorkItemVerificationInput extends CompleteWorkItemInput {
+	executionPlanId: string;
+	treeIdentity: WorkflowTreeIdentity;
+}
+
+export interface CompleteWorkItemVerificationInput {
+	taskGeneration: number;
+	executionPlanId: string;
+	receipt: WorkflowVerificationReceipt;
 }
 
 const MAX_ITEMS = 64;
@@ -165,16 +188,105 @@ export class WorkItemLedger {
 		item.acceptedExecutionPlanId = input.executionPlanId?.slice(0, 256);
 		item.artifactHistory.push(...item.artifacts.map((artifact) => structuredClone(artifact)));
 		item.artifacts = normalizeArtifacts(input.artifacts ?? [], id, this.generation + 1);
-		item.verificationAccepted = input.verificationAccepted === true;
+		item.verificationAccepted = false;
+		item.stagedTreeIdentity = undefined;
+		item.verificationReceipt = undefined;
 		item.state = "completed";
 		item.generation = ++this.generation;
-		if (item.verifierFor && item.verificationAccepted) {
-			const verified = this.require(item.verifierFor);
-			verified.verificationAccepted = true;
-			verified.generation = this.generation;
-		}
 		this.refreshReadyState();
 		return structuredClone(item);
+	}
+
+	stageForVerification(id: string, input: StageWorkItemVerificationInput): WorkItemRecord {
+		const item = this.require(id);
+		this.assertMutable(item);
+		if (item.state !== "running") {
+			throw new Error(`WorkItem ${id} cannot stage verification while ${item.state}`);
+		}
+		if (input.taskGeneration !== item.taskGeneration) {
+			throw new Error(`WorkItem ${id} rejected a stale task generation`);
+		}
+		validatePlanId(input.executionPlanId, "staged execution plan");
+		if (!isWorkflowTreeIdentity(input.treeIdentity)) {
+			throw new Error(`WorkItem ${id} received an invalid staged tree identity`);
+		}
+		item.acceptedExecutionPlanId = input.executionPlanId;
+		item.artifactHistory.push(...item.artifacts.map((artifact) => structuredClone(artifact)));
+		item.artifacts = normalizeArtifacts(input.artifacts ?? [], id, this.generation + 1);
+		item.verificationAccepted = false;
+		item.stagedTreeIdentity = structuredClone(input.treeIdentity);
+		item.verificationReceipt = undefined;
+		item.state = "awaiting-verification";
+		item.generation = ++this.generation;
+		this.refreshReadyState();
+		return structuredClone(item);
+	}
+
+	completeVerification(
+		verifierId: string,
+		input: CompleteWorkItemVerificationInput,
+	): { target: WorkItemRecord; verifier: WorkItemRecord } {
+		const verifier = this.require(verifierId);
+		this.assertMutable(verifier);
+		if (verifier.state !== "running" || !verifier.verifierFor) {
+			throw new Error(`WorkItem ${verifierId} is not a running verifier`);
+		}
+		if (input.taskGeneration !== verifier.taskGeneration) {
+			throw new Error(`WorkItem ${verifierId} rejected a stale verifier generation`);
+		}
+		validatePlanId(input.executionPlanId, "verifier execution plan");
+		if (!isWorkflowVerificationReceipt(input.receipt)) {
+			throw new Error(`WorkItem ${verifierId} received an invalid verification receipt`);
+		}
+		const target = this.require(verifier.verifierFor);
+		if (target.state !== "awaiting-verification") {
+			throw new Error(`WorkItem ${target.id} is not awaiting verification`);
+		}
+		assertReceiptMatches(target, verifier, input.executionPlanId, input.receipt);
+		verifier.acceptedExecutionPlanId = input.executionPlanId;
+		verifier.verificationReceipt = undefined;
+		verifier.verificationAccepted = false;
+		verifier.state = "completed";
+		verifier.generation = ++this.generation;
+		target.verificationReceipt = structuredClone(input.receipt);
+		target.verificationAccepted = input.receipt.decision === "accept";
+		target.outcomeReason =
+			input.receipt.decision === "accept"
+				? undefined
+				: input.receipt.decision === "rework"
+					? "verification-rework"
+					: "verification-rejected";
+		if (input.receipt.decision === "accept") {
+			target.artifacts = target.artifacts.map((artifact) => ({ ...artifact, verified: true }));
+			target.state = "completed";
+		} else {
+			target.state = input.receipt.decision === "rework" ? "blocked" : "failed";
+			this.invalidateDependents(target.id, verifier.id, target.outcomeReason);
+		}
+		target.generation = ++this.generation;
+		this.refreshReadyState();
+		return { target: structuredClone(target), verifier: structuredClone(verifier) };
+	}
+
+	failVerification(verifierId: string, reason: string): WorkItemRecord[] {
+		const verifier = this.require(verifierId);
+		if (!verifier.verifierFor) throw new Error(`WorkItem ${verifierId} is not a verifier`);
+		const target = this.require(verifier.verifierFor);
+		const boundedReason = bounded(reason, MAX_TEXT_LENGTH);
+		if (!boundedReason) throw new Error("Verification failure requires a reason");
+		if (!TERMINAL_STATES.has(verifier.state)) {
+			verifier.state = "failed";
+			verifier.outcomeReason = boundedReason;
+			verifier.generation = ++this.generation;
+		}
+		if (target.state === "awaiting-verification") {
+			target.state = "failed";
+			target.verificationAccepted = false;
+			target.outcomeReason = boundedReason;
+			target.generation = ++this.generation;
+		}
+		const invalidated = this.invalidateDependents(target.id, verifier.id, boundedReason);
+		return [structuredClone(target), structuredClone(verifier), ...invalidated];
 	}
 
 	settle(
@@ -184,7 +296,12 @@ export class WorkItemLedger {
 	): WorkItemRecord {
 		const item = this.require(id);
 		this.assertMutable(item);
-		if (item.state !== "running" && item.state !== "ready" && item.state !== "pending") {
+		if (
+			item.state !== "running" &&
+			item.state !== "awaiting-verification" &&
+			item.state !== "ready" &&
+			item.state !== "pending"
+		) {
 			throw new Error(`WorkItem ${id} cannot settle while ${item.state}`);
 		}
 		item.state = state;
@@ -230,6 +347,8 @@ export class WorkItemLedger {
 		item.acceptedExecutionPlanId = undefined;
 		item.outcomeReason = undefined;
 		item.verificationAccepted = false;
+		item.stagedTreeIdentity = undefined;
+		item.verificationReceipt = undefined;
 		item.generation = ++this.generation;
 		this.refreshReadyState();
 		return structuredClone(item);
@@ -271,12 +390,14 @@ export class WorkItemLedger {
 	static restore(snapshot: WorkItemLedgerSnapshot): WorkItemLedger {
 		if (
 			!snapshot ||
-			snapshot.version !== WORK_ITEM_LEDGER_VERSION ||
+			(snapshot.version !== WORK_ITEM_LEDGER_VERSION &&
+				(snapshot.version as string) !== LEGACY_WORK_ITEM_LEDGER_VERSION) ||
 			!Number.isSafeInteger(snapshot.generation) ||
 			snapshot.generation < 0
 		) {
 			throw new Error("Unsupported or malformed WorkItem ledger snapshot");
 		}
+		const isLegacySnapshot = (snapshot.version as string) === LEGACY_WORK_ITEM_LEDGER_VERSION;
 		if (
 			!Array.isArray(snapshot.items) ||
 			snapshot.items.length < 1 ||
@@ -309,23 +430,58 @@ export class WorkItemLedger {
 		ledger.generation = snapshot.generation;
 		for (const stored of snapshot.items) {
 			const item = ledger.require(stored.id);
-			item.state = stored.state === "running" ? "interrupted" : stored.state;
+			item.state =
+				stored.state === "running" || stored.state === "awaiting-verification"
+					? "interrupted"
+					: stored.state;
 			item.generation = stored.generation;
 			item.taskGeneration = stored.taskGeneration ?? 1;
 			item.assignedAgentId = stored.assignedAgentId;
 			item.acceptedExecutionPlanId = stored.acceptedExecutionPlanId;
 			item.inputArtifactVersions = { ...stored.inputArtifactVersions };
-			item.artifacts = normalizeStoredArtifacts(stored.artifacts, stored.id, stored.generation);
+			item.artifacts = normalizeStoredArtifacts(
+				stored.artifacts,
+				stored.id,
+				stored.generation,
+				!isLegacySnapshot,
+			);
 			item.artifactHistory = normalizeStoredArtifacts(
 				stored.artifactHistory ?? [],
 				stored.id,
 				stored.generation,
+				!isLegacySnapshot,
 			);
-			item.verificationAccepted = stored.verificationAccepted;
+			item.verificationAccepted = !isLegacySnapshot && stored.verificationAccepted;
+			item.stagedTreeIdentity =
+				!isLegacySnapshot && stored.stagedTreeIdentity
+					? structuredClone(stored.stagedTreeIdentity)
+					: undefined;
+			item.verificationReceipt =
+				!isLegacySnapshot && stored.verificationReceipt
+					? structuredClone(stored.verificationReceipt)
+					: undefined;
 			item.invalidationReasons = [...stored.invalidationReasons];
 			item.outcomeReason = stored.outcomeReason;
 		}
+		ledger.validateRestoredVerificationLinks();
 		return ledger;
+	}
+
+	private validateRestoredVerificationLinks(): void {
+		for (const target of this.items.values()) {
+			const receipt = target.verificationReceipt;
+			if (!receipt) continue;
+			const verifier = this.items.get(receipt.verifierTaskId);
+			if (
+				!verifier ||
+				verifier.verifierFor !== target.id ||
+				verifier.state !== "completed" ||
+				verifier.taskGeneration !== receipt.verifierTaskGeneration ||
+				verifier.acceptedExecutionPlanId !== receipt.verifierExecutionPlanId
+			) {
+				throw new Error(`Malformed stored WorkItem verification link for ${target.id}`);
+			}
+		}
 	}
 
 	private addDefinition(definition: WorkItemDefinition): void {
@@ -365,6 +521,8 @@ export class WorkItemLedger {
 			verifierFor: definition.verifierFor,
 			dependencyPolicy: definition.dependencyPolicy ?? "completed",
 			verificationAccepted: false,
+			stagedTreeIdentity: undefined,
+			verificationReceipt: undefined,
 			invalidationReasons: [],
 		});
 	}
@@ -406,10 +564,18 @@ export class WorkItemLedger {
 		for (const item of this.items.values()) {
 			if (item.state !== "pending") continue;
 			const dependencies = item.dependencies.map((id) => this.require(id));
-			const dependenciesReady =
-				item.dependencyPolicy === "settled"
+			const dependenciesReady = item.verifierFor
+				? dependencies.every((dependency) =>
+						dependency.id === item.verifierFor
+							? dependency.state === "awaiting-verification"
+							: dependency.state === "completed",
+					)
+				: item.dependencyPolicy === "settled"
 					? dependencies.every(
-							(dependency) => !["pending", "ready", "running"].includes(dependency.state),
+							(dependency) =>
+								!["pending", "ready", "running", "awaiting-verification"].includes(
+									dependency.state,
+								),
 						)
 					: dependencies.every((dependency) => dependency.state === "completed");
 			if (!dependenciesReady) continue;
@@ -433,6 +599,31 @@ export class WorkItemLedger {
 		}
 	}
 
+	private invalidateDependents(
+		targetId: string,
+		excludedId: string,
+		reason: string | undefined,
+	): WorkItemRecord[] {
+		const target = this.require(targetId);
+		const normalizedReason = bounded(reason ?? "verification-not-accepted", MAX_TEXT_LENGTH);
+		const queue = target.dependents.filter((id) => id !== excludedId);
+		const seen = new Set<string>();
+		const affected: WorkItemRecord[] = [];
+		while (queue.length > 0) {
+			const currentId = queue.shift();
+			if (!currentId || seen.has(currentId)) continue;
+			seen.add(currentId);
+			const current = this.require(currentId);
+			current.state = "invalidated";
+			current.taskGeneration++;
+			current.invalidationReasons.push(`${targetId}:${normalizedReason}`);
+			current.generation = ++this.generation;
+			affected.push(structuredClone(current));
+			queue.push(...current.dependents.filter((id) => id !== excludedId));
+		}
+		return affected;
+	}
+
 	private require(id: string): WorkItemRecord {
 		const item = this.items.get(id);
 		if (!item) throw new Error(`Unknown WorkItem ${id}`);
@@ -446,11 +637,36 @@ export class WorkItemLedger {
 	}
 }
 
+function assertReceiptMatches(
+	target: WorkItemRecord,
+	verifier: WorkItemRecord,
+	verifierExecutionPlanId: string,
+	receipt: WorkflowVerificationReceipt,
+): void {
+	if (
+		receipt.targetTaskId !== target.id ||
+		receipt.targetTaskGeneration !== target.taskGeneration ||
+		receipt.targetExecutionPlanId !== target.acceptedExecutionPlanId ||
+		receipt.verifierTaskId !== verifier.id ||
+		receipt.verifierTaskGeneration !== verifier.taskGeneration ||
+		receipt.verifierExecutionPlanId !== verifierExecutionPlanId ||
+		!target.stagedTreeIdentity ||
+		!sameWorkflowTreeIdentity(receipt.treeIdentity, target.stagedTreeIdentity)
+	) {
+		throw new Error("WorkItem verification receipt has stale or mismatched executor identity");
+	}
+}
+
+function validatePlanId(value: string, label: string): void {
+	if (!/^[a-f0-9]{64}$/u.test(value)) throw new Error(`Invalid ${label}`);
+}
+
 function validateStoredRecord(item: WorkItemRecord, ledgerGeneration: number): void {
 	const states: WorkItemState[] = [
 		"pending",
 		"ready",
 		"running",
+		"awaiting-verification",
 		"blocked",
 		"needs-input",
 		"completed",
@@ -545,10 +761,39 @@ function validateStoredRecord(item: WorkItemRecord, ledgerGeneration: number): v
 			(typeof item.outcomeReason !== "string" ||
 				item.outcomeReason.length > MAX_TEXT_LENGTH ||
 				item.outcomeReason.trim() !== item.outcomeReason)) ||
-		typeof item.verificationAccepted !== "boolean"
+		typeof item.verificationAccepted !== "boolean" ||
+		(item.stagedTreeIdentity !== undefined && !isWorkflowTreeIdentity(item.stagedTreeIdentity)) ||
+		(item.verificationReceipt !== undefined &&
+			(!isWorkflowVerificationReceipt(item.verificationReceipt) ||
+				!storedVerificationMatchesItem(item, item.verificationReceipt))) ||
+		(item.state === "awaiting-verification" &&
+			(!item.stagedTreeIdentity || !item.acceptedExecutionPlanId)) ||
+		(item.stagedTreeIdentity !== undefined &&
+			item.state === "completed" &&
+			item.verificationReceipt === undefined)
 	) {
 		throw new Error(`Malformed stored WorkItem ${String(item?.id ?? "unknown")}`);
 	}
+}
+
+function storedVerificationMatchesItem(
+	item: WorkItemRecord,
+	receipt: WorkflowVerificationReceipt,
+): boolean {
+	return (
+		!item.verifierFor &&
+		receipt.targetTaskId === item.id &&
+		receipt.targetTaskGeneration === item.taskGeneration &&
+		receipt.targetExecutionPlanId === item.acceptedExecutionPlanId &&
+		item.stagedTreeIdentity !== undefined &&
+		sameWorkflowTreeIdentity(receipt.treeIdentity, item.stagedTreeIdentity) &&
+		item.verificationAccepted === (receipt.decision === "accept") &&
+		(receipt.decision === "accept"
+			? item.state === "completed"
+			: receipt.decision === "rework"
+				? item.state === "blocked"
+				: item.state === "failed")
+	);
 }
 
 function validStoredArtifacts(
@@ -599,11 +844,15 @@ function normalizeStoredArtifacts(
 	values: WorkArtifactReference[],
 	defaultProducerTaskId: string,
 	defaultGeneration: number,
+	preserveVerification: boolean,
 ): WorkArtifactReference[] {
 	if (!validStoredArtifacts(values, defaultProducerTaskId, defaultGeneration)) {
 		throw new Error(`Malformed stored artifacts for WorkItem ${defaultProducerTaskId}`);
 	}
-	return values.map((value) => structuredClone(value));
+	return values.map((value) => ({
+		...structuredClone(value),
+		verified: preserveVerification && value.verified,
+	}));
 }
 
 function normalizeArtifacts(
@@ -627,7 +876,7 @@ function normalizeArtifacts(
 			...(value.digest ? { digest: bounded(value.digest, MAX_TEXT_LENGTH) } : {}),
 			producerTaskId,
 			generation,
-			verified: value.verified === true,
+			verified: false,
 		};
 	});
 }

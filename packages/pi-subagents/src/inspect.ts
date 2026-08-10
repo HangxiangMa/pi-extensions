@@ -537,6 +537,31 @@ function projectWorkflow(workflow: WorkItemLedgerSnapshot): Record<string, unkno
 			verified: artifact.verified,
 		})),
 		verificationAccepted: item.verificationAccepted,
+		stagedTreeIdentity: item.stagedTreeIdentity
+			? {
+					version: item.stagedTreeIdentity.version,
+					kind: item.stagedTreeIdentity.kind,
+					digest: item.stagedTreeIdentity.digest,
+				}
+			: undefined,
+		verificationReceipt: item.verificationReceipt
+			? {
+					version: item.verificationReceipt.version,
+					decision: item.verificationReceipt.decision,
+					targetTaskId: boundedPrivateText(item.verificationReceipt.targetTaskId, 256),
+					targetTaskGeneration: item.verificationReceipt.targetTaskGeneration,
+					targetExecutionPlanId: item.verificationReceipt.targetExecutionPlanId,
+					verifierTaskId: boundedPrivateText(item.verificationReceipt.verifierTaskId, 256),
+					verifierTaskGeneration: item.verificationReceipt.verifierTaskGeneration,
+					verifierExecutionPlanId: item.verificationReceipt.verifierExecutionPlanId,
+					treeIdentity: item.verificationReceipt.treeIdentity,
+					summary: boundedPrivateText(item.verificationReceipt.summary, 8 * 1024),
+					evidenceCount: item.verificationReceipt.evidence.length,
+					limitationCount: item.verificationReceipt.limitations.length,
+					createdAt: item.verificationReceipt.createdAt,
+					truncated: item.verificationReceipt.truncated,
+				}
+			: undefined,
 		outcomeReason: item.outcomeReason
 			? boundedPrivateText(item.outcomeReason, 2 * 1024)
 			: undefined,

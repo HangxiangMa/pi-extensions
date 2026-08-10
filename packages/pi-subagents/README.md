@@ -413,11 +413,58 @@ Run an explicit dependency workflow:
 }
 ```
 
+A verification-gated implementation declares one distinct verifier:
+
+```json
+{
+  "workflow": {
+    "tasks": [
+      {
+        "id": "implementation",
+        "agent": "worker",
+        "task": "Implement the contracted change.",
+        "resultFormat": "structured-v2",
+        "contract": {
+          "version": "pi-subagents:delegation:v2",
+          "level": "full",
+          "taskId": "implementation",
+          "objective": "Implement the contracted change",
+          "admission": {
+            "contextPressure": "medium",
+            "independentWorkItems": 1,
+            "coupling": "dense",
+            "verificationRequired": true,
+            "verificationAvailable": true,
+            "budgetAllowsChildren": true,
+            "requirementsComplete": true
+          }
+        }
+      },
+      {
+        "id": "verification",
+        "agent": "reviewer",
+        "task": "Independently verify the staged result.",
+        "dependsOn": ["implementation"],
+        "verifierFor": "implementation",
+        "resultFormat": "structured-v2"
+      }
+    ]
+  }
+}
+```
+
 Cycles, missing dependencies, conflicting integration owners, recursive workflow grandchildren, and unsafe retry or hedge policies fail before child launch.
 Workflow scheduling starts at most two mutating tasks concurrently, while declared read-only work may use the existing four-child ceiling.
 Set `workflow.honorAdmission: true` only when explicit contract admission metadata should be allowed to decline parent-owned or insufficient-evidence work before launch; admission never silently widens the requested architecture.
 Workflow result details include the final ledger, scheduling decisions, artifact versions, task generations, attempts, hedge use, accepted plan identity, and bounded capability-grant metadata.
-Explicit workflow transitions are also atomically persisted as mode-0600, private-text-redacted snapshots for current-session `list_workflows` and `get_workflow` inspection; in-flight tasks inspect as `interrupted`, and no prior side effect is automatically resumed.
+A task that explicitly requires independent verification must have exactly one direct-dependent `verifierFor` task using a different agent, and both tasks must request `structured-v2`.
+The producer stops in `awaiting-verification`, its own passing verification claims remain untrusted, and ordinary downstream tasks stay blocked until the executor records an accepted verifier receipt.
+The verifier runs alone in a fresh subprocess context against one bounded Git-visible tree identity and must encode `verification-accepted`, `verification-rework`, or `verification-rejected` through the documented `structured-v2` status and reason fields.
+Dirty-tree identity covers at most 1 MiB across separately framed staged and unstaged binary diffs plus bounded non-ignored untracked paths and bytes; submodules, unsupported states, and changing trees fail closed.
+A rework or rejection preserves bounded evidence but does not replay the producer automatically.
+This acceptance gate does not isolate operating-system effects and does not make shared-workspace mutation into manager-controlled patch integration.
+Explicit workflow transitions are also atomically persisted as mode-0600, private-text-redacted snapshots for current-session `list_workflows` and `get_workflow` inspection; running and awaiting-verification tasks inspect as `interrupted`, and no prior side effect is automatically resumed.
+When a v1 ledger is restored, legacy self-reported verification flags and artifact trust are cleared because they have no executor receipt.
 
 ## 🔁 Stateful agents
 
@@ -890,6 +937,8 @@ packages/pi-subagents/
 │   ├── execution-plan.ts         # Executor-owned authority and resource resolution
 │   ├── work-item-ledger.ts       # Persistent dependency and artifact state machine
 │   ├── work-item-persistence.ts  # Atomic redacted workflow state and inspection
+│   ├── workflow-verification.ts  # Executor-owned independent-verifier receipts
+│   ├── workflow-tree-identity.ts # Bounded exact Git-visible tree identities
 │   ├── integration-controller.ts # Fail-closed canonical integration admission
 │   ├── adaptive-scheduler.ts     # Dependency, capacity, budget, and conflict scheduling
 │   ├── semantic-snapshot.ts      # Privacy-safe continuation compatibility checks

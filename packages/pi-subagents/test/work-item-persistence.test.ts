@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
@@ -9,6 +9,7 @@ import {
 	inspectSessionWorkflows,
 	WorkItemPersistence,
 } from "../src/work-item-persistence.js";
+import type { WorkflowVerificationReceipt } from "../src/workflow-verification.js";
 
 test("session workflow persistence is bounded, redacted, and read-only inspectable", async () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-work-ledger-session-"));
@@ -31,6 +32,68 @@ test("session workflow persistence is bounded, redacted, and read-only inspectab
 	assert.equal(inspected.workflows[0]?.items[0]?.state, "interrupted");
 	assert.equal(inspected.workflows[0]?.items[0]?.objective, "visible [private content omitted]");
 	assert.equal(inspected.workflows[0]?.items[0]?.readPaths[0], "src/[private content omitted]");
+	rmSync(directory, { recursive: true, force: true });
+});
+
+test("WorkItemPersistence restores staged verification inertly and redacts receipts", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-work-ledger-verification-"));
+	const file = path.join(directory, "workflow.json");
+	const persistence = new WorkItemPersistence(file);
+	const ledger = WorkItemLedger.create({
+		workflowId: "wf",
+		items: [
+			{ id: "implementation", objective: "implement", dependencies: [] },
+			{
+				id: "verification",
+				objective: "verify",
+				dependencies: ["implementation"],
+				verifierFor: "implementation",
+			},
+		],
+	});
+	const implementation = ledger.start("implementation", "agent-worker");
+	const tree = {
+		version: "pi-subagents:workflow-tree:v1" as const,
+		kind: "git-dirty" as const,
+		digest: "c".repeat(64),
+	};
+	ledger.stageForVerification("implementation", {
+		taskGeneration: implementation.taskGeneration,
+		executionPlanId: "a".repeat(64),
+		treeIdentity: tree,
+	});
+	await persistence.save(ledger.snapshot());
+	assert.equal(persistence.load()?.get("implementation")?.state, "interrupted");
+
+	const verification = ledger.start("verification", "agent-reviewer");
+	const receipt: WorkflowVerificationReceipt = {
+		version: "pi-subagents:workflow-verification:v1",
+		decision: "accept",
+		targetTaskId: "implementation",
+		targetTaskGeneration: implementation.taskGeneration,
+		targetExecutionPlanId: "a".repeat(64),
+		verifierTaskId: "verification",
+		verifierTaskGeneration: verification.taskGeneration,
+		verifierExecutionPlanId: "b".repeat(64),
+		treeIdentity: tree,
+		summary: "visible <private>secret</private>",
+		evidence: ["evidence <private>secret</private>"],
+		limitations: [],
+		createdAt: 123,
+		truncated: false,
+	};
+	ledger.completeVerification("verification", {
+		taskGeneration: verification.taskGeneration,
+		executionPlanId: "b".repeat(64),
+		receipt,
+	});
+	await persistence.save(ledger.snapshot());
+	assert.doesNotMatch(readFileSync(file, "utf8"), /secret/);
+	const restored = persistence.load();
+	assert.equal(
+		restored?.get("implementation")?.verificationReceipt?.summary,
+		"visible [private content omitted]",
+	);
 	rmSync(directory, { recursive: true, force: true });
 });
 

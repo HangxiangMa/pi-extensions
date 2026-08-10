@@ -106,7 +106,14 @@ const WorkflowTaskItem = Type.Object({
 	ownershipKeys: Type.Optional(Type.Array(Type.String({ maxLength: 256 }), { maxItems: 50 })),
 	acceptanceCriteria: Type.Optional(Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 50 })),
 	integrationOwner: Type.Optional(Type.Boolean()),
-	verifierFor: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+	verifierFor: Type.Optional(
+		Type.String({
+			minLength: 1,
+			maxLength: 256,
+			description:
+				"Target task ID for one distinct direct-dependent structured-v2 verifier. The executor gates target acceptance on a current exact-tree receipt.",
+		}),
+	),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 	timeoutMs: Type.Optional(TimeoutMs),
 	...TurnLimitFields,

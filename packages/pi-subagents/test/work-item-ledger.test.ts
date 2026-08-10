@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { type CompleteWorkItemInput, WorkItemLedger } from "../src/work-item-ledger.js";
+import type { WorkflowTreeIdentity } from "../src/workflow-tree-identity.js";
+import type { WorkflowVerificationReceipt } from "../src/workflow-verification.js";
 
 function complete(
 	ledger: WorkItemLedger,
@@ -8,6 +10,53 @@ function complete(
 	input: Omit<CompleteWorkItemInput, "taskGeneration"> = {},
 ): void {
 	ledger.complete(id, { ...input, taskGeneration: ledger.get(id)?.taskGeneration ?? 0 });
+}
+
+const PLAN_A = "a".repeat(64);
+const PLAN_B = "b".repeat(64);
+const TREE: WorkflowTreeIdentity = {
+	version: "pi-subagents:workflow-tree:v1",
+	kind: "git-dirty",
+	digest: "c".repeat(64),
+};
+
+function verificationLedger(): WorkItemLedger {
+	return WorkItemLedger.create({
+		workflowId: "wf",
+		items: [
+			{ id: "implementation", objective: "implement", dependencies: [] },
+			{
+				id: "verification",
+				objective: "verify",
+				dependencies: ["implementation"],
+				verifierFor: "implementation",
+			},
+			{ id: "consumer", objective: "consume", dependencies: ["implementation"] },
+		],
+	});
+}
+
+function receipt(
+	decision: WorkflowVerificationReceipt["decision"],
+	targetTaskGeneration: number,
+	verifierTaskGeneration: number,
+): WorkflowVerificationReceipt {
+	return {
+		version: "pi-subagents:workflow-verification:v1",
+		decision,
+		targetTaskId: "implementation",
+		targetTaskGeneration,
+		targetExecutionPlanId: PLAN_A,
+		verifierTaskId: "verification",
+		verifierTaskGeneration,
+		verifierExecutionPlanId: PLAN_B,
+		treeIdentity: TREE,
+		summary: `${decision} summary`,
+		evidence: ["evidence"],
+		limitations: decision === "rework" ? ["rework needed"] : [],
+		createdAt: 123,
+		truncated: false,
+	};
 }
 
 test("WorkItemLedger rejects invalid dependencies and cycles before activation", () => {
@@ -122,6 +171,28 @@ test("WorkItemLedger rejects a late completion from a replaced task generation",
 	);
 });
 
+test("WorkItemLedger restores legacy v1 snapshots without trusting self-reported verification", () => {
+	const ledger = WorkItemLedger.create({
+		workflowId: "wf",
+		items: [{ id: "task", objective: "task", dependencies: [] }],
+	});
+	const started = ledger.start("task", "agent-worker");
+	ledger.complete("task", {
+		taskGeneration: started.taskGeneration,
+		artifacts: [{ id: "patch", kind: "patch", version: "v1" }],
+	});
+	const legacy = ledger.snapshot();
+	legacy.version = "pi-subagents:work-ledger:v1" as never;
+	legacy.items[0].verificationAccepted = true;
+	legacy.items[0].artifacts[0].verified = true;
+	legacy.items[0].artifactHistory = [structuredClone(legacy.items[0].artifacts[0])];
+	const restored = WorkItemLedger.restore(legacy);
+	assert.equal(restored.snapshot().version, "pi-subagents:work-ledger:v2");
+	assert.equal(restored.get("task")?.verificationAccepted, false);
+	assert.equal(restored.get("task")?.artifacts[0]?.verified, false);
+	assert.equal(restored.get("task")?.artifactHistory[0]?.verified, false);
+});
+
 test("WorkItemLedger rejects malformed persisted identity and artifact metadata", () => {
 	const ledger = WorkItemLedger.create({
 		workflowId: "wf",
@@ -156,26 +227,138 @@ test("WorkItemLedger rejects malformed persisted identity and artifact metadata"
 		structuredClone(duplicateArtifact.items[0].artifacts[0]),
 	);
 	assert.throws(() => WorkItemLedger.restore(duplicateArtifact), /malformed stored/i);
+
+	const verified = verificationLedger();
+	const implementation = verified.start("implementation", "agent-worker");
+	verified.stageForVerification("implementation", {
+		taskGeneration: implementation.taskGeneration,
+		executionPlanId: PLAN_A,
+		treeIdentity: TREE,
+	});
+	const verifier = verified.start("verification", "agent-reviewer");
+	verified.completeVerification("verification", {
+		taskGeneration: verifier.taskGeneration,
+		executionPlanId: PLAN_B,
+		receipt: receipt("accept", implementation.taskGeneration, verifier.taskGeneration),
+	});
+	const malformedReceipt = verified.snapshot();
+	malformedReceipt.items[0].verificationReceipt = {
+		...malformedReceipt.items[0].verificationReceipt,
+		targetTaskId: "other",
+	} as never;
+	assert.throws(() => WorkItemLedger.restore(malformedReceipt), /malformed stored/i);
+	const malformedLink = verified.snapshot();
+	const storedVerifier = malformedLink.items.find((item) => item.id === "verification");
+	assert.ok(storedVerifier);
+	storedVerifier.acceptedExecutionPlanId = "c".repeat(64);
+	assert.throws(() => WorkItemLedger.restore(malformedLink), /verification link/i);
 });
 
-test("WorkItemLedger records explicit verifier acceptance on the verified item", () => {
-	const ledger = WorkItemLedger.create({
-		workflowId: "wf",
-		items: [
-			{ id: "implementation", objective: "implement", dependencies: [] },
-			{
-				id: "verification",
-				objective: "verify",
-				dependencies: ["implementation"],
-				verifierFor: "implementation",
-			},
-		],
+test("WorkItemLedger stages verification-required work and releases only its verifier", () => {
+	const ledger = verificationLedger();
+	const implementation = ledger.start("implementation", "agent-worker");
+	ledger.stageForVerification("implementation", {
+		taskGeneration: implementation.taskGeneration,
+		executionPlanId: PLAN_A,
+		artifacts: [{ id: "patch", kind: "patch", version: "v1", verified: true }],
+		treeIdentity: TREE,
 	});
-	ledger.start("implementation", "agent-worker");
-	complete(ledger, "implementation", {});
-	ledger.start("verification", "agent-reviewer");
-	complete(ledger, "verification", { verificationAccepted: true });
+	assert.equal(ledger.get("implementation")?.state, "awaiting-verification");
+	assert.equal(ledger.get("implementation")?.artifacts[0]?.verified, false);
+	assert.deepEqual(
+		ledger.readyItems().map((item) => item.id),
+		["verification"],
+	);
+	assert.equal(ledger.get("consumer")?.state, "pending");
+});
+
+test("WorkItemLedger accepts only an executor-owned current verifier receipt", () => {
+	const ledger = verificationLedger();
+	const implementation = ledger.start("implementation", "agent-worker");
+	ledger.stageForVerification("implementation", {
+		taskGeneration: implementation.taskGeneration,
+		executionPlanId: PLAN_A,
+		artifacts: [{ id: "patch", kind: "patch", version: "v1" }],
+		treeIdentity: TREE,
+	});
+	const verification = ledger.start("verification", "agent-reviewer");
+	ledger.completeVerification("verification", {
+		taskGeneration: verification.taskGeneration,
+		executionPlanId: PLAN_B,
+		receipt: receipt("accept", implementation.taskGeneration, verification.taskGeneration),
+	});
+	assert.equal(ledger.get("implementation")?.state, "completed");
 	assert.equal(ledger.get("implementation")?.verificationAccepted, true);
+	assert.equal(ledger.get("implementation")?.artifacts[0]?.verified, true);
+	assert.equal(ledger.get("verification")?.state, "completed");
+	assert.deepEqual(
+		ledger.readyItems().map((item) => item.id),
+		["consumer"],
+	);
+
+	const stale = verificationLedger();
+	const staleImplementation = stale.start("implementation", "agent-worker");
+	stale.stageForVerification("implementation", {
+		taskGeneration: staleImplementation.taskGeneration,
+		executionPlanId: PLAN_A,
+		treeIdentity: TREE,
+	});
+	const staleVerifier = stale.start("verification", "agent-reviewer");
+	assert.throws(
+		() =>
+			stale.completeVerification("verification", {
+				taskGeneration: staleVerifier.taskGeneration,
+				executionPlanId: PLAN_B,
+				receipt: receipt("accept", 99, staleVerifier.taskGeneration),
+			}),
+		/stale|generation/i,
+	);
+});
+
+test("WorkItemLedger preserves verifier evidence while rework and reject block acceptance", () => {
+	for (const decision of ["rework", "reject"] as const) {
+		const ledger = verificationLedger();
+		const implementation = ledger.start("implementation", "agent-worker");
+		ledger.stageForVerification("implementation", {
+			taskGeneration: implementation.taskGeneration,
+			executionPlanId: PLAN_A,
+			treeIdentity: TREE,
+		});
+		const verification = ledger.start("verification", "agent-reviewer");
+		ledger.completeVerification("verification", {
+			taskGeneration: verification.taskGeneration,
+			executionPlanId: PLAN_B,
+			receipt: receipt(decision, implementation.taskGeneration, verification.taskGeneration),
+		});
+		assert.equal(ledger.get("implementation")?.state, decision === "rework" ? "blocked" : "failed");
+		assert.equal(ledger.get("implementation")?.verificationAccepted, false);
+		assert.equal(ledger.get("verification")?.state, "completed");
+		assert.equal(ledger.get("consumer")?.state, "invalidated");
+		assert.equal(ledger.get("implementation")?.verificationReceipt?.decision, decision);
+	}
+});
+
+test("WorkItemLedger rejects late verifier acceptance after target cancellation", () => {
+	const ledger = verificationLedger();
+	const implementation = ledger.start("implementation", "agent-worker");
+	ledger.stageForVerification("implementation", {
+		taskGeneration: implementation.taskGeneration,
+		executionPlanId: PLAN_A,
+		treeIdentity: TREE,
+	});
+	const verification = ledger.start("verification", "agent-reviewer");
+	ledger.invalidate("implementation", "cancelled");
+	assert.throws(
+		() =>
+			ledger.completeVerification("verification", {
+				taskGeneration: verification.taskGeneration,
+				executionPlanId: PLAN_B,
+				receipt: receipt("accept", implementation.taskGeneration, verification.taskGeneration),
+			}),
+		/stale|running verifier|awaiting verification|terminal/i,
+	);
+	assert.equal(ledger.get("implementation")?.state, "stale");
+	assert.equal(ledger.get("implementation")?.verificationAccepted, false);
 });
 
 test("WorkItemLedger enforces one terminal owner and monotonic generations", () => {

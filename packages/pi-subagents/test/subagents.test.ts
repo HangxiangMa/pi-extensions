@@ -1,6 +1,7 @@
 // Cohesion justification: this established integration matrix shares transport/runtime fixtures and
 // cross-covers command, settings, agent lifecycle, and completion-delivery invariants.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs, {
 	existsSync,
 	lstatSync,
@@ -106,14 +107,28 @@ type SubagentTool = {
 				termination?: { reason: string; finalization: { status: string } };
 				attemptCount?: number;
 				hedged?: boolean;
-				outcome?: { status: string };
+				outcome?: { status: string; reasonCode?: string };
 				target?: { cwd: string; trust: { kind: string; projectTrusted: boolean } };
 			}>;
 			aggregator?: {
 				thinkingLevel?: string;
 				termination?: { reason: string; finalization: { status: string } };
 			};
-			workflow?: { items: Array<{ id: string; state: string }> };
+			workflow?: {
+				items: Array<{
+					id: string;
+					state: string;
+					verificationAccepted?: boolean;
+					artifacts?: Array<{ verified?: boolean }>;
+					verificationReceipt?: { decision?: string };
+				}>;
+			};
+			metrics?: {
+				workerReportedVerification?: number;
+				executorAcceptedVerification?: number;
+				verificationRework?: number;
+				verificationTreeMismatch?: number;
+			};
 		};
 		isError?: boolean;
 	}>;
@@ -3120,6 +3135,38 @@ test("workflow mode schedules dependency-ready tasks and rejects cycles before c
 		await assert.rejects(
 			() =>
 				tool.execute(
+					"invalid-verifier",
+					{
+						workflow: {
+							tasks: [
+								{
+									id: "implementation",
+									agent: "scout",
+									task: "produce schema",
+									resultFormat: "structured-v2",
+								},
+								{
+									id: "verification",
+									agent: "scout",
+									task: "verify schema",
+									dependsOn: ["implementation"],
+									verifierFor: "implementation",
+									resultFormat: "structured-v2",
+								},
+							],
+						},
+					},
+					undefined,
+					undefined,
+					ctx,
+				),
+			/distinct agent/i,
+		);
+		assert.equal(existsSync(marker), false);
+
+		await assert.rejects(
+			() =>
+				tool.execute(
 					"cycle",
 					{
 						workflow: {
@@ -3136,6 +3183,224 @@ test("workflow mode schedules dependency-ready tasks and rejects cycles before c
 			/cycle/i,
 		);
 		assert.equal(existsSync(marker), false);
+	} finally {
+		restorePiPackage();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("workflow verification gates producer acceptance on an unchanged fresh verifier result", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-verification-gate-"));
+	const workspace = path.join(root, "workspace");
+	mkdirSync(workspace);
+	execFileSync("git", ["init", "-q", workspace]);
+	execFileSync("git", ["-C", workspace, "config", "user.email", "test@example.com"]);
+	execFileSync("git", ["-C", workspace, "config", "user.name", "Test"]);
+	writeFileSync(path.join(workspace, "tracked.txt"), "base\n");
+	execFileSync("git", ["-C", workspace, "add", "tracked.txt"]);
+	execFileSync("git", ["-C", workspace, "commit", "-qm", "initial"]);
+	const fakePi = path.join(root, "fake-pi.mjs");
+	writeFileSync(
+		fakePi,
+		[
+			"import{writeFileSync}from'node:fs';",
+			"import{join}from'node:path';",
+			"const task=process.argv.at(-1)??'';",
+			"const verifier=task.includes('verify accept')||task.includes('verify rework')||task.includes('verify reject')||task.includes('verify mutation')||task.includes('verify crash')||task.includes('verify timeout');",
+			"if(task.includes('verify mutation'))writeFileSync(join(process.cwd(),'tracked.txt'),'mutated\\n');",
+			"if(verifier&&task.includes('private-result-secret'))process.exit(9);",
+			"if(task.includes('verify crash'))process.exit(2);",
+			"if(task.includes('verify timeout'))await new Promise(resolve=>setTimeout(resolve,1000));",
+			"let result;",
+			"if(!verifier)result={version:'pi-subagents:result:v2',status:'completed',summary:'implementation <private>private-result-secret</private>',claims:[],artifacts:[{id:'patch',kind:'patch',version:'v1'}],changes:[],verification:[{status:'passed',summary:'worker self-check'}],limitations:[],unresolvedDependencies:[]};",
+			"else if(task.includes('verify rework'))result={version:'pi-subagents:result:v2',status:'partial',reasonCode:'verification-rework',summary:'rework',claims:[],artifacts:[],changes:[],verification:[{status:'failed',summary:'regression remains'}],limitations:['fix regression'],unresolvedDependencies:[]};",
+			"else if(task.includes('verify reject'))result={version:'pi-subagents:result:v2',status:'failed',reasonCode:'verification-rejected',summary:'reject',claims:[{claim:'broken',classification:'observed',evidence:['acceptance test failed']}],artifacts:[],changes:[],verification:[{status:'failed',summary:'acceptance test failed'}],limitations:[],unresolvedDependencies:[]};",
+			"else result={version:'pi-subagents:result:v2',status:'completed',reasonCode:'verification-accepted',summary:'accept',claims:[],artifacts:[],changes:[],verification:[{status:'passed',summary:'acceptance test passed'}],limitations:[],unresolvedDependencies:[]};",
+			"const message={role:'assistant',content:[{type:'text',text:JSON.stringify(result)}],stopReason:'stop',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	const restorePiPackage = useFakePiPackage(root, fakePi);
+	try {
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const tool = mock.tools.find((candidate) => candidate.name === "subagent") as SubagentTool;
+		const { ctx } = createMockContext({ cwd: workspace, isProjectTrusted: () => true });
+		const run = (verifierTask: string, verifierTimeoutMs?: number) =>
+			tool.execute(
+				`verification-${verifierTask}`,
+				{
+					workflow: {
+						id: `wf-${verifierTask.replaceAll(" ", "-")}`,
+						tasks: [
+							{
+								id: "implementation",
+								agent: "worker",
+								task: "implement feature",
+								resultFormat: "structured-v2",
+							},
+							{
+								id: "verification",
+								agent: "reviewer",
+								task: verifierTask,
+								dependsOn: ["implementation"],
+								verifierFor: "implementation",
+								resultFormat: "structured-v2",
+								...(verifierTimeoutMs ? { timeoutMs: verifierTimeoutMs } : {}),
+							},
+						],
+					},
+				},
+				undefined,
+				undefined,
+				ctx,
+			);
+
+		const accepted = await run("verify accept");
+		assert.equal(accepted.isError, undefined);
+		const acceptedProducer = accepted.details?.workflow?.items.find(
+			(item) => item.id === "implementation",
+		);
+		assert.equal(acceptedProducer?.state, "completed");
+		assert.equal(acceptedProducer?.verificationAccepted, true);
+		assert.equal(acceptedProducer?.artifacts?.[0]?.verified, true);
+		assert.equal(acceptedProducer?.verificationReceipt?.decision, "accept");
+		assert.equal(accepted.details?.metrics?.workerReportedVerification, 1);
+		assert.equal(accepted.details?.metrics?.executorAcceptedVerification, 1);
+
+		const rework = await run("verify rework");
+		assert.equal(rework.isError, true);
+		assert.equal(
+			rework.details?.workflow?.items.find((item) => item.id === "implementation")?.state,
+			"blocked",
+		);
+		assert.equal(
+			rework.details?.workflow?.items.find((item) => item.id === "verification")?.state,
+			"completed",
+		);
+		assert.equal(rework.details?.metrics?.verificationRework, 1);
+
+		const rejected = await run("verify reject");
+		assert.equal(rejected.isError, true);
+		assert.equal(
+			rejected.details?.workflow?.items.find((item) => item.id === "implementation")?.state,
+			"failed",
+		);
+		assert.equal(
+			rejected.details?.workflow?.items.find((item) => item.id === "verification")?.state,
+			"completed",
+		);
+
+		const mutated = await run("verify mutation");
+		assert.equal(mutated.isError, true);
+		assert.equal(
+			mutated.details?.workflow?.items.find((item) => item.id === "implementation")?.state,
+			"failed",
+		);
+		assert.equal(mutated.details?.results[1]?.outcome?.reasonCode, "verification-tree-mismatch");
+		assert.equal(mutated.details?.metrics?.verificationTreeMismatch, 1);
+
+		const crashed = await run("verify crash");
+		assert.equal(crashed.isError, true);
+		assert.equal(
+			crashed.details?.workflow?.items.find((item) => item.id === "implementation")?.state,
+			"failed",
+		);
+		assert.equal(crashed.details?.results[1]?.outcome?.reasonCode, "verification-receipt-invalid");
+
+		const timedOut = await run("verify timeout", 50);
+		assert.equal(timedOut.isError, true);
+		assert.equal(
+			timedOut.details?.workflow?.items.find((item) => item.id === "implementation")?.state,
+			"failed",
+		);
+		assert.equal(timedOut.details?.results[1]?.outcome?.reasonCode, "verification-receipt-invalid");
+	} finally {
+		restorePiPackage();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("workflow verification rejects a late verifier result after cancellation", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-verification-cancel-"));
+	const workspace = path.join(root, "workspace");
+	const started = path.join(root, "verifier-started");
+	const completed = path.join(root, "verifier-completed");
+	mkdirSync(workspace);
+	execFileSync("git", ["init", "-q", workspace]);
+	execFileSync("git", ["-C", workspace, "config", "user.email", "test@example.com"]);
+	execFileSync("git", ["-C", workspace, "config", "user.name", "Test"]);
+	writeFileSync(path.join(workspace, "tracked.txt"), "base\n");
+	execFileSync("git", ["-C", workspace, "add", "tracked.txt"]);
+	execFileSync("git", ["-C", workspace, "commit", "-qm", "initial"]);
+	const fakePi = path.join(root, "fake-pi.mjs");
+	writeFileSync(
+		fakePi,
+		[
+			"import{writeFileSync}from'node:fs';",
+			"const task=process.argv.at(-1)??'';",
+			"const verifier=task.includes('verify slowly');",
+			`if(verifier)writeFileSync(${JSON.stringify(started)},'started');`,
+			"const implementation={version:'pi-subagents:result:v2',status:'completed',summary:'implementation',claims:[],artifacts:[],changes:[],verification:[{status:'passed',summary:'self-check'}],limitations:[],unresolvedDependencies:[]};",
+			"const accepted={version:'pi-subagents:result:v2',status:'completed',reasonCode:'verification-accepted',summary:'accept',claims:[],artifacts:[],changes:[],verification:[{status:'passed',summary:'passed'}],limitations:[],unresolvedDependencies:[]};",
+			"const finish=()=>{if(verifier)writeFileSync(" +
+				JSON.stringify(completed) +
+				",'completed');const result=verifier?accepted:implementation;const message={role:'assistant',content:[{type:'text',text:JSON.stringify(result)}],stopReason:'stop',timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n')};",
+			"if(verifier)setTimeout(finish,1000);else finish();",
+		].join(""),
+	);
+	const restorePiPackage = useFakePiPackage(root, fakePi);
+	try {
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const tool = mock.tools.find((candidate) => candidate.name === "subagent") as SubagentTool;
+		const { ctx } = createMockContext({ cwd: workspace, isProjectTrusted: () => true });
+		const controller = new AbortController();
+		const running = tool.execute(
+			"verification-cancel",
+			{
+				workflow: {
+					id: "wf-verification-cancel",
+					tasks: [
+						{
+							id: "implementation",
+							agent: "worker",
+							task: "implement",
+							resultFormat: "structured-v2",
+						},
+						{
+							id: "verification",
+							agent: "reviewer",
+							task: "verify slowly",
+							dependsOn: ["implementation"],
+							verifierFor: "implementation",
+							resultFormat: "structured-v2",
+						},
+					],
+				},
+			},
+			controller.signal,
+			undefined,
+			ctx,
+		);
+		for (let attempt = 0; attempt < 200 && !existsSync(started); attempt++) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		assert.equal(existsSync(started), true, "verifier readiness handshake was not observed");
+		controller.abort();
+		const result = await running;
+		assert.equal(result.isError, true);
+		assert.equal(
+			result.details?.workflow?.items.find((item) => item.id === "implementation")?.state,
+			"stale",
+		);
+		assert.equal(
+			result.details?.workflow?.items.find((item) => item.id === "implementation")
+				?.verificationAccepted,
+			false,
+		);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		assert.equal(existsSync(completed), false);
 	} finally {
 		restorePiPackage();
 		rmSync(root, { recursive: true, force: true });
