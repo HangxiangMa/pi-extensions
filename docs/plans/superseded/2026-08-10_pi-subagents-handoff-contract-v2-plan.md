@@ -1,5 +1,11 @@
 # Pi Subagents Handoff Contract v2 Plan
 
+> **Superseded as an executable plan on 2026-08-10.**
+> The implemented delegation and result-contract baseline is documented in the [delegation-intelligence roadmap](../../roadmaps/2026-08-10_pi-subagents-delegation-intelligence-roadmap.md).
+> New automation-plan and verification-receipt contracts are owned by the active full-automation plans in the parent directory.
+> Optional contract-profile work is deferred and requires a separately approved active plan.
+> Unchecked boxes below preserve the original design sequence and are not current executable work.
+
 ## Goal
 
 Add one opt-in versioned delegation request and result contract that preserves objectives, authority requests, dependencies, evidence, artifacts, limitations, provenance, and outcome state across blocking, chained, fan-in, detached, persisted, inspected, and rendered subagent flows.

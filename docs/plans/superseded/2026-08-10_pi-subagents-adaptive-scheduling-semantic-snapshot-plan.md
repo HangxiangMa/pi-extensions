@@ -1,5 +1,11 @@
 # Pi Subagents Adaptive Scheduling and Semantic Snapshot Plan
 
+> **Superseded as an executable plan on 2026-08-10.**
+> The implemented dependency scheduler and semantic snapshot baseline are documented in the [delegation-intelligence roadmap](../../roadmaps/2026-08-10_pi-subagents-delegation-intelligence-roadmap.md).
+> Rolling dispatch, recovery, and resume are owned by the [event-driven workflow runtime plan](../2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md).
+> Matched admission evidence remains owned by the [minimal delegation admission evaluation plan](../2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md).
+> Unchecked boxes below preserve the original design sequence and are not current executable work.
+
 ## Goal
 
 Add deterministic dependency-aware scheduling and semantic resource snapshots so `pi-subagents` starts only current, ready, safely independent work, adapts effective concurrency below hard ceilings, detects semantic skew before continuation, and invalidates stale downstream evidence.

@@ -1,5 +1,11 @@
 # Pi Subagents Capability Manifest and Audit-Only ExecutionPlan Plan
 
+> **Superseded as an executable plan on 2026-08-10.**
+> The implemented capability-manifest, routing, and `ExecutionPlan` baseline is documented in the [delegation-intelligence roadmap](../../roadmaps/2026-08-10_pi-subagents-delegation-intelligence-roadmap.md).
+> Automatic plan compilation and capability routing are owned by the [autonomous workflow planning plan](../2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md).
+> Representative admission and permission evidence remains owned by the [minimal delegation admission evaluation plan](../2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md).
+> Unchecked boxes below preserve the original design sequence and are not current executable work.
+
 ## Goal
 
 Add versioned agent capability manifests and one deterministic transport-neutral `ExecutionPlan` that audits task fit, requested authority, effective policy, overgrant, mismatch, and unsupported guarantees without changing established launch behavior.

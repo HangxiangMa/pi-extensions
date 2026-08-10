@@ -1,5 +1,12 @@
 # Pi Subagents WorkItem and Artifact Ledger Plan
 
+> **Superseded as an executable plan on 2026-08-10.**
+> The implemented WorkItem and artifact-ledger baseline is documented in the [delegation-intelligence roadmap](../../roadmaps/2026-08-10_pi-subagents-delegation-intelligence-roadmap.md).
+> Acceptance-state migration and managed verification are owned by the [verified execution loop plan](../2026-08-10_pi-subagents-verified-execution-loop-plan.md).
+> Rolling persistence and resume are owned by the [event-driven workflow runtime plan](../2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md).
+> Detached-agent projection remains intentionally deferred and requires a separately approved plan.
+> Unchecked boxes below preserve the original design sequence and are not current executable work.
+
 ## Goal
 
 Add a bounded persistent orchestration ledger that owns WorkItem identity, dependencies, cohesive scope, assignment, artifacts, versions, ownership, acceptance, invalidation, and terminal state while leaving Pi and existing transports responsible for agent execution.

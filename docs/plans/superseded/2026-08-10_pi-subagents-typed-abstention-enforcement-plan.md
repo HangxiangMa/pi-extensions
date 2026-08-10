@@ -1,5 +1,11 @@
 # Pi Subagents Typed Abstention and Capability Enforcement Plan
 
+> **Superseded as an executable plan on 2026-08-10.**
+> The implemented typed-outcome, capability-enforcement, generation, and recovery baseline is documented in the [delegation-intelligence roadmap](../../roadmaps/2026-08-10_pi-subagents-delegation-intelligence-roadmap.md).
+> Automatic planning decisions are owned by the [autonomous workflow planning plan](../2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md).
+> Closed-loop recovery is owned by the [event-driven workflow runtime plan](../2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md).
+> Unchecked boxes below preserve the original design sequence and are not current executable work.
+
 ## Goal
 
 Turn audited capability and authority findings into an explicit opt-in enforcement and recovery protocol that can acknowledge suitable work, reject unsuitable work before side effects, request missing inputs, abstain safely, and avoid blind retries.
