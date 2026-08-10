@@ -4,7 +4,17 @@
 
 Add an explicit opt-in mode that accepts one high-level objective and compiles it into the smallest justified, capability-matched, bounded workflow without requiring the caller to author every task and dependency.
 
-Support versioned revisions to pending or invalidated work while preserving completed history and the verified-execution boundary.
+Support versioned revisions to pending, rework-requested, or invalidated work while preserving accepted history and the verified-execution boundary.
+
+## Plan Relationship
+
+This plan owns only the explicit automation request, read-only planning turn, deterministic plan compiler, topology minimization, and graph-patch contract.
+
+It depends on the [verified execution loop plan](2026-08-10_pi-subagents-verified-execution-loop-plan.md) for acceptance and rework semantics.
+
+It consumes the implemented capability, contract, `ExecutionPlan`, WorkItem, and workflow baselines preserved under [`docs/plans/superseded/`](superseded/) without reopening their original checklists.
+
+The [minimal delegation admission evaluation plan](2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) remains the sole owner of matched evidence required before a default change.
 
 ## Context
 
@@ -40,9 +50,9 @@ When admission returns parent-owned direct work or insufficient evidence, the au
 
 A bounded `pi-subagents:workflow-plan-patch:v1` format will support adding a task, replacing an unstarted task, adding a dependency, cancelling pending work, requesting verification, or invalidating downstream work.
 
-Plan patches will include the workflow generation and may modify only pending, needs-input, stale, or invalidated nodes.
+Plan patches will include the workflow generation and may modify only pending, needs-input, rework-requested, stale, or invalidated nodes.
 
-Completed tasks, accepted artifacts, current verification receipts, and executor-owned identities remain immutable.
+Accepted tasks, accepted artifacts, current verification receipts, and executor-owned identities remain immutable.
 
 The first implementation will not learn from historical runs or use a learned router.
 
@@ -106,7 +116,7 @@ The first implementation will not learn from historical runs or use a learned ro
 - [ ] Add compiler tests for parent-owned direct work, one child, one child plus verifier, sequential dependency, two safe mutating children, dense coupling, missing verification, unsupported capability, insufficient budget, scope conflict, no integration owner, and attempted grandchildren.
 - [ ] Ensure the compiler may narrow or reject a model proposal but cannot silently add authority, exceed aggregate budget, raise mutating width, or relax verification and trust requirements.
 - [ ] Integrate verified-execution synthesis so every compiled risk-selected mutating plan contains one distinct verifier and one authoritative integration path before any mutating child starts.
-- [ ] Implement graph patch validation and application for pending or invalidated nodes only, with current workflow generation, dependency closure, artifact invalidation, plan identity rotation, bounded revision count, and atomic persistence.
+- [ ] Implement graph patch validation and application for pending, rework-requested, or invalidated nodes only, with current workflow generation, dependency closure, artifact invalidation, plan identity rotation, bounded revision count, and atomic persistence.
 - [ ] Add tests proving plan patches cannot rewrite completed work, forge artifacts, remove required verification, revive cancelled generations, widen authority, exceed budget, create cycles, or trigger side-effect replay.
 - [ ] Add end-to-end deterministic fixtures for objective to direct result, objective to one child, objective to verified child, objective to bounded parallel workflow, missing-input abstention, planner failure, compiler rejection, one revision after failed assumption, and terminal stop after revision exhaustion.
 - [ ] Define a frozen matched evaluation protocol against strong single-agent, one-child, caller-authored workflow, fixed two-child, and equal-budget best-of-N arms with identical model information, tools, evaluator, aggregate token or dollar ceiling, wall-clock ceiling, and repeated paired tasks.
@@ -122,7 +132,7 @@ The first implementation will not learn from historical runs or use a learned ro
 - [ ] Deterministic compilation rejects unsafe or malformed plans before side effects and never silently widens authority, budget, width, or recursion.
 - [ ] Parent-owned and insufficient-evidence decisions start zero children.
 - [ ] Every admitted mutating plan uses the verified-execution acceptance boundary.
-- [ ] Plan patches modify only eligible current-generation work and preserve completed history, accepted artifacts, and verification receipts.
+- [ ] Plan patches modify only eligible current-generation work and preserve accepted history, accepted artifacts, and verification receipts.
 - [ ] Mutating width remains at most two and workflow grandchildren remain rejected.
 - [ ] Existing omitted-field modes remain compatible with a documented fallback and downgrade path.
 - [ ] Matched evaluation protocol is frozen before live results, and no unsupported default-quality claim is made.

@@ -1,7 +1,19 @@
 # Pi Subagents Minimal Delegation Admission Evaluation Plan
 
-- **Status:** Revise recorded for an explicit opt-in implementation; paired live-provider evaluation remains deferred.
+- **Status:** Active evidence gate; deterministic baseline complete and paired live-provider evaluation deferred.
 - **Decision:** [`2026-08-10_pi-subagents-admission-gate-decision.md`](../benchmarks/2026-08-10_pi-subagents-admission-gate-decision.md).
+
+## Plan Relationship
+
+This plan is the sole owner of matched delegation-admission evidence and the **Admit**, **Revise**, or **Defer** decision required before any full-automation default change.
+
+The [verified execution loop plan](2026-08-10_pi-subagents-verified-execution-loop-plan.md) owns fresh exact-tree acceptance and bounded rework behavior.
+
+The [autonomous workflow planning plan](2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md) owns objective-to-DAG compilation and opt-in topology selection.
+
+The [event-driven workflow runtime plan](2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md) owns rolling scheduling, recovery, and resume.
+
+Those plans may provide evaluated implementations and fixtures, but they do not satisfy this plan's paired live-provider gate by themselves.
 
 ## Post-hoc Origin
 

@@ -18,7 +18,7 @@ Keep `pi-subagents` as the owner of delegation planning, workflow state, authori
 
 - **Make completion evidence-owned** — Success: no opted-in mutating workflow can complete from worker self-report alone, and every accepted result has a current independent verification receipt for the exact integrated state.
 - **Automate topology selection** — Success: one high-level objective can produce parent-owned, one-child, verified-one-child, or bounded two-child execution without requiring the caller to author a complete workflow graph.
-- **Automate bounded replanning** — Success: failed assumptions, missing inputs, stale evidence, and verifier rejection can revise only unstarted or invalidated work without blindly replaying side effects.
+- **Automate bounded replanning** — Success: failed assumptions, missing inputs, stale evidence, and verifier rejection can revise only unstarted, rework-requested, or invalidated work without blindly replaying side effects.
 - **Keep capacity productive** — Success: newly ready safe work can start after any task settles instead of waiting for an unrelated batch sibling.
 - **Resume safely** — Success: restored workflows reconcile generations and side-effect state before continuing, with zero automatic replay of uncertain mutating work.
 - **Preserve the smallest useful team** — Success: delegation remains conditional, mutating width stays bounded, and recursive grandchildren remain disabled until separate matched evidence supports expansion.
@@ -34,6 +34,17 @@ Keep `pi-subagents` as the owner of delegation planning, workflow state, authori
 - Workflow persistence saves ledger snapshots, but the blocking execution path does not load and reconcile an interrupted workflow for continuation.
 - The admission decision remains opt-in because no paired live-provider repository benchmark has established a general quality, cost, or latency advantage over strong simpler baselines.
 
+## Plan Ownership
+
+| Concern | Current owner | Relationship to earlier plans |
+| --- | --- | --- |
+| Independent acceptance, immutable verification, and bounded rework | [`Verified Execution Loop Plan`](../plans/2026-08-10_pi-subagents-verified-execution-loop-plan.md) | Continues the implemented WorkItem baseline and owns the acceptance-state migration. |
+| Objective-to-DAG compilation and graph revision | [`Autonomous Workflow Planning Plan`](../plans/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md) | Continues capability routing and explicit workflow compilation without reopening their implemented baselines. |
+| Rolling scheduling, recovery, persistence reconciliation, and resume | [`Event-Driven Workflow Runtime Plan`](../plans/2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md) | Continues the dependency scheduler and semantic snapshot baseline without duplicating it. |
+| Matched evidence before a default change | [`Minimal Delegation Admission Evaluation Plan`](../plans/2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) | Remains the sole active admission evidence gate. |
+
+The original implementation plans now live under [`docs/plans/superseded/`](../plans/superseded/) as non-executable design provenance.
+
 ## Guiding Principles
 
 - **Verification before autonomy:** increase autonomous action only after completion requires independent current evidence.
@@ -41,7 +52,7 @@ Keep `pi-subagents` as the owner of delegation planning, workflow state, authori
 - **External evidence over agreement:** tests, type checks, builds, runtime smokes, artifact digests, and acceptance criteria outrank confidence or agent consensus.
 - **Smallest justified topology:** use parent-owned or one-child execution unless decomposition, isolation, parallelism, specialization, or independent verification provides a concrete benefit.
 - **No blind side-effect replay:** accepted, ambiguous, stale, interrupted, or potentially mutating work is never replayed merely because settlement was not observed.
-- **Patch the graph, not history:** replanning changes only pending or invalidated nodes and preserves accepted artifacts and provenance.
+- **Patch the graph, not history:** replanning changes only pending, rework-requested, or invalidated nodes and preserves accepted artifacts and provenance.
 - **Compatibility by omission:** existing single, parallel, chain, panel, detached, and explicit workflow calls retain their behavior unless the new automation contract is selected.
 - **Evidence before defaults:** full automation remains explicit and bounded until matched evaluation supports a separate default-change decision.
 
@@ -50,7 +61,9 @@ Keep `pi-subagents` as the owner of delegation planning, workflow state, authori
 ### Phase 1: Make verified completion authoritative
 
 - [ ] Every opted-in mutating or integration workflow automatically receives a distinct verifier when risk policy requires one.
+- [ ] The verifier cannot mutate the submitted state, and executor-owned before-and-after identities reject any verification-time drift.
 - [ ] Verification runs in a fresh context against the exact integrated state and returns an executor-validated receipt bound to task generation, `ExecutionPlan`, repository identity, patch digest, and required evidence.
+- [ ] WorkItem execution completion and acceptance are distinct versioned states, so verification and rework do not depend on the legacy terminal `completed` state.
 - [ ] The blocking workflow path uses managed integration admission before terminal success and rejects worker self-verification as sufficient acceptance.
 - [ ] Verifier rejection can trigger at most the configured bounded rework cycle, after which the workflow returns rework, rejected, or failed without claiming success.
 - [ ] Stale, cancelled, replaced, or mismatched verification evidence cannot complete current work.
@@ -65,7 +78,7 @@ Keep `pi-subagents` as the owner of delegation planning, workflow state, authori
 - [ ] A read-only planning turn proposes a bounded typed DAG, while deterministic compilation validates dependencies, scopes, authority, capabilities, artifacts, verification, and hard limits before any mutating child starts.
 - [ ] Admission selects the smallest justified topology and can return parent-owned direct work or abstention without allocating a child.
 - [ ] Capability routing assigns agents and tools from enforceable manifests without silently widening authority.
-- [ ] Versioned graph patches can revise pending or invalidated work after new evidence without replacing completed history.
+- [ ] Versioned graph patches can revise pending, rework-requested, or invalidated work after new evidence without replacing accepted history.
 
 **Outcome:** One high-level request can become a safe executable workflow with no manual topology authoring.
 
@@ -97,6 +110,8 @@ Keep `pi-subagents` as the owner of delegation planning, workflow state, authori
 | Indicator | Current baseline | Required invariant or decision |
 | --- | --- | --- |
 | Mutating workflow accepted from worker self-report alone | Possible | 0 in full-automation mode |
+| Verifier-caused state drift accepted | Not represented | 0 |
+| Executed but unaccepted work treated as terminal success | Possible through legacy `completed` semantics | 0 in full-automation mode |
 | Accepted stale or old-generation verification receipts | Rejected in isolated helpers | 0 end to end |
 | Managed integration checks exercised by workflow execution | Not wired | Every automated mutating acceptance |
 | Unrelated ready work blocked by a slow selected sibling | Possible under batch scheduling | 0 when safe capacity is available |
@@ -111,6 +126,7 @@ Keep `pi-subagents` as the owner of delegation planning, workflow state, authori
 | Risk or dependency | Impact | Mitigation or decision |
 | --- | --- | --- |
 | A verifier repeats the worker's blind spot | False confidence can become automated acceptance | Require fresh context, original requirements, raw artifacts, deterministic evidence, and a distinct agent identity. |
+| A verifier mutates the state under review | The receipt can attest to verifier-authored state and bypass the integration owner | Run checks under executor ownership, constrain verifier authority, compare before-and-after state identity, and reject drift. |
 | Planner output invents unsafe dependencies or scopes | Incorrect topology can race writes or omit required evidence | Compile model output through deterministic graph, capability, scope, authority, and artifact validation before allocation. |
 | Replanning loops consume budget without progress | Automation can become slower and less reliable than direct work | Bound plan revisions, rework cycles, model calls, total budget, and unchanged-state repetitions. |
 | Rolling scheduling introduces cancellation races | Late results or duplicate work can enter acceptance | Keep one event-loop owner, generation-bound grants, active-task cancellation, and stale-result quarantine. |

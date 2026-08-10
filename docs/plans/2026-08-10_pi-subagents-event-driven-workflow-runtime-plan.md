@@ -6,6 +6,18 @@ Replace batch-barrier workflow execution with one rolling event-driven runtime t
 
 Keep uncertain mutating work from being replayed or accepted while allowing current safe work to continue automatically.
 
+## Plan Relationship
+
+This plan owns only rolling dispatch, active-task state, bounded recovery execution, persistence reconciliation, and explicit resume behavior.
+
+It depends on the [verified execution loop plan](2026-08-10_pi-subagents-verified-execution-loop-plan.md) for acceptance-state and rework transitions.
+
+It depends on the [autonomous workflow planning plan](2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md) for bounded graph patches.
+
+It continues the implemented dependency scheduler and semantic snapshot baseline preserved in the [superseded adaptive scheduling plan](superseded/2026-08-10_pi-subagents-adaptive-scheduling-semantic-snapshot-plan.md) without re-owning that baseline.
+
+The [minimal delegation admission evaluation plan](2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) remains the sole owner of matched evidence required before a default change.
+
 ## Context
 
 `AdaptiveScheduler.decide()` already evaluates dependency readiness, critical-path depth, capacity, remaining budget, declared scopes, ownership keys, and a two-mutating-child ceiling.
