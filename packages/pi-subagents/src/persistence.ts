@@ -4,10 +4,14 @@ import * as path from "node:path";
 import { getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { projectAgentRecords } from "./agent-projection.js";
 import { isThinkingLevel } from "./agents.js";
+import { isCapabilityGrant, revokeCapabilityGrant } from "./capability-grant.js";
 import { redactPrivateText } from "./context.js";
+import { normalizeDelegationContract } from "./delegation-contract.js";
+import { copyExecutionPlan, isExecutionPlan } from "./execution-plan.js";
 import { MAX_SUBAGENT_TIMEOUT_MS } from "./limits.js";
 import type { ManagedAgent } from "./registry.js";
-import { SUBAGENT_RESULT_FORMATS } from "./result-contract.js";
+import { parseAnyStructuredSubagentResult, SUBAGENT_RESULT_FORMATS } from "./result-contract.js";
+import { isSemanticSnapshot } from "./semantic-snapshot.js";
 import { resolveStatefulLimits } from "./stateful-limits.js";
 import { copyTurnTerminationReport, type TurnTerminationReport } from "./timeout-checkpoint.js";
 import { MAX_SUBAGENT_TOOL_CALLS, MAX_SUBAGENT_TURNS } from "./turn-budget.js";
@@ -120,7 +124,7 @@ function sanitizeAgent(agent: ManagedAgent): ManagedAgent {
 			recipientId: agent.id,
 			content: redactPrivateText(message.content),
 		})),
-		state: "idle",
+		state: agent.state === "running" || agent.state === "starting" ? "interrupted" : agent.state,
 		currentTask: undefined,
 		currentTimeoutMs: undefined,
 		currentIdleTimeoutMs: undefined,
@@ -128,7 +132,24 @@ function sanitizeAgent(agent: ManagedAgent): ManagedAgent {
 		currentMaxToolCalls: undefined,
 		currentMailboxMessageIds: undefined,
 		telemetry: undefined,
-		structuredResult: undefined,
+		contract: normalizeDelegationContract(agent.contract),
+		structuredResult:
+			agent.structuredResult && agent.resultFormat
+				? parseAnyStructuredSubagentResult(
+						JSON.stringify(agent.structuredResult),
+						agent.resultFormat,
+					)
+				: undefined,
+		executionPlan: agent.executionPlan ? copyExecutionPlan(agent.executionPlan) : undefined,
+		capabilityGrant: agent.capabilityGrant
+			? agent.capabilityGrant.state === "active"
+				? revokeCapabilityGrant(agent.capabilityGrant, "persistence-boundary", Date.now())
+				: structuredClone(agent.capabilityGrant)
+			: undefined,
+		semanticSnapshot: agent.semanticSnapshot ? structuredClone(agent.semanticSnapshot) : undefined,
+		semanticCompatibility: agent.semanticCompatibility
+			? structuredClone(agent.semanticCompatibility)
+			: undefined,
 		termination: agent.termination ? sanitizeTermination(agent.termination) : undefined,
 		context: agent.context ? redactPrivateText(agent.context) : undefined,
 		error: agent.error ? redactPrivateText(agent.error) : undefined,
@@ -192,8 +213,21 @@ function isStoredState(value: unknown): value is StoredState {
 					record.spawnIdempotencyKey.length > 0 &&
 					record.spawnIdempotencyKey.length <= 256)) &&
 			(record.spawnRequestHash === undefined || isSha256(record.spawnRequestHash)) &&
+			(record.contract === undefined ||
+				normalizeDelegationContract(record.contract) !== undefined) &&
 			(record.resultFormat === undefined ||
 				SUBAGENT_RESULT_FORMATS.includes(record.resultFormat)) &&
+			(record.structuredResult === undefined ||
+				(record.resultFormat !== undefined &&
+					parseAnyStructuredSubagentResult(
+						JSON.stringify(record.structuredResult),
+						record.resultFormat,
+					) !== undefined)) &&
+			(record.executionPlan === undefined || isExecutionPlan(record.executionPlan)) &&
+			(record.capabilityGrant === undefined || isCapabilityGrant(record.capabilityGrant)) &&
+			(record.semanticSnapshot === undefined || isSemanticSnapshot(record.semanticSnapshot)) &&
+			(record.semanticCompatibility === undefined ||
+				isSemanticCompatibility(record.semanticCompatibility)) &&
 			(record.workspaceMode === undefined || record.workspaceMode === "worktree") &&
 			(record.target === undefined || isTargetPolicyAudit(record.target)) &&
 			(record.children === undefined ||
@@ -205,6 +239,18 @@ function isStoredState(value: unknown): value is StoredState {
 				(Array.isArray(record.mailbox) && record.mailbox.every(isMailboxMessage)))
 		);
 	});
+}
+
+function isSemanticCompatibility(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const compatibility = value as Record<string, unknown>;
+	return (
+		["compatible", "warning", "needs-revalidation", "rejected"].includes(
+			String(compatibility.status),
+		) &&
+		Array.isArray(compatibility.changedComponents) &&
+		compatibility.changedComponents.every((item) => typeof item === "string")
+	);
 }
 
 function isNonNegativeInteger(value: unknown): value is number {

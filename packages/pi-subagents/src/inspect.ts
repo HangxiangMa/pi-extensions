@@ -13,6 +13,7 @@ import {
 	type DelegationCwdPolicy,
 	discoverAgents,
 } from "./agents.js";
+import { projectCapabilityManifest } from "./capabilities.js";
 import { resolveConsultTools } from "./consult-policy.js";
 import { buildContextSnapshot, type ContextMode } from "./context.js";
 import { renderInspectCall, renderInspectResult } from "./inspect-render.js";
@@ -32,12 +33,16 @@ import {
 	resolveDelegationWorkflow,
 } from "./settings.js";
 import type { StatefulSubagentRuntimeStatus } from "./stateful.js";
+import type { WorkItemLedgerSnapshot } from "./work-item-ledger.js";
+import { inspectSessionWorkflows } from "./work-item-persistence.js";
 
 const INSPECT_ACTIONS = [
 	"list_agents",
 	"get_agent",
 	"list_runs",
 	"get_run",
+	"list_workflows",
+	"get_workflow",
 	"list_models",
 	"preview_context",
 	"status",
@@ -61,6 +66,7 @@ export const SubagentInspectParams = Type.Object(
 		action: StringEnum(INSPECT_ACTIONS),
 		agent: Type.Optional(Type.String({ minLength: 1 })),
 		agentId: Type.Optional(Type.String({ minLength: 1 })),
+		workflowId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
 		agentScope: Type.Optional(AgentScopeSchema),
 		limit: Type.Optional(LimitSchema),
 		includeClosed: Type.Optional(Type.Boolean({ default: false })),
@@ -93,6 +99,8 @@ type ValidatedInspectOperation =
 	| { action: "get_agent"; agent: string; agentScope: AgentScope }
 	| { action: "list_runs"; includeClosed: boolean; limit: number }
 	| { action: "get_run"; agentId: string }
+	| { action: "list_workflows"; limit: number }
+	| { action: "get_workflow"; workflowId: string }
 	| { action: "list_models"; limit: number }
 	| { action: "preview_context"; context: ContextMode; contextEntryIds?: string[] }
 	| { action: "status" }
@@ -103,7 +111,7 @@ export function registerSubagentInspect(pi: ExtensionAPI, runtime: SubagentInspe
 		name: "subagent_inspect",
 		label: "Inspect Subagents",
 		description:
-			"Inspect available subagent definitions, models, retained runs, runtime status, and diagnostics without changing subagent or workspace state. This tool never starts a child, sends or acknowledges messages, interrupts or closes runs, changes settings, or modifies files.",
+			"Inspect available subagent definitions, models, retained runs, persisted blocking workflows, runtime status, and diagnostics without changing subagent or workspace state. This tool never starts a child, sends or acknowledges messages, interrupts or closes runs, changes settings, or modifies files.",
 		promptSnippet: "Inspect subagent metadata and runtime state without changing it",
 		parameters: SubagentInspectParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<InspectToolResult> {
@@ -133,6 +141,8 @@ export function validateInspectParams(params: unknown): ValidatedInspectOperatio
 		get_agent: ["action", "agent", "agentScope"],
 		list_runs: ["action", "includeClosed", "limit"],
 		get_run: ["action", "agentId"],
+		list_workflows: ["action", "limit"],
+		get_workflow: ["action", "workflowId"],
 		list_models: ["action", "limit"],
 		preview_context: ["action", "context", "contextEntryIds"],
 		status: ["action"],
@@ -163,6 +173,12 @@ export function validateInspectParams(params: unknown): ValidatedInspectOperatio
 	}
 	if (action === "get_run") {
 		return { action, agentId: requiredString(values.agentId, action, "agentId") };
+	}
+	if (action === "list_workflows") {
+		return { action, limit: optionalLimit(values.limit, 50) };
+	}
+	if (action === "get_workflow") {
+		return { action, workflowId: requiredString(values.workflowId, action, "workflowId") };
 	}
 	if (action === "list_models") {
 		return { action, limit: optionalLimit(values.limit, 50) };
@@ -228,6 +244,38 @@ async function executeSubagentInspect(
 			throw new Error(`Unknown retained run: ${boundedPrivateText(operation.agentId, 256)}`);
 		}
 		return inspectResult({ action: operation.action, run: projectRun(run, ctx) });
+	}
+	if (operation.action === "list_workflows" || operation.action === "get_workflow") {
+		const owner =
+			ctx.sessionManager.getSessionId?.() ??
+			ctx.sessionManager.getSessionFile?.() ??
+			`ephemeral:${ctx.cwd}`;
+		const inspected = inspectSessionWorkflows(owner, {
+			maxStoredWorkflows: operation.action === "list_workflows" ? operation.limit : 64,
+		});
+		if (operation.action === "list_workflows") {
+			const selected = boundedProjection(
+				inspected.workflows,
+				operation.limit,
+				projectWorkflowSummary,
+			);
+			return inspectResult({
+				action: operation.action,
+				workflows: selected.items,
+				returned: selected.items.length,
+				omitted: inspected.omitted + selected.omitted,
+				invalid: inspected.invalid,
+			});
+		}
+		const workflow = inspected.workflows.find(
+			(candidate) => candidate.workflowId === operation.workflowId,
+		);
+		if (!workflow) {
+			throw new Error(
+				`Unknown persisted workflow: ${boundedPrivateText(operation.workflowId, 256)}`,
+			);
+		}
+		return inspectResult({ action: operation.action, workflow: projectWorkflow(workflow) });
 	}
 	if (operation.action === "list_models") {
 		return inspectResult({ action: operation.action, ...projectModels(ctx, operation.limit) });
@@ -339,6 +387,7 @@ function projectAgent(
 				: safeDisplayPath(agent.filePath, ctx.cwd),
 		model: agent.model ? boundedPrivateText(agent.model, 256) : undefined,
 		thinkingLevel: agent.thinkingLevel,
+		capabilityManifest: projectCapabilityManifest(agent.capabilityManifest),
 		...(includeTools
 			? { tools, toolCount: agent.tools?.length }
 			: { toolCount: agent.tools?.length }),
@@ -378,9 +427,52 @@ function projectRun(run: AgentRunInspectionDetail, ctx: ExtensionContext): Recor
 			bytes: run.contextBytes ?? 0,
 			truncated: run.contextTruncated === true,
 		},
+		contract: run.contract
+			? {
+					version: run.contract.version,
+					level: run.contract.level,
+					taskId: boundedPrivateText(run.contract.taskId, 256),
+					enforcement: run.contract.enforcement,
+					dependencies: run.contract.dependencies.length,
+					acceptanceCriteria: run.contract.acceptanceCriteria.length,
+					requiredEvidence: run.contract.requiredEvidence.length,
+				}
+			: undefined,
 		resultFormat: run.resultFormat ?? "text",
 		structuredResult: run.structuredResult,
 		termination: run.termination,
+		outcome: run.outcome,
+		capabilityGrant: run.capabilityGrant
+			? {
+					version: run.capabilityGrant.version,
+					id: run.capabilityGrant.id,
+					executionPlanId: run.capabilityGrant.executionPlanId,
+					taskGeneration: run.capabilityGrant.taskGeneration,
+					issuedAt: run.capabilityGrant.issuedAt,
+					expiresAt: run.capabilityGrant.expiresAt,
+					state: run.capabilityGrant.state,
+					revokedAt: run.capabilityGrant.revokedAt,
+					revocationReason: run.capabilityGrant.revocationReason,
+				}
+			: undefined,
+		executionPlan: run.executionPlan
+			? {
+					...run.executionPlan,
+					target: {
+						...run.executionPlan.target,
+						cwd: safeDisplayPath(run.executionPlan.target.cwd, ctx.cwd),
+						trust: { ...run.executionPlan.target.trust, sourcePath: undefined },
+					},
+				}
+			: undefined,
+		semanticSnapshot: run.semanticSnapshot
+			? {
+					version: run.semanticSnapshot.version,
+					digest: run.semanticSnapshot.digest,
+					components: { ...run.semanticSnapshot.components },
+				}
+			: undefined,
+		semanticCompatibility: run.semanticCompatibility,
 		telemetry: run.telemetry,
 		currentTask: run.currentTask ? boundedPrivateText(run.currentTask, 2 * 1024) : undefined,
 		error: run.error ? boundedPrivateText(run.error, 2 * 1024) : undefined,
@@ -407,6 +499,52 @@ function projectRun(run: AgentRunInspectionDetail, ctx: ExtensionContext): Recor
 					unsupported: projectToolNames(run.policy.unsupported),
 				}
 			: undefined,
+	};
+}
+
+function projectWorkflowSummary(workflow: WorkItemLedgerSnapshot): Record<string, unknown> {
+	return {
+		workflowId: boundedPrivateText(workflow.workflowId, 256),
+		generation: workflow.generation,
+		itemCount: workflow.items.length,
+		states: Object.fromEntries(
+			[...new Set(workflow.items.map((item) => item.state))]
+				.sort()
+				.map((state) => [state, workflow.items.filter((item) => item.state === state).length]),
+		),
+	};
+}
+
+function projectWorkflow(workflow: WorkItemLedgerSnapshot): Record<string, unknown> {
+	const projected = boundedProjection(workflow.items, 64, (item) => ({
+		id: boundedPrivateText(item.id, 256),
+		state: item.state,
+		generation: item.generation,
+		taskGeneration: item.taskGeneration,
+		dependencies: item.dependencies.map((value) => boundedPrivateText(value, 256)),
+		assignedAgentId: item.assignedAgentId
+			? boundedPrivateText(item.assignedAgentId, 256)
+			: undefined,
+		acceptedExecutionPlanId: item.acceptedExecutionPlanId,
+		artifacts: item.artifacts.map((artifact) => ({
+			id: boundedPrivateText(artifact.id, 256),
+			kind: boundedPrivateText(artifact.kind, 256),
+			version: boundedPrivateText(artifact.version, 256),
+			producerTaskId: artifact.producerTaskId
+				? boundedPrivateText(artifact.producerTaskId, 256)
+				: undefined,
+			generation: artifact.generation,
+			verified: artifact.verified,
+		})),
+		verificationAccepted: item.verificationAccepted,
+		outcomeReason: item.outcomeReason
+			? boundedPrivateText(item.outcomeReason, 2 * 1024)
+			: undefined,
+	}));
+	return {
+		...projectWorkflowSummary(workflow),
+		items: projected.items,
+		omittedItems: projected.omitted,
 	};
 }
 

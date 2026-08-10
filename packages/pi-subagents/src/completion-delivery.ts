@@ -18,6 +18,8 @@ interface CompletionMetadata {
 	state: string;
 	transport?: string;
 	structuredResult?: ManagedAgent["structuredResult"];
+	outcome?: ManagedAgent["outcome"];
+	capabilityGrant?: ManagedAgent["capabilityGrant"];
 }
 
 interface CompletionMessage {
@@ -210,6 +212,10 @@ function completionMetadata(completion: AgentTurnCompletion): CompletionMetadata
 			: {}),
 		...(completion.agent.structuredResult
 			? { structuredResult: completion.agent.structuredResult }
+			: {}),
+		...(completion.agent.outcome ? { outcome: completion.agent.outcome } : {}),
+		...(completion.agent.capabilityGrant
+			? { capabilityGrant: completion.agent.capabilityGrant }
 			: {}),
 	};
 }

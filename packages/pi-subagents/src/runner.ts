@@ -5,8 +5,12 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import type { SchedulingDecision } from "./adaptive-scheduler.js";
 import type { AgentConfig, AgentScope, AgentSource, SubagentThinkingLevel } from "./agents.js";
+import { type CapabilityGrant, revokeCapabilityGrant } from "./capability-grant.js";
 import type { TargetPolicyAudit } from "./cwd-policy.js";
+import type { DelegationContract } from "./delegation-contract.js";
+import type { ExecutionPlan } from "./execution-plan.js";
 import {
 	appendBounded,
 	DEFAULT_MAX_CONTEXT_BYTES,
@@ -16,14 +20,20 @@ import {
 	MAX_SUBAGENT_TIMEOUT_MS,
 	truncateUtf8,
 } from "./limits.js";
+import type { OrchestrationMetrics } from "./orchestration-metrics.js";
+import { type ClassifiedSubagentOutcome, classifyStructuredOutcome } from "./outcome.js";
 import { resolvePiInvocation } from "./pi-invocation.js";
 import { JsonLineDecoder } from "./protocol.js";
-import type { SubagentResultFormat } from "./result-contract.js";
 import {
-	formatResultFailure,
+	type AnyStructuredSubagentResult,
+	parseAnyStructuredSubagentResult,
+	type SubagentResultFormat,
+} from "./result-contract.js";
+import {
+	formatResultFailure as formatBaseResultFailure,
+	getResultFinalOutput as getBaseResultFinalOutput,
 	getFinalOutput,
-	getResultFinalOutput,
-	isResultError,
+	isResultError as isBaseResultError,
 } from "./runner-result.js";
 import {
 	addUsageValue,
@@ -45,6 +55,7 @@ import {
 	resolveTimeoutFinalizationMs,
 } from "./timeout-finalization.js";
 import { TurnBudgetMonitor, type TurnBudgetStop, type TurnLimits } from "./turn-budget.js";
+import type { WorkItemLedgerSnapshot } from "./work-item-ledger.js";
 
 export const KILL_GRACE_MS = 5000;
 
@@ -92,15 +103,52 @@ export interface SingleResult {
 		overridden: string[];
 		unsupported: string[];
 	};
+	contract?: DelegationContract;
+	resultFormat?: SubagentResultFormat;
+	structuredResult?: AnyStructuredSubagentResult;
+	resultContractInvalid?: boolean;
+	outcome?: ClassifiedSubagentOutcome;
+	attemptCount?: number;
+	hedged?: boolean;
+	executionPlan?: ExecutionPlan;
+	capabilityGrant?: CapabilityGrant;
 }
 
 export interface SubagentDetails {
-	mode: "single" | "parallel" | "chain";
+	mode: "single" | "parallel" | "chain" | "workflow";
 	agentScope: AgentScope;
 	projectAgentsDir: string | null;
 	results: SingleResult[];
 	aggregator?: SingleResult;
+	workflow?: WorkItemLedgerSnapshot;
+	schedulerDecisions?: SchedulingDecision[];
+	metrics?: OrchestrationMetrics;
 	isError?: boolean;
+}
+
+export function getResultFinalOutput(result: SingleResult): string {
+	return getBaseResultFinalOutput(result);
+}
+
+export function isResultError(result: SingleResult): boolean {
+	return (
+		isBaseResultError(result) ||
+		result.resultContractInvalid === true ||
+		(result.outcome !== undefined &&
+			result.outcome.status !== "completed" &&
+			result.outcome.status !== "partial")
+	);
+}
+
+export function formatResultFailure(result: SingleResult): string {
+	const contractError = result.resultContractInvalid
+		? `Subagent returned an invalid ${result.resultFormat ?? "structured"} result contract`
+		: result.outcome && !["completed", "partial"].includes(result.outcome.status)
+			? `Subagent outcome ${result.outcome.status}${result.outcome.reasonCode ? ` (${result.outcome.reasonCode})` : ""}; recovery: ${result.outcome.recoveryActions.join(", ") || "none"}`
+			: undefined;
+	return contractError
+		? formatBaseResultFailure({ ...result, errorMessage: contractError })
+		: formatBaseResultFailure(result);
 }
 
 function boundMessageText(
@@ -229,9 +277,11 @@ export function buildFanInContext(
 			const error = result.errorMessage || result.stderr.trim();
 			const resultText = failed
 				? `${error ? "Error" : output ? "Partial output" : "Error"}:\n${formatResultFailure(result)}`
-				: output
-					? `Output:\n${output}`
-					: "Output: (no output)";
+				: result.structuredResult
+					? `Structured result:\n${JSON.stringify(result.structuredResult)}`
+					: output
+						? `Output:\n${output}`
+						: "Output: (no output)";
 			return [
 				`## Result ${index + 1}: ${result.agent} (${status})`,
 				`Task: ${result.task}`,
@@ -337,8 +387,6 @@ function signalProcess(proc: ReturnType<typeof spawn>, signal: NodeJS.Signals): 
 	}
 }
 
-export { formatResultFailure, getResultFinalOutput, isResultError } from "./runner-result.js";
-
 export function terminateProcess(
 	proc: ReturnType<typeof spawn>,
 	graceMs = KILL_GRACE_MS,
@@ -388,6 +436,16 @@ export interface ChildLaunchPolicy {
 	workTimeoutReportLimit?: number;
 	/** Absolute blocking-workflow deadline that also caps model finalization. */
 	orchestrationDeadlineAt?: number;
+	/** Completion contract requested for this turn. */
+	resultFormat?: SubagentResultFormat;
+	/** Normalized request contract retained in result details. */
+	contract?: DelegationContract;
+	/** Original task summary shown in result details when the executed prompt has contract metadata. */
+	displayTask?: string;
+	/** Immutable audit or enforcement decision made before launch. */
+	executionPlan?: ExecutionPlan;
+	/** Executor-owned authority lifetime bound to the accepted plan generation. */
+	capabilityGrant?: CapabilityGrant;
 }
 
 export async function runSingleAgent(
@@ -442,7 +500,7 @@ export async function runSingleAgent(
 	const currentResult: SingleResult = {
 		agent: agentName,
 		agentSource: agent.source,
-		task,
+		task: launchPolicy?.displayTask ?? task,
 		exitCode: 0,
 		messages: [],
 		stderr: "",
@@ -459,6 +517,10 @@ export async function runSingleAgent(
 		thinkingLevel,
 		step,
 		timeoutMs,
+		contract: launchPolicy?.contract,
+		resultFormat: launchPolicy?.resultFormat,
+		executionPlan: launchPolicy?.executionPlan,
+		capabilityGrant: launchPolicy?.capabilityGrant,
 	};
 	const selectedAssistantOutput = () =>
 		terminalAssistantOutput !== undefined
@@ -925,6 +987,39 @@ export async function runSingleAgent(
 		if (currentResult.termination && !currentResult.finalOutput.trim()) {
 			currentResult.finalOutput = formatTimeoutCheckpoint(currentResult.termination.checkpoint);
 		}
+		if (currentResult.exitCode === 0 && launchPolicy?.resultFormat !== undefined) {
+			currentResult.structuredResult = parseAnyStructuredSubagentResult(
+				currentResult.finalOutput ?? "",
+				launchPolicy.resultFormat,
+			);
+			currentResult.resultContractInvalid =
+				launchPolicy.resultFormat !== "text" && currentResult.structuredResult === undefined;
+			if (
+				currentResult.structuredResult?.version === "pi-subagents:result:v2" &&
+				launchPolicy.executionPlan
+			) {
+				currentResult.structuredResult.provenance = {
+					...currentResult.structuredResult.provenance,
+					...(launchPolicy.executionPlan.taskId
+						? { taskId: launchPolicy.executionPlan.taskId }
+						: {}),
+					taskGeneration: launchPolicy.executionPlan.taskGeneration,
+					executionPlanId: launchPolicy.executionPlan.id,
+					cancellationLineage: [...launchPolicy.executionPlan.cancellationLineage],
+				};
+			}
+			if (currentResult.structuredResult?.version === "pi-subagents:result:v2") {
+				currentResult.outcome = classifyStructuredOutcome(
+					currentResult.structuredResult.status,
+					currentResult.structuredResult.reasonCode,
+				);
+			} else if (currentResult.resultContractInvalid) {
+				currentResult.outcome = classifyStructuredOutcome(
+					"contract-invalid",
+					"malformed-structured-result",
+				);
+			}
+		}
 		if (
 			currentResult.exitCode === 0 &&
 			currentResult.stopReason !== "error" &&
@@ -933,6 +1028,13 @@ export async function runSingleAgent(
 			currentResult.exitCode = 1;
 			currentResult.stopReason = "error";
 			setErrorMessage("Subagent completed without final text");
+		}
+		if (currentResult.capabilityGrant?.state === "active") {
+			currentResult.capabilityGrant = revokeCapabilityGrant(
+				currentResult.capabilityGrant,
+				"turn-settled",
+				Date.now(),
+			);
 		}
 		currentResult.policy = {
 			inherited: ["environment"],

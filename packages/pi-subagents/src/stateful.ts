@@ -1,3 +1,7 @@
+/**
+ * Stateful registration remains one lifecycle owner so session replacement, persistence,
+ * capability revocation, workspace cleanup, and completion delivery cannot reorder.
+ */
 import { randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -12,6 +16,7 @@ import {
 	type SubagentTransportKind,
 	THINKING_LEVELS,
 } from "./agents.js";
+import { issueCapabilityGrant } from "./capability-grant.js";
 import { CompletionDeliveryBroker } from "./completion-delivery.js";
 import { buildContextSnapshot, type ContextMode, redactPrivateText } from "./context.js";
 import { createStatefulTransport } from "./create-stateful-transport.js";
@@ -20,6 +25,7 @@ import {
 	resolveSubagentTarget,
 	targetPolicyAudit,
 } from "./cwd-policy.js";
+import { DelegationContractSchema, normalizeDelegationContract } from "./delegation-contract.js";
 import { assertSubagentDepthAllowed } from "./execution.js";
 import type { ChildSessionFactory, ParentRuntimeSnapshot } from "./in-process-transport.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, MAX_SUBAGENT_TIMEOUT_MS, truncateUtf8 } from "./limits.js";
@@ -31,15 +37,19 @@ import {
 	type ManagedAgent,
 } from "./registry.js";
 import { SUBAGENT_RESULT_FORMATS, type SubagentResultFormat } from "./result-contract.js";
+import { buildRetainedSemanticState } from "./retained-semantic-state.js";
+import { evaluateSemanticCompatibility } from "./semantic-snapshot.js";
 import { DEFAULT_DELEGATION_CWD_POLICY, readSubagentSettings } from "./settings.js";
 import {
 	assertSpawnIdempotencyKey,
 	hashSpawnRequest,
 	MAX_SPAWN_IDEMPOTENCY_KEY_LENGTH,
 } from "./spawn-idempotency.js";
+import { resolveCompletionDelivery, resolveStatefulTransportKind } from "./stateful-config.js";
 import { createSpawnPromptGuidelines } from "./stateful-guidance.js";
 import {
 	assertCurrentSpawn,
+	cleanupPersistedWorkspaces,
 	disposeStatefulRuntime,
 	waitForOwnedSpawn,
 } from "./stateful-lifecycle.js";
@@ -307,6 +317,7 @@ export function registerStatefulSubagents(
 				maxMailboxMessageBytes: sessionSettings.maxMailboxMessageBytes,
 				idleTtlMs: sessionSettings.idleTtlMs,
 				onChange: async (agents) => {
+					if (generation !== runtimeGeneration) return;
 					await sessionPersistence.save(agents);
 					if (generation !== runtimeGeneration) return;
 					for (const agent of agents) {
@@ -325,8 +336,12 @@ export function registerStatefulSubagents(
 					if (generation === runtimeGeneration) sessionBroker.enqueue(completion);
 				},
 			});
-			const restored = sessionPersistence
-				.load()
+			const persisted = sessionPersistence.load();
+			const orphanCleanupFailures = await cleanupPersistedWorkspaces(persisted, workspaceManager);
+			if (ctx.hasUI && orphanCleanupFailures > 0) {
+				ctx.ui.notify("Some orphaned subagent worktrees could not be cleaned", "warning");
+			}
+			const restored = persisted
 				.filter(
 					(agent) =>
 						agent.workspaceMode !== "worktree" &&
@@ -446,6 +461,7 @@ export function registerStatefulSubagents(
 					description: "Use the shared workspace or an opt-in disposable Git worktree.",
 				}),
 			),
+			contract: Type.Optional(DelegationContractSchema),
 			idempotencyKey: Type.Optional(
 				Type.String({
 					minLength: 1,
@@ -455,7 +471,8 @@ export function registerStatefulSubagents(
 			),
 			resultFormat: Type.Optional(
 				StringEnum(SUBAGENT_RESULT_FORMATS, {
-					description: "Use text (default) or the opt-in structured-v1 completion contract.",
+					description:
+						"Use text (default), structured-v1, or the evidence-preserving structured-v2 completion contract.",
 				}),
 			),
 		}),
@@ -463,6 +480,12 @@ export function registerStatefulSubagents(
 		async execute(_id, params, signal, _update, ctx) {
 			const scope = (params.agentScope ?? "user") as AgentScope;
 			const resultFormat = (params.resultFormat ?? "text") as SubagentResultFormat;
+			const contract = normalizeDelegationContract(params.contract);
+			if (params.contract !== undefined && !contract) {
+				throw new Error(
+					"subagent_spawn contract must be a valid pi-subagents:delegation:v2 object",
+				);
+			}
 			assertSubagentDepthAllowed();
 			assertSpawnIdempotencyKey(params.idempotencyKey);
 			const generation = runtimeGeneration;
@@ -487,6 +510,26 @@ export function registerStatefulSubagents(
 			if ((scope === "project" || scope === "both") && !ctx.isProjectTrusted()) {
 				throw new Error("Project-local subagent definitions require a trusted project");
 			}
+			const resolvedAgents = discoverAgents(cwd, scope, currentSettings).agents;
+			const resolvedAgent = resolvedAgents.find((agent) => agent.name === params.agent);
+			if (!resolvedAgent) {
+				const available = resolvedAgents.map((agent) => agent.name).join(", ") || "none";
+				throw new Error(`Unknown subagent ${params.agent}. Available agents: ${available}`);
+			}
+			const targetSnapshot = targetPolicyAudit(target);
+			const { executionPlan, semanticSnapshot } = await buildRetainedSemanticState({
+				agent: resolvedAgent,
+				contract,
+				target: targetSnapshot,
+				cwd,
+				workspaceMode: params.workspaceMode === "worktree" ? "worktree" : "shared",
+				transport: transportKind,
+				resultFormat,
+				thinkingLevel: params.thinkingLevel,
+				timeoutMs: params.timeoutMs,
+				taskGeneration: 1,
+			});
+			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			const requestHash = hashSpawnRequest({
 				agent: params.agent,
 				task: params.task,
@@ -502,6 +545,7 @@ export function registerStatefulSubagents(
 				contextSourceIds: snapshot.sourceIds,
 				workspaceMode: params.workspaceMode ?? "shared",
 				allowConcurrentWrites: params.allowConcurrentWrites ?? false,
+				contract,
 				resultFormat,
 			});
 			const ownedRegistry = requireRegistry();
@@ -549,10 +593,7 @@ export function registerStatefulSubagents(
 					currentSettings,
 				);
 				assertCurrentSpawn(signal, generation, runtimeGeneration);
-				const resolvedAgent = discoverAgents(cwd, scope, currentSettings).agents.find(
-					(agent) => agent.name === params.agent,
-				);
-				if (params.workspaceMode === "worktree" && resolvedAgent?.source === "project") {
+				if (params.workspaceMode === "worktree" && resolvedAgent.source === "project") {
 					throw new Error("Project-local subagent definitions cannot run in a detached worktree");
 				}
 				const requestedCwd = cwd;
@@ -576,9 +617,13 @@ export function registerStatefulSubagents(
 					if (workspace) await workspaceManager.cleanup(workspaceOwner);
 					throw error;
 				}
-				const targetSnapshot = targetPolicyAudit(target);
 				let agent: ManagedAgent | undefined;
 				try {
+					const capabilityGrant = issueCapabilityGrant(
+						executionPlan,
+						Date.now(),
+						Math.max(1, (params.timeoutMs ?? resolvedAgent.timeoutMs ?? 600_000) + 60_000),
+					);
 					agent = await ownedRegistry.spawn({
 						agent: params.agent,
 						task: params.task,
@@ -598,7 +643,12 @@ export function registerStatefulSubagents(
 						workspaceMode: workspace ? "worktree" : undefined,
 						spawnIdempotencyKey: params.idempotencyKey,
 						spawnRequestHash: params.idempotencyKey ? requestHash : undefined,
+						contract,
 						resultFormat: resultFormat === "text" ? undefined : resultFormat,
+						executionPlan,
+						capabilityGrant,
+						semanticSnapshot,
+						semanticCompatibility: { status: "compatible", changedComponents: [] },
 						target: targetSnapshot,
 					});
 					assertCurrentSpawn(signal, generation, runtimeGeneration);
@@ -645,7 +695,7 @@ export function registerStatefulSubagents(
 		name: "subagent_send",
 		label: "Send Subagent Follow-up",
 		description:
-			"Send follow-up work to an idle, completed, interrupted, or failed subagent and start a new turn. Use subagent_mailbox for queue-only messages.",
+			"Send follow-up work to a reusable retained subagent and start a new turn. Semantic resource skew requires explicit revalidation. Use subagent_mailbox for queue-only messages.",
 		promptSnippet: "Start a new detached follow-up turn on a retained subagent",
 		parameters: Type.Object({
 			agentId: Type.String(),
@@ -659,6 +709,12 @@ export function registerStatefulSubagents(
 				}),
 			),
 			...StatefulTurnLimitFields,
+			revalidate: Type.Optional(
+				Type.Boolean({
+					description:
+						"Accept the current semantic resource snapshot after a reported mismatch before starting this follow-up.",
+				}),
+			),
 			allowConcurrentWrites: Type.Optional(
 				Type.Boolean({ description: "Override the shared-workspace write conflict guard." }),
 			),
@@ -670,6 +726,64 @@ export function registerStatefulSubagents(
 			const currentSettings = getCurrentSettings();
 			const existing = ownedRegistry.get(params.agentId);
 			if (!existing) throw new Error(`Unknown subagent: ${params.agentId}`);
+			const currentAgent = discoverAgents(
+				existing.cwd,
+				existing.agentScope ?? "user",
+				currentSettings,
+			).agents.find((agent) => agent.name === existing.agent);
+			if (!currentAgent) throw new Error(`Unknown retained subagent definition: ${existing.agent}`);
+			const resolvedFollowUpTarget =
+				existing.workspaceMode === "worktree"
+					? undefined
+					: resolveSubagentTarget({
+							workspace: ctx.cwd,
+							requestedCwd: existing.cwd,
+							currentProjectTrusted: ctx.isProjectTrusted(),
+						});
+			if (resolvedFollowUpTarget) {
+				assertDelegationTargetAllowed(
+					resolvedFollowUpTarget,
+					currentSettings?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY,
+				);
+			}
+			if (existing.workspaceMode === "worktree" && !existing.target) {
+				throw new Error("Retained worktree is missing its trusted target snapshot");
+			}
+			const currentTarget =
+				existing.workspaceMode === "worktree" && existing.target
+					? existing.target
+					: targetPolicyAudit(resolvedFollowUpTarget as NonNullable<typeof resolvedFollowUpTarget>);
+			const { executionPlan: currentPlan, semanticSnapshot: currentSnapshot } =
+				await buildRetainedSemanticState({
+					agent: currentAgent,
+					contract: existing.contract,
+					target: currentTarget,
+					cwd: existing.cwd,
+					workspaceMode: existing.workspaceMode === "worktree" ? "worktree" : "shared",
+					transport: transportKind,
+					resultFormat: existing.resultFormat ?? "text",
+					thinkingLevel: existing.thinkingLevel,
+					timeoutMs: params.timeoutMs ?? existing.timeoutMs,
+					taskGeneration: (existing.executionPlan?.taskGeneration ?? 0) + 1,
+					cancellationLineage: [
+						...(existing.executionPlan?.cancellationLineage ?? []),
+						...(existing.state === "interrupted" && existing.executionPlan?.id
+							? [existing.executionPlan.id]
+							: []),
+					],
+				});
+			assertCurrentSpawn(signal, generation, runtimeGeneration);
+			const compatibility = existing.semanticSnapshot
+				? evaluateSemanticCompatibility(existing.semanticSnapshot, currentSnapshot)
+				: { status: "warning" as const, changedComponents: ["legacy-missing-snapshot"] };
+			if (
+				(compatibility.status === "needs-revalidation" || compatibility.status === "rejected") &&
+				params.revalidate !== true
+			) {
+				throw new Error(
+					`Subagent semantic resources changed; retry with revalidate: true after reviewing: ${compatibility.changedComponents.join(", ")}`,
+				);
+			}
 			await confirmProjectAgent(
 				existing.agent,
 				existing.agentScope ?? "user",
@@ -685,6 +799,20 @@ export function registerStatefulSubagents(
 				params.allowConcurrentWrites ?? false,
 				isolatedAgents.has(existing.id),
 				currentSettings,
+			);
+			const currentGrant = issueCapabilityGrant(
+				currentPlan,
+				Date.now(),
+				Math.max(1, (params.timeoutMs ?? existing.timeoutMs ?? 600_000) + 60_000),
+			);
+			await ownedRegistry.updateSemanticState(
+				existing.id,
+				currentPlan,
+				currentGrant,
+				currentSnapshot,
+				params.revalidate === true && compatibility.status !== "compatible"
+					? { status: "warning", changedComponents: compatibility.changedComponents }
+					: compatibility,
 			);
 			const agent = await ownedRegistry.followUp(params.agentId, params.task, {
 				timeoutMs: params.timeoutMs,
@@ -919,6 +1047,11 @@ function summarizeAgent(agent: ManagedAgent) {
 		resultFormat: agent.resultFormat ?? "text",
 		structuredResult: agent.structuredResult,
 		termination: agent.termination,
+		outcome: agent.outcome,
+		executionPlan: agent.executionPlan,
+		capabilityGrant: agent.capabilityGrant,
+		semanticCompatibility: agent.semanticCompatibility,
+		semanticSnapshotDigest: agent.semanticSnapshot?.digest,
 		telemetry: agent.telemetry,
 		error: agent.error ? truncateUtf8(agent.error, MAX_TOOL_MESSAGE_BYTES).text : undefined,
 		target: agent.target,
@@ -949,18 +1082,6 @@ function result(agent: ManagedAgent, text: string) {
 	};
 }
 
-export function resolveStatefulTransportKind(
-	value: SubagentTransportKind | undefined,
-): SubagentTransportKind {
-	return value ?? "subprocess";
-}
-
-export function resolveCompletionDelivery(
-	value: CompletionDelivery | undefined,
-): CompletionDelivery {
-	return value ?? "next-turn";
-}
-
 function normalizeRuntimeThinkingLevel(value: string): ParentRuntimeSnapshot["thinkingLevel"] {
 	return isThinkingLevel(value) ? value : "off";
 }
@@ -969,6 +1090,7 @@ export {
 	buildDetachedCompletionMessage,
 	CompletionDeliveryBroker,
 } from "./completion-delivery.js";
+export { resolveCompletionDelivery, resolveStatefulTransportKind } from "./stateful-config.js";
 export {
 	buildStatefulTurnPrompt,
 	resolveStatefulTurnTimeout,

@@ -5,6 +5,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import {
+	type AgentCapabilityManifest,
+	CAPABILITY_MANIFEST_VERSION,
+	normalizeCapabilityManifest,
+} from "./capabilities.js";
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -18,6 +23,12 @@ export type AgentScope = "user" | "project" | "both";
 
 export type AgentSource = "built-in" | "user" | "project";
 
+export const DEFAULT_PI_TOOL_NAMES = ["read", "bash", "edit", "write"] as const;
+
+export function resolveAgentToolNames(tools: readonly string[] | undefined): string[] {
+	return [...new Set(tools ?? DEFAULT_PI_TOOL_NAMES)];
+}
+
 export interface AgentConfig {
 	name: string;
 	description: string;
@@ -25,6 +36,7 @@ export interface AgentConfig {
 	model?: string;
 	thinkingLevel?: SubagentThinkingLevel;
 	timeoutMs?: number;
+	capabilityManifest?: AgentCapabilityManifest;
 	systemPrompt: string;
 	source: AgentSource;
 	filePath: string;
@@ -98,6 +110,9 @@ const BUILT_IN_AGENTS: AgentConfig[] = [
 		description:
 			"Read-only codebase reconnaissance; returns concise findings with paths and evidence.",
 		tools: ["read", "grep", "find", "ls", "bash"],
+		capabilityManifest: builtInManifest(["repository-search", "code-evidence"], "read", [
+			"evidence-gathering",
+		]),
 		source: "built-in",
 		filePath: "built-in:scout",
 		systemPrompt: [
@@ -110,6 +125,10 @@ const BUILT_IN_AGENTS: AgentConfig[] = [
 		name: "planner",
 		description: "Turns reconnaissance into a lean implementation or migration plan.",
 		tools: ["read", "grep", "find", "ls"],
+		capabilityManifest: builtInManifest(
+			["task-decomposition", "implementation-planning", "migration-planning"],
+			"read",
+		),
 		source: "built-in",
 		filePath: "built-in:planner",
 		systemPrompt: [
@@ -122,6 +141,11 @@ const BUILT_IN_AGENTS: AgentConfig[] = [
 		name: "reviewer",
 		description: "Independent code review agent that inspects existing verification evidence.",
 		tools: ["read", "grep", "find", "ls", "bash"],
+		capabilityManifest: builtInManifest(
+			["code-review", "evidence-review", "security-baseline"],
+			"read",
+			["independent-review"],
+		),
 		source: "built-in",
 		filePath: "built-in:reviewer",
 		systemPrompt: [
@@ -134,6 +158,10 @@ const BUILT_IN_AGENTS: AgentConfig[] = [
 	{
 		name: "worker",
 		description: "General-purpose implementation worker with the default Pi tool set.",
+		capabilityManifest: builtInManifest(
+			["implementation", "command-execution", "repository-modification"],
+			"write",
+		),
 		source: "built-in",
 		filePath: "built-in:worker",
 		systemPrompt: workerSystemPrompt(),
@@ -141,6 +169,10 @@ const BUILT_IN_AGENTS: AgentConfig[] = [
 	{
 		name: "general",
 		description: "Alias for worker; kept for model-generated subagent names.",
+		capabilityManifest: builtInManifest(
+			["implementation", "command-execution", "repository-modification"],
+			"write",
+		),
 		source: "built-in",
 		filePath: "built-in:general",
 		systemPrompt: workerSystemPrompt(),
@@ -148,11 +180,34 @@ const BUILT_IN_AGENTS: AgentConfig[] = [
 	{
 		name: "general-purpose",
 		description: "Alias for worker; compatible with common subagent naming conventions.",
+		capabilityManifest: builtInManifest(
+			["implementation", "command-execution", "repository-modification"],
+			"write",
+		),
 		source: "built-in",
 		filePath: "built-in:general-purpose",
 		systemPrompt: workerSystemPrompt(),
 	},
 ];
+
+function builtInManifest(
+	capabilities: string[],
+	filesystem: "read" | "write",
+	verificationRoles: string[] = [],
+): AgentCapabilityManifest {
+	return {
+		version: CAPABILITY_MANIFEST_VERSION,
+		capabilities,
+		modalities: ["text"],
+		resultFormats: ["text", "structured-v1", "structured-v2"],
+		authority: { filesystem },
+		verificationRoles,
+		contextStrengths: ["repository"],
+		costHint: filesystem === "read" ? "low" : "medium",
+		latencyHint: filesystem === "read" ? "low" : "medium",
+		limitations: [],
+	};
+}
 
 function workerSystemPrompt(): string {
 	return [
@@ -297,6 +352,7 @@ function loadAgentsFromDir(
 			thinkingLevel: isThinkingLevel(frontmatter.thinkingLevel)
 				? frontmatter.thinkingLevel
 				: undefined,
+			capabilityManifest: normalizeCapabilityManifest(frontmatter.capabilityManifest),
 			systemPrompt: body,
 			source,
 			filePath,

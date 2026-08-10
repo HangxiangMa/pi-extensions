@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { buildContextSnapshot, redactPrivateText } from "../src/context.js";
+import { normalizeDelegationContract } from "../src/delegation-contract.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8, truncateUtf8Tail } from "../src/limits.js";
 import { JsonLineDecoder } from "../src/protocol.js";
 import type { ManagedAgent } from "../src/registry.js";
@@ -174,6 +175,25 @@ test("context snapshots keep only user/assistant text, recent turns, and redact 
 	);
 	assert.ok(Buffer.byteLength(summarized.text) <= 100);
 	assert.match(summarized.text, /LATEST_END$/);
+});
+
+test("stateful prompts preserve delegation and result v2 contracts", () => {
+	const contract = normalizeDelegationContract({
+		version: "pi-subagents:delegation:v2",
+		level: "full",
+		taskId: "task-1",
+		objective: "Inspect <private>secret</private> behavior",
+		acceptanceCriteria: ["Evidence is cited"],
+	});
+	assert.ok(contract);
+	const prompt = buildStatefulTurnPrompt(
+		record({ contract, resultFormat: "structured-v2" }),
+		"inspect",
+	);
+	assert.match(prompt.text, /pi-subagents:delegation:v2/);
+	assert.match(prompt.text, /pi-subagents:result:v2/);
+	assert.match(prompt.text, /requested authority is advisory/i);
+	assert.doesNotMatch(prompt.text, /secret/);
 });
 
 test("stateful follow-up prompts redact retained history and honor global timeout", () => {

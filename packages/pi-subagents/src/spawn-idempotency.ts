@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AgentScope, SubagentThinkingLevel } from "./agents.js";
+import type { DelegationContract } from "./delegation-contract.js";
 import type { SubagentResultFormat } from "./result-contract.js";
 
 export const MAX_SPAWN_IDEMPOTENCY_KEY_LENGTH = 256;
@@ -19,6 +20,7 @@ export interface CanonicalSpawnRequest {
 	contextSourceIds: readonly string[];
 	workspaceMode: "shared" | "worktree";
 	allowConcurrentWrites: boolean;
+	contract?: DelegationContract;
 	resultFormat: SubagentResultFormat;
 }
 
@@ -42,6 +44,7 @@ export function hashSpawnRequest(request: CanonicalSpawnRequest): string {
 				contextSourceIds: [...request.contextSourceIds],
 				workspaceMode: request.workspaceMode,
 				allowConcurrentWrites: request.allowConcurrentWrites,
+				...(request.contract === undefined ? {} : { contract: request.contract }),
 				resultFormat: request.resultFormat,
 			}),
 		)

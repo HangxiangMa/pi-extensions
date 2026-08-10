@@ -71,6 +71,40 @@ export class WorkspaceManager {
 		}
 	}
 
+	async cleanupPersisted(ownerId: string, cwd: string): Promise<void> {
+		const rootPath = findGeneratedWorktreeRoot(cwd);
+		if (!rootPath || !(await this.isOwned(rootPath, ownerId))) return;
+		let repositoryRoot: string | undefined;
+		try {
+			const commonDirectory = (
+				await execFileAsync("git", ["-C", rootPath, "rev-parse", "--git-common-dir"])
+			).stdout.trim();
+			const resolvedCommonDirectory = await fs.promises.realpath(
+				path.resolve(rootPath, commonDirectory),
+			);
+			repositoryRoot = path.dirname(resolvedCommonDirectory);
+		} catch {
+			// The ownership marker still permits bounded filesystem cleanup below.
+		}
+		if (repositoryRoot) {
+			await execFileAsync("git", [
+				"-C",
+				repositoryRoot,
+				"worktree",
+				"remove",
+				"--force",
+				rootPath,
+			]).catch(() => undefined);
+		}
+		await fs.promises.rm(rootPath, { recursive: true, force: true });
+		await fs.promises.rm(`${rootPath}.owner`, { force: true });
+		if (repositoryRoot) {
+			await execFileAsync("git", ["-C", repositoryRoot, "worktree", "prune"]).catch(
+				() => undefined,
+			);
+		}
+	}
+
 	async cleanup(ownerId: string): Promise<void> {
 		const workspace = this.owned.get(ownerId);
 		if (!workspace) return;
@@ -114,5 +148,15 @@ export class WorkspaceManager {
 		} catch {
 			return false;
 		}
+	}
+}
+
+function findGeneratedWorktreeRoot(cwd: string): string | undefined {
+	let current = path.resolve(cwd);
+	while (true) {
+		if (path.basename(current).startsWith(WORKTREE_PREFIX)) return current;
+		const parent = path.dirname(current);
+		if (parent === current) return undefined;
+		current = parent;
 	}
 }

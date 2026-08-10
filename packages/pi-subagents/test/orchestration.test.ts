@@ -233,6 +233,10 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		assert.match(send.parameters.properties?.idleTimeoutMs?.description ?? "", /completed/i);
 		assert.match(send.parameters.properties?.maxTurns?.description ?? "", /assistant turns/i);
 		assert.match(send.parameters.properties?.maxToolCalls?.description ?? "", /tool calls/i);
+		assert.match(
+			send.parameters.properties?.revalidate?.description ?? "",
+			/semantic resource snapshot/i,
+		);
 		const manage = mock.tools.find((tool) => tool.name === "subagent_manage") as {
 			description: string;
 			parameters: { properties?: Record<string, { description?: string; enum?: string[] }> };
@@ -477,7 +481,9 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		assert.deepEqual(spawnTool.parameters.properties?.resultFormat?.enum, [
 			"text",
 			"structured-v1",
+			"structured-v2",
 		]);
+		assert.ok(spawnTool.parameters.properties?.contract);
 		assert.match(
 			spawnTool.parameters.properties?.thinkingLevel?.description ?? "",
 			/task difficulty/i,

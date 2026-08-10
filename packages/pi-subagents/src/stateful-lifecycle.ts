@@ -1,5 +1,23 @@
-import type { AgentRegistry } from "./registry.js";
+import type { AgentRegistry, ManagedAgent } from "./registry.js";
 import type { WorkspaceManager } from "./workspace.js";
+
+export async function cleanupPersistedWorkspaces(
+	agents: readonly ManagedAgent[],
+	workspaceManager: WorkspaceManager,
+): Promise<number> {
+	const cleanup = (
+		workspaceManager as WorkspaceManager & {
+			cleanupPersisted?: (ownerId: string, cwd: string) => Promise<void>;
+		}
+	).cleanupPersisted?.bind(workspaceManager);
+	if (!cleanup) return 0;
+	const results = await Promise.allSettled(
+		agents
+			.filter((agent) => agent.workspaceMode === "worktree")
+			.map((agent) => cleanup(agent.id, agent.cwd)),
+	);
+	return results.filter((result) => result.status === "rejected").length;
+}
 
 export async function disposeStatefulRuntime(
 	registry: AgentRegistry | undefined,

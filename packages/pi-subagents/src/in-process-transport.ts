@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type AgentConfig, discoverAgents, type SubagentThinkingLevel } from "./agents.js";
 import { redactPrivateText } from "./context.js";
+import { appendDelegationContract } from "./delegation-contract.js";
 import { resolveDefaultSubagentTimeoutMs } from "./execution.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_OUTPUT_BYTES, truncateUtf8 } from "./limits.js";
 import { resolvePiPromptResources } from "./prompt-resources.js";
@@ -178,7 +179,7 @@ export class InProcessTransport implements SubagentTransport {
 		}
 		let tools: string[] | undefined;
 		try {
-			tools = validateInProcessTools(agentConfig.tools);
+			tools = validateInProcessTools(agent.executionPlan?.effectiveTools ?? agentConfig.tools);
 		} catch (error) {
 			publish({ phase: "failed", failurePhase: "starting" });
 			return { output: "", exitCode: 1, error: errorMessage(error), telemetry };
@@ -787,13 +788,12 @@ export function buildCurrentTurnPrompt(agent: ManagedAgent, task: string): strin
 		.slice(-20)
 		.map((message) => `From ${message.senderId}: ${redactPrivateText(message.content)}`)
 		.join("\n");
+	const base = messages
+		? `${redactPrivateText(task)}\n\nMailbox messages:\n${messages}`
+		: redactPrivateText(task);
+	const contracted = appendDelegationContract(base, agent.contract, DEFAULT_MAX_CONTEXT_BYTES);
 	return truncateUtf8(
-		appendResultInstruction(
-			messages
-				? `${redactPrivateText(task)}\n\nMailbox messages:\n${messages}`
-				: redactPrivateText(task),
-			agent.resultFormat,
-		),
+		appendResultInstruction(contracted.text, agent.resultFormat),
 		DEFAULT_MAX_CONTEXT_BYTES,
 	).text;
 }

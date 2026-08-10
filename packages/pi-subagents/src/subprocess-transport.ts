@@ -73,6 +73,7 @@ export class SubprocessTransport implements SubagentTransport {
 			undefined,
 			{
 				projectTrust,
+				...(record.executionPlan ? { tools: record.executionPlan.effectiveTools } : {}),
 				appendSystemPromptPaths: promptResources?.appendSystemPromptPaths,
 				timeoutResultFormat: record.resultFormat,
 				turnLimits: {
@@ -80,6 +81,10 @@ export class SubprocessTransport implements SubagentTransport {
 					maxTurns: record.currentMaxTurns ?? record.maxTurns,
 					maxToolCalls: record.currentMaxToolCalls ?? record.maxToolCalls,
 				},
+				resultFormat: record.resultFormat,
+				contract: record.contract,
+				executionPlan: record.executionPlan,
+				displayTask: task,
 			},
 		);
 		const settledAt = Date.now();

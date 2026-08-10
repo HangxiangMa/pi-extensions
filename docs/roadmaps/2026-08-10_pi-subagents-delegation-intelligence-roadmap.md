@@ -1,6 +1,6 @@
 # Pi Subagents Delegation Intelligence Roadmap
 
-- **Status:** Proposed strategic direction; not an implementation or release commitment.
+- **Status:** Revised opt-in implementation complete; matched live admission evidence and any default change remain deferred.
 - **Audience:** `@narumitw/pi-subagents` maintainers and contributors.
 - **Planning horizon:** Evidence-qualified phases without delivery dates.
 - **Research basis:** [`2026-08-10-coding-agent-subagents-arxiv-survey.md`](../research/2026-08-10-coding-agent-subagents-arxiv-survey.md) and [`2026-08-10-coding-agent-subagents-engineering-notes.md`](../research/2026-08-10-coding-agent-subagents-engineering-notes.md).
@@ -31,17 +31,17 @@ Keep `pi-subagents` as the owner of delegation contracts, execution planning, su
 - **Post-hoc objective — Quarantine cancelled and replaced generations** — Success: task-version-bound authority is revoked on cancellation or replacement, and no result from an old generation can enter integration or satisfy current acceptance.
   **Reason:** The initial roadmap audited cancellation but did not make late-result rejection an orchestration invariant.
 
-## Current State
+## Implemented State
 
-- `pi-subagents` already supports blocking single, parallel, chain, and fan-in execution plus detached reusable agents, mailboxes, inspection, read-only consultation, multiple transports, worktrees, recursion limits, work deadlines, bounded timeout finalization, idempotent spawn, persistence, and completion delivery.
-- `structured-v1` is an opt-in stateful result shape with `summary`, `evidence`, `changes`, `verification`, and `risks`, while blocking task, chain, and fan-in handoffs remain primarily free-form text.
-- Blocking chain execution substitutes raw previous output into `{previous}`, and fan-in composes bounded Markdown from worker outputs.
-- `AgentConfig` describes tools, model, thinking level, timeout, and prompt but has no versioned capability or result-format manifest.
-- Automatic transport selection distinguishes custom tools, write-capable built-ins, and read-only built-ins but does not evaluate task intent or capability fit.
-- Stateful lifecycle states distinguish starting, running, idle, completed, interrupted, failed, and closed but do not represent acknowledgement, blocked work, missing input, abstention, stale evidence, or revalidation.
-- `AgentRegistry` owns a bounded parent tree, FIFO turn queue, mailbox, persistence, and concurrency limits but not an explicit task-dependency or artifact graph.
-- Current trust, tool, cwd, and worktree policies are valuable controls but are not an operating-system filesystem, network, secret, or credential sandbox.
-- The package has no established benchmark baseline for handoff fidelity, permission precision, missing transfers, cascade radius, or the marginal value of orchestration over matched alternatives.
+- `pi-subagents` preserves blocking single, parallel, chain, fan-in, detached reusable agents, mailboxes, inspection, read-only consultation, transports, worktrees, recursion limits, deadlines, timeout finalization, idempotent spawn, persistence, and completion delivery.
+- Opt-in delegation v2 and structured result v2 contracts carry bounded authority requests, evidence-backed claims, artifacts, verification, limitations, provenance, task generation, and actionable outcomes while text and `structured-v1` remain compatible.
+- Built-in and custom definitions can publish capability manifests, and deterministic capability routing plus executor-owned `ExecutionPlan` and capability-grant metadata make fit, authority, admission, lifetime, and unsupported guarantees reviewable.
+- Explicit blocking workflow mode validates bounded dependency graphs, routes by capability when requested, tracks WorkItems and versioned artifacts, limits mutating width to two, rejects recursive workflows, and exposes deterministic scheduling decisions and metrics.
+- Stateful outcomes include blocked, needs-input, abstained, stale, interrupted, failed, and contract-invalid projections, while cancellation rotates generations and revokes active grants before stale completions can be accepted.
+- Privacy-safe semantic snapshots hash prompts, policies, resources, repository state, artifact contracts, and scheduler policy, and retained follow-up requires explicit revalidation after incompatible changes.
+- The WorkItem ledger, integration controller, verifier relationship, strict persistence validation, invalidation, crash recovery, orphan cleanup, bounded retries, and read-only hedging are covered by deterministic tests.
+- Current trust, tool, cwd, worktree, capability, and grant policies remain task and runtime controls rather than an operating-system filesystem, network, secret, or credential sandbox.
+- Gate 4A recorded a revised opt-in scope and an offline matched-protocol dry-run, while representative paired live-provider quality and overhead baselines remain explicitly deferred before any recommendation or default change.
 
 ## Guiding Principles
 
@@ -62,59 +62,75 @@ Keep `pi-subagents` as the owner of delegation contracts, execution planning, su
 
 ## Roadmap
 
+### 2026-08-10 implementation record
+
+The revised opt-in architecture is implemented in `packages/pi-subagents` and covered by the package compatibility suite.
+
+The saved Gate 4A decision is **Revise** in [`2026-08-10_pi-subagents-admission-gate-decision.md`](../benchmarks/2026-08-10_pi-subagents-admission-gate-decision.md).
+
+That decision admits only caller-selected explicit workflows, audit-only admission with an explicit decline opt-in, two concurrent mutating children, no workflow grandchildren, and semantic revalidation.
+
+Unchecked matched-provider and measured-overhead items remain intentionally deferred because no paired repository sample, fixed provider budget, or live evaluation authorization was supplied.
+
+Detached parent trees and mailboxes also remain solely AgentRegistry-owned instead of being projected into WorkItems, because the revised scope avoids introducing a second lifecycle owner without an admitted detached-workflow use case.
+
+They are gates or separately scoped follow-ups, not evidence that may be replaced with deterministic simulation.
+
+No package publication, default scheduling change, tag, or release workflow is part of this implementation.
+
 ### Phase 1: Establish delegation contracts and structured handoffs
 
-- [ ] A versioned delegation-request contract covers task identity, objective, non-goals, dependencies, required inputs, requested authority, acceptance criteria, required evidence, and bounded budgets without claiming those requests are already enforced.
-- [ ] **Post-hoc addition:** The executor attaches an immutable task generation and cancellation lineage to the request and stamps the normalized structured result with that generation without trusting model output or claiming enforcement.
+- [x] A versioned delegation-request contract covers task identity, objective, non-goals, dependencies, required inputs, requested authority, acceptance criteria, required evidence, and bounded budgets without claiming those requests are already enforced.
+- [x] **Post-hoc addition:** The executor attaches an immutable task generation and cancellation lineage to the request and stamps the normalized structured result with that generation without trusting model output or claiming enforcement.
   **Reason:** Generation provenance must exist before later phases can revoke grants or quarantine results from cancelled and replaced work.
-- [ ] A versioned result contract preserves status, evidence-backed claims, artifact references, changed paths, verification results, limitations, unresolved dependencies, provenance, usage, and truncation metadata across every supported execution and delivery path.
-- [ ] Blocking single, parallel, chain, fan-in, and detached execution can opt into the same contract while existing text and `structured-v1` behavior remain compatible.
-- [ ] Chain and fan-in transfer validated structured envelopes when available and retain bounded raw text only as an explicit compatibility fallback.
+- [x] A versioned result contract preserves status, evidence-backed claims, artifact references, changed paths, verification results, limitations, unresolved dependencies, provenance, usage, and truncation metadata across every supported execution and delivery path.
+- [x] Blocking single, parallel, chain, fan-in, and detached execution can opt into the same contract while existing text and `structured-v1` behavior remain compatible.
+- [x] Chain and fan-in transfer validated structured envelopes when available and retain bounded raw text only as an explicit compatibility fallback.
 - [ ] Contract levels or profiles let small lookup tasks avoid the measured token, latency, and tool-call overhead of a full software delegation contract.
-- [ ] Deterministic contract tests cover malformed, partial, oversized, private, stale-version, unknown-field, and fallback behavior without silently presenting invalid structured data as successful evidence.
+- [x] Deterministic contract tests cover malformed, partial, oversized, private, stale-version, unknown-field, and fallback behavior without silently presenting invalid structured data as successful evidence.
 
 **Outcome:** Every opted-in subagent boundary has a reviewable request, result, and evidence surface that later policy can safely inspect and enforce.
 
 ### Phase 2: Add capability manifests and audit-only ExecutionPlan
 
-- [ ] Built-in and custom agent definitions can declare versioned capabilities, modalities, supported result contracts, authority needs, and verification roles while old definitions remain valid.
-- [ ] One transport-neutral `ExecutionPlan` records task requirements, selected agent, declared capability fit, requested and effective tools, cwd and trust decision, workspace mode, transport, model and thinking selection, budgets, and unsupported guarantees.
-- [ ] The first planner is deterministic and uses explicit contract requirements rather than task-keyword heuristics or an additional classifier model call.
-- [ ] **Post-hoc addition:** Audit-only `ExecutionPlan` records a delegation-admission recommendation, benefit hypothesis, task generation, and one of parent-owned direct work, one child, one child plus verification, or bounded multi-child work without changing launch behavior.
+- [x] Built-in and custom agent definitions can declare versioned capabilities, modalities, supported result contracts, authority needs, and verification roles while old definitions remain valid.
+- [x] One transport-neutral `ExecutionPlan` records task requirements, selected agent, declared capability fit, requested and effective tools, cwd and trust decision, workspace mode, transport, model and thinking selection, budgets, and unsupported guarantees.
+- [x] The first planner is deterministic and uses explicit contract requirements rather than task-keyword heuristics or an additional classifier model call.
+- [x] **Post-hoc addition:** Audit-only `ExecutionPlan` records a delegation-admission recommendation, benefit hypothesis, task generation, and one of parent-owned direct work, one child, one child plus verification, or bounded multi-child work without changing launch behavior.
   **Reason:** The original planner audited capability fit but did not answer the roadmap's core question of whether delegation was justified.
-- [ ] Audit-only planning does not change the caller-selected agent, tools, transport, workspace, or launch result, but it reports mismatch, overgrant, omission, and unsupported-policy findings through bounded details and inspection.
-- [ ] Agent catalogs and inspection expose only safe manifest metadata and never expose system prompts, credentials, raw protected paths, or private context.
+- [x] Audit-only planning does not change the caller-selected agent, tools, transport, workspace, or launch result, but it reports mismatch, overgrant, omission, and unsupported-policy findings through bounded details and inspection.
+- [x] Agent catalogs and inspection expose only safe manifest metadata and never expose system prompts, credentials, raw protected paths, or private context.
 - [ ] Baseline evaluation measures capability coverage and permission precision before any enforcement default is considered.
 
 **Outcome:** Maintainers can observe whether a launch is appropriately matched and minimally authorized without breaking existing workflows.
 
 ### Phase 3: Enforce capabilities and make inability actionable
 
-- [ ] Contracted calls can explicitly request capability enforcement, while legacy and uncontracted calls retain audit-only behavior unless a separately approved compatibility change says otherwise.
-- [ ] Preflight acknowledgement returns a typed accepted or rejected decision before project-agent confirmation, worktree creation, child allocation, provider work, or other side effects.
-- [ ] **Post-hoc addition:** Every enforceable capability grant is bound to the accepted task generation and `ExecutionPlan` identity, has an explicit lifetime, and is revocable before cancellation signals are delivered.
+- [x] Contracted calls can explicitly request capability enforcement, while legacy and uncontracted calls retain audit-only behavior unless a separately approved compatibility change says otherwise.
+- [x] Preflight acknowledgement returns a typed accepted or rejected decision before project-agent confirmation, worktree creation, child allocation, provider work, or other side effects.
+- [x] **Post-hoc addition:** Every enforceable capability grant is bound to the accepted task generation and `ExecutionPlan` identity, has an explicit lifetime, and is revocable before cancellation signals are delivered.
   **Reason:** Phase 3 otherwise enforces authority before Phase 4 introduces enough version identity to prevent stale grants and late-result races.
-- [ ] Runtime results distinguish completed, partial, blocked, needs-input, abstained, failed, interrupted, stale, and contract-invalid outcomes with bounded reason codes and actionable recovery metadata.
-- [ ] Enforceable controls cover actual agent capability, tool allow-lists, cwd and trust policy, resource policy, workspace mode, result-contract support, concurrency, and budgets consistently across subprocess, in-process, RPC, and automatic transport.
-- [ ] Requested filesystem, network, secret, or credential guarantees fail closed when no real sandbox or policy provider can enforce them, rather than being represented as prompt-only protection.
-- [ ] Recovery policy retries only classified transient failures, requests exact missing inputs for dependency failures, reroutes capability mismatch, and never blindly replays work whose side effects may already have occurred.
-- [ ] **Post-hoc addition:** For contracted generation-aware work, cancellation or session replacement rotates the generation, revokes matching grants, classifies later completions as stale, and prevents them from triggering recovery or acceptance while legacy omitted-field behavior remains unchanged.
+- [x] Runtime results distinguish completed, partial, blocked, needs-input, abstained, failed, interrupted, stale, and contract-invalid outcomes with bounded reason codes and actionable recovery metadata.
+- [x] Enforceable controls cover actual agent capability, tool allow-lists, cwd and trust policy, resource policy, workspace mode, result-contract support, concurrency, and budgets consistently across subprocess, in-process, RPC, and automatic transport.
+- [x] Requested filesystem, network, secret, or credential guarantees fail closed when no real sandbox or policy provider can enforce them, rather than being represented as prompt-only protection.
+- [x] Recovery policy retries only classified transient failures, requests exact missing inputs for dependency failures, reroutes capability mismatch, and never blindly replays work whose side effects may already have occurred.
+- [x] **Post-hoc addition:** For contracted generation-aware work, cancellation or session replacement rotates the generation, revokes matching grants, classifies later completions as stale, and prevents them from triggering recovery or acceptance while legacy omitted-field behavior remains unchanged.
   **Reason:** Logging cancellation is insufficient when detached or slow workers can settle after their owner has moved on.
 
 **Outcome:** The system can safely refuse, clarify, reroute, or stop unsuitable work without turning every inability into an opaque failure or repeated prompt.
 
 ### Phase 4: Introduce a WorkItem and artifact ledger
 
-- [ ] A bounded WorkItem model owns workflow identity, task identity, dependencies, assignment, cohesive scope, artifact inputs and outputs, acceptance criteria, state, provenance, and terminal outcome without replacing Pi's agent loop.
+- [x] A bounded WorkItem model owns workflow identity, task identity, dependencies, assignment, cohesive scope, artifact inputs and outputs, acceptance criteria, state, provenance, and terminal outcome without replacing Pi's agent loop.
 - [ ] Existing single, parallel, chain, fan-in, parent-child, and mailbox behavior projects into the ledger before an explicit DAG execution surface is admitted.
-- [ ] Explicit workflow graphs validate identifiers, dependencies, limits, ownership conflicts, and cycles before any child starts or project-authored agent confirmation appears.
-- [ ] Artifact versions and dependency generations make missing transfers, superseded inputs, conflicting ownership, and downstream invalidation observable.
-- [ ] One integration owner can assemble compatible artifacts, and one independently contextualized verifier can attach machine-executed acceptance evidence without becoming another completion owner.
-- [ ] **Post-hoc addition:** In an opted-in managed-integration WorkItem, the integration owner is the only component allowed to update canonical integration state and must fail closed on stale task generation, base commit, dependency or read-set version, accepted-plan identity, scope, patch digest, or required evidence.
+- [x] Explicit workflow graphs validate identifiers, dependencies, limits, ownership conflicts, and cycles before any child starts or project-authored agent confirmation appears.
+- [x] Artifact versions and dependency generations make missing transfers, superseded inputs, conflicting ownership, and downstream invalidation observable.
+- [x] One integration owner can assemble compatible artifacts, and one independently contextualized verifier can attach machine-executed acceptance evidence without becoming another completion owner.
+- [x] **Post-hoc addition:** In an opted-in managed-integration WorkItem, the integration owner is the only component allowed to update canonical integration state and must fail closed on stale task generation, base commit, dependency or read-set version, accepted-plan identity, scope, patch digest, or required evidence.
   **Reason:** Worktree isolation prevents direct file interference but does not prevent logically incompatible or stale patches from being accepted.
-- [ ] **Post-hoc addition:** Cancellation forms a WorkItem subtree operation that rotates affected generations, quarantines late artifacts, preserves their diagnostic provenance, and never treats quarantine as successful completion.
+- [x] **Post-hoc addition:** Cancellation forms a WorkItem subtree operation that rotates affected generations, quarantines late artifacts, preserves their diagnostic provenance, and never treats quarantine as successful completion.
   **Reason:** The deeper research identified cancellation propagation and accepted late results as important unmeasured correctness risks.
-- [ ] Ledger state is bounded, redacted, branch-aware where applicable, versioned for persistence, recoverable after partial writes, and inspectable without exposing artifact contents by default.
+- [x] Ledger state is bounded, redacted, branch-aware where applicable, versioned for persistence, recoverable after partial writes, and inspectable without exposing artifact contents by default.
 
 **Outcome:** Delegation becomes a reproducible state machine over tasks and artifacts rather than a collection of loosely related agent transcripts.
 
@@ -125,26 +141,26 @@ Keep `pi-subagents` as the owner of delegation contracts, execution planning, su
 **Reason:** The deeper evidence showed that building adaptive orchestration before comparing it with strong simpler baselines could turn extra models, tokens, or harness differences into a false delegation advantage.
 
 - [ ] An audit-only deterministic admission policy is evaluated on paired repeated repository tasks against parent-owned or equivalent strong single-agent execution, one-child execution, equal-budget best-of-N, naive parallelism, and a fixed two-child architecture with the same model, information, harness, evaluator, token or dollar ceiling, and wall-clock ceiling.
-- [ ] The first multi-child experiment permits at most two concurrent mutating children and no recursive grandchildren, and it uses one integration owner plus one fresh-context verifier.
+- [x] The first multi-child experiment permits at most two concurrent mutating children and no recursive grandchildren, and it uses one integration owner plus one fresh-context verifier.
 - [ ] Outcomes report verified task success, cost, tokens, wall-clock time, unnecessary delegation, handoff coverage, conflicts, stale-result rejection, cancellation latency, leaked work, and accepted late results with paired confidence intervals.
-- [ ] A recorded **Admit**, **Revise**, or **Defer** decision determines whether Phase 5 may implement adaptive admission and scheduling, while contracts, capability audit, typed outcomes, and fail-closed integration remain useful independently.
+- [x] A recorded **Admit**, **Revise**, or **Defer** decision determines whether Phase 5 may implement adaptive admission and scheduling, while contracts, capability audit, typed outcomes, and fail-closed integration remain useful independently.
 
 **Outcome:** Adaptive orchestration proceeds only if a small falsifiable architecture demonstrates value or a precisely bounded research gap justifies continued experimental work.
 
 ### Phase 5: Add adaptive scheduling and semantic isolation
 
-- [ ] **Post-hoc admission dependency:** Phase 5 implementation begins only after Gate 4A records **Admit** or a separately approved **Revise** scope.
+- [x] **Post-hoc admission dependency:** Phase 5 implementation begins only after Gate 4A records **Admit** or a separately approved **Revise** scope.
   **Reason:** The original roadmap postponed matched comparison until the end of adaptive-scheduler implementation.
-- [ ] A dependency-aware ready queue starts only work whose required artifacts are current and whose effective scopes do not create known write, ownership, or integration conflicts.
-- [ ] **Post-hoc addition:** The scheduler consumes the admitted audit policy and can recommend parent-owned direct work, one child, one child plus verification, or bounded multi-child work before allocating children.
+- [x] A dependency-aware ready queue starts only work whose required artifacts are current and whose effective scopes do not create known write, ownership, or integration conflicts.
+- [x] **Post-hoc addition:** The scheduler consumes the admitted audit policy and can recommend parent-owned direct work, one child, one child plus verification, or bounded multi-child work before allocating children.
   **Reason:** Dependency-aware scheduling alone decides when work is ready, not whether spawning subagents is worthwhile.
-- [ ] **Post-hoc addition:** Multi-child mutation remains capped at the Gate 4A bound and recursive delegation remains disabled until a separate matched evaluation and approval justify expansion.
+- [x] **Post-hoc addition:** Multi-child mutation remains capped at the Gate 4A bound and recursive delegation remains disabled until a separate matched evaluation and approval justify expansion.
   **Reason:** Wider teams and recursion would confound the first admission-policy evidence and can reduce success as coordination width grows.
-- [ ] Configured parallel limits remain hard ceilings, while effective concurrency adapts deterministically to ready work, cohesion, critical path, remaining budget, transport capacity, and workspace safety.
-- [ ] Semantic resource snapshots bind retained work to bounded identities or hashes for agent definition, role prompt, tool policy, model resolution, protected resources, repository generation, dependency artifacts, and scheduler policy without persisting secrets or full prompts.
-- [ ] Restore and continuation detect semantic skew and apply an explicit compatible, warn, needs-revalidation, or reject decision before new model work begins.
-- [ ] Upstream artifact or policy changes invalidate affected downstream work transitively, preserve prior evidence for diagnosis, and never auto-replay side effects.
-- [ ] Orchestration observability records decision reasons, transfers, acknowledgements, failures, retries, cancellations, invalidations, verification, cost, timing, and cascade radius through bounded safe metadata.
+- [x] Configured parallel limits remain hard ceilings, while effective concurrency adapts deterministically to ready work, cohesion, critical path, remaining budget, transport capacity, and workspace safety.
+- [x] Semantic resource snapshots bind retained work to bounded identities or hashes for agent definition, role prompt, tool policy, model resolution, protected resources, repository generation, dependency artifacts, and scheduler policy without persisting secrets or full prompts.
+- [x] Restore and continuation detect semantic skew and apply an explicit compatible, warn, needs-revalidation, or reject decision before new model work begins.
+- [x] Upstream artifact or policy changes invalidate affected downstream work transitively, preserve prior evidence for diagnosis, and never auto-replay side effects.
+- [x] Orchestration observability records decision reasons, transfers, acknowledgements, failures, retries, cancellations, invalidations, verification, cost, timing, and cascade radius through bounded safe metadata.
 - [ ] Matched evaluations compare the adaptive system with a strong single agent, equal-budget best-of-N, naive parallelism, fixed scheduling, and an orchestrator ablation before any default scheduling change.
 
 **Outcome:** `pi-subagents` uses concurrency and retained context only when the task graph and semantic state justify them, and it can prove when evidence remains current.

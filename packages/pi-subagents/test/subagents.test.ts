@@ -59,6 +59,7 @@ import subagents, {
 	updateDelegationWorkflowSetting,
 	updateStatefulLimitSetting,
 } from "../src/subagents.js";
+import { inspectSessionWorkflows } from "../src/work-item-persistence.js";
 
 initTheme("dark", false);
 
@@ -75,6 +76,7 @@ type SchemaObject = {
 	properties?: Record<string, SchemaObject>;
 	items?: SchemaObject;
 	enum?: string[];
+	const?: unknown;
 	description?: string;
 	maxItems?: number;
 };
@@ -99,14 +101,19 @@ type SubagentTool = {
 		content?: Array<{ type: string; text: string }>;
 		details?: {
 			results: Array<{
+				agent?: string;
 				thinkingLevel?: string;
 				termination?: { reason: string; finalization: { status: string } };
+				attemptCount?: number;
+				hedged?: boolean;
+				outcome?: { status: string };
 				target?: { cwd: string; trust: { kind: string; projectTrusted: boolean } };
 			}>;
 			aggregator?: {
 				thinkingLevel?: string;
 				termination?: { reason: string; finalization: { status: string } };
 			};
+			workflow?: { items: Array<{ id: string; state: string }> };
 		};
 		isError?: boolean;
 	}>;
@@ -171,6 +178,24 @@ test("subagents registers consistent blocking guidance and one management comman
 	assert.deepEqual(
 		parameters?.properties?.aggregator?.properties?.thinkingLevel?.enum,
 		thinkingLevels,
+	);
+	const resultFormats = ["text", "structured-v1", "structured-v2"];
+	assert.deepEqual(parameters?.properties?.resultFormat?.enum, resultFormats);
+	assert.deepEqual(
+		parameters?.properties?.tasks?.items?.properties?.resultFormat?.enum,
+		resultFormats,
+	);
+	assert.deepEqual(
+		parameters?.properties?.chain?.items?.properties?.resultFormat?.enum,
+		resultFormats,
+	);
+	assert.deepEqual(
+		parameters?.properties?.aggregator?.properties?.resultFormat?.enum,
+		resultFormats,
+	);
+	assert.equal(
+		parameters?.properties?.contract?.properties?.version?.const,
+		"pi-subagents:delegation:v2",
 	);
 	assert.equal(parameters?.properties?.agent?.enum, undefined);
 	assert.equal(parameters?.properties?.tasks?.items?.properties?.agent?.enum, undefined);
@@ -2905,6 +2930,346 @@ test("blocking delegation preflights every target and passes explicit saved trus
 		restorePiPackage();
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("workflow mode schedules dependency-ready tasks and rejects cycles before child launch", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-workflow-"));
+	const marker = path.join(root, "launches");
+	const fakePi = path.join(root, "fake-pi.mjs");
+	writeFileSync(
+		fakePi,
+		[
+			"import{appendFileSync}from'node:fs';",
+			`appendFileSync(${JSON.stringify(marker)},'launch\\n');`,
+			"const task=process.argv.at(-1) ?? '';",
+			"const first=task.includes('produce schema');",
+			"const duplicate=task.includes('duplicate artifact');",
+			"const artifacts=duplicate?[{id:'schema',kind:'document'},{id:'schema',kind:'document'}]:first?[{id:'schema',kind:'document',version:'v1'}]:[];",
+			"const result={version:'pi-subagents:result:v2',status:'completed',summary:first?'schema':'used schema',claims:[],artifacts,changes:[],verification:[],limitations:[],unresolvedDependencies:[]};",
+			"const message={role:'assistant',content:[{type:'text',text:JSON.stringify(result)}],stopReason:'stop',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	const restorePiPackage = useFakePiPackage(root, fakePi);
+	try {
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const tool = mock.tools.find((candidate) => candidate.name === "subagent") as SubagentTool;
+		const { ctx } = createMockContext();
+		const result = await tool.execute(
+			"workflow",
+			{
+				workflow: {
+					id: "wf-test",
+					tasks: [
+						{
+							id: "produce",
+							agent: "scout",
+							task: "produce schema",
+							resultFormat: "structured-v2",
+						},
+						{
+							id: "consume",
+							agent: "scout",
+							task: "consume schema",
+							dependsOn: ["produce"],
+							inputArtifacts: ["schema"],
+							resultFormat: "structured-v2",
+						},
+					],
+				},
+			},
+			undefined,
+			undefined,
+			ctx,
+		);
+		assert.equal(result.isError, undefined);
+		assert.equal(
+			result.details?.workflow?.items.every((item) => item.state === "completed"),
+			true,
+		);
+		assert.equal(readFileSync(marker, "utf8").trim().split("\n").length, 2);
+		const persisted = inspectSessionWorkflows("test-session");
+		assert.equal(
+			persisted.workflows
+				.find((workflow) => workflow.workflowId === "wf-test")
+				?.items.every((item) => item.state === "completed"),
+			true,
+		);
+
+		rmSync(marker, { force: true });
+		const routed = await tool.execute(
+			"routed",
+			{
+				workflow: {
+					tasks: [
+						{
+							id: "research",
+							task: "produce schema",
+							requiredCapabilities: ["repository-search"],
+							resultFormat: "structured-v2",
+						},
+					],
+				},
+			},
+			undefined,
+			undefined,
+			ctx,
+		);
+		assert.equal(routed.details?.results[0]?.agent, "scout");
+
+		rmSync(marker, { force: true });
+		const mismatched = await tool.execute(
+			"artifact-mismatch",
+			{
+				workflow: {
+					tasks: [
+						{
+							id: "produce",
+							agent: "scout",
+							task: "produce schema",
+							resultFormat: "structured-v2",
+						},
+						{
+							id: "consume",
+							agent: "scout",
+							task: "consume schema",
+							dependsOn: ["produce"],
+							inputArtifacts: ["schema"],
+							inputArtifactVersions: { schema: "v2" },
+						},
+					],
+				},
+			},
+			undefined,
+			undefined,
+			ctx,
+		);
+		assert.equal(mismatched.isError, true);
+		assert.equal(
+			mismatched.details?.workflow?.items.find((item) => item.id === "consume")?.state,
+			"needs-input",
+		);
+
+		rmSync(marker, { force: true });
+		const malformedArtifact = await tool.execute(
+			"malformed-artifact",
+			{
+				workflow: {
+					id: "wf-malformed-artifact",
+					tasks: [
+						{
+							id: "produce",
+							agent: "scout",
+							task: "duplicate artifact",
+							resultFormat: "structured-v2",
+						},
+					],
+				},
+			},
+			undefined,
+			undefined,
+			ctx,
+		);
+		assert.equal(malformedArtifact.isError, true);
+		assert.equal(malformedArtifact.details?.results[0]?.outcome?.status, "contract-invalid");
+		assert.equal(malformedArtifact.details?.workflow?.items[0]?.state, "failed");
+
+		rmSync(marker, { force: true });
+		await assert.rejects(
+			() =>
+				tool.execute(
+					"admission-decline",
+					{
+						workflow: {
+							honorAdmission: true,
+							tasks: [
+								{
+									id: "lookup",
+									agent: "scout",
+									task: "lookup",
+									contract: {
+										version: "pi-subagents:delegation:v2",
+										level: "minimal",
+										taskId: "lookup",
+										objective: "lookup",
+										admission: {
+											contextPressure: "low",
+											independentWorkItems: 1,
+											coupling: "dense",
+											verificationRequired: false,
+											verificationAvailable: true,
+											budgetAllowsChildren: true,
+											requirementsComplete: true,
+										},
+									},
+								},
+							],
+						},
+					},
+					undefined,
+					undefined,
+					ctx,
+				),
+			/admission declined/i,
+		);
+		assert.equal(existsSync(marker), false);
+
+		await assert.rejects(
+			() =>
+				tool.execute(
+					"cycle",
+					{
+						workflow: {
+							tasks: [
+								{ id: "a", agent: "scout", task: "a", dependsOn: ["b"] },
+								{ id: "b", agent: "scout", task: "b", dependsOn: ["a"] },
+							],
+						},
+					},
+					undefined,
+					undefined,
+					ctx,
+				),
+			/cycle/i,
+		);
+		assert.equal(existsSync(marker), false);
+	} finally {
+		restorePiPackage();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("workflow retries are bounded and require an idempotent contract", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-retry-"));
+	const marker = path.join(root, "launches");
+	const fakePi = path.join(root, "fake-pi.mjs");
+	writeFileSync(
+		fakePi,
+		[
+			"import{appendFileSync,existsSync,readFileSync}from'node:fs';",
+			`const marker=${JSON.stringify(marker)};`,
+			"const prior=existsSync(marker)?readFileSync(marker,'utf8').trim().split('\\n').filter(Boolean).length:0;",
+			"appendFileSync(marker,'launch\\n');",
+			"if(prior===0)process.exit(1);",
+			"const message={role:'assistant',content:[{type:'text',text:'done'}],stopReason:'stop',timestamp:Date.now()};",
+			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
+		].join(""),
+	);
+	const restorePiPackage = useFakePiPackage(root, fakePi);
+	try {
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const tool = mock.tools.find((candidate) => candidate.name === "subagent") as SubagentTool;
+		const { ctx } = createMockContext();
+		await assert.rejects(
+			() =>
+				tool.execute(
+					"unsafe",
+					{
+						workflow: {
+							tasks: [
+								{
+									id: "retry",
+									agent: "scout",
+									task: "retry",
+									retryPolicy: { maxAttempts: 2 },
+								},
+							],
+						},
+					},
+					undefined,
+					undefined,
+					ctx,
+				),
+			/idempotent retry/i,
+		);
+		assert.equal(existsSync(marker), false);
+
+		const result = await tool.execute(
+			"safe",
+			{
+				workflow: {
+					tasks: [
+						{
+							id: "retry",
+							agent: "scout",
+							task: "retry",
+							retryPolicy: { maxAttempts: 2 },
+							contract: {
+								version: "pi-subagents:delegation:v2",
+								level: "minimal",
+								taskId: "retry",
+								objective: "retry safely",
+								sideEffectPolicy: "idempotent",
+							},
+						},
+					],
+				},
+			},
+			undefined,
+			undefined,
+			ctx,
+		);
+		assert.equal(result.isError, undefined);
+		assert.equal(result.details?.results[0]?.attemptCount, 2);
+		assert.equal(readFileSync(marker, "utf8").trim().split("\n").length, 2);
+	} finally {
+		restorePiPackage();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("workflow hedging duplicates only an explicitly read-only task and cancels the loser", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-hedge-"));
+	const marker = path.join(root, "launches");
+	const fakePi = path.join(root, "fake-pi.mjs");
+	writeFileSync(
+		fakePi,
+		[
+			"import{appendFileSync}from'node:fs';",
+			`appendFileSync(${JSON.stringify(marker)},'launch\\n');`,
+			"setTimeout(()=>{const message={role:'assistant',content:[{type:'text',text:'done'}],stopReason:'stop',timestamp:Date.now()};process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n')},100);",
+		].join(""),
+	);
+	const restorePiPackage = useFakePiPackage(root, fakePi);
+	try {
+		const mock = createMockPi();
+		subagents(mock.pi);
+		const tool = mock.tools.find((candidate) => candidate.name === "subagent") as SubagentTool;
+		const { ctx } = createMockContext();
+		const result = await tool.execute(
+			"hedge",
+			{
+				workflow: {
+					tasks: [
+						{
+							id: "hedge",
+							agent: "scout",
+							task: "read only",
+							hedgeAfterMs: 20,
+							contract: {
+								version: "pi-subagents:delegation:v2",
+								level: "minimal",
+								taskId: "hedge",
+								objective: "read only",
+								sideEffectPolicy: "read-only",
+							},
+						},
+					],
+				},
+			},
+			undefined,
+			undefined,
+			ctx,
+		);
+		assert.equal(result.isError, undefined);
+		assert.equal(result.details?.results[0]?.hedged, true);
+		assert.equal(readFileSync(marker, "utf8").trim().split("\n").length, 2);
+	} finally {
+		restorePiPackage();
 		rmSync(root, { recursive: true, force: true });
 	}
 });

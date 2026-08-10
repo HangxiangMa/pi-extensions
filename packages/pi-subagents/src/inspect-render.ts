@@ -24,6 +24,7 @@ export function renderInspectCall(args: Partial<SubagentInspectParams>, theme: T
 	if (args.agentScope) metadata.push(`[${args.agentScope}]`);
 	if (args.agent) metadata.push(`agent:${safeLine(args.agent, "", 256)}`);
 	if (args.agentId) metadata.push(`id:${safeLine(args.agentId, "", 256)}`);
+	if (args.workflowId) metadata.push(`workflow:${safeLine(args.workflowId, "", 256)}`);
 	if (args.includeClosed) metadata.push("include closed");
 	return new Text(toolHeader(theme, "subagent_inspect", action, metadata), 0, 0);
 }
@@ -73,6 +74,23 @@ function renderAction(
 			];
 			if (!expanded) lines.push(expansionHint());
 			return lines.join("\n");
+		}
+		case "list_workflows":
+			return renderList(
+				"workflow",
+				recordList(details.workflows),
+				details,
+				expanded,
+				theme,
+				formatWorkflow,
+			);
+		case "get_workflow": {
+			const workflow = recordValue(details.workflow);
+			if (!workflow) return undefined;
+			return [
+				`${statusBadge(theme, "completed")} · workflow ${theme.fg("accent", safeLine(workflow.workflowId, "workflow", 256))}`,
+				formatWorkflow(workflow, theme, expanded),
+			].join("\n");
 		}
 		case "list_models":
 			return renderList(
@@ -180,6 +198,34 @@ function formatRun(run: Record<string, unknown>, theme: Theme, expanded: boolean
 		}
 		if (task) lines.push(`  ${theme.fg("dim", `task: ${task}`)}`);
 		if (error) lines.push(`  ${theme.fg("error", `error: ${error}`)}`);
+	}
+	return lines.join("\n");
+}
+
+function formatWorkflow(
+	workflow: Record<string, unknown>,
+	theme: Theme,
+	expanded: boolean,
+): string {
+	const id = safeLine(workflow.workflowId, "workflow", 256);
+	const states = recordValue(workflow.states);
+	const stateText = states
+		? Object.entries(states)
+				.map(([state, count]) => `${safeLine(state, "unknown", 128)}:${numberValue(count)}`)
+				.join(" · ")
+		: "";
+	const lines = [
+		`${theme.fg("muted", "• ")}${theme.fg("accent", id)} ${theme.fg("muted", `${numberValue(workflow.itemCount)} items · generation:${numberValue(workflow.generation)}`)}`,
+	];
+	if (stateText) lines.push(`  ${theme.fg("dim", stateText)}`);
+	if (expanded) {
+		for (const item of recordList(workflow.items).slice(0, COLLAPSED_LIST_LIMIT)) {
+			lines.push(
+				`  ${theme.fg("muted", "- ")}${theme.fg("toolOutput", safeLine(item.id, "task", 256))} ${theme.fg("dim", safeLine(item.state, "unknown", 128))}`,
+			);
+		}
+		const omitted = numberValue(workflow.omittedItems);
+		if (omitted > 0) lines.push(theme.fg("muted", `  … ${omitted} tasks omitted`));
 	}
 	return lines.join("\n");
 }

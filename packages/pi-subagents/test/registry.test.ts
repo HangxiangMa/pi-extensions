@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
 import { projectAgentRecords } from "../src/agent-projection.js";
+import { issueCapabilityGrant } from "../src/capability-grant.js";
+import { createExecutionPlan } from "../src/execution-plan.js";
 import { AgentPersistence } from "../src/persistence.js";
 import { AgentRegistry, type ManagedAgent } from "../src/registry.js";
 import { hashSpawnRequest } from "../src/spawn-idempotency.js";
@@ -207,6 +209,54 @@ test("AgentRegistry deduplicates exact spawn retries before another transport tu
 	await registry.close(first.id);
 	const afterClose = await registry.spawn(input);
 	assert.notEqual(afterClose.id, first.id);
+});
+
+test("AgentRegistry projects actionable structured v2 outcomes into lifecycle state", async () => {
+	const registry = new AgentRegistry(async () => ({
+		output: JSON.stringify({
+			version: "pi-subagents:result:v2",
+			status: "needs-input",
+			reasonCode: "missing-dependency",
+			summary: "need schema",
+			claims: [],
+			artifacts: [],
+			changes: [],
+			verification: [],
+			limitations: [],
+			unresolvedDependencies: ["schema"],
+		}),
+		exitCode: 0,
+	}));
+	const agent = await registry.spawn({
+		agent: "scout",
+		task: "inspect",
+		cwd: process.cwd(),
+		resultFormat: "structured-v2",
+	});
+	await registry.wait(agent.id, 100);
+	const inspection = registry.getInspection(agent.id);
+	assert.equal(inspection?.state, "needs-input");
+	assert.deepEqual(inspection?.outcome, {
+		status: "needs-input",
+		reasonCode: "missing-dependency",
+		recoveryActions: ["supply-input"],
+		retryable: false,
+	});
+	await registry.followUp(agent.id, "schema supplied");
+});
+
+test("AgentRegistry fails closed when a requested structured result is malformed", async () => {
+	const registry = new AgentRegistry(async () => ({ output: "ordinary text", exitCode: 0 }));
+	const agent = await registry.spawn({
+		agent: "scout",
+		task: "inspect",
+		cwd: process.cwd(),
+		resultFormat: "structured-v2",
+	});
+	await registry.wait(agent.id, 100);
+	const inspection = registry.getInspection(agent.id);
+	assert.equal(inspection?.state, "failed");
+	assert.equal(inspection?.outcome?.status, "contract-invalid");
 });
 
 test("AgentRegistry rejects invalid capacity and wait bounds", async () => {
@@ -720,6 +770,46 @@ test("AgentRegistry bounds mailbox input and reports rejected child turns to the
 	);
 });
 
+test("AgentRegistry rotates the accepted generation before abort and quarantines late results", async () => {
+	const plan = createExecutionPlan({
+		agent: {
+			name: "scout",
+			description: "scout",
+			systemPrompt: "",
+			source: "built-in",
+			filePath: "built-in:scout",
+		},
+		target: {
+			cwd: process.cwd(),
+			boundary: "current-workspace",
+			trust: { kind: "session-trusted", projectTrusted: true },
+		},
+		workspaceMode: "shared",
+		transport: "subprocess",
+		resultFormat: "text",
+		taskGeneration: 1,
+	});
+	const registry = new AgentRegistry(async (_agent, _task, signal) => {
+		await new Promise<void>((resolve) =>
+			signal.addEventListener("abort", () => resolve(), { once: true }),
+		);
+		return { output: "late completion", exitCode: 0, aborted: true };
+	});
+	const agent = await registry.spawn({
+		agent: "scout",
+		task: "work",
+		cwd: process.cwd(),
+		executionPlan: plan,
+		capabilityGrant: issueCapabilityGrant(plan, Date.now(), 10_000),
+	});
+	const interrupted = await registry.interrupt(agent.id);
+	assert.equal(interrupted.state, "stale");
+	assert.equal(interrupted.outcome?.status, "stale");
+	assert.equal(interrupted.executionPlan?.taskGeneration, 2);
+	assert.deepEqual(interrupted.executionPlan?.cancellationLineage, [plan.id]);
+	assert.equal(interrupted.capabilityGrant?.state, "revoked");
+});
+
 test("AgentRegistry shutdown aborts active work and drains queued work without starting it", async () => {
 	const started: string[] = [];
 	const registry = new AgentRegistry(
@@ -736,8 +826,8 @@ test("AgentRegistry shutdown aborts active work and drains queued work without s
 	const queued = await registry.spawn({ agent: "scout", task: "queued", cwd: process.cwd() });
 	await registry.shutdown();
 	assert.deepEqual(started, ["active"]);
-	assert.equal(registry.get(active.id)?.state, "idle");
-	assert.equal(registry.get(queued.id)?.state, "idle");
+	assert.equal(registry.get(active.id)?.state, "interrupted");
+	assert.equal(registry.get(queued.id)?.state, "interrupted");
 });
 
 test("AgentRegistry eviction preserves active ancestry and removes expired trees leaf-first", async () => {
@@ -895,7 +985,7 @@ test("AgentRegistry restores valid records inertly and rejects cyclic hierarchy"
 		record({ id: "cycle-b", rootId: "cycle-a", parentId: "cycle-a", depth: 2 }),
 	]);
 	const restored = registry.get("sa_test");
-	assert.equal(restored?.state, "idle");
+	assert.equal(restored?.state, "interrupted");
 	assert.equal(restored?.currentTask, undefined);
 	assert.deepEqual(restored?.children, ["child"]);
 	assert.equal(registry.get("child")?.rootId, "sa_test");
@@ -982,9 +1072,10 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	const raw = readFileSync(persistence.filePath, "utf8");
 	assert.doesNotMatch(raw, /secret|hidden/);
 	assert.match(raw, /visible/);
-	assert.doesNotMatch(raw, /telemetry|ephemeral|structuredResult/);
+	assert.doesNotMatch(raw, /telemetry/);
+	assert.match(raw, /structuredResult|ephemeral/);
 	const restoredState = persistence.load()[0];
-	assert.equal(restoredState?.state, "idle");
+	assert.equal(restoredState?.state, "completed");
 	assert.equal(restoredState?.thinkingLevel, "high");
 	assert.equal(restoredState?.timeoutMs, 1234);
 	assert.equal(restoredState?.currentTimeoutMs, undefined);
@@ -1000,7 +1091,7 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	assert.equal(restoredState?.contextTurns, 2);
 	assert.equal(restoredState?.contextBytes, 128);
 	assert.equal(restoredState?.telemetry, undefined);
-	assert.equal(restoredState?.structuredResult, undefined);
+	assert.equal(restoredState?.structuredResult?.summary, "ephemeral");
 	assert.equal(
 		restoredState?.termination?.checkpoint.assistantNotes[0],
 		"[private content omitted]visible checkpoint",
@@ -1108,4 +1199,14 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 			name.startsWith(`${path.basename(persistence.filePath)}.invalid-`),
 		),
 	);
+});
+
+test("AgentPersistence restores in-flight work as interrupted without replay", async () => {
+	const dir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-crash-state-"));
+	const persistence = new AgentPersistence("session", { stateDir: dir });
+	await persistence.save([record({ state: "running", currentTask: "do not replay" })]);
+	const restored = persistence.load()[0];
+	assert.equal(restored?.state, "interrupted");
+	assert.equal(restored?.currentTask, undefined);
+	rmSync(dir, { recursive: true, force: true });
 });

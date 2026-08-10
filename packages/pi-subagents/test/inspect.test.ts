@@ -7,6 +7,8 @@ import { createMockContext, createMockPi } from "../../../test/support.js";
 import { registerSubagentInspect } from "../src/inspect.js";
 import type { AgentRunInspectionDetail, AgentRunInspectionSummary } from "../src/registry.js";
 import { resolveStatefulLimits } from "../src/stateful-limits.js";
+import { WorkItemLedger } from "../src/work-item-ledger.js";
+import { createSessionWorkItemPersistence } from "../src/work-item-persistence.js";
 
 function runtime(
 	options: {
@@ -73,6 +75,8 @@ test("subagent_inspect registers one strict Google-compatible action schema", as
 		"get_agent",
 		"list_runs",
 		"get_run",
+		"list_workflows",
+		"get_workflow",
 		"list_models",
 		"preview_context",
 		"status",
@@ -102,6 +106,44 @@ test("subagent_inspect registers one strict Google-compatible action schema", as
 		() => execute(tool, { action: "preview_context", context: 0 }),
 		/positive integer/,
 	);
+});
+
+test("subagent_inspect reads persisted workflow evidence without exposing private text", async () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-inspect-workflow-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const ledger = WorkItemLedger.create({
+			workflowId: "wf-inspect",
+			items: [
+				{
+					id: "task",
+					objective: "visible <private>secret</private>",
+					dependencies: [],
+				},
+			],
+		});
+		ledger.start("task", "agent-task");
+		await createSessionWorkItemPersistence("test-session", "wf-inspect").save(ledger.snapshot());
+		const mock = createMockPi();
+		registerSubagentInspect(mock.pi, runtime());
+		const tool = registeredTool(mock);
+		const listed = await execute(tool, { action: "list_workflows" });
+		assert.equal(
+			(listed.details.workflows as Array<{ workflowId: string }>)[0]?.workflowId,
+			"wf-inspect",
+		);
+		const detail = await execute(tool, { action: "get_workflow", workflowId: "wf-inspect" });
+		assert.equal(
+			(detail.details.workflow as { items: Array<{ state: string }> }).items[0]?.state,
+			"interrupted",
+		);
+		assert.doesNotMatch(JSON.stringify(detail), /secret/);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(directory, { recursive: true, force: true });
+	}
 });
 
 test("subagent_inspect projects safe agent metadata and gates project discovery before reads", async () => {

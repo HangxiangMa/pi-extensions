@@ -16,6 +16,49 @@ function agentMarkdown(name: string, toolsLine?: string): string {
 	].join("\n");
 }
 
+test("agent frontmatter loads optional capability manifests without weakening legacy agents", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-capabilities-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const agentsDir = path.join(directory, "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			path.join(agentsDir, "capable.md"),
+			[
+				"---",
+				"name: capable",
+				"description: capable agent",
+				"capabilityManifest:",
+				"  version: pi-subagents:capabilities:v1",
+				"  capabilities: [repository-search]",
+				"  modalities: [text]",
+				"  resultFormats: [structured-v2]",
+				"  authority:",
+				"    filesystem: read",
+				"---",
+				"Agent prompt.",
+			].join("\n"),
+		);
+		writeFileSync(path.join(agentsDir, "legacy.md"), agentMarkdown("legacy"));
+		const agents = discoverAgents(directory, "user").agents;
+		assert.deepEqual(agents.find((agent) => agent.name === "capable")?.capabilityManifest, {
+			version: "pi-subagents:capabilities:v1",
+			capabilities: ["repository-search"],
+			modalities: ["text"],
+			resultFormats: ["structured-v2"],
+			authority: { filesystem: "read" },
+			verificationRoles: [],
+			limitations: [],
+		});
+		assert.equal(agents.find((agent) => agent.name === "legacy")?.capabilityManifest, undefined);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
 test("agent frontmatter preserves missing, empty, and comma-separated tool intent", () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agents-"));
 	const previous = process.env.PI_CODING_AGENT_DIR;

@@ -1,7 +1,9 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 import { THINKING_LEVELS } from "./agents.js";
+import { DelegationContractSchema } from "./delegation-contract.js";
 import { MAX_CONFIGURABLE_PARALLEL_TASKS, MAX_SUBAGENT_TIMEOUT_MS } from "./limits.js";
+import { SUBAGENT_RESULT_FORMATS } from "./result-contract.js";
 import { MAX_SUBAGENT_TOOL_CALLS, MAX_SUBAGENT_TURNS } from "./turn-budget.js";
 
 const TimeoutMs = Type.Number({
@@ -41,6 +43,26 @@ const ThinkingLevelSchema = StringEnum(THINKING_LEVELS, {
 		"Pi thinking level for the subagent process: off, minimal, low, medium, high, xhigh, or max.",
 });
 
+const ResultFormatSchema = StringEnum(SUBAGENT_RESULT_FORMATS, {
+	description:
+		"Optional completion contract. Text preserves ordinary output; structured-v1 and structured-v2 request versioned JSON with bounded text fallback.",
+});
+
+const ContractFields = {
+	contract: Type.Optional(DelegationContractSchema),
+	resultFormat: Type.Optional(ResultFormatSchema),
+	retryPolicy: Type.Optional(
+		Type.Object(
+			{
+				maxAttempts: Type.Integer({ minimum: 1, maximum: 3 }),
+				backoffMs: Type.Optional(Type.Integer({ minimum: 0, maximum: 30_000 })),
+			},
+			{ additionalProperties: false },
+		),
+	),
+	hedgeAfterMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 30_000 })),
+};
+
 const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
@@ -48,6 +70,47 @@ const TaskItem = Type.Object({
 	timeoutMs: Type.Optional(TimeoutMs),
 	...TurnLimitFields,
 	thinkingLevel: Type.Optional(ThinkingLevelSchema),
+	...ContractFields,
+});
+
+const WorkflowTaskItem = Type.Object({
+	id: Type.String({ minLength: 1, maxLength: 256 }),
+	agent: Type.Optional(
+		Type.String({ description: "Optional explicit agent; omit to route by capability manifest" }),
+	),
+	requiredCapabilities: Type.Optional(
+		Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 50 }),
+	),
+	requiredTools: Type.Optional(
+		Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 50 }),
+	),
+	requiredVerificationRole: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+	preferredCostHint: Type.Optional(StringEnum(["low", "medium", "high"] as const)),
+	preferredLatencyHint: Type.Optional(StringEnum(["low", "medium", "high"] as const)),
+	task: Type.String({ description: "Task to delegate to the agent" }),
+	dependsOn: Type.Optional(
+		Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 64 }),
+	),
+	inputArtifacts: Type.Optional(
+		Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 50 }),
+	),
+	inputArtifactVersions: Type.Optional(
+		Type.Record(
+			Type.String({ minLength: 1, maxLength: 256 }),
+			Type.String({ minLength: 1, maxLength: 256 }),
+		),
+	),
+	readPaths: Type.Optional(Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 50 })),
+	writePaths: Type.Optional(Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 50 })),
+	ownershipKeys: Type.Optional(Type.Array(Type.String({ maxLength: 256 }), { maxItems: 50 })),
+	acceptanceCriteria: Type.Optional(Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 50 })),
+	integrationOwner: Type.Optional(Type.Boolean()),
+	verifierFor: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	timeoutMs: Type.Optional(TimeoutMs),
+	...TurnLimitFields,
+	thinkingLevel: Type.Optional(ThinkingLevelSchema),
+	...ContractFields,
 });
 
 const ChainItem = Type.Object({
@@ -57,6 +120,7 @@ const ChainItem = Type.Object({
 	timeoutMs: Type.Optional(TimeoutMs),
 	...TurnLimitFields,
 	thinkingLevel: Type.Optional(ThinkingLevelSchema),
+	...ContractFields,
 });
 
 const AggregatorItem = Type.Object(
@@ -73,6 +137,7 @@ const AggregatorItem = Type.Object(
 		timeoutMs: Type.Optional(TimeoutMs),
 		...TurnLimitFields,
 		thinkingLevel: Type.Optional(ThinkingLevelSchema),
+		...ContractFields,
 	},
 	{
 		description:
@@ -101,6 +166,24 @@ export const SubagentParams = Type.Object({
 		Type.Array(ChainItem, { description: "Array of {agent, task} for sequential execution" }),
 	),
 	aggregator: Type.Optional(AggregatorItem),
+	workflow: Type.Optional(
+		Type.Object(
+			{
+				id: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+				honorAdmission: Type.Optional(
+					Type.Boolean({
+						description:
+							"Opt in to declining workflow tasks whose explicit audit metadata recommends parent-owned work or abstention.",
+					}),
+				),
+				tasks: Type.Array(WorkflowTaskItem, {
+					minItems: 1,
+					maxItems: MAX_CONFIGURABLE_PARALLEL_TASKS,
+				}),
+			},
+			{ additionalProperties: false },
+		),
+	),
 	agentScope: Type.Optional(AgentScopeSchema),
 	confirmProjectAgents: Type.Optional(
 		Type.Boolean({
@@ -115,13 +198,14 @@ export const SubagentParams = Type.Object({
 	totalTimeoutMs: Type.Optional(
 		Type.Number({
 			description:
-				"Overall blocking-workflow deadline in milliseconds, including queued parallel work, chain steps, and fan-in.",
+				"Overall blocking-workflow deadline in milliseconds, including queued work, workflow tasks, chain steps, and fan-in.",
 			minimum: 1,
 			maximum: MAX_SUBAGENT_TIMEOUT_MS,
 		}),
 	),
 	...TurnLimitFields,
 	thinkingLevel: Type.Optional(ThinkingLevelSchema),
+	...ContractFields,
 });
 
 export type SubagentParams = Static<typeof SubagentParams>;

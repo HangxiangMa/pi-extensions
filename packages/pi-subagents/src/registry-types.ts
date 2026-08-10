@@ -1,6 +1,11 @@
 import type { SubagentThinkingLevel } from "./agents.js";
+import type { CapabilityGrant } from "./capability-grant.js";
 import type { TargetPolicyAudit } from "./cwd-policy.js";
-import type { StructuredSubagentResult, SubagentResultFormat } from "./result-contract.js";
+import type { DelegationContract } from "./delegation-contract.js";
+import type { ExecutionPlan } from "./execution-plan.js";
+import type { ClassifiedSubagentOutcome } from "./outcome.js";
+import type { AnyStructuredSubagentResult, SubagentResultFormat } from "./result-contract.js";
+import type { SemanticCompatibility, SemanticSnapshot } from "./semantic-snapshot.js";
 import type { TurnTerminationReport } from "./timeout-checkpoint.js";
 import type { TransportTelemetry } from "./transport-types.js";
 
@@ -9,6 +14,10 @@ export type AgentLifecycleState =
 	| "running"
 	| "idle"
 	| "completed"
+	| "blocked"
+	| "needs-input"
+	| "abstained"
+	| "stale"
 	| "interrupted"
 	| "failed"
 	| "closed";
@@ -65,8 +74,14 @@ export interface ManagedAgent {
 	workspaceMode?: "worktree";
 	spawnIdempotencyKey?: string;
 	spawnRequestHash?: string;
+	contract?: DelegationContract;
 	resultFormat?: SubagentResultFormat;
-	structuredResult?: StructuredSubagentResult;
+	structuredResult?: AnyStructuredSubagentResult;
+	outcome?: ClassifiedSubagentOutcome;
+	executionPlan?: ExecutionPlan;
+	capabilityGrant?: CapabilityGrant;
+	semanticSnapshot?: SemanticSnapshot;
+	semanticCompatibility?: SemanticCompatibility;
 	termination?: TurnTerminationReport;
 	telemetry?: TransportTelemetry;
 	target?: TargetPolicyAudit;
@@ -103,10 +118,16 @@ export interface AgentRunInspectionDetail extends AgentRunInspectionSummary {
 	contextBytes?: number;
 	contextSources?: number;
 	contextTruncated?: boolean;
+	contract?: DelegationContract;
 	resultFormat?: SubagentResultFormat;
 	target?: TargetPolicyAudit;
 	policy?: { inherited: string[]; overridden: string[]; unsupported: string[] };
-	structuredResult?: StructuredSubagentResult;
+	structuredResult?: AnyStructuredSubagentResult;
+	outcome?: ClassifiedSubagentOutcome;
+	executionPlan?: ExecutionPlan;
+	capabilityGrant?: CapabilityGrant;
+	semanticSnapshot?: SemanticSnapshot;
+	semanticCompatibility?: SemanticCompatibility;
 	termination?: TurnTerminationReport;
 	telemetry?: TransportTelemetry;
 }
@@ -123,7 +144,9 @@ export interface TurnOutcome {
 	truncated?: boolean;
 	error?: string;
 	policy?: ManagedAgent["policy"];
-	structuredResult?: StructuredSubagentResult;
+	structuredResult?: AnyStructuredSubagentResult;
+	outcome?: ClassifiedSubagentOutcome;
+	executionPlan?: ExecutionPlan;
 	termination?: TurnTerminationReport;
 	telemetry?: TransportTelemetry;
 }

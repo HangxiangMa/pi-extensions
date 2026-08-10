@@ -25,7 +25,11 @@ Use it to split independent research, planning, implementation, and review work 
 - Renders all seven tools with Pi-native compact/expanded transcript rows; long-running blocking and consultation calls show bounded live activity.
 - Bounds JSON lines, captured messages, stderr, final output, chain substitution, and fan-in context.
 - Enforces a recursion-depth guard and deterministic process-group termination.
-- Provides addressable stateful agents with follow-up, consolidated mailbox/management actions, idempotent spawn retries, context selection and preview, opt-in structured completion metadata, and persistence.
+- Provides addressable stateful agents with follow-up, consolidated mailbox/management actions, idempotent spawn retries, context selection and preview, versioned structured outcomes, and persistence.
+- Publishes built-in and custom agent capability manifests, then records the executor-owned `ExecutionPlan` that resolves requested authority to effective tools, model, thinking, timeout, transport, trust, and workspace controls.
+- Runs explicit dependency workflows through a persistent `WorkItem` ledger, dependency-aware scheduler, declared scope-conflict checks, artifact provenance, stale-result invalidation, and bounded overall deadlines.
+- Supports bounded retries only for explicitly idempotent work and hedged execution only for explicitly read-only work.
+- Detects retained-agent semantic skew across agent definitions, role prompts, tools, model resolution, transport, trust, repository generation, artifacts, and scheduler policy before follow-up work starts.
 - Publishes transient runtime status through Pi's generic extension status API while subagents are running.
 - Returns complete bounded worker output in tool details and a concise result for the main agent.
 
@@ -62,7 +66,7 @@ The preview compares the selection with the tools registered in the current sess
 
 The available tools are:
 
-- `subagent` — delegate blocking single, parallel, fan-in, or chained batch work. The main agent cannot process queued steering until the call returns.
+- `subagent` — delegate blocking single, parallel, fan-in, chained, or explicit dependency-workflow tasks. The main agent cannot process queued steering until the call returns.
 - `subagent_spawn` and related lifecycle tools — when enabled, start reusable detached work, return immediately, and receive bounded completion messages automatically.
 - `subagent_inspect` — inspect agent/model/run/runtime metadata without launching work or changing state.
 - `subagent_consult` — run one ephemeral read-only consultation and wait for its answer.
@@ -105,6 +109,7 @@ Execution modes:
 - **parallel** — run multiple `{ agent, task }` jobs independently.
 - **parallel + aggregator** — run parallel jobs, then pass all outputs into one fan-in agent.
 - **chain** — run sequential steps, passing prior output with `{previous}`.
+- **workflow** — run named tasks only after declared `dependsOn` tasks and required `inputArtifacts` are ready; independent conflict-free tasks may run concurrently.
 
 Common controls:
 
@@ -115,7 +120,8 @@ Common controls:
 - `maxTurns` / `maxToolCalls` — stop unfinished repeated work after bounded assistant turns or tool calls.
 - `thinkingLevel` — request `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` thinking for the spawned Pi process or retained child.
 - `idempotencyKey` — make an exact `subagent_spawn` retry return the existing retained `agentId`; reuse with different parameters fails before confirmation, worktree creation, or child launch.
-- `resultFormat` — keep bounded text by default or request the opt-in `structured-v1` summary/evidence/changes/verification/risks contract with text fallback.
+- `resultFormat` — keep bounded text by default, request legacy `structured-v1`, or request `structured-v2` with explicit outcome status, reason code, claims, artifacts, verification, limitations, and unresolved dependencies.
+- `totalTimeoutMs` — bound a whole explicit blocking workflow; no new task starts after the budget is exhausted.
 
 For `subagent_spawn`, the root agent selects the lowest thinking level and shortest realistic work deadline sufficient for the delegated task. These are tool-argument decisions made from the task already in context; `pi-subagents` does not run a string heuristic or an extra classifier model call.
 
@@ -226,12 +232,14 @@ A blocking fan-out is reserved for output that must be synthesized before the ro
 | `get_agent` | Required `agent`; optional `agentScope` | One resolved definition, safe source path, configured tools, and consultation-effective tools; never the system prompt |
 | `list_runs` | Optional `includeClosed` and `limit` (default 50, maximum 100) | Metadata-only retained-run summaries and unread counts |
 | `get_run` | Required `agentId` | Safe `cwd`, current-task/error summaries, thinking level, context footprint, protocol, effective transport, bounded timing/usage telemetry, structured result when valid, policy, history count, and unread count |
+| `list_workflows` | Optional `limit` (default 50, maximum 100) | Metadata-only persisted blocking-workflow summaries for the current session |
+| `get_workflow` | Required `workflowId` | Bounded task states, generations, dependencies, plan identities, artifact metadata, verification state, and outcome reasons without artifact contents |
 | `list_models` | Optional `limit` (default 50, maximum 100) | Session-scoped models, or the already-loaded available snapshot |
 | `preview_context` | Optional `context` and `contextEntryIds` | Selected mode, user turns, source count, UTF-8 bytes, and truncation without returning context text |
 | `status` | No additional fields | Effective workflow, runtime counts/transport, detached limit values, completion delivery, consultation resources, and configured/runtime settings with per-field sources |
 | `diagnose` | No additional fields | Structured `pass`, `warning`, and `fail` checks; failed checks are report data rather than a tool error |
 
-The schema rejects fields that do not belong to the selected action. Explicit `project` or `both` scope fails before project-agent discovery unless Pi already trusts the project. Run inspection never returns history output, stored context, or mailbox content; unread counts come from a metadata-only snapshot and do not acknowledge messages. Paths beneath the Pi agent directory use `~`, project paths are workspace-relative, model objects are projected through an allow-list, and model-facing text is bounded to 50 KiB or 2,000 lines.
+The schema rejects fields that do not belong to the selected action. Explicit `project` or `both` scope fails before project-agent discovery unless Pi already trusts the project. Run inspection never returns history output, stored context, or mailbox content; unread counts come from a metadata-only snapshot and do not acknowledge messages. Workflow inspection reads validated, redacted snapshots without quarantining or rewriting invalid files. Paths beneath the Pi agent directory use `~`, project paths are workspace-relative, model objects are projected through an allow-list, and model-facing text is bounded to 50 KiB or 2,000 lines.
 
 Compatibility: `subagent_manage({ "action": "list" })` remains supported with its existing behavior. Prefer `subagent_inspect` when a whole tool must be safe to activate on a read-only surface.
 
@@ -342,6 +350,40 @@ Run a chain where each step receives the previous output:
 }
 ```
 
+Run an explicit dependency workflow:
+
+```json
+{
+  "workflow": {
+    "id": "auth-review",
+    "tasks": [
+      {
+        "id": "inventory",
+        "agent": "scout",
+        "task": "Produce the auth inventory artifact.",
+        "resultFormat": "structured-v2",
+        "readPaths": ["src/auth"]
+      },
+      {
+        "id": "review",
+        "agent": "reviewer",
+        "task": "Review the inventory and report verification evidence.",
+        "dependsOn": ["inventory"],
+        "inputArtifacts": ["auth-inventory"],
+        "resultFormat": "structured-v2"
+      }
+    ]
+  },
+  "totalTimeoutMs": 120000
+}
+```
+
+Cycles, missing dependencies, conflicting integration owners, recursive workflow grandchildren, and unsafe retry or hedge policies fail before child launch.
+Workflow scheduling starts at most two mutating tasks concurrently, while declared read-only work may use the existing four-child ceiling.
+Set `workflow.honorAdmission: true` only when explicit contract admission metadata should be allowed to decline parent-owned or insufficient-evidence work before launch; admission never silently widens the requested architecture.
+Workflow result details include the final ledger, scheduling decisions, artifact versions, task generations, attempts, hedge use, accepted plan identity, and bounded capability-grant metadata.
+Explicit workflow transitions are also atomically persisted as mode-0600, private-text-redacted snapshots for current-session `list_workflows` and `get_workflow` inspection; in-flight tasks inspect as `interrupted`, and no prior side effect is automatically resumed.
+
 ## 🔁 Stateful agents
 
 Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects a bounded `pi-subagent-completion` custom message. Completions that settle in the same dispatch window are batched, and the broker allows at most one in-flight root wake until that parent turn starts.
@@ -430,8 +472,8 @@ This avoids lifecycle-driven tool-schema churn and preserves a stable provider p
 
 | Tool | Purpose |
 | --- | --- |
-| `subagent_spawn` | Start detached work with optional task-selected thinking and retained timeout, exact-retry `idempotencyKey`, and `text` or `structured-v1` result format; return an opaque `agentId` immediately and deliver completion asynchronously. |
-| `subagent_send` | Send follow-up work with an optional one-turn timeout override and trigger a new turn on a reusable agent; shared-workspace write conflicts are guarded unless explicitly overridden. |
+| `subagent_spawn` | Start detached work with optional task-selected thinking and retained timeout, exact-retry `idempotencyKey`, and `text`, `structured-v1`, or `structured-v2` result format; return an opaque `agentId` immediately and deliver completion asynchronously. |
+| `subagent_send` | Send follow-up work with an optional one-turn timeout override and trigger a new turn on a reusable agent; semantic skew requires explicit `revalidate: true`, and shared-workspace write conflicts are guarded unless explicitly overridden. |
 | `subagent_manage` | Use `action: "list"` to inspect agents, `"interrupt"` to retain an agent after aborting active work, or `"close"` to release it; interrupt/close accept optional `subtree`. |
 | `subagent_mailbox` | Use `action: "send"` for queue-only messages that do not start a turn, or `"read"` to read and optionally acknowledge unread messages. |
 
@@ -500,8 +542,10 @@ The same key and canonical request returns the existing retained `agentId` witho
 Reusing the key with different behavior-affecting parameters fails.
 Closing the retained record releases the key.
 
-Set `resultFormat: "structured-v1"` to ask for versioned `summary`, `evidence`, `changes`, `verification`, and `risks` fields.
-Valid structured data appears in completion and inspection details, while the bounded final text remains authoritative fallback when the model returns malformed or ordinary text.
+Set `resultFormat: "structured-v1"` to ask for legacy `summary`, `evidence`, `changes`, `verification`, and `risks` fields.
+Prefer `resultFormat: "structured-v2"` when orchestration must distinguish `completed`, `partial`, `blocked`, `needs-input`, `failed`, `interrupted`, `abstained`, `stale`, or `contract-invalid` outcomes and consume typed artifact evidence.
+Valid structured data and deterministic recovery classification appear in completion and inspection details, while malformed structured output becomes `contract-invalid` instead of being treated as success.
+The executor stamps task generation, cancellation lineage, and accepted `ExecutionPlan` identity after parsing, so model output cannot forge the provenance used for stale-result containment.
 
 `subagent_spawn.context` accepts:
 
@@ -555,6 +599,7 @@ The intentional compatibility change is that an external target without saved tr
 | Chain | Input order. | Stops at the first failed step; completed steps remain in details. |
 | Parallel | Input order, up to `blocking.maxParallelTasks` total workers and at most four active children. | Rejects calls above the configured limit; otherwise collects all task results, and partial worker failure does not discard successful results. |
 | Parallel + aggregator | Source input order, then aggregator. | The aggregator runs with successful outputs and failure descriptions only when total budget remains; aggregator failure or orchestration expiry marks the tool result as an error. |
+| Workflow | Deterministic dependency-ready and critical-path order, with results returned in declared task order. | Invalid graphs fail before launch; blocked or failed dependencies prevent downstream start; bounded retry and hedging require explicit side-effect contracts. |
 
 An aggregator whose `agent` or `task` is empty or whitespace-only is treated as absent, so successful
 parallel outputs remain available instead of being replaced by a malformed fan-in failure.
@@ -625,6 +670,17 @@ description: Review API changes for compatibility and tests
 tools: read, grep, find, ls, bash
 model: sonnet
 thinkingLevel: high
+capabilityManifest:
+  version: pi-subagents:capabilities:v1
+  capabilities: [code-review, evidence-review]
+  modalities: [text]
+  resultFormats: [text, structured-v2]
+  authority:
+    filesystem: read
+  verificationRoles: [independent-review]
+  contextStrengths: [repository]
+  costHint: medium
+  latencyHint: medium
 ---
 
 You are an API review subagent. Do not edit files. Check compatibility,
@@ -632,6 +688,10 @@ test coverage, and migration risks. Report PASS/FAIL/PARTIAL with evidence.
 ```
 
 `tools` accepts either the comma-separated form above or a YAML string array such as `tools: [read, grep]`. An omitted field keeps the agent's default tools; blank, `null`, or `[]` explicitly selects no tools.
+
+`capabilityManifest` is optional for legacy custom agents and never grants authority by itself.
+Explicit workflow routing can match declared capabilities, configured tools, filesystem authority, verification roles, and low/medium/high cost or latency hints.
+A missing or malformed manifest remains unknown and cannot satisfy a capability-routed task.
 
 `agentScope` is a top-level tool argument supplied per invocation. It is not a setting in
 `~/.pi/agent/pi-subagents.json` and does not belong in agent frontmatter. The parent-facing tool
@@ -746,6 +806,9 @@ While the `subagent` tool is running, `pi-subagents` publishes compact activity 
 
 Subagents have separate processes and context windows, but they are **not security sandboxes**. They run as the same OS user, share the host filesystem and network access, and may conflict if they edit the same files. Tool allow-lists reduce available Pi tools but do not reduce operating-system permissions. `subagent_consult` prevents writes through its Pi tool surface and disables extensions, but it can read accessible paths, call the configured model over the network, and incur cost; its instruction-resource policy is not a filesystem or confidentiality boundary.
 
+Every contracted execution records a hashed immutable `ExecutionPlan` and an executor-owned capability grant bound to its task generation, effective tools, issuance time, and expiry.
+Interrupt, close, shutdown, replacement, persistence, and restore revoke active grants before signalling work or accepting another generation, and late old-plan results become `stale` diagnostic evidence.
+
 The runner explicitly reports policy continuity in result details:
 
 - inherited: process environment;
@@ -755,8 +818,12 @@ The runner explicitly reports policy continuity in result details:
 Treat project-local agent prompts like executable project configuration: only enable them in trusted repositories. Stateful project agents require Pi's project trust; interactive use also keeps confirmation enabled by default.
 
 Stateful records are stored as versioned mode-0600 JSON under `~/.pi/agent/pi-subagents-state/` (or the configured Pi agent directory).
+Explicit blocking-workflow snapshots use separate mode-0600 files under `~/.pi/agent/pi-subagents-workflows/`, retain at most 64 workflows per session for 30 days, and are available only through current-session workflow inspection.
 Records contain sanitized logical history, never process IDs or credentials.
-Corrupt or unsupported state is quarantined, restored agents are always inert `idle` records, and no prior side effect is automatically resumed.
+Corrupt or unsupported state is quarantined, completed and actionable terminal outcomes are preserved, in-flight records restore as `interrupted`, and no prior side effect is automatically resumed.
+Retained follow-ups compare a privacy-safe hashed semantic snapshot before model work; incompatible resource changes require explicit `revalidate: true`, while unknown snapshot versions fail closed.
+Snapshots hash agent manifests, prompts, effective tools, model/thinking, transport, trust, Git tracked and untracked state, and bounded user/project skill and prompt resources without persisting their contents.
+A non-Git target has no stable repository generation proof, so each later follow-up requires explicit revalidation.
 Count projection keeps complete ancestor chains together when stored or restored limits omit older trees.
 Retention and count limits are configurable.
 Downgrading is safe: older extension versions ignore this separate state directory; clear **Current agents** from `/subagents` before downgrade if the histories should be removed.
@@ -782,6 +849,15 @@ packages/pi-subagents/
 │   ├── auto-transport.ts         # Deterministic preflight transport routing
 │   ├── transport-types.ts        # Bounded pi-subagents:v1 progress and telemetry contract
 │   ├── completion-delivery.ts    # Completion batching and optional idle-root wake
+│   ├── admission-policy.ts       # Audit-only deterministic delegation admission
+│   ├── capability-grant.ts       # Generation-bound authority lifetime and revocation
+│   ├── execution-plan.ts         # Executor-owned authority and resource resolution
+│   ├── work-item-ledger.ts       # Persistent dependency and artifact state machine
+│   ├── work-item-persistence.ts  # Atomic redacted workflow state and inspection
+│   ├── integration-controller.ts # Fail-closed canonical integration admission
+│   ├── adaptive-scheduler.ts     # Dependency, capacity, budget, and conflict scheduling
+│   ├── semantic-snapshot.ts      # Privacy-safe continuation compatibility checks
+│   ├── supervision.ts            # Bounded idempotent retries and read-only hedging
 │   ├── execution-profiles.ts     # Provider-neutral thinking profile patches
 │   ├── execution-ui.ts           # Profile and per-agent execution settings screens
 │   ├── stateful-guidance.ts      # Detached model-facing workflow guidance

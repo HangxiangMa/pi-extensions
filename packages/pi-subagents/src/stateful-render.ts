@@ -277,6 +277,11 @@ function lifecycleStatus(state: string): RenderStatus {
 			return "running";
 		case "idle":
 			return "idle";
+		case "blocked":
+		case "needs-input":
+		case "abstained":
+		case "stale":
+			return "warning";
 		case "failed":
 			return "failed";
 		case "interrupted":
