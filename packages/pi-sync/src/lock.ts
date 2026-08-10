@@ -152,7 +152,9 @@ export function isStaleLock(lock: LockFile) {
 }
 
 export async function unlock(ctx: ExtensionCommandContext, options: CommandOptions) {
+	throwIfAborted(options.signal);
 	await ensureStateDir();
+	throwIfAborted(options.signal);
 	let guard: Guard;
 	try {
 		guard = await acquireGuard();
@@ -179,7 +181,9 @@ export async function unlock(ctx: ExtensionCommandContext, options: CommandOptio
 }
 
 async function unlockGuarded(ctx: ExtensionCommandContext, options: CommandOptions) {
+	throwIfAborted(options.signal);
 	let inspection = await inspectLock();
+	throwIfAborted(options.signal);
 	if (inspection.status === "missing") {
 		ctx.ui.notify("No pi-sync lock is present.", "info");
 		return;
@@ -193,12 +197,19 @@ async function unlockGuarded(ctx: ExtensionCommandContext, options: CommandOptio
 			return;
 		}
 		inspection = await inspectLock();
+		throwIfAborted(options.signal);
 		if (inspection.status === "unreadable") {
 			// Legacy writers expose an empty file before writing owner metadata, so no
 			// automatic test can prove this file is abandoned. The explicit --stale
 			// flag is the user's confirmation that no legacy sync is still running.
+			throwIfAborted(options.signal);
 			await fs.rm(lockPath(), { force: true });
-			ctx.ui.notify("Removed unreadable pi-sync lock.", "info");
+			if (!options.signal?.aborted) {
+				ctx.ui.notify(
+					"Removed unreadable pi-sync lock. No settings, files, sync state, or remote data were changed.",
+					"info",
+				);
+			}
 			return;
 		}
 		if (inspection.status === "missing") {
@@ -210,8 +221,21 @@ async function unlockGuarded(ctx: ExtensionCommandContext, options: CommandOptio
 		ctx.ui.notify("Lock owner is still live; refusing to remove it.", "warning");
 		return;
 	}
+	throwIfAborted(options.signal);
 	await fs.rm(lockPath(), { force: true });
-	ctx.ui.notify("Removed stale pi-sync lock.", "info");
+	if (!options.signal?.aborted) {
+		ctx.ui.notify(
+			"Removed stale pi-sync lock. No settings, files, sync state, or remote data were changed.",
+			"info",
+		);
+	}
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+	if (!signal?.aborted) return;
+	throw signal.reason instanceof Error
+		? signal.reason
+		: new DOMException("The operation was aborted", "AbortError");
 }
 
 async function releaseGuard(guard: Guard) {
