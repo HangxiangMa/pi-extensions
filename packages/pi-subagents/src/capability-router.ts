@@ -1,4 +1,4 @@
-import type { AgentConfig } from "./agents.js";
+import { type AgentConfig, resolveAgentToolNames } from "./agents.js";
 import type { CapabilityHint } from "./capabilities.js";
 
 export interface CapabilityRouteRequest {
@@ -27,10 +27,11 @@ export function routeByCapability(
 	const requiredTools = unique(request.requiredTools ?? []);
 	const eligible = agents.filter((agent) => {
 		const manifest = agent.capabilityManifest;
+		const effectiveTools = resolveAgentToolNames(agent.tools);
 		if (!manifest) {
 			return (
 				requiredCapabilities.length === 0 &&
-				requiredTools.length === 0 &&
+				requiredTools.every((tool) => effectiveTools.includes(tool)) &&
 				request.requiredVerificationRole === undefined &&
 				request.requiredSideEffectClass === undefined
 			);
@@ -41,7 +42,7 @@ export function routeByCapability(
 			manifest.authority?.filesystem === "none";
 		return (
 			requiredCapabilities.every((capability) => manifest.capabilities.includes(capability)) &&
-			requiredTools.every((tool) => agent.tools?.includes(tool) === true) &&
+			requiredTools.every((tool) => effectiveTools.includes(tool)) &&
 			(!request.requiredVerificationRole ||
 				manifest.verificationRoles.includes(request.requiredVerificationRole)) &&
 			sideEffectAllowed

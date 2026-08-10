@@ -23,6 +23,12 @@ export type AgentScope = "user" | "project" | "both";
 
 export type AgentSource = "built-in" | "user" | "project";
 
+export const DEFAULT_PI_TOOL_NAMES = ["read", "bash", "edit", "write"] as const;
+
+export function resolveAgentToolNames(tools: readonly string[] | undefined): string[] {
+	return [...new Set(tools ?? DEFAULT_PI_TOOL_NAMES)];
+}
+
 export interface AgentConfig {
 	name: string;
 	description: string;

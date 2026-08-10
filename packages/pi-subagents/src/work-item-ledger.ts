@@ -556,6 +556,7 @@ function validStoredArtifacts(
 	producerTaskId: string,
 	itemGeneration: number,
 ): boolean {
+	const seen = new Set<string>();
 	return values.every(
 		(artifact) =>
 			artifact !== null &&
@@ -566,6 +567,7 @@ function validStoredArtifacts(
 				),
 			) &&
 			isValidIdentifier(artifact.id) &&
+			claimUnique(artifact.id, seen) &&
 			typeof artifact.kind === "string" &&
 			artifact.kind.length > 0 &&
 			artifact.kind.length <= MAX_IDENTIFIER_LENGTH &&
@@ -585,6 +587,12 @@ function validStoredArtifacts(
 			Number(artifact.generation) <= itemGeneration &&
 			typeof artifact.verified === "boolean",
 	);
+}
+
+function claimUnique(value: string, seen: Set<string>): boolean {
+	if (seen.has(value)) return false;
+	seen.add(value);
+	return true;
 }
 
 function normalizeStoredArtifacts(

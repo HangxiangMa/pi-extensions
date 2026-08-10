@@ -99,6 +99,7 @@ export interface ResultContractEnvelope<T extends AnyStructuredSubagentResult> {
 const MAX_FIELD_BYTES = 8 * 1024;
 const MAX_ITEMS = 50;
 const MAX_REASON_CODE_BYTES = 256;
+const MAX_ARTIFACT_IDENTIFIER_BYTES = 256;
 
 export function structuredResultInstruction(format: SubagentResultFormat | undefined): string {
 	if (format === "structured-v1") {
@@ -193,6 +194,7 @@ export function parseStructuredSubagentResultV2(
 	if (
 		!claims ||
 		!artifacts ||
+		new Set(artifacts.map((artifact) => artifact.id)).size !== artifacts.length ||
 		!changes ||
 		!verification ||
 		!limitations ||
@@ -258,13 +260,19 @@ function parseClaim(value: Record<string, unknown>): EvidenceBackedClaim | undef
 
 function parseArtifact(value: Record<string, unknown>): SubagentArtifactReference | undefined {
 	if (typeof value.id !== "string" || typeof value.kind !== "string") return undefined;
-	const version = optionalBoundedString(value.version);
-	const location = optionalBoundedString(value.location);
-	const digest = optionalBoundedString(value.digest);
+	const id = truncateUtf8(redactPrivateText(value.id), MAX_ARTIFACT_IDENTIFIER_BYTES).text.trim();
+	const kind = truncateUtf8(
+		redactPrivateText(value.kind),
+		MAX_ARTIFACT_IDENTIFIER_BYTES,
+	).text.trim();
+	if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(id) || !kind) return undefined;
+	const version = optionalTrimmedBoundedString(value.version, MAX_ARTIFACT_IDENTIFIER_BYTES);
+	const location = optionalTrimmedBoundedString(value.location);
+	const digest = optionalTrimmedBoundedString(value.digest);
 	if (version === false || location === false || digest === false) return undefined;
 	return {
-		id: bounded(value.id),
-		kind: bounded(value.kind),
+		id,
+		kind,
 		...(version === undefined ? {} : { version }),
 		...(location === undefined ? {} : { location }),
 		...(digest === undefined ? {} : { digest }),
@@ -368,6 +376,16 @@ function stringArray(value: unknown): string[] | undefined {
 	if (!Array.isArray(value) || value.length > MAX_ITEMS) return undefined;
 	if (!value.every((item) => typeof item === "string")) return undefined;
 	return value.map((item) => bounded(item));
+}
+
+function optionalTrimmedBoundedString(
+	value: unknown,
+	maxBytes = MAX_FIELD_BYTES,
+): string | undefined | false {
+	const boundedValue = optionalBoundedString(value, maxBytes);
+	if (boundedValue === undefined || boundedValue === false) return boundedValue;
+	const trimmed = boundedValue.trim();
+	return trimmed || false;
 }
 
 function optionalBoundedString(

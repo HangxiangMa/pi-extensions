@@ -3,7 +3,12 @@ import {
 	type DelegationAdmissionDecision,
 	evaluateDelegationAdmission,
 } from "./admission-policy.js";
-import type { AgentConfig, AgentSource, SubagentThinkingLevel } from "./agents.js";
+import {
+	type AgentConfig,
+	type AgentSource,
+	resolveAgentToolNames,
+	type SubagentThinkingLevel,
+} from "./agents.js";
 import type { TargetPolicyAudit } from "./cwd-policy.js";
 import type { DelegationContract } from "./delegation-contract.js";
 import type { SubagentResultFormat } from "./result-contract.js";
@@ -159,8 +164,8 @@ export function resolveContractTools(
 	if (contract?.enforcement !== "enforce" || !requested || requested.length === 0) {
 		return configuredTools ? unique(configuredTools) : undefined;
 	}
-	if (configuredTools === undefined) return unique(requested);
-	return unique(requested.filter((tool) => configuredTools.includes(tool)));
+	const availableTools = resolveAgentToolNames(configuredTools);
+	return unique(requested.filter((tool) => availableTools.includes(tool)));
 }
 
 export function acknowledgeExecutionPlan(plan: ExecutionPlan): ExecutionAcknowledgement {

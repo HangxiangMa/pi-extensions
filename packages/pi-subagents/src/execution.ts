@@ -69,6 +69,10 @@ import { TimeoutProgressJournal, TURN_TERMINATION_VERSION } from "./timeout-chec
 import type { TurnLimits } from "./turn-budget.js";
 import { requiresIndependentVerification } from "./verification-policy.js";
 import type { WorkItemLedger } from "./work-item-ledger.js";
+import {
+	createSessionWorkItemPersistence,
+	type WorkItemPersistence,
+} from "./work-item-persistence.js";
 import { createBlockingWorkLedger, resolveWorkflowTasks } from "./workflow-planning.js";
 
 export const FALLBACK_TIMEOUT_MS = 10 * 60 * 1000;
@@ -316,6 +320,17 @@ export async function executeSubagent(
 		}
 	}
 	workLedger = createBlockingWorkLedger(params, resolvedWorkflowTasks, aggregator);
+	let workflowPersistence: WorkItemPersistence | undefined;
+	if (hasWorkflow && workLedger) {
+		const owner =
+			ctx.sessionManager.getSessionId?.() ??
+			ctx.sessionManager.getSessionFile?.() ??
+			`ephemeral:${ctx.cwd}`;
+		workflowPersistence = createSessionWorkItemPersistence(owner, workLedger.workflowId);
+	}
+	const persistWorkLedger = async () => {
+		if (workflowPersistence && workLedger) await workflowPersistence.save(workLedger.snapshot());
+	};
 
 	const delegationPolicy = config?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY;
 	const resolveTarget = (cwd: string | undefined): ResolvedSubagentTarget => {
@@ -563,6 +578,7 @@ export async function executeSubagent(
 			? undefined
 			: Date.now() + Math.floor(params.totalTimeoutMs);
 	if (params.workflow && resolvedWorkflowTasks.length > 0 && workLedger) {
+		await persistWorkLedger();
 		const status = startSubagentStatus(
 			ctx,
 			toolCallId,
@@ -621,6 +637,7 @@ export async function executeSubagent(
 						const thinkingLevel = resolveThinkingLevel(task.agent, task.thinkingLevel);
 						const startedItem = startWorkItem(workItemId, task.agent);
 						const acceptedTaskGeneration = startedItem?.taskGeneration ?? 0;
+						await persistWorkLedger();
 						const runAttempt = (attemptSignal: AbortSignal | undefined) => {
 							const budget = resolveExecutionBudget(task.agent, task.timeoutMs);
 							if (!budget) {
@@ -682,6 +699,7 @@ export async function executeSubagent(
 						}
 						resultsById.set(workItemId, result);
 						settleWorkItem(workItemId, result, acceptedTaskGeneration);
+						await persistWorkLedger();
 						return result;
 					},
 					signal,
@@ -705,6 +723,7 @@ export async function executeSubagent(
 					);
 				}
 			}
+			await persistWorkLedger();
 			const results = resolvedWorkflowTasks.map((task) => {
 				const completed = resultsById.get(task.id);
 				if (completed) return completed;
@@ -764,7 +783,11 @@ export async function executeSubagent(
 			};
 		} finally {
 			signal?.removeEventListener("abort", cancelWorkflowGeneration);
-			status.clear();
+			try {
+				await persistWorkLedger();
+			} finally {
+				status.clear();
+			}
 		}
 	}
 

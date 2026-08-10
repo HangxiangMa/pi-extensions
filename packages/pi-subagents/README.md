@@ -232,12 +232,14 @@ A blocking fan-out is reserved for output that must be synthesized before the ro
 | `get_agent` | Required `agent`; optional `agentScope` | One resolved definition, safe source path, configured tools, and consultation-effective tools; never the system prompt |
 | `list_runs` | Optional `includeClosed` and `limit` (default 50, maximum 100) | Metadata-only retained-run summaries and unread counts |
 | `get_run` | Required `agentId` | Safe `cwd`, current-task/error summaries, thinking level, context footprint, protocol, effective transport, bounded timing/usage telemetry, structured result when valid, policy, history count, and unread count |
+| `list_workflows` | Optional `limit` (default 50, maximum 100) | Metadata-only persisted blocking-workflow summaries for the current session |
+| `get_workflow` | Required `workflowId` | Bounded task states, generations, dependencies, plan identities, artifact metadata, verification state, and outcome reasons without artifact contents |
 | `list_models` | Optional `limit` (default 50, maximum 100) | Session-scoped models, or the already-loaded available snapshot |
 | `preview_context` | Optional `context` and `contextEntryIds` | Selected mode, user turns, source count, UTF-8 bytes, and truncation without returning context text |
 | `status` | No additional fields | Effective workflow, runtime counts/transport, detached limit values, completion delivery, consultation resources, and configured/runtime settings with per-field sources |
 | `diagnose` | No additional fields | Structured `pass`, `warning`, and `fail` checks; failed checks are report data rather than a tool error |
 
-The schema rejects fields that do not belong to the selected action. Explicit `project` or `both` scope fails before project-agent discovery unless Pi already trusts the project. Run inspection never returns history output, stored context, or mailbox content; unread counts come from a metadata-only snapshot and do not acknowledge messages. Paths beneath the Pi agent directory use `~`, project paths are workspace-relative, model objects are projected through an allow-list, and model-facing text is bounded to 50 KiB or 2,000 lines.
+The schema rejects fields that do not belong to the selected action. Explicit `project` or `both` scope fails before project-agent discovery unless Pi already trusts the project. Run inspection never returns history output, stored context, or mailbox content; unread counts come from a metadata-only snapshot and do not acknowledge messages. Workflow inspection reads validated, redacted snapshots without quarantining or rewriting invalid files. Paths beneath the Pi agent directory use `~`, project paths are workspace-relative, model objects are projected through an allow-list, and model-facing text is bounded to 50 KiB or 2,000 lines.
 
 Compatibility: `subagent_manage({ "action": "list" })` remains supported with its existing behavior. Prefer `subagent_inspect` when a whole tool must be safe to activate on a read-only surface.
 
@@ -380,6 +382,7 @@ Cycles, missing dependencies, conflicting integration owners, recursive workflow
 Workflow scheduling starts at most two mutating tasks concurrently, while declared read-only work may use the existing four-child ceiling.
 Set `workflow.honorAdmission: true` only when explicit contract admission metadata should be allowed to decline parent-owned or insufficient-evidence work before launch; admission never silently widens the requested architecture.
 Workflow result details include the final ledger, scheduling decisions, artifact versions, task generations, attempts, hedge use, accepted plan identity, and bounded capability-grant metadata.
+Explicit workflow transitions are also atomically persisted as mode-0600, private-text-redacted snapshots for current-session `list_workflows` and `get_workflow` inspection; in-flight tasks inspect as `interrupted`, and no prior side effect is automatically resumed.
 
 ## 🔁 Stateful agents
 
@@ -815,6 +818,7 @@ The runner explicitly reports policy continuity in result details:
 Treat project-local agent prompts like executable project configuration: only enable them in trusted repositories. Stateful project agents require Pi's project trust; interactive use also keeps confirmation enabled by default.
 
 Stateful records are stored as versioned mode-0600 JSON under `~/.pi/agent/pi-subagents-state/` (or the configured Pi agent directory).
+Explicit blocking-workflow snapshots use separate mode-0600 files under `~/.pi/agent/pi-subagents-workflows/`, retain at most 64 workflows per session for 30 days, and are available only through current-session workflow inspection.
 Records contain sanitized logical history, never process IDs or credentials.
 Corrupt or unsupported state is quarantined, completed and actionable terminal outcomes are preserved, in-flight records restore as `interrupted`, and no prior side effect is automatically resumed.
 Retained follow-ups compare a privacy-safe hashed semantic snapshot before model work; incompatible resource changes require explicit `revalidate: true`, while unknown snapshot versions fail closed.
@@ -849,6 +853,7 @@ packages/pi-subagents/
 │   ├── capability-grant.ts       # Generation-bound authority lifetime and revocation
 │   ├── execution-plan.ts         # Executor-owned authority and resource resolution
 │   ├── work-item-ledger.ts       # Persistent dependency and artifact state machine
+│   ├── work-item-persistence.ts  # Atomic redacted workflow state and inspection
 │   ├── integration-controller.ts # Fail-closed canonical integration admission
 │   ├── adaptive-scheduler.ts     # Dependency, capacity, budget, and conflict scheduling
 │   ├── semantic-snapshot.ts      # Privacy-safe continuation compatibility checks

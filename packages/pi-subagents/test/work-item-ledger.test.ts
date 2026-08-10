@@ -151,6 +151,11 @@ test("WorkItemLedger rejects malformed persisted identity and artifact metadata"
 	const futureArtifact = ledger.snapshot();
 	futureArtifact.items[0].artifacts[0].generation = futureArtifact.items[0].generation + 1;
 	assert.throws(() => WorkItemLedger.restore(futureArtifact), /malformed stored/i);
+	const duplicateArtifact = ledger.snapshot();
+	duplicateArtifact.items[0].artifacts.push(
+		structuredClone(duplicateArtifact.items[0].artifacts[0]),
+	);
+	assert.throws(() => WorkItemLedger.restore(duplicateArtifact), /malformed stored/i);
 });
 
 test("WorkItemLedger records explicit verifier acceptance on the verified item", () => {

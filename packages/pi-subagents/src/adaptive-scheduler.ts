@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import type { WorkItemLedgerSnapshot, WorkItemRecord } from "./work-item-ledger.js";
 
 export const ADAPTIVE_SCHEDULER_POLICY = "dependency-aware-v1" as const;
@@ -30,6 +31,7 @@ export interface AdaptiveSchedulerOptions {
 	activeCount: number;
 	transportCapacity: number;
 	remainingBudgetMs: number;
+	activeReadPaths?: string[];
 	activeWritePaths?: string[];
 	activeOwnershipKeys?: string[];
 	activeMutatingCount?: number;
@@ -58,7 +60,8 @@ export class AdaptiveScheduler {
 		const selected: string[] = [];
 		let mutatingCount = options.activeMutatingCount ?? 0;
 		const maxMutatingConcurrency = options.maxMutatingConcurrency ?? 2;
-		const selectedWritePaths = new Set(options.activeWritePaths ?? []);
+		const selectedReadPaths = normalizedScopes(options.activeReadPaths ?? []);
+		const selectedWritePaths = normalizedScopes(options.activeWritePaths ?? []);
 		const selectedOwnership = new Set(options.activeOwnershipKeys ?? []);
 		const reasons = new Map<string, SchedulingReason>();
 		for (const item of ready) {
@@ -73,14 +76,15 @@ export class AdaptiveScheduler {
 				reasons.set(item.id, "capacity-exhausted");
 				continue;
 			}
-			if (hasConflict(item, selectedWritePaths, selectedOwnership)) {
+			if (hasConflict(item, selectedReadPaths, selectedWritePaths, selectedOwnership)) {
 				reasons.set(item.id, "scope-conflict");
 				continue;
 			}
 			selected.push(item.id);
 			if (item.sideEffectPolicy !== "read-only") mutatingCount++;
 			reasons.set(item.id, "selected");
-			for (const path of item.writePaths) selectedWritePaths.add(path);
+			for (const scope of normalizedScopes(item.readPaths)) selectedReadPaths.add(scope);
+			for (const scope of normalizedScopes(item.writePaths)) selectedWritePaths.add(scope);
 			for (const key of item.ownershipKeys) selectedOwnership.add(key);
 		}
 		const decisions = snapshot.items
@@ -105,13 +109,46 @@ export class AdaptiveScheduler {
 
 function hasConflict(
 	item: WorkItemRecord,
+	readPaths: ReadonlySet<string>,
 	writePaths: ReadonlySet<string>,
 	ownership: ReadonlySet<string>,
 ): boolean {
+	const candidateReads = normalizedScopes(item.readPaths);
+	const candidateWrites = normalizedScopes(item.writePaths);
 	return (
-		item.writePaths.some((path) => writePaths.has(path)) ||
+		[...candidateWrites].some(
+			(scope) => overlapsAny(scope, readPaths) || overlapsAny(scope, writePaths),
+		) ||
+		[...candidateReads].some((scope) => overlapsAny(scope, writePaths)) ||
 		item.ownershipKeys.some((key) => ownership.has(key))
 	);
+}
+
+function normalizedScopes(values: readonly string[]): Set<string> {
+	return new Set(values.map(normalizeScope));
+}
+
+function normalizeScope(value: string): string {
+	const normalized = path.posix.normalize(value.trim().replace(/\\+/gu, "/"));
+	if (
+		normalized === "." ||
+		normalized === ".." ||
+		normalized.startsWith("../") ||
+		normalized.startsWith("/") ||
+		/^[A-Za-z]:\//u.test(normalized)
+	) {
+		return "";
+	}
+	return normalized.replace(/^\.\//u, "").replace(/\/$/u, "");
+}
+
+function overlapsAny(scope: string, candidates: ReadonlySet<string>): boolean {
+	return [...candidates].some((candidate) => scopesOverlap(scope, candidate));
+}
+
+function scopesOverlap(left: string, right: string): boolean {
+	if (!left || !right || left === right) return true;
+	return left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 }
 
 function criticalPathDepths(items: WorkItemRecord[]): Map<string, number> {

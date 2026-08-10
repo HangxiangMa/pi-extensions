@@ -86,6 +86,46 @@ test("structured v2 result preserves evidence provenance and actionable outcomes
 	assert.equal(parsed?.provenance?.taskId, "task-1");
 });
 
+test("structured v2 result rejects artifact identifiers that would break ledger settlement", () => {
+	const result = (
+		artifacts: Array<{ id: string; kind: string; version?: string; digest?: string }>,
+	) =>
+		JSON.stringify({
+			version: "pi-subagents:result:v2",
+			status: "completed",
+			summary: "done",
+			claims: [],
+			artifacts,
+			changes: [],
+			verification: [],
+			limitations: [],
+			unresolvedDependencies: [],
+		});
+	assert.equal(parseStructuredSubagentResultV2(result([{ id: "", kind: "document" }])), undefined);
+	assert.equal(
+		parseStructuredSubagentResultV2(result([{ id: "   ", kind: "document" }])),
+		undefined,
+	);
+	assert.equal(
+		parseStructuredSubagentResultV2(
+			result([
+				{ id: "schema", kind: "document" },
+				{ id: " schema ", kind: "document" },
+			]),
+		),
+		undefined,
+	);
+	assert.equal(parseStructuredSubagentResultV2(result([{ id: "schema", kind: "   " }])), undefined);
+	assert.equal(
+		parseStructuredSubagentResultV2(result([{ id: "schema", kind: "document", version: "   " }])),
+		undefined,
+	);
+	assert.equal(
+		parseStructuredSubagentResultV2(result([{ id: "schema", kind: "document", digest: "   " }])),
+		undefined,
+	);
+});
+
 test("structured v2 result rejects malformed or unsupported envelopes", () => {
 	assert.equal(
 		parseStructuredSubagentResultV2(

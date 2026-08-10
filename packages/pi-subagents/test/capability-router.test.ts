@@ -7,6 +7,7 @@ function candidate(
 	name: string,
 	capabilities: string[],
 	costHint: "low" | "medium" | "high",
+	tools: string[] | undefined = ["read"],
 ): AgentConfig {
 	return {
 		name,
@@ -14,7 +15,7 @@ function candidate(
 		systemPrompt: name,
 		source: "user",
 		filePath: `test:${name}`,
-		tools: ["read"],
+		tools,
 		capabilityManifest: {
 			version: "pi-subagents:capabilities:v1",
 			capabilities,
@@ -61,4 +62,19 @@ test("capability routing validates an explicitly selected agent", () => {
 			}),
 		/does not satisfy/i,
 	);
+});
+
+test("capability routing resolves omitted tools to Pi's default tool set", () => {
+	const worker = candidate("worker", ["implementation"], "medium");
+	worker.tools = undefined;
+	assert.equal(
+		routeByCapability([worker], { requiredTools: ["read", "edit"] }).agent.name,
+		"worker",
+	);
+	assert.throws(
+		() => routeByCapability([worker], { requiredTools: ["grep"] }),
+		/no capable agent/i,
+	);
+	worker.capabilityManifest = undefined;
+	assert.equal(routeByCapability([worker], { requiredTools: ["read"] }).agent.name, "worker");
 });

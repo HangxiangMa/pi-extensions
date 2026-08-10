@@ -59,6 +59,7 @@ import subagents, {
 	updateDelegationWorkflowSetting,
 	updateStatefulLimitSetting,
 } from "../src/subagents.js";
+import { inspectSessionWorkflows } from "../src/work-item-persistence.js";
 
 initTheme("dark", false);
 
@@ -105,6 +106,7 @@ type SubagentTool = {
 				termination?: { reason: string; finalization: { status: string } };
 				attemptCount?: number;
 				hedged?: boolean;
+				outcome?: { status: string };
 				target?: { cwd: string; trust: { kind: string; projectTrusted: boolean } };
 			}>;
 			aggregator?: {
@@ -2943,7 +2945,9 @@ test("workflow mode schedules dependency-ready tasks and rejects cycles before c
 			`appendFileSync(${JSON.stringify(marker)},'launch\\n');`,
 			"const task=process.argv.at(-1) ?? '';",
 			"const first=task.includes('produce schema');",
-			"const result={version:'pi-subagents:result:v2',status:'completed',summary:first?'schema':'used schema',claims:[],artifacts:first?[{id:'schema',kind:'document',version:'v1'}]:[],changes:[],verification:[],limitations:[],unresolvedDependencies:[]};",
+			"const duplicate=task.includes('duplicate artifact');",
+			"const artifacts=duplicate?[{id:'schema',kind:'document'},{id:'schema',kind:'document'}]:first?[{id:'schema',kind:'document',version:'v1'}]:[];",
+			"const result={version:'pi-subagents:result:v2',status:'completed',summary:first?'schema':'used schema',claims:[],artifacts,changes:[],verification:[],limitations:[],unresolvedDependencies:[]};",
 			"const message={role:'assistant',content:[{type:'text',text:JSON.stringify(result)}],stopReason:'stop',timestamp:Date.now()};",
 			"process.stdout.write(JSON.stringify({type:'message_end',message})+'\\n');",
 		].join(""),
@@ -2987,6 +2991,13 @@ test("workflow mode schedules dependency-ready tasks and rejects cycles before c
 			true,
 		);
 		assert.equal(readFileSync(marker, "utf8").trim().split("\n").length, 2);
+		const persisted = inspectSessionWorkflows("test-session");
+		assert.equal(
+			persisted.workflows
+				.find((workflow) => workflow.workflowId === "wf-test")
+				?.items.every((item) => item.state === "completed"),
+			true,
+		);
 
 		rmSync(marker, { force: true });
 		const routed = await tool.execute(
@@ -3041,6 +3052,30 @@ test("workflow mode schedules dependency-ready tasks and rejects cycles before c
 			mismatched.details?.workflow?.items.find((item) => item.id === "consume")?.state,
 			"needs-input",
 		);
+
+		rmSync(marker, { force: true });
+		const malformedArtifact = await tool.execute(
+			"malformed-artifact",
+			{
+				workflow: {
+					id: "wf-malformed-artifact",
+					tasks: [
+						{
+							id: "produce",
+							agent: "scout",
+							task: "duplicate artifact",
+							resultFormat: "structured-v2",
+						},
+					],
+				},
+			},
+			undefined,
+			undefined,
+			ctx,
+		);
+		assert.equal(malformedArtifact.isError, true);
+		assert.equal(malformedArtifact.details?.results[0]?.outcome?.status, "contract-invalid");
+		assert.equal(malformedArtifact.details?.workflow?.items[0]?.state, "failed");
 
 		rmSync(marker, { force: true });
 		await assert.rejects(

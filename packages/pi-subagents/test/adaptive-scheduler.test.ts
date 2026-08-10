@@ -43,6 +43,57 @@ test("adaptive scheduler avoids declared ownership and write conflicts determini
 	assert.equal(decision.decisions.find((item) => item.id === "b")?.reason, "scope-conflict");
 });
 
+test("adaptive scheduler blocks hierarchical write/write and read/write scope overlap", () => {
+	const ledger = WorkItemLedger.create({
+		workflowId: "wf",
+		items: [
+			{
+				id: "a",
+				objective: "a",
+				dependencies: [],
+				sideEffectPolicy: "read-only",
+				readPaths: ["./src/auth/session.ts"],
+			},
+			{ id: "b", objective: "b", dependencies: [], writePaths: ["src/auth"] },
+			{
+				id: "c",
+				objective: "c",
+				dependencies: [],
+				writePaths: ["src\\auth\\session.ts\\cache"],
+			},
+			{ id: "d", objective: "d", dependencies: [], writePaths: ["packages"] },
+			{ id: "e", objective: "e", dependencies: [], writePaths: ["./packages/api"] },
+			{ id: "f", objective: "f", dependencies: [], writePaths: ["docs"] },
+		],
+	});
+	const decision = new AdaptiveScheduler().decide(ledger.snapshot(), {
+		maxConcurrency: 6,
+		activeCount: 0,
+		transportCapacity: 6,
+		remainingBudgetMs: 10_000,
+	});
+	assert.deepEqual(decision.selected, ["a", "d", "f"]);
+	assert.equal(decision.decisions.find((item) => item.id === "b")?.reason, "scope-conflict");
+	assert.equal(decision.decisions.find((item) => item.id === "c")?.reason, "scope-conflict");
+	assert.equal(decision.decisions.find((item) => item.id === "e")?.reason, "scope-conflict");
+});
+
+test("adaptive scheduler compares candidates with active read scopes", () => {
+	const ledger = WorkItemLedger.create({
+		workflowId: "wf",
+		items: [{ id: "write", objective: "write", dependencies: [], writePaths: ["src/api"] }],
+	});
+	const decision = new AdaptiveScheduler().decide(ledger.snapshot(), {
+		maxConcurrency: 2,
+		activeCount: 1,
+		transportCapacity: 2,
+		remainingBudgetMs: 10_000,
+		activeReadPaths: ["src"],
+	});
+	assert.deepEqual(decision.selected, []);
+	assert.equal(decision.decisions[0]?.reason, "scope-conflict");
+});
+
 test("adaptive scheduler completes generated acyclic workflows without violating dependencies", () => {
 	for (let seed = 1; seed <= 50; seed++) {
 		let state = seed;
