@@ -1,0 +1,22 @@
+---
+description: Complete a plan on a new branch and deliver it as a pull request
+argument-hint: "<plan path>"
+---
+
+Plan: $ARGUMENTS
+
+Execute and complete the specified plan end to end.
+
+1. Read the repository instructions and the complete plan before changing anything.
+2. Inspect the working tree, preserve unrelated changes, and create a focused new branch from the appropriate base branch.
+3. Execute every required plan item in dependency order, keeping the plan synchronized with discoveries and verified progress.
+4. Create or update the code, tests, documentation, configuration, and other artifacts required by the plan.
+5. Run focused verification and all repository-required checks.
+6. Review the complete diff for correctness, security, lifecycle safety, compatibility, regressions, and unnecessary changes.
+7. When code is affected, harden plausible edge cases and failure paths, add regression coverage for any fixes, and rerun affected checks.
+8. Audit the finished work against every plan requirement and completion criterion.
+9. Stage only the intended files, create focused signed commits that follow repository conventions, and push the branch.
+10. Open a pull request with a concise summary, verification evidence, relevant risks or unverified paths, and a link to the completed plan.
+
+Do not discard user changes, conceal failing checks, or claim completion without evidence.
+Do not publish packages, create version tags, or dispatch release workflows.
