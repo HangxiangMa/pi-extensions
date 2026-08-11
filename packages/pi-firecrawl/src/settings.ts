@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { access, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { FIRECRAWL_TOOL_NAMES, type FirecrawlToolName } from "./tools.js";
+import { FIRECRAWL_TOOL_NAMES, type FirecrawlToolName } from "./tool-names.js";
 
 const NEW_SETTINGS_FILE = "pi-firecrawl.json";
 const LEGACY_SETTINGS_FILE = "pi-firecrawl-settings.json";
@@ -119,7 +119,9 @@ async function pathEntryExists(filePath: string) {
 export function normalizeFirecrawlSettings(value: unknown): FirecrawlSettings | undefined {
 	if (!value || typeof value !== "object") return undefined;
 	const settings = value as { tools?: unknown; updatedAt?: unknown };
-	if (typeof settings.updatedAt !== "number") return undefined;
+	if (typeof settings.updatedAt !== "number" || !Number.isFinite(settings.updatedAt)) {
+		return undefined;
+	}
 	if (!Array.isArray(settings.tools)) return undefined;
 	if (!settings.tools.every(isFirecrawlToolName)) return undefined;
 	return { tools: orderedUniqueFirecrawlTools(settings.tools), updatedAt: settings.updatedAt };
@@ -140,7 +142,11 @@ export function saveSettings(
 	settings: FirecrawlSettings,
 	operations: Partial<SettingsFileOperations> = {},
 ): Promise<void> {
-	const operation = settingsSaveQueue.then(() => saveSettingsNow(settings, operations));
+	const normalizedSettings = normalizeFirecrawlSettings(settings);
+	if (!normalizedSettings) {
+		return Promise.reject(new Error("Cannot save invalid Firecrawl settings"));
+	}
+	const operation = settingsSaveQueue.then(() => saveSettingsNow(normalizedSettings, operations));
 	settingsSaveQueue = operation.catch(() => undefined);
 	return operation;
 }

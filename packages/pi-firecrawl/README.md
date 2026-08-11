@@ -15,9 +15,10 @@ Use it to give your AI coding agent reliable web research capabilities for docum
 - Search the web and optionally scrape search result pages.
 - Supports Firecrawl API endpoint overrides.
 - Shows statusline activity only while Firecrawl tools are running.
-- Provides a `/firecrawl` menu with configuration help and tool controls.
+- Keeps one loader tool active and exposes matching Firecrawl capabilities only when needed.
+- Provides a `/firecrawl` menu with configuration help and availability controls.
 - Uses `@narumitw/pi-tui-kit` for width-safe menus and individual tool selection.
-- Persists the selected Firecrawl tools across Pi restarts.
+- Persists the Firecrawl lazy-load catalog across Pi restarts.
 - Bounds tool output to Pi's 50 KB or 2,000-line limit while preserving oversized responses in private temporary files.
 - Never logs, displays, or stores your Firecrawl API key.
 
@@ -57,13 +58,40 @@ export FIRECRAWL_API_URL=https://api.firecrawl.dev/v1
 
 ## 🛠️ Pi tools
 
+- `firecrawl_load` — find and load Firecrawl capabilities relevant to a web research task.
 - `firecrawl_scrape` — scrape a single URL and return requested formats such as markdown, HTML, links, screenshots, or JSON.
 - `firecrawl_crawl` — start a site crawl job and return the Firecrawl job id.
 - `firecrawl_crawl_status` — check a crawl job status and retrieve completed crawl data.
 - `firecrawl_map` — discover URLs for a site.
 - `firecrawl_search` — search the web through Firecrawl and optionally scrape result pages.
 
-All tools fail with a clear configuration error when `FIRECRAWL_API_KEY` is missing.
+### Lazy tool loading
+
+All six tools are registered, but only `firecrawl_load` starts active for this extension.
+
+The loader accepts a task-oriented `query`, filters to capabilities allowed by settings, and adds up to three matching tools by default without removing any active Pi tool.
+
+Set `limit` from 1 to 5 to change the maximum number loaded by one call.
+
+A general website-crawl query can load both `firecrawl_crawl` and `firecrawl_crawl_status`, while a status-specific query loads the status capability.
+
+Loaded capability tools remain active for the session unless the user makes them unavailable through `/firecrawl`.
+
+On reload, resume, or fork, capabilities recorded by `firecrawl_load` on the active branch are restored when the current catalog still allows them.
+
+Pi uses native deferred tool references on compatible Anthropic and OpenAI models.
+
+Other models receive Pi's safe fallback and see the newly active definitions in the normal tool list on the next model request.
+
+The capability tools omit active-only prompt metadata so loading them does not rebuild the system-prompt prefix.
+
+The saved `tools` array controls which capabilities `firecrawl_load` may expose.
+
+An empty array leaves the loader active but makes every Firecrawl API capability unavailable.
+
+`firecrawl_load` performs no network request and does not create response artifacts.
+
+Every API capability fails with a clear configuration error when `FIRECRAWL_API_KEY` is missing, and the always-active loader guidance tells the agent not to retry repeatedly.
 
 Tool output is limited to 50 KB or 2,000 lines, whichever is reached first. When a response is
 truncated, the result reports the original and displayed sizes and the path to a complete temporary
@@ -78,8 +106,8 @@ are bounded in the same way.
 /firecrawl
 ```
 
-Opens a menu with configuration quick start, command usage, tool status, controls for enabling
-or disabling all Firecrawl tools, and a selector for choosing individual tools.
+Opens a menu with configuration quick start, command usage, lazy-catalog status, controls for making
+all Firecrawl capabilities available or unavailable, and a selector for choosing individual tools.
 
 Direct subcommands are also available:
 
@@ -97,27 +125,41 @@ Direct subcommands are also available:
 - `help` shows command usage.
 - `config` shows API-key presence and API URL without displaying the API key value.
 - `quickstart` is an alias for `config`.
-- `status` shows runtime tool state, persisted selection, settings file path, API-key presence,
-  API URL, and active non-Firecrawl tool count.
-- `tools` opens a width-safe selector for choosing individual `firecrawl_*` tools.
+- `status` shows available and loaded capability counts, loader state, the persisted catalog,
+  settings file path, API-key presence, API URL, and active non-Firecrawl tool count.
+- `tools` opens a width-safe immediate-save selector for choosing capabilities available to lazy-load.
 - `toggle` is an alias for `tools`.
-- `enable` enables all `firecrawl_*` tools for future turns.
-- `disable` disables all `firecrawl_*` tools for future turns. The slash command remains
-  available.
+- `enable` makes all five API capabilities available but leaves newly available definitions deferred.
+- `disable` makes all five API capabilities unavailable and unloads affected active definitions.
+  The slash command and `firecrawl_load` remain available.
 
-The selected tool names are saved to:
+The menu, `tools`, `help`, `config`, `quickstart`, and `status` routes require TUI or RPC mode so their
+results are observable.
+
+Print and JSON modes reject those routes and unknown commands explicitly instead of entering
+unavailable UI or silently notifying a no-op channel.
+
+The deterministic `enable` and `disable` routes remain available in every mode.
+
+Tool-selector toggles save immediately in user action order.
+
+Done, Escape, or cancellation closes the selector without undoing changes that were already saved.
+
+The available capability names are saved to:
 
 ```text
 ${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-firecrawl.json
 ```
 
-When the file is missing or invalid, the extension preserves Pi's current active-tool policy
-instead of enabling tools by itself. A valid saved selection is restored on Pi startup and
-`/reload`. A missing file is created by the first successful selection change. Within one Pi process, selection saves run in invocation order, reread the latest valid document, and preserve unknown fields. Malformed JSON
-or invalid recognized fields block the save without replacement; a failed save restores the prior
-Firecrawl tool selection while preserving other extensions' current tools. The settings file
-stores only tool names and a timestamp; it never stores `FIRECRAWL_API_KEY`, request headers, or
-other secrets.
+When the file is missing or invalid, the extension preserves Pi's current Firecrawl availability
+policy instead of replacing it. An unsaved catalog remains stable across runtime reloads. A valid
+saved catalog is restored on Pi startup and `/reload`, while its capability definitions remain
+deferred. A missing file is created by the first successful
+availability change. Within one Pi process, catalog saves run in invocation order, reread the latest
+valid document, and preserve unknown fields. Malformed JSON or invalid recognized fields block the
+save without replacement; a failed save restores both the prior availability and loaded capability
+state while preserving other extensions' active tools. The settings file stores only tool names and
+a timestamp; it never stores `FIRECRAWL_API_KEY`, request headers, or other secrets.
 
 Compatibility: older versions used `pi-firecrawl-settings.json`. A legacy-only file remains
 readable with a warning and is never modified automatically; rename it to `pi-firecrawl.json`.
@@ -170,9 +212,10 @@ Start a crawl with markdown extraction:
 ```txt
 packages/pi-firecrawl/
 ├── src/
-│   ├── index.ts      # Pi package entrypoint
-│   ├── firecrawl.ts  # Extension registration and command orchestration
-│   └── *.ts          # Package-local client, settings, selector, and tool modules
+│   ├── index.ts       # Pi package entrypoint
+│   ├── firecrawl.ts   # Extension registration and command orchestration
+│   ├── lazy-tools.ts  # Deferred capability catalog and loader tool
+│   └── *.ts           # Package-local client, settings, selector, and tool modules
 ├── README.md
 ├── LICENSE
 ├── tsconfig.json

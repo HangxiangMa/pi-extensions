@@ -1,22 +1,31 @@
+import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { configuredApiUrl, hasApiKey } from "./client.js";
+import {
+	applyAvailableFirecrawlTools,
+	availableFirecrawlTools,
+	FIRECRAWL_LOAD_TOOL_NAME,
+} from "./lazy-tools.js";
 import {
 	loadSettings,
 	type SettingsLoadResult,
 	saveSettings,
 	settingsFilePath,
 } from "./settings.js";
-import { FIRECRAWL_TOOL_NAMES, type FirecrawlToolName } from "./tools.js";
+import { FIRECRAWL_TOOL_NAMES, type FirecrawlToolName } from "./tool-names.js";
 
 type CommandContext = ExtensionCommandContext;
-type ToolRuntimeStatus = "enabled" | "disabled" | "partial";
+type ToolAvailabilityStatus = "enabled" | "disabled" | "partial";
 type ToolSelectorScreen = "tools";
 type ToolSelectorAction = "toggle" | "enableAll" | "disableAll";
 interface ToolStatusSummary {
-	runtimeStatus: ToolRuntimeStatus;
-	activeFirecrawlToolCount: number;
+	availabilityStatus: ToolAvailabilityStatus;
+	availableFirecrawlToolCount: number;
+	loadedFirecrawlToolCount: number;
 	activeNonFirecrawlToolCount: number;
 }
+
+type ToolSelectionSaveResult = "saved" | "available-tools-changed" | "failed";
 
 let settingsNotice: string | undefined;
 let sessionGeneration = 0;
@@ -45,12 +54,14 @@ export function clearSettingsNotice() {
 }
 
 export function recordSettingsNotice(settings: SettingsLoadResult) {
-	if (settings.notice) settingsNotice = settings.notice;
+	settingsNotice = settings.notice;
 }
 
 export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
 	const generation = sessionGeneration;
-	if (!ctx.hasUI) return;
+	if (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc")) {
+		throw new Error("/firecrawl tools requires TUI or RPC mode");
+	}
 	const menuSignal = sessionController.signal;
 	const isCurrent = () => isCurrentFirecrawlSession(generation) && !menuSignal.aborted;
 	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
@@ -59,7 +70,7 @@ export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
 		start: "tools",
 		screens: {
 			tools: () => {
-				const selectedTools = new Set(getActiveFirecrawlTools(pi));
+				const selectedTools = new Set(availableFirecrawlTools(pi));
 				return {
 					kind: "multiSelect",
 					title: toolSelectorTitle(selectedTools),
@@ -72,12 +83,12 @@ export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
 					actions: [
 						{
 							id: "enable-all",
-							label: "Enable all Firecrawl tools",
+							label: "Make all Firecrawl tools available",
 							action: "enableAll",
 						},
 						{
 							id: "disable-all",
-							label: "Disable all Firecrawl tools",
+							label: "Make all Firecrawl tools unavailable",
 							action: "disableAll",
 						},
 						{ id: "done", label: "Done", close: true },
@@ -90,24 +101,34 @@ export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
 		actions: {
 			toggle: async ({ itemId, selected }) => {
 				if (!isFirecrawlToolName(itemId)) return { kind: "rejected" };
-				const selectedTools = new Set(getActiveFirecrawlTools(pi));
+				const acceptedTools = availableFirecrawlTools(pi);
+				const selectedTools = new Set(acceptedTools);
 				if (selected) selectedTools.add(itemId);
 				else selectedTools.delete(itemId);
-				const saved = await transactSelectedTools(
+				const result = await transactSelectedTools(
 					pi,
 					ctx,
 					orderedFirecrawlTools(selectedTools),
 					generation,
+					acceptedTools,
 				);
-				return saved ? { kind: "stay" } : { kind: "rejected" };
+				return result === "saved" ? { kind: "stay" } : { kind: "rejected" };
 			},
 			enableAll: async () => {
-				const saved = await transactSelectedTools(pi, ctx, allFirecrawlTools(), generation);
-				return saved ? { kind: "stay" } : { kind: "rejected" };
+				const acceptedTools = availableFirecrawlTools(pi);
+				const result = await transactSelectedTools(
+					pi,
+					ctx,
+					allFirecrawlTools(),
+					generation,
+					acceptedTools,
+				);
+				return result === "saved" ? { kind: "stay" } : { kind: "rejected" };
 			},
 			disableAll: async () => {
-				const saved = await transactSelectedTools(pi, ctx, [], generation);
-				return saved ? { kind: "stay" } : { kind: "rejected" };
+				const acceptedTools = availableFirecrawlTools(pi);
+				const result = await transactSelectedTools(pi, ctx, [], generation, acceptedTools);
+				return result === "saved" ? { kind: "stay" } : { kind: "rejected" };
 			},
 		},
 	});
@@ -129,11 +150,14 @@ export async function updateFirecrawlTools(
 	action: string,
 ) {
 	const generation = sessionGeneration;
-	const saved = await transactSelectedTools(pi, ctx, selectedTools, generation);
-	if (!saved || !isCurrentFirecrawlSession(generation)) return;
+	const result = await transactSelectedTools(pi, ctx, selectedTools, generation);
+	if (result !== "saved" || !isCurrentFirecrawlSession(generation)) return;
 	const status = await buildStatusMessage(pi);
 	if (!isCurrentFirecrawlSession(generation)) return;
-	ctx.ui.notify(`Firecrawl tools ${action}.\n\n${status}`, hasApiKey() ? "info" : "warning");
+	ctx.ui.notify(
+		sanitizeFirecrawlDisplay(`Firecrawl lazy catalog ${action}.\n\n${status}`),
+		hasApiKey() ? "info" : "warning",
+	);
 }
 
 export async function setSelectedFirecrawlTools(
@@ -141,7 +165,7 @@ export async function setSelectedFirecrawlTools(
 	ctx: CommandContext,
 	selectedTools: readonly FirecrawlToolName[],
 ): Promise<boolean> {
-	return transactSelectedTools(pi, ctx, selectedTools, sessionGeneration);
+	return (await transactSelectedTools(pi, ctx, selectedTools, sessionGeneration)) === "saved";
 }
 
 let toolTransactionQueue = Promise.resolve();
@@ -155,9 +179,10 @@ function transactSelectedTools(
 	ctx: CommandContext,
 	selectedTools: readonly FirecrawlToolName[],
 	expectedGeneration: number,
-): Promise<boolean> {
+	expectedAvailableTools?: readonly FirecrawlToolName[],
+): Promise<ToolSelectionSaveResult> {
 	const operation = toolTransactionQueue.then(() =>
-		transactSelectedToolsNow(pi, ctx, selectedTools, expectedGeneration),
+		transactSelectedToolsNow(pi, ctx, selectedTools, expectedGeneration, expectedAvailableTools),
 	);
 	toolTransactionQueue = operation.then(
 		() => undefined,
@@ -171,84 +196,118 @@ async function transactSelectedToolsNow(
 	ctx: CommandContext,
 	selectedTools: readonly FirecrawlToolName[],
 	expectedGeneration: number,
-): Promise<boolean> {
-	if (!isCurrentFirecrawlSession(expectedGeneration)) return false;
+	expectedAvailableTools?: readonly FirecrawlToolName[],
+): Promise<ToolSelectionSaveResult> {
+	if (!isCurrentFirecrawlSession(expectedGeneration)) return "failed";
+	if (expectedAvailableTools && !arraysEqual(availableFirecrawlTools(pi), expectedAvailableTools)) {
+		ctx.ui.notify(
+			"Firecrawl tool availability changed while the selector was open. Review the current state and try again.",
+			"warning",
+		);
+		return "available-tools-changed";
+	}
 	const previousActiveTools = pi.getActiveTools();
+	const previousAvailableTools = availableFirecrawlTools(pi);
 	try {
-		applyFirecrawlTools(pi, selectedTools);
+		applyFirecrawlTools(pi, selectedTools, ctx.sessionManager);
 		await persistSettings(selectedTools);
-		return isCurrentFirecrawlSession(expectedGeneration);
+		return isCurrentFirecrawlSession(expectedGeneration) ? "saved" : "failed";
 	} catch (error) {
 		let rollbackError: unknown;
 		try {
-			const previousFirecrawlTools = previousActiveTools.filter((name) =>
+			applyAvailableFirecrawlTools(pi, previousAvailableTools, ctx.sessionManager);
+			const currentNonCapabilityTools = pi
+				.getActiveTools()
+				.filter((name) => !FIRECRAWL_TOOL_NAMES.includes(name as FirecrawlToolName));
+			const previousLoadedTools = previousActiveTools.filter((name) =>
 				FIRECRAWL_TOOL_NAMES.includes(name as FirecrawlToolName),
-			) as FirecrawlToolName[];
-			applyFirecrawlTools(pi, previousFirecrawlTools);
+			);
+			pi.setActiveTools(unique([...currentNonCapabilityTools, ...previousLoadedTools]));
 		} catch (caught) {
 			rollbackError = caught;
 		}
-		if (!isCurrentFirecrawlSession(expectedGeneration)) return false;
+		if (!isCurrentFirecrawlSession(expectedGeneration)) return "failed";
 		ctx.ui.notify(
-			rollbackError
-				? `Firecrawl settings save failed: ${formatError(error)}; active-tool rollback failed: ${formatError(rollbackError)}`
-				: `Firecrawl settings save failed; active tools restored: ${formatError(error)}`,
+			sanitizeFirecrawlDisplay(
+				rollbackError
+					? `Firecrawl settings save failed: ${formatError(error)}; active-tool rollback failed: ${formatError(rollbackError)}`
+					: `Firecrawl settings save failed; active tools restored: ${formatError(error)}`,
+			),
 			"warning",
 		);
-		return false;
+		return "failed";
 	}
 }
 
-export function applyFirecrawlTools(pi: ExtensionAPI, selectedTools: readonly FirecrawlToolName[]) {
-	const activeToolNames = pi.getActiveTools();
-	const firecrawlToolNames = new Set<string>(FIRECRAWL_TOOL_NAMES);
-	const activeNonFirecrawlToolNames = activeToolNames.filter(
-		(name) => !firecrawlToolNames.has(name),
-	);
-	pi.setActiveTools(unique([...activeNonFirecrawlToolNames, ...selectedTools]));
+function arraysEqual<T>(left: readonly T[], right: readonly T[]) {
+	return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+export function applyFirecrawlTools(
+	pi: ExtensionAPI,
+	selectedTools: readonly FirecrawlToolName[],
+	sessionOwner?: object,
+) {
+	applyAvailableFirecrawlTools(pi, selectedTools, sessionOwner);
 }
 
 function getToolStatusSummary(pi: ExtensionAPI): ToolStatusSummary {
 	const firecrawlToolNames = new Set<string>(FIRECRAWL_TOOL_NAMES);
 	const activeToolNames = new Set(pi.getActiveTools());
-	const activeFirecrawlToolCount = FIRECRAWL_TOOL_NAMES.filter((name) =>
+	const loadedFirecrawlToolCount = FIRECRAWL_TOOL_NAMES.filter((name) =>
 		activeToolNames.has(name),
 	).length;
+	const availableFirecrawlToolCount = availableFirecrawlTools(pi).length;
 	const activeNonFirecrawlToolCount = Array.from(activeToolNames).filter(
-		(name) => !firecrawlToolNames.has(name),
+		(name) => !firecrawlToolNames.has(name) && name !== FIRECRAWL_LOAD_TOOL_NAME,
 	).length;
-	const runtimeStatus =
-		activeFirecrawlToolCount === FIRECRAWL_TOOL_NAMES.length
+	const availabilityStatus =
+		availableFirecrawlToolCount === FIRECRAWL_TOOL_NAMES.length
 			? "enabled"
-			: activeFirecrawlToolCount === 0
+			: availableFirecrawlToolCount === 0
 				? "disabled"
 				: "partial";
 
-	return { runtimeStatus, activeFirecrawlToolCount, activeNonFirecrawlToolCount };
+	return {
+		availabilityStatus,
+		availableFirecrawlToolCount,
+		loadedFirecrawlToolCount,
+		activeNonFirecrawlToolCount,
+	};
 }
 
 export async function buildStatusMessage(pi: ExtensionAPI) {
+	const generation = sessionGeneration;
+	const settings = await loadSettings();
+	if (!isCurrentFirecrawlSession(generation)) return "";
+	recordSettingsNotice(settings);
 	const summary = getToolStatusSummary(pi);
-	const persistedSetting = await persistedSettingLabel();
-	return [
-		`Firecrawl tools: ${formatRuntimeStatus(summary)}`,
-		`Persisted selection: ${persistedSetting}`,
-		`Settings file: ${settingsFilePath()}`,
-		...(settingsNotice ? [`Settings note: ${settingsNotice}`] : []),
-		`Other active tools preserved: ${summary.activeNonFirecrawlToolCount}`,
-		`API key: ${hasApiKey() ? "present" : "missing"} (FIRECRAWL_API_KEY)`,
-		`API URL: ${configuredApiUrl()}`,
-	].join("\n");
+	const persistedSetting = persistedSettingLabel(settings);
+	return sanitizeFirecrawlDisplay(
+		[
+			`Firecrawl tools available to lazy-load: ${formatRuntimeStatus(summary)}`,
+			`Loaded capability tools this session: ${summary.loadedFirecrawlToolCount}/${FIRECRAWL_TOOL_NAMES.length}`,
+			`Loader: ${pi.getActiveTools().includes(FIRECRAWL_LOAD_TOOL_NAME) ? "active" : "inactive"}`,
+			`Persisted lazy catalog: ${persistedSetting}`,
+			`Settings file: ${settingsFilePath()}`,
+			...(settingsNotice ? [`Settings note: ${settingsNotice}`] : []),
+			`Other active tools preserved: ${summary.activeNonFirecrawlToolCount}`,
+			`API key: ${hasApiKey() ? "present" : "missing"} (FIRECRAWL_API_KEY)`,
+			`API URL: ${configuredApiUrl()}`,
+		].join("\n"),
+	);
 }
 
 export function buildConfigMessage() {
-	return [
-		"Firecrawl configuration:",
-		`API key: ${hasApiKey() ? "present" : "missing"} (FIRECRAWL_API_KEY)`,
-		`API URL: ${configuredApiUrl()}`,
-		"Override API URL with FIRECRAWL_API_URL or FIRECRAWL_BASE_URL.",
-		"This extension never logs, displays, or stores your Firecrawl API key.",
-	].join("\n");
+	return sanitizeFirecrawlDisplay(
+		[
+			"Firecrawl configuration:",
+			`API key: ${hasApiKey() ? "present" : "missing"} (FIRECRAWL_API_KEY)`,
+			`API URL: ${configuredApiUrl()}`,
+			"Override API URL with FIRECRAWL_API_URL or FIRECRAWL_BASE_URL.",
+			"This extension never logs, displays, or stores your Firecrawl API key.",
+		].join("\n"),
+	);
 }
 
 export function buildCommandGuide() {
@@ -259,24 +318,19 @@ export function buildCommandGuide() {
 		"/firecrawl config — show API key presence and API URL",
 		"/firecrawl quickstart — alias for /firecrawl config",
 		"/firecrawl status — show tool and settings status",
-		"/firecrawl tools — select individual Firecrawl tools",
+		"/firecrawl tools — choose tools available to lazy-load",
 		"/firecrawl toggle — alias for /firecrawl tools",
-		"/firecrawl enable — enable all Firecrawl tools",
-		"/firecrawl disable — disable all Firecrawl tools",
+		"/firecrawl enable — make all Firecrawl tools available to lazy-load",
+		"/firecrawl disable — make all Firecrawl capability tools unavailable",
 	].join("\n");
 }
 
 function toolSelectorTitle(selectedTools: ReadonlySet<FirecrawlToolName>) {
-	return `Firecrawl tools (${selectedTools.size}/${FIRECRAWL_TOOL_NAMES.length}). Non-built-in tools run at user risk.`;
+	return `Firecrawl tools available to lazy-load (${selectedTools.size}/${FIRECRAWL_TOOL_NAMES.length}). Non-built-in tools run at user risk.`;
 }
 
 function isFirecrawlToolName(value: string): value is FirecrawlToolName {
 	return FIRECRAWL_TOOL_NAMES.includes(value as FirecrawlToolName);
-}
-
-function getActiveFirecrawlTools(pi: ExtensionAPI) {
-	const activeToolNames = new Set(pi.getActiveTools());
-	return FIRECRAWL_TOOL_NAMES.filter((toolName) => activeToolNames.has(toolName));
 }
 
 export function allFirecrawlTools() {
@@ -292,25 +346,38 @@ export function orderedFirecrawlTools(selectedTools: ReadonlySet<FirecrawlToolNa
 }
 
 function formatRuntimeStatus(summary: ToolStatusSummary) {
-	return `${summary.runtimeStatus} (${summary.activeFirecrawlToolCount}/${FIRECRAWL_TOOL_NAMES.length} active)`;
+	return `${summary.availabilityStatus} (${summary.availableFirecrawlToolCount}/${FIRECRAWL_TOOL_NAMES.length} available)`;
 }
 
-async function persistedSettingLabel() {
-	const settings = await loadSettings();
-	recordSettingsNotice(settings);
+function persistedSettingLabel(settings: SettingsLoadResult) {
 	if (settings.kind === "loaded") return formatPersistedSelection(settings.settings.tools);
 	if (settings.kind === "invalid") {
-		return `none; current active-tool policy preserved (invalid settings ignored: ${settings.reason})`;
+		return `none; current availability policy preserved (invalid settings ignored: ${settings.reason})`;
 	}
-	return "none; current active-tool policy preserved";
+	return "none; current availability policy preserved";
 }
 
 export function formatPersistedSelection(tools: readonly FirecrawlToolName[]) {
 	if (tools.length === FIRECRAWL_TOOL_NAMES.length) {
-		return `all enabled (${tools.length}/${FIRECRAWL_TOOL_NAMES.length} selected)`;
+		return `all available (${tools.length}/${FIRECRAWL_TOOL_NAMES.length} selected)`;
 	}
-	if (tools.length === 0) return `all disabled (0/${FIRECRAWL_TOOL_NAMES.length} selected)`;
+	if (tools.length === 0) return `all unavailable (0/${FIRECRAWL_TOOL_NAMES.length} selected)`;
 	return `${tools.length}/${FIRECRAWL_TOOL_NAMES.length} selected: ${tools.join(", ")}`;
+}
+
+export function sanitizeFirecrawlDisplay(value: string, maxCharacters = 50_000) {
+	const characters = Array.from(stripVTControlCharacters(value), (character) => {
+		const codePoint = character.codePointAt(0) ?? 0;
+		const unsafeControl =
+			(codePoint >= 0 && codePoint <= 8) ||
+			(codePoint >= 11 && codePoint <= 31) ||
+			(codePoint >= 127 && codePoint <= 159);
+		return unsafeControl ? "�" : character;
+	});
+	const limit = Number.isFinite(maxCharacters) ? Math.max(0, Math.floor(maxCharacters)) : 0;
+	if (characters.length <= limit) return characters.join("");
+	if (limit === 0) return "";
+	return `${characters.slice(0, limit - 1).join("")}…`;
 }
 
 function formatError(error: unknown) {
