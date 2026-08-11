@@ -30,8 +30,6 @@ import {
 import { showCodexCompactMenu } from "./settings-menu.js";
 
 const STATUS_KEY = "codex-compact";
-const EXPERIMENTAL_WARNING =
-	"Experimental: Codex Remote Compaction V2 uses an opaque, provider-specific checkpoint. Sessions require this extension and openai-codex for full replay.";
 
 function isSupportedModel(model: Model<Api> | undefined): model is Model<"openai-codex-responses"> {
 	return model?.provider === "openai-codex" && hasApi(model, "openai-codex-responses");
@@ -186,7 +184,7 @@ export function createCodexCompactExtension(
 		let generation = 0;
 
 		pi.registerCommand("codex-compact", {
-			description: "Compact now or configure experimental Codex Remote Compaction V2",
+			description: "Compact now or configure Codex Remote Compaction V2",
 			handler: async (_args, ctx) => {
 				const ownerGeneration = generation;
 				await showCodexCompactMenu(settingsRuntime, ctx, {
@@ -223,14 +221,11 @@ export function createCodexCompactExtension(
 			) {
 				return;
 			}
-			if (ctx.hasUI) {
-				ctx.ui.notify(EXPERIMENTAL_WARNING, "warning");
-				if (state.kind === "invalid") {
-					ctx.ui.notify(
-						`Invalid pi-codex-compact.json; using defaults without overwriting it. ${state.issue}`,
-						"warning",
-					);
-				}
+			if (ctx.hasUI && state.kind === "invalid") {
+				ctx.ui.notify(
+					`Invalid pi-codex-compact.json; using defaults without overwriting it. ${state.issue}`,
+					"warning",
+				);
 			}
 		});
 

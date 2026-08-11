@@ -783,11 +783,11 @@ The transferable design is the checkpoint protocol rather than any one summary p
 9. **Do not infer losslessness from persistence.** An exactly replayable summary checkpoint can still
    omit critical task state, so long conversations and repeated compactions remain accuracy risks.
 
-## Experimental Pi extension boundary
+## Pi extension boundary
 
-This repository now contains
-[`packages/pi-codex-compact`](../../packages/pi-codex-compact/README.md), an experimental
-Pi extension for the built-in `openai-codex` OAuth provider. It implements the Remote V2 wire path
+This repository contains
+[`packages/pi-codex-compact`](../../packages/pi-codex-compact/README.md), a stable Pi extension for
+the built-in `openai-codex` OAuth provider. It implements the Remote V2 wire path
 inside Pi's public extension boundary:
 
 - add `compaction_trigger` to an extension-owned Codex Responses request;
