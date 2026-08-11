@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { access, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { FIRECRAWL_TOOL_NAMES, type FirecrawlToolName } from "./tools.js";
+import { FIRECRAWL_TOOL_NAMES, type FirecrawlToolName } from "./tool-names.js";
 
 const NEW_SETTINGS_FILE = "pi-firecrawl.json";
 const LEGACY_SETTINGS_FILE = "pi-firecrawl-settings.json";

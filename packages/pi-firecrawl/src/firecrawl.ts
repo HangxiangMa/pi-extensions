@@ -1,11 +1,16 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { hasApiKey } from "./client.js";
+import {
+	availableFirecrawlTools,
+	configureLazyFirecrawlTools,
+	createFirecrawlLoadTool,
+	initializeAvailableFirecrawlTools,
+} from "./lazy-tools.js";
 import { cleanupResponseArtifacts, openResponseArtifacts } from "./response-format.js";
 import { loadSettings } from "./settings.js";
 import {
 	advanceFirecrawlSessionGeneration,
 	allFirecrawlTools,
-	applyFirecrawlTools,
 	buildCommandGuide,
 	buildConfigMessage,
 	buildStatusMessage,
@@ -14,6 +19,7 @@ import {
 	currentFirecrawlSessionSignal,
 	isCurrentFirecrawlSession,
 	recordSettingsNotice,
+	sanitizeFirecrawlDisplay,
 	showToolSelector,
 	updateFirecrawlTools,
 	waitForFirecrawlSettings,
@@ -26,18 +32,18 @@ const COMMAND_COMPLETIONS = [
 	{ value: "config", label: "config", description: "Show configuration quick start" },
 	{ value: "quickstart", label: "quickstart", description: "Show configuration quick start" },
 	{ value: "status", label: "status", description: "Show tool and settings status" },
-	{ value: "tools", label: "tools", description: "Select Firecrawl tools" },
-	{ value: "toggle", label: "toggle", description: "Select Firecrawl tools" },
-	{ value: "enable", label: "enable", description: "Enable all Firecrawl tools" },
-	{ value: "disable", label: "disable", description: "Disable all Firecrawl tools" },
+	{ value: "tools", label: "tools", description: "Choose lazy-loadable Firecrawl tools" },
+	{ value: "toggle", label: "toggle", description: "Choose lazy-loadable Firecrawl tools" },
+	{ value: "enable", label: "enable", description: "Make all Firecrawl tools available" },
+	{ value: "disable", label: "disable", description: "Make all Firecrawl tools unavailable" },
 ];
 const MENU_OPTIONS = {
 	config: "Configuration quick start",
 	help: "Command usage guide",
 	status: "Show tool status",
-	tools: "Select Firecrawl tools",
-	enable: "Enable all Firecrawl tools",
-	disable: "Disable all Firecrawl tools",
+	tools: "Choose available Firecrawl tools",
+	enable: "Make all Firecrawl tools available",
+	disable: "Make all Firecrawl tools unavailable",
 } as const;
 type CommandAction =
 	| "menu"
@@ -55,11 +61,13 @@ export default function firecrawl(pi: ExtensionAPI) {
 	pi.registerTool(crawlStatusTool);
 	pi.registerTool(mapTool);
 	pi.registerTool(searchTool);
+	pi.registerTool(createFirecrawlLoadTool(pi));
 
 	pi.registerCommand("firecrawl", {
 		description: "Open Firecrawl help and tool controls",
 		getArgumentCompletions: (prefix) => commandCompletions(prefix),
 		handler: async (args, ctx) => {
+			initializeAvailableFirecrawlTools(pi);
 			const generation = currentFirecrawlSessionGeneration();
 			await handleFirecrawlCommand(pi, args, ctx, generation);
 		},
@@ -67,19 +75,22 @@ export default function firecrawl(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = advanceFirecrawlSessionGeneration();
+		initializeAvailableFirecrawlTools(pi);
 		openResponseArtifacts(ctx.sessionManager);
 		clearSettingsNotice();
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		const settings = await loadSettings();
 		if (!isCurrentFirecrawlSession(generation)) return;
 		recordSettingsNotice(settings);
-		if (settings.notice) ctx.ui.notify(settings.notice, "warning");
-		if (settings.kind === "loaded") {
-			applyFirecrawlTools(pi, settings.settings.tools);
-			return;
-		}
+		if (settings.notice) ctx.ui.notify(sanitizeFirecrawlDisplay(settings.notice), "warning");
+		const availableTools =
+			settings.kind === "loaded" ? settings.settings.tools : availableFirecrawlTools(pi);
+		configureLazyFirecrawlTools(pi, availableTools);
 		if (settings.kind === "invalid") {
-			ctx.ui.notify(`Firecrawl settings ignored: ${settings.reason}`, "warning");
+			ctx.ui.notify(
+				sanitizeFirecrawlDisplay(`Firecrawl settings ignored: ${settings.reason}`),
+				"warning",
+			);
 		}
 	});
 
@@ -104,39 +115,46 @@ async function handleFirecrawlCommand(
 			await showMenu(pi, ctx, generation);
 			return;
 		case "help":
+			requireObservableUi(ctx, "help");
 			ctx.ui.notify(buildCommandGuide(), "info");
 			return;
 		case "config":
 		case "quickstart":
+			requireObservableUi(ctx, command);
 			ctx.ui.notify(buildConfigMessage(), hasApiKey() ? "info" : "warning");
 			return;
 		case "status": {
+			requireObservableUi(ctx, "status");
 			const status = await buildStatusMessage(pi);
 			if (!isCurrentFirecrawlSession(generation)) return;
 			ctx.ui.notify(status, hasApiKey() ? "info" : "warning");
 			return;
 		}
 		case "tools":
+			requireObservableUi(ctx, "tools");
 			await showToolSelector(pi, ctx);
 			return;
 		case "enable":
-			await updateFirecrawlTools(pi, ctx, allFirecrawlTools(), "enabled all");
+			await updateFirecrawlTools(pi, ctx, allFirecrawlTools(), "made all available");
 			return;
 		case "disable":
-			await updateFirecrawlTools(pi, ctx, [], "disabled all");
+			await updateFirecrawlTools(pi, ctx, [], "made all unavailable");
 			return;
 	}
 
-	ctx.ui.notify(`Unknown /firecrawl command: ${args.trim()}\n\n${buildCommandGuide()}`, "warning");
+	if (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc")) {
+		throw new Error(sanitizeFirecrawlDisplay(`Unknown /firecrawl command: ${args.trim()}`));
+	}
+	ctx.ui.notify(
+		sanitizeFirecrawlDisplay(
+			`Unknown /firecrawl command: ${args.trim()}\n\n${buildCommandGuide()}`,
+		),
+		"warning",
+	);
 }
 
 async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: number) {
-	if (!ctx.hasUI) {
-		const status = await buildStatusMessage(pi);
-		if (!isCurrentFirecrawlSession(generation)) return;
-		ctx.ui.notify(`${buildCommandGuide()}\n\n${status}`, hasApiKey() ? "info" : "warning");
-		return;
-	}
+	requireObservableUi(ctx, "menu");
 	const menuSignal = currentFirecrawlSessionSignal();
 	const isCurrent = () => isCurrentFirecrawlSession(generation) && !menuSignal.aborted;
 	const { defineMenu, runMenu } = await import("@narumitw/pi-tui-kit");
@@ -150,6 +168,7 @@ async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: numbe
 			main: () => ({
 				kind: "actions",
 				title: "Firecrawl",
+				lines: mainMenuLines(pi),
 				items: Object.entries(MENU_OPTIONS).map(([id, label]) => ({
 					id,
 					label,
@@ -179,11 +198,11 @@ async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: numbe
 				return { kind: "close" };
 			},
 			enable: async () => {
-				await updateFirecrawlTools(pi, ctx, allFirecrawlTools(), "enabled all");
+				await updateFirecrawlTools(pi, ctx, allFirecrawlTools(), "made all available");
 				return { kind: "close" };
 			},
 			disable: async () => {
-				await updateFirecrawlTools(pi, ctx, [], "disabled all");
+				await updateFirecrawlTools(pi, ctx, [], "made all unavailable");
 				return { kind: "close" };
 			},
 		},
@@ -193,6 +212,23 @@ async function showMenu(pi: ExtensionAPI, ctx: CommandContext, generation: numbe
 		signal: menuSignal,
 		isCurrent,
 	});
+}
+
+function mainMenuLines(pi: ExtensionAPI) {
+	const active = new Set(pi.getActiveTools());
+	const capabilityNames = allFirecrawlTools();
+	const loadedCount = capabilityNames.filter((name) => active.has(name)).length;
+	return [
+		`Lazy catalog: ${availableFirecrawlTools(pi).length}/${capabilityNames.length} available`,
+		`Loaded this session: ${loadedCount}/${capabilityNames.length}`,
+		`API key: ${hasApiKey() ? "present" : "missing"}`,
+	];
+}
+
+function requireObservableUi(ctx: CommandContext, route: string) {
+	if (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc")) {
+		throw new Error(`/firecrawl ${route} requires TUI or RPC mode`);
+	}
 }
 
 export function parseCommand(args: string): CommandAction | "unknown" {
@@ -228,4 +264,8 @@ export {
 } from "./client.js";
 export { cleanupResponseArtifacts } from "./response-format.js";
 export { normalizeFirecrawlSettings } from "./settings.js";
-export { formatPersistedSelection, orderedFirecrawlTools } from "./tool-selector.js";
+export {
+	formatPersistedSelection,
+	orderedFirecrawlTools,
+	sanitizeFirecrawlDisplay,
+} from "./tool-selector.js";

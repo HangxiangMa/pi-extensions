@@ -6,15 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { cleanObject, firecrawlRequest, jsonResult, withStatus } from "./client.js";
-
-export const FIRECRAWL_TOOL_NAMES = [
-	"firecrawl_scrape",
-	"firecrawl_crawl",
-	"firecrawl_crawl_status",
-	"firecrawl_map",
-	"firecrawl_search",
-] as const;
-export type FirecrawlToolName = (typeof FIRECRAWL_TOOL_NAMES)[number];
+import { FIRECRAWL_TOOL_NAMES } from "./tool-names.js";
 
 const StringArray = Type.Array(Type.String());
 const OUTPUT_LIMIT_DESCRIPTION = `Output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}; complete truncated responses are saved temporarily and their path is returned.`;
@@ -23,11 +15,6 @@ export const scrapeTool = defineTool({
 	name: FIRECRAWL_TOOL_NAMES[0],
 	label: "Firecrawl: Scrape",
 	description: `Scrape a single URL through Firecrawl and return requested formats. ${OUTPUT_LIMIT_DESCRIPTION}`,
-	promptSnippet: "Scrape a URL through Firecrawl",
-	promptGuidelines: [
-		"Use firecrawl_scrape when you need clean markdown, HTML, links, screenshots, or structured extraction for one URL.",
-		"If FIRECRAWL_API_KEY is missing, report the configuration error instead of retrying repeatedly.",
-	],
 	parameters: Type.Object({
 		url: Type.String({ description: "URL to scrape." }),
 		formats: Type.Optional(
@@ -91,7 +78,6 @@ export const crawlTool = defineTool({
 	name: FIRECRAWL_TOOL_NAMES[1],
 	label: "Firecrawl: Crawl",
 	description: `Start a Firecrawl crawl job for a website. ${OUTPUT_LIMIT_DESCRIPTION}`,
-	promptSnippet: "Start a Firecrawl site crawl job",
 	parameters: Type.Object({
 		url: Type.String({ description: "Starting URL for the crawl." }),
 		limit: Type.Optional(Type.Number({ description: "Maximum number of pages to crawl." })),
@@ -135,7 +121,6 @@ export const crawlStatusTool = defineTool({
 	name: FIRECRAWL_TOOL_NAMES[2],
 	label: "Firecrawl: Crawl Status",
 	description: `Check a Firecrawl crawl job status and retrieve completed crawl data. ${OUTPUT_LIMIT_DESCRIPTION}`,
-	promptSnippet: "Check a Firecrawl crawl job status",
 	parameters: Type.Object({
 		id: Type.String({ description: "Crawl job id returned by firecrawl_crawl." }),
 	}),
@@ -157,7 +142,6 @@ export const mapTool = defineTool({
 	name: FIRECRAWL_TOOL_NAMES[3],
 	label: "Firecrawl: Map",
 	description: `Discover URLs for a site through Firecrawl's map endpoint. ${OUTPUT_LIMIT_DESCRIPTION}`,
-	promptSnippet: "Map/discover URLs for a site through Firecrawl",
 	parameters: Type.Object({
 		url: Type.String({ description: "Website URL to map." }),
 		search: Type.Optional(
@@ -190,7 +174,6 @@ export const searchTool = defineTool({
 	name: FIRECRAWL_TOOL_NAMES[4],
 	label: "Firecrawl: Search",
 	description: `Search the web through Firecrawl and optionally scrape search results. ${OUTPUT_LIMIT_DESCRIPTION}`,
-	promptSnippet: "Search the web through Firecrawl",
 	parameters: Type.Object({
 		query: Type.String({ description: "Search query." }),
 		limit: Type.Optional(Type.Number({ description: "Maximum number of search results." })),
