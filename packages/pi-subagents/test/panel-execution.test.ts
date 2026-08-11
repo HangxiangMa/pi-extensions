@@ -11,13 +11,9 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, test } from "vitest";
+import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import subagents from "../src/subagents.js";
-import { installSubagentsTestEnvironment } from "./subagents-test-helpers.js";
-
-const restoreTestEnvironment = installSubagentsTestEnvironment();
-afterAll(restoreTestEnvironment);
 
 const CORE_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 
