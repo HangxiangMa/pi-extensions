@@ -299,8 +299,8 @@ No benchmark result in this release changes the default delegation policy or mak
 | --- | --- | --- |
 | `list_agents` | Optional `agentScope` (default `user`) and `limit` (default 32, maximum 100) | Bounded agent metadata and omission counts |
 | `get_agent` | Required `agent`; optional `agentScope` | One resolved definition, safe source path, configured tools, and consultation-effective tools; never the system prompt |
-| `list_runs` | Optional `includeClosed` and `limit` (default 50, maximum 100) | Metadata-only retained-run summaries and unread counts |
-| `get_run` | Required `agentId` | Safe `cwd`, current-task/error summaries, thinking level, context footprint, protocol, effective transport, bounded timing/usage telemetry, structured result when valid, policy, history count, and unread count |
+| `list_runs` | Optional `includeClosed` and `limit` (default 50, maximum 100) | Metadata-only retained-run summaries, turn generation, pending-completion count, and unread counts |
+| `get_run` | Required `agentId` | Safe `cwd`, current run and turn generation, current-task/error summaries, thinking level, context footprint, protocol, effective transport, bounded timing/usage telemetry, structured result when valid, policy, history count, pending-completion count, and unread count |
 | `list_workflows` | Optional `limit` (default 50, maximum 100) | Metadata-only persisted blocking-workflow summaries for the current session |
 | `get_workflow` | Required `workflowId` | Bounded task states, generations, dependencies, plan identities, artifact metadata, verification state, and outcome reasons without artifact contents |
 | `list_models` | Optional `limit` (default 50, maximum 100) | Session-scoped models, or the already-loaded available snapshot |
@@ -310,7 +310,7 @@ No benchmark result in this release changes the default delegation policy or mak
 
 The schema rejects fields that do not belong to the selected action. Explicit `project` or `both` scope fails before project-agent discovery unless Pi already trusts the project. Run inspection never returns history output, stored context, or mailbox content; unread counts come from a metadata-only snapshot and do not acknowledge messages. Workflow inspection reads validated, redacted snapshots without quarantining or rewriting invalid files. Paths beneath the Pi agent directory use `~`, project paths are workspace-relative, model objects are projected through an allow-list, and model-facing text is bounded to 50 KiB or 2,000 lines.
 
-Compatibility: `subagent_manage({ "action": "list" })` remains supported with its existing behavior. Prefer `subagent_inspect` when a whole tool must be safe to activate on a read-only surface.
+`subagent_manage` no longer accepts its former compatibility `list` action. Use `subagent_inspect({ "action": "list_runs", "includeClosed": true })` for metadata-only discovery and `get_run` for detail.
 
 ## 📖 Read-only consultation
 
@@ -599,9 +599,9 @@ Legacy v1 and v2 records without acceptance fields retain their prior completed 
 
 ## 🔁 Stateful agents
 
-Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects a bounded `pi-subagent-completion` custom message. Completions that settle in the same dispatch window are batched, and the broker allows at most one in-flight root wake until that parent turn starts.
+Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects a bounded `pi-subagent-completion` custom message. Every turn receives an executor-owned `runId`, monotonically increasing agent-local generation, and unique `completionId`. The terminal completion is persisted before delivery, simultaneous completions are batched, and the broker allows at most one in-flight root wake until that parent turn starts.
 
-Detached work follows a non-polling policy. With default `next-turn` delivery, prefer one bounded `subagent_spawn` for related asynchronous research or review only when the current response does not depend on its result. If it does, use blocking `subagent` when registered; in **Async only**, complete required work directly, opt into `auto-resume` when a later synthesis turn is appropriate, or switch workflows. With opt-in `auto-resume`, detached broad work may be final-answer-dependent because completion requests a synthesis turn after the root settles. In either mode, do useful non-overlapping main-agent work immediately, do not poll `subagent_manage` with `action: "list"` or `subagent_mailbox` with `action: "read"`, and do not duplicate delegated work. Add another detached agent only for truly independent work with safe workspace concurrency. Detached lifecycle work intentionally has no `subagent_wait` tool.
+Detached work follows a non-polling policy. With default `next-turn` delivery, prefer one bounded `subagent_spawn` for related asynchronous research or review only when the current response does not depend on its result. If it does, use blocking `subagent` when registered; in **Async only**, complete required work directly, opt into `auto-resume` when a later synthesis turn is appropriate, or switch workflows. With opt-in `auto-resume`, detached broad work may be final-answer-dependent because completion requests a synthesis turn after the root settles. In either mode, do useful non-overlapping main-agent work immediately, do not poll `subagent_inspect` or `subagent_mailbox` with `action: "read"`, and do not duplicate delegated work. Add another detached agent only for truly independent work with safe workspace concurrency. Detached lifecycle work intentionally has no `subagent_wait` tool.
 
 A detached agent additionally needs a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation. Simple work that the main agent can perform directly should not be delegated.
 
@@ -610,7 +610,7 @@ A detached agent additionally needs a concrete isolation or specialization benef
 - `"next-turn"` (default) preserves the previous behavior: use `deliverAs: "steer"` with `triggerTurn: false`. An active root can consume completion naturally; an idle root is not awakened.
 - `"auto-resume"` holds completion while the root is active, then requests one synthesis turn after the parent settles when no user or extension messages are already pending. Simultaneous completions share that turn, active work is not interrupted, and pending input suppresses the autonomous wake.
 
-Auto-resume is best-effort because Pi's custom-message API is fire-and-forget. Session-generation checks, shutdown cleanup, batching, and the in-flight wake guard prevent stale or duplicate scheduling pressure, but they do not make completion delivery durable across process exit.
+The bounded persisted completion outbox provides ordered at-least-once delivery across process restart without replaying the child turn. When state must be reduced to its storage bound, persistence drops roots without pending completions first and trims old history rather than discarding an outbox-owned root. Starting the parent turn that can consume the message acknowledges only the exact `completionId`; if the process exits after Pi accepts the message but before parent-turn acknowledgement is persisted, the same ID can be delivered again and consumers must deduplicate it. Auto-resume wake admission remains best-effort because Pi's custom-message API is fire-and-forget, but an unacknowledged terminal completion itself remains available for redelivery on the next start of the owning session.
 
 The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history.
 Set `transport` to `in-process` to retain one public Pi SDK `AgentSession` per stateful `agentId`, avoiding repeated process startup while preserving native child history in memory.
@@ -687,7 +687,7 @@ This avoids lifecycle-driven tool-schema churn and preserves a stable provider p
 | --- | --- |
 | `subagent_spawn` | Start detached work with optional task-selected thinking and retained timeout, exact-retry `idempotencyKey`, and `text`, `structured-v1`, or `structured-v2` result format; return an opaque `agentId` immediately and deliver completion asynchronously. |
 | `subagent_send` | Send follow-up work with an optional one-turn timeout override and trigger a new turn on a reusable agent; semantic skew requires explicit `revalidate: true`, and shared-workspace write conflicts are guarded unless explicitly overridden. |
-| `subagent_manage` | Use `action: "list"` to inspect agents, `"interrupt"` to retain an agent after aborting active work, or `"close"` to release it; interrupt/close accept optional `subtree`. |
+| `subagent_manage` | Use `"interrupt"` to retain an agent after aborting active work or `"close"` to release it; both actions accept optional `subtree`. Use `subagent_inspect` for all list and detail operations. |
 | `subagent_mailbox` | Use `action: "send"` for queue-only messages that do not start a turn, or `"read"` to read and optionally acknowledge unread messages. |
 
 The action schemas are flat for provider compatibility and reject parameters that belong to another action. For example:
@@ -721,13 +721,14 @@ The five replaced names are intentionally not registered as aliases. Update expl
 
 | Previous call | Fixed-surface call |
 | --- | --- |
-| `subagent_list({ includeClosed })` | `subagent_manage({ action: "list", includeClosed })` |
+| `subagent_list({ includeClosed })` | `subagent_inspect({ action: "list_runs", includeClosed })` |
+| `subagent_manage({ action: "list", includeClosed })` | `subagent_inspect({ action: "list_runs", includeClosed })` |
 | `subagent_interrupt({ agentId, subtree })` | `subagent_manage({ action: "interrupt", agentId, subtree })` |
 | `subagent_close({ agentId, subtree })` | `subagent_manage({ action: "close", agentId, subtree })` |
 | `subagent_message({ agentId, message, ... })` | `subagent_mailbox({ action: "send", agentId, message, ... })` |
 | `subagent_messages({ agentId, acknowledge, limit })` | `subagent_mailbox({ action: "read", agentId, acknowledge, limit })` |
 
-Persisted agent and mailbox records require no migration. If an explicit prompt in a resumed conversation keeps requesting an old name, update it with the mapping above or start a fresh conversation. To roll back after an upgrade, pin the package version used before the upgrade; for this migration, use `pi install npm:@narumitw/pi-subagents@0.26.0`. The previous release can read the same state directory.
+Persisted agent and mailbox records require no manual migration; older records load with an empty completion outbox and generation zero. If an explicit prompt in a resumed conversation keeps requesting an old name, update it with the mapping above or start a fresh conversation. To roll back after an upgrade, pin the package version used before the upgrade; for this migration, use `pi install npm:@narumitw/pi-subagents@0.26.0`. The previous release can read the same state directory.
 
 A spawn can request a thinking level explicitly:
 

@@ -404,6 +404,8 @@ function projectRunSummary(run: AgentRunInspectionSummary): Record<string, unkno
 		updatedAt: run.updatedAt,
 		historyCount: run.historyCount,
 		unreadMessages: run.unreadMessages,
+		turnGeneration: run.turnGeneration,
+		pendingCompletionCount: run.pendingCompletionCount,
 	};
 }
 
@@ -474,6 +476,8 @@ function projectRun(run: AgentRunInspectionDetail, ctx: ExtensionContext): Recor
 			: undefined,
 		semanticCompatibility: run.semanticCompatibility,
 		telemetry: run.telemetry,
+		currentRunId: run.currentRunId,
+		currentTurnGeneration: run.currentTurnGeneration,
 		currentTask: run.currentTask ? boundedPrivateText(run.currentTask, 2 * 1024) : undefined,
 		error: run.error ? boundedPrivateText(run.error, 2 * 1024) : undefined,
 		target: run.target

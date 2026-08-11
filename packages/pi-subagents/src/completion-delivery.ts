@@ -12,6 +12,9 @@ const COMPLETION_BATCH_DELAY_MS = 10;
 
 interface CompletionMetadata {
 	protocol: typeof PI_SUBAGENTS_RPC_PROTOCOL;
+	completionId: string;
+	runId: string;
+	generation: number;
 	agentId: string;
 	agent: string;
 	state: string;
@@ -38,13 +41,15 @@ type CompletionPi = Pick<ExtensionAPI, "sendMessage">;
 
 export interface CompletionDeliveryBrokerOptions {
 	onDeliveryError?: (error: unknown) => void;
-	onDelivered?: (completions: readonly AgentTurnCompletion[], deliveredAt: number) => void;
+	onAcknowledged?: (completions: readonly AgentTurnCompletion[], acknowledgedAt: number) => void;
 	now?: () => number;
 }
 
 /** Owns bounded completion batching and at most one idle-root wake for one parent session. */
 export class CompletionDeliveryBroker {
 	private pending: AgentTurnCompletion[] = [];
+	private readonly knownCompletionIds = new Set<string>();
+	private awaitingParentAck: AgentTurnCompletion[] = [];
 	private flushTimer?: NodeJS.Timeout;
 	private wakeInFlight = false;
 	private closed = false;
@@ -57,7 +62,8 @@ export class CompletionDeliveryBroker {
 	) {}
 
 	enqueue(completion: AgentTurnCompletion): void {
-		if (this.closed) return;
+		if (this.closed || this.knownCompletionIds.has(completion.completionId)) return;
+		this.knownCompletionIds.add(completion.completionId);
 		this.pending.push(completion);
 		this.scheduleFlush();
 	}
@@ -69,6 +75,7 @@ export class CompletionDeliveryBroker {
 
 	onParentTurnStart(): void {
 		this.wakeInFlight = false;
+		this.acknowledgeDelivered();
 		this.scheduleFlush();
 	}
 
@@ -88,18 +95,21 @@ export class CompletionDeliveryBroker {
 		let canWake = this.shouldWakeRoot();
 		for (let index = 0; index < batches.length; index++) {
 			const triggerTurn = canWake && index === batches.length - 1;
-			const message = buildCompletionMessage(batches[index]);
+			const batch = batches[index];
+			const message = buildCompletionMessage(batch);
 			if (triggerTurn) this.wakeInFlight = true;
+			this.awaitingParentAck.push(...batch);
 			try {
 				this.pi.sendMessage(message, { deliverAs: "steer", triggerTurn });
-				this.notifyDelivered(batches[index]);
 			} catch (primaryError) {
+				this.removeAwaiting(batch);
 				if (triggerTurn) this.wakeInFlight = false;
 				canWake = false;
+				this.awaitingParentAck.push(...batch);
 				try {
 					this.pi.sendMessage(message, { deliverAs: "nextTurn", triggerTurn: false });
-					this.notifyDelivered(batches[index]);
 				} catch (fallbackError) {
+					this.removeAwaiting(batch);
 					this.pending = [...batches.slice(index).flat(), ...this.pending];
 					try {
 						this.options.onDeliveryError?.(
@@ -122,6 +132,8 @@ export class CompletionDeliveryBroker {
 		if (this.flushTimer) clearTimeout(this.flushTimer);
 		this.flushTimer = undefined;
 		this.pending = [];
+		this.awaitingParentAck = [];
+		this.knownCompletionIds.clear();
 	}
 
 	private scheduleFlush(): void {
@@ -132,12 +144,22 @@ export class CompletionDeliveryBroker {
 		}, COMPLETION_BATCH_DELAY_MS);
 	}
 
-	private notifyDelivered(completions: readonly AgentTurnCompletion[]): void {
+	private acknowledgeDelivered(): void {
+		if (this.awaitingParentAck.length === 0) return;
+		const completions = this.awaitingParentAck.splice(0);
+		for (const completion of completions) this.knownCompletionIds.delete(completion.completionId);
 		try {
-			this.options.onDelivered?.(completions, (this.options.now ?? Date.now)());
+			this.options.onAcknowledged?.(completions, (this.options.now ?? Date.now)());
 		} catch {
-			// Delivery already succeeded, so observer failures cannot requeue it.
+			// Parent consumption already started, so observer failures cannot retract the message.
 		}
+	}
+
+	private removeAwaiting(completions: readonly AgentTurnCompletion[]): void {
+		const removed = new Set(completions.map((completion) => completion.completionId));
+		this.awaitingParentAck = this.awaitingParentAck.filter(
+			(completion) => !removed.has(completion.completionId),
+		);
 	}
 
 	private isRootIdle(): boolean {
@@ -203,6 +225,9 @@ function buildCompletionMessage(completions: AgentTurnCompletion[]): CompletionM
 function completionMetadata(completion: AgentTurnCompletion): CompletionMetadata {
 	return {
 		protocol: PI_SUBAGENTS_RPC_PROTOCOL,
+		completionId: completion.completionId,
+		runId: completion.runId,
+		generation: completion.generation,
 		agentId: completion.agent.id,
 		agent: completion.agent.agent,
 		state: completion.agent.state,
@@ -233,6 +258,9 @@ export function buildDetachedCompletionMessage(completion: AgentTurnCompletion):
 		[
 			"Message Type: SUBAGENT_COMPLETION",
 			`Protocol: ${PI_SUBAGENTS_RPC_PROTOCOL}`,
+			`Completion ID: ${completion.completionId}`,
+			`Run ID: ${completion.runId}`,
+			`Generation: ${completion.generation}`,
 			`Agent ID: ${completion.agent.id}`,
 			`Agent: ${agentName}`,
 			`Task: ${task}`,

@@ -284,6 +284,8 @@ test("subagent_inspect returns metadata-only run summaries", async () => {
 		updatedAt: 2,
 		historyCount: 3,
 		unreadMessages: 4,
+		turnGeneration: 3,
+		pendingCompletionCount: 1,
 	};
 	const detail: AgentRunInspectionDetail = {
 		...summary,
@@ -361,6 +363,8 @@ test("subagent_inspect bounds list details as well as model-facing content", asy
 		updatedAt: index,
 		historyCount: index,
 		unreadMessages: index,
+		turnGeneration: index,
+		pendingCompletionCount: index,
 	}));
 	const mock = createMockPi();
 	registerSubagentInspect(mock.pi, runtime({ runs }));

@@ -98,6 +98,8 @@ const statefulAgent = {
 	updatedAt: 2,
 	historyCount: 1,
 	unreadMessages: 2,
+	turnGeneration: 1,
+	pendingCompletionCount: 0,
 	thinkingLevel: "high",
 	currentTask: "Inspect the renderer",
 };
@@ -588,12 +590,6 @@ test("detached lifecycle renderers summarize calls and action-specific results",
 		},
 		{
 			name: "subagent_manage",
-			args: { action: "list", includeClosed: true },
-			result: { content: [{ type: "text", text: "listed" }], details: { agents: [statefulAgent] } },
-			expected: /list.*1 agent.*sa_worker/is,
-		},
-		{
-			name: "subagent_manage",
 			args: { action: "interrupt", agentId: "sa_worker", subtree: true },
 			result: {
 				content: [{ type: "text", text: "Interrupted 1 active agent(s)." }],
@@ -737,8 +733,11 @@ test("structured tool views remain width-safe when collapsed and expanded", () =
 		},
 		{
 			name: "subagent_manage",
-			args: { action: "list", includeClosed: true },
-			result: { content: [{ type: "text", text: "listed" }], details: { agents: [statefulAgent] } },
+			args: { action: "close", agentId: "sa_worker" },
+			result: {
+				content: [{ type: "text", text: "closed" }],
+				details: { agent: { ...statefulAgent, state: "closed" } },
+			},
 		},
 		{
 			name: "subagent_mailbox",

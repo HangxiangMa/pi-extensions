@@ -75,7 +75,6 @@ function renderStatefulCall(tool: StatefulRenderTool, args: Record<string, unkno
 		const metadata: string[] = [];
 		if (typeof args.agentId === "string") metadata.push(`id:${safeLine(args.agentId, "", 256)}`);
 		if (args.subtree === true) metadata.push("subtree");
-		if (args.includeClosed === true) metadata.push("include closed");
 		return new Text(toolHeader(theme, "subagent_manage", args.action, metadata), 0, 0);
 	}
 	const metadata = [`id:${safeLine(args.agentId, "...", 256)}`];
