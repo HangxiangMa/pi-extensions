@@ -155,6 +155,110 @@ test("firecrawl keeps its missing-settings catalog across session replacement", 
 	});
 });
 
+test("firecrawl preserves an unsaved catalog across reload API replacement", async () => {
+	await withTempAgentDir(async () => {
+		const sessionManager = {
+			getSessionId: () => "reload-session",
+			getBranch: () => [],
+			getEntries: () => [],
+		};
+		const firstModule = await importFreshFirecrawl();
+		const first = createMockPi({ activeTools: ["other_tool", SCRAPE_TOOL] });
+		const firstContext = createMockContext({ sessionManager }).ctx;
+		firstModule.default(first.pi);
+		await first.events.get("session_start")?.[0]?.({ reason: "startup" }, firstContext);
+
+		const secondModule = await importFreshFirecrawl();
+		const replacement = createMockPi({ activeTools: ["other_tool", ...CAPABILITY_TOOLS] });
+		const replacementContext = createMockContext({ sessionManager }).ctx;
+		secondModule.default(replacement.pi);
+		await replacement.events.get("session_start")?.[0]?.({ reason: "reload" }, replacementContext);
+		const loader = replacement.tools.find((tool) => tool.name === LOAD_TOOL) as {
+			execute: (...args: unknown[]) => Promise<{ details: { matches: string[] } }>;
+		};
+		const unavailable = await loader.execute(
+			"loader-unavailable",
+			{ query: "search the web" },
+			new AbortController().signal,
+			undefined,
+			replacementContext,
+		);
+		const available = await loader.execute(
+			"loader-available",
+			{ query: "scrape one page" },
+			new AbortController().signal,
+			undefined,
+			replacementContext,
+		);
+
+		assert.deepEqual(unavailable.details.matches, []);
+		assert.deepEqual(available.details.matches, [SCRAPE_TOOL]);
+	});
+});
+
+test("firecrawl restores only allowed loaded capabilities from the active branch", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		writeSettings(agentDir, [SCRAPE_TOOL, MAP_TOOL, SEARCH_TOOL]);
+		const branch = [
+			{
+				type: "message",
+				message: {
+					role: "toolResult",
+					toolName: LOAD_TOOL,
+					addedToolNames: [SEARCH_TOOL],
+					details: { matches: [SEARCH_TOOL], added: [SEARCH_TOOL] },
+				},
+			},
+			{
+				type: "message",
+				message: {
+					role: "toolResult",
+					toolName: LOAD_TOOL,
+					details: { matches: [SCRAPE_TOOL], added: [SCRAPE_TOOL] },
+				},
+			},
+			{
+				type: "message",
+				message: {
+					role: "toolResult",
+					toolName: LOAD_TOOL,
+					addedToolNames: [CRAWL_TOOL],
+					details: { matches: [CRAWL_TOOL], added: [CRAWL_TOOL] },
+				},
+			},
+		];
+		const sessionManager = {
+			getSessionId: () => "restored-session",
+			getBranch: () => branch,
+			getEntries: () => [
+				...branch,
+				{
+					type: "message",
+					message: {
+						role: "toolResult",
+						toolName: LOAD_TOOL,
+						addedToolNames: [MAP_TOOL],
+						details: { matches: [MAP_TOOL], added: [MAP_TOOL] },
+					},
+				},
+			],
+		};
+		const firecrawlModule = await importFreshFirecrawl();
+		const mock = createMockPi({ activeTools: ["other_tool", ...CAPABILITY_TOOLS] });
+		const { ctx } = createMockContext({ sessionManager });
+		firecrawlModule.default(mock.pi);
+
+		await mock.events.get("session_start")?.[0]?.({ reason: "fork" }, ctx);
+
+		assert.deepEqual(mock.rawPi.getActiveTools(), [
+			"other_tool",
+			LOAD_TOOL,
+			SCRAPE_TOOL,
+			SEARCH_TOOL,
+		]);
+	});
+});
+
 test("firecrawl loader filters the allowed catalog before limiting matches", async () => {
 	await withTempAgentDir(async (agentDir) => {
 		writeSettings(agentDir, [SEARCH_TOOL]);

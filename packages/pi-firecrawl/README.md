@@ -77,6 +77,8 @@ A general website-crawl query can load both `firecrawl_crawl` and `firecrawl_cra
 
 Loaded capability tools remain active for the session unless the user makes them unavailable through `/firecrawl`.
 
+On reload, resume, or fork, capabilities recorded by `firecrawl_load` on the active branch are restored when the current catalog still allows them.
+
 Pi uses native deferred tool references on compatible Anthropic and OpenAI models.
 
 Other models receive Pi's safe fallback and see the newly active definitions in the normal tool list on the next model request.
@@ -150,8 +152,9 @@ ${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-firecrawl.json
 ```
 
 When the file is missing or invalid, the extension preserves Pi's current Firecrawl availability
-policy instead of replacing it. A valid saved catalog is restored on Pi startup and `/reload`, while
-its capability definitions remain deferred. A missing file is created by the first successful
+policy instead of replacing it. An unsaved catalog remains stable across runtime reloads. A valid
+saved catalog is restored on Pi startup and `/reload`, while its capability definitions remain
+deferred. A missing file is created by the first successful
 availability change. Within one Pi process, catalog saves run in invocation order, reread the latest
 valid document, and preserve unknown fields. Malformed JSON or invalid recognized fields block the
 save without replacement; a failed save restores both the prior availability and loaded capability

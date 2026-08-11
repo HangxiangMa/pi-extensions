@@ -6,4 +6,6 @@ Load Firecrawl API capability tools on demand through a persistent `firecrawl_lo
 
 Treat the saved tool selection as the allowed lazy-load catalog and preserve stable prompt metadata while capabilities are deferred.
 
+Preserve unsaved catalogs across runtime reloads and restore allowed loaded capabilities from the active branch.
+
 Harden query ranking, settings validation and notices, and Unicode-safe display truncation.

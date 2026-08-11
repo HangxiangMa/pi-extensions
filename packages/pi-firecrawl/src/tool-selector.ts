@@ -209,13 +209,13 @@ async function transactSelectedToolsNow(
 	const previousActiveTools = pi.getActiveTools();
 	const previousAvailableTools = availableFirecrawlTools(pi);
 	try {
-		applyFirecrawlTools(pi, selectedTools);
+		applyFirecrawlTools(pi, selectedTools, ctx.sessionManager);
 		await persistSettings(selectedTools);
 		return isCurrentFirecrawlSession(expectedGeneration) ? "saved" : "failed";
 	} catch (error) {
 		let rollbackError: unknown;
 		try {
-			applyAvailableFirecrawlTools(pi, previousAvailableTools);
+			applyAvailableFirecrawlTools(pi, previousAvailableTools, ctx.sessionManager);
 			const currentNonCapabilityTools = pi
 				.getActiveTools()
 				.filter((name) => !FIRECRAWL_TOOL_NAMES.includes(name as FirecrawlToolName));
@@ -243,8 +243,12 @@ function arraysEqual<T>(left: readonly T[], right: readonly T[]) {
 	return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-export function applyFirecrawlTools(pi: ExtensionAPI, selectedTools: readonly FirecrawlToolName[]) {
-	applyAvailableFirecrawlTools(pi, selectedTools);
+export function applyFirecrawlTools(
+	pi: ExtensionAPI,
+	selectedTools: readonly FirecrawlToolName[],
+	sessionOwner?: object,
+) {
+	applyAvailableFirecrawlTools(pi, selectedTools, sessionOwner);
 }
 
 function getToolStatusSummary(pi: ExtensionAPI): ToolStatusSummary {

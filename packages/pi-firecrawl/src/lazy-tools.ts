@@ -5,14 +5,24 @@ import { FIRECRAWL_TOOL_NAMES, type FirecrawlToolName } from "./tool-names.js";
 export const FIRECRAWL_LOAD_TOOL_NAME = "firecrawl_load";
 
 const AVAILABLE_TOOLS_STORE = Symbol.for("@narumitw/pi-firecrawl.available-tools-store");
+const SESSION_AVAILABLE_TOOLS_STORE = Symbol.for(
+	"@narumitw/pi-firecrawl.session-available-tools-store",
+);
 type FirecrawlGlobal = typeof globalThis & {
 	[AVAILABLE_TOOLS_STORE]?: WeakMap<ExtensionAPI, Set<FirecrawlToolName>>;
+	[SESSION_AVAILABLE_TOOLS_STORE]?: WeakMap<object, Set<FirecrawlToolName>>;
 };
 const sharedGlobal = globalThis as FirecrawlGlobal;
 const existingAvailableToolsStore = sharedGlobal[AVAILABLE_TOOLS_STORE];
 const availableToolsByApi =
 	existingAvailableToolsStore ?? new WeakMap<ExtensionAPI, Set<FirecrawlToolName>>();
 if (!existingAvailableToolsStore) sharedGlobal[AVAILABLE_TOOLS_STORE] = availableToolsByApi;
+const existingSessionAvailableToolsStore = sharedGlobal[SESSION_AVAILABLE_TOOLS_STORE];
+const availableToolsBySession =
+	existingSessionAvailableToolsStore ?? new WeakMap<object, Set<FirecrawlToolName>>();
+if (!existingSessionAvailableToolsStore) {
+	sharedGlobal[SESSION_AVAILABLE_TOOLS_STORE] = availableToolsBySession;
+}
 
 const CRAWL_CREATION_TERMS = new Set(["begin", "create", "launch", "start"]);
 
@@ -27,31 +37,50 @@ const SEARCH_TEXT: Record<FirecrawlToolName, string> = {
 		"search searching web internet query results research discover discovery optionally scrape",
 };
 
-export function initializeAvailableFirecrawlTools(pi: ExtensionAPI) {
-	if (availableToolsByApi.has(pi)) return;
+export function initializeAvailableFirecrawlTools(pi: ExtensionAPI, sessionOwner?: object) {
+	if (sessionOwner) {
+		const sessionTools = availableToolsBySession.get(sessionOwner);
+		if (sessionTools) {
+			setAvailableTools(pi, sessionTools, sessionOwner);
+			return;
+		}
+	}
+	const apiTools = availableToolsByApi.get(pi);
+	if (apiTools) {
+		if (sessionOwner) setAvailableTools(pi, apiTools, sessionOwner);
+		return;
+	}
 	const activeTools = new Set(pi.getActiveTools());
 	setAvailableTools(
 		pi,
 		FIRECRAWL_TOOL_NAMES.filter((name) => activeTools.has(name)),
+		sessionOwner,
 	);
 }
 
 export function configureLazyFirecrawlTools(
 	pi: ExtensionAPI,
 	availableTools: readonly FirecrawlToolName[],
+	loadedTools: readonly FirecrawlToolName[] = [],
+	sessionOwner?: object,
 ) {
-	setAvailableTools(pi, availableTools);
+	const available = setAvailableTools(pi, availableTools, sessionOwner);
+	const loaded = new Set(loadedTools);
+	const restoredTools = FIRECRAWL_TOOL_NAMES.filter(
+		(name) => available.has(name) && loaded.has(name),
+	);
 	const nonCapabilityTools = pi
 		.getActiveTools()
 		.filter((name) => !FIRECRAWL_TOOL_NAMES.includes(name as FirecrawlToolName));
-	pi.setActiveTools(unique([...nonCapabilityTools, FIRECRAWL_LOAD_TOOL_NAME]));
+	pi.setActiveTools(unique([...nonCapabilityTools, FIRECRAWL_LOAD_TOOL_NAME, ...restoredTools]));
 }
 
 export function applyAvailableFirecrawlTools(
 	pi: ExtensionAPI,
 	availableTools: readonly FirecrawlToolName[],
+	sessionOwner?: object,
 ) {
-	const available = setAvailableTools(pi, availableTools);
+	const available = setAvailableTools(pi, availableTools, sessionOwner);
 	const active = pi
 		.getActiveTools()
 		.filter(
@@ -165,10 +194,51 @@ function matchFirecrawlTools(
 	return matches;
 }
 
-function setAvailableTools(pi: ExtensionAPI, availableTools: readonly FirecrawlToolName[]) {
+export function loadedFirecrawlToolsFromBranch(
+	entries: readonly unknown[],
+	availableTools: readonly FirecrawlToolName[],
+) {
+	const available = new Set(availableTools);
+	const loaded = new Set<FirecrawlToolName>();
+	for (const entry of entries) {
+		if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) continue;
+		const message = entry.message;
+		if (
+			message.role !== "toolResult" ||
+			message.toolName !== FIRECRAWL_LOAD_TOOL_NAME ||
+			message.isError === true
+		) {
+			continue;
+		}
+		const details = isRecord(message.details) ? message.details : undefined;
+		const recordedNames = [
+			...(Array.isArray(message.addedToolNames) ? message.addedToolNames : []),
+			...(details && Array.isArray(details.added) ? details.added : []),
+		];
+		for (const name of recordedNames) {
+			if (isFirecrawlToolName(name) && available.has(name)) loaded.add(name);
+		}
+	}
+	return FIRECRAWL_TOOL_NAMES.filter((name) => loaded.has(name));
+}
+
+function setAvailableTools(
+	pi: ExtensionAPI,
+	availableTools: readonly FirecrawlToolName[] | ReadonlySet<FirecrawlToolName>,
+	sessionOwner?: object,
+) {
 	const available = new Set(availableTools);
 	availableToolsByApi.set(pi, available);
+	if (sessionOwner) availableToolsBySession.set(sessionOwner, new Set(available));
 	return available;
+}
+
+function isFirecrawlToolName(value: unknown): value is FirecrawlToolName {
+	return typeof value === "string" && FIRECRAWL_TOOL_NAMES.includes(value as FirecrawlToolName);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function unique(values: readonly string[]) {

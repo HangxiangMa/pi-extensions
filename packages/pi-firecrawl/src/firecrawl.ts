@@ -5,6 +5,7 @@ import {
 	configureLazyFirecrawlTools,
 	createFirecrawlLoadTool,
 	initializeAvailableFirecrawlTools,
+	loadedFirecrawlToolsFromBranch,
 } from "./lazy-tools.js";
 import { cleanupResponseArtifacts, openResponseArtifacts } from "./response-format.js";
 import { loadSettings } from "./settings.js";
@@ -67,7 +68,7 @@ export default function firecrawl(pi: ExtensionAPI) {
 		description: "Open Firecrawl help and tool controls",
 		getArgumentCompletions: (prefix) => commandCompletions(prefix),
 		handler: async (args, ctx) => {
-			initializeAvailableFirecrawlTools(pi);
+			initializeAvailableFirecrawlTools(pi, ctx.sessionManager);
 			const generation = currentFirecrawlSessionGeneration();
 			await handleFirecrawlCommand(pi, args, ctx, generation);
 		},
@@ -75,7 +76,7 @@ export default function firecrawl(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = advanceFirecrawlSessionGeneration();
-		initializeAvailableFirecrawlTools(pi);
+		initializeAvailableFirecrawlTools(pi, ctx.sessionManager);
 		openResponseArtifacts(ctx.sessionManager);
 		clearSettingsNotice();
 		ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -85,7 +86,11 @@ export default function firecrawl(pi: ExtensionAPI) {
 		if (settings.notice) ctx.ui.notify(sanitizeFirecrawlDisplay(settings.notice), "warning");
 		const availableTools =
 			settings.kind === "loaded" ? settings.settings.tools : availableFirecrawlTools(pi);
-		configureLazyFirecrawlTools(pi, availableTools);
+		const loadedTools = loadedFirecrawlToolsFromBranch(
+			ctx.sessionManager.getBranch(),
+			availableTools,
+		);
+		configureLazyFirecrawlTools(pi, availableTools, loadedTools, ctx.sessionManager);
 		if (settings.kind === "invalid") {
 			ctx.ui.notify(
 				sanitizeFirecrawlDisplay(`Firecrawl settings ignored: ${settings.reason}`),
