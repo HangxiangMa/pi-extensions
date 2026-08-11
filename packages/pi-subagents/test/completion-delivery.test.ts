@@ -55,7 +55,43 @@ test("completion delivery acknowledges one deterministic timestamp when the pare
 	broker.flush();
 	assert.deepEqual(delivered, []);
 	broker.onParentTurnStart();
+	assert.deepEqual(delivered, []);
+	broker.onParentContext([
+		{
+			role: "custom",
+			customType: "pi-subagent-completion",
+			details: harness.sent[0]?.message.details,
+		},
+	]);
 	assert.deepEqual(delivered, [{ ids: ["sa_timed"], at: 1234 }]);
+	broker.close();
+});
+
+test("an unobserved asynchronous injection remains pending for retry", () => {
+	const harness = deliveryHarness();
+	const acknowledged: string[] = [];
+	const broker = new CompletionDeliveryBroker(harness.pi as never, harness.ctx, "next-turn", {
+		onAcknowledged: (completions) => {
+			acknowledged.push(...completions.map((value) => value.completionId));
+		},
+	});
+	broker.enqueue(completion("sa_async_failure"));
+	broker.flush();
+
+	broker.onParentTurnStart();
+	broker.onParentContext([]);
+	assert.deepEqual(acknowledged, []);
+	broker.flush();
+	assert.equal(harness.sent.length, 2);
+
+	broker.onParentContext([
+		{
+			role: "custom",
+			customType: "pi-subagent-completion",
+			details: harness.sent[1]?.message.details,
+		},
+	]);
+	assert.deepEqual(acknowledged, ["completion:sa_async_failure:1"]);
 	broker.close();
 });
 

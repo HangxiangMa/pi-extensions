@@ -198,12 +198,30 @@ test("AgentRegistry serializes state snapshots so slow persistence cannot overwr
 	assert.deepEqual(savedStates, ["starting", "starting", "completed"]);
 });
 
-test("AgentRegistry keeps lifecycle usable when persistence callbacks fail", async () => {
+test("AgentRegistry keeps an unpersisted terminal run pending until shutdown reports failure", async () => {
+	let markRetryStarted!: () => void;
+	const retryStarted = new Promise<void>((resolve) => {
+		markRetryStarted = resolve;
+	});
+	let terminalAttempts = 0;
 	const registry = new AgentRegistry(async () => ({ output: "done", exitCode: 0 }), {
-		onChange: async () => {
+		onChange: async (agents) => {
+			if (agents.some((agent) => (agent.pendingCompletions?.length ?? 0) > 0)) {
+				terminalAttempts++;
+				if (terminalAttempts === 2) markRetryStarted();
+			}
 			throw new Error("disk unavailable");
 		},
 	});
 	const agent = await registry.spawn({ agent: "scout", task: "done", cwd: process.cwd() });
-	assert.equal((await registry.wait(agent.id, 100)).agent.state, "completed");
+	await retryStarted;
+	let waitResolved = false;
+	const waiting = registry.wait(agent.id, 1_000).then((result) => {
+		waitResolved = true;
+		return result;
+	});
+	await Promise.resolve();
+	assert.equal(waitResolved, false);
+	await assert.rejects(() => registry.shutdown(), /disk unavailable/);
+	assert.equal((await waiting).agent.state, "completed");
 });

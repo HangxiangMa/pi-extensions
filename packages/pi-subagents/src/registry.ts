@@ -49,6 +49,8 @@ import { type TurnLimits, validateTurnLimits } from "./turn-budget.js";
 
 const DEFAULT_STATEFUL_LIMITS = resolveStatefulLimits();
 const MAX_PENDING_COMPLETIONS_PER_AGENT = 20;
+const INITIAL_PERSISTENCE_RETRY_DELAY_MS = 25;
+const MAX_PERSISTENCE_RETRY_DELAY_MS = 1_000;
 
 export type * from "./registry-types.js";
 
@@ -90,6 +92,21 @@ function waitAbortError(): Error {
 	return error;
 }
 
+function waitForPersistenceRetry(milliseconds: number, signal: AbortSignal): Promise<void> {
+	if (signal.aborted) return Promise.reject(signal.reason);
+	return new Promise((resolve, reject) => {
+		const onAbort = () => {
+			clearTimeout(timer);
+			reject(signal.reason);
+		};
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, milliseconds);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
 export class AgentRegistry {
 	private readonly agents = new Map<string, ManagedAgent>();
 	private readonly controllers = new Map<string, AbortController>();
@@ -100,6 +117,7 @@ export class AgentRegistry {
 		resolve: (agent: ManagedAgent) => void;
 	}> = [];
 	private changeQueue: Promise<void> = Promise.resolve();
+	private readonly shutdownController = new AbortController();
 	private readonly maxAgents: number;
 	private readonly maxActiveTurns: number;
 	private readonly maxHistoryTurns: number;
@@ -515,7 +533,7 @@ export class AgentRegistry {
 				agent.pendingCompletions = [...(agent.pendingCompletions ?? []), persistedCompletion];
 				clearCurrentTurn(agent);
 				agent.updatedAt = this.now();
-				const persisted = await this.changed(true).then(
+				const persisted = await this.persistTerminalState().then(
 					() => true,
 					() => false,
 				);
@@ -611,6 +629,7 @@ export class AgentRegistry {
 	}
 
 	async shutdown(): Promise<void> {
+		this.shutdownController.abort(new Error("Subagent registry is shutting down"));
 		for (const entry of this.queue.splice(0)) {
 			if (entry.agent.capabilityGrant?.state === "active") {
 				entry.agent.capabilityGrant = revokeCapabilityGrant(
@@ -656,7 +675,7 @@ export class AgentRegistry {
 		} catch (error) {
 			shutdownError = error;
 		}
-		await this.changed();
+		await this.changed(true);
 		if (shutdownError) throw shutdownError;
 	}
 
@@ -885,7 +904,7 @@ export class AgentRegistry {
 			agent.pendingCompletions = [...(agent.pendingCompletions ?? []), persistedCompletion];
 			clearCurrentTurn(agent);
 			agent.updatedAt = this.now();
-			void this.changed(true)
+			void this.persistTerminalState()
 				.then(() =>
 					this.notifyTurnComplete({
 						...persistedCompletion,
@@ -1067,11 +1086,11 @@ export class AgentRegistry {
 				}
 				clearCurrentTurn(agent);
 				agent.updatedAt = this.now();
-				this.controllers.delete(agent.id);
-				const persisted = await this.changed(true).then(
+				const persisted = await this.persistTerminalState().then(
 					() => true,
 					() => false,
 				);
+				this.controllers.delete(agent.id);
 				const turnCompletion: AgentTurnCompletion = {
 					...persistedCompletion,
 					agent: this.copy(agent),
@@ -1203,6 +1222,25 @@ export class AgentRegistry {
 			.filter((agent) => agent.state === "closed")
 			.sort((left, right) => right.updatedAt - left.updatedAt);
 		for (const agent of closed.slice(this.maxAgents)) this.agents.delete(agent.id);
+	}
+
+	private async persistTerminalState(): Promise<void> {
+		let failures = 0;
+		for (;;) {
+			try {
+				await this.changed(true);
+				return;
+			} catch (error) {
+				if (this.shutdownController.signal.aborted) throw error;
+				failures++;
+				if (failures === 1) continue;
+				const delay = Math.min(
+					INITIAL_PERSISTENCE_RETRY_DELAY_MS * 2 ** (failures - 2),
+					MAX_PERSISTENCE_RETRY_DELAY_MS,
+				);
+				await waitForPersistenceRetry(delay, this.shutdownController.signal);
+			}
+		}
 	}
 
 	private async notifyTurnComplete(completion: AgentTurnCompletion): Promise<void> {

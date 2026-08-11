@@ -411,6 +411,10 @@ export function registerStatefulSubagents(
 		completionBroker?.onParentTurnStart();
 	});
 
+	pi.on("context", (event) => {
+		completionBroker?.onParentContext(event.messages);
+	});
+
 	pi.on("agent_settled", () => {
 		completionBroker?.onParentSettled();
 	});

@@ -12,7 +12,7 @@ Each turn receives an executor-owned `runId`, monotonically increasing agent-loc
 
 The registry must persist a terminal completion before notifying the delivery broker.
 
-Delivery is at least once: successful delivery acknowledges the exact `completionId`, while a crash before acknowledgement may redeliver the same ID without replaying the agent turn.
+Delivery is at least once: parent context assembly must observe the exact `completionId` before acknowledgement, while a failed fire-and-forget injection or crash before acknowledgement leaves the same ID available for retry without replaying the agent turn.
 
 Session startup restores and enqueues unacknowledged completions only after trust and target validation restore the owning agent.
 
@@ -37,7 +37,7 @@ Session startup restores and enqueues unacknowledged completions only after trus
 
 - [x] Add focused failing tests for durable ordered completion restoration, exact-ID acknowledgement, stable completion metadata, and manage-query rejection; the initial focused run failed in all four intended behavior areas.
 - [x] Add executor-owned turn generation, run ID, completion ID, and a bounded persisted completion outbox to registry state.
-- [x] Persist terminal completion records before broker enqueue and restore pending records on session start without rerunning work.
+- [x] Persist terminal completion records before broker enqueue, retry transient persistence failures before resolving the run, and restore pending records on session start without rerunning work.
 - [x] Include completion, run, and generation IDs in single and batched completion messages and reject duplicate broker enqueue by completion ID.
 - [x] Remove the `list` action and `includeClosed` field from `subagent_manage`, keeping read-only discovery in `subagent_inspect`.
 - [x] Update README guidance, compatibility notes, tests, and `.changeset/strong-async-completions.md` with a major bump for the published breaking behavior.
@@ -46,9 +46,9 @@ Session startup restores and enqueues unacknowledged completions only after trus
 
 ## Completion Checklist
 
-- [x] A terminal completion is durably stored before delivery is attempted.
+- [x] A terminal completion is durably stored before delivery is attempted, and transient storage failure keeps the run pending for retry.
 - [x] Multiple unacknowledged turns for one retained agent survive restart in order.
-- [x] Acknowledgement removes only the matching completion ID and is persisted.
+- [x] Acknowledgement removes only a matching completion ID observed during parent context assembly and is persisted.
 - [x] Restored completions are delivered without rerunning agent work.
 - [x] Completion envelopes expose stable `completionId`, `runId`, and generation values.
 - [x] Duplicate enqueue in one broker lifetime emits one completion.

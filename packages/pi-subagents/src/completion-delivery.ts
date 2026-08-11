@@ -75,7 +75,14 @@ export class CompletionDeliveryBroker {
 
 	onParentTurnStart(): void {
 		this.wakeInFlight = false;
-		this.acknowledgeDelivered();
+		this.scheduleFlush();
+	}
+
+	onParentContext(messages: readonly unknown[]): void {
+		this.acknowledgeVisible(completionIdsFromContext(messages));
+		if (this.awaitingParentAck.length > 0) {
+			this.pending = [...this.awaitingParentAck.splice(0), ...this.pending];
+		}
 		this.scheduleFlush();
 	}
 
@@ -144,14 +151,24 @@ export class CompletionDeliveryBroker {
 		}, COMPLETION_BATCH_DELAY_MS);
 	}
 
-	private acknowledgeDelivered(): void {
-		if (this.awaitingParentAck.length === 0) return;
-		const completions = this.awaitingParentAck.splice(0);
+	private acknowledgeVisible(visibleIds: ReadonlySet<string>): void {
+		if (visibleIds.size === 0) return;
+		const completions = [...this.awaitingParentAck, ...this.pending].filter((completion) =>
+			visibleIds.has(completion.completionId),
+		);
+		if (completions.length === 0) return;
+		const acknowledgedIds = new Set(completions.map((completion) => completion.completionId));
+		this.awaitingParentAck = this.awaitingParentAck.filter(
+			(completion) => !acknowledgedIds.has(completion.completionId),
+		);
+		this.pending = this.pending.filter(
+			(completion) => !acknowledgedIds.has(completion.completionId),
+		);
 		for (const completion of completions) this.knownCompletionIds.delete(completion.completionId);
 		try {
 			this.options.onAcknowledged?.(completions, (this.options.now ?? Date.now)());
 		} catch {
-			// Parent consumption already started, so observer failures cannot retract the message.
+			// Context assembly already observed the message, so observer failures cannot retract it.
 		}
 	}
 
@@ -178,6 +195,33 @@ export class CompletionDeliveryBroker {
 			return false;
 		}
 	}
+}
+
+function completionIdsFromContext(messages: readonly unknown[]): Set<string> {
+	const ids = new Set<string>();
+	for (const message of messages) {
+		if (!message || typeof message !== "object" || Array.isArray(message)) continue;
+		const record = message as Record<string, unknown>;
+		if (record.role !== "custom" || record.customType !== "pi-subagent-completion") continue;
+		const details = record.details;
+		if (!details || typeof details !== "object" || Array.isArray(details)) continue;
+		const metadata = details as Record<string, unknown>;
+		if (
+			metadata.protocol === PI_SUBAGENTS_RPC_PROTOCOL &&
+			typeof metadata.completionId === "string"
+		) {
+			ids.add(metadata.completionId);
+		}
+		if (!Array.isArray(metadata.completions)) continue;
+		for (const completion of metadata.completions) {
+			if (!completion || typeof completion !== "object" || Array.isArray(completion)) continue;
+			const item = completion as Record<string, unknown>;
+			if (item.protocol === PI_SUBAGENTS_RPC_PROTOCOL && typeof item.completionId === "string") {
+				ids.add(item.completionId);
+			}
+		}
+	}
+	return ids;
 }
 
 function chunkCompletions(completions: AgentTurnCompletion[]): AgentTurnCompletion[][] {

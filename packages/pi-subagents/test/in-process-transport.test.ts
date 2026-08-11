@@ -759,6 +759,39 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 		mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
 		await waitForCompletionCount(1);
 		mock.events.get("agent_start")?.[0]?.({}, context.ctx);
+		const firstCompletion = mock.sentMessages[0] as {
+			message: {
+				customType: string;
+				content: string;
+				display: boolean;
+				details?: unknown;
+			};
+		};
+		mock.events.get("context")?.[0]?.(
+			{
+				messages: [
+					{
+						role: "custom",
+						...firstCompletion.message,
+						timestamp: 1,
+					},
+				],
+			},
+			context.ctx,
+		);
+		for (
+			let attempt = 0;
+			attempt < 10 &&
+			(controller.listAgents().find((agent) => agent.id === agentId)?.pendingCompletions?.length ??
+				0) > 0;
+			attempt++
+		) {
+			await Promise.resolve();
+		}
+		assert.equal(
+			controller.listAgents().find((agent) => agent.id === agentId)?.pendingCompletions?.length,
+			0,
+		);
 
 		const queued = await execute("subagent_mailbox", {
 			action: "send",
