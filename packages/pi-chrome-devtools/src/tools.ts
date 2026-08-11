@@ -18,7 +18,6 @@ export const listPagesTool = defineTool({
 	name: CHROME_DEVTOOLS_TOOL_NAMES[0],
 	label: "Chrome DevTools: List Pages",
 	description: "List Chrome tabs/pages from a running Chrome DevTools Protocol endpoint.",
-	promptSnippet: "List Chrome tabs/pages available over Chrome DevTools Protocol",
 	parameters: Type.Object({}),
 	renderCall: renderToolCall("list pages"),
 	renderResult: renderTextResult,
@@ -34,7 +33,6 @@ export const selectPageTool = defineTool({
 	name: CHROME_DEVTOOLS_TOOL_NAMES[1],
 	label: "Chrome DevTools: Select Page",
 	description: "Select the active Chrome page for later chrome_devtools_* tool calls.",
-	promptSnippet: "Select the Chrome tab/page to inspect or control",
 	parameters: Type.Object({
 		pageId: Type.String({ description: "Page id from chrome_devtools_list_pages." }),
 	}),
@@ -56,7 +54,6 @@ export const navigateTool = defineTool({
 	label: "Chrome DevTools: Navigate",
 	description:
 		"Navigate a Chrome page to a URL through Chrome DevTools Protocol, creating a page first if none is available.",
-	promptSnippet: "Navigate the selected or first Chrome tab to a URL, creating one if needed",
 	parameters: Type.Object({
 		url: Type.String({ description: "URL to navigate to." }),
 		pageId: Type.Optional(
@@ -88,7 +85,6 @@ export const evaluateTool = defineTool({
 	name: CHROME_DEVTOOLS_TOOL_NAMES[3],
 	label: "Chrome DevTools: Evaluate",
 	description: "Evaluate JavaScript in a Chrome page through Chrome DevTools Protocol.",
-	promptSnippet: "Evaluate JavaScript in the selected Chrome tab",
 	parameters: Type.Object({
 		expression: Type.String({ description: "JavaScript expression to evaluate." }),
 		pageId: Type.Optional(
@@ -121,7 +117,6 @@ export const screenshotTool = defineTool({
 	name: CHROME_DEVTOOLS_TOOL_NAMES[4],
 	label: "Chrome DevTools: Screenshot",
 	description: "Capture a PNG screenshot from a Chrome page through Chrome DevTools Protocol.",
-	promptSnippet: "Capture a screenshot from the selected Chrome tab",
 	parameters: Type.Object({
 		pageId: Type.Optional(
 			Type.String({ description: "Optional page id. Defaults to selected or first page." }),

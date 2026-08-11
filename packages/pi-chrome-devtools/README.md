@@ -26,10 +26,11 @@ This package is inspired by [`chrome-devtools-mcp`](https://github.com/ChromeDev
   explicit endpoint overrides.
 - Retries briefly while Chrome is starting and reports actionable endpoint errors.
 - Shows statusline activity only while Chrome DevTools tools are running.
-- Provides a state-first `/chrome-devtools` menu for tool access, browser status, setup, and help.
-- Stages menu-based tool changes for exact review before one confirmed apply.
+- Keeps one loader tool active and exposes matching browser capabilities only when the agent needs them.
+- Provides a state-first `/chrome-devtools` menu for tool availability, browser status, setup, and help.
+- Stages menu-based availability changes for exact review before one confirmed apply.
 - Uses `@narumitw/pi-tui-kit` for width-safe TUI menus and equivalent RPC dialogs.
-- Persists the selected Chrome DevTools tools across Pi restarts.
+- Persists the Chrome DevTools lazy-load catalog across Pi restarts.
 
 ## 📦 Install
 
@@ -143,11 +144,30 @@ removes their temporary profiles. It never closes user-started browsers or remot
 
 ## 🛠️ Pi tools
 
+- `chrome_devtools_load` — find and load browser capabilities relevant to a task.
 - `chrome_devtools_list_pages` — list inspectable Chrome tabs/pages.
 - `chrome_devtools_select_page` — select the active page for later tool calls.
 - `chrome_devtools_navigate` — navigate a page to a URL; if no page exists, create one first.
 - `chrome_devtools_evaluate` — evaluate JavaScript in the selected page.
 - `chrome_devtools_screenshot` — capture a PNG screenshot and save it as a PNG file.
+
+### Lazy tool loading
+
+All six tools are registered, but only `chrome_devtools_load` starts active for this extension.
+
+The loader accepts a task-oriented `query`, matches it against the five capability tools, and adds matching available tools without removing any active Pi tool.
+
+Loaded capability tools remain active for the rest of the session unless the user makes them unavailable through `/chrome-devtools`.
+
+Pi uses native deferred tool references on compatible Anthropic and OpenAI models.
+
+Other models receive Pi's safe fallback: the newly active definitions appear in the normal tool list on the next model request.
+
+The capability tools omit active-only prompt snippets so a lazy load does not rebuild the system prompt prefix.
+
+The saved `tools` array controls which capabilities the loader may expose.
+
+An empty array leaves the loader active but makes every browser capability unavailable.
 
 ### Screenshot files
 
@@ -182,14 +202,14 @@ to read the saved path, for example `read({ path: "artifacts/homepage.png" })`.
 /chrome-devtools
 ```
 
-Opens a menu that shows the current browser-tool count, whether that selection is saved, the
-configured endpoint, the observed managed-browser state, and any settings or launch warning before
-you choose an action. The five actions stay on one level:
+Opens a menu that shows the lazy catalog size, whether that catalog is saved, the configured
+endpoint, the observed managed-browser state, and any settings or launch warning before you choose
+an action. The five actions stay on one level:
 
-- **Choose browser tools…** — stage any combination of the five capabilities, then review the exact
-  enabled/disabled result before selecting **Apply tool changes**.
-- **Enable all browser tools…** or **Disable all browser tools…** — preview the context-appropriate
-  bulk change before applying it.
+- **Choose available browser tools…** — stage any combination of the five capabilities, then review
+  the exact available/unavailable result before selecting **Apply tool changes**.
+- **Make all browser tools available…** or **Make all browser tools unavailable…** — preview the
+  context-appropriate bulk change before applying it.
 - **Browser status** — inspect runtime, endpoint, launch mode, and the last launch attempt without
   probing the endpoint or starting Chrome.
 - **Settings & setup** — inspect effective files, sources, trust, reload steps, and recovery guidance.
@@ -200,8 +220,8 @@ friendly task labels while retaining their raw `chrome_devtools_*` identity in t
 Toggles remain a command-local draft. **Review changes** previews the exact effect, **Apply tool
 changes** saves it, and Cancel, Escape, Ctrl+C, disposal, or session replacement discards an
 unconfirmed draft without changing runtime tools or settings. A failed apply restores the previous
-active-tool state, preserves the settings file, retains the draft for retry, and reports how to
-recover.
+availability and loaded-tool state, preserves the settings file, retains the draft for retry, and
+reports how to recover.
 
 Direct subcommands are also available:
 
@@ -221,14 +241,15 @@ Compatibility aliases remain available: `toggle` and `select` mean `tools`, `on`
 - `help` shows command usage.
 - `quickstart` shows the configured CDP endpoint, endpoint source, auto-launch mode, browser
   candidates, last launch attempt, and launch hints.
-- `status` shows runtime tool state, persisted selection, settings file path, endpoint source,
-  launch mode, last launch attempt, and active non-Chrome tool count.
-- `tools` opens the same staged, width-safe selection and review flow used by the menu.
+- `status` shows available and loaded capability counts, loader state, the persisted catalog,
+  settings file path, endpoint source, launch mode, last launch attempt, and active non-Chrome tool
+  count.
+- `tools` opens the same staged, width-safe availability and review flow used by the menu.
 - `toggle` and `select` are compatibility aliases for `tools`.
-- `enable` immediately enables and saves all `chrome_devtools_*` tools for future turns; `on` is a
+- `enable` makes all five capability tools available to the loader and saves that catalog; `on` is a
   compatibility alias.
-- `disable` immediately disables and saves all `chrome_devtools_*` tools for future turns; `off` is a
-  compatibility alias. The slash command remains available.
+- `disable` makes all five capability tools unavailable and saves the empty catalog; `off` is a
+  compatibility alias. The slash command and `chrome_devtools_load` remain available.
 
 The menu, `tools`, `help`, `quickstart`, and `status` require TUI or RPC mode so their result is
 observable. TUI uses keyboard navigation and injected Pi keybindings; RPC receives equivalent
@@ -236,19 +257,20 @@ standard dialogs. In print and JSON modes, interactive and informational routes 
 instead of silently opening unavailable UI. The immediate `enable`/`disable` routes remain available
 for deterministic non-interactive use.
 
-The selected tool names are saved to:
+The available capability names are saved to:
 
 ```text
 ${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-chrome-devtools.json
 ```
 
-When the file is missing or invalid, the extension preserves Pi's current active-tool policy
-instead of enabling tools by itself. A valid saved selection is restored on Pi startup and
-`/reload`. A missing file is created by the first confirmed menu apply or successful direct
-selection change. Within one Pi process, selection saves run in invocation order, reread the latest
-valid document, and preserve unknown fields. Malformed JSON or invalid recognized fields make menu
-mutation unavailable and block direct saves without replacement; a failed save restores the prior
-Chrome DevTools tool selection while preserving other extensions' current tools.
+When the file is missing or invalid, the extension preserves Pi's current Chrome DevTools
+availability policy instead of replacing it. A valid saved catalog is restored on Pi startup and
+`/reload`, while its capability definitions remain deferred. A missing file is created by the first
+confirmed menu apply or successful direct availability change. Within one Pi process, catalog saves
+run in invocation order, reread the latest valid document, and preserve unknown fields. Malformed
+JSON or invalid recognized fields make menu mutation unavailable and block direct saves without
+replacement; a failed save restores the prior Chrome DevTools availability and loaded-tool state
+while preserving other extensions' current tools.
 
 Compatibility: older versions used `pi-chrome-devtools-settings.json`. A legacy-only file remains
 readable with a warning and is never modified automatically; rename it to
@@ -271,6 +293,7 @@ packages/pi-chrome-devtools/
 ├── src/
 │   ├── index.ts            # Pi package entrypoint
 │   ├── chrome-devtools.ts  # Extension registration and command orchestration
+│   ├── lazy-tools.ts       # Deferred capability catalog and loader tool
 │   └── *.ts                # Package-local browser, CDP, tool, and storage modules
 ├── README.md
 ├── LICENSE

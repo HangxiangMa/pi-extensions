@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu, runTask } from "@narumitw/pi-tui-kit";
 import { browserLifecycleState, devToolsEndpoint, launchModeLabel } from "./browser-manager.js";
+import { availableChromeDevtoolsTools } from "./lazy-tools.js";
 import { state } from "./runtime.js";
 import { loadSettings, type SettingsLoadResult } from "./settings.js";
 import { CHROME_DEVTOOLS_TOOL_NAMES, type ChromeDevToolsToolName } from "./tool-names.js";
@@ -75,8 +76,8 @@ export async function showChromeDevtoolsMenu(
 				items: [
 					{
 						id: "tools",
-						label: "Choose browser tools…",
-						description: "Select what Pi may do in Chrome.",
+						label: "Choose available browser tools…",
+						description: "Choose which capabilities the loader may expose.",
 						disabled: Boolean(current.mutationBlockedReason),
 						disabledReason: current.mutationBlockedReason,
 						action: "tools",
@@ -85,8 +86,8 @@ export async function showChromeDevtoolsMenu(
 						id: "bulk",
 						label:
 							current.activeTools.length === CHROME_DEVTOOLS_TOOL_NAMES.length
-								? "Disable all browser tools…"
-								: "Enable all browser tools…",
+								? "Make all browser tools unavailable…"
+								: "Make all browser tools available…",
 						description:
 							current.activeTools.length === CHROME_DEVTOOLS_TOOL_NAMES.length
 								? "Preview 0 of 5; other active tools stay enabled."
@@ -250,8 +251,8 @@ export async function showChromeDevtoolsToolWorkflow(
 				kind: "review",
 				title: "Review tool changes",
 				lines: [
-					`Current: ${current.accepted.size}/${CHROME_DEVTOOLS_TOOL_NAMES.length}`,
-					`Proposed: ${current.draft.size}/${CHROME_DEVTOOLS_TOOL_NAMES.length}`,
+					`Currently available: ${current.accepted.size}/${CHROME_DEVTOOLS_TOOL_NAMES.length}`,
+					`Proposed availability: ${current.draft.size}/${CHROME_DEVTOOLS_TOOL_NAMES.length}`,
 				],
 				content: buildToolReview(current),
 				format: { kind: "text" },
@@ -307,7 +308,7 @@ export async function showChromeDevtoolsToolWorkflow(
 				current.draft = new Set(selectedTools);
 				current.applied = true;
 				ctx.ui.notify(
-					`Saved: ${selectedTools.length} of ${CHROME_DEVTOOLS_TOOL_NAMES.length} browser tools enabled.`,
+					`Saved: ${selectedTools.length} of ${CHROME_DEVTOOLS_TOOL_NAMES.length} browser tools available to lazy-load.`,
 					"info",
 				);
 				return { kind: "close" };
@@ -363,7 +364,7 @@ function buildMenuSnapshot(pi: ExtensionAPI, settings: SettingsLoadResult): Menu
 				? "not saved"
 				: arraysEqual(activeTools, persistedTools)
 					? "saved"
-					: "runtime differs from saved selection";
+					: "runtime catalog differs from saved catalog";
 	const settingsWarning = [
 		...new Set([settings.notice, state.settingsNotice].filter(Boolean)),
 	].join("\n");
@@ -379,7 +380,7 @@ function buildMenuSnapshot(pi: ExtensionAPI, settings: SettingsLoadResult): Menu
 
 function mainStateLines(snapshot: MenuSnapshot) {
 	return sanitizeLines([
-		`Tools: ${snapshot.activeTools.length} of ${CHROME_DEVTOOLS_TOOL_NAMES.length} enabled · ${snapshot.persistenceLabel}`,
+		`Lazy catalog: ${snapshot.activeTools.length} of ${CHROME_DEVTOOLS_TOOL_NAMES.length} available · ${snapshot.persistenceLabel}`,
 		`Browser: ${browserLifecycleSummary()}`,
 		`Endpoint: ${devToolsEndpoint()}`,
 		...(snapshot.settingsWarning ? [`Settings warning: ${snapshot.settingsWarning}`] : []),
@@ -406,7 +407,7 @@ function toolDraftLines(current: ToolWorkflowState) {
 		return sanitizeLines([`Unavailable: ${current.mutationBlockedReason}`]);
 	const changes = symmetricDifferenceSize(current.accepted, current.draft);
 	return [
-		`Current accepted: ${current.accepted.size}/${CHROME_DEVTOOLS_TOOL_NAMES.length}`,
+		`Currently available: ${current.accepted.size}/${CHROME_DEVTOOLS_TOOL_NAMES.length}`,
 		changes === 0
 			? "No unapplied changes · Escape cancels"
 			: `${changes} unapplied ${changes === 1 ? "change" : "changes"} · Escape cancels`,
@@ -415,25 +416,26 @@ function toolDraftLines(current: ToolWorkflowState) {
 }
 
 function buildToolReview(current: ToolWorkflowState) {
-	const enabled = CHROME_DEVTOOLS_TOOL_NAMES.filter((name) => current.draft.has(name));
-	const disabled = CHROME_DEVTOOLS_TOOL_NAMES.filter((name) => !current.draft.has(name));
+	const available = CHROME_DEVTOOLS_TOOL_NAMES.filter((name) => current.draft.has(name));
+	const unavailable = CHROME_DEVTOOLS_TOOL_NAMES.filter((name) => !current.draft.has(name));
 	return sanitizeChromeDevtoolsDisplay(
 		[
-			`Current browser tools: ${current.accepted.size}/${CHROME_DEVTOOLS_TOOL_NAMES.length}`,
-			`Proposed browser tools: ${current.draft.size}/${CHROME_DEVTOOLS_TOOL_NAMES.length}`,
+			`Current available browser tools: ${current.accepted.size}/${CHROME_DEVTOOLS_TOOL_NAMES.length}`,
+			`Proposed available browser tools: ${current.draft.size}/${CHROME_DEVTOOLS_TOOL_NAMES.length}`,
 			"",
-			"Enabled after apply:",
-			...(enabled.length > 0
-				? enabled.map((name) => `  - ${TOOL_PRESENTATION[name].label} (${name})`)
+			"Available to lazy-load after apply:",
+			...(available.length > 0
+				? available.map((name) => `  - ${TOOL_PRESENTATION[name].label} (${name})`)
 				: ["  - none"]),
 			"",
-			"Disabled after apply:",
-			...(disabled.length > 0
-				? disabled.map((name) => `  - ${TOOL_PRESENTATION[name].label} (${name})`)
+			"Unavailable after apply:",
+			...(unavailable.length > 0
+				? unavailable.map((name) => `  - ${TOOL_PRESENTATION[name].label} (${name})`)
 				: ["  - none"]),
 			"",
 			"Other active Pi tools remain unchanged.",
-			"The accepted selection is saved for future sessions.",
+			"Newly available tools remain deferred until chrome_devtools_load selects them.",
+			"The accepted availability policy is saved for future sessions.",
 		].join("\n"),
 	);
 }
@@ -447,8 +449,7 @@ function updateSnapshotAfterApply(
 }
 
 function activeChromeTools(pi: ExtensionAPI) {
-	const active = new Set(pi.getActiveTools());
-	return CHROME_DEVTOOLS_TOOL_NAMES.filter((toolName) => active.has(toolName));
+	return availableChromeDevtoolsTools(pi);
 }
 
 function orderedTools(tools: ReadonlySet<ChromeDevToolsToolName>) {
