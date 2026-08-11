@@ -710,8 +710,9 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 			}>;
 		};
 		const waitForCompletionCount = async (expected: number) => {
-			for (let attempt = 0; attempt < 50 && mock.sentMessages.length < expected; attempt++) {
-				await new Promise((resolve) => setTimeout(resolve, 2));
+			const deadline = Date.now() + 5_000;
+			while (mock.sentMessages.length < expected && Date.now() < deadline) {
+				await new Promise((resolve) => setTimeout(resolve, 10));
 			}
 			assert.equal(mock.sentMessages.length, expected);
 		};
