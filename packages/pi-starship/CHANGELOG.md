@@ -1,5 +1,11 @@
 # @narumitw/pi-starship
 
+## 0.50.2
+
+### Patch Changes
+
+- d403f3c: Use Pi TUI Kit's published Live Choice interaction for preset browsing while keeping active-preset customization available.
+
 ## 0.50.1
 
 ### Patch Changes

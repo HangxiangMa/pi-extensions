@@ -1,5 +1,11 @@
 # @narumitw/pi-tool
 
+## 0.2.2
+
+### Patch Changes
+
+- 17426ab: Use Pi TUI Kit's standard browse screen for searchable tool details while preserving exact schema formatting and command behavior.
+
 ## 0.2.1
 
 ### Patch Changes
