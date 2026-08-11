@@ -62,6 +62,15 @@ Advance the declarative menu API compatibility marker, export the new public typ
 - Consumer audit: document content is excluded from implicit search, explicitly projected metadata remains searchable, exact details preserve schema indentation and tabs, stable raw identity survives duplicate sanitized labels, and the single Kit interaction owns query restoration, Back/Close, replacement, shutdown, and disposal.
 - Execution deviation: formatter extraction and browse wiring landed in one working-tree batch rather than two intermediate commits; the unchanged review contract was still verified independently by the focused review suite. The Tool implementation commit was prepared in a separate worktree and cherry-picked onto the post-Starship authoritative base while that worktree's staged archive remained untouched.
 
+## Revalidation Evidence
+
+- On 2026-08-11, branch `docs/revalidate-browse-detail-document-plan` was created from clean `origin/main` at `f8010851`; the implementation and consumer pull requests were already merged, so no production, test, dependency, or release artifact required another change.
+- The focused Kit and Tool checks, extension-boundary validator, and CI-equivalent `npm run check` passed with 279 test files and 2,979 tests.
+- `just pack tui-kit` confirmed the 59-file Kit package with built JavaScript, declarations, README, license, and manifest; `just pack tool` confirmed the six intended Tool files and no custom browser.
+- npm reported Kit `0.53.0` as `latest` with the expected root and testing exports, and Tool resolved the local package at the required `0.53.0` version.
+- Changesets status retained Tool's pending patch release and introduced no release action; an independent read-only review found no actionable correctness, terminal-safety, lifecycle, compatibility, regression, or packaging defect.
+- Historical implementation commits contain SSH signature headers; local cryptographic identity verification remained unavailable because this checkout has no `gpg.ssh.allowedSignersFile`.
+
 ## Plan
 
 ### Phase 1: Pi TUI Kit API
