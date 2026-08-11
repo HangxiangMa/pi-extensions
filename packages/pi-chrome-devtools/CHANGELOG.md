@@ -1,5 +1,13 @@
 # @narumitw/pi-chrome-devtools
 
+## 0.51.0
+
+### Minor Changes
+
+- 34d3576: Load Chrome DevTools capability tools on demand through a persistent `chrome_devtools_load` tool.
+
+  Treat the saved tool selection as the allowed lazy-load catalog and keep deferred capability metadata out of the stable system prompt prefix.
+
 ## 0.50.1
 
 ### Patch Changes

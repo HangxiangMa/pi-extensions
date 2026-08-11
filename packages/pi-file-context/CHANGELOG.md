@@ -1,5 +1,11 @@
 # @narumitw/pi-file-context
 
+## 0.52.0
+
+### Minor Changes
+
+- e68ad9e: Redesign `/file-context` as an Add, Remove, and Help menu with exact quote previews, repeated removal, cancellable project scanning, and compatible direct `browse` and `remove` routes.
+
 ## 0.51.1
 
 ### Patch Changes

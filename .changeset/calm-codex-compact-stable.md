@@ -1,5 +1,0 @@
----
-"@narumitw/pi-codex-compact": minor
----
-
-Promote the extension to stable, include it in root Git installations, and remove its experimental startup warning.

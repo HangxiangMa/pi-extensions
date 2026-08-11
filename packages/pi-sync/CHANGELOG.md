@@ -1,5 +1,11 @@
 # @narumitw/pi-sync
 
+## 0.49.10
+
+### Patch Changes
+
+- e3375f0: Avoid migration-lock contention during normal state access and safely share legacy migration protection across overlapping work in one Pi process.
+
 ## 0.49.9
 
 ### Patch Changes
