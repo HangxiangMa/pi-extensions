@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+	chmodSync,
 	existsSync,
 	mkdtempSync,
 	readdirSync,
@@ -15,11 +16,13 @@ import { createMockContext, createMockPi } from "../../../test/support.js";
 import caffeinate, {
 	commandCompletions,
 	formatMode,
+	getInhibitorCommand,
 	normalizeCaffeinateSettings,
 	parseCommand,
 	splitCommand,
 	windowsInhibitorScript,
 } from "../src/caffeinate.js";
+import type { DbusScreenSaverClient, DbusScreenSaverFactory } from "../src/dbus-inhibit.js";
 import { saveSettings } from "../src/settings.js";
 
 const NEW_SETTINGS_FILE = "pi-caffeinate.json";
@@ -116,6 +119,79 @@ test("windowsInhibitorScript flags and formatMode labels are user-facing", () =>
 	assert.match(windowsInhibitorScript("display"), /\[uint32\]'0x80000000'/);
 	assert.equal(formatMode("sleep"), "system-awake");
 	assert.equal(formatMode("display"), "display-awake");
+});
+
+test("Linux display mode pairs the systemd sleep blocker with D-Bus idle inhibit", async () => {
+	await withLinuxPathCommands(["systemd-inhibit"], () => {
+		const command = getInhibitorCommand("display");
+
+		assert.equal(command?.description, "systemd-inhibit (display-awake)");
+		assert.ok(command?.args.includes("--what=sleep"));
+		assert.equal(command?.addDbusIdleInhibit, true);
+	});
+});
+
+test("Linux sleep mode uses only the systemd sleep blocker", async () => {
+	await withLinuxPathCommands(["systemd-inhibit"], () => {
+		const command = getInhibitorCommand("sleep");
+
+		assert.equal(command?.description, "systemd-inhibit (system-awake)");
+		assert.ok(command?.args.includes("--what=sleep"));
+		assert.equal(command?.addDbusIdleInhibit, undefined);
+	});
+});
+
+test("D-Bus idle inhibit falls back to the niri ScreenSaver object path", async () => {
+	const calls: Array<{ member?: string; path?: string; body?: unknown[] }> = [];
+	let closeCalls = 0;
+	vi.resetModules();
+	vi.doMock("dbus-native", () => ({
+		sessionBus: () => ({
+			invoke(
+				message: { member?: string; path?: string; body?: unknown[] },
+				callback: (error: Error | null, value?: number) => void,
+			) {
+				calls.push(message);
+				if (message.member === "Inhibit" && message.path === "/org/freedesktop/ScreenSaver") {
+					callback(new Error("Unknown object"));
+					return;
+				}
+				callback(null, message.member === "Inhibit" ? 42 : undefined);
+			},
+			async close() {
+				closeCalls += 1;
+			},
+		}),
+	}));
+
+	try {
+		const { defaultDbusScreenSaverFactory } = await import("../src/dbus-inhibit.js");
+		const client = await defaultDbusScreenSaverFactory();
+		await client.inhibit("test");
+		await client.uninhibit();
+		await client.close();
+
+		assert.deepEqual(
+			calls.map(({ member, path, body }) => ({ member, path, body })),
+			[
+				{
+					member: "Inhibit",
+					path: "/org/freedesktop/ScreenSaver",
+					body: ["pi-caffeinate", "test"],
+				},
+				{
+					member: "Inhibit",
+					path: "/ScreenSaver",
+					body: ["pi-caffeinate", "test"],
+				},
+				{ member: "UnInhibit", path: "/ScreenSaver", body: [42] },
+			],
+		);
+		assert.equal(closeCalls, 1);
+	} finally {
+		vi.doUnmock("dbus-native");
+		vi.resetModules();
+	}
 });
 
 test("caffeinate loads the new settings file without a migration warning", async () => {
@@ -515,6 +591,85 @@ test("default settings keep routine lifecycle notifications", async () => {
 	});
 });
 
+test("Linux display mode holds one D-Bus inhibitor for the agent turn", async () => {
+	await withLinuxPathCommands([], async () => {
+		await withTempAgentDir(async () => {
+			const clients: FakeDbusClient[] = [];
+			const caffeinateModule = await importFreshCaffeinate();
+			const mock = createMockPi();
+			const { ctx, notifications, statuses } = createMockContext();
+
+			caffeinateModule.default(mock.pi, { dbusFactory: fakeDbusFactory(clients) });
+			await mock.events.get("session_start")?.[0]?.({}, ctx);
+			await mock.events.get("agent_start")?.[0]?.({}, ctx);
+
+			assert.equal(clients.length, 1);
+			assert.deepEqual(clients[0]?.inhibitCalls, ["Pi agent is running"]);
+			assert.equal(statuses.get("caffeinate"), "display-awake");
+			assert.match(notifications[0]?.message ?? "", /Keeping computer awake/);
+
+			await mock.events.get("agent_end")?.[0]?.({}, ctx);
+
+			assert.equal(clients[0]?.uninhibitCalls, 1);
+			assert.equal(clients[0]?.closeCalls, 1);
+			assert.equal(statuses.get("caffeinate"), undefined);
+		});
+	});
+});
+
+test("Linux display mode keeps the sleep blocker when D-Bus is unavailable", async () => {
+	await withLinuxPathCommands(["sh", "systemd-inhibit"], async () => {
+		await withTempAgentDir(async () => {
+			const caffeinateModule = await importFreshCaffeinate();
+			const mock = createMockPi();
+			const { ctx, notifications, statuses } = createMockContext();
+
+			caffeinateModule.default(mock.pi, {
+				dbusFactory: async () => {
+					throw new Error("no ScreenSaver service");
+				},
+			});
+			await mock.events.get("session_start")?.[0]?.({}, ctx);
+			await mock.events.get("agent_start")?.[0]?.({}, ctx);
+
+			assert.equal(statuses.get("caffeinate"), "display-awake");
+			assert.match(notifications.at(-1)?.message ?? "", /partially active/);
+			assert.match(notifications.at(-1)?.message ?? "", /no ScreenSaver service/);
+
+			await mock.events.get("agent_end")?.[0]?.({}, ctx);
+		});
+	});
+});
+
+test("agent_end closes a D-Bus inhibitor acquired after stop began", async () => {
+	await withLinuxPathCommands([], async () => {
+		await withTempAgentDir(async () => {
+			const clients: FakeDbusClient[] = [];
+			let releaseInhibit: (() => void) | undefined;
+			const gate = new Promise<void>((resolve) => {
+				releaseInhibit = resolve;
+			});
+			const caffeinateModule = await importFreshCaffeinate();
+			const mock = createMockPi();
+			const { ctx, statuses } = createMockContext();
+
+			caffeinateModule.default(mock.pi, {
+				dbusFactory: fakeDbusFactory(clients, gate),
+			});
+			await mock.events.get("session_start")?.[0]?.({}, ctx);
+			const startPromise = mock.events.get("agent_start")?.[0]?.({}, ctx);
+			await waitFor(() => clients[0]?.inhibitCalls.length === 1);
+			await mock.events.get("agent_end")?.[0]?.({}, ctx);
+			releaseInhibit?.();
+			await startPromise;
+
+			assert.equal(clients[0]?.uninhibitCalls, 0);
+			assert.equal(clients[0]?.closeCalls, 1);
+			assert.equal(statuses.get("caffeinate"), undefined);
+		});
+	});
+});
+
 async function importFreshCaffeinate() {
 	vi.resetModules();
 	return import("../src/caffeinate.js");
@@ -543,6 +698,70 @@ async function withTempAgentDir<T>(fn: (agentDir: string) => Promise<T>) {
 		else process.env.PI_CAFFEINATE_COMMAND = previousCommand;
 		rmSync(agentDir, { recursive: true, force: true });
 	}
+}
+
+async function withLinuxPathCommands<T>(commands: string[], fn: () => T | Promise<T>) {
+	const previousPath = process.env.PATH;
+	const previousCommand = process.env.PI_CAFFEINATE_COMMAND;
+	const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+	const binDir = mkdtempSync(path.join(os.tmpdir(), "pi-caffeinate-bin-"));
+
+	try {
+		for (const command of commands) {
+			const file = path.join(binDir, command);
+			if (command === "sh") {
+				const shell = process.env.SHELL;
+				if (!shell) throw new Error("SHELL is required for inhibitor lifecycle tests");
+				symlinkSync(shell, file);
+				continue;
+			}
+			writeFileSync(file, "#!/usr/bin/env sh\nwhile :; do :; done\n");
+			chmodSync(file, 0o755);
+		}
+		Object.defineProperty(process, "platform", { value: "linux" });
+		process.env.PATH = binDir;
+		delete process.env.PI_CAFFEINATE_COMMAND;
+		return await fn();
+	} finally {
+		if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+		if (previousPath === undefined) delete process.env.PATH;
+		else process.env.PATH = previousPath;
+		if (previousCommand === undefined) delete process.env.PI_CAFFEINATE_COMMAND;
+		else process.env.PI_CAFFEINATE_COMMAND = previousCommand;
+		rmSync(binDir, { recursive: true, force: true });
+	}
+}
+
+class FakeDbusClient implements DbusScreenSaverClient {
+	readonly inhibitCalls: string[] = [];
+	uninhibitCalls = 0;
+	closeCalls = 0;
+
+	constructor(private readonly inhibitResult: Promise<void> = Promise.resolve()) {}
+
+	async inhibit(reason: string): Promise<void> {
+		this.inhibitCalls.push(reason);
+		await this.inhibitResult;
+	}
+
+	async uninhibit(): Promise<void> {
+		this.uninhibitCalls += 1;
+	}
+
+	async close(): Promise<void> {
+		this.closeCalls += 1;
+	}
+}
+
+function fakeDbusFactory(
+	clients: FakeDbusClient[],
+	inhibitResult: Promise<void> = Promise.resolve(),
+): DbusScreenSaverFactory {
+	return async () => {
+		const client = new FakeDbusClient(inhibitResult);
+		clients.push(client);
+		return client;
+	};
 }
 
 function writeSettings(agentDir: string, fileName: string, mode: string, quiet?: boolean) {

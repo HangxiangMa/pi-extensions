@@ -17,6 +17,7 @@ It is designed for long-running coding, refactoring, debugging, web research, an
 - Persists the selected keep-awake mode and optional quiet mode in a small JSON settings file.
 - Allows a custom inhibitor command through environment configuration.
 - Emits plain status text; `@narumitw/pi-statusline` can add or suppress the status icon from JSON config.
+- Uses the standard `org.freedesktop.ScreenSaver` D-Bus idle-inhibition service for Linux `display` mode.
 - Fails safely when no supported inhibitor is available.
 
 ## 📦 Install
@@ -48,8 +49,17 @@ Use `/caffeinate sleep` if you want to prevent system sleep while allowing norma
 | macOS | `caffeinate -ims` | `caffeinate -dimsu` |
 | Windows | PowerShell `SetThreadExecutionState(0x80000001)` | PowerShell `SetThreadExecutionState(0x80000003)` |
 | WSL | Windows `powershell.exe` with `SetThreadExecutionState(0x80000001)` | Windows `powershell.exe` with `SetThreadExecutionState(0x80000003)` |
-| Linux with systemd | `systemd-inhibit --what=sleep ... sleep infinity` | `systemd-inhibit --what=idle:sleep ... sleep infinity` |
-| Linux fallback | `caffeinate -ims` when available | `caffeinate -dimsu` when available |
+| Linux with systemd | `systemd-inhibit --what=sleep ... sleep infinity` | D-Bus `org.freedesktop.ScreenSaver.Inhibit` + `systemd-inhibit --what=sleep ... sleep infinity` |
+| Linux without systemd | `caffeinate -ims` when available | D-Bus `org.freedesktop.ScreenSaver.Inhibit` + `caffeinate -dimsu` when available; D-Bus only otherwise |
+
+On Linux, `display` mode requests idle inhibition through the standard `org.freedesktop.ScreenSaver`
+D-Bus service, trying both `/org/freedesktop/ScreenSaver` and `/ScreenSaver` for desktop compatibility.
+The session-bus connection stays open for the whole agent turn.
+The inhibition ends when `UnInhibit` is called or the connection closes.
+`systemd-inhibit --what=sleep` runs alongside it to block actual suspend through logind.
+If no ScreenSaver service is available, pi-caffeinate keeps the systemd blocker or `caffeinate`
+fallback and reports a partial-activation warning.
+If only D-Bus is available, desktop idle is inhibited but direct logind suspend may remain possible.
 
 If no supported inhibitor is available, the extension stays loaded and reports that caffeinate is unavailable.
 
@@ -165,6 +175,11 @@ Without `@narumitw/pi-statusline`, keep using `PI_CAFFEINATE_ICON` during the co
 AI coding agents often run tool-heavy tasks that take several minutes. `pi-caffeinate` keeps your machine awake during active Pi work, helping browser automation, local builds, test runs, code generation, and long prompts finish reliably.
 
 The default display-awake mode prioritizes uninterrupted long-running Pi work across platforms, including Linux desktops that require idle inhibition to prevent automatic suspend. Use `/caffeinate sleep` (shown as `system-awake` in status output) when you prefer normal screen power saving and your system does not need idle inhibition to keep Pi running.
+
+## 📦 Dependencies
+
+On Linux, `display` mode uses the `dbus-native` package (pure JavaScript, no native build step) to
+call `org.freedesktop.ScreenSaver` on the session bus.
 
 ## 🗂️ Package layout
 
