@@ -43,7 +43,7 @@ Keep `pi-subagents` as the owner of delegation planning, workflow state, authori
 | Rolling scheduling, recovery, persistence reconciliation, and resume | [`Event-Driven Workflow Runtime Plan`](../plans/2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md) | Continues the dependency scheduler and semantic snapshot baseline without duplicating it. |
 | Matched evidence before a default change | [`Minimal Delegation Admission Evaluation Plan`](../plans/2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) | Remains the sole active admission evidence gate. |
 
-The original implementation plans now live under [`docs/plans/superseded/`](../plans/superseded/) as non-executable design provenance.
+The original implementation plans were removed after their durable decisions and remaining obligations moved to the owners above; Git preserves their design history.
 
 ## Guiding Principles
 

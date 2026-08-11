@@ -4,7 +4,7 @@
 
 Move a plan to `docs/plans/archived/` only after every task and completion check has evidence.
 
-Move an incomplete plan to `docs/plans/superseded/` only after its remaining work has one explicit current owner and the replacement records the relationship. Superseded plans are design provenance, not executable checklists, and their unchecked boxes must not be treated as active work.
+Delete an incomplete plan only after its remaining work has one explicit current owner and the replacement records the relationship. Git and GitHub preserve the superseded design history; unchecked boxes from deleted plans must not be treated as active work.
 
 The archive is a workflow handoff, not permanent product documentation. During later curation:
 
@@ -16,6 +16,5 @@ The archive is a workflow handoff, not permanent product documentation. During l
 
 After durable facts are represented by their maintained owner, completed checklists, migration
 sequence, review follow-ups, old counts/versions, and superseded designs may be deleted from the
-archive or superseded directory. Git and GitHub remain the historical record. Never move whole plans
-solely to retain execution history without first assigning every remaining obligation to a current
-owner.
+archive. Git and GitHub remain the historical record. Never retain or delete whole plans solely to
+manage execution history without first assigning every remaining obligation to a current owner.
