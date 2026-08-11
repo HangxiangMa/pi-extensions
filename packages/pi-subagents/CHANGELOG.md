@@ -1,5 +1,11 @@
 # @narumitw/pi-subagents
 
+## 0.54.0
+
+### Minor Changes
+
+- 1c117e4: Add an explicit verified-execution workflow contract with executor-owned deterministic checks, exact-state receipts, managed integration acceptance, and one bounded rework cycle.
+
 ## 0.53.0
 
 ### Minor Changes
