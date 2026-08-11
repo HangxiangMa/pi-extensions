@@ -85,6 +85,60 @@ test("a legacy operation guard without metadata defers migration", async () => {
 	});
 });
 
+test("canonical state access does not take the legacy migration lock", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(path.join(agentDir, "pi-sync"), { recursive: true });
+		await withStateDirectoryAccess(async () => {
+			assert.equal(existsSync(path.join(agentDir, ".pi-sync-state-migration.lock")), false);
+		});
+	});
+});
+
+test("overlapping legacy state users share migration protection without lock contention", async () => {
+	await withTempHome(async (agentDir) => {
+		mkdirSync(path.join(agentDir, ".pisync"), { recursive: true });
+		let firstStarted: () => void = () => undefined;
+		const started = new Promise<void>((resolve) => {
+			firstStarted = resolve;
+		});
+		let releaseUsers: () => void = () => undefined;
+		const usersReleased = new Promise<void>((resolve) => {
+			releaseUsers = resolve;
+		});
+		const first = withStateDirectoryAccess(async () => {
+			firstStarted();
+			await usersReleased;
+		});
+		await started;
+
+		let secondStarted: () => void = () => undefined;
+		const secondEntered = new Promise<void>((resolve) => {
+			secondStarted = resolve;
+		});
+		const second = withStateDirectoryAccess(async () => {
+			secondStarted();
+			await usersReleased;
+		});
+		const secondOutcome = second.then(
+			() => "completed" as const,
+			(error: unknown) => error,
+		);
+
+		try {
+			const outcome = await Promise.race([
+				secondEntered.then(() => "entered" as const),
+				secondOutcome,
+				new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 100)),
+			]);
+			assert.equal(outcome, "entered");
+		} finally {
+			releaseUsers();
+			await first;
+			await secondOutcome;
+		}
+	});
+}, 5_000);
+
 test("active state access defers migration without moving or recreating the legacy root", async () => {
 	await withTempHome(async (agentDir) => {
 		const legacy = path.join(agentDir, ".pisync");
