@@ -227,6 +227,25 @@ test("explorer previews a file, selects a range, and keeps rendered rows width-s
 	});
 	cancelledExplorer.handleInput("\u001b");
 	assert.equal(result, undefined);
+
+	const menuExplorer = (input: string) => {
+		result = "unchanged";
+		const explorer = new FileQuoteExplorer({
+			tui: tui as never,
+			theme: theme as never,
+			keybindings: keybindings as never,
+			files: ["src/menu.ts"],
+			loadFile: async () => ({ path: "", lines: [] }),
+			rootNavigation: true,
+			done: (value) => {
+				result = value;
+			},
+		});
+		explorer.handleInput(input);
+		return result;
+	};
+	assert.deepEqual(menuExplorer("\u001b"), { kind: "back" });
+	assert.deepEqual(menuExplorer("\u0003"), { kind: "close" });
 });
 
 test("explorer escapes errors and keeps narrow empty states width-safe", async () => {
@@ -833,12 +852,12 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 
 	await mock.events.get("session_start")?.[0]?.({}, context.ctx);
 	await mock.shortcuts.get("ctrl+alt+f")?.handler(context.ctx);
-	await mock.commands.get("file-context")?.handler("", context.ctx);
+	await mock.commands.get("file-context")?.handler("browse", context.ctx);
 	assert.equal(typeof customFactory, "function");
 	assert.deepEqual(widgets.get("file-context"), [
-		"Quotes (2) · ~13 tokens:",
-		"• src/example.ts · lines 1-1 · ~6 tokens",
-		"• test/example.test.ts · lines 2-3 · ~8 tokens",
+		"Quotes (2) · ~13 tokens · /file-context to manage",
+		"1. src/example.ts · lines 1-1 · ~6 tokens",
+		"2. test/example.test.ts · lines 2-3 · ~8 tokens",
 	]);
 
 	assert.equal(mock.events.get("input"), undefined);
@@ -892,7 +911,7 @@ test("quotes whole-file references and rejects picker results from replaced sess
 		},
 	});
 	await referenceMock.events.get("session_start")?.[0]?.({}, referenceContext.ctx);
-	await referenceMock.commands.get("file-context")?.handler("", referenceContext.ctx);
+	await referenceMock.commands.get("file-context")?.handler("browse", referenceContext.ctx);
 	assert.deepEqual(pasted, ['@"docs/my \\"note\\".md" ']);
 
 	const staleMock = createMockPi();
@@ -926,7 +945,7 @@ test("quotes whole-file references and rejects picker results from replaced sess
 	const oldContext = makeContext(oldManager, async () => picker);
 	const newContext = makeContext(newManager, async () => undefined);
 	await staleMock.events.get("session_start")?.[0]?.({}, oldContext.ctx);
-	const command = staleMock.commands.get("file-context")?.handler("", oldContext.ctx);
+	const command = staleMock.commands.get("file-context")?.handler("browse", oldContext.ctx);
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	await staleMock.events.get("session_start")?.[0]?.({}, newContext.ctx);
 	resolvePicker?.({
@@ -950,14 +969,22 @@ test("rejects the fallback command observably outside TUI mode", async () => {
 	});
 	const rpc = createMockContext({ mode: "rpc", hasUI: true });
 	await mock.commands.get("file-context")?.handler("", rpc.ctx);
-	assert.match(rpc.notifications[0]?.message ?? "", /interactive TUI/);
-	assert.equal(rpc.notifications[0]?.level, "warning");
+	await mock.commands.get("file-context")?.handler("remove", rpc.ctx);
+	assert.equal(rpc.notifications.length, 2);
+	assert.ok(rpc.notifications.every(({ message }) => /interactive TUI/.test(message)));
+	assert.ok(rpc.notifications.every(({ level }) => level === "warning"));
 
 	const print = createMockContext({ mode: "print", hasUI: false });
 	await assert.rejects(async () => {
 		await mock.commands.get("file-context")?.handler("", print.ctx);
 	}, /interactive TUI/);
 	await assert.rejects(async () => {
+		await mock.commands.get("file-context")?.handler("remove", print.ctx);
+	}, /interactive TUI/);
+	await assert.rejects(async () => {
 		await mock.commands.get("file-context")?.handler("unexpected", print.ctx);
+	}, /Usage/);
+	await assert.rejects(async () => {
+		await mock.commands.get("file-context")?.handler("remove trailing", print.ctx);
 	}, /Usage/);
 });
