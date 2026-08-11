@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { test } from "vitest";
+import { afterAll, test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { registerSubagentInspect } from "../src/inspect.js";
 import type { AgentRunInspectionDetail, AgentRunInspectionSummary } from "../src/registry.js";
 import { resolveStatefulLimits } from "../src/stateful-limits.js";
 import { WorkItemLedger } from "../src/work-item-ledger.js";
 import { createSessionWorkItemPersistence } from "../src/work-item-persistence.js";
+import { installSubagentsTestEnvironment } from "./subagents-test-helpers.js";
+
+const restoreTestEnvironment = installSubagentsTestEnvironment();
+afterAll(restoreTestEnvironment);
 
 function runtime(
 	options: {
