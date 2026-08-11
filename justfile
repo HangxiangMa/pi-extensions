@@ -8,6 +8,10 @@ default:
 check:
     npm run check
 
+# Run all active tests
+test:
+    npm test
+
 # Format all files with Biome
 format:
     npm run format
