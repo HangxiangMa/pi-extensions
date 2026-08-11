@@ -2,10 +2,6 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-codex-compact)](https://www.npmjs.com/package/@narumitw/pi-codex-compact) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-> [!WARNING]
-> This extension is experimental. It depends on an undocumented OpenAI Codex Responses wire
-> contract and stores provider-specific opaque checkpoints. Keep backups of important sessions.
-
 `@narumitw/pi-codex-compact` adds Codex Remote Compaction V2 to the
 [Pi Coding Agent](https://pi.dev) for the built-in `openai-codex` OAuth provider. It replaces Pi's
 plaintext summary-generation call with a server-generated opaque compaction item and safely replays
@@ -63,8 +59,7 @@ and the local workspace at the same time.
 4. Run `/codex-compact` to inspect the effective route or choose **Compact now**.
 5. After compaction, continue the session normally; compatible requests replay the opaque checkpoint.
 
-The extension shows an experimental warning at session start in UI-capable modes. When the active
-model is unsupported, compaction remains entirely Pi-native.
+When the active model is unsupported, compaction remains entirely Pi-native.
 
 ## 💬 Command
 
@@ -191,9 +186,10 @@ An individually oversized media item is dropped rather than making the session e
 oldest fitting text item may be partially truncated to preserve newer context. These hard byte
 ceilings are intentionally not configurable.
 
-## 🚧 Experimental limitations
+## 🚧 Known limitations
 
-- The wire contract is undocumented and can change independently of Pi or this package.
+- The wire contract is undocumented and can change independently of Pi or this package. Keep
+  backups of important sessions.
 - Full older history depends on this extension and the same compatible model. Removing the extension
   exposes only the portability fallback marker and Pi-retained recent messages.
 - The package does not reproduce Codex core's context-window UUID/number lineage, previous-model

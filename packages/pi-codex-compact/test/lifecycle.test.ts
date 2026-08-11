@@ -181,7 +181,10 @@ test("registers the settings command and returns a versioned Remote V2 compactio
 	createCodexCompactExtension({ settingsRuntime: runtime, fetch: async () => sseResponse() })(
 		mock.pi,
 	);
-	assert.ok(mock.commands.has("codex-compact"));
+	assert.equal(
+		mock.commands.get("codex-compact")?.description,
+		"Compact now or configure Codex Remote Compaction V2",
+	);
 	const handler = mock.events.get("session_before_compact")?.[0];
 	assert.ok(handler);
 	const entries = branch();
@@ -268,7 +271,21 @@ test("registers the settings command and returns a versioned Remote V2 compactio
 	assert.match(JSON.stringify(rewritten.input.at(-1)), /later/);
 });
 
-test("session lifecycle reloads settings, warns once current, and drops stale reload continuations", async () => {
+test("valid session startup reloads settings without a package warning", async () => {
+	const mock = createMockPi();
+	createCodexCompactExtension({ settingsRuntime: settingsRuntime() })(mock.pi);
+	const start = mock.events.get("session_start")?.[0];
+	const { ctx, notifications } = createMockContext({
+		hasUI: true,
+		sessionManager: { getSessionId: () => "session", getBranch: () => [] },
+	});
+
+	await start?.({ type: "session_start", reason: "startup" }, ctx);
+
+	assert.deepEqual(notifications, []);
+});
+
+test("session lifecycle reloads settings and drops stale reload continuations", async () => {
 	const mock = createMockPi();
 	let reloads = 0;
 	let flushes = 0;
