@@ -1,10 +1,15 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { shutdownManagedBrowser } from "./browser-manager.js";
+import {
+	availableChromeDevtoolsTools,
+	configureLazyChromeDevtoolsTools,
+	createChromeDevtoolsLoadTool,
+	initializeAvailableChromeDevtoolsTools,
+} from "./lazy-tools.js";
 import { applyRuntimeBrowserSettings, state } from "./runtime.js";
 import { loadSettings } from "./settings.js";
 import {
 	allChromeDevtoolsTools,
-	applyChromeDevtoolsTools,
 	buildCommandGuide,
 	buildQuickstartMessage,
 	buildToolStatusMessage,
@@ -27,12 +32,12 @@ const COMMAND_COMPLETIONS = [
 	{ value: "help", label: "help", description: "Show command usage" },
 	{ value: "quickstart", label: "quickstart", description: "Show endpoint and launch help" },
 	{ value: "status", label: "status", description: "Show tool and settings status" },
-	{ value: "tools", label: "tools", description: "Select Chrome DevTools tools" },
+	{ value: "tools", label: "tools", description: "Choose lazy-loadable Chrome DevTools tools" },
 	{ value: "toggle", label: "toggle", description: "Alias for tools" },
 	{ value: "select", label: "select", description: "Compatibility alias for tools" },
-	{ value: "enable", label: "enable", description: "Enable all Chrome DevTools tools" },
+	{ value: "enable", label: "enable", description: "Make all Chrome DevTools tools available" },
 	{ value: "on", label: "on", description: "Compatibility alias for enable" },
-	{ value: "disable", label: "disable", description: "Disable all Chrome DevTools tools" },
+	{ value: "disable", label: "disable", description: "Make all Chrome DevTools tools unavailable" },
 	{ value: "off", label: "off", description: "Compatibility alias for disable" },
 ];
 export default function chromeDevtools(pi: ExtensionAPI) {
@@ -41,6 +46,8 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 	pi.registerTool(navigateTool);
 	pi.registerTool(evaluateTool);
 	pi.registerTool(screenshotTool);
+	pi.registerTool(createChromeDevtoolsLoadTool(pi));
+	initializeAvailableChromeDevtoolsTools(pi);
 
 	pi.registerCommand("chrome-devtools", {
 		description: "Open Chrome DevTools help and tool controls",
@@ -69,9 +76,11 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 		for (const warning of settings.warnings) {
 			ctx.ui.notify(sanitizeChromeDevtoolsDisplay(warning), "warning");
 		}
-		if (settings.kind === "loaded" && settings.settings.tools) {
-			applyChromeDevtoolsTools(pi, settings.settings.tools);
-		}
+		const availableTools =
+			settings.kind === "loaded" && settings.settings.tools
+				? settings.settings.tools
+				: availableChromeDevtoolsTools(pi);
+		configureLazyChromeDevtoolsTools(pi, availableTools);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
@@ -120,10 +129,10 @@ async function handleChromeDevtoolsCommand(
 			return;
 		}
 		case "enable":
-			await updateChromeDevtoolsTools(pi, ctx, allChromeDevtoolsTools(), "enabled all");
+			await updateChromeDevtoolsTools(pi, ctx, allChromeDevtoolsTools(), "made all available");
 			return;
 		case "disable":
-			await updateChromeDevtoolsTools(pi, ctx, [], "disabled all");
+			await updateChromeDevtoolsTools(pi, ctx, [], "made all unavailable");
 			return;
 	}
 
@@ -185,6 +194,7 @@ export {
 	isLocalDevToolsHost,
 	quoteCommandPart,
 } from "./browser-manager.js";
+export { CHROME_DEVTOOLS_LOAD_TOOL_NAME } from "./lazy-tools.js";
 export { parseConfiguredPort } from "./runtime.js";
 export {
 	hasParentPathSegment,

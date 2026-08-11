@@ -10,6 +10,7 @@ import {
 	createMockPi,
 } from "../../../test/support.js";
 import chromeDevtools from "../src/chrome-devtools.js";
+import { applyAvailableChromeDevtoolsTools } from "../src/lazy-tools.js";
 import { state } from "../src/runtime.js";
 import { settingsFilePath } from "../src/settings.js";
 import { buildBrowserStatusMessage } from "../src/tool-selector.js";
@@ -42,11 +43,11 @@ test("main menu presents consequential state and five goal-oriented actions with
 
 		await mock.commands.get("chrome-devtools")?.handler("", ctx);
 
-		assert.match(rendered, /Tools: 2 of 5 enabled · not saved/);
+		assert.match(rendered, /Lazy catalog: 2 of 5 available · not\s+saved/);
 		assert.match(rendered, /Browser: not started · attaches or\s+launches on first use/);
 		assert.match(rendered, /Endpoint: http:\/\/127\.0\.0\.1:9222/);
-		assert.match(rendered, /[→›] Choose browser tools…/);
-		assert.match(rendered, /Enable all browser tools…/);
+		assert.match(rendered, /[→›] Choose available browser tools…/);
+		assert.match(rendered, /Make all browser tools available…/);
 		assert.match(rendered, /Browser status/);
 		assert.match(rendered, /Settings & setup/);
 		assert.match(rendered, /Help/);
@@ -115,9 +116,9 @@ test("main menu shows saved all-enabled state and the reversible disable preview
 
 		await mock.commands.get("chrome-devtools")?.handler("", ctx);
 
-		assert.match(rendered, /Tools: 5 of 5 enabled · saved/);
-		assert.match(rendered, /Disable all browser tools…/);
-		assert.match(rendered, /Preview 0 of 5; other active tools stay enabled/);
+		assert.match(rendered, /Lazy catalog: 5 of 5 available · saved/);
+		assert.match(rendered, /Make all browser tools unavailable…/);
+		assert.match(rendered, /Preview 0 of 5; other active tools stay/);
 	});
 });
 
@@ -252,7 +253,7 @@ test("bulk preview and nested detail navigation return without side effects", as
 
 		await mock.commands.get("chrome-devtools")?.handler("", ctx);
 
-		assert.match(details[0] ?? "", /Proposed: 5\/5/);
+		assert.match(details[0] ?? "", /Proposed availability: 5\/5/);
 		assert.match(details[1] ?? "", /does not probe the endpoint or launch Chrome/);
 		assert.match(details[2] ?? "", /Settings changes apply.*\/reload/s);
 		assert.match(details[3] ?? "", /\/chrome-devtools tools/);
@@ -286,7 +287,7 @@ test("invalid settings keep tool mutation unavailable and preserve the file", as
 		await mock.commands.get("chrome-devtools")?.handler("", ctx);
 
 		assert.match(rendered, /settings need repair/);
-		assert.match(rendered, /\[-\] Choose browser tools…/);
+		assert.match(rendered, /\[-\] Choose available browser tools…/);
 		assert.match(rendered, /Repair\s+.*invalid JSON\s+before saving/s);
 		assert.equal(readFileSync(settingsFilePath(), "utf8"), invalid);
 	});
@@ -337,7 +338,7 @@ test("interactive routes reject unsupported modes while direct mutations remain 
 		await assert.rejects(() => invoke("tools"), /requires TUI or RPC/);
 		await invoke("disable");
 
-		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool"]);
+		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", "chrome_devtools_load"]);
 		assert.deepEqual(JSON.parse(readFileSync(settingsFilePath(), "utf8")).tools, []);
 	});
 });
@@ -345,7 +346,6 @@ test("interactive routes reject unsupported modes while direct mutations remain 
 test("apply refreshes review instead of overwriting browser tools changed while waiting", async () => {
 	await withTempAgentDir(async () => {
 		const initialTools = ["other_tool", ...CHROME_TOOLS];
-		const concurrentTools = ["other_tool", ...CHROME_TOOLS.slice(0, 3)];
 		const mock = createMockPi({ activeTools: initialTools });
 		chromeDevtools(mock.pi);
 		let changedWhileWaiting = false;
@@ -356,7 +356,7 @@ test("apply refreshes review instead of overwriting browser tools changed while 
 			waitForIdle: async () => {
 				if (changedWhileWaiting) return;
 				changedWhileWaiting = true;
-				mock.rawPi.setActiveTools(concurrentTools);
+				applyAvailableChromeDevtoolsTools(mock.pi, CHROME_TOOLS.slice(0, 3));
 			},
 			hasUI: true,
 			mode: "tui",
@@ -386,9 +386,13 @@ test("apply refreshes review instead of overwriting browser tools changed while 
 		await mock.commands.get("chrome-devtools")?.handler("tools", ctx);
 
 		assert.equal(reviewScreen, 2);
-		assert.match(refreshedReview, /Current: 3\/5/);
-		assert.match(refreshedReview, /Proposed: 4\/5/);
-		assert.deepEqual(mock.rawPi.getActiveTools(), concurrentTools);
+		assert.match(refreshedReview, /Currently available: 3\/5/);
+		assert.match(refreshedReview, /Proposed availability: 4\/5/);
+		assert.deepEqual(mock.rawPi.getActiveTools(), [
+			"other_tool",
+			...CHROME_TOOLS.slice(0, 3),
+			"chrome_devtools_load",
+		]);
 		assert.equal(existsSync(settingsFilePath()), false);
 		assert.match(notifications.at(-1)?.message ?? "", /changed while review was open/i);
 	});
@@ -433,8 +437,12 @@ test("a failed confirmed save restores runtime and retains the draft for retry",
 		await mock.commands.get("chrome-devtools")?.handler("tools", ctx);
 
 		assert.equal(reviewScreen, 2);
-		assert.match(retryReview, /Proposed: 4\/5/);
-		assert.deepEqual(mock.rawPi.getActiveTools(), initialTools);
+		assert.match(retryReview, /Proposed availability: 4\/5/);
+		assert.deepEqual(mock.rawPi.getActiveTools(), [
+			"other_tool",
+			"chrome_devtools_load",
+			...CHROME_TOOLS,
+		]);
 		assert.match(
 			notifications.at(-1)?.message ?? "",
 			/settings save failed; active tools restored/i,
@@ -509,9 +517,13 @@ test("RPC dialogs preserve staged review and confirmed apply semantics", async (
 
 		await mock.commands.get("chrome-devtools")?.handler("tools", ctx);
 
-		assert.ok(dialogTitles.some((title) => title.includes("Current accepted: 5/5")));
-		assert.ok(dialogTitles.some((title) => title.includes("Proposed: 4/5")));
-		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", ...CHROME_TOOLS.slice(1)]);
+		assert.ok(dialogTitles.some((title) => title.includes("Currently available: 5/5")));
+		assert.ok(dialogTitles.some((title) => title.includes("Proposed availability: 4/5")));
+		assert.deepEqual(mock.rawPi.getActiveTools(), [
+			"other_tool",
+			...CHROME_TOOLS.slice(1),
+			"chrome_devtools_load",
+		]);
 		assert.deepEqual(
 			JSON.parse(readFileSync(settingsFilePath(), "utf8")).tools,
 			CHROME_TOOLS.slice(1),
@@ -563,20 +575,27 @@ test("review previews the exact tool effect and one confirmed apply persists it"
 
 		await mock.commands.get("chrome-devtools")?.handler("tools", ctx);
 
-		assert.match(review, /Current: 5\/5/);
-		assert.match(review, /Proposed: 4\/5/);
-		assert.match(review, /Disabled after apply:/);
+		assert.match(review, /Currently available: 5\/5/);
+		assert.match(review, /Proposed availability: 4\/5/);
+		assert.match(review, /Unavailable after apply:/);
 		assert.match(review, /List open pages \(chrome_devtools_list_pages\)/);
 		assert.match(review, /Other active Pi tools remain unchanged/);
 		assert.ok(narrowReview.every((line) => visibleWidth(line) <= 20));
 		assert.ok(narrowReview.length <= 5);
 		assert.deepEqual(applicationOrder, ["wait-for-idle", "apply-runtime"]);
-		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", ...CHROME_TOOLS.slice(1)]);
+		assert.deepEqual(mock.rawPi.getActiveTools(), [
+			"other_tool",
+			...CHROME_TOOLS.slice(1),
+			"chrome_devtools_load",
+		]);
 		assert.deepEqual(
 			JSON.parse(readFileSync(settingsFilePath(), "utf8")).tools,
 			CHROME_TOOLS.slice(1),
 		);
-		assert.match(notifications.at(-1)?.message ?? "", /Saved: 4 of 5 browser tools enabled/);
+		assert.match(
+			notifications.at(-1)?.message ?? "",
+			/Saved: 4 of 5 browser tools available to lazy-load/,
+		);
 	});
 });
 

@@ -10,6 +10,11 @@ import {
 	launchHint,
 	launchModeLabel,
 } from "./browser-manager.js";
+import {
+	applyAvailableChromeDevtoolsTools,
+	availableChromeDevtoolsTools,
+	CHROME_DEVTOOLS_LOAD_TOOL_NAME,
+} from "./lazy-tools.js";
 import { state } from "./runtime.js";
 import { loadSettings, saveSettings, settingsFilePath } from "./settings.js";
 import { CHROME_DEVTOOLS_TOOL_NAMES, type ChromeDevToolsToolName } from "./tool-names.js";
@@ -25,8 +30,9 @@ function formatError(error: unknown) {
 }
 
 interface ToolStatusSummary {
-	runtimeStatus: "enabled" | "disabled" | "partial";
-	activeChromeToolCount: number;
+	availabilityStatus: "enabled" | "disabled" | "partial";
+	availableChromeToolCount: number;
+	loadedChromeToolCount: number;
 	activeNonChromeToolCount: number;
 }
 
@@ -43,7 +49,7 @@ export async function updateChromeDevtoolsTools(
 	if (result !== "saved" || generation !== state.sessionGeneration) return;
 	const status = await buildToolStatusMessage(pi);
 	if (generation !== state.sessionGeneration) return;
-	ctx.ui.notify(`Chrome DevTools tools ${action}.\n\n${status}`, "info");
+	ctx.ui.notify(`Chrome DevTools lazy catalog ${action}.\n\n${status}`, "info");
 }
 
 export async function setSelectedChromeDevtoolsTools(
@@ -92,7 +98,7 @@ async function transactSelectedToolsNow(
 	expectedActiveTools?: readonly ChromeDevToolsToolName[],
 ): Promise<ToolSelectionSaveResult> {
 	if (expectedGeneration !== state.sessionGeneration) return "failed";
-	if (expectedActiveTools && !arraysEqual(activeChromeDevtoolsTools(pi), expectedActiveTools)) {
+	if (expectedActiveTools && !arraysEqual(availableChromeDevtoolsTools(pi), expectedActiveTools)) {
 		ctx.ui.notify(
 			"Browser tool selection changed while review was open. Review the current state, then apply again.",
 			"warning",
@@ -100,6 +106,7 @@ async function transactSelectedToolsNow(
 		return "active-tools-changed";
 	}
 	const previousActiveTools = pi.getActiveTools();
+	const previousAvailableTools = availableChromeDevtoolsTools(pi);
 	try {
 		applyChromeDevtoolsTools(pi, selectedTools);
 		await persistSettings(selectedTools);
@@ -107,10 +114,14 @@ async function transactSelectedToolsNow(
 	} catch (error) {
 		let rollbackError: unknown;
 		try {
-			const previousChromeTools = previousActiveTools.filter((name) =>
+			applyAvailableChromeDevtoolsTools(pi, previousAvailableTools);
+			const currentNonChromeTools = pi
+				.getActiveTools()
+				.filter((name) => !CHROME_DEVTOOLS_TOOL_NAMES.includes(name as ChromeDevToolsToolName));
+			const previousLoadedChromeTools = previousActiveTools.filter((name) =>
 				CHROME_DEVTOOLS_TOOL_NAMES.includes(name as ChromeDevToolsToolName),
-			) as ChromeDevToolsToolName[];
-			applyChromeDevtoolsTools(pi, previousChromeTools);
+			);
+			pi.setActiveTools(unique([...currentNonChromeTools, ...previousLoadedChromeTools]));
 		} catch (caught) {
 			rollbackError = caught;
 		}
@@ -127,11 +138,6 @@ async function transactSelectedToolsNow(
 	}
 }
 
-function activeChromeDevtoolsTools(pi: ExtensionAPI) {
-	const active = new Set(pi.getActiveTools());
-	return CHROME_DEVTOOLS_TOOL_NAMES.filter((toolName) => active.has(toolName));
-}
-
 function arraysEqual<T>(left: readonly T[], right: readonly T[]) {
 	return left.length === right.length && left.every((value, index) => value === right[index]);
 }
@@ -140,29 +146,32 @@ export function applyChromeDevtoolsTools(
 	pi: ExtensionAPI,
 	selectedTools: readonly ChromeDevToolsToolName[],
 ) {
-	const activeToolNames = pi.getActiveTools();
-	const chromeToolNames = new Set<string>(CHROME_DEVTOOLS_TOOL_NAMES);
-	const activeNonChromeToolNames = activeToolNames.filter((name) => !chromeToolNames.has(name));
-	pi.setActiveTools(unique([...activeNonChromeToolNames, ...selectedTools]));
+	applyAvailableChromeDevtoolsTools(pi, selectedTools);
 }
 
 function getToolStatusSummary(pi: ExtensionAPI): ToolStatusSummary {
 	const chromeToolNames = new Set<string>(CHROME_DEVTOOLS_TOOL_NAMES);
 	const activeToolNames = new Set(pi.getActiveTools());
-	const activeChromeToolCount = CHROME_DEVTOOLS_TOOL_NAMES.filter((name) =>
+	const loadedChromeToolCount = CHROME_DEVTOOLS_TOOL_NAMES.filter((name) =>
 		activeToolNames.has(name),
 	).length;
+	const availableChromeToolCount = availableChromeDevtoolsTools(pi).length;
 	const activeNonChromeToolCount = Array.from(activeToolNames).filter(
-		(name) => !chromeToolNames.has(name),
+		(name) => !chromeToolNames.has(name) && name !== CHROME_DEVTOOLS_LOAD_TOOL_NAME,
 	).length;
-	const runtimeStatus =
-		activeChromeToolCount === CHROME_DEVTOOLS_TOOL_NAMES.length
+	const availabilityStatus =
+		availableChromeToolCount === CHROME_DEVTOOLS_TOOL_NAMES.length
 			? "enabled"
-			: activeChromeToolCount === 0
+			: availableChromeToolCount === 0
 				? "disabled"
 				: "partial";
 
-	return { runtimeStatus, activeChromeToolCount, activeNonChromeToolCount };
+	return {
+		availabilityStatus,
+		availableChromeToolCount,
+		loadedChromeToolCount,
+		activeNonChromeToolCount,
+	};
 }
 
 export async function buildToolStatusMessage(pi: ExtensionAPI) {
@@ -170,8 +179,10 @@ export async function buildToolStatusMessage(pi: ExtensionAPI) {
 	const persistedSetting = await persistedSettingLabel();
 	return sanitizeChromeDevtoolsDisplay(
 		[
-			`Chrome DevTools tools: ${formatRuntimeStatus(summary)}`,
-			`Persisted selection: ${persistedSetting}`,
+			`Chrome DevTools tools available to lazy-load: ${formatRuntimeStatus(summary)}`,
+			`Loaded capability tools this session: ${summary.loadedChromeToolCount}/${CHROME_DEVTOOLS_TOOL_NAMES.length}`,
+			`Loader: ${pi.getActiveTools().includes(CHROME_DEVTOOLS_LOAD_TOOL_NAME) ? "active" : "inactive"}`,
+			`Persisted lazy catalog: ${persistedSetting}`,
 			...browserSettingsStatusLines(),
 			...(state.settingsNotice ? [`Settings note: ${state.settingsNotice}`] : []),
 			`Other active tools preserved: ${summary.activeNonChromeToolCount}`,
@@ -276,10 +287,10 @@ export function buildCommandGuide() {
 		"/chrome-devtools help — show command usage",
 		"/chrome-devtools quickstart — show endpoint and launch help",
 		"/chrome-devtools status — show tool and settings status",
-		"/chrome-devtools tools — select individual Chrome DevTools tools",
+		"/chrome-devtools tools — choose tools available to lazy-load",
 		"/chrome-devtools toggle|select — compatibility aliases for tools",
-		"/chrome-devtools enable|on — enable all Chrome DevTools tools immediately",
-		"/chrome-devtools disable|off — disable all Chrome DevTools tools immediately",
+		"/chrome-devtools enable|on — make all Chrome DevTools tools available to lazy-load",
+		"/chrome-devtools disable|off — make all Chrome DevTools capability tools unavailable",
 	].join("\n");
 }
 
@@ -292,7 +303,7 @@ export function orderedChromeDevtoolsTools(selectedTools: ReadonlySet<ChromeDevT
 }
 
 function formatRuntimeStatus(summary: ToolStatusSummary) {
-	return `${summary.runtimeStatus} (${summary.activeChromeToolCount}/${CHROME_DEVTOOLS_TOOL_NAMES.length} active)`;
+	return `${summary.availabilityStatus} (${summary.availableChromeToolCount}/${CHROME_DEVTOOLS_TOOL_NAMES.length} available)`;
 }
 
 async function persistedSettingLabel() {
@@ -308,9 +319,10 @@ async function persistedSettingLabel() {
 
 function formatPersistedSelection(tools: readonly ChromeDevToolsToolName[]) {
 	if (tools.length === CHROME_DEVTOOLS_TOOL_NAMES.length) {
-		return `all enabled (${tools.length}/${CHROME_DEVTOOLS_TOOL_NAMES.length} selected)`;
+		return `all available (${tools.length}/${CHROME_DEVTOOLS_TOOL_NAMES.length} selected)`;
 	}
-	if (tools.length === 0) return `all disabled (0/${CHROME_DEVTOOLS_TOOL_NAMES.length} selected)`;
+	if (tools.length === 0)
+		return `all unavailable (0/${CHROME_DEVTOOLS_TOOL_NAMES.length} selected)`;
 	return `${tools.length}/${CHROME_DEVTOOLS_TOOL_NAMES.length} selected: ${tools.join(", ")}`;
 }
 
