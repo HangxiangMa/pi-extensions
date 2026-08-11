@@ -131,12 +131,10 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		};
 		assert.match(send.description, /follow-up.*start.*turn/i);
 		assert.match(send.description, /subagent_mailbox.*queue-only/i);
-		assert.match(manage.description, /list.*interrupt.*close/i);
-		assert.deepEqual(manage.parameters.properties?.action?.enum, ["list", "interrupt", "close"]);
-		assert.match(
-			manage.parameters.properties?.action?.description ?? "",
-			/list.*interrupt.*close/i,
-		);
+		assert.doesNotMatch(manage.description, /list retained/i);
+		assert.match(manage.description, /interrupt.*close/i);
+		assert.deepEqual(manage.parameters.properties?.action?.enum, ["interrupt", "close"]);
+		assert.match(manage.parameters.properties?.action?.description ?? "", /interrupt.*close/i);
 		assert.match(mailbox.description, /without starting a turn.*read/i);
 		assert.deepEqual(mailbox.parameters.properties?.action?.enum, ["send", "read"]);
 		assert.match(mailbox.parameters.properties?.action?.description ?? "", /send.*read/i);
@@ -144,33 +142,15 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		assert.equal(mailbox.parameters.properties?.message?.maxLength, 16 * 1024);
 		assert.equal(mailbox.parameters.properties?.limit?.minimum, 1);
 		assert.equal(mailbox.parameters.properties?.limit?.maximum, 20);
-		const listed = await manage.execute(
-			"id",
-			{ action: "list" },
-			undefined,
-			undefined,
-			context.ctx,
+		await assert.rejects(
+			() => manage.execute("id", { action: "list" }, undefined, undefined, context.ctx),
+			/use subagent_inspect/i,
 		);
-		assert.equal(listed.content[0].text, "No stateful subagents.");
-		assert.deepEqual(listed.details, { agents: [] });
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["read"]);
 		await assert.rejects(
 			() => manage.execute("id", { action: "interrupt" }, undefined, undefined, context.ctx),
 			/subagent_manage action "interrupt" requires agentId/,
 		);
-		const listedWithProviderDefaults = await manage.execute(
-			"id",
-			{
-				action: "list",
-				agentId: "sa_unused",
-				includeClosed: false,
-				subtree: false,
-			},
-			undefined,
-			undefined,
-			context.ctx,
-		);
-		assert.equal(listedWithProviderDefaults.content[0].text, "No stateful subagents.");
 		await assert.rejects(
 			() =>
 				manage.execute(
@@ -190,12 +170,12 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			() =>
 				manage.execute(
 					"id",
-					{ action: "list", includeClosed: "yes" },
+					{ action: "interrupt", agentId: "sa_unknown", includeClosed: false },
 					undefined,
 					undefined,
 					context.ctx,
 				),
-			/subagent_manage action "list" requires includeClosed to be a boolean/,
+			/subagent_manage does not accept includeClosed/,
 		);
 		await assert.rejects(
 			() =>
@@ -204,7 +184,6 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 					{
 						action: "interrupt",
 						agentId: "sa_unknown",
-						includeClosed: false,
 						subtree: false,
 					},
 					undefined,
@@ -371,7 +350,7 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		);
 		assert.match(spawnGuidance, /useful non-overlapping.*immediately/i);
 		assert.match(spawnGuidance, /tell the user.*end the response/i);
-		assert.match(spawnGuidance, /do not poll.*subagent_manage.*action.*list/i);
+		assert.match(spawnGuidance, /do not poll.*subagent_inspect/i);
 		assert.match(spawnGuidance, /subagent_mailbox.*action.*read/i);
 		assert.doesNotMatch(spawnGuidance, /subagent_(?:list|messages)/i);
 		assert.match(spawnGuidance, /synthesize available.*completion/i);

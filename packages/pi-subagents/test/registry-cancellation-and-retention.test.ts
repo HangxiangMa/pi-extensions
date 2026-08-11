@@ -79,6 +79,9 @@ test("AgentRegistry eviction preserves active ancestry and removes expired trees
 	);
 	const root = await registry.spawn({ agent: "scout", task: "done", cwd: process.cwd() });
 	await registry.wait(root.id, 100);
+	for (const completion of registry.listPendingCompletions()) {
+		await registry.markCompletionDelivered(completion.completionId, now);
+	}
 	const child = await registry.spawn({
 		agent: "scout",
 		task: "slow",
@@ -89,6 +92,9 @@ test("AgentRegistry eviction preserves active ancestry and removes expired trees
 	assert.equal(await registry.sweepExpired(), 0);
 	assert.ok(registry.get(root.id));
 	await registry.interrupt(child.id);
+	for (const completion of registry.listPendingCompletions()) {
+		await registry.markCompletionDelivered(completion.completionId, now);
+	}
 	assert.equal(registry.get(root.id)?.updatedAt, now);
 	now += 101;
 	assert.equal(await registry.sweepExpired(), 2);
@@ -123,6 +129,9 @@ test("AgentRegistry expiry prunes stale child links and releases its transport",
 		parentId: root.id,
 	});
 	await registry.wait(child.id, 100);
+	for (const completion of registry.listPendingCompletions()) {
+		await registry.markCompletionDelivered(completion.completionId, now);
+	}
 	now += 50;
 	await registry.sendMessage(root.id, "refresh parent");
 	now += 51;
@@ -132,6 +141,23 @@ test("AgentRegistry expiry prunes stale child links and releases its transport",
 	assert.deepEqual(released, [child.id]);
 	assert.equal((await registry.close(root.id)).state, "closed");
 	assert.deepEqual(released, [child.id, root.id]);
+});
+
+test("AgentRegistry keeps an expired agent until its durable completion is acknowledged", async () => {
+	let now = 1_000;
+	const registry = new AgentRegistry(async () => ({ output: "done", exitCode: 0 }), {
+		idleTtlMs: 100,
+		now: () => now,
+	});
+	const agent = await registry.spawn({ agent: "scout", task: "done", cwd: process.cwd() });
+	await registry.wait(agent.id, 100);
+	now += 101;
+	assert.equal(await registry.sweepExpired(), 0);
+	const completionId = registry.listPendingCompletions()[0]?.completionId;
+	assert.ok(completionId);
+	await registry.markCompletionDelivered(completionId, now);
+	now += 101;
+	assert.equal(await registry.sweepExpired(), 1);
 });
 
 test("AgentRegistry bounds retained closed records", async () => {
@@ -172,12 +198,30 @@ test("AgentRegistry serializes state snapshots so slow persistence cannot overwr
 	assert.deepEqual(savedStates, ["starting", "starting", "completed"]);
 });
 
-test("AgentRegistry keeps lifecycle usable when persistence callbacks fail", async () => {
+test("AgentRegistry keeps an unpersisted terminal run pending until shutdown reports failure", async () => {
+	let markRetryStarted!: () => void;
+	const retryStarted = new Promise<void>((resolve) => {
+		markRetryStarted = resolve;
+	});
+	let terminalAttempts = 0;
 	const registry = new AgentRegistry(async () => ({ output: "done", exitCode: 0 }), {
-		onChange: async () => {
+		onChange: async (agents) => {
+			if (agents.some((agent) => (agent.pendingCompletions?.length ?? 0) > 0)) {
+				terminalAttempts++;
+				if (terminalAttempts === 2) markRetryStarted();
+			}
 			throw new Error("disk unavailable");
 		},
 	});
 	const agent = await registry.spawn({ agent: "scout", task: "done", cwd: process.cwd() });
-	assert.equal((await registry.wait(agent.id, 100)).agent.state, "completed");
+	await retryStarted;
+	let waitResolved = false;
+	const waiting = registry.wait(agent.id, 1_000).then((result) => {
+		waitResolved = true;
+		return result;
+	});
+	await Promise.resolve();
+	assert.equal(waitResolved, false);
+	await assert.rejects(() => registry.shutdown(), /disk unavailable/);
+	assert.equal((await waiting).agent.state, "completed");
 });

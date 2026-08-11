@@ -17,7 +17,15 @@ function completion(id: string, output = `output:${id}`): AgentTurnCompletion {
 		history: [],
 		mailbox: [],
 	};
-	return { agent, task: `task:${id}`, output };
+	return {
+		agent,
+		task: `task:${id}`,
+		output,
+		completionId: `completion:${id}:1`,
+		runId: `run:${id}:1`,
+		generation: 1,
+		createdAt: 1,
+	};
 }
 
 function deliveryHarness(options: { idle?: boolean; pending?: boolean } = {}) {
@@ -34,18 +42,56 @@ function deliveryHarness(options: { idle?: boolean; pending?: boolean } = {}) {
 	return { pi, ctx, sent };
 }
 
-test("completion delivery reports one deterministic delivery timestamp after success", () => {
+test("completion delivery acknowledges one deterministic timestamp when the parent consumes it", () => {
 	const harness = deliveryHarness();
 	const delivered: Array<{ ids: string[]; at: number }> = [];
 	const broker = new CompletionDeliveryBroker(harness.pi as never, harness.ctx, "next-turn", {
 		now: () => 1234,
-		onDelivered: (completions, at) => {
+		onAcknowledged: (completions, at) => {
 			delivered.push({ ids: completions.map((value) => value.agent.id), at });
 		},
 	});
 	broker.enqueue(completion("sa_timed"));
 	broker.flush();
+	assert.deepEqual(delivered, []);
+	broker.onParentTurnStart();
+	assert.deepEqual(delivered, []);
+	broker.onParentContext([
+		{
+			role: "custom",
+			customType: "pi-subagent-completion",
+			details: harness.sent[0]?.message.details,
+		},
+	]);
 	assert.deepEqual(delivered, [{ ids: ["sa_timed"], at: 1234 }]);
+	broker.close();
+});
+
+test("an unobserved asynchronous injection remains pending for retry", () => {
+	const harness = deliveryHarness();
+	const acknowledged: string[] = [];
+	const broker = new CompletionDeliveryBroker(harness.pi as never, harness.ctx, "next-turn", {
+		onAcknowledged: (completions) => {
+			acknowledged.push(...completions.map((value) => value.completionId));
+		},
+	});
+	broker.enqueue(completion("sa_async_failure"));
+	broker.flush();
+
+	broker.onParentTurnStart();
+	broker.onParentContext([]);
+	assert.deepEqual(acknowledged, []);
+	broker.flush();
+	assert.equal(harness.sent.length, 2);
+
+	broker.onParentContext([
+		{
+			role: "custom",
+			customType: "pi-subagent-completion",
+			details: harness.sent[1]?.message.details,
+		},
+	]);
+	assert.deepEqual(acknowledged, ["completion:sa_async_failure:1"]);
 	broker.close();
 });
 
@@ -61,6 +107,9 @@ test("next-turn completion delivery never wakes an idle root", () => {
 	assert.match(String(harness.sent[0]?.message.content), /Agent ID: sa_one/);
 	assert.deepEqual(harness.sent[0]?.message.details, {
 		protocol: "pi-subagents:v1",
+		completionId: "completion:sa_one:1",
+		runId: "run:sa_one:1",
+		generation: 1,
 		agentId: "sa_one",
 		agent: "scout",
 		state: "completed",
@@ -85,18 +134,40 @@ test("auto-resume batches simultaneous completions into one root synthesis turn"
 		completions: [
 			{
 				protocol: "pi-subagents:v1",
+				completionId: "completion:sa_one:1",
+				runId: "run:sa_one:1",
+				generation: 1,
 				agentId: "sa_one",
 				agent: "scout",
 				state: "completed",
 			},
 			{
 				protocol: "pi-subagents:v1",
+				completionId: "completion:sa_two:1",
+				runId: "run:sa_two:1",
+				generation: 1,
 				agentId: "sa_two",
 				agent: "scout",
 				state: "completed",
 			},
 		],
 	});
+	broker.close();
+});
+
+test("completion delivery deduplicates the same completion identity", () => {
+	const harness = deliveryHarness();
+	const broker = new CompletionDeliveryBroker(harness.pi as never, harness.ctx, "next-turn");
+	const value = completion("sa_duplicate");
+	broker.enqueue(value);
+	broker.enqueue(value);
+	broker.flush();
+
+	assert.equal(harness.sent.length, 1);
+	assert.match(
+		String(harness.sent[0]?.message.content),
+		/Completion ID: completion:sa_duplicate:1/,
+	);
 	broker.close();
 });
 

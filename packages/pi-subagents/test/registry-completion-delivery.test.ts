@@ -12,13 +12,23 @@ test("AgentRegistry emits one detached completion event for every settled turn",
 		output: string;
 	}> = [];
 	const settlers: Array<(outcome: { output: string; exitCode: number }) => void> = [];
+	let latestPersistedCompletionIds: string[] = [];
+	const persistedBeforeNotification: boolean[] = [];
 	const registry = new AgentRegistry(
 		async () =>
 			new Promise((resolve) => {
 				settlers.push(resolve);
 			}),
 		{
+			onChange: (agents) => {
+				latestPersistedCompletionIds = agents.flatMap((agent) =>
+					(agent.pendingCompletions ?? []).map((completion) => completion.completionId),
+				);
+			},
 			onTurnComplete: (completion) => {
+				persistedBeforeNotification.push(
+					latestPersistedCompletionIds.includes(completion.completionId),
+				);
 				completions.push({
 					agentId: completion.agent.id,
 					state: completion.agent.state,
@@ -49,10 +59,64 @@ test("AgentRegistry emits one detached completion event for every settled turn",
 		output: "second result",
 	});
 	assert.equal(completions.length, 2);
+	assert.deepEqual(persistedBeforeNotification, [true, true]);
+});
+
+test("AgentRegistry retries terminal persistence before resolving or notifying", async () => {
+	let settleTurn!: (outcome: { output: string; exitCode: number }) => void;
+	let releasePersistence!: () => void;
+	let markRetryStarted!: () => void;
+	const retryStarted = new Promise<void>((resolve) => {
+		markRetryStarted = resolve;
+	});
+	const persistenceGate = new Promise<void>((resolve) => {
+		releasePersistence = resolve;
+	});
+	let terminalAttempts = 0;
+	const notified: string[] = [];
+	const registry = new AgentRegistry(
+		async () =>
+			new Promise((resolve) => {
+				settleTurn = resolve;
+			}),
+		{
+			onChange: async (agents) => {
+				if (!agents.some((agent) => (agent.pendingCompletions?.length ?? 0) > 0)) return;
+				terminalAttempts++;
+				if (terminalAttempts === 1) throw new Error("transient persistence failure");
+				markRetryStarted();
+				await persistenceGate;
+			},
+			onTurnComplete: (completion) => {
+				notified.push(completion.completionId);
+			},
+		},
+	);
+	const agent = await registry.spawn({ agent: "scout", task: "persist", cwd: process.cwd() });
+	settleTurn({ output: "done", exitCode: 0 });
+	let waitResolved = false;
+	const waiting = registry.wait(agent.id, 1_000).then((result) => {
+		waitResolved = true;
+		return result;
+	});
+
+	await retryStarted;
+	await Promise.resolve();
+	assert.equal(waitResolved, false);
+	assert.deepEqual(notified, []);
+	releasePersistence();
+	const settled = await waiting;
+	assert.equal(settled.agent.state, "completed");
+	assert.equal(terminalAttempts, 2);
+	assert.equal(notified.length, 1);
 });
 
 test("detached completion messages retain bounded task, partial output, and errors after redaction", () => {
 	const content = buildDetachedCompletionMessage({
+		completionId: "completion:test:1",
+		runId: "run:test:1",
+		generation: 1,
+		createdAt: 1,
 		agent: record({ agent: "scout\nspoofed", state: "failed" }),
 		task: `inspect <private>task secret</private> ${"界".repeat(200)}`,
 		output: `partial output <private>output secret</private> ${"x".repeat(4_000)}`,

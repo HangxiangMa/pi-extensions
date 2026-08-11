@@ -16,12 +16,13 @@ import { resolveStatefulLimits } from "./stateful-limits.js";
 import { copyTurnTerminationReport, type TurnTerminationReport } from "./timeout-checkpoint.js";
 import { MAX_SUBAGENT_TOOL_CALLS, MAX_SUBAGENT_TURNS } from "./turn-budget.js";
 
-const STATE_VERSION = 2;
+const STATE_VERSION = 3;
+const MAX_STORED_COMPLETIONS_PER_AGENT = 20;
 const DEFAULT_STATEFUL_LIMITS = resolveStatefulLimits();
-const MAX_STATE_BYTES = 1024 * 1024;
+const MAX_STATE_BYTES = 5 * 1024 * 1024;
 
 interface StoredState {
-	version: 2;
+	version: 3;
 	updatedAt: number;
 	agents: ManagedAgent[];
 }
@@ -86,8 +87,19 @@ export class AgentPersistence {
 		const state: StoredState = { version: STATE_VERSION, updatedAt: Date.now(), agents: records };
 		let content = `${JSON.stringify(state, null, "\t")}\n`;
 		while (Buffer.byteLength(content, "utf8") > MAX_STATE_BYTES && state.agents.length > 0) {
-			const oldestRootId = state.agents[0].rootId;
-			state.agents = state.agents.filter((agent) => agent.rootId !== oldestRootId);
+			const rootsWithPendingCompletions = new Set(
+				state.agents
+					.filter((agent) => (agent.pendingCompletions?.length ?? 0) > 0)
+					.map((agent) => agent.rootId),
+			);
+			const droppableRoot = state.agents.find(
+				(agent) => !rootsWithPendingCompletions.has(agent.rootId),
+			)?.rootId;
+			if (droppableRoot) {
+				state.agents = state.agents.filter((agent) => agent.rootId !== droppableRoot);
+			} else if (!trimOldestHistory(state.agents) && !clearOldestContext(state.agents)) {
+				throw new Error("Subagent state exceeds its durable completion storage limit");
+			}
 			content = `${JSON.stringify(state, null, "\t")}\n`;
 		}
 		await fs.promises.mkdir(path.dirname(this.filePath), { recursive: true });
@@ -113,6 +125,27 @@ export class AgentPersistence {
 	}
 }
 
+function trimOldestHistory(agents: ManagedAgent[]): boolean {
+	const candidate = agents
+		.filter((agent) => agent.history.length > 0)
+		.sort(
+			(left, right) =>
+				(left.history[0]?.completedAt ?? Number.POSITIVE_INFINITY) -
+				(right.history[0]?.completedAt ?? Number.POSITIVE_INFINITY),
+		)[0];
+	if (!candidate) return false;
+	candidate.history.shift();
+	return true;
+}
+
+function clearOldestContext(agents: ManagedAgent[]): boolean {
+	const candidate = agents.find((agent) => agent.context !== undefined);
+	if (!candidate) return false;
+	candidate.context = undefined;
+	candidate.contextTruncated = true;
+	return true;
+}
+
 function sanitizeAgent(agent: ManagedAgent): ManagedAgent {
 	return {
 		...agent,
@@ -126,6 +159,17 @@ function sanitizeAgent(agent: ManagedAgent): ManagedAgent {
 		})),
 		state: agent.state === "running" || agent.state === "starting" ? "interrupted" : agent.state,
 		currentTask: undefined,
+		currentRunId: undefined,
+		currentTurnGeneration: undefined,
+		turnGeneration: agent.turnGeneration ?? 0,
+		pendingCompletions: (agent.pendingCompletions ?? [])
+			.slice(-MAX_STORED_COMPLETIONS_PER_AGENT)
+			.map((completion) => ({
+				...completion,
+				task: redactPrivateText(completion.task),
+				output: redactPrivateText(completion.output),
+				error: completion.error ? redactPrivateText(completion.error) : undefined,
+			})),
 		currentTimeoutMs: undefined,
 		currentIdleTimeoutMs: undefined,
 		currentMaxTurns: undefined,
@@ -184,7 +228,10 @@ function sanitizeTermination(report: TurnTerminationReport): TurnTerminationRepo
 function isStoredState(value: unknown): value is StoredState {
 	if (!value || typeof value !== "object") return false;
 	const state = value as { version?: unknown; agents?: unknown };
-	if ((state.version !== 1 && state.version !== STATE_VERSION) || !Array.isArray(state.agents)) {
+	if (
+		(state.version !== 1 && state.version !== 2 && state.version !== STATE_VERSION) ||
+		!Array.isArray(state.agents)
+	) {
 		return false;
 	}
 	return state.agents.every((agent) => {
@@ -208,6 +255,9 @@ function isStoredState(value: unknown): value is StoredState {
 			(record.termination === undefined || isTerminationReport(record.termination)) &&
 			(record.contextTurns === undefined || isNonNegativeInteger(record.contextTurns)) &&
 			(record.contextBytes === undefined || isNonNegativeInteger(record.contextBytes)) &&
+			(record.turnGeneration === undefined || isNonNegativeInteger(record.turnGeneration)) &&
+			(record.pendingCompletions === undefined ||
+				isCompletionOutbox(record.pendingCompletions, record.turnGeneration ?? 0)) &&
 			(record.spawnIdempotencyKey === undefined ||
 				(typeof record.spawnIdempotencyKey === "string" &&
 					record.spawnIdempotencyKey.length > 0 &&
@@ -356,10 +406,59 @@ function isTargetPolicyAudit(value: unknown): boolean {
 	);
 }
 
+function isCompletionOutbox(value: unknown, turnGeneration: number): boolean {
+	if (!Array.isArray(value) || value.length > MAX_STORED_COMPLETIONS_PER_AGENT) return false;
+	const ids = new Set<string>();
+	let previousGeneration = 0;
+	let previousCreatedAt = Number.NEGATIVE_INFINITY;
+	for (const completion of value) {
+		if (!isPersistedCompletion(completion, turnGeneration)) return false;
+		if (ids.has(completion.completionId)) return false;
+		if (completion.generation <= previousGeneration || completion.createdAt <= previousCreatedAt) {
+			return false;
+		}
+		ids.add(completion.completionId);
+		previousGeneration = completion.generation;
+		previousCreatedAt = completion.createdAt;
+	}
+	return true;
+}
+
+function isPersistedCompletion(
+	value: unknown,
+	turnGeneration: number,
+): value is import("./registry.js").PersistedAgentCompletion {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const completion = value as Record<string, unknown>;
+	return (
+		typeof completion.completionId === "string" &&
+		completion.completionId.length > 0 &&
+		completion.completionId.length <= 256 &&
+		typeof completion.runId === "string" &&
+		completion.runId.length > 0 &&
+		completion.runId.length <= 256 &&
+		typeof completion.generation === "number" &&
+		Number.isSafeInteger(completion.generation) &&
+		completion.generation >= 1 &&
+		completion.generation <= turnGeneration &&
+		typeof completion.task === "string" &&
+		typeof completion.output === "string" &&
+		(completion.error === undefined || typeof completion.error === "string") &&
+		typeof completion.createdAt === "number" &&
+		Number.isFinite(completion.createdAt)
+	);
+}
+
 function isAgentTurn(value: unknown): boolean {
 	if (!value || typeof value !== "object") return false;
 	const turn = value as Record<string, unknown>;
 	return (
+		(turn.runId === undefined ||
+			(typeof turn.runId === "string" && turn.runId.length > 0 && turn.runId.length <= 256)) &&
+		(turn.generation === undefined ||
+			(typeof turn.generation === "number" &&
+				Number.isSafeInteger(turn.generation) &&
+				turn.generation >= 1)) &&
 		typeof turn.task === "string" &&
 		typeof turn.output === "string" &&
 		typeof turn.startedAt === "number" &&

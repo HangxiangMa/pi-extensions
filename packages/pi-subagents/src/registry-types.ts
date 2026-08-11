@@ -23,6 +23,8 @@ export type AgentLifecycleState =
 	| "closed";
 
 export interface AgentTurn {
+	runId?: string;
+	generation?: number;
 	task: string;
 	output: string;
 	startedAt: number;
@@ -30,6 +32,16 @@ export interface AgentTurn {
 	exitCode: number;
 	truncated?: boolean;
 	termination?: TurnTerminationReport;
+}
+
+export interface PersistedAgentCompletion {
+	completionId: string;
+	runId: string;
+	generation: number;
+	task: string;
+	output: string;
+	error?: string;
+	createdAt: number;
 }
 
 export interface AgentMailboxMessage {
@@ -64,6 +76,10 @@ export interface ManagedAgent {
 	maxToolCalls?: number;
 	currentMaxToolCalls?: number;
 	currentTask?: string;
+	turnGeneration?: number;
+	currentRunId?: string;
+	currentTurnGeneration?: number;
+	pendingCompletions?: PersistedAgentCompletion[];
 	history: AgentTurn[];
 	error?: string;
 	context?: string;
@@ -98,6 +114,8 @@ export interface AgentRunInspectionSummary {
 	updatedAt: number;
 	historyCount: number;
 	unreadMessages: number;
+	turnGeneration: number;
+	pendingCompletionCount: number;
 }
 
 export interface AgentRunInspectionDetail extends AgentRunInspectionSummary {
@@ -112,6 +130,8 @@ export interface AgentRunInspectionDetail extends AgentRunInspectionSummary {
 	maxToolCalls?: number;
 	currentMaxToolCalls?: number;
 	currentTask?: string;
+	currentRunId?: string;
+	currentTurnGeneration?: number;
 	error?: string;
 	workspaceMode?: "worktree";
 	contextTurns?: number;
@@ -151,11 +171,8 @@ export interface TurnOutcome {
 	telemetry?: TransportTelemetry;
 }
 
-export interface AgentTurnCompletion {
+export interface AgentTurnCompletion extends PersistedAgentCompletion {
 	agent: ManagedAgent;
-	task: string;
-	output: string;
-	error?: string;
 }
 
 export interface AgentRegistryOptions {

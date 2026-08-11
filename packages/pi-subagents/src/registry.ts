@@ -21,6 +21,7 @@ import {
 	DEFAULT_MAX_CONTEXT_BYTES,
 	DEFAULT_MAX_OUTPUT_BYTES,
 	MAX_SUBAGENT_TIMEOUT_MS,
+	MAX_TOOL_MESSAGE_BYTES,
 	truncateUtf8,
 } from "./limits.js";
 import { classifyStructuredOutcome } from "./outcome.js";
@@ -47,6 +48,9 @@ import type { TransportTelemetry } from "./transport-types.js";
 import { type TurnLimits, validateTurnLimits } from "./turn-budget.js";
 
 const DEFAULT_STATEFUL_LIMITS = resolveStatefulLimits();
+const MAX_PENDING_COMPLETIONS_PER_AGENT = 20;
+const INITIAL_PERSISTENCE_RETRY_DELAY_MS = 25;
+const MAX_PERSISTENCE_RETRY_DELAY_MS = 1_000;
 
 export type * from "./registry-types.js";
 
@@ -73,6 +77,8 @@ function validateTurnTimeout(value: number): number {
 
 function clearCurrentTurn(agent: ManagedAgent): void {
 	agent.currentTask = undefined;
+	agent.currentRunId = undefined;
+	agent.currentTurnGeneration = undefined;
 	agent.currentTimeoutMs = undefined;
 	agent.currentIdleTimeoutMs = undefined;
 	agent.currentMaxTurns = undefined;
@@ -86,6 +92,21 @@ function waitAbortError(): Error {
 	return error;
 }
 
+function waitForPersistenceRetry(milliseconds: number, signal: AbortSignal): Promise<void> {
+	if (signal.aborted) return Promise.reject(signal.reason);
+	return new Promise((resolve, reject) => {
+		const onAbort = () => {
+			clearTimeout(timer);
+			reject(signal.reason);
+		};
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, milliseconds);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
 export class AgentRegistry {
 	private readonly agents = new Map<string, ManagedAgent>();
 	private readonly controllers = new Map<string, AbortController>();
@@ -96,6 +117,7 @@ export class AgentRegistry {
 		resolve: (agent: ManagedAgent) => void;
 	}> = [];
 	private changeQueue: Promise<void> = Promise.resolve();
+	private readonly shutdownController = new AbortController();
 	private readonly maxAgents: number;
 	private readonly maxActiveTurns: number;
 	private readonly maxHistoryTurns: number;
@@ -108,6 +130,7 @@ export class AgentRegistry {
 	private readonly idleTtlMs: number;
 	private readonly transport: SubagentTransport;
 	private readonly now: () => number;
+	private lastCompletionAt = 0;
 
 	constructor(
 		transport: SubagentTransport | AgentTurnRunner,
@@ -176,6 +199,9 @@ export class AgentRegistry {
 			}
 			const depth = seen.size - 1;
 			if (cyclic || depth > this.maxDepth) continue;
+			for (const completion of record.pendingCompletions ?? []) {
+				this.lastCompletionAt = Math.max(this.lastCompletionAt, completion.createdAt);
+			}
 			this.agents.set(record.id, {
 				...record,
 				state:
@@ -183,6 +209,12 @@ export class AgentRegistry {
 				rootId,
 				depth,
 				currentTask: undefined,
+				turnGeneration: record.turnGeneration ?? 0,
+				currentRunId: undefined,
+				currentTurnGeneration: undefined,
+				pendingCompletions: (record.pendingCompletions ?? []).map((completion) => ({
+					...completion,
+				})),
 				currentTimeoutMs: undefined,
 				currentIdleTimeoutMs: undefined,
 				currentMaxTurns: undefined,
@@ -286,6 +318,8 @@ export class AgentRegistry {
 			maxToolCalls: input.maxToolCalls,
 			currentMaxToolCalls: input.maxToolCalls,
 			currentTask: task,
+			turnGeneration: 0,
+			pendingCompletions: [],
 			history: [],
 			mailbox: [],
 			context: input.context,
@@ -486,19 +520,30 @@ export class AgentRegistry {
 			const index = this.queue.findIndex((entry) => entry.agent.id === id);
 			if (index >= 0) {
 				const [entry] = this.queue.splice(index, 1);
-				agent.state = "interrupted";
-				clearCurrentTurn(agent);
-				agent.updatedAt = this.now();
-				const completion: AgentTurnCompletion = {
-					agent: this.copy(agent),
-					task: entry.task,
+				const persistedCompletion = {
+					completionId: `completion:${agent.id}:${randomUUID()}`,
+					runId: agent.currentRunId ?? `run:${agent.id}:${randomUUID()}`,
+					generation: agent.currentTurnGeneration ?? agent.turnGeneration ?? 1,
+					task: truncateUtf8(entry.task, 256).text,
 					output: "",
 					error: "Interrupted before execution",
+					createdAt: this.completionCreatedAt(),
+				};
+				agent.state = "interrupted";
+				agent.pendingCompletions = [...(agent.pendingCompletions ?? []), persistedCompletion];
+				clearCurrentTurn(agent);
+				agent.updatedAt = this.now();
+				const persisted = await this.persistTerminalState().then(
+					() => true,
+					() => false,
+				);
+				const completion: AgentTurnCompletion = {
+					...persistedCompletion,
+					agent: this.copy(agent),
 				};
 				entry.resolve(agent);
 				this.running.delete(id);
-				await this.notifyTurnComplete(completion);
-				await this.changed();
+				if (persisted) await this.notifyTurnComplete(completion);
 				return this.copy(agent);
 			}
 		}
@@ -584,6 +629,7 @@ export class AgentRegistry {
 	}
 
 	async shutdown(): Promise<void> {
+		this.shutdownController.abort(new Error("Subagent registry is shutting down"));
 		for (const entry of this.queue.splice(0)) {
 			if (entry.agent.capabilityGrant?.state === "active") {
 				entry.agent.capabilityGrant = revokeCapabilityGrant(
@@ -629,7 +675,7 @@ export class AgentRegistry {
 		} catch (error) {
 			shutdownError = error;
 		}
-		await this.changed();
+		await this.changed(true);
 		if (shutdownError) throw shutdownError;
 	}
 
@@ -666,6 +712,8 @@ export class AgentRegistry {
 			maxToolCalls: agent.maxToolCalls,
 			currentMaxToolCalls: agent.currentMaxToolCalls,
 			currentTask: agent.currentTask,
+			currentRunId: agent.currentRunId,
+			currentTurnGeneration: agent.currentTurnGeneration,
 			error: agent.error,
 			workspaceMode: agent.workspaceMode,
 			contextTurns: agent.contextTurns,
@@ -712,14 +760,60 @@ export class AgentRegistry {
 		return agent ? this.copy(agent) : undefined;
 	}
 
-	markCompletionDelivered(id: string, deliveredAt: number): void {
-		const agent = this.agents.get(id);
-		if (!agent?.telemetry) return;
-		agent.telemetry = {
-			...agent.telemetry,
-			updatedAt: deliveredAt,
-			timing: { ...agent.telemetry.timing, completionDeliveredAt: deliveredAt },
-		};
+	listPendingCompletions(): AgentTurnCompletion[] {
+		return [...this.agents.values()]
+			.flatMap((agent) =>
+				(agent.pendingCompletions ?? []).map((completion) => ({
+					...completion,
+					agent: this.copy(agent),
+				})),
+			)
+			.sort(
+				(left, right) =>
+					left.createdAt - right.createdAt ||
+					left.generation - right.generation ||
+					left.completionId.localeCompare(right.completionId),
+			);
+	}
+
+	async markCompletionDelivered(completionId: string, deliveredAt: number): Promise<void> {
+		const agent = [...this.agents.values()].find((candidate) =>
+			candidate.pendingCompletions?.some((completion) => completion.completionId === completionId),
+		);
+		if (!agent) return;
+		const acknowledged = (agent.pendingCompletions ?? []).find(
+			(completion) => completion.completionId === completionId,
+		);
+		if (!acknowledged) return;
+		agent.pendingCompletions = (agent.pendingCompletions ?? []).filter(
+			(completion) => completion.completionId !== completionId,
+		);
+		if (agent.telemetry) {
+			agent.telemetry = {
+				...agent.telemetry,
+				updatedAt: deliveredAt,
+				timing: { ...agent.telemetry.timing, completionDeliveredAt: deliveredAt },
+			};
+		}
+		agent.updatedAt = Math.max(agent.updatedAt, deliveredAt);
+		try {
+			await this.changed(true);
+		} catch (error) {
+			if (
+				!agent.pendingCompletions?.some(
+					(completion) => completion.completionId === acknowledged.completionId,
+				)
+			) {
+				agent.pendingCompletions = [...(agent.pendingCompletions ?? []), acknowledged].sort(
+					(left, right) => left.createdAt - right.createdAt || left.generation - right.generation,
+				);
+			}
+			if (agent.telemetry?.timing.completionDeliveredAt === deliveredAt) {
+				const { completionDeliveredAt: _discarded, ...timing } = agent.telemetry.timing;
+				agent.telemetry = { ...agent.telemetry, timing };
+			}
+			throw error;
+		}
 	}
 
 	async sweepExpired(): Promise<number> {
@@ -740,6 +834,14 @@ export class AgentRegistry {
 		task: string,
 		limits: TurnLimits & { timeoutMs?: number } = {},
 	): void {
+		if ((agent.pendingCompletions?.length ?? 0) >= MAX_PENDING_COMPLETIONS_PER_AGENT) {
+			throw new Error(
+				`Agent ${agent.id} has ${MAX_PENDING_COMPLETIONS_PER_AGENT} undelivered completions; wait for delivery before another turn`,
+			);
+		}
+		agent.turnGeneration = (agent.turnGeneration ?? 0) + 1;
+		agent.currentTurnGeneration = agent.turnGeneration;
+		agent.currentRunId = `run:${agent.id}:${randomUUID()}`;
 		agent.state = "starting";
 		agent.error = undefined;
 		agent.currentTask = task;
@@ -790,17 +892,30 @@ export class AgentRegistry {
 			agent.state = "failed";
 			agent.error = "Capability grant expired or no longer matches the accepted plan";
 			agent.outcome = classifyStructuredOutcome("failed", "capability-grant-invalid");
-			agent.currentTask = undefined;
-			agent.currentTimeoutMs = undefined;
-			agent.updatedAt = this.now();
-			resolveQueued(agent);
-			this.running.delete(agent.id);
-			void this.notifyTurnComplete({
-				agent: this.copy(agent),
-				task,
+			const persistedCompletion = {
+				completionId: `completion:${agent.id}:${randomUUID()}`,
+				runId: agent.currentRunId ?? `run:${agent.id}:${randomUUID()}`,
+				generation: agent.currentTurnGeneration ?? agent.turnGeneration ?? 1,
+				task: truncateUtf8(task, 256).text,
 				output: "",
-				error: agent.error,
-			}).then(() => this.changed());
+				error: truncateUtf8(agent.error, 512).text,
+				createdAt: this.completionCreatedAt(),
+			};
+			agent.pendingCompletions = [...(agent.pendingCompletions ?? []), persistedCompletion];
+			clearCurrentTurn(agent);
+			agent.updatedAt = this.now();
+			void this.persistTerminalState()
+				.then(() =>
+					this.notifyTurnComplete({
+						...persistedCompletion,
+						agent: this.copy(agent),
+					}),
+				)
+				.catch(() => undefined)
+				.finally(() => {
+					resolveQueued(agent);
+					this.running.delete(agent.id);
+				});
 			return;
 		}
 		const controller = new AbortController();
@@ -808,6 +923,8 @@ export class AgentRegistry {
 		agent.state = "running";
 		agent.updatedAt = this.now();
 		const startedAt = this.now();
+		const runId = agent.currentRunId ?? `run:${agent.id}:${randomUUID()}`;
+		const turnGeneration = agent.currentTurnGeneration ?? agent.turnGeneration ?? 1;
 		const completionKey = `completion:${agent.id}:${randomUUID()}`;
 		const acceptedPlanId = agent.executionPlan?.id;
 		let completionContent = "";
@@ -830,6 +947,8 @@ export class AgentRegistry {
 					? truncateUtf8(outcome.error, this.maxTurnOutputBytes).text
 					: undefined;
 				agent.history.push({
+					runId,
+					generation: turnGeneration,
 					task,
 					output,
 					startedAt,
@@ -925,6 +1044,8 @@ export class AgentRegistry {
 					this.maxTurnOutputBytes,
 				).text;
 				agent.history.push({
+					runId,
+					generation: turnGeneration,
 					task,
 					output: "",
 					startedAt,
@@ -947,12 +1068,16 @@ export class AgentRegistry {
 				return agent;
 			})
 			.finally(async () => {
-				const turnCompletion: AgentTurnCompletion = {
-					agent: this.copy(agent),
-					task,
-					output: completionOutput,
-					error: completionError,
+				const persistedCompletion = {
+					completionId: completionKey,
+					runId,
+					generation: turnGeneration,
+					task: truncateUtf8(task, 256).text,
+					output: truncateUtf8(completionOutput, MAX_TOOL_MESSAGE_BYTES).text,
+					error: completionError ? truncateUtf8(completionError, 512).text : undefined,
+					createdAt: this.completionCreatedAt(),
 				};
+				agent.pendingCompletions = [...(agent.pendingCompletions ?? []), persistedCompletion];
 				if (agent.parentId) {
 					const parent = this.agents.get(agent.parentId);
 					if (parent && parent.state !== "closed") {
@@ -961,12 +1086,19 @@ export class AgentRegistry {
 				}
 				clearCurrentTurn(agent);
 				agent.updatedAt = this.now();
+				const persisted = await this.persistTerminalState().then(
+					() => true,
+					() => false,
+				);
 				this.controllers.delete(agent.id);
+				const turnCompletion: AgentTurnCompletion = {
+					...persistedCompletion,
+					agent: this.copy(agent),
+				};
 				this.running.delete(agent.id);
 				resolveQueued(agent);
 				this.pumpQueue();
-				await this.notifyTurnComplete(turnCompletion);
-				await this.changed();
+				if (persisted) await this.notifyTurnComplete(turnCompletion);
 			});
 	}
 
@@ -1032,11 +1164,22 @@ export class AgentRegistry {
 		return [...this.agents.values()].filter((agent) => agent.state !== "closed").length;
 	}
 
+	private completionCreatedAt(): number {
+		this.lastCompletionAt = Math.max(this.now(), this.lastCompletionAt + 1);
+		return this.lastCompletionAt;
+	}
+
 	private evictExpired(): ManagedAgent[] {
 		const cutoff = this.now() - this.idleTtlMs;
 		const protectedIds = new Set<string>();
 		for (const agent of this.agents.values()) {
-			if (agent.state !== "running" && agent.state !== "starting") continue;
+			if (
+				agent.state !== "running" &&
+				agent.state !== "starting" &&
+				(agent.pendingCompletions?.length ?? 0) === 0
+			) {
+				continue;
+			}
 			let current: ManagedAgent | undefined = agent;
 			while (current) {
 				protectedIds.add(current.id);
@@ -1081,6 +1224,25 @@ export class AgentRegistry {
 		for (const agent of closed.slice(this.maxAgents)) this.agents.delete(agent.id);
 	}
 
+	private async persistTerminalState(): Promise<void> {
+		let failures = 0;
+		for (;;) {
+			try {
+				await this.changed(true);
+				return;
+			} catch (error) {
+				if (this.shutdownController.signal.aborted) throw error;
+				failures++;
+				if (failures === 1) continue;
+				const delay = Math.min(
+					INITIAL_PERSISTENCE_RETRY_DELAY_MS * 2 ** (failures - 2),
+					MAX_PERSISTENCE_RETRY_DELAY_MS,
+				);
+				await waitForPersistenceRetry(delay, this.shutdownController.signal);
+			}
+		}
+	}
+
 	private async notifyTurnComplete(completion: AgentTurnCompletion): Promise<void> {
 		try {
 			await this.options.onTurnComplete?.(completion);
@@ -1089,16 +1251,17 @@ export class AgentRegistry {
 		}
 	}
 
-	private changed(): Promise<void> {
+	private changed(propagateError = false): Promise<void> {
 		const snapshot = this.list(true);
 		const next = this.changeQueue.then(async () => {
 			try {
 				await this.options.onChange?.(snapshot);
-			} catch {
-				// Persistence is best-effort; lifecycle operations must remain usable if storage fails.
+			} catch (error) {
+				if (propagateError) throw error;
+				// Non-terminal persistence remains best-effort so lifecycle controls stay usable.
 			}
 		});
-		this.changeQueue = next;
+		this.changeQueue = next.catch(() => undefined);
 		return next;
 	}
 
@@ -1115,6 +1278,8 @@ export class AgentRegistry {
 			updatedAt: agent.updatedAt,
 			historyCount: agent.history.length,
 			unreadMessages,
+			turnGeneration: agent.turnGeneration ?? 0,
+			pendingCompletionCount: agent.pendingCompletions?.length ?? 0,
 		};
 	}
 
@@ -1126,6 +1291,9 @@ export class AgentRegistry {
 			currentMailboxMessageIds: agent.currentMailboxMessageIds
 				? [...agent.currentMailboxMessageIds]
 				: undefined,
+			pendingCompletions: (agent.pendingCompletions ?? []).map((completion) => ({
+				...completion,
+			})),
 			history: agent.history.map((turn) => ({ ...turn })),
 			mailbox: agent.mailbox.map((message) => ({ ...message })),
 			contract: agent.contract ? structuredClone(agent.contract) : undefined,

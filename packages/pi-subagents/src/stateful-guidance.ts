@@ -31,6 +31,6 @@ export function createSpawnPromptGuidelines(
 		"Add another subagent_spawn only for truly independent work with safe workspace concurrency.",
 		noLocalWorkGuidance,
 		'Consume and synthesize available subagent_spawn completion messages; use subagent_manage with action "interrupt" or "close" for agents that are no longer needed.',
-		'Completion from subagent_spawn is delivered automatically. Do not poll with subagent_manage action "list" or subagent_mailbox action "read", repeatedly check progress, or duplicate the delegated work.',
+		'Completion from subagent_spawn is delivered automatically. Do not poll with subagent_inspect or subagent_mailbox action "read", repeatedly check progress, or duplicate the delegated work.',
 	];
 }

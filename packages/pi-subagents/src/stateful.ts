@@ -52,7 +52,7 @@ import {
 	hashSpawnRequest,
 	MAX_SPAWN_IDEMPOTENCY_KEY_LENGTH,
 } from "./spawn-idempotency.js";
-import { formatStatefulAgentLine, summarizeStatefulAgent } from "./stateful-agent-view.js";
+import { summarizeStatefulAgent } from "./stateful-agent-view.js";
 import { resolveCompletionDelivery, resolveStatefulTransportKind } from "./stateful-config.js";
 import { createSpawnPromptGuidelines } from "./stateful-guidance.js";
 import {
@@ -300,10 +300,16 @@ export function registerStatefulSubagents(
 					const reason = error instanceof Error ? error.message : String(error);
 					ctx.ui.notify(`Subagent completion delivery failed: ${reason}`, "warning");
 				},
-				onDelivered: (completions, deliveredAt) => {
+				onAcknowledged: (completions, deliveredAt) => {
 					if (generation !== runtimeGeneration) return;
 					for (const completion of completions) {
-						nextRegistry.markCompletionDelivered(completion.agent.id, deliveredAt);
+						void nextRegistry
+							.markCompletionDelivered(completion.completionId, deliveredAt)
+							.catch((error: unknown) => {
+								if (!ctx.hasUI || generation !== runtimeGeneration) return;
+								const reason = error instanceof Error ? error.message : String(error);
+								ctx.ui.notify(`Subagent completion acknowledgement failed: ${reason}`, "warning");
+							});
 					}
 				},
 			});
@@ -378,6 +384,9 @@ export function registerStatefulSubagents(
 			registry = nextRegistry;
 			persistence = sessionPersistence;
 			completionBroker = sessionBroker;
+			for (const completion of nextRegistry.listPendingCompletions()) {
+				sessionBroker.enqueue(completion);
+			}
 			runtimeLimits = nextLimits;
 			refreshSpawnToolRegistration?.();
 			const sweepEveryMs = Math.max(
@@ -400,6 +409,10 @@ export function registerStatefulSubagents(
 
 	pi.on("agent_start", () => {
 		completionBroker?.onParentTurnStart();
+	});
+
+	pi.on("context", (event) => {
+		completionBroker?.onParentContext(event.messages);
 	});
 
 	pi.on("agent_settled", () => {
@@ -835,8 +848,8 @@ export function registerStatefulSubagents(
 		name: "subagent_manage",
 		label: "Manage Subagents",
 		description:
-			"List retained subagents through the compatibility route, interrupt active work while keeping an agent reusable, or close agents and release their resources. Prefer subagent_inspect when the whole activated capability must be read-only.",
-		promptSnippet: "List or control retained detached subagents",
+			"Interrupt active work while keeping an agent reusable, or close agents and release their resources. Use subagent_inspect for every read-only list, detail, status, and diagnostic operation.",
+		promptSnippet: "Interrupt or close retained detached subagents",
 		parameters: ManageParamsSchema,
 		...createStatefulToolRenderer("manage"),
 		async execute(_id, params, signal): Promise<StatefulActionToolResult> {
@@ -848,20 +861,6 @@ export function registerStatefulSubagents(
 				return value;
 			};
 			const operation = validateManageParams(params);
-			if (operation.action === "list") {
-				const agents = ownedRegistry.list(operation.includeClosed);
-				return {
-					content: [
-						{
-							type: "text",
-							text: agents.length
-								? agents.map(formatStatefulAgentLine).join("\n")
-								: "No stateful subagents.",
-						},
-					],
-					details: { agents: agents.map(summarizeStatefulAgent) },
-				};
-			}
 			const agentId = operation.agentId;
 			if (operation.action === "interrupt") {
 				if (operation.subtree) {

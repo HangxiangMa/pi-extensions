@@ -97,8 +97,55 @@ test("AgentRegistry preserves queue and transport timing without persisting prog
 	assert.equal(telemetry?.timing.queuedAt, 12);
 	assert.equal(telemetry?.timing.readyAt, 20);
 	assert.equal(telemetry?.timing.settledAt, 30);
-	registry.markCompletionDelivered(spawned.id, 40);
+	const completionId = registry.listPendingCompletions()[0]?.completionId;
+	assert.ok(completionId);
+	await registry.markCompletionDelivered(completionId, 40);
 	assert.equal(registry.getInspection(spawned.id)?.telemetry?.timing.completionDeliveredAt, 40);
+});
+
+test("AgentRegistry retains ordered completion identities until exact acknowledgement", async () => {
+	const delivered: Array<{ completionId: string; runId: string; generation: number }> = [];
+	const registry = new AgentRegistry(
+		async (_agent, task) => ({ output: `done:${task}`, exitCode: 0 }),
+		{
+			onTurnComplete: (completion) => {
+				delivered.push({
+					completionId: completion.completionId,
+					runId: completion.runId,
+					generation: completion.generation,
+				});
+			},
+		},
+	);
+	const spawned = await registry.spawn({ agent: "scout", task: "first", cwd: process.cwd() });
+	await registry.wait(spawned.id, 100);
+	await registry.followUp(spawned.id, "second");
+	await registry.wait(spawned.id, 100);
+
+	const pending = registry.listPendingCompletions();
+	assert.equal(pending.length, 2);
+	assert.deepEqual(
+		pending.map((completion) => completion.generation),
+		[1, 2],
+	);
+	assert.deepEqual(
+		delivered,
+		pending.map(({ completionId, runId, generation }) => ({
+			completionId,
+			runId,
+			generation,
+		})),
+	);
+	assert.notEqual(pending[0]?.completionId, pending[1]?.completionId);
+	assert.notEqual(pending[0]?.runId, pending[1]?.runId);
+
+	await registry.markCompletionDelivered(pending[1].completionId, 40);
+	assert.deepEqual(
+		registry.listPendingCompletions().map((completion) => completion.completionId),
+		[pending[0].completionId],
+	);
+	await registry.markCompletionDelivered("completion:unknown", 50);
+	assert.equal(registry.listPendingCompletions().length, 1);
 });
 
 test("AgentRegistry exposes metadata-only inspection snapshots", async () => {
@@ -129,6 +176,8 @@ test("AgentRegistry exposes metadata-only inspection snapshots", async () => {
 		updatedAt: listed[0].updatedAt,
 		historyCount: 0,
 		unreadMessages: 1,
+		turnGeneration: 1,
+		pendingCompletionCount: 0,
 	});
 	assert.doesNotMatch(JSON.stringify(listed), /private/);
 

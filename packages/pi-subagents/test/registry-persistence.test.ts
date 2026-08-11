@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
 import { AgentPersistence } from "../src/persistence.js";
+import { AgentRegistry } from "../src/registry.js";
+import { CompletionDeliveryBroker } from "../src/stateful.js";
 import { record } from "./registry-test-helpers.js";
 
 test("AgentPersistence atomically saves, restores, redacts, deletes, and quarantines bad state", async () => {
@@ -70,6 +72,25 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 					createdAt: 1,
 				},
 			],
+			turnGeneration: 2,
+			pendingCompletions: [
+				{
+					completionId: "completion:one",
+					runId: "run:one",
+					generation: 1,
+					task: "<private>completion-task</private>visible task",
+					output: "[subagent-private] completion-output\nvisible completion",
+					createdAt: 2,
+				},
+				{
+					completionId: "completion:two",
+					runId: "run:two",
+					generation: 2,
+					task: "second",
+					output: "done",
+					createdAt: 3,
+				},
+			],
 			history: [
 				{
 					task: "task",
@@ -104,6 +125,32 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	assert.equal(restoredState?.contextBytes, 128);
 	assert.equal(restoredState?.telemetry, undefined);
 	assert.equal(restoredState?.structuredResult?.summary, "ephemeral");
+	assert.equal(restoredState?.turnGeneration, 2);
+	assert.deepEqual(
+		restoredState?.pendingCompletions?.map((completion) => ({
+			completionId: completion.completionId,
+			runId: completion.runId,
+			generation: completion.generation,
+			task: completion.task,
+			output: completion.output,
+		})),
+		[
+			{
+				completionId: "completion:one",
+				runId: "run:one",
+				generation: 1,
+				task: "[private content omitted]visible task",
+				output: "visible completion",
+			},
+			{
+				completionId: "completion:two",
+				runId: "run:two",
+				generation: 2,
+				task: "second",
+				output: "done",
+			},
+		],
+	);
 	assert.equal(
 		restoredState?.termination?.checkpoint.assistantNotes[0],
 		"[private content omitted]visible checkpoint",
@@ -211,6 +258,84 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 			name.startsWith(`${path.basename(persistence.filePath)}.invalid-`),
 		),
 	);
+});
+
+test("AgentPersistence trims history instead of dropping a root with pending completion", async () => {
+	const dir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-completion-priority-"));
+	const persistence = new AgentPersistence("session", { stateDir: dir });
+	await persistence.save([
+		record({
+			turnGeneration: 1,
+			pendingCompletions: [
+				{
+					completionId: "completion:priority:1",
+					runId: "run:priority:1",
+					generation: 1,
+					task: "deliver",
+					output: "result",
+					createdAt: 2,
+				},
+			],
+			history: [
+				{
+					task: "oversized history",
+					output: "x".repeat(6 * 1024 * 1024),
+					startedAt: 1,
+					completedAt: 2,
+					exitCode: 0,
+				},
+			],
+		}),
+	]);
+	const restored = persistence.load()[0];
+	assert.equal(restored?.id, "sa_test");
+	assert.equal(restored?.history.length, 0);
+	assert.equal(restored?.pendingCompletions?.[0]?.completionId, "completion:priority:1");
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("restored completion outbox delivery does not rerun retained agent work", async () => {
+	const dir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-completion-restore-"));
+	const persistence = new AgentPersistence("session", { stateDir: dir });
+	await persistence.save([
+		record({
+			turnGeneration: 1,
+			pendingCompletions: [
+				{
+					completionId: "completion:restore:1",
+					runId: "run:restore:1",
+					generation: 1,
+					task: "restore",
+					output: "restored output",
+					createdAt: 2,
+				},
+			],
+		}),
+	]);
+	let turns = 0;
+	const registry = new AgentRegistry(async () => {
+		turns++;
+		return { output: "unexpected", exitCode: 0 };
+	});
+	registry.restore(persistence.load());
+	const sent: Array<{ message: Record<string, unknown>; options: Record<string, unknown> }> = [];
+	const broker = new CompletionDeliveryBroker(
+		{
+			sendMessage(message: Record<string, unknown>, options: Record<string, unknown>) {
+				sent.push({ message, options });
+			},
+		} as never,
+		{ isIdle: () => true, hasPendingMessages: () => false },
+		"next-turn",
+	);
+	for (const completion of registry.listPendingCompletions()) broker.enqueue(completion);
+	broker.flush();
+	assert.equal(turns, 0);
+	assert.equal(sent.length, 1);
+	assert.match(String(sent[0]?.message.content), /Completion ID: completion:restore:1/);
+	assert.match(String(sent[0]?.message.content), /restored output/);
+	broker.close();
+	rmSync(dir, { recursive: true, force: true });
 });
 
 test("AgentPersistence restores in-flight work as interrupted without replay", async () => {
