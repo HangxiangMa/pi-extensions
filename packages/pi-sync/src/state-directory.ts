@@ -22,6 +22,14 @@ interface StateDirectoryGuard {
 	throwIfCompromised: () => void;
 }
 
+interface SharedStateDirectoryGuard {
+	guard: Promise<StateDirectoryGuard>;
+	users: number;
+	closing?: Promise<void>;
+}
+
+const sharedStateDirectoryGuards = new Map<string, SharedStateDirectoryGuard>();
+
 export function stateDir() {
 	const roots = inspectStateRoots();
 	if (roots.canonical) return canonicalStateDir();
@@ -40,7 +48,9 @@ export function stateDirectoryMigrationNotice() {
 }
 
 export async function withStateDirectoryAccess<T>(fn: () => Promise<T>): Promise<T> {
-	return runWithStateDirectoryGuard(await acquireStateDirectoryGuard(), fn);
+	const roots = inspectStateRoots();
+	if (!roots.legacy) return fn();
+	return runWithStateDirectoryGuard(await acquireSharedStateDirectoryGuard(), fn);
 }
 
 export async function migrateLegacyStateDirectory(): Promise<StateDirectoryPreparation> {
@@ -85,6 +95,50 @@ export async function migrateLegacyStateDirectory(): Promise<StateDirectoryPrepa
 			message: `Migrated pi-sync state from ${legacyStateDir()} to ${canonicalStateDir()}.`,
 		};
 	});
+}
+
+async function acquireSharedStateDirectoryGuard(): Promise<StateDirectoryGuard> {
+	const key = migrationLockPath();
+	for (;;) {
+		let shared = sharedStateDirectoryGuards.get(key);
+		if (shared?.closing) {
+			await shared.closing;
+			continue;
+		}
+		if (!shared) {
+			shared = { guard: acquireStateDirectoryGuard(), users: 0 };
+			sharedStateDirectoryGuards.set(key, shared);
+		}
+		shared.users += 1;
+		let guard: StateDirectoryGuard;
+		try {
+			guard = await shared.guard;
+		} catch (error) {
+			if (sharedStateDirectoryGuards.get(key) === shared) {
+				sharedStateDirectoryGuards.delete(key);
+			}
+			throw error;
+		}
+		let released = false;
+		return {
+			throwIfCompromised: guard.throwIfCompromised,
+			release: async () => {
+				if (released) return;
+				released = true;
+				shared.users -= 1;
+				if (shared.users > 0) return;
+				const closing = guard.release();
+				shared.closing = closing;
+				try {
+					await closing;
+				} finally {
+					if (sharedStateDirectoryGuards.get(key) === shared) {
+						sharedStateDirectoryGuards.delete(key);
+					}
+				}
+			},
+		};
+	}
 }
 
 async function acquireStateDirectoryGuard(): Promise<StateDirectoryGuard> {
