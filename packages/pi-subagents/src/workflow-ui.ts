@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { DelegationWorkflow } from "./settings.js";
+import type { DelegationWorkflow } from "./settings/inspection.js";
 
 export async function showWorkflowPreview(
 	ctx: ExtensionCommandContext,

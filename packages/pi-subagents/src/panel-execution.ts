@@ -1,6 +1,6 @@
 import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { AgentConfig, AgentScope, SubagentThinkingLevel } from "./agents.js";
+import type { AgentConfig, AgentScope, SubagentThinkingLevel } from "./agents/types.js";
 import { panelReviewStatus, panelSynthesisStatus, startSubagentStatus } from "./blocking-status.js";
 import { issueCapabilityGrant, revokeCapabilityGrant } from "./capability-grant.js";
 import type { ResolvedSubagentTarget } from "./cwd-policy.js";

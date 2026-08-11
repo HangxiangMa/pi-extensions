@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { projectAgentRecords } from "./agent-projection.js";
-import { isThinkingLevel } from "./agents.js";
+import { isThinkingLevel } from "./agents/types.js";
 import { isCapabilityGrant, revokeCapabilityGrant } from "./capability-grant.js";
 import { redactPrivateText } from "./context.js";
 import { normalizeDelegationContract } from "./delegation-contract.js";

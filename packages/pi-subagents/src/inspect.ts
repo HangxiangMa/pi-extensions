@@ -6,13 +6,13 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
-import {
-	type AgentConfig,
-	type AgentScope,
-	type ConsultationCwdPolicy,
-	type DelegationCwdPolicy,
-	discoverAgents,
-} from "./agents.js";
+import { discoverAgents } from "./agents/discovery.js";
+import type {
+	AgentConfig,
+	AgentScope,
+	ConsultationCwdPolicy,
+	DelegationCwdPolicy,
+} from "./agents/types.js";
 import { projectCapabilityManifest } from "./capabilities.js";
 import { resolveConsultTools } from "./consult-policy.js";
 import { buildContextSnapshot, type ContextMode } from "./context.js";
@@ -21,6 +21,7 @@ import { DEFAULT_MAX_CONTEXT_BYTES } from "./limits.js";
 import { resolvePiInvocation } from "./pi-invocation.js";
 import type { AgentRunInspectionDetail, AgentRunInspectionSummary } from "./registry.js";
 import { boundedPrivateText, boundText, safeDisplayPath, safeTerminalLine } from "./safe-text.js";
+import { resolveDelegationWorkflow } from "./settings/inspection.js";
 import {
 	inspectBlockingParallelLimitSettings,
 	inspectCompletionDeliverySettings,
@@ -30,7 +31,6 @@ import {
 	inspectStatefulLimitSettings,
 	inspectStatefulTransportSettings,
 	inspectSubagentSettings,
-	resolveDelegationWorkflow,
 } from "./settings.js";
 import type { StatefulSubagentRuntimeStatus } from "./stateful.js";
 import type { WorkItemLedgerSnapshot } from "./work-item-ledger.js";

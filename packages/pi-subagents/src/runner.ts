@@ -6,7 +6,12 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import type { SchedulingDecision } from "./adaptive-scheduler.js";
-import type { AgentConfig, AgentScope, AgentSource, SubagentThinkingLevel } from "./agents.js";
+import type {
+	AgentConfig,
+	AgentScope,
+	AgentSource,
+	SubagentThinkingLevel,
+} from "./agents/types.js";
 import { type CapabilityGrant, revokeCapabilityGrant } from "./capability-grant.js";
 import type { TargetPolicyAudit } from "./cwd-policy.js";
 import type { DelegationContract } from "./delegation-contract.js";

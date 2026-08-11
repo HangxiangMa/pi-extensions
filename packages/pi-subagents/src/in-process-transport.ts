@@ -7,10 +7,11 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { type AgentConfig, discoverAgents, type SubagentThinkingLevel } from "./agents.js";
+import { discoverAgents } from "./agents/discovery.js";
+import type { AgentConfig, SubagentThinkingLevel } from "./agents/types.js";
 import { redactPrivateText } from "./context.js";
 import { appendDelegationContract } from "./delegation-contract.js";
-import { resolveDefaultSubagentTimeoutMs } from "./execution.js";
+import { resolveDefaultSubagentTimeoutMs } from "./execution/runtime-policy.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, DEFAULT_MAX_OUTPUT_BYTES, truncateUtf8 } from "./limits.js";
 import { resolvePiPromptResources } from "./prompt-resources.js";
 import type { AgentTurn, ManagedAgent, TurnOutcome } from "./registry.js";

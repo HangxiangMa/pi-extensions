@@ -14,14 +14,13 @@ import {
 	type ExtensionAPI,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import {
-	type ConsultationCwdPolicy,
-	type ConsultResourcePolicy,
-	type DelegationCwdPolicy,
-	discoverAgentCatalog,
-	formatAgentCatalog,
-	type SubagentSettings,
-} from "./agents.js";
+import { discoverAgentCatalog, formatAgentCatalog } from "./agents/catalog.js";
+import type {
+	ConsultationCwdPolicy,
+	ConsultResourcePolicy,
+	DelegationCwdPolicy,
+	SubagentSettings,
+} from "./agents/types.js";
 import { registerSubagentAutomation } from "./automation.js";
 import { registerSubagentConfigCommand, registerSubagentConfigLifecycle } from "./config-ui.js";
 import { registerSubagentConsult } from "./consult.js";
@@ -256,7 +255,7 @@ function appendAgentCatalog(baseDescription: string, catalog: string): string {
 	return catalog ? `${baseDescription}\n\n${catalog}` : baseDescription;
 }
 
-export { parsePositiveInteger } from "./execution.js";
+export { parsePositiveInteger } from "./execution/runtime-policy.js";
 export { formatTokens, formatUsageStats } from "./render.js";
 export { buildPiArgs } from "./runner.js";
 export {

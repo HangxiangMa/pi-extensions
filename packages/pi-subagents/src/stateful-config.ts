@@ -1,4 +1,4 @@
-import type { CompletionDelivery, SubagentTransportKind } from "./agents.js";
+import type { CompletionDelivery, SubagentTransportKind } from "./agents/types.js";
 
 export function resolveStatefulTransportKind(
 	value: SubagentTransportKind | undefined,

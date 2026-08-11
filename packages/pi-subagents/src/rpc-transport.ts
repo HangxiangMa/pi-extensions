@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RpcSessionState } from "@earendil-works/pi-coding-agent";
-import { type AgentConfig, discoverAgents, type SubagentSettings } from "./agents.js";
+import { discoverAgents } from "./agents/discovery.js";
+import type { AgentConfig, SubagentSettings } from "./agents/types.js";
 import {
 	buildCurrentTurnPrompt,
 	type ParentRuntimeSnapshot,

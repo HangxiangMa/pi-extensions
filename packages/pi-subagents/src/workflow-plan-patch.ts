@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import type { AgentConfig } from "./agents.js";
+import type { AgentConfig } from "./agents/types.js";
 import {
 	parseAutomationRequest,
 	parseWorkflowPlan,

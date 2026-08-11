@@ -9,7 +9,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
-import { discoverAgents, getBuiltInAgent, type SubagentSettings } from "./agents.js";
+import { getBuiltInAgent } from "./agents/built-ins.js";
+import { discoverAgents } from "./agents/discovery.js";
+import type { SubagentSettings } from "./agents/types.js";
 import {
 	AutomationRequestSchema,
 	parseAutomationRequest,
@@ -39,7 +41,10 @@ import {
 	type SubagentDetails,
 } from "./runner.js";
 import { boundedPrivateText } from "./safe-text.js";
-import { DEFAULT_DELEGATION_CWD_POLICY, resolveBlockingMaxParallelTasks } from "./settings.js";
+import {
+	DEFAULT_DELEGATION_CWD_POLICY,
+	resolveBlockingMaxParallelTasks,
+} from "./settings/inspection.js";
 import {
 	type CompiledWorkflowPlan,
 	compileWorkflowPlan,

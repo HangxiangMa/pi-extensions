@@ -1,4 +1,4 @@
-import type { CompletionDelivery } from "./agents.js";
+import type { CompletionDelivery } from "./agents/types.js";
 
 export function createSpawnPromptGuidelines(
 	completionDelivery: CompletionDelivery,

@@ -1,4 +1,4 @@
-import type { AgentConfig, SubagentThinkingLevel } from "./agents.js";
+import type { AgentConfig, SubagentThinkingLevel } from "./agents/types.js";
 import { DEFAULT_MAX_OUTPUT_BYTES } from "./limits.js";
 import type { ManagedAgent, TurnOutcome } from "./registry.js";
 import { boundedPrivateText } from "./safe-text.js";

@@ -1,9 +1,5 @@
-import {
-	type AgentConfig,
-	discoverAgents,
-	type SubagentSettings,
-	type SubagentThinkingLevel,
-} from "./agents.js";
+import { discoverAgents } from "./agents/discovery.js";
+import type { AgentConfig, SubagentSettings, SubagentThinkingLevel } from "./agents/types.js";
 import { resolvePiPromptResources } from "./prompt-resources.js";
 import type { ManagedAgent, TurnOutcome } from "./registry.js";
 import { getResultFinalOutput, runSingleAgent, type SubagentDetails } from "./runner.js";

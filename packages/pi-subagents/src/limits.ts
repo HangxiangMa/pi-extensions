@@ -8,6 +8,7 @@ export const DEFAULT_MAX_PARALLEL_TASKS = 8;
 export const MAX_CONFIGURABLE_PARALLEL_TASKS = 64;
 export const MAX_BLOCKING_PARALLEL_CONCURRENCY = 4;
 export const DEFAULT_MAX_MESSAGES = 200;
+export const MAX_TOOL_MESSAGE_BYTES = 2 * 1024;
 export const TRUNCATION_MARKER = "\n… [truncated by pi-subagents]";
 export const TAIL_TRUNCATION_MARKER = "… [truncated by pi-subagents]\n";
 

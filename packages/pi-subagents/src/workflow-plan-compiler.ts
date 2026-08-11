@@ -2,7 +2,7 @@ import {
 	type DelegationAdmissionDecision,
 	evaluateDelegationAdmission,
 } from "./admission-policy.js";
-import type { AgentConfig } from "./agents.js";
+import type { AgentConfig } from "./agents/types.js";
 import type { AutomationRequest, WorkflowPlan, WorkflowPlanTask } from "./automation-contract.js";
 import { MAX_AUTOMATION_ITEMS, workflowPlanIdentity } from "./automation-contract.js";
 import { routeByCapability } from "./capability-router.js";

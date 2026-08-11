@@ -2,20 +2,21 @@
  * Stateful registration remains one lifecycle owner so session replacement, persistence,
  * capability revocation, workspace cleanup, and completion delivery cannot reorder.
  */
+
 import { randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { discoverAgents } from "./agents/discovery.js";
 import {
 	type AgentScope,
 	type CompletionDelivery,
-	discoverAgents,
 	isThinkingLevel,
 	type SubagentRuntimeSettings,
 	type SubagentSettings,
 	type SubagentTransportKind,
 	THINKING_LEVELS,
-} from "./agents.js";
+} from "./agents/types.js";
 import { issueCapabilityGrant } from "./capability-grant.js";
 import { CompletionDeliveryBroker } from "./completion-delivery.js";
 import { buildContextSnapshot, type ContextMode, redactPrivateText } from "./context.js";
@@ -26,9 +27,14 @@ import {
 	targetPolicyAudit,
 } from "./cwd-policy.js";
 import { DelegationContractSchema, normalizeDelegationContract } from "./delegation-contract.js";
-import { assertSubagentDepthAllowed } from "./execution.js";
+import { assertSubagentDepthAllowed } from "./execution/runtime-policy.js";
 import type { ChildSessionFactory, ParentRuntimeSnapshot } from "./in-process-transport.js";
-import { DEFAULT_MAX_CONTEXT_BYTES, MAX_SUBAGENT_TIMEOUT_MS, truncateUtf8 } from "./limits.js";
+import {
+	DEFAULT_MAX_CONTEXT_BYTES,
+	MAX_SUBAGENT_TIMEOUT_MS,
+	MAX_TOOL_MESSAGE_BYTES,
+	truncateUtf8,
+} from "./limits.js";
 import { AgentPersistence } from "./persistence.js";
 import {
 	AgentRegistry,
@@ -39,12 +45,14 @@ import {
 import { SUBAGENT_RESULT_FORMATS, type SubagentResultFormat } from "./result-contract.js";
 import { buildRetainedSemanticState } from "./retained-semantic-state.js";
 import { evaluateSemanticCompatibility } from "./semantic-snapshot.js";
-import { DEFAULT_DELEGATION_CWD_POLICY, readSubagentSettings } from "./settings.js";
+import { DEFAULT_DELEGATION_CWD_POLICY } from "./settings/inspection.js";
+import { readSubagentSettings } from "./settings.js";
 import {
 	assertSpawnIdempotencyKey,
 	hashSpawnRequest,
 	MAX_SPAWN_IDEMPOTENCY_KEY_LENGTH,
 } from "./spawn-idempotency.js";
+import { formatStatefulAgentLine, summarizeStatefulAgent } from "./stateful-agent-view.js";
 import { resolveCompletionDelivery, resolveStatefulTransportKind } from "./stateful-config.js";
 import { createSpawnPromptGuidelines } from "./stateful-guidance.js";
 import {
@@ -119,8 +127,6 @@ const StatefulTurnLimitFields = {
 		}),
 	),
 };
-const MAX_TOOL_MESSAGE_BYTES = 2 * 1024;
-
 export interface StatefulSubagentDependencies {
 	blockingEnabled?: boolean;
 	createInProcessSession?: ChildSessionFactory;
@@ -848,10 +854,12 @@ export function registerStatefulSubagents(
 					content: [
 						{
 							type: "text",
-							text: agents.length ? agents.map(formatLine).join("\n") : "No stateful subagents.",
+							text: agents.length
+								? agents.map(formatStatefulAgentLine).join("\n")
+								: "No stateful subagents.",
 						},
 					],
-					details: { agents: agents.map(summarizeAgent) },
+					details: { agents: agents.map(summarizeStatefulAgent) },
 				};
 			}
 			const agentId = operation.agentId;
@@ -862,8 +870,8 @@ export function registerStatefulSubagents(
 					return {
 						content: [{ type: "text", text: `Interrupted ${agents.length} active agent(s).` }],
 						details: {
-							agent: summarizeAgent(ownedAgent(agentId)),
-							agents: agents.map(summarizeAgent),
+							agent: summarizeStatefulAgent(ownedAgent(agentId)),
+							agents: agents.map(summarizeStatefulAgent),
 						},
 					};
 				}
@@ -890,8 +898,8 @@ export function registerStatefulSubagents(
 				return {
 					content: [{ type: "text", text: `Closed ${agents.length} agent(s).` }],
 					details: {
-						agent: summarizeAgent(ownedAgent(agentId)),
-						agents: agents.map(summarizeAgent),
+						agent: summarizeStatefulAgent(ownedAgent(agentId)),
+						agents: agents.map(summarizeStatefulAgent),
 					},
 				};
 			}
@@ -970,95 +978,6 @@ export function resolveSpawnContextMode(
 	return normalizeContextMode(value);
 }
 
-export function formatStatefulAgentLine(agent: ManagedAgent): string {
-	const elapsedSeconds = Math.max(0, Math.floor((Date.now() - agent.updatedAt) / 1000));
-	const actions =
-		agent.state === "running" || agent.state === "starting"
-			? "interrupt, close"
-			: agent.state === "closed"
-				? "inspect"
-				: "send, close";
-	const task = agent.currentTask ? ` — ${sanitizeStatusLine(agent.currentTask, 80)}` : "";
-	const unread = agent.mailbox.filter((message) => !message.readAt).length;
-	const indent = "  ".repeat(agent.depth);
-	const thinking = agent.thinkingLevel ? ` thinking:${agent.thinkingLevel}` : "";
-	const timeout = agent.currentTimeoutMs ?? agent.timeoutMs;
-	const timeoutText = timeout ? ` timeout:${timeout}ms` : "";
-	const idleTimeout = agent.currentIdleTimeoutMs ?? agent.idleTimeoutMs;
-	const idleText = idleTimeout ? ` idle:${idleTimeout}ms` : "";
-	const maxTurns = agent.currentMaxTurns ?? agent.maxTurns;
-	const turnsText = maxTurns ? ` turns:${maxTurns}` : "";
-	const maxToolCalls = agent.currentMaxToolCalls ?? agent.maxToolCalls;
-	const toolsText = maxToolCalls ? ` tools:${maxToolCalls}` : "";
-	const transport = agent.telemetry?.transport ? ` transport:${agent.telemetry.transport}` : "";
-	const phase = agent.telemetry?.phase ? ` phase:${agent.telemetry.phase}` : "";
-	const queued = agent.telemetry?.queuePosition ? ` queue:${agent.telemetry.queuePosition}` : "";
-	return `${indent}${sanitizeStatusLine(agent.id, 128)} ${sanitizeStatusLine(agent.agent, 128)} ${agent.state} ${elapsedSeconds}s${thinking}${timeoutText}${idleText}${turnsText}${toolsText}${transport}${phase}${queued} unread:${unread} [${actions}]${task}`;
-}
-
-function sanitizeStatusLine(value: string, maxLength: number): string {
-	return (
-		value
-			.slice(0, maxLength)
-			// biome-ignore lint/suspicious/noControlCharactersInRegex: Escape untrusted terminal controls.
-			.replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
-			.replace(/\s+/gu, " ")
-			.trim()
-	);
-}
-
-function formatLine(agent: ManagedAgent): string {
-	return formatStatefulAgentLine(agent);
-}
-
-function summarizeAgent(agent: ManagedAgent) {
-	return {
-		id: agent.id,
-		agent: agent.agent,
-		parentId: agent.parentId,
-		rootId: agent.rootId,
-		depth: agent.depth,
-		children: [...agent.children],
-		state: agent.state,
-		createdAt: agent.createdAt,
-		updatedAt: agent.updatedAt,
-		cwd: agent.cwd,
-		workspaceMode: agent.workspaceMode ?? "shared",
-		thinkingLevel: agent.thinkingLevel,
-		timeoutMs: agent.timeoutMs,
-		currentTimeoutMs: agent.currentTimeoutMs,
-		idleTimeoutMs: agent.idleTimeoutMs,
-		currentIdleTimeoutMs: agent.currentIdleTimeoutMs,
-		maxTurns: agent.maxTurns,
-		currentMaxTurns: agent.currentMaxTurns,
-		maxToolCalls: agent.maxToolCalls,
-		currentMaxToolCalls: agent.currentMaxToolCalls,
-		currentTask: agent.currentTask
-			? truncateUtf8(agent.currentTask, MAX_TOOL_MESSAGE_BYTES).text
-			: undefined,
-		historyCount: agent.history.length,
-		unreadMessages: agent.mailbox.filter((message) => !message.readAt).length,
-		context: {
-			turns: agent.contextTurns ?? 0,
-			sources: agent.contextSourceIds?.length ?? 0,
-			bytes: agent.contextBytes ?? 0,
-			truncated: agent.contextTruncated === true,
-		},
-		resultFormat: agent.resultFormat ?? "text",
-		structuredResult: agent.structuredResult,
-		termination: agent.termination,
-		outcome: agent.outcome,
-		executionPlan: agent.executionPlan,
-		capabilityGrant: agent.capabilityGrant,
-		semanticCompatibility: agent.semanticCompatibility,
-		semanticSnapshotDigest: agent.semanticSnapshot?.digest,
-		telemetry: agent.telemetry,
-		error: agent.error ? truncateUtf8(agent.error, MAX_TOOL_MESSAGE_BYTES).text : undefined,
-		target: agent.target,
-		policy: agent.policy,
-	};
-}
-
 async function cleanupClosedWorkspaces(
 	registry: AgentRegistry,
 	isolatedAgents: Map<string, string>,
@@ -1078,7 +997,7 @@ function appendAgentCatalog(baseDescription: string, catalog: string): string {
 function result(agent: ManagedAgent, text: string) {
 	return {
 		content: [{ type: "text" as const, text }],
-		details: { agent: summarizeAgent(agent) },
+		details: { agent: summarizeStatefulAgent(agent) },
 	};
 }
 
@@ -1090,6 +1009,7 @@ export {
 	buildDetachedCompletionMessage,
 	CompletionDeliveryBroker,
 } from "./completion-delivery.js";
+export { formatStatefulAgentLine } from "./stateful-agent-view.js";
 export { resolveCompletionDelivery, resolveStatefulTransportKind } from "./stateful-config.js";
 export {
 	buildStatefulTurnPrompt,

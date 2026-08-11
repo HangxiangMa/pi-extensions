@@ -1,12 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { CompletionDelivery } from "./agents.js";
+import type { CompletionDelivery } from "./agents/types.js";
 import { redactPrivateText } from "./context.js";
-import { DEFAULT_MAX_CONTEXT_BYTES, truncateUtf8 } from "./limits.js";
+import { DEFAULT_MAX_CONTEXT_BYTES, MAX_TOOL_MESSAGE_BYTES, truncateUtf8 } from "./limits.js";
 import type { AgentTurnCompletion, ManagedAgent } from "./registry.js";
 import { safeTerminalText } from "./safe-text.js";
 import { PI_SUBAGENTS_RPC_PROTOCOL } from "./transport-types.js";
 
-const MAX_TOOL_MESSAGE_BYTES = 2 * 1024;
 const MAX_COMPLETION_ERROR_BYTES = 512;
 const MAX_COMPLETIONS_PER_MESSAGE = 16;
 const COMPLETION_BATCH_DELAY_MS = 10;

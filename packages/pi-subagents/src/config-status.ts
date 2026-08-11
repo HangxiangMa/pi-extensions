@@ -4,11 +4,11 @@ import type {
 	ConsultationCwdPolicy,
 	ConsultResourcePolicy,
 	DelegationCwdPolicy,
-} from "./agents.js";
+} from "./agents/types.js";
 import type { SubagentSettingsRuntime } from "./config-ui.js";
 import { safeTerminalLine as safeTerminalText } from "./safe-text.js";
+import type { DelegationWorkflow } from "./settings/inspection.js";
 import {
-	type DelegationWorkflow,
 	inspectBlockingParallelLimitSettings,
 	inspectCompletionDeliverySettings,
 	inspectConsultResourceSettings,

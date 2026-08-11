@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { SubagentTransportKind } from "./agents.js";
+import type { SubagentTransportKind } from "./agents/types.js";
 import { safeTerminalLine as safeTerminalText } from "./safe-text.js";
 import { inspectStatefulTransportSettings, updateStatefulTransportSetting } from "./settings.js";
 import type { StatefulSubagentRuntimeStatus } from "./stateful.js";
