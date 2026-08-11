@@ -29,7 +29,12 @@ import {
 import { DelegationContractSchema, normalizeDelegationContract } from "./delegation-contract.js";
 import { assertSubagentDepthAllowed } from "./execution/runtime-policy.js";
 import type { ChildSessionFactory, ParentRuntimeSnapshot } from "./in-process-transport.js";
-import { DEFAULT_MAX_CONTEXT_BYTES, MAX_SUBAGENT_TIMEOUT_MS, truncateUtf8 } from "./limits.js";
+import {
+	DEFAULT_MAX_CONTEXT_BYTES,
+	MAX_SUBAGENT_TIMEOUT_MS,
+	MAX_TOOL_MESSAGE_BYTES,
+	truncateUtf8,
+} from "./limits.js";
 import { AgentPersistence } from "./persistence.js";
 import {
 	AgentRegistry,
@@ -122,8 +127,6 @@ const StatefulTurnLimitFields = {
 		}),
 	),
 };
-const MAX_TOOL_MESSAGE_BYTES = 2 * 1024;
-
 export interface StatefulSubagentDependencies {
 	blockingEnabled?: boolean;
 	createInProcessSession?: ChildSessionFactory;

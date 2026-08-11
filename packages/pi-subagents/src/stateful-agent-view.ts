@@ -1,7 +1,5 @@
-import { truncateUtf8 } from "./limits.js";
+import { MAX_TOOL_MESSAGE_BYTES, truncateUtf8 } from "./limits.js";
 import type { ManagedAgent } from "./registry.js";
-
-const MAX_TOOL_MESSAGE_BYTES = 16 * 1024;
 
 export function formatStatefulAgentLine(agent: ManagedAgent, now = Date.now()): string {
 	const elapsedSeconds = Math.max(0, Math.floor((now - agent.updatedAt) / 1000));

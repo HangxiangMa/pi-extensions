@@ -10,6 +10,7 @@ import {
 	resolveSpawnContextMode,
 	resolveStatefulTransportKind,
 } from "../src/stateful.js";
+import { summarizeStatefulAgent } from "../src/stateful-agent-view.js";
 import { waitForOwnedSpawn } from "../src/stateful-lifecycle.js";
 import { resolveStatefulSubprocessThinkingLevel } from "../src/subprocess-transport.js";
 import { record } from "./orchestration-test-helpers.js";
@@ -59,6 +60,18 @@ test("stateful agent lines escape terminal controls from retained agent data", (
 	assert.doesNotMatch(line, /[\u0000-\u001f\u007f-\u009f]/u);
 	assert.match(line, /scout.*linked/);
 	assert.match(line, /first line second line/);
+});
+
+test("stateful agent summaries preserve the 2 KiB task and error bounds", () => {
+	const summary = summarizeStatefulAgent(
+		record({ currentTask: "任".repeat(4_000), error: "誤".repeat(4_000) }),
+	);
+	assert.equal(typeof summary.currentTask, "string");
+	assert.equal(typeof summary.error, "string");
+	assert.ok(Buffer.byteLength(summary.currentTask ?? "", "utf8") <= 2 * 1024);
+	assert.ok(Buffer.byteLength(summary.error ?? "", "utf8") <= 2 * 1024);
+	assert.match(summary.currentTask ?? "", /truncated by pi-subagents/);
+	assert.match(summary.error ?? "", /truncated by pi-subagents/);
 });
 
 test("pending idempotent spawn waits honor caller cancellation", async () => {
