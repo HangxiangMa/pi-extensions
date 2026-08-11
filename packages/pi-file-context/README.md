@@ -18,7 +18,7 @@ Browse project files inside Pi, preview text, select a line range, and attach th
 - Shows textual staged, unstaged, untracked, ignored, and conflict status plus branch, HEAD, and dirty state when Git is available.
 - Selects a contiguous line range or changed hunk without using the system clipboard and shows a deterministic token estimate before attachment.
 - Discloses current-line blame and bounded file history, opens a validated commit/branch/tag version, and attaches explicit Git diff hunks.
-- Accumulates selected ranges in one compact pending-quote widget and injects every snapshot into the next ordinary interactive prompt.
+- Accumulates selected ranges in one compact pending-quote widget, lets you remove one with `/file-context remove`, and injects the remaining snapshots into the next ordinary interactive prompt.
 - Skips common dependency, VCS, build, and coverage directories and does not follow symlinks during discovery.
 
 ## 📦 Install
@@ -49,7 +49,7 @@ pi -e ./packages/pi-file-context
 4. In content results, use `Up`/`Down` to choose a highlighted path-and-line card. Press `Tab` for a whole-file reference or `Enter` to preview the file at that line. `Escape` from the preview restores the query, result selection, and scroll position.
 5. In the preview, press `Space` to anchor the selection. Extend the range with `Up`/`Down`, then press `Enter` to attach it. Without an anchor, `Enter` attaches the cursor line.
 6. In a Git worktree, use `[`/`]` to select changed hunks, `b` for current-line blame, `h` for file history, `r` to open a commit/branch/tag, or `d` to inspect and attach explicit diff context.
-7. Repeat from the shortcut to attach more ranges from the same or different files, then write the question and submit normally. All pending quotes are attached in selection order and then cleared together.
+7. Repeat from the shortcut to attach more ranges from the same or different files. Run `/file-context remove` to choose and remove one pending quote, or press `Escape`/`Ctrl+C` in that selector to keep every quote. Then write the question and submit normally. All remaining quotes are attached in selection order and cleared together.
 
 `Escape` returns from a preview to its originating file-name or content results; from either search screen it cancels without changing the draft. `Ctrl+C` cancels from every view.
 
@@ -91,9 +91,10 @@ The previous `Ctrl+Alt+F` default depended on terminal modifier support and may 
 
 | Command | Mode | Description |
 | --- | --- | --- |
-| `/file-context` | TUI only | Open the file explorer. Arguments are rejected. |
+| `/file-context` | TUI only | Open the file explorer. |
+| `/file-context remove` | TUI only | Choose and remove one pending quote. |
 
-RPC receives an observable warning. JSON and print modes do not enter custom UI.
+Unknown and trailing arguments are rejected. RPC receives an observable warning. JSON and print modes do not enter interactive UI.
 
 ## 🔒 Security and limits
 
@@ -113,7 +114,7 @@ RPC receives an observable warning. JSON and print modes do not enter custom UI.
 ## 🧪 Experimental limitations
 
 - Keyboard line selection only; mouse drag selection is not implemented.
-- Up to eight pending quotes; there is not yet an interactive remove/reorder action.
+- Up to eight pending quotes; removal is supported, but there is not yet a reorder action.
 - Pending quotes do not survive `/reload`, session replacement, or shutdown.
 - The configurable shortcut is registered without replacing another extension's custom editor; `/file-context` remains available if the shortcut is disabled or conflicts.
 - File discovery uses a small built-in ignore list rather than `.gitignore` semantics.
@@ -138,6 +139,7 @@ src/git-context.ts             Bounded read-only Git status, diff, blame, histor
 test/content-search.test.ts     Content matcher behavior and limits
 test/content-search-ui.test.ts  Content interaction, rendering, and lifecycle tests
 test/file-context.test.ts       Filesystem, prompt, lifecycle, shortcut, and explorer tests
+test/pending-quotes.test.ts     Pending quote removal, cancellation, and stale-flow tests
 test/file-context-settings.test.ts  Shortcut settings defaults and validation tests
 test/git-context.test.ts        Git repository behavior and parser tests
 ```

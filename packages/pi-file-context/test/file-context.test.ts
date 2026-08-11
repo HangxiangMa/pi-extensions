@@ -836,9 +836,9 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 	await mock.commands.get("file-context")?.handler("", context.ctx);
 	assert.equal(typeof customFactory, "function");
 	assert.deepEqual(widgets.get("file-context"), [
-		"Quotes (2) · ~13 tokens:",
-		"• src/example.ts · lines 1-1 · ~6 tokens",
-		"• test/example.test.ts · lines 2-3 · ~8 tokens",
+		"Quotes (2) · ~13 tokens · /file-context remove",
+		"1. src/example.ts · lines 1-1 · ~6 tokens",
+		"2. test/example.test.ts · lines 2-3 · ~8 tokens",
 	]);
 
 	assert.equal(mock.events.get("input"), undefined);
@@ -950,14 +950,22 @@ test("rejects the fallback command observably outside TUI mode", async () => {
 	});
 	const rpc = createMockContext({ mode: "rpc", hasUI: true });
 	await mock.commands.get("file-context")?.handler("", rpc.ctx);
-	assert.match(rpc.notifications[0]?.message ?? "", /interactive TUI/);
-	assert.equal(rpc.notifications[0]?.level, "warning");
+	await mock.commands.get("file-context")?.handler("remove", rpc.ctx);
+	assert.equal(rpc.notifications.length, 2);
+	assert.ok(rpc.notifications.every(({ message }) => /interactive TUI/.test(message)));
+	assert.ok(rpc.notifications.every(({ level }) => level === "warning"));
 
 	const print = createMockContext({ mode: "print", hasUI: false });
 	await assert.rejects(async () => {
 		await mock.commands.get("file-context")?.handler("", print.ctx);
 	}, /interactive TUI/);
 	await assert.rejects(async () => {
+		await mock.commands.get("file-context")?.handler("remove", print.ctx);
+	}, /interactive TUI/);
+	await assert.rejects(async () => {
 		await mock.commands.get("file-context")?.handler("unexpected", print.ctx);
+	}, /Usage/);
+	await assert.rejects(async () => {
+		await mock.commands.get("file-context")?.handler("remove trailing", print.ctx);
 	}, /Usage/);
 });

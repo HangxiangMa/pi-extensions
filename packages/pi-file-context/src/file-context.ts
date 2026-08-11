@@ -290,35 +290,88 @@ export async function registerFileQuoteExtension(
 	const activeExplorers = new Set<ActiveExplorer>();
 	let activeExplorerLaunch: { promise: Promise<void> } | undefined;
 
+	const updatePendingWidget = (ctx: ExtensionContext) => {
+		if (!ctx.hasUI) return;
+		if (pendingQuotes.length === 0) {
+			ctx.ui.setWidget(WIDGET_KEY, undefined);
+			return;
+		}
+		const totalBytes = pendingQuotes.reduce(
+			(total, item) => total + Buffer.byteLength(item.text, "utf8"),
+			0,
+		);
+		ctx.ui.setWidget(WIDGET_KEY, [
+			ctx.ui.theme.fg(
+				"accent",
+				`Quotes (${pendingQuotes.length}) · ~${estimateTokens(totalBytes)} tokens · /file-context remove`,
+			),
+			...pendingQuotes.map((item, index) =>
+				ctx.ui.theme.fg(
+					"muted",
+					`${index + 1}. ${escapeTerminalControls(item.path)} · lines ${item.startLine}-${item.endLine} · ~${estimateTokens(Buffer.byteLength(item.text, "utf8"))} tokens`,
+				),
+			),
+		]);
+	};
+
 	const clearPending = (ctx: ExtensionContext) => {
 		pendingQuotes = [];
-		if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
+		updatePendingWidget(ctx);
 	};
 
 	const appendPending = (quote: FileQuote, ctx: ExtensionContext) => {
 		pendingQuotes = appendPendingQuote(pendingQuotes, quote);
-		if (ctx.hasUI) {
-			const totalBytes = pendingQuotes.reduce(
-				(total, item) => total + Buffer.byteLength(item.text, "utf8"),
-				0,
-			);
-			ctx.ui.setWidget(WIDGET_KEY, [
-				ctx.ui.theme.fg(
-					"accent",
-					`Quotes (${pendingQuotes.length}) · ~${estimateTokens(totalBytes)} tokens:`,
-				),
-				...pendingQuotes.map((item) =>
-					ctx.ui.theme.fg(
-						"muted",
-						`• ${escapeTerminalControls(item.path)} · lines ${item.startLine}-${item.endLine} · ~${estimateTokens(Buffer.byteLength(item.text, "utf8"))} tokens`,
-					),
-				),
-			]);
-		}
+		updatePendingWidget(ctx);
 	};
 
 	const isCurrentSession = (owner: unknown, generation: number) =>
 		owner === activeSessionManager && generation === sessionGeneration;
+
+	const removePending = async (ctx: ExtensionContext): Promise<void> => {
+		if (ctx.mode !== "tui") {
+			rejectCommand(ctx, "File Context requires Pi's interactive TUI.");
+			return;
+		}
+		const owner = ctx.sessionManager;
+		const generation = sessionGeneration;
+		if (!isCurrentSession(owner, generation)) return;
+		if (pendingQuotes.length === 0) {
+			ctx.ui.notify("File Context has no pending quotes.", "warning");
+			return;
+		}
+		const choices = pendingQuotes.map((quote, index) => ({
+			label: `${index + 1}. ${escapeTerminalControls(quote.path)} · lines ${quote.startLine}-${quote.endLine}`,
+			quote,
+		}));
+		let selectedLabel: string | undefined;
+		try {
+			selectedLabel = await ctx.ui.select(
+				"Remove a pending quote",
+				choices.map(({ label }) => label),
+			);
+		} catch (error: unknown) {
+			if (!isCurrentSession(owner, generation)) return;
+			ctx.ui.notify(
+				`File Context could not remove a quote: ${escapeTerminalControls(formatError(error))}. Pending quotes were kept; run /file-context remove to retry.`,
+				"error",
+			);
+			return;
+		}
+		if (!isCurrentSession(owner, generation) || selectedLabel === undefined) return;
+		const selected = choices.find(({ label }) => label === selectedLabel);
+		if (!selected) return;
+		const currentIndex = pendingQuotes.indexOf(selected.quote);
+		if (currentIndex === -1) {
+			ctx.ui.notify("That quote is no longer pending.", "warning");
+			return;
+		}
+		pendingQuotes = pendingQuotes.filter((_quote, index) => index !== currentIndex);
+		updatePendingWidget(ctx);
+		ctx.ui.notify(
+			`Removed pending quote: ${escapeTerminalControls(selected.quote.path)} · lines ${selected.quote.startLine}-${selected.quote.endLine}.`,
+			"info",
+		);
+	};
 
 	const cancelExplorers = () => {
 		activeExplorerLaunch = undefined;
@@ -401,14 +454,31 @@ export async function registerFileQuoteExtension(
 	};
 
 	const handleFileContextCommand = async (args: string, ctx: ExtensionContext) => {
-		if (args.trim()) {
-			rejectCommand(ctx, "Usage: /file-context");
+		const normalized = args.trim().toLowerCase();
+		if (!normalized) {
+			await openExplorer(ctx);
 			return;
 		}
-		await openExplorer(ctx);
+		if (normalized === "remove") {
+			await removePending(ctx);
+			return;
+		}
+		rejectCommand(ctx, "Usage: /file-context [remove]");
 	};
 	pi.registerCommand("file-context", {
-		description: "Browse project files and attach a selected line range",
+		description: "Browse project files or remove a pending quote",
+		getArgumentCompletions: (prefix) => {
+			const normalized = prefix.trimStart().toLowerCase();
+			return "remove".startsWith(normalized)
+				? [
+						{
+							value: "remove",
+							label: "remove",
+							description: "Remove one pending quote",
+						},
+					]
+				: null;
+		},
 		handler: handleFileContextCommand,
 	});
 	if (loadedSettings.settings.openShortcut) {
