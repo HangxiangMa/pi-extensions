@@ -1,5 +1,5 @@
 ---
-"@narumitw/pi-file-context": patch
+"@narumitw/pi-file-context": minor
 ---
 
-Add `/file-context remove` so users can remove one pending quote before submitting their next prompt.
+Redesign `/file-context` as an Add, Remove, and Help menu with exact quote previews, repeated removal, cancellable project scanning, and compatible direct `browse` and `remove` routes.

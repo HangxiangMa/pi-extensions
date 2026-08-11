@@ -35,7 +35,9 @@ const DIFF_CHROME_ROWS = 3;
 
 export type FileQuoteExplorerResult =
 	| { kind: "quote"; quote: FileQuote }
-	| { kind: "reference"; path: string };
+	| { kind: "reference"; path: string }
+	| { kind: "back" }
+	| { kind: "close" };
 
 interface FileQuoteExplorerOptions {
 	tui: TUI;
@@ -45,6 +47,7 @@ interface FileQuoteExplorerOptions {
 	cwd?: string;
 	loadFile: (path: string, signal?: AbortSignal) => Promise<LoadedProjectTextFile>;
 	gitContext?: GitContext;
+	rootNavigation?: boolean;
 	done: (result: FileQuoteExplorerResult | undefined) => void;
 }
 
@@ -100,7 +103,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 			},
 			onReference: (path) => this.finish({ kind: "reference", path }),
 			onSwitchFiles: () => this.showFileSearch(),
-			onCancel: () => this.finish(undefined),
+			onCancel: () => this.finish(this.rootExit("back")),
 		});
 	}
 
@@ -128,7 +131,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 	handleInput(data: string): void {
 		if (this.finished || this.disposed) return;
 		if (matchesKey(data, Key.ctrl("c"))) {
-			this.finish(undefined);
+			this.finish(this.rootExit("close"));
 			return;
 		}
 		if (this.mode === "files") this.handleFileInput(data);
@@ -414,7 +417,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 			return;
 		}
 		if (matchesKey(data, Key.escape)) {
-			this.finish(undefined);
+			this.finish(this.rootExit("back"));
 			return;
 		}
 		if (this.loading) return;
@@ -909,6 +912,10 @@ export class FileQuoteExplorer implements Component, Focusable {
 		this.cancelOpenRequest();
 		this.cancelDetailRequest();
 		this.options.done(result);
+	}
+
+	private rootExit(kind: "back" | "close"): FileQuoteExplorerResult | undefined {
+		return this.options.rootNavigation ? { kind } : undefined;
 	}
 
 	private getSelectionRange(): { start: number; end: number } {

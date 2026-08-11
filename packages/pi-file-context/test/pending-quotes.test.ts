@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { registerFileQuoteExtension } from "../src/file-context.js";
@@ -9,59 +10,49 @@ import { registerFileQuoteExtension } from "../src/file-context.js";
 async function withTempProject(run: (root: string) => Promise<void>): Promise<void> {
 	const root = await mkdtemp(join(tmpdir(), "pi-file-context-pending-test-"));
 	try {
+		await writeFile(join(root, "example.txt"), "example\n");
 		await run(root);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
 }
 
-test("removes one selected pending quote and refreshes the widget", async () => {
+async function waitForNextOpen(
+	tui: ReturnType<typeof createTuiHarness>,
+	previousCount: number,
+): Promise<void> {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		if (tui.openCount > previousCount && tui.isOpen) return;
+		await new Promise<void>((resolve) => setImmediate(resolve));
+	}
+	throw new Error("Timed out waiting for the next File Context screen");
+}
+
+test("removes an exact duplicate-looking pending quote and refreshes the widget", async () => {
 	await withTempProject(async (root) => {
-		await writeFile(join(root, "example.txt"), "example\n");
 		const mock = createMockPi();
 		await registerFileQuoteExtension(mock.pi, {
-			loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
+			loadSettings: async () => ({ settings: { openShortcut: "f8" } }),
 		});
-		const command = mock.commands.get("file-context");
-		assert.ok(command?.getArgumentCompletions);
-		assert.deepEqual(
-			(command.getArgumentCompletions("") as Array<{ value: string }>).map((item) => item.value),
-			["remove"],
-		);
-		assert.deepEqual(
-			(command.getArgumentCompletions("rem") as Array<{ value: string }>).map((item) => item.value),
-			["remove"],
-		);
-
 		const quoteResults = [
 			{
 				kind: "quote",
-				quote: { path: "src/first.ts", startLine: 1, endLine: 1, text: "first" },
+				quote: { path: "src/example.ts", startLine: 1, endLine: 1, text: "first snapshot" },
 			},
 			{
 				kind: "quote",
-				quote: {
-					path: "src/unsafe\u001b[31m.ts",
-					startLine: 2,
-					endLine: 3,
-					text: "second\nthird",
-				},
+				quote: { path: "src/example.ts", startLine: 1, endLine: 1, text: "second snapshot" },
 			},
 		];
 		let quoteIndex = 0;
-		let removalTitle = "";
-		let removalOptions: string[] = [];
 		const widgets = new Map<string, unknown>();
-		const notifications: string[] = [];
 		const context = createMockContext({
 			mode: "tui",
 			hasUI: true,
 			cwd: root,
 			ui: {
 				theme: { fg: (_color: string, text: string) => text },
-				notify(message: string) {
-					notifications.push(message);
-				},
+				notify() {},
 				setWidget(key: string, value: unknown) {
 					widgets.set(key, value);
 				},
@@ -70,46 +61,54 @@ test("removes one selected pending quote and refreshes the widget", async () => 
 					quoteIndex += 1;
 					return result;
 				},
-				async select(title: string, options: string[]) {
-					removalTitle = title;
-					removalOptions = options;
-					return options[1];
-				},
 				pasteToEditor() {},
 			},
 		});
-
+		const command = mock.commands.get("file-context");
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await command.handler("", context.ctx);
-		await command.handler("", context.ctx);
-		await command.handler("remove", context.ctx);
+		await command?.handler("browse", context.ctx);
+		await command?.handler("browse", context.ctx);
 
-		assert.equal(removalTitle, "Remove a pending quote");
-		assert.equal(removalOptions.length, 2);
-		assert.ok(removalOptions.every((option) => !option.includes("\u001b")));
+		const tui = createTuiHarness({ width: 60, rows: 18 });
+		(context.ctx as unknown as { ui: { custom: typeof tui.custom } }).ui.custom = tui.custom;
+		const running = Promise.resolve(command?.handler("", context.ctx));
+		await tui.waitForOpen();
+		const mainCount = tui.openCount;
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await waitForNextOpen(tui, mainCount);
+		assert.match(tui.render().join("\n"), /first snapshot/u);
+		tui.press("tui.select.down");
+		const removeCount = tui.openCount;
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await waitForNextOpen(tui, removeCount);
+		assert.match(tui.render().join("\n"), /first snapshot/u);
+		assert.doesNotMatch(tui.render().join("\n"), /second snapshot/u);
+		tui.press("tui.select.cancel");
+		await tui.waitForOpen();
+		tui.press("ctrl+c");
+		await running;
+
 		assert.deepEqual(widgets.get("file-context"), [
-			"Quotes (1) · ~2 tokens · /file-context remove",
-			"1. src/first.ts · lines 1-1 · ~2 tokens",
+			"Quotes (1) · ~4 tokens · /file-context to manage",
+			"1. src/example.ts · lines 1-1 · ~4 tokens",
 		]);
-		assert.match(notifications.at(-1) ?? "", /Removed.*unsafe\\x1b\[31m\.ts.*2-3/u);
-
 		const injection = await mock.events.get("before_agent_start")?.[0]?.(
 			{ prompt: "Explain", systemPrompt: "base" },
 			context.ctx,
 		);
-		assert.match(JSON.stringify(injection), /src\/first\.ts/u);
-		assert.doesNotMatch(JSON.stringify(injection), /unsafe/u);
+		assert.match(JSON.stringify(injection), /first snapshot/u);
+		assert.doesNotMatch(JSON.stringify(injection), /second snapshot/u);
 	});
 });
 
-test("cancellation and selector failures leave every pending quote unchanged", async () => {
+test("removal cancellation and menu failures preserve pending quotes", async () => {
 	await withTempProject(async (root) => {
-		await writeFile(join(root, "example.txt"), "example\n");
 		const mock = createMockPi();
 		await registerFileQuoteExtension(mock.pi, {
-			loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
+			loadSettings: async () => ({ settings: { openShortcut: "f8" } }),
 		});
-		let selectCalls = 0;
 		const widgets = new Map<string, unknown>();
 		const notifications: string[] = [];
 		const context = createMockContext({
@@ -130,163 +129,93 @@ test("cancellation and selector failures leave every pending quote unchanged", a
 						quote: { path: "src/keep.ts", startLine: 4, endLine: 4, text: "keep" },
 					};
 				},
-				async select() {
-					selectCalls += 1;
-					if (selectCalls === 1) throw new Error("picker \u001b[31mfailed");
-					return undefined;
-				},
 				pasteToEditor() {},
 			},
 		});
 		const command = mock.commands.get("file-context");
-
 		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await command?.handler("", context.ctx);
-		const widgetBeforeCancel = widgets.get("file-context");
-		await command?.handler("remove", context.ctx);
-		assert.equal(selectCalls, 1);
-		assert.deepEqual(widgets.get("file-context"), widgetBeforeCancel);
-		assert.ok(!(notifications.at(-1) ?? "").includes("\u001b"));
-		assert.match(notifications.at(-1) ?? "", /picker \\x1b\[31mfailed.*kept.*retry/iu);
+		await command?.handler("browse", context.ctx);
+		const widgetBefore = widgets.get("file-context");
 
+		const tui = createTuiHarness();
+		(context.ctx as unknown as { ui: { custom: typeof tui.custom } }).ui.custom = tui.custom;
+		const cancelled = Promise.resolve(command?.handler("remove", context.ctx));
+		await tui.waitForOpen();
+		tui.press("tui.select.cancel");
+		await cancelled;
+		assert.deepEqual(widgets.get("file-context"), widgetBefore);
+
+		(
+			context.ctx as unknown as {
+				ui: { custom: (factory: unknown) => Promise<unknown> };
+			}
+		).ui.custom = async () => {
+			throw new Error("picker \u001b[31mfailed");
+		};
 		await command?.handler("remove", context.ctx);
-		assert.equal(selectCalls, 2);
-		assert.deepEqual(widgets.get("file-context"), widgetBeforeCancel);
+		assert.deepEqual(widgets.get("file-context"), widgetBefore);
+		assert.ok(!(notifications.at(-1) ?? "").includes("\u001b"));
+		assert.match(notifications.at(-1) ?? "", /failed.*kept.*try again/iu);
 
 		const injection = await mock.events.get("before_agent_start")?.[0]?.(
 			{ prompt: "Explain", systemPrompt: "base" },
 			context.ctx,
 		);
 		assert.match(JSON.stringify(injection), /src\/keep\.ts/u);
-
 		await command?.handler("remove", context.ctx);
-		assert.equal(selectCalls, 2);
 		assert.match(notifications.at(-1) ?? "", /no pending quotes/iu);
 	});
 });
 
-test("ignores stale and concurrent pending quote removal selections", async () => {
+test("session replacement closes the menu and ignores stale input", async () => {
 	await withTempProject(async (root) => {
-		await writeFile(join(root, "example.txt"), "example\n");
 		const mock = createMockPi();
 		await registerFileQuoteExtension(mock.pi, {
-			loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
+			loadSettings: async () => ({ settings: { openShortcut: "f8" } }),
 		});
-		const command = mock.commands.get("file-context");
-		const manager = { getSessionId: () => "same" };
-		const quoteResults = [
-			{ kind: "quote", quote: { path: "src/first.ts", startLine: 1, endLine: 1, text: "first" } },
-			{ kind: "quote", quote: { path: "src/second.ts", startLine: 2, endLine: 2, text: "second" } },
-		];
-		let quoteIndex = 0;
-		const pendingSelections: Array<{
-			options: string[];
-			resolve(value: string | undefined): void;
-		}> = [];
-		const context = createMockContext({
+		const oldManager = { getSessionId: () => "old" };
+		const newManager = { getSessionId: () => "new" };
+		const oldContext = createMockContext({
 			mode: "tui",
 			hasUI: true,
 			cwd: root,
-			sessionManager: manager,
+			sessionManager: oldManager,
 			ui: {
 				theme: { fg: (_color: string, text: string) => text },
 				notify() {},
 				setWidget() {},
 				async custom() {
-					const result = quoteResults[quoteIndex];
-					quoteIndex += 1;
-					return result;
-				},
-				select(_title: string, options: string[]) {
-					return new Promise<string | undefined>((resolve) => {
-						pendingSelections.push({ options, resolve });
-					});
+					return {
+						kind: "quote",
+						quote: { path: "src/old.ts", startLine: 1, endLine: 1, text: "old" },
+					};
 				},
 				pasteToEditor() {},
 			},
 		});
-
-		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-		await command?.handler("", context.ctx);
-		await command?.handler("", context.ctx);
-		const firstRemoval = Promise.resolve(command?.handler("remove", context.ctx));
-		const secondRemoval = Promise.resolve(command?.handler("remove", context.ctx));
-		assert.equal(pendingSelections.length, 2);
-		pendingSelections[1]?.resolve(pendingSelections[1]?.options[0]);
-		await secondRemoval;
-		pendingSelections[0]?.resolve(pendingSelections[0]?.options[0]);
-		await firstRemoval;
-
-		const injection = await mock.events.get("before_agent_start")?.[0]?.(
-			{ prompt: "Explain", systemPrompt: "base" },
-			context.ctx,
-		);
-		assert.doesNotMatch(JSON.stringify(injection), /src\/first\.ts/u);
-		assert.match(JSON.stringify(injection), /src\/second\.ts/u);
-	});
-
-	await withTempProject(async (root) => {
-		await writeFile(join(root, "example.txt"), "example\n");
-		const mock = createMockPi();
-		await registerFileQuoteExtension(mock.pi, {
-			loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
-		});
-		const command = mock.commands.get("file-context");
-		let resolveOldSelection: ((value: string | undefined) => void) | undefined;
-		let oldSelection: string | undefined;
-		const oldManager = { getSessionId: () => "old" };
-		const newManager = { getSessionId: () => "new" };
-		const makeContext = (
-			sessionManager: object,
-			quote: { path: string; startLine: number; endLine: number; text: string },
-			select?: (_title: string, options: string[]) => Promise<string | undefined>,
-		) =>
-			createMockContext({
-				mode: "tui",
-				hasUI: true,
-				cwd: root,
-				sessionManager,
-				ui: {
-					theme: { fg: (_color: string, text: string) => text },
-					notify() {},
-					setWidget() {},
-					async custom() {
-						return { kind: "quote", quote };
-					},
-					select: select ?? (async () => undefined),
-					pasteToEditor() {},
-				},
-			});
-		const oldContext = makeContext(
-			oldManager,
-			{ path: "src/old.ts", startLine: 1, endLine: 1, text: "old" },
-			async (_title, options) => {
-				oldSelection = options[0];
-				return new Promise((resolve) => {
-					resolveOldSelection = resolve;
-				});
-			},
-		);
-		const newContext = makeContext(newManager, {
-			path: "src/new.ts",
-			startLine: 1,
-			endLine: 1,
-			text: "new",
-		});
-
 		await mock.events.get("session_start")?.[0]?.({}, oldContext.ctx);
-		await command?.handler("", oldContext.ctx);
-		const oldRemoval = Promise.resolve(command?.handler("remove", oldContext.ctx));
-		await mock.events.get("session_start")?.[0]?.({}, newContext.ctx);
-		await command?.handler("", newContext.ctx);
-		resolveOldSelection?.(oldSelection);
-		await oldRemoval;
+		await mock.commands.get("file-context")?.handler("browse", oldContext.ctx);
+		const tui = createTuiHarness();
+		(oldContext.ctx as unknown as { ui: { custom: typeof tui.custom } }).ui.custom = tui.custom;
+		const oldMenu = Promise.resolve(mock.commands.get("file-context")?.handler("", oldContext.ctx));
+		await tui.waitForOpen();
 
-		const injection = await mock.events.get("before_agent_start")?.[0]?.(
-			{ prompt: "Explain", systemPrompt: "base" },
-			newContext.ctx,
+		const newContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			cwd: root,
+			sessionManager: newManager,
+		});
+		await mock.events.get("session_start")?.[0]?.({}, newContext.ctx);
+		await oldMenu;
+		assert.equal(tui.isOpen, false);
+		tui.press("tui.select.confirm");
+		assert.equal(
+			await mock.events.get("before_agent_start")?.[0]?.(
+				{ prompt: "new", systemPrompt: "base" },
+				newContext.ctx,
+			),
+			undefined,
 		);
-		assert.doesNotMatch(JSON.stringify(injection), /src\/old\.ts/u);
-		assert.match(JSON.stringify(injection), /src\/new\.ts/u);
 	});
 });

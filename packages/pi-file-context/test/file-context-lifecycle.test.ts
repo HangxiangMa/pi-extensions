@@ -77,7 +77,7 @@ async function assertExplorerLifecycleCancellation(
 		await mock.events.get("session_start")?.[0]?.({}, oldContext.ctx);
 		let settled = false;
 		const command = Promise.resolve(
-			mock.commands.get("file-context")?.handler("", oldContext.ctx),
+			mock.commands.get("file-context")?.handler("browse", oldContext.ctx),
 		).then(() => {
 			settled = true;
 		});
