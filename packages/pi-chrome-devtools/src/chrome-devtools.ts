@@ -47,12 +47,12 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 	pi.registerTool(evaluateTool);
 	pi.registerTool(screenshotTool);
 	pi.registerTool(createChromeDevtoolsLoadTool(pi));
-	initializeAvailableChromeDevtoolsTools(pi);
 
 	pi.registerCommand("chrome-devtools", {
 		description: "Open Chrome DevTools help and tool controls",
 		getArgumentCompletions: (prefix) => commandCompletions(prefix),
 		handler: async (args, ctx) => {
+			initializeAvailableChromeDevtoolsTools(pi);
 			const generation = state.sessionGeneration;
 			await handleChromeDevtoolsCommand(pi, args, ctx, generation);
 		},
@@ -60,6 +60,7 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++state.sessionGeneration;
+		initializeAvailableChromeDevtoolsTools(pi);
 		replaceSessionController("Chrome DevTools session replaced");
 		state.shuttingDown = false;
 		state.settingsNotice = undefined;

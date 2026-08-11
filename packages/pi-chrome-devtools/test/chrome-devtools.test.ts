@@ -48,6 +48,19 @@ const CAPABILITY_TOOLS = [
 	"chrome_devtools_screenshot",
 ] as const;
 
+test("chrome-devtools factory registers without reading action methods", () => {
+	const mock = createMockPi();
+	mock.rawPi.getActiveTools = () => {
+		throw new Error("must wait for session_start");
+	};
+	mock.rawPi.setActiveTools = () => {
+		throw new Error("must wait for session_start");
+	};
+
+	assert.doesNotThrow(() => chromeDevtools(mock.pi));
+	assert.ok(mock.events.has("session_start"));
+});
+
 test("chrome-devtools registers deferred CDP tools and one loader", () => {
 	const mock = createMockPi();
 	chromeDevtools(mock.pi);
@@ -148,6 +161,40 @@ test("chrome-devtools loader additively activates matching allowed tools", async
 		);
 		assert.deepEqual(second.details, { matches: [SCREENSHOT_TOOL], added: [] });
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool", LOAD_TOOL, SCREENSHOT_TOOL]);
+	});
+});
+
+test("chrome-devtools keeps its missing-settings catalog across session replacement", async () => {
+	await withTempAgentDir(async () => {
+		const chromeDevtoolsModule = await importFreshChromeDevtools();
+		const mock = createMockPi({ activeTools: ["other_tool", ...CAPABILITY_TOOLS] });
+		const { ctx } = createMockContext();
+		chromeDevtoolsModule.default(mock.pi);
+		const sessionStart = mock.events.get("session_start")?.[0];
+		await sessionStart?.({}, ctx);
+		const loader = mock.tools.find((tool) => tool.name === LOAD_TOOL) as {
+			execute: (...args: unknown[]) => Promise<{
+				details: { matches: string[]; added: string[] };
+			}>;
+		};
+
+		await loader.execute(
+			"loader-1",
+			{ query: "capture a screenshot" },
+			new AbortController().signal,
+			undefined,
+			ctx,
+		);
+		await sessionStart?.({}, ctx);
+		const result = await loader.execute(
+			"loader-2",
+			{ query: "evaluate JavaScript" },
+			new AbortController().signal,
+			undefined,
+			ctx,
+		);
+
+		assert.deepEqual(result.details, { matches: [EVALUATE_TOOL], added: [EVALUATE_TOOL] });
 	});
 });
 

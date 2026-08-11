@@ -23,9 +23,11 @@ const SEARCH_TEXT: Record<ChromeDevToolsToolName, string> = {
 };
 
 export function initializeAvailableChromeDevtoolsTools(pi: ExtensionAPI) {
+	if (availableToolsByApi.has(pi)) return;
+	const activeTools = new Set(pi.getActiveTools());
 	setAvailableTools(
 		pi,
-		CHROME_DEVTOOLS_TOOL_NAMES.filter((name) => pi.getActiveTools().includes(name)),
+		CHROME_DEVTOOLS_TOOL_NAMES.filter((name) => activeTools.has(name)),
 	);
 }
 
