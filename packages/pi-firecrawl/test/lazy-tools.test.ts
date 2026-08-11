@@ -218,6 +218,59 @@ test("firecrawl loader distinguishes scraping, URL discovery, search, and status
 	});
 });
 
+test("firecrawl loader ignores duplicate query terms when ranking tools", async () => {
+	await withTempAgentDir(async () => {
+		const firecrawlModule = await importFreshFirecrawl();
+		const mock = createMockPi({ activeTools: ["other_tool", ...CAPABILITY_TOOLS] });
+		const { ctx } = createMockContext();
+		firecrawlModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		const loader = mock.tools.find((tool) => tool.name === LOAD_TOOL) as {
+			execute: (...args: unknown[]) => Promise<{ details: { matches: string[] } }>;
+		};
+
+		const unique = await loader.execute(
+			"loader-unique",
+			{ query: "search crawl" },
+			new AbortController().signal,
+			undefined,
+			ctx,
+		);
+		const repeated = await loader.execute(
+			"loader-repeated",
+			{ query: "search search crawl" },
+			new AbortController().signal,
+			undefined,
+			ctx,
+		);
+
+		assert.deepEqual(repeated.details.matches, unique.details.matches);
+	});
+});
+
+test("firecrawl loader includes crawl creation for compound start and status tasks", async () => {
+	await withTempAgentDir(async () => {
+		const firecrawlModule = await importFreshFirecrawl();
+		const mock = createMockPi({ activeTools: ["other_tool", ...CAPABILITY_TOOLS] });
+		const { ctx } = createMockContext();
+		firecrawlModule.default(mock.pi);
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+		const loader = mock.tools.find((tool) => tool.name === LOAD_TOOL) as {
+			execute: (...args: unknown[]) => Promise<{ details: { matches: string[] } }>;
+		};
+
+		const result = await loader.execute(
+			"loader-compound-crawl",
+			{ query: "start crawl and monitor status" },
+			new AbortController().signal,
+			undefined,
+			ctx,
+		);
+
+		assert.deepEqual(result.details.matches, [CRAWL_TOOL, CRAWL_STATUS_TOOL]);
+	});
+});
+
 test("firecrawl loader rejects pre-cancelled execution without changing tools", async () => {
 	await withTempAgentDir(async () => {
 		const firecrawlModule = await importFreshFirecrawl();

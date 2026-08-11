@@ -119,7 +119,9 @@ async function pathEntryExists(filePath: string) {
 export function normalizeFirecrawlSettings(value: unknown): FirecrawlSettings | undefined {
 	if (!value || typeof value !== "object") return undefined;
 	const settings = value as { tools?: unknown; updatedAt?: unknown };
-	if (typeof settings.updatedAt !== "number") return undefined;
+	if (typeof settings.updatedAt !== "number" || !Number.isFinite(settings.updatedAt)) {
+		return undefined;
+	}
 	if (!Array.isArray(settings.tools)) return undefined;
 	if (!settings.tools.every(isFirecrawlToolName)) return undefined;
 	return { tools: orderedUniqueFirecrawlTools(settings.tools), updatedAt: settings.updatedAt };
@@ -140,7 +142,11 @@ export function saveSettings(
 	settings: FirecrawlSettings,
 	operations: Partial<SettingsFileOperations> = {},
 ): Promise<void> {
-	const operation = settingsSaveQueue.then(() => saveSettingsNow(settings, operations));
+	const normalizedSettings = normalizeFirecrawlSettings(settings);
+	if (!normalizedSettings) {
+		return Promise.reject(new Error("Cannot save invalid Firecrawl settings"));
+	}
+	const operation = settingsSaveQueue.then(() => saveSettingsNow(normalizedSettings, operations));
 	settingsSaveQueue = operation.catch(() => undefined);
 	return operation;
 }

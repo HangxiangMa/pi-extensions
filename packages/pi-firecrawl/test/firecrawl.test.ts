@@ -64,6 +64,11 @@ test("firecrawl display sanitization strips terminal controls and remains bounde
 	assert.equal(sanitizeFirecrawlDisplay("12345", 4), "123…");
 });
 
+test("firecrawl display truncation preserves complete Unicode characters", () => {
+	assert.equal(sanitizeFirecrawlDisplay("😀xy", 2), "😀…");
+	assert.equal(sanitizeFirecrawlDisplay("😀", 0), "");
+});
+
 test("firecrawl command parsing and completions cover aliases", () => {
 	assert.equal(parseCommand(""), "menu");
 	assert.equal(parseCommand("quickstart"), "quickstart");
@@ -136,6 +141,16 @@ test("firecrawl settings normalize ordered unique valid tool names", () => {
 		"firecrawl_map",
 		"firecrawl_search",
 	]);
+});
+
+test("firecrawl rejects non-finite settings timestamps before publication", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		await assert.rejects(
+			saveSettings({ tools: [SCRAPE_TOOL], updatedAt: Number.NaN }),
+			/Cannot save invalid Firecrawl settings/,
+		);
+		assert.equal(existsSync(path.join(agentDir, NEW_SETTINGS_FILE)), false);
+	});
 });
 
 test("firecrawl helpers trim URLs, parse payloads, and remove undefined fields", async () => {
@@ -497,6 +512,10 @@ test("firecrawl prefers new settings when both files exist and reports legacy ig
 		const statusMessage = notifications.at(-1)?.message ?? "";
 		assert.match(statusMessage, /Settings file: .*pi-firecrawl\.json/);
 		assert.match(statusMessage, /legacy settings ignored/i);
+
+		rmSync(path.join(agentDir, LEGACY_SETTINGS_FILE));
+		await mock.commands.get("firecrawl")?.handler("status", ctx);
+		assert.doesNotMatch(notifications.at(-1)?.message ?? "", /legacy settings ignored/i);
 	});
 });
 

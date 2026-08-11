@@ -54,7 +54,7 @@ export function clearSettingsNotice() {
 }
 
 export function recordSettingsNotice(settings: SettingsLoadResult) {
-	if (settings.notice) settingsNotice = settings.notice;
+	settingsNotice = settings.notice;
 }
 
 export async function showToolSelector(pi: ExtensionAPI, ctx: CommandContext) {
@@ -362,16 +362,18 @@ export function formatPersistedSelection(tools: readonly FirecrawlToolName[]) {
 }
 
 export function sanitizeFirecrawlDisplay(value: string, maxCharacters = 50_000) {
-	const sanitized = Array.from(stripVTControlCharacters(value), (character) => {
+	const characters = Array.from(stripVTControlCharacters(value), (character) => {
 		const codePoint = character.codePointAt(0) ?? 0;
 		const unsafeControl =
 			(codePoint >= 0 && codePoint <= 8) ||
 			(codePoint >= 11 && codePoint <= 31) ||
 			(codePoint >= 127 && codePoint <= 159);
 		return unsafeControl ? "�" : character;
-	}).join("");
-	if (sanitized.length <= maxCharacters) return sanitized;
-	return `${sanitized.slice(0, Math.max(0, maxCharacters - 1))}…`;
+	});
+	const limit = Number.isFinite(maxCharacters) ? Math.max(0, Math.floor(maxCharacters)) : 0;
+	if (characters.length <= limit) return characters.join("");
+	if (limit === 0) return "";
+	return `${characters.slice(0, limit - 1).join("")}…`;
 }
 
 function formatError(error: unknown) {

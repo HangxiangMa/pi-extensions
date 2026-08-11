@@ -14,6 +14,8 @@ const availableToolsByApi =
 	existingAvailableToolsStore ?? new WeakMap<ExtensionAPI, Set<FirecrawlToolName>>();
 if (!existingAvailableToolsStore) sharedGlobal[AVAILABLE_TOOLS_STORE] = availableToolsByApi;
 
+const CRAWL_CREATION_TERMS = new Set(["begin", "create", "launch", "start"]);
+
 const SEARCH_TEXT: Record<FirecrawlToolName, string> = {
 	firecrawl_scrape:
 		"scrape scraping extract extraction single url page pages markdown html raw links screenshot json structured content",
@@ -117,10 +119,14 @@ function matchFirecrawlTools(
 	limit: number,
 	available: ReadonlySet<FirecrawlToolName>,
 ) {
-	const terms = query
-		.toLowerCase()
-		.split(/[^a-z0-9]+/)
-		.filter((term) => term.length >= 2);
+	const terms = [
+		...new Set(
+			query
+				.toLowerCase()
+				.split(/[^a-z0-9]+/)
+				.filter((term) => term.length >= 2),
+		),
+	];
 	if (terms.length === 0) return [];
 	const ranked = FIRECRAWL_TOOL_NAMES.filter((name) => available.has(name))
 		.map((name, index) => ({
@@ -146,6 +152,15 @@ function matchFirecrawlTools(
 		matches.length < limit
 	) {
 		matches.push("firecrawl_crawl_status");
+	}
+	if (
+		matches.includes("firecrawl_crawl_status") &&
+		available.has("firecrawl_crawl") &&
+		!matches.includes("firecrawl_crawl") &&
+		terms.some((term) => CRAWL_CREATION_TERMS.has(term)) &&
+		matches.length < limit
+	) {
+		matches.unshift("firecrawl_crawl");
 	}
 	return matches;
 }
