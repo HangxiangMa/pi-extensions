@@ -12,7 +12,7 @@ This plan owns the acceptance-state migration, immutable verification boundary, 
 
 It continues the implemented WorkItem, capability, and semantic-snapshot baseline recorded in the [delegation-intelligence roadmap](../../roadmaps/2026-08-10_pi-subagents-delegation-intelligence-roadmap.md).
 
-The original WorkItem implementation plan is preserved as non-executable provenance under [`docs/plans/superseded/`](../superseded/).
+The implemented WorkItem baseline is documented in the [delegation-intelligence roadmap](../../roadmaps/2026-08-10_pi-subagents-delegation-intelligence-roadmap.md); Git preserves the original implementation plan's design history.
 
 The [minimal delegation admission evaluation plan](../2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) remains the sole owner of matched evidence required before a default change.
 

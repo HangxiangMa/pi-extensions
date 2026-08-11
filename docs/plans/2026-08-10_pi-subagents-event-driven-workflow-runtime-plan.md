@@ -14,7 +14,7 @@ It depends on the [verified execution loop plan](archived/2026-08-10_pi-subagent
 
 It depends on the [autonomous workflow planning plan](archived/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md) for bounded graph patches.
 
-It continues the implemented dependency scheduler and semantic snapshot baseline preserved in the [superseded adaptive scheduling plan](superseded/2026-08-10_pi-subagents-adaptive-scheduling-semantic-snapshot-plan.md) without re-owning that baseline.
+It continues the implemented dependency scheduler and semantic snapshot baseline documented in the [delegation-intelligence roadmap](../roadmaps/2026-08-10_pi-subagents-delegation-intelligence-roadmap.md) without re-owning that baseline.
 
 The [minimal delegation admission evaluation plan](2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) remains the sole owner of matched evidence required before a default change.
 
