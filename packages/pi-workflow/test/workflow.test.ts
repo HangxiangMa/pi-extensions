@@ -595,6 +595,124 @@ test("Goal restore cannot mutate stale Plan state before the new Plan session is
 	assert.equal(finalPlan.activeImplementation, undefined);
 });
 
+test("session restore keeps a newer Goal and clears an older unlinked implementation Plan", async () => {
+	const mock = createMockPi({
+		activeTools: [...BASE_TOOLS, ...GOAL_TOOLS],
+		allTools: [...BASE_TOOLS, ...GOAL_TOOLS].map(builtinTool),
+	});
+	workflow(mock.pi, { readSettings: () => ({ kind: "missing" }) });
+	const restoredGoal = createGoal("newer unrelated work", undefined, 0, "newer-goal");
+	const branch = [
+		{
+			type: "custom",
+			customType: "plan-mode-state",
+			data: {
+				enabled: false,
+				awaitingAction: false,
+				activeImplementation: {
+					id: "older-unlinked-plan",
+					plan: "# Stale standalone plan",
+					source: "plan_mode_complete",
+					startedAt: 1,
+					retention: "keep",
+				},
+			},
+		},
+		{
+			type: "custom",
+			customType: "goal-state",
+			data: serializeGoalState(restoredGoal, [], undefined),
+		},
+	];
+	const restored = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		sessionManager: {
+			getSessionId: () => "newer-goal-conflict",
+			getSessionName: () => undefined,
+			getBranch: () => branch,
+			getEntries: () => branch,
+		},
+	});
+
+	await emitAll(mock, "session_start", { reason: "startup" }, restored.ctx);
+
+	const finalPlan = mock.entries.filter((entry) => entry.customType === "plan-mode-state").at(-1)
+		?.data as { activeImplementation?: unknown };
+	assert.equal(finalPlan.activeImplementation, undefined);
+	assert.match(restored.statuses.get("workflow:goal") ?? "", /^active/u);
+	let messages: unknown[] = [{ role: "user", content: [{ type: "text", text: "continue" }] }];
+	for (const handler of mock.events.get("context") ?? []) {
+		const transformed = (await handler({ messages }, restored.ctx)) as
+			| { messages?: unknown[] }
+			| undefined;
+		messages = transformed?.messages ?? messages;
+	}
+	assert.doesNotMatch(JSON.stringify(messages), /Stale standalone plan/u);
+});
+
+test("session restore keeps a newer unlinked implementation Plan and clears an older Goal", async () => {
+	const mock = createMockPi({
+		activeTools: [...BASE_TOOLS, ...GOAL_TOOLS],
+		allTools: [...BASE_TOOLS, ...GOAL_TOOLS].map(builtinTool),
+	});
+	workflow(mock.pi, { readSettings: () => ({ kind: "missing" }) });
+	const restoredGoal = createGoal("older unrelated work", undefined, 0, "older-goal");
+	const branch = [
+		{
+			type: "custom",
+			customType: "goal-state",
+			data: serializeGoalState(restoredGoal, [], undefined),
+		},
+		{
+			type: "custom",
+			customType: "plan-mode-state",
+			data: {
+				enabled: false,
+				awaitingAction: false,
+				activeImplementation: {
+					id: "newer-unlinked-plan",
+					plan: "# Current standalone plan",
+					source: "plan_mode_complete",
+					startedAt: 2,
+					retention: "keep",
+				},
+			},
+		},
+	];
+	const appendEntry = mock.rawPi.appendEntry.bind(mock.rawPi);
+	mock.rawPi.appendEntry = (customType, data) => {
+		appendEntry(customType, data);
+		branch.push({ type: "custom", customType, data } as (typeof branch)[number]);
+	};
+	const restored = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		sessionManager: {
+			getSessionId: () => "newer-plan-conflict",
+			getSessionName: () => undefined,
+			getBranch: () => branch,
+			getEntries: () => branch,
+		},
+	});
+
+	await emitAll(mock, "session_start", { reason: "startup" }, restored.ctx);
+
+	const finalGoal = mock.entries.filter((entry) => entry.customType === "goal-state").at(-1)
+		?.data as { goal?: unknown };
+	assert.equal(finalGoal.goal, null);
+	assert.equal(restored.statuses.get("workflow:goal"), undefined);
+	assert.equal(restored.statuses.get("workflow:plan"), "plan implementing");
+	let messages: unknown[] = [{ role: "user", content: [{ type: "text", text: "continue" }] }];
+	for (const handler of mock.events.get("context") ?? []) {
+		const transformed = (await handler({ messages }, restored.ctx)) as
+			| { messages?: unknown[] }
+			| undefined;
+		messages = transformed?.messages ?? messages;
+	}
+	assert.match(JSON.stringify(messages), /Current standalone plan/u);
+});
+
 test("session restore clears a stale Plan linked to a superseding objective", async () => {
 	const mock = createMockPi({
 		activeTools: [...BASE_TOOLS, ...GOAL_TOOLS],

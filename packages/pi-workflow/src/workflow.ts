@@ -45,6 +45,13 @@ export default function workflow(pi: ExtensionAPI, dependencies: WorkflowDepende
 			? { kind: "loaded" as const, settings: loaded.settings.goal }
 			: loaded;
 	};
+	let restoredPlanEntryIndex = -1;
+	let restoredGoalEntryIndex = -1;
+	pi.on("session_start", (_event, ctx) => {
+		const branch = ctx.sessionManager.getBranch();
+		restoredPlanEntryIndex = latestCustomEntryIndex(branch, "plan-mode-state");
+		restoredGoalEntryIndex = latestCustomEntryIndex(branch, "goal-state");
+	});
 	let planHandle: PlanModeHandle | undefined;
 	const goalHandle = goal(pi, {
 		settingsPath,
@@ -111,12 +118,12 @@ export default function workflow(pi: ExtensionAPI, dependencies: WorkflowDepende
 	pi.on("session_start", (_event, ctx) => {
 		workflowGeneration += 1;
 		let restoredGoal = goalHandle.runtime.activeGoal;
-		const branch = ctx.sessionManager.getBranch();
 		const restoredPlanState = planHandle?.getState();
-		if (restoredGoal && restoredPlanState?.enabled) {
-			const planEntryIndex = latestCustomEntryIndex(branch, "plan-mode-state");
-			const goalEntryIndex = latestCustomEntryIndex(branch, "goal-state");
-			if (planEntryIndex > goalEntryIndex) {
+		const unlinkedImplementation =
+			restoredPlanState?.activeImplementation !== undefined &&
+			restoredPlanState.activeImplementation.goalId === undefined;
+		if (restoredGoal && (restoredPlanState?.enabled || unlinkedImplementation)) {
+			if (restoredPlanEntryIndex > restoredGoalEntryIndex) {
 				goalHandle.commands.clearGoal(ctx);
 				restoredGoal = goalHandle.runtime.activeGoal;
 			} else {
