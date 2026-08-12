@@ -162,6 +162,45 @@ test("fresh selection fails closed when automatic readiness has no command conte
 	assert.match(context.notifications.at(-1)?.message ?? "", /reopen \/plan/i);
 });
 
+test("workflow retention override keeps fresh Goal handoffs linked", async () => {
+	const mock = createMockPi({ activeTools: ["read", "edit"] });
+	let capturedRetention: string | undefined;
+	planMode(mock.pi, {
+		readSettings: async () => ({
+			kind: "loaded" as const,
+			settings: {
+				thinkingLevel: "inherit" as const,
+				implementationPlanRetention: "clear-on-start" as const,
+			},
+		}),
+		implementationPlanRetention: "keep",
+		implementationOutcome: () => "Goal keeps the exact Plan until it ends.",
+		startFreshImplementation: async (_ctx, request) => {
+			capturedRetention = request.retention;
+			return { kind: "started" };
+		},
+	});
+	let menuTitle = "";
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		select: async (title: string, options: string[]) => {
+			menuTitle = title;
+			return options.includes("Start fresh with Goal") ? "Start fresh with Goal" : undefined;
+		},
+		newSession: async () => ({ cancelled: false }),
+	});
+
+	await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+	await mock.commands.get("plan")?.handler("start", context.ctx);
+	await completePlan(mock, context.ctx);
+	await mock.commands.get("plan")?.handler("", context.ctx);
+
+	assert.equal(capturedRetention, "keep");
+	assert.match(menuTitle, /Goal keeps the exact Plan until it ends/u);
+	assert.doesNotMatch(menuTitle, /After Implement/u);
+});
+
 test("fresh implementation creates a linked destination and hands off only through replacement context", async () => {
 	const mock = createMockPi({ activeTools: ["read", "edit"] });
 	planMode(mock.pi, {

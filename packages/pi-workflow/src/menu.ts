@@ -88,7 +88,7 @@ export function createWorkflowMenu(controller: WorkflowMenuController) {
 					{
 						id: "planSettings",
 						label: "Plan settings",
-						description: "Thinking, tools, implementation retention, and export destination.",
+						description: "Thinking, tools, and export destination.",
 						currentValue: "Open…",
 						action: "open-plan-settings",
 					},
@@ -120,8 +120,10 @@ export function createWorkflowMenu(controller: WorkflowMenuController) {
 				kind: "detail",
 				title: "How Workflow works",
 				lines: [
-					"Use /plan to produce an authoritative implementation plan without mutating files.",
-					"After approval, pi-workflow transfers the exact approved Plan to Goal in one implementation request.",
+					"Use /plan alone to produce, save, export, revise, or discard an authoritative Plan without execution.",
+					"Use /goal alone when managed execution does not need a prior Plan.",
+					"Choosing Implement transfers the exact approved Plan to Goal in one implementation request.",
+					"The linked Plan remains available until Goal completes, is cleared, or is superseded.",
 					"Use /goal to pause, resume, edit, inspect, or clear managed execution.",
 					"Review-first handoff is the safe default. Automatic handoff must be explicitly enabled.",
 					"Do not load pi-workflow together with pi-plan-mode or pi-goal.",
@@ -204,8 +206,8 @@ function planDescription(state: WorkflowMenuState["plan"]) {
 		off: "Start a read-only planning workflow",
 		planning: "Continue or manage the active Plan",
 		ready: "Review and hand the approved Plan to Goal",
-		saved: "Show, run, export, or clear the saved Plan",
-		implementing: "Show, export, replace, or clear the implementation Plan",
+		saved: "Show, run with Goal, export, or clear the saved Plan",
+		implementing: "Show or export the linked Plan, or manage Goal",
 	}[state];
 }
 

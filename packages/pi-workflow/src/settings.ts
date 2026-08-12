@@ -102,14 +102,11 @@ export async function updateWorkflowPlanSettings(
 	else if (patch.defaultPlanTools !== undefined) {
 		plan.defaultPlanTools = [...patch.defaultPlanTools];
 	}
-	if (patch.implementationPlanRetention !== undefined) {
-		plan.implementationPlanRetention = patch.implementationPlanRetention;
-	}
 	if (patch.defaultPlanExportPath === null) delete plan.defaultPlanExportPath;
 	else if (patch.defaultPlanExportPath !== undefined) {
 		plan.defaultPlanExportPath = patch.defaultPlanExportPath;
 	}
-	const normalized = normalizePlanModeSettings(plan);
+	const normalized = normalizeWorkflowPlanSettings(plan);
 	if (!normalized) throw invalidSettingsError(settingsPath, "invalid Plan settings shape");
 	const document = { ...current, plan };
 	if (!normalizeWorkflowDocument(document)) {
@@ -166,7 +163,7 @@ function normalizeWorkflowDocument(value: unknown): WorkflowSettingsSnapshot | u
 	if (!workflow || !plan || !goal) return undefined;
 	const planHandoff = Object.hasOwn(workflow, "planHandoff") ? workflow.planHandoff : "review";
 	if (!PLAN_HANDOFF_BEHAVIORS.includes(planHandoff as PlanHandoffBehavior)) return undefined;
-	const normalizedPlan = normalizePlanModeSettings(plan);
+	const normalizedPlan = normalizeWorkflowPlanSettings(plan);
 	const normalizedGoal = normalizeGoalSettings(goal);
 	if (!normalizedPlan || !normalizedGoal) return undefined;
 	return {
@@ -174,6 +171,14 @@ function normalizeWorkflowDocument(value: unknown): WorkflowSettingsSnapshot | u
 		plan: normalizedPlan,
 		goal: normalizedGoal,
 	};
+}
+
+function normalizeWorkflowPlanSettings(value: unknown): PlanModeSettings | undefined {
+	const plan = ownRecord(value);
+	if (!plan) return undefined;
+	const supported = { ...plan };
+	delete supported.implementationPlanRetention;
+	return normalizePlanModeSettings(supported);
 }
 
 function section(document: SettingsDocument, key: string): SettingsDocument | undefined {

@@ -217,6 +217,15 @@ function persistedGoalState(session) {
 		.at(-1)?.data;
 }
 
+function persistedPlanState(session) {
+	return session.sessionManager
+		.getBranch()
+		.filter(
+			(candidate) => candidate.type === "custom" && candidate.customType === "plan-mode-state",
+		)
+		.at(-1)?.data;
+}
+
 function persistedGoalStatus(session) {
 	return persistedGoalState(session)?.goal?.status ?? null;
 }
@@ -234,6 +243,51 @@ async function waitFor(predicate, description, timeoutMs = 10_000) {
 	while (!predicate()) {
 		if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${description}`);
 		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+}
+
+async function linkedPlanGoalScenario() {
+	const approvedPlan = "# Runtime linked Plan\n\n1. Implement the change.\n2. Verify it.";
+	let sawExactHandoff = false;
+	let sawRetainedContext = false;
+	let harness;
+	harness = await createHarness([
+		fauxAssistantMessage(fauxToolCall("plan_mode_complete", { plan: approvedPlan })),
+		(context) => {
+			const contextText = JSON.stringify(context.messages);
+			assert.match(contextText, /Runtime linked Plan/);
+			assert.match(contextText, /Goal mode is active\. Complete this goal fully/);
+			assert.ok(persistedPlanState(harness.session)?.activeImplementation?.goalId);
+			assert.equal(persistedGoalStatus(harness.session), "active");
+			sawExactHandoff = true;
+			return fauxAssistantMessage("Implementation remains incomplete after the first Goal run.");
+		},
+		(context) => {
+			const contextText = JSON.stringify(context.messages);
+			assert.match(contextText, /Runtime linked Plan/);
+			assert.match(context.systemPrompt ?? "", /Active \/goal/);
+			assert.ok(persistedPlanState(harness.session)?.activeImplementation?.goalId);
+			sawRetainedContext = true;
+			return completionResponse(context);
+		},
+	]);
+	try {
+		await harness.session.prompt("/plan produce the runtime linked implementation plan");
+		await waitFor(() => harness.faux.state.callCount === 1, "Plan completion");
+		await harness.session.agent.waitForIdle();
+		assert.equal(harness.faux.state.callCount, 1);
+		assert.equal(persistedPlanState(harness.session)?.awaitingAction, true);
+		assert.equal(persistedGoalStatus(harness.session), null);
+
+		await harness.session.prompt("/plan implement");
+		await waitFor(() => harness.faux.state.callCount === 3, "linked Plan Goal completion");
+		await harness.session.agent.waitForIdle();
+		assert.equal(sawExactHandoff, true);
+		assert.equal(sawRetainedContext, true);
+		assert.equal(persistedGoalStatus(harness.session), null);
+		assert.equal(persistedPlanState(harness.session)?.activeImplementation, undefined);
+	} finally {
+		await harness.cleanup();
 	}
 }
 
@@ -834,6 +888,7 @@ async function manualCompactionScenario() {
 }
 
 await agentDirectoryIsolationScenario();
+await linkedPlanGoalScenario();
 await normalContinuationScenario();
 await runawayNoProgressScenario();
 await automaticToolLoopLimitScenario();
@@ -852,5 +907,5 @@ await managedRunRpcScenario();
 await managedRunDisabledScenario();
 await manualCompactionScenario();
 console.log(
-	"pi-workflow runtime smoke: normal, runaway guards, retry and busy-edit ownership, ordered queue, queued input, pause, frozen-queue and stale blocked-tool aborts, managed-run RPC, bounded budget behavior, and manual compaction passed",
+	"pi-workflow runtime smoke: linked Plan-to-Goal execution, normal and guarded continuation, retry and busy-edit ownership, ordered queue, queued input, pause, frozen-queue and stale blocked-tool aborts, managed-run RPC, bounded budget behavior, and manual compaction passed",
 );
