@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import {
 	chmodSync,
 	existsSync,
@@ -121,12 +122,12 @@ test("windowsInhibitorScript flags and formatMode labels are user-facing", () =>
 	assert.equal(formatMode("display"), "display-awake");
 });
 
-test("Linux display mode pairs the systemd sleep blocker with D-Bus idle inhibit", async () => {
+test("Linux display mode keeps logind idle and sleep inhibition alongside D-Bus", async () => {
 	await withLinuxPathCommands(["systemd-inhibit"], () => {
 		const command = getInhibitorCommand("display");
 
 		assert.equal(command?.description, "systemd-inhibit (display-awake)");
-		assert.ok(command?.args.includes("--what=sleep"));
+		assert.ok(command?.args.includes("--what=idle:sleep"));
 		assert.equal(command?.addDbusIdleInhibit, true);
 	});
 });
@@ -141,16 +142,24 @@ test("Linux sleep mode uses only the systemd sleep blocker", async () => {
 	});
 });
 
-test("D-Bus idle inhibit falls back to the niri ScreenSaver object path", async () => {
+test("D-Bus idle inhibit handles transport errors and falls back to the niri path", async () => {
 	const calls: Array<{ member?: string; path?: string; body?: unknown[] }> = [];
+	const connection = new EventEmitter();
 	let closeCalls = 0;
 	vi.resetModules();
 	vi.doMock("dbus-native", () => ({
 		sessionBus: () => ({
+			connection,
 			invoke(
 				message: { member?: string; path?: string; body?: unknown[] },
-				callback: (error: Error | null, value?: number) => void,
+				optionsOrCallback:
+					| { signal?: AbortSignal; timeout?: number }
+					| ((error: Error | null, value?: number) => void),
+				maybeCallback?: (error: Error | null, value?: number) => void,
 			) {
+				const callback =
+					typeof optionsOrCallback === "function" ? optionsOrCallback : maybeCallback;
+				assert.ok(callback);
 				calls.push(message);
 				if (message.member === "Inhibit" && message.path === "/org/freedesktop/ScreenSaver") {
 					callback(new Error("Unknown object"));
@@ -167,6 +176,7 @@ test("D-Bus idle inhibit falls back to the niri ScreenSaver object path", async 
 	try {
 		const { defaultDbusScreenSaverFactory } = await import("../src/dbus-inhibit.js");
 		const client = await defaultDbusScreenSaverFactory();
+		assert.doesNotThrow(() => connection.emit("error", new Error("session bus unavailable")));
 		await client.inhibit("test");
 		await client.uninhibit();
 		await client.close();
@@ -591,7 +601,7 @@ test("default settings keep routine lifecycle notifications", async () => {
 	});
 });
 
-test("Linux display mode holds one D-Bus inhibitor for the agent turn", async () => {
+test("Linux D-Bus-only display mode reports its missing system-sleep backend", async () => {
 	await withLinuxPathCommands([], async () => {
 		await withTempAgentDir(async () => {
 			const clients: FakeDbusClient[] = [];
@@ -606,7 +616,9 @@ test("Linux display mode holds one D-Bus inhibitor for the agent turn", async ()
 			assert.equal(clients.length, 1);
 			assert.deepEqual(clients[0]?.inhibitCalls, ["Pi agent is running"]);
 			assert.equal(statuses.get("caffeinate"), "display-awake");
-			assert.match(notifications[0]?.message ?? "", /Keeping computer awake/);
+			assert.equal(notifications[0]?.level, "warning");
+			assert.match(notifications[0]?.message ?? "", /partially active/);
+			assert.match(notifications[0]?.message ?? "", /system sleep inhibitor/i);
 
 			await mock.events.get("agent_end")?.[0]?.({}, ctx);
 
@@ -641,7 +653,7 @@ test("Linux display mode keeps the sleep blocker when D-Bus is unavailable", asy
 	});
 });
 
-test("agent_end closes a D-Bus inhibitor acquired after stop began", async () => {
+test("agent_end aborts and closes an in-flight D-Bus acquisition before returning", async () => {
 	await withLinuxPathCommands([], async () => {
 		await withTempAgentDir(async () => {
 			const clients: FakeDbusClient[] = [];
@@ -659,12 +671,156 @@ test("agent_end closes a D-Bus inhibitor acquired after stop began", async () =>
 			await mock.events.get("session_start")?.[0]?.({}, ctx);
 			const startPromise = mock.events.get("agent_start")?.[0]?.({}, ctx);
 			await waitFor(() => clients[0]?.inhibitCalls.length === 1);
-			await mock.events.get("agent_end")?.[0]?.({}, ctx);
-			releaseInhibit?.();
-			await startPromise;
+			try {
+				await mock.events.get("agent_end")?.[0]?.({}, ctx);
+				assert.equal(clients[0]?.inhibitSignal?.aborted, true);
+				assert.equal(clients[0]?.closeCalls, 1);
+			} finally {
+				releaseInhibit?.();
+				await startPromise;
+			}
 
 			assert.equal(clients[0]?.uninhibitCalls, 0);
 			assert.equal(clients[0]?.closeCalls, 1);
+			assert.equal(statuses.get("caffeinate"), undefined);
+		});
+	});
+});
+
+test("session_shutdown aborts and closes an in-flight D-Bus acquisition", async () => {
+	await withLinuxPathCommands([], async () => {
+		await withTempAgentDir(async () => {
+			const clients: FakeDbusClient[] = [];
+			let releaseInhibit: (() => void) | undefined;
+			const gate = new Promise<void>((resolve) => {
+				releaseInhibit = resolve;
+			});
+			const caffeinateModule = await importFreshCaffeinate();
+			const mock = createMockPi();
+			const { ctx, statuses } = createMockContext();
+
+			caffeinateModule.default(mock.pi, {
+				dbusFactory: fakeDbusFactory(clients, gate),
+			});
+			await mock.events.get("session_start")?.[0]?.({}, ctx);
+			const startPromise = mock.events.get("agent_start")?.[0]?.({}, ctx);
+			await waitFor(() => clients[0]?.inhibitCalls.length === 1);
+			try {
+				await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
+				assert.equal(clients[0]?.inhibitSignal?.aborted, true);
+				assert.equal(clients[0]?.closeCalls, 1);
+				assert.equal(statuses.get("caffeinate"), undefined);
+			} finally {
+				releaseInhibit?.();
+				await startPromise;
+			}
+		});
+	});
+});
+
+test("an active child failure after session replacement updates only the current context", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const releasePath = path.join(agentDir, "release-inhibitor");
+		process.env.PI_CAFFEINATE_COMMAND = customNodeCommand(
+			`const fs=require("node:fs");setInterval(()=>{if(fs.existsSync(${JSON.stringify(releasePath)}))process.exit(7)},10)`,
+		);
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const original = createMockContext();
+		const replacement = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		const sessionStart = mock.events.get("session_start")?.[0];
+		await sessionStart?.({ reason: "startup" }, original.ctx);
+		await mock.events.get("agent_start")?.[0]?.({}, original.ctx);
+		const originalNotificationCount = original.notifications.length;
+		assert.equal(original.statuses.get("caffeinate"), "custom");
+
+		await sessionStart?.({ reason: "replacement" }, replacement.ctx);
+		writeFileSync(releasePath, "release");
+		await waitFor(() => replacement.notifications.length > 0);
+
+		assert.equal(original.notifications.length, originalNotificationCount);
+		assert.equal(original.statuses.get("caffeinate"), "custom");
+		assert.equal(replacement.notifications.at(-1)?.level, "warning");
+		assert.match(replacement.notifications.at(-1)?.message ?? "", /exited unexpectedly \(code 7\)/);
+		assert.equal(replacement.statuses.get("caffeinate"), "unavailable");
+		await mock.events.get("agent_end")?.[0]?.({}, replacement.ctx);
+	});
+});
+
+test("an active D-Bus failure after session replacement updates only the current context", async () => {
+	await withLinuxPathCommands([], async () => {
+		await withTempAgentDir(async () => {
+			const clients: FakeDbusClient[] = [];
+			const caffeinateModule = await importFreshCaffeinate();
+			const mock = createMockPi();
+			const original = createMockContext();
+			const replacement = createMockContext();
+
+			caffeinateModule.default(mock.pi, { dbusFactory: fakeDbusFactory(clients) });
+			const sessionStart = mock.events.get("session_start")?.[0];
+			await sessionStart?.({ reason: "startup" }, original.ctx);
+			await mock.events.get("agent_start")?.[0]?.({}, original.ctx);
+			const originalNotificationCount = original.notifications.length;
+			assert.equal(original.statuses.get("caffeinate"), "display-awake");
+
+			await sessionStart?.({ reason: "replacement" }, replacement.ctx);
+			clients[0]?.fail(new Error("session bus disconnected"));
+
+			assert.equal(original.notifications.length, originalNotificationCount);
+			assert.equal(original.statuses.get("caffeinate"), "display-awake");
+			assert.equal(replacement.notifications.at(-1)?.level, "warning");
+			assert.match(replacement.notifications.at(-1)?.message ?? "", /session bus disconnected/);
+			assert.equal(replacement.statuses.get("caffeinate"), "unavailable");
+			await mock.events.get("agent_end")?.[0]?.({}, replacement.ctx);
+		});
+	});
+});
+
+test("an active D-Bus transport failure makes D-Bus-only mode unavailable", async () => {
+	await withLinuxPathCommands([], async () => {
+		await withTempAgentDir(async () => {
+			const clients: FakeDbusClient[] = [];
+			const caffeinateModule = await importFreshCaffeinate();
+			const mock = createMockPi();
+			const { ctx, notifications, statuses } = createMockContext();
+
+			caffeinateModule.default(mock.pi, { dbusFactory: fakeDbusFactory(clients) });
+			await mock.events.get("session_start")?.[0]?.({}, ctx);
+			await mock.events.get("agent_start")?.[0]?.({}, ctx);
+			clients[0]?.fail(new Error("session bus disconnected"));
+
+			assert.equal(statuses.get("caffeinate"), "unavailable");
+			assert.equal(notifications.at(-1)?.level, "warning");
+			assert.match(notifications.at(-1)?.message ?? "", /session bus disconnected/);
+			await mock.commands.get("caffeinate")?.handler("status", ctx);
+			assert.match(notifications.at(-1)?.message ?? "", /pi-caffeinate is unavailable/);
+
+			await mock.events.get("agent_end")?.[0]?.({}, ctx);
+		});
+	});
+});
+
+test("an active D-Bus transport failure preserves the system sleep blocker", async () => {
+	await withLinuxPathCommands(["sh", "systemd-inhibit"], async () => {
+		await withTempAgentDir(async () => {
+			const clients: FakeDbusClient[] = [];
+			const caffeinateModule = await importFreshCaffeinate();
+			const mock = createMockPi();
+			const { ctx, notifications, statuses } = createMockContext();
+
+			caffeinateModule.default(mock.pi, { dbusFactory: fakeDbusFactory(clients) });
+			await mock.events.get("session_start")?.[0]?.({}, ctx);
+			await mock.events.get("agent_start")?.[0]?.({}, ctx);
+			clients[0]?.fail(new Error("session bus disconnected"));
+
+			assert.equal(statuses.get("caffeinate"), "display-awake");
+			assert.equal(notifications.at(-1)?.level, "warning");
+			assert.match(notifications.at(-1)?.message ?? "", /partially active/);
+			assert.match(notifications.at(-1)?.message ?? "", /session bus disconnected/);
+
+			await mock.events.get("agent_end")?.[0]?.({}, ctx);
 			assert.equal(statuses.get("caffeinate"), undefined);
 		});
 	});
@@ -734,13 +890,20 @@ async function withLinuxPathCommands<T>(commands: string[], fn: () => T | Promis
 
 class FakeDbusClient implements DbusScreenSaverClient {
 	readonly inhibitCalls: string[] = [];
+	inhibitSignal?: AbortSignal;
 	uninhibitCalls = 0;
 	closeCalls = 0;
+	private failureHandler?: (error: Error) => void;
 
 	constructor(private readonly inhibitResult: Promise<void> = Promise.resolve()) {}
 
-	async inhibit(reason: string): Promise<void> {
+	setFailureHandler(handler: ((error: Error) => void) | undefined): void {
+		this.failureHandler = handler;
+	}
+
+	async inhibit(reason: string, signal?: AbortSignal): Promise<void> {
 		this.inhibitCalls.push(reason);
+		this.inhibitSignal = signal;
 		await this.inhibitResult;
 	}
 
@@ -750,6 +913,10 @@ class FakeDbusClient implements DbusScreenSaverClient {
 
 	async close(): Promise<void> {
 		this.closeCalls += 1;
+	}
+
+	fail(error: Error): void {
+		this.failureHandler?.(error);
 	}
 }
 

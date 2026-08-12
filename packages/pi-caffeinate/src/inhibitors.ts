@@ -9,7 +9,7 @@ export interface InhibitorCommand {
 	description: string;
 	releaseOnStdinClose?: boolean;
 	custom?: boolean;
-	/** Display mode still needs D-Bus idle inhibit on top of this command (systemd blocks sleep only). */
+	/** Display mode also needs D-Bus because logind idle inhibition misses some compositors. */
 	addDbusIdleInhibit?: boolean;
 }
 
@@ -31,10 +31,11 @@ export function getInhibitorCommand(mode: CaffeinateMode): InhibitorCommand | un
 			return windowsPowerInhibitorCommand("powershell.exe", mode);
 		}
 		if (commandExists("systemd-inhibit")) {
+			const what = mode === "display" ? "idle:sleep" : "sleep";
 			return parentBoundUnixCommand(
 				"systemd-inhibit",
 				[
-					"--what=sleep",
+					`--what=${what}`,
 					"--who=pi-caffeinate",
 					"--why=Pi agent is running",
 					"--mode=block",

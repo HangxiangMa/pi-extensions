@@ -49,17 +49,20 @@ Use `/caffeinate sleep` if you want to prevent system sleep while allowing norma
 | macOS | `caffeinate -ims` | `caffeinate -dimsu` |
 | Windows | PowerShell `SetThreadExecutionState(0x80000001)` | PowerShell `SetThreadExecutionState(0x80000003)` |
 | WSL | Windows `powershell.exe` with `SetThreadExecutionState(0x80000001)` | Windows `powershell.exe` with `SetThreadExecutionState(0x80000003)` |
-| Linux with systemd | `systemd-inhibit --what=sleep ... sleep infinity` | D-Bus `org.freedesktop.ScreenSaver.Inhibit` + `systemd-inhibit --what=sleep ... sleep infinity` |
+| Linux with systemd | `systemd-inhibit --what=sleep ... sleep infinity` | D-Bus `org.freedesktop.ScreenSaver.Inhibit` + `systemd-inhibit --what=idle:sleep ... sleep infinity` |
 | Linux without systemd | `caffeinate -ims` when available | D-Bus `org.freedesktop.ScreenSaver.Inhibit` + `caffeinate -dimsu` when available; D-Bus only otherwise |
 
 On Linux, `display` mode requests idle inhibition through the standard `org.freedesktop.ScreenSaver`
 D-Bus service, trying both `/org/freedesktop/ScreenSaver` and `/ScreenSaver` for desktop compatibility.
 The session-bus connection stays open for the whole agent turn.
 The inhibition ends when `UnInhibit` is called or the connection closes.
-`systemd-inhibit --what=sleep` runs alongside it to block actual suspend through logind.
+`systemd-inhibit --what=idle:sleep` runs alongside it to preserve logind idle and sleep inhibition.
 If no ScreenSaver service is available, pi-caffeinate keeps the systemd blocker or `caffeinate`
 fallback and reports a partial-activation warning.
-If only D-Bus is available, desktop idle is inhibited but direct logind suspend may remain possible.
+If only D-Bus is available, pi-caffeinate reports partial activation because desktop idle is
+inhibited but direct system suspend may remain possible.
+D-Bus method calls use short deadlines, and stop or shutdown aborts an in-flight acquisition before
+closing its session-bus connection.
 
 If no supported inhibitor is available, the extension stays loaded and reports that caffeinate is unavailable.
 

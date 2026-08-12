@@ -52,9 +52,18 @@ interface CaffeinateOptions {
 	dbusFactory?: DbusScreenSaverFactory;
 }
 
+interface PendingDbusStart {
+	token: number;
+	controller: AbortController;
+	client?: DbusScreenSaverClient;
+}
+
 interface CaffeinateState {
 	process?: ChildProcess;
 	dbus?: DbusScreenSaverClient;
+	currentSession?: { generation: number; ctx: ExtensionContext };
+	dbusCleanup?: Promise<void>;
+	pendingDbus?: PendingDbusStart;
 	startedAt?: number;
 	command?: InhibitorCommand;
 	lastError?: string;
@@ -93,6 +102,7 @@ export default function caffeinate(pi: ExtensionAPI, options: CaffeinateOptions 
 	dbusFactory = options.dbusFactory ?? defaultDbusScreenSaverFactory;
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++state.sessionGeneration;
+		state.currentSession = { generation, ctx };
 		replaceMenuController("Caffeinate session replaced");
 		state.iconWarningShown = false;
 		state.settingsNotice = undefined;
@@ -122,6 +132,7 @@ export default function caffeinate(pi: ExtensionAPI, options: CaffeinateOptions 
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		const generation = ++state.sessionGeneration;
+		state.currentSession = undefined;
 		state.menuController.abort(new DOMException("Caffeinate session shut down", "AbortError"));
 		state.activeTurns = 0;
 		await stopInhibitor(ctx, "session shutdown", { notify: false });
@@ -423,7 +434,10 @@ async function startInhibitor(
 	state.inhibitorStarting = true;
 	state.inhibitWarning = undefined;
 	let child: ChildProcess | undefined;
-	let childError: string | undefined;
+	let childError =
+		!command && wantsDbus
+			? "No supported system sleep inhibitor is available; direct system suspend may remain possible."
+			: undefined;
 	let assembling = true;
 	const handleChildFailure = (message: string) => {
 		if (!child || token !== inhibitSequence || state.process !== child) return;
@@ -433,7 +447,7 @@ async function startInhibitor(
 			childError = message;
 			return;
 		}
-		applyChildFailure(ctx, message);
+		applyChildFailure(message);
 	};
 
 	if (command) {
@@ -454,28 +468,50 @@ async function startInhibitor(
 	let dbus: DbusScreenSaverClient | undefined;
 	let dbusError: string | undefined;
 	if (wantsDbus) {
+		const pending: PendingDbusStart = { token, controller: new AbortController() };
+		state.pendingDbus = pending;
 		try {
-			dbus = await dbusFactory();
-			if (startIsStale(token, sessionGeneration)) {
-				await cancelPendingStart(token, child, command, dbus);
+			const client = await dbusFactory();
+			if (!pendingStartIsCurrent(pending, sessionGeneration)) {
+				await client.close().catch(() => undefined);
+				await cancelPendingStart(token, child, command);
 				return;
 			}
-			await dbus.inhibit(INHIBIT_REASON);
+			pending.client = client;
+			await client.inhibit(INHIBIT_REASON, pending.controller.signal);
+			if (!pendingStartIsCurrent(pending, sessionGeneration)) {
+				await cancelPendingStart(token, child, command);
+				return;
+			}
+			pending.client = undefined;
+			state.pendingDbus = undefined;
+			dbus = client;
 		} catch (error) {
+			const stale =
+				!pendingStartIsCurrent(pending, sessionGeneration) || pending.controller.signal.aborted;
+			const pendingClient = takePendingDbusClient(pending);
+			await pendingClient?.close().catch(() => undefined);
+			if (stale) {
+				await cancelPendingStart(token, child, command);
+				return;
+			}
 			dbusError = `D-Bus idle inhibit (${SCREENSAVER_BUS_NAME}): ${formatError(error)}`;
-			await dbus?.close().catch(() => undefined);
-			dbus = undefined;
 		}
 	}
 
 	assembling = false;
 	if (startIsStale(token, sessionGeneration)) {
-		await cancelPendingStart(token, child, command, dbus);
+		await cancelPendingStart(token, child, command);
+		await dbus?.close().catch(() => undefined);
 		return;
 	}
 
 	state.inhibitorStarting = false;
 	state.dbus = dbus;
+	if (dbus) {
+		dbus.setFailureHandler((error) => applyDbusFailure(token, dbus, error));
+		if (state.dbus !== dbus) return;
+	}
 	const failures = [childError, dbusError].filter((failure): failure is string => Boolean(failure));
 	if (!hasActiveInhibitor()) {
 		state.startedAt = undefined;
@@ -508,17 +544,28 @@ async function stopInhibitor(
 	inhibitSequence += 1;
 	const child = state.process;
 	const dbus = state.dbus;
+	const dbusCleanup = state.dbusCleanup;
+	const pending = state.pendingDbus;
 	const command = state.command;
 	const wasStarting = state.inhibitorStarting;
 	state.process = undefined;
 	state.dbus = undefined;
+	state.dbusCleanup = undefined;
+	state.pendingDbus = undefined;
 	state.command = undefined;
 	state.startedAt = undefined;
 	state.inhibitWarning = undefined;
 	state.inhibitorStarting = false;
+	dbus?.setFailureHandler(undefined);
+	pending?.controller.abort(new DOMException(`Caffeinate stopped: ${reason}`, "AbortError"));
+	const pendingClient = pending ? takePendingDbusClient(pending) : undefined;
 	if (child) stopInhibitorProcess(child, command);
-	if (!child && !dbus && !wasStarting) return;
+	if (!child && !dbus && !pendingClient && !wasStarting) {
+		await dbusCleanup;
+		return;
+	}
 	if (options.notify !== false) ctx.ui.notify(`Released pi-caffeinate (${reason}).`, "info");
+	await Promise.all([dbusCleanup, pendingClient?.close().catch(() => undefined)]);
 	if (!dbus) return;
 	try {
 		await dbus.uninhibit();
@@ -528,7 +575,7 @@ async function stopInhibitor(
 	await dbus.close().catch(() => undefined);
 }
 
-function applyChildFailure(ctx: ExtensionContext, message: string) {
+function applyChildFailure(message: string) {
 	if (state.dbus) {
 		state.available = true;
 		state.lastError = undefined;
@@ -539,8 +586,43 @@ function applyChildFailure(ctx: ExtensionContext, message: string) {
 		state.lastError = message;
 		state.inhibitWarning = undefined;
 	}
+	const ctx = currentSessionContext();
+	if (!ctx) return;
 	ctx.ui.notify(message, "warning");
 	updateStatus(ctx);
+}
+
+function applyDbusFailure(token: number, client: DbusScreenSaverClient, error: Error) {
+	if (token !== inhibitSequence || state.dbus !== client) return;
+	client.setFailureHandler(undefined);
+	state.dbus = undefined;
+	const message = `D-Bus idle inhibit (${SCREENSAVER_BUS_NAME}) failed: ${formatError(error)}`;
+	const notification = state.process ? `pi-caffeinate is partially active: ${message}` : message;
+	if (state.process) {
+		state.available = true;
+		state.lastError = undefined;
+		state.inhibitWarning = message;
+	} else {
+		state.startedAt = undefined;
+		state.command = undefined;
+		state.available = false;
+		state.lastError = [state.inhibitWarning, message].filter(Boolean).join("; ");
+		state.inhibitWarning = undefined;
+	}
+	const cleanup = client.close().catch(() => undefined);
+	state.dbusCleanup = cleanup;
+	void cleanup.then(() => {
+		if (state.dbusCleanup === cleanup) state.dbusCleanup = undefined;
+	});
+	const ctx = currentSessionContext();
+	if (!ctx) return;
+	ctx.ui.notify(notification, "warning");
+	updateStatus(ctx);
+}
+
+function currentSessionContext() {
+	const session = state.currentSession;
+	return session?.generation === state.sessionGeneration ? session.ctx : undefined;
 }
 
 function hasActiveInhibitor() {
@@ -551,23 +633,40 @@ function startIsStale(token: number, sessionGeneration: number) {
 	return token !== inhibitSequence || sessionGeneration !== state.sessionGeneration;
 }
 
+function pendingStartIsCurrent(pending: PendingDbusStart, sessionGeneration: number) {
+	return (
+		state.pendingDbus === pending &&
+		!pending.controller.signal.aborted &&
+		!startIsStale(pending.token, sessionGeneration)
+	);
+}
+
+function takePendingDbusClient(pending: PendingDbusStart) {
+	if (state.pendingDbus === pending) state.pendingDbus = undefined;
+	const client = pending.client;
+	pending.client = undefined;
+	return client;
+}
+
 async function cancelPendingStart(
 	token: number,
 	child: ChildProcess | undefined,
 	command: InhibitorCommand | undefined,
-	dbus: DbusScreenSaverClient | undefined,
 ) {
-	if (token === inhibitSequence) {
-		inhibitSequence += 1;
-		state.inhibitorStarting = false;
-		if (child && state.process === child) {
-			state.process = undefined;
-			state.command = undefined;
-			state.startedAt = undefined;
-			stopInhibitorProcess(child, command);
-		}
+	if (token !== inhibitSequence) return;
+	inhibitSequence += 1;
+	state.inhibitorStarting = false;
+	const pending = state.pendingDbus?.token === token ? state.pendingDbus : undefined;
+	state.pendingDbus = undefined;
+	pending?.controller.abort(new DOMException("Caffeinate start cancelled", "AbortError"));
+	const pendingClient = pending ? takePendingDbusClient(pending) : undefined;
+	if (child && state.process === child) {
+		state.process = undefined;
+		state.command = undefined;
+		state.startedAt = undefined;
+		stopInhibitorProcess(child, command);
 	}
-	await dbus?.close().catch(() => undefined);
+	await pendingClient?.close().catch(() => undefined);
 }
 
 function updateStatus(ctx: ExtensionContext) {
