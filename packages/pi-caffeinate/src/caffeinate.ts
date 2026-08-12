@@ -5,6 +5,13 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import {
+	type DbusScreenSaverClient,
+	type DbusScreenSaverFactory,
+	defaultDbusScreenSaverFactory,
+	INHIBIT_REASON,
+	SCREENSAVER_BUS_NAME,
+} from "./dbus-inhibit.js";
 import { startInhibitorProcess, stopInhibitorProcess } from "./inhibitor-process.js";
 import { formatMode, getInhibitorCommand, type InhibitorCommand } from "./inhibitors.js";
 import {
@@ -41,11 +48,18 @@ const MODE_OPTIONS = {
 type CommandAction = "menu" | "help" | "status" | "mode" | "sleep" | "display" | "stop";
 type CommandContext = ExtensionCommandContext;
 
+interface CaffeinateOptions {
+	dbusFactory?: DbusScreenSaverFactory;
+}
+
 interface CaffeinateState {
 	process?: ChildProcess;
+	dbus?: DbusScreenSaverClient;
 	startedAt?: number;
 	command?: InhibitorCommand;
 	lastError?: string;
+	inhibitWarning?: string;
+	inhibitorStarting: boolean;
 	activeTurns: number;
 	available: boolean;
 	disabled: boolean;
@@ -62,6 +76,7 @@ interface CaffeinateState {
 const state: CaffeinateState = {
 	activeTurns: 0,
 	available: true,
+	inhibitorStarting: false,
 	disabled: isDisabled(),
 	mode: DEFAULT_MODE,
 	quiet: false,
@@ -71,7 +86,11 @@ const state: CaffeinateState = {
 	menuController: new AbortController(),
 };
 
-export default function caffeinate(pi: ExtensionAPI) {
+let dbusFactory = defaultDbusScreenSaverFactory;
+let inhibitSequence = 0;
+
+export default function caffeinate(pi: ExtensionAPI, options: CaffeinateOptions = {}) {
+	dbusFactory = options.dbusFactory ?? defaultDbusScreenSaverFactory;
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++state.sessionGeneration;
 		replaceMenuController("Caffeinate session replaced");
@@ -88,24 +107,27 @@ export default function caffeinate(pi: ExtensionAPI) {
 		await ensureSettingsLoaded(ctx, generation);
 		if (generation !== state.sessionGeneration) return;
 		state.activeTurns += 1;
-		startInhibitor(ctx, { notify: !state.quiet });
+		await startInhibitor(ctx, generation, { notify: !state.quiet });
 	});
 
-	pi.on("agent_end", (_event, ctx) => {
+	pi.on("agent_end", async (_event, ctx) => {
+		const generation = state.sessionGeneration;
 		state.activeTurns = Math.max(0, state.activeTurns - 1);
 		if (state.activeTurns === 0) {
-			stopInhibitor(ctx, "agent finished", { notify: !state.quiet });
+			await stopInhibitor(ctx, "agent finished", { notify: !state.quiet });
 		}
+		if (generation !== state.sessionGeneration) return;
 		updateStatus(ctx);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		state.sessionGeneration += 1;
+		const generation = ++state.sessionGeneration;
 		state.menuController.abort(new DOMException("Caffeinate session shut down", "AbortError"));
 		state.activeTurns = 0;
-		stopInhibitor(ctx, "session shutdown", { notify: false });
-		ctx.ui.setStatus(STATUS_KEY, undefined);
+		await stopInhibitor(ctx, "session shutdown", { notify: false });
 		await modeOperationQueue;
+		if (generation !== state.sessionGeneration) return;
+		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 
 	pi.registerCommand("caffeinate", {
@@ -147,7 +169,7 @@ async function handleCaffeinateCommand(args: string, ctx: CommandContext, genera
 			await setMode(ctx, "display", generation);
 			return;
 		case "stop":
-			stopCaffeinate(ctx, "manual stop");
+			await stopCaffeinate(ctx, "manual stop", generation);
 			return;
 	}
 
@@ -215,7 +237,7 @@ async function runCaffeinateMenu(ctx: CommandContext, generation: number, start:
 				return { kind: "close" };
 			},
 			stop: async () => {
-				stopCaffeinate(ctx, "manual stop");
+				await stopCaffeinate(ctx, "manual stop", generation);
 				return { kind: "close" };
 			},
 			help: async () => {
@@ -264,18 +286,23 @@ async function setModeNow(ctx: ExtensionContext, mode: CaffeinateMode, generatio
 	if (generation !== state.sessionGeneration) return;
 	const previousMode = state.mode;
 	const previousQuiet = state.quiet;
-	const restartRequired = Boolean(state.process && previousMode !== mode && !state.command?.custom);
+	const restartRequired = Boolean(
+		hasActiveInhibitor() && previousMode !== mode && !state.command?.custom,
+	);
 	state.settingsError = undefined;
 
 	if (restartRequired) {
 		state.mode = mode;
-		stopInhibitor(ctx, "mode changed", { notify: false });
-		startInhibitor(ctx, { notify: false });
-		if (!state.process) {
+		await stopInhibitor(ctx, "mode changed", { notify: false });
+		if (generation !== state.sessionGeneration) return;
+		await startInhibitor(ctx, generation, { notify: false });
+		if (generation !== state.sessionGeneration) return;
+		if (!hasActiveInhibitor()) {
 			const applicationError = state.lastError ?? "the inhibitor could not be restarted";
 			state.mode = previousMode;
-			startInhibitor(ctx, { notify: false });
-			const rollbackError = state.process
+			await startInhibitor(ctx, generation, { notify: false });
+			if (generation !== state.sessionGeneration) return;
+			const rollbackError = hasActiveInhibitor()
 				? undefined
 				: (state.lastError ?? "the previous inhibitor could not be restored");
 			state.settingsError = rollbackError
@@ -296,9 +323,13 @@ async function setModeNow(ctx: ExtensionContext, mode: CaffeinateMode, generatio
 		if (restartRequired) {
 			state.mode = previousMode;
 			state.quiet = previousQuiet;
-			stopInhibitor(ctx, "settings save failed", { notify: false });
-			startInhibitor(ctx, { notify: false });
-			if (!state.process) rollbackError = state.lastError ?? "the prior inhibitor was not restored";
+			await stopInhibitor(ctx, "settings save failed", { notify: false });
+			if (generation !== state.sessionGeneration) return;
+			await startInhibitor(ctx, generation, { notify: false });
+			if (generation !== state.sessionGeneration) return;
+			if (!hasActiveInhibitor()) {
+				rollbackError = state.lastError ?? "the prior inhibitor was not restored";
+			}
 		}
 		state.settingsError = rollbackError
 			? `settings save failed (${formatError(error)}); runtime rollback failed: ${rollbackError}`
@@ -323,9 +354,10 @@ function showStatus(ctx: ExtensionContext) {
 	updateStatus(ctx);
 }
 
-function stopCaffeinate(ctx: ExtensionContext, reason: string) {
+async function stopCaffeinate(ctx: ExtensionContext, reason: string, sessionGeneration: number) {
 	state.activeTurns = 0;
-	stopInhibitor(ctx, reason);
+	await stopInhibitor(ctx, reason);
+	if (sessionGeneration !== state.sessionGeneration) return;
 	updateStatus(ctx);
 }
 
@@ -363,14 +395,24 @@ function buildCommandGuide() {
 	].join("\n");
 }
 
-function startInhibitor(ctx: ExtensionContext, options: { notify?: boolean } = {}) {
-	if (state.disabled || state.process) {
+async function startInhibitor(
+	ctx: ExtensionContext,
+	sessionGeneration: number,
+	options: { notify?: boolean } = {},
+) {
+	if (state.disabled || hasActiveInhibitor() || state.inhibitorStarting) {
 		updateStatus(ctx);
 		return;
 	}
 
+	const token = ++inhibitSequence;
 	const command = getInhibitorCommand(state.mode);
-	if (!command) {
+	const wantsDbus =
+		!command?.custom &&
+		state.mode === "display" &&
+		process.platform === "linux" &&
+		(command === undefined || command.addDbusIdleInhibit === true);
+	if (!command && !wantsDbus) {
 		state.available = false;
 		state.lastError = `No supported sleep inhibitor found for ${process.platform}.`;
 		ctx.ui.notify(state.lastError, "warning");
@@ -378,56 +420,154 @@ function startInhibitor(ctx: ExtensionContext, options: { notify?: boolean } = {
 		return;
 	}
 
-	try {
-		const child = startInhibitorProcess(
-			command,
-			(error) => {
-				if (state.process === child) {
-					state.process = undefined;
-					state.startedAt = undefined;
-				}
-				state.available = false;
-				state.lastError = `${command.description} failed: ${error.message}`;
-				ctx.ui.notify(state.lastError, "warning");
-				updateStatus(ctx);
-			},
-			(exit) => {
-				if (state.process !== child) return;
-				state.process = undefined;
-				state.startedAt = undefined;
-				state.available = false;
-				state.lastError = `${command.description} exited unexpectedly (${exit}).`;
-				ctx.ui.notify(state.lastError, "warning");
-				updateStatus(ctx);
-			},
-		);
-		state.process = child;
-		state.startedAt = Date.now();
-		state.command = command;
-		state.available = true;
-		state.lastError = undefined;
-		if (options.notify !== false) {
-			ctx.ui.notify(`Keeping computer awake (${statusModeLabel()}).`, "info");
-		}
-		updateStatus(ctx);
-	} catch (error) {
+	state.inhibitorStarting = true;
+	state.inhibitWarning = undefined;
+	let child: ChildProcess | undefined;
+	let childError: string | undefined;
+	let assembling = true;
+	const handleChildFailure = (message: string) => {
+		if (!child || token !== inhibitSequence || state.process !== child) return;
 		state.process = undefined;
-		state.startedAt = undefined;
-		state.available = false;
-		state.lastError = error instanceof Error ? error.message : String(error);
-		ctx.ui.notify(`Unable to start pi-caffeinate: ${state.lastError}`, "warning");
-		updateStatus(ctx);
+		state.command = undefined;
+		if (assembling) {
+			childError = message;
+			return;
+		}
+		applyChildFailure(ctx, message);
+	};
+
+	if (command) {
+		try {
+			child = startInhibitorProcess(
+				command,
+				(error) => handleChildFailure(`${command.description} failed: ${error.message}`),
+				(exit) => handleChildFailure(`${command.description} exited unexpectedly (${exit}).`),
+			);
+			state.process = child;
+			state.command = command;
+			state.startedAt = Date.now();
+		} catch (error) {
+			childError = `${command.description}: ${formatError(error)}`;
+		}
 	}
+
+	let dbus: DbusScreenSaverClient | undefined;
+	let dbusError: string | undefined;
+	if (wantsDbus) {
+		try {
+			dbus = await dbusFactory();
+			if (startIsStale(token, sessionGeneration)) {
+				await cancelPendingStart(token, child, command, dbus);
+				return;
+			}
+			await dbus.inhibit(INHIBIT_REASON);
+		} catch (error) {
+			dbusError = `D-Bus idle inhibit (${SCREENSAVER_BUS_NAME}): ${formatError(error)}`;
+			await dbus?.close().catch(() => undefined);
+			dbus = undefined;
+		}
+	}
+
+	assembling = false;
+	if (startIsStale(token, sessionGeneration)) {
+		await cancelPendingStart(token, child, command, dbus);
+		return;
+	}
+
+	state.inhibitorStarting = false;
+	state.dbus = dbus;
+	const failures = [childError, dbusError].filter((failure): failure is string => Boolean(failure));
+	if (!hasActiveInhibitor()) {
+		state.startedAt = undefined;
+		state.command = undefined;
+		state.available = false;
+		state.lastError =
+			failures.join("; ") || `No supported sleep inhibitor found for ${process.platform}.`;
+		ctx.ui.notify(state.lastError, "warning");
+		updateStatus(ctx);
+		return;
+	}
+
+	state.startedAt ??= Date.now();
+	state.available = true;
+	state.lastError = undefined;
+	state.inhibitWarning = failures.length > 0 ? failures.join("; ") : undefined;
+	if (state.inhibitWarning) {
+		ctx.ui.notify(`pi-caffeinate is partially active: ${state.inhibitWarning}`, "warning");
+	} else if (options.notify !== false) {
+		ctx.ui.notify(`Keeping computer awake (${statusModeLabel()}).`, "info");
+	}
+	updateStatus(ctx);
 }
 
-function stopInhibitor(ctx: ExtensionContext, reason: string, options: { notify?: boolean } = {}) {
+async function stopInhibitor(
+	ctx: ExtensionContext,
+	reason: string,
+	options: { notify?: boolean } = {},
+) {
+	inhibitSequence += 1;
 	const child = state.process;
-	if (!child) return;
+	const dbus = state.dbus;
+	const command = state.command;
+	const wasStarting = state.inhibitorStarting;
 	state.process = undefined;
-	state.startedAt = undefined;
-	stopInhibitorProcess(child, state.command);
+	state.dbus = undefined;
 	state.command = undefined;
+	state.startedAt = undefined;
+	state.inhibitWarning = undefined;
+	state.inhibitorStarting = false;
+	if (child) stopInhibitorProcess(child, command);
+	if (!child && !dbus && !wasStarting) return;
 	if (options.notify !== false) ctx.ui.notify(`Released pi-caffeinate (${reason}).`, "info");
+	if (!dbus) return;
+	try {
+		await dbus.uninhibit();
+	} catch {
+		// Closing the session-bus connection also releases its inhibition cookie.
+	}
+	await dbus.close().catch(() => undefined);
+}
+
+function applyChildFailure(ctx: ExtensionContext, message: string) {
+	if (state.dbus) {
+		state.available = true;
+		state.lastError = undefined;
+		state.inhibitWarning = message;
+	} else {
+		state.startedAt = undefined;
+		state.available = false;
+		state.lastError = message;
+		state.inhibitWarning = undefined;
+	}
+	ctx.ui.notify(message, "warning");
+	updateStatus(ctx);
+}
+
+function hasActiveInhibitor() {
+	return Boolean(state.process || state.dbus);
+}
+
+function startIsStale(token: number, sessionGeneration: number) {
+	return token !== inhibitSequence || sessionGeneration !== state.sessionGeneration;
+}
+
+async function cancelPendingStart(
+	token: number,
+	child: ChildProcess | undefined,
+	command: InhibitorCommand | undefined,
+	dbus: DbusScreenSaverClient | undefined,
+) {
+	if (token === inhibitSequence) {
+		inhibitSequence += 1;
+		state.inhibitorStarting = false;
+		if (child && state.process === child) {
+			state.process = undefined;
+			state.command = undefined;
+			state.startedAt = undefined;
+			stopInhibitorProcess(child, command);
+		}
+	}
+	await dbus?.close().catch(() => undefined);
 }
 
 function updateStatus(ctx: ExtensionContext) {
@@ -436,7 +576,7 @@ function updateStatus(ctx: ExtensionContext) {
 		return;
 	}
 
-	if (state.process) {
+	if (hasActiveInhibitor()) {
 		ctx.ui.setStatus(STATUS_KEY, withDeprecatedIcon(statusModeLabel()));
 		return;
 	}
@@ -465,11 +605,15 @@ function describeState() {
 		return lines.join("\n");
 	}
 
-	if (state.process) {
+	if (hasActiveInhibitor()) {
 		const seconds = state.startedAt ? Math.round((Date.now() - state.startedAt) / 1000) : 0;
+		const activeParts: string[] = [];
+		if (state.dbus) activeParts.push(`D-Bus idle inhibit (${SCREENSAVER_BUS_NAME})`);
+		if (state.process && state.command) activeParts.push(state.command.description);
 		lines.unshift(
-			`pi-caffeinate is active using ${state.command?.description ?? "an inhibitor"} for ${seconds}s.`,
+			`pi-caffeinate is active using ${activeParts.join(" + ") || "an inhibitor"} for ${seconds}s.`,
 		);
+		if (state.inhibitWarning) lines.push(`Inhibitor warning: ${state.inhibitWarning}`);
 		return lines.join("\n");
 	}
 
@@ -485,7 +629,7 @@ function describeState() {
 }
 
 function statusLevel() {
-	return state.available && !state.settingsError ? "info" : "warning";
+	return state.available && !state.settingsError && !state.inhibitWarning ? "info" : "warning";
 }
 
 function statusModeLabel() {
@@ -559,5 +703,10 @@ function warnDeprecatedIcon(ctx: ExtensionContext) {
 	);
 }
 
-export { formatMode, splitCommand, windowsInhibitorScript } from "./inhibitors.js";
+export {
+	formatMode,
+	getInhibitorCommand,
+	splitCommand,
+	windowsInhibitorScript,
+} from "./inhibitors.js";
 export { normalizeCaffeinateSettings } from "./settings.js";

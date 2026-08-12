@@ -9,6 +9,8 @@ export interface InhibitorCommand {
 	description: string;
 	releaseOnStdinClose?: boolean;
 	custom?: boolean;
+	/** Display mode still needs D-Bus idle inhibit on top of this command (systemd blocks sleep only). */
+	addDbusIdleInhibit?: boolean;
 }
 
 export function getInhibitorCommand(mode: CaffeinateMode): InhibitorCommand | undefined {
@@ -29,11 +31,10 @@ export function getInhibitorCommand(mode: CaffeinateMode): InhibitorCommand | un
 			return windowsPowerInhibitorCommand("powershell.exe", mode);
 		}
 		if (commandExists("systemd-inhibit")) {
-			const what = mode === "sleep" ? "sleep" : "idle:sleep";
 			return parentBoundUnixCommand(
 				"systemd-inhibit",
 				[
-					`--what=${what}`,
+					"--what=sleep",
 					"--who=pi-caffeinate",
 					"--why=Pi agent is running",
 					"--mode=block",
@@ -41,6 +42,7 @@ export function getInhibitorCommand(mode: CaffeinateMode): InhibitorCommand | un
 					"infinity",
 				],
 				`systemd-inhibit (${formatMode(mode)})`,
+				mode === "display",
 			);
 		}
 		if (commandExists("caffeinate")) {
@@ -48,6 +50,7 @@ export function getInhibitorCommand(mode: CaffeinateMode): InhibitorCommand | un
 				"caffeinate",
 				macCaffeinateArgs(mode),
 				caffeinateDescription(mode),
+				mode === "display",
 			);
 		}
 	}
@@ -67,6 +70,7 @@ function parentBoundUnixCommand(
 	command: string,
 	args: string[],
 	description: string,
+	addDbusIdleInhibit = false,
 ): InhibitorCommand {
 	return {
 		command: "sh",
@@ -79,6 +83,7 @@ function parentBoundUnixCommand(
 			...args,
 		],
 		description,
+		...(addDbusIdleInhibit ? { addDbusIdleInhibit: true } : {}),
 	};
 }
 
