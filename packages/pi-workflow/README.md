@@ -15,7 +15,8 @@ Those packages intentionally share command, tool, event-channel, and session-sta
 ## ✨ Features
 
 - Provides `/workflow`, `/plan`, and `/goal` from one extension.
-- Preserves Plan exploration, structured questions, completion, save, export, tool selection, thinking-level control, current-session implementation, and fresh-session implementation.
+- Preserves Plan exploration, structured questions, completion, save, export, tool selection, and thinking-level control.
+- Supports Plan alone, Goal alone, and approved Plan-to-Goal execution without adding a non-Goal implementation path.
 - Preserves Goal completion, blocking, external waits, pause, resume, edit, clear, token budgets, continuation guards, optional ordered queues, and managed-run RPC.
 - Uses review-first handoff by default, matching Codex's authoritative-plan and explicit-approval workflow.
 - Offers **Run with Goal** and **Start fresh with Goal** as the primary completed-plan actions.
@@ -68,7 +69,15 @@ Start planning:
 /plan describe the feature and produce an implementation plan
 ```
 
-When the plan is complete, choose **Run with Goal** to keep the planning conversation or **Start fresh with Goal** to transfer only the approved plan.
+A Plan can remain planning-only: save it, export it, continue revising it, or discard it without execution.
+
+When the Plan is ready, choose **Run with Goal** to keep the planning conversation or **Start fresh with Goal** to transfer only the approved Plan.
+
+Start Goal directly when no prior Plan is needed:
+
+```text
+/goal implement and verify the requested change
+```
 
 Use `/goal` to inspect, pause, resume, edit, or clear managed execution.
 
@@ -110,19 +119,21 @@ If the destination kickoff fails after state is saved, the destination retains b
 
 The source planning session remains resumable after every fresh handoff.
 
-### Plan retention
+### Linked Plan lifecycle
 
-The Plan **After Implement** policy still controls how long the accepted Plan is retained and reinjected.
+Implement always starts Goal; `pi-workflow` has no non-Goal implementation path.
 
-The default keeps the Plan active while its linked Goal runs.
+The exact approved Plan remains linked and available while Goal is active, paused, blocked, waiting, usage-limited, budget-limited, retried, compacted, or resumed.
 
-Goal completion, clear, or supersession clears the linked implementation Plan so stale context does not leak into later work.
+The original combined handoff supplies the first Goal request without duplication.
 
-Pausing, blocking, waiting, usage limits, budget limits, and resume retain or relink the approved Plan for recovery.
+After that handoff disappears from model context, the extension injects one hidden canonical copy of the exact Plan instead of depending on a lossy compaction summary.
 
-Shorter retention policies use the exact Plan in the initial handoff and then follow their established cleanup behavior.
+Goal completion, clear, or successful supersession clears the linked Plan so stale context does not leak into later work.
 
-Goal state remains independently persistent until completion, clear, or another Goal transition.
+A linked `/plan exit` is rejected because it would leave Goal referring to a missing Plan; use `/goal` to manage execution or `/goal clear` to stop it and clear both states.
+
+Persisted unlinked implementation state is recovered as a ready Plan because no Goal owns execution.
 
 ## 💬 Commands
 
@@ -151,7 +162,9 @@ It works in TUI and RPC modes and rejects print and JSON modes before opening in
 /plan exit
 ```
 
-`/plan` retains the Plan-mode read-only tool policy, structured `plan_mode_question` interaction, standalone `plan_mode_complete` completion contract, saved-plan slot, export safety, session persistence, and compaction-aware implementation context.
+`/plan` retains the Plan-mode read-only tool policy, structured `plan_mode_question` interaction, standalone `plan_mode_complete` completion contract, saved-plan slot, export safety, session persistence, and compaction-aware linked-Plan context.
+
+`/plan implement` is the direct compatibility route for starting the ready or saved Plan as Goal in the current session.
 
 A new Plan cannot start while any unfinished Goal exists.
 
@@ -233,7 +246,6 @@ Example:
   "plan": {
     "thinkingLevel": "inherit",
     "defaultPlanTools": ["read", "bash", "grep", "find", "ls"],
-    "implementationPlanRetention": "keep",
     "defaultPlanExportPath": "PLAN.md",
     "safeSubcommands": {
       "git": ["status", "log", "diff", "show"]
@@ -257,7 +269,11 @@ Example:
 
 `workflow.planHandoff` accepts `review` or `automatic`.
 
-The `plan` object accepts the same Plan defaults and reviewed shell subcommands as the standalone Plan extension.
+The `plan` object accepts Plan thinking, tools, export destination, and reviewed shell-subcommand defaults.
+
+The standalone `implementationPlanRetention` setting is not used by `pi-workflow` because every Implement action starts Goal and keeps the exact Plan until linked execution ends.
+
+A legacy `plan.implementationPlanRetention` field is ignored and preserved as unknown data during ordinary settings saves.
 
 The `goal` object accepts the same tool visibility, queue, RPC, and continuation-limit settings as the standalone Goal extension.
 
@@ -279,7 +295,7 @@ Recreate their desired values through `/workflow` or manually place them under t
 
 ## 📊 Status and persistence
 
-`workflow:plan` reports `plan active`, `plan ready`, `plan saved`, or `plan implementing`.
+`workflow:plan` reports `plan active`, `plan ready`, `plan saved`, or `plan implementing` while the exact Plan is linked to Goal.
 
 `workflow:goal` reports active, waiting, paused, blocked, usage-limited, budget-limited, complete, and queue-frozen states.
 

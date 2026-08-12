@@ -27,10 +27,15 @@ export function updatePlanModeUi(
 			"Use /plan to show, implement, or clear it.",
 		]);
 	} else if (state.activeImplementation) {
-		ctx.ui.setWidget(PLAN_WIDGET_KEY, [
-			"Implementation plan active",
-			"Use /plan to show, replace, or clear it.",
-		]);
+		ctx.ui.setWidget(
+			PLAN_WIDGET_KEY,
+			state.activeImplementation.goalId
+				? [
+						"Implementation Plan linked to Goal",
+						"Use /plan to show or export it, and /goal to manage execution.",
+					]
+				: ["Implementation plan active", "Use /plan to show, replace, or clear it."],
+		);
 	} else {
 		ctx.ui.setWidget(PLAN_WIDGET_KEY, undefined);
 	}
@@ -93,6 +98,7 @@ export function planModeStatusText(state: PlanModeState, toolSummary: () => stri
 		return `Plan mode is active. ${toolSummary()} Explore, ask, and finish with plan_mode_complete when decision-ready.`;
 	}
 	if (state.savedPlan) return "A plan is saved for later.";
+	if (state.activeImplementation?.goalId) return "An implementation Plan is linked to Goal.";
 	if (state.activeImplementation) return "An implementation plan is active.";
 	return "Plan mode is off.";
 }

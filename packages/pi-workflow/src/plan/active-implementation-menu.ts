@@ -10,8 +10,9 @@ interface ActiveImplementationMenuOptions {
 	show(): void;
 	exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
 	settings(signal: AbortSignal): Promise<boolean>;
-	startNew(): void;
-	clear(): void;
+	manageGoal?(): void | Promise<void>;
+	startNew?(): void;
+	clear?(): void;
 }
 
 export async function showActiveImplementationMenu(
@@ -19,20 +20,38 @@ export async function showActiveImplementationMenu(
 	options: ActiveImplementationMenuOptions,
 ) {
 	type Screen = "active" | "export";
-	type Action = "show" | "export" | "settings" | "start-new" | "clear";
+	type Action = "show" | "export" | "settings" | "manage-goal" | "start-new" | "clear";
 	const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
 		start: "active",
 		screens: {
 			active: () => ({
 				kind: "actions",
 				title: "Active implementation plan",
-				lines: [options.statusText],
+				lines: [
+					options.statusText,
+					...(options.manageGoal
+						? ["The exact Plan remains linked until Goal completes, is cleared, or is superseded."]
+						: []),
+				],
 				items: [
 					{ id: "show", label: "Show active implementation plan", action: "show" },
 					{ id: "export", label: "Export plan…", to: "export" },
+					...(options.manageGoal
+						? [{ id: "manage-goal", label: "Manage linked Goal…", action: "manage-goal" as const }]
+						: []),
 					{ id: "settings", label: "Settings", action: "settings" },
-					{ id: "start-new", label: "Start a new plan", action: "start-new" },
-					{ id: "clear", label: "Clear active implementation plan", action: "clear" },
+					...(options.startNew
+						? [{ id: "start-new", label: "Start a new plan", action: "start-new" as const }]
+						: []),
+					...(options.clear
+						? [
+								{
+									id: "clear",
+									label: "Clear active implementation plan",
+									action: "clear" as const,
+								},
+							]
+						: []),
 				],
 				hint: "close",
 			}),
@@ -50,11 +69,18 @@ export async function showActiveImplementationMenu(
 				if (signal.aborted || !options.isCurrent()) return { kind: "rejected" };
 				return close ? { kind: "close" } : { kind: "stay" };
 			},
+			"manage-goal": async () => {
+				if (!options.manageGoal) return { kind: "rejected" };
+				await options.manageGoal();
+				return { kind: "close" };
+			},
 			"start-new": async () => {
+				if (!options.startNew) return { kind: "rejected" };
 				options.startNew();
 				return { kind: "close" };
 			},
 			clear: async () => {
+				if (!options.clear) return { kind: "rejected" };
 				options.clear();
 				return { kind: "close" };
 			},

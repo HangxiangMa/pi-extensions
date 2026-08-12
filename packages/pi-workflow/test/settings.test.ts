@@ -75,7 +75,11 @@ test("Plan, Goal, and handoff saves preserve every unowned field", async () => {
 				{
 					futureTopLevel: { enabled: true },
 					workflow: { planHandoff: "review", futureWorkflow: 1 },
-					plan: { thinkingLevel: "low", futurePlan: 2 },
+					plan: {
+						thinkingLevel: "low",
+						implementationPlanRetention: "legacy-retention",
+						futurePlan: 2,
+					},
 					goal: {
 						futureGoal: 3,
 						experimental: { goals: false, futureQueue: 4 },
@@ -113,6 +117,7 @@ test("Plan, Goal, and handoff saves preserve every unowned field", async () => {
 		});
 		assert.deepEqual(document.plan, {
 			thinkingLevel: "xhigh",
+			implementationPlanRetention: "legacy-retention",
 			defaultPlanExportPath: "docs/PLAN.md",
 			futurePlan: 2,
 		});
@@ -197,6 +202,38 @@ test("atomic publication failure preserves the previous file and removes tempora
 		if (process.platform !== "win32") {
 			assert.equal((await stat(fixture.path)).mode & 0o777, 0o600);
 		}
+	} finally {
+		await fixture.cleanup();
+	}
+});
+
+test("retired Plan retention is ignored at runtime and preserved during saves", async () => {
+	const fixture = await temporarySettings();
+	try {
+		await writeFile(
+			fixture.path,
+			JSON.stringify({
+				workflow: { planHandoff: "review" },
+				plan: {
+					thinkingLevel: "medium",
+					implementationPlanRetention: "future-retention-policy",
+					futurePlan: { kept: true },
+				},
+				goal: {},
+			}),
+		);
+
+		const loaded = readWorkflowSettings(fixture.path);
+		assert.equal(loaded.kind, "loaded");
+		if (loaded.kind !== "loaded") assert.fail("Expected workflow settings to load");
+		assert.equal(loaded.settings.plan.implementationPlanRetention, undefined);
+
+		await updateWorkflowPlanSettings({ thinkingLevel: "high" }, { settingsPath: fixture.path });
+		const document = JSON.parse(await readFile(fixture.path, "utf8")) as {
+			plan?: Record<string, unknown>;
+		};
+		assert.equal(document.plan?.implementationPlanRetention, "future-retention-policy");
+		assert.deepEqual(document.plan?.futurePlan, { kept: true });
 	} finally {
 		await fixture.cleanup();
 	}

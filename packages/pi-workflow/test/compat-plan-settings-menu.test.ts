@@ -72,6 +72,26 @@ test("Plan settings show four flat workflow rows without materializing a missing
 	});
 });
 
+test("Workflow Plan settings hide standalone implementation retention", async () => {
+	await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
+		const running = showPlanModeSettings(
+			ctx,
+			menuOptions(settingsPath, saved, { showImplementationPlanRetention: false }),
+		);
+		await tui.waitForOpen();
+		const frame = tui.render().join("\n");
+		assert.match(frame, /Plan thinking\s+inherit/);
+		assert.match(frame, /Plan tools\s+Automatic safe built-ins/);
+		assert.doesNotMatch(frame, /After Implement/);
+		assert.match(frame, /Export destination\s+PLAN\.md/);
+		assert.ok(tui.render(34).every((line) => visibleWidth(line) <= 34));
+
+		tui.press("ctrl+c");
+		await running;
+		assert.deepEqual(saved, []);
+	});
+});
+
 test("Plan settings save thinking immediately for the next workflow", async () => {
 	await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
 		const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));

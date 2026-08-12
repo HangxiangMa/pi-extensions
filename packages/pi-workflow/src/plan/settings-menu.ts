@@ -33,6 +33,7 @@ export interface PlanModeSettingsMenuOptions {
 	isCurrent(): boolean;
 	settingsPath?: string;
 	legacySettingsPath?: string;
+	showImplementationPlanRetention?: boolean;
 	readSettings?: (settingsPath?: string) => Promise<PlanModeSettingsLoadResult>;
 	updateSettings?: (
 		patch: PlanModeSettingsPatch,
@@ -107,16 +108,21 @@ export async function showPlanModeSettings(
 									currentValue: defaultToolsValue(state.settings.defaultPlanTools),
 									action: "open-tools",
 								},
-								{
-									id: "implementationPlanRetention",
-									label: "After Implement",
-									description: "Choose how long the accepted plan keeps guiding implementation.",
-									currentValue: retentionLabel(
-										configuredImplementationPlanRetention(state.settings),
-									),
-									values: IMPLEMENTATION_PLAN_RETENTIONS.map(retentionLabel),
-									action: "set-retention",
-								},
+								...(options.showImplementationPlanRetention === false
+									? []
+									: [
+											{
+												id: "implementationPlanRetention",
+												label: "After Implement",
+												description:
+													"Choose how long the accepted plan keeps guiding implementation.",
+												currentValue: retentionLabel(
+													configuredImplementationPlanRetention(state.settings),
+												),
+												values: IMPLEMENTATION_PLAN_RETENTIONS.map(retentionLabel),
+												action: "set-retention" as const,
+											},
+										]),
 								{
 									id: "defaultPlanExportPath",
 									label: "Export destination",
@@ -265,7 +271,7 @@ export async function showPlanModeSettings(
 function settingsLines(settingsPath: string, notice: string | undefined) {
 	return [
 		`User settings · ${safeTerminalText(settingsPath)}`,
-		"Plan defaults apply to the next workflow; handoff and export choices apply to their next action.",
+		"Plan defaults apply to the next workflow; export choices apply to the next export.",
 		...(notice ? [safeTerminalText(notice)] : []),
 	];
 }

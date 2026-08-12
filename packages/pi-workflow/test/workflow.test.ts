@@ -4,7 +4,7 @@ import { builtinTool, createMockContext, createMockPi } from "../../../test/supp
 import { serializeGoalState } from "../src/goal/persistence.js";
 import { createGoal } from "../src/goal/runtime.js";
 import { DEFAULT_GOAL_SETTINGS } from "../src/goal/settings.js";
-import { startFreshWorkflowImplementation } from "../src/handoff.js";
+import { startFreshWorkflowImplementation, WORKFLOW_GOAL_OBJECTIVE } from "../src/handoff.js";
 import workflow from "../src/workflow.js";
 
 const BASE_TOOLS = ["read", "bash", "edit", "write"];
@@ -19,16 +19,33 @@ async function emitAll(
 	for (const handler of mock.events.get(name) ?? []) await handler(event, ctx);
 }
 
-function setup() {
+function setup(
+	readSettings: NonNullable<Parameters<typeof workflow>[1]>["readSettings"] = () => ({
+		kind: "missing",
+	}),
+	contextOptions: Parameters<typeof createMockContext>[0] = {},
+) {
 	const mock = createMockPi({
 		activeTools: [...BASE_TOOLS, ...GOAL_TOOLS],
 		allTools: [...BASE_TOOLS, ...GOAL_TOOLS].map(builtinTool),
 	});
-	workflow(mock.pi, {
-		readSettings: () => ({ kind: "missing" }),
-	});
-	const context = createMockContext({ mode: "tui", hasUI: true });
+	workflow(mock.pi, { readSettings });
+	const context = createMockContext({ mode: "tui", hasUI: true, ...contextOptions });
 	return { mock, ...context };
+}
+
+async function transformContext(
+	fixture: ReturnType<typeof setup>,
+	messages: unknown[],
+): Promise<unknown[]> {
+	let transformedMessages = messages;
+	for (const handler of fixture.mock.events.get("context") ?? []) {
+		const transformed = (await handler({ messages: transformedMessages }, fixture.ctx)) as
+			| { messages?: unknown[] }
+			| undefined;
+		transformedMessages = transformed?.messages ?? transformedMessages;
+	}
+	return transformedMessages;
 }
 
 async function startLinkedWorkflow(fixture: ReturnType<typeof setup>, plan = "# Approved") {
@@ -135,6 +152,40 @@ test("an approved Plan starts Goal with one exact combined implementation reques
 	assert.equal(goalState.goal?.text, "Implement and verify the approved Plan-mode plan.");
 });
 
+test("Plan-only actions do not execute until Implement starts Goal", async () => {
+	const fixture = setup(undefined, {
+		model: { provider: "test", id: "model" },
+		modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true }) },
+	});
+	await emitAll(fixture.mock, "session_start", { reason: "startup" }, fixture.ctx);
+	await fixture.mock.commands.get("plan")?.handler("start", fixture.ctx);
+	const complete = fixture.mock.tools.find((tool) => tool.name === "plan_mode_complete");
+	assert.ok(complete);
+	await (complete.execute as (...args: unknown[]) => Promise<unknown>)(
+		"plan-call",
+		{ plan: "# Saved before execution" },
+		undefined,
+		undefined,
+		fixture.ctx,
+	);
+	await fixture.mock.commands.get("plan")?.handler("save", fixture.ctx);
+	assert.equal(fixture.mock.entries.filter((entry) => entry.customType === "goal-state").length, 0);
+	const saved = fixture.mock.entries
+		.filter((entry) => entry.customType === "plan-mode-state")
+		.at(-1)?.data as { savedPlan?: { plan?: string } };
+	assert.equal(saved.savedPlan?.plan, "# Saved before execution");
+
+	await fixture.mock.commands.get("plan")?.handler("implement", fixture.ctx);
+	const activeGoal = fixture.mock.entries
+		.filter((entry) => entry.customType === "goal-state")
+		.at(-1)?.data as { goal?: { status?: string } };
+	assert.equal(activeGoal.goal?.status, "active");
+	const linkedPlan = fixture.mock.entries
+		.filter((entry) => entry.customType === "plan-mode-state")
+		.at(-1)?.data as { activeImplementation?: { goalId?: string } };
+	assert.ok(linkedPlan.activeImplementation?.goalId);
+});
+
 test("paused and resumed Goal states retain and relink the approved Plan", async () => {
 	const { mock, ctx } = setup();
 	await emitAll(mock, "session_start", { reason: "startup" }, ctx);
@@ -184,6 +235,43 @@ test("stopped Goal ID rotation keeps Plan cleanup linked", async () => {
 	assert.equal(finalPlan.activeImplementation, undefined);
 });
 
+test("budget-only Goal edits retain and relink the exact Plan", async () => {
+	const fixture = setup();
+	await startLinkedWorkflow(fixture, "# Keep through budget edit");
+	const initialPlan = fixture.mock.entries
+		.filter((entry) => entry.customType === "plan-mode-state")
+		.at(-1)?.data as { activeImplementation?: { goalId?: string } };
+	const initialGoalId = initialPlan.activeImplementation?.goalId;
+	assert.ok(initialGoalId);
+
+	await fixture.mock.commands
+		.get("goal")
+		?.handler(`edit --tokens 20 ${WORKFLOW_GOAL_OBJECTIVE}`, fixture.ctx);
+
+	const editedGoal = fixture.mock.entries
+		.filter((entry) => entry.customType === "goal-state")
+		.at(-1)?.data as { goal?: { id?: string; text?: string; tokenBudget?: number } };
+	const retainedPlan = fixture.mock.entries
+		.filter((entry) => entry.customType === "plan-mode-state")
+		.at(-1)?.data as { activeImplementation?: { goalId?: string; plan?: string } };
+	assert.notEqual(editedGoal.goal?.id, initialGoalId);
+	assert.equal(editedGoal.goal?.text, WORKFLOW_GOAL_OBJECTIVE);
+	assert.equal(editedGoal.goal?.tokenBudget, 20);
+	assert.equal(retainedPlan.activeImplementation?.goalId, editedGoal.goal?.id);
+	assert.equal(retainedPlan.activeImplementation?.plan, "# Keep through budget edit");
+	const compactedContext = await transformContext(fixture, [
+		{ role: "compactionSummary", content: "Budget changed after earlier work." },
+		{ role: "user", content: "Continue within the updated budget." },
+	]);
+	assert.match(JSON.stringify(compactedContext), /Keep through budget edit/u);
+
+	await fixture.mock.commands.get("goal")?.handler("clear", fixture.ctx);
+	const clearedPlan = fixture.mock.entries
+		.filter((entry) => entry.customType === "plan-mode-state")
+		.at(-1)?.data as { activeImplementation?: unknown };
+	assert.equal(clearedPlan.activeImplementation, undefined);
+});
+
 test("failed resume relinks the restored Goal so clear still removes Plan", async () => {
 	const fixture = setup();
 	await startLinkedWorkflow(fixture, "# Resume rollback");
@@ -227,6 +315,96 @@ test("successful Goal objective supersession clears the linked Plan", async () =
 		.filter((entry) => entry.customType === "plan-mode-state")
 		.at(-1)?.data as { activeImplementation?: unknown };
 	assert.equal(finalPlan.activeImplementation, undefined);
+});
+
+test("legacy short retention cannot detach a Plan from its linked Goal", async () => {
+	for (const retention of ["clear-on-start", "clear-after-first-run"] as const) {
+		const fixture = setup(() => ({
+			kind: "loaded",
+			settings: {
+				planHandoff: "review",
+				plan: { thinkingLevel: "inherit", implementationPlanRetention: retention },
+				goal: structuredClone(DEFAULT_GOAL_SETTINGS),
+			},
+		}));
+		await startLinkedWorkflow(fixture, `# Retain through Goal\n\nPolicy: ${retention}`);
+
+		const compactedContext = await transformContext(fixture, [
+			{ role: "compactionSummary", content: "Earlier implementation work was compacted." },
+			{ role: "user", content: "Continue the linked Goal." },
+		]);
+		assert.equal(
+			compactedContext.filter(
+				(message) =>
+					(message as { customType?: string }).customType === "plan-mode-implementation-context",
+			).length,
+			1,
+		);
+		assert.match(JSON.stringify(compactedContext), /Retain through Goal/u);
+		const repeatedContext = await transformContext(fixture, [
+			{ role: "branchSummary", content: "A branch summary remains first." },
+			...compactedContext,
+		]);
+		assert.equal(
+			repeatedContext.filter(
+				(message) =>
+					(message as { customType?: string }).customType === "plan-mode-implementation-context",
+			).length,
+			1,
+		);
+		const firstNonSummary = repeatedContext.findIndex(
+			(message) =>
+				!["branchSummary", "compactionSummary"].includes((message as { role?: string }).role ?? ""),
+		);
+		assert.equal(
+			(repeatedContext[firstNonSummary] as { customType?: string }).customType,
+			"plan-mode-implementation-context",
+		);
+
+		await fixture.mock.commands.get("goal")?.handler("pause", fixture.ctx);
+		const pausedContext = await transformContext(fixture, [
+			{ role: "compactionSummary", content: "Paused after compaction." },
+			{ role: "user", content: "Inspect the paused workflow." },
+		]);
+		assert.match(JSON.stringify(pausedContext), /Retain through Goal/u);
+		await fixture.mock.commands.get("goal")?.handler("resume", fixture.ctx);
+		await emitAll(fixture.mock, "agent_settled", {}, fixture.ctx);
+		const retainedPlan = fixture.mock.entries
+			.filter((entry) => entry.customType === "plan-mode-state")
+			.at(-1)?.data as { activeImplementation?: { goalId?: string; retention?: string } };
+		assert.ok(retainedPlan.activeImplementation?.goalId);
+		assert.equal(retainedPlan.activeImplementation.retention, "keep");
+
+		await fixture.mock.commands.get("goal")?.handler("clear", fixture.ctx);
+		const laterContext = await transformContext(fixture, [
+			{ role: "compactionSummary", content: "Goal ended." },
+			{ role: "user", content: "Start unrelated work." },
+		]);
+		assert.doesNotMatch(JSON.stringify(laterContext), /Retain through Goal/u);
+	}
+});
+
+test("plan exit cannot detach an active linked Goal", async () => {
+	const fixture = setup();
+	await startLinkedWorkflow(fixture, "# Keep linked");
+
+	await fixture.mock.commands.get("plan")?.handler("exit", fixture.ctx);
+
+	const retainedPlan = fixture.mock.entries
+		.filter((entry) => entry.customType === "plan-mode-state")
+		.at(-1)?.data as { activeImplementation?: { goalId?: string } };
+	assert.ok(retainedPlan.activeImplementation?.goalId);
+	assert.match(fixture.notifications.at(-1)?.message ?? "", /linked Goal.*\/goal clear/iu);
+	const retainedGoal = fixture.mock.entries
+		.filter((entry) => entry.customType === "goal-state")
+		.at(-1)?.data as { goal?: { status?: string } };
+	assert.equal(retainedGoal.goal?.status, "active");
+
+	const print = createMockContext({ mode: "print", hasUI: false });
+	await assert.rejects(
+		async () => fixture.mock.commands.get("plan")?.handler("exit", print.ctx),
+		/linked Goal.*\/goal clear/iu,
+	);
 });
 
 test("Goal completion clears the linked implementation Plan", async () => {
@@ -481,7 +659,7 @@ test("linkage persistence failure rolls back provisional Goal ownership and tool
 	]);
 });
 
-test("linked fresh-session restore activates Goal terminal tools hidden in the source", async () => {
+test("linked restore activates Goal tools and upgrades legacy short retention", async () => {
 	const mock = createMockPi({
 		activeTools: [...BASE_TOOLS],
 		allTools: [...BASE_TOOLS, ...GOAL_TOOLS].map(builtinTool),
@@ -506,7 +684,7 @@ test("linked fresh-session restore activates Goal terminal tools hidden in the s
 					plan: "# Fresh",
 					source: "plan_mode_complete",
 					startedAt: 1,
-					retention: "keep",
+					retention: "clear-on-start",
 				},
 			},
 		},
@@ -531,6 +709,18 @@ test("linked fresh-session restore activates Goal terminal tools hidden in the s
 
 	for (const tool of GOAL_TOOLS) assert.ok(mock.rawPi.getActiveTools().includes(tool));
 	assert.match(restored.statuses.get("workflow:goal") ?? "", /^active/u);
+	const migratedPlan = mock.entries.filter((entry) => entry.customType === "plan-mode-state").at(-1)
+		?.data as { activeImplementation?: { retention?: string } };
+	assert.equal(migratedPlan.activeImplementation?.retention, "keep");
+	const context = await transformContext({ mock, ...restored }, [
+		{ role: "compactionSummary", content: "Restored after compaction." },
+		{ role: "user", content: "Continue." },
+	]);
+	assert.match(JSON.stringify(context), /# Fresh/u);
+	await emitAll(mock, "agent_settled", {}, restored.ctx);
+	const retainedPlan = mock.entries.filter((entry) => entry.customType === "plan-mode-state").at(-1)
+		?.data as { activeImplementation?: { goalId?: string } };
+	assert.equal(retainedPlan.activeImplementation?.goalId, restoredGoal.id);
 });
 
 test("Goal restore cannot mutate stale Plan state before the new Plan session is ready", async () => {
@@ -651,7 +841,7 @@ test("session restore keeps a newer Goal and clears an older unlinked implementa
 	assert.doesNotMatch(JSON.stringify(messages), /Stale standalone plan/u);
 });
 
-test("session restore keeps a newer unlinked implementation Plan and clears an older Goal", async () => {
+test("session restore recovers a newer unlinked implementation as ready and clears an older Goal", async () => {
 	const mock = createMockPi({
 		activeTools: [...BASE_TOOLS, ...GOAL_TOOLS],
 		allTools: [...BASE_TOOLS, ...GOAL_TOOLS].map(builtinTool),
@@ -702,7 +892,13 @@ test("session restore keeps a newer unlinked implementation Plan and clears an o
 		?.data as { goal?: unknown };
 	assert.equal(finalGoal.goal, null);
 	assert.equal(restored.statuses.get("workflow:goal"), undefined);
-	assert.equal(restored.statuses.get("workflow:plan"), "plan implementing");
+	assert.equal(restored.statuses.get("workflow:plan"), "plan ready");
+	const recoveredPlan = mock.entries
+		.filter((entry) => entry.customType === "plan-mode-state")
+		.at(-1)?.data as { enabled?: boolean; latestPlan?: string; activeImplementation?: unknown };
+	assert.equal(recoveredPlan.enabled, true);
+	assert.equal(recoveredPlan.latestPlan, "# Current standalone plan");
+	assert.equal(recoveredPlan.activeImplementation, undefined);
 	let messages: unknown[] = [{ role: "user", content: [{ type: "text", text: "continue" }] }];
 	for (const handler of mock.events.get("context") ?? []) {
 		const transformed = (await handler({ messages }, restored.ctx)) as
@@ -710,7 +906,7 @@ test("session restore keeps a newer unlinked implementation Plan and clears an o
 			| undefined;
 		messages = transformed?.messages ?? messages;
 	}
-	assert.match(JSON.stringify(messages), /Current standalone plan/u);
+	assert.doesNotMatch(JSON.stringify(messages), /ACTIVE IMPLEMENTATION PLAN/u);
 });
 
 test("session restore clears a stale Plan linked to a superseding objective", async () => {

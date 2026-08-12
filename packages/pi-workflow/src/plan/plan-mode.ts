@@ -52,6 +52,7 @@ import {
 	awaitPlanModeSettingsWrites,
 	configuredImplementationPlanRetention,
 	configuredThinkingLevel,
+	type ImplementationPlanRetention,
 	type PlanModeSettings,
 	readPlanModeSettings,
 	type updatePlanModeSettings,
@@ -99,6 +100,10 @@ export interface PlanModeDependencies {
 	updateSettings?: typeof updatePlanModeSettings;
 	shouldAutoHandoff?(): boolean;
 	canStartPlan?(): string | undefined;
+	implementationPlanRetention?: ImplementationPlanRetention;
+	implementationOutcome?(): string;
+	showImplementationPlanRetentionSetting?: boolean;
+	manageLinkedGoal?(ctx: ExtensionCommandContext): Promise<void>;
 	startFreshImplementation?: FreshImplementationFromStateOptions["startSession"];
 	startImplementation?(
 		request: PlanImplementationHandoffRequest,
@@ -113,6 +118,7 @@ export interface PlanModeHandle {
 	linkImplementationToGoal(implementationId: string, goalId: string): boolean;
 	clearLinkedGoal(goalId: string): boolean;
 	clearForGoalConflict(ctx: ExtensionContext): boolean;
+	recoverUnlinkedImplementation(ctx: ExtensionContext): boolean;
 	handleGoalState(snapshot: { goalId: string; status: string }): void;
 	reconcileGoalState(goal: { id: string; status: string } | undefined): void;
 }
@@ -297,6 +303,7 @@ export default function planMode(
 				return;
 			}
 			if (command === "exit" || command === "off") {
+				if (linkedPlanExitBlocked(ctx)) return;
 				const notification = state.activeImplementation
 					? "Active implementation plan cleared."
 					: state.savedPlan
@@ -697,7 +704,7 @@ export default function planMode(
 		await startFreshImplementationFromState(ctx, {
 			getState: () => state,
 			menuIsCurrent,
-			retention: configuredImplementationPlanRetention(settings),
+			retention: effectiveImplementationPlanRetention(),
 			stateEntryType: STATE_ENTRY_TYPE,
 			...(dependencies.startFreshImplementation
 				? { startSession: dependencies.startFreshImplementation }
@@ -737,7 +744,7 @@ export default function planMode(
 			plan,
 			source,
 			startedAt: Date.now(),
-			retention: configuredImplementationPlanRetention(settings),
+			retention: effectiveImplementationPlanRetention(),
 		};
 		state = {
 			...state,
@@ -814,7 +821,11 @@ export default function planMode(
 		if (activeImplementation?.id !== implementationId) return false;
 		state = {
 			...state,
-			activeImplementation: { ...activeImplementation, goalId },
+			activeImplementation: {
+				...activeImplementation,
+				goalId,
+				retention: effectiveImplementationPlanRetention(),
+			},
 		};
 		persistState();
 		if (currentContext) updateUi(currentContext);
@@ -833,21 +844,60 @@ export default function planMode(
 		return true;
 	}
 
+	function recoverUnlinkedImplementation(ctx: ExtensionContext) {
+		const activeImplementation = state.activeImplementation;
+		if (!activeImplementation || activeImplementation.goalId) return false;
+		workflowGeneration += 1;
+		state = {
+			...state,
+			enabled: true,
+			latestPlan: activeImplementation.plan,
+			latestPlanSource: activeImplementation.source,
+			awaitingAction: true,
+			activeImplementation: undefined,
+		};
+		implementationRetention.reset();
+		activatePlanModeTools();
+		applyPlanThinkingLevel();
+		persistState();
+		updateUi(ctx);
+		return true;
+	}
+
 	function handleGoalState(snapshot: { goalId: string; status: string }) {
 		if (!sessionReady) return;
 		const activeImplementation = state.activeImplementation;
 		const linkedGoalId = activeImplementation?.goalId;
 		if (!activeImplementation || !linkedGoalId) return;
-		const linkedTerminal =
-			linkedGoalId === snapshot.goalId &&
-			(snapshot.status === "complete" || snapshot.status === "cleared");
+		const terminalStatus = snapshot.status === "complete" || snapshot.status === "cleared";
+		const linkedTerminal = linkedGoalId === snapshot.goalId && terminalStatus;
 		const linkedChanged = linkedGoalId !== snapshot.goalId;
 		if (linkedChanged) {
+			if (terminalStatus) {
+				if (handoffInFlightImplementationId !== activeImplementation.id) {
+					clearActiveImplementation(activeImplementation.id, currentContext);
+				}
+				return;
+			}
 			// Goal rotates stale-turn IDs for resume, edit, and priority transitions.
-			// Relink every persisted replacement first; committed supersession is cleared
-			// explicitly after delivery, so failed transitions can relink on rollback.
+			// Relink every persisted nonterminal replacement first; committed supersession
+			// is cleared explicitly after delivery, so failed transitions can relink on rollback.
 			linkImplementationToGoal(activeImplementation.id, snapshot.goalId);
 			return;
+		}
+		if (
+			!linkedTerminal &&
+			activeImplementation.retention !== effectiveImplementationPlanRetention()
+		) {
+			state = {
+				...state,
+				activeImplementation: {
+					...activeImplementation,
+					retention: effectiveImplementationPlanRetention(),
+				},
+			};
+			persistState();
+			if (currentContext) updateUi(currentContext);
 		}
 		if (linkedTerminal && handoffInFlightImplementationId !== activeImplementation.id) {
 			clearActiveImplementation(activeImplementation.id, currentContext);
@@ -909,7 +959,7 @@ export default function planMode(
 		});
 	}
 
-	async function showActivePlanMenu(ctx: ExtensionContext) {
+	async function showActivePlanMenu(ctx: ExtensionCommandContext) {
 		if (!ctx.hasUI) {
 			ctx.ui.notify(planStatusText(), "info");
 			return;
@@ -926,15 +976,26 @@ export default function planMode(
 			show: () => showStoredPlan(pi, ctx, state),
 			exportPlan: (path, signal) => planExports.export(path, ctx, signal, lifecycle.isCurrent),
 			settings: (signal) => showSettings(ctx, signal, lifecycle.isCurrent),
-			startNew: () => {
-				if (planStartBlocked(ctx)) return;
-				enterPlanMode(ctx);
-				ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
-			},
-			clear: () => {
-				exitPlanMode(ctx);
-				ctx.ui.notify("Active implementation plan cleared.", "info");
-			},
+			...(state.activeImplementation?.goalId
+				? {
+						manageGoal: dependencies.manageLinkedGoal
+							? () => dependencies.manageLinkedGoal?.(ctx)
+							: undefined,
+					}
+				: {
+						startNew: () => {
+							if (planStartBlocked(ctx)) return;
+							enterPlanMode(ctx);
+							ctx.ui.notify(
+								"Plan mode enabled. I will explore and plan, but not modify files.",
+								"info",
+							);
+						},
+						clear: () => {
+							exitPlanMode(ctx);
+							ctx.ui.notify("Active implementation plan cleared.", "info");
+						},
+					}),
 		});
 	}
 
@@ -948,6 +1009,8 @@ export default function planMode(
 		if (!isCurrent() || signal.aborted) return false;
 		const result = await ui.showPlanModeSettings(ctx, {
 			tools: selectableTools(),
+			showImplementationPlanRetention:
+				dependencies.showImplementationPlanRetentionSetting !== false,
 			signal,
 			isCurrent,
 			settingsPath: dependencies.settingsPath,
@@ -1101,6 +1164,15 @@ export default function planMode(
 		state = restorePlanModeState(ctx.sessionManager.getBranch(), STATE_ENTRY_TYPE);
 	}
 
+	function linkedPlanExitBlocked(ctx: ExtensionContext) {
+		if (!state.activeImplementation?.goalId) return false;
+		const message =
+			"The linked Goal must retain its active Plan until Goal ends. Use /goal to manage execution or /goal clear to stop it and clear the Plan.";
+		if (ctx.mode === "print" || ctx.mode === "json") throw new Error(message);
+		ctx.ui.notify(message, "warning");
+		return true;
+	}
+
 	function updateUi(ctx: ExtensionContext) {
 		updatePlanModeUi(ctx, state, formatToolSummary);
 	}
@@ -1113,8 +1185,17 @@ export default function planMode(
 		return formatPlanModeStatusText(state, formatToolSummary);
 	}
 
+	function effectiveImplementationPlanRetention() {
+		return (
+			dependencies.implementationPlanRetention ?? configuredImplementationPlanRetention(settings)
+		);
+	}
+
 	function implementationOutcome() {
-		return implementationRetentionPreview(configuredImplementationPlanRetention(settings));
+		return (
+			dependencies.implementationOutcome?.() ??
+			implementationRetentionPreview(effectiveImplementationPlanRetention())
+		);
 	}
 
 	function formatToolSummary() {
@@ -1176,6 +1257,7 @@ export default function planMode(
 		linkImplementationToGoal,
 		clearLinkedGoal,
 		clearForGoalConflict,
+		recoverUnlinkedImplementation,
 		handleGoalState,
 		reconcileGoalState,
 	};

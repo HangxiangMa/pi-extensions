@@ -78,6 +78,11 @@ export default function workflow(pi: ExtensionAPI, dependencies: WorkflowDepende
 		readSettings: async () => readPlanSettings(),
 		reportSettingsIssues: false,
 		shouldAutoHandoff: () => planHandoff === "automatic",
+		implementationPlanRetention: "keep",
+		implementationOutcome: () =>
+			"Goal execution keeps the exact Plan linked until Goal completes, is cleared, or is superseded.",
+		showImplementationPlanRetentionSetting: false,
+		manageLinkedGoal: (ctx) => goalHandle.ui.showManager(ctx),
 		canStartPlan: () =>
 			goalHandle.runtime.activeGoal
 				? "Clear the current Goal before starting Plan mode."
@@ -130,6 +135,7 @@ export default function workflow(pi: ExtensionAPI, dependencies: WorkflowDepende
 				planHandle?.clearForGoalConflict(ctx);
 			}
 		}
+		if (!restoredGoal) planHandle?.recoverUnlinkedImplementation(ctx);
 		const restoredPlan = planHandle?.getState().activeImplementation;
 		if (restoredGoal && restoredGoal.text !== WORKFLOW_GOAL_OBJECTIVE && restoredPlan?.goalId) {
 			planHandle?.clearLinkedGoal(restoredPlan.goalId);
