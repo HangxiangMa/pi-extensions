@@ -4,7 +4,7 @@ import { builtinTool, createMockContext, createMockPi } from "../../../test/supp
 import { serializeGoalState } from "../src/goal/persistence.js";
 import { createGoal } from "../src/goal/runtime.js";
 import { DEFAULT_GOAL_SETTINGS } from "../src/goal/settings.js";
-import { startFreshWorkflowImplementation } from "../src/handoff.js";
+import { startFreshWorkflowImplementation, WORKFLOW_GOAL_OBJECTIVE } from "../src/handoff.js";
 import workflow from "../src/workflow.js";
 
 const BASE_TOOLS = ["read", "bash", "edit", "write"];
@@ -233,6 +233,43 @@ test("stopped Goal ID rotation keeps Plan cleanup linked", async () => {
 		.filter((entry) => entry.customType === "plan-mode-state")
 		.at(-1)?.data as { activeImplementation?: unknown };
 	assert.equal(finalPlan.activeImplementation, undefined);
+});
+
+test("budget-only Goal edits retain and relink the exact Plan", async () => {
+	const fixture = setup();
+	await startLinkedWorkflow(fixture, "# Keep through budget edit");
+	const initialPlan = fixture.mock.entries
+		.filter((entry) => entry.customType === "plan-mode-state")
+		.at(-1)?.data as { activeImplementation?: { goalId?: string } };
+	const initialGoalId = initialPlan.activeImplementation?.goalId;
+	assert.ok(initialGoalId);
+
+	await fixture.mock.commands
+		.get("goal")
+		?.handler(`edit --tokens 20 ${WORKFLOW_GOAL_OBJECTIVE}`, fixture.ctx);
+
+	const editedGoal = fixture.mock.entries
+		.filter((entry) => entry.customType === "goal-state")
+		.at(-1)?.data as { goal?: { id?: string; text?: string; tokenBudget?: number } };
+	const retainedPlan = fixture.mock.entries
+		.filter((entry) => entry.customType === "plan-mode-state")
+		.at(-1)?.data as { activeImplementation?: { goalId?: string; plan?: string } };
+	assert.notEqual(editedGoal.goal?.id, initialGoalId);
+	assert.equal(editedGoal.goal?.text, WORKFLOW_GOAL_OBJECTIVE);
+	assert.equal(editedGoal.goal?.tokenBudget, 20);
+	assert.equal(retainedPlan.activeImplementation?.goalId, editedGoal.goal?.id);
+	assert.equal(retainedPlan.activeImplementation?.plan, "# Keep through budget edit");
+	const compactedContext = await transformContext(fixture, [
+		{ role: "compactionSummary", content: "Budget changed after earlier work." },
+		{ role: "user", content: "Continue within the updated budget." },
+	]);
+	assert.match(JSON.stringify(compactedContext), /Keep through budget edit/u);
+
+	await fixture.mock.commands.get("goal")?.handler("clear", fixture.ctx);
+	const clearedPlan = fixture.mock.entries
+		.filter((entry) => entry.customType === "plan-mode-state")
+		.at(-1)?.data as { activeImplementation?: unknown };
+	assert.equal(clearedPlan.activeImplementation, undefined);
 });
 
 test("failed resume relinks the restored Goal so clear still removes Plan", async () => {

@@ -746,10 +746,12 @@ export class GoalCommandController {
 		} else {
 			this.runtime.clearStaleGoalToolCallBlock();
 		}
-		try {
-			this.onGoalSuperseded?.(previousGoal, editedGoal);
-		} catch {
-			// The edited Goal is committed. Restore reconciliation retries Plan cleanup.
+		if (previousGoal.text !== editedGoal.text) {
+			try {
+				this.onGoalSuperseded?.(previousGoal, editedGoal);
+			} catch {
+				// The edited Goal is committed. Restore reconciliation retries Plan cleanup.
+			}
 		}
 		notifyTerminal(ctx.ui, `Goal updated: ${objective}`, "info");
 	}
