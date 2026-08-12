@@ -1,5 +1,11 @@
 # @narumitw/pi-workflow
 
+## 0.3.0
+
+### Minor Changes
+
+- 6132845: Keep each approved Plan linked and compaction-safe until its Goal completes, is cleared, or is superseded, and retire workflow-specific implementation retention choices.
+
 ## 0.2.0
 
 ### Minor Changes
