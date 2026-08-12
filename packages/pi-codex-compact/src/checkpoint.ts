@@ -123,6 +123,15 @@ export function latestCheckpoint(entries: readonly SessionEntry[]):
 	return undefined;
 }
 
+function isOlderCompactionSummary(message: AgentMessage, timestamp: number): boolean {
+	return (
+		message.role === "compactionSummary" &&
+		Number.isFinite(message.timestamp) &&
+		Number.isFinite(timestamp) &&
+		message.timestamp < timestamp
+	);
+}
+
 export function projectCheckpointContext(
 	messages: readonly AgentMessage[],
 	details: CodexCheckpointDetails,
@@ -132,21 +141,33 @@ export function projectCheckpointContext(
 		(message) => message.role === "compactionSummary" && message.summary === summary,
 	);
 	if (summaryIndex < 0) return undefined;
-	const keptStart = summaryIndex + 1;
-	const keptEnd = keptStart + details.keptMessageFingerprints.length;
-	if (keptEnd > messages.length) return undefined;
-	for (let index = keptStart; index < keptEnd; index++) {
-		if (
-			fingerprintMessage(messages[index]) !== details.keptMessageFingerprints[index - keptStart]
-		) {
-			return undefined;
-		}
-	}
 	const timestamp = messages[summaryIndex].timestamp;
+	let messageIndex = summaryIndex + 1;
+	let fingerprintIndex = 0;
+	while (fingerprintIndex < details.keptMessageFingerprints.length) {
+		if (messageIndex >= messages.length) return undefined;
+		const message = messages[messageIndex];
+		if (fingerprintMessage(message) === details.keptMessageFingerprints[fingerprintIndex]) {
+			messageIndex += 1;
+			fingerprintIndex += 1;
+			continue;
+		}
+		if (isOlderCompactionSummary(message, timestamp)) {
+			messageIndex += 1;
+			continue;
+		}
+		return undefined;
+	}
+	while (
+		messageIndex < messages.length &&
+		isOlderCompactionSummary(messages[messageIndex], timestamp)
+	) {
+		messageIndex += 1;
+	}
 	return [
 		...messages.slice(0, summaryIndex),
 		markerMessage(details.checkpointId, timestamp),
-		...messages.slice(keptEnd),
+		...messages.slice(messageIndex),
 	];
 }
 

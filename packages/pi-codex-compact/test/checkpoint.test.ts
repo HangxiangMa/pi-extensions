@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { CompactionEntry, SessionEntry } from "@earendil-works/pi-coding-agent";
+import {
+	buildSessionContext,
+	type CompactionEntry,
+	type SessionEntry,
+} from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import {
 	buildReplacementHistory,
@@ -31,6 +35,39 @@ function checkpoint(kept: AgentMessage[] = [user("kept", 2)], id = "checkpoint-1
 		checkpointId: id,
 		createdAt: "2026-01-01T00:00:00.000Z",
 	});
+}
+
+function compactionSummary(summary: string, timestamp: number): AgentMessage {
+	return { role: "compactionSummary", summary, tokensBefore: 100, timestamp };
+}
+
+function messageEntry(id: string, parentId: string | null, message: AgentMessage): SessionEntry {
+	return {
+		type: "message",
+		id,
+		parentId,
+		timestamp: new Date(message.timestamp).toISOString(),
+		message,
+	};
+}
+
+function compactionEntry(
+	id: string,
+	parentId: string,
+	firstKeptEntryId: string,
+	details: ReturnType<typeof checkpoint>,
+	timestamp: string,
+): CompactionEntry {
+	return {
+		type: "compaction",
+		id,
+		parentId,
+		timestamp,
+		summary: fallbackSummary(details.checkpointId),
+		firstKeptEntryId,
+		tokensBefore: 100,
+		details,
+	};
 }
 
 test("builds newest-first bounded replacement history and puts opaque item last", () => {
@@ -101,6 +138,97 @@ test("projects only an exact summary and kept suffix while preserving unrelated 
 	assert.deepEqual(projected?.[2], after);
 	assert.equal(projectCheckpointContext([summary, user("changed", 2), after], details), undefined);
 	assert.equal(projectCheckpointContext([kept, after], details), undefined);
+});
+
+test("projects resumed repeated compaction when Pi interleaves an older summary", () => {
+	const firstKept = user("first kept", 1);
+	const secondKept = user("second kept", 2);
+	const thirdKept = user("third kept", 4);
+	const fourthKept = user("fourth kept", 5);
+	const later = user("later", 7);
+	const firstDetails = checkpoint([firstKept, secondKept], "checkpoint-first");
+	const secondDetails = checkpoint(
+		[firstKept, secondKept, thirdKept, fourthKept],
+		"checkpoint-second",
+	);
+	const entries = [
+		messageEntry("first-kept", null, firstKept),
+		messageEntry("second-kept", "first-kept", secondKept),
+		compactionEntry(
+			"first-compaction",
+			"second-kept",
+			"first-kept",
+			firstDetails,
+			"2026-01-01T00:00:03.000Z",
+		),
+		messageEntry("third-kept", "first-compaction", thirdKept),
+		messageEntry("fourth-kept", "third-kept", fourthKept),
+		compactionEntry(
+			"second-compaction",
+			"fourth-kept",
+			"first-kept",
+			secondDetails,
+			"2026-01-01T00:00:06.000Z",
+		),
+		messageEntry("later", "second-compaction", later),
+	];
+
+	const resumed = buildSessionContext(entries, "later").messages;
+	assert.deepEqual(
+		resumed.map((message) => message.role),
+		["compactionSummary", "user", "user", "compactionSummary", "user", "user", "user"],
+	);
+	const projected = projectCheckpointContext(resumed, secondDetails);
+	assert.ok(projected);
+	assert.equal(projected[0].role, "user");
+	assert.match(JSON.stringify(projected[0]), /checkpoint-second/);
+	assert.deepEqual(projected[1], later);
+});
+
+test("removes trailing older compaction summaries covered by the checkpoint", () => {
+	const kept = user("kept", 2);
+	const after = user("after", 4);
+	const details = checkpoint([kept]);
+	const activeSummary = compactionSummary(fallbackSummary(details.checkpointId), 3);
+	const olderSummary = compactionSummary("older structural summary", 1);
+
+	const projected = projectCheckpointContext([activeSummary, kept, olderSummary, after], details);
+	assert.ok(projected);
+	assert.equal(projected.length, 2);
+	assert.deepEqual(projected[1], after);
+});
+
+test("does not skip unverified messages or newer compaction summaries", () => {
+	const first = user("first", 2);
+	const second = user("second", 3);
+	const details = checkpoint([first, second]);
+	const activeSummary = compactionSummary(fallbackSummary(details.checkpointId), 4);
+	const newerSummary = compactionSummary("newer summary", 5);
+
+	assert.equal(
+		projectCheckpointContext([activeSummary, first, user("unexpected", 3), second], details),
+		undefined,
+	);
+	assert.equal(
+		projectCheckpointContext([activeSummary, first, newerSummary, second], details),
+		undefined,
+	);
+	const projected = projectCheckpointContext([activeSummary, first, second, newerSummary], details);
+	assert.ok(projected);
+	assert.deepEqual(projected.at(-1), newerSummary);
+});
+
+test("matches stored summary fingerprints before treating old summaries as structural", () => {
+	const storedSummary = compactionSummary("fingerprinted summary", 1);
+	const kept = user("kept", 2);
+	const after = user("after", 4);
+	const details = checkpoint([storedSummary, kept]);
+	const activeSummary = compactionSummary(fallbackSummary(details.checkpointId), 3);
+
+	const projected = projectCheckpointContext([activeSummary, storedSummary, kept, after], details);
+	assert.ok(projected);
+	assert.equal(projected.length, 2);
+	assert.deepEqual(projected[1], after);
 });
 
 test("uses canonical SHA-256 message fingerprints", () => {
