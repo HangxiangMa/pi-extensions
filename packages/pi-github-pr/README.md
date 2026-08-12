@@ -68,6 +68,7 @@ The extension runs passively:
 - On session start, it checks the current branch PR and sets a compact statusline entry.
 - On Git branch change, it clears the old PR immediately and refreshes the new current branch.
 - While the session remains open, it refreshes that same current branch PR every 60 seconds and after each agent turn.
+- When an agent turn is aborted, it keeps the last successful PR status instead of treating cancellation as a GitHub failure.
 - On branch change, session replacement, or session shutdown, it cancels the previous refresh timer and any in-flight periodic request.
 - On session shutdown, it clears the statusline entry.
 - If the directory has no GitHub PR, the statusline entry stays empty.

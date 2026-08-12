@@ -454,6 +454,98 @@ test("lifecycle refresh sets and clears only statusline output", async () => {
 	assert.equal(context.notifications.length, 0);
 });
 
+test("an aborted agent-end preserves the current status and periodic refresh schedule", async () => {
+	vi.useFakeTimers({ toFake: ["setTimeout"] });
+	const mock = createMockPi();
+	const controller = new AbortController();
+	let prViews = 0;
+	installExec(mock, async (command, args, options) => {
+		if (command === "git") return textResult("", 128, "not a git repository");
+		if (args[0] === "pr") {
+			prViews += 1;
+			if (options?.signal?.aborted) {
+				return { stdout: "", stderr: "", code: 1, killed: true };
+			}
+			return okResult(
+				prViews === 1
+					? samplePr
+					: {
+							...samplePr,
+							reviewDecision: "CHANGES_REQUESTED",
+							latestReviews: [{ state: "CHANGES_REQUESTED", author: { login: "carol" } }],
+						},
+			);
+		}
+		return okResult(sampleCounts);
+	});
+	githubPr(mock.pi, { refreshIntervalMs: 100 });
+	const context = createMockContext({ cwd: "/repo", signal: controller.signal });
+	const sessionStart = mock.events.get("session_start")?.[0];
+	const agentEnd = mock.events.get("agent_end")?.[0];
+	const sessionShutdown = mock.events.get("session_shutdown")?.[0];
+	assert.ok(sessionStart);
+	assert.ok(agentEnd);
+	assert.ok(sessionShutdown);
+
+	try {
+		await sessionStart({}, context.ctx);
+		const visibleStatus = context.statuses.get("github-pr");
+		assert.match(visibleStatus ?? "", /PR .*#123/);
+		vi.advanceTimersByTime(60);
+
+		controller.abort();
+		await agentEnd({}, context.ctx);
+
+		assert.equal(prViews, 1);
+		assert.equal(context.statuses.get("github-pr"), visibleStatus);
+
+		await vi.advanceTimersByTimeAsync(40);
+		assert.equal(prViews, 2);
+		assert.match(context.statuses.get("github-pr") ?? "", /changes requested/);
+	} finally {
+		await sessionShutdown({}, context.ctx);
+	}
+});
+
+test("a refresh aborted during agent-end preserves the current status", async () => {
+	const mock = createMockPi();
+	const controller = new AbortController();
+	const abortedPrView = deferred<ExecResult>();
+	let prViews = 0;
+	installExec(mock, async (command, args) => {
+		if (command === "git") return textResult("", 128, "not a git repository");
+		if (args[0] === "pr") {
+			prViews += 1;
+			if (prViews === 2) return abortedPrView.promise;
+		}
+		return okResult(args[0] === "pr" ? samplePr : sampleCounts);
+	});
+	githubPr(mock.pi, { refreshIntervalMs: 100 });
+	const context = createMockContext({ cwd: "/repo", signal: controller.signal });
+	const sessionStart = mock.events.get("session_start")?.[0];
+	const agentEnd = mock.events.get("agent_end")?.[0];
+	const sessionShutdown = mock.events.get("session_shutdown")?.[0];
+	assert.ok(sessionStart);
+	assert.ok(agentEnd);
+	assert.ok(sessionShutdown);
+
+	try {
+		await sessionStart({}, context.ctx);
+		const visibleStatus = context.statuses.get("github-pr");
+		const agentEndPromise = agentEnd({}, context.ctx);
+		assert.equal(prViews, 2);
+
+		controller.abort();
+		abortedPrView.resolve({ stdout: "", stderr: "", code: 1, killed: true });
+		await agentEndPromise;
+
+		assert.equal(context.statuses.get("github-pr"), visibleStatus);
+	} finally {
+		abortedPrView.resolve({ stdout: "", stderr: "", code: 1, killed: true });
+		await sessionShutdown({}, context.ctx);
+	}
+});
+
 test("rejects invalid periodic refresh intervals", () => {
 	const mock = createMockPi();
 	for (const refreshIntervalMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {

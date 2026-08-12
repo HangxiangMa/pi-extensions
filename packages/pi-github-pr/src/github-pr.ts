@@ -90,12 +90,15 @@ export default function githubPr(pi: ExtensionAPI, options: GithubPrOptions = {}
 	) => {
 		branchWatch.request += 1;
 		const request = branchWatch.request;
+		if (signal?.aborted) return request;
 		try {
 			const status = await runGhPrView(pi, ctx.cwd, signal);
+			if (signal?.aborted) return request;
 			if (generation === branchWatch.generation && request === branchWatch.request) {
 				renderStatus(ctx, status, branchWatch, generation);
 			}
 		} catch (error) {
+			if (signal?.aborted) return request;
 			if (generation === branchWatch.generation && request === branchWatch.request) {
 				clearExpiryTimer(branchWatch);
 				renderAmbientFailure(ctx, error);
@@ -166,7 +169,7 @@ export default function githubPr(pi: ExtensionAPI, options: GithubPrOptions = {}
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
-		if (ctx.sessionManager !== branchWatch.sessionManager) return;
+		if (ctx.sessionManager !== branchWatch.sessionManager || ctx.signal?.aborted) return;
 		const session = branchWatch.session;
 		cancelPeriodicRefresh(branchWatch);
 		const request = await refreshStatus(ctx, ctx.signal);
