@@ -71,8 +71,8 @@ This plan records the approved substantial workflow proposal, so implementation 
 - [x] Extend `packages/pi-workflow/test/workflow-runtime-smoke.mjs` with a deterministic Plan-ready-to-Goal scenario that observes the exact handoff, continued Goal ownership, terminal cleanup, and extension disposal through real Pi lifecycle ordering; evidence: `npm --workspace @narumitw/pi-workflow run test:runtime` passes.
 - [x] Add a minor Changeset for `@narumitw/pi-workflow` describing the experimental settings and linked-lifecycle behavior change; evidence: `npm run changeset:status` reports only `@narumitw/pi-workflow` moving to `0.3.0`.
 - [x] Audit and harden the final diff against `docs/extension-conventions.md`, `docs/extension-settings.md`, the edge-case checklist, and the approved experience; evidence: a red regression exposed terminal Goal ID rotation leaving a stale Plan, the shared transition now clears it, all 567 package tests pass, and the final command-scoped-signing `npm run check` passes all 3,677 repository tests.
-- [ ] Stage only the intended paths and create focused signed commits; verify each index diff, signature, commit ID, and remaining worktree state.
-- [ ] Push `feat/pi-workflow-linked-plan-lifecycle` and open a pull request against `main` with behavior, checks, compatibility, risk, and plan evidence; verify the remote branch and PR URL before archiving this plan.
+- [x] Stage only the intended paths and create focused signed commits; evidence: commit `613284553f769e735f303240b2217f155c75a60c` contains the reviewed feature boundary and an SSH signature, with no unrelated worktree changes.
+- [x] Push `feat/pi-workflow-linked-plan-lifecycle` and open a pull request against `main` with behavior, checks, compatibility, risk, and plan evidence; evidence: the remote branch tracks origin and pull request `https://github.com/narumiruna/pi-extensions/pull/727` is open.
 
 ## Completion Checklist
 
@@ -85,4 +85,4 @@ This plan records the approved substantial workflow proposal, so implementation 
 - [x] The final `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false npm run check` passes the CI-equivalent gate, including all 3,677 tests; the command-scoped override only lets test fixtures commit without the unavailable signing agent.
 - [x] `just pack workflow` succeeds with the manifest-listed README, license, package manifest, and 51 source files in the 54-file dry-run tarball.
 - [x] The Changeset names only `@narumitw/pi-workflow` with a minor bump from `0.2.0` to `0.3.0`.
-- [ ] Every plan task and completion check has current evidence before this plan moves to `docs/plans/archived/`.
+- [x] Every plan task and completion check has current evidence before this plan moves to `docs/plans/archived/`.
