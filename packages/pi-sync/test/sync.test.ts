@@ -245,7 +245,7 @@ test("direct interactive selection mismatch opens recovery and cancellation pres
 		});
 
 		const running = mock.commands.get("sync")?.handler("pull --setup home", ctx);
-		await waitFor(() => tui.isOpen);
+		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /Synced content differs/u);
 		tui.press("tui.select.cancel");
 		await running;
@@ -290,7 +290,7 @@ test("direct interactive local-wins recovery clears attention after reviewed pub
 		});
 
 		const running = mock.commands.get("sync")?.handler("pull --setup home", ctx);
-		await waitFor(() => tui.isOpen);
+		await tui.waitForOpen();
 		tui.press("tui.select.down");
 		tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
@@ -487,7 +487,9 @@ test("the command boundary sends only typed selection mismatches to the manager 
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
 		releaseOperation();
-		await waitFor(() => tui.isOpen && /Synced content differs/u.test(tui.render().join("\n")));
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /Synced content differs/u);
 		assert.match(tui.render().join("\n"), /Remote-only paths: 1/u);
 		assert.deepEqual(notifications, []);
 		tui.press("tui.select.cancel");
@@ -526,7 +528,7 @@ test("automatic selection mismatch offers immediate TUI recovery and Later prese
 		});
 
 		const starting = mock.events.get("session_start")?.[0]?.({}, ctx);
-		await waitFor(() => tui.isOpen);
+		await tui.waitForOpen();
 		const frame = tui.render().join("\n");
 		assert.match(frame, /Synced content differs/u);
 		assert.match(frame, /Later/u);
@@ -606,7 +608,7 @@ test("session replacement aborts startup attention without stale presentation", 
 		const tui = createTuiHarness({ width: 60, rows: 18 });
 		const first = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
 		const firstStart = mock.events.get("session_start")?.[0]?.({}, first.ctx);
-		await waitFor(() => tui.isOpen);
+		await tui.waitForOpen();
 		let replacementCustomCalls = 0;
 		const replacement = createMockContext({
 			hasUI: true,
@@ -1044,12 +1046,4 @@ async function withStateDirectory(run: () => Promise<void>) {
 		mkdirSync(agentDir, { recursive: true });
 		await run();
 	});
-}
-
-async function waitFor(condition: () => boolean) {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (condition()) return;
-		await new Promise<void>((resolve) => setTimeout(resolve, 1));
-	}
-	assert.fail("Timed out waiting for condition");
 }
