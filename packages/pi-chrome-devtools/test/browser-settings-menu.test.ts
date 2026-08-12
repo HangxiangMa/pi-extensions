@@ -10,8 +10,8 @@ import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { showChromeDevtoolsBrowserSettings } from "../src/browser-settings-menu.js";
 import chromeDevtools from "../src/chrome-devtools.js";
-import { state } from "../src/runtime.js";
-import { settingsFilePath } from "../src/settings.js";
+import { DEFAULT_HOST, DEFAULT_PORT, state } from "../src/runtime.js";
+import { projectSettingsFilePath, settingsFilePath } from "../src/settings.js";
 
 class OwnedBrowserChild extends EventEmitter {
 	killCalls = 0;
@@ -30,6 +30,28 @@ const ENVIRONMENT_NAMES = [
 	"PI_CHROME_DEVTOOLS_BROWSER",
 ] as const;
 
+function resetBrowserRuntimeState() {
+	state.host = DEFAULT_HOST;
+	state.port = DEFAULT_PORT;
+	state.configuredPort = DEFAULT_PORT;
+	state.hostConfigured = false;
+	state.portConfigured = false;
+	state.autoLaunchEnabled = true;
+	state.endpointSource = "default";
+	state.autoLaunchSource = "default";
+	state.browserExecutable = undefined;
+	state.extensionPaths = [];
+	state.browserExecutableSource = "default";
+	state.extensionPathsSource = "default";
+	state.settingsFilePath = undefined;
+	state.projectSettingsFilePath = undefined;
+	state.projectSettingsTrusted = false;
+	state.managedBrowser = undefined;
+	state.launchPromise = undefined;
+	state.lastLaunchAttempt = undefined;
+	state.settingsNotice = undefined;
+}
+
 async function withBrowserSettingsMenu(
 	run: (fixture: {
 		directory: string;
@@ -46,6 +68,7 @@ async function withBrowserSettingsMenu(
 	) as Record<(typeof ENVIRONMENT_NAMES)[number], string | undefined>;
 	process.env.PI_CODING_AGENT_DIR = directory;
 	for (const name of ENVIRONMENT_NAMES) delete process.env[name];
+	resetBrowserRuntimeState();
 	state.sessionController.abort();
 	state.sessionController = new AbortController();
 	const generation = ++state.sessionGeneration;
@@ -58,10 +81,7 @@ async function withBrowserSettingsMenu(
 		state.sessionController.abort();
 		state.sessionController = new AbortController();
 		state.sessionGeneration += 1;
-		state.managedBrowser = undefined;
-		state.launchPromise = undefined;
-		state.lastLaunchAttempt = undefined;
-		state.settingsNotice = undefined;
+		resetBrowserRuntimeState();
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		for (const name of ENVIRONMENT_NAMES) {
@@ -126,6 +146,29 @@ test("browser settings save endpoint and auto-launch immediately while preservin
 		assert.ok(notifications.some(({ message }) => /auto-launch: Off/i.test(message)));
 		tui.press("ctrl+c");
 		assert.deepEqual(await running, { closeParent: true });
+	});
+});
+
+test("browser settings report the effective value when an environment override shadows a save", async () => {
+	await withBrowserSettingsMenu(async ({ ctx, notifications, tui, generation }) => {
+		process.env.PI_CHROME_DEVTOOLS_AUTO_LAUNCH = "1";
+		const running = showChromeDevtoolsBrowserSettings(ctx, generation);
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+
+		assert.equal((readSettings().browser as Record<string, unknown>).autoLaunch, false);
+		assert.equal(state.autoLaunchEnabled, true);
+		assert.equal(state.autoLaunchSource, "environment");
+		assert.match(
+			notifications.at(-1)?.message ?? "",
+			/Effective auto-launch: On \(environment\).*environment override remains effective/i,
+		);
+		assert.doesNotMatch(notifications.at(-1)?.message ?? "", /auto-launch: Off/);
+		tui.press("ctrl+c");
+		await running;
 	});
 });
 
@@ -206,6 +249,42 @@ test("browser settings cancellation and invalid files remain read-only", async (
 		tui.press("tui.select.cancel");
 		await invalid;
 		assert.equal(readFileSync(settingsFilePath(), "utf8"), "{ invalid\n");
+	});
+});
+
+test("an invalid trusted project file warns without blocking user browser settings", async () => {
+	await withBrowserSettingsMenu(async ({ directory, tui, generation }) => {
+		const projectPath = projectSettingsFilePath(directory);
+		mkdirSync(path.dirname(projectPath), { recursive: true });
+		writeFileSync(projectPath, "{ invalid project JSON\n");
+		const mock = createMockContext({
+			cwd: directory,
+			mode: "tui",
+			hasUI: true,
+			custom: tui.custom,
+			isProjectTrusted: () => true,
+		});
+		const running = showChromeDevtoolsBrowserSettings(mock.ctx, generation);
+		await tui.waitForOpen();
+		const rendered = tui.render().join("\n");
+		assert.match(rendered, /DevTools endpoint/);
+		assert.match(rendered, /invalid JSON/);
+		assert.doesNotMatch(rendered, /Read only/);
+
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		tui.setFocused(true);
+		tui.type("http://localhost:9555");
+		tui.press("tui.input.submit");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.equal(
+			(readSettings().browser as Record<string, unknown>).endpoint,
+			"http://localhost:9555",
+		);
+		tui.press("ctrl+c");
+		await running;
 	});
 });
 

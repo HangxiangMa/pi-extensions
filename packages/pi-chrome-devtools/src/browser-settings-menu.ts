@@ -5,11 +5,11 @@ import { shutdownManagedBrowser } from "./browser-manager.js";
 import { applyRuntimeBrowserSettings, state } from "./runtime.js";
 import {
 	type BrowserSettingsPatch,
+	type BrowserSettingsSource,
 	loadSettings,
 	parseBrowserEndpoint,
 	type SettingsLoadResult,
 	saveBrowserSettings,
-	settingsFilePath,
 } from "./settings.js";
 import { sanitizeChromeDevtoolsDisplay } from "./tool-selector.js";
 
@@ -39,7 +39,7 @@ export async function showChromeDevtoolsBrowserSettings(
 		start: "settings",
 		screens: {
 			settings: ({ state: current }) => {
-				if (current.load.kind === "invalid") return invalidSettingsScreen(current.load);
+				if (current.load.userFile.kind === "invalid") return invalidSettingsScreen(current.load);
 				const browser = current.load.effectiveBrowser;
 				return {
 					kind: "settings",
@@ -51,7 +51,7 @@ export async function showChromeDevtoolsBrowserSettings(
 							label: "DevTools endpoint",
 							description:
 								'HTTP origin with an explicit port; enter "default" to restore 127.0.0.1:9222.',
-							currentValue: browser.endpoint,
+							currentValue: sanitizeChromeDevtoolsDisplay(browser.endpoint),
 							action: "open-endpoint",
 						},
 						{
@@ -68,7 +68,7 @@ export async function showChromeDevtoolsBrowserSettings(
 							label: "Browser executable",
 							description:
 								'Absolute executable path; enter "automatic" to restore browser discovery.',
-							currentValue: browser.executablePath ?? "Automatic",
+							currentValue: sanitizeChromeDevtoolsDisplay(browser.executablePath ?? "Automatic"),
 							action: "open-executable",
 						},
 						{
@@ -85,7 +85,9 @@ export async function showChromeDevtoolsBrowserSettings(
 				kind: "input",
 				title: "DevTools endpoint",
 				lines: [
-					`Current effective endpoint: ${current.load.effectiveBrowser.endpoint}`,
+					sanitizeChromeDevtoolsDisplay(
+						`Current effective endpoint: ${current.load.effectiveBrowser.endpoint}`,
+					),
 					'Enter an HTTP origin with an explicit port, or "default".',
 				],
 				placeholder: "http://127.0.0.1:9222",
@@ -96,7 +98,9 @@ export async function showChromeDevtoolsBrowserSettings(
 				kind: "input",
 				title: "Browser executable",
 				lines: [
-					`Current effective executable: ${current.load.effectiveBrowser.executablePath ?? "automatic discovery"}`,
+					sanitizeChromeDevtoolsDisplay(
+						`Current effective executable: ${current.load.effectiveBrowser.executablePath ?? "automatic discovery"}`,
+					),
 					'Enter an absolute path, or "automatic".',
 				],
 				placeholder: "absolute browser executable path",
@@ -132,9 +136,11 @@ export async function showChromeDevtoolsBrowserSettings(
 					{ endpoint },
 				);
 				if (!saved) return { kind: "rejected" };
-				ctx.ui.notify(
-					`Chrome DevTools endpoint saved: ${endpoint ?? "default (http://127.0.0.1:9222)"}.`,
-					"info",
+				notifyEffectiveSave(
+					ctx,
+					"endpoint",
+					saved.effectiveBrowser.endpoint,
+					saved.effectiveBrowser.endpointSource,
 				);
 				return { kind: "back" };
 			},
@@ -149,7 +155,12 @@ export async function showChromeDevtoolsBrowserSettings(
 					{ autoLaunch: value === "On" },
 				);
 				if (!saved) return { kind: "rejected" };
-				ctx.ui.notify(`Chrome DevTools auto-launch: ${value}.`, "info");
+				notifyEffectiveSave(
+					ctx,
+					"auto-launch",
+					saved.effectiveBrowser.autoLaunchEnabled ? "On" : "Off",
+					saved.effectiveBrowser.autoLaunchSource,
+				);
 				return { kind: "stay" };
 			},
 			"open-executable": () => ({ kind: "to", screen: "executable" }),
@@ -171,9 +182,11 @@ export async function showChromeDevtoolsBrowserSettings(
 					{ executablePath },
 				);
 				if (!saved) return { kind: "rejected" };
-				ctx.ui.notify(
-					`Chrome DevTools browser executable saved: ${executablePath ?? "automatic discovery"}.`,
-					"info",
+				notifyEffectiveSave(
+					ctx,
+					"browser executable",
+					saved.effectiveBrowser.executablePath ?? "automatic discovery",
+					saved.effectiveBrowser.executablePathSource,
 				);
 				return { kind: "back" };
 			},
@@ -219,7 +232,7 @@ async function saveAndApplyBrowserPatch(
 		if (!isCurrent(generation, ownerSignal, actionSignal)) return false;
 		applyRuntimeBrowserSettings(loaded.effectiveBrowser, loaded.paths, projectTrusted);
 		state.settingsNotice = loaded.notice;
-		return true;
+		return loaded;
 	} catch (error) {
 		if (isCurrent(generation, ownerSignal, actionSignal)) notifySaveFailure(ctx, error);
 		return false;
@@ -231,11 +244,18 @@ function isCurrent(generation: number, ownerSignal: AbortSignal, actionSignal: A
 }
 
 function invalidSettingsScreen(load: SettingsLoadResult) {
-	const reason = load.kind === "invalid" ? load.reason : "The settings file is unavailable.";
+	const reason =
+		load.userFile.kind === "invalid"
+			? load.userFile.reason
+			: "The user settings file is unavailable.";
 	return {
 		kind: "detail" as const,
 		title: "Chrome DevTools Browser settings · Read only",
-		lines: [`Fix ${settingsFilePath()} before saving. The file will not be overwritten.`, reason],
+		lines: [
+			sanitizeChromeDevtoolsDisplay(
+				`Fix the active user settings before saving; the file will not be overwritten. ${reason}`,
+			),
+		],
 		hint: "back" as const,
 	};
 }
@@ -246,7 +266,7 @@ function settingsContextLines(load: SettingsLoadResult) {
 		`User settings · ${load.paths.user}`,
 		`Effective sources: endpoint ${browser.endpointSource} · auto-launch ${browser.autoLaunchSource} · executable ${browser.executablePathSource}`,
 		...(load.notice ? [`Warning: ${load.notice}`] : []),
-	];
+	].map((line) => sanitizeChromeDevtoolsDisplay(line));
 }
 
 function extensionDetailLines(load: SettingsLoadResult) {
@@ -258,7 +278,23 @@ function extensionDetailLines(load: SettingsLoadResult) {
 			: ["No unpacked extensions are configured."]),
 		"Edit browser.extensionPaths in the user JSON or a trusted project JSON, then run /reload.",
 		"Unpacked extensions execute privileged browser code; load only paths you trust.",
-	];
+	].map((line) => sanitizeChromeDevtoolsDisplay(line));
+}
+
+function notifyEffectiveSave(
+	ctx: CommandContext,
+	setting: string,
+	effectiveValue: string,
+	source: BrowserSettingsSource,
+) {
+	const overrideNotice =
+		source === "environment" ? " The deprecated environment override remains effective." : "";
+	ctx.ui.notify(
+		sanitizeChromeDevtoolsDisplay(
+			`Chrome DevTools ${setting} saved. Effective ${setting}: ${effectiveValue} (${source}).${overrideNotice}`,
+		),
+		"info",
+	);
 }
 
 function notifySaveFailure(ctx: CommandContext, error: unknown) {

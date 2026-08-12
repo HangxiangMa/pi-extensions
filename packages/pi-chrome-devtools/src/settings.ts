@@ -68,9 +68,14 @@ export interface SettingsLoadOptions {
 	projectTrusted?: boolean;
 }
 
+export type UserSettingsFileStatus =
+	| { kind: "missing" | "valid" }
+	| { kind: "invalid"; reason: string };
+
 interface SettingsLoadBase {
 	effectiveBrowser: EffectiveBrowserSettings;
 	paths: { user: string; project?: string };
+	userFile: UserSettingsFileStatus;
 	warnings: string[];
 	notice?: string;
 }
@@ -165,9 +170,17 @@ export async function loadSettings(options: SettingsLoadOptions = {}): Promise<S
 		.filter((result) => result.kind === "invalid")
 		.map((result) => result.reason)
 		.filter((reason): reason is string => Boolean(reason));
+	const userFile: UserSettingsFileStatus =
+		user.kind === "invalid"
+			? {
+					kind: "invalid",
+					reason: user.reason ?? `${userPath}: invalid settings`,
+				}
+			: { kind: user.kind };
 	const base = {
 		effectiveBrowser,
 		paths,
+		userFile,
 		warnings,
 		...(warnings.length > 0 ? { notice: warnings.join("\n") } : {}),
 	};
