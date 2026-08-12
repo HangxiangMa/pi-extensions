@@ -143,7 +143,7 @@ async function prepareManagedBrowserLaunch(
 		throwIfBrowserLaunchCancelled(generation, signal);
 		if (!available) {
 			throw new DevToolsEndpointError(
-				`Cannot launch the extension-owned browser because explicit port ${state.port} is already in use. Choose a free PI_CHROME_DEVTOOLS_PORT or remove the override for a dynamic port.`,
+				`Cannot launch the extension-owned browser because explicit port ${state.port} is already in use. Choose a free browser.endpoint port or reset the endpoint to use a dynamic managed port.`,
 			);
 		}
 	}
@@ -609,9 +609,7 @@ export function formatHostForUrl(host: string) {
 }
 
 export function endpointSourceLabel() {
-	const hostSource = state.hostConfigured ? "PI_CHROME_DEVTOOLS_HOST" : "default host";
-	const portSource = state.portConfigured ? "PI_CHROME_DEVTOOLS_PORT" : "default/dynamic port";
-	return `${hostSource}; ${portSource}`;
+	return state.endpointSource;
 }
 
 export type BrowserLifecycleState = "starting" | "running" | "exited" | "failed" | "unobserved";
@@ -710,7 +708,7 @@ export function quoteCommandPart(value: string) {
 }
 
 export function endpointConfigHint() {
-	return "Set PI_CHROME_DEVTOOLS_HOST and PI_CHROME_DEVTOOLS_PORT for a manual endpoint, PI_CHROME_DEVTOOLS_BROWSER to choose an executable, or PI_CHROME_DEVTOOLS_AUTO_LAUNCH=0 to disable auto-launch.";
+	return "Configure browser.endpoint, browser.executablePath, and browser.autoLaunch in pi-chrome-devtools.json or the /chrome-devtools Settings flow.";
 }
 
 export function isLocalDevToolsHost(host: string) {

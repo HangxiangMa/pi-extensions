@@ -268,10 +268,11 @@ function browserSettingsStatusLines() {
 					`Project settings: ${state.projectSettingsFilePath} (${state.projectSettingsTrusted ? "trusted" : "untrusted; ignored"})`,
 				]
 			: []),
+		`Auto-launch: ${state.autoLaunchEnabled ? "on" : "off"} (${state.autoLaunchSource})`,
 		`Browser executable: ${state.browserExecutable ?? "automatic discovery"} (${state.browserExecutableSource})`,
 		`Unpacked extensions (${state.extensionPathsSource}):`,
 		...extensionLines,
-		"Settings changes apply to a new managed browser after /reload or session replacement.",
+		"Confirmed menu settings apply before the next browser connection; manual JSON edits require /reload or session replacement.",
 		...(state.extensionPaths.length > 0
 			? [
 					"Unpacked extensions require Chrome for Testing or Chromium and execute trusted browser code.",
@@ -287,6 +288,7 @@ export function buildCommandGuide() {
 		"/chrome-devtools help — show command usage",
 		"/chrome-devtools quickstart — show endpoint and launch help",
 		"/chrome-devtools status — show tool and settings status",
+		"/chrome-devtools settings — edit browser connection settings",
 		"/chrome-devtools tools — choose tools available to lazy-load",
 		"/chrome-devtools toggle|select — compatibility aliases for tools",
 		"/chrome-devtools enable|on — make all Chrome DevTools tools available to lazy-load",

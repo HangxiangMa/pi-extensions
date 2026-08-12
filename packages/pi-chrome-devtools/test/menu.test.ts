@@ -49,7 +49,7 @@ test("main menu presents consequential state and five goal-oriented actions with
 		assert.match(rendered, /[→›] Choose available browser tools…/);
 		assert.match(rendered, /Make all browser tools available…/);
 		assert.match(rendered, /Browser status/);
-		assert.match(rendered, /Settings & setup/);
+		assert.match(rendered, /Browser settings/);
 		assert.match(rendered, /Help/);
 		assert.equal(state.managedBrowser, undefined);
 		assert.equal(state.launchPromise, undefined);
@@ -230,12 +230,14 @@ test("bulk preview and nested detail navigation return without side effects", as
 				}
 				if (
 					rendered.startsWith("Browser status") ||
-					rendered.startsWith("Settings & setup") ||
+					(rendered.includes("DevTools endpoint") && rendered.includes("Auto-launch")) ||
 					rendered.startsWith("Chrome DevTools help")
 				) {
 					details.push(rendered);
 					harness.setTerminalRows(8);
-					narrowDetails.push(harness.render(20));
+					const narrow = harness.render(20);
+					assert.ok(narrow.every((line) => visibleWidth(line) <= 20));
+					if (!rendered.includes("DevTools endpoint")) narrowDetails.push(narrow);
 					harness.handleInput("tui.select.cancel");
 					return harness.result;
 				}
@@ -255,8 +257,8 @@ test("bulk preview and nested detail navigation return without side effects", as
 
 		assert.match(details[0] ?? "", /Proposed availability: 5\/5/);
 		assert.match(details[1] ?? "", /does not probe the endpoint or launch Chrome/);
-		assert.match(details[2] ?? "", /Settings changes apply.*\/reload/s);
-		assert.match(details[3] ?? "", /\/chrome-devtools tools/);
+		assert.match(details[2] ?? "", /DevTools endpoint/);
+		assert.match(details[2] ?? "", /Auto-launch/);
 		assert.ok(narrowDetails.flat().every((line) => visibleWidth(line) <= 20));
 		assert.ok(narrowDetails.every((screen) => screen.length <= 5));
 		assert.deepEqual(mock.rawPi.getActiveTools(), ["other_tool"]);
@@ -335,6 +337,7 @@ test("interactive routes reject unsupported modes while direct mutations remain 
 		await assert.rejects(() => invoke("help"), /requires TUI or RPC/);
 		await assert.rejects(() => invoke("status"), /requires TUI or RPC/);
 		await assert.rejects(() => invoke("quickstart"), /requires TUI or RPC/);
+		await assert.rejects(() => invoke("settings"), /requires TUI or RPC/);
 		await assert.rejects(() => invoke("tools"), /requires TUI or RPC/);
 		await invoke("disable");
 

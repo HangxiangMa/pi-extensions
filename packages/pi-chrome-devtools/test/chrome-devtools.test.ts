@@ -87,11 +87,15 @@ test("chrome-devtools registers deferred CDP tools and one loader", () => {
 test("chrome-devtools command parsing and completions cover aliases", () => {
 	assert.equal(parseCommand(""), "menu");
 	assert.equal(parseCommand("toggle"), "tools");
+	assert.equal(parseCommand("settings"), "settings");
 	assert.equal(parseCommand("on"), "enable");
 	assert.equal(parseCommand("off"), "disable");
 	assert.equal(parseCommand("wat"), "unknown");
 	assert.deepEqual(commandCompletions("qui"), [
 		{ value: "quickstart", label: "quickstart", description: "Show endpoint and launch help" },
+	]);
+	assert.deepEqual(commandCompletions("set"), [
+		{ value: "settings", label: "settings", description: "Edit browser connection settings" },
 	]);
 	assert.deepEqual(commandCompletions("sel"), [
 		{ value: "select", label: "select", description: "Compatibility alias for tools" },

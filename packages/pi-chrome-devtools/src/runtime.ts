@@ -1,8 +1,13 @@
 import type { ChildProcess } from "node:child_process";
-import type { EffectiveBrowserSettings } from "./settings.js";
+import {
+	DEFAULT_BROWSER_HOST,
+	DEFAULT_BROWSER_PORT,
+	type EffectiveBrowserSettings,
+	parseConfiguredPort,
+} from "./settings.js";
 
-export const DEFAULT_HOST = "127.0.0.1";
-export const DEFAULT_PORT = 9222;
+export const DEFAULT_HOST = DEFAULT_BROWSER_HOST;
+export const DEFAULT_PORT = DEFAULT_BROWSER_PORT;
 export const DEFAULT_TIMEOUT_MS = 10_000;
 export const DEFAULT_HTTP_TIMEOUT_MS = 1_000;
 export const DEFAULT_ENDPOINT_WAIT_MS = 5_000;
@@ -26,6 +31,8 @@ export interface ChromeDevToolsState {
 	hostConfigured: boolean;
 	portConfigured: boolean;
 	autoLaunchEnabled: boolean;
+	endpointSource: EffectiveBrowserSettings["endpointSource"];
+	autoLaunchSource: EffectiveBrowserSettings["autoLaunchSource"];
 	browserExecutable?: string;
 	extensionPaths: string[];
 	browserExecutableSource: EffectiveBrowserSettings["executablePathSource"];
@@ -71,29 +78,19 @@ export interface BrowserCandidate extends BrowserCandidateDefinition {
 	resolvedExecutable: string;
 }
 
-export function parseConfiguredPort(value: string | undefined) {
-	if (value === undefined) return undefined;
-	const trimmedValue = value.trim();
-	if (!/^\d+$/.test(trimmedValue)) return undefined;
-	const port = Number(trimmedValue);
-	if (!Number.isInteger(port) || port < 1 || port > 65_535) return undefined;
-	return port;
-}
-
-const configuredHost = process.env.PI_CHROME_DEVTOOLS_HOST ?? DEFAULT_HOST;
-const configuredPortOverride = parseConfiguredPort(process.env.PI_CHROME_DEVTOOLS_PORT);
-const configuredPort = configuredPortOverride ?? DEFAULT_PORT;
+export { parseConfiguredPort };
 
 export const state: ChromeDevToolsState = {
-	host: configuredHost,
-	port: configuredPort,
-	configuredPort,
-	hostConfigured: process.env.PI_CHROME_DEVTOOLS_HOST !== undefined,
-	portConfigured: configuredPortOverride !== undefined,
-	autoLaunchEnabled: process.env.PI_CHROME_DEVTOOLS_AUTO_LAUNCH !== "0",
-	browserExecutable: process.env.PI_CHROME_DEVTOOLS_BROWSER,
+	host: DEFAULT_HOST,
+	port: DEFAULT_PORT,
+	configuredPort: DEFAULT_PORT,
+	hostConfigured: false,
+	portConfigured: false,
+	autoLaunchEnabled: true,
+	endpointSource: "default",
+	autoLaunchSource: "default",
 	extensionPaths: [],
-	browserExecutableSource: process.env.PI_CHROME_DEVTOOLS_BROWSER ? "environment" : "default",
+	browserExecutableSource: "default",
 	extensionPathsSource: "default",
 	projectSettingsTrusted: false,
 	shuttingDown: false,
@@ -106,6 +103,14 @@ export function applyRuntimeBrowserSettings(
 	paths: { user: string; project?: string },
 	projectTrusted: boolean,
 ) {
+	state.host = browser.host;
+	state.port = browser.port;
+	state.configuredPort = browser.port;
+	state.hostConfigured = browser.hostConfigured;
+	state.portConfigured = browser.portConfigured;
+	state.autoLaunchEnabled = browser.autoLaunchEnabled;
+	state.endpointSource = browser.endpointSource;
+	state.autoLaunchSource = browser.autoLaunchSource;
 	state.browserExecutable = browser.executablePath;
 	state.extensionPaths = [...browser.extensionPaths];
 	state.browserExecutableSource = browser.executablePathSource;

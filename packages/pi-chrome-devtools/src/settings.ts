@@ -23,11 +23,36 @@ export interface ChromeDevToolsSettings {
 	updatedAt: number;
 }
 
+export const DEFAULT_BROWSER_HOST = "127.0.0.1";
+export const DEFAULT_BROWSER_PORT = 9222;
+export const DEFAULT_BROWSER_ENDPOINT = `http://${DEFAULT_BROWSER_HOST}:${DEFAULT_BROWSER_PORT}`;
+
 export type BrowserSettingsSource = "default" | "environment" | "project" | "user";
 
+export interface UserBrowserSettings {
+	endpoint?: string;
+	autoLaunch?: boolean;
+	executablePath?: string;
+	extensionPaths?: string[];
+}
+
+export interface BrowserSettingsPatch {
+	endpoint?: string | null;
+	autoLaunch?: boolean | null;
+	executablePath?: string | null;
+}
+
 export interface EffectiveBrowserSettings {
+	endpoint: string;
+	host: string;
+	port: number;
+	hostConfigured: boolean;
+	portConfigured: boolean;
+	autoLaunchEnabled: boolean;
 	executablePath?: string;
 	extensionPaths: string[];
+	endpointSource: BrowserSettingsSource;
+	autoLaunchSource: BrowserSettingsSource;
 	executablePathSource: BrowserSettingsSource;
 	extensionPathsSource: BrowserSettingsSource;
 }
@@ -43,9 +68,14 @@ export interface SettingsLoadOptions {
 	projectTrusted?: boolean;
 }
 
+export type UserSettingsFileStatus =
+	| { kind: "missing" | "valid" }
+	| { kind: "invalid"; reason: string };
+
 interface SettingsLoadBase {
 	effectiveBrowser: EffectiveBrowserSettings;
 	paths: { user: string; project?: string };
+	userFile: UserSettingsFileStatus;
 	warnings: string[];
 	notice?: string;
 }
@@ -60,15 +90,10 @@ export interface SettingsFileOperations {
 	rename(source: string, destination: string): Promise<void>;
 }
 
-interface NormalizedBrowserSection {
-	executablePath?: string;
-	extensionPaths?: string[];
-}
-
 interface NormalizedSettingsDocument {
 	tools?: ChromeDevToolsToolName[];
 	updatedAt?: number;
-	browser?: NormalizedBrowserSection;
+	browser?: UserBrowserSettings;
 }
 
 interface SettingsDocumentResult {
@@ -85,6 +110,10 @@ const DEFAULT_FILE_OPERATIONS: SettingsFileOperations = {
 };
 
 let settingsSaveQueue = Promise.resolve();
+
+export async function waitForSettingsWrites() {
+	await settingsSaveQueue;
+}
 
 export async function loadSettings(options: SettingsLoadOptions = {}): Promise<SettingsLoadResult> {
 	await settingsSaveQueue;
@@ -127,10 +156,11 @@ export async function loadSettings(options: SettingsLoadOptions = {}): Promise<S
 		warnings.push(...project.warnings);
 	}
 
-	const effectiveBrowser = resolveEffectiveBrowser(
-		user.normalized?.browser,
-		project.normalized?.browser,
-	);
+	const environmentWarning = deprecatedEnvironmentWarning();
+	if (environmentWarning) warnings.push(environmentWarning);
+
+	const userBrowser = user.normalized?.browser ?? {};
+	const effectiveBrowser = resolveEffectiveBrowser(userBrowser, project.normalized?.browser);
 	const settings = resolveSettings(user.normalized, project.normalized, effectiveBrowser);
 	const recognized =
 		settings.tools !== undefined ||
@@ -140,9 +170,17 @@ export async function loadSettings(options: SettingsLoadOptions = {}): Promise<S
 		.filter((result) => result.kind === "invalid")
 		.map((result) => result.reason)
 		.filter((reason): reason is string => Boolean(reason));
+	const userFile: UserSettingsFileStatus =
+		user.kind === "invalid"
+			? {
+					kind: "invalid",
+					reason: user.reason ?? `${userPath}: invalid settings`,
+				}
+			: { kind: user.kind };
 	const base = {
 		effectiveBrowser,
 		paths,
+		userFile,
 		warnings,
 		...(warnings.length > 0 ? { notice: warnings.join("\n") } : {}),
 	};
@@ -166,26 +204,67 @@ function resolveSettings(
 }
 
 function resolveEffectiveBrowser(
-	user: NormalizedBrowserSection | undefined,
-	project: NormalizedBrowserSection | undefined,
+	user: UserBrowserSettings,
+	project: UserBrowserSettings | undefined,
 ): EffectiveBrowserSettings {
+	const configuredEndpoint = parseBrowserEndpoint(user.endpoint ?? DEFAULT_BROWSER_ENDPOINT);
+	const environmentHost = process.env.PI_CHROME_DEVTOOLS_HOST;
+	const environmentPortValue = process.env.PI_CHROME_DEVTOOLS_PORT;
+	const environmentPort = parseConfiguredPort(environmentPortValue);
+	const environmentEndpointConfigured =
+		environmentHost !== undefined || environmentPort !== undefined;
+	const host = environmentHost ?? configuredEndpoint.host;
+	const port = environmentPort ?? configuredEndpoint.port;
+	const environmentAutoLaunch = process.env.PI_CHROME_DEVTOOLS_AUTO_LAUNCH;
 	const environmentExecutable = process.env.PI_CHROME_DEVTOOLS_BROWSER;
-	const executablePath = environmentExecutable || user?.executablePath;
-	const extensionPaths = project?.extensionPaths ?? user?.extensionPaths ?? [];
+	const executablePath = environmentExecutable || user.executablePath;
+	const extensionPaths = project?.extensionPaths ?? user.extensionPaths ?? [];
+	const endpointSource: BrowserSettingsSource = environmentEndpointConfigured
+		? "environment"
+		: user.endpoint
+			? "user"
+			: "default";
 	return {
+		endpoint: formatBrowserEndpoint(host, port),
+		host,
+		port,
+		hostConfigured: environmentHost !== undefined || user.endpoint !== undefined,
+		portConfigured: environmentPort !== undefined || user.endpoint !== undefined,
+		autoLaunchEnabled:
+			environmentAutoLaunch === undefined
+				? (user.autoLaunch ?? true)
+				: environmentAutoLaunch !== "0",
 		...(executablePath ? { executablePath } : {}),
 		extensionPaths: [...extensionPaths],
+		endpointSource,
+		autoLaunchSource:
+			environmentAutoLaunch !== undefined
+				? "environment"
+				: user.autoLaunch !== undefined
+					? "user"
+					: "default",
 		executablePathSource: environmentExecutable
 			? "environment"
-			: user?.executablePath
+			: user.executablePath
 				? "user"
 				: "default",
 		extensionPathsSource: project?.extensionPaths
 			? "project"
-			: user?.extensionPaths
+			: user.extensionPaths
 				? "user"
 				: "default",
 	};
+}
+
+function deprecatedEnvironmentWarning() {
+	const configuredNames = [
+		"PI_CHROME_DEVTOOLS_HOST",
+		"PI_CHROME_DEVTOOLS_PORT",
+		"PI_CHROME_DEVTOOLS_AUTO_LAUNCH",
+		"PI_CHROME_DEVTOOLS_BROWSER",
+	].filter((name) => process.env[name] !== undefined);
+	if (configuredNames.length === 0) return undefined;
+	return `Chrome DevTools environment settings are deprecated and will be removed in a future version: ${configuredNames.join(", ")}. Move them to browser.endpoint, browser.autoLaunch, and browser.executablePath in ${settingsFilePath()}. Environment values remain active overrides during the deprecation period.`;
 }
 
 async function readSettingsDocument(
@@ -214,7 +293,7 @@ async function readSettingsDocument(
 		return { kind: "invalid", reason, warnings: [`Chrome DevTools settings ignored: ${reason}`] };
 	}
 
-	const scopeWarnings = projectExecutableWarnings(parsed, scope, filePath);
+	const scopeWarnings = projectMachineSettingsWarnings(parsed, scope, filePath);
 	try {
 		const normalized = await normalizeSettingsDocument(parsed, scope, filePath, cwd);
 		return { kind: "valid", document: { ...parsed }, normalized, warnings: scopeWarnings };
@@ -228,21 +307,19 @@ async function readSettingsDocument(
 	}
 }
 
-function projectExecutableWarnings(
+function projectMachineSettingsWarnings(
 	document: Record<string, unknown>,
 	scope: "project" | "user",
 	filePath: string,
 ) {
-	if (
-		scope !== "project" ||
-		!isRecord(document.browser) ||
-		document.browser.executablePath === undefined
-	) {
-		return [];
-	}
-	return [
-		`Chrome DevTools project browser.executablePath ignored in ${filePath}; configure the machine-owned executable in ${settingsFilePath()}.`,
-	];
+	if (scope !== "project" || !isRecord(document.browser)) return [];
+	const browser = document.browser;
+	return ["endpoint", "autoLaunch", "executablePath"]
+		.filter((field) => browser[field] !== undefined)
+		.map(
+			(field) =>
+				`Chrome DevTools project browser.${field} ignored in ${filePath}; configure this machine-owned setting in ${settingsFilePath()}.`,
+		);
 }
 
 async function normalizeSettingsDocument(
@@ -277,8 +354,20 @@ async function normalizeBrowserSection(
 	scope: "project" | "user",
 	_filePath: string,
 	cwd?: string,
-): Promise<NormalizedBrowserSection> {
-	const normalized: NormalizedBrowserSection = {};
+): Promise<UserBrowserSettings> {
+	const normalized: UserBrowserSettings = {};
+	if (scope === "user" && browser.endpoint !== undefined) {
+		if (typeof browser.endpoint !== "string") {
+			throw new Error("expected browser.endpoint to be an HTTP URL with an explicit port");
+		}
+		normalized.endpoint = parseBrowserEndpoint(browser.endpoint).endpoint;
+	}
+	if (scope === "user" && browser.autoLaunch !== undefined) {
+		if (typeof browser.autoLaunch !== "boolean") {
+			throw new Error("expected browser.autoLaunch to be a boolean");
+		}
+		normalized.autoLaunch = browser.autoLaunch;
+	}
 	if (scope === "user" && browser.executablePath !== undefined) {
 		if (typeof browser.executablePath !== "string" || browser.executablePath.length === 0) {
 			throw new Error("expected browser.executablePath to be a non-empty absolute path");
@@ -350,6 +439,52 @@ async function validateUnpackedExtensionPath(extensionPath: string) {
 	return canonicalPath;
 }
 
+export function parseBrowserEndpoint(value: string) {
+	const trimmedValue = value.trim();
+	const explicitPort = trimmedValue.match(/^http:\/\/(?:\[[^\]]+\]|[^/:?#]+):(\d+)\/?$/i)?.[1];
+	let endpoint: URL;
+	try {
+		endpoint = new URL(trimmedValue);
+	} catch {
+		throw new Error("browser.endpoint must be a valid HTTP URL with an explicit port");
+	}
+	if (
+		endpoint.protocol !== "http:" ||
+		endpoint.username ||
+		endpoint.password ||
+		!endpoint.hostname ||
+		!explicitPort ||
+		(endpoint.pathname !== "/" && endpoint.pathname !== "") ||
+		endpoint.search ||
+		endpoint.hash
+	) {
+		throw new Error(
+			"browser.endpoint must be an HTTP origin with an explicit port and no credentials, path, query, or fragment",
+		);
+	}
+	const port = parseConfiguredPort(explicitPort);
+	if (port === undefined) {
+		throw new Error("browser.endpoint must use a port from 1 through 65535");
+	}
+	const host = endpoint.hostname;
+	return { endpoint: formatBrowserEndpoint(host, port), host, port };
+}
+
+export function parseConfiguredPort(value: string | undefined) {
+	if (value === undefined) return undefined;
+	const trimmedValue = value.trim();
+	if (!/^\d+$/.test(trimmedValue)) return undefined;
+	const port = Number(trimmedValue);
+	if (!Number.isInteger(port) || port < 1 || port > 65_535) return undefined;
+	return port;
+}
+
+function formatBrowserEndpoint(host: string, port: number) {
+	const formattedHost =
+		host.startsWith("[") && host.endsWith("]") ? host : host.includes(":") ? `[${host}]` : host;
+	return `http://${formattedHost}:${port}`;
+}
+
 export function normalizeChromeDevtoolsSettings(
 	value: unknown,
 ): ChromeDevToolsSettings | undefined {
@@ -381,13 +516,48 @@ export function saveSettings(
 	settings: ChromeDevToolsSettings,
 	operations: Partial<SettingsFileOperations> = {},
 ): Promise<void> {
-	const operation = settingsSaveQueue.then(() => saveSettingsNow(settings, operations));
+	return queueSettingsMutation(
+		(current) => ({
+			...current,
+			tools: [...settings.tools],
+			updatedAt: settings.updatedAt,
+		}),
+		operations,
+	);
+}
+
+export function saveBrowserSettings(
+	patch: BrowserSettingsPatch,
+	operations: Partial<SettingsFileOperations> = {},
+): Promise<void> {
+	return queueSettingsMutation(async (current) => {
+		const browser = isRecord(current.browser) ? { ...current.browser } : {};
+		for (const field of ["endpoint", "autoLaunch", "executablePath"] as const) {
+			const value = patch[field];
+			if (value === undefined) continue;
+			if (value === null) delete browser[field];
+			else browser[field] = value;
+		}
+		await normalizeBrowserSection(browser, "user", settingsFilePath());
+		return { ...current, browser };
+	}, operations);
+}
+
+function queueSettingsMutation(
+	mutate: (
+		current: Record<string, unknown>,
+	) => Record<string, unknown> | Promise<Record<string, unknown>>,
+	operations: Partial<SettingsFileOperations>,
+) {
+	const operation = settingsSaveQueue.then(() => saveSettingsMutationNow(mutate, operations));
 	settingsSaveQueue = operation.catch(() => undefined);
 	return operation;
 }
 
-async function saveSettingsNow(
-	settings: ChromeDevToolsSettings,
+async function saveSettingsMutationNow(
+	mutate: (
+		current: Record<string, unknown>,
+	) => Record<string, unknown> | Promise<Record<string, unknown>>,
 	operations: Partial<SettingsFileOperations>,
 ): Promise<void> {
 	const filePath = settingsFilePath();
@@ -397,11 +567,7 @@ async function saveSettingsNow(
 	if (current.kind === "invalid") {
 		throw new Error(`Cannot save Chrome DevTools settings until you repair ${current.reason}`);
 	}
-	const nextDocument = {
-		...(current.document ?? {}),
-		tools: [...settings.tools],
-		updatedAt: settings.updatedAt,
-	};
+	const nextDocument = await mutate(current.document ?? {});
 	await mkdir(dirname(filePath), { recursive: true });
 	const tempFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
 	try {
