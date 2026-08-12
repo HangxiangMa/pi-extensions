@@ -52,7 +52,6 @@ test("resolution reviews exact differences and invokes local-wins push through t
 		assert.match(tui.render().join("\n"), /Review differences \(recommended\)/u);
 		tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
-		await waitFor(() => routes.length === 1);
 		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /Preparing local-wins push preview/u);
 		assert.deepEqual(
@@ -90,7 +89,7 @@ test("cancelling a remote-wins preparation drains work and returns to resolution
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
 		tui.press("tui.select.cancel");
-		await waitFor(() => routeSignal?.aborted === true);
+		assert.equal(routeSignal?.aborted, true);
 		releaseRoute();
 		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /Resolve sync conflict/u);
@@ -153,9 +152,9 @@ test("cancelling the exact push confirmation returns to conflict resolution", as
 		tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
-		const loaderOpenCount = tui.openCount;
 		releaseRoute();
-		await waitFor(() => tui.isOpen && tui.openCount > loaderOpenCount);
+		await tui.waitForPending();
+		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /Resolve sync conflict/u);
 		tui.press("ctrl+c");
 		assert.deepEqual(await running, { kind: "closed" });
@@ -184,9 +183,9 @@ test("a repeated conflict refreshes resolution labels instead of closing", async
 		tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
-		const loaderOpenCount = tui.openCount;
 		releaseRoute();
-		await waitFor(() => tui.isOpen && tui.openCount > loaderOpenCount);
+		await tui.waitForPending();
+		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /Use local as initial source/u);
 		tui.press("ctrl+c");
 		assert.deepEqual(await running, { kind: "closed" });
@@ -258,7 +257,7 @@ test("session replacement aborts and drains a resolution operation", async () =>
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
 		owner.abort(new DOMException("Session replaced", "AbortError"));
-		await waitFor(() => routeSignal?.aborted === true);
+		assert.equal(routeSignal?.aborted, true);
 		releaseRoute();
 		assert.deepEqual(await running, { kind: "stale" });
 	});
@@ -269,6 +268,10 @@ test("repeated remote-selection decisions refresh through bounded manager dispat
 		const tui = createTuiHarness({ width: 60, rows: 18 });
 		const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
 		let routeCalls = 0;
+		let releaseRoute: () => void = () => undefined;
+		const routeGate = new Promise<void>((resolve) => {
+			releaseRoute = resolve;
+		});
 		const running = dispatchManagerResult(
 			ctx,
 			{
@@ -285,6 +288,7 @@ test("repeated remote-selection decisions refresh through bounded manager dispat
 				routeCalls += 1;
 				assert.equal(route, "push --force");
 				assert.equal(target, "home");
+				await routeGate;
 				return {
 					kind: "remote-selection-required",
 					decision: {
@@ -301,8 +305,12 @@ test("repeated remote-selection decisions refresh through bounded manager dispat
 		tui.press("tui.select.down");
 		tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
-		await waitFor(() => routeCalls === 1);
-		await waitFor(() => tui.isOpen && /Synced content differs/u.test(tui.render().join("\n")));
+		await tui.waitForOpen();
+		assert.equal(routeCalls, 1);
+		releaseRoute();
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /Synced content differs/u);
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /models\.json/u);
@@ -318,6 +326,10 @@ test("selection continuation hands a file-direction decision to existing resolut
 		const tui = createTuiHarness({ width: 60, rows: 18 });
 		const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
 		let routeCalls = 0;
+		let releaseRoute: () => void = () => undefined;
+		const routeGate = new Promise<void>((resolve) => {
+			releaseRoute = resolve;
+		});
 		const running = dispatchManagerResult(
 			ctx,
 			{
@@ -332,6 +344,7 @@ test("selection continuation hands a file-direction decision to existing resolut
 			"pull",
 			async () => {
 				routeCalls += 1;
+				await routeGate;
 				return { kind: "decision-required", decision };
 			},
 		);
@@ -340,8 +353,12 @@ test("selection continuation hands a file-direction decision to existing resolut
 		tui.press("tui.select.down");
 		tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
-		await waitFor(() => routeCalls === 1);
-		await waitFor(() => tui.isOpen && /Resolve sync conflict/u.test(tui.render().join("\n")));
+		await tui.waitForOpen();
+		assert.equal(routeCalls, 1);
+		releaseRoute();
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		assert.match(tui.render().join("\n"), /Resolve sync conflict/u);
 		tui.press("tui.select.cancel");
 		assert.deepEqual(await running, { kind: "stay" });
 	});
@@ -354,6 +371,10 @@ test("ordinary selection continuation failure is reported only by its route", as
 			hasUI: true,
 			mode: "tui",
 			custom: tui.custom,
+		});
+		let releaseRoute: () => void = () => undefined;
+		const routeGate = new Promise<void>((resolve) => {
+			releaseRoute = resolve;
 		});
 		const running = dispatchManagerResult(
 			ctx,
@@ -369,6 +390,7 @@ test("ordinary selection continuation failure is reported only by its route", as
 			"push",
 			async () => {
 				notifications.push({ message: "transport failed", level: "error" });
+				await routeGate;
 				return { kind: "failed" };
 			},
 		);
@@ -377,7 +399,10 @@ test("ordinary selection continuation failure is reported only by its route", as
 		tui.press("tui.select.down");
 		tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
-		await waitFor(() => notifications.length === 1);
+		await tui.waitForOpen();
+		assert.equal(notifications.length, 1);
+		releaseRoute();
+		await tui.waitForPending();
 		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /Synced content differs/u);
 		assert.deepEqual(
@@ -414,9 +439,9 @@ test("the main manager opens inline remote-selection recovery", async () => {
 		await tui.waitForOpen();
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
-		const loaderOpenCount = tui.openCount;
 		releaseRoute();
-		await waitFor(() => tui.isOpen && tui.openCount > loaderOpenCount);
+		await tui.waitForPending();
+		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /Synced content differs/u);
 		tui.press("tui.select.cancel");
 		await tui.waitForOpen();
@@ -518,11 +543,11 @@ test("attention for a non-current setup stays reviewable without blocking curren
 		assert.doesNotMatch(frame, /\[-\] Sync now/u);
 		tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
-		await waitFor(() => routeCalls === 1);
 		await tui.waitForOpen();
-		const loaderOpenCount = tui.openCount;
+		assert.equal(routeCalls, 1);
 		releaseRoute();
-		await waitFor(() => tui.isOpen && tui.openCount > loaderOpenCount);
+		await tui.waitForPending();
+		await tui.waitForOpen();
 		tui.press("ctrl+c");
 		await running;
 	});
@@ -545,9 +570,9 @@ test("the main manager opens conflict recovery instead of ending at an error", a
 		await tui.waitForOpen();
 		tui.press("tui.select.confirm");
 		await tui.waitForOpen();
-		const loaderOpenCount = tui.openCount;
 		releaseRoute();
-		await waitFor(() => tui.isOpen && tui.openCount > loaderOpenCount);
+		await tui.waitForPending();
+		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /Resolve sync conflict/u);
 		tui.press("tui.select.cancel");
 		await tui.waitForOpen();
@@ -578,12 +603,4 @@ async function withConfiguredDecision(
 			syncConfigReviewFingerprint(config),
 		);
 	});
-}
-
-async function waitFor(condition: () => boolean) {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (condition()) return;
-		await new Promise<void>((resolve) => setTimeout(resolve, 1));
-	}
-	assert.fail("Timed out waiting for condition");
 }

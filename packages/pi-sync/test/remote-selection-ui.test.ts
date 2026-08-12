@@ -236,7 +236,7 @@ test("saved remote list can continue the captured route or stop without file mut
 		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /Continue Pull now/u);
 		tui.press("tui.select.confirm");
-		await waitFor(() => routes.length === 1);
+		await tui.waitForOpen();
 		assert.deepEqual(routes, [{ route: "pull", target: "home" }]);
 		assert.equal(existsSync(path.join(agentDir, "pi-starship.toml")), false);
 		releaseRoute();
@@ -256,6 +256,10 @@ test("keeping this device list invokes reviewed push force and cancellation retu
 		const tui = createTuiHarness({ width: 80, rows: 20 });
 		const { ctx } = createMockContext({ hasUI: true, mode: "tui", custom: tui.custom });
 		const routes: Array<{ route: string; target?: string }> = [];
+		let releaseRoute: () => void = () => undefined;
+		const routeGate = new Promise<void>((resolve) => {
+			releaseRoute = resolve;
+		});
 		const config = await loadConfig("home");
 		const running = showRemoteSelectionReview(ctx, "home", undefined, undefined, {
 			decision: {
@@ -267,6 +271,7 @@ test("keeping this device list invokes reviewed push force and cancellation retu
 			origin: "sync",
 			runRoute: async (route, _signal, _onCommit, target) => {
 				routes.push({ route, target });
+				await routeGate;
 				return { kind: "completed", outcome: "cancelled" };
 			},
 		});
@@ -275,9 +280,11 @@ test("keeping this device list invokes reviewed push force and cancellation retu
 		tui.press("tui.select.down");
 		tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
-		await waitFor(() => routes.length === 1);
 		await tui.waitForOpen();
 		assert.deepEqual(routes, [{ route: "push --force", target: "home" }]);
+		releaseRoute();
+		await tui.waitForPending();
+		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /Synced content differs/u);
 		tui.press("tui.select.cancel");
 		assert.deepEqual(await running, { kind: "back" });
@@ -320,7 +327,7 @@ test("local-wins action refreshes when the reviewed setup identity changes", asy
 		tui.press("tui.select.down");
 		tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
-		await waitFor(() => tui.openCount >= 2);
+		await tui.waitForOpen();
 		assert.equal(routeCalls, 0);
 		assert.match(notifications.at(-1)?.message ?? "", /Refreshing the comparison/u);
 		tui.press("tui.select.cancel");
@@ -413,7 +420,7 @@ test("remote selection adoption refreshes a changed remote head and preserves se
 		await tui.waitForOpen();
 		tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
-		await waitFor(() => tui.openCount >= 2);
+		await tui.waitForOpen();
 		assert.match(tui.render().join("\n"), /Synced content differs/u);
 		assert.match(notifications.at(-1)?.message ?? "", /Refreshing the comparison/u);
 		tui.press("tui.select.cancel");
@@ -450,7 +457,7 @@ test("remote selection adoption refreshes a concurrent local include change", as
 		await tui.waitForOpen();
 		tui.press("tui.select.down");
 		tui.press("tui.select.confirm");
-		await waitFor(() => tui.openCount >= 2);
+		await tui.waitForOpen();
 		assert.deepEqual((await readLocalConfigObject())?.syncSetups.home.sync.include, [
 			"models.json",
 		]);
@@ -525,12 +532,4 @@ async function publishSelection(backend: MemorySyncBackend, include: string[]) {
 		},
 		expectedRemoteHead(await backend.readHead()),
 	);
-}
-
-async function waitFor(condition: () => boolean) {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (condition()) return;
-		await new Promise<void>((resolve) => setTimeout(resolve, 1));
-	}
-	assert.fail("Timed out waiting for condition");
 }
