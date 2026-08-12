@@ -85,7 +85,6 @@ interface PendingQuote {
 interface ExplorerRunOptions {
 	menuOwned?: boolean;
 	signal?: AbortSignal;
-	showScanTask?: boolean;
 }
 
 type ExplorerRunResult = "stay" | "close";
@@ -326,7 +325,7 @@ export async function registerFileQuoteExtension(
 		ctx.ui.setWidget(WIDGET_KEY, [
 			ctx.ui.theme.fg(
 				"accent",
-				`Quotes (${pendingQuotes.length}) · ~${estimateTokens(totalBytes)} tokens · /file-context to manage`,
+				`Next prompt context · ${pendingQuotes.length} ${pendingQuotes.length === 1 ? "snippet" : "snippets"} · ~${estimateTokens(totalBytes)} tokens · /file-context to review`,
 			),
 			...pendingQuotes.map(({ quote }, index) =>
 				ctx.ui.theme.fg(
@@ -343,11 +342,15 @@ export async function registerFileQuoteExtension(
 		updatePendingWidget(ctx);
 	};
 
-	const appendPending = (quote: FileQuote, ctx: ExtensionContext) => {
+	const validatePending = (quote: FileQuote) => {
 		appendPendingQuote(
 			pendingQuotes.map((item) => item.quote),
 			quote,
 		);
+	};
+
+	const appendPending = (quote: FileQuote, ctx: ExtensionContext) => {
+		validatePending(quote);
 		pendingQuotes = [...pendingQuotes, { id: `quote-${nextPendingQuoteId}`, quote }];
 		nextPendingQuoteId += 1;
 		updatePendingWidget(ctx);
@@ -390,37 +393,31 @@ export async function registerFileQuoteExtension(
 			: controller.signal;
 		activeExplorers.add(activeExplorer);
 		try {
-			let discovery: ExplorerDiscovery;
-			if (options.showScanTask) {
-				const { runTask } = await import("@narumitw/pi-tui-kit");
-				if (!isCurrentSession(owner, generation) || flowSignal.aborted) return "close";
-				const task = await runTask(ctx, {
-					label: "Scanning project files…",
-					signal: flowSignal,
-					isCurrent: () => isCurrentSession(owner, generation) && !flowSignal.aborted,
-					task: ({ signal }) =>
-						Promise.all([discoverFiles(ctx.cwd, { signal }), createGit(ctx.cwd, signal)]),
-					onError: (_taskContext, error) => {
-						ctx.ui.notify(
-							`File Context could not scan project files: ${escapeTerminalControls(formatError(error))}. Choose Add file quote to retry.`,
-							"error",
-						);
-					},
-				});
-				if (task.kind === "cancelled" || task.kind === "error") return "stay";
-				if (task.kind === "stale") return "close";
-				discovery = task.value;
-			} else {
-				discovery = await Promise.all([
-					discoverFiles(ctx.cwd, { signal: flowSignal }),
-					createGit(ctx.cwd, flowSignal),
-				]);
+			const { runTask } = await import("@narumitw/pi-tui-kit");
+			if (!isCurrentSession(owner, generation) || flowSignal.aborted) return "close";
+			const task = await runTask(ctx, {
+				label: "Scanning project files…",
+				signal: flowSignal,
+				isCurrent: () => isCurrentSession(owner, generation) && !flowSignal.aborted,
+				task: ({ signal }) =>
+					Promise.all([discoverFiles(ctx.cwd, { signal }), createGit(ctx.cwd, signal)]),
+				onError: (_taskContext, error) => {
+					ctx.ui.notify(
+						`File Context could not scan project files: ${escapeTerminalControls(formatError(error))}. Open File Context to retry.`,
+						"error",
+					);
+				},
+			});
+			if (task.kind === "cancelled" || task.kind === "error") {
+				return options.menuOwned ? "stay" : "close";
 			}
+			if (task.kind === "stale") return "close";
+			const discovery: ExplorerDiscovery = task.value;
 			if (!isCurrentSession(owner, generation) || flowSignal.aborted) return "close";
 			const [files, gitContext] = discovery;
 			if (files.length === 0) {
 				ctx.ui.notify(
-					"File Context found no project files. Choose Add file quote to retry.",
+					"File Context found no project files. Choose Add context snippet to retry.",
 					"warning",
 				);
 				return options.menuOwned ? "stay" : "close";
@@ -436,6 +433,32 @@ export async function registerFileQuoteExtension(
 						loadFile: (path, signal) => loadProjectTextFile(ctx.cwd, path, { signal }),
 						gitContext,
 						rootNavigation: options.menuOwned,
+						getSelectedContextState: () => ({
+							count: pendingQuotes.length,
+							totalBytes: pendingQuotes.reduce(
+								(total, item) => total + Buffer.byteLength(item.quote.text, "utf8"),
+								0,
+							),
+							maximumCount: MAX_PENDING_QUOTES,
+							maximumBytes: MAX_PENDING_QUOTE_BYTES,
+							maximumSnippetLines: MAX_QUOTE_LINES,
+							maximumSnippetBytes: MAX_QUOTE_BYTES,
+						}),
+						validateQuote: validatePending,
+						onAddAndContinue: (quote) => {
+							if (!isCurrentSession(owner, generation) || flowSignal.aborted) {
+								throw new DOMException("File Context session replaced", "AbortError");
+							}
+							appendPending(quote, ctx);
+							try {
+								ctx.ui.notify(
+									`Added to next prompt context: ${escapeTerminalControls(quote.path)} · lines ${quote.startLine}-${quote.endLine}.`,
+									"info",
+								);
+							} catch {
+								// The widget already reflects the selected snapshot.
+							}
+						},
 						done,
 					});
 					activeExplorer.component = component;
@@ -459,7 +482,7 @@ export async function registerFileQuoteExtension(
 			}
 			try {
 				ctx.ui.notify(
-					`File Context failed: ${escapeTerminalControls(formatError(error))}. Choose Add file quote to retry.`,
+					`File Context failed: ${escapeTerminalControls(formatError(error))}. Open File Context to retry.`,
 					"error",
 				);
 			} catch {
@@ -494,7 +517,7 @@ export async function registerFileQuoteExtension(
 		if (activeMenuLaunch) return activeMenuLaunch.promise;
 		if (activeExplorerLaunch) return activeExplorerLaunch.promise;
 		if (start === "remove" && pendingQuotes.length === 0) {
-			ctx.ui.notify("File Context has no pending quotes.", "warning");
+			ctx.ui.notify("File Context has no context selected for the next prompt.", "warning");
 			return Promise.resolve();
 		}
 		const owner = ctx.sessionManager;
@@ -522,7 +545,7 @@ export async function registerFileQuoteExtension(
 					),
 				};
 			},
-			addQuote: (signal) => runExplorer(ctx, { menuOwned: true, showScanTask: true, signal }),
+			addQuote: (signal) => runExplorer(ctx, { menuOwned: true, signal }),
 			removeQuote: (id, signal) => {
 				if (!isCurrent() || signal.aborted) return { kind: "missing" };
 				const index = pendingQuotes.findIndex((item) => item.id === id);
@@ -568,7 +591,7 @@ export async function registerFileQuoteExtension(
 			const normalized = prefix.trimStart().toLowerCase();
 			const completions = [
 				{ value: "browse", label: "browse", description: "Open the file browser directly" },
-				{ value: "remove", label: "remove", description: "Manage pending quotes directly" },
+				{ value: "remove", label: "remove", description: "Review selected context directly" },
 			].filter(({ value }) => value.startsWith(normalized));
 			return completions.length > 0 ? completions : null;
 		},
@@ -594,8 +617,8 @@ export async function registerFileQuoteExtension(
 		const shortcut = loadedSettings.settings.openShortcut;
 		ctx.ui.notify(
 			shortcut
-				? `Experimental File Context loaded. Press ${shortcut} to browse or run /file-context to manage quotes.`
-				: "Experimental File Context loaded. Run /file-context to add or manage quotes.",
+				? `Experimental File Context loaded. Press ${shortcut} to browse or run /file-context to review selected context.`
+				: "Experimental File Context loaded. Run /file-context to add or review selected context.",
 			"warning",
 		);
 	});

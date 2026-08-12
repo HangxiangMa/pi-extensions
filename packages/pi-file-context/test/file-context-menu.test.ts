@@ -90,14 +90,14 @@ test("shows the primary menu immediately with visible state and disabled reasons
 	}
 	const initial = tui.render().join("\n");
 	assert.match(initial, /File Context/u);
-	assert.match(initial, /Pending quotes: 0\/8/u);
+	assert.match(initial, /Next prompt context: 0\/8 snippets/u);
 	assert.match(initial, /Shortcut: F8/u);
-	assert.match(initial, /Add file quote/u);
+	assert.match(initial, /Add context snippet/u);
 
 	tui.press("tui.select.down");
 	const disabled = tui.render().join("\n");
-	assert.match(disabled, /\[-\].*Remove pending quote \(0\)/u);
-	assert.match(disabled, /No pending quotes to remove/u);
+	assert.match(disabled, /\[-\].*Review selected context \(0\)/u);
+	assert.match(disabled, /No context selected for the next prompt/u);
 	tui.press("tui.select.confirm");
 	await tui.waitForPending();
 	assert.equal(removeCalls, 0);
@@ -142,16 +142,16 @@ test("opens Help from the menu and Escape returns without side effects", async (
 	tui.press("tui.select.down");
 	tui.press("tui.select.confirm");
 	await tui.waitForOpen();
-	assert.match(tui.render().join("\n"), /Pending quotes are attached.*next prompt/u);
+	assert.match(tui.render().join("\n"), /Selected context is attached.*next prompt/u);
 	tui.press("tui.select.cancel");
 	await tui.waitForOpen();
-	assert.match(tui.render().join("\n"), /Add file quote/u);
+	assert.match(tui.render().join("\n"), /Add context snippet/u);
 	assert.equal(addCalls, 0);
 	tui.press("ctrl+c");
 	await running;
 });
 
-test("previews and repeatedly removes exact duplicate-looking quotes by stable ID", async () => {
+test("reviews exact snippets before repeatedly removing them by stable ID", async () => {
 	const { tui, ctx, notifications } = menuContext(40, 12);
 	let current = state([
 		quote("quote-1", { text: "first snapshot\nwith details" }),
@@ -176,21 +176,39 @@ test("previews and repeatedly removes exact duplicate-looking quotes by stable I
 	await tui.waitForOpen();
 	const firstChoice = tui.render().join("\n");
 	assert.match(firstChoice, /src\/example\.ts/u);
-	assert.match(firstChoice, /Lines: 1-1/u);
-	assert.match(firstChoice, /first snapshot.*with details/u);
+	assert.match(firstChoice, /Lines 1-1/u);
+	assert.equal(removedIds.length, 0);
 
+	tui.press("tui.select.confirm");
+	await tui.waitForOpen();
+	const firstReview = tui.render().join("\n");
+	assert.match(firstReview, /Review context snippet/u);
+	assert.match(firstReview, /first snapshot/u);
+	assert.match(firstReview, /with details/u);
+	assert.match(firstReview, /Remove from next\s+prompt/u);
+	assert.equal(removedIds.length, 0);
+
+	tui.press("tui.select.cancel");
+	await tui.waitForOpen();
+	assert.match(tui.render().join("\n"), /Selected context/u);
+	assert.equal(removedIds.length, 0);
+	tui.press("tui.select.confirm");
+	await tui.waitForOpen();
 	tui.press("tui.select.confirm");
 	await tui.waitForPending();
 	await tui.waitForOpen();
-	assert.match(tui.render().join("\n"), /second snapshot.*with details/u);
+	assert.match(tui.render().join("\n"), /second snapshot/u);
+	tui.press("tui.select.confirm");
+	await tui.waitForOpen();
+	assert.match(tui.render().join("\n"), /Review context snippet/u);
 	tui.press("tui.select.confirm");
 	await tui.waitForPending();
 	await tui.waitForOpen();
 
 	assert.deepEqual(removedIds, ["quote-1", "quote-2"]);
-	assert.match(tui.render().join("\n"), /Pending quotes: 0\/8/u);
+	assert.match(tui.render().join("\n"), /No context selected for the next prompt/u);
 	assert.equal(
-		notifications.filter(({ message }) => /Removed pending quote/u.test(message)).length,
+		notifications.filter(({ message }) => /Removed from next prompt context/u.test(message)).length,
 		2,
 	);
 	tui.press("ctrl+c");
@@ -244,7 +262,7 @@ test("disables Add at either hard pending limit", async () => {
 			}),
 		);
 		await tui.waitForOpen();
-		assert.match(tui.render().join("\n"), /\[-\].*Add file quote/u);
+		assert.match(tui.render().join("\n"), /\[-\].*Add context snippet/u);
 		tui.press("tui.select.confirm");
 		await tui.waitForPending();
 		assert.equal(addCalls, 0);

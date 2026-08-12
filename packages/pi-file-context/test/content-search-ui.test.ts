@@ -13,6 +13,7 @@ function createHarness(
 		path: string,
 		signal?: AbortSignal,
 	) => Promise<{ path: string; lines: string[] }> = async (path) => ({ path, lines: [] }),
+	onAddAndContinue?: (quote: unknown) => void,
 ) {
 	const foreground: Array<{ color: string; text: string }> = [];
 	const backgrounds: Array<{ color: string; text: string }> = [];
@@ -42,6 +43,7 @@ function createHarness(
 		} as never,
 		files: ["a.txt", "b.txt"],
 		loadFile,
+		onAddAndContinue,
 		done: (value) => {
 			result = value;
 		},
@@ -91,6 +93,34 @@ test("content result cards highlight literal matches and open preview at the sel
 	explorer.handleInput("enter");
 	await flushAsyncWork();
 	assert.deepEqual(loads.slice(-2), ["b.txt", "b.txt"]);
+});
+
+test("add and continue returns to the originating content results with search state intact", async () => {
+	const continued: unknown[] = [];
+	const { explorer, getResult } = createHarness(
+		async (path) => ({ path, lines: [path === "a.txt" ? "before needle after" : "no match"] }),
+		(quote) => continued.push(quote),
+	);
+	explorer.handleInput(CTRL_F);
+	explorer.handleInput("needle");
+	await flushAsyncWork();
+	explorer.handleInput("enter");
+	await flushAsyncWork();
+	explorer.handleInput("a");
+
+	assert.deepEqual(continued, [
+		{
+			path: "a.txt",
+			startLine: 1,
+			endLine: 1,
+			text: "before needle after",
+		},
+	]);
+	assert.equal(getResult(), "pending");
+	const restored = explorer.render(48).join("\n");
+	assert.match(restored, /Content Search/u);
+	assert.match(restored, /needle/u);
+	assert.match(restored, /a\.txt/u);
 });
 
 test("content result cards keep a distant match visible within narrow context", async () => {

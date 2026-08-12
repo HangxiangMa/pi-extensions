@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import {
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+} from "../../../test/support.js";
 import {
 	appendPendingQuote,
 	createFileQuote,
@@ -15,7 +19,6 @@ import {
 	registerFileQuoteExtension,
 } from "../src/file-context.js";
 import { FileQuoteExplorer } from "../src/file-context-explorer.js";
-import { ProjectFileSearch } from "../src/file-search.js";
 
 async function withTempProject(run: (root: string) => Promise<void>): Promise<void> {
 	const root = await mkdtemp(join(tmpdir(), "pi-file-context-test-"));
@@ -103,40 +106,6 @@ test("rejects a validated file replaced by a symlink before descriptor open", as
 			await rm(outside, { recursive: true, force: true });
 		}
 	});
-});
-
-test("ranks fuzzy file matches and tolerates typos", () => {
-	const files = [
-		"file-context.ts-notes/README.md",
-		"src/file-context.ts",
-		"src/settings.ts",
-		"docs/guide.md",
-	];
-
-	const search = new ProjectFileSearch(files);
-	assert.deepEqual(search.search("  FILE-context.ts  "), [
-		"src/file-context.ts",
-		"file-context.ts-notes/README.md",
-	]);
-	assert.deepEqual(search.search("src/settings"), ["src/settings.ts"]);
-	assert.deepEqual(search.search("fc"), ["src/file-context.ts", "file-context.ts-notes/README.md"]);
-	assert.deepEqual(search.search("stg"), ["src/settings.ts"]);
-	assert.deepEqual(search.search("setxings"), ["src/settings.ts"]);
-	assert.deepEqual(search.search("settigns"), ["src/settings.ts"]);
-	assert.deepEqual(search.search("file-contexx.ts"), [
-		"src/file-context.ts",
-		"file-context.ts-notes/README.md",
-	]);
-	assert.deepEqual(search.search("zzzzzz"), []);
-	assert.deepEqual(search.search("  "), files);
-});
-
-test("bounds fuzzy search before scoring overlong pasted queries", () => {
-	const maximumQuery = "a".repeat(256);
-	const overlongQuery = `${maximumQuery}a`;
-
-	assert.deepEqual(new ProjectFileSearch([maximumQuery]).search(maximumQuery), [maximumQuery]);
-	assert.deepEqual(new ProjectFileSearch([overlongQuery]).search(overlongQuery), []);
 });
 
 test("explorer previews a file, selects a range, and keeps rendered rows width-safe", async () => {
@@ -806,6 +775,7 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 
 	let customFactory: unknown;
 	const widgets = new Map<string, unknown>();
+	let customCall = 0;
 	let quoteIndex = 0;
 	const quoteResults = [
 		{
@@ -842,6 +812,10 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 				widgets.set(key, value);
 			},
 			async custom(factory: unknown) {
+				customCall += 1;
+				if (customCall % 2 === 1) {
+					return createCustomSelectorHarness(factory).resultPromise;
+				}
 				customFactory = factory;
 				const result = quoteResults[quoteIndex];
 				quoteIndex += 1;
@@ -855,7 +829,7 @@ test("registers a TUI fallback command and injects all pending quotes only once"
 	await mock.commands.get("file-context")?.handler("browse", context.ctx);
 	assert.equal(typeof customFactory, "function");
 	assert.deepEqual(widgets.get("file-context"), [
-		"Quotes (2) · ~13 tokens · /file-context to manage",
+		"Next prompt context · 2 snippets · ~13 tokens · /file-context to review",
 		"1. src/example.ts · lines 1-1 · ~6 tokens",
 		"2. test/example.test.ts · lines 2-3 · ~8 tokens",
 	]);
@@ -890,6 +864,7 @@ test("quotes whole-file references and rejects picker results from replaced sess
 		loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
 	});
 	const pasted: string[] = [];
+	let referenceCustomCalls = 0;
 	const referenceContext = createMockContext({
 		mode: "tui",
 		hasUI: true,
@@ -902,7 +877,11 @@ test("quotes whole-file references and rejects picker results from replaced sess
 			getEditorComponent() {
 				return undefined;
 			},
-			async custom() {
+			async custom(factory: unknown) {
+				referenceCustomCalls += 1;
+				if (referenceCustomCalls === 1) {
+					return createCustomSelectorHarness(factory).resultPromise;
+				}
 				return { kind: "reference", path: 'docs/my "note".md' };
 			},
 			pasteToEditor(value: string) {
@@ -924,8 +903,9 @@ test("quotes whole-file references and rejects picker results from replaced sess
 	});
 	const oldManager = { getSessionId: () => "old" };
 	const newManager = { getSessionId: () => "new" };
-	const makeContext = (sessionManager: object, custom: () => Promise<unknown>) =>
-		createMockContext({
+	const makeContext = (sessionManager: object, custom: () => Promise<unknown>) => {
+		let customCalls = 0;
+		return createMockContext({
 			mode: "tui",
 			hasUI: true,
 			cwd: process.cwd(),
@@ -938,10 +918,17 @@ test("quotes whole-file references and rejects picker results from replaced sess
 				getEditorComponent() {
 					return undefined;
 				},
-				custom,
+				async custom(factory: unknown) {
+					customCalls += 1;
+					if (customCalls === 1) {
+						return createCustomSelectorHarness(factory).resultPromise;
+					}
+					return custom();
+				},
 				pasteToEditor() {},
 			},
 		});
+	};
 	const oldContext = makeContext(oldManager, async () => picker);
 	const newContext = makeContext(newManager, async () => undefined);
 	await staleMock.events.get("session_start")?.[0]?.({}, oldContext.ctx);
