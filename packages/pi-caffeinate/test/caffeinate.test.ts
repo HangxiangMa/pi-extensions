@@ -718,6 +718,66 @@ test("session_shutdown aborts and closes an in-flight D-Bus acquisition", async 
 	});
 });
 
+test("an active child failure after session replacement updates only the current context", async () => {
+	await withTempAgentDir(async (agentDir) => {
+		const releasePath = path.join(agentDir, "release-inhibitor");
+		process.env.PI_CAFFEINATE_COMMAND = customNodeCommand(
+			`const fs=require("node:fs");setInterval(()=>{if(fs.existsSync(${JSON.stringify(releasePath)}))process.exit(7)},10)`,
+		);
+		const caffeinateModule = await importFreshCaffeinate();
+		const mock = createMockPi();
+		const original = createMockContext();
+		const replacement = createMockContext();
+
+		caffeinateModule.default(mock.pi);
+		const sessionStart = mock.events.get("session_start")?.[0];
+		await sessionStart?.({ reason: "startup" }, original.ctx);
+		await mock.events.get("agent_start")?.[0]?.({}, original.ctx);
+		const originalNotificationCount = original.notifications.length;
+		assert.equal(original.statuses.get("caffeinate"), "custom");
+
+		await sessionStart?.({ reason: "replacement" }, replacement.ctx);
+		writeFileSync(releasePath, "release");
+		await waitFor(() => replacement.notifications.length > 0);
+
+		assert.equal(original.notifications.length, originalNotificationCount);
+		assert.equal(original.statuses.get("caffeinate"), "custom");
+		assert.equal(replacement.notifications.at(-1)?.level, "warning");
+		assert.match(replacement.notifications.at(-1)?.message ?? "", /exited unexpectedly \(code 7\)/);
+		assert.equal(replacement.statuses.get("caffeinate"), "unavailable");
+		await mock.events.get("agent_end")?.[0]?.({}, replacement.ctx);
+	});
+});
+
+test("an active D-Bus failure after session replacement updates only the current context", async () => {
+	await withLinuxPathCommands([], async () => {
+		await withTempAgentDir(async () => {
+			const clients: FakeDbusClient[] = [];
+			const caffeinateModule = await importFreshCaffeinate();
+			const mock = createMockPi();
+			const original = createMockContext();
+			const replacement = createMockContext();
+
+			caffeinateModule.default(mock.pi, { dbusFactory: fakeDbusFactory(clients) });
+			const sessionStart = mock.events.get("session_start")?.[0];
+			await sessionStart?.({ reason: "startup" }, original.ctx);
+			await mock.events.get("agent_start")?.[0]?.({}, original.ctx);
+			const originalNotificationCount = original.notifications.length;
+			assert.equal(original.statuses.get("caffeinate"), "display-awake");
+
+			await sessionStart?.({ reason: "replacement" }, replacement.ctx);
+			clients[0]?.fail(new Error("session bus disconnected"));
+
+			assert.equal(original.notifications.length, originalNotificationCount);
+			assert.equal(original.statuses.get("caffeinate"), "display-awake");
+			assert.equal(replacement.notifications.at(-1)?.level, "warning");
+			assert.match(replacement.notifications.at(-1)?.message ?? "", /session bus disconnected/);
+			assert.equal(replacement.statuses.get("caffeinate"), "unavailable");
+			await mock.events.get("agent_end")?.[0]?.({}, replacement.ctx);
+		});
+	});
+});
+
 test("an active D-Bus transport failure makes D-Bus-only mode unavailable", async () => {
 	await withLinuxPathCommands([], async () => {
 		await withTempAgentDir(async () => {

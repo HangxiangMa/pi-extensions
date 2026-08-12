@@ -61,6 +61,7 @@ interface PendingDbusStart {
 interface CaffeinateState {
 	process?: ChildProcess;
 	dbus?: DbusScreenSaverClient;
+	currentSession?: { generation: number; ctx: ExtensionContext };
 	dbusCleanup?: Promise<void>;
 	pendingDbus?: PendingDbusStart;
 	startedAt?: number;
@@ -101,6 +102,7 @@ export default function caffeinate(pi: ExtensionAPI, options: CaffeinateOptions 
 	dbusFactory = options.dbusFactory ?? defaultDbusScreenSaverFactory;
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++state.sessionGeneration;
+		state.currentSession = { generation, ctx };
 		replaceMenuController("Caffeinate session replaced");
 		state.iconWarningShown = false;
 		state.settingsNotice = undefined;
@@ -130,6 +132,7 @@ export default function caffeinate(pi: ExtensionAPI, options: CaffeinateOptions 
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		const generation = ++state.sessionGeneration;
+		state.currentSession = undefined;
 		state.menuController.abort(new DOMException("Caffeinate session shut down", "AbortError"));
 		state.activeTurns = 0;
 		await stopInhibitor(ctx, "session shutdown", { notify: false });
@@ -444,7 +447,7 @@ async function startInhibitor(
 			childError = message;
 			return;
 		}
-		applyChildFailure(ctx, message);
+		applyChildFailure(message);
 	};
 
 	if (command) {
@@ -506,7 +509,7 @@ async function startInhibitor(
 	state.inhibitorStarting = false;
 	state.dbus = dbus;
 	if (dbus) {
-		dbus.setFailureHandler((error) => applyDbusFailure(ctx, token, dbus, error));
+		dbus.setFailureHandler((error) => applyDbusFailure(token, dbus, error));
 		if (state.dbus !== dbus) return;
 	}
 	const failures = [childError, dbusError].filter((failure): failure is string => Boolean(failure));
@@ -572,7 +575,7 @@ async function stopInhibitor(
 	await dbus.close().catch(() => undefined);
 }
 
-function applyChildFailure(ctx: ExtensionContext, message: string) {
+function applyChildFailure(message: string) {
 	if (state.dbus) {
 		state.available = true;
 		state.lastError = undefined;
@@ -583,39 +586,43 @@ function applyChildFailure(ctx: ExtensionContext, message: string) {
 		state.lastError = message;
 		state.inhibitWarning = undefined;
 	}
+	const ctx = currentSessionContext();
+	if (!ctx) return;
 	ctx.ui.notify(message, "warning");
 	updateStatus(ctx);
 }
 
-function applyDbusFailure(
-	ctx: ExtensionContext,
-	token: number,
-	client: DbusScreenSaverClient,
-	error: Error,
-) {
+function applyDbusFailure(token: number, client: DbusScreenSaverClient, error: Error) {
 	if (token !== inhibitSequence || state.dbus !== client) return;
 	client.setFailureHandler(undefined);
 	state.dbus = undefined;
 	const message = `D-Bus idle inhibit (${SCREENSAVER_BUS_NAME}) failed: ${formatError(error)}`;
+	const notification = state.process ? `pi-caffeinate is partially active: ${message}` : message;
 	if (state.process) {
 		state.available = true;
 		state.lastError = undefined;
 		state.inhibitWarning = message;
-		ctx.ui.notify(`pi-caffeinate is partially active: ${message}`, "warning");
 	} else {
 		state.startedAt = undefined;
 		state.command = undefined;
 		state.available = false;
 		state.lastError = [state.inhibitWarning, message].filter(Boolean).join("; ");
 		state.inhibitWarning = undefined;
-		ctx.ui.notify(message, "warning");
 	}
 	const cleanup = client.close().catch(() => undefined);
 	state.dbusCleanup = cleanup;
 	void cleanup.then(() => {
 		if (state.dbusCleanup === cleanup) state.dbusCleanup = undefined;
 	});
+	const ctx = currentSessionContext();
+	if (!ctx) return;
+	ctx.ui.notify(notification, "warning");
 	updateStatus(ctx);
+}
+
+function currentSessionContext() {
+	const session = state.currentSession;
+	return session?.generation === state.sessionGeneration ? session.ctx : undefined;
 }
 
 function hasActiveInhibitor() {
