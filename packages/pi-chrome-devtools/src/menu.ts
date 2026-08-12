@@ -8,14 +8,13 @@ import { CHROME_DEVTOOLS_TOOL_NAMES, type ChromeDevToolsToolName } from "./tool-
 import {
 	buildBrowserStatusMessage,
 	buildCommandGuide,
-	buildSettingsSetupMessage,
 	sanitizeChromeDevtoolsDisplay,
 	setSelectedChromeDevtoolsTools,
 } from "./tool-selector.js";
 
 type CommandContext = ExtensionCommandContext;
-type MainScreen = "main" | "browserStatus" | "settings" | "help";
-type MainAction = "tools" | "bulk";
+type MainScreen = "main" | "browserStatus" | "help";
+type MainAction = "tools" | "bulk" | "settings";
 type ToolScreen = "tools" | "review";
 type ToolAction = "toggle" | "selectAll" | "selectNone" | "review" | "apply" | "cancel";
 
@@ -104,9 +103,9 @@ export async function showChromeDevtoolsMenu(
 					},
 					{
 						id: "settings",
-						label: "Settings & setup",
-						description: "Files, sources, trust, and reload steps.",
-						to: "settings",
+						label: "Browser settings",
+						description: "Edit endpoint, auto-launch, and browser executable settings.",
+						action: "settings",
 					},
 					{
 						id: "help",
@@ -121,14 +120,6 @@ export async function showChromeDevtoolsMenu(
 				kind: "review",
 				title: "Browser status",
 				content: buildBrowserStatusMessage(),
-				format: { kind: "text" },
-				viewportSize: "adaptive",
-				hint: "back",
-			}),
-			settings: () => ({
-				kind: "review",
-				title: "Settings & setup",
-				content: buildSettingsSetupMessage(),
 				format: { kind: "text" },
 				viewportSize: "adaptive",
 				hint: "back",
@@ -162,6 +153,13 @@ export async function showChromeDevtoolsMenu(
 				});
 				if (result?.applied && isCurrent()) updateSnapshotAfterApply(current, result.selectedTools);
 				return result?.closeParent ? { kind: "close" } : { kind: "stay" };
+			},
+			settings: async () => {
+				const { showChromeDevtoolsBrowserSettings } = await import("./browser-settings-menu.js");
+				if (!isCurrent()) return { kind: "stay" };
+				const result = await showChromeDevtoolsBrowserSettings(ctx, generation);
+				if (!isCurrent()) return { kind: "stay" };
+				return result.closeParent ? { kind: "close" } : { kind: "stay" };
 			},
 		},
 	});

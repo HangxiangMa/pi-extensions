@@ -34,6 +34,8 @@ function resetRuntime(overrides: Partial<typeof state> = {}) {
 		hostConfigured: false,
 		portConfigured: false,
 		autoLaunchEnabled: true,
+		endpointSource: "default",
+		autoLaunchSource: "default",
 		browserExecutable: "/test/chrome-for-testing",
 		extensionPaths: ["/test/extension-a", "/test/extension-b"],
 		browserExecutableSource: "user",

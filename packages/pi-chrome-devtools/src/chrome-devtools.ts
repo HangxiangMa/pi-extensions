@@ -7,7 +7,7 @@ import {
 	initializeAvailableChromeDevtoolsTools,
 } from "./lazy-tools.js";
 import { applyRuntimeBrowserSettings, state } from "./runtime.js";
-import { loadSettings } from "./settings.js";
+import { loadSettings, waitForSettingsWrites } from "./settings.js";
 import {
 	allChromeDevtoolsTools,
 	buildCommandGuide,
@@ -25,13 +25,22 @@ import {
 	selectPageTool,
 } from "./tools.js";
 
-type CommandAction = "menu" | "help" | "quickstart" | "status" | "tools" | "enable" | "disable";
+type CommandAction =
+	| "menu"
+	| "help"
+	| "quickstart"
+	| "status"
+	| "settings"
+	| "tools"
+	| "enable"
+	| "disable";
 type CommandContext = ExtensionCommandContext;
 const STATUS_KEY = "chrome-devtools";
 const COMMAND_COMPLETIONS = [
 	{ value: "help", label: "help", description: "Show command usage" },
 	{ value: "quickstart", label: "quickstart", description: "Show endpoint and launch help" },
 	{ value: "status", label: "status", description: "Show tool and settings status" },
+	{ value: "settings", label: "settings", description: "Edit browser connection settings" },
 	{ value: "tools", label: "tools", description: "Choose lazy-loadable Chrome DevTools tools" },
 	{ value: "toggle", label: "toggle", description: "Alias for tools" },
 	{ value: "select", label: "select", description: "Compatibility alias for tools" },
@@ -90,6 +99,7 @@ export default function chromeDevtools(pi: ExtensionAPI) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		const browserShutdown = shutdownManagedBrowser(undefined, { cancelLaunch: true });
 		await waitForChromeDevtoolsSettings();
+		await waitForSettingsWrites();
 		await browserShutdown;
 	});
 }
@@ -118,6 +128,15 @@ async function handleChromeDevtoolsCommand(
 			const status = await buildToolStatusMessage(pi);
 			if (generation !== state.sessionGeneration) return;
 			ctx.ui.notify(status, "info");
+			return;
+		}
+		case "settings": {
+			if (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc")) {
+				throw new Error("/chrome-devtools settings requires TUI or RPC mode");
+			}
+			const { showChromeDevtoolsBrowserSettings } = await import("./browser-settings-menu.js");
+			if (generation !== state.sessionGeneration) return;
+			await showChromeDevtoolsBrowserSettings(ctx, generation);
 			return;
 		}
 		case "tools": {
@@ -174,6 +193,7 @@ export function parseCommand(args: string): CommandAction | "unknown" {
 	if (command === "help") return "help";
 	if (command === "quickstart") return "quickstart";
 	if (command === "status") return "status";
+	if (command === "settings") return "settings";
 	if (command === "tools" || command === "select" || command === "toggle") return "tools";
 	if (command === "enable" || command === "on") return "enable";
 	if (command === "disable" || command === "off") return "disable";

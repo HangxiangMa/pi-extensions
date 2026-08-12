@@ -14,6 +14,7 @@ import { test } from "vitest";
 import {
 	loadSettings,
 	projectSettingsFilePath,
+	saveBrowserSettings,
 	saveSettings,
 	settingsFilePath,
 } from "../src/settings.js";
@@ -31,7 +32,15 @@ async function withSettingsFixture(
 ) {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-cdp-browser-settings-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-	const previousBrowser = process.env.PI_CHROME_DEVTOOLS_BROWSER;
+	const environmentNames = [
+		"PI_CHROME_DEVTOOLS_HOST",
+		"PI_CHROME_DEVTOOLS_PORT",
+		"PI_CHROME_DEVTOOLS_AUTO_LAUNCH",
+		"PI_CHROME_DEVTOOLS_BROWSER",
+	] as const;
+	const previousEnvironment = Object.fromEntries(
+		environmentNames.map((name) => [name, process.env[name]]),
+	) as Record<(typeof environmentNames)[number], string | undefined>;
 	const agentDir = path.join(root, "agent");
 	const cwd = path.join(root, "project");
 	const extensionA = path.join(root, "extension-a");
@@ -44,14 +53,17 @@ async function withSettingsFixture(
 	writeFileSync(executable, "#!/bin/sh\nexit 0\n");
 	chmodSync(executable, 0o755);
 	process.env.PI_CODING_AGENT_DIR = agentDir;
-	delete process.env.PI_CHROME_DEVTOOLS_BROWSER;
+	for (const name of environmentNames) delete process.env[name];
 	try {
 		await fn({ agentDir, cwd, extensionA, extensionB, executable });
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		if (previousBrowser === undefined) delete process.env.PI_CHROME_DEVTOOLS_BROWSER;
-		else process.env.PI_CHROME_DEVTOOLS_BROWSER = previousBrowser;
+		for (const name of environmentNames) {
+			const previous = previousEnvironment[name];
+			if (previous === undefined) delete process.env[name];
+			else process.env[name] = previous;
+		}
 		rmSync(root, { recursive: true, force: true });
 	}
 }
@@ -72,7 +84,12 @@ function writeJson(filePath: string, value: unknown) {
 test("browser-only user settings load without creating or requiring tool settings", async () => {
 	await withSettingsFixture(async ({ cwd, extensionA, executable }) => {
 		writeJson(settingsFilePath(), {
-			browser: { executablePath: executable, extensionPaths: [extensionA] },
+			browser: {
+				endpoint: "http://localhost:9333",
+				autoLaunch: false,
+				executablePath: executable,
+				extensionPaths: [extensionA],
+			},
 			future: { kept: true },
 		});
 
@@ -80,12 +97,16 @@ test("browser-only user settings load without creating or requiring tool setting
 
 		assert.equal(loaded.kind, "loaded");
 		assert.equal(loaded.settings?.tools, undefined);
-		assert.deepEqual(loaded.effectiveBrowser, {
-			executablePath: executable,
-			extensionPaths: [extensionA],
-			executablePathSource: "user",
-			extensionPathsSource: "user",
-		});
+		assert.equal(loaded.effectiveBrowser.endpoint, "http://localhost:9333");
+		assert.equal(loaded.effectiveBrowser.host, "localhost");
+		assert.equal(loaded.effectiveBrowser.port, 9333);
+		assert.equal(loaded.effectiveBrowser.autoLaunchEnabled, false);
+		assert.equal(loaded.effectiveBrowser.endpointSource, "user");
+		assert.equal(loaded.effectiveBrowser.autoLaunchSource, "user");
+		assert.equal(loaded.effectiveBrowser.executablePath, executable);
+		assert.deepEqual(loaded.effectiveBrowser.extensionPaths, [extensionA]);
+		assert.equal(loaded.effectiveBrowser.executablePathSource, "user");
+		assert.equal(loaded.effectiveBrowser.extensionPathsSource, "user");
 		assert.deepEqual(loaded.warnings, []);
 	});
 });
@@ -98,6 +119,9 @@ test("missing user and project settings are side-effect free defaults", async ()
 		const loaded = await loadSettings({ cwd, projectTrusted: true });
 
 		assert.equal(loaded.kind, "missing");
+		assert.equal(loaded.effectiveBrowser.endpoint, "http://127.0.0.1:9222");
+		assert.equal(loaded.effectiveBrowser.autoLaunchEnabled, true);
+		assert.equal(loaded.effectiveBrowser.endpointSource, "default");
 		assert.deepEqual(loaded.effectiveBrowser.extensionPaths, []);
 		assert.equal(existsSync(settingsFilePath()), false);
 		assert.equal(existsSync(projectSettingsFilePath(cwd)), false);
@@ -112,6 +136,34 @@ test("an explicit empty tool selection remains a loaded global setting", async (
 
 		assert.equal(loaded.kind, "loaded");
 		assert.deepEqual(loaded.settings?.tools, []);
+	});
+});
+
+test("browser endpoints retain explicitly configured default HTTP ports", async () => {
+	await withSettingsFixture(async ({ cwd }) => {
+		writeJson(settingsFilePath(), { browser: { endpoint: "http://localhost:80" } });
+
+		const loaded = await loadSettings({ cwd, projectTrusted: false });
+
+		assert.equal(loaded.kind, "loaded");
+		assert.equal(loaded.effectiveBrowser.endpoint, "http://localhost:80");
+		assert.equal(loaded.effectiveBrowser.port, 80);
+	});
+});
+
+test("user browser endpoint and auto-launch values are validated", async () => {
+	await withSettingsFixture(async ({ cwd }) => {
+		for (const browser of [
+			{ endpoint: "https://127.0.0.1:9222" },
+			{ endpoint: "http://127.0.0.1" },
+			{ endpoint: "http://127.0.0.1:9222/json/list" },
+			{ autoLaunch: "no" },
+		]) {
+			writeJson(settingsFilePath(), { browser });
+			const loaded = await loadSettings({ cwd, projectTrusted: false });
+			assert.equal(loaded.kind, "invalid");
+			assert.match(loaded.warnings.join("\n"), /browser\.(?:endpoint|autoLaunch)/i);
+		}
 	});
 });
 
@@ -179,6 +231,34 @@ test("untrusted projects are not read or allowed to override browser settings", 
 	});
 });
 
+test("project machine-owned browser settings are ignored with user-file guidance", async () => {
+	await withSettingsFixture(async ({ cwd, executable }) => {
+		writeJson(settingsFilePath(), {
+			browser: {
+				endpoint: "http://127.0.0.1:9333",
+				autoLaunch: false,
+				executablePath: executable,
+			},
+		});
+		writeJson(projectSettingsFilePath(cwd), {
+			browser: {
+				endpoint: "http://remote.example:9444",
+				autoLaunch: true,
+				executablePath: "/project/cannot/override",
+			},
+		});
+
+		const loaded = await loadSettings({ cwd, projectTrusted: true });
+
+		assert.equal(loaded.effectiveBrowser.endpoint, "http://127.0.0.1:9333");
+		assert.equal(loaded.effectiveBrowser.autoLaunchEnabled, false);
+		assert.equal(loaded.effectiveBrowser.executablePath, executable);
+		assert.match(loaded.warnings.join("\n"), /project browser\.endpoint ignored/i);
+		assert.match(loaded.warnings.join("\n"), /project browser\.autoLaunch ignored/i);
+		assert.match(loaded.warnings.join("\n"), /project browser\.executablePath ignored/i);
+	});
+});
+
 test("project executablePath is ignored while invalid project extension settings are warned", async () => {
 	await withSettingsFixture(async ({ cwd, extensionA, executable }) => {
 		writeJson(settingsFilePath(), {
@@ -197,15 +277,67 @@ test("project executablePath is ignored while invalid project extension settings
 	});
 });
 
-test("environment browser executable remains the explicit runtime override", async () => {
+test("deprecated environment settings remain explicit overrides and emit one migration warning", async () => {
 	await withSettingsFixture(async ({ cwd, executable }) => {
-		writeJson(settingsFilePath(), { browser: { executablePath: executable } });
+		writeJson(settingsFilePath(), {
+			browser: {
+				endpoint: "http://json.example:9333",
+				autoLaunch: false,
+				executablePath: executable,
+			},
+		});
+		process.env.PI_CHROME_DEVTOOLS_HOST = "127.0.0.1";
+		process.env.PI_CHROME_DEVTOOLS_PORT = "9444";
+		process.env.PI_CHROME_DEVTOOLS_AUTO_LAUNCH = "1";
 		process.env.PI_CHROME_DEVTOOLS_BROWSER = "chromium-from-environment";
 
 		const loaded = await loadSettings({ cwd, projectTrusted: false });
 
+		assert.equal(loaded.effectiveBrowser.endpoint, "http://127.0.0.1:9444");
+		assert.equal(loaded.effectiveBrowser.autoLaunchEnabled, true);
 		assert.equal(loaded.effectiveBrowser.executablePath, "chromium-from-environment");
+		assert.equal(loaded.effectiveBrowser.endpointSource, "environment");
+		assert.equal(loaded.effectiveBrowser.autoLaunchSource, "environment");
 		assert.equal(loaded.effectiveBrowser.executablePathSource, "environment");
+		assert.equal(loaded.warnings.length, 1);
+		assert.match(loaded.warnings[0] ?? "", /deprecated.*future version/i);
+		for (const name of [
+			"PI_CHROME_DEVTOOLS_HOST",
+			"PI_CHROME_DEVTOOLS_PORT",
+			"PI_CHROME_DEVTOOLS_AUTO_LAUNCH",
+			"PI_CHROME_DEVTOOLS_BROWSER",
+		]) {
+			assert.match(loaded.warnings[0] ?? "", new RegExp(name));
+		}
+		assert.match(loaded.warnings[0] ?? "", /browser\.endpoint.*browser\.autoLaunch/i);
+	});
+});
+
+test("browser saves preserve unknown top-level and browser fields", async () => {
+	await withSettingsFixture(async ({ extensionA, executable }) => {
+		writeJson(settingsFilePath(), {
+			browser: {
+				executablePath: executable,
+				extensionPaths: [extensionA],
+				futureBrowserField: { kept: true },
+			},
+			future: { kept: true },
+		});
+
+		await saveBrowserSettings({
+			endpoint: "http://localhost:9333",
+			autoLaunch: false,
+		});
+
+		const saved = JSON.parse(readFileSync(settingsFilePath(), "utf8")) as Record<string, unknown>;
+		assert.deepEqual(saved.browser, {
+			executablePath: executable,
+			extensionPaths: [extensionA],
+			futureBrowserField: { kept: true },
+			endpoint: "http://localhost:9333",
+			autoLaunch: false,
+		});
+		assert.deepEqual(saved.future, { kept: true });
 	});
 });
 

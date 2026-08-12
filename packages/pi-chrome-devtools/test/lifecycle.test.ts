@@ -9,7 +9,7 @@ import { createMockContext, createMockPi } from "../../../test/support.js";
 import { setBrowserManagerOperationsForTests } from "../src/browser-manager.js";
 import chromeDevtools from "../src/chrome-devtools.js";
 import { state } from "../src/runtime.js";
-import { projectSettingsFilePath, settingsFilePath } from "../src/settings.js";
+import { projectSettingsFilePath, saveBrowserSettings, settingsFilePath } from "../src/settings.js";
 
 class LifecycleChild extends EventEmitter {
 	killCalls = 0;
@@ -31,6 +31,15 @@ async function withFixture(
 ) {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-cdp-lifecycle-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const environmentNames = [
+		"PI_CHROME_DEVTOOLS_HOST",
+		"PI_CHROME_DEVTOOLS_PORT",
+		"PI_CHROME_DEVTOOLS_AUTO_LAUNCH",
+		"PI_CHROME_DEVTOOLS_BROWSER",
+	] as const;
+	const previousEnvironment = Object.fromEntries(
+		environmentNames.map((name) => [name, process.env[name]]),
+	) as Record<(typeof environmentNames)[number], string | undefined>;
 	const agentDir = path.join(root, "agent");
 	const cwdA = path.join(root, "project-a");
 	const cwdB = path.join(root, "project-b");
@@ -52,6 +61,7 @@ async function withFixture(
 	writeFileSync(executable, "#!/bin/sh\nexit 0\n");
 	chmodSync(executable, 0o755);
 	process.env.PI_CODING_AGENT_DIR = agentDir;
+	for (const name of environmentNames) delete process.env[name];
 	try {
 		await fn({ cwdA, cwdB, extensionA, extensionB, executable });
 	} finally {
@@ -61,6 +71,11 @@ async function withFixture(
 		state.launchPromise = undefined;
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		for (const name of environmentNames) {
+			const previous = previousEnvironment[name];
+			if (previous === undefined) delete process.env[name];
+			else process.env[name] = previous;
+		}
 		rmSync(root, { recursive: true, force: true });
 	}
 }
@@ -73,7 +88,12 @@ function writeJson(filePath: string, value: unknown) {
 test("session_start applies trusted project browser settings and status reports effective sources", async () => {
 	await withFixture(async ({ cwdA, extensionA, extensionB, executable }) => {
 		writeJson(settingsFilePath(), {
-			browser: { executablePath: executable, extensionPaths: [extensionA] },
+			browser: {
+				endpoint: "http://localhost:9333",
+				autoLaunch: false,
+				executablePath: executable,
+				extensionPaths: [extensionA],
+			},
 		});
 		writeJson(projectSettingsFilePath(cwdA), {
 			browser: { extensionPaths: [path.relative(cwdA, extensionB)] },
@@ -90,14 +110,45 @@ test("session_start applies trusted project browser settings and status reports 
 		await mock.events.get("session_start")?.[0]?.({}, ctx);
 		await mock.commands.get("chrome-devtools")?.handler("status", ctx);
 
+		assert.equal(state.host, "localhost");
+		assert.equal(state.port, 9333);
+		assert.equal(state.configuredPort, 9333);
+		assert.equal(state.autoLaunchEnabled, false);
+		assert.equal(state.endpointSource, "user");
+		assert.equal(state.autoLaunchSource, "user");
 		assert.deepEqual(state.extensionPaths, [extensionB]);
 		assert.equal(state.browserExecutable, executable);
 		assert.equal(state.extensionPathsSource, "project");
 		const status = notifications.at(-1)?.message ?? "";
 		assert.match(status, new RegExp(`Project settings: .*${path.basename(cwdA)}.*trusted`));
+		assert.match(status, /Endpoint source: user/);
+		assert.match(status, /Auto-launch: off \(user\)/);
 		assert.match(status, /Unpacked extensions \(project\)/);
 		assert.match(status, /Chrome for Testing or Chromium/);
-		assert.match(status, /after \/reload or session replacement/);
+		assert.match(status, /manual JSON edits require \/reload or session replacement/);
+	});
+});
+
+test("session start warns when deprecated environment overrides remain active", async () => {
+	await withFixture(async ({ cwdA }) => {
+		writeJson(settingsFilePath(), {
+			browser: { endpoint: "http://json.example:9333", autoLaunch: false },
+		});
+		process.env.PI_CHROME_DEVTOOLS_HOST = "127.0.0.1";
+		process.env.PI_CHROME_DEVTOOLS_PORT = "9444";
+		const mock = createMockPi();
+		const { ctx, notifications } = createMockContext({ cwd: cwdA });
+		chromeDevtools(mock.pi);
+
+		await mock.events.get("session_start")?.[0]?.({}, ctx);
+
+		assert.equal(state.host, "127.0.0.1");
+		assert.equal(state.port, 9444);
+		assert.equal(state.endpointSource, "environment");
+		assert.equal(notifications.length, 1);
+		assert.equal(notifications[0]?.level, "warning");
+		assert.match(notifications[0]?.message ?? "", /environment settings are deprecated/i);
+		assert.match(notifications[0]?.message ?? "", /browser\.endpoint/);
 	});
 });
 
@@ -121,6 +172,44 @@ test("session replacement discards the stale continuation and applies only the l
 
 		assert.deepEqual(state.extensionPaths, [extensionB]);
 		assert.equal(state.projectSettingsFilePath, projectSettingsFilePath(cwdB));
+	});
+});
+
+test("session shutdown waits for an in-flight browser settings publication", async () => {
+	await withFixture(async () => {
+		let markWriteStarted: (() => void) | undefined;
+		const writeStarted = new Promise<void>((resolve) => {
+			markWriteStarted = resolve;
+		});
+		let releaseWrite: (() => void) | undefined;
+		const writeBlocked = new Promise<void>((resolve) => {
+			releaseWrite = resolve;
+		});
+		const save = saveBrowserSettings(
+			{ autoLaunch: false },
+			{
+				write: async (temporaryPath, data) => {
+					writeFileSync(temporaryPath, data);
+					markWriteStarted?.();
+					await writeBlocked;
+				},
+			},
+		);
+		await writeStarted;
+		const mock = createMockPi();
+		const { ctx } = createMockContext();
+		chromeDevtools(mock.pi);
+		let shutdownSettled = false;
+		const shutdown = Promise.resolve(mock.events.get("session_shutdown")?.[0]?.({}, ctx)).then(
+			() => {
+				shutdownSettled = true;
+			},
+		);
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+		assert.equal(shutdownSettled, false);
+		releaseWrite?.();
+		await Promise.all([save, shutdown]);
+		assert.equal(shutdownSettled, true);
 	});
 });
 
