@@ -716,6 +716,13 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 			}
 			assert.equal(mock.sentMessages.length, expected);
 		};
+		const waitForPromptCount = async (expected: number) => {
+			const deadline = Date.now() + 5_000;
+			while (child.prompts.length < expected && Date.now() < deadline) {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			assert.equal(child.prompts.length, expected);
+		};
 
 		child.waitForNextAbort();
 		const spawned = await execute("subagent_spawn", {
@@ -738,6 +745,7 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 		assert.match(spawned.content[0]?.text ?? "", /useful non-overlapping work immediately/i);
 		assert.match(spawned.content[0]?.text ?? "", /end the response/i);
 		assert.match(spawned.content[0]?.text ?? "", /do not poll/i);
+		await waitForPromptCount(1);
 		assert.deepEqual(child.prompts, ["first"]);
 		assert.equal(created[0].agent.thinkingLevel, "high");
 		assert.equal(

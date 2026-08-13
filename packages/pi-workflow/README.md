@@ -15,6 +15,7 @@ Those packages intentionally share command, tool, event-channel, and session-sta
 ## ✨ Features
 
 - Provides `/workflow`, `/plan`, and `/goal` from one extension.
+- Registers Plan and Goal behavior eagerly while loading the combined manager and fresh-session handoff code only when those routes are used.
 - Preserves Plan exploration, structured questions, completion, save, export, tool selection, and thinking-level control.
 - Supports Plan alone, Goal alone, and approved Plan-to-Goal execution without adding a non-Goal implementation path.
 - Preserves Goal completion, blocking, external waits, pause, resume, edit, clear, token budgets, continuation guards, optional ordered queues, and managed-run RPC.
@@ -335,8 +336,9 @@ Behavioral updates to either stable predecessor must be intentionally synchroniz
 packages/pi-workflow/
 ├── src/
 │   ├── index.ts       # Thin Pi package entrypoint
-│   ├── workflow.ts    # Composition, command guards, lifecycle, and handoff ownership
-│   ├── handoff.ts     # Fresh linked-session Plan-to-Goal transfer
+│   ├── workflow.ts    # Composition, lifecycle, and retryable first-use loaders
+│   ├── workflow-contract.ts # Lightweight shared handoff identity
+│   ├── handoff.ts     # First-use fresh linked-session Plan-to-Goal transfer
 │   ├── menu.ts        # Standard /workflow TUI and RPC manager
 │   ├── settings.ts    # Unified validated and atomic settings store
 │   ├── plan/          # Package-owned Plan mode runtime

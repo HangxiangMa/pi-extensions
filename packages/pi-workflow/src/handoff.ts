@@ -9,8 +9,9 @@ import {
 	formatImplementationHandoff,
 } from "./plan/fresh-implementation.js";
 import type { PlanModeState } from "./plan/state.js";
+import { WORKFLOW_GOAL_OBJECTIVE } from "./workflow-contract.js";
 
-export const WORKFLOW_GOAL_OBJECTIVE = "Implement and verify the approved Plan-mode plan.";
+export { WORKFLOW_GOAL_OBJECTIVE } from "./workflow-contract.js";
 
 type NewSessionOptions = Exclude<Parameters<ExtensionCommandContext["newSession"]>[0], undefined>;
 type ReplacementContext = Parameters<NonNullable<NewSessionOptions["withSession"]>>[0];

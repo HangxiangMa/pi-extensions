@@ -355,9 +355,14 @@ test("subagent_consult shutdown awaits delayed resource setup cleanup", async ()
 	const delayed = new Promise<void>((resolve) => {
 		release = resolve;
 	});
+	let markSetupStarted!: () => void;
+	const setupStarted = new Promise<void>((resolve) => {
+		markSetupStarted = resolve;
+	});
 	const { tool, mock, requests } = setup({
 		settings: { consult: { resources: "all" } },
 		resolveResourceLaunchPolicy: async () => {
+			markSetupStarted();
 			await delayed;
 			return { disableExtensions: true, projectTrust: true };
 		},
@@ -367,7 +372,8 @@ test("subagent_consult shutdown awaits delayed resource setup cleanup", async ()
 		{ agent: "worker", task: "inspect" },
 		createMockContext({ isProjectTrusted: () => true }).ctx,
 	);
-	await Promise.resolve();
+	void running.catch(() => undefined);
+	await setupStarted;
 	let shutdownSettled = false;
 	const shutdown = Promise.all(
 		(mock.events.get("session_shutdown") ?? []).map((handler) =>

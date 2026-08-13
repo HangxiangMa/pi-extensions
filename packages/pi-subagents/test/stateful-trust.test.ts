@@ -27,6 +27,13 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 	let delegation: "trusted-targets" | "anywhere" = "trusted-targets";
 	const created: ManagedAgent[] = [];
 	const createdTools: Array<string[] | undefined> = [];
+	const waitForCreated = async (expected: number) => {
+		const deadline = Date.now() + 5_000;
+		while (created.length < expected && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		}
+		assert.equal(created.length, expected);
+	};
 	let workspaceCreates = 0;
 	let projectConfirmations = 0;
 	try {
@@ -106,7 +113,7 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 			undefined,
 			context.ctx,
 		);
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await waitForCreated(1);
 		assert.deepEqual(createdTools[0], []);
 		assert.equal(created[0]?.target?.trust.kind, "saved-trusted");
 		assert.equal(created[0]?.target?.trust.projectTrusted, true);
@@ -140,8 +147,7 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 		)) as { details: { agent: { id: string } } };
 		assert.equal(idempotentSecond.details.agent.id, idempotentFirst.details.agent.id);
 		assert.equal(idempotentFirst.details.agent.context.bytes, 0);
-		await new Promise<void>((resolve) => setImmediate(resolve));
-		assert.equal(created.length, 2);
+		await waitForCreated(2);
 		await assert.rejects(
 			() =>
 				spawn.execute(
@@ -168,7 +174,7 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 			undefined,
 			context.ctx,
 		);
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await waitForCreated(3);
 		assert.equal(created[2]?.target?.trust.kind, "saved-denied");
 		assert.equal(created[2]?.target?.trust.projectTrusted, false);
 
@@ -179,7 +185,7 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 			undefined,
 			context.ctx,
 		);
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await waitForCreated(4);
 		assert.equal(created[3]?.cwd, generated);
 		assert.equal(created[3]?.workspaceMode, "worktree");
 		assert.equal(created[3]?.target?.cwd, realpathSync(workspace));
