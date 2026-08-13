@@ -1,4 +1,4 @@
-import { sanitizeTerminalText } from "./terminal.js";
+import { sanitizeTerminalText } from "@narumitw/pi-tui-kit";
 import { defineModule } from "./types.js";
 
 const TRUNCATION_DIRECTIONS = ["start", "middle", "end"] as const;
