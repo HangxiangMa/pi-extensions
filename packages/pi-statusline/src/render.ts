@@ -5,6 +5,7 @@ import type {
 	Theme,
 	ThemeColor,
 } from "@earendil-works/pi-coding-agent";
+import { sanitizeTerminalText } from "@narumitw/pi-tui-kit";
 import { formatDirectoryPath } from "./directory.js";
 import {
 	type ExtensionStatusRuntime,
@@ -13,7 +14,6 @@ import {
 } from "./extension-status.js";
 import { formatGitBranchValue, type GitStatusSummary } from "./git-status.js";
 import { renderPowerlineStatusline } from "./powerline.js";
-import { sanitizeTerminalText } from "./terminal.js";
 import {
 	LINE_BREAK_SEGMENT_NAME,
 	type PowerlineBlockName,
