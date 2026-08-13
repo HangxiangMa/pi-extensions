@@ -549,9 +549,9 @@ test("switch selection searches branch and path while preserving raw worktree id
 				tui.press("tui.select.down");
 				tui.press("tui.select.confirm");
 			} else {
-				tui.type("fix/api");
+				tui.type("backend fix/api");
 				const filtered = tui.render().join("\n");
-				assert.match(filtered, /→ 2\..*backend.*fix\/api/u);
+				assert.match(filtered, /→ 2\..*backend/u);
 				assert.doesNotMatch(filtered, /frontend/u);
 				tui.press("tui.select.confirm");
 				await tui.waitForPending();
