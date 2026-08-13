@@ -1,5 +1,12 @@
 # @narumitw/pi-tui-kit
 
+## 0.54.0
+
+### Minor Changes
+
+- 83cdb0d: Add a display-only terminal sanitizer for specialized extension components.
+- 7ee5e48: Add optional TUI search to declarative choice screens while keeping RPC deterministic.
+
 ## 0.53.0
 
 ### Minor Changes
