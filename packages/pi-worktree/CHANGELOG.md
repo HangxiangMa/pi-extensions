@@ -1,5 +1,11 @@
 # @narumitw/pi-worktree
 
+## 0.51.0
+
+### Minor Changes
+
+- 5fd422d: Add local fuzzy search to worktree identity selectors.
+
 ## 0.50.0
 
 ### Minor Changes

@@ -1,5 +1,11 @@
 # @narumitw/pi-statusline
 
+## 0.49.7
+
+### Patch Changes
+
+- d26be16: Reuse Pi TUI Kit's display-only terminal sanitizer for footer model, symbol, and path text.
+
 ## 0.49.6
 
 ### Patch Changes
