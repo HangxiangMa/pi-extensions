@@ -1,3 +1,14 @@
+export {
+	CODEX_FAST_MODEL_IDS,
+	CODEX_FAST_SERVICE_TIER,
+	CODEX_STANDARD_SERVICE_TIER,
+	codexFastAvailability,
+	codexFastIsEffective,
+	codexFastRequestTier,
+	codexFastStatusLabel,
+	correctCodexFastMessageCost,
+	rewriteCodexFastPayload,
+} from "./codex-fast.js";
 export type {
 	CodexResetAvailability,
 	CodexResetOption,
@@ -32,6 +43,18 @@ export {
 	resolveUsageAuth,
 	SUPPORTED_ADAPTERS,
 } from "./query.js";
+export type {
+	UsageSettings,
+	UsageSettingsRuntime,
+	UsageSettingsState,
+} from "./settings.js";
+export {
+	createUsageSettingsRuntime,
+	DEFAULT_USAGE_SETTINGS,
+	loadUsageSettings,
+	normalizeUsageSettings,
+	usageSettingsPath,
+} from "./settings.js";
 export type {
 	ProviderUsageState,
 	ResolvedUsageAuth,
