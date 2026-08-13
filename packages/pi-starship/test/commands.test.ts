@@ -6,12 +6,21 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
-import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
+import { createMockContext, createMockPi } from "../../../test/support.js";
 import { registerStarshipCommand } from "../src/commands.js";
 import { BUILT_IN_EXAMPLE, loadStarshipConfig, settingsFilePath } from "../src/config.js";
 import piStarshipRuntime from "../src/pi-starship.js";
 
 initTheme("dark", false);
+
+async function driveTuiCustom(factory: unknown, inputs: readonly string[], width: number) {
+	const tui = createTuiHarness({ width, rows: 24 });
+	const running = (tui.custom as unknown as (customFactory: unknown) => Promise<unknown>)(factory);
+	await tui.waitForOpen();
+	const renders = [Array.from(tui.render())];
+	for (const input of inputs) renders.push(Array.from(tui.send(input)));
+	return { renders, result: await running };
+}
 
 function piStarship(pi: Parameters<typeof piStarshipRuntime>[0]) {
 	return piStarshipRuntime(pi, {
@@ -50,7 +59,7 @@ test("/starship keeps direct routes and opens a stateful narrow TUI menu", async
 		mode: "tui",
 		hasUI: true,
 		custom: async (factory: unknown) => {
-			const driven = driveCustomSelector(factory, ["\u001b"], 28);
+			const driven = await driveTuiCustom(factory, ["\u001b"], 28);
 			renders.push(...driven.renders);
 			return driven.result;
 		},
@@ -137,7 +146,7 @@ test("settings opens the raw TOML in TUI, saves atomically, and applies immediat
 				return "format = 'saved'\n";
 			},
 			custom: async (factory: unknown) => {
-				const driven = driveCustomSelector(factory, ["\r"], 40);
+				const driven = await driveTuiCustom(factory, ["\r"], 40);
 				preview = driven.renders.flat().join("\n");
 				return driven.result;
 			},
@@ -191,7 +200,7 @@ test("preview failure remains explicit and offers edit or discard recovery", asy
 			hasUI: true,
 			editor: async () => "format = 'draft'\n",
 			custom: async (factory: unknown) => {
-				const driven = driveCustomSelector(factory, ["\u001b"], 60);
+				const driven = await driveTuiCustom(factory, ["\u001b"], 60);
 				preview = driven.renders.flat().join("\n");
 				return driven.result;
 			},
@@ -226,7 +235,7 @@ test("warning drafts remain applicable and report their warning count", async ()
 			mode: "tui",
 			hasUI: true,
 			editor: async () => "format = 'warning'\nfuture = true\n",
-			custom: async (factory: unknown) => driveCustomSelector(factory, ["\r"], 40).result,
+			custom: async (factory: unknown) => (await driveTuiCustom(factory, ["\r"], 40)).result,
 			confirm: async () => true,
 		});
 		await mock.commands.get("starship")?.handler("settings", context.ctx);
@@ -259,7 +268,7 @@ test("invalid and cancelled edits keep the old file and effective config", async
 			mode: "tui",
 			editor: async () => nextEdit,
 			custom: async (factory: unknown) => {
-				const driven = driveCustomSelector(factory, ["\u001b"], 40);
+				const driven = await driveTuiCustom(factory, ["\u001b"], 40);
 				invalidReview = driven.renders.flat().join("\n");
 				return driven.result;
 			},
@@ -306,7 +315,7 @@ test("save failures retain current state and report the error", async () => {
 			editor: async () => "format = 'new'\n",
 			custom: async (factory: unknown) => {
 				const inputs = previewCalls++ === 0 ? ["\r"] : ["\u001b"];
-				return driveCustomSelector(factory, inputs, 40).result;
+				return (await driveTuiCustom(factory, inputs, 40)).result;
 			},
 			confirm: async () => true,
 		});
@@ -342,7 +351,7 @@ test("runtime apply failures restore the previous file and effective configurati
 			editor: async () => "format = 'new'\n",
 			custom: async (factory: unknown) => {
 				const inputs = previewCalls++ === 0 ? ["\r"] : ["\u001b"];
-				return driveCustomSelector(factory, inputs, 36).result;
+				return (await driveTuiCustom(factory, inputs, 36)).result;
 			},
 			confirm: async () => true,
 		});
@@ -376,7 +385,7 @@ test("a failed first runtime apply restores the missing Starship settings file",
 			editor: async () => "format = 'new'\n",
 			custom: async (factory: unknown) => {
 				const inputs = previewCalls++ === 0 ? ["\r"] : ["\u001b"];
-				return driveCustomSelector(factory, inputs, 36).result;
+				return (await driveTuiCustom(factory, inputs, 36)).result;
 			},
 			confirm: async () => true,
 		});
@@ -417,7 +426,7 @@ test("a failed first runtime apply preserves settings replaced concurrently", as
 			editor: async () => "format = 'new'\n",
 			custom: async (factory: unknown) => {
 				const inputs = previewCalls++ === 0 ? ["\r"] : ["\u001b"];
-				return driveCustomSelector(factory, inputs, 36).result;
+				return (await driveTuiCustom(factory, inputs, 36)).result;
 			},
 			confirm: async () => true,
 		});
@@ -460,7 +469,7 @@ test("a failed Starship update preserves existing settings replaced before rollb
 			editor: async () => "format = 'new'\n",
 			custom: async (factory: unknown) => {
 				const inputs = previewCalls++ === 0 ? ["\r"] : ["\u001b"];
-				return driveCustomSelector(factory, inputs, 36).result;
+				return (await driveTuiCustom(factory, inputs, 36)).result;
 			},
 			confirm: async () => true,
 		});
@@ -578,7 +587,7 @@ test("preview and confirmation cancellation preserve the previous document and r
 			editor: async () => "format = 'new'\nfuture = 'preserved'\n",
 			custom: async (factory: unknown) => {
 				customCalls += 1;
-				return driveCustomSelector(factory, ["\u001b"], 30).result;
+				return (await driveTuiCustom(factory, ["\u001b"], 30)).result;
 			},
 			confirm: async () => {
 				confirmations += 1;
@@ -598,7 +607,7 @@ test("preview and confirmation cancellation preserve the previous document and r
 			editor: async () => "format = 'new'\nfuture = 'preserved'\n",
 			custom: async (factory: unknown) => {
 				const inputs = customCalls++ === 0 ? ["\r"] : ["\u001b"];
-				return driveCustomSelector(factory, inputs, 30).result;
+				return (await driveTuiCustom(factory, inputs, 30)).result;
 			},
 			confirm: async () => false,
 		});
@@ -627,7 +636,7 @@ test("main and Configuration menus expose current state and a clear Back path", 
 		custom: async (factory: unknown) => {
 			const inputs =
 				call === 0 ? ["\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\r"] : ["\u001b"];
-			const driven = driveCustomSelector(factory, inputs, 26);
+			const driven = await driveTuiCustom(factory, inputs, 26);
 			screens[call++] = driven.renders.flat().join("\n");
 			assert.ok(driven.renders.flat().every((line) => visibleWidth(line) <= 26));
 			return driven.result;
@@ -669,7 +678,7 @@ test("Restore previews, confirms, and atomically applies the built-in footer", a
 					call === 0
 						? ["\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\r"]
 						: ["\r"];
-				const driven = driveCustomSelector(factory, inputs, 32);
+				const driven = await driveTuiCustom(factory, inputs, 32);
 				if (call === 1) restorePreview = driven.renders.flat().join("\n");
 				call += 1;
 				return driven.result;
@@ -725,7 +734,7 @@ test("Restore recovers a malformed settings document", async () => {
 					call++ === 0
 						? ["\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\r"]
 						: ["\r"];
-				return driveCustomSelector(factory, inputs, 60).result;
+				return (await driveTuiCustom(factory, inputs, 60)).result;
 			},
 			confirm: async () => true,
 		});
@@ -764,7 +773,7 @@ test("invalid drafts can return to editing before preview and atomic apply", asy
 			custom: async (factory: unknown) => {
 				assert.equal(readFileSync(path, "utf8"), "format = 'old'\nfuture = 'preserved'\n");
 				menuCalls += 1;
-				return driveCustomSelector(factory, ["\r"], 34).result;
+				return (await driveTuiCustom(factory, ["\r"], 34)).result;
 			},
 			confirm: async () => true,
 		});

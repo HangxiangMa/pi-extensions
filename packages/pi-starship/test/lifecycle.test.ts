@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { afterAll, test, vi } from "vitest";
-import { createMockContext, createMockPi, driveCustomSelector } from "../../../test/support.js";
+import { createMockContext, createMockPi } from "../../../test/support.js";
 import piStarshipRuntime, {
 	parseGitStatusPorcelain,
 	parseGitWorktree,
@@ -257,11 +258,12 @@ test("accepted settings disable and re-enable native PR refresh immediately", as
 		};
 		piStarship(mock.pi);
 		const drafts = ["format = '$model'\n", "format = '$github_pr'\n"];
+		const tui = createTuiHarness({ width: 80, rows: 24 });
 		const context = createMockContext({
 			mode: "tui",
 			hasUI: true,
 			editor: async () => drafts.shift(),
-			custom: async (factory: unknown) => driveCustomSelector(factory, ["\r"], 80).result,
+			custom: tui.custom,
 			confirm: async () => true,
 		});
 		await emit(mock.events, "session_start", {}, context.ctx);
@@ -279,7 +281,10 @@ test("accepted settings disable and re-enable native PR refresh immediately", as
 
 		await emit(mock.events, "agent_end", {}, context.ctx);
 		assert.equal(prCalls, 2);
-		await mock.commands.get("starship")?.handler("settings", context.ctx);
+		const disableSettings = mock.commands.get("starship")?.handler("settings", context.ctx);
+		await tui.waitForOpen();
+		tui.press("tui.select.confirm");
+		await disableSettings;
 		assert.equal(prSignals[1]?.aborted, true);
 		assert.equal(prCalls, 2);
 		assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#123/u);
@@ -287,7 +292,10 @@ test("accepted settings disable and re-enable native PR refresh immediately", as
 		await flushAsync();
 		assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#999/u);
 
-		await mock.commands.get("starship")?.handler("settings", context.ctx);
+		const enableSettings = mock.commands.get("starship")?.handler("settings", context.ctx);
+		await tui.waitForOpen();
+		tui.press("tui.select.confirm");
+		await enableSettings;
 		await flushAsync();
 		assert.equal(prCalls, 3);
 		assert.match(stripAnsi(footer.render(300).join("\n")), /#456/u);
