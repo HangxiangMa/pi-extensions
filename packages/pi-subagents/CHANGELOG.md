@@ -1,5 +1,11 @@
 # @narumitw/pi-subagents
 
+## 1.0.1
+
+### Patch Changes
+
+- 5a14026: Reduce idle Pi startup imports by loading Subagents execution and selected transport implementations, plus Workflow manager and fresh-session handoff code, only when their registered routes first need them.
+
 ## 1.0.0
 
 ### Major Changes
