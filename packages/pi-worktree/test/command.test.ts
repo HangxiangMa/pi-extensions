@@ -535,6 +535,7 @@ test("switch selection searches branch and path while preserving raw worktree id
 	const tui = createTuiHarness({ width: 72, rows: 20 });
 	let customCalls = 0;
 	let switchedCwd = "";
+	let filteredFrame = "";
 	const context = createMockContext({
 		cwd: main,
 		hasUI: true,
@@ -550,9 +551,7 @@ test("switch selection searches branch and path while preserving raw worktree id
 				tui.press("tui.select.confirm");
 			} else {
 				tui.type("backend fix/api");
-				const filtered = tui.render().join("\n");
-				assert.match(filtered, /→ 2\..*backend/u);
-				assert.doesNotMatch(filtered, /frontend/u);
+				filteredFrame = tui.render().join("\n");
 				tui.press("tui.select.confirm");
 				await tui.waitForPending();
 			}
@@ -571,6 +570,8 @@ test("switch selection searches branch and path while preserving raw worktree id
 	try {
 		await mock.commands.get("worktree")?.handler("", context.ctx);
 		assert.equal(customCalls, 2);
+		assert.match(filteredFrame, /→ 2\..*backend/u);
+		assert.doesNotMatch(filteredFrame, /frontend/u);
 		assert.equal(switchedCwd, second, JSON.stringify(context.notifications));
 	} finally {
 		tui.dispose();
