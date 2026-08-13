@@ -53,7 +53,18 @@ function skipEscSequence(value: string, start: number): number {
 	if (introducer === 0x50 || introducer === 0x5e || introducer === 0x5f) {
 		return skipStringSequence(value, start + 2, false);
 	}
-	return Math.min(value.length, start + 2);
+	return skipGenericEscSequence(value, start);
+}
+
+function skipGenericEscSequence(value: string, start: number): number {
+	let index = start + 1;
+	while (index < value.length) {
+		const code = value.charCodeAt(index);
+		if (code < 0x20 || code > 0x2f) break;
+		index += 1;
+	}
+	const final = value.charCodeAt(index);
+	return final >= 0x30 && final <= 0x7e ? index + 1 : start + 1;
 }
 
 function skipCsi(value: string, start: number): number {

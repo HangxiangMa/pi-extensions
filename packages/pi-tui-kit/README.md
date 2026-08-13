@@ -271,11 +271,10 @@ work before returning. The consumer still owns the component, its Back/Close val
 side effect. Async factories and pending work must honor the supplied signal; the helper drains them
 but does not hide uncooperative work behind a timeout.
 
-Use `sanitizeTerminalText()` when a specialized component must place an untrusted model label, path,
-or other value on one terminal line. It removes complete and unterminated terminal control sequences,
-C0/C1 controls, and bidirectional display controls; line separators become spaces. The result is for
-display only. Keep raw paths, IDs, URLs, settings, and action payloads separate, then use Pi TUI's
-cell-aware wrapping or truncation for layout.
+Use `sanitizeTerminalText()` when a specialized component must place an untrusted model label, path, or other value on one terminal line.
+It removes complete and unterminated terminal control sequences, C0/C1 controls, and bidirectional display controls; line separators become spaces.
+The result is for display only.
+Keep raw paths, IDs, URLs, settings, and action payloads separate, then use Pi TUI's cell-aware wrapping or truncation for layout.
 
 ```ts
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit";
@@ -700,8 +699,7 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
   typed selection, confirmation-only gating, shortcuts, Back, Close, Stale, Unsupported, and Error.
 - `formatInteractionHints()` — formats sanitized, normalized, de-duplicated injected bindings and
   literal shortcut keys for specialized interaction hints.
-- `sanitizeTerminalText()` — removes terminal and bidirectional display controls from untrusted
-  single-line presentation text without mutating raw payloads.
+- `sanitizeTerminalText()` — removes terminal and bidirectional display controls from untrusted single-line presentation text without mutating raw payloads.
 - `runCustomInteraction()` — owns cancellation, stale checks, exactly-once disposal, optional pending
   work draining, and typed results around one extension-owned custom TUI component.
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.

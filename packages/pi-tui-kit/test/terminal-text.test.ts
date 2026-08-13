@@ -25,6 +25,14 @@ test("removes complete and unterminated terminal control sequences as units", ()
 	assert.equal(sanitizeTerminalText("before\u001bXafter"), "beforeafter");
 });
 
+test("parses generic ESC sequences without corrupting following Unicode", () => {
+	assert.equal(sanitizeTerminalText("before\u001b(0after"), "beforeafter");
+	assert.equal(sanitizeTerminalText("before\u001b#8after"), "beforeafter");
+	assert.equal(sanitizeTerminalText("before\u001b!/Aafter"), "beforeafter");
+	assert.equal(sanitizeTerminalText("before\u001b😀after"), "before😀after");
+	assert.equal(sanitizeTerminalText("before\u001b(😀after"), "before(😀after");
+});
+
 test("composes with Pi TUI cell-aware truncation", () => {
 	const sanitized = sanitizeTerminalText("\u001b[31m目標😀value\u001b[0m");
 	assert.equal(sanitized.includes("\u001b"), false);
