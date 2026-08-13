@@ -80,12 +80,14 @@ async function runTuiMenu<
 		? AbortSignal.any([menuController.signal, options.signal])
 		: menuController.signal;
 	const navigator = createMenuNavigator(definition.start);
+	const searchQueries = new Map<ScreenId, string>();
 	try {
 		while (!navigator.closed) {
 			const loaded = await loadState(ctx, options, menuSignal);
 			if (loaded.kind !== "loaded") return loaded.result;
 			const state = loaded.state;
-			const screen = resolveMenuScreen(definition, navigator.current, state);
+			const screenId = navigator.current;
+			const screen = resolveMenuScreen(definition, screenId, state);
 			let staleAction = false;
 			const interact = async (interaction: MenuInteraction, interactionSignal?: AbortSignal) => {
 				const invocation = await invokeMenuInteraction({
@@ -107,10 +109,12 @@ async function runTuiMenu<
 			const event = await showTuiScreen(
 				ctx,
 				screen,
-				navigator.selectionFor(navigator.current, selectableItemIds(screen)),
+				navigator.selectionFor(screenId, selectableItemIds(screen)),
+				searchQueries.get(screenId),
 				menuSignal,
 				{
-					onSelectionChange: (itemId) => navigator.rememberSelection(navigator.current, itemId),
+					onSelectionChange: (itemId) => navigator.rememberSelection(screenId, itemId),
+					onSearchQueryChange: (query) => searchQueries.set(screenId, query),
 					onSettingChange: (change, signal) =>
 						interact({ kind: "setting", itemId: change.itemId, value: change.value }, signal),
 					onMultiSelectChange: (change, signal) =>
@@ -136,15 +140,18 @@ async function runTuiMenu<
 				continue;
 			}
 			if (event.kind === "back" || event.kind === "close") {
+				searchQueries.delete(screenId);
 				navigator.apply({ kind: event.kind });
 				continue;
 			}
 			if (event.kind === "transition") {
+				if (event.transition.kind !== "stay") searchQueries.delete(screenId);
 				navigator.apply(event.transition);
 				continue;
 			}
 			const outcome = await interact({ kind: "activate", itemId: event.itemId });
 			if (outcome.stale) return { kind: "stale" };
+			if (outcome.transition.kind !== "stay") searchQueries.delete(screenId);
 			navigator.apply(outcome.transition);
 		}
 		return closedMenuResult(navigator.closeReason);
@@ -181,9 +188,11 @@ async function showTuiScreen<
 	ctx: Context,
 	screen: MenuScreen<ScreenId, ActionId>,
 	selectedItemId: string | undefined,
+	searchQuery: string | undefined,
 	menuSignal: AbortSignal,
 	callbacks: {
 		onSelectionChange(itemId: string): void;
+		onSearchQueryChange(query: string): void;
 		onSettingChange(
 			change: MenuSettingChange,
 			signal: AbortSignal,
@@ -220,11 +229,13 @@ async function showTuiScreen<
 				component = createMenuScreenComponent({
 					screen,
 					selectedItemId,
+					searchQuery,
 					tui,
 					theme,
 					keybindings,
 					onEvent: finish,
 					onSelectionChange: callbacks.onSelectionChange,
+					onSearchQueryChange: callbacks.onSearchQueryChange,
 					onSettingChange: (change) => callbacks.onSettingChange(change, screenController.signal),
 					onMultiSelectChange: (change) =>
 						callbacks.onMultiSelectChange(change, screenController.signal),

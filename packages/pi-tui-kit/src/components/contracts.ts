@@ -70,6 +70,9 @@ export interface MenuScreenComponentOptions<ScreenId extends string, ActionId ex
 	onError?(error: unknown): void;
 	/** Internal standalone-interaction hint override. Declarative screens do not set this. */
 	interactionHint?: string;
+	/** Internal TUI-only query restoration for rejected searchable-choice actions. */
+	searchQuery?: string;
+	onSearchQueryChange?(query: string): void;
 	onDispose?(): void;
 }
 

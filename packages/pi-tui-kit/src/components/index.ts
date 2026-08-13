@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
 	type Focusable,
@@ -33,7 +34,6 @@ import {
 	safeMenuText,
 } from "./rendering.js";
 import { createReviewComponent, type ReviewOptions } from "./review.js";
-import { SelectionController } from "./selection-controller.js";
 
 export { browseDialogLabel, browseDialogPages } from "./browse.js";
 export type {
@@ -174,63 +174,135 @@ function createDetailComponent<ScreenId extends string, ActionId extends string>
 function createChoiceComponent<ScreenId extends string, ActionId extends string>(
 	options: ChoiceOptions<ScreenId, ActionId>,
 ): MenuScreenComponent {
+	const searchInput = new Input();
+	searchInput.setValue(options.searchQuery ?? "");
 	const border = new DynamicBorder((text: string) => options.theme.fg("border", text));
-	const items: SelectItem[] = options.screen.items.map((item) => {
+	const allItems = options.screen.items.map((item) => {
 		const current = item.id === options.screen.currentItemId ? " ✓ current" : "";
 		const unavailable = item.disabled
 			? `unavailable${item.disabledReason ? `: ${safeMenuText(item.disabledReason)}` : ""}`
 			: undefined;
+		const label = safeMenuText(item.label);
+		const description = item.description ? safeMenuText(item.description) : "";
 		return {
-			value: item.id,
-			label: `${item.disabled ? "[-] " : ""}${safeMenuText(item.label)}${current}`,
-			description:
-				[unavailable, item.description ? safeMenuText(item.description) : undefined]
-					.filter((value): value is string => Boolean(value))
-					.join(" · ") || undefined,
+			item,
+			selectItem: {
+				value: item.id,
+				label: `${item.disabled ? "[-] " : ""}${label}${current}`,
+				description:
+					[unavailable, description]
+						.filter((value): value is string => Boolean(value))
+						.join(" · ") || undefined,
+			} satisfies SelectItem,
+			searchText: [
+				safeChoiceText(item.label),
+				safeChoiceText(item.description ?? ""),
+				safeChoiceText(item.searchText ?? ""),
+			]
+				.filter(Boolean)
+				.join(" "),
 		};
 	});
-	const viewportSize = Math.min(items.length, options.screen.viewportSize ?? 10);
-	const list = new SelectList(items, viewportSize, selectTheme(options.theme));
-	const selection = new SelectionController(options.screen.items, options.selectedItemId);
-	setInitialSelection(list, items, selection.selectedItem?.id);
-	const syncSelection = () => {
-		const item = selection.selectedItem;
-		if (!item) return;
-		list.setSelectedIndex(selection.selectedIndex);
-		options.onSelectionChange?.(item.id);
+	let filteredItems = options.screen.enableSearch
+		? fuzzyFilter(allItems, searchInput.getValue(), (candidate) => candidate.searchText)
+		: [...allItems];
+	let selectedIndex = Math.max(
+		0,
+		filteredItems.findIndex(({ item }) => item.id === options.selectedItemId),
+	);
+	let restoreItemId: string | undefined;
+	let disposed = false;
+	let list = createList();
+
+	function pageSize() {
+		return Math.min(filteredItems.length, options.screen.viewportSize ?? 10);
+	}
+	function createList() {
+		const items = filteredItems.map(({ selectItem }) => selectItem);
+		const next = new SelectList(
+			items,
+			Math.min(items.length, options.screen.viewportSize ?? 10),
+			selectTheme(options.theme),
+		);
+		setInitialSelection(next, items, filteredItems[selectedIndex]?.item.id);
+		return next;
+	}
+	const selected = () => filteredItems[selectedIndex]?.item;
+	const setSelectedIndex = (index: number, wrap: boolean, rememberUserSelection: boolean) => {
+		if (filteredItems.length === 0) {
+			selectedIndex = 0;
+			return;
+		}
+		selectedIndex = wrap
+			? (index + filteredItems.length) % filteredItems.length
+			: Math.max(0, Math.min(index, filteredItems.length - 1));
+		if (rememberUserSelection) restoreItemId = undefined;
+		list.setSelectedIndex(selectedIndex);
+		const item = selected();
+		if (item) options.onSelectionChange?.(item.id);
 	};
-	const move = (delta: number) => {
-		if (selection.move(delta)) syncSelection();
+	const move = (delta: number) => setSelectedIndex(selectedIndex + delta, true, true);
+	const applyFilter = () => {
+		if (!options.screen.enableSearch) return;
+		const previouslySelectedId = selected()?.id;
+		filteredItems = fuzzyFilter(
+			allItems,
+			searchInput.getValue(),
+			(candidate) => candidate.searchText,
+		);
+		if (filteredItems.length === 0) {
+			if (previouslySelectedId) restoreItemId ??= previouslySelectedId;
+			selectedIndex = 0;
+			list = createList();
+			return;
+		}
+		const previousIndex = filteredItems.findIndex(({ item }) => item.id === previouslySelectedId);
+		if (previousIndex < 0 && previouslySelectedId) restoreItemId ??= previouslySelectedId;
+		const restoreIndex = filteredItems.findIndex(({ item }) => item.id === restoreItemId);
+		selectedIndex = restoreIndex >= 0 ? restoreIndex : previousIndex >= 0 ? previousIndex : 0;
+		if (restoreIndex >= 0) restoreItemId = undefined;
+		list = createList();
+		const item = selected();
+		if (item) options.onSelectionChange?.(item.id);
 	};
 	const activate = () => {
-		const item = selection.selectedItem;
+		const item = selected();
 		if (item && !item.disabled) options.onEvent({ kind: "activate", itemId: item.id });
 	};
-	let disposed = false;
-	return {
+	const component: MenuScreenComponent & Partial<Focusable> = {
 		render(width) {
 			const safeWidth = Math.max(1, width);
-			const selected = selection.selectedItem;
+			const selectedItem = selected();
 			const details = [
-				...(selected?.disabledReason
-					? [`Unavailable: ${safeMenuText(selected.disabledReason)}`]
+				...(selectedItem?.disabledReason
+					? [`Unavailable: ${safeMenuText(selectedItem.disabledReason)}`]
 					: []),
-				...(selected?.details ?? []).map(safeMenuText),
+				...(selectedItem?.details ?? []).map(safeMenuText),
 			];
-			const content =
-				items.length === 0
+			const choices =
+				allItems.length === 0
 					? [options.theme.fg("dim", "  No choices available")]
-					: [
-							...list.render(safeWidth),
-							...(details.length > 0
-								? [
-										"",
-										...details.flatMap((line) =>
-											wrapTextWithAnsi(options.theme.fg("muted", line), safeWidth),
-										),
-									]
-								: []),
-						];
+					: filteredItems.length === 0
+						? [options.theme.fg("dim", "  No matching choices")]
+						: [
+								...list.render(safeWidth),
+								...(details.length > 0
+									? [
+											"",
+											...details.flatMap((line) =>
+												wrapTextWithAnsi(options.theme.fg("muted", line), safeWidth),
+											),
+										]
+									: []),
+							];
+			const search = options.screen.enableSearch
+				? [
+						...renderChoiceSearchInput(searchInput, safeWidth),
+						"",
+						...choices,
+						options.theme.fg("dim", "Type to search"),
+					]
+				: choices;
 			const result = [
 				...border.render(safeWidth),
 				...wrapTextWithAnsi(
@@ -241,7 +313,7 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
 					wrapTextWithAnsi(options.theme.fg("muted", safeMenuText(line)), safeWidth),
 				),
 				"",
-				...content,
+				...search,
 				...wrapTextWithAnsi(
 					options.theme.fg(
 						"dim",
@@ -257,6 +329,7 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
 		invalidate() {
 			border.invalidate();
 			list.invalidate();
+			if (options.screen.enableSearch) searchInput.invalidate();
 		},
 		handleInput(data) {
 			if (disposed) return;
@@ -266,15 +339,21 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
 			} else if (options.keybindings.matches(data, "tui.select.up")) move(-1);
 			else if (options.keybindings.matches(data, "tui.select.down")) move(1);
 			else if (options.keybindings.matches(data, "tui.select.pageUp")) {
-				if (selection.page(-1, viewportSize)) syncSelection();
+				setSelectedIndex(selectedIndex - Math.max(1, pageSize()), false, true);
 			} else if (options.keybindings.matches(data, "tui.select.pageDown")) {
-				if (selection.page(1, viewportSize)) syncSelection();
-			} else if (matchesKey(data, Key.home)) {
-				if (selection.first()) syncSelection();
-			} else if (matchesKey(data, Key.end)) {
-				if (selection.last()) syncSelection();
-			} else if (options.keybindings.matches(data, "tui.select.confirm") || data === " ") {
+				setSelectedIndex(selectedIndex + Math.max(1, pageSize()), false, true);
+			} else if (matchesKey(data, Key.home)) setSelectedIndex(0, false, true);
+			else if (matchesKey(data, Key.end)) {
+				setSelectedIndex(filteredItems.length - 1, false, true);
+			} else if (
+				options.keybindings.matches(data, "tui.select.confirm") ||
+				(!options.screen.enableSearch && data === " ")
+			) {
 				activate();
+			} else if (options.screen.enableSearch) {
+				handleSearchInput(searchInput, data);
+				options.onSearchQueryChange?.(searchInput.getValue());
+				applyFilter();
 			}
 			options.tui.requestRender();
 		},
@@ -285,6 +364,25 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
 			options.onDispose?.();
 		},
 	};
+	if (options.screen.enableSearch) {
+		Object.defineProperty(component, "focused", {
+			get: () => searchInput.focused,
+			set: (value: boolean) => {
+				searchInput.focused = value;
+			},
+		});
+	}
+	return component;
+}
+
+function safeChoiceText(value: unknown): string {
+	return safeMenuText(stripVTControlCharacters(String(value)));
+}
+
+function renderChoiceSearchInput(input: Input, width: number): string[] {
+	const prefix = "Search: ";
+	const inputWidth = Math.max(1, width - visibleWidth(prefix));
+	return input.render(inputWidth).map((line) => truncateToWidth(`${prefix}${line}`, width, ""));
 }
 
 // Pi's current SettingsList cannot initialize its cursor, enforce disabled rows, expose search
