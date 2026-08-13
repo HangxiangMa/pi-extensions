@@ -1,5 +1,5 @@
 import { basename, isAbsolute, relative, sep } from "node:path";
-import { sanitizeTerminalText } from "./terminal.js";
+import { sanitizeTerminalText } from "@narumitw/pi-tui-kit";
 
 const DEFAULT_TRUNCATION_LENGTH = 3;
 const DEFAULT_HOME_SYMBOL = "~";

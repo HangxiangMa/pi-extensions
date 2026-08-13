@@ -237,6 +237,11 @@ test("cwd preserves POSIX backslashes and strips terminal controls", { skip: sep
 		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
 		"░▒▓ 📁 ~/teamclick/repo line",
 	);
+	(context.ctx as { cwd: string }).cwd = "/home/alice/team/\x1bPhidden\x1b\\repo\u202e";
+	assert.equal(
+		plain(renderStatusline(300, context.ctx, footerData, {} as Theme, config, runtime)),
+		"░▒▓ 📁 ~/team/repo",
+	);
 });
 
 test("model truncation supports all directions before prefixes and responsive fitting", () => {
@@ -290,7 +295,9 @@ test("model rendering strips terminal sequences from runtime IDs and truncation 
 		"safeclick model",
 	);
 	assert.equal(truncateModel("a\u009d0;title\u009cb", 0, "…", "end"), "ab");
+	assert.equal(truncateModel("safe\x1bPpayload\x1b\\model\u202e", 0, "…", "end"), "safemodel");
 	assert.equal(truncateModel("abcdef", 3, "\x1b[31m!\x1b[0m", "end"), "abc!");
+	assert.equal(truncateModel("abcdef", 3, "\x1b_private\x1b\\!\u2066", "end"), "abc!");
 });
 
 test("default model truncation retains useful llama.cpp path detail at standard width", () => {
