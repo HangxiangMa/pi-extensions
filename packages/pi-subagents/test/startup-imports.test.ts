@@ -311,6 +311,89 @@ test("stateful transport retries a rejected implementation load", async () => {
 	await transport.shutdown?.();
 });
 
+test("stateful transport cancellation during loading starts no turn", async () => {
+	let releaseLoading!: (transport: SubagentTransport) => void;
+	const loading = new Promise<SubagentTransport>((resolve) => {
+		releaseLoading = resolve;
+	});
+	const implementation = new FakeTransport();
+	const transport = createStatefulTransport({
+		kind: "subprocess",
+		modelRegistry: {} as never,
+		getParentRuntime: () => ({ model: undefined, thinkingLevel: "off" }),
+		getSettings: () => undefined,
+		loadTransport: () => loading,
+	});
+	const controller = new AbortController();
+	const running = transport.runTurn(managedAgent(), "first", controller.signal);
+	void running.catch(() => undefined);
+	await Promise.resolve();
+	controller.abort(new DOMException("turn cancelled", "AbortError"));
+	releaseLoading(implementation);
+
+	await assert.rejects(
+		running,
+		(error) =>
+			error instanceof DOMException &&
+			error.name === "AbortError" &&
+			error.message === "turn cancelled",
+	);
+	assert.equal(implementation.turns, 0);
+	await transport.shutdown?.();
+});
+
+test("stateful transport cancellation wins over a loader rejection", async () => {
+	let rejectLoading!: (error: Error) => void;
+	const loading = new Promise<SubagentTransport>((_resolve, reject) => {
+		rejectLoading = reject;
+	});
+	const transport = createStatefulTransport({
+		kind: "subprocess",
+		modelRegistry: {} as never,
+		getParentRuntime: () => ({ model: undefined, thinkingLevel: "off" }),
+		getSettings: () => undefined,
+		loadTransport: () => loading,
+	});
+	const controller = new AbortController();
+	const running = transport.runTurn(managedAgent(), "first", controller.signal);
+	void running.catch(() => undefined);
+	await Promise.resolve();
+	controller.abort(new DOMException("turn cancelled", "AbortError"));
+	rejectLoading(new Error("loader failed after cancellation"));
+
+	await assert.rejects(
+		running,
+		(error) =>
+			error instanceof DOMException &&
+			error.name === "AbortError" &&
+			error.message === "turn cancelled",
+	);
+	await transport.shutdown?.();
+});
+
+test("stateful transport rejects an already-cancelled turn without loading", async () => {
+	let loads = 0;
+	const transport = createStatefulTransport({
+		kind: "subprocess",
+		modelRegistry: {} as never,
+		getParentRuntime: () => ({ model: undefined, thinkingLevel: "off" }),
+		getSettings: () => undefined,
+		loadTransport: async () => {
+			loads += 1;
+			return new FakeTransport();
+		},
+	});
+	const controller = new AbortController();
+	controller.abort(new DOMException("turn cancelled", "AbortError"));
+
+	await assert.rejects(
+		() => transport.runTurn(managedAgent(), "first", controller.signal),
+		(error) => error instanceof DOMException && error.name === "AbortError",
+	);
+	assert.equal(loads, 0);
+	await transport.shutdown?.();
+});
+
 test("stateful transport shutdown disposes an implementation that resolves after closure", async () => {
 	let releaseLoading!: (transport: SubagentTransport) => void;
 	const loading = new Promise<SubagentTransport>((resolve) => {

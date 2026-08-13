@@ -1,6 +1,6 @@
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { SubagentSettings, SubagentTransportKind } from "./agents/types.js";
-import { cachedModuleLoader } from "./cached-module-loader.js";
+import { cachedModuleLoader, throwIfAborted } from "./cached-module-loader.js";
 import type { ChildSessionFactory, ParentRuntimeSnapshot } from "./in-process-transport.js";
 import type { ManagedAgent, TurnOutcome } from "./registry.js";
 import type { SubagentTransport } from "./transport.js";
@@ -42,7 +42,15 @@ class LazyStatefulTransport implements SubagentTransport {
 		onProgress?: TransportProgressCallback,
 	): Promise<TurnOutcome> {
 		if (this.closed) throw new Error("Subagent transport is shut down");
-		const transport = await this.load();
+		throwIfAborted(signal, "Subagent transport loading was cancelled");
+		let transport: SubagentTransport;
+		try {
+			transport = await this.load();
+		} catch (error) {
+			throwIfAborted(signal, "Subagent transport loading was cancelled");
+			throw error;
+		}
+		throwIfAborted(signal, "Subagent transport loading was cancelled");
 		if (this.closed) {
 			await this.shutdownLoaded();
 			throw new Error("Subagent transport shut down while loading");
