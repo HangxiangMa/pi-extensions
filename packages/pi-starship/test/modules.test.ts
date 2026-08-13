@@ -478,9 +478,12 @@ test("model rendering strips terminal sequences from runtime IDs and truncation 
 		"safeclick model",
 	);
 	assert.equal(renderModel("a\u009d0;title\u009cb"), "ab");
+	assert.equal(renderModel("safe\x1bPpayload\x1b\\model\u202e"), "safemodel");
 
 	config.modules.model.options.truncation_length = 3;
 	config.modules.model.options.truncation_symbol = "\x1b[31m!\x1b[0m";
+	assert.equal(renderModel("abcdef"), "abc!");
+	config.modules.model.options.truncation_symbol = "\x1b_private\x1b\\!\u2066";
 	assert.equal(renderModel("abcdef"), "abc!");
 });
 
@@ -618,6 +621,18 @@ test("directory preserves POSIX backslashes and strips terminal controls", {
 			).ansi,
 		),
 		"~/teamclick/repo line|/home/alice/teamclick/repo line",
+	);
+	assert.equal(
+		stripAnsi(
+			renderStatusline(
+				config,
+				fixture({
+					cwd: "/home/alice/team/\x1bPhidden\x1b\\repo\u202e",
+					homeDir: "/home/alice",
+				}),
+			).ansi,
+		),
+		"~/team/repo|/home/alice/team/repo",
 	);
 });
 
