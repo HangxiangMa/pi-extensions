@@ -33,6 +33,16 @@ export interface UsageSettingsRuntime {
 	flush(): Promise<void>;
 }
 
+interface UsageSettingsFileOperations {
+	rename: typeof rename;
+	writeFile: typeof writeFile;
+}
+
+interface UsageSettingsRuntimeOptions {
+	operations?: Partial<UsageSettingsFileOperations>;
+	path?: string;
+}
+
 export function usageSettingsPath(): string {
 	return join(getAgentDir(), USAGE_SETTINGS_FILE);
 }
@@ -98,7 +108,15 @@ export async function loadUsageSettings(
 	}
 }
 
-export function createUsageSettingsRuntime(path = usageSettingsPath()): UsageSettingsRuntime {
+export function createUsageSettingsRuntime(
+	options: UsageSettingsRuntimeOptions | string = {},
+): UsageSettingsRuntime {
+	const path = typeof options === "string" ? options : (options.path ?? usageSettingsPath());
+	const operations: UsageSettingsFileOperations = {
+		rename,
+		writeFile,
+		...(typeof options === "string" ? undefined : options.operations),
+	};
 	let state: UsageSettingsState = {
 		kind: "missing",
 		path,
@@ -124,7 +142,7 @@ export function createUsageSettingsRuntime(path = usageSettingsPath()): UsageSet
 			}),
 		update: (patch, signal) =>
 			enqueue(async () => {
-				const saved = await saveUsageSettingsPatch(path, patch, signal);
+				const saved = await saveUsageSettingsPatch(path, patch, operations, signal);
 				state = saved;
 				return structuredClone(state);
 			}),
@@ -135,6 +153,7 @@ export function createUsageSettingsRuntime(path = usageSettingsPath()): UsageSet
 async function saveUsageSettingsPatch(
 	path: string,
 	patch: Partial<UsageSettings>,
+	operations: UsageSettingsFileOperations,
 	signal?: AbortSignal,
 ): Promise<UsageSettingsState> {
 	const latest = await loadUsageSettings(path, signal);
@@ -149,7 +168,7 @@ async function saveUsageSettingsPatch(
 	await mkdir(directory, { recursive: true, mode: 0o700 });
 	throwIfAborted(signal);
 	try {
-		await writeFile(temporaryPath, `${JSON.stringify(document, null, 2)}\n`, {
+		await operations.writeFile(temporaryPath, `${JSON.stringify(document, null, 2)}\n`, {
 			encoding: "utf8",
 			flag: "wx",
 			mode: 0o600,
@@ -165,7 +184,7 @@ async function saveUsageSettingsPatch(
 			throw new Error("pi-usage.json changed while saving; retry the action");
 		}
 		throwIfAborted(signal);
-		await rename(temporaryPath, path);
+		await operations.rename(temporaryPath, path);
 	} finally {
 		await rm(temporaryPath, { force: true }).catch(() => undefined);
 	}

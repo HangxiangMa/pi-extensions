@@ -1,5 +1,15 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdtemp,
+	readdir,
+	readFile,
+	rename,
+	rm,
+	stat,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
@@ -107,7 +117,7 @@ test("serialized updates reread the latest document and leave no temporary files
 	);
 });
 
-test("aborted and failed saves retain prior runtime state and do not poison retries", async () => {
+test("aborted saves retain prior runtime state", async () => {
 	const abortedPath = await tempSettingsPath();
 	const abortedRuntime = createUsageSettingsRuntime(abortedPath);
 	const controller = new AbortController();
@@ -118,18 +128,29 @@ test("aborted and failed saves retain prior runtime state and do not poison retr
 	);
 	assert.equal(abortedRuntime.get().settings.codexFastMode, false);
 	assert.equal((await loadUsageSettings(abortedPath)).kind, "missing");
+});
 
-	if (process.platform === "win32") return;
-	const failedPath = await tempSettingsPath();
-	const directory = join(failedPath, "..");
-	const failedRuntime = createUsageSettingsRuntime(failedPath);
-	await chmod(directory, 0o500);
-	try {
-		await assert.rejects(failedRuntime.update({ codexFastMode: true }));
-		assert.equal(failedRuntime.get().settings.codexFastMode, false);
-	} finally {
-		await chmod(directory, 0o700);
-	}
-	await failedRuntime.update({ codexFastMode: true });
-	assert.equal(failedRuntime.get().settings.codexFastMode, true);
+test("failed saves retain prior runtime state, clean up, and do not poison retries", async () => {
+	const path = await tempSettingsPath();
+	let rejectRename = true;
+	const runtime = createUsageSettingsRuntime({
+		path,
+		operations: {
+			rename: async (source, destination) => {
+				if (rejectRename) throw new Error("rename rejected");
+				await rename(source, destination);
+			},
+		},
+	});
+	await assert.rejects(runtime.update({ codexFastMode: true }), /rename rejected/);
+	assert.equal(runtime.get().settings.codexFastMode, false);
+	assert.equal((await loadUsageSettings(path)).kind, "missing");
+	assert.deepEqual(
+		(await readdir(join(path, ".."))).filter((name) => name.endsWith(".tmp")),
+		[],
+	);
+
+	rejectRename = false;
+	await runtime.update({ codexFastMode: true });
+	assert.equal(runtime.get().settings.codexFastMode, true);
 });

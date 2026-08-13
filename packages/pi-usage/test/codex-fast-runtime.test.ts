@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { correctCodexFastMessageCost } from "../src/codex-fast.js";
 import { registerCodexFastMode } from "../src/codex-fast-runtime.js";
 import type { UsageSettingsRuntime, UsageSettingsState } from "../src/settings.js";
 
@@ -228,6 +229,51 @@ test("cost correction follows the captured request tier across a later toggle", 
 		),
 		undefined,
 		"one request marker is consumed exactly once",
+	);
+});
+
+test("an already-correct cost still consumes its request marker", async () => {
+	const memory = memoryRuntime({ enabled: true });
+	const mock = createMockPi();
+	registerCodexFastMode(mock.pi, memory.runtime, () => undefined);
+	const hook = mock.events.get("before_provider_request")?.[0];
+	const messageEnd = mock.events.get("message_end")?.[0];
+	assert.ok(hook);
+	assert.ok(messageEnd);
+	const current = context();
+	await hook({ payload: { model: "gpt-5.4" } }, current.ctx);
+	const usage = {
+		input: 100,
+		output: 20,
+		cacheRead: 10,
+		cacheWrite: 0,
+		totalTokens: 130,
+		cost: {
+			input: 0.0005,
+			output: 0.0006,
+			cacheRead: 0.000005,
+			cacheWrite: 0,
+			total: 0.001105,
+		},
+	};
+	const alreadyCorrect = correctCodexFastMessageCost(
+		{
+			role: "assistant",
+			provider: "openai-codex",
+			model: "gpt-5.4",
+			usage,
+		},
+		codexModel as never,
+		true,
+	) as { usage: typeof usage };
+	assert.ok(alreadyCorrect);
+	const event = { message: alreadyCorrect };
+	assert.equal(await messageEnd(event, current.ctx), undefined);
+	alreadyCorrect.usage.cost.total = 0;
+	assert.equal(
+		await messageEnd(event, current.ctx),
+		undefined,
+		"the completed request cannot affect a later assistant message",
 	);
 });
 

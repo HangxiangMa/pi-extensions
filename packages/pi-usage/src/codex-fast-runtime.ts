@@ -147,16 +147,14 @@ export function registerCodexFastMode(
 		return rewritten;
 	});
 	pi.on("message_end", (event, ctx) => {
-		const request = peekFastRequest(ctx, event.message, pendingFastRequests);
+		const request = consumeFastRequest(ctx, event.message, pendingFastRequests);
 		if (request === NO_FAST_REQUEST) return undefined;
 		const message = correctCodexFastMessageCost(
 			event.message,
 			request.model,
 			request.fastRequested,
 		);
-		if (!message) return undefined;
-		pendingFastRequests.delete(request.key);
-		return { message: message as never };
+		return message ? { message: message as never } : undefined;
 	});
 	pi.on("session_shutdown", async () => {
 		generation += 1;
@@ -184,16 +182,17 @@ function activeRequestKey(ctx: ExtensionContext): string | undefined {
 	return model ? `${ctx.sessionManager.getSessionId()}:${model.provider}/${model.id}` : undefined;
 }
 
-function peekFastRequest(
+function consumeFastRequest(
 	ctx: ExtensionContext,
 	message: unknown,
 	pending: Map<string, PendingFastRequest>,
-): (PendingFastRequest & { key: string }) | typeof NO_FAST_REQUEST {
+): PendingFastRequest | typeof NO_FAST_REQUEST {
 	if (!isRecord(message) || message.role !== "assistant") return NO_FAST_REQUEST;
 	const key = messageRequestKey(ctx, message);
-	if (!key || !pending.has(key)) return NO_FAST_REQUEST;
+	if (!key) return NO_FAST_REQUEST;
 	const request = pending.get(key);
-	return request ? { ...request, key } : NO_FAST_REQUEST;
+	pending.delete(key);
+	return request ?? NO_FAST_REQUEST;
 }
 
 function messageRequestKey(
