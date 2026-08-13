@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import {
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+} from "../../../test/support.js";
 import { registerFileQuoteExtension } from "../src/file-context.js";
 
 async function withTempProject(run: (root: string) => Promise<void>): Promise<void> {
@@ -44,6 +48,7 @@ test("removes an exact duplicate-looking pending quote and refreshes the widget"
 				quote: { path: "src/example.ts", startLine: 1, endLine: 1, text: "second snapshot" },
 			},
 		];
+		let customCalls = 0;
 		let quoteIndex = 0;
 		const widgets = new Map<string, unknown>();
 		const context = createMockContext({
@@ -56,7 +61,11 @@ test("removes an exact duplicate-looking pending quote and refreshes the widget"
 				setWidget(key: string, value: unknown) {
 					widgets.set(key, value);
 				},
-				async custom() {
+				async custom(factory: unknown) {
+					customCalls += 1;
+					if (customCalls % 2 === 1) {
+						return createCustomSelectorHarness(factory).resultPromise;
+					}
 					const result = quoteResults[quoteIndex];
 					quoteIndex += 1;
 					return result;
@@ -79,10 +88,15 @@ test("removes an exact duplicate-looking pending quote and refreshes the widget"
 		await waitForNextOpen(tui, mainCount);
 		assert.match(tui.render().join("\n"), /first snapshot/u);
 		tui.press("tui.select.down");
-		const removeCount = tui.openCount;
+		const selectedCount = tui.openCount;
+		tui.press("tui.select.confirm");
+		await waitForNextOpen(tui, selectedCount);
+		assert.match(tui.render().join("\n"), /Review context snippet/u);
+		assert.match(tui.render().join("\n"), /second snapshot/u);
+		const reviewCount = tui.openCount;
 		tui.press("tui.select.confirm");
 		await tui.waitForPending();
-		await waitForNextOpen(tui, removeCount);
+		await waitForNextOpen(tui, reviewCount);
 		assert.match(tui.render().join("\n"), /first snapshot/u);
 		assert.doesNotMatch(tui.render().join("\n"), /second snapshot/u);
 		tui.press("tui.select.cancel");
@@ -91,7 +105,7 @@ test("removes an exact duplicate-looking pending quote and refreshes the widget"
 		await running;
 
 		assert.deepEqual(widgets.get("file-context"), [
-			"Quotes (1) · ~4 tokens · /file-context to manage",
+			"Next prompt context · 1 snippet · ~4 tokens · /file-context to review",
 			"1. src/example.ts · lines 1-1 · ~4 tokens",
 		]);
 		const injection = await mock.events.get("before_agent_start")?.[0]?.(
@@ -111,6 +125,7 @@ test("removal cancellation and menu failures preserve pending quotes", async () 
 		});
 		const widgets = new Map<string, unknown>();
 		const notifications: string[] = [];
+		let customCalls = 0;
 		const context = createMockContext({
 			mode: "tui",
 			hasUI: true,
@@ -123,7 +138,11 @@ test("removal cancellation and menu failures preserve pending quotes", async () 
 				setWidget(key: string, value: unknown) {
 					widgets.set(key, value);
 				},
-				async custom() {
+				async custom(factory: unknown) {
+					customCalls += 1;
+					if (customCalls === 1) {
+						return createCustomSelectorHarness(factory).resultPromise;
+					}
 					return {
 						kind: "quote",
 						quote: { path: "src/keep.ts", startLine: 4, endLine: 4, text: "keep" },
@@ -163,7 +182,7 @@ test("removal cancellation and menu failures preserve pending quotes", async () 
 		);
 		assert.match(JSON.stringify(injection), /src\/keep\.ts/u);
 		await command?.handler("remove", context.ctx);
-		assert.match(notifications.at(-1) ?? "", /no pending quotes/iu);
+		assert.match(notifications.at(-1) ?? "", /no .*context/iu);
 	});
 });
 
@@ -175,6 +194,7 @@ test("session replacement closes the menu and ignores stale input", async () => 
 		});
 		const oldManager = { getSessionId: () => "old" };
 		const newManager = { getSessionId: () => "new" };
+		let oldCustomCalls = 0;
 		const oldContext = createMockContext({
 			mode: "tui",
 			hasUI: true,
@@ -184,7 +204,11 @@ test("session replacement closes the menu and ignores stale input", async () => 
 				theme: { fg: (_color: string, text: string) => text },
 				notify() {},
 				setWidget() {},
-				async custom() {
+				async custom(factory: unknown) {
+					oldCustomCalls += 1;
+					if (oldCustomCalls === 1) {
+						return createCustomSelectorHarness(factory).resultPromise;
+					}
 					return {
 						kind: "quote",
 						quote: { path: "src/old.ts", startLine: 1, endLine: 1, text: "old" },

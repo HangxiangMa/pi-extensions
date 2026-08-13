@@ -7,18 +7,18 @@
 > [!WARNING]
 > This extension is experimental. Its interaction model and package API may change between releases.
 
-Browse project files inside Pi, preview text, select a line range, and attach the exact snapshot to the next prompt.
+Browse project files inside Pi, select exact snapshots, and review the context queued for the next prompt.
 
 ## ✨ Features
 
 - Opens the file explorer directly with a configurable shortcut that defaults to `F8`.
-- Provides a `/file-context` menu for adding quotes, previewing and repeatedly removing pending snapshots, and reviewing help without replacing Pi's normal editor.
+- Provides a `/file-context` menu for adding context snippets, reviewing exact selected snapshots before removal, and opening help without replacing Pi's normal editor.
 - Fuzzy-searches project file names with typo tolerance and relevance ranking, preserves normal whole-file `@path` references, and previews bounded text files with line numbers.
 - Switches with `Ctrl+F` to cancellable cwd content search with highlighted result cards, literal case-insensitive matching by default, and visible case-sensitive and fuzzy toggles.
 - Shows textual staged, unstaged, untracked, ignored, and conflict status plus branch, HEAD, and dirty state when Git is available.
 - Selects a contiguous line range or changed hunk without using the system clipboard and shows a deterministic token estimate before attachment.
 - Discloses current-line blame and bounded file history, opens a validated commit/branch/tag version, and attaches explicit Git diff hunks.
-- Accumulates selected ranges in one compact pending-quote widget, lets you preview and remove exact snapshots from the menu, and injects the remaining snapshots into the next ordinary interactive prompt.
+- Shows selected snippets and capacity as next-prompt context, supports adding one and closing or adding repeatedly without leaving the browser, and injects snapshots in selection order.
 - Skips common dependency, VCS, build, and coverage directories and does not follow symlinks during discovery.
 
 ## 📦 Install
@@ -43,15 +43,15 @@ pi -e ./packages/pi-file-context
 
 ## 🚀 Quick start
 
-1. Run `/file-context` and choose **Add file quote**. Press `F8` or run `/file-context browse` to open the browser directly.
+1. Run `/file-context` and choose **Add context snippet**. Press `F8` or run `/file-context browse` to open the browser directly. Every route shows the same cancellable project scan before browsing.
 2. Type to fuzzy-search file names in relevance order and use `Up`/`Down` to navigate. Press `Tab` to insert a normal whole-file `@path` reference, or `Enter` to preview a file for quoting.
 3. Press `Ctrl+F` to switch between file-name and content search. Content search is literal and case-insensitive by default; `Alt+C` toggles case sensitivity and `Alt+F` toggles ordered fuzzy matching. The current states remain visible above the results.
 4. In content results, use `Up`/`Down` to choose a highlighted path-and-line card. Press `Tab` for a whole-file reference or `Enter` to preview the file at that line. `Escape` from the preview restores the query, result selection, and scroll position.
-5. In the preview, press `Space` to anchor the selection. Extend the range with `Up`/`Down`, then press `Enter` to attach it. Without an anchor, `Enter` attaches the cursor line.
-6. In a Git worktree, use `[`/`]` to select changed hunks, `b` for current-line blame, `h` for file history, `r` to open a commit/branch/tag, or `d` to inspect and attach explicit diff context.
-7. Repeat from the menu or shortcut to attach more ranges from the same or different files. Open `/file-context`, choose **Remove pending quote**, preview the selected snapshot, and press `Enter` to remove it. The removal list stays open for more removals. `Escape` goes back without changing quotes, while `Ctrl+C` closes File Context. Then write the question and submit normally. All remaining quotes are attached in selection order and cleared together.
+5. In the preview, press `Space` to anchor the selection and extend the range with `Up`/`Down`. The footer shows the selected lines, estimated tokens, and resulting next-prompt capacity. Press `Enter` to add and close, or press `a` to add and return to the originating file or content results so you can keep browsing.
+6. Press `?` in the preview to review all actions. In a Git worktree, `[`/`]` selects changed hunks, `b` shows current-line blame, `h` opens file history, `r` opens a commit/branch/tag, and `d` reviews and adds explicit diff context.
+7. Open `/file-context` and choose **Review selected context** to inspect each exact snapshot. `Enter` opens the snapshot first and then offers **Remove from next prompt**. `Escape` goes back without changing selected context, while `Ctrl+C` closes File Context. Write the question and submit normally; selected snippets are attached in order and cleared together.
 
-`Escape` returns from a preview to its originating file-name or content results. When the browser was opened from the menu, `Escape` from a root search returns to the menu. Direct browser routes cancel instead. `Ctrl+C` closes menus and browsers. During project scanning, either cancel key stops the scan and returns to the menu.
+`Escape` returns from a preview to its originating file-name or content results. When the browser was opened from the menu, `Escape` from a root search returns to the menu. Direct browser routes cancel instead. `Ctrl+C` closes menus and browsers. During project scanning, either cancel key stops the scan; menu-owned scans return to the menu and direct scans close without opening a stale explorer.
 
 The agent receives an explicit block similar to:
 
@@ -91,9 +91,9 @@ The previous `Ctrl+Alt+F` default depended on terminal modifier support and may 
 
 | Command | Mode | Description |
 | --- | --- | --- |
-| `/file-context` | TUI only | Open the Add, Remove, and Help menu. |
-| `/file-context browse` | TUI only | Open the file explorer directly. |
-| `/file-context remove` | TUI only | Open pending quote removal directly for compatibility. |
+| `/file-context` | TUI only | Open the Add, Review, and Help menu. |
+| `/file-context browse` | TUI only | Scan and open the file explorer directly. |
+| `/file-context remove` | TUI only | Open selected-context review directly for compatibility. |
 
 Unknown and trailing arguments are rejected. RPC receives an observable warning. JSON and print modes do not enter interactive UI.
 
@@ -109,14 +109,14 @@ Unknown and trailing arguments are rejected. RPC receives an observable warning.
 - Git is invoked read-only without a shell, pager, external diff, or text conversion; commands time out after 5 seconds and output is bounded to 1.1 MB.
 - Revision names are resolved to a commit before file loading. Historical files remain subject to the 1 MB and binary guards.
 - Blame shows the author name but not author email. Commit summaries and diffs can still contain sensitive project text; inspect selections before attachment.
-- Each quote stores the text visible at selection time. It does not silently reread changed content when the prompt is submitted.
-- A quote is limited to 500 lines and 50 KB. At most eight pending quotes and 100 KB of aggregate quote text are accepted.
+- Each snippet stores the text visible at selection time. It does not silently reread changed content when the prompt is submitted.
+- A snippet is limited to 500 lines and 50 KB. At most eight selected snippets and 100 KB of aggregate context text are accepted.
 
 ## 🧪 Experimental limitations
 
 - Keyboard line selection only; mouse drag selection is not implemented.
-- Up to eight pending quotes; repeated removal is supported, but there are not yet bulk clear or reorder actions.
-- Pending quotes do not survive `/reload`, session replacement, or shutdown.
+- Up to eight selected snippets; exact review and repeated removal are supported, but there are not yet bulk clear, undo, or reorder actions.
+- Selected context does not survive `/reload`, session replacement, or shutdown.
 - The configurable shortcut is registered without replacing another extension's custom editor; `/file-context` remains available if the shortcut is disabled or conflicts.
 - File discovery uses a small built-in ignore list rather than `.gitignore` semantics.
 - Content search scans discovered files natively and sequentially; large projects or queries with no matches may take longer than indexed or external search tools.
@@ -128,10 +128,11 @@ Unknown and trailing arguments are rejected. RPC receives an observable warning.
 
 ```text
 src/index.ts                   Thin Pi entrypoint
-src/file-context.ts            Lifecycle, routes, filesystem boundaries, pending state, quote injection
-src/file-context-menu.ts       Standard Add, Remove, preview, Help, and disabled-state menu flow
+src/file-context.ts            Lifecycle, routes, filesystem boundaries, selected state, prompt injection
+src/file-context-menu.ts       Standard Add, selected-context review, Help, and removal flow
 src/file-context-settings.ts   User shortcut loading and validation
-src/file-context-explorer.ts   File list, Git detail views, and line-range TUI
+src/file-context-explorer.ts   File, content, Git, and line-range interaction controller
+src/file-context-preview-ui.ts Width-safe preview, capacity, and progressive action help
 src/content-search.ts          Bounded literal and fuzzy content matching
 src/content-search-session.ts  Search input, toggles, navigation, and cancellation
 src/content-search-ui.ts       Width-safe result cards and highlighted context
@@ -140,10 +141,12 @@ src/git-context.ts             Bounded read-only Git status, diff, blame, histor
 
 test/content-search.test.ts     Content matcher behavior and limits
 test/content-search-ui.test.ts  Content interaction, rendering, and lifecycle tests
+test/file-context-search.test.ts  File-name ranking, typo tolerance, and query-bound tests
 test/file-context.test.ts       Filesystem, prompt, lifecycle, shortcut, and explorer tests
-test/file-context-menu.test.ts  Menu states, navigation, previews, limits, and responsive rendering tests
+test/file-context-selection.test.ts  Add-and-continue, capacity, and progressive-help tests
+test/file-context-menu.test.ts  Menu states, exact review, removal, limits, and responsive rendering tests
 test/file-context-command-menu.test.ts  Command routes, loading, and direct browser compatibility tests
-test/pending-quotes.test.ts     Exact pending quote removal, cancellation, and stale-flow tests
+test/pending-quotes.test.ts     Exact selected-context removal, cancellation, and stale-flow tests
 test/file-context-settings.test.ts  Shortcut settings defaults and validation tests
 test/git-context.test.ts        Git repository behavior and parser tests
 ```

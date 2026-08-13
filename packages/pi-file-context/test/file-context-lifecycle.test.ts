@@ -3,7 +3,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import {
+	createCustomSelectorHarness,
+	createMockContext,
+	createMockPi,
+} from "../../../test/support.js";
 import { registerFileQuoteExtension } from "../src/file-context.js";
 
 test("disposes and settles an active explorer on session replacement", async () => {
@@ -29,6 +33,7 @@ async function assertExplorerLifecycleCancellation(
 			markReady = resolve;
 		});
 		let disposed = false;
+		let customCalls = 0;
 		const oldManager = { getSessionId: () => "old" };
 		const newManager = { getSessionId: () => "new" };
 		const makeContext = (sessionManager: object, custom?: (factory: unknown) => Promise<unknown>) =>
@@ -47,32 +52,34 @@ async function assertExplorerLifecycleCancellation(
 					pasteToEditor() {},
 				},
 			});
-		const oldContext = makeContext(
-			oldManager,
-			(factory) =>
-				new Promise((resolve) => {
-					const component = (
-						factory as (...args: unknown[]) => {
-							dispose(): void;
-						}
-					)(
-						{ terminal: { rows: 18 }, requestRender() {} },
-						{
-							fg: (_color: string, text: string) => text,
-							bg: (_color: string, text: string) => text,
-							bold: (text: string) => text,
-						},
-						{ matches: () => false },
-						resolve,
-					);
-					const dispose = component.dispose.bind(component);
-					component.dispose = () => {
-						disposed = true;
-						dispose();
-					};
-					markReady();
-				}),
-		);
+		const oldContext = makeContext(oldManager, async (factory) => {
+			customCalls += 1;
+			if (customCalls === 1) {
+				return createCustomSelectorHarness(factory).resultPromise;
+			}
+			return new Promise((resolve) => {
+				const component = (
+					factory as (...args: unknown[]) => {
+						dispose(): void;
+					}
+				)(
+					{ terminal: { rows: 18 }, requestRender() {} },
+					{
+						fg: (_color: string, text: string) => text,
+						bg: (_color: string, text: string) => text,
+						bold: (text: string) => text,
+					},
+					{ matches: () => false },
+					resolve,
+				);
+				const dispose = component.dispose.bind(component);
+				component.dispose = () => {
+					disposed = true;
+					dispose();
+				};
+				markReady();
+			});
+		});
 		const newContext = makeContext(newManager);
 		await mock.events.get("session_start")?.[0]?.({}, oldContext.ctx);
 		let settled = false;

@@ -11,13 +11,17 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ContentSearchMatch } from "./content-search.js";
 import { ContentSearchSession } from "./content-search-session.js";
-import { highlightContentRanges } from "./content-search-ui.js";
 import {
 	createFileQuote,
 	createFileQuoteSnapshot,
 	type FileQuote,
 	type LoadedProjectTextFile,
 } from "./file-context.js";
+import {
+	renderFilePreview,
+	renderFilePreviewHelp,
+	type SelectedContextState,
+} from "./file-context-preview-ui.js";
 import { ProjectFileSearch } from "./file-search.js";
 import type {
 	GitBlameInfo,
@@ -29,7 +33,6 @@ import type {
 
 const RESERVED_APP_ROWS = 3;
 const EXPLORER_CHROME_ROWS = 4;
-const PREVIEW_CHROME_ROWS = 4;
 const HISTORY_CHROME_ROWS = 3;
 const DIFF_CHROME_ROWS = 3;
 
@@ -48,6 +51,9 @@ interface FileQuoteExplorerOptions {
 	loadFile: (path: string, signal?: AbortSignal) => Promise<LoadedProjectTextFile>;
 	gitContext?: GitContext;
 	rootNavigation?: boolean;
+	getSelectedContextState?: () => SelectedContextState;
+	validateQuote?: (quote: FileQuote) => void;
+	onAddAndContinue?: (quote: FileQuote) => void;
 	done: (result: FileQuoteExplorerResult | undefined) => void;
 }
 
@@ -59,7 +65,14 @@ export class FileQuoteExplorer implements Component, Focusable {
 	private filteredFiles: string[];
 	private selectedFileIndex = 0;
 	private fileScrollOffset = 0;
-	private mode: "files" | "contents" | "preview" | "history" | "revision" | "diff" = "files";
+	private mode:
+		| "files"
+		| "contents"
+		| "preview"
+		| "preview-help"
+		| "history"
+		| "revision"
+		| "diff" = "files";
 	private previewReturnMode: "files" | "contents" = "files";
 	private activeContentMatch: ContentSearchMatch | undefined;
 	private loadedFile: LoadedProjectTextFile | undefined;
@@ -125,6 +138,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 		if (this.mode === "history") return this.renderHistory(safeWidth);
 		if (this.mode === "revision") return this.renderRevisionInput(safeWidth);
 		if (this.mode === "diff") return this.renderDiff(safeWidth);
+		if (this.mode === "preview-help") return this.renderPreviewHelp(safeWidth);
 		return this.renderPreview(safeWidth);
 	}
 
@@ -139,6 +153,7 @@ export class FileQuoteExplorer implements Component, Focusable {
 		else if (this.mode === "history") this.handleHistoryInput(data);
 		else if (this.mode === "revision") this.handleRevisionInput(data);
 		else if (this.mode === "diff") this.handleDiffInput(data);
+		else if (this.mode === "preview-help") this.handlePreviewHelpInput(data);
 		else this.handlePreviewInput(data);
 		if (!this.finished) this.options.tui.requestRender();
 	}
@@ -227,84 +242,29 @@ export class FileQuoteExplorer implements Component, Focusable {
 
 	private renderPreview(width: number): string[] {
 		const availableRows = Math.max(1, this.options.tui.terminal.rows - RESERVED_APP_ROWS);
-		const previewHeight = Math.max(1, availableRows - PREVIEW_CHROME_ROWS);
-		const loadedFile = this.loadedFile;
-		if (!loadedFile) return [this.options.theme.fg("warning", "Loading preview…")];
-		this.keepPreviewVisible(previewHeight);
-		const digits = String(Math.max(1, loadedFile.lines.length)).length;
-		const range = this.getSelectionRange();
-		const changedLines = new Set(this.loadedGit?.hunks.flatMap((hunk) => hunk.changedLines) ?? []);
-		const deletedAtLines = new Set(
-			(this.loadedGit?.hunks ?? [])
-				.filter((hunk) => hunk.changedLines.length === 0 && hunk.oldCount > 0)
-				.map((hunk) => Math.max(1, hunk.newStart)),
-		);
-		const visibleLines = loadedFile.lines.slice(
-			this.previewScrollOffset,
-			this.previewScrollOffset + previewHeight,
-		);
-		const previewLines = visibleLines.map((rawLine, visibleIndex) => {
-			const index = this.previewScrollOffset + visibleIndex;
-			const selected = index >= range.start && index <= range.end;
-			const cursor = index === this.previewCursor ? ">" : " ";
-			const marker = changedLines.has(index + 1) ? "+" : deletedAtLines.has(index + 1) ? "-" : " ";
-			const number = String(index + 1).padStart(digits, " ");
-			const contentMatch =
-				this.activeContentMatch?.path === loadedFile.path &&
-				this.activeContentMatch.lineNumber === index + 1 &&
-				this.activeContentMatch.line === rawLine
-					? this.activeContentMatch
-					: undefined;
-			const content = contentMatch
-				? highlightContentRanges(rawLine, contentMatch.ranges, this.options.theme)
-				: escapeTerminalControls(rawLine);
-			const line = `${cursor}${marker}${number} │ ${content}`;
-			const styled = selected
-				? this.options.theme.bg("selectedBg", this.options.theme.fg("text", line))
-				: index === this.previewCursor
-					? this.options.theme.fg("accent", line)
-					: line;
-			return truncateToWidth(styled, width, "");
-		});
-		if (previewLines.length === 0) {
-			previewLines.push(truncateToWidth(this.options.theme.fg("muted", "  Empty file"), width, ""));
-		}
-		const selecting =
-			this.previewAnchor === undefined
-				? "cursor line"
-				: `lines ${range.start + 1}-${range.end + 1}`;
-		const selectedText = loadedFile.lines.slice(range.start, range.end + 1).join("\n");
-		const estimatedTokens = Math.max(1, Math.ceil(Buffer.byteLength(selectedText, "utf8") / 4));
-		const footer = this.error
-			? this.options.theme.fg("error", escapeTerminalControls(this.error))
-			: `~${estimatedTokens} tokens · Enter attach ${selecting} · Space anchor · ↑↓ extend · [] hunks · b blame · h history · r revision · d diff · Esc ${this.previewReturnMode === "contents" ? "content results" : "files"}`;
-		const project = this.options.gitContext?.project;
-		const gitLabel = this.loadedRevision
-			? `${escapeTerminalControls(this.loadedRevision.revision)}@${this.loadedRevision.commit.slice(0, 12)} · historical`
-			: project
-				? `${escapeTerminalControls(project.branch)}@${project.head.slice(0, 12)}${project.dirty ? " · dirty" : ""}${this.loadedGit?.status ? ` · ${this.loadedGit.status.label}` : " · clean"}`
-				: "";
-		const blameLabel = this.blame
-			? `L${this.previewCursor + 1} · ${this.blame.committed ? this.blame.commit.slice(0, 12) : "uncommitted"} · ${escapeTerminalControls(this.blame.author)} · ${escapeTerminalControls(this.blame.summary)}`
-			: "";
-		return fitRows(
-			[
-				truncateToWidth(
-					this.options.theme.fg(
-						"accent",
-						this.options.theme.bold(
-							`${escapeTerminalControls(loadedFile.path)}${gitLabel ? ` · ${gitLabel}` : ""}`,
-						),
-					),
-					width,
-					"",
-				),
-				truncateToWidth(this.options.theme.fg("muted", blameLabel), width, ""),
-				...previewLines,
-				truncateToWidth(this.options.theme.fg("muted", footer), width, ""),
-			],
+		if (!this.loadedFile) return [this.options.theme.fg("warning", "Loading preview…")];
+		return renderFilePreview({
+			theme: this.options.theme,
+			width,
 			availableRows,
-		);
+			file: this.loadedFile,
+			fileGit: this.loadedGit,
+			project: this.options.gitContext?.project,
+			revision: this.loadedRevision,
+			contentMatch: this.activeContentMatch,
+			blame: this.blame,
+			cursor: this.previewCursor,
+			anchor: this.previewAnchor,
+			scrollOffset: this.previewScrollOffset,
+			error: this.error,
+			selectedContext: this.options.getSelectedContextState?.(),
+			canContinue: this.options.onAddAndContinue !== undefined,
+		});
+	}
+
+	private renderPreviewHelp(width: number): string[] {
+		const availableRows = Math.max(1, this.options.tui.terminal.rows - RESERVED_APP_ROWS);
+		return renderFilePreviewHelp(this.options.theme, width, availableRows);
 	}
 
 	private renderRevisionInput(width: number): string[] {
@@ -476,20 +436,29 @@ export class FileQuoteExplorer implements Component, Focusable {
 		if (!loadedFile) return;
 		const lines = loadedFile.lines;
 		if (matchesKey(data, Key.escape)) {
+			this.returnToOrigin();
+			return;
+		}
+		if (data === "?") {
 			this.cancelDetailRequest();
-			this.cancelOpenRequest();
-			this.mode = this.previewReturnMode;
-			this.loadedFile = undefined;
-			this.loadedGit = undefined;
-			this.loadedRevision = undefined;
-			this.previewAnchor = undefined;
-			this.blame = undefined;
-			this.search.focused = this.isFocused && this.mode === "files";
-			this.contentSearch.focused = this.isFocused && this.mode === "contents";
+			this.mode = "preview-help";
+			this.search.focused = false;
+			this.contentSearch.focused = false;
+			return;
+		}
+		if (data === "a" && this.options.onAddAndContinue) {
+			try {
+				const quote = this.createSelectedQuote();
+				this.options.onAddAndContinue(quote);
+				this.returnToOrigin();
+			} catch (error: unknown) {
+				this.error = formatError(error);
+			}
 			return;
 		}
 		if (data === " ") {
 			this.previewAnchor = this.previewAnchor === undefined ? this.previewCursor : undefined;
+			this.error = undefined;
 			return;
 		}
 		if (data === "b") {
@@ -543,34 +512,18 @@ export class FileQuoteExplorer implements Component, Focusable {
 			return;
 		}
 		if (this.options.keybindings.matches(data, "tui.select.confirm")) {
-			const anchor = this.previewAnchor ?? this.previewCursor;
 			try {
-				const project = this.options.gitContext?.project;
-				const revision = this.loadedRevision;
-				this.finish({
-					kind: "quote",
-					quote: createFileQuote(
-						loadedFile.path,
-						lines,
-						anchor,
-						this.previewCursor,
-						project
-							? {
-									head: project.head,
-									branch: project.branch,
-									status: revision ? "historical" : (this.loadedGit?.status?.label ?? "clean"),
-									revision: revision?.revision,
-									blob: revision?.blob ?? this.loadedGit?.blob,
-									source: revision ? "revision" : "worktree",
-									base: revision ? undefined : "HEAD",
-								}
-							: undefined,
-					),
-				});
+				const quote = this.createSelectedQuote();
+				this.options.validateQuote?.(quote);
+				this.finish({ kind: "quote", quote });
 			} catch (error: unknown) {
 				this.error = formatError(error);
 			}
 		}
+	}
+
+	private handlePreviewHelpInput(data: string): void {
+		if (matchesKey(data, Key.escape)) this.mode = "preview";
 	}
 
 	private handleHistoryInput(data: string): void {
@@ -656,23 +609,22 @@ export class FileQuoteExplorer implements Component, Focusable {
 			try {
 				const startLine = Math.max(1, hunk.newStart);
 				const endLine = Math.max(startLine, hunk.newStart + hunk.newCount - 1);
-				this.finish({
-					kind: "quote",
-					quote: createFileQuoteSnapshot(
-						loadedFile.path,
-						startLine,
-						endLine,
-						hunk.lines.join("\n"),
-						{
-							head: project.head,
-							branch: project.branch,
-							status: this.loadedGit?.status?.label ?? "modified",
-							blob: this.loadedGit?.blob,
-							source: "git_diff",
-							base: "HEAD",
-						},
-					),
-				});
+				const quote = createFileQuoteSnapshot(
+					loadedFile.path,
+					startLine,
+					endLine,
+					hunk.lines.join("\n"),
+					{
+						head: project.head,
+						branch: project.branch,
+						status: this.loadedGit?.status?.label ?? "modified",
+						blob: this.loadedGit?.blob,
+						source: "git_diff",
+						base: "HEAD",
+					},
+				);
+				this.options.validateQuote?.(quote);
+				this.finish({ kind: "quote", quote });
 			} catch (error: unknown) {
 				this.error = formatError(error);
 			}
@@ -904,6 +856,46 @@ export class FileQuoteExplorer implements Component, Focusable {
 		this.cancelDetailRequest();
 		this.previewCursor = next;
 		this.blame = undefined;
+		this.error = undefined;
+	}
+
+	private createSelectedQuote(): FileQuote {
+		const loadedFile = this.loadedFile;
+		if (!loadedFile) throw new Error("No file is open");
+		const anchor = this.previewAnchor ?? this.previewCursor;
+		const project = this.options.gitContext?.project;
+		const revision = this.loadedRevision;
+		return createFileQuote(
+			loadedFile.path,
+			loadedFile.lines,
+			anchor,
+			this.previewCursor,
+			project
+				? {
+						head: project.head,
+						branch: project.branch,
+						status: revision ? "historical" : (this.loadedGit?.status?.label ?? "clean"),
+						revision: revision?.revision,
+						blob: revision?.blob ?? this.loadedGit?.blob,
+						source: revision ? "revision" : "worktree",
+						base: revision ? undefined : "HEAD",
+					}
+				: undefined,
+		);
+	}
+
+	private returnToOrigin(): void {
+		this.cancelDetailRequest();
+		this.cancelOpenRequest();
+		this.mode = this.previewReturnMode;
+		this.loadedFile = undefined;
+		this.loadedGit = undefined;
+		this.loadedRevision = undefined;
+		this.previewAnchor = undefined;
+		this.blame = undefined;
+		this.error = undefined;
+		this.search.focused = this.isFocused && this.mode === "files";
+		this.contentSearch.focused = this.isFocused && this.mode === "contents";
 	}
 
 	private finish(result: FileQuoteExplorerResult | undefined): void {
@@ -918,27 +910,11 @@ export class FileQuoteExplorer implements Component, Focusable {
 		return this.options.rootNavigation ? { kind } : undefined;
 	}
 
-	private getSelectionRange(): { start: number; end: number } {
-		const anchor = this.previewAnchor ?? this.previewCursor;
-		return {
-			start: Math.min(anchor, this.previewCursor),
-			end: Math.max(anchor, this.previewCursor),
-		};
-	}
-
 	private keepFileVisible(height: number): void {
 		if (this.selectedFileIndex < this.fileScrollOffset)
 			this.fileScrollOffset = this.selectedFileIndex;
 		if (this.selectedFileIndex >= this.fileScrollOffset + height) {
 			this.fileScrollOffset = this.selectedFileIndex - height + 1;
-		}
-	}
-
-	private keepPreviewVisible(height: number): void {
-		if (this.previewCursor < this.previewScrollOffset)
-			this.previewScrollOffset = this.previewCursor;
-		if (this.previewCursor >= this.previewScrollOffset + height) {
-			this.previewScrollOffset = this.previewCursor - height + 1;
 		}
 	}
 }

@@ -35,8 +35,8 @@ export interface FileContextMenuOptions {
 	): FileContextMenuRemovalResult | Promise<FileContextMenuRemovalResult>;
 }
 
-type Screen = "main" | "remove" | "help";
-type Action = "add" | "remove";
+type Screen = "main" | "selected" | "quote" | "help";
+type Action = "add" | "review" | "remove";
 
 export async function showFileContextMenu(
 	ctx: ExtensionCommandContext,
@@ -46,20 +46,21 @@ export async function showFileContextMenu(
 	if (!options.isCurrent() || options.signal.aborted) return { kind: "stale" };
 
 	let addRequested = false;
+	let selectedQuoteId: string | undefined;
 	const menu = defineMenu<FileContextMenuState, Screen, Action, ExtensionCommandContext>({
-		start: options.start ?? "main",
+		start: options.start === "remove" ? "selected" : "main",
 		screens: {
 			main: ({ state }) => ({
 				kind: "actions",
 				title: "File Context",
 				lines: [
-					`Pending quotes: ${state.quotes.length}/${state.maximumQuotes} · ~${estimateTokens(state.totalBytes)} tokens`,
+					`Next prompt context: ${state.quotes.length}/${state.maximumQuotes} snippets · ~${estimateTokens(state.totalBytes)} tokens`,
 					`Shortcut: ${formatShortcut(state.shortcut)}`,
 				],
 				items: [
 					{
 						id: "add",
-						label: "Add file quote",
+						label: "Add context snippet",
 						description: "Browse project files and select lines",
 						action: "add",
 						busyLabel: "Scanning project files",
@@ -67,12 +68,13 @@ export async function showFileContextMenu(
 						disabledReason: addDisabledReason(state),
 					},
 					{
-						id: "remove",
-						label: `Remove pending quote (${state.quotes.length})`,
-						description: "Preview and remove exact snapshots",
-						to: "remove",
+						id: "selected",
+						label: `Review selected context (${state.quotes.length})`,
+						description: "Preview exact snapshots before removing them",
+						to: "selected",
 						disabled: state.quotes.length === 0,
-						disabledReason: state.quotes.length === 0 ? "No pending quotes to remove" : undefined,
+						disabledReason:
+							state.quotes.length === 0 ? "No context selected for the next prompt" : undefined,
 					},
 					{
 						id: "help",
@@ -83,33 +85,69 @@ export async function showFileContextMenu(
 				],
 				hint: "close",
 			}),
-			remove: ({ state }) => ({
-				kind: "choice",
-				title: "Remove pending quote",
-				lines: [`${state.quotes.length} pending · choose one exact snapshot to remove`],
-				items: state.quotes.map((quote, index) => ({
-					id: quote.id,
-					label: `${index + 1}. ${quote.path}`,
-					description: `lines ${quote.startLine}-${quote.endLine} · ~${estimateTokens(Buffer.byteLength(quote.text, "utf8"))} tokens`,
-					details: [
-						`Path: ${quote.path}`,
-						`Lines: ${quote.startLine}-${quote.endLine}`,
-						`Preview: ${singleLinePreview(quote.text)}`,
+			selected: ({ state }) =>
+				state.quotes.length === 0
+					? {
+							kind: "detail",
+							title: "Selected context",
+							lines: ["No context selected for the next prompt."],
+							hint: "back",
+						}
+					: {
+							kind: "choice",
+							title: "Selected context",
+							lines: [
+								`${state.quotes.length} snippets · Enter reviews the exact snapshot before removal`,
+							],
+							items: state.quotes.map((quote, index) => ({
+								id: quote.id,
+								label: `${index + 1}. ${quote.path}`,
+								description: `lines ${quote.startLine}-${quote.endLine} · ~${estimateTokens(Buffer.byteLength(quote.text, "utf8"))} tokens`,
+								details: [
+									`Lines ${quote.startLine}-${quote.endLine} · Preview: ${singleLinePreview(quote.text)}`,
+								],
+							})),
+							action: "review",
+							viewportSize: 8,
+							hint: "back",
+						},
+			quote: ({ state }) => {
+				const quote = state.quotes.find((candidate) => candidate.id === selectedQuoteId);
+				if (!quote) {
+					return {
+						kind: "detail",
+						title: "Review context snippet",
+						lines: ["That snippet is no longer selected. Go back to refresh the list."],
+						hint: "back",
+					};
+				}
+				return {
+					kind: "review",
+					title: "Review context snippet",
+					lines: [
+						quote.path,
+						`Lines ${quote.startLine}-${quote.endLine} · ~${estimateTokens(Buffer.byteLength(quote.text, "utf8"))} tokens`,
 					],
-				})),
-				action: "remove",
-				viewportSize: 8,
-				hint: "back",
-			}),
+					content: quote.text,
+					format: { kind: "text" },
+					viewportSize: "adaptive",
+					confirm: {
+						id: "remove",
+						label: "Remove from next prompt",
+						action: "remove",
+					},
+					hint: "back",
+				};
+			},
 			help: () => ({
 				kind: "detail",
 				title: "File Context help",
 				lines: [
-					"Add file quote opens the project browser. Select a file, preview it, and press Enter to attach the selected line or range.",
-					"Pending quotes are attached in order to your next prompt, then cleared together.",
-					"Use Remove pending quote to preview and remove exact snapshots without changing the others.",
+					"Add context snippet opens the project browser. Select lines and press Enter to add and close, or A to add and keep browsing.",
+					"Selected context is attached in order to your next prompt, then cleared together.",
+					"Review selected context opens each exact snapshot before offering removal.",
 					"The configured shortcut and /file-context browse open the browser directly.",
-					"Escape goes back. Ctrl+C closes File Context. Cancelling never changes pending quotes.",
+					"Escape goes back. Ctrl+C closes File Context. Cancelling never changes selected context.",
 				],
 				hint: "back",
 			}),
@@ -119,18 +157,25 @@ export async function showFileContextMenu(
 				addRequested = true;
 				return { kind: "close" };
 			},
-			remove: async ({ itemId, signal }) => {
+			review: ({ itemId }) => {
+				selectedQuoteId = itemId;
+				return { kind: "to", screen: "quote" };
+			},
+			remove: async ({ signal }) => {
+				const itemId = selectedQuoteId;
+				if (!itemId) return { kind: "back" };
 				const result = await options.removeQuote(itemId, signal);
 				if (signal.aborted || !options.isCurrent()) return { kind: "close" };
 				if (result.kind === "missing") {
-					ctx.ui.notify("That quote is no longer pending. The list was refreshed.", "warning");
+					ctx.ui.notify("That snippet is no longer selected. The list was refreshed.", "warning");
 					return { kind: "stay" };
 				}
 				ctx.ui.notify(
-					`Removed pending quote: ${safeTerminalText(result.quote.path)} · lines ${result.quote.startLine}-${result.quote.endLine}.`,
+					`Removed from next prompt context: ${safeTerminalText(result.quote.path)} · lines ${result.quote.startLine}-${result.quote.endLine}.`,
 					"info",
 				);
-				return result.remaining === 0 ? { kind: "back" } : { kind: "stay" };
+				selectedQuoteId = undefined;
+				return { kind: "back" };
 			},
 		},
 	});
@@ -143,7 +188,7 @@ export async function showFileContextMenu(
 			isCurrent: options.isCurrent,
 			onError: (_menuContext, error) => {
 				ctx.ui.notify(
-					`File Context menu failed: ${safeTerminalText(formatError(error))}. Pending quotes were kept; try again.`,
+					`File Context menu failed: ${safeTerminalText(formatError(error))}. Selected context was kept; try again.`,
 					"error",
 				);
 			},
@@ -161,10 +206,10 @@ export async function showFileContextMenu(
 
 function addDisabledReason(state: FileContextMenuState): string | undefined {
 	if (state.quotes.length >= state.maximumQuotes) {
-		return `The ${state.maximumQuotes}-quote limit is reached; remove a quote first`;
+		return `The ${state.maximumQuotes}-snippet limit is reached; review selected context first`;
 	}
 	if (state.totalBytes >= state.maximumBytes) {
-		return `The ${formatBytes(state.maximumBytes)} pending limit is reached; remove a quote first`;
+		return `The ${formatBytes(state.maximumBytes)} context limit is reached; review selected context first`;
 	}
 	return undefined;
 }
