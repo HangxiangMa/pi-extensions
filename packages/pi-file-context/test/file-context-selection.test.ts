@@ -222,6 +222,33 @@ test("explorer adds exact context and keeps browsing with visible capacity and a
 	});
 });
 
+test("short narrow previews keep primary add controls visible", async () => {
+	const explorer = new FileQuoteExplorer({
+		tui: { terminal: { rows: 8 }, requestRender() {} } as never,
+		theme: {
+			fg: (_color: string, text: string) => text,
+			bg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		} as never,
+		keybindings: {
+			matches(data: string, key: string) {
+				return data === "enter" && key === "tui.select.confirm";
+			},
+		} as never,
+		files: ["short.ts"],
+		loadFile: async () => ({ path: "short.ts", lines: ["short"] }),
+		onAddAndContinue() {},
+		done() {},
+	});
+
+	explorer.handleInput("enter");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	const preview = explorer.render(36);
+	assert.ok(preview.every((line) => visibleWidth(line) <= 36));
+	assert.match(preview.join("\n"), /Enter add/u);
+	assert.match(preview.join("\n"), /A keep browsing/u);
+});
+
 test("compact preview help keeps every advanced action visible on short terminals", async () => {
 	const explorer = new FileQuoteExplorer({
 		tui: { terminal: { rows: 8 }, requestRender() {} } as never,

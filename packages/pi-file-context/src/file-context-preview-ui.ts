@@ -54,7 +54,10 @@ export function renderFilePreview(options: FilePreviewRenderOptions): string[] {
 				options.selectedContext,
 				options.canContinue,
 			);
-	const previewHeight = Math.max(1, options.availableRows - 2 - footerLines.length);
+	const previewHeight = Math.max(
+		1,
+		options.availableRows - 1 - (options.blame ? 1 : 0) - footerLines.length,
+	);
 	const scrollOffset = visiblePreviewOffset(options.scrollOffset, options.cursor, previewHeight);
 	const digits = String(Math.max(1, file.lines.length)).length;
 	const changedLines = new Set(options.fileGit?.hunks.flatMap((hunk) => hunk.changedLines) ?? []);
@@ -99,22 +102,26 @@ export function renderFilePreview(options: FilePreviewRenderOptions): string[] {
 	const blameLabel = options.blame
 		? `L${options.cursor + 1} · ${options.blame.committed ? options.blame.commit.slice(0, 12) : "uncommitted"} · ${escapeTerminalControls(options.blame.author)} · ${escapeTerminalControls(options.blame.summary)}`
 		: "";
-	return fitRows(
-		[
-			truncateToWidth(
-				theme.fg(
-					"accent",
-					theme.bold(`${escapeTerminalControls(file.path)}${gitLabel ? ` · ${gitLabel}` : ""}`),
-				),
-				width,
-				"",
-			),
-			truncateToWidth(theme.fg("muted", blameLabel), width, ""),
-			...previewLines,
-			...footerLines.map((line) =>
-				truncateToWidth(theme.fg(options.error ? "error" : "muted", line), width, ""),
-			),
-		],
+	const titleLine = truncateToWidth(
+		theme.fg(
+			"accent",
+			theme.bold(`${escapeTerminalControls(file.path)}${gitLabel ? ` · ${gitLabel}` : ""}`),
+		),
+		width,
+		"",
+	);
+	const blameLine = blameLabel
+		? truncateToWidth(theme.fg("muted", blameLabel), width, "")
+		: undefined;
+	const renderedFooter = footerLines.map((line) =>
+		truncateToWidth(theme.fg(options.error ? "error" : "muted", line), width, ""),
+	);
+	return fitPreviewRows(
+		titleLine,
+		blameLine,
+		previewLines,
+		renderedFooter,
+		options.error ? 0 : Math.min(1, renderedFooter.length - 1),
 		options.availableRows,
 	);
 }
@@ -214,6 +221,63 @@ function visiblePreviewOffset(current: number, cursor: number, height: number): 
 
 function estimateTokens(bytes: number): number {
 	return bytes === 0 ? 0 : Math.max(1, Math.ceil(bytes / 4));
+}
+
+function fitPreviewRows(
+	title: string,
+	blame: string | undefined,
+	previewLines: readonly string[],
+	footerLines: readonly string[],
+	primaryFooterIndex: number,
+	height: number,
+): string[] {
+	let visibleTitle: string | undefined = title;
+	let visibleBlame = blame;
+	const visiblePreview = [...previewLines];
+	const visibleFooter = footerLines.map((line, index) => ({
+		line,
+		primary: index === primaryFooterIndex,
+	}));
+	const rowCount = () =>
+		(visibleTitle ? 1 : 0) + (visibleBlame ? 1 : 0) + visiblePreview.length + visibleFooter.length;
+
+	while (rowCount() > height) {
+		if (visibleBlame) {
+			visibleBlame = undefined;
+			continue;
+		}
+		if (visiblePreview.length > 1) {
+			visiblePreview.pop();
+			continue;
+		}
+		let optionalFooter = -1;
+		for (let index = visibleFooter.length - 1; index >= 0; index -= 1) {
+			if (!visibleFooter[index]?.primary) {
+				optionalFooter = index;
+				break;
+			}
+		}
+		if (optionalFooter >= 0) {
+			visibleFooter.splice(optionalFooter, 1);
+			continue;
+		}
+		if (visibleTitle) {
+			visibleTitle = undefined;
+			continue;
+		}
+		if (visiblePreview.length > 0) {
+			visiblePreview.pop();
+			continue;
+		}
+		break;
+	}
+
+	return [
+		...(visibleTitle ? [visibleTitle] : []),
+		...(visibleBlame ? [visibleBlame] : []),
+		...visiblePreview,
+		...visibleFooter.map(({ line }) => line),
+	];
 }
 
 function fitRows(lines: string[], height: number): string[] {
