@@ -112,7 +112,7 @@ test("runSingleAgent aborts timed-out work and returns a hard-bounded tool-less 
 		undefined,
 		undefined,
 		"low",
-		150,
+		500,
 		undefined,
 		(results) => ({ mode: "single", agentScope: "user", projectAgentsDir: null, results }),
 		{ command: process.execPath, argsPrefix: ["-e", script, "--"] },

@@ -3,8 +3,7 @@ import { safeTerminalText } from "./goal/errors.js";
 import goal from "./goal/goal.js";
 import type { ActiveGoal } from "./goal/persistence.js";
 import { buildGoalPrompt } from "./goal/prompts.js";
-import { startFreshWorkflowImplementation, WORKFLOW_GOAL_OBJECTIVE } from "./handoff.js";
-import { showWorkflowMenu, type WorkflowMenuController } from "./menu.js";
+import type { WorkflowMenuController } from "./menu.js";
 import planMode, { type PlanModeHandle } from "./plan/plan-mode.js";
 import { restorePlanModeState } from "./plan/state.js";
 import {
@@ -18,19 +17,32 @@ import {
 	type WorkflowSettingsLoadResult,
 	workflowSettingsPath,
 } from "./settings.js";
+import { WORKFLOW_GOAL_OBJECTIVE } from "./workflow-contract.js";
+
+type WorkflowMenuModule = Pick<typeof import("./menu.js"), "showWorkflowMenu">;
+type FreshHandoffModule = Pick<typeof import("./handoff.js"), "startFreshWorkflowImplementation">;
 
 export interface WorkflowDependencies {
 	settingsPath?: string;
 	readSettings?: () => WorkflowSettingsLoadResult;
+	loadWorkflowMenu?: () => Promise<WorkflowMenuModule>;
+	loadFreshHandoff?: () => Promise<FreshHandoffModule>;
 }
 
 export default function workflow(pi: ExtensionAPI, dependencies: WorkflowDependencies = {}) {
 	const settingsPath = dependencies.settingsPath ?? workflowSettingsPath();
 	const readSettings = dependencies.readSettings ?? (() => readWorkflowSettings(settingsPath));
+	const loadWorkflowMenu = cachedModuleLoader(
+		dependencies.loadWorkflowMenu ?? (() => import("./menu.js")),
+	);
+	const loadFreshHandoff = cachedModuleLoader(
+		dependencies.loadFreshHandoff ?? (() => import("./handoff.js")),
+	);
 	let planHandoff: PlanHandoffBehavior = "review";
 	let settingsIssue: string | undefined;
 	let workflowGeneration = 0;
 	let workflowController = new AbortController();
+	let currentSessionManager: unknown;
 	const readPlanSettings = () => {
 		if (!dependencies.readSettings) return readWorkflowPlanSettings(settingsPath);
 		const loaded = readSettings();
@@ -87,7 +99,22 @@ export default function workflow(pi: ExtensionAPI, dependencies: WorkflowDepende
 			goalHandle.runtime.activeGoal
 				? "Clear the current Goal before starting Plan mode."
 				: undefined,
-		startFreshImplementation: startFreshWorkflowImplementation,
+		startFreshImplementation: async (ctx, request) => {
+			const ownership = captureWorkflowOwnership(ctx, request.isCurrent);
+			if (!ownership.isCurrent()) return { kind: "stale" };
+			let handoffModule: FreshHandoffModule;
+			try {
+				handoffModule = await loadFreshHandoff();
+			} catch (error) {
+				if (!ownership.isCurrent()) return { kind: "stale" };
+				throw error;
+			}
+			if (!ownership.isCurrent()) return { kind: "stale" };
+			return handoffModule.startFreshWorkflowImplementation(ctx, {
+				...request,
+				isCurrent: ownership.isCurrent,
+			});
+		},
 		updateSettings: (patch, options) =>
 			updateWorkflowPlanSettings(patch, {
 				settingsPath,
@@ -122,6 +149,7 @@ export default function workflow(pi: ExtensionAPI, dependencies: WorkflowDepende
 	});
 	pi.on("session_start", (_event, ctx) => {
 		workflowGeneration += 1;
+		currentSessionManager = ctx.sessionManager;
 		let restoredGoal = goalHandle.runtime.activeGoal;
 		const restoredPlanState = planHandle?.getState();
 		const unlinkedImplementation =
@@ -155,8 +183,9 @@ export default function workflow(pi: ExtensionAPI, dependencies: WorkflowDepende
 			"warning",
 		);
 	});
-	pi.on("session_shutdown", () => {
+	pi.on("session_shutdown", (_event, ctx) => {
 		workflowGeneration += 1;
+		if (currentSessionManager === ctx.sessionManager) currentSessionManager = undefined;
 		workflowController.abort(new DOMException("Workflow session shut down", "AbortError"));
 	});
 
@@ -201,17 +230,40 @@ export default function workflow(pi: ExtensionAPI, dependencies: WorkflowDepende
 			if (ctx.mode === "print" || ctx.mode === "json") {
 				throw new Error("The /workflow manager requires TUI or RPC mode.");
 			}
-			const generation = workflowGeneration;
-			const controller = workflowController;
-			await showWorkflowMenu(ctx, menuController, {
-				signal: controller.signal,
-				isCurrent: () =>
-					generation === workflowGeneration &&
-					controller === workflowController &&
-					!controller.signal.aborted,
+			const ownership = captureWorkflowOwnership(ctx);
+			if (!ownership.isCurrent()) return;
+			let menuModule: WorkflowMenuModule;
+			try {
+				menuModule = await loadWorkflowMenu();
+			} catch (error) {
+				if (!ownership.isCurrent()) return;
+				throw error;
+			}
+			if (!ownership.isCurrent()) return;
+			await menuModule.showWorkflowMenu(ctx, menuController, {
+				signal: ownership.signal,
+				isCurrent: ownership.isCurrent,
 			});
 		},
 	});
+
+	function captureWorkflowOwnership(
+		ctx: { sessionManager: unknown },
+		additionalCheck: () => boolean = () => true,
+	) {
+		const generation = workflowGeneration;
+		const controller = workflowController;
+		const sessionManager = ctx.sessionManager;
+		return {
+			signal: controller.signal,
+			isCurrent: () =>
+				generation === workflowGeneration &&
+				controller === workflowController &&
+				!controller.signal.aborted &&
+				currentSessionManager === sessionManager &&
+				additionalCheck(),
+		};
+	}
 }
 
 function latestCustomEntryIndex(entries: unknown[], customType: string) {
@@ -232,4 +284,19 @@ function latestCustomEntryIndex(entries: unknown[], customType: string) {
 function reportWorkflowError(message: string, ctx: ExtensionCommandContext) {
 	if (ctx.mode === "print" || ctx.mode === "json") throw new Error(message);
 	ctx.ui.notify(message, "warning");
+}
+
+function cachedModuleLoader<Module>(load: () => Promise<Module>): () => Promise<Module> {
+	let pending: Promise<Module> | undefined;
+	return () => {
+		if (!pending) {
+			pending = Promise.resolve()
+				.then(load)
+				.catch((error) => {
+					pending = undefined;
+					throw error;
+				});
+		}
+		return pending;
+	};
 }

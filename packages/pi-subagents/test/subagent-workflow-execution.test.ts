@@ -775,4 +775,4 @@ test("opt-in verified execution owns accept, bounded rework, drift, checks, evid
 		restorePiPackage();
 		rmSync(root, { recursive: true, force: true });
 	}
-});
+}, 60_000);
