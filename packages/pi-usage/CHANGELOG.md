@@ -1,5 +1,11 @@
 # @narumitw/pi-usage
 
+## 0.51.0
+
+### Minor Changes
+
+- e71cf31: Add persistent OpenAI Codex Fast routing with a `/fast` shortcut, a contextual `/usage` toggle, explicit usage guidance, and effective statusline labeling.
+
 ## 0.50.0
 
 ### Minor Changes
