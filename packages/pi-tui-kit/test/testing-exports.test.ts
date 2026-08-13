@@ -11,7 +11,7 @@ test("built package roots resolve separate production and testing exports", asyn
 	const testingSpecifier = "@narumitw/pi-tui-kit/testing";
 	const production = await import(productionSpecifier);
 	const testing = await import(testingSpecifier);
-	assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 11);
+	assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 12);
 	assert.equal(typeof production.sanitizeTerminalText, "function");
 	assert.equal(typeof production.formatInteractionHints, "function");
 	assert.equal(typeof production.runConfirmation, "function");
@@ -27,13 +27,14 @@ test("built package roots resolve separate production and testing exports", asyn
 	t.onTestFinished(() => rmSync(fixture, { recursive: true, force: true }));
 	writeFileSync(
 		path.join(fixture, "usage.ts"),
-		`import { PI_EXTENSION_MENU_API_VERSION, type BrowseDetailDocument, type LiveChoiceItem, type MenuBrowseItem } from "@narumitw/pi-tui-kit";\n` +
+		`import { PI_EXTENSION_MENU_API_VERSION, type BrowseDetailDocument, type ChoiceScreen, type LiveChoiceItem, type MenuBrowseItem } from "@narumitw/pi-tui-kit";\n` +
 			`import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";\n` +
-			`const version: 11 = PI_EXTENSION_MENU_API_VERSION;\n` +
+			`const version: 12 = PI_EXTENSION_MENU_API_VERSION;\n` +
 			`const document: BrowseDetailDocument = { content: "  exact", format: { kind: "text" } };\n` +
 			`const item: MenuBrowseItem = { id: "one", label: "One", detailDocument: document };\n` +
 			`const choice: LiveChoiceItem = { id: "active", label: "Active", confirmationDisabled: true, confirmationDisabledReason: "Already active" };\n` +
-			`void version;\nvoid item;\nvoid choice;\nvoid createTuiHarness();\nvoid createRpcHarness([]);\n`,
+			`const screen: ChoiceScreen<"select"> = { kind: "choice", title: "Records", enableSearch: true, items: [{ id: "one", label: "One", searchText: "alias" }], action: "select" };\n` +
+			`void version;\nvoid item;\nvoid choice;\nvoid screen;\nvoid createTuiHarness();\nvoid createRpcHarness([]);\n`,
 	);
 	writeFileSync(
 		path.join(fixture, "tsconfig.json"),

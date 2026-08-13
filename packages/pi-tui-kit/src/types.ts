@@ -76,6 +76,8 @@ export interface DetailScreen {
 export interface MenuChoiceItem extends MenuItemBase {
 	details?: readonly string[];
 	disabledReason?: string;
+	/** Additional non-rendered text used by optional TUI fuzzy search. */
+	searchText?: string;
 }
 
 export interface ChoiceScreen<ActionId extends string> {
@@ -86,6 +88,8 @@ export interface ChoiceScreen<ActionId extends string> {
 	action: ActionId;
 	currentItemId?: string;
 	initialItemId?: string;
+	/** Enables TUI-only fuzzy filtering while RPC keeps one deterministic unfiltered list. */
+	enableSearch?: boolean;
 	viewportSize?: number;
 	hint?: "back" | "close";
 }
