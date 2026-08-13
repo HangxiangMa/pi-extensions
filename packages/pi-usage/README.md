@@ -2,13 +2,14 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-usage)](https://www.npmjs.com/package/@narumitw/pi-usage) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-usage` is a native [Pi coding agent](https://pi.dev) extension that adds one interactive `/usage` command for reading usage from the account Pi is actually using. It supports OpenAI Codex ChatGPT subscription windows, GitHub Copilot allowances, and OpenRouter API-key spend limits without pretending those limits have the same semantics.
+`@narumitw/pi-usage` is a native [Pi coding agent](https://pi.dev) extension that adds an interactive `/usage` command for reading usage from the account Pi is actually using and a `/fast` shortcut for supported OpenAI Codex models. It supports Codex ChatGPT subscription windows, GitHub Copilot allowances, and OpenRouter API-key spend limits without pretending those limits have the same semantics.
 
 ## ✨ Features
 
 - Opens one interactive `/usage` menu with current state and next actions.
 - Automatically queries the selected model provider and active runtime account.
 - Supports OpenAI Codex subscription windows, resets, credits, and model-specific buckets.
+- Toggles persistent Codex Fast routing through `/fast` or the contextual `/usage` action.
 - Redeems earned Codex usage-limit resets for the active, matching Pi OAuth account with fresh availability, explicit confirmation, and idempotent retry.
 - Supports GitHub Copilot AI Credits, legacy premium requests, Free chat quota, additional usage, percentage, and reset time.
 - Supports OpenRouter per-key credit limits plus daily, weekly, monthly, and all-time spend.
@@ -52,6 +53,7 @@ with these actions:
 
 ```text
 Refresh current usage
+Turn Fast mode on/off       # Supported current Codex models only
 Redeem usage limit reset…   # Current Codex OAuth accounts only
 View another configured provider…
 View all configured providers…
@@ -73,6 +75,25 @@ same redemption request ID so the backend can treat an uncertain retry idempoten
 already-completed, not-needed, and no-credit outcomes are reported separately, then usage and the
 statusline are refreshed for the still-current account.
 
+### Codex Fast mode
+
+Run bare `/fast` to toggle Fast for the active supported Codex model, or use **Turn Fast mode on/off** in `/usage`.
+
+Fast is about 1.5× faster and uses more of your plan allowance.
+The preference defaults to Off and is saved as `codexFastMode` in Pi's user agent directory as `pi-usage.json`, normally `~/.pi/agent/pi-usage.json`.
+The extension reloads this file at every session start and does not create it until the first successful toggle.
+
+Fast currently applies only to official `openai-codex-responses` requests for `gpt-5.4`, `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna` at `https://chatgpt.com`.
+It sends `service_tier: "priority"` while enabled and explicit `service_tier: "default"` otherwise.
+The statusline adds `fast` only while the preference is effective, for example `codex fast 59% 5h`.
+Unsupported models and custom or proxy origins are left unchanged.
+
+`/fast` supports TUI and RPC mode, accepts no arguments, and rejects print or JSON mode before mutation.
+A toggle affects provider requests whose payload hook starts after the save; a request already sent is unchanged.
+Settings operations are serialized inside one Pi process, but separate Pi processes are not mutually locked.
+Unknown JSON fields are preserved, writes use a private temporary file plus rename, and a malformed or invalid file is never overwritten.
+Repair or remove an invalid file, then run `/reload` before trying the toggle again.
+
 ## 📋 Provider semantics
 
 ### OpenAI Codex
@@ -82,7 +103,7 @@ statusline are refreshed for the still-current account.
 - Source: the Codex usage and earned-reset endpoints using Pi's resolved runtime authorization
 - Displayed data: returned duration-based windows, resets, credits, earned usage-limit resets, and additional model buckets
 - Reset mutation: `POST /wham/rate-limit-reset-credits/consume` with a unique redemption request ID and, when available, the selected opaque credit ID
-- Statusline examples: `codex 59% 5h 61% wk` or `codex spark 100% 5h`
+- Statusline examples: `codex 59% 5h 61% wk`, `codex fast 59% 5h`, or `codex spark 100% 5h`
 
 The statusline selects a returned bucket that matches the current Codex model when one is available. Unlike `pi-codex-usage`, this successor intentionally has no Codex CLI fallback because the CLI may be logged into a different account than Pi's active runtime account.
 
@@ -138,7 +159,7 @@ Remove the deprecated package rather than loading both usage extensions together
 
 Behavior changes:
 
-- Use `/usage` as the only entry point; `/codex-status` is no longer registered.
+- Use `/usage` for usage management; `/codex-status` is no longer registered.
 - Refresh and cross-provider operations are menu actions rather than flags.
 - Codex CLI fallback is removed to preserve active-runtime-account correctness.
 - The status key changes from `codex-usage` to `usage`.
@@ -153,6 +174,8 @@ Behavior changes:
 - OpenRouter successful inference responses do not expose proactive request-rate counters; `/usage` reports the documented per-key credit/spend fields instead.
 - A provider may not return a safe human-readable account identity. In that case the provider and runtime credential state remain visible without exposing secrets.
 - Immediate account-change events are not available from Pi; auth is re-resolved before commands, turns, and scheduled refreshes.
+- Fast model support is intentionally conservative and may require an extension update when Codex adds or removes service tiers.
+- Another later-loaded extension can replace the final provider payload, so arbitrary third-party payload-rewrite conflicts cannot be prevented.
 
 ## 🗂️ Package layout
 
@@ -160,7 +183,11 @@ Behavior changes:
 packages/pi-usage/
 ├── src/
 │   ├── index.ts       # Pi package entrypoint and helper export barrel
-│   ├── usage.ts       # Menu, cache, and lifecycle orchestration
+│   ├── usage.ts       # Menu, cache, and usage lifecycle orchestration
+│   ├── codex-fast.ts  # Fast eligibility, request tier, and cost correction
+│   ├── codex-fast-runtime.ts # Fast command, persistence lifecycle, and request hooks
+│   ├── settings.ts    # Validated user settings and atomic persistence
+│   ├── usage-helpers.ts # Small orchestration helpers
 │   ├── query.ts       # Runtime auth resolution and bounded provider queries
 │   ├── codex-resets.ts # Codex reset auth, API contracts, and normalization
 │   ├── format.ts      # Provider-aware notifications and statusline text

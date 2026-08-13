@@ -56,14 +56,18 @@ function usageFetch(input: string | URL | Request): Promise<Response> {
 	);
 }
 
-test("pi-usage registers only its primary command and lifecycle hooks", () => {
+test("pi-usage registers its usage and Fast commands with lifecycle hooks", () => {
 	const mock = createMockPi();
 	usageExtension(mock.pi);
 
 	assert.ok(mock.commands.has("usage"));
+	assert.ok(mock.commands.has("fast"));
 	assert.equal(mock.commands.has("codex-status"), false);
 	assert.equal(mock.commands.get("usage")?.getArgumentCompletions, undefined);
+	assert.equal(mock.commands.get("fast")?.getArgumentCompletions, undefined);
 	assert.deepEqual([...mock.events.keys()].sort(), [
+		"before_provider_request",
+		"message_end",
 		"model_select",
 		"session_shutdown",
 		"session_start",

@@ -4,6 +4,7 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { FAST_USAGE_WARNING, registerCodexFastMode } from "./codex-fast-runtime.js";
 import {
 	type CodexResetAvailability,
 	type CodexResetOption,
@@ -19,22 +20,15 @@ import {
 	resetOptionExpiration,
 	resolveCodexResetAuth,
 } from "./codex-resets.js";
-import {
-	awaitWithDeadline,
-	errorMessage,
-	runWithConcurrency,
-	sanitizeDisplayText,
-	UsageCache,
-} from "./core.js";
+import { awaitWithDeadline, errorMessage, runWithConcurrency, UsageCache } from "./core.js";
 import { formatProviderStates, formatUsageStatusline } from "./format.js";
 import {
 	adapterForProvider,
 	isStaleExtensionContextError,
-	providerIsConfigured,
 	queryProviderUsage,
 	resolveUsageAuth,
-	SUPPORTED_ADAPTERS,
 } from "./query.js";
+import { createUsageSettingsRuntime, type UsageSettingsRuntime } from "./settings.js";
 import type {
 	PiModel,
 	ProviderUsageState,
@@ -42,6 +36,14 @@ import type {
 	UsageDisplayState,
 	UsageProviderAdapter,
 } from "./types.js";
+import {
+	configuredAdapters,
+	isAbortError,
+	isTimeoutError,
+	modelIdentity,
+	providerDisplayName,
+	setBoundedMap,
+} from "./usage-helpers.js";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -59,6 +61,7 @@ const REDEEM_CODEX_RESET = "Redeem usage limit reset…";
 type UsageExtensionDependencies = {
 	credentialReader?: (providerId: string) => unknown;
 	createRedemptionId?: () => string;
+	settingsRuntime?: UsageSettingsRuntime;
 };
 
 type QueryOutcome = {
@@ -78,6 +81,7 @@ export default function usageExtension(
 ) {
 	const credentialReader = dependencies.credentialReader;
 	const createRedemptionId = dependencies.createRedemptionId ?? randomUUID;
+	const settingsRuntime = dependencies.settingsRuntime ?? createUsageSettingsRuntime();
 	const cache = new UsageCache(CACHE_TTL_MS);
 	const failureBackoff = new Map<string, { until: number; message: string }>();
 	const latestQueries = new Map<string, number>();
@@ -88,6 +92,7 @@ export default function usageExtension(
 	let statusGeneration = 0;
 	let statusRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 	let statusController: AbortController | undefined;
+	let fastRuntime: ReturnType<typeof registerCodexFastMode>;
 
 	const clearStatusTimer = () => {
 		if (statusRefreshTimer) clearTimeout(statusRefreshTimer);
@@ -145,7 +150,8 @@ export default function usageExtension(
 			}
 			return;
 		}
-		const value = formatUsageStatusline(outcome.state.report, model);
+		const rawValue = formatUsageStatusline(outcome.state.report, model);
+		const value = rawValue ? fastRuntime.decorateStatus(model, rawValue) : undefined;
 		if (!safeSetStatus(ctx, value)) return;
 		if (shouldSchedule && sessionActive) scheduleStatusRefresh(ctx, model);
 	};
@@ -497,6 +503,7 @@ export default function usageExtension(
 			publishStableCurrent(ctx, stableCurrent);
 			let current = stableCurrent.outcome;
 			let visibleStates: ProviderUsageState[] = [current.state];
+			let fastState = settingsRuntime.get();
 			let resetAvailability: CodexResetAvailability | undefined;
 			let selectedReset: CodexResetOption | undefined;
 			let resetAuthFingerprint: string | undefined;
@@ -515,6 +522,7 @@ export default function usageExtension(
 				| "reset-error";
 			type Action =
 				| "refresh"
+				| "toggle-fast"
 				| "another"
 				| "all"
 				| "provider"
@@ -527,29 +535,54 @@ export default function usageExtension(
 			const menu = defineMenu<undefined, Screen, Action, ExtensionCommandContext>({
 				start: "main",
 				screens: {
-					main: () => ({
-						kind: "actions",
-						title: "Provider usage",
-						lines: formatProviderStates(visibleStates).split("\n"),
-						items: [
-							{ id: "refresh", label: REFRESH_CURRENT, action: "refresh" },
-							...(current.state.status === "ready" && current.state.providerId === "openai-codex"
-								? [
-										{
-											id: "open-resets",
-											label: REDEEM_CODEX_RESET,
-											description: codexResetActionDescription(current.state.report),
-											disabled: codexResetCount(current.state.report) === 0,
-											action: "open-resets" as const,
-										},
-									]
-								: []),
-							{ id: "another", label: VIEW_ANOTHER, action: "another" },
-							{ id: "all", label: VIEW_ALL, action: "all" },
-							{ id: "close", label: CLOSE, close: true },
-						],
-						hint: "close",
-					}),
+					main: () => {
+						const fastAvailability = fastRuntime.availability(ctx.model);
+						const fastLines =
+							fastAvailability.kind === "available"
+								? [`Fast mode: ${fastAvailability.enabled ? "On" : "Off"}`, FAST_USAGE_WARNING]
+								: fastAvailability.kind === "unavailable"
+									? [`Fast mode: Unavailable · ${fastAvailability.reason}`]
+									: [];
+						return {
+							kind: "actions",
+							title: "Provider usage",
+							lines: [...formatProviderStates(visibleStates).split("\n"), ...fastLines],
+							items: [
+								{ id: "refresh", label: REFRESH_CURRENT, action: "refresh" },
+								...(fastAvailability.kind === "available"
+									? [
+											{
+												id: "toggle-fast",
+												label: fastAvailability.enabled
+													? "Turn Fast mode off"
+													: "Turn Fast mode on",
+												description:
+													fastState.kind === "invalid"
+														? "Repair pi-usage.json and reload before changing Fast mode."
+														: FAST_USAGE_WARNING,
+												disabled: fastState.kind === "invalid",
+												action: "toggle-fast" as const,
+											},
+										]
+									: []),
+								...(current.state.status === "ready" && current.state.providerId === "openai-codex"
+									? [
+											{
+												id: "open-resets",
+												label: REDEEM_CODEX_RESET,
+												description: codexResetActionDescription(current.state.report),
+												disabled: codexResetCount(current.state.report) === 0,
+												action: "open-resets" as const,
+											},
+										]
+									: []),
+								{ id: "another", label: VIEW_ANOTHER, action: "another" },
+								{ id: "all", label: VIEW_ALL, action: "all" },
+								{ id: "close", label: CLOSE, close: true },
+							],
+							hint: "close",
+						};
+					},
 					providers: () => ({
 						kind: "actions",
 						title: "Select a configured provider",
@@ -621,6 +654,16 @@ export default function usageExtension(
 					}),
 				},
 				actions: {
+					"toggle-fast": async () => {
+						const availability = fastRuntime.availability(ctx.model);
+						if (availability.kind !== "available" || fastState.kind === "invalid") {
+							return { kind: "rejected" };
+						}
+						const changed = await fastRuntime.toggle(ctx, !availability.enabled, controller.signal);
+						if (!changed) return { kind: "rejected" };
+						fastState = settingsRuntime.get();
+						return { kind: "stay" };
+					},
 					"open-resets": async () => {
 						const summaryCount =
 							current.state.status === "ready" && current.state.providerId === "openai-codex"
@@ -891,24 +934,24 @@ export default function usageExtension(
 		}
 	};
 
-	const commandHandler = async (args: string, ctx: ExtensionCommandContext) => {
-		if (args.trim()) {
-			ctx.ui.notify("/usage does not accept arguments; choose an action from its menu.", "warning");
-			return;
-		}
-		try {
-			await showMenu(ctx);
-		} catch (error) {
-			if (isStaleExtensionContextError(error) || isAbortError(error)) return;
-			throw error;
-		}
-	};
-
 	pi.registerCommand("usage", {
 		description: "Show usage for the current runtime account",
-		handler: commandHandler,
+		handler: async (args, ctx) => {
+			if (args.trim()) {
+				ctx.ui.notify(
+					"/usage does not accept arguments; choose an action from its menu.",
+					"warning",
+				);
+				return;
+			}
+			try {
+				await showMenu(ctx);
+			} catch (error) {
+				if (isStaleExtensionContextError(error) || isAbortError(error)) return;
+				throw error;
+			}
+		},
 	});
-
 	pi.on("session_start", (_event, ctx) => {
 		statusGeneration += 1;
 		clearStatusTimer();
@@ -940,40 +983,8 @@ export default function usageExtension(
 		activeCurrentIdentity = undefined;
 		safeSetStatus(ctx, undefined);
 	});
-}
 
-function configuredAdapters(ctx: ExtensionContext): UsageProviderAdapter[] {
-	return SUPPORTED_ADAPTERS.filter(
-		(adapter) => adapter.id === ctx.model?.provider || providerIsConfigured(ctx, adapter.id),
+	fastRuntime = registerCodexFastMode(pi, settingsRuntime, (ctx) =>
+		startStatusRefresh(ctx, ctx.model, false),
 	);
-}
-
-function providerDisplayName(ctx: ExtensionContext, providerId: string): string {
-	try {
-		return sanitizeDisplayText(ctx.modelRegistry.getProviderDisplayName(providerId), 80);
-	} catch {
-		return sanitizeDisplayText(providerId, 80);
-	}
-}
-
-function setBoundedMap<T>(map: Map<string, T>, key: string, value: T, limit: number): void {
-	map.delete(key);
-	while (map.size >= limit) {
-		const oldest = map.keys().next().value;
-		if (oldest === undefined) break;
-		map.delete(oldest);
-	}
-	map.set(key, value);
-}
-
-function modelIdentity(model: PiModel | undefined): string | undefined {
-	return model ? `${model.provider}/${model.id}` : undefined;
-}
-
-function isAbortError(error: unknown): boolean {
-	return error instanceof Error && error.name === "AbortError";
-}
-
-function isTimeoutError(error: unknown): boolean {
-	return error instanceof Error && error.name === "TimeoutError";
 }
