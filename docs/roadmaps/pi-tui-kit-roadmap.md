@@ -331,7 +331,8 @@ abstractions when Pi provides a better stable owner.
 - [x] The additive contract returns a raw stable item ID while labels, descriptions, explicit search text, ordering, loading, and domain state remain consumer-owned.
 - [x] TUI search covers IME focus, no-match and empty states, disabled explanations, rejected retries, pasted controls, narrow widths, resize, Back, Close, owner replacement, disposal, and retained-query cursor restoration.
 - [x] RPC remains one deterministic unfiltered signal-aware selector, while print and JSON retain explicit unsupported behavior.
-- [ ] The API published independently in `@narumitw/pi-tui-kit@0.54.0`; separate BTW and Worktree proof migrations are implemented in passing PRs #748 and #749, with merge evidence pending.
+- [x] The API published independently in `@narumitw/pi-tui-kit@0.54.0` before either proof consumer changed its compatibility floor.
+- [ ] Separate BTW and Worktree proof migrations are implemented in passing PRs #748 and #749, with merge evidence pending.
 
 **Outcome:** Extensions can confirm searchable in-memory or domain-owned records without importing Pi session, filesystem, scope, delete, tree, or persistence semantics.
 
