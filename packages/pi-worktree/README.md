@@ -54,8 +54,8 @@ Choose one action:
 
 - **Worktree status** — browse a local snapshot for every registered worktree without fetching remotes.
 - **Add worktree** — enter a branch, optional start point, and optional path; review exact base provenance, confirm creation, and optionally switch.
-- **Switch worktree** — select another existing worktree and continue this Pi conversation there.
-- **Remove worktree** — remove a linked worktree without deleting its branch; ignored-only data is listed for explicit confirmation.
+- **Switch worktree** — search for another existing worktree by displayed path, branch, or HEAD and continue this Pi conversation there.
+- **Remove worktree** — search for a linked worktree by displayed path, branch, or HEAD, then remove it without deleting its branch; ignored-only data is listed for explicit confirmation.
 - **Prune stale metadata** — inspect Git's dry-run output, then optionally run the matching prune.
 - **Configure worktree root** — set a machine-local default root or submit a blank value to restore `~/.worktrees`.
 
@@ -63,7 +63,7 @@ The standard root menu shows the registered count, current path, effective workt
 and any settings warning. Escape closes it. `/worktree` intentionally does not accept text
 subcommands or expose argument autocomplete. Every change is initiated and confirmed through TUI or
 RPC dialogs; print and JSON modes reject the command observably. Operation-specific branch/path
-inputs, worktree identity selectors, preflight previews, and destructive confirmations remain
+inputs, searchable worktree identity selectors, preflight previews, and destructive confirmations remain
 extension-owned because they carry Git safety and commit-aware revalidation.
 
 The status browser runs only when selected and has no watcher, timer, persistent cache, or network
