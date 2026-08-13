@@ -87,28 +87,36 @@ smoke-chat-network:
 benchmark-subagents samples="7":
     node scripts/benchmark-pi-subagents-transports.mjs --samples {{ quote(samples) }}
 
-# Start Pi with the commonly used extensions loaded from this working tree
-# PI_TIMING reports startup timing for local extension development
+# Install dependencies and start Pi with every local extension package
+# pi-statusline and pi-tui-kit are intentionally excluded
+# PI_TIMING reports startup timing and PI_CODING_AGENT_DIR isolates local development state
 dev:
-    PI_TIMING=1 pi -ns -ne \
+    npm install
+    PI_TIMING=1 PI_CODING_AGENT_DIR=./.pi/agent pi \
         -e ./packages/pi-accounts \
+        -e ./packages/pi-analytics \
         -e ./packages/pi-btw \
         -e ./packages/pi-caffeinate \
+        -e ./packages/pi-chat \
         -e ./packages/pi-chrome-devtools \
-        -e ./packages/pi-github-pr \
-        -e ./packages/pi-goal \
-        -e ./packages/pi-plan-mode \
+        -e ./packages/pi-codex-compact \
+        -e ./packages/pi-file-context \
         -e ./packages/pi-firecrawl \
-        -e ./packages/pi-sync \
-        -e ./packages/pi-usage \
-        -e ./packages/pi-worktree \
+        -e ./packages/pi-fleet \
+        -e ./packages/pi-github-pr \
+        -e ./packages/pi-image-drop \
+        -e ./packages/pi-langfuse \
+        -e ./packages/pi-lsp \
+        -e ./packages/pi-recall \
         -e ./packages/pi-stamp \
         -e ./packages/pi-starship \
-        -e ./packages/pi-codex-compact
-
-# Start a fresh Pi session with every local extension package loaded
-try-all:
-    shopt -s nullglob; args=(); for package_json in ./packages/pi-*/package.json; do if node -e 'const p = require(process.argv[1]); process.exit(p.pi?.extensions ? 0 : 1)' "$package_json"; then args+=(-e "$(dirname "$package_json")"); fi; done; pi -ne "${args[@]}"
+        -e ./packages/pi-subagents \
+        -e ./packages/pi-sync \
+        -e ./packages/pi-tool \
+        -e ./packages/pi-usage \
+        -e ./packages/pi-webui \
+        -e ./packages/pi-workflow \
+        -e ./packages/pi-worktree
 
 # Install a package through pi, falling back to the local workspace if unpublished
 # Usage: just install subagents
