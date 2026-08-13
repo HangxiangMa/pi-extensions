@@ -58,65 +58,73 @@ If a migrated consumer exposes a compatibility problem, restore its local saniti
 
 No persisted data migration or rollback is required because sanitization occurs only at the display boundary.
 
+## Evidence
+
+- PR #743 added `sanitizeTerminalText()` after red-first package tests and review feedback coverage for generic ESC grammar and astral Unicode.
+- PR #744 integrated the sanitizer with API 12 before the combined Kit release.
+- The `@narumitw/pi-tui-kit@0.54.0` registry package exposes API 12 plus runtime and declaration exports; its 61-file tarball and clean installation were inspected.
+- Statusline PR #746 and Starship PR #747 raise only their own Kit floors, delete their duplicate parser modules, preserve raw values, and have passing CI.
+- Deterministic formatter tests cover model IDs, symbols, paths, CSI, OSC, DCS, APC, Unicode separators, bidi controls, width behavior, and adjacent text.
+
 ## Plan
 
 ### Phase 1: Contract qualification
 
-- [ ] Inventory every call site and focused test for the Statusline and Starship duplicate sanitizer; record whether each value is a path, model ID, symbol, metadata value, or already-formatted line.
-- [ ] Compare the duplicate policy with Pi TUI root exports, Node's terminal-control utilities, and Pi TUI Kit's internal text functions; select an existing public owner if and only if its exact behavior and compatibility floor match.
-- [ ] Build a behavior matrix covering printable Unicode, combining marks, emoji, tabs, CR, LF, C0 and C1 controls, CSI, OSC, DCS, APC, ST and BEL terminators, unterminated sequences, Unicode separators, bidi controls, and adjacent safe text.
-- [ ] Run the matrix against both duplicate implementations and their real formatting call sites; record every current difference or missing test before choosing a public contract.
-- [ ] Decide whether one single-line function is sufficient, choose its stable name and replacement policy, and record a finite no-go instead of adding an API if the two consumers do not share the same required behavior.
-- [ ] Map the selected contract to terminal-safety, width, package, Changeset, and release MUST rules from `docs/extension-conventions.md` and identify focused verification for each rule.
+- [x] Inventory every Statusline and Starship sanitizer call site as path, model ID, symbol, or formatted display metadata.
+- [x] Compare the duplicate policy with Pi TUI, Node, and Kit text owners; no existing public owner matched the required complete-sequence and single-line policy.
+- [x] Build a behavior matrix for printable Unicode, combining marks, emoji, line controls, C0/C1, CSI, OSC, DCS, APC, terminators, unterminated sequences, separators, bidi controls, and adjacent text.
+- [x] Run the matrix against the duplicate implementations and real formatting boundaries; red-first consumer tests recorded the previously unsupported DCS/APC and bidi cases.
+- [x] Select one single-line `sanitizeTerminalText()` display-only function with line separators converted to spaces and all other covered controls removed.
+- [x] Map the contract to the terminal-safety, width, package, Changeset, and release MUST rules in `docs/extension-conventions.md`.
 
 ### Phase 2: Kit-only API
 
-- [ ] Add failing package-root type and runtime tests for the qualified sanitizer contract, including malicious complete and unterminated terminal sequences and printable Unicode preservation.
-- [ ] Add failing width-boundary composition tests proving sanitized output remains safe when consumers subsequently use Pi TUI cell-aware truncation.
-- [ ] Implement the smallest stateless sanitizer in a descriptive Pi TUI Kit module and export only the qualified function and required type, if any, from `packages/pi-tui-kit/src/index.ts`.
-- [ ] Reuse the new function internally only where exact existing Kit behavior is characterized as compatible; leave `safeMenuText()` and exact-document formatting unchanged where whitespace or multiline semantics differ.
-- [ ] Make an explicit compatibility-literal decision for `PI_EXTENSION_MENU_API_VERSION`; do not increment a menu-definition marker mechanically for an unrelated utility export.
-- [ ] Update the Kit README with the display-only trust boundary, examples, exclusions, and guidance to keep raw IDs and payloads separate.
-- [ ] Add a Kit-only minor Changeset and verify that no consumer source or dependency floor uses the unpublished export.
-- [ ] Run the complete Kit tests and check, the runtime import benchmark, `npm run check:boundaries`, `npm run check`, `git diff --check`, and `just pack tui-kit` sequentially; inspect root runtime and declaration exports in the tarball.
-- [ ] Audit the final Kit diff for escape-parser bounds, malformed input, memory behavior on large strings, zero private imports, and unchanged existing menu rendering.
+- [x] Add red-first package-root runtime and declaration tests for complete, unterminated, malformed, and printable Unicode input.
+- [x] Add a cell-aware truncation composition test.
+- [x] Implement and export one stateless sanitizer from `packages/pi-tui-kit/src/terminal-text.ts` and the package root.
+- [x] Keep incompatible `safeMenuText()` and exact-document formatting behavior unchanged.
+- [x] Keep the menu API marker at 11 in the sanitizer-only PR because the utility did not change menu definitions; the separate searchable-choice PR advanced it to 12.
+- [x] Document the display-only trust boundary, exclusions, raw-payload rule, and cell-aware layout composition.
+- [x] Add a Kit-only minor Changeset without consumer adoption in the API PR.
+- [x] Pass Kit checks, runtime benchmark, boundaries, root gate, diff check, and package dry-run; inspect runtime and declaration exports.
+- [x] Audit parser bounds, generic ESC grammar, malformed astral input, linear memory behavior, private imports, and unchanged menu rendering.
 
 ### Release gate
 
-- [ ] Obtain explicit user approval before performing any publication, tag, visibility, or release-workflow action.
-- [ ] Verify the approved Kit release with `npm view`, registry tarball inspection, and a clean temporary installation that imports the sanitizer from runtime JavaScript and declarations.
-- [ ] Record the registry-visible compatibility floor before changing either consumer manifest.
+- [x] The user chose to perform the merge and publication themselves before consumer implementation continued.
+- [x] Verify `@narumitw/pi-tui-kit@0.54.0` with `npm view`, its 61-file registry tarball, runtime import, and clean NodeNext declaration compilation.
+- [x] Record `0.54.0` as the registry-visible compatibility floor before either consumer manifest changed.
 
 ### Phase 3: Statusline consumer
 
-- [ ] Create a Statusline-only branch from then-current `origin/main`, add characterization tests for every real call-site class, and verify the existing package baseline.
-- [ ] Raise only Statusline's Kit floor to the registry-verified release, refresh the root lockfile, and prove the consumer scope resolves the intended version before typechecking.
-- [ ] Replace the local sanitizer with the published Kit export while preserving model, symbol, directory, path fallback, width, and terminal-control presentation.
-- [ ] Delete only the superseded local module and imports, and retain raw path and model values for all non-display behavior.
-- [ ] Add the appropriate Statusline Changeset, then run focused tests, the package check, dependency-resolution verification, `npm run check:boundaries`, `npm run check`, `git diff --check`, and `just pack statusline`.
-- [ ] Exercise a practical local Pi footer smoke with malicious model or path display text when possible and record any unverified provider-controlled path.
+- [x] Create the Statusline-only branch `refactor/pi-statusline-terminal-sanitizer` from current `origin/main` and add red-first real-boundary model, symbol, and path tests.
+- [x] Raise only Statusline's Kit floor to `^0.54.0`, refresh the lockfile, and verify the workspace resolves `0.54.0`.
+- [x] Replace the local sanitizer with the published export while preserving model, symbol, directory, fallback, width, and existing CSI/OSC behavior.
+- [x] Delete only `src/terminal.ts` and retain raw path and model values outside display formatting.
+- [x] Add a patch Changeset and pass focused tests, package check, root gate, diff check, dependency verification, and the 28-file package dry-run; PR #746 CI passes.
+- [ ] Exercise a live malicious provider-model or cwd footer smoke; deterministic renderer coverage passed, but selecting an external provider-controlled model was not practical.
 
 ### Phase 4: Starship consumer
 
-- [ ] Create a Starship-only branch from then-current `origin/main`, add characterization tests for every model and directory call-site class, and verify the existing package baseline.
-- [ ] Raise only Starship's Kit floor when its current range does not already include the registry-verified release, refresh the lockfile if needed, and prove resolved compatibility before typechecking.
-- [ ] Replace the duplicate module with the published Kit export while preserving contracted paths, repository-relative paths, full-path metadata, model symbols, width, and terminal-control presentation.
-- [ ] Delete only the superseded local module and imports, and retain raw values for filesystem, settings, template, and action behavior.
-- [ ] Add the appropriate Starship Changeset, then run focused tests, the package check, dependency-resolution verification, `npm run check:boundaries`, `npm run check`, `git diff --check`, and `just pack starship`.
-- [ ] Exercise a practical local Pi Starship smoke with malicious model or path display text when possible and record any unverified provider-controlled path.
+- [x] Create the Starship-only branch `refactor/pi-starship-terminal-sanitizer` from current `origin/main` and add red-first real-boundary model, symbol, and directory tests.
+- [x] Raise only Starship's Kit floor to `^0.54.0`, refresh the lockfile, and verify the workspace resolves `0.54.0`.
+- [x] Replace the duplicate module with the published export while preserving contracted and repository paths, full-path metadata, model symbols, width, and existing CSI/OSC behavior.
+- [x] Delete only `src/modules/terminal.ts` and retain raw filesystem, setting, template, and action values.
+- [x] Add a patch Changeset and pass focused tests, package check, root gate, diff check, dependency verification, and the 78-file package dry-run; PR #747 CI passes.
+- [ ] Exercise a live malicious provider-model or cwd Starship smoke; deterministic module coverage passed, but selecting an external provider-controlled model was not practical.
 
 ### Phase 5: Follow-up boundary
 
-- [ ] Reassess Fleet, Chat, Subagents, GitHub PR, and other sanitizer implementations against the published contract; record compatible future migrations or explicit semantic no-go reasons without widening the API.
-- [ ] Update the roadmap decision record with the verified API, proof consumers, release ordering, retained specialized policies, and any accepted compatibility change.
-- [ ] Complete a final cross-package audit proving that sanitization remains at display boundaries and no raw identity, persistence, path, URL, or domain behavior changed.
+- [x] Reassess Fleet, Chat, Subagents, GitHub PR, and other sanitizer owners; their multiline, replacement, redaction, limits, or hyperlink semantics remain package-owned.
+- [x] Update the roadmap with API 12, release ordering, open proof migrations, and retained specialized policies.
+- [x] Audit both consumer diffs: sanitization stays at display boundaries and raw identity, persistence, paths, URLs, settings, templates, and actions remain unchanged.
 
 ## Completion Checklist
 
-- [ ] One exact terminal display policy is qualified by at least two compatible consumers or the proposal ends with a finite no-go.
-- [ ] Any new Kit export is additive, documented, terminal-safe, independently published, registry-verified, and covered through runtime plus declaration tests.
-- [ ] Statusline and Starship adopt only a published compatible API and preserve their user-visible output contract or document an explicitly approved change.
-- [ ] Incompatible multiline, redaction, byte-bound, path, and hyperlink policies remain package-owned.
-- [ ] Every package change has focused tests, semantic audit evidence, package checks, root gates, and inspected tarballs.
-- [ ] No publication or release workflow occurs without explicit user approval.
-- [ ] The plan is archived only after all accepted implementation, release, and consumer tasks have evidence.
+- [x] One exact display policy is qualified by Statusline and Starship.
+- [x] The Kit export is additive, documented, terminal-safe, independently published, registry-verified, and covered through runtime plus declarations.
+- [ ] Statusline and Starship migration PRs pass but remain unmerged, so repository adoption is not yet complete.
+- [x] Incompatible multiline, redaction, byte-bound, path, and hyperlink policies remain package-owned.
+- [x] Every package change has focused tests, semantic audits, package checks, root gates, and inspected tarballs.
+- [x] Publication occurred through the user's explicitly chosen merge-and-publish path.
+- [ ] Archive this plan only after PRs #746 and #747 merge or otherwise receive a final disposition and the unavailable live-smoke paths are accepted.

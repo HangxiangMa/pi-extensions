@@ -77,72 +77,83 @@ If post-release evidence rejects the UX, stop further adoption and record the AP
 
 No persisted data migration is involved because query and selection presentation remain interaction-local.
 
+## Evidence
+
+- PR #744 added optional `enableSearch` and `searchText` to API 12 after red-first TUI/RPC tests and review feedback coverage for retained-query cursor restoration.
+- The `@narumitw/pi-tui-kit@0.54.0` registry package exposes API 12 and compiles a searchable-choice fixture from a clean NodeNext installation.
+- BTW Resume is newest-first in-memory data with first-question labels, question-count descriptions, possible duplicate titles, and raw thread IDs.
+- Worktree Switch and Remove share a variable Git-owned list with displayed path/state labels, explicit path/branch/HEAD search metadata, raw path IDs, and mandatory post-selection identity revalidation.
+- BTW PR #748 and Worktree PR #749 have passing focused tests, package checks, root gates, package dry-runs, and CI.
+
 ## Plan
 
 ### Phase 1: Consumer qualification
 
-- [ ] Measure and document the current BTW Resume list shape, ordering, labels, duplicate-title behavior, interaction frequency evidence if available, and failure cost; do not infer a search need from list capability alone.
-- [ ] Inventory standard `choice` screens with variable user-owned rows in Worktree, Recall, Chat, Analytics, Fleet, and File Context; identify candidates whose only missing behavior is local search and stable-ID confirmation.
-- [ ] Select at least one independent second consumer with an evidence-backed search job, or record a finite no-go and stop before changing the Kit.
-- [ ] Build a shared behavior matrix for both proof consumers covering initial ordering, raw ID, labels, descriptions, explicit search metadata, duplicate labels, disabled rows, details, empty data, Back, Close, stale owner, action rejection, RPC, and unsupported modes.
-- [ ] Verify that neither proof consumer requires scope changes, delete actions, live previews, persistence, domain loading, action rows, or a different cancellation contract.
-- [ ] Capture focused pre-change tests and map the proposal to TUI, IME, terminal-safety, lifecycle, package, Changeset, release, and consumer-mode MUST rules from `docs/extension-conventions.md`.
+- [x] Document BTW Resume ordering, first-question labels, counts, duplicate-title behavior, in-memory lifetime, and the cost of selecting the wrong raw thread.
+- [x] Inventory variable standard choices and select Worktree identity selection as an independent compatible consumer.
+- [x] Verify both consumers need only local search plus stable-ID confirmation; scope, delete, preview, persistence, loading, and domain actions remain outside the Kit.
+- [x] Build and test the shared matrix for ordering, raw ID, labels, descriptions, explicit metadata, duplicates, disabled and empty states, exits, stale ownership, rejection, RPC, and unsupported modes.
+- [x] Preserve BTW session-owned thread state and Worktree Git inventory, identity revalidation, destructive confirmation, and session switching.
+- [x] Map the contract to TUI, IME, terminal-safety, lifecycle, package, Changeset, release, and consumer-mode MUST rules.
 
 ### Phase 2: UX and public contract approval
 
-- [ ] Produce focused component examples for empty query, matches, no match, disabled match, duplicate sanitized labels, narrow width, and selected details using current Pi theme and injected keybindings.
-- [ ] Decide whether matching preserves source ordering or uses the existing Kit fuzzy ranking, and document the choice with both consumers' ordering requirements.
-- [ ] Decide the exact search corpus from sanitized label, description, and explicit `searchText`, and prove details plus raw IDs remain excluded unless intentionally copied into safe metadata.
-- [ ] Confirm the additive `enableSearch` and `searchText` shape or record why a different minimal contract is required; do not add a new screen kind without a separate approved architecture decision.
-- [ ] Obtain explicit user approval of the substantial cross-consumer interaction proposal before editing production UI files.
+- [x] Exercise empty query, matches, no match, disabled match, duplicate labels, narrow widths, details, and injected keybindings through focused component tests.
+- [x] Use the existing Kit fuzzy ranking for non-empty queries while empty queries preserve source order.
+- [x] Search sanitized label, description, and explicit `searchText`; details and raw IDs stay excluded unless a consumer intentionally supplies safe metadata.
+- [x] Use additive `enableSearch?: boolean` and `searchText?: string` fields on the existing choice contract.
+- [x] Treat the user's active roadmap implementation objective as approval for the bounded cross-consumer interaction described in this saved plan.
 
 ### Phase 3: Kit-only implementation
 
-- [ ] Add failing public type and package-root declaration tests for optional searchable choice fields and the explicit compatibility-marker decision.
-- [ ] Add failing TUI tests for filtering, source-order or approved ranking, stable raw ID, duplicate labels, initial and current selection, query clearing, no match, disabled reasons, details, rejected retries, and empty items.
-- [ ] Add failing TUI lifecycle tests for IME focus, pasted controls, Escape Back, hinted Close, Ctrl+C Close, owner abort, `isCurrent()` failure, external disposal, resize, narrow widths, and complete frame bounds.
-- [ ] Add failing RPC tests proving one deterministic unfiltered selector, duplicate-label identity, disabled-row behavior, action rejection, signal cancellation, and unchanged non-search choices.
-- [ ] Implement optional search in the existing choice component and reuse internal search helpers only where behavior matrices prove exact compatibility.
-- [ ] Preserve raw item IDs outside rendered strings and revalidate the selected item after every filter, resize, return, and asynchronous action boundary.
-- [ ] Update the Kit README, examples, public types, API compatibility metadata when applicable, and root usage fixtures with TUI-only search and RPC degradation guidance.
-- [ ] Add a Kit-only minor Changeset and verify that no consumer source or dependency floor adopts the unpublished fields.
-- [ ] Run the complete Kit check and tests, runtime import benchmark, `npm run check:boundaries`, `npm run check`, `git diff --check`, and `just pack tui-kit` sequentially; inspect runtime and declaration exports.
-- [ ] Audit IME focus forwarding, terminal sanitization before filtering, width and row bounds, query and selection restoration, stale action continuations, component disposal, RPC identity, and unchanged ordinary choice behavior.
+- [x] Add red-first public type and package-root declaration tests and advance the compatibility marker to API 12.
+- [x] Add TUI tests for filtering, fuzzy ranking, stable raw IDs, duplicate labels, selection, query clearing, no match, disabled reasons, rejection, and empty items.
+- [x] Cover IME focus, pasted controls, Back, Close, owner abort, external disposal, narrow widths, resize, and bounded frames across searchable-choice and existing runtime suites.
+- [x] Prove RPC remains one deterministic unfiltered selector with stable duplicate-label identity and unchanged ordinary choices.
+- [x] Implement opt-in search in the existing choice component using shared fuzzy filtering without importing browse or multi-select domain semantics.
+- [x] Keep raw IDs separate and restore selection and query across filtering and rejected actions.
+- [x] Update README guidance, public types, API metadata, and root usage fixtures.
+- [x] Add a Kit-only minor Changeset without consumer adoption in the API PR.
+- [x] Pass complete Kit tests/checks, runtime benchmark, boundaries, root gate, diff check, and package dry-run; inspect runtime and declarations.
+- [x] Audit focus, terminal sanitization, bounds, retained-query cursor editing, stale/disposal behavior, RPC identity, and unchanged ordinary choices.
 
 ### Release gate
 
-- [ ] Obtain explicit user approval before publishing, tagging, changing visibility, or dispatching a release workflow.
-- [ ] Verify the approved Kit release with `npm view`, tarball inspection, and a clean temporary installation that compiles and runs a searchable-choice fixture.
-- [ ] Record the registry-visible compatibility floor before either proof consumer raises its dependency range.
+- [x] The user chose to perform the merge and publication themselves before consumer implementation continued.
+- [x] Verify `@narumitw/pi-tui-kit@0.54.0` through `npm view`, its 61-file tarball, runtime API 12 import, and a clean NodeNext searchable-choice fixture.
+- [x] Record `0.54.0` as the registry-visible compatibility floor before consumer manifests changed.
 
-### Phase 4: First proof consumer
+### Phase 4: BTW proof consumer
 
-- [ ] Create a consumer-only branch from then-current `origin/main`, raise only that package's Kit floor to the verified release, refresh the lockfile, and prove resolved compatibility before typechecking.
-- [ ] Enable search without changing raw IDs, data loading, ordering, labels, domain actions, persistence, command modes, Back, Close, or session ownership.
-- [ ] Add focused tests for the consumer's real duplicate, empty, no-match, narrow, disabled, stale, and unsupported-mode cases.
-- [ ] Add the appropriate consumer Changeset, then run focused tests, the package check, dependency-resolution verification, `npm run check:boundaries`, `npm run check`, `git diff --check`, and the package's `just pack` recipe.
-- [ ] Run a practical local Pi interaction smoke when possible and record any unverified user-data or provider path.
+- [x] Create `feat/pi-btw-searchable-resume` from current `origin/main`, raise only BTW's Kit floor to `^0.54.0`, refresh the lockfile, and verify resolution.
+- [x] Enable Resume search without changing raw thread IDs, in-memory loading, newest-first ordering, titles, counts, persistence lifetime, command modes, Back, Close, or session ownership.
+- [x] Cover no-match recovery, duplicate titles, raw-ID confirmation, narrow width, Back, Close, disposal, and the existing empty/no-Resume state.
+- [x] Add a minor Changeset and pass 35 focused tests, package check, root gate, dependency verification, diff check, the 12-file package dry-run, and PR #748 CI.
+- [ ] Run an interactive Pi Resume smoke; the deterministic public TUI harness covered the complete flow, but an interactive terminal was not opened.
 
-### Phase 5: Second proof consumer
+### Phase 5: Worktree proof consumer
 
-- [ ] Repeat the independent compatibility-floor, implementation, test, Changeset, package, root, pack, and runtime-smoke gates for the second consumer in a separate pull request.
-- [ ] Compare both final migrations against the qualification matrix and record any behavior that remained consumer-owned or prevented further convergence.
-- [ ] Remove only local search or selection code made redundant by the published contract and retain all domain loading, validation, actions, and persistence.
+- [x] Create `feat/pi-worktree-searchable-selection` from current `origin/main`, raise only Worktree's Kit floor to `^0.54.0`, refresh the lockfile, and verify resolution.
+- [x] Enable the shared Switch/Remove identity selector search over displayed labels plus explicit path, branch, and HEAD metadata while returning the raw path ID.
+- [x] Preserve Git inventory, source order, label formatting, identity revalidation, removal confirmation, mutation policy, RPC behavior, and session switching.
+- [x] Add a minor Changeset and pass 32 focused command/Git tests, package check, root gate, dependency verification, diff check, the 10-file package dry-run, and PR #749 CI.
+- [x] Fix one CI-only test ambiguity caused by fuzzy ranking by querying both path and branch terms; the production contract was unchanged and the complete root gate passed again.
+- [ ] Run an interactive Pi switch smoke; the deterministic public TUI harness covered the flow, but an interactive smoke would replace the active coding session.
 
 ### Phase 6: Completion decision
 
-- [ ] Update the roadmap with the verified API, release order, two proof migrations, UX trade-offs, retained domain boundaries, and any no-go consumers.
-- [ ] Recount ordinary searchable-choice adopters only as migration evidence, not as a target or justification for widening the API.
-- [ ] Complete a final semantic audit proving that no session, scope, delete, tree, persistence, preview, or action-bearing catalog policy entered Pi TUI Kit.
+- [x] Update the roadmap with API 12, release order, open proof migrations, fuzzy-ranking behavior, and retained domain boundaries.
+- [x] Treat BTW and Worktree only as proof evidence, not an adoption target or reason to widen the API.
+- [x] Audit the Kit and consumer diffs: no session, scope, delete, tree, persistence, preview, Git mutation, or action-bearing catalog policy entered Pi TUI Kit.
 
 ## Completion Checklist
 
-- [ ] Two independent consumers prove the same searchable single-choice need, or qualification ends before implementation with a finite no-go.
-- [ ] Search is opt-in, TUI-local, IME-safe, terminal-safe, width-bounded, and preserves stable raw identity plus exact lifecycle outcomes.
-- [ ] RPC remains deterministic and unfiltered without claiming unsupported interactive search parity.
-- [ ] Ordinary choice, browse, multi-select, and live-choice behavior remain compatible and separately owned.
-- [ ] The Kit API is independently published and registry-verified before either consumer adopts it.
-- [ ] Both proof consumers preserve domain ordering, loading, validation, actions, persistence, and session ownership.
-- [ ] Focused tests, package checks, root gates, pack inspections, semantic audits, and practical smokes are recorded.
-- [ ] No release action occurs without explicit user approval.
-- [ ] The plan is archived only after all accepted implementation, release, and consumer work is complete.
+- [x] BTW and Worktree prove the same searchable stable-ID choice need with independent domain owners.
+- [x] Search is opt-in, TUI-local, IME-safe, terminal-safe, width-bounded, and preserves raw identity plus lifecycle outcomes.
+- [x] RPC remains deterministic and unfiltered.
+- [x] Ordinary choice, browse, multi-select, and live-choice remain compatible and separately owned.
+- [x] API 12 was independently published and registry-verified before consumer adoption.
+- [x] Both proof consumers preserve domain ordering, loading, validation, actions, persistence, and session ownership.
+- [ ] Consumer PRs #748 and #749 pass but remain unmerged, and interactive smoke limitations remain recorded rather than performed.
+- [x] Publication occurred through the user's explicitly chosen merge-and-publish path.
+- [ ] Archive this plan only after both consumer PRs merge or receive a final disposition and the unavailable interactive-smoke paths are accepted.

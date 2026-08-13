@@ -1,10 +1,10 @@
 # Pi TUI Kit Roadmap
 
-- **Status:** Published API 11 and its proof migrations are complete; the next work is existing-contract convergence, terminal-display safety qualification, and evidence-gated searchable choice.
+- **Status:** Published API 12, existing-contract convergence, and the two Kit-only capabilities are complete; terminal-safety and searchable-choice proof migrations are open for review.
 - **Audience:** Pi TUI Kit maintainers and extension authors.
 - **Planning horizon:** The installed Pi 0.84.1 capability baseline; no delivery dates are committed.
-- **Repository source:** API 11 includes eight declarative screens, standalone task, confirmation, live-choice and custom-interaction lifecycles, exact browse documents, confirmation-only live-choice gating, interaction hints, and the supported `/testing` entrypoint.
-- **Published status:** The current registry release exposes API 11; every future public API must still publish independently before consumer adoption.
+- **Repository source:** API 12 includes eight declarative screens, standalone task, confirmation, live-choice and custom-interaction lifecycles, exact browse documents, confirmation-only live-choice gating, searchable choice, terminal display sanitization, interaction hints, and the supported `/testing` entrypoint.
+- **Published status:** The current registry release exposes API 12 and `sanitizeTerminalText()`; future public APIs must still publish independently before consumer adoption.
 - **Migration evidence:** Maintained package and consumer tests plus the stable pull-request references in the decision log below.
 
 ## Vision
@@ -45,13 +45,15 @@ handling.
 
 The maintained package exposes eight declarative screen kinds: `actions`, `detail`, `browse`, `choice`, `settings`, `input`, `review`, and `multiSelect`.
 
-Published API 11 also exposes:
+Published API 12 also exposes:
 
 - `runTask()` for abort-aware work with a TUI loader;
 - `runConfirmation()` for distinct Confirmed, Back, Close, Stale, Unsupported, and Error outcomes;
 - `runLiveChoice()` for initial and cursor preview callbacks, typed selection, shortcut and exit outcomes, confirmation-only gating, lifecycle draining, and deterministic ordinary RPC selection;
 - `formatInteractionHints()` for sanitized injected bindings and literal shortcuts;
-- `runCustomInteraction()` for lifecycle ownership around one extension-owned specialized component; and
+- `runCustomInteraction()` for lifecycle ownership around one extension-owned specialized component;
+- `sanitizeTerminalText()` for display-only removal of terminal and bidirectional controls;
+- optional TUI fuzzy search on declarative `choice` while RPC remains deterministic and unfiltered; and
 - a supported `/testing` subpath for semantic TUI driving and strict RPC scripts.
 
 API 10 added exact whitespace-sensitive browse detail documents through the review formatter without making document content implicitly searchable.
@@ -78,13 +80,11 @@ One-off values continue to use Pi primitives, setup and authentication remain do
 
 Public Pi `Input`, `SelectList`, `SettingsList`, `ScrollView`, overlays, statuses, widgets, footers, and editor replacement remain lower-level or host-owned capabilities that the Kit should not duplicate without a complete cross-mode lifecycle contract.
 
-The current Kit still has no searchable single-choice interaction.
+Searchable single choice is now available through opt-in `enableSearch` and explicit non-rendered `searchText`, while ordinary choice behavior remains unchanged.
 
-Declarative `choice` confirms a bounded static item without search, while `browse` searches read-only items and opens details instead of returning a selected item.
+Pi BTW Resume and Worktree identity selection qualified the same local stable-ID confirmation job without importing scope, delete, preview, persistence, or tree semantics into the Kit.
 
-Pi BTW Resume is the first concrete candidate, and Worktree, Recall, or Chat can qualify as a second proof consumer only when evidence shows the same search job without scope, delete, preview, persistence, or tree semantics.
-
-Execution is decomposed into the active existing-contract convergence, terminal-display safety, and searchable-choice plans under `docs/plans/`.
+Execution evidence is tracked in the archived existing-contract convergence plan and the active terminal-display safety and searchable-choice plans under `docs/plans/`.
 
 ## Guiding Principles
 
@@ -295,43 +295,43 @@ abstractions when Pi provides a better stable owner.
 
 ### Phase 8: Existing Contract Convergence
 
-**Status:** Planned through `docs/plans/2026-08-13_pi-tui-kit-existing-contract-convergence-plan.md`.
+**Status:** Complete through PRs #741 and #742 and archived at `docs/plans/archived/2026-08-13_pi-tui-kit-existing-contract-convergence-plan.md`.
 
 **Milestones:**
 
-- [ ] Classify every remaining direct custom host by exact lifecycle and domain behavior instead of raw call count.
-- [ ] Adopt `runCustomInteraction()` in Starship preview actions and File Context exploration only if characterization proves Back, Close, stale, disposal, pending-work, and error compatibility.
-- [ ] Replace repository test-host ownership with `@narumitw/pi-tui-kit/testing` only where specialized observations remain intact.
-- [ ] Keep Image Drop's loader and every other incompatible flow local with an explicit no-go until a published contract preserves its terminal outcomes.
-- [ ] Record deleted ownership, retained specialized owners, checks, smokes, and semantic audits without setting a numeric migration target.
+- [x] Remaining direct custom hosts were classified by exact lifecycle and domain behavior instead of raw call count.
+- [x] Starship preview actions and File Context exploration adopted `runCustomInteraction()` after characterization proved Back, Close, stale, disposal, pending-work, and error compatibility.
+- [x] Compatible tests adopted `@narumitw/pi-tui-kit/testing` while specialized explorer and preview observations remained extension-owned.
+- [x] Image Drop's loader and incompatible specialized flows remain local because the current standard contracts do not preserve their terminal or domain outcomes.
+- [x] The migrations deleted duplicate wrapper ownership, retained specialized owners, and passed focused, package, pack, and repository gates.
 
 **Outcome:** Existing public contracts remove proven duplicate lifecycle code while specialized UI and domain behavior remain extension-owned.
 
 ### Phase 9: Shared Terminal Display Safety
 
-**Status:** Proposed and evidence-gated through `docs/plans/2026-08-13_pi-tui-kit-terminal-display-safety-plan.md`.
+**Status:** API complete and published; proof migrations are open in PRs #746 and #747.
 
 **Milestones:**
 
-- [ ] Statusline and Starship prove one exact display-only sanitizer contract across complete terminal sequences, controls, whitespace, Unicode, paths, model labels, and symbols.
-- [ ] The qualification chooses an existing public Pi owner when exact behavior fits or adds one narrow Kit export without absorbing redaction, truncation, path, URL, hyperlink, or logging policy.
-- [ ] Any new Kit export publishes and passes registry clean-install verification before either consumer raises its compatibility floor.
-- [ ] Statusline and Starship complete separate proof migrations while raw paths, model IDs, settings, and action values remain untouched.
-- [ ] Fleet, Chat, Subagents, GitHub PR, and other incompatible text policies retain explicit package ownership.
+- [x] Statusline and Starship proved one display-only sanitizer contract across complete and unterminated terminal sequences, controls, whitespace, Unicode, paths, model labels, and symbols.
+- [x] The Kit exposes one narrow `sanitizeTerminalText()` function without absorbing redaction, truncation, path, URL, hyperlink, or logging policy.
+- [x] The API published in the registry release tagged `@narumitw/pi-tui-kit@0.54.0` and passed runtime, declaration, tarball, and clean-install verification before consumer floor changes.
+- [ ] Statusline and Starship proof migrations are implemented in separate passing PRs #746 and #747; merge evidence remains pending.
+- [x] Fleet, Chat, Subagents, GitHub PR, and other incompatible text policies retain explicit package ownership.
 
 **Outcome:** Compatible display boundaries share one tested sanitizer without creating a universal text-processing framework.
 
 ### Phase 10: Searchable Single Choice
 
-**Status:** Proposed and evidence-gated through `docs/plans/2026-08-13_pi-tui-kit-searchable-choice-plan.md`.
+**Status:** API complete and published; proof migrations are open in PRs #748 and #749.
 
 **Milestones:**
 
-- [ ] Pi BTW Resume and at least one independent compatible consumer demonstrate the same user need for searchable stable-ID confirmation.
-- [ ] An approved additive contract returns a raw stable item ID while keeping labels, descriptions, explicit search text, ordering, loading, and domain state consumer-owned.
-- [ ] TUI search covers IME focus, no-match and empty states, disabled explanations, rejected retries, pasted controls, narrow widths, resize, Back, Close, owner replacement, and disposal.
-- [ ] RPC remains one deterministic unfiltered signal-aware selector, while print and JSON retain explicit unsupported behavior.
-- [ ] The Kit API publishes independently before two separate proof migrations, or qualification records a finite no-go before implementation.
+- [x] Pi BTW Resume and Worktree identity selection demonstrated the same local stable-ID confirmation need without shared domain policy.
+- [x] The additive contract returns a raw stable item ID while labels, descriptions, explicit search text, ordering, loading, and domain state remain consumer-owned.
+- [x] TUI search covers IME focus, no-match and empty states, disabled explanations, rejected retries, pasted controls, narrow widths, resize, Back, Close, owner replacement, disposal, and retained-query cursor restoration.
+- [x] RPC remains one deterministic unfiltered signal-aware selector, while print and JSON retain explicit unsupported behavior.
+- [ ] The API published independently in `@narumitw/pi-tui-kit@0.54.0`; separate BTW and Worktree proof migrations are implemented in passing PRs #748 and #749, with merge evidence pending.
 
 **Outcome:** Extensions can confirm searchable in-memory or domain-owned records without importing Pi session, filesystem, scope, delete, tree, or persistence semantics.
 
@@ -411,9 +411,9 @@ abstractions when Pi provides a better stable owner.
 | Bounded live-choice ownership | Statusline and Starship repeated cursor navigation, preview dispatch, key hints, and exit handling | Published API 9 owns selection and lifecycle mechanics while consumers retain preview state, rollback, persistence, and final apply | Phase 6 complete; Kit lifecycle tests and separate Statusline and Starship proof migrations |
 | Interaction-hint consistency | Kit and specialized pickers repeated binding lookup, aliases, exclusions, and sanitization | Published API 9 exposes one formatter and uses it for Kit menu, browse, and live-choice hints | Phase 6 complete; formatter and rendering tests |
 | Exact browse documents | Legacy browse prose removed indentation and Tool owned a duplicate browser | Published API 10 preserves exact text, code, and diff details without implicit document search | Phase 7 complete; Kit formatter tests and Tool proof migration |
-| Existing custom lifecycle duplication | Direct custom hosts mix repeated wrapper ownership with specialized domain behavior | Migrate only behavior-compatible hosts to published lifecycle and testing contracts | Phase 8 planned; behavior matrices, focused migrations, and explicit no-go records |
-| Shared terminal display safety | Statusline and Starship duplicate one sanitizer while other packages use incompatible policies | Publish one narrow display-only contract only after exact two-consumer qualification | Phase 9 proposed; contract matrix, release gate, and separate proof migrations |
-| Searchable single-choice ownership | `choice` has no search and `browse` cannot confirm and return an item | Admit optional search only after two compatible consumers prove raw-ID selection, search, lifecycle, and cross-mode boundaries | Phase 10 proposed; Pi BTW Resume is the first evidence source |
+| Existing custom lifecycle duplication | Direct custom hosts mixed repeated wrapper ownership with specialized domain behavior | Starship and File Context now use published lifecycle and testing contracts; incompatible hosts remain local | Phase 8 complete; PRs #741 and #742 plus explicit no-go records |
+| Shared terminal display safety | Statusline and Starship duplicated one sanitizer while other packages use incompatible policies | API 12 release exposes one narrow display-only contract; two proof migrations await merge | Phase 9 API/release complete; PRs #743, #746, and #747 |
+| Searchable single-choice ownership | `choice` had no search and `browse` could not confirm and return an item | API 12 provides optional TUI search with raw-ID selection; BTW and Worktree proof migrations await merge | Phase 10 API/release complete; PRs #744, #748, and #749 |
 | Regression gate | Repository CI-equivalent gate at each capability change | No regression in the repository CI-equivalent gate | Every phase; `npm run check` |
 
 Delivery dates and capacity targets are unknown; this roadmap intentionally measures verified behavior
@@ -479,3 +479,6 @@ and adoption rather than calendar output.
 | 2026-08-10 | Publish API 11 live-choice confirmation gating and complete Statusline and Starship live-choice adoption. | Full disabled state still blocks every action, confirmation-only gating keeps safe shortcuts available, and both consumers retain preview, rollback, persistence, and final apply policy. |
 | 2026-08-13 | Refresh the roadmap from the completed API-11 baseline and split future work into three executable plans. | Existing-contract convergence proceeds without a new API, terminal display safety requires exact two-consumer qualification, and searchable choice remains evidence-gated with an explicit UX approval and release boundary. |
 | 2026-08-13 | Keep Image Drop's loader local under the current `runTask()` contract. | Image Drop distinguishes Escape Back from Ctrl+C Close, while `runTask()` exposes one user-cancelled result, so a direct migration would lose an observable lifecycle outcome. |
+| 2026-08-13 | Complete existing-contract convergence through Starship and File Context. | PRs #741 and #742 reused `runCustomInteraction()` and the supported test harness while preserving specialized component and domain ownership. |
+| 2026-08-13 | Publish API 12 and the display sanitizer in `@narumitw/pi-tui-kit@0.54.0`. | PRs #743 and #744 shipped bounded terminal display safety and opt-in searchable choice; registry runtime, declaration, and tarball verification passed before consumers changed floors. |
+| 2026-08-14 | Open separate proof migrations for Statusline, Starship, BTW, and Worktree. | PRs #746–#749 preserve raw identity and domain ownership while proving the two published contracts; all four have passing CI, but merge evidence remains pending. |
