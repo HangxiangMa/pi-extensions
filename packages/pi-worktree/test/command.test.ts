@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import {
 	createCustomSelectorHarness,
@@ -505,6 +506,75 @@ test("switch action prepares a target-cwd session and uses the replacement conte
 		assert.equal(switchedCwd, linked);
 		assert.match(replacementNotice, /switched/i);
 	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("switch selection searches branch and path while preserving raw worktree identity", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-worktree-search-choice-"));
+	const main = join(root, "repo");
+	const first = join(root, "worktrees", "frontend");
+	const second = join(root, "worktrees", "backend");
+	mkdirSync(main, { recursive: true });
+	mkdirSync(first, { recursive: true });
+	mkdirSync(second, { recursive: true });
+	const mock = createMockPi();
+	(mock.rawPi as typeof mock.rawPi & { exec: ExecFunction }).exec = async (_command, args) => {
+		if (args[0] === "worktree") {
+			return result(
+				porcelain([
+					{ path: main, branch: "main" },
+					{ path: first, branch: "feature/ui" },
+					{ path: second, branch: "fix/api" },
+				]),
+			);
+		}
+		return result(`${main}\n`);
+	};
+	worktreeExtension(mock.pi);
+	const tui = createTuiHarness({ width: 72, rows: 20 });
+	let customCalls = 0;
+	let switchedCwd = "";
+	let filteredFrame = "";
+	const context = createMockContext({
+		cwd: main,
+		hasUI: true,
+		mode: "tui",
+		sessionManager: { getSessionFile: () => undefined, getEntries: () => [] },
+		custom: async (factory: Parameters<typeof tui.custom>[0], options?: unknown) => {
+			customCalls += 1;
+			const pending = tui.custom(factory, options as never);
+			await tui.waitForOpen();
+			if (customCalls === 1) {
+				tui.press("tui.select.down");
+				tui.press("tui.select.down");
+				tui.press("tui.select.confirm");
+			} else {
+				tui.type("backend fix/api");
+				filteredFrame = tui.render().join("\n");
+				tui.press("tui.select.confirm");
+				await tui.waitForPending();
+			}
+			return pending;
+		},
+		switchSession: async (
+			path: string,
+			options: { withSession?: (ctx: unknown) => Promise<void> },
+		) => {
+			const session = (await import("@earendil-works/pi-coding-agent")).SessionManager.open(path);
+			switchedCwd = session.getCwd();
+			await options.withSession?.({ cwd: second, ui: { notify() {} } });
+			return { cancelled: false };
+		},
+	});
+	try {
+		await mock.commands.get("worktree")?.handler("", context.ctx);
+		assert.equal(customCalls, 2);
+		assert.match(filteredFrame, /→ 2\..*backend/u);
+		assert.doesNotMatch(filteredFrame, /frontend/u);
+		assert.equal(switchedCwd, second, JSON.stringify(context.notifications));
+	} finally {
+		tui.dispose();
 		rmSync(root, { recursive: true, force: true });
 	}
 });

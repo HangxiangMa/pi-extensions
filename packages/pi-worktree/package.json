@@ -46,6 +46,6 @@
 		"directory": "packages/pi-worktree"
 	},
 	"dependencies": {
-		"@narumitw/pi-tui-kit": "^0.51.0"
+		"@narumitw/pi-tui-kit": "^0.54.0"
 	}
 }
