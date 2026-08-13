@@ -89,6 +89,11 @@ test("searchable choice retains query and stable selection after rejection", asy
 	const retry = tui.render().join("\n");
 	assert.match(retry, /→ Second/u);
 	assert.doesNotMatch(retry, /First/u);
+	tui.send("\u007f");
+	tui.type("d");
+	const editedRetry = tui.render().join("\n");
+	assert.match(editedRetry, /→ Second/u);
+	assert.doesNotMatch(editedRetry, /First/u);
 	tui.press("tui.select.confirm");
 	assert.deepEqual(await running, { kind: "closed", reason: "close" });
 	assert.equal(attempts, 2);

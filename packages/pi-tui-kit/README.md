@@ -296,8 +296,7 @@ const result = await runCustomInteraction<{ kind: "back" | "close" }>(ctx, {
 - **`detail`** — read-only wrapped text with Back or Close behavior.
 - **`browse`** — a read-only searchable catalog with textual status, adaptive list/detail views,
   stable selection restoration, legacy prose or exact document details, and paginated RPC details.
-- **`choice`** — one confirmed value from a static list, with separate current and initial items,
-  selected details, disabled explanations, an optional TUI search field, and a bounded viewport.
+- **`choice`** — one confirmed value from a static list, with separate current and initial items, selected details, disabled explanations, an optional TUI search field, and a bounded viewport.
 - **`settings`** — Pi-style searchable, aligned settings rows with immediate value changes,
   serialized saves, and rollback when an action rejects.
 - **`input`** — single-line text entry inside the menu stack with IME focus, serialized submission,
@@ -364,12 +363,10 @@ const profileScreen = {
 };
 ```
 
-Set `enableSearch: true` when a choice list needs local filtering, and provide optional `searchText`
-for safe aliases or metadata that should not be rendered. TUI fuzzy-searches sanitized labels,
-descriptions, and explicit search text while preserving raw stable IDs, query and selection after a
-rejected action, disabled explanations, and IME focus. Details and raw IDs are not searched
-implicitly. RPC deliberately keeps one deterministic unfiltered selector and ignores interactive
-search metadata.
+Set `enableSearch: true` when a choice list needs local filtering, and provide optional `searchText` for safe aliases or metadata that should not be rendered.
+TUI fuzzy-searches sanitized labels, descriptions, and explicit search text while preserving raw stable IDs, query and selection after a rejected action, disabled explanations, and IME focus.
+Details and raw IDs are not searched implicitly.
+RPC deliberately keeps one deterministic unfiltered selector and ignores interactive search metadata.
 
 Keep preview snapshots, rollback, persistence, and confirmation policy in the consuming extension.
 Use standalone `runLiveChoice()` when its list-and-shortcut contract fits; keep a fully specialized UI
@@ -702,12 +699,9 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
   `MenuCloseReason`, and result types.
 - `@narumitw/pi-tui-kit/testing` — separate subpath for `createTuiHarness()`, `createRpcHarness()`,
   strict scripts, and their public testing types; it is not re-exported from the production root.
-- `PI_EXTENSION_MENU_API_VERSION` — current API version (`12`). Version 12 adds optional searchable
-  `choice` fields while version-11 menu definitions remain valid. Version 11 added Live Choice
-  confirmation-only gating, version 10 added exact browse detail documents, version 9 added
-  `runLiveChoice()` and `formatInteractionHints()`, version 8 added disabled action reasons and
-  adaptive action-label columns, version 7 added `runConfirmation()`, and version 6 added the
-  read-only `browse` screen and `runCustomInteraction()`.
+- `PI_EXTENSION_MENU_API_VERSION` — current API version (`12`).
+  Version 12 adds optional searchable `choice` fields while version-11 menu definitions remain valid.
+  Version 11 added Live Choice confirmation-only gating, version 10 added exact browse detail documents, version 9 added `runLiveChoice()` and `formatInteractionHints()`, version 8 added disabled action reasons and adaptive action-label columns, version 7 added `runConfirmation()`, and version 6 added the read-only `browse` screen and `runCustomInteraction()`.
 
 ## 🗂️ Package layout
 

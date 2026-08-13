@@ -175,7 +175,8 @@ function createChoiceComponent<ScreenId extends string, ActionId extends string>
 	options: ChoiceOptions<ScreenId, ActionId>,
 ): MenuScreenComponent {
 	const searchInput = new Input();
-	searchInput.setValue(options.searchQuery ?? "");
+	const restoredSearchQuery = options.searchQuery ?? "";
+	if (restoredSearchQuery) handleSearchInput(searchInput, restoredSearchQuery);
 	const border = new DynamicBorder((text: string) => options.theme.fg("border", text));
 	const allItems = options.screen.items.map((item) => {
 		const current = item.id === options.screen.currentItemId ? " ✓ current" : "";
