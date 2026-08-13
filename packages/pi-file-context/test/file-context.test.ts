@@ -3,12 +3,9 @@ import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
-import {
-	createCustomSelectorHarness,
-	createMockContext,
-	createMockPi,
-} from "../../../test/support.js";
+import { createMockContext, createMockPi } from "../../../test/support.js";
 import {
 	appendPendingQuote,
 	createFileQuote,
@@ -27,6 +24,64 @@ async function withTempProject(run: (root: string) => Promise<void>): Promise<vo
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
+}
+
+function createFileContextHarness() {
+	const bindingInputs: Record<string, string> = {
+		"tui.select.up": "\u001b[A",
+		"tui.select.down": "\u001b[B",
+		"tui.select.pageUp": "\u001b[5~",
+		"tui.select.pageDown": "\u001b[6~",
+		"tui.select.confirm": "\r",
+		"tui.select.cancel": "\u001b",
+		"tui.input.submit": "\r",
+	};
+	return createTuiHarness({
+		width: 80,
+		rows: 18,
+		keybindings: {
+			matches(data, binding) {
+				if (binding === "tui.input.tab") return data === "\t";
+				return bindingInputs[binding] === data;
+			},
+			getKeys(binding) {
+				return binding === "tui.input.tab" ? ["tab"] : [];
+			},
+		},
+	});
+}
+
+async function waitForHarnessText(
+	tui: ReturnType<typeof createTuiHarness>,
+	text: string,
+): Promise<void> {
+	const deadline = Date.now() + 3_000;
+	while (Date.now() < deadline) {
+		if (tui.isOpen && tui.render().join("\n").includes(text)) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 5));
+	}
+	throw new Error(`Timed out waiting for File Context text: ${text}`);
+}
+
+async function runFileContextExplorer(
+	command: { handler(args: string, ctx: unknown): unknown } | undefined,
+	context: ReturnType<typeof createMockContext>,
+	path: string,
+	finish: "quote" | "reference",
+): Promise<void> {
+	const tui = createFileContextHarness();
+	(context.ctx as unknown as { ui: { custom: typeof tui.custom } }).ui.custom = tui.custom;
+	const running = Promise.resolve(command?.handler("browse", context.ctx));
+	await waitForHarnessText(tui, "File Context");
+	tui.type(path);
+	if (finish === "reference") {
+		tui.send("\t");
+	} else {
+		tui.press("tui.select.confirm");
+		await waitForHarnessText(tui, "Enter add");
+		tui.press("tui.select.confirm");
+	}
+	await running;
 }
 
 test("discovers bounded project text candidates without traversing ignored directories or symlinks", async () => {
@@ -766,187 +821,159 @@ test("accumulates ordered pending quotes within aggregate limits", () => {
 });
 
 test("registers a TUI fallback command and injects all pending quotes only once", async () => {
-	const mock = createMockPi();
-	await registerFileQuoteExtension(mock.pi, {
-		loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
-	});
-	assert.ok(mock.commands.has("file-context"));
-	assert.equal(mock.commands.has("file-quote"), false);
+	await withTempProject(async (root) => {
+		await mkdir(join(root, "src"));
+		await mkdir(join(root, "test"));
+		await writeFile(join(root, "src", "example.ts"), "const example = true;\n");
+		await writeFile(
+			join(root, "test", "example.test.ts"),
+			"skip\nexpect(example)\n  .toBe(true);\n",
+		);
+		const mock = createMockPi();
+		await registerFileQuoteExtension(mock.pi, {
+			loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
+		});
+		assert.ok(mock.commands.has("file-context"));
+		assert.equal(mock.commands.has("file-quote"), false);
 
-	let customFactory: unknown;
-	const widgets = new Map<string, unknown>();
-	let customCall = 0;
-	let quoteIndex = 0;
-	const quoteResults = [
-		{
-			kind: "quote",
-			quote: {
-				path: "src/example.ts",
-				startLine: 1,
-				endLine: 1,
-				text: "const example = true;",
-			},
-		},
-		{
-			kind: "quote",
-			quote: {
-				path: "test/example.test.ts",
-				startLine: 2,
-				endLine: 3,
-				text: "expect(example)\n  .toBe(true);",
-			},
-		},
-	];
-	const context = createMockContext({
-		mode: "tui",
-		hasUI: true,
-		cwd: process.cwd(),
-		ui: {
-			theme: {
-				fg(_color: string, text: string) {
-					return text;
+		const widgets = new Map<string, unknown>();
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			cwd: root,
+			ui: {
+				theme: { fg: (_color: string, text: string) => text },
+				notify() {},
+				setWidget(key: string, value: unknown) {
+					widgets.set(key, value);
 				},
+				async custom() {
+					return undefined;
+				},
+				pasteToEditor() {},
 			},
-			notify() {},
-			setWidget(key: string, value: unknown) {
-				widgets.set(key, value);
-			},
-			async custom(factory: unknown) {
-				customCall += 1;
-				if (customCall % 2 === 1) {
-					return createCustomSelectorHarness(factory).resultPromise;
-				}
-				customFactory = factory;
-				const result = quoteResults[quoteIndex];
-				quoteIndex += 1;
-				return result;
-			},
-		},
-	});
+		});
 
-	await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-	await mock.shortcuts.get("ctrl+alt+f")?.handler(context.ctx);
-	await mock.commands.get("file-context")?.handler("browse", context.ctx);
-	assert.equal(typeof customFactory, "function");
-	assert.deepEqual(widgets.get("file-context"), [
-		"Next prompt context · 2 snippets · ~13 tokens · /file-context to review",
-		"1. src/example.ts · lines 1-1 · ~6 tokens",
-		"2. test/example.test.ts · lines 2-3 · ~8 tokens",
-	]);
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		const command = mock.commands.get("file-context");
+		await runFileContextExplorer(command, context, "src/example.ts", "quote");
 
-	assert.equal(mock.events.get("input"), undefined);
-	assert.notEqual(widgets.get("file-context"), undefined);
-	const beforeStart = mock.events.get("before_agent_start")?.[0];
-	const injection = await beforeStart?.(
-		{ prompt: "/skill:explain Explain this", images: [], systemPrompt: "base" },
-		context.ctx,
-	);
-	assert.deepEqual(injection, {
-		message: {
-			customType: "file-context-quotes",
-			content:
-				'<user_file_quote path="src/example.ts" lines="1-1">\nconst example = true;\n</user_file_quote>\n\n<user_file_quote path="test/example.test.ts" lines="2-3">\nexpect(example)\n  .toBe(true);\n</user_file_quote>\n\nThe user intentionally selected the file excerpts above.',
-			display: false,
-		},
+		const secondTui = createFileContextHarness();
+		(context.ctx as unknown as { ui: { custom: typeof secondTui.custom } }).ui.custom =
+			secondTui.custom;
+		const second = Promise.resolve(command?.handler("browse", context.ctx));
+		await waitForHarnessText(secondTui, "File Context");
+		secondTui.type("test/example.test.ts");
+		secondTui.press("tui.select.confirm");
+		await waitForHarnessText(secondTui, "Enter add");
+		secondTui.press("tui.select.down");
+		secondTui.send(" ");
+		secondTui.press("tui.select.down");
+		secondTui.press("tui.select.confirm");
+		await second;
+
+		assert.deepEqual(widgets.get("file-context"), [
+			"Next prompt context · 2 snippets · ~13 tokens · /file-context to review",
+			"1. src/example.ts · lines 1-1 · ~6 tokens",
+			"2. test/example.test.ts · lines 2-3 · ~8 tokens",
+		]);
+
+		assert.equal(mock.events.get("input"), undefined);
+		const beforeStart = mock.events.get("before_agent_start")?.[0];
+		const injection = await beforeStart?.(
+			{ prompt: "/skill:explain Explain this", images: [], systemPrompt: "base" },
+			context.ctx,
+		);
+		assert.deepEqual(injection, {
+			message: {
+				customType: "file-context-quotes",
+				content:
+					'<user_file_quote path="src/example.ts" lines="1-1">\nconst example = true;\n</user_file_quote>\n\n<user_file_quote path="test/example.test.ts" lines="2-3">\nexpect(example)\n  .toBe(true);\n</user_file_quote>\n\nThe user intentionally selected the file excerpts above.',
+				display: false,
+			},
+		});
+		assert.equal(widgets.get("file-context"), undefined);
+		assert.equal(
+			await beforeStart?.({ prompt: "Again", systemPrompt: "base" }, context.ctx),
+			undefined,
+		);
+		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+		assert.equal(widgets.get("file-context"), undefined);
 	});
-	assert.equal(widgets.get("file-context"), undefined);
-	assert.equal(
-		await beforeStart?.({ prompt: "Again", systemPrompt: "base" }, context.ctx),
-		undefined,
-	);
-	await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
-	assert.equal(widgets.get("file-context"), undefined);
 });
 
 test("quotes whole-file references and rejects picker results from replaced sessions", async () => {
-	const referenceMock = createMockPi();
-	await registerFileQuoteExtension(referenceMock.pi, {
-		loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
-	});
-	const pasted: string[] = [];
-	let referenceCustomCalls = 0;
-	const referenceContext = createMockContext({
-		mode: "tui",
-		hasUI: true,
-		cwd: process.cwd(),
-		ui: {
-			theme: { fg: (_color: string, text: string) => text },
-			notify() {},
-			setWidget() {},
-			setEditorComponent() {},
-			getEditorComponent() {
-				return undefined;
-			},
-			async custom(factory: unknown) {
-				referenceCustomCalls += 1;
-				if (referenceCustomCalls === 1) {
-					return createCustomSelectorHarness(factory).resultPromise;
-				}
-				return { kind: "reference", path: 'docs/my "note".md' };
-			},
-			pasteToEditor(value: string) {
-				pasted.push(value);
-			},
-		},
-	});
-	await referenceMock.events.get("session_start")?.[0]?.({}, referenceContext.ctx);
-	await referenceMock.commands.get("file-context")?.handler("browse", referenceContext.ctx);
-	assert.deepEqual(pasted, ['@"docs/my \\"note\\".md" ']);
-
-	const staleMock = createMockPi();
-	await registerFileQuoteExtension(staleMock.pi, {
-		loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
-	});
-	let resolvePicker: ((value: unknown) => void) | undefined;
-	const picker = new Promise((resolve) => {
-		resolvePicker = resolve;
-	});
-	const oldManager = { getSessionId: () => "old" };
-	const newManager = { getSessionId: () => "new" };
-	const makeContext = (sessionManager: object, custom: () => Promise<unknown>) => {
-		let customCalls = 0;
-		return createMockContext({
+	await withTempProject(async (root) => {
+		await mkdir(join(root, "docs"));
+		await writeFile(join(root, "docs", 'my "note".md'), "reference\n");
+		const referenceMock = createMockPi();
+		await registerFileQuoteExtension(referenceMock.pi, {
+			loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
+		});
+		const pasted: string[] = [];
+		const referenceContext = createMockContext({
 			mode: "tui",
 			hasUI: true,
-			cwd: process.cwd(),
-			sessionManager,
+			cwd: root,
 			ui: {
 				theme: { fg: (_color: string, text: string) => text },
 				notify() {},
 				setWidget() {},
 				setEditorComponent() {},
-				getEditorComponent() {
+				getEditorComponent: () => undefined,
+				async custom() {
 					return undefined;
 				},
-				async custom(factory: unknown) {
-					customCalls += 1;
-					if (customCalls === 1) {
-						return createCustomSelectorHarness(factory).resultPromise;
-					}
-					return custom();
+				pasteToEditor(value: string) {
+					pasted.push(value);
 				},
-				pasteToEditor() {},
 			},
 		});
-	};
-	const oldContext = makeContext(oldManager, async () => picker);
-	const newContext = makeContext(newManager, async () => undefined);
-	await staleMock.events.get("session_start")?.[0]?.({}, oldContext.ctx);
-	const command = staleMock.commands.get("file-context")?.handler("browse", oldContext.ctx);
-	await new Promise<void>((resolve) => setImmediate(resolve));
-	await staleMock.events.get("session_start")?.[0]?.({}, newContext.ctx);
-	resolvePicker?.({
-		kind: "quote",
-		quote: { path: "old.ts", startLine: 1, endLine: 1, text: "old" },
+		await referenceMock.events.get("session_start")?.[0]?.({}, referenceContext.ctx);
+		await runFileContextExplorer(
+			referenceMock.commands.get("file-context"),
+			referenceContext,
+			'docs/my "note".md',
+			"reference",
+		);
+		assert.deepEqual(pasted, ['@"docs/my \\"note\\".md" ']);
+
+		const staleMock = createMockPi();
+		await registerFileQuoteExtension(staleMock.pi, {
+			loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
+		});
+		const oldManager = { getSessionId: () => "old" };
+		const newManager = { getSessionId: () => "new" };
+		const tui = createFileContextHarness();
+		const oldContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			cwd: root,
+			sessionManager: oldManager,
+			ui: { custom: tui.custom, notify() {}, setWidget() {} },
+		});
+		const newContext = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			cwd: root,
+			sessionManager: newManager,
+		});
+		await staleMock.events.get("session_start")?.[0]?.({}, oldContext.ctx);
+		const command = Promise.resolve(
+			staleMock.commands.get("file-context")?.handler("browse", oldContext.ctx),
+		);
+		await waitForHarnessText(tui, "File Context");
+		await staleMock.events.get("session_start")?.[0]?.({}, newContext.ctx);
+		await command;
+		assert.equal(tui.isOpen, false);
+		assert.equal(
+			await staleMock.events.get("before_agent_start")?.[0]?.(
+				{ prompt: "new", systemPrompt: "base" },
+				newContext.ctx,
+			),
+			undefined,
+		);
 	});
-	await command;
-	assert.equal(
-		await staleMock.events.get("before_agent_start")?.[0]?.(
-			{ prompt: "new", systemPrompt: "base" },
-			newContext.ctx,
-		),
-		undefined,
-	);
 });
 
 test("rejects the fallback command observably outside TUI mode", async () => {
