@@ -12,6 +12,7 @@ test("built package roots resolve separate production and testing exports", asyn
 	const production = await import(productionSpecifier);
 	const testing = await import(testingSpecifier);
 	assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 11);
+	assert.equal(typeof production.sanitizeTerminalText, "function");
 	assert.equal(typeof production.formatInteractionHints, "function");
 	assert.equal(typeof production.runConfirmation, "function");
 	assert.equal(typeof production.runCustomInteraction, "function");
