@@ -1,5 +1,11 @@
 # @narumitw/pi-starship
 
+## 0.50.3
+
+### Patch Changes
+
+- c3721fd: Reuse Pi TUI Kit's display-only terminal sanitizer for model, symbol, and directory text.
+
 ## 0.50.2
 
 ### Patch Changes
