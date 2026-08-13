@@ -1,17 +1,11 @@
 # Pi TUI Kit Roadmap
 
-- **Status:** Source API 9 live-choice capability is complete and verified; publication and
-  post-publication consumer migrations remain gated; searchable single-choice remains a future
-  evidence-gated candidate
-- **Audience:** Pi TUI Kit maintainers and extension authors
-- **Planning horizon:** The reviewed Pi 0.84.1 capability baseline; no delivery dates are committed
-- **Repository source:** API version 9 adds standalone live choice, generic interaction hints, and
-  shared choice selection behavior to the API-8 confirmation, browse, custom-interaction, adaptive
-  review, distinct Back/Close, disabled-action, and `/testing` foundations
-- **Published status:** API 8 is published; API 9 must publish independently before any consumer
-  raises its compatibility floor
-- **Migration evidence:** Maintained package/consumer tests and the stable PR references in the
-  decision log below
+- **Status:** Published API 11 and its proof migrations are complete; the next work is existing-contract convergence, terminal-display safety qualification, and evidence-gated searchable choice.
+- **Audience:** Pi TUI Kit maintainers and extension authors.
+- **Planning horizon:** The installed Pi 0.84.1 capability baseline; no delivery dates are committed.
+- **Repository source:** API 11 includes eight declarative screens, standalone task, confirmation, live-choice and custom-interaction lifecycles, exact browse documents, confirmation-only live-choice gating, interaction hints, and the supported `/testing` entrypoint.
+- **Published status:** The current registry release exposes API 11; every future public API must still publish independently before consumer adoption.
+- **Migration evidence:** Maintained package and consumer tests plus the stable pull-request references in the decision log below.
 
 ## Vision
 
@@ -49,54 +43,48 @@ handling.
 
 ## Current State
 
-The maintained package exposes eight declarative screen kinds: `actions`, `detail`, `browse`,
-`choice`, `settings`, `input`, `review`, and `multiSelect`. Source API 9 also exposes:
+The maintained package exposes eight declarative screen kinds: `actions`, `detail`, `browse`, `choice`, `settings`, `input`, `review`, and `multiSelect`.
+
+Published API 11 also exposes:
 
 - `runTask()` for abort-aware work with a TUI loader;
 - `runConfirmation()` for distinct Confirmed, Back, Close, Stale, Unsupported, and Error outcomes;
-- `runLiveChoice()` for initial and cursor preview callbacks, typed selection/shortcut/exit outcomes,
-  lifecycle draining, and deterministic ordinary RPC selection;
+- `runLiveChoice()` for initial and cursor preview callbacks, typed selection, shortcut and exit outcomes, confirmation-only gating, lifecycle draining, and deterministic ordinary RPC selection;
 - `formatInteractionHints()` for sanitized injected bindings and literal shortcuts;
-- `runCustomInteraction()` for lifecycle ownership around one extension-owned specialized
-  component; and
+- `runCustomInteraction()` for lifecycle ownership around one extension-owned specialized component; and
 - a supported `/testing` subpath for semantic TUI driving and strict RPC scripts.
 
-Published API 8 includes distinct root Back/Close results, adaptive review, read-only browse,
-custom-interaction lifecycle handling, standalone confirmation, and explanatory disabled action
-rows. Source API 9 adds live choice and hint formatting without changing declarative `choice`
-cursor semantics. The internal interaction driver owns shared semantic action coordination once for
-both modes while adapters retain TUI component and RPC dialog cadence.
+API 10 added exact whitespace-sensitive browse detail documents through the review formatter without making document content implicitly searchable.
 
-Representative migrations prove the shipped boundaries: Usage uses `runTask()`; Stamp uses
-validated input; Image Drop composes input, review, and confirmation; Starship uses read-only browse;
-Pi Sync uses custom-interaction lifecycle ownership; and Analytics uses confirmation. These consumers
-retain domain state, validation, persistence, rollback, and session ownership. The supported testing
-subpath is proven through Stamp and Image Drop.
+API 11 added confirmation-only live-choice gating so a primary action can remain inert while safe shortcuts stay available.
 
-Deferred multi-select qualification admitted no Kit transaction API because Pi Sync and Subagents do
-not share Save/Discard cadence, review, persistence, conflict recovery, or RPC behavior. The direct
-dialog inventory likewise admitted no new API: one-off values use Pi primitives, setup and
-authentication sequences remain domain transactions, boolean confirmation stays direct unless richer
-outcomes are required, and multi-line editing remains extension-owned.
+The internal interaction driver owns shared semantic action coordination once for TUI and RPC, while adapters retain their presentation cadence.
 
-The original Pi 0.84.1 review found no additional Kit capability to admit or shipped screen to
-retire. Subsequent Starship preset work converged with Statusline's palette picker on a bounded live
-choice contract: initial/cursor preview, Enter confirmation, Back/Close distinction, owner
-cancellation, and consumer-owned snapshot restoration. Optional shortcut dispatch covers Starship's
-customize route without absorbing its save/apply transaction. Action-bearing async catalogs,
-reorderable lists, forms, and editors remain unqualified. Public `Input`, `SelectList`,
-`SettingsList`, and `ScrollView` remain useful low-level building blocks but do not own the Kit's
-cross-mode, cancellation, navigation, rollback, or stale-owner policy.
+Representative migrations prove the shipped boundaries: Usage uses `runTask()`, Stamp uses validated input, Image Drop composes input, review and confirmation, Sync uses custom-interaction lifecycle ownership, Statusline and Starship use live choice, and Tool uses exact browse documents.
 
-Production and experimental consumers continue to use the Kit alongside direct Pi dialogs. Raw
-consumer and dialog counts are intentionally not pinned because they change independently of roadmap
-outcomes; the stable admission rule is compatible lifecycle evidence, not call volume.
+These consumers retain domain state, validation, persistence, rollback, preview snapshots, final apply policy, and session ownership.
 
-The current Kit has no searchable single-choice interaction equivalent to Pi's `/resume` selector.
-Declarative `choice` confirms a bounded static item without search, while `browse` searches read-only
-items and opens details instead of returning a selected item. Pi-btw will initially use `choice` for
-its session-local in-memory thread list; that consumer provides evidence for a future generic picker
-but does not by itself waive the normal two-consumer admission gate.
+The supported testing subpath is proven across menu, lifecycle, resize, disposal, and strict RPC tests in multiple consumers.
+
+A 2026-08-13 static inventory found that 25 active extensions use `runMenu()`, while remaining direct custom hosts mix reusable lifecycle ownership with specialized OAuth, chat, explorer, composer, preview, and loader semantics.
+
+Direct call count is not an admission or migration criterion.
+
+Image Drop's loader currently distinguishes Escape Back from Ctrl+C Close, while `runTask()` returns one user-cancelled outcome, so that flow is not a behavior-preserving migration under the present contract.
+
+Deferred multi-select qualification admitted no Kit transaction API because Sync and Subagents do not share Save/Discard cadence, review, persistence, conflict recovery, or RPC behavior.
+
+One-off values continue to use Pi primitives, setup and authentication remain domain transactions, and multi-line editing remains extension-owned while Pi's editor dialog lacks `AbortSignal` support.
+
+Public Pi `Input`, `SelectList`, `SettingsList`, `ScrollView`, overlays, statuses, widgets, footers, and editor replacement remain lower-level or host-owned capabilities that the Kit should not duplicate without a complete cross-mode lifecycle contract.
+
+The current Kit still has no searchable single-choice interaction.
+
+Declarative `choice` confirms a bounded static item without search, while `browse` searches read-only items and opens details instead of returning a selected item.
+
+Pi BTW Resume is the first concrete candidate, and Worktree, Recall, or Chat can qualify as a second proof consumer only when evidence shows the same search job without scope, delete, preview, persistence, or tree semantics.
+
+Execution is decomposed into the active existing-contract convergence, terminal-display safety, and searchable-choice plans under `docs/plans/`.
 
 ## Guiding Principles
 
@@ -279,55 +267,73 @@ abstractions when Pi provides a better stable owner.
 
 ### Phase 6: Bounded Live Choice
 
-**Status:** Source complete and verified as API 9; publication and consumer adoption remain gated.
+**Status:** Complete and published.
 
 **Milestones:**
 
-- [x] Statusline palette selection and Starship preset selection demonstrate a compatible bounded
-  contract: initial and cursor preview, injected navigation, Enter confirmation, Back/Close,
-  stale-owner protection, and consumer-owned restoration and persistence.
-- [x] Source API 9 exposes `runLiveChoice()` with current/disabled rows, optional shortcuts, synchronous
-  preview immediacy, latest-selection coalescing for pending async previews, cancellation/disposal
-  draining, typed terminal outcomes, and ordinary signal-aware RPC selection without preview effects.
-- [x] One internal stable-ID selection controller owns wrap, paging, Home/End, and empty-list behavior
-  for declarative and live choices without making declarative cursor movement side-effecting.
-- [x] `formatInteractionHints()` owns injected-binding lookup, aliases, control sanitization,
-  exclusions, de-duplication, literal shortcuts, and separator policy; existing Kit menu and browse
-  hints consume it.
-- [x] API-root type tests, TUI/RPC/lifecycle coverage, the repository gate, and dry-run package
-  inspection verify the source contract and Kit-only release intent.
-- [ ] Publish API 9 through the independent Changesets release before raising a consumer's Kit floor.
-- [ ] After publication, migrate Statusline and Starship in independently reviewable consumer changes
-  that remove local selection/hint loops while preserving preview snapshots, rollback, settings,
-  confirmation, collectors, and session-generation ownership.
+- [x] Statusline palette selection and Starship preset selection demonstrated a compatible bounded contract with initial and cursor preview, injected navigation, confirmation, Back, Close, stale-owner protection, and consumer-owned restoration and persistence.
+- [x] API 9 published `runLiveChoice()` with current and disabled rows, optional shortcuts, synchronous preview immediacy, latest-selection coalescing, cancellation and disposal draining, typed terminal outcomes, and ordinary signal-aware RPC selection without preview effects.
+- [x] One internal stable-ID selection controller owns wrap, paging, Home, End, and empty-list behavior for declarative and live choices without making declarative cursor movement side-effecting.
+- [x] `formatInteractionHints()` owns injected-binding lookup, aliases, control sanitization, exclusions, de-duplication, literal shortcuts, and separator policy.
+- [x] Statusline and Starship adopted the published contract in separate consumer changes while retaining preview snapshots, rollback, settings, confirmation, collectors, and session-generation ownership.
 
-**Outcome:** The source contract concentrates reusable cursor-selection and lifecycle policy. Once
-published and proven by both consumers, live preview pickers can delete duplicate interaction code
-without turning the Kit into a preview-state or transaction owner.
+**Outcome:** Reusable cursor-selection and lifecycle policy is published and proven without making the Kit a preview-state or transaction owner.
 
-### Phase 7: Searchable Single Choice
+### Phase 7: Exact Documents and Confirmation Gating
 
-**Status:** Proposed and evidence-gated.
+**Status:** Complete and published.
 
 **Milestones:**
 
-- [ ] Pi-btw's in-memory Resume picker and at least one compatible consumer, or an explicit recorded
-  exception, demonstrate the same searchable single-choice lifecycle and mode contract.
-- [ ] A public contract returns a raw stable item ID on confirmation while keeping labels, metadata,
-  search text, ordering, and domain state consumer-owned.
-- [ ] TUI presentation follows the useful parts of Pi `/resume`: visible fuzzy search, a bounded
-  one-line list, consumer-supplied primary labels, right-aligned textual metadata, preservation of
-  consumer-provided recent-first ordering, IME focus, injected navigation, Enter selection, Escape
-  Back, and Ctrl+C Close.
-- [ ] RPC degrades to deterministic signal-aware ordinary selection without claiming an unsupported
-  interactive search protocol; print and JSON remain explicitly unsupported.
-- [ ] Focused tests prove filtering, stable selection, no-match and empty states, sanitization, narrow
-  widths, resize, disposal, owner replacement, stale continuations, and exact terminal outcomes.
-- [ ] Publish the Kit API independently before any consumer raises its compatibility floor.
+- [x] API 10 added exact browse detail documents with shared text, code, and diff formatting, terminal-safe hard wrapping, deterministic RPC pagination, and no implicit document-content search.
+- [x] Tool adopted exact browse details after publication and removed its duplicate browser while retaining catalog state, ordering, metadata projection, and domain ownership.
+- [x] API 11 added confirmation-only live-choice gating with full-disabled precedence and explanatory TUI and RPC presentation.
+- [x] Starship adopted confirmation-only gating after publication so the active preset rejects Apply while Customize remains available.
+- [x] Every API and consumer change remained independently releasable and passed focused lifecycle, width, terminal-safety, package, and repository gates.
 
-**Outcome:** Extensions can present searchable in-memory or domain-owned records with a Pi-familiar
-selection experience without pretending those records are Pi sessions or inheriting filesystem and
-session-management behavior.
+**Outcome:** Exact document disclosure and bounded live-choice action gating are standard contracts with completed proof migrations.
+
+### Phase 8: Existing Contract Convergence
+
+**Status:** Planned through `docs/plans/2026-08-13_pi-tui-kit-existing-contract-convergence-plan.md`.
+
+**Milestones:**
+
+- [ ] Classify every remaining direct custom host by exact lifecycle and domain behavior instead of raw call count.
+- [ ] Adopt `runCustomInteraction()` in Starship preview actions and File Context exploration only if characterization proves Back, Close, stale, disposal, pending-work, and error compatibility.
+- [ ] Replace repository test-host ownership with `@narumitw/pi-tui-kit/testing` only where specialized observations remain intact.
+- [ ] Keep Image Drop's loader and every other incompatible flow local with an explicit no-go until a published contract preserves its terminal outcomes.
+- [ ] Record deleted ownership, retained specialized owners, checks, smokes, and semantic audits without setting a numeric migration target.
+
+**Outcome:** Existing public contracts remove proven duplicate lifecycle code while specialized UI and domain behavior remain extension-owned.
+
+### Phase 9: Shared Terminal Display Safety
+
+**Status:** Proposed and evidence-gated through `docs/plans/2026-08-13_pi-tui-kit-terminal-display-safety-plan.md`.
+
+**Milestones:**
+
+- [ ] Statusline and Starship prove one exact display-only sanitizer contract across complete terminal sequences, controls, whitespace, Unicode, paths, model labels, and symbols.
+- [ ] The qualification chooses an existing public Pi owner when exact behavior fits or adds one narrow Kit export without absorbing redaction, truncation, path, URL, hyperlink, or logging policy.
+- [ ] Any new Kit export publishes and passes registry clean-install verification before either consumer raises its compatibility floor.
+- [ ] Statusline and Starship complete separate proof migrations while raw paths, model IDs, settings, and action values remain untouched.
+- [ ] Fleet, Chat, Subagents, GitHub PR, and other incompatible text policies retain explicit package ownership.
+
+**Outcome:** Compatible display boundaries share one tested sanitizer without creating a universal text-processing framework.
+
+### Phase 10: Searchable Single Choice
+
+**Status:** Proposed and evidence-gated through `docs/plans/2026-08-13_pi-tui-kit-searchable-choice-plan.md`.
+
+**Milestones:**
+
+- [ ] Pi BTW Resume and at least one independent compatible consumer demonstrate the same user need for searchable stable-ID confirmation.
+- [ ] An approved additive contract returns a raw stable item ID while keeping labels, descriptions, explicit search text, ordering, loading, and domain state consumer-owned.
+- [ ] TUI search covers IME focus, no-match and empty states, disabled explanations, rejected retries, pasted controls, narrow widths, resize, Back, Close, owner replacement, and disposal.
+- [ ] RPC remains one deterministic unfiltered signal-aware selector, while print and JSON retain explicit unsupported behavior.
+- [ ] The Kit API publishes independently before two separate proof migrations, or qualification records a finite no-go before implementation.
+
+**Outcome:** Extensions can confirm searchable in-memory or domain-owned records without importing Pi session, filesystem, scope, delete, tree, or persistence semantics.
 
 ## Technical Health
 
@@ -376,8 +382,8 @@ session-management behavior.
 - **Preview continuation races:** a slow preview may finish after a newer cursor, owner replacement, or
   exit. Mitigation: keep one drained latest-selection queue, abort through the interaction signal,
   revalidate generation after awaits, and require consumers to honor the callback signal.
-- **Premature consumer adoption:** source API 9 is not yet a published compatibility floor.
-  Mitigation: publish the Kit-only Changeset first, then migrate consumers in later PRs.
+- **Premature consumer adoption:** a workspace can resolve an unpublished or newer local Kit API than an independently installed extension.
+  Mitigation: publish each Kit-only Changeset first, verify the registry tarball and clean installation, then migrate consumers in later pull requests.
 - **Session-selector overreach:** copying Pi `/resume` too literally would pull session paths, folder
   scope, naming, deletion, and tree semantics into a generic picker.
   Mitigation: reuse only presentation and interaction evidence, keep raw IDs and domain mutation with
@@ -402,9 +408,12 @@ session-management behavior.
 | Specialized interaction pressure | Action-bearing and async catalogs, reorderable lists, forms, editors, and preview workflows beyond bounded choice have incompatible or single-consumer contracts | Keep each specialized until two consumers prove compatible reusable policy | Phase 5 baseline plus Phase 6 bounded-live-choice exception; re-open on new evidence |
 | Public Pi replacement pressure | Pi 0.84.1 exposes useful low-level TUI primitives but no equivalent Kit cross-mode composite | Retire a Kit screen when a stable public Pi owner provides the complete contract | Phase 5 review complete; re-run after Pi dependency upgrades |
 | Disabled action presentation | Disabled action rows could hide their state or truncate labels ambiguously | Published API 8 presents sanitized reasons and ellipsis-safe labels across TUI/RPC while keeping actions inert and raw identities stable | Phase 4 published; registry package, maintained component/runtime tests, and archived implementation plan |
-| Bounded live-choice ownership | Statusline and Starship repeated cursor navigation, preview dispatch, key hints, and exit handling | Source API 9 owns selection and lifecycle mechanics while consumers retain preview state, rollback, persistence, and final apply | Phase 6 source-complete; Kit TUI/RPC/lifecycle tests, repository gate, package dry run, and post-publication proof migrations |
-| Interaction-hint consistency | Kit and specialized pickers repeated binding lookup, aliases, exclusions, and sanitization | Source API 9 exposes one formatter and uses it for Kit menu, browse, and live-choice hints | Phase 6 source-complete; formatter and rendering tests |
-| Searchable single-choice ownership | `choice` has no search; `browse` cannot confirm and return an item | Admit a generic Pi-familiar picker only after compatible consumers prove raw-ID selection, search, lifecycle, and cross-mode boundaries | Phase 7 proposed; pi-btw in-memory Resume is the first evidence source |
+| Bounded live-choice ownership | Statusline and Starship repeated cursor navigation, preview dispatch, key hints, and exit handling | Published API 9 owns selection and lifecycle mechanics while consumers retain preview state, rollback, persistence, and final apply | Phase 6 complete; Kit lifecycle tests and separate Statusline and Starship proof migrations |
+| Interaction-hint consistency | Kit and specialized pickers repeated binding lookup, aliases, exclusions, and sanitization | Published API 9 exposes one formatter and uses it for Kit menu, browse, and live-choice hints | Phase 6 complete; formatter and rendering tests |
+| Exact browse documents | Legacy browse prose removed indentation and Tool owned a duplicate browser | Published API 10 preserves exact text, code, and diff details without implicit document search | Phase 7 complete; Kit formatter tests and Tool proof migration |
+| Existing custom lifecycle duplication | Direct custom hosts mix repeated wrapper ownership with specialized domain behavior | Migrate only behavior-compatible hosts to published lifecycle and testing contracts | Phase 8 planned; behavior matrices, focused migrations, and explicit no-go records |
+| Shared terminal display safety | Statusline and Starship duplicate one sanitizer while other packages use incompatible policies | Publish one narrow display-only contract only after exact two-consumer qualification | Phase 9 proposed; contract matrix, release gate, and separate proof migrations |
+| Searchable single-choice ownership | `choice` has no search and `browse` cannot confirm and return an item | Admit optional search only after two compatible consumers prove raw-ID selection, search, lifecycle, and cross-mode boundaries | Phase 10 proposed; Pi BTW Resume is the first evidence source |
 | Regression gate | Repository CI-equivalent gate at each capability change | No regression in the repository CI-equivalent gate | Every phase; `npm run check` |
 
 Delivery dates and capacity targets are unknown; this roadmap intentionally measures verified behavior
@@ -466,3 +475,7 @@ and adoption rather than calendar output.
 | 2026-08-08 | Complete Phase 5 capability and public-export review against Pi 0.84.1 without admitting or retiring an API. | Recall, File Context, Statusline, and Starship then demonstrated incompatible specialized catalog, preview, reorder, and transaction contracts; no maintained tree pair exists; Pi's editor remains non-abort-aware; and its public TUI controls remain lower-level than the Kit's cross-mode lifecycle contracts. Reassess after a Pi dependency upgrade or two compatible consumers provide new evidence. |
 | 2026-08-08 | Admit source API 9 bounded live choice after Starship preset selection converged with Statusline palette selection. | `runLiveChoice()` owns injected navigation, typed exits, optional shortcuts, RPC downgrade, stale checks, coalescing, disposal, and draining; a shared internal controller and public hint formatter remove repeated interaction mechanics. Preview snapshots, rollback, persistence, confirmation, and final apply remain consumer-owned. Publication must precede separate proof migrations. |
 | 2026-08-10 | Add searchable single choice as an evidence-gated future phase while pi-btw initially uses static `choice` for in-memory Resume. | Pi-btw needs Pi-familiar selection by first question and recent activity, but in-memory ownership is the immediate priority. The future Kit contract may borrow search and list presentation from Pi `/resume` without absorbing Pi session paths, scope, rename, delete, tree, or persistence semantics. |
+| 2026-08-10 | Publish API 10 exact browse detail documents and complete the Tool proof migration. | Review and browse now share exact terminal-safe document formatting, while Tool removed duplicate browser ownership and kept document content out of implicit search. |
+| 2026-08-10 | Publish API 11 live-choice confirmation gating and complete Statusline and Starship live-choice adoption. | Full disabled state still blocks every action, confirmation-only gating keeps safe shortcuts available, and both consumers retain preview, rollback, persistence, and final apply policy. |
+| 2026-08-13 | Refresh the roadmap from the completed API-11 baseline and split future work into three executable plans. | Existing-contract convergence proceeds without a new API, terminal display safety requires exact two-consumer qualification, and searchable choice remains evidence-gated with an explicit UX approval and release boundary. |
+| 2026-08-13 | Keep Image Drop's loader local under the current `runTask()` contract. | Image Drop distinguishes Escape Back from Ctrl+C Close, while `runTask()` exposes one user-cancelled result, so a direct migration would lose an observable lifecycle outcome. |

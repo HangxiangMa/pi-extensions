@@ -300,6 +300,7 @@ async function editSettings(
 					{ value: PREVIEW_ACTIONS.cancel, label: "Discard draft" },
 				],
 				owner.signal,
+				owner.isCurrent,
 			);
 			if (!isCurrentOwner(owner)) return "cancel";
 			if (action?.kind === "closed") return "close";
@@ -384,6 +385,7 @@ async function applyPreset(
 					{ value: PREVIEW_ACTIONS.cancel, label: "Choose another preset" },
 				],
 				owner.signal,
+				owner.isCurrent,
 			);
 			if (!isCurrentOwner(owner)) return "cancel";
 			if (action?.kind === "closed") return "close";
@@ -461,6 +463,7 @@ async function reviewAndApply(
 					},
 				],
 				owner.signal,
+				owner.isCurrent,
 			);
 			if (!isCurrentOwner(owner)) return "cancel";
 			if (selection?.kind === "closed") return "close";

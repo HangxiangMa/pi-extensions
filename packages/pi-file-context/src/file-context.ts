@@ -393,7 +393,7 @@ export async function registerFileQuoteExtension(
 			: controller.signal;
 		activeExplorers.add(activeExplorer);
 		try {
-			const { runTask } = await import("@narumitw/pi-tui-kit");
+			const { runCustomInteraction, runTask } = await import("@narumitw/pi-tui-kit");
 			if (!isCurrentSession(owner, generation) || flowSignal.aborted) return "close";
 			const task = await runTask(ctx, {
 				label: "Scanning project files…",
@@ -422,15 +422,24 @@ export async function registerFileQuoteExtension(
 				);
 				return options.menuOwned ? "stay" : "close";
 			}
-			const result = await ctx.ui.custom<FileQuoteExplorerResult | undefined>(
-				(tui, theme, keybindings, done) => {
+			const interaction = await runCustomInteraction<
+				FileQuoteExplorerResult | undefined,
+				ExtensionContext
+			>(ctx, {
+				signal: flowSignal,
+				isCurrent: () => isCurrentSession(owner, generation),
+				onError: () => {},
+				create: ({ tui, theme, keybindings, signal: interactionSignal, complete }) => {
 					const component = new FileQuoteExplorer({
 						tui,
 						theme,
 						keybindings,
 						files,
 						cwd: ctx.cwd,
-						loadFile: (path, signal) => loadProjectTextFile(ctx.cwd, path, { signal }),
+						loadFile: (path, signal) =>
+							loadProjectTextFile(ctx.cwd, path, {
+								signal: signal ? AbortSignal.any([signal, interactionSignal]) : interactionSignal,
+							}),
 						gitContext,
 						rootNavigation: options.menuOwned,
 						getSelectedContextState: () => ({
@@ -446,7 +455,7 @@ export async function registerFileQuoteExtension(
 						}),
 						validateQuote: validatePending,
 						onAddAndContinue: (quote) => {
-							if (!isCurrentSession(owner, generation) || flowSignal.aborted) {
+							if (!isCurrentSession(owner, generation) || interactionSignal.aborted) {
 								throw new DOMException("File Context session replaced", "AbortError");
 							}
 							appendPending(quote, ctx);
@@ -459,13 +468,14 @@ export async function registerFileQuoteExtension(
 								// The widget already reflects the selected snapshot.
 							}
 						},
-						done,
+						done: complete,
 					});
 					activeExplorer.component = component;
-					if (flowSignal.aborted) component.dispose();
 					return component;
 				},
-			);
+			});
+			if (interaction.kind === "error") throw interaction.error;
+			const result = interaction.kind === "completed" ? interaction.value : undefined;
 			if (!isCurrentSession(owner, generation) || flowSignal.aborted) return "close";
 			if (result?.kind === "quote") {
 				appendPending(result.quote, ctx);

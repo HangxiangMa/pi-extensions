@@ -1,6 +1,7 @@
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionCommandContext, KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { runCustomInteraction } from "@narumitw/pi-tui-kit";
 
 const RESERVED_HOST_ROWS = 3;
 
@@ -20,107 +21,104 @@ export async function showPreviewActionMenu<Value extends string>(
 	body: (width: number) => readonly string[],
 	items: readonly PreviewMenuItem<Value>[],
 	signal?: AbortSignal,
+	isCurrent: () => boolean = () => !signal?.aborted,
 ): Promise<PreviewMenuResult<Value> | undefined> {
-	if (signal?.aborted) return { kind: "closed" };
-	return ctx.ui.custom<PreviewMenuResult<Value> | undefined>((tui, theme, keybindings, done) => {
-		let selectedIndex = 0;
-		let scrollOffset = 0;
-		let lastMaximumScroll = 0;
-		let lastViewportSize = 1;
-		let disposed = false;
-		let deferredAbort: ReturnType<typeof setImmediate> | undefined;
-		const closeForAbort = () => {
-			if (disposed) return;
-			if (deferredAbort) clearImmediate(deferredAbort);
-			deferredAbort = undefined;
-			done({ kind: "closed" });
-		};
-		signal?.addEventListener("abort", closeForAbort, { once: true });
-		if (signal?.aborted) deferredAbort = setImmediate(closeForAbort);
+	if (signal?.aborted || !isCurrent()) return { kind: "closed" };
+	const result = await runCustomInteraction<PreviewMenuResult<Value>>(ctx, {
+		signal,
+		isCurrent,
+		create: ({ tui, theme, keybindings, complete }) => {
+			let selectedIndex = 0;
+			let scrollOffset = 0;
+			let lastMaximumScroll = 0;
+			let lastViewportSize = 1;
+			let disposed = false;
 
-		const requestRender = () => {
-			if (!disposed) tui.requestRender();
-		};
-		const moveSelection = (delta: number) => {
-			if (items.length === 0) return;
-			selectedIndex = (selectedIndex + delta + items.length) % items.length;
-			requestRender();
-		};
-		const movePreview = (offset: number) => {
-			scrollOffset = Math.max(0, Math.min(offset, lastMaximumScroll));
-			requestRender();
-		};
+			const requestRender = () => {
+				if (!disposed) tui.requestRender();
+			};
+			const moveSelection = (delta: number) => {
+				if (items.length === 0) return;
+				selectedIndex = (selectedIndex + delta + items.length) % items.length;
+				requestRender();
+			};
+			const movePreview = (offset: number) => {
+				scrollOffset = Math.max(0, Math.min(offset, lastMaximumScroll));
+				requestRender();
+			};
 
-		return {
-			render(width: number): string[] {
-				const safeWidth = Math.max(1, width);
-				const terminalRows = Number.isFinite(tui.terminal.rows)
-					? Math.floor(tui.terminal.rows)
-					: 24;
-				const availableRows = Math.max(1, terminalRows - RESERVED_HOST_ROWS);
-				const bodyLines = body(safeWidth).flatMap((line) =>
-					line ? wrapTextWithAnsi(line, safeWidth) : [""],
-				);
-				const layout = allocateLayout(availableRows, items.length, bodyLines.length);
-				lastViewportSize = layout.previewRows;
-				lastMaximumScroll = Math.max(0, bodyLines.length - layout.previewRows);
-				scrollOffset = Math.max(0, Math.min(scrollOffset, lastMaximumScroll));
-				const actionStart = actionWindowStart(selectedIndex, items.length, layout.actionRows);
-				const actionLines = items
-					.slice(actionStart, actionStart + layout.actionRows)
-					.map((item, index) => {
-						const absoluteIndex = actionStart + index;
-						const prefix = absoluteIndex === selectedIndex ? "→ " : "  ";
-						return theme.fg(
-							absoluteIndex === selectedIndex ? "accent" : "text",
-							`${prefix}${safeDisplayText(item.label)}`,
-						);
-					});
-				const position = layout.positionRows
-					? [theme.fg("dim", previewPosition(scrollOffset, layout.previewRows, bodyLines.length))]
-					: [];
-				const lines = [
-					...(layout.titleRows ? [theme.fg("accent", theme.bold(safeDisplayText(title)))] : []),
-					...bodyLines.slice(scrollOffset, scrollOffset + layout.previewRows),
-					...position,
-					...actionLines,
-					...(layout.hintRows ? [theme.fg("dim", previewHint(keybindings))] : []),
-				];
-				return lines.map((line) => truncateToWidth(line, safeWidth, ""));
-			},
-			invalidate() {},
-			handleInput(data: string) {
-				if (disposed) return;
-				if (matchesKey(data, Key.ctrl("c"))) {
-					done({ kind: "closed" });
-				} else if (keybindings.matches(data, "tui.select.cancel")) {
-					done({ kind: "cancelled" });
-				} else if (keybindings.matches(data, "tui.select.up")) {
-					moveSelection(-1);
-				} else if (keybindings.matches(data, "tui.select.down")) {
-					moveSelection(1);
-				} else if (keybindings.matches(data, "tui.select.pageUp")) {
-					movePreview(scrollOffset - lastViewportSize);
-				} else if (keybindings.matches(data, "tui.select.pageDown")) {
-					movePreview(scrollOffset + lastViewportSize);
-				} else if (matchesKey(data, Key.home)) {
-					movePreview(0);
-				} else if (matchesKey(data, Key.end)) {
-					movePreview(lastMaximumScroll);
-				} else if (keybindings.matches(data, "tui.select.confirm")) {
-					const item = items[selectedIndex];
-					if (item) done({ kind: "selected", value: item.value });
-				}
-			},
-			dispose() {
-				if (disposed) return;
-				disposed = true;
-				if (deferredAbort) clearImmediate(deferredAbort);
-				deferredAbort = undefined;
-				signal?.removeEventListener("abort", closeForAbort);
-			},
-		};
+			return {
+				render(width: number): string[] {
+					const safeWidth = Math.max(1, width);
+					const terminalRows = Number.isFinite(tui.terminal.rows)
+						? Math.floor(tui.terminal.rows)
+						: 24;
+					const availableRows = Math.max(1, terminalRows - RESERVED_HOST_ROWS);
+					const bodyLines = body(safeWidth).flatMap((line) =>
+						line ? wrapTextWithAnsi(line, safeWidth) : [""],
+					);
+					const layout = allocateLayout(availableRows, items.length, bodyLines.length);
+					lastViewportSize = layout.previewRows;
+					lastMaximumScroll = Math.max(0, bodyLines.length - layout.previewRows);
+					scrollOffset = Math.max(0, Math.min(scrollOffset, lastMaximumScroll));
+					const actionStart = actionWindowStart(selectedIndex, items.length, layout.actionRows);
+					const actionLines = items
+						.slice(actionStart, actionStart + layout.actionRows)
+						.map((item, index) => {
+							const absoluteIndex = actionStart + index;
+							const prefix = absoluteIndex === selectedIndex ? "→ " : "  ";
+							return theme.fg(
+								absoluteIndex === selectedIndex ? "accent" : "text",
+								`${prefix}${safeDisplayText(item.label)}`,
+							);
+						});
+					const position = layout.positionRows
+						? [theme.fg("dim", previewPosition(scrollOffset, layout.previewRows, bodyLines.length))]
+						: [];
+					const lines = [
+						...(layout.titleRows ? [theme.fg("accent", theme.bold(safeDisplayText(title)))] : []),
+						...bodyLines.slice(scrollOffset, scrollOffset + layout.previewRows),
+						...position,
+						...actionLines,
+						...(layout.hintRows ? [theme.fg("dim", previewHint(keybindings))] : []),
+					];
+					return lines.map((line) => truncateToWidth(line, safeWidth, ""));
+				},
+				invalidate() {},
+				handleInput(data: string) {
+					if (disposed) return;
+					if (matchesKey(data, Key.ctrl("c"))) {
+						complete({ kind: "closed" });
+					} else if (keybindings.matches(data, "tui.select.cancel")) {
+						complete({ kind: "cancelled" });
+					} else if (keybindings.matches(data, "tui.select.up")) {
+						moveSelection(-1);
+					} else if (keybindings.matches(data, "tui.select.down")) {
+						moveSelection(1);
+					} else if (keybindings.matches(data, "tui.select.pageUp")) {
+						movePreview(scrollOffset - lastViewportSize);
+					} else if (keybindings.matches(data, "tui.select.pageDown")) {
+						movePreview(scrollOffset + lastViewportSize);
+					} else if (matchesKey(data, Key.home)) {
+						movePreview(0);
+					} else if (matchesKey(data, Key.end)) {
+						movePreview(lastMaximumScroll);
+					} else if (keybindings.matches(data, "tui.select.confirm")) {
+						const item = items[selectedIndex];
+						if (item) complete({ kind: "selected", value: item.value });
+					}
+				},
+				dispose() {
+					if (disposed) return;
+					disposed = true;
+				},
+			};
+		},
 	});
+	if (result.kind === "completed") return result.value;
+	if (result.kind === "error") throw result.error;
+	if (result.kind === "stale" && (signal?.aborted || !isCurrent())) return { kind: "closed" };
+	return undefined;
 }
 
 interface PreviewLayout {

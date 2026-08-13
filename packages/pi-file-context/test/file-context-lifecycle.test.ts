@@ -2,12 +2,9 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
-import {
-	createCustomSelectorHarness,
-	createMockContext,
-	createMockPi,
-} from "../../../test/support.js";
+import { createMockContext, createMockPi } from "../../../test/support.js";
 import { registerFileQuoteExtension } from "../src/file-context.js";
 
 test("disposes and settles an active explorer on session replacement", async () => {
@@ -28,15 +25,10 @@ async function assertExplorerLifecycleCancellation(
 		await registerFileQuoteExtension(mock.pi, {
 			loadSettings: async () => ({ settings: { openShortcut: "ctrl+alt+f" } }),
 		});
-		let markReady!: () => void;
-		const ready = new Promise<void>((resolve) => {
-			markReady = resolve;
-		});
-		let disposed = false;
-		let customCalls = 0;
 		const oldManager = { getSessionId: () => "old" };
 		const newManager = { getSessionId: () => "new" };
-		const makeContext = (sessionManager: object, custom?: (factory: unknown) => Promise<unknown>) =>
+		const tui = createTuiHarness({ width: 80, rows: 18 });
+		const makeContext = (sessionManager: object, custom = tui.custom) =>
 			createMockContext({
 				mode: "tui",
 				hasUI: true,
@@ -48,39 +40,12 @@ async function assertExplorerLifecycleCancellation(
 					setWidget() {},
 					setEditorComponent() {},
 					getEditorComponent: () => undefined,
-					custom: custom ?? (async () => undefined),
+					custom,
 					pasteToEditor() {},
 				},
 			});
-		const oldContext = makeContext(oldManager, async (factory) => {
-			customCalls += 1;
-			if (customCalls === 1) {
-				return createCustomSelectorHarness(factory).resultPromise;
-			}
-			return new Promise((resolve) => {
-				const component = (
-					factory as (...args: unknown[]) => {
-						dispose(): void;
-					}
-				)(
-					{ terminal: { rows: 18 }, requestRender() {} },
-					{
-						fg: (_color: string, text: string) => text,
-						bg: (_color: string, text: string) => text,
-						bold: (text: string) => text,
-					},
-					{ matches: () => false },
-					resolve,
-				);
-				const dispose = component.dispose.bind(component);
-				component.dispose = () => {
-					disposed = true;
-					dispose();
-				};
-				markReady();
-			});
-		});
-		const newContext = makeContext(newManager);
+		const oldContext = makeContext(oldManager);
+		const newContext = makeContext(newManager, createTuiHarness().custom);
 		await mock.events.get("session_start")?.[0]?.({}, oldContext.ctx);
 		let settled = false;
 		const command = Promise.resolve(
@@ -88,7 +53,13 @@ async function assertExplorerLifecycleCancellation(
 		).then(() => {
 			settled = true;
 		});
-		await ready;
+		const deadline = Date.now() + 3_000;
+		while (Date.now() < deadline) {
+			if (tui.isOpen && tui.render().join("\n").includes("File Context")) break;
+			await new Promise<void>((resolve) => setTimeout(resolve, 5));
+		}
+		assert.equal(tui.isOpen, true);
+		assert.match(tui.render().join("\n"), /File Context/u);
 
 		if (event === "session_start") {
 			await mock.events.get(event)?.[0]?.({}, newContext.ctx);
@@ -97,7 +68,7 @@ async function assertExplorerLifecycleCancellation(
 		}
 		await new Promise<void>((resolve) => setImmediate(resolve));
 
-		assert.equal(disposed, true);
+		assert.equal(tui.isOpen, false);
 		assert.equal(settled, true);
 		await command;
 	} finally {

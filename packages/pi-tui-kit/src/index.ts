@@ -28,6 +28,7 @@ export { defineMenu, resolveMenuScreen } from "./model.js";
 export { createMenuNavigator, type MenuNavigator } from "./navigator.js";
 export { type RunMenuOptions, type RunMenuResult, runMenu } from "./runtime.js";
 export { type RunTaskOptions, type RunTaskResult, runTask } from "./task.js";
+export { sanitizeTerminalText } from "./terminal-text.js";
 export type {
 	ActionMenuItem,
 	ActionsScreen,
