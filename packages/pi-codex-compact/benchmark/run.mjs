@@ -29,6 +29,7 @@ const SYSTEM_PROMPT = [
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXTENSION_ENTRY = path.join(PACKAGE_ROOT, "src", "index.ts");
 const DEFAULT_MODEL = "gpt-5.6-sol";
+const DEFAULT_PROFILE = "matched-tail";
 const DEFAULT_TIMEOUT_MS = 300_000;
 const THINKING_LEVELS = Object.freeze(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -616,7 +617,9 @@ function publicConfig(benchmarkOptions, profile) {
 		suiteDefaultsUsed: benchmarkOptions.suiteDefaultsUsed,
 		confirmatoryProtocolEligible: benchmarkOptions.confirmatoryProtocolEligible,
 		studyDesign: benchmarkOptions.suiteDefaultsUsed
-			? "Default-vs-default unless profile is matched-tail; calibration outcomes are exploratory and confirmatory seeds are held out by the predefined suites."
+			? benchmarkOptions.profile === "matched-tail"
+				? "Matched 20K retained-tail comparison; calibration outcomes are exploratory and confirmatory seeds are held out by the predefined suites."
+				: "Shipped retention-policy comparison; calibration outcomes are exploratory and confirmatory seeds are held out by the predefined suites."
 			: "Suite controls were overridden; the caller must document calibration separation and predeclare confirmatory seeds and densities.",
 	};
 }
@@ -685,7 +688,7 @@ function parseArguments(args) {
 		model: DEFAULT_MODEL,
 		output: undefined,
 		probeThinking: "low",
-		profile: "production",
+		profile: DEFAULT_PROFILE,
 		questionsPerCategory: undefined,
 		requestDelayMs: 300,
 		seeds: undefined,
@@ -775,7 +778,7 @@ function parseArguments(args) {
 		parsed.fixtureTokens === 50_000 &&
 		parsed.compactionThinking === "medium" &&
 		parsed.probeThinking === "low" &&
-		parsed.profile === "production" &&
+		parsed.profile === DEFAULT_PROFILE &&
 		parsed.model === DEFAULT_MODEL;
 	const minimumDensity = Math.min(...parsed.densities);
 	if (parsed.questionsPerCategory > minimumDensity) {
@@ -856,7 +859,7 @@ function printHelp() {
 		"  --epochs <n>                   History epochs from 2 to 20 (default: 10).\n",
 	);
 	process.stdout.write(
-		"  --profile <name>               production or matched-tail (default: production).\n",
+		`  --profile <name>               production or matched-tail (default: ${DEFAULT_PROFILE}).\n`,
 	);
 	process.stdout.write("  --fixture-tokens <count>       Fixed history target (default: 50000).\n");
 	process.stdout.write(

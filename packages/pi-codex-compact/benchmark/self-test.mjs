@@ -9,6 +9,7 @@ import {
 	buildProbePrompt,
 	CATEGORIES,
 	createBenchmarkFixture,
+	PROFILES,
 	scoreProbeResponse,
 	summarizeBenchmarkTrials,
 	summarizeNumbers,
@@ -16,6 +17,14 @@ import {
 import { writeResultFile } from "./result-file.mjs";
 
 assert.equal(BENCHMARK_ID, "pi-codex-compact-comparison:v2");
+assert.deepEqual(PROFILES["matched-tail"], {
+	piKeepRecentTokens: 20_000,
+	codexReplacementTokenBudget: 20_000,
+});
+assert.deepEqual(PROFILES.production, {
+	piKeepRecentTokens: 20_000,
+	codexReplacementTokenBudget: 64_000,
+});
 
 const fixtureOptions = {
 	seed: 301,

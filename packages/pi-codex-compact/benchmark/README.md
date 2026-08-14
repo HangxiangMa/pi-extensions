@@ -8,7 +8,9 @@ This repository-only benchmark compares three paths on the same seeded synthetic
 
 It measures whether each fixture is answerable, then compares Pi and Codex on compaction speed, Pi-catalog estimated USD cost, downstream context size, and exact state recovery.
 
-The production profile compares the shipped retention policies under a controlled no-retry protocol, not every runtime default and not equal information capacity.
+The default `matched-tail` profile gives Pi native and Codex Remote V2 a 20K retained-tail budget under a controlled no-retry protocol.
+
+The optional `production` profile compares their shipped 20K and 64K retention policies.
 
 ## Metrics
 
@@ -74,7 +76,7 @@ Never include calibration scores in confirmatory totals.
 
 Do not inspect or tune against seeds 301–304 before their confirmatory run.
 
-The result marks evidence as primary-eligible only when the locked 50K production-profile protocol and held-out seeds are unchanged, except for densities fixed from calibration, every planned fixture completes, and every full-context fixture passes.
+The result marks evidence as primary-eligible only when the locked 50K matched-tail protocol and held-out seeds are unchanged, except for densities fixed from calibration, every planned fixture completes, and every full-context fixture passes.
 
 Questions within one fixture share one model response and are nested outcomes.
 
@@ -192,8 +194,8 @@ The uncompressed control receives no compaction request, so only Pi and Codex ha
 
 | Profile | Pi retained-tail budget | Codex retained user-text budget | Purpose |
 | --- | ---: | ---: | --- |
+| `matched-tail` (default) | 20K tokens | 20K approximate tokens | Reduce retained-tail differences for the primary comparison. |
 | `production` | 20K tokens | 64K approximate tokens | Compare shipped retention policies with retries controlled off. |
-| `matched-tail` | 20K tokens | 20K approximate tokens | Reduce retained-tail differences for a narrower diagnostic. |
 
 The matched-tail profile still does not make opaque Codex capacity numerically equivalent to Pi plaintext output capacity.
 
@@ -245,7 +247,7 @@ They are estimates, not an OpenAI invoice and not a statement about ChatGPT or C
 ## Limits
 
 - Remote Compaction V2 is an undocumented hosted protocol and can change independently.
-- Pi and Codex use different compaction representations, so production-profile results compare policies rather than equal capacities.
+- Pi and Codex use different compaction representations, so matching both retained-tail budgets at 20K does not make their total information capacities equal.
 - Prompt-only JSON conformance can fail because the Pi SDK path does not request a benchmark-specific provider response schema.
 - The synthetic benchmark does not measure images, real coding success, repeated compaction, resume, fork, model switching, or tool execution after compaction.
 - Provider cache state, load, OAuth tier, model updates, and Pi dependency updates can change latency, usage, and quality across dates.
