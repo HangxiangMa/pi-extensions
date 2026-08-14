@@ -210,8 +210,40 @@ src/checkpoint.ts     Replacement history, fingerprints, persistence, and replay
 src/settings.ts       Global settings validation and atomic persistence
 src/settings-menu.ts  Manual compaction and settings TUI
 
+benchmark/            Three-arm compaction benchmark, self-test, and methodology
 test/                 Protocol, checkpoint, lifecycle, remote, settings, and menu coverage
 ```
+
+## 📊 Benchmark
+
+The repository includes a seeded three-arm benchmark for uncompressed full context, Pi-native
+plaintext compaction, and this extension's Codex Remote Compaction V2 path.
+
+It holds history length nearly fixed while varying information density across five state categories
+and ten history epochs.
+
+Benchmark v3 uses repeated artifacts, isolated evaluator probes, seed-level paired statistics, one Pi
+SDK estimator for dry and live fixtures, and committed protocol manifests for confirmatory
+candidates.
+
+It never treats nominal Pi 20K and Codex 20K settings as equal information capacity or automatically
+claims that protocol-conformant evidence was genuinely held out.
+
+Preview its exploratory diagnostic without making a provider request:
+
+```bash
+just benchmark-codex-compact
+```
+
+A live run requires an explicit `--live` flag, reviewed request and cost exposure, OpenAI Codex OAuth,
+and Remote V2 entitlement.
+
+The repository preserves the explicitly labeled v2 matched-tail diagnostic and the v3 calibration
+evidence, while seeds 301–304 remain consumed and unavailable for future confirmatory protocols.
+
+See the
+[benchmark guide](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-codex-compact/benchmark)
+for manifests, repetitions, commands, privacy, cost semantics, and interpretation limits.
 
 ## 🧪 Development
 
