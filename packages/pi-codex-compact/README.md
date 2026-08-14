@@ -238,8 +238,8 @@ just benchmark-codex-compact
 A live run requires an explicit `--live` flag, reviewed request and cost exposure, OpenAI Codex OAuth,
 and Remote V2 entitlement.
 
-The repository preserves one explicitly labeled v2 matched-tail diagnostic result, while seeds
-301–304 remain consumed and unavailable for future confirmatory protocols.
+The repository preserves the explicitly labeled v2 matched-tail diagnostic and the v3 calibration
+evidence, while seeds 301–304 remain consumed and unavailable for future confirmatory protocols.
 
 See the
 [benchmark guide](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-codex-compact/benchmark)

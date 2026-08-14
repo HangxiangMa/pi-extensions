@@ -47,4 +47,24 @@ just benchmark-codex-compact \
   --output packages/pi-codex-compact/benchmark/results/calibration-v3-matched-tail-gpt-5.6-sol.json
 ```
 
-After an approved run, verify every fixture completed, full-context answerability passed, evaluator disagreement stayed at or below 2%, and the result file was atomically published before using it to choose confirmatory densities.
+## Calibration outcome
+
+The user approved this preflight, and the live run completed at `2026-08-14T13:38:29.028Z`.
+
+- Completed fixtures: 3 of 3.
+- Completed provider requests: 33 of 33.
+- Full-context control: 675 of 675 answers, passed.
+- Evaluator disagreement: 0 of 2,025 answer comparisons, passed.
+- Recorded estimated cost: $10.348713.
+- Result: `../results/calibration-v3-matched-tail-gpt-5.6-sol.json`.
+- Result SHA-256: `23b7e0197a7a921e5e155591b80ce911ccdf07edfc9f37c62f700691e65dad19`.
+
+Density 120 was selected as the shoulder because Codex retained all answers while Pi retained about half.
+
+Density 160 was selected as the stress point because both arms degraded and Codex reached the lowest observed calibration rate.
+
+Density 200 was not selected because its single Codex artifact returned to perfect recall, so it did not provide a stable observed stress point.
+
+All repeated full-context and fixed-artifact probes agreed exactly, so the confirmatory protocol uses one probe per artifact while retaining three independent compaction artifacts per arm and fixture.
+
+The selected controls are locked in `matched-tail-confirmatory-v3-2026-08-14.json` before any fresh confirmatory provider request.

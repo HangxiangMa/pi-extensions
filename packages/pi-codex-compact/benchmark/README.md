@@ -127,8 +127,11 @@ Human review must verify that the committed manifest predates provider execution
 
 See [`protocols/README.md`](./protocols/README.md) for the schema and workflow.
 
-The reviewed provider-free calibration request plan is in
+The reviewed calibration plan and completed outcome are in
 [`protocols/CALIBRATION-V3.md`](./protocols/CALIBRATION-V3.md).
+
+The locked fresh-seed protocol is
+[`protocols/matched-tail-confirmatory-v3-2026-08-14.json`](./protocols/matched-tail-confirmatory-v3-2026-08-14.json).
 
 ## Safe dry runs
 
@@ -254,9 +257,23 @@ Inspect artifact distributions rather than relying only on aggregate recall beca
 
 Output-size correlation is descriptive and does not prove that token count caused quality.
 
-## Preserved diagnostic result
+## Preserved evidence
 
-The repository retains one v2 matched-tail diagnostic result:
+The repository retains the v3 calibration evidence at:
+
+```text
+results/calibration-v3-matched-tail-gpt-5.6-sol.json
+```
+
+Its SHA-256 is:
+
+```text
+23b7e0197a7a921e5e155591b80ce911ccdf07edfc9f37c62f700691e65dad19
+```
+
+The calibration used seed 111 only and remains diagnostic evidence.
+
+The repository also retains the earlier v2 matched-tail diagnostic at:
 
 ```text
 results/matched-tail-same-fixtures-gpt-5.6-sol.json
@@ -270,7 +287,7 @@ Its SHA-256 is:
 
 It used consumed seeds 301–304, one artifact per arm and fixture, and no evaluator repetition.
 
-It must not be relabeled as v3 confirmatory evidence.
+Neither result may be relabeled as v3 confirmatory evidence.
 
 ## Cost, privacy, and cleanup
 
