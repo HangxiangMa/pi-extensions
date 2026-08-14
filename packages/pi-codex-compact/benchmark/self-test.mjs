@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseArguments } from "./config.mjs";
@@ -25,9 +25,16 @@ import {
 	classifyEvidence,
 	PROFILES,
 	protocolDeviations,
+	protocolEligibilityDeviations,
 	protocolSha256,
 	validateProtocolManifest,
 } from "./protocol.mjs";
+import {
+	checkRuntimeInputSnapshot,
+	createImmutableRuntimeSnapshot,
+	publicRuntimeInputSnapshot,
+	releaseRuntimeSnapshot,
+} from "./provenance.mjs";
 import { writeResultFile } from "./result-file.mjs";
 import { cloneSessionBranch } from "./session-clone.mjs";
 
@@ -93,6 +100,19 @@ assert.throws(
 	() => validateProtocolManifest({ ...protocolInput, seeds: [901, 902] }),
 	/at least 8 fresh seeds/,
 );
+assert.throws(
+	() => validateProtocolManifest({ ...protocolInput, fixtureTargetTokens: 180_000 }),
+	/controlled-manual-50k requires fixtureTargetTokens to equal 50000/,
+);
+const contextScaleProtocol = validateProtocolManifest({
+	...protocolInput,
+	fixtureTargetTokens: 180_000,
+	contextRegime: "context-scale-diagnostic",
+});
+assert.deepEqual(protocolEligibilityDeviations(protocol), []);
+assert.deepEqual(protocolEligibilityDeviations(contextScaleProtocol), [
+	"The context-scale regime is diagnostic and cannot support confirmatory evidence.",
+]);
 const protocolOptions = {
 	model: protocol.model,
 	profile: protocol.profile,
@@ -148,6 +168,24 @@ assert.equal(
 		sourceClean: false,
 	}).classification,
 	"diagnostic",
+);
+const contextScaleOptions = {
+	...protocolOptions,
+	fixtureTokens: contextScaleProtocol.fixtureTargetTokens,
+	contextRegime: contextScaleProtocol.contextRegime,
+};
+const contextScaleEvidence = classifyEvidence({
+	protocol: contextScaleProtocol,
+	options: contextScaleOptions,
+	status: "completed",
+	fullContextPassed: true,
+	evaluatorPassed: true,
+});
+assert.equal(contextScaleEvidence.protocolConformant, false);
+assert.equal(contextScaleEvidence.classification, "diagnostic");
+assert.deepEqual(
+	contextScaleEvidence.deviations,
+	protocolEligibilityDeviations(contextScaleProtocol),
 );
 
 const protocolArguments = await parseArguments(["--protocol", "protocol.json"], {
@@ -429,6 +467,111 @@ assert.notEqual(clonedCompaction.firstKeptEntryId, sourceCompaction.firstKeptEnt
 assert.deepEqual(clonedCompaction.details, sourceCompaction.details);
 sourceCompaction.details.nested.value = 2;
 assert.equal(clonedCompaction.details.nested.value, 1);
+
+const runtimeRoot = await mkdtemp(path.join(tmpdir(), "pi-codex-compact-runtime-test-"));
+let runtimeSnapshot;
+try {
+	const runtimePackageRoot = path.join(runtimeRoot, "packages", "pi-codex-compact");
+	const runtimeBenchmarkRoot = path.join(runtimePackageRoot, "benchmark");
+	const runtimeSourceRoot = path.join(runtimePackageRoot, "src");
+	const runtimeProtocolPath = path.join(runtimeBenchmarkRoot, "protocol.json");
+	await mkdir(runtimeSourceRoot, { recursive: true });
+	await writeFile(path.join(runtimeRoot, "package-lock.json"), '{"lockfileVersion":3}\n');
+	await writeFile(
+		path.join(runtimePackageRoot, "package.json"),
+		'{"name":"@narumitw/pi-codex-compact","version":"0.0.0"}\n',
+	);
+	await mkdir(runtimeBenchmarkRoot, { recursive: true });
+	await writeFile(path.join(runtimeBenchmarkRoot, "run.mjs"), "export const version = 1;\n");
+	await writeFile(path.join(runtimeSourceRoot, "helper.ts"), "export const value = 1;\n");
+	await writeFile(
+		path.join(runtimeSourceRoot, "index.ts"),
+		[
+			'import { value } from "./helper.js";',
+			"export default (pi) => {",
+			'\tpi.registerCommand("snapshot-smoke", { description: String(value), handler: () => {} });',
+			"};",
+			"",
+		].join("\n"),
+	);
+	await writeFile(runtimeProtocolPath, `${JSON.stringify(protocolInput)}\n`);
+
+	runtimeSnapshot = await createImmutableRuntimeSnapshot({
+		packageRoot: runtimePackageRoot,
+		protocol: { path: runtimeProtocolPath, sha256: protocolSha256(protocolInput) },
+		snapshotRoot: path.join(runtimeRoot, "immutable"),
+	});
+	assert.equal(
+		await readFile(path.join(runtimeSnapshot.extensionRoot, "helper.ts"), "utf8"),
+		"export const value = 1;\n",
+	);
+	const runtimeAgentDir = path.join(runtimeRoot, "agent");
+	await mkdir(runtimeAgentDir);
+	const snapshotLoader = new sdk.DefaultResourceLoader({
+		cwd: runtimePackageRoot,
+		agentDir: runtimeAgentDir,
+		settingsManager: sdk.SettingsManager.inMemory(),
+		noExtensions: true,
+		noSkills: true,
+		noPromptTemplates: true,
+		noThemes: true,
+		noContextFiles: true,
+		additionalExtensionPaths: [runtimeSnapshot.extensionEntry],
+	});
+	await snapshotLoader.reload();
+	assert.deepEqual(snapshotLoader.getExtensions().errors, []);
+	assert.equal(snapshotLoader.getExtensions().extensions.length, 1);
+	assert.equal((await checkRuntimeInputSnapshot(runtimeSnapshot)).clean, true);
+	const publicSnapshot = publicRuntimeInputSnapshot(runtimeSnapshot);
+	assert.match(publicSnapshot.sha256, /^[a-f0-9]{64}$/);
+	assert.equal(
+		publicSnapshot.files.some((file) => file.path === "package/src/helper.ts"),
+		true,
+	);
+	assert.equal("absolutePath" in publicSnapshot.files[0], false);
+
+	await writeFile(path.join(runtimeSourceRoot, "helper.ts"), "export const value = 2;\n");
+	const changedSnapshot = await checkRuntimeInputSnapshot(runtimeSnapshot);
+	assert.equal(changedSnapshot.clean, false);
+	assert.deepEqual(changedSnapshot.changedFiles, ["package/src/helper.ts"]);
+	assert.equal(
+		await readFile(path.join(runtimeSnapshot.extensionRoot, "helper.ts"), "utf8"),
+		"export const value = 1;\n",
+		"the live extension snapshot must not follow worktree changes",
+	);
+	await writeFile(path.join(runtimeSourceRoot, "helper.ts"), "export const value = 1;\n");
+	await writeFile(path.join(runtimeBenchmarkRoot, "added.mjs"), "export const added = true;\n");
+	assert.deepEqual((await checkRuntimeInputSnapshot(runtimeSnapshot)).changedFiles, [
+		"package/benchmark/added.mjs",
+	]);
+	await rm(path.join(runtimeBenchmarkRoot, "added.mjs"));
+	await rm(path.join(runtimeSourceRoot, "helper.ts"));
+	assert.deepEqual((await checkRuntimeInputSnapshot(runtimeSnapshot)).changedFiles, [
+		"package/src/helper.ts",
+	]);
+	await writeFile(path.join(runtimeSourceRoot, "helper.ts"), "export const value = 1;\n");
+	assert.equal((await checkRuntimeInputSnapshot(runtimeSnapshot)).clean, true);
+	await writeFile(runtimeProtocolPath, `${JSON.stringify(protocolInput, null, 2)}\n`);
+	assert.deepEqual((await checkRuntimeInputSnapshot(runtimeSnapshot)).changedFiles, [
+		"protocol/manifest.json",
+	]);
+	await writeFile(runtimeProtocolPath, `${JSON.stringify(protocolInput)}\n`);
+	assert.equal((await checkRuntimeInputSnapshot(runtimeSnapshot)).clean, true);
+	assert.equal(
+		classifyEvidence({
+			protocol,
+			options: protocolOptions,
+			status: "completed",
+			fullContextPassed: true,
+			evaluatorPassed: true,
+			sourceClean: changedSnapshot.clean,
+		}).classification,
+		"diagnostic",
+	);
+} finally {
+	await releaseRuntimeSnapshot(runtimeSnapshot);
+	await rm(runtimeRoot, { recursive: true, force: true });
+}
 
 const resultDirectory = await mkdtemp(path.join(tmpdir(), "pi-codex-compact-result-test-"));
 try {

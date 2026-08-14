@@ -185,6 +185,9 @@ export function validateProtocolManifest(value) {
 	if (!["controlled-manual-50k", "context-scale-diagnostic"].includes(value.contextRegime)) {
 		throw new Error("contextRegime is unsupported");
 	}
+	if (value.contextRegime === "controlled-manual-50k" && value.fixtureTargetTokens !== 50_000) {
+		throw new Error("controlled-manual-50k requires fixtureTargetTokens to equal 50000");
+	}
 	return structuredClone(value);
 }
 
@@ -214,6 +217,12 @@ export function protocolDeviations(protocol, options) {
 	return deviations;
 }
 
+export function protocolEligibilityDeviations(protocol) {
+	return protocol.contextRegime === "context-scale-diagnostic"
+		? ["The context-scale regime is diagnostic and cannot support confirmatory evidence."]
+		: [];
+}
+
 export function classifyEvidence({
 	protocol,
 	options,
@@ -223,7 +232,7 @@ export function classifyEvidence({
 	sourceClean = true,
 }) {
 	const configDeviations = protocol
-		? protocolDeviations(protocol, options)
+		? [...protocolDeviations(protocol, options), ...protocolEligibilityDeviations(protocol)]
 		: ["No locked protocol manifest was supplied."];
 	const outcomeDeviations = [];
 	if (status !== "completed") outcomeDeviations.push(`Run status is ${status}, not completed.`);

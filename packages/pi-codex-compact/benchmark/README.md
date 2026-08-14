@@ -119,6 +119,10 @@ The manifest locks:
 
 The runner rejects unknown fields, consumed or duplicate seeds, invalid ranges, and any locked CLI override.
 
+`controlled-manual-50k` requires an exact 50,000-token fixture target.
+
+A `context-scale-diagnostic` manifest can lock a diagnostic study but can never become a confirmatory plan or candidate.
+
 Machine output reports `protocolConformant`, the canonical protocol SHA-256, deviations, and either `diagnostic` or `confirmatory-candidate`.
 
 It never automatically claims that a conformant run was genuinely held out or primary evidence.
@@ -221,6 +225,16 @@ The cost guard is checked between fixtures, so one in-flight fixture can take th
 
 The runner checkpoints after every completed fixture using same-directory atomic rename.
 
+Checkpoint records remain `in-progress` and diagnostic until final revalidation publishes the completed result.
+
+Before the first provider request, it hashes the local benchmark modules, extension source, package manifest, lockfile, and locked protocol manifest.
+
+It loads every Codex session from a private read-only extension snapshot captured from those bytes.
+
+It rechecks the worktree inputs before every fixture, before each checkpoint, and before final evidence classification.
+
+Any detected addition, removal, or content change is recorded permanently and downgrades the run to diagnostic without changing the snapshotted extension code.
+
 It stops on provider, entitlement, protocol, extension, or validation failure.
 
 It refuses to report silent Pi fallback as a Codex artifact.
@@ -243,7 +257,8 @@ A future equal-resource analysis should use a predeclared budget frontier rather
 The JSON preserves:
 
 - Protocol identity and deviations.
-- Runtime, dependency, source, model, and estimator provenance.
+- Runtime, dependency, source, model, estimator, and local executable-input hashes.
+- Immutable-extension and source-drift evidence.
 - Exact fixture hashes.
 - Request sequence and repetition identity.
 - Artifact-level checkpoint size without opaque encrypted content.
@@ -309,7 +324,7 @@ Dollar values use Pi's model catalog and returned usage and are not an OpenAI in
 ## Limits
 
 - Remote Compaction V2 is an undocumented hosted protocol and can change independently.
-- The runner records local provenance but cannot identify an unpublished provider-side model revision.
+- The runner hashes local benchmark and extension inputs, but dependency provenance remains version- and lockfile-based and cannot identify an unpublished provider-side model revision.
 - Synthetic exact-state tasks do not measure real coding success, images, resume, fork, model switching, or tool execution after compaction.
 - The controlled 50K regime is not automatic-threshold evidence.
 - Provider load, cache state, OAuth tier, and model updates can affect latency, usage, and quality.

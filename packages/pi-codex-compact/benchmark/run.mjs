@@ -23,8 +23,19 @@ import {
 	fixtureMetadata,
 	plannedProviderRequests,
 } from "./planning.mjs";
-import { CONSUMED_SEEDS, classifyEvidence, PROFILES } from "./protocol.mjs";
-import { collectRuntimeProvenance } from "./provenance.mjs";
+import {
+	CONSUMED_SEEDS,
+	classifyEvidence,
+	PROFILES,
+	protocolEligibilityDeviations,
+} from "./protocol.mjs";
+import {
+	captureRuntimeInputSnapshot,
+	checkRuntimeInputSnapshot,
+	collectRuntimeProvenance,
+	createImmutableRuntimeSnapshot,
+	releaseRuntimeSnapshot,
+} from "./provenance.mjs";
 import { writeResultFile } from "./result-file.mjs";
 import { cloneSessionBranch } from "./session-clone.mjs";
 
@@ -35,7 +46,6 @@ const SYSTEM_PROMPT = [
 	"Do not invent unavailable state.",
 ].join("\n");
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const EXTENSION_ENTRY = path.join(PACKAGE_ROOT, "src", "index.ts");
 
 try {
 	const options = await parseArguments(process.argv.slice(2));
@@ -54,11 +64,28 @@ async function createDryRun(benchmarkOptions) {
 	const sdk = await import("@earendil-works/pi-coding-agent");
 	const plan = createFixturePlan(benchmarkOptions, sdk.estimateTokens);
 	const profile = PROFILES[benchmarkOptions.profile];
-	const provenance = await collectRuntimeProvenance(PACKAGE_ROOT, benchmarkOptions.protocol?.path);
+	const runtimeInputSnapshot = await captureRuntimeInputSnapshot({
+		packageRoot: PACKAGE_ROOT,
+		protocol: benchmarkOptions.protocol,
+	});
+	const provenance = await collectRuntimeProvenance(
+		PACKAGE_ROOT,
+		benchmarkOptions.protocol?.path,
+		runtimeInputSnapshot,
+	);
+	const planningDeviations = benchmarkOptions.protocol
+		? [
+				...protocolEligibilityDeviations(benchmarkOptions.protocol.manifest),
+				...(provenance.trackedBenchmarkChangesPresent === false
+					? []
+					: ["Tracked benchmark cleanliness is unavailable or dirty."]),
+				...(provenance.protocolManifestTrackedAtSourceRevision === true
+					? []
+					: ["The protocol manifest is not unchanged and tracked at the source revision."]),
+			]
+		: ["No locked protocol manifest was supplied."];
 	const protocolPlanConformant =
-		Boolean(benchmarkOptions.protocol) &&
-		provenance.trackedBenchmarkChangesPresent === false &&
-		provenance.protocolManifestTrackedAtSourceRevision === true;
+		Boolean(benchmarkOptions.protocol) && planningDeviations.length === 0;
 	return {
 		benchmark: BENCHMARK_ID,
 		mode: "dry-run",
@@ -71,16 +98,9 @@ async function createDryRun(benchmarkOptions) {
 			...(benchmarkOptions.protocol
 				? {
 						protocolSha256: benchmarkOptions.protocol.sha256,
-						deviations: [
-							...(provenance.trackedBenchmarkChangesPresent === false
-								? []
-								: ["Tracked benchmark cleanliness is unavailable or dirty."]),
-							...(provenance.protocolManifestTrackedAtSourceRevision === true
-								? []
-								: ["The protocol manifest is not unchanged and tracked at the source revision."]),
-						],
+						deviations: planningDeviations,
 					}
-				: { deviations: ["No locked protocol manifest was supplied."] }),
+				: { deviations: planningDeviations }),
 			humanPrimaryClaim: false,
 		},
 		provenance,
@@ -136,6 +156,7 @@ async function runLiveBenchmark(benchmarkOptions) {
 	const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = temporaryAgentDir;
 	const activeSessions = new Set();
+	let runtimeInputSnapshot;
 	let cancelled = false;
 	const lifecycleController = new AbortController();
 	const cancel = () => {
@@ -176,14 +197,25 @@ async function runLiveBenchmark(benchmarkOptions) {
 				);
 			}
 		}
+		runtimeInputSnapshot = await createImmutableRuntimeSnapshot({
+			packageRoot: PACKAGE_ROOT,
+			protocol: benchmarkOptions.protocol,
+			snapshotRoot: path.join(temporaryRoot, "runtime-snapshot"),
+		});
 		const provenance = await collectRuntimeProvenance(
 			PACKAGE_ROOT,
 			benchmarkOptions.protocol?.path,
+			runtimeInputSnapshot,
 		);
 		const trials = [];
 		let stopReason = "completed";
 		for (let index = 0; index < fixtures.length; index += 1) {
 			if (cancelled) throw new Error("cancelled");
+			await revalidateRuntimeInputs({
+				boundary: `before-fixture-${index + 1}`,
+				provenance,
+				runtimeInputSnapshot,
+			});
 			const recordedCost = trials.reduce((total, trial) => total + trial.recordedCostUsd, 0);
 			if (trials.length > 0 && recordedCost >= benchmarkOptions.maxCostUsd) {
 				stopReason = "estimated-cost-guard";
@@ -203,12 +235,18 @@ async function runLiveBenchmark(benchmarkOptions) {
 				model,
 				modelRuntime,
 				profile,
+				extensionEntry: runtimeInputSnapshot.extensionEntry,
 				sdk,
 				signal: lifecycleController.signal,
 				temporaryAgentDir,
 				trialIndex: index,
 			});
 			trials.push(trial);
+			await revalidateRuntimeInputs({
+				boundary: `checkpoint-after-fixture-${index + 1}`,
+				provenance,
+				runtimeInputSnapshot,
+			});
 			if (benchmarkOptions.output) {
 				await writeResultFile(
 					benchmarkOptions.output,
@@ -218,13 +256,18 @@ async function runLiveBenchmark(benchmarkOptions) {
 						model,
 						profile,
 						provenance,
-						stopReason: index + 1 === fixtures.length ? "completed" : "in-progress",
+						stopReason: "in-progress",
 						trials,
 					}),
 				);
 			}
 		}
 		if (trials.length === 0) throw new Error("no benchmark trial completed");
+		await revalidateRuntimeInputs({
+			boundary: "before-final-classification",
+			provenance,
+			runtimeInputSnapshot,
+		});
 		return createLiveResult({
 			benchmarkOptions,
 			fixtures,
@@ -242,7 +285,28 @@ async function runLiveBenchmark(benchmarkOptions) {
 		process.off("SIGTERM", cancel);
 		if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+		await releaseRuntimeSnapshot(runtimeInputSnapshot);
 		await rm(temporaryRoot, { recursive: true, force: true });
+	}
+}
+
+async function revalidateRuntimeInputs({ boundary, provenance, runtimeInputSnapshot }) {
+	const check = await checkRuntimeInputSnapshot(runtimeInputSnapshot);
+	const runtimeInputs = provenance.runtimeInputs;
+	if (!runtimeInputs) throw new Error("runtime input provenance is unavailable");
+	runtimeInputs.validationCount = (runtimeInputs.validationCount ?? 0) + 1;
+	if (check.clean) return;
+	const previousFiles = new Set(runtimeInputs.changedFiles);
+	const changedFiles = [...new Set([...previousFiles, ...check.changedFiles])].sort();
+	const newlyChanged = changedFiles.filter((file) => !previousFiles.has(file));
+	runtimeInputs.driftDetected = true;
+	runtimeInputs.changedFiles = changedFiles;
+	runtimeInputs.firstDetectedBoundary ??= boundary;
+	if (newlyChanged.length > 0 || runtimeInputs.validationCount === 1) {
+		process.stderr.write(
+			`Runtime input drift detected at ${terminalText(boundary)}; ` +
+				`evidence will remain diagnostic: ${terminalText(check.changedFiles.join(", "))}\n`,
+		);
 	}
 }
 
@@ -266,7 +330,8 @@ function createLiveResult({
 		evaluatorPassed: summary.evaluatorReliability.passed,
 		sourceClean:
 			provenance.trackedBenchmarkChangesPresent === false &&
-			(!benchmarkOptions.protocol || provenance.protocolManifestTrackedAtSourceRevision === true),
+			(!benchmarkOptions.protocol || provenance.protocolManifestTrackedAtSourceRevision === true) &&
+			provenance.runtimeInputs?.driftDetected === false,
 	});
 	return {
 		benchmark: BENCHMARK_ID,
@@ -315,6 +380,7 @@ async function runTrial(input) {
 		model,
 		modelRuntime,
 		profile,
+		extensionEntry,
 		sdk,
 		signal,
 		temporaryAgentDir,
@@ -355,6 +421,7 @@ async function runTrial(input) {
 				model,
 				modelRuntime,
 				profile,
+				extensionEntry,
 				sdk,
 				temporaryAgentDir,
 			});
@@ -407,6 +474,7 @@ async function runTrial(input) {
 					model,
 					modelRuntime,
 					profile,
+					extensionEntry,
 					sdk,
 					temporaryAgentDir,
 				});
@@ -480,6 +548,7 @@ async function createBenchmarkSession(input) {
 		model,
 		modelRuntime,
 		profile,
+		extensionEntry,
 		sdk,
 		temporaryAgentDir,
 	} = input;
@@ -517,7 +586,7 @@ async function createBenchmarkSession(input) {
 		noPromptTemplates: true,
 		noThemes: true,
 		noContextFiles: true,
-		additionalExtensionPaths: arm === "codex" ? [EXTENSION_ENTRY] : [],
+		additionalExtensionPaths: arm === "codex" ? [extensionEntry] : [],
 		systemPromptOverride: () => SYSTEM_PROMPT,
 		appendSystemPromptOverride: () => [],
 	});
@@ -747,7 +816,9 @@ function publicConfig(benchmarkOptions, profile) {
 		consumedSeedsUsed: benchmarkOptions.seeds.filter((seed) => CONSUMED_SEEDS.includes(seed)),
 		suiteDefaultsUsed: benchmarkOptions.suiteDefaultsUsed,
 		studyDesign: benchmarkOptions.protocol
-			? "Locked confirmatory-candidate protocol; human held-out provenance is not asserted by the runner."
+			? benchmarkOptions.contextRegime === "controlled-manual-50k"
+				? "Locked confirmatory-candidate protocol; human held-out provenance is not asserted by the runner."
+				: "Locked diagnostic context-scale protocol."
 			: benchmarkOptions.profile === "matched-tail"
 				? "Diagnostic nominal 20K retained-setting comparison."
 				: "Diagnostic shipped retention-policy comparison.",

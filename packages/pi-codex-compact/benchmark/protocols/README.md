@@ -35,6 +35,10 @@ The placeholder example is documentation and is not a valid executable manifest.
 
 The manifest validator rejects unknown fields, duplicate values, unsorted lists, consumed seeds 301–304, unsupported profiles, and invalid ranges.
 
+`controlled-manual-50k` requires `fixtureTargetTokens` to equal exactly `50000`.
+
+`context-scale-diagnostic` may lock a broader-context diagnostic protocol, but the runner always labels its plan and completed evidence as diagnostic.
+
 The following controls remain operational CLI options and are not locked by the manifest:
 
 - `--agent-dir`
