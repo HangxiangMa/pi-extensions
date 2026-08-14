@@ -49,12 +49,12 @@ The benchmark self-test will remain a documented manual check and will not be ad
 - Calibration may inspect calibration-only seeds, but it must not inspect fresh confirmatory outcomes.
 - The existing matched-tail result remains unchanged and is documented as diagnostic rather than rewritten into a new schema.
 
-## Unknowns
+## Resolved Unknowns
 
-- Confirm whether a compacted in-memory branch can be cloned into isolated probe sessions so one artifact can be probed repeatedly without adding the first probe response to later contexts.
-- Measure evaluator disagreement during calibration before deciding whether one probe per confirmatory artifact is sufficient.
-- Determine the final shoulder and stress densities from the revised matched-tail calibration before creating the confirmatory manifest.
-- Calculate the final request count and estimated spend after repetition and evaluator-reliability settings are locked.
+- A compacted linear in-memory branch can be cloned into isolated probe sessions without carrying an earlier probe response into later contexts; provider-free lifecycle coverage verifies ID remapping and deep-cloned checkpoint details.
+- Calibration found zero evaluator disagreements or parse failures, so the locked protocol uses one probe per confirmatory artifact.
+- Calibration selected density 120 as the shoulder and density 160 as the stress point before fresh confirmatory fixtures were generated.
+- The locked confirmatory plan contains 240 requests, projects $78.682920 recorded cost from calibration, and proposes a $100 between-fixture guard; the user chose not to execute it.
 
 ## Risks
 
@@ -89,9 +89,9 @@ The benchmark self-test will remain a documented manual check and will not be ad
 - [x] Obtained explicit user approval for the documented 33-request calibration and $20 between-fixture guard before making any live provider request.
 - [x] Completed all 33 calibration requests for three fixtures within $10.348713 recorded cost; retained the diagnostic evidence at SHA-256 `23b7e0197a7a921e5e155591b80ce911ccdf07edfc9f37c62f700691e65dad19`; verified full-context and evaluator gates; selected densities 120 and 160; generated eight unseen seed identifiers; and created the final confirmatory protocol manifest before execution.
 - [x] Produced a zero-network confirmatory dry run from committed source revision `d8a2149e6d332d4465ce61d638920e548a66e3e5`; verified all 16 fixture hashes, canonical protocol SHA-256 `5d2e1a6e0c4c45c9a4824e76e5d498c5c99e35365418029ee399e912ad851a10`, 240 requests, the proposed $100 between-fixture guard, clean tracked inputs, a tracked unchanged manifest, and no consumed seeds; and recorded the review in `benchmark/protocols/CONFIRMATORY-V3-PREFLIGHT.md` before requesting separate live-run approval.
-- [ ] After an explicitly approved confirmatory run, verify every planned fixture and repetition completed, every evaluator gate passed, the result matches its manifest, and any incomplete or deviating run remains diagnostic.
+- [x] Not applicable: the user chose not to authorize or execute the paid 240-request confirmatory run after reviewing its sampling basis, $78.682920 calibration-based projection, and proposed $100 between-fixture guard; no confirmatory provider request was made, and the committed protocol and zero-network preflight remain available for a separately approved future study.
 - [x] Audited the implementation diff against `docs/extension-conventions.md`, confirmed `docs/extension-settings.md` remains inapplicable, and scanned the complete benchmark for estimator divergence, false primary labels, unlocked controls, consumed seeds, pseudo-replication, unclosed sessions, and non-atomic result writes.
-- [ ] Archive this plan only after the separately approved calibration and confirmatory evidence gates complete.
+- [x] Archived this completed implementation plan after the approved calibration completed and the user explicitly declined the separately gated confirmatory execution.
 
 ## Completion Checklist
 
@@ -106,4 +106,4 @@ The benchmark self-test will remain a documented manual check and will not be ad
 - [x] The existing matched-tail result remains unchanged, tracked, and clearly diagnostic.
 - [x] No live provider call occurred without a reviewed dry run and explicit approval.
 - [x] Manual benchmark checks, repository checks, package packing, semantic audits, and implementation diff review pass.
-- [ ] The completed plan is archived under `docs/plans/archived/` with calibration, manifest, checks, and any unverified paths recorded.
+- [x] The completed plan is archived under `docs/plans/archived/` with calibration, manifest, checks, the declined confirmatory execution, and the absence of v3 confirmatory evidence recorded.

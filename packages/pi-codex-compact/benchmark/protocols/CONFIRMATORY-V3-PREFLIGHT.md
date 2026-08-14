@@ -4,6 +4,10 @@ This preflight was generated without provider requests from committed source rev
 
 It does not authorize the live run.
 
+The user reviewed the sampling basis and chose not to execute the paid confirmatory run.
+
+No confirmatory provider request was made.
+
 ## Locked identity
 
 - Protocol: `matched-tail-confirmatory-v3-2026-08-14.json`.
