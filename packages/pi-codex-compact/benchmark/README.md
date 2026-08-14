@@ -133,6 +133,9 @@ The reviewed calibration plan and completed outcome are in
 The locked fresh-seed protocol is
 [`protocols/matched-tail-confirmatory-v3-2026-08-14.json`](./protocols/matched-tail-confirmatory-v3-2026-08-14.json).
 
+Its provider-free request, cost, and fixture review is in
+[`protocols/CONFIRMATORY-V3-PREFLIGHT.md`](./protocols/CONFIRMATORY-V3-PREFLIGHT.md).
+
 ## Safe dry runs
 
 From the repository root, preview the default exploratory diagnostic without provider calls:

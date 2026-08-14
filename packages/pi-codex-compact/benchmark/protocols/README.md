@@ -47,3 +47,7 @@ The following controls remain operational CLI options and are not locked by the 
 A conformant completed run is only a confirmatory candidate.
 
 Human review must verify that the manifest commit predates execution, the seeds were not inspected, calibration selected the densities, all planned work completed, and no provider-side change invalidated the comparison.
+
+The current locked protocol is `matched-tail-confirmatory-v3-2026-08-14.json`.
+
+Its reviewed zero-network execution plan is in `CONFIRMATORY-V3-PREFLIGHT.md`.
