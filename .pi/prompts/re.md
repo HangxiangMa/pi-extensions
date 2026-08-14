@@ -1,6 +1,6 @@
 ---
 description: Resolve all review feedback on a pull request
-argument-hint: "<pr-url-or-number>"
+argument-hint: "<PR URL or number>"
 ---
 
 Target: ${ARGUMENTS:-the pull request for the current branch}
