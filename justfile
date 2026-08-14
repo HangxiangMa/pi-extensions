@@ -87,6 +87,10 @@ smoke-chat-network:
 benchmark-subagents samples="7":
     node scripts/benchmark-pi-subagents-transports.mjs --samples {{ quote(samples) }}
 
+# Preview or explicitly run the pi-codex-compact live-provider benchmark
+benchmark-codex-compact *args:
+    node packages/pi-codex-compact/benchmark/run.mjs {{ args }}
+
 # Install dependencies, build the shared TUI library, and start every local extension package
 # pi-statusline and pi-tui-kit are intentionally excluded from Pi extension loading
 # PI_TIMING reports startup timing and PI_CODING_AGENT_DIR isolates local development state
