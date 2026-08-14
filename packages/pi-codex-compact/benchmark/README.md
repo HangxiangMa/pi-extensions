@@ -6,33 +6,48 @@ This repository-only benchmark compares three paths on the same seeded synthetic
 2. Pi-native plaintext compaction.
 3. This extension's Codex Remote Compaction V2 path.
 
-It measures whether each fixture is answerable, then compares Pi and Codex on compaction speed, Pi-catalog estimated USD cost, downstream context size, and exact state recovery.
+It measures answerability, exact state recovery, latency, Pi-catalog estimated USD cost, and realized downstream context size.
 
-The default `matched-tail` profile gives Pi native and Codex Remote V2 a 20K retained-tail budget under a controlled no-retry protocol.
+Benchmark v3 separates ordinary diagnostics from locked confirmatory candidates and measures repeated compaction artifacts instead of treating one hosted response as stable.
 
-The optional `production` profile compares their shipped 20K and 64K retention policies.
+## Claim boundary
+
+The default `matched-tail` profile gives Pi and Codex nominal 20K retention settings.
+
+Those settings are not equal information capacities.
+
+Pi retains recent all-role messages and a plaintext summary.
+
+Codex retains approximate user-role text and an opaque compaction item.
+
+The default 50K fixture is a controlled manual-compaction study and does not represent automatic compaction near a model's context limit.
+
+The benchmark measures synthetic exact state recovery rather than general coding quality.
 
 ## Metrics
 
 | Area | Primary metric | Supporting metrics |
 | --- | --- | --- |
-| Answerability | Full-context exact-recall rate | Parse failures and probe stop reason |
-| Speed | Paired wall-clock compaction latency | Probe and compaction-plus-probe latency |
-| Cost | Paired compaction `usage.cost.total` | Probe cost, end-to-end cost, and input/output/cache usage |
-| Compression quality | Exact matches after compaction | Results by density, category, epoch, seed, and paired question outcome |
-| Compression footprint | Probe request input tokens | Compaction output tokens and Pi's local `estimatedTokensAfter` |
+| Answerability | Full-context exact-recall rate per fixture | Parse failures and stop reasons |
+| Reliability | Artifact and repeated-probe score distributions | Perfect artifacts, disagreement, and parse failures |
+| Compression quality | Seed-level paired Codex-minus-Pi recall | Descriptive totals by density, category, epoch, and question |
+| Speed | Artifact-level compaction latency | Probe and end-to-end latency |
+| Cost | Artifact-level compaction estimated cost | Probe, end-to-end, and total run cost |
+| Footprint | Provider-observed probe input tokens | Compaction output and local post-compaction estimates |
 
-Lower latency, estimated cost, and probe input tokens are better.
+Questions are nested within probes, artifacts, densities, and seeds.
 
-Higher exact-recall rate is better.
+Question totals are descriptive.
 
-A quality comparison is not primary evidence when any full-context fixture scores below 98%, because that indicates an evaluator, output-format, model, or fixture-answerability problem.
+Seed-level paired deltas are the independent comparison.
+
+The summary reports every seed delta, median, MAD, mean, and a deterministic seed-clustered bootstrap interval.
 
 ## Fixture design
 
 The fixture version is `multi-state-compaction-recall:v2`.
 
-Each fixture has a deterministic seed, ten history epochs, a fixed target near 50K estimated history tokens, and five state categories:
+Each fixture has ten history epochs, a fixed estimated history target, and five state categories:
 
 | Category | What it tests |
 | --- | --- |
@@ -42,214 +57,241 @@ Each fixture has a deterministic seed, ten history epochs, a fixed target near 5
 | `distractor_resolution` | Final corrections instead of superseded candidates |
 | `task_continuation` | Current status, receipt, and next-action bundles |
 
-Density means authoritative records per category.
+Density is the number of authoritative records per category.
 
-Raising density replaces unrelated filler with authoritative records while keeping total history length nearly fixed.
+Higher density replaces unrelated filler with authoritative state instead of making the fixture proportionally longer.
 
-This changes information load without making difficult fixtures proportionally longer.
+Questions are selected deterministically across categories and epochs and appear only after compaction.
 
-Scored questions are selected deterministically across categories and epochs and appear only in the post-compaction probe.
+Expected values appear in historical assistant messages or tool results and never in historical user text.
 
-Expected values appear in historical assistant messages or tool results, never in historical user text.
+The full, Pi, and Codex arms receive identical fixture messages and questions.
 
-This prevents Codex's retained user-role plaintext from answering a probe without preserving assistant or tool state.
+Dry and live planning both use Pi's installed `estimateTokens` export, so the same code, dependency versions, options, and protocol produce identical fixture hashes.
 
-The full-context, Pi, and Codex arms receive identical messages and questions.
+## Repetition and evaluator reliability
 
-## Study suites
+`--repetitions` controls independent Pi and Codex compaction artifacts per fixture.
 
-| Suite | Seeds | Densities | Questions per fixture | Fixtures | Provider requests |
-| --- | --- | --- | ---: | ---: | ---: |
-| `exploratory` | 1 | 120 | 15 | 1 | 5 |
-| `calibration` | 111 | 120, 160, 200 | 75 | 3 | 15 |
-| `confirmatory` | 301–304 | 180, 200 | 75 | 8 | 40 |
+`--probes-per-artifact` controls isolated probes over each artifact and an equal number of fresh full-context probes.
 
-The exploratory suite is only a harness and entitlement smoke.
+Each probe receives a cloned pre-probe session branch, so one probe response cannot affect another.
 
-The calibration suite finds a shoulder where at least one compaction path is below ceiling and a stress density where both paths face meaningful information pressure.
+Compaction order alternates and three-arm probe order rotates within every complete seed block.
 
-The confirmatory defaults are starting values adapted from an earlier related harness.
+A confirmatory manifest must use at least three compaction repetitions.
 
-Inspect this benchmark's own calibration before spending held-out seeds, and override `--densities` before the confirmatory run when its shoulder differs.
+Calibration should repeat probes over fixed artifacts to measure evaluator disagreement.
 
-Never include calibration scores in confirmatory totals.
+Any parse failure or exact-answer disagreement above the locked threshold makes the run diagnostic.
 
-Do not inspect or tune against seeds 301–304 before their confirmatory run.
+The uncompressed full-context control must also score at least 98% in every fixture.
 
-The result marks evidence as primary-eligible only when the locked 50K matched-tail protocol and held-out seeds are unchanged, except for densities fixed from calibration, every planned fixture completes, and every full-context fixture passes.
+## Diagnostic suites
 
-Questions within one fixture share one model response and are nested outcomes.
+| Suite | Seeds | Densities | Questions per fixture | Default purpose |
+| --- | --- | --- | ---: | --- |
+| `exploratory` | 1 | 120 | 15 | Harness and entitlement smoke |
+| `calibration` | 111 | 120, 160, 200 | 75 | Select difficulty and test evaluator reliability |
+| `confirmatory` | 301–304 | 180, 200 | 75 | Legacy diagnostic compatibility only |
 
-The independent replications are seeds, not the total number of question rows.
+Seeds 301–304 have already been inspected under matched-tail and production policies.
 
-## Safety-first dry runs
+They are permanently consumed and cannot appear in a v3 confirmatory protocol manifest.
 
-From the repository root, preview the exploratory suite without provider requests:
+A suite-only invocation is always diagnostic, even when its controls match a historical confirmatory command.
+
+## Locked protocol manifests
+
+A confirmatory candidate requires `--protocol <path>`.
+
+The manifest locks:
+
+- Benchmark and protocol versions.
+- Calibration evidence SHA-256.
+- Model and retention profile.
+- Fresh seeds and calibrated densities.
+- Questions, epochs, and fixture target.
+- Compaction and probe thinking levels.
+- Artifact and probe repetition counts.
+- Evaluator disagreement threshold.
+- Context claim scope.
+
+The runner rejects unknown fields, consumed or duplicate seeds, invalid ranges, and any locked CLI override.
+
+Machine output reports `protocolConformant`, the canonical protocol SHA-256, deviations, and either `diagnostic` or `confirmatory-candidate`.
+
+It never automatically claims that a conformant run was genuinely held out or primary evidence.
+
+Human review must verify that the committed manifest predates provider execution and that its fresh outcomes were not inspected earlier.
+
+See [`protocols/README.md`](./protocols/README.md) for the schema and workflow.
+
+The reviewed provider-free calibration request plan is in
+[`protocols/CALIBRATION-V3.md`](./protocols/CALIBRATION-V3.md).
+
+## Safe dry runs
+
+From the repository root, preview the default exploratory diagnostic without provider calls:
 
 ```bash
 just benchmark-codex-compact
 ```
 
-Preview the larger request plans the same way:
+Preview calibration with repeated evaluator probes:
 
 ```bash
-just benchmark-codex-compact --suite calibration
-just benchmark-codex-compact --suite confirmatory
+just benchmark-codex-compact \
+  --suite calibration \
+  --repetitions 1 \
+  --probes-per-artifact 3
 ```
 
-The direct equivalent is:
+Preview a committed protocol:
 
 ```bash
-node packages/pi-codex-compact/benchmark/run.mjs --suite exploratory
+just benchmark-codex-compact \
+  --protocol packages/pi-codex-compact/benchmark/protocols/<protocol>.json
 ```
 
-Dry-run output includes fixture hashes and sizes, suite controls, and exact request counts.
+Dry-run output includes exact fixture hashes, repetition counts, request order policy, request count, provenance, and protocol identity.
 
 It does not require credentials or contact OpenAI.
 
-Run the deterministic provider-free benchmark self-test with:
+Run the deterministic provider-free self-test manually with:
 
 ```bash
 node packages/pi-codex-compact/benchmark/self-test.mjs
 ```
 
+The benchmark self-test intentionally remains outside CI.
+
 ## Live workflow
 
-A live run requires Pi's `openai-codex` OAuth login and Remote Compaction V2 entitlement.
+Live work requires an explicit `--live` flag, OpenAI Codex OAuth, Remote V2 entitlement, and separate approval after reviewing the dry run.
 
-Every fixture makes five provider requests: two compactions and three quality probes.
+A fixture makes this many requests:
 
-Start with the exploratory suite:
-
-```bash
-just benchmark-codex-compact \
-  --live \
-  --suite exploratory \
-  --output packages/pi-codex-compact/benchmark/results/exploratory-gpt-5.6-sol.json
+```text
+repetitions × (2 compactions + 3 × probes-per-artifact)
 ```
 
-Then run calibration with a modest estimated-cost guard:
+For example, three artifact repetitions and one probe per artifact make 15 requests per fixture.
+
+A candidate with eight seeds, two densities, and three repetitions makes 240 requests.
+
+Run calibration only after reviewing its count and cost guard:
 
 ```bash
 just benchmark-codex-compact \
   --live \
   --suite calibration \
-  --max-cost-usd 8 \
-  --output packages/pi-codex-compact/benchmark/results/calibration-gpt-5.6-sol.json
+  --repetitions 1 \
+  --probes-per-artifact 3 \
+  --max-cost-usd <approved-amount> \
+  --output packages/pi-codex-compact/benchmark/results/<calibration>.json
 ```
 
-Choose and write down the shoulder and stress densities before touching held-out seeds.
+After calibration:
 
-Run the confirmatory suite once with those fixed densities:
+1. Preserve and hash the calibration evidence.
+2. Select densities without inspecting fresh confirmatory outcomes.
+3. Generate fresh seeds that exclude the consumed list.
+4. Commit the final protocol manifest before execution.
+5. Preview the committed manifest and request separate live-run approval.
+6. Run it once and retain any deviation or incomplete result as diagnostic.
+
+A live protocol command is:
 
 ```bash
 just benchmark-codex-compact \
   --live \
-  --suite confirmatory \
-  --densities 180,200 \
-  --max-cost-usd 20 \
-  --output packages/pi-codex-compact/benchmark/results/confirmatory-gpt-5.6-sol.json
+  --protocol packages/pi-codex-compact/benchmark/protocols/<protocol>.json \
+  --max-cost-usd <approved-amount> \
+  --output packages/pi-codex-compact/benchmark/results/<result>.json
 ```
-
-Custom seeds and densities are supported for additional predeclared studies:
-
-```bash
-just benchmark-codex-compact \
-  --live \
-  --suite exploratory \
-  --seeds 501,502 \
-  --densities 140,180 \
-  --questions-per-category 15
-```
-
-The runner checkpoints `--output` after every completed fixture.
-
-Each checkpoint is written to a same-directory temporary file and atomically renamed so an interrupted write cannot truncate the previous result.
 
 The cost guard is checked between fixtures, so one in-flight fixture can take the estimate past the configured amount.
 
-It stops on the first provider, entitlement, protocol, or validation failure.
+The runner checkpoints after every completed fixture using same-directory atomic rename.
 
-It refuses to label a silent Pi-native fallback as Codex.
+It stops on provider, entitlement, protocol, extension, or validation failure.
 
-Run `node packages/pi-codex-compact/benchmark/run.mjs --help` for every option.
-
-## Fairness controls
-
-Both compaction arms use the same current Pi SDK, model, synthetic history, system prompt, retained-tail profile, transport, retry policy, and fixture index.
-
-Pi's current product-default `medium` thinking level is used for compaction.
-
-All three quality probes use `low` thinking to keep the evaluator consistent and reduce evaluation cost.
-
-Tools are disabled during probes, and all Pi summarization, provider, and extension transport retries are disabled.
-
-The runner alternates Pi and Codex compaction order and rotates the three-arm probe order separately.
-
-A 300 ms delay separates provider requests by default.
-
-The uncompressed control receives no compaction request, so only Pi and Codex have comparable compaction latency and cost.
+It refuses to report silent Pi fallback as a Codex artifact.
 
 ## Profiles
 
-| Profile | Pi retained-tail budget | Codex retained user-text budget | Purpose |
+| Profile | Pi retained-tail setting | Codex retained user-text setting | Purpose |
 | --- | ---: | ---: | --- |
-| `matched-tail` (default) | 20K tokens | 20K approximate tokens | Reduce retained-tail differences for the primary comparison. |
-| `production` | 20K tokens | 64K approximate tokens | Compare shipped retention policies with retries controlled off. |
+| `matched-tail` (default) | 20K tokens | 20K approximate tokens | Nominal-setting diagnostic or locked study |
+| `production` | 20K tokens | 64K approximate tokens | Shipped-policy diagnostic |
 
-The matched-tail profile still does not make opaque Codex capacity numerically equivalent to Pi plaintext output capacity.
+Every result sets `equalInformationCapacity` to `false` and reports realized footprint beside the nominal settings.
 
-Never set Pi's output budget after observing a paired Codex artifact or vice versa, because that uses one treatment's outcome to configure the other treatment.
+Never configure one arm from the observed output of its paired treatment.
+
+A future equal-resource analysis should use a predeclared budget frontier rather than a post-treatment cap.
 
 ## Result interpretation
 
-The JSON retains every fixture, execution order, per-question exact score, usage object, latency, estimated cost, checkpoint size, and fixture hash.
+The JSON preserves:
 
-Its summary reports:
-
-- Overall quality for full context, Pi, and Codex.
-- Quality by density, category, epoch, and seed.
-- Paired outcomes where both matched, only Codex matched, only Pi matched, or both missed.
-- Medians, median absolute deviations, minima, and maxima for resource metrics.
-- Paired Codex-minus-Pi deltas.
-- The number of independent seeds and the nested-question caveat.
-
-A negative Codex-minus-Pi latency or cost delta favors Codex.
+- Protocol identity and deviations.
+- Runtime, dependency, source, model, and estimator provenance.
+- Exact fixture hashes.
+- Request sequence and repetition identity.
+- Artifact-level checkpoint size without opaque encrypted content.
+- Per-probe usage, latency, stop reason, response hash, and exact scores.
+- Full-context and fixed-artifact disagreement.
+- Seed-level paired quality and descriptive nested totals.
+- Realized latency, estimated cost, and downstream input.
 
 A positive Codex-minus-Pi quality delta favors Codex.
 
-The quality probe's input-token count is the best provider-observed approximation of downstream context size in this SDK harness.
+A negative Codex-minus-Pi latency or cost delta favors Codex.
 
-Compare quality and footprint together because retaining more context can improve recall while weakening compression.
+Inspect artifact distributions rather than relying only on aggregate recall because Remote V2 allocation can be bimodal.
 
-Exact matching intentionally treats wrong case, punctuation, formatting, or a lost negation as failures.
+Output-size correlation is descriptive and does not prove that token count caused quality.
 
-Inspect raw misses before deciding whether they represent semantic state loss or only formatting sensitivity.
+## Preserved diagnostic result
 
-## Cost and privacy
+The repository retains one v2 matched-tail diagnostic result:
 
-Live runs send only deterministic synthetic transcripts and probes to the OpenAI Codex backend used by Pi.
+```text
+results/matched-tail-same-fixtures-gpt-5.6-sol.json
+```
 
-They do not send repository content or user session data.
+Its SHA-256 is:
 
-The runner reads the selected Pi agent directory's `auth.json` through Pi's model runtime and never copies credentials into result files.
+```text
+526bebd0833528e2dfab8a7203e65a5e9ac4cfbbb9e23a36f7ecba362ab6afc7
+```
 
-Extension settings and sessions live in a temporary directory that is removed after success, failure, or cancellation.
+It used consumed seeds 301–304, one artifact per arm and fixture, and no evaluator repetition.
 
-Opaque compaction content is not stored in results.
+It must not be relabeled as v3 confirmatory evidence.
 
-Only its SHA-256 hash and byte count are retained.
+## Cost, privacy, and cleanup
 
-Reported dollars use the selected model's current Pi catalog rates and returned usage.
+Live runs send only deterministic synthetic transcripts and probes to the same OpenAI Codex backend used by Pi.
 
-They are estimates, not an OpenAI invoice and not a statement about ChatGPT or Codex subscription billing.
+They do not send repository content or user sessions.
+
+The runner reads credentials through Pi's model runtime and never stores tokens or headers in results.
+
+Temporary extension settings and sessions are removed after success, failure, or cancellation.
+
+Opaque content is represented only by SHA-256 and byte count.
+
+Dollar values use Pi's model catalog and returned usage and are not an OpenAI invoice.
 
 ## Limits
 
 - Remote Compaction V2 is an undocumented hosted protocol and can change independently.
-- Pi and Codex use different compaction representations, so matching both retained-tail budgets at 20K does not make their total information capacities equal.
-- Prompt-only JSON conformance can fail because the Pi SDK path does not request a benchmark-specific provider response schema.
-- The synthetic benchmark does not measure images, real coding success, repeated compaction, resume, fork, model switching, or tool execution after compaction.
-- Provider cache state, load, OAuth tier, model updates, and Pi dependency updates can change latency, usage, and quality across dates.
-- Four confirmatory seeds remain a small independent sample even though they produce hundreds of nested question outcomes.
-- The Codex arm measures this extension's checkpoint projection, not Codex CLI's complete context-window lifecycle.
+- The runner records local provenance but cannot identify an unpublished provider-side model revision.
+- Synthetic exact-state tasks do not measure real coding success, images, resume, fork, model switching, or tool execution after compaction.
+- The controlled 50K regime is not automatic-threshold evidence.
+- Provider load, cache state, OAuth tier, and model updates can affect latency, usage, and quality.
+- Even eight independent seeds remain a limited generalization sample.
+- The Codex arm measures this extension's projection path, not the complete Codex CLI lifecycle.

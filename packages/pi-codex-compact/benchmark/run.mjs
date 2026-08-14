@@ -9,16 +9,24 @@ import { performance } from "node:perf_hooks";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_TIMEOUT_MS, parseArguments } from "./config.mjs";
 import {
 	BENCHMARK_ID,
 	buildProbePrompt,
-	createBenchmarkFixtures,
-	PROFILES,
-	SUITES,
 	scoreProbeResponse,
 	summarizeBenchmarkTrials,
 } from "./core.mjs";
+import {
+	compactionOrderFor,
+	createFixturePlan,
+	evaluationOrderFor,
+	fixtureMetadata,
+	plannedProviderRequests,
+} from "./planning.mjs";
+import { CONSUMED_SEEDS, classifyEvidence, PROFILES } from "./protocol.mjs";
+import { collectRuntimeProvenance } from "./provenance.mjs";
 import { writeResultFile } from "./result-file.mjs";
+import { cloneSessionBranch } from "./session-clone.mjs";
 
 const SYSTEM_PROMPT = [
 	"You are a deterministic benchmark recovery agent.",
@@ -28,16 +36,12 @@ const SYSTEM_PROMPT = [
 ].join("\n");
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXTENSION_ENTRY = path.join(PACKAGE_ROOT, "src", "index.ts");
-const DEFAULT_MODEL = "gpt-5.6-sol";
-const DEFAULT_PROFILE = "matched-tail";
-const DEFAULT_TIMEOUT_MS = 300_000;
-const THINKING_LEVELS = Object.freeze(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 try {
-	const options = parseArguments(process.argv.slice(2));
+	const options = await parseArguments(process.argv.slice(2));
 	if (options.help) printHelp();
 	else {
-		const result = options.live ? await runLiveBenchmark(options) : createDryRun(options);
+		const result = options.live ? await runLiveBenchmark(options) : await createDryRun(options);
 		await publishResult(result, options.output);
 	}
 } catch (error) {
@@ -46,23 +50,52 @@ try {
 	process.exitCode = 1;
 }
 
-function createDryRun(benchmarkOptions) {
+async function createDryRun(benchmarkOptions) {
+	const sdk = await import("@earendil-works/pi-coding-agent");
+	const plan = createFixturePlan(benchmarkOptions, sdk.estimateTokens);
 	const profile = PROFILES[benchmarkOptions.profile];
-	const fixtures = createBenchmarkFixtures(fixtureOptions(benchmarkOptions));
+	const provenance = await collectRuntimeProvenance(PACKAGE_ROOT, benchmarkOptions.protocol?.path);
+	const protocolPlanConformant =
+		Boolean(benchmarkOptions.protocol) &&
+		provenance.trackedBenchmarkChangesPresent === false &&
+		provenance.protocolManifestTrackedAtSourceRevision === true;
 	return {
 		benchmark: BENCHMARK_ID,
 		mode: "dry-run",
 		createdAt: new Date().toISOString(),
 		note: "No provider request was made. Pass --live to execute the quota-consuming benchmark.",
 		config: publicConfig(benchmarkOptions, profile),
-		fixtures: fixtures.map(fixtureMetadata),
-		plannedProviderRequests: fixtures.length * 5,
+		planningEvidence: {
+			classification: protocolPlanConformant ? "confirmatory-plan" : "diagnostic-plan",
+			protocolConformant: protocolPlanConformant,
+			...(benchmarkOptions.protocol
+				? {
+						protocolSha256: benchmarkOptions.protocol.sha256,
+						deviations: [
+							...(provenance.trackedBenchmarkChangesPresent === false
+								? []
+								: ["Tracked benchmark cleanliness is unavailable or dirty."]),
+							...(provenance.protocolManifestTrackedAtSourceRevision === true
+								? []
+								: ["The protocol manifest is not unchanged and tracked at the source revision."]),
+						],
+					}
+				: { deviations: ["No locked protocol manifest was supplied."] }),
+			humanPrimaryClaim: false,
+		},
+		provenance,
+		fixtures: plan.map((entry) => entry.metadata),
+		plannedProviderRequests: plannedProviderRequests(benchmarkOptions, plan.length),
 		requestBreakdownPerFixture: {
-			fullContextQualityProbe: 1,
-			piNativeCompaction: 1,
-			piNativeQualityProbe: 1,
-			codexRemoteCompaction: 1,
-			codexRemoteQualityProbe: 1,
+			compactionRepetitions: benchmarkOptions.compactionRepetitions,
+			piNativeCompactions: benchmarkOptions.compactionRepetitions,
+			codexRemoteCompactions: benchmarkOptions.compactionRepetitions,
+			fullContextQualityProbes:
+				benchmarkOptions.compactionRepetitions * benchmarkOptions.probesPerArtifact,
+			piNativeQualityProbes:
+				benchmarkOptions.compactionRepetitions * benchmarkOptions.probesPerArtifact,
+			codexRemoteQualityProbes:
+				benchmarkOptions.compactionRepetitions * benchmarkOptions.probesPerArtifact,
 		},
 		costWarning:
 			"USD values are Pi model-catalog estimates from returned usage, not an OpenAI subscription invoice. Live cost is unknown until requests finish.",
@@ -133,10 +166,8 @@ async function runLiveBenchmark(benchmarkOptions) {
 		if (!modelRuntime.hasConfiguredAuth("openai-codex")) {
 			throw new Error("OpenAI Codex OAuth is not configured; run /login openai-codex in Pi");
 		}
-		const fixtures = createBenchmarkFixtures({
-			...fixtureOptions(benchmarkOptions),
-			estimateTokens: sdk.estimateTokens,
-		});
+		const fixturePlan = createFixturePlan(benchmarkOptions, sdk.estimateTokens);
+		const fixtures = fixturePlan.map((entry) => entry.fixture);
 		for (const fixture of fixtures) {
 			assertFixtureIntegrity(fixture);
 			if (fixture.estimatedTokens + 16_384 >= model.contextWindow) {
@@ -145,7 +176,10 @@ async function runLiveBenchmark(benchmarkOptions) {
 				);
 			}
 		}
-
+		const provenance = await collectRuntimeProvenance(
+			PACKAGE_ROOT,
+			benchmarkOptions.protocol?.path,
+		);
 		const trials = [];
 		let stopReason = "completed";
 		for (let index = 0; index < fixtures.length; index += 1) {
@@ -158,7 +192,8 @@ async function runLiveBenchmark(benchmarkOptions) {
 			const fixture = fixtures[index];
 			process.stderr.write(
 				`[fixture ${index + 1}/${fixtures.length}] ${fixture.id}; ` +
-					`records=${fixture.authoritativeRecords}; questions=${fixture.questions.length}\n`,
+					`records=${fixture.authoritativeRecords}; questions=${fixture.questions.length}; ` +
+					`repetitions=${benchmarkOptions.compactionRepetitions}\n`,
 			);
 			const trial = await runTrial({
 				activeSessions,
@@ -182,6 +217,7 @@ async function runLiveBenchmark(benchmarkOptions) {
 						fixtures,
 						model,
 						profile,
+						provenance,
 						stopReason: index + 1 === fixtures.length ? "completed" : "in-progress",
 						trials,
 					}),
@@ -194,6 +230,7 @@ async function runLiveBenchmark(benchmarkOptions) {
 			fixtures,
 			model,
 			profile,
+			provenance,
 			stopReason,
 			trials,
 		});
@@ -209,8 +246,28 @@ async function runLiveBenchmark(benchmarkOptions) {
 	}
 }
 
-function createLiveResult({ benchmarkOptions, fixtures, model, profile, stopReason, trials }) {
-	const summary = summarizeBenchmarkTrials(trials);
+function createLiveResult({
+	benchmarkOptions,
+	fixtures,
+	model,
+	profile,
+	provenance,
+	stopReason,
+	trials,
+}) {
+	const summary = summarizeBenchmarkTrials(trials, {
+		evaluatorDisagreementThreshold: benchmarkOptions.evaluatorDisagreementThreshold,
+	});
+	const evidence = classifyEvidence({
+		protocol: benchmarkOptions.protocol?.manifest,
+		options: benchmarkOptions,
+		status: stopReason,
+		fullContextPassed: summary.fullContextControl.passed,
+		evaluatorPassed: summary.evaluatorReliability.passed,
+		sourceClean:
+			provenance.trackedBenchmarkChangesPresent === false &&
+			(!benchmarkOptions.protocol || provenance.protocolManifestTrackedAtSourceRevision === true),
+	});
 	return {
 		benchmark: BENCHMARK_ID,
 		mode: "live",
@@ -230,26 +287,20 @@ function createLiveResult({ benchmarkOptions, fixtures, model, profile, stopReas
 			transport: "sse",
 			systemPromptSha256: createHash("sha256").update(SYSTEM_PROMPT).digest("hex"),
 		},
+		provenance,
 		plannedFixtures: fixtures.length,
 		completedFixtures: trials.length,
 		fixtures: fixtures.map(fixtureMetadata),
 		costSemantics:
 			"usage.cost uses Pi's current model catalog and is an estimate, not an OpenAI subscription invoice.",
 		qualitySemantics:
-			"Quality is deterministic exact recall of seeded synthetic state. Full-context control checks answerability; it is not a general coding-quality score.",
-		evidenceRole: {
-			suite: benchmarkOptions.suite,
-			primaryEligible:
-				benchmarkOptions.confirmatoryProtocolEligible &&
-				stopReason === "completed" &&
-				summary.fullContextControl.passed,
-			reason:
-				benchmarkOptions.suite !== "confirmatory"
-					? "Exploratory and calibration outcomes are not primary confirmatory evidence."
-					: benchmarkOptions.confirmatoryProtocolEligible
-						? "Confirmatory evidence is primary only when every planned fixture completed and every full-context fixture passed."
-						: "The confirmatory suite changed a locked protocol control other than calibrated densities, so this run is diagnostic.",
+			"Scoring and fixtures are deterministic, but model compactions and probes are not. Question totals are descriptive; seed-level paired deltas are the independent comparison.",
+		retentionSemantics: {
+			comparison: "nominal-setting-alignment",
+			equalInformationCapacity: false,
+			note: "Pi retains all-role recent messages while Codex retains approximate user text plus an opaque item.",
 		},
+		evidence,
 		trials,
 		summary,
 	};
@@ -269,88 +320,153 @@ async function runTrial(input) {
 		temporaryAgentDir,
 		trialIndex,
 	} = input;
-	const sessions = {};
-	try {
-		for (const arm of ["full", "native", "codex"]) {
-			if (isCancelled()) throw new Error("cancelled");
-			sessions[arm] = await createBenchmarkSession({
+	const arms = {
+		full: { probes: [] },
+		native: { artifacts: [] },
+		codex: { artifacts: [] },
+	};
+	const requestOrder = [];
+	let providerRequestStarted = false;
+	const spaceProviderRequest = async () => {
+		if (providerRequestStarted) await requestDelay(benchmarkOptions.requestDelayMs, signal);
+		providerRequestStarted = true;
+	};
+	const densityPosition = benchmarkOptions.densities.indexOf(fixture.density);
+	for (
+		let repetitionIndex = 0;
+		repetitionIndex < benchmarkOptions.compactionRepetitions;
+		repetitionIndex += 1
+	) {
+		if (isCancelled()) throw new Error("cancelled");
+		const compactionOrder = compactionOrderFor(
+			densityPosition,
+			repetitionIndex,
+			benchmarkOptions.compactionRepetitions,
+		);
+		const snapshots = {};
+		for (let orderPosition = 0; orderPosition < compactionOrder.length; orderPosition += 1) {
+			const arm = compactionOrder[orderPosition];
+			const state = await createBenchmarkSession({
 				activeSessions,
 				arm,
 				benchmarkOptions,
 				fixture,
+				isCancelled,
 				model,
 				modelRuntime,
 				profile,
-				isCancelled,
 				sdk,
 				temporaryAgentDir,
 			});
-			if (isCancelled()) throw new Error("cancelled");
-		}
-		const compactionOrder = trialIndex % 2 === 0 ? ["native", "codex"] : ["codex", "native"];
-		const compactions = {};
-		let providerRequestStarted = false;
-		const spaceProviderRequest = async () => {
-			if (providerRequestStarted) await requestDelay(benchmarkOptions.requestDelayMs, signal);
-			providerRequestStarted = true;
-		};
-		for (let index = 0; index < compactionOrder.length; index += 1) {
-			const arm = compactionOrder[index];
-			await spaceProviderRequest();
-			process.stderr.write(`  compacting ${arm} arm on ${terminalText(model.id)}\n`);
-			compactions[arm] = await compactArm({
-				arm,
-				isCancelled,
-				sessionState: sessions[arm],
-			});
+			try {
+				await spaceProviderRequest();
+				process.stderr.write(
+					`  compacting ${arm} repetition ${repetitionIndex + 1} on ${terminalText(model.id)}\n`,
+				);
+				requestOrder.push({
+					type: "compaction",
+					arm,
+					repetition: repetitionIndex + 1,
+					position: orderPosition + 1,
+				});
+				const compaction = await compactArm({ arm, isCancelled, sessionState: state });
+				const artifact = {
+					repetition: repetitionIndex + 1,
+					compactionOrderPosition: orderPosition + 1,
+					checkpoint: compaction.checkpoint,
+					compaction: compaction.metrics,
+					probes: [],
+				};
+				arms[arm].artifacts.push(artifact);
+				snapshots[arm] = {
+					artifact,
+					entries: structuredClone(state.session.sessionManager.getBranch()),
+				};
+			} finally {
+				await closeSession(state.session, activeSessions);
+			}
 		}
 
-		const rotations = [
-			["full", "native", "codex"],
-			["native", "codex", "full"],
-			["codex", "full", "native"],
-		];
-		const evaluationOrder = rotations[trialIndex % rotations.length];
-		const arms = {};
-		for (let index = 0; index < evaluationOrder.length; index += 1) {
-			const arm = evaluationOrder[index];
-			await spaceProviderRequest();
-			process.stderr.write(`  probing ${arm} arm on ${terminalText(model.id)}\n`);
-			const evaluation = await probeArm({
-				arm,
-				fixture,
-				isCancelled,
-				probeThinking: benchmarkOptions.probeThinking,
-				sessionState: sessions[arm],
-			});
-			const compaction = compactions[arm];
-			arms[arm] = {
-				arm,
-				checkpoint: compaction?.checkpoint ?? { kind: "uncompressed-full-context" },
-				compaction: compaction?.metrics,
-				probe: evaluation.probe,
-				quality: evaluation.quality,
-				total: {
-					latencyMs: round((compaction?.metrics.latencyMs ?? 0) + evaluation.probe.latencyMs),
-					costUsd: round((compaction?.metrics.costUsd ?? 0) + evaluation.probe.costUsd),
-				},
-			};
+		for (let probeIndex = 0; probeIndex < benchmarkOptions.probesPerArtifact; probeIndex += 1) {
+			const evaluationOrder = evaluationOrderFor(
+				densityPosition,
+				repetitionIndex,
+				benchmarkOptions.compactionRepetitions,
+				probeIndex,
+				benchmarkOptions.probesPerArtifact,
+			);
+			for (let orderPosition = 0; orderPosition < evaluationOrder.length; orderPosition += 1) {
+				const arm = evaluationOrder[orderPosition];
+				const state = await createBenchmarkSession({
+					activeSessions,
+					arm,
+					benchmarkOptions,
+					branchEntries: arm === "full" ? undefined : snapshots[arm].entries,
+					fixture,
+					isCancelled,
+					model,
+					modelRuntime,
+					profile,
+					sdk,
+					temporaryAgentDir,
+				});
+				try {
+					await spaceProviderRequest();
+					process.stderr.write(
+						`  probing ${arm} repetition ${repetitionIndex + 1}.${probeIndex + 1} on ${terminalText(model.id)}\n`,
+					);
+					requestOrder.push({
+						type: "quality-probe",
+						arm,
+						repetition: repetitionIndex + 1,
+						probeRepetition: probeIndex + 1,
+						position: orderPosition + 1,
+					});
+					const evaluation = await probeArm({
+						arm,
+						fixture,
+						isCancelled,
+						probeThinking: benchmarkOptions.probeThinking,
+						sessionState: state,
+					});
+					const sample = {
+						repetition: repetitionIndex + 1,
+						probeRepetition: probeIndex + 1,
+						evaluationOrderPosition: orderPosition + 1,
+						probe: evaluation.probe,
+						quality: evaluation.quality,
+					};
+					if (arm === "full") {
+						arms.full.probes.push({
+							...sample,
+							total: {
+								latencyMs: evaluation.probe.latencyMs,
+								costUsd: evaluation.probe.costUsd,
+							},
+						});
+					} else {
+						const artifact = snapshots[arm].artifact;
+						artifact.probes.push({
+							...sample,
+							total: {
+								latencyMs: round(artifact.compaction.latencyMs + evaluation.probe.latencyMs),
+								costUsd: round(artifact.compaction.costUsd + evaluation.probe.costUsd),
+							},
+						});
+					}
+				} finally {
+					await closeSession(state.session, activeSessions);
+				}
+			}
 		}
-		const trial = {
-			trial: trialIndex + 1,
-			fixture: fixtureMetadata(fixture),
-			compactionOrder,
-			evaluationOrder,
-			arms,
-		};
-		return { ...trial, recordedCostUsd: round(trialCost(trial)) };
-	} finally {
-		await Promise.allSettled(
-			Object.values(sessions)
-				.reverse()
-				.map(({ session }) => closeSession(session, activeSessions)),
-		);
 	}
+	const trial = {
+		trial: trialIndex + 1,
+		fixture: fixtureMetadata(fixture),
+		requestOrder,
+		arms,
+	};
+	return { ...trial, recordedCostUsd: round(trialCost(trial)) };
 }
 
 async function createBenchmarkSession(input) {
@@ -358,6 +474,7 @@ async function createBenchmarkSession(input) {
 		activeSessions,
 		arm,
 		benchmarkOptions,
+		branchEntries,
 		fixture,
 		isCancelled,
 		model,
@@ -366,10 +483,14 @@ async function createBenchmarkSession(input) {
 		sdk,
 		temporaryAgentDir,
 	} = input;
-	const sessionManager = sdk.SessionManager.inMemory(PACKAGE_ROOT);
-	sessionManager.appendModelChange(model.provider, model.id);
-	sessionManager.appendThinkingLevelChange(benchmarkOptions.compactionThinking);
-	for (const message of fixture.messages) sessionManager.appendMessage(structuredClone(message));
+	const sessionManager = branchEntries
+		? cloneSessionBranch(sdk, branchEntries, PACKAGE_ROOT)
+		: sdk.SessionManager.inMemory(PACKAGE_ROOT);
+	if (!branchEntries) {
+		sessionManager.appendModelChange(model.provider, model.id);
+		sessionManager.appendThinkingLevelChange(benchmarkOptions.compactionThinking);
+		for (const message of fixture.messages) sessionManager.appendMessage(structuredClone(message));
+	}
 	const settingsManager = sdk.SettingsManager.inMemory({
 		transport: "sse",
 		compaction: {
@@ -502,6 +623,8 @@ async function probeArm({ arm, fixture, isCancelled, probeThinking, sessionState
 			outputTokens: usage.output,
 			costUsd: round(usageCost(usage)),
 			stopReason: probeMessage.stopReason,
+			responseTextBytes: Buffer.byteLength(text, "utf8"),
+			responseTextSha256: createHash("sha256").update(text).digest("hex"),
 			usage,
 		},
 		quality: scoreProbeResponse(text, fixture.questions),
@@ -519,15 +642,18 @@ function assertSessionReady({ arm, extensionErrors, isCancelled, operation }) {
 
 async function closeSession(session, activeSessions) {
 	if (!session || !activeSessions.has(session)) return;
-	session.abortCompaction();
 	try {
+		session.abortCompaction();
 		if (session.isStreaming) await session.abort().catch(() => undefined);
 		await session.extensionRunner
 			.emit({ type: "session_shutdown", reason: "quit" })
 			.catch(() => undefined);
 	} finally {
-		session.dispose();
-		activeSessions.delete(session);
+		try {
+			session.dispose();
+		} finally {
+			activeSessions.delete(session);
+		}
 	}
 }
 
@@ -604,62 +730,48 @@ function publicConfig(benchmarkOptions, profile) {
 		epochs: benchmarkOptions.epochs,
 		profile: benchmarkOptions.profile,
 		fixtureTargetTokens: benchmarkOptions.fixtureTokens,
+		contextRegime: benchmarkOptions.contextRegime,
 		requestTimeoutMs: benchmarkOptions.timeoutMs,
 		requestDelayMs: benchmarkOptions.requestDelayMs,
 		maxEstimatedCostUsd: benchmarkOptions.maxCostUsd,
 		compactionThinkingLevel: benchmarkOptions.compactionThinking,
 		probeThinkingLevel: benchmarkOptions.probeThinking,
+		compactionRepetitions: benchmarkOptions.compactionRepetitions,
+		probesPerArtifact: benchmarkOptions.probesPerArtifact,
+		evaluatorDisagreementThreshold: benchmarkOptions.evaluatorDisagreementThreshold,
 		piKeepRecentTokens: profile.piKeepRecentTokens,
 		codexReplacementTokenBudget: profile.codexReplacementTokenBudget,
-		compactionOrder: "alternating by fixture",
-		evaluationOrder: "three-way rotation by fixture",
+		compactionOrder: "balanced within each complete seed block",
+		evaluationOrder: "three-way rotation within each complete seed block",
 		toolsDuringProbe: [],
+		consumedSeedsUsed: benchmarkOptions.seeds.filter((seed) => CONSUMED_SEEDS.includes(seed)),
 		suiteDefaultsUsed: benchmarkOptions.suiteDefaultsUsed,
-		confirmatoryProtocolEligible: benchmarkOptions.confirmatoryProtocolEligible,
-		studyDesign: benchmarkOptions.suiteDefaultsUsed
-			? benchmarkOptions.profile === "matched-tail"
-				? "Matched 20K retained-tail comparison; calibration outcomes are exploratory and confirmatory seeds are held out by the predefined suites."
-				: "Shipped retention-policy comparison; calibration outcomes are exploratory and confirmatory seeds are held out by the predefined suites."
-			: "Suite controls were overridden; the caller must document calibration separation and predeclare confirmatory seeds and densities.",
-	};
-}
-
-function fixtureOptions(benchmarkOptions) {
-	return {
-		seeds: benchmarkOptions.seeds,
-		densities: benchmarkOptions.densities,
-		targetTokens: benchmarkOptions.fixtureTokens,
-		questionsPerCategory: benchmarkOptions.questionsPerCategory,
-		epochs: benchmarkOptions.epochs,
-	};
-}
-
-function fixtureMetadata(fixture) {
-	return {
-		id: fixture.id,
-		fixtureVersion: fixture.fixtureVersion,
-		seed: fixture.seed,
-		density: fixture.density,
-		targetTokens: fixture.targetTokens,
-		historyEstimatedTokens: fixture.historyEstimatedTokens,
-		estimatedTokens: fixture.estimatedTokens,
-		messageCount: fixture.messages.length,
-		sharedTailMessageCount: fixture.sharedTailMessageCount,
-		authoritativeRecords: fixture.authoritativeRecords,
-		questionCount: fixture.questions.length,
-		qualityCategories: [...new Set(fixture.questions.map((question) => question.category))],
-		epochs: fixture.epochs,
-		fixtureSha256: createHash("sha256")
-			.update(JSON.stringify({ messages: fixture.messages, questions: fixture.questions }))
-			.digest("hex"),
+		studyDesign: benchmarkOptions.protocol
+			? "Locked confirmatory-candidate protocol; human held-out provenance is not asserted by the runner."
+			: benchmarkOptions.profile === "matched-tail"
+				? "Diagnostic nominal 20K retained-setting comparison."
+				: "Diagnostic shipped retention-policy comparison.",
+		...(benchmarkOptions.protocol
+			? {
+					protocol: {
+						id: benchmarkOptions.protocol.manifest.protocolId,
+						sha256: benchmarkOptions.protocol.sha256,
+						manifest: benchmarkOptions.protocol.manifest,
+					},
+				}
+			: {}),
 	};
 }
 
 function trialCost(trial) {
-	return Object.values(trial.arms).reduce(
-		(total, arm) => total + (arm.compaction?.costUsd ?? 0) + arm.probe.costUsd,
-		0,
-	);
+	let total = trial.arms.full.probes.reduce((sum, probe) => sum + (probe.probe?.costUsd ?? 0), 0);
+	for (const arm of ["native", "codex"]) {
+		for (const artifact of trial.arms[arm].artifacts) {
+			total += artifact.compaction.costUsd;
+			total += artifact.probes.reduce((sum, probe) => sum + (probe.probe?.costUsd ?? 0), 0);
+		}
+	}
+	return total;
 }
 
 async function requestDelay(milliseconds, signal) {
@@ -675,160 +787,6 @@ async function publishResult(value, outputPath) {
 	process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
-function parseArguments(args) {
-	const parsed = {
-		agentDir: undefined,
-		compactionThinking: "medium",
-		densities: undefined,
-		epochs: 10,
-		fixtureTokens: 50_000,
-		help: false,
-		live: false,
-		maxCostUsd: 20,
-		model: DEFAULT_MODEL,
-		output: undefined,
-		probeThinking: "low",
-		profile: DEFAULT_PROFILE,
-		questionsPerCategory: undefined,
-		requestDelayMs: 300,
-		seeds: undefined,
-		suite: "exploratory",
-		timeoutMs: DEFAULT_TIMEOUT_MS,
-	};
-	for (let index = 0; index < args.length; index += 1) {
-		const argument = args[index];
-		if (argument === "--") continue;
-		if (argument === "--help" || argument === "-h") parsed.help = true;
-		else if (argument === "--live") parsed.live = true;
-		else if (argument === "--agent-dir") parsed.agentDir = requireValue(args, ++index, argument);
-		else if (argument === "--compaction-thinking") {
-			parsed.compactionThinking = thinkingLevel(requireValue(args, ++index, argument), argument);
-		} else if (argument === "--densities") {
-			parsed.densities = integerList(requireValue(args, ++index, argument), argument, 1, 1_000);
-		} else if (argument === "--epochs") {
-			parsed.epochs = boundedInteger(requireValue(args, ++index, argument), argument, 2, 20);
-		} else if (argument === "--fixture-tokens") {
-			parsed.fixtureTokens = boundedInteger(
-				requireValue(args, ++index, argument),
-				argument,
-				25_000,
-				180_000,
-			);
-		} else if (argument === "--max-cost-usd") {
-			parsed.maxCostUsd = boundedNumber(
-				requireValue(args, ++index, argument),
-				argument,
-				0.01,
-				1_000,
-			);
-		} else if (argument === "--model") parsed.model = requireValue(args, ++index, argument);
-		else if (argument === "--output") parsed.output = requireValue(args, ++index, argument);
-		else if (argument === "--probe-thinking") {
-			parsed.probeThinking = thinkingLevel(requireValue(args, ++index, argument), argument);
-		} else if (argument === "--profile") {
-			const profile = requireValue(args, ++index, argument);
-			if (!Object.hasOwn(PROFILES, profile)) {
-				throw new Error(`--profile must be one of: ${Object.keys(PROFILES).join(", ")}`);
-			}
-			parsed.profile = profile;
-		} else if (argument === "--questions-per-category") {
-			parsed.questionsPerCategory = boundedInteger(
-				requireValue(args, ++index, argument),
-				argument,
-				1,
-				100,
-			);
-		} else if (argument === "--request-delay-ms") {
-			parsed.requestDelayMs = boundedInteger(
-				requireValue(args, ++index, argument),
-				argument,
-				0,
-				5_000,
-			);
-		} else if (argument === "--seeds") {
-			parsed.seeds = integerList(requireValue(args, ++index, argument), argument, 1, 1_000_000);
-		} else if (argument === "--suite") {
-			const suite = requireValue(args, ++index, argument);
-			if (!Object.hasOwn(SUITES, suite)) {
-				throw new Error(`--suite must be one of: ${Object.keys(SUITES).join(", ")}`);
-			}
-			parsed.suite = suite;
-		} else if (argument === "--timeout-ms") {
-			parsed.timeoutMs = boundedInteger(
-				requireValue(args, ++index, argument),
-				argument,
-				30_000,
-				600_000,
-			);
-		} else throw new Error(`Unknown argument: ${argument}`);
-	}
-	const suite = SUITES[parsed.suite];
-	parsed.seeds ??= [...suite.seeds];
-	parsed.densities ??= [...suite.densities];
-	parsed.questionsPerCategory ??= suite.questionsPerCategory;
-	parsed.suiteDefaultsUsed =
-		arraysEqual(parsed.seeds, suite.seeds) &&
-		arraysEqual(parsed.densities, suite.densities) &&
-		parsed.questionsPerCategory === suite.questionsPerCategory;
-	parsed.confirmatoryProtocolEligible =
-		parsed.suite === "confirmatory" &&
-		arraysEqual(parsed.seeds, SUITES.confirmatory.seeds) &&
-		parsed.questionsPerCategory === SUITES.confirmatory.questionsPerCategory &&
-		parsed.epochs === 10 &&
-		parsed.fixtureTokens === 50_000 &&
-		parsed.compactionThinking === "medium" &&
-		parsed.probeThinking === "low" &&
-		parsed.profile === DEFAULT_PROFILE &&
-		parsed.model === DEFAULT_MODEL;
-	const minimumDensity = Math.min(...parsed.densities);
-	if (parsed.questionsPerCategory > minimumDensity) {
-		throw new Error("--questions-per-category cannot exceed the smallest density");
-	}
-	if (parsed.epochs > minimumDensity) {
-		throw new Error("--epochs cannot exceed the smallest density");
-	}
-	return parsed;
-}
-
-function requireValue(args, index, option) {
-	const value = args[index];
-	if (!value) throw new Error(`${option} requires a value`);
-	return value;
-}
-
-function boundedInteger(value, option, minimum, maximum) {
-	const number = Number(value);
-	if (!Number.isSafeInteger(number) || number < minimum || number > maximum) {
-		throw new Error(`${option} must be an integer between ${minimum} and ${maximum}`);
-	}
-	return number;
-}
-
-function boundedNumber(value, option, minimum, maximum) {
-	const number = Number(value);
-	if (!Number.isFinite(number) || number < minimum || number > maximum) {
-		throw new Error(`${option} must be a number between ${minimum} and ${maximum}`);
-	}
-	return number;
-}
-
-function integerList(value, option, minimum, maximum) {
-	const values = value.split(",").map((part) => boundedInteger(part, option, minimum, maximum));
-	if (values.length === 0) throw new Error(`${option} requires at least one integer`);
-	return [...new Set(values)];
-}
-
-function arraysEqual(left, right) {
-	return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-function thinkingLevel(value, option) {
-	if (!THINKING_LEVELS.includes(value)) {
-		throw new Error(`${option} is not a supported Pi thinking level`);
-	}
-	return value;
-}
-
 function resolveAgentDir(input) {
 	const raw = input ?? process.env.PI_CODING_AGENT_DIR ?? path.join(homedir(), ".pi", "agent");
 	if (raw === "~") return homedir();
@@ -840,46 +798,51 @@ function printHelp() {
 	process.stdout.write("Usage: node packages/pi-codex-compact/benchmark/run.mjs [options]\n\n");
 	process.stdout.write("Without --live, the command performs a zero-network dry run.\n\n");
 	process.stdout.write(
-		"  --live                         Execute provider calls and consume quota or billable usage.\n",
+		"  --live                              Execute provider calls and consume quota or billable usage.\n",
 	);
 	process.stdout.write(
-		`  --model <id>                   OpenAI Codex model (default: ${DEFAULT_MODEL}).\n`,
+		"  --protocol <path>                   Lock confirmatory controls from a validated manifest.\n",
+	);
+	process.stdout.write("  --model <id>                        OpenAI Codex model.\n");
+	process.stdout.write(
+		"  --suite <name>                      exploratory, calibration, or confirmatory.\n",
 	);
 	process.stdout.write(
-		"  --suite <name>                 exploratory, calibration, or confirmatory (default: exploratory).\n",
+		"  --seeds <csv>                       Override deterministic diagnostic seeds.\n",
+	);
+	process.stdout.write("  --densities <csv>                   Override records per category.\n");
+	process.stdout.write(
+		"  --questions-per-category <n>        Override scored questions per category.\n",
+	);
+	process.stdout.write("  --epochs <n>                        History epochs from 2 to 20.\n");
+	process.stdout.write("  --profile <name>                    production or matched-tail.\n");
+	process.stdout.write("  --fixture-tokens <count>            Fixed history target.\n");
+	process.stdout.write(
+		"  --context-regime <name>             Manual-50K or context-scale claim scope.\n",
+	);
+	process.stdout.write("  --compaction-thinking <level>       Compaction thinking level.\n");
+	process.stdout.write("  --probe-thinking <level>            Evaluation thinking level.\n");
+	process.stdout.write(
+		"  --repetitions <n>                   Independent artifacts per arm and fixture.\n",
 	);
 	process.stdout.write(
-		"  --seeds <csv>                  Override the suite's deterministic seeds.\n",
-	);
-	process.stdout.write("  --densities <csv>              Override records per category.\n");
-	process.stdout.write(
-		"  --questions-per-category <n>   Override scored questions per category.\n",
+		"  --probes-per-artifact <n>           Isolated probes per artifact and full context.\n",
 	);
 	process.stdout.write(
-		"  --epochs <n>                   History epochs from 2 to 20 (default: 10).\n",
+		"  --evaluator-disagreement-threshold  Maximum exact-answer disagreement rate.\n",
 	);
 	process.stdout.write(
-		`  --profile <name>               production or matched-tail (default: ${DEFAULT_PROFILE}).\n`,
+		"  --max-cost-usd <amount>             Between-fixture estimated-cost guard.\n",
 	);
-	process.stdout.write("  --fixture-tokens <count>       Fixed history target (default: 50000).\n");
+	process.stdout.write("  --request-delay-ms <ms>             Delay between requests.\n");
 	process.stdout.write(
-		"  --compaction-thinking <level>  Compaction thinking level (default: medium).\n",
+		`  --timeout-ms <ms>                   Per-request timeout (default: ${DEFAULT_TIMEOUT_MS}).\n`,
 	);
+	process.stdout.write("  --agent-dir <path>                  Source Pi auth/models directory.\n");
 	process.stdout.write(
-		"  --probe-thinking <level>       Evaluation thinking level (default: low).\n",
+		"  --output <path>                     Atomically checkpoint JSON results.\n",
 	);
-	process.stdout.write(
-		"  --max-cost-usd <amount>        Stop before another fixture after this estimate (default: 20).\n",
-	);
-	process.stdout.write("  --request-delay-ms <ms>        Delay between requests (default: 300).\n");
-	process.stdout.write(
-		`  --timeout-ms <ms>              Per-request timeout (default: ${DEFAULT_TIMEOUT_MS}).\n`,
-	);
-	process.stdout.write(
-		"  --agent-dir <path>             Source Pi auth/models directory (default: current Pi dir).\n",
-	);
-	process.stdout.write("  --output <path>                Checkpoint and write the JSON result.\n");
-	process.stdout.write("  -h, --help                     Show this help.\n");
+	process.stdout.write("  -h, --help                          Show this help.\n");
 }
 
 function terminalText(value) {

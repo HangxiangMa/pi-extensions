@@ -222,22 +222,28 @@ plaintext compaction, and this extension's Codex Remote Compaction V2 path.
 It holds history length nearly fixed while varying information density across five state categories
 and ten history epochs.
 
-Results include answerability control, paired latency and Pi-catalog estimated USD cost, downstream
-input size, and exact recall by density, category, epoch, and seed.
+Benchmark v3 uses repeated artifacts, isolated evaluator probes, seed-level paired statistics, one Pi
+SDK estimator for dry and live fixtures, and committed protocol manifests for confirmatory
+candidates.
 
-Preview its exploratory plan without making a provider request:
+It never treats nominal Pi 20K and Codex 20K settings as equal information capacity or automatically
+claims that protocol-conformant evidence was genuinely held out.
+
+Preview its exploratory diagnostic without making a provider request:
 
 ```bash
 just benchmark-codex-compact
 ```
 
-Calibration and held-out confirmatory suites are also available.
+A live run requires an explicit `--live` flag, reviewed request and cost exposure, OpenAI Codex OAuth,
+and Remote V2 entitlement.
 
-A live run requires an explicit `--live` flag, OpenAI Codex OAuth, and Remote V2 entitlement.
+The repository preserves one explicitly labeled v2 matched-tail diagnostic result, while seeds
+301–304 remain consumed and unavailable for future confirmatory protocols.
 
 See the
 [benchmark guide](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-codex-compact/benchmark)
-for study design, commands, fairness controls, privacy, cost semantics, and interpretation limits.
+for manifests, repetitions, commands, privacy, cost semantics, and interpretation limits.
 
 ## 🧪 Development
 
