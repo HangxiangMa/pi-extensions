@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
 	BENCHMARK_ID,
 	buildProbePrompt,
@@ -10,6 +13,7 @@ import {
 	summarizeBenchmarkTrials,
 	summarizeNumbers,
 } from "./core.mjs";
+import { writeResultFile } from "./result-file.mjs";
 
 assert.equal(BENCHMARK_ID, "pi-codex-compact-comparison:v2");
 
@@ -154,5 +158,32 @@ assert.deepEqual(summarizeNumbers([3, 1, 2]), {
 	min: 1,
 	max: 3,
 });
+
+const resultDirectory = await mkdtemp(path.join(tmpdir(), "pi-codex-compact-result-test-"));
+try {
+	const resultPath = path.join(resultDirectory, "result.json");
+	const original = '{"status":"previous"}\n';
+	await writeFile(resultPath, original, "utf8");
+	await assert.rejects(
+		writeResultFile(
+			resultPath,
+			{ status: "replacement" },
+			{
+				renameFile: async () => {
+					throw new Error("simulated publication failure");
+				},
+			},
+		),
+		/simulated publication failure/,
+	);
+	assert.equal(await readFile(resultPath, "utf8"), original);
+	assert.deepEqual(await readdir(resultDirectory), ["result.json"]);
+
+	await writeResultFile(resultPath, { status: "replacement" });
+	assert.deepEqual(JSON.parse(await readFile(resultPath, "utf8")), { status: "replacement" });
+	assert.deepEqual(await readdir(resultDirectory), ["result.json"]);
+} finally {
+	await rm(resultDirectory, { recursive: true, force: true });
+}
 
 process.stdout.write("pi-codex-compact benchmark self-test passed\n");

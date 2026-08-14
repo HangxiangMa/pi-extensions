@@ -18,6 +18,7 @@ import {
 	scoreProbeResponse,
 	summarizeBenchmarkTrials,
 } from "./core.mjs";
+import { writeResultFile } from "./result-file.mjs";
 
 const SYSTEM_PROMPT = [
 	"You are a deterministic benchmark recovery agent.",
@@ -669,12 +670,6 @@ async function publishResult(value, outputPath) {
 		process.stderr.write(`Wrote benchmark result to ${terminalText(path.resolve(outputPath))}\n`);
 	}
 	process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
-
-async function writeResultFile(outputPath, value) {
-	const resolved = path.resolve(outputPath);
-	await mkdir(path.dirname(resolved), { recursive: true });
-	await writeFile(resolved, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
 function parseArguments(args) {

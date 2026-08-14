@@ -162,6 +162,8 @@ just benchmark-codex-compact \
 
 The runner checkpoints `--output` after every completed fixture.
 
+Each checkpoint is written to a same-directory temporary file and atomically renamed so an interrupted write cannot truncate the previous result.
+
 The cost guard is checked between fixtures, so one in-flight fixture can take the estimate past the configured amount.
 
 It stops on the first provider, entitlement, protocol, or validation failure.
