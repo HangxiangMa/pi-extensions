@@ -83,7 +83,7 @@ The benchmark self-test will remain a documented manual check and will not be ad
 - [x] Reported realized input, output, downstream footprint, latency, and estimated cost beside nominal settings and set `equalInformationCapacity` to `false`.
 - [x] Added `contextRegime`, scoped 50K evidence to controlled manual compaction, and kept context-scale work explicitly diagnostic.
 - [x] Updated benchmark and package documentation with manifests, consumed seeds, repetitions, seed statistics, estimator parity, evaluator gates, claim scope, privacy, cost, and evidence labels.
-- [ ] Update the preserved-result documentation and pull-request description so they no longer claim all raw artifacts are ignored or describe the older production-profile run as the current primary method.
+- [x] Updated preserved-result documentation and PR #757 so the tracked v2 result is diagnostic, seeds 301–304 are consumed, v3 has no live evidence yet, and calibration still requires separate approval.
 - [x] Ran `node packages/pi-codex-compact/benchmark/self-test.mjs`, dry-run protocol and altered-control smokes, targeted Biome checks, `git diff --check`, `npm run check`, and `just pack codex-compact`; 374 test files and 3,758 tests passed, and the 10-file package tarball excluded the benchmark.
 - [x] Produced `benchmark/protocols/CALIBRATION-V3.md` from a zero-network dry run with three exact fixture hashes, one artifact repetition, three evaluator probes, 33 provider requests, a $20 between-fixture guard, and the intended output path.
 - [ ] Obtain explicit user approval for the documented 33-request calibration and $20 between-fixture guard before making any live provider request.
