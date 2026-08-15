@@ -1,5 +1,13 @@
 # @narumitw/pi-starship
 
+## 0.51.0
+
+### Minor Changes
+
+- ff35763: Render the existing native GitHub PR `$checks`, `$review`, and `$status` variables as compact symbols and counts by default.
+
+  This is a breaking display change for custom formats that expect the previous English values; variable names and the default module format remain unchanged.
+
 ## 0.50.3
 
 ### Patch Changes
