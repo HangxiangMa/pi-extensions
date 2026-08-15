@@ -29,7 +29,7 @@ test("browser source uses React, TypeScript, and the complete Radix UI stack", (
 	for (const [dependency, version] of Object.entries(bundleDependencies)) {
 		assert.equal(manifest.dependencies?.[dependency], version, dependency);
 	}
-	assert.equal(manifest.devDependencies?.esbuild, "0.28.1");
+	assert.equal(manifest.devDependencies?.esbuild, "0.28.2");
 	assert.match(appSource, /from "@radix-ui\/themes"/);
 	assert.match(browserSource, /from "@radix-ui\/react-icons"/);
 	assert.match(browserSource, /from "radix-ui"/);
