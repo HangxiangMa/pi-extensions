@@ -204,7 +204,7 @@ test("native PR refresh clears branch state, aborts stale work, and stops on foo
 			},
 		},
 	);
-	assert.match(stripAnsi(footer.render(300).join("\n")), /PR #123 · checks passing/u);
+	assert.match(stripAnsi(footer.render(300).join("\n")), /PR #123 · ✓1/u);
 
 	await emit(mock.events, "agent_end", {}, context.ctx);
 	assert.equal(prCalls, 2);
@@ -485,7 +485,7 @@ test("terminal native PR snapshots clear at their lifecycle expiry", async (t) =
 		footer.dispose();
 		await emit(mock.events, "session_shutdown", {}, context.ctx);
 	});
-	assert.match(stripAnsi(footer.render(300).join("\n")), /#123 · merged/u);
+	assert.match(stripAnsi(footer.render(300).join("\n")), /#123 · M/u);
 	now += 1_000;
 	vi.advanceTimersByTime(1_000);
 	assert.doesNotMatch(stripAnsi(footer.render(300).join("\n")), /#123/u);
@@ -526,11 +526,11 @@ test("terminal native PR expiry revalidates the wall clock before clearing", asy
 		footer.dispose();
 		await emit(mock.events, "session_shutdown", {}, context.ctx);
 	});
-	assert.match(stripAnsi(footer.render(300).join("\n")), /#123 · merged/u);
+	assert.match(stripAnsi(footer.render(300).join("\n")), /#123 · M/u);
 
 	now -= 10_000;
 	vi.advanceTimersByTime(500);
-	assert.match(stripAnsi(footer.render(300).join("\n")), /#123 · merged/u);
+	assert.match(stripAnsi(footer.render(300).join("\n")), /#123 · M/u);
 
 	now = expiresAt;
 	vi.advanceTimersByTime(10_500);
