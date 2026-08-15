@@ -20,7 +20,7 @@ export function normalizeOpenCodeZenPayload(
 		const raw = asObject(usage[window.key]);
 		if (!raw) continue;
 		const status = asString(raw.status);
-		if (status !== "ok") {
+		if (status !== "ok" && status !== "rate-limited") {
 			notes.push(`${window.label} window unavailable (${status ?? "unknown status"}).`);
 			continue;
 		}

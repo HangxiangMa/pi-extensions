@@ -139,7 +139,7 @@ The extension does not call OpenRouter's account-level `/credits` endpoint becau
 - Provider ID: `opencode-go`
 - Semantics: OpenCode Zen plan usage windows—rolling, weekly, and monthly
 - Source: `GET {model base URL}/usage` on the configured `opencode.ai` gateway using Pi's resolved inference API key
-- Displayed data: used percentage and reset time for each window; windows with a non-`ok` status are reported as unavailable notes
+- Displayed data: used percentage and reset time for each window; `rate-limited` windows remain visible at their reported usage, while unknown statuses are reported as unavailable notes
 - Statusline examples: `zen 0% r 4% w 2% m`
 
 The usage endpoint is derived from the model's base URL (`…/zen/go/v1/usage`) and is only queried when the resolved origin is `https://opencode.ai`; other origins fail before sending the credential.

@@ -42,7 +42,7 @@ test("OpenCode Zen adapter normalizes rolling, weekly, and monthly windows", () 
 	assert.match(formatUsageReport(report, "current"), /Monthly window:\s+2% used/);
 });
 
-test("OpenCode Zen adapter reports non-ok windows as unavailable notes", () => {
+test("OpenCode Zen adapter reports unknown-status windows as unavailable notes", () => {
 	const report = normalizeOpenCodeZenPayload(
 		{
 			usage: {
@@ -57,6 +57,46 @@ test("OpenCode Zen adapter reports non-ok windows as unavailable notes", () => {
 	assert.equal(report.buckets[0]?.id, "rolling");
 	assert.match(report.notes?.join(" ") ?? "", /Weekly window unavailable/);
 	assert.equal(formatUsageStatusline(report), "zen 10% r");
+});
+
+test("OpenCode Zen adapter displays rate-limited windows", () => {
+	const report = normalizeOpenCodeZenPayload(
+		{
+			usage: {
+				rolling: {
+					status: "rate-limited",
+					percent: 100,
+					resetsAt: "2026-08-15T12:34:04.072Z",
+				},
+				weekly: { status: "ok", percent: 4, resetsAt: "2026-08-17T00:00:00.072Z" },
+			},
+		},
+		700,
+	);
+
+	assert.equal(report.buckets.length, 2);
+	assert.equal(report.buckets[0]?.id, "rolling");
+	assert.equal(report.buckets[0]?.used, 100);
+	assert.equal(report.buckets[0]?.remaining, 0);
+	assert.equal(report.notes, undefined);
+	assert.equal(formatUsageStatusline(report), "zen 100% r 4% w");
+	assert.match(formatUsageReport(report, "current"), /Rolling window:\s+100% used/);
+});
+
+test("OpenCode Zen adapter keeps fully rate-limited responses displayable", () => {
+	const report = normalizeOpenCodeZenPayload(
+		{
+			usage: {
+				rolling: { status: "rate-limited", percent: 100 },
+				weekly: { status: "rate-limited", percent: 100 },
+				monthly: { status: "rate-limited", percent: 100 },
+			},
+		},
+		800,
+	);
+
+	assert.equal(report.buckets.length, 3);
+	assert.equal(formatUsageStatusline(report), "zen 100% r 100% w 100% m");
 });
 
 test("OpenCode Zen adapter rejects empty or fully unavailable responses", () => {
