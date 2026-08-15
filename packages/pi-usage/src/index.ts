@@ -34,6 +34,7 @@ export {
 export { formatProviderStates, formatUsageReport, formatUsageStatusline } from "./format.js";
 export { normalizeCodexBackendPayload } from "./providers/codex.js";
 export { normalizeGitHubCopilotUsagePayload } from "./providers/github-copilot.js";
+export { normalizeOpenCodeZenPayload } from "./providers/opencode-zen.js";
 export { normalizeOpenRouterKeyPayload } from "./providers/openrouter.js";
 export {
 	adapterForProvider,

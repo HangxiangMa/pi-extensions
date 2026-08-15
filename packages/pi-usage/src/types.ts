@@ -93,6 +93,10 @@ export type OpenRouterKeyPayload = {
 	data?: unknown;
 };
 
+export type OpenCodeZenPayload = {
+	usage?: unknown;
+};
+
 export type CodexBackendPayload = {
 	plan_type?: unknown;
 	rate_limit?: unknown;

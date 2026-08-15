@@ -3,10 +3,12 @@ import { type ExtensionContext, readStoredCredential } from "@earendil-works/pi-
 import { errorMessage, fingerprintResolvedAuth, redactUsageError } from "./core.js";
 import { normalizeCodexBackendPayload } from "./providers/codex.js";
 import { normalizeGitHubCopilotUsagePayload } from "./providers/github-copilot.js";
+import { normalizeOpenCodeZenPayload } from "./providers/opencode-zen.js";
 import { normalizeOpenRouterKeyPayload } from "./providers/openrouter.js";
 import type {
 	CodexBackendPayload,
 	GitHubCopilotUsagePayload,
+	OpenCodeZenPayload,
 	OpenRouterKeyPayload,
 	PiModel,
 	ResolvedUsageAuth,
@@ -72,6 +74,21 @@ export const SUPPORTED_ADAPTERS: readonly UsageProviderAdapter[] = [
 				"OpenRouter key endpoint",
 			);
 			return normalizeOpenRouterKeyPayload(payload as OpenRouterKeyPayload, Date.now());
+		},
+	},
+	{
+		id: "opencode-go",
+		displayName: "OpenCode Go",
+		semantics: { kind: "consumer-subscription", label: "OpenCode Zen plan usage" },
+		async query(auth, signal, timeoutMs) {
+			const payload = await fetchProviderJson(
+				opencodeUsageUrl(auth.model.baseUrl),
+				auth,
+				signal,
+				timeoutMs,
+				"OpenCode Zen usage endpoint",
+			);
+			return normalizeOpenCodeZenPayload(payload as OpenCodeZenPayload, Date.now());
 		},
 	},
 ];
@@ -393,6 +410,7 @@ function hasOfficialUrlOrigin(value: string, providerId: string): boolean {
 		const url = new URL(value);
 		if (providerId === "openai-codex") return url.origin === "https://chatgpt.com";
 		if (providerId === "openrouter") return url.origin === "https://openrouter.ai";
+		if (providerId === "opencode-go") return url.origin === "https://opencode.ai";
 		if (providerId === "github-copilot") {
 			return (
 				url.protocol === "https:" && /^api\.[a-z0-9-]+\.githubcopilot\.com$/u.test(url.hostname)
@@ -416,6 +434,12 @@ function headerValue(
 
 function hasHeader(headers: Record<string, string>, name: string): boolean {
 	return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
+}
+
+function opencodeUsageUrl(baseUrl: string | undefined): string {
+	const base = baseUrl?.trim().replace(/\/+$/u, "");
+	if (!base) throw new Error("OpenCode Go model base URL is unavailable.");
+	return `${base}/usage`;
 }
 
 function isAbortError(error: unknown): boolean {

@@ -18,6 +18,7 @@ export function formatUsageReport(report: UsageReport, displayState: UsageDispla
 	if (report.providerId === "openai-codex") formatCodexReport(lines, report);
 	else if (report.providerId === "github-copilot") formatGitHubCopilotReport(lines, report);
 	else if (report.providerId === "openrouter") formatOpenRouterReport(lines, report);
+	else if (report.providerId === "opencode-go") formatOpenCodeZenReport(lines, report);
 	else formatGenericReport(lines, report);
 
 	if (report.notes) {
@@ -35,6 +36,7 @@ export function formatUsageStatusline(report: UsageReport, model?: UsageModel): 
 		const total = report.metrics.find((metric) => metric.id === "usage-total");
 		if (typeof total?.value === "number") return `openrouter ${formatUsd(total.value)} used`;
 	}
+	if (report.providerId === "opencode-go") return formatOpenCodeZenStatusline(report);
 	return undefined;
 }
 
@@ -138,6 +140,24 @@ function formatOpenRouterReport(lines: string[], report: UsageReport): void {
 			`${`${metric.label}:`.padEnd(VALUE_COLUMN)}${formatMetricValue(metric.value, metric.unit)}`,
 		);
 	}
+}
+
+function formatOpenCodeZenReport(lines: string[], report: UsageReport): void {
+	for (const bucket of report.buckets) {
+		const reset = bucket.resetsAt ? ` (resets ${formatReset(bucket.resetsAt)})` : "";
+		const used = bucket.used ?? "unavailable";
+		lines.push(`${`${bucket.label}:`.padEnd(VALUE_COLUMN)}${used}% used${reset}`);
+	}
+}
+
+function formatOpenCodeZenStatusline(report: UsageReport): string | undefined {
+	const parts = ["zen"];
+	for (const bucket of report.buckets) {
+		if (bucket.used === undefined) continue;
+		const compact = bucket.id === "rolling" ? "r" : bucket.id === "weekly" ? "w" : "m";
+		parts.push(`${clampPercent(bucket.used).toFixed(0)}% ${compact}`);
+	}
+	return parts.length > 1 ? parts.join(" ") : undefined;
 }
 
 function formatGenericReport(lines: string[], report: UsageReport): void {
