@@ -1,5 +1,11 @@
 # @narumitw/pi-usage
 
+## 0.52.0
+
+### Minor Changes
+
+- ab49f5b: Add OpenCode Go Zen usage reporting for rolling, weekly, and monthly quota windows.
+
 ## 0.51.0
 
 ### Minor Changes
