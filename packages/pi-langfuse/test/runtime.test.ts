@@ -134,6 +134,7 @@ test("isolated runtime preserves the global provider and exports native observat
 		"tool",
 	]);
 	for (const span of spans) assert.equal(span.attributes["langfuse.version"], "2");
+	for (const span of spans) assert.equal(span.attributes["session.id"], "runtime-session");
 	const agent = spans.find((span) => span.name === "pi.agent");
 	const attempt = spans.find((span) => span.name === "pi.attempt");
 	const turn = spans.find((span) => span.name === "pi.turn");

@@ -51,9 +51,7 @@ class ProductionObservation implements Observation {
 		if (name !== undefined) {
 			this.native.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_NAME, name);
 		}
-		if (sessionId !== undefined) {
-			this.native.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_SESSION_ID, sessionId);
-		}
+		applySessionId(this.native, sessionId);
 		if (tags !== undefined) {
 			this.native.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_TAGS, tags);
 		}
@@ -86,11 +84,14 @@ class ProductionTraceBackend implements TraceBackend {
 		attributes: ObservationAttributes,
 		options: { asType: ObservationType; parent?: Observation },
 	): Observation {
+		const { sessionId, ...observationAttributes } = attributes;
 		const parent = options.parent;
-		if (parent instanceof ProductionObservation) {
-			return new ProductionObservation(startChild(parent.native, name, attributes, options.asType));
-		}
-		return new ProductionObservation(startRoot(name, attributes, options.asType));
+		const native =
+			parent instanceof ProductionObservation
+				? startChild(parent.native, name, observationAttributes, options.asType)
+				: startRoot(name, observationAttributes, options.asType);
+		applySessionId(native, sessionId);
+		return new ProductionObservation(native);
 	}
 
 	async forceFlush(): Promise<void> {
@@ -176,6 +177,12 @@ const defaultFactories: RuntimeFactories = {
 	createProvider: (processor) => new NodeTracerProvider({ spanProcessors: [processor] }),
 	selectProvider: setLangfuseTracerProvider,
 };
+
+function applySessionId(observation: LangfuseObservation, sessionId: string | undefined): void {
+	if (sessionId !== undefined) {
+		observation.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_SESSION_ID, sessionId);
+	}
+}
 
 function startRoot(
 	name: string,

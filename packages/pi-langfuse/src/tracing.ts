@@ -234,6 +234,14 @@ export class TraceRecorder {
 		private readonly context: RecorderContext,
 	) {}
 
+	private startObservation(
+		name: string,
+		attributes: ObservationAttributes,
+		options: { asType: ObservationType; parent?: Observation },
+	): Observation {
+		return this.backend.start(name, { ...attributes, sessionId: this.context.sessionId }, options);
+	}
+
 	hasActiveTrace(): boolean {
 		return this.root !== undefined;
 	}
@@ -275,7 +283,7 @@ export class TraceRecorder {
 				? "git:detached"
 				: undefined;
 
-		this.root = this.backend.start("pi.agent", attributes, { asType: "agent" });
+		this.root = this.startObservation("pi.agent", attributes, { asType: "agent" });
 		this.root.updateTrace?.({
 			name: "pi.trace",
 			sessionId: this.context.sessionId,
@@ -296,7 +304,7 @@ export class TraceRecorder {
 		this.lastAssistant = undefined;
 		this.unresolvedToolErrors = 0;
 		this.attemptIndex = index;
-		this.attempt = this.backend.start(
+		this.attempt = this.startObservation(
 			"pi.attempt",
 			{
 				metadata: {
@@ -325,7 +333,7 @@ export class TraceRecorder {
 		if (this.turn) this.closeTurn("Interrupted by the next Pi turn.", "ERROR");
 		this.counters.turns += 1;
 		this.turnIndex = turnIndex;
-		this.turn = this.backend.start(
+		this.turn = this.startObservation(
 			"pi.turn",
 			{ metadata: { "pi.turn.index": turnIndex }, version: TRACE_SCHEMA_VERSION },
 			{ asType: "span", parent: this.attempt ?? this.root },
@@ -372,7 +380,7 @@ export class TraceRecorder {
 			...(input.model?.api ? { "pi.request.api": input.model.api } : {}),
 			...(input.thinkingLevel ? { "pi.request.thinking_level": input.thinkingLevel } : {}),
 		};
-		const observation = this.backend.start(
+		const observation = this.startObservation(
 			"pi.llm",
 			{
 				...(input.payload !== undefined ? { input: this.capture(input.payload) } : {}),
@@ -559,7 +567,7 @@ export class TraceRecorder {
 		this.closeCompaction("Interrupted by another Pi compaction.");
 		this.counters.compactions += 1;
 		this.compaction = {
-			observation: this.backend.start(
+			observation: this.startObservation(
 				"pi.compaction",
 				{
 					metadata: {
@@ -711,7 +719,7 @@ export class TraceRecorder {
 	}
 
 	private startToolObservation(toolCallId: string, toolName: string, args?: unknown): Observation {
-		return this.backend.start(
+		return this.startObservation(
 			`pi.tool.${toolName}`,
 			{
 				...(args !== undefined ? { input: this.capture(args) } : {}),
