@@ -491,10 +491,58 @@ Variables have these values:
 - `$number`: digits such as `123`.
 - `$link`: an OSC 8 `#123` link for a safe HTTP(S) URL, otherwise plain `#123`.
 - `$state`: `open`, `draft`, `merged`, or `closed`.
-- `$checks`: `checks passing`, `<n> failing`, `<n> pending`, or `no checks`.
-- `$review`: `approved`, `changes requested`, `review required`, or empty when unknown.
-- `$status`: one compact result selected in this order: merged, closed, draft, failing, changes
-  requested, pending, approved, review required, passing, then no checks.
+- `$checks`: all non-zero check counts in passed, failed, pending order, or `-` when no checks exist.
+- `$review`: `R✓` for approved, `R×` for changes requested, `R?` for review required, or empty
+  when unknown.
+- `$status`: one result selected in this order: merged, closed, draft, failing checks, changes
+  requested, pending checks, approved, review required, passing checks, then no checks.
+
+The compact symbols are font-safe and distinct from Git's default `$`, `!`, and `?` worktree markers:
+
+| Compact value | Meaning |
+| --- | --- |
+| `✓<n>` | Checks that passed, including successful, skipped, and neutral conclusions |
+| `×<n>` | Checks that failed |
+| `…<n>` | Checks that are pending |
+| `R✓` | Review approved |
+| `R×` | Changes requested |
+| `R?` | Review required |
+| `M` / `C` / `D` | Merged, closed, or draft PR |
+| `-` | No checks |
+
+The unchanged default module format uses `$status` and now renders compact output:
+
+```text
+PR #123 · ×2
+PR #123 · R✓
+PR #123 · M
+```
+
+Use the existing `$checks` and `$review` variables together when every check category and the review
+result should remain visible:
+
+```toml
+[github_pr]
+format = "[$symbol$link( $checks)( $review) ]($style)"
+```
+
+```text
+PR #123 ✓12 ×2 …7 R×
+```
+
+This is a breaking display migration for custom formats that use these variables:
+
+| Previous value | Compact value |
+| --- | --- |
+| `checks passing` | `✓<n>` |
+| `<n> failing` | `×<n>` |
+| `<n> pending` | `…<n>` |
+| `no checks` | `-` |
+| `approved` / `changes requested` / `review required` | `R✓` / `R×` / `R?` |
+| `merged` / `closed` / `draft` | `M` / `C` / `D` |
+
+The old English values have no verbose aliases.
+The variable names and default module format remain unchanged, so no TOML field migration is needed.
 
 The query runs only in TUI sessions when the enabled module is reachable from the root format. It
 refreshes at session start, immediately after a branch change, after each agent run, after accepted

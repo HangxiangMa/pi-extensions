@@ -55,9 +55,9 @@ function fixture(overrides: Partial<StarshipRuntimeSnapshot> = {}): StarshipRunt
 			number: "123",
 			link: LINK,
 			state: "open",
-			checks: "2 failing",
-			review: "approved",
-			status: "2 failing",
+			checks: "×2",
+			review: "R✓",
+			status: "×2",
 		},
 		gitStatus: {
 			ahead: 2,

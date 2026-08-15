@@ -180,16 +180,25 @@ function summarizeChecks(value: unknown): CheckSummary {
 }
 
 function formatChecks(checks: CheckSummary): string {
-	if (checks.total === 0) return "no checks";
-	if (checks.failed > 0) return `${checks.failed} failing`;
-	if (checks.pending > 0) return `${checks.pending} pending`;
-	return "checks passing";
+	if (checks.total === 0) return "-";
+	const passed = checks.total - checks.failed - checks.pending;
+	return [
+		compactCount("✓", passed),
+		compactCount("×", checks.failed),
+		compactCount("…", checks.pending),
+	]
+		.filter(Boolean)
+		.join(" ");
+}
+
+function compactCount(symbol: string, count: number): string {
+	return count > 0 ? `${symbol}${count}` : "";
 }
 
 function formatReview(review: ReviewDecision): string {
-	if (review === "APPROVED") return "approved";
-	if (review === "CHANGES_REQUESTED") return "changes requested";
-	if (review === "REVIEW_REQUIRED") return "review required";
+	if (review === "APPROVED") return "R✓";
+	if (review === "CHANGES_REQUESTED") return "R×";
+	if (review === "REVIEW_REQUIRED") return "R?";
 	return "";
 }
 
@@ -199,11 +208,13 @@ function compactStatus(
 	checksText: string,
 	review: string,
 ): string {
-	if (state === "merged" || state === "closed" || state === "draft") return state;
-	if (checks.failed > 0) return checksText;
-	if (review === "changes requested") return review;
-	if (checks.pending > 0) return checksText;
-	if (review === "approved" || review === "review required") return review;
+	if (state === "merged") return "M";
+	if (state === "closed") return "C";
+	if (state === "draft") return "D";
+	if (checks.failed > 0) return compactCount("×", checks.failed);
+	if (review === "R×") return review;
+	if (checks.pending > 0) return compactCount("…", checks.pending);
+	if (review === "R✓" || review === "R?") return review;
 	return checksText;
 }
 

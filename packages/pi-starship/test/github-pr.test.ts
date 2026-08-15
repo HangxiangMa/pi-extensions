@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { BUILT_IN_CONFIG } from "../src/config.js";
 import { parseFormat } from "../src/format/formatter.js";
+import { githubPrModule } from "../src/modules/github-pr.js";
 import { renderStatusline, type StarshipRuntimeSnapshot } from "../src/modules/index.js";
 import {
 	buildGithubPrSnapshot,
@@ -52,11 +53,12 @@ function stripSgr(value: string): string {
 	return value.replace(new RegExp(`${escapeSequence}\\[[0-9;]*m`, "gu"), "");
 }
 
-test("github_pr exposes native variables and compact status priority", () => {
+test("github_pr exposes compact checks, review, and prioritized status", () => {
 	const snapshot = buildGithubPrSnapshot(
 		rawPr({
 			reviewDecision: "CHANGES_REQUESTED",
 			statusCheckRollup: [
+				{ status: "COMPLETED", conclusion: "SUCCESS" },
 				{ status: "COMPLETED", conclusion: "FAILURE" },
 				{ status: "COMPLETED", conclusion: "TIMED_OUT" },
 				{ status: "IN_PROGRESS", conclusion: null },
@@ -76,9 +78,9 @@ test("github_pr exposes native variables and compact status priority", () => {
 		{
 			number: "123",
 			state: "open",
-			checks: "2 failing",
-			review: "changes requested",
-			status: "2 failing",
+			checks: "✓1 ×2 …1",
+			review: "R×",
+			status: "×2",
 		},
 	);
 
@@ -90,7 +92,7 @@ test("github_pr exposes native variables and compact status priority", () => {
 	const rendered = stripSgr(renderStatusline(config, runtime(snapshot)).ansi);
 	assert.equal(
 		rendered,
-		`123|\u001b]8;;https://github.com/o/r/pull/123\u0007#123\u001b]8;;\u0007|open|2 failing|changes requested|2 failing`,
+		`123|\u001b]8;;https://github.com/o/r/pull/123\u0007#123\u001b]8;;\u0007|open|✓1 ×2 …1|R×|×2`,
 	);
 
 	const cases: Array<[Record<string, unknown>, string]> = [
@@ -99,27 +101,81 @@ test("github_pr exposes native variables and compact status priority", () => {
 				state: "MERGED",
 				mergedAt: new Date(NOW - 1_000).toISOString(),
 			},
-			"merged",
+			"M",
 		],
 		[
 			{
 				state: "CLOSED",
 				closedAt: new Date(NOW - 1_000).toISOString(),
 			},
-			"closed",
+			"C",
 		],
-		[{ isDraft: true }, "draft"],
-		[{ statusCheckRollup: [{ status: "COMPLETED", conclusion: "FAILURE" }] }, "1 failing"],
-		[{ reviewDecision: "CHANGES_REQUESTED" }, "changes requested"],
-		[{ statusCheckRollup: [{ status: "IN_PROGRESS", conclusion: null }] }, "1 pending"],
-		[{ reviewDecision: "APPROVED" }, "approved"],
-		[{ reviewDecision: "REVIEW_REQUIRED" }, "review required"],
-		[{ reviewDecision: "", statusCheckRollup: [{ state: "SUCCESS" }] }, "checks passing"],
-		[{ reviewDecision: "", statusCheckRollup: [] }, "no checks"],
+		[{ isDraft: true }, "D"],
+		[{ statusCheckRollup: [{ status: "COMPLETED", conclusion: "FAILURE" }] }, "×1"],
+		[{ reviewDecision: "CHANGES_REQUESTED" }, "R×"],
+		[{ statusCheckRollup: [{ status: "IN_PROGRESS", conclusion: null }] }, "…1"],
+		[{ reviewDecision: "APPROVED" }, "R✓"],
+		[{ reviewDecision: "REVIEW_REQUIRED" }, "R?"],
+		[
+			{
+				reviewDecision: "",
+				statusCheckRollup: [
+					{ state: "SUCCESS" },
+					{ status: "COMPLETED", conclusion: "SKIPPED" },
+					{ status: "COMPLETED", conclusion: "NEUTRAL" },
+				],
+			},
+			"✓3",
+		],
+		[{ reviewDecision: "", statusCheckRollup: [] }, "-"],
 	];
 	for (const [overrides, expected] of cases) {
 		assert.equal(buildGithubPrSnapshot(rawPr(overrides), NOW)?.status, expected);
 	}
+});
+
+test("compact PR values omit zero check categories and cover bounded decisions", () => {
+	const checkCases: Array<[unknown[], string]> = [
+		[[{ status: "COMPLETED", conclusion: "SUCCESS" }], "✓1"],
+		[[{ status: "COMPLETED", conclusion: "FAILURE" }], "×1"],
+		[[{ status: "IN_PROGRESS", conclusion: null }], "…1"],
+		[
+			[
+				{ status: "COMPLETED", conclusion: "SUCCESS" },
+				{ status: "COMPLETED", conclusion: "FAILURE" },
+				{ status: "IN_PROGRESS", conclusion: null },
+			],
+			"✓1 ×1 …1",
+		],
+		[[], "-"],
+		[Array.from({ length: 1_000 }, () => ({ state: "SUCCESS" })), "✓1000"],
+	];
+	for (const [statusCheckRollup, expected] of checkCases) {
+		assert.equal(buildGithubPrSnapshot(rawPr({ statusCheckRollup }), NOW)?.checks, expected);
+	}
+
+	const reviewCases: Array<[unknown, string]> = [
+		["APPROVED", "R✓"],
+		["CHANGES_REQUESTED", "R×"],
+		["REVIEW_REQUIRED", "R?"],
+		["UNKNOWN", ""],
+	];
+	for (const [reviewDecision, expected] of reviewCases) {
+		assert.equal(buildGithubPrSnapshot(rawPr({ reviewDecision }), NOW)?.review, expected);
+	}
+});
+
+test("github_pr keeps its established variables and default format", () => {
+	assert.deepEqual(githubPrModule.variables, [
+		"symbol",
+		"number",
+		"link",
+		"state",
+		"checks",
+		"review",
+		"status",
+	]);
+	assert.equal(githubPrModule.defaults.format, "[ $symbol$link( · $status) ]($style)");
 });
 
 test("terminal pull requests expire at the exact 24-hour boundary", () => {
