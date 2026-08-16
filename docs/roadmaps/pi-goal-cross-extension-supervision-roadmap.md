@@ -42,8 +42,7 @@ Goal persistence carries a limited `safetyPauseCause`, but it cannot distinguish
 operator, RPC, interruption, safety, provider, agent, and rollback transitions required by a
 supervisor.
 
-The user settings file currently controls tool visibility, the experimental ordered-goal queue, and
-continuation limits. It has no cross-extension access policy. Settings already use defaults for an
+The user settings file currently controls tool visibility, managed-run RPC, and continuation limits. It has no cross-extension access policy. Settings already use defaults for an
 absent file, reject malformed content, preserve unknown fields, publish explicit saves atomically,
 and apply menu changes with rollback on failure.
 
@@ -282,8 +281,8 @@ Goal turns while preserving single-flight delivery and Goal liveness.
 - Allowing a supervisor to automatically reverse an explicit operator pause.
 - Weakening `goal_blocked` recurrence, evidence, or stale-ID validation.
 - Delivering settings, Resume RPC, terminal review, and continuation leases in one change.
-- Redesigning the Goal queue, token accounting, tool visibility, or the general `/goal` manager as
-  part of this roadmap.
+- Redesigning token accounting, tool visibility, or the general `/goal` manager as part of this
+  roadmap.
 - Committing to Phase 5 or 6 before the Phase 4 evidence gate passes.
 - Assigning delivery dates, releases, owners, or capacity without separate planning evidence.
 
