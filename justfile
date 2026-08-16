@@ -82,7 +82,7 @@ try name: (_validate-package-name name)
 # Open the private Pi TUI Kit showcase extension from this working tree
 showcase-tui-kit:
     npm --workspace @narumitw/pi-tui-kit run build
-    pi -e ./packages/pi-tui-kit-showcase
+    pi --no-extensions --no-skills -e ./packages/pi-tui-kit-showcase
 
 # Run Pi Chat's opt-in real local DHT and process-boundary smoke
 smoke-chat-network:
