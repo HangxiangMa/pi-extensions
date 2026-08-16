@@ -4,11 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
 import {
-	applyExecutionProfile,
-	executionProfilePreview,
-	inspectExecutionProfile,
-} from "../src/execution-profiles.js";
-import {
 	consumeSubagentSettingsNotice,
 	inspectBlockingParallelLimitSettings,
 	inspectConsultResourceSettings,
@@ -18,7 +13,6 @@ import {
 	inspectSubagentSettings,
 	normalizeSubagentSettings,
 	readSubagentSettings,
-	updateAgentSettingsPatch,
 	updateBlockingMaxParallelTasksSetting,
 	updateConsultResourceSetting,
 	updateCwdPolicySetting,
@@ -64,31 +58,6 @@ test("stateful RPC and automatic transports are opt-in and preserve unknown sett
 			value: "rpc",
 			source: "user settings",
 		});
-	});
-});
-
-test("execution profiles patch only thinking defaults and keep other agent fields", () => {
-	withAgentDir((directory) => {
-		writeFileSync(
-			path.join(directory, "pi-subagents.json"),
-			'{"agents":{"scout":{"model":"provider/model","tools":["read"]}},"future":true}\n',
-		);
-		applyExecutionProfile("balanced");
-		assert.equal(inspectExecutionProfile(), "balanced");
-		assert.match(executionProfilePreview("deep").join("\n"), /reviewer: high/);
-		const saved = JSON.parse(readFileSync(path.join(directory, "pi-subagents.json"), "utf8"));
-		assert.equal(saved.future, true);
-		assert.equal(saved.agents.scout.model, "provider/model");
-		assert.deepEqual(saved.agents.scout.tools, ["read"]);
-		assert.equal(saved.agents.scout.thinkingLevel, "low");
-		updateAgentSettingsPatch({
-			scout: { model: undefined, thinkingLevel: "high", timeoutMs: 1234 },
-		});
-		const updated = readSubagentSettings();
-		assert.equal(updated?.agents?.scout?.model, undefined);
-		assert.equal(updated?.agents?.scout?.thinkingLevel, "high");
-		assert.equal(updated?.agents?.scout?.timeoutMs, 1234);
-		assert.equal(inspectExecutionProfile(), "custom");
 	});
 });
 

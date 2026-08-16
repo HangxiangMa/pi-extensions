@@ -22,12 +22,10 @@ import {
 	applyAgentModel,
 	applyAgentThinking,
 	applyAgentTimeout,
-	applyExecutionProfileFromUi,
 	executionAgentPickerScreen,
 	executionAgentScreen,
 	executionModelInputScreen,
 	executionModelScreen,
-	executionProfileScreen,
 	executionThinkingScreen,
 	executionTimeoutInputScreen,
 	resetAgentExecution,
@@ -195,7 +193,6 @@ export async function showSubagentManager(
 		| "performance"
 		| "responsiveness"
 		| "transport"
-		| "execution-profiles"
 		| "execution-agent-picker"
 		| "execution-agent"
 		| "execution-thinking"
@@ -213,7 +210,6 @@ export async function showSubagentManager(
 		| "set-workflow"
 		| "clear-agents"
 		| "set-transport"
-		| "apply-execution-profile"
 		| "pick-execution-agent"
 		| "set-agent-thinking"
 		| "set-agent-model"
@@ -378,7 +374,7 @@ export async function showSubagentManager(
 						{
 							id: "performance",
 							label: "Performance and execution",
-							description: "Transport, responsiveness, profiles, and agent defaults",
+							description: "Transport, responsiveness, and agent defaults",
 							to: "performance",
 						},
 						{ id: "back", label: "Back", action: "back" },
@@ -397,7 +393,6 @@ export async function showSubagentManager(
 						to: "responsiveness",
 					},
 					{ id: "transport", label: "Detached transport", to: "transport" },
-					{ id: "profiles", label: "Execution profiles", to: "execution-profiles" },
 					{
 						id: "agents",
 						label: "Agent execution defaults",
@@ -410,7 +405,6 @@ export async function showSubagentManager(
 			}),
 			responsiveness: () => responsivenessSetupScreen(runtime),
 			transport: () => transportSettingsScreen(runtime),
-			"execution-profiles": () => executionProfileScreen(),
 			"execution-agent-picker": () => executionAgentPickerScreen(availableAgents),
 			"execution-agent": () => executionAgentScreen(selectedExecutionAgent),
 			"execution-thinking": () => executionThinkingScreen(selectedExecutionAgent),
@@ -568,8 +562,6 @@ export async function showSubagentManager(
 			},
 			"set-transport": async ({ itemId, signal }) =>
 				applyTransportSetting(itemId, ctx, runtime, signal, isCurrent),
-			"apply-execution-profile": async ({ itemId, signal }) =>
-				applyExecutionProfileFromUi(itemId, ctx, signal, isCurrent),
 			"pick-execution-agent": async ({ itemId }) => {
 				selectedExecutionAgent = availableAgents.find((agent) => agent.name === itemId);
 				return selectedExecutionAgent

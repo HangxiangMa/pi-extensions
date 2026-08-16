@@ -22,7 +22,7 @@ Use it to split independent research, planning, implementation, and review work 
 - Loads custom user agents from `~/.pi/agent/agents/*.md`.
 - Optionally loads project agents from `.pi/agents/*.md` with confirmation.
 - Provides a current-session-first `/subagents` manager, direct `settings|status|help` routes, and compatibility aliases for agent tools and retained agents.
-- Supports trust-aware per-task `cwd` policies, task-selected work, workflow, idle, turn, and tool-call budgets, deterministic timeout checkpoints, bounded abort-then-summary recovery, progress telemetry, and explicit Fast, Balanced, or Deep thinking profiles.
+- Supports trust-aware per-task `cwd` policies, task-selected work, workflow, idle, turn, and tool-call budgets, deterministic timeout checkpoints, bounded abort-then-summary recovery, progress telemetry, and per-agent execution defaults.
 - Uses Pi-native tool rows throughout; blocking and consultation calls add bounded custom live activity.
 - Bounds JSON lines, captured messages, stderr, final output, chain substitution, and fan-in context.
 - Enforces a recursion-depth guard and deterministic process-group termination.
@@ -625,8 +625,8 @@ Run `/subagents` in TUI mode to open the standard primary manager.
 It leads with the current delegation workflow, human-readable async completion behavior, consultation/delegation target policies, consultation-resource policy, parallel-worker limit, and active/retained counts.
 **Change delegation**, **Current agents**, and **Settings** cover the common workflows.
 Agent permissions, **Maximum parallel workers**, **Detached agent limits**, **Performance and execution**, transport/runtime details, source, and settings path remain under **Advanced settings**.
-**Performance and execution** provides responsiveness guidance, transport previews, Fast/Balanced/Deep thinking profiles, and per-agent model/thinking/timeout defaults.
-Profiles are explicit atomic thinking patches, preserve model/tool/timeout/context settings, never select `max`, and can be customized afterward.
+**Performance and execution** provides responsiveness guidance, transport previews, and per-agent model/thinking/timeout defaults.
+Per-agent defaults preserve tool and context settings, and explicit tool-call values remain authoritative.
 The parallel-worker input rejects invalid values without discarding the draft and applies a successful save immediately.
 The detached-limit screen edits retained capacity, active-turn concurrency, direct children, tree depth, and stored-record capacity.
 Detached-limit saves are durable immediately but apply to the runtime after `/reload` or the next Pi session.
@@ -838,17 +838,8 @@ Built-in agents are available without setup and can be overridden by user or pro
 The built-in `reviewer` does not run tests, builds, benchmarks, or formatters. It recommends additional verification commands for the main agent to run instead. Custom agents can override this behavior.
 
 Built-in agents inherit the active/default Pi model instead of forcing a provider-specific model alias, which keeps every transport usable across different Pi setups.
-Built-ins also have no fixed thinking override until a caller, frontmatter, per-agent setting, or execution profile selects one.
-
-The optional profiles apply these provider-neutral thinking defaults:
-
-| Profile | `scout` | `planner` | `reviewer` | `worker` |
-| --- | --- | --- | --- | --- |
-| Fast | `low` | `low` | `medium` | `low` |
-| Balanced | `low` | `medium` | `medium` | `medium` |
-| Deep | `medium` | `high` | `high` | `high` |
-
-Profiles preserve model, timeout, tools, transport, completion delivery, and parent-context behavior.
+The built-in `scout` defaults to `low` thinking for bounded reconnaissance.
+`planner`, `reviewer`, and `worker` inherit thinking unless a caller, frontmatter, or per-agent setting selects one.
 
 ## ⚙️ Configure agent tools
 
@@ -1101,8 +1092,7 @@ packages/pi-subagents/
 │   ├── panel-reconciliation.ts   # Objection-preserving valid-review barrier
 │   ├── panel-child-group.ts      # Child signals and disposable-worktree cleanup
 │   ├── panel-render.ts           # Compact and expanded sanitized panel rows
-│   ├── execution-profiles.ts     # Provider-neutral thinking profile patches
-│   ├── execution-ui.ts           # Profile and per-agent execution settings screens
+│   ├── execution-ui.ts           # Per-agent execution settings screens
 │   ├── stateful-guidance.ts      # Detached model-facing workflow guidance
 │   ├── stateful-lifecycle.ts     # Runtime disposal and spawn ownership guards
 │   ├── timeout-finalization.ts   # Abort-time bounded summary prompts and deadlines

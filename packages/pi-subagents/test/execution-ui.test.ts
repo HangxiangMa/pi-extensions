@@ -8,10 +8,8 @@ import {
 	applyAgentModel,
 	applyAgentThinking,
 	applyAgentTimeout,
-	applyExecutionProfileFromUi,
 	executionAgentScreen,
 	executionModelScreen,
-	executionProfileScreen,
 	resetAgentExecution,
 } from "../src/execution-ui.js";
 import { updateAgentSettingsPatch } from "../src/settings.js";
@@ -43,37 +41,8 @@ function runtime(retainedAgents = 0) {
 	};
 }
 
-test("execution profile preview cancels without a write and applies one atomic patch", async () => {
-	await withAgentDir(async (directory) => {
-		const cancelled = createMockContext({ confirm: async () => false });
-		const rejected = await applyExecutionProfileFromUi(
-			"balanced",
-			cancelled.ctx,
-			new AbortController().signal,
-			() => true,
-		);
-		assert.equal(rejected.kind, "rejected");
-		assert.equal(existsSync(path.join(directory, "pi-subagents.json")), false);
-
-		updateAgentSettingsPatch({ backend: { model: "unavailable/model", tools: ["bash"] } });
-		const accepted = createMockContext({ confirm: async () => true });
-		const applied = await applyExecutionProfileFromUi(
-			"balanced",
-			accepted.ctx,
-			new AbortController().signal,
-			() => true,
-		);
-		assert.equal(applied.kind, "stay");
-		const saved = JSON.parse(readFileSync(path.join(directory, "pi-subagents.json"), "utf8"));
-		assert.equal(saved.agents.scout.thinkingLevel, "low");
-		assert.equal(saved.agents.reviewer.thinkingLevel, "medium");
-		assert.equal(saved.agents.worker.thinkingLevel, "medium");
-		assert.equal(saved.agents.general, undefined);
-		assert.equal(saved.agents["general-purpose"], undefined);
-		assert.equal(saved.agents.backend.thinkingLevel, undefined);
-		assert.equal(saved.agents.backend.model, "unavailable/model");
-		assert.deepEqual(saved.agents.backend.tools, ["bash"]);
-		assert.match(JSON.stringify(executionProfileScreen()), /Fast.*Balanced.*Deep/);
+test("per-agent execution screens expose defaults without profile presets", async () => {
+	await withAgentDir(async () => {
 		assert.match(
 			JSON.stringify(
 				executionAgentScreen({
@@ -82,9 +51,10 @@ test("execution profile preview cancels without a write and applies one atomic p
 					systemPrompt: "",
 					source: "built-in",
 					filePath: "built-in:scout",
+					thinkingLevel: "low",
 				}),
 			),
-			/model.*Thinking level.*Timeout/i,
+			/model.*Thinking.*low.*Timeout/i,
 		);
 		const catalogContext = createMockContext({
 			modelRegistry: { getAvailable: () => [{ provider: "fake", id: "model" }] },
