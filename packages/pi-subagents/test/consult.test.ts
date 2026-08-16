@@ -167,7 +167,7 @@ test("subagent_consult bounds unknown-agent recovery metadata", async () => {
 		assert.equal(requests.length, 0);
 		assert.ok(Buffer.byteLength(message, "utf8") <= 6 * 1024);
 		assert.doesNotMatch(message, /x{200}/);
-		assert.match(message, /14 additional agent definitions? omitted/);
+		assert.match(message, /12 additional agent definitions? omitted/);
 
 		rmSync(agentsDir, { recursive: true, force: true });
 		writeFileSync(agentsDir, "not a directory");
