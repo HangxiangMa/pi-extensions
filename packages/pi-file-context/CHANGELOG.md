@@ -1,5 +1,11 @@
 # @narumitw/pi-file-context
 
+## 0.53.1
+
+### Patch Changes
+
+- bf127d8: Prioritize shallow project files before deeper files during bounded File Context discovery.
+
 ## 0.53.0
 
 ### Minor Changes
