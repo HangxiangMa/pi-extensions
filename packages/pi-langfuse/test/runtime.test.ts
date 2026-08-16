@@ -185,6 +185,16 @@ test("isolated runtime preserves the global provider and exports native observat
 		compaction?.attributes["langfuse.observation.metadata.pi.compaction.from_extension"],
 		"false",
 	);
+
+	const updatedSession = backend.start("updated-session", {}, { asType: "span" });
+	updatedSession.update({ sessionId: "updated-session" });
+	updatedSession.end();
+	await backend.forceFlush();
+	const updatedSessionSpan = exporter
+		.getFinishedSpans()
+		.find((span) => span.name === "updated-session");
+	assert.equal(updatedSessionSpan?.attributes["session.id"], "updated-session");
+
 	await backend.shutdown();
 	await backend.shutdown();
 	await existingGlobalProvider.shutdown();
