@@ -4,14 +4,7 @@ import { readSubagentSettings, updateAgentSettingsPatch } from "./settings.js";
 export const EXECUTION_PROFILES = ["fast", "balanced", "deep"] as const;
 export type ExecutionProfile = (typeof EXECUTION_PROFILES)[number];
 
-const PROFILE_AGENT_ORDER = [
-	"scout",
-	"planner",
-	"reviewer",
-	"worker",
-	"general",
-	"general-purpose",
-] as const;
+const PROFILE_AGENT_ORDER = ["scout", "planner", "reviewer", "worker"] as const;
 
 type ProfileAgent = (typeof PROFILE_AGENT_ORDER)[number];
 
@@ -24,24 +17,18 @@ export const EXECUTION_PROFILE_THINKING: Record<
 		planner: "low",
 		reviewer: "medium",
 		worker: "low",
-		general: "low",
-		"general-purpose": "low",
 	},
 	balanced: {
 		scout: "low",
 		planner: "medium",
 		reviewer: "medium",
 		worker: "medium",
-		general: "medium",
-		"general-purpose": "medium",
 	},
 	deep: {
 		scout: "medium",
 		planner: "high",
 		reviewer: "high",
 		worker: "high",
-		general: "high",
-		"general-purpose": "high",
 	},
 };
 

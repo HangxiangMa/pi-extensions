@@ -81,6 +81,10 @@ test("built-in lookup is immutable when a user agent and settings override the s
 		assert.equal(builtIn?.thinkingLevel, undefined);
 		builtIn?.tools?.push("write");
 		assert.deepEqual(getBuiltInAgent("planner")?.tools, ["read", "grep", "find", "ls"]);
+		assert.equal(getBuiltInAgent("general"), undefined);
+		assert.equal(getBuiltInAgent("general-purpose"), undefined);
+		const builtInNames = discoverAgents(directory, "project").agents.map((agent) => agent.name);
+		assert.deepEqual(builtInNames, ["scout", "planner", "reviewer", "worker"]);
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;

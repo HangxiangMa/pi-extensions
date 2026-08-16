@@ -67,7 +67,9 @@ test("execution profile preview cancels without a write and applies one atomic p
 		const saved = JSON.parse(readFileSync(path.join(directory, "pi-subagents.json"), "utf8"));
 		assert.equal(saved.agents.scout.thinkingLevel, "low");
 		assert.equal(saved.agents.reviewer.thinkingLevel, "medium");
-		assert.equal(saved.agents.general.thinkingLevel, "medium");
+		assert.equal(saved.agents.worker.thinkingLevel, "medium");
+		assert.equal(saved.agents.general, undefined);
+		assert.equal(saved.agents["general-purpose"], undefined);
 		assert.equal(saved.agents.backend.thinkingLevel, undefined);
 		assert.equal(saved.agents.backend.model, "unavailable/model");
 		assert.deepEqual(saved.agents.backend.tools, ["bash"]);

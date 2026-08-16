@@ -834,7 +834,6 @@ Built-in agents are available without setup and can be overridden by user or pro
 | `planner` | Grounded implementation plans. | `read`, `grep`, `find`, `ls` |
 | `reviewer` | Independent review of code and existing verification evidence. | `read`, `grep`, `find`, `ls`, `bash` |
 | `worker` | General-purpose implementation. | Pi default tools |
-| `general`, `general-purpose` | Aliases for `worker`. | Pi default tools |
 
 The built-in `reviewer` does not run tests, builds, benchmarks, or formatters. It recommends additional verification commands for the main agent to run instead. Custom agents can override this behavior.
 
@@ -843,7 +842,7 @@ Built-ins also have no fixed thinking override until a caller, frontmatter, per-
 
 The optional profiles apply these provider-neutral thinking defaults:
 
-| Profile | `scout` | `planner` | `reviewer` | `worker` and aliases |
+| Profile | `scout` | `planner` | `reviewer` | `worker` |
 | --- | --- | --- | --- | --- |
 | Fast | `low` | `low` | `medium` | `low` |
 | Balanced | `low` | `medium` | `medium` | `medium` |
