@@ -14,6 +14,7 @@ export const BUILT_IN_AGENTS: AgentConfig[] = [
 		capabilityManifest: builtInManifest(["repository-search", "code-evidence"], "read", [
 			"evidence-gathering",
 		]),
+		thinkingLevel: "low",
 		source: "built-in",
 		filePath: "built-in:scout",
 		systemPrompt: [
