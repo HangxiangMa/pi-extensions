@@ -84,7 +84,7 @@ Searchable single choice is now available through opt-in `enableSearch` and expl
 
 Pi BTW Resume and Worktree identity selection qualified the same local stable-ID confirmation job without importing scope, delete, preview, persistence, or tree semantics into the Kit.
 
-Execution evidence is tracked in the archived existing-contract convergence plan and the active terminal-display safety and searchable-choice plans under `docs/plans/`.
+Execution evidence is tracked in the roadmap outcomes and retained PR history.
 
 ## Guiding Principles
 
@@ -413,8 +413,8 @@ abstractions when Pi provides a better stable owner.
 | Interaction-hint consistency | Kit and specialized pickers repeated binding lookup, aliases, exclusions, and sanitization | Published API 9 exposes one formatter and uses it for Kit menu, browse, and live-choice hints | Phase 6 complete; formatter and rendering tests |
 | Exact browse documents | Legacy browse prose removed indentation and Tool owned a duplicate browser | Published API 10 preserves exact text, code, and diff details without implicit document search | Phase 7 complete; Kit formatter tests and Tool proof migration |
 | Existing custom lifecycle duplication | Direct custom hosts mixed repeated wrapper ownership with specialized domain behavior | Starship and File Context now use published lifecycle and testing contracts; incompatible hosts remain local | Phase 8 complete; PRs #741 and #742 plus explicit no-go records |
-| Shared terminal display safety | Statusline and Starship duplicated one sanitizer while other packages use incompatible policies | API 12 release exposes one narrow display-only contract; two proof migrations await merge | Phase 9 API/release complete; PRs #743, #746, and #747 |
-| Searchable single-choice ownership | `choice` had no search and `browse` could not confirm and return an item | API 12 provides optional TUI search with raw-ID selection; BTW and Worktree proof migrations await merge | Phase 10 API/release complete; PRs #744, #748, and #749 |
+| Shared terminal display safety | Statusline and Starship duplicated one sanitizer while other packages use incompatible policies | API 12 release exposes one narrow display-only contract; Statusline and Starship proof migrations are merged | Phase 9 complete; PRs #743, #746, and #747 |
+| Searchable single-choice ownership | `choice` had no search and `browse` could not confirm and return an item | API 12 provides optional TUI search with raw-ID selection; BTW and Worktree proof migrations are merged | Phase 10 complete; PRs #744, #748, and #749 |
 | Regression gate | Repository CI-equivalent gate at each capability change | No regression in the repository CI-equivalent gate | Every phase; `npm run check` |
 
 Delivery dates and capacity targets are unknown; this roadmap intentionally measures verified behavior
