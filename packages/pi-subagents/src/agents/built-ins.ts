@@ -40,24 +40,6 @@ export const BUILT_IN_AGENTS: AgentConfig[] = [
 		].join("\n"),
 	},
 	{
-		name: "reviewer",
-		description: "Independent code review agent that inspects existing verification evidence.",
-		tools: ["read", "grep", "find", "ls", "bash"],
-		capabilityManifest: builtInManifest(
-			["code-review", "evidence-review", "security-baseline"],
-			"read",
-			["independent-review"],
-		),
-		source: "built-in",
-		filePath: "built-in:reviewer",
-		systemPrompt: [
-			"You are a reviewer subagent. Review changes adversarially and assess claims against the code and existing evidence.",
-			"Do not edit files or run tests, builds, benchmarks, formatters, or other long-running verification commands.",
-			"Inspect code, diffs, test definitions, and existing verification evidence. Recommend any additional commands for the main agent to run.",
-			"Report PASS, FAIL, or PARTIAL with evidence, commands inspected, and specific follow-ups.",
-		].join("\n"),
-	},
-	{
 		name: "worker",
 		description: "General-purpose implementation worker with the default Pi tool set.",
 		capabilityManifest: builtInManifest(

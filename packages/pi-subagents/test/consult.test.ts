@@ -132,7 +132,7 @@ test("subagent_consult reports actionable available agents before launching a ch
 			assert.match(error.message, /Unknown subagent definition: tester-one/);
 			assert.match(error.message, /Available agents for agentScope "user":/);
 			assert.match(error.message, /scout \(built-in\)/);
-			assert.match(error.message, /reviewer \(built-in\)/);
+			assert.doesNotMatch(error.message, /reviewer \(built-in\)/);
 			return true;
 		},
 	);
@@ -167,7 +167,7 @@ test("subagent_consult bounds unknown-agent recovery metadata", async () => {
 		assert.equal(requests.length, 0);
 		assert.ok(Buffer.byteLength(message, "utf8") <= 6 * 1024);
 		assert.doesNotMatch(message, /x{200}/);
-		assert.match(message, /12 additional agent definitions? omitted/);
+		assert.match(message, /11 additional agent definitions? omitted/);
 
 		rmSync(agentsDir, { recursive: true, force: true });
 		writeFileSync(agentsDir, "not a directory");

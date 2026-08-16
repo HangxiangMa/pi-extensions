@@ -34,8 +34,8 @@ test("audit execution plan reports capability mismatch, tool overgrant, and unsu
 			name: "reviewer",
 			description: "review",
 			systemPrompt: "private",
-			source: "built-in",
-			filePath: "built-in:reviewer",
+			source: "user",
+			filePath: "user:reviewer",
 			tools: ["read", "grep", "bash"],
 			capabilityManifest: {
 				version: "pi-subagents:capabilities:v1",
