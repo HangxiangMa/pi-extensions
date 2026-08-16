@@ -4,7 +4,7 @@
 
 Remove `pi-goal`'s experimental ordered-goal queue from the stable package while preserving the single-objective Goal workflow.
 
-Keep affected legacy users safe by warning when `experimental.goals` or persisted queue state is present, documenting `/goal edit` for active-objective reprioritization, and documenting `/goal <merged objective>` for inert legacy queues that no longer restore an active head.
+Keep affected legacy users safe by warning when `experimental.goals` or persisted queue state is present, documenting `/goal edit` for active-objective reprioritization, and documenting `/goal <objectives>` for inert legacy queues that no longer restore an active head.
 
 ## Context
 
@@ -34,7 +34,7 @@ When the same words are typed by users without legacy setting or state, they rem
 
 Persisted queue state does not auto-continue or auto-advance after reload.
 
-A user with legacy queue state receives an observable warning that says to start one merged objective with `/goal <merged objective>`, or use `/goal clear` to discard the old state.
+A user with legacy queue state receives an observable warning that says to start one merged objective with `/goal <objectives>`, or use `/goal clear` to discard the old state.
 
 ## Non-Goals
 
