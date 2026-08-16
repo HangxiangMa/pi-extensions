@@ -1,5 +1,13 @@
 # @narumitw/pi-starship
 
+## 0.51.1
+
+### Patch Changes
+
+- 11bdf1e: Update runtime dependencies for chat networking, Starship TOML parsing, and TUI syntax highlighting.
+- Updated dependencies [11bdf1e]
+  - @narumitw/pi-tui-kit@0.54.1
+
 ## 0.51.0
 
 ### Minor Changes
