@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { discoverAgents } from "../src/agents.js";
 import { consumeSubagentSettingsNotice } from "../src/settings.js";
 import subagents, {
 	inspectCompletionDeliverySettings,
@@ -57,6 +58,71 @@ test("subagent settings normalize known override fields only", () => {
 	assert.equal(normalizeSubagentSettings({ blocking: { enabled: "no" } }), undefined);
 	assert.equal(normalizeSubagentSettings({ blocking: false }), undefined);
 	assert.equal(normalizeSubagentSettings({ agents: [] }), undefined);
+});
+
+test("legacy scout agent overrides apply to explorer without overriding conflicts", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-scout-settings-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({
+				agents: {
+					scout: {
+						tools: ["read"],
+						model: "legacy-model",
+						thinkingLevel: "medium",
+						timeoutMs: 1234,
+					},
+				},
+			}),
+		);
+
+		const migrated = discoverAgents(directory, "user", readSubagentSettings()).agents.find(
+			(agent) => agent.name === "explorer",
+		);
+		assert.deepEqual(migrated?.tools, ["read"]);
+		assert.equal(migrated?.model, "legacy-model");
+		assert.equal(migrated?.thinkingLevel, "medium");
+		assert.equal(migrated?.timeoutMs, 1234);
+
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({
+				agents: {
+					explorer: { tools: ["grep"] },
+					scout: { tools: ["read"] },
+				},
+			}),
+		);
+		const explicit = discoverAgents(directory, "user", readSubagentSettings()).agents.find(
+			(agent) => agent.name === "explorer",
+		);
+		assert.deepEqual(explicit?.tools, ["grep"]);
+
+		const agentsDir = path.join(directory, "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			path.join(agentsDir, "scout.md"),
+			"---\nname: scout\ndescription: Custom scout\ntools: bash\n---\nCustom scout.",
+		);
+		writeFileSync(settingsPath, JSON.stringify({ agents: { scout: { tools: ["read"] } } }));
+		const withCustomScout = discoverAgents(directory, "user", readSubagentSettings()).agents;
+		assert.deepEqual(withCustomScout.find((agent) => agent.name === "scout")?.tools, ["read"]);
+		assert.deepEqual(withCustomScout.find((agent) => agent.name === "explorer")?.tools, [
+			"read",
+			"grep",
+			"find",
+			"ls",
+			"bash",
+		]);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
 });
 
 test("session start re-reads settings before reporting warnings", async () => {

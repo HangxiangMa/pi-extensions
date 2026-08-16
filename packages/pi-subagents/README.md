@@ -854,6 +854,7 @@ tool names and availability metadata; Save and Discard remain pinned below the m
 settings stored in `~/.pi/agent/pi-subagents.json` and affect future sessions.
 
 Compatibility: a valid legacy `pi-subagents-config.json` remains readable with a warning and is never modified automatically; rename it to `pi-subagents.json`. The first subsequent settings save writes the canonical file. If both files exist, the new filename takes precedence.
+A saved `agents.scout` override from earlier releases applies to the renamed built-in `explorer` only when no explicit `agents.explorer` override exists and no custom `scout` agent is available.
 
 - Select an agent, then press Enter or Space to toggle tools.
 - Choose **Save changes** to write the draft, choose **Discard draft** to abandon it, or press Esc to
