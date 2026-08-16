@@ -102,7 +102,7 @@ Unknown and trailing arguments are rejected. RPC receives an observable warning.
 - Extensions run with the user's full permissions; install only trusted code.
 - File paths and symlink targets are checked against the real project root before reading.
 - Preview files are limited to 1 MB and NUL-containing files are treated as binary.
-- Discovery is limited to 5,000 files and skips symlinks.
+- Discovery is limited to 5,000 files, skips symlinks, and prioritizes shallow files before deeper files.
 - File-name and content-search queries are limited to 256 characters. Content search returns at most 100 cards and reports truncation and unreadable, oversized, or binary files as skipped.
 - Content search uses the same 5,000-file, 1 MB-per-file, real-project-path, and no-symlink boundaries as preview loading. Superseded searches and file opens are cancelled.
 - Terminal control characters are escaped before file names, Git refs, authors, summaries, search context, or file contents are rendered.
