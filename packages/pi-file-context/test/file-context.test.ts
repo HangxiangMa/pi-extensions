@@ -105,6 +105,21 @@ test("discovers bounded project text candidates without traversing ignored direc
 	});
 });
 
+test("discovers shallow files before deep files when the file limit is reached", async () => {
+	await withTempProject(async (root) => {
+		await mkdir(join(root, "a-deep"), { recursive: true });
+		await writeFile(join(root, "a-deep", "one.txt"), "one");
+		await writeFile(join(root, "a-deep", "two.txt"), "two");
+		await writeFile(join(root, "b-shallow.txt"), "b");
+		await writeFile(join(root, "c-shallow.txt"), "c");
+
+		assert.deepEqual(await discoverProjectFiles(root, { maxFiles: 2 }), [
+			"b-shallow.txt",
+			"c-shallow.txt",
+		]);
+	});
+});
+
 test("loads only bounded regular text files inside the project", async () => {
 	await withTempProject(async (root) => {
 		await writeFile(join(root, "safe.ts"), "one\ntwo\nthree\n");

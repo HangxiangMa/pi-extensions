@@ -98,30 +98,34 @@ export async function discoverProjectFiles(
 	const files: string[] = [];
 	options.signal?.throwIfAborted();
 
-	async function walk(directory: string, prefix: string): Promise<void> {
+	const canonicalRoot = await realpath(root);
+	const directories: Array<{ directory: string; prefix: string }> = [
+		{ directory: canonicalRoot, prefix: "" },
+	];
+	options.signal?.throwIfAborted();
+
+	for (let index = 0; index < directories.length && files.length < maxFiles; index += 1) {
 		options.signal?.throwIfAborted();
-		if (files.length >= maxFiles) return;
+		const current = directories[index];
+		if (!current) break;
+		const { directory, prefix } = current;
 		const entries = (await readdir(directory, { withFileTypes: true })).sort((left, right) =>
 			compareStrings(left.name, right.name),
 		);
 		options.signal?.throwIfAborted();
 		for (const entry of entries) {
 			options.signal?.throwIfAborted();
-			if (files.length >= maxFiles) return;
 			if (IGNORED_DIRECTORIES.has(entry.name) || entry.isSymbolicLink()) continue;
 			const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
 			const absolutePath = resolve(directory, entry.name);
 			if (entry.isDirectory()) {
-				await walk(absolutePath, relativePath);
+				directories.push({ directory: absolutePath, prefix: relativePath });
 			} else if (entry.isFile()) {
 				files.push(relativePath);
+				if (files.length >= maxFiles) break;
 			}
 		}
 	}
-
-	const canonicalRoot = await realpath(root);
-	options.signal?.throwIfAborted();
-	await walk(canonicalRoot, "");
 	options.signal?.throwIfAborted();
 	return files.sort(compareStrings);
 }
