@@ -29,8 +29,7 @@ keeps only the internal lifecycle rationale and remaining Pi-core boundary.
    creates an in-memory continuation intent for an eligible active goal. It does not send the normal
    continuation.
 3. `agent_settled` runs after retry, automatic compaction, steering, and follow-up work drains. It
-   first finalizes matching exhausted recovery, then dispatches any pending queue transition, and
-   only then may dispatch an ordinary continuation.
+   first finalizes matching exhausted recovery, then may dispatch an ordinary continuation.
 4. Continuation dispatch re-reads the active goal, requires matching ownership, `ctx.isIdle()`, and
    no pending messages. Repeated settled events cannot consume one intent twice.
 
@@ -76,10 +75,11 @@ state and stale guards without aborting unrelated work.
 
 ## Compaction persistence
 
-Canonical Goal and queue state is stored in `goal-state` session entries. Before compaction, the
-runtime checkpoints active elapsed time and current safety/accounting state. Automatic compaction
-retries do not enqueue another Goal turn. Non-retrying manual compaction creates at most one fresh
-intent and uses the common idle dispatcher.
+Canonical Goal state is stored in `goal-state` session entries. Before compaction, the runtime
+checkpoints active elapsed time and current safety/accounting state. Automatic compaction retries do
+not enqueue another Goal turn. Non-retrying manual compaction creates at most one fresh intent and
+uses the common idle dispatcher. Old queue metadata in `goal-state` or legacy `goals-state` entries
+is treated as inert legacy data and never dispatches automatic work.
 
 Goal prompts and compacted context use the same objective trust boundary, stale goal id, full-scope
 rule, and requirement-by-requirement completion audit. Prompt wording is a guardrail; current files,
@@ -104,8 +104,8 @@ Automatic-work safety is separate from the token budget:
 - `continuationLimits.noProgressTurns` defaults to `3`. Repeated empty or normalized-identical
   tool-free automatic runs pause the goal; attempted tool calls reset that heuristic.
 - The no-progress fingerprint is fixed-size and stores no raw assistant text.
-- Safety state persists across reload, compaction, shelving, and automatic queue activation. It
-  resets only at documented successful user-control boundaries.
+- Safety state persists across reload and compaction. It resets only at documented successful
+  user-control boundaries.
 
 These guards pause rather than infer completion. `goal_complete` remains authoritative because plain
 assistant text cannot prove filesystem, test, runtime, PR, rendered, or external requirements.
