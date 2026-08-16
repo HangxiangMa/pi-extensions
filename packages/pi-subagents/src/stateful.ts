@@ -7,7 +7,6 @@ import { randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { discoverAgents } from "./agents/discovery.js";
 import {
 	type AgentScope,
 	type CompletionDelivery,
@@ -17,20 +16,10 @@ import {
 	type SubagentTransportKind,
 	THINKING_LEVELS,
 } from "./agents/types.js";
-import { issueCapabilityGrant } from "./capability-grant.js";
-import { CompletionDeliveryBroker } from "./completion-delivery.js";
-import { buildContextSnapshot, type ContextMode, redactPrivateText } from "./context.js";
-import {
-	type CreateStatefulTransportOptions,
-	createStatefulTransport,
-} from "./create-stateful-transport.js";
-import {
-	assertDelegationTargetAllowed,
-	resolveSubagentTarget,
-	targetPolicyAudit,
-} from "./cwd-policy.js";
-import { DelegationContractSchema, normalizeDelegationContract } from "./delegation-contract.js";
-import { assertSubagentDepthAllowed } from "./execution/runtime-policy.js";
+import type { CompletionDeliveryBroker } from "./completion-delivery.js";
+import type { ContextMode } from "./context.js";
+import type { CreateStatefulTransportOptions } from "./create-stateful-transport.js";
+import { DelegationContractSchema } from "./delegation-contract.js";
 import type { ChildSessionFactory, ParentRuntimeSnapshot } from "./in-process-transport.js";
 import {
 	DEFAULT_MAX_CONTEXT_BYTES,
@@ -38,32 +27,24 @@ import {
 	MAX_TOOL_MESSAGE_BYTES,
 	truncateUtf8,
 } from "./limits.js";
-import { AgentPersistence } from "./persistence.js";
-import {
+import type { AgentPersistence } from "./persistence.js";
+import type {
 	AgentRegistry,
-	type AgentRunInspectionDetail,
-	type AgentRunInspectionSummary,
-	type ManagedAgent,
+	AgentRunInspectionDetail,
+	AgentRunInspectionSummary,
+	ManagedAgent,
 } from "./registry.js";
 import { SUBAGENT_RESULT_FORMATS, type SubagentResultFormat } from "./result-contract.js";
-import { buildRetainedSemanticState } from "./retained-semantic-state.js";
-import { evaluateSemanticCompatibility } from "./semantic-snapshot.js";
 import { DEFAULT_DELEGATION_CWD_POLICY } from "./settings/inspection.js";
 import { readSubagentSettings } from "./settings.js";
 import {
 	assertSpawnIdempotencyKey,
-	hashSpawnRequest,
 	MAX_SPAWN_IDEMPOTENCY_KEY_LENGTH,
 } from "./spawn-idempotency.js";
 import { summarizeStatefulAgent } from "./stateful-agent-view.js";
 import { resolveCompletionDelivery, resolveStatefulTransportKind } from "./stateful-config.js";
 import { createSpawnPromptGuidelines } from "./stateful-guidance.js";
-import {
-	assertCurrentSpawn,
-	cleanupPersistedWorkspaces,
-	disposeStatefulRuntime,
-	waitForOwnedSpawn,
-} from "./stateful-lifecycle.js";
+import { assertCurrentSpawn, waitForOwnedSpawn } from "./stateful-lifecycle.js";
 import { resolveStatefulLimits, type StatefulLimits } from "./stateful-limits.js";
 import { createStatefulToolRenderer } from "./stateful-render.js";
 import {
@@ -85,7 +66,112 @@ import {
 	validateMailboxParams,
 	validateManageParams,
 } from "./stateful-tool-params.js";
-import { WorkspaceManager } from "./workspace.js";
+import type { WorkspaceManager } from "./workspace.js";
+
+type CwdPolicyModule = typeof import("./cwd-policy.js");
+type StateLifecycleModule = typeof import("./stateful-lifecycle.js");
+
+type StatefulSessionModules = {
+	broker: typeof import("./completion-delivery.js");
+	context: typeof import("./context.js");
+	transport: typeof import("./create-stateful-transport.js");
+	cwdPolicy: CwdPolicyModule;
+	persistence: typeof import("./persistence.js");
+	registry: typeof import("./registry.js");
+	lifecycle: StateLifecycleModule;
+};
+
+type StatefulSpawnModules = {
+	agents: typeof import("./agents/discovery.js");
+	capabilityGrant: typeof import("./capability-grant.js");
+	context: typeof import("./context.js");
+	cwdPolicy: CwdPolicyModule;
+	delegationContract: typeof import("./delegation-contract.js");
+	runtimePolicy: typeof import("./execution/runtime-policy.js");
+	retainedSemanticState: typeof import("./retained-semantic-state.js");
+	semanticSnapshot: typeof import("./semantic-snapshot.js");
+	spawnIdempotency: typeof import("./spawn-idempotency.js");
+};
+
+let statefulSessionModules: Promise<StatefulSessionModules> | undefined;
+let statefulSpawnModules: Promise<StatefulSpawnModules> | undefined;
+let workspaceModule: Promise<typeof import("./workspace.js")> | undefined;
+
+function loadStatefulSessionModules(): Promise<StatefulSessionModules> {
+	statefulSessionModules ??= Promise.all([
+		import("./completion-delivery.js"),
+		import("./context.js"),
+		import("./create-stateful-transport.js"),
+		import("./cwd-policy.js"),
+		import("./persistence.js"),
+		import("./registry.js"),
+		import("./stateful-lifecycle.js"),
+	])
+		.then(([broker, context, transport, cwdPolicy, persistence, registry, lifecycle]) => ({
+			broker,
+			context,
+			transport,
+			cwdPolicy,
+			persistence,
+			registry,
+			lifecycle,
+		}))
+		.catch((error: unknown) => {
+			statefulSessionModules = undefined;
+			throw error;
+		});
+	return statefulSessionModules;
+}
+
+function loadStatefulSpawnModules(): Promise<StatefulSpawnModules> {
+	statefulSpawnModules ??= Promise.all([
+		import("./agents/discovery.js"),
+		import("./capability-grant.js"),
+		import("./context.js"),
+		import("./cwd-policy.js"),
+		import("./delegation-contract.js"),
+		import("./execution/runtime-policy.js"),
+		import("./retained-semantic-state.js"),
+		import("./semantic-snapshot.js"),
+		import("./spawn-idempotency.js"),
+	])
+		.then(
+			([
+				agents,
+				capabilityGrant,
+				context,
+				cwdPolicy,
+				delegationContract,
+				runtimePolicy,
+				retainedSemanticState,
+				semanticSnapshot,
+				spawnIdempotency,
+			]) => ({
+				agents,
+				capabilityGrant,
+				context,
+				cwdPolicy,
+				delegationContract,
+				runtimePolicy,
+				retainedSemanticState,
+				semanticSnapshot,
+				spawnIdempotency,
+			}),
+		)
+		.catch((error: unknown) => {
+			statefulSpawnModules = undefined;
+			throw error;
+		});
+	return statefulSpawnModules;
+}
+
+async function loadWorkspaceModule(): Promise<typeof import("./workspace.js")> {
+	workspaceModule ??= import("./workspace.js").catch((error: unknown) => {
+		workspaceModule = undefined;
+		throw error;
+	});
+	return workspaceModule;
+}
 
 const ContextModeSchema = Type.Union([
 	StringEnum(["none", "all", "summary"] as const),
@@ -186,7 +272,13 @@ export function registerStatefulSubagents(
 	let sweepTimer: NodeJS.Timeout | undefined;
 	let runtimeGeneration = 0;
 	let runtimeTransition: Promise<void> = Promise.resolve();
-	const workspaceManager = dependencies.workspaceManager ?? new WorkspaceManager();
+	let workspaceManager = dependencies.workspaceManager;
+	const getWorkspaceManager = async () => {
+		if (workspaceManager) return workspaceManager;
+		const { WorkspaceManager } = await loadWorkspaceModule();
+		workspaceManager = new WorkspaceManager();
+		return workspaceManager;
+	};
 	const isolatedAgents = new Map<string, string>();
 	const seenMessageIds = new Set<string>();
 	type PendingIdempotentSpawn = {
@@ -206,11 +298,12 @@ export function registerStatefulSubagents(
 		const currentRegistry = registry;
 		const currentPersistence = persistence;
 		if (!currentRegistry) return 0;
+		const currentWorkspaceManager = await getWorkspaceManager();
 		const count = currentRegistry.list().length;
 		const clear = async () => {
 			await currentRegistry.closeAll();
 			if (generation !== runtimeGeneration) return;
-			await workspaceManager.cleanupAll();
+			await currentWorkspaceManager.cleanupAll();
 			isolatedAgents.clear();
 			seenMessageIds.clear();
 			await currentPersistence?.delete();
@@ -277,7 +370,12 @@ export function registerStatefulSubagents(
 		seenMessageIds.clear();
 		pendingIdempotentSpawns.clear();
 		const initialize = async () => {
-			const cleanupErrors = await disposeStatefulRuntime(previousRegistry, workspaceManager);
+			const currentWorkspaceManager = await getWorkspaceManager();
+			const modules = await loadStatefulSessionModules();
+			const cleanupErrors = await modules.lifecycle.disposeStatefulRuntime(
+				previousRegistry,
+				currentWorkspaceManager,
+			);
 			if (generation !== runtimeGeneration) return;
 			if (cleanupErrors.length > 0 && ctx.hasUI) {
 				ctx.ui.notify(
@@ -293,31 +391,36 @@ export function registerStatefulSubagents(
 				ctx.sessionManager.getSessionId?.() ??
 				ctx.sessionManager.getSessionFile?.() ??
 				`ephemeral:${ctx.cwd}`;
-			const sessionPersistence = new AgentPersistence(owner, {
+			const sessionPersistence = new modules.persistence.AgentPersistence(owner, {
 				retentionDays: sessionSettings.retentionDays,
 				maxStoredAgents: nextLimits.maxStoredAgents,
 			});
 			let nextRegistry: AgentRegistry;
-			const sessionBroker = new CompletionDeliveryBroker(pi, ctx, completionDelivery, {
-				onDeliveryError: (error) => {
-					if (!ctx.hasUI) return;
-					const reason = error instanceof Error ? error.message : String(error);
-					ctx.ui.notify(`Subagent completion delivery failed: ${reason}`, "warning");
+			const sessionBroker = new modules.broker.CompletionDeliveryBroker(
+				pi,
+				ctx,
+				completionDelivery,
+				{
+					onDeliveryError: (error) => {
+						if (!ctx.hasUI) return;
+						const reason = error instanceof Error ? error.message : String(error);
+						ctx.ui.notify(`Subagent completion delivery failed: ${reason}`, "warning");
+					},
+					onAcknowledged: (completions, deliveredAt) => {
+						if (generation !== runtimeGeneration) return;
+						for (const completion of completions) {
+							void nextRegistry
+								.markCompletionDelivered(completion.completionId, deliveredAt)
+								.catch((error: unknown) => {
+									if (!ctx.hasUI || generation !== runtimeGeneration) return;
+									const reason = error instanceof Error ? error.message : String(error);
+									ctx.ui.notify(`Subagent completion acknowledgement failed: ${reason}`, "warning");
+								});
+						}
+					},
 				},
-				onAcknowledged: (completions, deliveredAt) => {
-					if (generation !== runtimeGeneration) return;
-					for (const completion of completions) {
-						void nextRegistry
-							.markCompletionDelivered(completion.completionId, deliveredAt)
-							.catch((error: unknown) => {
-								if (!ctx.hasUI || generation !== runtimeGeneration) return;
-								const reason = error instanceof Error ? error.message : String(error);
-								ctx.ui.notify(`Subagent completion acknowledgement failed: ${reason}`, "warning");
-							});
-					}
-				},
-			});
-			const transport = createStatefulTransport({
+			);
+			const transport = modules.transport.createStatefulTransport({
 				kind: transportKind,
 				modelRegistry: ctx.modelRegistry,
 				getParentRuntime: () => ({ ...parentRuntime }),
@@ -325,7 +428,7 @@ export function registerStatefulSubagents(
 				createInProcessSession: dependencies.createInProcessSession,
 				loadTransport: dependencies.loadTransport,
 			});
-			nextRegistry = new AgentRegistry(transport, {
+			nextRegistry = new modules.registry.AgentRegistry(transport, {
 				maxAgents: nextLimits.maxAgents,
 				maxActiveTurns: nextLimits.maxActiveTurns,
 				maxDepth: nextLimits.maxDepth,
@@ -344,7 +447,7 @@ export function registerStatefulSubagents(
 							pi.appendEntry("pi-subagent-message", {
 								senderId: message.senderId,
 								recipientId: message.recipientId,
-								content: redactPrivateText(message.content).slice(0, 160),
+								content: modules.context.redactPrivateText(message.content).slice(0, 160),
 							});
 						}
 					}
@@ -354,7 +457,10 @@ export function registerStatefulSubagents(
 				},
 			});
 			const persisted = sessionPersistence.load();
-			const orphanCleanupFailures = await cleanupPersistedWorkspaces(persisted, workspaceManager);
+			const orphanCleanupFailures = await modules.lifecycle.cleanupPersistedWorkspaces(
+				persisted,
+				currentWorkspaceManager,
+			);
 			if (ctx.hasUI && orphanCleanupFailures > 0) {
 				ctx.ui.notify("Some orphaned subagent worktrees could not be cleaned", "warning");
 			}
@@ -367,12 +473,14 @@ export function registerStatefulSubagents(
 				)
 				.flatMap((agent) => {
 					try {
-						const target = resolveSubagentTarget({
+						const target = modules.cwdPolicy.resolveSubagentTarget({
 							workspace: ctx.cwd,
 							requestedCwd: agent.cwd,
 							currentProjectTrusted: ctx.isProjectTrusted(),
 						});
-						return [{ ...agent, cwd: target.cwd, target: targetPolicyAudit(target) }];
+						return [
+							{ ...agent, cwd: target.cwd, target: modules.cwdPolicy.targetPolicyAudit(target) },
+						];
 					} catch {
 						return [];
 					}
@@ -383,7 +491,7 @@ export function registerStatefulSubagents(
 			nextRegistry.restore(restored);
 			if (generation !== runtimeGeneration) {
 				sessionBroker.close();
-				await disposeStatefulRuntime(nextRegistry, workspaceManager);
+				await modules.lifecycle.disposeStatefulRuntime(nextRegistry, currentWorkspaceManager);
 				return;
 			}
 			registry = nextRegistry;
@@ -445,7 +553,9 @@ export function registerStatefulSubagents(
 		seenMessageIds.clear();
 		pendingIdempotentSpawns.clear();
 		const shutdown = async () => {
-			const errors = await disposeStatefulRuntime(previousRegistry, workspaceManager);
+			const currentWorkspaceManager = await getWorkspaceManager();
+			const { disposeStatefulRuntime } = await import("./stateful-lifecycle.js");
+			const errors = await disposeStatefulRuntime(previousRegistry, currentWorkspaceManager);
 			if (errors.length > 0 && ctx.hasUI) {
 				ctx.ui.notify(`Subagent shutdown cleanup reported ${errors.length} error(s).`, "warning");
 			}
@@ -502,30 +612,47 @@ export function registerStatefulSubagents(
 		}),
 		...createStatefulToolRenderer("spawn"),
 		async execute(_id, params, signal, _update, ctx) {
+			const generation = runtimeGeneration;
+			const capturedRegistry = registry;
+			let modules: StatefulSpawnModules;
+			try {
+				modules = await loadStatefulSpawnModules();
+			} catch (error) {
+				assertCurrentSpawn(signal, generation, runtimeGeneration);
+				throw error;
+			}
+			assertCurrentSpawn(signal, generation, runtimeGeneration);
+			let currentWorkspaceManager: WorkspaceManager;
+			try {
+				currentWorkspaceManager = await getWorkspaceManager();
+			} catch (error) {
+				assertCurrentSpawn(signal, generation, runtimeGeneration);
+				throw error;
+			}
+			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			const scope = (params.agentScope ?? "user") as AgentScope;
 			const resultFormat = (params.resultFormat ?? "text") as SubagentResultFormat;
-			const contract = normalizeDelegationContract(params.contract);
+			const contract = modules.delegationContract.normalizeDelegationContract(params.contract);
 			if (params.contract !== undefined && !contract) {
 				throw new Error(
 					"subagent_spawn contract must be a valid pi-subagents:delegation:v2 object",
 				);
 			}
-			assertSubagentDepthAllowed();
+			modules.runtimePolicy.assertSubagentDepthAllowed();
 			assertSpawnIdempotencyKey(params.idempotencyKey);
-			const generation = runtimeGeneration;
 			const currentSettings = getCurrentSettings();
-			const target = resolveSubagentTarget({
+			const target = modules.cwdPolicy.resolveSubagentTarget({
 				workspace: ctx.cwd,
 				requestedCwd: params.cwd,
 				currentProjectTrusted: ctx.isProjectTrusted(),
 			});
-			assertDelegationTargetAllowed(
+			modules.cwdPolicy.assertDelegationTargetAllowed(
 				target,
 				currentSettings?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY,
 			);
 			const cwd = target.cwd;
 			const mode = resolveSpawnContextMode(params.context, params.contextEntryIds);
-			const snapshot = buildContextSnapshot(
+			const snapshot = modules.context.buildContextSnapshot(
 				ctx.sessionManager.getBranch(),
 				mode,
 				DEFAULT_MAX_CONTEXT_BYTES,
@@ -534,27 +661,28 @@ export function registerStatefulSubagents(
 			if ((scope === "project" || scope === "both") && !ctx.isProjectTrusted()) {
 				throw new Error("Project-local subagent definitions require a trusted project");
 			}
-			const resolvedAgents = discoverAgents(cwd, scope, currentSettings).agents;
+			const resolvedAgents = modules.agents.discoverAgents(cwd, scope, currentSettings).agents;
 			const resolvedAgent = resolvedAgents.find((agent) => agent.name === params.agent);
 			if (!resolvedAgent) {
 				const available = resolvedAgents.map((agent) => agent.name).join(", ") || "none";
 				throw new Error(`Unknown subagent ${params.agent}. Available agents: ${available}`);
 			}
-			const targetSnapshot = targetPolicyAudit(target);
-			const { executionPlan, semanticSnapshot } = await buildRetainedSemanticState({
-				agent: resolvedAgent,
-				contract,
-				target: targetSnapshot,
-				cwd,
-				workspaceMode: params.workspaceMode === "worktree" ? "worktree" : "shared",
-				transport: transportKind,
-				resultFormat,
-				thinkingLevel: params.thinkingLevel,
-				timeoutMs: params.timeoutMs,
-				taskGeneration: 1,
-			});
+			const targetSnapshot = modules.cwdPolicy.targetPolicyAudit(target);
+			const { executionPlan, semanticSnapshot } =
+				await modules.retainedSemanticState.buildRetainedSemanticState({
+					agent: resolvedAgent,
+					contract,
+					target: targetSnapshot,
+					cwd,
+					workspaceMode: params.workspaceMode === "worktree" ? "worktree" : "shared",
+					transport: transportKind,
+					resultFormat,
+					thinkingLevel: params.thinkingLevel,
+					timeoutMs: params.timeoutMs,
+					taskGeneration: 1,
+				});
 			assertCurrentSpawn(signal, generation, runtimeGeneration);
-			const requestHash = hashSpawnRequest({
+			const requestHash = modules.spawnIdempotency.hashSpawnRequest({
 				agent: params.agent,
 				task: params.task,
 				cwd,
@@ -572,7 +700,10 @@ export function registerStatefulSubagents(
 				contract,
 				resultFormat,
 			});
-			const ownedRegistry = requireRegistry();
+			if (!capturedRegistry) {
+				throw new Error("Stateful subagents are not initialized for this session");
+			}
+			const ownedRegistry = capturedRegistry;
 			const retained = ownedRegistry.findBySpawnIdempotencyKey(params.idempotencyKey, requestHash);
 			if (retained) return result(retained, `Reused ${retained.agent} as ${retained.id}.`);
 			const foundPending = params.idempotencyKey
@@ -633,17 +764,17 @@ export function registerStatefulSubagents(
 				const workspaceOwner = `pending-${randomUUID()}`;
 				const workspace =
 					params.workspaceMode === "worktree"
-						? await workspaceManager.create(workspaceOwner, requestedCwd)
+						? await currentWorkspaceManager.create(workspaceOwner, requestedCwd)
 						: undefined;
 				try {
 					assertCurrentSpawn(signal, generation, runtimeGeneration);
 				} catch (error) {
-					if (workspace) await workspaceManager.cleanup(workspaceOwner);
+					if (workspace) await currentWorkspaceManager.cleanup(workspaceOwner);
 					throw error;
 				}
 				let agent: ManagedAgent | undefined;
 				try {
-					const capabilityGrant = issueCapabilityGrant(
+					const capabilityGrant = modules.capabilityGrant.issueCapabilityGrant(
 						executionPlan,
 						Date.now(),
 						Math.max(1, (params.timeoutMs ?? resolvedAgent.timeoutMs ?? 600_000) + 60_000),
@@ -678,12 +809,12 @@ export function registerStatefulSubagents(
 					assertCurrentSpawn(signal, generation, runtimeGeneration);
 				} catch (error) {
 					if (agent) await ownedRegistry.closeTree(agent.id).catch(() => undefined);
-					if (workspace) await workspaceManager.cleanup(workspaceOwner);
+					if (workspace) await currentWorkspaceManager.cleanup(workspaceOwner);
 					throw error;
 				}
 				if (!agent) throw new Error("Subagent spawn completed without a retained agent");
 				if (workspace && agent.cwd === workspace.path) isolatedAgents.set(agent.id, workspaceOwner);
-				else if (workspace) await workspaceManager.cleanup(workspaceOwner);
+				else if (workspace) await currentWorkspaceManager.cleanup(workspaceOwner);
 				assertCurrentSpawn(signal, generation, runtimeGeneration);
 				resolvePending?.(agent);
 				const deliveryNote =
@@ -747,25 +878,31 @@ export function registerStatefulSubagents(
 		async execute(_id, params, signal, _update, ctx) {
 			const generation = runtimeGeneration;
 			const ownedRegistry = requireRegistry();
+			let modules: StatefulSpawnModules;
+			try {
+				modules = await loadStatefulSpawnModules();
+			} catch (error) {
+				assertCurrentSpawn(signal, generation, runtimeGeneration);
+				throw error;
+			}
+			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			const currentSettings = getCurrentSettings();
 			const existing = ownedRegistry.get(params.agentId);
 			if (!existing) throw new Error(`Unknown subagent: ${params.agentId}`);
-			const currentAgent = discoverAgents(
-				existing.cwd,
-				existing.agentScope ?? "user",
-				currentSettings,
-			).agents.find((agent) => agent.name === existing.agent);
+			const currentAgent = modules.agents
+				.discoverAgents(existing.cwd, existing.agentScope ?? "user", currentSettings)
+				.agents.find((agent) => agent.name === existing.agent);
 			if (!currentAgent) throw new Error(`Unknown retained subagent definition: ${existing.agent}`);
 			const resolvedFollowUpTarget =
 				existing.workspaceMode === "worktree"
 					? undefined
-					: resolveSubagentTarget({
+					: modules.cwdPolicy.resolveSubagentTarget({
 							workspace: ctx.cwd,
 							requestedCwd: existing.cwd,
 							currentProjectTrusted: ctx.isProjectTrusted(),
 						});
 			if (resolvedFollowUpTarget) {
-				assertDelegationTargetAllowed(
+				modules.cwdPolicy.assertDelegationTargetAllowed(
 					resolvedFollowUpTarget,
 					currentSettings?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY,
 				);
@@ -776,9 +913,11 @@ export function registerStatefulSubagents(
 			const currentTarget =
 				existing.workspaceMode === "worktree" && existing.target
 					? existing.target
-					: targetPolicyAudit(resolvedFollowUpTarget as NonNullable<typeof resolvedFollowUpTarget>);
+					: modules.cwdPolicy.targetPolicyAudit(
+							resolvedFollowUpTarget as NonNullable<typeof resolvedFollowUpTarget>,
+						);
 			const { executionPlan: currentPlan, semanticSnapshot: currentSnapshot } =
-				await buildRetainedSemanticState({
+				await modules.retainedSemanticState.buildRetainedSemanticState({
 					agent: currentAgent,
 					contract: existing.contract,
 					target: currentTarget,
@@ -798,7 +937,10 @@ export function registerStatefulSubagents(
 				});
 			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			const compatibility = existing.semanticSnapshot
-				? evaluateSemanticCompatibility(existing.semanticSnapshot, currentSnapshot)
+				? modules.semanticSnapshot.evaluateSemanticCompatibility(
+						existing.semanticSnapshot,
+						currentSnapshot,
+					)
 				: { status: "warning" as const, changedComponents: ["legacy-missing-snapshot"] };
 			if (
 				(compatibility.status === "needs-revalidation" || compatibility.status === "rejected") &&
@@ -824,7 +966,7 @@ export function registerStatefulSubagents(
 				isolatedAgents.has(existing.id),
 				currentSettings,
 			);
-			const currentGrant = issueCapabilityGrant(
+			const currentGrant = modules.capabilityGrant.issueCapabilityGrant(
 				currentPlan,
 				Date.now(),
 				Math.max(1, (params.timeoutMs ?? existing.timeoutMs ?? 600_000) + 60_000),
@@ -838,6 +980,7 @@ export function registerStatefulSubagents(
 					? { status: "warning", changedComponents: compatibility.changedComponents }
 					: compatibility,
 			);
+			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			const agent = await ownedRegistry.followUp(params.agentId, params.task, {
 				timeoutMs: params.timeoutMs,
 				idleTimeoutMs: params.idleTimeoutMs,
@@ -860,6 +1003,14 @@ export function registerStatefulSubagents(
 		async execute(_id, params, signal): Promise<StatefulActionToolResult> {
 			const generation = runtimeGeneration;
 			const ownedRegistry = requireRegistry();
+			let currentWorkspaceManager: WorkspaceManager;
+			try {
+				currentWorkspaceManager = await getWorkspaceManager();
+			} catch (error) {
+				assertCurrentSpawn(signal, generation, runtimeGeneration);
+				throw error;
+			}
+			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			const ownedAgent = (agentId: string): ManagedAgent => {
 				const value = ownedRegistry.get(agentId);
 				if (!value) throw new Error(`Unknown subagent: ${agentId}`);
@@ -886,7 +1037,7 @@ export function registerStatefulSubagents(
 			const existing = ownedRegistry.get(agentId);
 			if (existing?.state === "closed" && !operation.subtree) {
 				const pendingOwner = isolatedAgents.get(existing.id);
-				if (pendingOwner) await workspaceManager.cleanup(pendingOwner);
+				if (pendingOwner) await currentWorkspaceManager.cleanup(pendingOwner);
 				assertCurrentSpawn(signal, generation, runtimeGeneration);
 				isolatedAgents.delete(existing.id);
 				return result(existing, `Closed ${existing.id}.`);
@@ -896,7 +1047,7 @@ export function registerStatefulSubagents(
 				try {
 					agents = await ownedRegistry.closeTree(agentId);
 				} finally {
-					await cleanupClosedWorkspaces(ownedRegistry, isolatedAgents, workspaceManager);
+					await cleanupClosedWorkspaces(ownedRegistry, isolatedAgents, currentWorkspaceManager);
 				}
 				assertCurrentSpawn(signal, generation, runtimeGeneration);
 				return {
@@ -911,7 +1062,7 @@ export function registerStatefulSubagents(
 			try {
 				agent = await ownedRegistry.close(agentId);
 			} finally {
-				await cleanupClosedWorkspaces(ownedRegistry, isolatedAgents, workspaceManager);
+				await cleanupClosedWorkspaces(ownedRegistry, isolatedAgents, currentWorkspaceManager);
 			}
 			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			return result(agent, `Closed ${agent.id}.`);

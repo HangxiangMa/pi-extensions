@@ -310,7 +310,6 @@ function appendAgentCatalog(baseDescription: string, catalog: string): string {
 
 export { parsePositiveInteger } from "./execution/runtime-policy.js";
 export { buildPiArgs } from "./pi-args.js";
-export { formatTokens, formatUsageStats } from "./render.js";
 export {
 	DEFAULT_CONSULT_RESOURCE_POLICY,
 	DEFAULT_CONSULTATION_CWD_POLICY,
@@ -339,3 +338,4 @@ export {
 	updateDelegationWorkflowSetting,
 	updateStatefulLimitSetting,
 } from "./settings.js";
+export { formatTokens, formatUsageStats } from "./usage-format.js";
