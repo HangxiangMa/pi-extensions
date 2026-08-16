@@ -1,7 +1,7 @@
 {
 	"name": "@narumitw/pi-webui",
 	"version": "0.49.3",
-	"description": "Experimental Radix UI web companion for the current Pi terminal session.",
+	"description": "Deprecated experimental Radix UI web companion for the current Pi terminal session.",
 	"type": "module",
 	"license": "MIT",
 	"private": false,
@@ -22,9 +22,6 @@
 		"extensions": [
 			"./src/index.ts"
 		]
-	},
-	"piExtension": {
-		"lifecycle": "experimental"
 	},
 	"scripts": {
 		"build:web": "node scripts/build-web.mjs",
@@ -62,6 +59,6 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/narumiruna/pi-extensions",
-		"directory": "packages/pi-webui"
+		"directory": "deprecated/pi-webui"
 	}
 }
