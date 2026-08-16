@@ -232,6 +232,8 @@ A blocking fan-out is reserved for output that must be synthesized before the ro
 `subagent_auto` is an opt-in surface separate from the large multi-mode `subagent` schema.
 It never intercepts ordinary prompts and does not change existing calls when omitted.
 The caller supplies one versioned objective, non-goals, required inputs, acceptance criteria, required evidence, an authority ceiling, an aggregate budget, and deterministic constraints.
+Mutating autonomous workflows that require verification need a user-scoped custom verifier agent with `structured-v2` output and the `independent-review` role, because the built-in catalog intentionally has no reviewer.
+Create one like the [`api-reviewer` custom agent](#-custom-agents) before using the mutating example below, or omit review capability and verification requirements for reconnaissance-only automation.
 
 ```json
 {
