@@ -4,7 +4,7 @@
 
 Remove `pi-goal`'s experimental ordered-goal queue from the stable package while preserving the single-objective Goal workflow.
 
-Keep affected legacy users safe by warning when `experimental.goals` or persisted queue state is present, and by documenting `/goal edit` as the replacement for reprioritizing work.
+Keep affected legacy users safe by warning when `experimental.goals` or persisted queue state is present, documenting `/goal edit` for active-objective reprioritization, and documenting `/goal <merged objective>` for inert legacy queues that no longer restore an active head.
 
 ## Context
 
@@ -34,7 +34,7 @@ When the same words are typed by users without legacy setting or state, they rem
 
 Persisted queue state does not auto-continue or auto-advance after reload.
 
-A user with legacy queue state receives an observable warning that says to merge priorities into one objective with `/goal edit`, or use `/goal clear` to discard the old state.
+A user with legacy queue state receives an observable warning that says to start one merged objective with `/goal <merged objective>`, or use `/goal clear` to discard the old state.
 
 ## Non-Goals
 
@@ -53,14 +53,14 @@ A user with legacy queue state receives an observable warning that says to merge
 ## Plan
 
 - [x] Add or update focused failing tests for settings normalization and saving so legacy `experimental.goals` is ignored as active configuration, remains non-invalid, and preserves unknown fields; initial focused run failed against old expectations, and final evidence is `npx vitest run packages/pi-goal/test/command.test.ts packages/pi-goal/test/settings.test.ts packages/pi-goal/test/persistence.test.ts` passing with 21 tests.
-- [x] Add or update focused failing tests for command parsing and command registration so queue words are ordinary objective text for unaffected users, but legacy-affected users receive a removed-queue warning with a `/goal edit` example and no Goal replacement; verified by `packages/pi-goal/test/command.test.ts` and `packages/pi-goal/test/goal-command-transitions.test.ts`.
+- [x] Add or update focused failing tests for command parsing and command registration so queue words are ordinary objective text for unaffected users, but legacy-affected users receive a removed-queue warning with a valid migration command and no Goal replacement; verified by `packages/pi-goal/test/command.test.ts` and `packages/pi-goal/test/goal-command-transitions.test.ts`.
 - [x] Add or update focused failing tests for session restore and persistence so old canonical queue fields, `queued` heads, pending queue actions, and legacy `goals-state` data are inert and produce migration guidance instead of automatic queue work; verified by `packages/pi-goal/test/persistence.test.ts` and `legacy persisted queue state is inert and shows migration guidance`.
-- [x] Add or update focused failing menu tests so `/goal` no longer exposes a Queue screen or Ordered goal queue setting, and affected legacy state shows migration guidance that mentions `/goal edit`; verified by `packages/pi-goal/test/menu.test.ts`, `packages/pi-goal/test/settings-ui.test.ts`, and command-transition legacy guidance tests.
+- [x] Add or update focused failing menu tests so `/goal` no longer exposes a Queue screen or Ordered goal queue setting, and affected legacy state shows migration guidance that mentions a valid single-objective migration command; verified by `packages/pi-goal/test/menu.test.ts`, `packages/pi-goal/test/settings-ui.test.ts`, and command-transition legacy guidance tests.
 - [x] Remove queue command kinds, queue completions, direct queue command handlers, queue menu actions, queue advancement dispatch, and completion-tool queue advancement paths from `packages/pi-goal/src`; verified by `npm run check --workspace @narumitw/pi-goal` and focused tests.
 - [x] Remove active queue runtime state and persistence writes while retaining only the minimal legacy detection or warning state needed for safe migration; verified by workspace typecheck and `rg "queuedGoals|pendingQueueAction|queueFrozen|queueFreezeAwaitingSettle" packages/pi-goal/src` returning no active queue runtime fields.
 - [x] Remove the pure ordered-queue module and queue-specific tests that no longer describe supported behavior; verified by deleting `packages/pi-goal/src/queue.ts`, `packages/pi-goal/test/queue.test.ts`, and `packages/pi-goal/test/goal-queue.test.ts`.
-- [x] Update `packages/pi-goal/README.md`, package metadata, and maintained implementation notes to describe single-objective Goal mode, the removal of experimental ordered goals, and the `/goal edit` migration example; verified by README package-layout review and `just pack goal` showing no `src/queue.ts` in the tarball.
-- [x] Add a Changeset for `@narumitw/pi-goal` describing removal of the experimental ordered queue and the `/goal edit` migration path; verified by `npm run changeset:status`.
+- [x] Update `packages/pi-goal/README.md`, package metadata, and maintained implementation notes to describe single-objective Goal mode, the removal of experimental ordered goals, and active-vs-inert migration examples; verified by README package-layout review and `just pack goal` showing no `src/queue.ts` in the tarball.
+- [x] Add a Changeset for `@narumitw/pi-goal` describing removal of the experimental ordered queue and the single-objective migration path; verified by `npm run changeset:status`.
 - [x] Run focused verification in dependency order: command tests, settings tests, persistence/lifecycle tests, menu tests, tool tests, and `npm run test:runtime --workspace @narumitw/pi-goal`; verified by `npx vitest run packages/pi-goal/test` with 18 files and 277 tests passing, plus runtime smoke passing.
 - [x] Run package and repository gates with `npm run check --workspace @narumitw/pi-goal`, root `npm test`, root `npm run check`, and `just pack goal`; all passed, and the pack dry run listed 23 files without `src/queue.ts`.
 - [x] Audit the final diff against `docs/extension-conventions.md`, `docs/extension-settings.md`, and `packages/pi-goal/AGENTS.md`; verified command compatibility, settings preservation, stale session handling, user cancellation paths, shutdown cleanup, and removed queue references during final diff review.
@@ -75,7 +75,7 @@ A user with legacy queue state receives an observable warning that says to merge
 
 - [x] The only supported user-facing Goal model is one active objective, and `/goal edit` is documented and tested as the reprioritization path.
 - [x] `experimental.goals`, `/goal add`, `/goal prioritize`, `/goal drop-last`, `/goal skip`, and hidden queue aliases no longer activate ordered queue behavior.
-- [x] Affected legacy users get an observable warning that includes a concrete `/goal edit` migration example, while unaffected users are not warned.
+- [x] Affected legacy users get an observable warning that includes a concrete migration command that works for their current state, while unaffected users are not warned.
 - [x] Old persisted queue state cannot dispatch automatic work, cannot advance after completion, and can be cleared or superseded by explicit user action.
 - [x] Settings remain side-effect-free on missing files, invalid files are protected, unknown fields are preserved, and TUI settings no longer expose an Ordered goal queue control.
 - [x] README, package metadata, maintained implementation notes, and package layout references no longer describe active ordered queue support.
