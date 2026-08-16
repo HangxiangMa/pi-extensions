@@ -152,6 +152,45 @@ test("Subagents direct status stays lightweight and manager UI loads once on dem
 	await emitAll(mock, "session_shutdown", { reason: "quit" }, context.ctx);
 });
 
+test("Subagents direct status ignores stale lazy status loads", async () => {
+	const mock = createMockPi();
+	let statusLoadingStarted!: () => void;
+	const statusLoading = new Promise<void>((resolve) => {
+		statusLoadingStarted = resolve;
+	});
+	let releaseStatus!: () => void;
+	const statusGate = new Promise<void>((resolve) => {
+		releaseStatus = resolve;
+	});
+	let shows = 0;
+	subagents(mock.pi, {
+		config: {
+			loadConfigStatus: async () => {
+				statusLoadingStarted();
+				await statusGate;
+				return {
+					showSubagentHelp: () => {
+						shows += 1;
+					},
+					showSubagentStatus: () => {
+						shows += 1;
+					},
+				};
+			},
+		},
+	});
+	const context = createMockContext({ mode: "tui", hasUI: true });
+	await emitAll(mock, "session_start", { reason: "startup" }, context.ctx);
+	const command = mock.commands.get("subagents");
+	assert.ok(command);
+	const running = command.handler("status", context.ctx);
+	await statusLoading;
+	await emitAll(mock, "session_shutdown", { reason: "quit" }, context.ctx);
+	releaseStatus();
+	await running;
+	assert.equal(shows, 0);
+});
+
 test("blocking execution caches a successful module and retries a rejected load", async () => {
 	const mock = createMockPi();
 	let loads = 0;

@@ -612,8 +612,24 @@ export function registerStatefulSubagents(
 		}),
 		...createStatefulToolRenderer("spawn"),
 		async execute(_id, params, signal, _update, ctx) {
-			const modules = await loadStatefulSpawnModules();
-			const currentWorkspaceManager = await getWorkspaceManager();
+			const generation = runtimeGeneration;
+			const capturedRegistry = registry;
+			let modules: StatefulSpawnModules;
+			try {
+				modules = await loadStatefulSpawnModules();
+			} catch (error) {
+				assertCurrentSpawn(signal, generation, runtimeGeneration);
+				throw error;
+			}
+			assertCurrentSpawn(signal, generation, runtimeGeneration);
+			let currentWorkspaceManager: WorkspaceManager;
+			try {
+				currentWorkspaceManager = await getWorkspaceManager();
+			} catch (error) {
+				assertCurrentSpawn(signal, generation, runtimeGeneration);
+				throw error;
+			}
+			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			const scope = (params.agentScope ?? "user") as AgentScope;
 			const resultFormat = (params.resultFormat ?? "text") as SubagentResultFormat;
 			const contract = modules.delegationContract.normalizeDelegationContract(params.contract);
@@ -624,7 +640,6 @@ export function registerStatefulSubagents(
 			}
 			modules.runtimePolicy.assertSubagentDepthAllowed();
 			assertSpawnIdempotencyKey(params.idempotencyKey);
-			const generation = runtimeGeneration;
 			const currentSettings = getCurrentSettings();
 			const target = modules.cwdPolicy.resolveSubagentTarget({
 				workspace: ctx.cwd,
@@ -685,7 +700,10 @@ export function registerStatefulSubagents(
 				contract,
 				resultFormat,
 			});
-			const ownedRegistry = requireRegistry();
+			if (!capturedRegistry) {
+				throw new Error("Stateful subagents are not initialized for this session");
+			}
+			const ownedRegistry = capturedRegistry;
 			const retained = ownedRegistry.findBySpawnIdempotencyKey(params.idempotencyKey, requestHash);
 			if (retained) return result(retained, `Reused ${retained.agent} as ${retained.id}.`);
 			const foundPending = params.idempotencyKey
@@ -858,9 +876,16 @@ export function registerStatefulSubagents(
 		}),
 		...createStatefulToolRenderer("send"),
 		async execute(_id, params, signal, _update, ctx) {
-			const modules = await loadStatefulSpawnModules();
 			const generation = runtimeGeneration;
 			const ownedRegistry = requireRegistry();
+			let modules: StatefulSpawnModules;
+			try {
+				modules = await loadStatefulSpawnModules();
+			} catch (error) {
+				assertCurrentSpawn(signal, generation, runtimeGeneration);
+				throw error;
+			}
+			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			const currentSettings = getCurrentSettings();
 			const existing = ownedRegistry.get(params.agentId);
 			if (!existing) throw new Error(`Unknown subagent: ${params.agentId}`);
@@ -955,6 +980,7 @@ export function registerStatefulSubagents(
 					? { status: "warning", changedComponents: compatibility.changedComponents }
 					: compatibility,
 			);
+			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			const agent = await ownedRegistry.followUp(params.agentId, params.task, {
 				timeoutMs: params.timeoutMs,
 				idleTimeoutMs: params.idleTimeoutMs,
@@ -975,9 +1001,16 @@ export function registerStatefulSubagents(
 		parameters: ManageParamsSchema,
 		...createStatefulToolRenderer("manage"),
 		async execute(_id, params, signal): Promise<StatefulActionToolResult> {
-			const currentWorkspaceManager = await getWorkspaceManager();
 			const generation = runtimeGeneration;
 			const ownedRegistry = requireRegistry();
+			let currentWorkspaceManager: WorkspaceManager;
+			try {
+				currentWorkspaceManager = await getWorkspaceManager();
+			} catch (error) {
+				assertCurrentSpawn(signal, generation, runtimeGeneration);
+				throw error;
+			}
+			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			const ownedAgent = (agentId: string): ManagedAgent => {
 				const value = ownedRegistry.get(agentId);
 				if (!value) throw new Error(`Unknown subagent: ${agentId}`);
