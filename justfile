@@ -79,6 +79,11 @@ try name: (_validate-package-name name)
     npm --workspace {{ quote("@narumitw/pi-" + name) }} run build --if-present
     pi -e {{ quote("./packages/pi-" + name) }}
 
+# Open the private Pi TUI Kit showcase extension from this working tree
+showcase-tui-kit:
+    npm --workspace @narumitw/pi-tui-kit run build
+    pi -e ./packages/pi-tui-kit-showcase
+
 # Run Pi Chat's opt-in real local DHT and process-boundary smoke
 smoke-chat-network:
     npm run smoke:chat-network
