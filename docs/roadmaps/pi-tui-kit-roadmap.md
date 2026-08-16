@@ -84,7 +84,7 @@ Searchable single choice is now available through opt-in `enableSearch` and expl
 
 Pi BTW Resume and Worktree identity selection qualified the same local stable-ID confirmation job without importing scope, delete, preview, persistence, or tree semantics into the Kit.
 
-Execution evidence is tracked in the archived existing-contract convergence plan and the active terminal-display safety and searchable-choice plans under `docs/plans/`.
+Execution evidence is tracked in the archived existing-contract convergence plan and the active terminal-display safety plan under `docs/plans/`.
 
 ## Guiding Principles
 
