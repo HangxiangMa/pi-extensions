@@ -42,7 +42,7 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 			settings: { transport: "in-process" },
 			getSettings: () => ({
 				cwdPolicy: { delegation },
-				agents: { scout: { tools: [] } },
+				agents: { explorer: { tools: [] } },
 			}),
 			workspaceManager: {
 				async create() {
@@ -96,7 +96,7 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 			() =>
 				spawn.execute(
 					"unsaved",
-					{ agent: "scout", task: "inspect", cwd: external },
+					{ agent: "explorer", task: "inspect", cwd: external },
 					undefined,
 					undefined,
 					context.ctx,
@@ -108,7 +108,7 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 		new ProjectTrustStore(agentDir).set(external, true);
 		await spawn.execute(
 			"trusted",
-			{ agent: "scout", task: "inspect", cwd: external },
+			{ agent: "explorer", task: "inspect", cwd: external },
 			undefined,
 			undefined,
 			context.ctx,
@@ -122,7 +122,7 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 		const idempotentFirst = (await spawn.execute(
 			"idempotent-1",
 			{
-				agent: "scout",
+				agent: "explorer",
 				task: "idempotent inspect",
 				cwd: external,
 				idempotencyKey: "inspect-external",
@@ -135,7 +135,7 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 		const idempotentSecond = (await spawn.execute(
 			"idempotent-2",
 			{
-				agent: "scout",
+				agent: "explorer",
 				task: "idempotent inspect",
 				cwd: external,
 				idempotencyKey: "inspect-external",
@@ -153,7 +153,7 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 				spawn.execute(
 					"idempotent-mismatch",
 					{
-						agent: "scout",
+						agent: "explorer",
 						task: "different task",
 						cwd: external,
 						idempotencyKey: "inspect-external",
@@ -169,7 +169,7 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 		delegation = "anywhere";
 		await spawn.execute(
 			"anywhere",
-			{ agent: "scout", task: "inspect", cwd: external },
+			{ agent: "explorer", task: "inspect", cwd: external },
 			undefined,
 			undefined,
 			context.ctx,
@@ -180,7 +180,7 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 
 		await spawn.execute(
 			"worktree",
-			{ agent: "scout", task: "inspect", workspaceMode: "worktree" },
+			{ agent: "explorer", task: "inspect", workspaceMode: "worktree" },
 			undefined,
 			undefined,
 			context.ctx,
@@ -243,7 +243,7 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 		const isolatedFirst = (await spawn.execute(
 			"worktree-idempotent-1",
 			{
-				agent: "scout",
+				agent: "explorer",
 				task: "isolated exact retry",
 				workspaceMode: "worktree",
 				idempotencyKey: "isolated-retry",
@@ -255,7 +255,7 @@ test("stateful spawn enforces trusted targets and carries trust into in-process 
 		const isolatedSecond = (await spawn.execute(
 			"worktree-idempotent-2",
 			{
-				agent: "scout",
+				agent: "explorer",
 				task: "isolated exact retry",
 				workspaceMode: "worktree",
 				idempotencyKey: "isolated-retry",
@@ -351,7 +351,7 @@ test("stateful subprocess uses the retained resolved trust decision", async () =
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	try {
 		const transport = new SubprocessTransport({
-			getSettings: () => ({ agents: { scout: { tools: [] } } }),
+			getSettings: () => ({ agents: { explorer: { tools: [] } } }),
 		});
 		for (const [projectTrusted, expected] of [
 			[true, "--approve"],

@@ -6,7 +6,7 @@ import { hashSpawnRequest } from "../src/spawn-idempotency.js";
 
 test("spawn idempotency includes retained execution budgets", () => {
 	const request = {
-		agent: "scout",
+		agent: "explorer",
 		task: "inspect",
 		cwd: process.cwd(),
 		agentScope: "user" as const,
@@ -45,7 +45,7 @@ test("spawn idempotency includes retained execution budgets", () => {
 test("AgentRegistry retains spawn idempotency only until close", async () => {
 	const registry = new AgentRegistry(async () => ({ output: "done", exitCode: 0 }));
 	const first = await registry.spawn({
-		agent: "scout",
+		agent: "explorer",
 		task: "first",
 		cwd: process.cwd(),
 		spawnIdempotencyKey: "key",
@@ -56,7 +56,7 @@ test("AgentRegistry retains spawn idempotency only until close", async () => {
 	await registry.close(first.id);
 	assert.equal(registry.findBySpawnIdempotencyKey("key", "hash"), undefined);
 	const replacement = await registry.spawn({
-		agent: "scout",
+		agent: "explorer",
 		task: "different after close",
 		cwd: process.cwd(),
 		spawnIdempotencyKey: "key",
@@ -90,7 +90,7 @@ test("AgentRegistry preserves queue and transport timing without persisting prog
 		},
 		{ now: () => now++ },
 	);
-	const spawned = await registry.spawn({ agent: "scout", task: "timed", cwd: process.cwd() });
+	const spawned = await registry.spawn({ agent: "explorer", task: "timed", cwd: process.cwd() });
 	await registry.wait(spawned.id, 100);
 	const telemetry = registry.getInspection(spawned.id)?.telemetry;
 	assert.equal(telemetry?.transport, "rpc");
@@ -117,7 +117,7 @@ test("AgentRegistry retains ordered completion identities until exact acknowledg
 			},
 		},
 	);
-	const spawned = await registry.spawn({ agent: "scout", task: "first", cwd: process.cwd() });
+	const spawned = await registry.spawn({ agent: "explorer", task: "first", cwd: process.cwd() });
 	await registry.wait(spawned.id, 100);
 	await registry.followUp(spawned.id, "second");
 	await registry.wait(spawned.id, 100);
@@ -157,7 +157,7 @@ test("AgentRegistry exposes metadata-only inspection snapshots", async () => {
 			}),
 	);
 	const spawned = await registry.spawn({
-		agent: "scout",
+		agent: "explorer",
 		task: "private current task",
 		cwd: process.cwd(),
 		thinkingLevel: "high",
@@ -170,7 +170,7 @@ test("AgentRegistry exposes metadata-only inspection snapshots", async () => {
 	assert.equal(listed.length, 1);
 	assert.deepEqual(listed[0], {
 		id: spawned.id,
-		agent: "scout",
+		agent: "explorer",
 		state: "running",
 		createdAt: spawned.createdAt,
 		updatedAt: listed[0].updatedAt,
@@ -213,7 +213,7 @@ test("AgentRegistry deduplicates exact spawn retries before another transport tu
 		};
 	});
 	const input = {
-		agent: "scout",
+		agent: "explorer",
 		task: "inspect",
 		cwd: process.cwd(),
 		spawnIdempotencyKey: "request-1",
@@ -252,7 +252,7 @@ test("AgentRegistry projects actionable structured v2 outcomes into lifecycle st
 		exitCode: 0,
 	}));
 	const agent = await registry.spawn({
-		agent: "scout",
+		agent: "explorer",
 		task: "inspect",
 		cwd: process.cwd(),
 		resultFormat: "structured-v2",
@@ -272,7 +272,7 @@ test("AgentRegistry projects actionable structured v2 outcomes into lifecycle st
 test("AgentRegistry fails closed when a requested structured result is malformed", async () => {
 	const registry = new AgentRegistry(async () => ({ output: "ordinary text", exitCode: 0 }));
 	const agent = await registry.spawn({
-		agent: "scout",
+		agent: "explorer",
 		task: "inspect",
 		cwd: process.cwd(),
 		resultFormat: "structured-v2",

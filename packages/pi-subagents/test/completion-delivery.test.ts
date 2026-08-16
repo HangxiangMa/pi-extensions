@@ -6,7 +6,7 @@ import { CompletionDeliveryBroker } from "../src/stateful.js";
 function completion(id: string, output = `output:${id}`): AgentTurnCompletion {
 	const agent: ManagedAgent = {
 		id,
-		agent: "scout",
+		agent: "explorer",
 		rootId: id,
 		depth: 0,
 		children: [],
@@ -111,7 +111,7 @@ test("next-turn completion delivery never wakes an idle root", () => {
 		runId: "run:sa_one:1",
 		generation: 1,
 		agentId: "sa_one",
-		agent: "scout",
+		agent: "explorer",
 		state: "completed",
 	});
 	broker.close();
@@ -138,7 +138,7 @@ test("auto-resume batches simultaneous completions into one root synthesis turn"
 				runId: "run:sa_one:1",
 				generation: 1,
 				agentId: "sa_one",
-				agent: "scout",
+				agent: "explorer",
 				state: "completed",
 			},
 			{
@@ -147,7 +147,7 @@ test("auto-resume batches simultaneous completions into one root synthesis turn"
 				runId: "run:sa_two:1",
 				generation: 1,
 				agentId: "sa_two",
-				agent: "scout",
+				agent: "explorer",
 				state: "completed",
 			},
 		],

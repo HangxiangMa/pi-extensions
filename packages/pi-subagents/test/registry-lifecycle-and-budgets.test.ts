@@ -12,16 +12,17 @@ test("AgentRegistry rejects invalid capacity and wait bounds", async () => {
 		/non-negative safe integer/,
 	);
 	const registry = new AgentRegistry(async () => ({ output: "", exitCode: 0 }));
-	const agent = await registry.spawn({ agent: "scout", task: "done", cwd: process.cwd() });
+	const agent = await registry.spawn({ agent: "explorer", task: "done", cwd: process.cwd() });
 	await assert.rejects(() => registry.wait(agent.id, Number.NaN), /positive finite/);
 	await registry.wait(agent.id, 100);
 	await registry.close(agent.id);
 	await assert.rejects(
-		() => registry.spawn({ agent: "scout", task: "child", cwd: process.cwd(), parentId: agent.id }),
+		() =>
+			registry.spawn({ agent: "explorer", task: "child", cwd: process.cwd(), parentId: agent.id }),
 		/Cannot spawn under closed agent/,
 	);
 	await assert.rejects(
-		() => registry.spawn({ agent: "scout", task: "  ", cwd: process.cwd() }),
+		() => registry.spawn({ agent: "explorer", task: "  ", cwd: process.cwd() }),
 		/tasks cannot be empty/,
 	);
 
@@ -34,7 +35,7 @@ test("AgentRegistry rejects invalid capacity and wait bounds", async () => {
 		{ maxTaskBytes: 64, maxTurnOutputBytes: 64 },
 	);
 	const boundedAgent = await boundedRegistry.spawn({
-		agent: "scout",
+		agent: "explorer",
 		task: "x".repeat(200),
 		cwd: process.cwd(),
 	});
@@ -59,7 +60,7 @@ test("AgentRegistry supports follow-up, wait timeout, interrupt/reuse, limits, a
 		},
 		{ maxAgents: 2, maxActiveTurns: 1 },
 	);
-	const first = await registry.spawn({ agent: "scout", task: "slow", cwd: process.cwd() });
+	const first = await registry.spawn({ agent: "explorer", task: "slow", cwd: process.cwd() });
 	const second = await registry.spawn({ agent: "reviewer", task: "queued", cwd: process.cwd() });
 	const queued = await registry.wait(second.id, 5);
 	assert.equal(queued.timedOut, true);
@@ -119,7 +120,7 @@ test("AgentRegistry retains explicit execution defaults and applies one-turn bud
 		return { output: "done", exitCode: 0 };
 	});
 	const spawned = await registry.spawn({
-		agent: "scout",
+		agent: "explorer",
 		task: "first",
 		cwd: process.cwd(),
 		thinkingLevel: "high",
@@ -205,7 +206,7 @@ test("AgentRegistry runs lifecycle operations through a transport contract", asy
 			calls.push("shutdown");
 		},
 	});
-	const agent = await registry.spawn({ agent: "scout", task: "slow", cwd: process.cwd() });
+	const agent = await registry.spawn({ agent: "explorer", task: "slow", cwd: process.cwd() });
 	await registry.interrupt(agent.id);
 	await registry.followUp(agent.id, "next");
 	await registry.wait(agent.id, 100);
@@ -224,7 +225,7 @@ test("AgentRegistry clears stale terminal errors when a detached follow-up start
 		);
 		return { output: "", exitCode: 130, aborted: true };
 	});
-	const agent = await registry.spawn({ agent: "scout", task: "first", cwd: process.cwd() });
+	const agent = await registry.spawn({ agent: "explorer", task: "first", cwd: process.cwd() });
 	await registry.wait(agent.id, 100);
 	assert.equal(registry.get(agent.id)?.error, "first failure");
 	const followUp = await registry.followUp(agent.id, "second");

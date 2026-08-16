@@ -27,7 +27,7 @@ test("subagent recursion guard rejects nested delegation before spawning", async
 			() =>
 				tool.execute(
 					"call",
-					{ agent: "scout", task: "nested" },
+					{ agent: "explorer", task: "nested" },
 					undefined,
 					undefined,
 					createMockContext().ctx,
@@ -141,48 +141,47 @@ test("discoverAgents includes built-ins and lets project agents override by name
 	const agentsDir = path.join(cwd, ".pi", "agents");
 	mkdirSync(agentsDir, { recursive: true });
 	writeFileSync(
-		path.join(agentsDir, "scout.md"),
+		path.join(agentsDir, "explorer.md"),
 		[
 			"---",
-			"name: scout",
-			"description: Project-specific scout",
+			"name: explorer",
+			"description: Project-specific explorer",
 			"tools: read,bash",
 			"model: gpt-test",
 			"thinkingLevel: high",
 			"---",
-			"Project scout prompt.",
+			"Project explorer prompt.",
 		].join("\n"),
 	);
 
 	const baseResult = discoverAgents(cwd, "project");
-	const baseScout = baseResult.agents.find((agent) => agent.name === "scout");
-	assert.equal(baseScout?.thinkingLevel, "high");
+	const baseExplorer = baseResult.agents.find((agent) => agent.name === "explorer");
+	assert.equal(baseExplorer?.thinkingLevel, "high");
 
 	const result = discoverAgents(cwd, "project", {
-		agents: { scout: { timeoutMs: 1234, thinkingLevel: "low" } },
+		agents: { explorer: { timeoutMs: 1234, thinkingLevel: "low" } },
 	});
-	const scout = result.agents.find((agent) => agent.name === "scout");
+	const explorer = result.agents.find((agent) => agent.name === "explorer");
 
 	assert.equal(result.projectAgentsDir, agentsDir);
-	assert.equal(scout?.source, "project");
-	assert.deepEqual(scout?.tools, ["read", "bash"]);
-	assert.equal(scout?.model, "gpt-test");
-	assert.equal(scout?.thinkingLevel, "low");
-	assert.equal(scout?.timeoutMs, 1234);
+	assert.equal(explorer?.source, "project");
+	assert.deepEqual(explorer?.tools, ["read", "bash"]);
+	assert.equal(explorer?.model, "gpt-test");
+	assert.equal(explorer?.thinkingLevel, "low");
+	assert.equal(explorer?.timeoutMs, 1234);
 
-	const cleared = discoverAgents(cwd, "project", { agents: { scout: { thinkingLevel: null } } });
-	assert.equal(cleared.agents.find((agent) => agent.name === "scout")?.thinkingLevel, undefined);
+	const cleared = discoverAgents(cwd, "project", { agents: { explorer: { thinkingLevel: null } } });
+	assert.equal(cleared.agents.find((agent) => agent.name === "explorer")?.thinkingLevel, undefined);
 	assert.ok(result.agents.some((agent) => agent.name === "worker" && agent.source === "built-in"));
 });
 
-test("reviewer is no longer a built-in agent", () => {
-	const cwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-reviewer-test-"));
+test("removed built-in agent names are unavailable", () => {
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-removed-agent-test-"));
 	try {
-		const reviewer = discoverAgents(cwd, "project").agents.find(
-			(agent) => agent.name === "reviewer",
-		);
+		const names = discoverAgents(cwd, "project").agents.map((agent) => agent.name);
 
-		assert.equal(reviewer, undefined);
+		assert.equal(names.includes("reviewer"), false);
+		assert.equal(names.includes("scout"), false);
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}
@@ -192,7 +191,7 @@ test("formatAgentList returns concise text and remaining count", () => {
 	const agents = discoverAgents(process.cwd(), "project").agents;
 	const formatted = formatAgentList(agents, 2);
 
-	assert.match(formatted.text, /scout \(built-in\)/);
+	assert.match(formatted.text, /explorer \(built-in\)/);
 	assert.equal(formatted.remaining, Math.max(0, agents.length - 2));
 });
 
@@ -202,8 +201,8 @@ test("formatAgentCatalog advertises scope variants deterministically and within 
 		const projectAgentsDir = path.join(cwd, ".pi", "agents");
 		mkdirSync(projectAgentsDir, { recursive: true });
 		writeFileSync(
-			path.join(projectAgentsDir, "scout.md"),
-			"---\nname: scout\ndescription: Project\n---\nProject prompt.",
+			path.join(projectAgentsDir, "explorer.md"),
+			"---\nname: explorer\ndescription: Project\n---\nProject prompt.",
 		);
 		writeFileSync(
 			path.join(projectAgentsDir, "project.md"),
@@ -222,8 +221,11 @@ test("formatAgentCatalog advertises scope variants deterministically and within 
 		const first = formatAgentCatalog({ user, project }, { maxCharacters: 5_000 });
 		const second = formatAgentCatalog({ user, project }, { maxCharacters: 5_000 });
 		assert.equal(first.text, second.text);
-		assert.match(first.text, /scout \[source: built-in; agentScope: "user"\]/);
-		assert.match(first.text, /scout \[source: project; requires agentScope: "project" or "both"/);
+		assert.match(first.text, /explorer \[source: built-in; agentScope: "user"\]/);
+		assert.match(
+			first.text,
+			/explorer \[source: project; requires agentScope: "project" or "both"/,
+		);
 		assert.match(first.text, /Project/);
 		assert.match(first.text, /Same-name precedence/);
 		assert.match(first.text, /project \[source: project/);
@@ -332,8 +334,8 @@ test("session start refreshes every agent catalog and gates project metadata on 
 			"---\nname: api-reviewer\ndescription: Reviews API compatibility\n---\nReview APIs.",
 		);
 		writeFileSync(
-			path.join(agentDir, "agents", "scout.md"),
-			"---\nname: scout\ndescription: User scout override\n---\nUser scout.",
+			path.join(agentDir, "agents", "explorer.md"),
+			"---\nname: explorer\ndescription: User explorer override\n---\nUser explorer.",
 		);
 		for (const cwd of [trustedCwd, untrustedCwd]) {
 			mkdirSync(path.join(cwd, ".pi", "agents"), { recursive: true });
@@ -342,8 +344,8 @@ test("session start refreshes every agent catalog and gates project metadata on 
 				"---\nname: local\ndescription: Project-only description\n---\nProject work.",
 			);
 			writeFileSync(
-				path.join(cwd, ".pi", "agents", "scout.md"),
-				"---\nname: scout\ndescription: Project scout override\n---\nProject scout.",
+				path.join(cwd, ".pi", "agents", "explorer.md"),
+				"---\nname: explorer\ndescription: Project explorer override\n---\nProject explorer.",
 			);
 		}
 		const mock = createMockPi();
@@ -368,10 +370,10 @@ test("session start refreshes every agent catalog and gates project metadata on 
 		const untrusted = await start(untrustedCwd, false);
 		for (const description of Object.values(untrusted)) {
 			assert.match(description, /api-reviewer/);
-			assert.match(description, /User scout override/);
+			assert.match(description, /User explorer override/);
 			assert.doesNotMatch(
 				description,
-				/Project-only description|Project scout override|local \[source: project|scout \[source: project/,
+				/Project-only description|Project explorer override|local \[source: project|explorer \[source: project/,
 			);
 		}
 		const trusted = await start(trustedCwd, true);
@@ -379,14 +381,14 @@ test("session start refreshes every agent catalog and gates project metadata on 
 			assert.match(description, /local \[source: project/);
 			assert.match(description, /agentScope: "project" or "both"/);
 			assert.match(description, /Project-only description/);
-			assert.match(description, /Project scout override/);
+			assert.match(description, /Project explorer override/);
 			assert.doesNotMatch(description, /untrusted/);
 		}
 		const untrustedAgain = await start(untrustedCwd, false);
 		for (const description of Object.values(untrustedAgain)) {
 			assert.doesNotMatch(
 				description,
-				/Project-only description|Project scout override|local \[source: project|scout \[source: project/,
+				/Project-only description|Project explorer override|local \[source: project|explorer \[source: project/,
 			);
 		}
 	} finally {

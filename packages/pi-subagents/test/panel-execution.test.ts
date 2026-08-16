@@ -97,14 +97,14 @@ test("panel mode rejects mixed modes and unknown agents before launch", async ()
 	const panel = {
 		task: "Review",
 		reviewers: [
-			{ id: "a", agent: "scout" },
-			{ id: "b", agent: "scout" },
+			{ id: "a", agent: "explorer" },
+			{ id: "b", agent: "explorer" },
 		],
-		synthesizer: { agent: "scout" },
+		synthesizer: { agent: "explorer" },
 	};
 	const mixed = await tool.execute(
 		"panel-mixed",
-		{ agent: "scout", task: "single", panel },
+		{ agent: "explorer", task: "single", panel },
 		undefined,
 		undefined,
 		createMockContext().ctx,
@@ -219,10 +219,10 @@ test("panel executes isolated reviewers, preserves evidence, then synthesizes on
 					task: "Review the shared change",
 					context: "diff: shared",
 					reviewers: [
-						{ id: "a", agent: "scout", focus: "correctness" },
-						{ id: "b", agent: "scout", focus: "tests" },
+						{ id: "a", agent: "explorer", focus: "correctness" },
+						{ id: "b", agent: "explorer", focus: "tests" },
 					],
-					synthesizer: { agent: "scout" },
+					synthesizer: { agent: "explorer" },
 					minValidReviews: 2,
 				},
 			},
@@ -291,10 +291,10 @@ test("timed-out reviewers receive one bounded contract finalization turn", async
 				panel: {
 					task: "Review",
 					reviewers: [
-						{ id: "a", agent: "scout", timeoutMs: 50 },
-						{ id: "b", agent: "scout", timeoutMs: 50 },
+						{ id: "a", agent: "explorer", timeoutMs: 50 },
+						{ id: "b", agent: "explorer", timeoutMs: 50 },
 					],
-					synthesizer: { agent: "scout" },
+					synthesizer: { agent: "explorer" },
 				},
 			},
 			undefined,
@@ -337,10 +337,10 @@ test("panel preserves valid reviews when synthesis returns an invalid contract",
 				panel: {
 					task: "Review",
 					reviewers: [
-						{ id: "a", agent: "scout" },
-						{ id: "b", agent: "scout" },
+						{ id: "a", agent: "explorer" },
+						{ id: "b", agent: "explorer" },
 					],
-					synthesizer: { agent: "scout" },
+					synthesizer: { agent: "explorer" },
 				},
 			},
 			undefined,
@@ -385,10 +385,10 @@ test("panel marks valid synthesis output from an errored process as failed", asy
 				panel: {
 					task: "Review",
 					reviewers: [
-						{ id: "a", agent: "scout" },
-						{ id: "b", agent: "scout" },
+						{ id: "a", agent: "explorer" },
+						{ id: "b", agent: "explorer" },
 					],
-					synthesizer: { agent: "scout" },
+					synthesizer: { agent: "explorer" },
 				},
 			},
 			undefined,
@@ -434,10 +434,10 @@ test("panel retries transient transport failures once within the review phase", 
 				panel: {
 					task: "Review",
 					reviewers: [
-						{ id: "a", agent: "scout" },
-						{ id: "b", agent: "scout" },
+						{ id: "a", agent: "explorer" },
+						{ id: "b", agent: "explorer" },
 					],
-					synthesizer: { agent: "scout" },
+					synthesizer: { agent: "explorer" },
 				},
 			},
 			undefined,
@@ -567,10 +567,10 @@ test("an insufficient panel returns partial evidence and never launches synthesi
 				panel: {
 					task: "Review",
 					reviewers: [
-						{ id: "a", agent: "scout" },
-						{ id: "b", agent: "scout" },
+						{ id: "a", agent: "explorer" },
+						{ id: "b", agent: "explorer" },
 					],
-					synthesizer: { agent: "scout" },
+					synthesizer: { agent: "explorer" },
 				},
 			},
 			undefined,
@@ -613,10 +613,10 @@ test("ordinary reviewer progress updates do not trigger a semantic stall", async
 				panel: {
 					task: "Review after ordinary progress",
 					reviewers: [
-						{ id: "a", agent: "scout" },
-						{ id: "b", agent: "scout" },
+						{ id: "a", agent: "explorer" },
+						{ id: "b", agent: "explorer" },
 					],
-					synthesizer: { agent: "scout" },
+					synthesizer: { agent: "explorer" },
 				},
 			},
 			undefined,
@@ -658,10 +658,10 @@ test("panel semantic progress stops repeated evidence states without blind retri
 				panel: {
 					task: "Review with evidence",
 					reviewers: [
-						{ id: "a", agent: "scout" },
-						{ id: "b", agent: "scout" },
+						{ id: "a", agent: "explorer" },
+						{ id: "b", agent: "explorer" },
 					],
-					synthesizer: { agent: "scout" },
+					synthesizer: { agent: "explorer" },
 				},
 			},
 			undefined,
@@ -918,9 +918,9 @@ test("panel cancellation closes the child group and skips synthesis", async () =
 					task: "Review until cancelled",
 					reviewers: Array.from({ length: 5 }, (_, index) => ({
 						id: `reviewer-${index}`,
-						agent: "scout",
+						agent: "explorer",
 					})),
-					synthesizer: { agent: "scout" },
+					synthesizer: { agent: "explorer" },
 				},
 			},
 			controller.signal,

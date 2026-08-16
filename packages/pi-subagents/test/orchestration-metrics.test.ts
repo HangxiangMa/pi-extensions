@@ -5,7 +5,7 @@ import type { SingleResult } from "../src/runner.js";
 import { WorkItemLedger } from "../src/work-item-ledger.js";
 
 const result: SingleResult = {
-	agent: "scout",
+	agent: "explorer",
 	agentSource: "built-in",
 	task: "inspect",
 	exitCode: 0,

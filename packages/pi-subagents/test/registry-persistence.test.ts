@@ -198,7 +198,7 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 			agents: [
 				{
 					id: "legacy",
-					agent: "scout",
+					agent: "explorer",
 					state: "completed",
 					createdAt: Date.now(),
 					updatedAt: Date.now(),
@@ -218,7 +218,7 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 			agents: [
 				{
 					id: "invalid-thinking",
-					agent: "scout",
+					agent: "explorer",
 					thinkingLevel: "huge",
 					state: "idle",
 					createdAt: Date.now(),
@@ -238,7 +238,7 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 			agents: [
 				{
 					id: "malformed",
-					agent: "scout",
+					agent: "explorer",
 					state: "idle",
 					createdAt: Date.now(),
 					updatedAt: Date.now(),

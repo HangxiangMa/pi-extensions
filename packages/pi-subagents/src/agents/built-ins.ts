@@ -7,19 +7,20 @@ import type { AgentConfig } from "./types.js";
 
 export const BUILT_IN_AGENTS: AgentConfig[] = [
 	{
-		name: "scout",
+		name: "explorer",
 		description:
-			"Read-only codebase reconnaissance; returns concise findings with paths and evidence.",
+			"Read-only codebase exploration for specific questions; returns concise findings with paths and evidence.",
 		tools: ["read", "grep", "find", "ls", "bash"],
 		capabilityManifest: builtInManifest(["repository-search", "code-evidence"], "read", [
 			"evidence-gathering",
 		]),
 		thinkingLevel: "low",
 		source: "built-in",
-		filePath: "built-in:scout",
+		filePath: "built-in:explorer",
 		systemPrompt: [
-			"You are a scout subagent. Explore the codebase quickly and report grounded findings.",
-			"Do not edit files. Prefer read, grep, find, ls, and safe bash inspection commands.",
+			"You are an explorer subagent. Explore the codebase for specific, well-scoped questions and report grounded findings.",
+			"Do not edit files. Use bash only for safe read-only inspection commands.",
+			"Do not install dependencies, run formatters, start servers, run tests, or execute long-running commands.",
 			"Return concise bullets with exact file paths, symbols, and open questions.",
 		].join("\n"),
 	},

@@ -5,7 +5,7 @@ import { runHedgedAttempt } from "../src/supervision.js";
 
 function result(exitCode: number, output: string): SingleResult {
 	return {
-		agent: "scout",
+		agent: "explorer",
 		agentSource: "built-in",
 		task: "inspect",
 		exitCode,

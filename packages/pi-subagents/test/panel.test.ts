@@ -174,7 +174,7 @@ test("panel planning reserves synthesis and cleanup before launch", () => {
 				task: "review",
 				reviewers: [
 					{ id: "same", agent: "reviewer" },
-					{ id: "same", agent: "scout" },
+					{ id: "same", agent: "explorer" },
 				],
 				synthesizer: { agent: "reviewer" },
 			}),

@@ -181,7 +181,7 @@ test("agent tool drafts preserve settings across searchable save, discard, and E
 			settingsPath,
 			JSON.stringify({
 				future: { kept: true },
-				agents: { scout: { tools: ["read", "missing-tool"] } },
+				agents: { explorer: { tools: ["read", "missing-tool"] } },
 			}),
 		);
 		const mock = createMockPi({
@@ -258,7 +258,7 @@ test("agent tool drafts preserve settings across searchable save, discard, and E
 		assert.equal(call, 5, openedScreens.join("\n---\n"));
 		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
 			future: { kept: true },
-			agents: { scout: { tools: ["read", "missing-tool", "remote-tool"] } },
+			agents: { explorer: { tools: ["read", "missing-tool", "remote-tool"] } },
 		});
 		const savedDocument = readFileSync(settingsPath, "utf8");
 
@@ -657,7 +657,7 @@ test("current-session manager excludes already closed agent records", async () =
 		const mock = createMockPi();
 		const closedAgent: ManagedAgent = {
 			id: "sa_closed",
-			agent: "scout",
+			agent: "explorer",
 			rootId: "sa_closed",
 			depth: 0,
 			children: [],

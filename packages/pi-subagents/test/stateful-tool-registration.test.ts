@@ -375,7 +375,7 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 				() =>
 					spawnTool.execute(
 						"id",
-						{ agent: "scout", task: "nested" },
+						{ agent: "explorer", task: "nested" },
 						undefined,
 						undefined,
 						context.ctx,

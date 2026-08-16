@@ -10,11 +10,11 @@ import { createExecutionPlan } from "../src/execution-plan.js";
 
 const plan = createExecutionPlan({
 	agent: {
-		name: "scout",
-		description: "scout",
+		name: "explorer",
+		description: "explorer",
 		systemPrompt: "",
 		source: "built-in",
-		filePath: "built-in:scout",
+		filePath: "built-in:explorer",
 		tools: ["read"],
 	},
 	effectiveTools: ["read"],

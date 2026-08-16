@@ -34,7 +34,7 @@ function candidate(
 test("capability routing rejects unsupported work before execution", () => {
 	assert.throws(
 		() =>
-			routeByCapability([candidate("scout", ["repository-research"], "low")], {
+			routeByCapability([candidate("explorer", ["repository-research"], "low")], {
 				requiredCapabilities: ["typescript-implementation"],
 			}),
 		/no capable agent/i,
@@ -56,8 +56,8 @@ test("capability routing deterministically prefers the requested cost profile", 
 test("capability routing validates an explicitly selected agent", () => {
 	assert.throws(
 		() =>
-			routeByCapability([candidate("scout", ["repository-research"], "low")], {
-				agent: "scout",
+			routeByCapability([candidate("explorer", ["repository-research"], "low")], {
+				agent: "explorer",
 				requiredCapabilities: ["code-review"],
 			}),
 		/does not satisfy/i,

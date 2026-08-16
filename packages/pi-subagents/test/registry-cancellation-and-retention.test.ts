@@ -7,11 +7,11 @@ import { AgentRegistry } from "../src/registry.js";
 test("AgentRegistry rotates the accepted generation before abort and quarantines late results", async () => {
 	const plan = createExecutionPlan({
 		agent: {
-			name: "scout",
-			description: "scout",
+			name: "explorer",
+			description: "explorer",
 			systemPrompt: "",
 			source: "built-in",
-			filePath: "built-in:scout",
+			filePath: "built-in:explorer",
 		},
 		target: {
 			cwd: process.cwd(),
@@ -30,7 +30,7 @@ test("AgentRegistry rotates the accepted generation before abort and quarantines
 		return { output: "late completion", exitCode: 0, aborted: true };
 	});
 	const agent = await registry.spawn({
-		agent: "scout",
+		agent: "explorer",
 		task: "work",
 		cwd: process.cwd(),
 		executionPlan: plan,
@@ -56,8 +56,8 @@ test("AgentRegistry shutdown aborts active work and drains queued work without s
 		},
 		{ maxActiveTurns: 1 },
 	);
-	const active = await registry.spawn({ agent: "scout", task: "active", cwd: process.cwd() });
-	const queued = await registry.spawn({ agent: "scout", task: "queued", cwd: process.cwd() });
+	const active = await registry.spawn({ agent: "explorer", task: "active", cwd: process.cwd() });
+	const queued = await registry.spawn({ agent: "explorer", task: "queued", cwd: process.cwd() });
 	await registry.shutdown();
 	assert.deepEqual(started, ["active"]);
 	assert.equal(registry.get(active.id)?.state, "interrupted");
@@ -77,13 +77,13 @@ test("AgentRegistry eviction preserves active ancestry and removes expired trees
 		},
 		{ idleTtlMs: 100, now: () => now },
 	);
-	const root = await registry.spawn({ agent: "scout", task: "done", cwd: process.cwd() });
+	const root = await registry.spawn({ agent: "explorer", task: "done", cwd: process.cwd() });
 	await registry.wait(root.id, 100);
 	for (const completion of registry.listPendingCompletions()) {
 		await registry.markCompletionDelivered(completion.completionId, now);
 	}
 	const child = await registry.spawn({
-		agent: "scout",
+		agent: "explorer",
 		task: "slow",
 		cwd: process.cwd(),
 		parentId: root.id,
@@ -120,10 +120,10 @@ test("AgentRegistry expiry prunes stale child links and releases its transport",
 			now: () => now,
 		},
 	);
-	const root = await registry.spawn({ agent: "scout", task: "root", cwd: process.cwd() });
+	const root = await registry.spawn({ agent: "explorer", task: "root", cwd: process.cwd() });
 	await registry.wait(root.id, 100);
 	const child = await registry.spawn({
-		agent: "scout",
+		agent: "explorer",
 		task: "child",
 		cwd: process.cwd(),
 		parentId: root.id,
@@ -149,7 +149,7 @@ test("AgentRegistry keeps an expired agent until its durable completion is ackno
 		idleTtlMs: 100,
 		now: () => now,
 	});
-	const agent = await registry.spawn({ agent: "scout", task: "done", cwd: process.cwd() });
+	const agent = await registry.spawn({ agent: "explorer", task: "done", cwd: process.cwd() });
 	await registry.wait(agent.id, 100);
 	now += 101;
 	assert.equal(await registry.sweepExpired(), 0);
@@ -166,7 +166,7 @@ test("AgentRegistry bounds retained closed records", async () => {
 	});
 	for (let index = 0; index < 4; index++) {
 		const agent = await registry.spawn({
-			agent: "scout",
+			agent: "explorer",
 			task: String(index),
 			cwd: process.cwd(),
 		});
@@ -190,7 +190,7 @@ test("AgentRegistry serializes state snapshots so slow persistence cannot overwr
 			savedStates.push(agents[0]?.state ?? "missing");
 		},
 	});
-	const agent = await registry.spawn({ agent: "scout", task: "task", cwd: process.cwd() });
+	const agent = await registry.spawn({ agent: "explorer", task: "task", cwd: process.cwd() });
 	await registry.wait(agent.id, 100);
 	await new Promise((resolve) => setImmediate(resolve));
 	releaseSlowSave?.();
@@ -213,7 +213,7 @@ test("AgentRegistry keeps an unpersisted terminal run pending until shutdown rep
 			throw new Error("disk unavailable");
 		},
 	});
-	const agent = await registry.spawn({ agent: "scout", task: "done", cwd: process.cwd() });
+	const agent = await registry.spawn({ agent: "explorer", task: "done", cwd: process.cwd() });
 	await retryStarted;
 	let waitResolved = false;
 	const waiting = registry.wait(agent.id, 1_000).then((result) => {

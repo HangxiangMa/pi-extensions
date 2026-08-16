@@ -131,7 +131,7 @@ test("subagent_consult reports actionable available agents before launching a ch
 			assert.ok(error instanceof Error);
 			assert.match(error.message, /Unknown subagent definition: tester-one/);
 			assert.match(error.message, /Available agents for agentScope "user":/);
-			assert.match(error.message, /scout \(built-in\)/);
+			assert.match(error.message, /explorer \(built-in\)/);
 			assert.doesNotMatch(error.message, /reviewer \(built-in\)/);
 			return true;
 		},

@@ -49,7 +49,7 @@ const agents = [
 	agent("worker", ["implementation"], "write"),
 	agent("worker-two", ["implementation"], "write"),
 	agent("reviewer", ["code-review"], "read", ["independent-review"]),
-	agent("scout", ["repository-search"], "read"),
+	agent("explorer", ["repository-search"], "read"),
 ];
 
 function request(overrides: Record<string, unknown> = {}) {
@@ -146,7 +146,7 @@ test("compiler admits one child and a sequential dependency without widening aut
 	assert.equal(one.status, "compiled");
 	if (one.status !== "compiled") return;
 	assert.equal(one.workflow.tasks.length, 1);
-	assert.equal(one.workflow.tasks[0]?.agent, "scout");
+	assert.equal(one.workflow.tasks[0]?.agent, "explorer");
 	assert.deepEqual(one.workflow.tasks[0]?.requiredTools, ["read"]);
 
 	const sequential = compile([task("inspect"), task("summarize", { dependsOn: ["inspect"] })]);
