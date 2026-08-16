@@ -1,5 +1,11 @@
 # @narumitw/pi-subagents
 
+## 1.0.2
+
+### Patch Changes
+
+- df627e4: Reduce idle startup import work by lazily loading heavier subagent runtime modules.
+
 ## 1.0.1
 
 ### Patch Changes
