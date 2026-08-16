@@ -691,3 +691,50 @@ test("TraceRecorder omits generation request content when capture is disabled", 
 		"[content capture disabled]",
 	);
 });
+
+test("TraceRecorder stamps the session id on every observation", () => {
+	const backend = new FakeBackend();
+	const recorder = new TraceRecorder(backend, {
+		sessionId: "session-42",
+		cwd: "/workspace",
+		mode: "tui",
+		captureContent: true,
+	});
+
+	recorder.beginAgent({ prompt: "trace everything" });
+	recorder.beginAttempt();
+	recorder.beginTurn(0);
+	recorder.beginGeneration({ payloadStage: "before_provider_request" });
+	recorder.finishAssistant({
+		role: "assistant",
+		content: "done",
+		usage: { input: 10, output: 5, totalTokens: 15 },
+		stopReason: "stop",
+	});
+	recorder.beginTool("call-1", "bash", { command: "ls" });
+	recorder.finishTool("call-1", { content: "ok" });
+	recorder.beginCompaction({
+		reason: "threshold",
+		willRetry: false,
+		messagesToSummarize: 1,
+		turnPrefixMessages: 0,
+		branchEntries: 0,
+		isSplitTurn: false,
+	});
+	recorder.finishCompaction({ reason: "threshold", willRetry: false, fromExtension: false });
+	recorder.finishTurn(0, { message: { role: "assistant" }, toolResultCount: 1 });
+	recorder.finishAttempt({ role: "assistant", content: "done", stopReason: "stop" });
+	recorder.settle();
+
+	assert.deepEqual(backend.observations.map(({ name }) => name).sort(), [
+		"pi.agent",
+		"pi.attempt",
+		"pi.compaction",
+		"pi.llm",
+		"pi.tool.bash",
+		"pi.turn",
+	]);
+	for (const observation of backend.observations) {
+		assert.equal(observation.attributes.sessionId, "session-42");
+	}
+});
