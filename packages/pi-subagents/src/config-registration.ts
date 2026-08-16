@@ -1,6 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { cachedModuleLoader } from "./cached-module-loader.js";
-import { showSubagentHelp, showSubagentStatus } from "./config-status.js";
 import type { SubagentMenuOwner, SubagentSettingsRuntime } from "./config-ui.js";
 
 const SUBCOMMANDS = [
@@ -12,6 +11,11 @@ const SUBCOMMANDS = [
 type ConfigUiModule = Pick<
 	typeof import("./config-ui.js"),
 	"showSubagentManager" | "showSubagentSettings"
+>;
+
+type ConfigStatusModule = Pick<
+	typeof import("./config-status.js"),
+	"showSubagentHelp" | "showSubagentStatus"
 >;
 
 export interface ConfigRegistrationDependencies {
@@ -41,6 +45,9 @@ export function registerSubagentConfigCommand(
 	const loadConfigUi = cachedModuleLoader(
 		dependencies.loadConfigUi ?? (() => import("./config-ui.js")),
 	);
+	const loadConfigStatus = cachedModuleLoader<ConfigStatusModule>(
+		() => import("./config-status.js"),
+	);
 	pi.registerCommand("subagents", {
 		description: "Manage current-session subagents and user settings",
 		getArgumentCompletions(prefix: string) {
@@ -51,15 +58,18 @@ export function registerSubagentConfigCommand(
 		async handler(args, ctx) {
 			const subcommand = args.trim().toLowerCase();
 			if (!subcommand && ctx.mode !== "tui") {
-				showSubagentStatus(ctx, runtime);
+				const status = await loadConfigStatus();
+				status.showSubagentStatus(ctx, runtime);
 				return;
 			}
 			if (subcommand === "status") {
-				showSubagentStatus(ctx, runtime);
+				const status = await loadConfigStatus();
+				status.showSubagentStatus(ctx, runtime);
 				return;
 			}
 			if (subcommand === "help") {
-				showSubagentHelp(ctx, runtime);
+				const status = await loadConfigStatus();
+				status.showSubagentHelp(ctx, runtime);
 				return;
 			}
 			if (!subcommand || subcommand === "settings") {
