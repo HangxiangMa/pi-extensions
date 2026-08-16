@@ -116,7 +116,7 @@ function managedAgent(): ManagedAgent {
 	const now = Date.now();
 	return {
 		id: "sa_rpc",
-		agent: "planner",
+		agent: "worker",
 		rootId: "sa_rpc",
 		depth: 0,
 		children: [],
@@ -138,13 +138,13 @@ test("RPC launch arguments preserve model, thinking, tools, trust, and role poli
 	const args = buildRpcArgs(
 		{ ...managedAgent(), thinkingLevel: "high" },
 		{
-			name: "planner",
-			description: "plan",
+			name: "worker",
+			description: "work",
 			model: "provider/model:low",
 			tools: ["read", "find"],
-			systemPrompt: "plan",
+			systemPrompt: "work",
 			source: "built-in",
-			filePath: "built-in:planner",
+			filePath: "built-in:worker",
 		},
 		{ model: undefined, thinkingLevel: "medium" },
 		"/tmp/role.md",
@@ -172,13 +172,13 @@ test("RPC launch arguments preserve model, thinking, tools, trust, and role poli
 	const inheritedThinking = buildRpcArgs(
 		managedAgent(),
 		{
-			name: "planner",
-			description: "plan",
+			name: "worker",
+			description: "work",
 			model: "provider/model",
 			tools: [],
 			systemPrompt: "",
 			source: "built-in",
-			filePath: "built-in:planner",
+			filePath: "built-in:worker",
 		},
 		{ model: undefined, thinkingLevel: "medium" },
 	);

@@ -55,16 +55,16 @@ test("AutoTransport deterministically routes before launch and retains the selec
 	const subprocess = new FakeTransport("subprocess");
 	const inProcess = new FakeTransport("in-process");
 	const rpc = new FakeTransport("rpc");
-	let settings: SubagentSettings | undefined;
+	let settings: SubagentSettings | undefined = { agents: { explorer: { tools: ["read"] } } };
 	const transport = new AutoTransport({
 		subprocess,
 		inProcess,
 		rpc,
 		getSettings: () => settings,
 	});
-	const planner = agent("planner-id", "planner");
+	const explorer = agent("explorer-id", "explorer");
 	const worker = agent("worker-id", "worker");
-	const planned = await transport.runTurn(planner, "plan", new AbortController().signal);
+	const planned = await transport.runTurn(explorer, "plan", new AbortController().signal);
 	assert.equal(planned.output, "in-process");
 	assert.match(planned.telemetry?.selectionReason ?? "", /read-only/i);
 	const worked = await transport.runTurn(worker, "work", new AbortController().signal);
@@ -77,10 +77,10 @@ test("AutoTransport deterministically routes before launch and retains the selec
 	const customResult = await transport.runTurn(custom, "custom", new AbortController().signal);
 	assert.equal(customResult.output, "subprocess");
 	assert.match(customResult.telemetry?.selectionReason ?? "", /custom tools/i);
-	await transport.release?.(planner);
+	await transport.release?.(explorer);
 	await transport.release?.(worker);
 	await transport.release?.(custom);
-	assert.deepEqual(inProcess.releases, ["planner-id"]);
+	assert.deepEqual(inProcess.releases, ["explorer-id"]);
 	assert.deepEqual(rpc.releases, ["worker-id"]);
 	assert.deepEqual(subprocess.releases, ["custom-id"]);
 	await transport.shutdown();

@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-subagents)](https://www.npmjs.com/package/@narumitw/pi-subagents) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-subagents` is a native [Pi coding agent](https://pi.dev) extension for delegating work to specialized agents. By default, it exposes eight capability-specific tools: blocking batches, explicit autonomous workflow planning, four detached lifecycle tools, side-effect-free inspection, and synchronous read-only consultation. Users can keep every delegation method, choose async-only delegation, retain only blocking delegation, or disable delegation while keeping inspection available.
+`@narumitw/pi-subagents` is a native [Pi coding agent](https://pi.dev) extension for delegating work to specialized agents. By default, it exposes seven capability-specific tools: blocking batches, four detached lifecycle tools, side-effect-free inspection, and synchronous read-only consultation. Users can keep every delegation method, choose async-only delegation, retain only blocking delegation, or disable delegation while keeping inspection available.
 
 Use it to split independent research, planning, implementation, and review work across focused workers. Under the default next-turn delivery policy, background delegation is for work the current response does not depend on. Opt-in auto-resume also supports final-answer-dependent background work by requesting a synthesis turn after completion.
 
@@ -11,14 +11,13 @@ Use it to split independent research, planning, implementation, and review work 
 - Offers all delegation methods by default, with goal-oriented presets for async-only, blocking-only, or disabled delegation.
 - Adds `subagent_inspect` for bounded metadata without child launch, mailbox-content access, acknowledgement, or mutation.
 - Adds `subagent_consult` for one synchronous ephemeral child constrained to built-in `read`, `grep`, `find`, and `ls` tools (or a narrower agent allow-list).
-- Adds explicit `subagent_auto` requests that use one bounded read-only planning turn and a deterministic compiler to select the smallest justified existing workflow without changing omitted-field behavior.
 - Keeps batch workers isolated in `pi --mode json -p --no-session` subprocesses.
 - Lets users set a blocking parallel call's maximum worker count from 1 through 64 while keeping four-at-a-time execution.
 - Registers detached stateful lifecycle tools by default; completion can stay queued for the next turn or opt into an idle root synthesis turn.
 - Supports an opt-in public-SDK `in-process` stateful transport with one reusable child `AgentSession` per `agentId`.
 - Supports an opt-in persistent `rpc` transport with one isolated Pi RPC process per active retained agent and `pi-subagents:v1` lifecycle metadata.
 - Supports deterministic opt-in `auto` routing: read-only built-ins use in-process, write-capable built-ins use RPC, and custom tools use the compatibility subprocess path.
-- Supports built-in `explorer`, `planner`, and `worker` agents.
+- Supports built-in `explorer` and `worker` agents.
 - Loads custom user agents from `~/.pi/agent/agents/*.md`.
 - Optionally loads project agents from `.pi/agents/*.md` with confirmation.
 - Provides a current-session-first `/subagents` manager, direct `settings|status|help` routes, and compatibility aliases for agent tools and retained agents.
@@ -55,13 +54,13 @@ pi -e ./packages/pi-subagents
 
 ## 🛠️ Pi tool
 
-`pi-subagents` registers eight tools by default. Run `/subagents`, choose **Change delegation**, review the concrete tool changes, then select **Save and reload** to apply one of these workflows:
+`pi-subagents` registers seven tools by default. Run `/subagents`, choose **Change delegation**, review the concrete tool changes, then select **Save and reload** to apply one of these workflows:
 
 | Workflow | Registered tools |
 | --- | --- |
-| **All delegation methods** (default) | Existing five delegation/lifecycle tools, `subagent_auto`, `subagent_inspect`, and `subagent_consult` |
+| **All delegation methods** (default) | Existing five delegation/lifecycle tools, `subagent_inspect`, and `subagent_consult` |
 | **Async only** | Four detached lifecycle tools plus `subagent_inspect`; blocking `subagent` and `subagent_consult` are omitted |
-| **Blocking only** | `subagent`, `subagent_auto`, `subagent_consult`, and `subagent_inspect` |
+| **Blocking only** | `subagent`, `subagent_consult`, and `subagent_inspect` |
 | **Disabled** | `subagent_inspect` only; delegation is disabled |
 
 The preview compares the selection with the tools registered in the current session, even when a manual settings edit is pending, and remains read-only until confirmation. Escape or **Cancel** leaves settings unchanged. Tool removal requires an extension reload because Pi does not expose extension tool unregistration. To avoid aborting work or removing isolated worktrees during `session_shutdown`, workflow changes are blocked while detached agents are retained; finish or clear them through **Current agents** first. Pi owns reload-error reporting and does not return a success result to extensions, so the save notification also tells users to run `/reload` if the tool surface does not refresh.
@@ -69,7 +68,6 @@ The preview compares the selection with the tools registered in the current sess
 The available tools are:
 
 - `subagent` — delegate blocking single, parallel, fan-in, chained, panel-review, or explicit dependency-workflow tasks. The main agent cannot process queued steering until the call returns.
-- `subagent_auto` — explicitly request one read-only planning turn followed by deterministic compilation and, only when admitted, execution through the existing blocking workflow engine.
 - `subagent_spawn` and related lifecycle tools — when enabled, start reusable detached work, return immediately, and receive bounded completion messages automatically.
 - `subagent_inspect` — inspect agent/model/run/runtime metadata without launching work or changing state.
 - `subagent_consult` — run one ephemeral read-only consultation and wait for its answer.
@@ -98,7 +96,6 @@ Choose the API by lifecycle:
 
 | Need | Use |
 | --- | --- |
-| The caller explicitly wants a high-level objective decomposed under an authority ceiling and aggregate budget | `subagent_auto`, when blocking delegation is enabled |
 | A delegated result is required before the root's next action under default next-turn delivery | Use one blocking `subagent` call when registered. In **Async only**, complete the critical-path work directly or switch workflows before delegating it |
 | Broad research/review the current response does not depend on | Prefer one `subagent_spawn` covering related branches, when lifecycle tools are enabled |
 | Final-answer-dependent broad work with `completionDelivery: "auto-resume"` | Prefer one `subagent_spawn`; completion requests a synthesis turn |
@@ -227,72 +224,6 @@ A blocking fan-out is reserved for output that must be synthesized before the ro
 }
 ```
 
-## 🧠 Explicit autonomous workflow planning
-
-`subagent_auto` is an opt-in surface separate from the large multi-mode `subagent` schema.
-It never intercepts ordinary prompts and does not change existing calls when omitted.
-The caller supplies one versioned objective, non-goals, required inputs, acceptance criteria, required evidence, an authority ceiling, an aggregate budget, and deterministic constraints.
-Mutating autonomous workflows that require verification need a user-scoped custom verifier agent with `structured-v2` output and the `independent-review` role, because the built-in catalog intentionally has no reviewer.
-Create one like the [`api-reviewer` custom agent](#-custom-agents) before using the mutating example below, or omit review capability and verification requirements for reconnaissance-only automation.
-
-```json
-{
-  "request": {
-    "version": "pi-subagents:automation-request:v1",
-    "objective": "Implement and verify the package change",
-    "nonGoals": ["Do not publish or release"],
-    "requiredInputs": ["current trusted repository"],
-    "acceptanceCriteria": ["Focused and root checks pass"],
-    "requiredEvidence": ["test output", "final diff review"],
-    "authorityCeiling": {
-      "capabilities": ["implementation", "code-review"],
-      "tools": ["read", "bash", "edit", "write"],
-      "readPaths": ["packages/pi-subagents"],
-      "writePaths": ["packages/pi-subagents"],
-      "network": "unspecified",
-      "secrets": "unspecified",
-      "sideEffectPolicy": "mutating"
-    },
-    "aggregateBudget": {
-      "timeoutMs": 180000,
-      "maxTurns": 30,
-      "maxToolCalls": 60,
-      "maxTasks": 4,
-      "maxRevisions": 1
-    },
-    "constraints": {
-      "contextPressure": "high",
-      "maxMutatingWidth": 2,
-      "requireVerification": true,
-      "workspaceMode": "shared"
-    }
-  }
-}
-```
-
-The planner always uses the built-in `planner` with only `read`, `grep`, `find`, and `ls`, disabled extensions and session persistence, trust-aware prompt resources, a maximum 60-second planning deadline, and bounded turn/tool-call counts.
-The planner returns only `pi-subagents:workflow-plan:v1` JSON and cannot choose agents, grant authority, create descendants, or forge executor identities.
-The executor reserves at most one quarter of the aggregate timeout, turns, and tool calls for planning before compiling execution work.
-It rejects before planning when that reservation leaves no positive execution budget, and it narrows the request task ceiling to the configured blocking-task limit before compilation or persistence.
-
-The compiler validates strict unknown-field and UTF-8 bounds, relative scopes, cycles, artifacts, ownership, capability routes, aggregate budgets, task generations, integration ownership, and the two-mutating-worker limit before execution.
-Caller-level acceptance criteria and required evidence are merged into the authoritative terminal, integration-owner, and verifier contracts without exceeding contract item limits.
-Path ceilings are compiler and conflict-scheduling constraints, not operating-system filesystem isolation; use a container or sandbox when host-level containment is required.
-Network and secrets guarantees other than `"unspecified"` fail closed because the current executor cannot enforce them.
-It can narrow or reject a proposal and can add one verifier only within the caller's remaining authority and budget.
-Parent-owned, needs-input, planner-failed, and compiler-rejected outcomes launch no execution workers.
-Every admitted mutating workflow has one authoritative integration owner and one distinct `structured-v2` verifier before any mutating worker starts.
-Project-local agents are not selected by this first surface, workflow grandchildren are rejected, and `workspaceMode: "worktree"` fails closed until blocking workflow worktree execution is supported.
-
-Pending, needs-input, verification-rework, stale, or invalidated work can be revised through the internal `pi-subagents:workflow-plan-patch:v1` contract.
-Each accepted patch must match the current plan identity and workflow generation, rotates both identity and task generations, preserves accepted history/artifacts/receipts, and stops after the caller's revision limit.
-The initial tool surface does not expose free-form public graph editing.
-
-For compatibility or exact task control, use caller-authored `subagent.workflow`.
-Before downgrading, use that explicit workflow fallback and let active automation calls finish.
-Older releases do not register `subagent_auto` and ignore the separate versioned automation records under `~/.pi/agent/pi-subagents-workflows/`; no settings migration is required.
-No benchmark result in this release changes the default delegation policy or makes a production-quality claim.
-
 ## 🔎 Read-only inspection
 
 `subagent_inspect` is registered in every workflow, including disabled delegation. It never starts a child, sends or acknowledges mailbox messages, interrupts or closes a run, changes settings, refreshes providers, resolves credentials, or modifies files.
@@ -414,7 +345,7 @@ Run a chain where each step receives the previous output:
   "chain": [
     { "agent": "explorer", "task": "Find subagent-related code" },
     {
-      "agent": "planner",
+      "agent": "worker",
       "task": "Using this context, plan the extension: {previous}"
     }
   ]
@@ -611,7 +542,7 @@ A detached agent additionally needs a concrete isolation or specialization benef
 `stateful.completionDelivery` controls settled completion delivery:
 
 - `"next-turn"` (default) preserves the previous behavior: use `deliverAs: "steer"` with `triggerTurn: false`. An active root can consume completion naturally; an idle root is not awakened.
-- `"auto-resume"` holds completion while the root is active, then requests one synthesis turn after the parent settles when no user or extension messages are already pending. Simultaneous completions share that turn, active work is not interrupted, and pending input suppresses the autonomous wake.
+- `"auto-resume"` holds completion while the root is active, then requests one synthesis turn after the parent settles when no user or extension messages are already pending. Simultaneous completions share that turn, active work is not interrupted, and pending input suppresses the automatic wake.
 
 The bounded persisted completion outbox provides ordered at-least-once delivery across process restart without replaying the child turn. When state must be reduced to its storage bound, persistence drops roots without pending completions first and trims old history rather than discarding an outbox-owned root. A completion is acknowledged only after parent context assembly observes its exact `completionId`; an injection that returns synchronously but never reaches context remains pending for retry. If the process exits after context assembly but before acknowledgement is persisted, the same ID can be delivered again and consumers must deduplicate it. Auto-resume wake admission remains best-effort because Pi's custom-message API is fire-and-forget, but an unacknowledged terminal completion itself remains available for redelivery on the next start of the owning session. Transient terminal-persistence failures retry with bounded exponential backoff and keep the run pending; shutdown cancels retry waits and reports a final persistence failure instead of silently resolving unsaved work.
 
@@ -834,14 +765,13 @@ Built-in agents are available without setup and can be overridden by user or pro
 | Agent | Purpose | Tools |
 | --- | --- | --- |
 | `explorer` | Read-only codebase exploration for specific questions. | `read`, `grep`, `find`, `ls`, `bash` |
-| `planner` | Grounded implementation plans. | `read`, `grep`, `find`, `ls` |
 | `worker` | General-purpose implementation. | Pi default tools |
 
 Review-specific delegation should use a custom user or project agent when needed.
 
 Built-in agents inherit the active/default Pi model instead of forcing a provider-specific model alias, which keeps every transport usable across different Pi setups.
 The built-in `explorer` defaults to `low` thinking for bounded exploration.
-`planner` and `worker` inherit thinking unless a caller, frontmatter, or per-agent setting selects one.
+`worker` inherits thinking unless a caller, frontmatter, or per-agent setting selects one.
 
 ## ⚙️ Configure agent tools
 
@@ -1047,13 +977,6 @@ packages/pi-subagents/
 │   ├── index.ts                  # Pi package entrypoint
 │   ├── subagents.ts              # Lightweight extension composition and blocking registration
 │   ├── cached-module-loader.ts   # Retryable first-use code-module cache
-│   ├── automation-registration.ts # Lightweight autonomous tool registration
-│   ├── automation.ts             # First-use autonomous planning execution
-│   ├── automation-contract.ts    # Strict request, proposal, and graph-patch contracts
-│   ├── automation-planner.ts     # Bounded read-only planner prompt and resource policy
-│   ├── workflow-plan-compiler.ts # Deterministic admission, routing, and workflow compilation
-│   ├── workflow-plan-patch.ts    # Generation-safe revisions and atomic plan persistence
-│   ├── workflow-planning-benchmark.ts # Frozen matched offline evaluation protocol
 │   ├── inspect-registration.ts   # Lightweight inspection tool registration
 │   ├── inspect.ts                # First-use side-effect-free metadata inspection
 │   ├── consult-registration.ts   # Lightweight consultation tool registration

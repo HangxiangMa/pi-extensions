@@ -148,11 +148,10 @@ const consultDetails = {
 	},
 };
 
-test("all eight subagent tools register native call and result renderers", () => {
+test("all seven subagent tools register native call and result renderers", () => {
 	const tools = registeredTools();
 	assert.deepEqual([...tools.keys()].sort(), [
 		"subagent",
-		"subagent_auto",
 		"subagent_consult",
 		"subagent_inspect",
 		"subagent_mailbox",
@@ -164,44 +163,6 @@ test("all eight subagent tools register native call and result renderers", () =>
 		assert.equal(typeof tool.renderCall, "function", `${tool.name} renderCall`);
 		assert.equal(typeof tool.renderResult, "function", `${tool.name} renderResult`);
 	}
-});
-
-test("automation renderer bounds and sanitizes untrusted objective and result text", () => {
-	const tool = registeredTools().get("subagent_auto");
-	assert.ok(tool);
-	const callLines = renderCall(
-		tool,
-		{
-			request: {
-				version: "pi-subagents:automation-request:v1",
-				objective: "Plan <private>SECRET</private>\u001b]8;;link\u0007 safely",
-			},
-		},
-		32,
-	);
-	const call = withoutSgr(callLines.join("\n"));
-	assert.doesNotMatch(call, /SECRET/u);
-	assert.equal(call.includes(ESCAPE), false);
-	assert.ok(callLines.every((line) => visibleWidth(line) <= 32));
-	const resultLines = renderResult(
-		tool,
-		{
-			request: {
-				version: "pi-subagents:automation-request:v1",
-				objective: "Plan safely",
-			},
-		},
-		{
-			content: [{ type: "text", text: "Compiler rejected <private>SECRET</private>\u001b[31m" }],
-			details: { status: "compiler-rejected", isError: true },
-		},
-		{ expanded: false, isPartial: false },
-		32,
-	);
-	const result = withoutSgr(resultLines.join("\n"));
-	assert.doesNotMatch(result, /SECRET/u);
-	assert.equal(result.includes(ESCAPE), false);
-	assert.ok(resultLines.every((line) => visibleWidth(line) <= 32));
 });
 
 test("panel renderer is width-safe, sanitized, and preserves objections and dissent", () => {

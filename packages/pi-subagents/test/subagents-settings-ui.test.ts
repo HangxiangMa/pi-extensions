@@ -40,7 +40,6 @@ test("delegation workflow settings control the registered tool surface", () => {
 				settings: {},
 				tools: [
 					"subagent",
-					"subagent_auto",
 					"subagent_spawn",
 					"subagent_send",
 					"subagent_manage",
@@ -63,7 +62,7 @@ test("delegation workflow settings control the registered tool surface", () => {
 			{
 				name: "blocking only",
 				settings: { blocking: { enabled: true }, stateful: { enabled: false } },
-				tools: ["subagent", "subagent_auto", "subagent_inspect", "subagent_consult"],
+				tools: ["subagent", "subagent_inspect", "subagent_consult"],
 			},
 			{
 				name: "disabled",
@@ -109,7 +108,7 @@ test("disabled stateful settings do not advertise unavailable lifecycle tools", 
 		subagents(mock.pi);
 		assert.deepEqual(
 			mock.tools.map((tool) => tool.name),
-			["subagent", "subagent_auto", "subagent_inspect", "subagent_consult"],
+			["subagent", "subagent_inspect", "subagent_consult"],
 		);
 		const blockingTool = mock.tools[0];
 		assert.doesNotMatch(String(blockingTool?.description), /subagent_spawn/i);

@@ -12,7 +12,7 @@ This plan owns only rolling dispatch, active-task state, bounded recovery execut
 
 It depends on the [verified execution loop plan](archived/2026-08-10_pi-subagents-verified-execution-loop-plan.md) for acceptance-state and rework transitions.
 
-It depends on the [autonomous workflow planning plan](archived/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md) for bounded graph patches.
+The former autonomous workflow planning dependency was removed with `subagent_auto` and the built-in `planner`.
 
 It continues the implemented dependency scheduler and semantic snapshot baseline documented in the [delegation-intelligence roadmap](../roadmaps/2026-08-10_pi-subagents-delegation-intelligence-roadmap.md) without re-owning that baseline.
 
@@ -32,7 +32,7 @@ The runtime currently performs only caller-configured transient retries or read-
 
 Workflow persistence saves snapshots, but blocking execution does not load and reconcile a previous snapshot for continuation.
 
-The verified-execution and autonomous-planning plans provide the acceptance and graph-revision boundaries required before automatic recovery can safely become a closed loop.
+The verified-execution plan provides the acceptance boundary required before automatic recovery can safely become a closed loop.
 
 ## Architecture
 
@@ -52,7 +52,7 @@ Transient pre-acceptance transport or tool failures may retry within the declare
 
 Capability mismatch may reroute only before uncertain side effects and only to an agent satisfying the accepted authority ceiling.
 
-Missing inputs may request one bounded planner patch.
+Missing inputs stop with an actionable typed outcome for the main agent or caller-authored workflow to revise.
 
 Stale read-only evidence may revalidate against the current semantic snapshot.
 
@@ -88,7 +88,7 @@ Otherwise the workflow stops with an actionable non-success outcome.
 ## Assumptions
 
 - The verified-execution loop supplies authoritative acceptance and bounded rework.
-- The autonomous planner supplies versioned graph patches for missing-input and semantic replanning.
+- Main-agent-authored workflow changes supply any revised graph after missing-input or semantic replanning outcomes.
 - WorkItem generations, capability grants, semantic snapshots, artifacts, and persistence remain the authoritative workflow data.
 - A session-owned runtime can cancel every task, timer, completion waiter, persistence operation, status owner, and disposable workspace it creates.
 - A deterministic fake transport and virtual clock can exercise scheduling and recovery without live-provider variance.
@@ -130,9 +130,9 @@ Otherwise the workflow stops with an actionable non-success outcome.
 - [ ] Implement an active-task registry that tracks task and workflow generation, agent, transport, side-effect policy, read and write scopes, ownership, budget, cancellation controller, workspace, and settlement promise without storing private prompts.
 - [ ] Replace workflow batch waiting with a completion queue or bounded `Promise.race()` event loop that invokes the pure scheduler after each authoritative state change and preserves declared result ordering.
 - [ ] Pass truthful active counts, mutating counts, active scopes, ownership, transport capacity, and remaining budget into every scheduling decision, and add tests for no overcommit, no scope conflict, critical-path progress, fairness, and aggregate deadline exhaustion.
-- [ ] Define a bounded recovery matrix for transient retry, capability reroute, missing-input planner patch, stale read-only revalidation, verifier-directed rework, contract repair, unsupported guarantee, ambiguous mutation, repeated unchanged failure, and terminal stop.
+- [ ] Define a bounded recovery matrix for transient retry, capability reroute, missing-input stop, stale read-only revalidation, verifier-directed rework, contract repair, unsupported guarantee, ambiguous mutation, repeated unchanged failure, and terminal stop.
 - [ ] Implement `WorkflowRecoveryController` with aggregate retry, reroute, revision, revalidation, rework, provider-call, token or cost when available, and wall-clock ceilings; prevent model output from increasing any bound.
-- [ ] Add tests proving capability reroute cannot occur after ambiguous side effects, planner repair cannot alter completed work, verification rework uses a new generation, and repeated identical failures terminate.
+- [ ] Add tests proving capability reroute cannot occur after ambiguous side effects, missing-input stops cannot alter completed work, verification rework uses a new generation, and repeated identical failures terminate.
 - [ ] Decide the explicit persisted workflow identity and resume request surface, including compatibility, trust, project scope, branch behavior, idempotency, missing record, duplicate request, and downgrade semantics.
 - [ ] Implement serialized load, reconcile, and save so in-flight records restore as interrupted, completed evidence remains immutable, stale generations stay quarantined, and publication cannot regress to an older snapshot.
 - [ ] Implement restore classification for pending, ready, read-only interrupted, idempotent interrupted, mutating interrupted, awaiting verification, accepted, stale, invalidated, and terminal work with a default stop for uncertain mutation.

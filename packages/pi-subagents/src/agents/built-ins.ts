@@ -25,22 +25,6 @@ export const BUILT_IN_AGENTS: AgentConfig[] = [
 		].join("\n"),
 	},
 	{
-		name: "planner",
-		description: "Turns reconnaissance into a lean implementation or migration plan.",
-		tools: ["read", "grep", "find", "ls"],
-		capabilityManifest: builtInManifest(
-			["task-decomposition", "implementation-planning", "migration-planning"],
-			"read",
-		),
-		source: "built-in",
-		filePath: "built-in:planner",
-		systemPrompt: [
-			"You are a planner subagent. Produce executable, verifiable plans only.",
-			"Do not modify files. Ground the plan in the repository's actual structure.",
-			"Call out assumptions, risks, sequencing, and verification commands.",
-		].join("\n"),
-	},
-	{
 		name: "worker",
 		description: "General-purpose implementation worker with the default Pi tool set.",
 		capabilityManifest: builtInManifest(

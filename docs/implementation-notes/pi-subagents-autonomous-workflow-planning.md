@@ -1,6 +1,10 @@
 # pi-subagents autonomous workflow planning
 
-## Decision
+> Status: Superseded.
+> `subagent_auto`, the built-in `planner`, and the automation planner/compiler sources were removed.
+> This note remains as historical implementation context only; current workflow graphs are main-agent-authored through `subagent.workflow`.
+
+## Historical decision
 
 Automation is a separate `subagent_auto` tool rather than another field in `subagent`.
 

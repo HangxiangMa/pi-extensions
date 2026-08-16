@@ -66,30 +66,27 @@ test("built-in lookup is immutable when a user agent and settings override the s
 	try {
 		const agentsDir = path.join(directory, "agents");
 		mkdirSync(agentsDir, { recursive: true });
-		writeFileSync(path.join(agentsDir, "planner.md"), agentMarkdown("planner", "tools: bash"));
+		writeFileSync(path.join(agentsDir, "worker.md"), agentMarkdown("worker", "tools: bash"));
 		const discovered = discoverAgents(directory, "user", {
-			agents: { planner: { model: "custom-model", thinkingLevel: "max" } },
-		}).agents.find((agent) => agent.name === "planner");
+			agents: { worker: { model: "custom-model", thinkingLevel: "max" } },
+		}).agents.find((agent) => agent.name === "worker");
 		assert.equal(discovered?.source, "user");
 		assert.deepEqual(discovered?.tools, ["bash"]);
 		assert.equal(discovered?.model, "custom-model");
 
-		const builtIn = getBuiltInAgent("planner");
+		const builtIn = getBuiltInAgent("worker");
 		assert.equal(builtIn?.source, "built-in");
-		assert.deepEqual(builtIn?.tools, ["read", "grep", "find", "ls"]);
 		assert.equal(builtIn?.model, undefined);
 		assert.equal(builtIn?.thinkingLevel, undefined);
 		assert.equal(getBuiltInAgent("explorer")?.thinkingLevel, "low");
-		assert.equal(getBuiltInAgent("reviewer")?.thinkingLevel, undefined);
 		assert.equal(getBuiltInAgent("worker")?.thinkingLevel, undefined);
-		builtIn?.tools?.push("write");
-		assert.deepEqual(getBuiltInAgent("planner")?.tools, ["read", "grep", "find", "ls"]);
+		assert.equal(getBuiltInAgent("planner"), undefined);
 		assert.equal(getBuiltInAgent("scout"), undefined);
 		assert.equal(getBuiltInAgent("reviewer"), undefined);
 		assert.equal(getBuiltInAgent("general"), undefined);
 		assert.equal(getBuiltInAgent("general-purpose"), undefined);
 		const builtInNames = discoverAgents(directory, "project").agents.map((agent) => agent.name);
-		assert.deepEqual(builtInNames, ["explorer", "planner", "worker"]);
+		assert.deepEqual(builtInNames, ["explorer", "worker"]);
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;
