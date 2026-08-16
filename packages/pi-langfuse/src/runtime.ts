@@ -39,7 +39,9 @@ class ProductionObservation implements Observation {
 	constructor(readonly native: LangfuseObservation) {}
 
 	update(attributes: ObservationAttributes): Observation {
-		this.native.updateOtelSpanAttributes(attributes as LangfuseObservationAttributes);
+		const { sessionId, ...observationAttributes } = attributes;
+		this.native.updateOtelSpanAttributes(observationAttributes as LangfuseObservationAttributes);
+		applySessionId(this.native, sessionId);
 		return this;
 	}
 
