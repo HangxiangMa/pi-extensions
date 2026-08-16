@@ -1,11 +1,16 @@
-# 🌐 pi-webui — Current-session Web Companion for Pi
+# 🌐 pi-webui — Deprecated Current-session Web Companion for Pi
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-webui)](https://www.npmjs.com/package/@narumitw/pi-webui) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
 > [!WARNING]
-> This extension is experimental. Its browser workflow and package API may change between releases.
+> `@narumitw/pi-webui` is deprecated with no replacement, kept under `deprecated/` for reference, and no longer part of the active workspace package set.
+> To remove it from Pi:
+>
+> ```bash
+> pi uninstall npm:@narumitw/pi-webui
+> ```
 
-`@narumitw/pi-webui` adds a private, focused browser companion to the current terminal-owned [Pi Coding Agent](https://pi.dev) session. It displays Pi's semantic conversation and tool activity as they happen and can send text or sanitized images back into that same session.
+`@narumitw/pi-webui` added a private, focused browser companion to the current terminal-owned [Pi Coding Agent](https://pi.dev) session. It displayed Pi's semantic conversation and tool activity as they happened and could send text or sanitized images back into that same session.
 
 This package is intentionally different from the broader, separately maintained `@narumitw/pi-web` application. WebUI has one current-session chat page and no session manager, shell, file browser, git UI, control room, or task board.
 
@@ -21,21 +26,15 @@ This package is intentionally different from the broader, separately maintained 
 - Keeps a failed browser draft and prevents rapid duplicate submission with request IDs.
 - Uses React with Radix Primitives, Themes, Colors, and Icons for accessible controls, disclosures, overlays, adaptive color, and consistent iconography. Published browser assets are bundled locally; runtime use needs no CDN, remote service, browser storage, or automatically launched browser.
 
-## 📦 Install
+## 📦 Archived reference
+
+To inspect the deprecated package from this repository without installing it:
 
 ```bash
-pi install npm:@narumitw/pi-webui
+pi -e ./deprecated/pi-webui
 ```
 
-Try the working tree without installing:
-
-```bash
-pi -e ./packages/pi-webui
-# or
-just try webui
-```
-
-The package targets the latest Pi release.
+The package last targeted the Pi release current at archival time.
 
 ## 🚀 Usage
 
@@ -175,35 +174,34 @@ The browser page uses semantic headings, native disclosure/dialog controls, conc
 ## 🗂️ Package layout
 
 ```text
-src/index.ts         Pi package entrypoint
-src/webui.ts         extension registration and command orchestration
-src/runtime.ts       Pi lifecycle, commands, menu orchestration, event projection, and browser routing
-src/menu.ts          responsive current-state menu and read-only detail presentation
-src/settings.ts      global WebUI settings validation and atomic persistence
-src/conversation.ts  bounded transcript snapshot and ordered event replay
-src/drafts.ts        authoritative in-memory text and attachment-reference revisions
-src/attachments.ts   revisioned staged-image state, processing queue, and byte ownership
-src/sent-images.ts   opt-in bounded sanitized sent-image retention
-src/server.ts        authenticated loopback HTTP/SSE server and raw attachment protocol
-src/image-limits.ts  shared configurable defaults, ceilings, and provider constraints
-src/images.ts        bounded provider-ready image processing
-src/pi-settings.ts   effective Pi image settings reader
-src/web/ui/          React source using Radix UI and the browser protocol client
-src/web/app.js        generated, bundled browser application
-src/web/app.css       generated Radix Themes, Colors, and local presentation styles
-src/web/index.html    minimal authenticated browser shell
+deprecated/pi-webui/src/index.ts         Pi package entrypoint
+deprecated/pi-webui/src/webui.ts         extension registration and command orchestration
+deprecated/pi-webui/src/runtime.ts       Pi lifecycle, commands, menu orchestration, event projection, and browser routing
+deprecated/pi-webui/src/menu.ts          responsive current-state menu and read-only detail presentation
+deprecated/pi-webui/src/settings.ts      global WebUI settings validation and atomic persistence
+deprecated/pi-webui/src/conversation.ts  bounded transcript snapshot and ordered event replay
+deprecated/pi-webui/src/drafts.ts        authoritative in-memory text and attachment-reference revisions
+deprecated/pi-webui/src/attachments.ts   revisioned staged-image state, processing queue, and byte ownership
+deprecated/pi-webui/src/sent-images.ts   opt-in bounded sanitized sent-image retention
+deprecated/pi-webui/src/server.ts        authenticated loopback HTTP/SSE server and raw attachment protocol
+deprecated/pi-webui/src/image-limits.ts  shared configurable defaults, ceilings, and provider constraints
+deprecated/pi-webui/src/images.ts        bounded provider-ready image processing
+deprecated/pi-webui/src/pi-settings.ts   effective Pi image settings reader
+deprecated/pi-webui/src/web/ui/          React source using Radix UI and the browser protocol client
+deprecated/pi-webui/src/web/app.js        generated, bundled browser application
+deprecated/pi-webui/src/web/app.css       generated Radix Themes, Colors, and local presentation styles
+deprecated/pi-webui/src/web/index.html    minimal authenticated browser shell
 ```
 
 ## 🧪 Development
 
-From the repository root:
+From this archived package directory:
 
 ```bash
-npm --workspace @narumitw/pi-webui run build:web
-npm --workspace @narumitw/pi-webui run check
-npm test
-just try webui
-just pack webui
+npm install
+npm run build:web
+npm run check
+npm pack --dry-run
 ```
 
 Edit browser code under `src/web/ui/`, then run `build:web`; `check:web` (included in the package typecheck) rejects stale generated assets. The package preview must contain its manifest, license, README, TypeScript and browser source, and bundled static assets, but no tests, fixtures, cache, build scripts, or `node_modules`.
