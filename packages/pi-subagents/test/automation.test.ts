@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import type { SubagentSettings } from "../src/agents.js";
@@ -84,39 +87,73 @@ async function run(
 	let plannerCalls = 0;
 	let workflowCalls = 0;
 	let persistenceCalls = 0;
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-automation-agents-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	writeReviewerAgent(directory);
 	const context = createMockContext({ cwd: process.cwd(), isProjectTrusted: () => true });
-	const result = await executeAutomationRequest(
-		"auto-1",
-		{ request: requestValue },
-		new AbortController().signal,
-		undefined,
-		context.ctx,
-		{
-			getSettings: () => settings,
-			runPlanner: async () => {
-				plannerCalls++;
-				if (plannerOutput instanceof Error) throw plannerOutput;
-				return plannerOutput;
+	try {
+		const result = await executeAutomationRequest(
+			"auto-1",
+			{ request: requestValue },
+			new AbortController().signal,
+			undefined,
+			context.ctx,
+			{
+				getSettings: () => settings,
+				runPlanner: async () => {
+					plannerCalls++;
+					if (plannerOutput instanceof Error) throw plannerOutput;
+					return plannerOutput;
+				},
+				runWorkflow: async (params) => {
+					workflowCalls++;
+					return {
+						content: [{ type: "text" as const, text: `executed ${params.workflow?.tasks.length}` }],
+						details: {
+							mode: "workflow" as const,
+							agentScope: "user" as const,
+							projectAgentsDir: null,
+							results: [],
+						},
+					};
+				},
+				persistCompiled: async () => {
+					persistenceCalls++;
+				},
 			},
-			runWorkflow: async (params) => {
-				workflowCalls++;
-				return {
-					content: [{ type: "text" as const, text: `executed ${params.workflow?.tasks.length}` }],
-					details: {
-						mode: "workflow" as const,
-						agentScope: "user" as const,
-						projectAgentsDir: null,
-						results: [],
-					},
-				};
-			},
-			persistCompiled: async () => {
-				persistenceCalls++;
-			},
-		},
-		isCurrent,
+			isCurrent,
+		);
+		return { result, plannerCalls, workflowCalls, persistenceCalls };
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(directory, { recursive: true, force: true });
+	}
+}
+
+function writeReviewerAgent(directory: string): void {
+	const agentsDir = path.join(directory, "agents");
+	mkdirSync(agentsDir, { recursive: true });
+	writeFileSync(
+		path.join(agentsDir, "reviewer.md"),
+		[
+			"---",
+			"name: reviewer",
+			"description: Test review agent",
+			"tools: read,grep,find,ls",
+			"capabilityManifest:",
+			"  version: pi-subagents:capabilities:v1",
+			"  capabilities: [code-review]",
+			"  modalities: [text]",
+			"  resultFormats: [structured-v2]",
+			"  authority:",
+			"    filesystem: read",
+			"  verificationRoles: [independent-review]",
+			"---",
+			"Review independently.",
+		].join("\n"),
 	);
-	return { result, plannerCalls, workflowCalls, persistenceCalls };
 }
 
 test("objective compiles to a typed parent-owned result with zero execution workers", async () => {

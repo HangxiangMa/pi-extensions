@@ -14,7 +14,32 @@ import {
 } from "./subagents-test-helpers.js";
 
 const restoreTestEnvironment = installSubagentsTestEnvironment();
+writeReviewerAgent(process.env.PI_CODING_AGENT_DIR ?? "");
 afterAll(restoreTestEnvironment);
+
+function writeReviewerAgent(directory: string): void {
+	const agentsDir = path.join(directory, "agents");
+	mkdirSync(agentsDir, { recursive: true });
+	writeFileSync(
+		path.join(agentsDir, "reviewer.md"),
+		[
+			"---",
+			"name: reviewer",
+			"description: Test review agent",
+			"tools: read,grep,find,ls",
+			"capabilityManifest:",
+			"  version: pi-subagents:capabilities:v1",
+			"  capabilities: [code-review]",
+			"  modalities: [text]",
+			"  resultFormats: [structured-v2]",
+			"  authority:",
+			"    filesystem: read",
+			"  verificationRoles: [independent-review]",
+			"---",
+			"Review independently.",
+		].join("\n"),
+	);
+}
 
 test("workflow mode schedules dependency-ready tasks and rejects cycles before child launch", async () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-workflow-"));
