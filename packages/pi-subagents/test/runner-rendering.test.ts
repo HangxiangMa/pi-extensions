@@ -49,7 +49,7 @@ test("renderSubagentCall omits an empty optional aggregator", () => {
 	};
 	const rendered = renderSubagentCall(
 		{
-			tasks: [{ agent: "scout", task: "Inspect the implementation" }],
+			tasks: [{ agent: "explorer", task: "Inspect the implementation" }],
 			aggregator: { agent: "  ", task: "\t" },
 		},
 		identityTheme as never,

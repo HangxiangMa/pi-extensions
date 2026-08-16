@@ -3,7 +3,7 @@ import type { ManagedAgent } from "../src/registry.js";
 export function record(overrides: Partial<ManagedAgent> = {}): ManagedAgent {
 	return {
 		id: "sa_test",
-		agent: "scout",
+		agent: "explorer",
 		rootId: "sa_test",
 		depth: 0,
 		children: [],

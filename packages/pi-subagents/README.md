@@ -18,7 +18,7 @@ Use it to split independent research, planning, implementation, and review work 
 - Supports an opt-in public-SDK `in-process` stateful transport with one reusable child `AgentSession` per `agentId`.
 - Supports an opt-in persistent `rpc` transport with one isolated Pi RPC process per active retained agent and `pi-subagents:v1` lifecycle metadata.
 - Supports deterministic opt-in `auto` routing: read-only built-ins use in-process, write-capable built-ins use RPC, and custom tools use the compatibility subprocess path.
-- Supports built-in `scout`, `planner`, and `worker` agents.
+- Supports built-in `explorer`, `planner`, and `worker` agents.
 - Loads custom user agents from `~/.pi/agent/agents/*.md`.
 - Optionally loads project agents from `.pi/agents/*.md` with confirmation.
 - Provides a current-session-first `/subagents` manager, direct `settings|status|help` routes, and compatibility aliases for agent tools and retained agents.
@@ -200,7 +200,7 @@ One detached agent for broad asynchronous research that the current response doe
 
 ```json
 {
-  "agent": "scout",
+  "agent": "explorer",
   "task": "Inspect source, tests, and integration risks for the current changes. Do not edit files. Report concise findings with evidence."
 }
 ```
@@ -212,16 +212,16 @@ A blocking fan-out is reserved for output that must be synthesized before the ro
 {
   "tasks": [
     {
-      "agent": "scout",
+      "agent": "explorer",
       "task": "Research auth-related source files. Report paths and open questions. Do not edit files."
     },
     {
-      "agent": "scout",
+      "agent": "explorer",
       "task": "Research auth-related tests. Report coverage gaps. Do not edit files."
     }
   ],
   "aggregator": {
-    "agent": "scout",
+    "agent": "explorer",
     "task": "Merge these findings into a concise implementation-risk summary. Use {previous}."
   }
 }
@@ -320,7 +320,7 @@ The schema rejects fields that do not belong to the selected action. Explicit `p
 
 ```json
 {
-  "agent": "scout",
+  "agent": "explorer",
   "task": "Inspect the authentication changes and report correctness and security findings with paths.",
   "thinkingLevel": "high"
 }
@@ -360,7 +360,7 @@ Run one read-only reconnaissance agent:
 
 ```json
 {
-  "agent": "scout",
+  "agent": "explorer",
   "task": "Find the statusline extension entry points"
 }
 ```
@@ -373,13 +373,13 @@ Run multiple agents in parallel with a shared thinking level and one per-task ov
 {
   "tasks": [
     {
-      "agent": "scout",
+      "agent": "explorer",
       "task": "Map package metadata files",
       "timeoutMs": 30000,
       "thinkingLevel": "low"
     },
     {
-      "agent": "scout",
+      "agent": "explorer",
       "task": "Inspect TypeScript config consistency"
     }
   ],
@@ -397,11 +397,11 @@ Run parallel workers, then aggregate their results:
 ```json
 {
   "tasks": [
-    { "agent": "scout", "task": "Find auth-related code" },
-    { "agent": "scout", "task": "Find auth-related tests" }
+    { "agent": "explorer", "task": "Find auth-related code" },
+    { "agent": "explorer", "task": "Find auth-related tests" }
   ],
   "aggregator": {
-    "agent": "scout",
+    "agent": "explorer",
     "task": "Merge, dedupe, and verify these findings. Use {previous}."
   }
 }
@@ -412,7 +412,7 @@ Run a chain where each step receives the previous output:
 ```json
 {
   "chain": [
-    { "agent": "scout", "task": "Find subagent-related code" },
+    { "agent": "explorer", "task": "Find subagent-related code" },
     {
       "agent": "planner",
       "task": "Using this context, plan the extension: {previous}"
@@ -431,10 +431,10 @@ Run an evidence-preserving panel:
     "task": "Review the authentication change for correctness and regressions.",
     "context": "Inspect the current repository snapshot and existing test evidence.",
     "reviewers": [
-      { "id": "correctness", "agent": "scout", "focus": "Control flow and edge cases" },
-      { "id": "tests", "agent": "scout", "focus": "Coverage and regression risk" }
+      { "id": "correctness", "agent": "explorer", "focus": "Control flow and edge cases" },
+      { "id": "tests", "agent": "explorer", "focus": "Coverage and regression risk" }
     ],
-    "synthesizer": { "agent": "scout" },
+    "synthesizer": { "agent": "explorer" },
     "minValidReviews": 2
   },
   "totalTimeoutMs": 120000
@@ -463,14 +463,14 @@ Run an explicit dependency workflow:
     "tasks": [
       {
         "id": "inventory",
-        "agent": "scout",
+        "agent": "explorer",
         "task": "Produce the auth inventory artifact.",
         "resultFormat": "structured-v2",
         "readPaths": ["src/auth"]
       },
       {
         "id": "review",
-        "agent": "scout",
+        "agent": "explorer",
         "task": "Inspect the inventory and report verification evidence.",
         "dependsOn": ["inventory"],
         "inputArtifacts": ["auth-inventory"],
@@ -740,7 +740,7 @@ A spawn can request a thinking level explicitly:
 
 ```json
 {
-  "agent": "scout",
+  "agent": "explorer",
   "task": "Analyze the cross-package concurrency failure and identify the safest fix",
   "thinkingLevel": "high"
 }
@@ -833,14 +833,14 @@ Built-in agents are available without setup and can be overridden by user or pro
 
 | Agent | Purpose | Tools |
 | --- | --- | --- |
-| `scout` | Read-only codebase reconnaissance. | `read`, `grep`, `find`, `ls`, `bash` |
+| `explorer` | Read-only codebase exploration for specific questions. | `read`, `grep`, `find`, `ls`, `bash` |
 | `planner` | Grounded implementation plans. | `read`, `grep`, `find`, `ls` |
 | `worker` | General-purpose implementation. | Pi default tools |
 
 Review-specific delegation should use a custom user or project agent when needed.
 
 Built-in agents inherit the active/default Pi model instead of forcing a provider-specific model alias, which keeps every transport usable across different Pi setups.
-The built-in `scout` defaults to `low` thinking for bounded reconnaissance.
+The built-in `explorer` defaults to `low` thinking for bounded exploration.
 `planner` and `worker` inherit thinking unless a caller, frontmatter, or per-agent setting selects one.
 
 ## ⚙️ Configure agent tools
@@ -854,6 +854,7 @@ tool names and availability metadata; Save and Discard remain pinned below the m
 settings stored in `~/.pi/agent/pi-subagents.json` and affect future sessions.
 
 Compatibility: a valid legacy `pi-subagents-config.json` remains readable with a warning and is never modified automatically; rename it to `pi-subagents.json`. The first subsequent settings save writes the canonical file. If both files exist, the new filename takes precedence.
+A saved `agents.scout` override from earlier releases applies to the renamed built-in `explorer` only when no explicit `agents.explorer` override exists and no custom `scout` agent is available.
 
 - Select an agent, then press Enter or Space to toggle tools.
 - Choose **Save changes** to write the draft, choose **Discard draft** to abandon it, or press Esc to

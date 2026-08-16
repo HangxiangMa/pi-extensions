@@ -52,13 +52,13 @@ test("shared-workspace write classification and follow-up guards are conservativ
 test("stateful agent lines escape terminal controls from retained agent data", () => {
 	const line = formatStatefulAgentLine(
 		record({
-			agent: "scout\u001b]8;;https://example.com\u0007linked",
+			agent: "explorer\u001b]8;;https://example.com\u0007linked",
 			currentTask: "first line\nsecond line\u009b31m",
 		}),
 	);
 	// biome-ignore lint/suspicious/noControlCharactersInRegex: Verify terminal-control escaping.
 	assert.doesNotMatch(line, /[\u0000-\u001f\u007f-\u009f]/u);
-	assert.match(line, /scout.*linked/);
+	assert.match(line, /explorer.*linked/);
 	assert.match(line, /first line second line/);
 });
 
@@ -91,7 +91,7 @@ test("selected context entries imply all mode only when context mode is omitted"
 });
 
 test("stateful subprocess thinking uses spawn override before the agent default", () => {
-	const agents = [{ name: "scout", thinkingLevel: "low" as const }, { name: "reviewer" }];
+	const agents = [{ name: "explorer", thinkingLevel: "low" as const }, { name: "reviewer" }];
 	assert.equal(
 		resolveStatefulSubprocessThinkingLevel(agents, record({ thinkingLevel: "high" })),
 		"high",

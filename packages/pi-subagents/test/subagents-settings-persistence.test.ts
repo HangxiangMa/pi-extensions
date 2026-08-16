@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { discoverAgents } from "../src/agents.js";
 import { consumeSubagentSettingsNotice } from "../src/settings.js";
 import subagents, {
 	inspectCompletionDeliverySettings,
@@ -38,7 +39,7 @@ test("subagent settings normalize known override fields only", () => {
 			blocking: { enabled: false },
 			stateful: { enabled: true },
 			agents: {
-				scout: { tools: ["read"], model: null, timeoutMs: 1, thinkingLevel: "medium" },
+				explorer: { tools: ["read"], model: null, timeoutMs: 1, thinkingLevel: "medium" },
 				clearThinking: { thinkingLevel: null },
 				bad: { tools: [1] },
 				badThinking: { thinkingLevel: "huge" },
@@ -47,7 +48,7 @@ test("subagent settings normalize known override fields only", () => {
 		}),
 		{
 			agents: {
-				scout: { tools: ["read"], model: null, timeoutMs: 1, thinkingLevel: "medium" },
+				explorer: { tools: ["read"], model: null, timeoutMs: 1, thinkingLevel: "medium" },
 				clearThinking: { thinkingLevel: null },
 			},
 			blocking: { enabled: false },
@@ -57,6 +58,71 @@ test("subagent settings normalize known override fields only", () => {
 	assert.equal(normalizeSubagentSettings({ blocking: { enabled: "no" } }), undefined);
 	assert.equal(normalizeSubagentSettings({ blocking: false }), undefined);
 	assert.equal(normalizeSubagentSettings({ agents: [] }), undefined);
+});
+
+test("legacy scout agent overrides apply to explorer without overriding conflicts", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-scout-settings-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = directory;
+	try {
+		const settingsPath = path.join(directory, "pi-subagents.json");
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({
+				agents: {
+					scout: {
+						tools: ["read"],
+						model: "legacy-model",
+						thinkingLevel: "medium",
+						timeoutMs: 1234,
+					},
+				},
+			}),
+		);
+
+		const migrated = discoverAgents(directory, "user", readSubagentSettings()).agents.find(
+			(agent) => agent.name === "explorer",
+		);
+		assert.deepEqual(migrated?.tools, ["read"]);
+		assert.equal(migrated?.model, "legacy-model");
+		assert.equal(migrated?.thinkingLevel, "medium");
+		assert.equal(migrated?.timeoutMs, 1234);
+
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({
+				agents: {
+					explorer: { tools: ["grep"] },
+					scout: { tools: ["read"] },
+				},
+			}),
+		);
+		const explicit = discoverAgents(directory, "user", readSubagentSettings()).agents.find(
+			(agent) => agent.name === "explorer",
+		);
+		assert.deepEqual(explicit?.tools, ["grep"]);
+
+		const agentsDir = path.join(directory, "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			path.join(agentsDir, "scout.md"),
+			"---\nname: scout\ndescription: Custom scout\ntools: bash\n---\nCustom scout.",
+		);
+		writeFileSync(settingsPath, JSON.stringify({ agents: { scout: { tools: ["read"] } } }));
+		const withCustomScout = discoverAgents(directory, "user", readSubagentSettings()).agents;
+		assert.deepEqual(withCustomScout.find((agent) => agent.name === "scout")?.tools, ["read"]);
+		assert.deepEqual(withCustomScout.find((agent) => agent.name === "explorer")?.tools, [
+			"read",
+			"grep",
+			"find",
+			"ls",
+			"bash",
+		]);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		rmSync(directory, { recursive: true, force: true });
+	}
 });
 
 test("session start re-reads settings before reporting warnings", async () => {
@@ -154,7 +220,7 @@ test("subagent settings read legacy files and save to the canonical package file
 		writeFileSync(
 			legacyPath,
 			JSON.stringify({
-				agents: { scout: { tools: ["read"] } },
+				agents: { explorer: { tools: ["read"] } },
 				blocking: { enabled: false },
 				stateful: { completionDelivery: "auto-resume" },
 				futureOption: true,
@@ -174,7 +240,7 @@ test("subagent settings read legacy files and save to the canonical package file
 		subagents(migrationMock.pi);
 		assert.equal(existsSync(canonicalPath), false);
 		assert.deepEqual(JSON.parse(readFileSync(legacyPath, "utf8")), {
-			agents: { scout: { tools: ["read"] } },
+			agents: { explorer: { tools: ["read"] } },
 			blocking: { enabled: false },
 			stateful: { completionDelivery: "auto-resume" },
 			futureOption: true,
@@ -185,9 +251,9 @@ test("subagent settings read legacy files and save to the canonical package file
 		}
 		assert.match(migrationContext.notifications[0]?.message ?? "", /using legacy/i);
 
-		writeFileSync(legacyPath, JSON.stringify({ agents: { scout: { tools: ["bash"] } } }));
-		writeFileSync(canonicalPath, JSON.stringify({ agents: { scout: { tools: ["read"] } } }));
-		assert.deepEqual(readSubagentSettings(), { agents: { scout: { tools: ["read"] } } });
+		writeFileSync(legacyPath, JSON.stringify({ agents: { explorer: { tools: ["bash"] } } }));
+		writeFileSync(canonicalPath, JSON.stringify({ agents: { explorer: { tools: ["read"] } } }));
+		assert.deepEqual(readSubagentSettings(), { agents: { explorer: { tools: ["read"] } } });
 		assert.deepEqual(inspectDelegationWorkflowSettings(), {
 			path: canonicalPath,
 			value: "all",
@@ -202,17 +268,17 @@ test("subagent settings read legacy files and save to the canonical package file
 		assert.match(inspectDelegationWorkflowSettings().error ?? "", /JSON/i);
 		assert.equal(readFileSync(legacyPath, "utf8").includes("bash"), true);
 		unlinkSync(legacyPath);
-		writeFileSync(canonicalPath, JSON.stringify({ agents: { scout: { tools: ["read"] } } }));
-		assert.deepEqual(readSubagentSettings(), { agents: { scout: { tools: ["read"] } } });
+		writeFileSync(canonicalPath, JSON.stringify({ agents: { explorer: { tools: ["read"] } } }));
+		assert.deepEqual(readSubagentSettings(), { agents: { explorer: { tools: ["read"] } } });
 		assert.equal(consumeSubagentSettingsNotice(), undefined);
 		unlinkSync(canonicalPath);
 		writeFileSync(legacyPath, "invalid");
 		assert.equal(readSubagentSettings(), undefined);
 		assert.equal(existsSync(canonicalPath), false);
 
-		writeFileSync(legacyPath, JSON.stringify({ agents: { scout: { tools: ["read"] } } }));
+		writeFileSync(legacyPath, JSON.stringify({ agents: { explorer: { tools: ["read"] } } }));
 		symlinkSync("missing-target", canonicalPath);
-		assert.deepEqual(readSubagentSettings(), { agents: { scout: { tools: ["read"] } } });
+		assert.deepEqual(readSubagentSettings(), { agents: { explorer: { tools: ["read"] } } });
 		assert.equal(existsSync(legacyPath), true);
 
 		saveSubagentConfig({ stateful: { enabled: false } });
@@ -354,7 +420,7 @@ test("legacy-seeded updates preserve canonical settings created before publicati
 		["delegation workflow", () => updateDelegationWorkflowSetting("async-only")],
 		["blocking parallel limit", () => updateBlockingMaxParallelTasksSetting(4)],
 		["detached limit", () => updateStatefulLimitSetting("maxAgents", 4)],
-		["agent tools", () => updateAgentToolsSetting("scout", ["read"])],
+		["agent tools", () => updateAgentToolsSetting("explorer", ["read"])],
 	] as const;
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	try {

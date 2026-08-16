@@ -20,7 +20,7 @@ test("AgentRegistry persists closed state even when transport release reports cl
 			},
 		},
 	);
-	const agent = await registry.spawn({ agent: "scout", task: "task", cwd: process.cwd() });
+	const agent = await registry.spawn({ agent: "explorer", task: "task", cwd: process.cwd() });
 	await registry.wait(agent.id, 100);
 	await assert.rejects(() => registry.close(agent.id), /cleanup failed/);
 	assert.equal(snapshots.at(-1)?.find((candidate) => candidate.id === agent.id)?.state, "closed");
@@ -37,10 +37,10 @@ test("AgentRegistry releases subtree transport sessions child-first and exactly 
 			released.push(agent.id);
 		},
 	});
-	const root = await registry.spawn({ agent: "scout", task: "root", cwd: process.cwd() });
+	const root = await registry.spawn({ agent: "explorer", task: "root", cwd: process.cwd() });
 	await registry.wait(root.id, 100);
 	const child = await registry.spawn({
-		agent: "scout",
+		agent: "explorer",
 		task: "child",
 		cwd: process.cwd(),
 		parentId: root.id,
@@ -57,7 +57,7 @@ test("AgentRegistry delivers unread mailbox messages to only the next follow-up 
 		delivered.push(agent.currentMailboxMessageIds ?? []);
 		return { output: "done", exitCode: 0 };
 	});
-	const agent = await registry.spawn({ agent: "scout", task: "initial", cwd: process.cwd() });
+	const agent = await registry.spawn({ agent: "explorer", task: "initial", cwd: process.cwd() });
 	await registry.wait(agent.id, 100);
 	const message = await registry.sendMessage(agent.id, "once");
 	await registry.followUp(agent.id, "first follow-up");
@@ -76,17 +76,17 @@ test("AgentRegistry preserves hierarchy and delivers bounded deduplicated mailbo
 			maxMailboxMessages: 2,
 		},
 	);
-	const root = await registry.spawn({ agent: "scout", task: "root", cwd: process.cwd() });
+	const root = await registry.spawn({ agent: "explorer", task: "root", cwd: process.cwd() });
 	await registry.wait(root.id, 100);
 	const child = await registry.spawn({
-		agent: "scout",
+		agent: "explorer",
 		task: "child",
 		cwd: process.cwd(),
 		parentId: root.id,
 	});
 	await registry.wait(child.id, 100);
 	const grandchild = await registry.spawn({
-		agent: "scout",
+		agent: "explorer",
 		task: "grandchild",
 		cwd: process.cwd(),
 		parentId: child.id,
@@ -95,7 +95,7 @@ test("AgentRegistry preserves hierarchy and delivers bounded deduplicated mailbo
 	await assert.rejects(
 		() =>
 			registry.spawn({
-				agent: "scout",
+				agent: "explorer",
 				task: "too deep",
 				cwd: process.cwd(),
 				parentId: grandchild.id,
@@ -141,10 +141,10 @@ test("AgentRegistry bounds mailbox input and reports rejected child turns to the
 		},
 		{ maxMailboxMessageBytes: 64 },
 	);
-	const root = await registry.spawn({ agent: "scout", task: "root", cwd: process.cwd() });
+	const root = await registry.spawn({ agent: "explorer", task: "root", cwd: process.cwd() });
 	await registry.wait(root.id, 100);
 	const child = await registry.spawn({
-		agent: "scout",
+		agent: "explorer",
 		task: "reject",
 		cwd: process.cwd(),
 		parentId: root.id,
@@ -160,7 +160,7 @@ test("AgentRegistry bounds mailbox input and reports rejected child turns to the
 		() => registry.sendMessage(child.id, "message", "missing"),
 		/Unknown subagent/,
 	);
-	const other = await registry.spawn({ agent: "scout", task: "other", cwd: process.cwd() });
+	const other = await registry.spawn({ agent: "explorer", task: "other", cwd: process.cwd() });
 	await registry.wait(other.id, 100);
 	await assert.rejects(
 		() => registry.sendMessage(child.id, "message", other.id),

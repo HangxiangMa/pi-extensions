@@ -71,7 +71,7 @@ test("verification policy validates one distinct direct structured verifier", ()
 			validateWorkflowVerificationGraph(
 				[
 					{ id: "implementation", agent: "worker", resultFormat: "structured-v2" },
-					{ id: "other", agent: "scout", resultFormat: "structured-v2" },
+					{ id: "other", agent: "explorer", resultFormat: "structured-v2" },
 					{
 						id: "verification",
 						agent: "reviewer",
@@ -98,7 +98,7 @@ test("verification policy validates one distinct direct structured verifier", ()
 					},
 					{
 						id: "verification-b",
-						agent: "scout",
+						agent: "explorer",
 						dependsOn: ["implementation"],
 						verifierFor: "implementation",
 						resultFormat: "structured-v2",

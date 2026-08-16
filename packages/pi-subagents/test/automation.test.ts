@@ -177,7 +177,7 @@ test("objective compiles to one capability-routed child", async () => {
 	const { result, workflowCalls } = await run(plan([task("inspect")]));
 	assert.equal(result.details.status, "executed");
 	assert.equal(result.details.childCount, 1);
-	assert.equal(result.details.compiled?.workflow.tasks[0]?.agent, "scout");
+	assert.equal(result.details.compiled?.workflow.tasks[0]?.agent, "explorer");
 	assert.equal(workflowCalls, 1);
 });
 

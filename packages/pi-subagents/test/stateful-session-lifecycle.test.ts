@@ -67,7 +67,7 @@ test("stateful worktree spawn revalidates session ownership and cleans stale wor
 		assert.ok(spawn);
 		const pending = spawn.execute(
 			"worktree",
-			{ agent: "scout", task: "inspect", workspaceMode: "worktree" },
+			{ agent: "explorer", task: "inspect", workspaceMode: "worktree" },
 			undefined,
 			undefined,
 			first.ctx,
@@ -149,7 +149,7 @@ test("stale idempotent spawn cleanup cannot delete a replacement session attempt
 			execute: (...args: unknown[]) => Promise<unknown>;
 		};
 		const spawnParams = {
-			agent: "scout",
+			agent: "explorer",
 			task: "same request",
 			workspaceMode: "worktree" as const,
 			idempotencyKey: "replacement-key",
@@ -251,7 +251,7 @@ test("stateful clear and session replacement serialize active-child cleanup befo
 		assert.ok(spawn);
 		await spawn.execute(
 			"active",
-			{ agent: "scout", task: "wait" },
+			{ agent: "explorer", task: "wait" },
 			undefined,
 			undefined,
 			first.ctx,

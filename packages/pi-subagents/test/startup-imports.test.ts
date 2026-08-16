@@ -22,7 +22,7 @@ async function emitAll(
 function managedAgent(): ManagedAgent {
 	return {
 		id: "sa_lazy",
-		agent: "scout",
+		agent: "explorer",
 		rootId: "sa_lazy",
 		depth: 0,
 		children: [],
@@ -222,19 +222,25 @@ test("blocking execution caches a successful module and retries a rejected load"
 	const context = createMockContext();
 	await assert.rejects(
 		() =>
-			tool.execute("first", { agent: "scout", task: "inspect" }, undefined, undefined, context.ctx),
+			tool.execute(
+				"first",
+				{ agent: "explorer", task: "inspect" },
+				undefined,
+				undefined,
+				context.ctx,
+			),
 		/temporary blocking loader failure/u,
 	);
 	await tool.execute(
 		"second",
-		{ agent: "scout", task: "inspect" },
+		{ agent: "explorer", task: "inspect" },
 		undefined,
 		undefined,
 		context.ctx,
 	);
 	await tool.execute(
 		"third",
-		{ agent: "scout", task: "inspect" },
+		{ agent: "explorer", task: "inspect" },
 		undefined,
 		undefined,
 		context.ctx,
@@ -274,7 +280,7 @@ test("blocking execution cancellation waits for a pending import and starts no s
 	const context = createMockContext();
 	const running = tool.execute(
 		"pending",
-		{ agent: "scout", task: "inspect" },
+		{ agent: "explorer", task: "inspect" },
 		undefined,
 		undefined,
 		context.ctx,

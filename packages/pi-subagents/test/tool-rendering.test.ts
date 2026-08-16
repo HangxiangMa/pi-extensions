@@ -444,19 +444,19 @@ test("inspect renderer summarizes every action instead of dumping collapsed JSON
 			args: { action: "list_agents", agentScope: "user" },
 			details: {
 				action: "list_agents",
-				agents: [{ name: "scout", source: "built-in", toolCount: 4, consultTools: ["read"] }],
+				agents: [{ name: "explorer", source: "built-in", toolCount: 4, consultTools: ["read"] }],
 				returned: 1,
 				omitted: 0,
 			},
-			expected: /1 agent.*scout/is,
+			expected: /1 agent.*explorer/is,
 		},
 		{
-			args: { action: "get_agent", agent: "scout" },
+			args: { action: "get_agent", agent: "explorer" },
 			details: {
 				action: "get_agent",
-				agent: { name: "scout", source: "built-in", description: "Scout files" },
+				agent: { name: "explorer", source: "built-in", description: "Explorer files" },
 			},
-			expected: /scout.*built-in.*Scout files/is,
+			expected: /explorer.*built-in.*Explorer files/is,
 		},
 		{
 			args: { action: "list_runs" },

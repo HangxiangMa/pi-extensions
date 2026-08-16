@@ -274,7 +274,7 @@ test("subagent_inspect projects safe agent metadata and gates project discovery 
 test("subagent_inspect returns metadata-only run summaries", async () => {
 	const summary: AgentRunInspectionSummary = {
 		id: "sa_one",
-		agent: "scout",
+		agent: "explorer",
 		state: "running",
 		createdAt: 1,
 		updatedAt: 2,

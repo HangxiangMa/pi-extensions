@@ -82,11 +82,11 @@ test("execution plans record deterministic admission and rotate cancellation gen
 	const plan = createExecutionPlan({
 		contract,
 		agent: {
-			name: "scout",
-			description: "scout",
+			name: "explorer",
+			description: "explorer",
 			systemPrompt: "private",
 			source: "built-in",
-			filePath: "built-in:scout",
+			filePath: "built-in:explorer",
 			capabilityManifest: {
 				version: "pi-subagents:capabilities:v1",
 				capabilities: ["repository-search"],
@@ -143,11 +143,11 @@ test("enforced execution plans narrow tools and reject unknown or unsupported gu
 	const plan = createExecutionPlan({
 		contract,
 		agent: {
-			name: "scout",
-			description: "scout",
+			name: "explorer",
+			description: "explorer",
 			systemPrompt: "private",
 			source: "built-in",
-			filePath: "built-in:scout",
+			filePath: "built-in:explorer",
 			tools: ["read", "grep", "bash"],
 			capabilityManifest: {
 				version: "pi-subagents:capabilities:v1",

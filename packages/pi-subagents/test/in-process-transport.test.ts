@@ -31,7 +31,7 @@ import { type IsolatedWorkspace, WorkspaceManager } from "../src/workspace.js";
 function managedAgent(overrides: Partial<ManagedAgent> = {}): ManagedAgent {
 	return {
 		id: "sa_test",
-		agent: "scout",
+		agent: "explorer",
 		rootId: "sa_test",
 		depth: 0,
 		children: [],
@@ -47,12 +47,12 @@ function managedAgent(overrides: Partial<ManagedAgent> = {}): ManagedAgent {
 
 function agentConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 	return {
-		name: "scout",
-		description: "test scout",
+		name: "explorer",
+		description: "test explorer",
 		tools: ["read"],
-		systemPrompt: "Scout safely.",
+		systemPrompt: "Explorer safely.",
 		source: "built-in",
-		filePath: "built-in:scout",
+		filePath: "built-in:explorer",
 		...overrides,
 	};
 }
@@ -726,7 +726,7 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 
 		child.waitForNextAbort();
 		const spawned = await execute("subagent_spawn", {
-			agent: "scout",
+			agent: "explorer",
 			task: "first",
 			thinkingLevel: "high",
 		});
@@ -916,7 +916,7 @@ test("consolidated close reports cleanup failure and remains safely repeatable",
 			}>;
 		};
 		const spawned = await execute("subagent_spawn", {
-			agent: "scout",
+			agent: "explorer",
 			task: "complete before close",
 			workspaceMode: "worktree",
 		});
@@ -984,12 +984,12 @@ test("session shutdown closes completion delivery before delayed isolated-agent 
 			}>;
 		};
 		const first = await execute("subagent_spawn", {
-			agent: "scout",
+			agent: "explorer",
 			task: "complete before shutdown",
 			workspaceMode: "worktree",
 		});
 		const second = await execute("subagent_spawn", {
-			agent: "scout",
+			agent: "explorer",
 			task: "delay shutdown cleanup",
 			workspaceMode: "worktree",
 		});

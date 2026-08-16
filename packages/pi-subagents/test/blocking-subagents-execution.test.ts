@@ -52,22 +52,22 @@ test("blocking delegation preflights every target and passes explicit saved trus
 		const tool = mock.tools.find((candidate) => candidate.name === "subagent") as SubagentTool;
 		const ctx = createMockContext({ cwd: workspace, isProjectTrusted: () => true }).ctx;
 		for (const params of [
-			{ agent: "scout", task: "single", cwd: external },
+			{ agent: "explorer", task: "single", cwd: external },
 			{
 				chain: [
-					{ agent: "scout", task: "first", cwd: workspace },
-					{ agent: "scout", task: "second", cwd: external },
+					{ agent: "explorer", task: "first", cwd: workspace },
+					{ agent: "explorer", task: "second", cwd: external },
 				],
 			},
 			{
 				tasks: [
-					{ agent: "scout", task: "first", cwd: workspace },
-					{ agent: "scout", task: "second", cwd: external },
+					{ agent: "explorer", task: "first", cwd: workspace },
+					{ agent: "explorer", task: "second", cwd: external },
 				],
 			},
 			{
-				tasks: [{ agent: "scout", task: "first", cwd: workspace }],
-				aggregator: { agent: "scout", task: "fan-in", cwd: external },
+				tasks: [{ agent: "explorer", task: "first", cwd: workspace }],
+				aggregator: { agent: "explorer", task: "fan-in", cwd: external },
 			},
 		] as Array<Record<string, unknown>>) {
 			await assert.rejects(
@@ -80,7 +80,7 @@ test("blocking delegation preflights every target and passes explicit saved trus
 		new ProjectTrustStore(agentDir).set(external, true);
 		const accepted = await tool.execute(
 			"cwd-trusted",
-			{ agent: "scout", task: "trusted", cwd: external },
+			{ agent: "explorer", task: "trusted", cwd: external },
 			undefined,
 			undefined,
 			ctx,
@@ -102,7 +102,7 @@ test("blocking delegation preflights every target and passes explicit saved trus
 		new ProjectTrustStore(agentDir).set(external, false);
 		const anywhere = await anywhereTool.execute(
 			"cwd-anywhere",
-			{ agent: "scout", task: "anywhere", cwd: external },
+			{ agent: "explorer", task: "anywhere", cwd: external },
 			undefined,
 			undefined,
 			ctx,
@@ -140,8 +140,8 @@ test("parallel execution ignores an empty optional aggregator and preserves work
 			"empty-aggregator",
 			{
 				tasks: [
-					{ agent: "scout", task: "PROOF" },
-					{ agent: "scout", task: "CALC" },
+					{ agent: "explorer", task: "PROOF" },
+					{ agent: "explorer", task: "CALC" },
 				],
 				aggregator: { agent: " ", task: "\t", thinkingLevel: "off", timeoutMs: 1 },
 			},
@@ -186,7 +186,7 @@ test("blocking totalTimeoutMs caps chains, queued parallel work, and fan-in", as
 		const earlyLimit = await tool.execute(
 			"early-limit",
 			{
-				agent: "scout",
+				agent: "explorer",
 				task: "LIMIT_EARLY",
 				timeoutMs: 5_000,
 				totalTimeoutMs: 1_000,
@@ -205,8 +205,8 @@ test("blocking totalTimeoutMs caps chains, queued parallel work, and fan-in", as
 			{
 				totalTimeoutMs: 120,
 				chain: [
-					{ agent: "scout", task: "SLOW_FIRST", timeoutMs: 5_000 },
-					{ agent: "scout", task: "SECOND_MUST_NOT_START", timeoutMs: 5_000 },
+					{ agent: "explorer", task: "SLOW_FIRST", timeoutMs: 5_000 },
+					{ agent: "explorer", task: "SECOND_MUST_NOT_START", timeoutMs: 5_000 },
 				],
 			},
 			new AbortController().signal,
@@ -223,7 +223,7 @@ test("blocking totalTimeoutMs caps chains, queued parallel work, and fan-in", as
 			{
 				totalTimeoutMs: 250,
 				tasks: Array.from({ length: 5 }, (_, index) => ({
-					agent: "scout",
+					agent: "explorer",
 					task: `SLOW_${index}`,
 					timeoutMs: 5_000,
 				})),
@@ -241,8 +241,8 @@ test("blocking totalTimeoutMs caps chains, queued parallel work, and fan-in", as
 			"total-fan-in",
 			{
 				totalTimeoutMs: 120,
-				tasks: [{ agent: "scout", task: "SLOW_FANOUT", timeoutMs: 5_000 }],
-				aggregator: { agent: "scout", task: "AGGREGATOR_MUST_NOT_START", timeoutMs: 5_000 },
+				tasks: [{ agent: "explorer", task: "SLOW_FANOUT", timeoutMs: 5_000 }],
+				aggregator: { agent: "explorer", task: "AGGREGATOR_MUST_NOT_START", timeoutMs: 5_000 },
 			},
 			new AbortController().signal,
 			undefined,
@@ -333,8 +333,8 @@ test("parallel updates keep failed fan-out pending while fan-in starts", async (
 		const result = await tool.execute(
 			"pending-fan-in",
 			{
-				tasks: [{ agent: "scout", task: "RUN_FANOUT_FAILURE" }],
-				aggregator: { agent: "scout", task: "RUN_AGGREGATOR" },
+				tasks: [{ agent: "explorer", task: "RUN_FANOUT_FAILURE" }],
+				aggregator: { agent: "explorer", task: "RUN_AGGREGATOR" },
 			},
 			signal,
 			(update: unknown) => updates.push(update as (typeof updates)[number]),
@@ -380,8 +380,8 @@ test("parallel summaries classify provider errors and retain partial output", as
 			"parallel-errors",
 			{
 				tasks: [
-					{ agent: "scout", task: "provider failure" },
-					{ agent: "scout", task: "success" },
+					{ agent: "explorer", task: "provider failure" },
+					{ agent: "explorer", task: "success" },
 				],
 			},
 			signal,
@@ -390,9 +390,9 @@ test("parallel summaries classify provider errors and retain partial output", as
 		);
 		const text = result.content?.[0]?.text ?? "";
 		assert.match(text, /Parallel: 1\/2 succeeded/);
-		assert.match(text, /\[scout\] failed: PROVIDER_FAILED/);
+		assert.match(text, /\[explorer\] failed: PROVIDER_FAILED/);
 		assert.match(text, /Partial output:\nPARTIAL/);
-		assert.match(text, /\[scout\] completed: DONE/);
+		assert.match(text, /\[explorer\] completed: DONE/);
 	} finally {
 		restorePiPackage();
 		rmSync(dir, { recursive: true, force: true });

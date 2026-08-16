@@ -11,7 +11,7 @@ import { buildStatefulTurnPrompt, resolveStatefulTurnTimeout } from "../src/stat
 function record(overrides: Partial<ManagedAgent> = {}): ManagedAgent {
 	return {
 		id: "sa_test",
-		agent: "scout",
+		agent: "explorer",
 		rootId: "sa_test",
 		depth: 0,
 		children: [],

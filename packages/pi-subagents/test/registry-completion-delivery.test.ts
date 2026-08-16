@@ -38,7 +38,7 @@ test("AgentRegistry emits one detached completion event for every settled turn",
 			},
 		},
 	);
-	const agent = await registry.spawn({ agent: "scout", task: "first", cwd: process.cwd() });
+	const agent = await registry.spawn({ agent: "explorer", task: "first", cwd: process.cwd() });
 	assert.deepEqual(completions, []);
 	settlers.shift()?.({ output: "first result", exitCode: 0 });
 	await registry.wait(agent.id, 100);
@@ -92,7 +92,7 @@ test("AgentRegistry retries terminal persistence before resolving or notifying",
 			},
 		},
 	);
-	const agent = await registry.spawn({ agent: "scout", task: "persist", cwd: process.cwd() });
+	const agent = await registry.spawn({ agent: "explorer", task: "persist", cwd: process.cwd() });
 	settleTurn({ output: "done", exitCode: 0 });
 	let waitResolved = false;
 	const waiting = registry.wait(agent.id, 1_000).then((result) => {
@@ -117,12 +117,12 @@ test("detached completion messages retain bounded task, partial output, and erro
 		runId: "run:test:1",
 		generation: 1,
 		createdAt: 1,
-		agent: record({ agent: "scout\nspoofed", state: "failed" }),
+		agent: record({ agent: "explorer\nspoofed", state: "failed" }),
 		task: `inspect <private>task secret</private> ${"界".repeat(200)}`,
 		output: `partial output <private>output secret</private> ${"x".repeat(4_000)}`,
 		error: `provider failed ${"e".repeat(4_000)}`,
 	});
-	assert.match(content, /Agent: scout spoofed/);
+	assert.match(content, /Agent: explorer spoofed/);
 	assert.match(content, /Task: inspect/);
 	assert.match(content, /Error:\nprovider failed/);
 	assert.match(content, /Payload:\npartial output/);
@@ -136,7 +136,7 @@ test("AgentRegistry keeps detached lifecycle stable when completion delivery fai
 			throw new Error("stale parent session");
 		},
 	});
-	const agent = await registry.spawn({ agent: "scout", task: "task", cwd: process.cwd() });
+	const agent = await registry.spawn({ agent: "explorer", task: "task", cwd: process.cwd() });
 	const settled = await registry.wait(agent.id, 100);
 	assert.equal(settled.agent.state, "completed");
 	assert.equal(settled.agent.history.at(-1)?.output, "done");
@@ -162,8 +162,8 @@ test("AgentRegistry emits a detached completion when queued work is interrupted"
 			},
 		},
 	);
-	const active = await registry.spawn({ agent: "scout", task: "active", cwd: process.cwd() });
-	const queued = await registry.spawn({ agent: "scout", task: "queued", cwd: process.cwd() });
+	const active = await registry.spawn({ agent: "explorer", task: "active", cwd: process.cwd() });
+	const queued = await registry.spawn({ agent: "explorer", task: "queued", cwd: process.cwd() });
 	assert.equal(registry.get(queued.id)?.state, "starting");
 	await registry.interrupt(queued.id);
 	await new Promise((resolve) => setImmediate(resolve));

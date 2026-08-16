@@ -160,7 +160,7 @@ test("blocking parallel calls honor the configured worker limit", async () => {
 					"parallel-limit",
 					{
 						tasks: [
-							{ agent: "scout", task: "first" },
+							{ agent: "explorer", task: "first" },
 							{
 								agent: "reviewer",
 								task: "second",

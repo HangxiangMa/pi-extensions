@@ -49,11 +49,11 @@ test("subagent formatting and set helpers are deterministic", () => {
 });
 
 test("subagent thinking levels resolve by local, top-level, then agent default", () => {
-	const agents = [{ name: "scout", thinkingLevel: "low" }, { name: "reviewer" }] as const;
+	const agents = [{ name: "explorer", thinkingLevel: "low" }, { name: "reviewer" }] as const;
 
-	assert.equal(resolveSubagentThinkingLevel(agents, "scout", "medium", "high"), "high");
-	assert.equal(resolveSubagentThinkingLevel(agents, "scout", "medium"), "medium");
-	assert.equal(resolveSubagentThinkingLevel(agents, "scout"), "low");
+	assert.equal(resolveSubagentThinkingLevel(agents, "explorer", "medium", "high"), "high");
+	assert.equal(resolveSubagentThinkingLevel(agents, "explorer", "medium"), "medium");
+	assert.equal(resolveSubagentThinkingLevel(agents, "explorer"), "low");
 	assert.equal(resolveSubagentThinkingLevel(agents, "reviewer"), undefined);
 	assert.equal(resolveSubagentThinkingLevel(agents, "missing", "minimal"), "minimal");
 });

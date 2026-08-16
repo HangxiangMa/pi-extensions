@@ -387,7 +387,7 @@ test("detached-limit lowering cancellation and stale previews leave settings unc
 		const agents: ManagedAgent[] = [
 			{
 				id: "older",
-				agent: "scout",
+				agent: "explorer",
 				rootId: "older",
 				depth: 0,
 				children: [],
@@ -505,7 +505,7 @@ test("detached-limit previews depth and stored-record reductions", async () => {
 	try {
 		const root: ManagedAgent = {
 			id: "root",
-			agent: "scout",
+			agent: "explorer",
 			rootId: "root",
 			depth: 0,
 			children: ["child"],
@@ -799,14 +799,14 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 				completionDelivery: "auto-resume",
 			},
 		});
-		updateAgentToolsSetting("scout", ["read"]);
+		updateAgentToolsSetting("explorer", ["read"]);
 		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
 			futureOption: true,
 			stateful: {
 				futureStatefulOption: "keep",
 				completionDelivery: "auto-resume",
 			},
-			agents: { scout: { tools: ["read"] } },
+			agents: { explorer: { tools: ["read"] } },
 		});
 		await command.handler("status", context.ctx);
 		assert.match(
@@ -823,7 +823,7 @@ test("subagent settings UI preserves unknown JSON and applies completion deliver
 				futureStatefulOption: "keep",
 				completionDelivery: "auto-resume",
 			},
-			agents: { scout: { tools: ["read"] } },
+			agents: { explorer: { tools: ["read"] } },
 			consult: { resources: "none" },
 		});
 		await command.handler("status", context.ctx);

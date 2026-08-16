@@ -46,11 +46,11 @@ test("per-agent execution screens expose defaults without profile presets", asyn
 		assert.match(
 			JSON.stringify(
 				executionAgentScreen({
-					name: "scout",
-					description: "scout",
+					name: "explorer",
+					description: "explorer",
 					systemPrompt: "",
 					source: "built-in",
-					filePath: "built-in:scout",
+					filePath: "built-in:explorer",
 					thinkingLevel: "low",
 				}),
 			),
@@ -63,11 +63,11 @@ test("per-agent execution screens expose defaults without profile presets", asyn
 			JSON.stringify(
 				executionModelScreen(
 					{
-						name: "scout",
-						description: "scout",
+						name: "explorer",
+						description: "explorer",
 						systemPrompt: "",
 						source: "built-in",
-						filePath: "built-in:scout",
+						filePath: "built-in:explorer",
 					},
 					catalogContext.ctx,
 				),
@@ -81,25 +81,25 @@ test("per-agent execution controls validate, preserve tools, and reset inheritan
 	await withAgentDir(async (directory) => {
 		const context = createMockContext();
 		const agent = {
-			name: "scout",
-			description: "scout",
+			name: "explorer",
+			description: "explorer",
 			tools: ["read"],
 			systemPrompt: "",
 			source: "built-in" as const,
-			filePath: "built-in:scout",
+			filePath: "built-in:explorer",
 		};
-		updateAgentSettingsPatch({ scout: { tools: ["read"] } });
+		updateAgentSettingsPatch({ explorer: { tools: ["read"] } });
 		assert.equal(applyAgentThinking(agent, "high", context.ctx).kind, "back");
 		assert.equal(applyAgentModel(agent, "provider/model", context.ctx).kind, "back");
 		assert.equal(applyAgentTimeout(agent, "1234", context.ctx).kind, "back");
 		assert.equal(applyAgentTimeout(agent, "0", context.ctx).kind, "rejected");
 		let saved = JSON.parse(readFileSync(path.join(directory, "pi-subagents.json"), "utf8"));
-		assert.equal(saved.agents.scout.thinkingLevel, "high");
-		assert.equal(saved.agents.scout.model, "provider/model");
-		assert.equal(saved.agents.scout.timeoutMs, 1234);
+		assert.equal(saved.agents.explorer.thinkingLevel, "high");
+		assert.equal(saved.agents.explorer.model, "provider/model");
+		assert.equal(saved.agents.explorer.timeoutMs, 1234);
 		assert.equal(resetAgentExecution(agent, context.ctx).kind, "back");
 		saved = JSON.parse(readFileSync(path.join(directory, "pi-subagents.json"), "utf8"));
-		assert.deepEqual(saved.agents.scout, { tools: ["read"] });
+		assert.deepEqual(saved.agents.explorer, { tools: ["read"] });
 	});
 });
 
