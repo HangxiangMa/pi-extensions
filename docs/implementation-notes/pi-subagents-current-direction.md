@@ -13,7 +13,7 @@ The built-in catalog is intentionally small:
 | Built-in | Purpose | Default tools |
 | --- | --- | --- |
 | `explorer` | Bounded read-only repository exploration with cited paths and evidence. | `read`, `grep`, `find`, `ls` |
-| `worker` | Implementation, command execution, fixes, and other write-capable work. | Pi default tools |
+| `worker` | Write-capable parallel implementation, command execution, and fixes. | Pi default tools |
 
 Removed built-ins and tools are not part of the active surface:
 
@@ -25,11 +25,21 @@ Removed built-ins and tools are not part of the active surface:
 
 ## Delegation rules
 
-Use no subagent for simple, latency-sensitive, conversational, or tightly coupled work that the main agent can do directly.
+Use no subagent for simple, latency-sensitive, conversational, tightly coupled, or single-lane implementation work that the main agent can do directly.
 
 Use `explorer` when a bounded read-only search can save main-context space or run independently.
 
-Use `worker` when the delegated task may run commands, edit files, or perform implementation work.
+Keep overall planning, immediate critical-path work, integration, final verification, and the final answer in the main agent.
+
+A worker may directly implement a bounded slice with clear ownership when it can run independently beside useful non-overlapping main-agent work.
+
+Use one async `worker` only when the main agent has named that local work to continue immediately and the worker result has a supported delivery and integration path.
+
+If the main agent has no such local work, it should implement directly instead of spawning one worker.
+
+Use two or more workers only for disjoint implementation slices whose parallel progress justifies coordination, and keep integration ownership in the main agent.
+
+A single worker without concurrent main-agent work remains an explicit escape hatch for a user-requested specialist model, tool profile, or isolation boundary rather than the ordinary implementation path.
 
 Use custom user or project agents for specialist review, verification, or shell-capable read-mostly work.
 
@@ -43,9 +53,13 @@ Use custom verifier agents only when independent child verification is explicitl
 
 The current transition target is async-first.
 
-`subagent_spawn` is preferred for independent non-critical-path work.
+`subagent_spawn` is preferred only when detached execution creates real parallelism rather than moving the main agent's only useful task into a child.
 
-Blocking `subagent` remains available for synchronous output that the main agent needs before its next action.
+After spawning one worker, the main agent should immediately continue the named non-overlapping work instead of only announcing the spawn, waiting, polling, or ending the turn.
+
+Final-answer-dependent detached work needs a supported synthesis path such as opt-in `auto-resume`; default `next-turn` delivery remains appropriate only when the current response does not depend on the result.
+
+Blocking `subagent` remains available for intentional synchronous output, but one ordinary implementation worker should not replace work the main agent could perform directly.
 
 `subagent_consult` remains the synchronous read-only exception while its use case is still supported.
 
@@ -53,13 +67,13 @@ Future async-only behavior needs a separate approved migration decision.
 
 ## Active follow-ups
 
-- [`2026-08-17_pi-subagents-async-first-tool-surface-plan.md`](../plans/2026-08-17_pi-subagents-async-first-tool-surface-plan.md) defines the async-first and tool-surface migration questions.
-- [`2026-08-17_pi-subagents-main-agent-led-delegation-guidance-plan.md`](../plans/2026-08-17_pi-subagents-main-agent-led-delegation-guidance-plan.md) defines prompt and documentation cleanup for main-agent-led delegation.
+- [`2026-08-17_pi-subagents-async-first-tool-surface-plan.md`](../plans/2026-08-17_pi-subagents-async-first-tool-surface-plan.md) consumes the completed main-agent-led rubric and owns later async-first tool-surface migration decisions.
 - [`2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md`](../plans/2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md) remains the owner for rolling execution of caller-authored workflows.
 - [`2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md`](../plans/2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) remains the owner for matched evidence before any adaptive/default routing change.
 
 ## Current reference notes
 
+- The [completed main-agent-led guidance plan](../plans/archived/2026-08-17_pi-subagents-main-agent-led-delegation-guidance-plan.md) records the accepted delegation rubric and verification evidence.
 - [`pi-subagents-capability-matrix.md`](pi-subagents-capability-matrix.md) records maintained capability boundaries.
 - [`pi-subagents-stateful-runtime.md`](pi-subagents-stateful-runtime.md) records detached lifecycle and transport behavior.
 - [`pi-subagents-rpc-v1.md`](pi-subagents-rpc-v1.md) records the RPC transport contract.

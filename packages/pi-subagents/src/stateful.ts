@@ -819,11 +819,11 @@ export function registerStatefulSubagents(
 				resolvePending?.(agent);
 				const deliveryNote =
 					completionDelivery === "auto-resume"
-						? "If no useful local work remains, briefly tell the user what was launched and end the response; auto-resume will request synthesis after completion."
-						: "End the response without the result only when the current response does not depend on it; next-turn delivery will not wake an idle root.";
+						? "Auto-resume will request synthesis after completion."
+						: "The current response must not depend on the result because next-turn delivery will not wake an idle root.";
 				return result(
 					agent,
-					`Spawned ${agent.agent} as ${agent.id}. Do useful non-overlapping work immediately. ${deliveryNote} Do not poll for progress.`,
+					`Spawned ${agent.agent} as ${agent.id}. Continue the identified non-overlapping local work immediately; do not merely announce the spawn or end while useful local work remains. Only an explicit user-requested specialist model, tool-profile, or isolation exception may lack concurrent local work. ${deliveryNote} Do not poll for progress.`,
 				);
 			} catch (error) {
 				rejectPending?.(error);

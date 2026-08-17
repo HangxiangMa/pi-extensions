@@ -1,5 +1,7 @@
 # Research on AI/LLM Subagent Multi-Agent Orchestration Methods
 
+> **Historical research input:** Role names and automation described here summarize external systems and do not define current `pi-subagents` built-ins or routing; see the [current direction](../implementation-notes/pi-subagents-current-direction.md).
+
 ## Abstract
 
 This research reviews five representative papers from 2024–2025 that are directly relevant to AI/LLM subagent multi-agent orchestration.

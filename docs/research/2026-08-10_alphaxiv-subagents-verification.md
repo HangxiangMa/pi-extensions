@@ -1,5 +1,7 @@
 # AI/LLM Subagent Verification and Multi-Agent Methods
 
+> **Historical research input:** Role names and automation described here summarize external systems and do not define current `pi-subagents` built-ins or routing; see the [current direction](../implementation-notes/pi-subagents-current-direction.md).
+
 ## Executive conclusion
 
 Multi-agent workflows sometimes outperform one-shot single-agent generation, but the evidence does not support a general rule that more agents are better.

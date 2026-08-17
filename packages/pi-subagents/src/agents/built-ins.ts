@@ -26,7 +26,7 @@ export const BUILT_IN_AGENTS: AgentConfig[] = [
 	},
 	{
 		name: "worker",
-		description: "General-purpose implementation worker with the default Pi tool set.",
+		description: "Bounded implementation and command-execution worker with clear ownership.",
 		capabilityManifest: builtInManifest(
 			["implementation", "command-execution", "repository-modification"],
 			"write",
@@ -63,8 +63,9 @@ function builtInManifest(
 
 function workerSystemPrompt(): string {
 	return [
-		"You are a focused worker subagent running in an isolated Pi process.",
-		"Complete the delegated task directly. Keep scope tight and avoid unrelated changes.",
-		"When done, summarize files changed, commands run, and any remaining risks.",
+		"You are a focused worker subagent running in an isolated Pi child context.",
+		"Complete only the bounded delegated implementation slice and respect its assigned file or responsibility ownership.",
+		"Keep scope tight, avoid unrelated changes, and do not overwrite concurrent work outside your ownership.",
+		"The main agent owns integration and final verification; report changed files, commands run, and remaining risks for that handoff.",
 	].join("\n");
 }

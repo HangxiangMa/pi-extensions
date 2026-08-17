@@ -4,7 +4,9 @@
 
 `@narumitw/pi-subagents` is a native [Pi coding agent](https://pi.dev) extension for delegating work to specialized agents. By default, it exposes seven capability-specific tools: blocking batches, four detached lifecycle tools, side-effect-free inspection, and synchronous read-only consultation. Users can keep every delegation method, choose async-only delegation, retain only blocking delegation, or disable delegation while keeping inspection available.
 
-Use it to split independent research, planning, implementation, and review work across focused workers. Under the default next-turn delivery policy, background delegation is for work the current response does not depend on. Opt-in auto-resume also supports final-answer-dependent background work by requesting a synthesis turn after completion.
+The main agent decides whether to delegate and retains overall planning, immediate critical-path work, integration, final verification, and the final answer.
+Use `explorer` for bounded read-only evidence and `worker` for a bounded implementation slice with clear ownership when delegation creates real parallelism.
+One ordinary async worker requires named non-overlapping main-agent work that starts immediately after spawn plus a supported delivery and integration path.
 
 ## ✨ Features
 
@@ -96,13 +98,16 @@ Choose the API by lifecycle:
 
 | Need | Use |
 | --- | --- |
-| A delegated result is required before the root's next action under default next-turn delivery | Use one blocking `subagent` call when registered. In **Async only**, complete the critical-path work directly or switch workflows before delegating it |
-| Broad research/review the current response does not depend on | Prefer one `subagent_spawn` covering related branches, when lifecycle tools are enabled |
-| Final-answer-dependent broad work with `completionDelivery: "auto-resume"` | Prefer one `subagent_spawn`; completion requests a synthesis turn |
-| Reusable history, follow-ups, or mailboxes | `subagent_spawn` and lifecycle tools, when enabled |
-| Side-effect-free agent/model/run diagnostics | `subagent_inspect` |
-| Synchronous reconnaissance, planning, or review that must not write | `subagent_consult`, when blocking delegation is enabled |
-| One simple or critical-path action the root can perform directly | No subagent |
+| One simple, tightly coupled, or immediate critical-path task | Keep it in the main agent |
+| Ordinary planning or review | Use the main agent with applicable skills and deterministic checks |
+| One bounded implementation slice can run beside named main-agent work | Use async `subagent_spawn` with `worker`, clear ownership, and a supported delivery and integration path |
+| Two or more independent implementation slices | Use workers with disjoint write ownership while the main agent coordinates and integrates |
+| Broad read-only evidence that can run beside main-agent work | Use async `subagent_spawn` with `explorer` |
+| Final-answer-dependent detached work | Enable `completionDelivery: "auto-resume"` so completion requests a synthesis turn |
+| Bounded synchronous read-only evidence whose independent perspective justifies waiting | Use `subagent_consult` when blocking delegation is enabled |
+| Intentional synchronous workflow, panel, chain, or fan-in | Use blocking `subagent` when making the main agent unavailable is justified |
+| Reusable history, follow-ups, or mailboxes | Use `subagent_spawn` and lifecycle tools when enabled |
+| Side-effect-free agent/model/run diagnostics | Use `subagent_inspect` |
 
 Execution modes:
 
@@ -162,30 +167,24 @@ catalog is bounded and reports its omission count; metadata discovery also caps 
 per scope. Refreshed metadata replaces the previous session's catalog rather than accumulating stale
 entries.
 
-Count-selection guidance:
+Delegation guidance:
 
-- Use **no subagent** for simple answers, quick targeted edits, latency-sensitive one-step work, or
-  critical-path work the main agent can perform directly.
-- `subagent` is deliberately blocking: while it runs, the main agent cannot answer queued steering.
-  Use it when delegated outputs are required before the next root action and waiting is intentional.
-- With default `completionDelivery: "next-turn"`, prefer **one detached `subagent_spawn`** for broad
-  research or review only when the current response does not depend on its result. When blocking
-  `subagent` is registered, use it for required delegated output because an idle root is not awakened.
-  In **Async only**, complete required work directly, opt into `auto-resume` when a later synthesis
-  turn is appropriate, or switch delegation workflows.
-- With `completionDelivery: "auto-resume"`, prefer one detached `subagent_spawn` for broad related
-  research or review even when the final answer depends on it; completion requests a later synthesis
-  turn. Do not choose blocking parallel fan-out merely to keep delegation in one turn.
-- Use detached `subagent_spawn` only when lifecycle tools are enabled and a bounded independent task
-  has a concrete isolation or specialization benefit. After spawning, do useful non-overlapping work
-  immediately. Do not poll lifecycle tools for progress or duplicate the delegated work.
-- Add another detached agent only for truly independent work with safe workspace concurrency.
-  If synchronous parallel or fan-in output is genuinely required, keep blocking `subagent` tasks independent, stay within the configured `blocking.maxParallelTasks` limit, and do not parallelize implementation that may edit the same files or shared state.
-  The limit defaults to 8, accepts 1 through 64, and bounds total worker tasks in one call rather than the four-at-a-time execution concurrency.
-- Do not use project-local agents unless the user explicitly opts into them with
-  `agentScope: "project"` or `"both"`; keep confirmation enabled for untrusted repositories.
+- The main agent owns overall planning, immediate critical-path work, integration, final verification, and the final answer.
+- Use **no subagent** for simple answers, quick targeted edits, latency-sensitive one-step work, tightly coupled work, or the main agent's immediate blocker.
+- Before one ordinary `subagent_spawn`, identify useful non-overlapping main-agent work that can start immediately and decide how completion will be integrated.
+- A single async `worker` may implement a bounded slice with clear ownership while the main agent advances its named local task.
+- If no useful main-agent work exists, perform the single-lane task directly instead of spawning one ordinary worker.
+- A single worker without concurrent main-agent work remains available when the user explicitly requests a specialist model, tool profile, or isolation boundary.
+- With default `completionDelivery: "next-turn"`, use detached work only when the current response does not depend on its result because an idle root is not awakened.
+- With `completionDelivery: "auto-resume"`, detached work may affect the final answer because completion requests a later synthesis turn.
+- After `subagent_spawn` returns, immediately continue the identified local task instead of merely announcing the spawn, waiting, polling, duplicating the child task, or ending while useful local work remains.
+- Use multiple workers only for truly independent slices with disjoint write ownership and safe workspace concurrency, and keep integration in the main agent.
+- Keep ordinary planning in the main agent or express a genuine dependency graph through an explicit caller-authored `workflow` payload.
+- Keep ordinary review in the main agent with a review skill and deterministic checks; reserve custom verifier agents or panels for consequential independent verification.
+- Use blocking `subagent` only when intentional synchronous output or isolation justifies making the main agent unavailable.
+- Do not use project-local agents unless the user explicitly opts into them with `agentScope: "project"` or `"both"`; keep confirmation enabled for untrusted repositories.
 
-Examples where the main agent chooses the count:
+Examples where the main agent chooses the topology:
 
 No subagent for a known-file edit:
 
@@ -193,17 +192,22 @@ No subagent for a known-file edit:
 Rename one symbol in src/foo.ts.
 ```
 
-One detached agent for broad asynchronous research that the current response does not require, or when auto-resume is enabled (call `subagent_spawn`):
+One async implementation worker beside useful main-agent work:
+
+The following example assumes `completionDelivery: "auto-resume"` because the final answer depends on both slices.
+The main agent owns `src/parser.ts`, immediately continues that work after spawn, and later integrates and verifies the worker result.
 
 ```json
 {
-  "agent": "explorer",
-  "task": "Inspect source, tests, and integration risks for the current changes. Do not edit files. Report concise findings with evidence."
+  "agent": "worker",
+  "task": "Implement the approved formatter slice only in src/formatter.ts and test/formatter.test.ts. Do not edit src/parser.ts. Report changed paths, checks, and remaining risks."
 }
 ```
 
-A blocking fan-out is reserved for output that must be synthesized before the root continues (call
-`subagent`):
+For two or more implementation workers, issue one spawn per disjoint slice, state each file or responsibility boundary, and keep integration in the main agent.
+Use isolated worktrees for repository-write isolation, or set `allowConcurrentWrites` only when shared-workspace overlap is knowingly safe.
+
+A blocking fan-out is reserved for output that must be synthesized before the main agent continues:
 
 ```json
 {
@@ -247,7 +251,12 @@ The schema rejects fields that do not belong to the selected action. Explicit `p
 
 ## 📖 Read-only consultation
 
-`subagent_consult` is registered whenever blocking delegation is enabled. It runs exactly one synchronous, non-retained child with `--no-session`, `--no-extensions`, and only the effective intersection of the agent tools with `read`, `grep`, `find`, and `ls`. A missing tool list receives those four defaults; an explicit `tools: []` receives `--no-tools`; write, shell, lifecycle, custom, and extension tools cannot enter the child allow-list. The executor policy remains authoritative even when the task or agent prompt asks for implementation.
+Ordinary planning and review stay in the main agent with applicable skills and deterministic checks.
+Use `subagent_consult` only when bounded read-only evidence and an independent perspective justify making the main agent wait.
+It is registered whenever blocking delegation is enabled and runs exactly one synchronous, non-retained child with `--no-session`, `--no-extensions`, and only the effective intersection of the agent tools with `read`, `grep`, `find`, and `ls`.
+A missing tool list receives those four defaults, while an explicit `tools: []` receives `--no-tools`.
+Write, shell, lifecycle, custom, and extension tools cannot enter the child allow-list.
+The executor policy remains authoritative even when the task or agent prompt asks for implementation.
 
 ```json
 {
@@ -338,21 +347,22 @@ Run parallel workers, then aggregate their results:
 }
 ```
 
-Run a chain where each step receives the previous output:
+Run a read-only chain where each step receives the previous output:
 
 ```json
 {
   "chain": [
     { "agent": "explorer", "task": "Find subagent-related code" },
     {
-      "agent": "worker",
-      "task": "Using this context, plan the extension: {previous}"
+      "agent": "explorer",
+      "task": "Summarize the relevant paths and open questions from this inventory: {previous}"
     }
   ]
 }
 ```
 
-Run an evidence-preserving panel:
+Ordinary review stays in the main agent with a review skill and deterministic checks.
+Run an evidence-preserving panel only when consequential independent perspectives justify blocking the main agent:
 
 ```json
 {
@@ -535,9 +545,17 @@ Legacy v1 and v2 records without acceptance fields retain their prior completed 
 
 Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects a bounded `pi-subagent-completion` custom message. Every turn receives an executor-owned `runId`, monotonically increasing agent-local generation, and unique `completionId`. The terminal completion is persisted before delivery, simultaneous completions are batched, and the broker allows at most one in-flight root wake until that parent turn starts.
 
-Detached work follows a non-polling policy. With default `next-turn` delivery, prefer one bounded `subagent_spawn` for related asynchronous research or review only when the current response does not depend on its result. If it does, use blocking `subagent` when registered; in **Async only**, complete required work directly, opt into `auto-resume` when a later synthesis turn is appropriate, or switch workflows. With opt-in `auto-resume`, detached broad work may be final-answer-dependent because completion requests a synthesis turn after the root settles. In either mode, do useful non-overlapping main-agent work immediately, do not poll `subagent_inspect` or `subagent_mailbox` with `action: "read"`, and do not duplicate delegated work. Add another detached agent only for truly independent work with safe workspace concurrency. Detached lifecycle work intentionally has no `subagent_wait` tool.
+Detached work follows a non-polling policy.
+Before one ordinary `subagent_spawn`, identify useful non-overlapping main-agent work that starts immediately and a supported completion integration path.
+With default `next-turn` delivery, the current response must not depend on the result because an idle root is not awakened.
+With opt-in `auto-resume`, detached work may affect the final answer because completion requests a synthesis turn after the main agent settles.
+After spawning, immediately continue the identified local task instead of merely announcing the spawn, waiting, polling `subagent_inspect` or `subagent_mailbox`, duplicating the child task, or ending while useful local work remains.
+Add another detached agent only for truly independent work with safe workspace concurrency and disjoint write ownership.
+Detached lifecycle work intentionally has no `subagent_wait` tool.
 
-A detached agent additionally needs a concrete isolation or specialization benefit such as independent review, bounded context/output, a distinct model/tool profile, or workspace isolation. Simple work that the main agent can perform directly should not be delegated.
+A detached `worker` may directly implement a bounded slice with clear ownership while the main agent handles another useful slice and retains integration and final verification.
+Without concurrent main-agent work, use one worker only for an explicit user-requested specialist model, tool profile, or isolation boundary.
+Simple and immediate critical-path work should stay in the main agent.
 
 `stateful.completionDelivery` controls settled completion delivery:
 
@@ -731,7 +749,12 @@ No private Pi imports, runtime casts, or `ExtensionAPI` monkey-patching are used
 The package uses public Pi root RPC types but owns exact CLI resolution, bounded framing, readiness, stderr, cancellation, and process-group cleanup because the stock client does not provide those package-specific guarantees.
 Approval policy, sandbox profile, provider-header hooks, extension state, global scheduling, and parent/child transcript switching are not inherited or provided by in-process or RPC transport.
 
-Write-capable agents share the workspace by default. Concurrent write-capable starts in the same cwd are rejected unless `allowConcurrentWrites` is explicitly set. Classification is intentionally conservative: an agent with `bash`, `write`, or `edit` is write-capable even when its task prompt says “read only,” because prompt wording is not a filesystem sandbox. Prefer one detached agent when asynchronous work can be combined. If concurrent work is genuinely required, use the blocking batch only when synchronous outputs justify making the root unavailable, explicitly accept safe detached overlap with `allowConcurrentWrites`, or use isolated worktrees when repository isolation is needed.
+Write-capable agents share the workspace by default.
+Concurrent write-capable starts in the same cwd are rejected unless `allowConcurrentWrites` is explicitly set.
+Classification is intentionally conservative: an agent with `bash`, `write`, or `edit` is write-capable even when its task prompt says “read only,” because prompt wording is not a filesystem sandbox.
+Keep one existing bounded detached worker only while the main agent continues its named non-overlapping work, or close it before handling the work directly.
+For truly independent disjoint write slices, use isolated worktrees, or set `allowConcurrentWrites` only when shared overlap is knowingly safe.
+Use the blocking batch only when synchronous outputs justify making the main agent unavailable.
 
 Set `workspaceMode: "worktree"` to opt into a disposable detached Git worktree; this requires a clean repository and the worktree is removed on close or session shutdown. The generated path inherits the approved base cwd's trust snapshot. Retained records mark disposable worktrees explicitly, so they are never restored even if cleanup could not remove the generated directory. Shared-workspace retained records store an additive bounded target-trust snapshot for transport and inspection parity; session restore canonicalizes the retained cwd and re-resolves current/saved trust rather than blindly trusting the persisted value. Older records without either field remain readable.
 
@@ -765,12 +788,14 @@ Built-in agents are available without setup and can be overridden by user or pro
 | Agent | Purpose | Tools |
 | --- | --- | --- |
 | `explorer` | Read-only codebase exploration for specific questions. | `read`, `grep`, `find`, `ls` |
-| `worker` | General-purpose implementation. | Pi default tools |
+| `worker` | Bounded implementation and command execution with clear ownership. | Pi default tools |
 
-Review-specific delegation should use a custom user or project agent when needed.
+Ordinary review stays in the main agent with a review skill and deterministic checks.
+Use a custom user or project verifier only when consequential independent verification justifies the added cost and coordination.
 
 Built-in agents inherit the active/default Pi model instead of forcing a provider-specific model alias, which keeps every transport usable across different Pi setups.
-The built-in `explorer` defaults to `low` thinking for bounded exploration.
+The built-in `explorer` defaults to `low` thinking for bounded exploration and intentionally omits `bash` so it remains read-only and preserves the automatic in-process route.
+Users who need shell-assisted read-mostly work can define a custom agent, but `bash` makes transport classification conservatively write-capable because prompt wording is not an enforcement boundary.
 `worker` inherits thinking unless a caller, frontmatter, or per-agent setting selects one.
 
 ## ⚙️ Configure agent tools

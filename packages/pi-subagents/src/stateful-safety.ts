@@ -28,7 +28,7 @@ export function assertNoSharedWriteConflict(
 		if (isWriteCapable(activeConfig?.tools)) {
 			throw new Error(
 				`Write-capable subagent ${active.id} is already active in shared workspace ${cwd}. ` +
-					"Prefer one subagent_spawn covering combined asynchronous work. Use the blocking subagent parallel mode only when concurrent synchronous outputs justify making the main agent unavailable. Otherwise let the active agent finish or close it; set allowConcurrentWrites only when overlapping writes are knowingly safe, or use workspaceMode worktree when repository isolation is needed.",
+					"Keep the existing bounded subagent_spawn and continue the main agent's named non-overlapping work, or close it before handling the work directly. For truly independent disjoint write slices, use workspaceMode worktree; set allowConcurrentWrites only when shared overlap is knowingly safe. Use the blocking subagent parallel mode only when concurrent synchronous outputs justify making the main agent unavailable.",
 			);
 		}
 	}

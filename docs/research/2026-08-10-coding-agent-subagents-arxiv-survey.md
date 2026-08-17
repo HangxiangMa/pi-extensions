@@ -1,5 +1,7 @@
 # Coding-Agent Subagents and Multi-Agent Orchestration on arXiv
 
+> **Historical research input:** Role names and automation described here summarize external systems and do not define current `pi-subagents` built-ins or routing; see the [current direction](../implementation-notes/pi-subagents-current-direction.md).
+
 ## Methodology and scope
 
 This survey covers recent arXiv literature on subagents for coding agents, hierarchical or multi-agent software-engineering systems, delegation and planning, and agent orchestration.

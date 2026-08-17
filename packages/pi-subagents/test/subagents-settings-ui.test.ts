@@ -85,7 +85,15 @@ test("delegation workflow settings control the registered tool surface", () => {
 					(tool) => tool.name === "subagent_spawn",
 				)?.promptGuidelines;
 				assert.ok(Array.isArray(spawnGuidance));
-				assert.doesNotMatch(spawnGuidance.join("\n"), /blocking subagent/i);
+				const guidance = spawnGuidance.join("\n");
+				assert.doesNotMatch(guidance, /blocking subagent/i);
+				assert.match(guidance, /identify.*non-overlapping.*main-agent work/i);
+				assert.match(guidance, /immediately continue.*identified.*local task/i);
+				assert.match(guidance, /supported.*integration path/i);
+				assert.match(
+					guidance,
+					/without concurrent main-agent work.*specialist model.*tool profile.*isolation/i,
+				);
 			}
 		}
 	} finally {

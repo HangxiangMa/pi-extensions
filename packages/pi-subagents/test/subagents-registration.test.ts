@@ -45,6 +45,16 @@ test("subagents registers consistent blocking guidance and one management comman
 	assert.match(guidanceText, /no subagent/i);
 	assert.match(guidanceText, /blocking subagent.*outputs.*required.*before/i);
 	assert.match(guidanceText, /critical-path work.*main agent can perform directly/i);
+	assert.match(
+		guidanceText,
+		/main agent.*planning.*critical-path.*integration.*final verification.*final answer/i,
+	);
+	assert.match(
+		guidanceText,
+		/one ordinary implementation worker.*should not replace.*main agent.*directly/i,
+	);
+	assert.match(guidanceText, /ordinary planning.*main agent.*explicit.*workflow/i);
+	assert.match(guidanceText, /ordinary review.*main agent.*review skill.*deterministic checks/i);
 	assert.doesNotMatch(guidanceText, /critical-path work needed for.*next action/i);
 	assert.doesNotMatch(guidanceText, /subagent_spawn/i);
 	assert.doesNotMatch(guidanceText, /use subagent parallel mode with 2-4/i);
