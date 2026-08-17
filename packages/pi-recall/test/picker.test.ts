@@ -34,10 +34,18 @@ function createPicker(
 ) {
 	let result: unknown;
 	let renders = 0;
+	const themeCalls: Array<{ kind: "fg" | "bg"; color: string; text: string }> = [];
 	const picker = new ScopedRecallPicker({
 		tui: { terminal: { rows: options.rows ?? 12 }, requestRender: () => renders++ } as never,
 		theme: {
-			fg: (_color: string, text: string) => text,
+			fg: (color: string, text: string) => {
+				themeCalls.push({ kind: "fg", color, text });
+				return text;
+			},
+			bg: (color: string, text: string) => {
+				themeCalls.push({ kind: "bg", color, text });
+				return text;
+			},
 			bold: (text: string) => text,
 		} as never,
 		keybindings: {
@@ -47,10 +55,19 @@ function createPicker(
 					(data === "down" && key === "tui.select.down") ||
 					(data === "enter" && key === "tui.select.confirm") ||
 					(data === "escape" && key === "tui.select.cancel") ||
+					(data === "cycle-forward" && key === "app.tree.filter.cycleForward") ||
+					(data === "cycle-backward" && key === "app.tree.filter.cycleBackward") ||
 					(data === "\u0004" && key === "app.session.delete")
 				);
 			},
-			getKeys: (key: string) => (key === "app.session.delete" ? ["ctrl+d"] : []),
+			getKeys: (key: string) => {
+				const keys: Record<string, string[]> = {
+					"app.session.delete": ["ctrl+d"],
+					"app.tree.filter.cycleForward": ["ctrl+o"],
+					"app.tree.filter.cycleBackward": ["ctrl+shift+o"],
+				};
+				return keys[key] ?? [];
+			},
 		} as never,
 		records,
 		current: { sessionId: "current", cwd: "/work/project" },
@@ -61,7 +78,7 @@ function createPicker(
 			result = value;
 		},
 	});
-	return { picker, result: () => result, renders: () => renders };
+	return { picker, result: () => result, renders: () => renders, themeCalls };
 }
 
 test("defaults to Current cwd and cycles scope forward and backward with visible counts", () => {
@@ -80,6 +97,86 @@ test("defaults to Current cwd and cycles scope forward and backward with visible
 	assert.equal(renders(), 3);
 });
 
+test("cycles all, user, and assistant views through injected tree bindings", () => {
+	const { picker, renders } = createPicker([
+		saved("one", "current", "/work/project", "user note"),
+		saved("two", "other", "/work/project", "assistant note"),
+		saved("three", "elsewhere", "/work/project", "another assistant note"),
+	]);
+	assert.match(picker.render(100).join("\n"), /View: All messages \(3\)/);
+	picker.handleInput("cycle-forward");
+	let rendered = picker.render(100).join("\n");
+	assert.match(rendered, /View: User only \(1\)/);
+	assert.match(rendered, /user note/);
+	assert.doesNotMatch(rendered, /assistant note/);
+	picker.handleInput("cycle-forward");
+	rendered = picker.render(100).join("\n");
+	assert.match(rendered, /View: Assistant only \(2\)/);
+	assert.doesNotMatch(rendered, /user note/);
+	assert.match(rendered, /assistant note/);
+	picker.handleInput("cycle-forward");
+	assert.match(picker.render(100).join("\n"), /View: All messages \(3\)/);
+	picker.handleInput("cycle-backward");
+	assert.match(picker.render(100).join("\n"), /View: Assistant only \(2\)/);
+	assert.equal(renders(), 4);
+});
+
+test("applies scope before view before query and reports mode-specific empty states", () => {
+	const { picker } = createPicker([
+		saved("one", "current", "/work/project", "local user alpha"),
+		saved("two", "other", "/work/project", "local assistant beta"),
+		saved("three", "elsewhere", "/other", "remote assistant alpha"),
+	]);
+	picker.handleInput("cycle-forward");
+	picker.handleInput("alpha");
+	let rendered = picker.render(100).join("\n");
+	assert.match(rendered, /Scope: Current cwd \(2\).*View: User only \(1\).*1 match/);
+	assert.match(rendered, /local user alpha/);
+	assert.doesNotMatch(rendered, /remote assistant alpha/);
+	picker.handleInput("\t");
+	rendered = picker.render(100).join("\n");
+	assert.match(rendered, /Scope: All \(3\).*View: User only \(1\).*1 match/);
+
+	const emptyView = createPicker([saved("two", "current", "/work/project", "assistant only")]);
+	emptyView.picker.handleInput("cycle-forward");
+	assert.match(emptyView.picker.render(80).join("\n"), /No user messages in this scope/);
+
+	const noQueryMatch = createPicker([saved("one", "current", "/work/project", "alpha")]);
+	noQueryMatch.picker.handleInput("cycle-forward");
+	noQueryMatch.picker.handleInput("zulu");
+	assert.match(noQueryMatch.picker.render(80).join("\n"), /No matching saved messages/);
+});
+
+test("preserves visible selection across view changes and falls back deterministically", () => {
+	const records = [
+		saved("one", "current", "/work/project", "user note"),
+		saved("two", "current", "/work/project", "older assistant"),
+		saved("three", "current", "/work/project", "newer assistant"),
+	];
+	const visible = createPicker(records, { initialSelectedId: "one" });
+	visible.picker.handleInput("cycle-forward");
+	visible.picker.handleInput("enter");
+	assert.deepEqual(visible.result(), {
+		kind: "selected",
+		recordId: "one",
+		scope: "cwd",
+		view: "user",
+		query: "",
+	});
+
+	const hidden = createPicker(records, { initialSelectedId: "two" });
+	hidden.picker.handleInput("cycle-forward");
+	hidden.picker.handleInput("cycle-forward");
+	hidden.picker.handleInput("enter");
+	assert.deepEqual(hidden.result(), {
+		kind: "selected",
+		recordId: "three",
+		scope: "cwd",
+		view: "assistant",
+		query: "",
+	});
+});
+
 test("preserves a selected saved id across scope changes when still visible", () => {
 	const { picker, result } = createPicker([
 		saved("one", "current", "/work/project", "one"),
@@ -93,6 +190,7 @@ test("preserves a selected saved id across scope changes when still visible", ()
 		kind: "selected",
 		recordId: "one",
 		scope: "all",
+		view: "all",
 		query: "",
 	});
 });
@@ -110,6 +208,7 @@ test("falls back to the first newest record when selection leaves the scope", ()
 		kind: "selected",
 		recordId: "one",
 		scope: "session",
+		view: "all",
 		query: "",
 	});
 });
@@ -118,12 +217,19 @@ test("escape returns to the menu while ctrl+c closes the whole Recall flow", () 
 	const records = [saved("one", "current", "/work/project", "one")];
 	const back = createPicker(records);
 	back.picker.handleInput("escape");
-	assert.deepEqual(back.result(), { kind: "back", scope: "cwd", selectedId: "one", query: "" });
+	assert.deepEqual(back.result(), {
+		kind: "back",
+		scope: "cwd",
+		view: "all",
+		selectedId: "one",
+		query: "",
+	});
 	const close = createPicker(records);
 	close.picker.handleInput("\u0003");
 	assert.deepEqual(close.result(), {
 		kind: "close",
 		scope: "cwd",
+		view: "all",
 		selectedId: "one",
 		query: "",
 	});
@@ -131,7 +237,12 @@ test("escape returns to the menu while ctrl+c closes the whole Recall flow", () 
 
 test("empty scopes remain switchable and rendered output is sanitized and width-safe", () => {
 	const { picker } = createPicker([
-		saved("unsafe", "other", "/other", "unsafe\u001b]8;;https://bad\u0007link\u001b[31m"),
+		saved(
+			"unsafe",
+			"other",
+			"/other",
+			"unsafe\u001b]8;;https://bad\u0007link\u001b[31m\u202espoof\u2066\u2028break\u2029",
+		),
 	]);
 	const empty = picker.render(24);
 	assert.match(empty.join("\n"), /No saved messages/);
@@ -142,6 +253,10 @@ test("empty scopes remain switchable and rendered output is sanitized and width-
 	assert.equal(rendered.includes("\u001b]"), false);
 	assert.equal(rendered.includes("\u001b[31m"), false);
 	assert.equal(rendered.includes("https://bad"), false);
+	assert.equal(rendered.includes("\u202e"), false);
+	assert.equal(rendered.includes("\u2066"), false);
+	assert.equal(rendered.includes("\u2028"), false);
+	assert.equal(rendered.includes("\u2029"), false);
 	picker.dispose();
 	picker.handleInput("\t");
 	assert.match(picker.render(24).join("\n"), /Scope: All \(1\)/);
@@ -197,6 +312,39 @@ test("applies scope before search and distinguishes totals, matches, and empty s
 	assert.match(empty.picker.render(80).join("\n"), /No saved messages in this scope/);
 });
 
+test("renders tree-inspired rows, view status, provenance, and binding-derived hints", () => {
+	const { picker, themeCalls } = createPicker([
+		saved("one", "current", "/work/project", "user preview"),
+		saved("two", "other", "/work/project", "assistant preview"),
+	]);
+	let rendered = stripVTControlCharacters(picker.render(120).join("\n"));
+	assert.match(rendered, /› assistant: assistant preview/);
+	assert.match(rendered, / {2}user: user preview/);
+	assert.match(rendered, /Session other/);
+	assert.match(rendered, /2026-08-04T11:00:00.000Z/);
+	assert.match(rendered, /\(1\/2\) \[all\]/);
+	assert.match(rendered, /ctrl\+o\/ctrl\+shift\+o view/);
+	assert.ok(
+		themeCalls.some(
+			(call) => call.kind === "bg" && call.color === "selectedBg" && call.text.startsWith("› "),
+		),
+	);
+	assert.ok(
+		themeCalls.some(
+			(call) => call.kind === "fg" && call.color === "accent" && call.text === "user: ",
+		),
+	);
+	assert.ok(
+		themeCalls.some(
+			(call) => call.kind === "fg" && call.color === "success" && call.text === "assistant: ",
+		),
+	);
+
+	picker.handleInput("cycle-forward");
+	rendered = stripVTControlCharacters(picker.render(120).join("\n"));
+	assert.match(rendered, /\(1\/1\) \[user\]/);
+});
+
 test("preserves query spaces, removes pasted controls, bounds queries, and forwards focus", () => {
 	const record = saved("one", "current", "/work/project", "bar foo 📖");
 	const { picker } = createPicker([record]);
@@ -204,12 +352,16 @@ test("preserves query spaces, removes pasted controls, bounds queries, and forwa
 	focusable.focused = true;
 	assert.equal(picker.render(80).join("\n").includes(CURSOR_MARKER), true);
 	focusable.focused = false;
-	picker.handleInput("\u001b[200~foo \u0007\u009dbar\u009c\u001b[201~");
+	picker.handleInput("\u001b[200~foo \u0007\u009dbar\u009c\u202e\u2066\u2028\u2029\u001b[201~");
 	const rendered = picker.render(80).join("\n");
 	assert.match(rendered, /bar foo/);
 	assert.equal(rendered.includes("\u0007"), false);
 	assert.equal(rendered.includes("\u009d"), false);
 	assert.equal(rendered.includes("\u009c"), false);
+	assert.equal(rendered.includes("\u202e"), false);
+	assert.equal(rendered.includes("\u2066"), false);
+	assert.equal(rendered.includes("\u2028"), false);
+	assert.equal(rendered.includes("\u2029"), false);
 	for (const width of [1, 2, 8, 20, 80]) {
 		assert.ok(picker.render(width).every((line) => visibleWidth(line) <= width));
 	}
@@ -239,6 +391,7 @@ test("requests direct deletion with the selected record and nearest surviving re
 		recordId: "one",
 		nextSelectedId: "two",
 		scope: "cwd",
+		view: "all",
 		query: "",
 	});
 });
@@ -268,6 +421,7 @@ test("restores selection after broadening and carries query through scope and co
 		kind: "selected",
 		recordId: "one",
 		scope: "cwd",
+		view: "all",
 		query: "",
 	});
 
@@ -279,6 +433,7 @@ test("restores selection after broadening and carries query through scope and co
 		kind: "selected",
 		recordId: "one",
 		scope: "all",
+		view: "all",
 		query: "alpha",
 	});
 });
