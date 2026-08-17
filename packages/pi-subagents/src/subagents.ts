@@ -22,6 +22,7 @@ import type {
 	SubagentSettings,
 } from "./agents/types.js";
 import { cachedModuleLoader, throwIfAborted } from "./cached-module-loader.js";
+import { renderCompletionMessage, SUBAGENT_COMPLETION_MESSAGE_TYPE } from "./completion-render.js";
 import {
 	type ConfigRegistrationDependencies,
 	registerSubagentConfigCommand,
@@ -62,6 +63,7 @@ export interface SubagentsDependencies {
 }
 
 export default function (pi: ExtensionAPI, dependencies: SubagentsDependencies = {}) {
+	pi.registerMessageRenderer(SUBAGENT_COMPLETION_MESSAGE_TYPE, renderCompletionMessage);
 	const loadBlockingExecution = cachedModuleLoader(
 		dependencies.loadBlockingExecution ?? (() => import("./execution.js")),
 	);

@@ -567,6 +567,7 @@ Legacy v1 and v2 records without acceptance fields retain their prior completed 
 ## 🔁 Stateful agents
 
 Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects a bounded `pi-subagent-completion` custom message. Every turn receives an executor-owned `runId`, monotonically increasing agent-local generation, and unique `completionId`. The terminal completion is persisted before delivery, simultaneous completions are batched, and the broker allows at most one in-flight root wake until that parent turn starts.
+In TUI mode, completion messages show a compact task and payload summary while collapsed; use the configured tool-output expansion action (`Ctrl+O` by default) to show or hide the complete message globally.
 
 Detached work follows a non-polling policy.
 Before one ordinary `subagent_spawn`, identify useful non-overlapping main-agent work that starts immediately and a supported completion integration path.
