@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { CompletionDelivery } from "./agents/types.js";
+import { SUBAGENT_COMPLETION_MESSAGE_TYPE } from "./completion-render.js";
 import { redactPrivateText } from "./context.js";
 import { DEFAULT_MAX_CONTEXT_BYTES, MAX_TOOL_MESSAGE_BYTES, truncateUtf8 } from "./limits.js";
 import type { AgentTurnCompletion, ManagedAgent } from "./registry.js";
@@ -17,6 +18,7 @@ interface CompletionMetadata {
 	generation: number;
 	agentId: string;
 	agent: string;
+	task: string;
 	state: string;
 	transport?: string;
 	structuredResult?: ManagedAgent["structuredResult"];
@@ -25,7 +27,7 @@ interface CompletionMetadata {
 }
 
 interface CompletionMessage {
-	customType: "pi-subagent-completion";
+	customType: typeof SUBAGENT_COMPLETION_MESSAGE_TYPE;
 	content: string;
 	display: true;
 	details:
@@ -202,7 +204,8 @@ function completionIdsFromContext(messages: readonly unknown[]): Set<string> {
 	for (const message of messages) {
 		if (!message || typeof message !== "object" || Array.isArray(message)) continue;
 		const record = message as Record<string, unknown>;
-		if (record.role !== "custom" || record.customType !== "pi-subagent-completion") continue;
+		if (record.role !== "custom" || record.customType !== SUBAGENT_COMPLETION_MESSAGE_TYPE)
+			continue;
 		const details = record.details;
 		if (!details || typeof details !== "object" || Array.isArray(details)) continue;
 		const metadata = details as Record<string, unknown>;
@@ -236,7 +239,7 @@ function buildCompletionMessage(completions: AgentTurnCompletion[]): CompletionM
 	if (completions.length === 1) {
 		const completion = completions[0];
 		return {
-			customType: "pi-subagent-completion",
+			customType: SUBAGENT_COMPLETION_MESSAGE_TYPE,
 			content: buildDetachedCompletionMessage(completion),
 			display: true,
 			details: completionMetadata(completion),
@@ -256,7 +259,7 @@ function buildCompletionMessage(completions: AgentTurnCompletion[]): CompletionM
 		DEFAULT_MAX_CONTEXT_BYTES,
 	).text;
 	return {
-		customType: "pi-subagent-completion",
+		customType: SUBAGENT_COMPLETION_MESSAGE_TYPE,
 		content,
 		display: true,
 		details: {
@@ -274,6 +277,7 @@ function completionMetadata(completion: AgentTurnCompletion): CompletionMetadata
 		generation: completion.generation,
 		agentId: completion.agent.id,
 		agent: completion.agent.agent,
+		task: sanitizeCompletionLine(completion.task, 256) || "(unknown task)",
 		state: completion.agent.state,
 		...(completion.agent.telemetry?.transport
 			? { transport: completion.agent.telemetry.transport }

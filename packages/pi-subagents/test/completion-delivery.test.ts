@@ -112,6 +112,7 @@ test("next-turn completion delivery never wakes an idle root", () => {
 		generation: 1,
 		agentId: "sa_one",
 		agent: "explorer",
+		task: "task:sa_one",
 		state: "completed",
 	});
 	broker.close();
@@ -139,6 +140,7 @@ test("auto-resume batches simultaneous completions into one root synthesis turn"
 				generation: 1,
 				agentId: "sa_one",
 				agent: "explorer",
+				task: "task:sa_one",
 				state: "completed",
 			},
 			{
@@ -148,6 +150,7 @@ test("auto-resume batches simultaneous completions into one root synthesis turn"
 				generation: 1,
 				agentId: "sa_two",
 				agent: "explorer",
+				task: "task:sa_two",
 				state: "completed",
 			},
 		],
