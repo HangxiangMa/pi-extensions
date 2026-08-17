@@ -40,6 +40,7 @@ export interface ObservationAttributes {
 	version?: string;
 	name?: string;
 	sessionId?: string;
+	userId?: string;
 	tags?: string[];
 }
 
@@ -63,6 +64,7 @@ export interface TraceBackend {
 
 interface RecorderContext {
 	sessionId: string;
+	userId?: string;
 	cwd: string;
 	mode: string;
 	captureContent: boolean;
@@ -239,7 +241,12 @@ export class TraceRecorder {
 		attributes: ObservationAttributes,
 		options: { asType: ObservationType; parent?: Observation },
 	): Observation {
-		return this.backend.start(name, { ...attributes, sessionId: this.context.sessionId }, options);
+		const { sessionId, userId } = this.context;
+		return this.backend.start(
+			name,
+			{ ...attributes, sessionId, ...(userId ? { userId } : {}) },
+			options,
+		);
 	}
 
 	hasActiveTrace(): boolean {
@@ -287,6 +294,7 @@ export class TraceRecorder {
 		this.root.updateTrace?.({
 			name: "pi.trace",
 			sessionId: this.context.sessionId,
+			...(this.context.userId ? { userId: this.context.userId } : {}),
 			version: TRACE_SCHEMA_VERSION,
 			input: traceInput,
 			metadata,

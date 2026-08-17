@@ -65,6 +65,7 @@ test("isolated runtime preserves the global provider and exports native observat
 
 	const recorder = new TraceRecorder(backend, {
 		sessionId: "runtime-session",
+		userId: "runtime-user",
 		cwd: "/workspace",
 		mode: "tui",
 		captureContent: true,
@@ -135,6 +136,7 @@ test("isolated runtime preserves the global provider and exports native observat
 	]);
 	for (const span of spans) assert.equal(span.attributes["langfuse.version"], "2");
 	for (const span of spans) assert.equal(span.attributes["session.id"], "runtime-session");
+	for (const span of spans) assert.equal(span.attributes["user.id"], "runtime-user");
 	const agent = spans.find((span) => span.name === "pi.agent");
 	const attempt = spans.find((span) => span.name === "pi.attempt");
 	const turn = spans.find((span) => span.name === "pi.turn");
@@ -187,13 +189,20 @@ test("isolated runtime preserves the global provider and exports native observat
 	);
 
 	const updatedSession = backend.start("updated-session", {}, { asType: "span" });
-	updatedSession.update({ sessionId: "updated-session" });
+	updatedSession.update({ sessionId: "updated-session", userId: "updated-user" });
 	updatedSession.end();
 	await backend.forceFlush();
 	const updatedSessionSpan = exporter
 		.getFinishedSpans()
 		.find((span) => span.name === "updated-session");
 	assert.equal(updatedSessionSpan?.attributes["session.id"], "updated-session");
+	assert.equal(updatedSessionSpan?.attributes["user.id"], "updated-user");
+
+	const withoutUser = backend.start("without-user", {}, { asType: "span" });
+	withoutUser.end();
+	await backend.forceFlush();
+	const withoutUserSpan = exporter.getFinishedSpans().find((span) => span.name === "without-user");
+	assert.equal("user.id" in (withoutUserSpan?.attributes ?? {}), false);
 
 	await backend.shutdown();
 	await backend.shutdown();

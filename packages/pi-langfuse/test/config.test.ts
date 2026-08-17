@@ -214,6 +214,25 @@ test("configuration covers malformed JSON, normalization, and captureContent fal
 		if (!normalized.ok) assert.match(normalized.reason, /environment/i);
 	}
 
+	assert.deepEqual(
+		normalizeLangfuseConfig({ publicKey: "pk", secretKey: "sk", userId: "  analyst-7  " }),
+		{
+			ok: true,
+			config: {
+				publicKey: "pk",
+				secretKey: "sk",
+				baseUrl: "https://us.cloud.langfuse.com",
+				userId: "analyst-7",
+				captureContent: true,
+			},
+		},
+	);
+	for (const userId of ["", "   ", 7, null]) {
+		const normalized = normalizeLangfuseConfig({ publicKey: "pk", secretKey: "sk", userId });
+		assert.equal(normalized.ok, false, String(userId));
+		if (!normalized.ok) assert.match(normalized.reason, /userId/i);
+	}
+
 	await writeFile(path, JSON.stringify({ publicKey: "pk", secretKey: "sk" }), { mode: 0o600 });
 	await chmod(path, 0o644);
 	const repaired = await loadLangfuseConfig(path);

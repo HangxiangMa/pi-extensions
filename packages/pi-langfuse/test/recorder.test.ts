@@ -692,10 +692,11 @@ test("TraceRecorder omits generation request content when capture is disabled", 
 	);
 });
 
-test("TraceRecorder stamps the session id on every observation", () => {
+test("TraceRecorder stamps the session and user id on every observation", () => {
 	const backend = new FakeBackend();
 	const recorder = new TraceRecorder(backend, {
 		sessionId: "session-42",
+		userId: "user-42",
 		cwd: "/workspace",
 		mode: "tui",
 		captureContent: true,
@@ -736,5 +737,10 @@ test("TraceRecorder stamps the session id on every observation", () => {
 	]);
 	for (const observation of backend.observations) {
 		assert.equal(observation.attributes.sessionId, "session-42");
+		assert.equal(observation.attributes.userId, "user-42");
 	}
+	assert.equal(
+		backend.observations.find(({ name }) => name === "pi.agent")?.traceUpdates[0]?.userId,
+		"user-42",
+	);
 });
