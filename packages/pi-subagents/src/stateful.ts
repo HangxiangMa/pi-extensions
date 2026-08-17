@@ -47,18 +47,10 @@ import { createSpawnPromptGuidelines } from "./stateful-guidance.js";
 import { assertCurrentSpawn, waitForOwnedSpawn } from "./stateful-lifecycle.js";
 import { resolveStatefulLimits, type StatefulLimits } from "./stateful-limits.js";
 import { createStatefulToolRenderer } from "./stateful-render.js";
-import {
-	assertFollowUpWriteAllowed,
-	assertNoSharedWriteConflict,
-	confirmProjectAgent,
-} from "./stateful-safety.js";
+import { confirmProjectAgent } from "./stateful-safety.js";
 import { MAX_SUBAGENT_TOOL_CALLS, MAX_SUBAGENT_TURNS } from "./turn-budget.js";
 
-export {
-	assertFollowUpWriteAllowed,
-	assertNoSharedWriteConflict,
-	isWriteCapable,
-} from "./stateful-safety.js";
+export { isWriteCapable } from "./stateful-safety.js";
 
 import {
 	MailboxParamsSchema,
@@ -588,11 +580,14 @@ export function registerStatefulSubagents(
 			),
 			parentId: Type.Optional(Type.String({ description: "Optional parent agent ID." })),
 			allowConcurrentWrites: Type.Optional(
-				Type.Boolean({ description: "Override the shared-workspace write conflict guard." }),
+				Type.Boolean({
+					description:
+						"Deprecated compatibility field; shared-workspace concurrency is allowed by default.",
+				}),
 			),
 			workspaceMode: Type.Optional(
 				StringEnum(["shared", "worktree"] as const, {
-					description: "Use the shared workspace or an opt-in disposable Git worktree.",
+					description: "Use the shared workspace (default) or an opt-in disposable Git worktree.",
 				}),
 			),
 			contract: Type.Optional(DelegationContractSchema),
@@ -752,15 +747,6 @@ export function registerStatefulSubagents(
 					throw new Error("Project-local subagent definitions cannot run in a detached worktree");
 				}
 				const requestedCwd = cwd;
-				if ((params.workspaceMode ?? "shared") === "shared" && !params.allowConcurrentWrites) {
-					assertNoSharedWriteConflict(
-						ownedRegistry,
-						params.agent,
-						requestedCwd,
-						scope,
-						currentSettings,
-					);
-				}
 				const workspaceOwner = `pending-${randomUUID()}`;
 				const workspace =
 					params.workspaceMode === "worktree"
@@ -871,7 +857,10 @@ export function registerStatefulSubagents(
 				}),
 			),
 			allowConcurrentWrites: Type.Optional(
-				Type.Boolean({ description: "Override the shared-workspace write conflict guard." }),
+				Type.Boolean({
+					description:
+						"Deprecated compatibility field; shared-workspace concurrency is allowed by default.",
+				}),
 			),
 		}),
 		...createStatefulToolRenderer("send"),
@@ -959,13 +948,6 @@ export function registerStatefulSubagents(
 				currentSettings,
 			);
 			assertCurrentSpawn(signal, generation, runtimeGeneration);
-			assertFollowUpWriteAllowed(
-				ownedRegistry,
-				existing,
-				params.allowConcurrentWrites ?? false,
-				isolatedAgents.has(existing.id),
-				currentSettings,
-			);
 			const currentGrant = modules.capabilityGrant.issueCapabilityGrant(
 				currentPlan,
 				Date.now(),

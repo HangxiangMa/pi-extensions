@@ -654,6 +654,66 @@ test("in-process resource loading rejects a non-regular system prompt source", a
 	}
 });
 
+test("registered detached workers share a workspace without a write override", async () => {
+	const originalDir = process.env.PI_CODING_AGENT_DIR;
+	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-shared-workers-"));
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	try {
+		const children: FakeChildSession[] = [];
+		const mock = createMockPi();
+		const controller = registerStatefulSubagents(mock.pi, {
+			settings: { transport: "in-process" },
+			createInProcessSession: async () => {
+				const child = new FakeChildSession(true);
+				children.push(child);
+				return child;
+			},
+		});
+		const context = createMockContext();
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		const execute = async (name: string, params: Record<string, unknown>) => {
+			const tool = mock.tools.find((candidate) => candidate.name === name) as {
+				execute: (...args: unknown[]) => Promise<unknown>;
+			};
+			return tool.execute(
+				`call-${name}`,
+				params,
+				new AbortController().signal,
+				undefined,
+				context.ctx,
+			) as Promise<{ details: { agent: { id: string; state: string } } }>;
+		};
+
+		const first = await execute("subagent_spawn", { agent: "worker", task: "first" });
+		const [second, third] = await Promise.all([
+			execute("subagent_spawn", { agent: "worker", task: "second" }),
+			execute("subagent_spawn", { agent: "worker", task: "third" }),
+		]);
+		assert.equal(new Set([first, second, third].map((entry) => entry.details.agent.id)).size, 3);
+		assert.equal(controller.getRuntimeStatus().activeAgents, 3);
+
+		await execute("subagent_manage", {
+			action: "interrupt",
+			agentId: first.details.agent.id,
+		});
+		const followedUp = await execute("subagent_send", {
+			agentId: first.details.agent.id,
+			task: "continue while second is active",
+			allowConcurrentWrites: false,
+		});
+		assert.match(followedUp.details.agent.state, /starting|running/);
+		assert.equal(controller.getRuntimeStatus().activeAgents, 3);
+
+		assert.equal(children.length, 3);
+		assert.equal(await controller.clearAgents(), 3);
+		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+	} finally {
+		if (originalDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = originalDir;
+		rmSync(agentDir, { recursive: true, force: true });
+	}
+});
+
 test("registered detached spawn auto-resumes without exposing a wait tool", async () => {
 	const originalDir = process.env.PI_CODING_AGENT_DIR;
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-sdk-tools-"));
