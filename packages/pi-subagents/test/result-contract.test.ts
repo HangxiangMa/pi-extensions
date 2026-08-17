@@ -5,6 +5,7 @@ import {
 	parseStructuredSubagentResult,
 	parseStructuredSubagentResultV2,
 	resultContractEnvelope,
+	structuredResultInstruction,
 } from "../src/result-contract.js";
 
 test("structured result contract validates versioned fields and redacts private text", () => {
@@ -55,7 +56,31 @@ test("structured result instruction is opt-in and bounded", () => {
 	const oversized = appendResultInstruction("x".repeat(100 * 1024), "structured-v1");
 	assert.match(oversized, /pi-subagents:result:v1/);
 	assert.ok(Buffer.byteLength(oversized, "utf8") <= 50 * 1024);
+	const oversizedV2 = appendResultInstruction("界".repeat(100 * 1024), "structured-v2");
+	assert.match(oversizedV2, /Minimum valid result:/u);
+	assert.ok(Buffer.byteLength(oversizedV2, "utf8") <= 50 * 1024);
 	assert.equal(parseStructuredSubagentResult("x".repeat(50 * 1024 + 1)), undefined);
+});
+
+test("structured v2 instruction provides a complete parseable result shape", () => {
+	const instruction = structuredResultInstruction("structured-v2");
+	const example = /Minimum valid result:\n(\{[^\n]+\})/u.exec(instruction)?.[1];
+	assert.ok(example);
+	assert.deepEqual(parseStructuredSubagentResultV2(example), {
+		version: "pi-subagents:result:v2",
+		status: "completed",
+		summary: "Concise outcome",
+		claims: [],
+		artifacts: [],
+		changes: [],
+		verification: [],
+		limitations: [],
+		unresolvedDependencies: [],
+	});
+	assert.match(instruction, /Claim item shape: \{"claim":/u);
+	assert.match(instruction, /Artifact item shape: \{"id":/u);
+	assert.match(instruction, /Change item shape: \{"path":/u);
+	assert.match(instruction, /Verification item shape: \{"status":/u);
 });
 
 test("structured v2 result preserves evidence provenance and actionable outcomes", () => {

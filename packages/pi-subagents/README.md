@@ -586,7 +586,7 @@ Simple and immediate critical-path work should stay in the main agent.
 
 `stateful.completionDelivery` controls settled completion delivery:
 
-- `"next-turn"` (default) preserves the previous behavior: use `deliverAs: "steer"` with `triggerTurn: false`. An active root can consume completion naturally; an idle root is not awakened.
+- `"next-turn"` (default) sends `deliverAs: "steer"` without a turn trigger. Pi queues it into an active root's context, while an idle root records it without waking.
 - `"auto-resume"` holds completion while the root is active, then requests one synthesis turn after the parent settles when no user or extension messages are already pending. Simultaneous completions share that turn, active work is not interrupted, and pending input suppresses the automatic wake.
 
 The bounded persisted completion outbox provides ordered at-least-once delivery across process restart without replaying the child turn. A top-level completion targets `/root`; a nested completion enters the direct retained parent's mailbox and is not duplicated into the root transcript. If the direct parent cannot own delivery, routing walks toward the nearest live retained ancestor and uses `/root` only as the final fallback. An idle parent remains asleep, and inspection exposes its unread and pending-completion counts until a later turn consumes the envelope. When state must be reduced to its storage bound, persistence drops roots without pending completions first and trims old history rather than discarding an outbox-owned root. A completion is acknowledged only after the intended recipient context observes its exact `completionId`; an injection that returns synchronously but never reaches context remains pending for retry. If the process exits after context assembly but before acknowledgement is persisted, the same ID can be delivered again and consumers must deduplicate it. Auto-resume applies only to `/root`; nested delivery never silently starts the parent. Transient terminal-persistence failures retry with bounded exponential backoff and keep the run pending; shutdown cancels retry waits and reports a final persistence failure instead of silently resolving unsaved work.
@@ -772,6 +772,7 @@ Closing the retained record releases the key.
 
 Set `resultFormat: "structured-v1"` to ask for legacy `summary`, `evidence`, `changes`, `verification`, and `risks` fields.
 Prefer `resultFormat: "structured-v2"` when orchestration must distinguish `completed`, `partial`, `blocked`, `needs-input`, `failed`, `interrupted`, `abstained`, `stale`, or `contract-invalid` outcomes and consume typed artifact evidence.
+The child prompt includes a complete minimum JSON object and item shapes; every displayed top-level field remains required even when its array is empty.
 Valid structured data and deterministic recovery classification appear in completion and inspection details, while malformed structured output becomes `contract-invalid` instead of being treated as success.
 The executor stamps task generation, cancellation lineage, and accepted `ExecutionPlan` identity after parsing, so model output cannot forge the provenance used for stale-result containment.
 

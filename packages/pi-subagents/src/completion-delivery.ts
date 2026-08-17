@@ -111,7 +111,11 @@ export class CompletionDeliveryBroker {
 			if (triggerTurn) this.wakeInFlight = true;
 			this.awaitingParentAck.push(...batch);
 			try {
-				this.pi.sendMessage(message, { deliverAs: "steer", triggerTurn });
+				// Pi treats explicit false as immediate insertion instead of queued steering while streaming.
+				this.pi.sendMessage(message, {
+					deliverAs: "steer",
+					...(triggerTurn ? { triggerTurn: true } : {}),
+				});
 			} catch (primaryError) {
 				this.removeAwaiting(batch);
 				if (triggerTurn) this.wakeInFlight = false;

@@ -17,9 +17,10 @@ availability.
 
 Detached completion is configurable. `stateful.completionDelivery: "next-turn"` is the default
 Codex-style behavior: the lifecycle observer publishes final status/output with
-`deliverAs: "steer"` and `triggerTurn: false`. Opt-in `"auto-resume"` holds completion while the root
-is active, coalesces simultaneous completions, and requests at most one synthesis turn after the
-parent settles when no input is pending. Completion metadata/output/error fields are independently
+`deliverAs: "steer"` and omits `triggerTurn`, allowing active-turn steering without waking an idle
+root. Opt-in `"auto-resume"` holds completion while the root is active, coalesces simultaneous
+completions, and requests at most one synthesis turn after the parent settles when no input is
+pending. Completion metadata/output/error fields are independently
 sanitized and bounded, and session-generation, shutdown, batching, and in-flight wake guards prevent
 stale or duplicate scheduling pressure. Delivery remains best-effort because Pi's custom-message API
 is fire-and-forget.
